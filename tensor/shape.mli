@@ -231,6 +231,21 @@ val set_scale : factor:int -> delayed_var_ref -> delayed_var_ref -> unit
     divisible by [factor], on insufficient information (both refs are [`Not_set_yet]), or when
     either ref resolves to a row variable, this raises [Row.Shape_error]. *)
 
+(** The spec of an einsum-family operation (gh-ocannl-2163). [exec] is the spec Shape parses, infers
+    and projects with. [source] is the spec as the user wrote it, when that differs from [exec]: the
+    [%op]/[%cd] translators supply it for a spec that reads runtime values (a stride or dilation
+    identifier, a [+] window reading [use_padding]), whose [exec] they build at run time. A spec
+    reading no runtime value reaches Shape as written, so its [source] is [None]. Messages quote
+    {!spec_text}; nothing parses [source]. *)
+type einsum_spec = private { exec : string; source : string option }
+[@@deriving equal, sexp_of]
+
+val einsum_spec : ?source:string -> string -> einsum_spec
+(** [einsum_spec ?source exec]; a [source] equal to [exec] is dropped. *)
+
+val spec_text : einsum_spec -> string
+(** The spec text for messages: [source] when present, else [exec]. *)
+
 type compose_type =
   | Pointwise_bin
       (** NumPy-style broadcast matching batch, input and output axes, e.g. as in [s1 + s2]. *)
@@ -238,7 +253,7 @@ type compose_type =
       (** Compose the outputs of the second shape with the inputs of the first shape, i.e. the shape
           of [fun x -> s1(s2(x))], or [s1 * s2] where [*] is the inner product (e.g. matrix
           multiply). *)
-  | Einsum of string * delayed_var_ref list
+  | Einsum of einsum_spec * delayed_var_ref list
       (** The binary "einsum" syntax: RHS1;RHS2=>LHS, where RHSi, LHS are labels specifications.
           OCANNL's extended einsum notation supports both axis variables and row variables. The
           [axis_labels] use pseudo-labels local to the notation, to line up the axes and row
@@ -261,7 +276,7 @@ type compose_type =
 type transpose_type =
   | Transpose  (** Swaps inputs and outputs of a shape, preserves batch axes. *)
   | Pointwise_un  (** Preserves the shape. *)
-  | Permute of string * delayed_var_ref list
+  | Permute of einsum_spec * delayed_var_ref list
       (** The unary "einsum" syntax: RHS1=>LHS.
 
           Unlike [Pointwise_un], permute operations use equations only (not inequalities), so they
@@ -284,7 +299,7 @@ type ternary_type =
   | Compose_accumulate  (** As in the operation [FMA]. *)
   | Defined_by_cd_logic
       (** A placeholder for operations where the shape logic is defined by the %cd extension. *)
-  | Einsum_tern of string * delayed_var_ref list
+  | Einsum_tern of einsum_spec * delayed_var_ref list
       (** Ternary einsum contraction. The spec string has three RHS slots separated by [;] and one
           LHS slot after [=>]. Axis labels absent from the LHS become reduction axes. E.g.
           ["ij;jk;km=>im"] for a chain contraction (note: O(N⁴) — prefer binary chains for chain
@@ -352,7 +367,7 @@ type logic =
   | Terminal of { is_param : bool; logic : terminal_type }
       (** Extracts any available shape information from the initialization. The [is_param] field
           indicates if this is a parameter tensor that requires gradients. *)
-  | Block of { spec : string; delayed_vars : delayed_var_ref list; rhses : t list }
+  | Block of { spec : einsum_spec; delayed_vars : delayed_var_ref list; rhses : t list }
       (** Block tensor / concatenation operation. Takes an n-ary einsum specification where
           concatenated axes use the [a^b^c] syntax, e.g., ["x;y;z => x^y^z"]. *)
 [@@deriving equal, sexp_of]

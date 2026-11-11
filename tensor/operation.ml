@@ -46,11 +46,11 @@ end
 
 (** Helper to compute compose_op: if spec is provided, use Einsum; otherwise use Pointwise_bin. *)
 let compose_op_of_spec ?spec ?(capture_dims = []) () : Shape.compose_type =
-  match spec with None -> Pointwise_bin | Some s -> Einsum (s, capture_dims)
+  match spec with None -> Pointwise_bin | Some s -> Einsum (Shape.einsum_spec s, capture_dims)
 
 (** Helper to compute transpose_op: if spec is provided, use Permute; otherwise use Pointwise_un. *)
 let transpose_op_of_spec ?spec ?(capture_dims = []) () : Shape.transpose_type =
-  match spec with None -> Pointwise_un | Some s -> Permute (s, capture_dims)
+  match spec with None -> Pointwise_un | Some s -> Permute (Shape.einsum_spec s, capture_dims)
 
 let add ?spec ?(capture_dims = []) =
   let module NTDSL = Initial_NTDSL in
@@ -395,7 +395,7 @@ let uint4x32_to_prec_uniform1 ?grad_spec =
          broadcast axes (few unique values in inferred-shape params). The batch and input rows are
          left implicit (shared context ellipsis), so they remain safe to close to empty rows when
          nothing constrains them. *)
-        ~transpose_op:(Permute ("..b.. => ..b..", []))
+        ~transpose_op:(Permute (Shape.einsum_spec "..b.. => ..b..", []))
         ~op_asn ~grad_asn ?grad_spec (* Modifying the label would cause identifier pollution. *)
         ?label ~top_down_prec:true t1 ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes
         ?output_axes ?deduced ()
@@ -563,7 +563,7 @@ let fma ~grad_spec t1 t2 t3 =
 let where ?spec ?(capture_dims = []) ~grad_spec t1 t2 t3 =
   let module NTDSL = NTDSL_before_div in
   let ternary_op =
-    match spec with None -> Shape.Pointwise_tern | Some s -> Shape.Einsum_tern (s, capture_dims)
+    match spec with None -> Shape.Pointwise_tern | Some s -> Shape.Einsum_tern (Shape.einsum_spec s, capture_dims)
   in
   let%cd op_asn ~t ~t1 ~t2 ~t3 ~projections = v =:+ where v1 v2 v3 in
   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~t3 ~projections =
@@ -599,7 +599,7 @@ let einsum3 ?(capture_dims = []) spec =
     g3 =+ mul3 v1 v2 g
   in
   Tensor.ternop ~op_label:"einsum3"
-    ~ternary_op:(Shape.Einsum_tern (spec, capture_dims))
+    ~ternary_op:(Shape.Einsum_tern (Shape.einsum_spec spec, capture_dims))
     ~op_asn ~grad_asn
 
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract
@@ -611,7 +611,7 @@ let einsum1 ?(capture_dims = []) spec =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~t ~t1 ~projections = v =:+ v1 in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ g in
-  Tensor.unop ~transpose_op:(Shape.Permute (spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"=>"
+  Tensor.unop ~transpose_op:(Shape.Permute (Shape.einsum_spec spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"=>"
 
 let concat_sum ?(capture_dims = []) ?(negated = false) spec ?grad_spec rhses =
   let op = if negated then Ir.Ops.Neg else Ir.Ops.Identity in
@@ -731,7 +731,7 @@ let einmax1 ?(capture_dims = []) ?(nonoverlapping = false) spec =
       in
       grad_asn
   in
-  Tensor.unop ~transpose_op:(Shape.Permute (spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"@^=>"
+  Tensor.unop ~transpose_op:(Shape.Permute (Shape.einsum_spec spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"@^=>"
 
 (** This generalizes the tropical matrix multiplication to arbitrary indices combinations.
 
@@ -788,7 +788,7 @@ let tropical ?(capture_dims = []) ?(nonoverlapping = false) spec =
       in
       grad_asn
   in
-  Tensor.binop ~compose_op:(Shape.Einsum (spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"@^=>+"
+  Tensor.binop ~compose_op:(Shape.Einsum (Shape.einsum_spec spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"@^=>+"
 
 (** A fully-shape-inferred tensor that is initialized with the offset of each cell. *)
 let offsets = Tensor.term ~fetch_op:Range_over_offsets ?init_data:None

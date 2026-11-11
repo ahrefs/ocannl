@@ -140,7 +140,7 @@ let () =
         && Array.equal String.equal (Shape.to_bases z.Tensor.shape) [| Row.default_basis |]);
       let proxy =
         Shape.product_space_shape ~shape:z.Tensor.shape
-          ~logic:(Transpose (Permute ("n => n", [ n ]), y.Tensor.shape))
+          ~logic:(Transpose (Permute (Shape.einsum_spec "n => n", [ n ]), y.Tensor.shape))
       in
       Shape.propagate_shapes
         (Shape.make_update_step ~shape:proxy ~neutral_elem:None

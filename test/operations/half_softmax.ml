@@ -35,7 +35,7 @@ module Tn = Ir.Tnode
 let einmin1 spec =
   let%cd op_asn ~t ~t1 ~projections = v =:@- v1 in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ g in
-  Tensor.unop ~transpose_op:(Shape.Permute (spec, [])) ~op_asn ~grad_asn ~op_label:"@-=>"
+  Tensor.unop ~transpose_op:(Shape.Permute (Shape.einsum_spec spec, [])) ~op_asn ~grad_asn ~op_label:"@-=>"
 
 let show ctx label t =
   Stdio.printf "%s:" label;

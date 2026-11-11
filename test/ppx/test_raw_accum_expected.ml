@@ -95,7 +95,8 @@ let test_raw_unop_permute a =
              (Tensor.raw_accum ~initialize_neutral:true ~accum:Ir.Ops.Add
                 ~t:r ~lhs_is_grad:false
                 ~shape_logic:(Shape.Transpose
-                                ((Shape.Permute ("ij=>ji", [])),
+                                ((Shape.Permute
+                                    ((Shape.einsum_spec "ij=>ji"), [])),
                                   (a.Tensor.shape)))
                 ~rhs:(Ir.Assignments.Unop
                         {
@@ -288,7 +289,8 @@ let test_raw_ternop_einsum a b c =
              (Tensor.raw_accum ~initialize_neutral:true ~accum:Ir.Ops.Add
                 ~t:r ~lhs_is_grad:false
                 ~shape_logic:(Shape.Broadcast_tern
-                                ((Shape.Einsum_tern ("i;i;i=>i", [])),
+                                ((Shape.Einsum_tern
+                                    ((Shape.einsum_spec "i;i;i=>i"), [])),
                                   (a.Tensor.shape), (b.Tensor.shape),
                                   (c.Tensor.shape)))
                 ~rhs:(Ir.Assignments.Ternop

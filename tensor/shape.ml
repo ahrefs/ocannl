@@ -618,17 +618,27 @@ let refuse_closed_unsolved_ref ?(as_row = false) ~operation (r : delayed_var_ref
               variable. Capture it afresh in an operation of the open work."],
            [] )
 
+type einsum_spec = { exec : string; source : string option } [@@deriving equal, sexp_of]
+
+let einsum_spec ?source exec =
+  let source =
+    match source with Some s when not (String.equal s exec) -> Some s | Some _ | None -> None
+  in
+  { exec; source }
+
+let spec_text { exec; source } = Option.value source ~default:exec
+
 type compose_type =
   | Pointwise_bin
   | Compose
-  | Einsum of string * delayed_var_ref list
+  | Einsum of einsum_spec * delayed_var_ref list
   | Defined_by_cd_logic
 [@@deriving sexp_of, equal]
 
 type transpose_type =
   | Transpose
   | Pointwise_un
-  | Permute of string * delayed_var_ref list
+  | Permute of einsum_spec * delayed_var_ref list
   | Batch_slice of Idx.static_symbol
   | Uint4x32_to_prec of Ir.Ops.prec Lazy.t
   | Defined_by_cd_logic
@@ -641,7 +651,7 @@ type ternary_type =
   | Pointwise_tern
   | Compose_accumulate
   | Defined_by_cd_logic
-  | Einsum_tern of string * delayed_var_ref list
+  | Einsum_tern of einsum_spec * delayed_var_ref list
 [@@deriving sexp_of, equal]
 
 let einsum_of_spec spec =
@@ -654,7 +664,7 @@ type logic =
   | Transpose of transpose_type * t
   | Broadcast_tern of ternary_type * t * t * t
   | Terminal of { is_param : bool; logic : terminal_type }
-  | Block of { spec : string; delayed_vars : delayed_var_ref list; rhses : t list }
+  | Block of { spec : einsum_spec; delayed_vars : delayed_var_ref list; rhses : t list }
 [@@deriving equal, sexp_of]
 
 let logic_to_spec = function
@@ -663,10 +673,10 @@ let logic_to_spec = function
   | Broadcast_tern (Pointwise_tern, _, _, _) ->
       "."
   | Broadcast (Compose, _, _) | Broadcast_tern (Compose_accumulate, _, _, _) -> "@"
-  | Broadcast (Einsum (spec, _), _, _)
-  | Transpose (Permute (spec, _), _)
-  | Block { spec; _ }
-  | Broadcast_tern (Einsum_tern (spec, _), _, _, _) ->
+  | Broadcast (Einsum ({ exec = spec; _ }, _), _, _)
+  | Transpose (Permute ({ exec = spec; _ }, _), _)
+  | Block { spec = { exec = spec; _ }; _ }
+  | Broadcast_tern (Einsum_tern ({ exec = spec; _ }, _), _, _, _) ->
       spec
   | Transpose (Transpose, _) -> "T"
   | Transpose (Batch_slice _, _) -> "@|"
@@ -1544,10 +1554,10 @@ let unsized_padded_kernels ~spec ~(dim_refs : delayed_var_ref list) =
 
 (** The spec and captures of an einsum-family logic. *)
 let einsum_of_logic = function
-  | Transpose (Permute (spec, dim_refs), _)
-  | Broadcast (Einsum (spec, dim_refs), _, _)
-  | Broadcast_tern (Einsum_tern (spec, dim_refs), _, _, _)
-  | Block { spec; delayed_vars = dim_refs; _ } ->
+  | Transpose (Permute ({ exec = spec; _ }, dim_refs), _)
+  | Broadcast (Einsum ({ exec = spec; _ }, dim_refs), _, _)
+  | Broadcast_tern (Einsum_tern ({ exec = spec; _ }, dim_refs), _, _, _)
+  | Block { spec = { exec = spec; _ }; delayed_vars = dim_refs; _ } ->
       Some (spec, dim_refs)
   | Transpose _ | Broadcast _ | Broadcast_tern _ | Terminal _ -> None
 
@@ -2269,7 +2279,7 @@ let%debug4_sexp get_inequalities ?projection_sizing
             Row_eq { r1 = cur_sh.input; r2 = sh.input; origin = get_origin `Input };
             Row_eq { r1 = cur_sh.output; r2 = sh.output; origin = get_origin `Output };
           ] )
-  | Transpose (Permute (spec, dim_refs), sh) ->
+  | Transpose (Permute ({ exec = spec; _ }, dim_refs), sh) ->
       unmark_unused sh.id;
       add_var_used_in_spec_or_compose cur_sh.input.bcast;
       add_var_used_in_spec_or_compose sh.input.bcast;
@@ -2458,7 +2468,7 @@ let%debug4_sexp get_inequalities ?projection_sizing
                  ];
              };
          ]
-  | Broadcast (Einsum (spec, dim_refs), sh1, sh2) ->
+  | Broadcast (Einsum ({ exec = spec; _ }, dim_refs), sh1, sh2) ->
       unmark_unused sh1.id;
       unmark_unused sh2.id;
       add_var_used_in_spec_or_compose cur_sh.input.bcast;
@@ -2481,7 +2491,7 @@ let%debug4_sexp get_inequalities ?projection_sizing
           ~lhs_constraints_first:true ()
       in
       (proj_env, dim_var_set_empty, inequalities)
-  | Block { spec; delayed_vars; rhses } ->
+  | Block { spec = { exec = spec; _ }; delayed_vars; rhses } ->
       List.iter rhses ~f:(fun sh -> unmark_unused sh.id);
       add_var_used_in_spec_or_compose cur_sh.input.bcast;
       List.iter rhses ~f:(fun sh -> add_var_used_in_spec_or_compose sh.input.bcast);
@@ -2514,7 +2524,7 @@ let%debug4_sexp get_inequalities ?projection_sizing
       in
       let discardable_vars = Set.union discardable_from_rhs discardable_from_lhs in
       (proj_env, discardable_vars, inequalities)
-  | Broadcast_tern (Einsum_tern (spec, dim_refs), sh1, sh2, sh3) ->
+  | Broadcast_tern (Einsum_tern ({ exec = spec; _ }, dim_refs), sh1, sh2, sh3) ->
       unmark_unused sh1.id;
       unmark_unused sh2.id;
       unmark_unused sh3.id;
@@ -3096,15 +3106,15 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
   in
   let spec, dim_refs, ls_rhs_list, ls_lhs, rhs_shapes =
     match logic with
-    | Broadcast (Einsum (spec, dim_refs), sh1, sh2) -> (
+    | Broadcast (Einsum ({ exec = spec; _ }, dim_refs), sh1, sh2) -> (
         match einsum_of_spec spec with
         | [ ls1; ls2 ], ls_lhs -> (spec, dim_refs, [ ls1; ls2 ], ls_lhs, [ sh1; sh2 ])
         | _ -> invalid ("invalid binary einsum spec: " ^ spec) [ cur_sh; sh1; sh2 ])
-    | Transpose (Permute (spec, dim_refs), sh1) -> (
+    | Transpose (Permute ({ exec = spec; _ }, dim_refs), sh1) -> (
         match einsum_of_spec spec with
         | [ ls1 ], ls_lhs -> (spec, dim_refs, [ ls1 ], ls_lhs, [ sh1 ])
         | _ -> invalid ("invalid permutation spec: " ^ spec) [ cur_sh; sh1 ])
-    | Broadcast_tern (Einsum_tern (spec, dim_refs), sh1, sh2, sh3) -> (
+    | Broadcast_tern (Einsum_tern ({ exec = spec; _ }, dim_refs), sh1, sh2, sh3) -> (
         match einsum_of_spec spec with
         | [ ls1; ls2; ls3 ], ls_lhs -> (spec, dim_refs, [ ls1; ls2; ls3 ], ls_lhs, [ sh1; sh2; sh3 ])
         | _ -> invalid ("invalid ternary einsum spec: " ^ spec) [ cur_sh; sh1; sh2; sh3 ])

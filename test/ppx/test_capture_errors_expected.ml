@@ -308,8 +308,9 @@ let logic_unary =
            (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
               ~t:tgt ~lhs_is_grad:false
               ~shape_logic:(Shape.Transpose
-                              ((Shape.Permute ("a^c => a^b^c", [missing])),
-                                (x.Tensor.shape)))
+                              ((Shape.Permute
+                                  ((Shape.einsum_spec "a^c => a^b^c"),
+                                    [missing])), (x.Tensor.shape)))
               ~rhs:(Ir.Assignments.Unop
                       {
                         op = Ir.Ops.Identity;
@@ -340,7 +341,8 @@ let logic_binary =
            (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
               ~t:tgt ~lhs_is_grad:false
               ~shape_logic:(Shape.Broadcast
-                              ((Shape.Einsum ("a; a => a", [a])),
+                              ((Shape.Einsum
+                                  ((Shape.einsum_spec "a; a => a"), [a])),
                                 (x.Tensor.shape), (y.Tensor.shape)))
               ~rhs:(Ir.Assignments.Binop
                       {
@@ -374,7 +376,8 @@ let logic_binary_tuple =
            (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
               ~t:tgt ~lhs_is_grad:false
               ~shape_logic:(Shape.Broadcast
-                              ((Shape.Einsum ("a; a => a", [a])),
+                              ((Shape.Einsum
+                                  ((Shape.einsum_spec "a; a => a"), [a])),
                                 (x.Tensor.shape), (y.Tensor.shape)))
               ~rhs:(Ir.Assignments.Binop
                       {
@@ -413,7 +416,8 @@ let logic_ternary =
            (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
               ~t:tgt ~lhs_is_grad:false
               ~shape_logic:(Shape.Broadcast_tern
-                              ((Shape.Einsum_tern ("a; a; a => a", [a])),
+                              ((Shape.Einsum_tern
+                                  ((Shape.einsum_spec "a; a; a => a"), [a])),
                                 (x.Tensor.shape), (y.Tensor.shape),
                                 (z.Tensor.shape)))
               ~rhs:(Ir.Assignments.Ternop
@@ -455,7 +459,8 @@ let logic_ternary_tuple =
            (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
               ~t:tgt ~lhs_is_grad:false
               ~shape_logic:(Shape.Broadcast_tern
-                              ((Shape.Einsum_tern ("a; a; a => a", [a])),
+                              ((Shape.Einsum_tern
+                                  ((Shape.einsum_spec "a; a; a => a"), [a])),
                                 (x.Tensor.shape), (y.Tensor.shape),
                                 (z.Tensor.shape)))
               ~rhs:(Ir.Assignments.Ternop
@@ -487,7 +492,8 @@ let logic_unary_parens =
            (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
               ~t:tgt ~lhs_is_grad:false
               ~shape_logic:(Shape.Transpose
-                              ((Shape.Permute ("a => a", [a])),
+                              ((Shape.Permute
+                                  ((Shape.einsum_spec "a => a"), [a])),
                                 (x.Tensor.shape)))
               ~rhs:(Ir.Assignments.Unop
                       {
@@ -513,7 +519,8 @@ let logic_empty =
            (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
               ~t:tgt ~lhs_is_grad:false
               ~shape_logic:(Shape.Transpose
-                              ((Shape.Permute ("a => a", [])),
+                              ((Shape.Permute
+                                  ((Shape.einsum_spec "a => a"), [])),
                                 (x.Tensor.shape)))
               ~rhs:(Ir.Assignments.Unop
                       {

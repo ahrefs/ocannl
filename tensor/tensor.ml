@@ -1573,7 +1573,7 @@ let%track7_sexp blockop ?op_label ~spec ~delayed_vars ~op_asn ~grad_asn ?grad_sp
     ?output_axes ?deduced () : t =
   let rhses_list = Array.to_list rhses in
   let rhs_shapes = List.map rhses_list ~f:(fun rhs -> rhs.shape) in
-  let shape_logic = Shape.Block { spec; delayed_vars; rhses = rhs_shapes } in
+  let shape_logic = Shape.Block { spec = Shape.einsum_spec spec; delayed_vars; rhses = rhs_shapes } in
   op
     ~label:(Option.to_list op_label @ label)
     ~shape_logic ~op_asn ~grad_asn ?grad_spec ?top_down_prec

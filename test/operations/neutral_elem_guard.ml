@@ -72,7 +72,7 @@ let unop ~op_asn =
 
 let padded_conv ~op_asn a k =
   Tensor.binop ~op_label:"guard_probe"
-    ~compose_op:(Shape.Einsum ("1*oh= + kh; kh => oh", []))
+    ~compose_op:(Shape.Einsum (Shape.einsum_spec "1*oh= + kh; kh => oh", []))
     ~op_asn ~grad_asn:conv_grad_asn ~grad_spec:Tensor.Prohibit_grad a k ()
 
 let verdict ?(substring = "forced from within [op_asn]") ~claim ~expect_rejected build =
