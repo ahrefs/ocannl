@@ -12,4 +12,6 @@ the source stores double: true
 execution preserves the double data: true
 the refusal explains data provenance and construction-time precision: true
 the refusal explains data provenance and construction-time precision: true
+the refusal explains data provenance and construction-time precision: true
+the refusal explains data provenance and construction-time precision: true
 the refusal does not attribute an explicit precision to data: true

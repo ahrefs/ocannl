@@ -29,18 +29,37 @@ let () =
                 (Array.map values ~f:(fun v -> 2. *. v))
                 ~f:Float.equal;
               Context.release ctx)));
-  List.iter [ false; true ] ~f:(fun read_first ->
-      Verdict.case (Printf.sprintf "data precision conflict, read first %b" read_first) (fun () ->
-          let x = TDSL.ndarray (Array.create ~len:64 1.) ~output_dims:[ 64 ] () in
-          if read_first then ignore (Lazy.force x.Tensor.value.Ir.Tnode.storage_prec : Ir.Ops.prec);
-          let message =
-            match Ir.Tnode.update_prec x.Tensor.value Ir.Ops.double with
-            | () -> ""
-            | exception Utils.User_error message -> message
+  let sources =
+    [
+      ("ndarray", fun () -> TDSL.ndarray (Array.create ~len:64 1.) ~output_dims:[ 64 ] ());
+      ( "wrap",
+        fun () ->
+          let data =
+            Ir.Ndarray.create_array ~debug:"precision diagnostic" ~dims:[| 64 |] ~padding:None
+              Ir.Ops.single
           in
-          p "the refusal explains data provenance and construction-time precision"
-            (String.is_substring message ~substring:"precision fixed by data at creation"
-            && String.is_substring message ~substring:"~prec")));
+          NTDSL.wrap ~l:"wrapped" ~o:[ 64 ] data () );
+    ]
+  in
+  List.iter sources ~f:(fun (name, source) ->
+      List.iter [ false; true ] ~f:(fun read_first ->
+          Verdict.case (Printf.sprintf "%s precision conflict, read first %b" name read_first)
+            (fun () ->
+              let x = source () in
+              if read_first then
+                ignore (Lazy.force x.Tensor.value.Ir.Tnode.storage_prec : Ir.Ops.prec);
+              let message =
+                match Ir.Tnode.update_prec x.Tensor.value Ir.Ops.double with
+                | () -> ""
+                | exception Utils.User_error message -> message
+              in
+              p "the refusal explains data provenance and construction-time precision"
+                (String.is_substring message
+                   ~substring:"precision fixed by initialization data at creation"
+                && String.is_substring message
+                     ~substring:"construct the source at the wanted precision"
+                && String.is_substring message ~substring:"ndarray ~prec"
+                && String.is_substring message ~substring:"wrap ~prec"))));
   Verdict.case "explicit precision without data" (fun () ->
       let x = TDSL.ndarray ~prec:Ir.Ops.single [| 1. |] ~output_dims:[ 1 ] () in
       let message =
@@ -50,4 +69,4 @@ let () =
       in
       p "the refusal does not attribute an explicit precision to data"
         (String.is_substring message ~substring:"already set"
-        && not (String.is_substring message ~substring:"fixed by data")))
+        && not (String.is_substring message ~substring:"fixed by initialization data")))

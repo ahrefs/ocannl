@@ -286,8 +286,7 @@ val ndarray : ?prec:Ir.Ops.prec -> ?grad_spec:grad_spec -> float array -> op_fun
 (** A tensor with an explicit shape, initialized to the given values. Omitted shape rows default to
     no axes. [prec] fixes the value precision at construction, including for data-backed literals
     above [limit_constant_fill_size]. When omitted, small literals follow precision inference and
-    data-backed ones use [default_value_prec]. [grad_spec] is by default [Prohibit_grad]. The given
-    values must fill the tensor's [value] node precisely. *)
+    data-backed ones use [default_value_prec]. [grad_spec] is by default [Prohibit_grad]. *)
 
 val param : ?require_grad:bool -> t:op_fun -> string -> ?more_label:string list -> param_op_fun
 (** [param] is intended for all tensors with initialization; these typically are parameters, but

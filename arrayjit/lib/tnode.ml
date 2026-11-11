@@ -775,7 +775,8 @@ let update_prec ?only_if tn prec =
     raise
     @@ Utils.User_error
          (message
-        ^ "; precision fixed by data at creation; for ndarray, construct it with ~prec instead")
+        ^ "; precision fixed by initialization data at creation; construct the source at the \
+           wanted precision (e.g. ndarray ~prec or wrap ~prec)")
 
 let update_infer_prec ?only_if tn delayed_prec =
   Prec_cell.update_infer_prec ?only_if
