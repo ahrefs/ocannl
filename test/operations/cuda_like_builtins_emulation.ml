@@ -37,6 +37,7 @@ type shape =
   | Lane  (** [uint4x32_to_<prec>_uniform_lane]: a draw and a lane of its [_vec] pack. *)
   | From_u32  (** [uint32_to_<prec>_uniform]: one 32-bit word. *)
   | To_u4 of string  (** [<prec>_to_uint4x32]: a value of [<prec>]. *)
+  | From_integer of string  (** Integer-to-bf16 bit codec, shared with HIP. *)
   | From_f64
       (** [double_to_single_round_odd] (gh-ocannl-2075): a double, the draw's first two words. *)
   | Excluded of string
@@ -95,7 +96,9 @@ let shape key =
           then To_u4 prec
           else Unknown
       | None -> (
-          if key = "double_to_single_round_odd" then From_f64
+          if key = "ocannl_int64_to_bfloat16_bits" then From_integer "long long"
+          else if key = "ocannl_uint64_to_bfloat16_bits" then From_integer "unsigned long long"
+          else if key = "double_to_single_round_odd" then From_f64
           else
             match chop_suffix key ~suffix:"_uniform_lane" with
             | Some stem when List.mem (stem ^ "_uniform_vec") c_keys -> Lane
@@ -260,7 +263,7 @@ let probe ~vendor ~prefix key =
     | From_u4 -> Printf.sprintf "%s%s(x)" prefix key
     | Lane -> Printf.sprintf "%s%s(x, lane)" prefix key
     | From_u32 -> Printf.sprintf "%s%s(in[0])" prefix key
-    | To_u4 _ | From_f64 -> Printf.sprintf "%s%s(a)" prefix key
+    | To_u4 _ | From_f64 | From_integer _ -> Printf.sprintf "%s%s(a)" prefix key
     | Excluded _ | Unknown -> assert false
   in
   let arg =
@@ -268,6 +271,7 @@ let probe ~vendor ~prefix key =
     | To_u4 prec ->
         let t = Option.get (param_type prec ~vendor) in
         Printf.sprintf "  %s a; memset(&a, 0, sizeof a); memcpy(&a, in, sizeof a);\n" t
+    | From_integer typ -> Printf.sprintf "  %s a; memcpy(&a, in, sizeof a);\n" typ
     | From_f64 -> "  double a; memcpy(&a, in, sizeof a);\n"
     | _ -> ""
   in

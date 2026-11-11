@@ -1,0 +1,19 @@
+int32: midpoint offset -1 rounds once to bf16: true
+int32: midpoint offset 0 rounds once to bf16: true
+int32: midpoint offset 1 rounds once to bf16: true
+uint32: midpoint offset -1 rounds once to bf16: true
+uint32: midpoint offset 0 rounds once to bf16: true
+uint32: midpoint offset 1 rounds once to bf16: true
+int64: midpoint offset -1 rounds once to bf16: true
+int64: midpoint offset 0 rounds once to bf16: true
+int64: midpoint offset 1 rounds once to bf16: true
+uint64: midpoint offset -1 rounds once to bf16: true
+uint64: midpoint offset 0 rounds once to bf16: true
+uint64: midpoint offset 1 rounds once to bf16: true
+int64_small: integer edge values round once to bf16: true
+uint64_small: integer edge values round once to bf16: true
+int64_min: integer edge values round once to bf16: true
+int64_max: integer edge values round once to bf16: true
+uint64_max: integer edge values round once to bf16: true
+half: the wide integer witness still overflows: true
+fp8: the wide integer witness still saturates: true

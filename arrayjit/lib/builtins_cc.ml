@@ -278,6 +278,50 @@ let double_to_single_round_odd_builtin ~dialect =
       prefix to_bits of_bits,
     [] )
 
+(* gh-ocannl-2147: keep every integer bit until the bf16 rounding decision. A double intermediate
+   still loses +/-1 around midpoints beyond 2^53. Share the bit codec with HIP; only linkage and the
+   reinterpretation of its result differ. Both tables use project-prefixed helper names to avoid
+   vendor header collisions. Unsigned subtraction obtains the magnitude even for INT64_MIN, without
+   signed overflow. *)
+let integer_bfloat16_builtins ~dialect =
+  let prefix =
+    match dialect with
+    | `C -> "ARRAYJIT_BUILTIN_LINKAGE"
+    | `Cuda_like -> "__device__ __forceinline__"
+  in
+  [
+    ( "ocannl_uint64_to_bfloat16_bits",
+      Printf.sprintf
+        {|%s unsigned short ocannl_uint64_to_bfloat16_bits(unsigned long long x) {
+  if (x == 0) return 0;
+  unsigned long long top = x;
+  unsigned int e = 0;
+  while (top >= 2) { top >>= 1; ++e; }
+  unsigned int q;
+  if (e <= 7) q = (unsigned int)x << (7 - e);
+  else {
+    unsigned int shift = e - 7; /* 1..56: every shift and mask fits uint64 */
+    q = (unsigned int)(x >> shift);
+    unsigned long long remainder = x & ((1ull << shift) - 1ull);
+    unsigned long long midpoint = 1ull << (shift - 1);
+    q += remainder > midpoint || (remainder == midpoint && (q & 1u));
+  }
+  /* Addition carries q == 256 into the exponent, including UINT64_MAX -> 2^64. */
+  return (unsigned short)(((e + 127u) << 7) + q - 128u);
+}|}
+        prefix,
+      [] );
+    ( "ocannl_int64_to_bfloat16_bits",
+      Printf.sprintf
+        {|%s unsigned short ocannl_int64_to_bfloat16_bits(long long x) {
+  unsigned long long magnitude = (unsigned long long)x;
+  if (x < 0) magnitude = 0ull - magnitude;
+  return (unsigned short)(ocannl_uint64_to_bfloat16_bits(magnitude) | (x < 0 ? 0x8000u : 0u));
+}|}
+        prefix,
+      [ "ocannl_uint64_to_bfloat16_bits" ] );
+  ]
+
 let builtins =
   [
     (* Float16 feature detection and type definitions *)
@@ -2039,6 +2083,8 @@ ARRAYJIT_BUILTIN_LINKAGE int32_t OCANNL_CHECKED_LANE(int64_t lane, int32_t lanes
   ]
 
 let builtins =
-  integer_power_builtins ~prefix:"static inline" ~supports_double:true ~dialect:`C @ builtins
+  integer_bfloat16_builtins ~dialect:`C
+  @ integer_power_builtins ~prefix:"static inline" ~supports_double:true ~dialect:`C
+  @ builtins
 
 let source = includes ^ String.concat "" (List.map (fun (_, def, _) -> def) builtins)
