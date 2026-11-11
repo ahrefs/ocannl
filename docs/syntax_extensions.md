@@ -702,6 +702,14 @@ objects can be used to add shape constraints via `Shape.set_dim` and `Shape.set_
 corresponding variable (as a number) into a tensor expression. For a row variable, the number
 will be the product of the dimensions it resolved into.
 
+`%cd` assignments also accept a trailing capture list on a literal `~logic` specification,
+for unary, binary and ternary assignments. For example,
+`let%cd comp = tgt =: id x ~logic:"a^c => a^b^c" ["a"; "b"] in`
+binds `a` and `b` with the same per-call scope and label checks as operator captures.
+`Shape.set_dim a 2; Shape.set_dim b 1` sizes those concat segments before compilation.
+This assignment writes the `a` and `c` segments; the existing `b` cells of `tgt` retain their
+prior values. The capture references are passed in the assignment's shape logic.
+
 The ppx never shares a capture between calls, but a reference made by hand with
 `Shape.get_variable_ref` can be passed through `~capture_dims` to several operations. It then
 names one dimension, whichever order shape inference solves them in (gh-ocannl-1545): until

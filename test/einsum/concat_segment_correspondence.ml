@@ -50,6 +50,20 @@ let computes label make ~want =
 (* The operand is [1 .. 6]: a = [1 2], b = [3], c = [4 5 6]. *)
 let abc spec = NTDSL.einsum1 ~capture_dims:[ capture "a" 2; capture "b" 1 ] spec (vec 6) ()
 
+let cd_partial label make =
+  computes label
+    (fun () ->
+      let tgt =
+        NTDSL.init ~l:"cd_sentinel" ~prec:Ir.Ops.single ~o:[ 6 ]
+          ~f:(fun i -> Float.of_int (-100 + i.(0)))
+          ()
+      in
+      Train.set_materialized tgt.Tensor.value;
+      let comp = make tgt (vec 5) in
+      let ctx, routine = Context.compile (Context.cpu ()) comp Ir.Indexing.Empty in
+      Context.get_values (Context.run ctx routine) tgt.Tensor.value)
+    ~want:[| 1.; 2.; -98.; 3.; 4.; 5. |]
+
 let forward () =
   computes "a dropped middle segment, a^b^c => a^c"
     (fun () -> values (abc "a^b^c => a^c"))
@@ -65,6 +79,16 @@ let forward () =
       values
         (NTDSL.einsum1 ~capture_dims:[ capture "a" 2; capture "b" 1 ] "a^c => a^b^c" (vec 5) ()))
     ~want:[| 1.; 2.; 0.; 3.; 4.; 5. |];
+  cd_partial "%cd captures concat sizes and preserves the untouched sentinel" (fun tgt x ->
+      let%cd comp = tgt =: id x ~logic:"a^c => a^b^c" [ "a"; "b" ] in
+      Shape.set_dim a 2;
+      Shape.set_dim b 1;
+      comp);
+  cd_partial "%cd parenthesized primitive captures preserve the untouched sentinel" (fun tgt x ->
+      let%cd comp = tgt =: (id x) ~logic:"a^c => a^b^c" [ "a"; "b" ] in
+      Shape.set_dim a 2;
+      Shape.set_dim b 1;
+      comp);
   computes "a written segment between reordered ones, a^c => c^b^a"
     (fun () ->
       values
