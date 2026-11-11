@@ -976,3 +976,22 @@ let _constrained_block =
     fun x ->
       Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
         (fun () -> __ocannl_body x)
+let rec _constrained_rec =
+  let open! TDSL.O in
+    (((fun x ->
+         if false
+         then
+           Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+             (fun () -> _constrained_rec x)
+         else
+           relu
+             ?label:(Some
+                       (List.concat
+                          [["_constrained_rec"];
+                          (x.Tensor.value).Ir.Tnode.label])) x : Tensor.t ->
+                                                                   Tensor.t))
+    [@ocannl.no_scheme ])
+let _constrained_optout =
+  let open! TDSL.O in
+    (((fun () -> fun x -> relu ?label:(Some ["_constrained_optout"]) x : 
+    unit -> Tensor.t -> Tensor.t))[@ocannl.no_scheme ])

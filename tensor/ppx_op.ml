@@ -915,6 +915,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
   } ->
       (no_vbs, ndarray_op ?label ~ndarray_fn:(dsl_fn "ndarray") expr)
   | { pexp_desc = Pexp_constraint (inner, typ); _ } ->
+      let inner = if opted_out expr then opt_out inner else inner in
       let vbs, inner =
         translate ~dsl_name ~num_configs ~is_toplevel ~in_block ?scheme_name ~opt_label ~late ?label
           inner

@@ -104,3 +104,17 @@ let () =
   let x = TDSL.range ~label:[ "constrained_input" ] 3 in
   claim "type-constrained application" (constrained_relu x)
     ([ "relu"; "constrained_relu" ] @ label x)
+
+let constrained_calls = ref 0
+
+let%op constrained_no_scheme =
+  (fun () x ->
+     incr constrained_calls;
+     relu x
+    : unit -> Tensor.t -> Tensor.t)
+[@@ocannl.no_scheme]
+
+let () =
+  let x = TDSL.range 3 in
+  ignore (constrained_no_scheme () x);
+  p "type-constrained opt-out: the body runs once" (!constrained_calls = 1)

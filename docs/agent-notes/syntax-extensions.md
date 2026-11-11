@@ -163,6 +163,7 @@ files.
   shape and checks both its captured dimension and rank (gh-ocannl-2163).
 
 - Type constraints in `%op` (gh-ocannl-2175) preserve translation of their expression, including
-  result labels, application sites, inline declarations and block-element context. The earlier
+  result labels, application sites, inline declarations, scheme opt-outs and block-element context.
+  The earlier
   numeric-literal and tensor-container constraints remain axis-basis annotations; `[%oc ...]`
   still opts out explicitly.

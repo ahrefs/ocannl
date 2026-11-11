@@ -52,3 +52,4 @@ without (): the inline declaration: it does not carry L: true
 ~label after the tensor: the label is as stated: true
 type-constrained application: [relu; constrained_relu; 0...2; constrained_input]
 type-constrained application: the label is as stated: true
+type-constrained opt-out: the body runs once: true

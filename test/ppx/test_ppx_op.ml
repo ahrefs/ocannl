@@ -195,3 +195,9 @@ let%op _constrained_call x = (initialized_no_unit x : Tensor.t)
 let%op _constrained_op x = ((relu x : Tensor.t) : Tensor.t)
 let%op _constrained_inline () x = (( + ) (x, { constrained_w }) : Tensor.t)
 let%op _constrained_block x = [ ((x, x) : Tensor.t) ]
+
+let%op rec _constrained_rec =
+  (fun x -> if false then _constrained_rec x else relu x : Tensor.t -> Tensor.t)
+
+let%op _constrained_optout = (fun () x -> relu x : unit -> Tensor.t -> Tensor.t)
+[@@ocannl.no_scheme]
