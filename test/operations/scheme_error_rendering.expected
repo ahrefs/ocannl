@@ -43,7 +43,7 @@ Shape_error: tracing the shape scheme name_clash: Name 'v' is used as both a dim
   shape of name_clash: ..'a..|..'b..->..'c..
   shape of n'1: ..'d..|..'e..->..'f..
 --- an empty concatenation component
-Shape_error: tracing the shape scheme concat_empty: einsum spec 0 ^ o => o: a concatenation component of size 0 is empty; drop it from the concatenation
+Shape_error: tracing the shape scheme concat_empty: einsum spec 0^o => o: a concatenation component of size 0 is empty; drop it from the concatenation
 --- undetermined concatenation components, at the closure (a variable in the message)
 Shape_error: the size of the concatenation component 'a:o is not determined, and closure does not guess one: it is a segment of the axis, not a broadcast. Size it: capture the component (the spec's trailing label list) and Shape.set_dim it, write its size as an integer component (e.g. 2^o => o), or pass the operation's result dims explicitly
   the axis: 'a:o

@@ -16,7 +16,8 @@ val ndarray_constant :
 (** Parses an ndarray literal into its flat values and batch, output, input [(dim, basis)] axes. *)
 
 val substitute_identifiers_in_einsum_spec : loc:location -> string -> expression
-(** An expression building an einsum or axis-labels spec, reading identifier strides at run time. *)
+(** An expression building an einsum or axis-labels spec, reading identifier strides at run time.
+    A spec that reads no runtime value is returned as the literal the user wrote (gh-ocannl-2163). *)
 
 val einsum_spec_identifiers : string -> string list
 (** The identifiers [substitute_identifiers_in_einsum_spec] reads as integers at run time: the

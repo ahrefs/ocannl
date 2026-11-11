@@ -70,7 +70,7 @@ let () =
            Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> mk "a") in
          let __op_component2 =
            Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> mk "b") in
-         concat ?label:(Some []) "i; j; k => i ^ j ^ k"
+         concat ?label:(Some []) "i; j; k => i^j^k"
            [|__op_component1;__op_component2;(Tensor.Scheme.For_ppx.at_site
                                                 Stdlib.__POS__
                                                 (fun () -> mk "c"))|]);
@@ -81,7 +81,7 @@ let () =
          let j = Shape.get_variable_ref "j" in
          let __op_component1 =
            Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> mk "a") in
-         concat ?label:(Some []) ~capture_dims:[i; j] "i; j => i ^ j"
+         concat ?label:(Some []) ~capture_dims:[i; j] "i; j => i^j"
            [|__op_component1;(Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
                                 (fun () -> mk "b"))|])
 let () =
@@ -155,8 +155,7 @@ let () =
           Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> mk "a") in
         let __op_component2 =
           Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> mk "b") in
-        concat ?label:(Some ["r"]) ~capture_dims:[i; j; k]
-          "i; j; k => i ^ j ^ k"
+        concat ?label:(Some ["r"]) ~capture_dims:[i; j; k] "i; j; k => i^j^k"
           [|__op_component1;__op_component2;(Tensor.Scheme.For_ppx.at_site
                                                Stdlib.__POS__
                                                (fun () -> mk "c"))|] in

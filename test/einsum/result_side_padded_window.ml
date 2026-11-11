@@ -148,8 +148,8 @@ let run_refusals () =
           (kernel ()) (kernel ()) ()
       in
       forward r);
-  (* The [++^] ppx re-renders the concatenation as [c ^ d] in the spec it passes on. *)
-  refused "block" ~window:"s=+k" ~spec:"s, c; s, d => s=+k, c ^ d" (fun () ->
+  (* The [++^] ppx passes the literal on as written (gh-ocannl-2163). *)
+  refused "block" ~window:"s=+k" ~spec:"s, c; s, d => s=+k, c^d" (fun () ->
       let a = operand () in
       let b = operand () in
       let%op r = (a, b) ++^ "s, c; s, d => s=+k, c^d" in

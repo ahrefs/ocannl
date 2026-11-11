@@ -189,7 +189,7 @@ let () =
     ~layout:Trailing ~rows:1 ~src:1 ~dst:4 ~offset:2 Replace;
   both ~label:"integer padding, s, a => s, 2^a^1" ~spec:"s, a => s, 2^a^1" ~layout:Trailing ~rows:2
     ~src:3 ~dst:6 ~offset:2 Replace;
-  (* The [%op] literal path: the PPX re-renders the parsed spec, integer components included. *)
+  (* The [%op] literal path: the PPX passes the literal on as written (gh-ocannl-2163). *)
   run_case ~label:"ppx literal, x ++ \"2^o => o\"" ~layout:Trailing ~rows:1 ~src:5 ~dst:3 ~offset:2
     ~mode:Extract (fun x ->
       let%op t = x ++ "2^o => o" in

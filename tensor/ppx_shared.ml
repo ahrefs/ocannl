@@ -315,17 +315,12 @@ let substitute_identifiers_in_einsum_spec ~loc str_input =
     @ (if parsed.implicit_input then [] else input_segments @ [ estring ~loc "->" ])
     @ output_segments
   in
-  (* Fold the segments into one literal when every one of them is a literal, so the common case
-     costs nothing at run time. *)
+  (* A spec that reads no runtime value is emitted as written (gh-ocannl-2163): Shape parses it with
+     the same parser, exactly as a direct call's, and its refusals then quote what the user wrote,
+     not a comma-separated re-rendering. Only a spec with a runtime substitution is rebuilt. *)
   let concat_segments segments =
     match Option.all (List.map segments ~f:string_literal) with
-    | Some literals ->
-        let rendered = String.concat literals in
-        (* A trailing comma can be the only multichar trigger: [ab, => ab,] must not become [ab =>
-           ab]. With no runtime substitutions, the already-parsed source is safe to keep. Dynamic
-           substitutions retain a [*] or a window marker, so they cannot lose the mode. *)
-        estring ~loc
-          (if is_multichar str_input && not (is_multichar rendered) then str_input else rendered)
+    | Some _ -> estring ~loc str_input
     | None -> [%expr String.concat ~sep:"" [%e elist ~loc segments]]
   in
   (* Try to parse as einsum spec *)

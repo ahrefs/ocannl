@@ -165,7 +165,8 @@ files.
   coefficient identifiers and fixed indices are not. `test/ppx/test_capture_errors.ml` pins the
   errors and accepted expansions; direct operation calls retain Shape's runtime fallback.
 
-- Constant-only spec rendering keeps the parsed source if normalization would erase its multichar
-  trigger: `"ab, => ab,"` must not reach Shape as `"ab => ab"`. Dynamic coefficient or padding
-  substitutions retain an affine marker. `capture_multichar_hint` closes the documented repair's
-  shape and checks both its captured dimension and rank (gh-ocannl-2163).
+- A spec reading no runtime value reaches Shape as the literal the user wrote, so Shape parses
+  exactly what a direct call would and its refusals quote the source (gh-ocannl-2163). Only a spec
+  with a stride/dilation identifier or a padding-less `+` window is rebuilt at run time (as a
+  comma-separated multichar string; dynamic substitutions retain an affine marker, so its mode
+  survives). `capture_multichar_hint` pins the `"ab, => ab,"` repair's captured dimension and rank.

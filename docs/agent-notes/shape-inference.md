@@ -295,8 +295,10 @@ files.
   operand they read past it. `refuse_out_of_extent_offset` (gh-ocannl-1618) refuses them in
   `einsum_slot_spec_to_dims_bio`, so every slot of every route; padded windows keep offsets.
   `test/einsum/result_side_affine_forms` executes every accepted result-side form against an
-  oracle — extend it when adding one. The `%op`/`%cd` renderer (`Ppx_shared`) re-renders specs, so
-  a grammar form it renders wrong is a parse error of a spec the user never wrote.
+  oracle — extend it when adding one. The `%op`/`%cd` renderer (`Ppx_shared`) re-renders only specs
+  reading a runtime value (a stride identifier, a padding-less `+` window); a grammar form it
+  renders wrong is a parse error of a spec the user never wrote. A literal passes as written
+  (gh-ocannl-2163).
 - A padded window's margins follow the DILATED kernel extent, `left = (span - 1) / 2` and
   `right = (span + 1) / 2` (the `Conv_input` arm of `Row`'s projection derivation): PyTorch's
   `padding='same'`, the extra tap of an even span on the right (gh-ocannl-1692; the
