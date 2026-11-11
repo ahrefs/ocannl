@@ -119,6 +119,10 @@ files.
   its head with `NTDSL`; wrapped, `{ w = uniform () }` resolved `TDSL.O.uniform` and failed to
   type-check). Otherwise the thunk only types the application without its position's expected
   type and takes it out of tail position; no other `%op` code in the repository noticed.
+- Type constraints in `%op` (gh-ocannl-2175) preserve translation of their expression, including
+  result labels, application sites, inline declarations, scheme opt-outs and block-element context.
+  Numeric-literal and tensor-container annotations keep their axis-basis meaning; `[%oc ...]`
+  still opts out explicitly.
 - `%cd` composition seams verified by ppx expansion (gh-465, `Train.sgd_one`/`grad_update`): an
   OCaml variable of `Asgns.comp` type in statement position splices verbatim (so a
   programmatically built fragment can sit inside a `%cd` body); an inline declaration `{ x }`
