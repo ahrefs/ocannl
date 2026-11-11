@@ -306,10 +306,12 @@ files.
   application substitutes through the environment (which sums a concrete extent into a `Dim`), and a
   closed row's total reaches the variable as a `Dim_eq` whose solution carries to the parts
   (gh-ocannl-2086, `test/einsum/product_tie_concat_affine.ml`). With nothing sized, stage 6 holds
-  that total while the numerator has open parts (gh-ocannl-2159). Stage 7 closes the parts and
-  re-emits the total: the stored constraint mentions only the numerator variable, so a part's
-  solution need not revisit it. Affine parts default to 1, then their extent sizes the row;
-  concatenation components retain the deliberate refusal to guess (gh-ocannl-1656, above).
+  the guess of total 1 over open parts (gh-ocannl-2159). Larger totals keep the exact-solving path:
+  a known row prefix can determine the parts. Free affine parts close here, and their total sizes
+  the row before another shape can close: emitting equations alone leaves consumers closing too
+  soon. A remaining hold re-emits at stage 7, since the stored constraint mentions only the
+  numerator variable, so a part's solution need not revisit it. Concatenation components retain
+  the deliberate refusal to guess (gh-ocannl-1656, above).
 - `divided_by` is a multiset, and a repeat in it is an equation: `n / w` over `[w, ..r..]` leaves
   `n / (w * w)` on `r` (`Row.reduce_row_constraint` appends the consumed variables as they are), and
   the closed-row check takes any number of `divided_by` variables. A shortcut that treats a repeat

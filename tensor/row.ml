@@ -5564,12 +5564,49 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
                  here left a [28 -> 28] parameter's draw at 28 elements, broadcast along the other
                  axis. *)
               match subst_dim env (Var var) with
-              | (Affine _ | Concat _) as dim when not (Set.is_empty (vars_of_dim dim)) ->
-                  (* gh-ocannl-2159: the numerator already has a value, but its parts still need
-                     closing. Guessing it now can contradict that value. At stage 7 revisit the
-                     total after closing the parts: the stored constraint mentions only [var], so a
-                     part's solution alone need not visit it. *)
-                  if is_stage7 stage then
+              | (Affine _ | Concat _) as dim
+                when denom = Utils.safe_force coeff && not (Set.is_empty (vars_of_dim dim)) ->
+                  (* gh-ocannl-2159: do not force a composite with open parts to 1. Larger totals
+                     keep the exact-solving path below: known row axes can size the parts. Close
+                     free affine parts here, before operation results close at stage 6b. Revisit the
+                     total explicitly: its stored form mentions only [var], so a part's solution
+                     alone need not visit it. *)
+                  let part_eqs =
+                    match dim with
+                    | Affine _ ->
+                        Set.to_list (vars_of_dim dim)
+                        |> List.concat_map ~f:(fun v ->
+                            match find_dim env.dim_env v with
+                            | None ->
+                                refuse_concat_component_guess env v;
+                                let d = if Set.mem env.discardable_vars v then 0 else 1 in
+                                [ Dim_eq { d1 = Var v; d2 = get_bcast_dim ~d (); origin } ]
+                            | Some _ -> close_dim_terminal ~stage ~is_param:false origin env (Var v))
+                        |> List.filter ~f:(function Dim_eq _ -> true | _ -> false)
+                    | _ -> []
+                  in
+                  if not (List.is_empty part_eqs) then
+                    (* Apply both moves before the next shape in this pass can close: merely
+                       emitting the equations lets a consumer see the still-open row. *)
+                    let apply_equations eqs env =
+                      List.fold eqs ~init:([], env) ~f:(fun (pending, env) eq ->
+                          let more, env =
+                            match eq with
+                            | Dim_eq { d1; d2; origin } -> unify_dim ~stage origin (d1, d2) env
+                            | Row_eq { r1; r2; origin } -> unify_row ~stage origin (r1, r2) env
+                            | _ -> ([ eq ], env)
+                          in
+                          (pending @ more, env))
+                    in
+                    let pending, env = apply_equations part_eqs env in
+                    let constr = subst_row_constraint stage env constr in
+                    let more, env =
+                      eliminate_row_constraint ~depth:(depth + 1) stage origin ~terminal ~glb:None
+                        (subst_row env r) constr env
+                    in
+                    let more, env = apply_equations more env in
+                    (pending @ more, env)
+                  else if is_stage7 stage then
                     ( [
                         Rows_constr { r = [ r ]; constr; origin };
                         Shape_row
