@@ -1305,6 +1305,8 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       let vbs, body =
         translate ~dsl_name ~num_configs ~is_toplevel:false ~opt_label ~late:bound_late ?label body
       in
+      (* The body is a callback, so captures must be fresh each time the operator invokes it. *)
+      let vbs, body = bind_captures ~loc vbs body in
       ( reduce_vbss (vbss @ [ vbs ]),
         {
           expr with

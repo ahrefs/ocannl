@@ -6,3 +6,4 @@ constructor contains a tensor: true
 variant contains a tensor: true
 let operators construct a tensor: true
 let operator right-hand sides retain outer scope: true
+binding operator callbacks get fresh dimension captures: true

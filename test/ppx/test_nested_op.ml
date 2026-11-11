@@ -40,3 +40,16 @@ let () =
 let () =
   p "let operator right-hand sides retain outer scope"
     (List.mem "letop_outer_scope" (letop_outer_scope ~n:3 ()).Tensor.value.label)
+
+(* A binding operator's body is an implicit callback: captures belong to each invocation. *)
+let capture_callbacks xs =
+  let ( let* ) xs f = List.map f xs in
+  [%op
+    let* x = [%oc xs] in
+    let y = x ++ "a => a" [ "a" ] in
+    (y, a)]
+
+let () =
+  let outputs = capture_callbacks [ TDSL.range 3; TDSL.range 5 ] in
+  p "binding operator callbacks get fresh dimension captures"
+    (match outputs with [ (_, a); (_, b) ] -> a.Shape.uid <> b.Shape.uid | _ -> false)

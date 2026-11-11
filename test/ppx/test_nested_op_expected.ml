@@ -83,3 +83,17 @@ let () =
   p "let operator right-hand sides retain outer scope"
     (List.mem "letop_outer_scope"
        ((letop_outer_scope ~n:3 ()).Tensor.value).label)
+let capture_callbacks xs =
+  let ( let* ) xs f = List.map f xs in
+  let open! TDSL.O in
+    let* x = xs
+     in
+    let a = Shape.get_variable_ref "a" in
+    let y = einsum1 ?label:(Some ["y"]) ~capture_dims:[a] "a => a" x in
+    (y, a)
+let () =
+  let outputs = capture_callbacks [TDSL.range 3; TDSL.range 5] in
+  p "binding operator callbacks get fresh dimension captures"
+    (match outputs with
+     | (_, a)::(_, b)::[] -> a.Shape.uid <> b.Shape.uid
+     | _ -> false)
