@@ -38,16 +38,21 @@ let outcome =
     (let healthy, x, expected = submit ~first_id:9_300 ~name:"reap_healthy" ctx in
      Context.sync healthy;
      let before = Array.equal Float.equal (Context.get_values healthy x) expected in
-     let failed, output, _ = submit ~first_id:9_400 ~name:"reap_injected" ctx in
      let observed = ref None in
-     let first =
-       MF.For_testing.with_reap_error
+     let fail_now = ref false in
+     let failed, output, first =
+       MF.For_testing.with_reap_status
          (fun ~what ->
            if String.is_substring what ~substring:"kernel reap_injected" then (
              observed := Some what;
-             Some (Some driver_error))
+             Some (if !fail_now then MF.For_testing.Error (Some driver_error) else Pending))
            else None)
-         ~f:(fun () -> raised (fun () -> Context.sync failed))
+         ~f:(fun () ->
+           (* The post-launch writer event also calls [reap]. Keep this buffer observable there,
+              even if the finite kernel already completed, until the explicit sync under test. *)
+           let failed, output, _ = submit ~first_id:9_400 ~name:"reap_injected" ctx in
+           fail_now := true;
+           (failed, output, raised (fun () -> Context.sync failed)))
      in
      (* Outside the override scope: subsequent reads and fresh lineages must still refuse the failed
         runner, even though the real finite kernel completed successfully. *)

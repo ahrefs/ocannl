@@ -139,8 +139,9 @@ let rec reap ?deadline runner =
   runner.in_flight <-
     List.filter runner.in_flight ~f:(fun tracked ->
         let status, error =
-          match Metal_failure.For_testing.error_for_reap ~what:tracked.what with
-          | Some error -> (Me.CommandBuffer.Status.Error, error)
+          match Metal_failure.For_testing.status_for_reap ~what:tracked.what with
+          | Some Pending -> (Me.CommandBuffer.Status.Scheduled, None)
+          | Some (Error error) -> (Me.CommandBuffer.Status.Error, error)
           | None ->
               let status = Me.CommandBuffer.get_status tracked.buffer in
               let error =

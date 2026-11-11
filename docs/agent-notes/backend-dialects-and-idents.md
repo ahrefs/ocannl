@@ -441,8 +441,10 @@ files.
   and lineage containment*, gh-ocannl-2089): every later raise carries the same text but is the
   device's state, so a text match alone would charge the hang to every later candidate.
 - The report path also has a deterministic test (gh-ocannl-2139): `metal_reap_failure` submits a
-  finite kernel, then `Metal_failure.For_testing.with_reap_error` substitutes its observed status
-  and error in `Metal_backend.reap`. The domain-local callback is scoped and restored on exception;
+  finite kernel under `Metal_failure.For_testing.with_reap_status`, which substitutes its observed
+  status and error in `Metal_backend.reap`. The seam is installed before submission: `Pending`
+  keeps post-launch writer-event bookkeeping from reaping a fast kernel, then `Error` exercises the
+  explicit wait. The domain-local callback is scoped and restored on exception;
   it changes no real command buffer, and the failure it produces stays latched on the runner.
   This covers the first typed report, the backend's `gpu_hang` classification, and rejection of
   later reads and fresh lineages on every Metal test run, independently of the OS watchdog. It
