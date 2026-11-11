@@ -541,6 +541,16 @@ let wrap_schemed ~loc ~at_unit ~name ~params (fn : expression) =
     let __ocannl_scheme = [%e make_call] in
     [%e returned]]
 
+(* A pipeline can supply the last argument to a partial application. Both application arms classify
+   the same source head, before translation adds labels or site wrappers. *)
+let rec is_dsl_application_head fn =
+  is_named_spec_function fn
+  ||
+  match fn.pexp_desc with
+  | Pexp_ident { txt = Lident op_ident; _ } -> is_primitive_op op_ident || is_operator op_ident
+  | Pexp_apply (head, _) -> is_dsl_application_head head
+  | _ -> false
+
 (* A function application in [%op] code, run with its source site recorded (gh-ocannl-2007): the
    shape-scheme check of an application inside it names the line. The DSL's operators, and the named
    einsum forms that spell them, are not wrapped; any other application may be (or reach) a schemed
@@ -941,16 +951,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
          them. Then consider removing this case, but maybe not... *)
       (* The pipeline's function may already have arguments ([einsum1 "ab=>a"], [( + ) y]).
          Classify its source head before translation adds labels or site wrappers. *)
-      let rec is_dsl_call fn =
-        is_named_spec_function fn
-        ||
-        match fn.pexp_desc with
-        | Pexp_ident { txt = Lident op_ident; _ } ->
-            is_primitive_op op_ident || is_operator op_ident
-        | Pexp_apply (head, _) -> is_dsl_call head
-        | _ -> false
-      in
-      let operator = is_dsl_call fn in
+      let operator = is_dsl_application_head fn in
       let vbs1, arg = loop arg in
       let vbs2, fn = loop fn in
       let vbs = reduce_vbss [ vbs1; vbs2 ] in
@@ -998,14 +999,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       (* A named einsum form is the DSL's operation spelled by name ([einsum1 "ab=>a" x] is [x ++
          "ab=>a"]): no scheme's application, and its own body applies none, so it is not wrapped
          either -- both spellings expand alike. *)
-      let operator =
-        is_named_spec_function fn_expr
-        ||
-        match fn_expr.pexp_desc with
-        | Pexp_ident { txt = Lident op_ident; _ } ->
-            is_primitive_op op_ident || is_operator op_ident
-        | _ -> false
-      in
+      let operator = is_dsl_application_head fn_expr in
       (all_vbs, if operator then app else at_site ~loc app)
   | { pexp_desc = Pexp_function (args, constr, body); _ } when is_toplevel -> (
       (* Check if there's a unit parameter or a labeled parameter with label "label" *)

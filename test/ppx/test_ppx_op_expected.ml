@@ -885,3 +885,28 @@ let _pipe_layer =
     fun x ->
       Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
         (fun () -> __ocannl_body x)
+let _direct_partial =
+  let open! TDSL.O in
+    let __ocannl_body x y =
+      Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+        (fun () -> _direct_add y x) in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_direct_partial" ~arity:2
+        (function | x::y::[] -> __ocannl_body x y | _ -> assert false) in
+    fun x y ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x; y]
+        (fun () -> __ocannl_body x y)
+let _pipe_partial =
+  let open! TDSL.O in
+    let __ocannl_body x y =
+      let __x = x in
+      Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+        (fun () ->
+           (Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+              (fun () -> _direct_add y)) __x) in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_pipe_partial" ~arity:2
+        (function | x::y::[] -> __ocannl_body x y | _ -> assert false) in
+    fun x y ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x; y]
+        (fun () -> __ocannl_body x y)

@@ -182,3 +182,9 @@ let%op _direct_einsum1 x = einsum1 "ab=>a" x
 let%op _pipe_einsum1 x = x |> einsum1 "ab=>a"
 let%op _direct_layer x = initialized_no_unit x
 let%op _pipe_layer x = x |> initialized_no_unit
+
+(* Ordinary partial applications retain their existing two site wrappers in a pipeline: one for the
+   partial application and one for the final call. Changing that is separate from exempting DSL
+   operations. *)
+let%op _direct_partial x y = _direct_add y x
+let%op _pipe_partial x y = x |> _direct_add y
