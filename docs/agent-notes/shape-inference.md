@@ -52,9 +52,9 @@ files.
 - `Shape.compute_row_product` must not latch a product while the row still ends in an open
   `Row_var` — the historical bug silently resolved xavier/kaiming fan products to 1 for every
   `{ w }` param with an inferred input row (fixed; regression `test/operations/layer_norm_1d.ml`,
-  `test_default_init_std.ml`). A fixed-index output axis (`=> ...|0`, its `At_least_dim`)
-  broadcasts by closing to 1 at stage 7; nothing may equate it with a consumer's axis first
-  (layer_norm's mean over a 1-D input once took dim 4, the sum written only at index 0).
+  `test_default_init_std.ml`). Fixed-index output axes (`=> ...|0`, recognized via their
+  `At_least_dim`) must not be equated by the stage-2 singleton-bounds heuristic, so that they
+  broadcast at stage 7 (layer_norm's mean over a 1-D input once took dim 4).
 - Row closing goes by role, not by distance (gh-ocannl-2126). A row's GLB is forwarded along every
   variable-to-variable bound (`solve_row_ineq`'s `glb_forward` and `forward_glb_to_operands`), as a
   dimension's is. A row that resolves at its use sites closes to it. An operation result takes no
@@ -74,10 +74,11 @@ files.
   parameter behind a pointwise result of two parameters: a unary chain exercises none of the
   three. Pins: `test_row_glb_reach` (chains of every length), `row_glb_reach_executed`,
   `test_row_bound_emissions` (neither a repeated bound nor the old emission changes a store).
-  The dimension twin of the guess is gone too (`solve_dim_ineq`, gh-ocannl-2141): it fired on
-  every mutually-sole pair, because the closure re-solves every stage-1 constraint at Stage2, so
-  a "repeated bound" is the production path, not a corner; the same test's dimension sweep holds
-  a repeat and that re-solve to changing no store. Still open: a dimension's role. A row closing to its GLB takes the GLB's dimension variables with the role of
+  The dimension twin of the guess stays (`solve_dim_ineq`, gh-ocannl-2141): it fires on every
+  mutually-sole pair, since the closure re-solves every stage-1 constraint at Stage2, and it
+  stands in for a dimension's role. Deleted (staging#1927), `Nn_blocks.dropout`'s mask closed to
+  one value over its input and the full suite stayed green; `dropout_mask_varies` pins it now
+  (gh-ocannl-2185). Delete it only together with the role fix below, and run that pin. Still open: a dimension's role. A row closing to its GLB takes the GLB's dimension variables with the role of
   the result that minted them, so a draw behind `u + 1` fills its batch and repeats along the
   literal's size-1 output axis; with a constant that has no axes it fills. Giving literals no
   axes is not a shortcut: it moved 27 test actions, a transformer's logits closing `2x3x1` among

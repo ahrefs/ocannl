@@ -12,6 +12,8 @@ through one computation embedding both, the owner's draws are unchanged: true
 through a checkpoint rewound, the reader draws exactly the reference: true
 through a checkpoint rewound, the owner's draws are unchanged: true
 another seed draws a different reference: true
+the reference's mask keeps some entries: true
+the reference's mask drops some entries: true
 through a fresh context, the reader draws exactly the reference: true
 through a fresh context, the owner's draws are unchanged: true
 through Train.to_routine, the reader draws exactly the reference: true
@@ -24,6 +26,8 @@ through one computation embedding both, the owner's draws are unchanged: true
 through a checkpoint rewound, the reader draws exactly the reference: true
 through a checkpoint rewound, the owner's draws are unchanged: true
 another seed draws a different reference: true
+the reference's mask keeps some entries: true
+the reference's mask drops some entries: true
 through a fresh context, the reader draws exactly the reference: true
 through a fresh context, the owner's draws are unchanged: true
 through Train.to_routine, the reader draws exactly the reference: true
@@ -36,6 +40,8 @@ through one computation embedding both, the owner's draws are unchanged: true
 through a checkpoint rewound, the reader draws exactly the reference: true
 through a checkpoint rewound, the owner's draws are unchanged: true
 another seed draws a different reference: true
+the reference's mask keeps some entries: true
+the reference's mask drops some entries: true
 through a fresh context, the reader draws exactly the reference: true
 through a fresh context, the owner's draws are unchanged: true
 through Train.to_routine, the reader draws exactly the reference: true
