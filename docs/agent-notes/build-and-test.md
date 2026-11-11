@@ -3351,12 +3351,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   boolean combinations of literal equality/inequality and `OCANNL_BACKEND` environment
   interpolation. Unsupported expressions stay with Dune; includes or an unreadable
   census disable this filtering. Cram or interpolated alias names keep their
-  directory's aliases with Dune. Every matching owner must be disabled, so an active
+  directory's aliases with Dune; unmodeled stanza kinds with alias fields are
+  treated as active owners. Every matching owner must be disabled, so an active
   descendant keeps a recursive alias. Replay modes (`repeat`, `fresh`) refuse
-  recognized disabled aliases rather than replaying a partial set. Leg 120 of
+  recognized disabled aliases rather than replaying a partial set. `bisect` aborts
+  with exit 2 when a phase records any disabled aliases, whether its remaining
+  targets pass or fail. Leg 120 of
   `tools/test-test-run-options.sh` uses real Dune: generated disabled aliases disappear
   from its listing, while explicit disabled rule aliases remain listed and empty.
-
 
 - Every rule that diffs a golden — the repo-wide scans, the codegen snapshots, the config-precedence
   rules, the ppx-output diffs — carries its own `runtest-<name>` alias (gh-ocannl-726), so

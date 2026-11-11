@@ -1188,7 +1188,7 @@ alias_disabled_perl='
       }
       # Cram owns aliases derived from fixture filenames; do not guess them.
       if ($kind eq "cram") { push @{ $owners{"$dir\t*"} }, 0; next }
-      next unless $kind =~ /^(?:rule|alias|test|tests|library)$/;
+      my $modeled = $kind =~ /^(?:rule|alias|test|tests|library)$/;
       my (@names, $enabled, $library, $inline);
       for my $f (@fields) {
         next unless ref $f && @$f && !ref $f->[0];
@@ -1196,7 +1196,7 @@ alias_disabled_perl='
         next unless @$f >= 2;
         $library = $f->[1] if $kind eq "library" && $f->[0] eq "name";
         $enabled = $f->[1] if $f->[0] eq "enabled_if";
-        if (($kind eq "rule" && $f->[0] =~ /^alias(?:es)?$/) ||
+        if ($f->[0] =~ /^alias(?:es)?$/ ||
             ($kind eq "alias" && $f->[0] eq "name")) {
           push @names, @$f[1 .. $#$f];
         }
@@ -1211,7 +1211,7 @@ alias_disabled_perl='
         if (ref $name || $name !~ /^[A-Za-z0-9_.+-]+$/) {
           push @{ $owners{"$dir\t*"} }, 0; next;
         }
-        push @{ $owners{"$dir\t$name"} }, defined $v && !$v ? 1 : 0;
+        push @{ $owners{"$dir\t$name"} }, $modeled && defined $v && !$v ? 1 : 0;
       }
     }
   };
@@ -1256,6 +1256,8 @@ alias_dune_dirs() { # the directories holding a dune file or a subdir's rules, `
   done < <(alias_dune_files)
   [ ${#list[@]} -gt 0 ] || return 1
   list=("${list[@]#./}")
+  # The ownership reader consumes exactly this filtered census too.
+  printf '%s\0' "${list[@]}" >"$run_dir/aliases.files" || return 1
   perl -e "$dune_reader_perl $alias_dirs_perl" "${list[@]}" >"$run_dir/aliases.dirs" || return 1
   sort -u "$run_dir/aliases.dirs"
   rm -f "$run_dir/aliases.dirs"
@@ -1340,7 +1342,7 @@ plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
   # comment or a quoted head does not hide them.
   all=$(alias_dune_dirs) || return 0
   local files=() f
-  while IFS= read -r -d '' f; do files+=("${f#./}"); done < <(alias_dune_files)
+  while IFS= read -r -d '' f; do files+=("$f"); done <"$run_dir/aliases.files"
   perl -e "$dune_reader_perl $alias_disabled_perl" "${files[@]}" >"$run_dir/aliases.disabled" ||
     : >"$run_dir/aliases.disabled"
   alias_listing "$run_dir/aliases.1" "${first[@]}" || return 0
@@ -1392,7 +1394,8 @@ plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
   done >"$run_dir/aliases.ops" &&
     alias_siblings=$(perl -e "$alias_siblings_perl" "$run_dir/aliases.ops" "$run_dir/aliases.1" "$run_dir/aliases.2") ||
     alias_siblings=
-  rm -f "$run_dir/aliases.1" "$run_dir/aliases.2" "$run_dir/aliases.ops"
+  rm -f "$run_dir/aliases.1" "$run_dir/aliases.2" "$run_dir/aliases.ops" \
+    "$run_dir/aliases.files" "$run_dir/aliases.disabled"
 }
 # A refused per-test alias whose test the listing has under another family
 # (gh-ocannl-1740): a batch built from file names asks for `runtest-NAME` where
@@ -5195,7 +5198,9 @@ case $sub in
         position=$((position + 1))
       done
       if [ "$alias_active" = 0 ] || [ "$mode" = repeat ] || [ "$mode" = fresh ]; then
-        printf '%s\n' 'disabled alias batch' >"$run_dir/disabled-refused" || exit 126
+        if [ -z "$alias_refusal" ]; then
+          printf '%s\n' 'disabled alias batch' >"$run_dir/disabled-refused" || exit 126
+        fi
         alias_refusal="$alias_refusal${alias_refusal:+$'\n'}disabled aliases leave no active alias (or this replay mode requires all aliases); nothing ran"
       fi
       set -- "${kept[@]}"

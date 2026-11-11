@@ -402,6 +402,12 @@ bisect_step() { # <bisect dir> [label]
     phase_verdict=$(sed -n 's/^verdict: //p' "$out" | tail -n 1)
     [ -n "$phase_verdict" ] || phase_verdict="no verdict (exit $phase_rc; see steps/$label-$phase.out)"
     [ -z "$phase_run" ] || cp "$phase_run/log" "$dir/steps/$label-$phase.log" 2>/dev/null
+    # A partial target set cannot judge this commit against the other steps.
+    if [ -n "$phase_run" ] && [ -s "$phase_run/disabled-aliases" ]; then
+      phase_rc=2
+      phase_verdict="targets skipped as backend-disabled: $(tr '\n' ' ' <"$phase_run/disabled-aliases")"
+      return 0
+    fi
     recorded=
     [ -z "$phase_run" ] || recorded=$(cat "$phase_run/exit" 2>/dev/null)
     case $phase_rc:$recorded in

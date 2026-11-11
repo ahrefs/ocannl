@@ -18,3 +18,6 @@ tools/test-test-run-digest.sh	negative control: with the replay cut out, dune's 
 tools/test-test-run-digest.sh	negative control: with the replay's inherited descriptors closed, a session-escaped descendant goes unseen (real dune)
 tools/test-test-run-digest.sh	a real type error is BUILD FAILED naming the stale output; a red test alone stays FAIL (real dune)
 tools/test-test-run-options.sh	capped stderr: real-Dune plans and cap kills keep the diagnostic line
+# Backend-disabled target resolution and bisect phases need real Dune (gh-ocannl-2161).
+tools/test-test-run-options.sh	backend-disabled aliases are loud skips; all-disabled and typos refuse
+tools/test-test-run-bisect.sh	bisect aborts on backend-disabled targets, for passing and failing partial runs

@@ -15,7 +15,7 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
-# Groups: #credentials (79, 90), #bisect (82), #harness (86, 105), #hermetic (70).
+# Groups: #credentials (79, 90), #bisect (82, 121), #harness (86, 105), #hermetic (70).
 #
 # Legs:
 #  79. credentials never reach dune (gh-ocannl-1280): a run exporting GH_TOKEN
@@ -911,6 +911,83 @@ EOF
 fi
 }
 harness_leg_run '82: bisect #bisect' leg_82
+
+# A bisect must compare the full target set at every revision, even when the
+# remaining targets produce an ordinary passing or failing run.
+leg_121() {
+  local label="bisect aborts on backend-disabled targets, for passing and failing partial runs"
+  local real root state outcome gate action base bad rc dir detail= saved mutant
+  if ! harness_real_dune; then skip "$label" "$harness_dune_absent"; return; fi
+  command -v git >/dev/null 2>&1 || { skip "$label" 'no git on PATH'; return; }
+  real=$harness_dune
+  for outcome in pass fail; do
+    root=$TMP/bisect-disabled-$outcome
+    mkdir -p "$root/tools" "$root/scripts" "$root/al"
+    cp "$SRC" "$root/tools/test-run.sh"
+    stage_sourced "$root" || { harness_abandon "$stage_error"; return; }
+    printf '(lang dune 3.20)\n' >"$root/dune-project"
+    printf '(executable (name witness))\n' >"$root/dune"
+    printf 'let () = ()\n' >"$root/witness.ml"
+    printf '_build/\n' >"$root/.gitignore"
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$root" init -q
+    git -C "$root" config user.name harness
+    git -C "$root" config user.email harness@invalid
+    git -C "$root" config commit.gpgsign false
+    for state in base partial bad; do
+      gate= action='(progn)'
+      if [ "$state" = partial ]; then
+        gate='(enabled_if false)'
+        [ "$outcome" != fail ] || action='(run false)'
+      elif [ "$state" = bad ]; then action='(run false)'; fi
+      printf '(rule (alias active) (action %s))\n(rule (alias dormant) %s (action (progn)))\n' \
+        "$action" "$gate" >"$root/al/dune"
+      git -C "$root" add -A && git -C "$root" -c core.hooksPath=/dev/null commit -qm "$state" ||
+        { harness_abandon 'cannot commit the bisect fixture'; return; }
+      if [ "$state" = base ]; then
+        base=$(git -C "$root" rev-parse HEAD)
+        git -C "$root" branch -M master
+        git -C "$root" checkout -qb range
+      fi
+    done
+    bad=$(git -C "$root" rev-parse HEAD)
+    git -C "$root" checkout -q master
+    disabled_bisect_run() {
+      rc=0
+      (cd "$root" && PATH="$(dirname "$real"):$PATH" OCANNL_BACKEND=cc \
+        OCANNL_TOOL_TEST_RUNS="$TMP/bisect-disabled-runs" "${BASH:-bash}" tools/test-run.sh \
+        bisect "$base" "$bad" @al/active @al/dormant) >"$TMP/bisect-disabled.out" 2>&1 || rc=$?
+      dir=$(sed -n 's/^bisect: \(\/.*\)$/\1/p' "$TMP/bisect-disabled.out" | head -n 1)
+    }
+    disabled_bisect_run
+    if [ "$rc" != 2 ] || ! grep -qF 'targets skipped as backend-disabled: @al/dormant' "$TMP/bisect-disabled.out" ||
+       [ "$(cut -f3 "$dir/steps.tsv" | tr '\n' ' ')" != 'bad good ABORT ' ]; then
+      detail="$outcome: partial run judged the step: exit $rc: $(cat "$TMP/bisect-disabled.out")"; break
+    fi
+    # Negative control: removing only the record check makes the SAME oracle
+    # fail, and the bisect instead publishes a first-bad result on a partial set.
+    saved=$TMP/bisect-helper-$outcome
+    cp "$root/tools/bisect-steps.sh" "$saved"
+    mutant=$TMP/bisect-helper-mutant-$outcome
+    awk '/^    # A partial target set/ { cut = 1 }
+      cut && /^    fi$/ { cut = 0; next }
+      !cut { print }' "$saved" >"$mutant"
+    if cmp -s "$saved" "$mutant" || grep -q 'targets skipped as backend-disabled' "$mutant"; then
+      harness_abandon 'cannot remove the bisect partial-target guard'; return
+    fi
+    cp "$mutant" "$root/tools/bisect-steps.sh"
+    disabled_bisect_run
+    cp "$saved" "$root/tools/bisect-steps.sh"
+    if [ "$rc" != 0 ] || ! grep -q '^result: FIRST BAD COMMIT ' "$TMP/bisect-disabled.out"; then
+      detail="$outcome: negative control did not publish the partial verdict: exit $rc: $(cat "$TMP/bisect-disabled.out")"; break
+    fi
+    if [ -n "$(git -C "$root" status --porcelain)" ] ||
+       [ "$(git -C "$root" worktree list | wc -l | tr -d ' ')" != 1 ]; then
+      detail="$outcome: the fixture checkout changed or a bisect tree was left"; break
+    fi
+  done
+  if [ -z "$detail" ]; then report 0 "$label"; else report 1 "$label" "$detail"; fi
+}
+harness_leg_run '121: bisect rejects backend-disabled targets #bisect' leg_121
 
 # ---------------------------------------------------------------------------
 # Leg 86: a structural failure ends only its own leg (gh-ocannl-1374)
