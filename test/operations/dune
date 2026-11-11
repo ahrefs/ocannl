@@ -14898,6 +14898,22 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; One literal predicate for Context's host, routine and copy refusals (gh-ocannl-2104 follow-up):
+; a host write to a view of a literal or to a TDSL.number, and a copy of one.
+
+(test
+ (name literal_write_kinds)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (run %{test} --ocannl_limit_constant_fill_size=16))
+ (modules literal_write_kinds)
+ (libraries base ocannl stdio arrayjit.verdict lineage_claims)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1998/2027: Context.run refuses the run of a forward recomputing a node a step meant to
 ; last (Asgns.persists), not one the forward builds on; Asgns.sequence a step before its forward.
 

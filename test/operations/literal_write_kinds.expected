@@ -1,0 +1,82 @@
+2, before compilation: set_values to a view of a literal: the refusal names Context.set_values: true
+2, before compilation: set_values to a view of a literal: the refusal names view: true
+2, before compilation: set_values to a view of a literal: the refusal names lit_parent_2: true
+2, before compilation: set_values to a view of a literal: the refusal names gh-ocannl-2021: true
+2, before compilation: set_values to a view of a literal: the refusal names Operation.init: true
+2, before compilation: set_value to a view of a literal: the refusal names Context.set_value: true
+2, before compilation: set_value to a view of a literal: the refusal names view: true
+2, before compilation: set_value to a view of a literal: the refusal names lit_parent_2: true
+2, before compilation: set_value to a view of a literal: the refusal names gh-ocannl-2021: true
+2, before compilation: set_value to a view of a literal: the refusal names Operation.init: true
+2, before compilation: from_host to a view of a literal: the refusal names Context.from_host: true
+2, before compilation: from_host to a view of a literal: the refusal names view: true
+2, before compilation: from_host to a view of a literal: the refusal names lit_parent_2: true
+2, before compilation: from_host to a view of a literal: the refusal names gh-ocannl-2021: true
+2, before compilation: from_host to a view of a literal: the refusal names Operation.init: true
+2, compiled: set_values to a view of a literal: the refusal names Context.set_values: true
+2, compiled: set_values to a view of a literal: the refusal names view: true
+2, compiled: set_values to a view of a literal: the refusal names lit_parent_2: true
+2, compiled: set_values to a view of a literal: the refusal names gh-ocannl-2021: true
+2, compiled: set_values to a view of a literal: the refusal names Operation.init: true
+2, compiled: set_value to a view of a literal: the refusal names Context.set_value: true
+2, compiled: set_value to a view of a literal: the refusal names view: true
+2, compiled: set_value to a view of a literal: the refusal names lit_parent_2: true
+2, compiled: set_value to a view of a literal: the refusal names gh-ocannl-2021: true
+2, compiled: set_value to a view of a literal: the refusal names Operation.init: true
+2, compiled: from_host to a view of a literal: the refusal names Context.from_host: true
+2, compiled: from_host to a view of a literal: the refusal names view: true
+2, compiled: from_host to a view of a literal: the refusal names lit_parent_2: true
+2, compiled: from_host to a view of a literal: the refusal names gh-ocannl-2021: true
+2, compiled: from_host to a view of a literal: the refusal names Operation.init: true
+2: the literal keeps its registered values: true
+2: the forward of the view reads them: true
+32, before compilation: set_values to a view of a literal: the refusal names Context.set_values: true
+32, before compilation: set_values to a view of a literal: the refusal names view: true
+32, before compilation: set_values to a view of a literal: the refusal names lit_parent_32: true
+32, before compilation: set_values to a view of a literal: the refusal names gh-ocannl-2021: true
+32, before compilation: set_values to a view of a literal: the refusal names Operation.init: true
+32, before compilation: set_value to a view of a literal: the refusal names Context.set_value: true
+32, before compilation: set_value to a view of a literal: the refusal names view: true
+32, before compilation: set_value to a view of a literal: the refusal names lit_parent_32: true
+32, before compilation: set_value to a view of a literal: the refusal names gh-ocannl-2021: true
+32, before compilation: set_value to a view of a literal: the refusal names Operation.init: true
+32, before compilation: from_host to a view of a literal: the refusal names Context.from_host: true
+32, before compilation: from_host to a view of a literal: the refusal names view: true
+32, before compilation: from_host to a view of a literal: the refusal names lit_parent_32: true
+32, before compilation: from_host to a view of a literal: the refusal names gh-ocannl-2021: true
+32, before compilation: from_host to a view of a literal: the refusal names Operation.init: true
+32, compiled: set_values to a view of a literal: the refusal names Context.set_values: true
+32, compiled: set_values to a view of a literal: the refusal names view: true
+32, compiled: set_values to a view of a literal: the refusal names lit_parent_32: true
+32, compiled: set_values to a view of a literal: the refusal names gh-ocannl-2021: true
+32, compiled: set_values to a view of a literal: the refusal names Operation.init: true
+32, compiled: set_value to a view of a literal: the refusal names Context.set_value: true
+32, compiled: set_value to a view of a literal: the refusal names view: true
+32, compiled: set_value to a view of a literal: the refusal names lit_parent_32: true
+32, compiled: set_value to a view of a literal: the refusal names gh-ocannl-2021: true
+32, compiled: set_value to a view of a literal: the refusal names Operation.init: true
+32, compiled: from_host to a view of a literal: the refusal names Context.from_host: true
+32, compiled: from_host to a view of a literal: the refusal names view: true
+32, compiled: from_host to a view of a literal: the refusal names lit_parent_32: true
+32, compiled: from_host to a view of a literal: the refusal names gh-ocannl-2021: true
+32, compiled: from_host to a view of a literal: the refusal names Operation.init: true
+32: the literal keeps its registered values: true
+32: the forward of the view reads them: true
+a number before compilation: the refusal names Context.set_values: true
+a number before compilation: the refusal names num_seed: true
+a number before compilation: the refusal names a literal: true
+a number before compilation: the refusal names gh-ocannl-2021: true
+a number before compilation: the refusal names Operation.init: true
+a number once compiled: the refusal names gh-ocannl-1959: true
+the forward of the number reads its value: true
+a number in a fresh context: the refusal names Context.set_values: true
+a number in a fresh context: the refusal names num_seed: true
+a number in a fresh context: the refusal names a literal: true
+a number in a fresh context: the refusal names gh-ocannl-2021: true
+a number in a fresh context: the refusal names Operation.init: true
+2: a literal's copy from an unrun source: true
+2: the copied literal reads its registered values: true
+32: a literal's copy from an unrun source: true
+32: the copied literal reads its registered values: true
+a number's copy from an unrun source: the refusal names gh-ocannl-2022: true
+the number reads as its fetch left it: true
