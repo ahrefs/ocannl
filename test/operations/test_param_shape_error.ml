@@ -43,7 +43,7 @@ let default_linear_op () =
 let default_affine_op_propagated () =
   Stdio.printf "Testing default affine operation with propagated dimensions\n";
   Tensor.unsafe_reinitialize ();
-  (* This should raise an error because we have a parameter with unspecified dimensions *)
+  (* No error: the sum's [1; 2] sizes w's output through the product, so w is [3 -> 2]. *)
   try
     let%op w_o = [ 1; 2 ] + ({ w = uniform1 () } * [ 3; 4; 5 ]) in
     let _ctx : Context.t = Train.init_params (Context.auto ()) Train.IDX.empty w_o in
@@ -54,7 +54,9 @@ let default_affine_op_propagated () =
 let default_affine_op_unknown_input () =
   Stdio.printf "Testing default affine operation with unknown input dimensions\n";
   Tensor.unsafe_reinitialize ();
-  (* This should raise an error because we have a parameter with unspecified dimensions *)
+  (* An error: x is a parameter and nothing sizes its output, the hidden axis between w and x,
+     however w's output is sized. Until gh-ocannl-2126 this closed that axis empty: a guess equated
+     w's input row with x's output row, and w's input row may close empty. *)
   try
     let%op w_o = [ 1; 2 ] + ({ w = uniform1 () } * { x = uniform1 () }) in
     let _ctx : Context.t = Train.init_params (Context.auto ()) Train.IDX.empty w_o in

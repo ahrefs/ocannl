@@ -40,7 +40,7 @@ let dim d = Row.get_default_dim ~d ()
 
 let check name (alpha, beta, constraints) =
   match
-    let stages = [ Row.Stage2; Stage3; Stage4; Stage5; Stage6; Stage7 ] in
+    let stages = [ Row.Stage2; Stage3; Stage4; Stage5; Stage6a; Stage6b; Stage7 ] in
     let leftover, env = Row.solve_inequalities ~stage:Stage1 constraints Row.empty_env in
     List.fold stages ~init:(leftover, env) ~f:(fun (leftover, env) stage ->
         Row.solve_inequalities ~stage leftover env)
@@ -52,7 +52,7 @@ let check name (alpha, beta, constraints) =
 
 let check3 name (alpha, beta, gamma, constraints) =
   match
-    let stages = [ Row.Stage2; Stage3; Stage4; Stage5; Stage6; Stage7 ] in
+    let stages = [ Row.Stage2; Stage3; Stage4; Stage5; Stage6a; Stage6b; Stage7 ] in
     let leftover, env = Row.solve_inequalities ~stage:Stage1 constraints Row.empty_env in
     List.fold stages ~init:(leftover, env) ~f:(fun (leftover, env) stage ->
         Row.solve_inequalities ~stage leftover env)

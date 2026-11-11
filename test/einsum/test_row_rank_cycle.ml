@@ -151,7 +151,7 @@ let () =
   in
   let solved =
     match
-      List.fold [ Row.Stage1; Stage2; Stage3; Stage4; Stage5; Stage6; Stage7 ]
+      List.fold [ Row.Stage1; Stage2; Stage3; Stage4; Stage5; Stage6a; Stage6b; Stage7 ]
         ~init:(constraints, Row.empty_env) ~f:(fun (pending, env) stage ->
           Row.solve_inequalities ~stage pending env)
     with

@@ -726,14 +726,18 @@ let equal_constraint_up_to_origin (c1 : constraint_) (c2 : constraint_) =
       _ ) ->
       false
 
-type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 | Stage7
+(* Stage 6 is two stages (gh-ocannl-2126). In [Stage6a], rows that resolve at their use sites take
+   their bounds and the constraints settle, and no operation result closes. In [Stage6b] the results
+   close, to what their arguments, closed by then, require. *)
+type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6a | Stage6b | Stage7
 [@@deriving sexp, equal, compare]
 
 let is_stage2_up = function Stage1 -> false | _ -> true
 let is_stage3_up = function Stage1 | Stage2 -> false | _ -> true
 let is_stage4_up = function Stage1 | Stage2 | Stage3 -> false | _ -> true
-let is_stage5_up = function Stage5 | Stage6 | Stage7 -> true | _ -> false
-let is_stage6_up = function Stage6 | Stage7 -> true | _ -> false
+let is_stage5_up = function Stage5 | Stage6a | Stage6b | Stage7 -> true | _ -> false
+let is_stage6_up = function Stage6a | Stage6b | Stage7 -> true | _ -> false
+let is_stage6b_up = function Stage6b | Stage7 -> true | _ -> false
 let is_stage7 = function Stage7 -> true | _ -> false
 
 module Idx = Ir.Indexing
@@ -1940,13 +1944,12 @@ let is_bare_row_var : row -> bool = function
 (* The visited entry [e] is bounded by [v], and [v := value]. What this owes through [e], beyond
    [v]'s own bounds, which [unify_row] re-emits (gh-ocannl-1977):
 
-   - [e]'s GLB reaches [value]. Rows have no other route to it: [solve_row_ineq] records a GLB and
-   does not pass it on, unlike [solve_dim_ineq]. - A [value] with axes reaches the far neighbours:
-   [value ⊑ opnd] is what carries a lower bound two hops, to a use-site row closing from its GLB.
-   [res ⊑ value] follows, for [e ⊑ value] solves [e], but it costs little. - A bare variable has no
-   axes to carry. [r ⊑ value] is the path [r ⊑ e ⊑ value], which stays in the environment, so
-   emitting it would only store the transitive closure: quadratic pairs in a residual stack, each
-   re-emitted per solution. *)
+   - [e]'s GLB reaches [value]. - A [value] with axes reaches the far neighbours: [value ⊑ opnd]
+   carries the lower bound on to them, as [solve_row_ineq] forwards a recorded GLB along
+   variable-to-variable bounds (gh-ocannl-2126). [res ⊑ value] follows, for [e ⊑ value] solves [e],
+   but it costs little. - A bare variable has no axes to carry. [r ⊑ value] is the path [r ⊑ e ⊑
+   value], which stays in the environment, so emitting it would only store the transitive closure:
+   quadratic pairs in a residual stack, each re-emitted per solution. *)
 let s_row_one_in_entry (v : row_var) ~(value : row) ~(in_ : row_entry) :
     constraint_ list * row_entry =
   match in_ with
@@ -4564,6 +4567,40 @@ let add_marks rn m =
   List.iter m.m_concat_component_vars ~f:(fun v -> add_concat_component (rn.rn_dim v));
   List.iter m.m_resolve_at_use ~f:(fun v -> add_resolve_at_use (rn.rn_row v))
 
+let equal_modulo_proj (r1 : t) (r2 : t) =
+  let rec erase = function
+    | Dim d -> Dim { d with proj_id = None }
+    | Sym s -> Sym { s with sym_proj_id = None }
+    | Var _ as d -> d
+    | Affine { stride; over; conv; stride_offset } ->
+        let conv =
+          Option.map conv ~f:(fun { dilation; kernel; use_padding } ->
+              { dilation; kernel = erase kernel; use_padding })
+        in
+        Affine { stride; over = erase over; conv; stride_offset }
+    | Concat dims -> Concat (List.map dims ~f:erase)
+  in
+  let erase_row r =
+    { r with beg_dims = List.map r.beg_dims ~f:erase; dims = List.map r.dims ~f:erase }
+  in
+  equal_row (erase_row r1) (erase_row r2)
+
+let same_glb_axes (r1 : t) (r2 : t) =
+  let same_dim d1 d2 =
+    match (d1, d2) with
+    | Var _, Var _ -> true
+    | _ ->
+        equal_modulo_proj
+          { beg_dims = []; dims = [ d1 ]; bcast = Broadcastable; prov = [] }
+          { beg_dims = []; dims = [ d2 ]; bcast = Broadcastable; prov = [] }
+  in
+  List.equal same_dim r1.beg_dims r2.beg_dims
+  && List.equal same_dim r1.dims r2.dims
+  &&
+  match (r1.bcast, r2.bcast) with
+  | Broadcastable, Broadcastable | Row_var _, Row_var _ -> true
+  | _ -> false
+
 let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) env :
     constraint_ list * _ =
   let nonredundant ?(more = []) v vs =
@@ -4591,7 +4628,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
         (take_from_end res.dims dims_l) (take_from_end opnd.dims dims_l)
   in
   match (res, opnd) with
-  | ({ bcast = Row_var v; prov; _ }, _ | _, { bcast = Row_var v; prov; _ }) when is_stage6_up stage
+  | ({ bcast = Row_var v; prov; _ }, _ | _, { bcast = Row_var v; prov; _ }) when is_stage6b_up stage
     ->
       ( Row_ineq { res; opnd; origin }
         :: Row_eq
@@ -4629,6 +4666,12 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
   | { bcast = Row_var res_v; _ }, { bcast = Row_var opnd_v; _ }
     when res_dims_l = opnd_dims_l && res_beg_dims_l = opnd_beg_dims_l -> (
       add_rank_edge ~rows:[ res; opnd ] res_v opnd_v 0;
+      (* [glb ⊑ res_v ⊑ opnd_v] gives [glb ⊑ opnd_v], as for dimensions (gh-ocannl-2126). *)
+      let glb_forward glb1 =
+        Option.to_list glb1
+        |> List.map ~f:(fun glb ->
+            Row_ineq { res = glb; opnd = row_of_var opnd_v opnd.prov; origin })
+      in
       match (find_row env.row_env res_v, find_row env.row_env opnd_v) with
       | Some (Bounds_row { res = res1; origin = origin1; _ }), _
         when List.mem ~equal:equal_row_var res1 opnd_v ->
@@ -4640,17 +4683,6 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
         when List.mem ~equal:equal_row_var opnd2 res_v ->
           let origin = merge_origins origin origin2 in
           ( Row_eq { r1 = row_of_var opnd_v opnd.prov; r2 = row_of_var res_v res.prov; origin }
-            :: ineqs,
-            env )
-      | Some (Bounds_row { opnd = [ opnd1 ]; _ }), Some (Bounds_row { res = [ res2 ]; _ })
-        when is_stage2_up stage && equal_row_var opnd1 opnd_v && equal_row_var res2 res_v ->
-          (* Each row is the other's only bound: from Stage2 on, a guess equates them, which is how
-             a parameter whose row only its consumer bounds takes that consumer's row. The guess is
-             HELD, as the bare pair, until the call's fixpoint ({!release_sole_bound}), where
-             nothing the call still holds can tell the rows apart (gh-ocannl-2039). Made here,
-             mid-pass, it refused a store a solution existed for, depending on where the repeated
-             pair sat in the list. *)
-          ( Row_ineq { res = row_of_var res_v res.prov; opnd = row_of_var opnd_v opnd.prov; origin }
             :: ineqs,
             env )
       | Some (Bounds_row { opnd = opnd1; _ }), _ when List.mem ~equal:equal_row_var opnd1 opnd_v ->
@@ -4694,7 +4726,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
                }),
           None ) ->
           let origin = merge_origins origin origin1 in
-          ( ineqs,
+          ( glb_forward glb1 @ ineqs,
             env
             |> set_row ~key:res_v
                  ~data:
@@ -4776,7 +4808,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
                  origin = origin2;
                }) ) ->
           let origin = merge_origins origin (merge_origins origin1 origin2) in
-          ( ineqs,
+          ( glb_forward glb1 @ ineqs,
             env
             |> set_row ~key:res_v
                  ~data:
@@ -4868,6 +4900,10 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
           prov = res.prov;
         }
       in
+      (* [glb ⊑ opnd_v ⊑ w] gives [glb ⊑ w] (gh-ocannl-2126). *)
+      let forward_glb_to_operands glb ws =
+        List.map ws ~f:(fun w -> Row_ineq { res = glb; opnd = row_of_var w opnd.prov; origin })
+      in
       match find_row env.row_env opnd_v with
       | None ->
           ( ineqs,
@@ -4893,7 +4929,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
                origin = origin2;
              }) ->
           let origin = merge_origins origin origin2 in
-          ( ineqs,
+          ( forward_glb_to_operands r_res opnd2 @ ineqs,
             env
             |> set_row ~key:opnd_v
                  ~data:
@@ -5054,6 +5090,12 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
                      constr = constr2;
                      origin;
                    })
+          in
+          let ineqs =
+            (* Only a change of axes counts: the join mints a fresh broadcast top each time, and
+               keeps the incoming side's variable where both sides have one, so two GLBs differing
+               only in their variables would otherwise trade places forever along a diamond. *)
+            if same_glb_axes glb glb2 then ineqs else forward_glb_to_operands glb opnd2 @ ineqs
           in
           match glb with
           | { beg_dims = []; dims = [] | [ Dim { d = 1; _ } ]; bcast = Broadcastable; prov = _ } ->
@@ -5761,6 +5803,13 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env
          would leave them unresolved forever. *)
       let keep = if final then [] else [ Shape_row (r, origin) ] in
       match entry_for_closing env v with
+      | Some (Bounds_row { glb = Some _; constr = Unconstrained; is_in_param; _ })
+        when equal_stage stage Stage6a && not (is_in_param || is_resolve_at_use v) ->
+          (* An operation result closes after its arguments (gh-ocannl-2126). Closed here, while a
+             row that resolves at its use sites under it is still taking its bound, the result would
+             end with fewer axes than its own operand, refusing a satisfiable program ("Too many
+             axes in an operand", [(u + v) *. c] with two draws). *)
+          (Shape_row (r, origin) :: dim_eqs, env)
       | Some (Bounds_row { glb = Some glb; constr = Unconstrained; is_in_param; _ })
         when is_stage6_up stage ->
           (* gh-ocannl-544: only rows that resolve at use sites (terminal rows of leaves and
@@ -5863,32 +5912,6 @@ let is_draw_total = function
   | Rows_constr { constr = Total_elems { numerator = Strided_var { round_up; _ }; _ }; _ } ->
       round_up
   | _ -> false
-
-(* The guess {!solve_row_ineq} holds (gh-ocannl-2039). At the call's fixpoint, a held bare pair [r ⊑
-   o] whose rows are still each the other's only bound is equated, unless one row's GLB is open in
-   the other ([<r>.[2] ⊑ o]): equating them would give that row an infinite number of axes, a guess
-   the store already rules out. Every qualifying pair at once: equating one leaves the other pairs'
-   entries as they were, since the merged row is bounded by nothing else. *)
-let release_sole_bound env = function
-  | Row_ineq { res; opnd; origin } -> (
-      let glb_mentions v = function
-        | Some { bcast = Row_var x; _ } -> equal_row_var x v
-        | _ -> false
-      in
-      match (subst_row env res, subst_row env opnd) with
-      | ( { beg_dims = []; dims = []; bcast = Row_var r; prov = res_prov },
-          { beg_dims = []; dims = []; bcast = Row_var o; prov = opnd_prov } )
-        when not (equal_row_var r o) -> (
-          match (find_row env.row_env r, find_row env.row_env o) with
-          | ( Some (Bounds_row { opnd = [ o' ]; glb = glb_r; _ }),
-              Some (Bounds_row { res = [ r' ]; glb = glb_o; _ }) )
-            when equal_row_var o o' && equal_row_var r r'
-                 && (not (glb_mentions o glb_r))
-                 && not (glb_mentions r glb_o) ->
-              Some (Row_eq { r1 = row_of_var o opnd_prov; r2 = row_of_var r res_prov; origin })
-          | _ -> None)
-      | _ -> None)
-  | _ -> None
 
 let%debug4_sexp solve_inequalities ~(stage : stage)
     ?(discardable_vars : dim_var_set = dim_var_set_empty) (ineqs : constraint_ list) env :
@@ -6019,19 +6042,7 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
     let at_fixpoint () =
       match if is_stage2_up stage then settle () else None with
       | Some (ineqs', env) -> solve ineqs' env
-      | None ->
-          let released = ref false in
-          let ineqs'' =
-            if not (is_stage2_up stage) then ineqs'
-            else
-              List.map ineqs' ~f:(fun ineq ->
-                  match release_sole_bound env ineq with
-                  | Some eq ->
-                      released := true;
-                      eq
-                  | None -> ineq)
-          in
-          if !released then solve ineqs'' env else (ineqs', env)
+      | None -> (ineqs', env)
     in
     if List.is_empty ineqs' || List.equal equal_constraint_up_to_origin ineqs' ineqs then
       at_fixpoint ()
@@ -6047,7 +6058,9 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
     if List.equal equal_constraint_up_to_origin draws' draws then (others @ draws, env)
     else draws_at_quiescence (others @ draws') env
   in
-  match stage with Stage5 | Stage6 -> draws_at_quiescence ineqs env | _ -> solve ineqs env
+  match stage with
+  | Stage5 | Stage6a | Stage6b -> draws_at_quiescence ineqs env
+  | _ -> solve ineqs env
 
 let rec row_to_bases env =
   let rec f = function
@@ -6086,24 +6099,6 @@ let fresh_row_proj r =
     | Concat dims -> Concat (List.map dims ~f:fresh_dim)
   in
   { r with beg_dims = List.map r.beg_dims ~f:fresh_dim; dims = List.map r.dims ~f:fresh_dim }
-
-let equal_modulo_proj (r1 : t) (r2 : t) =
-  let rec erase = function
-    | Dim d -> Dim { d with proj_id = None }
-    | Sym s -> Sym { s with sym_proj_id = None }
-    | Var _ as d -> d
-    | Affine { stride; over; conv; stride_offset } ->
-        let conv =
-          Option.map conv ~f:(fun { dilation; kernel; use_padding } ->
-              { dilation; kernel = erase kernel; use_padding })
-        in
-        Affine { stride; over = erase over; conv; stride_offset }
-    | Concat dims -> Concat (List.map dims ~f:erase)
-  in
-  let erase_row r =
-    { r with beg_dims = List.map r.beg_dims ~f:erase; dims = List.map r.dims ~f:erase }
-  in
-  equal_row (erase_row r1) (erase_row r2)
 
 let populate_dim_proj_in_solved env =
   let rec fresh_dim = function

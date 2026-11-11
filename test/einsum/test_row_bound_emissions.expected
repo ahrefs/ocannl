@@ -5,17 +5,17 @@ the result side, through an alias: r <= e <= v, v := u, u := [5]: [5] [5] [5]
 a refusal past an alias, operand side: v <= e <= o, v := u, o := [3], u := [4]: Shape_error: solved dimensions for axis: mismatch
 a refusal past an alias, result side: r <= e <= v, v := u, r := [3], u := [4]: Shape_error: dimension comparison for axis: mismatch
 the same refusal over an entry no shape closes: v <= e <= o: Shape_error: solved dimensions for axis: mismatch
-reach past an alias: v <= e <= o <= leaf, v := u, u := [3]: [3] [] [] []
-the same store written with u: u <= e <= o <= leaf, u := [3]: [3] [] [] []
-the equations swapped: u := [3], then v := u: [3] [] [] []
+reach past an alias: v <= e <= o <= leaf, v := u, u := [3]: [3] [3] [3] [3]
+the same store written with u: u <= e <= o <= leaf, u := [3]: [3] [3] [3] [3]
+the equations swapped: u := [3], then v := u: [3] [3] [3] [3]
 the old emission, reach past an alias: [3] [3] [3] [3]
-the old emission, the equations swapped: [3] [] [] []
+the old emission, the equations swapped: [3] [3] [3] [3]
 the sweep solves stores and refuses others: true
 every solution satisfies its store, on ground rows: true
-no store the old emission solved is refused: true
+the old emission decides or closes no store differently: true
 e<=u, e<=v, a<=f, f<=w, w=u, f=[2], then in one stage-2 call v=u, e=[3,2], u=[2]: solved: true
 the same store under the transitive emission: solved: true
-the issue's store, one stage-2 call per equation: Shape_error: Too many axes in an operand; maybe using * instead of *.?
+the issue's store, one stage-2 call per equation: solved: true
 r<=o recorded, then r=[3,2], o=[2]: solved: true
 the same with the bound repeated first: solved: true
 the same with the bound repeated last: solved: true
@@ -25,4 +25,4 @@ r<=o and o<=r, r=[3,2], o=[2]: refused, the bounds make them equal: true
 r<=o and o<=r, r=[3,2]: solved, o with it: true
 the dim twin: d1<=d2 recorded, then d1=3, d2=1 in one stage-2 call: 3 1
 the dim twin, the bound repeated first: Shape_error: solved dimensions for axis: different bases
-repeating a recorded bound in the stage-2 call refuses no store it solves: true
+repeating a recorded bound in the stage-2 call changes no store's outcome: true

@@ -359,8 +359,10 @@ val with_origin_focus : (constraint_origin -> bool) -> (unit -> 'a) -> 'a
     shape-scheme trace and application on the scheme's own tensors. *)
 
 (** Removed duplicate helper functions *)
-type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 | Stage7
+type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6a | Stage6b | Stage7
 [@@deriving sexp, equal, compare]
+(** Stage 6 is two stages: in [Stage6a] rows that resolve at their use sites take their bounds and
+    no operation result closes; in [Stage6b] the results close. A closing runs both, in order. *)
 
 val add_safe_to_guess : row_var -> unit
 (** Mark a row variable as allowed to be empty even if it's in a parameter. *)
