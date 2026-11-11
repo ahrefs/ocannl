@@ -54,7 +54,7 @@ opam install hipjit   # for AMD HIP backend
 
 **Dependency pins**: before changing a shared switch, test a scratch install against master and the consumer branch (build-and-test.md#testing-a-dependency-candidate-without-changing-the-switch).
 
-**Worktrees**: nested ones (`.claude/worktrees/`) need a `dune-workspace` at their root (else dune builds the PARENT checkout), which Claude Code’s setup hooks write (without hooks, run `scripts/setup-ocaml-env.sh --switch` in the worktree); to retire one after its merge, ship-pr's `post-merge-cleanup.sh` takes `--regenerable _build` (both: build-and-test.md#dune-mechanics).
+**Worktrees**: nested ones (`.claude/worktrees/`) need a `dune-workspace` at their root (else dune builds the PARENT checkout), which Claude Code’s setup hooks write (without hooks, run `scripts/setup-ocaml-env.sh --switch` in the worktree); to retire one after its merge, ship-pr's `post-merge-cleanup.sh` takes `--regenerable _build` (far-side cleanup set too: build-and-test.md#dune-mechanics).
 
 **Windows shells**: use **Git Bash** (MSYS), never a Cygwin bash, and source `tools/opam-env.sh` before building (`opam env`'s cygwin-style paths break linking). Route dune through `tools/dune-quiet.sh`, which filters benign binutils link warnings and keeps dune's exit status (gh-ocannl-662; build-and-test.md#windows-ci tells the two bashes apart).
 
