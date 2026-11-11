@@ -194,6 +194,14 @@ files.
   used to surface as `different bases` at strides above 1 and pass silently at stride 1, by
   `s_dim_one`'s padded arm merging two reserved tags. A broadcast consumer does not size such an
   axis, an einsum consumer does (`scheme_unsized_kernel`).
+- Spec-only einsum errors also precede registration (gh-ocannl-2162):
+  `refuse_invalid_einsum_spec` checks operand count, dimension/row name clashes and every capture
+  label from the parsed slots in `propagate_shapes`. It reads names only: constructing temporary
+  rows would already write the solver's used-in-spec and safe-to-guess sets. Capture-label checks
+  are shared with binding, and run over the whole list before any reference is bound. The public
+  unary, binary, ternary and block paths are pinned in `spec_error_session`: each refusal leaves
+  the session untainted and permits an unrelated operation without a rewind, including a missing
+  capture after a valid one. Solver-dependent failures still require a rewind as above.
 - Extraction and replacement (`p^o^q => o`, `b => a^b^c`, gh-ocannl-1656) are a concat TARGET
   exactly one of whose components another access names. `solve_proj_equations` gives such a target
   a SHIFT index (the named component's index plus the preceding extents) and the unnamed

@@ -15075,3 +15075,10 @@
   arrayjit.verdict
   test_utils
   ll_test))
+(test
+ (name spec_error_session)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ ; ocannl-backend: none -- shape registration only, no compilation or device access
+ (modules spec_error_session)
+ (libraries base ocannl arrayjit.verdict))
