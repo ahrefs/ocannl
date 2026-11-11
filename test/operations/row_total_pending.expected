@@ -1,0 +1,20 @@
+concat trailing: unresolved axis keeps the total pending: true
+concat trailing: unresolved total survives closing stages: true
+concat trailing: a later wrong total is refused: true
+concat trailing: a later extent solves the remaining factor: true
+concat trailing: the satisfied total leaves no residual: true
+valid window trailing: unresolved axis keeps the total pending: true
+valid window trailing: unresolved total survives closing stages: true
+valid window trailing: a later wrong total is refused: true
+valid window trailing: a later extent solves the remaining factor: true
+valid window trailing: the satisfied total leaves no residual: true
+concat leading: unresolved axis keeps the total pending: true
+concat leading: unresolved total survives closing stages: true
+concat leading: a later wrong total is refused: true
+concat leading: a later extent solves the remaining factor: true
+concat leading: the satisfied total leaves no residual: true
+valid window leading: unresolved axis keeps the total pending: true
+valid window leading: unresolved total survives closing stages: true
+valid window leading: a later wrong total is refused: true
+valid window leading: a later extent solves the remaining factor: true
+valid window leading: the satisfied total leaves no residual: true
