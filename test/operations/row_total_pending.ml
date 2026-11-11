@@ -35,6 +35,13 @@ let test label axis ~axis_size ~leading =
   p
     (label ^ ": unresolved total survives closing stages")
     (match pending with [ Row.Rows_constr _ ] -> true | _ -> false);
+  p
+    (label ^ ": the finalizer refuses an undecidable total with a sizing remedy")
+    (match Shape.refuse_unsolved ~where:"row_total_pending" pending with
+    | () -> false
+    | exception Row.Shape_error (message, _) ->
+        String.is_substring message ~substring:"total-elements constraint"
+        && String.is_substring message ~substring:"Shape.set_dim");
   let later rest =
     solve
       (pending @ [ eq (Var x) (dim 2); row_eq (row (Row_var r)) (row ~dims:rest Broadcastable) ])
@@ -46,7 +53,8 @@ let test label axis ~axis_size ~leading =
   p
     (label ^ ": a later extent solves the remaining factor")
     (Option.equal Int.equal (Row.get_dim_val solved u) (Some 3));
-  p_empty (label ^ ": the satisfied total leaves no residual") ~over:pending remaining
+  p_empty (label ^ ": the satisfied total leaves no residual") ~over:pending remaining;
+  Shape.refuse_unsolved ~where:"row_total_pending" remaining
 
 let () =
   List.iter [ false; true ] ~f:(fun leading ->

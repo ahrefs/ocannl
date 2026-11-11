@@ -2172,49 +2172,56 @@ and apply_row_constraint ~depth stage origin (r : row) (constr : row_constraint)
       with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch [ r ] :: trace)
     in
     let extras, constr, env, stored, updated =
-      try
-        match r with
-        | { bcast = Broadcastable; _ } -> ([], constr, env, false, false)
-        | { bcast = Row_var v; beg_dims; dims; _ } -> (
-            match find_row env.row_env v with
-            | Some (Solved_row _) -> ([], constr, env, false, false)
-            | None ->
-                ( [],
-                  constr,
-                  (let constr = reduce constr ~beg_dims ~dims in
-                   set_row env ~key:v
-                     ~data:
-                       (Bounds_row
-                          { is_in_param = false; constr; res = []; opnd = []; glb = None; origin })),
-                  true,
-                  false )
-            | Some (Bounds_row ({ constr = Unconstrained; _ } as bounds)) ->
-                ( [],
-                  constr,
-                  set_row env ~key:v
-                    ~data:(Bounds_row { bounds with constr = reduce constr ~beg_dims ~dims }),
-                  true,
-                  false )
-            | Some (Bounds_row bounds) -> (
-                let origin = merge_origins origin bounds.origin in
-                match
-                  row_conjunction ~prov:r.prov ~origin stage (reduce constr ~beg_dims ~dims)
-                    bounds.constr
-                with
-                | None -> ([], constr, env, false, false)
-                | Some (extras, constr) ->
-                    if phys_equal constr bounds.constr then (extras, constr, env, true, false)
-                    else
-                      ( extras,
-                        constr,
-                        set_row env ~key:v ~data:(Bounds_row { bounds with constr }),
-                        true,
-                        true )))
-      with Given_up ->
-        (* The total cannot be divided over an unresolved sum or valid window. Retain it on the
-           whole row; [stored] also covers this explicit retention in [extras], so the return below
-           bypasses closing shortcuts (gh-ocannl-2127). *)
-        ([ Rows_constr { r = [ r ]; constr; origin } ], constr, env, true, false)
+      match r with
+      | { bcast = Broadcastable; _ } -> ([], constr, env, false, false)
+      | { bcast = Row_var v; beg_dims; dims; _ } -> (
+          let with_reduced store =
+            match reduce constr ~beg_dims ~dims with
+            | exception Given_up ->
+                (* Retain the whole row and its total before any closing shortcut. [stored] also
+                   covers explicit retention in [extras] (gh-ocannl-2127). *)
+                ([ Rows_constr { r = [ r ]; constr; origin } ], constr, env, true, false)
+            | reduced -> store reduced
+          in
+          match find_row env.row_env v with
+          | Some (Solved_row _) -> ([], constr, env, false, false)
+          | None ->
+              with_reduced (fun reduced ->
+                  ( [],
+                    constr,
+                    set_row env ~key:v
+                      ~data:
+                        (Bounds_row
+                           {
+                             is_in_param = false;
+                             constr = reduced;
+                             res = [];
+                             opnd = [];
+                             glb = None;
+                             origin;
+                           }),
+                    true,
+                    false ))
+          | Some (Bounds_row ({ constr = Unconstrained; _ } as bounds)) ->
+              with_reduced (fun reduced ->
+                  ( [],
+                    constr,
+                    set_row env ~key:v ~data:(Bounds_row { bounds with constr = reduced }),
+                    true,
+                    false ))
+          | Some (Bounds_row bounds) ->
+              with_reduced (fun reduced ->
+                  let origin = merge_origins origin bounds.origin in
+                  match row_conjunction ~prov:r.prov ~origin stage reduced bounds.constr with
+                  | None -> ([], constr, env, false, false)
+                  | Some (extras, constr) ->
+                      if phys_equal constr bounds.constr then (extras, constr, env, true, false)
+                      else
+                        ( extras,
+                          constr,
+                          set_row env ~key:v ~data:(Bounds_row { bounds with constr }),
+                          true,
+                          true )))
     in
     match (r, constr) with
     | _ when stored && not updated -> (extras, env)
@@ -5415,7 +5422,11 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
       in
       (* Note: the reduced constraint applies to just the row variable. *)
       match reduce_row_constraint constr ~beg_dims ~dims with
-      | exception Given_up -> ([ Rows_constr { r = [ r ]; constr; origin } ], env)
+      | exception Given_up ->
+          (* The row's composite axes must resolve before reducing its total. This also precedes the
+             composite-numerator hold below (gh-ocannl-2159): do not guess numerator parts while the
+             row's own factors are unavailable. *)
+          ([ Rows_constr { r = [ r ]; constr; origin } ], env)
       | Total_elems { numerator; divided_by; keep_axis } -> (
           let _divided_by : dim_var list = divided_by in
           (* Row-variable elimination runs at late stages only: an open total under a round-up slack
