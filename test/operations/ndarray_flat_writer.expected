@@ -37,3 +37,39 @@ rank 0: flat writer matches the per-cell write in every precision: true
 edge values: flat writer raises or stores as the per-cell writer does, in every precision: true
 a 65536-cell flat write allocates under 512 heap words, padded or not, in every scalar precision: true
 a packed uint4x32 flat write allocates no more than its 3-word record per cell: true
+byte point refuses out-of-range and nonfinite values with precision and value: true
+byte fill refuses out-of-range and nonfinite values with precision and value: true
+byte flat refuses out-of-range and nonfinite values with precision and value: true
+byte rank zero refuses out-of-range and nonfinite values with precision and value: true
+byte padding refuses out-of-range and nonfinite values with precision and value: true
+byte host fills preserve endpoints and truncated fractions: true
+uint16 point refuses out-of-range and nonfinite values with precision and value: true
+uint16 fill refuses out-of-range and nonfinite values with precision and value: true
+uint16 flat refuses out-of-range and nonfinite values with precision and value: true
+uint16 rank zero refuses out-of-range and nonfinite values with precision and value: true
+uint16 padding refuses out-of-range and nonfinite values with precision and value: true
+uint16 host fills preserve endpoints and truncated fractions: true
+int32 point refuses out-of-range and nonfinite values with precision and value: true
+int32 fill refuses out-of-range and nonfinite values with precision and value: true
+int32 flat refuses out-of-range and nonfinite values with precision and value: true
+int32 rank zero refuses out-of-range and nonfinite values with precision and value: true
+int32 padding refuses out-of-range and nonfinite values with precision and value: true
+int32 host fills preserve endpoints and truncated fractions: true
+uint32 point refuses out-of-range and nonfinite values with precision and value: true
+uint32 fill refuses out-of-range and nonfinite values with precision and value: true
+uint32 flat refuses out-of-range and nonfinite values with precision and value: true
+uint32 rank zero refuses out-of-range and nonfinite values with precision and value: true
+uint32 padding refuses out-of-range and nonfinite values with precision and value: true
+uint32 host fills preserve endpoints and truncated fractions: true
+int64 point refuses out-of-range and nonfinite values with precision and value: true
+int64 fill refuses out-of-range and nonfinite values with precision and value: true
+int64 flat refuses out-of-range and nonfinite values with precision and value: true
+int64 rank zero refuses out-of-range and nonfinite values with precision and value: true
+int64 padding refuses out-of-range and nonfinite values with precision and value: true
+int64 host fills preserve endpoints and truncated fractions: true
+uint64 point refuses out-of-range and nonfinite values with precision and value: true
+uint64 fill refuses out-of-range and nonfinite values with precision and value: true
+uint64 flat refuses out-of-range and nonfinite values with precision and value: true
+uint64 rank zero refuses out-of-range and nonfinite values with precision and value: true
+uint64 padding refuses out-of-range and nonfinite values with precision and value: true
+uint64 host fills preserve endpoints and truncated fractions: true

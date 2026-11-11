@@ -126,12 +126,14 @@ open Verdict.Claims
 
 (* [Train.forward_once], with [t]'s value prefilled off every value the routine writes between the
    compile and the run: a fresh device buffer is already zero, so a zero row the routine never wrote
-   would read as one it did (gh-ocannl-1625). *)
+   would read as one it did (gh-ocannl-1625). These embeddings contain only 0..11, so positive 100+k
+   distinguishes every missing write while fitting the uint32 output inferred from integer IDs
+   (gh-ocannl-2144). *)
 let forward_prefilled ctx (t : Tensor.t) =
   let ctx, routine = Train.to_routine ctx Train.IDX.empty (Train.forward t) in
   let n = Ir.Tnode.num_elems t.Tensor.value in
   let ctx =
-    Context.set_values ctx t.Tensor.value (Array.init n ~f:(fun k -> -.(100. +. Float.of_int k)))
+    Context.set_values ctx t.Tensor.value (Array.init n ~f:(fun k -> 100. +. Float.of_int k))
   in
   Context.run ctx routine
 
