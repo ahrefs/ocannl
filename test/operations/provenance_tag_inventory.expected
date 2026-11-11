@@ -180,7 +180,7 @@ arrayjit/lib/tnode.ml -- 1 13 16 17 36 39 41 49 432
 arrayjit/lib/winograd.ml -- 505
 arrayjit/lib/winograd.mli -- 505
 benchmarks/report-gh612-hip.md -- 41
-docs/agent-notes/virtualization-and-inlining.md -- 1 8 9 10 13 19 37 39 40 41 51 52 141 142 143 144 147 148 149 154 155 156 157 158 432
+docs/agent-notes/virtualization-and-inlining.md -- 8 9 10 13 19 37 39 40 41 51 52 141 142 143 144 147 148 149 154 155 156 157 158 432
 docs/lowering_and_inlining.md -- 4 5 7 8 9 10 11 12 13 14 16 18 19 39 41 51 52 140 141 142 143 144 145 146 147 148 149 151 152 154 155 156 157 158 432
 lib/train.ml -- 28 29
 tensor/tensor.ml -- 24 49 241
@@ -208,7 +208,7 @@ test/operations/virtual_inliner_oracle.ml -- 10 13 51 157 158
 test/operations/virtual_rejection_boundary.expected -- 1 4 7 9 10 13 19 36 40 51 142 147 148 157 158
 test/operations/virtual_rejection_boundary.ml -- 1 4 5 7 8 9 10 11 12 13 14 17 19 36 39 40 41 51 52 140 141 142 143 144 145 146 147 148 149 154 155 156 157 158
 test/operations/virtual_uncaptured_loop.expected -- 147
-test/operations/virtual_uncaptured_loop.ml -- 9 147
+test/operations/virtual_uncaptured_loop.ml -- 147
 test/support/provenance_tag_scan.ml -- 13 41
 Read, not part of the checklist:
   docs/design/ -- design records, each describing the code as it stood when written

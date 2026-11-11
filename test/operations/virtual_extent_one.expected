@@ -1,0 +1,18 @@
+extent 2
+materialized: accumulator placement: true
+materialized values match the closed form: true
+virtual: accumulator placement: true
+virtual: values match the closed form: true
+virtual: values match materialization: true
+auto: accumulator placement: true
+auto: values match the closed form: true
+auto: values match materialization: true
+extent 1
+materialized: accumulator placement: true
+materialized values match the closed form: true
+virtual: accumulator placement: true
+virtual: values match the closed form: true
+virtual: values match materialization: true
+auto: accumulator placement: true
+auto: values match the closed form: true
+auto: values match materialization: true

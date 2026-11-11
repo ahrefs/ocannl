@@ -4,8 +4,12 @@ repetition above the capture: candidate rejected (stays non-virtual): true
 repetition above the capture: rejected as Non_virtual 147: true
 symbol_free_map: executed values are the reference: true
 symbol_free_map: virtual and materialized arms agree: true
-symbol-free index map: candidate rejected (stays non-virtual): true
-symbol-free index map: rejected as Non_virtual 147: true
+symbol-free index map: candidate virtual: true
+symbol-free index map: no array read survives: true
+nested_scalar: executed values are the reference: true
+nested_scalar: virtual and materialized arms agree: true
+nested scalar: candidate virtual: true
+nested scalar: no array read survives: true
 inner_reduction: executed values are the reference: true
 inner_reduction: virtual and materialized arms agree: true
 inner reduction: candidate still virtual: true

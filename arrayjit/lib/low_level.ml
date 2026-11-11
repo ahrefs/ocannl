@@ -1315,7 +1315,7 @@ let is_scalar_dims tn = Array.for_all ~f:(( = ) 1) @@ Lazy.force tn.Tn.dims
    Multiple tensors may share a symbol (e.g. Block/concat lowering): all are recorded, in first-seen
    (trace) order and deduplicated, so that [virtual_llc] can store one computation per candidate.
    See #134. *)
-let track_symbol reverse_node_map tn idcs =
+let track_symbol reverse_node_map tn idcs ~(enclosing : Access_fold.binder list) =
   let add s =
     let existing = Hashtbl.find reverse_node_map s |> Option.value ~default:[] in
     if not (List.mem existing tn ~equal:Tn.equal) then
@@ -1326,7 +1326,13 @@ let track_symbol reverse_node_map tn idcs =
     | Indexing.Sub_axis -> ()
     | Indexing.Iterator s -> add s
     | Indexing.Affine { symbols; _ } -> List.iter symbols ~f:(fun (_, s) -> add s)
-    | Indexing.Concat syms -> List.iter syms ~f:add)
+    | Indexing.Concat syms -> List.iter syms ~f:add);
+  (* A symbol-free output has no indexing loop to own its capture. Capture at the outermost
+     enclosing loop instead, keeping the whole reduction/repetition in the replay (gh-ocannl-2149).
+     Without this, per-statement storage loses its binders and refuses valid extent-1 reductions. *)
+  if
+    Array.for_all idcs ~f:(function Indexing.Fixed_idx _ | Indexing.Sub_axis -> true | _ -> false)
+  then Option.iter (List.last enclosing) ~f:(fun b -> add b.index)
 
 (* gh-343 / task-73617488: helpers for the one-hot reduction rewrite and the virtualizer exemption.
    Placed before [trace_node_facts] so [is_one_hot_selector_assignment] is available during
@@ -1808,7 +1814,7 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
            symbol (e.g. Block/concat lowering); all of them are recorded as candidate owners in
            first-seen (trace) order. Sharing a symbol no longer marks tensors [is_complex] -- only
            genuine computation complexity does (see #134). *)
-        track_symbol reverse_node_map tn idcs
+        track_symbol reverse_node_map tn idcs ~enclosing:ctx.loops
     | Set_from_vec { tn; idcs; length = _; vec_unop = _; arg = arg, _; debug = _ } ->
         let traced, _ = setter_facts ctx ~tn ~idcs ~rhs:arg in
         (* Vector operations cannot be scalar constexpr or one-hot selectors. *)
@@ -1817,7 +1823,7 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
         traced.is_accessing <- traced.is_accessing || is_accessing_comp traced_store arg;
         traced.is_complex <- traced.is_complex || not (is_constexpr_comp traced_store arg);
         traced.has_assignment <- true;
-        track_symbol reverse_node_map tn idcs
+        track_symbol reverse_node_map tn idcs ~enclosing:ctx.loops
     | _ -> ()
   in
   let scalar _ () (sc : scalar_t) =
@@ -2451,8 +2457,9 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
        [width] times. [virtual_llc] captures at the outermost loop whose symbol occurs in the
        candidate's indices, so a reduction loop BELOW that point does ride along inside [top_llc]
        (the ordinary [x[t] += a[s]] shape, whose cost the [max_inline_reduction] cap governs); one
-       ABOVE it, or any loop at all when the index map is symbol-free, does not. Only widths above 1
-       matter: replaying a single-iteration loop once is exact. *)
+       ABOVE it does not. Symbol-free maps instead capture at the outermost enclosing loop
+       (gh-ocannl-2149), keeping every repetition. Only widths above 1 matter: replaying a
+       single-iteration loop once is exact. *)
     List.iter enclosing ~f:(fun (s, (from_, to_)) ->
         let width = to_ - from_ + 1 in
         if
@@ -4549,6 +4556,19 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     | Noop | Set_local _ | Declare_local _ | Comment _ | Staged_compilation _ | Workgroup_barrier ->
         acc
   in
+  (* Unlike an output-indexed capture, a fixed-index capture replays every iteration. Keep it to
+     assignment nests owned by one node: sibling buffer OR statement-local writes can observe
+     intermediate values. RHS scope bodies are pure and keep their own locals (scope purity). *)
+  let rec fixed_capture_body tn = function
+    | Noop | Comment _ -> true
+    | Seq (a, b) -> fixed_capture_body tn a && fixed_capture_body tn b
+    | For_loop { body; _ } -> fixed_capture_body tn body
+    | Set { tn = target; _ } | Set_from_vec { tn = target; _ } | Zero_out target ->
+        Tn.equal tn target
+    | Scan_loop _ | If _ | Set_local _ | Declare_local _ | Staged_compilation _ | Workgroup_barrier
+    | Tile_mma _ | Set_dynamic _ ->
+        false
+  in
   (* gh-ocannl-1469: the loops whose extent may decide a [Where] condition in the walked code —
      every enclosing loop except the [opaque] ones. Code that executes where it stands holds every
      loop's extent; code the walk is producing as a node's stored template replays with the read
@@ -4628,7 +4648,11 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
             List.filter tns ~f:(fun tn ->
                 (not @@ Set.mem process_for tn)
                 && (not @@ Set.mem owned tn)
-                && (not @@ Tn.Placements.known_non_virtual plc tn))
+                && (not @@ Tn.Placements.known_non_virtual plc tn)
+                (* A fixed-index reduction replays the WHOLE loop. A sibling setter could observe an
+                   intermediate accumulator value, so keep the old refusal for shared loops without
+                   an output index to select the observed iteration (gh-ocannl-2149). *)
+                && (write_index_mentions tn index body || fixed_capture_body tn body))
           in
           match candidates with
           | [] ->
