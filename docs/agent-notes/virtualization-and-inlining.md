@@ -339,6 +339,9 @@ files.
   iterator-dependent sum. A shared loop stays refused: a sibling buffer or statement-local setter
   can observe an intermediate sum, which replaying the entire loop would replace by the final sum
   (`symbol_free_intermediate_observer`, `symbol_free_local_observer`).
+  Each registration carries `fixed_index_capture`, so this body restriction applies only to the
+  new fallback. Indexed captures keep their prior rule, including raw specialization probes with
+  nested scope writes (`prelowered_seam` phase 6); `write_index_mentions` omits those scalar bodies.
   The visit and reduction caps still apply before legality.
 - **A committed-virtual node has no fallback, so nothing commits one ahead of the walk**
   (gh-ocannl-1690, gh-ocannl-1735): a `Non_virtual` against a node already `Virtual` cannot decline

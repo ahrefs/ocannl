@@ -1311,16 +1311,28 @@ let is_complex_comp traced_store llsc =
 
 let is_scalar_dims tn = Array.for_all ~f:(( = ) 1) @@ Lazy.force tn.Tn.dims
 
+type capture_candidate = { candidate_tn : Tn.t; fixed_index_capture : bool }
+
 (* Records [tn] as a candidate owner of each loop symbol appearing in its assignment indices.
    Multiple tensors may share a symbol (e.g. Block/concat lowering): all are recorded, in first-seen
    (trace) order and deduplicated, so that [virtual_llc] can store one computation per candidate.
    See #134. *)
 let track_symbol reverse_node_map tn idcs ~(enclosing : Access_fold.binder list) =
-  let add s =
+  let add_registration s fixed_index_capture =
     let existing = Hashtbl.find reverse_node_map s |> Option.value ~default:[] in
-    if not (List.mem existing tn ~equal:Tn.equal) then
-      Hashtbl.set reverse_node_map ~key:s ~data:(existing @ [ tn ])
+    match List.find existing ~f:(fun c -> Tn.equal c.candidate_tn tn) with
+    | None ->
+        Hashtbl.set reverse_node_map ~key:s
+          ~data:(existing @ [ { candidate_tn = tn; fixed_index_capture } ])
+    | Some c when c.fixed_index_capture && not fixed_index_capture ->
+        (* An indexed registration retains the existing capture rule if both kinds meet here. *)
+        Hashtbl.set reverse_node_map ~key:s
+          ~data:
+            (List.map existing ~f:(fun c ->
+                 if Tn.equal c.candidate_tn tn then { c with fixed_index_capture = false } else c))
+    | Some _ -> ()
   in
+  let add s = add_registration s false in
   Array.iter idcs ~f:(function
     | Indexing.Fixed_idx _ -> ()
     | Indexing.Sub_axis -> ()
@@ -1332,7 +1344,7 @@ let track_symbol reverse_node_map tn idcs ~(enclosing : Access_fold.binder list)
      Without this, per-statement storage loses its binders and refuses valid extent-1 reductions. *)
   if
     Array.for_all idcs ~f:(function Indexing.Fixed_idx _ | Indexing.Sub_axis -> true | _ -> false)
-  then Option.iter (List.last enclosing) ~f:(fun b -> add b.index)
+  then Option.iter (List.last enclosing) ~f:(fun b -> add_registration b.index true)
 
 (* gh-343 / task-73617488: helpers for the one-hot reduction rewrite and the virtualizer exemption.
    Placed before [trace_node_facts] so [is_one_hot_selector_assignment] is available during
@@ -4645,14 +4657,16 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           let candidates =
             (* First-seen (trace) order is preserved by [track_symbol], so a forward provider is
                stored before its consumer below. *)
-            List.filter tns ~f:(fun tn ->
-                (not @@ Set.mem process_for tn)
-                && (not @@ Set.mem owned tn)
-                && (not @@ Tn.Placements.known_non_virtual plc tn)
-                (* A fixed-index reduction replays the WHOLE loop. A sibling setter could observe an
-                   intermediate accumulator value, so keep the old refusal for shared loops without
-                   an output index to select the observed iteration (gh-ocannl-2149). *)
-                && (write_index_mentions tn index body || fixed_capture_body tn body))
+            List.filter_map tns ~f:(fun { candidate_tn = tn; fixed_index_capture } ->
+                (* Only the new fixed-index registration requires an exclusive assignment nest. Keep
+                   the existing indexed capture rule, including for raw analysis probes whose nested
+                   scope writes [write_index_mentions] deliberately does not inspect. *)
+                Option.some_if
+                  ((not @@ Set.mem process_for tn)
+                  && (not @@ Set.mem owned tn)
+                  && (not @@ Tn.Placements.known_non_virtual plc tn)
+                  && ((not fixed_index_capture) || fixed_capture_body tn body))
+                  tn)
           in
           match candidates with
           | [] ->
@@ -11459,7 +11473,7 @@ type analysis = {
       (** The decision-independent facts. [specialize_proc] hands each candidate a record-copied
           view, because [decide_placements] writes the placement-dependent [read_only] /
           [read_before_write] flags under the candidate's own placements. *)
-  an_reverse_node_map : (Indexing.symbol, Tnode.t list) Hashtbl.t;
+  an_reverse_node_map : (Indexing.symbol, capture_candidate list) Hashtbl.t;
   an_merge_node : Tnode.t option;
   an_reads_covered :
     (Tn.t -> [ `Covered | `Covered_rmw_exempt of string | `Unknown of string ]) Lazy.t;
