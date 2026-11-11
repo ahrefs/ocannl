@@ -258,8 +258,8 @@ using namespace metal;|}, []);
 }|},
       [] );
     ( "uint4x32_to_byte_uniform",
-      {|int8_t uint4x32_to_byte_uniform(uint4 x) {
-    return int8_t(x.x & 0xFF);
+      {|uint8_t uint4x32_to_byte_uniform(uint4 x) {
+    return uint8_t(x.x & 0xFF);
 }|},
       [] );
     ( "uint4x32_to_uint16_uniform",
@@ -434,7 +434,7 @@ using namespace metal;|}, []);
 }|},
       [ "uint4x32_to_uint64_uniform_vec" ] );
     ( "uint4x32_to_byte_uniform_lane",
-      {|int8_t uint4x32_to_byte_uniform_lane(uint4 x, int32_t lane) {
+      {|uint8_t uint4x32_to_byte_uniform_lane(uint4 x, int32_t lane) {
     return uint4x32_to_byte_uniform_vec(x).v[lane];
 }|},
       [ "uint4x32_to_byte_uniform_vec" ] );

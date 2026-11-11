@@ -298,6 +298,13 @@ files.
   annotation (gh-ocannl-1788). It used to re-annotate a load at its storage precision, which erased
   such a request before the gate, and in a heterogeneous slot (a `Where` condition, a guard) changed
   the precision the renderer evaluates the load at.
+- **Byte RNG expressions return unsigned bytes before storage** (gh-ocannl-2136): every
+  scalar and lane helper, on every backend and through the host stub, returns byte storage's
+  unsigned type. Packed vectors may keep `int8x16_t` bit containers. A signed scalar return
+  preserves a store's bits yet changes a nested comparison: the all-ones byte compares below
+  100 as -1 instead of above it as 255. `byte_uniform_unsigned` executes both direct forms
+  against a packed unsigned store, with all-ones and zero words forcing both comparison
+  branches, and exhausts all 256 host byte values.
 - **Which bits an RNG conversion consumes is fixed per precision, and it is the same on every
   backend** (gh-ocannl-951). The scalar `uint4x32_to_{bfloat16,half}_uniform` take the single draw
   of the key's first 32 bits (`uint32_to_single_uniform`) and narrow it; the `_vec`/`_lane` forms

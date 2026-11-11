@@ -1692,9 +1692,9 @@ ARRAYJIT_BUILTIN_LINKAGE uint64_t uint4x32_to_uint64_uniform(uint4x32_t x) {
       [ "uint4x32_t" ] );
     ( "uint4x32_to_byte_uniform",
       {|
-/* Uint4x32 to int8 uniform - full range */
-ARRAYJIT_BUILTIN_LINKAGE int8_t uint4x32_to_byte_uniform(uint4x32_t x) {
-    return (int8_t)(x.v[0] & 0xFF);
+/* Uint4x32 to unsigned byte uniform - full range */
+ARRAYJIT_BUILTIN_LINKAGE uint8_t uint4x32_to_byte_uniform(uint4x32_t x) {
+    return (uint8_t)(x.v[0] & 0xFF);
 }
 |},
       [ "uint4x32_t" ] );
@@ -1893,8 +1893,8 @@ ARRAYJIT_BUILTIN_LINKAGE int64_t uint4x32_to_int64_uniform_lane(uint4x32_t x, in
       [ "uint4x32_t"; "uint4x32_to_int64_uniform_vec" ] );
     ( "uint4x32_to_byte_uniform_lane",
       {|
-/* Lane of the packed byte uniform conversion. */
-ARRAYJIT_BUILTIN_LINKAGE int8_t uint4x32_to_byte_uniform_lane(uint4x32_t x, int32_t lane) {
+/* Unsigned byte storage value, even though the packed vector carries signed lanes. */
+ARRAYJIT_BUILTIN_LINKAGE uint8_t uint4x32_to_byte_uniform_lane(uint4x32_t x, int32_t lane) {
     return uint4x32_to_byte_uniform_vec(x).v[lane];
 }
 |},

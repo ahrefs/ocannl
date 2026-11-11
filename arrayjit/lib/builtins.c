@@ -118,7 +118,7 @@ CAMLprim value arrayjit_uint4x32_to_byte_uniform_ocaml(value v_x)
 {
   CAMLparam1(v_x);
   uint4x32_t x = ocaml_array_to_uint4x32(v_x);
-  int8_t result = uint4x32_to_byte_uniform(x);
+  uint8_t result = uint4x32_to_byte_uniform(x);
   CAMLreturn(Val_int(result));
 }
 

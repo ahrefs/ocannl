@@ -1,0 +1,5 @@
+host scalar draws cover every unsigned byte: true
+packed bytes cover high-bit and zero values: true
+stored unsigned comparisons take both branches: true
+lane comparisons match unsigned byte storage: true
+scalar comparison treats 255 as unsigned: true
