@@ -93,6 +93,8 @@ files.
   A regression probe must put its call in a translated position: `let%op chosen = max x y`
   reaches the translator, but the body of `[%op let max = Int.max in ...]` stays ordinary OCaml.
   `test/operations/op_binary_names.ml` executes curried, tuple and piped local calls.
+  Driver-only expansion fixtures such as `test/ppx/test_param_errors_expected.ml` are outside
+  `ppx-output-diff.sh`'s registered preprocessing corpus; rerun their `runtest-*-ppx` aliases too.
 
 - Evaluation order (gh-ocannl-1869): where `%op` gives a literal a meaning of its own -- a block
   tensor's components, a concat's operand tuple or array, an einsum's capture list -- the expansion runs
