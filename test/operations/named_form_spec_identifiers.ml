@@ -116,6 +116,9 @@ let () =
 let%op named_concat x w = concat "a; b => a^b" [| x; w |]
 let%op named_concat_sum ~d x w = concat_sum "a; b => a^b" ~capture_dims:[ d ] [| x; w |]
 let%op named_optional_capture ~d x = einsum1 ?capture_dims:(Some [ d ]) "a => a" x
+let%op named_escaped_capture ~d x = einsum1 ?capture_dims:(Some [%oc [ d ]]) "a => a" x
+let%op named_escaped_concat x w = concat "a; b => a^b" [%oc [| x; w |]]
+let%op named_nested_op x w = concat "a; b => a^b" [| [%op x *. 2]; w |]
 
 let () =
   let want = Array.append xs taps in
@@ -131,3 +134,18 @@ let () =
     (values (named_optional_capture ~d x))
     xs ~f:exact;
   p "optional capture_dims captures the axis" (Option.equal Int.equal d.var_ref.solved_dim (Some n))
+
+let () =
+  let d = Shape.get_variable_ref "a" in
+  p_all2 "nested OCaml capture escapes remain accepted"
+    (values (named_escaped_capture ~d x))
+    xs ~f:exact;
+  p "escaped optional capture_dims captures the axis"
+    (Option.equal Int.equal d.var_ref.solved_dim (Some n));
+  p_all2 "OCaml operand array escapes remain accepted"
+    (values (named_escaped_concat x w))
+    (Array.append xs taps) ~f:exact;
+  p_all2 "operand arrays allow explicit nested tensor quotations"
+    (values (named_nested_op x w))
+    (Array.append (Array.map xs ~f:(fun x -> 2. *. x)) taps)
+    ~f:exact

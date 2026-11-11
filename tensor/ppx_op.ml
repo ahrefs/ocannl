@@ -1004,12 +1004,19 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
             | _ when ocaml_argument ->
                 (* These containers belong to the named API, not block-tensor syntax. Keep existing
                    [%oc ...] escapes working as well. *)
-                let vbs, e =
-                  match arg_expr.pexp_desc with
-                  | Pexp_extension ({ txt = "oc"; _ }, _) -> loop arg_expr
-                  | _ -> (no_vbs, arg_expr)
+                let preserve =
+                  object
+                    inherit Ast_traverse.map as super
+
+                    method! expression expr =
+                      match expr.pexp_desc with
+                      | Pexp_extension ({ txt = "oc"; _ }, _) -> snd (loop expr)
+                      (* An explicit nested quotation owns its contents and escapes. *)
+                      | Pexp_extension _ -> expr
+                      | _ -> super#expression expr
+                  end
                 in
-                (vbs, (arg_label, e))
+                (no_vbs, (arg_label, preserve#expression arg_expr))
             | Some unit_pos when i < unit_pos ->
                 (* Before unit: preserve as OCaml expression *)
                 (no_vbs, (arg_label, arg_expr))
