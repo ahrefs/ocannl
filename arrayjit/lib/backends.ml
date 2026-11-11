@@ -1030,6 +1030,42 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
   include Device
   include Add_buffer_retrieval_and_syncing (Device)
 
+  (* gh-ocannl-2134: the devices a bounded wait gave up on, by [device_id], with what expired. Read
+     on every [await], written once per expiry; any domain may wait. *)
+  let wedged : (int, string, Int.comparator_witness) Map.t Atomic.t =
+    Atomic.make (Map.empty (module Int))
+
+  let check_wedged (device : device) =
+    Option.iter
+      (Map.find (Atomic.get wedged) device.device_id)
+      ~f:(fun detail ->
+        raise (Backend_intf.Device_wedged { device = Device.get_name device; detail }))
+
+  let rec mark_wedged (device : device) detail =
+    let before = Atomic.get wedged in
+    let after = Map.set before ~key:device.device_id ~data:detail in
+    if not (Atomic.compare_and_set wedged before after) then mark_wedged device detail
+
+  let await device =
+    check_wedged device;
+    Device.await device
+
+  let await_within device ~seconds =
+    check_wedged device;
+    let completed =
+      match Device.bounded_await with
+      | Some bounded -> bounded device ~seconds
+      | None -> Utils.poll_within ~seconds (fun () -> Device.is_idle device)
+    in
+    if completed then (
+      (* Idle now, so this returns at once; it is what raises a reported failure, and what keeps
+         each backend's own [await] semantics (CUDA's routine-log drain). *)
+      if Option.is_none Device.bounded_await then Device.await device;
+      true)
+    else (
+      mark_wedged device (Printf.sprintf "work outstanding past a %gs wait" seconds);
+      false)
+
   type fissioned = { batch : Device.code_batch; count : int } [@@deriving sexp_of]
 
   type nonrec code = {

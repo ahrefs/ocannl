@@ -1806,6 +1806,16 @@ let sync ctx =
           Backend.await c.BI.device);
     }
 
+let await_within ctx ~seconds =
+  check_live ~fn:"await_within" ctx;
+  check_not_poisoned ctx;
+  Backends.query ctx.wrapped
+    {
+      q =
+        (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
+          Backend.await_within c.BI.device ~seconds);
+    }
+
 let static_properties ctx =
   let (module Backend) = backend_module ctx in
   Backend.static_properties ()

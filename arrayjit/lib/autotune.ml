@@ -6390,6 +6390,7 @@ module type Driver = sig
 
   val run : ?timing:bool -> ctx -> routine -> ctx
   val sync : ctx -> unit
+  val await_within : ctx -> seconds:float -> bool
   val release : ctx -> unit
   val adopt_ancestor : ctx -> ancestor:ctx -> unit
   val check_lineage_runnable : ctx -> routine -> unit
