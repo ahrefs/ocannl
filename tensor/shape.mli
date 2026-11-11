@@ -658,6 +658,7 @@ module Scheme : sig
 
   val trace :
     ?sabotage:sabotage ->
+    ?site:string ->
     var_mark:int ->
     label:string ->
     args:shape list ->
@@ -673,6 +674,8 @@ module Scheme : sig
       related in it ([set_dim] and the like), or forcing dims or projections; and [Row.Shape_error]
       on a contradiction among the window's constraints (solved at Stage1 once more at the end, so a
       trailing [set_dim] is checked too). Both are prefixed ["tracing the shape scheme <label>: "].
+      When [site] is supplied, a contradiction instead names ["<label> <site>: "]; refusals keep
+      their site-independent text so fallback warnings remain deduplicated by function and reason.
 
       A capture reference made outside the window that [f]'s operations bind ([~capture_dims]) is an
       input of the scheme (gh-ocannl-1791): during the trace it reads as unbound and unsolved, so

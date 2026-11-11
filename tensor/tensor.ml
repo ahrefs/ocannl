@@ -2112,7 +2112,7 @@ module Scheme = struct
           end_id_neutral_window ~label))
 
   (* The trace proper, to run inside a rewound window. *)
-  let trace_core ?sabotage ~label arity f =
+  let trace_core ?sabotage ?site ~label arity f =
     let var_mark = Row.var_mark () in
     (* The tracers' terminal steps are the trace's work, discarded with it: not inline
        registrations. Made after [var_mark], so that their variables are generalized, and before the
@@ -2122,7 +2122,7 @@ module Scheme = struct
           List.init arity ~f:(fun i ->
               term ~grad_spec:Prohibit_grad ~label:[ [%string "%{label}.arg%{i#Int}"] ] ()))
     in
-    Shape.Scheme.trace ?sabotage ~var_mark ~label
+    Shape.Scheme.trace ?sabotage ?site ~var_mark ~label
       ~args:(List.map tracers ~f:(fun t -> t.shape))
       (fun () -> List.map (f tracers) ~f:(fun t -> t.shape))
 
@@ -2339,20 +2339,19 @@ module Scheme = struct
       with_id_neutral ~label (fun () ->
           let ck = checkpoint ~label () in
           match
-            trace_core ~label:s.label (List.count s.pattern ~f:Fn.id) (fun ts ->
-                h.body (spread s.pattern ts))
+            trace_core ?site:(site_phrase ()) ~label:s.label (List.count s.pattern ~f:Fn.id)
+              (fun ts -> h.body (spread s.pattern ts))
           with
           | scheme ->
               rewind ck;
               s.state <- Schemed { scheme; generation = !generation };
               emit (Traced scheme)
-          | exception Row.Shape_error (msg, trace) ->
+          | exception (Row.Shape_error _ as exn) ->
               (* A contradiction that does not depend on the arguments: loud, naming the
                  function. *)
               let bt = Stdlib.Printexc.get_raw_backtrace () in
-              let msg = match site_phrase () with None -> msg | Some site -> site ^ ": " ^ msg in
               (try rewind ck with Session_error _ -> ());
-              Stdlib.Printexc.raise_with_backtrace (Row.Shape_error (msg, trace)) bt
+              Stdlib.Printexc.raise_with_backtrace exn bt
           | exception (Shape.Untraceable_scheme msg as exn) ->
               let bt = Stdlib.Printexc.get_raw_backtrace () in
               rewind_or_reraise s ck exn bt;

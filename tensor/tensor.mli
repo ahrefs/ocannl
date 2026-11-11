@@ -532,9 +532,11 @@ module Scheme : sig
       - [off]: no schemes.
 
       A shape error that does not depend on the arguments raises at the trace, prefixed
-      ["tracing the shape scheme <function>: "]; one that does raises at the application, before the
-      body runs, prefixed ["applying the shape scheme <function> to <arguments>: "] -- or, for an
-      application evaluated inside an application written in [%op] code, the innermost such,
+      ["tracing the shape scheme <function>: "] -- or, inside an application written in [%op],
+      ["tracing the shape scheme <function> in the %op application at <file>:<line>: "]
+      (gh-ocannl-2164). One that does raises at the application, before the body runs, prefixed
+      ["applying the shape scheme <function> to <arguments>: "] -- or, for an application evaluated
+      inside an application written in [%op] code, the innermost such,
       ["applying the shape scheme <function> to <arguments> in the %op application at <file>:<line>:
        "] (gh-ocannl-2007). The expansion records that site; an application written in plain OCaml
       outside any [%op] application has none (OCaml has no caller location), so its message names

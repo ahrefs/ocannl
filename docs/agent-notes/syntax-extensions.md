@@ -93,8 +93,10 @@ files.
   `Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> app)`, which a scheme check inside it
   reads to name `<file>:<line>`. `__POS__` is filled in by the compiler at the application's
   location, so the `test/ppx/*_expected.ml` goldens spell no line. A contradiction while
-  tracing a closure at its `()` application reads the same site in `Tensor.Scheme.trace_slot`'s
-  error handler (gh-ocannl-2164); `check_definition` preserves it under its own context. The
+  tracing a closure at its `()` application takes the same site from `Tensor.Scheme.trace_slot`
+  through `trace_core` to `Shape.Scheme.trace` (gh-ocannl-2164); `check_definition` preserves it
+  under its own context. Only contradictions name the site: fallback warnings and failed-rewind
+  refusals keep their existing diagnostics. The
   `scheme_application_site` test pins both against the application's line. An arm that reads the
   applied function of a translated expression syntactically must undo the wrapper with `strip_at_site`:
   the inline-declaration initializer does (`add_module_qualifier_to_applied_function` qualifies

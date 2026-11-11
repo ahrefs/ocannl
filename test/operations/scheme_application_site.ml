@@ -135,6 +135,9 @@ let () =
       in
       p "the trace names the closure construction's file and line"
         (names_site msg ~expected:(in_op !line));
+      p "the trace starts with its phase and function"
+        (Option.exists msg ~f:(fun msg ->
+             String.is_prefix msg ~prefix:"tracing the shape scheme bad_definition in "));
       let msg =
         attempt "trace in plain OCaml" (fun () ->
             ignore (bad_definition ~width:3 () : Tensor.t -> Tensor.t))
@@ -159,3 +162,14 @@ let () =
       p "the error retains the definition-check context"
         (Option.exists msg ~f:(fun msg ->
              String.is_prefix msg ~prefix:"checking the definition bad_definition: ")))
+
+let%op bad_deferred x = x + ([ 1.; 2.; 3. ] + [ 1.; 2.; 3.; 4. ])
+
+let () =
+  Verdict.case "a deferred trace names its first application" (fun () ->
+      let x = input "deferred_x" [ 3 ] in
+      let line, msg =
+        (Stdlib.__LINE__, attempt "deferred trace" (tensor (fun () -> [%op bad_deferred x])))
+      in
+      p "the deferred trace names the first application's file and line"
+        (names_site msg ~expected:(in_op line)))

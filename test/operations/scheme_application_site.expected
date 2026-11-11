@@ -42,12 +42,16 @@ instantiate:
   applying the shape scheme needs3 to application #2: dimension comparison for axis: mismatch
 without [~here], the instance names no site: true
 trace in %op:
-  in the %op application at test/operations/scheme_application_site.ml:134: tracing the shape scheme bad_definition: solved dimensions for axis: mismatch
+  tracing the shape scheme bad_definition in the %op application at test/operations/scheme_application_site.ml:134: solved dimensions for axis: mismatch
 the trace names the closure construction's file and line: true
+the trace starts with its phase and function: true
 trace in plain OCaml:
   tracing the shape scheme bad_definition: solved dimensions for axis: mismatch
 a plain trace after a refusal names no site: true
 definition check:
-  checking the definition bad_definition: in the %op application at test/operations/scheme_application_site.ml:153: tracing the shape scheme bad_definition: solved dimensions for axis: mismatch
+  checking the definition bad_definition: tracing the shape scheme bad_definition in the %op application at test/operations/scheme_application_site.ml:156: solved dimensions for axis: mismatch
 the definition check names the closure construction's file and line: true
 the error retains the definition-check context: true
+deferred trace:
+  tracing the shape scheme bad_deferred in the %op application at test/operations/scheme_application_site.ml:172: solved dimensions for axis: mismatch
+the deferred trace names the first application's file and line: true
