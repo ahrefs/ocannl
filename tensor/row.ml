@@ -3609,6 +3609,18 @@ let restore_globals
 [@@mutation_serial.boundary
   "part of a rewind: puts back the solver's inference sets as a checkpoint captured them"]
 
+(* An extent of 1 still occupies an axis: it cannot repair this rank mismatch. Keep the close-down
+   rule visible here, where an einsum's open slot can meet a closed result. *)
+let closed_row_rank_error required closed =
+  let rank r = List.length r.beg_dims + List.length r.dims in
+  Shape_error
+    ( Printf.sprintf
+        "Number of axes mismatch: the row requires at least %d axes, but the other row is closed \
+         with %d. Operation results close to their arguments' shapes; a use site cannot add axes \
+         to them implicitly (use stretch to request use-site widening)."
+        (rank required) (rank closed),
+      [ Row_mismatch [ required; closed ] ] )
+
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
 let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list * _ =
   let solve (ineqs, env) : constraint_ -> constraint_ list * _ = function
@@ -3702,7 +3714,7 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
         (* A closed r2 is flat: only the total axis count can rule the equation out (the
            [Broadcastable] arm below aligns r1's flanks against the flat axis list, so e.g. r1.dims
            may exceed r2.dims by matching into r2.beg_dims). *)
-        raise @@ Shape_error ("Number of axes mismatch", [ Row_mismatch [ r1; r2 ] ])
+        raise @@ closed_row_rank_error r1 r2
       else
         let orig_rows = [ r1; r2 ] in
         let (beg_handled : bool), (ineqs, env), (value : row) =
@@ -3754,8 +3766,7 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
                  matching flank length — handled below. *)
               let r2_flat = r2.beg_dims @ r2.dims in
               let r2_l = beg_dims2_l + dims2_l in
-              if dims1_l + beg_dims1_l > r2_l then
-                raise @@ Shape_error ("Number of axes mismatch", [ Row_mismatch [ r1; r2 ] ])
+              if dims1_l + beg_dims1_l > r2_l then raise @@ closed_row_rank_error r1 r2
               else
                 let beg_overlap = min beg_dims1_l beg_dims2_l in
                 let end_overlap = min dims1_l dims2_l in

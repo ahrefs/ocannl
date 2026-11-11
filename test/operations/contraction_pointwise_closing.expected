@@ -1,0 +1,4 @@
+the self-contraction followed by pointwise use is refused: true
+the refusal reports the open row's minimum rank and the closed row's rank: true
+the refusal explains operation-result closing: true
+the refusal names explicit use-site widening: true
