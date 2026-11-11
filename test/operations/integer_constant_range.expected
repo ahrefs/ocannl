@@ -90,6 +90,10 @@ uint64 ~- wrapping row 1 agrees with subtraction from zero: true
 uint64 ~- wrapping row 1 nested: accepted: true
 uint64 ~- wrapping row 1 nested negation restores the input: true
 single where with the default mask fill keeps its infinity: true
+single nested: accepted: true
+single nested negation restores the input: true
+int32 nested: accepted: true
+int32 nested negation restores the input: true
 byte the top endpoint minus a gives the truncated value per cell: true
 byte the bottom endpoint plus a gives the truncated value per cell: true
 byte a fraction above the top endpoint, minus a gives the truncated value per cell: true
