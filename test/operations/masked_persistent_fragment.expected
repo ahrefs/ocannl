@@ -1,17 +1,19 @@
-matmul: every partial sum is exact in f32: true
-conv: every partial sum is exact in f32: true
+mm: every partial sum is exact in f32: true
 mm: every seed's schedule applies: true
 mm: some seed's masked accumulator contracts at the loop site: true
 mm: every loop-site masked seed holds an unshared fragment over a shared scratch tile: true
 mm: a masked seed marks a persistent fragment exactly at the loop site: true
 mm: the seeding's pad verdict is the applied schedule's mask, seed by seed: true
+mm: the executed reference equals the premise's host sums: true
 mm: every loop-site seed matches the reference bitwise, run twice: true
 mm: every loop-site seed renders persistent-fragment scopes, each resident in its source: true
+cv: every partial sum is exact in f32: true
 cv: every seed's schedule applies: true
 cv: some seed's masked accumulator contracts at the loop site: true
 cv: every loop-site masked seed holds an unshared fragment over a shared scratch tile: true
 cv: a masked seed marks a persistent fragment exactly at the loop site: true
 cv: the seeding's pad verdict is the applied schedule's mask, seed by seed: true
+cv: the executed reference equals the premise's host sums: true
 cv: every loop-site seed matches the reference bitwise, run twice: true
 cv: every loop-site seed renders persistent-fragment scopes, each resident in its source: true
 nw: every seed's schedule applies: true

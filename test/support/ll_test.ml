@@ -310,6 +310,23 @@ let weighted ~weights ~modulus ~offset ~stride idcs =
   let key = Array.foldi idcs ~init:0 ~f:(fun ax acc i -> acc + (weights.(ax) * i)) in
   (Float.of_int (key % modulus) +. offset) *. stride
 
+(** [operand ~b ~o ~i f] checks coordinates against [NTDSL.init]'s batch/output/input layout before
+    calling [f]. Use the same reader for initialization and host-side premises. This checks rank and
+    bounds, not permutations that remain within every axis's extent. *)
+let operand ~b ~o ~i f =
+  let dims = Array.of_list (b @ o @ i) in
+  fun idcs ->
+    if Array.length idcs <> Array.length dims then
+      invalid_arg
+        (Printf.sprintf "Ll_test.operand: expected rank %d, got %d" (Array.length dims)
+           (Array.length idcs));
+    Array.iteri idcs ~f:(fun axis index ->
+        if index < 0 || index >= dims.(axis) then
+          invalid_arg
+            (Printf.sprintf "Ll_test.operand: axis %d index %d outside [0, %d)" axis index
+               dims.(axis)));
+    f idcs
+
 (** [drift ~dims idcs] is {!cycle} at [13/20/(1/64)], the accumulator-width tests' operand: cells
     are the multiples of 1/64 between 0.3125 and 0.5, i.e. [k * (1/64)] for [k] in [20 .. 32], with
     mean [k = 26]. In {!cycle}'s units: cells are exact in bf16 ([p = 8], [32 < 256]) and stay exact

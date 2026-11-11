@@ -301,3 +301,24 @@ let () =
       not (accepts ~bits:8 c));
   p_all "and it is the sign that refuses it: the magnitudes still fit bf16" (products ~offset:(-2.))
     ~f:(fun c -> accepts ~bits:8 (List.map c ~f:Float.abs))
+
+let () =
+  let operand =
+    Ll_test.operand ~b:[ 2 ] ~o:[ 8 ] ~i:[ 3; 4 ] (fun ix ->
+        Float.of_int (Array.sum (module Int) ix ~f:Fn.id))
+  in
+  p "operand accepts batch/output/input coordinates" (Float.equal (operand [| 1; 7; 2; 3 |]) 13.);
+  p_all "operand refuses wrong rank and every out-of-bounds coordinate"
+    [
+      [| 0; 0; 0 |];
+      [| 0; 0; 0; 0; 0 |];
+      [| -1; 0; 0; 0 |];
+      [| 2; 0; 0; 0 |];
+      [| 0; 8; 0; 0 |];
+      [| 0; 0; 3; 0 |];
+      [| 0; 0; 0; 4 |];
+    ]
+    ~f:(fun ix -> refuses (fun () -> operand ix));
+  let kernel = Ll_test.operand ~b:[] ~o:[ 8 ] ~i:[ 3; 4 ] (fun _ -> 1.) in
+  p "operand catches the staging#1908 kh/ic/oc permutation"
+    (refuses (fun () -> kernel [| 2; 3; 7 |]))

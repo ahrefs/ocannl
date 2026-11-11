@@ -56,7 +56,18 @@ let on_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name 
 
 (* A hand-built leg's seeded value of [tn] at [idcs]. *)
 let seeded seed tn ~dims idcs =
-  (List.Assoc.find_exn seed ~equal:Ir.Tnode.equal tn).(L.flat ~dims idcs)
+  let actual = Lazy.force tn.Ir.Tnode.dims in
+  if not (Array.equal Int.equal dims actual) then invalid_arg "seeded: operand layout mismatch";
+  L.operand ~b:[] ~o:(Array.to_list actual) ~i:[]
+    (fun ix -> (List.Assoc.find_exn seed ~equal:Ir.Tnode.equal tn).(L.flat ~dims ix))
+    idcs
+
+let check_products label products want =
+  p_all2
+    (label ^ ": the executed reference equals the premise's host sums")
+    want
+    (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id)))
+    ~f:Float.equal
 
 let raises_with ~substring f =
   match f () with
@@ -146,13 +157,16 @@ let () =
     | None -> false);
   (* The bitwise premise, from the seeds. At f32 no gfx11 WMMA runs a leg of this file's hand-built
      nests (HIP tensorizes half and bf16 alone), so mixed signs need no sign condition. *)
-  p_all "control: every partial sum of every cell is exact in f32"
-    (L.reduction_cells ~out:[| bb; ss; hh; ee |] ~over:[| kk |] (fun o r ->
-         seeded seed w ~dims:[| hh; ee; kk |] [| o.(2); o.(3); r.(0) |]
-         *. seeded seed x ~dims:[| bb; ss; kk |] [| o.(0); o.(1); r.(0) |]))
+  let products =
+    L.reduction_cells ~out:[| bb; ss; hh; ee |] ~over:[| kk |] (fun o r ->
+        seeded seed w ~dims:[| hh; ee; kk |] [| o.(2); o.(3); r.(0) |]
+        *. seeded seed x ~dims:[| bb; ss; kk |] [| o.(0); o.(1); r.(0) |])
+  in
+  p_all "control: every partial sum of every cell is exact in f32" products
     ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   let run name o = List.hd_exn (L.execute ~name o ~seed:(List.take seed 2) ~read:[ d ]) in
   let want = run "co_plain_run" o in
+  check_products "control" products want;
   let got = run "co_merged_run" oc in
   p "control: the coalesced nest computes the uncoalesced one's values bitwise"
     (Array.exists want ~f:(fun v -> Float.(v <> 0.)) && Array.equal Float.equal want got);
@@ -254,11 +268,14 @@ let () =
     in
     Context.get_values (Context.run (Context.run ctx routine) routine) d
   in
-  p_all "split-reduce: every partial sum of every cell is exact in f32"
-    (L.reduction_cells ~out:[| hh; ee |] ~over:[| kk |] (fun o r ->
-         seeded seed x ~dims:[| kk; hh; ee |] [| r.(0); o.(0); o.(1) |]))
+  let products =
+    L.reduction_cells ~out:[| hh; ee |] ~over:[| kk |] (fun o r ->
+        seeded seed x ~dims:[| kk; hh; ee |] [| r.(0); o.(0); o.(1) |])
+  in
+  p_all "split-reduce: every partial sum of every cell is exact in f32" products
     ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   let want = run "cs_plain_run" o (fun o -> [ o ]) in
+  check_products "split-reduce" products want;
   let got =
     run "cs_split_run" os
       (Sched.maybe_default_schedules
@@ -339,15 +356,18 @@ let () =
     ~f:(fun idcs -> (Ir.Affine.axis_extents ~dims:[| kk; hh; ee |] idcs).(2) = hh * ee);
   p_all "privatize: the transfers' accesses of the coalesced target stay flattened" !d_accesses
     ~f:(fun idcs -> (Ir.Affine.axis_extents ~dims:[| hh; ee |] idcs).(1) = hh * ee);
-  p_all "stage+privatize: every partial sum of every cell is exact in f32"
-    (L.reduction_cells ~out:[| hh; ee |] ~over:[| kk |] (fun o r ->
-         seeded seed x ~dims:[| kk; hh; ee |] [| r.(0); o.(0); o.(1) |]))
+  let products =
+    L.reduction_cells ~out:[| hh; ee |] ~over:[| kk |] (fun o r ->
+        seeded seed x ~dims:[| kk; hh; ee |] [| r.(0); o.(0); o.(1) |])
+  in
+  p_all "stage+privatize: every partial sum of every cell is exact in f32" products
     ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   (* [Privatize] drops [d]'s zero and opens its tile at zero instead; fresh buffers are zero and
      would hide a tile opened from [d] (gh-ocannl-1625), so [d] starts off its every result. *)
   let d_prefill = Array.init (hh * ee) ~f:(fun c -> Float.of_int (1000 + c)) in
   let seed = (d, d_prefill) :: seed in
   let want = List.hd_exn (L.execute ~name:"cp_plain_run" o ~seed ~read:[ d ]) in
+  check_products "stage+privatize" products want;
   let got = List.hd_exn (L.execute ~name:"cp_packed_run" os ~seed ~read:[ d ]) in
   p "stage+privatize: the coalesced, packed reduction computes the plain one's values bitwise"
     (Array.exists want ~f:(fun v -> Float.(v <> 0.)) && Array.equal Float.equal want got);
@@ -482,10 +502,12 @@ let () =
   (* [bk = 4] divides neither [e = 5] nor [K = 15]: tiles cross heads and the last one runs past
      [K]. A fringe guarded against the head's [e] instead of [K] would zero most of every tile,
      which the bitwise claim below catches. *)
-  p_all "contraction: every partial sum of every cell is exact in f32"
-    (L.reduction_cells ~out:[| ss; jj |] ~over:[| hh; ee |] (fun o r ->
-         seeded seed w ~dims:[| jj; hh; ee |] [| o.(1); r.(0); r.(1) |]
-         *. seeded seed x ~dims:[| ss; hh; ee |] [| o.(0); r.(0); r.(1) |]))
+  let products =
+    L.reduction_cells ~out:[| ss; jj |] ~over:[| hh; ee |] (fun o r ->
+        seeded seed w ~dims:[| jj; hh; ee |] [| o.(1); r.(0); r.(1) |]
+        *. seeded seed x ~dims:[| ss; hh; ee |] [| o.(0); r.(0); r.(1) |])
+  in
+  p_all "contraction: every partial sum of every cell is exact in f32" products
     ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   let want_d, want_r, got_d, got_r =
     match
@@ -495,6 +517,7 @@ let () =
     | [ wd; wr ], [ gd; gr ] -> (wd, wr, gd, gr)
     | _ -> assert false
   in
+  check_products "contraction" products want_d;
   p
     "contraction: the coalesced, padded, staged and privatized contraction computes the plain \
      one's values bitwise"
@@ -595,12 +618,15 @@ let () =
     in
     Context.get_values (Context.run (Context.run ctx routine) routine) d
   in
-  p_all "contraction split-reduce: every partial sum of every cell is exact in f32"
-    (L.reduction_cells ~out:[| jj |] ~over:[| hh; ee |] (fun o r ->
-         seeded seed w ~dims:[| jj; hh; ee |] [| o.(0); r.(0); r.(1) |]
-         *. seeded seed x ~dims:[| hh; ee |] [| r.(0); r.(1) |]))
+  let products =
+    L.reduction_cells ~out:[| jj |] ~over:[| hh; ee |] (fun o r ->
+        seeded seed w ~dims:[| jj; hh; ee |] [| o.(0); r.(0); r.(1) |]
+        *. seeded seed x ~dims:[| hh; ee |] [| r.(0); r.(1) |])
+  in
+  p_all "contraction split-reduce: every partial sum of every cell is exact in f32" products
     ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   let want = run "cks_plain_run" o (fun o -> [ o ]) in
+  check_products "contraction split-reduce" products want;
   let got =
     run "cks_split_run" os
       (Sched.maybe_default_schedules
@@ -708,18 +734,26 @@ and hh = 4
 and ee = 32
 and kk = 16
 
-let x_f = Ll_test.cycle ~dims:[| bb; ss; kk |] ~modulus:13 ~offset:0. ~stride:0.25
-let w_f = Ll_test.cycle ~dims:[| hh; ee; kk |] ~modulus:11 ~offset:(-5.) ~stride:0.5
+let x_f =
+  Ll_test.operand ~b:[] ~o:[ bb; ss; kk ] ~i:[]
+    (Ll_test.cycle ~dims:[| bb; ss; kk |] ~modulus:13 ~offset:0. ~stride:0.25)
+
+let w_f =
+  Ll_test.operand ~b:[] ~o:[ hh; ee; kk ] ~i:[]
+    (Ll_test.cycle ~dims:[| hh; ee; kk |] ~modulus:11 ~offset:(-5.) ~stride:0.5)
+
 let x () = NTDSL.init ~l:"co_x" ~prec:Ir.Ops.single ~o:[ bb; ss; kk ] ~f:x_f ()
 let w () = NTDSL.init ~l:"co_w" ~prec:Ir.Ops.single ~o:[ hh; ee; kk ] ~f:w_f ()
 
 (* The bitwise premise of the projection legs below (the serial reference against every seed, here
    and over the folded zero), from [x] and [w]'s init functions. At f32 no gfx11 WMMA runs them --
    HIP tensorizes half and bf16 alone -- so the weight's mixed signs need no sign condition. *)
+let projection_products =
+  Ll_test.reduction_cells ~out:[| bb; ss; hh; ee |] ~over:[| kk |] (fun o r ->
+      x_f [| o.(0); o.(1); r.(0) |] *. w_f [| o.(2); o.(3); r.(0) |])
+
 let () =
-  p_all "projection: every partial sum of every cell is exact in f32"
-    (Ll_test.reduction_cells ~out:[| bb; ss; hh; ee |] ~over:[| kk |] (fun o r ->
-         x_f [| o.(0); o.(1); r.(0) |] *. w_f [| o.(2); o.(3); r.(0) |]))
+  p_all "projection: every partial sum of every cell is exact in f32" projection_products
     ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single))
 
 (* The gpt2 q/k/v projection's own layout: [d[b,s,h,e] += x[b,s,k] * w[h,e,k]]. *)
@@ -734,6 +768,7 @@ let () =
   let reference = projection () in
   let ref_fwd = named "co_ref" (Train.forward reference) in
   let want = run_with ref_fwd reference Fn.id in
+  check_products "projection" projection_products want;
   p "projection: the serial reference is not all zeros"
     (Array.exists want ~f:(fun v -> Float.(v <> 0.)));
   let cand = projection () in
@@ -960,10 +995,12 @@ let () =
    structural round trip and, on GPU backends, execute to the serial reference bitwise. *)
 
 let out_proj_w ~jj ~hh ~ee =
-  Ll_test.cycle ~dims:[| jj; hh; ee |] ~modulus:11 ~offset:(-11.) ~stride:0.5
+  Ll_test.operand ~b:[] ~o:[ jj ] ~i:[ hh; ee ]
+    (Ll_test.cycle ~dims:[| jj; hh; ee |] ~modulus:11 ~offset:(-11.) ~stride:0.5)
 
 let out_proj_att ~bb ~ss ~hh ~ee =
-  Ll_test.cycle ~dims:[| bb; ss; hh; ee |] ~modulus:13 ~offset:1. ~stride:0.25
+  Ll_test.operand ~b:[ bb; ss ] ~o:[ hh; ee ] ~i:[]
+    (Ll_test.cycle ~dims:[| bb; ss; hh; ee |] ~modulus:13 ~offset:1. ~stride:0.25)
 
 let out_proj ~tag ~bb ~ss ~jj ~hh ~ee () =
   let w =
@@ -989,14 +1026,18 @@ let contraction_leg ~tag ~bb ~ss ~jj ~hh ~ee =
   (* Inputs: the weight strictly negative and the activation strictly positive, every product a
      small multiple of 1/8, so no cell is zero, and every partial sum, in any association, is exact
      in f32 -- derived here from the init functions. *)
+  let products =
+    Ll_test.reduction_cells ~out:[| bb; ss; jj |] ~over:[| hh; ee |] (fun o r ->
+        out_proj_w ~jj ~hh ~ee [| o.(2); r.(0); r.(1) |]
+        *. out_proj_att ~bb ~ss ~hh ~ee [| o.(0); o.(1); r.(0); r.(1) |])
+  in
   p_all
     (tag ^ ": every partial sum of every cell is exact in f32")
-    (Ll_test.reduction_cells ~out:[| bb; ss; jj |] ~over:[| hh; ee |] (fun o r ->
-         out_proj_w ~jj ~hh ~ee [| o.(2); r.(0); r.(1) |]
-         *. out_proj_att ~bb ~ss ~hh ~ee [| o.(0); o.(1); r.(0); r.(1) |]))
+    products
     ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   let reference, _, _ = out_proj ~tag:(tag ^ "_ref") ~bb ~ss ~jj ~hh ~ee () in
   let want = run_with (named (tag ^ "_ref") (Train.forward reference)) reference Fn.id in
+  check_products tag products want;
   p
     (tag ^ ": no cell of the serial reference is zero")
     ((not (Array.is_empty want)) && Array.for_all want ~f:(fun v -> Float.(v <> 0.)));
@@ -1230,10 +1271,12 @@ let () =
    any order, so the candidates must match the serial reference bitwise at either precision. *)
 
 let int_out_proj_w ~jj ~hh ~ee =
-  Ll_test.cycle ~dims:[| jj; hh; ee |] ~modulus:3 ~offset:(-3.) ~stride:1.
+  Ll_test.operand ~b:[] ~o:[ jj ] ~i:[ hh; ee ]
+    (Ll_test.cycle ~dims:[| jj; hh; ee |] ~modulus:3 ~offset:(-3.) ~stride:1.)
 
 let int_out_proj_att ~bb ~ss ~hh ~ee =
-  Ll_test.cycle ~dims:[| bb; ss; hh; ee |] ~modulus:3 ~offset:1. ~stride:1.
+  Ll_test.operand ~b:[ bb; ss ] ~o:[ hh; ee ] ~i:[]
+    (Ll_test.cycle ~dims:[| bb; ss; hh; ee |] ~modulus:3 ~offset:1. ~stride:1.)
 
 let int_out_proj ~tag ~prec ~bb ~ss ~jj ~hh ~ee () =
   let w =
@@ -1327,11 +1370,14 @@ let tensorized_leg ~tag ~prec =
   let bb = 2 and ss = 32 and jj = 64 and hh = 4 and ee = 16 in
   (* The bitwise premise, from the init functions: one sign, and every partial sum, in any
      association, exact at f16's 11 significant bits -- so at tf32's and f32's too. *)
+  let products =
+    Ll_test.reduction_cells ~out:[| bb; ss; jj |] ~over:[| hh; ee |] (fun o r ->
+        int_out_proj_w ~jj ~hh ~ee [| o.(2); r.(0); r.(1) |]
+        *. int_out_proj_att ~bb ~ss ~hh ~ee [| o.(0); o.(1); r.(0); r.(1) |])
+  in
   p_all
     (tag ^ ": every partial sum of every cell is exact in f16, so in tf32 and f32")
-    (Ll_test.reduction_cells ~out:[| bb; ss; jj |] ~over:[| hh; ee |] (fun o r ->
-         int_out_proj_w ~jj ~hh ~ee [| o.(2); r.(0); r.(1) |]
-         *. int_out_proj_att ~bb ~ss ~hh ~ee [| o.(0); o.(1); r.(0); r.(1) |]))
+    products
     ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.half));
   let saved = Ir.Numerics.get () in
   Ir.Numerics.set_policy { saved with tf32_matmuls = true };
@@ -1340,6 +1386,7 @@ let tensorized_leg ~tag ~prec =
     ~f:(fun () ->
       let reference, _, _ = int_out_proj ~tag:(tag ^ "_ref") ~prec ~bb ~ss ~jj ~hh ~ee () in
       let want = run_with (named (tag ^ "_ref") (Train.forward reference)) reference Fn.id in
+      check_products tag products want;
       p
         (tag ^ ": no cell of the serial reference is zero")
         ((not (Array.is_empty want)) && Array.for_all want ~f:(fun v -> Float.(v <> 0.)));

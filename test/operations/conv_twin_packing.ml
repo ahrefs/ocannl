@@ -8,10 +8,12 @@ module LL = Ir.Low_level
 module Sched = Ir.Schedule
 
 let input_values =
-  Ll_test.weighted ~weights:[| 1; 2; 1 |] ~modulus:7 ~offset:1.000244140625 ~stride:0.125
+  Ll_test.operand ~b:[ 2 ] ~o:[ 6; 4 ] ~i:[]
+    (Ll_test.weighted ~weights:[| 1; 2; 1 |] ~modulus:7 ~offset:1.000244140625 ~stride:0.125)
 
 let kernel_values =
-  Ll_test.weighted ~weights:[| 1; 3; 2 |] ~modulus:5 ~offset:1.000244140625 ~stride:0.125
+  Ll_test.operand ~b:[] ~o:[ 8 ] ~i:[ 3; 4 ]
+    (Ll_test.weighted ~weights:[| 1; 3; 2 |] ~modulus:5 ~offset:1.000244140625 ~stride:0.125)
 
 let product ~materialized ~raw ~round_a ~round_b =
   let x = NTDSL.init ~l:"cvtx" ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 6; 4 ] ~f:input_values () in
