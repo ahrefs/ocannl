@@ -825,22 +825,38 @@ let () =
              (Option.map (rejection_code o_pref f) ~f:Tn.provenance_to_string)
     | None -> false)
 
-(* An [`Inline] flip the store itself refuses: a scalar reduction S[0] = sum_i A[i] over i < 20 (the
-   cap materializes it). Captured at its setter, the read of A escapes the reduction loop the
-   capture leaves outside, so [virtual_llc] refuses the node however it is preferred — and so does
-   the walk the pricer re-runs, which prices the flip by the proxy instead of modeling a reading
-   that cannot happen (the hand rewrite priced such a flip as the whole nest per read). *)
+(* gh-ocannl-2149: a fixed-index reduction now captures its entire loop. Its Inline flip must be
+   modeled from that legal replay, just like the indexed reduction above. *)
 let () =
-  Stdio.printf "== an Inline flip the store refuses ==\n";
-  let s = mk ~dims:[| 1 |] "Ssum"
-  and a = mk ~dims:[| 20 |] "As"
-  and out = mk ~dims:[| 1 |] "outS" in
+  Stdio.printf "== the Inline flip of a fixed-index reduction ==\n";
+  let s = mk ~dims:[| 1 |] "Sfixedsum"
+  and a = mk ~dims:[| 20 |] "Afixedsum"
+  and out = mk ~dims:[| 1 |] "outFixedSum" in
   let i = sym () in
   let llc =
     seq (zero s)
       (seq
          (loop_n i 20 (set s [| fixed 0 |] (add (get s [| fixed 0 |]) (get a [| iter i |]))))
          (set out [| fixed 0 |] (get s [| fixed 0 |])))
+  in
+  ignore
+    (inline_flip_vs_emitted ~name:"fixed-index reduction cap" ~self:s ~reader:out
+       ~materialized:[ a; out ] ~mult:1 llc
+      : LL.optimized)
+
+(* An [`Inline] flip the store itself refuses: S[j] += A[i] with i OUTSIDE the output-index capture
+   at j. The reduction cap materializes S; preferring inline still leaves the read of A escaping its
+   stored subtree, so the pricer must retain the virtualizer's refusal and proxy. *)
+let () =
+  Stdio.printf "== an Inline flip the store refuses ==\n";
+  let s = mk "Ssum" and a = mk ~dims:[| 20 |] "As" and out = mk "outS" in
+  let i = sym () and j = sym () and k = sym () in
+  let llc =
+    seq (zero s)
+      (seq
+         (loop_n i 20
+            (loop_n j 4 (set s [| iter j |] (add (get s [| iter j |]) (get a [| iter i |])))))
+         (loop_n k 4 (set out [| iter k |] (get s [| iter k |]))))
   in
   let o = optimize ~materialized:[ a; out ] ~name:"cmt_refused" llc in
   let inline_flip =
