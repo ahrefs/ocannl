@@ -56,6 +56,10 @@ module Device_config = struct
     mutable failure : (Metal_failure.command_buffer_failure[@sexp.opaque]) option;
         (* The first failed command buffer, kept for the rest of the process, with [first_report]
            still [true] until it is first raised: see [raise_on_failure]. *)
+    mutable abandoned : string option;
+        (* gh-ocannl-2134: set when a bounded wait ([sync_until]) expired with this runner's work
+           outstanding, for the rest of the process: [raise_on_failure] then refuses every wait and
+           submission at once, before any command buffer is allocated. *)
   }
   [@@deriving sexp_of]
 
@@ -157,6 +161,8 @@ let rec reap ?deadline runner =
 (* Raised typed (gh-ocannl-2089), so [Impl.classify_failure] can read it: only the first raise is
    marked [first_report], since every later one is the device's state, not the waited-for work's. *)
 let raise_on_failure runner =
+  Option.iter runner.abandoned ~f:(fun detail ->
+      raise (Backend_intf.Device_wedged { device = "metal runner"; detail }));
   reap runner;
   Option.iter runner.failure ~f:(fun failure ->
       runner.failure <- Some { failure with first_report = false };
@@ -186,6 +192,59 @@ let sync event =
   List.iter (List.rev runner.in_flight) ~f:(fun tracked ->
       if tracked.seq <= event.seq then Me.CommandBuffer.wait_until_completed tracked.buffer);
   raise_on_failure runner
+
+(* gh-ocannl-2134: [sync] bounded by the monotonic [deadline] (seconds of [clock]): [true] as [sync]
+   returns, [false] once the deadline passes with covered work unfinished, which latches
+   [runner.abandoned]. Both of [sync]'s waits are bounded: each event wait is capped by the time
+   left, and the covered buffers' completion, which [sync] waits for with [wait_until_completed], is
+   read off their statuses instead. A reported failure and completion are read before expiry at
+   every step, so a typed gh-ocannl-2089 hang report stays one, and work that finished while the
+   host was descheduled is not abandoned. *)
+let sync_until event ~clock ~deadline =
+  let runner = event.owner in
+  let remaining () = deadline -. (Mtime.Span.to_float_ns (Mtime_clock.count clock) /. 1e9) in
+  let abandon () =
+    runner.abandoned <-
+      Some
+        (Printf.sprintf "event %s of a bounded wait did not complete in time"
+           (Unsigned.ULLong.to_string event.value));
+    false
+  in
+  let rec wait_for_signal () =
+    raise_on_failure runner;
+    if is_done event then true
+    else
+      let left = remaining () in
+      if Float.(left <= 0.) then abandon ()
+      else
+        let timeout_ms =
+          Unsigned.ULLong.of_int
+            (Int.max 1
+               (Int.min
+                  (Unsigned.ULLong.to_int failure_poll_ms)
+                  (Float.iround_up_exn (left *. 1000.))))
+        in
+        if Me.SharedEvent.wait_until_signaled_value event.shared ~value:event.value ~timeout_ms then (
+          raise_on_failure runner;
+          true)
+        else wait_for_signal ()
+  in
+  let covered_unfinished () =
+    reap runner;
+    List.exists runner.in_flight ~f:(fun tracked -> tracked.seq <= event.seq)
+  in
+  let rec wait_for_buffers () =
+    if not (covered_unfinished ()) then (
+      raise_on_failure runner;
+      true)
+    else if Float.(remaining () <= 0.) then (
+      raise_on_failure runner;
+      abandon ())
+    else (
+      Stdlib.Domain.cpu_relax ();
+      wait_for_buffers ())
+  in
+  wait_for_signal () && wait_for_buffers ()
 
 (* Makes [buffer] signal the next value of the runner's event, and commits it. *)
 let commit_signalling runner ~what buffer =
@@ -330,6 +389,7 @@ module Impl = struct
         committed = 0;
         in_flight = [];
         failure = None;
+        abandoned = None;
       },
       opt_log_buffer )
 
@@ -381,10 +441,22 @@ module Impl = struct
     let command_buffer = Me.CommandBuffer.on_queue device.runner.queue in
     commit_signalling device.runner ~what:"an all-work signal" command_buffer
 
-  let await device =
+  let rec await device =
     (* Signal an event after all current work and wait for it. This ensures all previously submitted
        command buffers complete. *)
     sync (all_work device);
+    drain_logs device
+
+  (* gh-ocannl-2134: [await] bounded; its own body because [is_idle] cannot see a failed buffer,
+     which never signals. *)
+  and bounded_await_body device ~seconds =
+    let clock = Mtime_clock.counter () in
+    sync_until (all_work device) ~clock ~deadline:seconds
+    &&
+    (drain_logs device;
+     true)
+
+  and drain_logs device =
     (* Drain the captured routine logs, if logging is on for this device. The event firing is a GPU
        timeline fact, while Metal hands log messages to the handler on the CPU side, so what matters
        here is that [sync] also waited for the signalling command buffer (the queue's last) to
@@ -412,6 +484,8 @@ module Impl = struct
           if not (List.is_empty messages) then
             Utils.log_debug_routine_logs ~log_contents:messages ~stream_name:(get_name device)
       | None -> () (* No log buffer for this device, logging likely not enabled for it *)
+
+  let bounded_await = Some bounded_await_body
 
   let is_idle device =
     (* FIXME: store the latest CommandBuffer with the device runner and check that it's completed *)
