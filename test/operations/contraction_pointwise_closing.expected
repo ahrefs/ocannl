@@ -1,0 +1,4 @@
+the original store accepts all five witness shapes: true
+known gap: the inferred program is still refused: true
+known gap: p's empty remainder conflicts with q's axis-4 remainder: true
+control: an unrelated rank refusal does not match the gap: true

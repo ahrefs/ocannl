@@ -43,6 +43,12 @@ files.
   (`st +* "...|h,w,..c..; ...|..c.. => ...|h" st`) is a true refusal, and `(st *. x) +* ... st` is
   the program meant. Pinned by `test/einsum/test_row_self_reference` (last block) and
   `test/operations/self_contraction_occurs`.
+- gh-ocannl-2154 is a known false refusal (`contraction_pointwise_closing`): the original
+  store accepts the added witness equations `st=[]`, `p=[1_(bcast_if_1);5]`, `y=[1_(bcast_if_1)]`,
+  `q=z=[3;4;5]`. Closing is not a rank upper bound overriding an einsum's equations.
+  Without that witness, a Stage6a mixed-flank trial chooses an empty remainder; the later
+  `p`/`q` remaining-row equation needs `q`'s axis 4 there. The test pins that trace, not a
+  generic rank refusal. Repair needs closing/trial-choice design; the issue stays open.
 - `Row.Concat` dimensions (block tensors, `^` in specs) are solved as ARITHMETIC SUMS, not
   structural lists: equality lives in `unify_dim` (single-component unwrap, `Concat=Dim`
   subtraction, cancel-common residuals, nested-`Concat` flattening), and the equal-arity
