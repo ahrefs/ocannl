@@ -224,6 +224,7 @@ let () = ignore (initialized_no_unit, initialized_expr)
 let mlp_layer =
   let open! TDSL.O in
     fun ~label ~hid_dim () ->
+      let __ocannl_result_label = ["mlp_layer"] @ (label : string list) in
       let w =
         (TDSL.param ?more_label:(Some label) ?value:None ?values:None
            ?param_init:None "w") () in
@@ -231,7 +232,7 @@ let mlp_layer =
         ((TDSL.param ?more_label:(Some label) ?value:None ?values:None
             ?param_init:None "b") ~output_dims:[hid_dim]) () in
       let __ocannl_body ~x =
-        relu ?label:(Some ["mlp_layer"])
+        relu ?label:(Some __ocannl_result_label)
           ((+) ?label:None (( * ) ?label:None w x) b) in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"mlp_layer" ~arity:1
@@ -256,6 +257,7 @@ let _use_layer =
 let _config_layer =
   let open! TDSL.O in
     fun ~label () ->
+      let __ocannl_result_label = ["_config_layer"] @ (label : string list) in
       let l =
         Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
           (fun () -> mlp_layer ~label:(label @ ["L"]) ~hid_dim:3 ()) in
@@ -270,6 +272,8 @@ let _config_layer =
 let _three_layer_perceptron =
   let open! TDSL.O in
     fun ~label ~dim1 ~dim2 ~dim3 () ->
+      let __ocannl_result_label =
+        ["_three_layer_perceptron"] @ (label : string list) in
       let l1 =
         Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
           (fun () -> mlp_layer ~label:(label @ ["L1"]) ~hid_dim:dim1 ()) in
@@ -683,6 +687,11 @@ let _late_exponent =
 let _opt_label =
   let open! TDSL.O in
     fun ?label ~hid_dim () ->
+      let __ocannl_result_label =
+        ["_opt_label"] @
+          (match label with
+           | Some label -> (label : string list)
+           | None -> []) in
       let olw =
         (TDSL.param ?more_label:label ?value:None ?values:None
            ?param_init:None "olw") () in
@@ -690,7 +699,7 @@ let _opt_label =
         ((TDSL.param ?more_label:label ?value:None ?values:None
             ?param_init:None "olb") ~output_dims:[hid_dim]) () in
       let __ocannl_body x =
-        (+) ?label:(Some ["_opt_label"]) (( * ) ?label:None olw x) olb in
+        (+) ?label:(Some __ocannl_result_label) (( * ) ?label:None olw x) olb in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"_opt_label" ~arity:1
           (function | x::[] -> __ocannl_body x | _ -> assert false) in
@@ -700,10 +709,12 @@ let _opt_label =
 let _opt_label_default =
   let open! TDSL.O in
     fun ?(label= ["dflt"]) () ->
+      let __ocannl_result_label =
+        ["_opt_label_default"] @ (label : string list) in
       let odw =
         (TDSL.param ?more_label:(Some label) ?value:None ?values:None
            ?param_init:None "odw") () in
-      let __ocannl_body x = ( * ) ?label:(Some ["_opt_label_default"]) odw x in
+      let __ocannl_body x = ( * ) ?label:(Some __ocannl_result_label) odw x in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"_opt_label_default" ~arity:1
           (function | x::[] -> __ocannl_body x | _ -> assert false) in

@@ -31,9 +31,9 @@ files.
   alike, because a shared `delayed_var_ref` pins the first call's solution and a second size then
   fails inference (gh-ocannl-1507). A lifted initializer cannot name one; a capture that would
   shadow a lifted name is a clash, found through the `ocannl.bound_capture` marker `let_opt` checks.
-- Label sources: only a toplevel `%op` function WITHOUT `()` reads its parameters' labels into
-  the result's (the no-unit arm of `translate`); after `()`, no parameter is one. There an
-  unlabelled parameter is read as `p.Tensor.value.Ir.Tnode.label`, so an unlabelled non-tensor is
+- Label sources: only a toplevel `%op` function WITHOUT `()` reads its tensor parameters' labels
+  into the result's (the no-unit arm of `translate`); with `()`, no tensor parameter is one.
+  Without `()`, an unlabelled parameter is read as `p.Tensor.value.Ir.Tnode.label`, so an unlabelled non-tensor is
   a type error at the parameter ("not a record type", or the mismatch at its first use), never a
   ppx message; optional ones are skipped (gh-ocannl-1787) since `?x` is an option and a default
   marks configuration; a labelled one is a source on `tensor_params`' evidence only -- a
@@ -45,8 +45,12 @@ files.
   `b_logits` lacked the `lenet` label. Without `()` the declarations are lifted to definition
   and cannot take it, so there the non-tensor parameter labelled `label` (any of the three forms)
   is itself a label source of the RESULT, at its position (gh-ocannl-1987; it was accepted and
-  ignored); with `()` the result still gets the binding's name only -- an asymmetry by where each
-  is possible, pinned by `test/ppx/test_label_param.ml`, which runs.
+  ignored); with `()` it also enriches the result after the binding's name (gh-ocannl-2059).
+  An omitted `?label` adds nothing, a defaulted one adds its default, and inline declarations
+  keep their labels. The result list is captured at the unit stage, under a name absent from the
+  source, before a body binder or a parameter after `()` can shadow `label`. The result uses the
+  same tensor-evidence exclusion as the no-unit arm; an explicitly ignored `~label:_` adds nothing.
+  `test/ppx/test_label_param.ml` runs and pins these cases.
 - Refusals that name the fix (gh-ocannl-1987, `test/ppx/test_param_errors.ml`, expansion only):
   `translate` threads `late`, the names bound after the lift point (every parameter of a
   no-unit toplevel function, and of any function below the toplevel one; and, gh-ocannl-2058,

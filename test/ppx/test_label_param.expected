@@ -1,7 +1,41 @@
-with (): the result: [*; unit_layer]
+with (): the result: [*; unit_layer; L]
 with (): the result: the label is as stated: true
 with (): the inline declaration: [*.; ul_w; L]
 with (): the inline declaration: it carries L: true
+with (): ?label given: [+; unit_opt; O]
+with (): ?label given: the label is as stated: true
+with (): ?label omitted: [+; unit_opt]
+with (): ?label omitted: the label is as stated: true
+with (): default omitted: [+; unit_default; dflt]
+with (): default omitted: the label is as stated: true
+with (): default given: [+; unit_default; G]
+with (): default given: the label is as stated: true
+with (): shadowed label: [+; unit_shadow; S]
+with (): shadowed label: the label is as stated: true
+with (): shadowed inline declaration: [*.; shadow_w; S]
+with (): shadowed inline declaration: it carries S: true
+with (): tensor named label after unit: [+; unit_after; A]
+with (): tensor named label after unit: the label is as stated: true
+with (): annotated tensor label: [+; unit_tensor]
+with (): annotated tensor label: the label is as stated: true
+with (): operand tensor label: [+; unit_operand]
+with (): operand tensor label: the label is as stated: true
+with (): optional tensor given: [+; unit_tensor_opt]
+with (): optional tensor given: the label is as stated: true
+with (): optional tensor omitted: [+; unit_tensor_opt]
+with (): optional tensor omitted: the label is as stated: true
+with (): default tensor omitted: [+; unit_tensor_default]
+with (): default tensor omitted: the label is as stated: true
+with (): default tensor given: [+; unit_tensor_default]
+with (): default tensor given: the label is as stated: true
+with (): ignored label: [relu; unit_ignored]
+with (): ignored label: the label is as stated: true
+with (): capture avoids private-name binders: [+; unit_private_name; P]
+with (): capture avoids private-name binders: the label is as stated: true
+with (): capture avoids outer references: [+; unit_outer_name; R]
+with (): capture avoids outer references: the label is as stated: true
+with (): capture avoids inline names: [+; unit_inline_name; N]
+with (): capture avoids inline names: the label is as stated: true
 without (): the result: [*; late_layer; L; 0...2; x]
 without (): the result: the label is as stated: true
 without (): the inline declaration: [*.; ll_w]

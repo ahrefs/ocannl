@@ -1006,9 +1006,49 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
             Some (List.rev acc, unit_param, rest)
         | hd :: rest -> find_unit (hd :: acc) rest
       in
-      (* The [string list option] the inline declarations take as [?more_label]: [~label] and a
-         defaulted [?(label = ...)] bind the list, an un-defaulted [?label] the option itself
-         (gh-ocannl-1885). *)
+      let orig_body =
+        match body with
+        | Pfunction_body body -> body
+        | Pfunction_cases _ -> { expr with pexp_desc = Pexp_function ([], None, body) }
+      in
+      let labelled_tensor_evidence name =
+        tensor_operand_evidence name orig_body && not (rebinds name orig_body)
+      in
+      (* The parameter labelled [label] is the [string list] that enriches the result's label,
+         unless it is a tensor by the evidence above (gh-ocannl-1987): accepted since
+         gh-ocannl-1885, it was ignored. Without [()], inline declarations cannot take it: they are
+         created when the function is defined. *)
+      let is_label_list ?(shadowed = []) pat =
+        match pat.ppat_desc with
+        | Ppat_var { txt; _ } ->
+            List.mem shadowed txt ~equal:String.equal || not (labelled_tensor_evidence txt)
+        | Ppat_constraint ({ ppat_desc = Ppat_var _; _ }, t) -> Option.is_none (annotated_kind t)
+        | _ -> false
+      in
+      (* One result-label contribution, in either function stage. Strip an optional parameter's
+         option annotation before reconstructing its value; report a wrong payload type at the
+         parameter, as the no-unit arm has always done. *)
+      let result_label_param ?(shadowed = []) = function
+        | {
+            pparam_desc = Pparam_val (((Labelled "label" | Optional "label") as l), default, pat);
+            _;
+          }
+          when is_label_list ~shadowed pat ->
+            let loc = pat.ppat_loc in
+            let v =
+              match pat.ppat_desc with
+              | Ppat_constraint (pat, _) -> pat2expr pat
+              | _ -> pat2expr pat
+            in
+            Some
+              (match (l, default) with
+              | Optional _, None ->
+                  [%expr match [%e v] with Some label -> (label : string list) | None -> []]
+              | _ -> [%expr ([%e v] : string list)])
+        | _ -> None
+      in
+      (* Inline declarations retain their [string list option] form: required and defaulted
+         parameters bind the list, an un-defaulted [?label] the option (gh-ocannl-1885). *)
       let rec find_label_param = function
         | [] -> None
         | { pparam_desc = Pparam_val (Optional "label", None, pat); _ } :: _ -> Some (pat2expr pat)
@@ -1023,6 +1063,38 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
              in this body are bound here too, since the unit function is their innermost function;
              those under the parameters after the unit are already bound per call. *)
           let opt_label = find_label_param before_unit in
+          (* Capture the application label at [()], before a body binder (or a parameter after [()])
+             can shadow it. Tensor-valued and ignored [label] parameters are not sources. *)
+          let result_vbs, label =
+            match
+              List.find_map before_unit ~f:(result_label_param ~shadowed:(params_idents after_unit))
+            with
+            | None -> ([], label)
+            | Some application_label ->
+                let used = Hash_set.create (module String) in
+                let visitor =
+                  object
+                    inherit Ast_traverse.iter as super
+
+                    method! longident_loc lid =
+                      (match lid.txt with Lident name -> Hash_set.add used name | _ -> ());
+                      super#longident_loc lid
+
+                    method! pattern p =
+                      (match p.ppat_desc with
+                      | Ppat_var { txt; _ } | Ppat_alias (_, { txt; _ }) -> Hash_set.add used txt
+                      | _ -> ());
+                      super#pattern p
+                  end
+                in
+                visitor#expression expr;
+                let rec fresh name = if Hash_set.mem used name then fresh (name ^ "_") else name in
+                let name = fresh "__ocannl_result_label" in
+                let binding_label = Option.value label ~default:[%expr []] in
+                let value = [%expr [%e binding_label] @ [%e application_label]] in
+                let vb = Ast_helper.Vb.mk ~loc (Ast_builder.Default.pvar ~loc name) value in
+                ([ vb ], Some (Ast_builder.Default.evar ~loc name))
+          in
           let vbs, inner_body =
             let body =
               match (after_unit, body) with
@@ -1042,7 +1114,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
             in
             translate ~dsl_name ~num_configs ~is_toplevel:false ~opt_label ~late ?label body
           in
-          let inner_body = let_opt ~loc vbs inner_body in
+          let inner_body = let_opt ~loc (result_vbs @ vbs) inner_body in
           ( no_vbs,
             {
               expr with
@@ -1057,65 +1129,34 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
              evidence [tensor_params] asks for -- a [Tensor.t] annotation, or a direct operand use
              (gh-ocannl-1885): read as a tensor, [~hid_dim] failed to type-check at the parameter
              ("not a record type"), with nothing naming the missing [()]. *)
-          let orig_body =
-            match body with
-            | Pfunction_body body -> body
-            | Pfunction_cases _ -> { expr with pexp_desc = Pexp_function ([], None, body) }
-          in
-          let labelled_tensor_evidence name =
-            tensor_operand_evidence name orig_body && not (rebinds name orig_body)
-          in
-          (* The parameter labelled [label] is the [string list] that enriches the result's label,
-             unless it is a tensor by the evidence above (gh-ocannl-1987): accepted since
-             gh-ocannl-1885, it was ignored. The inline declarations cannot take it as they do
-             before a [()]: they are created when the function is defined. *)
-          let is_label_list pat =
-            match pat.ppat_desc with
-            | Ppat_var { txt; _ } -> not (labelled_tensor_evidence txt)
-            | Ppat_constraint ({ ppat_desc = Ppat_var _; _ }, t) ->
-                Option.is_none (annotated_kind t)
-            | _ -> false
-          in
           let late = List.map (params_idents args) ~f:(fun n -> (n, No_unit)) @ late in
           let loop = translate ~dsl_name ~num_configs ~is_toplevel:false ~opt_label ~late in
           let labels =
             Option.to_list label
-            @ List.filter_map args ~f:(function
-              | {
-                  pparam_desc =
-                    Pparam_val (((Labelled "label" | Optional "label") as l), default, pat);
-                  _;
-                }
-                when is_label_list pat -> (
-                  let loc = pat.ppat_loc in
-                  (* Without the annotation, which for an un-defaulted [?label] states the
-                     option. *)
-                  let v =
-                    match pat.ppat_desc with
-                    | Ppat_constraint (pat, _) -> pat2expr pat
-                    | _ -> pat2expr pat
-                  in
-                  match (l, default) with
-                  | Optional _, None ->
-                      Some
-                        [%expr match [%e v] with Some label -> (label : string list) | None -> []]
-                  | _ -> Some [%expr ([%e v] : string list)])
-              | { pparam_desc = Pparam_val (Optional _, _, _); _ } -> None
-              (* An annotation other than [Tensor.t]: an option-valued tensor, which may be absent,
-                 or a non-tensor (gh-ocannl-1792) -- not a label source. *)
-              | { pparam_desc = Pparam_val (_, _, { ppat_desc = Ppat_constraint (_, t); _ }); _ }
-                when match annotated_kind t with Some Required -> false | _ -> true ->
-                  None
-              | {
-                  pparam_desc = Pparam_val (Labelled _, _, { ppat_desc = Ppat_var { txt; _ }; _ });
-                  _;
-                }
-                when not (labelled_tensor_evidence txt) ->
-                  None
-              | { pparam_desc = Pparam_val (_, _, pat); _ } ->
-                  let loc = pat.ppat_loc in
-                  Some [%expr [%e pat2expr pat].Tensor.value.Ir.Tnode.label]
-              | _ -> None)
+            @ List.filter_map args ~f:(fun arg ->
+                match result_label_param arg with
+                | Some _ as label -> label
+                | None -> (
+                    match arg with
+                    | { pparam_desc = Pparam_val (Optional _, _, _); _ } -> None
+                    (* An annotation other than [Tensor.t]: an option-valued tensor, which may be
+                       absent, or a non-tensor (gh-ocannl-1792) -- not a label source. *)
+                    | {
+                     pparam_desc = Pparam_val (_, _, { ppat_desc = Ppat_constraint (_, t); _ });
+                     _;
+                    }
+                      when match annotated_kind t with Some Required -> false | _ -> true ->
+                        None
+                    | {
+                     pparam_desc = Pparam_val (Labelled _, _, { ppat_desc = Ppat_var { txt; _ }; _ });
+                     _;
+                    }
+                      when not (labelled_tensor_evidence txt) ->
+                        None
+                    | { pparam_desc = Pparam_val (_, _, pat); _ } ->
+                        let loc = pat.ppat_loc in
+                        Some [%expr [%e pat2expr pat].Tensor.value.Ir.Tnode.label]
+                    | _ -> None))
           in
           let label_locs = List.map labels ~f:(fun label -> label.pexp_loc) in
           let label_starts = List.map label_locs ~f:(fun l -> l.loc_start) in
