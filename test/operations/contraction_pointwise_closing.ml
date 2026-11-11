@@ -100,8 +100,9 @@ let () =
       p "z is x's [3; 4; 5]" (List.equal Int.equal zd [ 3; 4; 5 ]);
       let s = Context.get_values ctx st.Tensor.value
       and got = Context.get_values ctx z.Tensor.value in
-      p "the leaf's draw is distinct per cell"
-        (List.length (List.dedup_and_sort ~compare:Float.compare (Array.to_list s)) = Array.length s);
+      (* A zero draw would make the oracle's st terms vanish, whatever z held there. *)
+      p_all ~min:1 "the leaf's draws are nonzero, so the oracle discriminates" (Array.to_list s)
+        ~f:(fun v -> not (Float.equal v 0.));
       (* y[h] sums p[h, w, c] * st[c] = 2 * st[c]^2 over w and c, the same for every h. *)
       let w = List.nth_exn pd 1 in
       let y0 = Float.of_int w *. 2. *. Array.fold s ~init:0. ~f:(fun acc v -> acc +. (v *. v)) in
@@ -120,10 +121,11 @@ let () =
           1e-4 *. Float.max 1. (Float.abs w));
       ignore (q : Tensor.t)
 
-(* A different rank mismatch stays refused. *)
+(* A different rank mismatch stays refused, and costs no replay. *)
 let () =
   Verdict.case "unrelated refusal" @@ fun () ->
   Tensor.unsafe_reinitialize ();
+  Row.reset_trial_replays ();
   let leaf = TDSL.range_of_shape ~output_dims:[ 3 ] () in
   let refused =
     try
@@ -133,4 +135,6 @@ let () =
     with Row.Shape_error (msg, _) -> Some msg
   in
   p "control: an unrelated rank mismatch is still refused"
-    (Option.exists refused ~f:(String.is_prefix ~prefix:"Number of axes mismatch"))
+    (Option.exists refused ~f:(String.is_prefix ~prefix:"Number of axes mismatch"));
+  (* No balanced-flank trial was reached: the refusal cost one run, not a search. *)
+  p "control: a refusal with no balanced-flank trial is not replayed" (Row.trial_replays () = 0)

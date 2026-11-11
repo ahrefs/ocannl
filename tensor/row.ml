@@ -3562,6 +3562,33 @@ let rank_refutes_glb v ({ beg_dims; dims; bcast; prov = _ } : t) =
 
 let global_template_cache : (row_var * int * int, row_var) Map.Poly.t ref = ref Map.Poly.empty
 
+(* {2 The balanced-flank trial as a choice point (gh-ocannl-2154)}
+
+   The stage-6 trial of a balanced mixed-flank equation (in [unify_row]) commits the least overlap
+   whose own consequences raise nothing, but a constraint later in the same closing can still refute
+   that overlap where a larger one holds. [solve_closing_stages] vets the choices by replay: each
+   trial a run reaches takes the next index, and starts its first fit at the floor the run gives
+   that index (0 when none); the overlap it commits is logged under the index. The index and the log
+   are part of [capture_globals], so every trial site that rolls its module-level effects back (a
+   refused overlap, a [fits] probe, a refused settle candidate, a demoted [merge_by_equality]) takes
+   the indices and log entries of the trials inside it back too: indices name the trials of the path
+   the run kept, and a discarded probe's trial is never a choice (gh-ocannl-2154 review). Outside a
+   [solve_closing_stages] there are no floors and the log is not read. *)
+let trial_floors : int Map.M(Int).t ref = ref (Map.empty (module Int))
+[@@mutation_serial.exempt "a solver pass's transient choice floors, set by solve_closing_stages"]
+
+let trial_count = ref 0
+[@@mutation_serial.exempt "a solver pass's transient trial index, reset by solve_closing_stages"]
+
+let trial_log : (int * int) Map.M(Int).t ref = ref (Map.empty (module Int))
+[@@mutation_serial.exempt "a solver pass's transient choice log, read by solve_closing_stages"]
+
+let trial_replay_count = ref 0
+[@@mutation_serial.exempt "a work counter of closing replays, not inference state"]
+
+let trial_replays () = !trial_replay_count
+let reset_trial_replays () = trial_replay_count := 0
+
 (* {2 Checkpoint capture (gh-ocannl-903)}
 
    Every module-level binding above whose writes count as session mutations is a persistent value,
@@ -3580,6 +3607,8 @@ type globals = {
   g_rank_edges : (row_var * int) list Map.M(Row_var).t;
   g_rank_potentials : int Map.M(Row_var).t;
   g_template_cache : (row_var * int * int, row_var) Map.Poly.t;
+  g_trial_count : int;
+  g_trial_log : (int * int) Map.M(Int).t;
 }
 
 let capture_globals () =
@@ -3594,6 +3623,8 @@ let capture_globals () =
     g_rank_edges = !global_rank_edges;
     g_rank_potentials = !global_rank_potentials;
     g_template_cache = !global_template_cache;
+    g_trial_count = !trial_count;
+    g_trial_log = !trial_log;
   }
 
 let restore_globals
@@ -3608,6 +3639,8 @@ let restore_globals
       g_rank_edges;
       g_rank_potentials;
       g_template_cache;
+      g_trial_count;
+      g_trial_log;
     } =
   pending_roles := g_pending_roles;
   resolve_at_use_dim := g_resolve_at_use_dim;
@@ -3618,34 +3651,11 @@ let restore_globals
   resolve_at_use := g_resolve_at_use;
   global_rank_edges := g_rank_edges;
   global_rank_potentials := g_rank_potentials;
-  global_template_cache := g_template_cache
+  global_template_cache := g_template_cache;
+  trial_count := g_trial_count;
+  trial_log := g_trial_log
 [@@mutation_serial.boundary
   "part of a rewind: puts back the solver's inference sets as a checkpoint captured them"]
-
-(* {2 The balanced-flank trial as a choice point (gh-ocannl-2154)}
-
-   The stage-6 trial of a balanced mixed-flank equation (in [unify_row]) commits the least overlap
-   whose own consequences raise nothing, but a constraint later in the same closing can still refute
-   that overlap where a larger one holds. [solve_closing_stages] vets the choices by replay: each
-   trial a run reaches takes the next index, and starts its first fit at the floor the run gives
-   that index (0 when none); the overlap it commits is logged under the index. A trial's refused
-   overlaps take their nested trials' indices and log entries back with their module-level effects,
-   so indices name the trials of the path the run kept. Outside a [solve_closing_stages] there are
-   no floors and the log is not read. *)
-let trial_floors : int Map.M(Int).t ref = ref (Map.empty (module Int))
-[@@mutation_serial.exempt "a solver pass's transient choice floors, set by solve_closing_stages"]
-
-let trial_count = ref 0
-[@@mutation_serial.exempt "a solver pass's transient trial index, reset by solve_closing_stages"]
-
-let trial_log : (int * int) Map.M(Int).t ref = ref (Map.empty (module Int))
-[@@mutation_serial.exempt "a solver pass's transient choice log, read by solve_closing_stages"]
-
-let trial_replay_count = ref 0
-[@@mutation_serial.exempt "a work counter of closing replays, not inference state"]
-
-let trial_replays () = !trial_replay_count
-let reset_trial_replays () = trial_replay_count := 0
 
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
 let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list * _ =
@@ -3944,17 +3954,13 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
                     record s;
                     commit s)
                   else
-                    let saved = capture_globals ()
-                    and saved_count = !trial_count
-                    and saved_log = !trial_log in
+                    let saved = capture_globals () in
                     match commit k with
                     | result ->
                         record k;
                         result
                     | exception Shape_error _ ->
                         restore_globals saved;
-                        trial_count := saved_count;
-                        trial_log := saved_log;
                         first_fit (k + 1)
                 in
                 first_fit (Option.value (Map.find !trial_floors index) ~default:0))
@@ -4454,7 +4460,8 @@ let solver_census () =
     ("global_template_cache", Map.length !global_template_cache);
   ]
 
-(* The components of two captures that differ (physically: each is a persistent value). *)
+(* The components of two captures that differ (physically: each is a persistent value). The trial
+   index and log are a closing search's transient state, not inference state: they never differ. *)
 let globals_differences
     {
       g_pending_roles = a1;
@@ -4467,6 +4474,8 @@ let globals_differences
       g_rank_edges = a8;
       g_rank_potentials = a10;
       g_template_cache = a9;
+      g_trial_count = _;
+      g_trial_log = _;
     }
     {
       g_pending_roles = b1;
@@ -4479,6 +4488,8 @@ let globals_differences
       g_rank_edges = b8;
       g_rank_potentials = b10;
       g_template_cache = b9;
+      g_trial_count = _;
+      g_trial_log = _;
     } =
   List.filter_map
     [
@@ -6347,7 +6358,9 @@ let max_closing_attempts = 32
    module-level inference sets are put back as they were before the first run. The search vets an
    overlap against what these stages derive after it, not against a later refusal
    ([Shape.refuse_unsolved], lowering), and only the balanced-flank trial is a choice: closing to a
-   GLB, the empty close, window settling and [merge_by_equality] are not revisited. *)
+   GLB, the empty close, window settling and [merge_by_equality] are not revisited. A refused run
+   still mints fresh ids (they only move forward), so after a replay the ids the session prints
+   later differ from a run that needed none; the error a refused store raises is the first run's. *)
 let solve_closing_stages ~(stages : stage list) ?discardable_vars (ineqs : constraint_ list) env :
     constraint_ list * environment =
   let saved_floors = !trial_floors and saved_count = !trial_count and saved_log = !trial_log in

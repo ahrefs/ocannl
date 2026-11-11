@@ -444,8 +444,10 @@ files.
   first run's error; only `Shape_error` rejects a run. The first run is the plain fold, so an
   accepted store's shapes cannot move. It is still order-dependent where the plain fold was: with
   the closer after the equation in the pass, the empty overlap is accepted (pins:
-  `test_row_self_reference`'s last block, `Row.trial_replays`). A bare `solve_inequalities ~stage`
-  does not search: a test's own stage list gets the old behavior.
+  `test_row_self_reference`'s gh-ocannl-2154 blocks, `Row.trial_replays`). A bare `solve_inequalities ~stage`
+  does not search: a test's own stage list gets the old behavior. The trial index and log are in
+  `capture_globals`, so a trial inside a discarded probe or a refused settle candidate leaves no
+  choice behind.
 - **Every trial solve keeps its module-level effects exactly when it keeps its environment**
   (gh-ocannl-2129). The trial sites: the mixed-flank overlaps above; `solve_dim_ineq`'s
   `merge_by_equality`, rolled back on a refusal (demotion) and on a postponement below stage 4,
