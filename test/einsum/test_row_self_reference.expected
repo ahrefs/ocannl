@@ -37,3 +37,4 @@ same variable, result surplus, v = [3] later: [3; 2] >= [3] refused by its dims:
 same variable, result surplus, outer overlap 3 against 5 refused by its dims: true
 same variable, operand surplus refused by self-reference: true
 same variable, equation [h; w].<c> = <c> refused by self-reference: true
+closed rows with a leading result surplus bound the axis before stage 7: v = 3: true

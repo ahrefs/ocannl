@@ -473,3 +473,20 @@ let () =
   let h = Row.Var (Row.get_var ()) and w = Row.Var (Row.get_var ()) in
   Verdict.p "same variable, equation [h; w].<c> = <c> refused by self-reference"
     (self_reference (solved [ eq (flanked rho ~beg:[ h; w ] ~dims:[]) rho ]))
+
+(* gh-ocannl-2154's second refusal: two closed rows with a leading result surplus, [[v].[4; 5] >=
+   [3; 4; 5]], align by their flat axis lists. Held to stage 7, the final closing of [v] (the
+   [Shape_row]) came first in the pass and guessed it before the operand's 3 bounded it. *)
+let () =
+  let v = Row.Var (Row.get_var ~name:"v" ()) in
+  let res =
+    {
+      Row.beg_dims = [ v ];
+      dims = [ dim 4; dim 5 ];
+      bcast = Broadcastable;
+      prov = Row.provenance ~sh_id:60 ~kind:`Output;
+    }
+  in
+  let o = solved [ Row.Shape_row (res, origin); ineq res (closed [ 3; 4; 5 ]) ] in
+  Verdict.p "closed rows with a leading result surplus bound the axis before stage 7: v = 3"
+    (Option.equal String.equal (axes o res) (Some "3,4,5"))

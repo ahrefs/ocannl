@@ -5155,7 +5155,13 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
               (Row_eq { r1 = row_of_var opnd_v opnd.prov; r2 = glb; origin } :: ineqs, env)
           | _ -> (ineqs, env))
       | Some (Solved_row _) -> assert false)
-  | _ when res_beg_dims_l > beg_dims_l && not (is_stage7 stage) ->
+  | _
+    when res_beg_dims_l > beg_dims_l
+         && (not (is_stage7 stage))
+         && not (is_broadcastable res.bcast && is_broadcastable opnd.bcast) ->
+      (* A leading result surplus over an open row aligns only once the row is known. Two closed
+         rows are aligned already, by the flat pairing below: holding them to stage 7 let the final
+         closing guess a result axis before the operand's axis bounded it (gh-ocannl-2154). *)
       (Row_ineq { res; opnd; origin } :: ineqs, env)
   | { bcast = Broadcastable; _ }, { bcast = Broadcastable; _ }
     when opnd_dims_l + opnd_beg_dims_l <= res_dims_l + res_beg_dims_l ->
