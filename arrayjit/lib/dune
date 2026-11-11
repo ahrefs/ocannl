@@ -184,6 +184,8 @@
  (modules metal_backend)
  (libraries
   base
+  mtime
+  mtime.clock.os
   metal
   metal_math_api_runtime
   utils

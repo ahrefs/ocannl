@@ -3301,6 +3301,18 @@ val baseline_window_ms : float
 (** 3000: the sampled time at which the serial baseline's timing window may end ({!window_bounded},
     gh-ocannl-1666). *)
 
+val wait_bound_floor_s : float
+val wait_bound_multiple : float
+
+val wait_bound_s : ?reference_ms:float -> depth:int -> unit -> float
+(** The host-side bound, in seconds, on one wait of a tuner timing window that closes [depth]
+    launches (gh-ocannl-2134): [max wait_bound_floor_s (wait_bound_multiple * depth * reference)],
+    with [reference_ms] the larger of the incumbent's admitted per-launch reading and the window's
+    own completed waits' per-launch wall; the floor alone where it is absent, non-finite or not
+    positive. An expiry raises {!Ir.Schedule_outcome.Wait_bound_expired}, a decline that may have
+    written, so the search counts it once and ends; the device is left marked
+    ({!Ir.Backend_intf.Device_wedged}). *)
+
 val window_bounded : ?at_least_ms:float -> bound_ms:float -> timing_sample list -> bool
 (** Whether a timing window, oldest sample first, has sampled enough to end before its sample floor
     and still be ranked (gh-ocannl-1666): at least {!hopeless_min_samples} samples, which
@@ -3976,6 +3988,7 @@ module type Driver = sig
 
   val run : ?timing:bool -> ctx -> routine -> ctx
   val sync : ctx -> unit
+  val await_within : ctx -> seconds:float -> bool
   val release : ctx -> unit
   val adopt_ancestor : ctx -> ancestor:ctx -> unit
   val check_lineage_runnable : ctx -> routine -> unit
@@ -4268,20 +4281,25 @@ module Make (D : Driver) : sig
     ?hopeless_ratio:float ->
     ?window_bound_ms:float ->
     ?prior_depth:int ->
+    ?incumbent_ms:float ->
     timing:timing_mode ->
     repeats:int ->
     D.ctx ->
     D.routine ->
     timing_result
-  (** [on_retry] defaults to a no-op and observes each fresh contention retry as it starts;
-      [on_call] (also a no-op by default) receives the call's {!timing_call} record as it returns,
-      before the domain's {!with_timing_call_observer} observers. Both are per call, which is how a
-      search's accounting stays its own (gh-ocannl-1263). The tuner's own instrument, exposed so a
-      harness can rank candidates by exactly what a search ranks them by (gh-ocannl-755) rather than
-      by a re-derivation of it. Binds test values ({!set_test_bindings}) and restores the routine's
-      bindings afterwards, runs one warmup, then minimizes the per-launch time over at least 16 and
-      [repeats] timed runs, topping up until ~25 ms of per-launch samples has accumulated (up to 64
-      runs unless the [repeats] floor is larger) so that a host stall cannot collapse the min-of-N.
+  (** [incumbent_ms] (default: none) is the incumbent's admitted per-launch reading, which with the
+      window's own completed waits scales the host-side bound on every wait ({!wait_bound_s},
+      gh-ocannl-2134): an expired wait raises {!Ir.Schedule_outcome.Wait_bound_expired}, inside the
+      [Sync] tag under [tag_failures]. [on_retry] defaults to a no-op and observes each fresh
+      contention retry as it starts; [on_call] (also a no-op by default) receives the call's
+      {!timing_call} record as it returns, before the domain's {!with_timing_call_observer}
+      observers. Both are per call, which is how a search's accounting stays its own
+      (gh-ocannl-1263). The tuner's own instrument, exposed so a harness can rank candidates by
+      exactly what a search ranks them by (gh-ocannl-755) rather than by a re-derivation of it.
+      Binds test values ({!set_test_bindings}) and restores the routine's bindings afterwards, runs
+      one warmup, then minimizes the per-launch time over at least 16 and [repeats] timed runs,
+      topping up until ~25 ms of per-launch samples has accumulated (up to 64 runs unless the
+      [repeats] floor is larger) so that a host stall cannot collapse the min-of-N.
       [window_bound_ms] (default: none) ends the window, admitted, as soon as {!window_bounded}
       holds of it at that bound (gh-ocannl-1666: the serial baseline's window). [prior_depth]
       (default: none) is a depth a calibration of a near-identical routine settled at: on CUDA/HIP,

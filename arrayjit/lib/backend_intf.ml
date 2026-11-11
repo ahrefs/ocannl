@@ -99,10 +99,22 @@ exception Backend_unavailable of { backend : string; detail : string }
     driver that is present but fails to initialize is {e not} this: that is a real problem with a
     real installation, and silently selecting another backend would hide it. *)
 
+exception Device_wedged of { device : string; detail : string }
+(** gh-ocannl-2134: the device's work outlived a bounded wait ([Backend.await_within] answered
+    [false]), so the host gave up on it with that work still outstanding. Every later [await] of the
+    device raises this at once instead of blocking behind the abandoned work, for the rest of the
+    process: there is no recovery (gh-ocannl-2133). [device] is the device's [get_name]. *)
+
 let () =
   Stdlib.Printexc.register_printer (function
     | Backend_unavailable { backend; detail } ->
         Some (Printf.sprintf "Backend %s unavailable: %s" backend detail)
+    | Device_wedged { device; detail } ->
+        Some
+          (Printf.sprintf
+             "Device %s refuses work: a bounded wait expired with its work outstanding (%s); the \
+              device is unusable for the rest of the process"
+             device detail)
     | _ -> None)
 
 (** Element formats tensor-core instructions accept for their multiplicand operands, and (reusing
@@ -1889,6 +1901,19 @@ module type Backend = sig
       [prelowered], which it excludes). *)
 
   include Backend_device_common
+
+  val await_within : device -> seconds:float -> bool
+  (** [await_within device ~seconds] is {!await} bounded by [seconds] of host wall time
+      (gh-ocannl-2134): [true] once the device is idle (having run [await], whose failures it
+      raises), [false] when the bound passes first. Completion and a reported failure are checked
+      before expiry at every poll. A [false] leaves the device's work outstanding, possibly still
+      writing its buffers, and marks the device: from then on {!await} and [await_within] raise
+      {!Device_wedged} at once, so a release or cleanup refuses rather than blocking behind the
+      abandoned work, and frees nothing. Ordinary {!await} is unchanged on an unmarked device.
+
+      Boundary: the CPU backend [cc] runs a routine on the calling thread inside the launch, so its
+      device is always idle here, and nothing bounds the launch itself; event-level [sync] and
+      blocking copies of the lower layers are not covered by the mark. *)
 
   val link : context -> code -> context routine
   (** Returns the routine for the code's procedure, in a new context derived from the given context.

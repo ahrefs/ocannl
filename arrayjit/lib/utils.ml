@@ -3099,6 +3099,12 @@ module Device_init_deadline_internals = struct
         default
 end
 
+(* gh-ocannl-2134: the shared body of a bounded device wait. Spins for the first
+   [poll_spin_seconds], so a timing window's sub-millisecond waits keep their resolution (the
+   CUDA/HIP drivers' own default synchronization spins too), then sleeps a millisecond between
+   polls, at most 1% of any wait that long. [ready] is asked once more at the bound, so work that
+   completed while the host was descheduled is never read as an expiry. *)
+
 (** [with_device_init_deadline ~backend_name f] runs [f] -- a GPU backend's device discovery, device
     query or device opening -- under a deadline of [device_init_deadline] seconds (gh-ocannl-1281;
     [0] or negative disables; 120 when the setting is absent or not a finite number): if [f] has not
@@ -3124,6 +3130,24 @@ end
     A healthy device initializes in well under a second (the harness's device probe, a whole fresh
     process, answers in 0.2-0.6 s), so the default is generous for cold starts on loaded, WSL2 or
     freshly installed boxes. *)
+let poll_spin_seconds = 0.1
+
+let poll_within ~seconds ready =
+  ready ()
+  ||
+  let started = Mtime_clock.counter () in
+  let elapsed () = Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9 in
+  let rec loop () =
+    ready ()
+    ||
+    let e = elapsed () in
+    if Float.(e >= seconds) then ready ()
+    else (
+      if Float.(e >= poll_spin_seconds) then Unix.sleepf 0.001 else Stdlib.Domain.cpu_relax ();
+      loop ())
+  in
+  loop ()
+
 let with_device_init_deadline ~backend_name f =
   let module Stub = Device_init_deadline_internals in
   let seconds = Stub.seconds in

@@ -259,6 +259,7 @@ struct
 
   let get_name device = [%string "%{name}:%{device.ordinal#Int}:%{device.device_id#Int}"]
   let classify_failure _phase _exn = None
+  let bounded_await = None
 
   let make_context ?(ctx_buffers = Map.empty (module Tnode)) ?optimize_ctx device =
     let optimize_ctx = Option.value_or_thunk optimize_ctx ~default:Low_level.empty_optimize_ctx in
@@ -387,12 +388,26 @@ module type With_scheduler = sig
       implementations. Not part of {!Backend_intf}. *)
 
   val schedule_task : device -> Task.t -> unit
+
+  val bounded_await : (device -> seconds:float -> bool) option
+  (** gh-ocannl-2134: the backend's own body for {!Backend_intf.Backend.await_within}, without the
+      device mark the shared layer adds. [None] (the {!Device} default) takes the shared body: poll
+      [is_idle], then [await]. A backend whose [is_idle] cannot see a reported failure (Metal: a
+      failed buffer never signals) or a dead runner supplies its own, which answers [true] only
+      having done everything its [await] does (raising a failure, draining routine logs). *)
 end
 
 (** Lowered-level backend interface: implementation-facing API for device-based (GPU, or CPU after
     adding a scheduler) backends based on the {!Low_level} IR. *)
 module type Lowered_backend = sig
   include Backend_device_common
+
+  val bounded_await : (device -> seconds:float -> bool) option
+  (** gh-ocannl-2134: the backend's own body for {!Backend_intf.Backend.await_within}, without the
+      device mark the shared layer adds. [None] (the {!Device} default) takes the shared body: poll
+      [is_idle], then [await]. A backend whose [is_idle] cannot see a reported failure (Metal: a
+      failed buffer never signals) or a dead runner supplies its own, which answers [true] only
+      having done everything its [await] does (raising a failure, draining routine logs). *)
 
   include
     No_buffer_retrieval_or_syncing

@@ -126,6 +126,25 @@ module Multidev (Backend : For_add_scheduler) :
     Mut.unlock st.mut;
     Option.iter st.dev_error ~f:(fun e -> Exn.reraise e @@ get_name device)
 
+  (* gh-ocannl-2134: a stopped worker is an answer, not an expiry: [await] then re-raises its error
+     at once, where polling [is_idle] would wait out the bound over the tasks it left queued. *)
+  let bounded_await =
+    Some
+      (fun device ~seconds ->
+        let st = device.runner.state in
+        (* Read under the worker's mutex: it dequeues a task and marks itself busy under it, so an
+           unlocked read could see the queue emptied and [busy] still unset. *)
+        Utils.poll_within ~seconds (fun () ->
+            Mut.lock st.mut;
+            let answer =
+              (not st.keep_spinning) || ((not st.busy) && Stdlib.Queue.is_empty st.queue)
+            in
+            Mut.unlock st.mut;
+            answer)
+        &&
+        (await device;
+         true))
+
   let schedule_task device task =
     assert (Domain.is_main_domain ());
     let st = device.runner.state in

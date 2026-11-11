@@ -486,6 +486,18 @@ val sync : t -> unit
     their own; explicit [sync] is for timing runs (e.g. the autotuner) and for fencing against
     out-of-band observation. Refuses a {!release}d context with {!Ir.Utils.User_error}. *)
 
+val await_within : t -> seconds:float -> bool
+(** {!sync} bounded by [seconds] of host wall time (gh-ocannl-2134): [true] once the device is idle,
+    with {!sync}'s refusals and failures; [false] when the bound passes first, with the device's
+    work still outstanding and possibly still writing buffers (a GPU kernel that never ends, which a
+    driver need not report). Completion and a reported failure are checked before expiry. After a
+    [false] the device is marked for the rest of the process: every later {!sync}, read or
+    {!release} on it raises {!Ir.Backend_intf.Device_wedged} at once instead of blocking behind the
+    abandoned work, and a release frees nothing. There is no recovery (gh-ocannl-2133).
+
+    Boundary: on [cc] a routine runs on the calling thread inside {!run}, so the device is idle here
+    and nothing bounds {!run} itself. *)
+
 val failure_classifier :
   t -> Ir.Schedule_outcome.phase -> exn -> Ir.Schedule_outcome.classified_cause option
 (** The backend's own failure classifier, for callers that wrap {!run} / {!sync} in

@@ -112,6 +112,30 @@ let () =
              detail)
     | _ -> None)
 
+let wait_bound_stage = "wait_bound"
+
+exception
+  Wait_bound_expired of {
+    backend : string;
+    bound_s : float;
+    depth : int;
+    reference_ms : float option;
+  }
+
+let () =
+  Stdlib.Printexc.register_printer (function
+    | Wait_bound_expired { backend; bound_s; depth; reference_ms } ->
+        Some
+          (Printf.sprintf
+             "%s: a timing wait closing %d launch(es) did not complete within its host-side bound \
+              of %gs (%s); the device's work is still outstanding and may still be writing, so the \
+              device is abandoned for the rest of the process (no recovery: gh-ocannl-2133)"
+             backend depth bound_s
+             (match reference_ms with
+             | None -> "the floor; no completed reading to scale"
+             | Some ms -> Printf.sprintf "scaled from a %gms per-launch reading" ms))
+    | _ -> None)
+
 type provenance = Candidate | Cache_replay | Advisory | User_schedule
 [@@deriving sexp_of, compare, equal]
 
@@ -167,6 +191,22 @@ let classify_raw ~strict ~classify_backend ~provenance ~phase ~candidate exn bac
                 detail = Stdlib.Printexc.to_string exn;
               };
           execution_effect = No_device_writes;
+        }
+  (* gh-ocannl-2134: typed at the host-side bound, so no backend classifier is consulted: the driver
+     reported nothing, and its classifier must not read a host refusal as a backend error. *)
+  | Wait_bound_expired { backend; _ } ->
+      Classified
+        {
+          phase;
+          cause =
+            Backend_rejected
+              {
+                backend;
+                stage = wait_bound_stage;
+                severity = Expected;
+                detail = Stdlib.Printexc.to_string exn;
+              };
+          execution_effect = Writes_may_have_occurred;
         }
   | _ when is_assert_or_stack exn && not (equal_provenance provenance Cache_replay) -> fatal ()
   | _ when is_pre_dispatch phase ->

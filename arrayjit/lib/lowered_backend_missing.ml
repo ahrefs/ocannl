@@ -95,6 +95,7 @@ struct
      test on a box without the toolkit still models this backend's scheduling through them. *)
   let backend_facts = Config.backend_facts
   let classify_failure _phase _exn = None
+  let bounded_await = None
 
   let get_debug_info _device =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"

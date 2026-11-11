@@ -1666,12 +1666,34 @@ files.
   traps. `No_device_writes` would be false (the killed kernel wrote for seconds), and the search
   would end one candidate later anyway, on an unattributed re-report. And recognition is the
   driver's code token, never elapsed time: a 1.3-2 s buffer that is still progressing is not a hang
-  (gh-ocannl-2082). So a hang Metal never reports (a wait past 300 s with no status, seen on
-  macOS 27.2) reaches no classifier at all. Continuing past a hang needs device recovery, which is
-  not built. `test/operations/metal_hang_declines` injects the typed report at a seed's timing sync
+  (gh-ocannl-2082). A hang Metal never reports (a wait past 300 s with no status, seen on macOS
+  27.2) is the next bullet's. Continuing past a hang needs device recovery, which is not built. `test/operations/metal_hang_declines` injects the typed report at a seed's timing sync
   through a wrapped `Autotune.Context_driver` (`Autotune.Make`), on any backend. Recombined
   contenders that the finals re-time from saved forms pass no attempt hook, so aim an injection at a
   seed.
+- **Every timing wait is bounded on the host, and an expiry ends the search** (gh-ocannl-2134).
+  `time_routine` waits through `D.await_within` (`Context.await_within`), never a bare `sync`:
+  the bound on a wait closing `depth` launches is `max 60 s (20 x depth x reference)`
+  (`Autotune.wait_bound_s`), the reference the larger of the incumbent's admitted per-launch
+  reading and the window's own completed waits', the floor alone without either. A normal search's
+  waits all sit at the floor (774 waits of `wait_bound_declines`' healthy search: every one at
+  60 s). An expiry raises `Schedule_outcome.Wait_bound_expired`, classified host-side, before the
+  backend, as an `Expected` `Backend_rejected` at `wait_bound_stage` with `Writes_may_have_occurred`
+  -- distinct from `gpu_hang`, since elapsed time proves only that the wait outlived its policy --
+  so `try_spec` counts it once, poisons and ends `Search_died`, as for a reported hang. Two traps
+  the bound alone does not close. The kernel is still running, so the device is marked
+  (`Backend_intf.Device_wedged`): every later wrapped `await` refuses at once, or the candidate's
+  release, the exit sweep and the caller's own release (`Backends.finalize` awaits before it frees)
+  would block forever behind it; Metal also latches the runner (`abandoned`) so no submission
+  allocates another command buffer. And Metal's `sync` had a second unbounded wait
+  (`wait_until_completed` on the covered buffers after the event fires): its bounded body reads
+  their statuses instead. Boundaries: cc runs a routine inside `run` on the calling thread, so it
+  has no wait to bound; `run` itself (Metal's 64-buffer `commandBuffer` block) is unbounded, but a
+  deterministic hang meets the bound at the warmup's wait first. Inject an expiry through a wrapped
+  `Autotune.Context_driver`'s `await_within` (`test/operations/wait_bound_declines`, which also
+  means a driver wrapper injecting at the timing wait overrides `await_within`, not `sync`); the
+  real expiry and mark run on a finite kernel against a zero bound
+  (`test/operations/wait_bound_device_wedged`, multidev_cc and Metal).
 - A typed cause is not automatically a containable one. `Schedule_outcome.uncontainable` names the
   causes `protect` makes `Fatal` although typed, the fatal record keeping them in `cause`: today the
   cc backend's `dlopen`, `artifact_missing`, and `codesign` rejections at `Backend_link`

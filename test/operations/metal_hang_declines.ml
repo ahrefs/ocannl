@@ -67,13 +67,15 @@ module Hang_driver = struct
     then dispatched := true;
     ctx
 
-  let sync ctx =
-    Autotune.Context_driver.sync ctx;
-    match (!fault, !target, !fired) with
+  (* The tuner's timing waits are bounded (gh-ocannl-2134), so they go through [await_within]. *)
+  let await_within ctx ~seconds =
+    let completed = Autotune.Context_driver.await_within ctx ~seconds in
+    (match (!fault, !target, !fired) with
     | Some make, Some label, None when !dispatched ->
         fired := Some label;
         raise (make label)
-    | _ -> ()
+    | _ -> ());
+    completed
 
   let failure_classifier _ctx = MF.classify_command_buffer_failure ~backend:"metal"
 

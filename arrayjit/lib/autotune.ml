@@ -1023,6 +1023,32 @@ let hopeless_window ?(ratio = hopeless_ratio) ?(at_least_ms = 0.) ~reference_ms 
    singles exactly as {!hopeless_window}'s does: they are cut only where they are the reading. *)
 let baseline_window_ms = 3000.
 
+(* gh-ocannl-2134: the host-side bound on one wait of a timing window, for a kernel that never ends
+   and that no driver reports (macOS 27.2 let one run past 300 s with no status; CUDA and HIP
+   compute GPUs have no watchdog at all). A wait closing [depth] launches gets [max
+   wait_bound_floor_s (wait_bound_multiple * depth * reference)], where the reference is the largest
+   of the incumbent's admitted per-launch reading and this window's own completed waits' per launch,
+   and the floor alone applies with neither (the baseline, a GPU search's first seeds, any window's
+   warmup before an incumbent exists). A wait out of line with every completed reading is the hang
+   no status reports.
+
+   The numbers, from what has been measured. The floor is 2x the longest legitimate kernel seen
+   (gh-ocannl-2082: 10 s and 30 s kernels complete on macOS 27.2) and 12x the slowest cc serial
+   single in the notes (gpt2_mini_train b8, ~5 s: gh-ocannl-1666), and costs a minute per real hang.
+   The multiple is 5x [hopeless_ratio] and 10x [contention_ratio], so no jitter, stall or contention
+   the timing rules already absorb approaches it; it governs only routines whose single exceeds 3 s.
+   An expiry ends the search (the work may still be writing), so a false one is loud and the bound
+   is deliberately generous; it never shortens a window that completes. *)
+let wait_bound_floor_s = 60.
+let wait_bound_multiple = 20.
+
+let wait_bound_s ?reference_ms ~depth () =
+  match reference_ms with
+  | Some ms when Float.is_finite ms && Float.is_positive ms ->
+      Float.max wait_bound_floor_s
+        (wait_bound_multiple *. Float.of_int (Int.max 1 depth) *. ms /. 1000.)
+  | Some _ | None -> wait_bound_floor_s
+
 let window_bounded ?(at_least_ms = 0.) ~bound_ms samples =
   List.length samples >= hopeless_min_samples
   &&
@@ -6390,6 +6416,7 @@ module type Driver = sig
 
   val run : ?timing:bool -> ctx -> routine -> ctx
   val sync : ctx -> unit
+  val await_within : ctx -> seconds:float -> bool
   val release : ctx -> unit
   val adopt_ancestor : ctx -> ancestor:ctx -> unit
   val check_lineage_runnable : ctx -> routine -> unit
@@ -6444,7 +6471,7 @@ module Make (D : Driver) = struct
      P2 on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)
   let time_routine ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ()) ?(tag_failures = false)
       ?phase ?(stop = fun () -> false) ?hopeless_against ?(hopeless_ratio = hopeless_ratio)
-      ?window_bound_ms ?prior_depth ~timing ~repeats cctx routine =
+      ?window_bound_ms ?prior_depth ?incumbent_ms ~timing ~repeats cctx routine =
     let check_stop () = if stop () then raise Timing_stopped in
     (* The call's [setup_ms] runs from here: the pre-dispatch validation, the warmup and the
        calibration. *)
@@ -6457,8 +6484,41 @@ module Make (D : Driver) = struct
       if tag_failures then Outcome.tag Outcome.Launch (fun () -> D.run ~timing:true ctx routine)
       else D.run ~timing:true ctx routine
     in
-    let sync ctx =
-      if tag_failures then Outcome.tag Outcome.Sync (fun () -> D.sync ctx) else D.sync ctx
+    (* gh-ocannl-2134: every wait is bounded ({!wait_bound_s}); [own_ms] is the largest per-launch
+       wall of this window's completed waits. An expiry raises inside the [Sync] tag, where
+       [Outcome.protect] classifies it host-side as a decline that may have written. *)
+    let own_ms = ref None in
+    let finite ms = Option.filter ms ~f:(fun ms -> Float.is_finite ms && Float.is_positive ms) in
+    let sync ~depth ctx =
+      let reference_ms =
+        match (finite incumbent_ms, finite !own_ms) with
+        | Some a, Some b -> Some (Float.max a b)
+        | (Some _ as r), None | None, (Some _ as r) -> r
+        | None, None -> None
+      in
+      let bound_s = wait_bound_s ?reference_ms ~depth () in
+      let wait () =
+        if not (D.await_within ctx ~seconds:bound_s) then
+          raise
+            (Outcome.Wait_bound_expired
+               {
+                 backend =
+                   D.backend_name ctx
+                   [@label_read
+                     "names the decline's rejection key and its message, as a backend classifier \
+                      names its own; nothing is decided on it"];
+                 bound_s;
+                 depth;
+                 reference_ms;
+               })
+      in
+      if tag_failures then Outcome.tag Outcome.Sync wait else wait ()
+    in
+    let completed ~depth c0 =
+      let wall = Mtime.Span.to_float_ns (Mtime_clock.count c0) /. 1e6 in
+      let per_launch = wall /. Float.of_int (Int.max 1 depth) in
+      own_ms := Some (Option.value_map !own_ms ~default:per_launch ~f:(Float.max per_launch));
+      wall
     in
     Exn.protect
       ~finally:(fun () -> List.iter saved_bindings ~f:(fun (r, v) -> r := v))
@@ -6480,8 +6540,10 @@ module Make (D : Driver) = struct
         (* Warmup run: absorbs lazy initialization and fills caches like a steady-state
            iteration. *)
         check_stop ();
+        let warmup = Mtime_clock.counter () in
         let ctx = ref (run cctx) in
-        sync !ctx;
+        sync ~depth:1 !ctx;
+        ignore (completed ~depth:1 warmup : float);
         (* Monotonic high-resolution clock: on Windows, [Unix.gettimeofday] ticks at ~1 ms, which
            makes sub-millisecond candidates indistinguishable (they all measure 0). *)
         let ordinal = ref 0 in
@@ -6491,8 +6553,8 @@ module Make (D : Driver) = struct
           for _ = 1 to depth do
             ctx := run !ctx
           done;
-          sync !ctx;
-          let wall = Mtime.Span.to_float_ns (Mtime_clock.count c0) /. 1e6 in
+          sync ~depth !ctx;
+          let wall = completed ~depth c0 in
           let wall = Seam.get on_batch_wall ~depth ~ordinal:!ordinal wall in
           Int.incr ordinal;
           wall
@@ -10206,7 +10268,8 @@ module Make (D : Driver) = struct
                       match
                         time_routine ~on_retry ~on_call:on_window_call ~tag_failures:true
                           ~phase:!progress_phase ~stop ?hopeless_against ?hopeless_ratio
-                          ?prior_depth ~timing ~repeats c.cctx c.routine
+                          ?prior_depth ~incumbent_ms:(snd !best_so_far) ~timing ~repeats c.cctx
+                          c.routine
                       with
                       | timing_result -> `Timed timing_result
                       | exception Timing_stopped -> `Stopped
@@ -12185,6 +12248,16 @@ module Make (D : Driver) = struct
                        | None ->
                            logf "untuned-default in-process control: refused (%s)"
                              (refusal_reason (timing_admission timing_result)))
+                   | exception (Outcome.Wait_bound_expired _ as exn) ->
+                       (* gh-ocannl-2134: not a diagnostic's failure to swallow. The wait gave up on
+                          work still running, and the device is marked, so the winner could not ship
+                          from it: the lineage is condemned and the expiry propagates. The control's
+                          artifacts stay where they are -- releasing them would only meet the
+                          mark. *)
+                       let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+                       logf "untuned-default control: %s" (Exn.to_string exn);
+                       D.poison_lineage cctx ~routine_name:(D.routine_name croutine) exn;
+                       Stdlib.Printexc.raise_with_backtrace exn backtrace
                    | exception exn ->
                        logf "untuned-default control run failed: %s" (Exn.to_string exn));
                    (* A diagnostic's artifacts are dead the moment it has printed its number

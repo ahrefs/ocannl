@@ -488,6 +488,12 @@ val device_init_test_stall : (unit -> unit) option ref
 val driver_init_test_stall : (unit -> unit) option ref
 (** Test-only: run right before a GPU backend's one-time driver initialization call. *)
 
+val poll_within : seconds:float -> (unit -> bool) -> bool
+(** [poll_within ~seconds ready] polls [ready] until it answers [true] (then [true]) or [seconds] of
+    host wall time pass (then [false], after asking once more): a spin for the first 0.1 s, then a
+    one-millisecond sleep between polls (gh-ocannl-2134, the shared body of [Backend.await_within]).
+*)
+
 val with_device_init_deadline : backend_name:string -> (unit -> 'a) -> 'a
 (** Runs a device init or query under [device_init_deadline] seconds, dying by SIGALRM past it. *)
 
