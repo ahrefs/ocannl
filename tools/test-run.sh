@@ -986,6 +986,8 @@ plan_test_cap() { # <requested, empty for the default> dune-argv
 # tracked tree lists them, or as `find` does outside a checkout's top level); a
 # DIR dune does not know ("Directory DIR does not exist") is no alias at all.
 # Every unknown one refuses the batch: ALIAS REFUSED, exit 2, nothing ran.
+# Recognized disabled aliases are removed first (alias_disabled_perl); the
+# run records and counts them, and refuses a batch with no active alias.
 #
 # The check refuses only on dune's own, conclusive answer, and is otherwise
 # silent and lets dune decide, as before: a listing that does not read as dune
@@ -1149,6 +1151,89 @@ alias_dirs_perl='
   }
   exit($bad ? 3 : 0);
 '
+# Deliberately small enabled_if boundary: backend equality/inequality and
+# boolean combinations only. Unknown forms keep their aliases; Dune decides.
+# Every declaration of an alias must be disabled before we may remove it.
+alias_disabled_perl='
+  sub condition {
+    my ($x) = @_;
+    return $x eq "false" ? 0 : $x eq "true" ? 1 : undef unless ref $x;
+    my ($op, @xs) = @$x;
+    if (($op eq "=" || $op eq "<>") && @xs == 2 && !grep { ref } @xs) {
+      for (@xs) {
+        s/%\{env:OCANNL_BACKEND=([^}]+)\}/exists $ENV{OCANNL_BACKEND} ? $ENV{OCANNL_BACKEND} : $1/ge;
+        return undef unless /^[A-Za-z0-9_.+-]+$/;
+      }
+      return $op eq "=" ? $xs[0] eq $xs[1] : $xs[0] ne $xs[1];
+    }
+    my @v = map { condition($_) } @xs;
+    return undef if grep { !defined } @v;
+    return !$v[0] if $op eq "not" && @v == 1;
+    return !grep { !$_ } @v if $op eq "and";
+    return !!grep { $_ } @v if $op eq "or";
+    return undef;
+  }
+  my %owners;
+  my $walk;
+  $walk = sub {
+    my ($dir, $forms) = @_;
+    push @{ $owners{"$dir\tdefault"} }, 0;
+    for my $s (@$forms) {
+      next unless ref $s && @$s && !ref $s->[0];
+      my ($kind, @fields) = @$s;
+      if ($kind eq "subdir") {
+        my $name = shift @fields;
+        $walk->($dir eq "." ? $name : "$dir/$name", \@fields);
+        next;
+      }
+      # Cram owns aliases derived from fixture filenames; do not guess them.
+      if ($kind eq "cram") { push @{ $owners{"$dir\t*"} }, 0; next }
+      next unless $kind =~ /^(?:rule|alias|test|tests|library)$/;
+      my (@names, $enabled, $library, $inline);
+      for my $f (@fields) {
+        next unless ref $f && @$f && !ref $f->[0];
+        $inline = 1 if $f->[0] eq "inline_tests";
+        next unless @$f >= 2;
+        $library = $f->[1] if $kind eq "library" && $f->[0] eq "name";
+        $enabled = $f->[1] if $f->[0] eq "enabled_if";
+        if (($kind eq "rule" && $f->[0] =~ /^alias(?:es)?$/) ||
+            ($kind eq "alias" && $f->[0] eq "name")) {
+          push @names, @$f[1 .. $#$f];
+        }
+        if ($kind =~ /^tests?$/ && $f->[0] =~ /^names?$/) {
+          push @names, map { ref $_ ? $_ : "runtest-$_" } @$f[1 .. $#$f];
+        }
+      }
+      push @names, "runtest-$library" if $kind eq "library" && $inline && defined $library && !ref $library;
+      my $v = defined $enabled ? condition($enabled) : 1;
+      push @{ $owners{"$dir\truntest"} }, 0 if $kind =~ /^tests?$/ || ($kind eq "library" && $inline);
+      for my $name (@names) {
+        if (ref $name || $name !~ /^[A-Za-z0-9_.+-]+$/) {
+          push @{ $owners{"$dir\t*"} }, 0; next;
+        }
+        push @{ $owners{"$dir\t$name"} }, defined $v && !$v ? 1 : 0;
+      }
+    }
+  };
+  for my $f (@ARGV) {
+    my $forms = eval { read_dune($f) };
+    exit 3 unless $forms;
+    my $dir = $f =~ m{^(.*)/[^/]+$} ? $1 : ".";
+    $walk->($dir, $forms);
+  }
+  for my $key (sort keys %owners) {
+    print "$key\t", (grep { !$_ } @{ $owners{$key} }) ? 0 : 1, "\n";
+  }
+'
+alias_disabled_for() { # recursive dir name; every matching owner must be disabled
+  local rec=$1 d=$2 name=$3
+  awk -F '\t' -v rec="$rec" -v d="$d" -v name="$name" '
+    ($1 == d || (rec == 1 && (d == "." || index($1, d "/") == 1))) {
+      if ($2 == name) { found = 1; if ($3 != 1) active = 1 }
+      if ($2 == "*") active = 1
+    }
+    END { exit (!found || active) }' "$run_dir/aliases.disabled"
+}
 alias_dune_files() { # the dune files of this tree, NUL-terminated
   (
     # This tree's own listing, whatever repository an inherited GIT_DIR names
@@ -1199,9 +1284,10 @@ capped_stderr() { # dune argv; 0 iff we should inject --no-buffer
 }
 
 plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal, alias_siblings
-  local arg spec rec d name i n all=
-  local specs=() recs=() spec_dirs=() names=() first=() rest=()
-  alias_refusal= alias_siblings=
+  local arg spec rec d name i n all= position=0
+  local specs=() recs=() spec_dirs=() names=() first=() rest=() positions=()
+  alias_refusal= alias_siblings= alias_disabled= alias_active=0
+  alias_disabled_positions=()
   [ "${1:-}" = build ] || return 0
   shift
   # Every option before dune's `--` must be one known to leave the set of
@@ -1211,6 +1297,7 @@ plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
   # an option dune adds later fails open). A separate value is skipped with it.
   local value=
   for arg do
+    position=$((position + 1))
     if [ -n "$value" ]; then value=; continue; fi
     case $arg in
       --) break ;;
@@ -1235,7 +1322,7 @@ plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
     # is a path through a directory dune keeps out of the source tree by
     # default, `_build/CONTEXT/...` (a context-qualified alias) among them.
     [ "$d" = . ] || case /$d/ in */./* | /_*) continue ;; esac
-    specs+=("$arg") recs+=("$rec") spec_dirs+=("$d") names+=("$name")
+    specs+=("$arg") recs+=("$rec") spec_dirs+=("$d") names+=("$name") positions+=("$position")
   done
   n=${#specs[@]}
   [ "$n" -gt 0 ] || return 0
@@ -1252,6 +1339,10 @@ plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
   # the census does not read. The reader decides both on its tokens, so a
   # comment or a quoted head does not hide them.
   all=$(alias_dune_dirs) || return 0
+  local files=() f
+  while IFS= read -r -d '' f; do files+=("${f#./}"); done < <(alias_dune_files)
+  perl -e "$dune_reader_perl $alias_disabled_perl" "${files[@]}" >"$run_dir/aliases.disabled" ||
+    : >"$run_dir/aliases.disabled"
   alias_listing "$run_dir/aliases.1" "${first[@]}" || return 0
   i=0
   while [ "$i" -lt "$n" ]; do
@@ -1274,7 +1365,11 @@ plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
   i=0
   while [ "$i" -lt "$n" ]; do
     d=${spec_dirs[$i]} name=${names[$i]}
-    if alias_listed - "$d" "" "$run_dir/aliases.1"; then
+    if alias_listed + "$d" "" "$run_dir/aliases.1" &&
+       alias_disabled_for "${recs[$i]}" "$d" "$name"; then
+      alias_disabled="$alias_disabled${alias_disabled:+$'\n'}${specs[$i]}"
+      alias_disabled_positions+=("${positions[$i]}")
+    elif alias_listed - "$d" "" "$run_dir/aliases.1"; then
       alias_refusal="$alias_refusal${alias_refusal:+$'\n'}${specs[$i]}: dune knows no directory $d"
     elif alias_listed = "$d" "$name" "$run_dir/aliases.1"; then
       :
@@ -1289,6 +1384,7 @@ plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
     fi
     i=$((i + 1))
   done
+  alias_active=$((n - ${#alias_disabled_positions[@]}))
   i=0
   while [ "$i" -lt "$n" ]; do
     printf '%s\t%s\t%s\n' "${recs[$i]}" "${spec_dirs[$i]}" "${names[$i]}"
@@ -3733,6 +3829,8 @@ digest() {
     2)
       if [ -s "$dir/unmerged-refused" ]; then
         verdict="UNMERGED REFUSED (the checkout has unmerged paths; nothing ran)"
+      elif [ -s "$dir/disabled-refused" ]; then
+        verdict="ALIAS REFUSED (disabled alias batch; nothing ran)"
       elif [ -s "$dir/alias-refused" ]; then
         verdict="ALIAS REFUSED (dune knows no such alias; nothing ran)"
       elif [ -s "$dir/marker-refused" ]; then
@@ -3831,6 +3929,10 @@ digest() {
     fi
   fi
   [ ! -s "$dir/unmerged-refused" ] || sed 's/^/unmerged refused: /' "$dir/unmerged-refused"
+  if [ -s "$dir/disabled-aliases" ]; then
+    printf 'disabled aliases skipped: %s\n' "$(wc -l <"$dir/disabled-aliases" | tr -d ' ')"
+    sed 's/^/disabled alias skipped: /' "$dir/disabled-aliases"
+  fi
   [ ! -s "$dir/alias-refused" ] || sed 's/^/alias refused: /' "$dir/alias-refused"
   [ ! -s "$dir/marker-refused" ] || sed 's/^/marker refused: /' "$dir/marker-refused"
   if [ -s "$dir/backend-refused" ]; then
@@ -5082,6 +5184,22 @@ case $sub in
     # An alias dune does not know is refused next (plan_aliases): before the
     # backends' resolution builds anything, and before the slot and the probe.
     plan_aliases "$@"
+    if [ -n "$alias_disabled" ]; then
+      printf '%s\n' "$alias_disabled" | sort -u >"$run_dir/disabled-aliases" || exit 126
+      wc -l <"$run_dir/disabled-aliases" | tr -d ' ' >"$run_dir/disabled-alias-count" || exit 126
+      printf 'test-run: disabled aliases skipped: %s\n' "$(cat "$run_dir/disabled-alias-count")"
+      sed 's/^/test-run: DISABLED ALIAS SKIPPED: /' "$run_dir/disabled-aliases"
+      kept=() position=0
+      for arg do
+        if ! alias_member "$position" "${alias_disabled_positions[@]}"; then kept+=("$arg"); fi
+        position=$((position + 1))
+      done
+      if [ "$alias_active" = 0 ] || [ "$mode" = repeat ] || [ "$mode" = fresh ]; then
+        printf '%s\n' 'disabled alias batch' >"$run_dir/disabled-refused" || exit 126
+        alias_refusal="$alias_refusal${alias_refusal:+$'\n'}disabled aliases leave no active alias (or this replay mode requires all aliases); nothing ran"
+      fi
+      set -- "${kept[@]}"
+    fi
     if [ -n "$alias_refusal" ] && [ "$mode" != plan ]; then
       { printf '%s\n' "$alias_refusal" >"$run_dir/alias-refused.tmp" &&
           mv -f "$run_dir/alias-refused.tmp" "$run_dir/alias-refused"; } ||
@@ -5171,6 +5289,10 @@ case $sub in
     if [ "$mode" = plan ]; then
       {
         echo "command: dune $*"
+        if [ -s "$run_dir/disabled-aliases" ]; then
+          printf 'disabled aliases skipped: %s\n' "$(cat "$run_dir/disabled-alias-count")"
+          sed 's/^/  disabled alias skipped: /' "$run_dir/disabled-aliases"
+        fi
         echo "backends: $(batch_summary)"
         echo "run cap: ${cap}s ($(cat "$run_dir/cap-source"); 0 disables)"
         sed -n 's/^test-run: batch: /  /p' "$run_dir/log"
@@ -5228,7 +5350,7 @@ case $sub in
       } >"$run_dir/plan" || { echo "test-run: cannot write the plan in $run_dir"; exit 126; }
       exit 0
     fi
-    if [ -n "$width_cap" ] || [ "$mode" = fresh ] || [ -n "$stderr_stream" ]; then
+    if [ -n "$alias_disabled" ] || [ -n "$width_cap" ] || [ "$mode" = fresh ] || [ -n "$stderr_stream" ]; then
       { { printf '%q ' "$@"; echo; } >"$run_dir/cmd.tmp" &&
         mv -f "$run_dir/cmd.tmp" "$run_dir/cmd"; } ||
         { echo "test-run: cannot record the capped command in $run_dir"; exit 126; }
