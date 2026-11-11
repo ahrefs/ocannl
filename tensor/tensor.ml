@@ -410,11 +410,6 @@ let remove_bprop_root t =
   Row.note_mutation ();
   session_state.backprop_roots <- Map.remove session_state.backprop_roots t.value.id
 
-let take_forward_code t =
-  remove_fwd_root t;
-  t.consumption.fwd <- Taken;
-  t.forward
-
 (** {2 Checkpoints and rewind (gh-ocannl-1301, gh-ocannl-903)}
 
     A checkpoint snapshots the open frontier ({!Shape.Checkpoint} holds the shape-inference half):
@@ -683,8 +678,7 @@ let%debug7_sexp rec init_params_body ?skip (t : t) : Asgns.comp =
    the program reads and does not write gets its [Constant_bits] fetch prepended, so the draws are
    those of a program owning the seed, whichever singleton is current. Checked once, on the whole
    program: a seed one included parameter's initializer writes is not missing for another's. *)
-let init_params ?skip (t : t) : Asgns.comp =
-  let comp = init_params_body ?skip t in
+let with_seed_fetches (comp : Asgns.comp) : Asgns.comp =
   let read, _ = Asgns.collect_nodes_guess_output comp.Asgns.asgns in
   let missing =
     Set.filter
@@ -700,7 +694,45 @@ let init_params ?skip (t : t) : Asgns.comp =
           ( Set.add (Set.union embedded seed.Asgns.embedded_nodes) tn,
             Asgns.Seq (seed.Asgns.asgns, asgns) ))
     in
-    Asgns.comp ~embedded:embedded_nodes asgns
+    (* Only the code and the nodes it allocates change: the fetch carries no fragment, so the
+       computation's own ownership and gradient metadata stand as they were. *)
+    { comp with Asgns.asgns; embedded_nodes }
+
+let init_params ?skip (t : t) : Asgns.comp = with_seed_fetches (init_params_body ?skip t)
+
+(* A forward graph reads a seed the same way: a draw whose code another graph absorbed -- an unused
+   draw, a sibling graph compiled into another routine, a discarded scheme trace -- reads the seed
+   without writing it (gh-ocannl-2157). Every forward handout ([consume_forward_code],
+   [take_forward_code] for [%cd]) carries the [Constant_bits] fetch of each registered seed its code
+   reads and does not write, so a routine reading a seed writes it, whichever context it links in.
+   The fetch replays an immutable literal: re-running it never changes a draw. A repaired handout is
+   memoized per tensor record, so that repeated handouts stay physically equal (gh-ocannl-1724's
+   replay contract); the entry is held weakly by the record, which holds [forward] itself, so it
+   keeps nothing alive that the tensor does not. *)
+module Weak_tensors = Stdlib.Ephemeron.K1.Make (struct
+  type nonrec t = t
+
+  let equal = phys_equal
+  let hash t = Int.hash t.value.id
+end)
+
+let forward_handouts : Asgns.comp Weak_tensors.t = Weak_tensors.create 16
+[@@mutation_serial.exempt
+  "a weak memo of a tensor's seed-repaired forward code, derived from its immutable [forward] and \
+   the append-only seed registry, so it restores nothing"]
+
+let forward_handout t =
+  match Weak_tensors.find_opt forward_handouts t with
+  | Some repaired -> repaired
+  | None ->
+      let repaired = with_seed_fetches t.forward in
+      if not (phys_equal repaired t.forward) then Weak_tensors.replace forward_handouts t repaired;
+      repaired
+
+let take_forward_code t =
+  remove_fwd_root t;
+  t.consumption.fwd <- Taken;
+  forward_handout t
 
 let initial_default_prec =
   Ir.Ops.prec_of_string (Utils.get_global_arg ~default:"single" ~arg_name:"default_prec")
@@ -1757,9 +1789,11 @@ let not_a_root_reason ~(handout : handout) ~what ~name t =
          in a tensor constructed from it (a shared subtensor's code is owned by its \
          first-constructed consumer); consume that consumer instead"]
 
-(* [t]'s non-embedded reads: the forward requirements of its code. *)
+(* [t]'s non-embedded reads: the forward requirements of the code it hands out, so a seed whose
+   fetch the handout carries is not one (gh-ocannl-2157). *)
 let forward_reads t =
-  Set.diff (fst @@ Asgns.collect_nodes_guess_output t.forward.asgns) t.forward.embedded_nodes
+  let fwd = forward_handout t in
+  Set.diff (fst @@ Asgns.collect_nodes_guess_output fwd.Asgns.asgns) fwd.Asgns.embedded_nodes
 
 (* The reads whose code an unconsumed forward root still owns, read off the owner cells
    (gh-ocannl-1796): a root the caller dropped before its code was consumed stays pending, whatever
@@ -1803,7 +1837,7 @@ let consume_forward_code t =
   if equal_handout t.consumption.fwd Taken then (
     (* Taken by an embedding (e.g. [%cd]) and now handed out: a handout all the same. *)
     note_external_handout ~fwd:true t;
-    t.forward)
+    forward_handout t)
   else (
     if not @@ is_fwd_root t then
       raise

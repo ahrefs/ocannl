@@ -1,0 +1,57 @@
+another seed draws a different reference: true
+the reference draws a distinct value per element: true
+through a fresh context, the reader draws exactly the reference: true
+through a fresh context, the owner's draws are unchanged: true
+through Train.to_routine, the reader draws exactly the reference: true
+through Train.to_routine, the owner's draws are unchanged: true
+through the owner's lineage, the reader draws exactly the reference: true
+through the owner's lineage, the owner's draws are unchanged: true
+through an unconsumed owner, the reader draws exactly the reference: true
+through one computation embedding both, the reader draws exactly the reference: true
+through one computation embedding both, the owner's draws are unchanged: true
+through a checkpoint rewound, the reader draws exactly the reference: true
+through a checkpoint rewound, the owner's draws are unchanged: true
+another seed draws a different reference: true
+through a fresh context, the reader draws exactly the reference: true
+through a fresh context, the owner's draws are unchanged: true
+through Train.to_routine, the reader draws exactly the reference: true
+through Train.to_routine, the owner's draws are unchanged: true
+through the owner's lineage, the reader draws exactly the reference: true
+through the owner's lineage, the owner's draws are unchanged: true
+through an unconsumed owner, the reader draws exactly the reference: true
+through one computation embedding both, the reader draws exactly the reference: true
+through one computation embedding both, the owner's draws are unchanged: true
+through a checkpoint rewound, the reader draws exactly the reference: true
+through a checkpoint rewound, the owner's draws are unchanged: true
+another seed draws a different reference: true
+through a fresh context, the reader draws exactly the reference: true
+through a fresh context, the owner's draws are unchanged: true
+through Train.to_routine, the reader draws exactly the reference: true
+through Train.to_routine, the owner's draws are unchanged: true
+through the owner's lineage, the reader draws exactly the reference: true
+through the owner's lineage, the owner's draws are unchanged: true
+through an unconsumed owner, the reader draws exactly the reference: true
+through one computation embedding both, the reader draws exactly the reference: true
+through one computation embedding both, the owner's draws are unchanged: true
+through a checkpoint rewound, the reader draws exactly the reference: true
+through a checkpoint rewound, the owner's draws are unchanged: true
+another seed draws a different reference: true
+through a fresh context, the reader draws exactly the reference: true
+through a fresh context, the owner's draws are unchanged: true
+through Train.to_routine, the reader draws exactly the reference: true
+through Train.to_routine, the owner's draws are unchanged: true
+through the owner's lineage, the reader draws exactly the reference: true
+through the owner's lineage, the owner's draws are unchanged: true
+through an unconsumed owner, the reader draws exactly the reference: true
+through one computation embedding both, the reader draws exactly the reference: true
+through one computation embedding both, the owner's draws are unchanged: true
+through a checkpoint rewound, the reader draws exactly the reference: true
+through a checkpoint rewound, the owner's draws are unchanged: true
+it draws exactly the caller-seeded reference: true
+the reader's own code reads the seed and does not write it: true
+the owner's handout is its own code: it writes the seed already: true
+the reader's handout prepends the seed's fetch exactly once: true
+the reader's handout allocates the seed: true
+the reader's handout keeps its fragment metadata: true
+a repeated handout is the same computation: true
+a graph reading no seed is handed its own code: true
