@@ -6268,6 +6268,9 @@
 (test
  (name mma_bf16_seed_parity)
  (package neural_nets_lib)
+ ; The narrowing models describe FMA chains, independent of vendor contraction heuristics.
+ (action
+  (run %{test} --ocannl_fp_contract=true))
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
