@@ -1670,7 +1670,10 @@ files.
   27.2) is the next bullet's. Continuing past a hang needs device recovery, which is not built. `test/operations/metal_hang_declines` injects the typed report at a seed's timing sync
   through a wrapped `Autotune.Context_driver` (`Autotune.Make`), on any backend. Recombined
   contenders that the finals re-time from saved forms pass no attempt hook, so aim an injection at a
-  seed.
+  seed. Finals re-timing also counts a `Writes_may_have_occurred` decline before poisoning and
+  ending the search (gh-ocannl-2135), just as `try_spec` does. The same test locates the first beam
+  finals window from a healthy search's report and injects at that window's wait on replay; its
+  decline-count claim fails without the finals accounting, while the containment claims still pass.
 - **Every timing wait is bounded on the host, and an expiry ends the search** (gh-ocannl-2134).
   `time_routine` waits through `D.await_within` (`Context.await_within`), never a bare `sync`:
   the bound on a wait closing `depth` launches is `max 60 s (20 x depth x reference)`

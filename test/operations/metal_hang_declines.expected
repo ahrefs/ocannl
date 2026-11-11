@@ -9,6 +9,14 @@ the report ends the search at the hung candidate's Sync: true
 the timing lineage was poisoned with the hang's rendering: true
 the hung candidate was never timed: true
 no candidate was attempted after the hung one: true
+finals: the healthy control re-times at least two contenders: true
+finals: the healthy control computes the untuned values: true
+finals: the hang fired after that contender had a search reading: true
+finals: the report ends the search at the contender's Sync: true
+finals: the failure is in the first finals window, with none admitted: true
+finals: the hang is counted once, as a gpu_hang decline: true
+finals: the lineage is poisoned with the hang's rendering: true
+finals: the failed re-time adds no admitted reading: true
 untyped, the injection fired too: true
 untyped, the search raised the plain Failure itself: true
 untyped, nothing is counted as a gpu_hang decline: true
