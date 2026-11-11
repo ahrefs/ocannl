@@ -1219,9 +1219,11 @@ let c_convert_precision ~from ~to_ =
       (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _) )
     ->
       ("(" ^ c_typ_of_prec to_ ^ ")bfloat16_to_single(", ")")
-  | ( (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _),
-      Bfloat16_prec _ ) ->
-      ("single_to_bfloat16((float)", ")")
+  (* Every 32-bit integer is exact in double; wider sources need the integer bit codec. *)
+  | (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _), Bfloat16_prec _ ->
+      ("double_to_bfloat16((double)(", "))")
+  | Int64_prec _, Bfloat16_prec _ -> ("int64_to_bfloat16_bits(", ")")
+  | Uint64_prec _, Bfloat16_prec _ -> ("uint64_to_bfloat16_bits(", ")")
   (* Conversions involving FP8 and other types *)
   | Fp8_prec _, Half_prec _ -> ("FLOAT_TO_HALF(fp8_to_single(", "))")
   | Half_prec _, Fp8_prec _ -> ("single_to_fp8(HALF_TO_FLOAT(", "))")

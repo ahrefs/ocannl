@@ -121,8 +121,13 @@ files.
   settled that CUDA is one step. The `half_codec_exhaustive` / `bf16_codec_exhaustive` sweeps add
   17.2e9 doubles each (every top half, crossed with low halves that straddle the f32 rounding bit)
   against the same oracle, ~15 s each on 8 domains. A NaN is held only to NaN-ness across
-  backends. Not covered: an integer source wider than 2^24 into bf16 still goes through `(float)`
-  on cc and HIP.
+  backends.
+- Integer sources narrow to bf16 in one rounding too (gh-ocannl-2147). cc and HIP route up to
+  32-bit integers through exact f64, and 64-bit integers through the shared
+  `Builtins_cc.integer_bfloat16_builtins` bit codec: f64 itself loses one-integer offsets from
+  bf16 midpoints above 2^53. `integer_bf16_narrowing` assembles those offsets on the device from
+  materialized exact inputs, checks both midpoint parities and signs across every affected
+  exponent, and keeps half overflow and fp8 saturation as separate rows.
 - ROCm's fp8 narrowing is broken for tiny magnitudes and the HIP backend guards it
   UNCONDITIONALLY (gh-ocannl-647). `(__hip_fp8_e5m2)(float)` returns up to 2^-14 where the answer
   is a signed zero, for magnitudes around 4e-25 to 3.3e-24 — an out-of-range shift in
