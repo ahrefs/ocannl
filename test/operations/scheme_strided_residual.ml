@@ -748,7 +748,7 @@ let () =
    come. [~close] appends one output row over the given variables, the [Shape_row] a tensor's shape
    contributes, so closure sizes them together. *)
 
-let stages_closing = [ Row.Stage2; Stage3; Stage4; Stage5; Stage6; Stage7 ]
+let stages_closing = [ Row.Stage2; Stage3; Stage4; Stage5; Stage6a; Stage6b; Stage7 ]
 
 let staged ?(closing = stages_closing) ?(close = []) cs =
   let cs =

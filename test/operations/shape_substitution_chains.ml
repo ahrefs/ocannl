@@ -344,7 +344,7 @@ let () =
             env
         in
         let _, env =
-          List.fold [ Row.Stage3; Stage4; Stage5; Stage6; Stage7 ] ~init:(pending, env)
+          List.fold [ Row.Stage3; Stage4; Stage5; Stage6a; Stage6b; Stage7 ] ~init:(pending, env)
             ~f:(fun (pending, env) stage -> Row.solve_inequalities ~stage pending env)
         in
         List.map (Row.subst_row env (row_var r)).dims ~f:Row.dim_to_int_exn

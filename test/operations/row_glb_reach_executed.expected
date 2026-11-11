@@ -1,15 +1,39 @@
 u *. c[5|3]
-  u = 5|3, 15 distinct values for 15 cells
-u *. c[5|3]: the draw fills its use site: true
-(u + 1) *. c[5|3]
-  u = 5|1, 5 distinct values for 15 cells
-(u + 1) *. c[5|3]: the draw repeats along its use site (gh-544's close-down): true
+  draw = 5|3, 15 distinct values for 15 cells
+u *. c[5|3]: every draw closes to 5|3: true
+u *. c[5|3]: every draw fills its use site: true
 stretch (stretch (stretch u)) *. c[5|3]
-  u = 5|3, 15 distinct values for 15 cells
-stretch (stretch (stretch u)) *. c[5|3]: the draw fills its use site: true
+  draw = 5|3, 15 distinct values for 15 cells
+stretch (stretch (stretch u)) *. c[5|3]: every draw closes to 5|3: true
+stretch (stretch (stretch u)) *. c[5|3]: every draw fills its use site: true
+(u + v) *. c[5|3], two draws
+  draw = 5|3, 15 distinct values for 15 cells
+  draw = 5|3, 15 distinct values for 15 cells
+(u + v) *. c[5|3], two draws: every draw closes to 5|3: true
+(u + v) *. c[5|3], two draws: every draw fills its use site: true
+(u + z) *. c[5|3], z a constant with no axes
+  draw = 5|3, 15 distinct values for 15 cells
+(u + z) *. c[5|3], z a constant with no axes: every draw closes to 5|3: true
+(u + z) *. c[5|3], z a constant with no axes: every draw fills its use site: true
+(u + 1) *. c[5|3]
+  draw = 5|1, 5 distinct values for 15 cells
+(u + 1) *. c[5|3]: every draw closes to 5|1: true
+(u + 1) *. c[5|3]: every draw repeats along its use site: true
+((u + 1) + (u *. 2)) *. c[5|3], one draw with two consumers
+  draw = 5|1, 5 distinct values for 15 cells
+((u + 1) + (u *. 2)) *. c[5|3], one draw with two consumers: every draw closes to 5|1: true
+((u + 1) + (u *. 2)) *. c[5|3], one draw with two consumers: every draw repeats along its use site: true
 (u *. 2) *. 2, then a fixed index, batch 4
-  u = 4|1, 4 distinct values for 16 cells
-(u *. 2) *. 2, then a fixed index, batch 4: the draw repeats along its use site (gh-544's close-down): true
+  draw = 4|1, 4 distinct values for 16 cells
+(u *. 2) *. 2, then a fixed index, batch 4: every draw closes to 4|1: true
+(u *. 2) *. 2, then a fixed index, batch 4: every draw repeats along its use site: true
 u *. 2, then a fixed index, batch 4
-  u = 4|4, 16 distinct values for 16 cells
-u *. 2, then a fixed index, batch 4: the draw fills its use site: true
+  draw = 4|4, 16 distinct values for 16 cells
+u *. 2, then a fixed index, batch 4: every draw closes to 4|4: true
+u *. 2, then a fixed index, batch 4: every draw fills its use site: true
+[1;2] + (({w} + {v}) * [3;4;5])
+  3->2, 3->2
+[1;2] + (({w} + {v}) * [3;4;5]): the parameters take the shapes their use sites give: true
+[1;2] + relu (relu (({w} * [3;4;5]) *. ({v} * [6;7])))
+  3->2, 2->2
+[1;2] + relu (relu (({w} * [3;4;5]) *. ({v} * [6;7]))): the parameters take the shapes their use sites give: true

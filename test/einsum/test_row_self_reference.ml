@@ -241,8 +241,9 @@ let ineq res opnd = Row.Row_ineq { res; opnd; origin }
 let eq r1 r2 = Row.Row_eq { r1; r2; origin }
 
 let through_stages constraints env =
-  List.fold [ Row.Stage1; Stage2; Stage3; Stage4; Stage5; Stage6; Stage7 ] ~init:(constraints, env)
-    ~f:(fun (constraints, env) stage -> Row.solve_inequalities ~stage constraints env)
+  List.fold [ Row.Stage1; Stage2; Stage3; Stage4; Stage5; Stage6a; Stage6b; Stage7 ]
+    ~init:(constraints, env) ~f:(fun (constraints, env) stage ->
+      Row.solve_inequalities ~stage constraints env)
 
 let show_axes env (r : Row.t) =
   let r = Row.subst_row env r in
@@ -406,7 +407,7 @@ let () =
     (fun () ->
       let env =
         snd
-          (Row.solve_inequalities ~stage:Stage6
+          (Row.solve_inequalities ~stage:Stage6b
              [
                eq
                  (flanked rho1 ~beg:[ a; b; a ] ~dims:[])

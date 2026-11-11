@@ -35,7 +35,7 @@ let closed dims =
 
 let ineq res opnd = Row.Row_ineq { res; opnd; origin }
 let eq r1 r2 = Row.Row_eq { r1; r2; origin }
-let all_stages = [ Row.Stage1; Stage2; Stage3; Stage4; Stage5; Stage6; Stage7 ]
+let all_stages = [ Row.Stage1; Stage2; Stage3; Stage4; Stage5; Stage6a; Stage6b; Stage7 ]
 
 let through_stages constraints env =
   List.fold all_stages ~init:(constraints, env) ~f:(fun (constraints, env) stage ->
@@ -98,9 +98,10 @@ let () =
   scenario "the same refusal over an entry no shape closes: v <= e <= o" ~leaves:[] ~rows:[ u; o ]
     [ [ ineq v e; ineq e o ]; [ eq v u ]; [ eq o (closed [ 3 ]) ]; [ eq u (closed [ 4 ]) ] ]
 
-(* An alias does not lengthen a lower bound's reach: it is two hops with or without one. The first
-   scenario used to close its leaf to [3], through an edge the alias stored; with the equations in
-   the other order it did not. *)
+(* A lower bound travels the whole chain (gh-ocannl-2126), so the leaf closes to [3] with or without
+   an alias, in either equation order and under either emission. While a row's bound reached two
+   hops, these stores closed the leaf empty, except where the old emission's alias stored an edge
+   that carried it a third. *)
 let () =
   let v = fresh () and e = fresh () and o = fresh () and l = fresh () and u = fresh () in
   scenario "reach past an alias: v <= e <= o <= leaf, v := u, u := [3]" ~leaves:[ l ]
@@ -230,14 +231,21 @@ let () =
         (List.length solved > 0 && List.length solved < num_stores);
       p_all "every solution satisfies its store, on ground rows" solved ~f:(fun (store, rows) ->
           List.for_all store.steps ~f:(holds rows));
-      p_none "no store the old emission solved is refused" outcomes ~f:(fun (_, n, o) ->
-          Result.is_error n && Result.is_ok o))
+      (* The old emission stored the transitive closure of the bounds; now that a bound travels the
+         chain by itself, the stored pairs decide nothing. *)
+      p_none "the old emission decides or closes no store differently" outcomes ~f:(fun (_, n, o) ->
+          match (n, o) with
+          | Ok a, Ok b -> not (Poly.equal a b)
+          | Error _, Error _ -> false
+          | _ -> true))
 
-(* A guess waits for the call's fixpoint (gh-ocannl-2039). From Stage2 on, re-processing a recorded
-   [r ⊑ o] whose rows are each the other's only bound equates them. Made mid-pass, that guess
-   refused stores a solution existed for, by where the repeated pair sat in the call; it is now held
-   to the fixpoint. Each case states a store a solution exists for, and claims it is solved with the
-   rows that solution prescribes, or a store none exists for, and claims it is refused. *)
+(* No guess between two rows (gh-ocannl-2039, gh-ocannl-2142). From Stage2 on, re-processing a
+   recorded [r ⊑ o] whose rows were each the other's only bound used to equate them: made mid-pass
+   it refused stores a solution existed for, by where the repeated pair sat in the call, and held to
+   the call's fixpoint it still fired only on a repeat. It stood in for a bound's reach along a
+   chain; the bound travels the chain now (gh-ocannl-2126), and a repeated bound is no event. Each
+   case states a store a solution exists for, and claims it is solved with the rows that solution
+   prescribes, or a store none exists for, and claims it is refused. *)
 
 let ground env r =
   let r = Row.subst_row env r in
@@ -261,7 +269,7 @@ let solve_closing ~rows ~recorded at_stage2 =
   match
     let pending, env = Row.solve_inequalities ~stage:Stage1 (recorded @ init) Row.empty_env in
     let pending, env = Row.solve_inequalities ~stage:Stage2 (at_stage2 @ pending) env in
-    List.fold [ Row.Stage3; Stage4; Stage5; Stage6; Stage7 ] ~init:(pending, env)
+    List.fold [ Row.Stage3; Stage4; Stage5; Stage6a; Stage6b; Stage7 ] ~init:(pending, env)
       ~f:(fun (pending, env) stage -> Row.solve_inequalities ~stage pending env)
   with
   | _, env -> Ok (List.map rows ~f:(ground env))
@@ -274,9 +282,9 @@ let solved_to want = function
 let refused = Result.is_error
 
 (* The issue's store. Its stage-2 equations arrive either in ONE call, as the closing does it, or
-   one call each, as the sweep above feeds them. The second form is outside what a closing stage
-   assumes: a stage-2 call's fixpoint is where the held guess is made, so a call after it can only
-   find [e = u] already chosen. *)
+   one call each, as the sweep above feeds them. Both solve: while a guess was made at a stage-2
+   call's fixpoint, a call after it could only find [e = u] already chosen, and the second form was
+   refused. *)
 let issue_store ~one_call () =
   let e = fresh () and u = fresh () and v = fresh () in
   let a = fresh () and f = fresh () and w = fresh () in
@@ -309,10 +317,9 @@ let () =
         (rows_ok (issue_store ~one_call:true ()));
       p "the same store under the transitive emission: solved"
         (rows_ok (Row.with_transitive_row_emissions (issue_store ~one_call:true))));
-  Stdio.printf "the issue's store, one stage-2 call per equation: %s\n"
-    (match issue_store ~one_call:false () with
-    | Ok _ -> "solved"
-    | Error msg -> "Shape_error: " ^ msg)
+  Verdict.case "the issue's store, a call per equation" (fun () ->
+      p "the issue's store, one stage-2 call per equation: solved"
+        (rows_ok (issue_store ~one_call:false ())))
 
 let () =
   let pair () =
@@ -374,10 +381,9 @@ let () =
     (outcome ~repeat:false);
   Stdio.printf "the dim twin, the bound repeated first: %s\n" (outcome ~repeat:true)
 
-(* The contract over random stores: repeating a recorded bound anywhere in the stage-2 call refuses
-   no store the call solves without it. The stage-1 steps are solved one per call as before; every
-   later step goes into the one stage-2 call. What closes can still differ, and is counted on
-   stderr: the guess is made only on a pair re-processed, so a repeat can be what makes it. *)
+(* The contract over random stores: repeating a recorded bound anywhere in the stage-2 call changes
+   no store's outcome, neither whether it solves nor what closes. The stage-1 steps are solved one
+   per call as before; every later step goes into the one stage-2 call. *)
 let run_closing ?dup { steps; leaves } =
   let rows = Array.init num_rows ~f:(fun _ -> fresh ()) in
   let constraint_ = function
@@ -403,7 +409,7 @@ let run_closing ?dup { steps; leaves } =
           Row.solve_inequalities ~stage:Stage1 (constraint_ s :: pending) env)
     in
     let pending, env = Row.solve_inequalities ~stage:Stage2 (late @ pending) env in
-    List.fold [ Row.Stage3; Stage4; Stage5; Stage6; Stage7 ] ~init:(pending, env)
+    List.fold [ Row.Stage3; Stage4; Stage5; Stage6a; Stage6b; Stage7 ] ~init:(pending, env)
       ~f:(fun (pending, env) stage -> Row.solve_inequalities ~stage pending env)
   with
   | _, env ->
@@ -446,7 +452,5 @@ let () =
     (List.count outcomes ~f:(function Error _, Ok _ -> true | _ -> false))
     (List.count outcomes ~f:(function Ok a, Ok b -> not (Poly.equal a b) | _ -> false));
   Verdict.case "random stores, one stage-2 call" (fun () ->
-      p_none ~min:1000 "repeating a recorded bound in the stage-2 call refuses no store it solves"
-        outcomes ~f:(function
-        | Ok _, Error _ -> true
-        | _ -> false))
+      p_none ~min:1000 "repeating a recorded bound in the stage-2 call changes no store's outcome"
+        outcomes ~f:(fun o -> not (same o)))

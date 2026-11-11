@@ -59,7 +59,7 @@ let draw rows =
 
 let shape_row r = Row.Shape_row (r, origin)
 let ineq ~res ~opnd = Row.Row_ineq { res; opnd; origin }
-let stages_to_6 : Row.stage list = [ Stage1; Stage2; Stage3; Stage4; Stage5; Stage6 ]
+let stages_to_6 : Row.stage list = [ Stage1; Stage2; Stage3; Stage4; Stage5; Stage6a; Stage6b ]
 
 let run stages (ineqs, env) =
   List.fold stages ~init:(ineqs, env) ~f:(fun (ineqs, env) stage ->

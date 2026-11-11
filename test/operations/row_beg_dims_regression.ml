@@ -106,7 +106,7 @@ let test_4_glb_merge_symmetric () =
   let ineq2 = Row.Row_ineq { res = res2; opnd = rho_row; origin = dummy_origin } in
   let _remaining, env = Row.solve_inequalities ~stage:Stage1 [ ineq1; ineq2 ] Row.empty_env in
   let _remaining, env =
-    Row.solve_inequalities ~stage:Stage6 [ Row.Shape_row (rho_row, dummy_origin) ] env
+    Row.solve_inequalities ~stage:Stage6b [ Row.Shape_row (rho_row, dummy_origin) ] env
   in
   let result = Row.subst_row env rho_row in
   match result with
@@ -132,7 +132,7 @@ let test_4b_glb_leading_conflict_demotes_to_one () =
   let ineq2 = Row.Row_ineq { res = res2; opnd = rho_row; origin = dummy_origin } in
   let _remaining, env = Row.solve_inequalities ~stage:Stage1 [ ineq1; ineq2 ] Row.empty_env in
   let _remaining, env =
-    Row.solve_inequalities ~stage:Stage6 [ Row.Shape_row (rho_row, dummy_origin) ] env
+    Row.solve_inequalities ~stage:Stage6b [ Row.Shape_row (rho_row, dummy_origin) ] env
   in
   let result = Row.subst_row env rho_row in
   match result with
@@ -163,7 +163,7 @@ let test_4c_glb_trailing_conflict_demotes_to_one () =
   let ineq2 = Row.Row_ineq { res = res2; opnd = rho_row; origin = dummy_origin } in
   let _remaining, env = Row.solve_inequalities ~stage:Stage1 [ ineq1; ineq2 ] Row.empty_env in
   let _remaining, env =
-    Row.solve_inequalities ~stage:Stage6 [ Row.Shape_row (rho_row, dummy_origin) ] env
+    Row.solve_inequalities ~stage:Stage6b [ Row.Shape_row (rho_row, dummy_origin) ] env
   in
   let result = Row.subst_row env rho_row in
   match result with
@@ -237,7 +237,7 @@ let test_5b_monotonicity_negative_mutation () =
     let closed =
       try
         let _remaining, env_closed =
-          Row.solve_inequalities ~stage:Stage6
+          Row.solve_inequalities ~stage:Stage6b
             [ Row.Shape_row (rho_row, dummy_origin) ]
             env_after_subst
         in

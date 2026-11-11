@@ -1,14 +1,13 @@
-(** gh-ocannl-2024: how far a row's GLB travels, pinned as policy. A row's GLB does not travel by
-    itself: a solution with axes carries it two hops (gh-ocannl-1977), where a dimension's lower
-    bound travels all the way. So a leaf three operations from a solved row closes empty, and a
-    draw's sibling bounded only through a stage-6 row closes empty and repeats.
+(** gh-ocannl-2126: a row's lower bound travels the whole chain of bounds, as a dimension's does, so
+    what a row closes to does not depend on how many operations stand between it and the solved row
+    that bounds it. A row that resolves at its use sites closes to the bound; the operation results
+    on the way take no use-site bound themselves and close after their arguments, to what those
+    require (gh-544).
 
-    Both ways of closing that gap, forwarding a GLB along every variable-to-variable bound and only
-    into rows that resolve at their use sites, were built and compared under gh-ocannl-2024 and not
-    adopted: neither changed an executed program in the suite
-    (test/operations/row_glb_reach_executed pins the executed side), and both widen operation
-    results above a leaf that takes the bound, against gh-544. Each store below prints its closed
-    rows; the claims pin them. *)
+    While the bound reached two hops (gh-ocannl-2024), a leaf three operations from a solved row
+    closed empty, and a draw's sibling bounded only through a stage-6 row closed empty and repeated.
+    test/operations/row_glb_reach_executed pins the executed side. Each store below prints its
+    closed rows; the claims pin them. *)
 
 open! Base
 open Ocannl
@@ -35,7 +34,7 @@ let closed dims =
 
 let ineq res opnd = Row.Row_ineq { res; opnd; origin }
 let eq r1 r2 = Row.Row_eq { r1; r2; origin }
-let all_stages = [ Row.Stage1; Stage2; Stage3; Stage4; Stage5; Stage6; Stage7 ]
+let all_stages = [ Row.Stage1; Stage2; Stage3; Stage4; Stage5; Stage6a; Stage6b; Stage7 ]
 let block = 4
 
 (* A packed draw's round-up total over [rows], as [Uint4x32_to_prec] builds it. *)
@@ -102,23 +101,34 @@ let closes name build =
     | Error msg -> "Shape_error: " ^ msg);
   fun want -> match outcome with Ok shown -> List.equal String.equal shown want | Error _ -> false
 
-(* The issue's store: three hops from a solved row to a leaf. The same store past an alias is
-   test_row_bound_emissions'. *)
+(* A chain of [n] results between a solved row and a leaf: [u <= e_1 <= ... <= e_n <= leaf]. *)
+let chain n () =
+  let u = fresh () and l = fresh () in
+  let es = List.init n ~f:(fun _ -> fresh ()) in
+  Row.add_resolve_at_use (var_of l);
+  let rec bounds = function a :: (b :: _ as rest) -> ineq a b :: bounds rest | _ -> [] in
+  ([ l ], (u :: es) @ [ l ], [ bounds ((u :: es) @ [ l ]); [ eq u (closed [ 3 ]) ] ], [])
+
+(* gh-ocannl-2024's store, three hops from a solved row to a leaf, and the chain at other lengths.
+   The same store past an alias is test_row_bound_emissions'. *)
 let () =
-  Verdict.case "a leaf three hops away" @@ fun () ->
-  let shows =
-    closes "u <= e <= o <= leaf, u := [3]  (rows u e o leaf)" (fun () ->
-        let u = fresh () and e = fresh () and o = fresh () and l = fresh () in
-        Row.add_resolve_at_use (var_of l);
-        ([ l ], [ u; e; o; l ], [ [ ineq u e; ineq e o; ineq o l ]; [ eq u (closed [ 3 ]) ] ], []))
+  Verdict.case "a leaf at the end of a chain" @@ fun () ->
+  let lengths = [ 1; 2; 3; 6 ] in
+  let shown =
+    List.map lengths ~f:(fun n ->
+        let names = ("u" :: List.init n ~f:(fun i -> Printf.sprintf "e%d" (i + 1))) @ [ "leaf" ] in
+        closes
+          (Printf.sprintf "%s, u := [3]  (rows %s)" (String.concat ~sep:" <= " names)
+             (String.concat ~sep:" " names))
+          (chain n))
   in
-  (* Taking the bound here would widen [e] and [o] with the leaf: an operand cannot have more axes
-     than its result. When those rows are operation results, that is the widening gh-544 forbids. *)
-  pf "a leaf three hops away closes empty" (shows [ "[3]"; "[]"; "[]"; "[]" ])
+  (* The results between take the leaf's axes with it: a result has at least its operand's. *)
+  p_all "at every length the leaf takes the bound, and the results between it"
+    (List.zip_exn lengths shown) ~f:(fun (n, shows) ->
+      shows (List.init (n + 2) ~f:(fun _ -> "[3]")))
 
 (* gh-ocannl-1961's chain: a draw's sibling row [a] bounded only by [w], a use-site row whose own
-   bound closes it at stage 6. No executed program reaches it: whatever stands between a draw and a
-   stage-6 row in a program is an operation result, which closes down first. *)
+   bound closes it at stage 6. *)
 let () =
   Verdict.case "a draw's sibling bounded through a stage-6 row" @@ fun () ->
   let shows =
@@ -135,8 +145,8 @@ let () =
               Option.value_map (Row.get_dim_val env counter) ~default:"?" ~f:Int.to_string);
           ] ))
   in
-  pf "the sibling closes empty, so the draw of one block repeats along w's 5"
-    (shows [ "[]"; "[4]"; "[5]"; "1" ])
+  pf "the sibling takes w's 5, and the draw sizes its blocks for it"
+    (shows [ "[5]"; "[]"; "[5]"; "2" ])
 
 (* Two bounds meet in the leaf's GLB: incompatible ones join to the broadcast top. *)
 let () =

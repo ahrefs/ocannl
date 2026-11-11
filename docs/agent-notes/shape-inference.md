@@ -46,18 +46,31 @@ files.
   `test_default_init_std.ml`). Fixed-index output axes (`=> ...|0`, recognized via their
   `At_least_dim`) must not be equated by the stage-2 singleton-bounds heuristic, so that it
   broadcasts at stage-7.
-- The row singleton arm (`solve_row_ineq`: a recorded `r ⊑ o` re-processed from Stage2 on, each
-  row the other's only bound) is a GUESS, and load-bearing: it is how a parameter whose row only its
-  consumer bounds takes that consumer's row (without it `test_param_shape_error` and
-  `test_default_init_std` regress). A guess waits for the call's fixpoint (gh-ocannl-2039): the arm
-  holds the bare pair and `release_sole_bound` equates it there, unless one row's GLB is open in
-  the other (`<r>.[2] ⊑ o`, an infinite row). Made mid-pass, it refused stores a solution existed
-  for, by where a repeated pair sat in the list. A closing call's fixpoint is final: constraints fed
-  in a later stage-2 call find the pair already equated. Two things it still does not do: fire
-  independently of the repeat (it reads re-processed pairs only, so a repeat can change what closes,
-  never whether the store solves; `test_row_bound_emissions` counts it), and equating every
-  sole-bound pair at the fixpoint instead pre-empts the stage-3 closure guess
-  (`test_row_closure_guess`) and the rank refusals (`test_row_rank_cycle`).
+- Row closing goes by role, not by distance (gh-ocannl-2126). A row's GLB is forwarded along every
+  variable-to-variable bound (`solve_row_ineq`'s `glb_forward` and `forward_glb_to_operands`), as a
+  dimension's is. A row that resolves at its use sites closes to it. An operation result takes no
+  use-site bound and closes after its arguments: stage 6 is two stages, `Stage6a` with results held
+  open while use-site rows take their bounds and the constraints settle, and `Stage6b` closing the
+  results. A caller of `Row.solve_inequalities` that closes runs both (`Shape.finish_inference`,
+  `derive_projections`, a test's own stage list); a test of one stage-6 closing arm calls `Stage6b`. Three traps. Forwarding must count a change of
+  axes modulo variables and projection ids (`same_glb_axes`): the GLB join keeps the incoming
+  side's variable and mints a fresh broadcast top, so with `equal_row` as the change test
+  resnet_block's diamonds trade two renamed GLBs forever. A result closed while a leaf under it is
+  still taking its bound ends with fewer axes than its own operand ("Too many axes in an operand"
+  on `(u + v) *. c` with two draws). And no arm may equate two rows because each is the other's
+  only bound: that guess stands in for the reach along unary chains only, fires only on a
+  re-processed pair, and passes marks across the merge (`[1;2] + ({w} * {x})` closed the
+  unspecified axis between two parameters empty, `w`'s safe-to-guess input row merged with `x`'s
+  output row). Probe a change here on programs whose chains BRANCH, a result of two draws or a
+  parameter behind a pointwise result of two parameters: a unary chain exercises none of the
+  three. Pins: `test_row_glb_reach` (chains of every length), `row_glb_reach_executed`,
+  `test_row_bound_emissions` (neither a repeated bound nor the old emission changes a store).
+  Still open: the dimension twin of the guess (`solve_dim_ineq`, gh-ocannl-2141), and a
+  dimension's role. A row closing to its GLB takes the GLB's dimension variables with the role of
+  the result that minted them, so a draw behind `u + 1` fills its batch and repeats along the
+  literal's size-1 output axis; with a constant that has no axes it fills. Giving literals no
+  axes is not a shortcut: it moved 27 test actions, a transformer's logits closing `2x3x1` among
+  them.
 - Implicit (omitted) row specs are shared and safe-to-guess; an explicit `...` stays strict; row
   variables in kernel slots need the `|` prefix. Symbolic extents (`Row.Sym`, gh-490) are rigid:
   equal only to themselves, materialized at their declared maximum; `Total_elems` against them
@@ -636,19 +649,9 @@ files.
   are load-bearing, and for a long time nothing pinned them; dropping both passed the whole shape
   suite (`test_row_bound_emissions` does now). A bare variable carries no axes, so it stops at the
   entry: its emissions stored the transitive closure, 94% of the volume in a resnet, and duplicates
-  were not the cost. The pairs it stored moved two things a test can see. A store closes differently
-  in a corner, where an alias before a solution reached a third hop (an accident of equation order,
-  pinned), and the stage-2 singleton arm fires about 3% more often, since it needs a recorded pair
-  and a short list. `Row.with_transitive_row_emissions` is the old walk; compare against it on
-  random stores before touching this. Row GLBs reach two hops, dims all the way, and that is
-  policy (gh-ocannl-2024, pinned by `test_row_glb_reach` and `row_glb_reach_executed`). Both ways
-  of closing the gap, forwarding a GLB along every variable-to-variable bound or only into
-  resolve-at-use rows and parameters, were built and compared (the first commit of
-  staging#1804, removed by its second) and changed no executed program: executed repeats come from
-  gh-544's close-down of operation results. Before reopening it: forwarding must count a change
-  of axes modulo variables and projection ids. The GLB join keeps the incoming side's variable and
-  mints a fresh broadcast top, so with `equal_row` as the change test, resnet_block's diamonds
-  traded two renamed GLBs forever.
+  were not the cost. `Row.with_transitive_row_emissions` is the old walk;
+  `test_row_bound_emissions` claims it decides and closes every random store the same, since a
+  bound now travels by forwarding (the row-closing bullet above).
 - Substitution is indexed (gh-ocannl-1904): a solution visits the entries mentioning its variable
   and, for a dimension solution, the pending ones (`environment`'s doc comment), not the whole
   environment. Every write goes through `set_dim`/`set_row`, which index it: a `Tree_map.add` on
