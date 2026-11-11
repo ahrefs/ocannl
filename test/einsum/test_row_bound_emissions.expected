@@ -27,9 +27,9 @@ repeating a recorded bound in the stage-2 call changes no store's outcome: true
 d1<=d2 recorded, then d1=3, d2=1_(bcast_if_1) in one stage-2 call: solved to 3, the top: true
 the bound repeated between the equations: solved alike: true
 the bound repeated last: solved alike: true
-the dim twin, the bound repeated first: Shape_error: solved dimensions for axis: different bases
-the dim twin, the equations swapped, the bound repeated first: Shape_error: solved dimensions for axis: different bases
-the dim twin, the bound repeated alone, then a call per equation: Shape_error: solved dimensions for axis: different bases
+the dim twin, the bound repeated first: Shape_error: solved dimensions for axis: different sizes
+the dim twin, the equations swapped, the bound repeated first: Shape_error: solved dimensions for axis: different sizes
+the dim twin, the bound repeated alone, then a call per equation: Shape_error: solved dimensions for axis: different sizes
 d1<=d2 repeated, d1=3, d2=3: solved, equal: true
 d1<=d2 repeated, d1=3: solved, d2 closing above it: true
 d1<=d2 repeated, d1=3, d2=1_(default): refused, a default 1 is no top: true

@@ -12,7 +12,7 @@ refusal: solved dimensions for axis: different bases
 a named and a default dimension are refused as the second registers: true
 refusal: solved dimensions for axis: different bases
 a default dimension captured after a named one closed is refused: true
-refusal: solved dimensions for axis: different bases
+refusal: solved dimensions for axis: different sizes
 a size met after a free dimension closed to 1 is refused: true
 a free and a plain 1 capture in one inference agree: true
 refusal: solved dimensions for axis: different bases

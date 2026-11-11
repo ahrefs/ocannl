@@ -92,8 +92,8 @@ let () =
       let n = Shape.get_variable_ref "n" in
       ignore (dims (capture n (rgb3 ())) : int list);
       ignore (dims (capture n (plain 3)) : int list));
-  refused_with "a size met after a free dimension closed to 1 is refused"
-    ~sub:"solved dimensions for axis" (fun () ->
+  refused_with "a size met after a free dimension closed to 1 is refused" ~sub:"different sizes"
+    (fun () ->
       let n = Shape.get_variable_ref "n" in
       ignore (dims (capture n (open_leaf "q")) : int list);
       ignore (dims (capture n (plain 5)) : int list));

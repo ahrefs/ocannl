@@ -111,8 +111,42 @@ let test_inequality_no_propagation () =
     (String.equal basis Row.bcast_if_1) ~detail:(fun () ->
       Printf.sprintf "inequality leaked basis %S onto v" basis)
 
+(* Strict equality must diagnose size before basis (gh-ocannl-2132). Solved Dim_eq constraints enter
+   unify_dim directly, without capture setter checks. *)
+let test_equality_diagnostics () =
+  let check name expected a b =
+    List.iteri
+      [ (a, b); (b, a) ]
+      ~f:(fun order (d1, d2) ->
+        let message =
+          try
+            let _ =
+              Row.solve_inequalities ~stage:Stage1
+                [ Row.Dim_eq { d1; d2; origin = dummy_origin } ]
+                Row.empty_env
+            in
+            "accepted"
+          with Row.Shape_error (message, _) -> message
+        in
+        Verdict.pass_fail (Printf.sprintf "%s, order %d" name order) (String.equal message expected)
+          ~detail:(fun () -> message))
+  in
+  check "  unequal sizes against broadcast top report sizes"
+    "solved dimensions for axis: different sizes" (Row.get_default_dim ~d:5 ())
+    (Row.get_bcast_dim ~d:1 ());
+  check "  unequal sizes with equal tags keep the size mismatch"
+    "solved dimensions for axis: mismatch" (d ~basis:"rgb" 5) (d ~basis:"rgb" 3);
+  check "  unequal sizes with different named tags report sizes"
+    "solved dimensions for axis: different sizes" (d ~basis:"rgb" 5) (d ~basis:"xyz" 3);
+  check "  equal sizes against broadcast top still report bases"
+    "solved dimensions for axis: different bases" (Row.get_default_dim ~d:1 ())
+    (Row.get_bcast_dim ~d:1 ());
+  check "  equal sizes with different named tags still report bases"
+    "solved dimensions for axis: different bases" (d ~basis:"rgb" 3) (d ~basis:"xyz" 3)
+
 let () =
   Stdio.printf "Testing total-basis broadcast order:\n\n";
+  test_equality_diagnostics ();
   test_transitivity ();
   test_top_asymmetry ();
   test_advertisable_affordance ();

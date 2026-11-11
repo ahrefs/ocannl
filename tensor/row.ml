@@ -2878,9 +2878,11 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
         match fit with None -> ([ held ], env) | Some result -> result)
   in
   match (dim1, dim2) with
-  | Dim { basis = b1; _ }, Dim { basis = b2; _ } when not (String.equal b1 b2) ->
-      raise
-      @@ Shape_error ("solved dimensions for axis: different bases", [ Dim_mismatch [ dim1; dim2 ] ])
+  | Dim { d = d1; basis = b1; _ }, Dim { d = d2; basis = b2; _ } when not (String.equal b1 b2) ->
+      (* Strict equality checks sizes too, even against the broadcast top. Do not blame its tag when
+         the extents already disagree (gh-ocannl-2132). *)
+      let reason = if d1 = d2 then "different bases" else "different sizes" in
+      raise @@ Shape_error ("solved dimensions for axis: " ^ reason, [ Dim_mismatch [ dim1; dim2 ] ])
   | Dim { d = d1; basis = _; _ }, Dim { d = d2; basis = _; _ } when d1 = d2 ->
       (* Basis is total now: equality of two solved dims requires both equal size and equal tag (the
          preceding arm already rejected unequal tags). There is no unspecified ([None]) side to

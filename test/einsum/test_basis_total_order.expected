@@ -1,5 +1,15 @@
 Testing total-basis broadcast order:
 
+  unequal sizes against broadcast top report sizes, order 0: PASS
+  unequal sizes against broadcast top report sizes, order 1: PASS
+  unequal sizes with equal tags keep the size mismatch, order 0: PASS
+  unequal sizes with equal tags keep the size mismatch, order 1: PASS
+  unequal sizes with different named tags report sizes, order 0: PASS
+  unequal sizes with different named tags report sizes, order 1: PASS
+  equal sizes against broadcast top still report bases, order 0: PASS
+  equal sizes against broadcast top still report bases, order 1: PASS
+  equal sizes with different named tags still report bases, order 0: PASS
+  equal sizes with different named tags still report bases, order 1: PASS
 Transitivity: bridging through default no longer relates rgb and xyz
   3_default ⊑ 3_rgb rejects: PASS
   3_xyz ⊑ 3_default rejects: PASS
