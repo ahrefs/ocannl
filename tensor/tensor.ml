@@ -671,6 +671,8 @@ let params_in_program_order (t : t) =
         | None -> List.fold sub.children ~init:acc ~f:(fun acc c -> visit acc c.subtensor))
     in
     let params = List.rev (visit [] t) in
+    if List.length params <> Set.length t.params then
+      invalid_arg "Tensor.init_params: parameter set and tensor children disagree";
     let positions = Hashtbl.create (module Tn) in
     ignore
       (Asgns.fold_leaves t.forward.asgns ~init:0 ~f:(fun pos leaf ->

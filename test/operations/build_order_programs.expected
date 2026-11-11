@@ -1,3 +1,4 @@
+initialization refuses parameters absent from the tensor graph: true
 initialization order preserves fixed-program random draws bit for bit: true
 independent parameters initialize in forward operand order: true
 initializer dependencies precede readers despite reversed forward access: true

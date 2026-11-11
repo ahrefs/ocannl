@@ -72,6 +72,7 @@ type t = {
       (** The eventual shape of [t.value] and [t.diff.grad], incorporating the current state of
           shape inference. *)
   children : subtensor list;
+      (** Hand-built records must keep every member of [params] reachable through [children]. *)
   consumption : consumption;
 }
 [@@deriving sexp_of]

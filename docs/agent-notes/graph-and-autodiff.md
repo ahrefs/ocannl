@@ -240,8 +240,10 @@ files.
   ordering the draws; otherwise that accidental dependency would keep creation order in the
   parameter pool offsets. No node or counter is reminted: `build_order_programs` pins fixed-graph
   random draws bit for bit against separately initialized parameters, executed shared-initializer
-  dependencies (including copying slices), and held-parameter offsets across reversed conv/transformer builds (including
-  `buffer_aliasing`). Reversing graph construction still changes node-keyed random counters;
+  dependencies (including copying slices), and held-parameter offsets across reversed
+  conv/transformer builds (including `buffer_aliasing`). Reversing graph construction still changes node-keyed random counters;
   cross-build loss comparisons therefore keep the fixture's label-keyed parameter uploads.
   The dependency query adds slice-parent reads explicitly: `collect_nodes_guess_output` instead
   classifies those parents as materialization outputs, so its first set alone misses the edge.
+  A hand-built tensor record must keep its declared parameters reachable through `children`;
+  initialization refuses an incomplete walk rather than silently omitting an initializer.

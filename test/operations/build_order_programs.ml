@@ -297,6 +297,19 @@ let check name make ~changed =
     ((not (List.equal String.equal other.layout base.layout))
     || not (String.equal other.linked base.linked))
 
+(* Hand-built tensor records must keep the state set reachable through the operand graph. *)
+let () =
+  Tensor.unsafe_reinitialize ();
+  let first = TDSL.param "unreachable_first" ~value:1. () in
+  let second = TDSL.param "unreachable_second" ~value:2. () in
+  let root = NTDSL.number 0. in
+  let malformed = { root with Tensor.params = Set.union first.params second.params } in
+  p "initialization refuses parameters absent from the tensor graph"
+    (match Tensor.init_params malformed with
+    | _ -> false
+    | exception Invalid_argument msg ->
+        String.equal msg "Tensor.init_params: parameter set and tensor children disagree")
+
 (* Same graph, same seed and counters: initializing its two draws together in forward order must
    agree bit for bit with initializing each separately in creation order. *)
 let () =
