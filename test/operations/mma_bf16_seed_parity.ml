@@ -8,8 +8,8 @@
    narrows at every k step. The f32-accumulator arm ([simdgroup_float8x8] over bfloat operand
    fragments) is an f32 chain whose partials equal the serial f32 accumulation, so since
    gh-ocannl-2029 Metal resolves [Bf16_auto] wide ([Metal_mma.bf16_accum_wide]), as HIP has since
-   gh-ocannl-1051, and only [Bf16_narrow] keeps the narrow pair. Three parts, Metal legs only (every
-   claim skips by name elsewhere).
+   gh-ocannl-1051, and only [Bf16_narrow] keeps the narrow pair. The original three parts are Metal
+   legs only (every claim skips by name elsewhere); the f16 census below also runs on CUDA and HIP.
 
    (i) The discriminating fixture: one hand-scheduled [Tile_mma] statement against its serial twin,
    over a single intrinsic block (k = 8) and four (k = 32). The inputs make the three narrowing
@@ -31,7 +31,7 @@
 
    Mismatch counts go to stderr; the golden holds the claims. *)
 
-(* cc-fp-contract: not-cc -- every bitwise claim is a Metal leg; on cc it skips and nothing
+(* cc-fp-contract: not-cc -- every device bitwise claim is a GPU leg; on cc it skips and nothing
    executes *)
 
 open Base
@@ -68,30 +68,33 @@ let round_bf16 x =
 let fa = Ll_test.weighted ~weights:[| 37; 11 |] ~modulus:255 ~offset:(-127.) ~stride:(1. /. 32.)
 let fb = Ll_test.weighted ~weights:[| 29; 53 |] ~modulus:251 ~offset:(-125.) ~stride:(1. /. 32.)
 
-(* The three narrowing models of cell (i, j) over a k-deep reduction, as bf16 values. *)
-let models ~k =
+(* The three narrowing models of cell (i, j), parameterized by format and intrinsic k depth. *)
+let models ?(fa = fa) ?(fb = fb) ?(round = round_bf16) ?(k_index = fun _ kk -> kk) ?(block = 8) ~k
+    () =
   let cell f =
     Array.init (n * n) ~f:(fun t ->
         let i = t / n and j = t % n in
-        f (fun kk -> fa [| i; kk |] *. fb [| kk; j |]))
+        f (fun kk ->
+            let kk = k_index i kk in
+            fa [| i; kk |] *. fb [| kk; j |]))
   in
   let per_step =
     cell (fun prod ->
         let acc = ref 0. in
         for kk = 0 to k - 1 do
-          acc := round_bf16 (!acc +. prod kk)
+          acc := round (!acc +. prod kk)
         done;
         !acc)
   in
   let per_block =
     cell (fun prod ->
         let acc = ref 0. in
-        for b = 0 to (k / 8) - 1 do
+        for b = 0 to (k / block) - 1 do
           let partial = ref !acc in
-          for kk = 8 * b to (8 * b) + 7 do
+          for kk = block * b to (block * (b + 1)) - 1 do
             partial := !partial +. prod kk
           done;
-          acc := round_bf16 !partial
+          acc := round !partial
         done;
         !acc)
   in
@@ -101,7 +104,7 @@ let models ~k =
         for kk = 0 to k - 1 do
           acc := !acc +. prod kk
         done;
-        round_bf16 !acc)
+        round !acc)
   in
   (per_step, per_block, once)
 
@@ -113,21 +116,23 @@ let count_mismatches a b =
 let named name (comp : Ir.Assignments.comp) : Ir.Assignments.comp =
   { comp with asgns = Ir.Assignments.Block_comment (name, comp.asgns) }
 
-(* Every tensorized run starts its destination at [1000 + c] per cell, off every value these sums
-   reach, so a parity claim needs every cell overwritten (gh-ocannl-1625). *)
+(* Every tensorized run starts its destination at [-4096 - c] per cell, below every value either
+   fixture reaches, so a parity claim needs every cell overwritten (gh-ocannl-1625). *)
 let run_prefilled ctx routine (t : Tensor.t) =
   let tn = t.Tensor.value in
   let numel = Array.fold (Tn.dims_without_padding tn) ~init:1 ~f:( * ) in
   Context.run
-    (Context.set_values ctx tn (Array.init numel ~f:(fun c -> Float.of_int (1000 + c))))
+    (Context.set_values ctx tn (Array.init numel ~f:(fun c -> Float.of_int (-4096 - c))))
     routine
 
-let matmul ~prec ~k ~tag =
+let matmul_with_inputs ~fa ~fb ~prec ~k ~tag =
   let a = NTDSL.init ~l:(tag ^ "_a") ~prec ~i:[ k ] ~o:[ n ] ~f:fa () in
   let b = NTDSL.init ~l:(tag ^ "_b") ~prec ~i:[ n ] ~o:[ k ] ~f:fb () in
   let%op c = a * b in
   Tn.update_prec c.Tensor.value prec;
   c
+
+let matmul = matmul_with_inputs ~fa ~fb
 
 (* The readback and the mma census of one compile; [transform] rewrites the lowering. *)
 let run ?(prefill = false) ?(transform = fun o -> o) ~name (t : Tensor.t) =
@@ -164,24 +169,27 @@ let mode_name = function
   | Numerics.Bf16_wide -> "Bf16_wide"
   | Numerics.Bf16_narrow -> "Bf16_narrow"
 
-(* One tile/serial pair over a k-deep bf16 reduction under [mode]. *)
+(* One tile/serial pair; shared by the bf16 policies and the f16 intrinsic census below. *)
+let fixture_pair_at ?(fa = fa) ?(fb = fb) ~prec ~k ~tag () =
+  let matmul = matmul_with_inputs ~fa ~fb in
+  let serial, _ = run ~name:(tag ^ "_serial") (matmul ~prec ~k ~tag:(tag ^ "s")) in
+  let t = matmul ~prec ~k ~tag:(tag ^ "t") in
+  let tile, census =
+    run ~prefill:true ~name:(tag ^ "_tile")
+      ~transform:(fun opt -> Sched.apply (mma_schedule ~out:t.Tensor.value opt) opt)
+      t
+  in
+  (serial, tile, census)
+
 let fixture_pair ~mode ~k =
   Test_utils.with_policy (bf16_policy mode) (fun () ->
-      let tag = Printf.sprintf "bsp_%s_k%d" (String.lowercase (mode_name mode)) k in
-      let serial, _ =
-        run ~name:(tag ^ "_serial") (matmul ~prec:Ir.Ops.bfloat16 ~k ~tag:(tag ^ "s"))
-      in
-      let t = matmul ~prec:Ir.Ops.bfloat16 ~k ~tag:(tag ^ "t") in
-      let tile, census =
-        run ~prefill:true ~name:(tag ^ "_tile")
-          ~transform:(fun opt -> Sched.apply (mma_schedule ~out:t.Tensor.value opt) opt)
-          t
-      in
-      (serial, tile, census))
+      fixture_pair_at ~prec:Ir.Ops.bfloat16 ~k
+        ~tag:(Printf.sprintf "bsp_%s_k%d" (String.lowercase (mode_name mode)) k)
+        ())
 
 let () =
-  let per_step8, _, once8 = models ~k:8 in
-  let per_step32, per_block32, once32 = models ~k:32 in
+  let per_step8, _, once8 = models ~k:8 () in
+  let per_step32, per_block32, once32 = models ~k:32 () in
   (* The premises, from the inputs alone. Every product and every f32 partial sum of these operands
      is exact (derived by [Ll_test.exact_partials] at f32's 24 bits, over every k this file
      contracts), so the host's double arithmetic in [models] reproduces the device's f32 chains and
@@ -206,7 +214,7 @@ let () =
   in
   let report mode k =
     let serial, tile, _ = get mode k in
-    let per_step, per_block, once = models ~k in
+    let per_step, per_block, once = models ~k () in
     Stdio.eprintf
       "mma_bf16_seed_parity: %s k=%d mismatches (of %d) -- tile vs serial %d; tile vs per-step %d, \
        per-block %d, once %d; serial vs per-step %d, once %d (not part of the golden)\n\
@@ -345,3 +353,87 @@ let () =
       p label
         (String.equal auto (fingerprint Numerics.Bf16_wide)
         && not (String.equal auto (fingerprint Numerics.Bf16_narrow))))
+
+(* === f16 tensor-unit narrowing census (gh-ocannl-2151) === *)
+(* Keep the pre-existing bf16 Metal legs above. These fixtures deliberately select the narrow
+   f16 arm, independent of the profile, and compare with exact host predictions rather than
+   inferring narrowing from the fragment's declared type. The model table is measured evidence,
+   not a vendor guarantee: new hardware may refute it. CUDA sm_120 and HIP gfx1151 are probed at
+   k=16/64; Metal M4 Max at k=8/32. Earlier Apple families remain unmeasured. *)
+let () =
+  let on_cuda = String.is_substring backend_name ~substring:"cuda" in
+  let on_hip = String.is_substring backend_name ~substring:"hip" in
+  let gpu_leg = Verdict.leg ~when_:(on_metal || on_cuda || on_hip) ~on:backend_name () in
+  (* One-sign operands isolate narrowing from gfx11 WMMA's signed-cancellation residue
+     (gh-ocannl-1420/1509). Both indices still discriminate. The Dune action also pins
+     fp_contract=true: the serial twin must use explicit FMAs rather than clang's per-kernel
+     contraction choice (the unpinned k=16 HIP serial twin missed the FMA model in 49 cells). *)
+  let fa indices = fa indices +. 4. in
+  let fb indices = fb indices +. 4. in
+  let hip_leg = Verdict.leg ~when_:on_hip ~on:backend_name () in
+  let block = if on_metal then 8 else 16 in
+  List.iter
+    [ ("one-block", block); ("four-block", 4 * block) ]
+    ~f:(fun (depth, k) ->
+      let step, blocked, once = models ~fa ~fb ~round:Ir.Ops.round_to_half ~block ~k () in
+      (* gfx1151's f16 WMMA narrows per pair, in a row-dependent order within each native 16-deep
+         block: odd rows visit its upper eight terms first. [lxor 8] preserves the block number at
+         both k depths. This is measured behaviour, not a claim about other AMD GPU families. *)
+      let hip_pairs =
+        lazy
+          (let _, paired, _ =
+             models ~fa ~fb ~round:Ir.Ops.round_to_half ~block:2
+               ~k_index:(fun i kk -> if i % 2 = 0 then kk else kk lxor 8)
+               ~k ()
+           in
+           paired)
+      in
+      p_all
+        (Printf.sprintf "f16 %s: every product and partial is exact in f32, with one-sign products"
+           depth)
+        (Ll_test.matmul_products ~m:n ~n ~k fa fb)
+        ~f:(Ll_test.exact_partials ~sig_bits:24);
+      pf "f16 %s: per-step differs from both wider models" depth
+        (differ step once && differ step blocked);
+      pf "f16 %s: per-block equals once only for a single block" depth
+        (Bool.equal (not (differ blocked once)) (k = block));
+      in_legf ~leg:hip_leg "f16 %s: HIP ordered pairs differ from all three baseline models" depth
+        (fun label ->
+          let paired = Lazy.force hip_pairs in
+          p label (differ paired step && differ paired blocked && differ paired once));
+      let pair =
+        lazy
+          (Test_utils.with_policy
+             (fun p -> { p with Numerics.fp16_arithmetic = Numerics.Fp16_narrow })
+             (fun () ->
+               let serial, tile, census =
+                 fixture_pair_at ~fa ~fb ~prec:Ir.Ops.half ~k
+                   ~tag:(Printf.sprintf "bsp_f16_narrow_k%d" k)
+                   ()
+               in
+               Stdio.eprintf
+                 "f16 narrowing: backend=%s k=%d block=%d tile mismatches: step=%d block=%d \
+                  once=%d; serial: step=%d block=%d once=%d (not part of the golden)\n\
+                  %!"
+                 backend_name k block (count_mismatches tile step) (count_mismatches tile blocked)
+                 (count_mismatches tile once) (count_mismatches serial step)
+                 (count_mismatches serial blocked) (count_mismatches serial once);
+               if on_hip then
+                 Stdio.eprintf "HIP ordered pairs: k=%d mismatches=%d (not part of the golden)\n%!"
+                   k
+                   (count_mismatches tile (Lazy.force hip_pairs));
+               (serial, tile, census)))
+      in
+      in_legf ~leg:gpu_leg "f16 %s: the narrow tile renders tensor-unit intrinsics" depth
+        (fun label ->
+          let _, _, census = Lazy.force pair in
+          p label (Ll_test.all_rendered ~what:label Ir.C_syntax.Mma_intrinsics census));
+      in_legf ~leg:gpu_leg "f16 %s: the serial loop equals the per-step model" depth (fun label ->
+          let serial, _, _ = Lazy.force pair in
+          p_all2 label serial step ~f:Float.equal);
+      in_legf ~leg:gpu_leg "f16 %s: the tensor unit equals the backend narrowing model" depth
+        (fun label ->
+          let _, tile, _ = Lazy.force pair in
+          p_all2 label tile
+            (if on_hip then Lazy.force hip_pairs else if on_metal then step else blocked)
+            ~f:Float.equal))
