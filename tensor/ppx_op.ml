@@ -1271,6 +1271,45 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
             (vbs, { c with pc_rhs }))
       in
       (reduce_vbss vbss, { expr with pexp_desc = Pexp_match (expr1, cases) })
+  | { pexp_desc = Pexp_try (body, cases); _ } ->
+      let vbs, body = loop ?label body in
+      let vbss, cases =
+        List.unzip
+        @@ List.map cases ~f:(fun ({ pc_lhs; pc_rhs; _ } as c) ->
+            let vbs, pc_rhs = loop_under "try case" pc_lhs ?label pc_rhs in
+            (vbs, { c with pc_rhs }))
+      in
+      (reduce_vbss (vbs :: vbss), { expr with pexp_desc = Pexp_try (body, cases) })
+  | { pexp_desc = Pexp_lazy body; _ } ->
+      let vbs, body = loop ?label body in
+      (vbs, { expr with pexp_desc = Pexp_lazy body })
+  | { pexp_desc = Pexp_construct (name, Some arg); _ } ->
+      let vbs, arg = loop ?label arg in
+      (vbs, { expr with pexp_desc = Pexp_construct (name, Some arg) })
+  | { pexp_desc = Pexp_variant (name, Some arg); _ } ->
+      let vbs, arg = loop ?label arg in
+      (vbs, { expr with pexp_desc = Pexp_variant (name, Some arg) })
+  | { pexp_desc = Pexp_letop { let_; ands; body }; _ } ->
+      (* Binding expressions see the outer scope; all patterns bind only in the body. *)
+      let bindings = let_ :: ands in
+      let vbss, bindings =
+        List.unzip
+        @@ List.map bindings ~f:(fun binding ->
+            let vbs, pbop_exp = loop binding.pbop_exp in
+            (vbs, { binding with pbop_exp }))
+      in
+      let bound_late =
+        List.fold bindings ~init:late ~f:(fun late binding ->
+            late_binder ~late "let operator" binding.pbop_pat)
+      in
+      let vbs, body =
+        translate ~dsl_name ~num_configs ~is_toplevel:false ~opt_label ~late:bound_late ?label body
+      in
+      ( reduce_vbss (vbss @ [ vbs ]),
+        {
+          expr with
+          pexp_desc = Pexp_letop { let_ = List.hd_exn bindings; ands = List.tl_exn bindings; body };
+        } )
   | { pexp_desc = Pexp_let (recflag, bindings, body); _ } ->
       (* The names the bindings bind: in scope in the body, and in the right-hand sides of a [let
          rec]. *)

@@ -1,0 +1,8 @@
+try body parameter is shared: true
+try handler parameter is shared: true
+try body and handler parameters differ: true
+lazy parameter is shared: true
+constructor contains a tensor: true
+variant contains a tensor: true
+let operators construct a tensor: true
+let operator right-hand sides retain outer scope: true

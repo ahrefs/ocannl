@@ -56,9 +56,11 @@ files.
   value", or a silent capture of an outer value of that name (a body `let n` shadowing a `~n`
   bound before `()` read the parameter). Every binder `translate` reaches is below the lift
   point: only the toplevel function's `()` is one, and `let%op f = let n = .. in fun () ..` makes
-  that function non-toplevel. Constructs `translate` does not descend into (`try`, `lazy`, a
-  constructor's argument, `let*`) leave their declarations unexpanded, so bind nothing. And an
-  unlabelled, unannotated parameter with `non_tensor_evidence` (a stride/dilation identifier of
+  that function non-toplevel. The `try` body and handlers, `lazy` body, constructor/variant
+  arguments and `let*`/`and*` binding expressions and body are traversed too (gh-ocannl-2166). Handler patterns and all
+  binding-operator patterns are late binders in their bodies; binding-operator right-hand sides
+  keep the outer scope. Inline declarations still lift out of these wrappers, including `lazy`.
+  An unlabelled, unannotated parameter with `non_tensor_evidence` (a stride/dilation identifier of
   a literal spec through `Ppx_shared.einsum_spec_identifiers` -- an operator's, or a named
   form's first positional argument (`Ppx_shared.named_form_spec`, gh-ocannl-2060) -- the operand
   of `!.`/`!..`, the exponent of `**.`, the argument of `Float.of_int`/`float_of_int`/
