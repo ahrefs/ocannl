@@ -11,6 +11,7 @@
 
 open Base
 open Ocannl
+open Operation.DSL_modules
 open Verdict.Claims
 
 type outcome = Closed of int list | Refused of string
@@ -72,8 +73,34 @@ let () =
      refused at the closure, as a shape error, not an assertion failure. *)
   refused_naming_the_deduction ~spec:"2*a -> 3*o" ~output:[ 9 ]
     "the closure refuses a non-dividing stride";
-  (* Nothing sizes the kernel nor the window's iterator, and the closure closes [x] before it
-     settles the window: it refuses where [o = 1], [k = 9] would do. A loud refusal, not the
-     assertion failure it used to be; which constraint it names is the closure's business. *)
-  p "x -> 2*o<+k over 9: an underdetermined window is a shape error"
-    (match close ~spec:"x -> 2*o<+k" ~output:[ 9 ] with Refused _ -> true | Closed _ -> false)
+  (* Neither the kernel nor the iterator is sized explicitly: closing the iterator at 1 lets the
+     extent 9 infer the kernel as 9. The plain input must wait for that equation. *)
+  closes_to ~spec:"x -> 2*o<+k" ~output:[ 9 ] [ 9; 9 ];
+  closes_to ~spec:"2*o<+k -> x" ~output:[ 9 ] [ 9; 9 ];
+  closes_to ~spec:"x -> 2*o<+2*k" ~output:[ 9 ] [ 9; 9 ]
+
+(* Execute the same deduction through a real terminal, then reduce its inferred input axis. Its
+   row-major offsets discriminate both axes: a wrongly broadcast input cannot pass. The context is
+   explicitly CPU because the regression is shape closure and projection derivation. *)
+let () =
+  case "a forward run uses both inferred axes" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let sh =
+        Shape.of_spec ~deduced:Input_equals_output ~debug_name:"deduced_forward" ~id:(-1)
+          "x -> 2*o<+k"
+      in
+      let t =
+        NTDSL.term ~label:[ "deduced_forward" ] ~batch_dims:[] ~fetch_op:Range_over_offsets ()
+      in
+      Shape.infer_equal t.Tensor.shape sh;
+      Shape.infer_equal sh
+        (Shape.make ~batch_dims:[] ~output_dims:[ 9 ] ~debug_name:"other" ~id:(-1) ());
+      p "the terminal closes with two axes of 9"
+        (Array.equal Int.equal (Shape.to_dims t.shape) [| 9; 9 |]);
+      let reduced = NTDSL.einsum1 "i -> j => i" t () in
+      Train.set_materialized reduced.Tensor.value;
+      let ctx = Train.forward_once (Context.cpu ()) reduced in
+      pf_close "each output sums its own nine input offsets"
+        (Context.get_values ctx reduced.value)
+        (Array.init 9 ~f:(fun i -> Float.of_int (324 + (9 * i))))
+        ~tol:(fun _ -> 0.))

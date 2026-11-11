@@ -591,11 +591,11 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; ocannl-backend: cc -- the forward context is explicitly Context.cpu (): these claims cover shape
+ ; closure and projection derivation.
  (name input_equals_output_deferral)
  (package neural_nets_lib)
- (deps
-  ocannl_config
-  (env_var OCANNL_BACKEND))
+ (deps ocannl_config)
  (modules input_equals_output_deferral)
  (libraries base ocannl stdio arrayjit.verdict))
 

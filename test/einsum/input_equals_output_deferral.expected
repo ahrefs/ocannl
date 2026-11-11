@@ -6,5 +6,11 @@ a, o, 2*a<+j -> d, c, 2*o<+k: the input is sized by the deferred equation: true
 2*a -> 3*o: the input is sized by the deferred equation: true
 2*a -> 3*o, output 9: refused
 2*a -> 3*o: the closure refuses a non-dividing stride, naming the deduction: true
-x -> 2*o<+k, output 9: refused
-x -> 2*o<+k over 9: an underdetermined window is a shape error: true
+x -> 2*o<+k, output 9: 9,9
+x -> 2*o<+k: the input is sized by the deferred equation: true
+2*o<+k -> x, output 9: 9,9
+2*o<+k -> x: the input is sized by the deferred equation: true
+x -> 2*o<+2*k, output 9: 9,9
+x -> 2*o<+2*k: the input is sized by the deferred equation: true
+the terminal closes with two axes of 9: true
+each output sums its own nine input offsets: true
