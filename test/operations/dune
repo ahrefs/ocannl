@@ -13526,8 +13526,8 @@
   (pps ppx_here ppx_ocannl)))
 
 ; gh-ocannl-2134: a timing wait that outlives its host-side bound is a typed wait_bound decline that
-; ends the search (injected through a wrapped driver, on any backend); a Metal leg runs the healthy
-; control through Metal's own bounded wait.
+; ends the search (injected through a wrapped driver, on any backend); a GPU leg runs the healthy
+; control through the device's own bounded wait.
 
 (test
  (name wait_bound_declines)
@@ -13541,7 +13541,7 @@
   (pps ppx_here ppx_ocannl)))
 
 ; gh-ocannl-2134: the production bounded wait gives up on still-running (finite) work, and the
-; device it gave up on refuses sync and release instead of blocking; multidev_cc, plus a Metal leg.
+; device it gave up on refuses sync and release instead of blocking; multidev_cc, plus a GPU leg.
 
 (test
  (name wait_bound_device_wedged)

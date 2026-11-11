@@ -11,9 +11,10 @@
    The healthy control is the same search with no fault: no wait expires, and every wait's bound is
    at least the floor. The bound's arithmetic is pinned directly ([Autotune.wait_bound_s]).
 
-   On Metal a leg runs the healthy control on the device itself, through Metal's own bounded wait
-   (the production [await_within], which must not expire on a normal search). The real expiry path,
-   with the device mark it leaves, is test/operations/wait_bound_device_wedged. *)
+   On a GPU backend a leg runs the healthy control on the device itself, through its own bounded
+   wait (Metal's, or CUDA's and HIP's generic stream poll) (the production [await_within], which
+   must not expire on a normal search). The real expiry path, with the device mark it leaves, is
+   test/operations/wait_bound_device_wedged. *)
 
 open Base
 open Ocannl
@@ -246,11 +247,12 @@ let () =
     (match control.result with Error (SO.Wait_bound_expired _) -> true | Ok _ | Error _ -> false);
   p_exists "an expiry at the diagnostic control poisons the lineage with it" control.poisonings
     ~f:(fun (_, exn) -> match exn with SO.Wait_bound_expired _ -> true | _ -> false);
-  (* --- The Metal leg: the healthy control through Metal's own bounded wait. *)
+  (* --- The GPU leg: the healthy control through the device's own bounded wait. *)
   let ctx = Context.auto () in
   let backend_name = Context.backend_name ctx in
+  let on_gpu = not (Ir.Backend_intf.renders_on_host_pool (Context.backend_facts ctx)) in
   Context.release ctx;
-  let leg = Verdict.leg ~when_:(String.equal backend_name "metal") ~on:backend_name () in
+  let leg = Verdict.leg ~when_:on_gpu ~on:backend_name () in
   Verdict.in_leg ~leg "on the device, a normal search's bounded waits never expire" (fun claim ->
       let r = search ~make_ctx:Context.auto () in
       (* A search that failed contributes no waits, so its claim fails on the empty population. *)

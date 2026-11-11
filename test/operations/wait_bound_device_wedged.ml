@@ -5,9 +5,9 @@
    dispatch, is waited for with a zero bound, which only completed work could meet. Asserted on
    [multidev_cc] (worker-domain devices, the generic is_idle poll): a generous bound waits it out
    ([true]); a zero bound answers [false]; afterwards [Context.sync] and [Context.release] of a
-   context on that device raise [Device_wedged] at once rather than block and return. A Metal leg
-   asserts the same through Metal's own bounded wait. The mark lasts for the process, hence this
-   executable of its own. *)
+   context on that device raise [Device_wedged] at once rather than block and return. A GPU leg
+   asserts the same on the device: Metal's own bounded wait, CUDA's and HIP's generic stream poll.
+   The mark lasts for the process, hence this executable of its own. *)
 
 open Base
 open Ocannl
@@ -64,9 +64,13 @@ let () =
     o.release_refused;
   let ctx = Context.auto () in
   let backend_name = Context.backend_name ctx in
-  let leg = Verdict.leg ~when_:(String.equal backend_name "metal") ~on:backend_name () in
+  let leg =
+    Verdict.leg
+      ~when_:(not (Ir.Backend_intf.renders_on_host_pool (Context.backend_facts ctx)))
+      ~on:backend_name ()
+  in
   Verdict.in_leg ~leg
-    "metal: a generous bound waits; a zero bound gives up; the marked device refuses sync and \
-     release" (fun claim ->
+    "on a GPU device: a generous bound waits; a zero bound gives up; the marked device refuses \
+     sync and release" (fun claim ->
       let o = exercise (fun () -> ctx) in
       p claim (o.control && o.expired && o.sync_refused && o.release_refused))
