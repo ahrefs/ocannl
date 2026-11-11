@@ -1170,11 +1170,15 @@ binding to <code>tropical</code> and <code>+++</code> binding to
 <code>outer_sum</code>; unary <code>@^^</code> binding to
 <code>einmax1</code> (the operator-to-function tables are
 <code>einsum_binary_ops</code>/<code>einsum_unary_ops</code> in
-<code>tensor/ppx_shared.ml</code>). When the einsum specification is a
-literal string, we support two syntax patterns: the string can either
-directly follow the operator (infix-style notation), or the string can
-follow the second argument (mixfix-style notation). When the spec string
-is an identifier, it must directly follow the operator.</p>
+<code>tensor/ppx_shared.ml</code>). The ternary einsum has no operator:
+write the named form <code>einsum3 &quot;ij; jk; km =&gt; im&quot; a b c</code>
+(outside the syntax extensions, <code>TDSL.einsum3 spec a b c ()</code>
+or <code>NTDSL.einsum3 spec a b c ()</code>, as for the other named
+forms). When the einsum specification is a literal string, we support
+two syntax patterns: the string can either directly follow the operator
+(infix-style notation), or the string can follow the second argument
+(mixfix-style notation). When the spec string is an identifier, it must
+directly follow the operator.</p>
 <p><code>+*</code>, <code>+++</code> and <code>++</code> use addition
 for the accumulation operation; <code>@^+</code> and <code>@^^</code>
 use maximum. The pairwise operation combined with the accumulation:
@@ -1280,7 +1284,14 @@ variable by a constant coefficient with the <code>*</code> sign.</li>
 e.g. <code>&quot;2*i+3*k&quot;</code>, but under the <code>%op</code> and
 <code>%cd</code> syntax extensions, it can also be an identifier of an
 integer value,
-e.g. <code>let stride = 2 and dilation = 3 in [%op &quot;input&quot; +* &quot;stride * a + dilation * b; b=&gt;a,&quot; &quot;kernel&quot;]</code>.</li>
+e.g. <code>let stride = 2 and dilation = 3 in [%op &quot;input&quot; +* &quot;stride * a + dilation * b; b=&gt;a,&quot; &quot;kernel&quot;]</code>.
+The same holds for the literal spec of the named forms –
+<code>einsum</code>, <code>einsum1</code>, <code>einsum3</code>,
+<code>outer_sum</code>, <code>tropical</code>, <code>einmax1</code>,
+<code>concat</code>, <code>concat_sum</code> (its first argument,
+unqualified; gh-ocannl-2060):
+<code>einsum &quot;stride*o&lt;+dilation*k; k =&gt; o&quot; x w</code>. A
+named-form spec that reads no identifier is passed on as written.</li>
 <li>Note the comma above: <code>*</code> and <code>+</code> select the
 multichar mode, so a spec with a stride or a window always separates its
 axes by commas,
@@ -1602,6 +1613,20 @@ of <code>b</code></td>
 <td>Replace middle: requires knowing sizes of <code>a</code> and
 <code>c</code></td>
 </tr>
+<tr>
+<td><code>a^b^c =&gt; a^c</code></td>
+<td>Drop a segment: the result is <code>a</code> then
+<code>c</code></td>
+</tr>
+<tr>
+<td><code>a^c =&gt; a^b^c</code></td>
+<td>Write around a segment: <code>b</code> is left unwritten (zero in a
+fresh result)</td>
+</tr>
+<tr>
+<td><code>a^b^c =&gt; c^b^a</code>, <code>a^b^c =&gt; c^a</code></td>
+<td>Reorder segments, dropping or not</td>
+</tr>
 </tbody>
 </table>
 <p><strong>Integer constants in concatenation</strong>: an integer
@@ -1614,6 +1639,23 @@ the start and 5 at the end</p>
 <p>No other slot names an integer component, so it is skipped: an
 extraction does not read it, a replacement does not write it. An integer
 component must be positive.</p>
+<p><strong>Integer components carry the <code>default</code>
+basis</strong> (a short-term rule, gh-ocannl-2093): an integer is a size
+with no basis of its own, so a concatenation of integers alone sums to
+an unannotated axis, which does not fuse with a named one. On an operand
+<code>x</code> whose axis is <code>rgb</code> of size 5,
+<code>x ++ &quot;2^a =&gt; a&quot;</code> is accepted, the variable <code>a</code>
+taking the <code>rgb</code> claim (its binding records it, so it cannot
+take a second named basis later); <code>x ++ &quot;2^3 =&gt; &quot;</code> is
+refused with <code>solved dimensions for axis: different bases</code>. A
+fixed claim-free tag for integers would be unsound: a solved size that
+meets another records no basis, so a claim-free <code>5</code> could
+meet <code>rgb 5</code> and later <code>hsv 5</code>, merging the two
+silently. Workaround: name a segment, as in <code>2^a</code>. The
+principled answer, an integer component taking a slice of its partner’s
+basis, is the algebra of concatenation bases of gh-ocannl-2095. Pinned
+in <code>test/einsum/concat_integer_components.ml</code> and
+<code>test/operations/test_concat_dim_solver.ml</code>.</p>
 <p><strong>Sizing the components</strong>: every component must have a
 size. A component another slot names gets it from that tensor; the
 others take an integer, or a captured variable set with
@@ -1639,11 +1681,27 @@ and leaves the rest of <code>target</code> unchanged. The gradient of an
 extraction flows into the selected segment only. These forms are
 executed against oracles in
 <code>test/einsum/concat_extraction.ml</code>.</p>
+<p><strong>Segments correspond by name</strong>: when two slots both
+concatenate components of one axis, each component is matched by its
+label, and each slot places it at its own offset. A segment one slot
+does not list is one that slot takes no part in, so the two sides may
+differ in order and in what they list: <code>a^b^c =&gt; c^b^a</code>
+reverses the segments, <code>a^b^c =&gt; a^c</code> drops
+<code>b</code>, <code>a^b^c =&gt; c^a</code> does both, and
+<code>a^c =&gt; a^b^c</code> writes <code>a</code> and <code>c</code>
+around a <code>b</code> no operand fills – zero under <code>++</code>,
+its prior contents under <code>%cd</code> <code>=:</code>. An integer
+component is matched by nothing, as everywhere:
+<code>a^2^c =&gt; a^c</code> drops two cells,
+<code>a^c =&gt; a^2^c</code> leaves two unwritten. Gradients follow the
+segments back, and a dropped segment gets none. These forms, binary ones
+(<code>a^b^c; a^c =&gt; a^c</code>) among them, are executed in
+<code>test/einsum/concat_segment_correspondence.ml</code>
+(gh-ocannl-2087).</p>
 <p><strong>What a concatenated axis cannot say</strong>: a concatenated
 axis is one axis of alternatives, so a position lies in one segment.
-Three forms therefore have no meaning, and are refused with a shape
-error when the operation is built, whatever the sizes
-(gh-ocannl-2017):</p>
+Four forms therefore have no meaning, and are refused with a shape error
+when the operation is built, whatever the sizes (gh-ocannl-2017):</p>
 <ul>
 <li>One tensor’s axes needing two components of the same concatenation:
 <code>p^q =&gt; p, q</code>, <code>a, b =&gt; a^b</code>,
@@ -1660,6 +1718,14 @@ repeat the reduced operand in every cell, use a plain axis and size it
 <li>A <code>++^</code> concatenation with its operands out of the order
 of the segments they fill: <code>(x, y) ++^ &quot;b; a =&gt; a^b&quot;</code>.
 Write <code>(y, x) ++^ &quot;a; b =&gt; a^b&quot;</code>.</li>
+<li>A concatenation listing one component twice:
+<code>a =&gt; a^a</code>, <code>a^b =&gt; a^b^a</code>,
+<code>a^b^a =&gt; a^b</code>, <code>a; a =&gt; a^a</code>. A segment is
+one range of positions with one index, so only one copy would be read or
+written (it was, silently, gh-ocannl-2087). To repeat a tensor along an
+axis, pass it once per copy under distinct components:
+<code>(x, x) ++^ &quot;a; b =&gt; a^b&quot;</code>. Integer components may repeat
+(<code>2^a^2 =&gt; a</code>): each is its own skipped segment.</li>
 </ul>
 <p>The same forms on an operand are defined where every cell has a
 reading: an operand concatenation no component of which the result names
@@ -1821,7 +1887,10 @@ row – after <code>2, 3</code>, an operand of <code>3, 2</code> or
 <code>6</code> is refused – and a dimension captured again has the row’s
 product. A reference whose last binding before the closure was a
 dimension carries only the number, so a row captured from it later is
-tied by product, as within one inference. That tie is not transitive
+tied by product, as within one inference. The number keeps its basis
+(gh-ocannl-2033): a dimension of an <code>rgb</code> axis is captured
+again as <code>rgb</code>, and a free one, closed to the broadcast top
+<code>1_(bcast_if_1)</code>, as that top. That tie is not transitive
 (gh-ocannl-1969): row, dimension, row leaves two rows of one product,
 not one row, and identifying them takes an explicit
 <code>set_equal</code> of two row references.</p>
@@ -2058,17 +2127,28 @@ declaration is created:
 creates <code>b</code> once, at definition, where <code>hid_dim</code>
 is not bound. Give the function a unit parameter, with the configuration
 before it: <code>let%op layer ~hid_dim () x = ...</code>. The same holds
-for a parameter after the <code>()</code> and for the parameters of a
-function nested in the body.</li>
+for a parameter after the <code>()</code>, for the parameters of a
+function nested in the body, and for any name the body binds – a
+<code>let</code>, a <code>match</code> or <code>function</code> case, a
+<code>for</code> loop (gh-ocannl-2058):
+<code>let%op layer ~dims () x = let n = List.length dims in x + { b; o = [ n ] }</code>
+creates <code>b</code> above the <code>let</code>. Bind the name before
+the unit parameter, or outside <code>%op</code>. A body binding that
+shadows a parameter bound before the <code>()</code>
+(<code>let n = [%oc n + 1] in ... { b; o = [ n ] }</code>) is refused
+too: the lifted declaration would silently read the parameter.</li>
 <li>An unlabelled parameter that the body uses as an integer or a float
 – a stride or dilation in a literal einsum spec
-(<code>&quot;stride*o+k&quot;</code>), the operand of <code>!.</code> or
-<code>!..</code>, the exponent of <code>**.</code>: an unlabelled
-parameter is taken for a tensor, both as a label source and as an
-argument of the function’s <a href="#automatic-shape-schemes">shape
-scheme</a>. Label it (<code>~stride</code>) or bind it before a unit
-parameter. Other non-tensor uses of an unlabelled parameter are not
-detected and remain type errors at the use.</li>
+(<code>&quot;stride*o+k&quot;</code>) of an operator or of a named form
+(<code>einsum &quot;stride*o&lt;+k; k =&gt; o&quot; x w</code>, gh-ocannl-2060),
+the operand of <code>!.</code> or <code>!..</code>, the exponent of
+<code>**.</code>, the argument of <code>Float.of_int</code>,
+<code>float_of_int</code> or <code>Int.to_float</code> (spelled so): an
+unlabelled parameter is taken for a tensor, both as a label source and
+as an argument of the function’s <a href="#automatic-shape-schemes">shape scheme</a>. Label it
+(<code>~stride</code>) or bind it before a unit parameter. Other
+non-tensor uses of an unlabelled parameter are not detected and remain
+type errors at the use.</li>
 </ul>
 <h3 id="configuring-inline-declarations-inline-output-dimensions-initial-values">Configuring
 inline declarations: inline output dimensions, initial values</h3>
@@ -2172,11 +2252,26 @@ on the arguments raises when the closure is built, as
 <code>tracing the shape scheme &lt;function&gt;: ...</code>. One that
 does raises at the application, before the body runs, as
 <code>applying the shape scheme &lt;function&gt; to &lt;arguments&gt;: ...</code>.
-Printed (<code>Printexc.to_string</code>, as the toplevel prints it),
-the error lists the conflicting sizes, the failed constraint and the
-tensors it relates, with their axis kinds; the variables, and the
-tensors of the trace, are named by first appearance rather than by their
-reserved-range ids (<code>Shape.error_to_string_hum</code>;
+Where the application is evaluated inside a function application written
+in <code>%op</code> code, the message names the innermost such:
+<code>applying the shape scheme &lt;function&gt; to &lt;arguments&gt; in the %op application at &lt;file&gt;:&lt;line&gt;: ...</code>
+(gh-ocannl-2007). The expansion runs each such application (any but the
+DSL’s operators and the named einsum forms that spell them, such as
+<code>einsum1</code>) under
+<code>Tensor.Scheme.For_ppx.at_site Stdlib.__POS__</code>, so in the
+usual <code>let%op logits = model x</code> the line is the application’s
+own; an application reached from it through a function written outside
+<code>%op</code> names the <code>%op</code> application it is inside. An
+application written in plain OCaml, outside any <code>%op</code>
+application, names no site: OCaml gives a function no caller location.
+An explicit <code>Tensor.Scheme.instantiate ~here:[%here]</code> names
+<code>at &lt;file&gt;:&lt;line&gt;</code>; <a href="../test/operations/scheme_application_site.ml"><code>scheme_application_site.ml</code></a>
+pins each case. Printed (<code>Printexc.to_string</code>, as the
+toplevel prints it), the error lists the conflicting sizes, the failed
+constraint and the tensors it relates, with their axis kinds; the
+variables, and the tensors of the trace, are named by first appearance
+rather than by their reserved-range ids
+(<code>Shape.error_to_string_hum</code>;
 <code>shape_error_full_sexp=true</code> prints the raw constraint
 sexp).</li>
 </ul>
@@ -2288,10 +2383,15 @@ no body to run, refuses a scheme with draws.</p>
 <p><strong>Side effects.</strong> The trace runs the body once more per
 closure (once per presence pattern with option-valued tensors). Under
 the rewind it leaves no shape state, no tensor and no session id behind
-(traces and checks allocate tensor ids, node uids and shape-variable ids
-from reserved ranges, so printed ids and shapes, compilation choices,
-generated code and random draws are the same with or without schemes),
-but OCaml side effects of the body (a counter, a print) happen.</p>
+(traces and checks allocate tensor ids and shape-variable ids from
+reserved ranges, so printed ids and shapes, compilation choices,
+generated code and random draws are the same with or without schemes;
+node uids come from the one session counter, so the trace’s discarded
+nodes shift later uids, which nothing but node identity and a few
+uid-spelled identifiers – MMA fragment registers,
+<code>recompute_&lt;uid&gt;</code> routine names – reads,
+gh-ocannl-2053), but OCaml side effects of the body (a counter, a print)
+happen.</p>
 <p><strong>Opting out.</strong> <code>[@@ocannl.no_scheme]</code> on the
 binding, or <code>[@ocannl.no_scheme]</code> on a <code>fun</code>
 expression, leaves a function unschemed: for a body whose constraints
@@ -2388,6 +2488,11 @@ labels of tensor expressions (creating new tensors) will typically be
 overly verbose.</li>
 <li>Filter out escaping variables (identifiers coming from nested
 function parameters).</li>
+<li>Filter out the declared tensor itself (gh-ocannl-2056).
+<code>{ x } =: x + 1</code> reads the tensor it declares, which the
+declaration’s non-recursive <code>let</code> has not bound yet where the
+label is computed, so <code>x</code> labels by its name alone; in
+<code>{ x } =: x + y</code>, <code>y</code> provides the label.</li>
 <li>Filter out embedded tensor expressions. In principle we could use
 them – we already introduce local bindings to avoid recomputing the
 expressions – but this would need pulling out these bindings together
