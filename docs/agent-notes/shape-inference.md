@@ -23,6 +23,12 @@ files.
   pushes what it returns onto `active_constraints`, never asserts it empty: `deduce_within`
   (`~deduced:Input_equals_output`) defers an unpadded window over an open kernel and a held window
   pair (gh-ocannl-2030, `test/einsum/input_equals_output_deferral.ml`).
+- A stored round-up total can retain a dimension solved at Stage1, when its coefficient must
+  stay lazy (gh-ocannl-2032). `apply_row_constraint` normalizes both sides of `row_conjunction`:
+  a range against a stale `Strided_var` defers, and an early `Shape_row` adds a copy each pass.
+  `round_up_total_termination` bounds that incremental reproducer with `Bounded_run`, also pinning
+  lazy coefficients and the driver's stage-4 shape-row insertion order. After gh-ocannl-2126 the
+  driver still inserts ordinary `Shape_row`s at stage 4; no user path to the stage-2 case is shown.
 - A deferred valid-window equality constrains guessing order too (gh-ocannl-2156): its plain
   extent waits for the window, and a kernel inferred from a fixed extent waits for the iterator.
   `solve_inequalities` recomputes these dependencies after substitution and threads them through

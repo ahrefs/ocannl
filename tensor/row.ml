@@ -2216,10 +2216,17 @@ and apply_row_constraint ~depth stage origin (r : row) (constr : row_constraint)
           | Some (Bounds_row bounds) ->
               with_reduced (fun reduced ->
                   let origin = merge_origins origin bounds.origin in
-                  match row_conjunction ~prov:r.prov ~origin stage reduced bounds.constr with
+                  (* Stage1 leaves a solved round-up numerator symbolic until its coefficient can be
+                     forced. Normalize the stored side too: Range_elems against that stale
+                     Strided_var otherwise defers forever, with Shape_row adding a copy each pass
+                     (gh-ocannl-2032). *)
+                  let stored_constr = subst_row_constraint stage env bounds.constr in
+                  reapply_rows_constr := false;
+                  match row_conjunction ~prov:r.prov ~origin stage reduced stored_constr with
                   | None -> ([], constr, env, false, false)
                   | Some (extras, constr) ->
-                      if phys_equal constr bounds.constr then (extras, constr, env, true, false)
+                      if equal_row_constraint constr bounds.constr then
+                        (extras, constr, env, true, false)
                       else
                         ( extras,
                           constr,

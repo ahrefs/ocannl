@@ -1,0 +1,4 @@
+stage-4 Shape_row: stage 1 leaves the coefficient lazy: true
+stage-4 Shape_row: the row uses all six elements: true
+early Shape_row: stage 1 leaves the coefficient lazy: true
+early Shape_row: the row uses all six elements: true
