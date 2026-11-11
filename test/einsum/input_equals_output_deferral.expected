@@ -16,3 +16,9 @@ the terminal closes with two axes of 9: true
 each output sums its own nine input offsets: true
 a self-dependent kernel still closes, in either constraint order: true
 mutually dependent kernels still close, in either constraint order: true
+a variable-extent self-cycle still closes, in either constraint order: true
+a variable-extent mutual cycle still closes, in either constraint order: true
+x -> 2*o<+k, output 9: refused
+a parameter extent tied to an open window still names its hidden dimension: true
+an open iterator cannot choose a parameter kernel's hidden dimension: true
+a specified iterator still infers the parameter kernel as 3: true

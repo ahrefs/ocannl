@@ -23,7 +23,7 @@ let outcome_to_string = function
 (* Constructs the deduced shape for [spec], equates it with a shape of output [output] (and no batch
    axes) and closes it: [batch, output, input] dims (matrix convention), or the shape error's
    message. *)
-let close ~spec ~output =
+let close ?(is_param = false) ~spec ~output () =
   Tensor.unsafe_reinitialize ();
   let result =
     match
@@ -33,7 +33,7 @@ let close ~spec ~output =
       (* A step over the shape, so that the closure applies its solution to the shape's rows. *)
       Shape.propagate_shapes
         (Shape.make_update_step ~shape:sh
-           ~logic:(Shape.Terminal { is_param = false; logic = Fetch (Constant 0.) })
+           ~logic:(Shape.Terminal { is_param; logic = Fetch (Constant 0.) })
            ~neutral_elem:None);
       Shape.to_dims sh
     with
@@ -50,13 +50,13 @@ let close ~spec ~output =
 
 let closes_to ~spec ~output expected =
   pf "%s: the input is sized by the deferred equation" spec
-    (match close ~spec ~output with
+    (match close ~spec ~output () with
     | Closed ds -> List.equal Int.equal ds expected
     | Refused _ -> false)
 
 let refused_naming_the_deduction ~spec ~output what =
   pf "%s: %s, naming the deduction" spec what
-    (match close ~spec ~output with
+    (match close ~spec ~output () with
     | Refused msg -> String.is_substring msg ~substring:"input_equals_output"
     | Closed _ -> false)
 
@@ -108,7 +108,7 @@ let () =
 (* A kernel can also be its iterator, or two windows can use each other's kernels as iterators.
    These stores already close on the base solver: all extents carry the broadcast top explicitly, so
    guessing the cycle's parts at 1 satisfies sizes AND bases. *)
-let closes_cycle ~mutual ~reverse =
+let closes_cycle ~fixed_extent ~mutual ~reverse =
   Tensor.unsafe_reinitialize ();
   let x = Row.get_var () and a = Row.get_var () and b = Row.get_var () in
   let y = if mutual then Row.get_var () else x in
@@ -134,9 +134,12 @@ let closes_cycle ~mutual ~reverse =
       prov = Row.provenance ~sh_id:(-1) ~kind:`Output;
     }
   in
+  let kernel_x, kernel_y = if fixed_extent then (b, a) else (y, x) in
+  let first = window a kernel_x and second = window b kernel_y in
   let constraints =
-    [ Row.Shape_row (row, []); eq (dim x) (window a b); eq (window a b) top ]
-    @ if mutual then [ eq (dim y) (window b a); eq (window b a) top ] else []
+    [ Row.Shape_row (row, []); eq (dim x) first ]
+    @ (if mutual then [ eq (dim y) second ] else [])
+    @ if fixed_extent then eq first top :: (if mutual then [ eq second top ] else []) else []
   in
   let constraints = if reverse then List.rev constraints else constraints in
   match
@@ -154,6 +157,41 @@ let closes_cycle ~mutual ~reverse =
 
 let () =
   p_all "a self-dependent kernel still closes, in either constraint order" [ false; true ]
-    ~f:(fun reverse -> closes_cycle ~mutual:false ~reverse);
+    ~f:(fun reverse -> closes_cycle ~fixed_extent:true ~mutual:false ~reverse);
   p_all "mutually dependent kernels still close, in either constraint order" [ false; true ]
-    ~f:(fun reverse -> closes_cycle ~mutual:true ~reverse)
+    ~f:(fun reverse -> closes_cycle ~fixed_extent:true ~mutual:true ~reverse);
+  p_all "a variable-extent self-cycle still closes, in either constraint order" [ false; true ]
+    ~f:(fun reverse -> closes_cycle ~fixed_extent:false ~mutual:false ~reverse);
+  p_all "a variable-extent mutual cycle still closes, in either constraint order" [ false; true ]
+    ~f:(fun reverse -> closes_cycle ~fixed_extent:false ~mutual:true ~reverse)
+
+let parameter_window ?output_dims () =
+  let x = NTDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 9 ] () in
+  let w = TDSL.param "unsized_kernel" () in
+  (TDSL.einsum "2*o<+k; k => o" x w ?output_dims (), w)
+
+let () =
+  p "a parameter extent tied to an open window still names its hidden dimension"
+    (match close ~is_param:true ~spec:"x -> 2*o<+k" ~output:[ 9 ] () with
+    | Refused msg -> String.is_substring msg ~substring:"hidden dimension"
+    | Closed _ -> false);
+  case "an unsized parameter kernel" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let outcome =
+        match
+          let r, _ = parameter_window () in
+          Shape.to_dims r.Tensor.shape
+        with
+        | _ -> false
+        | exception Row.Shape_error (msg, trace) ->
+            Stdio.eprintf "(not part of the golden) parameter kernel: %s\n%!"
+              (Shape.error_to_string_hum msg trace);
+            String.is_substring msg ~substring:"hidden dimension"
+      in
+      p "an open iterator cannot choose a parameter kernel's hidden dimension" outcome);
+  case "a sized iterator determines a parameter kernel" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let r, w = parameter_window ~output_dims:[ 4 ] () in
+      p "a specified iterator still infers the parameter kernel as 3"
+        (Array.equal Int.equal (Shape.to_dims r.Tensor.shape) [| 4 |]
+        && Array.equal Int.equal (Shape.to_dims w.Tensor.shape) [| 3 |]))

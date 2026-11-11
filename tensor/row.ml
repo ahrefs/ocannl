@@ -5135,12 +5135,13 @@ let%debug5_sexp rec close_dim_terminal ?(deferred_dims = dim_var_set_empty) ~(st
              { is_in_param; has_uniq_constr_unless; glb = None; constr = Unconstrained_dim; _ })
         when is_stage5_up stage ->
           (* Check if we can guess this variable to 1 (or 0 for discardable_vars) *)
-          if Set.mem deferred_dims v || not (can_guess_dim_to_one env has_uniq_constr_unless) then
+          if not (can_guess_dim_to_one env has_uniq_constr_unless) then
             [ Terminal_dim (is_param, dim, origin) ]
           else if is_param || is_in_param then
             raise
             @@ Shape_error
                  ("You forgot to specify the hidden dimension(s) 1", [ Dim_mismatch [ dim ] ])
+          else if Set.mem deferred_dims v then [ Terminal_dim (is_param, dim, origin) ]
           else (
             refuse_concat_component_guess env v;
             let guess_d = if Set.mem env.discardable_vars v then 0 else 1 in
@@ -5792,7 +5793,7 @@ let%track5_sexp process_shape_row ?(deferred_dims = dim_var_set_empty) ~(stage :
           else get_bcast_dim ~d:1 ~proj_id:62 ()
         in
         match find_dim env.dim_env v with
-        | Some (Bounds_dim { is_in_param = true; _ }) when final && not defer_guess ->
+        | Some (Bounds_dim { is_in_param = true; _ }) when final ->
             raise @@ unresolved_param_dim_error env v [ Row_mismatch [ r ] ]
         | Some (Bounds_dim { glb; constr; has_uniq_constr_unless; _ })
           when is_stage4_up stage && can_guess_dim_to_one env has_uniq_constr_unless ->
@@ -5945,7 +5946,7 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
     ?(discardable_vars : dim_var_set = dim_var_set_empty) (ineqs : constraint_ list) env :
     constraint_ list * _ =
   let env = { env with discardable_vars = Set.union discardable_vars env.discardable_vars } in
-  let rec solve ?(unblocked_kernels = dim_var_set_empty) ineqs (env : environment) :
+  let rec solve ?(unblocked_dims = dim_var_set_empty) ineqs (env : environment) :
       constraint_ list * _ =
     (* gh-ocannl-2156: a held window equation is a dependency for closing, too. Its plain extent
        waits for the window; against a fixed extent, an open kernel waits for the iterator so kernel
@@ -5969,8 +5970,8 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
               waiting_on_window (waiting_on_window waiting d1 d2) d2 d1
           | _ -> waiting)
     in
-    let deferred_dims = Set.diff deferred_dims unblocked_kernels in
-    let deferred_kernels = Set.diff deferred_kernels unblocked_kernels in
+    let deferred_dims = Set.diff deferred_dims unblocked_dims in
+    let deferred_kernels = Set.diff deferred_kernels unblocked_dims in
     (* Process a single constraint and return new constraints + updated env *)
     let process_constraint env ineq =
       match ineq with
@@ -6095,18 +6096,25 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
     in
     let at_fixpoint () =
       match if is_stage2_up stage then settle () else None with
-      | Some (ineqs', env) -> solve ~unblocked_kernels ineqs' env
+      | Some (ineqs', env) -> solve ~unblocked_dims ineqs' env
       | None -> (
-          (* A kernel can also supply its iterator, directly or through other windows. Only at the
-             final fixpoint, when nothing else can close, let one waiting kernel use ordinary
-             closing and retry. Keep that choice through retries, even if it emits no guess. *)
-          match if is_stage7 stage then Set.min_elt deferred_kernels else None with
-          | Some kernel -> solve ~unblocked_kernels:(Set.add unblocked_kernels kernel) ineqs' env
+          (* Only at the final fixpoint, when nothing else can close, let one waiting dimension use
+             ordinary closing and retry. Prefer a kernel, but a cycle with no fixed extent has only
+             first-arm dependencies. Keep the choice even if it emits no guess. *)
+          let next_guess =
+            if not (is_stage7 stage) then None
+            else
+              match Set.min_elt deferred_kernels with
+              | Some _ as kernel -> kernel
+              | None -> Set.min_elt deferred_dims
+          in
+          match next_guess with
+          | Some dim -> solve ~unblocked_dims:(Set.add unblocked_dims dim) ineqs' env
           | None -> (ineqs', env))
     in
     if List.is_empty ineqs' || List.equal equal_constraint_up_to_origin ineqs' ineqs then
       at_fixpoint ()
-    else solve ~unblocked_kernels ineqs' env
+    else solve ~unblocked_dims ineqs' env
   in
   (* gh-ocannl-1961: what closes a draw's rows reads the environment, which mid-pass lies: a solved
      bound has left its operands' [res] while the [Row_ineq] carrying it is still in the list. So
