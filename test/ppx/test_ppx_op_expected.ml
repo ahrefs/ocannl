@@ -798,3 +798,115 @@ let _uncurried_nested =
     fun c x y ->
       Tensor.Scheme.For_ppx.apply __ocannl_scheme [c; x; y]
         (fun () -> __ocannl_body c x y)
+let _direct_relu =
+  let open! TDSL.O in
+    let __ocannl_body x =
+      relu
+        ?label:(Some
+                  (List.concat
+                     [["_direct_relu"]; (x.Tensor.value).Ir.Tnode.label])) x in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_direct_relu" ~arity:1
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
+    fun x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+        (fun () -> __ocannl_body x)
+let _pipe_relu =
+  let open! TDSL.O in
+    let __ocannl_body x = let __x = x in (relu ?label:None) __x in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_pipe_relu" ~arity:1
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
+    fun x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+        (fun () -> __ocannl_body x)
+let _direct_add =
+  let open! TDSL.O in
+    let __ocannl_body x y =
+      (+) ?label:(Some
+                    (List.concat
+                       [["_direct_add"];
+                       (x.Tensor.value).Ir.Tnode.label;
+                       (y.Tensor.value).Ir.Tnode.label]))
+        y x in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_direct_add" ~arity:2
+        (function | x::y::[] -> __ocannl_body x y | _ -> assert false) in
+    fun x y ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x; y]
+        (fun () -> __ocannl_body x y)
+let _pipe_add =
+  let open! TDSL.O in
+    let __ocannl_body x y = let __x = x in ((+) ?label:None y) __x in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_pipe_add" ~arity:2
+        (function | x::y::[] -> __ocannl_body x y | _ -> assert false) in
+    fun x y ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x; y]
+        (fun () -> __ocannl_body x y)
+let _direct_einsum1 =
+  let open! TDSL.O in
+    let __ocannl_body x = einsum1 "ab=>a" x in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_direct_einsum1" ~arity:1
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
+    fun x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+        (fun () -> __ocannl_body x)
+let _pipe_einsum1 =
+  let open! TDSL.O in
+    let __ocannl_body x = let __x = x in (einsum1 "ab=>a") __x in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_pipe_einsum1" ~arity:1
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
+    fun x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+        (fun () -> __ocannl_body x)
+let _direct_layer =
+  let open! TDSL.O in
+    let __ocannl_body x =
+      Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+        (fun () -> initialized_no_unit x) in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_direct_layer" ~arity:1
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
+    fun x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+        (fun () -> __ocannl_body x)
+let _pipe_layer =
+  let open! TDSL.O in
+    let __ocannl_body x =
+      let __x = x in
+      Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+        (fun () -> initialized_no_unit __x) in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_pipe_layer" ~arity:1
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
+    fun x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+        (fun () -> __ocannl_body x)
+let _direct_partial =
+  let open! TDSL.O in
+    let __ocannl_body x y =
+      Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+        (fun () -> _direct_add y x) in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_direct_partial" ~arity:2
+        (function | x::y::[] -> __ocannl_body x y | _ -> assert false) in
+    fun x y ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x; y]
+        (fun () -> __ocannl_body x y)
+let _pipe_partial =
+  let open! TDSL.O in
+    let __ocannl_body x y =
+      let __x = x in
+      Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+        (fun () ->
+           (Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+              (fun () -> _direct_add y)) __x) in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_pipe_partial" ~arity:2
+        (function | x::y::[] -> __ocannl_body x y | _ -> assert false) in
+    fun x y ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x; y]
+        (fun () -> __ocannl_body x y)
