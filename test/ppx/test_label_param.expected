@@ -32,6 +32,10 @@ with (): ignored label: [relu; unit_ignored]
 with (): ignored label: the label is as stated: true
 with (): capture avoids private-name binders: [+; unit_private_name; P]
 with (): capture avoids private-name binders: the label is as stated: true
+with (): capture avoids outer references: [+; unit_outer_name; R]
+with (): capture avoids outer references: the label is as stated: true
+with (): capture avoids inline names: [+; unit_inline_name; N]
+with (): capture avoids inline names: the label is as stated: true
 without (): the result: [*; late_layer; L; 0...2; x]
 without (): the result: the label is as stated: true
 without (): the inline declaration: [*.; ll_w]

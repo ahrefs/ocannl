@@ -224,9 +224,7 @@ let () = ignore (initialized_no_unit, initialized_expr)
 let mlp_layer =
   let open! TDSL.O in
     fun ~label ~hid_dim () ->
-      let __ocannl_result_label =
-        ["mlp_layer"] @
-          (match Some label with | Some label -> label | None -> []) in
+      let __ocannl_result_label = ["mlp_layer"] @ (label : string list) in
       let w =
         (TDSL.param ?more_label:(Some label) ?value:None ?values:None
            ?param_init:None "w") () in
@@ -259,9 +257,7 @@ let _use_layer =
 let _config_layer =
   let open! TDSL.O in
     fun ~label () ->
-      let __ocannl_result_label =
-        ["_config_layer"] @
-          (match Some label with | Some label -> label | None -> []) in
+      let __ocannl_result_label = ["_config_layer"] @ (label : string list) in
       let l =
         Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
           (fun () -> mlp_layer ~label:(label @ ["L"]) ~hid_dim:3 ()) in
@@ -277,8 +273,7 @@ let _three_layer_perceptron =
   let open! TDSL.O in
     fun ~label ~dim1 ~dim2 ~dim3 () ->
       let __ocannl_result_label =
-        ["_three_layer_perceptron"] @
-          (match Some label with | Some label -> label | None -> []) in
+        ["_three_layer_perceptron"] @ (label : string list) in
       let l1 =
         Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
           (fun () -> mlp_layer ~label:(label @ ["L1"]) ~hid_dim:dim1 ()) in
@@ -694,7 +689,9 @@ let _opt_label =
     fun ?label ~hid_dim () ->
       let __ocannl_result_label =
         ["_opt_label"] @
-          (match label with | Some label -> label | None -> []) in
+          (match label with
+           | Some label -> (label : string list)
+           | None -> []) in
       let olw =
         (TDSL.param ?more_label:label ?value:None ?values:None
            ?param_init:None "olw") () in
@@ -713,8 +710,7 @@ let _opt_label_default =
   let open! TDSL.O in
     fun ?(label= ["dflt"]) () ->
       let __ocannl_result_label =
-        ["_opt_label_default"] @
-          (match Some label with | Some label -> label | None -> []) in
+        ["_opt_label_default"] @ (label : string list) in
       let odw =
         (TDSL.param ?more_label:(Some label) ?value:None ?values:None
            ?param_init:None "odw") () in

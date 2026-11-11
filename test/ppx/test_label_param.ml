@@ -29,6 +29,9 @@ let%op unit_private_name ~label () x =
   let __ocannl_result_label = x + 1.0 in
   __ocannl_result_label + x
 
+let __ocannl_result_label = TDSL.range 3
+let%op unit_outer_name ~label () x = __ocannl_result_label + x
+let%op unit_inline_name ~label () x = { __ocannl_result_label = 1.0 } + x
 let%op late_layer ~label x = { ll_w } * x
 let%op late_opt ?label x = x + 1.0
 let%op late_default ?(label = [ "dflt" ]) x = x + 1.0
@@ -78,6 +81,12 @@ let () =
   claim "with (): capture avoids private-name binders"
     (unit_private_name ~label:[ "P" ] () x)
     [ "+"; "unit_private_name"; "P" ];
+  claim "with (): capture avoids outer references"
+    (unit_outer_name ~label:[ "R" ] () x)
+    [ "+"; "unit_outer_name"; "R" ];
+  claim "with (): capture avoids inline names"
+    (unit_inline_name ~label:[ "N" ] () x)
+    [ "+"; "unit_inline_name"; "N" ];
   let y = late_layer ~label:[ "L" ] x in
   claim "without (): the result" y ([ "*"; "late_layer"; "L" ] @ lx);
   claim_declared "without (): the inline declaration" y "ll_w" ~has:false "L";
