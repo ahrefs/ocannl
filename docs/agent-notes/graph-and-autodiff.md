@@ -194,6 +194,12 @@ files.
   `Context.get_values`), shrink to a tiny `NTDSL.init` repro, and read `build_files/*.cd` —
   use-before-def is visible at the .cd level.
 
+- A settled precision cell forces its stated-by-operands lazy too, releasing its captured
+  ancestor nodes (gh-ocannl-2028). `precision_cell_retention` keeps only a settled result node,
+  closes the shape session, and witnesses collection of every virtual ancestor through
+  `Gc_witness`; keeping the tensor itself would legitimately keep its children. Removing the
+  force in `Prec_cell.make` is the negative control. An unsettled operand retaining dropped
+  consumers' other operand nodes is separate work (gh-ocannl-2170).
 - Top-down precision links are guarded by shape closure, not by a node's `dims` readiness
   (gh-ocannl-2026). The precision cell owns the forced-read refusal and the `Specified` no-op.
   `dims_top_down_prec` supplies known layout on open tensor record copies to separate these
