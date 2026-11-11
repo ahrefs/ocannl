@@ -2311,6 +2311,23 @@ module Scheme = struct
     | true :: _, [] -> assert false
     | false :: pattern, tracers -> None :: spread pattern tracers
 
+  (* The innermost application in [%op] code being evaluated (gh-ocannl-2007): the expansion wraps
+     each one in [at_site] with its [__POS__], and a check names it. An application reached from it
+     through a function written outside [%op] is inside its extent too, so the site reads "in the
+     %op application at", not "at". *)
+  let site : (string * int * int * int) option ref = ref None
+  [@@mutation_serial.exempt
+    "the source site of the [%op] application being evaluated, restored by at_site's finally"]
+
+  let at_site pos f =
+    let outer = !site in
+    site := Some pos;
+    Exn.protect ~f ~finally:(fun () -> site := outer)
+
+  let site_phrase () =
+    Option.map !site ~f:(fun (file, line, _, _) ->
+        [%string "in the %op application at %{file}:%{line#Int}"])
+
   let trace_slot h s =
     if not (Shape.can_checkpoint ()) then
       (* Tainted, or mid-construction: the body itself reports what it reports, as without a scheme.
@@ -2329,12 +2346,13 @@ module Scheme = struct
               rewind ck;
               s.state <- Schemed { scheme; generation = !generation };
               emit (Traced scheme)
-          | exception (Row.Shape_error _ as exn) ->
+          | exception Row.Shape_error (msg, trace) ->
               (* A contradiction that does not depend on the arguments: loud, naming the
                  function. *)
               let bt = Stdlib.Printexc.get_raw_backtrace () in
+              let msg = match site_phrase () with None -> msg | Some site -> site ^ ": " ^ msg in
               (try rewind ck with Session_error _ -> ());
-              Stdlib.Printexc.raise_with_backtrace exn bt
+              Stdlib.Printexc.raise_with_backtrace (Row.Shape_error (msg, trace)) bt
           | exception (Shape.Untraceable_scheme msg as exn) ->
               let bt = Stdlib.Printexc.get_raw_backtrace () in
               rewind_or_reraise s ck exn bt;
@@ -2407,22 +2425,7 @@ module Scheme = struct
     let deferred ~name ~arity body =
       deferred_variants ~name ~optional:(all_required arity) (present_all body)
 
-    (* The innermost application in [%op] code being evaluated (gh-ocannl-2007): the expansion wraps
-       each one in [at_site] with its [__POS__], and a check names it. An application reached from
-       it through a function written outside [%op] is inside its extent too, so the site reads "in
-       the %op application at", not "at". *)
-    let site : (string * int * int * int) option ref = ref None
-    [@@mutation_serial.exempt
-      "the source site of the [%op] application being evaluated, restored by at_site's finally"]
-
-    let at_site pos f =
-      let outer = !site in
-      site := Some pos;
-      Exn.protect ~f ~finally:(fun () -> site := outer)
-
-    let site_phrase () =
-      Option.map !site ~f:(fun (file, line, _, _) ->
-          [%string "in the %op application at %{file}:%{line#Int}"])
+    let at_site = at_site
 
     let application_name args =
       match args with
