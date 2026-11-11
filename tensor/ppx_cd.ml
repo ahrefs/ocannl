@@ -19,6 +19,21 @@ type expr_type =
     }
   | Function
 
+(* The capture list belongs to the literal logic argument, just as it belongs to the literal spec of
+   an einsum operator. Keep recognition separate from collecting bindings so guards do not mint
+   capture references. *)
+let logic_spec expr =
+  match expr with
+  | { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } ->
+      Some (spec, s_loc, expr, None)
+  | [%expr [%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } as literal] []] ->
+      Some (spec, s_loc, literal, None)
+  | [%expr
+      [%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } as literal]
+        ([%e? head] :: [%e? rest])] ->
+      if String.contains spec '>' then Some (spec, s_loc, literal, Some (head, rest)) else None
+  | _ -> None
+
 let is_unknown = function Unknown -> true | _ -> false
 
 type projections_slot = LHS | RHS1 | RHS2 | RHS3 | Prod | Scalar | Nonslot | Undet
@@ -932,6 +947,10 @@ let translate ?ident_label (expr : expression) : result =
               ([%e logic], [%e t1].Tensor.shape, [%e t2].Tensor.shape, [%e t3].Tensor.shape)]
       | _ -> assert false
     in
+    let collect_logic_captures ~loc ~spec = function
+      | None -> ([], [%expr []])
+      | Some (head, rest) -> collect_capture_labels ~loc ~spec head rest
+    in
     let process_raw_accum ~accu_op ~lhs ~rhses ~rhs_of_buffers ~logic =
       let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l = setup_array ~punned ~bad_pun_hints ~for_slot:LHS @@ loop ~proj_in_scope lhs in
@@ -955,7 +974,65 @@ let translate ?ident_label (expr : expression) : result =
       in
       assignment ~punned ~lhs:setup_l ~rhses:setup_rs ~raw_body ()
     in
+    (* OCaml parses the trailing list as a positional argument of the RHS application, rather than
+       an argument of the labelled spec. Move it onto the literal for the logic arms below. Only
+       inspect the application spine used by those arms. *)
+    let attach_logic_captures rhs =
+      let attach rhs =
+        match rhs.pexp_desc with
+        | Pexp_apply (fn, args) -> (
+            match List.last args with
+            | Some (Nolabel, (([%expr [%e? _] :: [%e? _]] | [%expr []]) as captures))
+              when List.exists args ~f:(function
+                     | Labelled "logic", { pexp_desc = Pexp_constant (Pconst_string _); _ } -> true
+                     | _ -> false) ->
+                let args = List.drop_last_exn args in
+                Some
+                  {
+                    rhs with
+                    pexp_desc =
+                      Pexp_apply
+                        ( fn,
+                          List.map args ~f:(function
+                            | Labelled "logic", literal ->
+                                ( Labelled "logic",
+                                  A.Exp.apply ~loc:literal.pexp_loc literal [ (Nolabel, captures) ]
+                                )
+                            | arg -> arg) );
+                  }
+            | _ -> None)
+        | _ -> None
+      in
+      match rhs.pexp_desc with
+      | Pexp_apply (({ pexp_desc = Pexp_ident { txt = Lident op; _ }; _ } as fn), args)
+        when Hashtbl.mem unary_ops op || Hashtbl.mem binary_ops op || Hashtbl.mem ternary_ops op
+        -> (
+          match attach rhs with
+          | Some _ as result -> result
+          | None -> (
+              (* Infix precedence can put ~logic on the final operand. *)
+              match List.last args with
+              | None -> None
+              | Some (label, arg) ->
+                  Option.map (attach arg) ~f:(fun arg ->
+                      {
+                        rhs with
+                        pexp_desc = Pexp_apply (fn, List.drop_last_exn args @ [ (label, arg) ]);
+                      })))
+      | _ -> None
+    in
     match expr with
+    | {
+     pexp_desc =
+       Pexp_apply
+         ( ({ pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ } as op),
+           [ (Nolabel, lhs); (Nolabel, rhs) ] );
+     _;
+    }
+      when is_assignment accu_op && Option.is_some (attach_logic_captures rhs) ->
+        let rhs = Option.value_exn (attach_logic_captures rhs) in
+        loop ~proj_in_scope
+          { expr with pexp_desc = Pexp_apply (op, [ (Nolabel, lhs); (Nolabel, rhs) ]) }
     (* %oc anti-quotation: preserve the expression without transformation *)
     | [%expr [%oc [%e? oc_expr]]] -> { default_result with expr = oc_expr }
     | { pexp_desc = Pexp_extension ({ txt = "oc"; _ }, _); _ } ->
@@ -1578,23 +1655,23 @@ let translate ?ident_label (expr : expression) : result =
           [%e? lhs]
           ([%e? { pexp_desc = Pexp_ident { txt = Lident bin_op; _ }; _ }]
              ([%e? rhs1], [%e? rhs2])
-             ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } as logic])]
+             ~logic:[%e? logic])]
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
           ([%e? { pexp_desc = Pexp_ident { txt = Lident bin_op; _ }; _ }]
              [%e? rhs1]
              [%e? rhs2]
-             ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } as logic])]
+             ~logic:[%e? logic])]
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
           ([%e? { pexp_desc = Pexp_ident { txt = Lident bin_op; _ }; _ }]
              [%e? rhs1]
-             ([%e? rhs2]
-                ~logic:
-                  [%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } as logic]))]
-      ->
+             ([%e? rhs2] ~logic:[%e? logic]))]
+      when Option.is_some (logic_spec logic) ->
+        let spec, s_loc, logic, captures = Option.value_exn (logic_spec logic) in
+        let capture_vbs, capture_dims = collect_logic_captures ~loc ~spec captures in
         let logic =
           let loc = s_loc in
           if String.equal spec "." then [%expr Shape.Pointwise_bin]
@@ -1608,18 +1685,21 @@ let translate ?ident_label (expr : expression) : result =
                       or einsum notation for a custom contraction"
                      bin_op bin_op
             | _ -> [%expr Shape.Compose]
-          else [%expr Shape.Einsum ([%e logic], [])]
+          else [%expr Shape.Einsum ([%e logic], [%e capture_dims])]
         in
         let _, bin_op = binary_op bin_op in
-        process_raw_accum ~accu_op ~lhs
-          ~rhses:[ (RHS1, rhs1); (RHS2, rhs2) ]
-          ~rhs_of_buffers:(binop_of_buffers bin_op) ~logic:(broadcast_of_tensors logic)
+        let res =
+          process_raw_accum ~accu_op ~lhs
+            ~rhses:[ (RHS1, rhs1); (RHS2, rhs2) ]
+            ~rhs_of_buffers:(binop_of_buffers bin_op) ~logic:(broadcast_of_tensors logic)
+        in
+        { res with vbs = reduce_vbss [ res.vbs; capture_vbs ] }
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
           ([%e? { pexp_desc = Pexp_ident { txt = Lident tern_op; _ }; _ }]
              ([%e? rhs1], [%e? rhs2], [%e? rhs3])
-             ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ }])]
+             ~logic:[%e? logic])]
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
@@ -1627,7 +1707,10 @@ let translate ?ident_label (expr : expression) : result =
              [%e? rhs1]
              [%e? rhs2]
              [%e? rhs3]
-             ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ }])] ->
+             ~logic:[%e? logic])]
+      when Option.is_some (logic_spec logic) ->
+        let spec, s_loc, logic, captures = Option.value_exn (logic_spec logic) in
+        let capture_vbs, capture_dims = collect_logic_captures ~loc ~spec captures in
         let logic =
           let loc = s_loc in
           if String.equal spec "." then [%expr Shape.Pointwise_tern]
@@ -1639,45 +1722,49 @@ let translate ?ident_label (expr : expression) : result =
                   semantics (the +c term is re-added on every reduction iteration) are ambiguous \
                   under contraction; use '.' or '@' for fma"
                  spec
-          else
-            let spec_expr = Ast_builder.Default.estring ~loc spec in
-            [%expr Shape.Einsum_tern ([%e spec_expr], [])]
+          else [%expr Shape.Einsum_tern ([%e logic], [%e capture_dims])]
         in
         let _, tern_op = ternary_op tern_op in
-        process_raw_accum ~accu_op ~lhs
-          ~rhses:[ (RHS1, rhs1); (RHS2, rhs2); (RHS3, rhs3) ]
-          ~rhs_of_buffers:(ternop_of_buffers tern_op) ~logic:(broadcast_tern_of_tensors logic)
+        let res =
+          process_raw_accum ~accu_op ~lhs
+            ~rhses:[ (RHS1, rhs1); (RHS2, rhs2); (RHS3, rhs3) ]
+            ~rhs_of_buffers:(ternop_of_buffers tern_op) ~logic:(broadcast_tern_of_tensors logic)
+        in
+        { res with vbs = reduce_vbss [ res.vbs; capture_vbs ] }
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
           (([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }] [%e? rhs])
-             ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } as logic])]
+             ~logic:[%e? logic])]
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
           ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }]
              [%e? rhs]
-             ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } as logic])]
+             ~logic:[%e? logic])]
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
           (* FIXME: this was never needed as prefix operators bind tighter? *)
           ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }]
-             ([%e? rhs]
-                ~logic:
-                  [%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } as logic]))]
-      when Hashtbl.mem unary_ops unop_ident ->
+             ([%e? rhs] ~logic:[%e? logic]))]
+      when Hashtbl.mem unary_ops unop_ident && Option.is_some (logic_spec logic) ->
+        let spec, s_loc, logic, captures = Option.value_exn (logic_spec logic) in
+        let capture_vbs, capture_dims = collect_logic_captures ~loc ~spec captures in
         (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
         let logic =
           let loc = s_loc in
           if String.equal spec "." then [%expr Shape.Pointwise_un]
           else if String.equal spec "T" then [%expr Shape.Transpose]
-          else [%expr Shape.Permute ([%e logic], [])]
+          else [%expr Shape.Permute ([%e logic], [%e capture_dims])]
         in
         let _, un_op = Hashtbl.find_exn unary_ops unop_ident loc in
-        process_raw_accum ~accu_op ~lhs
-          ~rhses:[ (RHS1, rhs) ]
-          ~rhs_of_buffers:(unop_of_buffers un_op) ~logic:(transpose_of_tensors logic)
+        let res =
+          process_raw_accum ~accu_op ~lhs
+            ~rhses:[ (RHS1, rhs) ]
+            ~rhs_of_buffers:(unop_of_buffers un_op) ~logic:(transpose_of_tensors logic)
+        in
+        { res with vbs = reduce_vbss [ res.vbs; capture_vbs ] }
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]

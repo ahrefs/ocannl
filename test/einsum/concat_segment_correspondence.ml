@@ -65,6 +65,21 @@ let forward () =
       values
         (NTDSL.einsum1 ~capture_dims:[ capture "a" 2; capture "b" 1 ] "a^c => a^b^c" (vec 5) ()))
     ~want:[| 1.; 2.; 0.; 3.; 4.; 5. |];
+  computes "%cd captures concat sizes and preserves the untouched sentinel"
+    (fun () ->
+      let x = vec 5 in
+      let tgt =
+        NTDSL.init ~l:"cd_sentinel" ~prec:Ir.Ops.single ~o:[ 6 ]
+          ~f:(fun i -> Float.of_int (-100 + i.(0)))
+          ()
+      in
+      Train.set_materialized tgt.Tensor.value;
+      let%cd comp = tgt =: id x ~logic:"a^c => a^b^c" [ "a"; "b" ] in
+      Shape.set_dim a 2;
+      Shape.set_dim b 1;
+      let ctx, routine = Context.compile (Context.cpu ()) comp Ir.Indexing.Empty in
+      Context.get_values (Context.run ctx routine) tgt.Tensor.value)
+    ~want:[| 1.; 2.; -98.; 3.; 4.; 5. |];
   computes "a written segment between reordered ones, a^c => c^b^a"
     (fun () ->
       values

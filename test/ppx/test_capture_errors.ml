@@ -24,3 +24,12 @@ let%cd cd_multichar_ok x = (x ++ "ab, => ab," [ "ab" ]).forward
 let%op row_only x = x ++ "..axes,.. => ..axes,.." [ "axes" ]
 let%op coefficient x = x ++ "stride*o<+k => o" [ "stride" ]
 let%op dilation_coefficient x = x ++ "o<+dilation*k => o" [ "dilation" ]
+
+(* ~logic assignment captures share the operator checks and shape-logic references. *)
+let%cd logic_unary tgt x = tgt =: id x ~logic:"a^c => a^b^c" [ "missing" ]
+let%cd logic_binary tgt x y = tgt =: x * y ~logic:"a; a => a" [ "a" ]
+let%cd logic_binary_tuple tgt x y = tgt =: mul (x, y) ~logic:"a; a => a" [ "a" ]
+let%cd logic_ternary tgt x y z = tgt =: where x y z ~logic:"a; a; a => a" [ "a" ]
+let%cd logic_ternary_tuple tgt x y z = tgt =: where (x, y, z) ~logic:"a; a; a => a" [ "a" ]
+let%cd logic_unary_parens tgt x = tgt =: (id x) ~logic:"a => a" [ "a" ]
+let%cd logic_empty tgt x = tgt =: id x ~logic:"a => a" []
