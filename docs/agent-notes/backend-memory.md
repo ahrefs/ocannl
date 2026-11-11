@@ -257,6 +257,15 @@ files.
   through. When asserting a memory bound, assert on `live_working_pools`, not `live_pools`: summing the
   constant class in makes the assertion fail for a reason it is not about, and on a workload with no
   hoisted candidates it passes while proving less than it looks like.
+- **A wedged device keeps its pools: a release there refuses rather than frees** (gh-ocannl-2134).
+  After a bounded wait (`Backend.await_within`) gives up, the abandoned work may still be writing
+  its buffers, so `Raise_backend` marks the device and its `await` raises `Device_wedged` from then
+  on. `Backends.finalize` awaits before `free_pool`, so a release on the marked device raises with
+  nothing freed and the flag reset (the gh-ocannl-550 rule), and every pool of the process on that
+  device leaks until exit: deliberately, since freeing memory under a running kernel is worse.
+  Recovery (gh-ocannl-2133) is what would end the leak. The mark covers the wrapped `await` only:
+  the lower layers' own `Device.await` calls and event-level `sync` do not see it, and on Metal the
+  runner's `abandoned` latch covers those.
 - **A dropped graph is held by device tables, never by the session** (gh-ocannl-1747). Since
   gh-ocannl-1745 the session lets an evaluated graph go, and the only strong holders of its nodes
   were two device tables: `updating_for` (every node a routine or upload wrote, now pruned of done

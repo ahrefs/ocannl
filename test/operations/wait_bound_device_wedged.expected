@@ -1,0 +1,5 @@
+multidev_cc: a generous bound waits the work out: true
+multidev_cc: a zero bound gives up on work still running: true
+multidev_cc: a sync of the marked device raises Device_wedged: true
+multidev_cc: a release on the marked device raises Device_wedged, freeing nothing: true
+metal: a generous bound waits; a zero bound gives up; the marked device refuses sync and release: true

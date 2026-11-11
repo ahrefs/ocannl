@@ -916,6 +916,7 @@ test/operations/virtual_inliner_oracle.ml [through Ll_test.execute; through Ll_t
 test/operations/virtual_rejection_boundary.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-virtual_rejection_boundary, @test/operations/runtest-virtual_rejection_boundary_raise]
 test/operations/virtual_shared_loop.ml [through Ll_test.execute; run by @test/operations/runtest-virtual_shared_loop]
 test/operations/virtual_uncaptured_loop.ml [through Ll_test.execute; run by @test/operations/runtest-virtual_uncaptured_loop]
+test/operations/wait_bound_declines.ml [prelowered compile; run by @test/operations/runtest-wait_bound_declines]
 test/operations/winograd_conv.ml [through Ll_test.optimize_and_execute; run by @test/operations/runtest-winograd_conv]
 test/operations/zero_elision.ml [through Ll_test.link; run by @test/operations/runtest-zero_elision]
 test/operations/zero_out_local_decl.ml [through Ll_test.execute; run by @test/operations/runtest-zero_out_local_decl, @test/operations/runtest-zero_out_local_decl-extension, @test/operations/runtest-zero_out_local_decl-unoptimized]
@@ -1062,6 +1063,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-virtual_rejection_boundary_raise
 @test/operations/runtest-virtual_shared_loop
 @test/operations/runtest-virtual_uncaptured_loop
+@test/operations/runtest-wait_bound_declines
 @test/operations/runtest-winograd_conv
 @test/operations/runtest-zero_elision
 @test/operations/runtest-zero_out_local_decl

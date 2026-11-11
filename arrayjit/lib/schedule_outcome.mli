@@ -187,6 +187,25 @@ exception
     dispatch); {!Autotune.tune} refuses a whole search when its baseline compile, one candidate's
     footprint, meets it. *)
 
+val wait_bound_stage : string
+(** The stage of a {!Wait_bound_expired} rejection (gh-ocannl-2134). *)
+
+exception
+  Wait_bound_expired of {
+    backend : string;
+    bound_s : float;  (** The bound the wait was given, in seconds. *)
+    depth : int;  (** How many launches the wait closed. *)
+    reference_ms : float option;
+        (** The per-launch reading the bound multiplied, [None] where only the floor applied. *)
+  }
+(** A tuner timing window's wait outlived its host-side bound (gh-ocannl-2134): the device's work is
+    still outstanding, with no status from the driver to classify (a GPU kernel that never ends,
+    which macOS 27.2 does not kill). {!protect} classifies it itself, before the backend's
+    classifier, as an [Expected] {!Backend_rejected} decline at {!wait_bound_stage} with
+    [Writes_may_have_occurred]: the abandoned work may still be writing the lineage's buffers, so a
+    search counts the decline once and then ends. Not a GPU hang: elapsed time proves only that the
+    wait exceeded its policy. *)
+
 type provenance = Candidate | Cache_replay | Advisory | User_schedule
 [@@deriving sexp_of, compare, equal]
 
