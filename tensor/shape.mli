@@ -127,13 +127,11 @@ type delayed_var_ref = private {
           closure it stands in for that row. A concatenated axis of concrete components is its sum
           (gh-ocannl-1969). [None] when the binding at the closure was a dimension, or the row held
           a concatenated or affine axis over a symbolic extent. Omitted from sexps when [None]. *)
-  mutable solved_basis : string;
-      (** The basis tag of the size [var_ref.solved_dim] holds (gh-ocannl-2033): the tag of the
-          solution the reference's dimension variable reached, such as the broadcast top
-          [1_(bcast_if_1)] a free dimension closes to, or a named tag an operand gave it. A later
-          dimension capture, across a closure too, takes the size with this tag: it names that
-          dimension, as [carried_row] does a row. [default] for a value {!set_dim} gave and for a
-          row's product. Omitted from sexps when [default]. *)
+  mutable solved_basis : string option;
+      (** [Some basis] carries a published dimension's tag, including [default] and the broadcast
+          top. [None] is a size-only value from {!set_dim} or a row product. A later dimension
+          capture checks the size without claiming a basis; once it resolves, publication records
+          its actual tag. Omitted from sexps when [None]. *)
   uid : int;  (** The reference's identity for rewind tracking; ignored by [equal] and sexps. *)
   mutable discarded_by : string option;
       (** The provenance of the rewind that discarded the reference, which every setter then refuses
@@ -171,7 +169,8 @@ val get_variable_ref : string -> delayed_var_ref
 
 val set_dim : delayed_var_ref -> int -> unit
 (** Sets the dimension resp. total elements of the dim resp. row variable reference to the given
-    value. This will propagate through shape inference.
+    value. This will propagate through shape inference. A numeric size makes no basis claim: a
+    tagged axis of that size remains tagged. An axis left unnamed at closure takes [default].
 
     For row variables, this means the product of the dimensions, via the [Total_elems] constraint.
 *)

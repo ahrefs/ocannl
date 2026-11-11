@@ -148,6 +148,7 @@ let spells_reserved_id text =
 
 let constraint_origins : Row.constraint_ -> Row.constraint_origin list = function
   | Dim_eq { origin; _ }
+  | Dim_size { origin; _ }
   | Row_eq { origin; _ }
   | Dim_ineq { origin; _ }
   | Row_ineq { origin; _ }

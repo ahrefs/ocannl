@@ -320,6 +320,9 @@ type row_entry =
 
 type constraint_ =
   | Dim_eq of { d1 : dim; d2 : dim; origin : constraint_origin list }
+  | Dim_size of { dim : dim; size : int; origin : constraint_origin list }
+      (** A numeric size without a basis claim. Stage1 checks solved axes and defers open ones;
+          closure sizes an axis still open using its matching use-site basis, or [default]. *)
   | Row_eq of { r1 : t; r2 : t; origin : constraint_origin list }
   | Dim_ineq of { res : dim; opnd : dim; from_ : Sexp.t; origin : constraint_origin list }
   | Row_ineq of { res : t; opnd : t; origin : constraint_origin list }

@@ -1,0 +1,35 @@
+set_dim supplies the size without replacing rgb: true
+a sized capture publishes rgb for a later equality: true
+a pending size allows a later rgb constraint: true
+source open, target unbound, argument order forward: the target is unsolved before set_equal: true
+source open, target unbound, argument order forward: set_equal carries the solved rgb dimension: true
+source open, target unbound, argument order forward: set_equal still refuses another named basis: true
+source open, target unbound, argument order reversed: the target is unsolved before set_equal: true
+source open, target unbound, argument order reversed: set_equal carries the solved rgb dimension: true
+source open, target unbound, argument order reversed: set_equal still refuses another named basis: true
+source open, target bound, argument order forward: the target is unsolved before set_equal: true
+source open, target bound, argument order forward: set_equal carries the solved rgb dimension: true
+source open, target bound, argument order forward: set_equal still refuses another named basis: true
+source open, target bound, argument order reversed: the target is unsolved before set_equal: true
+source open, target bound, argument order reversed: set_equal carries the solved rgb dimension: true
+source open, target bound, argument order reversed: set_equal still refuses another named basis: true
+source closed, target unbound, argument order forward: the target is unsolved before set_equal: true
+source closed, target unbound, argument order forward: set_equal carries the solved rgb dimension: true
+source closed, target unbound, argument order forward: set_equal still refuses another named basis: true
+source closed, target unbound, argument order reversed: the target is unsolved before set_equal: true
+source closed, target unbound, argument order reversed: set_equal carries the solved rgb dimension: true
+source closed, target unbound, argument order reversed: set_equal still refuses another named basis: true
+source closed, target bound, argument order forward: the target is unsolved before set_equal: true
+source closed, target bound, argument order forward: set_equal carries the solved rgb dimension: true
+source closed, target bound, argument order forward: set_equal still refuses another named basis: true
+source closed, target bound, argument order reversed: the target is unsolved before set_equal: true
+source closed, target bound, argument order reversed: set_equal carries the solved rgb dimension: true
+source closed, target bound, argument order reversed: set_equal still refuses another named basis: true
+set_dim still refuses another size: true
+a size-only solution acquires the equal dimension's tag: true
+set_equal rejects two solved same-sized axes with different bases: true
+the public symbolic setter creates a default axis: true
+a solved symbolic reference survives recapture: true
+a solved symbolic reference survives the proxy: true
+the numeric size takes the matching use-site basis: true
+the row product does not acquire rgb: true
