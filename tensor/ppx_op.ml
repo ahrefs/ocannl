@@ -1002,34 +1002,80 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
             Some (List.rev acc, unit_param, rest)
         | hd :: rest -> find_unit (hd :: acc) rest
       in
+      let orig_body =
+        match body with
+        | Pfunction_body body -> body
+        | Pfunction_cases _ -> { expr with pexp_desc = Pexp_function ([], None, body) }
+      in
+      let labelled_tensor_evidence name =
+        tensor_operand_evidence name orig_body && not (rebinds name orig_body)
+      in
+      (* The parameter labelled [label] is the [string list] that enriches the result's label,
+         unless it is a tensor by the evidence above (gh-ocannl-1987): accepted since
+         gh-ocannl-1885, it was ignored. Without [()], inline declarations cannot take it: they are
+         created when the function is defined. *)
+      let is_label_list ?(shadowed = []) pat =
+        match pat.ppat_desc with
+        | Ppat_var { txt; _ } ->
+            List.mem shadowed txt ~equal:String.equal || not (labelled_tensor_evidence txt)
+        | Ppat_constraint ({ ppat_desc = Ppat_var _; _ }, t) -> Option.is_none (annotated_kind t)
+        | _ -> false
+      in
       (* The [string list option] the inline declarations take as [?more_label]: [~label] and a
          defaulted [?(label = ...)] bind the list, an un-defaulted [?label] the option itself
          (gh-ocannl-1885). *)
-      let rec find_label_param = function
+      let rec find_label_param ?(shadowed = []) ~for_result = function
         | [] -> None
-        | { pparam_desc = Pparam_val (Optional "label", None, pat); _ } :: _ -> Some (pat2expr pat)
-        | { pparam_desc = Pparam_val ((Labelled "label" | Optional "label"), _, pat); _ } :: _ ->
+        | { pparam_desc = Pparam_val (Optional "label", None, pat); _ } :: _
+          when (not for_result) || is_label_list ~shadowed pat ->
+            Some (pat2expr pat)
+        | { pparam_desc = Pparam_val ((Labelled "label" | Optional "label"), _, pat); _ } :: _
+          when (not for_result) || is_label_list ~shadowed pat ->
             let loc = pat.ppat_loc in
             Some [%expr Some [%e pat2expr pat]]
-        | _ :: rest -> find_label_param rest
+        | _ :: rest -> find_label_param ~shadowed ~for_result rest
       in
       match find_unit [] args with
       | Some (before_unit, unit_param, after_unit) ->
           (* With a unit parameter, always bind the collected inline definitions. Captures directly
              in this body are bound here too, since the unit function is their innermost function;
              those under the parameters after the unit are already bound per call. *)
-          let opt_label = find_label_param before_unit in
-          (* The application label names the result as well as its inline declarations. Tensor
-             parameters remain absent from the result's label under [()] (gh-ocannl-2059). *)
-          let label =
-            match opt_label with
-            | None -> label
+          let opt_label = find_label_param ~for_result:false before_unit in
+          (* Capture the application label at [()], before a body binder (or a parameter after [()])
+             can shadow it. Tensor-valued and ignored [label] parameters are not sources. *)
+          let result_vbs, label =
+            match
+              find_label_param ~shadowed:(params_idents after_unit) ~for_result:true before_unit
+            with
+            | None -> ([], label)
             | Some more_label ->
+                let used = Hash_set.create (module String) in
+                let visitor =
+                  object
+                    inherit Ast_traverse.iter as super
+
+                    method! longident_loc lid =
+                      (match lid.txt with Lident name -> Hash_set.add used name | _ -> ());
+                      super#longident_loc lid
+
+                    method! pattern p =
+                      (match p.ppat_desc with
+                      | Ppat_var { txt; _ } | Ppat_alias (_, { txt; _ }) -> Hash_set.add used txt
+                      | _ -> ());
+                      super#pattern p
+                  end
+                in
+                visitor#expression expr;
+                let rec fresh name = if Hash_set.mem used name then fresh (name ^ "_") else name in
+                let name = fresh "__ocannl_result_label" in
                 let binding_label = Option.value label ~default:[%expr []] in
-                Some
+                let value =
                   [%expr
                     [%e binding_label]
                     @ match [%e more_label] with Some label -> label | None -> []]
+                in
+                let vb = Ast_helper.Vb.mk ~loc (Ast_builder.Default.pvar ~loc name) value in
+                ([ vb ], Some (Ast_builder.Default.evar ~loc name))
           in
           let vbs, inner_body =
             let body =
@@ -1050,7 +1096,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
             in
             translate ~dsl_name ~num_configs ~is_toplevel:false ~opt_label ~late ?label body
           in
-          let inner_body = let_opt ~loc vbs inner_body in
+          let inner_body = let_opt ~loc (result_vbs @ vbs) inner_body in
           ( no_vbs,
             {
               expr with
@@ -1065,25 +1111,6 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
              evidence [tensor_params] asks for -- a [Tensor.t] annotation, or a direct operand use
              (gh-ocannl-1885): read as a tensor, [~hid_dim] failed to type-check at the parameter
              ("not a record type"), with nothing naming the missing [()]. *)
-          let orig_body =
-            match body with
-            | Pfunction_body body -> body
-            | Pfunction_cases _ -> { expr with pexp_desc = Pexp_function ([], None, body) }
-          in
-          let labelled_tensor_evidence name =
-            tensor_operand_evidence name orig_body && not (rebinds name orig_body)
-          in
-          (* The parameter labelled [label] is the [string list] that enriches the result's label,
-             unless it is a tensor by the evidence above (gh-ocannl-1987): accepted since
-             gh-ocannl-1885, it was ignored. The inline declarations cannot take it as they do
-             before a [()]: they are created when the function is defined. *)
-          let is_label_list pat =
-            match pat.ppat_desc with
-            | Ppat_var { txt; _ } -> not (labelled_tensor_evidence txt)
-            | Ppat_constraint ({ ppat_desc = Ppat_var _; _ }, t) ->
-                Option.is_none (annotated_kind t)
-            | _ -> false
-          in
           let late = List.map (params_idents args) ~f:(fun n -> (n, No_unit)) @ late in
           let loop = translate ~dsl_name ~num_configs ~is_toplevel:false ~opt_label ~late in
           let labels =

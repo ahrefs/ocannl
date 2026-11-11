@@ -9,6 +9,26 @@ open Verdict.Claims
 let%op unit_layer ~label () x = { ul_w } * x
 let%op unit_opt ?label () x = x + 1.0
 let%op unit_default ?(label = [ "dflt" ]) () x = x + 1.0
+
+let%op unit_shadow ~label () x =
+  let label = { shadow_w } * x in
+  label + x
+
+let%op unit_after ~label () label = label + 1.0
+let%op unit_tensor ~(label : Tensor.t) () x = label + x
+let%op unit_operand ~label () x = label + x
+
+let%op unit_tensor_opt ?(label : Tensor.t option) () x =
+  match label with Some label -> label + x | None -> x + 1.0
+
+let fallback = TDSL.range 3
+let%op unit_tensor_default ?(label = fallback) () x = label + x
+let%op unit_ignored ~label:_ () x = relu x
+
+let%op unit_private_name ~label () x =
+  let __ocannl_result_label = x + 1.0 in
+  __ocannl_result_label + x
+
 let%op late_layer ~label x = { ll_w } * x
 let%op late_opt ?label x = x + 1.0
 let%op late_default ?(label = [ "dflt" ]) x = x + 1.0
@@ -41,6 +61,23 @@ let () =
   claim "with (): ?label omitted" (unit_opt () x) [ "+"; "unit_opt" ];
   claim "with (): default omitted" (unit_default () x) [ "+"; "unit_default"; "dflt" ];
   claim "with (): default given" (unit_default ~label:[ "G" ] () x) [ "+"; "unit_default"; "G" ];
+  let y = unit_shadow ~label:[ "S" ] () x in
+  claim "with (): shadowed label" y [ "+"; "unit_shadow"; "S" ];
+  claim_declared "with (): shadowed inline declaration" y "shadow_w" ~has:true "S";
+  claim "with (): tensor named label after unit" (unit_after ~label:[ "A" ] () x)
+    [ "+"; "unit_after"; "A" ];
+  claim "with (): annotated tensor label" (unit_tensor ~label:x () x) [ "+"; "unit_tensor" ];
+  claim "with (): operand tensor label" (unit_operand ~label:x () x) [ "+"; "unit_operand" ];
+  claim "with (): optional tensor given" (unit_tensor_opt ~label:x () x) [ "+"; "unit_tensor_opt" ];
+  claim "with (): optional tensor omitted" (unit_tensor_opt () x) [ "+"; "unit_tensor_opt" ];
+  claim "with (): default tensor omitted" (unit_tensor_default () x) [ "+"; "unit_tensor_default" ];
+  claim "with (): default tensor given"
+    (unit_tensor_default ~label:x () x)
+    [ "+"; "unit_tensor_default" ];
+  claim "with (): ignored label" (unit_ignored ~label:[ "I" ] () x) [ "relu"; "unit_ignored" ];
+  claim "with (): capture avoids private-name binders"
+    (unit_private_name ~label:[ "P" ] () x)
+    [ "+"; "unit_private_name"; "P" ];
   let y = late_layer ~label:[ "L" ] x in
   claim "without (): the result" y ([ "*"; "late_layer"; "L" ] @ lx);
   claim_declared "without (): the inline declaration" y "ll_w" ~has:false "L";

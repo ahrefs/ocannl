@@ -47,7 +47,10 @@ files.
   is itself a label source of the RESULT, at its position (gh-ocannl-1987; it was accepted and
   ignored); with `()` it also enriches the result after the binding's name (gh-ocannl-2059).
   An omitted `?label` adds nothing, a defaulted one adds its default, and inline declarations
-  keep their labels. `test/ppx/test_label_param.ml` runs and pins these cases.
+  keep their labels. The result list is captured at the unit stage, under a name absent from the
+  source, before a body binder or a parameter after `()` can shadow `label`. The result uses the
+  same tensor-evidence exclusion as the no-unit arm; an explicitly ignored `~label:_` adds nothing.
+  `test/ppx/test_label_param.ml` runs and pins these cases.
 - Refusals that name the fix (gh-ocannl-1987, `test/ppx/test_param_errors.ml`, expansion only):
   `translate` threads `late`, the names bound after the lift point (every parameter of a
   no-unit toplevel function, and of any function below the toplevel one; and, gh-ocannl-2058,
