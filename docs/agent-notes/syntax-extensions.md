@@ -18,9 +18,11 @@ files.
   live (gh-ocannl-2060): a named form's literal first argument is substituted by
   `Ppx_shared.substitute_named_form_spec`, which both PPXs apply to the applications they rebuild
   or pass through, only when the spec reads a runtime value (an identifier, or a plain `+` window's
-  `use_padding`) -- otherwise the call is left as written. Its other arguments get the ordinary
-  `%op` translation: a list or array literal there (`~capture_dims:[ d ]`, `concat`'s `[| x; y |]`)
-  becomes a block tensor, so write it under `[%oc ...]`.
+  `use_padding`) -- otherwise the call is left as written. In `%op`, `~capture_dims` / `?capture_dims` and
+  the second positional argument of `concat` / `concat_sum` keep their ordinary OCaml meaning
+  (gh-ocannl-2172): `[ d ]` is a capture list and `[| x; y |]` is an operand array. Their contents
+  are plain OCaml too; use an explicit `[%op ...]` inside the array for tensor DSL expressions.
+  Existing `[%oc ...]` escapes still work. Other arguments get the ordinary `%op` translation.
 - `%op` inline-record init expressions (`{ w = kaiming normal1 () }`) are bound under the
   generated `open TDSL.O`, including when there is no unit parameter (gh-511). The no-unit-param
   form is not generative: `let%op f x = ...` closes over ONE shared param created at definition

@@ -975,11 +975,41 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
         List.find_mapi args ~f:(fun i (_, arg_expr) ->
             match arg_expr with [%expr ()] -> Some i | _ -> None)
       in
+      let named_form = is_named_spec_function fn_expr in
+      let concat_form =
+        match fn_expr.pexp_desc with
+        | Pexp_ident { txt = Lident ("concat" | "concat_sum"); _ } -> true
+        | _ -> false
+      in
+      let rhses_position =
+        if concat_form then
+          List.filter_mapi args ~f:(fun i (label, _) ->
+              match label with Nolabel -> Some i | _ -> None)
+          |> fun positions -> List.nth positions 1
+        else None
+      in
       let vbs_fn, e_fn = loop ?label fn_expr in
       let vbs_args, processed_args =
         List.unzip
         @@ List.mapi args ~f:(fun i (arg_label, arg_expr) ->
+            let ocaml_argument =
+              (named_form
+              &&
+              match arg_label with
+              | Labelled "capture_dims" | Optional "capture_dims" -> true
+              | _ -> false)
+              || Option.equal Int.equal rhses_position (Some i)
+            in
             match unit_position with
+            | _ when ocaml_argument ->
+                (* These containers belong to the named API, not block-tensor syntax. Keep existing
+                   [%oc ...] escapes working as well. *)
+                let vbs, e =
+                  match arg_expr.pexp_desc with
+                  | Pexp_extension ({ txt = "oc"; _ }, _) -> loop arg_expr
+                  | _ -> (no_vbs, arg_expr)
+                in
+                (vbs, (arg_label, e))
             | Some unit_pos when i < unit_pos ->
                 (* Before unit: preserve as OCaml expression *)
                 (no_vbs, (arg_label, arg_expr))

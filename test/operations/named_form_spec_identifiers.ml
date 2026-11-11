@@ -37,7 +37,7 @@ let%op named_window ~use_padding x w = einsum "o+k; k => o" x w
 let%op op_window ~use_padding x w = x +* "o+k; k => o" w
 
 (* A capture alongside a stride identifier. *)
-let%op named_captured ~stride ~d x = einsum1 ~capture_dims:[%oc [ d ]] "stride*o => o" x
+let%op named_captured ~stride ~d x = einsum1 ~capture_dims:[ d ] "stride*o => o" x
 
 (* The same in [%cd]. *)
 let%cd cd_strided ~stride x = einsum1 "stride*o => o" x
@@ -111,3 +111,23 @@ let () =
     ~f:exact;
   p "the capture names the output dimension, n / stride"
     (Option.equal Int.equal d.var_ref.solved_dim (Some (n / stride)))
+
+(* Named forms consume ordinary OCaml containers, even when labels intervene. *)
+let%op named_concat x w = concat "a; b => a^b" [| x; w |]
+let%op named_concat_sum ~d x w = concat_sum "a; b => a^b" ~capture_dims:[ d ] [| x; w |]
+let%op named_optional_capture ~d x = einsum1 ?capture_dims:(Some [ d ]) "a => a" x
+
+let () =
+  let want = Array.append xs taps in
+  p_all2 "concat accepts an OCaml operand array" (values (named_concat x w)) want ~f:exact;
+  let d = Shape.get_variable_ref "a" in
+  p_all2 "concat_sum accepts an array after labelled capture_dims"
+    (values (named_concat_sum ~d x w))
+    want ~f:exact;
+  p "concat_sum captures its first operand dimension"
+    (Option.equal Int.equal d.var_ref.solved_dim (Some n));
+  let d = Shape.get_variable_ref "a" in
+  p_all2 "einsum1 accepts an optional OCaml capture list"
+    (values (named_optional_capture ~d x))
+    xs ~f:exact;
+  p "optional capture_dims captures the axis" (Option.equal Int.equal d.var_ref.solved_dim (Some n))
