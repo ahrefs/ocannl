@@ -740,7 +740,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
            ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest]))]
     when String.contains spec_str '>'
          && String.equal op_ident Einsum_parser.concat_operator_with_generated_specs ->
-      let capture_vbs, capture_dims_expr = collect_capture_labels ~loc head rest in
+      let capture_vbs, capture_dims_expr = collect_capture_labels ~loc ~spec:spec_str head rest in
       let vbs1, rhses =
         match expr1.pexp_desc with
         | Pexp_tuple elems ->
@@ -765,7 +765,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
            ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest])
            [%e? expr2])]
     when String.contains spec_str '>' && Hashtbl.mem einsum_binary_ops op_ident ->
-      let capture_vbs, capture_dims_expr = collect_capture_labels ~loc head rest in
+      let capture_vbs, capture_dims_expr = collect_capture_labels ~loc ~spec:spec_str head rest in
       let vbs1, e1 = loop expr1 in
       let vbs2, e2 = loop expr2 in
       let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
@@ -782,7 +782,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
            [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]
            ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest]))]
     when String.contains spec_str '>' && Hashtbl.mem einsum_binary_ops op_ident ->
-      let capture_vbs, capture_dims_expr = collect_capture_labels ~loc head rest in
+      let capture_vbs, capture_dims_expr = collect_capture_labels ~loc ~spec:spec_str head rest in
       let vbs1, e1 = loop expr1 in
       let vbs2, e2 = loop expr2 in
       let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
@@ -798,7 +798,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
         ([%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]
            ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest]))]
     when String.contains spec_str '>' && Hashtbl.mem einsum_unary_ops op_ident ->
-      let capture_vbs, capture_dims_expr = collect_capture_labels ~loc head rest in
+      let capture_vbs, capture_dims_expr = collect_capture_labels ~loc ~spec:spec_str head rest in
       let vbs1, e1 = loop expr1 in
       let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
       let combined_vbs = reduce_vbss [ vbs1; capture_vbs ] in

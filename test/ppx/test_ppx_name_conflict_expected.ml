@@ -81,7 +81,7 @@ let test_capture_shadows_outer_param =
       let __ocannl_body x =
         let c = Shape.get_variable_ref "c" in
         (+) ?label:(Some ["test_capture_shadows_outer_param"]) p
-          (einsum1 ?label:None ~capture_dims:[c] "a, b => a" x) in
+          (einsum1 ?label:None ~capture_dims:[c] "a, c => a" x) in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure
           ~name:"test_capture_shadows_outer_param" ~arity:1

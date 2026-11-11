@@ -747,7 +747,32 @@ include (
         let captures = List.map captures ~f:(fun vb -> if clashes vb then clash_error vb else vb) in
         (lifted @ markers, let_opt ~loc captures body)
 
-    let collect_capture_labels ~loc head rest =
+    (* Match the environments Shape builds: dimension labels (also inside windows and concats) and
+       named row variables, never coefficients or fixed indices. Parse the source text before
+       identifier substitution, so the refusal can distinguish single-char and multichar specs. *)
+    let capture_labels_in_spec spec =
+      let open Einsum_parser in
+      let axis_labels = function
+        | Label name -> [ name ]
+        | Fixed_index _ -> []
+        | Affine_spec { over_label; conv; _ } ->
+            over_label :: Option.to_list (Option.map conv ~f:(fun c -> c.kernel_label))
+        | Concat_spec components ->
+            List.filter_map components ~f:(function
+              | Concat_label name -> Some name
+              | Concat_size _ -> None)
+      in
+      let slot_labels slot =
+        List.filter_opt [ slot.bcast_batch; slot.bcast_input; slot.bcast_output ]
+        @ List.concat_map (Map.data slot.labels) ~f:axis_labels
+      in
+      try
+        let rhses, lhs = einsum_of_spec spec in
+        Some (Set.of_list (module String) (List.concat_map (lhs :: rhses) ~f:slot_labels))
+      with Parse_error _ -> None (* The spec substitution reports the parse error itself. *)
+
+    let collect_capture_labels ~loc ~spec head rest =
+      let spec_labels = capture_labels_in_spec spec in
       let capture_labels = head :: collect_list [] rest in
       let capture_labels, errors =
         List.partition_map capture_labels ~f:(fun expr ->
@@ -776,7 +801,18 @@ include (
       let capture_refs, capture_bindings =
         List.map capture_labels ~f:(fun (loc, label) ->
             let ref_expr =
-              [%expr Shape.get_variable_ref [%e Ast_builder.Default.estring ~loc label]]
+              match spec_labels with
+              | Some labels when not (Set.mem labels label) ->
+                  let hint =
+                    if (not (Einsum_parser.is_multichar spec)) && String.length label > 1 then
+                      Einsum_parser.multichar_note ~what:"capture label" ~written:(label ^ ",")
+                    else ""
+                  in
+                  Ast_builder.Default.pexp_extension ~loc
+                  @@ Location.error_extensionf ~loc
+                       "ppx_ocannl: capture label %S is absent from einsum spec %S%s" label spec
+                       hint
+              | _ -> [%expr Shape.get_variable_ref [%e Ast_builder.Default.estring ~loc label]]
             in
             let binding =
               with_attr ~name:capture_attr
@@ -800,7 +836,7 @@ include (
         loc:location -> value_binding list -> expression -> value_binding list * expression
 
       val collect_capture_labels :
-        loc:location -> expression -> expression -> value_binding list * expression
+        loc:location -> spec:string -> expression -> expression -> value_binding list * expression
     end)
 
 let no_vbs = []

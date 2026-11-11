@@ -144,3 +144,10 @@ files.
   root and shifts later printed ids by one.
 - A dimension capture needs a literal spec containing `=>`; this example captures the reduced axis.
   Doc-check `note_dimension_capture`: `let sum_last x = let open Ocannl.Nn_blocks.DSL_modules in [%op x ++ "ab => a" ["b"]]`.
+
+- Literal einsum operator captures are checked before substitution (gh-ocannl-2163):
+  `collect_capture_labels` shares the check between `%op` and `%cd`, names the user's spec at the
+  capture literal, and offers multichar mode only for a multi-letter label in a single-char spec.
+  Rows, affine over/kernel labels, concat components and result-only labels are capturable;
+  coefficient identifiers and fixed indices are not. `test/ppx/test_capture_errors.ml` pins the
+  errors and accepted expansions; direct operation calls retain Shape's runtime fallback.
