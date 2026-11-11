@@ -87,6 +87,12 @@ LOGS=$STATE/logs
 UNIT_STATES=$STATE/unit-state
 MAIN=${OCANNL_TOOL_SWEEP_REPO:-$HOME/ocannl-staging}
 SWEEP_TOOLS=$(cd "$(dirname "$0")" && pwd)
+# A failed `.` does not stop bash (not in POSIX mode), so a sweep extracted without scripts/
+# would run on and die later with an unrelated message; refuse here, by name.
+[ -r "$SWEEP_TOOLS/../scripts/process-group.sh" ] || {
+  echo "sweep: cannot read $SWEEP_TOOLS/../scripts/process-group.sh (extract scripts/ beside tools/)" >&2
+  exit 2
+}
 # shellcheck source=../scripts/process-group.sh
 . "$SWEEP_TOOLS/../scripts/process-group.sh"
 AGGREGATE_SKIPS=$SWEEP_TOOLS/aggregate-skips.sh
