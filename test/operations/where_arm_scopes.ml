@@ -445,9 +445,9 @@ let row_cross_order () =
   values name got [ [| sum2 0 +. (2. *. (sum2 0 +. xs.(0))); sum2 1; 0.; 0. |] ];
   guarded name source x
 
-(* [i < 1 ? (r ? s : 0) : 0], [s] minted before [r]: [r] runs under [i < 1], [s] under [i < 1 && r],
-   whose test reads [r]'s local, so [r] has to run first although [s]'s body does not read it (Codex
-   review of the gh-ocannl-2145 PR). *)
+(* [i < 1 ? (r ? s : 0) : 0], [s] minted before [r]: a test of [r]'s value guards nothing, so [s]
+   runs under [i < 1] alone, never testing [r] ahead of [r]'s own definition (Codex review of the
+   gh-ocannl-2145 PR, round 2). *)
 let row_guard_reads () =
   let name = "was_guard_reads" in
   let x = mk "was_guard_reads_x" and out = mk ~dims:[| n |] "was_guard_reads_out" in
@@ -467,9 +467,9 @@ let row_guard_reads () =
   guarded name source x
 
 (* [(i < 1 ? (r ? s : 0) : 0) + (3 <= i ? (s' ? r' : 0) : 0)], the primed scopes alpha-equal to the
-   others: after the CSE, [r]'s conditions test [s] and [s]'s test [r], a cycle the ordering cuts
-   (Codex review of the gh-ocannl-2145 PR). Both read in range; the indices in the conditions keep
-   them from blending. *)
+   others: after the CSE, [r]'s conditions would test [s] and [s]'s test [r], a cycle; tests of
+   scope values guard nothing, so none arises (Codex review of the gh-ocannl-2145 PR, round 4). Both
+   read in range; the indices in the conditions keep them from blending. *)
 let row_guard_cycle () =
   let name = "was_guard_cycle" in
   let x = mk "was_guard_cycle_x" and out = mk ~dims:[| n |] "was_guard_cycle_out" in
@@ -491,8 +491,9 @@ let row_guard_cycle () =
   let got, _source = run_row ~name ~inputs:[ x ] ~outputs:[ out ] llc in
   values name got [ [| xs.(2) +. xs.(3); 0.; 0.; xs.(3) +. xs.(4) |] ]
 
-(* [(i < 1 ? s : 0) ? r : 0], [r] minted first, [s] copying [r]'s local: [r]'s conditions test [s],
-   whose body reads [r], a cycle closed through a body (Codex review of the gh-ocannl-2145 PR). *)
+(* [(i < 1 ? s : 0) ? r : 0], [r] minted first, [s] copying [r]'s local: [r]'s conditions would test
+   [s], whose body reads [r], a cycle closed through a body; the test of a value reading [s] guards
+   nothing (Codex review of the gh-ocannl-2145 PR, round 5). *)
 let row_mixed_cycle () =
   let name = "was_mixed_cycle" in
   let x = mk "was_mixed_cycle_x" and out = mk ~dims:[| n |] "was_mixed_cycle_out" in
@@ -512,6 +513,32 @@ let row_mixed_cycle () =
   let got, _source = run_row ~name ~inputs:[ x ] ~outputs:[ out ] llc in
   values name got [ [| sum2 0; 0.; 0.; 0. |] ]
 
+(* [(i < 2 ? (r ? (i < 1 ? s : 0) : 0) : 0) + (i <= 0 ? (s' ? r' : 0) : 0)], the primed scopes
+   alpha-equal to the others, [s] reading in range at [i = 0] only: the tests of the scopes' values
+   guard nothing, but the index guard after one of them still does, so [s] runs under [(i < 2 && i <
+   1) || i <= 0] (Codex review of the gh-ocannl-2145 PR). *)
+let row_value_test_range () =
+  let name = "was_value_test_range" in
+  let x = mk "was_value_test_range_x" and out = mk ~dims:[| n |] "was_value_test_range_out" in
+  let llc =
+    loop (fun i ->
+        let vr = local_node () and vs = local_node () in
+        let _, r = sum_scope ~v:vr x ~at:(in_range i)
+        and _, r' = sum_scope ~v:vr x ~at:(in_range i) in
+        let _, sc = sum_scope ~v:vs x ~at:(off_at ~pass:0 i)
+        and _, sc' = sum_scope ~v:vs x ~at:(off_at ~pass:0 i) in
+        let truth v = add v (mul (c 0.) (embed i)) in
+        let sel cond a = LL.Ternop (Ops.Where, (truth cond, single), (a, single), (c 0., single)) in
+        set_at out (iter i)
+          (add
+             (where_ (lt (embed i) (ic 2)) (sel r (where_ (lt (embed i) (ic 1)) sc (c 0.))) (c 0.))
+             (where_ (le (embed i) (ic 0)) (sel sc' r') (c 0.))))
+  in
+  let llc = LL.eliminate_common_subexpressions llc in
+  let got, source = run_row ~name ~inputs:[ x ] ~outputs:[ out ] llc in
+  values name got [ [| sum2 0 +. sum2 0; 0.; 0.; 0. |] ];
+  guarded name source x
+
 let () =
   row_then ();
   row_else ();
@@ -529,4 +556,5 @@ let () =
   row_cross_order ();
   row_guard_reads ();
   row_guard_cycle ();
-  row_mixed_cycle ()
+  row_mixed_cycle ();
+  row_value_test_range ()

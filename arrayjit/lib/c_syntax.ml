@@ -3349,12 +3349,12 @@ let with_compiler_options ~compiler ~options ~enrich compile =
     let exn = Option.value (enrich exn ~suffix) ~default:exn in
     Stdlib.Printexc.raise_with_backtrace exn backtrace
 
-type guard_lit = { key : string; test : PPrint.document; holds : bool; deps : int list }
+type guard_lit = { key : string; test : PPrint.document; holds : bool }
 (** One condition a scope definition's execution is under (gh-ocannl-2145): the rendered condition
     [test] of a short-circuiting [Where], and whether the definition sits in its then-arm ([holds])
     or its else-arm. [key] is [test]'s text: a condition is pure and the bodies run before it write
-    only their own locals, so two conditions spelled alike in one statement agree. [deps]: the scope
-    locals [test] reads, whose definitions must run before it is tested. *)
+    only their own locals, so two conditions spelled alike in one statement agree. A condition
+    reading a scope local is never one: see {!guard_arms}. *)
 
 type scope_def = {
   reads : int list Lazy.t;  (** The locals the body reads. *)
@@ -3414,21 +3414,20 @@ let rec normalize_guards (paths : guard_lit list list) =
         (prefix :: List.filter absorbed ~f:(fun r -> not (equal_guard r p || equal_guard r q)))
 
 (* gh-ocannl-2145: [d_then] and [d_else], the entries of a short-circuiting [Where]'s arms, under
-   their condition [cond]. *)
+   their condition [cond], whose own entries are [cond_defs]. A condition reading a scope local -- a
+   test of a computed value, never one of the index guards the inliner and lowering mint -- guards
+   nothing: its arms' definitions stay under the conditions around it. Testing it ahead of the
+   statement would make the definitions' order depend on their tests' reads too, and CSE sharing
+   makes those cycle (Codex review of the gh-ocannl-2145 PR, rounds 2-6). *)
 let guard_arms ~(cond : PPrint.document) ~(cond_defs : local_def list) d_then d_else =
-  if List.is_empty d_then && List.is_empty d_else then []
+  if (List.is_empty d_then && List.is_empty d_else) || not (List.is_empty cond_defs) then
+    d_then @ d_else
   else
     let buf = Buffer.create 64 in
     PPrint.ToBuffer.compact buf cond;
     let key = Buffer.contents buf in
     let under holds =
-      List.map ~f:(fun d ->
-          {
-            d with
-            guard =
-              { key; test = cond; holds; deps = List.map cond_defs ~f:(fun d -> d.scope) }
-              :: d.guard;
-          })
+      List.map ~f:(fun d -> { d with guard = { key; test = cond; holds } :: d.guard })
     in
     under true d_then @ under false d_else
 
@@ -3738,7 +3737,9 @@ module C_syntax (B : C_syntax_config) = struct
      [Where]'s condition is never tested where the operator skipped it. Its other definitions still
      run ahead of the statement. *)
   let gate_entries prec op ~d1 e1 d2 =
-    if not (List.exists d2 ~f:(fun d -> not (List.is_empty d.guard))) then d2
+    (* As in {!guard_arms}, a test reading a scope local guards nothing. *)
+    if (not (List.exists d2 ~f:(fun d -> not (List.is_empty d.guard)))) || not (List.is_empty d1)
+    then d2
     else
       let open PPrint in
       let lit c = string (B.constant_literal prec c) in
@@ -3749,9 +3750,7 @@ module C_syntax (B : C_syntax_config) = struct
       in
       let buf = Buffer.create 64 in
       PPrint.ToBuffer.compact buf test;
-      let lit =
-        { key = Buffer.contents buf; test; holds = true; deps = List.map d1 ~f:(fun d -> d.scope) }
-      in
+      let lit = { key = Buffer.contents buf; test; holds = true } in
       List.map d2 ~f:(fun d ->
           if List.is_empty d.guard then d else { d with guard = lit :: d.guard })
 
@@ -4826,9 +4825,9 @@ module C_syntax (B : C_syntax_config) = struct
      ({!normalize_guards}) -- what each of them implies, so no read meets a local its body did not
      set, and a scope both arms need runs unconditionally, as either arm would run it. The
      unconditional definitions render as they always did; then the conditional ones'
-     zero-initialized declarations; then the conditional bodies in one dependency order -- over what
-     each body reads and what the tests of its conditions read -- each run of them under the same
-     conditions in an [if] over those conditions. *)
+     zero-initialized declarations; then the conditional bodies in one dependency order, each run of
+     them under the same conditions in an [if] over those conditions. A condition reads no scope
+     local ({!guard_arms}), so the bodies' reads are the only order to keep. *)
   let pp_local_defs (local_defs : local_def list) =
     let open PPrint in
     let defs =
@@ -4845,18 +4844,6 @@ module C_syntax (B : C_syntax_config) = struct
     let equal_paths a b =
       List.length a = List.length b && List.for_all a ~f:(fun p -> List.mem b p ~equal:equal_guard)
     in
-    (* The cycle cuts made so far (see [settle]), each [(s, r)] applied to every update of [s]'s
-       conditions, so that propagation cannot bring a cut test back. *)
-    let cuts = Hashtbl.create (module Int) in
-    let apply_cuts s paths =
-      match Hashtbl.find cuts s with
-      | None -> paths
-      | Some rs ->
-          normalize_guards
-            (List.map paths ~f:(fun path ->
-                 List.take_while path ~f:(fun (l : guard_lit) ->
-                     not (List.exists l.deps ~f:(fun d -> List.mem rs d ~equal:Int.equal)))))
-    in
     let propagate () =
       let changed = ref true in
       while !changed do
@@ -4866,73 +4853,14 @@ module C_syntax (B : C_syntax_config) = struct
             List.iter (Lazy.force def.reads) ~f:(fun r ->
                 match Hashtbl.find guards r with
                 | Some gr when r <> scope ->
-                    let gr' = apply_cuts r (normalize_guards (gr @ g)) in
+                    let gr' = normalize_guards (gr @ g) in
                     if not (equal_paths gr gr') then (
                       Hashtbl.set guards ~key:r ~data:gr';
                       changed := true)
                 | _ -> ()))
       done
     in
-    let is_conditional s =
-      match Hashtbl.find guards s with Some [ [] ] | None -> false | Some _ -> true
-    in
-    let guard_deps s =
-      List.concat_map (Hashtbl.find_exn guards s) ~f:(fun path ->
-          List.concat_map path ~f:(fun (l : guard_lit) -> l.deps))
-    in
-    (* A definition whose conditions' tests read a definition that, through bodies and tests, waits
-       on it: a walk over both reaches one still in progress through a test. CSE sharing independent
-       scopes makes one, as in [(A ? (R ? S : 0) : 0) + (B ? (S ? R : 0) : 0)] (Codex review). *)
-    let guard_back_edge () =
-      let state = Hashtbl.create (module Int) in
-      let found = ref None in
-      (* [stack]: the walk's active definitions, innermost first, each with whether it was reached
-         through a test ([`Test]) or a body ([`Body]) of the one below it. *)
-      let rec visit ~stack s =
-        if Option.is_none !found && not (Hashtbl.mem state s) then (
-          Hashtbl.set state ~key:s ~data:`Active;
-          let edge kind r =
-            if Option.is_none !found && r <> s && is_conditional r then
-              match Hashtbl.find state r with
-              | Some `Done -> ()
-              | None -> visit ~stack:((s, kind) :: stack) r
-              | Some `Active ->
-                  if
-                    (* A cycle, closed by this edge from [s] to [r]: cut the innermost test edge on
-                       it. Body edges alone never close one (scope purity; hand-built cycles render
-                       as they read). *)
-                    Poly.equal kind `Test
-                  then found := Some (s, r)
-                  else
-                    let rec back child = function
-                      | (parent, `Test) :: _ when child <> r -> found := Some (parent, child)
-                      | (parent, _) :: rest when child <> r -> back parent rest
-                      | _ -> ()
-                    in
-                    back s stack
-          in
-          List.iter (Lazy.force (Hashtbl.find_exn by_scope s).reads) ~f:(edge `Body);
-          List.iter (guard_deps s) ~f:(edge `Test);
-          Hashtbl.set state ~key:s ~data:`Done)
-      in
-      List.iter sorted ~f:(fun (s, _) -> if is_conditional s then visit ~stack:[] s);
-      !found
-    in
-    (* Such a cycle is cut where it is found: the definition's conditions stop before the first test
-       reading the one in progress, so it runs at least as often, under the conditions ahead of that
-       test -- a test of a scope's value, never one of the index guards the inliner mints -- and
-       what it reads follows. A cut stays applied, and each removes a test dependency for good, so
-       the cutting ends. *)
-    let rec settle () =
-      propagate ();
-      match guard_back_edge () with
-      | None -> ()
-      | Some (s, r) ->
-          Hashtbl.add_multi cuts ~key:s ~data:r;
-          Hashtbl.update guards s ~f:(function Some paths -> apply_cuts s paths | None -> [ [] ]);
-          settle ()
-    in
-    settle ();
+    propagate ();
     let unconditional, conditional =
       List.partition_tf sorted ~f:(fun (s, _) ->
           match Hashtbl.find_exn guards s with [ [] ] -> true | _ -> false)
@@ -4946,15 +4874,8 @@ module C_syntax (B : C_syntax_config) = struct
         if Hash_set.mem emitted scope then docs
         else (
           Hash_set.add emitted scope;
-          (* What the body reads, and what the tests of its conditions read. *)
-          let guard_deps =
-            List.concat_map (Hashtbl.find_exn guards scope) ~f:(fun path ->
-                List.concat_map path ~f:(fun (l : guard_lit) -> l.deps))
-          in
           let siblings =
-            List.filter_map
-              (Lazy.force def.reads @ guard_deps)
-              ~f:(fun r ->
+            List.filter_map (Lazy.force def.reads) ~f:(fun r ->
                 if Hash_set.mem in_group r then
                   Option.map (Hashtbl.find by_scope r) ~f:(fun d -> (r, d))
                 else None)

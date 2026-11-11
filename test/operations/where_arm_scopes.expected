@@ -33,3 +33,5 @@ was_guard_reads: the values are the closed form's: true
 was_guard_reads: every read of was_guard_reads_x sits under its condition: true
 was_guard_cycle: the values are the closed form's: true
 was_mixed_cycle: the values are the closed form's: true
+was_value_test_range: the values are the closed form's: true
+was_value_test_range: every read of was_value_test_range_x sits under its condition: true

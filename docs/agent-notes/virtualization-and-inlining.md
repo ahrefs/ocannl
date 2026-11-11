@@ -76,13 +76,12 @@ files.
   gate) keeps its block behind that operator's own test (the second operand at 1 and at 0 giving
   different results), so its condition is never tested where the operator skipped it. The unconditional definitions render as before, then the
   conditional ones' zero-initialized declarations, then the conditional bodies in ONE dependency
-  order (over what each body reads AND what its conditions' tests read: in `A ? (R ? S : 0) : 0`
-  the test of `S` reads `R`; a cycle through such a test, closed by another test or by a body, which CSE
-  sharing or hand-built sibling reads make, is cut at its innermost test edge by stopping that
-  definition's conditions before the test) across all their
-  conditions (a body under `(A && B) || (A && C)` can read one under `A`:
-  blocks emitted condition by condition read it before it ran, Codex review), consecutive bodies
-  under the same conditions sharing one `if`. Under a blend (cc and HIP at a
+  order across all their conditions (a body under `(A && B) || (A && C)` can read one under `A`),
+  consecutive bodies under the same conditions sharing one `if`. A condition reading a scope local
+  (a test of a computed value, never an index guard) guards nothing: its arms stay under the
+  conditions around it, the index guards after it included. Letting such tests guard made the
+  definitions' order depend on their tests' reads, which CSE sharing turns into cycles, and cutting
+  those dropped index guards (Codex review, rounds 2-6). Under a blend (cc and HIP at a
   float precision, `speculable_select`, whose conditions never mention an index) both arms run by
   contract, so nothing is guarded and no branch is added; a gate's operand keeps its hoisted
   definitions too (a value test, never a range guard). `hoist_cross_statement_cse` lifts a shared
