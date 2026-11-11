@@ -1,2 +1,13 @@
 compose closes the packed draw to rank zero: true
+packed=false materialized=true singleton=false uses the intended placement: true
 reference lies in [0,1): true
+packed=true materialized=false singleton=false uses the intended placement: true
+packed materialized=false singleton=false equals the first lane: true
+packed=true materialized=false singleton=true uses the intended placement: true
+packed materialized=false singleton=true equals the first lane: true
+packed=true materialized=true singleton=false uses the intended placement: true
+packed materialized=true singleton=false equals the first lane: true
+packed=true materialized=true singleton=true uses the intended placement: true
+packed materialized=true singleton=true equals the first lane: true
+einsum closes the packed draw to rank zero: true
+packed einsum equals 2*u*u: true

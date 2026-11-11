@@ -9533,7 +9533,6 @@
  (deps
   (alias runtest-uniform_rank_zero-logged)))
 
-
 (test
  (name schedule_split_reduce)
  (package neural_nets_lib)
