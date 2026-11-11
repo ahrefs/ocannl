@@ -1236,7 +1236,7 @@ let translate ?ident_label (expr : expression) : result =
              ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest])
              [%e? expr2])]
       when String.contains spec_str '>' && Hashtbl.mem einsum_binary_ops op_ident ->
-        let capture_vbs, capture_dims_expr = collect_capture_labels ~loc head rest in
+        let capture_vbs, capture_dims_expr = collect_capture_labels ~loc ~spec:spec_str head rest in
         let res1 = loop ~proj_in_scope expr1 in
         let res2 = loop ~proj_in_scope expr2 in
         let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
@@ -1258,7 +1258,7 @@ let translate ?ident_label (expr : expression) : result =
              [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]
              ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest]))]
       when String.contains spec_str '>' && Hashtbl.mem einsum_binary_ops op_ident ->
-        let capture_vbs, capture_dims_expr = collect_capture_labels ~loc head rest in
+        let capture_vbs, capture_dims_expr = collect_capture_labels ~loc ~spec:spec_str head rest in
         let res1 = loop ~proj_in_scope expr1 in
         let res2 = loop ~proj_in_scope expr2 in
         let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
@@ -1304,7 +1304,7 @@ let translate ?ident_label (expr : expression) : result =
           ([%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]
              ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest]))]
       when String.contains spec_str '>' && Hashtbl.mem einsum_unary_ops op_ident ->
-        let capture_vbs, capture_dims_expr = collect_capture_labels ~loc head rest in
+        let capture_vbs, capture_dims_expr = collect_capture_labels ~loc ~spec:spec_str head rest in
         let res1 = loop ~proj_in_scope expr1 in
         let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
         {

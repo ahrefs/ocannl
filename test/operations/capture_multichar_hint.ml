@@ -2,14 +2,11 @@ open Base
 open Ocannl
 open Nn_blocks.DSL_modules
 
-(* A capture label is looked up whole among the spec's labels, but a single-char spec lexes a
-   multi-letter label as one axis per character, so the label is never there (gh-ocannl-2092). The
-   refusal then names the fix -- multichar mode -- with the note the einsum parser gives a
-   multi-letter row variable. The ppx renders every literal spec comma-separated ("ab => a" reaches
-   Shape as "a, b => a"), so the hint is decided on the spec's labels: it is given when every
-   character of the label is an axis of the spec, and withheld for a one-letter label or a label
-   with a character the spec does not hold. *)
+(* Direct operation calls still need Shape's runtime fallback for absent captures. Literal operator
+   captures are now refused by the ppx (test/ppx/test_capture_errors.ml, gh-ocannl-2163). The
+   runtime hint uses the parsed labels because callers can supply comma-rendered specs. *)
 
+let capture spec label x = NTDSL.einsum1 ~capture_dims:[ Shape.get_variable_ref label ] spec x ()
 let input () = NTDSL.init ~l:"x" ~prec:Ir.Ops.single ~b:[] ~o:[ 2; 3 ] ~f:(fun _ -> 1.) ()
 
 let refusal name build =
@@ -19,39 +16,27 @@ let refusal name build =
   | exception Row.Shape_error (msg, _) -> Stdio.printf "%s:\n  %s\n" name msg
 
 let () =
-  refusal "multi-letter label, single-char spec" (fun x ->
-      let%op y = x ++ "ab => a" [ "ab" ] in
-      ignore (ab : Shape.delayed_var_ref);
-      y);
-  refusal "label with a digit, single-char spec" (fun x ->
-      let%op y = x ++ "f0 => f0" [ "f0" ] in
-      ignore (f0 : Shape.delayed_var_ref);
-      y);
-  refusal "single-char spec through the operation, not the ppx" (fun x ->
-      Operation.einsum1
-        ~capture_dims:[ Shape.get_variable_ref "ab" ]
-        "ab => a" ~grad_spec:Tensor.Prohibit_grad x ());
-  (* Indistinguishable, once the ppx has rendered it, from the single-char case above. *)
+  refusal "multi-letter label, single-char spec" (fun x -> capture "ab => a" "ab" x);
+  refusal "label with a digit, single-char spec" (fun x -> capture "f0 => f0" "f0" x);
+  (* A comma-rendered spec still receives the conservative runtime hint. *)
   refusal "multi-letter label whose letters a multichar spec names" (fun x ->
-      let%op y = x ++ "a, b => a" [ "ab" ] in
-      ignore (ab : Shape.delayed_var_ref);
-      y);
-  refusal "one-letter label absent from the spec" (fun x ->
-      let%op y = x ++ "ab => a" [ "c" ] in
-      ignore (c : Shape.delayed_var_ref);
-      y);
+      capture "a, b => a" "ab" x);
+  refusal "one-letter label absent from the spec" (fun x -> capture "ab => a" "c" x);
   refusal "multi-letter label with a letter the spec does not hold" (fun x ->
-      let%op y = x ++ "ab => a" [ "bc" ] in
-      ignore (bc : Shape.delayed_var_ref);
-      y);
-  refusal "label with a digit the spec does not hold" (fun x ->
-      let%op y = x ++ "ab => a" [ "a1" ] in
-      ignore (a1 : Shape.delayed_var_ref);
-      y);
+      capture "ab => a" "bc" x);
+  refusal "label with a digit the spec does not hold" (fun x -> capture "ab => a" "a1" x);
   (* The fix the hint names: the label written as one multichar axis is found and captures it. *)
   Tensor.unsafe_reinitialize ();
   let%op y = input () ++ "a, f0 => a" [ "f0" ] in
-  let ctx = Train.forward_once (Context.auto ()) y in
+  ignore (Shape.to_dims y.Tensor.shape : int array);
   Stdio.printf "multichar spec: the label captures dimension %s\n"
     (Option.value_map f0.var_ref.solved_dim ~default:"none" ~f:Int.to_string);
-  Context.release ctx
+  (* A trailing comma must survive rendering even when no slot has a second axis. *)
+  Tensor.unsafe_reinitialize ();
+  let x = NTDSL.init ~l:"single_axis" ~prec:Ir.Ops.single ~b:[] ~o:[ 7 ] ~f:(fun _ -> 1.) () in
+  let%op y = x ++ "ab, => ab," [ "ab" ] in
+  let dims = Shape.to_dims y.Tensor.shape in
+  Verdict.Claims.p "single-axis multichar capture preserves the dimension"
+    (Option.equal Int.equal ab.var_ref.solved_dim (Some 7));
+  Verdict.Claims.p "single-axis multichar spec preserves the rank"
+    (Array.equal Int.equal dims [| 7 |])

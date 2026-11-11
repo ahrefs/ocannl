@@ -96,8 +96,9 @@ val bind_captures :
 (** Binds the dimension captures in [vbs] atop a function body; returns the rest, plus markers. *)
 
 val collect_capture_labels :
-  loc:location -> expression -> expression -> value_binding list * expression
-(** For capture list [head :: rest]: a [Shape.get_variable_ref] binding per label, and the list. *)
+  loc:location -> spec:string -> expression -> expression -> value_binding list * expression
+(** For capture list [head :: rest]: a [Shape.get_variable_ref] binding per label, and the list.
+    Refuses a label absent from the literal source [spec], at the capture literal's location. *)
 
 val no_vbs : 'a list
 (** The empty list of collected bindings. *)

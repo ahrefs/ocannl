@@ -18,4 +18,4 @@ let%op test_mixed x =
 (* The capture is bound inside [fun x], the parameter after the unit: it would shadow [c]. *)
 let%op test_capture_shadows_outer_param () =
   let p = { c } in
-  fun x -> p + (x ++ "ab=>a" [ "c" ])
+  fun x -> p + (x ++ "ac=>a" [ "c" ])

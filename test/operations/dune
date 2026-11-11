@@ -2859,13 +2859,12 @@
   (pps ppx_ocannl)))
 
 (test
+ ; ocannl-backend: none -- parses specs and closes shapes; no context or compiled routine.
  (name capture_multichar_hint)
  (package neural_nets_lib)
- (deps
-  ocannl_config
-  (env_var OCANNL_BACKEND))
+ (deps ocannl_config)
  (modules capture_multichar_hint)
- (libraries base ocannl stdio)
+ (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_ocannl)))
 

@@ -1,15 +1,15 @@
 multi-letter label, single-char spec:
-  Variable ab not found in environments for spec: a, b => a; hint: the spec has an axis for each character of `ab`; a multi-letter capture label needs multichar mode: write `ab,` and separate the other axes with commas
-label with a digit, single-char spec:
-  Variable f0 not found in environments for spec: f, 0 => f, 0; hint: the spec has an axis for each character of `f0`; a multi-letter capture label needs multichar mode: write `f0,` and separate the other axes with commas
-single-char spec through the operation, not the ppx:
   Variable ab not found in environments for spec: ab => a; hint: the spec has an axis for each character of `ab`; a multi-letter capture label needs multichar mode: write `ab,` and separate the other axes with commas
+label with a digit, single-char spec:
+  Variable f0 not found in environments for spec: f0 => f0; hint: the spec has an axis for each character of `f0`; a multi-letter capture label needs multichar mode: write `f0,` and separate the other axes with commas
 multi-letter label whose letters a multichar spec names:
   Variable ab not found in environments for spec: a, b => a; hint: the spec has an axis for each character of `ab`; a multi-letter capture label needs multichar mode: write `ab,` and separate the other axes with commas
 one-letter label absent from the spec:
-  Variable c not found in environments for spec: a, b => a
+  Variable c not found in environments for spec: ab => a
 multi-letter label with a letter the spec does not hold:
-  Variable bc not found in environments for spec: a, b => a
+  Variable bc not found in environments for spec: ab => a
 label with a digit the spec does not hold:
-  Variable a1 not found in environments for spec: a, b => a
+  Variable a1 not found in environments for spec: ab => a
 multichar spec: the label captures dimension 3
+single-axis multichar capture preserves the dimension: true
+single-axis multichar spec preserves the rank: true

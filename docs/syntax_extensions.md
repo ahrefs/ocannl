@@ -479,6 +479,11 @@ The specification syntax has two modes:
 - if there is a comma anywhere in a spec, it is the _multichar mode_: axis identifiers are comma-separated and can have multiple characters. The convolution and concatenation syntax also selects it: any of `*`, `+`, `^`, `<`, `&`, or an `=` that does not begin `=>`;
 - otherwise, it is the _single-char mode_: each alphanumeric character corresponds to an axis.
 
+A literal operator capture list is checked by the ppx: every captured name must occur as a
+label or a named row variable in the spec. For example, `"ab => a" ["ab"]` is refused at the
+capture literal: that spec names axes `a` and `b`. To name one axis `ab`, use multichar mode,
+e.g. `"ab, => ab," ["ab"]`. Writing `"a, b => a"` still names two separate axes.
+
 Whitespace never separates axes. In single-char mode it is ignored (`s a` is the two axes `sa`); in multichar mode axes need commas between them, so `s a; s b => s a^b` is a parse error (the `^` selected multichar mode) whose message names the fix, `s, a; s, b => s, a^b`.
 
 The syntax of a generalized einsum spec has two variants:
