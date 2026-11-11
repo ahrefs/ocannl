@@ -57,11 +57,15 @@ files.
   bound before `()` read the parameter). Every binder `translate` reaches is below the lift
   point: only the toplevel function's `()` is one, and `let%op f = let n = .. in fun () ..` makes
   that function non-toplevel. The `try` body and handlers, `lazy` body, constructor/variant
-  arguments and `let*`/`and*` binding expressions and body are traversed too (gh-ocannl-2166). Handler patterns and all
+  arguments and `let*`/`and*` binding expressions and body are traversed too (gh-ocannl-2166).
+  Handler patterns and all
   binding-operator patterns are late binders in their bodies; binding-operator right-hand sides
   keep the outer scope. Dimension captures bind inside the binding-operator callback, so an
   operator invoking it more than once gets fresh references for each invocation. Inline
-  declarations still lift out of these wrappers, including `lazy`.
+  declarations still lift out of these wrappers, including `lazy`. Constructor/variant payloads
+  preserve tuple grouping while translating their elements, including literals and inline records;
+  use `[%oc ...]` for payloads that must keep their ordinary OCaml meaning. Binding-operator
+  right-hand sides carry their pattern's label, like ordinary `let` bindings.
   An unlabelled, unannotated parameter with `non_tensor_evidence` (a stride/dilation identifier of
   a literal spec through `Ppx_shared.einsum_spec_identifiers` -- an operator's, or a named
   form's first positional argument (`Ppx_shared.named_form_spec`, gh-ocannl-2060) -- the operand

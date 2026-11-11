@@ -577,6 +577,14 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
     ~late ?label expr =
   let loc = expr.pexp_loc in
   let loop = translate ~dsl_name ~num_configs ~is_toplevel:false ~opt_label ~late in
+  (* Payloads and application arguments keep OCaml tuple grouping, including nested tuples. *)
+  let rec loop_grouping ?label expr =
+    match expr.pexp_desc with
+    | Pexp_tuple elems ->
+        let vbss, elems = List.unzip (List.map elems ~f:(loop_grouping ?label)) in
+        (reduce_vbss vbss, { expr with pexp_desc = Pexp_tuple elems })
+    | _ -> loop ?label expr
+  in
   (* [loop] below a binder of the body: [construct] binds the names of [pat] there. *)
   let loop_under construct pat =
     translate ~dsl_name ~num_configs ~is_toplevel:false ~opt_label
@@ -961,20 +969,9 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
             | Some unit_pos when i < unit_pos ->
                 (* Before unit: preserve as OCaml expression *)
                 (no_vbs, (arg_label, arg_expr))
-            | _ -> (
-                (* After unit or no unit: transform *)
-                match arg_expr.pexp_desc with
-                | Pexp_tuple elems ->
-                    (* A tuple passed as a function argument is regular OCaml tuple grouping, not an
-                       input-axis block-tensor stack (that is only the top-level tuple form). Keep
-                       the tuple structure, but still translate each element so %op content inside
-                       it (operators, inline params, numeric literals) is expanded rather than left
-                       as raw OCaml. *)
-                    let vbss, elems = List.unzip (List.map elems ~f:loop) in
-                    (reduce_vbss vbss, (arg_label, { arg_expr with pexp_desc = Pexp_tuple elems }))
-                | _ ->
-                    let vbs, e = loop arg_expr in
-                    (vbs, (arg_label, e))))
+            | _ ->
+                let vbs, e = loop_grouping arg_expr in
+                (vbs, (arg_label, e)))
       in
       let all_vbs = reduce_vbss (vbs_fn :: vbs_args) in
       (* A named einsum form's literal spec, which the translation leaves as written, reads
@@ -1284,10 +1281,10 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       let vbs, body = loop ?label body in
       (vbs, { expr with pexp_desc = Pexp_lazy body })
   | { pexp_desc = Pexp_construct (name, Some arg); _ } ->
-      let vbs, arg = loop ?label arg in
+      let vbs, arg = loop_grouping ?label arg in
       (vbs, { expr with pexp_desc = Pexp_construct (name, Some arg) })
   | { pexp_desc = Pexp_variant (name, Some arg); _ } ->
-      let vbs, arg = loop ?label arg in
+      let vbs, arg = loop_grouping ?label arg in
       (vbs, { expr with pexp_desc = Pexp_variant (name, Some arg) })
   | { pexp_desc = Pexp_letop { let_; ands; body }; _ } ->
       (* Binding expressions see the outer scope; all patterns bind only in the body. *)
@@ -1295,7 +1292,9 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       let vbss, bindings =
         List.unzip
         @@ List.map bindings ~f:(fun binding ->
-            let vbs, pbop_exp = loop binding.pbop_exp in
+            let vbs, pbop_exp =
+              loop ~label:[%expr [ [%e pat2string binding.pbop_pat] ]] binding.pbop_exp
+            in
             (vbs, { binding with pbop_exp }))
       in
       let bound_late =

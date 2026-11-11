@@ -17,7 +17,7 @@ let under_lazy =
       let delayed =
         (TDSL.param ?more_label:None ?value:None ?values:None
            ?param_init:None "delayed") () in
-      lazy delayed
+      fun () -> lazy delayed
 let under_constructor =
   let open! TDSL.O in
     fun () ->
@@ -68,7 +68,7 @@ let () =
   p "try body and handler parameters differ"
     ((choose false) != (choose true));
   (let t = under_lazy () in
-   p "lazy parameter is shared" ((Lazy.force t) == (Lazy.force t));
+   p "lazy parameter is shared" ((Lazy.force (t ())) == (Lazy.force (t ())));
    (let wrapped = under_constructor () in
     p "constructor contains a tensor"
       (match wrapped with
@@ -97,3 +97,63 @@ let () =
     (match outputs with
      | (_, a)::(_, b)::[] -> a.Shape.uid <> b.Shape.uid
      | _ -> false)
+type pair =
+  | Pair of Tensor.t * Tensor.t 
+let under_pair =
+  let open! TDSL.O in
+    fun () ->
+      let left =
+        (TDSL.param ?more_label:None ?value:None ?values:None
+           ?param_init:None "left") () in
+      let right =
+        (TDSL.param ?more_label:None ?value:None ?values:None
+           ?param_init:None "right") () in
+      Pair (left, right)
+let under_tuple_option =
+  let open! TDSL.O in
+    fun () ->
+      let optional_left =
+        (TDSL.param ?more_label:None ?value:None ?values:None
+           ?param_init:None "optional_left") () in
+      let optional_right =
+        (TDSL.param ?more_label:None ?value:None ?values:None
+           ?param_init:None "optional_right") () in
+      let nested =
+        (TDSL.param ?more_label:None ?value:None ?values:None
+           ?param_init:None "nested") () in
+      Some (optional_left, (optional_right, nested))
+let under_tuple_variant =
+  let open! TDSL.O in
+    fun () ->
+      let variant_left =
+        (TDSL.param ?more_label:None ?value:None ?values:None
+           ?param_init:None "variant_left") () in
+      let variant_right =
+        (TDSL.param ?more_label:None ?value:None ?values:None
+           ?param_init:None "variant_right") () in
+      `Pair (variant_left, variant_right)
+let labelled_letop =
+  let open! TDSL.O in
+    fun () ->
+      let operand =
+        (TDSL.param ?more_label:None ?value:None ?values:None
+           ?param_init:None "operand") () in
+      let* h = (+) ?label:(Some ["h"]) operand (TDSL.number ?label:None 1.0)
+       in h
+let named name (t : Tensor.t) = List.mem name (t.value).label
+let () =
+  p "constructor tuple payload expands both fields"
+    (match under_pair () with
+     | Pair (a, b) -> (named "left" a) && ((named "right" b) && (a != b)));
+  p "nested tuple payloads preserve grouping"
+    (match under_tuple_option () with
+     | Some (a, (b, c)) ->
+         (named "optional_left" a) &&
+           ((named "optional_right" b) && (named "nested" c))
+     | None -> false);
+  p "variant tuple payload expands both fields"
+    (match under_tuple_variant () with
+     | `Pair (a, b) ->
+         (named "variant_left" a) && ((named "variant_right" b) && (a != b)));
+  p "binding operator right-hand side carries its pattern label"
+    (named "h" (labelled_letop ()))

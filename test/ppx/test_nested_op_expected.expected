@@ -7,3 +7,7 @@ variant contains a tensor: true
 let operators construct a tensor: true
 let operator right-hand sides retain outer scope: true
 binding operator callbacks get fresh dimension captures: true
+constructor tuple payload expands both fields: true
+nested tuple payloads preserve grouping: true
+variant tuple payload expands both fields: true
+binding operator right-hand side carries its pattern label: true

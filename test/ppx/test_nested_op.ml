@@ -6,7 +6,7 @@ let%op under_try () fail =
   try if fail then [%oc raise Exit] else { normal } with Exit -> { recovered }
 [@@ocannl.no_scheme]
 
-let%op under_lazy () = lazy { delayed } [@@ocannl.no_scheme]
+let%op under_lazy () () = lazy { delayed } [@@ocannl.no_scheme]
 let%op under_constructor () = Some { wrapped } [@@ocannl.no_scheme]
 let%op under_variant () = `Tensor { tagged } [@@ocannl.no_scheme]
 let ( let* ) x f = f x
@@ -29,7 +29,7 @@ let () =
   p "try handler parameter is shared" (choose true == choose true);
   p "try body and handler parameters differ" (choose false != choose true);
   let t = under_lazy () in
-  p "lazy parameter is shared" (Lazy.force t == Lazy.force t);
+  p "lazy parameter is shared" (Lazy.force (t ()) == Lazy.force (t ()));
   let wrapped = under_constructor () in
   p "constructor contains a tensor"
     (match wrapped with Some t -> List.mem "wrapped" t.Tensor.value.label | None -> false);
@@ -53,3 +53,31 @@ let () =
   let outputs = capture_callbacks [ TDSL.range 3; TDSL.range 5 ] in
   p "binding operator callbacks get fresh dimension captures"
     (match outputs with [ (_, a); (_, b) ] -> a.Shape.uid <> b.Shape.uid | _ -> false)
+
+type pair = Pair of Tensor.t * Tensor.t
+
+let%op under_pair () = Pair ({ left }, { right }) [@@ocannl.no_scheme]
+
+let%op under_tuple_option () = Some ({ optional_left }, ({ optional_right }, { nested }))
+[@@ocannl.no_scheme]
+
+let%op under_tuple_variant () = `Pair ({ variant_left }, { variant_right }) [@@ocannl.no_scheme]
+
+let%op labelled_letop () =
+  let* h = { operand } + 1.0 in
+  h
+[@@ocannl.no_scheme]
+
+let named name (t : Tensor.t) = List.mem name t.value.label
+
+let () =
+  p "constructor tuple payload expands both fields"
+    (match under_pair () with Pair (a, b) -> named "left" a && named "right" b && a != b);
+  p "nested tuple payloads preserve grouping"
+    (match under_tuple_option () with
+    | Some (a, (b, c)) -> named "optional_left" a && named "optional_right" b && named "nested" c
+    | None -> false);
+  p "variant tuple payload expands both fields"
+    (match under_tuple_variant () with
+    | `Pair (a, b) -> named "variant_left" a && named "variant_right" b && a != b);
+  p "binding operator right-hand side carries its pattern label" (named "h" (labelled_letop ()))
