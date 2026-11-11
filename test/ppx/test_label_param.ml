@@ -2,10 +2,13 @@ open Ocannl.Nn_blocks.DSL_modules
 open Verdict.Claims
 
 (* gh-ocannl-1987: where the [string list] of a parameter labelled [label] goes. Before a [()] it
-   enriches the inline declarations, created at that application; without a [()] they are created
-   once, at definition, and it enriches the result's label, at its position among the parameters. *)
+   enriches the result and inline declarations, created at that application; without a [()] they are
+   created once, at definition, and it enriches the result's label, at its position among the
+   parameters. *)
 
 let%op unit_layer ~label () x = { ul_w } * x
+let%op unit_opt ?label () x = x + 1.0
+let%op unit_default ?(label = [ "dflt" ]) () x = x + 1.0
 let%op late_layer ~label x = { ll_w } * x
 let%op late_opt ?label x = x + 1.0
 let%op late_default ?(label = [ "dflt" ]) x = x + 1.0
@@ -32,8 +35,12 @@ let () =
   let x = TDSL.range ~label:[ "x" ] 3 in
   let lx = label x in
   let y = unit_layer ~label:[ "L" ] () x in
-  claim "with (): the result" y [ "*"; "unit_layer" ];
+  claim "with (): the result" y [ "*"; "unit_layer"; "L" ];
   claim_declared "with (): the inline declaration" y "ul_w" ~has:true "L";
+  claim "with (): ?label given" (unit_opt ~label:[ "O" ] () x) [ "+"; "unit_opt"; "O" ];
+  claim "with (): ?label omitted" (unit_opt () x) [ "+"; "unit_opt" ];
+  claim "with (): default omitted" (unit_default () x) [ "+"; "unit_default"; "dflt" ];
+  claim "with (): default given" (unit_default ~label:[ "G" ] () x) [ "+"; "unit_default"; "G" ];
   let y = late_layer ~label:[ "L" ] x in
   claim "without (): the result" y ([ "*"; "late_layer"; "L" ] @ lx);
   claim_declared "without (): the inline declaration" y "ll_w" ~has:false "L";

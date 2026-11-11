@@ -231,7 +231,12 @@ let mlp_layer =
         ((TDSL.param ?more_label:(Some label) ?value:None ?values:None
             ?param_init:None "b") ~output_dims:[hid_dim]) () in
       let __ocannl_body ~x =
-        relu ?label:(Some ["mlp_layer"])
+        relu
+          ?label:(Some
+                    (["mlp_layer"] @
+                       (match Some label with
+                        | Some label -> label
+                        | None -> [])))
           ((+) ?label:None (( * ) ?label:None w x) b) in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"mlp_layer" ~arity:1
@@ -690,7 +695,10 @@ let _opt_label =
         ((TDSL.param ?more_label:label ?value:None ?values:None
             ?param_init:None "olb") ~output_dims:[hid_dim]) () in
       let __ocannl_body x =
-        (+) ?label:(Some ["_opt_label"]) (( * ) ?label:None olw x) olb in
+        (+) ?label:(Some
+                      (["_opt_label"] @
+                         (match label with | Some label -> label | None -> [])))
+          (( * ) ?label:None olw x) olb in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"_opt_label" ~arity:1
           (function | x::[] -> __ocannl_body x | _ -> assert false) in
@@ -703,7 +711,14 @@ let _opt_label_default =
       let odw =
         (TDSL.param ?more_label:(Some label) ?value:None ?values:None
            ?param_init:None "odw") () in
-      let __ocannl_body x = ( * ) ?label:(Some ["_opt_label_default"]) odw x in
+      let __ocannl_body x =
+        ( *
+          ) ?label:(Some
+                      (["_opt_label_default"] @
+                         (match Some label with
+                          | Some label -> label
+                          | None -> [])))
+          odw x in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"_opt_label_default" ~arity:1
           (function | x::[] -> __ocannl_body x | _ -> assert false) in

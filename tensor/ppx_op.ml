@@ -1019,6 +1019,18 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
              in this body are bound here too, since the unit function is their innermost function;
              those under the parameters after the unit are already bound per call. *)
           let opt_label = find_label_param before_unit in
+          (* The application label names the result as well as its inline declarations. Tensor
+             parameters remain absent from the result's label under [()] (gh-ocannl-2059). *)
+          let label =
+            match opt_label with
+            | None -> label
+            | Some more_label ->
+                let binding_label = Option.value label ~default:[%expr []] in
+                Some
+                  [%expr
+                    [%e binding_label]
+                    @ match [%e more_label] with Some label -> label | None -> []]
+          in
           let vbs, inner_body =
             let body =
               match (after_unit, body) with

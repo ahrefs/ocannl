@@ -1,7 +1,15 @@
-with (): the result: [*; unit_layer]
+with (): the result: [*; unit_layer; L]
 with (): the result: the label is as stated: true
 with (): the inline declaration: [*.; ul_w; L]
 with (): the inline declaration: it carries L: true
+with (): ?label given: [+; unit_opt; O]
+with (): ?label given: the label is as stated: true
+with (): ?label omitted: [+; unit_opt]
+with (): ?label omitted: the label is as stated: true
+with (): default omitted: [+; unit_default; dflt]
+with (): default omitted: the label is as stated: true
+with (): default given: [+; unit_default; G]
+with (): default given: the label is as stated: true
 without (): the result: [*; late_layer; L; 0...2; x]
 without (): the result: the label is as stated: true
 without (): the inline declaration: [*.; ll_w]

@@ -10,10 +10,10 @@
    (dims ((Dim ((d 4) (basis default) (proj_id ((Proj_id 1)))))))
    (bcast Broadcastable) (prov (((sh_id 19) (kind Output))))))
  (batch_padding ()) (input_padding ()) (output_padding ()) (padding_elem ())
- (id 19) (debug_name layer_norm))
+ (id 19) (debug_name layer_norm_ln))
 HERE: test/operations/layer_norm_1d.ml:21:28
 ┌───────────────────────────────────┐
-│[19]: +_layer_norm shape 0:4       │
+│[19]: +_layer_norm_ln shape 0:4    │
 │┌┬────────────────────────────────┐│
 │││axis 0                          ││
 │├┼────────────────────────────────┤│
