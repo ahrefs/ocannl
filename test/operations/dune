@@ -7729,6 +7729,17 @@
  (modules rng_operand_precision)
  (libraries base ocannl stdio arrayjit.verdict ll_test))
 
+; gh-ocannl-2136: byte RNG expressions compare like unsigned storage.
+
+(test
+ (name byte_uniform_unsigned)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules byte_uniform_unsigned)
+ (libraries base ocannl stdio arrayjit.verdict ll_test))
+
 ; gh-ocannl-2046: a constant at a narrow float slot is rounded to the slot's precision at lowering,
 ; after folding, with integer power exponents exempt; executed on the selected backend.
 

@@ -407,7 +407,7 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
 }|},
       [ "uint4x32_t"; "uint4x32_to_int64_uniform_vec" ] );
     ( "uint4x32_to_byte_uniform_lane",
-      {|__device__ signed char uint4x32_to_byte_uniform_lane(uint4x32_t x, int lane) {
+      {|__device__ unsigned char uint4x32_to_byte_uniform_lane(uint4x32_t x, int lane) {
   return uint4x32_to_byte_uniform_vec(x).v[lane];
 }|},
       [ "uint4x32_t"; "uint4x32_to_byte_uniform_vec" ] );
