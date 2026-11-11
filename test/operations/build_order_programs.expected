@@ -1,6 +1,8 @@
 initialization order preserves fixed-program random draws bit for bit: true
 independent parameters initialize in forward operand order: true
 initializer dependencies precede readers despite reversed forward access: true
+slice initializer regression exercises copies: true
+slice parent initialization precedes every copying reader: true
 conv: control: the uid shift changes a node-keyed table's iteration order: true
 conv: control: the shift keeps the nodes' creation order: true
 conv: control: the reversed build creates its nodes in another order: true

@@ -350,6 +350,46 @@ let () =
             ~tol:(fun _ -> 1e-6))
   | _ -> assert false
 
+(* Slice parents are materialization outputs of collect_nodes_guess_output, but still execution
+   dependencies. A precision mismatch forces copies so reading before the owner cannot hide behind
+   aliasing the buffer the owner later fills. *)
+let () =
+  Verdict.case "slice initializer dependencies" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let index, bindings = IDX.get_static_symbol ~static_range:2 IDX.empty in
+      let data =
+        NTDSL.init ~l:"init_slice_data" ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 8 ]
+          ~f:(fun i -> Float.of_int ((10 * i.(0)) + i.(1) + 1))
+          ()
+      in
+      let shared = NTDSL.pointmul data (NTDSL.number 2.) () in
+      let first = TDSL.param "init_slice_owner" ~param_init:(NTDSL.slice index shared) () in
+      let second = TDSL.param "init_slice_reader" ~param_init:(NTDSL.slice index shared) () in
+      List.iter [ first; second ] ~f:(fun t -> Tn.update_prec t.Tensor.value Ir.Ops.half);
+      let%op out = second + first in
+      let base = Context.auto () in
+      let ctx, routine =
+        Context.compile ~name:"bop_init_slices" base (Tensor.init_params out) bindings
+      in
+      IDX.find_exn routine.bindings index := 1;
+      let init_ctx = Context.run ctx routine in
+      p_all "slice initializer regression exercises copies" [ first; second ] ~f:(fun t ->
+          not (Ir.Assignments.slice_alias_eligible ~array:t.Tensor.value ~sliced:shared.value));
+      Train.set_materialized out.value;
+      let ctx, forward =
+        Context.compile ~name:"bop_init_slices_value" init_ctx (Tensor.consume_forward_code out)
+          bindings
+      in
+      IDX.find_exn forward.bindings index := 1;
+      let ctx = Context.run ctx forward in
+      p "slice parent initialization precedes every copying reader"
+        (Array.equal Float.equal
+           (Context.get_values ctx out.value)
+           (Array.init 8 ~f:(fun i -> Float.of_int (44 + (4 * i)))));
+      Context.release ctx;
+      Context.release init_ctx;
+      Context.release base)
+
 let () =
   check "conv" (conv ~channels:(3, 2)) ~changed:(conv ~channels:(2, 3));
   check "transformer" transformer ~changed:(fun ~rev () ->

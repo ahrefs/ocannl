@@ -719,7 +719,16 @@ let%debug7_sexp rec init_params_body ?skip (t : t) : Asgns.comp =
         in
         let asgns = lift_seeds asgns in
         let provides = Asgns.collect_written asgns in
-        let needs = Set.diff (fst (Asgns.collect_nodes_guess_output asgns)) provides in
+        (* That query treats a slice parent as an output to materialize, not a read. A copying slice
+           still needs its parent's writer before it, even when the parent is embedded in a sibling
+           initializer. *)
+        let reads =
+          Asgns.fold_leaves asgns
+            ~init:(fst (Asgns.collect_nodes_guess_output asgns))
+            ~f:(fun reads -> function
+              | Fetch { fetch_op = Slice { sliced; _ }; _ } -> Set.add reads sliced | _ -> reads)
+        in
+        let needs = Set.diff reads provides in
         (asgns, needs, provides))
   in
   (* A parameter initializer can read another parameter or a shared intermediate whose defining code
