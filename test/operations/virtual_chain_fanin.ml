@@ -52,7 +52,11 @@
    inherited/local pair (4), while a downstream fresh input sees their full union (6).
 
    Phase 10 commutes a select's tied arms (gh-ocannl-2098): a predicate-inverted, arm-swapped
-   spelling must not move a consumer across the cap; the producer keeps its per-read charge. *)
+   spelling must not move a consumer across the cap; the producer keeps its per-read charge.
+
+   Phase 11 charges a consumer the maximum over a dependency's alternatives joined with its own
+   loads (gh-ocannl-2128): a narrower select arm or setter is the wider one once the consumer's
+   loads overlap the other, and the alternatives kept are bounded. *)
 
 open Base
 open Ll_test
@@ -2248,6 +2252,274 @@ let phase10 () =
     (match q_gots with [ a; b ] -> same a b | _ -> false);
   LL.virtualize_settings.max_inline_fanin <- saved_cap
 
+(* === Phase 11: narrower alternatives reach the consumer (gh-ocannl-2128) ===
+
+   [p := where m (x+y) z] and its spelling [where (not m) z (x+y)]; [c := p + x + y + w]. Short-
+   circuiting, [p]'s arms are [{m,x,y}] (3) and [{m,z}] (2): its own charge is 3. Keeping only the
+   wider arm downstream charged [c] [{m,x,y,w}] = 4, but a cell with [m = 0] replays [z] beside [x],
+   [y] and [w]: [{m,z,x,y,w}] = 5, the charge now, across cap 4. Blended, [p] is charged the union
+   (4) and [c] 5 as before. A consumer adding only a fresh [w] is charged 4, not the union's 5 --
+   the max over alternatives, not their union. The charge survives a virtual copy between [p] and
+   [c], and a routine boundary; a materialized [p] counts once. The setter analog writes [a]'s first
+   slice from [x+y] and its second from [z]; [d := a + x + y + w] is charged 4 (the second slice's
+   cells), not 3, in either setter order. The bound: one setter of width 2 beside
+   [max_fanin_alternatives + 1] single-source ones keeps the producer's own charge at 2, while past
+   the cap the narrowest tail -- three singletons -- is unioned into one alternative, so a consumer
+   adding one fresh input is charged 4 where the exact maximum is 3: the cap over-charges, in a
+   function of the sets, the same in either setter order. Every leg executes against a reference and
+   a materialized reading. *)
+
+let phase11 () =
+  let saved_cap = LL.virtualize_settings.max_inline_fanin in
+  let mk = node_factory ~first_id:8800 ~dims:[| dim |] () in
+  let m = mk "nm" and x = mk "nx" and y = mk "ny" and z = mk "nz" and w = mk "nw" in
+  let leaves = [ x; y; z; w ] in
+  List.iter (m :: leaves) ~f:materialize;
+  let m_vals = Array.init dim ~f:(fun i -> Float.of_int (i % 2)) in
+  let vals k = Array.init dim ~f:(fun i -> Float.of_int ((100 * (k + 1)) + (10 * (i + 1)))) in
+  let seed out =
+    (out, blank dim) :: (m, m_vals) :: List.mapi leaves ~f:(fun k tn -> (tn, vals k))
+  in
+  let xv = vals 0 and yv = vals 1 and zv = vals 2 and wv = vals 3 in
+  let is_fanin_cap o tn =
+    Option.equal Tn.equal_provenance (rejection_code o tn) (Some Tn.Inline_fanin_cap)
+  in
+  let fanin (o : LL.optimized) tn = (Hashtbl.find_exn o.traced_store tn).LL.inline_fanin in
+  let where_at cond then_ else_ =
+    LL.Ternop (Ir.Ops.Where, (cond, single), (then_, single), (else_, single))
+  in
+  let spelling inverted = if inverted then "inverted" else "plain" in
+  let select ~inverted idx =
+    let xy = add (get x idx) (get y idx) in
+    if inverted then where_at (LL.Unop (Ir.Ops.Not, (get m idx, single))) (get z idx) xy
+    else where_at (get m idx) xy (get z idx)
+  in
+  let select_ref i = if i % 2 <> 0 then xv.(i) +. yv.(i) else zv.(i) in
+  let producer p_ ~inverted =
+    let i = sym () in
+    loop_n i dim (set p_ [| iter i |] (select ~inverted [| iter i |]))
+  in
+  let copy dst src =
+    let i = sym () in
+    loop_n i dim (set dst [| iter i |] (get src [| iter i |]))
+  in
+  let consumer ?(extra = [ x; y; w ]) c_ p_ =
+    let j = sym () in
+    let idx = [| iter j |] in
+    loop_n j dim
+      (set c_ idx (List.fold extra ~init:(get p_ idx) ~f:(fun acc tn -> add acc (get tn idx))))
+  in
+  let full_ref i = select_ref i +. xv.(i) +. yv.(i) +. wv.(i) in
+  let check_exec ?blends ~name ~materialized ~seed ~out ~expected llc o =
+    let got = execute ~name o ~seed ~read:[ out ] in
+    let mat_name = name ^ "_mat" in
+    let mat = optimize ?blends_value_selects:blends ~materialized ~name:mat_name llc in
+    let got_mat = execute ~name:mat_name mat ~seed ~read:[ out ] in
+    same got expected && same got got_mat
+  in
+  LL.virtualize_settings.max_inline_fanin <- 4;
+  List.iter [ false; true ] ~f:(fun blends ->
+      let reading = if blends then "blended" else "short-circuiting" in
+      List.iter [ false; true ] ~f:(fun inverted ->
+          let label = (if blends then "blend_" else "branch_") ^ spelling inverted in
+          let p_ = mk ("np_" ^ label) and c_ = mk ("nc_" ^ label) and out = mk ("no_" ^ label) in
+          materialize out;
+          let llc = seq (seq (producer p_ ~inverted) (consumer c_ p_)) (copy out c_) in
+          let name = "vcf_narrow_" ^ label in
+          let o = optimize ~blends_value_selects:blends ~name llc in
+          let prefix = Printf.sprintf "narrower arm, %s, %s: " reading (spelling inverted) in
+          p
+            (prefix
+            ^
+            if blends then "the producer is charged the union of its arms (4), virtual at cap 4"
+            else "the producer is charged its wider arm (3), virtual at cap 4")
+            ((fanin o p_ = if blends then 4 else 3) && known_virtual o p_);
+          p
+            (prefix
+           ^ "the consumer is charged the narrower arm joined with x, y and w (5), materialized by \
+              the fan-in cap")
+            (fanin o c_ = 5 && is_fanin_cap o c_);
+          p
+            (prefix ^ "execution matches the reference and the materialized reading")
+            (check_exec ~blends ~name ~materialized:[ p_; c_ ] ~seed:(seed out) ~out
+               ~expected:[ Array.init dim ~f:full_ref ]
+               llc o)));
+  (* The control: the max over alternatives, not their union. *)
+  (let p_ = mk "np_ctl" and c_ = mk "nc_ctl" and out = mk "no_ctl" in
+   materialize out;
+   let llc = seq (seq (producer p_ ~inverted:false) (consumer ~extra:[ w ] c_ p_)) (copy out c_) in
+   let o = optimize ~name:"vcf_narrow_ctl" llc in
+   p
+     "narrower arm, a consumer adding only w: charged the wider arm with w (4), not the union (5), \
+      virtual at cap 4"
+     (fanin o c_ = 4 && known_virtual o c_);
+   p "narrower arm, a consumer adding only w: execution matches the reference"
+     (check_exec ~name:"vcf_narrow_ctl" ~materialized:[ p_; c_ ] ~seed:(seed out) ~out
+        ~expected:[ Array.init dim ~f:(fun i -> select_ref i +. wv.(i)) ]
+        llc o));
+  (* Through a virtual copy. *)
+  (let p_ = mk "np_cp" and q_ = mk "nq_cp" and c_ = mk "nc_cp" and out = mk "no_cp" in
+   materialize out;
+   let llc =
+     List.reduce_exn ~f:seq [ producer p_ ~inverted:false; copy q_ p_; consumer c_ q_; copy out c_ ]
+   in
+   let o = optimize ~name:"vcf_narrow_copy" llc in
+   p "narrower arm through a virtual copy: the copy stays virtual (3)"
+     (fanin o q_ = 3 && known_virtual o q_);
+   p
+     "narrower arm through a virtual copy: the consumer is charged 5, materialized by the fan-in \
+      cap"
+     (fanin o c_ = 5 && is_fanin_cap o c_);
+   p "narrower arm through a virtual copy: execution matches the reference"
+     (check_exec ~name:"vcf_narrow_copy" ~materialized:[ p_; q_; c_ ] ~seed:(seed out) ~out
+        ~expected:[ Array.init dim ~f:full_ref ]
+        llc o));
+  (* A materialized producer counts once. *)
+  (let p_ = mk "np_mat" and c_ = mk "nc_mat" and out = mk "no_mat" in
+   materialize out;
+   let llc = seq (seq (producer p_ ~inverted:false) (consumer c_ p_)) (copy out c_) in
+   let o = optimize ~materialized:[ p_ ] ~name:"vcf_narrow_reset" llc in
+   p "narrower arm, a materialized producer: the consumer is charged {p,x,y,w} (4), virtual"
+     (fanin o c_ = 4 && known_virtual o c_));
+  (* Across routines: routine A commits the producer [Virtual]; B's consumer replays it. *)
+  List.iter [ false; true ] ~f:(fun inverted ->
+      let label = "x_" ^ spelling inverted in
+      let p_ = mk ("np_" ^ label) and c_ = mk ("nc_" ^ label) and out = mk ("no_" ^ label) in
+      materialize out;
+      let ctx = LL.empty_optimize_ctx () in
+      let name = "vcf_narrow_" ^ label in
+      let o_a = optimize_in ctx ~name:(name ^ "_a") (producer p_ ~inverted) in
+      let o_b = optimize_in ctx ~name:(name ^ "_b") (seq (consumer c_ p_) (copy out c_)) in
+      let prefix = Printf.sprintf "cross-routine narrower arm, %s: " (spelling inverted) in
+      p (prefix ^ "routine A commits the producer virtual") (known_virtual o_a p_);
+      p
+        (prefix ^ "the consumer is charged 5, materialized by the fan-in cap")
+        (fanin o_b c_ = 5 && is_fanin_cap o_b c_);
+      let got = execute ~name:(name ^ "_b") o_b ~seed:(seed out) ~read:[ out ] in
+      p (prefix ^ "execution matches the reference") (same got [ Array.init dim ~f:full_ref ]));
+  (* Setters: the first slice from [x+y], the second from [z]. *)
+  let cells = 2 * dim in
+  let smk = node_factory ~first_id:8860 ~dims:[| cells |] () in
+  let sx = smk "nsx" and sy = smk "nsy" and sz = smk "nsz" and sw = smk "nsw" in
+  let sleaves = [ sx; sy; sz; sw ] in
+  List.iter sleaves ~f:materialize;
+  let svals k = Array.init cells ~f:(fun i -> Float.of_int ((100 * (k + 1)) + i + 1)) in
+  let sseed = List.mapi sleaves ~f:(fun k tn -> (tn, svals k)) in
+  let slice_setter a part ks =
+    let i = sym () in
+    let idx = aff [ (1, i) ] (part * dim) in
+    loop_n i dim
+      (set a [| idx |] (List.reduce_exn ~f:add (List.map ks ~f:(fun tn -> get tn [| idx |]))))
+  in
+  let scopy dst src =
+    let i = sym () in
+    loop_n i cells (set dst [| iter i |] (get src [| iter i |]))
+  in
+  let sconsumer d a extra =
+    let j = sym () in
+    let idx = [| iter j |] in
+    loop_n j cells
+      (set d idx (List.fold extra ~init:(get a idx) ~f:(fun acc tn -> add acc (get tn idx))))
+  in
+  LL.virtualize_settings.max_inline_fanin <- 3;
+  List.iter [ false; true ] ~f:(fun reverse ->
+      let order = if reverse then "reverse" else "forward" in
+      let a = smk ("nsa_" ^ order) and d = smk ("nsd_" ^ order) and out = smk ("nso_" ^ order) in
+      materialize out;
+      let setters = [ slice_setter a 0 [ sx; sy ]; slice_setter a 1 [ sz ] ] in
+      let setters = if reverse then List.rev setters else setters in
+      let llc = List.reduce_exn ~f:seq (setters @ [ sconsumer d a [ sx; sy; sw ]; scopy out d ]) in
+      let name = "vcf_narrow_setter_" ^ order in
+      let o = optimize ~name llc in
+      let prefix = "narrower setter, " ^ order ^ ": " in
+      p
+        (prefix ^ "the producer is charged its wider setter (2), virtual at cap 3")
+        (fanin o a = 2 && known_virtual o a);
+      p
+        (prefix
+       ^ "the consumer is charged the narrower setter joined with x, y and w (4), materialized by \
+          the fan-in cap")
+        (fanin o d = 4 && is_fanin_cap o d);
+      let v k i = (svals k).(i) in
+      let expected =
+        [
+          Array.init cells ~f:(fun i ->
+              (if i < dim then v 0 i +. v 1 i else v 2 i) +. v 0 i +. v 1 i +. v 3 i);
+        ]
+      in
+      p
+        (prefix ^ "execution matches the reference and the materialized reading")
+        (check_exec ~name ~materialized:[ a; d ]
+           ~seed:((out, blank cells) :: sseed)
+           ~out ~expected llc o));
+  (* The bound: one setter of width 2 and [cap_n + 1] single-source setters, one slice each. *)
+  let cap_n = LL.max_fanin_alternatives in
+  let n_single = cap_n + 1 in
+  let parts = n_single + 1 in
+  let bcells = parts * dim in
+  let bmk = node_factory ~first_id:8900 ~dims:[| bcells |] () in
+  let wa = bmk "nba" and wb = bmk "nbb" in
+  let singles = List.init n_single ~f:(fun k -> bmk (Printf.sprintf "nbs%d" k)) in
+  let fresh = bmk "nbf" in
+  let bleaves = (wa :: wb :: singles) @ [ fresh ] in
+  List.iter bleaves ~f:materialize;
+  let bvals k = Array.init bcells ~f:(fun i -> Float.of_int ((1000 * (k + 1)) + i + 1)) in
+  let bseed = List.mapi bleaves ~f:(fun k tn -> (tn, bvals k)) in
+  let bsetter a part ks =
+    let i = sym () in
+    let idx = aff [ (1, i) ] (part * dim) in
+    loop_n i dim
+      (set a [| idx |] (List.reduce_exn ~f:add (List.map ks ~f:(fun tn -> get tn [| idx |]))))
+  in
+  (* Ordered by cardinality, then by the sets: [{a,b}], then the singletons in node order. The cap
+     keeps [cap_n - 1] -- the pair and [cap_n - 2] singletons -- and unions the other three. *)
+  let merged = n_single - (cap_n - 2) in
+  LL.virtualize_settings.max_inline_fanin <- merged;
+  List.iter [ false; true ] ~f:(fun reverse ->
+      let order = if reverse then "reverse" else "forward" in
+      let a = bmk ("nbx_" ^ order) and d = bmk ("nbd_" ^ order) and out = bmk ("nbo_" ^ order) in
+      materialize out;
+      let setters =
+        bsetter a 0 [ wa; wb ] :: List.mapi singles ~f:(fun k s -> bsetter a (k + 1) [ s ])
+      in
+      let setters = if reverse then List.rev setters else setters in
+      let consumer =
+        let j = sym () in
+        loop_n j bcells (set d [| iter j |] (add (get a [| iter j |]) (get fresh [| iter j |])))
+      in
+      let output =
+        let k = sym () in
+        loop_n k bcells (set out [| iter k |] (get d [| iter k |]))
+      in
+      let llc = List.reduce_exn ~f:seq (setters @ [ consumer; output ]) in
+      let name = "vcf_narrow_bound_" ^ order in
+      let o = optimize ~name llc in
+      let prefix = "alternatives bound, " ^ order ^ ": " in
+      p
+        (prefix ^ "the producer's own charge is its widest setter (2), taken before the cap merges")
+        (fanin o a = 2 && known_virtual o a);
+      p
+        (prefix
+       ^ "the consumer is charged the merged tail with its fresh input (exact maximum 3 plus one \
+          for the merge), materialized by the fan-in cap")
+        (fanin o d = merged + 1 && is_fanin_cap o d);
+      let expected =
+        [
+          Array.init bcells ~f:(fun i ->
+              let part = i / dim in
+              let src =
+                if part = 0 then (bvals 0).(i) +. (bvals 1).(i) else (bvals (part + 1)).(i)
+              in
+              src +. (bvals (List.length bleaves - 1)).(i));
+        ]
+      in
+      p
+        (prefix ^ "execution matches the reference and the materialized reading")
+        (check_exec ~name ~materialized:[ a; d ]
+           ~seed:((out, blank bcells) :: bseed)
+           ~out ~expected llc o));
+  LL.virtualize_settings.max_inline_fanin <- saved_cap
+
 let () =
   phase1 ();
   phase1b ();
@@ -2263,4 +2535,5 @@ let () =
   phase7 ();
   phase8 ();
   phase9 ();
-  phase10 ()
+  phase10 ();
+  phase11 ()

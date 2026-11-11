@@ -40,6 +40,14 @@ a Where whose arm re-reads the condition charges the arm that adds more: true
 a short-circuiting Where charges the arm wider after expansion, not before: true
 a blended Where charges the union of its arms' expansions: true
 arms that tie only after expansion keep both alternatives: true
+a short-circuiting Where keeps its narrower arm as an alternative: true
+an arm contained in the other is dropped: it can never be the wider one: true
+a consumer overlapping the wider arm is charged the narrower one: the widest join, not the wider arm: true
+the selects' exact paths outnumber the cap, so the bound is exercised: true
+past the cap the alternatives number at most max_fanin_alternatives: true
+every exact path lies inside a kept alternative: the cap only over-charges: true
+no kept alternative contains another: true
+the capped alternatives do not depend on how the selects are spelled: true
 the setter's own reads and merge-buffer reads are no contributors: true
 a gather charges its index and its table: true
 a projection charges only its rendered operand: true

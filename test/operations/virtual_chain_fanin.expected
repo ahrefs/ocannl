@@ -227,3 +227,39 @@ successive select ties, plain: execution matches the reference and the materiali
 successive select ties, inverted: the node's own charge is the widest path (5), materialized by the fan-in cap: true
 successive select ties, inverted: execution matches the reference and the materialized reading: true
 successive select ties: the two spellings execute the same values: true
+narrower arm, short-circuiting, plain: the producer is charged its wider arm (3), virtual at cap 4: true
+narrower arm, short-circuiting, plain: the consumer is charged the narrower arm joined with x, y and w (5), materialized by the fan-in cap: true
+narrower arm, short-circuiting, plain: execution matches the reference and the materialized reading: true
+narrower arm, short-circuiting, inverted: the producer is charged its wider arm (3), virtual at cap 4: true
+narrower arm, short-circuiting, inverted: the consumer is charged the narrower arm joined with x, y and w (5), materialized by the fan-in cap: true
+narrower arm, short-circuiting, inverted: execution matches the reference and the materialized reading: true
+narrower arm, blended, plain: the producer is charged the union of its arms (4), virtual at cap 4: true
+narrower arm, blended, plain: the consumer is charged the narrower arm joined with x, y and w (5), materialized by the fan-in cap: true
+narrower arm, blended, plain: execution matches the reference and the materialized reading: true
+narrower arm, blended, inverted: the producer is charged the union of its arms (4), virtual at cap 4: true
+narrower arm, blended, inverted: the consumer is charged the narrower arm joined with x, y and w (5), materialized by the fan-in cap: true
+narrower arm, blended, inverted: execution matches the reference and the materialized reading: true
+narrower arm, a consumer adding only w: charged the wider arm with w (4), not the union (5), virtual at cap 4: true
+narrower arm, a consumer adding only w: execution matches the reference: true
+narrower arm through a virtual copy: the copy stays virtual (3): true
+narrower arm through a virtual copy: the consumer is charged 5, materialized by the fan-in cap: true
+narrower arm through a virtual copy: execution matches the reference: true
+narrower arm, a materialized producer: the consumer is charged {p,x,y,w} (4), virtual: true
+cross-routine narrower arm, plain: routine A commits the producer virtual: true
+cross-routine narrower arm, plain: the consumer is charged 5, materialized by the fan-in cap: true
+cross-routine narrower arm, plain: execution matches the reference: true
+cross-routine narrower arm, inverted: routine A commits the producer virtual: true
+cross-routine narrower arm, inverted: the consumer is charged 5, materialized by the fan-in cap: true
+cross-routine narrower arm, inverted: execution matches the reference: true
+narrower setter, forward: the producer is charged its wider setter (2), virtual at cap 3: true
+narrower setter, forward: the consumer is charged the narrower setter joined with x, y and w (4), materialized by the fan-in cap: true
+narrower setter, forward: execution matches the reference and the materialized reading: true
+narrower setter, reverse: the producer is charged its wider setter (2), virtual at cap 3: true
+narrower setter, reverse: the consumer is charged the narrower setter joined with x, y and w (4), materialized by the fan-in cap: true
+narrower setter, reverse: execution matches the reference and the materialized reading: true
+alternatives bound, forward: the producer's own charge is its widest setter (2), taken before the cap merges: true
+alternatives bound, forward: the consumer is charged the merged tail with its fresh input (exact maximum 3 plus one for the merge), materialized by the fan-in cap: true
+alternatives bound, forward: execution matches the reference and the materialized reading: true
+alternatives bound, reverse: the producer's own charge is its widest setter (2), taken before the cap merges: true
+alternatives bound, reverse: the consumer is charged the merged tail with its fresh input (exact maximum 3 plus one for the merge), materialized by the fan-in cap: true
+alternatives bound, reverse: execution matches the reference and the materialized reading: true

@@ -433,9 +433,27 @@ val resolve_charge :
 
     gh-ocannl-2098: the result is every tied widest alternative (non-empty, all of one cardinality,
     deduplicated, in [Set.compare_direct] order), never the first arm on a tie, so a select's
-    spelling (its predicate inverted, its arms swapped) cannot change it. Each alternative is a path
-    some visit runs; exact for one select per path, across several a greedy beam that continues
-    every tied alternative. *)
+    spelling (its predicate inverted, its arms swapped) cannot change it. The widest members of
+    {!resolve_alternatives} with [expand] lifted to one set. *)
+
+val max_fanin_alternatives : int
+(** gh-ocannl-2128: the most alternatives {!resolve_alternatives} keeps, and the inline-fanin guard
+    passes downstream per node -- the bound on the beam's growth (k successive incomparable selects
+    otherwise hold up to 2^k). Past it the antichain, ordered by cardinality descending then
+    [Set.compare_direct], keeps its first [max_fanin_alternatives - 1] members and unions the rest
+    into one: a superset of real paths, so a capped charge can only be higher. *)
+
+val resolve_alternatives :
+  blends:bool ->
+  expand:(Set.M(Tnode).t -> Tnode.t -> Set.M(Tnode).t list) ->
+  read_charge ->
+  Set.M(Tnode).t list
+(** gh-ocannl-2128: every MAXIMAL alternative of the charge -- the antichain under inclusion, in the
+    order {!max_fanin_alternatives} names, at most that many. [expand acc q] folds load [q] into the
+    alternative [acc], one result per alternative of [q] (the transitive guard maps [acc] across a
+    virtual dependency's own alternatives). Pruning to the antichain is exact, since [A ⊆ B] implies
+    [A ∪ X ⊆ B ∪ X]: a narrower path is kept while it may still become the widest once the rest is
+    joined. Reading and admission as for {!resolve_charge}. *)
 
 val evaluation_reads : blends:bool -> self:Tnode.t -> scalar_t -> Set.M(Tnode).t list
 (** {!resolve_charge} of {!read_charge}, each load charged as itself: a [Where] charges its

@@ -897,43 +897,40 @@ files.
   renderer judges it after virtualization at the compute precision (and HIP keeps `?:` over a NaN
   literal): the guard can charge the union where the select ends up branching, never the reverse --
   the materializing direction. The per-setter maximum across components is untouched: each
-  component's update sits under an index-only `Where` no backend blends. Known under-counts that
-  remain: overlapping components (two bodies run where both guards hold), and several selects on
-  one path, where the arm choice is greedy (each select joined to what is already charged), still
-  a path some visit runs. Pins: `virtual_chain_fanin` phases 1c, 1d (the arm chosen after
-  expansion) and 2b/2c (two-sided on the running backend), `access_fold`, `backend_facts`, and
-  `op_table_compile` against the emitted kernels.
-- **Equal per-setter fan-in maxima union their contributors for downstream consumers**
-  (gh-ocannl-2047). Keeping one tied set made a consumer's charge depend on which independent
-  setter was written last: `{x,y}` and `{y,z}`, followed by a consumer also loading `x` and `w`,
-  charged either 3 or 4. Keep all tied widest sets, comparing individual cardinalities, and union
-  them only in the expansion passed downstream. The node's OWN charge remains per-read: the
-  maximum cardinality of a local/inherited tied pair's union (an absent side contributes the empty
-  set). Without inherited reads it is just the maximum setter width: a concat of nine single-source
-  components still costs 1, not 9. Cycles retain their shared union charge above.
-  Downstream consumers can be over-counted by the union of mutually exclusive tied contributors;
-  a spurious materialization remains an `Inline` flip candidate. Narrower setters stay excluded,
-  so this is still a heuristic rather than a bound on every downstream union. `virtual_chain_fanin`
-  phase 8 commutes disjoint slice setters (two ties, three ties, and unequal widths), pins the
-  producer's per-read charge and its virtual placement at that cap, pins the consumer's charge and
-  landing, and executes each order against a cell-varying reference and a materialized reading.
-- **A short-circuiting select's tied arms are kept, never the first** (gh-ocannl-2098), the same
-  move one level down. Keeping the first tied arm let a select's spelling decide downstream:
-  `where m (x+y) (y+z)` and `where (not m) (y+z) (x+y)` kept `{m,x,y}` or `{m,y,z}`, so a
-  consumer also loading `x` and `w` cost 4 or 5 -- across cap 4 on CUDA/Metal -- where a cell with
-  `m = 0` really runs 5. `resolve_charge` returns every tied widest alternative (deduplicated, in
-  `Set.compare_direct` order): a beam in which each alternative takes a level's loads, a
-  short-circuiting select continues every alternative through every arm, and only the widest
-  survive each step. So a later select's charge cannot depend on which tie an earlier one took
-  either (`where m x y + where n (x+w) v` costs 5 in both spellings; first-tie charged 4 or 5).
-  `max_expansion` treats the alternatives as setter ties: the node's own charge stays one path
-  (per-read), the union goes downstream. The beam is unbounded: k successive tied value selects at
-  one level hold up to 2^k sets, which needs value selects -- not concat's statement guards -- to
-  tie. A greedy beam pruned after each level's loads can, on contrived overlaps, end narrower than
-  the old single greedy path, so "never materializes less" is not a property of it.
-  `virtual_chain_fanin` phase 10 pins both spellings on both readings (producer 3 or 4, consumer 5),
-  the producer's own cap, a cross-routine replay and successive selects, each executed against a
-  reference and a materialized reading; `access_fold` pins the alternatives themselves.
+  component's update sits under an index-only `Where` no backend blends. A known under-count that
+  remains: overlapping components (two bodies run where both guards hold). Pins: `virtual_chain_fanin`
+  phases 1c, 1d (the arm chosen after expansion) and 2b/2c (two-sided on the running backend),
+  `access_fold`, `backend_facts`, and `op_table_compile` against the emitted kernels.
+- **A node passes downstream its ALTERNATIVES, and a consumer is charged the maximum over them
+  joined with its own loads** (gh-ocannl-2047, gh-ocannl-2098, gh-ocannl-2128). An alternative is
+  a load set one read of one cell can run: one per setter (a read executes one setter), one per
+  short-circuiting select arm, and for a node with both local setters and inherited components the
+  union of one of each. Choosing before the consumer's loads are joined under-counts: `p := where m
+  (x+y) z` read by `c := p + x + y + w` costs `{m,x,y,w}` = 4 through the wider arm, but the cells
+  with `m = 0` run `{m,z,x,y,w}` = 5; a narrower setter is the same. `resolve_alternatives` keeps
+  every MAXIMAL set (the antichain under inclusion; exact, since `A ⊆ B` gives `A ∪ X ⊆ B ∪ X`) in
+  its beam over loads and selects, and the guard's memo holds each node's list. The node's OWN
+  charge stays per-read: the widest alternative (a concat of nine single-source components costs 1,
+  not 9). Two conservative rules sit on top. First, the union of the tied widest sets stays one
+  more alternative -- a floor, so no downstream charge is below the one-set reading's and
+  commuting tied setters or respelling a select (`where (not m) (y+z) (x+y)`) cannot move one; it
+  over-counts a consumer of mutually exclusive ties, which also happens to cover a consumer reading
+  SEVERAL cells of a multi-alternative producer in one evaluation (`a[j] + a[j+dim]` across two
+  components), a case the per-cell max does not see -- an under-count that remains for narrower
+  setters and arms. Second, every list is capped at `Low_level.max_fanin_alternatives` (8): past
+  it the antichain, ordered by cardinality then `Set.compare_direct` (node creation order),
+  keeps its first 7 and unions the rest into one, a superset of real paths, so a capped charge can
+  only be higher (k successive incomparable selects otherwise hold 2^k sets; with equal widths
+  the merged tail can swallow the whole list). The own charge is taken before the memo is
+  capped. Cycles keep their shared union charge above. With `log_level > 1` the guard prints
+  `fan-in alternatives: <node> keeps <n> (own charge <w>[, capped])` to stderr for each node
+  keeping more than one, so "does test X hit a fan-in tie or a narrower alternative?" is a grep.
+  Pins: `virtual_chain_fanin` phase 8 (tied setters in both orders), 9 (local x inherited ties),
+  10 (tied arms in both spellings, cross-routine, successive selects) and 11 (narrower arms and
+  setters, the fresh-input control that is charged the max not the union, a virtual copy, a
+  materialized producer, cross-routine, and the cap's merged tail in both setter orders), each
+  executed against a reference and a materialized reading; `access_fold` pins the antichain and the
+  cap against an enumerated oracle.
 - **The fan-in traversal must not enter a node already materialized** (gh-ocannl-1777). A whole
   step's setter-reads graph is cyclic through its parameters (a parameter reads its gradient, which
   reads activations that read the parameter), and the cycle guard memoizes whatever it computed under
