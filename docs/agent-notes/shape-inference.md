@@ -179,8 +179,9 @@ files.
   mint only `default` symbols. Recapture across closure and the product-space proxy both preserve
   these. `Row.get_sym_dim ~basis` can build a named symbol in a hand-built solver store, but no
   public `Shape` path inserts it into a private shape or reference; carrying a symbolic tag is
-  needed when such a constructor is added. The numeric `unify_dim` different-bases diagnostic is
-  unchanged (gh-ocannl-2132).
+  needed when such a constructor is added. Since gh-ocannl-2132, numeric `unify_dim` reports unequal
+  sizes before blaming unequal basis tags, including against the broadcast top. Equal-size tag
+  conflicts still report different bases; same-tag size mismatches keep their existing diagnostic.
 - `Shape.set_equal` on two row references is `Row_eq` in every solved state (gh-ocannl-1617): its
   Row-Row arm matches on `var` BEFORE the `solved_sym`/`solved_dim` arms. A row reference's
   `solved_dim` is only its product, and it is set early (by `set_dim`, or by
