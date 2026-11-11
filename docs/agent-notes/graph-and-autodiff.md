@@ -198,8 +198,12 @@ files.
   ancestor nodes (gh-ocannl-2028). `precision_cell_retention` keeps only a settled result node,
   closes the shape session, and witnesses collection of every virtual ancestor through
   `Gc_witness`; keeping the tensor itself would legitimately keep its children. Removing the
-  force in `Prec_cell.make` is the negative control. An unsettled operand retaining dropped
-  consumers' other operand nodes is separate work (gh-ocannl-2170).
+  force in `Prec_cell.make` is the negative control. Free bottom-up operands follow consumers'
+  storage lazies weakly (gh-ocannl-2170), so a dropped consumer releases its other operand nodes even while the shared
+  operand stays unsettled. A held consumer value node keeps its constraint; a tensor-record witness
+  alone misses the old retention. Close shapes before witnessing: `Tensor.open_nodes` owns every
+  open node. Closure prevents later rebuilds adding links to the shared operand, so the remaining
+  link metadata is bounded by consumers constructed before its first closure.
 - Top-down precision links are guarded by shape closure, not by a node's `dims` readiness
   (gh-ocannl-2026). The precision cell owns the forced-read refusal and the `Specified` no-op.
   `dims_top_down_prec` supplies known layout on open tensor record copies to separate these

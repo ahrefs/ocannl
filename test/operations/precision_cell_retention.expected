@@ -1,2 +1,11 @@
 settled result node survives collections: true
 settled result releases every virtual ancestor node: true
+operand storage remains unsettled: true
+dropped graph releases other value node after closure: true
+operand storage remains unsettled: true
+live operand releases consumer tensor after closure: true
+live operand releases other value node after closure: true
+consumer tensor can die while its value node is held: true
+held consumer value node still widens its operand: true
+shared operand stays unsettled across closed graph rebuilds: true
+every rebuilt graph releases its other value node: true
