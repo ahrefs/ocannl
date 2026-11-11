@@ -52,7 +52,6 @@ let test ~early =
         in
         (Row.subst_row env r, stayed_lazy))
   in
-  pf "%s: returns within the deadline" label true;
   pf "%s: stage 1 leaves the coefficient lazy" label stayed_lazy;
   pf "%s: the row uses all six elements" label
     (match axes with
