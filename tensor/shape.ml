@@ -897,6 +897,21 @@ let axis_map_to_dims_index (type a) ?(default : a option) (idcs : a axis_map) : 
   let (bch, inp, out), (beg_bch, beg_inp, beg_out) = axis_map_to_dims_bio ?default idcs in
   Array.concat [ beg_bch; bch; beg_out; out; beg_inp; inp ]
 
+(* Names a slot introduces, independently of dimension construction and solver bookkeeping. *)
+let slot_names (slot : parsed_axis_labels) =
+  let dims =
+    List.concat_map (Map.data slot.labels) ~f:(function
+      | Label name -> [ name ]
+      | Fixed_index _ -> []
+      | Affine_spec { over_label; conv; _ } ->
+          over_label :: Option.to_list (Option.map conv ~f:(fun c -> c.kernel_label))
+      | Concat_spec components ->
+          List.filter_map components ~f:(function
+            | Concat_label name -> Some name
+            | Concat_size _ -> None))
+  in
+  (dims, List.filter_opt [ slot.bcast_batch; slot.bcast_input; slot.bcast_output ])
+
 let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
   let (b_dims, i_dims, o_dims), (beg_b_dims, beg_i_dims, beg_o_dims) =
     axis_map_to_dims_bio labels.labels
@@ -1054,6 +1069,12 @@ let affine_dim_of_spec ~spec ~dim_var_env axis_spec =
 
 let einsum_slot_spec_to_dims_bio ?(fixed_index = `Pin_var) ~original_spec ~sh_id ~row_var_env
     ~dim_var_env labels =
+  let dim_names, row_names = slot_names labels in
+  let names_with env names =
+    List.dedup_and_sort ~compare:String.compare (Hashtbl.keys env @ names)
+  in
+  let expected_dims = names_with dim_var_env dim_names in
+  let expected_rows = names_with row_var_env row_names in
   let proj_env_update = ref @@ Row.dim_map_empty in
   let extras = ref [] in
   let f kind = function
@@ -1090,6 +1111,10 @@ let einsum_slot_spec_to_dims_bio ?(fixed_index = `Pin_var) ~original_spec ~sh_id
         Row.Concat (List.map components ~f:(concat_component_dim ~spec:original_spec ~dim_var_env))
   in
   let result = axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env ~f labels in
+  (* Pin the preflight's inventory to the names elaboration actually introduced, without
+     preallocating variables: their creation order is also the diagnostic naming order. *)
+  assert (List.equal String.equal expected_dims (names_with dim_var_env []));
+  assert (List.equal String.equal expected_rows (names_with row_var_env []));
   (!extras, !proj_env_update, result)
 
 type proj_axis_env = Idx.axis_index Row.dim_map [@@deriving sexp]
@@ -1354,6 +1379,18 @@ let split_capture_label_hint ~spec ~dim_var_env label =
     ^ Einsum_parser.multichar_note ~what:"capture label" ~written:(label ^ ",")
   else ""
 
+(* Check the whole capture list before binding any reference. Also used by the read-only spec
+   preflight, whose environments contain names only. *)
+let check_capture_labels ~spec ~dim_var_env ~row_var_env ~error_shapes dim_refs =
+  List.iter dim_refs ~f:(fun delayed_ref ->
+      let label = delayed_ref.var_ref.ref_label in
+      if not (Hashtbl.mem dim_var_env label || Hashtbl.mem row_var_env label) then
+        raise
+        @@ Row.Shape_error
+             ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec
+               ^ split_capture_label_hint ~spec ~dim_var_env label,
+               [ Shape_mismatch error_shapes ] ))
+
 (** Shared helper: bind each [delayed_var_ref] to the dim/row variable resolved for its label in
     [dim_var_env]/[row_var_env]. Returns the constraints the binding implies
     ({!binding_constraints}). Used by the unary-permute, binary-einsum, block, and ternary-einsum
@@ -1377,6 +1414,7 @@ let split_capture_label_hint ~spec ~dim_var_env label =
     equates no index (and a dimension-1 value there would pin the axis to [Fixed_idx 0]). *)
 let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~error_shapes
     dim_refs =
+  check_capture_labels ~spec ~dim_var_env ~row_var_env ~error_shapes dim_refs;
   (* Every refusal before any binding (gh-ocannl-1655). Projection derivation binds nothing and
      emits no ties, so it is exempt. *)
   if not for_projections then
@@ -1393,12 +1431,7 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
       | None -> (
           match Hashtbl.find row_var_env label with
           | Some var -> bind_ref ~for_projections ~error_shapes delayed_ref (`Row var)
-          | None ->
-              raise
-              @@ Row.Shape_error
-                   ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec
-                     ^ split_capture_label_hint ~spec ~dim_var_env label,
-                     [ Shape_mismatch error_shapes ] )))
+          | None -> assert false))
 
 (* The constraints binding an operation's capture references ({!bind_delayed_vars_to_envs}).
    Projection derivation passes [projection_sizing], and its bindings -- sizes for its local solve
@@ -4561,6 +4594,38 @@ let propagate_inline (update_step : update_step) : unit =
    definition. Every step is registered through [propagate_shapes] ([Tensor.register_update_step]),
    so projection derivation never meets a step these refuse. *)
 
+(* Read names directly from the parsed slots: building rows here would itself write the solver's
+   used-in-spec and safe-to-guess sets. No capture may be bound until all labels pass. *)
+let refuse_invalid_einsum_spec (update_step : update_step) =
+  Option.iter (einsum_of_logic update_step.logic) ~f:(fun (spec, dim_refs) ->
+      let rhses, lhs = einsum_of_spec spec in
+      let operands = fst (projected_operands update_step.logic) in
+      let error_shapes = update_step.shape :: operands in
+      let expected, kind, count =
+        match update_step.logic with
+        | Transpose (Permute _, _) -> (1, "permutation", "one argument")
+        | Broadcast (Einsum _, _, _) -> (2, "einsum", "two arguments")
+        | Broadcast_tern (Einsum_tern _, _, _, _) -> (3, "einsum", "three arguments")
+        | Block { rhses; _ } ->
+            let n = List.length rhses in
+            (n, "block", Printf.sprintf "%d arguments" n)
+        | _ -> assert false
+      in
+      if List.length rhses <> expected then
+        raise
+        @@ Row.Shape_error
+             ( Printf.sprintf "Invalid %s spec (expected %s): %s" kind count spec,
+               [ Shape_mismatch error_shapes ] );
+      let dim_var_env = Hashtbl.create (module String) in
+      let row_var_env = Hashtbl.create (module String) in
+      List.iter (rhses @ [ lhs ]) ~f:(fun slot ->
+          let dims, rows = slot_names slot in
+          List.iter dims ~f:(fun name -> Hashtbl.set dim_var_env ~key:name ~data:());
+          List.iter rows ~f:(fun name -> Hashtbl.set row_var_env ~key:name ~data:()));
+      check_dim_row_var_name_clash ~spec ~error_trace:[ Shape_mismatch error_shapes ] dim_var_env
+        row_var_env;
+      check_capture_labels ~spec ~dim_var_env ~row_var_env ~error_shapes dim_refs)
+
 (* {!refuse_result_side_padded_window} over the step's result slot. *)
 let refuse_result_side_padded_windows (update_step : update_step) =
   Option.iter (einsum_of_logic update_step.logic) ~f:(fun (spec, _) ->
@@ -4707,6 +4772,7 @@ let refuse_meaningless_concats (update_step : update_step) =
 let%debug4_sexp propagate_shapes (update_step : update_step) : unit =
   check_untainted ();
   refuse_discarded_operands update_step;
+  refuse_invalid_einsum_spec update_step;
   refuse_result_side_padded_windows update_step;
   refuse_unsized_kernels update_step;
   refuse_meaningless_concats update_step;

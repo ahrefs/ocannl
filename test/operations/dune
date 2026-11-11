@@ -14304,6 +14304,16 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+;; gh-ocannl-2162: spec-only construction errors precede session writes.
+
+(test
+ (name spec_error_session)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ ; ocannl-backend: none -- shape registration only, no compilation or device access
+ (modules spec_error_session)
+ (libraries base ocannl arrayjit.verdict))
+
 ;; gh-ocannl-1803: a window kernel nothing can size is refused at the definition, in agreement
 ;; with projection derivation.
 
