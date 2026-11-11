@@ -15,6 +15,7 @@ test/operations/autotune_scope_provenance.ml -- records=1 traversals=0
 test/operations/autotune_smoke.ml -- records=0 traversals=1
 test/operations/back_to_back_runs.ml -- records=5 traversals=0
 test/operations/canonical_render.ml -- records=11 traversals=0
+test/operations/cc_half_excess_precision.ml -- records=1 traversals=0
 test/operations/cc_march_census.ml -- records=6 traversals=0
 test/operations/cost_model_extraction.ml -- records=1 traversals=0
 test/operations/cost_model_floor.ml -- records=4 traversals=0

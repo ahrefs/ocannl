@@ -1,0 +1,9 @@
+the witness inputs are exactly representable in half: true
+the witness distinguishes one rounding from two: true
+the host evaluation probe reports absent, narrow or excess precision: true
+native evaluation rounds the raw product before adding: true
+excess evaluation rounds the raw expression only at its result: true
+hxp_kept: the executed IR has exactly the intended scope: true
+hxp_collapsed: the executed IR has exactly the intended scope: true
+the kept half local rounds the product before adding: true
+cc's operator casts round even inside a collapsed narrow expression: true

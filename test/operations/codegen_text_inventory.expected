@@ -824,6 +824,7 @@ test/operations/bf16_subnormal_storage.ml [through Ll_test.execute; run by @test
 test/operations/branchless_select.ml [through Ll_test.optimize_and_execute; run by @test/operations/runtest-branchless_select, @test/operations/runtest-branchless_select-no_hip_fast_math, @test/operations/runtest-branchless_select-outlined]
 test/operations/canonical_render.ml [staged callback; run by @test/operations/runtest-canonical_render]
 test/operations/capture_pass_side_effects.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-capture_pass_side_effects]
+test/operations/cc_half_excess_precision.ml [through Ll_test.execute; run by @test/operations/runtest-cc_half_excess_precision]
 test/operations/cc_kernel_outline.ml [through Ll_test.execute; run by @test/operations/runtest-cc_kernel_outline]
 test/operations/cc_march_census.ml [through Ll_test.link; run by @test/operations/runtest-cc_march_census-emission, @test/operations/runtest-cc_march_census-emission-outlined, @test/operations/runtest-cc_march_census-w16_native_foreign, @test/operations/runtest-cc_march_census-w16_native_host, @test/operations/runtest-cc_march_census-w16_wide_foreign, @test/operations/runtest-cc_march_census-w16_wide_host, @test/operations/runtest-cc_march_census-w32_native_foreign, @test/operations/runtest-cc_march_census-w32_native_host, @test/operations/runtest-cc_march_census-w32_wide_foreign, @test/operations/runtest-cc_march_census-w32_wide_host, @test/operations/runtest-cc_march_census-w64_native_foreign, @test/operations/runtest-cc_march_census-w64_native_host, @test/operations/runtest-cc_march_census-w64_wide_foreign, @test/operations/runtest-cc_march_census-w64_wide_host]
 test/operations/codegen_fma_precision.ml [through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-codegen_fma_precision]
@@ -943,6 +944,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-branchless_select-outlined
 @test/operations/runtest-canonical_render
 @test/operations/runtest-capture_pass_side_effects
+@test/operations/runtest-cc_half_excess_precision
 @test/operations/runtest-cc_kernel_outline
 @test/operations/runtest-cc_march_census-emission
 @test/operations/runtest-cc_march_census-emission-outlined
@@ -1094,6 +1096,7 @@ arrayjit/test/test_hip_driver_init_deadline.real.ml [calls hip's compiler; run b
 arrayjit/test/test_shared_builtins.ml [calls cc's compiler; run by @arrayjit/test/runtest-test_shared_builtins]
 test/operations/branchless_select.ml [calls cc's compiler; run by @test/operations/runtest-branchless_select, @test/operations/runtest-branchless_select-no_hip_fast_math, @test/operations/runtest-branchless_select-outlined]
 test/operations/bridge_arm_coverage.ml [calls cc's compiler; run by @test/operations/runtest-bridge_arm_coverage]
+test/operations/cc_half_excess_precision.ml [calls cc's compiler; run by @test/operations/runtest-cc_half_excess_precision]
 test/operations/cc_load_refusal_classes.ml [calls cc's compiler; run by @test/operations/runtest-cc_load_refusal_classes]
 test/operations/cc_march_census.ml [calls cc's compiler; run by @test/operations/runtest-cc_march_census-emission, @test/operations/runtest-cc_march_census-emission-outlined, @test/operations/runtest-cc_march_census-w16_native_foreign, @test/operations/runtest-cc_march_census-w16_native_host, @test/operations/runtest-cc_march_census-w16_wide_foreign, @test/operations/runtest-cc_march_census-w16_wide_host, @test/operations/runtest-cc_march_census-w32_native_foreign, @test/operations/runtest-cc_march_census-w32_native_host, @test/operations/runtest-cc_march_census-w32_wide_foreign, @test/operations/runtest-cc_march_census-w32_wide_host, @test/operations/runtest-cc_march_census-w64_native_foreign, @test/operations/runtest-cc_march_census-w64_native_host, @test/operations/runtest-cc_march_census-w64_wide_foreign, @test/operations/runtest-cc_march_census-w64_wide_host]
 test/operations/cuda_like_builtins_emulation.ml [calls cc's compiler; run by @test/operations/runtest-cuda_like_builtins_emulation]
@@ -1108,6 +1111,7 @@ cc:
   @test/operations/runtest-branchless_select-no_hip_fast_math
   @test/operations/runtest-branchless_select-outlined
   @test/operations/runtest-bridge_arm_coverage
+  @test/operations/runtest-cc_half_excess_precision
   @test/operations/runtest-cc_load_refusal_classes
   @test/operations/runtest-cc_march_census-emission
   @test/operations/runtest-cc_march_census-emission-outlined
