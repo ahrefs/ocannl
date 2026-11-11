@@ -169,4 +169,9 @@ files.
   exactly what a direct call would and its refusals quote the source (gh-ocannl-2163). Only a spec
   with a stride/dilation identifier or a padding-less `+` window is rebuilt at run time (as a
   comma-separated multichar string; dynamic substitutions retain an affine marker, so its mode
-  survives). `capture_multichar_hint` pins the `"ab, => ab,"` repair's captured dimension and rank.
+  survives); `Ppx_shared.with_spec_source` then adds `~spec_source:"<literal>"`, which rides in
+  `Shape.einsum_spec`'s `source` (messages read `Shape.spec_text`; parsing, captures and the
+  runtime capture hint read `exec` only). A local wrapper shadowing a named form must accept
+  `?spec_source`, or a runtime spec fails to typecheck ("applied to too many arguments").
+  `test/operations/spec_source_refusals` executes each route; `capture_multichar_hint` pins the
+  `"ab, => ab,"` repair's captured dimension and rank.

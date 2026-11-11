@@ -91,7 +91,7 @@ let z2 =
     let hey8 =
       (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
          "hey8") () in
-    einsum ?label:(Some ["z2"])
+    einsum ?label:(Some ["z2"]) ~spec_source:"stride*a+dilation*b,;b=>a,"
       (String.concat ~sep:""
          [Int.to_string stride;
          "*";
@@ -115,7 +115,7 @@ let z3 =
     let hey10 =
       (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
          "hey10") () in
-    einsum ?label:(Some [])
+    einsum ?label:(Some []) ~spec_source:"i, s*a+d*bc; bc => i, a, c"
       (String.concat ~sep:""
          ["i";
          ", ";
@@ -639,6 +639,7 @@ let _late_stride =
         ?label:(Some
                   (List.concat
                      [["_late_stride"]; (x.Tensor.value).Ir.Tnode.label]))
+        ~spec_source:"stride*o<+k; k => o"
         (String.concat ~sep:""
            [Int.to_string stride;
            "*";
@@ -658,6 +659,7 @@ let _unit_stride =
            ?param_init:None "us_kernel") () in
       let __ocannl_body x =
         einsum ?label:(Some ["_unit_stride"])
+          ~spec_source:"stride*o<+k; k => o"
           (String.concat ~sep:""
              [Int.to_string stride;
              "*";

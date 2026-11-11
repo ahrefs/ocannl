@@ -552,8 +552,9 @@ let%op depthwise_separable_conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_
 let%op max_pool2d ?(stride = 2) ?(window_size = 2) ?(use_padding = false) () x =
   (* [@^+] expands to the [tropical] in scope (TDSL.O's, unless shadowed) — dispatch the gradient
      gate here, where the window geometry is a plain value. *)
-  let tropical ?label ?capture_dims spec t1 t2 =
-    tropical ?label ?capture_dims ~nonoverlapping:(Int.( >= ) stride window_size) spec t1 t2
+  let tropical ?label ?capture_dims ?spec_source spec t1 t2 =
+    tropical ?label ?capture_dims ?spec_source ~nonoverlapping:(Int.( >= ) stride window_size) spec
+      t1 t2
   in
   Shape.set_dim wh window_size;
   Shape.set_dim ww window_size;
@@ -587,8 +588,9 @@ let%op max_pool2d ?(stride = 2) ?(window_size = 2) ?(use_padding = false) () x =
     Prefer {!max_pool2d}: it reads the operand directly, without the extra buffer and copy. *)
 let%op max_pool2d_copy ?(stride = 2) ?(window_size = 2) ?(use_padding = false) () x =
   (* Same gradient-gate dispatch as {!max_pool2d} (gh-527). *)
-  let tropical ?label ?capture_dims spec t1 t2 =
-    tropical ?label ?capture_dims ~nonoverlapping:(Int.( >= ) stride window_size) spec t1 t2
+  let tropical ?label ?capture_dims ?spec_source spec t1 t2 =
+    tropical ?label ?capture_dims ?spec_source ~nonoverlapping:(Int.( >= ) stride window_size) spec
+      t1 t2
   in
   Shape.set_dim wh window_size;
   Shape.set_dim ww window_size;

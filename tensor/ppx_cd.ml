@@ -1285,9 +1285,10 @@ let translate ?ident_label (expr : expression) : result =
           typ = Tensor;
           slot;
           expr =
-            [%expr
-              [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
-                [%e spec] [%e res1.expr] [%e res2.expr]];
+            with_spec_source ~spec_str ~spec
+              [%expr
+                [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
+                  [%e spec] [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
     | [%expr
@@ -1305,9 +1306,10 @@ let translate ?ident_label (expr : expression) : result =
           typ = Tensor;
           slot;
           expr =
-            [%expr
-              [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
-                [%e spec] [%e res1.expr] [%e res2.expr]];
+            with_spec_source ~spec_str ~spec
+              [%expr
+                [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
+                  [%e spec] [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
     | [%expr
@@ -1327,9 +1329,10 @@ let translate ?ident_label (expr : expression) : result =
           typ = Tensor;
           slot;
           expr =
-            [%expr
-              [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
-                ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr] [%e res2.expr]];
+            with_spec_source ~spec_str ~spec
+              [%expr
+                [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
+                  ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
     | [%expr
@@ -1349,9 +1352,10 @@ let translate ?ident_label (expr : expression) : result =
           typ = Tensor;
           slot;
           expr =
-            [%expr
-              [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
-                ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr] [%e res2.expr]];
+            with_spec_source ~spec_str ~spec
+              [%expr
+                [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
+                  ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
     | [%expr
@@ -1377,7 +1381,8 @@ let translate ?ident_label (expr : expression) : result =
           res1 with
           typ = Tensor;
           expr =
-            [%expr [%e Hashtbl.find_exn einsum_unary_ops op_ident loc] [%e spec] [%e res1.expr]];
+            with_spec_source ~spec_str ~spec
+              [%expr [%e Hashtbl.find_exn einsum_unary_ops op_ident loc] [%e spec] [%e res1.expr]];
         }
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
@@ -1393,9 +1398,10 @@ let translate ?ident_label (expr : expression) : result =
           typ = Tensor;
           slot = res1.slot;
           expr =
-            [%expr
-              [%e Hashtbl.find_exn einsum_unary_ops op_ident loc]
-                ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr]];
+            with_spec_source ~spec_str ~spec
+              [%expr
+                [%e Hashtbl.find_exn einsum_unary_ops op_ident loc]
+                  ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr]];
           array_opt_of_code = None;
         }
     | [%expr [%e? expr1].grad] -> (

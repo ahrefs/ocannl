@@ -1568,12 +1568,15 @@ let%track7_sexp ternop ?op_label ?ternary_op ~op_asn ~grad_asn ?grad_spec t1 t2 
        ())
     [ t1; t2; t3 ]
 
-let%track7_sexp blockop ?op_label ~spec ~delayed_vars ~op_asn ~grad_asn ?grad_spec rhses
-    ?(label = []) ?top_down_prec ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes
+let%track7_sexp blockop ?op_label ~spec ?spec_source ~delayed_vars ~op_asn ~grad_asn ?grad_spec
+    rhses ?(label = []) ?top_down_prec ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes
     ?output_axes ?deduced () : t =
   let rhses_list = Array.to_list rhses in
   let rhs_shapes = List.map rhses_list ~f:(fun rhs -> rhs.shape) in
-  let shape_logic = Shape.Block { spec = Shape.einsum_spec spec; delayed_vars; rhses = rhs_shapes } in
+  let shape_logic =
+    Shape.Block
+      { spec = Shape.einsum_spec ?source:spec_source spec; delayed_vars; rhses = rhs_shapes }
+  in
   op
     ~label:(Option.to_list op_label @ label)
     ~shape_logic ~op_asn ~grad_asn ?grad_spec ?top_down_prec

@@ -2869,6 +2869,17 @@
   (pps ppx_ocannl)))
 
 (test
+ (name spec_source_refusals)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules spec_source_refusals)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_ocannl)))
+
+(test
  (name demo_models_smoke)
  (package neural_nets_lib)
  (deps

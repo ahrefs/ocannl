@@ -231,14 +231,13 @@ val set_scale : factor:int -> delayed_var_ref -> delayed_var_ref -> unit
     divisible by [factor], on insufficient information (both refs are [`Not_set_yet]), or when
     either ref resolves to a row variable, this raises [Row.Shape_error]. *)
 
+type einsum_spec = private { exec : string; source : string option } [@@deriving equal, sexp_of]
 (** The spec of an einsum-family operation (gh-ocannl-2163). [exec] is the spec Shape parses, infers
     and projects with. [source] is the spec as the user wrote it, when that differs from [exec]: the
     [%op]/[%cd] translators supply it for a spec that reads runtime values (a stride or dilation
     identifier, a [+] window reading [use_padding]), whose [exec] they build at run time. A spec
     reading no runtime value reaches Shape as written, so its [source] is [None]. Messages quote
     {!spec_text}; nothing parses [source]. *)
-type einsum_spec = private { exec : string; source : string option }
-[@@deriving equal, sexp_of]
 
 val einsum_spec : ?source:string -> string -> einsum_spec
 (** [einsum_spec ?source exec]; a [source] equal to [exec] is dropped. *)
@@ -375,7 +374,8 @@ type logic =
 type update_id [@@deriving equal, compare, hash, sexp]
 
 val logic_to_spec : logic -> string
-(** Converts a shape logic to its string specification for debugging/display purposes. *)
+(** Converts a shape logic to its string specification for debugging/display purposes: for an
+    einsum-family logic, its {!spec_text}. *)
 
 type update_step = private {
   shape : t;

@@ -184,7 +184,7 @@ let window =
       einsum1
         ?label:(Some
                   (List.concat [["window"]; (x.Tensor.value).Ir.Tnode.label]))
-        ~capture_dims:[o; k]
+        ~capture_dims:[o; k] ~spec_source:"stride*o<+dilation*k => o"
         (String.concat ~sep:""
            [Int.to_string stride;
            "*";
@@ -258,7 +258,7 @@ let coefficient =
         ?label:(Some
                   (List.concat
                      [["coefficient"]; (x.Tensor.value).Ir.Tnode.label]))
-        ~capture_dims:[stride]
+        ~capture_dims:[stride] ~spec_source:"stride*o<+k => o"
         (String.concat ~sep:""
            [Int.to_string stride; "*"; "o"; "<"; "+"; "k"; " => "; "o"]) x in
     let __ocannl_scheme =
@@ -278,7 +278,7 @@ let dilation_coefficient =
                   (List.concat
                      [["dilation_coefficient"];
                      (x.Tensor.value).Ir.Tnode.label]))
-        ~capture_dims:[dilation]
+        ~capture_dims:[dilation] ~spec_source:"o<+dilation*k => o"
         (String.concat ~sep:""
            ["o"; "<"; "+"; Int.to_string dilation; "*"; "k"; " => "; "o"]) x in
     let __ocannl_scheme =

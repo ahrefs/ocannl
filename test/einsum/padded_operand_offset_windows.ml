@@ -737,13 +737,15 @@ let run_refusals () =
       forward (Operation.einsum1 "s, i => s, 0*i" ~grad_spec:pg (operand ()) ()));
   refused "zero dilation, result side" ~axis:"i<+0*k" ~spec:"s, i; k => s, i<+0*k" (fun () ->
       forward (Operation.einsum "s, i; k => s, i<+0*k" ~grad_spec:pg (operand ()) (kernel ()) ()));
-  refused "zero dilation, %op identifier" ~axis:"o=+0*k" ~spec:"s, o=+0*k; k => s, o" (fun () ->
+  (* The spec quotation is the source (gh-ocannl-2163); the axis is the evaluated one. *)
+  refused "zero dilation, %op identifier" ~axis:"o=+0*k" ~spec:"s, o=+dilation*k; k => s, o"
+    (fun () ->
       let dilation = 0 in
       let x = operand () in
       let w = kernel () in
       let%op r = x +* "s, o=+dilation*k; k => s, o" w in
       forward r);
-  refused "zero stride, %op identifier" ~axis:"0*o<+k" ~spec:"s, 0*o<+k; k => s, o" (fun () ->
+  refused "zero stride, %op identifier" ~axis:"0*o<+k" ~spec:"s, stride*o<+k; k => s, o" (fun () ->
       let stride = 0 in
       let x = operand () in
       let w = kernel () in

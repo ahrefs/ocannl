@@ -16,8 +16,8 @@ val ndarray_constant :
 (** Parses an ndarray literal into its flat values and batch, output, input [(dim, basis)] axes. *)
 
 val substitute_identifiers_in_einsum_spec : loc:location -> string -> expression
-(** An expression building an einsum or axis-labels spec, reading identifier strides at run time.
-    A spec that reads no runtime value is returned as the literal the user wrote (gh-ocannl-2163). *)
+(** An expression building an einsum or axis-labels spec, reading identifier strides at run time. A
+    spec that reads no runtime value is returned as the literal the user wrote (gh-ocannl-2163). *)
 
 val einsum_spec_identifiers : string -> string list
 (** The identifiers [substitute_identifiers_in_einsum_spec] reads as integers at run time: the
@@ -78,6 +78,12 @@ val is_named_spec_function : expression -> bool
 val named_form_spec : expression -> expression option
 (** The spec of an application of a named einsum form ([Einsum_parser.named_spec_functions],
     unqualified): its first positional argument. *)
+
+val with_spec_source : spec_str:string -> spec:expression -> expression -> expression
+(** [with_spec_source ~spec_str ~spec e]: the application [e] of an einsum-family function to
+    [spec], the {!substitute_identifiers_in_einsum_spec} expression for the literal [spec_str], with
+    [~spec_source:spec_str] added when [spec] is built at run time, so Shape's messages quote what
+    the user wrote (gh-ocannl-2163). [e] itself for a spec emitted as its literal. *)
 
 val substitute_named_form_spec : expression -> expression
 (** The application of a named einsum form with its literal spec substituted as an operator's is

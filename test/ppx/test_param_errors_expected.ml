@@ -390,6 +390,7 @@ let stride_unschemed =
            ?param_init:None "kernel") () in
       fun stride x ->
         einsum ?label:(Some ["stride_unschemed"])
+          ~spec_source:"stride*o<+k; k => o"
           (String.concat ~sep:""
              [Int.to_string stride;
              "*";
@@ -454,14 +455,14 @@ let conversion_after_unit =
 let named_labelled =
   let open! TDSL.O in
     fun ~stride x ->
-      einsum1
+      einsum1 ~spec_source:"stride*o => o"
         (String.concat ~sep:"" [Int.to_string stride; "*"; "o"; " => "; "o"])
         x
 let named_before_unit =
   let open! TDSL.O in
     fun stride () ->
       let __ocannl_body x =
-        einsum1
+        einsum1 ~spec_source:"stride*o => o"
           (String.concat ~sep:""
              [Int.to_string stride; "*"; "o"; " => "; "o"]) x in
       let __ocannl_scheme =
@@ -474,7 +475,7 @@ let named_unschemed =
   let open! TDSL.O in
     fun () ->
       fun stride x ->
-        einsum1
+        einsum1 ~spec_source:"stride*o => o"
           (String.concat ~sep:""
              [Int.to_string stride; "*"; "o"; " => "; "o"]) x
 let named_axis_label =

@@ -169,7 +169,8 @@ let run_refusals () =
       let w = kernel () in
       let%op r = a +* "i, ..r..; k => i=+k, ..r.." w in
       forward r);
-  refused "legacy + with use_padding = true" ~window:"i=+k" ~spec:"s, i; k => s, i=+k" (fun () ->
+  (* The spec reads [use_padding] at run time: Shape parses [i=+k] and quotes the source. *)
+  refused "legacy + with use_padding = true" ~window:"i=+k" ~spec:"s, i; k => s, i+k" (fun () ->
       let use_padding = true in
       let a = operand () in
       let w = kernel () in

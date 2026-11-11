@@ -51,8 +51,8 @@ let mentions_label ~sub (update : Asgns.comp) : bool =
    twin for the parity legs (and, forced true, a canary that the shadow mechanism itself works). *)
 let%op pool_gate ?(nonoverlapping = false) ?(stride = 2) ?(window_size = 2) ?(use_padding = false)
     () x =
-  let tropical ?label ?capture_dims spec t1 t2 =
-    tropical ?label ?capture_dims ~nonoverlapping spec t1 t2
+  let tropical ?label ?capture_dims ?spec_source spec t1 t2 =
+    tropical ?label ?capture_dims ?spec_source ~nonoverlapping spec t1 t2
   in
   Shape.set_dim wh window_size;
   Shape.set_dim ww window_size;
@@ -147,7 +147,9 @@ let () =
 (* === Leg 3: einmax1's flag — a full reduction with ties, both gates bitwise-equal. === *)
 
 let%op emax_gate ?(nonoverlapping = false) () x =
-  let einmax1 ?label ?capture_dims spec t1 = einmax1 ?label ?capture_dims ~nonoverlapping spec t1 in
+  let einmax1 ?label ?capture_dims ?spec_source spec t1 =
+    einmax1 ?label ?capture_dims ?spec_source ~nonoverlapping spec t1
+  in
   x @^^ "i => 0"
 
 let () =
