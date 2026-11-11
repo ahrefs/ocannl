@@ -1,0 +1,37 @@
+homogeneous arithmetic inherits the slot, ignoring operand annotations: true
+Where keeps its condition's precision and inherits the slot in both arms: true
+Round_prec keeps its exact narrow annotation: true
+uniform lane keeps the block and lane precisions under a half slot: true
+a stale packed Where annotation terminates with its condition at its own single precision: true
+threefry4x32_crypto_constant_scalar: a uniform conversion still directly contains the nested RNG: true
+threefry4x32_crypto_constant_scalar: large RNG input is accepted under a half store and matches materialized: true
+threefry4x32_crypto_constant_scalar: draws are finite and in [0, 1): true
+threefry4x32_crypto_constant_scalar: counters discriminate output cells: true
+threefry4x32_crypto_constant_lane: a uniform conversion still directly contains the nested RNG: true
+threefry4x32_crypto_constant_lane: large RNG input is accepted under a half store and matches materialized: true
+threefry4x32_crypto_constant_lane: draws are finite and in [0, 1): true
+threefry4x32_crypto_constant_lane: counters discriminate output cells: true
+threefry4x32_crypto_index_scalar: a uniform conversion still directly contains the nested RNG: true
+threefry4x32_crypto_index_scalar: large RNG input is accepted under a half store and matches materialized: true
+threefry4x32_crypto_index_scalar: draws are finite and in [0, 1): true
+threefry4x32_crypto_index_scalar: counters discriminate output cells: true
+threefry4x32_crypto_index_lane: a uniform conversion still directly contains the nested RNG: true
+threefry4x32_crypto_index_lane: large RNG input is accepted under a half store and matches materialized: true
+threefry4x32_crypto_index_lane: draws are finite and in [0, 1): true
+threefry4x32_crypto_index_lane: counters discriminate output cells: true
+threefry4x32_light_constant_scalar: a uniform conversion still directly contains the nested RNG: true
+threefry4x32_light_constant_scalar: large RNG input is accepted under a half store and matches materialized: true
+threefry4x32_light_constant_scalar: draws are finite and in [0, 1): true
+threefry4x32_light_constant_scalar: counters discriminate output cells: true
+threefry4x32_light_constant_lane: a uniform conversion still directly contains the nested RNG: true
+threefry4x32_light_constant_lane: large RNG input is accepted under a half store and matches materialized: true
+threefry4x32_light_constant_lane: draws are finite and in [0, 1): true
+threefry4x32_light_constant_lane: counters discriminate output cells: true
+threefry4x32_light_index_scalar: a uniform conversion still directly contains the nested RNG: true
+threefry4x32_light_index_scalar: large RNG input is accepted under a half store and matches materialized: true
+threefry4x32_light_index_scalar: draws are finite and in [0, 1): true
+threefry4x32_light_index_scalar: counters discriminate output cells: true
+threefry4x32_light_index_lane: a uniform conversion still directly contains the nested RNG: true
+threefry4x32_light_index_lane: large RNG input is accepted under a half store and matches materialized: true
+threefry4x32_light_index_lane: draws are finite and in [0, 1): true
+threefry4x32_light_index_lane: counters discriminate output cells: true
