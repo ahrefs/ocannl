@@ -43,12 +43,12 @@ files.
   (`st +* "...|h,w,..c..; ...|..c.. => ...|h" st`) is a true refusal, and `(st *. x) +* ... st` is
   the program meant. Pinned by `test/einsum/test_row_self_reference` (last block) and
   `test/operations/self_contraction_occurs`.
-- A pointwise factor cannot give a statistic two new axes implicitly (gh-ocannl-2154):
-  `p = st *. 2` closes with output rank `max(rank(st), 1)`, while contracting slots
-  `h,w,..c..; ..c..` demand `rank(p) = rank(st) + 2`. Even `h = 1` adds an axis.
-  `contraction_pointwise_closing` pins the refusal after `y + (p *. x)`; `closed_row_rank_error`
-  reports the required and closed ranks and explains operation-result closing. The `stretch`
-  hint names the opt-in policy, not a promise that every other constraint will then fit.
+- gh-ocannl-2154 is a known false refusal (`contraction_pointwise_closing`): the original
+  store accepts the added witness equations `st=[]`, `p=[1_(bcast_if_1);5]`, `y=[1_(bcast_if_1)]`,
+  `q=z=[3;4;5]`. Closing is not a rank upper bound overriding an einsum's equations.
+  Without that witness, a Stage6a mixed-flank trial chooses an empty remainder; the later
+  `p`/`q` remaining-row equation needs `q`'s axis 4 there. The test pins that trace, not a
+  generic rank refusal. Repair needs closing/trial-choice design; the issue stays open.
 - `Row.Concat` dimensions (block tensors, `^` in specs) are solved as ARITHMETIC SUMS, not
   structural lists: equality lives in `unify_dim` (single-component unwrap, `Concat=Dim`
   subtraction, cancel-common residuals, nested-`Concat` flattening), and the equal-arity

@@ -1,4 +1,4 @@
-the self-contraction followed by pointwise use is refused: true
-the refusal reports the open row's minimum rank and the closed row's rank: true
-the refusal explains operation-result closing: true
-the refusal names explicit use-site widening: true
+the original store accepts all five witness shapes: true
+known gap: the inferred program is still refused: true
+known gap: p's empty remainder conflicts with q's axis-4 remainder: true
+control: an unrelated rank refusal does not match the gap: true
