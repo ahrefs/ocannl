@@ -6664,20 +6664,22 @@ module C_syntax (B : C_syntax_config) = struct
         let vec_var = string vec_result_temporary in
         let vec_typ = string (B.vec_typ_of_prec ~length:block_lanes prec) in
         let vec_decl = vec_typ ^^ space ^^ vec_var ^^ string " = " ^^ result_doc ^^ semi in
+        (* A rank-zero tensor has one cell: consume lane zero of the packed block at offset zero,
+           just as a singleton tail store does. Share offsets with routine logging. *)
+        let element_offset i =
+          if Array.is_empty idcs then string (Int.to_string i)
+          else
+            match Array.last idcs with
+            | Fixed_idx idx ->
+                let elem_idcs = Array.copy idcs in
+                elem_idcs.(Array.length elem_idcs - 1) <- Fixed_idx (idx + i);
+                pp_array_offset (elem_idcs, dims)
+            | _ -> pp_array_offset (idcs, dims) ^^ string (" + " ^ Int.to_string i)
+        in
         let assignments =
           let elem_assigns =
             List.init length ~f:(fun i ->
-                let offset_doc =
-                  match idcs.(Array.length idcs - 1) with
-                  | Fixed_idx idx ->
-                      (* For Fixed_idx, update the index and compute offset normally *)
-                      let elem_idcs = Array.copy idcs in
-                      elem_idcs.(Array.length elem_idcs - 1) <- Fixed_idx (idx + i);
-                      pp_array_offset (elem_idcs, dims)
-                  | _ ->
-                      (* For non-Fixed_idx (Iterator, etc), add i to the computed offset *)
-                      pp_array_offset (idcs, dims) ^^ string (" + " ^ Int.to_string i)
-                in
+                let offset_doc = element_offset i in
                 let value_doc =
                   if block_lanes = 1 then
                     (* A single-lane block has a scalar type, so no .v[] access *)
@@ -6700,16 +6702,7 @@ module C_syntax (B : C_syntax_config) = struct
           in
           let value_logs =
             List.init length ~f:(fun i ->
-                let elem_idcs = Array.copy idcs in
-                (match elem_idcs.(Array.length elem_idcs - 1) with
-                | Fixed_idx idx -> elem_idcs.(Array.length elem_idcs - 1) <- Fixed_idx (idx + i)
-                | _ -> ());
-                let offset_doc =
-                  let base_offset = pp_array_offset (elem_idcs, dims) in
-                  match elem_idcs.(Array.length elem_idcs - 1) with
-                  | Fixed_idx _ -> base_offset
-                  | _ -> base_offset ^^ string (" + " ^ Int.to_string i)
-                in
+                let offset_doc = element_offset i in
                 let offset_spec, offset_arg_doc = B.log_index_arg offset_doc in
                 let value_base_msg =
                   Printf.sprintf "%s[%s]{=%s} = %s.v[%d] = %s\n" (get_code_ident tn) offset_spec
