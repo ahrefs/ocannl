@@ -353,34 +353,6 @@ let () =
            [ [ 3; 2 ]; [ 3; 2 ] ]
            (closing ~recorded:(fun r o -> [ ineq r o; ineq o r ]) (fun r _ -> [ r_32 r ]))))
 
-(* The dim twin in [solve_dim_ineq] keeps its singleton arm, guarded by [glb = None] and no
-   [At_least_dim]: printed, not claimed, until it is decided on its own. [d1 = 3] and [d2] the
-   broadcast top [1] satisfy [d1 <= d2]; whether it is refused depends on the repeat. *)
-let () =
-  let outcome ~repeat =
-    let d1 = Row.Var (Row.get_var ()) and d2 = Row.Var (Row.get_var ()) in
-    let dim_ineq res opnd = Row.Dim_ineq { res; opnd; from_ = Sexp.Atom "test"; origin } in
-    let dim_eq d1 d2 = Row.Dim_eq { d1; d2; origin } in
-    match
-      let pending, env = Row.solve_inequalities ~stage:Stage1 [ dim_ineq d1 d2 ] Row.empty_env in
-      Row.solve_inequalities ~stage:Stage2
-        ((if repeat then [ dim_ineq d1 d2 ] else [])
-        @ [ dim_eq d1 (dim 3); dim_eq d2 (Row.get_bcast_dim ~d:1 ()) ]
-        @ pending)
-        env
-    with
-    | _, env ->
-        let show = function
-          | Row.Var v -> Option.value_map (Row.get_dim_val env v) ~default:"?" ~f:Int.to_string
-          | _ -> "?"
-        in
-        show d1 ^ " " ^ show d2
-    | exception Row.Shape_error (msg, _) -> "Shape_error: " ^ msg
-  in
-  Stdio.printf "the dim twin: d1<=d2 recorded, then d1=3, d2=1 in one stage-2 call: %s\n"
-    (outcome ~repeat:false);
-  Stdio.printf "the dim twin, the bound repeated first: %s\n" (outcome ~repeat:true)
-
 (* The contract over random stores: repeating a recorded bound anywhere in the stage-2 call changes
    no store's outcome, neither whether it solves nor what closes. The stage-1 steps are solved one
    per call as before; every later step goes into the one stage-2 call. *)
@@ -454,3 +426,254 @@ let () =
   Verdict.case "random stores, one stage-2 call" (fun () ->
       p_none ~min:1000 "repeating a recorded bound in the stage-2 call changes no store's outcome"
         outcomes ~f:(fun o -> not (same o)))
+
+(* No guess between two dimensions either (gh-ocannl-2141). From Stage2 on, re-processing a recorded
+   [d1 ⊑ d2] whose variables were each the other's only bound used to equate them, which a solution
+   need not do: [3 ⊑ 1_(bcast_if_1)] holds unequal. It matched only an edge already recorded, so it
+   fired only on a repeated bound -- and the closure repeats every bound, re-solving its stage-1
+   constraints at Stage2. Each case states a store a solution exists for, and claims it is solved
+   with the dimensions, sizes and bases, that solution prescribes, or a store none exists for, and
+   claims it is refused. *)
+
+let dim_ineq res opnd = Row.Dim_ineq { res; opnd; from_ = Sexp.Atom "test"; origin }
+let dim_eq d1 d2 = Row.Dim_eq { d1; d2; origin }
+let dim_var () = Row.Var (Row.get_var ())
+let top () = Row.get_bcast_dim ~d:1 ()
+let dim_row d = { Row.beg_dims = []; dims = [ d ]; bcast = Broadcastable; prov = prov () }
+
+(* A closed dimension as its size and basis: [get_dim_val] alone cannot tell the broadcast top from
+   a default [1]. *)
+let ground_dim env d =
+  match (Row.subst_row env (dim_row d)).dims with
+  | [ Row.Dim { d; basis; _ } ] -> Some (d, basis)
+  | _ -> None
+
+(* [recorded] solved at Stage1, then each of [calls] its own stage-2 call, then every closing stage.
+   Each dimension sits in a row to close; [leaves] are terminal, closing to their use sites. *)
+let solve_dims ?(leaves = []) ~dims ~recorded calls =
+  let init =
+    List.map leaves ~f:(fun d -> Row.Terminal_dim (false, d, origin))
+    @ List.map dims ~f:(fun d -> Row.Shape_row (dim_row d, origin))
+  in
+  match
+    let pending, env = Row.solve_inequalities ~stage:Stage1 (recorded @ init) Row.empty_env in
+    let pending, env =
+      List.fold calls ~init:(pending, env) ~f:(fun (pending, env) call ->
+          Row.solve_inequalities ~stage:Stage2 (call @ pending) env)
+    in
+    List.fold [ Row.Stage3; Stage4; Stage5; Stage6a; Stage6b; Stage7 ] ~init:(pending, env)
+      ~f:(fun (pending, env) stage -> Row.solve_inequalities ~stage pending env)
+  with
+  | _, env -> Ok (List.map dims ~f:(ground_dim env))
+  | exception Row.Shape_error (msg, _) -> Error msg
+
+let dims_to want = function
+  | Ok got -> List.equal (Option.equal Poly.equal) got (List.map want ~f:Option.some)
+  | Error _ -> false
+
+let () =
+  let default d = (d, Row.default_basis) and top_ = (1, Row.bcast_if_1) in
+  (* [d1 ⊑ d2] recorded; [calls] builds the stage-2 calls from [d1], [d2]. *)
+  let pair ?(two_way = false) calls =
+    let d1 = dim_var () and d2 = dim_var () in
+    let recorded = dim_ineq d1 d2 :: (if two_way then [ dim_ineq d2 d1 ] else []) in
+    solve_dims ~dims:[ d1; d2 ] ~recorded (calls d1 d2)
+  in
+  let three d1 = dim_eq d1 (dim 3) and to_top d2 = dim_eq d2 (top ()) in
+  Verdict.case "a repeated dimension bound" (fun () ->
+      p "d1<=d2 recorded, then d1=3, d2=1_(bcast_if_1) in one stage-2 call: solved to 3, the top"
+        (dims_to [ default 3; top_ ] (pair (fun d1 d2 -> [ [ three d1; to_top d2 ] ])));
+      p "the same with the bound repeated first: solved alike"
+        (dims_to
+           [ default 3; top_ ]
+           (pair (fun d1 d2 -> [ [ dim_ineq d1 d2; three d1; to_top d2 ] ])));
+      p "the bound repeated between the equations: solved alike"
+        (dims_to
+           [ default 3; top_ ]
+           (pair (fun d1 d2 -> [ [ three d1; dim_ineq d1 d2; to_top d2 ] ])));
+      p "the bound repeated last: solved alike"
+        (dims_to
+           [ default 3; top_ ]
+           (pair (fun d1 d2 -> [ [ three d1; to_top d2; dim_ineq d1 d2 ] ])));
+      p "the equations swapped, the bound repeated first: solved alike"
+        (dims_to
+           [ default 3; top_ ]
+           (pair (fun d1 d2 -> [ [ dim_ineq d1 d2; to_top d2; three d1 ] ])));
+      (* A guess made at the repeat-only call's fixpoint would have equated them before either
+         equation arrived. *)
+      p "the bound repeated alone in a stage-2 call, then a call per equation: solved alike"
+        (dims_to
+           [ default 3; top_ ]
+           (pair (fun d1 d2 -> [ [ dim_ineq d1 d2 ]; [ three d1 ]; [ to_top d2 ] ]))));
+  Verdict.case "what a dimension bound still decides" (fun () ->
+      p "d1<=d2 repeated, d1=3, d2=3: solved, equal"
+        (dims_to
+           [ default 3; default 3 ]
+           (pair (fun d1 d2 -> [ [ dim_ineq d1 d2; three d1; dim_eq d2 (dim 3) ] ])));
+      p "d1<=d2 repeated, d1=3: solved, d2 closing above it"
+        (match pair (fun d1 d2 -> [ [ dim_ineq d1 d2; three d1 ] ]) with
+        | Ok [ Some a; Some b ] ->
+            Poly.equal a (default 3) && (Poly.equal b (default 3) || Poly.equal b top_)
+        | _ -> false);
+      p "d1<=d2 repeated, d1=3, d2=1_(default): refused, a default 1 is no top"
+        (refused (pair (fun d1 d2 -> [ [ dim_ineq d1 d2; three d1; dim_eq d2 (dim 1) ] ])));
+      p "d1<=d2 repeated, d1=3, d2=2: refused"
+        (refused (pair (fun d1 d2 -> [ [ dim_ineq d1 d2; three d1; dim_eq d2 (dim 2) ] ])));
+      p "d1<=d2 repeated, d1=3_(rgb), d2=3: refused, the bases differ"
+        (refused
+           (pair (fun d1 d2 ->
+                [
+                  [
+                    dim_ineq d1 d2; dim_eq d1 (Row.get_dim ~d:3 ~basis:"rgb" ()); dim_eq d2 (dim 3);
+                  ];
+                ])));
+      p "d1<=d2 and d2<=d1, d1=3, d2=1_(bcast_if_1): refused, the bounds make them equal"
+        (refused (pair ~two_way:true (fun d1 d2 -> [ [ dim_ineq d1 d2; three d1; to_top d2 ] ])));
+      p "d1<=d2 and d2<=d1, d1=3: solved, d2 with it"
+        (dims_to
+           [ default 3; default 3 ]
+           (pair ~two_way:true (fun d1 d2 -> [ [ dim_ineq d1 d2; three d1 ] ]))));
+  (* A chain: the lower bound reaches the leaf with or without a repeat, before or after the
+     edges. *)
+  let chain ~repeat ~early =
+    let d1 = dim_var () and d2 = dim_var () and d3 = dim_var () in
+    let edges = [ dim_ineq d1 d2; dim_ineq d2 d3 ] in
+    let size = [ three d1 ] in
+    let recorded = if early then size @ edges else edges in
+    let call = (if repeat then edges else []) @ if early then [] else size in
+    solve_dims ~leaves:[ d3 ] ~dims:[ d1; d2; d3 ] ~recorded [ call ]
+  in
+  Verdict.case "a dimension chain" (fun () ->
+      let leaf_is_3 = function Ok [ _; _; Some l ] -> Poly.equal l (default 3) | _ -> false in
+      p_all
+        "d1<=d2<=leaf, d1=3: the leaf closes to 3, with or without the repeat, d1=3 early or late"
+        [ (false, false); (true, false); (false, true); (true, true) ]
+        ~f:(fun (repeat, early) -> leaf_is_3 (chain ~repeat ~early));
+      p "and the repeat changes nothing in how it closes"
+        (Poly.equal (chain ~repeat:false ~early:false) (chain ~repeat:true ~early:false)))
+
+(* The contract over random dimension stores, the row sweep's twin. The store reads plain variables
+   and closed sizes only, default-based or the broadcast top, related by bounds and equations, some
+   variables leaves: no affine, concatenated or symbolic dimension, no fixed-index [At_least_dim]
+   and no [Total_elems] (those have tests of their own). The stage-1 steps are solved one per call;
+   the rest go into one stage-2 call, with and without a repeated bound, and with every stage-1 step
+   re-solved there as the closure does it. Every solution reported is checked on ground
+   dimensions. *)
+type dim_step =
+  | D_bound of int * int  (** [d_i ⊑ d_j] *)
+  | D_alias of int * int  (** [d_i = d_j] *)
+  | D_size of int * (int * string)  (** [d_i = size_basis] *)
+
+let num_dims = 5
+
+let random_dim_store state =
+  let int n = Random.State.int state n in
+  let pair () =
+    let i = int num_dims in
+    (i, (i + 1 + int (num_dims - 1)) % num_dims)
+  in
+  let sizes =
+    [ (2, Row.default_basis); (3, Row.default_basis); (1, Row.default_basis); (1, Row.bcast_if_1) ]
+  in
+  let bounds =
+    List.init
+      (2 + int 5)
+      ~f:(fun _ ->
+        let i, j = pair () in
+        D_bound (i, j))
+  in
+  let equations =
+    List.init
+      (1 + int 3)
+      ~f:(fun _ ->
+        match int 5 with
+        | 0 | 1 ->
+            let i, j = pair () in
+            D_alias (i, j)
+        | _ -> D_size (int num_dims, List.nth_exn sizes (int 4)))
+  in
+  let steps =
+    List.map (bounds @ equations) ~f:(fun s -> (Random.State.bits state, s))
+    |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+    |> List.map ~f:snd
+  in
+  let at_stage1 = int (List.length steps + 1) in
+  ( List.take steps at_stage1,
+    List.drop steps at_stage1,
+    List.filter (List.range 0 num_dims) ~f:(fun _ -> int 2 = 0) )
+
+let run_dims ?(late_extra = fun _ late -> late) (early, late, leaves) =
+  let dims = Array.init num_dims ~f:(fun _ -> dim_var ()) in
+  let constraint_ = function
+    | D_bound (i, j) -> dim_ineq dims.(i) dims.(j)
+    | D_alias (i, j) -> dim_eq dims.(i) dims.(j)
+    | D_size (i, (d, basis)) -> dim_eq dims.(i) (Row.get_dim ~d ~basis ())
+  in
+  let init =
+    List.map leaves ~f:(fun i -> Row.Terminal_dim (false, dims.(i), origin))
+    @ List.map (Array.to_list dims) ~f:(fun d -> Row.Shape_row (dim_row d, origin))
+  in
+  let late = List.map ~f:constraint_ (late_extra early late) in
+  match
+    let pending, env =
+      List.fold early ~init:(init, Row.empty_env) ~f:(fun (pending, env) s ->
+          Row.solve_inequalities ~stage:Stage1 (constraint_ s :: pending) env)
+    in
+    let pending, env = Row.solve_inequalities ~stage:Stage2 (late @ pending) env in
+    List.fold [ Row.Stage3; Stage4; Stage5; Stage6a; Stage6b; Stage7 ] ~init:(pending, env)
+      ~f:(fun (pending, env) stage -> Row.solve_inequalities ~stage pending env)
+  with
+  | _, env -> Ok (Array.map dims ~f:(ground_dim env))
+  | exception Row.Shape_error (msg, _) -> Error msg
+
+(* The flat broadcast order on ground dimensions: equal in size and basis, or the operand the
+   top. *)
+let dim_holds dims step =
+  let get i = dims.(i) in
+  let top = (1, Row.bcast_if_1) in
+  match step with
+  | D_bound (i, j) -> (
+      match (get i, get j) with Some r, Some o -> Poly.equal r o || Poly.equal o top | _ -> false)
+  | D_alias (i, j) -> ( match (get i, get j) with Some a, Some b -> Poly.equal a b | _ -> false)
+  | D_size (i, s) -> Option.equal Poly.equal (get i) (Some s)
+
+let () =
+  let state = Random.State.make [| 2141 |] in
+  let stores = List.init num_stores ~f:(fun _ -> random_dim_store state) in
+  let with_dup =
+    List.filter_map stores ~f:(fun ((early, late, _) as store) ->
+        let bounds = List.filter (early @ late) ~f:(function D_bound _ -> true | _ -> false) in
+        if List.is_empty bounds then None
+        else
+          let bound = List.nth_exn bounds (Random.State.int state (List.length bounds)) in
+          Some (store, (bound, Random.State.int state (List.length late + 1))))
+  in
+  let outcomes =
+    List.map with_dup ~f:(fun (store, (bound, at)) ->
+        let dup _ late = List.take late at @ (bound :: List.drop late at) in
+        (* The closure's form: every stage-1 step re-solved in the stage-2 call. *)
+        let refeed early late = early @ late in
+        (store, run_dims store, run_dims ~late_extra:dup store, run_dims ~late_extra:refeed store))
+  in
+  let same a b =
+    match (a, b) with Ok a, Ok b -> Poly.equal a b | Error _, Error _ -> true | _ -> false
+  in
+  let solved =
+    List.filter_map outcomes ~f:(fun (s, r, _, _) -> Result.ok r |> Option.map ~f:(fun r -> (s, r)))
+  in
+  Stdio.eprintf
+    "(not part of the golden) %d dimension stores with a bound to repeat, %d solved, %d changed by \
+     the repeat, %d by re-solving stage 1\n"
+    (List.length outcomes) (List.length solved)
+    (List.count outcomes ~f:(fun (_, a, b, _) -> not (same a b)))
+    (List.count outcomes ~f:(fun (_, a, _, c) -> not (same a c)));
+  Verdict.case "random dimension stores, one stage-2 call" (fun () ->
+      p "the dimension sweep solves stores and refuses others"
+        (List.length solved > 0 && List.length solved < List.length outcomes);
+      p_all ~min:500 "every dimension solution satisfies its store, on ground dimensions" solved
+        ~f:(fun ((early, late, _), dims) -> List.for_all (early @ late) ~f:(dim_holds dims));
+      p_none ~min:1000 "repeating a recorded dimension bound in the stage-2 call changes no store"
+        outcomes ~f:(fun (_, a, b, _) -> not (same a b));
+      p_none ~min:1000
+        "re-solving the stage-1 steps at stage 2, as the closure does, changes no store" outcomes
+        ~f:(fun (_, a, _, c) -> not (same a c)))
