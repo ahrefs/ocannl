@@ -61,26 +61,36 @@ layer_norm : ..'a..|..'b..->..'c.. => ..'d..|..'e..->..'f..,'g
   'g ⊑ 'i
   ..'h..,'i ⊑ ..'c..
 
-conv2d : ..'a..|..'_a..->'b,'c,..'d.. => ..'a..|..'_a..->'b,'c,..'_b..,'_c
+conv2d : ..'a..|..'_a..->conv('b+'c),conv('d+'e),..'f.. => ..'a..|..'_a..->'b,'d,..'_b..,'_c
   ..'_b.. ⊑ ..'_d..
   '_c ⊑ '_e
+  size('c) = 3
+  size('e) = 3
 
-depthwise_separable_conv2d : ..'a..|..'_a..->'b,'c,..'_b..,'_c => ..'a..|..'_a..->'b,'c,..'_d..,'_e
+depthwise_separable_conv2d : ..'a..|..'_a..->conv('b+'c),conv('d+'e),..'_b..,'_c => ..'a..|..'_a..->'b,'d,..'_d..,'_e
   ..'_b.. ⊑ ..'_f..
   '_c ⊑ '_g
   ..'_d.. ⊑ ..'_h..
   '_e ⊑ '_i
+  size('c) = 3
+  size('e) = 3
 
-max_pool2d : ..'a..|..'b..->conv(2*'c+2),conv(2*'d+2),..'e.. => ..'a..|..'b..->'c,'d,..'e..
+max_pool2d : ..'a..|..'b..->conv(2*'c+'d),conv(2*'e+'f),..'g.. => ..'a..|..'b..->'c,'e,..'g..
+  size('d) = 2
+  size('f) = 2
 
-max_pool2d_copy : ..'a..|..'b..->conv(2*'c+2),conv(2*'d+2),..'e.. => ..'a..|..'b..->'c,'d,..'e..
+max_pool2d_copy : ..'a..|..'b..->conv(2*'c+'d),conv(2*'e+'f),..'g.. => ..'a..|..'b..->'c,'e,..'g..
+  size('d) = 2
+  size('f) = 2
 
-avg_pool2d : ..'a..|..'b..->conv(2*'c+2),conv(2*'d+2),..'e.. => ..'f..|..'g..->'h,'i,..'j..
-  ..'f.. ⊑ ..'a..
-  ..'g.. ⊑ ..'b..
-  'h ⊑ 'c
-  'i ⊑ 'd
-  ..'j.. ⊑ ..'e..
+avg_pool2d : ..'a..|..'b..->conv(2*'c+'d),conv(2*'e+'f),..'g.. => ..'h..|..'i..->'j,'k,..'l..
+  ..'h.. ⊑ ..'a..
+  ..'i.. ⊑ ..'b..
+  'j ⊑ 'c
+  'k ⊑ 'e
+  ..'l.. ⊑ ..'g..
+  size('d) = 2
+  size('f) = 2
 
 dropout [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.. => ..'d..|..'e..->..'f..
 
@@ -99,7 +109,7 @@ multi_head_attention [train_step, mask] : ..'a..|..'b..->..'c.., ..'d..|..'e..->
   's ⊑ 'r
   ..'o..,'p ⊑ ..'d..
   'r ⊑ ..'e..
-  2 ⊑ ..'f..
+  't ⊑ ..'f..
   ..'q..,'s ⊑ ..'g..
 
 multi_head_attention [train_step, no mask] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.. => ..'g..,'h|..'i..->..'j..,'k
@@ -125,7 +135,7 @@ multi_head_attention [no train_step, mask] : ..'a..|..'b..->..'c.., ..'d..|..'e.
   'p ⊑ 'o
   ..'l..,'m ⊑ ..'a..
   'o ⊑ ..'b..
-  2 ⊑ ..'c..
+  'q ⊑ ..'c..
   ..'n..,'p ⊑ ..'d..
 
 multi_head_attention [no train_step, no mask] : ..'a..|..'b..->..'c.. => ..'d..,'e|..'f..->..'g..,'h
@@ -209,7 +219,7 @@ decoder_only_block [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.., 
   ..'q..,'r ⊑ ..'f..
   ..'o..,'s ⊑ ..'g..
   'u ⊑ ..'h..
-  2 ⊑ ..'i..
+  'v ⊑ ..'i..
 
 decoder_only_block [no train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.. => ..'g..,'h|..'i..->..'j..,'k
   ..'g.. ⊑ ..'l..
@@ -228,7 +238,7 @@ decoder_only_block [no train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.
   ..'n..,'o ⊑ ..'c..
   ..'l..,'p ⊑ ..'d..
   'r ⊑ ..'e..
-  2 ⊑ ..'f..
+  's ⊑ ..'f..
 
 transformer_decoder_block [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.., ..'g..|..'h..->..'i.., ..'j..|..'k..->..'l.. => ..'m..,'n|..'o..->..'p..,'q
   ..'m.. ⊑ ..'r.., ..'s..
@@ -251,7 +261,7 @@ transformer_decoder_block [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->.
   ..'r..,'y ⊑ ..'g..
   ..'s..,'w ⊑ ..'j..
   'z ⊑ ..'k..
-  2 ⊑ ..'l..
+  'a1 ⊑ ..'l..
 
 transformer_decoder_block [no train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.., ..'g..|..'h..->..'i.. => ..'j..,'k|..'l..->..'m..,'n
   ..'j.. ⊑ ..'o.., ..'p..
@@ -274,7 +284,7 @@ transformer_decoder_block [no train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..
   ..'o..,'v ⊑ ..'d..
   ..'p..,'t ⊑ ..'g..
   'w ⊑ ..'h..
-  2 ⊑ ..'i..
+  'x ⊑ ..'i..
 
 transformer_encoder [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.. => ..'g..,'h|..'i..->..'j..,'k
   ..'g.. ⊑ ..'l..
@@ -322,7 +332,7 @@ decoder_only [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.., ..'g..
   ..'r..,'s ⊑ ..'f..
   ..'o..,'q ⊑ ..'g..
   'u ⊑ ..'h..
-  2 ⊑ ..'i..
+  'v ⊑ ..'i..
 
 decoder_only [no train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.. => ..'g..,'h|..'i..->..'j..,'k
   ..'g.. ⊑ ..'l..
@@ -342,7 +352,7 @@ decoder_only [no train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.. => .
   ..'o..,'p ⊑ ..'c..
   ..'l..,'n ⊑ ..'d..
   'r ⊑ ..'e..
-  2 ⊑ ..'f..
+  's ⊑ ..'f..
 
 transformer_decoder [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.., ..'g..|..'h..->..'i.., ..'j..|..'k..->..'l.. => ..'m..,'n|..'o..->..'p..,'q
   ..'m.. ⊑ ..'r.., ..'s..
@@ -368,7 +378,7 @@ transformer_decoder [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f..,
   ..'r..,'z ⊑ ..'g..
   ..'s..,'u ⊑ ..'j..
   'y ⊑ ..'k..
-  2 ⊑ ..'l..
+  'a1 ⊑ ..'l..
 
 transformer_decoder [no train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.., ..'g..|..'h..->..'i.. => ..'j..,'k|..'l..->..'m..,'n
   ..'j.. ⊑ ..'o.., ..'p..
@@ -394,7 +404,7 @@ transformer_decoder [no train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f
   ..'o..,'w ⊑ ..'d..
   ..'p..,'r ⊑ ..'g..
   'v ⊑ ..'h..
-  2 ⊑ ..'i..
+  'x ⊑ ..'i..
 
 batch_norm1d [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'_a..->..'e..,'f => ..'d..|..'_a..->..'e..,'f
   ..'_b.. ⊑ ..'_a..
@@ -408,60 +418,72 @@ batch_norm2d [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'_a..->'e,'f,..'g..,
 batch_norm2d [no train_step] : ..'a..|..'_a..->'b,'c,..'d..,'e => ..'a..|..'_a..->'b,'c,..'d..,'e
   ..'_a.. ⊑ ..'_b..
 
-conv_bn_relu [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'_a..->'e,'f,..'g.. => ..'h..|..'i..->'j,'k,..'l..,'m
-  ..'h.. ⊑ ..'d..
-  ..'i.. ⊑ ..'_a..
-  'j ⊑ 'e
-  'k ⊑ 'f
-  ..'l.. ⊑ ..'_b..
-  'm ⊑ '_c
+conv_bn_relu [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'_a..->conv('e+'f),conv('g+'h),..'i.. => ..'j..|..'k..->'l,'m,..'n..,'o
+  ..'j.. ⊑ ..'d..
+  ..'k.. ⊑ ..'_a..
+  'l ⊑ 'e
+  'm ⊑ 'g
+  ..'n.. ⊑ ..'_b..
+  'o ⊑ '_c
   ..'_d.. ⊑ ..'_a..
+  size('f) = 3
+  size('h) = 3
 
-conv_bn_relu [no train_step] : ..'a..|..'_a..->'b,'c,..'d.. => ..'e..|..'f..->'g,'h,..'i..,'j
+conv_bn_relu [no train_step] : ..'a..|..'_a..->conv('b+'c),conv('d+'e),..'f.. => ..'g..|..'h..->'i,'j,..'k..,'l
   ..'_a.. ⊑ ..'_b..
-  ..'e.. ⊑ ..'a..
-  ..'f.. ⊑ ..'_a..
-  'g ⊑ 'b
-  'h ⊑ 'c
-  ..'i.. ⊑ ..'_c..
-  'j ⊑ '_d
+  ..'g.. ⊑ ..'a..
+  ..'h.. ⊑ ..'_a..
+  'i ⊑ 'b
+  'j ⊑ 'd
+  ..'k.. ⊑ ..'_c..
+  'l ⊑ '_d
+  size('c) = 3
+  size('e) = 3
 
-resnet_block [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'_a..->conv(2*'e+3),conv(2*'f+3),..'g.. => ..'h..|..'i..->'j,'k,..'l..,'m
-  ..'h.. ⊑ ..'d..
-  ..'i.. ⊑ ..'_a.., ..'_b..
-  'j ⊑ 'e
-  'k ⊑ 'f
-  ..'l.. ⊑ ..'_c.., ..'_d..
-  'm ⊑ '_e, '_f
+resnet_block [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'_a..->conv(2*'e+'f),conv(2*'g+'h),..'i.. => ..'j..|..'k..->'l,'m,..'n..,'o
+  ..'j.. ⊑ ..'d..
+  ..'k.. ⊑ ..'_a.., ..'_b..
+  'l ⊑ 'e
+  'm ⊑ 'g
+  ..'n.. ⊑ ..'_c.., ..'_d..
+  'o ⊑ '_e, '_f
   ..'_g.. ⊑ ..'_a..
   ..'_h.. ⊑ ..'_a..
   ..'_b.. ⊑ ..'_a..
+  size('f) = 3
+  size('h) = 3
 
-resnet_block [no train_step] : ..'a..|..'_a..->conv(2*'b+3),conv(2*'c+3),..'d.. => ..'e..|..'f..->'g,'h,..'i..,'j
+resnet_block [no train_step] : ..'a..|..'_a..->conv(2*'b+'c),conv(2*'d+'e),..'f.. => ..'g..|..'h..->'i,'j,..'k..,'l
   ..'_a.. ⊑ ..'_b.., ..'_c..
-  ..'e.. ⊑ ..'a..
-  ..'f.. ⊑ ..'_a.., ..'_d..
-  'g ⊑ 'b
-  'h ⊑ 'c
-  ..'i.. ⊑ ..'_e.., ..'_f..
-  'j ⊑ '_g, '_h
+  ..'g.. ⊑ ..'a..
+  ..'h.. ⊑ ..'_a.., ..'_d..
+  'i ⊑ 'b
+  'j ⊑ 'd
+  ..'k.. ⊑ ..'_e.., ..'_f..
+  'l ⊑ '_g, '_h
   ..'_d.. ⊑ ..'_a..
+  size('c) = 3
+  size('e) = 3
 
-vgg_block [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'_a..->conv(2*'e+2),conv(2*'f+2),..'g.. => ..'h..|..'i..->'e,'f,..'j..,'k
-  ..'h.. ⊑ ..'d..
-  ..'i.. ⊑ ..'_b..
-  ..'j.. ⊑ ..'_c..
-  'k ⊑ '_d
+vgg_block [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'_a..->conv('e+'f),conv('g+'h),..'i.. => ..'j..|..'k..->'l,'m,..'n..,'o
+  ..'j.. ⊑ ..'d..
+  ..'k.. ⊑ ..'_b..
+  ..'n.. ⊑ ..'_c..
+  'o ⊑ '_d
   ..'_e.. ⊑ ..'_a..
   ..'_b.. ⊑ ..'_a..
+  size('f) = 3
+  size('h) = 3
 
-vgg_block [no train_step] : ..'a..|..'_a..->conv(2*'b+2),conv(2*'c+2),..'d.. => ..'e..|..'f..->'b,'c,..'g..,'h
+vgg_block [no train_step] : ..'a..|..'_a..->conv('b+'c),conv('d+'e),..'f.. => ..'g..|..'h..->'i,'j,..'k..,'l
   ..'_a.. ⊑ ..'_b..
-  ..'e.. ⊑ ..'a..
-  ..'f.. ⊑ ..'_c..
-  ..'g.. ⊑ ..'_d..
-  'h ⊑ '_e
+  ..'g.. ⊑ ..'a..
+  ..'h.. ⊑ ..'_c..
+  ..'k.. ⊑ ..'_d..
+  'l ⊑ '_e
   ..'_c.. ⊑ ..'_a..
+  size('c) = 3
+  size('e) = 3
 the stack's scheme is the one checked: true
 a mask of the wrong size is refused, naming the stack: true
 before any layer's body ran: true

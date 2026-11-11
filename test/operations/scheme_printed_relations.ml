@@ -17,6 +17,11 @@ let%op joined_kept () x y = x *. y
 (* The result refines several fixed rows (the parameters'): one line per left side. *)
 let%op biased () x = x + { w1 } + { w2 } + { w3 }
 
+let%op sized () x =
+  let y = x ++ "...|...->i => ...|...->i" [ "i" ] in
+  [%oc Shape.set_dim i 3];
+  y
+
 let traced build =
   let _, schemes = Tensor.Scheme.traced_by build in
   List.map schemes ~f:(fun s ->
@@ -55,4 +60,9 @@ let () =
       in
       p "no two lines share a left side" (not (List.contains_dup lefts ~compare:String.compare));
       p_exists "a line lists several upper bounds" lines ~f:(fun l ->
-          String.is_substring l ~substring:", "))
+          String.is_substring l ~substring:", "));
+  Verdict.case "numeric capture setters remain visible before their basis settles" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let text = List.hd_exn (traced (fun () -> sized ())) in
+      p_exists "the signature shows its held size of 3" (relation_lines text) ~f:(fun line ->
+          String.is_prefix line ~prefix:"size(" && String.is_suffix line ~suffix:" = 3"))

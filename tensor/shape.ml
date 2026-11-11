@@ -5603,6 +5603,12 @@ module Scheme = struct
     let dim_name v = name ~fixed:(dim_fixed v) (dim_key v) in
     let row_name v = ".." ^ name ~fixed:(row_fixed v) (row_key v) ^ ".." in
     let dim_str = Row.dim_to_string ~var_to_string:dim_name Row.Axis_size in
+    let subst_dim dim =
+      let row =
+        Row.{ beg_dims = []; bcast = Broadcastable; dims = [ dim ]; prov = empty_provenance }
+      in
+      List.hd_exn (Row.subst_row s.env row).dims
+    in
     (* Sequenced: names are given in reading order. *)
     let row_str (r : Row.t) =
       let beg = List.map r.beg_dims ~f:dim_str in
@@ -5682,11 +5688,13 @@ module Scheme = struct
           | D d -> (
               match Row.find_dim_entry s.env d with
               | Some (Row.Bounds_dim { glb = Some b; _ }) ->
+                  let b = subst_dim b in
                   Some ((fun () -> dim_str b), vars_of_dim b, v)
               | _ -> None)
           | R r -> (
               match Row.find_row_entry s.env r with
               | Some (Row.Bounds_row { glb = Some b; _ }) ->
+                  let b = Row.subst_row s.env b in
                   Some ((fun () -> row_str b), vars_of_row b, v)
               | _ -> None))
     in
@@ -5803,9 +5811,21 @@ module Scheme = struct
       |> List.map ~f:(fun (b, _, v) -> fun () -> [%string "%{b ()} ⊑ %{pr v}"])
     in
     (* Rendered in order: names follow the reading order. *)
+    let relations = List.map (lines @ commons @ glbs) ~f:(fun r -> "  " ^ r ()) in
+    (* A numeric setter deliberately leaves its basis open at Stage1. Show its size claim wherever
+       the signature names the dimension, without solving or retagging it. *)
+    let sizes =
+      List.filter_map s.constraints ~f:(function
+        | Row.Dim_size { dim; size; _ } ->
+            let dim = subst_dim dim in
+            if List.exists (vars_of_dim dim) ~f:(fun v -> Hashtbl.mem names (key v)) then
+              Some [%string "  size(%{dim_str dim}) = %{size#Int}"]
+            else None
+        | _ -> None)
+      |> List.dedup_and_sort ~compare:String.compare
+    in
     String.concat ~sep:"\n"
-      ((header :: List.map captures ~f:(fun r -> "  " ^ r))
-      @ List.map (lines @ commons @ glbs) ~f:(fun r -> "  " ^ r ()))
+      ((header :: List.map captures ~f:(fun r -> "  " ^ r)) @ relations @ sizes)
 
   let rows_of env (sh : shape) =
     {
