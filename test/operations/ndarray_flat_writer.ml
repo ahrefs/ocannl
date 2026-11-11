@@ -206,3 +206,70 @@ let () =
      the compiler does not elide that 3-word record, so the bound is the record per cell. *)
   p_all "a packed uint4x32 flat write allocates no more than its 3-word record per cell"
     (writes packed_precs) ~f:(fun words -> Float.(words < 512. + (3. * 65536.)))
+
+(* Host-only conversion contract: explicit boundary oracles, independent of the shared predicate. *)
+let () =
+  List.iter
+    Ops.
+      [
+        (byte, 0., 255.);
+        (uint16, 0., 65535.);
+        (int32, -2147483648., 2147483647.);
+        (uint32, 0., 4294967295.);
+        (int64, -9223372036854775808., 9223372036854774784.);
+        (uint64, 0., 18446744073709549568.);
+      ]
+    ~f:(fun (prec, lo, hi) ->
+      let routes =
+        [
+          ("point", fun nd v -> Nd.set_from_float nd [| 0 |] v);
+          ("fill", fun nd v -> Nd.fill_from_float nd v);
+          ("flat", fun nd v -> Nd.set_flat_values nd [| v |]);
+          ( "rank zero",
+            fun _ v ->
+              let nd = fresh prec ~dims:[||] ~pads:None in
+              Nd.set_flat_values nd [| v |] );
+          ( "padding",
+            fun _ v ->
+              ignore
+                (Nd.create_array ~debug:"integer_padding" prec ~dims:[| 1 |]
+                   ~padding:(Some ([| Ops.{ left = 1; right = 0 } |], v))
+                  : Nd.t) );
+        ]
+      in
+      List.iter routes ~f:(fun (route, write) ->
+          let rejected =
+            [
+              Float.nan;
+              Float.infinity;
+              Float.neg_infinity;
+              (if Float.equal lo 0. then -1. else lo *. 2.);
+              (if Float.(hi < 4294967296.) then hi +. 1. else hi *. 2.);
+            ]
+          in
+          p_all
+            (Ops.prec_string prec ^ " " ^ route
+           ^ " refuses out-of-range and nonfinite values with precision and value")
+            rejected
+            ~f:(fun value ->
+              let nd = fresh prec ~dims:[| 1 |] ~pads:None in
+              match write nd value with
+              | () -> false
+              | exception Nd.Unrepresentable_integer_value { prec = got; value = v } ->
+                  Ops.equal_prec prec got && Float.(equal value v || (is_nan value && is_nan v))
+              | exception _ -> false));
+      p_all
+        (Ops.prec_string prec ^ " host fills preserve endpoints and truncated fractions")
+        ([ (lo, lo); (hi, hi); (7.75, 7.); (-0.75, 0.) ]
+        @ if Float.(hi < 4294967296.) then [ (hi +. 0.75, hi); (lo -. 0.75, lo) ] else [])
+        ~f:(fun (value, expected) ->
+          let nd = fresh prec ~dims:[| 2 |] ~pads:None in
+          Nd.fill_from_float nd value;
+          Nd.set_flat_values nd [| value |];
+          Nd.set_from_float nd [| 1 |] value;
+          let padded =
+            Nd.create_array ~debug:"integer_padding" prec ~dims:[| 1 |]
+              ~padding:(Some ([| Ops.{ left = 1; right = 0 } |], value))
+          in
+          Array.equal Float.equal (Nd.retrieve_flat_values nd) [| expected; expected |]
+          && Float.equal (Nd.retrieve_flat_values padded).(0) expected))

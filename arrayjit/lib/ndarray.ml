@@ -152,6 +152,67 @@ let create_bigarray_of_prec (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precis
 
 (** {2 *** Initialization ***} *)
 
+(* [uint32] and [uint64] are stored in {e signed} int32/int64 bigarrays (see {!Ops.precision}), so
+   the host's own conversions read and write them wrong at the top of their range: [Int32.to_float]
+   turns the u32 0xffffffff into -1., and [Int32.of_float] cannot take 4294967295. back. Every
+   float-facing conversion below goes through these four instead. Callers must validate floating
+   inputs before converting. *)
+let[@inline] uint32_to_float (x : int32) =
+  Stdlib.Int64.to_float (Stdlib.Int64.logand (Stdlib.Int64.of_int32 x) 0xFFFFFFFFL)
+
+let[@inline] float_to_uint32 v = Stdlib.Int64.to_int32 (Stdlib.Int64.of_float v)
+let two_pow_63 = 9_223_372_036_854_775_808.0
+
+let[@inline] uint64_to_float (x : int64) =
+  if Stdlib.Int64.compare x 0L >= 0 then Stdlib.Int64.to_float x
+  else
+    (* [Int64.to_float] would read a value with the top bit set as negative, so halve it first and
+       double the result. The halving must not round separately, or the doubling rounds a second
+       time and the two together can land an ulp low (u64 [2^63 + 1025] converting to [2^63] rather
+       than [2^63 + 2048]). OR-ing the discarded bit back in makes the halved value odd whenever
+       anything was dropped, which keeps it off the tie the single rounding would then resolve the
+       wrong way -- the standard round-to-odd step. *)
+    Stdlib.Int64.to_float
+      (Stdlib.Int64.logor (Stdlib.Int64.shift_right_logical x 1) (Stdlib.Int64.logand x 1L))
+    *. 2.0
+
+let[@inline] float_to_uint64 v =
+  if Float.(v < two_pow_63) then Stdlib.Int64.of_float v
+  else Stdlib.Int64.add (Stdlib.Int64.of_float (v -. two_pow_63)) Stdlib.Int64.min_int
+
+exception Unrepresentable_integer_value of { prec : Ops.prec; value : float }
+
+(* The half-open interval is a cheap, allocation-free sufficient check. At its boundaries (including
+   fractions truncating onto an endpoint), use the same rule as device constants. *)
+let[@inline] check_integer_value prec lo hi value =
+  if not Float.(value >= lo && value < hi) then
+    if not (Ops.integer_constant_converts prec value) then
+      raise (Unrepresentable_integer_value { prec; value })
+
+let[@inline] checked_byte v =
+  check_integer_value Ops.byte 0. 256. v;
+  Char.of_int_exn (Int.of_float_unchecked v)
+
+let[@inline] checked_uint16 v =
+  check_integer_value Ops.uint16 0. 65536. v;
+  Int.of_float_unchecked v
+
+let[@inline] checked_int32 v =
+  check_integer_value Ops.int32 (-2147483648.) 2147483648. v;
+  Int32.of_float_unchecked v
+
+let[@inline] checked_uint32 v =
+  check_integer_value Ops.uint32 0. 4294967296. v;
+  float_to_uint32 v
+
+let[@inline] checked_int64 v =
+  check_integer_value Ops.int64 (-9223372036854775808.) 9223372036854775808. v;
+  Int64.of_float_unchecked v
+
+let[@inline] checked_uint64 v =
+  check_integer_value Ops.uint64 0. 18446744073709551616. v;
+  float_to_uint64 v
+
 let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~dims ~padding :
     (ocaml, elt_t) bigarray =
   let arr = create_bigarray_of_prec prec dims in
@@ -161,12 +222,12 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
   | Some (_, pad_value) -> (
       (* Fill the entire array with padding value using precision-specific fill *)
       match prec with
-      | Ops.Byte -> A.fill arr (Char.of_int_exn @@ Int.of_float pad_value)
-      | Ops.Uint16 -> A.fill arr (Int.of_float pad_value)
-      | Ops.Int32 -> A.fill arr (Int32.of_float pad_value)
-      | Ops.Uint32 -> A.fill arr (Int32.of_float pad_value)
-      | Ops.Int64 -> A.fill arr (Int64.of_float pad_value)
-      | Ops.Uint64 -> A.fill arr (Int64.of_float pad_value)
+      | Ops.Byte -> A.fill arr (checked_byte pad_value)
+      | Ops.Uint16 -> A.fill arr (checked_uint16 pad_value)
+      | Ops.Int32 -> A.fill arr (checked_int32 pad_value)
+      | Ops.Uint32 -> A.fill arr (checked_uint32 pad_value)
+      | Ops.Int64 -> A.fill arr (checked_int64 pad_value)
+      | Ops.Uint64 -> A.fill arr (checked_uint64 pad_value)
       | Ops.Uint4x32 -> A.fill arr Stdlib.Complex.{ re = pad_value; im = 0.0 }
       | Ops.Half -> A.fill arr (Ops.round_to_half pad_value)
       | Ops.Bfloat16 -> A.fill arr (Ops.double_to_bfloat16 pad_value)
@@ -243,45 +304,17 @@ let compute_end_idx ?padding dims axis =
       dims.(axis) - padding_arr.(axis).Ops.left - padding_arr.(axis).Ops.right - 1
   | Some _ -> dims.(axis) - 1
 
-(* [uint32] and [uint64] are stored in {e signed} int32/int64 bigarrays (see {!Ops.precision}), so
-   the host's own conversions read and write them wrong at the top of their range: [Int32.to_float]
-   turns the u32 0xffffffff into -1., and [Int32.of_float] cannot take 4294967295. back. Every
-   float-facing conversion below goes through these four instead. Out-of-range floats wrap, which is
-   C's unsigned conversion. *)
-let[@inline] uint32_to_float (x : int32) =
-  Stdlib.Int64.to_float (Stdlib.Int64.logand (Stdlib.Int64.of_int32 x) 0xFFFFFFFFL)
-
-let[@inline] float_to_uint32 v = Stdlib.Int64.to_int32 (Stdlib.Int64.of_float v)
-let two_pow_63 = 9_223_372_036_854_775_808.0
-
-let[@inline] uint64_to_float (x : int64) =
-  if Stdlib.Int64.compare x 0L >= 0 then Stdlib.Int64.to_float x
-  else
-    (* [Int64.to_float] would read a value with the top bit set as negative, so halve it first and
-       double the result. The halving must not round separately, or the doubling rounds a second
-       time and the two together can land an ulp low (u64 [2^63 + 1025] converting to [2^63] rather
-       than [2^63 + 2048]). OR-ing the discarded bit back in makes the halved value odd whenever
-       anything was dropped, which keeps it off the tie the single rounding would then resolve the
-       wrong way -- the standard round-to-odd step. *)
-    Stdlib.Int64.to_float
-      (Stdlib.Int64.logor (Stdlib.Int64.shift_right_logical x 1) (Stdlib.Int64.logand x 1L))
-    *. 2.0
-
-let[@inline] float_to_uint64 v =
-  if Float.(v < two_pow_63) then Stdlib.Int64.of_float v
-  else Stdlib.Int64.add (Stdlib.Int64.of_float (v -. two_pow_63)) Stdlib.Int64.min_int
-
 let set_from_float ?padding arr idx v =
   (* NOTE: Bigarray requires the length of indices to be the same as the number of dimensions. *)
   let idx = if Array.is_empty (dims arr) then [||] else idx in
   let adjusted_idx = adjust_idx_for_padding ?padding idx in
   match arr with
-  | Byte_nd arr -> A.set arr adjusted_idx @@ Char.of_int_exn @@ Int.of_float v
-  | Uint16_nd arr -> A.set arr adjusted_idx @@ Int.of_float v
-  | Int32_nd arr -> A.set arr adjusted_idx @@ Int32.of_float v
-  | Uint32_nd arr -> A.set arr adjusted_idx @@ float_to_uint32 v
-  | Int64_nd arr -> A.set arr adjusted_idx @@ Int64.of_float v
-  | Uint64_nd arr -> A.set arr adjusted_idx @@ float_to_uint64 v
+  | Byte_nd arr -> A.set arr adjusted_idx @@ checked_byte v
+  | Uint16_nd arr -> A.set arr adjusted_idx @@ checked_uint16 v
+  | Int32_nd arr -> A.set arr adjusted_idx @@ checked_int32 v
+  | Uint32_nd arr -> A.set arr adjusted_idx @@ checked_uint32 v
+  | Int64_nd arr -> A.set arr adjusted_idx @@ checked_int64 v
+  | Uint64_nd arr -> A.set arr adjusted_idx @@ checked_uint64 v
   | Uint4x32_nd arr -> A.set arr adjusted_idx @@ Stdlib.Complex.{ re = v; im = 0.0 }
   | Half_nd arr -> A.set arr adjusted_idx @@ Ops.round_to_half v
   | Bfloat16_nd arr -> A.set arr adjusted_idx @@ Ops.double_to_bfloat16 v
@@ -340,12 +373,12 @@ let fill_from_float ?padding arr v =
           done)
   in
   match arr with
-  | Byte_nd arr -> fill arr @@ Char.of_int_exn @@ Int.of_float v
-  | Uint16_nd arr -> fill arr @@ Int.of_float v
-  | Int32_nd arr -> fill arr @@ Int32.of_float v
-  | Uint32_nd arr -> fill arr @@ float_to_uint32 v
-  | Int64_nd arr -> fill arr @@ Int64.of_float v
-  | Uint64_nd arr -> fill arr @@ float_to_uint64 v
+  | Byte_nd arr -> fill arr @@ checked_byte v
+  | Uint16_nd arr -> fill arr @@ checked_uint16 v
+  | Int32_nd arr -> fill arr @@ checked_int32 v
+  | Uint32_nd arr -> fill arr @@ checked_uint32 v
+  | Int64_nd arr -> fill arr @@ checked_int64 v
+  | Uint64_nd arr -> fill arr @@ checked_uint64 v
   | Uint4x32_nd arr -> fill arr @@ Stdlib.Complex.{ re = v; im = 0.0 }
   | Half_nd arr -> fill arr @@ Ops.round_to_half v
   | Bfloat16_nd arr -> fill arr @@ Ops.double_to_bfloat16 v
@@ -577,63 +610,43 @@ let flat_reader arr (buf : float array) : int -> int -> int -> unit =
     nothing (gh-ocannl-1258), except for a [uint4x32] cell's [Complex.t] record. *)
 let flat_writer arr (buf : float array) : int -> int -> int -> unit =
   let numel = Array.fold (dims arr) ~init:1 ~f:( * ) in
-  (* Base's checked [of_float]s are out-of-line calls, so each one boxes its float argument (and the
-     [int32]/[int64] result): heap words per cell in a bulk writer. These convert with the unboxed
-     primitive, which is what Base returns wherever it accepts the argument, and consult Base only
-     outside a range inside the one it accepts -- NaN, out of range -- where it raises exactly as
-     {!set_from_float} does. Base's result is discarded rather than returned: a branch that returned
-     it would make the result boxed on the fast path too. *)
-  let[@inline] checked_int_of_float v =
-    if not Float.(v >= -4611686018427387904. && v < 4611686018427387904.) then
-      ignore (Int.of_float v : int);
-    Int.of_float_unchecked v
-  in
-  let[@inline] checked_int32_of_float v =
-    if not Float.(v >= -2147483648. && v < 2147483648.) then ignore (Int32.of_float v : int32);
-    Int32.of_float_unchecked v
-  in
-  let[@inline] checked_int64_of_float v =
-    if not Float.(v >= -9223372036854775808. && v < 9223372036854775808.) then
-      ignore (Int64.of_float v : int64);
-    Int64.of_float_unchecked v
-  in
   let module A1 = Bigarray.Array1 in
   match arr with
   | Byte_nd arr ->
       let flat = Bigarray.reshape_1 arr numel in
       fun dst src len ->
         for i = 0 to len - 1 do
-          A1.set flat (dst + i) @@ Char.of_int_exn @@ checked_int_of_float buf.(src + i)
+          A1.set flat (dst + i) @@ checked_byte buf.(src + i)
         done
   | Uint16_nd arr ->
       let flat = Bigarray.reshape_1 arr numel in
       fun dst src len ->
         for i = 0 to len - 1 do
-          A1.set flat (dst + i) @@ checked_int_of_float buf.(src + i)
+          A1.set flat (dst + i) @@ checked_uint16 buf.(src + i)
         done
   | Int32_nd arr ->
       let flat = Bigarray.reshape_1 arr numel in
       fun dst src len ->
         for i = 0 to len - 1 do
-          A1.set flat (dst + i) @@ checked_int32_of_float buf.(src + i)
+          A1.set flat (dst + i) @@ checked_int32 buf.(src + i)
         done
   | Uint32_nd arr ->
       let flat = Bigarray.reshape_1 arr numel in
       fun dst src len ->
         for i = 0 to len - 1 do
-          A1.set flat (dst + i) @@ float_to_uint32 buf.(src + i)
+          A1.set flat (dst + i) @@ checked_uint32 buf.(src + i)
         done
   | Int64_nd arr ->
       let flat = Bigarray.reshape_1 arr numel in
       fun dst src len ->
         for i = 0 to len - 1 do
-          A1.set flat (dst + i) @@ checked_int64_of_float buf.(src + i)
+          A1.set flat (dst + i) @@ checked_int64 buf.(src + i)
         done
   | Uint64_nd arr ->
       let flat = Bigarray.reshape_1 arr numel in
       fun dst src len ->
         for i = 0 to len - 1 do
-          A1.set flat (dst + i) @@ float_to_uint64 buf.(src + i)
+          A1.set flat (dst + i) @@ checked_uint64 buf.(src + i)
         done
   | Uint4x32_nd arr ->
       let flat = Bigarray.reshape_1 arr numel in

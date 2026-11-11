@@ -60,6 +60,15 @@ let exempt_zero_reference_exports =
     "Ndarray.bigarray_start_not_managed";
     "Ndarray.c_ptr_to_string";
     "Ndarray.compare";
+    (* gh-ocannl-2144: shared implementation helpers for the point, fill, padding and bulk
+       float-write routes; keep their checked conversions identical without publishing an API. *)
+    "Ndarray.check_integer_value";
+    "Ndarray.checked_byte";
+    "Ndarray.checked_uint16";
+    "Ndarray.checked_int32";
+    "Ndarray.checked_uint32";
+    "Ndarray.checked_int64";
+    "Ndarray.checked_uint64";
     "Ndarray.compute_end_idx";
     "Ndarray.count_logical_elems";
     "Ndarray.create_bigarray";

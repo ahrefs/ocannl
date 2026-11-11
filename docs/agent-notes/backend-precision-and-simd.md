@@ -517,6 +517,15 @@ files.
   never judged. `test/operations/integer_constant_range` compiles the refused cases without running them
   (an undefined conversion is no oracle, and on Metal one stalled a kernel) and runs the accepted
   endpoints on every backend.
+- **Host float writes obey the device constant range rule** (gh-ocannl-2144).
+  `Ndarray.Unrepresentable_integer_value { prec; value }` refuses a nonfinite or out-of-range
+  scalar integer input at point writes, bulk writes, fills and padding initialization. Boundary
+  values use `Ops.integer_constant_converts`; an in-range fast path keeps bulk writes allocation
+  free. Fractions truncate toward zero, so unsigned `-0.75` and byte `255.75` remain valid.
+  A bulk write can have written preceding cells when a later value is refused; surplus values
+  that are not written are not checked. Packed uint4x32 and floating formats retain their codecs.
+  `ndarray_flat_writer` pins refusals, endpoints and allocation without a device backend.
+
 - **An integer table arm is integer-TYPED, in its operands' common type** (gh-ocannl-1883). cc's
   integer `Max`/`Min`/`Relu`/`Satur01` were `fmax`/`fmin` calls, `Trunc` a `truncf` and `Not` a
   `? 1.0 : 0.0`; CUDA's and HIP's `Relu`/`Satur01`/`Trunc`/`Not`, and Metal's `Trunc`, `Satur01`
