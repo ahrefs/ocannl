@@ -5941,14 +5941,14 @@ module Scheme = struct
       (* Random draws (gh-ocannl-1890): a packed conversion's coefficient is a lazy over its result
          node's precision, which the node's consumers set as they register and closure forces. The
          scheme never reads it -- a trace, a check and an instance solve Stage1 only, which reads no
-         lazy coefficient -- so it carries a hole in its place, holding none of the trace's nodes;
-         an application's own conversion node, registered by the body, is what fills it. *)
+         lazy coefficient -- so it carries a hole in its place, holding no trace precision cells; an
+         application's own conversion node, registered by the body, is what fills it. *)
       let holes = Hashtbl.create (module String) in
       let hole (coeff : int Utils.safe_lazy) =
         if sabotaged No_draw_holes then coeff
         else
           (* Only the id is kept: the hole must not close over [coeff], a lazy over the trace's
-             node. *)
+             precision cell. *)
           let id = coeff.unique_id in
           Hashtbl.find_or_add holes id ~default:(fun () ->
               Utils.safe_lazy ("draw hole of " ^ id) (fun () ->

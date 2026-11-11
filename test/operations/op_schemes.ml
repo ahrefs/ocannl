@@ -1030,7 +1030,7 @@ let () =
       p "the precision of the tensor in the draw's precision chain is still unsettled"
         (not (Lazy.is_val c.Tensor.value.Ir.Tnode.storage_prec)))
 
-(* The trace's own nodes die with its rewind: a held scheme keeps none of them. *)
+(* The trace's nodes and precision cells die with its rewind: a held scheme keeps none of them. *)
 let[@inline never] held_draw_scheme ?sabotage () =
   let w = ref None in
   let body = function
@@ -1040,7 +1040,10 @@ let[@inline never] held_draw_scheme ?sabotage () =
           List.find_map_exn y.Tensor.children ~f:(fun c ->
               if phys_equal c.Tensor.subtensor x then None else Some c.subtensor)
         in
-        w := Some (Gc_witness.witness u.Tensor.value);
+        w :=
+          Some
+            ( Gc_witness.witness u.Tensor.value,
+              Gc_witness.witness u.value.Ir.Tnode.delayed_prec_unsafe );
         [ y ]
     | _ -> assert false
   in
@@ -1049,15 +1052,23 @@ let[@inline never] held_draw_scheme ?sabotage () =
     | None -> Tensor.Scheme.trace ~label:"held" 1 body
     | Some sabotage -> Tensor.For_testing.trace_scheme ~sabotage ~label:"held" 1 body
   in
-  (s, Option.value_exn !w)
+  let node, cell = Option.value_exn !w in
+  (s, node, cell)
 
 let () =
   Verdict.case "a held scheme with a draw keeps none of its trace's nodes" (fun () ->
       Tensor.unsafe_reinitialize ();
-      let s, w = held_draw_scheme () in
-      p "the trace's draw node is reclaimed while its scheme is held" (Gc_witness.reclaimed w);
+      let s, node, cell = held_draw_scheme () in
+      p "the trace's draw node is reclaimed while its scheme is held" (Gc_witness.reclaimed node);
+      p "the trace's draw precision cell is reclaimed while its scheme is held"
+        (Gc_witness.reclaimed cell);
       ignore (Sys.opaque_identity s : Tensor.Scheme.t);
       Tensor.unsafe_reinitialize ();
-      let s, w = held_draw_scheme ~sabotage:No_draw_holes () in
-      p "control (the trace's own coefficients kept): the node is kept" (Gc_witness.kept w);
+      let s, node, cell = held_draw_scheme ~sabotage:No_draw_holes () in
+      (* Draw coefficients keep storage lazies, hence precision cells. Since gh-ocannl-2170 the
+         cells no longer capture operand nodes: observe the retained cell itself. *)
+      p "control (the trace's own coefficients kept): the node is still reclaimed"
+        (Gc_witness.reclaimed node);
+      p "control (the trace's own coefficients kept): the precision cell is kept"
+        (Gc_witness.kept cell);
       ignore (Sys.opaque_identity s : Tensor.Scheme.t))
