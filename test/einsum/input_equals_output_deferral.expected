@@ -6,5 +6,19 @@ a, o, 2*a<+j -> d, c, 2*o<+k: the input is sized by the deferred equation: true
 2*a -> 3*o: the input is sized by the deferred equation: true
 2*a -> 3*o, output 9: refused
 2*a -> 3*o: the closure refuses a non-dividing stride, naming the deduction: true
+x -> 2*o<+k, output 9: 9,9
+x -> 2*o<+k: the input is sized by the deferred equation: true
+2*o<+k -> x, output 9: 9,9
+2*o<+k -> x: the input is sized by the deferred equation: true
+x -> 2*o<+2*k, output 9: 9,9
+x -> 2*o<+2*k: the input is sized by the deferred equation: true
+the terminal closes with two axes of 9: true
+each output sums its own nine input offsets: true
+a self-dependent kernel still closes, in either constraint order: true
+mutually dependent kernels still close, in either constraint order: true
+a variable-extent self-cycle still closes, in either constraint order: true
+a variable-extent mutual cycle still closes, in either constraint order: true
 x -> 2*o<+k, output 9: refused
-x -> 2*o<+k over 9: an underdetermined window is a shape error: true
+a parameter extent tied to an open window still names its hidden dimension: true
+an open iterator cannot choose a parameter kernel's hidden dimension: true
+a specified iterator still infers the parameter kernel as 3: true
