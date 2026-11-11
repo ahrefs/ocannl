@@ -15056,3 +15056,22 @@
  (libraries base ocannl stdio arrayjit.utils test_utils arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-2137: distinguish host _Float16 excess evaluation from cc's explicit operator casts.
+
+(test
+ ; ocannl-backend: cc -- probes the configured host C compiler and executes cc narrow arithmetic.
+ (name cc_half_excess_precision)
+ (package neural_nets_lib)
+ (modules cc_half_excess_precision)
+ (deps ocannl_config)
+ (libraries
+  base
+  ocannl
+  stdio
+  unix
+  ctypes
+  ctypes.foreign
+  arrayjit.verdict
+  test_utils
+  ll_test))

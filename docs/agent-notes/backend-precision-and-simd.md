@@ -368,6 +368,14 @@ files.
   `compute_prec` leave `Half_prec` alone, so `vec_ext_typ` mints a `HALF_T` vector and the lane
   count doubles. The middle state is why the probe is not a boolean: seeding and the cost model
   must not expect a lane-count win where only the type exists.
+- **A half expression can evaluate wider than its C type** (gh-ocannl-2137), but cc's
+  `FLOAT_TO_HALF` at every half operator removes that excess precision even without a local.
+  `cc_half_excess_precision` probes the configured compiler under the kernel flags with contraction
+  off: `(1 + 2^-11) - 1` classifies its evaluation method, then half inputs
+  `a = b = 1 + 2^-10`, `c = -(1 + 2^-9)` distinguish the raw expression's one rounding (2^-20)
+  from a kept half local's two (0). Method-gated claims cover native and excess evaluation; the
+  executed narrow-compute cc expression must give 0 under either. GCC may omit
+  `__FLT16_EVAL_METHOD__`; the executed probe, not that macro's absence, decides the leg.
 - The fp16 FMA is where parity nearly breaks: `fmaf` on `_Float16` operands promotes to float and
   rounds **twice**, while `__builtin_elementwise_fma` on an fp16 vector rounds once. The scalar
   rendering and the vector rendering's per-lane fallback therefore both go through one builtin
