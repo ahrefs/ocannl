@@ -808,6 +808,15 @@ let scalar_precision = function
   | Binop (_, (_, prec), _) -> prec
   | Unop (_, (_, prec)) -> prec
 
+let operand_eval_precisions ~eval (op : Ops.op) precs =
+  match (op, precs) with
+  | Unop op, [| p |] -> [| (if Ops.is_homogeneous_prec_unop op then eval else p) |]
+  | Binop op, [| p1; p2 |] ->
+      if Ops.is_homogeneous_prec_binop op then [| eval; eval |] else [| p1; p2 |]
+  | Ternop Ops.Where, [| p1; _; _ |] -> [| p1; eval; eval |]
+  | Ternop (Ops.FMA | Ops.Mul3), [| _; _; _ |] -> [| eval; eval; eval |]
+  | _ -> invalid_arg "Low_level.operand_eval_precisions: invalid number of operands"
+
 (* gh-ocannl-1739: the operand an arm that is never evaluated becomes -- a decided [Where]'s dead
    arm, a shut gate's gated operand. Annotated at the [Constant]'s own precision, which describes it
    in every slot (the renderer evaluates a homogeneous slot at the slot's precision, whatever the
@@ -6613,6 +6622,9 @@ let simplify_llc static_indices llc =
        (gh-ocannl-1958). *)
     let own ((_, p) as arg) = loop_scalar ~ienv ~render ~eval:p ~divided:false arg in
     let divided = divided || match llsc with Binop (Div, _, _) -> true | _ -> false in
+    let at_precision p arg =
+      loop_scalar ~ienv ~render ~eval:p ~divided:(divided && Ops.equal_prec p eval) arg
+    in
     let loop_scalar = loop_scalar ~ienv ~render ~eval ~divided in
     let loop_proc = loop_proc ~ienv in
     (* gh-ocannl-1498: in a [uint4x32] slot the SOURCE precision of what renders there picks the
@@ -6779,9 +6791,8 @@ let simplify_llc static_indices llc =
         ( ((Threefry4x32_crypto | Threefry4x32_light | Uint4x32_to_prec_uniform_lane) as op),
           (v1, prec1),
           (v2, prec2) ) ->
-        let slot operand_prec = if Ops.is_homogeneous_prec_binop op then prec else operand_prec in
-        let at_own (v, p) = own (v, slot p) in
-        (Binop (op, at_own (v1, prec1), at_own (v2, prec2)), prec)
+        let ps = operand_eval_precisions ~eval (Ops.Binop op) [| prec1; prec2 |] in
+        (Binop (op, own (v1, ps.(0)), own (v2, ps.(1))), prec)
     | Binop (ToPowOf, (Constant _, prec1), (Constant exponent, prec2))
       when Ops.is_float (Ops.promote_prec prec1 prec2)
            && Float.is_finite exponent && Float.is_integer exponent ->
@@ -6828,16 +6839,18 @@ let simplify_llc static_indices llc =
       when negative_zero c ->
         loop_scalar (at_slot (llsc, prec1))
     | Binop (ToPowOf, llv1, llv2) -> (
-        let v1 = loop_scalar llv1 in
-        let v2 = loop_scalar llv2 in
+        let ps = operand_eval_precisions ~eval (Ops.Binop ToPowOf) [| snd llv1; snd llv2 |] in
+        let v1 = at_precision ps.(0) llv1 in
+        let v2 = at_precision ps.(1) llv2 in
         let result = (Binop (ToPowOf, v1, v2), prec) in
         match fp_algebra_step ~eval licence result with Some r -> loop_scalar r | None -> result)
     | Binop (op, llv1, llv2) -> (
         match fp_algebra_step ~eval licence (llsc, prec) with
         | Some rewritten -> loop_scalar rewritten
         | None ->
-            let v1 = loop_scalar llv1 in
-            let v2 = loop_scalar llv2 in
+            let ps = operand_eval_precisions ~eval (Ops.Binop op) [| snd llv1; snd llv2 |] in
+            let v1 = at_precision ps.(0) llv1 in
+            let v2 = at_precision ps.(1) llv2 in
             let result = (Binop (op, v1, v2), prec) in
             if
               Ops.equal_binop op Ops.And
@@ -6860,11 +6873,15 @@ let simplify_llc static_indices llc =
         loop_scalar (at_slot then_)
     | Ternop (op, llv1, llv2, llv3) ->
         (* A [Where]'s branches, and every operand of a homogeneous ternop, render at its slot. *)
-        let llv1 = if Ops.is_homogeneous_prec_ternop op then at_slot llv1 else llv1 in
+        let ps = operand_eval_precisions ~eval (Ops.Ternop op) [| snd llv1; snd llv2; snd llv3 |] in
+        let llv1 = if Ops.equal_prec ps.(0) eval then at_slot llv1 else llv1 in
         let llv2 = at_slot llv2 and llv3 = at_slot llv3 in
-        let v1 = if Ops.is_homogeneous_prec_ternop op then loop_scalar llv1 else own llv1 in
-        let v2 = loop_scalar llv2 in
-        let v3 = loop_scalar llv3 in
+        (* A condition is independent of an enclosing division, even at the same precision. *)
+        let v1 =
+          match op with Ops.Where -> own (fst llv1, ps.(0)) | _ -> at_precision ps.(0) llv1
+        in
+        let v2 = at_precision ps.(1) llv2 in
+        let v3 = at_precision ps.(2) llv3 in
         let result = (Ternop (op, v1, v2, v3), prec) in
         if equal_scalar_arg llv1 v1 && equal_scalar_arg llv2 v2 then
           match op with
@@ -6885,7 +6902,9 @@ let simplify_llc static_indices llc =
     (* The annotation is the precision rounded to, so it survives whatever the operand becomes: a
        fold or a stripped wrapper answers with the annotation of what it left. And no constant fold:
        [Ops.interpret_unop] has no precision to round to. *)
-    | Unop (Round_prec, ((_, t) as v)) -> (Unop (Round_prec, (fst (own v), t)), prec)
+    | Unop (Round_prec, (v, t)) ->
+        let ps = operand_eval_precisions ~eval (Ops.Unop Round_prec) [| t |] in
+        (Unop (Round_prec, (fst (own (v, ps.(0))), t)), prec)
     (* gh-ocannl-1785: at an integer evaluation precision a real-valued operator yields a float the
        renderer carries in float to its conversion point, where a folded [Constant] would be
        converted wherever it is read -- [2 * sin(1)] would fold its sine to 0.84 and render [2 *
@@ -6900,7 +6919,8 @@ let simplify_llc static_indices llc =
         (llsc, prec)
     | Unop (op, (Constant c, _)) -> (Constant (Ops.interpret_unop op c), prec)
     | Unop (op, llsc) ->
-        let v = if Ops.is_homogeneous_prec_unop op then loop_scalar llsc else own llsc in
+        let ps = operand_eval_precisions ~eval (Ops.Unop op) [| snd llsc |] in
+        let v = at_precision ps.(0) llsc in
         let result = (Unop (op, v), prec) in
         if equal_scalar_arg llsc v then result else loop_scalar result
   in
@@ -7012,26 +7032,25 @@ let simplify_llc static_indices llc =
     let loop = round_float ~tn ~scope ~eval in
     let own (v, p) = (round_float ~tn ~scope ~eval:p v, p) in
     let at_eval (v, p) = (loop v, p) in
+    let operands op args =
+      let ps = operand_eval_precisions ~eval op (Array.map args ~f:snd) in
+      Array.mapi args ~f:(fun i (v, p) -> (round_float ~tn ~scope ~eval:ps.(i) v, p))
+    in
     match llsc with
     | Constant c -> at_slot ~tn ~scope ~eval c
     | Constant_bits _ -> llsc (* An int64 literal: its integer conversions are defined. *)
     | Local_scope ({ body; _ } as opts) ->
         Local_scope { opts with body = round_proc ~within:(Some tn) body }
     | Ternop (op, v1, v2, v3) ->
-        let v1 = if Ops.is_homogeneous_prec_ternop op then at_eval v1 else own v1 in
-        let v2 = at_eval v2 in
-        Ternop (op, v1, v2, at_eval v3)
+        let vs = operands (Ops.Ternop op) [| v1; v2; v3 |] in
+        Ternop (op, vs.(0), vs.(1), vs.(2))
     | Binop (Ops.ToPowOf, v1, (Constant c, p2)) when integer_exponent ~eval c ->
         check_constant ~tn ~scope ~eval c;
         Binop (Ops.ToPowOf, at_eval v1, (Constant c, p2))
     | Binop (op, v1, v2) ->
-        if Ops.is_homogeneous_prec_binop op then
-          let v1 = at_eval v1 in
-          Binop (op, v1, at_eval v2)
-        else
-          let v1 = own v1 in
-          Binop (op, v1, own v2)
-    | Unop (op, v) -> Unop (op, if Ops.is_homogeneous_prec_unop op then at_eval v else own v)
+        let vs = operands (Ops.Binop op) [| v1; v2 |] in
+        Binop (op, vs.(0), vs.(1))
+    | Unop (op, v) -> Unop (op, (operands (Ops.Unop op) [| v |]).(0))
     (* An index converts from an integer, which is defined: only the fp16 check judges it. *)
     | Embed_index (Indexing.Fixed_idx i) ->
         check_fp16 (match scope with Some _ -> scope | None -> tn) ~eval (Float.of_int i);

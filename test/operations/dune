@@ -7719,6 +7719,17 @@
  (modules half_index_bound_constant)
  (libraries base ocannl stdio arrayjit.verdict ll_test))
 
+; gh-ocannl-2130: RNG operands retain their evaluation precision under a half store.
+
+(test
+ (name rng_operand_precision)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules rng_operand_precision)
+ (libraries base ocannl stdio arrayjit.verdict ll_test))
+
 ; gh-ocannl-2046: a constant at a narrow float slot is rounded to the slot's precision at lowering,
 ; after folding, with integer power exponents exempt; executed on the selected backend.
 

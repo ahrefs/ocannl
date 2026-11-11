@@ -518,6 +518,13 @@ val is_pure_index_conjunction : scalar_t -> bool
 
 val scalar_precision : scalar_t -> Ops.prec
 
+val operand_eval_precisions : eval:Ops.prec -> Ops.op -> Ops.prec array -> Ops.prec array
+(** Evaluation precisions of the direct operands, in operand order. [eval] is the enclosing slot's
+    precision, not the operator's annotation. Homogeneous operands inherit it; heterogeneous
+    operands keep their annotations, except [Where]'s value arms, which inherit [eval]. [Round_prec]
+    keeps its operand's exact annotated precision. Backend compute widening belongs to the renderer.
+    Raises [Invalid_argument] if the array has the wrong arity. *)
+
 val neutral_scalar : Ops.prec -> Ops.binop -> scalar_t
 (** {!Ops.neutral_elem_at} as a scalar, a [Constant] or a [Constant_bits]. *)
 

@@ -3666,39 +3666,13 @@ module C_syntax (B : C_syntax_config) = struct
           (Printf.sprintf "C_syntax.pp_scalar: FMA requires floating-point precision, got %s"
              (Ops.prec_string prec))
     | Ternop (op, (v1, v1_prec), (v2, v2_prec), (v3, v3_prec)) ->
-        (* A heterogeneous argument keeps its own precision, which -- like every precision reaching
-           here from [Low_level] -- is a storage precision; the rendering takes [comp_prec] of
-           it. *)
-        let v1_prec = comp_prec v1_prec and v2_prec = comp_prec v2_prec in
-        let v3_prec = comp_prec v3_prec in
-        let d1, e1, d2, e2, d3, e3 =
-          if Ops.is_homogeneous_prec_ternop op then
-            (* Homogeneous: all arguments use result precision *)
-            let d1, e1 = operand prec v1 in
-            let d2, e2 = operand prec v2 in
-            let d3, e3 = operand prec v3 in
-            (d1, e1, d2, e2, d3, e3)
-          else
-            (* Heterogeneous: arguments keep their natural precision *)
-            match op with
-            | Ops.Where ->
-                (* For Where: condition keeps its precision, then/else use result precision *)
-                (* Note: we evaluate condition without precision conversion, but then/else
-                   need to match the result precision for the final assignment *)
-                let d1, e1 = operand v1_prec v1 in
-                (* condition: no conversion *)
-                let d2, e2 = operand prec v2 in
-                (* then: result precision *)
-                let d3, e3 = operand prec v3 in
-                (* else: result precision *)
-                (d1, e1, d2, e2, d3, e3)
-            | _ ->
-                (* Other heterogeneous ternary ops would go here *)
-                let d1, e1 = operand v1_prec v1 in
-                let d2, e2 = operand v2_prec v2 in
-                let d3, e3 = operand v3_prec v3 in
-                (d1, e1, d2, e2, d3, e3)
+        let ps =
+          Low_level.operand_eval_precisions ~eval:prec (Ops.Ternop op)
+            (Array.map [| v1_prec; v2_prec; v3_prec |] ~f:comp_prec)
         in
+        let d1, e1 = operand ps.(0) v1 in
+        let d2, e2 = operand ps.(1) v2 in
+        let d3, e3 = operand ps.(2) v3 in
         let defs = List.concat [ d1; d2; d3 ] in
         let expr = ternop_expr prec op ~v1 ~v2 ~v3 e1 e2 e3 in
         (defs, expr)
@@ -3714,36 +3688,27 @@ module C_syntax (B : C_syntax_config) = struct
         | Ops.Only_first -> operand prec v1
         | Ops.Only_second -> operand prec v2
         | Ops.Both_operands | Ops.Gated_second ->
-            let v1_prec = comp_prec v1_prec and v2_prec = comp_prec v2_prec in
-            let d1, e1, d2, e2 =
-              if Ops.is_homogeneous_prec_binop op then
-                (* Homogeneous: both arguments use result precision *)
-                let d1, e1 = operand prec v1 in
-                let d2, e2 = operand prec v2 in
-                (d1, e1, d2, e2)
-              else
-                (* Heterogeneous: arguments keep their natural precision *)
-                (* Currently all binops are homogeneous, but this is here for future extension *)
-                let d1, e1 = operand v1_prec v1 in
-                let d2, e2 = operand v2_prec v2 in
-                (d1, e1, d2, e2)
+            let ps =
+              Low_level.operand_eval_precisions ~eval:prec (Ops.Binop op)
+                (Array.map [| v1_prec; v2_prec |] ~f:comp_prec)
             in
+            let d1, e1 = operand ps.(0) v1 in
+            let d2, e2 = operand ps.(1) v2 in
             let defs = List.concat [ d1; d2 ] in
             let expr = binop_expr prec op ~v1 ~v2 e1 e2 in
             (defs, expr))
     (* gh-ocannl-1975: at exactly [t], never [comp_prec t], which on a wide-compute backend rounds
        nothing and takes an f64 source through f32 first (gh-ocannl-1956); then into the slot. *)
     | Unop (Ops.Round_prec, (v, t)) ->
-        let defs, expr_v = operand t v in
+        let ps = Low_level.operand_eval_precisions ~eval:prec (Ops.Unop Ops.Round_prec) [| t |] in
+        let defs, expr_v = operand ps.(0) v in
         let pre, post = B.convert_precision ~from:t ~to_:prec in
         (defs, group (string pre ^^ expr_v ^^ string post))
     | Unop (op, (v, v_prec)) ->
-        let arg_prec =
-          if Ops.is_homogeneous_prec_unop op then prec
-            (* Homogeneous: argument uses result precision *)
-          else comp_prec v_prec
+        let ps =
+          Low_level.operand_eval_precisions ~eval:prec (Ops.Unop op) [| comp_prec v_prec |]
         in
-        let defs, expr_v = operand arg_prec v in
+        let defs, expr_v = operand ps.(0) v in
         let expr = group (B.unop_syntax prec op expr_v) in
         (defs, expr)
     | Local_scope _ | Get_local _ | Get_merge_buffer _ | Get _ | Get_dynamic _ | Constant _
@@ -9298,55 +9263,49 @@ module C_syntax (B : C_syntax_config) = struct
         (* Parenthesize multi-term affines, mirroring [pp_scalar]. *)
         ((if affine_needs_parens idx then parens idx_doc else idx_doc), [])
     | Ternop (op, (v1, v1_prec), (v2, v2_prec), (v3, v3_prec)) ->
-        let v1_prec = comp_prec v1_prec and v2_prec = comp_prec v2_prec in
-        let v3_prec = comp_prec v3_prec in
+        let ps =
+          Low_level.operand_eval_precisions ~eval:prec (Ops.Ternop op)
+            (Array.map [| v1_prec; v2_prec; v3_prec |] ~f:comp_prec)
+        in
+        let v1_prec = ps.(0) and v2_prec = ps.(1) and v3_prec = ps.(2) in
         let v1_doc, idcs1, v2_doc, idcs2, v3_doc, idcs3 =
-          if Ops.is_homogeneous_prec_ternop op then
-            (* Homogeneous: all arguments use result precision *)
-            let v1_doc, idcs1 = (debug_float ctx) ?guard prec v1 in
-            let v2_doc, idcs2 = (debug_float ctx) ?guard prec v2 in
-            let v3_doc, idcs3 = (debug_float ctx) ?guard prec v3 in
-            (v1_doc, idcs1, v2_doc, idcs2, v3_doc, idcs3)
-          else
-            (* Heterogeneous: handle based on operation *)
-            match op with
-            | Ops.Where ->
-                (* task-9658aac9: short-circuit array-read leaves on the live [Where] condition so
-                   debug value-logging never dereferences a conditionally-evaluated branch out of
-                   bounds (the Stage B unit-solve then-branch producer read; gh-343's hazard class
-                   for the sibling [Get_dynamic]). The displayed ternary is unchanged -- only the
-                   dereferencing printf arguments are gated: then-reads under [cond], else-reads
-                   under [!cond], each AND-composed with any enclosing [guard] so nested/triangular
-                   range guards compose. [cond_c] is rendered twice -- via [pp_scalar] for the real
-                   C guard expression here, and via [debug_float] for the annotated display
-                   below. *)
-                let _cond_defs, cond_c = (pp_scalar ctx) v1_prec v1 in
-                (* Conditions reaching a Where here are pure index/value comparisons (range guards,
-                   in_range) with no Local_scope, so [_cond_defs] is empty. Even if a future
-                   condition inlined a Local_scope, dropping the redundant re-definition is safe:
-                   the local is already bound by the assignment computation that precedes the log
-                   statement (the same invariant debug_float's Local_scope arm relies on). *)
-                let compose outer c =
-                  match outer with None -> c | Some g -> parens (g ^^ string " && " ^^ c)
-                in
-                let then_guard = compose guard cond_c in
-                let else_guard = compose guard (parens (string "!" ^^ parens cond_c)) in
-                let v1_doc, idcs1 = (debug_float ctx) ?guard v1_prec v1 in
-                (* condition: no precision conversion. It is evaluated whenever the enclosing branch
-                   is reached, so its array reads (a nested [Where] condition may contain a [Get])
-                   are gated by the incoming [guard] -- not by [cond_c], which the condition itself
-                   computes. At the top level [guard = None], so this is a no-op for the common
-                   pure-index-comparison case. *)
-                let v2_doc, idcs2 = (debug_float ctx) ~guard:then_guard prec v2 in
-                (* then: result precision, gated by [cond] *)
-                let v3_doc, idcs3 = (debug_float ctx) ~guard:else_guard prec v3 in
-                (* else: result precision, gated by [!cond] *)
-                (v1_doc, idcs1, v2_doc, idcs2, v3_doc, idcs3)
-            | _ ->
-                let v1_doc, idcs1 = (debug_float ctx) ?guard v1_prec v1 in
-                let v2_doc, idcs2 = (debug_float ctx) ?guard v2_prec v2 in
-                let v3_doc, idcs3 = (debug_float ctx) ?guard v3_prec v3 in
-                (v1_doc, idcs1, v2_doc, idcs2, v3_doc, idcs3)
+          match op with
+          | Ops.Where ->
+              (* task-9658aac9: short-circuit array-read leaves on the live [Where] condition so
+                 debug value-logging never dereferences a conditionally-evaluated branch out of
+                 bounds (the Stage B unit-solve then-branch producer read; gh-343's hazard class for
+                 the sibling [Get_dynamic]). The displayed ternary is unchanged -- only the
+                 dereferencing printf arguments are gated: then-reads under [cond], else-reads under
+                 [!cond], each AND-composed with any enclosing [guard] so nested/triangular range
+                 guards compose. [cond_c] is rendered twice -- via [pp_scalar] for the real C guard
+                 expression here, and via [debug_float] for the annotated display below. *)
+              let _cond_defs, cond_c = (pp_scalar ctx) v1_prec v1 in
+              (* Conditions reaching a Where here are pure index/value comparisons (range guards,
+                 in_range) with no Local_scope, so [_cond_defs] is empty. Even if a future condition
+                 inlined a Local_scope, dropping the redundant re-definition is safe: the local is
+                 already bound by the assignment computation that precedes the log statement (the
+                 same invariant debug_float's Local_scope arm relies on). *)
+              let compose outer c =
+                match outer with None -> c | Some g -> parens (g ^^ string " && " ^^ c)
+              in
+              let then_guard = compose guard cond_c in
+              let else_guard = compose guard (parens (string "!" ^^ parens cond_c)) in
+              let v1_doc, idcs1 = (debug_float ctx) ?guard v1_prec v1 in
+              (* condition: no precision conversion. It is evaluated whenever the enclosing branch
+                 is reached, so its array reads (a nested [Where] condition may contain a [Get]) are
+                 gated by the incoming [guard] -- not by [cond_c], which the condition itself
+                 computes. At the top level [guard = None], so this is a no-op for the common
+                 pure-index-comparison case. *)
+              let v2_doc, idcs2 = (debug_float ctx) ~guard:then_guard prec v2 in
+              (* then: result precision, gated by [cond] *)
+              let v3_doc, idcs3 = (debug_float ctx) ~guard:else_guard prec v3 in
+              (* else: result precision, gated by [!cond] *)
+              (v1_doc, idcs1, v2_doc, idcs2, v3_doc, idcs3)
+          | _ ->
+              let v1_doc, idcs1 = (debug_float ctx) ?guard v1_prec v1 in
+              let v2_doc, idcs2 = (debug_float ctx) ?guard v2_prec v2 in
+              let v3_doc, idcs3 = (debug_float ctx) ?guard v3_prec v3 in
+              (v1_doc, idcs1, v2_doc, idcs2, v3_doc, idcs3)
         in
         (B.ternop_syntax prec op v1_doc v2_doc v3_doc, idcs1 @ idcs2 @ idcs3)
     | Binop (Ops.ToPowOf, (base, _), (Constant exponent, _))
@@ -9359,31 +9318,23 @@ module C_syntax (B : C_syntax_config) = struct
         | Ops.Only_first -> (debug_float ctx) ?guard prec v1
         | Ops.Only_second -> (debug_float ctx) ?guard prec v2
         | Ops.Both_operands | Ops.Gated_second ->
-            let v1_prec = comp_prec v1_prec and v2_prec = comp_prec v2_prec in
-            let v1_doc, idcs1, v2_doc, idcs2 =
-              if Ops.is_homogeneous_prec_binop op then
-                (* Homogeneous: both arguments use result precision *)
-                let v1_doc, idcs1 = (debug_float ctx) ?guard prec v1 in
-                let v2_doc, idcs2 = (debug_float ctx) ?guard prec v2 in
-                (v1_doc, idcs1, v2_doc, idcs2)
-              else
-                (* Heterogeneous: arguments keep their natural precision *)
-                let v1_doc, idcs1 = (debug_float ctx) ?guard v1_prec v1 in
-                let v2_doc, idcs2 = (debug_float ctx) ?guard v2_prec v2 in
-                (v1_doc, idcs1, v2_doc, idcs2)
+            let ps =
+              Low_level.operand_eval_precisions ~eval:prec (Ops.Binop op)
+                (Array.map [| v1_prec; v2_prec |] ~f:comp_prec)
             in
+            let v1_doc, idcs1 = (debug_float ctx) ?guard ps.(0) v1 in
+            let v2_doc, idcs2 = (debug_float ctx) ?guard ps.(1) v2 in
             (B.binop_syntax prec op v1_doc v2_doc, idcs1 @ idcs2))
     | Unop (Ops.Round_prec, (v, t)) ->
-        let v_doc, idcs = (debug_float ctx) ?guard t v in
+        let ps = Low_level.operand_eval_precisions ~eval:prec (Ops.Unop Ops.Round_prec) [| t |] in
+        let v_doc, idcs = (debug_float ctx) ?guard ps.(0) v in
         let pre, post = B.convert_precision ~from:t ~to_:prec in
         (PPrint.(string pre ^^ v_doc ^^ string post), idcs)
     | Unop (op, (v, v_prec)) ->
-        let arg_prec =
-          if Ops.is_homogeneous_prec_unop op then prec
-            (* Homogeneous: argument uses result precision *)
-          else comp_prec v_prec
+        let ps =
+          Low_level.operand_eval_precisions ~eval:prec (Ops.Unop op) [| comp_prec v_prec |]
         in
-        let v_doc, idcs = (debug_float ctx) ?guard arg_prec v in
+        let v_doc, idcs = (debug_float ctx) ?guard ps.(0) v in
         (B.unop_syntax prec op v_doc, idcs)
 
   let compile_main ctx llc : PPrint.document = (pp_ll ctx) llc
