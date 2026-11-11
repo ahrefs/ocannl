@@ -243,6 +243,121 @@ let two_components_at_once () =
   refused "an operand needs both, another fills one" ~needle:two_components (fun () ->
       values (NTDSL.concat "a, b; b => a^b" [| leaf ~o:[ 2; 3 ] ~base:1 (); vec ~base:10 3 |] ()))
 
+(* gh-ocannl-2167: a component shared by two different concatenated axes of one tensor fuses the two
+   concatenations into one set of alternatives, so only the blocks where both axes are in the shared
+   segment were reached: [a^b, a^c => a] gave the diagonal of the [a] block, [1 6] below, and [a^b,
+   b^a => a^b] the diagonals of the [a] and [b] blocks. Refused from the spec when the operation is
+   built: these build it and never compile it, so no later error can pass for the refusal. *)
+let shared_component = "names segments of two different concatenated axes of one tensor"
+
+let built t =
+  ignore (t : Tensor.t);
+  [||]
+
+let shared_across_axes () =
+  let shared label make = refused label ~needle:shared_component (fun () -> built (make ())) in
+  shared "a shared first segment, a^b, a^c => a" (fun () ->
+      NTDSL.einsum1 ~capture_dims:[ capture "a" 2 ] "a^b, a^c => a" (leaf ~o:[ 3; 4 ] ~base:1 ()) ());
+  shared "the same segments reordered, a^b, b^a => a^b" (fun () ->
+      NTDSL.einsum1
+        ~capture_dims:[ capture "a" 1 ]
+        "a^b, b^a => a^b"
+        (leaf ~o:[ 3; 3 ] ~base:1 ())
+        ());
+  shared "one concatenation a prefix of the other, a^b, a^b^c => a^b" (fun () ->
+      NTDSL.einsum1
+        ~capture_dims:[ capture "a" 2; capture "c" 1 ]
+        "a^b, a^b^c => a^b"
+        (leaf ~o:[ 3; 4 ] ~base:1 ())
+        ());
+  shared "differing only in an integer, 2^a, 3^a => a" (fun () ->
+      NTDSL.einsum1 "2^a, 3^a => a" (leaf ~o:[ 4; 5 ] ~base:1 ()) ());
+  shared "three components reversed, a^b^c, c^b^a => a^b^c" (fun () ->
+      NTDSL.einsum1
+        ~capture_dims:[ capture "a" 1; capture "b" 1 ]
+        "a^b^c, c^b^a => a^b^c"
+        (leaf ~o:[ 3; 3 ] ~base:1 ())
+        ());
+  shared "on the result side, a => a^b, a^c" (fun () ->
+      NTDSL.einsum1 ~capture_dims:[ capture "b" 1; capture "c" 1 ] "a => a^b, a^c" (vec 2) ());
+  shared "across axis kinds, a^b | a^c => a" (fun () ->
+      NTDSL.einsum1
+        ~capture_dims:[ capture "a" 2 ]
+        "a^b | a^c => a"
+        (leaf ~b:[ 3 ] ~o:[ 4 ] ~base:1 ())
+        ());
+  shared "over an open operand" (fun () ->
+      NTDSL.einsum1
+        ~capture_dims:[ capture "a" 2; capture "b" 1; capture "c" 2 ]
+        "a^b, a^c => a" (open_leaf ()) ());
+  shared "every component a single cell" (fun () ->
+      NTDSL.einsum1
+        ~capture_dims:[ capture "a" 1; capture "b" 1; capture "c" 1 ]
+        "a^b, a^c => a"
+        (leaf ~o:[ 2; 2 ] ~base:1 ())
+        ());
+  shared "a binary einsum" (fun () ->
+      NTDSL.einsum
+        ~capture_dims:[ capture "a" 2 ]
+        "a^b, a^c; a => a"
+        (leaf ~o:[ 3; 4 ] ~base:1 ())
+        (vec ~base:10 2) ());
+  shared "a ternary einsum" (fun () ->
+      NTDSL.einsum3
+        ~capture_dims:[ capture "a" 2 ]
+        "a; a^b, a^c; a => a" (vec 2)
+        (leaf ~o:[ 3; 4 ] ~base:1 ())
+        (vec ~base:10 2) ());
+  shared "a concatenation" (fun () ->
+      NTDSL.concat
+        ~capture_dims:[ capture "a" 1 ]
+        "a^b, b^a; c => a^b^c"
+        [| leaf ~o:[ 3; 3 ] ~base:1 (); vec ~base:10 2 |]
+        ());
+  refused "through %op" ~needle:shared_component (fun () ->
+      let x = leaf ~o:[ 3; 3 ] ~base:1 () in
+      let%op t = x ++ "a^b, b^a => a^b" in
+      built t);
+  refused "through %cd" ~needle:shared_component (fun () ->
+      let x = leaf ~o:[ 3; 4 ] ~base:1 () and tgt = vec ~base:50 2 in
+      let comp = [%cd tgt =: id x ~logic:"a^b, a^c => a"] in
+      ignore (comp : Ir.Assignments.comp);
+      [||])
+
+(* What the refusal sits next to, and the rewrite its message offers. *)
+let shared_neighbours () =
+  computes "the same concatenation on two axes, a segment of its diagonal, a^b, a^b => a"
+    (fun () ->
+      values
+        (NTDSL.einsum1
+           ~capture_dims:[ capture "a" 2 ]
+           "a^b, a^b => a"
+           (leaf ~o:[ 3; 3 ] ~base:1 ())
+           ()))
+    ~want:[| 1.; 5. |];
+  computes "the same concatenation with integers, 2^a, 2^a => a"
+    (fun () -> values (NTDSL.einsum1 "2^a, 2^a => a" (leaf ~o:[ 4; 4 ] ~base:1 ()) ()))
+    ~want:[| 11.; 16. |];
+  computes "a diagonal written into the same concatenation, a^b => a^b, a^b"
+    (fun () -> values (NTDSL.einsum1 ~capture_dims:[ capture "a" 2 ] "a^b => a^b, a^b" (vec 3) ()))
+    ~want:[| 1.; 0.; 0.; 0.; 2.; 0.; 0.; 0.; 3. |];
+  computes "one component in two tensors, a^b; a^c => a"
+    (fun () ->
+      values
+        (NTDSL.einsum ~capture_dims:[ capture "a" 2 ] "a^b; a^c => a" (vec 3) (vec ~base:10 4) ()))
+    ~want:[| 10.; 22. |];
+  computes "the rewrite of a^b, a^c => a: the segments under distinct labels, then a diagonal"
+    (fun () ->
+      let segments =
+        NTDSL.einsum1
+          ~capture_dims:[ capture "a" 2; capture "c" 2 ]
+          "a^b, d^c => a, d"
+          (leaf ~o:[ 3; 4 ] ~base:1 ())
+          ()
+      in
+      values (NTDSL.einsum1 "aa => a" segments ()))
+    ~want:[| 1.; 6. |]
+
 (* The operand summed is 10, so a plain axis would hold 10 in every cell. *)
 let unnamed_result () =
   refused "integers alone, a closed operand" ~needle:unnamed (fun () ->
@@ -400,6 +515,8 @@ let refusal_leaves_inference_usable () =
         (shape_refused (fun () -> NTDSL.einsum1 "a => 2^3" x ()));
       p "the two components are refused"
         (shape_refused (fun () -> NTDSL.einsum1 "a, b => a^b" y ()));
+      p "a component shared by two concatenated axes is refused"
+        (shape_refused (fun () -> NTDSL.einsum1 "a => a^b, a^c" x ()));
       let label = "the same operands, a valid operation" in
       pf_close "%s" label
         (values (NTDSL.einsum1 "a => 2^a^1" x ()))
@@ -411,6 +528,8 @@ let () =
   same_step ();
   symbolic_component ();
   two_components_at_once ();
+  shared_across_axes ();
+  shared_neighbours ();
   unnamed_result ();
   operand_order ();
   unreached_operand ();

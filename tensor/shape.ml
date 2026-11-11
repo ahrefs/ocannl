@@ -4661,6 +4661,13 @@ let refuse_unsized_kernels (update_step : update_step) =
       copy's offset -- it did, silently (gh-ocannl-2087). A tensor repeated along an axis is that
       tensor passed once per copy, under distinct components. Integer components are distinct
       skipped segments, and may repeat.
+    - One tensor's concatenated axes sharing a component but not the same concatenation
+      ([a^b, a^c => a], [a^b, b^a => a^b], gh-ocannl-2167): the shared symbol fuses the two
+      concatenations into one product component of alternatives, so lowering reaches only the blocks
+      where both axes are in the shared segment, their diagonal, dropping the off-diagonal blocks
+      silently. The same concatenation on two axes ([a^b, a^b => a^b]) is that axis's plain
+      diagonal, like [aa => a], and stays; so does a component shared with a plain axis
+      ([a^b, b => b], a slice's diagonal) or with another tensor.
     - Block operands out of the order of the segments they fill: an operand of a width-1 segment
       indexes at [Fixed_idx 0] and names no segment, so the lowering of a block selects its operand
       by position (in [Assignments]), and two swapped width-1 operands would swap silently. Other
@@ -4708,6 +4715,50 @@ let refuse_meaningless_concats (update_step : update_step) =
                    components}, but a segment is one range of positions with one index, so only \
                    one of its copies would be read or written. To repeat a tensor along an axis, \
                    pass it once per copy under distinct components: (x, x) ++^ \"a; b => a^b\""]));
+      (* A slot's axes in the order the spec writes them, so the message names the concatenations as
+         written: batch, input, output, and within a kind the axes counted from the front, then
+         those counted from the end, the last one last. *)
+      let in_spec_order (ls : parsed_axis_labels) =
+        Map.to_alist ls.labels
+        |> List.sort ~compare:(fun ((k1 : AxisKey.t), _) ((k2 : AxisKey.t), _) ->
+            let rank (k : AxisKey.t) = (k.from_end, if k.from_end then -k.pos else k.pos) in
+            match AxisKey.compare_kind k1.in_axes k2.in_axes with
+            | 0 -> [%compare: bool * int] (rank k1) (rank k2)
+            | c -> c)
+        |> List.map ~f:snd
+      in
+      List.iter (ls_lhs :: ls_rhs_list) ~f:(fun ls ->
+          let rec check = function
+            | [] -> ()
+            | components :: rest ->
+                List.iter rest ~f:(fun other ->
+                    let same c c' =
+                      match (c, c') with
+                      | Concat_label l, Concat_label l' -> String.equal l l'
+                      | Concat_size n, Concat_size n' -> n = n'
+                      | Concat_label _, Concat_size _ | Concat_size _, Concat_label _ -> false
+                    in
+                    if not (List.equal same components other) then
+                      let labels = in_concats [ Concat_spec other ] in
+                      Option.iter
+                        (List.find
+                           (in_concats [ Concat_spec components ])
+                           ~f:(List.mem labels ~equal:String.equal))
+                        ~f:(fun label ->
+                          refuse
+                            [%string
+                              "the component %{label} names segments of two different concatenated \
+                               axes of one tensor, %{concat_text components} and %{concat_text \
+                               other}, so only the blocks where both axes are in segment %{label} \
+                               would be reached (their diagonal), and the two concatenations would \
+                               become one set of alternatives. On one tensor, a component may \
+                               repeat only with its whole concatenation (a^b, a^b => a^b is its \
+                               diagonal, like aa => a). For the diagonal of two segments, extract \
+                               them under distinct labels first: x ++ \"a^b, d^c => a, d\", then \
+                               ++ \"aa => a\""]));
+                check rest
+          in
+          check (concats (in_spec_order ls)));
       let result_axes = axes_of ls_lhs in
       let operands = List.map ls_rhs_list ~f:axes_of in
       List.iter (List.concat_map slots ~f:concats) ~f:(fun components ->

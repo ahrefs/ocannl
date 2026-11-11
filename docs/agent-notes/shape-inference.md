@@ -248,6 +248,12 @@ files.
   segment the result lists (`a^c; a^b^c => a^b^c` under `+*`) is an operand-arity shortfall,
   refused in lowering with a message of its own naming the block and the missing operand
   (gh-ocannl-2088).
+- Product components are CONNECTED components of concatenation symbols, so one tensor's two
+  concatenated axes sharing a component (`a^b, a^c => a`) fuse into one set of alternatives and
+  lowering reaches only the blocks where both are in the shared segment, silently dropping the
+  rest. `refuse_meaningless_concats` refuses that per slot unless the two concatenations are equal
+  component lists: `a^b, a^b => a^b` is the axis's diagonal and stays, as do sharings with a plain
+  axis or across tensors (gh-ocannl-2167, pinned in `test/einsum/concat_axis_consumers.ml`).
 - An affine axis's constant offset is sized for by nothing: the dim formulas omit it, so an offset
   at or past the stride, or on an unpadded window, indexes past the extent. On the result side
   those writes were silently dropped (stride 1 died in `projection_of_solved_dims`); on an
