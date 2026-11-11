@@ -93,8 +93,35 @@ let check_slots () =
     (Ops.Binop Ops.Uint4x32_to_prec_uniform_lane) [| Ops.uint4x32; Ops.int32 |]
     [| Ops.uint4x32; Ops.int32 |]
 
+(* Internal rewrites can leave stale operator annotations before the closing describe walk. The
+   Where is annotated packed but evaluated in a single slot. Its condition must never go through the
+   packed at_slot rewrite: re-annotating it there and restoring its own precision afterwards made
+   the simplifier recurse forever instead of reaching a fixed point. *)
+let check_stale_where () =
+  let mk = Ll_test.node_factory ~first_id:2130900 ~dims:[| 1 |] () in
+  let flag = mk "oep_flag" and dst = mk "oep_stale" in
+  let at0 = [| Ll_test.fixed 0 |] in
+  let conditional =
+    LL.Ternop
+      ( Ops.Where,
+        (Ll_test.get flag at0, Ops.single),
+        (LL.Constant 1., Ops.single),
+        (LL.Constant 2., Ops.single) )
+  in
+  let raw =
+    Ll_test.set dst at0
+      (LL.Binop (Ops.Add, (conditional, Ops.uint4x32), (Ll_test.get flag at0, Ops.single)))
+  in
+  let simplified = LL.simplify_llc [] raw in
+  p "a stale packed Where annotation terminates with its condition at its own single precision"
+    (Ll_test.count_scalar simplified ~f:(function
+       | LL.Ternop (Ops.Where, (_, p), _, _) -> Ops.equal_prec p Ops.single
+       | _ -> false)
+    = 1)
+
 let () =
   check_slots ();
+  check_stale_where ();
   let ctx = Context.auto () in
   Stdio.eprintf "rng_operand_precision: backend %s (not part of the golden)\n"
     (Context.backend_name ctx);

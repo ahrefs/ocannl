@@ -28,9 +28,10 @@ files.
 - `Low_level.operand_eval_precisions` owns the direct scalar operand slot rule (gh-ocannl-2130),
   shared by simplification, the constant check/rounding walk, and rendering (debug values included).
   It takes the enclosing evaluation precision, an `Ops.op`, and operand annotations in order;
-  backend compute widening stays in `C_syntax`, with `Round_prec` exact. The suspected large-RNG-input
-  fp16 refusal did not reproduce: `rng_operand_precision` passes before and after the refactor,
-  since the uniform conversion already switches to uint4x32 before entering Threefry.
+  backend compute widening stays in `C_syntax`, with `Round_prec` exact. A uniform conversion
+  evaluates its block at uint4x32, so RNG operands under a half store never meet the fp16 check at
+  half; `rng_operand_precision` pins this and the simplifier's handling of a stale packed annotation
+  over a `Where` condition.
 - The `bf16_ops`/`half_ops` convention of picking inputs that are exactly representable in the
   reduced precision, so printed numbers stay backend-uniform, does NOT extend to transcendental
   results: no choice of inputs makes an `exp` output exactly representable, and backend libm

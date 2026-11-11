@@ -813,8 +813,9 @@ let operand_eval_precisions ~eval (op : Ops.op) precs =
   | Unop op, [| p |] -> [| (if Ops.is_homogeneous_prec_unop op then eval else p) |]
   | Binop op, [| p1; p2 |] ->
       if Ops.is_homogeneous_prec_binop op then [| eval; eval |] else [| p1; p2 |]
-  | Ternop Ops.Where, [| p1; _; _ |] -> [| p1; eval; eval |]
-  | Ternop (Ops.FMA | Ops.Mul3), [| _; _; _ |] -> [| eval; eval; eval |]
+  | Ternop op, [| p1; p2; p3 |] -> (
+      if Ops.is_homogeneous_prec_ternop op then [| eval; eval; eval |]
+      else match op with Ops.Where -> [| p1; eval; eval |] | _ -> [| p1; p2; p3 |])
   | _ -> invalid_arg "Low_level.operand_eval_precisions: invalid number of operands"
 
 (* gh-ocannl-1739: the operand an arm that is never evaluated becomes -- a decided [Where]'s dead
@@ -1494,24 +1495,23 @@ let speculable_select ~(cond : scalar_t) ~(arms : scalar_arg list) =
         true
     | Get_dynamic _ -> false
     | Ternop (op, (a, pa), (b, pb), (c, pc)) -> (
-        let pa, pb, pc =
-          if Ops.is_homogeneous_prec_ternop op then (prec, prec, prec)
-          else match op with Ops.Where -> (pa, prec, prec) | _ -> (pa, pb, pc)
-        in
+        let ps = operand_eval_precisions ~eval:prec (Ops.Ternop op) [| pa; pb; pc |] in
         (* A nested select is walked whole: once the enclosing arm evaluates eagerly, its condition
            can hold where the enclosing one did not, so everything its arms evaluate is reachable
            (review round 2) -- even while it keeps short-circuiting itself. *)
         match Ops.ternop_conditionality op with
-        | Ops.All_three | Ops.Cond_and_one_arm -> safe pa a && safe pb b && safe pc c)
+        | Ops.All_three | Ops.Cond_and_one_arm -> safe ps.(0) a && safe ps.(1) b && safe ps.(2) c)
     | Binop ((Ops.Div | Ops.Mod), _, _) when not (Ops.is_float prec) -> false
     | Binop (op, (a, pa), (b, pb)) -> (
-        let pa, pb = if Ops.is_homogeneous_prec_binop op then (prec, prec) else (pa, pb) in
+        let ps = operand_eval_precisions ~eval:prec (Ops.Binop op) [| pa; pb |] in
         match Ops.binop_conditionality op with
         (* A gated operand is reachable, as a nested select's arms are. *)
-        | Ops.Both_operands | Ops.Gated_second -> safe pa a && safe pb b
-        | Ops.Only_first -> safe pa a
-        | Ops.Only_second -> safe pb b)
-    | Unop (op, (a, pa)) -> safe (if Ops.is_homogeneous_prec_unop op then prec else pa) a
+        | Ops.Both_operands | Ops.Gated_second -> safe ps.(0) a && safe ps.(1) b
+        | Ops.Only_first -> safe ps.(0) a
+        | Ops.Only_second -> safe ps.(1) b)
+    | Unop (op, (a, pa)) ->
+        let ps = operand_eval_precisions ~eval:prec (Ops.Unop op) [| pa |] in
+        safe ps.(0) a
   in
   (not (mentions_index cond)) && List.for_all arms ~f:(fun (s, prec) -> safe prec s)
 
@@ -6784,9 +6784,9 @@ let simplify_llc static_indices llc =
        it on doubles), but its operands are simplified like any others. So a producer inlined
        beneath a threefry goes through the same rewrites as its materialized setter, whose
        right-hand side the [Set] arm simplifies at the node's own precision. Each operand is
-       simplified into the slot the renderer converts it to: a threefry renders both operands at its
-       own [uint4x32] precision ([Ops.is_homogeneous_prec_binop]), the lane conversion each operand
-       at the operand's own. *)
+       simplified into the slot the renderer converts it to: a threefry renders both operands at the
+       slot's precision ([uint4x32] in well-typed code), the lane conversion each operand at the
+       operand's own. *)
     | Binop
         ( ((Threefry4x32_crypto | Threefry4x32_light | Uint4x32_to_prec_uniform_lane) as op),
           (v1, prec1),
@@ -6874,7 +6874,7 @@ let simplify_llc static_indices llc =
     | Ternop (op, llv1, llv2, llv3) ->
         (* A [Where]'s branches, and every operand of a homogeneous ternop, render at its slot. *)
         let ps = operand_eval_precisions ~eval (Ops.Ternop op) [| snd llv1; snd llv2; snd llv3 |] in
-        let llv1 = if Ops.equal_prec ps.(0) eval then at_slot llv1 else llv1 in
+        let llv1 = match op with Ops.Where -> llv1 | _ -> at_slot llv1 in
         let llv2 = at_slot llv2 and llv3 = at_slot llv3 in
         (* A condition is independent of an enclosing division, even at the same precision. *)
         let v1 =
