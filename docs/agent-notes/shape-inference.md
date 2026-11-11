@@ -156,11 +156,21 @@ files.
   would accept it (both pinned in `free_capture_basis.ml`). Since gh-ocannl-2131, `set_dim` and
   a row product make only a size claim (`Row.Dim_size`); `solved_basis = None` distinguishes it
   from a solved dimension's `Some basis`, including `Some default`. Stage1 checks already-solved
-  axes and defers open sizes; closure solves other constraints first, then sizes an open axis with
-  its matching use-site basis or `default`. A dimension publication records the actual tag even
+  axes and defers open sizes; at each solver fixpoint, ordinary constraints run first, then held
+  sizes, then window settling. Keeping sizes in an outer pass let a Stage2 window pair settle
+  before a held output size reached it (review of gh-ocannl-2131). An open size takes its matching
+  use-site basis or `default`. A size also accepts an axis whose numeric product already made it
+  `1_(bcast_if_1)`: it does not re-tag that arithmetic solution to `default`. Thus `set_dim n 1`
+  alone closes a free axis to `default`, but two open axes with total 1 can both take the broadcast
+  top before the size claim is checked (pinned in `solved_capture_basis.ml`). A dimension publication records the actual tag even
   when the reference held its size already. `set_equal` between dimensions carries the solved
   tag in either argument order and checks two held tags; any row in the pair keeps only the
-  product (the Row-Row arm still compares rows). Pins: `solved_capture_basis.ml`.
+  product (the Row-Row arm still compares rows). This also carries a free source's committed
+  broadcast top: equating it with a plain `1_default` now refuses, where dropping the source tag
+  used to accept it. Pins: `solved_capture_basis.ml`. A contradiction that depended on an eager
+  numeric kernel size can now defer from registration until closure; the invalid valid-3x3
+  convolution residual in `scheme_strided_residual.ml` forces its dims and still refuses before
+  compilation.
   The symbolic analog did not reproduce: `Shape.set_sym_dim` and every other `Shape` constructor
   mint only `default` symbols. Recapture across closure and the product-space proxy both preserve
   these. `Row.get_sym_dim ~basis` can build a named symbol in a hand-built solver store, but no

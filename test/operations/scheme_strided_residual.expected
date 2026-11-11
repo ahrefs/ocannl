@@ -43,7 +43,7 @@ control (off): no scheme event, where check had some: true
 output dims: single prec 2x1
 check and off give the same output dims: true
 check and off give the same output, loss, parameters and gradients, bitwise: true
-the scheme or the body raises a shape error: true
+the invalid residual is refused by shape-inference closure: true
 width 12 gives outputs 6 and 4, over the input and y's 66: true
 control: width 10 is no multiple of 3: true
 control: and its refusal is not the unsized pair's: true

@@ -89,8 +89,16 @@ let () =
       let n = Shape.get_variable_ref "n" and m = Shape.get_variable_ref "n" in
       ignore (dims (capture n (tagged "rgb")));
       ignore (dims (capture m (tagged "xyz")));
-      refused "set_equal rejects two solved same-sized axes with different bases" (fun () ->
-          Shape.set_equal n m));
+      let message =
+        match Shape.set_equal n m with
+        | () -> None
+        | exception Row.Shape_error (msg, _) ->
+            Tensor.rewind_to_last_closure ~reason:"gh-2131 named basis refusal" ();
+            Some msg
+      in
+      p "set_equal rejects two solved same-sized axes with different bases" (Option.is_some message);
+      p "the basis refusal names the reference"
+        (Option.exists message ~f:(fun msg -> String.is_substring msg ~substring:"label n")));
   case "symbolic recapture and proxy" (fun () ->
       let sym, _ = Ir.Indexing.get_static_symbol ~static_range:6 Ir.Indexing.Empty in
       let n = Shape.get_variable_ref "n" in
@@ -101,7 +109,9 @@ let () =
         (List.equal Int.equal (dims y) [ 6 ]
         && Array.mem (Shape.to_bases y.Tensor.shape) Row.default_basis ~equal:String.equal);
       let z = capture n y in
-      p "a solved symbolic reference survives recapture" (List.equal Int.equal (dims z) [ 6 ]);
+      p "a solved symbolic reference survives recapture"
+        (List.equal Int.equal (dims z) [ 6 ]
+        && Array.equal String.equal (Shape.to_bases z.Tensor.shape) [| Row.default_basis |]);
       let proxy =
         Shape.product_space_shape ~shape:z.Tensor.shape
           ~logic:(Transpose (Permute ("n => n", [ n ]), y.Tensor.shape))
@@ -110,7 +120,8 @@ let () =
         (Shape.make_update_step ~shape:proxy ~neutral_elem:None
            ~logic:(Terminal { is_param = false; logic = Fetch (Constant 2.) }));
       p "a solved symbolic reference survives the proxy"
-        (Array.equal Int.equal (Shape.to_dims proxy) [| 6 |]));
+        (Array.equal Int.equal (Shape.to_dims proxy) [| 6 |]
+        && Array.equal String.equal (Shape.to_bases proxy) [| Row.default_basis |]));
   case "a numeric size meets a named use-site bound" (fun () ->
       let n = Shape.get_variable_ref "n" in
       let x = leaf () in
@@ -129,4 +140,67 @@ let () =
       let z = NTDSL.einsum1 ~capture_dims:[ row ] "r => r" (tagged "xyz") () in
       p "the row product does not acquire rgb"
         (List.equal Int.equal (dims z) [ 3 ]
-        && Array.mem (Shape.to_bases z.Tensor.shape) "xyz" ~equal:String.equal))
+        && Array.mem (Shape.to_bases z.Tensor.shape) "xyz" ~equal:String.equal));
+  case "a held output size precedes window-pair settling" (fun () ->
+      let build ~eager =
+        Tensor.unsafe_reinitialize ();
+        let x = leaf () and o = Shape.get_variable_ref "o" in
+        let first =
+          NTDSL.einsum ~capture_dims:[ o ] "2*o<+k; k => o" x (tagged "h")
+            ?output_dims:(if eager then Some [ 1 ] else None)
+            ()
+        in
+        let second = NTDSL.einsum "2*p<+k; k => p" x (tagged Row.default_basis) () in
+        if not eager then Shape.set_dim o 1;
+        let first_dims = dims first and second_dims = dims second in
+        ( first_dims,
+          Array.to_list (Shape.to_bases first.Tensor.shape),
+          second_dims,
+          Array.to_list (Shape.to_bases second.Tensor.shape) )
+      in
+      let eager = build ~eager:true in
+      p "the eager window pair has distinct output tags"
+        (Poly.equal eager ([ 1 ], [ Row.default_basis ], [ 1 ], [ "h" ]));
+      let held = build ~eager:false in
+      p "set_dim closes both windows with the eager sizes and tags" (Poly.equal eager held));
+  case "a size claim preserves an arithmetically inferred broadcast top" (fun () ->
+      let n = Row.get_var () and m = Row.get_var () in
+      let row : Row.t =
+        {
+          beg_dims = [];
+          dims = [ Var n; Var m ];
+          bcast = Broadcastable;
+          prov = Row.empty_provenance;
+        }
+      in
+      let constraints : Row.constraint_ list =
+        [
+          Dim_size { dim = Var n; size = 1; origin = [] };
+          Rows_constr
+            {
+              r = [ row ];
+              constr = Total_elems { numerator = Num_elems 1; divided_by = []; keep_axis = false };
+              origin = [];
+            };
+        ]
+      in
+      let pending, env = Row.solve_inequalities ~stage:Stage1 constraints Row.empty_env in
+      let pending, env = Row.solve_inequalities ~stage:Stage2 pending env in
+      let top v =
+        match Row.get_dim_from_env env v with
+        | Some (Dim { d = 1; basis; _ }) -> String.equal basis Row.bcast_if_1
+        | _ -> false
+      in
+      p_empty "the numeric product and size leave no deferred constraint" ~over:constraints pending;
+      p_all ~min:2 "a size-only 1 keeps the broadcast tops implied by a two-axis product of 1"
+        [ n; m ] ~f:top);
+  case "set_equal carries a closed free dimension's broadcast top" (fun () ->
+      let n = Shape.get_variable_ref "n" in
+      ignore (dims (capture n (leaf ())));
+      let m = Shape.get_variable_ref "n" in
+      let plain =
+        NTDSL.init ~l:"plain_one" ~prec:Ir.Ops.single ~b:[] ~o:[ 1 ] ~f:(fun _ -> 2.) ()
+      in
+      ignore (dims (capture m plain));
+      refused "set_equal refuses a closed broadcast top against a plain 1" (fun () ->
+          Shape.set_equal n m))

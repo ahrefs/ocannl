@@ -193,8 +193,13 @@ let () =
         Nn_blocks.conv2d ~label:[ "valid3" ] ~kernel_size:3 ~use_padding:false ~out_channels:3 ()
       in
       let%op self_res x = c x + x in
-      p "the scheme or the body raises a shape error"
-        (Result.is_error (outcome (fun () -> self_res (input `S2)))))
+      (* The kernel's numeric size is held until closure (gh-ocannl-2131), so registration may defer
+         this contradiction. It must be refused before the tensor can be compiled. *)
+      p "the invalid residual is refused by shape-inference closure"
+        (Result.is_error
+           (outcome (fun () ->
+                let y = self_res (input `S2) in
+                Lazy.force y.Tensor.value.dims))))
 
 (* gh-ocannl-1972: an input whose width is not known when the windows meet it, under [off] too, so
    the application itself leaves the pair waiting. The width comes from a later operation, or never.

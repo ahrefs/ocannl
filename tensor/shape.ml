@@ -3313,19 +3313,14 @@ let%track7_sexp set_ref_dim ?basis (delayed_var_ref : delayed_var_ref) (dim : in
   refuse_closed_unsolved_ref ~operation:"Shape.set_dim" delayed_var_ref;
   let basis = match delayed_var_ref.var with `Row _ -> None | `Dim _ | `Not_set_yet -> basis in
   (match (delayed_var_ref.var_ref.solved_dim, delayed_var_ref.solved_basis, basis) with
-  | Some d, Some old_basis, Some basis when d = dim ->
-      ignore
-        (Row.solve_inequalities ~stage:Row.Stage1
-           [
-             Row.Dim_eq
-               {
-                 d1 = Row.get_dim ~d ~basis:old_basis ();
-                 d2 = Row.get_dim ~d:dim ~basis ();
-                 origin = [];
-               };
-           ]
-           Row.empty_env
-          : Row.constraint_ list * Row.environment)
+  | Some d, Some old_basis, Some basis when d = dim && not (String.equal old_basis basis) ->
+      raise
+      @@ Row.Shape_error
+           ( "Cannot set dimension basis for variable reference with label "
+             ^ delayed_var_ref.var_ref.ref_label,
+             [
+               Row.Dim_mismatch [ Row.get_dim ~d ~basis:old_basis (); Row.get_dim ~d:dim ~basis () ];
+             ] )
   | _ -> ());
   match delayed_var_ref with
   | { var_ref = { solved_sym = Some _; ref_label; _ }; _ } ->

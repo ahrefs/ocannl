@@ -6018,6 +6018,7 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
   let env = { env with discardable_vars = Set.union discardable_vars env.discardable_vars } in
   let rec solve ?(unblocked_dims = dim_var_set_empty) ineqs (env : environment) :
       constraint_ list * _ =
+    let sizes, ineqs = List.partition_tf ineqs ~f:(function Dim_size _ -> true | _ -> false) in
     (* gh-ocannl-2156: a held window equation is a dependency for closing, too. Its plain extent
        waits for the window; against a fixed extent, an open kernel waits for the iterator so kernel
        inference can use it. Recompute after substitution each pass, retaining the closing
@@ -6197,26 +6198,34 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
       | None -> settle_window ~merge_pairs:true [] ineqs'
     in
     let at_fixpoint () =
-      match if is_stage2_up stage then settle () else None with
-      | Some (ineqs', env) -> solve ~unblocked_dims ineqs' env
-      | None -> (
-          (* Only at the final fixpoint, when nothing else can close, let one waiting dimension use
-             ordinary closing and retry. Prefer a kernel, but a cycle with no fixed extent has only
-             first-arm dependencies. Keep the choice even if it emits no guess. *)
-          let next_guess =
-            if not (is_stage7 stage) then None
-            else
-              match Set.min_elt deferred_kernels with
-              | Some _ as kernel -> kernel
-              | None -> Set.min_elt deferred_dims
-          in
-          match next_guess with
-          | Some dim -> solve ~unblocked_dims:(Set.add unblocked_dims dim) ineqs' env
-          | None -> (ineqs', env))
+      (* Sizes claim no basis: let ordinary equalities and bounds supply it first. But a held size
+         is still information that can solve a window, so spend it BEFORE any settling choice. Keep
+         the window-closing retry state when a size makes progress. *)
+      let sizes', sized_env = List.fold sizes ~init:([], env) ~f in
+      let sizes' = List.rev sizes' in
+      if not (List.equal equal_constraint_up_to_origin sizes' sizes) then
+        solve ~unblocked_dims (ineqs' @ sizes') sized_env
+      else
+        match if is_stage2_up stage then settle () else None with
+        | Some (ineqs', env) -> solve ~unblocked_dims (ineqs' @ sizes) env
+        | None -> (
+            (* Only at the final fixpoint, when nothing else can close, let one waiting dimension
+               use ordinary closing and retry. Prefer a kernel, but a cycle with no fixed extent has
+               only first-arm dependencies. Keep the choice even if it emits no guess. *)
+            let next_guess =
+              if not (is_stage7 stage) then None
+              else
+                match Set.min_elt deferred_kernels with
+                | Some _ as kernel -> kernel
+                | None -> Set.min_elt deferred_dims
+            in
+            match next_guess with
+            | Some dim -> solve ~unblocked_dims:(Set.add unblocked_dims dim) (ineqs' @ sizes) env
+            | None -> (ineqs' @ sizes, env))
     in
     if List.is_empty ineqs' || List.equal equal_constraint_up_to_origin ineqs' ineqs then
       at_fixpoint ()
-    else solve ~unblocked_dims ineqs' env
+    else solve ~unblocked_dims (ineqs' @ sizes) env
   in
   (* gh-ocannl-1961: what closes a draw's rows reads the environment, which mid-pass lies: a solved
      bound has left its operands' [res] while the [Row_ineq] carrying it is still in the list. So
@@ -6228,23 +6237,9 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
     if List.equal equal_constraint_up_to_origin draws' draws then (others @ draws, env)
     else draws_at_quiescence (others @ draws') env
   in
-  let ordinary ineqs env =
-    match stage with
-    | Stage5 | Stage6a | Stage6b -> draws_at_quiescence ineqs env
-    | _ -> solve ineqs env
-  in
-  (* A size makes no basis claim. First let equalities and use-site bounds supply the basis; only
-     closure may choose [default] for an axis they leave open. A size can unlock another constraint,
-     so repeat after it progresses. This also covers trailing setters which closure sees for the
-     first time at Stage2. *)
-  let rec sizes_at_quiescence ineqs env =
-    let sizes, others = List.partition_tf ineqs ~f:(function Dim_size _ -> true | _ -> false) in
-    let others, env = ordinary others env in
-    let sizes', env = solve sizes env in
-    if List.equal equal_constraint_up_to_origin sizes' sizes then (others @ sizes, env)
-    else sizes_at_quiescence (others @ sizes') env
-  in
-  sizes_at_quiescence ineqs env
+  match stage with
+  | Stage5 | Stage6a | Stage6b -> draws_at_quiescence ineqs env
+  | _ -> solve ineqs env
 
 let rec row_to_bases env =
   let rec f = function

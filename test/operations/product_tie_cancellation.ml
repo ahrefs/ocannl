@@ -103,7 +103,10 @@ let test_through_captures () =
         (dims_str sum);
       all_of_5 "a row closed from the start holds the tied dimension" [ y1; y2; sum ]);
   let cancels = "the dimension cancels" in
-  refused_with "a row closed with a second axis of 3 refuses the tie" ~sub:cancels (fun () ->
+  (* A held size lets the cancellation infer w = 1 first; w's explicit size 3 then refuses it. The
+     open unconstrained row below still reports the fractional product directly. *)
+  let mismatch = "solved dimensions for axis: mismatch" in
+  refused_with "a row closed with a second axis of 3 refuses the tie" ~sub:mismatch (fun () ->
       let w = Shape.get_variable_ref "w" in
       Shape.set_dim w 3;
       let y1, y2 = tied_closed_row [ "w" ] [ w ] in
@@ -111,7 +114,7 @@ let test_through_captures () =
   refused_with "an open row with an axis of 3 refuses the tie" ~sub:cancels (fun () ->
       let _, y1, y2 = open_row_with_3 () in
       ignore ((dims y1, dims y2) : int list * int list));
-  refused_with "an open row with an axis of 3 refuses the tie, its rest constrained" ~sub:cancels
+  refused_with "an open row with an axis of 3 refuses the tie, its rest constrained" ~sub:mismatch
     (fun () ->
       let c, y1, y2 = open_row_with_3 () in
       Shape.set_dim c 1;
