@@ -466,6 +466,31 @@ let row_guard_reads () =
   values name got [ [| sum2 0; 0.; 0.; 0. |] ];
   guarded name source x
 
+(* [(i < 1 ? (r ? s : 0) : 0) + (3 <= i ? (s' ? r' : 0) : 0)], the primed scopes alpha-equal to the
+   others: after the CSE, [r]'s conditions test [s] and [s]'s test [r], a cycle the ordering cuts
+   (Codex review of the gh-ocannl-2145 PR). Both read in range; the indices in the conditions keep
+   them from blending. *)
+let row_guard_cycle () =
+  let name = "was_guard_cycle" in
+  let x = mk "was_guard_cycle_x" and out = mk ~dims:[| n |] "was_guard_cycle_out" in
+  let llc =
+    loop (fun i ->
+        let vr = local_node () and vs = local_node () in
+        let _, r = sum_scope ~v:vr x ~at:(in_range i)
+        and _, r' = sum_scope ~v:vr x ~at:(in_range i) in
+        let at_s k = aff [ (1, i); (1, k) ] 2 in
+        let _, sc = sum_scope ~v:vs x ~at:at_s and _, sc' = sum_scope ~v:vs x ~at:at_s in
+        let truth v = add v (mul (c 0.) (embed i)) in
+        let sel cond a = LL.Ternop (Ops.Where, (truth cond, single), (a, single), (c 0., single)) in
+        set_at out (iter i)
+          (add
+             (where_ (lt (embed i) (ic 1)) (sel r sc) (c 0.))
+             (where_ (le (ic 3) (embed i)) (sel sc' r') (c 0.))))
+  in
+  let llc = LL.eliminate_common_subexpressions llc in
+  let got, _source = run_row ~name ~inputs:[ x ] ~outputs:[ out ] llc in
+  values name got [ [| xs.(2) +. xs.(3); 0.; 0.; xs.(3) +. xs.(4) |] ]
+
 let () =
   row_then ();
   row_else ();
@@ -481,4 +506,5 @@ let () =
   row_gate ();
   row_disjunction ();
   row_cross_order ();
-  row_guard_reads ()
+  row_guard_reads ();
+  row_guard_cycle ()

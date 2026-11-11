@@ -4845,20 +4845,78 @@ module C_syntax (B : C_syntax_config) = struct
     let equal_paths a b =
       List.length a = List.length b && List.for_all a ~f:(fun p -> List.mem b p ~equal:equal_guard)
     in
-    let changed = ref true in
-    while !changed do
-      changed := false;
-      List.iter sorted ~f:(fun (scope, def) ->
-          let g = Hashtbl.find_exn guards scope in
-          List.iter (Lazy.force def.reads) ~f:(fun r ->
-              match Hashtbl.find guards r with
-              | Some gr when r <> scope ->
-                  let gr' = normalize_guards (gr @ g) in
-                  if not (equal_paths gr gr') then (
-                    Hashtbl.set guards ~key:r ~data:gr';
-                    changed := true)
-              | _ -> ()))
-    done;
+    (* The cycle cuts made so far (see [settle]), each [(s, r)] applied to every update of [s]'s
+       conditions, so that propagation cannot bring a cut test back. *)
+    let cuts = Hashtbl.create (module Int) in
+    let apply_cuts s paths =
+      match Hashtbl.find cuts s with
+      | None -> paths
+      | Some rs ->
+          normalize_guards
+            (List.map paths ~f:(fun path ->
+                 List.take_while path ~f:(fun (l : guard_lit) ->
+                     not (List.exists l.deps ~f:(fun d -> List.mem rs d ~equal:Int.equal)))))
+    in
+    let propagate () =
+      let changed = ref true in
+      while !changed do
+        changed := false;
+        List.iter sorted ~f:(fun (scope, def) ->
+            let g = Hashtbl.find_exn guards scope in
+            List.iter (Lazy.force def.reads) ~f:(fun r ->
+                match Hashtbl.find guards r with
+                | Some gr when r <> scope ->
+                    let gr' = apply_cuts r (normalize_guards (gr @ g)) in
+                    if not (equal_paths gr gr') then (
+                      Hashtbl.set guards ~key:r ~data:gr';
+                      changed := true)
+                | _ -> ()))
+      done
+    in
+    let is_conditional s =
+      match Hashtbl.find guards s with Some [ [] ] | None -> false | Some _ -> true
+    in
+    let guard_deps s =
+      List.concat_map (Hashtbl.find_exn guards s) ~f:(fun path ->
+          List.concat_map path ~f:(fun (l : guard_lit) -> l.deps))
+    in
+    (* A definition whose conditions' tests read a definition that, through bodies and tests, waits
+       on it: a walk over both reaches one still in progress through a test. CSE sharing independent
+       scopes makes one, as in [(A ? (R ? S : 0) : 0) + (B ? (S ? R : 0) : 0)] (Codex review). *)
+    let guard_back_edge () =
+      let state = Hashtbl.create (module Int) in
+      let found = ref None in
+      let rec visit s =
+        if Option.is_none !found && not (Hashtbl.mem state s) then (
+          Hashtbl.set state ~key:s ~data:`Active;
+          List.iter (Lazy.force (Hashtbl.find_exn by_scope s).reads) ~f:(fun r ->
+              if r <> s && is_conditional r then visit r);
+          List.iter (guard_deps s) ~f:(fun r ->
+              if is_conditional r then
+                match Hashtbl.find state r with
+                | Some `Active -> if Option.is_none !found then found := Some (s, r)
+                | Some `Done -> ()
+                | None -> visit r);
+          Hashtbl.set state ~key:s ~data:`Done)
+      in
+      List.iter sorted ~f:(fun (s, _) -> if is_conditional s then visit s);
+      !found
+    in
+    (* Such a cycle is cut where it is found: the definition's conditions stop before the first test
+       reading the one in progress, so it runs at least as often, under the conditions ahead of that
+       test -- a test of a scope's value, never one of the index guards the inliner mints -- and
+       what it reads follows. A cut stays applied, and each removes a test dependency for good, so
+       the cutting ends. *)
+    let rec settle () =
+      propagate ();
+      match guard_back_edge () with
+      | None -> ()
+      | Some (s, r) ->
+          Hashtbl.add_multi cuts ~key:s ~data:r;
+          Hashtbl.update guards s ~f:(function Some paths -> apply_cuts s paths | None -> [ [] ]);
+          settle ()
+    in
+    settle ();
     let unconditional, conditional =
       List.partition_tf sorted ~f:(fun (s, _) ->
           match Hashtbl.find_exn guards s with [ [] ] -> true | _ -> false)

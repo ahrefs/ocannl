@@ -31,3 +31,4 @@ was_cross_order: the values are the closed form's: true
 was_cross_order: every read of was_cross_order_x sits under its condition: true
 was_guard_reads: the values are the closed form's: true
 was_guard_reads: every read of was_guard_reads_x sits under its condition: true
+was_guard_cycle: the values are the closed form's: true
