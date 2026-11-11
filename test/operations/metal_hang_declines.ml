@@ -29,7 +29,9 @@ let typed_hang label =
     { what = "kernel " ^ label; runs_kernels = true; error = Some hang_error; first_report = true }
 
 (* The fault in force for the current search: [None] for the healthy control. *)
-let fault : (string -> exn) option ref = ref None
+type injected_fault = Report of (string -> exn) | Expire_wait
+
+let fault : injected_fault option ref = ref None
 
 (* The candidate the fault is aimed at: chosen at its attempt, recognized by the routine its compile
    returns (a baseline re-timing between two candidates dispatches another routine), fired at the
@@ -40,6 +42,10 @@ let target_routine : int option ref = ref None
 (* Every candidate compile's routine, by the candidate's label: a candidate may be compiled ahead of
    its attempt. *)
 let compiled : (string, int) Hashtbl.t = Hashtbl.create (module String)
+
+(* Most recent compile by routine name: candidates can share that name. At a finals preflight, this
+   is the contender just recompiled for this window, not a per-candidate map. *)
+let compiled_routines : (string, int) Hashtbl.t = Hashtbl.create (module String)
 let dispatched = ref false
 let fired : string option ref = ref None
 let poisoned : (string * exn) list ref = ref []
@@ -56,6 +62,7 @@ module Hang_driver = struct
     (match (outcome, candidate) with
     | Ok (_, routine), Some c ->
         Hashtbl.set compiled ~key:c ~data:(routine_id routine);
+        Hashtbl.set compiled_routines ~key:(routine_name routine) ~data:(routine_id routine);
         if Option.equal String.equal (Some c) !target && not !dispatched then
           target_routine := Some (routine_id routine)
     | _ -> ());
@@ -70,12 +77,11 @@ module Hang_driver = struct
   (* The tuner's timing waits are bounded (gh-ocannl-2134), so they go through [await_within]. *)
   let await_within ctx ~seconds =
     let completed = Autotune.Context_driver.await_within ctx ~seconds in
-    (match (!fault, !target, !fired) with
-    | Some make, Some label, None when !dispatched ->
+    match (!fault, !target, !fired) with
+    | Some injection, Some label, None when !dispatched -> (
         fired := Some label;
-        raise (make label)
-    | _ -> ());
-    completed
+        match injection with Report make -> raise (make label) | Expire_wait -> false)
+    | _ -> completed
 
   let failure_classifier _ctx = MF.classify_command_buffer_failure ~backend:"metal"
 
@@ -111,32 +117,43 @@ type run = {
   poisonings : (string * exn) list;
 }
 
-(* One search of [comp] through the wrapped driver on a fresh cc context. With [?raise_as], the
+(* One search of [comp] through the wrapped driver on a fresh cc context. With [?injection], the
    fault is aimed at the first candidate attempted once the baseline is timed: a seed the search
    times itself, so the search has an incumbent when it hangs. (This small search's later contenders
    are re-timed by its finals from saved forms, a path with no attempt.) A candidate whose compile
    is declined never dispatches, and the aim moves on to the next attempt. *)
-let search ?raise_as () =
-  fault := raise_as;
+let search ?injection ?finals_at ?(finals = false) () =
+  fault := injection;
   target := None;
   target_routine := None;
   Hashtbl.clear compiled;
+  Hashtbl.clear compiled_routines;
   dispatched := false;
   fired := None;
   poisoned := [];
   let report = ref None in
   let timed = ref 0 in
+  let windows = ref 0 in
   let result, record =
+    Autotune.Seam.with_value Autotune.on_candidate_preflight (fun routine_name ->
+        Option.iter finals_at ~f:(fun (before, label) ->
+            if !windows = before && Option.is_none !fired then (
+              target := Some label;
+              target_routine := Hashtbl.find compiled_routines routine_name)))
+    @@ fun () ->
     Autotune.Seam.with_value Autotune.on_candidate_timed (fun _ ~timed_so_far ->
         timed := timed_so_far)
     @@ fun () ->
     Autotune.Seam.with_value Autotune.on_candidate_attempt (fun label ->
-        if !timed >= 1 && Option.is_none !fired && not !dispatched then (
+        if (not finals) && !timed >= 1 && Option.is_none !fired && not !dispatched then (
           target := Some label;
           target_routine := Hashtbl.find compiled label))
     @@ fun () ->
     Scripted_search.scripted
-      ~measure:(fun w -> Float.of_int (10 + w.Scripted_search.ordinal))
+      ~settings:[ ("autotune_composite_playoff_width", "0"); ("autotune_finals_margin", "0.1") ]
+      ~measure:(fun w ->
+        Int.incr windows;
+        if finals then 10. else Float.of_int (10 + w.Scripted_search.ordinal))
       (fun () ->
         let ctx = Context.cpu () in
         match
@@ -163,9 +180,11 @@ let search ?raise_as () =
 
 let hang_key = SO.Backend_rejected_key ("metal", MF.gpu_hang_stage, SO.Expected)
 
-let hang_declines (r : run) =
+let declines_for key (r : run) =
   Option.value_map r.report ~default:[] ~f:(fun rep ->
-      List.filter rep.Autotune.declines ~f:(fun d -> SO.equal_rejection_key d.Autotune.key hang_key))
+      List.filter rep.Autotune.declines ~f:(fun d -> SO.equal_rejection_key d.Autotune.key key))
+
+let hang_declines = declines_for hang_key
 
 let died_at_sync_of (r : run) label =
   match Option.map r.report ~f:(fun rep -> rep.Autotune.outcome) with
@@ -183,7 +202,7 @@ let () =
   p_exists "with no fault, the search timed candidates past the baseline" healthy.measured
     ~f:(fun l -> not (String.equal l "baseline"));
   (* --- The typed hang. *)
-  let hung = search ~raise_as:typed_hang () in
+  let hung = search ~injection:(Report typed_hang) () in
   let label = fired_label hung in
   Stdio.eprintf "the hang was injected at %s (not part of the golden)\n%!" label;
   p "the hang was injected at a candidate's timing sync" (Option.is_some hung.fired_at);
@@ -205,9 +224,66 @@ let () =
   p "the hung candidate was never timed" (not (List.mem hung.measured label ~equal:String.equal));
   p "no candidate was attempted after the hung one"
     (match List.last hung.attempts with Some last -> String.equal last label | None -> false);
+  (* gh-ocannl-2135: equal readings and no composite playoff yield beam finals. The healthy control
+     locates their first window from the report, rather than guessing a seed count or confusing
+     baseline re-timings with finals. Replay the same search and fail that window's wait. *)
+  let control = search ~finals:true () in
+  let finals_timed =
+    Option.value_map control.report ~default:0 ~f:(fun r -> r.Autotune.finals_timed)
+  in
+  p "finals: the healthy control re-times at least two contenders" (finals_timed >= 4);
+  let before = List.length control.measured - finals_timed in
+  let target_label = Option.value (List.nth control.measured before) ~default:"<no finals>" in
+  let finals =
+    search ~injection:(Report typed_hang) ~finals:true ~finals_at:(before, target_label) ()
+  in
+  let finals_label = fired_label finals in
+  p "finals: the healthy control computes the untuned values"
+    (match control.result with Ok got -> Array.equal Float.equal got expected | Error _ -> false);
+  p "finals: the hang fired after that contender had a search reading"
+    (Option.is_some finals.fired_at && List.mem finals.measured finals_label ~equal:String.equal);
+  p "finals: the report ends the search at the contender's Sync"
+    (died_at_sync_of finals finals_label);
+  p "finals: the failure is in the first finals window, with none admitted"
+    (Option.exists finals.report ~f:(fun r ->
+         r.Autotune.finals_timed = 1 && r.Autotune.finals_admitted = 0));
+  p "finals: the hang is counted once, as a gpu_hang decline"
+    (match hang_declines finals with [ d ] -> d.Autotune.count = 1 | _ -> false);
+  p_exists "finals: the lineage is poisoned with the hang's rendering" finals.poisonings
+    ~f:(fun (_, exn) ->
+      match exn with
+      | Invalid_argument m -> String.is_substring m ~substring:hang_error
+      | _ -> false);
+  p "finals: the failed re-time adds no admitted reading"
+    (List.count finals.measured ~f:(String.equal finals_label) = 1);
+  (* Returning false drives the host-side wait-bound classification itself, rather than substituting
+     a backend exception for it. The same first finals window is targeted. *)
+  let expired = search ~injection:Expire_wait ~finals:true ~finals_at:(before, target_label) () in
+  let bound_key =
+    SO.Backend_rejected_key (Context.backend_name (Context.cpu ()), SO.wait_bound_stage, SO.Expected)
+  in
+  p "finals expiry: the first finals wait expired, with none admitted"
+    (Option.is_some expired.fired_at
+    && Option.exists expired.report ~f:(fun r ->
+        r.Autotune.finals_timed = 1 && r.Autotune.finals_admitted = 0));
+  p "finals expiry: the expiry is counted once under the wait-bound key"
+    (match declines_for bound_key expired with [ d ] -> d.Autotune.count = 1 | _ -> false);
+  p "finals expiry: the report ends the search at the contender's Sync"
+    (died_at_sync_of expired target_label);
+  p "finals expiry: the search raises the host-side bound's rendering"
+    (match expired.result with
+    | Error (Invalid_argument m) -> String.is_substring m ~substring:"host-side bound"
+    | Ok _ | Error _ -> false);
+  p_exists "finals expiry: the lineage is poisoned with the expiry's rendering" expired.poisonings
+    ~f:(fun (_, exn) ->
+      match exn with
+      | Invalid_argument m -> String.is_substring m ~substring:"host-side bound"
+      | _ -> false);
   (* --- The attribution control: the same report text, untyped. *)
   let untyped =
-    search ~raise_as:(fun label -> Failure (Stdlib.Printexc.to_string (typed_hang label))) ()
+    search
+      ~injection:(Report (fun label -> Failure (Stdlib.Printexc.to_string (typed_hang label))))
+      ()
   in
   let untyped_label = fired_label untyped in
   p "untyped, the injection fired too" (Option.is_some untyped.fired_at);

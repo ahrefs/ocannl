@@ -11072,6 +11072,8 @@ module Make (D : Driver) = struct
                                 D.rollback_execution c.cctx (D.routine_id c.routine);
                                 release_candidate c
                             | Outcome.Writes_may_have_occurred ->
+                                (* As in [try_spec], count the decline before escalating it. *)
+                                record_decline declines classified;
                                 D.poison_lineage c.cctx ~routine_name:(D.routine_name c.routine)
                                   (Outcome.exception_of_cause classified.cause);
                                 release_candidate c;
