@@ -342,6 +342,9 @@ module Access_fold : sig
     live : bool;
     guards : scalar_arg list;
     gated : bool;
+    arm : bool;
+        (** Under a [Where] arm: unlike a gate's, the scope bodies there run under the select's
+            condition (gh-ocannl-2145), so they stay [gated]. *)
     scope_depth : int;
     implicit : implicit;
     loops : binder list;

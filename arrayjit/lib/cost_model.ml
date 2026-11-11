@@ -148,10 +148,11 @@ let access_uncertainty ~open_placement (code : Low_level.t) =
   let dead = Hashtbl.create (module Tn) in
   let mark tbl tn = Hashtbl.set tbl ~key:tn ~data:() in
   (* [~through_scopes:false] stops at [Local_scope] bodies: the renderers hoist a scope's definition
-     out of the statement's expression, so a body under a [Where] arm or a gated operand executes
-     unconditionally and its reads are certain — only the arm's inline reads are gated
-     (gh-ocannl-637). The dead-loop and open-producer markings descend (a dead body never runs,
-     hoisted or not; an open producer's whole effect attributes to the open placement). *)
+     out of the statement's expression, so a body under a gated operand executes unconditionally and
+     its reads are certain — only the operand's inline reads are gated (gh-ocannl-637). A [Where]
+     arm's bodies run under its condition (gh-ocannl-2145), so all of its reads are gated. The
+     dead-loop and open-producer markings descend (a dead body never runs, hoisted or not; an open
+     producer's whole effect attributes to the open placement). *)
   let rec sc_reads ~into ~through_scopes (s : Low_level.scalar_t) =
     match s with
     | Low_level.Get (tn, _) -> mark into tn
@@ -211,10 +212,10 @@ let access_uncertainty ~open_placement (code : Low_level.t) =
             sc_walk c
         | Ops.Cond_and_one_arm ->
             sc_walk a;
-            (* The arms' inline reads are conditional; their nested structure (hoisted scope bodies
-               included) still walks in its own right. *)
-            gated_reads_of b;
-            gated_reads_of c;
+            (* The arms' reads are conditional, their scope bodies' included (gh-ocannl-2145); their
+               nested structure still walks in its own right. *)
+            sc_reads ~into:gated_reads b;
+            sc_reads ~into:gated_reads c;
             sc_walk b;
             sc_walk c)
     | Binop (op, (a, _), (b, _)) -> (
@@ -391,10 +392,10 @@ let op_census ~on_ops (code : Low_level.t) : int * bool * bool =
      the [Local_scope] bodies it contains, [inline] the operations of the expression itself. The
      distinction is what the renderers do with a scope: [C_syntax.pp_scalar] returns a scope's
      definition separately and the statement emits every definition BEFORE its expression, so a
-     scope body under a [Where] arm or a gated operand executes unconditionally, while the arm's
-     inline operations sit inside the [?:] / [&&] and execute only when selected. Charging both
-     arms' hoisted bodies is therefore exact, and only inline arm work can make the count a
-     guards-taken bound. *)
+     scope body under a gated operand executes unconditionally, while the operand's inline
+     operations sit inside the [?:] / [&&] and execute only when selected. A short-circuiting
+     [Where]'s arm definitions run under its condition (gh-ocannl-2145), so there both arms' work,
+     hoisted or inline, is a guards-taken bound. *)
   and sc_split (sc : Low_level.scalar_t) : int * int =
     match sc with
     | Low_level.Local_scope { body; _ } -> (0, go ~report:false ~ctx:top_ctx ~scale:1 ~env:[] body)
@@ -411,19 +412,19 @@ let op_census ~on_ops (code : Low_level.t) : int * bool * bool =
            mul+add form; the select is one.
 
            The upper walk charges every operand that is {e rendered}, which for a conditional one is
-           more than {!Ops.ternop_conditionality} says can execute: both arms' hoisted scope bodies
-           run, and both arms' inline operations are charged although only one arm's execute. Only
-           an operand no renderer emits at all — a projection's discarded one, below — may be
-           dropped. Charging both arms' inline work of a short-circuiting [?:] is an over-count
-           whenever either arm has any — equal costs notwithstanding — so a nonzero inline arm flags
-           the op count approximate (gh-ocannl-578); arms whose whole cost is hoisted keep it exact
-           (gh-ocannl-637). The floor's [Int.min] over the inline parts stays sound under the same
-           hoisting. *)
+           more than {!Ops.ternop_conditionality} says can execute: both arms are charged although
+           only one arm's execute, its scope bodies included (C_syntax runs them under the
+           condition, gh-ocannl-2145). Only an operand no renderer emits at all — a projection's
+           discarded one, below — may be dropped. Charging both arms of a short-circuiting [?:] is
+           an over-count whenever either arm has any work — equal costs notwithstanding — so a
+           nonzero arm flags the op count approximate (gh-ocannl-578). The floor takes the smaller
+           arm, hoisted bodies included. *)
         let ops = match op with Ops.FMA | Ops.Mul3 -> 2 | Ops.Where -> 1 in
         let i1, h1 = arg a1 and i2, h2 = arg a2 and i3, h3 = arg a3 in
         (match Ops.ternop_conditionality op with
         | Ops.All_three -> ()
-        | Ops.Cond_and_one_arm -> if i2 <> 0 || i3 <> 0 then flops_approx := true);
+        | Ops.Cond_and_one_arm ->
+            if i2 <> 0 || i3 <> 0 || h2 <> 0 || h3 <> 0 then flops_approx := true);
         (ops + i1 + i2 + i3, h1 + h2 + h3)
     | Binop (op, a1, a2) -> (
         match Ops.binop_conditionality op with
@@ -551,8 +552,9 @@ let floor_flops ~open_placement (code : Low_level.t) : int * bool =
     let inline, hoisted = split s in
     inline + hoisted
   (* (inline, hoisted) as in the upper walk's [sc_split]: hoisted scope bodies are certain work
-     under every short-circuiting form (the renderers emit them before the statement), so the dual
-     minimizes over the inline parts only (gh-ocannl-637). *)
+     under a gate (the renderers emit them before the statement), so the dual minimizes over the
+     inline parts only there (gh-ocannl-637); a [Where] arm's bodies run with the arm
+     (gh-ocannl-2145). *)
   and split (s : Low_level.scalar_t) : int * int =
     match s with
     | Low_level.Local_scope { body; _ } -> (0, go ~scale:1 ~env:[] body)
@@ -569,10 +571,12 @@ let floor_flops ~open_placement (code : Low_level.t) : int * bool =
         match Ops.ternop_conditionality op with
         | Ops.All_three -> (ops + i1 + i2 + i3, h1 + h2 + h3)
         | Ops.Cond_and_one_arm ->
-            (* Short-circuiting [?:] in every renderer: the condition and exactly one arm's inline
-               work execute; both arms' hoisted bodies do. *)
-            if i2 <> i3 then exact := false;
-            (ops + i1 + Int.min i2 i3, h1 + h2 + h3))
+            (* Short-circuiting [?:]: the condition and exactly one arm execute, that arm's scope
+               bodies included, which C_syntax renders under the condition (gh-ocannl-2145). A blend
+               evaluates both, so the smaller arm is the floor either way. *)
+            let t2 = i2 + h2 and t3 = i3 + h3 in
+            if t2 <> t3 then exact := false;
+            (ops + i1 + Int.min t2 t3, h1))
     | Binop (op, a1, a2) -> (
         match Ops.binop_conditionality op with
         (* The projections render only the selected operand ([C_syntax.pp_scalar]); the discarded

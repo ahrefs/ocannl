@@ -1234,9 +1234,11 @@ type 'tn access = {
       (** Under a SCALAR gate (gh-ocannl-1016): a read inside a [Where] arm or a gated operand
           ({!Ops.binop_conditionality} [Gated_second], {!Ops.ternop_conditionality}
           [Cond_and_one_arm]) — evaluated only when the gate selects it, a conditionality inside one
-          statement that [a_guarded] (the [If] statement) does not carry. A [Local_scope] body
-          clears it: scope definitions are hoisted out of the expression and execute
-          unconditionally. Always [false] for a write (statements are never gated). *)
+          statement that [a_guarded] (the [If] statement) does not carry. A [Local_scope] body under
+          a gate clears it: its definition is hoisted out of the expression and executes
+          unconditionally; one under a [Where] arm keeps it, since C_syntax renders the arm's
+          definitions under the select's condition (gh-ocannl-2145). Always [false] for a write
+          (statements are never gated). *)
   a_rmw : bool;
       (** The statement also reads [a_tn] on its right-hand side (an accumulation): the write
           carries a reduction dependence — an order-sensitive legality dimension (the determinism
@@ -1288,9 +1290,9 @@ type 'tn effect_kind =
   | Local_declare  (** A [Declare_local]: a statement-level local comes into scope. *)
   | Scope_body
       (** A [Local_scope] occurrence: its body's statements run at this position, hoisted ahead of
-          the statement whose expression holds it, and unconditionally (whatever scalar gate the
-          occurrence sits under). The body's own accesses and effects are rows too, under the path
-          this row names ({!in_scope_body}). *)
+          the statement whose expression holds it, unconditionally under a gate and under the
+          condition of a [Where] arm holding it (gh-ocannl-2145). The body's own accesses and
+          effects are rows too, under the path this row names ({!in_scope_body}). *)
   | Barrier  (** A [Workgroup_barrier]. *)
   | Staged  (** [Staged_compilation]: opaque code, whose accesses are not enumerated at all. *)
   | Mma

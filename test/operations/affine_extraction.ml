@@ -336,9 +336,10 @@ let () =
   let p_ = fresh_tn "P" [| 4 |] and q_ = fresh_tn "Q" [| 4 |] and h_ = fresh_tn "H" [| 4 |] in
   let r_ = fresh_tn "R" [| 4 |] and m_ = fresh_tn "M" [| 4 |] in
   let lc = LL.get_scope (scope_node "LC") and ls = LL.get_scope (scope_node "LS") in
+  let lg = LL.get_scope (scope_node "LG") in
   let cr = B.carry ~init:(B.get p_ [| B.fixed 0 |]) (scope_node "CR") in
   let i8 = B.sym () and i9 = B.sym () and i10 = B.sym () and i11 = B.sym () in
-  let dead = B.sym () in
+  let dead = B.sym () and i12 = B.sym () in
   let program =
     LL.unflat_lines
       [
@@ -352,8 +353,8 @@ let () =
                  (B.get h_ [| B.iter i8 |])
                  (B.get p_ [| B.iter i8 |])
                  (B.get q_ [| B.iter i8 |]) ));
-        (* 2: a scope body in a gated arm runs hoisted, ungated; a merge read in the other arm is
-           gated *)
+        (* 2: a scope body in a [Where] arm runs under the condition (gh-ocannl-2145), gated; a
+           merge read in the other arm is gated *)
         B.loop_n i9 4
           (B.set r_
              [| B.iter i9 |]
@@ -381,6 +382,16 @@ let () =
           (B.set_next cr (B.add (B.prev cr) (B.get q_ [| B.iter i11 |])));
         (* 7: a dead loop's rows carry the dead bound *)
         B.loop ~upto:(-1) dead (LL.Set_local (lc, B.c 0.));
+        (* 8: a scope body in a gated second operand runs hoisted, ungated *)
+        B.loop_n i12 4
+          (B.set r_
+             [| B.iter i12 |]
+             (B.conj
+                (B.get h_ [| B.iter i12 |])
+                (B.scope_of
+                   ~orig_indices:[| B.iter i12 |]
+                   lg
+                   (LL.Set_local (lg, B.get q_ [| B.iter i12 |])))));
       ]
   in
   let accs, effs = LL.affine_relations program in
@@ -415,7 +426,8 @@ let () =
   in
   gated_as "the Where's condition read is not gated" [ (1, h_, false) ];
   gated_as "both Where arms' reads are gated" [ (1, p_, true); (1, q_, true) ];
-  gated_as "a scope body inside a gated arm runs ungated" [ (2, p_, false) ];
+  gated_as "a scope body inside a Where arm stays gated" [ (2, p_, true) ];
+  gated_as "a scope body inside a gated operand runs ungated" [ (8, q_, false) ];
   gated_as "And's first operand is ungated and its second gated" [ (3, p_, false); (3, q_, true) ];
   let kinds_at stmt =
     List.filter_map effs ~f:(fun (e : Tn.t Aff.statement_effect) ->

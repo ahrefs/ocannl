@@ -3349,9 +3349,50 @@ let with_compiler_options ~compiler ~options ~enrich compile =
     let exn = Option.value (enrich exn ~suffix) ~default:exn in
     Stdlib.Printexc.raise_with_backtrace exn backtrace
 
-type local_def = { scope : int; reads : int list Lazy.t; doc : PPrint.document }
-(** A scope's definition, emitted ahead of the statement reading it ({!C_syntax.pp_local_defs}): the
-    local's [scope] id, the locals its body reads, and the rendered declaration and body. *)
+type guard_lit = { key : string; test : PPrint.document; holds : bool }
+(** One condition a scope definition's execution is under (gh-ocannl-2145): the rendered condition
+    [test] of a short-circuiting [Where], and whether the definition sits in its then-arm ([holds])
+    or its else-arm. [key] is [test]'s text: a condition is pure and the bodies run before it write
+    only their own locals, so two conditions spelled alike in one statement agree. *)
+
+type scope_def = {
+  reads : int list Lazy.t;  (** The locals the body reads. *)
+  decl : PPrint.document;  (** The declaration, initialized as the body needs. *)
+  zeroed_decl : PPrint.document;
+      (** The declaration initialized to zero, emitted for a definition under a condition: a
+          discarded arm's local then holds a defined value for the routine log. *)
+  body : PPrint.document;
+}
+
+type local_def = { scope : int; guard : guard_lit list; def : scope_def option }
+(** A scope's definition, emitted ahead of the statement reading it ({!C_syntax.pp_local_defs}), or
+    with [def = None] a read of the local at operand position ([Get_local]): the local's [scope] id,
+    and the conditions this occurrence is evaluated under, outermost first. A definition runs under
+    the conditions every occurrence and every read of its local shares. *)
+
+let has_definitions (defs : local_def list) = List.exists defs ~f:(fun d -> Option.is_some d.def)
+
+let common_guard (a : guard_lit list) (b : guard_lit list) =
+  let rec go acc a b =
+    match (a, b) with
+    | x :: a, y :: b when String.equal x.key y.key && Bool.equal x.holds y.holds ->
+        go (x :: acc) a b
+    | _ -> List.rev acc
+  in
+  go [] a b
+
+(* gh-ocannl-2145: [d_then] and [d_else], the entries of a short-circuiting [Where]'s arms, under
+   their condition [cond]. *)
+let guard_arms ~(cond : PPrint.document) d_then d_else =
+  if List.is_empty d_then && List.is_empty d_else then []
+  else
+    let buf = Buffer.create 64 in
+    PPrint.ToBuffer.compact buf cond;
+    let key = Buffer.contents buf in
+    let under holds =
+      List.map ~f:(fun d -> { d with guard = { key; test = cond; holds } :: d.guard })
+    in
+    under true d_then @ under false d_else
 
 module C_syntax (B : C_syntax_config) = struct
   (* The backend's renderings must implement the operand-evaluation contract that
@@ -3673,7 +3714,15 @@ module C_syntax (B : C_syntax_config) = struct
         let d1, e1 = operand ps.(0) v1 in
         let d2, e2 = operand ps.(1) v2 in
         let d3, e3 = operand ps.(2) v3 in
-        let defs = List.concat [ d1; d2; d3 ] in
+        (* gh-ocannl-2145: a short-circuiting select's arm definitions run under its condition; a
+           blend evaluates both arms, so they stay with the condition's. *)
+        let defs =
+          match op with
+          | Ops.Where when Option.is_none (blend_for prec ~cond:v1 ~arms:[ (v2, prec); (v3, prec) ])
+            ->
+              d1 @ guard_arms ~cond:e1 d2 d3
+          | _ -> List.concat [ d1; d2; d3 ]
+        in
         let expr = ternop_expr prec op ~v1 ~v2 ~v3 e1 e2 e3 in
         (defs, expr)
     | Binop (Ops.ToPowOf, (base, _), (Constant exponent, _))
@@ -3806,7 +3855,9 @@ module C_syntax (B : C_syntax_config) = struct
             let arms_prec, render = if fv v2 || fv v3 then (f, widen) else (p, sub) in
             let d2, e2 = render v2 in
             let d3, e3 = render v3 in
-            (List.concat [ d1; d2; d3 ], ternop_expr ~blend:false arms_prec op ~v1 ~v2 ~v3 e1 e2 e3)
+            (* A select at an integer precision short-circuits (gh-ocannl-2145). *)
+            ( d1 @ guard_arms ~cond:e1 d2 d3,
+              ternop_expr ~blend:false arms_prec op ~v1 ~v2 ~v3 e1 e2 e3 )
         | Follows_operands, _ when fv v1 || fv v2 || fv v3 ->
             let d1, e1 = widen v1 in
             let d2, e2 = widen v2 in
@@ -4695,21 +4746,106 @@ module C_syntax (B : C_syntax_config) = struct
      can change, and ascending ids are kept wherever they already respect it, so such a kernel is
      the only one whose text moves. A cycle needs hand-built IR, and renders as it reads: a C
      compiler's undeclared identifier. *)
+  (* gh-ocannl-2145: a definition from a short-circuiting [Where]'s arm runs under that arm's
+     condition. Each runs under the longest condition prefix its occurrences, the reads of its local
+     at operand position and (to a fixpoint) the definitions reading it share -- the weakest guard
+     each of them implies, so no read meets a local its body did not set, and a scope both arms need
+     runs unconditionally, as either arm would run it. The unconditional definitions render as they
+     always did; then the conditional ones' zero-initialized declarations, then [if]/[else] blocks
+     over their bodies, each block's own definitions ahead of its nested blocks. A body reads only
+     definitions under a prefix of its own conditions, so the order within a block suffices. *)
   let pp_local_defs (local_defs : local_def list) =
-    let sorted = List.dedup_and_sort local_defs ~compare:(fun a b -> Int.compare a.scope b.scope) in
-    let by_scope = Hashtbl.create (module Int) in
-    List.iter sorted ~f:(fun def -> Hashtbl.set by_scope ~key:def.scope ~data:def);
-    let emitted = Hash_set.create (module Int) in
-    let rec emit docs def =
-      if Hash_set.mem emitted def.scope then docs
-      else (
-        Hash_set.add emitted def.scope;
-        let siblings = List.filter_map (Lazy.force def.reads) ~f:(Hashtbl.find by_scope) in
-        def.doc :: List.fold siblings ~init:docs ~f:emit)
+    let open PPrint in
+    let defs =
+      List.filter_map local_defs ~f:(fun d -> Option.map d.def ~f:(fun s -> (d.scope, s)))
     in
-    match sorted with
-    | [ { doc; _ } ] -> doc
-    | _ -> PPrint.separate PPrint.hardline (List.rev (List.fold sorted ~init:[] ~f:emit))
+    let sorted = List.dedup_and_sort defs ~compare:(fun (a, _) (b, _) -> Int.compare a b) in
+    let by_scope = Hashtbl.create (module Int) in
+    List.iter sorted ~f:(fun (scope, def) -> Hashtbl.set by_scope ~key:scope ~data:def);
+    let guard = Hashtbl.create (module Int) in
+    List.iter local_defs ~f:(fun d ->
+        if Hashtbl.mem by_scope d.scope then
+          Hashtbl.update guard d.scope ~f:(function
+            | None -> d.guard
+            | Some g -> common_guard g d.guard));
+    let changed = ref true in
+    while !changed do
+      changed := false;
+      List.iter sorted ~f:(fun (scope, def) ->
+          let g = Hashtbl.find_exn guard scope in
+          List.iter (Lazy.force def.reads) ~f:(fun r ->
+              match Hashtbl.find guard r with
+              | Some gr when r <> scope ->
+                  let gr' = common_guard gr g in
+                  if List.length gr' < List.length gr then (
+                    Hashtbl.set guard ~key:r ~data:gr';
+                    changed := true)
+              | _ -> ()))
+    done;
+    let depth scope = List.length (Hashtbl.find_exn guard scope) in
+    (* The definitions [group], in ascending scope id except that one follows the sibling
+       definitions of [group] its body reads (gh-ocannl-1895). *)
+    let ordered group ~doc =
+      let in_group = Hash_set.of_list (module Int) (List.map group ~f:fst) in
+      let emitted = Hash_set.create (module Int) in
+      let rec emit docs (scope, def) =
+        if Hash_set.mem emitted scope then docs
+        else (
+          Hash_set.add emitted scope;
+          let siblings =
+            List.filter_map (Lazy.force def.reads) ~f:(fun r ->
+                if Hash_set.mem in_group r then
+                  Option.map (Hashtbl.find by_scope r) ~f:(fun d -> (r, d))
+                else None)
+          in
+          doc def :: List.fold siblings ~init:docs ~f:emit)
+      in
+      List.rev (List.fold group ~init:[] ~f:emit)
+    in
+    let unconditional, conditional = List.partition_tf sorted ~f:(fun (s, _) -> depth s = 0) in
+    let root =
+      match unconditional with
+      | [ (_, def) ] -> [ def.decl ^^ hardline ^^ def.body ]
+      | _ -> ordered unconditional ~doc:(fun def -> def.decl ^^ hardline ^^ def.body)
+    in
+    let block doc = lbrace ^^ nest 2 (hardline ^^ doc) ^^ hardline ^^ rbrace in
+    (* The blocks of the definitions [group], whose first [level] conditions are the enclosing
+       blocks'. *)
+    let rec blocks level group =
+      let here, deeper = List.partition_tf group ~f:(fun (s, _) -> depth s = level) in
+      let lit (s, _) = List.nth_exn (Hashtbl.find_exn guard s) level in
+      let keys =
+        List.fold deeper ~init:[] ~f:(fun keys d ->
+            let l = lit d in
+            if List.exists keys ~f:(fun (k : guard_lit) -> String.equal k.key l.key) then keys
+            else l :: keys)
+        |> List.rev
+      in
+      let nested =
+        List.map keys ~f:(fun (k : guard_lit) ->
+            let arm holds =
+              List.filter deeper ~f:(fun d ->
+                  let l = lit d in
+                  String.equal l.key k.key && Bool.equal l.holds holds)
+            in
+            match (arm true, arm false) with
+            | [], arm_else ->
+                string "if (!(" ^^ k.test ^^ string ")) " ^^ block (blocks (level + 1) arm_else)
+            | arm_then, [] ->
+                string "if (" ^^ k.test ^^ string ") " ^^ block (blocks (level + 1) arm_then)
+            | arm_then, arm_else ->
+                string "if (" ^^ k.test ^^ string ") "
+                ^^ block (blocks (level + 1) arm_then)
+                ^^ string " else "
+                ^^ block (blocks (level + 1) arm_else))
+      in
+      separate hardline (ordered here ~doc:(fun def -> def.body) @ nested)
+    in
+    let conditional_docs =
+      if List.is_empty conditional then []
+      else List.map conditional ~f:(fun (_, def) -> def.zeroed_decl) @ [ blocks 0 conditional ]
+    in
+    separate hardline (root @ conditional_docs)
 
   let pp_scope_id id = PPrint.string (scope_local_ident id)
 
@@ -7833,7 +7969,7 @@ module C_syntax (B : C_syntax_config) = struct
        the packed style the scalar participates per lane). *)
     no_written_reads ~written llsc;
     let local_defs, sdoc = (pp_scalar ctx) prec llsc in
-    if not (List.is_empty local_defs) then raise Vectorization_declined;
+    if has_definitions local_defs then raise Vectorization_declined;
     parens sdoc
   (* The [`Vec_extensions] expression renderer shared by the elementwise ([try_vectorize]) and
      reduction ([try_vectorize_reduce]) renderings. Emitted binding statements accumulate through
@@ -9053,13 +9189,16 @@ module C_syntax (B : C_syntax_config) = struct
         (record_accumulation_scope ctx) id;
         let scope_prec = (scope_prec_of ctx) id in
         let num_typ = string ((scope_decl_type ctx) id) in
+        let zero =
+          let prefix, postfix = B.convert_precision ~from:Ops.int32 ~to_:scope_prec in
+          string " = " ^^ string prefix ^^ string "0" ^^ string postfix
+        in
         let init_zero =
-          if Low_level.reads_scope_before_set id body || Utils.debug_log_from_routines () then
-            let prefix, postfix = B.convert_precision ~from:Ops.int32 ~to_:scope_prec in
-            string " = " ^^ string prefix ^^ string "0" ^^ string postfix
+          if Low_level.reads_scope_before_set id body || Utils.debug_log_from_routines () then zero
           else empty
         in
         let decl = num_typ ^^ space ^^ pp_scope_id id ^^ init_zero ^^ semi in
+        let zeroed_decl = num_typ ^^ space ^^ pp_scope_id id ^^ zero ^^ semi in
         (* A [Local_scope] body is a nested sub-computation; conservatively treat it like a loop
            body so a [Zero_out] reached through it is never mistaken for the function-scope
            first-touch that the declaration's [= {0}] covers. *)
@@ -9071,15 +9210,19 @@ module C_syntax (B : C_syntax_config) = struct
            Renderings that drop the definitions ([debug_float]'s display) or refuse them
            ([uniform_scalar]) are unaffected, and the SIMD and warp paths decline under logging. *)
         let body_doc = (pp_ll ctx) ~in_loop:true body in
-        let def_doc = decl ^^ hardline ^^ body_doc in
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
         let expr = string prefix ^^ pp_scope_id id ^^ string postfix in
-        ([ { scope = scope_id; reads = lazy (Low_level.local_reads body); doc = def_doc } ], expr)
+        let def =
+          { reads = lazy (Low_level.local_reads body); decl; zeroed_decl; body = body_doc }
+        in
+        ([ { scope = scope_id; guard = []; def = Some def } ], expr)
     | Get_local id ->
         let scope_prec = (scope_prec_of ctx) id in
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
         let expr = string prefix ^^ pp_scope_id id ^^ string postfix in
-        ([], expr)
+        (* A read of a sibling definition's local: it runs wherever this read is evaluated
+           (gh-ocannl-2145). *)
+        ([ { scope = id.scope_id; guard = []; def = None } ], expr)
     | Get_merge_buffer (source, idcs) ->
         let tn = source in
         let dims = Lazy.force tn.dims in

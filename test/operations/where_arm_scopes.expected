@@ -1,0 +1,24 @@
+was_then: the values are the closed form's: true
+was_then: every read of was_then_x sits under its condition: true
+was_else: the values are the closed form's: true
+was_else: every read of was_else_x sits under its condition: true
+was_nested: the values are the closed form's: true
+was_nested: every read of was_nested_x sits under its condition: true
+was_integer: the values are the closed form's: true
+was_integer: every read of was_integer_x sits under its condition: true
+was_sibling: the values are the closed form's: true
+was_sibling: every read of was_sibling_x sits under its condition: true
+was_cse_use: the CSE reads the arm's local outside the arm: true
+was_cse_use: the values are the closed form's: true
+was_cse_use: the reads of was_cse_use_x run unconditionally: true
+was_both_arms: the values are the closed form's: true
+was_both_arms: the reads of was_both_arms_x run unconditionally: true
+was_reader: the values are the closed form's: true
+was_reader: the reads of was_reader_x run unconditionally: true
+was_hoist_arms: no shared definition is hoisted: true
+was_hoist_arms: the values are the closed form's: true
+was_hoist_arms: every read of was_hoist_arms_x sits under its condition: true
+was_hoist_uncond: the shared definition is hoisted: true
+was_hoist_uncond: the values are the closed form's: true
+was_blend: the values are the closed form's: true
+was_blend: the reads of was_blend_x run unconditionally: true

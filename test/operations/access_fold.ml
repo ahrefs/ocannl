@@ -64,9 +64,15 @@ let () =
   let rs = reads policy (if_ (at a) (put conditional)) in
   p "guard read precedes conditional operands and hoisted scope reads"
     (same_nodes rs [ a; a; b; out ]);
-  p "scope hoisting clears operand gating but preserves statement guard"
+  (* gh-ocannl-2145: a [Where] arm's scope bodies render under its condition. *)
+  p "a scope in a Where arm stays gated and keeps the statement guard"
     (match List.nth rs 2 with
-    | Some (_, ctx) -> (not ctx.gated) && ctx.scope_depth = 1 && List.length ctx.guards = 1
+    | Some (_, ctx) -> ctx.gated && ctx.arm && ctx.scope_depth = 1 && List.length ctx.guards = 1
+    | None -> false);
+  let gated_scope = binop Ops.Relu_gate (at a) (scope (LL.Set_local (scope_id, at b))) in
+  p "scope hoisting clears a gate's operand gating"
+    (match List.nth (reads policy (put gated_scope)) 1 with
+    | Some (_, ctx) -> (not ctx.gated) && ctx.scope_depth = 1
     | None -> false);
   p "direct Where arm remains gated"
     (match List.last rs with Some (_, ctx) -> ctx.gated && ctx.scope_depth = 0 | None -> false);

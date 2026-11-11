@@ -574,6 +574,7 @@ test/operations/vec_signed_zero.ml [run by @test/operations/runtest-vec_signed_z
     "tmma_as_0__, tmma_as_0__"
     "vector_size"
     "vunif"
+test/operations/where_arm_scopes.ml [run by @test/operations/runtest-where_arm_scopes; also pins text this scan cannot name: untraced callback]
 test/operations/workgroup_memory_accounting.ml [run by @test/operations/runtest-workgroup_memory_accounting; also pins text this scan cannot name: untraced callback]
 
 == support helpers pinning emitted text for their callers ==
@@ -759,6 +760,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-uint4x32_counter_conversion
 @test/operations/runtest-uint4x32_fixed_index_parity
 @test/operations/runtest-vec_signed_zero
+@test/operations/runtest-where_arm_scopes
 @test/operations/runtest-workgroup_memory_accounting
 @test/operations/runtest-zero_out_local_decl-extension
 @test/operations/runtest-zero_out_local_decl-unoptimized
@@ -923,6 +925,7 @@ test/operations/virtual_rejection_boundary.ml [through Ll_test.execute; through 
 test/operations/virtual_shared_loop.ml [through Ll_test.execute; run by @test/operations/runtest-virtual_shared_loop]
 test/operations/virtual_uncaptured_loop.ml [through Ll_test.execute; run by @test/operations/runtest-virtual_uncaptured_loop]
 test/operations/wait_bound_declines.ml [prelowered compile; run by @test/operations/runtest-wait_bound_declines]
+test/operations/where_arm_scopes.ml [through Ll_test.execute; run by @test/operations/runtest-where_arm_scopes]
 test/operations/winograd_conv.ml [through Ll_test.optimize_and_execute; run by @test/operations/runtest-winograd_conv]
 test/operations/zero_elision.ml [through Ll_test.link; run by @test/operations/runtest-zero_elision]
 test/operations/zero_out_local_decl.ml [through Ll_test.execute; run by @test/operations/runtest-zero_out_local_decl, @test/operations/runtest-zero_out_local_decl-extension, @test/operations/runtest-zero_out_local_decl-unoptimized]
@@ -1074,6 +1077,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-virtual_shared_loop
 @test/operations/runtest-virtual_uncaptured_loop
 @test/operations/runtest-wait_bound_declines
+@test/operations/runtest-where_arm_scopes
 @test/operations/runtest-winograd_conv
 @test/operations/runtest-zero_elision
 @test/operations/runtest-zero_out_local_decl
