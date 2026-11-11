@@ -599,10 +599,11 @@ A whole-stack trace costs less than one build of the same model, and the fractio
 | too few axes for the spec | yes | application (body) | application (scheme) |
 | dimension and row variable share a name | no | application (body) | definition |
 | empty concatenation component | no | application (body) | definition |
-| concatenation component exceeds the axis | yes | closure | application (scheme) |
-| `set_dim` against a fixed width | no | application (body) | definition |
+| concatenation component exceeds the axis | yes | closure | closure |
+| trailing equality with a fixed-width tensor | yes | closure | application (scheme) |
+| `set_dim` against a fixed width | no | application (body) | application (scheme) |
 | `set_dim` twice, no `()` stage | no | application (body) | application (trace) |
-| window kernel nothing sizes | no | closure | definition |
+| window kernel nothing sizes | no | application (body) | definition |
 | undetermined concatenation components | no | closure | closure |
 | forgotten hidden dimension | no | closure | closure |
 | parameter sized by a fixed index | no | closure | closure |
@@ -613,7 +614,11 @@ The mode-independent facts are claimed:
 - every mode accepts and refuses the same programs;
 - no error surfaces later under a scheme.
 
-Three kinds of error move earlier. An argument-independent contradiction moves to the definition, or to the first application for a function without a `()` stage. So does a window kernel nothing can size, which no contradiction shows: the spec and its captures decide it. An argument-dependent error is reported at the application before the body runs, naming the function and the argument, and, when the application is evaluated inside one written in `%op` code, the file and line of the innermost such (gh-ocannl-2007). That includes a concatenation that Stage 1 alone leaves to the closure without schemes.
+Three kinds of error move earlier. An argument-independent contradiction moves to the definition, or to the first application for a function without a `()` stage. So does a window kernel nothing can size, which no contradiction shows: the spec and its captures decide it. An argument-dependent error is reported at the application before the body runs, naming the function and the argument, and, when the application is evaluated inside one written in `%op` code, the file and line of the innermost such (gh-ocannl-2007). That includes a trailing `Shape.infer_equal` constraint that inline registration leaves to the closure.
+Numeric `Shape.set_dim` claims remain pending while Stage 1 lacks a basis (gh-ocannl-2131), so an
+oversized captured concatenation component can wait until closure in both modes; a fixed-width
+contradiction can move from the definition to the application. Those programs still refuse before
+compilation.
 
 The classes that stay late all need what a trace deliberately does not run, namely the closing stages. The trace validates at Stage 1 only, because the closing stages would default the generic arguments.
 

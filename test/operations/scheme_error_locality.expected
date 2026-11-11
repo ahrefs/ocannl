@@ -5,11 +5,12 @@ residual around a wider layer | arg | application:body | application:scheme
 too few axes for the spec | arg | application:body | application:scheme
 dimension and row variable share a name | int | application:body | definition:trace
 empty concatenation component | int | application:body | definition:trace
-concatenation component exceeds the axis | arg | closure | application:scheme
+concatenation component exceeds the axis | arg | closure | closure
+trailing equality with a fixed-width tensor | arg | closure | application:scheme
 undetermined concatenation components | int | closure | closure
 forgotten hidden dimension | int | closure | closure
 parameter sized by a fixed index | int | closure | closure
-set_dim against a fixed width | int | application:body | definition:trace
+set_dim against a fixed width | int | application:body | application:scheme
 set_dim twice, no () stage | int | application:body | application:trace
 cyclic row permutation, abstract argument | arg | closure | closure
 cyclic row permutation, concrete argument | arg | accepted | accepted
@@ -21,11 +22,12 @@ residual around a wider layer | arg | application:scheme | application:scheme | 
 too few axes for the spec | arg | application:scheme | application:scheme | application:scheme
 dimension and row variable share a name | int | definition:trace | definition:trace | definition:trace
 empty concatenation component | int | definition:trace | definition:trace | definition:trace
-concatenation component exceeds the axis | arg | application:scheme | application:scheme | application:scheme
+concatenation component exceeds the axis | arg | closure | closure | closure
+trailing equality with a fixed-width tensor | arg | application:scheme | application:scheme | application:scheme
 undetermined concatenation components | int | closure | closure | closure
 forgotten hidden dimension | int | closure | closure | closure
 parameter sized by a fixed index | int | closure | closure | closure
-set_dim against a fixed width | int | definition:trace | definition:trace | definition:trace
+set_dim against a fixed width | int | application:scheme | application:scheme | application:scheme
 set_dim twice, no () stage | int | application:trace | application:trace | application:trace
 cyclic row permutation, abstract argument | arg | closure | closure | closure
 cyclic row permutation, concrete argument | arg | accepted | accepted | accepted

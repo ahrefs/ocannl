@@ -1,0 +1,53 @@
+set_dim supplies the size without replacing rgb: true
+a sized capture publishes rgb for a later equality: true
+a pending size allows a later rgb constraint: true
+live equality, sizes true/false, order forward: a later rgb basis propagates across the equality: true
+live equality, sizes true/false, order forward: later different bases conflict: true
+live equality, sizes true/false, order reversed: a later rgb basis propagates across the equality: true
+live equality, sizes true/false, order reversed: later different bases conflict: true
+live equality, sizes false/true, order forward: a later rgb basis propagates across the equality: true
+live equality, sizes false/true, order forward: later different bases conflict: true
+live equality, sizes false/true, order reversed: a later rgb basis propagates across the equality: true
+live equality, sizes false/true, order reversed: later different bases conflict: true
+live equality, sizes true/true, order forward: a later rgb basis propagates across the equality: true
+live equality, sizes true/true, order forward: later different bases conflict: true
+live equality, sizes true/true, order reversed: a later rgb basis propagates across the equality: true
+live equality, sizes true/true, order reversed: later different bases conflict: true
+source open, target unbound, argument order forward: the target is unsolved before set_equal: true
+source open, target unbound, argument order forward: set_equal carries the solved rgb dimension: true
+source open, target unbound, argument order forward: set_equal still refuses another named basis: true
+source open, target unbound, argument order reversed: the target is unsolved before set_equal: true
+source open, target unbound, argument order reversed: set_equal carries the solved rgb dimension: true
+source open, target unbound, argument order reversed: set_equal still refuses another named basis: true
+source open, target bound, argument order forward: the target is unsolved before set_equal: true
+source open, target bound, argument order forward: set_equal carries the solved rgb dimension: true
+source open, target bound, argument order forward: set_equal still refuses another named basis: true
+source open, target bound, argument order reversed: the target is unsolved before set_equal: true
+source open, target bound, argument order reversed: set_equal carries the solved rgb dimension: true
+source open, target bound, argument order reversed: set_equal still refuses another named basis: true
+source closed, target unbound, argument order forward: the target is unsolved before set_equal: true
+source closed, target unbound, argument order forward: set_equal carries the solved rgb dimension: true
+source closed, target unbound, argument order forward: set_equal still refuses another named basis: true
+source closed, target unbound, argument order reversed: the target is unsolved before set_equal: true
+source closed, target unbound, argument order reversed: set_equal carries the solved rgb dimension: true
+source closed, target unbound, argument order reversed: set_equal still refuses another named basis: true
+source closed, target bound, argument order forward: the target is unsolved before set_equal: true
+source closed, target bound, argument order forward: set_equal carries the solved rgb dimension: true
+source closed, target bound, argument order forward: set_equal still refuses another named basis: true
+source closed, target bound, argument order reversed: the target is unsolved before set_equal: true
+source closed, target bound, argument order reversed: set_equal carries the solved rgb dimension: true
+source closed, target bound, argument order reversed: set_equal still refuses another named basis: true
+set_dim still refuses another size: true
+a size-only solution acquires the equal dimension's tag: true
+set_equal rejects two solved same-sized axes with different bases: true
+the basis refusal names the reference: true
+the public symbolic setter creates a default axis: true
+a solved symbolic reference survives recapture: true
+a solved symbolic reference survives the proxy: true
+the numeric size takes the matching use-site basis: true
+the row product does not acquire rgb: true
+the eager window pair has distinct output tags: true
+set_dim closes both windows with the eager sizes and tags: true
+the numeric product and size leave no deferred constraint: true
+a size-only 1 keeps the broadcast tops implied by a two-axis product of 1: true
+set_equal refuses a closed broadcast top against a plain 1: true

@@ -18,3 +18,6 @@ biased : ..'a..|..'b..->..'c.. => ..'d..|..'e..->..'f..,'g
   ..'h..,'i ⊑ ..'c..
 no two lines share a left side: true
 a line lists several upper bounds: true
+sized : ..'a..|..'b..->'c => ..'a..|..'b..->'c
+  size('c) = 3
+the signature shows its held size of 3: true

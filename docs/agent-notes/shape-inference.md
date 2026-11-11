@@ -154,8 +154,33 @@ files.
   `publish_ref_solutions`), and a later dimension capture takes it exactly, as `carried_row` keeps a
   row's tags: a named dimension is captured again as itself, and a free one closed to
   `1_(bcast_if_1)` as that top, so a plain `1` captured afterwards is refused though one inference
-  would accept it (both pinned in `free_capture_basis.ml`). `set_dim`, `set_equal` and a row's
-  product stay `default`.
+  would accept it (both pinned in `free_capture_basis.ml`). Since gh-ocannl-2131, `set_dim` and
+  a row product make only a size claim (`Row.Dim_size`); `solved_basis = None` distinguishes it
+  from a solved dimension's `Some basis`, including `Some default`. Stage1 checks already-solved
+  axes and defers open sizes; at each solver fixpoint, ordinary constraints run first, then held
+  sizes, then window settling. Keeping sizes in an outer pass let a Stage2 window pair settle
+  before a held output size reached it (review of gh-ocannl-2131). An open size takes its matching
+  use-site basis or `default`. A size also accepts an axis whose numeric product already made it
+  `1_(bcast_if_1)`: it does not re-tag that arithmetic solution to `default`. Thus `set_dim n 1`
+  alone closes a free axis to `default`, but two open axes with total 1 can both take the broadcast
+  top before the size claim is checked (pinned in `solved_capture_basis.ml`). A dimension publication records the actual tag even
+  when the reference held its size already. `set_equal` between dimensions carries the solved
+  tag in either argument order and checks two held tags; any row in the pair keeps only the
+  product (the Row-Row arm still compares rows). Two live dimension bindings also retain their
+  `Dim_eq` after numeric forwarding: when one or both references hold only sizes, later basis
+  information must still propagate or conflict across the equality (`solved_capture_basis.ml`'s
+  left/right/both size matrix, in both argument orders). This also carries a free source's committed
+  broadcast top: equating it with a plain `1_default` now refuses, where dropping the source tag
+  used to accept it. Pins: `solved_capture_basis.ml`. A contradiction that depended on an eager
+  numeric kernel size can now defer from registration until closure; the invalid valid-3x3
+  convolution residual in `scheme_strided_residual.ml` forces its dims and still refuses before
+  compilation.
+  The symbolic analog did not reproduce: `Shape.set_sym_dim` and every other `Shape` constructor
+  mint only `default` symbols. Recapture across closure and the product-space proxy both preserve
+  these. `Row.get_sym_dim ~basis` can build a named symbol in a hand-built solver store, but no
+  public `Shape` path inserts it into a private shape or reference; carrying a symbolic tag is
+  needed when such a constructor is added. The numeric `unify_dim` different-bases diagnostic is
+  unchanged (gh-ocannl-2132).
 - `Shape.set_equal` on two row references is `Row_eq` in every solved state (gh-ocannl-1617): its
   Row-Row arm matches on `var` BEFORE the `solved_sym`/`solved_dim` arms. A row reference's
   `solved_dim` is only its product, and it is set early (by `set_dim`, or by
@@ -601,7 +626,9 @@ files.
   `nn_blocks_definitions` golden churned on solver-only changes). An intermediate that refines two
   printed variables with none refining it prints as `_ ⊑ a, b` -- a common refinement, dropped
   when a printed variable's own group witnesses it (`test/operations/scheme_printed_relations.ml`
-  is the pin, with `cross_entropy_loss` in the inventory as the library's case).
+  is the pin, with `cross_entropy_loss` in the inventory as the library's case). Numeric capture
+  setters held at Stage1 print as `size('a) = n` when the signature names their dimension
+  (gh-ocannl-2131): printing does not settle the dimension or commit a basis.
 - The results of an automatic scheme (gh-ocannl-1801, `Tensor.Scheme.traced_results`): the ppx
   cannot name a function's result type, so its tracer hands the body's value over untyped and the
   runtime finds the tensors in it by physical identity, among the tensors `add_fwd_root` saw while

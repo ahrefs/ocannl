@@ -351,13 +351,10 @@ module Delayed_ref : sig
             whose variable belongs to the reset environment. [None] when the binding at the closure
             was a dimension (a dimension and a row share only the product), or the row held a
             concatenated or affine axis over a symbolic extent. *)
-    mutable solved_basis : string; [@sexp_drop_if String.equal Row.default_basis]
-        (** The basis tag of the size [var_ref.solved_dim] holds (gh-ocannl-2033): the tag of the
-            solution the reference's dimension variable reached when it was published, such as the
-            broadcast top [1_(bcast_if_1)] a free dimension closes to, or a named tag an operand
-            gave it. A dimension binding re-emits the size with it, so a capture after the closure
-            holds the dimension itself, as [carried_row] does a row. [default] for a value [set_dim]
-            gave and for a row's product. *)
+    mutable solved_basis : string option; [@sexp_drop_if Option.is_none]
+        (** [Some basis] carries the tag of a published dimension, including [default] and the
+            broadcast top. [None] is a size-only value from [set_dim] or a row product. A capture
+            checks that size without claiming a basis; publication records the axis's actual tag. *)
     uid : int; [@equal.ignore] [@sexp_drop_if fun _ -> true]
         (** The reference's identity for the rewind's tracking; not part of its value. *)
     mutable discarded_by : string option; [@equal.ignore] [@sexp_drop_if fun _ -> true]
@@ -383,7 +380,8 @@ module Delayed_ref : sig
   val set_var : t -> [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ] -> unit
 
   val set_solved_dim : ?basis:string -> t -> int -> unit
-  (** Solves the reference to a size, of the basis tag [basis] (by default [default]). *)
+  (** Solves the reference to a size; [basis] carries a dimension's tag when known. Without it the
+      solution claims only the numeric size. *)
 
   val set_solved_sym : t -> Ir.Indexing.static_symbol -> unit
 
@@ -411,7 +409,7 @@ end = struct
     var_ref : Ir.Indexing.variable_ref;
     mutable var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
     mutable carried_row : Row.dim list option; [@sexp_drop_if Option.is_none]
-    mutable solved_basis : string; [@sexp_drop_if String.equal Row.default_basis]
+    mutable solved_basis : string option; [@sexp_drop_if Option.is_none]
     uid : int; [@equal.ignore] [@sexp_drop_if fun _ -> true]
     mutable discarded_by : string option; [@equal.ignore] [@sexp_drop_if fun _ -> true]
   }
@@ -437,7 +435,7 @@ end = struct
         var_ref = Ir.Indexing.variable_ref ref_label;
         var = `Not_set_yet;
         carried_row = None;
-        solved_basis = Row.default_basis;
+        solved_basis = None;
         uid = !ref_uid;
         discarded_by = None;
       }
@@ -473,11 +471,14 @@ end = struct
     touch_ref r.uid;
     r.var <- v
 
-  (* A solution already held is no change, so it is not a mutation; a conflicting one raises before
-     anything is written or counted. *)
-  let set_solved_dim ?(basis = Row.default_basis) r d =
+  (* A size and basis already held are no change. A conflicting size raises before anything is
+     written or counted; publishing a previously unknown basis is a mutation. *)
+  let set_solved_dim ?basis r d =
     check_live r;
-    if not ([%equal: int option] r.var_ref.solved_dim (Some d)) then (
+    if
+      (not ([%equal: int option] r.var_ref.solved_dim (Some d)))
+      || not (Option.equal String.equal r.solved_basis basis)
+    then (
       Ir.Indexing.set_solved_dim shape_writer r.var_ref d;
       r.solved_basis <- basis;
       touch_ref r.uid)
@@ -498,7 +499,7 @@ end = struct
     snap_ref : t;
     snap_var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
     snap_carried_row : Row.dim list option;
-    snap_solved_basis : string;
+    snap_solved_basis : string option;
     snap_var_ref : Ir.Indexing.variable_ref_snapshot;
   }
 
@@ -523,7 +524,7 @@ end = struct
   let snapshot_changed { snap_ref; snap_var; snap_carried_row; snap_solved_basis; snap_var_ref } =
     (not (phys_equal snap_ref.var snap_var))
     || (not (phys_equal snap_ref.carried_row snap_carried_row))
-    || (not (String.equal snap_ref.solved_basis snap_solved_basis))
+    || (not (Option.equal String.equal snap_ref.solved_basis snap_solved_basis))
     || Ir.Indexing.variable_ref_snapshot_changed snap_var_ref
 end
 
@@ -531,7 +532,7 @@ type delayed_var_ref = Delayed_ref.t = private {
   var_ref : Ir.Indexing.variable_ref;
   mutable var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
   mutable carried_row : Row.dim list option; [@sexp_drop_if Option.is_none]
-  mutable solved_basis : string; [@sexp_drop_if String.equal Row.default_basis]
+  mutable solved_basis : string option; [@sexp_drop_if Option.is_none]
   uid : int; [@equal.ignore] [@sexp_drop_if fun _ -> true]
   mutable discarded_by : string option; [@equal.ignore] [@sexp_drop_if fun _ -> true]
 }
@@ -1234,6 +1235,13 @@ let product_tie ~origin row_var dim_var =
       origin;
     }
 
+(* A number supplied by a setter or a row product claims only a size. A dimension's published
+   solution also carries its basis, and equality must keep that claim. *)
+let ref_dim_constraint ~origin var (delayed_ref : delayed_var_ref) size =
+  match delayed_ref.solved_basis with
+  | Some basis -> Row.Dim_eq { d1 = Row.Var var; d2 = Row.get_dim ~d:size ~basis (); origin }
+  | None -> Row.Dim_size { dim = Row.Var var; size; origin }
+
 (* The constraints binding [delayed_ref] to [binding] implies, given [previous_binding] and the
    reference's solution: equality with a value already solved for the reference, and a tie to the
    variable another operation bound the reference to (gh-ocannl-1545). [carried_row]: the row the
@@ -1272,14 +1280,7 @@ let binding_constraints ~for_projections ~as_input ~error_shapes ~previous_bindi
         | Some sym, _ ->
             [ Row.Dim_eq { d1 = Row.Var var; d2 = Row.get_sym_dim sym; origin = solved_origin } ]
         | None, Some solved_dim ->
-            [
-              Row.Dim_eq
-                {
-                  d1 = Row.Var var;
-                  d2 = Row.get_dim ~d:solved_dim ~basis:delayed_ref.solved_basis ();
-                  origin = solved_origin;
-                };
-            ]
+            [ ref_dim_constraint ~origin:solved_origin var delayed_ref solved_dim ]
         | None, None -> []
       in
       let tie =
@@ -3059,15 +3060,7 @@ let capture_ties_for_proxy ~spec ~dim_var_env ~row_var_env (dim_refs : delayed_v
           let held =
             match (delayed_ref.var_ref.solved_sym, delayed_ref.var_ref.solved_dim) with
             | Some sym, _ -> [ Row.Dim_eq { d1 = Row.Var var; d2 = Row.get_sym_dim sym; origin } ]
-            | None, Some d ->
-                [
-                  Row.Dim_eq
-                    {
-                      d1 = Row.Var var;
-                      d2 = Row.get_dim ~d ~basis:delayed_ref.solved_basis ();
-                      origin;
-                    };
-                ]
+            | None, Some d -> [ ref_dim_constraint ~origin var delayed_ref d ]
             | None, None -> []
           in
           let tie =
@@ -3314,10 +3307,21 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
 
 (** Sets the dimension/total-elements for a delayed variable reference. For row variables, this
     creates a [Total_elems] constraint that will be reconciled during [finish_inference]. *)
-let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
+let%track7_sexp set_ref_dim ?basis (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
   check_ref_live delayed_var_ref;
   refuse_external_in_trace ~operation:"Shape.set_dim" delayed_var_ref;
   refuse_closed_unsolved_ref ~operation:"Shape.set_dim" delayed_var_ref;
+  let basis = match delayed_var_ref.var with `Row _ -> None | `Dim _ | `Not_set_yet -> basis in
+  (match (delayed_var_ref.var_ref.solved_dim, delayed_var_ref.solved_basis, basis) with
+  | Some d, Some old_basis, Some basis when d = dim && not (String.equal old_basis basis) ->
+      raise
+      @@ Row.Shape_error
+           ( "Cannot set dimension basis for variable reference with label "
+             ^ delayed_var_ref.var_ref.ref_label,
+             [
+               Row.Dim_mismatch [ Row.get_dim ~d ~basis:old_basis (); Row.get_dim ~d:dim ~basis () ];
+             ] )
+  | _ -> ());
   match delayed_var_ref with
   | { var_ref = { solved_sym = Some _; ref_label; _ }; _ } ->
       raise
@@ -3325,36 +3329,36 @@ let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
            ( "Cannot set a concrete dimension for variable reference with label " ^ ref_label
              ^ ": already set to a symbolic dimension",
              [] )
-  | { var_ref = { solved_dim = Some dim2; _ }; _ } when dim2 = dim -> ()
-  | { var_ref = { solved_dim = Some dim2; ref_label; _ }; _ } ->
+  | { var_ref = { solved_dim = Some dim2; _ }; _ }
+    when dim2 = dim
+         && (Option.is_none basis || Option.equal String.equal delayed_var_ref.solved_basis basis)
+    ->
+      ()
+  | { var_ref = { solved_dim = Some dim2; ref_label; _ }; _ } when dim2 <> dim ->
       raise
       @@ Row.Shape_error
            ( "Cannot set dimension for variable reference with label " ^ ref_label,
              [ Row.Dim_mismatch [ Row.get_default_dim ~d:dim2 (); Row.get_default_dim ~d:dim () ] ]
            )
-  | { var_ref = { solved_dim = None; _ }; var = `Not_set_yet; _ } ->
-      Delayed_ref.set_solved_dim delayed_var_ref dim
-  | { var_ref = { solved_dim = None; _ }; var = `Dim dim_var; _ } ->
-      Delayed_ref.set_solved_dim delayed_var_ref dim;
+  | { var_ref = { solved_sym = None; _ }; var = `Not_set_yet; _ } ->
+      Delayed_ref.set_solved_dim ?basis delayed_var_ref dim
+  | { var_ref = { solved_sym = None; _ }; var = `Dim dim_var; _ } ->
+      Delayed_ref.set_solved_dim ?basis delayed_var_ref dim;
       active_constraints :=
-        Row.Dim_eq
-          {
-            d1 = Row.Var dim_var;
-            d2 = Row.get_default_dim ~d:dim ();
-            origin =
-              [
-                {
-                  lhs_name = delayed_var_ref.var_ref.ref_label;
-                  lhs_kind = `Output;
-                  rhs_name = Int.to_string dim;
-                  rhs_kind = `Output;
-                  operation = Some "Shape.set_dim Dim";
-                };
-              ];
-          }
+        ref_dim_constraint dim_var delayed_var_ref dim
+          ~origin:
+            [
+              {
+                lhs_name = delayed_var_ref.var_ref.ref_label;
+                lhs_kind = `Output;
+                rhs_name = Int.to_string dim;
+                rhs_kind = `Output;
+                operation = Some "Shape.set_dim Dim";
+              };
+            ]
         :: !active_constraints
-  | { var_ref = { solved_dim = None; _ }; var = `Row row_var; _ } ->
-      Delayed_ref.set_solved_dim delayed_var_ref dim;
+  | { var_ref = { solved_sym = None; _ }; var = `Row row_var; _ } ->
+      Delayed_ref.set_solved_dim ?basis delayed_var_ref dim;
       active_constraints :=
         Row.Rows_constr
           {
@@ -3374,6 +3378,8 @@ let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
               ];
           }
         :: !active_constraints
+
+let set_dim delayed_var_ref dim = set_ref_dim delayed_var_ref dim
 
 (** Sets a delayed variable reference to a symbolic dimension (gh-490): the referenced dim variable
     is equated with the rigid symbolic extent [Sym sym]. Mirrors {!set_dim}; row variables are not
@@ -3520,6 +3526,33 @@ let set_equal delayed_ref1 delayed_ref2 =
                 trace ));
     active_constraints := equation :: !active_constraints
   in
+  let equal_live_dims () =
+    match (delayed_ref1.var, delayed_ref2.var) with
+    | `Dim dim_var1, `Dim dim_var2
+      when not (bound_before_closure delayed_ref1 || bound_before_closure delayed_ref2) ->
+        (* Both are dimension variables - create equality constraint *)
+        active_constraints :=
+          Row.Dim_eq
+            {
+              d1 = Row.Var dim_var1;
+              d2 = Row.Var dim_var2;
+              origin =
+                [
+                  {
+                    lhs_name = delayed_ref1.var_ref.ref_label;
+                    lhs_kind = `Output;
+                    rhs_name = delayed_ref2.var_ref.ref_label;
+                    rhs_kind = `Output;
+                    operation = Some "Shape.set_equal Dim-Dim";
+                  };
+                ];
+            }
+          :: !active_constraints
+    | _ -> ()
+  in
+  let equal_basis (source : delayed_var_ref) (target : delayed_var_ref) =
+    match (source.var, target.var) with `Row _, _ | _, `Row _ -> None | _ -> source.solved_basis
+  in
   match (delayed_ref1, delayed_ref2) with
   | { var = `Row _; _ }, { var = `Row _; _ } -> row_row ()
   | { var_ref = { solved_sym = Some sym1; _ }; _ }, { var_ref = { solved_sym = Some sym2; _ }; _ }
@@ -3538,7 +3571,13 @@ let set_equal delayed_ref1 delayed_ref2 =
   | delayed_ref1, { var_ref = { solved_sym = Some sym; _ }; _ } -> set_sym_dim delayed_ref1 sym
   | { var_ref = { solved_dim = Some dim1; _ }; _ }, { var_ref = { solved_dim = Some dim2; _ }; _ }
     ->
-      if dim1 = dim2 then note_numbered ()
+      if dim1 = dim2 then (
+        (match (equal_basis delayed_ref1 delayed_ref2, equal_basis delayed_ref2 delayed_ref1) with
+        | Some basis, _ -> set_ref_dim ~basis delayed_ref2 dim1
+        | None, Some basis -> set_ref_dim ~basis delayed_ref1 dim2
+        | None, None -> ());
+        note_numbered ();
+        equal_live_dims ())
       else
         raise
         @@ Row.Shape_error
@@ -3548,12 +3587,14 @@ let set_equal delayed_ref1 delayed_ref2 =
                ] )
   | { var_ref = { solved_dim = Some dim; _ }; _ }, delayed_ref2 ->
       (* First is solved, second is not - set the second to match the first *)
-      set_dim delayed_ref2 dim;
-      note_numbered ()
+      set_ref_dim ?basis:(equal_basis delayed_ref1 delayed_ref2) delayed_ref2 dim;
+      note_numbered ();
+      equal_live_dims ()
   | delayed_ref1, { var_ref = { solved_dim = Some dim; _ }; _ } ->
       (* Second is solved, first is not - set the first to match the second *)
-      set_dim delayed_ref1 dim;
-      note_numbered ()
+      set_ref_dim ?basis:(equal_basis delayed_ref2 delayed_ref1) delayed_ref1 dim;
+      note_numbered ();
+      equal_live_dims ()
   | ( { var_ref = { solved_dim = None; ref_label = ref_label1; _ }; var = _; _ },
       { var_ref = { solved_dim = None; ref_label = ref_label2; _ }; var = `Not_set_yet; _ } )
   | ( { var_ref = { solved_dim = None; ref_label = ref_label1; _ }; var = `Not_set_yet; _ },
@@ -3563,25 +3604,7 @@ let set_equal delayed_ref1 delayed_ref2 =
            ( "set_equal: insufficient information between labels " ^ ref_label1 ^ " and "
              ^ ref_label2,
              [] )
-  | { var = `Dim dim_var1; _ }, { var = `Dim dim_var2; _ } ->
-      (* Both are dimension variables - create equality constraint *)
-      active_constraints :=
-        Row.Dim_eq
-          {
-            d1 = Row.Var dim_var1;
-            d2 = Row.Var dim_var2;
-            origin =
-              [
-                {
-                  lhs_name = delayed_ref1.var_ref.ref_label;
-                  lhs_kind = `Output;
-                  rhs_name = delayed_ref2.var_ref.ref_label;
-                  rhs_kind = `Output;
-                  operation = Some "Shape.set_equal Dim-Dim";
-                };
-              ];
-          }
-        :: !active_constraints
+  | { var = `Dim _; _ }, { var = `Dim _; _ } -> equal_live_dims ()
   | { var = `Dim dim_var; _ }, { var = `Row row_var; _ }
   | { var = `Row row_var; _ }, { var = `Dim dim_var; _ } ->
       (* One is dim var, one is row var - equality via Total_elems constraint *)
@@ -4446,7 +4469,7 @@ let publish_ref_solutions ~closure env var_refs =
          | `Dim _ -> Delayed_ref.set_carried_row delayed_ref None
          | `Not_set_yet -> ());
       match delayed_ref.var with
-      | _ when not unsolved -> ()
+      | _ when (not unsolved) && Option.is_some delayed_ref.solved_basis -> ()
       (* An input of the running shape-scheme trace (gh-ocannl-1791): its solution belongs to the
          application, and the trace's constraints already say what this one would. *)
       | _ when is_trace_input delayed_ref -> ()
@@ -5123,6 +5146,7 @@ let error_to_string_hum msg trace =
   let constraint_ (c : Row.constraint_) =
     match c with
     | Dim_eq { d1; d2; origin } -> relation dim d1 "=" d2 origin
+    | Dim_size { dim = d; size; origin } -> (dim d ^ " has size " ^ Int.to_string size, origin)
     | Row_eq { r1; r2; origin } -> relation row r1 "=" r2 origin
     | Dim_ineq { res; opnd; from_ = _; origin } -> relation dim res "⊑" opnd origin
     | Row_ineq { res; opnd; origin } -> relation row res "⊑" opnd origin
@@ -5588,6 +5612,12 @@ module Scheme = struct
     let dim_name v = name ~fixed:(dim_fixed v) (dim_key v) in
     let row_name v = ".." ^ name ~fixed:(row_fixed v) (row_key v) ^ ".." in
     let dim_str = Row.dim_to_string ~var_to_string:dim_name Row.Axis_size in
+    let subst_dim dim =
+      let row =
+        Row.{ beg_dims = []; bcast = Broadcastable; dims = [ dim ]; prov = empty_provenance }
+      in
+      List.hd_exn (Row.subst_row s.env row).dims
+    in
     (* Sequenced: names are given in reading order. *)
     let row_str (r : Row.t) =
       let beg = List.map r.beg_dims ~f:dim_str in
@@ -5667,11 +5697,13 @@ module Scheme = struct
           | D d -> (
               match Row.find_dim_entry s.env d with
               | Some (Row.Bounds_dim { glb = Some b; _ }) ->
+                  let b = subst_dim b in
                   Some ((fun () -> dim_str b), vars_of_dim b, v)
               | _ -> None)
           | R r -> (
               match Row.find_row_entry s.env r with
               | Some (Row.Bounds_row { glb = Some b; _ }) ->
+                  let b = Row.subst_row s.env b in
                   Some ((fun () -> row_str b), vars_of_row b, v)
               | _ -> None))
     in
@@ -5788,9 +5820,21 @@ module Scheme = struct
       |> List.map ~f:(fun (b, _, v) -> fun () -> [%string "%{b ()} ⊑ %{pr v}"])
     in
     (* Rendered in order: names follow the reading order. *)
+    let relations = List.map (lines @ commons @ glbs) ~f:(fun r -> "  " ^ r ()) in
+    (* A numeric setter deliberately leaves its basis open at Stage1. Show its size claim wherever
+       the signature names the dimension, without solving or retagging it. *)
+    let sizes =
+      List.filter_map s.constraints ~f:(function
+        | Row.Dim_size { dim; size; _ } ->
+            let dim = subst_dim dim in
+            if List.exists (vars_of_dim dim) ~f:(fun v -> Hashtbl.mem names (key v)) then
+              Some [%string "  size(%{dim_str dim}) = %{size#Int}"]
+            else None
+        | _ -> None)
+      |> List.dedup_and_sort ~compare:String.compare
+    in
     String.concat ~sep:"\n"
-      ((header :: List.map captures ~f:(fun r -> "  " ^ r))
-      @ List.map (lines @ commons @ glbs) ~f:(fun r -> "  " ^ r ()))
+      ((header :: List.map captures ~f:(fun r -> "  " ^ r)) @ relations @ sizes)
 
   let rows_of env (sh : shape) =
     {

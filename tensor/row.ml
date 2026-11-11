@@ -676,6 +676,7 @@ let find_row_entry env var = find_row env.row_env var
 
 type constraint_ =
   | Dim_eq of { d1 : dim; d2 : dim; origin : constraint_origin list }
+  | Dim_size of { dim : dim; size : int; origin : constraint_origin list }
   | Row_eq of { r1 : t; r2 : t; origin : constraint_origin list }
   | Dim_ineq of { res : dim; opnd : dim; from_ : Sexp.t; origin : constraint_origin list }
   | Row_ineq of { res : t; opnd : t; origin : constraint_origin list }
@@ -691,6 +692,7 @@ type constraint_ =
 let drop_constraint_origin (c : constraint_) : constraint_ =
   match c with
   | Dim_eq { d1; d2; origin = _ } -> Dim_eq { d1; d2; origin = [] }
+  | Dim_size { dim; size; origin = _ } -> Dim_size { dim; size; origin = [] }
   | Row_eq { r1; r2; origin = _ } -> Row_eq { r1; r2; origin = [] }
   | Dim_ineq { res; opnd; from_; origin = _ } -> Dim_ineq { res; opnd; from_; origin = [] }
   | Row_ineq { res; opnd; origin = _ } -> Row_ineq { res; opnd; origin = [] }
@@ -707,6 +709,8 @@ let equal_constraint_up_to_origin (c1 : constraint_) (c2 : constraint_) =
   match (c1, c2) with
   | Dim_eq { d1; d2; origin = _ }, Dim_eq { d1 = d1'; d2 = d2'; origin = _ } ->
       equal_dim d1 d1' && equal_dim d2 d2'
+  | Dim_size { dim; size; origin = _ }, Dim_size { dim = dim'; size = size'; origin = _ } ->
+      equal_dim dim dim' && Int.equal size size'
   | Row_eq { r1; r2; origin = _ }, Row_eq { r1 = r1'; r2 = r2'; origin = _ } ->
       equal_row r1 r1' && equal_row r2 r2'
   | ( Dim_ineq { res; opnd; from_; origin = _ },
@@ -721,7 +725,7 @@ let equal_constraint_up_to_origin (c1 : constraint_) (c2 : constraint_) =
   | Terminal_dim (b, d, _), Terminal_dim (b', d', _) -> Bool.equal b b' && equal_dim d d'
   | Terminal_row (b, r, _), Terminal_row (b', r', _) -> Bool.equal b b' && equal_row r r'
   | Shape_row (r, _), Shape_row (r', _) -> equal_row r r'
-  | ( ( Dim_eq _ | Row_eq _ | Dim_ineq _ | Row_ineq _ | Dim_constr _ | Rows_constr _
+  | ( ( Dim_eq _ | Dim_size _ | Row_eq _ | Dim_ineq _ | Row_ineq _ | Dim_constr _ | Rows_constr _
       | Terminal_dim _ | Terminal_row _ | Shape_row _ ),
       _ ) ->
       false
@@ -3625,8 +3629,8 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
         let origin = merge_origins eq_origin origin in
         let more_ineqs, env = unify_row ~stage origin (r1, r2) env in
         (more_ineqs @ ineqs, env)
-    | ( Dim_ineq _ | Row_ineq _ | Dim_constr _ | Rows_constr _ | Terminal_dim _ | Terminal_row _
-      | Shape_row _ ) as ineq ->
+    | ( Dim_size _ | Dim_ineq _ | Row_ineq _ | Dim_constr _ | Rows_constr _ | Terminal_dim _
+      | Terminal_row _ | Shape_row _ ) as ineq ->
         (ineq :: ineqs, env)
   in
   let unify_suffix init dims1 dims2 len =
@@ -4489,6 +4493,7 @@ let rename_row_constraint rn = function
   | Exact dims -> Exact (List.map dims ~f:(rename_dim rn))
 
 let rename_constraint rn = function
+  | Dim_size { dim; size; origin } -> Dim_size { dim = rename_dim rn dim; size; origin }
   | Dim_eq { d1; d2; origin } -> Dim_eq { d1 = rename_dim rn d1; d2 = rename_dim rn d2; origin }
   | Row_eq { r1; r2; origin } -> Row_eq { r1 = rename_row rn r1; r2 = rename_row rn r2; origin }
   | Dim_ineq { res; opnd; from_; origin } ->
@@ -4527,6 +4532,7 @@ let constraint_vars c = collect_vars ~f:(fun rn -> ignore (rename_constraint rn 
 let row_vars r = collect_vars ~f:(fun rn -> ignore (rename_row rn r : t))
 
 let add_constraint_origin o = function
+  | Dim_size r -> Dim_size { r with origin = o :: r.origin }
   | Dim_eq r -> Dim_eq { r with origin = o :: r.origin }
   | Row_eq r -> Row_eq { r with origin = o :: r.origin }
   | Dim_ineq r -> Dim_ineq { r with origin = o :: r.origin }
@@ -6048,6 +6054,7 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
   let env = { env with discardable_vars = Set.union discardable_vars env.discardable_vars } in
   let rec solve ?(unblocked_dims = dim_var_set_empty) ineqs (env : environment) :
       constraint_ list * _ =
+    let sizes, ineqs = List.partition_tf ineqs ~f:(function Dim_size _ -> true | _ -> false) in
     (* gh-ocannl-2156: a held window equation is a dependency for closing, too. Its plain extent
        waits for the window; against a fixed extent, an open kernel waits for the iterator so kernel
        inference can use it. Recompute after substitution each pass, retaining the closing
@@ -6079,6 +6086,23 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
           let _ineq : constraint_ = ineq in
           (* Substituted inside unify_dim. *)
           unify_dim ~stage origin (d1, d2) env
+      | Dim_size { dim; size; origin } -> (
+          let dim = subst_dim env dim in
+          match dim with
+          | Dim { d; _ } when d = size -> ([], env)
+          | (Var _ | Affine _ | Concat _) when not (is_stage2_up stage) -> ([ ineq ], env)
+          | _ ->
+              let basis =
+                match dim with
+                | Dim { basis; _ } -> basis
+                | Var v -> (
+                    match find_dim env.dim_env v with
+                    | Some (Bounds_dim { glb = Some (Dim { d; basis; _ }); _ }) when d = size ->
+                        basis
+                    | _ -> default_basis)
+                | Sym _ | Affine _ | Concat _ -> default_basis
+              in
+              unify_dim ~stage origin (dim, get_dim ~d:size ~basis ()) env)
       | Row_eq { r1; r2; origin } ->
           (* Substituted inside unify_row. *)
           unify_row ~stage origin (r1, r2) env
@@ -6210,26 +6234,34 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
       | None -> settle_window ~merge_pairs:true [] ineqs'
     in
     let at_fixpoint () =
-      match if is_stage2_up stage then settle () else None with
-      | Some (ineqs', env) -> solve ~unblocked_dims ineqs' env
-      | None -> (
-          (* Only at the final fixpoint, when nothing else can close, let one waiting dimension use
-             ordinary closing and retry. Prefer a kernel, but a cycle with no fixed extent has only
-             first-arm dependencies. Keep the choice even if it emits no guess. *)
-          let next_guess =
-            if not (is_stage7 stage) then None
-            else
-              match Set.min_elt deferred_kernels with
-              | Some _ as kernel -> kernel
-              | None -> Set.min_elt deferred_dims
-          in
-          match next_guess with
-          | Some dim -> solve ~unblocked_dims:(Set.add unblocked_dims dim) ineqs' env
-          | None -> (ineqs', env))
+      (* Sizes claim no basis: let ordinary equalities and bounds supply it first. But a held size
+         is still information that can solve a window, so spend it BEFORE any settling choice. Keep
+         the window-closing retry state when a size makes progress. *)
+      let sizes', sized_env = List.fold sizes ~init:([], env) ~f in
+      let sizes' = List.rev sizes' in
+      if not (List.equal equal_constraint_up_to_origin sizes' sizes) then
+        solve ~unblocked_dims (ineqs' @ sizes') sized_env
+      else
+        match if is_stage2_up stage then settle () else None with
+        | Some (ineqs', env) -> solve ~unblocked_dims (ineqs' @ sizes) env
+        | None -> (
+            (* Only at the final fixpoint, when nothing else can close, let one waiting dimension
+               use ordinary closing and retry. Prefer a kernel, but a cycle with no fixed extent has
+               only first-arm dependencies. Keep the choice even if it emits no guess. *)
+            let next_guess =
+              if not (is_stage7 stage) then None
+              else
+                match Set.min_elt deferred_kernels with
+                | Some _ as kernel -> kernel
+                | None -> Set.min_elt deferred_dims
+            in
+            match next_guess with
+            | Some dim -> solve ~unblocked_dims:(Set.add unblocked_dims dim) (ineqs' @ sizes) env
+            | None -> (ineqs' @ sizes, env))
     in
     if List.is_empty ineqs' || List.equal equal_constraint_up_to_origin ineqs' ineqs then
       at_fixpoint ()
-    else solve ~unblocked_dims ineqs' env
+    else solve ~unblocked_dims (ineqs' @ sizes) env
   in
   (* gh-ocannl-1961: what closes a draw's rows reads the environment, which mid-pass lies: a solved
      bound has left its operands' [res] while the [Row_ineq] carrying it is still in the list. So
@@ -6609,7 +6641,7 @@ let%track4_sexp get_proj_equations ?spec (inequalities : constraint_ list) proj_
                       :: List.map other_dims ~f:(fun d -> Proj_eq (to_proj d, Solved Sub_axis)))
             else assert false
         | None -> [])
-    | Dim_constr _ | Rows_constr _ -> []
+    | Dim_size _ | Dim_constr _ | Rows_constr _ -> []
   in
   List.concat_map inequalities ~f
 

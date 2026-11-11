@@ -52,6 +52,15 @@ let%op concat_exceeds () x =
   [%oc Shape.set_dim p 6];
   y
 
+(* A trailing equality is checked by the scheme before the inline body's next closure. *)
+let%op shape_equal5 () x =
+  let y = x ++ "...|... => ...|..." in
+  let reference =
+    NTDSL.init ~l:"shape_five" ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 5 ] ~f:(fun _ -> 0.) ()
+  in
+  [%oc Shape.infer_equal y.Tensor.shape reference.Tensor.shape];
+  y
+
 (* A concatenation whose components only their sum determines. *)
 let%op concat_undetermined () x = x ++ "p^o => o"
 
@@ -130,6 +139,7 @@ let catalogue wrap =
     unit_case "empty concatenation component" "int" concat_empty x23;
     unit_case "concatenation component exceeds the axis" "arg" concat_exceeds (fun () ->
         leaf ~batch:[ 2 ] ~output:[ 5 ] "x");
+    unit_case "trailing equality with a fixed-width tensor" "arg" shape_equal5 x23;
     unit_case "undetermined concatenation components" "int" concat_undetermined (fun () ->
         leaf ~batch:[ 2 ] ~output:[ 5 ] "x");
     unit_case "forgotten hidden dimension" "int" forgotten_hidden x23;
