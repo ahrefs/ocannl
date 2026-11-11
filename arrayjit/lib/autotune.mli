@@ -1571,7 +1571,9 @@ type report = {
           proposal (split-reduce sites evicted by [max_split_reduce_sites], gh-ocannl-541) and
           candidates refused as unparallelized on a GPU backend (gh-ocannl-532), which the decline
           census records so a previously-proposed site — or a candidate space the backend's
-          execution model empties — never stops being proposed silently. *)
+          execution model empties — never stops being proposed silently. Typed candidate run
+          failures also count, including a finals re-time that condemns the lineage; that contender
+          can already have contributed an admitted search reading to [candidates_timed]. *)
   baseline_declined : bool;
       (** The serial baseline's own compile was rejected with a typed cause and the search ran on
           the scheduled candidates alone (gh-ocannl-533): [baseline_ms] is then [infinity] and the
@@ -1598,10 +1600,10 @@ type report = {
           replay and search-disabled calls, which time nothing, and on a declined or undispatched
           baseline. *)
   declines : decline_summary list;
-      (** Candidate rejections aggregated by stable cause key. Their counts sum to
-          [candidates_failed]. Cache-entry replay failures are excluded: they are
-          [cache_replay_refusal]; so are the privatized presets' dropped proposals, which are
-          [privatize_drops]. *)
+      (** Candidate rejections (including typed run failures and condemning finals re-times)
+          aggregated by stable cause key. Their counts sum to [candidates_failed]. Cache-entry
+          replay failures are excluded: they are [cache_replay_refusal]; so are the privatized
+          presets' dropped proposals, which are [privatize_drops]. *)
   privatize_drops : decline_summary list;
       (** The [Privatize] proposals the privatized preset candidates ([F_preset[... priv]]) dropped
           because the op refused them ({!privatize_extension}'s drops, gh-ocannl-1438), aggregated

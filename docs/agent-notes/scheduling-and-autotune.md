@@ -1673,7 +1673,10 @@ files.
   seed. Finals re-timing also counts a `Writes_may_have_occurred` decline before poisoning and
   ending the search (gh-ocannl-2135), just as `try_spec` does. The same test locates the first beam
   finals window from a healthy search's report and injects at that window's wait on replay; its
-  decline-count claim fails without the finals accounting, while the containment claims still pass.
+  decline-count claims fail without the finals accounting, while the containment claims still pass.
+  Returning false at that wait also pins the host-side wait-bound path. This repair is scoped to
+  condemning finals re-times: classified recompile failures and contained `No_device_writes` finals
+  failures still lack census entries, a pre-existing accounting gap to address separately.
 - **Every timing wait is bounded on the host, and an expiry ends the search** (gh-ocannl-2134).
   `time_routine` waits through `D.await_within` (`Context.await_within`), never a bare `sync`:
   the bound on a wait closing `depth` launches is `max 60 s (20 x depth x reference)`
