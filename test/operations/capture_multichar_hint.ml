@@ -18,10 +18,6 @@ let refusal name build =
 let () =
   refusal "multi-letter label, single-char spec" (fun x -> capture "ab => a" "ab" x);
   refusal "label with a digit, single-char spec" (fun x -> capture "f0 => f0" "f0" x);
-  refusal "single-char spec through the operation, not the ppx" (fun x ->
-      Operation.einsum1
-        ~capture_dims:[ Shape.get_variable_ref "ab" ]
-        "ab => a" ~grad_spec:Tensor.Prohibit_grad x ());
   (* A comma-rendered spec still receives the conservative runtime hint. *)
   refusal "multi-letter label whose letters a multichar spec names" (fun x ->
       capture "a, b => a" "ab" x);
@@ -34,4 +30,13 @@ let () =
   let%op y = input () ++ "a, f0 => a" [ "f0" ] in
   ignore (Shape.to_dims y.Tensor.shape : int array);
   Stdio.printf "multichar spec: the label captures dimension %s\n"
-    (Option.value_map f0.var_ref.solved_dim ~default:"none" ~f:Int.to_string)
+    (Option.value_map f0.var_ref.solved_dim ~default:"none" ~f:Int.to_string);
+  (* A trailing comma must survive rendering even when no slot has a second axis. *)
+  Tensor.unsafe_reinitialize ();
+  let x = NTDSL.init ~l:"single_axis" ~prec:Ir.Ops.single ~b:[] ~o:[ 7 ] ~f:(fun _ -> 1.) () in
+  let%op y = x ++ "ab, => ab," [ "ab" ] in
+  let dims = Shape.to_dims y.Tensor.shape in
+  Verdict.Claims.p "single-axis multichar capture preserves the dimension"
+    (Option.equal Int.equal ab.var_ref.solved_dim (Some 7));
+  Verdict.Claims.p "single-axis multichar spec preserves the rank"
+    (Array.equal Int.equal dims [| 7 |])

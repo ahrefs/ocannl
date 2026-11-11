@@ -39,7 +39,7 @@ let test_variable_capture =
                      [["test_variable_capture"];
                      (x.Tensor.value).Ir.Tnode.label]))
         ~capture_dims:[[%ocaml.error
-                         "ppx_ocannl %op: repeated variable capture 'a'"];
+                         "ppx_ocannl: repeated variable capture 'a'"];
                       a;
                       b] "a, b => b, a" x in
     let __ocannl_scheme =

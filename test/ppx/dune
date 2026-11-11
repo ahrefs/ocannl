@@ -58,12 +58,12 @@
   (alias runtest-env_spelling_gate)
   (alias runtest-test_ppx_op-ppx)
   (alias runtest-test_ppx_name_conflict-ppx)
+  (alias runtest-test_capture_errors-ppx)
   (alias runtest-test_compose_logic_err-ppx)
   (alias runtest-test_raw_accum-ppx)
   (alias runtest-test_eval_order-ppx)
   (alias runtest-test_param_errors-ppx)
-  (alias runtest-test_nested_op-ppx)
-  (alias runtest-test_capture_errors-ppx)))
+  (alias runtest-test_nested_op-ppx)))
 
 (executable
  (name pp)
@@ -181,6 +181,23 @@
  (action
   (diff test_param_errors_expected.ml test_param_errors_actual.ml)))
 
+(rule
+ ; ocannl-backend: none -- expansion only; pp.exe links no arrayjit or configuration.
+ (targets test_capture_errors_actual.ml)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  (:pp pp.exe)
+  (:input test_capture_errors.ml))
+ (action
+  (run ./%{pp} --impl %{input} -o %{targets})))
+
+(rule
+ (alias runtest-test_capture_errors-ppx)
+ (package neural_nets_lib)
+ (action
+  (diff test_capture_errors_expected.ml test_capture_errors_actual.ml)))
+
 (test
  (name test_ppx_op)
  (package neural_nets_lib)
@@ -295,20 +312,3 @@
  (modules test_nested_op_expected)
  (deps ocannl_config)
  (libraries ocannl arrayjit.verdict))
-
-(rule
- ; ocannl-backend: none -- expansion only; pp.exe links no arrayjit or configuration.
- (targets test_capture_errors_actual.ml)
- (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate)
-  (:pp pp.exe)
-  (:input test_capture_errors.ml))
- (action
-  (run ./%{pp} --impl %{input} -o %{targets})))
-
-(rule
- (alias runtest-test_capture_errors-ppx)
- (package neural_nets_lib)
- (action
-  (diff test_capture_errors_expected.ml test_capture_errors_actual.ml)))

@@ -147,7 +147,13 @@ files.
 
 - Literal einsum operator captures are checked before substitution (gh-ocannl-2163):
   `collect_capture_labels` shares the check between `%op` and `%cd`, names the user's spec at the
-  capture literal, and offers multichar mode only for a multi-letter label in a single-char spec.
+  capture literal, and offers multichar mode for every multi-letter label in a single-char spec,
+  even if some letters are absent (unlike Shape's conservative runtime hint).
   Rows, affine over/kernel labels, concat components and result-only labels are capturable;
   coefficient identifiers and fixed indices are not. `test/ppx/test_capture_errors.ml` pins the
   errors and accepted expansions; direct operation calls retain Shape's runtime fallback.
+
+- Constant-only spec rendering keeps the parsed source if normalization would erase its multichar
+  trigger: `"ab, => ab,"` must not reach Shape as `"ab => ab"`. Dynamic coefficient or padding
+  substitutions retain an affine marker. `capture_multichar_hint` closes the documented repair's
+  shape and checks both its captured dimension and rank (gh-ocannl-2163).

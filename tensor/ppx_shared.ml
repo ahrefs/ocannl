@@ -319,7 +319,13 @@ let substitute_identifiers_in_einsum_spec ~loc str_input =
      costs nothing at run time. *)
   let concat_segments segments =
     match Option.all (List.map segments ~f:string_literal) with
-    | Some literals -> estring ~loc (String.concat literals)
+    | Some literals ->
+        let rendered = String.concat literals in
+        (* A trailing comma can be the only multichar trigger: [ab, => ab,] must not become [ab =>
+           ab]. With no runtime substitutions, the already-parsed source is safe to keep. Dynamic
+           substitutions retain a [*] or a window marker, so they cannot lose the mode. *)
+        estring ~loc
+          (if is_multichar str_input && not (is_multichar rendered) then str_input else rendered)
     | None -> [%expr String.concat ~sep:"" [%e elist ~loc segments]]
   in
   (* Try to parse as einsum spec *)
@@ -782,7 +788,7 @@ include (
                 Either.Second
                   (Ast_builder.Default.pexp_extension ~loc:expr.pexp_loc
                   @@ Location.error_extensionf ~loc:expr.pexp_loc
-                       "ppx_ocannl %%op: expected a string literal"))
+                       "ppx_ocannl: expected a string literal"))
       in
       let capture_labels, more_errors =
         List.fold_left capture_labels ~init:([], [])
@@ -790,8 +796,8 @@ include (
             if List.mem labels arg ~equal:(fun (_, a) (_, b) -> String.equal a b) then
               ( labels,
                 (Ast_builder.Default.pexp_extension ~loc
-                @@ Location.error_extensionf ~loc "ppx_ocannl %%op: repeated variable capture '%s'"
-                     label)
+                @@ Location.error_extensionf ~loc "ppx_ocannl: repeated variable capture '%s'" label
+                )
                 :: errors )
             else (arg :: labels, errors))
       in

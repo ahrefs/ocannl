@@ -20,5 +20,7 @@ let%op result_only x = x ++ "a => b" [ "b" ]
 let%op window ~stride ~dilation x = x ++ "stride*o<+dilation*k => o" [ "o"; "k" ]
 let%op segments x = x ++ "left^middle^right => middle" [ "left"; "middle"; "right" ]
 let%op multichar_ok x = x ++ "ab, => ab," [ "ab" ]
+let%cd cd_multichar_ok x = (x ++ "ab, => ab," [ "ab" ]).forward
+let%op row_only x = x ++ "..axes,.. => ..axes,.." [ "axes" ]
 let%op coefficient x = x ++ "stride*o<+k => o" [ "stride" ]
 let%op dilation_coefficient x = x ++ "o<+dilation*k => o" [ "dilation" ]

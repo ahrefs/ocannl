@@ -222,9 +222,29 @@ let multichar_ok =
         ?label:(Some
                   (List.concat
                      [["multichar_ok"]; (x.Tensor.value).Ir.Tnode.label]))
-        ~capture_dims:[ab] "ab => ab" x in
+        ~capture_dims:[ab] "ab, => ab," x in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"multichar_ok" ~arity:1
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
+    fun x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+        (fun () -> __ocannl_body x)
+let cd_multichar_ok =
+  let open! NTDSL.O in
+    fun x ->
+      let ab = Shape.get_variable_ref "ab" in
+      Tensor.consume_forward_code (einsum1 ~capture_dims:[ab] "ab, => ab," x)
+let row_only =
+  let open! TDSL.O in
+    let __ocannl_body x =
+      let axes = Shape.get_variable_ref "axes" in
+      einsum1
+        ?label:(Some
+                  (List.concat
+                     [["row_only"]; (x.Tensor.value).Ir.Tnode.label]))
+        ~capture_dims:[axes] "..axes,.. => ..axes,.." x in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"row_only" ~arity:1
         (function | x::[] -> __ocannl_body x | _ -> assert false) in
     fun x ->
       Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]

@@ -1363,9 +1363,9 @@ let bind_ref ~for_projections ~error_shapes (delayed_ref : delayed_var_ref) (bin
 
 (** The hint for a capture label a single-char spec split (gh-ocannl-2092): there every character is
     an axis of its own -- a label, or a digit's fixed index -- so a multi-letter label is never one
-    of the spec's labels. The test is on the spec's labels, not on its mode: the ppx renders every
-    literal spec in comma-separated form, so the spec reaching here reads as multichar whatever the
-    user wrote. A label with a character the spec does not hold gets no hint. *)
+    of the spec's labels. The test is on the spec's labels, not on its mode: callers can pass a
+    comma-rendered spec whose source mode is no longer known here. A label with a character the spec
+    does not hold gets no hint. The ppx checks literal captures against their source spec. *)
 let split_capture_label_hint ~spec ~dim_var_env label =
   let is_axis c =
     if Char.is_digit c then String.mem spec c else Hashtbl.mem dim_var_env (String.of_char c)
