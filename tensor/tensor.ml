@@ -693,44 +693,43 @@ let%debug7_sexp rec init_params_body ?skip (t : t) : Asgns.comp =
     | None -> Fn.id
     | Some skip -> List.filter ~f:(fun p -> not (Map.mem skip p.value))
   in
-  (* Seed literals can be embedded in the first-created parameter's initializer. Hoist them before
-     ordering: that ownership is not a dependency between the parameter draws. *)
-  let seeds = ref [] in
-  let seen_seeds = Hash_set.create (module Tn) in
-  let rec lift_seeds = function
-    | Asgns.Fetch { array; fetch_op = Constant_bits _; _ } as fetch
-      when Weak_discards.mem seed_literals array ->
-        if not (Hash_set.mem seen_seeds array) then (
-          Hash_set.add seen_seeds array;
-          seeds := fetch :: !seeds);
-        Asgns.Noop
-    | Asgns.Seq (a, b) ->
-        let a = lift_seeds a in
-        Asgns.Seq (a, lift_seeds b)
-    | Asgns.Block_comment (comment, body) -> Asgns.Block_comment (comment, lift_seeds body)
-    | leaf -> leaf
+  (* The general query treats a slice parent as an output to materialize, not a read. A copying
+     slice still needs its parent's writer before it, even when a sibling initializer owns it. *)
+  let initializer_reads asgns =
+    Asgns.fold_leaves asgns
+      ~init:(fst (Asgns.collect_nodes_guess_output asgns))
+      ~f:(fun reads -> function
+        | Fetch { fetch_op = Slice { sliced; _ }; _ } -> Set.add reads sliced | _ -> reads)
   in
   let fragments =
     List.map params ~f:(fun param ->
-        let asgns =
-          if Set.is_empty param.params then param.forward.asgns
-          else
-            let comp = init_params_body ?skip param in
-            more_embedded := Set.union !more_embedded comp.Asgns.embedded_nodes;
-            Asgns.Seq (comp.Asgns.asgns, param.forward.asgns)
-        in
-        let asgns = lift_seeds asgns in
+        if Set.is_empty param.params then param.forward.asgns
+        else
+          let comp = init_params_body ?skip param in
+          more_embedded := Set.union !more_embedded comp.Asgns.embedded_nodes;
+          Asgns.Seq (comp.Asgns.asgns, param.forward.asgns))
+  in
+  (* A seed fetch owned by the first-created parameter is not a dependency between draws. Strip the
+     literals the fragments read before ordering; [with_seed_fetches] restores them once on the
+     whole program. Unread literal outputs keep their writes. *)
+  let seed_reads =
+    List.fold fragments
+      ~init:(Set.empty (module Tn))
+      ~f:(fun reads asgns -> Set.union reads (initializer_reads asgns))
+  in
+  let rec strip_seed_fetches = function
+    | Asgns.Fetch { array; fetch_op = Constant_bits _; _ }
+      when Set.mem seed_reads array && Weak_discards.mem seed_literals array ->
+        Asgns.Noop
+    | Asgns.Seq (a, b) -> Asgns.Seq (strip_seed_fetches a, strip_seed_fetches b)
+    | Asgns.Block_comment (comment, body) -> Asgns.Block_comment (comment, strip_seed_fetches body)
+    | leaf -> leaf
+  in
+  let fragments =
+    List.map fragments ~f:(fun asgns ->
+        let asgns = strip_seed_fetches asgns in
         let provides = Asgns.collect_written asgns in
-        (* That query treats a slice parent as an output to materialize, not a read. A copying slice
-           still needs its parent's writer before it, even when the parent is embedded in a sibling
-           initializer. *)
-        let reads =
-          Asgns.fold_leaves asgns
-            ~init:(fst (Asgns.collect_nodes_guess_output asgns))
-            ~f:(fun reads -> function
-              | Fetch { fetch_op = Slice { sliced; _ }; _ } -> Set.add reads sliced | _ -> reads)
-        in
-        let needs = Set.diff reads provides in
+        let needs = Set.diff (initializer_reads asgns) provides in
         (asgns, needs, provides))
   in
   (* A parameter initializer can read another parameter or a shared intermediate whose defining code
@@ -745,7 +744,6 @@ let%debug7_sexp rec init_params_body ?skip (t : t) : Asgns.comp =
         List.fold_right fragments ~init:Asgns.Noop ~f:(fun fragment acc ->
             Asgns.Seq (fragment, acc)) )
   in
-  let asgns = List.fold !seeds ~init:asgns ~f:(fun acc seed -> Asgns.Seq (seed, acc)) in
   let embedded_nodes =
     List.fold params ~init:!more_embedded ~f:(fun acc p ->
         Set.add (Set.union acc p.forward.embedded_nodes) p.value)
