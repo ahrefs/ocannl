@@ -78,6 +78,7 @@ tensor/tensor.ml: discarded_nodes_table (ref) -- accounted; kept by rewinds: a r
 tensor/tensor.ml: seed_literals (Ephemeron) -- accounted; kept by rewinds: a weak registry of seed literals and their constant fetches: [set_random_seed] extends it, and no rewind restores it -- a discarded seed is refused by the validity check, not by its absence
 tensor/tensor.ml: id_neutral_depth (ref) -- exempt: the nesting of id-neutral windows, restored by their own finally
 tensor/tensor.ml: window_discarded_nodes (ref) -- exempt: scratch of the current id-neutral window, emptied when it ends
+tensor/tensor.ml: forward_handouts (Ephemeron) -- exempt: a weak memo of a tensor's seed-repaired forward code, derived from its immutable [forward] and the append-only seed registry, so it restores nothing
 tensor/tensor.ml: default_value_prec (ref) -- exempt: user configuration read when a tensor is built, not inference state
 tensor/tensor.ml: default_grad_prec (ref) -- exempt: user configuration read when a tensor is built, not inference state
 tensor/tensor.ml: max_sublabel_length (ref) -- exempt: user configuration of label printing, not inference state

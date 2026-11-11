@@ -220,5 +220,15 @@ files.
   draws against a caller-seeded reference and a seed-8 control across nested, unwound, replaced
   and same-integer variants (the registry keys on the seed node, which the kept graph holds, so the
   owner's liveness does not enter; a `Gc_witness` probe found the dropped owner still reachable
-  before initialization, so it is not a variant). Still unrepaired: a captured seed read only by a
-  forward graph whose code a dropped graph absorbed (`Context` refuses it as uninitialized).
+  before initialization, so it is not a variant). Forward code follows the same rule
+  (gh-ocannl-2157): `with_seed_fetches` is the one transformer, and every forward handout
+  (`consume_forward_code`, both branches, and `take_forward_code`, `%cd`'s embedding) returns it
+  applied, memoized per tensor record when it changed anything (`forward_handouts`, held weakly by
+  the record, never by its node, which outlives a dropped tensor), because repeated handouts are pinned
+  `phys_equal`. `forward_reads` reads the repaired handout, so a
+  seed is never a conflicting read: an unused draw that absorbed the seed no longer refuses its
+  readers. The invariant: a routine reading a seed writes it, whatever context it links in. It
+  re-runs the fetch in a lineage that already wrote it, and a `%cd` block embedding the owner and a
+  reader carries two fetches of one literal: both harmless, pinned by `forward_seed_fetch` against
+  a reference that reads the seed from its owner's lineage. A raw `t.forward` given to
+  `Context.compile` bypasses the handout and gets no fetch.

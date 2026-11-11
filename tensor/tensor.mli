@@ -132,7 +132,8 @@ val take_forward_code : t -> comp
     code a caller keeps is handed out with {!consume_forward_code}. This is the handout every path
     that embeds a tensor's forward code goes through -- {!consume_forward_code} and the [%cd]
     operands' embedding alike -- so that a later {!consume_forward_code} on the same tensor returns
-    the same comp. *)
+    the same comp. Like {!consume_forward_code}, it returns the code with the fetch of every random
+    seed the code reads and does not write prepended (gh-ocannl-2157). *)
 
 val with_unchanged_roots : f:(unit -> 'a) -> 'a
 (** Runs [f] and restores the forward and backprop root maps afterwards, including the consumption
@@ -320,6 +321,15 @@ val consume_forward_code : t -> comp
     equivalent to retaining the original comp; the caller still owns execution order and the
     availability of non-embedded inputs. Parameters and subtensors embedded in a tensor consumer
     remain rejected.
+
+    Random seeds are the exception to "the caller owns the availability" (gh-ocannl-2157): the comp
+    handed out carries the [Constant_bits] fetch of every seed literal ({!set_random_seed}) that
+    [t]'s code reads and does not write -- a seed whose code another graph absorbed: a sibling
+    compiled into another routine, an unused draw, under the current, a scoped or a replaced
+    singleton -- and embeds it. So a routine reading a seed writes it, in whichever context it is
+    compiled, and a seed is never a conflicting read. A seed literal is immutable and draws derive
+    their counters from node ids and offsets, so the replayed fetch never changes a draw. A raw
+    [t.forward] passed to [Context.compile] bypasses the handout and gets no fetch.
 
     The conflicting-roots check carries correctness, not just an early diagnosis (gh-ocannl-1741):
     no lineage check backs it, since a computation's [requires] names backprop fragments only, and
@@ -766,10 +776,9 @@ val with_saved_random_seed : (unit -> 'a) -> 'a
     owning that seed would, even when the seed's own code was absorbed by another graph (a discarded
     draw) and another singleton has been restored since. The same holds after a plain
     {!set_random_seed} replaced the singleton. A seed literal is immutable, so replaying it replays
-    no random stream: draws derive their counters from node ids and offsets. What is not repaired: a
-    captured seed read only by a {e forward} graph whose code another graph absorbed is still an
-    uninitialized input there ([Context] refuses it), and a seed a rewind discarded is refused as
-    discarded. *)
+    no random stream: draws derive their counters from node ids and offsets. A {e forward} graph
+    reading such a seed is handed its fetch the same way ({!consume_forward_code}, gh-ocannl-2157).
+    A seed a rewind discarded is refused as discarded. *)
 
 (** {2 Printing.} *)
 
