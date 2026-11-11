@@ -505,7 +505,7 @@ UNITS=(
 #
 # cc-oracle-widen (gh-ocannl-1964): `virtual_inliner_oracle --widen` on cc, through its
 # `@test/operations/slow-virtual_inliner_oracle-widen` alias alone -- the inliner oracle's full cross
-# of every write with every read on every shape (9 million programs, 10 to 16 minutes on one core),
+# of every write with every read on every shape (about 9.3 million programs with nested sources),
 # where the default run, the one `dune runtest` and CI hold, thins the large shapes to fit a test's
 # budget. It is the only run crossing every pair on those shapes, and the oracle's first run found a
 # real silent wrong value, so it runs daily rather than on Sunday's --slow alone. Last in the table:

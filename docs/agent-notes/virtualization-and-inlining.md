@@ -469,7 +469,7 @@ files.
   non-vacuous, and a compiled sample holds the interpreter to a backend. Add a form to `coord_forms`
   or a step shape to `enumerate`, not a row, when a new inliner path appears; a stderr `FINDING` names
   a program, and `--only` on the built executable prints its code. The default run thins the large
-  shapes to fit a test's budget; `--widen` is the full cross (9 million programs, 10 to 16 minutes on one core),
+  shapes to fit a test's budget; `--widen` is the full cross (about 9.3 million programs),
   on its own alias `@test/operations/slow-virtual_inliner_oracle-widen`, which the daily sweep's
   `cc-oracle-widen` unit builds and `tools/test-run.sh affected` names to a change reaching the
   inliner — run it before pushing such a change. Its first run found
@@ -477,6 +477,24 @@ files.
   last element, so a side effect in its predicate runs backwards): both sides reversed alike, which
   the pairwise solving could not see, while `same_unit_cell` read a wide coordinate at a unit axis
   (`row_trailing_sub_axis_write`).
+  The `src=reduce` family (gh-ocannl-2146) makes the complex value's source a virtual
+  two-term reduction of a materialized `[4; 4; 2]` input, discriminating along all three axes;
+  replay computes it independently and the materialized twin computes both producers. It crosses
+  core writes with every read, with and without zero, in all three standings. Every accepted
+  nested program must keep `src` virtual and leave no read of it, and each standing must retain
+  at least 100 programs with scopes in `Where` arms. Eight of the 32 compiled anchors come
+  specifically from those programs; the ordinary families share the other 24. The census and
+  correctness-run durations before and after the extension are recorded in staging#1924.
+  To repeat its negative control, disable the call to `guard_hoisted` in
+  `instantiate_computations`' call-site condition while retaining the helper definitions (removing
+  the call entirely leaves them unused, a fatal warning). The expanded table then reports about
+  2.9 thousand strict address faults, all in `src=reduce`, across axes/axes, axes/flat, axes/trail,
+  flat/axes, flat/flat and flat/trail layout pairs in every standing. One reproducible descriptor
+  in every standing is `2x2 src=reduce
+  P0=store:axes[t;s]{s:1..1,t:1..1}:src R0=flat[_;u+1]{u:0..2} Z;P0;R0`:
+  the discarded arm's scope reads offset -6 of the 32-cell input. These are the generated
+  guarded-arm scopes for the renderer work in gh-ocannl-2145; `--only` selects descriptors for
+  inspection without changing the grammar.
 - **Where a virtualization candidate is refused is readable off its placement PROVENANCE, and four
   phases write into the same table** (gh-ocannl-658, pinned row by row in
   `test/operations/virtual_rejection_boundary.ml`): `decide_placements` applies the heuristic caps

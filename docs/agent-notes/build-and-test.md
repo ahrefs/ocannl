@@ -4999,7 +4999,7 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   remaining uncollected at the backprop hand-back gate.
   `cc-oracle-widen` (gh-ocannl-1964) builds one alias on cc,
   `@test/operations/slow-virtual_inliner_oracle-widen`: the inliner oracle's full cross of every
-  write with every read on every shape (9 million programs, 10 to 16 minutes on one core), which
+  write with every read on every shape (about 9.3 million programs with the nested-source family), which
   the default run `dune runtest` and CI hold thins on the large shapes. That cross is the only run
   holding every pair there to the semantics, and the oracle's first run found a silent wrong value,
   so it runs daily; the alias is a `slow-` member, so `tools/test-run.sh affected` names it to a

@@ -25,8 +25,10 @@
    The virtual arm answers for faults a compiled run would swallow, too: [Interp_fault] is a
    finding. Both arms evaluate under [~strict:true], so a scope the code hoists out of a discarded
    [Where] arm is held to its node's bounds as well (gh-ocannl-2077; [strict_probe_controls] pin the
-   probe, [virtual_rejection_boundary]'s [row_guarded_scope_read] the inliner carrying its own guard
-   into such a scope).
+   probe; [virtual_rejection_boundary]'s [row_guarded_scope_read] pins the inliner's arm guard). The
+   [src=reduce] family makes [src] itself a virtual two-term reduction over a materialized input:
+   scopes then sit inside the replay's guarded arms throughout the table, including out-of-range
+   substitutions the inliner must protect with [guard_hoisted].
 
    Tier B is the anchor. An interpreter agreeing only with itself would prove nothing, so a sample
    across the outcome buckets also compiles and runs on the selected backend, in both arms, against
@@ -36,9 +38,9 @@
    programs whose descriptor contains it and checks nothing, for a finding printed on stderr;
    [--widen] lifts the pools below, for someone changing the inliner. Both are for a direct run of
    the built executable from [_build/default/test/operations], which finds [ocannl_config] there;
-   [--widen] also has an alias of its own, [@test/operations/slow-virtual_inliner_oracle-widen] (10
-   to 16 minutes on one core), which the daily sweep's [cc-oracle-widen] unit builds
-   (tools/sweep.sh) and [tools/test-run.sh affected] names to a change reaching the inliner. *)
+   [--widen] also has an alias of its own, [@test/operations/slow-virtual_inliner_oracle-widen],
+   which the daily sweep's [cc-oracle-widen] unit builds (tools/sweep.sh) and [tools/test-run.sh
+   affected] names to a change reaching the inliner. *)
 
 open Base
 open Ll_test
@@ -72,6 +74,7 @@ type program = {
   read_accesses : access array;
   steps : step list;
   standing : standing;
+  nested_src : bool;
 }
 
 let kind_name = function Store -> "store" | Accumulate -> "accumulate" | Reduce -> "reduce"
@@ -119,7 +122,9 @@ let show_program prog =
     |> List.mapi ~f:(fun i r -> Printf.sprintf "R%d=%s" i (show_access "uv" r))
   in
   String.concat ~sep:" "
-    ((standing_name prog.standing :: dims :: comps)
+    (standing_name prog.standing :: dims
+     :: (if prog.nested_src then "src=reduce" else "src=input")
+     :: comps
     @ reads
     @ [ String.concat ~sep:";" (List.map prog.steps ~f:show_step) ])
 
@@ -250,6 +255,7 @@ let accesses ~launch dims =
 type built = {
   x : Ir.Tnode.t;
   src : Ir.Tnode.t;
+  inputs : (Ir.Tnode.t * float array) list;
   outs : Ir.Tnode.t array;
   routines : LL.t list;
   static_indices : Idx.static_symbol list;
@@ -259,6 +265,19 @@ type built = {
 
 let src_dims = [| 4; 4 |]
 let src_cells = Array.init 16 ~f:(fun i -> 5000. +. (7. *. Float.of_int i))
+
+(* Distinct along all three producer axes, with a two-term reduction exact in f32. *)
+let src_input_cells = Array.init 32 ~f:(fun i -> Float.of_int (1 + (3 * i)))
+
+let source_cells prog =
+  if prog.nested_src then
+    Array.init 16 ~f:(fun i ->
+        let sum = ref 0. in
+        for k = 0 to 1 do
+          sum := !sum +. src_input_cells.((2 * i) + k)
+        done;
+        !sum)
+  else src_cells
 
 let entries prog =
   Array.init (Array.fold prog.dims ~init:1 ~f:( * )) ~f:(fun i -> -.(100. +. Float.of_int i))
@@ -278,27 +297,28 @@ let consumer_base = 20000.
 
 (* Values identify the component, every symbol of its iteration, and stay small integers: exact in
    the single precision Tier B stores them at, off the entries (negative) and the sentinel. *)
-let write_value ~comp_i env ~k ~used c =
+let write_value ~src_values ~comp_i env ~k ~used c =
   let base = Float.of_int (1 + (100 * comp_i)) in
   let at slot = if List.mem used slot ~equal:Int.equal then env.(slot) else 0 in
-  (if c.complex then src_cells.((4 * at 0) + at 1) else Float.of_int ((10 * at 0) + at 1))
+  (if c.complex then src_values.((4 * at 0) + at 1) else Float.of_int ((10 * at 0) + at 1))
   +. base
   +. (1000. *. Float.of_int k)
 
 (* The reference: the program's meaning, by its descriptor. *)
 let replay prog =
-  let cells = entries prog in
+  let cells = entries prog and src_values = source_cells prog in
   let outs = Array.map prog.read_accesses ~f:(fun a -> blank (out_len a)) in
   let apply_write comp_i c =
     let used = slots_of c.write.pos in
     let at env = cell_of ~dims:prog.dims c.write.pos env in
     iter_box c.write.ranges ~f:(fun env ->
         match c.kind with
-        | Store -> cells.(at env) <- write_value ~comp_i env ~k:0 ~used c
-        | Accumulate -> cells.(at env) <- cells.(at env) +. write_value ~comp_i env ~k:0 ~used c
+        | Store -> cells.(at env) <- write_value ~src_values ~comp_i env ~k:0 ~used c
+        | Accumulate ->
+            cells.(at env) <- cells.(at env) +. write_value ~src_values ~comp_i env ~k:0 ~used c
         | Reduce ->
             for k = 0 to 1 do
-              cells.(at env) <- cells.(at env) +. write_value ~comp_i env ~k ~used c
+              cells.(at env) <- cells.(at env) +. write_value ~src_values ~comp_i env ~k ~used c
             done)
   in
   let apply_read i a =
@@ -314,9 +334,27 @@ let replay prog =
     | Read i -> apply_read i prog.read_accesses.(i));
   outs
 
-let build prog ~declare =
+let build ?(materialized_src = false) prog ~declare =
   let x = mk ~dims:prog.dims "x" and src = mk ~dims:src_dims "src" in
-  materialize src;
+  let inputs, source =
+    if prog.nested_src then (
+      if materialized_src then materialize src else virtualize src;
+      let input = mk ~dims:[| 4; 4; 2 |] "src_input" in
+      materialize input;
+      let i = sym () and j = sym () and k = sym () in
+      let idcs = [| iter i; iter j |] in
+      ( [ (input, src_input_cells) ],
+        loop_n i 4
+          (loop_n j 4
+             (seq
+                (set src idcs (c 0.))
+                (loop_n k 2
+                   (set src idcs (add (get src idcs) (get input [| iter i; iter j; iter k |]))))))
+      ))
+    else (
+      materialize src;
+      ([ (src, src_cells) ], LL.Noop))
+  in
   declare x;
   let static = ref None in
   let static_of k =
@@ -397,10 +435,14 @@ let build prog ~declare =
         let before, after = List.split_while prog.steps ~f:(Fn.non is_read) in
         [ chain before; chain after ]
   in
+  let routines =
+    match routines with [] -> assert false | first :: rest -> seq source first :: rest
+  in
   match !static with
-  | None -> { x; src; outs; routines; static_indices = []; bindings = Idx.Empty; launch = [] }
+  | None ->
+      { x; src; inputs; outs; routines; static_indices = []; bindings = Idx.Empty; launch = [] }
   | Some (s, k, bindings) ->
-      { x; src; outs; routines; static_indices = [ s ]; bindings; launch = [ (s, k) ] }
+      { x; src; inputs; outs; routines; static_indices = [ s ]; bindings; launch = [ (s, k) ] }
 
 (* === Running both arms === *)
 
@@ -412,9 +454,9 @@ let optimize_routines ?materialized b =
 let evaluate prog b (os : LL.optimized list) =
   let memory =
     interp_memory
-      ((b.x, entries prog)
-      :: (b.src, src_cells)
-      :: List.mapi (Array.to_list b.outs) ~f:(fun i out ->
+      (((b.x, entries prog) :: b.inputs)
+      @ (if prog.nested_src then [ (b.src, blank 16) ] else [])
+      @ List.mapi (Array.to_list b.outs) ~f:(fun i out ->
           (out, blank (out_len prog.read_accesses.(i)))))
   in
   List.iter os ~f:(fun o -> interpret ~strict:true ~launch:b.launch memory o.LL.llc);
@@ -448,6 +490,7 @@ let recognized_refusals =
 let census = Hashtbl.create (module String)
 let finding_count = ref 0
 let programs_run = ref 0
+let guarded_scope_programs = Hashtbl.create (module String)
 let finding_classes = Hashtbl.create (module String)
 
 let finding prog reason =
@@ -458,6 +501,7 @@ let finding prog reason =
       @@ Array.to_list (Array.map prog.comps ~f:(fun c -> c.write.layout ^ ":" ^ kind_name c.kind))
       )
     ^ "/" ^ prog.read_accesses.(0).layout
+    ^ if prog.nested_src then " src=reduce" else ""
   in
   Hashtbl.incr finding_classes cls;
   if Hashtbl.find_exn finding_classes cls <= 2 then
@@ -466,10 +510,30 @@ let finding prog reason =
 let family prog =
   Printf.sprintf "comps=%d %s %s" (Array.length prog.comps) (kind_name prog.comps.(0).kind)
     (standing_name prog.standing)
+  ^ if prog.nested_src then " src=reduce" else ""
 
 (* Per bucket, the first program that fell in it: the candidates for Tier B. A program of a family
    the compiled leg cannot seed (a two-routine one) is not one. *)
 let anchors = Hashtbl.create (module String)
+let guarded_anchors = Hashtbl.create (module String)
+
+let has_guarded_scope os =
+  List.exists os ~f:(fun o ->
+      let found = ref false in
+      walk o.LL.llc ~on_scalar:(function
+        | LL.Ternop (Ops.Where, _, (a, _), (b, _)) ->
+            List.iter [ a; b ] ~f:(fun arm -> walk_scalar arm ~on_scope:(fun _ -> found := true))
+        | _ -> ());
+      !found)
+
+let anchor_key ?outcome prog =
+  let layouts = prog.comps.(0).write.layout ^ "/" ^ prog.read_accesses.(0).layout in
+  String.concat ~sep:" " ([ family prog ] @ Option.to_list outcome @ [ layouts ])
+
+let sorted_values tbl =
+  Hashtbl.to_alist tbl
+  |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
+  |> List.map ~f:snd
 
 let check_program prog =
   let want = replay prog in
@@ -478,12 +542,8 @@ let check_program prog =
     match prog.standing with
     | Inherited -> ()
     | Undecided | Declared ->
-        let layouts = prog.comps.(0).write.layout ^ "/" ^ prog.read_accesses.(0).layout in
         ignore
-          (Hashtbl.add anchors
-             ~key:(String.concat ~sep:" " [ standing_name prog.standing; outcome; layouts ])
-             ~data:prog
-            : [ `Ok | `Duplicate ])
+          (Hashtbl.add anchors ~key:(anchor_key ~outcome prog) ~data:prog : [ `Ok | `Duplicate ])
   in
   let judge label thunk =
     match thunk () with
@@ -495,7 +555,21 @@ let check_program prog =
     | exception Interp_fault msg -> finding prog (label ^ " faulted: " ^ msg)
     | exception e -> finding prog (label ^ " raised: " ^ Exn.to_string e)
   in
+  let note_guarded_scope os =
+    if prog.nested_src && has_guarded_scope os then (
+      Hashtbl.incr guarded_scope_programs (family prog);
+      match prog.standing with
+      | Inherited -> ()
+      | Undecided | Declared ->
+          ignore
+            (Hashtbl.add guarded_anchors ~key:(anchor_key prog) ~data:prog : [ `Ok | `Duplicate ]))
+  in
   let no_read b os =
+    if prog.nested_src then (
+      if not (known_virtual (List.last_exn os) b.src) then
+        finding prog "the declared virtual source lost its placement";
+      if List.exists os ~f:(fun o -> count_get o b.src > 0) then
+        finding prog "the declared virtual source left a read");
     if known_virtual (List.last_exn os) b.x && List.exists os ~f:(fun o -> count_get o b.x > 0) then
       finding prog "a virtual node left a read"
   in
@@ -509,11 +583,15 @@ let check_program prog =
       | os ->
           tally (outcome_of b os);
           no_read b os;
+          note_guarded_scope os;
           judge "virtual arm" (fun () -> evaluate prog b os);
           judge "materialized arm" (fun () ->
-              evaluate prog b (optimize_routines ~materialized:[ b.x ] b)))
+              if prog.nested_src then
+                let twin = build ~materialized_src:true prog ~declare:materialize in
+                evaluate prog twin (optimize_routines twin)
+              else evaluate prog b (optimize_routines ~materialized:[ b.x ] b)))
   | Declared | Inherited -> (
-      let twin = build prog ~declare:materialize in
+      let twin = build ~materialized_src:true prog ~declare:materialize in
       judge "materialized twin" (fun () -> evaluate prog twin (optimize_routines twin));
       let b =
         build prog ~declare:(match prog.standing with Declared -> virtualize | _ -> ignore)
@@ -534,6 +612,7 @@ let check_program prog =
       | os ->
           tally (outcome_of b os);
           no_read b os;
+          note_guarded_scope os;
           judge "virtual arm" (fun () -> evaluate prog b os))
 
 (* [--only <substring>]: print the raw and optimized code of the programs whose descriptor contains
@@ -618,11 +697,11 @@ let core ~dims xs =
 let widen = Array.mem (Sys.get_argv ()) "--widen" ~equal:String.equal
 let thinned xs = if widen then xs else List.filteri xs ~f:(fun i _ -> i % 3 = 0)
 
-let family_runs ~dims ~comps ~reads ~steps ~standings =
+let family_runs ?(nested_src = false) ~dims ~comps ~reads ~steps ~standings () =
   List.iter reads ~f:(fun read_accesses ->
       List.iter steps ~f:(fun steps ->
           List.iter standings ~f:(fun standing ->
-              check { dims; comps; read_accesses; steps; standing })))
+              check { dims; comps; read_accesses; steps; standing; nested_src })))
 
 let stores write = { write; kind = Store; complex = false }
 let one_read reads = List.map reads ~f:(fun r -> [| r |])
@@ -634,7 +713,7 @@ let enumerate dims =
   and reads = accesses ~launch:true dims in
   let core_writes = dead_write dims :: thinned (core ~dims writes)
   and core_reads = thinned (core ~dims reads) in
-  let run ~comps ~reads ~steps ~standings = family_runs ~dims ~comps ~reads ~steps ~standings in
+  let run ~comps ~reads ~steps ~standings = family_runs ~dims ~comps ~reads ~steps ~standings () in
   (* One stored component. *)
   if widen || List.length writes * List.length reads <= 20_000 then
     List.iter writes ~f:(fun w ->
@@ -663,6 +742,13 @@ let enumerate dims =
         ~f:(fun comp ->
           run ~comps:[| comp |] ~reads:(one_read core_reads) ~steps:one_component
             ~standings:all_standings));
+  (* Nested virtual reduction: the same position/layout pools, not isolated boundary rows. Replay
+     computes [src]; materialized twins compute both producers. Keeping this cross on the core
+     writes bounds its cost while all reads retain offsets, reversals and launch indices. *)
+  List.iter core_writes ~f:(fun write ->
+      family_runs ~nested_src:true ~dims
+        ~comps:[| { write; kind = Store; complex = true } |]
+        ~reads:(one_read reads) ~steps:one_component ~standings:all_standings ());
   (* Reading twice, ahead of the write, around a later zero. *)
   List.iter core_writes ~f:(fun w ->
       run
@@ -713,7 +799,14 @@ let self_controls () =
     { layout = "axes"; pos = [| sweep |]; extents = [| 3 |]; ranges = [ (0, ranges) ] }
   in
   let prog ~comps ~steps =
-    { dims = [| 3 |]; comps; read_accesses = [| over (0, 2) |]; steps; standing = Undecided }
+    {
+      dims = [| 3 |];
+      comps;
+      read_accesses = [| over (0, 2) |];
+      steps;
+      standing = Undecided;
+      nested_src = false;
+    }
   in
   let zeroed = prog ~comps:[| stores (over (0, 1)) |] ~steps:[ Zero; Write 0; Read 0 ] in
   p "self-control: a dropped zero is seen"
@@ -806,7 +899,7 @@ let run_anchor i prog =
   let compiled ~name b o ~seed =
     let values =
       execute ~name ~bindings:b.bindings ~launch:b.launch o
-        ~seed:((b.src, src_cells) :: (seed @ seed_outs b))
+        ~seed:(b.inputs @ seed @ seed_outs b)
         ~read:(Array.to_list b.outs)
     in
     Array.of_list values
@@ -816,7 +909,7 @@ let run_anchor i prog =
   in
   let matches got = Array.for_all2_exn got want ~f:(fun a b -> close a b) in
   let twin =
-    let b = build prog ~declare:materialize in
+    let b = build ~materialized_src:true prog ~declare:materialize in
     compiled ~name:(Printf.sprintf "vio_m%d" i) b (optimized b) ~seed:[ (b.x, entries prog) ]
   in
   let refused, virtual_arm =
@@ -830,14 +923,15 @@ let run_anchor i prog =
   matches twin && (refused || matches virtual_arm)
 
 let tier_b () =
-  let candidates =
-    Hashtbl.to_alist anchors
-    |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
-    |> List.map ~f:snd
+  let candidates = sorted_values anchors and nested = sorted_values guarded_anchors in
+  let ordinary = List.filter candidates ~f:(fun p -> not p.nested_src) in
+  let sample limit xs =
+    let step = Int.max 1 (List.length xs / limit) in
+    List.take (List.filteri xs ~f:(fun i _ -> i % step = 0)) limit
   in
-  let step = Int.max 1 (List.length candidates / anchor_limit) in
-  let picked = List.filteri candidates ~f:(fun i _ -> i % step = 0) in
-  let picked = List.take picked anchor_limit in
+  p "compiled anchors include eight nested producers with guarded-arm scopes"
+    (List.length (sample 8 nested) = 8);
+  let picked = sample 8 nested @ sample (anchor_limit - 8) ordinary in
   Stdio.eprintf "Tier B: %d of %d buckets, on backend %s (not part of the golden)\n%!"
     (List.length picked) (List.length candidates)
     (Context.backend_name (Lazy.force base_ctx));
@@ -874,7 +968,8 @@ let () =
           (String.concat ~sep:" " (List.map rows ~f:snd)));
     let total prefix substring =
       Hashtbl.fold census ~init:0 ~f:(fun ~key ~data acc ->
-          if String.is_prefix key ~prefix && String.is_substring key ~substring then acc + data
+          if String.is_prefix key ~prefix:(prefix ^ " | ") && String.is_substring key ~substring
+          then acc + data
           else acc)
     in
     List.iter
@@ -887,9 +982,18 @@ let () =
         "comps=2 store inherited";
         "comps=1 accumulate undecided";
         "comps=1 reduce undecided";
+        "comps=1 store undecided src=reduce";
+        "comps=1 store declared src=reduce";
+        "comps=1 store inherited src=reduce";
       ] ~f:(fun fam ->
         pf "%s: some program inlined" fam (total fam "| inlined" >= 100);
         pf "%s: some program inlined under a guard" fam (total fam "| inlined-guarded" >= 100));
+    List.iter [ Undecided; Declared; Inherited ] ~f:(fun standing ->
+        let fam = "comps=1 store " ^ standing_name standing ^ " src=reduce" in
+        pf "%s: some program has a scope in a guarded arm" fam
+          (Option.value (Hashtbl.find guarded_scope_programs fam) ~default:0 >= 100));
+    Hashtbl.iteri finding_classes ~f:(fun ~key ~data ->
+        Stdio.eprintf "findings %s: %d (not part of the golden)\n%!" key data);
     p "every program kept to the semantics" (!programs_run >= 100_000 && !finding_count = 0);
     case "self-controls" self_controls;
     case "strict probe" strict_probe_controls;
