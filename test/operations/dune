@@ -15155,6 +15155,17 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-2147: integer narrowing must not double-round through f32 or f64.
+
+(test
+ (name integer_bf16_narrowing)
+ (package neural_nets_lib)
+ (modules integer_bf16_narrowing)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries base ocannl arrayjit.verdict ll_test))
+
 ; gh-ocannl-2137: distinguish host _Float16 excess evaluation from cc's explicit operator casts.
 
 (test
@@ -15197,13 +15208,13 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-; gh-ocannl-2147: integer narrowing must not double-round through f32 or f64.
-
 (test
- (name integer_bf16_narrowing)
+ (name dropout_mask_varies)
  (package neural_nets_lib)
- (modules integer_bf16_narrowing)
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries base ocannl arrayjit.verdict ll_test))
+ (modules dropout_mask_varies)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_ocannl)))

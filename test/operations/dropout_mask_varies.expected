@@ -1,0 +1,19 @@
+seed 7: at least 8 entries: true
+seed 7: the mask keeps some entries: true
+seed 7: the mask drops some entries: true
+seed 8: at least 8 entries: true
+seed 8: the mask keeps some entries: true
+seed 8: the mask drops some entries: true
+batch 4, output 8: at least 8 entries: true
+batch 4, output 8: the mask keeps some entries: true
+batch 4, output 8: the mask drops some entries: true
+x *. (0.5 < uniform_at step): at least 8 entries: true
+x *. (0.5 < uniform_at step): the mask keeps some entries: true
+x *. (0.5 < uniform_at step): the mask drops some entries: true
+x *. uniform_at step: every element draws its own value: true
+x *. (uniform_at step + 1): every element draws its own value: true
+x *. (uniform_at step - 0.5): every element draws its own value: true
+x *. (2 *. uniform_at step): every element draws its own value: true
+x *. normal_at step: 1 distinct values of 16
+x *. normal (): 1 distinct values of 16
+x *. { w = normal () }: 16 distinct values of 16
