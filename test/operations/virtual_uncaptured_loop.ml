@@ -95,6 +95,25 @@ let case_nested_scalar () =
   p "nested scalar: candidate virtual" (known_virtual o x);
   p "nested scalar: no array read survives" (count_get o x = 0)
 
+(* Two sequential fixed-index captures must append to the zero component, rather than superseding
+   each other or replaying an update twice. Both producers vary with their own symbol. *)
+let case_sequential_reductions () =
+  let x = mk ~dims:[| 1 |] "ucl_seq_x" and out = mk ~dims:[| 1 |] "ucl_seq_out" in
+  materialize out;
+  let i = sym () and j = sym () in
+  let llc =
+    seq (zero x)
+      (seq
+         (loop_n i n (set x [| fixed 0 |] (add (get x [| fixed 0 |]) (tick i))))
+         (seq
+            (loop_n j 3 (set x [| fixed 0 |] (add (get x [| fixed 0 |]) (ramp 11. j))))
+            (set out [| fixed 0 |] (get x [| fixed 0 |]))))
+  in
+  (* (1 + 2 + 3 + 4) + (11 + 12 + 13) = 46. *)
+  let o = both ~label:"sequential_reductions" ~llc ~cand:x ~out ~seed:[] ~expected:[| 46. |] in
+  p "sequential reductions: candidate virtual" (known_virtual o x);
+  p "sequential reductions: no array read survives" (count_get o x = 0)
+
 (* === Case 3 (positive control): the ordinary inner reduction still inlines ===
 
    Here the reduction loop is BELOW the capture point, so it is part of the stored computation and
@@ -147,6 +166,7 @@ let () =
   case "repetition_above" case_repetition_above;
   case "symbol_free_map" case_symbol_free_map;
   case "nested_scalar" case_nested_scalar;
+  case "sequential_reductions" case_sequential_reductions;
   case "inner_reduction" case_inner_reduction;
   case "width_one_enclosing" case_width_one_enclosing;
   Stdio.printf "%!"
