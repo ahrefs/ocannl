@@ -90,13 +90,16 @@ val comparator : (t, comparator_witness) Base.Comparator.t
 
 val init_params : ?skip:'a Map.M(Ir.Tnode).t -> t -> comp
 (** [init_params ?skip t] collects into a single sequence the {!field:forward} code of [t.params],
-    and transitively the initializations of the parameters of the parameters. If [skip] is provided,
-    it is used to filter out the parameters belonging to [skip] (e.g. [skip] can be a set of
-    parameters that are already initialized). The code also writes every random seed the selected
-    initializers read whose own code lives elsewhere -- e.g. absorbed by a discarded draw -- by
-    replaying its constant literal, whichever seed is the {!get_random_seed} singleton at the time
-    (see {!with_saved_random_seed}). NOTE: it always outputs code with a block comment, even if the
-    params set is empty. *)
+    and transitively the initializations of the parameters of the parameters. Initializers follow
+    dependency order; independent fragments follow first access in [t]'s forward statements, with
+    tensor operand order breaking ties. Seed literals are written before the draws; changing this
+    statement order preserves the random values of a fixed graph (node counters are unchanged). If
+    [skip] is provided, it is used to filter out the parameters belonging to [skip] (e.g. [skip] can
+    be a set of parameters that are already initialized). The code also writes every random seed the
+    selected initializers read whose own code lives elsewhere -- e.g. absorbed by a discarded draw
+    -- by replaying its constant literal, whichever seed is the {!get_random_seed} singleton at the
+    time (see {!with_saved_random_seed}). NOTE: it always outputs code with a block comment, even if
+    the params set is empty. *)
 
 val is_fwd_root : t -> bool
 (** Whether [t]'s forward code is still unconsumed: no consumer embedded it and it was not handed
