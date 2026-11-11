@@ -1630,7 +1630,7 @@ module Impl = struct
       in
       match (op, prec) with
       | (Ops.Identity | Ops.Round_prec), _ -> fun v -> v
-      | Neg, _ -> fun v -> string "-" ^^ v
+      | Neg, _ -> fun v -> string "-" ^^ parens v
       | Exp, _ -> widened_math "exp"
       | Log, _ -> widened_math "log"
       | Exp2, _ -> widened_math "exp2"

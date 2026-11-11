@@ -71,6 +71,16 @@ let compile (t : Tensor.t) () =
 
 let values (t : Tensor.t) = Context.get_values (Train.forward_once (Context.auto ()) t) t.value
 
+let nested_negation_restores label prec xs =
+  let nested = ref [||] in
+  let result =
+    outcome (fun () ->
+        let a = input prec xs in
+        nested := values NTDSL.O.(~- (~-a)))
+  in
+  accepted (label ^ " nested") result;
+  p (label ^ " nested negation restores the input") (Array.equal Float.equal !nested xs)
+
 (* The 64-bit precisions have no fractional floats near their endpoints, and their largest floats
    below the upper endpoint are 2^63 - 1024 and 2^64 - 2048. *)
 let wide prec = match prec with Ops.Int64_prec _ | Ops.Uint64_prec _ -> true | _ -> false
@@ -150,8 +160,8 @@ let () =
         (outcome (compile r)));
   Utils.settings.check_half_prec_constants_cutoff <- saved
 
-(* The user routes the issue names: a mask fill at an integer precision, and the library's unary
-   minus over an unsigned tensor, which multiplies by the literal -1. *)
+(* A mask fill at an integer precision still refuses its out-of-range sentinel. Unary minus instead
+   wraps, just like subtraction from zero (gh-ocannl-2143). *)
 let () =
   List.iter Ops.integer_precs ~f:(fun prec ->
       let ps = Ops.prec_string prec in
@@ -162,19 +172,37 @@ let () =
         ~tn:(Some w.value) ~prec ~value:Float.neg_infinity
         (outcome (compile w));
       match Ops.integer_range prec with
-      | Some (0., _) ->
-          let a = input prec [| 0.; 1. |] in
-          let negated = NTDSL.O.( ~- ) a in
-          refused
-            (ps ^ " ~- over an unsigned tensor")
-            ~tn:(Some negated.value) ~prec ~value:(-1.)
-            (outcome (compile negated))
+      | Some (0., upper) ->
+          let hi = snd (range prec) in
+          (* The uint64 upper endpoint rounds to 2^64 as a host float already. *)
+          let modulus = upper +. if wide prec then 0. else 1. in
+          let s = step prec in
+          List.iteri
+            [ [| 0.; s |]; [| hi; 2. *. s |] ]
+            ~f:(fun row xs ->
+              let label = Printf.sprintf "%s ~- wrapping row %d" ps row in
+              let got = ref [||] in
+              let result = outcome (fun () -> got := values (NTDSL.O.( ~- ) (input prec xs))) in
+              accepted label result;
+              let want = Array.map xs ~f:(fun x -> if Float.equal x 0. then 0. else modulus -. x) in
+              p (label ^ " gives modular negation per cell") (Array.equal Float.equal !got want);
+              let a = input prec xs in
+              let%op subtracted = 0. - a in
+              p
+                (label ^ " agrees with subtraction from zero")
+                (Array.equal Float.equal !got (values subtracted));
+              nested_negation_restores label prec xs)
       | _ -> ());
   let x = input ~l:"x" Ops.single [| 0.; 1. |] in
   let%op w = where (x < 1.) x !.Ocannl.Nn_blocks.default_mask_fill in
   let got = values w in
   p "single where with the default mask fill keeps its infinity"
     (Float.equal got.(0) 0. && Float.equal got.(1) Float.neg_infinity)
+
+(* Parenthesization of nested Neg applies to signed and floating slots too. *)
+let () =
+  List.iter [ Ops.single; Ops.int32 ] ~f:(fun prec ->
+      nested_negation_restores (Ops.prec_string prec) prec [| -3.; 5. |])
 
 (* Accepted and executed: each endpoint, and a fraction truncating onto it. *)
 let () =

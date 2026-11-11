@@ -108,9 +108,6 @@ module NDO_before_pow = struct
   let ( !.. ) ?label i = Tensor.number ?label ~grad_spec:Prohibit_grad @@ Float.of_int i
   let ( !% ) ?label i = Tensor.bits ?label ~grad_spec:Prohibit_grad i
   let ( - ) t1 t2 = sub ~grad_spec:Prohibit_grad t1 t2 ()
-
-  let ( ~- ) ?label t =
-    pointmul ~grad_spec:Prohibit_grad ?label (Tensor.number ~grad_spec:Prohibit_grad (-1.)) t ()
 end
 
 let is_prohibit_grad = function Some Tensor.Prohibit_grad -> true | _ -> false
@@ -1153,7 +1150,7 @@ struct
     let ( !@ ) = embed_symbol
     let dim = embed_dim
     let ( - ) ?label t1 t2 = sub ?label t1 t2 ()
-    let ( ~- ) ?label t = pointmul ?label (number (-1.)) t ()
+    let ( ~- ) ?label t = neg ?label t ()
     let ( /. ) ?label t1 t2 = pointdiv ?label t1 t2 ()
     let ( @| ) ?label t1 idx = slice ?label idx t1 ()
     let exp ?label t = exp ?label t ()

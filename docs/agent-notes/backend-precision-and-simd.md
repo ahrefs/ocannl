@@ -520,15 +520,18 @@ files.
   statement's destination, through inlined scopes; `scope` is the innermost scope, which at byte
   and uint16 is the inlined literal's own node (a promoted integer scope does not collapse). User
   routes it closes: a literal in `%op`, `where … Nn_blocks.default_mask_fill` at an integer
-  precision (it read 0 in the masked cell on cc), and the library's `~-` over an unsigned tensor
-  (`number (-1.) *. t`). `Constant_bits` and fixed indices convert from integers, defined in C, so
-  are not judged. The slot-precision threading is the fp16 check's (gh-ocannl-2112), shared by the
-  one walk; the integer check runs first, so a byte constant past the fp16 cutoff gets the typed
-  refusal. A uint4x32 operand (Threefry, the uniform-lane conversions) is evaluated at its own
-  uint4x32 annotation, as `loop_scalar` does, and uint4x32 is no scalar integer precision, so it is
-  never judged. `test/operations/integer_constant_range` compiles the refused cases without running them
-  (an undefined conversion is no oracle, and on Metal one stalled a kernel) and runs the accepted
-  endpoints on every backend.
+  precision (it read 0 in the masked cell on cc). `Constant_bits` and fixed indices convert from
+  integers, defined in C, so are not judged. The slot-precision threading is the fp16 check's
+  (gh-ocannl-2112), shared by the one walk; the integer check runs first, so a byte constant past
+  the fp16 cutoff gets the typed refusal. A uint4x32 operand (Threefry, the uniform-lane conversions)
+  is evaluated at its own uint4x32 annotation, as `loop_scalar` does, and uint4x32 is no scalar
+  integer precision, so it is never judged. `test/operations/integer_constant_range` compiles the
+  refused cases without running them (an undefined conversion is no oracle, and on Metal one
+  stalled a kernel) and runs the accepted endpoints on every backend. Unary `~-` no longer reaches
+  this check (gh-ocannl-2143): it uses the existing `Neg` primitive, so unsigned tensors wrap just
+  like `0. - a`, without an out-of-range `-1.` constant. `integer_constant_range` executes zero,
+  small values and upper-range values at every unsigned precision. Floating negation and its
+  gradient use the same primitive.
 - **Host float writes obey the device constant range rule** (gh-ocannl-2144).
   `Ndarray.Unrepresentable_integer_value { prec; value }` refuses a nonfinite or out-of-range
   scalar integer input at point writes, bulk writes, fills and padding initialization. Boundary
