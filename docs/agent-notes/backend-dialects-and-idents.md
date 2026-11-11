@@ -6,6 +6,10 @@ backend config functor binds its overrides.
 Part of the agent notes; the [index](../agent-notes.md) carries the scope discipline and the other
 files.
 
+- Metal scalar `Neg` parenthesizes its operand (gh-ocannl-2143): nested public `~-` over an
+  inlined uint32/uint64 read otherwise emits `--x`, a pre-decrement that mutates the input.
+  `integer_constant_range` executes double negation at every unsigned precision; the uint32 and
+  uint64 rows fail without the parentheses.
 - Metal shader compiler miscompiles serial accumulations, and API validation hides it
   (`MTL_SHADER_VALIDATION=1` makes it vanish). Two spellings are affected: the original
   `acc[k] = acc[k] + f(i)` device-memory RMW can leave only the last iteration (fingerprint: loss

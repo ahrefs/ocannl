@@ -180,7 +180,15 @@ let () =
               let%op subtracted = 0. - a in
               p
                 (label ^ " agrees with subtraction from zero")
-                (Array.equal Float.equal !got (values subtracted)))
+                (Array.equal Float.equal !got (values subtracted));
+              let nested = ref [||] in
+              let result =
+                outcome (fun () ->
+                    let a = input prec xs in
+                    nested := values NTDSL.O.(~- (~-a)))
+              in
+              accepted (label ^ " nested") result;
+              p (label ^ " nested negation restores the input") (Array.equal Float.equal !nested xs))
       | _ -> ());
   let x = input ~l:"x" Ops.single [| 0.; 1. |] in
   let%op w = where (x < 1.) x !.Ocannl.Nn_blocks.default_mask_fill in

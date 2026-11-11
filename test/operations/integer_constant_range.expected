@@ -47,32 +47,48 @@ byte where with the default mask fill: refused, naming the node, the precision a
 byte ~- wrapping row 0: accepted: true
 byte ~- wrapping row 0 gives modular negation per cell: true
 byte ~- wrapping row 0 agrees with subtraction from zero: true
+byte ~- wrapping row 0 nested: accepted: true
+byte ~- wrapping row 0 nested negation restores the input: true
 byte ~- wrapping row 1: accepted: true
 byte ~- wrapping row 1 gives modular negation per cell: true
 byte ~- wrapping row 1 agrees with subtraction from zero: true
+byte ~- wrapping row 1 nested: accepted: true
+byte ~- wrapping row 1 nested negation restores the input: true
 uint16 where with the default mask fill: refused, naming the node, the precision and the value: true
 uint16 ~- wrapping row 0: accepted: true
 uint16 ~- wrapping row 0 gives modular negation per cell: true
 uint16 ~- wrapping row 0 agrees with subtraction from zero: true
+uint16 ~- wrapping row 0 nested: accepted: true
+uint16 ~- wrapping row 0 nested negation restores the input: true
 uint16 ~- wrapping row 1: accepted: true
 uint16 ~- wrapping row 1 gives modular negation per cell: true
 uint16 ~- wrapping row 1 agrees with subtraction from zero: true
+uint16 ~- wrapping row 1 nested: accepted: true
+uint16 ~- wrapping row 1 nested negation restores the input: true
 int32 where with the default mask fill: refused, naming the node, the precision and the value: true
 uint32 where with the default mask fill: refused, naming the node, the precision and the value: true
 uint32 ~- wrapping row 0: accepted: true
 uint32 ~- wrapping row 0 gives modular negation per cell: true
 uint32 ~- wrapping row 0 agrees with subtraction from zero: true
+uint32 ~- wrapping row 0 nested: accepted: true
+uint32 ~- wrapping row 0 nested negation restores the input: true
 uint32 ~- wrapping row 1: accepted: true
 uint32 ~- wrapping row 1 gives modular negation per cell: true
 uint32 ~- wrapping row 1 agrees with subtraction from zero: true
+uint32 ~- wrapping row 1 nested: accepted: true
+uint32 ~- wrapping row 1 nested negation restores the input: true
 int64 where with the default mask fill: refused, naming the node, the precision and the value: true
 uint64 where with the default mask fill: refused, naming the node, the precision and the value: true
 uint64 ~- wrapping row 0: accepted: true
 uint64 ~- wrapping row 0 gives modular negation per cell: true
 uint64 ~- wrapping row 0 agrees with subtraction from zero: true
+uint64 ~- wrapping row 0 nested: accepted: true
+uint64 ~- wrapping row 0 nested negation restores the input: true
 uint64 ~- wrapping row 1: accepted: true
 uint64 ~- wrapping row 1 gives modular negation per cell: true
 uint64 ~- wrapping row 1 agrees with subtraction from zero: true
+uint64 ~- wrapping row 1 nested: accepted: true
+uint64 ~- wrapping row 1 nested negation restores the input: true
 single where with the default mask fill keeps its infinity: true
 byte the top endpoint minus a gives the truncated value per cell: true
 byte the bottom endpoint plus a gives the truncated value per cell: true
