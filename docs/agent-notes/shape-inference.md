@@ -640,10 +640,12 @@ files.
   merge arms, `is_stage2_up`/`is_stage5_up` elsewhere), so it is forced at closure, at its call
   site's precision. A scheme never forces it (trace, check and instance are Stage1): the trace
   swaps it for a hole that raises if read (`Row.map_draw_coefficients`; the kept `env` too, or the
-  scheme pins the trace's nodes), and the body's own conversion node fills it per application. An
-  explicit `instantiate` has no node and refuses. A new Stage1 arm reading a lazy coefficient
+  scheme pins the trace's precision cells); the body's conversion node fills it per application.
+  An explicit `instantiate` has no node and refuses. A new Stage1 arm reading a lazy coefficient
   would break this, and inline precision too. A round-up `Strided_var` is the draw marker: only
-  `Uint4x32_to_prec` mints one.
+  `Uint4x32_to_prec` mints one. The `op_schemes` GC control witnesses the retained precision cell
+  directly (gh-ocannl-2170): precision cells no longer capture tensor nodes, so even a sabotaged
+  scheme retaining its draw coefficients lets the nodes collect.
 - Printing a scheme (gh-ocannl-1753, `Shape.Scheme.to_string`): substituted boundary rows alone
   say almost nothing -- after a trace an argument's and its result's rows are distinct unsolved
   variables, related only by broadcasting bounds -- so the scheme keeps the trace's final

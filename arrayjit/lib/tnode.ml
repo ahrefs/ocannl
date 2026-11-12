@@ -193,8 +193,8 @@ end = struct
              let prec =
                match cell.value with Default prec | Specified prec | Inferred (lazy prec) -> prec
              in
-             (* Settle what the operands state too, so the lazy drops its operand nodes: a settled
-                node must not keep otherwise-dead ancestors alive (gh-ocannl-2028). *)
+             (* Settle what the operands state too, so the lazy drops its operand precision cells: a
+                settled node must not keep otherwise-dead ancestors alive (gh-ocannl-2028). *)
              Option.iter stated ~f:(fun l -> ignore (Lazy.force l : Ops.prec option));
              prec);
         settling = false;

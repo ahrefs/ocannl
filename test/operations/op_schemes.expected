@@ -120,4 +120,6 @@ control (one coefficient memoized from the trace): the half application loses it
 the function is traced and its application checked: true
 the precision of the tensor in the draw's precision chain is still unsettled: true
 the trace's draw node is reclaimed while its scheme is held: true
-control (the trace's own coefficients kept): the node is kept: true
+the trace's draw precision cell is reclaimed while its scheme is held: true
+control (the trace's own coefficients kept): the node is still reclaimed: true
+control (the trace's own coefficients kept): the precision cell is kept: true

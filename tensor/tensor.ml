@@ -1108,8 +1108,10 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
       let lazy_v_precs =
         List.filter_map ordered_ts ~f:(fun ti ->
             Option.map (get ti) ~f:(fun v ->
-                if ti.top_down_prec then lazy (Tn.get_specified_prec v)
-                else lazy (Some (Tn.bottom_up_prec v))))
+                let cell = v.Tn.delayed_prec_unsafe in
+                if ti.top_down_prec then
+                  lazy (match Tn.Prec_cell.get cell with Specified prec -> Some prec | _ -> None)
+                else lazy (Some (Tn.Prec_cell.bottom_up cell))))
       in
       Tn.Inferred
         (lazy
@@ -1122,12 +1124,16 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let stated_for get =
     if top_down_prec then None
     else
-      (* Capture the operands' nodes, not the tensors: an operand's cell can outlive this result
-         through a precision link, and must not keep the operand tensors alive with it. *)
-      let operand_nodes = List.filter_map ordered_ts ~f:get in
+      (* Precision links can outlive the graph. Capture only cells, in both delayed calculations, so
+         strong reverse links preserve constraints without retaining nodes (gh-ocannl-2170). *)
+      let operand_cells =
+        List.filter_map ordered_ts ~f:(fun ti ->
+            Option.map (get ti) ~f:(fun v -> v.Tn.delayed_prec_unsafe))
+      in
       Some
         (lazy
-          (List.filter_map operand_nodes ~f:Tn.stated_prec |> List.reduce ~f:Ir.Ops.promote_prec))
+          (List.filter_map operand_cells ~f:Tn.Prec_cell.stated
+          |> List.reduce ~f:Ir.Ops.promote_prec))
   in
   let delayed_prec = delayed_prec_for !default_value_prec (fun t -> Some t.value) in
   let stated = stated_for (fun t -> Some t.value) in

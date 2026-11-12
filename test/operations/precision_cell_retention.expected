@@ -1,2 +1,29 @@
 settled result node survives collections: true
 settled result releases every virtual ancestor node: true
+settled result releases every virtual ancestor precision cell: true
+operand storage remains unsettled: true
+dropped graph releases other value node after closure: true
+operand storage remains unsettled: true
+live operand releases consumer tensor after closure: true
+live operand releases other value node after closure: true
+consumer tensor can die while its value node is held: true
+held consumer value node still widens its operand: true
+first rebuild closes the shared operand: true
+shared operand stays unsettled across closed graph rebuilds: true
+first linking rebuild releases its other value node: true
+later closed-operand rebuilds release their other value nodes: true
+later wider consumers do not link to the closed operand: true
+widening consumer leaves operand free: true
+widening consumer leaves operand storage unsettled: true
+dropped widening consumer value node collects: true
+dropped widening consumer's other value node collects: true
+dropped consumer still widens operand after collections: true
+widening consumer leaves operand free: true
+widening consumer leaves operand storage unsettled: true
+dropped widening consumer value node collects: true
+dropped widening consumer's other value node collects: true
+dropped consumer still widens operand after collections: true
+operand gradient storage remains unsettled: true
+dropped consumer gradient node collects: true
+dropped consumer's other gradient node collects: true
+dropped consumer still widens operand gradient after collections: true

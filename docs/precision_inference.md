@@ -29,6 +29,11 @@ A node is free when nothing in its bottom-up dependencies states a precision: it
 - Freeness is decided when the operand settles, not when its consumer is built: a `Tnode.update_prec` on one of its operands in between makes it stated, and it keeps its bottom-up precision. What an operand states is memoized once read, which happens only as a node in its cone settles.
 - A settled or closed operand takes no link (gh-ocannl-1301), as for the top-down links.
 - Gradients follow the same rule against `Tensor.default_grad_prec`.
+- Reverse links keep precision constraints strongly, so collecting a consumer never changes
+  inference (gh-ocannl-2170). Both delayed calculations capture operand precision cells rather than
+  tensor nodes: dropped graphs release their nodes even when a shared operand stays unsettled.
+  Closing shapes releases the open-node registry and prevents adding further links to that operand,
+  bounding the retained precision cells by its pre-closure consumers.
 
 ## Storage, compute and placement
 
