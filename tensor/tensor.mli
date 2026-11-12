@@ -566,7 +566,9 @@ module Scheme : sig
       the function and the arguments only. A trace a scheme cannot carry (setting a capture
       reference made outside the function, forcing dims, or a body that cannot run on tracers)
       leaves the function unschemed, as it was before, once its rewind succeeded, and says so on
-      stderr -- once per function and reason in a process (gh-ocannl-1791). A capture reference made
+      stderr -- once per function and reason in a process (gh-ocannl-1791), without an application
+      site. If rewind is refused, the error names the function followed by the active [%op]
+      application site, when present, and the scheme opt-out remedy. A capture reference made
       outside the function that its operations bind is a scheme input, checked against each
       application's state of it. Ids are unaffected: traces and checks allocate tensor ids, node
       uids and shape-variable ids from reserved ranges.

@@ -219,3 +219,55 @@ let () =
       p "a trace while constructing the piped closure names the partial application"
         (names_site partial ~expected:(in_op !partial_line)))
 [@@ocamlformat "disable"]
+
+(* A committed-state read of an older open tensor raises during tracing and makes rewind unsafe. *)
+let%op rewind_reads_dims c () x =
+  ignore (Shape.to_dims c.Tensor.shape : int array);
+  x + c
+
+let%op warning_sets_outside r () x =
+  [%oc Shape.set_dim r 4];
+  x + x
+
+let () =
+  Verdict.case "a refused trace rewind names its application" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let c = input "rewind_c" [ 3 ] in
+      let line = ref 0 in
+      let msg =
+        attempt "rewind in %op" (fun () ->
+            line := Stdlib.__LINE__ + 1;
+            ignore ([%op rewind_reads_dims c ()] : Tensor.t -> Tensor.t))
+      in
+      p "the rewind refusal names the function followed by the application site"
+        (names_site msg
+           ~expected:
+             ("the shape scheme rewind_reads_dims "
+             ^ String.chop_suffix_exn (in_op !line) ~suffix:": "
+             ^ " was refused"));
+      p "the refusal keeps the opt-out remedy" (names_site msg ~expected:"[@@ocannl.no_scheme]");
+      Tensor.unsafe_reinitialize ();
+      let c = input "plain_rewind_c" [ 3 ] in
+      let msg =
+        attempt "rewind in plain OCaml" (fun () ->
+            ignore (rewind_reads_dims c () : Tensor.t -> Tensor.t))
+      in
+      p "a plain rewind refusal after the located failure has no site"
+        (names_site msg ~expected:"the shape scheme rewind_reads_dims was refused"
+        && not (names_site msg ~expected:"in the %op application at")));
+  Verdict.case "ordinary fallback warnings stay independent of the application site" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let r = Shape.get_variable_ref "warning_dim" in
+      let (), warnings =
+        Stderr_capture.capture (fun () ->
+            ignore ([%op warning_sets_outside r ()] : Tensor.t -> Tensor.t);
+            ignore ([%op warning_sets_outside r ()] : Tensor.t -> Tensor.t))
+      in
+      let warnings = String.split_lines warnings in
+      p "one fallback warning is printed for both application sites"
+        (Int.equal 1
+           (List.count warnings ~f:(fun s ->
+                String.is_substring s
+                  ~substring:"the shape scheme of warning_sets_outside was refused")));
+      p_none "fallback warnings contain no application site" warnings ~f:(fun s ->
+          String.is_substring s ~substring:"in the %op application at"))
