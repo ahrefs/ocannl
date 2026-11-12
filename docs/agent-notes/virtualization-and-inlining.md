@@ -495,7 +495,7 @@ files.
   non-vacuous, and a compiled sample holds the interpreter to a backend. Add a form to `coord_forms`
   or a step shape to `enumerate`, not a row, when a new inliner path appears; a stderr `FINDING` names
   a program, and `--only` on the built executable prints its code. The default run thins the large
-  shapes to fit a test's budget; `--widen` is the full cross (about 9.3 million programs),
+  shapes to fit a test's budget; `--widen` is the full cross,
   on its own alias `@test/operations/slow-virtual_inliner_oracle-widen`, which the daily sweep's
   `cc-oracle-widen` unit builds and `tools/test-run.sh affected` names to a change reaching the
   inliner — run it before pushing such a change. That alias aggregates four locked
@@ -503,9 +503,10 @@ files.
   ordinal with its base-four digits XOR-folded, each retaining compiled anchors and reporting a
   total elapsed time against a 600-second bound on stderr. Plain ordinal modulo four aligned with
   the repeating grammar and left shard 0 without inlined accumulate/reduce cases; folding the
-  higher digits preserves balanced four-ordinal blocks while breaking that alignment. `runtest-virtual_inliner_oracle-shards` cheaply enumerates the full
-  grammar and checks the disjoint union against the pre-split 9,333,622-program census; no backend
-  loses programs. Shared-slot before/after evidence belongs to the PR. Its first run found
+  higher digits preserves balanced four-ordinal blocks while breaking that alignment.
+  `runtest-virtual_inliner_oracle-shards` cheaply enumerates the full grammar and checks the
+  disjoint union against its pinned widened census; each shard also checks that it walked that
+  full census. The audit owns the size, so no backend silently loses programs. Its first run found
   `Affine.common_layout` writing coordinates back in reverse (`Array.for_all` in Base runs from the
   last element, so a side effect in its predicate runs backwards): both sides reversed alike, which
   the pairwise solving could not see, while `same_unit_cell` read a wide coordinate at a unit axis

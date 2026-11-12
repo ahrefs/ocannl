@@ -618,9 +618,12 @@ let check_program prog =
           judge "virtual arm" (fun () -> evaluate prog b os))
 
 (* Ordinals belong to the descriptor enumeration, before optimization or any placement decision.
-   Four is coprime to the three standings, so no slice loses a standing. Every shard walks the same
-   grammar but optimizes only its slice; --check-shards exercises that same selector cheaply. *)
+   Each aligned group of four ordinals is a permutation of the shards. XOR-folding the higher
+   base-four digits mixes their phase into that permutation, breaking the alignment between a plain
+   residue and the repeating grammar. Every shard walks the same grammar but optimizes only its
+   slice; --check-shards audits that same selector cheaply. *)
 let shard_count = 4
+let widened_census = 9_333_622
 let argv = Sys.get_argv ()
 let has_arg flag = Array.mem argv flag ~equal:String.equal
 
@@ -680,11 +683,10 @@ let check prog =
 
 (* === The families ===
 
-   The widened grammar contains about 9.3 million programs, minutes of a test run, so the default
-   run crosses what it can afford to and states what it does not. On a shape with at most 20000
-   pairs, the full cross; on every other, each write against the core reads and each read against
-   the core writes. [--widen] runs the full cross on every shape and unthins the pools, for someone
-   changing the inliner. *)
+   The widened grammar takes minutes of a test run, so the default run crosses what it can afford to
+   and states what it does not. On a shape with at most 20000 pairs, the full cross; on every other,
+   each write against the core reads and each read against the core writes. [--widen] runs the full
+   cross on every shape and unthins the pools, for someone changing the inliner. *)
 
 let shapes =
   [
@@ -995,7 +997,7 @@ let audit_shards () =
   Stdio.printf "%d widened programs\n" !enumerated;
   Array.iteri shard_sizes ~f:(fun i n -> Stdio.printf "shard %d/%d: %d programs\n" i shard_count n);
   (* An independent census pin: adding grammar requires an explicit coverage update. *)
-  p "the widened census is unchanged" (!enumerated = 9_333_622);
+  p "the widened census is unchanged" (!enumerated = widened_census);
   p "every ordinal belongs to exactly one shard" (!bad_ownerships = 0);
   p_all "each shard has a balanced share of the census" (Array.to_list shard_sizes) ~f:(fun n ->
       n >= !enumerated / shard_count && n <= (!enumerated + shard_count - 1) / shard_count);
@@ -1021,7 +1023,8 @@ let () =
     Stdio.printf "%d programs\n" !programs_run;
     Option.iter shard ~f:(fun i ->
         Stdio.printf "slice: folded base-%d ordinal = %d of %d widened programs\n" shard_count i
-          !enumerated);
+          !enumerated;
+        p "the shard walked the full widened census" (!enumerated = widened_census));
     (* One row per family, so that a moved boundary edits rows without removing any:
        [tools/mutation-run.sh] reads a run printing fewer rows than the golden as stopped early. *)
     Hashtbl.to_alist census
