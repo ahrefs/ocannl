@@ -706,6 +706,8 @@ will be the product of the dimensions it resolved into.
 for unary, binary and ternary assignments. For example,
 `let%cd comp = tgt =: id x ~logic:"a^c => a^b^c" ["a"; "b"] in`
 binds `a` and `b` with the same per-call scope and label checks as operator captures.
+Captures apply to einsum specs only: the shortcuts `"."`, `"T"` and `"@"` reject nonempty
+capture lists, but accept `[]`.
 `Shape.set_dim a 2; Shape.set_dim b 1` sizes those concat segments before compilation.
 This assignment writes the `a` and `c` segments; the existing `b` cells of `tgt` retain their
 prior values. The capture references are passed in the assignment's shape logic.
