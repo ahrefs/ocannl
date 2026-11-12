@@ -77,6 +77,7 @@ code alone does not show.
 
 2. **Shape Inference** (`docs/shape_inference.md` is the authoritative reference):
    - Three axis kinds — batch | input -> output (matrix convention: input rightmost) — with row variables (`..d..`) for broadcasting and generalized einsum notation for convolutions, reductions, and arbitrary permutations
+   - Before declaring a solver guess or closing arm redundant, run the draw-variation pins and report them in the PR (docs/agent-notes/shape-inference.md, "Solver deletion experiments").
    - "Principle of least commitment": use row variables where axis count doesn't matter
    - Shape inference completion is forced by lowering: via `Context.compile`, or wrappers such as `Train.to_routine`, `Train.run_once` or `Train.forward_once`; `finish_inference` closes still-unsolved dims (GLB where known, otherwise 1/broadcast)
    - Operations in `Operation`, `TDSL`, `NTDSL` return `Tensor.op_fun`s, so call sites can specify shapes; `TDSL.O` (opened for `%op`) and `NTDSL.O` (for `%cd`) hide this, so shapes are inferred
