@@ -181,3 +181,41 @@ let () =
       in
       p "the deferred trace names the first application's file and line"
         (names_site msg ~expected:(in_op line)))
+
+(* A curried ordinary call traces only once both tensor arguments have arrived. The pipeline's inner
+   partial application has finished by then, so the outer wrapper must supply the site. *)
+let%op _direct_add x y = x + y + ([ 1.; 2.; 3. ] + [ 1.; 2.; 3.; 4. ])
+
+let () =
+  Tensor.unsafe_reinitialize ();
+  Verdict.case "ordinary partial pipelines record both application stages" (fun () ->
+      let x = input "partial_x" [ 3 ] and y = input "partial_y" [ 3 ] in
+      let direct_line = ref 0 and pipe_line = ref 0 and partial_line = ref 0 in
+      let direct =
+        attempt "direct partial trace"
+          (tensor (fun () ->
+               direct_line := Stdlib.__LINE__ + 1;
+               [%op _direct_add y x]))
+      in
+      let piped =
+        attempt "piped final trace"
+          (tensor (fun () ->
+               pipe_line := Stdlib.__LINE__ + 1;
+               [%op x
+                 |> _direct_add y]))
+      in
+      p "the direct call's trace names the full application"
+        (names_site direct ~expected:(in_op !direct_line));
+      p "the piped call's trace names the final application, after the partial wrapper returns"
+        (names_site piped ~expected:(in_op !pipe_line));
+      let partial =
+        attempt "piped partial trace"
+          (tensor (fun () ->
+               partial_line := Stdlib.__LINE__ + 2;
+               [%op x
+                 |> bad_definition ~width:3 ()]))
+      in
+      p "a trace while constructing the piped closure names the partial application"
+        (names_site partial ~expected:(in_op !partial_line)))
+[@@ocamlformat "disable"]
+(* Keep the two pipeline stages on distinct source lines. *)
