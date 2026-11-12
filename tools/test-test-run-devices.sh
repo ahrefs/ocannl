@@ -689,6 +689,10 @@ for probe in "cpu:cc:sync_cc:--cpu" "unset:unset:cc:--gpu" "multidev:multidev_cc
     { slot_detail="$tag: slot call: ${slot_calls:-<none>} (want $want)"; break; }
   grep -q "fleet correctness slots.*as $want" <<<"$(tr '\n' ' ' <<<"$argv_err")" ||
     { slot_detail="$tag: the slot and its kind were not announced: $argv_err"; break; }
+  { grep -q 'if no enclosing slot is reusable' <<<"$argv_err" &&
+    grep -q 'reuses an enclosing slot without taking an additional slot or GPU token' <<<"$argv_err" &&
+    grep -q 'a GPU batch inside a CPU-only slot is refused' <<<"$argv_err"; } ||
+    { slot_detail="$tag: the announcement does not distinguish acquisition from validated reuse: $argv_err"; break; }
   { [ -n "$argv_dir" ] && grep -q -- "as $want" "$argv_dir/log" &&
       grep -q "^test-run: batch: " "$argv_dir/log" &&
       grep -q "^EXECUTION SLOT fakebox: slot 1 of 4" "$argv_dir/log"; } ||

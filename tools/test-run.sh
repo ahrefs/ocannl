@@ -830,8 +830,10 @@ plan_slot_kind() { # after plan_batch
   else
     what="--gpu (any slot may hold the GPU here): it can hold $(batch_summary)"
   fi
-  slot_announce="requesting one of $slot_box's $slot_slots fleet correctness slots for this run (gh-ocannl-1004),
-  as $what. Acquisition timeout: ${slot_wait}s; an enclosing slot may be reused immediately."
+  slot_announce="requesting one of $slot_box's $slot_slots fleet correctness slots if no enclosing slot is reusable (gh-ocannl-1004),
+  as $what. Acquisition timeout: ${slot_wait}s.
+  The fleet validates and reuses an enclosing slot without taking an additional slot or GPU token;
+  a GPU batch inside a CPU-only slot is refused."
 }
 
 # Whether `run` resolves this batch's backends at all (plan_batch): only on a
