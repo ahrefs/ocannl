@@ -431,6 +431,22 @@ val solve_inequalities :
 (** [discardable_vars] are safe to guess dimension = 0, they do not participate in projections for
     the update step the constraints were derived for. *)
 
+val solve_closing_stages :
+  stages:stage list ->
+  ?discardable_vars:dim_var_set ->
+  constraint_ list ->
+  environment ->
+  constraint_ list * environment
+(** [solve_inequalities] over [stages] in order, as one search over the stage-6 balanced-flank
+    trials' overlaps (gh-ocannl-2154): the first run is the plain fold, so a store it accepts
+    returns unchanged; when a run is refused, the last trial on its path short of its principal
+    overlap is replayed one overlap larger, the earlier ones pinned, up to a bound. When no choice
+    is left the first run's error is raised. Only a [Shape_error] rejects a run. *)
+
+val trial_replays : unit -> int
+(** The replays [solve_closing_stages] ran since the last reset: a work counter, process-wide. *)
+
+val reset_trial_replays : unit -> unit
 val row_to_bases : environment -> t -> string array
 
 type proj [@@deriving compare, equal, sexp]

@@ -1,4 +1,11 @@
 the original store accepts all five witness shapes: true
-known gap: the inferred program is still refused: true
-known gap: p's empty remainder conflicts with q's axis-4 remainder: true
-control: an unrelated rank refusal does not match the gap: true
+control: the witness with ordinary 1_default singletons is refused: true
+the inferred program is accepted: true
+inferred shapes: st=[1] p=[1;4;1] y=[1] q=[3;4;5] z=[3;4;5]
+the closing replayed its balanced-flank choice: true
+p is the contraction's [h; w] over st's row: true
+z is x's [3; 4; 5]: true
+the leaf's draws are nonzero, so the oracle discriminates: true
+z against the host oracle y + 2 * st * x: true
+control: an unrelated rank mismatch is still refused: true
+control: a refusal with no balanced-flank trial is not replayed: true

@@ -37,3 +37,10 @@ same variable, result surplus, v = [3] later: [3; 2] >= [3] refused by its dims:
 same variable, result surplus, outer overlap 3 against 5 refused by its dims: true
 same variable, operand surplus refused by self-reference: true
 same variable, equation [h; w].<c> = <c> refused by self-reference: true
+trial refuted by a same-stage closing, as written: the replay takes overlap 1, v2 = [5], v = [y]: true
+control, as written: the stage-by-stage fold refuses it: true
+trial refuted by a same-stage closing, flipped: the replay takes overlap 1, v2 = [5], v = [y]: true
+control, flipped: the stage-by-stage fold refuses it: true
+the closer after the equation: accepted at overlap 0 with no replay, as before: true
+every overlap refuted: refused after one replay, with the first run's refusal: true
+closed rows with a leading result surplus bound the axis before stage 7: v = 3: true

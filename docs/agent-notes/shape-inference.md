@@ -49,12 +49,18 @@ files.
   (`st +* "...|h,w,..c..; ...|..c.. => ...|h" st`) is a true refusal, and `(st *. x) +* ... st` is
   the program meant. Pinned by `test/einsum/test_row_self_reference` (last block) and
   `test/operations/self_contraction_occurs`.
-- gh-ocannl-2154 is a known false refusal (`contraction_pointwise_closing`): the original
-  store accepts the added witness equations `st=[]`, `p=[1_(bcast_if_1);5]`, `y=[1_(bcast_if_1)]`,
-  `q=z=[3;4;5]`. Closing is not a rank upper bound overriding an einsum's equations.
-  Without that witness, a Stage6a mixed-flank trial chooses an empty remainder; the later
-  `p`/`q` remaining-row equation needs `q`'s axis 4 there. The test pins that trace, not a
-  generic rank refusal. Repair needs closing/trial-choice design; the issue stays open.
+- gh-ocannl-2154's program (`st *. 2` self-contracted, then `y + p *. x`) had two false refusals
+  in a row (`contraction_pointwise_closing`, executed). First, Stage6a's balanced-flank trial
+  `[w].<c> = <m>.[a]` committed the empty overlap in the pass where the `Shape_row` closed `m` (p's
+  middle, holding `st`'s resolve-at-use mark through the einsum) to its use-site bound `<r>.[4]`.
+  Two guesses collided, with no deterministic bound left to drain, so the closing stages became one
+  replay search over those overlaps (`Row.solve_closing_stages`, see the gh-ocannl-2037 bullet below). Second,
+  `solve_row_ineq` held two closed rows with a leading result surplus (`[v].[4; 5] >= [3; 4; 5]`) to
+  stage 7, where the final `Shape_row` guessed `v` from the literal's `1_(bcast_if_1)` before the
+  flat pairing bounded it by 3. Closed rows are aligned already, so they no longer wait. Inferred:
+  `st=[1]`, `p=[1;4;1]`, `y=[1]`, `q=z=[3;4;5]`. The added scalar witness (`st=[]`, `p=[1;5]`) is
+  also valid, but it is not what the closing policy picks: it would need p's middle to skip its
+  use-site close.
 - `Row.Concat` dimensions (block tensors, `^` in specs) are solved as ARITHMETIC SUMS, not
   structural lists: equality lives in `unify_dim` (single-component unwrap, `Concat=Dim`
   subtraction, cancel-common residuals, nested-`Concat` flattening), and the equal-arity
@@ -429,7 +435,19 @@ files.
   pairs: a loud refusal of a store satisfiable at a larger overlap. A refused trial must restore
   the module-level sets, not only drop its environment: `unify_dim` shares a use-site mark across a
   `Var = Var` merge before a later pair conflicts. Every pair the old check refuted, `unify_dim`
-  refuses too, so a store accepted before keeps its overlap.
+  refuses too, so a store accepted before keeps its overlap. A later closing can still refute the
+  overlap (gh-ocannl-2154), so a closing caller runs Stages 6a, 6b and 7 through
+  `Row.solve_closing_stages`, a depth-first replay. The `i`-th trial on a run's path (refused
+  overlaps take their nested trials' indices back) starts at the floor the run gives it. A refused
+  run retries the last trial short of its principal overlap one larger, with the earlier ones
+  pinned to what they committed. The search is bounded (`max_closing_attempts`) and raises the
+  first run's error; only `Shape_error` rejects a run. The first run is the plain fold, so an
+  accepted store's shapes cannot move. It is still order-dependent where the plain fold was: with
+  the closer after the equation in the pass, the empty overlap is accepted (pins:
+  `test_row_self_reference`'s gh-ocannl-2154 blocks, `Row.trial_replays`). A bare `solve_inequalities ~stage`
+  does not search: a test's own stage list gets the old behavior. The trial index and log are in
+  `capture_globals`, so a trial inside a discarded probe or a refused settle candidate leaves no
+  choice behind.
 - **Every trial solve keeps its module-level effects exactly when it keeps its environment**
   (gh-ocannl-2129). The trial sites: the mixed-flank overlaps above; `solve_dim_ineq`'s
   `merge_by_equality`, rolled back on a refusal (demotion) and on a postponement below stage 4,
