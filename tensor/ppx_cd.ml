@@ -19,7 +19,23 @@ type expr_type =
     }
   | Function
 
-let is_shortcut_logic spec = List.mem [ "."; "T"; "@" ] spec ~equal:String.equal
+let shortcut_logic_arities = function
+  | "." -> Some [ 1; 2; 3 ]
+  | "T" -> Some [ 1 ]
+  | "@" -> Some [ 2; 3 ]
+  | _ -> None
+
+let is_shortcut_logic spec = Option.is_some (shortcut_logic_arities spec)
+
+let check_logic_arity ~loc ~arity ~spec logic =
+  match shortcut_logic_arities spec with
+  | Some arities when not (List.mem arities arity ~equal:Int.equal) ->
+      let names = List.map arities ~f:(function 1 -> "unary" | 2 -> "binary" | _ -> "ternary") in
+      Ast_builder.Default.pexp_extension ~loc
+      @@ Location.error_extensionf ~loc
+           "ppx_ocannl %%cd: ~logic:%S is a shortcut valid only for %s assignments" spec
+           (String.concat ~sep:" and " names)
+  | _ -> logic
 
 (* The capture list belongs to the literal logic argument, just as it belongs to the literal spec of
    an einsum operator. Keep recognition separate from collecting bindings so guards do not mint
@@ -1712,6 +1728,7 @@ let translate ?ident_label (expr : expression) : result =
             | _ -> [%expr Shape.Compose]
           else [%expr Shape.Einsum (Shape.einsum_spec [%e logic], [%e capture_dims])]
         in
+        let logic = check_logic_arity ~loc:s_loc ~arity:2 ~spec logic in
         let _, bin_op = binary_op bin_op in
         let res =
           process_raw_accum ~accu_op ~lhs
@@ -1749,6 +1766,7 @@ let translate ?ident_label (expr : expression) : result =
                  spec
           else [%expr Shape.Einsum_tern (Shape.einsum_spec [%e logic], [%e capture_dims])]
         in
+        let logic = check_logic_arity ~loc:s_loc ~arity:3 ~spec logic in
         let _, tern_op = ternary_op tern_op in
         let res =
           process_raw_accum ~accu_op ~lhs
@@ -1783,6 +1801,7 @@ let translate ?ident_label (expr : expression) : result =
           else if String.equal spec "T" then [%expr Shape.Transpose]
           else [%expr Shape.Permute (Shape.einsum_spec [%e logic], [%e capture_dims])]
         in
+        let logic = check_logic_arity ~loc:s_loc ~arity:1 ~spec logic in
         let _, un_op = Hashtbl.find_exn unary_ops unop_ident loc in
         let res =
           process_raw_accum ~accu_op ~lhs

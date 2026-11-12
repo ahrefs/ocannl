@@ -816,3 +816,262 @@ let logic_accumulate_empty =
                         rhs3 =
                           (Tensor.buffer_of ~is_grad:false ~is_merge:false z)
                       }))])
+let logic_unary_compose =
+  let open! NTDSL.O in
+    fun tgt x ->
+      Ir.Assignments.sequence
+        (let __cd_fwd1 =
+           if Tensor.is_fwd_root tgt
+           then Tensor.take_forward_code tgt
+           else Ir.Assignments.empty_comp in
+         let __cd_fwd2 =
+           if Tensor.is_fwd_root x
+           then Tensor.take_forward_code x
+           else Ir.Assignments.empty_comp in
+         [__cd_fwd1;
+         __cd_fwd2;
+         Ir.Assignments.to_comp
+           (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
+              ~t:tgt ~lhs_is_grad:false
+              ~shape_logic:(Shape.Transpose
+                              (([%ocaml.error
+                                  "ppx_ocannl %cd: ~logic:\"@\" is a shortcut valid only for binary and ternary assignments"]),
+                                (x.Tensor.shape)))
+              ~rhs:(Ir.Assignments.Unop
+                      {
+                        op = Ir.Ops.Identity;
+                        rhs =
+                          (Tensor.buffer_of ~is_grad:false ~is_merge:false x)
+                      }))])
+let logic_unary_compose_empty =
+  let open! NTDSL.O in
+    fun tgt x ->
+      Ir.Assignments.sequence
+        (let __cd_fwd1 =
+           if Tensor.is_fwd_root tgt
+           then Tensor.take_forward_code tgt
+           else Ir.Assignments.empty_comp in
+         let __cd_fwd2 =
+           if Tensor.is_fwd_root x
+           then Tensor.take_forward_code x
+           else Ir.Assignments.empty_comp in
+         [__cd_fwd1;
+         __cd_fwd2;
+         Ir.Assignments.to_comp
+           (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
+              ~t:tgt ~lhs_is_grad:false
+              ~shape_logic:(Shape.Transpose
+                              (([%ocaml.error
+                                  "ppx_ocannl %cd: ~logic:\"@\" is a shortcut valid only for binary and ternary assignments"]),
+                                (x.Tensor.shape)))
+              ~rhs:(Ir.Assignments.Unop
+                      {
+                        op = Ir.Ops.Identity;
+                        rhs =
+                          (Tensor.buffer_of ~is_grad:false ~is_merge:false x)
+                      }))])
+let logic_binary_transpose =
+  let open! NTDSL.O in
+    fun tgt x y ->
+      Ir.Assignments.sequence
+        (let __cd_fwd1 =
+           if Tensor.is_fwd_root tgt
+           then Tensor.take_forward_code tgt
+           else Ir.Assignments.empty_comp in
+         let __cd_fwd2 =
+           if Tensor.is_fwd_root x
+           then Tensor.take_forward_code x
+           else Ir.Assignments.empty_comp in
+         let __cd_fwd3 =
+           if Tensor.is_fwd_root y
+           then Tensor.take_forward_code y
+           else Ir.Assignments.empty_comp in
+         [__cd_fwd1;
+         __cd_fwd2;
+         __cd_fwd3;
+         Ir.Assignments.to_comp
+           (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
+              ~t:tgt ~lhs_is_grad:false
+              ~shape_logic:(Shape.Broadcast
+                              (([%ocaml.error
+                                  "ppx_ocannl %cd: ~logic:\"T\" is a shortcut valid only for unary assignments"]),
+                                (x.Tensor.shape), (y.Tensor.shape)))
+              ~rhs:(Ir.Assignments.Binop
+                      {
+                        op = Ir.Ops.Mul;
+                        rhs1 =
+                          (Tensor.buffer_of ~is_grad:false ~is_merge:false x);
+                        rhs2 =
+                          (Tensor.buffer_of ~is_grad:false ~is_merge:false y)
+                      }))])
+let logic_binary_transpose_empty =
+  let open! NTDSL.O in
+    fun tgt x y ->
+      Ir.Assignments.sequence
+        (let __cd_fwd1 =
+           if Tensor.is_fwd_root tgt
+           then Tensor.take_forward_code tgt
+           else Ir.Assignments.empty_comp in
+         let __cd_fwd2 =
+           if Tensor.is_fwd_root x
+           then Tensor.take_forward_code x
+           else Ir.Assignments.empty_comp in
+         let __cd_fwd3 =
+           if Tensor.is_fwd_root y
+           then Tensor.take_forward_code y
+           else Ir.Assignments.empty_comp in
+         [__cd_fwd1;
+         __cd_fwd2;
+         __cd_fwd3;
+         Ir.Assignments.to_comp
+           (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
+              ~t:tgt ~lhs_is_grad:false
+              ~shape_logic:(Shape.Broadcast
+                              (([%ocaml.error
+                                  "ppx_ocannl %cd: ~logic:\"T\" is a shortcut valid only for unary assignments"]),
+                                (x.Tensor.shape), (y.Tensor.shape)))
+              ~rhs:(Ir.Assignments.Binop
+                      {
+                        op = Ir.Ops.Mul;
+                        rhs1 =
+                          (Tensor.buffer_of ~is_grad:false ~is_merge:false x);
+                        rhs2 =
+                          (Tensor.buffer_of ~is_grad:false ~is_merge:false y)
+                      }))])
+let logic_ternary_transpose =
+  let open! NTDSL.O in
+    fun tgt x y z ->
+      Ir.Assignments.sequence
+        (let __cd_fwd1 =
+           if Tensor.is_fwd_root tgt
+           then Tensor.take_forward_code tgt
+           else Ir.Assignments.empty_comp in
+         let __cd_fwd2 =
+           if Tensor.is_fwd_root x
+           then Tensor.take_forward_code x
+           else Ir.Assignments.empty_comp in
+         let __cd_fwd3 =
+           if Tensor.is_fwd_root y
+           then Tensor.take_forward_code y
+           else Ir.Assignments.empty_comp in
+         let __cd_fwd4 =
+           if Tensor.is_fwd_root z
+           then Tensor.take_forward_code z
+           else Ir.Assignments.empty_comp in
+         [__cd_fwd1;
+         __cd_fwd2;
+         __cd_fwd3;
+         __cd_fwd4;
+         Ir.Assignments.to_comp
+           (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
+              ~t:tgt ~lhs_is_grad:false
+              ~shape_logic:(Shape.Broadcast_tern
+                              (([%ocaml.error
+                                  "ppx_ocannl %cd: ~logic:\"T\" is a shortcut valid only for unary assignments"]),
+                                (x.Tensor.shape), (y.Tensor.shape),
+                                (z.Tensor.shape)))
+              ~rhs:(Ir.Assignments.Ternop
+                      {
+                        op = Ir.Ops.Where;
+                        rhs1 =
+                          (Tensor.buffer_of ~is_grad:false ~is_merge:false x);
+                        rhs2 =
+                          (Tensor.buffer_of ~is_grad:false ~is_merge:false y);
+                        rhs3 =
+                          (Tensor.buffer_of ~is_grad:false ~is_merge:false z)
+                      }))])
+let logic_ternary_transpose_empty =
+  let open! NTDSL.O in
+    fun tgt x y z ->
+      Ir.Assignments.sequence
+        (let __cd_fwd1 =
+           if Tensor.is_fwd_root tgt
+           then Tensor.take_forward_code tgt
+           else Ir.Assignments.empty_comp in
+         let __cd_fwd2 =
+           if Tensor.is_fwd_root x
+           then Tensor.take_forward_code x
+           else Ir.Assignments.empty_comp in
+         let __cd_fwd3 =
+           if Tensor.is_fwd_root y
+           then Tensor.take_forward_code y
+           else Ir.Assignments.empty_comp in
+         let __cd_fwd4 =
+           if Tensor.is_fwd_root z
+           then Tensor.take_forward_code z
+           else Ir.Assignments.empty_comp in
+         [__cd_fwd1;
+         __cd_fwd2;
+         __cd_fwd3;
+         __cd_fwd4;
+         Ir.Assignments.to_comp
+           (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
+              ~t:tgt ~lhs_is_grad:false
+              ~shape_logic:(Shape.Broadcast_tern
+                              (([%ocaml.error
+                                  "ppx_ocannl %cd: ~logic:\"T\" is a shortcut valid only for unary assignments"]),
+                                (x.Tensor.shape), (y.Tensor.shape),
+                                (z.Tensor.shape)))
+              ~rhs:(Ir.Assignments.Ternop
+                      {
+                        op = Ir.Ops.Where;
+                        rhs1 =
+                          (Tensor.buffer_of ~is_grad:false ~is_merge:false x);
+                        rhs2 =
+                          (Tensor.buffer_of ~is_grad:false ~is_merge:false y);
+                        rhs3 =
+                          (Tensor.buffer_of ~is_grad:false ~is_merge:false z)
+                      }))])
+let logic_one_char =
+  let open! NTDSL.O in
+    fun tgt x ->
+      Ir.Assignments.sequence
+        (let __cd_fwd1 =
+           if Tensor.is_fwd_root tgt
+           then Tensor.take_forward_code tgt
+           else Ir.Assignments.empty_comp in
+         let __cd_fwd2 =
+           if Tensor.is_fwd_root x
+           then Tensor.take_forward_code x
+           else Ir.Assignments.empty_comp in
+         [__cd_fwd1;
+         __cd_fwd2;
+         Ir.Assignments.to_comp
+           (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
+              ~t:tgt ~lhs_is_grad:false
+              ~shape_logic:(Shape.Transpose
+                              ((Shape.Permute ((Shape.einsum_spec "a"), [])),
+                                (x.Tensor.shape)))
+              ~rhs:(Ir.Assignments.Unop
+                      {
+                        op = Ir.Ops.Identity;
+                        rhs =
+                          (Tensor.buffer_of ~is_grad:false ~is_merge:false x)
+                      }))])
+let logic_transpose_label =
+  let open! NTDSL.O in
+    fun tgt x ->
+      Ir.Assignments.sequence
+        (let __cd_fwd1 =
+           if Tensor.is_fwd_root tgt
+           then Tensor.take_forward_code tgt
+           else Ir.Assignments.empty_comp in
+         let __cd_fwd2 =
+           if Tensor.is_fwd_root x
+           then Tensor.take_forward_code x
+           else Ir.Assignments.empty_comp in
+         [__cd_fwd1;
+         __cd_fwd2;
+         Ir.Assignments.to_comp
+           (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
+              ~t:tgt ~lhs_is_grad:false
+              ~shape_logic:(Shape.Transpose
+                              ((Shape.Permute
+                                  ((Shape.einsum_spec "T => T"), [])),
+                                (x.Tensor.shape)))
+              ~rhs:(Ir.Assignments.Unop
+                      {
+                        op = Ir.Ops.Identity;
+                        rhs =
+                          (Tensor.buffer_of ~is_grad:false ~is_merge:false x)
+                      }))])

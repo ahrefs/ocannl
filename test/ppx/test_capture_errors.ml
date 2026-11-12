@@ -46,3 +46,15 @@ let%cd logic_binary_pointwise_empty tgt x y = tgt =: x * y ~logic:"." []
 let%cd logic_compose_empty tgt x y = tgt =: x * y ~logic:"@" []
 let%cd logic_ternary_pointwise_empty tgt x y z = tgt =: where x y z ~logic:"." []
 let%cd logic_accumulate_empty tgt x y z = tgt =: fma x y z ~logic:"@" []
+
+(* Shortcut spellings used at the wrong assignment arity, with either capture syntax. *)
+let%cd logic_unary_compose tgt x = tgt =: id x ~logic:"@"
+let%cd logic_unary_compose_empty tgt x = tgt =: id x ~logic:"@" []
+let%cd logic_binary_transpose tgt x y = tgt =: x * y ~logic:"T"
+let%cd logic_binary_transpose_empty tgt x y = tgt =: mul (x, y) ~logic:"T" []
+let%cd logic_ternary_transpose tgt x y z = tgt =: where x y z ~logic:"T"
+let%cd logic_ternary_transpose_empty tgt x y z = tgt =: where (x, y, z) ~logic:"T" []
+
+(* Other one-character strings remain einsum specs; explicit arrows disambiguate labels. *)
+let%cd logic_one_char tgt x = tgt =: id x ~logic:"a"
+let%cd logic_transpose_label tgt x = tgt =: id x ~logic:"T => T"

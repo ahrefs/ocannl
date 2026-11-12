@@ -708,6 +708,9 @@ for unary, binary and ternary assignments. For example,
 binds `a` and `b` with the same per-call scope and label checks as operator captures.
 Captures apply to einsum specs only: the shortcuts `"."`, `"T"` and `"@"` reject nonempty
 capture lists, but accept `[]`.
+Shortcut spellings take precedence over einsum parsing: `"."` accepts unary, binary and ternary
+assignments, `"T"` only unary, and `"@"` only binary or ternary; other arities are expansion errors
+with or without `[]` (use an explicit einsum spec such as `"T => T"` for an axis named `T`).
 `Shape.set_dim a 2; Shape.set_dim b 1` sizes those concat segments before compilation.
 This assignment writes the `a` and `c` segments; the existing `b` cells of `tgt` retain their
 prior values. The capture references are passed in the assignment's shape logic.
