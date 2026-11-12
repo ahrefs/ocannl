@@ -19,6 +19,8 @@ type expr_type =
     }
   | Function
 
+let is_shortcut_logic spec = List.mem [ "."; "T"; "@" ] spec ~equal:String.equal
+
 (* The capture list belongs to the literal logic argument, just as it belongs to the literal spec of
    an einsum operator. Keep recognition separate from collecting bindings so guards do not mint
    capture references. *)
@@ -31,7 +33,7 @@ let logic_spec expr =
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } as literal]
         ([%e? head] :: [%e? rest])] ->
-      if String.contains spec '>' || List.mem [ "."; "T"; "@" ] spec ~equal:String.equal then
+      if String.contains spec '>' || is_shortcut_logic spec then
         Some (spec, s_loc, literal, Some (head, rest))
       else None
   | _ -> None
@@ -951,12 +953,13 @@ let translate ?ident_label (expr : expression) : result =
     in
     let collect_logic_captures ~loc ~spec = function
       | None -> ([], [%expr []])
-      | Some (head, _) when List.mem [ "."; "T"; "@" ] spec ~equal:String.equal ->
+      | Some (head, _) when is_shortcut_logic spec ->
           let loc = head.pexp_loc in
           let error =
             Ast_builder.Default.pexp_extension ~loc
             @@ Location.error_extensionf ~loc
-                 "ppx_ocannl %%cd: captures apply to einsum specs only; ~logic:%S is a shortcut"
+                 "ppx_ocannl %%cd: captures apply to einsum specs only; ~logic:%S has no einsum \
+                  labels"
                  spec
           in
           (* Shortcut logic ignores capture_dims, so keep the diagnostic in a binding. *)

@@ -531,7 +531,7 @@ let logic_empty =
 let logic_pointwise_capture =
   let _ =
     [%ocaml.error
-      "ppx_ocannl %cd: captures apply to einsum specs only; ~logic:\".\" is a shortcut"] in
+      "ppx_ocannl %cd: captures apply to einsum specs only; ~logic:\".\" has no einsum labels"] in
   let open! NTDSL.O in
     fun tgt x ->
       Ir.Assignments.sequence
@@ -559,7 +559,7 @@ let logic_pointwise_capture =
 let logic_transpose_capture =
   let _ =
     [%ocaml.error
-      "ppx_ocannl %cd: captures apply to einsum specs only; ~logic:\"T\" is a shortcut"] in
+      "ppx_ocannl %cd: captures apply to einsum specs only; ~logic:\"T\" has no einsum labels"] in
   let open! NTDSL.O in
     fun tgt x ->
       Ir.Assignments.sequence
@@ -587,7 +587,7 @@ let logic_transpose_capture =
 let logic_compose_capture =
   let _ =
     [%ocaml.error
-      "ppx_ocannl %cd: captures apply to einsum specs only; ~logic:\"@\" is a shortcut"] in
+      "ppx_ocannl %cd: captures apply to einsum specs only; ~logic:\"@\" has no einsum labels"] in
   let open! NTDSL.O in
     fun tgt x y ->
       Ir.Assignments.sequence
