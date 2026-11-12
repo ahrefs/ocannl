@@ -31,7 +31,9 @@ let logic_spec expr =
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } as literal]
         ([%e? head] :: [%e? rest])] ->
-      if String.contains spec '>' then Some (spec, s_loc, literal, Some (head, rest)) else None
+      if String.contains spec '>' || List.mem [ "."; "T"; "@" ] spec ~equal:String.equal then
+        Some (spec, s_loc, literal, Some (head, rest))
+      else None
   | _ -> None
 
 let is_unknown = function Unknown -> true | _ -> false
@@ -949,6 +951,16 @@ let translate ?ident_label (expr : expression) : result =
     in
     let collect_logic_captures ~loc ~spec = function
       | None -> ([], [%expr []])
+      | Some (head, _) when List.mem [ "."; "T"; "@" ] spec ~equal:String.equal ->
+          let loc = head.pexp_loc in
+          let error =
+            Ast_builder.Default.pexp_extension ~loc
+            @@ Location.error_extensionf ~loc
+                 "ppx_ocannl %%cd: captures apply to einsum specs only; ~logic:%S is a shortcut"
+                 spec
+          in
+          (* Shortcut logic ignores capture_dims, so keep the diagnostic in a binding. *)
+          ([ Ast_builder.Default.value_binding ~loc ~pat:[%pat? _] ~expr:error ], [%expr []])
       | Some (head, rest) -> collect_capture_labels ~loc ~spec head rest
     in
     let process_raw_accum ~accu_op ~lhs ~rhses ~rhs_of_buffers ~logic =

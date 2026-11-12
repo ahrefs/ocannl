@@ -33,3 +33,16 @@ let%cd logic_ternary tgt x y z = tgt =: where x y z ~logic:"a; a; a => a" [ "a" 
 let%cd logic_ternary_tuple tgt x y z = tgt =: where (x, y, z) ~logic:"a; a; a => a" [ "a" ]
 let%cd logic_unary_parens tgt x = tgt =: (id x) ~logic:"a => a" [ "a" ]
 let%cd logic_empty tgt x = tgt =: id x ~logic:"a => a" []
+
+(* Shortcut shape logic has no einsum labels to capture. *)
+let%cd logic_pointwise_capture tgt x = tgt =: id x ~logic:"." [ "a" ]
+let%cd logic_transpose_capture tgt x = tgt =: id x ~logic:"T" [ "a" ]
+let%cd logic_compose_capture tgt x y = tgt =: x * y ~logic:"@" [ "a" ]
+
+(* Empty capture lists retain the shortcut expansions at each supported arity. *)
+let%cd logic_pointwise_empty tgt x = tgt =: id x ~logic:"." []
+let%cd logic_transpose_empty tgt x = tgt =: id x ~logic:"T" []
+let%cd logic_binary_pointwise_empty tgt x y = tgt =: x * y ~logic:"." []
+let%cd logic_compose_empty tgt x y = tgt =: x * y ~logic:"@" []
+let%cd logic_ternary_pointwise_empty tgt x y z = tgt =: where x y z ~logic:"." []
+let%cd logic_accumulate_empty tgt x y z = tgt =: fma x y z ~logic:"@" []
