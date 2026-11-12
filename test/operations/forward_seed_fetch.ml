@@ -237,6 +237,17 @@ let count_seed_prepends (comp : Asgns.comp) ~(rest : Asgns.t) ~(seed : Asgns.t) 
   go 0 comp.asgns
 
 let () =
+  Verdict.case "parameter initialization leaves forward-only seeds to the handout" (fun () ->
+      let { rs; owner; reader } = build ~seed:7 Singleton in
+      let%op result = reader *. { scale = 2. } in
+      let init = Tensor.init_params result in
+      let written = Asgns.collect_written init.asgns in
+      p "initialization does not write a seed read only by the forward graph"
+        (not (Set.mem written rs.value));
+      p "initialization does not allocate that seed" (not (Set.mem init.embedded_nodes rs.value));
+      p_all "initialization still writes the constant parameter" (Set.to_list result.params)
+        ~f:(fun param -> Set.mem written param.Tensor.value);
+      ignore (Stdlib.Sys.opaque_identity owner : Tensor.t));
   Verdict.case "the handout's shape" (fun () ->
       Exn.protect ~finally:release_all ~f:(fun () ->
           let { rs; owner; reader } = build ~seed:7 Scoped in

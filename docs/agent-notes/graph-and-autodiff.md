@@ -213,9 +213,9 @@ files.
   they now reach the `Specified` no-op before the forced-read check, pinned by the read-first
   `wrap` rows in `data_leaf_top_down_prec`. The algorithm is in `docs/precision_inference.md`.
 
-- Embedding a seed singleton does not initialize it (gh-ocannl-2023). When `Tensor.init_params`
-  adds the singleton whose code another graph absorbed, it also prepends that seed's own
-  `Constant_bits` fetch. This covers independent models and unused branches without requiring
+- Embedding a seed singleton does not initialize it (gh-ocannl-2023). `Tensor.init_params`
+  prepends the `Constant_bits` fetch of each registered seed its parameter initializers read
+  and do not write. This covers independent models and unused branches without requiring
   callers to initialize a library-owned node. Replaying the literal does not reset a stream:
   `uniform` derives its counter from node ids and offsets, and `uniform_at` adds an explicit
   counter input. `embedded_read_only` pins draws against explicit seed 42, distinguishes seed 0,
@@ -243,6 +243,9 @@ files.
   reader carries two fetches of one literal: both harmless, pinned by `forward_seed_fetch` against
   a reference that reads the seed from its owner's lineage. A raw `t.forward` given to
   `Context.compile` bypasses the handout and gets no fetch.
+  `init_params_body` no longer adds the current singleton independently of those reads: seeds
+  read only by the forward graph belong to its handout, not parameter initialization.
+  `forward_seed_fetch` pins the absence of that init write and allocation with a constant parameter.
 
 - Parameter initialization order follows the program (gh-ocannl-2158): `init_params` orders
   fragments by dependency, with first forward-statement access and tensor operand order breaking

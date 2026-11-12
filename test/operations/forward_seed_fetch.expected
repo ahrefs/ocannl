@@ -54,6 +54,9 @@ through one computation embedding both, the owner's draws are unchanged: true
 through a checkpoint rewound, the reader draws exactly the reference: true
 through a checkpoint rewound, the owner's draws are unchanged: true
 it draws exactly the caller-seeded reference: true
+initialization does not write a seed read only by the forward graph: true
+initialization does not allocate that seed: true
+initialization still writes the constant parameter: true
 the reader's own code reads the seed and does not write it: true
 the owner's handout is its own code: it writes the seed already: true
 the reader's handout prepends the seed's fetch exactly once: true
