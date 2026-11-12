@@ -3293,22 +3293,49 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules virtual_inliner_oracle)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (libraries base ocannl stdio mtime.clock.os arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-; The oracle's `--widen` run (gh-ocannl-1964): the full cross of every write with every read on
-; every shape, pools unthinned -- about 9.3 million programs including the nested-source family,
-; against the default run's 463 thousand. Runtime evidence lives in staging#1924. The default thins the large shapes, so `--widen` is the only
-; run holding every pair on them to the semantics, and the oracle's first run found a real wrong
-; value (`Affine.common_layout`, pinned by `row_trailing_sub_axis_write`). No golden: the census
-; counts differ from the default run's by construction, and the Verdict claims are the gate (a
-; `FINDING` on stderr names the program). On the `slow` alias, so `tools/test-run.sh affected`
-; names it to whoever changes the inliner, and the daily sweep's `cc-oracle-widen` unit
-; (tools/sweep.sh) builds this alias alone.
+; The full widened census is partitioned by descriptor ordinal modulo four (gh-ocannl-2186).
+; No thinning: the aggregate retains every program. Each shard keeps the replay, both optimizer
+; arms, the compiled anchors and the same coverage floors, under the per-test training lock.
+; Its own 600s bound includes anchors; --check-shards audits all 9,333,622 descriptors cheaply.
 
 (rule
- (alias slow-virtual_inliner_oracle-widen)
+ (alias runtest-virtual_inliner_oracle-shards)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  virtual_inliner_oracle-shards.expected)
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     virtual_inliner_oracle-shards.actual
+     (run %{dep:virtual_inliner_oracle.exe} --check-shards))
+    (diff
+     virtual_inliner_oracle-shards.expected
+     virtual_inliner_oracle-shards.actual)))))
+
+(alias
+ (name runtest)
+ (deps
+  (alias runtest-virtual_inliner_oracle-shards)))
+
+(alias
+ (name slow-virtual_inliner_oracle-widen)
+ (deps
+  (alias runtest-virtual_inliner_oracle-shards)
+  (alias slow-virtual_inliner_oracle-widen-0)
+  (alias slow-virtual_inliner_oracle-widen-1)
+  (alias slow-virtual_inliner_oracle-widen-2)
+  (alias slow-virtual_inliner_oracle-widen-3)))
+
+(rule
+ (alias slow-virtual_inliner_oracle-widen-0)
  (package neural_nets_lib)
  (locks /ocannl_training_test)
  (deps
@@ -3316,7 +3343,40 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (action
-  (run %{dep:virtual_inliner_oracle.exe} --widen)))
+  (run %{dep:virtual_inliner_oracle.exe} --widen --shard 0)))
+
+(rule
+ (alias slow-virtual_inliner_oracle-widen-1)
+ (package neural_nets_lib)
+ (locks /ocannl_training_test)
+ (deps
+  (alias slow-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (run %{dep:virtual_inliner_oracle.exe} --widen --shard 1)))
+
+(rule
+ (alias slow-virtual_inliner_oracle-widen-2)
+ (package neural_nets_lib)
+ (locks /ocannl_training_test)
+ (deps
+  (alias slow-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (run %{dep:virtual_inliner_oracle.exe} --widen --shard 2)))
+
+(rule
+ (alias slow-virtual_inliner_oracle-widen-3)
+ (package neural_nets_lib)
+ (locks /ocannl_training_test)
+ (deps
+  (alias slow-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (run %{dep:virtual_inliner_oracle.exe} --widen --shard 3)))
 
 (test
  (name affine_lowering)

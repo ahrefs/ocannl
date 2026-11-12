@@ -498,7 +498,12 @@ files.
   shapes to fit a test's budget; `--widen` is the full cross (about 9.3 million programs),
   on its own alias `@test/operations/slow-virtual_inliner_oracle-widen`, which the daily sweep's
   `cc-oracle-widen` unit builds and `tools/test-run.sh affected` names to a change reaching the
-  inliner — run it before pushing such a change. Its first run found
+  inliner — run it before pushing such a change. That alias aggregates four locked
+  `slow-virtual_inliner_oracle-widen-0` through `-3` shards (gh-ocannl-2186), selected by descriptor
+  ordinal modulo four, each retaining compiled anchors and reporting total elapsed time against a
+  600-second bound on stderr. `runtest-virtual_inliner_oracle-shards` cheaply enumerates the full
+  grammar and checks the disjoint union against the pre-split 9,333,622-program census; no backend
+  loses programs. Shared-slot before/after evidence belongs to the PR. Its first run found
   `Affine.common_layout` writing coordinates back in reverse (`Array.for_all` in Base runs from the
   last element, so a side effect in its predicate runs backwards): both sides reversed alike, which
   the pairwise solving could not see, while `same_unit_cell` read a wide coordinate at a unit axis

@@ -54,3 +54,4 @@ strict probe: scope in a projection's unrendered operand: lazy passes, strict pa
 strict probe: plain read past s in a projection's unrendered operand: lazy passes, strict passes: true
 compiled anchors include eight nested producers with guarded-arm scopes: true
 a compiled program computes the interpreter's values, in both arms: true
+the oracle completed within its wall-time bound: true

@@ -40,7 +40,9 @@
    the built executable from [_build/default/test/operations], which finds [ocannl_config] there;
    [--widen] also has an alias of its own, [@test/operations/slow-virtual_inliner_oracle-widen],
    which the daily sweep's [cc-oracle-widen] unit builds (tools/sweep.sh) and [tools/test-run.sh
-   affected] names to a change reaching the inliner. *)
+   affected] names to a change reaching the inliner. The alias now aggregates four [--shard N]
+   slices of the same enumeration (gh-ocannl-2186); [--check-shards] audits their union without
+   optimizing or compiling any program. *)
 
 open Base
 open Ll_test
@@ -615,12 +617,41 @@ let check_program prog =
           note_guarded_scope os;
           judge "virtual arm" (fun () -> evaluate prog b os))
 
-(* [--only <substring>]: print the raw and optimized code of the programs whose descriptor contains
-   it, and check nothing. *)
-let only =
-  let argv = Sys.get_argv () in
-  Array.findi argv ~f:(fun _ a -> String.equal a "--only")
-  |> Option.map ~f:(fun (i, _) -> argv.(i + 1))
+(* Ordinals belong to the descriptor enumeration, before optimization or any placement decision.
+   Four is coprime to the three standings, so no slice loses a standing. Every shard walks the same
+   grammar but optimizes only its slice; --check-shards exercises that same selector cheaply. *)
+let shard_count = 4
+let argv = Sys.get_argv ()
+let has_arg flag = Array.mem argv flag ~equal:String.equal
+
+let arg flag =
+  Array.findi argv ~f:(fun _ a -> String.equal a flag)
+  |> Option.map ~f:(fun (i, _) ->
+      if i + 1 >= Array.length argv then invalid_arg (flag ^ " needs a value");
+      argv.(i + 1))
+
+let only = arg "--only"
+let check_shards = has_arg "--check-shards"
+let widen = has_arg "--widen" || check_shards
+let shard = Option.map (arg "--shard") ~f:Int.of_string
+
+let () =
+  Option.iter shard ~f:(fun i ->
+      if (not widen) || i < 0 || i >= shard_count || check_shards || Option.is_some only then
+        invalid_arg "--shard requires --widen and an index in 0..3, without --only/--check-shards")
+
+let owns ~shard ordinal = ordinal % shard_count = shard
+let enumerated = ref 0
+let shard_sizes = Array.create ~len:shard_count 0
+let bad_ownerships = ref 0
+
+let audit_ordinal ordinal =
+  let owners = ref 0 in
+  Array.iteri shard_sizes ~f:(fun shard n ->
+      if owns ~shard ordinal then (
+        Int.incr owners;
+        shard_sizes.(shard) <- n + 1));
+  if !owners <> 1 then Int.incr bad_ownerships
 
 let dump prog =
   Stdio.eprintf "PROGRAM %s\nreplay %s\n" (show_program prog) (show_outs (replay prog));
@@ -633,18 +664,22 @@ let dump prog =
       Stdio.eprintf "optimized:\n%s\n%!" (Sexp.to_string_hum (LL.sexp_of_t o.LL.llc)))
 
 let check prog =
-  Int.incr programs_run;
-  match only with
-  | Some sub -> if String.is_substring (show_program prog) ~substring:sub then dump prog
-  | None -> check_program prog
+  let ordinal = !enumerated in
+  Int.incr enumerated;
+  if check_shards then audit_ordinal ordinal
+  else if Option.for_all shard ~f:(fun shard -> owns ~shard ordinal) then (
+    Int.incr programs_run;
+    match only with
+    | Some sub -> if String.is_substring (show_program prog) ~substring:sub then dump prog
+    | None -> check_program prog)
 
 (* === The families ===
 
-   The whole cross of every write with every read is 3 to 4 million programs, minutes of a test run,
-   so the default run crosses what it can afford to and states what it does not. On a shape with at
-   most 20000 pairs, the full cross; on every other, each write against the core reads and each read
-   against the core writes. [--widen] runs the full cross on every shape and unthins the pools, for
-   someone changing the inliner. *)
+   The widened grammar contains about 9.3 million programs, minutes of a test run, so the default
+   run crosses what it can afford to and states what it does not. On a shape with at most 20000
+   pairs, the full cross; on every other, each write against the core reads and each read against
+   the core writes. [--widen] runs the full cross on every shape and unthins the pools, for someone
+   changing the inliner. *)
 
 let shapes =
   [
@@ -694,7 +729,6 @@ let core ~dims xs =
   |> List.map ~f:snd
 
 (* Every third, in the classes' order: what keeps the crosses below to a test's run time. *)
-let widen = Array.mem (Sys.get_argv ()) "--widen" ~equal:String.equal
 let thinned xs = if widen then xs else List.filteri xs ~f:(fun i _ -> i % 3 = 0)
 
 let family_runs ?(nested_src = false) ~dims ~comps ~reads ~steps ~standings () =
@@ -952,14 +986,36 @@ let tier_b () =
 
 (* === The verdict === *)
 
+let audit_shards () =
+  Stdio.printf "%d widened programs\n" !enumerated;
+  Array.iteri shard_sizes ~f:(fun i n -> Stdio.printf "shard %d/%d: %d programs\n" i shard_count n);
+  (* An independent census pin: adding grammar requires an explicit coverage update. *)
+  p "the widened census is unchanged" (!enumerated = 9_333_622);
+  p "every ordinal belongs to exactly one shard" (!bad_ownerships = 0);
+  p_alli "each shard has its complete ordinal slice" (Array.to_list shard_sizes) ~f:(fun i n ->
+      n = (!enumerated + shard_count - 1 - i) / shard_count);
+  p "the shard union equals the full widened census"
+    (Array.sum (module Int) shard_sizes ~f:Fn.id = !enumerated)
+
 let () =
-  let t0 = Unix.gettimeofday () in
+  let started = Mtime_clock.counter () in
+  let seconds () = Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9 in
+  let bound = if Option.is_some shard then 600. else 1200. in
+  let slice =
+    Option.value_map shard ~default:"all" ~f:(fun i -> Printf.sprintf "%d/%d" i shard_count)
+  in
+  Stdlib.at_exit (fun () ->
+      Stdio.eprintf
+        "oracle shard=%s elapsed=%.2f s / %.0f s bound, %d programs of %d, %d findings (not part \
+         of the golden)\n\
+         %!"
+        slice (seconds ()) bound !programs_run !enumerated !finding_count);
   List.iter shapes ~f:enumerate;
-  if Option.is_none only then (
-    let seconds = Unix.gettimeofday () -. t0 in
+  if check_shards then audit_shards ()
+  else if Option.is_none only then (
     Stdio.printf "%d programs\n" !programs_run;
-    Stdio.eprintf "%d programs in %.1f s, %d findings (not part of the golden)\n%!" !programs_run
-      seconds !finding_count;
+    Option.iter shard ~f:(fun i ->
+        Stdio.printf "slice: ordinal mod %d = %d of %d widened programs\n" shard_count i !enumerated);
     (* One row per family, so that a moved boundary edits rows without removing any:
        [tools/mutation-run.sh] reads a run printing fewer rows than the golden as stopped early. *)
     Hashtbl.to_alist census
@@ -1006,4 +1062,5 @@ let () =
     p "every program kept to the semantics" (!programs_run >= 100_000 && !finding_count = 0);
     case "self-controls" self_controls;
     case "strict probe" strict_probe_controls;
-    case "tier B" tier_b)
+    case "tier B" tier_b;
+    p "the oracle completed within its wall-time bound" Float.(seconds () <= bound))
