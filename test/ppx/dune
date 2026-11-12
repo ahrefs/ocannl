@@ -40,22 +40,19 @@
  (action
   (run %{dep:env_spelling_gate.exe})))
 
-; This directory's golden-diff rules, aggregated back onto `runtest` (gh-ocannl-726). Each of them
-; attaches to its own `runtest-<name>` alias and to NOTHING else, so that `dune build
-; @test/ppx/runtest-test_ppx_op-ppx` runs that one test and applies its diff; this stanza is what
-; keeps `dune runtest` running all of them. Attaching such a rule to `runtest` as well would defeat
-; the point: a rule on two aliases makes building either alias build both, so a per-test alias that
-; also named `runtest` would pull the whole directory in behind it -- and where the name is one dune
-; generates for a `(test)` stanza, dune rejects the pair outright as a dependency cycle. Hence the
-; naming: `<name>` is the golden the rule checks, and never a `(test)` stanza's name in this
-; directory. A `runtest-<name>` rule missing from this list is one plain `dune runtest` skips
-; silently, which `test/operations/env_var_deps` checks -- the same check it makes of the `slow`
-; suite.
+; Expansion goldens have one inventory, shared by runtest through this focused aggregate.
+; Keep each diff on its individual alias: attaching it to two aliases couples their builds.
+; env_var_deps derives the required membership from every runtest-*-ppx rule.
 
 (alias
  (name runtest)
  (deps
   (alias runtest-env_spelling_gate)
+  (alias ppx-expansions)))
+
+(alias
+ (name ppx-expansions)
+ (deps
   (alias runtest-test_ppx_op-ppx)
   (alias runtest-test_ppx_name_conflict-ppx)
   (alias runtest-test_capture_errors-ppx)

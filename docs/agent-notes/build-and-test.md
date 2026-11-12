@@ -3387,10 +3387,17 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     literally: the alias must begin with the golden's name, since what a reader has in hand when
     they reach for the alias is the golden that just failed, and an alias that renames it is one
     they construct empty.
-- **The ppx goldens pin four fixtures; a ppx change's reach over the tree is
+- **The ppx expansion goldens run together through `dune build @test/ppx/ppx-expansions`;
+  a ppx change's reach over the tree is
   `tools/ppx-output-diff.sh BASE HEAD`** (gh-ocannl-1886). `test/ppx/*_expected.ml` hold the
-  expansion of the sources beside them, so a change that alters any other module's expansion passes
-  them. The script builds every `.pp.ml`/`.pp.mli` dune defines at both revisions, each in a
+  expansion of the sources beside them. These include driver-only fixtures outside Dune's
+  registered preprocessing corpus, such as the local `pow` case in `test_param_errors.ml`:
+  a `.pp.ml` comparison alone misses them. Run the aggregate as well as the comparison.
+  The aggregate reuses the existing per-fixture alias inventory; `runtest` depends on it, and
+  `env_var_deps` derives required membership from every `runtest-*-ppx` rule, so a new rule
+  omitted from the aggregate fails the scan. Each diff retains its individual alias and
+  producer dependencies. A change that alters another module's expansion can pass these fixtures.
+  The script builds every `.pp.ml`/`.pp.mli` dune defines at both revisions, each in a
   throwaway worktree, prints them back to source and diffs them; stderr tags each file `EXPANSION`
   (its input unchanged: the preprocessors' own reach), `SOURCE`, `ADDED` or `REMOVED`, and
   `-- DIR...` narrows it. The whole tree takes about 80 s on mac-studio (warm dune cache), as a
