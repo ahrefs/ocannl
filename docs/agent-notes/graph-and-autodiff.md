@@ -243,9 +243,9 @@ files.
   reader carries two fetches of one literal: both harmless, pinned by `forward_seed_fetch` against
   a reference that reads the seed from its owner's lineage. A raw `t.forward` given to
   `Context.compile` bypasses the handout and gets no fetch.
-  `init_params_body` no longer adds the current singleton independently of those reads: seeds
-  read only by the forward graph belong to its handout, not parameter initialization.
-  `forward_seed_fetch` pins the absence of that init write and allocation with a constant parameter.
+  Initialization writes only the seeds its initializers read; a seed only the forward graph reads
+  is written by its handout. `forward_seed_fetch` pins the absence of that init write and allocation
+  with a constant parameter, then runs initialization and forward against the seed-owning reference.
 
 - Parameter initialization order follows the program (gh-ocannl-2158): `init_params` orders
   fragments by dependency, with first forward-statement access and tensor operand order breaking

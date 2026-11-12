@@ -753,12 +753,12 @@ let%debug7_sexp rec init_params_body ?skip (t : t) : Asgns.comp =
      fragments are not carried here. *)
   Asgns.comp ~embedded:embedded_nodes asgns
 
-(* A seed the selected initializers read is a literal whose code may live elsewhere: absorbed by a
-   discarded draw, while the singleton has since moved on -- a [with_saved_random_seed] scope
-   restored another one, or [set_random_seed] replaced it (gh-ocannl-2119). Every registered seed
-   the program reads and does not write gets its [Constant_bits] fetch prepended, so the draws are
-   those of a program owning the seed, whichever singleton is current. Checked once, on the whole
-   program: a seed one included parameter's initializer writes is not missing for another's. *)
+(* A seed a program reads is a literal whose code may live elsewhere: absorbed by another graph,
+   whether still the singleton (gh-ocannl-2023), restored by a [with_saved_random_seed] scope, or
+   replaced by [set_random_seed] (gh-ocannl-2119). Every registered seed the program reads and does
+   not write gets its [Constant_bits] fetch prepended, so the draws are those of a program owning
+   the seed, whichever singleton is current. Checked once, on the whole program: a seed one included
+   parameter's initializer writes is not missing for another's. *)
 let with_seed_fetches (comp : Asgns.comp) : Asgns.comp =
   let read, _ = Asgns.collect_nodes_guess_output comp.Asgns.asgns in
   let missing =

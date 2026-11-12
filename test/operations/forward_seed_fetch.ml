@@ -238,16 +238,24 @@ let count_seed_prepends (comp : Asgns.comp) ~(rest : Asgns.t) ~(seed : Asgns.t) 
 
 let () =
   Verdict.case "parameter initialization leaves forward-only seeds to the handout" (fun () ->
-      let { rs; owner; reader } = build ~seed:7 Singleton in
-      let%op result = reader *. { scale = 2. } in
-      let init = Tensor.init_params result in
-      let written = Asgns.collect_written init.asgns in
-      p "initialization does not write a seed read only by the forward graph"
-        (not (Set.mem written rs.value));
-      p "initialization does not allocate that seed" (not (Set.mem init.embedded_nodes rs.value));
-      p_all "initialization still writes the constant parameter" (Set.to_list result.params)
-        ~f:(fun param -> Set.mem written param.Tensor.value);
-      ignore (Stdlib.Sys.opaque_identity owner : Tensor.t));
+      let reference = (drawn ~seed:7 Singleton Reference).values in
+      Exn.protect ~finally:release_all ~f:(fun () ->
+          let { rs; owner; reader } = build ~seed:7 Singleton in
+          let%op result = reader *. { scale = 2. } in
+          let init = Tensor.init_params result in
+          let written = Asgns.collect_written init.asgns in
+          p "initialization does not write a seed read only by the forward graph"
+            (not (Set.mem written rs.value));
+          p "initialization does not allocate that seed"
+            (not (Set.mem init.embedded_nodes rs.value));
+          p_all "initialization still writes the constant parameter" (Set.to_list result.params)
+            ~f:(fun param -> Set.mem written param.Tensor.value);
+          let ctx = track (Train.forward_once (track (Context.auto ())) result) in
+          p "initialization then forward draws exactly twice the seed-owning reference"
+            (Poly.equal
+               (Context.get_values ctx result.value)
+               (Array.map reference ~f:(fun value -> 2. *. value)));
+          ignore (Stdlib.Sys.opaque_identity owner : Tensor.t)));
   Verdict.case "the handout's shape" (fun () ->
       Exn.protect ~finally:release_all ~f:(fun () ->
           let { rs; owner; reader } = build ~seed:7 Scoped in

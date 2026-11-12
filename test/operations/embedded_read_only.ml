@@ -146,7 +146,7 @@ type init_mode =
   | Outside  (** After the scope restored another singleton. *)
   | Caller_seeded
       (** Outside too, with the caller writing the captured seed first: the reference. *)
-  | Inside  (** While the captured seed is still the singleton (gh-ocannl-2023's repair). *)
+  | Inside  (** While the captured seed is still the singleton. *)
 
 type scope =
   | Scoped  (** [with_saved_random_seed] returning normally. *)
@@ -161,8 +161,8 @@ type drawn = {
 
 let captured ?outer ?(scope = Scoped) ?(nested = false) ?(owner = true) ~inner mode =
   Tensor.unsafe_reinitialize ();
-  (* The outer singleton's own code is absorbed elsewhere too, so gh-ocannl-2023's repair of the
-     current singleton is live when the parameters are initialized outside the scope. *)
+  (* The outer singleton's own code is absorbed elsewhere too: initialization must supply the
+     captured seed the parameters read, independently of this unread current singleton. *)
   let outer_draw =
     Option.map outer ~f:(fun seed ->
         Tensor.set_random_seed ~seed ();
