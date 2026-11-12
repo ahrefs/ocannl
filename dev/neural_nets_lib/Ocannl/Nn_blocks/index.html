@@ -98,7 +98,7 @@
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-transformer_encoder_block"><a href="#val-transformer_encoder_block" class="anchor"></a><code><span><span class="keyword">val</span> transformer_encoder_block : 
-  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_k</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_v</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
@@ -109,7 +109,7 @@
   <span><span class="label">train_step</span>:<span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a> <span class="xref-unresolved">Base</span>.option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-decoder_only_block"><a href="#val-decoder_only_block" class="anchor"></a><code><span><span class="keyword">val</span> decoder_only_block : 
-  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_k</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_v</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
@@ -123,7 +123,7 @@
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">mask</span>:<a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Decoder-only transformer block: masked self-attention + FFN with post-norm LayerNorm. Like <a href="#val-transformer_encoder_block"><code>transformer_encoder_block</code></a> but accepts a <code>~mask</code> parameter for causal masking. No cross-attention — suitable for autoregressive language models.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-decoder_only"><a href="#val-decoder_only" class="anchor"></a><code><span><span class="keyword">val</span> decoder_only : 
-  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_layers</span>:int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_k</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
@@ -149,7 +149,7 @@
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">enc_output</span>:<a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-transformer_decoder_block"><a href="#val-transformer_decoder_block" class="anchor"></a><code><span><span class="keyword">val</span> transformer_decoder_block : 
-  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_k</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_v</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
@@ -163,7 +163,7 @@
   <span><span class="label">enc_output</span>:<a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">mask</span>:<a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-transformer_encoder"><a href="#val-transformer_encoder" class="anchor"></a><code><span><span class="keyword">val</span> transformer_encoder : 
-  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_layers</span>:int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_k</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
@@ -175,7 +175,7 @@
   <span><span class="label">train_step</span>:<span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a> <span class="xref-unresolved">Base</span>.option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-transformer_decoder"><a href="#val-transformer_decoder" class="anchor"></a><code><span><span class="keyword">val</span> transformer_decoder : 
-  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_layers</span>:int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_k</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
@@ -247,7 +247,7 @@
   <span><span class="label">train_step</span>:<span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a> <span class="xref-unresolved">Base</span>.option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Batch normalization for MLP layers, reducing the batch axes and preserving channel axes. Training/inference behavior, initialization and the <code>momentum</code> recurrence are as in <a href="#val-batch_norm2d"><code>batch_norm2d</code></a>.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-conv_bn_relu"><a href="#val-conv_bn_relu" class="anchor"></a><code><span><span class="keyword">val</span> conv_bn_relu : 
-  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?kernel_size</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?stride</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?out_channels</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
@@ -255,14 +255,14 @@
   <span><span class="label">train_step</span>:<span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a> <span class="xref-unresolved">Base</span>.option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Conv block with conv -&gt; batch norm -&gt; activation pattern; <code>out_channels</code> goes to <a href="#val-conv2d"><code>conv2d</code></a>.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-resnet_block"><a href="#val-resnet_block" class="anchor"></a><code><span><span class="keyword">val</span> resnet_block : 
-  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?stride</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?out_channels</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a> <span class="xref-unresolved">Base</span>.option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Residual block for ResNet-style architectures. Features skip connections that help with gradient flow in deep networks. Both convolutions use <code>out_channels</code>, or preserve the input channel row when it is omitted. An explicit <code>out_channels</code> selects a projection shortcut, including at stride 1; otherwise the shortcut is projected only when downsampling.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-vgg_block"><a href="#val-vgg_block" class="anchor"></a><code><span><span class="keyword">val</span> vgg_block : 
-  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_convs</span>:int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?kernel_size</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
