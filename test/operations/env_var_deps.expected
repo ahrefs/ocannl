@@ -355,6 +355,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-vendor_stub_arms_scan_control
   test/operations/dune                     @runtest-verdict_quantified
   test/operations/dune                     @runtest-verdict_ratchet
+  test/operations/dune                     @runtest-virtual_inliner_oracle-shards
   test/operations/dune                     @runtest-virtual_rejection_boundary_raise
   test/operations/dune                     @runtest-workflow_job_timeouts
   test/operations/dune                     @runtest-zero2hero_1of7
@@ -377,6 +378,10 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @slow-metal_gpu_hang_failure
   test/operations/dune                     @slow-tune_ship_arm
   test/operations/dune                     @slow-virtual_inliner_oracle-widen
+  test/operations/dune                     @slow-virtual_inliner_oracle-widen-0
+  test/operations/dune                     @slow-virtual_inliner_oracle-widen-1
+  test/operations/dune                     @slow-virtual_inliner_oracle-widen-2
+  test/operations/dune                     @slow-virtual_inliner_oracle-widen-3
   test/operations/profiles/dune            @runtest
   test/operations/profiles/dune            @runtest-empty_cmdline_falls_through
   test/operations/profiles/dune            @runtest-env_spelling_gate
