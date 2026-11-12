@@ -182,10 +182,11 @@ let () =
       p "the deferred trace names the first application's file and line"
         (names_site msg ~expected:(in_op line)))
 
-(* A curried ordinary call traces only once both tensor arguments have arrived. The pipeline's inner
-   partial application has finished by then, so the outer wrapper must supply the site. *)
 let%op _direct_add x y = x + y + ([ 1.; 2.; 3. ] + [ 1.; 2.; 3.; 4. ])
 
+(* Pin both the final-call site (outer wrapper, after the partial call returns) and the
+   closure-construction site (inner wrapper). Formatting is disabled so the pipeline stages keep
+   distinct source lines. _direct_add traces only once both tensor arguments have arrived. *)
 let () =
   Tensor.unsafe_reinitialize ();
   Verdict.case "ordinary partial pipelines record both application stages" (fun () ->
@@ -218,4 +219,3 @@ let () =
       p "a trace while constructing the piped closure names the partial application"
         (names_site partial ~expected:(in_op !partial_line)))
 [@@ocamlformat "disable"]
-(* Keep the two pipeline stages on distinct source lines. *)

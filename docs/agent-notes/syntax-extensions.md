@@ -127,8 +127,10 @@ files.
   constructing the partial application; after it returns, `at_site` restores the outer pipeline's
   site for the final call on `x`. Multiline pipelines distinguish these locations. A deferred
   binary function such as `_direct_add` traces only at the final call, so its error names the
-  outer site, just as the single wrapper in `f y x` names that full application. A closure trace
-  raised by `f y` instead names the inner site. Removing either wrapper loses one of these sites;
+  outer site, just as the single wrapper in `f y x` names that full application. This deliberately
+  treats a pipeline as one application starting at `x`: placing a single wrapper at `f y` around
+  the whole call would instead conflate the final call with partial-application construction.
+  A closure trace raised by `f y` instead names the inner site. Removing either wrapper loses one of these sites;
   the same executed test pins both stages. Keep the pipeline's argument binding and separate
   applications: they preserve evaluation order and optional-argument inference. An arm that reads the
   applied function of a translated expression syntactically must undo the wrapper with `strip_at_site`:
