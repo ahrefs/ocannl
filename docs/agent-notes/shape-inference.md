@@ -101,6 +101,16 @@ files.
   literal's size-1 output axis; with a constant that has no axes it fills. Giving literals no
   axes is not a shortcut: it moved 27 test actions, a transformer's logits closing `2x3x1` among
   them.
+- Solver deletion experiments: a green suite does not prove a guess or closing arm redundant
+  unless executed pins check that draws vary across their use sites. Before making that claim,
+  run `@test/operations/runtest-dropout_mask_varies` and
+  `@test/operations/runtest-row_glb_reach_executed`, inspect their draw probes, and record the
+  runs and what they establish in the PR. `test/operations/dropout_mask_varies.ml` pins both a
+  mask that keeps some entries and drops others and raw draws distinct per element; the
+  `row_glb_reach_executed` probes cover branching and repeated consumers, including documented
+  repetition cases rather than claiming every draw fills. The full green suite missed a
+  constant dropout mask after a guess deletion (gh-ocannl-2185, staging#1927); the failure story
+  and the dimension-role prerequisite for that guess are above.
 - Implicit (omitted) row specs are shared and safe-to-guess; an explicit `...` stays strict; row
   variables in kernel slots need the `|` prefix. Symbolic extents (`Row.Sym`, gh-490) are rigid:
   equal only to themselves, materialized at their declared maximum; `Total_elems` against them
