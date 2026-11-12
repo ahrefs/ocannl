@@ -429,7 +429,7 @@ let aliases_reached_from = Scan.aliases_reached_from
 
 (* The suite a per-test alias belongs to, by the naming convention: `<suite>-<name>` is one test and
    `<suite>` the suite, an `(alias (name <suite>) (deps …))` stanza listing its members -- so a
-   member the list omits is one `dune build @<suite>` skips, silently. Three suites are built this
+   member the list omits is one `dune build @<suite>` skips, silently. The main suites are built this
    way. `slow` is the one gh-ocannl-667 introduced. `train` carries the training integration runs --
    toy problems by intent, but serialized on the training lock, so on their own entry point (two
    ubuntu CI shards, a daily-sweep unit) rather than in `runtest` where they set every full run's
@@ -439,8 +439,14 @@ let aliases_reached_from = Scan.aliases_reached_from
    ALONE, since a rule attached to two aliases makes building either build both, which would put the
    whole directory behind every per-test alias. Aggregating the members here is then the only thing
    that keeps them in `dune runtest`. *)
-let suites = [ "slow"; "train"; "runtest" ]
-let member_of suite alias = String.is_prefix alias ~prefix:(suite ^ "-")
+(* Expansion membership comes from the per-fixture rules, sharing the existing inventory in
+   test/ppx/dune rather than adding another list beside runtest. *)
+let suites = [ "slow"; "train"; "runtest"; "ppx-expansions" ]
+
+let member_of suite alias =
+  if String.equal suite "ppx-expansions" then
+    String.is_prefix alias ~prefix:"runtest-" && String.is_suffix alias ~suffix:"-ppx"
+  else String.is_prefix alias ~prefix:(suite ^ "-")
 
 (* The repo-wide scans and the family alias that runs them (gh-ocannl-703). Which rules are in the
    family is DERIVED rather than listed here: a rule that recursively globs the repository, or takes

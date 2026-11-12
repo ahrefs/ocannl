@@ -391,6 +391,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/startup_streams/dune     @runtest-default_stderr
   test/operations/startup_streams/dune     @runtest-env_spelling_gate
   test/operations/startup_streams/dune     @runtest-stdout_clean
+  test/ppx/dune                            @ppx-expansions
   test/ppx/dune                            @runtest
   test/ppx/dune                            @runtest-env_spelling_gate
   test/ppx/dune                            @runtest-test_capture_errors-ppx
