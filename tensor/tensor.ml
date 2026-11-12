@@ -1720,6 +1720,7 @@ let ndarray ?prec ?(grad_spec = Prohibit_grad) values ?(label = []) ?top_down_pr
      (gh-ocannl-2028). *)
   t
 
+(* Keep precision initialization in step with ndarray: host data first, then the value node. *)
 let term_init ?prec ?grad_spec values ?(label = []) ?top_down_prec ?batch_dims ?batch_axes
     ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
   let init_data, fetch_op = constant_fill ?prec ~debug:"Tensor.term_init" values in

@@ -32,9 +32,15 @@ let () =
                 (Array.map values ~f:(fun v -> 2. *. v))
                 ~f:Float.equal;
               Context.release ctx)));
-  List.iter [ None; Some Tensor.If_needed; Some Tensor.Require_grad; Some Tensor.Prohibit_grad ]
-    ~f:(fun grad_spec ->
-      Verdict.case "term_init gradient policy" (fun () ->
+  List.iter
+    [
+      ("default", None);
+      ("If_needed", Some Tensor.If_needed);
+      ("Require_grad", Some Tensor.Require_grad);
+      ("Prohibit_grad", Some Tensor.Prohibit_grad);
+    ]
+    ~f:(fun (name, grad_spec) ->
+      Verdict.case ("term_init gradient policy " ^ name) (fun () ->
           let x = Tensor.term_init ~prec:Ir.Ops.double ?grad_spec [| 1. |] () in
           let reference = Tensor.term ?grad_spec () in
           p "term_init preserves term's gradient policy"
