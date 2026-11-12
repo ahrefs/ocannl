@@ -10,6 +10,7 @@ let constructors =
     ("Tensor", fun ~prec values ~output_dims () -> Tensor.ndarray ~prec values ~output_dims ());
     ("TDSL", fun ~prec values ~output_dims () -> TDSL.ndarray ~prec values ~output_dims ());
     ("NTDSL", fun ~prec values ~output_dims () -> NTDSL.ndarray ~prec values ~output_dims ());
+    ("Tensor.term_init", fun ~prec values ~output_dims:_ () -> Tensor.term_init ~prec values ());
   ]
 
 let () =
@@ -19,7 +20,9 @@ let () =
               Tensor.unsafe_reinitialize ();
               let values = Array.init n ~f:(fun i -> 1. +. (Float.of_int (i + 1) *. 0x1p-30)) in
               let x = ndarray ~prec:Ir.Ops.double values ~output_dims:[ n ] () in
-              let%op y = x *. 2 in
+              (* A shaped consumer also constrains term_init's omitted shape rows. *)
+              let scale = NTDSL.ndarray [| 2. |] ~output_dims:[ n ] () in
+              let%op y = x *. scale in
               Train.set_materialized y.Tensor.value;
               let ctx = Train.forward_once (Context.cpu ()) y in
               p "the source stores double"
@@ -29,6 +32,19 @@ let () =
                 (Array.map values ~f:(fun v -> 2. *. v))
                 ~f:Float.equal;
               Context.release ctx)));
+  List.iter
+    [
+      ("default", None);
+      ("If_needed", Some Tensor.If_needed);
+      ("Require_grad", Some Tensor.Require_grad);
+      ("Prohibit_grad", Some Tensor.Prohibit_grad);
+    ]
+    ~f:(fun (name, grad_spec) ->
+      Verdict.case ("term_init gradient policy " ^ name) (fun () ->
+          let x = Tensor.term_init ~prec:Ir.Ops.double ?grad_spec [| 1. |] () in
+          let reference = Tensor.term ?grad_spec () in
+          p "term_init preserves term's gradient policy"
+            (Bool.equal (Option.is_some x.Tensor.diff) (Option.is_some reference.Tensor.diff))));
   let sources =
     [
       ("ndarray", fun () -> TDSL.ndarray (Array.create ~len:64 1.) ~output_dims:[ 64 ] ());

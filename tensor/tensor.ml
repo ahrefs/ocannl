@@ -1704,11 +1704,16 @@ let ndarray ?prec ?(grad_spec = Prohibit_grad) values ?(label = []) ?top_down_pr
      (gh-ocannl-2028). *)
   t
 
-let term_init ?grad_spec values ?(label = []) ?top_down_prec ?batch_dims ?batch_axes ?input_dims
-    ?output_dims ?input_axes ?output_axes ?deduced () =
-  let init_data, fetch_op = constant_fill ~debug:"Tensor.term_init" values in
-  term ?init_data ?fetch_op ?grad_spec ?batch_dims ?batch_axes ~label ?top_down_prec ?input_dims
-    ?output_dims ?input_axes ?output_axes ?deduced ()
+(* Keep precision initialization in step with ndarray: host data first, then the value node. *)
+let term_init ?prec ?grad_spec values ?(label = []) ?top_down_prec ?batch_dims ?batch_axes
+    ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
+  let init_data, fetch_op = constant_fill ?prec ~debug:"Tensor.term_init" values in
+  let t =
+    term ?init_data ?fetch_op ?grad_spec ?batch_dims ?batch_axes ~label ?top_down_prec ?input_dims
+      ?output_dims ?input_axes ?output_axes ?deduced ()
+  in
+  Option.iter prec ~f:(Tn.update_prec t.value);
+  t
 
 let force_param_diff t =
   Option.iter t.diff ~f:(fun _ -> remove_bprop_root t);
