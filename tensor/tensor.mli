@@ -314,9 +314,10 @@ val param_postprocess : (t -> t) ref
     which remains the sole member of the result's {!field:params}. Reset by {!unsafe_reinitialize}.
 *)
 
-val term_init : ?grad_spec:grad_spec -> float array -> op_fun
+val term_init : ?prec:Ir.Ops.prec -> ?grad_spec:grad_spec -> float array -> op_fun
 (** A {!term} wrapper that sets up the value node initialization (it generalizes {!ndarray} to
-    tensors with inferred shapes). *)
+    tensors with inferred shapes). [prec] fixes the value precision at construction, with the same
+    defaults as {!ndarray}; shape inference and [grad_spec] follow {!term}. *)
 
 val consume_forward_code : t -> comp
 (** A forward root is a tensor that is not (currently) used to compute another tensor. On the first

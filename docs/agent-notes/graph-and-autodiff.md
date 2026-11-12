@@ -262,7 +262,7 @@ files.
   A hand-built tensor record must keep its declared parameters reachable through `children`;
   initialization refuses an incomplete walk rather than silently omitting an initializer.
 
-- `Tensor.ndarray`, `TDSL.ndarray` and `NTDSL.ndarray` accept `?prec` at construction
+- `Tensor.ndarray`, `TDSL.ndarray`, `NTDSL.ndarray` and `Tensor.term_init` accept `?prec` at construction
   (gh-ocannl-2173). Above `limit_constant_fill_size` the host array must be allocated at that
   precision; below it the literal node is explicitly specified before it gains consumers.
   Omitting `prec` preserves inference for small literals and the session default for data-backed

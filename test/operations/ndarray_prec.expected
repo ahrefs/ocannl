@@ -10,6 +10,14 @@ the source stores double: true
 execution preserves the double data: true
 the source stores double: true
 execution preserves the double data: true
+the source stores double: true
+execution preserves the double data: true
+the source stores double: true
+execution preserves the double data: true
+term_init preserves term's gradient policy: true
+term_init preserves term's gradient policy: true
+term_init preserves term's gradient policy: true
+term_init preserves term's gradient policy: true
 the refusal explains data provenance and construction-time precision: true
 the refusal explains data provenance and construction-time precision: true
 the refusal explains data provenance and construction-time precision: true
