@@ -819,6 +819,7 @@ clamp_slot_wait() { # after the resolution, in `_resolve`, whose SECONDS the cap
 }
 slot_box= slot_slots= slot_tokens=
 slot_kind=        # cpu or gpu, once plan_batch has resolved the batch
+# Reuse/refusal wording follows lukstafi/ludics lib/ludics/fleetworker/slot.py's judge_nested (THE NESTED SLOT); change both together.
 plan_slot_kind() { # after plan_batch
   local what
   [ -n "$slot_fw" ] || return 0
