@@ -56,3 +56,12 @@ the error retains the definition-check context: true
 deferred trace:
   tracing the shape scheme bad_deferred in the %op application at test/operations/scheme_application_site.ml:180: solved dimensions for axis: mismatch
 the deferred trace names the first application's file and line: true
+direct partial trace:
+  tracing the shape scheme _direct_add in the %op application at test/operations/scheme_application_site.ml:199: solved dimensions for axis: mismatch
+piped final trace:
+  tracing the shape scheme _direct_add in the %op application at test/operations/scheme_application_site.ml:205: solved dimensions for axis: mismatch
+the direct call's trace names the full application: true
+the piped call's trace names the final application, after the partial wrapper returns: true
+piped partial trace:
+  tracing the shape scheme bad_definition in the %op application at test/operations/scheme_application_site.ml:217: solved dimensions for axis: mismatch
+a trace while constructing the piped closure names the partial application: true

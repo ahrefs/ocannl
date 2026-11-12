@@ -122,7 +122,17 @@ files.
   through `trace_core` to `Shape.Scheme.trace` (gh-ocannl-2164); `check_definition` preserves it
   under its own context. Only contradictions name the site: fallback warnings and failed-rewind
   refusals keep their existing diagnostics. The
-  `scheme_application_site` test pins both against the application's line. An arm that reads the
+  `scheme_application_site` test pins both against the application's line. Ordinary partial
+  pipelines deliberately have two wrappers: in `x |> f y`, the inner one records `f y` while
+  constructing the partial application; after it returns, `at_site` restores the outer pipeline's
+  site for the final call on `x`. Multiline pipelines distinguish these locations. A deferred
+  binary function such as `_direct_add` traces only at the final call, so its error names the
+  outer site, just as the single wrapper in `f y x` names that full application. This deliberately
+  treats a pipeline as one application starting at `x`: placing a single wrapper at `f y` around
+  the whole call would instead conflate the final call with partial-application construction.
+  A closure trace raised by `f y` instead names the inner site. Removing either wrapper loses one of these sites;
+  the same executed test pins both stages. Keep the pipeline's argument binding and separate
+  applications: they preserve evaluation order and optional-argument inference. An arm that reads the
   applied function of a translated expression syntactically must undo the wrapper with `strip_at_site`:
   the inline-declaration initializer does (`add_module_qualifier_to_applied_function` qualifies
   its head with `NTDSL`; wrapped, `{ w = uniform () }` resolved `TDSL.O.uniform` and failed to
