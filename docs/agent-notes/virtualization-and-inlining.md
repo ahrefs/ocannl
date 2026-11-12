@@ -500,8 +500,10 @@ files.
   `cc-oracle-widen` unit builds and `tools/test-run.sh affected` names to a change reaching the
   inliner — run it before pushing such a change. That alias aggregates four locked
   `slow-virtual_inliner_oracle-widen-0` through `-3` shards (gh-ocannl-2186), selected by descriptor
-  ordinal modulo four, each retaining compiled anchors and reporting total elapsed time against a
-  600-second bound on stderr. `runtest-virtual_inliner_oracle-shards` cheaply enumerates the full
+  ordinal with its base-four digits XOR-folded, each retaining compiled anchors and reporting a
+  total elapsed time against a 600-second bound on stderr. Plain ordinal modulo four aligned with
+  the repeating grammar and left shard 0 without inlined accumulate/reduce cases; folding the
+  higher digits preserves balanced four-ordinal blocks while breaking that alignment. `runtest-virtual_inliner_oracle-shards` cheaply enumerates the full
   grammar and checks the disjoint union against the pre-split 9,333,622-program census; no backend
   loses programs. Shared-slot before/after evidence belongs to the PR. Its first run found
   `Affine.common_layout` writing coordinates back in reverse (`Array.for_all` in Base runs from the

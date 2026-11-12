@@ -640,7 +640,12 @@ let () =
       if (not widen) || i < 0 || i >= shard_count || check_shards || Option.is_some only then
         invalid_arg "--shard requires --widen and an index in 0..3, without --only/--check-shards")
 
-let owns ~shard ordinal = ordinal % shard_count = shard
+let owns ~shard ordinal =
+  let rec fold_digits n acc =
+    if n = 0 then acc else fold_digits (n / shard_count) (acc lxor (n % shard_count))
+  in
+  fold_digits ordinal 0 = shard
+
 let enumerated = ref 0
 let shard_sizes = Array.create ~len:shard_count 0
 let bad_ownerships = ref 0
@@ -992,8 +997,8 @@ let audit_shards () =
   (* An independent census pin: adding grammar requires an explicit coverage update. *)
   p "the widened census is unchanged" (!enumerated = 9_333_622);
   p "every ordinal belongs to exactly one shard" (!bad_ownerships = 0);
-  p_alli "each shard has its complete ordinal slice" (Array.to_list shard_sizes) ~f:(fun i n ->
-      n = (!enumerated + shard_count - 1 - i) / shard_count);
+  p_all "each shard has a balanced share of the census" (Array.to_list shard_sizes) ~f:(fun n ->
+      n >= !enumerated / shard_count && n <= (!enumerated + shard_count - 1) / shard_count);
   p "the shard union equals the full widened census"
     (Array.sum (module Int) shard_sizes ~f:Fn.id = !enumerated)
 
@@ -1015,7 +1020,8 @@ let () =
   else if Option.is_none only then (
     Stdio.printf "%d programs\n" !programs_run;
     Option.iter shard ~f:(fun i ->
-        Stdio.printf "slice: ordinal mod %d = %d of %d widened programs\n" shard_count i !enumerated);
+        Stdio.printf "slice: folded base-%d ordinal = %d of %d widened programs\n" shard_count i
+          !enumerated);
     (* One row per family, so that a moved boundary edits rows without removing any:
        [tools/mutation-run.sh] reads a run printing fewer rows than the golden as stopped early. *)
     Hashtbl.to_alist census

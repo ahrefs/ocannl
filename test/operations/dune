@@ -3297,7 +3297,7 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-; The full widened census is partitioned by descriptor ordinal modulo four (gh-ocannl-2186).
+; The full widened census is partitioned by folded base-four descriptor ordinal (gh-ocannl-2186).
 ; No thinning: the aggregate retains every program. Each shard keeps the replay, both optimizer
 ; arms, the compiled anchors and the same coverage floors, under the per-test training lock.
 ; Its own 600s bound includes anchors; --check-shards audits all 9,333,622 descriptors cheaply.

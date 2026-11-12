@@ -1,9 +1,9 @@
 9333622 widened programs
-shard 0/4: 2333406 programs
-shard 1/4: 2333406 programs
-shard 2/4: 2333405 programs
-shard 3/4: 2333405 programs
+shard 0/4: 2333405 programs
+shard 1/4: 2333405 programs
+shard 2/4: 2333406 programs
+shard 3/4: 2333406 programs
 the widened census is unchanged: true
 every ordinal belongs to exactly one shard: true
-each shard has its complete ordinal slice: true
+each shard has a balanced share of the census: true
 the shard union equals the full widened census: true
