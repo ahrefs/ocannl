@@ -59,27 +59,45 @@ files.
   top-level `Declare_local` + body, running ONCE ahead of the first user. Purity makes all three
   placements unobservable from outside the body, which is exactly what `Affine.path_before` assumes
   when it refuses to order sibling `Arg` positions; the two would otherwise disagree. Purity hides
-  a hoisted body's VALUE, not its ADDRESSES (gh-ocannl-2077): `pp_scalar_op_at` collects the
-  definitions of all three `Where` operands, so a scope in an arm runs whatever the condition
-  selects, outside the `?:` that short-circuits the arm's own expression. The inliner's guarded
-  replay is the one producer of arms that index outside the node where the condition fails, and a
-  producer reading a virtual reduction put that reduction's scope in such an arm: a SIGBUS on cc
-  at `-O0`/`-O1` (clang sinks the loop at `-O2`), volatile reads past the buffer on Metal, values
-  correct throughout. `instantiate_computations` therefore carries the guard into such a body
-  (`guard_hoisted`): an assignment whose value has a read that can leave its node -- flat offset
-  bounded over the read site's, the replay's and the body's loops -- becomes `Where (guard, value,
-  self)` where it updates its own local, and goes under `If guard` where it initializes one (a
-  `Where` would hide a narrowing read from `C_syntax.set_local_value_prec`'s init rule), so the read
-  is guarded and the node stays inlined. Refusing the read
-  site instead (materializing the producer) was the first fix, and it cost real inlining: on a
-  symbol-mention test it materialized `fused_classifier`'s guarded gradients, whose guards cannot
-  fail (a multi-component replay guards every component), and with an exact range test it still
-  materialized `virtual_chain_fanin`'s cycle, whose single-assignment scope collapses into the arm
-  expression later -- a collapse instantiation cannot predict, so the guard goes in regardless and
-  costs one select. A user `where` over in-range arms is untouched, and no codegen-side gate could
-  tell the two apart. The codegen alternative, rendering an arm's definitions under its condition
-  in `C_syntax`, would cover hand-built IR too. `Ll_test.interpret ~strict:true` is the oracle that
-  sees this class; `virtual_rejection_boundary`'s `row_guarded_scope_read` pins both sides of where
+  a hoisted body's VALUE, not its ADDRESSES (gh-ocannl-2077): a scope in a `Where` arm that ran
+  ahead of the statement read whatever its addresses were where the condition failed, outside the
+  `?:` that short-circuits the arm's own expression. The inliner's guarded replay produces such
+  arms (a producer reading a virtual reduction, replayed past its writes): a SIGBUS on cc at
+  `-O0`/`-O1` (clang sinks the loop at `-O2`), volatile reads past the buffer on Metal, values
+  correct throughout. So `pp_local_defs` renders a short-circuiting select's arm definitions under
+  its condition (gh-ocannl-2145): each `local_def` carries the conditions of its occurrence, a
+  `Get_local` at operand position is a use carrying its own, and a definition runs under the
+  disjunction of the conditions of its occurrences, its uses and (to a fixpoint) the definitions
+  reading it (`normalize_guards` absorbs a path another is a prefix of and merges two differing in
+  the last polarity; a common prefix instead would drop the replay guard two differently-nested
+  CSE'd uses share). A scope both arms need, or one the scalar CSE reads outside the arm (it keeps
+  the first alpha-equal copy and turns later ones into `Get_local`), runs unconditionally, as the
+  program needs it there anyway. A `Where` under a short-circuiting gated operator (`&&`, `||`, a
+  gate) keeps its block behind that operator's own test (the second operand at 1 and at 0 giving
+  different results), so its condition is never tested where the operator skipped it. The unconditional definitions render as before, then the
+  conditional ones' zero-initialized declarations, then the conditional bodies in ONE dependency
+  order across all their conditions (a body under `(A && B) || (A && C)` can read one under `A`),
+  consecutive bodies under the same conditions sharing one `if`. A condition reading a scope local
+  (a test of a computed value, never an index guard) guards nothing: its arms stay under the
+  conditions around it, the nested conditions that can be tested anywhere (no memory, no
+  local, no division: index guards) included, the others dropped, since they may rely on the test
+  that no longer precedes them. Letting such tests guard made the
+  definitions' order depend on their tests' reads, which CSE sharing turns into cycles, and cutting
+  those dropped index guards (Codex review, rounds 2-6). Under a blend (cc and HIP at a
+  float precision, `speculable_select`, whose conditions never mention an index) both arms run by
+  contract, so nothing is guarded and no branch is added; a gate's operand keeps its hoisted
+  definitions too (a value test, never a range guard). `hoist_cross_statement_cse` lifts a shared
+  group only when some member sits outside every `Where` arm, since its lifted body runs
+  unconditionally. `Access_fold` keeps `gated` through a `Where` arm's scope bodies (its `arm`
+  flag; a gate's still clears it), which the prologue's gated-node decline and the cost floor read.
+  This retired the inliner's own protection (gh-ocannl-2077's `guard_hoisted`, which carried the
+  guard into such a body as `Where (guard, value, self)` or `If guard`, and the scope-body `If`
+  acceptance at store time it needed); the replay's guard is again the only one. Refusing the
+  read site instead (materializing the producer) was the first fix of gh-ocannl-2077, and it cost
+  real inlining (`fused_classifier`'s guarded gradients, `virtual_chain_fanin`'s cycle).
+  `where_arm_scopes` pins the renderer on hand-built IR, every backend, each protection with a row
+  of its own; `Ll_test.interpret ~strict:true` is the oracle that sees this class in generated
+  programs, and `virtual_rejection_boundary`'s `row_guarded_scope_read` pins both sides of where
   the guard goes in. Purity governs
   a body's EFFECTS, not its inputs — the hoist separately needs the body's reads untouched across
   the statements it is lifted over, and its hazard check must cover scope locals (`Get_local` /
@@ -493,16 +511,15 @@ files.
   at least 100 programs with scopes in `Where` arms. Eight of the 32 compiled anchors come
   specifically from those programs; the ordinary families share the other 24. The census and
   correctness-run durations before and after the extension are recorded in staging#1924.
-  To repeat its negative control, disable the call to `guard_hoisted` in
-  `instantiate_computations`' call-site condition while retaining the helper definitions (removing
-  the call entirely leaves them unused, a fatal warning). The expanded table then reports about
-  2.9 thousand strict address faults, all in `src=reduce`, across axes/axes, axes/flat, axes/trail,
-  flat/axes, flat/flat and flat/trail layout pairs in every standing. One reproducible descriptor
-  in every standing is `2x2 src=reduce
-  P0=store:axes[t;s]{s:1..1,t:1..1}:src R0=flat[_;u+1]{u:0..2} Z;P0;R0`:
-  the discarded arm's scope reads offset -6 of the 32-cell input. These are the generated
-  guarded-arm scopes for the renderer work in gh-ocannl-2145; `--only` selects descriptors for
-  inspection without changing the grammar.
+  Its negative control is the strict probe of before gh-ocannl-2145, which ran every discarded
+  arm's scopes (codegen hoisted them then), over the inliner without `guard_hoisted`: the table
+  reports 2,869 strict address faults, all in `src=reduce`, across axes/axes, axes/flat,
+  axes/trail, flat/axes, flat/flat and flat/trail layout pairs in every standing (staging PR for
+  gh-ocannl-2145). One reproducible descriptor in every standing is `2x2 src=reduce
+  P0=store:axes[t;s]{s:1..1,t:1..1}:src R0=flat[_;u+1]{u:0..2} Z;P0;R0`: the discarded arm's scope
+  reads offset -6 of the 32-cell input. Codegen now renders those scopes under the guard, which
+  `where_arm_scopes` pins on hand-built IR; `--only` selects descriptors for inspection without
+  changing the grammar.
 - **Where a virtualization candidate is refused is readable off its placement PROVENANCE, and four
   phases write into the same table** (gh-ocannl-658, pinned row by row in
   `test/operations/virtual_rejection_boundary.ml`): `decide_placements` applies the heuristic caps

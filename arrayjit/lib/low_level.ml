@@ -320,6 +320,9 @@ module Access_fold = struct
     live : bool;
     guards : scalar_arg list;
     gated : bool;
+    arm : bool;
+        (** Under a [Where] arm: unlike a gate's, the scope bodies there run under the select's
+            condition (gh-ocannl-2145), so they stay [gated]. *)
     scope_depth : int;
     implicit : implicit;
     loops : binder list;
@@ -347,7 +350,15 @@ module Access_fold = struct
     }
 
   let initial =
-    { live = true; guards = []; gated = false; scope_depth = 0; implicit = Explicit; loops = [] }
+    {
+      live = true;
+      guards = [];
+      gated = false;
+      arm = false;
+      scope_depth = 0;
+      implicit = Explicit;
+      loops = [];
+    }
 
   let traversal ~policy ~hooks =
     let rec stmt ctx acc code =
@@ -417,10 +428,11 @@ module Access_fold = struct
                 match policy.local_scopes with
                 | Skip -> acc
                 | Visit ->
-                    (* Scope definitions are hoisted out of scalar conditionals, but remain inside
-                       enclosing statement guards. Discarded operands never reach this point unless
-                       the caller explicitly requested structural traversal. *)
-                    stmt { ctx with scope_depth = ctx.scope_depth + 1; gated = false } acc body)
+                    (* Scope definitions are hoisted out of a gate, but remain inside enclosing
+                       statement guards and, rendered under its condition, a [Where] arm
+                       (gh-ocannl-2145). Discarded operands never reach this point unless the caller
+                       explicitly requested structural traversal. *)
+                    stmt { ctx with scope_depth = ctx.scope_depth + 1; gated = ctx.arm } acc body)
             | Unop (_, a) -> scalar ctx acc (fst a)
             | Binop (op, a, b) ->
                 let first, second =
@@ -439,7 +451,7 @@ module Access_fold = struct
                     match policy.gated_operands with
                     | Skip -> acc
                     | Visit ->
-                        let ctx = { ctx with gated = true } in
+                        let ctx = { ctx with gated = true; arm = true } in
                         hooks.branches ctx acc ~select:code
                           [
                             (fun acc -> scalar ctx acc (fst b)); (fun acc -> scalar ctx acc (fst c));
@@ -1539,10 +1551,11 @@ let speculable_select ~(cond : scalar_t) ~(arms : scalar_arg list) =
    binary operand is charged (its worst case evaluates both), and merge-buffer reads are not
    contributors: a merge-buffer read loads a materialized copy, never inlining the source's
    computation; - a [Cond_and_one_arm] ternary's arms are kept apart, as a {!select_charge}
-   ({!resolve_charge} reads them); - [Local_scope] bodies hoist to statement level and execute
-   unconditionally (both [Where] arms' bodies really run), so their reads join the STATEMENT sink,
-   never an arm's; - a dead loop's body replays zero times, and a [Tile_mma] (constructed after the
-   analyses) is opaque. *)
+   ({!resolve_charge} reads them); - [Local_scope] bodies hoist to statement level, so their reads
+   join the STATEMENT sink, never an arm's: exact under a gate, whose hoisted definitions run
+   unconditionally, and an upper charge under a short-circuiting [Where], whose arm definitions run
+   under its condition (gh-ocannl-2145); - a dead loop's body replays zero times, and a [Tile_mma]
+   (constructed after the analyses) is opaque. *)
 type eval_reads = { e_stmt : read_charge; e_cur : read_charge; e_saved : read_charge list }
 
 let empty_charge = { loads = Set.empty (module Tn); selects = [] }
@@ -2308,11 +2321,6 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
                 (top_llc : t)];
               raise @@ Non_virtual code)))
   in
-  (* How many [Local_scope] bodies the walk is inside: there a statement assigns only the scope's
-     own locals (scope purity, gh-ocannl-584), so an [If] guards no write of a node -- the guard
-     [guard_hoisted] carries into a body over an initializer's out-of-range read
-     (gh-ocannl-2077). *)
-  let in_scope_body = ref 0 in
   (* Traverse the float code too, for completeness / future use-cases. *)
   let rec loop_proc ~env_dom ~loop_ranges llc =
     let loop = loop_proc ~env_dom ~loop_ranges in
@@ -2377,9 +2385,6 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
        [~guarded] (gh-651). Reachable pre-virtualization: [Assignments.to_low_level] emits interval
        guards for clamped-window pooling (gh-504) and extent guards for symbolic extents (gh-490),
        besides the launch-extent guards introduced at backend-compile time. *)
-    | If { cond = c, _; body } when !in_scope_body > 0 ->
-        loop_scalar ~env_dom ~loop_ranges c;
-        loop body
     | If _ -> raise @@ Non_virtual "142:guarded-computation"
   and loop_scalar ~env_dom ~loop_ranges llsc =
     match llsc with
@@ -2390,11 +2395,7 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
     | Get_dynamic { dyn_value = v, _; _ } ->
         (* gh-343: defensive -- [Get_dynamic] is produced after virtualization analysis. *)
         loop_scalar ~env_dom ~loop_ranges v
-    | Local_scope { body; _ } ->
-        Int.incr in_scope_body;
-        Exn.protect
-          ~f:(fun () -> loop_proc ~env_dom ~loop_ranges body)
-          ~finally:(fun () -> Int.decr in_scope_body)
+    | Local_scope { body; _ } -> loop_proc ~env_dom ~loop_ranges body
     | Get_local _ -> ()
     | Get_merge_buffer (tn, idcs) ->
         if Tn.equal tn top_tn then check_idcs loop_ranges idcs
@@ -2692,7 +2693,7 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
      map holds a placeholder, not a position: a read records the write map ([a_stmt_write]) only
      when its own dynamic coordinate agrees with the write's ({!stmt_write_for_read},
      gh-ocannl-1244). *)
-  let rec code ~loops ~path ~guarded (llc : t) =
+  let rec code ?(arm = false) ~loops ~path ~guarded (llc : t) =
     (* gh-561: paths gain an intra-statement component at each statement the traversal descends into
        — [Cond]/[Body] for [If], [Rhs]/[Write] for the [Set] family — so lexicographic path order is
        program order within a statement too: a guarded body's write no longer shares its condition's
@@ -2712,9 +2713,9 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
     | Declare_local _ -> stmt_effect Affine.Local_declare
     | Seq _ ->
         List.iteri (flat_lines [ llc ]) ~f:(fun k stmt ->
-            code ~loops ~path:(Affine.Stmt k :: path) ~guarded stmt)
+            code ~arm ~loops ~path:(Affine.Stmt k :: path) ~guarded stmt)
     | For_loop { index; from_; to_; body; _ } ->
-        code ~loops:((index, (from_, to_)) :: loops) ~path ~guarded body
+        code ~arm ~loops:((index, (from_, to_)) :: loops) ~path ~guarded body
     | Scan_loop { index; from_; to_; carried; body; _ } ->
         (* gh-ocannl-696: the inits are statement [0] of the construct, one [Set_local]-shaped
            position each, and the body statement [1] -- so every init read orders before every body
@@ -2723,12 +2724,12 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
            iteration (under the scan index). *)
         List.iteri carried ~f:(fun j c ->
             let path = Affine.Stmt j :: Affine.Stmt 0 :: path in
-            scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c ?stmt_write:None
-              c.init;
+            scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:arm ~arm ~arg_c
+              ?stmt_write:None c.init;
             add_effect ~loops ~path:(Affine.Write :: path) ~guarded
               (Affine.Local_write (affine_local c.prev)));
         let loops = (index, (from_, to_)) :: loops in
-        code ~loops ~path:(Affine.Stmt 1 :: path) ~guarded body;
+        code ~arm ~loops ~path:(Affine.Stmt 1 :: path) ~guarded body;
         List.iteri carried ~f:(fun j c ->
             let path = Affine.Stmt j :: Affine.Stmt 2 :: path in
             add_effect ~loops ~path:(Affine.Rhs :: path) ~guarded
@@ -2736,41 +2737,45 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
             add_effect ~loops ~path:(Affine.Write :: path) ~guarded
               (Affine.Local_write (affine_local c.prev)))
     | If { cond = c, _; body } ->
-        scalar ~loops ~path:(Affine.Cond :: path) ~guarded ~gated:false ~arg_c ?stmt_write:None c;
-        code ~loops ~path:(Affine.Body :: path) ~guarded:true body
+        scalar ~loops ~path:(Affine.Cond :: path) ~guarded ~gated:arm ~arm ~arg_c ?stmt_write:None c;
+        code ~arm ~loops ~path:(Affine.Body :: path) ~guarded:true body
     | Zero_out tn -> add ~loops ~path:(Affine.Write :: path) ~guarded ~whole:true ~write:true tn [||]
     | Set { tn; idcs; llsc; _ } ->
-        scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c
+        scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:arm ~arm ~arg_c
           ~stmt_write:(idcs, None) llsc;
         add ~loops ~path:(Affine.Write :: path) ~guarded ~rmw:(reads_tn tn.Tn.uid llsc)
           ~val_syms:(scalar_syms llsc) ~write:true tn idcs
     | Set_dynamic { tn; idcs; dyn_axis; dyn_value = (v, _) as dyn_value; llsc; _ } ->
         let stmt_write = (idcs, Some (dyn_axis, dyn_value)) in
-        scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c ~stmt_write v;
-        scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c ~stmt_write llsc;
+        scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:arm ~arm ~arg_c ~stmt_write v;
+        scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:arm ~arm ~arg_c ~stmt_write llsc;
         add ~loops ~path:(Affine.Write :: path) ~guarded ~dyn_axis
           ~rmw:(reads_tn tn.Tn.uid llsc || reads_tn tn.Tn.uid v)
           ~val_syms:(scalar_syms v @ scalar_syms llsc)
           ~write:true tn idcs
     | Set_from_vec { tn; idcs; length; arg = a, _; _ } ->
-        scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c
+        scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:arm ~arm ~arg_c
           ~stmt_write:(idcs, None) a;
         add ~loops ~path:(Affine.Write :: path) ~guarded ~vec_len:length ~rmw:(reads_tn tn.Tn.uid a)
           ~val_syms:(scalar_syms a) ~write:true tn idcs
     | Set_local (id, llsc) ->
-        scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c ?stmt_write:None llsc;
+        scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:arm ~arm ~arg_c ?stmt_write:None
+          llsc;
         stmt_effect (Affine.Local_write (affine_local id))
     | Tile_mma { fallback; _ } ->
-        code ~loops ~path ~guarded fallback;
+        code ~arm ~loops ~path ~guarded fallback;
         stmt_effect Affine.Mma
   (* [gated]: the expression sits under a scalar gate ({!Access_fold}'s [gated] context, the same
-     classification): set by a gated operand, cleared by a [Local_scope] body, which is hoisted out
-     of the expression and executes unconditionally. *)
-  and scalar ~loops ~path ~guarded ~gated ~arg_c ?stmt_write (llsc : scalar_t) =
+     classification): set by a gated operand or a [Where] arm. [arm]: under a short-circuiting
+     select's arm, whose scope bodies C_syntax renders under the select's condition
+     (gh-ocannl-2145), so a body there stays gated; a gate's scope definitions are hoisted out of
+     the expression and execute unconditionally, so a body under a gate alone clears it. *)
+  and scalar ?(arm = false) ~loops ~path ~guarded ~gated ~arg_c ?stmt_write (llsc : scalar_t) =
     let operand kind sub =
       match kind with
-      | `Always -> scalar ~loops ~path ~guarded ~gated ~arg_c ?stmt_write sub
-      | `Gated -> scalar ~loops ~path ~guarded ~gated:true ~arg_c ?stmt_write sub
+      | `Always -> scalar ~arm ~loops ~path ~guarded ~gated ~arg_c ?stmt_write sub
+      | `Gated -> scalar ~arm ~loops ~path ~guarded ~gated:true ~arg_c ?stmt_write sub
+      | `Arm -> scalar ~arm:true ~loops ~path ~guarded ~gated:true ~arg_c ?stmt_write sub
       | `Discarded -> ()
     in
     match llsc with
@@ -2779,7 +2784,7 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
         Int.incr arg_c;
         let path = Affine.Arg k :: path in
         add_effect ~loops ~path ~guarded Affine.Scope_body;
-        code ~loops ~path ~guarded body
+        code ~arm ~loops ~path ~guarded body
     | Get_merge_buffer (tn, _) -> add_effect ~loops ~path ~guarded ~gated (Affine.Merge_read tn)
     | Get_local id -> add_effect ~loops ~path ~guarded ~gated (Affine.Local_read (affine_local id))
     | Constant _ | Constant_bits _ | Embed_index _ -> ()
@@ -2796,7 +2801,7 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
         let arms =
           match Ops.ternop_conditionality op with
           | Ops.All_three -> `Always
-          | Ops.Cond_and_one_arm -> `Gated
+          | Ops.Cond_and_one_arm -> `Arm
         in
         operand `Always a;
         operand arms b;
@@ -2989,148 +2994,6 @@ and proc_mentions ~merge (tn : Tn.t) (llc : t) : bool =
    ever licenses a binding (gh-ocannl-1896), so [None] is always sound. *)
 
 let scalar_mentions_tn tn llsc = scalar_mentions ~merge:true tn llsc
-
-(* gh-ocannl-2077: whether an array read of [llsc] can leave its node. [~direct] counts the reads of
-   the expression itself, [~scopes] those inside the bodies of its operand-position [Local_scope]s,
-   which [C_syntax.pp_local_defs] emits ahead of the statement, outside any [?:]: the walk goes
-   through every arm of a [Where] and a gate, never into the operand a projection does not render,
-   and inside a body every read counts, since the body runs as a whole. [range s] is the inclusive
-   range of a symbol where known; a read's flat offset is bounded from it, the way
-   [Ll_test.interpret] computes one ([Sub_axis] contributes nothing), and a read with a symbol of no
-   known range, a [Concat] index or a dynamic row counts as leaving. *)
-let rec scalar_read_escapes ~direct ~scopes ~(range : Indexing.symbol -> (int * int) option)
-    (llsc : scalar_t) =
-  let sub (v, _) = scalar_read_escapes ~direct ~scopes ~range v in
-  match llsc with
-  | Local_scope { body; _ } -> scopes && proc_read_escapes ~range body
-  | Get (tn, idcs) | Get_merge_buffer (tn, idcs) -> direct && read_escapes ~range tn idcs
-  | Get_dynamic { dyn_value; _ } -> direct || sub dyn_value
-  | Ternop (_, a, b, c) -> sub a || sub b || sub c
-  | Binop (op, a, b) -> (
-      match Ops.binop_conditionality op with
-      | Ops.Only_first -> sub a
-      | Ops.Only_second -> sub b
-      | Ops.Both_operands | Ops.Gated_second -> sub a || sub b)
-  | Unop (_, a) -> sub a
-  | Embed_index _ | Get_local _ | Constant _ | Constant_bits _ -> false
-
-and proc_read_escapes ~range (llc : t) =
-  let sc v = scalar_read_escapes ~direct:true ~scopes:true ~range v in
-  match llc with
-  | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier ->
-      false
-  | Seq (a, b) -> proc_read_escapes ~range a || proc_read_escapes ~range b
-  | For_loop { index; from_; to_; body; _ } ->
-      to_ >= from_ && proc_read_escapes ~range:(range_within ~range index from_ to_) body
-  | Scan_loop { index; from_; to_; carried; body; _ } ->
-      List.exists carried ~f:(fun c -> sc c.init)
-      || (to_ >= from_ && proc_read_escapes ~range:(range_within ~range index from_ to_) body)
-  | If { cond = c, _; body } -> sc c || proc_read_escapes ~range body
-  | Set { llsc; _ } | Set_local (_, llsc) -> sc llsc
-  | Set_dynamic { dyn_value = v, _; llsc; _ } -> sc v || sc llsc
-  | Set_from_vec { arg = v, _; _ } -> sc v
-  | Tile_mma _ -> true
-
-and range_within ~range index from_ to_ s =
-  if Indexing.equal_symbol s index then Some (from_, to_) else range s
-
-and read_escapes ~range tn idcs =
-  let dims = Lazy.force tn.Tn.dims in
-  let bounds (idx : Indexing.axis_index) =
-    match idx with
-    | Indexing.Fixed_idx i -> Some (i, i)
-    | Indexing.Sub_axis -> Some (0, 0)
-    | Indexing.Concat _ -> None
-    | Indexing.Iterator s -> range s
-    | Indexing.Affine { symbols; offset } ->
-        List.fold symbols
-          ~init:(Some (offset, offset))
-          ~f:(fun acc (coeff, s) ->
-            match (acc, range s) with
-            | Some (lo, hi), Some (from_, to_) ->
-                let a = coeff * from_ and b = coeff * to_ in
-                Some (lo + Int.min a b, hi + Int.max a b)
-            | _ -> None)
-  in
-  Array.length idcs <> Array.length dims
-  ||
-  let flat, _ =
-    Array.foldi idcs
-      ~init:(Some (0, 0), Tn.num_elems tn)
-      ~f:(fun ax (acc, stride) idx ->
-        let stride = stride / Int.max 1 dims.(ax) in
-        ( (match (acc, bounds idx) with
-          | Some (lo, hi), Some (a, b) -> Some (lo + (a * stride), hi + (b * stride))
-          | _ -> None),
-          stride ))
-  in
-  match flat with None -> true | Some (lo, hi) -> lo < 0 || hi >= Tn.num_elems tn
-
-(* gh-ocannl-2077: [guard_hoisted ~range ~cond llsc] puts [cond] -- the guard of the [Where] whose
-   arm [llsc] is -- over every read of the operand-position scopes of [llsc] that can leave its node
-   ({!scalar_read_escapes}). Their bodies run ahead of the statement whatever the [Where] selects,
-   so an assignment in them whose value has such a read is guarded: an update reading its own local
-   becomes [Set_local (l, Where (cond, value, l))] (a reduction's update, the guarded replay's own
-   shape), an initializer [If (cond, Set_local (l, value))]; an [If] condition with one becomes
-   [Where (cond, c, 0)]. Where [cond] holds, every value is the one the body computed; where it
-   fails, the body's values are the garbage the arm discards, computed from in-range reads. Nested
-   scopes are guarded the same way, so the guard reaches every body codegen hoists. *)
-let rec guard_hoisted ~range ~(cond : scalar_arg) (llsc : scalar_t) : scalar_t =
-  let arg (v, p) = (guard_hoisted ~range ~cond v, p) in
-  match llsc with
-  | Local_scope scope -> Local_scope { scope with body = guard_body ~range ~cond scope.body }
-  | Ternop (op, a, b, c) -> Ternop (op, arg a, arg b, arg c)
-  | Binop (op, a, b) -> Binop (op, arg a, arg b)
-  | Unop (op, a) -> Unop (op, arg a)
-  | Get_dynamic g -> Get_dynamic { g with dyn_value = arg g.dyn_value }
-  | Get _ | Get_merge_buffer _ | Embed_index _ | Get_local _ | Constant _ | Constant_bits _ -> llsc
-
-and guard_body ~range ~cond (llc : t) : t =
-  let escapes v = scalar_read_escapes ~direct:true ~scopes:false ~range v in
-  match llc with
-  | Set_local (id, v) ->
-      let v = guard_hoisted ~range ~cond v in
-      if not (escapes v) then Set_local (id, v)
-      else
-        let prec = Lazy.force id.tn.Tn.storage_prec in
-        let rec reads_self = function
-          | Get_local id' -> equal_scope_id id id'
-          | Local_scope { body = _; _ } -> false
-          | Ternop (_, (a, _), (b, _), (c, _)) -> reads_self a || reads_self b || reads_self c
-          | Binop (_, (a, _), (b, _)) -> reads_self a || reads_self b
-          | Unop (_, (a, _)) -> reads_self a
-          | Get_dynamic { dyn_value = a, _; _ } -> reads_self a
-          | Get _ | Get_merge_buffer _ | Embed_index _ | Constant _ | Constant_bits _ -> false
-        in
-        (* An update reading its own local keeps the guarded-replay shape the accumulation analyses
-           recognize. An initializer goes under an [If] instead, its value untouched: an assignment
-           not reading its local renders as its source store would, a narrowing read at storage
-           precision ([C_syntax.set_local_value_prec] reads the value's own shape), and a [Where]
-           around it would hide that read and round the init at compute precision (Codex review of
-           the gh-ocannl-2077 PR). Where the guard fails the local keeps its declaration's zero,
-           which a later read in the body makes codegen emit. *)
-        if reads_self v then
-          Set_local (id, Ternop (Ops.Where, cond, (v, prec), (Get_local id, prec)))
-        else If { cond; body = Set_local (id, v) }
-  | If { cond = c, cprec; body } ->
-      let c = guard_hoisted ~range ~cond c in
-      let c = if escapes c then Ternop (Ops.Where, cond, (c, cprec), (Constant 0., cprec)) else c in
-      If { cond = (c, cprec); body = guard_body ~range ~cond body }
-  | Seq (a, b) -> Seq (guard_body ~range ~cond a, guard_body ~range ~cond b)
-  | For_loop ({ index; from_; to_; body; _ } as loop) ->
-      For_loop
-        { loop with body = guard_body ~range:(range_within ~range index from_ to_) ~cond body }
-  | Scan_loop ({ index; from_; to_; carried; body; _ } as scan) ->
-      Scan_loop
-        {
-          scan with
-          carried =
-            List.map carried ~f:(fun c -> { c with init = guard_hoisted ~range ~cond c.init });
-          body = guard_body ~range:(range_within ~range index from_ to_) ~cond body;
-        }
-  | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier
-  | Set _ | Set_dynamic _ | Set_from_vec _ | Tile_mma _ ->
-      llc
 
 let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
     ~(placements : Tn.Placements.t) ~(call_range : Indexing.symbol -> (int * int) option)
@@ -3883,34 +3746,11 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
              discarded read is never even constructed -- is deferred until an eager/predicated
              backend that evaluates both [Where] arms actually lands.
 
-             A read inside a [Local_scope] of the arm is NOT protected by the [?:] (gh-ocannl-2077):
-             codegen emits the scope's body ahead of the statement ([C_syntax.pp_local_defs]), so it
-             runs for every iteration the guard rejects too -- a producer reading a virtual
-             reduction, replayed past its writes, read its input megabytes outside the node (a
-             SIGBUS on cc at [-O0]/[-O1]; volatile, so never sunk, on Metal). Scope purity hides the
-             body's value, not its addresses. So where a scope's read can leave its node -- its flat
-             offset bounded over the read site's loops ([call_range]), the replay's kept loops and
-             the body's own -- the guard is carried into the body ({!guard_hoisted}): the read then
-             sits in a [?:] of its own. A guard that cannot fail where it is minted (a
-             multi-component replay guards every component, a full-node one included), or a read in
-             range for every value, leaves the body as it was. *)
-          let inlined =
-            match conds with
-            | [] -> inlined
-            | first :: rest ->
-                let range s =
-                  match List.Assoc.find !kept_syms s ~equal:Indexing.equal_symbol with
-                  | Some r -> Some r
-                  | None -> call_range s
-                in
-                if scalar_read_escapes ~direct:false ~scopes:true ~range inlined then
-                  let cond =
-                    List.fold rest ~init:first ~f:(fun acc c ->
-                        Binop (Ops.And, (acc, index_prec), (c, index_prec)))
-                  in
-                  guard_hoisted ~range ~cond:(cond, index_prec) inlined
-                else inlined
-          in
+             A read inside a [Local_scope] of the arm is protected too: codegen emits the scope's
+             body under the [Where]'s condition ([C_syntax.pp_local_defs], gh-ocannl-2145), where it
+             once ran ahead of the statement for every iteration the guard rejects (gh-ocannl-2077:
+             a producer reading a virtual reduction, replayed past its writes, read its input
+             megabytes outside the node). *)
           let guarded =
             List.fold conds ~init:inlined ~f:(fun acc cond ->
                 Ternop (Ops.Where, (cond, index_prec), (acc, value_prec), (Get_local id, value_prec)))
@@ -3929,15 +3769,9 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
       | Declare_local _ -> None
       | Comment _ -> Some llc
       | Staged_compilation _ -> Some llc
-      | If { cond = c, cprec; body } ->
-          (* Only inside a scope body ([check_and_store_virtual]'s [in_scope_body]): the guard
-             [guard_hoisted] put over an initializer, which assigns a local alone. *)
-          Option.map (loop env body) ~f:(fun body : t ->
-              If { cond = (loop_scalar env c, cprec); body })
       (* Unreachable: [check_and_store_virtual] rejects computations containing barriers,
-         cooperative tile statements, guarded statements outside a scope body, and (gh-466) dynamic
-         scatters. *)
-      | Workgroup_barrier | Tile_mma _ | Set_dynamic _ -> assert false
+         cooperative tile statements, guarded statements, and (gh-466) dynamic scatters. *)
+      | If _ | Workgroup_barrier | Tile_mma _ | Set_dynamic _ -> assert false
     and loop_scalar env llsc : scalar_t =
       match llsc with
       | Constant _ | Constant_bits _ -> llsc
@@ -7280,6 +7114,31 @@ let collect_local_scopes_in_scalar (llsc : scalar_t) : (scalar_t * scope_id) lis
   loop llsc;
   List.rev !acc
 
+(** The ids of the [Local_scope]s [collect_local_scopes_in_scalar] reports that sit outside every
+    [Where] arm: C_syntax renders an arm's definitions under the select's condition
+    (gh-ocannl-2145), and a gate's ahead of the statement. *)
+let unconditional_scope_ids_in_scalar (llsc : scalar_t) : scope_id list =
+  let acc = ref [] in
+  let rec loop (llsc : scalar_t) =
+    match llsc with
+    | Local_scope { id; _ } -> acc := id :: !acc
+    | Get_dynamic { dyn_value = v, _; _ } -> loop v
+    | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
+    | Ternop (op, (s1, _), (s2, _), (s3, _)) -> (
+        loop s1;
+        match Ops.ternop_conditionality op with
+        | Ops.Cond_and_one_arm -> ()
+        | Ops.All_three ->
+            loop s2;
+            loop s3)
+    | Binop (_, (s1, _), (s2, _)) ->
+        loop s1;
+        loop s2
+    | Unop (_, (s, _)) -> loop s
+  in
+  loop llsc;
+  !acc
+
 (** Collect all [Local_scope] candidates from a statement's scalar trees. *)
 let collect_local_scopes_in_stmt (stmt : t) : (scalar_t * scope_id) list =
   match stmt with
@@ -7564,7 +7423,8 @@ exception Impure_scope of string
 
     The rule exists because a scope body does not execute where it is written. [C_syntax.pp_scalar]
     returns it as a local definition, which [pp_local_defs] emits ahead of the enclosing statement,
-    in its own order rather than by the operand's syntactic position; [simplify_llc] collapses a
+    in its own order rather than by the operand's syntactic position (a short-circuiting [Where]
+    arm's under the select's condition, gh-ocannl-2145); [simplify_llc] collapses a
     single-assignment scope into the expression, moving its reads the other way; and
     [hoist_cross_statement_cse] lifts a body shared by sibling statements out of the statement
     altogether, to run ONCE ahead of the first user. An effect in a body is therefore placed by none
@@ -8139,11 +7999,25 @@ and hoist_shared_locals_segment (stmts : t list) : t list =
                 if i = group_idx then (s, id, stmt_idx :: idxs, cand_id :: all_ids)
                 else (s, id, idxs, all_ids))
       | None -> groups := (scalar, cand_id, [ stmt_idx ], [ cand_id ]) :: !groups);
+  (* gh-ocannl-2145: the hoisted body runs unconditionally ahead of the first user, so a group is
+     lifted only where some member runs unconditionally in its own statement too: its reads are then
+     in range in this iteration anyway. A group living only in [Where] arms, which C_syntax renders
+     under their conditions, stays where it is. *)
+  let unconditional =
+    List.concat_map stmts ~f:(function
+      | Set { llsc; _ } | Set_local (_, llsc) | Set_from_vec { arg = llsc, _; _ } ->
+          unconditional_scope_ids_in_scalar llsc
+      | _ -> [])
+  in
   (* Keep only groups with 2+ members *)
   let shared_groups =
     List.filter_map !groups ~f:(fun (scalar, id, indices, all_ids) ->
         let indices = List.dedup_and_sort indices ~compare:Int.compare in
-        if List.length indices >= 2 then Some (scalar, id, indices, all_ids) else None)
+        if
+          List.length indices >= 2
+          && List.exists all_ids ~f:(fun id -> List.mem unconditional id ~equal:equal_scope_id)
+        then Some (scalar, id, indices, all_ids)
+        else None)
   in
   if List.is_empty shared_groups then stmts
   else

@@ -23,12 +23,12 @@
    ([recognized_refusals]) and nothing else. An uncovered read owns entry values no replay can
    produce, so such a node reading one MUST refuse; distinct entries are what tell the two apart.
    The virtual arm answers for faults a compiled run would swallow, too: [Interp_fault] is a
-   finding. Both arms evaluate under [~strict:true], so a scope the code hoists out of a discarded
-   [Where] arm is held to its node's bounds as well (gh-ocannl-2077; [strict_probe_controls] pin the
-   probe; [virtual_rejection_boundary]'s [row_guarded_scope_read] pins the inliner's arm guard). The
+   finding. Both arms evaluate under [~strict:true], so the discarded arm of a select a backend may
+   blend is held to its nodes' bounds as well ([strict_probe_controls] pin the probe). The
    [src=reduce] family makes [src] itself a virtual two-term reduction over a materialized input:
    scopes then sit inside the replay's guarded arms throughout the table, including out-of-range
-   substitutions the inliner must protect with [guard_hoisted].
+   substitutions, which codegen renders under the guard (gh-ocannl-2145; before it, the inliner
+   carried the guard into the scope body, gh-ocannl-2077's [guard_hoisted]).
 
    Tier B is the anchor. An interpreter agreeing only with itself would prove nothing, so a sample
    across the outcome buckets also compiles and runs on the selected backend, in both arms, against
@@ -817,25 +817,26 @@ let self_controls () =
   p "self-control: swapped components are seen"
     (disagrees ~original:overlap { overlap with steps = [ Write 1; Write 0; Read 0 ] })
 
-(* gh-ocannl-2077: the instrument's [~strict] probe. Codegen emits a [Local_scope]'s body ahead of
-   its statement, so a scope in a discarded [Where] arm runs on a backend; the probe holds the
-   scopes of a discarded arm to their nodes' bounds, and nothing else. Each case names what the lazy
-   mode and the probe answer: a plain read of a discarded arm stays unevaluated (the control an
-   eager-[Where] mutant fails), as do a scope guarded inside its own body, one in an [If] body never
-   entered or a loop that never runs, and anything in a projection's unrendered operand, which
-   neither mode evaluates. *)
+(* The instrument's [~strict] probe. Codegen renders a short-circuiting [Where]'s arm scopes under
+   its condition (gh-ocannl-2145), so a discarded arm runs nothing; a select a blending backend may
+   evaluate both arms of ([Low_level.speculable_select]: a condition mentioning no index) runs its
+   discarded arm whole, and the probe holds that arm to its nodes' bounds, and nothing else. Each
+   case names what the lazy mode and the probe answer: an index-guarded arm, a scope in one or a
+   plain read, stays unevaluated (the control an eager-[Where] mutant fails), as do a scope guarded
+   inside its own body, one in an [If] body never entered or a loop that never runs, and anything in
+   a projection's unrendered operand, which neither mode evaluates. *)
 let fault ?strict entries llc =
   match interpret ?strict (interp_memory entries) llc with
   | () -> None
   | exception Interp_fault msg -> Some msg
 
-let is_hoisted_fault = function
-  | Some msg -> String.is_substring msg ~substring:"a hoisted scope of a discarded Where arm"
+let is_blended_fault = function
+  | Some msg -> String.is_substring msg ~substring:"the discarded arm of a blendable Where"
   | None -> false
 
 let strict_probe_controls () =
-  let s = mk "s" and out = mk ~dims:[| 5 |] "out" and v = mk "v" in
-  let entries = [ (s, [| 10.; 20.; 30. |]); (out, blank 5) ] in
+  let s = mk "s" and out = mk ~dims:[| 5 |] "out" and v = mk "v" and m = mk ~dims:[| 5 |] "m" in
+  let entries = [ (s, [| 10.; 20.; 30. |]); (out, blank 5); (m, [| 0.; 0.; 0.; 1.; 1. |]) ] in
   (* A scope over [v] whose body reads [s] at [idx]. *)
   let reading_scope ?guard idx =
     let id = LL.get_scope v in
@@ -850,38 +851,46 @@ let strict_probe_controls () =
     loop_n j 5 (f j)
   in
   let below3 j = lt (embed j) (ic 3) in
+  (* The same selection by a value: blendable. *)
+  let unmasked j = lt (get m [| iter j |]) (c 0.5) in
   let case name ~lazy_ ~strict llc =
     let lz = fault entries llc and st = fault ~strict:true entries llc in
     p
       (Printf.sprintf "strict probe: %s: lazy %s, strict %s" name
          (if lazy_ then "passes" else "faults")
-         (match strict with `Passes -> "passes" | `Hoisted -> "faults on the hoisted scope"))
+         (match strict with `Passes -> "passes" | `Blended -> "faults on the blendable arm"))
       (Bool.equal (Option.is_none lz) lazy_
-      && match strict with `Passes -> Option.is_none st | `Hoisted -> is_hoisted_fault st)
+      && match strict with `Passes -> Option.is_none st | `Blended -> is_blended_fault st)
   in
-  case "scope reading past s in a discarded arm" ~lazy_:true ~strict:`Hoisted
+  case "scope reading past s in a discarded arm" ~lazy_:true ~strict:`Passes
     (each (fun j -> set out [| iter j |] (where_ (below3 j) (reading_scope (iter j)) (c 0.))));
+  case "scope reading past s in a blendable discarded arm" ~lazy_:true ~strict:`Blended
+    (each (fun j -> set out [| iter j |] (where_ (unmasked j) (reading_scope (iter j)) (c 0.))));
   case "plain read past s in a discarded arm" ~lazy_:true ~strict:`Passes
     (each (fun j -> set out [| iter j |] (where_ (below3 j) (get s [| iter j |]) (c 0.))));
+  case "plain read past s in a blendable discarded arm" ~lazy_:true ~strict:`Blended
+    (each (fun j -> set out [| iter j |] (where_ (unmasked j) (get s [| iter j |]) (c 0.))));
   case "scope guarded inside its own body" ~lazy_:true ~strict:`Passes
     (each (fun j ->
-         set out [| iter j |] (where_ (below3 j) (reading_scope ~guard:(below3 j) (iter j)) (c 0.))));
+         set out
+           [| iter j |]
+           (where_ (unmasked j) (reading_scope ~guard:(below3 j) (iter j)) (c 0.))));
   case "scope in an If body never entered past s" ~lazy_:true ~strict:`Passes
     (each (fun j -> if_idx (below3 j) (set out [| iter j |] (reading_scope (iter j)))));
   case "scope in a loop that never runs" ~lazy_:true ~strict:`Passes
     (let j = sym () in
      loop ~from_:5 ~upto:4 j
-       (set out [| fixed 0 |] (where_ (below3 j) (c 0.) (reading_scope (iter j)))));
-  case "scope in the discarded arm of an If condition" ~lazy_:true ~strict:`Hoisted
+       (set out [| fixed 0 |] (where_ (unmasked j) (c 0.) (reading_scope (iter j)))));
+  case "scope in the blendable discarded arm of an If condition" ~lazy_:true ~strict:`Blended
     (each (fun j ->
          if_idx
-           (lt (c 0.) (where_ (below3 j) (reading_scope (iter j)) (c 1.)))
+           (lt (c 0.) (where_ (unmasked j) (reading_scope (iter j)) (c 1.)))
            (set out [| iter j |] (c 1.))));
   case "scope in a projection's unrendered operand" ~lazy_:true ~strict:`Passes
     (each (fun j ->
          set out
            [| iter j |]
-           (where_ (below3 j)
+           (where_ (unmasked j)
               (binop Ops.Arg1 (get s [| fixed 0 |]) (reading_scope (aff [ (1, j) ] 3)))
               (c 0.))));
   case "plain read past s in a projection's unrendered operand" ~lazy_:true ~strict:`Passes

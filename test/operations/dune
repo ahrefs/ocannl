@@ -3212,6 +3212,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name where_arm_scopes)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules where_arm_scopes)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name local_scope_sibling_reads)
  (package neural_nets_lib)
  (deps

@@ -181,10 +181,11 @@ let () =
                 sp ) )))
   in
   let _ = show "where short-circuit" where_case in
-  (* gh-ocannl-637: an arm whose cost is a hoisted scope body executes whichever arm is selected
-     (the renderers emit scope definitions before the statement), so both extractions charge it:
-     K[i] = where(0 < M[i], { lv := E2[i] * 2 }, 0) — cond + select + the body's multiply, 3/iter,
-     floor = upper = 12, and E2's read inside the body is certain in both. *)
+  (* An arm whose cost is a scope body: K[i] = where(0 < M[i], { lv := E2[i] * 2 }, 0). Before
+     gh-ocannl-2145 the renderers emitted every scope definition ahead of the statement, so both
+     extractions charged it as certain (gh-ocannl-637); now C_syntax runs it under the condition, so
+     the upper charges cond + select + the body's multiply, 3/iter, as a guards-taken bound, the
+     floor the cheaper arm's 2/iter, and E2's read inside the body is no longer certain. *)
   let lv = fresh_tn "lv" [||] in
   Ll_test.virtualize lv;
   let where_hoisted =
@@ -207,13 +208,12 @@ let () =
                 sp ),
               (LL.Constant 0., sp) )))
   in
-  let hoisted = show "where arm hoisted into a scope body" where_hoisted in
+  let hoisted = show "where arm in a scope body" where_hoisted in
   let upper = CM.analyze where_hoisted in
-  Verdict.p "  hoisted arm: floor = upper on both legs, both exact"
-    (hoisted.CM.fr_exact
-    && (not (CM.approximate upper))
-    && hoisted.CM.fr_flops = upper.CM.flops
-    && hoisted.CM.fr_bytes = CM.total_bytes upper);
+  Verdict.p "  scope arm: floor below upper on both legs, both bounds"
+    ((not hoisted.CM.fr_exact) && CM.approximate upper
+    && hoisted.CM.fr_flops < upper.CM.flops
+    && hoisted.CM.fr_bytes < CM.total_bytes upper);
   (* An open producer computing a larger domain than consumed: P2[0..7] = A3[0..7] * 2, then C3[0] =
      P2[0]. The inline completion instantiates one multiply and one A3 read and drops the setter
      loop, so with P2 open the floor keeps only C3's certain write — the producer's ops AND its A3

@@ -151,9 +151,9 @@ let () =
         && r.CM.rc_flops = 5 && r.CM.rc_bytes = 20 && (not r.CM.rc_flops_approx)
         && not r.CM.rc_bytes_approx
     | None -> false);
-  (* Where body with a hoisted scope arm: W[i] = where(K[i], { lv := 0; for k: lv += A[i][k] }, 0).
-     The reduction body stays hoisted through the simplifier: select + 5 adds per read, A's row and
-     K's cell read — exact, per gh-ocannl-637 Part 1. *)
+  (* Where body with a scope arm: W[i] = where(K[i], { lv := 0; for k: lv += A[i][k] }, 0). The
+     reduction body survives the simplifier as a scope, which C_syntax renders under the condition
+     (gh-ocannl-2145): select + 5 adds per read, A's row and K's cell read, a guards-taken bound. *)
   let w = mk "W" and kk = mk "K" and a4 = mk "A4" and lv = mk ~dims:[||] "lv" in
   virtualize lv;
   let scope_with ?(id = LL.get_scope lv) body =
@@ -173,9 +173,9 @@ let () =
   in
   let where_one = price ~self:w [ (Some [| iter i |], where_body) ] in
   show_opt "where, hoisted reduction arm" where_one;
-  p "where: exact, 6 ops and 24 bytes per read"
+  p "where: a guards-taken bound of 6 ops and 24 bytes per read"
     (match where_one with
-    | Some r -> flops_exact where_one && r.CM.rc_flops = 6 && r.CM.rc_bytes = 24
+    | Some r -> (not (flops_exact where_one)) && r.CM.rc_flops = 6 && r.CM.rc_bytes = 24
     | None -> false);
   (* A single-assignment scope under the arm is what the simplifier collapses into the arm's
      expression, where it IS conditional: the op count is a guards-taken bound. *)

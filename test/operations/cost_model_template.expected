@@ -1,8 +1,8 @@
 == instantiation_cost on hand-built computations ==
   reduction, one read                            flops=5 (exact) bytes=20 (exact)
 reduction: kernel flops = read flops x projected extent, 20 bytes, exact: true
-  where, hoisted reduction arm                   flops=6 (exact) bytes=24 (exact)
-where: exact, 6 ops and 24 bytes per read: true
+  where, hoisted reduction arm                   flops=6 (bound) bytes=24 (bound)
+where: a guards-taken bound of 6 ops and 24 bytes per read: true
   where, arm the simplifier collapses            flops=2 (bound) bytes=8 (bound)
 where: a collapsible arm prices as the simplified, conditional form: true
   shared loop read as S (sibling filtered)       flops=1 (exact) bytes=4 (exact)

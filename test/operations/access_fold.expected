@@ -3,7 +3,8 @@ structural policy includes discarded operands: true
 second projection selects only its second operand: true
 every binop follows the operator classifier: true
 guard read precedes conditional operands and hoisted scope reads: true
-scope hoisting clears operand gating but preserves statement guard: true
+a scope in a Where arm stays gated and keeps the statement guard: true
+scope hoisting clears a gate's operand gating: true
 direct Where arm remains gated: true
 guard policy can suppress statement context: true
 gated skip is explicit subtree pruning: true
