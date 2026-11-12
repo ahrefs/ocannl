@@ -120,9 +120,10 @@ files.
   location, so the `test/ppx/*_expected.ml` goldens spell no line. A contradiction while
   tracing a closure at its `()` application takes the same site from `Tensor.Scheme.trace_slot`
   through `trace_core` to `Shape.Scheme.trace` (gh-ocannl-2164); `check_definition` preserves it
-  under its own context. Only contradictions name the site: fallback warnings and failed-rewind
-  refusals keep their existing diagnostics. The
-  `scheme_application_site` test pins both against the application's line. Ordinary partial
+  under its own context. A failed trace rewind also names the active application through
+  `rewind_or_reraise`; ordinary fallback warnings stay site-independent so their per-function and
+  reason deduplication holds across application sites. The `scheme_application_site` test pins
+  the contradiction and rewind refusal against the application's line. Ordinary partial
   pipelines deliberately have two wrappers: in `x |> f y`, the inner one records `f y` while
   constructing the partial application; after it returns, `at_site` restores the outer pipeline's
   site for the final call on `x`. Multiline pipelines distinguish these locations. A deferred

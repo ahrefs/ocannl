@@ -2396,15 +2396,16 @@ module Scheme = struct
      pre-existing open shape's committed state (forcing its dims), and a lazy over that read may
      hold the failure, which no rewind can reset -- the function cannot degrade silently: loud,
      naming the function and the remedy. *)
-  let rewind_or_reraise s ck exn bt =
+  let rewind_or_reraise ?site s ck exn bt =
     match rewind ck with
     | () -> ()
     | exception Session_error (why, _) ->
+        let subject = s.label ^ Option.value_map site ~default:"" ~f:(fun site -> " " ^ site) in
         Stdlib.Printexc.raise_with_backtrace
           (Row.Shape_error
              ( [%string
                  "%{Shape.exn_summary exn}; and the rewind of the trace of the shape scheme \
-                  %{s.label} was refused (%{why}), so the function cannot be left unschemed -- opt \
+                  %{subject} was refused (%{why}), so the function cannot be left unschemed -- opt \
                   it out of its scheme with [@@ocannl.no_scheme]"],
                [] ))
           bt
@@ -2460,13 +2461,13 @@ module Scheme = struct
               Stdlib.Printexc.raise_with_backtrace exn bt
           | exception (Shape.Untraceable_scheme msg as exn) ->
               let bt = Stdlib.Printexc.get_raw_backtrace () in
-              rewind_or_reraise s ck exn bt;
+              rewind_or_reraise ?site:(site_phrase ()) s ck exn bt;
               unscheme_refused s msg
           | exception exn ->
               (* The body cannot run on tracers (it reads concrete dims, say): degrade only once the
                  session is verifiably back where it was. *)
               let bt = Stdlib.Printexc.get_raw_backtrace () in
-              rewind_or_reraise s ck exn bt;
+              rewind_or_reraise ?site:(site_phrase ()) s ck exn bt;
               unscheme_refused s
                 [%string
                   "tracing the shape scheme %{s.label}: the function raised %{Shape.exn_summary \
