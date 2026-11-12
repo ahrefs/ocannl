@@ -282,12 +282,19 @@ heuristic when needed - Preserving expressions in contexts without a
 unit parameter - Escaping from the DSL in <code>%cd</code> contexts
 (which don’t use the unit heuristic)</p>
 <h2 id="primitive-operations">Primitive operations</h2>
-<p>To accomodate stylistic preferences, OCANNL supports both curried and
-uncurried syntaxes for primitive operation application. Binary operators
-are associated with infix operators, in addition to having alphabetic
-identifiers. This stems from the following restriction: in the
-<code>%cd</code> syntax, the assignment is always an infix operator, and
-it needs to pick the accumulation operation.</p>
+<p>To accommodate stylistic preferences, OCANNL supports both curried
+and uncurried syntaxes for primitive operation application. Binary
+operators have infix and alphabetic identifiers. The infix forms stem
+from the following restriction: in the <code>%cd</code> syntax, the
+assignment is always an infix operator, and it needs to pick the
+accumulation operation. In <code>%op</code>, alphabetic names are
+available for the binary operations its <code>O</code> module provides:
+<code>add</code>, <code>sub</code>, <code>mul</code>, <code>div</code>,
+<code>lt</code>, <code>le</code>, <code>eq</code>, and <code>ne</code>
+(<code>mul</code> and <code>div</code> are pointwise). The remaining
+binary primitive names in the table below are <code>%cd</code>-only; in
+<code>%op</code>, those identifiers retain their ordinary OCaml
+meaning.</p>
 <p>In <code>%op</code>, the uncurried form <code>op (a, b)</code> or
 <code>op (a, b, c)</code> of a binary or ternary primitive operation is
 the curried call <code>op a b</code> or <code>op a b c</code>:
@@ -974,6 +981,9 @@ bare type-constructor name is read as the basis (qualified,
 parameterised, tuple, arrow and variant types are ignored). These bases
 then propagate to specify bases of other dimensions in other tensors,
 via shape inference.</p>
+<p>Outside literal axis-basis syntax, <code>(relu x : Tensor.t)</code>
+preserves the type annotation and translates the application inside it
+as usual.</p>
 <p>As a convenience, the same annotation on a bare numeric literal
 labels the size-1 output axis of the resulting scalar:
 <code>(2.0 : q)</code> is shorthand for <code>([ 2.0 ] : q)</code>.</p>
@@ -1210,6 +1220,13 @@ not begin <code>=&gt;</code>;</li>
 <li>otherwise, it is the <em>single-char mode</em>: each alphanumeric
 character corresponds to an axis.</li>
 </ul>
+<p>A literal operator capture list is checked by the ppx: every captured
+name must occur as a label or a named row variable in the spec. For
+example, <code>&quot;ab =&gt; a&quot; [&quot;ab&quot;]</code> is refused at the capture
+literal: that spec names axes <code>a</code> and <code>b</code>. To name
+one axis <code>ab</code>, use multichar mode,
+e.g. <code>&quot;ab, =&gt; ab,&quot; [&quot;ab&quot;]</code>. Writing
+<code>&quot;a, b =&gt; a&quot;</code> still names two separate axes.</p>
 <p>Whitespace never separates axes. In single-char mode it is ignored
 (<code>s a</code> is the two axes <code>sa</code>); in multichar mode
 axes need commas between them, so <code>s a; s b =&gt; s a^b</code> is a
@@ -1291,7 +1308,18 @@ The same holds for the literal spec of the named forms –
 <code>concat</code>, <code>concat_sum</code> (its first argument,
 unqualified; gh-ocannl-2060):
 <code>einsum &quot;stride*o&lt;+dilation*k; k =&gt; o&quot; x w</code>. A
-named-form spec that reads no identifier is passed on as written.</li>
+named-form spec that reads no identifier is passed on as written. Under
+the extensions a spec that reads a runtime value is rebuilt at run time
+from its parse, and the translator also passes the literal as
+<code>~spec_source</code>: Shape parses the evaluated spec and its
+refusals quote the source (with <code>stride = 0</code>:
+<code>affine axis `0*o&lt;+k` in einsum spec &quot;stride*o&lt;+k; k =&gt; o&quot; has stride 0</code>;
+gh-ocannl-2163). Every other literal reaches Shape as written, and a
+spec held in a variable, or passed to the functions directly, is quoted
+as passed. A local function shadowing one of the named forms receives
+<code>~spec_source</code> from a runtime spec, so it takes and forwards
+<code>?spec_source</code> (<code>lib/nn_blocks.ml</code>’s
+<code>max_pool2d</code>).</li>
 <li>Note the comma above: <code>*</code> and <code>+</code> select the
 multichar mode, so a spec with a stride or a window always separates its
 axes by commas,
@@ -1700,7 +1728,7 @@ segments back, and a dropped segment gets none. These forms, binary ones
 (gh-ocannl-2087).</p>
 <p><strong>What a concatenated axis cannot say</strong>: a concatenated
 axis is one axis of alternatives, so a position lies in one segment.
-Four forms therefore have no meaning, and are refused with a shape error
+Five forms therefore have no meaning, and are refused with a shape error
 when the operation is built, whatever the sizes (gh-ocannl-2017):</p>
 <ul>
 <li>One tensor’s axes needing two components of the same concatenation:
@@ -1726,6 +1754,23 @@ written (it was, silently, gh-ocannl-2087). To repeat a tensor along an
 axis, pass it once per copy under distinct components:
 <code>(x, x) ++^ &quot;a; b =&gt; a^b&quot;</code>. Integer components may repeat
 (<code>2^a^2 =&gt; a</code>): each is its own skipped segment.</li>
+<li>One tensor’s concatenated axes sharing a component, unless they are
+the same concatenation: <code>a^b, a^c =&gt; a</code>,
+<code>a^b, b^a =&gt; a^b</code>, <code>a^b, a^b^c =&gt; a^b</code>,
+<code>2^a, 3^a =&gt; a</code>, <code>a =&gt; a^b, a^c</code>. The shared
+component fuses the two concatenations into one set of alternatives, so
+only the blocks where both axes are in its segment would be reached,
+their diagonal, and the others silently dropped (they were,
+gh-ocannl-2167). The same concatenation on two axes is that axis’s
+diagonal, like <code>aa =&gt; a</code>, and stays legal
+(<code>a^b, a^b =&gt; a^b</code>, <code>2^a, 2^a =&gt; a</code>), as
+does a component shared with a plain axis (<code>a^b, b =&gt; b</code>,
+the diagonal of a slice) or with another tensor
+(<code>a^b; a^c =&gt; a</code>). For the diagonal of two segments,
+extract them under distinct labels first:
+<code>x ++ &quot;a^b, d^c =&gt; a, d&quot;</code>, then
+<code>++ &quot;aa =&gt; a&quot;</code>. These are pinned in
+<code>test/einsum/concat_axis_consumers.ml</code>.</li>
 </ul>
 <p>The same forms on an operand are defined where every cell has a
 reading: an operand concatenation no component of which the result names
@@ -1873,6 +1918,24 @@ or its alias <code>Operation.TDSL.O.dim</code> to embed the solved
 dimension of the corresponding variable (as a number) into a tensor
 expression. For a row variable, the number will be the product of the
 dimensions it resolved into.</p>
+<p><code>%cd</code> assignments also accept a trailing capture list on a
+literal <code>~logic</code> specification, for unary, binary and ternary
+assignments. For example,
+<code>let%cd comp = tgt =: id x ~logic:&quot;a^c =&gt; a^b^c&quot; [&quot;a&quot;; &quot;b&quot;] in</code>
+binds <code>a</code> and <code>b</code> with the same per-call scope and
+label checks as operator captures. Captures apply to einsum specs only:
+the shortcuts <code>&quot;.&quot;</code>, <code>&quot;T&quot;</code> and <code>&quot;@&quot;</code>
+reject nonempty capture lists, but accept <code>[]</code>. Shortcut
+spellings take precedence over einsum parsing: <code>&quot;.&quot;</code> accepts
+unary, binary and ternary assignments, <code>&quot;T&quot;</code> only unary, and
+<code>&quot;@&quot;</code> only binary or ternary; other arities are expansion
+errors with or without <code>[]</code> (use an explicit einsum spec such
+as <code>&quot;T =&gt; T&quot;</code> for an axis named <code>T</code>).
+<code>Shape.set_dim a 2; Shape.set_dim b 1</code> sizes those concat
+segments before compilation. This assignment writes the <code>a</code>
+and <code>c</code> segments; the existing <code>b</code> cells of
+<code>tgt</code> retain their prior values. The capture references are
+passed in the assignment’s shape logic.</p>
 <p>The ppx never shares a capture between calls, but a reference made by
 hand with <code>Shape.get_variable_ref</code> can be passed through
 <code>~capture_dims</code> to several operations. It then names one
@@ -2087,8 +2150,9 @@ only hands to another function contributes its label only when
 annotated. An optional parameter (<code>?scale</code>,
 <code>?(stride = 2)</code>) is not a label source and may be anything
 (gh-ocannl-1787). If the function has a unit parameter <code>()</code>,
-like <code>mlp_layer</code> above, no parameter is a label source: the
-label comes from the binding’s name.</p>
+like <code>mlp_layer</code> above, no tensor parameter is a label
+source: the label comes from the binding’s name, followed by the
+<code>label</code> parameter before <code>()</code>, if present.</p>
 <h3 id="the-label-parameter">The <code>label</code> parameter</h3>
 <p>A parameter with the label <code>label</code> – <code>~label</code>,
 <code>?label</code> or <code>?(label = [ ... ])</code> – is a
@@ -2100,7 +2164,14 @@ the tensors the function creates per application (gh-ocannl-1987):</p>
 the inline declarations, which are created at the <code>()</code>
 application: <code>mlp_layer ~label:[ &quot;L1&quot; ] ~hid_dim:3 ()</code>
 creates <code>w</code> and <code>b</code> labelled with <code>L1</code>.
-The result’s label is not enriched.</li>
+It also enriches the result’s label after the binding’s name: a result
+of <code>mlp_layer ~label:[ &quot;L1&quot; ] ~hid_dim:3 () x</code> has label
+<code>[ &quot;relu&quot;; &quot;mlp_layer&quot;; &quot;L1&quot; ]</code>. Tensor parameters contribute
+no labels. An omitted <code>?label</code> contributes nothing;
+<code>?(label = [ ... ])</code> contributes its default when omitted. A
+non-tensor <code>label</code> now expects a string-list argument even
+when there are no inline declarations; use <code>~label:_</code> to opt
+out of result labeling.</li>
 <li>Without a unit parameter, as in
 <code>let%op scaled ~label x = { gamma } *. x</code>, the inline
 declarations are created once, when the function is defined, where
@@ -2246,11 +2317,19 @@ against its arguments’ shapes, in a window that is always rewound, then
 runs the body, which builds and registers the graph as it always has.
 The scheme only checks; it never replaces the body’s own registration,
 which would not be cheaper (<a href="shape_inference.md#what-schemes-buy-measured">shape
+inference</a>). Because the body always runs, automatic schemes are
+unaffected by explicit <code>Tensor.Scheme.instantiate</code> skipping
+projection-time refusals: they get the body’s inline verdict at closure
+(gh-ocannl-2020, <a href="shape_inference.md#shape-schemes">shape
 inference</a>).</li>
 <li><strong>What it reports.</strong> A shape error that does not depend
 on the arguments raises when the closure is built, as
-<code>tracing the shape scheme &lt;function&gt;: ...</code>. One that
-does raises at the application, before the body runs, as
+<code>tracing the shape scheme &lt;function&gt;: ...</code>, or
+<code>tracing the shape scheme &lt;function&gt; in the %op application at &lt;file&gt;:&lt;line&gt;: ...</code>
+when constructed inside a <code>%op</code> application (gh-ocannl-2164).
+A function without <code>()</code> reports its trace error at its first
+application in the same form. One that does raises at the application,
+before the body runs, as
 <code>applying the shape scheme &lt;function&gt; to &lt;arguments&gt;: ...</code>.
 Where the application is evaluated inside a function application written
 in <code>%op</code> code, the message names the innermost such:

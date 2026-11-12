@@ -1346,7 +1346,7 @@ let%op avg_pool2d ~window () x =
     g2 =+ where (t = t1 + t2) (v1 *. g) 0
   in
   Tensor.binop
-    ~compose_op:(Shape.Einsum (spec, capture_dims))
+    ~compose_op:(Shape.Einsum (Shape.einsum_spec spec, capture_dims))
     ~op_asn ~grad_asn ~label:(&amp;quot;@^=&amp;gt;*&amp;quot; :: label)
 &lt;/code&gt;&lt;/pre&gt;
 &lt;/div&gt;
