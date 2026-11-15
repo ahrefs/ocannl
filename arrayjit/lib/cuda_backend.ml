@@ -569,12 +569,13 @@ end = struct
     let accum_prec prec =
       match prec with
       | Ops.Bfloat16_prec _ -> Ops.single
-      (* gh-ocannl-680: [Fp16_wide] gives f16 accumulators f32 residency on every backend; here the
-         uniform-f16 mma legs keep width-uniform with it through the f32-accumulate inline-PTX
-         m16n8k16 arm (the fragment layouts are shared by .f16 and .bf16), seeded via the
-         per-statement entry in [mma_f16_wide_acc_scopes]. Under [Fp16_auto]/[Fp16_narrow] f16 keeps
-         storage residency, matching the f16-accumulate wmma triple — the pre-gh-680 behavior. *)
-      | Ops.Half_prec _ when Numerics.fp16_accum_wide () -> Ops.single
+      (* gh-ocannl-680: [Fp16_wide] gives f16 accumulators f32 residency on every backend, and since
+         gh-ocannl-2195 so does [Fp16_auto] here ([Cuda_mma.fp16_accum_wide]); the uniform-f16 mma
+         legs keep width-uniform with it through the f32-accumulate inline-PTX m16n8k16 arm per
+         statement and the wmma f32 fragments with a converted [d] in fragment scope
+         (gh-ocannl-925), both in [mma_f16_wide_acc_scopes]. Under [Fp16_narrow] f16 keeps storage
+         residency, matching the f16-accumulate wmma triple. *)
+      | Ops.Half_prec _ when Cuda_mma.fp16_accum_wide () -> Ops.single
       | Ops.Fp8_prec _ when (Numerics.get ()).Numerics.narrow_compute_f32 -> Ops.single
       | _ -> prec
 
@@ -677,9 +678,9 @@ end = struct
     (* Tensorize-mma T3: cooperative tile-MMA emission for [Low_level.Tile_mma]. Two renderings:
 
        - The CUDA wmma C++ API for the 16-bit combinations: f16 x f16 -> f32 (the flagship), f16 x
-       f16 -> f16 (under [Numerics.Fp16_auto]/[Fp16_narrow] only — the wide policy routes the
-       uniform-f16 combination to the f32-accumulate inline-PTX m16n8k16 arm instead,
-       gh-ocannl-680), and bf16 x bf16 -> f32 (sm_80+; the [(wmma-bf16)] marker makes
+       f16 -> f16 (under [Numerics.Fp16_narrow] only — the wide resolution, [Fp16_wide] and since
+       gh-ocannl-2195 [Fp16_auto], routes the uniform-f16 combination to the f32-accumulate arms
+       instead, gh-ocannl-680), and bf16 x bf16 -> f32 (sm_80+; the [(wmma-bf16)] marker makes
        [nvrtc_options] select the arch). 16x16x16 fragment blocks are resident across the whole [k]
        extent, mirroring the Metal emission. - Inline-PTX
        [mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e5m2.f32] for fp8 x fp8 -> f32 (OCANNL's fp8 is

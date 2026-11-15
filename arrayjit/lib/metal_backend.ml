@@ -1791,7 +1791,7 @@ module Impl = struct
        convert the f16 destination only at their outer load/store boundary (gh-ocannl-837). *)
     let accum_prec prec =
       match prec with
-      | Ops.Half_prec _ when Numerics.fp16_accum_wide () -> Ops.single
+      | Ops.Half_prec _ when Metal_mma.fp16_accum_wide () -> Ops.single
       (* gh-ocannl-838: likewise bf16 where the uniform-bf16 MMA arm swaps to a float accumulator
          over bfloat operands (gh-ocannl-923) -- under [Bf16_wide], and since gh-ocannl-2029 under
          [Bf16_auto] too: the storage-width bfloat fragment narrows once per 8-deep k block, never

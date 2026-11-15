@@ -8,6 +8,15 @@
     still gates the descriptor at the device level (Apple7 and later), which is why no arm names a
     floor. *)
 
+val fp16_auto_wide : bool
+(** Whether [Numerics.Fp16_auto] resolves wide on this backend: [false] (gh-ocannl-2195) — the
+    storage-width half tile and serial loop are both per-step half FMAs (gh-ocannl-2151), so the
+    narrow auto is schedule-uniform here. The value of the descriptor's [mma_f16_auto_wide]. *)
+
+val fp16_accum_wide : unit -> bool
+(** [Numerics.fp16_accum_wide ~auto_wide:fp16_auto_wide ()]: the predicate behind [accum_prec] and
+    {!mma_accumulator}. *)
+
 val bf16_accum_wide : unit -> bool
 (** Whether bf16 reduction accumulators reside in f32 on this backend: under [Numerics.Bf16_wide],
     and since gh-ocannl-2029 under [Bf16_auto] too -- only [Bf16_narrow] keeps the

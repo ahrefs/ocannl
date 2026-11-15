@@ -1588,8 +1588,9 @@ cc_vector_bytes=0
 
 # The numerics gates at their exact defaults, so that a profile switch never silently changes
 # what math is being done (they are the orthogonal axis; see the issue). fp16_arithmetic=auto
-# resolves deterministically per backend (gh-ocannl-680), so pinning the default keeps the
-# principle: apart from the GPU fast-math keys above, this profile changes no math, and same-machine
+# resolves deterministically per backend (gh-ocannl-680) -- wide on CUDA and HIP since
+# gh-ocannl-2195, so a tensorized f16 schedule accumulates as its serial twin does -- so pinning
+# the default keeps the principle: apart from the GPU fast-math keys above, this profile changes no math, and same-machine
 # runs stay reproducible.
 # bf16_arithmetic=auto likewise (gh-ocannl-838).
 tf32_matmuls=false
@@ -1633,8 +1634,9 @@ cc_backend_arch_flags=auto
 cc_backend_simd_flags=auto
 
 # Native 16-bit arithmetic where the target has it; ignored on targets that promote fp16 to
-# float, and on the GPU backends (whose f16 arithmetic and accumulators are native narrow
-# under this setting, same as under auto -- gh-ocannl-680).
+# float. On the GPU backends it keeps the f16-accumulate tensor units and storage-width f16
+# accumulators -- on CUDA and HIP the narrow side of the trade auto no longer takes
+# (gh-ocannl-2195), and the one result-changing key of this payload.
 fp16_arithmetic=true
 
 # The floating-point licences (fp_contract, fp_reassociate, fp_finite_math; gh-ocannl-998) stay

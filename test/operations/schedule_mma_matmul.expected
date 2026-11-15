@@ -77,11 +77,13 @@ staged+tensorized uniform-f16 matmul matches the serial twin bitwise: true
 staged+tensorized uniform-f16 fragment residency: true
 staged+tensorized Fp16_wide matmul equals the once-narrowed wide reference bitwise: true
 staged+tensorized Fp16_wide fragment residency converts d once: true
+on CUDA and HIP the default policy's staged+tensorized uniform-f16 matmul equals the once-narrowed wide reference bitwise: true
+on CUDA and HIP the default policy's staged uniform-f16 fragment converts d once: true
 f16->f32 k-split inputs: every cell's products share a sign and every partial sum is exact in f32: true
 f16->f32 k-split, direct scope: every cell accumulates to 2056 in f32: true
 f16->f32 k-split, fragment scope: every cell accumulates to 2056 in f32: true
-f16->f16 k-split under Fp16_auto, direct scope: no cell reaches 2056 (the discriminator discriminates): true
-f16->f16 k-split under Fp16_auto, fragment scope: no cell reaches 2056 (the discriminator discriminates): true
+f16->f16 k-split under Fp16_narrow, direct scope: no cell reaches 2056 (the discriminator discriminates): true
+f16->f16 k-split under Fp16_narrow, fragment scope: no cell reaches 2056 (the discriminator discriminates): true
 f16->f32 k-split, direct scope: the mixed intrinsic loads and stores d unconverted: true
 f16->f32 k-split, fragment scope: the f32 fragment stays resident with d unconverted: true
 the k-split inputs discriminate: narrowing per block and once give different bf16 values: true
@@ -107,6 +109,7 @@ the format cross-check micro-kernel fits every advertised format tile: true
 every format triple's tensorized matmul renders its Tile_mma statements: true
 the format triples include advertised and unadvertised ones: true
 default policy: census is all-intrinsics exactly for the advertised format triples: true
+Fp16_narrow/Bf16_narrow: census is all-intrinsics exactly for the advertised format triples: true
 Fp16_wide/Bf16_wide: census is all-intrinsics exactly for the advertised format triples: true
 tf32 policy-on: census is all-intrinsics exactly for the advertised format triples: true
 misassigned roles are rejected with a targeted error: true

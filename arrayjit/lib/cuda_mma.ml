@@ -12,23 +12,34 @@ type wmma_kind = Wmma_f16_f32 | Wmma_f16_f16 | Wmma_f16_wide | Wmma_bf16 | Wmma_
 
 type arm = Inline_ptx of inline_ptx | Wmma of wmma_kind [@@deriving equal, sexp_of, enumerate]
 
+(* Whether [Numerics.Fp16_auto] resolves wide on this backend: yes, since gh-ocannl-2195. The
+   f16-accumulate wmma triple narrows once per 16-deep block on sm_120 (gh-ocannl-2151's census)
+   where the storage-width serial loop narrows per step, so under a narrow auto the value depended
+   on whether the tuner crowned a tile; the wide resolution narrows once per nest in every schedule.
+   Only [Fp16_narrow] (the [performance] and [approximate] profiles' setting) keeps the
+   f16-accumulate arm. The one predicate behind [accum_prec] and {!resolve_arm}, and published to
+   seeding as [capability]'s [mma_f16_auto_wide]. *)
+let fp16_auto_wide = true
+let fp16_accum_wide () = Numerics.fp16_accum_wide ~auto_wide:fp16_auto_wide ()
+
 (* The one table from storage precisions, the numerics policy and the emission scope to an arm.
 
    - fp8 x fp8 -> f32 has no wmma form: inline-PTX m16n8k32 over e5m2 in both scopes. - Uniform bf16
    likewise (gh-ocannl-545): [nvcuda::wmma] declares no bf16 accumulator fragment, but [mma.sync]
    accumulates bf16 operands in per-lane f32 registers whose layout is architecturally defined, so
    the [d] boundary converts — per statement, or once at each end of the register scope
-   (gh-ocannl-1063). - Uniform f16 under [Numerics.Fp16_wide] (gh-ocannl-680) is the one triple
-   whose arm depends on the scope. A per-statement statement renders through the same m16n8k16 body
-   as bf16 (the PTX fragment layouts are shared by .f16 and .bf16). The persistent-fragment scope
-   renders wmma's f16 x f16 -> f32 fragments behind a converted f16 [d] boundary (gh-ocannl-925) —
-   and so do the update-only statements nested in it, whose arm is the scope's: the hooks resolve a
-   [`Fragment] destination at [Mma_fragment_scope]. That converted boundary is element-wise across a
-   whole fragment array, which no self-contained statement has, so the per-statement scope never
-   resolves to it. Before gh-ocannl-1232 this was a fall-through: the per-statement hook tried the
-   inline-PTX arm first and reached wmma only when that declined. - The f16-accumulate wmma triple
-   is gated off under that policy: the fragment accumulator width follows [accum_prec]. Matching
-   widths do not imply matching narrowing points (gh-ocannl-2151; the f16 census in
+   (gh-ocannl-1063). - Uniform f16 under the wide resolution ([Numerics.Fp16_wide], gh-ocannl-680,
+   and since gh-ocannl-2195 [Fp16_auto]: {!fp16_accum_wide}) is the one triple whose arm depends on
+   the scope. A per-statement statement renders through the same m16n8k16 body as bf16 (the PTX
+   fragment layouts are shared by .f16 and .bf16). The persistent-fragment scope renders wmma's f16
+   x f16 -> f32 fragments behind a converted f16 [d] boundary (gh-ocannl-925) — and so do the
+   update-only statements nested in it, whose arm is the scope's: the hooks resolve a [`Fragment]
+   destination at [Mma_fragment_scope]. That converted boundary is element-wise across a whole
+   fragment array, which no self-contained statement has, so the per-statement scope never resolves
+   to it. Before gh-ocannl-1232 this was a fall-through: the per-statement hook tried the inline-PTX
+   arm first and reached wmma only when that declined. - The f16-accumulate wmma triple is gated off
+   under that policy: the fragment accumulator width follows [accum_prec]. Matching widths do not
+   imply matching narrowing points (gh-ocannl-2151; the f16 census in
    [test/operations/mma_bf16_seed_parity]). - Uniform f32 computes in tf32 (m16n16k8) only when the
    policy opts in (gh-ocannl-478); with the policy off there is no arm and the scalar fallback keeps
    full f32 numerics.
@@ -41,7 +52,7 @@ let resolve_arm ~a_prec ~b_prec ~d_prec ~scope =
   | Ops.Fp8_prec _, Ops.Fp8_prec _, Ops.Single_prec _ -> Some (Inline_ptx Fp8_m16n8k32)
   | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ ->
       Some (Inline_ptx (M16n8k16 M16n8k16_bf16))
-  | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ when Numerics.fp16_accum_wide () -> (
+  | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ when fp16_accum_wide () -> (
       match scope with
       | Backend_intf.Mma_per_statement -> Some (Inline_ptx (M16n8k16 M16n8k16_f16))
       | Backend_intf.Mma_fragment_scope -> Some (Wmma Wmma_f16_wide))
@@ -737,6 +748,7 @@ let capability ~cc =
               (Backend_intf.Mma_per_statement, Inline_ptx (M16n8k16 M16n8k16_f16));
               (Backend_intf.Mma_fragment_scope, Wmma Wmma_f16_wide);
             ];
+        mma_f16_auto_wide = fp16_auto_wide;
         (* gh-ocannl-838: the uniform-bf16 key is the same inline-PTX arm, f32 in hardware whatever
            the policy, so [Numerics.Bf16_wide] changes no rendering here. Since gh-ocannl-1063 a
            staged outer-k split keeps it f32 too: the persistent-fragment scope holds that arm's

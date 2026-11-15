@@ -194,15 +194,20 @@ let fp8_leg () =
     (Float.equal (fp8_sum ~name:"aw_fp8" ~first_id:9700 ()) fp8_values.once_narrowed)
 
 (* === f16 residency is the fp16_arithmetic policy's question (gh-ocannl-680) === *)
-(* Universal legs, executed on every backend. Under the default [Fp16_auto] each backend keeps its
-   structural residency — the CPU backends compute f16 in f32 ([narrow_compute_f32]'s blanket), the
-   GPU backends keep storage residency, mirroring their f16-accumulate tensor-unit triples — and
-   under [Fp16_wide] every backend resolves f32, narrowing once per nest. The discrimination: f16's
-   spacing at 2048 is 2, so per-step narrowing absorbs every +1 (2049 ties to even, back to 2048)
-   and leaves 2048, while the wide accumulator reaches 2056, exactly representable. NOTE the
-   default-policy expectations pin [Fp16_auto]'s CURRENT resolution: auto deliberately retains
-   latitude to resolve wide on hardware where that costs nothing (see Numerics.fp16_mode), and a
-   backend exercising it would update these legs, not violate the policy. *)
+(* Universal legs, executed on every backend. Under the default [Fp16_auto] each backend takes its
+   own resolution — the CPU backends compute f16 in f32 ([narrow_compute_f32]'s blanket), CUDA and
+   HIP resolve f32 residency since gh-ocannl-2195 (their f16-accumulate tensor units narrow at other
+   points than a per-step serial loop, so only the wide pair is schedule-uniform), Metal keeps
+   storage residency (its half tile and serial loop are both per-step) — and under [Fp16_wide]
+   every backend resolves f32, narrowing once per nest, while [Fp16_narrow] keeps every GPU backend
+   at storage width. The discrimination: f16's spacing at 2048 is 2, so per-step narrowing absorbs
+   every +1 (2049 ties to even, back to 2048) and leaves 2048, while the wide accumulator reaches
+   2056, exactly representable. The expectations name each backend's resolution independently
+   (deriving them from the backend's own constant would bless a regression in both). *)
+let on_metal = String.is_substring backend_name ~substring:"metal"
+let auto_widens_f16 = not on_metal
+let gpu_leg = Verdict.leg ~when_:(not on_cpu) ~on:backend_name ()
+
 let f16_sum ~name ~first_id () =
   let half = Ir.Ops.half in
   let hnode = Ll_test.node_factory ~prec:half ~first_id ~dims:[| f16_fixture.terms |] () in
@@ -235,7 +240,7 @@ let f16_sum ~name ~first_id () =
 
 let claim_f16_default =
   "the default-policy f16 reduction takes the backend's declared residency (2048 + 1x8: wide 2056 \
-   on CPU, per-step 2048 on GPU)"
+   on CPU, CUDA and HIP, per-step 2048 on Metal)"
 
 let claim_f16_wide =
   "Fp16_wide widens the f16 reduction on this backend too (2048 + 1x8 gives 2056)"
@@ -247,8 +252,8 @@ let claim_f16_wide_matmul =
   "under Fp16_wide the f16 naive matmul equals the once-narrowed wide-accumulation reference"
 
 let claim_f16_default_matmul =
-  "the default-policy f16 matmul matches the wide reference exactly where the backend widens (CPU) \
-   and diverges where it keeps storage residency (GPU)"
+  "the default-policy f16 matmul matches the wide reference exactly where the backend widens (CPU, \
+   CUDA, HIP) and diverges where it keeps storage residency (Metal)"
 
 let n16 = 128
 let fa16 = Ll_test.cycle ~dims:[| n16; n16 |] ~modulus:3 ~offset:1. ~stride:0.375
@@ -281,8 +286,22 @@ let () =
   Stdio.eprintf "accum_width: default-policy f16 residency on %s is %s (not part of the golden)\n%!"
     backend_name
     (if wide16 then "wide" else "storage");
-  p claim_f16_default (Bool.equal wide16 on_cpu);
+  p claim_f16_default (Bool.equal wide16 auto_widens_f16);
   let saved_policy = Numerics.get () in
+  in_leg ~leg:gpu_leg
+    "on a GPU backend the default f16 residency does not depend on narrow_compute_f32" (fun label ->
+      Numerics.set_policy
+        { saved_policy with fp16_arithmetic = Numerics.Fp16_auto; narrow_compute_f32 = false };
+      let got = f16_sum ~name:"aw_f16_auto_nco" ~first_id:9800 () in
+      Numerics.set_policy saved_policy;
+      p label (Bool.equal (Float.equal got f16_values.once_narrowed) wide16));
+  in_leg ~leg:gpu_leg
+    "on a GPU backend Fp16_narrow keeps the f16 reduction at storage width (2048 + 1x8 stays 2048)"
+    (fun label ->
+      Numerics.set_policy { saved_policy with fp16_arithmetic = Numerics.Fp16_narrow };
+      let got = f16_sum ~name:"aw_f16_narrow" ~first_id:9820 () in
+      Numerics.set_policy saved_policy;
+      p label (Float.equal got f16_values.per_step));
   Numerics.set_policy { saved_policy with fp16_arithmetic = Numerics.Fp16_wide };
   p claim_f16_wide
     (Float.equal (f16_sum ~name:"aw_f16_wide" ~first_id:9760 ()) f16_values.once_narrowed);
@@ -393,7 +412,7 @@ let () =
   let got_auto16 = Test_utils.with_fp16_auto (f16_matmul ~name:"aw_f16_naive_auto") in
   p claim_f16_default_matmul
     ((not (Array.is_empty got_auto16))
-    && Bool.equal (Array.for_all2_exn got_auto16 want16 ~f:Float.equal) on_cpu)
+    && Bool.equal (Array.for_all2_exn got_auto16 want16 ~f:Float.equal) auto_widens_f16)
 
 (* Where the backend's accumulator resolution keeps bf16 narrow (none under [Bf16_auto] since
    gh-ocannl-2029; HIP and Metal under [Bf16_narrow]) every bf16-widening claim below is skipped by

@@ -431,7 +431,8 @@
 # If true, the untuned CUDA/HIP default (the seeded sketches, the reduction sink above, and the
 # analytic model's numerics-preserving set) also takes the sites whose accumulator precision is
 # wider than their storage precision (gh-ocannl-1405): a bf16 weight gradient on CUDA (on HIP
-# unless bf16_arithmetic=true), fp8 on both, f16 under fp16_arithmetic=false. Off, those sites keep
+# unless bf16_arithmetic=true), fp8 on both, f16 on both unless fp16_arithmetic=true (auto resolves
+# f16 wide there since gh-ocannl-2195), and on Metal under fp16_arithmetic=false. Off, those sites keep
 # the default pipeline. On, a seeded contraction keeps its result (the sketch's private tile stays
 # at storage precision wherever the default narrows inside the reduction), while a sunk reduction
 # (a bias or layer-norm parameter gradient) keeps its summation order but accumulates at the
@@ -1995,25 +1996,29 @@
 
 # Numerics policy: how f16 computes and accumulates (gh-ocannl-680; ternary since then, and the
 # old boolean spellings keep working).
-# - "auto" (the default): each backend's structural residency. On the CPU backends f16 computes
-#   in f32 (under narrow_compute_f32); on the GPU backends f16 arithmetic is native and reduction
-#   accumulators keep storage residency, mirroring the f16-accumulate tensor-unit triple every
-#   backend seeds. Currently that means storage-width f16 accumulators on every GPU backend;
-#   the auto resolution is per backend and deliberately retains latitude to resolve WIDE on
-#   hardware where a wide f16 accumulate costs nothing (datacenter-class NVIDIA), so pin "true"
-#   or "false" where that must not move.
+# - "auto" (the default): each backend's own resolution. On the CPU backends f16 computes in f32
+#   (under narrow_compute_f32). CUDA and HIP resolve it as "false" since gh-ocannl-2195: f32
+#   accumulators and the wide tensor-unit arms, because their f16-accumulate tensor units narrow
+#   per 16-deep block (sm_120) or per ordered pair (gfx1151) where the serial loop narrows per
+#   step, so under a narrow default a value depended on which schedule the tuner picked. Metal
+#   keeps storage-width f16 accumulators (its half tile and serial loop are both per-step,
+#   bitwise equal). The resolution is per backend: pin "true" or "false" where it must not move.
 # - "false": f16 reduction accumulators reside in f32 on every backend, narrowing once per nest
 #   -- the strict cross-backend-uniform semantics. HIP (gh-ocannl-789) and Metal (gh-ocannl-837)
 #   keep their uniform-f16 mma legs tensorized through an f32 accumulator fragment converted at
-#   the destination boundary; CUDA sm_80+ through an f32-accumulate inline-PTX arm in the
-#   per-statement scope only, so its staged multi-block uniform-f16 seeds are withheld --
+#   the destination boundary; CUDA sm_80+ through an f32-accumulate inline-PTX arm per statement
+#   and wmma f32 fragments with a converted boundary in the persistent-fragment scope
+#   (gh-ocannl-925). CUDA below sm_80 has neither, so its uniform-f16 mma seeds are withheld --
 #   widening only the serial legs would make results depend on the schedule again
 #   (gh-ocannl-663).
 # - "true": compute fp16 in fp16 on CPU targets with native 16-bit arithmetic (ARMv8.2-FP16,
 #   AVX512-FP16) -- the lane count doubles against f32, at fp16's 10-bit mantissa and 65504
 #   range for intermediates. Unlike narrow_compute_f32 this trades accuracy for throughput.
 #   Ignored on targets whose fp16 arithmetic is promoted to float (see cc_fp16_arithmetic),
-#   where it would cost accuracy for no speed; the GPU backends behave as under "auto".
+#   where it would cost accuracy for no speed. On the GPU backends it keeps storage-width f16
+#   accumulators and the f16-accumulate tensor-unit arms (on CUDA and HIP not schedule-uniformly:
+#   those arms narrow at other points than the serial loop). The performance and approximate
+#   profiles set it.
 # Programmatic override: `Ir.Numerics.set_policy`.
 #fp16_arithmetic=auto
 
@@ -2303,8 +2308,9 @@
 #
 # # The numerics gates at their exact defaults, so that a profile switch never silently changes
 # # what math is being done (they are the orthogonal axis; see the issue). fp16_arithmetic=auto
-# # resolves deterministically per backend (gh-ocannl-680), so pinning the default keeps the
-# # principle: apart from the GPU fast-math keys above, this profile changes no math, and same-machine
+# # resolves deterministically per backend (gh-ocannl-680) -- wide on CUDA and HIP since
+# # gh-ocannl-2195, so a tensorized f16 schedule accumulates as its serial twin does -- so pinning
+# # the default keeps the principle: apart from the GPU fast-math keys above, this profile changes no math, and same-machine
 # # runs stay reproducible.
 # # bf16_arithmetic=auto likewise (gh-ocannl-838).
 # tf32_matmuls=false
@@ -2348,8 +2354,9 @@
 # cc_backend_simd_flags=auto
 #
 # # Native 16-bit arithmetic where the target has it; ignored on targets that promote fp16 to
-# # float, and on the GPU backends (whose f16 arithmetic and accumulators are native narrow
-# # under this setting, same as under auto -- gh-ocannl-680).
+# # float. On the GPU backends it keeps the f16-accumulate tensor units and storage-width f16
+# # accumulators -- on CUDA and HIP the narrow side of the trade auto no longer takes
+# # (gh-ocannl-2195), and the one result-changing key of this payload.
 # fp16_arithmetic=true
 #
 # # The floating-point licences (fp_contract, fp_reassociate, fp_finite_math; gh-ocannl-998) stay

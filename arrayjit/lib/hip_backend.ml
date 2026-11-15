@@ -753,10 +753,11 @@ end = struct
        an f32 accumulator fragment — which is what takes the uniform-bf16 legs off gfx11's
        bf16-accumulate WMMA, whose result is not exactly rounded. Since gh-ocannl-1051 [Bf16_auto]
        resolves wide here too ([bf16_accum_wide] above); only [Bf16_narrow] keeps bf16 storage
-       residency. *)
+       residency. Likewise [Fp16_auto] since gh-ocannl-2195 ([Hip_mma.fp16_accum_wide]); only
+       [Fp16_narrow] keeps f16 storage residency and the f16-accumulate WMMA. *)
     let accum_prec prec =
       match prec with
-      | Ops.Half_prec _ when Numerics.fp16_accum_wide () -> Ops.single
+      | Ops.Half_prec _ when Hip_mma.fp16_accum_wide () -> Ops.single
       | Ops.Bfloat16_prec _ when bf16_accum_wide () -> Ops.single
       | Ops.Fp8_prec _ when (Numerics.get ()).Numerics.narrow_compute_f32 -> Ops.single
       | _ -> prec

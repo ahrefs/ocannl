@@ -13,14 +13,16 @@ open Base
 
 (** The fp16 compute/accumulator mode (gh-ocannl-680, refining gh-ocannl-516's boolean).
 
-    - [Fp16_auto] (the default): each backend's structural residency. On the CPU backends f16
-      computes in f32 (under {!field-narrow_compute_f32}); on the GPU backends f16 arithmetic is
-      native and reduction accumulators keep storage residency, mirroring the tensor-unit triples
-      every backend seeds at f16 accumulate. The auto resolution is per BACKEND and deliberately
-      retains latitude: on hardware where a wide f16 accumulate costs nothing (datacenter-class
-      NVIDIA runs f32-accumulate f16 mma at full rate) a later refinement may resolve it wide, so do
-      not write code that assumes [Fp16_auto] equals [Fp16_narrow] — ask the backend's
-      [accum_prec]/seeding instead.
+    - [Fp16_auto] (the default): each backend's own resolution, the backend's [fp16_auto_wide]
+      constant read through {!fp16_accum_wide}. On the CPU backends f16 computes in f32 (under
+      {!field-narrow_compute_f32}). CUDA and HIP resolve it WIDE since gh-ocannl-2195 (as
+      [Fp16_wide]: [Cuda_mma.fp16_auto_wide], [Hip_mma.fp16_auto_wide]): their f16-accumulate tensor
+      units narrow per 16-deep block (sm_120) or per ordered pair (gfx1151) where a storage-width
+      serial loop narrows per step (gh-ocannl-2151's census), so under a narrow default a value
+      depended on which schedule the tuner crowned. Metal keeps storage residency
+      ([Metal_mma.fp16_auto_wide]): both its f16 tile and its serial loop are per-step half FMAs,
+      bitwise equal. The resolution is per BACKEND: do not write code that assumes [Fp16_auto]
+      equals either explicit mode — ask the backend's [accum_prec]/seeding instead.
     - [Fp16_wide] (config [false]): f16 reduction accumulators reside in f32 on every backend,
       narrowing once per nest — the strict cross-backend-uniform semantics. Backends whose
       tensor-unit f16 legs cannot accumulate f32 in the required emission scope
@@ -32,8 +34,11 @@ open Base
     - [Fp16_narrow] (config [true]): compute fp16 in fp16 on CPU targets that have native 16-bit
       arithmetic (ARMv8.2-FP16, AVX512-FP16) — gh-ocannl-516's opt-in, trading fp16's 10-bit
       mantissa and 65504 range for a doubled lane count. On targets that merely promote to float it
-      is ignored (costs accuracy for no speed), and the GPU backends behave as under [Fp16_auto]
-      (their f16 arithmetic is native narrow already). *)
+      is ignored (costs accuracy for no speed). On the GPU backends it keeps storage-width f16
+      accumulators and the f16-accumulate tensor-unit arms — on CUDA and HIP not schedule-uniformly,
+      since those arms narrow at different points from the serial loop (gh-ocannl-2195); it is what
+      the [performance] and [approximate] profiles name, which is how they kept the narrow side when
+      auto moved. *)
 type fp16_mode = Fp16_auto | Fp16_narrow | Fp16_wide [@@deriving sexp, compare, equal, enumerate]
 
 (** The bf16 accumulator mode (gh-ocannl-838), the same three-way shape as {!fp16_mode} so the
@@ -176,13 +181,21 @@ let get () =
     compilation; routines already compiled keep the numerics they were compiled with. *)
 let set_policy p = policy := Some p
 
-(** Whether the current policy is {!Fp16_wide}: f16 reduction accumulators reside in f32 on every
-    backend (gh-ocannl-680). Consulted by every backend's [accum_prec] and by the mma
-    accumulator-scope gate in [Sketch_families.wide_acc_withholding] — one predicate on both sides
-    of the gh-ocannl-545 seam, so seeding and emission cannot drift apart on which f16 sites
-    tensorize. *)
-let fp16_accum_wide () =
-  match (get ()).fp16_arithmetic with Fp16_wide -> true | Fp16_auto | Fp16_narrow -> false
+(** Whether f16 reduction accumulators reside in f32 under [mode] on a backend whose {!Fp16_auto}
+    resolves wide exactly when [auto_wide]: always under {!Fp16_wide} (gh-ocannl-680), never under
+    {!Fp16_narrow}, and [auto_wide] under {!Fp16_auto} (gh-ocannl-2195). The pure form, for callers
+    judging an explicit policy ([Backend_intf.advertises_mma_format_in_scope]). *)
+let fp16_mode_accum_wide ~auto_wide = function
+  | Fp16_wide -> true
+  | Fp16_auto -> auto_wide
+  | Fp16_narrow -> false
+
+(** {!fp16_mode_accum_wide} under the current policy. Consulted by every backend's [accum_prec] and
+    mma arm table, each passing its own [fp16_auto_wide] constant, and by the mma accumulator-scope
+    gate in [Sketch_families.wide_acc_withholding], which reads the same constant from
+    [Backend_intf.mma_capability.mma_f16_auto_wide] — one predicate on both sides of the
+    gh-ocannl-545 seam, so seeding and emission cannot drift apart on which f16 sites tensorize. *)
+let fp16_accum_wide ~auto_wide () = fp16_mode_accum_wide ~auto_wide (get ()).fp16_arithmetic
 
 (** Whether the current policy is {!Bf16_wide}: bf16 reduction accumulators reside in f32 on every
     backend (gh-ocannl-838). The bf16 twin of {!fp16_accum_wide}, consulted on both sides of the
@@ -221,6 +234,6 @@ let cpu_compute_prec ~native_fp16_arithmetic (prec : Ops.prec) : Ops.prec =
     round 1 on staging PR #477). *)
 let cpu_accum_prec ~native_fp16_arithmetic (prec : Ops.prec) : Ops.prec =
   match prec with
-  | Ops.Half_prec _ when fp16_accum_wide () -> Ops.single
+  | Ops.Half_prec _ when fp16_accum_wide ~auto_wide:false () -> Ops.single
   | Ops.Bfloat16_prec _ when bf16_accum_wide () -> Ops.single
   | _ -> cpu_compute_prec ~native_fp16_arithmetic prec

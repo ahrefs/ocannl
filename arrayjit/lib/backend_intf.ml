@@ -193,6 +193,15 @@ type mma_capability = {
           gh-ocannl-837 (mixed-type [simdgroup_multiply_accumulate] plus a [thread_elements()]
           boundary copy). Withholding only the unsupported scope preserves legal tensorized
           schedules without letting an outer [k] split introduce extra f16 narrowing boundaries. *)
+  mma_f16_auto_wide : bool;
+      (** Whether {!Numerics.Fp16_auto} resolves wide on this backend — the backend's own
+          [fp16_auto_wide] constant, which its [accum_prec] and mma arm table read through the same
+          {!Numerics.fp16_accum_wide} (gh-ocannl-2195). Carried here because the seeding gates
+          ([Sketch_families.wide_acc_withholding], {!advertises_mma_format_in_scope}) see the
+          descriptor, not the backend: under a wide-resolving auto they must withhold the
+          uniform-f16 seeds of any scope missing from {!mma_f16_wide_acc_scopes}, exactly as under
+          {!Numerics.Fp16_wide} (CUDA below sm_80 lists none). [true] on CUDA and HIP, [false] on
+          Metal. *)
   mma_bf16_wide_acc_scopes : mma_emission_scope list;
       (** The bf16 twin of {!mma_f16_wide_acc_scopes}: the emission scopes in which the backend's
           uniform-bf16 arm holds the accumulator in f32 and converts once at that scope's [d]
@@ -555,7 +564,9 @@ let advertises_mma_format (limits : hardware_limits) ~a ~b ~d =
     policy. This is a descriptor judgment, not a promise that a particular statement emits:
     geometry, strides, address spaces and logging can still make the backend decline it. [Mma_tf32]
     describes f32 operand storage; it requires [tf32_matmuls]. Uniform narrow triples additionally
-    require the matching wide-accumulator scope when that policy is selected. *)
+    require the matching wide-accumulator scope when that policy is selected — for f16 also when
+    {!Numerics.Fp16_auto} resolves wide on the backend ({!field-mma_capability.mma_f16_auto_wide},
+    gh-ocannl-2195). *)
 let advertises_mma_format_in_scope (limits : hardware_limits) ~(policy : Numerics.t) ~scope ~a ~b ~d
     =
   advertises_mma_format limits ~a ~b ~d
@@ -568,7 +579,8 @@ let advertises_mma_format_in_scope (limits : hardware_limits) ~(policy : Numeric
       let has scopes = List.mem scopes scope ~equal:equal_mma_emission_scope in
       match (a, b, d) with
       | Mma_f16, Mma_f16, Mma_f16
-        when Numerics.equal_fp16_mode policy.fp16_arithmetic Numerics.Fp16_wide ->
+        when Numerics.fp16_mode_accum_wide ~auto_wide:mma.mma_f16_auto_wide policy.fp16_arithmetic
+        ->
           has mma.mma_f16_wide_acc_scopes
       | Mma_bf16, Mma_bf16, Mma_bf16
         when Numerics.equal_bf16_mode policy.bf16_arithmetic Numerics.Bf16_wide ->
@@ -775,11 +787,12 @@ let no_codegen_capabilities =
     its mma arm table over every storage triple and emission scope (gh-ocannl-1153). It is what a
     numerics mode resolves to on this backend (gh-ocannl-1117) — the mode itself is fingerprinted by
     [Schedule_cache.numerics_tag], but what [Bf16_auto] means on HIP changed in gh-ocannl-1051 (and
-    on Metal in gh-ocannl-2029) with the mode unchanged, and a winner tuned under the old resolution
-    would have replayed. Tabulating the function codegen calls, rather than naming the predicate
-    behind it, makes the cache identity move exactly when the resolution does, on every backend,
-    with nothing to add by hand. The record pattern names every field, so a field added to
-    {!codegen_capabilities} is a compile error here until it is rendered (warning 9).
+    on Metal in gh-ocannl-2029), and what [Fp16_auto] means on CUDA and HIP in gh-ocannl-2195, with
+    the mode unchanged, and a winner tuned under the old resolution would have replayed. Tabulating
+    the function codegen calls, rather than naming the predicate behind it, makes the cache identity
+    move exactly when the resolution does, on every backend, with nothing to add by hand. The record
+    pattern names every field, so a field added to {!codegen_capabilities} is a compile error here
+    until it is rendered (warning 9).
 
     [mma_operand_loads], [mma_accepts] and [mma_operand_fragments] are not rendered either
     (gh-ocannl-1254): which operands load through [ldmatrix], and how often, is a fixed function of
@@ -1181,6 +1194,7 @@ let minimal_mma_capability =
     mma_tile = (16, 16, 16);
     mma_format_tiles = [];
     mma_f16_wide_acc_scopes = [];
+    mma_f16_auto_wide = false;
     mma_bf16_wide_acc_scopes = [];
     mma_staged_layouts = [];
     mma_pipeline_depths = [];

@@ -37,7 +37,7 @@ the bf16 four-warp rival-rendering values are pairwise distinct: true
 a bf16 single-warp Workgroup_reduce accumulates at the widened residency (32 terms narrow once to 33.25, not the 33 a bf16-staged tree or the 32.75 a per-step narrowing gives): true
 a bf16 four-warp Workgroup_reduce stages its per-warp partials at the widened residency (128 terms narrow once to 133, not the 132 a bf16-staged tree or the 129 a per-step narrowing gives): true
 the emitted shuffle declares its staging register and its per-warp slots at the residency type, never at bf16 storage: true
-an f16 accumulator whose residency stays narrow, as the default fp16_arithmetic policy resolves it on every GPU backend, is refused by the warp-shuffle rendering (GPU) or runs serially (CPU): true
+an f16 accumulator whose residency stays narrow, as Fp16_narrow resolves it on every GPU backend, is refused by the warp-shuffle rendering (GPU) or runs serially (CPU): true
 a bf16 Workgroup_reduce whose contribution mentions an RNG conversion is refused where the residency is wider than storage (GPU) or runs serially (CPU): true
 the old f16 four-warp mod7 fixture cannot distinguish wide from storage-staged trees: true
 the f16 single-warp rival-rendering values are pairwise distinct: true

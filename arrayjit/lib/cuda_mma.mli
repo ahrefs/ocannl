@@ -47,6 +47,17 @@ type wmma_kind =
     over arms (the arch-target markers, the floors' minimum) covers a new arm automatically. *)
 type arm = Inline_ptx of inline_ptx | Wmma of wmma_kind [@@deriving equal, sexp_of, enumerate]
 
+val fp16_auto_wide : bool
+(** Whether [Numerics.Fp16_auto] resolves wide on this backend: [true] since gh-ocannl-2195 — the
+    f16-accumulate tensor unit (sm_120 narrows per 16-deep block, gh-ocannl-2151) and the
+    storage-width serial loop (per step) narrow at different points, so only the wide resolution is
+    schedule-uniform. The value of the descriptor's [mma_f16_auto_wide]. *)
+
+val fp16_accum_wide : unit -> bool
+(** [Numerics.fp16_accum_wide ~auto_wide:fp16_auto_wide ()]: whether f16 reduction accumulators
+    reside in f32 here under the current policy — the predicate behind [accum_prec] and the arm
+    table. *)
+
 val resolve_arm :
   a_prec:Ops.prec ->
   b_prec:Ops.prec ->
