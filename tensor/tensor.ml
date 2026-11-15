@@ -693,9 +693,6 @@ let%debug7_sexp rec init_params_body ?skip (t : t) : Asgns.comp =
     | None -> Fn.id
     | Some skip -> List.filter ~f:(fun p -> not (Map.mem skip p.value))
   in
-  (* Value reads, not the materialization guess's read term: a copying slice needs its parent's
-     writer before it, even when a sibling initializer owns it. *)
-  let initializer_reads = Asgns.collect_value_reads in
   let fragments =
     List.map params ~f:(fun param ->
         if Set.is_empty param.params then param.forward.asgns
@@ -710,7 +707,7 @@ let%debug7_sexp rec init_params_body ?skip (t : t) : Asgns.comp =
   let seed_reads =
     List.fold fragments
       ~init:(Set.empty (module Tn))
-      ~f:(fun reads asgns -> Set.union reads (initializer_reads asgns))
+      ~f:(fun reads asgns -> Set.union reads (Asgns.collect_value_reads asgns))
   in
   let rec strip_seed_fetches = function
     | Asgns.Fetch { array; fetch_op = Constant_bits _; _ }
@@ -724,7 +721,7 @@ let%debug7_sexp rec init_params_body ?skip (t : t) : Asgns.comp =
     List.map fragments ~f:(fun asgns ->
         let asgns = strip_seed_fetches asgns in
         let provides = Asgns.collect_written asgns in
-        let needs = Set.diff (initializer_reads asgns) provides in
+        let needs = Set.diff (Asgns.collect_value_reads asgns) provides in
         (asgns, needs, provides))
   in
   (* A parameter initializer can read another parameter or a shared intermediate whose defining code
