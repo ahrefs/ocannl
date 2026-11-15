@@ -255,10 +255,10 @@ let%debug3_sexp context_nodes ~(plc : Tn.Placements.t) (asgns : t) : Tn.t_set =
       | Fetch { array; _ } -> acc + one array
       | Noop | Seq _ | Block_comment _ -> acc)
 
-(** In the second set, returns the nodes that are not read from after being written to. In the first
-    set, returns the nodes that are ever read from. The second set is also used as the set of nodes
-    to materialize; for a [Fetch.Slice] the parent is included there so it is materialized to back a
-    potential zero-copy alias view (gh-ocannl-293 293a). *)
+(** Documented in the interface. In the second set, returns the nodes that are not read from after
+    being written to; the first set is the read term that second set subtracts, which leaves a
+    [Fetch.Slice]'s parent out: the parent is in the second set, materialized to back a potential
+    zero-copy alias view (gh-ocannl-293 293a). *)
 let%debug3_sexp collect_nodes_guess_output (asgns : t) : Tn.t_set * Tn.t_set =
   let open Utils.Set_O in
   let empty = Set.empty (module Tn) in
@@ -286,6 +286,21 @@ let%debug3_sexp collect_nodes_guess_output (asgns : t) : Tn.t_set * Tn.t_set =
     | Fetch { array; _ } -> (empty, one array)
   in
   loop asgns
+
+(* Documented in the interface (gh-ocannl-2205). *)
+let collect_value_reads (asgns : t) : Tn.t_set =
+  let of_node acc = function Node rhs -> Set.add acc rhs | Merge_buffer _ -> acc in
+  fold_leaves asgns
+    ~init:(Set.empty (module Tn))
+    ~f:(fun acc leaf ->
+      match leaf with
+      (* [Rev_sides] reverses the roles: the assignment's [lhs] is its source. *)
+      | Accum_op { lhs; rhs; _ } when is_rev_sides rhs -> Set.add acc lhs
+      | Accum_op { rhs; _ } -> List.fold (buffers_of_accum_rhs rhs) ~init:acc ~f:of_node
+      | Set_vec_unop { rhs; _ } -> of_node acc rhs
+      (* A copying slice reads its parent's cells; an alias view reads them where it is read. *)
+      | Fetch { fetch_op = Slice { sliced; _ }; _ } -> Set.add acc sliced
+      | Fetch _ | Noop | Seq _ | Block_comment _ -> acc)
 
 (** All nodes that any assignment writes to (unlike the second set of {!collect_nodes_guess_output},
     nodes also read within [asgns] are included). *)

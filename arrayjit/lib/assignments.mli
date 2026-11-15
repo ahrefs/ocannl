@@ -145,7 +145,31 @@ val no_fragments : Set.M(Fragment).t
 val to_comp : t -> comp
 val empty_comp : comp
 val context_nodes : plc:Tnode.Placements.t -> t -> Tnode.t_set
+
 val collect_nodes_guess_output : t -> Tnode.t_set * Tnode.t_set
+(** [(inputs, outputs)]: the materialization guess. [outputs] are the nodes written and not read
+    afterwards, plus every [Fetch.Slice]'s parent and view, so a parent can back a zero-copy alias
+    view (gh-ocannl-293); it is the set to materialize. [inputs] is the read term [outputs]
+    subtracts (in a [Seq], [o1 + o2 - (i1 + i2)]), and it leaves a slice's parent out, so it is not
+    the set of nodes whose values the code reads: a dependency consumer uses {!collect_value_reads}.
+    The union of the two is every node the code mentions, merge buffers aside. *)
+
+val collect_value_reads : t -> Tnode.t_set
+(** The source-value dependencies of the code (gh-ocannl-2205): the nodes whose values it reads as
+    operands. These are an [Accum_op]'s [Node] right-hand-side buffers, or for [Rev_sides] its [lhs]
+    (the source; its buffers are written); a [Set_vec_unop]'s [Node] operand; and a [Fetch.Slice]'s
+    parent [sliced], whether the slice lowers to a copy or to an alias view -- the view itself is
+    defined by that [Fetch], not read, so a reader of the view depends on the view and the view on
+    its parent. A node the code writes and then reads is included: callers subtract what they
+    provide or embed.
+
+    Not included: a [Merge_buffer tn] operand, which reads another stream's transferred buffer and
+    not [tn]'s value in this program; and the prior value an accumulation without
+    [initialize_neutral] reads from its own [lhs], which is a write ({!collect_written}), so a
+    gradient accumulation is not a dependency on its target. Syntactic: it forces no dims,
+    projections or precision and marks no alias, so it is usable before shape inference closes. The
+    materialization guess {!collect_nodes_guess_output} is unaffected by it. *)
+
 val collect_written : t -> Tnode.t_set
 
 val slice_alias_eligible : array:Tnode.t -> sliced:Tnode.t -> bool

@@ -693,14 +693,9 @@ let%debug7_sexp rec init_params_body ?skip (t : t) : Asgns.comp =
     | None -> Fn.id
     | Some skip -> List.filter ~f:(fun p -> not (Map.mem skip p.value))
   in
-  (* The general query treats a slice parent as an output to materialize, not a read. A copying
-     slice still needs its parent's writer before it, even when a sibling initializer owns it. *)
-  let initializer_reads asgns =
-    Asgns.fold_leaves asgns
-      ~init:(fst (Asgns.collect_nodes_guess_output asgns))
-      ~f:(fun reads -> function
-        | Fetch { fetch_op = Slice { sliced; _ }; _ } -> Set.add reads sliced | _ -> reads)
-  in
+  (* Value reads, not the materialization guess's read term: a copying slice needs its parent's
+     writer before it, even when a sibling initializer owns it. *)
+  let initializer_reads = Asgns.collect_value_reads in
   let fragments =
     List.map params ~f:(fun param ->
         if Set.is_empty param.params then param.forward.asgns
@@ -760,7 +755,7 @@ let%debug7_sexp rec init_params_body ?skip (t : t) : Asgns.comp =
    the seed, whichever singleton is current. Checked once, on the whole program: a seed one included
    parameter's initializer writes is not missing for another's. *)
 let with_seed_fetches (comp : Asgns.comp) : Asgns.comp =
-  let read, _ = Asgns.collect_nodes_guess_output comp.Asgns.asgns in
+  let read = Asgns.collect_value_reads comp.Asgns.asgns in
   let missing =
     Set.filter
       (Set.diff read (Asgns.collect_written comp.Asgns.asgns))
@@ -1036,10 +1031,9 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
               let defines =
                 Set.inter ti.forward.embedded_nodes (Asgns.collect_written ti.forward.asgns)
               in
+              (* Value reads: a slice reads its parent's value too (gh-ocannl-2205). *)
               let requires =
-                Set.diff
-                  (fst @@ Asgns.collect_nodes_guess_output ti.forward.asgns)
-                  ti.forward.embedded_nodes
+                Set.diff (Asgns.collect_value_reads ti.forward.asgns) ti.forward.embedded_nodes
               in
               (ti, requires, defines))
         in
@@ -1870,7 +1864,7 @@ let not_a_root_reason ~(handout : handout) ~what ~name t =
    fetch the handout carries is not one (gh-ocannl-2157). *)
 let forward_reads t =
   let fwd = forward_handout t in
-  Set.diff (fst @@ Asgns.collect_nodes_guess_output fwd.Asgns.asgns) fwd.Asgns.embedded_nodes
+  Set.diff (Asgns.collect_value_reads fwd.Asgns.asgns) fwd.Asgns.embedded_nodes
 
 (* The reads whose code an unconsumed forward root still owns, read off the owner cells
    (gh-ocannl-1796): a root the caller dropped before its code was consumed stays pending, whatever
@@ -1959,7 +1953,7 @@ let consume_backprop_code t =
                t,
              Some t );
     (* Check if any non-embedded grad descendants of t are embedded in other roots *)
-    let all_read = fst @@ Asgns.collect_nodes_guess_output diff.backprop.asgns in
+    let all_read = Asgns.collect_value_reads diff.backprop.asgns in
     let non_embedded_grad_descendants = Set.diff all_read diff.backprop.embedded_nodes in
     (* Live roots only (gh-ocannl-1745): a root the caller dropped can never be consumed, so it is
        not the fix a refusal would ask for; a dependence on its propagation is refused by the

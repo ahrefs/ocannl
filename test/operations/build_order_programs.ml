@@ -363,9 +363,9 @@ let () =
             ~tol:(fun _ -> 1e-6))
   | _ -> assert false
 
-(* Slice parents are materialization outputs of collect_nodes_guess_output, but still execution
-   dependencies. A precision mismatch forces copies so reading before the owner cannot hide behind
-   aliasing the buffer the owner later fills. *)
+(* Slice parents are materialization outputs of collect_nodes_guess_output, and execution
+   dependencies through collect_value_reads (gh-ocannl-2205). A precision mismatch forces copies so
+   reading before the owner cannot hide behind aliasing the buffer the owner later fills. *)
 let () =
   Verdict.case "slice initializer dependencies" (fun () ->
       Tensor.unsafe_reinitialize ();

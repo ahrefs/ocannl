@@ -2,3 +2,5 @@ q: -0.003428 -0.003428 -0.003428 -0.003428 -0.001153 -0.001153 -0.001153 -0.0011
 k: -0.006855 -0.006855 -0.006855 -0.006855 -0.002307 -0.002307 -0.002307 -0.002307 0.002308 0.002308 0.002308 0.002308
 v: -0.010283 -0.010283 -0.010283 -0.010283 -0.003460 -0.003460 -0.003460 -0.003460 0.003463 0.003463 0.003463 0.003463
 fragment cycle raises Session_error: true
+the slice copies rather than aliasing its parent: true
+a slice reader runs after the fragment computing its parent: true
