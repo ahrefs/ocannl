@@ -98,6 +98,7 @@ ok: skip list -- a wrapper never applied
 ok: skip list -- a wrapper applied in part
 ok: skip list -- a wrapper a local binding shadows
 ok: skip list -- a partial iteration stored and applied later
+ok: skip list -- a stored Stdlib iteration completed later
 ok: skip list -- a stored partial iteration applied through a pipeline
 ok: skip list -- a lazy of two skips forced in a branch
 ok: skip list -- a lazy forced twice in a branch, which runs once
@@ -111,6 +112,7 @@ ok: skip list -- a lazy that also evaluates a claim
 ok: skip list -- a lazy sequence of skips a consumer runs
 ok: skip list -- a lazy sequence of skips materialised
 ok: skip list -- a lazy sequence a fold only carries as its accumulator
+ok: skip list -- a lazy sequence stored as another sequence's element
 ok: skip list -- a comparator wrapper a sort runs
 ok: skip list -- a sequence consumer the table marks consuming
 ok: skip list -- a sequence transformation that only builds

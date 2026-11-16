@@ -430,6 +430,10 @@ let () = let skip_both () = () in if on_gpu then run () else skip_both ()|ocaml}
         {ocaml|let skip_labels = List.iter ~f:(Verdict.skipped ~backend:backend_name)
 let () = if on_gpu then run () else skip_labels labels|ocaml},
         [ "iterated Verdict.skipped ~backend:backend_name" ] );
+      ( "a stored Stdlib iteration completed later",
+        {ocaml|let skip_all = Stdlib.List.iter (Verdict.skipped ~backend:backend_name)
+let () = skip_all [ "a"; "b" ]|ocaml},
+        [ "iterated Verdict.skipped ~backend:backend_name" ] );
       ( "a stored partial iteration applied through a pipeline",
         {ocaml|let skip_labels = List.iter ~f:(Verdict.skipped ~backend:backend_name)
 let () = labels |> skip_labels|ocaml},
@@ -484,6 +488,10 @@ let () = Stdlib.Seq.iter ignore deferred|ocaml},
       ( "a lazy sequence a fold only carries as its accumulator",
         {ocaml|let deferred = Stdlib.Seq.map (Verdict.skipped ~backend:backend_name) (Stdlib.List.to_seq labels)
 let () = ignore (Stdlib.List.fold_left (fun acc _ -> acc) deferred [ 1; 2 ])|ocaml},
+        [] );
+      ( "a lazy sequence stored as another sequence's element",
+        {ocaml|let pending = Stdlib.Seq.map (Verdict.skipped ~backend:backend_name) (Stdlib.List.to_seq labels)
+let () = ignore (Stdlib.Seq.length (Stdlib.Seq.return pending))|ocaml},
         [] );
       ( "a comparator wrapper a sort runs",
         {ocaml|let cmp a b = skipped "comparison"; Int.compare a b

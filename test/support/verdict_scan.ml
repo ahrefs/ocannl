@@ -4807,8 +4807,15 @@ let skip_list_census content =
         | Pexp_ident _ -> completed seen rhs arguments
         | Pexp_apply (inner, stored) -> (
             let inner, stored = normalize inner stored in
+            (* A value already, where complete in both libraries' orders; complete in one only
+               ([Stdlib.List.iter f] meets [Base]'s one-positional arity), it may still await its
+               collection. *)
+            let labels = List.map stored ~f:fst in
             match collection_iteration inner with
-            | Some name when fully name stored -> (callee, arguments)
+            | Some name
+              when applied_fully ~stdlib:false name labels && applied_fully ~stdlib:true name labels
+              ->
+                (callee, arguments)
             | _ -> completed seen inner (stored @ arguments))
         | _ -> (callee, arguments))
     | _ -> (callee, arguments)
@@ -4828,6 +4835,9 @@ let skip_list_census content =
     let pairwise = String.is_substring name ~substring:"2" in
     List.filteri positional ~f:(fun i _ -> i = 0 || i = n - 1 || (pairwise && (i = 1 || i = n - 2)))
   in
+  let sequence_element_constructors =
+    [ "return"; "singleton"; "repeat"; "forever"; "make"; "init"; "unfold"; "iterate"; "once" ]
+  in
   let rec producer_skips seen expr =
     let expr = strip_constraints expr in
     match expr.pexp_desc with
@@ -4843,7 +4853,14 @@ let skip_list_census content =
           when List.mem sequence_families family ~equal:String.equal
                && not (runs_callback ~family name) ->
             let positional = ref 0 in
-            let collections = collection_positionals name arguments in
+            (* The sequences it is built from -- not the element a constructor stores ([Seq.return
+               s] holds [s] unconsumed, [Seq.cons x s] holds [x]). *)
+            let collections =
+              if List.mem sequence_element_constructors name ~equal:String.equal then []
+              else if String.equal name "cons" then
+                List.drop (collection_positionals name arguments) 1
+              else collection_positionals name arguments
+            in
             List.concat_map arguments ~f:(fun (label, argument) ->
                 let index = !positional in
                 (match label with Ppxlib.Asttypes.Nolabel -> Int.incr positional | _ -> ());
