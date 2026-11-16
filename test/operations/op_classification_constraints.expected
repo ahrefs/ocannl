@@ -1,0 +1,11 @@
+plain tail traces a scheme: true
+constrained tail traces a scheme: true
+plain tail checks its scheme: true
+constrained tail checks its scheme: true
+tail values agree: true
+head values agree: true
+pipeline head values agree: true
+constructor grouping values agree: true
+argument grouping values agree: true
+uncurried binary values agree: true
+uncurried ternary values agree: true

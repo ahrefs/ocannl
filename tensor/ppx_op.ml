@@ -463,10 +463,13 @@ let eligible_function (e : expression) =
       Option.is_some (tensor_params params body)
   | _ -> false
 
-(* Marks [e]'s tail function -- through [let], [;], [let open] and [let module] -- when eligible. *)
+(* Marks [e]'s tail function -- through constraints, [let], [;], [let open] and [let module] -- when
+   eligible. *)
 let rec mark_tail ~name (e : expression) =
   match e.pexp_desc with
   | Pexp_function _ -> if eligible_function e then mark_schemed ~name e else e
+  | Pexp_constraint (body, typ) ->
+      { e with pexp_desc = Pexp_constraint (mark_tail ~name body, typ) }
   | Pexp_let (rf, vbs, body) -> { e with pexp_desc = Pexp_let (rf, vbs, mark_tail ~name body) }
   | Pexp_sequence (e1, e2) -> { e with pexp_desc = Pexp_sequence (e1, mark_tail ~name e2) }
   | Pexp_open (d, body) -> { e with pexp_desc = Pexp_open (d, mark_tail ~name body) }
@@ -588,7 +591,7 @@ let rec is_dsl_application_head fn =
   ||
   match fn.pexp_desc with
   | Pexp_ident { txt = Lident op_ident; _ } -> is_op_primitive op_ident || is_operator op_ident
-  | Pexp_apply (head, _) -> is_dsl_application_head head
+  | Pexp_apply (head, _) | Pexp_constraint (head, _) -> is_dsl_application_head head
   | _ -> false
 
 (* A function application in [%op] code, run with its source site recorded (gh-ocannl-2007): the
@@ -633,6 +636,14 @@ let concat_rhses_position fn args =
       |> fun positions -> List.nth positions 1
   | _ -> None
 
+(* Only tuple grouping looks through these constraints. Numeric and array/list annotations still
+   belong to [translate]'s axis-annotation arms, before its general constraint arm. *)
+let rec tuple_arity expr =
+  match expr.pexp_desc with
+  | Pexp_constraint (inner, _) -> tuple_arity inner
+  | Pexp_tuple elems -> Some (List.length elems)
+  | _ -> None
+
 let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?scheme_name ~opt_label
     ~late ?label expr =
   let loc = expr.pexp_loc in
@@ -640,6 +651,9 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
   (* Payloads and application arguments keep OCaml tuple grouping, including nested tuples. *)
   let rec loop_grouping ?label expr =
     match expr.pexp_desc with
+    | Pexp_constraint (inner, typ) when Option.is_some (tuple_arity inner) ->
+        let vbs, inner = loop_grouping ?label inner in
+        (vbs, { expr with pexp_desc = Pexp_constraint (inner, typ) })
     | Pexp_tuple elems ->
         let vbss, elems = List.unzip (List.map elems ~f:(loop_grouping ?label)) in
         (reduce_vbss vbss, { expr with pexp_desc = Pexp_tuple elems })
@@ -1023,6 +1037,30 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       if is_ndarray_constant_expr expr then
         (no_vbs, ndarray_op ?label ~ndarray_fn:(dsl_fn "ndarray") expr)
       else translate_block_tensor ~loc ~loop:block_loop ~label ~opt_label `Input elems
+  (* A constrained tuple is still an uncurried call. Keep the type check on the translated tuple,
+     evaluating it once before passing its components to the curried DSL operation. *)
+  | [%expr
+      [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } as op]
+        [%e? { pexp_desc = Pexp_constraint _; _ } as arg]]
+    when is_op_primitive op_ident
+         && ((Hashtbl.mem binary_ops op_ident && Option.equal Int.equal (tuple_arity arg) (Some 2))
+            || Hashtbl.mem ternary_ops op_ident
+               && Option.equal Int.equal (tuple_arity arg) (Some 3)) ->
+      let vbs, arg = loop_grouping arg in
+      let head = [%expr [%e op] ?label:[%e opt_expr ~loc label]] in
+      let result =
+        match tuple_arity arg with
+        | Some 2 ->
+            [%expr
+              let __a, __b = [%e arg] in
+              [%e head] __a __b]
+        | Some 3 ->
+            [%expr
+              let __a, __b, __c = [%e arg] in
+              [%e head] __a __b __c]
+        | _ -> assert false
+      in
+      (vbs, result)
   (* The uncurried forms [op (a, b)] and [op (a, b, c)]: the call head is the operator alone, as in
      the curried form (gh-ocannl-1986). *)
   | [%expr

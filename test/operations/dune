@@ -10082,6 +10082,16 @@
   (pps ppx_ocannl)))
 
 (test
+ ; ocannl-backend: cc -- executes translation equivalence through Context.cpu.
+ (name op_classification_constraints)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules op_classification_constraints)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_ocannl)))
+
+(test
  (name op_legality)
  (package neural_nets_lib)
  (deps
