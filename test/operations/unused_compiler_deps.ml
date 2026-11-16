@@ -23,11 +23,15 @@
    the library that owns [ocamlcommon] -- the definition of the property, not a list: every scanner
    library falls out of the walk.
 
-   OWNERSHIP: a library owns the units whose [.cmi] files its [include_dirs] hold. Libraries sharing
-   a directory share its units: the [compiler-libs.*] subpackages all live in [+compiler-libs], so a
-   declared [compiler-libs.toplevel] used only through [Location] reads as used. That gap is a
-   missed finding, never a false one; the fixture [ucd_gap_shared_directory] pins it, so closing it
-   (owning units by archive) shows up as a golden change.
+   OWNERSHIP: a library with its own include directory owns the units whose [.cmi] files that
+   directory holds. For compiler-reaching libraries sharing any include directory with another
+   library, ownership comes only from their byte archives: [ocamlfind query -predicates byte]
+   supplies absolute archive paths, and [ocamlobjinfo]'s [Unit name:] entries name the units defined
+   there (not the imported interfaces). Both tools are passed by dune. An archive-less findlib
+   package owns no units; a failed query, unreadable archive or unrecognised archive output refuses,
+   never falling back to directory ownership. Shared local libraries refuse: findlib cannot resolve
+   their archives, and [@check] does not build them. Non-compiler-reaching libraries need no
+   ownership census, since their declarations are outside this check's scope.
 
    USE: the typed tree of every [.cmt]/[.cmti] in the stanza's byte object directory
    ([Cmt_references]): post-preprocessing, so generated modules, a [select]-chosen source and a
@@ -82,14 +86,14 @@ let fixture_expectations =
     ("ucd_flag_ppxlib_metaquot_only", [ "ppxlib" ]);
     ("ucd_pass_wrapped_name", []);
     ("ucd_pass_public_unwrapped", []);
+    ("ucd_pass_toplevel", []);
     ("ucd_pass_interface_only", []);
     ("ucd_pass_generated_module", []);
     ("ucd_pass_ppx_generated", []);
     ("ucd_pass_select_arm_used", []);
     ("ucd_pass_re_export", []);
     ("ucd_pass_rewriter_registration", []);
-    (* A KNOWN miss, not a pass: see OWNERSHIP in the header. *)
-    ("ucd_gap_shared_directory", []);
+    ("ucd_gap_shared_directory", [ "compiler-libs.toplevel" ]);
   ]
 
 let compiler_root = "compiler-libs.common"
@@ -284,6 +288,50 @@ let cmi_units dir =
         (Array.to_list files
         |> List.filter_map ~f:(fun f ->
             Option.map (String.chop_suffix f ~suffix:".cmi") ~f:String.capitalize))
+
+(* These tools are action arguments resolved by dune, not shell commands found on PATH. *)
+let capture tool args =
+  let out = temp "ucd-tool-output" in
+  try
+    let fd = Unix.openfile out [ O_WRONLY; O_CREAT; O_TRUNC ] 0o644 in
+    let pid =
+      Exn.protect
+        ~finally:(fun () -> Unix.close fd)
+        ~f:(fun () ->
+          Unix.create_process tool (Array.of_list (tool :: args)) Unix.stdin fd Unix.stderr)
+    in
+    let _, status = Unix.waitpid [] pid in
+    match status with WEXITED 0 -> Ok (In_channel.read_all out) | _ -> Error "tool did not exit 0"
+  with Unix.Unix_error (e, _, _) -> Error (Unix.error_message e)
+
+let archive_units ~objinfo archive =
+  match capture objinfo [ archive ] with
+  | Error e ->
+      refuse "archive %s: %s" archive e;
+      []
+  | Ok text ->
+      let units =
+        String.split_lines text
+        |> List.filter_map ~f:(fun line -> String.chop_prefix line ~prefix:"Unit name: ")
+      in
+      if List.is_empty units || List.exists units ~f:String.is_empty then (
+        refuse "archive %s: no recognised unit definitions" archive;
+        [])
+      else units
+
+let shared_units ~findlib ~objinfo l =
+  if l.local then (
+    refuse "shared include directory: cannot resolve local archives for %s" l.lib_name;
+    [])
+  else
+    match capture findlib [ "query"; "-predicates"; "byte"; "-format"; "%+a"; l.lib_name ] with
+    | Error e ->
+        refuse "archive query for %s: %s" l.lib_name e;
+        []
+    | Ok text ->
+        String.split_lines text
+        |> List.filter ~f:(fun line -> not (String.is_empty line))
+        |> List.concat_map ~f:(archive_units ~objinfo)
 
 (* A shortest path from [uid] to the compiler root through [requires], if there is one. *)
 let reach_path by_uid uid =
@@ -484,7 +532,7 @@ let refuses f =
   refusals := saved;
   raised || recorded
 
-let controls ~dune =
+let controls ~dune ~objinfo =
   let stanza_of text =
     match collect_stanzas ~dir:"synthetic" (Scan.stanzas text) with
     | [ s ] -> s
@@ -495,6 +543,18 @@ let controls ~dune =
   List.iter [ empty_dir; corrupt_dir ] ~f:(fun d ->
       try Unix.mkdir d 0o755 with Unix.Unix_error (EEXIST, _, _) -> ());
   Out_channel.write_all (corrupt_dir ^ "/m.cmt") ~data:"not a cmt";
+  p "an unreadable archive is refused"
+    (refuses (fun () -> ignore (archive_units ~objinfo (empty_dir ^ "/missing.cma") : string list)));
+  p "an archive tool producing no unit definitions is refused"
+    (refuses (fun () -> ignore (archive_units ~objinfo:dune "--version" : string list)));
+  let shared =
+    { lib_name = "missing"; uid = "missing"; local = false; requires = []; include_dirs = [] }
+  in
+  p "a failed archive query is refused"
+    (refuses (fun () -> ignore (shared_units ~findlib:dune ~objinfo shared : string list)));
+  p "a shared local library is refused"
+    (refuses (fun () ->
+         ignore (shared_units ~findlib:dune ~objinfo { shared with local = true } : string list)));
   let w =
     {
       workspace_root = temp "ucd-control-root";
@@ -597,17 +657,17 @@ let controls ~dune =
 let () =
   Test_utils.set_binary_stdout ();
   let argv = Array.to_list (Test_scan.Scan_argv.expand Stdlib.Sys.argv) in
-  let workspace_root, dune, deps =
+  let workspace_root, dune, findlib, objinfo, deps =
     match argv with
-    | _ :: root :: dune :: deps -> (root, dune, deps)
-    | _ -> failwith "usage: unused_compiler_deps WORKSPACE_ROOT DUNE @DEPS"
+    | _ :: root :: dune :: findlib :: objinfo :: deps -> (root, dune, findlib, objinfo, deps)
+    | _ -> failwith "usage: unused_compiler_deps WORKSPACE_ROOT DUNE OCAMLFIND OCAMLOBJINFO @DEPS"
   in
   let source_root =
     match Stdlib.Sys.getenv_opt "DUNE_SOURCEROOT" with
     | Some r -> r
     | None -> failwith "DUNE_SOURCEROOT is unset: run this through its dune rule"
   in
-  controls ~dune;
+  controls ~dune ~objinfo;
   let describe ~root ~tag =
     match run_describe ~dune ~root ~tag with
     | Error e ->
@@ -687,11 +747,22 @@ let () =
     | Some l -> Some l
     | None -> Option.bind (Map.find public_of name) ~f:(Hashtbl.find by_name)
   in
+  let directories = Hashtbl.create (module String) in
+  Hashtbl.iter by_uid ~f:(fun l ->
+      List.iter l.include_dirs ~f:(fun d -> Hashtbl.add_multi directories ~key:d ~data:l.uid));
   let owners = Hashtbl.create (module String) in
   Hashtbl.iter by_uid ~f:(fun l ->
-      List.iter l.include_dirs ~f:(fun d ->
-          Option.iter (cmi_units d)
-            ~f:(List.iter ~f:(fun u -> Hashtbl.add_multi owners ~key:u ~data:l.uid))));
+      if Option.is_some (reach_path by_uid l.uid) then
+        let shared =
+          List.exists l.include_dirs ~f:(fun d ->
+              List.exists (Hashtbl.find_multi directories d) ~f:(fun uid ->
+                  not (String.equal uid l.uid)))
+        in
+        let units =
+          if shared then shared_units ~findlib ~objinfo l
+          else List.concat_map l.include_dirs ~f:(fun d -> Option.value (cmi_units d) ~default:[])
+        in
+        List.iter units ~f:(fun u -> Hashtbl.add_multi owners ~key:u ~data:l.uid));
   let reach = Hashtbl.create (module String) in
   let w =
     {
