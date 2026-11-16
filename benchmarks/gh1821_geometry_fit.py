@@ -99,6 +99,9 @@ def load(out, arm):
         rows = []
         for pos, label in enumerate(order):
             row = label
+            if label == "default":
+                # The untuned candidate: `baseline` in the timing rows (gh1600_txn_fit's row_label).
+                row = "baseline" if "baseline" in times else None
             if label == "seeded":
                 seeded = [t for t in times if t.startswith("F_seeded[")]
                 row = seeded[0] if len(seeded) == 1 else None

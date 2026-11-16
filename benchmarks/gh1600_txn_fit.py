@@ -23,13 +23,14 @@ Usage: gh1600_txn_fit.py CELL [CELL ...] [--band B] [--sector 32|64|128] [--rate
             multiprocessor) and TPM thread slots per multiprocessor (cost_model.ml's occupancy,
             from each kernel's wg= and thr=), replacing the one the listing priced (its occ=,
             1 where it priced none): what the factor does before an advisory value ships.
-  --staged-rate  gh-ocannl-1821: re-score the staged-copy term at this rate (bytes/s), or `sweep`
+  --staged-rate  gh-ocannl-1821 (each CELL then NAME=TSV,LISTING,NOSTG_LISTING, the third the
+            cell's `nostg` arm, the fill-only reference every agreement and admitted-set argmin is
+            judged against): re-score the staged-copy term at this rate (bytes/s), or `sweep`
             a log grid of rates, on a listing scored at --listed-staged-rate L (the backend's
             advisory or the model_staged_copy_rate it ran under): each kernel's stg= (its staged
             bytes over their fill) moves its compute leg by stg * (1/R - 1/L), before its
             occupancy. The launch tail the rate switches on stays as listed, so R is a rate of the
-            same calibration; the fill-only reference is the cell's own `nostg` listing, scored
-            directly (gh1253_cells.sh's arm). The listing passes the rebuild check below as is: its
+            same calibration. The listing passes the rebuild check below as is: its
             c= already carries the term. Kernel lines without stg= (pre-1821 listings) carry none;
             benchmarks/gh1821_geometry_fit.py fits those from the leaves' block tiles instead.
 
@@ -145,6 +146,8 @@ def rescore(kernels, rate, sector, occ=None, staged=None):
 def load_cell(spec):
     name, rest = spec.split("=", 1)
     tsv, explain = rest.split(",", 1)
+    # gh-ocannl-1821: an optional third listing, the cell's `nostg` reference (--staged-rate).
+    explain, _, _reference = explain.partition(",")
     reps = replicates(tsv)
     cands = {}
     bad = []
@@ -235,6 +238,21 @@ def main():
         spread = spread_of(cands)
         unc = sum(c["uncovered"] for c in cands.values())
         base = evaluate(cands, None, args.sector, args.band)  # the listing as it was scored
+        if args.staged_rate is not None:
+            # gh-ocannl-1821: the comparison is against the cell's fill-only reference, its `nostg`
+            # listing, scored as listed -- the staged term cannot be subtracted back out of this
+            # one, since the rate also switched the launch tail on.
+            reference = spec.split("=", 1)[1].split(",")
+            if len(reference) < 3 or not reference[2]:
+                print(f"gh1600_txn_fit: {name}: --staged-rate needs the cell's nostg listing as"
+                      " NAME=TSV,LISTING,NOSTG_LISTING", file=sys.stderr)
+                return 2
+            _, ref_cands, ref_bad = load_cell(f"{name}={reference[0]},{reference[2]}")
+            if ref_bad:
+                print(f"gh1600_txn_fit: {name}: the nostg listing does not rebuild from its kernel"
+                      " legs", file=sys.stderr)
+                return 2
+            base = evaluate(ref_cands, None, args.sector, args.band)
         print(f"{name}: joined={len(cands)} spread={spread:.3f} uncovered_accesses={unc}"
               f" off_agreement={base[0]:.1f}% decided={base[1]}"
               + "".join(f" off_{s}={p!r}@{sl:.3f}" for s, (p, sl, _) in base[2].items()))
