@@ -4009,6 +4009,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     a harness's fixture writes one through a variable. gh-ocannl-1797's two CI reds read this way:
     `tools/test-run.sh` reaches the members of `tools/test-test-run.sh`, `benchmarks/fixture_digest.py`
     `benchmarks/test-check-box.sh`.
+    Fake diagnostics should use synthetic locations: device-init and surjectivity locations in
+    `tools/test-test-run-common.sh` named real operations and einsum files, reaching all six
+    members for additions there (gh-ocannl-2231). The isolated-addition leg in
+    `tools/test-affected-tests.sh` queries every tracked test-suite stanza, with independent
+    exceptions for intentional source and fixture inputs; cat and printf controls retain
+    the conservative fallback for real reads and indistinguishable text mentions.
   - A module of a library this build does not compile (`cuda_backend.ml` on a Mac) stays UNMAPPED,
     exit 3, but an OFF-BUILD line on stderr counts what a build compiling it reaches -- read from
     the dune files' `libraries` (a `(select)` condition included), since dune describes none of

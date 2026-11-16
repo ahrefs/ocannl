@@ -819,8 +819,9 @@ case $REPEAT_TEST_MODE in
   # gh-ocannl-1281: a test whose GPU device initialization outlived the
   # in-process deadline -- its line, at a line's start, among an ordinary red
   # run's -- and a test quoting such a line, indented, which is no death.
+  # Synthetic location: this diagnostic does not read a repository dune file.
   wedged_init)
-    printf 'File "test/operations/dune", lines 3-9, characters 0-120:\n' >&2
+    printf 'File "fixture/device-init/dune", lines 3-9, characters 0-120:\n' >&2
     printf 'OCANNL device_init_deadline: hip device initialization did not finish within 120s; the device or driver is likely wedged. Dying by SIGALRM.\n' >&2
     exit 1 ;;
   # ...and the same line followed by more output than the digest's 10MB scan
@@ -830,7 +831,7 @@ case $REPEAT_TEST_MODE in
     perl -e 'my $l = ("y" x 99) . "\n"; print STDERR $l for 1 .. 110000'
     exit 1 ;;
   wedged_quoted)
-    printf 'File "test/operations/dune", lines 3-9, characters 0-120:\n' >&2
+    printf 'File "fixture/device-init/dune", lines 3-9, characters 0-120:\n' >&2
     printf '  child | OCANNL device_init_deadline: hip device initialization did not finish within 1s\n' >&2
     exit 1 ;;
   # An ordinary red run: a located error, exit 1 -- and the same with a test's
@@ -863,7 +864,7 @@ case $REPEAT_TEST_MODE in
   # over the runner's own error, verbatim from the reported run (plus an
   # `.expected` stanza line and a test's `--- ` banner that no `+++ ` follows).
   action_no_diff)
-    printf 'File "test/einsum/dune", lines 197-217, characters 0-458:\n197 | (rule\n198 |  (alias runtest-surjectivity)\n.....\n215 |     -diff-cmd\n216 |     -)\n217 |    (diff? surjectivity.ml surjectivity.ml.corrected))))\n' >&2
+    printf 'File "fixture/surjectivity/dune", lines 197-217, characters 0-458:\n197 | (rule\n198 |  (alias runtest-surjectivity)\n.....\n215 |     -diff-cmd\n216 |     -)\n217 |    (diff? surjectivity.ml surjectivity.ml.corrected))))\n' >&2
     printf 'File "test/operations/fixture.expected", line 1, characters 0-0:\n--- stage 2 ---\nnot a diff\n' >&2
     printf 'ppx_inline_test error: the following -only-test flags matched nothing: surjectivty.ml.\n' >&2
     exit 1 ;;
@@ -891,7 +892,7 @@ case $REPEAT_TEST_MODE in
   # An inline-expect rule's mismatch under `--diff-command -`: the remaining
   # location names the `.ml` source, no `.expected` or `.corrected` at all.
   inline_suppressed)
-    printf 'File "test/einsum/surjectivity.ml", line 12, characters 0-1:\n' >&2
+    printf 'File "fixture/surjectivity/surjectivity.ml", line 12, characters 0-1:\n' >&2
     exit 1 ;;
   # A real hunk followed by more output than the digest's 10MB scan window.
   diff_then_noise)
