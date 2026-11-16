@@ -427,7 +427,10 @@ let () =
      packed seeds' order), the accumulator's base indices name the row block bound inside it, so
      nothing contracts across it: each single-trip segment stores its own partial accumulation back,
      inside the batch loop that encloses both, and no enclosing loop of extent > 1 betrays the first
-     store-back as partial. That fusion must be refused for the second segment's write. *)
+     store-back as partial. Fusing there would read the first k block alone; since gh-ocannl-1844
+     the tail goes to the LAST segment's store-back, after the whole reduction, and the dependence
+     check over the batch loop proves the first segment's later iterations never rewrite what it
+     read ([epf_partition_outermost] below). *)
   let b_pad = 2 and m_pad = 15 and k_pad = 28 in
   (* [batched:false] drops the batch axis (gh-ocannl-1733): the k-block segments are then top-level
      statements, the last one the last writer of the accumulator. *)
@@ -519,28 +522,6 @@ let () =
    let got = run_with "epf_partition_spanned" (partitioned_k ~k_outermost:false ma mb prod) mc in
    p_all2 "epf_partition_spanned (one store-back after both segments) fused values match two-kernel"
      got want_padded ~f:Float.equal);
-  (let ma, mb, prod, mc = make_padded_graph "7o" in
-   let label =
-     "epf_partition_outermost (a store-back per single-trip segment) rejected with a targeted error"
-   in
-   match
-     try
-       ignore
-         (Context.compile
-            ~lowered_transform:(fun o -> [ partitioned_k ~k_outermost:true ma mb prod o ])
-            (Context.auto ())
-            (named "epf_partition_outermost" (Train.forward mc))
-            Ir.Indexing.Empty
-           : Context.t * Context.routine);
-       None
-     with Invalid_argument msg -> Some msg
-   with
-   | Some msg ->
-       Stdio.eprintf "epf_partition_outermost: %s (not part of the golden)\n%!" msg;
-       p label
-         (String.is_substring msg ~substring:"Schedule.Fuse_epilogue"
-         && String.is_substring msg ~substring:"written again")
-   | None -> p label false);
   (* gh-ocannl-1721: the store-back recognizer knows the masked fragment by IDENTITY -- membership
      in [masked_fragments], which the contraction fills -- not by the ["fragment"] label head it
      mints. The real masked fragment of the padded pipeline is a member (and the fusion through it
@@ -598,7 +579,7 @@ let () =
    p_all2 "fragment identity: fused through the real masked fragment, values match two-kernel" got
      want_padded ~f:Float.equal);
   (* gh-ocannl-1733: an UNBATCHED k-split. With the k-block loop above the row blocks, each segment
-     stores its own partial accumulation back, as in [epf_partition_outermost]; but with no batch
+     stores its own partial accumulation back, as in [epf_partition_outermost] below; with no batch
      loop the two segments are top-level statements, and the last one -- a loop starting above 0,
      which nothing re-executes -- is the last writer of the accumulator. Its store-back follows the
      whole reduction, so the tail is fused there: the relocated tail lands inside that segment and
@@ -625,6 +606,21 @@ let () =
     | exception Invalid_argument msg -> Some msg
   in
   let sets_of (tn : Tn.t) = function LL.Set { tn = t; _ } -> Tn.equal t tn | _ -> false in
+  (* The tail's writes all sit inside a loop starting above 0: the k Partition's last segment. *)
+  let in_last_segment_only (fused : LL.optimized) (mc : Tensor.t) =
+    let tail_writes = Ll_test.count_stmt fused.LL.llc ~f:(sets_of mc.Tensor.value) in
+    let in_later_segment =
+      List.sum
+        (module Int)
+        (Ll_test.loop_sites fused.LL.llc)
+        ~f:(fun site ->
+          match site.Ll_test.ls_stmt with
+          | LL.For_loop { from_; body; _ } when from_ > 0 ->
+              Ll_test.count_stmt body ~f:(sets_of mc.Tensor.value)
+          | _ -> 0)
+    in
+    tail_writes > 0 && tail_writes = in_later_segment
+  in
   (let want_unbatched =
      let _, _, _, mc = make_padded_graph ~batched:false "8r" in
      nonzero "epf_unbatched_ref" (run_with "epf_unbatched_ref" (fun opt -> opt) mc)
@@ -633,18 +629,7 @@ let () =
    let placed = ref None in
    let transform opt =
      let fused = partitioned_k ~k_outermost:true ma mb prod opt in
-     let tail_writes = Ll_test.count_stmt fused.LL.llc ~f:(sets_of mc.Tensor.value) in
-     let in_later_segment =
-       List.sum
-         (module Int)
-         (Ll_test.loop_sites fused.LL.llc)
-         ~f:(fun site ->
-           match site.Ll_test.ls_stmt with
-           | LL.For_loop { from_; body; _ } when from_ > 0 ->
-               Ll_test.count_stmt body ~f:(sets_of mc.Tensor.value)
-           | _ -> 0)
-     in
-     placed := Some (tail_writes > 0 && tail_writes = in_later_segment);
+     placed := Some (in_last_segment_only fused mc);
      fused
    in
    let got = run_with "epf_partition_unbatched" transform mc in
@@ -652,6 +637,34 @@ let () =
      (Option.value ~default:false !placed);
    p_all2 "epf_partition_unbatched (fused at the last segment) fused values match two-kernel" got
      want_unbatched ~f:Float.equal);
+  (* gh-ocannl-1844: the BATCHED k-split, the k-block loop above the row blocks (the packed seeds'
+     order): [for b { seg0; seg1 }], each segment storing its own partial accumulation back. The
+     tail goes to the last segment's store-back -- the first is written again by the second -- and
+     the dependence check over the batch loop proves the first segment's writes in later batch
+     iterations (indexed by the batch symbol, as the store-back is) never touch the cells the tail
+     already read. Values equal the two-kernel run and the same scheduled pipeline left unfused,
+     bitwise (dyadic inputs varying with every axis: a tail reading the first k block alone
+     differs). *)
+  (let ma, mb, prod, mc = make_padded_graph "7o" in
+   let placed = ref None in
+   let transform opt =
+     let fused = partitioned_k ~k_outermost:true ma mb prod opt in
+     placed := Some (in_last_segment_only fused mc);
+     fused
+   in
+   let got = run_with "epf_partition_outermost" transform mc in
+   let unfused_pipeline =
+     let ma, mb, _, mc = make_padded_graph "7u" in
+     run_with "epf_partition_outermost_unfused" (padded_pipeline ~k_outermost:true ma mb) mc
+   in
+   p
+     "epf_partition_outermost (batched): the tail is relocated into the last k segment, and only \
+      there"
+     (Option.value ~default:false !placed);
+   p_all2 "epf_partition_outermost (batched, fused at the last segment) values match two-kernel" got
+     want_padded ~f:Float.equal;
+   p_all2 "epf_partition_outermost (batched) values match the same pipeline unfused" got
+     unfused_pipeline ~f:Float.equal);
   (* A later segment of more than one trip that does not index the store-back re-executes it with
      partial accumulations: k = 70 is five 16-deep blocks, partitioned after the third, so the last
      segment runs blocks 3 and 4. Descended, it is refused by the surplus-loop check. *)
@@ -685,15 +698,17 @@ let () =
          (String.is_substring msg ~substring:"Schedule.Fuse_epilogue"
          && String.is_substring msg ~substring:"do not cover the output space bijectively")
    | None -> p label false);
-  (* A later segment is judged only where nothing re-executes the statements before it. Under the
-     batch loop, the first segment's write of a later batch iteration would follow the last
+  (* Under the batch loop, the first segment's writes in a later batch iteration follow the last
      segment's store-back, unseen by the written-again check (which reads only what follows the site
-     textually). In real schedules the first segment matches first and is refused as written again
-     ([epf_partition_outermost]); here its intrinsic and store-back are made unrecognizable (their
-     [Workgroup] lane loops turned [Serial]) while it still writes the accumulator, so the last
-     segment must not be descended. The control: the same surgery on the unbatched program, where
-     the segments are top-level, fuses. Neither surgered program is run (the unfused pipeline
-     is). *)
+     textually). Since gh-ocannl-1844 the dependence check over the batch loop judges them, whether
+     or not the first segment is a recognized site. Two surgeries on the batched program show it is
+     the check that decides, not recognition. In the first, the first segment's intrinsic and
+     store-back are made unrecognizable (their [Workgroup] lane loops turned [Serial]) while it
+     still writes the accumulator at batch-indexed cells: the dependence holds and the last segment
+     fuses (as it does on the unbatched program, the control). In the second, the first segment's
+     writes of the accumulator are rebound to batch row 0: in batch iteration 1 they rewrite cells
+     iteration 0's tail already read, and the fusion is refused naming the batch loop. Neither
+     surgered program is run (the unfused pipeline is). *)
   let serialize_segment seg (llc : LL.t) =
     let rec serial (llc : LL.t) : LL.t =
       match llc with
@@ -727,10 +742,50 @@ let () =
     assert !found;
     res
   in
-  let surgered ~batched tag =
+  (* Rewrite the accumulator's writes inside the loop [seg]: the leading (batch) index becomes row
+     0. *)
+  let rebind_batch ~(acc : Tn.t) seg (llc : LL.t) =
+    let rec rebind (llc : LL.t) : LL.t =
+      match llc with
+      | LL.Set ({ tn; idcs; _ } as st) when Tn.equal tn acc ->
+          let idcs = Array.copy idcs in
+          idcs.(0) <- Ir.Indexing.Fixed_idx 0;
+          LL.Set { st with idcs }
+      | LL.For_loop fc -> LL.For_loop { fc with body = rebind fc.body }
+      | LL.Seq (a, b) ->
+          let a = rebind a in
+          LL.Seq (a, rebind b)
+      | LL.If x -> LL.If { x with body = rebind x.body }
+      | other -> other
+    in
+    let found = ref false in
+    let rec find (llc : LL.t) : LL.t =
+      match llc with
+      | LL.For_loop fc when Ir.Indexing.equal_symbol fc.index seg ->
+          found := true;
+          rebind llc
+      | LL.For_loop fc -> LL.For_loop { fc with body = find fc.body }
+      | LL.Seq (a, b) ->
+          let a = find a in
+          LL.Seq (a, find b)
+      | LL.If x -> LL.If { x with body = find x.body }
+      | other -> other
+    in
+    let res = find llc in
+    assert !found;
+    res
+  in
+  let surgered ~batched ~surgery tag =
     let ma, mb, prod, mc = make_padded_graph ~batched tag in
     let verdict = ref None in
+    let batch_loop = ref None in
     let transform opt =
+      (* The batch loop: the outermost loop of the matmul nest, the deepest one. *)
+      (let paths = Ll_test.nest_paths opt.LL.llc in
+       let depth = List.fold paths ~init:0 ~f:(fun d p -> Int.max d (List.length p)) in
+       match List.find_exn paths ~f:(fun p -> List.length p = depth) with
+       | [ b; _; _; _ ] -> batch_loop := Some b
+       | _ -> ());
       let first = ref None in
       let partition ~i_o:_ ~k_o =
         let op, segs = Sched.partition ~axis:k_o ~breakpoints:[ 1 ] in
@@ -739,24 +794,30 @@ let () =
       in
       let opt = padded_pipeline ~partition ~k_outermost:true ma mb opt in
       let seg = Option.value_exn ~here:[%here] !first in
-      verdict := Some (fuse_refusal prod { opt with LL.llc = serialize_segment seg opt.LL.llc });
+      verdict :=
+        Some (fuse_refusal prod { opt with LL.llc = surgery ~acc:prod.Tensor.value seg opt.LL.llc });
       opt
     in
     ignore (run_with ("epf_partition_surgery_" ^ tag) transform mc : float array);
-    Option.value_exn ~here:[%here] !verdict
+    (Option.value_exn ~here:[%here] !verdict, !batch_loop)
   in
-  (match surgered ~batched:true "8g" with
-  | Some msg ->
-      Stdio.eprintf "epf_partition_surgery batched: %s (not part of the golden)\n%!" msg;
-      p
-        "epf_partition_surgery: a later segment under a batch loop, after an unrecognized writer, \
-         is not fused"
-        (String.is_substring msg ~substring:"Schedule.Fuse_epilogue")
-  | None ->
-      p
-        "epf_partition_surgery: a later segment under a batch loop, after an unrecognized writer, \
-         is not fused"
-        false);
+  let unrecognized ~acc:_ seg llc = serialize_segment seg llc in
+  p
+    "epf_partition_surgery: a later segment under a batch loop, after an unrecognized \
+     batch-indexed writer, fuses"
+    (Option.is_none (fst (surgered ~batched:true ~surgery:unrecognized "8g")));
   p "epf_partition_surgery control: the same surgery on the unbatched program fuses"
-    (Option.is_none (surgered ~batched:false "8c"));
+    (Option.is_none (fst (surgered ~batched:false ~surgery:unrecognized "8c")));
+  let label =
+    "epf_partition_surgery: an earlier segment rewriting batch row 0 in every batch iteration \
+     refuses the fusion, naming the batch loop"
+  in
+  (match surgered ~batched:true ~surgery:rebind_batch "8o" with
+  | Some msg, Some b ->
+      Stdio.eprintf "epf_partition_surgery overlap: %s (not part of the golden)\n%!" msg;
+      p label
+        (String.is_substring msg ~substring:"Schedule.Fuse_epilogue"
+        && String.is_substring msg ~substring:("enclosing loop " ^ Ir.Indexing.symbol_ident b ^ " ")
+        )
+  | _ -> p label false);
   ignore prod4

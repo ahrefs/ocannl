@@ -614,11 +614,12 @@ val cpu_pack_fused_partial_witness : matmul_site -> sketch_params -> string opti
     geometry and packing shape [p] carries (gh-ocannl-1612), or [None] where it may admit one. Only
     the shapes that sink the row-block loop under the reduction-block loops are concerned (not
     {!cpu_pack_grid_outermost}): there the micro-kernel writes the accumulator once per reduction
-    block, so a repeating reduction-block loop, a k-block [Partition] whose segments share an
-    enclosing loop that runs twice, or a row-block edge split off beside a k [Partition] leaves no
-    exactly-once store-back. [None] off the CPU packed matmul sketches. The family tree refutes the
-    fused flavor's geometries with it. Exposed for tests, which check it two-sided against the
-    applied fused schedules. *)
+    block, so a repeating reduction-block loop, a k-block [Partition] whose segments share an outer
+    contraction loop that runs twice, or a row- or column-block edge split off beside a k
+    [Partition] leaves no exactly-once store-back (enclosing loops that index the accumulator, such
+    as a batch loop, pass [Fuse_epilogue]'s dependence check, gh-ocannl-1844). [None] off the CPU
+    packed matmul sketches. The family tree refutes the fused flavor's geometries with it. Exposed
+    for tests, which check it two-sided against the applied fused schedules. *)
 
 val matmul_fragment_certain : Ir.Low_level.optimized -> sketch_params -> bool
 (** Whether every application of the matmul tensorized sketch [p] to [opt] has

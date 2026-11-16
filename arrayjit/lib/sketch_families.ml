@@ -2698,13 +2698,16 @@ let cpu_pack_grid_chunk_bytes (site : matmul_site) ~shape ~prec_bytes (p : sketc
    - No k [Partition] ([Sched.pad_edge_partition], the builder's own k split, which these shapes
    always take with the k pad since they stage both operands): the last writer is one nest whose
    site sits under every reduction-block loop, so one running twice ([reduction_blocks_repeat]) is a
-   surplus loop. - With the Partition, the edge segment is single-trip and, unenclosed, the last
-   writer, whose store-back follows the whole reduction (gh-ocannl-1733). A loop enclosing both
-   segments that runs twice -- a batch loop, an outer contraction loop, the column-block loop --
-   keeps that segment from being descended, and the earlier segment's site, fused, is written again.
-   - So is a row-block edge: under the reduction loop [Tensorize]'s statement-site contraction
-   splits a Serial row-block loop at its last full block ([full_block_split]), and the site
-   [fuse_at_fragment] reaches covers only part of the rows. *)
+   surplus loop. - With the Partition, the edge segment is single-trip and the last writer, whose
+   store-back follows the whole reduction: [fuse_at_fragment] takes the last site (gh-ocannl-1733).
+   A loop enclosing both segments that indexes the accumulator -- a batch loop, the column-block
+   loop of dividing column blocks -- passes its dependence check (gh-ocannl-1844); an outer
+   contraction loop that runs twice does not index it, and re-runs the last segment's store-back
+   with partial sums (the surplus-loop rule). - So is an edge block: under the reduction loop
+   [Tensorize]'s statement-site contraction splits a Serial block loop at its last full block
+   ([full_block_split]) where one axis alone is masked -- the row-block loop, or the column-block
+   loop of a non-dividing column block -- and the site [fuse_at_fragment] reaches covers only part
+   of the output. *)
 let cpu_pack_fused_partial_witness (site : matmul_site)
     ({ sk_bm = bm; sk_bn = bn; sk_bk = bk; sk_hoist; sk_grid; sk_pack_rest; _ } as p :
       sketch_params) : string option =
@@ -2729,21 +2732,24 @@ let cpu_pack_fused_partial_witness (site : matmul_site)
         else None
       else
         let enclosing =
-          List.filter_map
-            (matmul_batch_loops site @ site.m_ko)
-            ~f:(fun (s, e) -> if e > 1 then Some (Idx.symbol_ident s) else None)
-          @
-          if bn > 0 && blocks_of site.m_nj bn > 1 then
-            [ Printf.sprintf "the column-block loop (%d blocks)" (blocks_of site.m_nj bn) ]
-          else []
+          List.filter_map site.m_ko ~f:(fun (s, e) ->
+              if e > 1 then Some (Idx.symbol_ident s) else None)
         in
         if not (List.is_empty enclosing) then
           Some
             (Printf.sprintf
-               "the k-block loop is partitioned at its last full block (%s, bk=%d), and loop(s) %s \
-                enclose both segments, so the first segment's site would be written again"
+               "the k-block loop is partitioned at its last full block (%s, bk=%d), and outer \
+                contraction loop(s) %s enclose both segments without indexing the accumulator, so \
+                the last segment's store-back runs once per outer contraction block"
                (k_extent_label site) bk
                (String.concat ~sep:", " enclosing))
+        else if bn > 0 && site.m_nj > bn && site.m_nj % bn <> 0 && block_divides bm site.m_ni then
+          Some
+            (Printf.sprintf
+               "the k-block loop is partitioned (%s, bk=%d) and the column-block loop's edge \
+                (n=%d, bn=%d) is split off from the full blocks, so no one site's store-back \
+                covers the output"
+               (k_extent_label site) bk site.m_nj bn)
         else if
           (not sk_grid) && site.m_ni > bm
           && site.m_ni % bm <> 0

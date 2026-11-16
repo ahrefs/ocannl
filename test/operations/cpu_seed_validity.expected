@@ -18,11 +18,17 @@ kone: premise: unfused packed seeds apply: true
 ksub: premise: unfused packed seeds apply: true
 rowedge: premise: unfused packed seeds apply: true
 colblocks: premise: unfused packed seeds apply: true
+colblocksdiv: premise: unfused packed seeds apply: true
+kouter: premise: the site's outer contraction loops repeat: true
+kouter: premise: unfused packed seeds apply: true
 relationship: Fuse_epilogue refuses a fused packed twin exactly where the witness says so: true
 relationship: no witnessed twin is offered by the fused flavor: true
 relationship: the repeating reduction-block clause fires: true
-relationship: the clause for a loop enclosing both k segments fires: true
-relationship: the clause fires on a column-block loop alone: true
+relationship: the clause for outer contraction loops enclosing both k segments fires: true
+relationship: the column-edge clause fires: true
+relationship: a batched partitioned twin of a row-sinking shape is admitted: true
+relationship: the fused flavor offers a batched partitioned twin: true
+relationship: a partitioned twin under several dividing column blocks is admitted: true
 relationship: the row-edge clause fires: true
 relationship: a partitioned twin of a row-sinking shape is admitted: true
 cpu_seed_validity: done

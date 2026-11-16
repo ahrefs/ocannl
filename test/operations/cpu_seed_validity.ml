@@ -24,11 +24,14 @@
 
    2. The refutation against the op, two-sided: on k-split sites (one full k block and an edge,
    batched and not; four full blocks and an edge, batched and not; k of one block and below one; a
-   row edge; a column-blocked site; dividing k = 32), every unfused packed seed of the lifted tree
-   whose own schedule applies and validates is flipped to its fused twin, and [Fuse_epilogue]
-   refuses that twin exactly where the witness says so. Each of the witness's clauses fires
-   somewhere, an admitted twin of a concerned shape exists (gh-ocannl-1733's last segment), and no
-   witnessed twin is offered by the fused flavor.
+   row edge; column blocks with an edge and dividing; a two-axis contraction whose outer loop
+   repeats; dividing k = 32), every unfused packed seed of the lifted tree whose own schedule
+   applies and validates is flipped to its fused twin, and [Fuse_epilogue] refuses that twin exactly
+   where the witness says so. Each of the witness's clauses fires somewhere, admitted twins of a
+   concerned shape exist (gh-ocannl-1733's unbatched last segment; since gh-ocannl-1844 the batched
+   one and one under dividing column blocks, whose loops index the accumulator and pass
+   [Fuse_epilogue]'s dependence check), the fused flavor offers a batched one, and no witnessed twin
+   is offered by the fused flavor.
 
    Values cannot change: the refutation only removes candidates that never compiled. The admitted
    fused twins' values are epilogue_fusion_single_trip_sweep's (bitwise) and
@@ -220,6 +223,27 @@ let gemm ?(b = 0) ~m ~k ~n tag =
   let%op y = z + pos in
   lower ~materialized:[ z.Tensor.value ] (Train.forward y)
 
+(* A GEMM contracting two axes, [h] outer and [k] inner ([z = x . w] over [hk]): the matmul site's
+   [m_ko] is the [h] loop, which encloses the k-block loop and does not index the accumulator. *)
+let gemm2 ~m ~h ~k ~n tag =
+  let xv =
+    Array.init
+      (m * h * k)
+      ~f:(Ll_test.cycle_flat ~dims:[| m; h * k |] ~modulus:13 ~offset:0. ~stride:0.25)
+  in
+  let wv =
+    Array.init
+      (h * k * n)
+      ~f:(Ll_test.cycle_flat ~dims:[| h * k; n |] ~modulus:17 ~offset:(-8.) ~stride:1.)
+  in
+  let pv = Array.init n ~f:(fun j -> Float.of_int (j % 5) -. 2.) in
+  let x = TDSL.ndarray xv ~label:[ tag ^ "_x" ] ~output_dims:[ m; h; k ] () in
+  let w = TDSL.ndarray wv ~label:[ tag ^ "_w" ] ~output_dims:[ h; k; n ] () in
+  let pos = TDSL.ndarray pv ~label:[ tag ^ "_pos" ] ~output_dims:[ n ] () in
+  let%op z = x +* "ihk;hkj=>ij" w in
+  let%op y = z + pos in
+  lower ~materialized:[ z.Tensor.value ] (Train.forward y)
+
 type case = {
   c_tag : string;
   c_twin : Autotune.sketch_params;
@@ -233,6 +257,9 @@ let cases = ref []
 let relationship_site tag opt =
   match (matmul_site opt, tree_of opt) with
   | Some site, Some tree ->
+      if String.equal tag "kouter" then
+        p_exists "kouter: premise: the site's outer contraction loops repeat" site.Autotune.m_ko
+          ~f:(fun (_, e) -> e > 1);
       let lifted = Sspace.leaves (Autotune.lift_pad_waste (Autotune.lift_cpu_companions tree)) in
       let unfused_packed =
         List.filter lifted ~f:(fun sp -> sp.sk_mma && sp.sk_bk > 0 && not sp.sk_epilogue)
@@ -245,6 +272,9 @@ let relationship_site tag opt =
           let c_verdict = judge opt twin in
           (match (Autotune.cpu_pack_fused_partial_witness site twin, c_verdict) with
           | Some _, Fuse_refused _ | None, Valid -> ()
+          | Some w, Valid ->
+              Stdio.eprintf "%s: %s witnessed but admitted: %s (not part of the golden)\n%!" tag
+                (label twin) (one_line w)
           | _ -> report ~tag twin c_verdict);
           cases :=
             {
@@ -268,6 +298,8 @@ let () =
   relationship_site "ksub" (gemm ~m:24 ~k:12 ~n:32 "ksub");
   relationship_site "rowedge" (gemm ~m:20 ~k:20 ~n:32 "rowedge");
   relationship_site "colblocks" (gemm ~m:128 ~k:140 ~n:288 "colblocks");
+  relationship_site "colblocksdiv" (gemm ~m:128 ~k:140 ~n:256 "colblocksdiv");
+  relationship_site "kouter" (gemm2 ~m:16 ~h:2 ~k:20 ~n:32 "kouter");
   let all = List.rev !cases in
   let refused c =
     match c.c_verdict with Fuse_refused _ -> true | Valid | Other_refused _ -> false
@@ -284,10 +316,26 @@ let () =
       Option.is_some c.c_witness && c.c_offered);
   p_exists "relationship: the repeating reduction-block clause fires" all
     ~f:(witnessed ~phrase:"once per reduction block");
-  p_exists "relationship: the clause for a loop enclosing both k segments fires" all
-    ~f:(witnessed ~phrase:"enclose both segments");
-  p_exists "relationship: the clause fires on a column-block loop alone" all ~f:(fun c ->
-      String.equal c.c_tag "colblocks" && witnessed ~phrase:"the column-block loop" c);
+  p_exists "relationship: the clause for outer contraction loops enclosing both k segments fires"
+    all ~f:(fun c -> String.equal c.c_tag "kouter" && witnessed ~phrase:"enclose both segments" c);
+  p_exists "relationship: the column-edge clause fires" all ~f:(fun c ->
+      String.equal c.c_tag "colblocks" && witnessed ~phrase:"column-block loop's edge" c);
+  (* gh-ocannl-1844: loops enclosing both k segments that index the accumulator -- the batch loop, a
+     dividing column-block loop -- no longer keep the last segment from fusing. *)
+  let admitted_partitioned tag c =
+    String.equal c.c_tag tag
+    && (not
+          (Autotune.cpu_pack_grid_outermost ~sk_grid:c.c_twin.sk_grid ~sk_hoist:c.c_twin.sk_hoist
+             ~sk_pack_rest:c.c_twin.sk_pack_rest))
+    && not (refused c)
+  in
+  p_exists "relationship: a batched partitioned twin of a row-sinking shape is admitted" all
+    ~f:(fun c -> admitted_partitioned "ksplit1b" c || admitted_partitioned "ksplit4b" c);
+  p_exists "relationship: the fused flavor offers a batched partitioned twin" all ~f:(fun c ->
+      (admitted_partitioned "ksplit1b" c || admitted_partitioned "ksplit4b" c) && c.c_offered);
+  p_exists "relationship: a partitioned twin under several dividing column blocks is admitted" all
+    ~f:(fun c ->
+      admitted_partitioned "colblocksdiv" c && c.c_twin.sk_bn > 0 && c.c_twin.sk_bn < 256);
   p_exists "relationship: the row-edge clause fires" all
     ~f:(witnessed ~phrase:"row-block loop's edge");
   p_exists "relationship: a partitioned twin of a row-sinking shape is admitted" all ~f:(fun c ->
