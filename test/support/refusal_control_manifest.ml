@@ -21,8 +21,11 @@ let raw_entries =
         "[scanner-refusal:1262ba0367f56ab63b0ef45185bb1257] control stanza must";
         "[scanner-refusal:1c8850699d8f9fec6290b9542a410741] an unreadable archive";
         "[scanner-refusal:e25a1cf286ceb521ee4eb7746aad5229] archive tool producing";
+        "[scanner-refusal:ff2924c3a9869dd3bc7f7d72acd8ead1] malformed archive interface";
         "[scanner-refusal:f684c2c391ba5d7246a2468a4d4584ca] failed archive query";
         "[scanner-refusal:38b0123ae5353ab2b03e006a018d2bc6] shared local library";
+        "[scanner-refusal:8321fb2ab306d6d7f47b17136d308f5d] unique dependency-minimal archive";
+        "[scanner-refusal:9444a57b2ad4731e29ce408670e73e59] cyclic interface-only owners";
         "[scanner-refusal:ffa4bc91bdd9e0c6519d47ab6e078f3c] csexp reader refuses";
         "[scanner-refusal:b2e2da4cfdb3763209d5bb0bf037f3eb] description that is";
         "[scanner-refusal:cb9d50292bf8e1411a78fe56d95365d7] description entry of";

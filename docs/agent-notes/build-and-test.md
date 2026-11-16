@@ -2577,11 +2577,17 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `.cmi` units. A compiler-reaching library
   sharing a directory is owned by its byte archives instead (gh-ocannl-2248): dune-resolved
   `ocamlfind` supplies the archive paths and dune-resolved `ocamlobjinfo` supplies their defined
-  units, excluding imported interfaces. An archive-less package owns no units; a failed query or
+  units. A shared-directory interface-only `.cmi` has no archive definition: its candidates are
+  archives importing its interface, with consumers removed through the dependency graph. Exactly
+  one dependency-minimal candidate must remain; ambiguous or absent candidates refuse when the
+  unit is referenced. This preserves `Parsetree` under common without crediting toplevel for its
+  imports. Definitions always take precedence over imported interfaces.
+  An archive-less package owns no units; a failed query or
   unreadable archive refuses without falling back to directory ownership. Shared local libraries
   refuse because findlib cannot resolve their archives and `@check` does not build them.
   `ucd_gap_shared_directory` now reports an unused `compiler-libs.toplevel` beside `Location`;
-  `ucd_pass_toplevel` and `ucd_pass_public_unwrapped` pin used toplevel/common declarations. `ll_test` is
+  `ucd_pass_toplevel` and `ucd_pass_public_unwrapped` pin used toplevel/common declarations;
+  `ucd_pass_interface_unit` and `ucd_flag_interface_unit_toplevel` pin interface-only ownership. `ll_test` is
   covered by it like every stanza;
   it stays outside `test_utils_linkage`'s probe, since it links `ocannl`, so a USED
   compiler-reaching dependency added there is not refused by either check. A library declared

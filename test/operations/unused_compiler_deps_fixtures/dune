@@ -116,3 +116,19 @@
  (package neural_nets_lib)
  (modules ucd_pass_toplevel)
  (libraries compiler-libs.toplevel))
+
+; Interface-only compiler units have no implementation entry in the byte archive.
+
+(library
+ (name ucd_pass_interface_unit)
+ (package neural_nets_lib)
+ (modules ucd_pass_interface_unit)
+ (libraries compiler-libs.common))
+
+; Imported type-only interfaces must not credit a dependent archive.
+
+(library
+ (name ucd_flag_interface_unit_toplevel)
+ (package neural_nets_lib)
+ (modules ucd_flag_interface_unit_toplevel)
+ (libraries compiler-libs.toplevel))
