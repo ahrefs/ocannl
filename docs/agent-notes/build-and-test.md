@@ -1719,7 +1719,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   Live queries, changed tokens, old records without proof, and holders outside
   that group refuse. A `setsid` descendant requires manual inspection, never
   deletion of the lock file. The waiting query wrapper forwards INT, TERM and HUP
-  to its isolated group and reaps the query. Zombie queries are exited identities,
+  to its isolated group and reaps the query. SIGKILL or an unforwarded caller-group
+  signal can leave that isolated query alive; recovery refuses it until it exits. Keeper
+  unlock probes explicitly unlock before exit; acquisitions briefly retry an exited
+  query record, and recovery settles a keeper-only census before refusing it.
+  Zombie queries are exited identities,
   not live queries; state and start token are checked separately. Lifecycle leg
   123 pins recovery, refusals, cancellation and an intentionally unreaped query.
 - **`/proc/locks` names a flock's ACQUIRER, not its holders** (gh-ocannl-1107): the lock lives on

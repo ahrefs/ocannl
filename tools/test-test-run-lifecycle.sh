@@ -15,7 +15,7 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
-# Groups: #lifecycle (65, 97, 40-47, 74, 122, 123), #source (59-63, 66, 104), #hermetic (70).
+# Groups: #lifecycle (65, 97, 40-47, 74, 122, 123, 124), #source (59-63, 66, 104), #hermetic (70).
 #
 # Legs:
 #  40-47. run/start lifecycle: completion, signals (a group TERM landing inside
@@ -35,6 +35,8 @@
 # 123. exited query recovery authenticates its group keeper and every holder;
 #      live queries, mismatched tokens, unrelated and setsid holders refuse.
 #      Signals reach the isolated query, and unreaped zombie queries recover.
+# 124. readiness-controlled keeper probes collide with launch and recovery;
+#      both settle successfully, and recovery reports the reaping it performed.
 #  74. fork TERM is deferred until the parent owns its child pid and the child
 #      resets its handlers; no-mask and inherited-handler controls prove both.
 #  65. a `stop`, or a signal to the launcher alone, while the backends
@@ -1146,7 +1148,8 @@ EOF
     esac
     life_capture recover-query
     if [ "$mode" = retained ] || [ "$mode" = zombie ]; then
-      if [ "$life_rc" = 0 ] && life_await_dead "$holder"; then
+      if [ "$life_rc" = 0 ] && grep -q '^reaped exited query holders;' "$TMP/lifecycle.out" &&
+         life_await_dead "$holder"; then
         report 0 'query recovery: exited query holder reaped by recorded identity'
       else report 1 'query recovery: exited query holder reaped by recorded identity' "$(cat "$TMP/lifecycle.out" "$TMP/lifecycle.err")"; fi
       # This launch is before fixture cleanup: on the base it stays refused.
@@ -1186,6 +1189,95 @@ EOF
   life_check 0 'verdict: pass' 'recovered query permits immediate launch'
 }
 harness_leg_run '123: exited query retained fd 9 recovery authenticates every holder #lifecycle' leg_123
+
+# Fixed literal seams in a subject copy pause the keeper after successful flock
+# and publish the retry yield. Unknown source shapes fail setup. No real dune,
+# timing lottery, or production environment hook is used by this collision leg.
+leg_124() {
+  local mode launcher result keeper
+  cp "$life_root/tools/test-run.sh" "$TMP/124-before"
+  cp "$life_bin/dune" "$TMP/124-dune-before"
+  if ! perl -0777 -e '
+    my $s = <>;
+    my $seam = q~if (flock($f, LOCK_EX | LOCK_NB)) {~;
+    my $at = index($s, $seam);
+    die "keeper probe seam missing or duplicated" if $at < 0 || index($s, $seam, $at + 1) >= 0;
+    substr($s, $at, length $seam) = $seam . q~
+      alarm 30;
+      open my $ready, ">", "$ENV{LIFECYCLE_PREFIX}.probe-ready" or die $!; close $ready;
+      while (!-e "$ENV{LIFECYCLE_PREFIX}.probe-release") { select undef, undef, undef, .01 }
+      alarm 0;
+~;
+    my $yield = q~select undef, undef, undef, .02;~;
+    my $hook = q~open my $note, ">", "$ENV{LIFECYCLE_PREFIX}.probe-contended" or die $!; close $note;
+~;
+    my $n = ($s =~ s/\Q$yield\E/$hook$yield/g);
+    die "expected acquisition and recovery retry seams, got $n" unless $n == 2;
+    print $s;
+  ' "$SRC" >"$TMP/124-subject"; then
+    report 1 'keeper probe: collision seams exist'; return
+  fi
+  cp "$TMP/124-subject" "$life_root/tools/test-run.sh"
+  cat >"$life_root/tools/affected-tests.sh" <<'EOF'
+#!/usr/bin/env bash
+exec dune query-probe
+EOF
+  cat >"$life_bin/dune" <<'EOF'
+#!/usr/bin/env bash
+[ "${PROBE_HOLDER:-0}" = 1 ] || exit 0
+exec perl -e '
+  my $p = fork(); die $! unless defined $p;
+  if (!$p) {
+    alarm 45;
+    open my $r, ">", "$ARGV[0].probe-holder" or die $!; print $r "$$\n"; close $r;
+    sleep 45; exit;
+  }
+  while (!-s "$ARGV[0].probe-holder") { select undef, undef, undef, .01 }
+' "$LIFECYCLE_PREFIX"
+EOF
+  for mode in launch recovery; do
+    unlink "$life_prefix.probe-ready" 2>/dev/null
+    unlink "$life_prefix.probe-contended" 2>/dev/null
+    unlink "$life_prefix.probe-release" 2>/dev/null
+    unlink "$life_prefix.probe-holder" 2>/dev/null
+    if [ "$mode" = launch ]; then
+      PROBE_HOLDER=0 life affected >"$TMP/124-query.out" 2>"$TMP/124-query.err"
+      if ! await_fixture_ready "$life_prefix.probe-ready"; then
+        report 1 'keeper probe: launch collision ready'; touch "$life_prefix.probe-release"; break
+      fi
+      keeper=$(cut -f5 "$(life paths owner)")
+      life run --cap 30 ok >"$TMP/124-result.out" 2>"$TMP/124-result.err" &
+    else
+      PROBE_HOLDER=1 life affected >"$TMP/124-query.out" 2>"$TMP/124-query.err"
+      ps_token "$(cat "$life_prefix.probe-holder")" >"$life_prefix.probe-holder-token"
+      keeper=$(cut -f5 "$(life paths owner)")
+      life recover-query >"$TMP/124-result.out" 2>"$TMP/124-result.err" &
+    fi
+    launcher=$!
+    if ! await_fixture_ready "$life_prefix.probe-ready" ||
+       ! await_fixture_ready "$life_prefix.probe-contended"; then
+      report 1 "keeper probe: $mode really contends with the held probe"
+    else report 0 "keeper probe: $mode really contends with the held probe"; fi
+    touch "$life_prefix.probe-release"
+    harness_wait_child "$launcher" life_dead "keeper probe: $mode returns" 300
+    result=$harness_child_rc
+    if [ "$mode" = launch ]; then
+      if [ "$result" = 0 ] && grep -q 'verdict: pass' "$TMP/124-result.out"; then
+        report 0 'keeper probe: collided launch retries and succeeds'
+      else report 1 'keeper probe: collided launch retries and succeeds' "exit $result; $(cat "$TMP/124-result.out" "$TMP/124-result.err")"; fi
+    else
+      if [ "$result" = 0 ] && grep -q '^reaped exited query holders;' "$TMP/124-result.out"; then
+        report 0 'keeper probe: collided recovery settles and reports reaping'
+      else report 1 'keeper probe: collided recovery settles and reports reaping' "exit $result; $(cat "$TMP/124-result.out" "$TMP/124-result.err")"; fi
+      harness_kill_recorded "$life_prefix.probe-holder" "$life_prefix.probe-holder-token"
+    fi
+    life_await_dead "$keeper" || report 1 "keeper probe: $mode keeper retires"
+  done
+  cp "$TMP/124-before" "$life_root/tools/test-run.sh"
+  cp "$TMP/124-dune-before" "$life_bin/dune"
+  unlink "$life_root/tools/affected-tests.sh"
+}
+harness_leg_run '124: a held keeper unlock probe cannot refuse a launch or recovery #lifecycle' leg_124
 
 # ---------------------------------------------------------------------------
 # Legs 59-63 and 66: the source a run tested, recorded at launch (gh-ocannl-992)

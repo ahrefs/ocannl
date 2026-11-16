@@ -81,6 +81,8 @@
 # it manually with `lsof` on the lock from `paths lock`. Never delete the lock.
 # The keeper closes fd 9 and all streams; it reserves the group until the query
 # exits and the lock becomes free. Old query records have no recovery authority.
+# INT/TERM/HUP are forwarded. SIGKILL or an unforwarded caller-group signal can
+# leave the isolated query running; recovery refuses it until it exits.
 #
 # `prepush --since BASE` (gh-ocannl-1829) is the pre-push run as one command:
 # `affected --since BASE`'s default list (link-only aliases included) without
@@ -1747,6 +1749,7 @@ QUEUED=$RUNS/queued-$wt_key # a launch seen in flight before this worktree's fir
 lock_census_perl='
 use POSIX ();
 use Time::HiRes ();
+use Fcntl ();
 sub census_token {
   my $p = shift;
   return "" unless defined $p && $p =~ /\A[0-9]+\z/;
@@ -1784,6 +1787,27 @@ sub census_zombie {
   }
   my $s = qx{ps -o stat= -p $p 2>/dev/null};
   return $s =~ /\A\s*Z/;
+}
+# Waiting grants no signal authority. Only the six-field protocol for an
+# exited query gets a brief retry, covering its keeper unlock probe. A live
+# query, changed token or any other owner remains an immediate refusal.
+sub acquire_query_lock {
+  my ($fd, $owner) = @_;
+  my $flags = Fcntl::LOCK_EX() | Fcntl::LOCK_NB();
+  for my $attempt (0 .. 10) {
+    return 1 if flock($fd, $flags);
+    last if $attempt == 10;
+    open my $o, "<", $owner or last;
+    my $r = <$o> // ""; close $o; chomp $r;
+    my ($kind, $verb, $q, $qt, $k, $kt, @extra) = split /\t/, $r;
+    last unless $kind eq "query" && defined $kt && !@extra &&
+      $q =~ /\A[1-9][0-9]*\z/ && $k =~ /\A[1-9][0-9]*\z/ && length $qt && length $kt;
+    my $now = census_token($q);
+    last if length $now && ($now ne $qt || !census_zombie($q));
+    select undef, undef, undef, .02;
+  }
+  # The keeper may have finished during the identity read above.
+  return flock($fd, $flags);
 }
 sub lock_census {
   my ($lock, $bound, @skip) = @_;
@@ -2345,9 +2369,8 @@ take_lock() {
   # the lock in the same instant sees the previous owner or this run, never
   # a truncated or half-written path that would send it to `last` instead
   # of the actual holder.
-  perl -e '
-    use Fcntl ":flock";
-    exit 1 unless flock(STDIN, LOCK_EX | LOCK_NB);
+  perl -e "$lock_census_perl"'
+    exit 1 unless acquire_query_lock(\*STDIN, $ARGV[0]);
     my $tmp = "$ARGV[0].tmp.$$";
     open(my $fh, ">", $tmp) or exit 2;
     print $fh "$ARGV[1]\n" or exit 2;
@@ -4262,9 +4285,8 @@ hold_query_lock() {
   fi
   mkdir -p "$RUNS" || die "cannot create $RUNS"
   exec 9>>"$LOCK" || die "cannot open lock file $LOCK"
-  perl -e '
-    use Fcntl ":flock";
-    exit 3 unless flock(STDIN, LOCK_EX | LOCK_NB);
+  perl -e "$lock_census_perl"'
+    exit 3 unless acquire_query_lock(\*STDIN, $ARGV[0]);
     my $tmp = "$ARGV[0].tmp.$$";
     open(my $fh, ">", $tmp) or exit 2;
     print $fh "query\t$ARGV[1]\t$ARGV[2]\n" or exit 2;
@@ -4298,7 +4320,10 @@ hold_query_lock() {
           my $r = <$o> // ""; close $o;
           exit 0 unless index($r, "query\t$verb\t$query\t$qt\t") == 0;
           open my $f, ">>", $lock or exit 1;
-          exit 0 if flock($f, LOCK_EX | LOCK_NB);
+          if (flock($f, LOCK_EX | LOCK_NB)) {
+            flock($f, LOCK_UN) or exit 1;
+            exit 0;
+          }
         }
         select undef, undef, undef, .2;
       }
@@ -4553,14 +4578,30 @@ case $sub in
         refuse("keeper left query group") unless group_of($k) eq $q;
         query_exited();
       }
+      my $sent = 0;
+      sub recovered {
+        print $sent ? "reaped exited query holders; worktree lock released\n"
+                    : "query lock is free or owner changed; nothing to reap\n";
+        exit 0;
+      }
       for my $signal (qw(TERM KILL)) {
-        unless (owned()) { print "query lock is free or owner changed; nothing to reap\n"; exit 0 }
+        recovered() unless owned();
         proof();
         # lsof sees openers too: the authenticated keeper may briefly open
         # the inode to probe freedom, but closed inherited fd 9 before setup.
         # Never signal the group reservation itself through that probe.
-        my %holders = lock_census($lock, 10, $k);
-        refuse("no authenticated holders in census") unless keys %holders;
+        my %holders;
+        my $settle = Time::HiRes::time() + 2;
+        while (1) {
+          recovered() unless owned();
+          proof();
+          %holders = lock_census($lock, 10, $k);
+          last if keys %holders;
+          recovered() unless owned();
+          refuse("no authenticated holders in census") if Time::HiRes::time() >= $settle;
+          # A keeper-only unlock probe is transient, never signal authority.
+          select undef, undef, undef, .02;
+        }
         # Validate the WHOLE census before the first signal, then again per pid.
         for my $p (keys %holders) {
           refuse("holder pid token changed") unless census_same($p, $holders{$p});
@@ -4571,12 +4612,12 @@ case $sub in
           refuse("owner changed") unless owned();
           refuse("holder pid token changed") unless census_same($p, $holders{$p});
           refuse("holder left recorded query group") unless group_of($p) eq $q;
-          kill $signal, $p;
+          $sent += kill $signal, $p;
         }
         select undef, undef, undef, 1;
       }
       refuse("holders STILL hold lock") if owned();
-      print "reaped exited query holders; worktree lock released\n";
+      recovered();
     ' "$OWNER" "$LOCK" || exit 2
     exit 0
     ;;
