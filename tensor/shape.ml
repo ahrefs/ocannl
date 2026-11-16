@@ -4742,6 +4742,9 @@ let refuse_unsized_kernels (update_step : update_step) =
 
     - One tensor's axes needing two components of a concatenation: no position has both, so
       lowering's segment blocks reach that access for none of them, at any extent but 1.
+    - One tensor's axes needing two alternatives of a fused product component ([a^b; a^c => b, c],
+      gh-ocannl-2198): concatenations sharing labels form connected components across the whole
+      spec, so [b] and [c] cannot be selected together either.
     - A result concatenation no component of which an operand names: nothing says what its segments
       hold. It was iterated like a plain axis, every cell taking the reduced operand, against what
       the components say everywhere else ([2^b => 2^b] skips the [2]). An operand concatenation no
@@ -4859,11 +4862,40 @@ let refuse_meaningless_concats (update_step : update_step) =
               | first :: second :: _ ->
                   refuse
                     [%string
-                      "one tensor's axes need both %{first} and %{second}, components of the \
-                       concatenated axis %{concat_text components}, but a position of that axis \
-                       lies in one segment, so no position has both and the operation would \
-                       compute nothing. Name one component per tensor (x ++ \"a^b => a\" takes a \
-                       segment; (x, y) ++^ \"a; b => a^b\" joins two)"]
+                      "one tensor's axes need both %{first} and %{second}, components of the same \
+                       concatenation %{concat_text components}, but a position of that axis lies \
+                       in one segment, so no position has both and the operation would compute \
+                       nothing. Name one component per tensor (x ++ \"a^b => a\" takes a segment; \
+                       (x, y) ++^ \"a; b => a^b\" joins two)"]
+              | _ -> ()));
+      (* Keep the per-concatenation check above for its more specific diagnostic; the fused check
+         subsumes its refusals. Concatenations sharing a label, even transitively and across slots,
+         select alternatives of one product component. Integer segments have no symbols and join
+         nothing. The accumulated components are disjoint, so a new concatenation merges every one
+         it meets. *)
+      let product_components =
+        List.fold (List.concat_map slots ~f:concats) ~init:[] ~f:(fun fused components ->
+            let labels = in_concats [ Concat_spec components ] in
+            let touching, separate =
+              List.partition_tf fused ~f:(fun other ->
+                  List.exists labels ~f:(List.mem other ~equal:String.equal))
+            in
+            let merged =
+              List.dedup_and_sort (labels @ List.concat touching) ~compare:String.compare
+            in
+            if List.is_empty merged then separate else merged :: separate)
+      in
+      List.iter product_components ~f:(fun labels ->
+          List.iter slots ~f:(fun axes ->
+              match List.filter (outside_concats axes) ~f:(List.mem labels ~equal:String.equal) with
+              | first :: second :: _ ->
+                  let component = String.concat ~sep:", " labels in
+                  refuse
+                    [%string
+                      "one tensor's axes need both %{first} and %{second}, alternatives of the \
+                       fused product component {%{component}}. Concatenations sharing labels \
+                       select one alternative of that component, so no position has both and the \
+                       operation would compute nothing. Name one alternative per tensor"]
               | _ -> ()));
       let operand_labels =
         List.concat_map operands ~f:(fun axes -> outside_concats axes @ in_concats axes)
