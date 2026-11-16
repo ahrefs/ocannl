@@ -56,3 +56,8 @@ a stored computation's dead loop replays nothing: true
 a stored computation's Tile_mma is opaque: true
 the write demand enters a scan body, counts a Tile_mma once as its accumulator, and skips expressions: true
 the write demand reports every binder in program order, a scan's with no axis: true
+Emitted visits each definition once, in the emission's order, then the operands: true
+the operand-order walk visits every occurrence where it stands: true
+Emitted refuses an emission order that omits one of the unit's scopes: true
+Emitted refuses a structural visit of discarded operands: true
+Emitted refuses a bare expression: true

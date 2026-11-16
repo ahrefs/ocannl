@@ -27,6 +27,7 @@ module Ops = Ir.Ops
 module Generated = Test_utils.Generated
 
 let () = Utils.settings.output_debug_files_in_build_directory <- true
+let () = Ir.C_syntax.scope_order_oracles_enabled () := true
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let () = Generated.init ~backend_name
 let facts = Context.backend_facts_of_name backend_name
@@ -72,12 +73,80 @@ let raw ~inputs ~outputs =
        (List.concat_map outputs ~f:(fun out ->
             List.map inputs ~f:(fun x -> set_at out (iter i) (get x [| iter i |])))))
 
-let run_row ~name ~inputs ~outputs llc =
+(* gh-ocannl-2213: the scope bodies of [o] as [Access_fold] walks them under [local_scopes], each
+   when its walk ends -- a body ends after the definitions nested in it -- paired with the line of
+   [source] holding its last assignment, for the scopes [source] still assigns ([C_syntax]'s exact
+   collapse renders a single-assignment scope as an expression). A local spells its scope id first
+   ([v<id>_], {!Ir.Low_level.scope_local_name}) and a declaration starts with its type, so a line
+   assigning it is one starting with the local and an [=]: a wrapped operand line can start with a
+   read of it. *)
+let body_ends local_scopes (o : LL.optimized) source =
+  let policy : LL.Access_fold.policy =
+    {
+      discarded_operands = Skip;
+      gated_operands = Visit;
+      dead_loops = Visit;
+      local_scopes;
+      guards = Ignore;
+      scan_implicit = Visit;
+    }
+  in
+  let after_scalar _ acc = function
+    | LL.Local_scope { id; _ } -> id.LL.scope_id :: acc
+    | _ -> acc
+  in
+  let visits =
+    List.rev
+      (LL.Access_fold.fold ~policy
+         ~hooks:{ (LL.Access_fold.hooks ()) with after_scalar }
+         ~init:[] o.llc)
+  in
+  let lines = List.mapi (String.split_lines source) ~f:(fun k l -> (k, String.lstrip l)) in
+  List.filter_map visits ~f:(fun id ->
+      let prefix = "v" ^ Int.to_string id ^ "_" in
+      let assigns l =
+        match String.chop_prefix l ~prefix with
+        | None -> false
+        | Some rest ->
+            let rest =
+              String.lstrip ~drop:(fun ch -> Char.is_alphanum ch || Char.equal ch '_') rest
+            in
+            String.is_prefix rest ~prefix:" = "
+      in
+      List.rev lines
+      |> List.find ~f:(fun (_, l) -> assigns l)
+      |> Option.map ~f:(fun (k, _) -> (id, k)))
+
+let in_text_order ends =
+  let ks = List.map ends ~f:snd in
+  List.is_sorted_strictly ks ~compare:Int.compare
+
+(* The fold's [Emitted] mode, under the oracle the routine compiled with, walks the scope bodies in
+   the order the kernel text holds them. [row_emission_order] is the row where the operand order
+   does not. *)
+let emission_order_claims ~name (o : LL.optimized) source =
+  match List.Assoc.find !(Ir.C_syntax.scope_order_oracles ()) name ~equal:String.equal with
+  | None -> p (name ^ ": the compile recorded its scope emission oracle") false
+  | Some oracle ->
+      let ends = body_ends (Emitted (LL.Scope_order.emission oracle)) o source in
+      (* A row whose definitions all left the text (hoisted, collapsed) claims nothing here. *)
+      if not (List.is_empty ends) then
+        p
+          (name ^ ": Access_fold's Emitted mode walks the scope bodies in the kernel's text order")
+          (in_text_order ends)
+
+let run_row_o ~name ~inputs ~outputs llc =
   List.iter (inputs @ outputs) ~f:materialize;
   let o = optimize_scoped ~name ~raw:(raw ~inputs ~outputs) llc in
   let seed = List.map inputs ~f:(fun x -> (x, xs)) @ List.map outputs ~f:(fun o -> (o, blank n)) in
   let got = execute ~name o ~seed ~read:outputs in
-  (got, Generated.main_logic (Generated.read name))
+  let source = Generated.main_logic (Generated.read name) in
+  emission_order_claims ~name o source;
+  (got, source, o)
+
+let run_row ~name ~inputs ~outputs llc =
+  let got, source, _ = run_row_o ~name ~inputs ~outputs llc in
+  (got, source)
 
 (* The kernel lines reading [x], and whether each sits inside an [if] or [else] block. *)
 let reads_of source x =
@@ -579,7 +648,38 @@ let row_value_test_nested () =
   p_none (name ^ ": no test ahead of the statement reads x where only the value test protects it")
     ahead ~f:(fun l -> String.is_substring l ~substring:far_text)
 
+(* gh-ocannl-2213: [(i < 1 ? a + c + d : 0) + b], the scopes minted in the order [a], [c], [d], [b],
+   [c]'s body reading [d]'s local. The renderer emits the unconditional [b] first, then the
+   conditional ones by ascending id except that [c] follows [d], the definition it reads: [b], [a],
+   [d], [c], where the operand order is [a], [c], [d], [b]. *)
+let row_emission_order () =
+  let name = "was_emission_order" in
+  let x = mk "was_emission_order_x" and out = mk ~dims:[| n |] "was_emission_order_out" in
+  let llc =
+    loop (fun i ->
+        let _, a = sum_scope x ~at:(off_at ~pass:0 i) in
+        let vc = local_node () in
+        let c_id = LL.get_scope vc in
+        let d_id, d = sum_scope x ~at:(off_at ~pass:0 i) in
+        let cs =
+          scope_of c_id
+            (seq
+               (LL.Set_local (c_id, LL.Get_local d_id))
+               (LL.Set_local (c_id, add (LL.Get_local c_id) (get x [| aff [ (far, i) ] 0 |]))))
+        in
+        let _, b = sum_scope x ~at:(in_range i) in
+        set_at out (iter i) (add (where_ (lt (embed i) (ic 1)) (add a (add cs d)) (c 0.)) b))
+  in
+  let got, source, o = run_row_o ~name ~inputs:[ x ] ~outputs:[ out ] llc in
+  values name got [ [| (4. *. sum2 0) +. xs.(0); sum2 1; sum2 2; sum2 3 |] ];
+  (* The negative control: the operand-order walk is not the kernel's order. *)
+  let operand = body_ends Visit o source in
+  p
+    (name ^ ": the operand-order walk visits the same four bodies out of the kernel's order")
+    (List.length operand = 4 && not (in_text_order operand))
+
 let () =
+  row_emission_order ();
   row_then ();
   row_else ();
   row_nested ();

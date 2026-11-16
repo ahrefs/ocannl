@@ -617,7 +617,29 @@ files.
   its known ones and refuses whatever else `direct_write` calls a write, as `trace_node_facts` does.
   Rewriters, affine path construction, `check_and_store_virtual`'s legality walk and cleanup's
   placement-dependent survival checks retain their own semantics; do not infer execution order
-  among hoisted sibling scope definitions from scalar source order.
+  among hoisted sibling scope definitions from scalar source order: an analysis that needs it walks
+  the `Emitted` mode (next bullet).
+
+- `Access_fold`'s `local_scopes = Emitted e` walks scope definitions in the order
+  `C_syntax.pp_local_defs` emits them (gh-ocannl-2213). The order lives in one place,
+  `Low_level.Scope_order.plan` (dedup, occurrence and read guards, propagation through
+  `local_reads`, the unconditional/conditional partition, ascending ids with read dependencies
+  first, consecutive equal-condition groups); the renderer renders it and `Scope_order.emission`
+  hands it to the fold. It is NOT a function of the IR alone: whether an arm's definitions are
+  conditional depends on whether the backend blends the select (`blend_for`: the dialect's blend
+  syntax at that precision, `speculable_select`, GPU NaN literals; an integer precision always
+  short-circuits) and on the precision each scalar renders at, which is also part of a gate
+  condition. So `e` comes from the backend's `Scope_order.oracle` (`C_syntax.scope_order_oracle`;
+  tests reach a compiled routine's through `C_syntax.scope_order_oracles`). Conditions are keyed by
+  IR (`Select`/`Gate` with the precision rendered at), not rendered text. Two derivations meet:
+  the renderer's entries, collected by `pp_scalar` as it renders, and `Scope_order.entries`, which
+  follows the same descent over the IR; `pp_local_defs` asserts on every statement with
+  definitions that their plans and the oracle's root precisions agree, so a drift fails the
+  compile loudly. Under `Emitted`, each top-level scope of a rendering unit is shown once, at its
+  definition position (with `placement`, `gated` for a conditional one), then the operands with
+  those scopes as leaves; it refuses `discarded_operands = Visit` and `fold_scalar`.
+  `where_arm_scopes` checks the walk against kernel text on every row, with an operand-order
+  negative control (`was_emission_order`).
 
 - `Indexing.affine` is the construction boundary for affine indices (gh-ocannl-774): its private
   payload preserves pattern matching while forcing coalescing and `Fixed_idx`/`Iterator`

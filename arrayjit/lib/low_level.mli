@@ -316,7 +316,22 @@ and carried = { prev : scope_id; next : scope_id; init : scalar_t }
     rather than simulating simultaneous assignment. [implicit] identifies synthetic statements and
     their descendants; [scope_depth] counts Local_scope bodies; [loops] lists the enclosing
     [For_loop] / [Scan_loop] binders, innermost first (a scan's init expressions sit outside its
-    binder, its body and rotations inside). *)
+    binder, its body and rotations inside).
+
+    [local_scopes = Emitted e] (gh-ocannl-2213) visits scope bodies in the order the renderer emits
+    them instead of operand order. [C_syntax.pp_local_defs] emits a statement's top-level scope
+    definitions ahead of the statement -- the unconditional ones, then the conditional ones under
+    their [if]s -- in an order decided by {!Scope_order.plan}, and that order depends on the backend
+    (which selects blend) and on the precision each scalar renders at, so it is [e]'s to give:
+    {!Scope_order.emission} over the backend's {!Scope_order.oracle}. At each rendering unit -- a
+    [Set], [Set_local] (a scan's init included), [Set_from_vec], an [If]'s condition, and a
+    [Set_dynamic]'s index and value together -- the fold visits each top-level scope ONCE at its
+    definition position, in [e]'s order: [scalar] and [after_scalar] see the [Local_scope] node
+    there, with [placement] set, around its body. Then it walks the unit's operands in operand
+    order, where a top-level [Local_scope] is a leaf no hook is shown again (its value is a read of
+    the local). A definition under a condition is [gated]. [Emitted] refuses
+    [discarded_operands = Visit] (an operand the renderer never renders has no emission position)
+    and {!fold_scalar} (a bare expression is no rendering unit). *)
 module Access_fold : sig
   type visit = Visit | Skip
   type guards = Track | Ignore
@@ -329,11 +344,24 @@ module Access_fold : sig
     axis : axis_type option;  (** [None]: a [Scan_loop]'s index. *)
   }
 
+  type placement =
+    | Unconditional
+    | Conditional of int
+        (** Emitted under the [if] of the statement's [n]th conditional group, counted from 0:
+            definitions of one group share its block. *)
+
+  type emission = { order : t -> scalar_t list -> (int * placement) list }
+  (** [order unit roots]: the scope ids of the top-level [Local_scope]s of the rendering unit
+      [unit], whose scalars are [roots] (in operand order), in emission order with their placements.
+  *)
+
+  type scopes = Visit | Skip | Emitted of emission
+
   type policy = {
     discarded_operands : visit;
     gated_operands : visit;
     dead_loops : visit;
-    local_scopes : visit;
+    local_scopes : scopes;
     guards : guards;
     scan_implicit : visit;
   }
@@ -348,6 +376,9 @@ module Access_fold : sig
     scope_depth : int;
     implicit : implicit;
     loops : binder list;
+    placement : placement option;
+        (** Under [Emitted]: the placement of the innermost scope definition the walk is at or
+            inside. *)
   }
 
   type 'a descent = Continue of 'a | Prune of 'a
@@ -367,7 +398,7 @@ module Access_fold : sig
   val fold : policy:policy -> hooks:'a hooks -> init:'a -> t -> 'a
 
   val fold_scalar : policy:policy -> hooks:'a hooks -> init:'a -> scalar_t -> 'a
-  (** [fold] entered at an expression, in the top-level context. *)
+  (** [fold] entered at an expression, in the top-level context. Not under [Emitted]. *)
 end
 
 val direct_write : t -> Tnode.t option
@@ -1851,6 +1882,106 @@ val clear_analysis_cache : unit -> unit
 val local_reads : t -> int list
 (** The scope locals a statement reads when rendered, by [scope_id], ascending: at any depth, locals
     bound inside the statement included, a projection's discarded operand excluded. *)
+
+(** gh-ocannl-2213: the order a statement's scope definitions are emitted in, in one place for the
+    renderer and the analyses. [C_syntax.pp_local_defs] renders {!plan} of the entries its
+    [pp_scalar] collects; [Access_fold]'s [Emitted] mode walks {!order} of {!plan} of the entries
+    {!entries} derives from the IR. The two derivations meet the same backend facts through an
+    {!oracle}, and the renderer asserts on every statement it renders that they agree
+    ([C_syntax.pp_local_defs]' consistency check), so they cannot drift silently.
+
+    The emission order (gh-ocannl-2145, gh-ocannl-1895): the unconditional definitions, ascending by
+    scope id except that a definition follows the sibling definitions its body reads; then the
+    conditional ones' zero-initialized declarations, ascending; then the conditional bodies in one
+    such dependency order, consecutive ones under the same conditions sharing one [if]. A definition
+    runs under the disjunction of the conditions of its occurrences, of the reads of its local at
+    operand position and, to a fixpoint, of the definitions reading it.
+
+    A condition is keyed by IR, not by its rendered text: the condition and the precision it renders
+    at for a short-circuiting [Where] ({!Select}), the operator, its first operand and its
+    evaluation precision for a short-circuiting gate ({!Gate}, whose test is that the second operand
+    matters). Two conditions keyed alike are one value: a condition reads no scope local (the
+    [cond_defs] rule of {!arms}), and the bodies run before it write only their own locals. *)
+module Scope_order : sig
+  type key =
+    | Select of { cond : scalar_t; prec : Ops.prec }
+    | Gate of { op : Ops.binop; prec : Ops.prec; first : scalar_t }
+
+  val equal_key : key -> key -> bool
+
+  type 'p lit = { key : key; holds : bool; anywhere : bool; payload : 'p }
+  (** One condition an occurrence is evaluated under: [holds] in the then-arm, not in the else-arm.
+      [anywhere]: the condition can be evaluated in any iteration -- it reads no memory and no
+      local, and divides nothing. [payload] is the caller's (the renderer's rendered test); equality
+      ignores it. *)
+
+  type ('p, 'd) entry = { scope : int; guard : 'p lit list; def : 'd option }
+  (** A scope's definition ([def = Some _]) or, with [def = None], a read of its local at operand
+      position, under [guard], outermost first. *)
+
+  val equal_lit : 'p lit -> 'p lit -> bool
+  val evaluable_anywhere : scalar_t -> bool
+
+  val arms :
+    key:key ->
+    payload:'p ->
+    v1:scalar_t ->
+    cond_defs:('p, 'd) entry list ->
+    ('p, 'd) entry list ->
+    ('p, 'd) entry list ->
+    ('p, 'd) entry list
+  (** The entries of a short-circuiting [Where]'s arms, under its condition [v1] (keyed [key]),
+      whose own entries are [cond_defs]. A condition reading a scope local guards nothing: the arms
+      keep only their conditions evaluable anywhere. *)
+
+  val gate :
+    key:key ->
+    payload:(unit -> 'p) ->
+    v1:scalar_t ->
+    cond_defs:('p, 'd) entry list ->
+    ('p, 'd) entry list ->
+    ('p, 'd) entry list
+  (** The entries of a short-circuiting gate's second operand: its definitions that run under a
+      [Where]'s condition keep that condition behind the gate's test. *)
+
+  type ('p, 'd) plan = {
+    unconditional : (int * 'd) list;  (** In emission order. *)
+    conditional : (int * 'd) list;  (** Ascending: the order of their zeroed declarations. *)
+    groups : ('p lit list list * (int * 'd) list) list;
+        (** In emission order: each group's conditions (a disjunction of conjunctions) and its
+            definitions. *)
+  }
+
+  val plan : reads:('d -> int list) -> ('p, 'd) entry list -> ('p, 'd) plan
+  val order : ('p, 'd) plan -> (int * Access_fold.placement) list
+
+  val same_plan : ('p, 'd) plan -> ('q, 'e) plan -> bool
+  (** Equal orders, placements, declaration orders and conditions, payloads aside. *)
+
+  type oracle = {
+    short_circuits : prec:Ops.prec -> scalar_t -> bool;
+        (** Whether a [Where] or a [Relu_gate] / [Satur01_gate] node rendered at [prec]
+            short-circuits rather than blending its arms (the renderer's [blend_for]); [true] at
+            every integer precision. *)
+    comp_prec : Ops.prec -> Ops.prec;
+    int_math_prec : Ops.prec;
+        (** The float precision a float-valued subexpression at an integer compute precision is
+            computed in. *)
+    root_precs : t -> Ops.prec list;
+        (** The precision each scalar of a rendering unit renders at, in [Access_fold]'s root order:
+            a [Set_dynamic]'s index, then its value. *)
+  }
+  (** The backend facts the emission order reads: [C_syntax]'s [scope_order_oracle]. *)
+
+  val entries : oracle -> Ops.prec -> scalar_t -> (unit, int list Lazy.t) entry list
+  (** The entries of a scalar rendered at a precision: the renderer's own descent. *)
+
+  val statement_entries : oracle -> (Ops.prec * scalar_t) list -> (unit, int list Lazy.t) entry list
+  val derived_plan : oracle -> (Ops.prec * scalar_t) list -> (unit, int list Lazy.t) plan
+
+  val emission : oracle -> Access_fold.emission
+  (** [Access_fold]'s [Emitted] mode under [oracle]. *)
+end
 
 val reads_scope_before_set : scope_id -> t -> bool
 (** [reads_scope_before_set id body] returns [true] if [id] is read (via [Get_local]) before the

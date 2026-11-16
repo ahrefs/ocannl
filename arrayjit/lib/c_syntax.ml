@@ -153,6 +153,19 @@ type mma_rendering =
   | Mma_scalar_fallback
 [@@deriving sexp_of, compare, equal]
 
+(* gh-ocannl-2213: the test seam handing a test the scope emission oracle its routine compiled with,
+   so the test walks [Access_fold]'s [Emitted] mode with the backend's own facts. Off unless a test
+   turns it on: each entry holds its procedure family's analyses. *)
+let scope_order_oracles_enabled =
+  let key : bool ref Stdlib.Domain.DLS.key = Stdlib.Domain.DLS.new_key (fun () -> ref false) in
+  fun () -> Stdlib.Domain.DLS.get key
+
+let scope_order_oracles =
+  let key : (string * Low_level.Scope_order.oracle) list ref Stdlib.Domain.DLS.key =
+    Stdlib.Domain.DLS.new_key (fun () -> ref [])
+  in
+  fun () -> Stdlib.Domain.DLS.get key
+
 let mma_census_enabled =
   let key : bool ref Stdlib.Domain.DLS.key = Stdlib.Domain.DLS.new_key (fun () -> ref false) in
   fun () -> Stdlib.Domain.DLS.get key
@@ -3349,13 +3362,10 @@ let with_compiler_options ~compiler ~options ~enrich compile =
     let exn = Option.value (enrich exn ~suffix) ~default:exn in
     Stdlib.Printexc.raise_with_backtrace exn backtrace
 
-type guard_lit = { key : string; test : PPrint.document; holds : bool; anywhere : bool }
-(** One condition a scope definition's execution is under (gh-ocannl-2145): the rendered condition
-    [test] of a short-circuiting [Where], and whether the definition sits in its then-arm ([holds])
-    or its else-arm. [key] is [test]'s text: a condition is pure and the bodies run before it write
-    only their own locals, so two conditions spelled alike in one statement agree. A condition
-    reading a scope local is never one: see {!guard_arms}. [anywhere]: [test] can be evaluated in
-    any iteration -- it reads no memory and no local, and divides nothing. *)
+type guard_lit = PPrint.document Low_level.Scope_order.lit
+(** One condition a scope definition's execution is under (gh-ocannl-2145): a short-circuiting
+    [Where]'s or gate's, keyed by IR ({!Low_level.Scope_order.key}, gh-ocannl-2213), with its
+    rendered test as the payload. *)
 
 type scope_def = {
   reads : int list Lazy.t;  (** The locals the body reads. *)
@@ -3366,90 +3376,14 @@ type scope_def = {
   body : PPrint.document;
 }
 
-type local_def = { scope : int; guard : guard_lit list; def : scope_def option }
+type local_def = (PPrint.document, scope_def) Low_level.Scope_order.entry
 (** A scope's definition, emitted ahead of the statement reading it ({!C_syntax.pp_local_defs}), or
     with [def = None] a read of the local at operand position ([Get_local]): the local's [scope] id,
     and the conditions this occurrence is evaluated under, outermost first. A definition runs under
     the conditions every occurrence and every read of its local shares. *)
 
-let has_definitions (defs : local_def list) = List.exists defs ~f:(fun d -> Option.is_some d.def)
-
-let equal_lit (x : guard_lit) (y : guard_lit) =
-  String.equal x.key y.key && Bool.equal x.holds y.holds
-
-let equal_guard = List.equal equal_lit
-
-(* gh-ocannl-2145: the conditions a definition runs under, as a disjunction of [paths] (each a
-   conjunction, outermost first), simplified: a path another one is a prefix of is absorbed, and two
-   paths differing only in their last condition's polarity merge into their common prefix. [[[]]] is
-   unconditional. *)
-let rec normalize_guards (paths : guard_lit list list) =
-  let paths =
-    List.fold paths ~init:[] ~f:(fun acc p ->
-        if List.mem acc p ~equal:equal_guard then acc else acc @ [ p ])
-  in
-  let rec is_prefix a b =
-    match (a, b) with
-    | [], _ -> true
-    | x :: a, y :: b -> equal_lit x y && is_prefix a b
-    | _, [] -> false
-  in
-  let absorbed =
-    List.filter paths ~f:(fun p ->
-        not (List.exists paths ~f:(fun q -> (not (equal_guard p q)) && is_prefix q p)))
-  in
-  let complementary p q =
-    match (List.rev p, List.rev q) with
-    | x :: rp, y :: rq ->
-        String.equal x.key y.key && Bool.equal x.holds (not y.holds) && equal_guard rp rq
-    | _ -> false
-  in
-  match
-    List.find_map absorbed ~f:(fun p ->
-        Option.map (List.find absorbed ~f:(complementary p)) ~f:(fun q -> (p, q)))
-  with
-  | None -> absorbed
-  | Some (p, q) ->
-      let prefix = List.drop_last_exn p in
-      normalize_guards
-        (prefix :: List.filter absorbed ~f:(fun r -> not (equal_guard r p || equal_guard r q)))
-
-(* gh-ocannl-2145: [d_then] and [d_else], the entries of a short-circuiting [Where]'s arms, under
-   their condition [cond], whose own entries are [cond_defs]. A condition reading a scope local -- a
-   test of a computed value, never one of the index guards the inliner and lowering mint -- guards
-   nothing: its arms' definitions stay under the conditions around it. Testing it ahead of the
-   statement would make the definitions' order depend on their tests' reads too, and CSE sharing
-   makes those cycle (Codex review of the gh-ocannl-2145 PR, rounds 2-6). *)
-let rec evaluable_anywhere (s : Low_level.scalar_t) =
-  match s with
-  | Constant _ | Constant_bits _ | Embed_index _ -> true
-  | Get _ | Get_dynamic _ | Get_merge_buffer _ | Get_local _ | Local_scope _ -> false
-  | Binop ((Ops.Div | Ops.Mod), _, _) -> false
-  | Binop (_, (a, _), (b, _)) -> evaluable_anywhere a && evaluable_anywhere b
-  | Ternop (_, (a, _), (b, _), (c, _)) ->
-      evaluable_anywhere a && evaluable_anywhere b && evaluable_anywhere c
-  | Unop (_, (a, _)) -> evaluable_anywhere a
-
-(* Under a test that guards nothing, the entries keep only the nested conditions that can be tested
-   in any iteration: one reading memory may rely on the enclosing test that no longer precedes it
-   (Codex review of the gh-ocannl-2145 PR, round 7). *)
-let only_anywhere entries =
-  List.map entries ~f:(fun d ->
-      { d with guard = List.filter d.guard ~f:(fun (l : guard_lit) -> l.anywhere) })
-
-let guard_arms ~(cond : PPrint.document) ~(v1 : Low_level.scalar_t) ~(cond_defs : local_def list)
-    d_then d_else =
-  if List.is_empty d_then && List.is_empty d_else then []
-  else if not (List.is_empty cond_defs) then only_anywhere (d_then @ d_else)
-  else
-    let buf = Buffer.create 64 in
-    PPrint.ToBuffer.compact buf cond;
-    let key = Buffer.contents buf in
-    let anywhere = evaluable_anywhere v1 in
-    let under holds =
-      List.map ~f:(fun d -> { d with guard = { key; test = cond; holds; anywhere } :: d.guard })
-    in
-    under true d_then @ under false d_else
+let has_definitions (defs : local_def list) =
+  List.exists defs ~f:(fun (d : local_def) -> Option.is_some d.def)
 
 module C_syntax (B : C_syntax_config) = struct
   (* The backend's renderings must implement the operand-evaluation contract that
@@ -3757,23 +3691,32 @@ module C_syntax (B : C_syntax_config) = struct
      [Where]'s condition is never tested where the operator skipped it. Its other definitions still
      run ahead of the statement. *)
   let gate_entries prec op ~v1 ~d1 e1 d2 =
-    if not (List.exists d2 ~f:(fun d -> not (List.is_empty d.guard))) then d2
-    else if not (List.is_empty d1) then (* As in {!guard_arms}. *) only_anywhere d2
-    else
+    let payload () =
       let open PPrint in
       let lit c = string (B.constant_literal prec c) in
-      let test =
-        parens (B.binop_syntax prec op e1 (lit 1.))
-        ^^ string " != "
-        ^^ parens (B.binop_syntax prec op e1 (lit 0.))
-      in
-      let buf = Buffer.create 64 in
-      PPrint.ToBuffer.compact buf test;
-      let lit =
-        { key = Buffer.contents buf; test; holds = true; anywhere = evaluable_anywhere v1 }
-      in
-      List.map d2 ~f:(fun d ->
-          if List.is_empty d.guard then d else { d with guard = lit :: d.guard })
+      parens (B.binop_syntax prec op e1 (lit 1.))
+      ^^ string " != "
+      ^^ parens (B.binop_syntax prec op e1 (lit 0.))
+    in
+    Low_level.Scope_order.gate ~key:(Gate { op; prec; first = v1 }) ~payload ~v1 ~cond_defs:d1 d2
+
+  (* gh-ocannl-2145: a short-circuiting select's arm definitions run under its condition [e1],
+     rendered at [cond_prec]. *)
+  let guard_arms ~cond:e1 ~cond_prec ~v1 ~cond_defs d2 d3 =
+    Low_level.Scope_order.arms
+      ~key:(Select { cond = v1; prec = cond_prec })
+      ~payload:e1 ~v1 ~cond_defs d2 d3
+
+  (* gh-ocannl-2213: whether a [Where] or a blendable gate at [prec] short-circuits -- the one
+     decision [pp_scalar_op_at] renders by and {!scope_order_oracle} hands the scope emission
+     order. *)
+  let short_circuits ~prec (node : Low_level.scalar_t) =
+    match node with
+    | Ternop (Ops.Where, (v1, _), (v2, _), (v3, _)) ->
+        Option.is_none (blend_for prec ~cond:v1 ~arms:[ (v2, prec); (v3, prec) ])
+    | Binop ((Ops.Relu_gate | Ops.Satur01_gate), (v1, _), (v2, _)) ->
+        Option.is_none (blend_for prec ~cond:v1 ~arms:[ (v2, prec) ])
+    | _ -> true
 
   let pp_scalar_op_at ~operand (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
       local_def list * PPrint.document =
@@ -3800,9 +3743,8 @@ module C_syntax (B : C_syntax_config) = struct
            blend evaluates both arms, so they stay with the condition's. *)
         let defs =
           match op with
-          | Ops.Where when Option.is_none (blend_for prec ~cond:v1 ~arms:[ (v2, prec); (v3, prec) ])
-            ->
-              d1 @ guard_arms ~cond:e1 ~v1 ~cond_defs:d1 d2 d3
+          | Ops.Where when short_circuits ~prec vcomp ->
+              d1 @ guard_arms ~cond:e1 ~cond_prec:ps.(0) ~v1 ~cond_defs:d1 d2 d3
           | _ -> List.concat [ d1; d2; d3 ]
         in
         let expr = ternop_expr prec op ~v1 ~v2 ~v3 e1 e2 e3 in
@@ -3827,8 +3769,7 @@ module C_syntax (B : C_syntax_config) = struct
             let d2, e2 = operand ps.(1) v2 in
             let blended =
               match op with
-              | Ops.Relu_gate | Ops.Satur01_gate ->
-                  Option.is_some (blend_for prec ~cond:v1 ~arms:[ (v2, prec) ])
+              | Ops.Relu_gate | Ops.Satur01_gate -> not (short_circuits ~prec vcomp)
               | _ -> false
             in
             let defs =
@@ -3950,7 +3891,7 @@ module C_syntax (B : C_syntax_config) = struct
             let d2, e2 = render v2 in
             let d3, e3 = render v3 in
             (* A select at an integer precision short-circuits (gh-ocannl-2145). *)
-            ( d1 @ guard_arms ~cond:e1 ~v1 ~cond_defs:d1 d2 d3,
+            ( d1 @ guard_arms ~cond:e1 ~cond_prec:v1_prec ~v1 ~cond_defs:d1 d2 d3,
               ternop_expr ~blend:false arms_prec op ~v1 ~v2 ~v3 e1 e2 e3 )
         | Follows_operands, _ when fv v1 || fv v2 || fv v3 ->
             let d1, e1 = widen v1 in
@@ -4848,71 +4789,66 @@ module C_syntax (B : C_syntax_config) = struct
      unconditional definitions render as they always did; then the conditional ones'
      zero-initialized declarations; then the conditional bodies in one dependency order, each run of
      them under the same conditions in an [if] over those conditions. A condition reads no scope
-     local ({!guard_arms}), so the bodies' reads are the only order to keep. *)
-  let pp_local_defs (local_defs : local_def list) =
+     local ({!guard_arms}), so the bodies' reads are the only order to keep. The order is
+     {!Low_level.Scope_order.plan}'s (gh-ocannl-2213), which [Access_fold]'s [Emitted] mode walks
+     too; this renders it. *)
+  (* gh-ocannl-2213: the backend facts the scope emission order reads, for [Access_fold]'s
+     [Emitted] mode ({!Low_level.Scope_order.emission}): this functor's own select decision and
+     precisions, and the precision each rendering unit's scalars render at in [pp_ll] -- before
+     rendering, with the procedure family's accumulator census. *)
+  let scope_order_oracle : Low_level.Scope_order.oracle =
+    let store llsc (tn : Tn.t) = fst (store_precs ~store_prec:(Lazy.force tn.storage_prec) llsc) in
+    {
+      short_circuits;
+      comp_prec;
+      int_math_prec;
+      root_precs =
+        (function
+        | Low_level.Set { tn; llsc; _ } -> [ store llsc tn ]
+        | Set_dynamic { tn; dyn_value = _, iprec; llsc; _ } -> [ iprec; store llsc tn ]
+        | Set_from_vec { tn; vec_unop; arg = _, arg_prec; _ } ->
+            [
+              (if Ops.is_homogeneous_prec_vec_unop vec_unop then Lazy.force tn.storage_prec
+               else arg_prec);
+            ]
+        | Set_local (id, value) ->
+            [ set_local_value_prec ~scope_prec:(scope_prec_in ~accum_scope_ids id) id value ]
+        | If { cond = _, cprec; _ } -> [ comp_prec cprec ]
+        | Noop | Comment _ | Staged_compilation _ | Seq _ | For_loop _ | Scan_loop _ | Zero_out _
+        | Declare_local _ | Workgroup_barrier | Tile_mma _ ->
+            []);
+    }
+
+  (* gh-ocannl-2213: the scope emission order the renderer renders ([plan], of the entries
+     [pp_scalar] collected) is the one {!scope_order_oracle} derives from the IR, for the statement
+     [stmt] (when the rendering is [pp_ll]'s own) with scalars [roots] at their rendered precisions:
+     what [Access_fold]'s [Emitted] mode walks is checked against what renders, on every statement
+     with definitions. A mismatch is an internal inconsistency: fix the derivation
+     ({!Low_level.Scope_order.entries}) or the oracle. *)
+  let check_scope_order ~stmt ~roots (plan : (_, _) Low_level.Scope_order.plan) =
+    if not (List.is_empty plan.unconditional && List.is_empty plan.conditional) then (
+      let derived = Low_level.Scope_order.derived_plan scope_order_oracle roots in
+      if not (Low_level.Scope_order.same_plan plan derived) then
+        invalid_arg
+          "C_syntax.pp_local_defs: the scope emission order Low_level.Scope_order derives from the \
+           IR differs from the one rendered (gh-ocannl-2213)";
+      Option.iter stmt ~f:(fun stmt ->
+          let precs = scope_order_oracle.root_precs stmt in
+          if not (List.equal Ops.equal_prec precs (List.map roots ~f:fst)) then
+            invalid_arg
+              "C_syntax.pp_local_defs: scope_order_oracle's root precisions differ from the ones \
+               rendered (gh-ocannl-2213)"))
+
+  let pp_local_defs ?check (local_defs : local_def list) =
     let open PPrint in
-    let defs =
-      List.filter_map local_defs ~f:(fun d -> Option.map d.def ~f:(fun s -> (d.scope, s)))
-    in
-    let sorted = List.dedup_and_sort defs ~compare:(fun (a, _) (b, _) -> Int.compare a b) in
-    let by_scope = Hashtbl.create (module Int) in
-    List.iter sorted ~f:(fun (scope, def) -> Hashtbl.set by_scope ~key:scope ~data:def);
-    (* Each definition's conditions, a disjunction ({!normalize_guards}). *)
-    let guards = Hashtbl.create (module Int) in
-    List.iter local_defs ~f:(fun d ->
-        if Hashtbl.mem by_scope d.scope then Hashtbl.add_multi guards ~key:d.scope ~data:d.guard);
-    Hashtbl.map_inplace guards ~f:normalize_guards;
-    let equal_paths a b =
-      List.length a = List.length b && List.for_all a ~f:(fun p -> List.mem b p ~equal:equal_guard)
-    in
-    let propagate () =
-      let changed = ref true in
-      while !changed do
-        changed := false;
-        List.iter sorted ~f:(fun (scope, def) ->
-            let g = Hashtbl.find_exn guards scope in
-            List.iter (Lazy.force def.reads) ~f:(fun r ->
-                match Hashtbl.find guards r with
-                | Some gr when r <> scope ->
-                    let gr' = normalize_guards (gr @ g) in
-                    if not (equal_paths gr gr') then (
-                      Hashtbl.set guards ~key:r ~data:gr';
-                      changed := true)
-                | _ -> ()))
-      done
-    in
-    propagate ();
-    let unconditional, conditional =
-      List.partition_tf sorted ~f:(fun (s, _) ->
-          match Hashtbl.find_exn guards s with [ [] ] -> true | _ -> false)
-    in
-    (* The definitions [group], in ascending scope id except that one follows the sibling
-       definitions of [group] its body reads (gh-ocannl-1895). *)
-    let ordered group ~doc =
-      let in_group = Hash_set.of_list (module Int) (List.map group ~f:fst) in
-      let emitted = Hash_set.create (module Int) in
-      let rec emit docs (scope, def) =
-        if Hash_set.mem emitted scope then docs
-        else (
-          Hash_set.add emitted scope;
-          let siblings =
-            List.filter_map (Lazy.force def.reads) ~f:(fun r ->
-                if Hash_set.mem in_group r then
-                  Option.map (Hashtbl.find by_scope r) ~f:(fun d -> (r, d))
-                else None)
-          in
-          doc scope def :: List.fold siblings ~init:docs ~f:emit)
-      in
-      List.rev (List.fold group ~init:[] ~f:emit)
-    in
-    let root =
-      match unconditional with
-      | [ (_, def) ] -> [ def.decl ^^ hardline ^^ def.body ]
-      | _ -> ordered unconditional ~doc:(fun _ def -> def.decl ^^ hardline ^^ def.body)
-    in
+    let plan = Low_level.Scope_order.plan ~reads:(fun d -> Lazy.force d.reads) local_defs in
+    Option.iter check ~f:(fun (stmt, roots) -> (check_scope_order ~stmt ~roots) plan);
+    let root = List.map plan.unconditional ~f:(fun (_, def) -> def.decl ^^ hardline ^^ def.body) in
     let block doc = lbrace ^^ nest 2 (hardline ^^ doc) ^^ hardline ^^ rbrace in
     let literal ~alone (l : guard_lit) =
-      if not l.holds then string "!" ^^ parens l.test else if alone then l.test else parens l.test
+      if not l.holds then string "!" ^^ parens l.payload
+      else if alone then l.payload
+      else parens l.payload
     in
     let test paths =
       match paths with
@@ -4922,27 +4858,13 @@ module C_syntax (B : C_syntax_config) = struct
             (List.map paths ~f:(fun path ->
                  parens (separate (string " && ") (List.map path ~f:(literal ~alone:false)))))
     in
-    (* The conditional definitions in one dependency order across all their conditions -- a body
-       reads only definitions run at least as often as itself, wherever their conditions place them
-       -- and consecutive ones under the same conditions share one [if]. A conjunction tests its
-       conditions outermost first, so [&&] evaluates each only where the enclosing ones hold. *)
-    let groups =
-      List.fold
-        (ordered conditional ~doc:(fun scope def -> (Hashtbl.find_exn guards scope, def)))
-        ~init:[]
-        ~f:(fun acc (paths, def) ->
-          match acc with
-          | (paths', defs) :: rest when equal_paths paths paths' -> (paths', def :: defs) :: rest
-          | _ -> (paths, [ def ]) :: acc)
-      |> List.rev_map ~f:(fun (paths, defs) -> (paths, List.rev defs))
-    in
     let conditional_docs =
-      if List.is_empty conditional then []
+      if List.is_empty plan.conditional then []
       else
-        List.map conditional ~f:(fun (_, def) -> def.zeroed_decl)
-        @ List.map groups ~f:(fun (paths, defs) ->
+        List.map plan.conditional ~f:(fun (_, def) -> def.zeroed_decl)
+        @ List.map plan.groups ~f:(fun (paths, defs) ->
             string "if (" ^^ test paths ^^ string ") "
-            ^^ block (separate hardline (List.map defs ~f:(fun def -> def.body))))
+            ^^ block (separate hardline (List.map defs ~f:(fun (_, def) -> def.body))))
     in
     separate hardline (root @ conditional_docs)
 
@@ -6726,7 +6648,7 @@ module C_syntax (B : C_syntax_config) = struct
                   (pp_scalar ctx) prec llsc)
             in
             let val_doc = wrap_conversion narrowing val_doc in
-            let local_defs = pp_local_defs local_defs in
+            let local_defs = pp_local_defs ~check:(Some c, [ (prec, llsc) ]) local_defs in
             let offset_doc =
               (pp_pipelined_rotation ctx) ~is_write:true tn ^^ (pp_tn_offset ctx) tn (idcs, dims)
             in
@@ -6811,7 +6733,9 @@ module C_syntax (B : C_syntax_config) = struct
         let offset_doc = pp_array_offset_dyn (idcs, dims) ~dyn_axis ~dyn_idx_doc in
         let val_defs, val_doc = (pp_scalar ctx) prec llsc in
         let val_doc = wrap_conversion narrowing val_doc in
-        let local_defs = pp_local_defs (dyn_defs @ val_defs) in
+        let local_defs =
+          pp_local_defs ~check:(Some c, [ (iprec, iv); (prec, llsc) ]) (dyn_defs @ val_defs)
+        in
         let assignment =
           group
             (ident_doc ^^ brackets offset_doc ^^ string " ="
@@ -6888,7 +6812,7 @@ module C_syntax (B : C_syntax_config) = struct
           else arg_prec
         in
         let local_defs, arg_doc = (pp_scalar ctx) arg_prec arg in
-        let local_defs = pp_local_defs local_defs in
+        let local_defs = pp_local_defs ~check:(Some c, [ (arg_prec, arg) ]) local_defs in
         (* Generate the function call *)
         let result_doc = B.vec_unop_syntax prec vec_unop arg_doc in
         (* The vector temporary always has the full 128-bit block width: a tail store ([length] <
@@ -7013,7 +6937,17 @@ module C_syntax (B : C_syntax_config) = struct
         let value_doc =
           wrap_conversion (B.convert_precision ~from:value_prec ~to_:prec) value_doc
         in
-        let local_defs = pp_local_defs local_defs in
+        (* A scope the localized reductions mint while rendering is in no tree the fold walks: only
+           the derivation is checked for it, not the oracle's census-based precision. *)
+        let minted =
+          Hash_set.mem ctx.accum_scope_ids id.Low_level.scope_id
+          && not (Hash_set.mem accum_scope_ids id.Low_level.scope_id)
+        in
+        let local_defs =
+          pp_local_defs
+            ~check:((if minted then None else Some c), [ (value_prec, value) ])
+            local_defs
+        in
         let assignment = pp_scope_id id ^^ string " = " ^^ value_doc ^^ semi in
         if Utils.debug_log_from_routines () then
           let new_var = string log_set_local_temporary in
@@ -7670,7 +7604,11 @@ module C_syntax (B : C_syntax_config) = struct
             (not (List.is_empty controlled_scopes))
             (fun () -> (pp_scalar ctx) (comp_prec cprec) c)
         in
-        let local_defs = pp_local_defs local_defs in
+        let local_defs =
+          pp_local_defs
+            ~check:(Some (Low_level.If { cond = (c, cprec); body }), [ (comp_prec cprec, c) ])
+            local_defs
+        in
         let body_doc =
           match !(ctx.current_localized_zero_seed) with
           | Some seed when not seed.lzs_consumed ->
@@ -8565,7 +8503,7 @@ module C_syntax (B : C_syntax_config) = struct
         vec_acc_grid_fold ~prec ~lanes ~op grid
         @ vec_acc_lane_fold ~prec ~lanes ~op ~vname:acc_regs.(0) ~out:total
       in
-      let tail_defs, tail_update =
+      let tail_roots, tail_defs, tail_update =
         match (op, contrib) with
         | Ops.Add, Low_level.Binop (Ops.Mul, (a, _), (b, _)) ->
             (* Mirror the widened serial baseline's fused update ([pp_scalar]'s homogeneous FMA), or
@@ -8573,15 +8511,18 @@ module C_syntax (B : C_syntax_config) = struct
                the same steps. *)
             let da, ea = (pp_scalar ctx) prec a in
             let db, eb = (pp_scalar ctx) prec b in
-            ( da @ db,
+            ( [ (prec, a); (prec, b) ],
+              da @ db,
               string total ^^ string " = "
               ^^ B.ternop_syntax prec Ops.FMA ea eb (string total)
               ^^ semi )
         | _ ->
             let dc, ec = (pp_scalar ctx) prec contrib in
-            (dc, string total ^^ string " = " ^^ B.binop_syntax prec op (string total) ec ^^ semi)
+            ( [ (prec, contrib) ],
+              dc,
+              string total ^^ string " = " ^^ B.binop_syntax prec op (string total) ec ^^ semi )
       in
-      let tail_body = pp_local_defs tail_defs ^^ tail_update in
+      let tail_body = pp_local_defs ~check:(None, tail_roots) tail_defs ^^ tail_update in
       let store =
         match acc_target with
         | `Cell (tn, idcs) ->
@@ -8759,7 +8700,7 @@ module C_syntax (B : C_syntax_config) = struct
                     ^^ semi
                   in
                   let local_defs, contrib_doc = (pp_scalar ctx) prec contrib in
-                  let local_defs = pp_local_defs local_defs in
+                  let local_defs = pp_local_defs ~check:(None, [ (prec, contrib) ]) local_defs in
                   let binding =
                     string ("const " ^ B.loop_index_type)
                     ^^ pp_symbol i
@@ -9100,7 +9041,7 @@ module C_syntax (B : C_syntax_config) = struct
              full-precision-product-into-f32 semantics the serial legs and the tensor cores apply
              (gh-ocannl-663's note in [Cuda_backend.accum_prec]). *)
           let local_defs, contrib_doc = (pp_scalar ctx) prec contrib in
-          let local_defs = pp_local_defs local_defs in
+          let local_defs = pp_local_defs ~check:(None, [ (prec, contrib) ]) local_defs in
           let binding =
             string ("const " ^ B.loop_index_type) ^^ pp_symbol i ^^ string (" = " ^ cast ^ reg ^ ";")
           in
@@ -9314,14 +9255,14 @@ module C_syntax (B : C_syntax_config) = struct
         let def =
           { reads = lazy (Low_level.local_reads body); decl; zeroed_decl; body = body_doc }
         in
-        ([ { scope = scope_id; guard = []; def = Some def } ], expr)
+        ([ { Low_level.Scope_order.scope = scope_id; guard = []; def = Some def } ], expr)
     | Get_local id ->
         let scope_prec = (scope_prec_of ctx) id in
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
         let expr = string prefix ^^ pp_scope_id id ^^ string postfix in
         (* A read of a sibling definition's local: it runs wherever this read is evaluated
            (gh-ocannl-2145). *)
-        ([ { scope = id.scope_id; guard = []; def = None } ], expr)
+        ([ { Low_level.Scope_order.scope = id.scope_id; guard = []; def = None } ], expr)
     | Get_merge_buffer (source, idcs) ->
         let tn = source in
         let dims = Lazy.force tn.dims in
@@ -9877,6 +9818,8 @@ module C_syntax (B : C_syntax_config) = struct
        shape is what a pass leaves behind (a hoist or rename that misses a reader), and this is
        where all of them have run. *)
     Low_level.validate_local_binders ~site:"C_syntax.compile_proc" llc;
+    if !(scope_order_oracles_enabled ()) then
+      scope_order_oracles () := (name, scope_order_oracle) :: !(scope_order_oracles ());
     Low_level.validate_scan_loops optimize_ctx.Low_level.placements llc;
     (* gh-ocannl-1485: the exit gate of the slice-alias invariant ([optimize_proc] holds the entry
        one), for what a schedule transform constructs and for a [?prelowered] routine that never

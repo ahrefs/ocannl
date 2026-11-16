@@ -22,8 +22,8 @@ let at tn = get tn [| fixed 0 |]
 let put sc = set_at out (fixed 0) sc
 let scope_id = LL.get_scope st
 
-let scope body : LL.scalar_t =
-  Local_scope { id = scope_id; body; orig_indices = [| fixed 0 |]; mint = Inlined_computation }
+let scope ?(id = scope_id) body : LL.scalar_t =
+  Local_scope { id; body; orig_indices = [| fixed 0 |]; mint = Inlined_computation }
 
 let reads policy code =
   let hooks =
@@ -405,3 +405,76 @@ let () =
     (same_loops
        (Some (List.map demand.binders ~f:(fun (b : F.binder) -> (b.index, b.axis))))
        [ (i, Some LL.Serial); (j, None); (k, Some LL.Unrolled) ])
+
+(* gh-ocannl-2213: [Emitted] visits each top-level scope of a rendering unit once, at its definition
+   position and in its emission's order, with its node's events around its body, then the unit's
+   operands with those scopes as leaves. The emission here is hand-written -- the order and the
+   placements are its to give; [where_arm_scopes] checks the renderer's against the kernel text. *)
+let () =
+  let s1 = mk "emit_s1" and s2 = mk "emit_s2" and c_ = mk "emit_c" in
+  let id1 = LL.get_scope s1 and id2 = LL.get_scope s2 in
+  let def1 = scope ~id:id1 (LL.Set_local (id1, at a))
+  and def2 = scope ~id:id2 (LL.Set_local (id2, at b)) in
+  let code = put (add (at c_) (add def1 (add def2 def1))) in
+  let order = [ (id2.scope_id, F.Unconditional); (id1.scope_id, F.Conditional 0) ] in
+  let emission : F.emission = { order = (fun _ _ -> order) } in
+  let events (local_scopes : F.scopes) code =
+    let hooks =
+      {
+        (F.hooks ()) with
+        scalar =
+          (fun ctx acc sc ->
+            match sc with
+            | LL.Local_scope { id; _ } ->
+                Continue (`Enter (id.scope_id, ctx.F.placement, ctx.gated) :: acc)
+            | _ -> Continue acc);
+        after_scalar =
+          (fun _ acc sc ->
+            match sc with
+            | LL.Local_scope { id; _ } -> `Exit id.scope_id :: acc
+            | LL.Get (tn, _) -> `Read tn.Tn.id :: acc
+            | _ -> acc);
+      }
+    in
+    List.rev (F.fold ~policy:{ policy with local_scopes } ~hooks ~init:[] code)
+  in
+  let emitted = events (Emitted emission) code in
+  p "Emitted visits each definition once, in the emission's order, then the operands"
+    (Poly.equal emitted
+       [
+         `Enter (id2.scope_id, Some F.Unconditional, false);
+         `Read b.Tn.id;
+         `Exit id2.scope_id;
+         `Enter (id1.scope_id, Some (F.Conditional 0), true);
+         `Read a.Tn.id;
+         `Exit id1.scope_id;
+         `Read c_.Tn.id;
+       ]);
+  p "the operand-order walk visits every occurrence where it stands"
+    (Poly.equal (events Visit code)
+       [
+         `Read c_.Tn.id;
+         `Enter (id1.scope_id, None, false);
+         `Read a.Tn.id;
+         `Exit id1.scope_id;
+         `Enter (id2.scope_id, None, false);
+         `Read b.Tn.id;
+         `Exit id2.scope_id;
+         `Enter (id1.scope_id, None, false);
+         `Read a.Tn.id;
+         `Exit id1.scope_id;
+       ]);
+  let refuses f = match f () with _ -> false | exception Invalid_argument _ -> true in
+  p "Emitted refuses an emission order that omits one of the unit's scopes"
+    (refuses (fun () ->
+         events (Emitted { order = (fun _ _ -> [ (id2.scope_id, F.Unconditional) ]) }) code));
+  p "Emitted refuses a structural visit of discarded operands"
+    (refuses (fun () ->
+         F.fold
+           ~policy:{ policy with local_scopes = Emitted emission; discarded_operands = Visit }
+           ~hooks:(F.hooks ()) ~init:() code));
+  p "Emitted refuses a bare expression"
+    (refuses (fun () ->
+         F.fold_scalar
+           ~policy:{ policy with local_scopes = Emitted emission }
+           ~hooks:(F.hooks ()) ~init:() def1))
