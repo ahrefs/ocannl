@@ -17,7 +17,8 @@
     GitHub's first unused -1, -2, ... suffix, including collisions with literal suffixed titles.
     Setext headings, links/images, HTML, entities, escapes, other Unicode, controls, padded code
     spans and underscore emphasis in headings refuse the linked file rather than guessing its IDs.
-*)
+    Raw HTML block openers also refuse the file: allocating their contents would require HTML block
+    context, which this reader does not interpret. *)
 
 open Base
 module Notes = Agent_notes_scan
@@ -161,9 +162,10 @@ let heading_errors contents =
         Option.bind container ~f:(fun text ->
             if
               Option.is_some (atx_heading text)
+              || Notes.html_block_opener text
               || Option.is_some
                    (Notes.setext_underline ~under_paragraph:!previous_container_prose text)
-            then Some "a heading candidate in an unsupported quote/list container"
+            then Some "a heading candidate or HTML in an unsupported quote/list container"
             else None)
       in
       previous_container_prose :=
@@ -176,6 +178,8 @@ let heading_errors contents =
         | Some _ -> container_error
         | None -> (
             if not visible then None
+            else if Notes.html_block_opener (String.strip line) then
+              Some "a raw HTML block, whose heading context is unsupported"
             else
               match atx_heading line with
               | Some _ ->

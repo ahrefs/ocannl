@@ -23,6 +23,8 @@ let () =
         [e](missing.md)\n\
         ```");
   p "a missing Markdown anchor is rejected" (not (List.is_empty (check "[a](./target.md#missing)")));
+  p "a missing non-Markdown target with a line fragment is rejected"
+    (not (List.is_empty (check "[source](missing.ml#L1)")));
   p "a missing image is rejected" (not (List.is_empty (check "![alt](missing.png)")));
   p_empty "an existing image destination passes" ~over:[ "image" ] (check "![alt](image.png)");
   p "root-relative destinations fail closed" (not (List.is_empty (check "[root](/docs/target.md)")));
@@ -57,6 +59,7 @@ let () =
       ("# Same\n# Same-1\n# Same", "same-2");
       ("# With `inline_code` and *emphasis*", "with-inline_code-and-emphasis");
       ("# A — B", "a--b");
+      ("# Valid\n```html\n<pre>\n# Fake\n</pre>\n```", "valid");
       ("# Valid\n\n    value\n    ---", "valid");
       ("   ### Heading ###", "heading");
       ("# Heading#", "heading");
@@ -78,6 +81,9 @@ let () =
       "Title\n--";
       "# [linked](target.md)";
       "# <em>HTML</em>";
+      "<pre>\n# Fake\n</pre>";
+      "<div>\n# Fake\n</div>";
+      "<script>\n# Fake\n</script>";
       "# A &amp; B";
       "# _emphasis_";
       "# Unicode é";

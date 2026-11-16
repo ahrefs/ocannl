@@ -2,6 +2,7 @@ a deliberately broken relative link is rejected: true
 relative paths, angle destinations, titles and fragments share resolution: true
 URLs, reference links, code spans, comments and fences are outside the corpus: true
 a missing Markdown anchor is rejected: true
+a missing non-Markdown target with a line fragment is rejected: true
 a missing image is rejected: true
 an existing image destination passes: true
 root-relative destinations fail closed: true
