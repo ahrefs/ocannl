@@ -5143,7 +5143,12 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
              they were. Dropped, a draw with two consumers behind literals ([(u + 1) + (u *. 2)])
              took the size of one and broadcast into the other: inference accepted it and
              projection refused [3 = 1]. *)
+          (* gh-ocannl-2224: a concrete axis wins a mixed join, or a draw takes the result
+             variable's minimal extent instead. Keep the displaced variable's bound too: the
+             incoming inequality when it supplied the variable, the old GLB otherwise. Holding
+             only the incoming inequality loses the old variable in the latter orientation. *)
           let dropped_var = ref false in
+          let dropped_glb = ref false in
           let join_dim d1 d2 =
             match (d1, d2) with
             | Var v1, Var v2 when not (equal_dim_var v1 v2) ->
@@ -5236,6 +5241,12 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
                    so the join generalizes to the broadcast top (mirroring the differing-[Dim]
                    arms). [Sym] vs. [Affine]/[Concat] falls to the deferring wildcards below. *)
                 get_bcast_dim ~d:1 ~proj_id:64 ()
+            | Var _, Dim _ ->
+                dropped_var := true;
+                d2
+            | Dim _, Var _ ->
+                dropped_glb := true;
+                d1
             | Var _, _ -> d1
             | _, Var _ -> d2
             | _, Dim _ -> d2
@@ -5285,11 +5296,15 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
             (* Only a change of axes counts: the join mints a fresh broadcast top each time, and two
                GLBs differing only in their variables would otherwise trade places forever along a
                diamond (the join kept the incoming side's variable before gh-ocannl-2180; it keeps
-               the existing one now, but a variable against a non-variable still keeps the
-               variable). *)
+               the existing one now, and mixed concrete/variable joins retain the concrete axis). *)
             if same_glb_axes glb glb2 then ineqs else forward_glb_to_operands glb opnd2 @ ineqs
           in
           let ineqs = if !dropped_var then Row_ineq { res; opnd; origin } :: ineqs else ineqs in
+          let ineqs =
+            if !dropped_glb then
+              Row_ineq { res = glb2; opnd = row_of_var opnd_v opnd.prov; origin } :: ineqs
+            else ineqs
+          in
           match glb with
           | { beg_dims = []; dims = [] | [ Dim { d = 1; _ } ]; bcast = Broadcastable; prov = _ } ->
               (Row_eq { r1 = row_of_var opnd_v opnd.prov; r2 = glb; origin } :: ineqs, env)
@@ -6193,7 +6208,7 @@ let%track5_sexp process_shape_row ~deferred_dims ~(stage : stage) origin env
           (* That's a greatest-lower-bound (most specific) value for a row. *)
           (keep @ (Row_eq { r1; r2 = glb; origin } :: dim_eqs), env)
       | Some (Bounds_row { glb = Some glb; constr; is_in_param; _ })
-        when is_packed_draw_constr constr && equal_stage stage Stage6a
+        when is_packed_draw_constr constr && is_stage6_up stage
              && (is_in_param || is_resolve_at_use v)
              && (let glb = subst_row env glb in
                  is_broadcastable glb.bcast || List.is_empty glb.beg_dims)
@@ -6208,7 +6223,10 @@ let%track5_sexp process_shape_row ~deferred_dims ~(stage : stage) origin env
              bounded too, and is taken as it is ({!glb_has_bounded_axis}). A GLB with leading axes
              over an open middle waits: aligning its flanks is a balanced-flank choice still to be
              made ([solve_closing_stages]); taken here, it refused [contraction_pointwise_closing]'s
-             satisfiable program. *)
+             satisfiable program. Retry after stage 6a too (gh-ocannl-2224): the tail can first
+             close at stage 6b while a bounded axis is still a variable. Generic elimination then
+             waits for stage 7, where that result axis closes minimal; taking it by role first
+             preserves its bound instead. *)
           let closing = close_to_glb_by_role ~own:(dim_has_glb env) env origin ~r1 ~glb in
           (keep @ closing @ dim_eqs, env)
       | Some (Bounds_row { glb; constr; _ }) ->

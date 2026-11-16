@@ -208,6 +208,19 @@ files.
   middle (one ran ahead of `contraction_pointwise_closing`'s balanced-flank search; requiring a
   closed tail instead left a draw under an unbatched `c[|16]` repeating). Giving literals no axes is not a
   shortcut: it moved 27 test actions, a transformer's logits closing `2x3x1` among them.
+  A mixed variable/concrete GLB join (gh-ocannl-2224) keeps the concrete axis and holds the
+  displaced variable's bound: the incoming inequality or the old GLB, by orientation. Keeping the
+  variable alone made `(u *. c[3]) + reduce (u + 1)` draw once for three cells. A packed GLB's tail
+  first closed at stage 6b can still leave a bounded result-axis variable unresolved: generic
+  elimination rereads concrete flanks, but waits on that variable until stage 7 closes it minimal.
+  The packed role arm therefore retries after stage 6a, with its balanced-flank guard unchanged.
+  `row_glb_reach_executed` pins concrete and bounded-variable late tails in staged stores; the
+  variable case drew once for three cells before the retry. No natural program reaching that exact
+  path was found; the staged store pins it and its configured draw is an execution smoke check.
+  Mixed `Var`/`Sym` or `Affine` joins remain outside this numeric fix; there is no claim that
+  those joins preserve both bounds. Packed `Total_elems` rejects symbolic axes, so a symbolic
+  regression needs a different supported path. The mixed row-store pins in `test_row_glb_reach`
+  distinguish holding the old GLB: without it the displaced result closes 1 while its draw is 3.
   A solved row passes its role on too (gh-ocannl-2247): when `unify_row` commits `v := value` for a
   marked `v`, the dimension variables of `subst_row env value` take the mark. A draw read through an
   einsum spec (`u ++ "ab => ba"`) is solved to the spec's axes, minted for the result; unmarked,
