@@ -4256,7 +4256,12 @@ let apply_tensorize op (opt : Low_level.optimized) : Low_level.optimized =
     the completed accumulation). A Serial loop starting above 0 — a [Partition]'s later segment, the
     last writer of an unbatched k-split (gh-ocannl-1733) — is descended where every enclosing loop
     is single-trip, its trip count counted for the surplus check; a site indexed by such a loop
-    covers only that segment's part of the output and is refused. Nodes related by buffer aliasing
+    covers only that segment's part of the output and is refused. Every enclosing loop of extent > 1
+    is checked for dependence (gh-ocannl-1844): no write of [target] in its body, in another
+    iteration, may touch a cell the relocated tail read — a write textually before the site runs
+    again after it in the next iteration. Writes are read from [affine_relations] (scalar-scope
+    bodies and [Tile_mma] fallbacks included) and judged with [Affine.pair_conflict]; an undecided
+    one refuses. Nodes related by buffer aliasing
     ([Tnode.alias_of]) are not analyzed — sole-consumption is judged by node identity. *)
 let settled_on_device plc tn =
   match Tn.Placements.get plc tn with Some (Tn.On_device, _) -> true | _ -> false
@@ -4550,7 +4555,97 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
   let cover_env ~shifted env =
     List.filter env ~f:(fun (s, _) -> not (List.mem shifted s ~equal:Indexing.equal_symbol))
   in
-  let rec fuse_at_fragment ~shifted env llc =
+  (* The accumulator's writes, from the one access inventory ([affine_relations]): it sees writes
+     inside scalar [Local_scope] bodies and through a [Tile_mma]'s fallback, which the statement-
+     level [writes_tn] does not. An opaque [Staged_compilation] enumerates nothing, so it counts as
+     a possible write. *)
+  let target_writes llc =
+    let accs, effects = affine_relations llc in
+    ( List.filter accs ~f:(fun (a : Tn.t Affine.access) -> a.a_write && Tn.equal a.a_tn target),
+      List.exists effects ~f:(fun (e : Tn.t Affine.statement_effect) ->
+          match e.e_kind with Affine.Staged -> true | _ -> false) )
+  in
+  let writes_target llc =
+    writes_tn target llc
+    ||
+    let writes, staged = target_writes llc in
+    staged || not (List.is_empty writes)
+  in
+  (* gh-ocannl-1844: the dependence check over the site's enclosing loops. [encl] is the stack of
+     descended loops, innermost first, each with its inclusive bounds and its statement;
+     [site_loops] bound the site's own index symbols below that stack (the store-back's tile loops
+     and lane, or the whole-K tile's fresh symbols). The relocated tail reads the site's cells right
+     after the store-back; a write of the accumulator that runs after it would make the tail read a
+     value the final [target] no longer holds. One that follows in the same iteration of every
+     enclosing loop is textually later, which the written-again check refuses. Any other differs
+     from the site in the iteration of some enclosing loop of extent > 1 -- take the outermost --
+     and lies in its body: so for each such loop [s], every write of [target] in its body (the
+     site's own included) must be proven never to touch a site cell at a different value of [s].
+     [Affine.pair_conflict] decides it with [s] paired, every loop inside [s] iterated independently
+     on each side, and the loops outside [s] shared; only [Disjoint] or [Same_thread] passes. The
+     proof is symmetric in iteration order, so it holds under a parallel enclosing loop too. Sound
+     acceptance, not an exact test: an undecided write refuses. *)
+  let check_enclosing_dependence ~what ~encl ~site_loops (site_idcs : Indexing.axis_index array) =
+    let find_range stack s =
+      List.find_map stack ~f:(fun (s', lo, hi, _) ->
+          if Indexing.equal_symbol s s' then Some (lo, hi) else None)
+    in
+    let site_range s =
+      match
+        List.find_map site_loops ~f:(fun (s', lo, hi) ->
+            if Indexing.equal_symbol s s' then Some (lo, hi) else None)
+      with
+      | Some _ as r -> r
+      | None -> find_range encl s
+    in
+    let right = Affine.view ~range:site_range ~dims site_idcs in
+    let rec go inner = function
+      | [] -> ()
+      | ((s, lo, hi, stmt) as here) :: outer ->
+          if hi > lo then (
+            let refuse_at why =
+              fail
+                ("the accumulator is written inside enclosing loop " ^ Indexing.symbol_ident s
+               ^ " ("
+                ^ Int.to_string (hi - lo + 1)
+                ^ " iterations) " ^ why
+                ^ " -- a later iteration could overwrite cells the tail relocated to the " ^ what
+                ^ " already read")
+            in
+            let site_dup =
+              s
+              :: (List.map inner ~f:(fun (s', _, _, _) -> s')
+                 @ List.map site_loops ~f:(fun (s', _, _) -> s'))
+            in
+            let writes, staged = target_writes stmt in
+            if staged then refuse_at "by opaque staged code";
+            List.iter writes ~f:(fun (w : Tn.t Affine.access) ->
+                if w.a_whole then refuse_at "as a whole node (Zero_out)";
+                let left_range s' =
+                  match List.Assoc.find w.a_loops s' ~equal:Indexing.equal_symbol with
+                  | Some _ as r -> r
+                  | None -> find_range outer s'
+                in
+                let left =
+                  Affine.view ~range:left_range ?dyn_axis:w.a_dyn_axis
+                    ?vec:(if w.a_vec_last then Some (Affine.Run w.a_vec_len) else None)
+                    ~dims w.a_map
+                in
+                match
+                  Affine.pair_conflict ~left_range ~right_range:site_range
+                    ~dup_left:(fun s' -> List.Assoc.mem w.a_loops s' ~equal:Indexing.equal_symbol)
+                    ~dup_right:(fun s' -> List.mem site_dup s' ~equal:Indexing.equal_symbol)
+                    ~pairs:[ (s, s) ]
+                    ~left ~right
+                with
+                | Affine.Disjoint | Affine.Same_thread -> ()
+                | Affine.Cross_thread witness ->
+                    refuse_at ("at cells its index does not separate from the site's: " ^ witness)));
+          go (here :: inner) outer
+    in
+    go [] encl
+  in
+  let rec fuse_at_fragment ~shifted ~encl env llc =
     if !fused then begin
       (* Exactly-once, past the site: the relocated tail reads every output cell right after the
          site's store-back, so nothing that follows may write the accumulator again. A [Partition]ed
@@ -4558,7 +4653,7 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
          betrays it: a padded packed seed's k-block split with one full block (gh-ocannl-1670)
          leaves both segments single-trip, and its first segment's store-back holds the first k
          block's partial sum alone. *)
-      if writes_tn target llc then
+      if writes_target llc then
         fail
           "the accumulator is written again after the fragment store-back the tail would follow (a \
            later segment of a partitioned loop) — the tail would read partial accumulations";
@@ -4567,8 +4662,8 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
     else
       match llc with
       | Seq (a, b) ->
-          let a' = fuse_at_fragment ~shifted env a in
-          Seq (a', fuse_at_fragment ~shifted env b)
+          let a' = fuse_at_fragment ~shifted ~encl env a in
+          Seq (a', fuse_at_fragment ~shifted ~encl env b)
       | For_loop fc -> (
           match match_storeback (For_loop fc) with
           | Some (lane, width, loops, guards, st_idcs) ->
@@ -4595,6 +4690,9 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
                          of the output");
               if not (covers_bijectively ~guarded ~env:(cover_env ~shifted env') st_idcs) then
                 fail "the fragment store-back tiles do not cover the output space bijectively";
+              check_enclosing_dependence ~what:"fragment store-back" ~encl
+                ~site_loops:((lane, 0, width - 1) :: List.map loops ~f:(fun (s, e) -> (s, 0, e - 1)))
+                st_idcs;
               fused := true;
               let tail_leaf =
                 (* Re-impose the store-back's own range guards: the relocated tail writes exactly
@@ -4628,6 +4726,9 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
                   let env' = ((fi, m) :: (fj, n) :: env : (Indexing.symbol * int) list) in
                   if not (covers_bijectively ~env:(cover_env ~shifted env') site_idcs) then
                     fail "the Tile_mma tiles do not cover the output space bijectively";
+                  check_enclosing_dependence ~what:"Tile_mma block" ~encl
+                    ~site_loops:[ (lane, 0, width - 1); (fi, 0, m - 1); (fj, 0, n - 1) ]
+                    site_idcs;
                   fused := true;
                   let body =
                     For_loop
@@ -4655,7 +4756,11 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
                       For_loop
                         {
                           fc with
-                          body = fuse_at_fragment ~shifted ((fc.index, fc.to_ + 1) :: env) fc.body;
+                          body =
+                            fuse_at_fragment ~shifted
+                              ~encl:((fc.index, fc.from_, fc.to_, llc) :: encl)
+                              ((fc.index, fc.to_ + 1) :: env)
+                              fc.body;
                         }
                   (* A Serial loop starting above 0 — a [Partition]'s later segment, the last
                      top-level writer of an unbatched k-split (gh-ocannl-1733) — is judged too, but
@@ -4672,13 +4777,14 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
                           fc with
                           body =
                             fuse_at_fragment ~shifted:(fc.index :: shifted)
+                              ~encl:((fc.index, fc.from_, fc.to_, llc) :: encl)
                               ((fc.index, fc.to_ - fc.from_ + 1) :: env)
                               fc.body;
                         }
                   | _ -> For_loop fc)))
       | other -> other
   in
-  let red_stmt' = fuse_at_fragment ~shifted:[] [] red_stmt in
+  let red_stmt' = fuse_at_fragment ~shifted:[] ~encl:[] [] red_stmt in
   let red_stmt' =
     if !fused then red_stmt'
     else begin
