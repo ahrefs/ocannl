@@ -959,12 +959,14 @@ let conv_window_contracts (site : conv_site) =
 (* Whether a conv geometry masks its accumulator: on the GPU leg a row or column pad ([conv_pads],
    [Pad_reduction] masking nothing), on the CPU leg a row panel [bm] that does not divide the row
    ([cpu_conv_sketch_schedule]'s [pad_to]; its columns are unpadded). *)
-let conv_acc_masked_of (site : conv_site) ~gpu ~bm ~tm ~bn ~bk =
-  if gpu then seed_pads_mask_accumulator (conv_pads_of site ~bm ~tm ~bn ~bk)
-  else pads_extent ~extent:site.c_nrow bm
+let cpu_conv_acc_masked (site : conv_site) ~bm = pads_extent ~extent:site.c_nrow bm
+
+let gpu_conv_acc_masked (site : conv_site) ~bm ~tm ~bn ~bk =
+  seed_pads_mask_accumulator (conv_pads_of site ~bm ~tm ~bn ~bk)
 
 let conv_acc_masked (site : conv_site) (p : sketch_params) =
-  conv_acc_masked_of site ~gpu:p.sk_gpu ~bm:p.sk_bm ~tm:p.sk_tm ~bn:p.sk_bn ~bk:p.sk_bk
+  if p.sk_gpu then gpu_conv_acc_masked site ~bm:p.sk_bm ~tm:p.sk_tm ~bn:p.sk_bn ~bk:p.sk_bk
+  else cpu_conv_acc_masked site ~bm:p.sk_bm
 
 (* Whether every completion of a conv geometry whose masks are [masked] mints the accumulator
    fragment, and whether it also mints the padded scratch tile: a masked LOOP site of the staged GPU
@@ -5790,9 +5792,7 @@ let conv_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (site : 
        fun bm ->
          let m = if bm = 0 then site.c_nrow else bm in
          tiles ~pack_prec ~m ~k:site.c_nred ~n:site.c_noc
-         + accumulator ~gpu:false
-             ~masked:(conv_acc_masked_of site ~gpu:false ~bm ~tm:0 ~bn:0 ~bk:0)
-             ~m ~n:site.c_noc)
+         + accumulator ~gpu:false ~masked:(cpu_conv_acc_masked site ~bm) ~m ~n:site.c_noc)
   in
   let gpu =
     lazy
@@ -5808,7 +5808,7 @@ let conv_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (site : 
           fun bm ->
             let m = if bm = 0 then pad site.c_nrow tm_t else bm in
             (* [conv_pads] ignores [sk_tm] under a row block, so the multiples pass as seeded. *)
-            let masked = conv_acc_masked_of site ~gpu:true ~bm ~tm:sk_tm ~bn:sk_bn ~bk:sk_bk in
+            let masked = gpu_conv_acc_masked site ~bm ~tm:sk_tm ~bn:sk_bn ~bk:sk_bk in
             tiles ~pack_prec:None ~m ~k ~n + accumulator ~gpu:true ~masked ~m ~n))
   in
   fun path ->

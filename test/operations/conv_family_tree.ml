@@ -638,14 +638,7 @@ let contraction_pins ?(minting = true) name ~is_gpu ~limits ~regimes base =
       let accumulators (post : LL.optimized) =
         fresh post.LL.simdgroup_fragments @ fresh post.LL.masked_fragments
       in
-      let scratch_of (post : LL.optimized) =
-        match
-          ( fresh post.LL.simdgroup_fragments,
-            List.filter (fresh post.LL.masked_fragments) ~f:(Set.mem post.LL.workgroup_shared) )
-        with
-        | _ :: _, [ tn ] -> Some tn
-        | _ -> None
-      in
+      let scratch_of = Ll_test.pad_scratch_of ~base in
       let masked p = Autotune.conv_acc_masked site p in
       let fragment_certain p = Autotune.conv_fragment_certain site ~masked:(masked p) in
       let scratch_certain p =
@@ -673,10 +666,7 @@ let contraction_pins ?(minting = true) name ~is_gpu ~limits ~regimes base =
                List.map (accumulators post) ~f:(fun tn -> (p, tn, s))))
           ~f:(fun (p, tn, s) ->
             let m, _, n = conv_mkn site p in
-            let w = Ir.Ops.prec_in_bytes (Lazy.force tn.Ir.Tnode.storage_prec) in
-            match List.Assoc.find s.CM.per_node tn ~equal:Ir.Tnode.equal with
-            | Some fp -> fp.CM.fp_read_bytes + fp.CM.fp_write_bytes = 2 * m * n * w
-            | None -> false);
+            Ll_test.charged_once s tn ~m ~n);
       List.iter regimes ~f:(fun (regime, f) ->
           let witnesses = List.count applied ~f:(fun (p, _, _) -> f site p) in
           Stdio.printf "  %-56s %d applied leaves\n" regime witnesses;

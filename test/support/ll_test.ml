@@ -1943,3 +1943,30 @@ let single_trip_loops ~(loops : Ir.Indexing.symbol -> bool) (llc : LL.t) : LL.t 
         llc
   in
   go llc
+
+(** [pad_scratch_of ~base post]: the padded scratch tile [Schedule.contract_tensorized_accumulator]
+    minted in [post] (an application of a schedule to [base]), if any — read structurally, never by
+    label: a fresh member of [masked_fragments] in workgroup-shared memory beside a fresh persistent
+    fragment ([simdgroup_fragments]); the statement site's single masked tile is shared too, but no
+    persistent fragment wraps it (gh-ocannl-1736). Fresh means absent from [base]'s fragment sets.
+    One reading for every test that pins the scratch tile (gh-ocannl-1856). *)
+let pad_scratch_of ~(base : LL.optimized) (post : LL.optimized) : Tn.t option =
+  let base_sets = Set.union base.LL.simdgroup_fragments base.LL.masked_fragments in
+  let fresh set = Set.to_list (Set.diff set base_sets) in
+  match
+    ( fresh post.LL.simdgroup_fragments,
+      List.filter (fresh post.LL.masked_fragments) ~f:(Set.mem post.LL.workgroup_shared) )
+  with
+  | _ :: _, [ tn ] -> Some tn
+  | _ -> None
+
+(** [charged_once summary tn ~m ~n]: whether {!Ir.Cost_model.analyze} charged [tn] exactly one whole
+    [m x n] tile written and one read, at [tn]'s storage width — what a fresh accumulator fragment
+    or scratch tile costs (gh-ocannl-1601, gh-ocannl-1856). [false] when [tn] is not charged at all.
+*)
+let charged_once (s : Ir.Cost_model.summary) (tn : Tn.t) ~m ~n =
+  match List.Assoc.find s.Ir.Cost_model.per_node tn ~equal:Tn.equal with
+  | Some fp ->
+      fp.Ir.Cost_model.fp_read_bytes + fp.Ir.Cost_model.fp_write_bytes
+      = 2 * m * n * Ir.Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec)
+  | None -> false

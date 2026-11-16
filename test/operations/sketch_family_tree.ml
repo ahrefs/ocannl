@@ -436,14 +436,7 @@ let fragment_pins ?(contracting = true) ?(scratching = false) name ~m_extent ~n_
      workgroup-shared memory beside a fresh persistent fragment (the statement site's single masked
      tile is shared too, but no persistent fragment wraps it). Where minted it is charged written
      and read once, exactly, like the fragment it stages. *)
-  let scratch_of (post : LL.optimized) =
-    match
-      ( fresh post.LL.simdgroup_fragments,
-        List.filter (fresh post.LL.masked_fragments) ~f:(Set.mem post.LL.workgroup_shared) )
-    with
-    | _ :: _, [ tn ] -> Some tn
-    | _ -> None
-  in
+  let scratch_of = Ll_test.pad_scratch_of ~base:opt in
   let scratch_certain p = Autotune.matmul_pad_scratch_certain opt p in
   Stdio.printf "  %d staging a pad scratch by the predicate, %d staged one\n"
     (List.count applied ~f:(fun (_, p, _, _) -> scratch_certain p))
@@ -458,17 +451,9 @@ let fragment_pins ?(contracting = true) ?(scratching = false) name ~m_extent ~n_
     Verdict.p_all
       (name ^ ": a pad scratch tile is charged its block, written and read once")
       (List.filter applied ~f:(fun (_, p, _, _) -> scratch_certain p))
-      ~f:(fun (_, p, post, (s : Ir.Cost_model.summary)) ->
-        match
-          Option.bind (scratch_of post) ~f:(fun tn ->
-              Option.map (List.Assoc.find s.per_node tn ~equal:Ir.Tnode.equal) ~f:(fun fp ->
-                  (tn, fp)))
-        with
-        | Some (tn, fp) ->
-            let w = Ir.Ops.prec_in_bytes (Lazy.force tn.Ir.Tnode.storage_prec) in
-            let fm, fn = fragment_dims ~m_extent ~n_extent p in
-            fp.Ir.Cost_model.fp_read_bytes + fp.Ir.Cost_model.fp_write_bytes = 2 * fm * fn * w
-        | None -> false);
+      ~f:(fun (_, p, post, s) ->
+        let m, n = fragment_dims ~m_extent ~n_extent p in
+        Option.exists (scratch_of post) ~f:(fun tn -> Ll_test.charged_once s tn ~m ~n));
   List.iter regimes ~f:(fun (regime, f) ->
       let witnesses = List.count applied ~f:(fun (_, p, _, _) -> f p) in
       Stdio.printf "  %-48s %d applied leaves\n" regime witnesses;
