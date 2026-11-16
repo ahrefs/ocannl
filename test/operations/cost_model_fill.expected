@@ -29,6 +29,7 @@ two single cells no fixed component tells apart may alias: no chains: true
 an update reading through a scope body is not proven independent: no chains: true
 an update gathering a member node at a runtime index is not proven independent: no chains: true
 an update reading a temporary the reduction step writes is not proven independent: no chains: true
+a member zeroed inside the reduction step carries no chain: true
 inner loops whose cells may alias prove no chains: true
 a looped member beside a single cell of its node may overlap it: no chains: true
 elementwise work counts no chain: true

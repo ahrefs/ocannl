@@ -345,6 +345,12 @@ let () =
   in
   p "an update reading a temporary the reduction step writes is not proven independent: no chains"
     (chains_are ~private_:[ a; tv ] through_tmp [ None ]);
+  (* A zero fill of a member inside the step: no accumulation is carried. *)
+  let zeroed =
+    Ll_test.loop_n k 8 (List.reduce_exn ~f:Ll_test.seq [ Ll_test.zero a; upd 0 xk; upd 1 xk ])
+  in
+  p "a member zeroed inside the reduction step carries no chain"
+    (chains_are ~private_:[ a ] zeroed [ None ]);
   (* Inner loops that do not address distinct cells: [acc[i + j]] over i, j < 4 is 7 cells, not 16;
      and a looped member beside a single cell of the same node may overlap it. *)
   let s7 = fresh_tn "cf_dep_s" [| 7 |] in

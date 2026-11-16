@@ -444,8 +444,11 @@ let carrier_chains ~is_private ~carrier (body : Low_level.t) =
     | Workgroup_barrier -> barrier := true
     | Set { tn; _ } -> update frames c (`Node tn)
     | Set_local (id, _) -> update frames c (`Local id)
-    | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } -> foreign := `Node tn :: !foreign
-    | _ -> ()
+    | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } | Zero_out tn | Tile_mma { d = tn, _; _ } ->
+        foreign := `Node tn :: !foreign
+    (* Opaque code may write anything: as a barrier, it leaves the carrier uncounted. *)
+    | Staged_compilation _ -> barrier := true
+    | Noop | Comment _ | Declare_local _ -> ()
   and update frames (c : Low_level.t) written =
     match chain_target ~is_private c with
     | None -> foreign := written :: !foreign
