@@ -88,7 +88,7 @@ let () =
   p "symbol 386 keys like its neighbours despite the system macro blacklist"
     (String.equal (symbol_kernel 385) (symbol_kernel 386)
     && String.equal (symbol_kernel 386) (symbol_kernel 387));
-  p_none "minted index symbols avoid predefined system macros" Ir.C_syntax.system_macro_idents
+  p_none "symbol 386 avoids predefined system macros" Ir.C_syntax.system_macro_idents
     ~f:(fun name -> String.equal name (Ir.Indexing.symbol_ident (Ir.Indexing.Symbol 386)));
   p "symbols are renamed by first occurrence"
     (String.equal

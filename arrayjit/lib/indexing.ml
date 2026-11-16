@@ -27,10 +27,10 @@ module Symbol = struct
   include Comparator.Make (CompareSymbol)
 end
 
-(* [i386] is a predefined macro in GNU C on 32-bit x86. It is also a free name to the kernel cache's
-   canonicalizer on every target, so emitting it makes just this symbol number escape renaming
-   (gh-ocannl-1932). A leading zero keeps the index namespace and is injective: no other integer's
-   decimal spelling starts with zero. *)
+(* [i386] in [C_syntax.system_macro_idents] is a predefined macro in GNU C on 32-bit x86. It is also
+   a free name to the kernel cache's canonicalizer on every target, so emitting it makes just this
+   symbol number escape renaming (gh-ocannl-1932). A leading zero keeps the index namespace and is
+   injective: no other integer's decimal spelling starts with zero. *)
 let symbol_ident (Symbol s) = if s = 386 then "i0386" else "i" ^ Int.to_string s
 
 (* [digits_then_end_or_underscore s ~pos] is whether [s] has one or more digits from [pos], followed
