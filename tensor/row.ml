@@ -1939,15 +1939,17 @@ let is_bare_row_var : row -> bool = function
   | { beg_dims = []; dims = []; bcast = Row_var _; prov = _ } -> true
   | _ -> false
 
-(* The visited entry [e] is bounded by [v], and [v := value]. What this owes through [e], beyond
-   [v]'s own bounds, which [unify_row] re-emits (gh-ocannl-1977):
+(* The visited entry [e] is bounded by [v], and [v := value]. [unify_row] re-emits [v]'s own bounds;
+   GLB forwarding already carries [e]'s lower bound to [value], and [res ⊑ value] follows when [e ⊑
+   value] solves [e] (gh-ocannl-2182). Neither needs another emission here. The transitive reference
+   retains both, so the random-store sweep compares the reduced visit with the original one, not
+   with itself.
 
-   - [e]'s GLB reaches [value]. - A [value] with axes reaches the far neighbours: [value ⊑ opnd]
-   carries the lower bound on to them, as [solve_row_ineq] forwards a recorded GLB along
-   variable-to-variable bounds (gh-ocannl-2126). [res ⊑ value] follows, for [e ⊑ value] solves [e],
-   but it costs little. - A bare variable has no axes to carry. [r ⊑ value] is the path [r ⊑ e ⊑
-   value], which stays in the environment, so emitting it would only store the transitive closure:
-   quadratic pairs in a residual stack, each re-emitted per solution. *)
+   Keep [value ⊑ opnd] for a value with axes: it eagerly propagates the solved value rather than
+   waiting for the recorded GLB to travel. Removing it gives the same tested closed rows, but
+   increases decoder build allocation: [scheme_payoff]'s trace/build allocation pin fails (0.371
+   against its 0.4 floor, depth 2). A bare variable carries no axes and still stops at the entry,
+   avoiding the transitive closure of the bounds. *)
 let s_row_one_in_entry (v : row_var) ~(value : row) ~(in_ : row_entry) :
     constraint_ list * row_entry =
   match in_ with
@@ -1956,18 +1958,23 @@ let s_row_one_in_entry (v : row_var) ~(value : row) ~(in_ : row_entry) :
       let find_v side = List.partition_tf side ~f:(equal_row_var v) in
       let res_v, res = find_v res in
       let opnd_v, opnd = find_v opnd in
-      let ineqs0 =
-        match (opnd_v, glb) with
-        | _ :: _, Some glb -> [ Row_ineq { res = glb; opnd = value; origin } ]
-        | _ -> []
+      let reference_ineqs =
+        if not !transitive_row_emissions then []
+        else
+          let ineqs0 =
+            match (opnd_v, glb) with
+            | _ :: _, Some glb -> [ Row_ineq { res = glb; opnd = value; origin } ]
+            | _ -> []
+          in
+          let ineqs1 =
+            if List.is_empty opnd_v then []
+            else
+              List.map res ~f:(fun res ->
+                  Row_ineq { res = row_of_var res value.prov; opnd = value; origin })
+          in
+          ineqs0 @ ineqs1
       in
       let past_the_entry = !transitive_row_emissions || not (is_bare_row_var value) in
-      let ineqs1 =
-        if List.is_empty opnd_v || not past_the_entry then []
-        else
-          List.map res ~f:(fun res ->
-              Row_ineq { res = row_of_var res value.prov; opnd = value; origin })
-      in
       let ineqs2 =
         if List.is_empty res_v || not past_the_entry then []
         else
@@ -1976,7 +1983,7 @@ let s_row_one_in_entry (v : row_var) ~(value : row) ~(in_ : row_entry) :
       in
       let constr = s_row_one_in_row_constr v ~value ~in_:constr in
       let glb = Option.map glb ~f:(fun in_ -> s_row_one v ~value ~in_) in
-      (ineqs0 @ ineqs1 @ ineqs2, Bounds_row { is_in_param; res; opnd; glb; constr; origin })
+      (reference_ineqs @ ineqs2, Bounds_row { is_in_param; res; opnd; glb; constr; origin })
 
 (* The occurs check's refusal (gh-ocannl-2036): [what] names the relation that no finite value of
    the row variable both rows share satisfies, [surplus] by how many axes one side exceeds the

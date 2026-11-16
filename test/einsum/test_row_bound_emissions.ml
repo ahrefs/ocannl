@@ -1,10 +1,12 @@
 (** What a row solution owes the entries bounded by it (gh-ocannl-1977).
 
     When [v := value] and [e] is bounded by [v], [unify_row] re-emits [v]'s own bounds, and the
-    visit of [e] in [s_row_one_in_entry] emits past it. A value with axes must go past: rows carry a
-    lower bound nowhere else, and no other test noticed its loss. A bare variable has no axes to
-    carry, so it does not, which is what keeps a residual stack from storing the transitive closure
-    of its bounds. Each scenario names the store and prints the closed rows, or the error.
+    visit of [e] in [s_row_one_in_entry] emits a value with axes to its operands. GLB forwarding
+    makes the entry's GLB-to-value and result-to-value emissions redundant (gh-ocannl-2182); the
+    reference keeps both so this sweep compares against their original behavior. The operand-side
+    emission stays for its allocation benefit, pinned by [scheme_payoff]. A bare variable has no
+    axes to carry, so it stops at the entry, avoiding the transitive closure of its bounds. Each
+    scenario names the store and prints the closed rows, or the error.
 
     The sweep holds the solver to the constraints themselves and to the emission it replaced, on
     seeded random stores: every solution it reports must satisfy its store, checked here on ground

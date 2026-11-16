@@ -832,14 +832,18 @@ files.
   cross-check off (gh-ocannl-1968; its header): cap 0 drops the origin lists, a term linear in the
   merges, and the decoder trace's deepest doubling reads 2.88 against its 2.9 ceiling; under the
   cross-check they are a skipped leg.
-- What a row solution owes the entries it bounds (gh-ocannl-1977, `s_row_one_in_entry`'s comment):
-  rows have no GLB transport but the visit, so `value ⊑ opnd` (a value with axes) and `glb ⊑ value`
-  are load-bearing, and for a long time nothing pinned them; dropping both passed the whole shape
-  suite (`test_row_bound_emissions` does now). A bare variable carries no axes, so it stops at the
-  entry: its emissions stored the transitive closure, 94% of the volume in a resnet, and duplicates
-  were not the cost. `Row.with_transitive_row_emissions` is the old walk;
-  `test_row_bound_emissions` claims it decides and closes every random store the same, since a
-  bound now travels by forwarding (the row-closing bullet above).
+- Row-solution visit emissions (gh-ocannl-1977, gh-ocannl-2182): GLB forwarding makes
+  `s_row_one_in_entry`'s `glb ⊑ value` and other-results `⊑ value` unnecessary. Dropping each,
+  then both, changes no ground-store outcome or shape golden in the cross-checked shape set and
+  draw-variation pins. Resnet row-visit emissions at depths 4/8/16 fall from 60/124/252 to
+  12/24/48. Keep `value ⊑ opnd` for a value with axes: removing it too preserves those tested
+  outcomes, but loses eager propagation of the solved value and raises depth-2 decoder build
+  allocation from about 12.87M to 14.46M words; `scheme_payoff`'s existing trace/build allocation
+  band fails (0.371 below 0.4). This is a cost pin, not evidence that forwarding loses a solution.
+  A bare variable still stops at the entry. `Row.with_transitive_row_emissions` retains ALL the
+  original emissions: both the random-store sweep's unchanged reference and `scheme_payoff`'s
+  transitive-cost control need it. Do not remove an emission from the reference while testing
+  its default deletion: the comparator would then miss a shared change.
 - Substitution is indexed (gh-ocannl-1904): a solution visits the entries mentioning its variable
   and, for a dimension solution, the pending ones (`environment`'s doc comment), not the whole
   environment. Every write goes through `set_dim`/`set_row`, which index it: a `Tree_map.add` on
