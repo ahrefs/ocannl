@@ -5,4 +5,5 @@ annotated multiply-nest values match the serial twin: true
 annotated kernel structure as expected: true
 unrolled variant values correct: true
 unrolled kernel repeats the body with constant bindings: true
-partial hardware coverage rejected: true
+partial hardware coverage rejected by the hardware-thread rule: true
+the backend's compile follows its own model (rejected when launching, admitted fork-join): true

@@ -44,3 +44,21 @@ pipeline: readback 1 equals the unscheduled compile's, bit for bit: true
 pipeline: readback 2 equals the unscheduled compile's, bit for bit: true
 pipeline: readback 3 equals the unscheduled compile's, bit for bit: true
 pipeline: readback 4 equals the unscheduled compile's, bit for bit: true
+lane: fork-join validation accepts the program: true
+lane: hardware-thread validation refuses it: true
+lane: the companion's nest is Grid-typed: true
+lane: every Grid loop renders on the pool: true
+lane: readback 0 equals the unscheduled compile's, bit for bit: true
+lane: readback 1 equals the unscheduled compile's, bit for bit: true
+lane: readback 2 equals the unscheduled compile's, bit for bit: true
+depths: fork-join validation accepts the program: true
+depths: hardware-thread validation refuses it: true
+depths: the two-level nest is Grid-typed: true
+depths: the companion's nest is Grid-typed: true
+depths: each Grid nest renders as one pool dispatch: true
+depths: readback 0 equals the unscheduled compile's, bit for bit: true
+depths: readback 1 equals the unscheduled compile's, bit for bit: true
+depths: readback 2 equals the unscheduled compile's, bit for bit: true
+zero: fork-join validation refuses a whole-node Zero_out under a Grid loop: true
+collide: fork-join validation admits the colliding store: true
+collide: the renderer refuses the store as written from more than one thread: true
