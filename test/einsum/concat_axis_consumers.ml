@@ -218,7 +218,7 @@ let refused_lowering =
 
 let open_leaf () = NTDSL.term ~fetch_op:(Constant 2.) ()
 let vec ?(base = 1) n = leaf ~o:[ n ] ~base ()
-let two_components = "one tensor's axes need both"
+let two_components = "components of the same concatenation"
 let unnamed = "no operand names a component"
 let out_of_order = "not in the order of the segments"
 let unreached = "no segment of a concatenated axis reaches"
@@ -253,6 +253,20 @@ let shared_component = "names segments of two different concatenated axes of one
 let built t =
   ignore (t : Tensor.t);
   [||]
+
+(* Build only: a lowering refusal must not satisfy these claims. *)
+let fused_alternatives () =
+  let needle = "alternatives of the fused product component {a, b, c}" in
+  refused "the result needs fused alternatives at construction" ~needle (fun () ->
+      built (NTDSL.einsum "a^b; a^c => b, c" (vec 3) (vec ~base:10 4) ()));
+  refused "transitively fused alternatives at construction"
+    ~needle:"alternatives of the fused product component {a, b, c, d}" (fun () ->
+      built (NTDSL.einsum3 "a^b; c^d; a^c => b, d" (vec 3) (vec 4) (vec 5) ()));
+  computes "one alternative per tensor in a fused component stays valid"
+    (fun () ->
+      values
+        (NTDSL.einsum ~capture_dims:[ capture "a" 2 ] "a^b; a^c => a" (vec 3) (vec ~base:10 4) ()))
+    ~want:[| 10.; 22. |]
 
 let shared_across_axes () =
   let shared label make = refused label ~needle:shared_component (fun () -> built (make ())) in
@@ -528,6 +542,7 @@ let () =
   same_step ();
   symbolic_component ();
   two_components_at_once ();
+  fused_alternatives ();
   shared_across_axes ();
   shared_neighbours ();
   unnamed_result ();

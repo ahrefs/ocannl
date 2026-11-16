@@ -339,6 +339,13 @@ files.
   rest. `refuse_meaningless_concats` refuses that per slot unless the two concatenations are equal
   component lists: `a^b, a^b => a^b` is the axis's diagonal and stays, as do sharings with a plain
   axis or across tensors (gh-ocannl-2167, pinned in `test/einsum/concat_axis_consumers.ml`).
+- The same "needs both" rule applies across a fused product component, not just one
+  concatenation: `a^b; a^c => b, c` needs incompatible alternatives `b` and `c`.
+  `refuse_meaningless_concats` merges concatenation label sets transitively from the spec alone
+  before any inference write (gh-ocannl-2198). The base refused this binary form in lowering
+  with an operand-arity shortfall, pointing at operand 1 in operand 2's second segment instead
+  of the incompatible result axes. Construction-only binary and transitive ternary refusals,
+  plus an executed `a^b; a^c => a` control, live in `concat_axis_consumers`.
 - An affine axis's constant offset is sized for by nothing: the dim formulas omit it, so an offset
   at or past the stride, or on an unpadded window, indexes past the extent. On the result side
   those writes were silently dropped (stride 1 died in `projection_of_solved_dims`); on an
