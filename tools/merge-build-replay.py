@@ -38,6 +38,11 @@ replayed repository's working tree, never copied here:
 With no `--set`, both built-ins are replayed. `--trigger` defaults to the config's `trigger`
 line (same-input when it has none, or when there is no config); it governs every set but
 `shell-tier`, which follows the script's own reading of the head side.
+Whenever the config is read (the `config` set, including `@config`, or the default trigger),
+a `comments` directive is refused: this replay does not model comment-only changes. Named sets
+with an explicit `--trigger` do not read the config and therefore do not refuse its directives.
+Only `input` and `trigger` decide builds in the supported config grammar; `command` and `timeout`
+are accepted without modeling execution. This is not a validator for the complete ship-pr config.
 
 Output, per set in the order given: the merges replayed, how many would build, and the paths that
 triggered them, counted by merges (`--top N`, default 15, 0 for all); from the second set on,
@@ -54,7 +59,7 @@ A shallow clone is refused: its boundary commits lose their parents, which hides
 from the listing and can hide merge bases (ship-pr's merge build refuses one too).
 
 Exit status: 0 the replay ran; 1 a git command failed; 2 a usage error, a shallow clone, or a
-built-in set whose definition could not be read.
+built-in set whose definition could not be read, or a config read containing `comments`.
 """
 
 from __future__ import annotations
@@ -106,12 +111,14 @@ def config_definition(repo: str) -> tuple[list[str], str | None]:
     build's grammar: `#` comments and blank lines skipped, `KEY VALUE` lines."""
     inputs: list[str] = []
     trigger = None
-    for raw in read_text(repo, CONFIG_PATH).split("\n"):
+    for number, raw in enumerate(read_text(repo, CONFIG_PATH).split("\n"), start=1):
         line = raw.rstrip("\r").strip(" \t")
         if not line or line.startswith("#"):
             continue
-        key, _, value = line.partition(" ")
-        value = value.strip(" \t")
+        key, *rest = re.split(r"[ \t]+", line, maxsplit=1)
+        value = rest[0] if rest else ""
+        if key == "comments":
+            raise Usage(f"{CONFIG_PATH}:{number}: replay does not model comment-only changes (`comments`)")
         if key == "input" and value:
             inputs.append(value)
         elif key == "trigger" and value:

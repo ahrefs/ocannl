@@ -339,6 +339,32 @@ if harness_leg 'built-in sets are read from where they are defined #definitions'
   fi
 fi
 
+if harness_leg 'comments directives refuse only when the config is read #comments'; then
+  if [ -z "$FIXTURE" ]; then report 1 'comments refusal' 'no fixture'; else
+    # Preserve the shared fixture: this leg also runs alone, before or after other legs.
+    cp "$R/.github/ship-pr-merge-build" "$TMP/config-before-comments"
+    for directive in 'comments *.ml' $'comments\t*.ml' 'comments'; do
+      cp "$TMP/config-before-comments" "$R/.github/ship-pr-merge-build"
+      printf '%s\n' "$directive" >>"$R/.github/ship-pr-merge-build"
+      for mode in config default include; do
+        case $mode in
+          config) replay --set config --trigger same-input main ;;
+          default) replay --set 'ml=*.ml' main ;;
+          include) replay --set 'ml=@config' --trigger same-input main ;;
+        esac
+        if [ "$rc" = 2 ] && has '.github/ship-pr-merge-build:5: replay does not model comment-only changes (`comments`)'; then
+          report 0 "$mode refuses $directive with its file, line and reason"
+        else report 1 "$mode refuses $directive with its file, line and reason" "exit $rc; $(cat "$out")"; fi
+      done
+      replay --set 'ml=*.ml' --trigger same-input main
+      if [ "$rc" = 0 ] && [ "$(row ml)" = 61- ]; then
+        report 0 "explicit sets and trigger do not read $directive"
+      else report 1 "explicit sets and trigger do not read $directive" "exit $rc; $(cat "$out")"; fi
+    done
+    cp "$TMP/config-before-comments" "$R/.github/ship-pr-merge-build"
+  fi
+fi
+
 if harness_leg 'usage errors exit 2 #usage'; then
   if [ -z "$FIXTURE" ]; then report 1 'usage' 'no fixture'; else
     for args in "--set nosuch" "--set ml=*.ml --set ml" "--set ml=a,,b" "--set ml=@ml" "--top -1" "--trigger sometimes"; do
