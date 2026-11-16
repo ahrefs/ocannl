@@ -35,6 +35,13 @@ files.
   alike, because a shared `delayed_var_ref` pins the first call's solution and a second size then
   fails inference (gh-ocannl-1507). A lifted initializer cannot name one; a capture that would
   shadow a lifted name is a clash, found through the `ocannl.bound_capture` marker `let_opt` checks.
+- Unary minus in an inline initializer qualifies to `NTDSL.neg` (gh-ocannl-2201), leaving
+  its final `()` for parameter construction. Qualification drops the translated operator's
+  generated `?label:None`, so the initializer retains the full `Tensor.op_fun` label argument.
+  `%extend_dsls` qualifies before translation and shares the same `~-` → `neg` mapping.
+  `op_neg_initializer` anchors the original values to nonzero literals before checking their
+  negation: forcing both parameter readbacks to zero must fail that anchor, even though the
+  relative negation still passes.
 - Label sources: only a toplevel `%op` function WITHOUT `()` reads its tensor parameters' labels
   into the result's (the no-unit arm of `translate`); with `()`, no tensor parameter is one.
   Without `()`, an unlabelled parameter is read as `p.Tensor.value.Ir.Tnode.label`, so an unlabelled non-tensor is

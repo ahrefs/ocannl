@@ -1012,7 +1012,7 @@ let operators =
       ("!@", "embed_symbol");
       ("dim", "embed_dim");
       ("-", "sub");
-      ("~-", "num_neg");
+      ("~-", "neg");
       ("/.", "pointdiv");
       ("@|", "slice");
       ("<", "lt");
@@ -1039,6 +1039,18 @@ let add_module_qualifier_to_applied_function ?(module_name = "NTDSL") expr =
     | Pexp_apply (_, _) ->
         let fn, args = decompose_app expr [] in
         let qualified_fn = qualify_if_needed fn in
+        let args =
+          match fn with
+          | { pexp_desc = Pexp_ident { txt = Lident "~-"; _ }; _ } ->
+              (* [Ppx_op.translate] supplies the O operator's absent label. Leave it unapplied on
+                 [neg]: the initializer still needs a full [Tensor.op_fun], whose label will be
+                 supplied by [param]. The extend_dsls caller reaches this helper before translation,
+                 so has no generated label to remove. *)
+              List.filter args ~f:(function
+                | Optional "label", [%expr None] -> false
+                | _ -> true)
+          | _ -> args
+        in
         Ast_builder.Default.pexp_apply ~loc qualified_fn args
     | Pexp_ifthenelse (cond, then_expr, else_expr) ->
         let processed_then = process_expr then_expr in
