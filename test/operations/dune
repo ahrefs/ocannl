@@ -5726,7 +5726,7 @@
   (progn
    (with-stdout-to
     cuda_wmma_floor_missing.actual
-    (run %{exe:cuda_wmma_floor_missing.exe}))
+    (run %{exe:cuda_wmma_floor_missing.exe} --forced))
    (diff cuda_wmma_floor.expected cuda_wmma_floor_missing.actual))))
 
 (alias
