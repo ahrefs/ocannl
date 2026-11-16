@@ -18,3 +18,13 @@ shared node: the forcing order does not change the precisions: true
 a linked node read bottom-up after a checkpoint refuses the rewind: true
 narrow parameter: the parameter is half: true
 narrow parameter: the draw and the operations over it stay single: true
+hand-set half: the parameter is half: true
+hand-set half: the draw and the operations over it stay single: true
+policy half: the parameter is half: true
+policy half: the draw and the operations over it stay single: true
+policy half: initial value count matches the hand-set parameter: true
+policy half: initial values equal the hand-set parameter bit for bit: true
+policy double: the parameter is double: true
+policy double: every float node of the initializer is double: true
+policy double: the initial values lie in the initializer's range: true
+policy double: some initial value is not f32-representable: true

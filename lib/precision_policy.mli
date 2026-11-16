@@ -17,14 +17,12 @@
       [~grad_spec:Require_grad] leaf is an activation here even when an optimizer steps it; give it
       an explicit [~prec], which always wins), [activation_prec] for every other tensor's value node
       (op results, inputs, constants), [grad_prec] for all gradient nodes. A parameter's initializer
-      expression is not an activation: it fills the parameter, so it takes the precision the
-      parameter holds explicitly, or else [param_prec] ([None] leaves it alone), and an f32 master's
-      initial values are f32 draws under any policy, not f16-quantized (gh-ocannl-1865). A node that
-      both the model and an initializer read is an activation. Without a policy, inference alone
-      already keeps an initializer at least as precise as its parameter (gh-ocannl-1967); the
-      policy's assignment is what narrows one to a reduced [param_prec]. Op-kind selectivity
-      ("softmax stays f32") is the [except] predicate's job — or the training recipe's, when
-      gh-ocannl-492 grows one; label matching over [Tn.label] is the intended idiom.
+      expression is not an activation: the policy does not assign its nodes (gh-ocannl-2055).
+      Inference's promote-only link keeps an initializer at least as precise as its parameter
+      (gh-ocannl-1967), so a narrow parameter rounds a default-precision draw once, however it
+      became narrow. A node that both the model and an initializer read is an activation. Op-kind
+      selectivity ("softmax stays f32") is the [except] predicate's job — or the training recipe's,
+      when gh-ocannl-492 grows one; label matching over [Tn.label] is the intended idiom.
     - [except]-ed float nodes are PINNED at the session default precision for their class
       ([Tensor.default_value_prec] / [default_grad_prec]), not merely skipped: precision inference
       propagates top-down as well as bottom-up (see the [top_down_prec] test), so a skipped node
@@ -44,8 +42,8 @@
 
 type t = {
   param_prec : Ir.Ops.prec option;
-      (** For values of model-state parameters ([root.params]) and, unless the parameter holds an
-          explicit precision, of their initializers. *)
+      (** For values of model-state parameters ([root.params]); initializer nodes are left to
+          precision inference. *)
   activation_prec : Ir.Ops.prec option;
       (** For values of every other tensor: op results, inputs, unannotated constants. *)
   grad_prec : Ir.Ops.prec option;  (** For gradient nodes (of params and intermediates alike). *)

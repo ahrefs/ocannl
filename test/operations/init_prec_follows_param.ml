@@ -1,11 +1,14 @@
-(* An initializer's precision follows its parameter in inference (gh-ocannl-1967), with no
-   [Precision_policy] applied: the initializer fills the parameter, so a draw narrower than the
-   parameter quantizes its initial values. The parameters here are double over the single session
-   default, each for a different reason.
+(* An initializer's precision follows its parameter in inference (gh-ocannl-1967), including
+   [Precision_policy] assignments: the initializer fills the parameter, so a draw narrower than the
+   parameter quantizes its initial values. The wide parameters here are double over the single
+   session default, each for a different reason; narrow parameters keep single initializers.
 
    The structural claims read the settled precisions of the initializer's nodes; the executed ones
    are the load-bearing half: a double parameter's initial values are not all f32-representable.
    Precision inference precedes every backend, so the test names cc, which evaluates double. *)
+
+(* cc-fp-contract: same-shape -- both sessions execute the same initializer graph at the same
+   precisions; only how the parameter receives its half storage precision differs. *)
 
 open! Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -134,4 +137,48 @@ let () =
     List.filter (float_init_nodes w) ~f:(fun t -> not (List.is_empty t.children))
   in
   p_all "narrow parameter: the draw and the operations over it stay single" draw_and_above
-    ~f:(fun t -> is_prec t Ir.Ops.single)
+    ~f:(fun t -> is_prec t Ir.Ops.single);
+
+  (* Fresh sessions reproduce both the seed and node IDs used by the default initializer's counter.
+     Compare stored values as bits, rather than with a floating-point tolerance. *)
+  let narrow_initial ~policy =
+    Tensor.unsafe_reinitialize ();
+    Tensor.set_random_seed ~seed:42 ();
+    let base_ctx = Context.cpu () in
+    let w = TDSL.param "w_policy_half" ~output_dims:[ 4096 ] () in
+    let%op root = w ++ "i=>0" in
+    if policy then
+      Ocannl.Precision_policy.apply
+        { param_prec = Some Ir.Ops.half; activation_prec = Some Ir.Ops.half; grad_prec = None }
+        root
+    else Tn.update_prec w.value Ir.Ops.half;
+    p
+      (if policy then "policy half: the parameter is half"
+       else "hand-set half: the parameter is half")
+      (is_prec w Ir.Ops.half);
+    let draw_and_above =
+      List.filter (float_init_nodes w) ~f:(fun t -> not (List.is_empty t.children))
+    in
+    p_all
+      (if policy then "policy half: the draw and the operations over it stay single"
+       else "hand-set half: the draw and the operations over it stay single")
+      draw_and_above
+      ~f:(fun t -> is_prec t Ir.Ops.single);
+    initial_values base_ctx root w
+  in
+  let hand_set = narrow_initial ~policy:false in
+  let policy_set = narrow_initial ~policy:true in
+  p "policy half: initial value count matches the hand-set parameter"
+    (Int.equal (List.length policy_set) (List.length hand_set));
+  p_all "policy half: initial values equal the hand-set parameter bit for bit"
+    (List.zip_exn policy_set hand_set) ~f:(fun (a, b) ->
+      Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b));
+
+  Tensor.unsafe_reinitialize ();
+  let base_ctx = Context.cpu () in
+  let w = TDSL.param "w_policy_double" ~output_dims:[ n ] () in
+  let%op root = w ++ "i=>0" in
+  Ocannl.Precision_policy.apply
+    { param_prec = Some wide; activation_prec = None; grad_prec = None }
+    root;
+  claims "policy double" base_ctx ~root ~param:w

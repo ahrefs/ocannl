@@ -72,6 +72,7 @@ test/operations/gpu_packed_prec.ml -- no-contraction: each lane does one operati
 test/operations/grid_launch_floor.ml -- exact-operands: Bench_gebp products are multiples of an eighth and every sum stays exact in f32
 test/operations/half_float_power.ml -- pinned off
 test/operations/half_unary_math.ml -- pinned off
+test/operations/init_prec_follows_param.ml -- same-shape: both sessions execute the same initializer graph at the same precisions; only how the parameter receives its half storage precision differs.
 test/operations/integer_power_domain.ml -- pinned off
 test/operations/lineage_recompile_step.ml -- exact-operands: integer inputs, eighth-step weights and a dyadic rate stay exact for the three steps
 test/operations/masked_persistent_fragment.ml -- not-cc: executed claims need a GPU advertising an f16 tile; cc skips them
