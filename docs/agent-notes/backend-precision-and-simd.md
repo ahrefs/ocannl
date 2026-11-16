@@ -1234,7 +1234,8 @@ files.
   gate, which neither digest reaches by construction, is hashed into the codegen tag ON-regime
   only and only on the backends it acts on, as `gpu_elide_covered_zeros` is (GPU) and
   `gpu_default_seed_narrow_storage` (gh-ocannl-1405, CUDA/HIP via the backend fact
-  `seeds_untuned_default`): every pre-existing key stays valid, and
+  `seeds_untuned_default`; since gh-ocannl-2195 it gates only the reduction sink's narrow
+  admission, the seeding taking widening sites in every profile): every pre-existing key stays valid, and
   `cache_key_agreement` flips it under that scope. Keeping such a gate `Search_shaping` with its
   plan's siblings was the first draft's choice; the local review pointed out it lets a winner
   crowned with the gate on replay with it off, `autotune_search=false` included. Benchmark side: `orchestrate.py --profile

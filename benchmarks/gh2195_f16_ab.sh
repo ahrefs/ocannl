@@ -34,10 +34,12 @@
 # is a hand-written schedule compiled through [~lowered_transform].
 #
 # UNTUNED-DEFAULT ROW (only with --untuned-fixture). gh-ocannl-2195 also moves the untuned
-# default's f16 matmul sites: under the wide arm their accumulator widens their storage, so the
-# seeded untuned plan (Autotune.seeded_default, gh-ocannl-1324) refuses them
-# (Autotune.accumulates_at_storage; gpu_default_seed_narrow_storage, pinned off here, is the gate
-# that would admit them), where the narrow arm seeds them. schedule_bench cannot time that: its
+# default's f16 matmul sites: under the wide arm their accumulator widens their storage. Up to its
+# follow-up the seeded untuned plan (Autotune.seeded_default, gh-ocannl-1324) refused such sites,
+# where the narrow arm seeds them -- a 5x untuned step on sm_120; since then it seeds them under both
+# arms, and only its reduction sink still leaves them to the default (gpu_default_seed_narrow_storage,
+# pinned off here, is the gate that would admit them), so the censuses may differ in the sunk count
+# alone. schedule_bench cannot time that: its
 # variants are hand schedules and its untimed oracle is a plain Context.compile. So this row is
 # benchmarks/runners/ocannl/bench_gpt's untuned training step (BENCH_TUNE=0, so
 # Bench_harness.compile_default = Autotune.untuned_compile; no search, model_default off) on the

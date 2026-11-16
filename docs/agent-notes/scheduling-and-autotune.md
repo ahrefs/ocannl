@@ -756,17 +756,21 @@ files.
   (unseeded 1725). Second, seeding is refused where `accum_prec` widens the output's storage
   precision, on the premise that a sketch's `Privatize` keeps a wide accumulator across the whole
   reduction while the default rounds back to storage after each outer contraction step. Losses
-  stayed bitwise identical on f32 (pinned by `test/operations/seeded_default`). The reduction sink
-  and `model_admits` share the refusal. **The premise is stale for the sketch half** (gh-ocannl-1405,
-  measured on CUDA): `Privatize` mints its tile wide only where the default's serial rendering
-  widens too (gh-ocannl-1151), so a seeded bf16 weight gradient is bitwise the default's. Only the
-  sink changes numerics: the sunk accumulator sits below its write loops, where code generation
-  widens it, and rounds once (a bf16 bias gradient's total error vs f64 went 1.80 → 0.088).
-  `gpu_default_seed_narrow_storage` (the `approximate` profile's) lifts the refusal in all three,
-  threaded as `seed_narrow`/`admit_narrow` and recorded in the plan (`sp_admit_narrow`): the replay
+  stayed bitwise identical on f32 (pinned by `test/operations/seeded_default`). **That premise was
+  stale and the seeding refusal is gone** (gh-ocannl-1405 measured, gh-ocannl-2195 removed it):
+  `Privatize` mints its tile wide only where the default's serial rendering widens too
+  (gh-ocannl-1151, one `Low_level.decide_accum_width` for both), so a seeded widening site keeps
+  the default's narrowing points, executed bitwise per precision (bf16, f16, fp8) by
+  `test/operations/seeded_narrow_storage` under the reproducible arithmetic. Keeping the refusal
+  cost the untuned f16 `gpt2_mini_train` step 5.05x on sm_120 once staging#2010 resolved f16 wide (52.4
+  against 10.4 ms, 0 against 99 of 353 segments seeded). Only the sink changes numerics: the sunk
+  accumulator sits below its write loops, where code generation widens it, and rounds once (a
+  bf16 bias gradient's total error vs f64 went 1.80 → 0.088). `gpu_default_seed_narrow_storage`
+  (the `approximate` profile's; the name predates the split) admits widening sites to the sink
+  only, threaded as `seed_narrow`/`admit_narrow` and recorded in the plan (`sp_admit_narrow`): the replay
   re-derives a sunk segment's chain, so a replay under a different admission would sink different
-  statements. Under `approximate` it bites on CUDA bf16 and on fp8; HIP's bf16 is narrow there
-  (`bf16_arithmetic=true`). Pinned by `test/operations/seeded_narrow_storage`.
+  statements. Under `approximate` it bites on CUDA bf16 and on fp8; HIP's bf16 and both backends'
+  f16 are narrow there (`bf16_arithmetic=true`, `fp16_arithmetic=true`). Pinned by `test/operations/seeded_narrow_storage`.
 - **`model_default` segments at the search's presets, and prices a segment against the lower of
   its two presets** (gh-ocannl-1512, gh-ocannl-1687, `Autotune.model_segments`). The preset
   decides the cuts: `fission_segmented` coalesces adjacent segments whose preset is empty. At the
@@ -930,8 +934,7 @@ files.
   staging adds; without the cache tier, never within capacity, where under the distinct-cell
   roofline a staged sketch only adds traffic. Geometry and the numerics-preserving candidate set are
   `seeded_params`' either way (`scalar_blocktile`: no mma, conv, epilogue, coalesce, batch-inner,
-  swizzle or pipelining; `accumulates_at_storage`: the site's accumulator precision IS its storage
-  precision), and a device publishing neither constant (Metal, cc, an uncalibrated GPU) falls back
+  swizzle or pipelining; whatever the site's storage precision, since gh-ocannl-2195), and a device publishing neither constant (Metal, cc, an uncalibrated GPU) falls back
   to threshold 32 — integers stay the fallback. `tune`'s seeded candidate is the same resolved plan
   (its digest in the trajectory identity, previous bullet). `model_default` starts from it wherever
   the untuned compile seeds (CUDA and HIP, seeding on: the same `seeded_settings` decides both):

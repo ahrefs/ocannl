@@ -1707,10 +1707,10 @@ fp_finite_math=true
 # does not), so `performance` leaves it alone. Two flips: each costs a full search, so this
 # bounds the extra cost at two searches per arm while still exercising the refinement.
 tune_inline_flips=2
-# The untuned CUDA/HIP default also seeds and sinks the sites whose accumulator is wider than their
-# storage (gh-ocannl-1405): a bf16 weight gradient on CUDA, fp8 on CUDA and HIP. A seeded one keeps
-# its result; a sunk one (a bias gradient) keeps its summation order but rounds to storage once
-# instead of after every step.
+# The untuned CUDA/HIP default also sinks the sites whose accumulator is wider than their storage
+# (gh-ocannl-1405): a bf16 gradient on CUDA, fp8 on CUDA and HIP, f16 unless fp16_arithmetic=true. It
+# seeds them in every profile (gh-ocannl-2195), since a seeded one keeps its result; a sunk one (a
+# bias gradient) keeps its summation order but rounds to storage once instead of after every step.
 gpu_default_seed_narrow_storage=true
 # The GPU compilers' fast math (gh-ocannl-1710, gh-ocannl-1779), stated at the value it already
 # defaults to: the `reproducible` profile turns both off, and stating them here makes an explicit
