@@ -1,0 +1,112 @@
+; The controls of `unused_compiler_deps` (gh-ocannl-2118). Each library below is one case: a
+; `ucd_flag_*` stanza plants a compiler-reaching declaration its modules never reference, a
+; `ucd_pass_*` stanza references one in a way a source-text reading would miss. The check pins each
+; stanza's expected finding in its own `fixture_expectations` table, which must name exactly the
+; stanzas of this file. Nothing links these libraries: `@check` compiles them, and only their
+; `.cmt` files are read.
+
+(library
+ (name ucd_flag_unused_test_scan)
+ (package neural_nets_lib)
+ (modules ucd_flag_unused_test_scan)
+ (libraries base test_scan))
+
+(library
+ (name ucd_flag_ppxlib_beside_test_scan)
+ (package neural_nets_lib)
+ (modules ucd_flag_ppxlib_beside_test_scan)
+ (libraries test_scan ppxlib))
+
+(library
+ (name ucd_flag_select_arm_unused)
+ (package neural_nets_lib)
+ (modules ucd_sel_unused)
+ (libraries
+  (select
+   ucd_sel_unused.ml
+   from
+   (test_scan -> ucd_sel_unused.with_scan.ml)
+   (-> ucd_sel_unused.without_scan.ml))))
+
+(library
+ (name ucd_pass_wrapped_name)
+ (package neural_nets_lib)
+ (modules ucd_pass_wrapped_name)
+ (libraries test_scan))
+
+(library
+ (name ucd_pass_public_unwrapped)
+ (package neural_nets_lib)
+ (modules ucd_pass_public_unwrapped)
+ (libraries compiler-libs.common))
+
+(library
+ (name ucd_pass_interface_only)
+ (package neural_nets_lib)
+ (modules ucd_pass_interface_only)
+ (libraries ppxlib))
+
+; The only module is written by a rule, and its only reference is in that generated text.
+
+(rule
+ (target ucd_pass_generated_module.ml)
+ (action
+  (with-stdout-to
+   %{target}
+   (echo "let loc = Location.none\n"))))
+
+(library
+ (name ucd_pass_generated_module)
+ (package neural_nets_lib)
+ (modules ucd_pass_generated_module)
+ (libraries compiler-libs.common))
+
+(library
+ (name ucd_flag_ppxlib_metaquot_only)
+ (package neural_nets_lib)
+ (modules ucd_flag_ppxlib_metaquot_only)
+ (libraries ppxlib)
+ (preprocess
+  (pps ppxlib.metaquot)))
+
+(library
+ (name ucd_pass_ppx_generated)
+ (package neural_nets_lib)
+ (modules ucd_pass_ppx_generated)
+ (libraries ppxlib.ast)
+ (preprocess
+  (pps ppxlib.metaquot)))
+
+(library
+ (name ucd_pass_rewriter_registration)
+ (package neural_nets_lib)
+ (modules ucd_pass_rewriter_registration)
+ (libraries ppx_ocannl))
+
+(library
+ (name ucd_pass_select_arm_used)
+ (package neural_nets_lib)
+ (modules ucd_sel_used)
+ (libraries
+  (select
+   ucd_sel_used.ml
+   from
+   (test_scan -> ucd_sel_used.with_scan.ml)
+   (-> ucd_sel_used.without_scan.ml))))
+
+(library
+ (name ucd_pass_re_export)
+ (package neural_nets_lib)
+ (modules ucd_pass_re_export)
+ (libraries
+  (re_export test_scan)))
+
+; A pinned gap: declared `compiler-libs.toplevel`, used only through `Location`, which the
+; `+compiler-libs` directory it shares with `compiler-libs.common` credits to both. Expected
+; unreported until units are owned by archive rather than by directory.
+
+(library
+ (name ucd_gap_shared_directory)
+ (package neural_nets_lib)
+ (modules ucd_gap_shared_directory)
+ (libraries compiler-libs.toplevel))

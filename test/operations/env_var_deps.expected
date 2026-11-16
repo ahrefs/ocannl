@@ -17,6 +17,7 @@ Directories whose sources this scan reads:
   test/operations/atomic_file_rename_scan_fixture
   test/operations/profiles
   test/operations/startup_streams
+  test/operations/unused_compiler_deps_fixtures
   test/ppx
   test/support
   test/training
@@ -353,6 +354,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-transformer_test-origins_cap_0
   test/operations/dune                     @runtest-unary_math_special_values-reproducible
   test/operations/dune                     @runtest-uniform_rank_zero-logged
+  test/operations/dune                     @runtest-unused_compiler_deps
   test/operations/dune                     @runtest-vendor_stub_arms_scan
   test/operations/dune                     @runtest-vendor_stub_arms_scan_control
   test/operations/dune                     @runtest-verdict_quantified
@@ -465,6 +467,7 @@ will copy them from, and the tallies go to stderr (gh-ocannl-659, gh-ocannl-665)
   test/operations/dune: declares OCANNL_BACKEND; markers: cc, cuda, metal, multidev_cc, none
   test/operations/profiles/dune: markers: none
   test/operations/startup_streams/dune: markers: none
+  test/operations/unused_compiler_deps_fixtures/dune: nothing that runs a test executable
   test/ppx/dune: declares OCANNL_BACKEND; markers: none
   test/support/dune: nothing that runs a test executable
   test/training/dune: declares OCANNL_BACKEND; markers: cc, multidev_cc, none

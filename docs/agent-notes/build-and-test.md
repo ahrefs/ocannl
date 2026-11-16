@@ -2474,8 +2474,30 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   side: the compiler archive forces its units into every executable on its dependency path,
   even one using only a printer. `test_utils_linkage` compares the linked native units with the
   installed compiler archive's unit census, so this boundary has no hand-maintained byte limit.
+  A new stdlib-tier support library (one meant to link without the compiler) joins that probe:
+  name it in `test_utils_linkage`'s `(libraries ...)`, or its closure is unguarded.
   Compare clean builds with the same aliases before attributing disk growth to source changes;
   old build trees can contain only a subset of the currently declared executables.
+
+- The other direction is `unused_compiler_deps` (a `scans` member, gh-ocannl-2118): no stanza of
+  the workspace declares a compiler-reaching library -- one whose dependency closure holds
+  `compiler-libs.common`, derived from `dune describe`, never listed -- that none of its compiled
+  modules references. Use is read from the typed trees of the stanza's `.cmt`/`.cmti` files
+  (`test/support/cmt_references.ml`), so a ppx-generated, generated-module or `select`-chosen
+  reference counts and a reference that only another library's interface loads does not: a direct
+  `ppxlib` beside a used `test_scan` is reported. A library owns the units of its `include_dirs`,
+  so libraries sharing one directory credit each other: an unused `compiler-libs.toplevel` beside a
+  `Location` use goes unreported (fixture `ucd_gap_shared_directory` pins the gap). `ll_test` is
+  covered by it like every stanza;
+  it stays outside `test_utils_linkage`'s probe, since it links `ocannl`, so a USED
+  compiler-reaching dependency added there is not refused by either check. A library declared
+  only for a side effect -- an external deriver linked so it registers -- takes an exact row in the
+  check's `exemptions` (a local `(kind ppx_rewriter)` library is exempt by form); a row whose
+  declaration is gone or now used fails. The rule runs `dune describe` itself against the source
+  root with a private `--build-dir`, and depends on the workspace's `@check` for the typed trees:
+  on mac-studio its own action takes about 2 s on a warm tree, and from a build directory with no
+  `@check` built the full `@test/operations/scans` took 34 s beyond the 162 s its other members
+  took (the merge build pays nothing extra: it builds `@check` in the same invocation).
 
 ## Verdict claims
 
