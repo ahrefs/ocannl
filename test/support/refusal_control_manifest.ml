@@ -61,6 +61,12 @@ let raw_entries =
       ] );
     ("doc_examples_extract.ml", []);
     ("ll_test_ratchet.ml", []);
+    ( "premise_ratchet.ml",
+      [
+        "[scanner-refusal:b58a95cec37dfce6d01a2e4de53038d6] test source parses";
+        "[scanner-refusal:e74f4879325b87eebe84c1ce30d37ed2] premise debt has";
+        "[scanner-refusal:b35b45534098c6165bc2d50aab63313c] contains exactness premises";
+      ] );
     ( "exact_partials_ratchet.ml",
       [
         "[scanner-refusal:ba759c72b65ab51d06be7e24325abbb2] every test source";

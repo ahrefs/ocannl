@@ -1,0 +1,13 @@
+parse failures name the input: true
+scanner defects retain their exception: true
+aliased operand and exact_partials are checked: true
+a new unchecked site fails with no debt row: true
+conversion without lowering its row fails stale: true
+a zero debt row is stale: true
+a removed source leaves a stale row: true
+a local comparison function cannot confer coverage: true
+an unmodelled collection alias cannot confer coverage: true
+checked operands alone do not cover a premise: true
+a shadowed module is outside the Ll_test census: true
+fully applied sites are counted once: true
+an unrelated checked operand cannot cover a site: true

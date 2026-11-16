@@ -1,0 +1,27 @@
+every test source parses: true
+test/operations/autotune_grid_record.ml: 1 uncovered, 0 covered
+test/operations/conv_twin_packing.ml: 1 uncovered, 0 covered
+test/operations/default_prefill.ml: 1 uncovered, 0 covered
+test/operations/discriminating_values.ml: 2 uncovered, 0 covered
+test/operations/fresh_output_fill.ml: 1 uncovered, 0 covered
+test/operations/frozen_master_pack.ml: 1 uncovered, 0 covered
+test/operations/gpu_conv_twin_tiles.ml: 1 uncovered, 0 covered
+test/operations/gpu_lane_reduction.ml: 1 uncovered, 0 covered
+test/operations/masked_persistent_fragment.ml: 1 uncovered, 0 covered
+test/operations/mma_bf16_seed_parity.ml: 2 uncovered, 0 covered
+test/operations/prefix_scan.ml: 2 uncovered, 0 covered
+test/operations/reduction_forms.ml: 1 uncovered, 0 covered
+test/operations/scan_companion_coverage.ml: 1 uncovered, 0 covered
+test/operations/schedule_batched_mma.ml: 1 uncovered, 0 covered
+test/operations/schedule_coalesce.ml: 8 uncovered, 0 covered
+test/operations/schedule_contraction_nest.ml: 1 uncovered, 0 covered
+test/operations/schedule_mma_matmul.ml: 5 uncovered, 0 covered
+test/operations/set_values_pool_coalescing.ml: 1 uncovered, 0 covered
+premise debt has not grown and every row is current: true
+the census contains exactness premises: true
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:b58a95cec37dfce6d01a2e4de53038d6] test source parses
+  [scanner-refusal:e74f4879325b87eebe84c1ce30d37ed2] premise debt has
+  [scanner-refusal:b35b45534098c6165bc2d50aab63313c] contains exactness premises
+End of synthetic controls.
