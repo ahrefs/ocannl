@@ -161,7 +161,7 @@ let scope_order_oracles_enabled =
   fun () -> Stdlib.Domain.DLS.get key
 
 let scope_order_oracles =
-  let key : (string * Low_level.Scope_order.oracle) list ref Stdlib.Domain.DLS.key =
+  let key : (string * (Low_level.Scope_order.oracle * Low_level.t)) list ref Stdlib.Domain.DLS.key =
     Stdlib.Domain.DLS.new_key (fun () -> ref [])
   in
   fun () -> Stdlib.Domain.DLS.get key
@@ -9818,8 +9818,6 @@ module C_syntax (B : C_syntax_config) = struct
        shape is what a pass leaves behind (a hoist or rename that misses a reader), and this is
        where all of them have run. *)
     Low_level.validate_local_binders ~site:"C_syntax.compile_proc" llc;
-    if !(scope_order_oracles_enabled ()) then
-      scope_order_oracles () := (name, scope_order_oracle) :: !(scope_order_oracles ());
     Low_level.validate_scan_loops optimize_ctx.Low_level.placements llc;
     (* gh-ocannl-1485: the exit gate of the slice-alias invariant ([optimize_proc] holds the entry
        one), for what a schedule transform constructs and for a [?prelowered] routine that never
@@ -9849,6 +9847,8 @@ module C_syntax (B : C_syntax_config) = struct
     Low_level.validate_local_binders ~site:"C_syntax.compile_proc"
       ~emission:(Low_level.Scope_order.emission scope_order_oracle)
       llc;
+    if !(scope_order_oracles_enabled ()) then
+      scope_order_oracles () := (name, (scope_order_oracle, llc)) :: !(scope_order_oracles ());
     (* Launch-extent guards (construct-then-fold, axis-types proposal §2), only for kinds this
        backend binds in hardware -- the serial fallback iterates the true extent. *)
     let llc =
