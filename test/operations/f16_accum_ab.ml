@@ -43,16 +43,17 @@ let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~d
 let on_cuda = String.is_substring backend_name ~substring:"cuda"
 let on_hip = String.is_substring backend_name ~substring:"hip"
 
+(* The descriptor's own judgment of the default policy's uniform-f16 tile in the per-statement scope
+   this file's schedule renders in: CUDA sm_70-sm_75 advertise the triple but no wide scope, so
+   under the wide-resolving auto their seeds are withheld and nothing here could tensorize. *)
 let capable =
   lazy
     ((on_cuda || on_hip)
-    &&
-    match (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.mma with
-    | None -> false
-    | Some mma ->
-        List.Assoc.mem mma.Ir.Backend_intf.mma_format_tiles
-          (Ir.Backend_intf.Mma_f16, Ir.Backend_intf.Mma_f16, Ir.Backend_intf.Mma_f16)
-          ~equal:Ir.Backend_intf.equal_mma_format_triple)
+    && Test_utils.with_fp16_auto (fun () ->
+        Ir.Backend_intf.advertises_mma_format_in_scope
+          (Context.hardware_limits (Context.auto ()))
+          ~policy:(Ir.Numerics.get ()) ~scope:Ir.Backend_intf.Mma_per_statement
+          ~a:Ir.Backend_intf.Mma_f16 ~b:Ir.Backend_intf.Mma_f16 ~d:Ir.Backend_intf.Mma_f16))
 
 let leg = Verdict.leg ~when_:(Lazy.force capable) ~on:backend_name ()
 let n = 32
@@ -69,10 +70,11 @@ let scramble ~salt idcs m =
    so narrowing points show. *)
 let signed ~salt idcs = (Float.of_int (scramble ~salt idcs 256) -. 128.) /. 64.
 
-(* Attention weights: exp(-d/4) for a scrambled distance d in [0, 32), rounded to f16 on the host
-   and then divided by 1024 (exact), so the row sums to about one over 1024 keys. a [| i; key |]. *)
+(* Attention weights: exp(-d/4) / 1024 for a scrambled distance d in [0, 32), so the row sums to
+   about one over 1024 keys, rounded to f16 on the host AFTER the scaling: the small weights are f16
+   subnormals, and the reference must use the values the device stores. a [| i; key |]. *)
 let weights idcs =
-  Ir.Ops.round_to_half (Float.exp (-.Float.of_int (scramble ~salt:11 idcs 32) /. 4.)) /. 1024.
+  Ir.Ops.round_to_half (Float.exp (-.Float.of_int (scramble ~salt:11 idcs 32) /. 4.) /. 1024.)
 
 type contraction = {
   name : string;

@@ -124,17 +124,30 @@ let f16_mma_capable =
    rounded over mixed-sign products (gh-ocannl-1420), so on HIP the claim is the bound instead
    (gfx1151: 30 of 1024 cells differ in every seed on these signed, f32-exact inputs, where the
    one-sign census fixtures below agree bitwise). *)
+(* Whether the default policy's uniform-f16 tile is available per statement, by the descriptor's own
+   judgment: CUDA sm_70-sm_75 advertise the triple but no wide scope, so under the wide-resolving
+   auto (gh-ocannl-2195) their uniform-f16 seeds are withheld and the default legs have nothing to
+   compare. *)
+let f16_auto_capable =
+  lazy
+    (on_gpu
+    && Test_utils.with_fp16_auto (fun () ->
+        Ir.Backend_intf.advertises_mma_format_in_scope
+          (Context.hardware_limits (Context.auto ()))
+          ~policy:(Numerics.get ()) ~scope:Ir.Backend_intf.Mma_per_statement
+          ~a:Ir.Backend_intf.Mma_f16 ~b:Ir.Backend_intf.Mma_f16 ~d:Ir.Backend_intf.Mma_f16))
+
 let f16_default_parity_leg () =
   if on_metal then measured_metal_leg ()
   else
-    Verdict.leg ~when_:((on_cuda || on_hip) && Lazy.force f16_mma_capable) ~on:(family_label ()) ()
+    Verdict.leg ~when_:((on_cuda || on_hip) && Lazy.force f16_auto_capable) ~on:(family_label ()) ()
 
 let f16_default_bitwise_leg () =
   if on_metal then measured_metal_leg ()
-  else Verdict.leg ~when_:(on_cuda && Lazy.force f16_mma_capable) ~on:(family_label ()) ()
+  else Verdict.leg ~when_:(on_cuda && Lazy.force f16_auto_capable) ~on:(family_label ()) ()
 
 let f16_default_bound_leg () =
-  Verdict.leg ~when_:(on_hip && Lazy.force f16_mma_capable) ~on:(family_label ()) ()
+  Verdict.leg ~when_:(on_hip && Lazy.force f16_auto_capable) ~on:(family_label ()) ()
 
 (* One f16 ulp of [x]: the spacing of x's binade, the subnormal spacing below 2^-14. *)
 let f16_ulp x =
@@ -598,7 +611,11 @@ let () =
          tile and the serial loop alike, so on these exact-partials fixtures both equal the
          once-narrowed model bitwise — at four blocks the model every measured narrow arm misses.
          Metal's default stays narrow (per-step tile and loop) and the leg skips there. *)
-      let auto_leg = Verdict.leg ~when_:(capable && (on_cuda || on_hip)) ~on:(family_label ()) () in
+      let auto_leg =
+        Verdict.leg
+          ~when_:(Lazy.force f16_auto_capable && (on_cuda || on_hip))
+          ~on:(family_label ()) ()
+      in
       let auto_pair =
         lazy
           (Test_utils.with_fp16_auto (fun () ->
