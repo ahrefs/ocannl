@@ -168,6 +168,26 @@
   metal_stub
   metal_backend_stub_check))
 
+; test/operations: compile-only WMMA floor witness, also names the NVRTC bindings.
+
+(rule
+ (action
+  (copy# ../../../test/operations/cuda_wmma_floor.real.ml cuda_wmma_floor.ml)))
+
+(library
+ (name cuda_wmma_floor_arm)
+ (modules cuda_wmma_floor)
+ (libraries
+  base
+  stdio
+  ocannl
+  arrayjit.verdict
+  test_utils
+  ll_test
+  cudajit_stub)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; test/operations: the arms that reach their backend through `Context` and name no vendor module.
 
 (rule

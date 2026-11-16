@@ -127,8 +127,8 @@ let mma_format_triples ~a_prec ~b_prec ~d_prec =
 
    gh-ocannl-2195: [Fp16_auto] resolves wide on CUDA and HIP, so the f16 question is the backend's
    resolution ([mma_f16_auto_wide], read through the same [Numerics.fp16_accum_wide] as its
-   [accum_prec] and arm table), not the configured mode alone: CUDA below sm_80 has no wide
-   uniform-f16 arm in either scope, and its auto-resolved uniform-f16 seeds are withheld here. *)
+   [accum_prec] and arm table), not the configured mode alone: CUDA sm_70-79 has only the wide
+   uniform-f16 fragment scope, so its per-statement seeds are withheld here. *)
 let wide_acc_withholding (mma : Ir.Backend_intf.mma_capability) ~scope ~d_prec =
   let withheld ~policy scopes =
     if List.mem scopes scope ~equal:Ir.Backend_intf.equal_mma_emission_scope then None

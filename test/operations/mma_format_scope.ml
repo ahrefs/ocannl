@@ -1,5 +1,5 @@
 (* The policy/scope descriptor judgment is pure: synthetic capabilities cover scope omissions that
-   one concrete GPU cannot vary, notably CUDA sm_70's empty wide-scope lists, and both values of the
+   one concrete GPU cannot vary, notably CUDA sm_70's fragment-only wide-f16 scope, and both values of the
    descriptor's [mma_f16_auto_wide]: under a wide-resolving [Fp16_auto] (CUDA and HIP since
    gh-ocannl-2195) the uniform-f16 triple needs a wide scope exactly as under [Fp16_wide]; and both
    values of [mma_f16_narrow_floored] (gh-ocannl-2233): the profiles' [Fp16_prefer_narrow] needs one

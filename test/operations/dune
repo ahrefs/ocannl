@@ -5683,6 +5683,29 @@
  (modules cuda_mma_cutoffs)
  (libraries base stdio arrayjit.ir arrayjit.autotune arrayjit.verdict))
 
+(test
+ ; ocannl-backend: cuda -- compile-only NVRTC witness, selected only for CUDA runs.
+ (name cuda_wmma_floor)
+ (package neural_nets_lib)
+ (enabled_if
+  (= %{env:OCANNL_BACKEND=cc} cuda))
+ (deps ocannl_config)
+ (modules cuda_wmma_floor)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  test_utils
+  ll_test
+  (select
+   cuda_wmma_floor.ml
+   from
+   (cudajit.nvrtc -> cuda_wmma_floor.real.ml)
+   (-> cuda_wmma_floor.missing.ml)))
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-2011: data-backed leaves keep their stated precision under a consumer, whether or not it
 ; was read first; a leaf with no data takes top-down precision and refuses a link after a read.
 
