@@ -310,54 +310,64 @@ let () =
       let%op y = r + (u *. c) in
       ([ u ], y, y))
 
-(* gh-ocannl-2224: the late-tail boundary is staged deliberately: all ordinary program constraints
-   register before closing. A packed draw's GLB has a concrete leading axis over a tail held open
-   through Stage6a; supply the tail equation at Stage6b. This exercises the fallback's GLB read,
-   rather than the Stage6a role arm. No natural program reaching this exact late-tail path was
-   found; the solver claims pin that path, and the draw configured from its dimensions is a smoke
-   check. *)
+(* gh-ocannl-2224: the late-tail boundary is staged deliberately: ordinary program constraints
+   register before closing. The GLB has a leading axis over a tail held open through Stage6a; supply
+   the tail equation at Stage6b. Concrete axes already work through generic elimination, but an
+   unmarked variable bounded by 3 waited until stage 7 and closed to 1. The packed role arm must
+   retry after stage 6a. No natural program reaching this exact late-tail path was found; the staged
+   solver claims pin it and the configured draws are execution smoke checks. *)
 module Row = Ocannl.Row
 
-let late_tail_dims () =
+let late_tail_dims ?(variable_axis = false) () =
   let prov = Row.provenance ~sh_id:2224 ~kind:`Output in
   let fresh () = Row.get_row_for_var prov (Row.get_row_var ()) in
   let draw = fresh () and tail = fresh () in
   let v = match draw.bcast with Row_var v -> v | Broadcastable -> assert false in
   Row.add_resolve_at_use v;
-  let glb = { tail with beg_dims = [ Row.get_default_dim ~d:3 () ] } in
+  let concrete = Row.get_default_dim ~d:3 () in
+  let axis = if variable_axis then Row.Var (Row.get_var ()) else concrete in
+  let glb = { tail with beg_dims = [ axis ] } in
+  let fixture = if variable_axis then "late-tail variable fixture" else "late-tail fixture" in
   let counter = Row.get_var () in
   let origin = [] in
   let constraints =
-    [
-      Row.Shape_row (draw, origin);
-      Row.Row_ineq { res = glb; opnd = draw; origin };
-      Row.Rows_constr
-        {
-          r = [ draw ];
-          constr =
-            Total_elems
-              {
-                numerator =
-                  Strided_var
-                    {
-                      coeff = Utils.safe_lazy "late-tail block" (fun () -> 4);
-                      var = counter;
-                      denom = 1;
-                      round_up = true;
-                    };
-                divided_by = [];
-                keep_axis = false;
-              };
-          origin;
-        };
-    ]
+    (if variable_axis then
+       [
+         Row.Dim_ineq { res = concrete; opnd = axis; from_ = Sexp.Atom "late-tail"; origin };
+         Row.Shape_row ({ glb with bcast = Broadcastable }, origin);
+       ]
+     else [])
+    @ [
+        Row.Shape_row (draw, origin);
+        Row.Row_ineq { res = glb; opnd = draw; origin };
+        Row.Rows_constr
+          {
+            r = [ draw ];
+            constr =
+              Total_elems
+                {
+                  numerator =
+                    Strided_var
+                      {
+                        coeff = Utils.safe_lazy "late-tail block" (fun () -> 4);
+                        var = counter;
+                        denom = 1;
+                        round_up = true;
+                      };
+                  divided_by = [];
+                  keep_axis = false;
+                };
+            origin;
+          };
+      ]
   in
   let pending, env =
     List.fold [ Row.Stage1; Stage2; Stage3; Stage4; Stage5; Stage6a ]
       ~init:(constraints, Row.empty_env) ~f:(fun (cs, env) stage ->
         Row.solve_inequalities ~stage cs env)
   in
-  p "late-tail fixture: the packed draw is open after Stage6a"
+  p
+    (fixture ^ ": the packed draw is open after Stage6a")
     (match (Row.subst_row env draw).bcast with Row_var _ -> true | Broadcastable -> false);
   let empty = { tail with bcast = Broadcastable } in
   let pending, env =
@@ -366,15 +376,18 @@ let late_tail_dims () =
       env
   in
   let solved = Row.subst_row env draw in
-  p "late-tail fixture: the closed GLB is retained at Stage6b"
+  p
+    (fixture ^ ": the closed GLB is retained at Stage6b")
     (Row.is_broadcastable solved.bcast
     && List.equal Int.equal
          (List.map (solved.beg_dims @ solved.dims) ~f:(function Row.Dim { d; _ } -> d | _ -> 0))
          [ 3 ]);
-  p "late-tail fixture: three cells use one counter block"
+  p
+    (fixture ^ ": three cells use one counter block")
     (Option.equal Int.equal (Row.get_dim_val env counter) (Some 1));
-  let pending, _env = Row.solve_inequalities ~stage:Stage7 pending env in
+  let pending, env = Row.solve_inequalities ~stage:Stage7 pending env in
   Shape.refuse_unsolved ~where:"late packed draw tail" pending;
+  let solved = Row.subst_row env draw in
   List.map (solved.beg_dims @ solved.dims) ~f:(fun d ->
       match d with Row.Dim { d; _ } -> d | _ -> failwith "late-tail dimension unresolved")
 
@@ -386,3 +399,11 @@ let () =
       let c = const [ 3 ] in
       let%op y = u *. c in
       ([ u ], y, y))
+
+let () =
+  draws "packed draw using bounded-variable late-tail fixture dimensions (smoke)" ~want:"3"
+    ~fills:(Some true) (fun () ->
+      let dims = late_tail_dims ~variable_axis:true () in
+      let u = TDSL.uniform () ~output_dims:dims () in
+      let c = const [ 3 ] in
+      ([ u ], c, u))

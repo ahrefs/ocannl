@@ -6142,7 +6142,7 @@ let%track5_sexp process_shape_row ~deferred_dims ~(stage : stage) origin env
           (* That's a greatest-lower-bound (most specific) value for a row. *)
           (keep @ (Row_eq { r1; r2 = glb; origin } :: dim_eqs), env)
       | Some (Bounds_row { glb = Some glb; constr; is_in_param; _ })
-        when is_packed_draw_constr constr && equal_stage stage Stage6a
+        when is_packed_draw_constr constr && is_stage6_up stage
              && (is_in_param || is_resolve_at_use v)
              && (let glb = subst_row env glb in
                  is_broadcastable glb.bcast || List.is_empty glb.beg_dims)
@@ -6157,7 +6157,10 @@ let%track5_sexp process_shape_row ~deferred_dims ~(stage : stage) origin env
              bounded too, and is taken as it is ({!glb_has_bounded_axis}). A GLB with leading axes
              over an open middle waits: aligning its flanks is a balanced-flank choice still to be
              made ([solve_closing_stages]); taken here, it refused [contraction_pointwise_closing]'s
-             satisfiable program. *)
+             satisfiable program. Retry after stage 6a too (gh-ocannl-2224): the tail can first
+             close at stage 6b while a bounded axis is still a variable. Generic elimination then
+             waits for stage 7, where that result axis closes minimal; taking it by role first
+             preserves its bound instead. *)
           let closing = close_to_glb_by_role ~own:(dim_has_glb env) env origin ~r1 ~glb in
           (keep @ closing @ dim_eqs, env)
       | Some (Bounds_row { glb; constr; _ }) ->

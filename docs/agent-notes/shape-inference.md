@@ -196,12 +196,13 @@ files.
   shortcut: it moved 27 test actions, a transformer's logits closing `2x3x1` among them.
   A mixed variable/concrete GLB join (gh-ocannl-2224) keeps the concrete axis and holds the
   displaced variable's bound: the incoming inequality or the old GLB, by orientation. Keeping the
-  variable alone made `(u *. c[3]) + reduce (u + 1)` draw once for three cells. The late-tail
-  fixture in `row_glb_reach_executed` holds a packed draw's GLB tail open through stage 6a, then
-  closes it at stage 6b: `eliminate_row_constraint` rereads it and retains its three cells, so a
-  closed tail cannot strand that draw on the minimal path merely by missing the stage-6a arm.
-  The late-tail pin is a staged store; no natural program reaching that exact path was found,
-  and its configured draw is an execution smoke check, not an execution through stage 6b.
+  variable alone made `(u *. c[3]) + reduce (u + 1)` draw once for three cells. A packed GLB's tail
+  first closed at stage 6b can still leave a bounded result-axis variable unresolved: generic
+  elimination rereads concrete flanks, but waits on that variable until stage 7 closes it minimal.
+  The packed role arm therefore retries after stage 6a, with its balanced-flank guard unchanged.
+  `row_glb_reach_executed` pins concrete and bounded-variable late tails in staged stores; the
+  variable case drew once for three cells before the retry. No natural program reaching that exact
+  path was found; the staged store pins it and its configured draw is an execution smoke check.
   Mixed `Var`/`Sym` or `Affine` joins remain outside this numeric fix; there is no claim that
   those joins preserve both bounds. Packed `Total_elems` rejects symbolic axes, so a symbolic
   regression needs a different supported path. The mixed row-store pins in `test_row_glb_reach`

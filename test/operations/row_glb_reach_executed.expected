@@ -167,3 +167,10 @@ packed draw using late-tail fixture dimensions (smoke)
   draw = 3, 3 distinct values for 3 cells
 packed draw using late-tail fixture dimensions (smoke): every draw closes to 3: true
 packed draw using late-tail fixture dimensions (smoke): every draw fills its use site: true
+late-tail variable fixture: the packed draw is open after Stage6a: true
+late-tail variable fixture: the closed GLB is retained at Stage6b: true
+late-tail variable fixture: three cells use one counter block: true
+packed draw using bounded-variable late-tail fixture dimensions (smoke)
+  draw = 3, 3 distinct values for 3 cells
+packed draw using bounded-variable late-tail fixture dimensions (smoke): every draw closes to 3: true
+packed draw using bounded-variable late-tail fixture dimensions (smoke): every draw fills its use site: true
