@@ -42,14 +42,28 @@
    NOT covered: [If]-condition, [Set_dynamic], [Set_from_vec] and [Scan_loop] units, cross-statement
    hoisting, nesting past two selects, other precisions.
 
+   Two shapes are out of the IR's contract, so the grammar does not produce them; the generator met
+   each before it was a rule. (1) An out-of-range read guarded only by a gate: a gate guards no
+   definition. [C_syntax.gate_entries] keeps behind a gate's test only the definitions that run
+   under a select's condition, and every other definition of its second operand hoists ahead of the
+   statement, which [Low_level.speculable_select]'s invariant licenses: lowering emits a read that
+   can be out of range only under a select of its own. [relu_gate(1 - i, (m<1 ? k : off))] faulted
+   on cc (SIGBUS), its blended select's arm hoisted out of the gate. (2) A read, outside a scope
+   body, of a local defined inside it: [Low_level.eliminate_common_subexpressions] restores its
+   table after each [Local_scope] body ("inner definitions must not leak to sibling subtrees"), so
+   the pipeline never produces one, and the renderer declares such a local inside the body's block
+   (cc: "undeclared identifier"). A pass that produced either shape would need the renderer to
+   change with it.
+
    Programs are compiled in batches, one row of [out] each; a batch the compile refuses is retried
    one program at a time, and a program the compile refuses is a finding. A finding prints [FINDING
    <descriptor>: <check>] on stderr; [known_findings] lists the ones a filed issue owns. [--only
    <substring>] prints the IR and kernel text of the matching programs and checks nothing;
-   [--plant-swap] routes check (a) through the planted group swap below, for showing that it fails;
-   [--widen] lifts the bound ([@test/operations/slow-where_scope_generator-widen]). The census on
-   stdout is the grammar's, backend-uniform; what the backend decided (blends, groups) is on stderr
-   and in the legs. *)
+   [--plant-swap] routes check (a) through the planted group swap below, for showing that it fails,
+   and [--blind-reader] does the same for (a') with a reader that flags nothing; [--widen] lifts the
+   bound ([@test/operations/slow-where_scope_generator-widen]). The census on stdout is the
+   grammar's, backend-uniform; what the backend decided (blends, groups) is on stderr and in the
+   legs. *)
 
 open Base
 open Ll_test
@@ -76,6 +90,11 @@ let arg flag =
 let widen = has_arg "--widen"
 let plant_swap = has_arg "--plant-swap"
 let only = arg "--only"
+
+(* [--blind-reader]: the dependency-order text reader flags nothing, for showing that its controls
+   fail without it. *)
+let reads_ahead =
+  if has_arg "--blind-reader" then fun _ _ -> [] else Scope_emission.reads_ahead_of_definition
 
 (* Disagreements a filed issue owns, by descriptor: excluded from the claims, reported on stderr. *)
 let known_findings : string list = []
@@ -443,6 +462,10 @@ type outcome = {
   text_deps_ok : bool;  (** (a'), the text *)
   walk_deps_ok : bool;  (** (a'), the walk against the IR's reads *)
   dead_ok : bool;
+  moved_caught : bool option;
+      (** The live control of (a'): with the last assignment of a local some other code reads moved
+          to the end of the text, the reader flags a read ahead of it. [None]: no such local. *)
+  rendered_named : bool;  (** Every rendered scope's local is named in the text. *)
   rendered : int;  (** Scope bodies the kernel holds for the program. *)
   shared : bool;  (** Some rendered scope's local is read where it is not defined. *)
   groups : int;  (** Conditional groups of the statement's emission order. *)
@@ -463,6 +486,8 @@ let refused_outcome prog msg =
     text_deps_ok = false;
     walk_deps_ok = false;
     dead_ok = false;
+    moved_caught = None;
+    rendered_named = false;
     rendered = 0;
     shared = false;
     groups = 0;
@@ -592,6 +617,43 @@ let finding prog check =
   if not (List.mem known_findings d ~equal:String.equal) then findings := (d, check) :: !findings;
   Stdio.eprintf "FINDING %s: %s\n%!" d check
 
+(* [source] with the line holding the last assignment of scope [id]'s local moved to its end. *)
+let definition_moved_last source id =
+  match SE.last_assignment source id with
+  | None -> source
+  | Some k ->
+      let lines = String.split_lines source in
+      String.concat ~sep:"\n" (List.filteri lines ~f:(fun j _ -> j <> k) @ [ List.nth_exn lines k ])
+
+(* The text readers on synthetic fragments: each rule flags its violation and passes the nearest
+   legitimate text. *)
+let reader_controls () =
+  let src lines = String.concat ~sep:"\n" lines in
+  let read_first = src [ "  y = (v7_n1_a * 2.0);"; "  v7_n1_a = 1.0;" ] in
+  let def_first = src [ "  v7_n1_a = 1.0;"; "  y = (v7_n1_a * 2.0);" ] in
+  let decl_and_step =
+    src
+      [
+        "  float v7_n1_a = (float)(0);";
+        "  v7_n1_a = (float)(0.0);";
+        "  for (int32_t i2 = 0; i2 <= 1; ++i2) {";
+        "    v7_n1_a = (v7_n1_a + x[i2]);";
+        "  }";
+        "  y = v7_n1_a;";
+      ]
+  in
+  let never_assigned = src [ "  y = v7_n1_a;" ] in
+  (* The exact lines flagged: a reader flagging too much fails as well as one flagging nothing. *)
+  let flagged s expected = List.equal Int.equal (reads_ahead s 7) expected in
+  p "reader control: a read ahead of the last assignment is flagged" (flagged read_first [ 0 ]);
+  p "reader control: the same lines definition-first are not" (flagged def_first []);
+  p "reader control: a declaration and an accumulation step are not reads"
+    (flagged decl_and_step []);
+  p "reader control: a read of a local never assigned is flagged" (flagged never_assigned [ 0 ]);
+  p "reader control: a fragment spelling the local names it" (SE.names_local read_first 7);
+  p "reader control: v17_ is not a mention of scope 7"
+    (not (SE.names_local (src [ "  y = v17_n1_a;"; "  v17_n1_a = xv7_n1_a;" ]) 7))
+
 let check_rows ~name progs (_, _, out, built, values) =
   let source = Generated.main_logic (Generated.read name) in
   let oracle, rendered =
@@ -640,11 +702,14 @@ let check_rows ~name progs (_, _, out, built, values) =
               values_ok = same_values got want;
               twin_ok = (match twin with Ok t -> same_values t want | Error _ -> false);
               order_ok = SE.in_text_order ends && List.length ends = List.length ids;
-              text_deps_ok =
-                List.for_all ids ~f:(fun id ->
-                    List.is_empty (SE.reads_ahead_of_definition source id));
+              text_deps_ok = List.for_all ids ~f:(fun id -> List.is_empty (reads_ahead source id));
               walk_deps_ok = deps_respected deps ends;
               dead_ok = List.for_all b.dead ~f:(fun id -> not (SE.names_local source id));
+              moved_caught =
+                List.find ids ~f:(fun id -> List.mem read_ids id ~equal:Int.equal)
+                |> Option.map ~f:(fun r ->
+                    not (List.is_empty (reads_ahead (definition_moved_last source r) r)));
+              rendered_named = List.for_all ids ~f:(SE.names_local source);
               rendered = List.length ids;
               shared = List.exists ids ~f:(fun id -> List.mem read_ids id ~equal:Int.equal);
               groups;
@@ -755,6 +820,14 @@ let () =
       p_all ~min:100 "no kernel names the scope of a discarded projection operand"
         (List.filter checked ~f:(fun o -> String.is_prefix o.prog.skeleton ~prefix:"keep"))
         ~f:(fun o -> o.dead_ok);
+      p_all ~min:floor "every rendered scope's local is named in the kernel" checked ~f:(fun o ->
+          o.rendered_named);
+      p_all ~min:1000
+        "control: with a read local's definition moved after its readers, the text reader flags \
+         the read"
+        (List.filter_map checked ~f:(fun o -> o.moved_caught))
+        ~f:Fn.id;
+      case "control: the text readers on synthetic fragments" reader_controls;
       (* Coverage floors: what the kernels rendered, at counts every backend reaches. *)
       let at_least k label xs ~f = pf "%s (at least %d)" label k (List.count xs ~f >= k) in
       at_least floor "programs whose kernel holds a scope body" checked ~f:(fun o -> o.rendered > 0);

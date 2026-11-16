@@ -14,6 +14,14 @@ every program's Emitted walk ends its scope bodies in the kernel's text order: t
 every program's text reads each scope local only after its definition: true
 every program's Emitted walk ends a body after the bodies it reads: true
 no kernel names the scope of a discarded projection operand: true
+every rendered scope's local is named in the kernel: true
+control: with a read local's definition moved after its readers, the text reader flags the read: true
+reader control: a read ahead of the last assignment is flagged: true
+reader control: the same lines definition-first are not: true
+reader control: a declaration and an accumulation step are not reads: true
+reader control: a read of a local never assigned is flagged: true
+reader control: a fragment spelling the local names it: true
+reader control: v17_ is not a mention of scope 7: true
 programs whose kernel holds a scope body (at least 2598): true
 programs with a conditional group of definitions (at least 3000): true
 programs with two conditional groups (at least 1000): true
