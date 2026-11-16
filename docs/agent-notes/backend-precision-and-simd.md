@@ -432,7 +432,7 @@ files.
   lists every test source whose string literals claim bitwise equality or whose recognised Verdict
   argument reaches an Int32/Int64 bit comparator and a `Context.get_values` or `Ll_test.execute`
   read (gh-ocannl-1851); the claim forms reuse the Verdict population model checked against
-  `Verdict.Claims` exports. Local helper arguments propagate to a fixpoint, including recursion; the shared callback table
+  `Verdict.Claims` exports. Local helper arguments from fully applied calls propagate to a fixpoint, including recursion; the shared callback table
   carries collection dependencies into tuple parameters (gh-ocannl-2230). Function identities and
   parameter rebinding use `Lexical_scope`; unknown external callers add no evidence.
   Its header owns the closed forms and dependency-summary boundary. Numeric `Float.equal` alone is outside

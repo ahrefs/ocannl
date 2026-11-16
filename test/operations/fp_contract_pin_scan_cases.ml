@@ -186,8 +186,10 @@ let () = report 1.; middle (Context.get_values ctx tensor).(0)
       {ocaml|
 open Verdict.Claims
 let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
-let rec report n got = if n = 0 then p "equal" (eq got 1.) else report (n - 1) got
-let () = report 2 (Context.get_values ctx tensor).(0)
+let rec report n got =
+  if n = 0 then p "equal" (eq got 1.)
+  else report (n - 1) (Context.get_values ctx tensor).(0)
+let () = report 2 1.
 |ocaml}
     );
     ( "helper parameter rebound to host value",
@@ -296,6 +298,30 @@ open Verdict.Claims
 let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
 let got = Context.get_values ctx tensor
 let () = p "equal" (let _unused = List.map [got] ~f:(fun _ -> eq) in Float.equal got.(0) 1.)
+|ocaml}
+    );
+    ( "unsaturated helper does not execute its claim",
+      false,
+      {ocaml|
+open Verdict.Claims
+let report got () = p "equal" (Int64.equal (Int64.bits_of_float got.(0)) 0L)
+let unused = report (Context.get_values ctx tensor)
+|ocaml}
+    );
+    ( "fully applied nested lambda comparator",
+      true,
+      {ocaml|
+open Verdict.Claims
+let eq x = fun y -> Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let () = p "equal" (eq (Context.get_values ctx tensor).(0) 1.)
+|ocaml}
+    );
+    ( "iterator does not saturate a returned closure",
+      false,
+      {ocaml|
+open Verdict.Claims
+let unused = List.map [Context.get_values ctx tensor] ~f:(fun got () ->
+  p "equal" (Int64.equal (Int64.bits_of_float got.(0)) 0L))
 |ocaml}
     );
   ]

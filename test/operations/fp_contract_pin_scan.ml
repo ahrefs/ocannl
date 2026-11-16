@@ -36,16 +36,18 @@
    Ll_test.execute_with_census with an optimized program and labelled read. A recognised claim must
    reach both an applied comparator and an output-read dependency. Summaries union expression
    children and tuple bindings: conservative dependency accounting, not per-element provenance.
-   Ordinary function parameters ([fun x ->] or [let f x =]) union the arguments of lexically
-   resolved calls in this file, to a finite monotone fixpoint (recursive calls included). Escaping
-   helpers receive no evidence from unknown external callers; uncalled parameters stay unknown. The
-   List/Array iter, iteri, map, mapi, for_all, for_alli, iter2[_exn] and map2[_exn] table maps
-   collection dependencies into inline labelled f callbacks with ordinary parameters, treating a
-   comparator callback as applied (index parameters stay unknown), including tuple patterns. Tuple
-   components share their collection's union; this is not per-element provenance. Other higher-order
-   calls, mutable storage, external helper bodies and exported module-structure values remain
-   outside this extension. Calls have an identifier claim callee and operands in one application
-   node; operator-based application, partial helper applications, function-case parameters, omitted
+   Ordinary function parameters ([fun x ->] or [let f x =]) union the arguments of fully applied
+   lexical calls in this file, to a finite monotone fixpoint (recursive calls included).
+   Unconstrained nested ordinary lambdas are flattened to count their full arity; returning a
+   comparator identifier does not execute it. Escaping helpers receive no evidence from unknown
+   external callers; uncalled parameters stay unknown. The List/Array iter, iteri, map, mapi,
+   for_all, for_alli, iter2[_exn] and map2[_exn] table maps collection dependencies into inline
+   labelled f callbacks with ordinary parameters, treating a fully saturated comparator callback as
+   applied (index parameters stay unknown), including tuple patterns. Tuple components share their
+   collection's union; this is not per-element provenance. Other higher-order calls, mutable
+   storage, external helper bodies and exported module-structure values remain outside this
+   extension. Calls have an identifier claim callee and operands in one application node;
+   operator-based application, partial helper applications, function-case parameters, omitted
    optional defaults and bare external-reader aliases are not reconstructed.
 
    - A PIN: the string literal [OCANNL_CC_BACKEND_FP_CONTRACT] whose next string literal is [off]
@@ -199,7 +201,22 @@ let callback_slots path =
             name ~equal:String.equal))
 
 let code_claim_lines content =
-  let ast = Parse.implementation (Lexing.from_string content) in
+  (* A single application may supply parameters of nested ordinary lambdas too. Flatten only
+     unconstrained function bodies; returned identifiers remain comparator factories. *)
+  let flatten =
+    object
+      inherit Ast_traverse.map as super
+
+      method! expression e =
+        let e = super#expression e in
+        match e.pexp_desc with
+        | Pexp_function
+            (params, None, Pfunction_body { pexp_desc = Pexp_function (inner, None, body); _ }) ->
+            { e with pexp_desc = Pexp_function (params @ inner, None, body) }
+        | _ -> e
+    end
+  in
+  let ast = flatten#structure (Parse.implementation (Lexing.from_string content)) in
   let functions = Hashtbl.create (module Int) in
   let parameters = Hashtbl.create (module Int) in
   let changed = ref false in
@@ -317,32 +334,34 @@ let code_claim_lines content =
             let fn_summary = self#summary env fn in
             List.iter fn_summary.helpers ~f:(fun key ->
                 Option.iter (Hashtbl.find functions key) ~f:(fun params ->
-                    let remaining = ref args in
-                    List.iter params ~f:(fun (label, pattern) ->
-                        let matching, rest =
-                          List.partition_tf !remaining ~f:(fun (actual, _) ->
-                              match (label, actual) with
-                              | (Labelled a | Optional a), (Labelled b | Optional b) ->
-                                  String.equal a b
-                              | Nolabel, Nolabel -> true
-                              | _ -> false)
-                        in
-                        match matching with
-                        | (_, arg) :: later ->
-                            remaining := later @ rest;
-                            grow pattern (self#summary env arg)
-                        | [] -> ())));
+                    if List.length args >= List.length params then
+                      let remaining = ref args in
+                      List.iter params ~f:(fun (label, pattern) ->
+                          let matching, rest =
+                            List.partition_tf !remaining ~f:(fun (actual, _) ->
+                                match (label, actual) with
+                                | (Labelled a | Optional a), (Labelled b | Optional b) ->
+                                    String.equal a b
+                                | Nolabel, Nolabel -> true
+                                | _ -> false)
+                          in
+                          match matching with
+                          | (_, arg) :: later ->
+                              remaining := later @ rest;
+                              grow pattern (self#summary env arg)
+                          | [] -> ())));
             Option.iter (callback_slots path) ~f:(fun slots ->
                 List.iter args ~f:(function
                   | Labelled "f", callback ->
                       Option.iter (Hashtbl.find functions callback.pexp_loc.loc_start.pos_cnum)
                         ~f:(fun params ->
-                          List.iteri params ~f:(fun i (_, pattern) ->
-                              Option.iter
-                                (List.nth slots i |> Option.join)
-                                ~f:(fun slot ->
-                                  Option.iter (List.nth positional slot) ~f:(fun arg ->
-                                      grow pattern (self#summary env arg)))))
+                          if List.length params <= List.length slots then
+                            List.iteri params ~f:(fun i (_, pattern) ->
+                                Option.iter
+                                  (List.nth slots i |> Option.join)
+                                  ~f:(fun slot ->
+                                    Option.iter (List.nth positional slot) ~f:(fun arg ->
+                                        grow pattern (self#summary env arg)))))
                   | _ -> ()));
 
             let is_bits =
@@ -364,7 +383,12 @@ let code_claim_lines content =
                 | Labelled "f", callback ->
                     let summary = self#summary env callback in
                     if List.is_empty summary.helpers then summary.comparator
-                    else summary.call_compared
+                    else
+                      summary.call_compared
+                      && Option.value_map (callback_slots path) ~default:false ~f:(fun slots ->
+                          List.exists summary.helpers ~f:(fun key ->
+                              Option.value_map (Hashtbl.find functions key) ~default:false
+                                ~f:(fun params -> List.length params <= List.length slots)))
                 | _ -> false)
             in
             let applied =
