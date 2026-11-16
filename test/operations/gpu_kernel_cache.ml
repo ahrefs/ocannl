@@ -206,15 +206,28 @@ let compile_run name r =
   let ctx = Context.run ctx routine in
   (Context.backend_name ctx, Context.get_values ctx r.Tensor.value, cost)
 
+let cache_stats backend =
+  if String.equal backend "cc" then
+    let s = Context.Cc_backend.kernel_cache_stats () in
+    Printf.sprintf "groups=%d entries=%d bytes=%d evicted_groups=%d" s.n_groups s.n_entries
+      s.n_bytes s.n_evicted_groups
+  else "stats available for cc only"
+
 let () =
   let backend, first, c1 = compile_run "hkf_fresh" (collide_graph ()) in
+  let stats1 = cache_stats backend in
   let _, second, c2 = compile_run "hkf_fresh" (collide_graph ()) in
+  let stats2 = cache_stats backend in
   let _, renamed, c3 = compile_run "hkf_renamed" (collide_graph ()) in
   let on = backend and when_ = c1.reuse_capable in
   p "colliding labels: outputs equal the host reference" (bitwise_equal first doubled);
   p "fresh build: outputs equal the host reference" (bitwise_equal second doubled);
   p "renamed routine: outputs equal the host reference" (bitwise_equal renamed doubled);
-  gated ~when_ ~on "fresh build, freshly numbered nodes: the same kernels rendered, none compiled"
+  gated ~when_ ~on
+    ~detail:(fun () ->
+      Printf.sprintf "compiled %d of %d; first cache {%s}; fresh cache {%s}" c2.kernels_compiled
+        c2.kernels stats1 stats2)
+    "fresh build, freshly numbered nodes: the same kernels rendered, none compiled"
     (c2.kernels = c1.kernels && c2.kernels_compiled = 0);
   gated ~when_ ~on "another routine name: the same kernels rendered, all compiled afresh"
     (c3.kernels = c1.kernels && c3.kernels_compiled = c3.kernels);
@@ -228,3 +241,29 @@ let () =
      build %d of %d, renamed %d of %d\n\
      %!"
     c1.kernels_compiled c1.kernels c2.kernels_compiled c2.kernels c3.kernels_compiled c3.kernels
+
+(* Probe several node-id offsets, including digit-count boundaries. The deterministic symbol-386
+   control is in [kernel_code_cache]; these end-to-end builds also execute the reused kernels. *)
+let () =
+  let backend, _, c1 = compile_run "hkf_offsets" (collide_graph ()) in
+  let cases =
+    List.map [ 10; 100; 1000; 10000 ] ~f:(fun offset ->
+        for _ = 1 to offset do
+          ignore (TDSL.ndarray [| 1. |] () : Tensor.t)
+        done;
+        let before = cache_stats backend in
+        let _, output, c = compile_run "hkf_offsets" (collide_graph ()) in
+        let after = cache_stats backend in
+        if c.kernels_compiled <> 0 then
+          Stdio.eprintf
+            "gpu_kernel_cache (not part of the golden): offset %d, next node %d, compiled %d of \
+             %d; before {%s}; after {%s}\n\
+             %!"
+            offset (Tensor.get_next_id ()) c.kernels_compiled c.kernels before after;
+        (output, c))
+  in
+  p_all "node-id offset builds: outputs equal the host reference" cases ~f:(fun (output, _) ->
+      bitwise_equal output doubled);
+  gated_all ~when_:c1.reuse_capable ~on:backend
+    "node-id offset builds: the same kernels rendered, none compiled" cases ~f:(fun (_, c) ->
+      c.CC.kernels = c1.kernels && c.kernels_compiled = 0)

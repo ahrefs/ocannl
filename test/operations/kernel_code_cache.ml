@@ -77,6 +77,19 @@ let () =
   let same ?kernel_name ?bound a b =
     String.equal (canon ?kernel_name ?bound a) (canon ?kernel_name ?bound b)
   in
+  (* gh-ocannl-1932: [i386] is a predefined macro on some C targets, hence in the emitter's
+     free-name blacklist. Its old spelling escaped canonical renaming even on x86-64, where it
+     compiled, making otherwise identical fresh builds miss the cache. *)
+  let symbol_kernel id =
+    let ident = Ir.Indexing.symbol_ident (Ir.Indexing.Symbol id) in
+    K.canonical_kernel ~free:Ir.C_syntax.system_macro_idents
+      (Printf.sprintf "for (int %s = 0; %s < 5; ++%s) x[%s] = 1;" ident ident ident ident)
+  in
+  p "symbol 386 keys like its neighbours despite the system macro blacklist"
+    (String.equal (symbol_kernel 385) (symbol_kernel 386)
+    && String.equal (symbol_kernel 386) (symbol_kernel 387));
+  p_none "minted index symbols avoid predefined system macros" Ir.C_syntax.system_macro_idents
+    ~f:(fun name -> String.equal name (Ir.Indexing.symbol_ident (Ir.Indexing.Symbol 386)));
   p "symbols are renamed by first occurrence"
     (String.equal
        (canon "for (int i12 = 0; i12 < 4; ++i12) a[i12 + i3] = i3;")

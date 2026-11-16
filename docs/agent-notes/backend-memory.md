@@ -667,6 +667,19 @@ files.
   **unified**, gpt2 b8, 300 s budget, base vs head): a bare candidate's median compile 1.87 to 0.68 s
   (12 to 1 of 261 kernels), a staffed one's 4.10 to 0.69 s (68 to 1), the winner's 6.7 to 1.9 s (112
   to 6-8 of 269).
+- **A fresh-build cache miss can be a free-name collision in the index namespace**
+  (gh-ocannl-1932, gh-ocannl-2214). The forced node-offset probe reproduced a miss whose two
+  `render_batch.key_text` dumps differed at loop symbol `i386`: it was left verbatim because
+  `system_macro_idents` includes the GNU C 32-bit x86 macro, while neighbouring symbols were
+  canonicalized. Earlier autotune searches consume a timing-dependent number of symbols, so
+  ordinary repeats can miss this one number. `Indexing.symbol_ident (Symbol 386)` now spells
+  `i0386`, still in the reserved numeric index namespace and injective. Do not remove the
+  canonicalizer's free-name protection: on a target defining the macro, that declaration would
+  not compile. `kernel_code_cache` pins the exact collision; `gpu_kernel_cache` executes fresh
+  builds separated by node allocations and reports cc cache stats on failure. The cc cache is
+  process-local: parallel test executables cannot populate or evict it. In the reproducer there
+  were no evictions; compare snapshots after the first and second build to distinguish a
+  future key miss from capacity pressure.
 - **cc has the cache too** (gh-ocannl-1525, `cc_kernel_cache_mib`, default 256, weighted by library
   file bytes): the C compiler costs per kernel and a lot -- a `gpt2_mini_train` candidate of 16
   kernels spent 10-37 s in it on mac-studio. Misses compile as one library; the toolchain identity

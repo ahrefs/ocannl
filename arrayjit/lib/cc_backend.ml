@@ -2083,6 +2083,8 @@ let kernel_cache_capacity_bytes =
 let kernel_cache : (library * string) Kernel_code_cache.t =
   Kernel_code_cache.create ~capacity_bytes:(fun () -> Lazy.force kernel_cache_capacity_bytes)
 
+let kernel_cache_stats () = Kernel_code_cache.stats kernel_cache
+
 (* Held from the lookups of a batch's misses to their publication, so two domains compiling the same
    kernels compile them once. *)
 let kernel_compile_lock = Stdlib.Mutex.create ()
