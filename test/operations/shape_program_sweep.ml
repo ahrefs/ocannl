@@ -46,35 +46,31 @@
    known list still occurs (a stale entry fails until it is removed: the entry's fix removes it).
    Counts go to stderr.
 
-   THE KNOWN LIST (at this sweep's landing; [known] below). An entry names the operation its cause
-   stands at, with a draw under its operand; it excuses a node at or under one whose shape is the
-   oracle's with some axes collapsed to 1, its draws filling the shape they closed to. Where the
-   cause was seen to reach the siblings it is broadcast with, the entry also covers the pointwise
-   operation consuming one. A refusal is excused only with a message the entry was seen to give. The
-   entries. gh-ocannl-2180's fixed-index input chain is fixed by gh-ocannl-2229: a non-parameter
-   minimum above 1 closes before minimal guesses, then stage 6 propagates its concrete size through
-   results to draws. The literal itself no longer makes a draw adopt its axis: [(u + 1) *. c[5|3]]
-   fills. [x[16] *. normal ()] agrees in both its shapes and its executed distinct values; the judge
-   checks both, not only fill. On the initial base, this fix retired 36 of the literal entry's 54
-   programs and reattributed 10 to other entries. With gh-ocannl-2244 combined, its 8 residual
-   programs are 5 stretches adopting a fixed-index output's size-1 axis (#107, #557, #977, #1423,
-   #1572) and 3 literals after reductions (#536, #682, #1036). The role follows unary results after
-   its one pointwise consumer too (#557's relu); it does not excuse another pointwise hop. The
-   normal entry still covers one composed draw that repeats.
+   THE KNOWN LIST ([known] below). An entry excuses only the oracle's shape with axes collapsed to
+   1, its draws filling the shape they closed to, at or under its named cause. [reach] additionally
+   covers one pointwise consumer through unary results; the residual fixed-index/stretch role also
+   follows a unary suffix after that hop (#557's relu), but adds no second pointwise hop. Refusals
+   need one of that entry's observed messages.
 
-   Other causes (each with a fixed program below): nested branching (its fixed programs, [c + (u + (v *. w))] which
-   closed [u] and [c + ((u + v) + w)] which was refused, agree since gh-ocannl-2244; random programs
-   whose branching pointwise operations nest still collapse); a fixed index over a draw ([(stretch u
-   + stretch (stretch u)) ++ "...|3 => ...|0"]: once every einsum spec over a draw, [c[|3->2] * (u
-   ++ "ab => a")] closing the kept axis to 1, with a compose whose left operand it is taking that
-   row; since gh-ocannl-2247 a spec's axes take the draw's role, those programs agree, and of the
-   entry's 17 programs the 3 left are fixed indices); and a [uniform1]-initialized parameter sized
-   only by a fixed index, accepted where a default-initialized one is refused. Four more entries the
-   sweep found are fixed (gh-ocannl-2244): a draw under a unary operation ([relu u *. c[|2,5]]),
-   under both operands of a pointwise operation ([(u *. u) + c[|2]]) or under a compose ([(c[|3,2]
-   *. v) *. (u * c[|5])]), and a constant of no axes in a branching program ([((u + v) + z) *.
-   c[|3]]), closed the draw to one element: waiting on its bound's open tail at stage 6a, the draw
-   was closed empty by the result above it at 6b. Their fixed programs stay, and agree. *)
+   gh-ocannl-2229 fixes a fixed-index input's lower bound behind a chain of results: its
+   non-parameter minimum above 1 closes before minimal guesses, then stage 6 propagates the concrete
+   size to draws. On the initial base this retired 36 of the literal entry's 54 programs and
+   reattributed 10 to existing causes. The 8 remaining cases were 5 stretches adopting a fixed-index
+   output's size-1 axis and 3 literals after reductions. gh-ocannl-2247 retires the reduction half
+   (#536, #682, #1036), which is removed from the predicate. The 5 stretch cases remain (#107, #557,
+   #977, #1423, #1572). [(u + 1) *. c[5|3]] and [x[16] *. normal ()] agree in both shapes and
+   executed fill; the judge checks every program node's shape, not just its draws.
+
+   Other remaining causes: one observed normal-draw repeat; 3 fixed-index programs, including
+   [(stretch u + stretch (stretch u)) ++ "...|3 => ...|0"]; and 20 [uniform1]-initialized parameters
+   sized only by a fixed index, accepted where default-initialized ones are refused. The fixed-index
+   entry used to cover all einsum specs over draws; since gh-ocannl-2247 passes a solved row's role
+   to its axes, only fixed indices remain.
+
+   Retired entries retain their agreeing fixed programs: gh-ocannl-2244 fixes a draw under a unary
+   operation, under both operands of a pointwise operation, under a compose, and a no-axis constant
+   in a branching program. The nested-branching entry also becomes stale with gh-ocannl-2229 and
+   gh-ocannl-2247 combined, and is removed rather than reassigned to another cause. *)
 
 open! Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -564,7 +560,7 @@ let open_under (prog : program) =
           :: List.map (args node) ~f:(fun x -> sets.(x))));
   sets
 
-let known_lit = "gh-ocannl-2180: a fixed-index axis through stretch or a literal after einsum"
+let known_lit = "gh-ocannl-2180: a fixed-index output axis through stretch"
 
 let known_uniform1_param =
   "proposed: a parameter initialized by uniform1 and sized only by a fixed index is accepted"
@@ -578,23 +574,15 @@ let output_collapse ~want ~got =
        (List.init (List.length w) ~f:(fun j -> j + 1))
        ~f:(fun j -> equal_row (strip got.o) (strip (List.take w (List.length w - j) @ [ 1 ])))
 
-(* Residual axis-role cases: stretch adopts a fixed-index output's size-1 axis; a literal after an
-   einsum carries its collapsed axis through another result. *)
+(* Stretch adopts a fixed-index output's size-1 axis. The reduction half of the former literal
+   exception was retired by gh-ocannl-2247. *)
 let residual_axis_role (prog : program) =
   let fixed = Array.create ~len:(Array.length prog) false in
-  let einsum = Array.create ~len:(Array.length prog) false in
   Array.iteri prog ~f:(fun k node ->
       fixed.(k) <-
         (match node with Einsum (Fixed_index, _) -> true | _ -> false)
-        || List.exists (args node) ~f:(fun x -> fixed.(x));
-      einsum.(k) <-
-        (match node with Einsum (Reduce, _) -> true | _ -> false)
-        || List.exists (args node) ~f:(fun x -> einsum.(x)));
-  fun _ -> function
-    | Stretch x -> fixed.(x)
-    | Add (x, y) | Mul (x, y) ->
-        (Poly.equal prog.(x) Lit && einsum.(y)) || (Poly.equal prog.(y) Lit && einsum.(x))
-    | _ -> false
+        || List.exists (args node) ~f:(fun x -> fixed.(x)));
+  fun _ -> function Stretch x -> fixed.(x) | _ -> false
 
 (* The known lists. Each entry names the operations its cause stands at ([is_x]); it excuses a node
    at or under one of them -- with [reach], also at or under the pointwise operation consuming one
@@ -630,14 +618,6 @@ let region ?(unary_after_consumer = false) (prog : program) ~is_x ~reach =
 
 let opens prog = open_under prog
 let is_open prog x = not (Set.is_empty (opens prog).(x))
-
-let rec branching prog = function
-  | Add (x, y) | Mul (x, y) -> is_open prog x && is_open prog y
-  | Stretch x | Relu x | Neg x -> branching prog prog.(x)
-  | _ -> false
-
-let pointwise_with f = function Add (x, y) | Mul (x, y) -> f x || f y | _ -> false
-let mismatch = "solved dimensions for axis: mismatch"
 let axes_count = "Mismatching number of axes"
 let too_many = "Too many axes in an operand"
 
@@ -649,14 +629,6 @@ let known : known list =
       is_x = (fun _ _ node -> Poly.equal node (Draw Normal));
       reach = true;
       refusals = [ too_many; axes_count ];
-    };
-    {
-      entry = "proposed: nested branching, a branching pointwise operation over another";
-      is_x =
-        (fun prog _ node ->
-          branching prog node && pointwise_with (fun x -> branching prog prog.(x)) node);
-      reach = true;
-      refusals = [ mismatch; axes_count ];
     };
     {
       (* Excuses no shape (no node holds it): only the acceptance, in [judge]. *)
