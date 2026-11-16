@@ -10,4 +10,10 @@ an unmodelled collection alias cannot confer coverage: true
 checked operands alone do not cover a premise: true
 a shadowed module is outside the Ll_test census: true
 fully applied sites are counted once: true
+a different products binding cannot cover the premise: true
+host sums cannot impersonate an executed reference: true
+checked reduction, comparison and lazy reference wrappers cover tuple dispatch: true
+reading a context without running it is not an executed reference: true
+one unchecked dispatched products arm keeps the shared site uncovered: true
+opaque product builders cannot export a shared lexical identity: true
 an unrelated checked operand cannot cover a site: true

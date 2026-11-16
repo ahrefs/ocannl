@@ -1,14 +1,13 @@
 (* gh-ocannl-2194: per-file exact counts of premises outside Premise_scan's closed migration
-   protocol. Counts may shrink, never grow. Even semantically checked sites outside that protocol
-   remain debt; this is deliberately conservative rather than a proof about arbitrary helpers. *)
+   protocol. Counts may shrink, never grow. Other checked spellings outside that protocol remain
+   debt; this is deliberately conservative rather than a proof about arbitrary helpers. *)
 open Base
 open Stdio
 open Verdict.Claims
-module Scan = Premise_reader.Premise_scan
+module Scan = Test_scan.Premise_scan
 
-(* Counts include helper unit tests (discriminating_values) and already-checked premises whose
-   wrappers this reader deliberately does not model (notably schedule_coalesce and masked
-   fragments). Lower a row with each conversion; delete it when it reaches zero. *)
+(* Remaining debt includes the helper's mathematical unit tests (discriminating_values), which are
+   not operand premises. Lower a row with each conversion; remove it at zero. *)
 let debt =
   [
     ("test/operations/autotune_grid_record.ml", 1);
@@ -19,13 +18,11 @@ let debt =
     ("test/operations/frozen_master_pack.ml", 1);
     ("test/operations/gpu_conv_twin_tiles.ml", 1);
     ("test/operations/gpu_lane_reduction.ml", 1);
-    ("test/operations/masked_persistent_fragment.ml", 1);
     ("test/operations/mma_bf16_seed_parity.ml", 2);
     ("test/operations/prefix_scan.ml", 2);
     ("test/operations/reduction_forms.ml", 1);
     ("test/operations/scan_companion_coverage.ml", 1);
     ("test/operations/schedule_batched_mma.ml", 1);
-    ("test/operations/schedule_coalesce.ml", 8);
     ("test/operations/schedule_contraction_nest.ml", 1);
     ("test/operations/schedule_mma_matmul.ml", 5);
     ("test/operations/set_values_pool_coalescing.ml", 1);

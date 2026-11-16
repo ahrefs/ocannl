@@ -1,6 +1,6 @@
 open Base
 open Verdict.Claims
-module Scan = Premise_reader.Premise_scan
+module Scan = Test_scan.Premise_scan
 
 let protocol =
   {ocaml|
@@ -12,6 +12,32 @@ let () = p_all "exact" products ~f:(L.exact_partials ~sig_bits:24)
 let reference = List.hd_exn (L.execute ~name:"ref" program ~seed:[] ~read:[])
 let () = p_all2 "reference" reference
   (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id))) ~f:Float.equal
+|ocaml}
+
+let wrapped_protocol =
+  {ocaml|
+module L = Ll_test
+let a = L.operand ~b:[] ~o:[2] ~i:[2] (fun _ -> 1.)
+let b = L.operand ~b:[] ~o:[2] ~i:[2] (fun _ -> 2.)
+let seeded seed idcs =
+  let _layout = [2; 2] in
+  L.operand ~b:[] ~o:[2] ~i:[2] (fun _ -> seed) idcs
+let check_products label products want =
+  p_all2 label want (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id))) ~f:Float.equal
+let run () =
+  let ctx, routine = Context.compile () in
+  let ctx = Context.run ctx routine in
+  let got = Context.get_values ctx () in
+  Context.release ctx;
+  (got, ())
+let reference () = lazy (fst (run ()))
+let first = L.reduction_cells ~out:[|2;2|] ~over:[|2|] (fun o r ->
+  seeded 1. [|o.(0);r.(0)|] *. seeded 2. [|r.(0);o.(1)|])
+let second = L.matmul_products ~m:2 ~n:2 ~k:2 a b
+let () = List.iter [ ("first", first); ("second", second) ] ~f:(fun (tag, products) ->
+  p_all tag products ~f:(L.exact_partials ~sig_bits:24);
+  let want = reference () in
+  check_products tag products (Lazy.force want))
 |ocaml}
 
 let read source =
@@ -65,6 +91,44 @@ let () =
   p "a shadowed module is outside the Ll_test census" (List.length shadowed = 0);
   let direct = read "let f cell = Ll_test.exact_partials ~sig_bits:24 cell" in
   p "fully applied sites are counted once" (List.length direct = 1 && Scan.uncovered direct = 1);
+  let other_products =
+    String.substr_replace_all protocol ~pattern:"let () = p_all2"
+      ~with_:"let () = let products = L.matmul_products ~m:2 ~n:2 ~k:2 a b in p_all2"
+    |> read
+  in
+  p "a different products binding cannot cover the premise" (Scan.uncovered other_products = 1);
+  let host_reference =
+    String.substr_replace_all protocol
+      ~pattern:"List.hd_exn (L.execute ~name:\"ref\" program ~seed:[] ~read:[])"
+      ~with_:"Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id))"
+    |> read
+  in
+  p "host sums cannot impersonate an executed reference" (Scan.uncovered host_reference = 1);
+  let wrapped = read wrapped_protocol in
+  p "checked reduction, comparison and lazy reference wrappers cover tuple dispatch"
+    (List.length wrapped = 1 && Scan.uncovered wrapped = 0);
+  let without_run =
+    String.substr_replace_all wrapped_protocol ~pattern:"Context.run ctx routine" ~with_:"ctx"
+    |> read
+  in
+  p "reading a context without running it is not an executed reference"
+    (Scan.uncovered without_run = 1);
+  let unchecked_dispatch =
+    String.substr_replace_all wrapped_protocol ~pattern:"~k:2 a b" ~with_:"~k:2 (fun _ -> 1.) b"
+    |> read
+  in
+  p "one unchecked dispatched products arm keeps the shared site uncovered"
+    (Scan.uncovered unchecked_dispatch = 1);
+  let builder_wrapper =
+    String.substr_replace_all protocol
+      ~pattern:"let products = L.matmul_products ~m:2 ~n:2 ~k:2 a b"
+      ~with_:
+        "let make_products a b = L.matmul_products ~m:2 ~n:2 ~k:2 a b\n\
+         let products = make_products a b"
+    |> read
+  in
+  p "opaque product builders cannot export a shared lexical identity"
+    (Scan.uncovered builder_wrapper = 1);
   let unrelated =
     "let unused = Ll_test.operand ~b:[] ~o:[] ~i:[] (fun _ -> 1.)\n"
     ^ String.substr_replace_all protocol ~pattern:"L.operand ~b:[] ~o:[2] ~i:[2]" ~with_:"Fun.id"

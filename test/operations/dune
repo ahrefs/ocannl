@@ -10754,7 +10754,7 @@
 (executable
  (name premise_ratchet)
  (modules premise_ratchet)
- (libraries base stdio test_scan premise_reader arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- AST-only test premise census.
@@ -10776,16 +10776,11 @@
  (action
   (diff premise_ratchet.expected premise_ratchet.actual)))
 
-(library
- (name premise_reader)
- (modules premise_scan)
- (libraries base ppxlib test_scan))
-
 (test
  ; ocannl-backend: none -- synthetic parse-tree controls.
  (name premise_scan_cases)
  (modules premise_scan_cases)
- (libraries base test_scan premise_reader arrayjit.verdict)
+ (libraries base test_scan arrayjit.verdict)
  (deps ocannl_config))
 
 (rule
