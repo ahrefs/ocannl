@@ -570,3 +570,26 @@ let () =
   let o = solved [ Row.Shape_row (res, origin); ineq res (closed [ 3; 4; 5 ]) ] in
   Verdict.p "closed rows with a leading result surplus bound the axis before stage 7: v = 3"
     (Option.equal String.equal (axes o res) (Some "3,4,5"))
+
+(* gh-ocannl-2210: the final wildcard never receives two closed rows. If the operand has more axes,
+   the earlier closed-result rank check refuses before any closing guess, independently of how
+   either row splits its material around the broadcast marker. *)
+let () =
+  List.iter [ Row.Stage1; Stage7 ] ~f:(fun stage ->
+      let stage_name = if Row.equal_stage stage Row.Stage1 then "stage 1" else "stage 7" in
+      List.iter [ 0; 1 ] ~f:(fun res_split ->
+          List.iter [ 0; 1; 2 ] ~f:(fun opnd_split ->
+              let row sh_id split axes =
+                closed_row ~sh_id ~beg_dims:(List.take axes split) ~dims:(List.drop axes split)
+              in
+              let res = row 61 res_split [ dim 3 ] and opnd = row 62 opnd_split [ dim 3; dim 3 ] in
+              let refused =
+                match Row.solve_inequalities ~stage [ ineq res opnd ] Row.empty_env with
+                | _ -> false
+                | exception Row.Shape_error (msg, _) ->
+                    String.equal msg "Too many axes in an operand; maybe using * instead of *.?"
+              in
+              Verdict.p
+                (Printf.sprintf "closed rows, longer operand, %s, splits %d/%d: refused by rank"
+                   stage_name res_split opnd_split)
+                refused)))

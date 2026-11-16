@@ -44,3 +44,15 @@ control, flipped: the stage-by-stage fold refuses it: true
 the closer after the equation: accepted at overlap 0 with no replay, as before: true
 every overlap refuted: refused after one replay, with the first run's refusal: true
 closed rows with a leading result surplus bound the axis before stage 7: v = 3: true
+closed rows, longer operand, stage 1, splits 0/0: refused by rank: true
+closed rows, longer operand, stage 1, splits 0/1: refused by rank: true
+closed rows, longer operand, stage 1, splits 0/2: refused by rank: true
+closed rows, longer operand, stage 1, splits 1/0: refused by rank: true
+closed rows, longer operand, stage 1, splits 1/1: refused by rank: true
+closed rows, longer operand, stage 1, splits 1/2: refused by rank: true
+closed rows, longer operand, stage 7, splits 0/0: refused by rank: true
+closed rows, longer operand, stage 7, splits 0/1: refused by rank: true
+closed rows, longer operand, stage 7, splits 0/2: refused by rank: true
+closed rows, longer operand, stage 7, splits 1/0: refused by rank: true
+closed rows, longer operand, stage 7, splits 1/1: refused by rank: true
+closed rows, longer operand, stage 7, splits 1/2: refused by rank: true
