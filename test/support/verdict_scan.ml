@@ -1286,14 +1286,18 @@ let tolerance_census content =
     adds no gate). Each choice of the applications on the way is one RESOLUTION ({!leg_resolution}),
     and the claim is compared once per resolution, under that choice: there a parameter of a chosen
     function, on either side, is the chosen application's argument alone, so one call's gate never
-    meets another call's population; a parameter of a function no resolution chose is followed into
-    every application's argument (the loud direction). A [gated_*] claim inside a named function is
-    compared once per application of that function the same way, so
-    [let check ~when_ label xs = gated_all ~when_ ~on label xs ~f] is read at its callers. A make
-    function given by name is followed through a [let] to its definition, and through a parameter to
-    each argument as a [~leg] is, and the function found is walked again with the claim's collector
-    ({!replay}); a helper applied in its place keeps the helper rule above. A local function's
-    application on a [~leg]'s way binds its parameters to that application's arguments.
+    meets another call's population. Every claim inside a named function -- a leg claim, under each
+    of its resolutions, and a [gated_*] claim -- is also compared once per CALL CHAIN reaching that
+    function ({!call_chains}: an application of it, then one of the function that application is
+    written in, and so on up to code no function encloses, at most 256 chains), so a leg a helper
+    builds from its own [~when_] parameter, and
+    [let check ~when_ label xs = gated_all ~when_ ~on label xs ~f], are read at their callers, one
+    call at a time, through forwarding helpers too. A parameter of a function no resolution or chain
+    chose is followed into every application's argument (the loud direction). A make function given
+    by name is followed through a [let] to its definition, and through a parameter to each argument
+    as a [~leg] is, and the function found is walked again with the claim's collector ({!replay}); a
+    helper applied in its place keeps the helper rule above. A local function's application on a
+    [~leg]'s way binds its parameters to that application's arguments.
 
     Where this stops, the leg is UNCOMPARED, with the reason: the function's name is spelled other
     than as the callee of an application (handed on as a value, piped, qualified through a module
@@ -2115,6 +2119,16 @@ let gate_census content =
   (* Every application of a name the source binds, by the binding's identity: where the name is
      spelled, the arguments, and the scope they are written in. *)
   let call_sites = Hashtbl.create (module Int) in
+  (* The named function each application of a name is written in, by where the name is spelled: what
+     a parameter forwarded to it is resolved through. *)
+  let call_callers = Hashtbl.create (module Int) in
+  (* Whether two choices of applications agree on every function both choose for. *)
+  let calls_compatible a b =
+    List.for_all a ~f:(fun (owner, at) ->
+        match List.Assoc.find b owner ~equal:Int.equal with
+        | Some other -> at = other
+        | None -> true)
+  in
   (* The parameters of the named functions, by the parameter's identity. *)
   let parameters = Hashtbl.create (module Int) in
   let next_frame = ref 0 in
@@ -3242,6 +3256,31 @@ let gate_census content =
         in
         List.exists (Hashtbl.find_multi references owner) ~f:(fun at -> not (Set.mem callees at))
 
+      (* Every chain of applications that reaches the named function [owner] -- an application of
+         it, then one of the function that application is written in, and so on up to code no
+         function of the source encloses -- so that a parameter forwarded through several calls is
+         read under one call of each. [[ [] ]] where [owner] is no function, or has no application
+         in the source; past 256 chains, too, where every parameter is read through every
+         application, the loud direction. *)
+      method call_chains owner =
+        let produced = ref 0 in
+        let rec go seen owner =
+          match Hashtbl.find_multi call_sites owner with
+          | [] -> [ [] ]
+          | sites ->
+              List.concat_map sites ~f:(fun (at, _, _) ->
+                  match Option.join (Hashtbl.find call_callers at) with
+                  | Some caller when not (List.mem seen caller ~equal:Int.equal) ->
+                      List.map (go (caller :: seen) caller) ~f:(fun chain -> (owner, at) :: chain)
+                  | _ ->
+                      Int.incr produced;
+                      if !produced > 256 then raise Stdlib.Exit;
+                      [ [ (owner, at) ] ])
+        in
+        match owner with
+        | None -> [ [] ]
+        | Some owner -> ( try go [ owner ] owner with Stdlib.Exit -> [ [] ])
+
       (* The applications a parameter of [owner] takes its arguments from: under {!context}, the one
          chosen there; otherwise every one. *)
       method sites owner =
@@ -3268,12 +3307,7 @@ let gate_census content =
         let single gates ambiguous =
           [ { calls = []; leg_gates = gates; leg_ambiguous = ambiguous } ]
         in
-        let compatible a b =
-          List.for_all a ~f:(fun (owner, at) ->
-              match List.Assoc.find b owner ~equal:Int.equal with
-              | Some other -> at = other
-              | None -> true)
-        in
+        let compatible = calls_compatible in
         let merge a b =
           {
             calls = List.dedup_and_sort (a.calls @ b.calls) ~compare:Poly.compare;
@@ -3677,6 +3711,7 @@ let gate_census content =
               { populations = []; handed = []; branches = []; make_span = span_of make }
             in
             let point = self#point_of expr in
+            let enclosing = List.hd enclosing_functions in
             (* The collectors [make] fills under the current {!context}: what each function it names
                claims, and what each helper it names is handed. *)
             let collectors () =
@@ -3751,6 +3786,27 @@ let gate_census content =
                 | Ok resolutions -> (
                     (* Each resolution is compared under its own applications, so that one call's
                        gate never meets another call's population. *)
+                    (* Under each chain of applications reaching the claim's enclosing function,
+                       too, so that a leg the helper builds from its own parameters is compared per
+                       call (gh-ocannl-1893, local review). *)
+                    let chains = self#call_chains enclosing in
+                    let resolutions =
+                      List.concat_map resolutions ~f:(fun resolution ->
+                          match
+                            List.filter_map chains ~f:(fun chain ->
+                                if calls_compatible resolution.calls chain then
+                                  Some
+                                    {
+                                      resolution with
+                                      calls =
+                                        List.dedup_and_sort (resolution.calls @ chain)
+                                          ~compare:Poly.compare;
+                                    }
+                                else None)
+                          with
+                          | [] -> [ resolution ]
+                          | chosen -> chosen)
+                    in
                     let compared =
                       List.map resolutions ~f:(fun resolution ->
                           context <- resolution.calls;
@@ -3960,7 +4016,9 @@ let gate_census content =
                    match Lexical_scope.lookup env name with
                    | Some { identity; _ } when identity > 0 ->
                        Hashtbl.add_multi call_sites ~key:identity
-                         ~data:(loc.loc_start.pos_cnum, arguments, env)
+                         ~data:(loc.loc_start.pos_cnum, arguments, env);
+                       Hashtbl.set call_callers ~key:loc.loc_start.pos_cnum
+                         ~data:(List.hd enclosing_functions)
                    | _ -> ())
                | _ -> ());
                (* A pipeline is read as the application it spells, so that [rows |> List.iter ~f] is
@@ -4097,14 +4155,7 @@ let gate_census content =
                            (* Inside a named function its applications supply, compared once per
                               application, so that one call's gate never meets another call's
                               population (gh-ocannl-1893). *)
-                           let contexts =
-                             match enclosing with
-                             | Some owner -> (
-                                 match Hashtbl.find_multi call_sites owner with
-                                 | [] -> [ [] ]
-                                 | sites -> List.map sites ~f:(fun (at, _, _) -> [ (owner, at) ]))
-                             | None -> [ [] ]
-                           in
+                           let contexts = self#call_chains enclosing in
                            let shared =
                              List.concat_map contexts ~f:(fun calls ->
                                  context <- calls;

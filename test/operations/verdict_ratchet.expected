@@ -705,6 +705,9 @@ refuses an optional leg parameter one application supplies and another defaults:
 refuses a leg passed through two helpers: true
 accepts a helper applied twice whose gates each read only the other call's rows: true
 refuses the one offending application of a helper applied twice: true
+refuses a helper building its own leg from a gate its caller reads off the rows: true
+accepts a helper building its own leg, applied twice with each gate reading the other's rows: true
+accepts a forwarding helper applied twice with each gate reading the other's rows: true
 names a leg uncompared whose helper is also handed on as a value: true
 terminates on a helper that passes its leg back to itself: true
 refuses a make function given by name whose population the leg's gate reads: true

@@ -4841,6 +4841,39 @@ let () =
   check ~leg:(Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name ()) rows|ocaml},
       [ "rows" ],
       1 );
+    ( "refuses a helper building its own leg from a gate its caller reads off the rows",
+      {ocaml|open Verdict.Claims
+let check ~when_ rows =
+  in_leg ~leg:(Verdict.leg ~when_ ~on:backend_name ()) "all rows pass" (fun label ->
+      p_all label rows ~f:Fn.id)
+let () =
+  let rows = probe () in
+  check ~when_:(not (List.is_empty rows)) rows|ocaml},
+      [ "rows" ],
+      1 );
+    ( "accepts a helper building its own leg, applied twice with each gate reading the other's rows",
+      {ocaml|open Verdict.Claims
+let check ~when_ rows =
+  in_leg ~leg:(Verdict.leg ~when_ ~on:backend_name ()) "all rows pass" (fun label ->
+      p_all label rows ~f:Fn.id)
+let () =
+  let rows = probe () and others = probe () in
+  check ~when_:(not (List.is_empty others)) rows;
+  check ~when_:true others|ocaml},
+      [],
+      1 );
+    ( "accepts a forwarding helper applied twice with each gate reading the other's rows",
+      {ocaml|open Verdict.Claims
+let check ~when_ rows =
+  in_leg ~leg:(Verdict.leg ~when_ ~on:backend_name ()) "all rows pass" (fun label ->
+      p_all label rows ~f:Fn.id)
+let outer ~when_ rows = check ~when_ rows
+let () =
+  let rows = probe () and others = probe () in
+  outer ~when_:(not (List.is_empty others)) rows;
+  outer ~when_:true others|ocaml},
+      [],
+      1 );
     ( "names a leg uncompared whose helper is also handed on as a value",
       helper
       ^ {ocaml|let () =
