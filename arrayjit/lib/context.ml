@@ -639,7 +639,9 @@ let overwritten (comp : Asgns.comp) =
   Asgns.fold_leaves comp.asgns
     ~init:(Set.empty (module Tn))
     ~f:(fun acc -> function
-      | Asgns.Accum_op { rhs = Rev_sides { lhses; _ }; _ } -> Array.fold lhses ~init:acc ~f:add
+      | Asgns.Accum_op { rhs = Rev_sides { lhses; _ }; _ } ->
+          Array.fold lhses ~init:acc ~f:(fun acc buf ->
+              Option.value_map buf ~default:acc ~f:(add acc))
       | Asgns.Accum_op { lhs; _ } | Asgns.Set_vec_unop { lhs; _ } -> Set.add acc lhs
       | Asgns.Fetch _ | Asgns.Noop | Asgns.Seq _ | Asgns.Block_comment _ -> acc)
 

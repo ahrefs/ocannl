@@ -1,0 +1,24 @@
+constant first: forward values: true
+constant first: parameter gradient: true
+constant first: constant has no gradient: true
+constant first: forward matches materialized reference: true
+constant first: gradient matches materialized reference: true
+constant last: forward values: true
+constant last: parameter gradient: true
+constant last: constant has no gradient: true
+constant last: forward matches materialized reference: true
+constant last: gradient matches materialized reference: true
+constant middle: forward values: true
+constant middle: parameter gradient: true
+constant middle: parameter gradient: true
+constant middle: constant has no gradient: true
+constant middle: forward matches materialized reference: true
+constant middle: gradient matches materialized reference: true
+constant middle: gradient matches materialized reference: true
+constant then width-1 parameter: forward values: true
+constant then width-1 parameter: parameter gradient: true
+constant then width-1 parameter: constant has no gradient: true
+constant then width-1 parameter: forward matches materialized reference: true
+constant then width-1 parameter: gradient matches materialized reference: true
+all-constant concat has no gradient: true
+all-constant concat forward values: true

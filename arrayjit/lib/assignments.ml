@@ -62,10 +62,12 @@ type accum_rhs =
           list a component's segments in different orders and different subsets: [a^b^c => c^a]
           writes nothing for the choice of [b], and [a^c => a^b^c] reads no operand there
           (gh-ocannl-2087). *)
-  | Rev_sides of { op : Ops.unop; lhses : buffer array }
+  | Rev_sides of { op : Ops.unop; lhses : buffer option array }
       (** Causes the [Accum_op] to completely reverse its semantics: left-hand side and right-hand
           side are swapped. [lhs] becomes the read-from tensor and [rhs], i.e. [lhses] above, become
-          the written-to tensors. This is needed in particular for gradients of concatenation. *)
+          the written-to tensors. A [None] target skips that operand position without removing its
+          projection or segment. This is needed in particular for gradients of mixed-gradient
+          concatenation. *)
 [@@deriving sexp_of, equal]
 
 type t =
@@ -169,7 +171,7 @@ let buffers_of_accum_rhs : accum_rhs -> buffer list = function
   | Binop { rhs1; rhs2; _ } -> [ rhs1; rhs2 ]
   | Unop { rhs; _ } -> [ rhs ]
   | Block { rhses; _ } -> Array.to_list rhses
-  | Rev_sides { lhses; _ } -> Array.to_list lhses
+  | Rev_sides { lhses; _ } -> Array.filter_opt lhses |> Array.to_list
 
 (** Whether the assignment's roles are reversed: [Rev_sides]' buffers are written and its enclosing
     [Accum_op]'s [lhs] is read. *)
@@ -395,8 +397,8 @@ let forward_recomputed (comp : comp) =
         | Rev_sides { lhses; _ } ->
             let sources = current lhs in
             Array.fold lhses ~init:built_from ~f:(fun built_from -> function
-              | Node tn -> write built_from tn (accumulated tn sources)
-              | Merge_buffer _ -> built_from)
+              | Some (Node tn) -> write built_from tn (accumulated tn sources)
+              | None | Some (Merge_buffer _) -> built_from)
         | Binop { op; rhs1; rhs2 } ->
             let operands =
               match Ops.binop_conditionality op with
@@ -1278,64 +1280,72 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
     let selector = block_selector ~arity:(Array.length lhses) projections in
     let target_projections =
       Array.mapi projections.project_rhs ~f:(fun i project_lhs ->
-          let target_dims = projections.rhs_dims.(i) in
-          (* Keep inactive symbols in the domain: removing one would make the source availability
-             proof mistake it for an always-available static parameter. *)
-          (* Each target's queries judge that target's writes alone, so they are sound only when no
-             other target writes the same storage: [(t, t) ++^ ...] scatters both segments into one
-             gradient, and two plain stores would keep only the later contribution. Storage is
-             compared after [resolve_alias], as [set] and [get] resolve it, so two slice-alias
-             views of one parent count as one. A storage named by more than one target keeps the
-             read-add-write form and its init. *)
-          let storage = function Node tn | Merge_buffer tn -> fst (resolve_alias tn [||]) in
-          let shared =
-            Array.existsi lhses ~f:(fun j buf ->
-                j <> i && Tn.equal (storage buf) (storage lhses.(i)))
-          in
-          let attributed =
-            match selector with
-            | _ when shared -> None
-            | None -> Some project_lhs
-            | Some syms ->
-                let selected = syms.(i) in
-                (* A segment of dimension 1 iterates its symbol over [0] alone, so the target
-                   indexes that axis at [Fixed_idx 0] and never mentions the symbol. [Iterator
-                   selected] at that axis is the same index -- the writes are unchanged -- and it
-                   lets the analyses below see that only the blocks choosing this segment write the
-                   target. Without it, every block of the component looked like a writer, so the
-                   target was never proven injective: a read-add-write plus an init where a store
-                   would do. Any dimension-1 [Fixed_idx 0] axis is the same index for a symbol
-                   ranging over [0]; with none, the target keeps the conservative path. *)
-                let project_lhs =
-                  if Array.exists project_lhs ~f:(Indexing.axis_index_mentions_symbol selected) then
-                    Some project_lhs
-                  else if Option.equal Int.equal (segment_width projections selected) (Some 1) then
-                    Array.findi project_lhs ~f:(fun ax idx ->
-                        match idx with Indexing.Fixed_idx 0 -> target_dims.(ax) = 1 | _ -> false)
-                    |> Option.map ~f:(fun (ax, _) ->
-                        Array.mapi project_lhs ~f:(fun ax' idx ->
-                            if ax' = ax then Indexing.Iterator selected else idx))
-                  else None
-                in
-                Option.filter project_lhs ~f:(fun project_lhs ->
-                    Array.for_all projections.components ~f:(fun comp ->
-                        if List.exists comp ~f:(fun (_, s) -> Indexing.equal_symbol s selected) then
-                          let others =
-                            List.filter_map comp ~f:(fun (_, s) ->
-                                if Indexing.equal_symbol s selected then None else Some s)
-                          in
-                          not
-                            (Array.exists project_lhs ~f:(Indexing.axis_index_mentions_any others))
-                        else true))
-          in
-          Option.map attributed ~f:(fun project_lhs ->
-              {
-                projections with
-                lhs_dims = target_dims;
-                project_lhs;
-                rhs_dims = [| projections.lhs_dims |];
-                project_rhs = [| projections.project_lhs |];
-              }))
+          Option.bind lhses.(i) ~f:(fun target ->
+              let target_dims = projections.rhs_dims.(i) in
+              (* Keep inactive symbols in the domain: removing one would make the source availability
+                 proof mistake it for an always-available static parameter. *)
+              (* Each target's queries judge that target's writes alone, so they are sound only when no
+                 other target writes the same storage: [(t, t) ++^ ...] scatters both segments into one
+                 gradient, and two plain stores would keep only the later contribution. Storage is
+                 compared after [resolve_alias], as [set] and [get] resolve it, so two slice-alias
+                 views of one parent count as one. A storage named by more than one target keeps the
+                 read-add-write form and its init. *)
+              let storage = function Node tn | Merge_buffer tn -> fst (resolve_alias tn [||]) in
+              let shared =
+                Array.existsi lhses ~f:(fun j buf ->
+                    j <> i
+                    && Option.exists buf ~f:(fun buf -> Tn.equal (storage buf) (storage target)))
+              in
+              let attributed =
+                match selector with
+                | _ when shared -> None
+                | None -> Some project_lhs
+                | Some syms ->
+                    let selected = syms.(i) in
+                    (* A segment of dimension 1 iterates its symbol over [0] alone, so the target
+                       indexes that axis at [Fixed_idx 0] and never mentions the symbol. [Iterator
+                       selected] at that axis is the same index -- the writes are unchanged -- and
+                       it lets the analyses below see that only the blocks choosing this segment
+                       write the target. Without it, every block of the component looked like a
+                       writer, so the target was never proven injective: a read-add-write plus an
+                       init where a store would do. Any dimension-1 [Fixed_idx 0] axis is the same
+                       index for a symbol ranging over [0]; with none, the target keeps the
+                       conservative path. *)
+                    let project_lhs =
+                      if Array.exists project_lhs ~f:(Indexing.axis_index_mentions_symbol selected)
+                      then Some project_lhs
+                      else if Option.equal Int.equal (segment_width projections selected) (Some 1)
+                      then
+                        Array.findi project_lhs ~f:(fun ax idx ->
+                            match idx with
+                            | Indexing.Fixed_idx 0 -> target_dims.(ax) = 1
+                            | _ -> false)
+                        |> Option.map ~f:(fun (ax, _) ->
+                            Array.mapi project_lhs ~f:(fun ax' idx ->
+                                if ax' = ax then Indexing.Iterator selected else idx))
+                      else None
+                    in
+                    Option.filter project_lhs ~f:(fun project_lhs ->
+                        Array.for_all projections.components ~f:(fun comp ->
+                            if List.exists comp ~f:(fun (_, s) -> Indexing.equal_symbol s selected)
+                            then
+                              let others =
+                                List.filter_map comp ~f:(fun (_, s) ->
+                                    if Indexing.equal_symbol s selected then None else Some s)
+                              in
+                              not
+                                (Array.exists project_lhs
+                                   ~f:(Indexing.axis_index_mentions_any others))
+                            else true))
+              in
+              Option.map attributed ~f:(fun project_lhs ->
+                  {
+                    projections with
+                    lhs_dims = target_dims;
+                    project_lhs;
+                    rhs_dims = [| projections.lhs_dims |];
+                    project_rhs = [| projections.project_lhs |];
+                  })))
     in
     let target_can_skip =
       Array.map target_projections ~f:(fun proj ->
@@ -1367,10 +1377,13 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
           let targets =
             Array.filter_mapi projections.project_rhs ~f:(fun i lhs_idcs ->
                 try
-                  if not (is_allowed i) then None
-                  else
-                    let lhs_idcs = Array.map ~f:subst_index lhs_idcs in
-                    Some (i, lhses.(i), lhs_idcs)
+                  match lhses.(i) with
+                  | None -> None
+                  | Some buf ->
+                      if not (is_allowed i) then None
+                      else
+                        let lhs_idcs = Array.map ~f:subst_index lhs_idcs in
+                        Some (i, buf, lhs_idcs)
                 with Empty_block -> None)
           in
           if Array.is_empty targets then raise Empty_block;
@@ -1415,7 +1428,9 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
        not in uid order, which is the order the nodes were created in). *)
     let padding_resets =
       Array.to_list lhses
-      |> List.filter_map ~f:(function Node tn -> Some tn | Merge_buffer _ -> None)
+      |> List.filter_map ~f:(function
+        | Some (Node tn) -> Some tn
+        | None | Some (Merge_buffer _) -> None)
       |> List.stable_dedup ~compare:Tn.compare
       |> List.concat_map ~f:(fun tn ->
           match Tn.get_padding tn with Some (_, v) -> reset_padding_regions tn v | None -> [])
@@ -1427,27 +1442,29 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
     in
     let init_ops =
       Array.filter_mapi lhses ~f:(fun i buf ->
-          if not target_needs_init.(i) then None
-          else
-            let array =
-              match buf with
-              | Node tn -> tn
-              | Merge_buffer _ ->
-                  raise @@ Utils.User_error "Rev_sides cannot initialize merge buffers"
-            in
-            (* The target's own view as the written side, built whether or not the selector
-               attributes the target ([target_projections] drops one that mentions another segment
-               of its component, or whose width-1 segment has no dimension-1 [Fixed_idx 0] axis):
-               the initialization needs only its dims, its index per axis and the extent table, and
-               the body's writes to it are guarded by the same bound extents. *)
-            let projections =
-              {
-                projections with
-                lhs_dims = projections.rhs_dims.(i);
-                project_lhs = projections.project_rhs.(i);
-              }
-            in
-            Some (neutral_init ~projections array accum))
+          match buf with
+          | None -> None
+          | Some _ when not target_needs_init.(i) -> None
+          | Some buf ->
+              let array =
+                match buf with
+                | Node tn -> tn
+                | Merge_buffer _ ->
+                    raise @@ Utils.User_error "Rev_sides cannot initialize merge buffers"
+              in
+              (* The target's own view as the written side, built whether or not the selector
+                 attributes the target ([target_projections] drops one that mentions another segment
+                 of its component, or whose width-1 segment has no dimension-1 [Fixed_idx 0] axis):
+                 the initialization needs only its dims, its index per axis and the extent table,
+                 and the body's writes to it are guarded by the same bound extents. *)
+              let projections =
+                {
+                  projections with
+                  lhs_dims = projections.rhs_dims.(i);
+                  project_lhs = projections.project_rhs.(i);
+                }
+              in
+              Some (neutral_init ~projections array accum))
       |> Array.to_list
     in
     if List.is_empty init_ops then for_loops_with_resets
@@ -1468,17 +1485,20 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
   and lower_code (code : t) : Low_level.t =
     match code with
     | Accum_op { initialize_neutral; accum; lhs; rhs; projections; _ } -> (
-        let op, rhses =
-          match rhs with
-          | Unop { op; rhs } -> (Ops.Unop op, [| rhs |])
-          | Binop { op; rhs1; rhs2 } -> (Ops.Binop op, [| rhs1; rhs2 |])
-          | Ternop { op; rhs1; rhs2; rhs3 } -> (Ops.Ternop op, [| rhs1; rhs2; rhs3 |])
-          | Block { op; rhses } -> (Ops.Unop op, rhses)
-          | Rev_sides { op; lhses } -> (Ops.Unop op, lhses)
-        in
         match rhs with
-        | Rev_sides _ -> loop_accum_rev ~initialize_neutral ~accum ~op ~lhs ~lhses:rhses projections
-        | _ -> loop_accum ~initialize_neutral ~accum ~op ~lhs ~rhses projections)
+        | Rev_sides { op; lhses } ->
+            loop_accum_rev ~initialize_neutral ~accum ~op:(Ops.Unop op) ~lhs ~lhses projections
+        | Unop { op; rhs } ->
+            loop_accum ~initialize_neutral ~accum ~op:(Ops.Unop op) ~lhs ~rhses:[| rhs |]
+              projections
+        | Binop { op; rhs1; rhs2 } ->
+            loop_accum ~initialize_neutral ~accum ~op:(Ops.Binop op) ~lhs ~rhses:[| rhs1; rhs2 |]
+              projections
+        | Ternop { op; rhs1; rhs2; rhs3 } ->
+            loop_accum ~initialize_neutral ~accum ~op:(Ops.Ternop op) ~lhs
+              ~rhses:[| rhs1; rhs2; rhs3 |] projections
+        | Block { op; rhses } ->
+            loop_accum ~initialize_neutral ~accum ~op:(Ops.Unop op) ~lhs ~rhses projections)
     | Set_vec_unop { op; lhs; rhs; projections; _ } ->
         (* Handle vector unary operations *)
         let projections = Lazy.force projections in
@@ -1885,7 +1905,10 @@ let to_doc ?name ?static_indices () c =
         | Rev_sides { op; lhses } ->
             brackets
               (separate (semi ^^ space)
-                 (Array.to_list (Array.map lhses ~f:(Fn.compose string buffer_ident))))
+                 (Array.to_list
+                    (Array.map lhses ~f:(function
+                      | None -> string "_"
+                      | Some buf -> string (buffer_ident buf)))))
             ^^ space
             ^^ string (Ops.assign_op_cd_syntax ~initialize_neutral accum)
             ^^ space

@@ -114,16 +114,17 @@ let classification () =
   classified "Rev_sides writes its buffers from the lhs"
     [
       assign s x;
-      accum ~initialize_neutral:true y (Rev_sides { op = Identity; lhses = [| Node v; Node w |] });
+      accum ~initialize_neutral:true y
+        (Rev_sides { op = Identity; lhses = [| Some (Node v); Some (Node w) |] });
     ]
     ~recomputed:[ s; v; w ];
   classified "Rev_sides reads the lhs and accumulates into its buffers"
-    [ accum ~initialize_neutral:false s (Rev_sides { op = Identity; lhses = [| Node v |] }) ]
+    [ accum ~initialize_neutral:false s (Rev_sides { op = Identity; lhses = [| Some (Node v) |] }) ]
     ~recomputed:[];
   classified "a Rev_sides write is built from what it read"
     [
       accum ~initialize_neutral:true ~op:Ir.Ops.Add v
-        (Rev_sides { op = Identity; lhses = [| Node s |] });
+        (Rev_sides { op = Identity; lhses = [| Some (Node s) |] });
       binary v v x;
     ]
     ~recomputed:[ s ];

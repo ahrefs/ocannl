@@ -29,7 +29,9 @@ type accum_rhs =
   | Binop of { op : Ops.binop; rhs1 : buffer; rhs2 : buffer }
   | Unop of { op : Ops.unop; rhs : buffer }
   | Block of { op : Ops.unop; rhses : buffer array }
-  | Rev_sides of { op : Ops.unop; lhses : buffer array }
+  | Rev_sides of { op : Ops.unop; lhses : buffer option array }
+      (** Reverse scatter: [None] skips a target without removing its operand position or
+          projection. Skipped targets are neither read nor written, including initialization. *)
 [@@deriving sexp_of, equal]
 
 type t =

@@ -42,8 +42,11 @@ let () =
       [
         Asgns.Fetch { array = const; fetch_op = Constant 1.; dims = unforced "dims" };
         accum dst (Binop { op = Add; rhs1 = Node const; rhs2 = Merge_buffer merged });
+        (* Absent targets retain positions but contribute no read or materialization output. *)
         Block_comment
-          ("reversed", accum rev_src (Rev_sides { op = Identity; lhses = [| Node rev_dst |] }));
+          ( "reversed",
+            accum rev_src
+              (Rev_sides { op = Identity; lhses = [| None; Some (Node rev_dst); None |] }) );
         Set_vec_unop
           {
             op = Uint4x32_to_prec_uniform;
