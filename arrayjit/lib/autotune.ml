@@ -3080,6 +3080,14 @@ let transaction_rate_override =
     (parse_rate ~key:"model_transaction_rate" ~what:"rate in sectors/s"
        (Utils.get_global_arg ~arg_name:"model_transaction_rate" ~default:""))
 
+(* gh-ocannl-1821: the staged-copy rate (bytes/s; [none]: no staged-copy term, a continuous launch
+   fill, and no coalesced layouts admitted through it) beats the backend's advisory
+   [staged_copy_rate]. Same readers and class as the rates above. *)
+let staged_copy_rate_override =
+  lazy
+    (parse_rate ~key:"model_staged_copy_rate" ~what:"rate in bytes/s"
+       (Utils.get_global_arg ~arg_name:"model_staged_copy_rate" ~default:""))
+
 let resolve override advisory =
   match Lazy.force override with `Advisory -> advisory | `Off -> None | `Value v -> Some v
 
@@ -3151,13 +3159,20 @@ let ranking_workgroup_capacity ~limits =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   resolve workgroup_capacity_override u.workgroup_capacity
 
+let ranking_staged_copy_rate ~limits =
+  let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
+  resolve staged_copy_rate_override u.copy_rate
+
+(* The launch fill as resolved: continuous ([fm_tail] off). The score switches the tail on where it
+   prices a staged-copy rate (segments_legs, gh-ocannl-1821). *)
 let ranking_fill_model ~limits : CM.fill_model option =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   match
     ( resolve multiprocessors_override u.core_count,
       resolve fill_threads_override u.saturation_threads )
   with
-  | Some fm_multiprocessors, Some fm_fill_threads -> Some { CM.fm_multiprocessors; fm_fill_threads }
+  | Some fm_multiprocessors, Some fm_fill_threads ->
+      Some { CM.fm_multiprocessors; fm_fill_threads; fm_tail = false }
   | _ -> None
 
 type kernel_legs = {
@@ -3180,6 +3195,10 @@ type kernel_legs = {
   kl_transactions_by_sector : (int * float) list;
       (** The same fill-weighted excess at the 64- and 128-byte sector sizes, on request only: a
           diagnostic for whether the counting unit changes the ordering. *)
+  kl_staged_bytes : float;
+      (** gh-ocannl-1821: the operand staging copies' bytes as the compute leg divides them by the
+          staged-copy rate ({!Ir.Cost_model.filled_staged_bytes}); 0 where they were not counted (no
+          rate). *)
   kl_workgroup_bytes : int;
   kl_block_threads : int;
       (** The kernel's static workgroup-shared bytes ({!Sched.workgroup_memory_bytes}; 0 without
@@ -3194,7 +3213,7 @@ type kernel_legs = {
    candidate's roofline lower bound ([summaries_roofline]'s). [None] exactly where
    [summaries_roofline] is. *)
 let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate
-    ?device_gather_rate ?fill_model ?transaction_rate ?workgroup_capacity
+    ?device_gather_rate ?fill_model ?transaction_rate ?workgroup_capacity ?staged_copy_rate
     ?(count_transactions = false) ~peak_flops ~peak_memory_bandwidth ~limits
     (segs : LL.optimized list) : (float * kernel_legs list) option =
   (* Each reading only where no explicit value replaces it: a caller's gate isolates the score from
@@ -3214,7 +3233,16 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
   let device_gather_rate =
     match device_gather_rate with Some r -> r | None -> ranking_device_gather_rate ~limits
   in
-  let fill_model = match fill_model with Some f -> f | None -> ranking_fill_model ~limits in
+  let staged_copy_rate =
+    match staged_copy_rate with Some r -> r | None -> ranking_staged_copy_rate ~limits
+  in
+  (* gh-ocannl-1821: the launch tail follows the copy rate the score prices, whichever reading
+     supplied the fill model -- the two are one calibration. *)
+  let fill_model =
+    Option.map
+      (match fill_model with Some f -> f | None -> ranking_fill_model ~limits)
+      ~f:(fun fm -> { fm with CM.fm_tail = Option.is_some staged_copy_rate })
+  in
   let transaction_rate =
     match transaction_rate with Some r -> r | None -> ranking_transaction_rate ~limits
   in
@@ -3278,10 +3306,24 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
                     CM.memory_transactions ?sector ~lane_width ~is_global:(CM.global_in o) o.LL.llc)
               in
               let transactions = count None in
+              (* gh-ocannl-1821: the operand staging copies, where a copy rate prices them: into a
+                 workgroup-shared node that is not a fragment. *)
+              let staged_copies =
+                match staged_copy_rate with
+                | None -> []
+                | Some _ ->
+                    let is_staged tn =
+                      Set.mem o.LL.workgroup_shared tn
+                      && (not (Set.mem o.LL.simdgroup_fragments tn))
+                      && not (Set.mem o.LL.masked_fragments tn)
+                    in
+                    CM.staged_copies ~is_staged o.LL.llc
+              in
               let kl_compute, kl_memory =
                 CM.ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes
                   ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate ~mma_flops ~device_gathers
-                  ?device_gather_rate ?launch ~transactions ?transaction_rate ?occupancy s reuse
+                  ?device_gather_rate ?launch ~transactions ?transaction_rate ~staged_copies
+                  ?staged_copy_rate ?occupancy s reuse
               in
               let filled ts = CM.filled_transactions ?fill_model:(Option.map launch ~f:fst) ts in
               let kl_mma_work, kl_device_gathers =
@@ -3297,6 +3339,8 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
                   (if count_transactions && Option.is_some lane_width then
                      List.map [ 64; 128 ] ~f:(fun b -> (b, filled (count (Some b))))
                    else []);
+                kl_staged_bytes =
+                  CM.filled_staged_bytes ?fill_model:(Option.map launch ~f:fst) staged_copies;
                 kl_workgroup_bytes = workgroup_bytes;
                 kl_block_threads = block_threads;
                 kl_occupancy = Option.value occupancy ~default:1.;
@@ -3320,12 +3364,12 @@ let kernel_rank { kl_compute; kl_memory; _ } =
    by the untimed choosers only — [model_default], [model_explain] and the [auto] seeding gate. An
    explicit [capacity] / [cache_bandwidth] (the gate's own, or a test's) overrides the readings. *)
 let segments_ranking ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate
-    ?device_gather_rate ?fill_model ?transaction_rate ?workgroup_capacity ~peak_flops
-    ~peak_memory_bandwidth ~limits (segs : LL.optimized list) : (float * float) option =
+    ?device_gather_rate ?fill_model ?transaction_rate ?workgroup_capacity ?staged_copy_rate
+    ~peak_flops ~peak_memory_bandwidth ~limits (segs : LL.optimized list) : (float * float) option =
   Option.map
     (segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate
-       ?device_gather_rate ?fill_model ?transaction_rate ?workgroup_capacity ~peak_flops
-       ~peak_memory_bandwidth ~limits segs) ~f:(fun (bound, legs) ->
+       ?device_gather_rate ?fill_model ?transaction_rate ?workgroup_capacity ?staged_copy_rate
+       ~peak_flops ~peak_memory_bandwidth ~limits segs) ~f:(fun (bound, legs) ->
       (List.fold legs ~init:0. ~f:(fun acc l -> acc +. kernel_rank l), bound))
 
 let ranking_ms ?capabilities ~limits segs =
@@ -5318,7 +5362,7 @@ let seed_gate_tag = function
         (rate cache_rate) (rate scalar_rate) (rate dram_rate) (set "matrix_rate" matrix_rate)
         (set "gather_rate" gather_rate)
         (Option.value_map fill ~default:""
-           ~f:(fun { Ir.Cost_model.fm_multiprocessors; fm_fill_threads } ->
+           ~f:(fun { Ir.Cost_model.fm_multiprocessors; fm_fill_threads; fm_tail = _ } ->
              Printf.sprintf " fill=%dx%d" fm_multiprocessors fm_fill_threads))
       (* gh-ocannl-1600: likewise only where set. *)
       ^ set "sector_rate" sector_rate
@@ -5672,8 +5716,14 @@ let seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices ~capacity ~c
     | post ->
         Option.map
           (segments_ranking ~capabilities ~capacity ~cache_bandwidth ~issue_rate ~dram_bandwidth
-             ~mma_rate ~device_gather_rate ~fill_model ~transaction_rate ~workgroup_capacity
-             ~peak_flops ~peak_memory_bandwidth ~limits [ post ])
+             ~mma_rate ~device_gather_rate ~fill_model ~transaction_rate
+             ~workgroup_capacity
+               (* gh-ocannl-1821: no staged-copy term (and so no launch tail) in the gate: it was
+                  fitted among staged blocktile leaves, and the gate weighs a staged sketch against
+                  an unstaged preset, whose operand loads the compute leg charges nothing for --
+                  priced here, the term declined seeding a two-matmul chain on CUDA that nothing
+                  measured. *)
+             ~staged_copy_rate:None ~peak_flops ~peak_memory_bandwidth ~limits [ post ])
           ~f:fst
   in
   match
@@ -6047,23 +6097,29 @@ let model_seeding ~facts ~limits =
 (* Where the model starts from the seeded plan, the family is restricted to the numerics-preserving
    candidate set the seeding uses ({!scalar_blocktile}, at a site accumulating at its storage
    precision), so a model pick never changes a result the seeded plan would not: tensorized forms
-   reround, the conv family reorders the reduction. (The coalesced branch is not enumerated here at
-   all: it preserves numerics, but the score ties it with its uncoalesced twins, gh-ocannl-1278.)
+   reround, the conv family reorders the reduction. (The coalesced branch joins it only under
+   {!model_ranks_coalesced}: it preserves numerics, and only the terms that gate names tell the
+   geometry it adds from its uncoalesced twins, gh-ocannl-1278.)
    Other leaves are kept out of the ranking, counted as not numerics-preserving, never an error.
    Metal, the CPU backends and an unseeded CUDA/HIP compile keep the whole family. *)
-(* gh-ocannl-1600: whether [model_default] ranks the coalesced layouts: only where both terms that
-   tell them apart are priced -- the memory-transaction rate (with the lane group's width stated)
-   and the occupancy factor (its workgroup capacity, the device residency and the fill model's
-   multiprocessor count). A coalesced layout never changes which lanes read
+(* gh-ocannl-1600: whether [model_default] ranks the coalesced layouts: only where the terms that
+   tell them apart are priced -- the memory-transaction rate (with the lane group's width stated),
+   and a geometry term: the occupancy factor (its workgroup capacity, the device residency and the
+   fill model's multiprocessor count) or, since gh-ocannl-1821, the staged-copy term (its rate and a
+   fill model, whose launch tail it switches on). A coalesced layout never changes which lanes read
    contiguous cells (its transactions equal its twin's); what it adds is geometry the uncoalesced
-   site cannot reach -- deep-K tiles, whose workgroup memory only the occupancy factor charges. *)
+   site cannot reach -- deep-K tiles and wider block tiles at a merged contraction -- which only
+   those terms order: the occupancy factor by their workgroup memory, the copy term by their
+   operands' reuse across the block. *)
 let model_ranks_coalesced ~limits =
+  let fill = Option.is_some (ranking_fill_model ~limits) in
   Option.is_some (ranking_transaction_rate ~limits)
-  && Option.is_some (ranking_workgroup_capacity ~limits)
-  (* The occupancy factor needs the residency and a multiprocessor count too (segments_legs): a
-     capacity that prices nothing must not admit what only it ranks. *)
-  && Option.is_some (Ir.Backend_intf.untimed_limits limits).resident_threads
-  && Option.is_some (ranking_fill_model ~limits)
+  && (Option.is_some (ranking_workgroup_capacity ~limits)
+      (* The occupancy factor needs the residency and a multiprocessor count too (segments_legs): a
+         capacity that prices nothing must not admit what only it ranks. *)
+      && Option.is_some (Ir.Backend_intf.untimed_limits limits).resident_threads
+      && fill
+     || (Option.is_some (ranking_staged_copy_rate ~limits) && fill))
   && Option.is_some limits.Ir.Backend_intf.simdgroup_width
 
 let model_admits ?(coalesced = false) ~seeding p =
@@ -6141,6 +6197,7 @@ type explain_kernel = {
   ek_workgroup_bytes : int;
   ek_block_threads : int;
   ek_occupancy : float;
+  ek_staged_bytes : float;
 }
 
 type explain = {
@@ -7815,6 +7872,7 @@ module Make (D : Driver) = struct
                        ek_workgroup_bytes = l.kl_workgroup_bytes;
                        ek_block_threads = l.kl_block_threads;
                        ek_occupancy = l.kl_occupancy;
+                       ek_staged_bytes = l.kl_staged_bytes;
                      }));
             ex_operand_loads;
             ex_admitted;

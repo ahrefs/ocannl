@@ -74,6 +74,7 @@ let full =
     fill_threads = Some 256;
     transaction_rate = Some 2e11;
     workgroup_bytes_per_multiprocessor = Some 131072;
+    staged_copy_rate = Some 1e12;
     native_fp16_arithmetic = true;
     simdgroup_width = Some 32;
     lane_scalar_recompute_cheap = true;
@@ -111,6 +112,7 @@ let toggles : (string * (BI.hardware_limits -> BI.hardware_limits)) list =
     ("transaction_rate", fun l -> { l with transaction_rate = Some 1. });
     ( "workgroup_bytes_per_multiprocessor",
       fun l -> { l with workgroup_bytes_per_multiprocessor = Some 1 } );
+    ("staged_copy_rate", fun l -> { l with staged_copy_rate = Some 1. });
     ("native_fp16_arithmetic", fun l -> { l with native_fp16_arithmetic = false });
     ("simdgroup_width", fun l -> { l with simdgroup_width = Some 64 });
     ("lane_scalar_recompute_cheap", fun l -> { l with lane_scalar_recompute_cheap = false });
@@ -143,9 +145,10 @@ let () =
       List.mem names f ~equal:String.equal);
   p_all ~min:1 "every toggle here names a field of the record" names ~f:(fun f ->
       List.mem all_fields f ~equal:String.equal);
-  (* The ranking score's capacity, residency, its cache, issue, DRAM, tile-MMA, device-gather and
-     memory-transaction rates, its launch fill's two constants and its occupancy capacity. *)
-  p "the Untimed fields are the ranking score's capacities, residency, six rates and launch fill"
+  (* The ranking score's capacity, residency, its cache, issue, DRAM, tile-MMA, device-gather,
+     memory-transaction and staged-copy rates, its launch fill's two constants and its occupancy
+     capacity. *)
+  p "the Untimed fields are the ranking score's capacities, residency, seven rates and launch fill"
     (List.equal String.equal
        (List.sort untimed_fields ~compare:String.compare)
        [
@@ -158,6 +161,7 @@ let () =
          "max_resident_threads";
          "mma_rate";
          "multiprocessors";
+         "staged_copy_rate";
          "transaction_rate";
          "workgroup_bytes_per_multiprocessor";
        ]);
@@ -201,6 +205,7 @@ let presets =
         fill_threads = Some 128;
         transaction_rate = Some 2e11;
         workgroup_bytes_per_multiprocessor = Some 65536;
+        staged_copy_rate = Some 1e12;
         codegen_tag = Some "graph-capture/no-device-debug";
       } );
   ]
@@ -223,6 +228,7 @@ let () =
           fill_threads = None;
           transaction_rate = None;
           workgroup_bytes_per_multiprocessor = None;
+          staged_copy_rate = None;
         }
       in
       let ok =

@@ -1070,8 +1070,9 @@ files.
   a copy of 128 loads per lane only partly (about 8 in flight), so the deep-K blocktile leaves
   measured 1.2-2.9x slower at equal transactions, legs and occupancy; the cost model, charging
   guards as taken, never saw it. Partitioned, the deep-K `coal-k` leaves are the FASTEST at
-  rog's outproj b8 (0.0215 ms against 0.0474 for the old crown), and the score, with no term for
-  a staged k-step, ranks the leaves near the argmin within 0.1%.
+  rog's outproj b8 (0.0215 ms against 0.0474 for the old crown). The score then ranked the
+  leaves near the argmin within 0.1%; what orders them is the copies' volume, not a per-k-step
+  cost (gh-ocannl-1821, training-and-performance.md's staged-copy bullet).
 ## Renderer failures and fault injection
 - A schedule can pass `Schedule.apply`'s validation and still be one the RENDERER cannot express:
   the pipelined-tile checks in `c_syntax.ml` (a read reached outside its rotor loop; a rotor loop no

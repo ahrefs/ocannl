@@ -1203,8 +1203,9 @@
 # launched, and a batch-serial one measured up to 35x slower), and its sketch candidates are
 # restricted to the seeding's numerics-preserving forms (scalar register-blocktiled sketches at a
 # site accumulating at its storage precision: no tensor-core or conv form), so the pick never changes a value the untuned compile computes. The coalesced
-# layouts the autotuner seeds preserve values too, but the model does not rank them: its score
-# cannot tell them from their uncoalesced twins (gh-ocannl-1278).
+# layouts the autotuner seeds preserve values too; the model ranks them only where its score can
+# tell them from their uncoalesced twins: a memory-transaction rate beside a geometry term, the
+# occupancy capacity or the staged-copy rate (gh-ocannl-1278, gh-ocannl-1600, gh-ocannl-1821).
 #model_default_schedule=false
 
 # gh-ocannl-514, the placement levels of the untuned regime: with model_default_schedule=true and
@@ -1364,6 +1365,20 @@
 # coalesced layouts in model_default. Unset/empty uses the backend's value. Same readers and cache
 # identity as model_cache_capacity.
 #model_workgroup_bytes_per_multiprocessor=
+
+# gh-ocannl-1821: overrides the backend's advisory staged-copy rate, in bytes/s, of the ranking
+# score: the bytes a kernel's operand staging copies write into workgroup memory over every block
+# and k-step (M*N*K*(BM+BN)/(BM*BN) cells for a BM x BN block tile), each over its launch fill,
+# are added to the compute leg over this rate -- what orders a site's staged block tiles against
+# each other. Where it resolves, the launch fill also takes the launch tail (the busiest
+# multiprocessor's ceil(blocks/multiprocessors) blocks), fitted with it; and with
+# model_transaction_rate it admits the coalesced layouts to model_default (as the occupancy
+# capacity does). CUDA advises 1e12 (fitted on an RTX 5070 Ti, gh-ocannl-1600's M1 cells); HIP and
+# Metal none. `none`: no staged-copy term, a continuous launch fill, and no coalesced layouts
+# admitted through it. Read by model_default's ranking only, not the auto seeding gate (which weighs a
+# staged sketch against an unstaged preset, outside what the rate was fitted on). Unset/empty uses
+# the backend's value. Same cache identity as model_cache_capacity.
+#model_staged_copy_rate=
 
 # If true, stdout capturing is disabled, so some logs meant for the ppx_minidebug log files
 # (in particular CUDA logs) remain on the stdout.

@@ -137,7 +137,7 @@ let () =
    p label
      (match
         Cal.fit_issue_rate
-          ~fill:{ Ir.Cost_model.fm_multiprocessors = np; fm_fill_threads = t }
+          ~fill:{ Ir.Cost_model.fm_multiprocessors = np; fm_fill_threads = t; fm_tail = false }
           ksweep
       with
      | Cal.Issue_fit { rate = normalized; _ } -> rel label normalized rate

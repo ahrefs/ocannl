@@ -1928,6 +1928,13 @@ end = struct
               model_workgroup_bytes_per_multiprocessor. *)
            workgroup_bytes_per_multiprocessor =
              (if Lazy.force all_rdna_wave32 then Some 131072 else None);
+           (* gh-ocannl-1821: no staged-copy rate. On the discrete RX 7700S (tuf, ecb13bb8) the term
+              moves the outproj argmin to a 64x64x128 coal-k tile 1.30x / 1.14x slower than the
+              fastest leaf, and would favor the uncoalesced 64x64x8 blocktile measured 4.5x slower
+              there: the deep tiles also need the occupancy factor, and the latter a mechanism the
+              counts do not see. The unified class (minix) admits the coalesced layouts through its
+              capacity and was not re-measured. Overridable by model_staged_copy_rate. *)
+           staged_copy_rate = None;
          })
     in
     (* gh-ocannl-572: the kernel source is a function of the lowered code, the device capabilities

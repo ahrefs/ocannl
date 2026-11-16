@@ -314,15 +314,20 @@ val launch_contexts : Low_level.t -> launch_context list
 (** In first-reported order, one entry per distinct context; contexts with no operations (zero
     nests, copies) are absent. The [lc_ops] sum to {!analyze}'s [flops]. *)
 
-type fill_model = { fm_multiprocessors : int; fm_fill_threads : int } [@@deriving sexp_of]
+type fill_model = { fm_multiprocessors : int; fm_fill_threads : int; fm_tail : bool }
+[@@deriving sexp_of]
 (** The device's launch shape as the score reads it: [fm_multiprocessors] multiprocessors, each
     saturating its scalar issue at [fm_fill_threads] threads — a fitted constant
-    ([tools/calibrate_issue_rate.exe]), not the physical residency. *)
+    ([tools/calibrate_issue_rate.exe]), not the physical residency. [fm_tail] (gh-ocannl-1821)
+    quantizes the fill by the launch tail ({!context_fill}); the ranking score sets it exactly where
+    a staged-copy rate is priced, the two being one calibration. *)
 
 val context_fill : fill_model -> blocks:int -> threads:int -> float
 (** [min 1 (B * min T t / (P * t))]: the fraction of the device's saturated issue a launch of [B]
     blocks of [T] threads reaches, each block counting at most one multiprocessor's saturating
-    share. Positive, at most 1. *)
+    share. Under [fm_tail], where [B > P]: [(B / P) * u n / n] with [n = ceil (B / P)] the busiest
+    multiprocessor's blocks and [u n = min 1 (n * min T t / t)] its issue -- below the continuous
+    fill between multiples of [P], equal to it at a saturated multiple. Positive, at most 1. *)
 
 val launch_fill : fill_model -> launch_context list -> float
 (** The scalar contexts' work-weighted harmonic fill: total scalar operations over the sum of each
@@ -381,6 +386,27 @@ val filled_transactions : ?fill_model:fill_model -> transaction_context list -> 
 (** The excess transactions as the compute leg divides them by the transaction rate: each context's
     over its {!context_fill} under a fill model, the plain sum without one. *)
 
+type staged_copy_context = { sc_blocks : int; sc_threads : int; sc_bytes : float }
+[@@deriving sexp_of]
+(** gh-ocannl-1821: the operand staging copies of one parallel context of a kernel -- the copies
+    whose enclosing [Grid] extents multiply to [sc_blocks] and [Workgroup] extents to [sc_threads]
+    -- and the bytes they write into workgroup memory over all their executions. *)
+
+val staged_copies : is_staged:(Tnode.t -> bool) -> Low_level.t -> staged_copy_context list
+(** The kernel's operand staging copies, per parallel context in first-copy order (contexts with
+    none are absent). A copy is a [Set] into a node [is_staged] holds (the caller's:
+    workgroup-shared and not a fragment) whose value is a plain read of a node it does not hold -- a
+    [Get], behind at most a precision-preserving [Unop] or a [Where] against a constant (a padded
+    tile's fringe guard). Zero fills, reductions into shared scratch, [Set_from_vec] and
+    [Set_dynamic] are not copies. A kernel with a [Tile_mma] statement has none ([mma_rate] prices
+    its staging, fitted on staged tensorized leaves). Guards are taken. For a [BM x BN] scalar
+    blocktile of an [M x N x K] contraction: [M * N * K * (BM + BN) / (BM * BN)] cells times the
+    element width. *)
+
+val filled_staged_bytes : ?fill_model:fill_model -> staged_copy_context list -> float
+(** The staged bytes as the compute leg divides them by the copy rate: each context's over its
+    {!context_fill} under a fill model, the plain sum without one. *)
+
 val ranking_seconds_of :
   ?peak_flops:float ->
   ?peak_memory_bandwidth:float ->
@@ -395,6 +421,8 @@ val ranking_seconds_of :
   ?launch:fill_model * launch_context list ->
   ?transactions:transaction_context list ->
   ?transaction_rate:float ->
+  ?staged_copies:staged_copy_context list ->
+  ?staged_copy_rate:float ->
   ?occupancy:float ->
   summary ->
   reuse option ->
@@ -408,9 +436,11 @@ val ranking_seconds_of :
     device's fill model and the kernel's {!launch_contexts} (absent: no launch fill). [transactions]
     (default none) are the kernel's {!memory_transactions}, their {!filled_transactions} priced at
     [transaction_rate] (sectors/s) and added to the compute leg (gh-ocannl-1600): without a rate, or
-    without an excess, the leg is exactly as before. [occupancy] (default none) is the kernel's
-    {!occupancy}: below 1, the compute leg is divided by it; absent or 1, unchanged. [None] when
-    neither peak is given. *)
+    without an excess, the leg is exactly as before. [staged_copies] (default none) are the kernel's
+    {!staged_copies}, their {!filled_staged_bytes} priced at [staged_copy_rate] (bytes/s) and added
+    to the compute leg likewise (gh-ocannl-1821): without a positive rate or without a copy, the leg
+    is exactly as before. [occupancy] (default none) is the kernel's {!occupancy}: below 1, the
+    compute leg is divided by it; absent or 1, unchanged. [None] when neither peak is given. *)
 
 val ranking_legs_of :
   ?peak_flops:float ->
@@ -426,6 +456,8 @@ val ranking_legs_of :
   ?launch:fill_model * launch_context list ->
   ?transactions:transaction_context list ->
   ?transaction_rate:float ->
+  ?staged_copies:staged_copy_context list ->
+  ?staged_copy_rate:float ->
   ?occupancy:float ->
   summary ->
   reuse option ->
@@ -460,13 +492,16 @@ val ranking_seconds :
   ?transaction_rate:float ->
   ?lane_width:int ->
   ?max_resident_threads:int ->
+  ?staged_copy_rate:float ->
+  ?is_staged:(Tnode.t -> bool) ->
   is_global:(Tnode.t -> bool) ->
   Low_level.t ->
   float option
 (** {!ranking_seconds_of} over {!analyze}, {!launch_contexts} when a fill model is given, and, when
     a capacity or a cache bandwidth is given, {!reuse_traffic}; with both a transaction rate and a
-    lane width, {!memory_transactions}. A ranking score, not a runtime prediction — and, unlike
-    {!roofline_seconds}, not a lower bound either. *)
+    lane width, {!memory_transactions}; with both a staged-copy rate and [is_staged],
+    {!staged_copies}. A ranking score, not a runtime prediction — and, unlike {!roofline_seconds},
+    not a lower bound either. *)
 
 (** {2 Tile-MMA operand loads (gh-ocannl-1254)}
 

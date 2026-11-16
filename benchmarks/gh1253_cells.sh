@@ -75,7 +75,12 @@
 # N times into the same TSV, so benchmarks/gh1600_txn_fit.py, run on the `notxn` listing at the
 # shipped rate (TXN_RATE=R, the backend's advisory; unset: no transaction-term check), judges the
 # rate on medians against the measured spread (p90/p10 of the fastest admitted candidate);
-# NO_COALESCED=1 for a backend that does not admit the coalesced layouts (CUDA).
+# NO_COALESCED=1 for a backend that does not admit the coalesced layouts.
+# gh-ocannl-1821: and a `nostg` arm (model_staged_copy_rate none: no staged-copy term, a continuous
+# launch fill, and no coalesced layouts admitted through the copy rate) -- the fill-only reference
+# the shipped arm is judged against; its kernel lines' stg= are what gh1600_txn_fit.py
+# --staged-rate re-scores. With BENCH_PICK=1 each arm prints model_default's pick, so `nostg`'s is
+# the pick before the term.
 # FIT_FILL=1 with RANK_ONLY=1 runs the issue cell first (MULTIPROCESSORS=P passes --multiprocessors,
 # needed only where the device reports none: a non-AGX Metal GPU) and passes its fitted constants to the listing and pick
 # cells, which otherwise run the shipped ones. PICK_GATE0=1 adds pick cells with the seeding off
@@ -389,6 +394,10 @@ for site in $sites; do
   cell "rank_${name}_noocc" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
     --ocannl_gpu_default_sketch_min_reduction=32 \
     ${model[@]+"${model[@]}"} --ocannl_model_workgroup_bytes_per_multiprocessor=none
+  # gh-ocannl-1821: the same constants without the staged-copy term and its launch tail.
+  cell "rank_${name}_nostg" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
+    --ocannl_gpu_default_sketch_min_reduction=32 \
+    ${model[@]+"${model[@]}"} --ocannl_model_staged_copy_rate=none
   picks=()
   if [[ ${RANK_ONLY:-0} == 1 ]]; then
     pick_cells=()
@@ -430,6 +439,7 @@ for site in $sites; do
       "ceilings=$out/rank_${name}_ceilings.out" "nofill=$out/rank_${name}_nofill.out" \
       "nomma=$out/rank_${name}_nomma.out" "mmaonly=$out/rank_${name}_mmaonly.out" \
       "noocc=$out/rank_${name}_noocc.out" "notxn=$out/rank_${name}_notxn.out" \
+      "nostg=$out/rank_${name}_nostg.out" \
       "${fitted_arm}=$out/rank_${name}_${fitted_arm}.out" ${fit[@]+"${fit[@]}"} \
       ${picks[@]+"${picks[@]}"} |
       tee "$out/rank_${name}_agreement.txt" || failed=$((failed + 1))

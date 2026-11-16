@@ -4,6 +4,11 @@ not without the transaction rate: true
 not without the launch fill's multiprocessor count, which the occupancy factor reads: true
 not without the device residency: true
 not without a lane width: true
+the coalesced layouts are ranked through the staged-copy rate, without a capacity: true
+not without the staged-copy rate (and no capacity): true
+not through the copy rate without the launch fill it prices with: true
+not through the copy rate without the transaction rate: true
 the uncoalesced walk returns an uncoalesced leaf: true
 with the coalesced menu, the pick ranks no higher than the uncoalesced walk's: true
-under the deep-K stand-in, a coal-k leaf strictly beats the uncoalesced walk's pick: true
+under the staged-copy rate, a coal-k leaf strictly beats the uncoalesced walk's pick at b256: true
+without it, both walks return a pick, the uncoalesced one uncoalesced, and the coalesced menu's ranks no lower: true

@@ -169,7 +169,12 @@ let () =
       let rate =
         match
           Cal.fit_issue_rate
-            ~fill:{ Ir.Cost_model.fm_multiprocessors = cores; fm_fill_threads = saturation }
+            ~fill:
+              {
+                Ir.Cost_model.fm_multiprocessors = cores;
+                fm_fill_threads = saturation;
+                fm_tail = false;
+              }
             points
         with
         | Cal.Issue_fit { rate; max_residual; points = n; _ } ->
