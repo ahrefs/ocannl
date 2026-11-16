@@ -4253,15 +4253,16 @@ let apply_tensorize op (opt : Low_level.optimized) : Low_level.optimized =
     written by the reduction statement; and the store-back tiles cover [target]'s index space
     bijectively, with no surplus enclosing loop (extent > 1, not indexing the site) re-executing the
     store-back per iteration (so the relocated tail writes each output element exactly once, from
-    the completed accumulation). A Serial loop starting above 0 — a [Partition]'s later segment, the
-    last writer of an unbatched k-split (gh-ocannl-1733) — is descended where every enclosing loop
-    is single-trip, its trip count counted for the surplus check; a site indexed by such a loop
-    covers only that segment's part of the output and is refused. Every enclosing loop of extent > 1
-    is checked for dependence (gh-ocannl-1844): no write of [target] in its body, in another
-    iteration, may touch a cell the relocated tail read — a write textually before the site runs
-    again after it in the next iteration. Writes are read from [affine_relations] (scalar-scope
-    bodies and [Tile_mma] fallbacks included) and judged with [Affine.pair_conflict]; an undecided
-    one refuses. Nodes related by buffer aliasing
+    the completed accumulation). At the fragment and whole-K sites the tail goes to the LAST site: a
+    site a later sibling statement writes [target] after is passed over (a write after the fused
+    site is refused). A Serial loop starting above 0 — a [Partition]'s later segment, the last
+    writer of a k-split (gh-ocannl-1733), batched or not — is descended, its trip count counted for
+    the surplus check; a site indexed by such a loop covers only that segment's part of the output
+    and is refused. Every enclosing loop of extent > 1 is checked for dependence (gh-ocannl-1844):
+    no write of [target] in its body, in another iteration, may touch a cell the relocated tail read
+    — a write textually before the site runs again after it in the next iteration. Writes are read
+    from [affine_relations] (scalar-scope bodies and [Tile_mma] fallbacks included) and judged with
+    [Affine.pair_conflict]; an undecided one refuses. Nodes related by buffer aliasing
     ([Tnode.alias_of]) are not analyzed — sole-consumption is judged by node identity. *)
 let settled_on_device plc tn =
   match Tn.Placements.get plc tn with Some (Tn.On_device, _) -> true | _ -> false
@@ -4661,6 +4662,11 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
     end
     else
       match llc with
+      | Seq (a, b) when writes_target b ->
+          (* The last site: a site inside [a] would be written again by [b], which the check above
+             refuses, so only [b] is searched (gh-ocannl-1844: a batched k-split's last segment
+             follows its first under the batch loop). *)
+          Seq (a, fuse_at_fragment ~shifted ~encl env b)
       | Seq (a, b) ->
           let a' = fuse_at_fragment ~shifted ~encl env a in
           Seq (a', fuse_at_fragment ~shifted ~encl env b)
@@ -4762,16 +4768,12 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
                               ((fc.index, fc.to_ + 1) :: env)
                               fc.body;
                         }
-                  (* A Serial loop starting above 0 — a [Partition]'s later segment, the last
-                     top-level writer of an unbatched k-split (gh-ocannl-1733) — is judged too, but
-                     only where every enclosing loop is single-trip: then each statement before it
-                     ran exactly once, and before it, so the last write in program order is the last
-                     in execution order. Under a loop of extent > 1 an earlier segment's write of a
-                     later iteration would follow the site unseen by the textual written-again
-                     check. *)
-                  | Serial
-                    when fc.from_ > 0 && fc.to_ >= fc.from_
-                         && List.for_all env ~f:(fun (_, e) -> e <= 1) ->
+                  (* A Serial loop starting above 0 — a [Partition]'s later segment, the last writer
+                     of a k-split (gh-ocannl-1733), batched or not (gh-ocannl-1844) — is judged too.
+                     An earlier segment's write of a later iteration of an enclosing loop would
+                     follow the site unseen by the textual written-again check: the dependence check
+                     over the enclosing loops proves it never touches the site's cells. *)
+                  | Serial when fc.from_ > 0 && fc.to_ >= fc.from_ ->
                       For_loop
                         {
                           fc with

@@ -11,7 +11,6 @@ epf_bad_input rejected with a targeted error: true
 epf_bad_transpose rejected with a targeted error: true
 epf_partial_storeback rejected with a targeted error: true
 epf_partition_spanned (one store-back after both segments) fused values match two-kernel: true
-epf_partition_outermost (a store-back per single-trip segment) rejected with a targeted error: true
 fragment identity: the padded pipeline registers exactly one masked fragment: true
 fragment identity: the masked fragment is not a simdgroup fragment: true
 fragment identity: the forged program names the look-alike, labelled [fragment], and never the fragment: true
@@ -21,7 +20,11 @@ fragment identity: the transform ran: true
 fragment identity: fused through the real masked fragment, values match two-kernel: true
 epf_partition_unbatched: the tail is relocated into the last k segment, and only there: true
 epf_partition_unbatched (fused at the last segment) fused values match two-kernel: true
+epf_partition_outermost (batched): the tail is relocated into the last k segment, and only there: true
+epf_partition_outermost (batched, fused at the last segment) values match two-kernel: true
+epf_partition_outermost (batched) values match the same pipeline unfused: true
 epf_partition_multitrip (a later k segment of two trips) rejected with a targeted error: true
 epf_partition_rowedge (a later row-block segment) rejected with a targeted error: true
-epf_partition_surgery: a later segment under a batch loop, after an unrecognized writer, is not fused: true
+epf_partition_surgery: a later segment under a batch loop, after an unrecognized batch-indexed writer, fuses: true
 epf_partition_surgery control: the same surgery on the unbatched program fuses: true
+epf_partition_surgery: an earlier segment rewriting batch row 0 in every batch iteration refuses the fusion, naming the enclosing loop: true

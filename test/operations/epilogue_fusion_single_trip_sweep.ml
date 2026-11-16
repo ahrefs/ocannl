@@ -11,13 +11,14 @@
    (transformer_names dropped half its vocabulary, with every loss claim still holding). That PR
    made [fuse_at_fragment] refuse any write of the accumulator after the fused site. Since
    gh-ocannl-1733 an unbatched split's last segment (a loop starting above 0, the last top-level
-   writer) is descended and its store-back judged, so those twins are admitted where they used to be
-   refused, and their values are held to the same bitwise check. This sweep pins the class, not the
-   instance: on each site below, the fused twin of EVERY whole-routine seed the search would propose
-   ([Autotune.search_seeding]'s [ss_whole], sketch and coalesced, each seed's flag-flipped twin) is
-   compiled and run. These twins probe fusion independently of the family tree's fused-flavor
-   preconditions. Every admitted twin must equal the untuned two-kernel run; every other one must be
-   refused typed (a crash is not a quiet exclusion from the population).
+   writer) is descended and its store-back judged, and since gh-ocannl-1844 a batched one too (its
+   enclosing batch loop passes the dependence check), so those twins are admitted where they used to
+   be refused, and their values are held to the same bitwise check. This sweep pins the class, not
+   the instance: on each site below, the fused twin of EVERY whole-routine seed the search would
+   propose ([Autotune.search_seeding]'s [ss_whole], sketch and coalesced, each seed's flag-flipped
+   twin) is compiled and run. These twins probe fusion independently of the family tree's
+   fused-flavor preconditions. Every admitted twin must equal the untuned two-kernel run; every
+   other one must be refused typed (a crash is not a quiet exclusion from the population).
 
    The sites are chosen for their single-trip producers: one full k block and an edge (the k-split,
    batched as in transformer_names and not), four full blocks and an edge, k exactly one block (a
@@ -177,9 +178,11 @@ let sweep ?(admits_partitioned = false) tag build =
       match t.outcome with Ran _ | Refused _ -> true | Crashed _ -> false);
   claim (tag ^ ": every admitted fused twin equals the unfused reference bitwise") ran
     ~f:(fun got -> Array.equal Float.equal got want);
-  (* gh-ocannl-1733: an unbatched k-split's last segment, a loop starting above 0 that nothing
-     re-executes, is the last writer of the accumulator; its store-back is judged, and the twin
-     fuses there instead of being refused. The CPU packed seeds are the ones that partition. *)
+  (* gh-ocannl-1733: a k-split's last segment, a loop starting above 0, is the last writer of the
+     accumulator; its store-back is judged, and the twin fuses there instead of being refused --
+     unbatched, and since gh-ocannl-1844 under a batch loop too, where the dependence check proves
+     the earlier segment's later iterations never rewrite the cells the tail read. The CPU packed
+     seeds are the ones that partition. *)
   if admits_partitioned then
     gated_exists ~when_:is_cpu ~on:backend_name
       (tag ^ ": a Partition-carrying fused twin is admitted") twins ~f:(fun t ->
@@ -246,8 +249,9 @@ let conv ~hw ~ic ~kw ~oc tag () =
 
 let () =
   (* One full 16-deep k block and an edge, batched with 15 rows: transformer_names' one-hot
-     embedding site, where the gh-ocannl-1670 split met the exactly-once check. *)
-  sweep "ksplit1b" (gemm ~b:4 ~m:15 ~k:28 ~n:16 "ksplit1b");
+     embedding site, where the gh-ocannl-1670 split met the exactly-once check. Since gh-ocannl-1844
+     the last segment fuses under the batch loop, which indexes the accumulator. *)
+  sweep ~admits_partitioned:true "ksplit1b" (gemm ~b:4 ~m:15 ~k:28 ~n:16 "ksplit1b");
   (* The same split unbatched, at a dividing row count: the edge segment is the last top-level
      writer, and its store-back is where the fused twins put the tail. *)
   sweep ~admits_partitioned:true "ksplit1" (gemm ~m:16 ~k:20 ~n:32 "ksplit1");

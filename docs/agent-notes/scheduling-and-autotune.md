@@ -465,9 +465,11 @@ files.
   refutes such a geometry in the fused flavor where the exactly-once rule refuses every completion:
   with no k `Partition`, wherever a reduction-block loop repeats (`mma-cpu 16x0x16 ep` and its
   `grid` twin at k = 32 were offered at every search and declined at every compile); with one, where
-  a loop of extent > 1 encloses both segments (a batch, outer contraction or column-block loop),
-  or where `full_block_split` splits a Serial row-block edge off. An unbatched partitioned twin
-  stays offered (gh-ocannl-1733 admits its last segment). Each clause restates an op's rule, so
+  an outer contraction loop of extent > 1 encloses both segments, or where `full_block_split`
+  splits a Serial row-block edge, or a non-dividing column-block edge, off. A partitioned twin
+  under a batch loop or dividing column blocks stays offered: gh-ocannl-1733 admits the last
+  segment, and gh-ocannl-1844's dependence check admits the enclosing loops that index the
+  accumulator. Each clause restates an op's rule, so
   `test/operations/cpu_seed_validity` pins the witness two-sided against `Fuse_epilogue` over
   k-split sites, every clause firing, and checks every seed the CPU trees offer (companion lift and
   coalesced branch included) against the cc compile path's `validate_parallel ~fork_join:true`.
@@ -2419,21 +2421,32 @@ files.
   against the unfused run, exact because every input is a small dyadic; none admitted differed on
   cc or Metal. `schedule_epilogue_fusion` pins the seeds' geometry by hand both
   ways: k-block loop under the row block (the contraction spans both segments; fuses, equal) and
-  above it (a store-back per segment; refused). The refusal
-  needs a loop enclosing both segments (the batch loop, as in transformer_names). **Unbatched, the
-  last segment fuses** (gh-ocannl-1733): the edge segment, a `Serial` loop starting above 0, is the
-  last top-level writer, and `fuse_at_fragment` descends it and judges its store-back, which
-  follows the whole reduction. Three rules keep that exactly-once. The segment counts its real
-  trip count, so a later segment of several trips is a surplus loop. Its symbol is left out of the
+  above it (a store-back per segment; the tail goes to the last one). **The last segment fuses**
+  (gh-ocannl-1733, batched since gh-ocannl-1844): the edge segment, a `Serial` loop starting
+  above 0, is the last writer, and `fuse_at_fragment` descends it and judges its store-back, which
+  follows the whole reduction. In `Seq (a, b)` a site inside `a` is passed over when `b` writes the
+  accumulator (it would be written again), so under the batch loop the first segment's store-back
+  no longer captures the tail. Four rules keep that exactly-once. The segment counts its real trip
+  count, so a later segment of several trips is a surplus loop. Its symbol is left out of the
   cover env, since `covers_bijectively` assumes zero-based loops, so a site it indexes (a row-block
   edge) is refused on cover; the cover arithmetic alone already refuses a strict sub-range of
-  blocks, so this is defense in depth. And it is descended only where every enclosing loop is
-  single-trip: under the batch loop, an earlier segment that was not recognized as a site would
-  write again in a later iteration, after the store-back, and the written-again check reads only
-  what follows textually. `schedule_epilogue_fusion`'s `epf_partition_*` legs pin all four
-  (fused and equal, multi-trip, row edge, and a surgered batched program), and the sweep's
-  `ksplit1` claims a Partition-carrying twin is admitted. The batched case stays refused: fusing
-  at its last segment needs a dependence check over the batch loop. The
+  blocks, so this is defense in depth. Nothing may write the accumulator textually after the site.
+  And every enclosing loop of extent > 1 passes a **dependence check**: each write of the
+  accumulator in its body (from `affine_relations`, so scalar-scope bodies and `Tile_mma`
+  fallbacks count, and opaque staged code refuses) must be proven by `Affine.pair_conflict`, with
+  the loop's symbol paired and every loop inside it iterated independently per side, never to
+  touch a site cell in another iteration. A write textually BEFORE the site runs again after it in
+  the next iteration, which the textual check cannot see; before gh-ocannl-1844 a loop starting at
+  0 was descended under any enclosing loop with no such check (`epilogue_fusion_loop_dependence`'s
+  hand-built programs fused there, and their relocation, interpreted, miscomputes). A batch loop
+  passes (the earlier segment's writes are indexed by it as the store-back is); an outer
+  contraction loop never reaches it (the surplus check refuses it first). The check is sound, not
+  exact: the engine does not chain equalities across axes, so a transposed write `acc[b2, b1]`
+  refuses even at the inner loop. `schedule_epilogue_fusion`'s `epf_partition_*` legs pin it:
+  unbatched and batched fusion (bitwise equal to two-kernel and to the unfused pipeline),
+  multi-trip, row edge, an unrecognized batch-indexed earlier writer (fuses), and one rebound to
+  batch row 0 (refused); the sweep's `ksplit1` and `ksplit1b` claim Partition-carrying twins are
+  admitted. The
   whole-K residual (16x76 vs 19x76: 1.095x against 1.053x row waste, block shapes differing too)
   is what two-site `Fuse_epilogue` fusion could at most recover, so it was not built.
   `Grid_outermost` B~ packing is a size call, not a fix: re-packing a panel per row block runs

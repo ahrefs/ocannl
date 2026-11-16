@@ -439,12 +439,18 @@ type optop =
           mentioning [target]. At the fragment and whole-K sites the store-back must complete
           [target]: one under an enclosing loop of extent > 1 that does not index it, or followed by
           another write of [target] (a later segment of a [Partition]ed block loop, gh-ocannl-1670),
-          is refused. A later segment that is itself the last writer — the top-level edge segment of
-          an unbatched k-split — is judged: its store-back completes [target] and takes the tail
+          is refused, and the site is the last one: a site a later sibling writes [target] after is
+          passed over. A later segment that is itself the last writer — the edge segment of a
+          k-split, batched or not — is judged: its store-back completes [target] and takes the tail
           (gh-ocannl-1733), unless it runs more than once or its own index covers only part of the
-          output. The store-back of [target] itself is kept. Elementwise tails never reorder the
-          reduction, so on the C backends the fused values are bitwise equal to the two-kernel form.
-          Apply after [Tensorize]/[Privatize].
+          output. Every enclosing loop of extent > 1 must separate the site from [target]'s other
+          writes inside it (gh-ocannl-1844): {!Affine.pair_conflict} proves that no such write, in
+          another iteration of the loop, touches a cell the relocated tail read — a write textually
+          before the site runs again after it in the next iteration. An undecided write (whole-node,
+          opaque staged code, an index the engine cannot separate) refuses. The store-back of
+          [target] itself is kept. Elementwise tails never reorder the reduction, so on the C
+          backends the fused values are bitwise equal to the two-kernel form. Apply after
+          [Tensorize]/[Privatize].
 
           [shared] (GPU only, requires the fragment site): the fused tail is often [target]'s last
           consumer, so placement makes [target] routine-local — a per-thread array the fragment

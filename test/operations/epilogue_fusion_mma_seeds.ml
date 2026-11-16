@@ -227,9 +227,12 @@ let census tag ~m ~n ~k =
    no enclosing loop of extent > 1 betrays the first segment's fragment store-back as partial; a
    fused twin that relocated its tail there computed the tail from the first k block alone, and the
    edge segment's later store-back never reached it. Every CPU mma epilogue twin that compiles must
-   match the untuned reference. On cc [Fuse_epilogue] refuses the packed 16x16 ones (the batch loop
-   encloses both segments), so the family tree no longer offers them (gh-ocannl-1612); the unfused
-   seeds' flag-flipped twins keep the refusal itself pinned. *)
+   match the untuned reference. On cc the packed 16x16 ones were refused while the batch loop
+   enclosing both segments kept the last one from being judged, and the family tree stopped offering
+   them (gh-ocannl-1612). Since gh-ocannl-1844 [Fuse_epilogue] proves that the first segment's later
+   batch iterations never rewrite the cells the tail read (the batch loop indexes the accumulator)
+   and fuses at the last segment: the flag-flipped twins of the unfused seeds are admitted, the tree
+   offers them again, and they run against the reference below. *)
 let ksplit_tail () =
   Tensor.unsafe_reinitialize ();
   let b = 4 and m = 15 and k = 28 and n = 16 in
@@ -303,10 +306,10 @@ let ksplit_tail () =
   gated_exists ~when_:is_cpu ~on:backend_name "ksplit: the site seeds unfused packed 16x16 seeds"
     flipped ~f:(fun _ -> true);
   gated_all ~when_:is_cpu ~on:backend_name
-    "ksplit: Fuse_epilogue refuses their flag-flipped epilogue twins" flipped ~f:fuse_refused;
-  gated_all ~when_:is_cpu ~on:backend_name
-    "ksplit: the tree offers no packed 16x16 epilogue twin (gh-ocannl-1612)" ep_params ~f:(fun q ->
-      not (packed16 q));
+    "ksplit: Fuse_epilogue admits their flag-flipped epilogue twins (gh-ocannl-1844)" flipped
+    ~f:(fun q -> not (fuse_refused q));
+  gated_exists ~when_:is_cpu ~on:backend_name
+    "ksplit: the tree offers packed 16x16 epilogue twins (gh-ocannl-1844)" ep_params ~f:packed16;
   (* Gated like [census]'s claims, on the site's advertised tensorized pipeline: where the backend
      advertises none (CUDA/HIP at f32 without tf32), no mma twin exists to run. On cc the
      whole-extent twin always runs, so the population is never empty there. *)
