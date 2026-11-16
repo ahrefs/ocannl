@@ -15198,6 +15198,15 @@
 ; device it gave up on refuses sync and release instead of blocking; multidev_cc, plus a GPU leg.
 
 (test
+ (name wait_bound_delta_unwind)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules wait_bound_delta_unwind)
+ (libraries wait_wedge_fixture))
+
+(test
  (name wait_bound_device_wedged)
  (package neural_nets_lib)
  (deps
@@ -15207,6 +15216,61 @@
  (libraries base ocannl stdio mtime mtime.clock.os arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ (name wait_bound_event_sync)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules wait_bound_event_sync)
+ (libraries wait_wedge_fixture))
+
+(test
+ (name wait_bound_free_delta)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules wait_bound_free_delta)
+ (libraries wait_wedge_fixture))
+
+(test
+ (name wait_bound_from_host)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules wait_bound_from_host)
+ (libraries wait_wedge_fixture))
+
+(test
+ (name wait_bound_init_from_device)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules wait_bound_init_from_device)
+ (libraries wait_wedge_fixture))
+
+(test
+ ; cc-vector-width: independent -- asserts expiry and typed release, never the schedules ranked.
+ (name wait_bound_placements)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules wait_bound_placements)
+ (libraries wait_wedge_fixture))
+
+(test
+ (name wait_bound_transfer_cleanup)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules wait_bound_transfer_cleanup)
+ (libraries wait_wedge_fixture))
 
 (test
  (name where_arm_scopes)

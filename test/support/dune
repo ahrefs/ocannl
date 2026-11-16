@@ -239,3 +239,11 @@
  (libraries base arrayjit.ir)
  (preprocess
   (pps ppx_sexp_conv)))
+
+(library
+ (name wait_wedge_fixture)
+ (package neural_nets_lib)
+ (modules wait_wedge_fixture)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

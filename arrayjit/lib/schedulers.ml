@@ -85,7 +85,9 @@ module Multidev (Backend : For_add_scheduler) :
     let sexp_of_domain (d : domain) = Sexp.Atom ("domain-" ^ Int.to_string (Domain.get_id d :> int))
 
     type runner = { state : device_state; domain : domain } [@@deriving sexp_of]
-    type event = { dev_state : device_state; is_done : Utils.atomic_bool } [@@deriving sexp_of]
+
+    type event = { device_id : int; dev_state : device_state; is_done : Utils.atomic_bool }
+    [@@deriving sexp_of]
 
     let name = "multidev_" ^ Backend.name
   end
@@ -94,7 +96,9 @@ module Multidev (Backend : For_add_scheduler) :
   include Device (Device_types) (Make_slab (Device_types) (Backend))
   open Device_config
 
-  let sync { dev_state; is_done } =
+  let event_device_id event = Some event.device_id
+
+  let sync { device_id = _; dev_state; is_done } =
     Mut.lock dev_state.mut;
     while dev_state.keep_spinning && not (Atomic.get is_done) do
       Stdlib.Condition.wait dev_state.progress dev_state.mut
@@ -108,7 +112,7 @@ module Multidev (Backend : For_add_scheduler) :
     Option.iter err ~f:(fun e ->
         Exn.reraise e [%string "Multidev_scheduler.sync: device %{dev_state.ordinal#Int} failed"])
 
-  let is_done { dev_state = _; is_done } = Atomic.get is_done
+  let is_done { device_id = _; dev_state = _; is_done } = Atomic.get is_done
   let get_used_memory _device = get_used_memory ()
   let get_free_and_total_memory _device = None
 
@@ -155,7 +159,7 @@ module Multidev (Backend : For_add_scheduler) :
     Stdlib.Condition.broadcast st.work_available;
     Mut.unlock st.mut
 
-  let will_wait_for ctx ({ dev_state; is_done = _ } as event) =
+  let will_wait_for ctx ({ device_id = _; dev_state; is_done = _ } as event) =
     let work () = sync event in
     let task =
       Ir.Task.Task
@@ -177,7 +181,7 @@ module Multidev (Backend : For_add_scheduler) :
        on the returned event. *)
     schedule_task device
     @@ Ir.Task.Task { context_lifetime = (); description = "all_work tick"; work };
-    { dev_state = state; is_done }
+    { device_id = device.device_id; dev_state = state; is_done }
 
   let spinup_runner ~ordinal : runner =
     let state =
@@ -321,6 +325,7 @@ module Sync (Backend : For_add_scheduler) = struct
   include Device (Device_types) (Make_slab (Device_types) (Backend))
   open Device_config
 
+  let event_device_id () = None
   let sync () = ()
   let is_done () = true
   let will_wait_for _context () = ()

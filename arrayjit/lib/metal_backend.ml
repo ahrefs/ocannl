@@ -44,6 +44,7 @@ module Device_config = struct
 
   (* Represents a command queue + event for synchronization *)
   type runner = {
+    mutable owner_device_id : int option;
     queue : Me.CommandQueue.t;
     event : Me.SharedEvent.t; (* Use SharedEvent for signalling *)
     mutable counter : ullong; (* Next value to signal *)
@@ -392,6 +393,7 @@ module Impl = struct
     let counter = Unsigned.ULLong.one in
     (* Next value = 1 *)
     ( {
+        owner_device_id = None;
         queue = actual_queue;
         event = shared_event_obj;
         counter;
@@ -417,10 +419,11 @@ module Impl = struct
       let metal_device = (Lazy.force metal_devices).(ordinal) in
       let runner, opt_log_buffer = spinup_runner metal_device in
       let result_device = make_device metal_device runner ~ordinal in
+      runner.owner_device_id <- Some result_device.device_id;
       (* The device is its own single compute stream; key captured logs by [device_id]. *)
       Option.iter opt_log_buffer ~f:(fun log_buffer ->
           Hashtbl.add_exn stream_logs ~key:result_device.device_id ~data:log_buffer);
-      Stdlib.Gc.finalise (fun d -> Hashtbl.remove stream_logs d.device_id) result_device;
+      Stdlib.Gc.finalise (fun (d : device) -> Hashtbl.remove stream_logs d.device_id) result_device;
       devices_cache.(ordinal) <- Some result_device;
       result_device
     in
@@ -432,6 +435,7 @@ module Impl = struct
     num_devs ()
 
   (* --- Event Handling --- *)
+  let event_device_id event = event.owner.owner_device_id
   let is_done = is_done
   let sync = sync
 

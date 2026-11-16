@@ -1,0 +1,10 @@
+the healthy wait completes: true
+the healthy allocation cleanup preserves the original failure: true
+the healthy allocation cleanup frees every new pool: true
+a zero bound expires on finite work: true
+the allocation failure seam fired: true
+the failed compile propagates Device_wedged: true
+the failed compile allocated pools: true
+no pool is freed under outstanding work: true
+wedged delta cleanup preserves uncontainable exceptions: true
+uncontainable delta failures also leave every pool allocated: true

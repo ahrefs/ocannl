@@ -657,6 +657,12 @@ val tune_placements :
     should read {!Autotune.terminal_failure} — or match the report's [outcome] — before [best_ms],
     as benchmarks/runners/ocannl/bench_harness.ml does.
 
+    A host-side wait expiry leaves the device marked for the rest of the process (gh-ocannl-2192).
+    The arm's failure still propagates with its original cause. A caller's later {!Context.release}
+    independently raises {!Ir.Backend_intf.Device_wedged}; this function does not catch that later
+    call or replace the arm's report with its cleanup failure. The device's still-live pools are
+    deliberately retained rather than freed under outstanding writes.
+
     The in-position guarantee is {!Autotune.tune}'s reporting contract, and inherits its one
     carve-out: an argument-precondition violation (an incompatible [timing_ctx]) is detected before
     the call reaches any phase, so it reports nothing and propagates. Both arms are given the same

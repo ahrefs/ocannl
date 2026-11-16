@@ -41,7 +41,7 @@ module Device_config = struct
   [@@deriving sexp_of]
 
   type runner = H.Stream.t [@@deriving sexp_of]
-  type event = H.Delimited_event.t [@@deriving sexp_of]
+  type event = { device_id : int; raw : H.Delimited_event.t } [@@deriving sexp_of]
 
   let name = "hip"
 end
@@ -269,10 +269,13 @@ end = struct
   include Backend_buffer
 
   let ctx_of (context : context) = context.device.dev.primary_context
-  let is_done event = H.Delimited_event.query event
-  let will_wait_for context event = H.Delimited_event.wait context.device.runner event
-  let sync event = H.Delimited_event.synchronize event
-  let all_work device = H.Delimited_event.record device.runner
+  let event_device_id event = Some event.device_id
+  let is_done event = H.Delimited_event.query event.raw
+  let will_wait_for context event = H.Delimited_event.wait context.device.runner event.raw
+  let sync event = H.Delimited_event.synchronize event.raw
+
+  let all_work (device : device) =
+    { device_id = device.device_id; raw = H.Delimited_event.record device.runner }
 
   (* The inline-test harness ([ppx_inline_test]'s runner, which hosts ppx_expect tests) is detected
      by its command line, the same way [Ppx_inline_test_lib] switches to test mode. *)
