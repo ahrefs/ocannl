@@ -3008,7 +3008,11 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
              (gh-ocannl-1824: a kernel solved before the equation met the solved arms' check, one
              inferred here skipped it). *)
           let solve_kernel basis =
-            let constrs, env' = unify_dim ~stage origin (kernel, get_dim ~d:k ~basis ()) env in
+            (* A nested stride may itself need a basis choice at the fixpoint. Its inverse is part
+               of this window equation, so it receives the same settling capability. *)
+            let constrs, env' =
+              unify_dim ?settling ~stage origin (kernel, get_dim ~d:k ~basis ()) env
+            in
             (* A composite kernel can defer its own equation. Re-enter the window only once
                substitution sizes it. With no binding, the window already carries that equation:
                adding its deferred inverse each pass would grow the list forever. *)
@@ -3325,7 +3329,11 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
              gh-ocannl-2095. *)
           unify_dim ~stage origin (get_dim ~d:sum ~basis:solved_basis (), d) env
       | [ c ] ->
-          unify_dim ~stage origin (c, get_dim ~d:residual ~basis:(Lazy.force residual_basis) ()) env
+          (* Subtracting solved components leaves an equivalent equation: a window in the residual
+             still needs to settle as part of the original equation. *)
+          unify_dim ?settling ~stage origin
+            (c, get_dim ~d:residual ~basis:(Lazy.force residual_basis) ())
+            env
       | _ ->
           (* Multiple unsolved components remain: defer the NORMALIZED residual (solved components
              subtracted), not the original equation, so the arithmetic progress is not lost and the

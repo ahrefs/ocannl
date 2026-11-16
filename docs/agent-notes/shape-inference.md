@@ -26,7 +26,9 @@ files.
 - A valid window's kernel can be a composite expression (gh-ocannl-2254): concatenation
   cancellation can bind it to `[2v; 1]`. Infer its size through `unify_dim` on that expression,
   then recheck the window's forward basis rule only once substitution sizes the kernel. If its
-  own equation defers, retain the window without recursing on it. Deferral and the shared
+  own equation defers, retain the window without recursing on it. Pass `settling` through the
+  inverse and its single concat residual so a nested stride chooses its basis at the fixpoint,
+  rather than a shape-row guess (gh-ocannl-2245's filler rule makes this choice ambiguous). Deferral and the shared
   `closing_dim_dependencies` reader include every kernel variable inside `Concat` and `Affine`,
   in ordinary closing and the stage-7 fixed-index prepass; rigid symbolic kernels cannot equal a
   concrete size. Pins: `test_concat_order_independence.ml`.

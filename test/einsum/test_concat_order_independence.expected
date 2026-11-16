@@ -14,7 +14,7 @@ a later plain k keeps both concatenations' shared claim h: true
 a later plain k keeps both concatenations' shared claim bcast_if_1: true
 a stride of the broadcast top settles in every order: true
 a filler stride cannot also supply a size-2 broadcast-atom claim: true
-all twelve composite-kernel stores are accepted in all six orders: true
+all twelve composite-kernel stores obey the stride basis rule in every order: true
 the issue's example is refused in every order: true
 and so is #1935's held-set vetting case, a named claim against a plain size: true
 control: [v; u] = 4 a with v = 1 a takes u = 3 a in every order: true

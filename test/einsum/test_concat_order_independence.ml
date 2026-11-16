@@ -20,9 +20,9 @@
    enter every two-constraint store; three-constraint stores use the window/concat pool, including
    gh-ocannl-2254's fixed [u = 3 T] family. A solved/pinned matrix checks both equation orientations
    and registration orders. Before adding the stride families, the fixed family gave 21,124 stores,
-   14 order-dependent before its fix: 12 from composite window kernels and two from
-   gh-ocannl-2095's residual basis choice. Those two stores remain named, counted exceptions; every
-   other store remains subject to all three claims. Counts go to stderr. The search runs whole. *)
+   14 order-dependent before its fix: 12 from composite window kernels and two from gh-ocannl-2095's
+   residual basis choice. Those two stores remain named, counted exceptions; every other store
+   remains subject to all three claims. Counts go to stderr. The search runs whole. *)
 
 open! Base
 open Ocannl
@@ -453,17 +453,23 @@ let () =
                   else [ Row.default_basis ]
                 in
                 List.concat_map fixed_tags ~f:(fun xt ->
-                    verdicts
-                      [
-                        Printf.sprintf "w(k)(1 %s)=3 %s" et it;
-                        "[u; 2v]=[k; 2 default]";
-                        Printf.sprintf "u=3 %s" xt;
-                      ])))
+                    List.map
+                      (verdicts
+                         [
+                           Printf.sprintf "w(k)(1 %s)=3 %s" et it;
+                           "[u; 2v]=[k; 2 default]";
+                           Printf.sprintf "u=3 %s" xt;
+                         ])
+                      ~f:(fun out -> (it, out)))))
       in
-      p_all ~min:72 "all twelve composite-kernel stores are accepted in all six orders"
-        kernel_controls ~f:(function
-        | Accepted _ -> true
-        | Refused -> false);
+      (* gh-ocannl-2245: 2 * 1_(bcast_if_1) is a claim-free filler. With u = 3_default, a size-3
+         broadcast-atom kernel would claim a basis only on the right of the concat equation. Those
+         two formerly accepted stores now refuse; all twelve remain checked. *)
+      p_all ~min:72 "all twelve composite-kernel stores obey the stride basis rule in every order"
+        kernel_controls ~f:(fun (input_basis, out) ->
+          match out with
+          | Accepted _ -> not (String.equal input_basis Row.bcast_if_1)
+          | Refused -> String.equal input_basis Row.bcast_if_1);
       p_all "the issue's example is refused in every order"
         (verdicts [ "w(s1,k3 default)(v)=3 default"; "[v; u]=4 default"; "[v; u]=4 bcast_if_1" ])
         ~f:(equal_outcome Refused);
