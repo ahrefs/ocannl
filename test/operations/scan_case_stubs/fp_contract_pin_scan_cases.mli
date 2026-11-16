@@ -43,6 +43,7 @@ module List : sig
   val for_alli : 'a list -> f:(int -> 'a -> bool) -> bool
   val iter : 'a list -> f:('a -> unit) -> unit
   val map : 'a list -> f:('a -> 'b) -> 'b list
+  val map2_exn : 'a list -> 'b list -> f:('a -> 'b -> 'c) -> 'c list
   val iter2_exn : 'a list -> 'b list -> f:('a -> 'b -> unit) -> unit
   val zip_exn : 'a list -> 'b list -> ('a * 'b) list
 end

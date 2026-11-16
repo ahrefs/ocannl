@@ -42,13 +42,14 @@
    comparator identifier does not execute it. Escaping helpers receive no evidence from unknown
    external callers; uncalled parameters stay unknown. The List/Array iter, iteri, map, mapi,
    for_all, for_alli, iter2[_exn] and map2[_exn] table maps collection dependencies into inline
-   labelled f callbacks with ordinary parameters, treating a fully saturated comparator callback as
-   applied (index parameters stay unknown), including tuple patterns. Tuple components share their
-   collection's union; this is not per-element provenance. Other higher-order calls, mutable
-   storage, external helper bodies and exported module-structure values remain outside this
-   extension. Calls have an identifier claim callee and operands in one application node;
-   operator-based application, partial helper applications, function-case parameters, omitted
-   optional defaults and bare external-reader aliases are not reconstructed.
+   labelled f callbacks with ordinary parameters, requiring every mapped positional collection
+   before invoking a callback, and treating a fully saturated comparator callback as applied (index
+   parameters stay unknown), including tuple patterns. Tuple components share their collection's
+   union; this is not per-element provenance. Other higher-order calls, mutable storage, external
+   helper bodies and exported module-structure values remain outside this extension. Calls have an
+   identifier claim callee and operands in one application node; operator-based application, partial
+   helper applications, function-case parameters, omitted optional defaults and bare external-reader
+   aliases are not reconstructed.
 
    - A PIN: the string literal [OCANNL_CC_BACKEND_FP_CONTRACT] whose next string literal is [off]
    (the [Unix.putenv] the pinned tests do at module initialization). A pin made elsewhere -- a dune
@@ -331,6 +332,12 @@ let code_claim_lines content =
             let positional =
               List.filter_map args ~f:(function Nolabel, arg -> Some arg | _ -> None)
             in
+            let callback_mapping =
+              Option.filter (callback_slots path) ~f:(fun slots ->
+                  List.for_all slots ~f:(function
+                    | None -> true
+                    | Some slot -> Option.is_some (List.nth positional slot)))
+            in
             let fn_summary = self#summary env fn in
             List.iter fn_summary.helpers ~f:(fun key ->
                 Option.iter (Hashtbl.find functions key) ~f:(fun params ->
@@ -350,7 +357,7 @@ let code_claim_lines content =
                               remaining := later @ rest;
                               grow pattern (self#summary env arg)
                           | [] -> ())));
-            Option.iter (callback_slots path) ~f:(fun slots ->
+            Option.iter callback_mapping ~f:(fun slots ->
                 List.iter args ~f:(function
                   | Labelled "f", callback ->
                       Option.iter (Hashtbl.find functions callback.pexp_loc.loc_start.pos_cnum)
@@ -378,14 +385,14 @@ let code_claim_lines content =
               && match values with v :: _ -> v.comparator | [] -> false
             in
             let callback_compared =
-              Option.is_some (callback_slots path)
+              Option.is_some callback_mapping
               && List.exists args ~f:(function
                 | Labelled "f", callback ->
                     let summary = self#summary env callback in
                     if List.is_empty summary.helpers then summary.comparator
                     else
                       summary.call_compared
-                      && Option.value_map (callback_slots path) ~default:false ~f:(fun slots ->
+                      && Option.value_map callback_mapping ~default:false ~f:(fun slots ->
                           List.exists summary.helpers ~f:(fun key ->
                               Option.value_map (Hashtbl.find functions key) ~default:false
                                 ~f:(fun params -> List.length params <= List.length slots)))

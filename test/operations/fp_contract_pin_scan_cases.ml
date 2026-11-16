@@ -324,4 +324,21 @@ let unused = List.map [Context.get_values ctx tensor] ~f:(fun got () ->
   p "equal" (Int64.equal (Int64.bits_of_float got.(0)) 0L))
 |ocaml}
     );
+    ( "iterator missing its second collection does not invoke callback",
+      false,
+      {ocaml|
+open Verdict.Claims
+let unused = List.iter2_exn [Context.get_values ctx tensor] ~f:(fun got () ->
+  p "equal" (Int64.equal (Int64.bits_of_float got.(0)) 0L))
+|ocaml}
+    );
+    ( "partial map does not apply comparator callback",
+      false,
+      {ocaml|
+open Verdict.Claims
+let got = Context.get_values ctx tensor
+let () = p "equal" (let _unused = List.map2_exn [got] ~f:(fun x () ->
+  Int64.equal (Int64.bits_of_float x.(0)) 0L) in Float.equal got.(0) 1.)
+|ocaml}
+    );
   ]
