@@ -478,3 +478,35 @@ let () =
          F.fold_scalar
            ~policy:{ policy with local_scopes = Emitted emission }
            ~hooks:(F.hooks ()) ~init:() def1))
+
+(* gh-ocannl-2213: [Scope_order]'s condition keys tell a float constant by its bits. [x / 0.0 > 0]
+   and [x / -0.0 > 0] decide differently, so definitions under the two run under different
+   conditions; under one condition spelled twice they share a group (Codex review of the
+   gh-ocannl-2213 PR). *)
+let () =
+  let module O = LL.Scope_order in
+  let i = sym () in
+  let cond zero =
+    LL.Binop
+      ( Ops.Cmplt,
+        (LL.Constant 0., single),
+        (binop Ops.Div (add (embed i) (LL.Constant 1.)) (LL.Constant zero), single) )
+  in
+  let under zero scope : (unit, int list) O.entry =
+    {
+      scope;
+      guard =
+        [
+          {
+            key = Select { cond = cond zero; prec = single };
+            holds = true;
+            anywhere = false;
+            payload = ();
+          };
+        ];
+      def = Some [];
+    }
+  in
+  let groups a b = List.length (O.plan ~reads:Fn.id [ under a 1; under b 2 ]).groups in
+  p "conditions differing only in a zero's sign are two conditions" (groups 0. (-0.) = 2);
+  p "one condition spelled twice is one condition" (groups (-0.) (-0.) = 1)

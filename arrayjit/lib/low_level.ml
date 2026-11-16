@@ -7379,11 +7379,30 @@ module Scope_order = struct
     | Select of { cond : scalar_t; prec : Ops.prec }
     | Gate of { op : Ops.binop; prec : Ops.prec; first : scalar_t }
 
+  (* Structural, but a float constant by its bits: [0.0] and [-0.0] compare equal as floats yet can
+     decide a condition differently ([x / -0.0 > 0]), so they are different conditions (Codex review
+     of the gh-ocannl-2213 PR). A key holds no [Local_scope] ({!arms}' and {!gate}'s [cond_defs]
+     rule), so a leaf without a nested expression compares as {!equal_scalar_t} does. *)
+  let rec equal_cond (a : scalar_t) (b : scalar_t) =
+    let arg (x, p) (y, q) = Ops.equal_prec p q && equal_cond x y in
+    match (a, b) with
+    | Constant x, Constant y -> Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+    | Unop (o, x), Unop (o', y) -> Ops.equal_unop o o' && arg x y
+    | Binop (o, x1, x2), Binop (o', y1, y2) -> Ops.equal_binop o o' && arg x1 y1 && arg x2 y2
+    | Ternop (o, x1, x2, x3), Ternop (o', y1, y2, y3) ->
+        Ops.equal_ternop o o' && arg x1 y1 && arg x2 y2 && arg x3 y3
+    | Get_dynamic x, Get_dynamic y ->
+        arg x.dyn_value y.dyn_value
+        && equal_scalar_t
+             (Get_dynamic { x with dyn_value = (Constant 0., snd x.dyn_value) })
+             (Get_dynamic { y with dyn_value = (Constant 0., snd x.dyn_value) })
+    | _ -> equal_scalar_t a b
+
   let equal_key a b =
     match (a, b) with
-    | Select a, Select b -> Ops.equal_prec a.prec b.prec && equal_scalar_t a.cond b.cond
+    | Select a, Select b -> Ops.equal_prec a.prec b.prec && equal_cond a.cond b.cond
     | Gate a, Gate b ->
-        Ops.equal_binop a.op b.op && Ops.equal_prec a.prec b.prec && equal_scalar_t a.first b.first
+        Ops.equal_binop a.op b.op && Ops.equal_prec a.prec b.prec && equal_cond a.first b.first
     | Select _, Gate _ | Gate _, Select _ -> false
 
   type 'p lit = { key : key; holds : bool; anywhere : bool; payload : 'p }
