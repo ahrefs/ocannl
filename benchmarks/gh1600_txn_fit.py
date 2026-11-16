@@ -2,7 +2,7 @@
 """gh-ocannl-1600: fit and evaluate the ranking score's memory-transaction rate offline.
 
 Usage: gh1600_txn_fit.py CELL [CELL ...] [--band B] [--sector 32|64|128] [--rate R] [--show]
-                         [--occupancy CAP,TPM]
+                         [--occupancy CAP,TPM] [--staged-rate R|sweep --listed-staged-rate L]
 
   CELL      NAME=TSV,EXPLAIN: one site's timing rows (config autotune_calibration_file, every
             candidate timed by gh1253_cells.sh's `time` cell) and a bench_rank_site.exe stdout
@@ -23,6 +23,15 @@ Usage: gh1600_txn_fit.py CELL [CELL ...] [--band B] [--sector 32|64|128] [--rate
             multiprocessor) and TPM thread slots per multiprocessor (cost_model.ml's occupancy,
             from each kernel's wg= and thr=), replacing the one the listing priced (its occ=,
             1 where it priced none): what the factor does before an advisory value ships.
+  --staged-rate  gh-ocannl-1821: re-score the staged-copy term at this rate (bytes/s), or `sweep`
+            a log grid of rates, on a listing scored at --listed-staged-rate L (the backend's
+            advisory or the model_staged_copy_rate it ran under): each kernel's stg= (its staged
+            bytes over their fill) moves its compute leg by stg * (1/R - 1/L), before its
+            occupancy. The launch tail the rate switches on stays as listed, so R is a rate of the
+            same calibration; the fill-only reference is the cell's own `nostg` listing, scored
+            directly (gh1253_cells.sh's arm). The listing passes the rebuild check below as is: its
+            c= already carries the term. Kernel lines without stg= (pre-1821 listings) carry none;
+            benchmarks/gh1821_geometry_fit.py fits those from the leaves' block tiles instead.
 
 What it re-scores: per candidate, the sum over its kernels of max(c + txn / rate, m) -- the
 runtime score with the term priced (cost_model.ml's ranking_legs_of adds the filled excess over the
@@ -84,7 +93,8 @@ def parse_kernel(spec):
     num = lambda k: None if fields[k] == "n/a" else float(fields[k])
     return {"c": num("c"), "m": num("m"), "txn32": num("txn"), "txn64": num("txn64"),
             "txn128": num("txn128"), "unc": int(fields["unc"]), "wg": int(fields["wg"]),
-            "thr": int(fields["thr"]), "occ": float(fields.get("occ", "1"))}
+            "thr": int(fields["thr"]), "occ": float(fields.get("occ", "1")),
+            "stg": float(fields.get("stg", "0"))}
 
 
 def occupancy(wg, thr, cap, tpm):
@@ -110,7 +120,7 @@ def listing(path):
     return {l: (r, pos, adm, kernels.get(l)) for l, (r, pos, adm) in ranks.items()}
 
 
-def rescore(kernels, rate, sector, occ=None):
+def rescore(kernels, rate, sector, occ=None, staged=None):
     total = 0.0
     for k in kernels:
         c = k["c"]
@@ -120,6 +130,10 @@ def rescore(kernels, rate, sector, occ=None):
             c = c * k["occ"]
         if c is not None and rate is not None:
             c = c + txn / rate * 1e3
+        if c is not None and staged is not None:
+            # gh-ocannl-1821: (rate, listed rate) -- the staged bytes' move between the two.
+            r, listed = staged
+            c = c + k["stg"] * (1.0 / r - 1.0 / listed) * 1e3
         if c is not None:
             o = k["occ"] if occ is None else occupancy(k["wg"], k["thr"], *occ)
             c = c / o
@@ -160,8 +174,8 @@ def spread_of(cands):
     return q[8] / q[0]
 
 
-def evaluate(cands, rate, sector, band, occ=None):
-    ranks = {l: rescore(c["kernels"], rate, sector, occ) for l, c in cands.items()}
+def evaluate(cands, rate, sector, band, occ=None, staged=None):
+    ranks = {l: rescore(c["kernels"], rate, sector, occ, staged) for l, c in cands.items()}
     labels = sorted(cands)
     decided = right = 0
     for i, a in enumerate(labels):
@@ -193,7 +207,13 @@ def main():
     ap.add_argument("--show", action="store_true")
     ap.add_argument("--occupancy")
     ap.add_argument("--no-coalesced", dest="no_coalesced", action="store_true")
+    ap.add_argument("--staged-rate", dest="staged_rate")
+    ap.add_argument("--listed-staged-rate", dest="listed_staged_rate", type=float)
     args = ap.parse_args()
+    if args.staged_rate is not None and not args.listed_staged_rate:
+        print("gh1600_txn_fit: --staged-rate needs --listed-staged-rate (the rate the listing was"
+              " scored at)", file=sys.stderr)
+        return 2
     occ = None
     if args.occupancy:
         cap, tpm = args.occupancy.split(",")
@@ -220,10 +240,10 @@ def main():
               + "".join(f" off_{s}={p!r}@{sl:.3f}" for s, (p, sl, _) in base[2].items()))
         cells.append((name, cands, spread, base))
 
-    def judge(rate):
+    def judge(rate, staged=None):
         rows = []
         for name, cands, spread, base in cells:
-            agree, _, sets, ranks = evaluate(cands, rate, args.sector, args.band, occ)
+            agree, _, sets, ranks = evaluate(cands, rate, args.sector, args.band, occ, staged)
             pick, slow, best = sets.get("admitted+coalesced", (None, 1.0, None))
             _, adm_slow, _ = sets.get("admitted", (None, 1.0, None))
             _, base_adm_slow, _ = base[2].get("admitted", (None, 1.0, None))
@@ -235,6 +255,24 @@ def main():
             rows.append((name, agree, pick, slow, best, ok, sets, ranks, cands))
         return rows
 
+    if args.staged_rate is not None:
+        listed = args.listed_staged_rate
+        grid = ([10 ** (e / 10) for e in range(100, 141)] if args.staged_rate == "sweep"
+                else [float(args.staged_rate)])
+        scored = []
+        for r in grid:
+            rows = judge(args.rate or None, (r, listed))
+            passing = sum(row[5] for row in rows)
+            worst = max(row[3] for row in rows)
+            least = min(row[1] for row in rows)
+            scored.append(((-passing, worst, -least), r))
+            print(f"staged_rate={r:.3e} passing={passing}/{len(rows)} worst_slowdown={worst:.3f}"
+                  f" least_agreement={least:.1f}%"
+                  + "".join(f" {row[0]}={row[1]:.1f}%@{row[3]:.3f}:{row[2]!r}" for row in rows))
+        (key, r) = min(scored)
+        print(f"fit: model_staged_copy_rate={r:.6e} passing={-key[0]}/{len(cells)}"
+              f" worst_slowdown={key[1]:.3f} least_agreement={-key[2]:.1f}%")
+        return 0 if len(grid) > 1 or key[0] == -len(cells) else 1
     if args.rate is not None:
         rows = judge(args.rate or None)
         for name, agree, pick, slow, best, ok, sets, ranks, cands in rows:
