@@ -14,6 +14,6 @@ x *. uniform_at step: every element draws its own value: true
 x *. (uniform_at step + 1): every element draws its own value: true
 x *. (uniform_at step - 0.5): every element draws its own value: true
 x *. (2 *. uniform_at step): every element draws its own value: true
-x *. normal_at step: 1 distinct values of 16
-x *. normal (): 1 distinct values of 16
-x *. { w = normal () }: 16 distinct values of 16
+x *. normal_at step: every element draws its own value: true
+x *. normal (): every element draws its own value: true
+x *. { w = normal () }: every element draws its own value: true

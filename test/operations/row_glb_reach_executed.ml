@@ -12,10 +12,15 @@
    one element, and a parameter behind a pointwise result of two parameters, or behind a pointwise
    result of two results, was refused as a hidden dimension.
 
-   What still repeats, and why: a numeric literal has one size-1 output axis, so [u + 1] has an
-   output axis of its own, and the draw takes that axis as the result closes it, to 1. The batch
-   row, which the literal does not have, fills. With a constant that has no axes the draw fills its
-   whole use site. A dimension-level question, left open under gh-ocannl-2126. *)
+   What changed with gh-ocannl-2180: a numeric literal has one size-1 output axis, so [u + 1] has an
+   output axis of its own, and the draw, closing to its bound, took that very axis, which closes
+   minimal as the result's does: the batch filled and the output repeated. The draw now takes axes
+   of its own, bounded by the result's, so it fills like the draw beside a constant with no axes;
+   with two consumers each one's axis stays related to the draw.
+
+   What still repeats, and why: in [(u *. 2) *. 2, then a fixed index] the use site's size is a
+   fixed index's lower bound on the outer result's axis, which is no GLB and does not travel down to
+   the inner result; that one closes minimal, and the draw matches it. *)
 
 open! Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -107,15 +112,21 @@ let () =
       let z = NTDSL.reshape ~l:"z" ~b:[] ~o:[] (values 1) () in
       let%op y = (u + z) *. c53 () in
       ([ u ], y, y));
-  (* A literal has one size-1 output axis: the batch fills, the output repeats. *)
-  draws "(u + 1) *. c[5|3]" ~want:"5|1" ~fills:false (fun () ->
+  (* A literal has one size-1 output axis of its own, which the draw does not adopt. *)
+  draws "(u + 1) *. c[5|3]" ~want:"5|3" ~fills:true (fun () ->
       let u = TDSL.uniform () () in
       let%op y = plus1 u *. c53 () in
       ([ u ], y, y));
-  draws "((u + 1) + (u *. 2)) *. c[5|3], one draw with two consumers" ~want:"5|1" ~fills:false
+  draws "((u + 1) + (u *. 2)) *. c[5|3], one draw with two consumers" ~want:"5|3" ~fills:true
     (fun () ->
       let u = TDSL.uniform () () in
       let%op y = (plus1 u + times2 u) *. c53 () in
+      ([ u ], y, y));
+  (* Control: nothing sizes the draw, so it closes minimal with the literal's axis (an axis of its
+     own would have been sized by the packed draw's block, 4). *)
+  draws "u + 1, nothing sizing u" ~want:"1" ~fills:true (fun () ->
+      let u = TDSL.uniform () () in
+      let y = plus1 u in
       ([ u ], y, y));
   (* gh-ocannl-1961's executed shape: the use site's bound arrives at the final stage, through a
      fixed index, and a chain of two operation results stands between it and the draw. *)
