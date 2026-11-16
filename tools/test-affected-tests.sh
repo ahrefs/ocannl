@@ -15,9 +15,10 @@
 # graph needs the full opam switch, which this harness's CI job does not install.
 # The harness legs (gh-ocannl-1900) are read on a dune-free fixture and on this
 # repository's own harnesses; the latter reads the scan-case stubs directory:
-# The isolated-addition leg queries repository paths without opening them;
-# synthetic readers pin the conservative text fallback, including printed paths.
 # affected-reads: test/operations/scan_case_stubs/* --only '^harness legs of this repository$'
+#
+# The isolated-addition leg queries tracked test-suite stanza paths without
+# opening them; synthetic readers pin conservative handling of printed paths.
 set -u
 # The expected lists are sorted with `sort` and compared with the helper's
 # bytewise order: one collation, whatever the caller's locale (gh-ocannl-1431).
@@ -1564,14 +1565,31 @@ rhas() { # LABEL LINE: stdout carries exactly that line, exit 0, no warning
   if [ "$rc" = 0 ] && grep -qxF -- "$2" "$out" && ! grep -q '^affected: warning:' "$err"; then report 0 "$1"
   else report 1 "$1" "exit $rc; got [$(tr '\n' '|' <"$out")]; stderr: $(tr '\n' '|' <"$err")"; fi
 }
-if harness_leg 'isolated operations addition'; then
-  # Query the real shape: a new module and its stanza's file. Assemble the
-  # paths because this leg queries them; it does not read either as data.
-  operations=test/operations addition=isolated_2231
-  raffected --files "$operations/dune" "$operations/$addition.ml"
-  if [ "$rc" = 0 ] && [ ! -s "$out" ]; then
-    report 0 'an isolated operations addition reaches no repository harness'
-  else report 1 'an isolated operations addition reaches no repository harness' "exit $rc; $(cat "$out" "$err")"; fi
+if harness_leg 'isolated test addition'; then
+  # Query each tracked test-suite stanza, including nested test directories.
+  # The query does not read the stanza or the new module as data.
+  compiler=arrayjit
+  git -C "$root" ls-files 'test/**/dune' "$compiler/test/dune" >"$TMP/suite-dunes" || exit 2
+  n=0 addition=isolated_2231
+  while IFS= read -r stanza; do
+    suite=${stanza%/dune}
+    raffected --files "$stanza" "$suite/$addition.ml"
+    # Independent expectations for intentional source/fixture inputs. These
+    # are judgment exceptions, not a copy of the reader's computed reach;
+    # a newly added suite defaults to no harnesses.
+    case $suite in
+      test/config) printf '%s\n' tools/test-machine-verify.sh tools/test-test-run-devices.sh >"$TMP/want" ;;
+      test/training) printf '%s\n' tools/test-ci-shard.sh >"$TMP/want" ;;
+      arrayjit/test) printf '%s\n' tools/test-machine-verify.sh >"$TMP/want" ;;
+      *) : >"$TMP/want" ;;
+    esac
+    if [ "$rc" = 0 ] && cmp -s "$TMP/want" "$out"; then
+      report 0 "an isolated addition in $suite reaches only its intentional harness inputs"
+    else report 1 "an isolated addition in $suite reaches only its intentional harness inputs" "exit $rc; $(cat "$out" "$err")"; fi
+    n=$((n + 1))
+  done <"$TMP/suite-dunes"
+  [ "$n" -gt 0 ] || report 1 'tracked test-suite stanzas were queried' 'no stanzas found'
+  operations=test/operations
   # A real read still reaches its harness. Text the reader cannot distinguish
   # from a read (even a diagnostic printed by a fixture) stays conservative.
   mkdir -p "$hrepo/$operations" || exit 2
@@ -1582,6 +1600,7 @@ if harness_leg 'isolated operations addition'; then
     hexpect "$command mentioning the stanza file still reaches its harness" 0 tools/test-c.sh
   done
   hc_restore
+  unlink "$hrepo/$operations/dune" && rmdir "$hrepo/$operations" "$hrepo/test" || exit 2
 fi
 
 if harness_leg 'harness legs of this repository'; then

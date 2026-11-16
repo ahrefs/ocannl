@@ -772,7 +772,7 @@ esac
   *"promotion diffs present"*) nodiff_detail="promotion offered without a diff" ;;
 esac
 [ -n "$nodiff_detail" ] || case $argv_out in
-  *"fingerprint:"*'File "test/einsum/dune", lines 197-217'*) ;;
+  *"fingerprint:"*'File "fixture/surjectivity/dune", lines 197-217'*) ;;
   *) nodiff_detail="the stanza's location is not fingerprinted" ;;
 esac
 if [ -z "$nodiff_detail" ]; then
