@@ -105,7 +105,10 @@ files.
   five stores with both `[u; 2v]=[k; 2 default]` and `[u; 2v]=[k; 2 bcast_if_1]` (alone or
   with one window pair). Their old all-top answer drops the explicit size-2 atom's claim,
   so they remain refused; finding other sizes/tags is a separate concatenation search problem.
-  Twenty atom-counterpart stores become refused, leaving 1,689 accepted of the original 16,730.
+  Twenty atom-counterpart stores become refused. The original 16,730-store pool accepts 1,689
+  before/after on base `608c490e`, and 1,692 before/after on `39bdb75d` after gh-ocannl-2223;
+  the combined expanded pool accepts 2,358 stores in 8,484 runs, with no order dependence,
+  self-refusal, or batch/individual difference.
   Identity strides keep the tag; atoms keep their claim.
   Reverse inference filters candidates through the forward rule and defers an ambiguous
   size-1 result through the window settling mechanism. Thus `2_default / 2` can be

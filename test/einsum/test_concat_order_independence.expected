@@ -1,3 +1,6 @@
+stride basis rule agrees with pinned extents in both orientations and orders: true
+pinned stride pairs size the other extent in both orders: true
+open stride pairs close to equal sized extents: true
 stores whose verdict or solution depends on the order: true
 accepted answers refused when stated up front: true
 stores registered in one batch settling otherwise: true
@@ -8,6 +11,8 @@ shared claim with a zero residual settles to u = 1, k = 3_bcast_if_1: true
 a later plain k keeps both concatenations' shared claim a: true
 a later plain k keeps both concatenations' shared claim h: true
 a later plain k keeps both concatenations' shared claim bcast_if_1: true
+a stride of the broadcast top settles in every order: true
+a filler stride cannot also supply a size-2 broadcast-atom claim: true
 the issue's example is refused in every order: true
 and so is #1935's held-set vetting case, a named claim against a plain size: true
 control: [v; u] = 4 a with v = 1 a takes u = 3 a in every order: true
