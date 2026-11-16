@@ -193,3 +193,28 @@ let () =
   in
   pf "one result: the leaf takes the use site's 3, and the result with it" (one [ "[3]"; "[3]" ]);
   pf "two results: the leaf takes 3, and both results with it" (two [ "[3]"; "[3]"; "[3]" ])
+
+(* gh-ocannl-2244: a packed draw under one result, below a result row with a concrete axis and an
+   open tail ([relu u *. c[|5]]: the product's row is [5].<t>). The draw's GLB, [5].<t>, has no
+   variable axis; the draw waited at stage 6a on its open tail, and the result between, closing
+   empty at 6b, closed the draw empty. The twin repeats the result's bound on the draw, as both
+   operands of [u *. u] give it. *)
+let () =
+  Verdict.case "a packed draw under a result, its GLB's axes concrete" @@ fun () ->
+  let store ~repeats () =
+    let y = { (fresh ()) with Row.dims = [ dim 5 ] } and r = fresh () and u = fresh () in
+    Row.add_resolve_at_use (var_of u);
+    let counter, total = draw [ u ] in
+    ( [],
+      [ u; r; y ],
+      [ ineq y r :: List.init repeats ~f:(fun _ -> ineq r u); [ total ] ],
+      [ (fun env -> Option.value_map (Row.get_dim_val env counter) ~default:"?" ~f:Int.to_string) ]
+    )
+  in
+  let once = closes "[5].<t> <= r <= u, draw over [u]  (rows u r y; counter)" (store ~repeats:1) in
+  let twice =
+    closes "[5].<t> <= r <= u twice, draw over [u]  (rows u r y; counter)" (store ~repeats:2)
+  in
+  pf "the draw takes the use site's 5, the result with it, and the draw sizes its blocks"
+    (once [ "[5]"; "[5]"; "[5]"; "2" ]);
+  pf "the repeated bound closes the same" (twice [ "[5]"; "[5]"; "[5]"; "2" ])

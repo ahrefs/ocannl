@@ -60,13 +60,17 @@
    and branching causes below. box_muller: a [normal] draw closes to one value; since gh-ocannl-2180
    it fills ([x[16] *. normal ()] agrees, [dropout_mask_varies] claims it), and what the entry still
    excuses (4 programs) are normals under a fixed index or a compose. Then those this sweep found,
-   each with its fixed program below: a unary operation over a draw ([relu u *. c[|2,5]] closes [u]
-   to one element); one draw under both operands of a pointwise operation ([(u *. u) + c[|2]]);
-   nested branching ([c + (u + (v *. w))] closes [u], [c + ((u + v) + w)] is refused); a constant of
-   no axes in a branching program ([((u + v) + z) *. c[|3]]); an einsum spec over a draw ([c[|3->2]
-   * (u ++ "ab => a")] closes the kept axis to 1); a compose over a draw ([(c[|3,2] *. v) *. (u *
-   c[|5])] gives [u] no output axes); and a [uniform1]-initialized parameter sized only by a fixed
-   index, accepted where a default-initialized one is refused. *)
+   each with a fixed program below: nested branching (its fixed programs, [c + (u + (v *. w))] which
+   closed [u] and [c + ((u + v) + w)] which was refused, agree since gh-ocannl-2244; random programs
+   whose branching pointwise operations nest still collapse); an einsum spec over a draw ([c[|3->2]
+   * (u ++ "ab => a")] closes the kept axis to 1; a compose whose left operand it is takes that row,
+   and a fixed index is such a spec); and a [uniform1]-initialized parameter sized only by a fixed
+   index, accepted where a default-initialized one is refused. Four more entries the sweep found are
+   fixed (gh-ocannl-2244): a draw under a unary operation ([relu u *. c[|2,5]]), under both operands
+   of a pointwise operation ([(u *. u) + c[|2]]) or under a compose ([(c[|3,2] *. v) *. (u *
+   c[|5])]), and a constant of no axes in a branching program ([((u + v) + z) *. c[|3]]), closed the
+   draw to one element: waiting on its bound's open tail at stage 6a, the draw was closed empty by
+   the result above it at 6b. Their fixed programs stay, and agree. *)
 
 open! Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -605,7 +609,6 @@ let region (prog : program) ~is_x ~reach =
   else under prog ~is_x:(fun k _ -> base.(k))
 
 let is_lit prog x = Poly.equal prog.(x) Lit
-let is_scalar_const prog x = match prog.(x) with Const r -> cells r = 1 | _ -> false
 let opens prog = open_under prog
 let is_open prog x = not (Set.is_empty (opens prog).(x))
 
@@ -634,33 +637,10 @@ let known : known list =
       refusals = [ too_many; axes_count ];
     };
     {
-      entry = "proposed: a unary operation (relu, neg) over a draw";
-      is_x = (fun prog _ -> function Relu x | Neg x -> is_open prog x | _ -> false);
-      reach = false;
-      refusals = [];
-    };
-    {
-      entry = "proposed: a pointwise operation with one draw under both operands";
-      is_x =
-        (fun prog _ -> function
-          | Add (x, y) | Mul (x, y) ->
-              let o = opens prog in
-              not (Set.is_empty (Set.inter o.(x) o.(y)))
-          | _ -> false);
-      reach = true;
-      refusals = [ mismatch; axes_count ];
-    };
-    {
       entry = "proposed: nested branching, a branching pointwise operation over another";
       is_x =
         (fun prog _ node ->
           branching prog node && pointwise_with (fun x -> branching prog prog.(x)) node);
-      reach = true;
-      refusals = [ mismatch; axes_count ];
-    };
-    {
-      entry = "proposed: a pointwise operation with a constant of no axes";
-      is_x = (fun prog _ -> pointwise_with (is_scalar_const prog));
       reach = true;
       refusals = [ mismatch; axes_count ];
     };
@@ -673,16 +653,16 @@ let known : known list =
     };
     {
       entry = "proposed: an einsum spec over a draw";
-      is_x = (fun prog _ -> function Einsum (_, x) -> is_open prog x | _ -> false);
+      is_x =
+        (fun prog _ ->
+          let over_draw = function Einsum (_, x) -> is_open prog x | _ -> false in
+          function
+          (* A compose whose left operand is such an einsum takes its output row from it, the kept
+             axis closed to 1 with it: [((u ++ "ab => a") * c[|2->5]) *. c[|2->7]]. *)
+          | Compose (x, _) -> over_draw prog.(x)
+          | node -> over_draw node);
       (* Seen reaching siblings: [(neg (u ++ "ab => a") *. v) *. c[|5,2]] closes [v]. *)
       reach = true;
-      refusals = [];
-    };
-    {
-      entry = "proposed: a compose over a draw";
-      is_x =
-        (fun prog _ -> function Compose (x, y) -> is_open prog x || is_open prog y | _ -> false);
-      reach = false;
       refusals = [];
     };
   ]

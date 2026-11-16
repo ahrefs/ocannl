@@ -38,6 +38,30 @@ u *. 2, then a fixed index, batch 4
   draw = 4|4, 16 distinct values for 16 cells
 u *. 2, then a fixed index, batch 4: every draw closes to 4|4: true
 u *. 2, then a fixed index, batch 4: every draw fills its use site: true
+relu u *. c[|2,5]
+  draw = 2,5, 10 distinct values for 10 cells
+relu u *. c[|2,5]: every draw closes to 2,5: true
+relu u *. c[|2,5]: every draw fills its use site: true
+c[|2,5] + relu u
+  draw = 2,5, 10 distinct values for 10 cells
+c[|2,5] + relu u: every draw closes to 2,5: true
+c[|2,5] + relu u: every draw fills its use site: true
+relu (relu u) *. c[|2,5]
+  draw = 2,5, 10 distinct values for 10 cells
+relu (relu u) *. c[|2,5]: every draw closes to 2,5: true
+relu (relu u) *. c[|2,5]: every draw fills its use site: true
+(u *. u) + c[|2]
+  draw = 2, 2 distinct values for 2 cells
+(u *. u) + c[|2]: every draw closes to 2: true
+(u *. u) + c[|2]: every draw fills its use site: true
+(u + u) + c[|2]
+  draw = 2, 2 distinct values for 2 cells
+(u + u) + c[|2]: every draw closes to 2: true
+(u + u) + c[|2]: every draw fills its use site: true
+(c[|3,2] *. v) *. (u * c[|5]), the compose's draw
+  draw = 5->3,2, 30 distinct values for 30 cells
+(c[|3,2] *. v) *. (u * c[|5]), the compose's draw: every draw closes to 5->3,2: true
+(c[|3,2] *. v) *. (u * c[|5]), the compose's draw: every draw fills its use site: true
 [1;2] + (({w} + {v}) * [3;4;5])
   3->2, 3->2
 [1;2] + (({w} + {v}) * [3;4;5]): the parameters take the shapes their use sites give: true

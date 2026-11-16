@@ -7,19 +7,19 @@
 x[16] *. normal (): agrees, executed
 c[|2,5] + u: agrees, executed
 u + c[|2,5]: agrees, executed
-c[|2,5] + relu u: known: proposed: a unary operation (relu, neg) over a draw, executed
-relu u + c[|2,5]: known: proposed: a unary operation (relu, neg) over a draw, executed
-c[|2,5] *. relu u: known: proposed: a unary operation (relu, neg) over a draw, executed
-relu u *. c[|2,5]: known: proposed: a unary operation (relu, neg) over a draw, executed
-(u *. u) + c[|2]: known: proposed: a pointwise operation with one draw under both operands, executed
+c[|2,5] + relu u: agrees, executed
+relu u + c[|2,5]: agrees, executed
+c[|2,5] *. relu u: agrees, executed
+relu u *. c[|2,5]: agrees, executed
+(u *. u) + c[|2]: agrees, executed
 c[|3->2] * (u ++ "ab => a"): known: proposed: an einsum spec over a draw, executed
-(c[|3,2] *. v) *. (u * c[|5]): known: proposed: a compose over a draw, executed
-c + (u + (v *. w)): known: proposed: nested branching, a branching pointwise operation over another, executed
-c + ((u + v) + w): known: proposed: nested branching, a branching pointwise operation over another
+(c[|3,2] *. v) *. (u * c[|5]): agrees, executed
+c + (u + (v *. w)): agrees, executed
+c + ((u + v) + w): agrees, executed
 (u + (v + w)) *. c[5|3]: agrees, executed
 ((u + v) *. c[5|3]) + w: agrees, executed
-((u + v) + z) *. c[|3]: known: proposed: a pointwise operation with a constant of no axes, executed
-(u + v) *. (w + x) *. c[|3]: known: proposed: nested branching, a branching pointwise operation over another
+((u + v) + z) *. c[|3]: agrees, executed
+(u + v) *. (w + x) *. c[|3]: agrees, executed
 every fixed program agrees with the oracle or is a listed known case: true
 the oracle solves programs and the solver accepts them: true
 programs whose fixed shapes conflict occur, and every one is refused: true

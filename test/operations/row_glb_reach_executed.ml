@@ -18,6 +18,11 @@
    of its own, bounded by the result's, so it fills like the draw beside a constant with no axes;
    with two consumers each one's axis stays related to the draw.
 
+   What changed with gh-ocannl-2244: a draw behind a unary result, behind a pointwise result of the
+   draw with itself, or under a compose, closed to one element (or lost its output axes) when the
+   use site's axes were concrete: the draw waited at stage 6a and the result above it, closing at
+   6b, closed it empty.
+
    What still repeats, and why: in [(u *. 2) *. 2, then a fixed index] the use site's size is a
    fixed index's lower bound on the outer result's axis, which is no GLB and does not travel down to
    the inner result; that one closes minimal, and the draw matches it. *)
@@ -95,6 +100,10 @@ let stretched r =
 
 let c53 () = NTDSL.reshape ~l:"c" ~b:[ 5 ] ~o:[ 3 ] (values 15) ()
 
+(* An unbatched constant with output axes [o]: the use site's axes are concrete by the time the draw
+   under a result closes. *)
+let const o = NTDSL.reshape ~l:"c" ~b:[] ~o (values (List.fold o ~init:1 ~f:( * ))) ()
+
 let () =
   draws "u *. c[5|3]" ~want:"5|3" ~fills:(Some true) (fun () ->
       let u = TDSL.uniform () () in
@@ -149,6 +158,45 @@ let () =
       let m = times2 u in
       let%op y = m ++ "...|3 => ...|0" in
       ([ u ], m, y))
+
+(* gh-ocannl-2244: a draw whose use site's axes are concrete, behind a result: a unary result, one
+   draw as both operands of a pointwise result, a compose result. The use site's bound reached the
+   draw, but the draw, waiting on the open tail of that bound, was still open when the result above
+   it closed, and the result closing empty closed the draw empty with it. *)
+let () =
+  draws "relu u *. c[|2,5]" ~want:"2,5" ~fills:(Some true) (fun () ->
+      let u = TDSL.uniform () () in
+      let c = const [ 2; 5 ] in
+      let%op y = relu u *. c in
+      ([ u ], y, y));
+  draws "c[|2,5] + relu u" ~want:"2,5" ~fills:(Some true) (fun () ->
+      let u = TDSL.uniform () () in
+      let c = const [ 2; 5 ] in
+      let%op y = c + relu u in
+      ([ u ], y, y));
+  draws "relu (relu u) *. c[|2,5]" ~want:"2,5" ~fills:(Some true) (fun () ->
+      let u = TDSL.uniform () () in
+      let c = const [ 2; 5 ] in
+      let%op y = relu (relu u) *. c in
+      ([ u ], y, y));
+  draws "(u *. u) + c[|2]" ~want:"2" ~fills:(Some true) (fun () ->
+      let u = TDSL.uniform () () in
+      let c = const [ 2 ] in
+      let%op y = (u *. u) + c in
+      ([ u ], y, y));
+  draws "(u + u) + c[|2]" ~want:"2" ~fills:(Some true) (fun () ->
+      let u = TDSL.uniform () () in
+      let c = const [ 2 ] in
+      let%op y = u + u + c in
+      ([ u ], y, y));
+  (* The compose's draw takes its input axis from the contraction and its output axes from the outer
+     use site: the whole shape is claimed, and the draw fills it. *)
+  draws "(c[|3,2] *. v) *. (u * c[|5]), the compose's draw" ~want:"5->3,2" ~fills:(Some true)
+    (fun () ->
+      let u = TDSL.uniform () () and v = TDSL.uniform () () in
+      let c32 = const [ 3; 2 ] and c5 = const [ 5 ] in
+      let%op y = c32 *. v *. (u * c5) in
+      ([ u ], u, y))
 
 let () =
   (* The bias-like [1;2] sizes both parameters' outputs through the pointwise result of the two. *)
