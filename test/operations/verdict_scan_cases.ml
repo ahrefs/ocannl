@@ -413,6 +413,14 @@ let () = if on_gpu then run () else skip ()|ocaml},
         {ocaml|let skip ?(before = skipped "a") () = ignore before; skipped "b"
 let () = if on_gpu then run () else skip ~before:() ()|ocaml},
         [] );
+      ( "a callback whose skipping optional default the stored arguments supply",
+        {ocaml|let skip ?(before = skipped "a") () = ignore before
+let () = Stdlib.List.iter (skip ~before:()) [ (); () ]|ocaml},
+        [] );
+      ( "a callback whose skipping optional default the call omits",
+        {ocaml|let skip ?(before = skipped "a") () = ignore before
+let () = Stdlib.List.iter skip [ (); () ]|ocaml},
+        [ "iterated a" ] );
       ( "a wrapper that also evaluates a claim",
         {ocaml|let both () = p "a" x; skipped "b"
 let () = if on_gpu then run () else (both (); skipped "c")|ocaml},

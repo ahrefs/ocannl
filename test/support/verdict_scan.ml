@@ -3273,19 +3273,22 @@ let gate_census content =
          in the source; past 256 chains, too, where every parameter is read through every
          application, the loud direction. *)
       method call_chains owner =
+        (* Every chain ends in one terminal case or the other, so counting both bounds the total. *)
         let produced = ref 0 in
+        let terminal chain =
+          Int.incr produced;
+          if !produced > 256 then raise Stdlib.Exit;
+          [ chain ]
+        in
         let rec go seen owner =
           match Hashtbl.find_multi call_sites owner with
-          | [] -> [ [] ]
+          | [] -> terminal []
           | sites ->
               List.concat_map sites ~f:(fun (at, _, _) ->
                   match Option.join (Hashtbl.find call_callers at) with
                   | Some caller when not (List.mem seen caller ~equal:Int.equal) ->
                       List.map (go (caller :: seen) caller) ~f:(fun chain -> (owner, at) :: chain)
-                  | _ ->
-                      Int.incr produced;
-                      if !produced > 256 then raise Stdlib.Exit;
-                      [ [ (owner, at) ] ])
+                  | _ -> terminal [ (owner, at) ])
         in
         match owner with
         | None -> [ [] ]
@@ -3684,14 +3687,38 @@ let gate_census content =
                     run identity (self#bind_applied ~definition_env:scope env params arguments) body
                 | Some
                     ( identity,
-                      ({ pexp_desc = Pexp_function (params, _, (Pfunction_cases _ as cases)); _ } as
-                       function_),
+                      {
+                        pexp_desc =
+                          Pexp_function (params, _, (Pfunction_cases (case_list, _, _) as cases));
+                        _;
+                      },
                       scope )
                   when fully_applies
                          (function_kind ~binding:None params cases)
-                         (List.map arguments ~f:fst) ->
-                    (* A [function]'s cases, each a branch, under its implicit argument. *)
-                    run identity scope function_
+                         (List.map arguments ~f:fst) -> (
+                    (* A [function]'s cases, each a branch, its pattern taking apart the implicit
+                       argument this application supplies: the positional one after the explicit
+                       parameters'. *)
+                    let explicit =
+                      List.count params ~f:(fun param ->
+                          match param.pparam_desc with
+                          | Pparam_val (Ppxlib.Asttypes.Nolabel, _, _) -> true
+                          | _ -> false)
+                    in
+                    let body_env = self#bind_applied ~definition_env:scope env params arguments in
+                    match
+                      List.nth
+                        (List.filter_map arguments ~f:(function
+                          | Ppxlib.Asttypes.Nolabel, argument -> Some argument
+                          | _ -> None))
+                        explicit
+                    with
+                    | Some implicit ->
+                        List.iter case_list ~f:(fun case ->
+                            let case_env = self#bind_parts body_env case.pc_lhs (implicit, env) in
+                            Option.iter case.pc_guard ~f:(run identity case_env);
+                            run identity case_env case.pc_rhs)
+                    | None -> ())
                 | _ -> ())
             | _ -> ())
 
@@ -4693,7 +4720,19 @@ let skip_list_census content =
                     | Some key when start <= key && key < stop -> (skip, None)
                     | _ -> (skip, key))
               in
-              let whole, run_evaluating = claims ~branches:true rhs in
+              (* What the body runs, branches and a [function]'s cases included, apart from the
+                 defaults, which run only where an application omits their label. *)
+              let whole, run_evaluating =
+                let bodies =
+                  match body with
+                  | Pfunction_body body -> [ body ]
+                  | Pfunction_cases (cases, _, _) ->
+                      List.concat_map cases ~f:(fun case ->
+                          Option.to_list case.pc_guard @ [ case.pc_rhs ])
+                in
+                ( List.concat_map bodies ~f:(fun body -> fst (claims ~branches:true body)),
+                  snd (claims ~branches:true rhs) )
+              in
               Some
                 (Skip_function
                    {
@@ -4779,14 +4818,24 @@ let skip_list_census content =
   let wrapper_skips name callee stored =
     match Option.bind (binding_of callee) ~f:deferred with
     | Some
-        (Skip_function { positional; labelled; runs = { run_evaluating = 0; _ }; callback_skips; _ })
+        (Skip_function
+           { positional; labelled; runs = { run_evaluating = 0; _ }; callback_skips; defaults })
       when List.count stored ~f:(fun (label, _) -> Poly.equal label Ppxlib.Asttypes.Nolabel)
            + callback_arguments name
            >= positional
            && List.for_all labelled ~f:(fun label ->
                List.exists stored ~f:(fun (given, _) ->
                    Poly.equal given (Ppxlib.Asttypes.Labelled label))) ->
-        callback_skips
+        (* A default runs where the stored arguments omit its label. *)
+        List.concat_map defaults ~f:(fun (label, default) ->
+            if
+              List.exists stored ~f:(fun (given, _) ->
+                  match given with
+                  | Ppxlib.Asttypes.Labelled given | Optional given -> String.equal given label
+                  | Nolabel -> false)
+            then []
+            else List.map default.run_skips ~f:fst)
+        @ callback_skips
     | _ -> []
   in
   let iterated_argument name argument =
