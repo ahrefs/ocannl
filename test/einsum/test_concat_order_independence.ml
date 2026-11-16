@@ -549,6 +549,20 @@ let () =
              match Row.get_dim_from_env env u with
              | Some (Dim { d = 1; basis; _ }) -> String.equal basis Row.bcast_if_1
              | _ -> false));
+      let v = Row.get_var () and u = Row.get_var () in
+      let kernel = Row.Concat [ affine v; dim 1 ] in
+      let minimum v d_min : Row.constraint_ =
+        Row.Dim_constr { d = Var v; constr = At_least_dim { d_min; sites = [] }; origin }
+      in
+      p "a fixed-index kernel component waits for the iterator minimum before closing"
+        (Option.value_map
+           (settled
+              ([ (Row.Stage1, [ eq (window ~kernel (Var u)) (dim 9); minimum v 2; minimum u 3 ]) ]
+              @ List.map [ Row.Stage2; Stage3 ] ~f:(fun stage -> (stage, []))
+              @ [ (Row.Stage4, [ close [ v; u ] ]) ]
+              @ List.map closing ~f:(fun stage -> (stage, []))))
+           ~default:false
+           ~f:(fun env -> sized env v 3 && sized env u 3));
       let sym, _ = Ir.Indexing.get_static_symbol ~static_range:3 Ir.Indexing.Empty in
       p "a rigid symbolic kernel cannot be equated with a concrete kernel size"
         (match

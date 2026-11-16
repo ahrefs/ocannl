@@ -26,9 +26,10 @@ files.
 - A valid window's kernel can be a composite expression (gh-ocannl-2254): concatenation
   cancellation can bind it to `[2v; 1]`. Infer its size through `unify_dim` on that expression,
   then recheck the window's forward basis rule only once substitution sizes the kernel. If its
-  own equation defers, retain the window without recursing on it. Deferral and the gh-ocannl-2156
-  guessing dependencies include every kernel variable, including inside `Concat` and `Affine`;
-  rigid symbolic kernels cannot equal a concrete size. Pins: `test_concat_order_independence.ml`.
+  own equation defers, retain the window without recursing on it. Deferral and the shared
+  `closing_dim_dependencies` reader include every kernel variable inside `Concat` and `Affine`,
+  in ordinary closing and the stage-7 fixed-index prepass; rigid symbolic kernels cannot equal a
+  concrete size. Pins: `test_concat_order_independence.ml`.
 - A stored round-up total can retain a dimension solved at Stage1, when its coefficient must
   stay lazy (gh-ocannl-2032). `apply_row_constraint` normalizes both sides of `row_conjunction`:
   a range against a stale `Strided_var` defers, and an early `Shape_row` adds a copy each pass.

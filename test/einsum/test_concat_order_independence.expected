@@ -23,4 +23,5 @@ an affine kernel is solved through its expression: true
 a multi-variable kernel equation defers, then drains after a component is sized: true
 composite kernel variables wait for the iterator before guessing: true
 an unbounded iterator closes before the composite kernel variables: true
+a fixed-index kernel component waits for the iterator minimum before closing: true
 a rigid symbolic kernel cannot be equated with a concrete kernel size: true
