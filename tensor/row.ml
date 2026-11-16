@@ -276,8 +276,7 @@ let is_claim_free (s : solved_dim) =
    included. The claims of a concatenated axis's components must agree, and the axis takes the one
    claim, else [default]. *)
 let concat_claim (s : solved_dim) =
-  if String.equal s.basis default_basis || (String.equal s.basis bcast_if_1 && s.d <= 1) then None
-  else Some s.basis
+  if is_claim_free s || (String.equal s.basis bcast_if_1 && s.d = 0) then None else Some s.basis
 
 let concat_claims (solved : solved_dim list) =
   List.filter_map solved ~f:concat_claim |> List.dedup_and_sort ~compare:String.compare
@@ -3283,24 +3282,28 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
          solved: a solved claim other than [n]'s is refused now, as the fully solved arm below
          refuses it later, [n]'s [default] included (gh-ocannl-2191; merging the claim into the
          residual accepted [[1_a; u] = 4_default] while [[1_a; 3_a] = 4_default] is refused). The
-         broadcast top keeps the solved claim, as before. *)
+         broadcast top keeps the solved claim, as before. Lazy: a fully solved sum keeps the solved
+         arm's own refusal ([different bases]). *)
       let top = String.equal n.basis bcast_if_1 && n.d <= 1 in
       let residual_basis =
-        if String.equal solved_basis default_basis || String.equal solved_basis n.basis then n.basis
-        else if top then solved_basis
-        else conflict ()
+        lazy
+          (if String.equal solved_basis default_basis || String.equal solved_basis n.basis then
+             n.basis
+           else if top then solved_basis
+           else conflict ())
       in
       (* [n]'s claim must land on an unsolved component when no solved one carries it. A size-1
          [bcast_if_1] residual is the claim-free top: one unknown component cannot carry the claim,
          and several defer unchanged until one is solved. *)
-      let lost_claim =
+      let lost_claim () =
         Option.is_some (concat_claim n)
         && String.equal solved_basis default_basis
-        && Option.is_none (concat_claim { d = residual; basis = residual_basis; proj_id = None })
+        && Option.is_none
+             (concat_claim { d = residual; basis = Lazy.force residual_basis; proj_id = None })
       in
       match rest with
-      | [ _ ] when lost_claim -> conflict ()
-      | _ :: _ :: _ when lost_claim -> ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)
+      | [ _ ] when lost_claim () -> conflict ()
+      | _ :: _ :: _ when lost_claim () -> ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)
       | [] ->
           (* Fully solved: the sum meets [d] under [solved_basis], not [residual_basis]. A residual
              component is a variable, and binding it records the merged tag, so a named size claims
@@ -3312,13 +3315,19 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
              principled answer, an integer component taking a slice of its partner's basis, is
              gh-ocannl-2095. *)
           unify_dim ~stage origin (get_dim ~d:sum ~basis:solved_basis (), d) env
-      | [ c ] -> unify_dim ~stage origin (c, get_dim ~d:residual ~basis:residual_basis ()) env
+      | [ c ] ->
+          unify_dim ~stage origin (c, get_dim ~d:residual ~basis:(Lazy.force residual_basis) ()) env
       | _ ->
           (* Multiple unsolved components remain: defer the NORMALIZED residual (solved components
              subtracted), not the original equation, so the arithmetic progress is not lost and the
              same unsolved form is not requeued. *)
           ( [
-              Dim_eq { d1 = Concat rest; d2 = get_dim ~d:residual ~basis:residual_basis (); origin };
+              Dim_eq
+                {
+                  d1 = Concat rest;
+                  d2 = get_dim ~d:residual ~basis:(Lazy.force residual_basis) ();
+                  origin;
+                };
             ],
             env ))
   | Concat _, Sym _ | Sym _, Concat _ ->

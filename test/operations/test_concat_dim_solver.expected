@@ -20,6 +20,7 @@ Concrete Concat: its sum, against a stored Concat and a named basis
   PASS: 2^3 = 6: refused: solved dimensions for axis: mismatch
   PASS: a named component names the sum
   PASS: a plain 2^3 against a named 5: refused: solved dimensions for axis: different bases
+  PASS: a named 1^3 against a plain 4: refused: solved dimensions for axis: different bases
 Tagged components: one verdict in either order
   PASS: [a; u] = 4, a = 1 rgb: a claim against a plain size: refused in either order
   PASS: 4 = [a; u], a = 1 rgb: the other orientation: refused in either order

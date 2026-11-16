@@ -298,7 +298,10 @@ let test_concrete_concat () =
      meets a solved size, so a claim-free [2^3] taking [rgb 5] could later take [hsv 5] too, merging
      the two silently. gh-ocannl-2095 is the sound alternative (integer components as slices of the
      partner's basis). *)
-  refuses "a plain 2^3 against a named 5" [ eq c23 (dim ~basis:"rgb" 5) ] ~needle:"different bases"
+  refuses "a plain 2^3 against a named 5" [ eq c23 (dim ~basis:"rgb" 5) ] ~needle:"different bases";
+  refuses "a named 1^3 against a plain 4"
+    [ eq (Row.Concat [ dim ~basis:"rgb" 1; dim ~basis:"rgb" 3 ]) (dim 4) ]
+    ~needle:"different bases"
 
 (* gh-ocannl-2191: a component's basis is decided as the fully solved axis is checked, so each
    system below gets one verdict whichever of its equations is solved first. *)
