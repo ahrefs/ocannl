@@ -243,6 +243,16 @@ manifest_writer_contract() (
   manifest_required row remote cuda gate &
   local b=$!
   wait "$a"; wait "$b"
+  # A failed authoritative-record read must leave the view in flight.
+  sed -n '/^write_run_record() /,/^# A unit.*summary lines/p' "$sweep" >"$STATE/record-writer.sh"
+  . "$STATE/record-writer.sh"
+  run_rows() { return 1; }
+  RUN_RECORD=$STATE/unpublished-run.tsv
+  if write_run_record complete; then
+    echo "failed run-record read unexpectedly succeeded" >&2
+    exit 1
+  fi
+  perl -MJSON::PP -e 'local $/; die "premature terminal view" if defined decode_json(<>)->{exit_kind}' "$MANIFEST"
   manifest_required end cancelled
   perl -MJSON::PP -e '
     local $/; my $v = decode_json(<>);

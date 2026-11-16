@@ -1852,7 +1852,6 @@ run_rows() { # -> machine, backend, outcome, log for each row of this run
 # Given its path once the lanes have been forked, which is what makes a record
 # owed at all: before that nothing has been swept and the absence is the signal.
 write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-run-failed
-  manifest end "$1" || return 1
   local kind=$1 unit machine backend host outcome log stopped stage rows
   local window window_start window_end bursts window_kind_field tokens_field
   stage=$RUN_RECORD.stage.$$
