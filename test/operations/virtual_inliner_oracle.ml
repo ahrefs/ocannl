@@ -27,9 +27,13 @@
    blend is held to its nodes' bounds as well ([strict_probe_controls] pin the probe). The
    [src=reduce] family makes [src] itself a virtual two-term reduction over a materialized input:
    scopes then sit inside the replay's guarded arms throughout the table. [src=reduce-init]
-   additionally reads a materialized, index-varying initializer before that reduction. Substitutions
-   can be out of range, which codegen renders under the guard (gh-ocannl-2145; before it, the
-   inliner carried the guard into the scope body, gh-ocannl-2077's [guard_hoisted]).
+   additionally reads a materialized, index-varying initializer before that reduction.
+   [src=reduce-chain-1/2] inserts one/two declared-virtual initializer links before the reduction,
+   each transposing its predecessor and adding an index-varying tag. These use the same bounded
+   core-write/all-read cross and all three consumer standings; the links themselves are declared
+   virtual (as [src] is), not a separate standing dimension. Twins materialize every link.
+   Substitutions can be out of range, which codegen renders under the guard (gh-ocannl-2145; before
+   it, the inliner carried the guard into the scope body, gh-ocannl-2077's [guard_hoisted]).
 
    Tier B is the anchor. An interpreter agreeing only with itself would prove nothing, so a sample
    across the outcome buckets also compiles and runs on the selected backend, in both arms, against
@@ -70,12 +74,18 @@ type kind = Store | Accumulate | Reduce
 type comp = { write : access; kind : kind; complex : bool }
 type step = Zero | Write of int | Read of int
 type standing = Undecided | Declared | Inherited
-type source = Input | Reduce_zero | Reduce_init
+
+let all_standings = [ Undecided; Declared; Inherited ]
+
+type source = Input | Reduce_zero | Reduce_init | Reduce_chain of int
 
 let source_name = function
   | Input -> "input"
   | Reduce_zero -> "reduce"
   | Reduce_init -> "reduce-init"
+  | Reduce_chain depth -> Printf.sprintf "reduce-chain-%d" depth
+
+let nested_sources = [ Reduce_zero; Reduce_init; Reduce_chain 1; Reduce_chain 2 ]
 
 type program = {
   dims : int array;
@@ -262,6 +272,7 @@ let accesses ~launch dims =
 type built = {
   x : Ir.Tnode.t;
   src : Ir.Tnode.t;
+  init_links : Ir.Tnode.t list;
   inputs : (Ir.Tnode.t * float array) list;
   outs : Ir.Tnode.t array;
   routines : LL.t list;
@@ -279,10 +290,23 @@ let src_init_cells = Array.init 16 ~f:(fun i -> Float.of_int (101 + (5 * i)))
 (* Distinct along all three reduction-input axes, with a two-term sum exact in f32. *)
 let src_input_cells = Array.init 32 ~f:(fun i -> Float.of_int (1 + (3 * i)))
 
+(* Descriptor arithmetic, independent of IR construction and optimization. Each link transposes its
+   predecessor and adds a distinct, nonzero tag. On [4; 4], depth 1 has strides (18,21), depth 2
+   (34,19): every cell is distinct, and all arithmetic stays exact in f32. *)
+let rec initializer_cell depth i j =
+  if depth = 0 then src_init_cells.((4 * i) + j)
+  else initializer_cell (depth - 1) j i +. Float.of_int ((211 * depth) + (13 * i) + j)
+
 let source_cells prog =
   if not (Poly.equal prog.source Input) then
     Array.init 16 ~f:(fun i ->
-        let sum = ref (if Poly.equal prog.source Reduce_init then src_init_cells.(i) else 0.) in
+        let initial =
+          match prog.source with
+          | Input | Reduce_zero -> 0.
+          | Reduce_init -> src_init_cells.(i)
+          | Reduce_chain depth -> initializer_cell depth (i / 4) (i % 4)
+        in
+        let sum = ref initial in
         for k = 0 to 1 do
           sum := !sum +. src_input_cells.((2 * i) + k)
         done;
@@ -346,28 +370,54 @@ let replay prog =
 
 let build ?(materialized_src = false) prog ~declare =
   let x = mk ~dims:prog.dims "x" and src = mk ~dims:src_dims "src" in
+  let init_links = ref [] in
   let inputs, source =
     if not (Poly.equal prog.source Input) then (
       if materialized_src then materialize src else virtualize src;
       let input = mk ~dims:[| 4; 4; 2 |] "src_input" in
       let init_inputs, init =
-        if Poly.equal prog.source Reduce_init then (
-          let init = mk ~dims:src_dims "src_init" in
-          materialize init;
-          ([ (init, src_init_cells) ], Some init))
-        else ([], None)
+        match prog.source with
+        | Reduce_init | Reduce_chain _ ->
+            let init = mk ~dims:src_dims "src_init" in
+            materialize init;
+            ([ (init, src_init_cells) ], Some init)
+        | Input | Reduce_zero -> ([], None)
+      in
+      let init, init_code =
+        let depth =
+          match prog.source with
+          | Reduce_chain depth -> depth
+          | Input | Reduce_zero | Reduce_init -> 0
+        in
+        let rec links level prev code =
+          if level > depth then (prev, code)
+          else
+            let init_node = mk ~dims:src_dims (Printf.sprintf "src_init%d" level) in
+            init_links := init_node :: !init_links;
+            if materialized_src then materialize init_node else virtualize init_node;
+            let i = sym () and j = sym () in
+            let value =
+              add
+                (get (Option.value_exn prev) [| iter j; iter i |])
+                (add (c (Float.of_int (211 * level))) (add (mul (c 13.) (embed i)) (embed j)))
+            in
+            let body = loop_n i 4 (loop_n j 4 (set init_node [| iter i; iter j |] value)) in
+            links (level + 1) (Some init_node) (seq code body)
+        in
+        links 1 init LL.Noop
       in
       materialize input;
       let i = sym () and j = sym () and k = sym () in
       let idcs = [| iter i; iter j |] in
       ( (input, src_input_cells) :: init_inputs,
-        loop_n i 4
-          (loop_n j 4
-             (seq
-                (set src idcs
-                   (Option.value_map init ~default:(c 0.) ~f:(fun init -> get init idcs)))
-                (loop_n k 2
-                   (set src idcs (add (get src idcs) (get input [| iter i; iter j; iter k |]))))))
+        seq init_code
+          (loop_n i 4
+             (loop_n j 4
+                (seq
+                   (set src idcs
+                      (Option.value_map init ~default:(c 0.) ~f:(fun init -> get init idcs)))
+                   (loop_n k 2
+                      (set src idcs (add (get src idcs) (get input [| iter i; iter j; iter k |])))))))
       ))
     else (
       materialize src;
@@ -458,9 +508,29 @@ let build ?(materialized_src = false) prog ~declare =
   in
   match !static with
   | None ->
-      { x; src; inputs; outs; routines; static_indices = []; bindings = Idx.Empty; launch = [] }
+      {
+        x;
+        src;
+        init_links = !init_links;
+        inputs;
+        outs;
+        routines;
+        static_indices = [];
+        bindings = Idx.Empty;
+        launch = [];
+      }
   | Some (s, k, bindings) ->
-      { x; src; inputs; outs; routines; static_indices = [ s ]; bindings; launch = [ (s, k) ] }
+      {
+        x;
+        src;
+        init_links = !init_links;
+        inputs;
+        outs;
+        routines;
+        static_indices = [ s ];
+        bindings;
+        launch = [ (s, k) ];
+      }
 
 (* === Running both arms === *)
 
@@ -583,11 +653,12 @@ let check_program prog =
             (Hashtbl.add guarded_anchors ~key:(anchor_key prog) ~data:prog : [ `Ok | `Duplicate ]))
   in
   let no_read b os =
-    if not (Poly.equal prog.source Input) then (
-      if not (known_virtual (List.last_exn os) b.src) then
-        finding prog "the declared virtual source lost its placement";
-      if List.exists os ~f:(fun o -> count_get o b.src > 0) then
-        finding prog "the declared virtual source left a read");
+    if not (Poly.equal prog.source Input) then
+      List.iter (b.src :: b.init_links) ~f:(fun node ->
+          if not (known_virtual (List.last_exn os) node) then
+            finding prog "a declared virtual source link lost its placement";
+          if List.exists os ~f:(fun o -> count_get o node > 0) then
+            finding prog "a declared virtual source link left a read");
     if known_virtual (List.last_exn os) b.x && List.exists os ~f:(fun o -> count_get o b.x > 0) then
       finding prog "a virtual node left a read"
   in
@@ -639,7 +710,7 @@ let check_program prog =
    residue and the repeating grammar. Every shard walks the same grammar but optimizes only its
    slice; --check-shards audits that same selector cheaply. *)
 let shard_count = 4
-let widened_census = 9_658_108
+let widened_census = 10_307_080
 let argv = Sys.get_argv ()
 let has_arg flag = Array.mem argv flag ~equal:String.equal
 
@@ -765,7 +836,6 @@ let one_read reads = List.map reads ~f:(fun r -> [| r |])
 let one_component = [ [ Write 0; Read 0 ]; [ Zero; Write 0; Read 0 ] ]
 
 let enumerate dims =
-  let all_standings = [ Undecided; Declared; Inherited ] in
   let writes = dead_write dims :: accesses ~launch:false dims
   and reads = accesses ~launch:true dims in
   let core_writes = dead_write dims :: thinned (core ~dims writes)
@@ -803,7 +873,7 @@ let enumerate dims =
      computes [src]; materialized twins compute both producers. Keeping this cross on the core
      writes bounds its cost while all reads retain offsets, reversals and launch indices. *)
   List.iter core_writes ~f:(fun write ->
-      List.iter [ Reduce_zero; Reduce_init ] ~f:(fun source ->
+      List.iter nested_sources ~f:(fun source ->
           family_runs ~source ~dims
             ~comps:[| { write; kind = Store; complex = true } |]
             ~reads:(one_read reads) ~steps:one_component ~standings:all_standings ()));
@@ -881,7 +951,12 @@ let self_controls () =
     }
   in
   p "self-control: a dropped nested initializer read is seen"
-    (disagrees ~original:initialized { initialized with source = Reduce_zero })
+    (disagrees ~original:initialized { initialized with source = Reduce_zero });
+  List.iter [ 1; 2 ] ~f:(fun depth ->
+      let chained = { initialized with source = Reduce_chain depth } in
+      pf "self-control: dropping initializer chain link %d is seen" depth
+        (disagrees ~original:chained
+           { chained with source = (if depth = 1 then Reduce_init else Reduce_chain (depth - 1)) }))
 
 (* The instrument's [~strict] probe. Codegen renders a short-circuiting [Where]'s arm scopes under
    its condition (gh-ocannl-2145), so a discarded arm runs nothing; a select a blending backend may
@@ -964,7 +1039,7 @@ let strict_probe_controls () =
 
 (* === Tier B: compiled and run === *)
 
-let anchor_limit = 32
+let ordinary_anchor_limit = 16
 
 let run_anchor i prog =
   let want = replay prog in
@@ -1005,24 +1080,29 @@ let tier_b () =
     List.take (List.filteri xs ~f:(fun i _ -> i % step = 0)) limit
   in
   let nested_samples =
-    List.concat_map [ Reduce_zero; Reduce_init ] ~f:(fun source ->
+    List.concat_map nested_sources ~f:(fun source ->
         let picked = sample 8 (List.filter nested ~f:(fun p -> Poly.equal p.source source)) in
         pf "compiled anchors include eight %s producers with guarded-arm scopes"
           (source_name source)
           (List.length picked = 8);
         picked)
   in
-  let picked = nested_samples @ sample (anchor_limit - 16) ordinary in
+  let picked = nested_samples @ sample ordinary_anchor_limit ordinary in
   Stdio.eprintf "Tier B: %d of %d buckets, on backend %s (not part of the golden)\n%!"
     (List.length picked) (List.length candidates)
     (Context.backend_name (Lazy.force base_ctx));
-  p_alli ~min:24 "a compiled program computes the interpreter's values, in both arms" picked
+  p_alli ~min:48 "a compiled program computes the interpreter's values, in both arms" picked
     ~f:(fun i prog ->
       let holds = run_anchor i prog in
       if not holds then Stdio.eprintf "ANCHOR %s\n%!" (show_program prog);
       holds)
 
 (* === The verdict === *)
+
+let nested_families =
+  List.concat_map nested_sources ~f:(fun source ->
+      List.map all_standings ~f:(fun standing ->
+          "comps=1 store " ^ standing_name standing ^ " src=" ^ source_name source))
 
 let audit_shards () =
   Stdio.printf "%d widened programs\n" !enumerated;
@@ -1078,29 +1158,23 @@ let () =
           else acc)
     in
     List.iter
-      [
-        "comps=1 store undecided";
-        "comps=1 store declared";
-        "comps=1 store inherited";
-        "comps=2 store undecided";
-        "comps=2 store declared";
-        "comps=2 store inherited";
-        "comps=1 accumulate undecided";
-        "comps=1 reduce undecided";
-        "comps=1 store undecided src=reduce";
-        "comps=1 store declared src=reduce";
-        "comps=1 store inherited src=reduce";
-        "comps=1 store undecided src=reduce-init";
-        "comps=1 store declared src=reduce-init";
-        "comps=1 store inherited src=reduce-init";
-      ] ~f:(fun fam ->
+      ([
+         "comps=1 store undecided";
+         "comps=1 store declared";
+         "comps=1 store inherited";
+         "comps=2 store undecided";
+         "comps=2 store declared";
+         "comps=2 store inherited";
+         "comps=1 accumulate undecided";
+         "comps=1 reduce undecided";
+       ]
+      @ nested_families)
+      ~f:(fun fam ->
         pf "%s: some program inlined" fam (total fam "| inlined" >= 100);
         pf "%s: some program inlined under a guard" fam (total fam "| inlined-guarded" >= 100));
-    List.iter [ Reduce_zero; Reduce_init ] ~f:(fun source ->
-        List.iter [ Undecided; Declared; Inherited ] ~f:(fun standing ->
-            let fam = "comps=1 store " ^ standing_name standing ^ " src=" ^ source_name source in
-            pf "%s: some program has a scope in a guarded arm" fam
-              (Option.value (Hashtbl.find guarded_scope_programs fam) ~default:0 >= 100)));
+    List.iter nested_families ~f:(fun fam ->
+        pf "%s: some program has a scope in a guarded arm" fam
+          (Option.value (Hashtbl.find guarded_scope_programs fam) ~default:0 >= 100));
     Hashtbl.iteri finding_classes ~f:(fun ~key ~data ->
         Stdio.eprintf "findings %s: %d (not part of the golden)\n%!" key data);
     p "every program kept to the semantics" (!programs_run >= 100_000 && !finding_count = 0);
