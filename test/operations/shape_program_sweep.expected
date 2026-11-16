@@ -1,10 +1,10 @@
 (u + v) *. c[5|3], two draws: agrees, executed
 [1;2] + (({w} + {v}) * [3;4;5]): agrees, executed
-((u + 1) + (u *. 2)) *. c[5|3], one draw with two consumers: known: gh-ocannl-2180: the size-1 output axis of a literal or a fixed index, executed
-(u + 1) *. c[5|3]: known: gh-ocannl-2180: the size-1 output axis of a literal or a fixed index, executed
+((u + 1) + (u *. 2)) *. c[5|3], one draw with two consumers: agrees, executed
+(u + 1) *. c[5|3]: agrees, executed
 (u + z) *. c[5|3], z a constant with no axes: agrees, executed
 (u + z) + (u *. z), z with no axes, *. c[5|3]: agrees, executed
-x[16] *. normal (): known: box_muller: a normal draw, executed
+x[16] *. normal (): agrees, executed
 c[|2,5] + u: agrees, executed
 u + c[|2,5]: agrees, executed
 c[|2,5] + relu u: known: proposed: a unary operation (relu, neg) over a draw, executed

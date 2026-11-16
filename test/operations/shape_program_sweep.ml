@@ -52,16 +52,21 @@
    cause was seen to reach the siblings it is broadcast with, the entry also covers the pointwise
    operation consuming one. A refusal is excused only with a message the entry was seen to give. The
    entries. gh-ocannl-2180: the size-1 output axis of a literal or a fixed index takes over the last
-   output axes of everything broadcast with it (the dimension role), as in [(u + 1) *. c[5|3]].
-   box_muller: a [normal] draw closes to one value, its inner uniforms behind the clamp's literals
-   ([dropout_mask_varies] prints it). Then those this sweep found, each with its fixed program
-   below: a unary operation over a draw ([relu u *. c[|2,5]] closes [u] to one element); one draw
-   under both operands of a pointwise operation ([(u *. u) + c[|2]]); nested branching ([c + (u + (v
-   *. w))] closes [u], [c + ((u + v) + w)] is refused); a constant of no axes in a branching program
-   ([((u + v) + z) *. c[|3]]); an einsum spec over a draw ([c[|3->2] * (u ++ "ab => a")] closes the
-   kept axis to 1); a compose over a draw ([(c[|3,2] *. v) *. (u * c[|5])] gives [u] no output
-   axes); and a [uniform1]-initialized parameter sized only by a fixed index, accepted where a
-   default-initialized one is refused. *)
+   output axes of everything broadcast with it. Its literal half, [(u + 1) *. c[5|3]], is fixed (a
+   leaf closing to its bound takes axes of its own); what the entry still excuses is, in 46 of its
+   58 programs at that fix, a fixed index ([...|3 => ...|0]) under a chain of results: the index's
+   lower bound is no GLB and does not travel down the chain, so a result in it closes minimal (as in
+   [row_glb_reach_executed]'s [(u *. 2) *. 2] probe); the other 12 co-occur with the einsum, compose
+   and branching causes below. box_muller: a [normal] draw closes to one value; since gh-ocannl-2180
+   it fills ([x[16] *. normal ()] agrees, [dropout_mask_varies] claims it), and what the entry still
+   excuses (4 programs) are normals under a fixed index or a compose. Then those this sweep found,
+   each with its fixed program below: a unary operation over a draw ([relu u *. c[|2,5]] closes [u]
+   to one element); one draw under both operands of a pointwise operation ([(u *. u) + c[|2]]);
+   nested branching ([c + (u + (v *. w))] closes [u], [c + ((u + v) + w)] is refused); a constant of
+   no axes in a branching program ([((u + v) + z) *. c[|3]]); an einsum spec over a draw ([c[|3->2]
+   * (u ++ "ab => a")] closes the kept axis to 1); a compose over a draw ([(c[|3,2] *. v) *. (u *
+   c[|5])] gives [u] no output axes); and a [uniform1]-initialized parameter sized only by a fixed
+   index, accepted where a default-initialized one is refused. *)
 
 open! Base
 open Ocannl.Nn_blocks.DSL_modules

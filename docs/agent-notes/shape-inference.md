@@ -137,8 +137,9 @@ files.
   the join now holds the incoming inequality until the row is solved. And a packed draw's row
   closes through the Strided_var arms, not the close-to-GLB arm, so it needs its own `Stage6a`
   arm, restricted to GLB axes a use site bounds (an unbounded one sized by the block arithmetic
-  turned `uniform () + 1` into 4 values) and to a GLB with a closed tail (an open one ran ahead
-  of `contraction_pointwise_closing`'s balanced-flank search). Giving literals no axes is not a
+  turned `uniform () + 1` into 4 values) and to a GLB that is not leading axes over an open
+  middle (one ran ahead of `contraction_pointwise_closing`'s balanced-flank search; requiring a
+  closed tail instead left a draw under an unbatched `c[|16]` repeating). Giving literals no axes is not a
   shortcut: it moved 27 test actions, a transformer's logits closing `2x3x1` among them.
 - Solver deletion experiments: a green suite does not prove a guess or closing arm redundant
   unless executed pins check that draws vary across their use sites. Before making that claim,

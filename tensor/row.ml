@@ -6145,7 +6145,8 @@ let%track5_sexp process_shape_row ~deferred_dims ~(stage : stage) origin env
              })
         when equal_stage stage Stage6a
              && (is_in_param || is_resolve_at_use v)
-             && is_broadcastable (subst_row env glb).bcast
+             && (let glb = subst_row env glb in
+                 is_broadcastable glb.bcast || List.is_empty glb.beg_dims)
              && snd (role_axes ~own:(dim_has_glb env) env glb) ->
           (* gh-ocannl-2180: a packed draw's row closes to its GLB only once the GLB's axes are
              known, and an axis still open then is closed by its own rules (gh-ocannl-1961) -- for a
@@ -6153,7 +6154,10 @@ let%track5_sexp process_shape_row ~deferred_dims ~(stage : stage) origin env
              which take the use sites' bound at stage 6; the block count follows from them. Only an
              axis a use site bounds is taken by role: one nothing bounds has nothing to take, and an
              axis of its own would be sized by the block arithmetic (a whole block of 4 for [uniform
-             () + 1] alone) instead of closing minimal with the result. *)
+             () + 1] alone) instead of closing minimal with the result. A GLB with leading axes over
+             an open middle waits: aligning its flanks is a balanced-flank choice still to be made
+             ([solve_closing_stages]); taken here, it refused [contraction_pointwise_closing]'s
+             satisfiable program. *)
           let closing = close_to_glb_by_role ~own:(dim_has_glb env) env origin ~r1 ~glb in
           (keep @ closing @ dim_eqs, env)
       | Some (Bounds_row { glb; constr; _ }) ->

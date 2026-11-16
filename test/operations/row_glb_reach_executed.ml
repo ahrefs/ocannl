@@ -122,6 +122,12 @@ let () =
       let u = TDSL.uniform () () in
       let%op y = (plus1 u + times2 u) *. c53 () in
       ([ u ], y, y));
+  (* Unbatched: the draw's bound is the result's open row with one axis, no batch to fill. *)
+  draws "(u + 1) *. c[16]" ~want:"16" ~fills:true (fun () ->
+      let u = TDSL.uniform () () in
+      let c = NTDSL.reshape ~l:"c" ~b:[] ~o:[ 16 ] (values 16) () in
+      let%op y = plus1 u *. c in
+      ([ u ], y, y));
   (* Control: nothing sizes the draw, so it closes minimal with the literal's axis (an axis of its
      own would have been sized by the packed draw's block, 4). *)
   draws "u + 1, nothing sizing u" ~want:"1" ~fills:true (fun () ->
