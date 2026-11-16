@@ -286,3 +286,11 @@ files.
   ones. Data-backed nodes retain diagnostic provenance separately from layout commitment, so a
   conflicting `Tnode.update_prec` explains why the precision was fixed, even after a storage read.
   `ndarray_prec` executes both paths on cc at double with bits that single ingestion would lose.
+
+- Mixed-gradient concatenation keeps one reverse-scatter target position per operand
+  (gh-ocannl-2190). `Rev_sides.lhses` uses `None` for a constant: lowering keeps its segment and
+  projection for positional selection and offsets but emits no gradient write, initialization or
+  padding reset for it. Node bookkeeping filters absent targets too. Filtering the target array
+  itself would shift slices, especially for width-1 operands. `concat_mixed_grad` executes both
+  orders and a constant in the middle against hand-written integer gradients and an all-trainable,
+  materialized reference; an all-constant result remains non-differentiable.

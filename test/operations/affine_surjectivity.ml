@@ -175,7 +175,7 @@ let execute_case ?make_projection ?(reverse = false) name ~n ~m ~dims ~indices ~
           accum = Ir.Ops.Add;
           lhs = (if reverse then src else dst);
           rhs =
-            (if reverse then A.Rev_sides { op = Ir.Ops.Identity; lhses = [| A.Node dst |] }
+            (if reverse then A.Rev_sides { op = Ir.Ops.Identity; lhses = [| Some (A.Node dst) |] }
              else if Array.exists projection.components ~f:(fun comp -> List.length comp > 1) then
                A.Block { op = Ir.Ops.Identity; rhses = [| A.Node src |] }
              else A.Unop { op = Ir.Ops.Identity; rhs = A.Node src });
@@ -333,7 +333,9 @@ let () =
           initialize_neutral = not explicit_init;
           accum = Ir.Ops.Add;
           lhs = src;
-          rhs = A.Rev_sides { op = Ir.Ops.Identity; lhses = Array.map dsts ~f:(fun n -> A.Node n) };
+          rhs =
+            A.Rev_sides
+              { op = Ir.Ops.Identity; lhses = Array.map dsts ~f:(fun n -> Some (A.Node n)) };
           projections = lazy projection;
           projections_debug = name;
         }

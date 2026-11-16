@@ -212,7 +212,8 @@ let width1_pair ~targets =
   with
   | Some (Asgns.Accum_op ({ rhs = Asgns.Rev_sides { op; _ }; _ } as r)) ->
       let rhs =
-        Asgns.Rev_sides { op; lhses = Array.map (targets ~ga ~gb) ~f:(fun t -> Asgns.Node t) }
+        Asgns.Rev_sides
+          { op; lhses = Array.map (targets ~ga ~gb) ~f:(fun t -> Some (Asgns.Node t)) }
       in
       ( ga,
         gcat,

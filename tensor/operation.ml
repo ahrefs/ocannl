@@ -632,7 +632,10 @@ let concat_sum ?(capture_dims = []) ?(negated = false) ?spec_source spec ?grad_s
          }
   in
   let grad_asn ~t:_ ~g ~projections =
-    let lhses = Array.map rhses ~f:(fun rhs -> Asgns.Node (grad rhs)) in
+    let lhses =
+      Array.map rhses ~f:(fun rhs ->
+          Option.map rhs.Tensor.diff ~f:(fun diff -> Asgns.Node diff.Tensor.grad))
+    in
     Asgns.to_comp
     @@ Asgns.Accum_op
          {

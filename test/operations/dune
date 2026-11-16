@@ -4694,6 +4694,17 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ (name concat_mixed_grad)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules concat_mixed_grad)
+ (libraries base ocannl arrayjit.verdict)
+ (preprocess
+  (pps ppx_ocannl)))
+
 ; gh-ocannl-1272: the search-trajectory identity renders a Search_shaping key only when its resolved
 ; value is not its built-in default. Run twice: without a profile, and under a commandline-picked
 ; profile with one of the keys the profile raises restated at its built-in default.
