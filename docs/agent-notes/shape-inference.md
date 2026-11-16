@@ -154,7 +154,7 @@ files.
   Size-1 fixed-index outputs keep their existing minimal rule, and parameters remain excluded.
   The sweep pins acceptance of the 13 programs the broad deferral refused; its residual literal
   entry covers stretch adopting a fixed-index output axis and a literal after an einsum reduction,
-  not this input-bound chain. [x[16] *. normal ()] agrees in both internal shapes and executed fill.
+  not this input-bound chain. `x[16] *. normal ()` agrees in both internal shapes and executed fill.
   A dimension's role (gh-ocannl-2180): a row closing to its GLB (`role_template`) takes fresh
   resolve-at-use variables bounded by the GLB's axes, not the axes themselves, which keep the
   role of the result that minted them (closing minimal: a draw behind `u + 1` used to repeat

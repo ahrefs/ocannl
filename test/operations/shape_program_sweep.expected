@@ -1,3 +1,4 @@
+the thirteen fixed-index regression names still identify the same programs: true
 the thirteen fixed-index closing regressions stay accepted: true
 (u + v) *. c[5|3], two draws: agrees, executed
 [1;2] + (({w} + {v}) * [3;4;5]): agrees, executed

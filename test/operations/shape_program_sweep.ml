@@ -583,7 +583,7 @@ let residual_axis_role (prog : program) =
         (match node with Einsum (Fixed_index, _) -> true | _ -> false)
         || List.exists (args node) ~f:(fun x -> fixed.(x));
       einsum.(k) <-
-        (match node with Einsum _ -> true | _ -> false)
+        (match node with Einsum (Reduce, _) -> true | _ -> false)
         || List.exists (args node) ~f:(fun x -> einsum.(x)));
   fun _ -> function
     | Stretch x -> fixed.(x)
@@ -1141,12 +1141,59 @@ let () =
   (* These thirteen seeded programs were refused by the broad leaf-waits-for-any-bound prototype
      (gh-ocannl-2141). Keep their acceptance independent of the known list. *)
   let fixed_index_regressions =
-    [ 45; 411; 456; 747; 762; 823; 845; 1237; 1402; 1615; 1703; 1783; 1795 ]
-    |> List.map ~f:(Printf.sprintf "random #%d")
+    [
+      ( 45,
+        "%0 = uniform; %1 = uniform1; %2 = %0 *. %1; %3 = neg %2; %4 = %3 ++ \"...|3 => ...|0\"; \
+         %5 = const[2,5|3->]; %6 = %5 + %4" );
+      ( 411,
+        "%0 = uniform1; %1 = 2.; %2 = %0 * %1; %3 = stretch %2; %4 = %3 ++ \"...|3 => ...|0\"; %5 \
+         = const[|3]; %6 = %4 *. %5" );
+      ( 456,
+        "%0 = uniform1; %1 = %0 ++ \"...|3 => ...|0\"; %2 = const[|2->]; %3 = uniform; %4 = %2 + \
+         %3; %5 = uniform; %6 = stretch %5; %7 = %4 + %6; %8 = const[7|2]; %9 = %7 * %8; %10 = %1 \
+         *. %9; %11 = const[7|5,3->]; %12 = %11 + %10" );
+      (747, "%0 = uniform1; %1 = neg %0; %2 = const[|]; %3 = %1 * %2; %4 = %3 ++ \"...|3 => ...|0\"");
+      ( 762,
+        "%0 = uniform1; %1 = %0 ++ \"...|3 => ...|0\"; %2 = uniform1; %3 = stretch %2; %4 = %1 *. \
+         %3; %5 = const[3,2|5->7]; %6 = %4 * %5; %7 = const[3,2|5->]; %8 = %6 *. %7" );
+      ( 823,
+        "%0 = const[|]; %1 = uniform1; %2 = %1 *. %1; %3 = %0 + %2; %4 = %3 ++ \"...|3 => ...|0\""
+      );
+      ( 845,
+        "%0 = uniform; %1 = %0 ++ \"...|3 => ...|0\"; %2 = uniform; %3 = stretch %2; %4 = %1 + %3; \
+         %5 = const[|5->]; %6 = relu %5; %7 = relu %6; %8 = %4 *. %7; %9 = relu %8; %10 = relu %9; \
+         %11 = %8 + %10; %12 = const[|5->]; %13 = %11 *. %12" );
+      ( 1237,
+        "%0 = uniform; %1 = stretch %0; %2 = stretch %1; %3 = %1 + %2; %4 = %3 ++ \"...|3 => \
+         ...|0\"" );
+      ( 1402,
+        "%0 = uniform; %1 = 2.; %2 = %0 * %1; %3 = uniform1; %4 = neg %3; %5 = %2 *. %4; %6 = \
+         stretch %5; %7 = uniform; %8 = stretch %7; %9 = %8 ++ \"...|3 => ...|0\"; %10 = %9 + %9; \
+         %11 = %6 *. %10; %12 = const[2,5|3->]; %13 = %12 + %11" );
+      ( 1615,
+        "%0 = uniform; %1 = %0 ++ \"...|3 => ...|0\"; %2 = uniform; %3 = stretch %2; %4 = %1 *. \
+         %3; %5 = 2.; %6 = const[5|]; %7 = %5 * %6; %8 = %4 *. %7; %9 = const[5|]; %10 = %8 *. %9"
+      );
+      ( 1703,
+        "%0 = const[|2->4]; %1 = %0 ++ \"...|3 => ...|0\"; %2 = uniform1; %3 = const[|]; %4 = %2 + \
+         %3; %5 = %1 + %4; %6 = stretch %5; %7 = const[|2->]; %8 = %7 + %6" );
+      ( 1783,
+        "%0 = uniform1; %1 = const[|7->]; %2 = %0 *. %1; %3 = %2 + %2; %4 = uniform1; %5 = %4 *. \
+         %4; %6 = %3 *. %5; %7 = %6 ++ \"...|3 => ...|0\"" );
+      ( 1795,
+        "%0 = const[7|4]; %1 = %0 ++ \"...|3 => ...|0\"; %2 = uniform; %3 = uniform1; %4 = %2 *. \
+         %3; %5 = %1 + %4; %6 = const[7|]; %7 = %6 + %5" );
+    ]
+    |> List.map ~f:(fun (k, text) -> (Printf.sprintf "random #%d" k, text))
   in
   let fixed_index_cases =
-    List.filter cases ~f:(fun c -> List.mem fixed_index_regressions c.name ~equal:String.equal)
+    List.filter cases ~f:(fun c ->
+        List.Assoc.mem fixed_index_regressions c.name ~equal:String.equal)
   in
+  p_all ~min:13 "the thirteen fixed-index regression names still identify the same programs"
+    fixed_index_cases ~f:(fun c ->
+      String.equal (show_program c.prog)
+        (List.Assoc.find_exn fixed_index_regressions c.name ~equal:String.equal));
   p_all ~min:13 "the thirteen fixed-index closing regressions stay accepted" fixed_index_cases
     ~f:(fun c -> match c.outcome with Accepted _ -> true | _ -> false);
   Verdict.case "the fixed programs" (fun () ->
