@@ -1182,6 +1182,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   matching no leg exits 2; a filtered run lists the legs it ran and each check they skipped,
   with its reason, above a `FILTERED RUN, not a full pass` footer. To sample a flaky leg, loop
   over the selected run and count its `FAIL  ` lines.
+- `test/operations/ci_matrix.sh` gates independent contracts through `harness_leg_run`
+  (gh-ocannl-2113): `--list-legs` names them, and `--only '^step-order$'` selects
+  the configuration/release ordering checks. Shared Python readers are staged once; each
+  selected leg runs in a fresh process, so an assertion fails that leg and later legs still
+  report. Keep fixtures inside their leg and shared readers outside every leg.
 - Testing another copy of the script (gh-ocannl-1925): `tools/test-test-run.sh --subject FILE`
   (or `OCANNL_TOOL_HARNESS_SUBJECT=FILE`; the option wins) runs the legs against FILE in place of
   `tools/test-run.sh`, so "this leg fails against the previous script" is

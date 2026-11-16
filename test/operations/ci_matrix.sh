@@ -5,16 +5,19 @@
 # master push and per PR only for the opam inputs (gh-ocannl-1816).
 # Also run the three depext-listing steps against hermetic opam/dpkg stubs.
 # Requires only python3 and bash; run in CI's shell harness tier before opam setup.
+# Boundary: read the current workflow expression/step dialect and tracked train
+# aggregates; unsupported syntax fails closed. Execute only extracted step bodies
+# with hermetic fixtures, not arbitrary YAML or commands hidden in actions/scripts.
+# Named legs are independent; shared readers/setup run before each selected leg.
 # ocannl-harness: standalone
-# Usage: test/operations/ci_matrix.sh [--keep|--help]
+# Usage: test/operations/ci_matrix.sh [--only REGEX|--list-legs|--keep|--help]
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 . "$root/scripts/harness-support.sh"
 harness_args "$@"
 harness_require python3
 harness_scratch ci-matrix
-rc=0
-python3 - "$root/.github/workflows/ci.yml" "$TMP" "$("$root/tools/ci-shard.sh" aliases)" <<'PY' || rc=$?
+cat >"$TMP/contracts.py" <<'PY'
 import ast
 import itertools
 import json
@@ -321,107 +324,6 @@ def extra_job(name, guard=''):
     return source.replace('  notify-triage-routine:\n', block + '  notify-triage-routine:\n', 1)
 
 
-controls(source)
-# The side-job list is read, not restated: a new job carrying the fallback
-# guard joins the selection unremarked (its unguarded twin is a mutant below).
-fallback_guard = re.search(r'^  promotion-floor:\n(    if: .*\n)', source, re.M)[1]
-controls(extra_job('new-side-job', fallback_guard), extra=('new-side-job',))
-# A scheduled side job: the schedule, or a dispatch the fallback guard admits.
-scheduled_guard = re.search(r'^  harness-legs-alone:\n(    if: .*\n)', source, re.M)[1]
-assert scheduled_guard.startswith('    if: ' + SCHEDULED_GUARD), 'scheduled side-job guard moved'
-controls(extra_job('new-scheduled-job', scheduled_guard))
-
-
-print('PASS per PR ci.yml runs the Dune-floor promotion harnesses and the CPU-torch tests, and nothing else')
-print('PASS ci.yml runs per PR, unfiltered, and has no push trigger')
-print('PASS normal, scheduled and explicit Windows fallback matrix selections')
-print('PASS every ocaml_compiler option: the default is the ordinary matrix, another is one ubuntu job')
-print('PASS every scheduled-only compiler dispatches as exactly its scheduled job')
-print('PASS side jobs are read from ci.yml: a new guarded job joins the selection')
-print('PASS a scheduled side job runs on the schedule and an ordinary dispatch, never per PR or in the fallback')
-print('PASS ubuntu main and train shards are exactly 1/N..N/N, over the aliases ci-shard.sh shards')
-print('PASS an ordinary dispatch runs one macOS job, main; the schedule adds its train job')
-print('PASS every build step piping into tee has pipefail; the PowerShell one exits with dune\'s status')
-second = '{"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "main", "shard": "2/2"},'
-train_second = '{"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "train", "shard": "2/2"},'
-train_last = train_second.rstrip(',') + "]'"
-assert source.count(train_second) == 1 and source.count(',\n               ' + train_last) == 1, \
-    'train 2/2 entries moved; update the mutants below'
-side_guard = "github.event_name != 'workflow_dispatch' || !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'"
-assert source.count(side_guard) == 2, 'side-job guard text moved; update the mutants below'
-scheduled_text = scheduled_guard.strip().removeprefix('if: ')
-assert source.count(scheduled_text) == 4, 'scheduled side-job guard text moved; update the mutants below'
-build_guard = "  run:\n    if: github.event_name != 'pull_request'\n"
-assert source.count(build_guard) == 1, 'build matrix guard moved; update the mutants below'
-compiler_axis = "&& format('[\"{0}\"]', inputs.ocaml_compiler)"
-assert compiler_axis in source, 'compiler axis text moved; update the mutants below'
-for label, mutant in (
-    ('fallback enabled by default', source.replace('default: false', 'default: true')),
-    ('full matrix back on master push', source.replace('\non:\n', '\non:\n  push:\n    branches:\n      - master\n', 1)),
-    ('PR skips documentation inputs', source.replace('  pull_request:\n', '  pull_request:\n    paths-ignore:\n      - "docs/**"\n', 1)),
-    ('quoted PR documentation filter', source.replace('  pull_request:\n', '  pull_request:\n    "paths-ignore": ["docs/**"]\n', 1)),
-    ('repeated PR trigger hides documentation filter', source.replace('  pull_request:\n', '  pull_request:\n  pull_request:\n    paths-ignore: ["docs/**"]\n', 1)),
-    ('automatic Windows jobs', source.replace("github.event_name == 'schedule'", "github.event_name != 'workflow_dispatch'")),
-    ('schedule loses coverage', source.replace("github.event_name == 'schedule'", "github.event_name == 'never'")),
-    ('schedule narrowed by dispatch input', source.replace("github.event_name == 'workflow_dispatch' && inputs.windows_only", 'inputs.windows_only')),
-    ('schedule narrowed by compiler input', source.replace("github.event_name == 'workflow_dispatch' && inputs.ocaml_compiler", 'inputs.ocaml_compiler')),
-    ('the build matrix back on pull requests', source.replace(build_guard, '  run:\n', 1)),
-    ('the build matrix on pull requests through a guard that selects them',
-     source.replace(build_guard, "  run:\n    if: github.event_name != 'never'\n", 1)),
-    ('the build matrix off the schedule',
-     source.replace(build_guard, "  run:\n    if: github.event_name == 'workflow_dispatch'\n", 1)),
-    ('formatting in the Windows fallback', source.replace("  fmt:\n    if: " + scheduled_text, "  fmt:\n    if: github.event_name != 'never'")),
-    ('harnesses in the Windows fallback', source.replace("  harnesses:\n    if: " + scheduled_text, "  harnesses:\n    if: github.event_name != 'never'")),
-    ('real-dune shell harnesses in the Windows fallback', source.replace("  harness-real-dune:\n    if: " + scheduled_text, "  harness-real-dune:\n    if: github.event_name != 'never'")),
-    ('Dune-floor promotion harnesses in the Windows fallback', source.replace("  promotion-floor:\n    if: " + side_guard, "  promotion-floor:\n    if: github.event_name != 'never'")),
-    ('CPU-torch benchmark tests in the Windows fallback', source.replace("  torch-runner:\n    if: " + side_guard, "  torch-runner:\n    if: github.event_name != 'never'")),
-    ('a per-PR side job in the compiler dispatch', source.replace(side_guard, "github.event_name != 'workflow_dispatch' || !inputs.windows_only", 1)),
-    ('compiler dispatch builds the ordinary compiler', source.replace(compiler_axis, "&& '[\"5.5.x\"]'")),
-    ('compiler dispatch keeps macOS', source.replace("&& '[\"ubuntu-latest\"]'", "&& '[\"ubuntu-latest\", \"macos-latest\"]'")),
-    ('compiler dispatch keeps the 5.5 shards and train', source.replace("inputs.ocaml_compiler != '5.5.x'\n          && '[]'", "inputs.ocaml_compiler == 'never'\n          && '[]'")),
-    ('compiler dispatch combined with the Windows fallback', source.replace("&& !inputs.windows_only\n", "\n", 1)),
-    ('scheduled floor not dispatchable', source.replace('          - 5.5.x\n          - 5.3.x\n', '          - 5.5.x\n', 1)),
-    ('compiler input defaults to the floor', source.replace('          - 5.3.x\n        default: 5.5.x\n', '          - 5.3.x\n        default: 5.3.x\n', 1)),
-    ('compiler input as free text', source.replace('        type: choice\n', '        type: string\n', 1)),
-    ('a new side job without the Windows-fallback guard', extra_job('new-side-job')),
-    ('a scheduled side job in the Windows fallback',
-     extra_job('new-scheduled-job', "    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'\n")),
-    ('a scheduled side job per PR',
-     extra_job('new-scheduled-job', "    if: github.event_name == 'schedule' || github.event_name != 'never'\n")),
-    ('a scheduled side job off the schedule',
-     extra_job('new-scheduled-job', "    if: github.event_name == 'schedule' || github.event_name == 'never'\n")),
-    ('ordinary-dispatch shard dropped', source[:source.rindex(second)] + source[source.rindex(second) + len(second):]),
-    ('scheduled shard dropped', source.replace(second, '', 1)),
-    ('shard renumbered', source.replace('"shard": "2/2"', '"shard": "2/3"', 1)),
-    ('floor job sharded', source.replace('"ocaml-compiler": "5.3.x", "suite": "main"}', '"ocaml-compiler": "5.3.x", "suite": "main", "shard": "1/1"}')),
-    ('suite alias drift', source.replace("'@default @runtest @bin-smoke'", "'@default @runtest'")),
-    ('unsharded bash build without pipefail',
-     source.replace("    - if: ${{ !matrix.shard && runner.os != 'Windows' }}\n      shell: bash\n",
-                    "    - if: ${{ !matrix.shard && runner.os != 'Windows' }}\n", 1)),
-    ('sharded build without pipefail',
-     source.replace('    - if: ${{ matrix.shard }}\n      shell: bash\n', '    - if: ${{ matrix.shard }}\n', 1)),
-    ('PowerShell build exits with the pipe status', source.replace('        exit $LASTEXITCODE\n', '', 1)),
-    ('PowerShell build names its aliases as literals',
-     source.replace("@($env:SUITE_TARGETS -split ' ')", '@default @runtest @bin-smoke', 1)),
-    ('ordinary-dispatch train shard dropped', source.replace(',\n               ' + train_last, "]'", 1)),
-    ('scheduled train shard dropped', source.replace(train_second, '', 1)),
-    ('train back on macOS in the ordinary dispatch', source[:source.rindex(train_last)] + train_second
-     + ' {"os": "macos-latest", "ocaml-compiler": "5.5.x", "suite": "train"}]\'' + source[source.rindex(train_last) + len(train_last):]),
-    ('scheduled macOS train dropped', source.replace('               {"os": "macos-latest", "ocaml-compiler": "5.5.x", "suite": "train"},\n', '', 1)),
-    ('an unsharded ubuntu train beside its shards', source.replace(train_second, train_second + ' {"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "train"},', 1)),
-    ('a shard of a suite ci-shard.sh does not cut', source.replace('"suite": "train"}]\'', '"suite": "train", "shard": "1/1"}]\'', 1)),
-    ('sharded step drops the suite', source.replace('targets "$SHARD" "$SUITE")', 'targets "$SHARD")')),
-    ('sharded step reads no suite', source.replace('        SUITE: ${{ matrix.suite }}\n', '')),
-):
-    assert mutant != source, label
-    try:
-        controls(mutant)
-    except AssertionError:
-        print('PASS rejected mutant:', label)
-    else:
-        raise AssertionError('accepted mutant: ' + label)
-
-
 # ci-env.yml, master's per-merge verdict (gh-ocannl-1816): on every master
 # push, unfiltered, never cancelling a push run; per PR only where the change
 # is to what the clean room's switch is solved from, or to the workflow.
@@ -430,95 +332,8 @@ env_source = (Path(sys.argv[1]).parent / 'ci-env.yml').read_text()
 
 ENV_PR_PATHS = ['*.opam', '*.opam.template', 'dune-project', '.github/workflows/ci-env.yml']
 
-
-def env_controls(text):
-    unfiltered_triggers(text, ('push',))
-    trigger = text.split('\non:\n', 1)[1].split('\nconcurrency:', 1)[0]
-    blocks = re.findall(r'^  pull_request: *\n(.*?)(?=^  [a-z_]+:|\Z)', trigger, re.M | re.S)
-    assert len(blocks) == 1, 'pull_request trigger absent, repeated or unsupported'
-    lines = [line for line in blocks[0].splitlines() if line.strip() and not line.lstrip().startswith('#')]
-    # Only this shape is read: a `paths:` list of double-quoted patterns. Anything else (a
-    # paths-ignore, an unquoted or negated pattern) fails rather than being taken for a filter.
-    assert lines[:1] == ['    paths:'], 'ci-env.yml per PR is not filtered by a paths list: %s' % lines[:1]
-    assert all(re.fullmatch(r'      - "[^"!]+"', line) for line in lines[1:]), 'unsupported paths entry'
-    paths = [line.strip()[3:-1] for line in lines[1:]]
-    assert paths == ENV_PR_PATHS, 'ci-env.yml runs per PR for %s' % paths
-    concurrency = text.split('\nconcurrency:\n', 1)[1].split('\njobs:', 1)[0] + '\n'
-    assert "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n" in concurrency, \
-        'ci-env.yml cancels more than superseded PR runs'
-
-
-env_controls(env_source)
-# GitHub's `*` does not cross `/`: the patterns reach the opam files only while
-# every one of them sits at the root.
-nested = subprocess.run(['git', '-C', str(Path(sys.argv[1]).resolve().parents[2]), 'ls-files', '--',
-                         '*/*.opam', '*/*.opam.template', '*/dune-project'],
-                        capture_output=True, text=True, check=True).stdout.split()
-assert not nested, 'opam inputs below the root, which the per-PR paths filter does not match: %s' % nested
-print('PASS ci-env.yml runs on every master push, and per PR only for the opam inputs and itself, cancelling only superseded PR runs')
-for label, mutant in (
-    ('ci-env.yml without push', env_source.replace('  push:\n    branches:\n      - master\n', '', 1)),
-    ('ci-env.yml push off master', env_source.replace('      - master\n', '      - main\n', 1)),
-    ('ci-env.yml back on every PR', env_source.replace('  pull_request:\n    paths:\n' + ''.join('      - "%s"\n' % p for p in ENV_PR_PATHS), '  pull_request:\n', 1)),
-    ('ci-env.yml per PR without dune-project', env_source.replace('      - "dune-project"\n', '', 1)),
-    ('ci-env.yml per PR by a paths-ignore', env_source.replace('  pull_request:\n    paths:\n', '  pull_request:\n    paths-ignore:\n', 1)),
-    ('ci-env.yml push filtered by paths', env_source.replace('    branches:\n      - master\n', '    branches:\n      - master\n    paths:\n      - "*.opam"\n', 1)),
-    ('ci-env.yml cancels push runs', env_source.replace("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", 'cancel-in-progress: true', 1)),
-):
-    assert mutant != env_source, label
-    try:
-        env_controls(mutant)
-    except AssertionError:
-        print('PASS rejected mutant:', label)
-    else:
-        raise AssertionError('accepted mutant: ' + label)
-
-
-# The `train` shards together build exactly the tier `@train` builds. The tier
-# is read here on its own terms -- each tracked dune file's top-level `train`
-# aggregate, its `(alias train-<name>)` deps -- a reader deliberately simpler
-# than ci-shard.sh's, so a disagreement between the two is a red, not a shared
-# blind spot. ci-shard.sh's train mode runs no dune, so this needs none.
 root = Path(sys.argv[1]).resolve().parents[2]
-listed = subprocess.run(['git', '-C', str(root), 'ls-files', '--', 'dune', '*/dune'],
-                        capture_output=True, text=True, check=True).stdout.split()
-tier = set()
-for path in listed:
-    prefix = '' if '/' not in path else path.rsplit('/', 1)[0] + '/'
-    code = re.sub(r';[^\n]*', '', (root / path).read_text())
-    for stanza in re.split(r'\n(?=\()', '\n' + code):
-        if re.match(r'\(alias\s+\(name\s+train\)', stanza):
-            tier |= {'@@' + prefix + name for name in re.findall(r'\(alias\s+(train-[^\s()]+)\s*\)', stanza)}
-assert len(tier) >= 2, 'no train tier found: %s' % sorted(tier)
-
-
-def train_shards(n):
-    out = []
-    for k in range(1, n + 1):
-        run = subprocess.run([str(root / 'tools/ci-shard.sh'), 'targets', '%d/%d' % (k, n), 'train'],
-                             capture_output=True, text=True)
-        assert run.returncode == 0, 'ci-shard.sh targets %d/%d train: %s' % (k, n, run.stderr)
-        out.append(run.stdout.split())
-    return out
-
-
-def partitions(shards, whole):
-    # Every shard nonempty, none sharing a target, together exactly WHOLE.
-    flat = [t for shard in shards for t in shard]
-    return all(shards) and len(flat) == len(set(flat)) and set(flat) == whole
-
-
-group = ('ubuntu-latest', '5.5.x', 'train')
-for event in ('workflow_dispatch', 'schedule'):
-    # The ordinary dispatch: the input's default compiler, not the empty input of another event.
-    counts = unshard(sorted(raw_jobs(source, event, False, compiler_input(source)[1])))[1]
-    assert group in counts, '%s runs no ubuntu train shards' % event
-    shards = train_shards(counts[group])
-    assert partitions(shards, tier), '%s: the %d train shards %s are not a partition of %s' % (
-        event, counts[group], shards, sorted(tier))
-    # The oracle discriminates: a lost shard, a member it does not carry.
-    assert not partitions(shards[:-1], tier) and not partitions(shards, tier | {'@@x/train-ghost'})
-print('PASS the train shards partition the tier the train aggregates define, every shard nonempty')
+leg = sys.argv[4]
 
 # Read named steps and literal run blocks from the workflows' current YAML
 # dialect. This is deliberately not a YAML parser: fail on a missing/repeated
@@ -555,14 +370,6 @@ def workflow_script(step):
     return '\n'.join(line[indent:] for line in lines).rstrip('\n') + '\n'
 
 
-# Reader regression: script payload can itself contain YAML-like keys and lists.
-payload = "cat <<'EOF'\n- keep this dash\nrun: keep this text\nEOF\n"
-for header in ('    - run: |\n', '      run: |\n'):
-    assert workflow_script(header + ''.join('        ' + line + '\n'
-                                           for line in payload.splitlines())) == payload
-print('PASS workflow_script preserves list dashes and run keys inside script bodies')
-
-
 # Step-order checks (gh-ocannl-1919). Read the same small YAML dialect as
 # workflow_step/script: four- or six-space step lists, inline commands or literal blocks.
 # Inspect direct dune commands, not commands hidden inside scripts/actions; the
@@ -578,20 +385,6 @@ def workflow_steps(text, job):
     starts = list(re.finditer(r'^' + first[1] + '- ', section[1], re.M))
     return [section[1][start.start():end] for start, end in
             zip(starts, [m.start() for m in starts[1:]] + [len(section[1])])]
-
-
-# Block lists outside the step list or inside a step are not step boundaries.
-for indent in (4, 6):
-    fixture = ('jobs:\n  fixture:\n    needs:\n      - dependency\n    steps:\n'
-               + ' ' * indent + '- uses: external/action@v1\n'
-               + ' ' * (indent + 2) + 'with:\n'
-               + ' ' * (indent + 4) + 'items:\n'
-               + ' ' * (indent + 4) + '- nested\n'
-               + ' ' * indent + '- run: true\n')
-    entries = workflow_steps(fixture, 'fixture')
-    assert len(entries) == 2 and '- nested' in entries[0]
-    assert workflow_script(entries[1]) == 'true\n'
-print('PASS workflow_steps follows the steps list indentation, excluding other block lists')
 
 
 def dune_commands(step):
@@ -670,214 +463,440 @@ def rejects_order(check, text, label, reason):
         raise AssertionError('accepted mutant: ' + label)
 
 
-main_config_order(source)
-env_release_order(env_source)
-print('PASS OCANNL configuration dune steps follow the shard build')
-print('PASS ci-env dune steps after the package build use --release')
-steps = workflow_steps(source, 'run')
-shard = steps[shard_build(steps)]
-configured_steps = [step for step in steps[shard_build(steps) + 1:]
-                    if dune_commands(step) and configured(step)]
-assert configured_steps, 'no configured dune step to exercise the order check'
-for step in configured_steps:
-    mutant = source.replace(step, '', 1).replace(shard, step + shard, 1)
-    rejects_order(main_config_order, mutant, 'configured step moved before shard build',
-                  'configuration dune step precedes shard build')
-# Also exercise run-line configuration through both supported scalar forms.
-for label, early in (
-    ('inline configured dune before shard build',
-     '    - run: OCANNL_LOG_LEVEL_CC_BACKEND=3 opam exec -- dune build @check\n'),
-    ('block configured dune before shard build',
-     '    - run: |\n        export OCANNL_LOG_LEVEL_CC_BACKEND=3\n        opam exec -- dune build @check\n'),
-):
-    mutant = source.replace(shard, early + shard, 1)
-    rejects_order(main_config_order, mutant, label, 'configuration dune step precedes shard build')
-# Non-dune steps may follow -p; an unconfigured dune may precede the shard.
-main_config_order(source.replace(shard, '    - run: opam exec -- dune build @check\n' + shard, 1))
-env_steps = workflow_steps(env_source, 'clean-room')
-package = env_steps[package_build(env_steps)]
-for label, later in (
-    ('ci-env dev check moved after package build', '    - run: opam exec -- dune build @check\n'),
-    ('ci-env dev check in a block after package build',
-     '    - run: |\n        opam exec -- dune build @check\n'),
-):
-    # The same command before -p is allowed; moving it past -p must fail.
-    env_release_order(env_source.replace(package, later + package, 1))
-    rejects_order(env_release_order, env_source.replace(package, package + later, 1),
-                  label, 'dune after package build lacks --release')
-for harmless in (
-    '    - run: echo "dune build is done"\n',
-    '    - run: echo dune build is done\n',
-):
-    env_release_order(env_source.replace(package, package + harmless, 1))
-main_config_order(source.replace(shard,
-    '    - run: OCANNL_TOOL_HARNESS_STRICT=1 opam exec -- dune build @check\n' + shard, 1))
-main_config_order(source.replace(shard,
-    '    - env:\n        OCANNL_TOOL_HARNESS_STRICT: 1\n'
-    '      run: opam exec -- dune build @check\n' + shard, 1))
-rejects_order(env_release_order, env_source.replace(package, package +
-    '    - run: dune build --release @check && dune build @check\n', 1),
-    'a second dev command after a release command', 'dune after package build lacks --release')
+if leg == 'matrix':
+    controls(source)
+    # The side-job list is read, not restated: a new job carrying the fallback
+    # guard joins the selection unremarked (its unguarded twin is a mutant below).
+    fallback_guard = re.search(r'^  promotion-floor:\n(    if: .*\n)', source, re.M)[1]
+    controls(extra_job('new-side-job', fallback_guard), extra=('new-side-job',))
+    # A scheduled side job: the schedule, or a dispatch the fallback guard admits.
+    scheduled_guard = re.search(r'^  harness-legs-alone:\n(    if: .*\n)', source, re.M)[1]
+    assert scheduled_guard.startswith('    if: ' + SCHEDULED_GUARD), 'scheduled side-job guard moved'
+    controls(extra_job('new-scheduled-job', scheduled_guard))
 
 
-# Host evidence (gh-ocannl-1948): pin the shared save path, program and
-# configuration directory, not identical command text. ci-env builds from the
-# root then runs from test/config: --release and --root cannot be combined.
-# The shared readers cover direct commands in the current inline/literal dialect.
-def host_evidence(main, clean):
-    name = "Print the host's capabilities"
-    probe = workflow_step(main, name)
-    clean_probe = workflow_step(clean, name)
-    main_args = shlex.split(workflow_script(probe))
-    target, = [arg for arg in main_args if arg.endswith('/host_caps.exe')]
-    save, = [arg for arg in main_args if arg.startswith('--save=')]
-    assert '      working-directory: test/config\n' in probe, 'matrix probe configuration moved'
-    assert '      continue-on-error: true\n' in probe and \
-           '      continue-on-error: true\n' in clean_probe, 'host probe error policy drifted'
-    commands = dune_commands(clean_probe)
-    assert commands and all(command[:2] == ['dune', 'build'] and '--release' in command and
-                            '--root' not in command and target in command for command in commands), \
-        'host probe needs a release build from the root'
-    assert 'working-directory:' not in clean_probe, 'host build must start from the root'
-    launches = [shlex.split(line) for line in workflow_script(clean_probe).splitlines()
-                if line.lstrip().startswith('cd ')]
-    launch, = launches
-    assert launch[:3] == ['cd', 'test/config', '&&'], 'host probe configuration directory drifted'
-    executable = '../../_build/default/' + target.removeprefix('./')
-    assert launch[3:] == ['opam', 'exec', '--', executable, save], 'host launch or save path drifted'
-    listing = workflow_step(main, 'List the failed dune rules')
-    clean_listing = workflow_step(clean, 'List the failed dune rules')
-    assert clean_listing.replace('failure() }}', "failure() && runner.os != 'Windows' }}").rstrip() == listing.rstrip(), \
-        'host failure listings drifted'
-    for step in workflow_steps(clean, 'clean-room'):
-        if dune_commands(step):
-            assert '      shell: bash\n' in step, 'dune log pipe needs bash pipefail'
-            for line in workflow_script(step).splitlines():
-                if dune_commands('      run: ' + line.strip() + '\n'):
-                    assert '2>&1 | tee -a "$RUNNER_TEMP/dune-build.log"' in line, 'missing dune build log'
-
-
-host_evidence(source, env_source)
-print('PASS ci-env preserves the host probe contract, release builds and failure listing')
-for label, mutant, reason in (
-    ('host save path drift', env_source.replace('/host-caps.txt', '/lost-host.txt', 1), 'host launch or save path'),
-    ('host probe dev profile', env_source.replace('dune build --release ./tools/host_caps.exe',
-                                                 'dune build ./tools/host_caps.exe', 1), 'release build'),
-    ('host probe wrong configuration', env_source.replace('cd test/config &&', 'cd test &&', 1), 'configuration directory'),
-    ('failure listing loses host', env_source.replace('--host "$RUNNER_TEMP/host-caps.txt" ', '', 1), 'failure listings'),
-    ('build log loses pipefail', env_source.replace('      shell: bash\n      run: opam exec -- dune build',
-                                                   '      run: opam exec -- dune build', 1), 'bash pipefail'),
-    ('a fourth build omits logging', env_source.replace('    - name: Smoke test',
-        '    - name: Extra build\n      shell: bash\n      run: dune build --release @check\n    - name: Smoke test', 1),
-     'missing dune build log'),
-):
-    assert mutant != env_source, label
-    rejects_order(lambda text: host_evidence(source, text), mutant, label, reason)
-
-
-# Execute the actual failure block in ci-env's reachable states: an early
-# failure has a build log but no host; a failure after the probe has both.
-listing = workflow_script(workflow_step(env_source, 'List the failed dune rules'))
-host_line = 'OCANNL host: cpu=fixture\n'
-for saved_host in (False, True):
-    fixture = Path(sys.argv[2]) / ('host-evidence-%s' % saved_host)
-    fixture.mkdir()
-    (fixture / 'dune-build.log').write_text('File "fixture.ml", line 1, characters 0-1:\nError: fixture build failure\n')
-    if saved_host:
-        (fixture / 'host-caps.txt').write_text(host_line)
-    listed = subprocess.run(['bash', '-eo', 'pipefail', '-c', listing], cwd=root,
-                            env=dict(os.environ, RUNNER_TEMP=str(fixture)),
-                            capture_output=True, text=True)
-    assert listed.returncode == 1 and 'fixture build failure' in listed.stdout, \
-        (listed.returncode, listed.stdout, listed.stderr)
-    assert listed.stdout.startswith(host_line) == saved_host, listed.stdout
-print('PASS ci-env failure listing reports the build failure with and without saved host evidence')
-
-
-# Hermetic depext listing (gh-ocannl-1917): run all three actual scripts, with
-# only their external commands in PATH, no opam switch or Debian host required.
-def install_mode_flags(step):
-    # The inline opam install dialect used by these system-dependency steps.
-    # ci-env installs both system and opam dependencies in this one command;
-    # the other workflows use a separate --depext-only install.
-    commands = re.findall(r'^ +run: (opam install .+)$', step, re.M)
-    assert len(commands) == 1, 'system-dependency install needs one inline opam install'
-    args = shlex.split(commands[0])[2:]
-    assert args.count('.') == 1 and '--deps-only' in args, commands[0]
-    selected = set()
-    for arg in args:
-        if arg in ('.', '--deps-only', '--depext-only', '--yes'):
-            continue
-        if arg in ('--with-test', '--with-doc'):
-            selected.add(arg)
+    print('PASS per PR ci.yml runs the Dune-floor promotion harnesses and the CPU-torch tests, and nothing else')
+    print('PASS ci.yml runs per PR, unfiltered, and has no push trigger')
+    print('PASS normal, scheduled and explicit Windows fallback matrix selections')
+    print('PASS every ocaml_compiler option: the default is the ordinary matrix, another is one ubuntu job')
+    print('PASS every scheduled-only compiler dispatches as exactly its scheduled job')
+    print('PASS side jobs are read from ci.yml: a new guarded job joins the selection')
+    print('PASS a scheduled side job runs on the schedule and an ordinary dispatch, never per PR or in the fallback')
+    print('PASS ubuntu main and train shards are exactly 1/N..N/N, over the aliases ci-shard.sh shards')
+    print('PASS an ordinary dispatch runs one macOS job, main; the schedule adds its train job')
+    print('PASS every build step piping into tee has pipefail; the PowerShell one exits with dune\'s status')
+    second = '{"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "main", "shard": "2/2"},'
+    train_second = '{"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "train", "shard": "2/2"},'
+    train_last = train_second.rstrip(',') + "]'"
+    assert source.count(train_second) == 1 and source.count(',\n               ' + train_last) == 1, \
+        'train 2/2 entries moved; update the mutants below'
+    side_guard = "github.event_name != 'workflow_dispatch' || !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'"
+    assert source.count(side_guard) == 2, 'side-job guard text moved; update the mutants below'
+    scheduled_text = scheduled_guard.strip().removeprefix('if: ')
+    assert source.count(scheduled_text) == 4, 'scheduled side-job guard text moved; update the mutants below'
+    build_guard = "  run:\n    if: github.event_name != 'pull_request'\n"
+    assert source.count(build_guard) == 1, 'build matrix guard moved; update the mutants below'
+    compiler_axis = "&& format('[\"{0}\"]', inputs.ocaml_compiler)"
+    assert compiler_axis in source, 'compiler axis text moved; update the mutants below'
+    for label, mutant in (
+        ('fallback enabled by default', source.replace('default: false', 'default: true')),
+        ('full matrix back on master push', source.replace('\non:\n', '\non:\n  push:\n    branches:\n      - master\n', 1)),
+        ('PR skips documentation inputs', source.replace('  pull_request:\n', '  pull_request:\n    paths-ignore:\n      - "docs/**"\n', 1)),
+        ('quoted PR documentation filter', source.replace('  pull_request:\n', '  pull_request:\n    "paths-ignore": ["docs/**"]\n', 1)),
+        ('repeated PR trigger hides documentation filter', source.replace('  pull_request:\n', '  pull_request:\n  pull_request:\n    paths-ignore: ["docs/**"]\n', 1)),
+        ('automatic Windows jobs', source.replace("github.event_name == 'schedule'", "github.event_name != 'workflow_dispatch'")),
+        ('schedule loses coverage', source.replace("github.event_name == 'schedule'", "github.event_name == 'never'")),
+        ('schedule narrowed by dispatch input', source.replace("github.event_name == 'workflow_dispatch' && inputs.windows_only", 'inputs.windows_only')),
+        ('schedule narrowed by compiler input', source.replace("github.event_name == 'workflow_dispatch' && inputs.ocaml_compiler", 'inputs.ocaml_compiler')),
+        ('the build matrix back on pull requests', source.replace(build_guard, '  run:\n', 1)),
+        ('the build matrix on pull requests through a guard that selects them',
+         source.replace(build_guard, "  run:\n    if: github.event_name != 'never'\n", 1)),
+        ('the build matrix off the schedule',
+         source.replace(build_guard, "  run:\n    if: github.event_name == 'workflow_dispatch'\n", 1)),
+        ('formatting in the Windows fallback', source.replace("  fmt:\n    if: " + scheduled_text, "  fmt:\n    if: github.event_name != 'never'")),
+        ('harnesses in the Windows fallback', source.replace("  harnesses:\n    if: " + scheduled_text, "  harnesses:\n    if: github.event_name != 'never'")),
+        ('real-dune shell harnesses in the Windows fallback', source.replace("  harness-real-dune:\n    if: " + scheduled_text, "  harness-real-dune:\n    if: github.event_name != 'never'")),
+        ('Dune-floor promotion harnesses in the Windows fallback', source.replace("  promotion-floor:\n    if: " + side_guard, "  promotion-floor:\n    if: github.event_name != 'never'")),
+        ('CPU-torch benchmark tests in the Windows fallback', source.replace("  torch-runner:\n    if: " + side_guard, "  torch-runner:\n    if: github.event_name != 'never'")),
+        ('a per-PR side job in the compiler dispatch', source.replace(side_guard, "github.event_name != 'workflow_dispatch' || !inputs.windows_only", 1)),
+        ('compiler dispatch builds the ordinary compiler', source.replace(compiler_axis, "&& '[\"5.5.x\"]'")),
+        ('compiler dispatch keeps macOS', source.replace("&& '[\"ubuntu-latest\"]'", "&& '[\"ubuntu-latest\", \"macos-latest\"]'")),
+        ('compiler dispatch keeps the 5.5 shards and train', source.replace("inputs.ocaml_compiler != '5.5.x'\n          && '[]'", "inputs.ocaml_compiler == 'never'\n          && '[]'")),
+        ('compiler dispatch combined with the Windows fallback', source.replace("&& !inputs.windows_only\n", "\n", 1)),
+        ('scheduled floor not dispatchable', source.replace('          - 5.5.x\n          - 5.3.x\n', '          - 5.5.x\n', 1)),
+        ('compiler input defaults to the floor', source.replace('          - 5.3.x\n        default: 5.5.x\n', '          - 5.3.x\n        default: 5.3.x\n', 1)),
+        ('compiler input as free text', source.replace('        type: choice\n', '        type: string\n', 1)),
+        ('a new side job without the Windows-fallback guard', extra_job('new-side-job')),
+        ('a scheduled side job in the Windows fallback',
+         extra_job('new-scheduled-job', "    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'\n")),
+        ('a scheduled side job per PR',
+         extra_job('new-scheduled-job', "    if: github.event_name == 'schedule' || github.event_name != 'never'\n")),
+        ('a scheduled side job off the schedule',
+         extra_job('new-scheduled-job', "    if: github.event_name == 'schedule' || github.event_name == 'never'\n")),
+        ('ordinary-dispatch shard dropped', source[:source.rindex(second)] + source[source.rindex(second) + len(second):]),
+        ('scheduled shard dropped', source.replace(second, '', 1)),
+        ('shard renumbered', source.replace('"shard": "2/2"', '"shard": "2/3"', 1)),
+        ('floor job sharded', source.replace('"ocaml-compiler": "5.3.x", "suite": "main"}', '"ocaml-compiler": "5.3.x", "suite": "main", "shard": "1/1"}')),
+        ('suite alias drift', source.replace("'@default @runtest @bin-smoke'", "'@default @runtest'")),
+        ('unsharded bash build without pipefail',
+         source.replace("    - if: ${{ !matrix.shard && runner.os != 'Windows' }}\n      shell: bash\n",
+                        "    - if: ${{ !matrix.shard && runner.os != 'Windows' }}\n", 1)),
+        ('sharded build without pipefail',
+         source.replace('    - if: ${{ matrix.shard }}\n      shell: bash\n', '    - if: ${{ matrix.shard }}\n', 1)),
+        ('PowerShell build exits with the pipe status', source.replace('        exit $LASTEXITCODE\n', '', 1)),
+        ('PowerShell build names its aliases as literals',
+         source.replace("@($env:SUITE_TARGETS -split ' ')", '@default @runtest @bin-smoke', 1)),
+        ('ordinary-dispatch train shard dropped', source.replace(',\n               ' + train_last, "]'", 1)),
+        ('scheduled train shard dropped', source.replace(train_second, '', 1)),
+        ('train back on macOS in the ordinary dispatch', source[:source.rindex(train_last)] + train_second
+         + ' {"os": "macos-latest", "ocaml-compiler": "5.5.x", "suite": "train"}]\'' + source[source.rindex(train_last) + len(train_last):]),
+        ('scheduled macOS train dropped', source.replace('               {"os": "macos-latest", "ocaml-compiler": "5.5.x", "suite": "train"},\n', '', 1)),
+        ('an unsharded ubuntu train beside its shards', source.replace(train_second, train_second + ' {"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "train"},', 1)),
+        ('a shard of a suite ci-shard.sh does not cut', source.replace('"suite": "train"}]\'', '"suite": "train", "shard": "1/1"}]\'', 1)),
+        ('sharded step drops the suite', source.replace('targets "$SHARD" "$SUITE")', 'targets "$SHARD")')),
+        ('sharded step reads no suite', source.replace('        SUITE: ${{ matrix.suite }}\n', '')),
+    ):
+        assert mutant != source, label
+        try:
+            controls(mutant)
+        except AssertionError:
+            print('PASS rejected mutant:', label)
         else:
-            assert re.fullmatch(r'-[ydt]+', arg), 'unsupported install option: ' + arg
-            selected.update({'d': '--with-doc', 't': '--with-test'}[char]
-                            for char in arg[1:] if char != 'y')
-    return [flag for flag in ('--with-test', '--with-doc') if flag in selected]
+            raise AssertionError('accepted mutant: ' + label)
 
 
-workflows = root / '.github/workflows'
-depext_steps, depext_flags, install_steps = {}, {}, {}
-for name, suffix, install in (
-    ('ci.yml', ' (Linux)', 'Install system dependencies'),
-    ('gh-pages-api.yml', '', 'Install system dependencies'),
-    ('ci-env.yml', '', 'Install dependencies from the opam files'),
-):
-    text = (workflows / name).read_text()
-    depext_steps[name] = workflow_step(text, "List opam's missing system dependencies" + suffix)
-    install_steps[name] = workflow_step(text, install)
-    depext_flags[name] = install_mode_flags(install_steps[name])
-depext_scripts = {name: workflow_script(step) for name, step in depext_steps.items()}
+
+if leg == 'env-triggers':
+    def env_controls(text):
+        unfiltered_triggers(text, ('push',))
+        trigger = text.split('\non:\n', 1)[1].split('\nconcurrency:', 1)[0]
+        blocks = re.findall(r'^  pull_request: *\n(.*?)(?=^  [a-z_]+:|\Z)', trigger, re.M | re.S)
+        assert len(blocks) == 1, 'pull_request trigger absent, repeated or unsupported'
+        lines = [line for line in blocks[0].splitlines() if line.strip() and not line.lstrip().startswith('#')]
+        # Only this shape is read: a `paths:` list of double-quoted patterns. Anything else (a
+        # paths-ignore, an unquoted or negated pattern) fails rather than being taken for a filter.
+        assert lines[:1] == ['    paths:'], 'ci-env.yml per PR is not filtered by a paths list: %s' % lines[:1]
+        assert all(re.fullmatch(r'      - "[^"!]+"', line) for line in lines[1:]), 'unsupported paths entry'
+        paths = [line.strip()[3:-1] for line in lines[1:]]
+        assert paths == ENV_PR_PATHS, 'ci-env.yml runs per PR for %s' % paths
+        concurrency = text.split('\nconcurrency:\n', 1)[1].split('\njobs:', 1)[0] + '\n'
+        assert "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n" in concurrency, \
+            'ci-env.yml cancels more than superseded PR runs'
 
 
-def identical_depexts(scripts, flags=depext_flags):
-    # Only the resolver's flags may differ; don't erase a flag elsewhere in
-    # the script (or any other text) and accidentally hide semantic drift.
-    normalized = []
-    for name, script in scripts.items():
-        options = ''.join(' ' + flag for flag in flags[name])
-        pattern = r'^(    --resolve="\$request")' + re.escape(options) + r'(\); then)$'
-        body, count = re.subn(pattern, r'\1\2', script, flags=re.M)
-        assert count == 1, name + ': resolver flags moved or changed'
-        normalized.append(body)
-    assert len(set(normalized)) == 1, 'depext step copies drifted apart'
+    env_controls(env_source)
+    # GitHub's `*` does not cross `/`: the patterns reach the opam files only while
+    # every one of them sits at the root.
+    nested = subprocess.run(['git', '-C', str(Path(sys.argv[1]).resolve().parents[2]), 'ls-files', '--',
+                             '*/*.opam', '*/*.opam.template', '*/dune-project'],
+                            capture_output=True, text=True, check=True).stdout.split()
+    assert not nested, 'opam inputs below the root, which the per-PR paths filter does not match: %s' % nested
+    print('PASS ci-env.yml runs on every master push, and per PR only for the opam inputs and itself, cancelling only superseded PR runs')
+    for label, mutant in (
+        ('ci-env.yml without push', env_source.replace('  push:\n    branches:\n      - master\n', '', 1)),
+        ('ci-env.yml push off master', env_source.replace('      - master\n', '      - main\n', 1)),
+        ('ci-env.yml back on every PR', env_source.replace('  pull_request:\n    paths:\n' + ''.join('      - "%s"\n' % p for p in ENV_PR_PATHS), '  pull_request:\n', 1)),
+        ('ci-env.yml per PR without dune-project', env_source.replace('      - "dune-project"\n', '', 1)),
+        ('ci-env.yml per PR by a paths-ignore', env_source.replace('  pull_request:\n    paths:\n', '  pull_request:\n    paths-ignore:\n', 1)),
+        ('ci-env.yml push filtered by paths', env_source.replace('    branches:\n      - master\n', '    branches:\n      - master\n    paths:\n      - "*.opam"\n', 1)),
+        ('ci-env.yml cancels push runs', env_source.replace("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", 'cancel-in-progress: true', 1)),
+    ):
+        assert mutant != env_source, label
+        try:
+            env_controls(mutant)
+        except AssertionError:
+            print('PASS rejected mutant:', label)
+        else:
+            raise AssertionError('accepted mutant: ' + label)
 
 
-identical_depexts(depext_scripts)
-# A changed install must change the resolver too, even if all resolver bodies
-# still agree. Derive this mutant's expectation from its changed command.
-mutant_flags = dict(depext_flags)
-mutant_flags['ci-env.yml'] = install_mode_flags(install_steps['ci-env.yml'].replace(
-    'opam install ', 'opam install --with-doc ', 1))
-try:
-    identical_depexts(depext_scripts, mutant_flags)
-except AssertionError as error:
-    assert 'ci-env.yml: resolver flags' in str(error), error
-    print('PASS rejected mutant: install enables docs but resolver does not')
-else:
-    raise AssertionError('accepted install/resolver flag mismatch')
-mutant = dict(depext_scripts)
-mutant['ci-env.yml'] += 'echo drift\n'
-try:
-    identical_depexts(mutant)
-except AssertionError as error:
-    assert 'drifted apart' in str(error), error
-    print('PASS rejected mutant: one depext copy drifts')
-else:
-    raise AssertionError('accepted depext copy drift')
+
+if leg == 'train-shards':
+    # The `train` shards together build exactly the tier `@train` builds. The tier
+    # is read here on its own terms -- each tracked dune file's top-level `train`
+    # aggregate, its `(alias train-<name>)` deps -- a reader deliberately simpler
+    # than ci-shard.sh's, so a disagreement between the two is a red, not a shared
+    # blind spot. ci-shard.sh's train mode runs no dune, so this needs none.
+    root = Path(sys.argv[1]).resolve().parents[2]
+    listed = subprocess.run(['git', '-C', str(root), 'ls-files', '--', 'dune', '*/dune'],
+                            capture_output=True, text=True, check=True).stdout.split()
+    tier = set()
+    for path in listed:
+        prefix = '' if '/' not in path else path.rsplit('/', 1)[0] + '/'
+        code = re.sub(r';[^\n]*', '', (root / path).read_text())
+        for stanza in re.split(r'\n(?=\()', '\n' + code):
+            if re.match(r'\(alias\s+\(name\s+train\)', stanza):
+                tier |= {'@@' + prefix + name for name in re.findall(r'\(alias\s+(train-[^\s()]+)\s*\)', stanza)}
+    assert len(tier) >= 2, 'no train tier found: %s' % sorted(tier)
 
 
-depext_root = Path(sys.argv[2]) / 'depexts'
-depext_bin = depext_root / 'bin'
-depext_bin.mkdir(parents=True)
-for command in ('sed', 'paste', 'awk'):
-    executable = shutil.which(command)
-    assert executable, command + ' missing'
-    (depext_bin / command).symlink_to(executable)
-for command in ('opam', 'dpkg-query'):
-    stub = depext_bin / command
-    stub.write_text('#!' + sys.executable + '\n' + '''import json, os, sys
+    def train_shards(n):
+        out = []
+        for k in range(1, n + 1):
+            run = subprocess.run([str(root / 'tools/ci-shard.sh'), 'targets', '%d/%d' % (k, n), 'train'],
+                                 capture_output=True, text=True)
+            assert run.returncode == 0, 'ci-shard.sh targets %d/%d train: %s' % (k, n, run.stderr)
+            out.append(run.stdout.split())
+        return out
+
+
+    def partitions(shards, whole):
+        # Every shard nonempty, none sharing a target, together exactly WHOLE.
+        flat = [t for shard in shards for t in shard]
+        return all(shards) and len(flat) == len(set(flat)) and set(flat) == whole
+
+
+    group = ('ubuntu-latest', '5.5.x', 'train')
+    for event in ('workflow_dispatch', 'schedule'):
+        # The ordinary dispatch: the input's default compiler, not the empty input of another event.
+        counts = unshard(sorted(raw_jobs(source, event, False, compiler_input(source)[1])))[1]
+        assert group in counts, '%s runs no ubuntu train shards' % event
+        shards = train_shards(counts[group])
+        assert partitions(shards, tier), '%s: the %d train shards %s are not a partition of %s' % (
+            event, counts[group], shards, sorted(tier))
+        # The oracle discriminates: a lost shard, a member it does not carry.
+        assert not partitions(shards[:-1], tier) and not partitions(shards, tier | {'@@x/train-ghost'})
+    print('PASS the train shards partition the tier the train aggregates define, every shard nonempty')
+
+
+if leg == 'workflow-readers':
+    # Reader regression: script payload can itself contain YAML-like keys and lists.
+    payload = "cat <<'EOF'\n- keep this dash\nrun: keep this text\nEOF\n"
+    for header in ('    - run: |\n', '      run: |\n'):
+        assert workflow_script(header + ''.join('        ' + line + '\n'
+                                               for line in payload.splitlines())) == payload
+    print('PASS workflow_script preserves list dashes and run keys inside script bodies')
+
+
+    # Block lists outside the step list or inside a step are not step boundaries.
+    for indent in (4, 6):
+        fixture = ('jobs:\n  fixture:\n    needs:\n      - dependency\n    steps:\n'
+                   + ' ' * indent + '- uses: external/action@v1\n'
+                   + ' ' * (indent + 2) + 'with:\n'
+                   + ' ' * (indent + 4) + 'items:\n'
+                   + ' ' * (indent + 4) + '- nested\n'
+                   + ' ' * indent + '- run: true\n')
+        entries = workflow_steps(fixture, 'fixture')
+        assert len(entries) == 2 and '- nested' in entries[0]
+        assert workflow_script(entries[1]) == 'true\n'
+    print('PASS workflow_steps follows the steps list indentation, excluding other block lists')
+
+
+
+if leg == 'step-order':
+
+    main_config_order(source)
+    env_release_order(env_source)
+    print('PASS OCANNL configuration dune steps follow the shard build')
+    print('PASS ci-env dune steps after the package build use --release')
+    steps = workflow_steps(source, 'run')
+    shard = steps[shard_build(steps)]
+    configured_steps = [step for step in steps[shard_build(steps) + 1:]
+                        if dune_commands(step) and configured(step)]
+    assert configured_steps, 'no configured dune step to exercise the order check'
+    for step in configured_steps:
+        mutant = source.replace(step, '', 1).replace(shard, step + shard, 1)
+        rejects_order(main_config_order, mutant, 'configured step moved before shard build',
+                      'configuration dune step precedes shard build')
+    # Also exercise run-line configuration through both supported scalar forms.
+    for label, early in (
+        ('inline configured dune before shard build',
+         '    - run: OCANNL_LOG_LEVEL_CC_BACKEND=3 opam exec -- dune build @check\n'),
+        ('block configured dune before shard build',
+         '    - run: |\n        export OCANNL_LOG_LEVEL_CC_BACKEND=3\n        opam exec -- dune build @check\n'),
+    ):
+        mutant = source.replace(shard, early + shard, 1)
+        rejects_order(main_config_order, mutant, label, 'configuration dune step precedes shard build')
+    # Non-dune steps may follow -p; an unconfigured dune may precede the shard.
+    main_config_order(source.replace(shard, '    - run: opam exec -- dune build @check\n' + shard, 1))
+    env_steps = workflow_steps(env_source, 'clean-room')
+    package = env_steps[package_build(env_steps)]
+    for label, later in (
+        ('ci-env dev check moved after package build', '    - run: opam exec -- dune build @check\n'),
+        ('ci-env dev check in a block after package build',
+         '    - run: |\n        opam exec -- dune build @check\n'),
+    ):
+        # The same command before -p is allowed; moving it past -p must fail.
+        env_release_order(env_source.replace(package, later + package, 1))
+        rejects_order(env_release_order, env_source.replace(package, package + later, 1),
+                      label, 'dune after package build lacks --release')
+    for harmless in (
+        '    - run: echo "dune build is done"\n',
+        '    - run: echo dune build is done\n',
+    ):
+        env_release_order(env_source.replace(package, package + harmless, 1))
+    main_config_order(source.replace(shard,
+        '    - run: OCANNL_TOOL_HARNESS_STRICT=1 opam exec -- dune build @check\n' + shard, 1))
+    main_config_order(source.replace(shard,
+        '    - env:\n        OCANNL_TOOL_HARNESS_STRICT: 1\n'
+        '      run: opam exec -- dune build @check\n' + shard, 1))
+    rejects_order(env_release_order, env_source.replace(package, package +
+        '    - run: dune build --release @check && dune build @check\n', 1),
+        'a second dev command after a release command', 'dune after package build lacks --release')
+
+
+
+if leg == 'host-evidence':
+    # Host evidence (gh-ocannl-1948): pin the shared save path, program and
+    # configuration directory, not identical command text. ci-env builds from the
+    # root then runs from test/config: --release and --root cannot be combined.
+    # The shared readers cover direct commands in the current inline/literal dialect.
+    def host_evidence(main, clean):
+        name = "Print the host's capabilities"
+        probe = workflow_step(main, name)
+        clean_probe = workflow_step(clean, name)
+        main_args = shlex.split(workflow_script(probe))
+        target, = [arg for arg in main_args if arg.endswith('/host_caps.exe')]
+        save, = [arg for arg in main_args if arg.startswith('--save=')]
+        assert '      working-directory: test/config\n' in probe, 'matrix probe configuration moved'
+        assert '      continue-on-error: true\n' in probe and \
+               '      continue-on-error: true\n' in clean_probe, 'host probe error policy drifted'
+        commands = dune_commands(clean_probe)
+        assert commands and all(command[:2] == ['dune', 'build'] and '--release' in command and
+                                '--root' not in command and target in command for command in commands), \
+            'host probe needs a release build from the root'
+        assert 'working-directory:' not in clean_probe, 'host build must start from the root'
+        launches = [shlex.split(line) for line in workflow_script(clean_probe).splitlines()
+                    if line.lstrip().startswith('cd ')]
+        launch, = launches
+        assert launch[:3] == ['cd', 'test/config', '&&'], 'host probe configuration directory drifted'
+        executable = '../../_build/default/' + target.removeprefix('./')
+        assert launch[3:] == ['opam', 'exec', '--', executable, save], 'host launch or save path drifted'
+        listing = workflow_step(main, 'List the failed dune rules')
+        clean_listing = workflow_step(clean, 'List the failed dune rules')
+        assert clean_listing.replace('failure() }}', "failure() && runner.os != 'Windows' }}").rstrip() == listing.rstrip(), \
+            'host failure listings drifted'
+        for step in workflow_steps(clean, 'clean-room'):
+            if dune_commands(step):
+                assert '      shell: bash\n' in step, 'dune log pipe needs bash pipefail'
+                for line in workflow_script(step).splitlines():
+                    if dune_commands('      run: ' + line.strip() + '\n'):
+                        assert '2>&1 | tee -a "$RUNNER_TEMP/dune-build.log"' in line, 'missing dune build log'
+
+
+    host_evidence(source, env_source)
+    print('PASS ci-env preserves the host probe contract, release builds and failure listing')
+    for label, mutant, reason in (
+        ('host save path drift', env_source.replace('/host-caps.txt', '/lost-host.txt', 1), 'host launch or save path'),
+        ('host probe dev profile', env_source.replace('dune build --release ./tools/host_caps.exe',
+                                                     'dune build ./tools/host_caps.exe', 1), 'release build'),
+        ('host probe wrong configuration', env_source.replace('cd test/config &&', 'cd test &&', 1), 'configuration directory'),
+        ('failure listing loses host', env_source.replace('--host "$RUNNER_TEMP/host-caps.txt" ', '', 1), 'failure listings'),
+        ('build log loses pipefail', env_source.replace('      shell: bash\n      run: opam exec -- dune build',
+                                                       '      run: opam exec -- dune build', 1), 'bash pipefail'),
+        ('a fourth build omits logging', env_source.replace('    - name: Smoke test',
+            '    - name: Extra build\n      shell: bash\n      run: dune build --release @check\n    - name: Smoke test', 1),
+         'missing dune build log'),
+    ):
+        assert mutant != env_source, label
+        rejects_order(lambda text: host_evidence(source, text), mutant, label, reason)
+
+
+    # Execute the actual failure block in ci-env's reachable states: an early
+    # failure has a build log but no host; a failure after the probe has both.
+    listing = workflow_script(workflow_step(env_source, 'List the failed dune rules'))
+    host_line = 'OCANNL host: cpu=fixture\n'
+    for saved_host in (False, True):
+        fixture = Path(sys.argv[2]) / ('host-evidence-%s' % saved_host)
+        fixture.mkdir()
+        (fixture / 'dune-build.log').write_text('File "fixture.ml", line 1, characters 0-1:\nError: fixture build failure\n')
+        if saved_host:
+            (fixture / 'host-caps.txt').write_text(host_line)
+        listed = subprocess.run(['bash', '-eo', 'pipefail', '-c', listing], cwd=root,
+                                env=dict(os.environ, RUNNER_TEMP=str(fixture)),
+                                capture_output=True, text=True)
+        assert listed.returncode == 1 and 'fixture build failure' in listed.stdout, \
+            (listed.returncode, listed.stdout, listed.stderr)
+        assert listed.stdout.startswith(host_line) == saved_host, listed.stdout
+    print('PASS ci-env failure listing reports the build failure with and without saved host evidence')
+
+
+
+if leg == 'depexts':
+    # Hermetic depext listing (gh-ocannl-1917): run all three actual scripts, with
+    # only their external commands in PATH, no opam switch or Debian host required.
+    def install_mode_flags(step):
+        # The inline opam install dialect used by these system-dependency steps.
+        # ci-env installs both system and opam dependencies in this one command;
+        # the other workflows use a separate --depext-only install.
+        commands = re.findall(r'^ +run: (opam install .+)$', step, re.M)
+        assert len(commands) == 1, 'system-dependency install needs one inline opam install'
+        args = shlex.split(commands[0])[2:]
+        assert args.count('.') == 1 and '--deps-only' in args, commands[0]
+        selected = set()
+        for arg in args:
+            if arg in ('.', '--deps-only', '--depext-only', '--yes'):
+                continue
+            if arg in ('--with-test', '--with-doc'):
+                selected.add(arg)
+            else:
+                assert re.fullmatch(r'-[ydt]+', arg), 'unsupported install option: ' + arg
+                selected.update({'d': '--with-doc', 't': '--with-test'}[char]
+                                for char in arg[1:] if char != 'y')
+        return [flag for flag in ('--with-test', '--with-doc') if flag in selected]
+
+
+    workflows = root / '.github/workflows'
+    depext_steps, depext_flags, install_steps = {}, {}, {}
+    for name, suffix, install in (
+        ('ci.yml', ' (Linux)', 'Install system dependencies'),
+        ('gh-pages-api.yml', '', 'Install system dependencies'),
+        ('ci-env.yml', '', 'Install dependencies from the opam files'),
+    ):
+        text = (workflows / name).read_text()
+        depext_steps[name] = workflow_step(text, "List opam's missing system dependencies" + suffix)
+        install_steps[name] = workflow_step(text, install)
+        depext_flags[name] = install_mode_flags(install_steps[name])
+    depext_scripts = {name: workflow_script(step) for name, step in depext_steps.items()}
+
+
+    def identical_depexts(scripts, flags=depext_flags):
+        # Only the resolver's flags may differ; don't erase a flag elsewhere in
+        # the script (or any other text) and accidentally hide semantic drift.
+        normalized = []
+        for name, script in scripts.items():
+            options = ''.join(' ' + flag for flag in flags[name])
+            pattern = r'^(    --resolve="\$request")' + re.escape(options) + r'(\); then)$'
+            body, count = re.subn(pattern, r'\1\2', script, flags=re.M)
+            assert count == 1, name + ': resolver flags moved or changed'
+            normalized.append(body)
+        assert len(set(normalized)) == 1, 'depext step copies drifted apart'
+
+
+    identical_depexts(depext_scripts)
+    # A changed install must change the resolver too, even if all resolver bodies
+    # still agree. Derive this mutant's expectation from its changed command.
+    mutant_flags = dict(depext_flags)
+    mutant_flags['ci-env.yml'] = install_mode_flags(install_steps['ci-env.yml'].replace(
+        'opam install ', 'opam install --with-doc ', 1))
+    try:
+        identical_depexts(depext_scripts, mutant_flags)
+    except AssertionError as error:
+        assert 'ci-env.yml: resolver flags' in str(error), error
+        print('PASS rejected mutant: install enables docs but resolver does not')
+    else:
+        raise AssertionError('accepted install/resolver flag mismatch')
+    mutant = dict(depext_scripts)
+    mutant['ci-env.yml'] += 'echo drift\n'
+    try:
+        identical_depexts(mutant)
+    except AssertionError as error:
+        assert 'drifted apart' in str(error), error
+        print('PASS rejected mutant: one depext copy drifts')
+    else:
+        raise AssertionError('accepted depext copy drift')
+
+
+    depext_root = Path(sys.argv[2]) / 'depexts'
+    depext_bin = depext_root / 'bin'
+    depext_bin.mkdir(parents=True)
+    for command in ('sed', 'paste', 'awk'):
+        executable = shutil.which(command)
+        assert executable, command + ' missing'
+        (depext_bin / command).symlink_to(executable)
+    for command in ('opam', 'dpkg-query'):
+        stub = depext_bin / command
+        stub.write_text('#!' + sys.executable + '\n' + '''import json, os, sys
 from pathlib import Path
 name = Path(sys.argv[0]).name
 with open(os.environ['CALLS'], 'a') as log:
@@ -885,452 +904,475 @@ with open(os.environ['CALLS'], 'a') as log:
 sys.stdout.write(os.environ['LISTED' if name == 'opam' else 'PRESENT'])
 sys.exit(int(os.environ['OPAM_RC' if name == 'opam' else 'DPKG_RC']))
 ''')
-    stub.chmod(0o755)
-for package in ('alpha', 'beta'):
-    (depext_root / (package + '.opam')).write_text('')
+        stub.chmod(0o755)
+    for package in ('alpha', 'beta'):
+        (depext_root / (package + '.opam')).write_text('')
 
 
-def depext_case(name, script, case, listed, present, expected, opam_rc=0, dpkg_rc=0):
-    output = depext_root / 'output'
-    calls = depext_root / 'calls'
-    output.write_text('')
-    calls.write_text('')
-    # GitHub's implicit bash uses -e; explicit shell: bash adds pipefail.
-    step = depext_steps[name]
-    shells = re.findall(r'^ +shell: (.+)$', step, re.M)
-    assert shells in ([], ['bash']), name + ': unsupported step shell'
-    options = ['-eo', 'pipefail'] if shells else ['-e']
-    env = dict(PATH=str(depext_bin), HOME=str(depext_root), LANG='C',
-               GITHUB_OUTPUT=str(output), CALLS=str(calls), LISTED=listed,
-               PRESENT=present, OPAM_RC=str(opam_rc), DPKG_RC=str(dpkg_rc))
-    run = subprocess.run(['/bin/bash'] + options + ['-u', '-c', script], cwd=depext_root,
-                         env=env, capture_output=True, text=True, timeout=10)
-    context = '%s %s: %s %s' % (name, case, run.stdout, run.stderr)
-    assert run.returncode == 0, context
-    assert output.read_text() == expected, context + ' output=' + repr(output.read_text())
-    invocations = [json.loads(line) for line in calls.read_text().splitlines()]
-    want = [['opam', '--cli=2.1', 'list', '--safe', '--color=never', '--external',
-             '--resolve=alpha,beta'] + depext_flags[name]]
-    if not opam_rc:
-        want.append(['dpkg-query', '-W', '-f=${db:Status-Abbrev}|${Package}|${Provides}\\n'])
-    assert invocations == want, context + ' calls=' + repr(invocations)
-    warning = ('could not list opam\'s system dependencies' if opam_rc else
-               'could not list the installed packages' if dpkg_rc else '')
-    if warning:
-        assert '::warning::' + warning in run.stdout, context
-    else:
-        assert '::warning::' not in run.stdout, context
+    def depext_case(name, script, case, listed, present, expected, opam_rc=0, dpkg_rc=0):
+        output = depext_root / 'output'
+        calls = depext_root / 'calls'
+        output.write_text('')
+        calls.write_text('')
+        # GitHub's implicit bash uses -e; explicit shell: bash adds pipefail.
+        step = depext_steps[name]
+        shells = re.findall(r'^ +shell: (.+)$', step, re.M)
+        assert shells in ([], ['bash']), name + ': unsupported step shell'
+        options = ['-eo', 'pipefail'] if shells else ['-e']
+        env = dict(PATH=str(depext_bin), HOME=str(depext_root), LANG='C',
+                   GITHUB_OUTPUT=str(output), CALLS=str(calls), LISTED=listed,
+                   PRESENT=present, OPAM_RC=str(opam_rc), DPKG_RC=str(dpkg_rc))
+        run = subprocess.run(['/bin/bash'] + options + ['-u', '-c', script], cwd=depext_root,
+                             env=env, capture_output=True, text=True, timeout=10)
+        context = '%s %s: %s %s' % (name, case, run.stdout, run.stderr)
+        assert run.returncode == 0, context
+        assert output.read_text() == expected, context + ' output=' + repr(output.read_text())
+        invocations = [json.loads(line) for line in calls.read_text().splitlines()]
+        want = [['opam', '--cli=2.1', 'list', '--safe', '--color=never', '--external',
+                 '--resolve=alpha,beta'] + depext_flags[name]]
+        if not opam_rc:
+            want.append(['dpkg-query', '-W', '-f=${db:Status-Abbrev}|${Package}|${Provides}\\n'])
+        assert invocations == want, context + ' calls=' + repr(invocations)
+        warning = ('could not list opam\'s system dependencies' if opam_rc else
+                   'could not list the installed packages' if dpkg_rc else '')
+        if warning:
+            assert '::warning::' + warning in run.stdout, context
+        else:
+            assert '::warning::' not in run.stdout, context
 
 
-def depext_cases(name, script):
-    for case, listed, present, expected, opam_rc, dpkg_rc in (
-        ('installed', 'libfoo\nlibbar\n', 'ii |libfoo|\nii |libbar|\n', 'packages=\n', 0, 0),
-        ('held', 'libheld', 'hi |libheld|\n', 'packages=\n', 0, 0),
-        ('provided', 'pkg-config alias other',
-         'ii |pkgconf|pkg-config (= 1.8), alias (>= 2), other\n', 'packages=\n', 0, 0),
-        ('removed', 'gone virtual-gone unpacked absent',
-         'rc |gone|virtual-gone\niU |unpacked|\n',
-         'packages=gone virtual-gone unpacked absent\n', 0, 0),
-        ('exact names and order', 'foo foobar bar', 'ii |foobar|\n', 'packages=foo bar\n', 0, 0),
-        ('empty lists', '', '', 'packages=\n', 0, 0),
-        ('empty installed set', 'missing', '', 'packages=missing\n', 0, 0),
-        ('opam failure with partial output', 'partial', '', '', 17, 0),
-        ('dpkg failure with partial output', 'libfoo absent', 'ii |libfoo|\n', '', 0, 23),
-    ):
-        depext_case(name, script, case, listed, present, expected, opam_rc, dpkg_rc)
+    def depext_cases(name, script):
+        for case, listed, present, expected, opam_rc, dpkg_rc in (
+            ('installed', 'libfoo\nlibbar\n', 'ii |libfoo|\nii |libbar|\n', 'packages=\n', 0, 0),
+            ('held', 'libheld', 'hi |libheld|\n', 'packages=\n', 0, 0),
+            ('provided', 'pkg-config alias other',
+             'ii |pkgconf|pkg-config (= 1.8), alias (>= 2), other\n', 'packages=\n', 0, 0),
+            ('removed', 'gone virtual-gone unpacked absent',
+             'rc |gone|virtual-gone\niU |unpacked|\n',
+             'packages=gone virtual-gone unpacked absent\n', 0, 0),
+            ('exact names and order', 'foo foobar bar', 'ii |foobar|\n', 'packages=foo bar\n', 0, 0),
+            ('empty lists', '', '', 'packages=\n', 0, 0),
+            ('empty installed set', 'missing', '', 'packages=missing\n', 0, 0),
+            ('opam failure with partial output', 'partial', '', '', 17, 0),
+            ('dpkg failure with partial output', 'libfoo absent', 'ii |libfoo|\n', '', 0, 23),
+        ):
+            depext_case(name, script, case, listed, present, expected, opam_rc, dpkg_rc)
 
 
-for name, script in depext_scripts.items():
-    depext_cases(name, script)
-    print('PASS %s depexts: installed, held, provided, removed, exact names, empty sets, failures' % name)
-    # Undo the old provides fix in every copy. The same behavioral oracle must
-    # reject it even if all copies drift together, defeating the identity check.
-    marker = 'for (i = 1; i <= n; i++)'
-    assert script.count(marker) == 1, name + ': provides loop moved'
-    broken = script.replace(marker, 'for (i = 1; i <= 0; i++)')
-    try:
-        depext_cases(name, broken)
-    except AssertionError as error:
-        assert name + ' provided:' in str(error), error
-        print('PASS rejected mutant: %s ignores provided package names' % name)
-    else:
-        raise AssertionError('accepted broken provides case: ' + name)
-print('PASS the three depext scripts are identical apart from their resolver flags')
-
-# The main shards' weigh step prints what `tools/ci-shard.sh merge-weights` reads back from a run's
-# log (gh-ocannl-1464): run the step's own script for each shard over a fixture trace, beside the
-# real tools, and merge the two jobs' output into the WEIGHTS block it stands for.
-weigh_step = workflow_step(source, "Weigh the shard's units")
-assert "      if: ${{ matrix.shard && matrix.suite == 'main' && !cancelled() }}\n" in weigh_step, \
-    'the weigh step does not run on every main shard that built'
-assert '      shell: bash\n' in weigh_step and '        SHARD: ${{ matrix.shard }}\n' in weigh_step
-weigh_script = workflow_script(weigh_step)
+    for name, script in depext_scripts.items():
+        depext_cases(name, script)
+        print('PASS %s depexts: installed, held, provided, removed, exact names, empty sets, failures' % name)
+        # Undo the old provides fix in every copy. The same behavioral oracle must
+        # reject it even if all copies drift together, defeating the identity check.
+        marker = 'for (i = 1; i <= n; i++)'
+        assert script.count(marker) == 1, name + ': provides loop moved'
+        broken = script.replace(marker, 'for (i = 1; i <= 0; i++)')
+        try:
+            depext_cases(name, broken)
+        except AssertionError as error:
+            assert name + ' provided:' in str(error), error
+            print('PASS rejected mutant: %s ignores provided package names' % name)
+        else:
+            raise AssertionError('accepted broken provides case: ' + name)
+    print('PASS the three depext scripts are identical apart from their resolver flags')
 
 
-def csexp(x):
-    if isinstance(x, list):
-        return b'(' + b''.join(csexp(e) for e in x) + b')'
-    x = str(x).encode()
-    return str(len(x)).encode() + b':' + x
+if leg == 'weigh':
+    # The main shards' weigh step prints what `tools/ci-shard.sh merge-weights` reads back from a run's
+    # log (gh-ocannl-1464): run the step's own script for each shard over a fixture trace, beside the
+    # real tools, and merge the two jobs' output into the WEIGHTS block it stands for.
+    weigh_step = workflow_step(source, "Weigh the shard's units")
+    assert "      if: ${{ matrix.shard && matrix.suite == 'main' && !cancelled() }}\n" in weigh_step, \
+        'the weigh step does not run on every main shard that built'
+    assert '      shell: bash\n' in weigh_step and '        SHARD: ${{ matrix.shard }}\n' in weigh_step
+    weigh_script = workflow_script(weigh_step)
 
 
-def weigh_job(script, shard, units):
-    # The step's stdout for SHARD, its trace holding UNITS: (directory, program, CPU seconds).
-    work = Path(sys.argv[2]) / ('weigh-' + shard.replace('/', '-'))
-    (work / '_build').mkdir(parents=True, exist_ok=True)
-    if not (work / 'tools').exists():
-        (work / 'tools').symlink_to(root / 'tools')
-    (work / '_build' / 'trace.csexp').write_bytes(b''.join(
-        csexp(['process', 'finish', ['1', str(int(s * 1e9))], ['prog', prog], ['dir', '/w/_build/default/' + d],
-               ['rusage', [['user_cpu_time', str(int(s * 1e9))], ['system_cpu_time', '0']]]])
-        for d, prog, s in units))
-    run = subprocess.run(['bash', '-eo', 'pipefail', '-c', script], cwd=work, capture_output=True,
-                         text=True, env=dict(os.environ, SHARD=shard))
-    assert run.returncode == 0, 'weigh step for %s: %s' % (shard, run.stderr)
-    return run.stdout
+    def csexp(x):
+        if isinstance(x, list):
+            return b'(' + b''.join(csexp(e) for e in x) + b')'
+        x = str(x).encode()
+        return str(len(x)).encode() + b':' + x
 
 
-def merged(script):
-    log = (weigh_job(script, '1/2', [('test/operations', 'heavy.exe', 100), ('lib', 'gen.exe', 300)])
-           + weigh_job(script, '2/2', [('test/operations', 'light.exe', 50), ('lib', 'gen.exe', 20)]))
-    run = subprocess.run([str(root / 'tools/ci-shard.sh'), 'merge-weights'], input=log,
-                         capture_output=True, text=True)
-    return run.returncode, run.stdout
+    def weigh_job(script, shard, units):
+        # The step's stdout for SHARD, its trace holding UNITS: (directory, program, CPU seconds).
+        work = Path(sys.argv[2]) / ('weigh-' + shard.replace('/', '-'))
+        (work / '_build').mkdir(parents=True, exist_ok=True)
+        if not (work / 'tools').exists():
+            (work / 'tools').symlink_to(root / 'tools')
+        (work / '_build' / 'trace.csexp').write_bytes(b''.join(
+            csexp(['process', 'finish', ['1', str(int(s * 1e9))], ['prog', prog], ['dir', '/w/_build/default/' + d],
+                   ['rusage', [['user_cpu_time', str(int(s * 1e9))], ['system_cpu_time', '0']]]])
+            for d, prog, s in units))
+        run = subprocess.run(['bash', '-eo', 'pipefail', '-c', script], cwd=work, capture_output=True,
+                             text=True, env=dict(os.environ, SHARD=shard))
+        assert run.returncode == 0, 'weigh step for %s: %s' % (shard, run.stderr)
+        return run.stdout
 
 
-assert merged(weigh_script) == (0, '@rest 280\nheavy 100\nlight 50\n'), merged(weigh_script)
-marker = 'sed "s|^|ci-shard-weight $SHARD |"'
-assert weigh_script.count(marker) == 1, 'the weigh step marks its lines another way'
-for label, mutant in (('unmarked lines', weigh_script.replace(marker, 'cat')),
-                      ('lines without their shard', weigh_script.replace('$SHARD |', '|'))):
-    assert merged(mutant)[0] == 2, 'accepted mutant: ' + label
-    print('PASS rejected mutant: weigh step with', label)
-print("PASS the weigh step's output, merged over one run's main shards, is the WEIGHTS block")
+    def merged(script):
+        log = (weigh_job(script, '1/2', [('test/operations', 'heavy.exe', 100), ('lib', 'gen.exe', 300)])
+               + weigh_job(script, '2/2', [('test/operations', 'light.exe', 50), ('lib', 'gen.exe', 20)]))
+        run = subprocess.run([str(root / 'tools/ci-shard.sh'), 'merge-weights'], input=log,
+                             capture_output=True, text=True)
+        return run.returncode, run.stdout
 
-# Run the exact bash guard from the workflow with git reporting a fixture HEAD
-# and gh answering the compare API for the one direction the guard must ask:
-# is the intended commit behind the dispatched head?
-step = workflow_step(source, 'Verify dispatch commit')
-assert "if: github.event_name == 'workflow_dispatch'" in step
-script = workflow_script(step)
-sha, other = 'a' * 40, 'b' * 40
-master, branch = 'refs/heads/master', 'refs/heads/topic'
-scratch = sys.argv[2]
-git = Path(scratch) / 'git'
-git.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$CHECKOUT_SHA"\n')
-git.chmod(0o755)
-gh = Path(scratch) / 'gh'
-gh.write_text('#!/usr/bin/env bash\n'
-              'if [ "$1 $2" = "api repos/$GITHUB_REPOSITORY/contents/.github/workflows/ci.yml?ref=$GITHUB_WORKFLOW_SHA" ]; then\n'
-              '  cat "$WORKFLOW_FIXTURE"; exit\n'
-              'fi\n'
-              '[ "$1 $2" = "api repos/$GITHUB_REPOSITORY/compare/$EXPECTED_SHA...$GITHUB_SHA" ] || exit 1\n'
-              '[ -n "$RELATION" ] || exit 1\n'
-              'printf "%s\\n" "$RELATION"\n')
-gh.chmod(0o755)
 
-workflow_fixture = Path(scratch) / 'workflow.yml'
-workflow_fixture.write_text(source)
-checkout_root = Path(scratch) / 'checkout'
-checkout_root.mkdir()
-# workflow_job_timeouts holds this strict floor record equal to the workflows'
-# local-action set. Reuse that owner instead of a third YAML uses reader.
-note = (Path(sys.argv[1]).parents[2] / 'docs/agent-notes/build-and-test.md').read_text()
-floor_record = re.search(r'^### How far back a dispatch reaches\n(.*?)(?=^### |\Z)',
-                         note, re.M | re.S)
-assert floor_record, 'dispatch-floor record missing'
-recorded_actions = re.findall(r'^- `(\./[^`]+)`: \d{4}-\d{2}-\d{2}, ',
-                              floor_record[1], re.M)
-assert recorded_actions and len(recorded_actions) == len(set(recorded_actions))
-expected_actions = set(recorded_actions)
+    assert merged(weigh_script) == (0, '@rest 280\nheavy 100\nlight 50\n'), merged(weigh_script)
+    marker = 'sed "s|^|ci-shard-weight $SHARD |"'
+    assert weigh_script.count(marker) == 1, 'the weigh step marks its lines another way'
+    for label, mutant in (('unmarked lines', weigh_script.replace(marker, 'cat')),
+                          ('lines without their shard', weigh_script.replace('$SHARD |', '|'))):
+        assert merged(mutant)[0] == 2, 'accepted mutant: ' + label
+        print('PASS rejected mutant: weigh step with', label)
+    print("PASS the weigh step's output, merged over one run's main shards, is the WEIGHTS block")
 
-for action in expected_actions:
-    manifest = checkout_root / action / 'action.yml'
-    manifest.parent.mkdir(parents=True, exist_ok=True)
-    manifest.touch()
 
-compilers, ordinary = compiler_input(source)
-floor = [compiler for compiler in compilers if compiler != ordinary][0]
-# The guard's literal for the ordinary compiler is the schema's default.
-assert '[ "$OCAML_COMPILER" != %s ]' % ordinary in script, 'guard names another ordinary compiler'
+if leg == 'dispatch-guard':
+    # Run the exact bash guard from the workflow with git reporting a fixture HEAD
+    # and gh answering the compare API for the one direction the guard must ask:
+    # is the intended commit behind the dispatched head?
+    step = workflow_step(source, 'Verify dispatch commit')
+    assert "if: github.event_name == 'workflow_dispatch'" in step
+    script = workflow_script(step)
+    sha, other = 'a' * 40, 'b' * 40
+    master, branch = 'refs/heads/master', 'refs/heads/topic'
+    scratch = sys.argv[2]
+    git = Path(scratch) / 'git'
+    git.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$CHECKOUT_SHA"\n')
+    git.chmod(0o755)
+    gh = Path(scratch) / 'gh'
+    gh.write_text('#!/usr/bin/env bash\n'
+                  'if [ "$1 $2" = "api repos/$GITHUB_REPOSITORY/contents/.github/workflows/ci.yml?ref=$GITHUB_WORKFLOW_SHA" ]; then\n'
+                  '  cat "$WORKFLOW_FIXTURE"; exit\n'
+                  'fi\n'
+                  '[ "$1 $2" = "api repos/$GITHUB_REPOSITORY/compare/$EXPECTED_SHA...$GITHUB_SHA" ] || exit 1\n'
+                  '[ -n "$RELATION" ] || exit 1\n'
+                  'printf "%s\\n" "$RELATION"\n')
+    gh.chmod(0o755)
 
-def guard(code, expected, run, checkout, only=True, ref=master, relation='ahead', compiler=ordinary, output=False):
-    env = dict(os.environ, PATH=scratch + os.pathsep + os.environ['PATH'],
-               EXPECTED_SHA=expected, GITHUB_SHA=run, CHECKOUT_SHA=checkout,
-               WINDOWS_ONLY=str(only).lower(), GITHUB_REF=ref,
-               GITHUB_WORKFLOW_SHA=other, WORKFLOW_FIXTURE=str(workflow_fixture),
-               GITHUB_REPOSITORY='owner/repo', RELATION=relation, OCAML_COMPILER=compiler)
-    result = subprocess.run(['bash', '-eo', 'pipefail', '-c', code], env=env,
-                            capture_output=True, text=True, cwd=checkout_root)
-    return result if output else result.returncode
+    workflow_fixture = Path(scratch) / 'workflow.yml'
+    workflow_fixture.write_text(source)
+    checkout_root = Path(scratch) / 'checkout'
+    checkout_root.mkdir()
+    # workflow_job_timeouts holds this strict floor record equal to the workflows'
+    # local-action set. Reuse that owner instead of a third YAML uses reader.
+    note = (Path(sys.argv[1]).parents[2] / 'docs/agent-notes/build-and-test.md').read_text()
+    floor_record = re.search(r'^### How far back a dispatch reaches\n(.*?)(?=^### |\Z)',
+                             note, re.M | re.S)
+    assert floor_record, 'dispatch-floor record missing'
+    recorded_actions = re.findall(r'^- `(\./[^`]+)`: \d{4}-\d{2}-\d{2}, ',
+                                  floor_record[1], re.M)
+    assert recorded_actions and len(recorded_actions) == len(set(recorded_actions))
+    expected_actions = set(recorded_actions)
 
-assert guard(script, sha, sha, sha) == 0
-assert guard(script, sha, sha, sha, ref=branch) == 0  # a branch's own head
-assert guard(script, '', sha, sha, False) == 0  # ordinary manual dispatch
-assert guard(script, sha, other, sha, False) == 0  # bisection probe: an ancestor of master's head
-assert guard(script, sha, sha, sha, False, ref=branch, compiler=floor) == 0  # floor at a PR head
-assert guard(script, sha, other, sha, False, compiler=floor) == 0  # floor probe inside a master span
-print('PASS accepts the head, an ordinary dispatch, an ancestor of master, and a floor dispatch')
-for label, only, expected in (
-    ('floor dispatch without an intended SHA', False, ''),
-    ('floor dispatch combined with the Windows fallback', True, sha),
-):
-    assert guard(script, expected, sha, sha, only, ref=branch, compiler=floor) == 1, label
-    print('PASS rejects', label)
-check = '[ "$OCAML_COMPILER" != %s ]' % ordinary
-assert guard(script.replace(check, 'false'), '', sha, sha, False, ref=branch, compiler=floor) == 0
-assert guard(script.replace(check, 'false'), sha, sha, sha, True, ref=branch, compiler=floor) == 0
-print('PASS negative control exposes removed floor-dispatch refusals')
-for label, expected, run, checkout, ref, relation in (
-    ('missing intended SHA', '', sha, sha, master, 'ahead'),
-    ('malformed SHA', 'abc', sha, sha, master, 'ahead'),
-    ('wrong checkout', sha, sha, other, master, 'ahead'),
-    ('obsolete branch head', sha, other, sha, branch, 'ahead'),
-    ('commit not behind master', sha, other, sha, master, 'diverged'),
-    ('commit ahead of master', sha, other, sha, master, 'behind'),
-    ('unread ancestry', sha, other, sha, master, ''),
-):
-    assert guard(script, expected, run, checkout, ref=ref, relation=relation) == 1, label
-    print('PASS rejects', label)
-for label, check, args in (
-    ('master-only ancestry', '[ "$GITHUB_REF" = refs/heads/master ] &&', dict(ref=branch)),
-    ('ancestry', '[ "$relation" = ahead ]', dict(relation='diverged')),
-):
-    assert check in script, label
-    mutant = script.replace(check, 'true &&' if check.endswith('&&') else 'true')
-    assert guard(mutant, sha, other, sha, **args) == 0, label  # proves the refusal owns this case
-    print('PASS negative control exposes removed', label)
-check = '[ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ]'
-assert check in script
-assert guard(script.replace(check, 'true'), sha, sha, other) == 0, 'checkout identity'
-print('PASS negative control exposes removed checkout identity')
-
-# Execute the derivation against the dispatched workflow fixture, with each
-# distinct local action absent in turn. The checkout has no workflow file:
-# consulting expected_sha's tree instead of the executing revision cannot pass.
-def action_coverage(code, text, actions):
-    workflow_fixture.write_text(text)
-    for action in sorted(actions):
+    for action in expected_actions:
         manifest = checkout_root / action / 'action.yml'
         manifest.parent.mkdir(parents=True, exist_ok=True)
         manifest.touch()
-        alternate = manifest.with_suffix('.yaml')
-        manifest.rename(alternate)
-        assert guard(code, sha, sha, sha) == 0, 'action.yaml refused: ' + action
-        alternate.unlink()
-        try:
-            result = guard(code, sha, sha, sha, output=True)
-            assert result.returncode == 1, 'missing local action accepted: ' + action
-            for needle in ('::error::', action,
-                           'build-and-test.md#how-far-back-a-dispatch-reaches',
-                           'branch-dispatch', 'without expected_sha'):
-                assert needle in result.stdout, 'missing dispatch guidance: ' + needle
-        finally:
+
+    compilers, ordinary = compiler_input(source)
+    floor = [compiler for compiler in compilers if compiler != ordinary][0]
+    # The guard's literal for the ordinary compiler is the schema's default.
+    assert '[ "$OCAML_COMPILER" != %s ]' % ordinary in script, 'guard names another ordinary compiler'
+
+    def guard(code, expected, run, checkout, only=True, ref=master, relation='ahead', compiler=ordinary, output=False):
+        env = dict(os.environ, PATH=scratch + os.pathsep + os.environ['PATH'],
+                   EXPECTED_SHA=expected, GITHUB_SHA=run, CHECKOUT_SHA=checkout,
+                   WINDOWS_ONLY=str(only).lower(), GITHUB_REF=ref,
+                   GITHUB_WORKFLOW_SHA=other, WORKFLOW_FIXTURE=str(workflow_fixture),
+                   GITHUB_REPOSITORY='owner/repo', RELATION=relation, OCAML_COMPILER=compiler)
+        result = subprocess.run(['bash', '-eo', 'pipefail', '-c', code], env=env,
+                                capture_output=True, text=True, cwd=checkout_root)
+        return result if output else result.returncode
+
+    assert guard(script, sha, sha, sha) == 0
+    assert guard(script, sha, sha, sha, ref=branch) == 0  # a branch's own head
+    assert guard(script, '', sha, sha, False) == 0  # ordinary manual dispatch
+    assert guard(script, sha, other, sha, False) == 0  # bisection probe: an ancestor of master's head
+    assert guard(script, sha, sha, sha, False, ref=branch, compiler=floor) == 0  # floor at a PR head
+    assert guard(script, sha, other, sha, False, compiler=floor) == 0  # floor probe inside a master span
+    print('PASS accepts the head, an ordinary dispatch, an ancestor of master, and a floor dispatch')
+    for label, only, expected in (
+        ('floor dispatch without an intended SHA', False, ''),
+        ('floor dispatch combined with the Windows fallback', True, sha),
+    ):
+        assert guard(script, expected, sha, sha, only, ref=branch, compiler=floor) == 1, label
+        print('PASS rejects', label)
+    check = '[ "$OCAML_COMPILER" != %s ]' % ordinary
+    assert guard(script.replace(check, 'false'), '', sha, sha, False, ref=branch, compiler=floor) == 0
+    assert guard(script.replace(check, 'false'), sha, sha, sha, True, ref=branch, compiler=floor) == 0
+    print('PASS negative control exposes removed floor-dispatch refusals')
+    for label, expected, run, checkout, ref, relation in (
+        ('missing intended SHA', '', sha, sha, master, 'ahead'),
+        ('malformed SHA', 'abc', sha, sha, master, 'ahead'),
+        ('wrong checkout', sha, sha, other, master, 'ahead'),
+        ('obsolete branch head', sha, other, sha, branch, 'ahead'),
+        ('commit not behind master', sha, other, sha, master, 'diverged'),
+        ('commit ahead of master', sha, other, sha, master, 'behind'),
+        ('unread ancestry', sha, other, sha, master, ''),
+    ):
+        assert guard(script, expected, run, checkout, ref=ref, relation=relation) == 1, label
+        print('PASS rejects', label)
+    for label, check, args in (
+        ('master-only ancestry', '[ "$GITHUB_REF" = refs/heads/master ] &&', dict(ref=branch)),
+        ('ancestry', '[ "$relation" = ahead ]', dict(relation='diverged')),
+    ):
+        assert check in script, label
+        mutant = script.replace(check, 'true &&' if check.endswith('&&') else 'true')
+        assert guard(mutant, sha, other, sha, **args) == 0, label  # proves the refusal owns this case
+        print('PASS negative control exposes removed', label)
+    check = '[ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ]'
+    assert check in script
+    assert guard(script.replace(check, 'true'), sha, sha, other) == 0, 'checkout identity'
+    print('PASS negative control exposes removed checkout identity')
+
+    # Execute the derivation against the dispatched workflow fixture, with each
+    # distinct local action absent in turn. The checkout has no workflow file:
+    # consulting expected_sha's tree instead of the executing revision cannot pass.
+    def action_coverage(code, text, actions):
+        workflow_fixture.write_text(text)
+        for action in sorted(actions):
+            manifest = checkout_root / action / 'action.yml'
+            manifest.parent.mkdir(parents=True, exist_ok=True)
             manifest.touch()
+            alternate = manifest.with_suffix('.yaml')
+            manifest.rename(alternate)
+            assert guard(code, sha, sha, sha) == 0, 'action.yaml refused: ' + action
+            alternate.unlink()
+            try:
+                result = guard(code, sha, sha, sha, output=True)
+                assert result.returncode == 1, 'missing local action accepted: ' + action
+                for needle in ('::error::', action,
+                               'build-and-test.md#how-far-back-a-dispatch-reaches',
+                               'branch-dispatch', 'without expected_sha'):
+                    assert needle in result.stdout, 'missing dispatch guidance: ' + needle
+            finally:
+                manifest.touch()
+        workflow_fixture.write_text(source)
+
+    # New actions in both step-key spellings must join the runtime derivation,
+    # including actions owned by a job other than the guarded matrix job.
+    expanded = extra_job('new-action-job').replace(
+        '    - run: true\n', '    - uses: ./.github/actions/new-list-action\n'
+        '    - name: Another local action\n      uses: ./.github/actions/new-named-action\n', 1)
+    expanded_actions = expected_actions | {'./.github/actions/new-list-action',
+                                           './.github/actions/new-named-action'}
+    quoted = re.sub(r'(uses: )(\./[^\s#]+)', r'\1"\2" # quoted action', source)
+    single_quoted = quoted.replace('"./', "'./").replace('" # quoted action', "' # quoted action")
+    for text, actions in ((source, expected_actions), (expanded, expanded_actions),
+                          (quoted, expected_actions), (single_quoted, expected_actions)):
+        for action in actions:
+            manifest = checkout_root / action / 'action.yml'
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.touch()
+        action_coverage(script, text, actions)
+    print('PASS dispatch derivation checks every local action, including new steps in another job')
+    # The very same checker must reject a derivation silently dropping one action.
+    mutant = script.replace('| sort -u)', "| sed '/pin-revisions/d' | sort -u)", 1)
+    assert mutant != script
+    try:
+        action_coverage(mutant, source, expected_actions)
+    except AssertionError as error:
+        assert 'missing local action accepted' in str(error), error
+        print('PASS rejected mutant: dispatch derivation omits a local action')
+    else:
+        raise AssertionError('accepted mutant: incomplete local-action derivation')
+    for empty in ('', json.dumps({'content': 'not a raw workflow'})):
+        workflow_fixture.write_text(empty)
+        result = guard(script, sha, sha, sha, output=True)
+        assert result.returncode == 1 and '::error::' in result.stdout
+        assert 'ci.yml@' + other in result.stdout
+    print('PASS dispatch refuses empty and non-raw local-action derivations')
     workflow_fixture.write_text(source)
 
-# New actions in both step-key spellings must join the runtime derivation,
-# including actions owned by a job other than the guarded matrix job.
-expanded = extra_job('new-action-job').replace(
-    '    - run: true\n', '    - uses: ./.github/actions/new-list-action\n'
-    '    - name: Another local action\n      uses: ./.github/actions/new-named-action\n', 1)
-expanded_actions = expected_actions | {'./.github/actions/new-list-action',
-                                       './.github/actions/new-named-action'}
-quoted = re.sub(r'(uses: )(\./[^\s#]+)', r'\1"\2" # quoted action', source)
-single_quoted = quoted.replace('"./', "'./").replace('" # quoted action', "' # quoted action")
-for text, actions in ((source, expected_actions), (expanded, expanded_actions),
-                      (quoted, expected_actions), (single_quoted, expected_actions)):
-    for action in actions:
-        manifest = checkout_root / action / 'action.yml'
-        manifest.parent.mkdir(parents=True, exist_ok=True)
-        manifest.touch()
-    action_coverage(script, text, actions)
-print('PASS dispatch derivation checks every local action, including new steps in another job')
-# The very same checker must reject a derivation silently dropping one action.
-mutant = script.replace('| sort -u)', "| sed '/pin-revisions/d' | sort -u)", 1)
-assert mutant != script
-try:
-    action_coverage(mutant, source, expected_actions)
-except AssertionError as error:
-    assert 'missing local action accepted' in str(error), error
-    print('PASS rejected mutant: dispatch derivation omits a local action')
-else:
-    raise AssertionError('accepted mutant: incomplete local-action derivation')
-for empty in ('', json.dumps({'content': 'not a raw workflow'})):
-    workflow_fixture.write_text(empty)
-    result = guard(script, sha, sha, sha, output=True)
-    assert result.returncode == 1 and '::error::' in result.stdout
-    assert 'ci.yml@' + other in result.stdout
-print('PASS dispatch refuses empty and non-raw local-action derivations')
-workflow_fixture.write_text(source)
-
-# A bisection probe judges the commit it names only if EVERY job builds that
-# commit: a job checking out the event's commit would test master's head and
-# report it under the probe's name. And a probe's red must not fire triage.
-checkouts = re.findall(r'^    - uses: actions/checkout@v7\n(      with:\n        ref: \$\{\{ inputs\.expected_sha \}\}\n)?',
-                       source, re.M)
-assert len(checkouts) >= 3 and all(checkouts), 'a job checks out the event commit, not the dispatched one'
-notify = re.search(r'^  notify-triage-routine:\n(?:    .*\n)*?    if: >-\n((?:      .*\n)+)', source, re.M)
-assert notify and "!(github.event_name == 'workflow_dispatch' && inputs.expected_sha)" in notify[1], \
-    'a pinned dispatch fires the triage routine'
-print('PASS every job builds the dispatched commit, and a pinned dispatch fires no triage')
-# A job missing from the triage job's `needs` can go red on master without
-# firing it: `failure()` there reads only the jobs it waits for. Derive the
-# job list from the workflow rather than keep a second copy of it here.
-def triage_waits_for_every_job(text):
-    jobs = job_keys(text)
-    needs = re.search(r'^  notify-triage-routine:\n(?:    .*\n)*?    needs: \[([^]]*)\]\n', text, re.M)
-    assert needs, 'triage job has no inline needs list'
-    others = sorted(job for job in jobs if job != 'notify-triage-routine')
-    assert len(others) >= 2, 'found too few jobs: %s' % jobs
-    assert sorted(name.strip() for name in needs[1].split(',')) == others, \
-        'triage needs [%s], the other jobs are %s' % (needs[1], others)
+    # A bisection probe judges the commit it names only if EVERY job builds that
+    # commit: a job checking out the event's commit would test master's head and
+    # report it under the probe's name. And a probe's red must not fire triage.
+    checkouts = re.findall(r'^    - uses: actions/checkout@v7\n(      with:\n        ref: \$\{\{ inputs\.expected_sha \}\}\n)?',
+                           source, re.M)
+    assert len(checkouts) >= 3 and all(checkouts), 'a job checks out the event commit, not the dispatched one'
+    notify = re.search(r'^  notify-triage-routine:\n(?:    .*\n)*?    if: >-\n((?:      .*\n)+)', source, re.M)
+    assert notify and "!(github.event_name == 'workflow_dispatch' && inputs.expected_sha)" in notify[1], \
+        'a pinned dispatch fires the triage routine'
+    print('PASS every job builds the dispatched commit, and a pinned dispatch fires no triage')
+    # A job missing from the triage job's `needs` can go red on master without
+    # firing it: `failure()` there reads only the jobs it waits for. Derive the
+    # job list from the workflow rather than keep a second copy of it here.
+    def triage_waits_for_every_job(text):
+        jobs = job_keys(text)
+        needs = re.search(r'^  notify-triage-routine:\n(?:    .*\n)*?    needs: \[([^]]*)\]\n', text, re.M)
+        assert needs, 'triage job has no inline needs list'
+        others = sorted(job for job in jobs if job != 'notify-triage-routine')
+        assert len(others) >= 2, 'found too few jobs: %s' % jobs
+        assert sorted(name.strip() for name in needs[1].split(',')) == others, \
+            'triage needs [%s], the other jobs are %s' % (needs[1], others)
 
 
-triage_waits_for_every_job(source)
-last = re.search(r'^    needs: \[.*(, [A-Za-z0-9_-]+)\]$', source, re.M)
-assert last, 'triage needs list unreadable'
-for label, mutant, needle in (
-    ('a job dropped from the triage needs', source.replace(last[0], last[0].replace(last[1], ''), 1),
-     last[1].lstrip(', ')),
-    ('an underscore-named job the triage omits', extra_job('extra_job'), 'extra_job'),
-    ('a quoted job key', extra_job('"extra job"'), 'unsupported job key syntax'),
-):
-    assert mutant != source, label
-    try:
-        triage_waits_for_every_job(mutant)
-    except AssertionError as e:
-        assert needle in str(e), '%s: rejected for another reason: %s' % (label, e)
-        print('PASS rejected mutant:', label)
-    else:
-        raise AssertionError('accepted mutant: ' + label)
-print('PASS the triage job waits for every other job')
-
-
-# The disk watchdog (gh-ocannl-1771): run the start step's and the report step's own scripts with
-# stub df/sudo/pkill and the polls shortened, the free space moved under the watchdog's feet.
-def step_script(name):
-    step = workflow_step(source, name)
-    assert "runner.os == 'Linux'" in step.split('      run: |\n', 1)[0], name + ' is not Linux-only'
-    return workflow_script(step)
-
-
-watch_start = step_script('Free disk space and start the disk watchdog (Linux)')
-watch_report = step_script('Report the disk headroom (Linux)')
-assert 'always()' in source.split('    - name: Report the disk headroom (Linux)\n', 1)[1].split('\n', 1)[0], \
-    'the headroom report does not run on a cancelled or red job'
-state_dir = '/dev/shm/ocannl-disk-watch'
-timing = 'floor_mb=1024 poll=5 grace=15 min= tripped='
-assert watch_start.count(state_dir) == 1 and watch_report.count(state_dir) == 1, 'watchdog state moved'
-assert watch_start.count(timing) == 1, 'watchdog timings moved'
-watch_root = Path(sys.argv[2]) / 'disk-watch'
-watch_bin = watch_root / 'bin'
-watch_bin.mkdir(parents=True)
-for name, body in (
-        # df: one line per path argument, every filesystem with $DF_AVAIL MB free; each call logged.
-        ('df', 'echo "$*" >> "$WATCH_LOG/df"\n'
-               'echo "Filesystem 1M-blocks Used Available Capacity Mounted on"\n'
-               'for a in "$@"; do case $a in -*) ;; *) echo "stub 99999 1 $(cat "$DF_AVAIL") 1% $a" ;; esac; done\n'),
-        # sudo: the cleanup, held until the test releases it, then freeing space (atomically, as below,
-        # through its own temp name) and failing, as an rm -rf that could not delete everything does.
-        ('sudo', 'echo "$*" >> "$WATCH_LOG/sudo"\n'
-                 'while [ ! -e "$WATCH_LOG/release" ]; do sleep 0.02; done\n'
-                 'echo 50000 > "$DF_AVAIL.stub" && mv "$DF_AVAIL.stub" "$DF_AVAIL"\nexit 1\n'),
-        ('pkill', 'echo "$*" >> "$WATCH_LOG/pkill"\n')):
-    (watch_bin / name).write_text('#!/usr/bin/env bash\n' + body)
-    (watch_bin / name).chmod(0o755)
-
-
-def watch_run(start, report):
-    # (tripped before the floor, report exit and output while healthy, report exit and output after
-    # the trip, pkill's calls, sudo's calls); the watchdog is killed however this ends.
-    run = watch_root / ('run%d' % len(list(watch_root.glob('run*'))))
-    state, log = run / 'state', run / 'log'
-    log.mkdir(parents=True)
-    avail = run / 'avail'
-    avail.write_text('20000\n')
-    env = dict(os.environ, PATH=str(watch_bin) + os.pathsep + os.environ['PATH'], DF_AVAIL=str(avail),
-               WATCH_LOG=str(log), GITHUB_WORKSPACE=str(run))
-    start = start.replace(state_dir, str(state)).replace(timing, 'floor_mb=1024 poll=0.05 grace=0 min= tripped=')
-    report = report.replace(state_dir, str(state))
-
-    def wait_for(path):
-        for _ in range(100):
-            if path.exists() and path.read_text().strip():
-                return True
-            time.sleep(0.05)
-        return False
-
-    def report_run():
-        r = subprocess.run(['bash', '-e', '-c', report], env=env, capture_output=True, text=True, timeout=30)
-        return r.returncode, r.stdout
-
-    # A new session: its group is the watchdog's too, killed at the end. The step must return at
-    # once, its output closed to the watchdog (on GitHub a held pipe keeps the step running).
-    proc = subprocess.Popen(['bash', '-e', '-c', start], env=env, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, start_new_session=True)
-    try:
-        out, _ = proc.communicate(timeout=5)
-        assert proc.returncode == 0, 'watchdog start step: ' + out
-        # Polls while the cleanup still runs (the step's own two df calls, then the watchdog's), and
-        # only then the cleanup ends: a low counted before its end reads 20000.
-        for _ in range(100):
-            if (log / 'df').exists() and len((log / 'df').read_text().splitlines()) >= 4:
-                break
-            time.sleep(0.05)
-        (log / 'release').touch()
-        wait_for(state / 'min')
-        healthy = report_run()
-        early = (state / 'tripped').exists()
-        # Atomically: a df reading the file mid-truncation would report 1 MB free. The cleanup's own
-        # write is over by now: state/min follows state/cleaned, which follows the stub. Only the mutant
-        # counting a low before the cleanup's end comes here sooner, and its 20000 fails it either way.
-        (run / 'avail.new').write_text('600\n')
-        os.replace(run / 'avail.new', avail)
-        wait_for(state / 'tripped')
-        time.sleep(0.3)
-        after = report_run()
-        read = lambda path: path.read_text() if path.exists() else ''
-        return early, healthy, after, read(log / 'pkill'), read(log / 'sudo'), read(state / 'min')
-    finally:
+    triage_waits_for_every_job(source)
+    last = re.search(r'^    needs: \[.*(, [A-Za-z0-9_-]+)\]$', source, re.M)
+    assert last, 'triage needs list unreadable'
+    for label, mutant, needle in (
+        ('a job dropped from the triage needs', source.replace(last[0], last[0].replace(last[1], ''), 1),
+         last[1].lstrip(', ')),
+        ('an underscore-named job the triage omits', extra_job('extra_job'), 'extra_job'),
+        ('a quoted job key', extra_job('"extra job"'), 'unsupported job key syntax'),
+    ):
+        assert mutant != source, label
         try:
-            os.killpg(proc.pid, 9)
-        except ProcessLookupError:
-            pass
+            triage_waits_for_every_job(mutant)
+        except AssertionError as e:
+            assert needle in str(e), '%s: rejected for another reason: %s' % (label, e)
+            print('PASS rejected mutant:', label)
+        else:
+            raise AssertionError('accepted mutant: ' + label)
+    print('PASS the triage job waits for every other job')
 
 
-def watch_ok(start, report):
-    early, healthy, after, pkill, sudo, low = watch_run(start, report)
-    return (not early and healthy[0] == 0 and 'watchdog saw after the cleanup: 50000 MB at ' in healthy[1]
-            and '; before the cleanup: 20000 MB, after it: 50000 MB\n' in healthy[1]
-            and '::error' not in healthy[1] and after[0] == 1
-            and '::error title=disk space::Free disk space fell to 600 MB' in after[1]
-            and pkill.startswith('-TERM -x dune\n-KILL -x dune\n-TERM -x dune\n') and low.startswith('600 MB at ')
-            and sudo.startswith('rm -rf /usr/local/lib/android '))
+
+if leg == 'disk-watchdog':
+    # The disk watchdog (gh-ocannl-1771): run the start step's and the report step's own scripts with
+    # stub df/sudo/pkill and the polls shortened, the free space moved under the watchdog's feet.
+    def step_script(name):
+        step = workflow_step(source, name)
+        assert "runner.os == 'Linux'" in step.split('      run: |\n', 1)[0], name + ' is not Linux-only'
+        return workflow_script(step)
 
 
-assert watch_ok(watch_start, watch_report), watch_run(watch_start, watch_report)
-print('PASS the disk watchdog stops dune under its floor and the report names disk space, red')
-for label, start, report in (
-        ('a floor never reached', watch_start.replace('-lt "$floor_mb"', '-lt 0'), watch_report),
-        ('a low counted before the cleanup ends', watch_start.replace('[ -n "$cleaned" ] && ', ''), watch_report),
-        ('a failed cleanup that never marks its end',
-         watch_start.replace('/opt/hostedtoolcache/CodeQL || true;', '/opt/hostedtoolcache/CodeQL;'), watch_report),
-        ('a watchdog that stops dune only once',
-         watch_start.replace('pkill -KILL -x dune || true\n', 'pkill -KILL -x dune || true\n  return 0\n'),
-         watch_report),
-        ('a watchdog that only asks dune to stop', watch_start.replace('pkill -KILL -x dune', 'true'), watch_report),
-        ('a watchdog holding the step\'s output', watch_start.replace('disk_watch </dev/null >/dev/null 2>&1 &', 'disk_watch &'),
-         watch_report),
-        ('a report that stays green on a trip', watch_start, watch_report.replace('  exit 1\n', '', 1)),
-        ('no cleanup', watch_start.replace('sudo rm -rf', 'true'), watch_report)):
-    assert (start, report) != (watch_start, watch_report), label
-    try:
-        ok = watch_ok(start, report)
-    except (AssertionError, subprocess.TimeoutExpired):
-        ok = False
-    assert not ok, 'accepted mutant: ' + label
-    print('PASS rejected mutant: disk watchdog with', label)
+    watch_start = step_script('Free disk space and start the disk watchdog (Linux)')
+    watch_report = step_script('Report the disk headroom (Linux)')
+    assert 'always()' in source.split('    - name: Report the disk headroom (Linux)\n', 1)[1].split('\n', 1)[0], \
+        'the headroom report does not run on a cancelled or red job'
+    state_dir = '/dev/shm/ocannl-disk-watch'
+    timing = 'floor_mb=1024 poll=5 grace=15 min= tripped='
+    assert watch_start.count(state_dir) == 1 and watch_report.count(state_dir) == 1, 'watchdog state moved'
+    assert watch_start.count(timing) == 1, 'watchdog timings moved'
+    watch_root = Path(sys.argv[2]) / 'disk-watch'
+    watch_bin = watch_root / 'bin'
+    watch_bin.mkdir(parents=True)
+    for name, body in (
+            # df: one line per path argument, every filesystem with $DF_AVAIL MB free; each call logged.
+            ('df', 'echo "$*" >> "$WATCH_LOG/df"\n'
+                   'echo "Filesystem 1M-blocks Used Available Capacity Mounted on"\n'
+                   'for a in "$@"; do case $a in -*) ;; *) echo "stub 99999 1 $(cat "$DF_AVAIL") 1% $a" ;; esac; done\n'),
+            # sudo: the cleanup, held until the test releases it, then freeing space (atomically, as below,
+            # through its own temp name) and failing, as an rm -rf that could not delete everything does.
+            ('sudo', 'echo "$*" >> "$WATCH_LOG/sudo"\n'
+                     'while [ ! -e "$WATCH_LOG/release" ]; do sleep 0.02; done\n'
+                     'echo 50000 > "$DF_AVAIL.stub" && mv "$DF_AVAIL.stub" "$DF_AVAIL"\nexit 1\n'),
+            ('pkill', 'echo "$*" >> "$WATCH_LOG/pkill"\n')):
+        (watch_bin / name).write_text('#!/usr/bin/env bash\n' + body)
+        (watch_bin / name).chmod(0o755)
+
+
+    def watch_run(start, report):
+        # (tripped before the floor, report exit and output while healthy, report exit and output after
+        # the trip, pkill's calls, sudo's calls); the watchdog is killed however this ends.
+        run = watch_root / ('run%d' % len(list(watch_root.glob('run*'))))
+        state, log = run / 'state', run / 'log'
+        log.mkdir(parents=True)
+        avail = run / 'avail'
+        avail.write_text('20000\n')
+        env = dict(os.environ, PATH=str(watch_bin) + os.pathsep + os.environ['PATH'], DF_AVAIL=str(avail),
+                   WATCH_LOG=str(log), GITHUB_WORKSPACE=str(run))
+        start = start.replace(state_dir, str(state)).replace(timing, 'floor_mb=1024 poll=0.05 grace=0 min= tripped=')
+        report = report.replace(state_dir, str(state))
+
+        def wait_for(path):
+            for _ in range(100):
+                if path.exists() and path.read_text().strip():
+                    return True
+                time.sleep(0.05)
+            return False
+
+        def report_run():
+            r = subprocess.run(['bash', '-e', '-c', report], env=env, capture_output=True, text=True, timeout=30)
+            return r.returncode, r.stdout
+
+        # A new session: its group is the watchdog's too, killed at the end. The step must return at
+        # once, its output closed to the watchdog (on GitHub a held pipe keeps the step running).
+        proc = subprocess.Popen(['bash', '-e', '-c', start], env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, start_new_session=True)
+        try:
+            out, _ = proc.communicate(timeout=5)
+            assert proc.returncode == 0, 'watchdog start step: ' + out
+            # Polls while the cleanup still runs (the step's own two df calls, then the watchdog's), and
+            # only then the cleanup ends: a low counted before its end reads 20000.
+            for _ in range(100):
+                if (log / 'df').exists() and len((log / 'df').read_text().splitlines()) >= 4:
+                    break
+                time.sleep(0.05)
+            (log / 'release').touch()
+            wait_for(state / 'min')
+            healthy = report_run()
+            early = (state / 'tripped').exists()
+            # Atomically: a df reading the file mid-truncation would report 1 MB free. The cleanup's own
+            # write is over by now: state/min follows state/cleaned, which follows the stub. Only the mutant
+            # counting a low before the cleanup's end comes here sooner, and its 20000 fails it either way.
+            (run / 'avail.new').write_text('600\n')
+            os.replace(run / 'avail.new', avail)
+            wait_for(state / 'tripped')
+            time.sleep(0.3)
+            after = report_run()
+            read = lambda path: path.read_text() if path.exists() else ''
+            return early, healthy, after, read(log / 'pkill'), read(log / 'sudo'), read(state / 'min')
+        finally:
+            try:
+                os.killpg(proc.pid, 9)
+            except ProcessLookupError:
+                pass
+
+
+    def watch_ok(start, report):
+        early, healthy, after, pkill, sudo, low = watch_run(start, report)
+        return (not early and healthy[0] == 0 and 'watchdog saw after the cleanup: 50000 MB at ' in healthy[1]
+                and '; before the cleanup: 20000 MB, after it: 50000 MB\n' in healthy[1]
+                and '::error' not in healthy[1] and after[0] == 1
+                and '::error title=disk space::Free disk space fell to 600 MB' in after[1]
+                and pkill.startswith('-TERM -x dune\n-KILL -x dune\n-TERM -x dune\n') and low.startswith('600 MB at ')
+                and sudo.startswith('rm -rf /usr/local/lib/android '))
+
+
+    assert watch_ok(watch_start, watch_report), watch_run(watch_start, watch_report)
+    print('PASS the disk watchdog stops dune under its floor and the report names disk space, red')
+    for label, start, report in (
+            ('a floor never reached', watch_start.replace('-lt "$floor_mb"', '-lt 0'), watch_report),
+            ('a low counted before the cleanup ends', watch_start.replace('[ -n "$cleaned" ] && ', ''), watch_report),
+            ('a failed cleanup that never marks its end',
+             watch_start.replace('/opt/hostedtoolcache/CodeQL || true;', '/opt/hostedtoolcache/CodeQL;'), watch_report),
+            ('a watchdog that stops dune only once',
+             watch_start.replace('pkill -KILL -x dune || true\n', 'pkill -KILL -x dune || true\n  return 0\n'),
+             watch_report),
+            ('a watchdog that only asks dune to stop', watch_start.replace('pkill -KILL -x dune', 'true'), watch_report),
+            ('a watchdog holding the step\'s output', watch_start.replace('disk_watch </dev/null >/dev/null 2>&1 &', 'disk_watch &'),
+             watch_report),
+            ('a report that stays green on a trip', watch_start, watch_report.replace('  exit 1\n', '', 1)),
+            ('no cleanup', watch_start.replace('sudo rm -rf', 'true'), watch_report)):
+        assert (start, report) != (watch_start, watch_report), label
+        try:
+            ok = watch_ok(start, report)
+        except (AssertionError, subprocess.TimeoutExpired):
+            ok = False
+        assert not ok, 'accepted mutant: ' + label
+        print('PASS rejected mutant: disk watchdog with', label)
 PY
-report "$rc" "ci matrix controls"
+
+run_contract() {
+  local rc=0
+  python3 "$TMP/contracts.py" "$root/.github/workflows/ci.yml" "$TMP" \
+    "$("$root/tools/ci-shard.sh" aliases)" "${harness_leg_current}" || rc=$?
+  report "$rc" "${harness_leg_current} controls"
+}
+
+harness_leg_run 'matrix' run_contract
+harness_leg_run 'env-triggers' run_contract
+harness_leg_run 'train-shards' run_contract
+harness_leg_run 'workflow-readers' run_contract
+harness_leg_run 'step-order' run_contract
+harness_leg_run 'host-evidence' run_contract
+harness_leg_run 'depexts' run_contract
+harness_leg_run 'weigh' run_contract
+harness_leg_run 'dispatch-guard' run_contract
+harness_leg_run 'disk-watchdog' run_contract
 finish
