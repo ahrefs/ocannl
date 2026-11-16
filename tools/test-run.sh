@@ -50,6 +50,7 @@
 #                                                    # (tools/bisect-steps.sh says how)
 #   tools/test-run.sh status [RUN|last]                # one-shot, never blocks
 #   tools/test-run.sh wait   [RUN|last] [--timeout N]  # bounded; exits with the run's status
+#   tools/test-run.sh recover-query                    # recover an exited query (see boundary below)
 #   tools/test-run.sh stop   [RUN|last]                # TERM the run's process group
 #   tools/test-run.sh list [--all]                     # this worktree's runs (--all: every
 #                                                      # worktree's) and their states
@@ -71,6 +72,17 @@
 #                             [build [DUNE OPTIONS...]] # the pre-push run: affected's default
 #                                                      # list without slow-/train-, as `run`
 #   tools/test-run.sh prepush --since BASE|OLD..NEW --list  # that list, one alias per line; runs none
+#
+# Query recovery boundary: `recover-query` reads only this worktree/state root's
+# owner pointer and lock census. Queries record a dedicated process group and a
+# keeper's start token while alive. Recovery refuses a live query, changed query
+# or keeper identity, missing evidence, and ANY holder outside that group before
+# signalling anyone. A setsid descendant is deliberately unattributable: inspect
+# it manually with `lsof` on the lock from `paths lock`. Never delete the lock.
+# The keeper closes fd 9 and all streams; it reserves the group until the query
+# exits and the lock becomes free. Old query records have no recovery authority.
+# INT/TERM/HUP are forwarded. SIGKILL or an unforwarded caller-group signal can
+# leave the isolated query running; recovery refuses it until it exits.
 #
 # `prepush --since BASE` (gh-ocannl-1829) is the pre-push run as one command:
 # `affected --since BASE`'s default list (link-only aliases included) without
@@ -1737,6 +1749,7 @@ QUEUED=$RUNS/queued-$wt_key # a launch seen in flight before this worktree's fir
 lock_census_perl='
 use POSIX ();
 use Time::HiRes ();
+use Fcntl ();
 sub census_token {
   my $p = shift;
   return "" unless defined $p && $p =~ /\A[0-9]+\z/;
@@ -1762,6 +1775,39 @@ sub census_token {
 sub census_same {
   my ($p, $tok) = @_;
   defined $tok && length $tok && census_token($p) eq $tok;
+}
+# Identity can survive exit as a zombie; state is a separate liveness fact.
+sub census_zombie {
+  my $p = shift;
+  return 0 unless defined $p && $p =~ /\A[0-9]+\z/;
+  if (-d "/proc/self") {
+    open my $f, "<", "/proc/$p/stat" or return 0;
+    my $s = <$f> // "";
+    return $s =~ /^(?s:.*)\)\s+Z(?:\s|$)/;
+  }
+  my $s = qx{ps -o stat= -p $p 2>/dev/null};
+  return $s =~ /\A\s*Z/;
+}
+# Waiting grants no signal authority. Only the six-field protocol for an
+# exited query gets a brief retry, covering its keeper unlock probe. A live
+# query, changed token or any other owner remains an immediate refusal.
+sub acquire_query_lock {
+  my ($fd, $owner) = @_;
+  my $flags = Fcntl::LOCK_EX() | Fcntl::LOCK_NB();
+  for my $attempt (0 .. 10) {
+    return 1 if flock($fd, $flags);
+    last if $attempt == 10;
+    open my $o, "<", $owner or last;
+    my $r = <$o> // ""; close $o; chomp $r;
+    my ($kind, $verb, $q, $qt, $k, $kt, @extra) = split /\t/, $r;
+    last unless $kind eq "query" && defined $kt && !@extra &&
+      $q =~ /\A[1-9][0-9]*\z/ && $k =~ /\A[1-9][0-9]*\z/ && length $qt && length $kt;
+    my $now = census_token($q);
+    last if length $now && ($now ne $qt || !census_zombie($q));
+    select undef, undef, undef, .02;
+  }
+  # The keeper may have finished during the identity read above.
+  return flock($fd, $flags);
 }
 sub lock_census {
   my ($lock, $bound, @skip) = @_;
@@ -2323,9 +2369,8 @@ take_lock() {
   # the lock in the same instant sees the previous owner or this run, never
   # a truncated or half-written path that would send it to `last` instead
   # of the actual holder.
-  perl -e '
-    use Fcntl ":flock";
-    exit 1 unless flock(STDIN, LOCK_EX | LOCK_NB);
+  perl -e "$lock_census_perl"'
+    exit 1 unless acquire_query_lock(\*STDIN, $ARGV[0]);
     my $tmp = "$ARGV[0].tmp.$$";
     open(my $fh, ">", $tmp) or exit 2;
     print $fh "$ARGV[1]\n" or exit 2;
@@ -2350,8 +2395,9 @@ take_lock() {
       owner=$(cat "$OWNER" 2>/dev/null)
       case $owner in
         query$'\t'*)
-          IFS=$'\t' read -r holder_kind holder_verb holder_pid <<<"$owner"
+          IFS=$'\t' read -r holder_kind holder_verb holder_pid holder_proof <<<"$owner"
           echo "test-run: an $holder_verb query (pid $holder_pid) holds this worktree's lock; wait for it" >&2
+          echo "  after the query exits: tools/test-run.sh recover-query (refuses unverified holders)" >&2
           ;;
         *)
           holder_exit=$(cat "${owner:-/nonexistent}/exit" 2>/dev/null)
@@ -4193,17 +4239,44 @@ finish_run() { # rc -> append sentinel, record verdict
   done
 }
 
-# For a read-only query that asks dune about this worktree (`affected`,
-# `aliases`): a dune started beside a run's dune contends for `_build`. So it
-# takes the worktree's run lock, as a run does, and holds it on fd 9 through
-# every dune it starts: a run refuses meanwhile, and the query refuses during
-# a run. The owner pointer records query<TAB>verb<TAB>pid, atomically with
-# acquisition as for a run. The pid is a diagnostic, never signal authority;
-# queries are waited for, not stopped through a completed run. Where
-# the previous version's in-tree lock exists it is held too, on fd 5, as
-# take_lock holds it, so a launcher of that version is refused meanwhile; it
-# is never created, nor removed, here.
+# Queries isolate their group before acquiring fd 9. The keeper remains in
+# that group after its leader exits, preventing numeric group reuse; its token
+# authenticates that reservation. It does not hold the lock or query streams.
 hold_query_lock() {
+  if [ "${OCANNL_TOOL_QUERY_GROUP:-}" != "$$" ]; then
+    exec perl -MPOSIX -e '
+      # Mask across fork and handler installation: cancellation must never
+      # land before the parent owns its child pid or before setsid completes.
+      my $blocked = POSIX::SigSet->new(SIGINT, SIGTERM, SIGHUP);
+      my $old = POSIX::SigSet->new();
+      sigprocmask(SIG_BLOCK, $blocked, $old) or die $!;
+      my ($p, $cancel, $deadline);
+      for my $sig (qw(INT TERM HUP)) {
+        $SIG{$sig} = sub {
+          $cancel ||= $sig;
+          kill($sig, -$p) or kill($sig, $p) if $p;
+        };
+      }
+      $p = fork(); die $! unless defined $p;
+      if (!$p) {
+        $SIG{$_} = "DEFAULT" for qw(INT TERM HUP);
+        setsid() >= 0 or die "cannot isolate query: $!";
+        $ENV{OCANNL_TOOL_QUERY_GROUP} = $$;
+        chdir shift @ARGV or die $!;
+        sigprocmask(SIG_SETMASK, $old) or die $!;
+        exec @ARGV; die $!;
+      }
+      sigprocmask(SIG_SETMASK, $old) or die $!;
+      while (waitpid($p, WNOHANG) != $p) {
+        if ($cancel) {
+          $deadline //= time() + 2;
+          if (time() >= $deadline) { kill("KILL", -$p); kill("KILL", $p) }
+        }
+        select undef, undef, undef, .05;
+      }
+      exit($? & 127 ? 128 + ($? & 127) : $? >> 8);
+    ' "$caller_pwd" "$BASH" "$PWD/tools/test-run.sh" "$sub" "$@"
+  fi
   query_state_for ""
   if [ -e "$PWD/.test-run.lock" ]; then
     exec 5>>"$PWD/.test-run.lock" || die "cannot open the previous version's lock file"
@@ -4212,9 +4285,8 @@ hold_query_lock() {
   fi
   mkdir -p "$RUNS" || die "cannot create $RUNS"
   exec 9>>"$LOCK" || die "cannot open lock file $LOCK"
-  perl -e '
-    use Fcntl ":flock";
-    exit 3 unless flock(STDIN, LOCK_EX | LOCK_NB);
+  perl -e "$lock_census_perl"'
+    exit 3 unless acquire_query_lock(\*STDIN, $ARGV[0]);
     my $tmp = "$ARGV[0].tmp.$$";
     open(my $fh, ">", $tmp) or exit 2;
     print $fh "query\t$ARGV[1]\t$ARGV[2]\n" or exit 2;
@@ -4224,13 +4296,50 @@ hold_query_lock() {
   case $? in
     0) ;;
     2) die "cannot record the query lock owner pointer at $OWNER" ;;
-    *) die "a run or query holds this worktree's lock; $sub asks dune too, so wait for it" ;;
+    *) die "a run or query holds this worktree's lock; $sub asks dune too, so wait for it (exited query: tools/test-run.sh recover-query)" ;;
   esac
+  # Publish the complete proof before running any query helper. The temporary
+  # diagnostic-only pointer above grants no authority if this setup fails.
+  perl -e "$lock_census_perl"'
+    use Fcntl ":flock";
+    my ($owner, $verb, $query, $lock) = @ARGV;
+    my $qt = census_token($query); length $qt or die "query identity missing";
+    # Keep the group reservation through a cooperative group cancellation;
+    # the query wrapper escalates only if its child fails to exit.
+    $SIG{$_} = "IGNORE" for qw(INT TERM HUP);
+    my $keeper = fork(); die $! unless defined $keeper;
+    if (!$keeper) {
+      POSIX::close($_) for 3 .. 255;
+      open STDIN, "<", "/dev/null";
+      open STDOUT, ">", "/dev/null";
+      open STDERR, ">", "/dev/null";
+      while (1) {
+        unless (census_same($query, $qt) && !census_zombie($query)) {
+          # Do not follow a later owner if its launch wins the unlock window.
+          open my $o, "<", $owner or exit 0;
+          my $r = <$o> // ""; close $o;
+          exit 0 unless index($r, "query\t$verb\t$query\t$qt\t") == 0;
+          open my $f, ">>", $lock or exit 1;
+          if (flock($f, LOCK_EX | LOCK_NB)) {
+            flock($f, LOCK_UN) or exit 1;
+            exit 0;
+          }
+        }
+        select undef, undef, undef, .2;
+      }
+    }
+    my $kt = census_token($keeper); length $kt or die "keeper identity missing";
+    my $tmp = "$owner.tmp.$$";
+    open my $f, ">", $tmp or die $!;
+    print $f join("\t", "query", $verb, $query, $qt, $keeper, $kt), "\n" or die $!;
+    close $f or die $!;
+    rename $tmp, $owner or die $!;
+  ' "$OWNER" "$sub" "$$" "$LOCK" || die "cannot record query recovery identity"
 }
 
 pp_scope=
 sub=${1:-}
-[ -n "$sub" ] || die "usage: tools/test-run.sh run|start|plan|repeat|fresh|bisect|status|wait|stop|list|idle|paths|lock-status|affected|aliases|prepush ... (see header)"
+[ -n "$sub" ] || die "usage: tools/test-run.sh run|start|plan|repeat|fresh|bisect|status|wait|stop|recover-query|list|idle|paths|lock-status|affected|aliases|prepush ... (see header)"
 shift
 
 # `prepush` (gh-ocannl-1829; see the header): the pre-push run is `affected
@@ -4430,6 +4539,88 @@ if [ "$sub" = prepush ]; then
 fi
 
 case $sub in
+  recover-query)
+    [ $# -eq 0 ] || die "usage: tools/test-run.sh recover-query"
+    query_state_for ""
+    perl -e "$lock_census_perl"'
+      use Fcntl ":flock";
+      my ($owner, $lock) = @ARGV;
+      sub refuse { die "test-run: query recovery refused: $_[0]; inspect with lsof $lock; never delete the lock\n" }
+      open my $f, "<", $owner or refuse("no query owner record");
+      my $record = <$f>; close $f;
+      chomp(my $line = $record // "");
+      my ($kind, $verb, $q, $qt, $k, $kt, @extra) = split /\t/, $line;
+      refuse("missing query identity evidence") unless
+        $kind eq "query" && defined $kt && !@extra &&
+        $q =~ /\A[1-9][0-9]*\z/ && $k =~ /\A[1-9][0-9]*\z/ && length $qt && length $kt;
+      sub query_exited {
+        my $now = census_token($q);
+        return unless length $now;
+        refuse("query pid token changed") unless $now eq $qt;
+        refuse("query is live (or state unreadable)") unless census_zombie($q);
+        refuse("query pid token changed") unless census_same($q, $qt);
+      }
+      query_exited();
+      sub group_of {
+        my $p = shift;
+        my $g = qx{ps -o pgid= -p $p 2>/dev/null};
+        $g =~ s/\s//g; $g;
+      }
+      sub owned {
+        open my $o, "<", $owner or return 0;
+        my $r = <$o>; close $o;
+        return 0 unless defined $r && $r eq $record;
+        open my $l, ">>", $lock or return 0;
+        return !flock($l, LOCK_EX | LOCK_NB);
+      }
+      sub proof {
+        refuse("keeper pid token changed or missing") unless census_same($k, $kt);
+        refuse("keeper left query group") unless group_of($k) eq $q;
+        query_exited();
+      }
+      my $sent = 0;
+      sub recovered {
+        print $sent ? "reaped exited query holders; worktree lock released\n"
+                    : "query lock is free or owner changed; nothing to reap\n";
+        exit 0;
+      }
+      for my $signal (qw(TERM KILL)) {
+        recovered() unless owned();
+        proof();
+        # lsof sees openers too: the authenticated keeper may briefly open
+        # the inode to probe freedom, but closed inherited fd 9 before setup.
+        # Never signal the group reservation itself through that probe.
+        my %holders;
+        my $settle = Time::HiRes::time() + 2;
+        while (1) {
+          recovered() unless owned();
+          proof();
+          %holders = lock_census($lock, 10, $k);
+          last if keys %holders;
+          recovered() unless owned();
+          refuse("no authenticated holders in census") if Time::HiRes::time() >= $settle;
+          # A keeper-only unlock probe is transient, never signal authority.
+          select undef, undef, undef, .02;
+        }
+        # Validate the WHOLE census before the first signal, then again per pid.
+        for my $p (keys %holders) {
+          refuse("holder pid token changed") unless census_same($p, $holders{$p});
+          refuse("holder $p is outside recorded query group (possibly setsid)") unless group_of($p) eq $q;
+        }
+        for my $p (keys %holders) {
+          proof();
+          refuse("owner changed") unless owned();
+          refuse("holder pid token changed") unless census_same($p, $holders{$p});
+          refuse("holder left recorded query group") unless group_of($p) eq $q;
+          $sent += kill $signal, $p;
+        }
+        select undef, undef, undef, 1;
+      }
+      refuse("holders STILL hold lock") if owned();
+      recovered();
+    ' "$OWNER" "$LOCK" || exit 2
+    exit 0
+    ;;
   affected)
     # `--harnesses` (gh-ocannl-1900) reads the shell harnesses' own text and
     # asks dune nothing, so it neither contends for `_build` nor needs a dune:
@@ -4440,7 +4631,7 @@ case $sub in
       case $aff_arg in --) break ;; --harnesses) aff_dune=0 ;; esac
     done
     if [ "$aff_dune" = 1 ]; then
-      hold_query_lock
+      hold_query_lock "$@"
       select_dune
     fi
     exec bash tools/affected-tests.sh "$@"
@@ -4471,7 +4662,7 @@ case $sub in
       [ -n "$al_dir" ] || al_dir=.
       al_paths+=("$al_p") al_dirs+=("$al_dir") al_names+=("$al_name")
     done
-    hold_query_lock
+    hold_query_lock "$@"
     select_dune
     run_dir=$(mktemp -d "${TMPDIR:-/tmp}/test-run-aliases.XXXXXX") || die "cannot create a scratch directory"
     trap 'rm -rf "$run_dir"' EXIT
@@ -6265,5 +6456,5 @@ case $sub in
       fi
     fi
     ;;
-  *) die "unknown subcommand: $sub (run|start|plan|repeat|fresh|bisect|status|wait|stop|list|idle|paths|lock-status|affected|aliases|prepush)" ;;
+  *) die "unknown subcommand: $sub (run|start|plan|repeat|fresh|bisect|status|wait|stop|recover-query|list|idle|paths|lock-status|affected|aliases|prepush)" ;;
 esac

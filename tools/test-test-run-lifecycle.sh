@@ -15,7 +15,7 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
-# Groups: #lifecycle (65, 97, 40-47, 74, 122), #source (59-63, 66, 104), #hermetic (70).
+# Groups: #lifecycle (65, 97, 40-47, 74, 122, 123, 124), #source (59-63, 66, 104), #hermetic (70).
 #
 # Legs:
 #  40-47. run/start lifecycle: completion, signals (a group TERM landing inside
@@ -32,6 +32,11 @@
 #      active affected query names itself, never the previous completed run.
 #      The query helper is a readiness-controlled stand-in, not a test of
 #      affected-tests.sh or Dune locking.
+# 123. exited query recovery authenticates its group keeper and every holder;
+#      live queries, mismatched tokens, unrelated and setsid holders refuse.
+#      Signals reach the isolated query, and unreaped zombie queries recover.
+# 124. readiness-controlled keeper probes collide with launch and recovery;
+#      both settle successfully, and recovery reports the reaping it performed.
 #  74. fork TERM is deferred until the parent owns its child pid and the child
 #      resets its handlers; no-mask and inherited-handler controls prove both.
 #  65. a `stop`, or a signal to the launcher alone, while the backends
@@ -968,6 +973,311 @@ EOF
   unlink "$life_root/tools/affected-tests.sh"
 }
 harness_leg_run '122: failing batches release locks and refusals name the real holder #lifecycle' leg_122
+
+# Retained-query recovery boundary (gh-ocannl-2238): a fake dune backgrounds
+# an fd-9 holder and exits under the real affected entry point. We cover live
+# queries, a corrupted start token, unrelated openers and setsid escapees;
+# detached holders must be refused, not guessed from a stale parent pid.
+# Cancellation reaches the isolated query through its real wrapper. The zombie
+# fixture replaces only that waiting parent to retain an unreaped exited query.
+leg_123() {
+  local mode holder query_pid owner keeper escape wrapper signal expected cancel_rc real_perl query_child
+  real_perl=$(command -v perl)
+  cp "$life_bin/dune" "$TMP/123-dune-before"
+  cat >"$life_root/tools/affected-tests.sh" <<'EOF'
+#!/usr/bin/env bash
+exec dune query-retain
+EOF
+  cat >"$life_bin/dune" <<'EOF'
+#!/usr/bin/env bash
+exec perl -MPOSIX -e '
+  if ($ENV{QUERY_MODE} eq "mixed") {
+    my $escape = fork(); die $! unless defined $escape;
+    if (!$escape) {
+      setsid() >= 0 or die $!;
+      alarm 90;
+      open my $r, ">", "$ARGV[0].escape" or die $!;
+      print $r "$$\n"; close $r;
+      while (1) { select undef, undef, undef, .05 }
+    }
+    while (!-s "$ARGV[0].escape") { select undef, undef, undef, .05 }
+  }
+  my $child = fork(); die $! unless defined $child;
+  if (!$child) {
+    setsid() >= 0 or die $! if $ENV{QUERY_MODE} eq "detached";
+    alarm 90;
+    open my $r, ">", "$ARGV[0].retained" or die $!;
+    print $r "$$\n"; close $r;
+    while (1) { select undef, undef, undef, .05 }
+  }
+  while (!-s "$ARGV[0].retained") { select undef, undef, undef, .05 }
+  if ($ENV{QUERY_MODE} =~ /^(live|query-token|cancel-.*)$/) {
+    while (!-e "$ARGV[0].query-release") { select undef, undef, undef, .05 }
+  }
+' "$LIFECYCLE_PREFIX"
+EOF
+  owner=$(life paths owner)
+  for mode in live retained detached mixed unrelated token query-token cancel-TERM cancel-INT cancel-HUP zombie; do
+    escape=
+    unlink "$life_prefix.escape" 2>/dev/null
+    unlink "$life_prefix.retained" 2>/dev/null
+    unlink "$life_prefix.query-release" 2>/dev/null
+    if [ "$mode" = zombie ]; then
+      # Replace only the outer waiting parent, preserving the real query,
+      # session setup and owner publication. This parent deliberately leaves
+      # its exited child unreaped, independent of the host PID 1 behaviour.
+      printf '%s\n' "$real_perl" >"$life_prefix.real-perl"
+      unlink "$life_prefix.zombie-ready" 2>/dev/null
+      unlink "$life_prefix.zombie-release" 2>/dev/null
+      cat >"$life_bin/perl" <<'EOF'
+#!/usr/bin/env bash
+real=$(cat "$LIFECYCLE_PREFIX.real-perl")
+if [ "$1" = -MPOSIX ] && [[ "$3" = *"cannot isolate query"* ]]; then
+  shift 3
+  exec "$real" -MPOSIX -e '
+    alarm 60;
+    my $p = fork(); die $! unless defined $p;
+    if (!$p) {
+      setsid() >= 0 or die $!;
+      $ENV{OCANNL_TOOL_QUERY_GROUP} = $$;
+      chdir shift @ARGV or die $!;
+      exec @ARGV; die $!;
+    }
+    while (qx{ps -o stat= -p $p} !~ /^\s*Z/) { select undef, undef, undef, .05 }
+    open my $r, ">", "$ENV{LIFECYCLE_PREFIX}.zombie-ready" or die $!; close $r;
+    while (!-e "$ENV{LIFECYCLE_PREFIX}.zombie-release") { select undef, undef, undef, .05 }
+    waitpid($p, 0);
+  ' "$@"
+fi
+exec "$real" "$@"
+EOF
+      chmod +x "$life_bin/perl"
+    fi
+    QUERY_MODE=$mode life affected >"$TMP/123-query.out" 2>"$TMP/123-query.err" &
+    query_pid=$!
+    if ! await_fixture_ready "$life_prefix.retained"; then
+      report 1 "query recovery: $mode fixture ready" "$(cat "$TMP/123-query.err")"
+      kill -KILL "$query_pid" 2>/dev/null; wait "$query_pid" 2>/dev/null
+      [ ! -e "$life_bin/perl" ] || unlink "$life_bin/perl"
+      break
+    fi
+    holder=$(cat "$life_prefix.retained")
+    printf '%s\n' "$holder" >"$TMP/123-holder-pid"
+    ps_token "$holder" >"$TMP/123-holder-token"
+    case $mode in
+      live | query-token | cancel-*) ;;
+      zombie)
+        if ! await_fixture_ready "$life_prefix.zombie-ready"; then
+          report 1 'query recovery: zombie fixture ready'
+          touch "$life_prefix.zombie-release"
+          wait "$query_pid"
+        fi
+        unlink "$life_bin/perl"
+        ;;
+      *) wait "$query_pid" ;;
+    esac
+    life_capture run --cap 30 ok
+    if [ "$life_rc" = 2 ] && grep -q 'query .*holds this worktree' "$TMP/lifecycle.err"; then
+      report 0 "query recovery: $mode retained fd 9 blocks launch"
+    else report 1 "query recovery: $mode retained fd 9 blocks launch"; fi
+    cp "$owner" "$TMP/123-owner"
+    keeper=$(cut -f5 "$TMP/123-owner")
+    if [ "$mode" = mixed ]; then
+      escape=$(cat "$life_prefix.escape")
+      ps_token "$escape" >"$life_prefix.escape-token"
+    fi
+    case $mode in
+      cancel-*)
+        if [ -z "$keeper" ]; then
+          report 1 'query cancellation: no isolated wrapper identity in old record'
+          touch "$life_prefix.query-release"; wait "$query_pid"
+          harness_kill_recorded "$TMP/123-holder-pid" "$TMP/123-holder-token"
+          continue
+        fi
+        signal=${mode#cancel-}
+        case $signal in TERM) expected=143 ;; INT) expected=130 ;; HUP) expected=129 ;; esac
+        query_child=$(cut -f3 "$owner")
+        wrapper=$(ps -o ppid= -p "$query_child")
+        wrapper=${wrapper//[[:space:]]/}
+        printf '%s\n' "$wrapper" >"$TMP/123-wrapper-pid"
+        ps_token "$wrapper" >"$TMP/123-wrapper-token"
+        if proc_identity_matches "$TMP/123-wrapper-pid" "$TMP/123-wrapper-token"; then
+          kill "-$signal" "$wrapper"
+        else report 1 "query cancellation: $signal wrapper identity"; fi
+        harness_wait_child "$query_pid" life_dead "query cancellation: $signal launcher returns" 200
+        cancel_rc=$harness_child_rc
+        if [ "$cancel_rc" = "$expected" ] && life_await_dead "$holder"; then
+          report 0 "query cancellation: $signal relayed and query reaped (exit $expected)"
+        else report 1 "query cancellation: $signal relayed and query reaped (exit $expected)" "exit $cancel_rc"; fi
+        # A subject without forwarding can leave the query alive. Release
+        # that controlled wait as well before checking/cleaning the fixture.
+        touch "$life_prefix.query-release"
+        harness_kill_recorded "$TMP/123-holder-pid" "$TMP/123-holder-token"
+        life_await_dead "$query_child"
+        life_capture lock-status
+        life_check 0 '^idle$' "query $signal cancellation releases the lock"
+        if life_await_dead "$keeper"; then report 0 "query cancellation: $signal keeper retires"
+        else report 1 "query cancellation: $signal keeper retires"; fi
+        continue
+        ;;
+      query-token)
+        perl -i -pe 'my @f = split /\t/; $f[3] = "wrong-query-token"; $_ = join("\t", @f)' "$owner"
+        ;;
+      token)
+        perl -i -pe 's/[^\t\n]+$/wrong-start-token/' "$owner"
+        ;;
+      unrelated)
+        # Drop only the retained child, then let an unrelated process acquire
+        # the same inode. The stale owner pointer alone must grant no authority.
+        harness_kill_recorded "$TMP/123-holder-pid" "$TMP/123-holder-token"; life_await_dead "$holder"
+        unlink "$life_prefix.unrelated-ready" 2>/dev/null
+        perl -MFcntl=:flock -e '
+          open my $f, ">>", $ARGV[0] or die $!;
+          flock($f, LOCK_EX|LOCK_NB) or die $!;
+          open my $r, ">", $ARGV[1] or die $!; close $r;
+          sleep 90;
+        ' "$(life paths lock)" "$life_prefix.unrelated-ready" &
+        life_pid=$! holder=$!
+        if ! await_fixture_ready "$life_prefix.unrelated-ready"; then
+          report 1 'query recovery: unrelated fixture ready'
+          kill -TERM "$holder" 2>/dev/null; life_wait_child; break
+        fi
+        printf '%s\n' "$holder" >"$TMP/123-holder-pid"
+        ps_token "$holder" >"$TMP/123-holder-token"
+        ;;
+    esac
+    life_capture recover-query
+    if [ "$mode" = retained ] || [ "$mode" = zombie ]; then
+      if [ "$life_rc" = 0 ] && grep -q '^reaped exited query holders;' "$TMP/lifecycle.out" &&
+         life_await_dead "$holder"; then
+        report 0 'query recovery: exited query holder reaped by recorded identity'
+      else report 1 'query recovery: exited query holder reaped by recorded identity' "$(cat "$TMP/lifecycle.out" "$TMP/lifecycle.err")"; fi
+      # This launch is before fixture cleanup: on the base it stays refused.
+      life_capture run --cap 30 ok
+      life_check 0 'verdict: pass' 'recovery permits launch before manual cleanup'
+      harness_kill_recorded "$TMP/123-holder-pid" "$TMP/123-holder-token"
+      life_await_dead "$holder"
+    else
+      if [ "$life_rc" = 2 ] && ! life_dead "$holder" &&
+         { [ -z "$escape" ] || ! life_dead "$escape"; } &&
+         grep -q 'query recovery refused' "$TMP/lifecycle.err"; then
+        report 0 "query recovery: refuses $mode without reaping holder"
+      else report 1 "query recovery: refuses $mode without reaping holder" "$(cat "$TMP/lifecycle.out" "$TMP/lifecycle.err")"; fi
+      case $mode in live | query-token) touch "$life_prefix.query-release"; wait "$query_pid" ;; esac
+      harness_kill_recorded "$TMP/123-holder-pid" "$TMP/123-holder-token"
+      life_await_dead "$holder"
+      if [ -n "$escape" ]; then
+        harness_kill_recorded "$life_prefix.escape" "$life_prefix.escape-token"
+        life_await_dead "$escape"
+      fi
+      [ "$mode" != unrelated ] || life_wait_child
+    fi
+    if [ "$mode" = zombie ]; then touch "$life_prefix.zombie-release"; wait "$query_pid"; fi
+    cp "$TMP/123-owner" "$owner"
+    # Release checks use a real lock attempt, never a process disappearance.
+    life_capture lock-status
+    life_check 0 '^idle$' "query $mode fixture releases the lock"
+    # Old subjects have only three fields, so this is not their retirement test.
+    if [ -n "$keeper" ]; then
+      if life_await_dead "$keeper"; then report 0 "query recovery: $mode keeper retires"
+      else report 1 "query recovery: $mode keeper retires"; fi
+    fi
+  done
+  cp "$TMP/123-dune-before" "$life_bin/dune"
+  unlink "$life_root/tools/affected-tests.sh"
+  life_capture run --cap 30 ok
+  life_check 0 'verdict: pass' 'recovered query permits immediate launch'
+}
+harness_leg_run '123: exited query retained fd 9 recovery authenticates every holder #lifecycle' leg_123
+
+# Fixed literal seams in a subject copy pause the keeper after successful flock
+# and publish the retry yield. Unknown source shapes fail setup. No real dune,
+# timing lottery, or production environment hook is used by this collision leg.
+leg_124() {
+  local mode launcher result keeper
+  cp "$life_root/tools/test-run.sh" "$TMP/124-before"
+  cp "$life_bin/dune" "$TMP/124-dune-before"
+  if ! perl -0777 -e '
+    my $s = <>;
+    my $seam = q~if (flock($f, LOCK_EX | LOCK_NB)) {~;
+    my $at = index($s, $seam);
+    die "keeper probe seam missing or duplicated" if $at < 0 || index($s, $seam, $at + 1) >= 0;
+    substr($s, $at, length $seam) = $seam . q~
+      alarm 30;
+      open my $ready, ">", "$ENV{LIFECYCLE_PREFIX}.probe-ready" or die $!; close $ready;
+      while (!-e "$ENV{LIFECYCLE_PREFIX}.probe-release") { select undef, undef, undef, .01 }
+      alarm 0;
+~;
+    my $yield = q~select undef, undef, undef, .02;~;
+    my $hook = q~open my $note, ">", "$ENV{LIFECYCLE_PREFIX}.probe-contended" or die $!; close $note;
+~;
+    my $n = ($s =~ s/\Q$yield\E/$hook$yield/g);
+    die "expected acquisition and recovery retry seams, got $n" unless $n == 2;
+    print $s;
+  ' "$SRC" >"$TMP/124-subject"; then
+    report 1 'keeper probe: collision seams exist'; return
+  fi
+  cp "$TMP/124-subject" "$life_root/tools/test-run.sh"
+  cat >"$life_root/tools/affected-tests.sh" <<'EOF'
+#!/usr/bin/env bash
+exec dune query-probe
+EOF
+  cat >"$life_bin/dune" <<'EOF'
+#!/usr/bin/env bash
+[ "${PROBE_HOLDER:-0}" = 1 ] || exit 0
+exec perl -e '
+  my $p = fork(); die $! unless defined $p;
+  if (!$p) {
+    alarm 45;
+    open my $r, ">", "$ARGV[0].probe-holder" or die $!; print $r "$$\n"; close $r;
+    sleep 45; exit;
+  }
+  while (!-s "$ARGV[0].probe-holder") { select undef, undef, undef, .01 }
+' "$LIFECYCLE_PREFIX"
+EOF
+  for mode in launch recovery; do
+    unlink "$life_prefix.probe-ready" 2>/dev/null
+    unlink "$life_prefix.probe-contended" 2>/dev/null
+    unlink "$life_prefix.probe-release" 2>/dev/null
+    unlink "$life_prefix.probe-holder" 2>/dev/null
+    if [ "$mode" = launch ]; then
+      PROBE_HOLDER=0 life affected >"$TMP/124-query.out" 2>"$TMP/124-query.err"
+      if ! await_fixture_ready "$life_prefix.probe-ready"; then
+        report 1 'keeper probe: launch collision ready'; touch "$life_prefix.probe-release"; break
+      fi
+      keeper=$(cut -f5 "$(life paths owner)")
+      life run --cap 30 ok >"$TMP/124-result.out" 2>"$TMP/124-result.err" &
+    else
+      PROBE_HOLDER=1 life affected >"$TMP/124-query.out" 2>"$TMP/124-query.err"
+      ps_token "$(cat "$life_prefix.probe-holder")" >"$life_prefix.probe-holder-token"
+      keeper=$(cut -f5 "$(life paths owner)")
+      life recover-query >"$TMP/124-result.out" 2>"$TMP/124-result.err" &
+    fi
+    launcher=$!
+    if ! await_fixture_ready "$life_prefix.probe-ready" ||
+       ! await_fixture_ready "$life_prefix.probe-contended"; then
+      report 1 "keeper probe: $mode really contends with the held probe"
+    else report 0 "keeper probe: $mode really contends with the held probe"; fi
+    touch "$life_prefix.probe-release"
+    harness_wait_child "$launcher" life_dead "keeper probe: $mode returns" 300
+    result=$harness_child_rc
+    if [ "$mode" = launch ]; then
+      if [ "$result" = 0 ] && grep -q 'verdict: pass' "$TMP/124-result.out"; then
+        report 0 'keeper probe: collided launch retries and succeeds'
+      else report 1 'keeper probe: collided launch retries and succeeds' "exit $result; $(cat "$TMP/124-result.out" "$TMP/124-result.err")"; fi
+    else
+      if [ "$result" = 0 ] && grep -q '^reaped exited query holders;' "$TMP/124-result.out"; then
+        report 0 'keeper probe: collided recovery settles and reports reaping'
+      else report 1 'keeper probe: collided recovery settles and reports reaping' "exit $result; $(cat "$TMP/124-result.out" "$TMP/124-result.err")"; fi
+      harness_kill_recorded "$life_prefix.probe-holder" "$life_prefix.probe-holder-token"
+    fi
+    life_await_dead "$keeper" || report 1 "keeper probe: $mode keeper retires"
+  done
+  cp "$TMP/124-before" "$life_root/tools/test-run.sh"
+  cp "$TMP/124-dune-before" "$life_bin/dune"
+  unlink "$life_root/tools/affected-tests.sh"
+}
+harness_leg_run '124: a held keeper unlock probe cannot refuse a launch or recovery #lifecycle' leg_124
 
 # ---------------------------------------------------------------------------
 # Legs 59-63 and 66: the source a run tested, recorded at launch (gh-ocannl-992)
