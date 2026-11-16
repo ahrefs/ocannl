@@ -230,7 +230,7 @@ files.
   would accept it (both pinned in `free_capture_basis.ml`). Since gh-ocannl-2131, `set_dim` and
   a row product make only a size claim (`Row.Dim_size`); `solved_basis = None` distinguishes it
   from a solved dimension's `Some basis`, including `Some default`. Stage1 checks already-solved
-  axes and defers open sizes; at each solver fixpoint, ordinary constraints run first, then held
+  axes and defers open bases; at each solver fixpoint, ordinary constraints run first, then held
   sizes, then window settling. Keeping sizes in an outer pass let a Stage2 window pair settle
   before a held output size reached it (review of gh-ocannl-2131). An open size takes its matching
   use-site basis or `default`. A size also accepts an axis whose numeric product already made it
@@ -244,10 +244,25 @@ files.
   information must still propagate or conflict across the equality (`solved_capture_basis.ml`'s
   left/right/both size matrix, in both argument orders). This also carries a free source's committed
   broadcast top: equating it with a plain `1_default` now refuses, where dropping the source tag
-  used to accept it. Pins: `solved_capture_basis.ml`. A contradiction that depended on an eager
-  numeric kernel size can now defer from registration until closure; the invalid valid-3x3
-  convolution residual in `scheme_strided_residual.ml` forces its dims and still refuses before
-  compilation.
+  used to accept it. Pins: `solved_capture_basis.ml`. Before holding a size at Stage1,
+  `solve_inequalities` checks disjoint numeric intervals over pending dimension constraints and
+  dimension bounds (gh-ocannl-2204), using held variable sizes without assigning their bases.
+  Unknown axes range from zero upward; an inequality whose operand can still be the size-1
+  broadcast top stays possible. `scheme_error_locality` pins the concatenation's scheme refusal
+  at application and the fixed-width size claim at definition. `concat_extraction` pins the existing
+  excess-component diagnosis too, with origins capped at zero as well as the default cap.
+  The numeric check propagates exact sizes in a local map, forward through equalities and backward
+  through an affine's `over`; a dependency-indexed worklist retries only affected relations, and
+  each variable acquires a number once. These facts never enter the solver environment or choose
+  a basis. The valid-3x3 residual's trace has open extents, but its checked application supplies 8 and 12:
+  the known kernel size 3 determines 6 and 10, neither the broadcast top, so application refuses
+  before forcing dims (`scheme_strided_residual.ml`, also in `scheme_error_locality`).
+  A discarded size probe is not a refusal oracle: the open store `n = conv(o, k)`, `n` refining
+  `o`, and held `k = 3` has the later solution `o = 1_(bcast_if_1)`, `n = 3_default`.
+  Substituting `k = 3_default` in a probe before those extents arrive instead raises the occurs
+  check. Discarding the probe's state does not make its premature refusal sound (gh-ocannl-2204
+  review counterexample, recorded on staging#2033). Numeric bound checks walk only the
+  dimensions reachable from held or newly learned sizes, through GLBs and both bound-edge directions.
   The symbolic analog did not reproduce: `Shape.set_sym_dim` and every other `Shape` constructor
   mint only `default` symbols. Recapture across closure and the product-space proxy both preserve
   these. `Row.get_sym_dim ~basis` can build a named symbol in a hand-built solver store, but no

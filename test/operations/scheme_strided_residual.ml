@@ -185,21 +185,17 @@ let () =
               p "check and off give the same output, loss, parameters and gradients, bitwise"
                 (List.equal (List.equal Float.equal) vals_check vals_off)
           | _ -> ()));
-  (* A genuine self-reference stays loud: a valid stride-1 3x3 conv residual-added to its own input
-     relates [w = o + 2] and [o = w], which no width satisfies. *)
+  (* On this 8x12 input, a valid stride-1 3x3 conv produces 6x10: neither spatial axis can broadcast
+     back to its input. Refuse at application, before forcing the result's dims. *)
   Verdict.case "a valid 3x3 conv added to its own input is still refused" (fun () ->
       Tensor.unsafe_reinitialize ();
+      Tensor.For_testing.set_op_shape_schemes check_mode;
       let c =
         Nn_blocks.conv2d ~label:[ "valid3" ] ~kernel_size:3 ~use_padding:false ~out_channels:3 ()
       in
       let%op self_res x = c x + x in
-      (* The kernel's numeric size is held until closure (gh-ocannl-2131), so registration may defer
-         this contradiction. It must be refused before the tensor can be compiled. *)
-      p "the invalid residual is refused by shape-inference closure"
-        (Result.is_error
-           (outcome (fun () ->
-                let y = self_res (input `S2) in
-                Lazy.force y.Tensor.value.dims))))
+      p "the invalid residual is refused by shape registration"
+        (Result.is_error (outcome (fun () -> self_res (input `S2)))))
 
 (* gh-ocannl-1972: an input whose width is not known when the windows meet it, under [off] too, so
    the application itself leaves the pair waiting. The width comes from a later operation, or never.
