@@ -6285,10 +6285,68 @@ let concat_closing_dependent d1 d2 =
       | _ -> None)
   | _ -> None
 
-let%debug4_sexp solve_inequalities ~(stage : stage)
+let closing_dim_dependencies ineqs env =
+  let waiting_on_window (waiting, kernels) extent window =
+    match (extent, window) with
+    | Var v, Affine { conv = Some { kernel = Var _; use_padding = false; _ }; _ } ->
+        (Set.add waiting v, kernels)
+    | Dim _, Affine { over; conv = Some { kernel = Var k; use_padding = false; _ }; _ }
+      when not (Set.is_empty (vars_of_dim over)) ->
+        (Set.add waiting k, Set.add kernels k)
+    | _ -> (waiting, kernels)
+  in
+  List.fold ineqs ~init:(dim_var_set_empty, dim_var_set_empty) ~f:(fun waiting -> function
+    | Dim_eq { d1; d2; _ } ->
+        let d1 = subst_dim env d1 and d2 = subst_dim env d2 in
+        let waiting, kernels = waiting_on_window (waiting_on_window waiting d1 d2) d2 d1 in
+        let waiting =
+          match concat_closing_dependent d1 d2 with Some v -> Set.add waiting v | None -> waiting
+        in
+        (waiting, kernels)
+    | _ -> waiting)
+
+let%debug4_sexp rec solve_inequalities ~(stage : stage)
     ?(discardable_vars : dim_var_set = dim_var_set_empty) (ineqs : constraint_ list) env :
     constraint_ list * _ =
   let env = { env with discardable_vars = Set.union discardable_vars env.discardable_vars } in
+  (* gh-ocannl-2229: a fixed-index input without a use-site GLB closes to its minimum at stage 7. Do
+     that before unconstrained result axes guess to 1, then let the existing leaf-before-result
+     stages propagate the concrete bound. Otherwise an intermediate result in [(u *. 2) *. 2]
+     guesses 1 before the outer result's index sizes it, so [u] repeats.
+
+     Boundary: only non-parameter axes eligible for closing, with no GLB and a minimum above 1. This
+     also respects held window and shared-claim concat dependencies. It is a closing order, not a
+     stronger broadcast inequality: an operand may still be top. In particular [=> ...|0] outputs
+     keep their stage-7 minimal rule (layer_norm's mean must broadcast), and a fixed index alone
+     still cannot size a parameter. *)
+  let ineqs, env =
+    if not (is_stage7 stage) then (ineqs, env)
+    else
+      let waiting, _ = closing_dim_dependencies ineqs env in
+      let fixed =
+        Utils.Tree_map.to_alist env.dim_env
+        |> List.filter_map ~f:(fun (v, entry) ->
+            match entry with
+            | Bounds_dim
+                {
+                  is_in_param = false;
+                  glb = None;
+                  constr = At_least_dim { d_min; _ };
+                  has_uniq_constr_unless;
+                  origin;
+                  _;
+                }
+              when d_min > 1
+                   && (not (Set.mem waiting v))
+                   && can_guess_dim_to_one env has_uniq_constr_unless ->
+                Some (Dim_eq { d1 = Var v; d2 = get_default_dim ~d:d_min (); origin })
+            | _ -> None)
+      in
+      if List.is_empty fixed then (ineqs, env)
+      else
+        let ineqs, env = solve_inequalities ~stage:Stage6a (fixed @ ineqs) env in
+        solve_inequalities ~stage:Stage6b ineqs env
+  in
   let rec solve ?(unblocked_dims = dim_var_set_empty) ineqs (env : environment) :
       constraint_ list * _ =
     let sizes, ineqs = List.partition_tf ineqs ~f:(function Dim_size _ -> true | _ -> false) in
@@ -6296,29 +6354,9 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
        closing order. A window's plain extent waits for the window; against a fixed extent, an open
        kernel waits for the iterator so kernel inference can use it. Recompute after substitution
        each pass, retaining the closing constraints until those equations settle. *)
-    let waiting_on_window (waiting, kernels) extent window =
-      match (extent, window) with
-      | Var v, Affine { conv = Some { kernel = Var _; use_padding = false; _ }; _ } ->
-          (Set.add waiting v, kernels)
-      | Dim _, Affine { over; conv = Some { kernel = Var k; use_padding = false; _ }; _ }
-        when not (Set.is_empty (vars_of_dim over)) ->
-          (Set.add waiting k, Set.add kernels k)
-      | _ -> (waiting, kernels)
-    in
     let deferred_dims, deferred_kernels =
       if not (is_stage4_up stage) then (dim_var_set_empty, dim_var_set_empty)
-      else
-        List.fold ineqs ~init:(dim_var_set_empty, dim_var_set_empty) ~f:(fun waiting -> function
-          | Dim_eq { d1; d2; _ } ->
-              let d1 = subst_dim env d1 and d2 = subst_dim env d2 in
-              let waiting, kernels = waiting_on_window (waiting_on_window waiting d1 d2) d2 d1 in
-              let waiting =
-                match concat_closing_dependent d1 d2 with
-                | Some v -> Set.add waiting v
-                | None -> waiting
-              in
-              (waiting, kernels)
-          | _ -> waiting)
+      else closing_dim_dependencies ineqs env
     in
     let deferred_dims =
       if is_stage7 stage then Set.union deferred_dims (draw_counter_leaves ineqs env)

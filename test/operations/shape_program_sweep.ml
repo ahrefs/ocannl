@@ -46,33 +46,31 @@
    known list still occurs (a stale entry fails until it is removed: the entry's fix removes it).
    Counts go to stderr.
 
-   THE KNOWN LIST (at this sweep's landing; [known] below). An entry names the operation its cause
-   stands at, with a draw under its operand; it excuses a node at or under one whose shape is the
-   oracle's with some axes collapsed to 1, its draws filling the shape they closed to. Where the
-   cause was seen to reach the siblings it is broadcast with, the entry also covers the pointwise
-   operation consuming one. A refusal is excused only with a message the entry was seen to give. The
-   entries. gh-ocannl-2180: the size-1 output axis of a literal or a fixed index takes over the last
-   output axes of everything broadcast with it. Its literal half, [(u + 1) *. c[5|3]], is fixed (a
-   leaf closing to its bound takes axes of its own); what the entry still excuses is, in 46 of its
-   58 programs at that fix, a fixed index ([...|3 => ...|0]) under a chain of results: the index's
-   lower bound is no GLB and does not travel down the chain, so a result in it closes minimal (as in
-   [row_glb_reach_executed]'s [(u *. 2) *. 2] probe); the other 12 co-occur with the einsum, compose
-   and branching causes below. box_muller: a [normal] draw closes to one value; since gh-ocannl-2180
-   it fills ([x[16] *. normal ()] agrees, [dropout_mask_varies] claims it), and what the entry still
-   excuses (4 programs) are normals under a fixed index or a compose. Then those this sweep found,
-   each with a fixed program below: nested branching (its fixed programs, [c + (u + (v *. w))] which
-   closed [u] and [c + ((u + v) + w)] which was refused, agree since gh-ocannl-2244; random programs
-   whose branching pointwise operations nest still collapse); a fixed index over a draw ([(stretch u
-   + stretch (stretch u)) ++ "...|3 => ...|0"]: once every einsum spec over a draw, [c[|3->2] * (u
-   ++ "ab => a")] closing the kept axis to 1, with a compose whose left operand it is taking that
-   row; since gh-ocannl-2247 a spec's axes take the draw's role, those programs agree, and of the
-   entry's 17 programs the 3 left are fixed indices); and a [uniform1]-initialized parameter sized
-   only by a fixed index, accepted where a default-initialized one is refused. Four more entries the
-   sweep found are fixed (gh-ocannl-2244): a draw under a unary operation ([relu u *. c[|2,5]]),
-   under both operands of a pointwise operation ([(u *. u) + c[|2]]) or under a compose ([(c[|3,2]
-   *. v) *. (u * c[|5])]), and a constant of no axes in a branching program ([((u + v) + z) *.
-   c[|3]]), closed the draw to one element: waiting on its bound's open tail at stage 6a, the draw
-   was closed empty by the result above it at 6b. Their fixed programs stay, and agree. *)
+   THE KNOWN LIST ([known] below). An entry excuses only the oracle's shape with axes collapsed to
+   1, its draws filling the shape they closed to, at or under its named cause. [reach] additionally
+   covers one pointwise consumer through unary results; the residual fixed-index/stretch role also
+   follows a unary suffix after that hop (#557's relu), but adds no second pointwise hop. Refusals
+   need one of that entry's observed messages.
+
+   gh-ocannl-2229 fixes a fixed-index input's lower bound behind a chain of results: its
+   non-parameter minimum above 1 closes before minimal guesses, then stage 6 propagates the concrete
+   size to draws. On the initial base this retired 36 of the literal entry's 54 programs and
+   reattributed 10 to existing causes. The 8 remaining cases were 5 stretches adopting a fixed-index
+   output's size-1 axis and 3 literals after reductions. gh-ocannl-2247 retires the reduction half
+   (#536, #682, #1036), which is removed from the predicate. The 5 stretch cases remain (#107, #557,
+   #977, #1423, #1572). [(u + 1) *. c[5|3]] and [x[16] *. normal ()] agree in both shapes and
+   executed fill; the judge checks every program node's shape, not just its draws.
+
+   Other remaining causes: one observed normal-draw repeat; 3 fixed-index programs, including
+   [(stretch u + stretch (stretch u)) ++ "...|3 => ...|0"]; and 20 [uniform1]-initialized parameters
+   sized only by a fixed index, accepted where default-initialized ones are refused. The fixed-index
+   entry used to cover all einsum specs over draws; since gh-ocannl-2247 passes a solved row's role
+   to its axes, only fixed indices remain.
+
+   Retired entries retain their agreeing fixed programs: gh-ocannl-2244 fixes a draw under a unary
+   operation, under both operands of a pointwise operation, under a compose, and a no-axis constant
+   in a branching program. The nested-branching entry also becomes stale with gh-ocannl-2229 and
+   gh-ocannl-2247 combined, and is removed rather than reassigned to another cause. *)
 
 open! Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -562,7 +560,7 @@ let open_under (prog : program) =
           :: List.map (args node) ~f:(fun x -> sets.(x))));
   sets
 
-let known_lit = "gh-ocannl-2180: the size-1 output axis of a literal or a fixed index"
+let known_lit = "gh-ocannl-2180: a fixed-index output axis through stretch"
 
 let known_uniform1_param =
   "proposed: a parameter initialized by uniform1 and sized only by a fixed index is accepted"
@@ -576,21 +574,23 @@ let output_collapse ~want ~got =
        (List.init (List.length w) ~f:(fun j -> j + 1))
        ~f:(fun j -> equal_row (strip got.o) (strip (List.take w (List.length w - j) @ [ 1 ])))
 
-(* The nodes under a pointwise operation with a literal or a fixed index at or under it. *)
-let over_lit (prog : program) =
-  let over = Array.create ~len:(Array.length prog) false in
+(* Stretch adopts a fixed-index output's size-1 axis. The reduction half of the former literal
+   exception was retired by gh-ocannl-2247. *)
+let residual_axis_role (prog : program) =
+  let fixed = Array.create ~len:(Array.length prog) false in
   Array.iteri prog ~f:(fun k node ->
-      over.(k) <-
-        (match node with Lit | Einsum (Fixed_index, _) -> true | _ -> false)
-        || List.exists (args node) ~f:(fun x -> over.(x)));
-  under prog ~is_x:(fun k node -> over.(k) && match node with Add _ | Mul _ -> true | _ -> false)
+      fixed.(k) <-
+        (match node with Einsum (Fixed_index, _) -> true | _ -> false)
+        || List.exists (args node) ~f:(fun x -> fixed.(x)));
+  fun _ -> function Stretch x -> fixed.(x) | _ -> false
 
 (* The known lists. Each entry names the operations its cause stands at ([is_x]); it excuses a node
    at or under one of them -- with [reach], also at or under the pointwise operation consuming one
    (through unary results), where the cause was seen to reach the siblings it is broadcast with --
    and for a shape, only one that is the oracle's with some axes collapsed to 1. A refusal of a
    program holding one is excused only when its message holds one of [refusals], the messages the
-   entry was seen to produce. *)
+   entry was seen to produce. The residual literal/fixed-index role also follows a unary suffix
+   after that single pointwise consumer; it never adds another pointwise hop. *)
 type known = {
   entry : string;
   is_x : program -> int -> node -> bool;
@@ -598,7 +598,7 @@ type known = {
   refusals : string list;
 }
 
-let region (prog : program) ~is_x ~reach =
+let region ?(unary_after_consumer = false) (prog : program) ~is_x ~reach =
   let base = Array.mapi prog ~f:(is_x prog) in
   if reach then (
     Array.iteri prog ~f:(fun k node ->
@@ -607,44 +607,28 @@ let region (prog : program) ~is_x ~reach =
       Array.mapi prog ~f:(fun k node ->
           base.(k) || match node with Add (x, y) | Mul (x, y) -> base.(x) || base.(y) | _ -> false)
     in
+    (* A unary suffix preserves the residual axis collapse after the one pointwise hop. Restricted
+       to the literal/fixed-index role entry: it must not reinstate the retired generic unary
+       exception (gh-ocannl-2244, random #557). *)
+    if unary_after_consumer then
+      Array.iteri prog ~f:(fun k node ->
+          match node with Stretch x | Relu x | Neg x -> if ext.(x) then ext.(k) <- true | _ -> ());
     under prog ~is_x:(fun k _ -> ext.(k)))
   else under prog ~is_x:(fun k _ -> base.(k))
 
-let is_lit prog x = Poly.equal prog.(x) Lit
 let opens prog = open_under prog
 let is_open prog x = not (Set.is_empty (opens prog).(x))
-
-let rec branching prog = function
-  | Add (x, y) | Mul (x, y) -> is_open prog x && is_open prog y
-  | Stretch x | Relu x | Neg x -> branching prog prog.(x)
-  | _ -> false
-
-let pointwise_with f = function Add (x, y) | Mul (x, y) -> f x || f y | _ -> false
-let mismatch = "solved dimensions for axis: mismatch"
 let axes_count = "Mismatching number of axes"
 let too_many = "Too many axes in an operand"
 
 let known : known list =
   [
-    {
-      entry = known_lit;
-      is_x = (fun prog _ -> pointwise_with (is_lit prog));
-      reach = true;
-      refusals = [];
-    };
+    { entry = known_lit; is_x = residual_axis_role; reach = true; refusals = [] };
     {
       entry = "box_muller: a normal draw";
       is_x = (fun _ _ node -> Poly.equal node (Draw Normal));
       reach = true;
       refusals = [ too_many; axes_count ];
-    };
-    {
-      entry = "proposed: nested branching, a branching pointwise operation over another";
-      is_x =
-        (fun prog _ node ->
-          branching prog node && pointwise_with (fun x -> branching prog prog.(x)) node);
-      reach = true;
-      refusals = [ mismatch; axes_count ];
     };
     {
       (* Excuses no shape (no node holds it): only the acceptance, in [judge]. *)
@@ -706,14 +690,18 @@ let judge (prog : program) (oracle : oracle) (outcome : outcome) ~(fills : int o
       let nodes = List.init (Array.length prog) ~f:Fn.id in
       let mismatched = List.filter nodes ~f:(fun k -> not (same want.(k) got.(k))) in
       (* A known repeat explains a mismatch only in its predicted form. *)
-      let holds = List.map known ~f:(fun e -> (e.entry, region prog ~is_x:e.is_x ~reach:e.reach)) in
+      let holds =
+        List.map known ~f:(fun e ->
+            ( e.entry,
+              region ~unary_after_consumer:(String.equal e.entry known_lit) prog ~is_x:e.is_x
+                ~reach:e.reach ))
+      in
       let explained k =
         if collapse_of ~want:want.(k) ~got:got.(k) then
           List.find_map holds ~f:(fun (entry, at) ->
               if String.equal entry known_lit then
-                (* The literal's role reaches every result its axis is broadcast into, in exactly
-                   one form: the last output axis repeats. *)
-                Option.some_if ((over_lit prog).(k) || at.(k)) entry
+                (* These residual roles collapse only trailing output axes. *)
+                Option.some_if at.(k) entry
                 |> Option.filter ~f:(fun _ -> output_collapse ~want:want.(k) ~got:got.(k))
               else if at.(k) then Some entry
               else None)
@@ -1139,6 +1127,64 @@ let () =
   List.iter known_entries ~f:(fun e ->
       Stdio.eprintf "(not part of the golden) known %s: %d\n%!" e
         (count (fun (_, j, _) -> Poly.equal j (Known e))));
+  (* These thirteen seeded programs were refused by the broad leaf-waits-for-any-bound prototype
+     (gh-ocannl-2141). Keep their acceptance independent of the known list. *)
+  let fixed_index_regressions =
+    [
+      ( 45,
+        "%0 = uniform; %1 = uniform1; %2 = %0 *. %1; %3 = neg %2; %4 = %3 ++ \"...|3 => ...|0\"; \
+         %5 = const[2,5|3->]; %6 = %5 + %4" );
+      ( 411,
+        "%0 = uniform1; %1 = 2.; %2 = %0 * %1; %3 = stretch %2; %4 = %3 ++ \"...|3 => ...|0\"; %5 \
+         = const[|3]; %6 = %4 *. %5" );
+      ( 456,
+        "%0 = uniform1; %1 = %0 ++ \"...|3 => ...|0\"; %2 = const[|2->]; %3 = uniform; %4 = %2 + \
+         %3; %5 = uniform; %6 = stretch %5; %7 = %4 + %6; %8 = const[7|2]; %9 = %7 * %8; %10 = %1 \
+         *. %9; %11 = const[7|5,3->]; %12 = %11 + %10" );
+      (747, "%0 = uniform1; %1 = neg %0; %2 = const[|]; %3 = %1 * %2; %4 = %3 ++ \"...|3 => ...|0\"");
+      ( 762,
+        "%0 = uniform1; %1 = %0 ++ \"...|3 => ...|0\"; %2 = uniform1; %3 = stretch %2; %4 = %1 *. \
+         %3; %5 = const[3,2|5->7]; %6 = %4 * %5; %7 = const[3,2|5->]; %8 = %6 *. %7" );
+      ( 823,
+        "%0 = const[|]; %1 = uniform1; %2 = %1 *. %1; %3 = %0 + %2; %4 = %3 ++ \"...|3 => ...|0\""
+      );
+      ( 845,
+        "%0 = uniform; %1 = %0 ++ \"...|3 => ...|0\"; %2 = uniform; %3 = stretch %2; %4 = %1 + %3; \
+         %5 = const[|5->]; %6 = relu %5; %7 = relu %6; %8 = %4 *. %7; %9 = relu %8; %10 = relu %9; \
+         %11 = %8 + %10; %12 = const[|5->]; %13 = %11 *. %12" );
+      ( 1237,
+        "%0 = uniform; %1 = stretch %0; %2 = stretch %1; %3 = %1 + %2; %4 = %3 ++ \"...|3 => \
+         ...|0\"" );
+      ( 1402,
+        "%0 = uniform; %1 = 2.; %2 = %0 * %1; %3 = uniform1; %4 = neg %3; %5 = %2 *. %4; %6 = \
+         stretch %5; %7 = uniform; %8 = stretch %7; %9 = %8 ++ \"...|3 => ...|0\"; %10 = %9 + %9; \
+         %11 = %6 *. %10; %12 = const[2,5|3->]; %13 = %12 + %11" );
+      ( 1615,
+        "%0 = uniform; %1 = %0 ++ \"...|3 => ...|0\"; %2 = uniform; %3 = stretch %2; %4 = %1 *. \
+         %3; %5 = 2.; %6 = const[5|]; %7 = %5 * %6; %8 = %4 *. %7; %9 = const[5|]; %10 = %8 *. %9"
+      );
+      ( 1703,
+        "%0 = const[|2->4]; %1 = %0 ++ \"...|3 => ...|0\"; %2 = uniform1; %3 = const[|]; %4 = %2 + \
+         %3; %5 = %1 + %4; %6 = stretch %5; %7 = const[|2->]; %8 = %7 + %6" );
+      ( 1783,
+        "%0 = uniform1; %1 = const[|7->]; %2 = %0 *. %1; %3 = %2 + %2; %4 = uniform1; %5 = %4 *. \
+         %4; %6 = %3 *. %5; %7 = %6 ++ \"...|3 => ...|0\"" );
+      ( 1795,
+        "%0 = const[7|4]; %1 = %0 ++ \"...|3 => ...|0\"; %2 = uniform; %3 = uniform1; %4 = %2 *. \
+         %3; %5 = %1 + %4; %6 = const[7|]; %7 = %6 + %5" );
+    ]
+    |> List.map ~f:(fun (k, text) -> (Printf.sprintf "random #%d" k, text))
+  in
+  let fixed_index_cases =
+    List.filter cases ~f:(fun c ->
+        List.Assoc.mem fixed_index_regressions c.name ~equal:String.equal)
+  in
+  p_all ~min:13 "the thirteen fixed-index regression names still identify the same programs"
+    fixed_index_cases ~f:(fun c ->
+      String.equal (show_program c.prog)
+        (List.Assoc.find_exn fixed_index_regressions c.name ~equal:String.equal));
+  p_all ~min:13 "the thirteen fixed-index closing regressions stay accepted" fixed_index_cases
+    ~f:(fun c -> match c.outcome with Accepted _ -> true | _ -> false);
   Verdict.case "the fixed programs" (fun () ->
       List.iter
         (List.take judged (List.length fixed_programs))

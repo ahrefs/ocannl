@@ -146,6 +146,17 @@ files.
   had equated the leaf with the counter. Now `draw_counter_leaves` defers such a leaf at Stage7
   until the draw sizes the counter. Keep it narrow: deferring every resolve-at-use axis with an
   open lower bound refused 13 oracle-solvable `shape_program_sweep` programs with a fixed index.
+  A fixed-index input's minimum above 1 must settle before those final minimal guesses
+  (gh-ocannl-2229). With no GLB and no parameter role, and outside held window or concat
+  dependencies, stage 7 closes it to its minimum, then repeats stage 6a/6b to propagate the
+  concrete size to leaves before results close.
+  This fills the draw under two or three pointwise results before a fixed index; copying the
+  minimum down a broadcast inequality would instead forbid its operand from broadcasting.
+  Size-1 fixed-index outputs keep their existing minimal rule, and parameters remain excluded.
+  The sweep pins the identities and acceptance of the 13 programs the broad deferral refused.
+  Its residual literal entry now covers only five stretches adopting a fixed-index output axis;
+  the reduction half retires with gh-ocannl-2247, as does the nested-branching entry when the fixes
+  are combined. `x[16] *. normal ()` agrees in both internal shapes and executed fill.
   A dimension's role (gh-ocannl-2180): a row closing to its GLB (`role_template`) takes fresh
   resolve-at-use variables bounded by the GLB's axes, not the axes themselves, which keep the
   role of the result that minted them (closing minimal: a draw behind `u + 1` used to repeat
