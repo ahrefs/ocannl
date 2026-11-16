@@ -1666,6 +1666,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   dialect covers literal short timeouts, patched timeout constants, alarms, subsequent assertions
   or file reads, and same-class forwarding wrappers; its docstring states the boundary, including
   computed caps and control-flow ordering it does not prove.
+- Lock refusals distinguish runs from queries (gh-ocannl-2207): `take_lock` and
+  `hold_query_lock` publish the owner while acquiring fd 9; a query records its verb
+  and diagnostic pid, so a refused launch says to wait rather than stop the last run.
+  A run with an `exit` verdict can still have inherited lock holders; its refusal
+  reports that verdict and safe `stop` recovery. Lifecycle leg 122 pins both refusal
+  forms and immediate relaunch after exits 1 and 65; neither failure alone reproduced
+  a leaked lock on macbook-pro, including under the parallel harness load.
 - **`/proc/locks` names a flock's ACQUIRER, not its holders** (gh-ocannl-1107): the lock lives on
   the open file description, so after `take_lock`'s perl exits the line keeps its dead pid (0 from
   inside a pid namespace; some kernels drop the row) while the supervisor, dune and a `setsid`

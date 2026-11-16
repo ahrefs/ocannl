@@ -15,7 +15,7 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
-# Groups: #lifecycle (65, 97, 40-47, 74), #source (59-63, 66, 104), #hermetic (70).
+# Groups: #lifecycle (65, 97, 40-47, 74, 122), #source (59-63, 66, 104), #hermetic (70).
 #
 # Legs:
 #  40-47. run/start lifecycle: completion, signals (a group TERM landing inside
@@ -27,6 +27,11 @@
 #      `bg-run.sh spawn` or `nohup`, and reset it, so the legs pass whatever
 #      this harness inherited (gh-ocannl-1236); a fixture that never becomes
 #      ready fails and ends its leg, never the harness.
+# 122. exits 1 and 65 permit an immediate relaunch; an inherited fd 9
+#      held by a child refuses it and identifies a completed verdict. An
+#      active affected query names itself, never the previous completed run.
+#      The query helper is a readiness-controlled stand-in, not a test of
+#      affected-tests.sh or Dune locking.
 #  74. fork TERM is deferred until the parent owns its child pid and the child
 #      resets its handlers; no-mask and inherited-handler controls prove both.
 #  65. a `stop`, or a signal to the launcher alone, while the backends
@@ -71,7 +76,7 @@
 shared_through native
 
 # Leg 65: the run's first phase. The backends resolve in the supervisor's
-# child, after the run is published (gh-ocannl-1106), so a `stop` of the run
+# child, after the run is published (gh-ocannl-1122), so a `stop` of the run
 # reaches its supervisor as for any run: the child and the reader it waits on
 # are reaped, the launch exits 143 with the verdict recorded, dune never
 # started and the log says so, and the worktree is idle again. A reader held
@@ -418,6 +423,8 @@ cat >"$life_bin/dune" <<'EOF'
 #!/usr/bin/env bash
 case $1 in
   ok) echo 'built ok' ;;
+  fail1) exit 1 ;;
+  fail65) exit 65 ;;
   hold)
     touch "$LIFECYCLE_PREFIX.ready"
     exec perl -e 'while (!-e "$ARGV[0].release") { select undef, undef, undef, .05 }' "$LIFECYCLE_PREFIX"
@@ -887,6 +894,80 @@ leg_40_47_signals() {
 lifecycle_signals || lifecycle_abandoned '40-47 (signals, publication window, legacy lock)'
 }
 harness_leg_run '40-47b: run/start lifecycle (signals, publication window, legacy lock) #lifecycle' leg_40_47_signals
+
+# Lock ownership after ordinary failures (gh-ocannl-2207). The child control
+# deliberately inherits fd 9 from a parent that then closes it, as a run descendant
+# would. No claim here covers Dune's own lock or transitional in-tree locks.
+leg_122() {
+  local code completed lock child query_pid query_holder
+  for code in 1 65; do
+    life_capture run --cap 30 "fail$code"
+    life_check "$code" "exit $code" "a failing batch returns $code"
+    life_capture run --cap 30 ok
+    life_check 0 'verdict: pass' "exit $code releases the lock before an immediate relaunch"
+  done
+  completed=$(life paths run last)
+  lock=$(life paths lock)
+  perl -MFcntl=:flock -e '
+    use POSIX ();
+    open my $f, ">>", $ARGV[0] or die $!;
+    flock($f, LOCK_EX|LOCK_NB) or die $!;
+    POSIX::dup2(fileno($f), 9) >= 0 or die $!; close $f;
+    my $pid = fork(); die $! unless defined $pid;
+    if (!$pid) {
+      alarm 60;
+      open my $r, ">", $ARGV[1] or die $!; print $r "$$\n"; close $r;
+      while (!-e $ARGV[2]) { select undef, undef, undef, .05 };
+      exit;
+    }
+    POSIX::close(9);
+    waitpid($pid, 0);
+  ' "$lock" "$TMP/122-child" "$TMP/122-child-release" &
+  child=$!
+  if ! await_fixture_ready "$TMP/122-child"; then
+    kill -KILL "$child" 2>/dev/null; wait "$child" 2>/dev/null
+    report 1 'lock: inherited-holder control became ready'; return
+  fi
+  life_capture run --cap 30 ok
+  if [ "$life_rc" = 2 ] && grep -qF "status $completed" "$TMP/lifecycle.err"; then
+    report 0 'negative control: a child holding inherited fd 9 refuses a launch naming its run'
+  else report 1 'negative control: a child holding inherited fd 9 refuses a launch naming its run' "$(cat "$TMP/lifecycle.err")"; fi
+  if grep -q 'already has a verdict (exit 0)' "$TMP/lifecycle.err" &&
+     grep -q 'safe to stop' "$TMP/lifecycle.err"; then
+    report 0 'lock: a completed holder reports its verdict and safe stop recovery'
+  else report 1 'lock: a completed holder reports its verdict and safe stop recovery' "$(cat "$TMP/lifecycle.err")"; fi
+  touch "$TMP/122-child-release"
+  wait "$child"
+  # The real affected entry point takes the lock, then execs this stand-in.
+  cat >"$life_root/tools/affected-tests.sh" <<'EOF'
+#!/usr/bin/env bash
+exec perl -e '
+  alarm 60;
+  open my $f, ">", "$ARGV[0].query-ready" or die $!;
+  print $f "$$\n"; close $f;
+  while (!-e "$ARGV[0].query-release") { select undef, undef, undef, .05 }
+' "$LIFECYCLE_PREFIX"
+EOF
+  life affected >"$TMP/122-query.out" 2>"$TMP/122-query.err" &
+  query_pid=$!
+  if ! await_fixture_ready "$life_prefix.query-ready"; then
+    kill -KILL "$query_pid" 2>/dev/null; wait "$query_pid" 2>/dev/null
+    report 1 'lock: affected query became ready' "$(cat "$TMP/122-query.err")"; return
+  fi
+  query_holder=$(cat "$life_prefix.query-ready")
+  life_capture run --cap 30 ok
+  if [ "$life_rc" = 2 ] && grep -qF "affected query (pid $query_holder) holds this worktree's lock; wait for it" "$TMP/lifecycle.err" &&
+     ! grep -qF "$completed" "$TMP/lifecycle.err" && ! grep -q 'stop ' "$TMP/lifecycle.err"; then
+    report 0 'lock: affected query refusal names the query and says wait, never stop the completed run'
+  else report 1 'lock: affected query refusal names the query and says wait, never stop the completed run' "$(cat "$TMP/lifecycle.err")"; fi
+  touch "$life_prefix.query-release"
+  wait "$query_pid"
+  life_capture run --cap 30 ok
+  life_check 0 'verdict: pass' 'query completion releases the lock for a run'
+  # Restore the shared fixture tree.
+  unlink "$life_root/tools/affected-tests.sh"
+}
+harness_leg_run '122: failing batches release locks and refusals name the real holder #lifecycle' leg_122
 
 # ---------------------------------------------------------------------------
 # Legs 59-63 and 66: the source a run tested, recorded at launch (gh-ocannl-992)
