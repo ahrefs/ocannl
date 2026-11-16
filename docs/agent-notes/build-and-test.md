@@ -1083,6 +1083,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   nested bare-Bash and env-shebang subjects with the `set -u` empty-array control at
   widths 1 and 4; the same expansion passes under modern Bash. Its slot-command
   assertions derive the fixture's interpreter from PATH, independently of the outer shell.
+  The modern-PATH witness is a separate leg: a PATH Bash older than 4.4 declares
+  it not applicable and names its version, so the 3.2 tier reports that absence.
+  One version helper owns both that gate and the empty-array expectations.
   On macbook-pro, both full 35-member tiers passed at `--jobs 4`: 529.51 s
   under Bash 3.2 and 533.74 s under Homebrew 5.3 (shared correctness slots,
   not benchmark timings). Replacing keeps the local tier near nine minutes;

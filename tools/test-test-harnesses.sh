@@ -12,6 +12,7 @@
 # --harnesses` on a fixture change reaching two members).
 # --jobs runs members beside one another and prints each one's output whole,
 # in the manifest's order (gh-ocannl-2002).
+# The modern-PATH witness is gated separately; aggregate controls remain ungated.
 # Usage: tools/test-test-harnesses.sh [--keep|--help]
 set -u
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -36,8 +37,11 @@ if [ "$system_bash_version" = 3.2 ]; then
 fi
 expected_member_version=$("$expected_member_bash" -c 'printf "%s.%s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"')
 # Empty arrays under nounset changed at 4.4, independently of the 3.2 leg.
+empty_array_expands() { # MAJOR.MINOR
+  case $1 in [0-3].*|4.[0-3]) return 1 ;; *) return 0 ;; esac
+}
 empty_array_rc=0
-case $expected_member_version in [0-3].*|4.[0-3]) empty_array_rc=1 ;; esac
+empty_array_expands "$expected_member_version" || empty_array_rc=1
 # Derive fixture membership through the public interface, rather than keeping
 # another list that would go stale as CI gains a harness.
 "$subject" --list >"$TMP/all" || exit 2
@@ -877,10 +881,16 @@ for control in member bash shebang; do
 done
 cp "$TMP/member-before-bash-control" "$fixture/$control_member"
 # The same planted expansion passes under a modern Bash when one is on PATH.
-if "$subject_bash" -c '((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4)))'; then
-  control_rc=0
+modern_empty_array() {
+  local version control_rc=0
+  version=$("$subject_bash" -c 'printf "%s.%s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"')
+  if ! empty_array_expands "$version"; then
+    harness_not_applicable "PATH Bash $subject_bash ($version) predates 4.4; no modern Bash witness here"
+    return
+  fi
   "$subject_bash" "$TMP/empty-array.sh" >"$TMP/modern-control" 2>&1 || control_rc=$?
   report "$control_rc" 'Bash interpreter: empty-array control passes under the modern PATH Bash'
-fi
+}
+harness_leg_run '1: modern PATH Bash expands nounset empty arrays' modern_empty_array
 
 finish
