@@ -872,6 +872,7 @@ test/operations/lineage_template_supersession.ml [through Ll_test.execute; throu
 test/operations/local_binder_gate.ml [through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-local_binder_gate]
 test/operations/local_scope_sibling_reads.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-local_scope_sibling_reads]
 test/operations/matmul_interchange.ml [through Ll_test.execute_with_census; run by @test/operations/runtest-matmul_interchange, @test/operations/runtest-matmul_interchange-tf32]
+test/operations/metal_bounded_failure.ml [through Ll_test.run_routine; run by @test/operations/runtest-metal_bounded_failure]
 test/operations/metal_gpu_hang_failure.ml [through Ll_test.run_routine; run by @test/operations/slow-metal_gpu_hang_failure]
 test/operations/metal_hang_declines.ml [prelowered compile; run by @test/operations/runtest-metal_hang_declines]
 test/operations/metal_reap_failure.ml [through Ll_test.run_routine; run by @test/operations/runtest-metal_reap_failure]
@@ -1018,6 +1019,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-local_scope_sibling_reads
 @test/operations/runtest-matmul_interchange
 @test/operations/runtest-matmul_interchange-tf32
+@test/operations/runtest-metal_bounded_failure
 @test/operations/runtest-metal_hang_declines
 @test/operations/runtest-metal_reap_failure
 @test/operations/runtest-metal_routine_log_delivery

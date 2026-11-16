@@ -240,7 +240,9 @@ let sync_until event ~clock ~deadline =
         else wait_for_signal ()
   in
   let covered_unfinished () =
-    reap runner;
+    (* Failed buffers remain in flight. Surface the failure [reap] records before treating them as
+       unfinished work, rather than spinning until the bounded wait expires (gh-ocannl-2209). *)
+    raise_on_failure runner;
     List.exists runner.in_flight ~f:(fun tracked -> tracked.seq <= event.seq)
   in
   let rec wait_for_buffers () =
