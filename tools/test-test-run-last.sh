@@ -15,7 +15,11 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
-# Groups: #lifecycle (99, 105, 105b, 105c), #queries (100), #harness (102), #hermetic (70).
+# Shape-reading boundary (99b): only ps pid/ppid/exact command fields;
+# no shell text, fleet source, or environments. This pins guardian/child
+# topology while a fixture holds publication, not guardian signal handling.
+#
+# Groups: #lifecycle (99, 99b, 105, 105b, 105c), #queries (100), #harness (102), #hermetic (70).
 #
 # Legs:
 #  99. `wait last` and `status last` follow a launch still in flight
@@ -44,6 +48,9 @@
 #      CMD`): a `-c` string is never parsed. The slot this script takes itself is taken after
 #      publication: a run waiting for it is `last`, live, and its wait times
 #      out on it.
+#  99b. Real fleet --bg: queued status, wait through publication to red, then
+#      its own verdict without unpublished; compare guardian/child topology
+#      to q-slot, with a guardian-free negative control. Skips off fleet/CI.
 # 100. every `last` lookup stays in its own worktree: beside a sibling's newer
 #      red run in the same state root, `wait last`, `status last` and `paths
 #      run last` name the worktree's own, `list` lists only its runs (`--all`
@@ -89,6 +96,8 @@
 #      printed the copy's digest; the option outranks the variable, and a
 #      subject that is no file, or no value, is refused (gh-ocannl-1925).
 
+# Preserve the caller's fleet choice before common makes ordinary fixtures hermetic.
+last_fleet_worker=${OCANNL_TOOL_FLEET_WORKER-}
 . "$(cd "$(dirname "$0")" && pwd)/test-test-run-common.sh"
 
 
@@ -185,11 +194,23 @@ q_wrap() { # root release exec|refuse argv...
 # The leg's own processes, for the harness's interrupted exit (cleanup_fixture):
 # a wrapper still waiting would poll a release file the cleanup deletes, forever.
 q_kill_all() {
-  local w
+  local w bg
+  # Keep the shape parents alive to reap their children after release. Killing
+  # the parents first can orphan a sleeper that misses a short-lived release.
+  touch "$TMP/real.release" "$TMP/shape.release" "$TMP/control.release"
   for w in ${q_wraps[@]+"${q_wraps[@]}"}; do
-    kill -KILL "${w%%:*}" 2>/dev/null
+    case ${w#*:} in
+      "$TMP/shape.slot" | "$TMP/control.slot") touch "${w#*:}" ;;
+      *) kill -KILL "${w%%:*}" 2>/dev/null ;;
+    esac
     wait "${w%%:*}" 2>/dev/null
   done
+  if [ -s "$TMP/real-launch.out" ] && [ -n "${q_real_waiter:-}" ]; then
+    bg=$(tail -n 1 "$TMP/real-launch.out")
+    case $bg in
+      "$TMP/real-fleet-bg/"*) "$q_real_waiter" wait "$bg" >/dev/null 2>&1 ;;
+    esac
+  fi
   q_wraps=()
   if [ -n "${q_follow:-}" ]; then
     kill -KILL "$q_follow" 2>/dev/null
@@ -652,6 +673,136 @@ fi
 if [ -z "$q_detail" ]; then report 0 "$q_slot_label"; else report 1 "$q_slot_label" "$q_detail"; fi
 }
 harness_leg_run '99: wait last and status last follow a launch still in flight #lifecycle' leg_99
+
+# 99b reads only the renamed_dune shared stage and the local queued fixtures.
+shared_through renamed_dune
+# Shape boundary: ps pid/ppid/command fields only. A blocked command has a
+# distinct parent and an orphan of parent 1 with that parent's exact argv.
+# No shell text, fleet source, or process environment is parsed. This pins
+# the guardian/child topology, not the guardian's signal-handling internals.
+q_child_shape() { # command pid
+  local parent argv
+  parent=$(ps -o ppid= -p "$1" 2>/dev/null | tr -d ' ')
+  [ -n "$parent" ] && [ "$parent" != 1 ] || return 1
+  argv=$(ps -ww -o command= -p "$parent" 2>/dev/null) || return 1
+  [ -n "$argv" ] || return 1
+  ps -axww -o ppid= -o command= | awk -v wanted="$argv" '
+    $1 == 1 { sub(/^[[:space:]]*[0-9]+[[:space:]]+/, ""); if ($0 == wanted) found=1 }
+    END { exit !found }'
+}
+# Status boundary: exit 0, the exact red verdict, and no queued/unpublished
+# prefix. Other output is opaque. Both sides of the public reap use this check.
+q_failed_verdict() { # root state-root output
+  local root=$1 runs=$2 out=$3 rc
+  OCANNL_TOOL_TEST_RUNS=$runs "$root/tools/test-run.sh" status last >"$out" 2>&1
+  rc=$?
+  [ "$rc" = 0 ] && grep -qxF 'verdict: FAIL (exit 1)' "$out" &&
+    ! grep -qE '^(queued:|unpublished:)' "$out"
+}
+leg_99b() {
+  local label='real fleet slot --bg follows queued last and matches the stand-in guardian shape'
+  local fw real_root real_runs real_bg real_pid real_dir real_rc real_green real_red shape_pid real_detail=
+  . "$HERE/fleet-worker-candidates.sh"
+  # --ci-shell hides fleet tables but the host can still answer by hostname.
+  # Its explicit no-toolchain mode is also the no-real-fleet boundary.
+  if [ "${OCANNL_TOOL_HARNESS_NO_DUNE:-0}" = 1 ] ||
+    ! OCANNL_TOOL_FLEET_WORKER=$last_fleet_worker fleet_slot_probe "$TMP/real-probe"; then
+    skip "$label" 'no real fleet slot probe (or CI shell mode)'
+    return
+  fi
+  fw=$fleet_slot_fw
+  q_real_waiter=$(dirname "$fw")/bg-run.sh
+  real_root=$TMP/real-fleet-repo real_runs=$TMP/real-fleet-runs real_bg=$TMP/real-fleet-bg
+  mkdir -p "$real_root/tools" "$real_root/test/config" "$real_root/arrayjit/test" "$real_runs" "$real_bg"
+  cp "$SRC" "$real_root/tools/test-run.sh"
+  stage_sourced "$real_root" || { harness_abandon "$stage_error"; return; }
+  OCANNL_TOOL_TEST_RUNS=$real_runs PATH="$q_bin:$PATH" "$real_root/tools/test-run.sh" run build @ok >"$TMP/real-green" 2>&1 ||
+    { harness_abandon "green fixture run failed: $(cat "$TMP/real-green")"; return; }
+  real_green=$(OCANNL_TOOL_TEST_RUNS=$real_runs "$real_root/tools/test-run.sh" paths run last)
+  # A nested --bg reuses the enclosing slot and starts immediately. Hold the
+  # fixture BEFORE publication, rather than racing it or taking extra slots.
+  # --deadline makes even a nested slot supervise a child and guardian.
+  # Keep the state root in wrapper argv and qualify the script's worktree:
+  # environment-only/relative launches over-read other parallel fixtures.
+  { printf '%s\n' '#!/usr/bin/env bash' \
+      'if [ "${1-}" = run ]; then' \
+      '  echo $$ >"$Q_REAL_PID"' \
+      '  while [ ! -e "$Q_REAL_RELEASE" ]; do sleep .1; done' \
+      'fi'; cat "$SRC"; } >"$real_root/tools/test-run.sh"
+  chmod +x "$real_root/tools/test-run.sh"
+  (cd "$real_root" && env OCANNL_TOOL_TEST_RUNS="$real_runs" OCANNL_TOOL_FLEET_WORKER=none \
+    PATH="$q_bin:$PATH" Q_REAL_PID="$TMP/real.pid" Q_REAL_RELEASE="$TMP/real.release" \
+    "$fw" execution slot --bg "$real_bg" --cpu --deadline 60 -- \
+      env "OCANNL_TOOL_TEST_RUNS=$real_runs" "$real_root/tools/test-run.sh" run build @red) \
+    >"$TMP/real-launch.out" 2>&1
+  real_rc=$?
+  if [ "$real_rc" != 0 ] || ! q_until 20 test -s "$TMP/real.pid"; then
+    touch "$TMP/real.release"
+    real_dir=$(tail -n 1 "$TMP/real-launch.out")
+    [ ! -d "$real_dir" ] || "$q_real_waiter" wait "$real_dir" >/dev/null 2>&1
+    harness_abandon "real fleet launch did not become ready: exit $real_rc: $(cat "$TMP/real-launch.out")"
+    return
+  fi
+  read -r real_pid <"$TMP/real.pid"
+  q_until 5 q_child_shape "$real_pid" || real_detail='real wrapper lacks guardian/child topology'
+  # Same observation against the stand-in, and a deliberately guardian-free
+  # twin. The control removes only the fork line, leaving command-as-child.
+  cat >"$TMP/shape-child.sh" <<'EOF'
+#!/usr/bin/env bash
+echo $$ >"$1"
+while [ ! -e "$2" ]; do sleep .1; done
+EOF
+  q_wrap "$q_root" "$TMP/shape.slot" exec bash "$TMP/shape-child.sh" "$TMP/shape.pid" "$TMP/shape.release"
+  touch "$TMP/shape.slot"
+  q_until 5 test -s "$TMP/shape.pid"
+  if [ -s "$TMP/shape.pid" ]; then
+    read -r shape_pid <"$TMP/shape.pid"
+    q_until 5 q_child_shape "$shape_pid" || real_detail='stand-in lacks real guardian/child topology'
+  else real_detail='stand-in child never started'; fi
+  sed '/^( (while kill -0 /d' "$q_slot" >"$TMP/no-guardian.sh"
+  (cd "$q_root" && exec bash "$TMP/no-guardian.sh" "$TMP/control.slot" exec -- \
+    bash "$TMP/shape-child.sh" "$TMP/control.pid" "$TMP/control.release") &
+  local control=$!
+  q_wraps+=("$control:$TMP/control.slot")
+  touch "$TMP/control.slot"
+  q_until 5 test -s "$TMP/control.pid"
+  if [ -s "$TMP/control.pid" ]; then
+    read -r shape_pid <"$TMP/control.pid"
+    q_until 2 q_child_shape "$shape_pid" && real_detail='negative control accepted guardian-free stand-in'
+  else real_detail='negative control child never started'; fi
+  touch "$TMP/shape.release" "$TMP/control.release"
+  q_release_all
+  OCANNL_TOOL_TEST_RUNS=$real_runs "$real_root/tools/test-run.sh" status last >"$TMP/real-status" 2>&1
+  real_rc=$?
+  { [ "$real_rc" = 3 ] && grep -q '^queued:' "$TMP/real-status"; } ||
+    real_detail="queued status: exit $real_rc: $(cat "$TMP/real-status")"
+  # Clear status's observation; only the new waiter can recreate this mark.
+  mv "$real_green/queued-after" "$TMP/status-observed" || real_detail='status did not mark the queued launch'
+  OCANNL_TOOL_TEST_RUNS=$real_runs "$real_root/tools/test-run.sh" wait last --timeout 40 >"$TMP/real-wait" 2>&1 &
+  q_follow=$!
+  q_until 5 test -e "$real_green/queued-after" || real_detail='waiter never observed the queued launch'
+  touch "$TMP/real.release"
+  wait "$q_follow"; real_rc=$?; q_follow=
+  real_red=$(OCANNL_TOOL_TEST_RUNS=$real_runs "$real_root/tools/test-run.sh" paths run last)
+  { [ "$real_rc" = 1 ] && [ "$real_red" != "$real_green" ] && grep -qF "$real_red" "$TMP/real-wait"; } ||
+    real_detail="wait last: exit $real_rc: $(cat "$TMP/real-wait")"
+  q_failed_verdict "$real_root" "$real_runs" "$TMP/real-status" ||
+    real_detail="status before background reap: $(cat "$TMP/real-status")"
+  # Reap the detached record through its public waiter before returning.
+  real_dir=$(tail -n 1 "$TMP/real-launch.out")
+  if [ -z "$real_dir" ]; then
+    real_detail="no bg run directory: $(cat "$TMP/real-launch.out")"
+  else
+    "$q_real_waiter" wait "$real_dir" >"$TMP/real-bg-wait" 2>&1
+    [ "$?" = 0 ] && [ "$(cat "$real_dir/rc")" = 1 ] || real_detail="bg wait: $(cat "$TMP/real-bg-wait")"
+  fi
+  q_failed_verdict "$real_root" "$real_runs" "$TMP/real-status" ||
+    real_detail="final status: $(cat "$TMP/real-status")"
+  printf '  real fleet run: %s; background record: %s\n' \
+    "$(OCANNL_TOOL_TEST_RUNS=$real_runs "$real_root/tools/test-run.sh" paths run last)" "$real_dir"
+  if [ -z "$real_detail" ]; then report 0 "$label"; else report 1 "$label" "$real_detail"; fi
+}
+harness_leg_run '99b: real fleet slot and stand-in shape #lifecycle' leg_99b
 
 # ---------------------------------------------------------------------------
 # Leg 105: the residuals of following a queued launch (gh-ocannl-1913)
