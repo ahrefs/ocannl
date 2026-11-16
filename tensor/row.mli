@@ -578,7 +578,7 @@ type marks
 (** The additions to the per-variable policy sets, parameter-output checks and symbol-role claims
     since a {!capture_globals}. *)
 
-val marks_since : globals -> marks
+val marks_since : ?parameter_is_used:(t -> bool) -> globals -> marks
 
 val add_marks : renaming -> marks -> unit
 (** Re-adds the marks through the sets' writers, renaming the variables. *)

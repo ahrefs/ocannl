@@ -3758,7 +3758,7 @@ let set_scale ~factor delayed_ref_large delayed_ref_small =
             (* Defensive: already caught by the top-of-function row guard. *)
             assert false)
 
-let set_terminal ~is_param (sh : t) =
+let set_terminal ?(implicit_input = false) ~is_param (sh : t) =
   mark_unused sh.id;
   let get_origin kind =
     Row.
@@ -3770,7 +3770,13 @@ let set_terminal ~is_param (sh : t) =
         operation = Some "set_terminal";
       }
   in
-  if is_param then Row.register_parameter_output sh.output [ get_origin `Output ];
+  if is_param then (
+    Row.register_parameter_output sh.output [ get_origin `Output ];
+    (* Omission belongs to the declaration, independently of the initializer's rows. *)
+    if implicit_input then
+      match (Row.subst_row !state sh.input).bcast with
+      | Row.Row_var v -> Row.add_safe_to_guess v
+      | Row.Broadcastable -> ());
   active_constraints :=
     Row.Terminal_row (is_param, sh.batch, [ get_origin `Batch ])
     :: Row.Terminal_row (is_param, sh.input, [ get_origin `Input ])
@@ -6024,7 +6030,12 @@ module Scheme = struct
           "the function writes a capture reference made outside it other than by binding it in an \
            operation, which a scheme cannot carry per application -- make the reference inside the \
            function, or apply the function inline";
-      let marks = Row.marks_since row_globals in
+      let unused_end = !unused_shapes in
+      let own_unused = Set.diff unused_end unused_start in
+      let marks =
+        Row.marks_since row_globals ~parameter_is_used:(fun r ->
+            not (List.exists (Row.row_shapes r) ~f:(Set.mem own_unused)))
+      in
       (* Validation: the trailing setters ([set_dim], [infer_equal], [set_terminal]) push
          constraints without solving them, so the whole window is solved once more -- Stage1 only:
          the closing stages would default the generic arguments. *)
@@ -6032,10 +6043,8 @@ module Scheme = struct
         if sabotaged No_end_validation then !state
         else snd (Row.solve_inequalities ~stage:Row.Stage1 constraints !state)
       in
-      let unused_end = !unused_shapes in
       (* As [finish_inference] filters the terminal rows of shapes still marked unused: the trace's
          own such shapes can never be used afterwards. *)
-      let own_unused = Set.diff unused_end unused_start in
       let constraints =
         List.filter constraints ~f:(function
           | Row.Shape_row (r, _) | Terminal_row (_, r, _) ->

@@ -41,21 +41,32 @@ let%op transformer ~label ~num_encoder_layers ~num_decoder_layers ~num_heads ~d_
     transformer_decoder ~label:("decoder" :: label) ~num_layers:num_decoder_layers ~num_heads
       ~d_k:dec_att ~d_v:dec_att ~d_ff ~epsilon ?mask_fill ~pos_embed:attn_pos_embed ()
   in
-  (* NOTE: { pos_encoding } and { pos_encoding_tgt } are learned inline params lifted by %op. They
-     are created unconditionally but only used when pos_embed = Learned_additive. *)
-  let pos_encoding_tgt = if Int.(d_enc = d_dec) then pos_encoding else { pos_encoding_tgt } in
+  (* Inline records lift out of branches. Construct only the positional parameters this
+     configuration uses; an unused, unsized parameter is refused at inference closure. *)
+  let pos_encoding =
+    [%oc
+      match pos_embed with
+      | Learned_additive -> Some (TDSL.param "pos_encoding" ~more_label:label ())
+      | Sinusoidal_additive _ | RoPE _ | No_pos_embed -> None]
+  in
+  let pos_encoding_tgt =
+    [%oc
+      Option.map pos_encoding ~f:(fun encoding ->
+          if Int.equal d_enc d_dec then encoding
+          else TDSL.param "pos_encoding_tgt" ~more_label:label ())]
+  in
   fun ~train_step ~src ~tgt ~mask ->
     let enc_input = { src_embed; o = [ d_enc ] } * src in
     let enc_output =
       match pos_embed with
-      | Learned_additive -> encoder ~train_step (enc_input + { pos_encoding })
+      | Learned_additive -> encoder ~train_step (enc_input + Option.value_exn pos_encoding)
       | Sinusoidal_additive { enc_encoding; _ } -> encoder ~train_step (enc_input + enc_encoding)
       | RoPE _ | No_pos_embed -> encoder ~train_step enc_input
     in
     let tgt_embedded_base = { tgt_embed; o = [ d_dec ] } * tgt in
     let tgt_embedded =
       match pos_embed with
-      | Learned_additive -> tgt_embedded_base + pos_encoding_tgt
+      | Learned_additive -> tgt_embedded_base + Option.value_exn pos_encoding_tgt
       | Sinusoidal_additive { dec_encoding; _ } -> tgt_embedded_base + dec_encoding
       | RoPE _ | No_pos_embed -> tgt_embedded_base
     in

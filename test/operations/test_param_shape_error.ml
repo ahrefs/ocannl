@@ -148,7 +148,8 @@ let parameter_use_refusals () =
 
 let parameter_use_acceptances () =
   List.iter initializers ~f:(fun init ->
-      List.iter [ "sized"; "explicit unit axis"; "omitted row"; "schemed omitted row" ]
+      List.iter
+        [ "sized"; "explicit unit axis"; "declared output"; "omitted row"; "schemed omitted row" ]
         ~f:(fun use ->
           let label = init ^ " parameter: " ^ use in
           Verdict.case label (fun () ->
@@ -158,6 +159,9 @@ let parameter_use_acceptances () =
                 | "explicit unit axis" ->
                     let p = parameter init ~input_dims:[] ~output_dims:[ 1 ] () in
                     (p, p, [| 1 |])
+                | "declared output" ->
+                    let p = parameter init ~output_dims:[ 3 ] () in
+                    (p, p, [| 3 |])
                 | "sized" ->
                     let p = parameter init () in
                     let c = TDSL.range_of_shape ~input_dims:[] ~output_dims:[ 3 ] () in
@@ -177,6 +181,48 @@ let parameter_use_acceptances () =
               ignore (Shape.to_dims root.Tensor.shape : int array);
               p label (Array.equal Int.equal want (Shape.to_dims param.Tensor.shape)))))
 
+(* A held mixed-flank equation binds neither row. Parameter membership may follow a real
+   substitution, but must not jump from v onto w or d while [d].v = w.[3] is still held. *)
+let deferred_parameter_membership () =
+  Verdict.case "deferred parameter membership" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let row () =
+        {
+          Row.beg_dims = [];
+          dims = [];
+          bcast = Row_var (Row.get_row_var ());
+          prov = Row.empty_provenance;
+        }
+      in
+      let v = row () and w = row () and d = Row.get_var () in
+      let three = Row.get_default_dim ~d:3 () in
+      let fixed = { (row ()) with bcast = Broadcastable; dims = [ three ] } in
+      let terminal = Row.Terminal_row (true, v, []) in
+      let pending, env =
+        Row.solve_inequalities ~stage:Stage1
+          [ terminal; Row.Row_ineq { res = fixed; opnd = v; origin = [] } ]
+          Row.empty_env
+      in
+      let constraints =
+        Row.Row_eq
+          { r1 = { v with beg_dims = [ Var d ] }; r2 = { w with dims = [ three ] }; origin = [] }
+        :: Row.Shape_row (v, [])
+        :: Row.Shape_row (w, [])
+        :: pending
+      in
+      let _, env =
+        List.fold [ Row.Stage3; Stage4; Stage5; Stage6a; Stage6b; Stage7 ] ~init:(constraints, env)
+          ~f:(fun (pending, env) stage -> Row.solve_inequalities ~stage pending env)
+      in
+      let dims r =
+        let r = Row.subst_row env r in
+        List.map (r.beg_dims @ r.dims) ~f:Row.dim_to_int_exn
+      in
+      p "a deferred row equation does not transfer parameter membership"
+        (List.equal Int.equal (dims v) [ 3 ]
+        && List.equal Int.equal (dims w) [ 1 ]
+        && Option.equal Int.equal (Row.get_dim_val env d) (Some 1)))
+
 let () =
   default_lone_param ();
   lone_param_1d ();
@@ -187,4 +233,5 @@ let () =
   default_bias_param_1d ();
   fixed_index_into_param ();
   parameter_use_refusals ();
-  parameter_use_acceptances ()
+  parameter_use_acceptances ();
+  deferred_parameter_membership ()

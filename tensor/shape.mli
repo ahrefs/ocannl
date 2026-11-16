@@ -339,10 +339,11 @@ val refuse_unsolved : where:string -> Row.constraint_ list -> unit
 (** Validate the residual constraints of a fully staged solve, as the inference finalizers do.
     Raises [Row.Shape_error] if any remain, with [where] identifying the finalizer. *)
 
-val set_terminal : is_param:bool -> t -> unit
+val set_terminal : ?implicit_input:bool -> is_param:bool -> t -> unit
 (** Mark the shape as terminal, so that its rows can be closed to Greatest Lower Bounds (GLBs). This
     function is only intended for parameters shapes, which would otherwise not be terminal because
-    of the initialization expressions of the parameters. *)
+    of the initialization expressions of the parameters. [implicit_input] marks an omitted input row
+    in the parameter declaration, which may close empty independently of its initializer. *)
 
 val set_resolve_at_use : t -> unit
 (** Mark the shape's rows as resolved by their use sites (gh-ocannl-544): at the final solver stages

@@ -4051,9 +4051,8 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
         match find_row env.row_env v with
         | None -> result env
         | Some (Solved_row _) -> assert false
-        | Some (Bounds_row { is_in_param; res; opnd; glb; constr; origin = origin1 }) ->
+        | Some (Bounds_row { is_in_param = _; res; opnd; glb; constr; origin = origin1 }) ->
             let origin = merge_origins origin origin1 in
-            if is_in_param then ineqs := Terminal_row (true, value, origin) :: !ineqs;
             let env =
               if beg_handled then (
                 List.iter res ~f:(fun res ->
@@ -4697,7 +4696,7 @@ type marks = {
   m_resolve_at_use : row_var list;
 }
 
-let marks_since (g : globals) =
+let marks_since ?(parameter_is_used = fun _ -> true) (g : globals) =
   let diff now before = Set.to_list (Set.diff now before) in
   let rec roles_since acc = function
     | l when phys_equal l g.g_pending_roles -> List.rev acc
@@ -4710,7 +4709,8 @@ let marks_since (g : globals) =
     m_safe_to_guess = diff !safe_to_guess g.g_safe_to_guess;
     m_parameter_outputs =
       List.take !parameter_outputs
-        (List.length !parameter_outputs - List.length g.g_parameter_outputs);
+        (List.length !parameter_outputs - List.length g.g_parameter_outputs)
+      |> List.filter ~f:(fun (r, _) -> parameter_is_used r);
     m_used_in_spec_or_compose = diff !used_in_spec_or_compose g.g_used_in_spec_or_compose;
     m_used_in_pointwise = diff !used_in_pointwise g.g_used_in_pointwise;
     m_concat_component_vars = diff !concat_component_vars g.g_concat_component_vars;
@@ -5349,9 +5349,13 @@ let%debug5_sexp rec close_dim_terminal ~deferred_dims ~(stage : stage) ~is_param
           if not (can_guess_dim_to_one env has_uniq_constr_unless) then
             [ Terminal_dim (is_param, dim, origin) ]
           else if is_param || is_in_param then
-            raise
-            @@ Shape_error
-                 ("You forgot to specify the hidden dimension(s) 1", [ Dim_mismatch [ dim ] ])
+            (* A use-site row may not yield its axes until stage 6. Parameter membership must
+               prevent guessing, without refusing before those bounds have arrived. *)
+            if is_stage7 stage then
+              raise
+              @@ Shape_error
+                   ("You forgot to specify the hidden dimension(s) 1", [ Dim_mismatch [ dim ] ])
+            else [ Terminal_dim (is_param, dim, origin) ]
           else if Set.mem deferred_dims v then [ Terminal_dim (is_param, dim, origin) ]
           else (
             refuse_concat_component_guess env v;
@@ -5963,7 +5967,9 @@ let%track5_sexp close_row_terminal ~deferred_dims ~(stage : stage) ~is_param ori
       | Some (Bounds_row { is_in_param; glb = None; constr = Unconstrained; _ })
         when is_stage4_up stage ->
           if (is_param || is_in_param) && not (is_safe_to_guess v) then
-            raise @@ Shape_error ("You forgot to specify the hidden dimension(s) 4", [])
+            if is_stage7 stage then
+              raise @@ Shape_error ("You forgot to specify the hidden dimension(s) 4", [])
+            else Terminal_row (is_param, r1, origin) :: term_dims ()
           else (
             [%log6 "terminal row: closing", (_r : row)];
             no_further_axes :: term_dims ())
@@ -5987,7 +5993,11 @@ let%track5_sexp close_row_terminal ~deferred_dims ~(stage : stage) ~is_param ori
           term_dims ()
       | Some (Bounds_row { glb = Some glb; origin = glb_origin; _ }) when is_stage3_up stage ->
           let origin = merge_origins origin glb_origin in
-          close_to_glb_by_role env origin ~r1 ~glb @ term_dims ()
+          let closing = close_to_glb_by_role env origin ~r1 ~glb in
+          (* Keep the original terminal until substitution exposes its actual axes. A terminal on
+             the equation's remainder can instead mark an initializer's private axes. *)
+          if is_param && not (is_stage7 stage) then closing @ [ Terminal_row (true, _r, origin) ]
+          else closing @ term_dims ()
       | _ when is_stage6_up stage -> []
       | _ ->
           [%log6 "terminal row: keeping", (_r : row), "as", (r1 : row)];
@@ -6126,6 +6136,9 @@ let%track5_sexp process_shape_row ~deferred_dims ~(stage : stage) origin env
          would leave them unresolved forever. *)
       let keep = if final && not pending_window then [] else [ Shape_row (r, origin) ] in
       match entry_for_closing env v with
+      | Some (Bounds_row { glb = None; is_in_param = true; _ })
+        when (not (is_safe_to_guess v)) && not final ->
+          (Shape_row (r, origin) :: dim_eqs, env)
       | Some (Bounds_row { glb = Some _; constr = Unconstrained; is_in_param; _ })
         when equal_stage stage Stage6a && not (is_in_param || is_resolve_at_use v) ->
           (* An operation result closes after its arguments (gh-ocannl-2126). Closed here, while a

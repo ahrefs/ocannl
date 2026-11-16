@@ -640,7 +640,9 @@ refused, and an inferred output row nothing sizes is a forgotten hidden dimensio
 same refusal applies to `{p}`, `neg {p}`, and a parameter beside a constant, with the
 default initializer, `uniform1`, or another initializer. State the parameter dimensions
 explicitly or supply a use that sizes them. The omitted-row exception is unchanged for
-batch and input rows: an omitted row spec may close empty. Output rows are never
+batch and input rows: an omitted row spec may close empty. Omitting both input dimensions
+and input axis labels in the parameter declaration grants this permission to its input
+row, independently of the initializer. Output rows are never
 implicitly omitted, so an initializer's omitted input row cannot grant that permission
 to its parameter's output.
 

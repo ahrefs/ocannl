@@ -141,7 +141,10 @@ let detour pre ~m ~fail =
 let suffix pre ~j =
   match
     let c = leaf "ck_c" j in
-    let out = TDSL.O.( + ) pre.y c in
+    (* The suffix states w's output width; plain broadcast addition can leave w at the heuristic's
+       unit width in prefixes with an unused literal branch. *)
+    let y = pre.y in
+    let%op out = y +++ "...|o; ...|o => ...|o" c in
     List.map (pre.held @ [ out ]) ~f:(fun t -> Shape.to_dims t.Tensor.shape)
   with
   | dims -> Ok dims
@@ -361,6 +364,12 @@ let soak () =
   let seeds = List.init 24 ~f:(fun i -> i + 1) in
   let controls = List.map seeds ~f:(fun seed -> (seed, control_dims ~seed)) in
   p_all "control: every prefix closes with the suffix" controls ~f:(fun (_, d) -> Result.is_ok d);
+  p_all ~min:24 "control: the suffix sizes the parameter output" controls ~f:(fun (_, dims) ->
+      match dims with
+      | Error _ -> false
+      | Ok dims ->
+          let weight = List.nth_exn dims 1 and output = List.last_exn dims in
+          Array.length weight = 2 && Array.length output = 1 && weight.(0) = output.(0));
   List.iter [ true; false ] ~f:(fun fail ->
       let what = if fail then "a failing construction" else "a succeeding construction" in
       let legs =

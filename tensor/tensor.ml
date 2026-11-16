@@ -1832,7 +1832,9 @@ let%debug7_sexp param ?(require_grad = true) ~t (name : string) ?(more_label = [
   (match t.diff with
   | Some diff -> Tn.set_observable diff.grad
   | None -> ());
-  Shape.set_terminal ~is_param:(Option.is_some t.diff) t.shape;
+  Shape.set_terminal
+    ~implicit_input:(Option.is_none input_dims && Option.is_none input_axes)
+    ~is_param:(Option.is_some t.diff) t.shape;
   mark_init_cone t;
   remove_fwd_root t;
   !param_postprocess { t with params = Set.singleton (module T) t }
