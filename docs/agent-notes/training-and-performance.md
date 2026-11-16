@@ -412,7 +412,7 @@ files.
   staging copies write into workgroup memory (a `Set` into a non-fragment workgroup-shared node
   from a plain read; an `i < c` partition guard on a loop index counts what it admits, since
   gh-1661's restrict fallback guards half the rows of threads), priced at `staged_copy_rate` in
-  the compute leg. Two traps: (1) the b8 cells reverse the order (64 blocks of a 64-wide tile over
+  the compute leg. Three traps: (1) the b8 cells reverse the order (64 blocks of a 64-wide tile over
   46 SMs leave 18 SMs doing two blocks), so the rate also switches on the launch TAIL in
   `context_fill` (`fm_tail`: `(B/P) * u(n) / n`, `n = ceil(B/P)`) -- and the tail alone, without
   the copy term, picks 16-thread tiles 3-4x slow: they are one calibration; (2) tensorized

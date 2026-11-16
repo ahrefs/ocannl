@@ -11,4 +11,4 @@ not through the copy rate without the transaction rate: true
 the uncoalesced walk returns an uncoalesced leaf: true
 with the coalesced menu, the pick ranks no higher than the uncoalesced walk's: true
 under the staged-copy rate, a coal-k leaf strictly beats the uncoalesced walk's pick at b256: true
-without it, the coalesced menu finds nothing strictly below the uncoalesced pick: true
+without it, both walks return a pick, the uncoalesced one uncoalesced, and the coalesced menu's ranks no lower: true

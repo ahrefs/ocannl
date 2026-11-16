@@ -994,21 +994,21 @@ let staged_copies ~is_staged (code : Low_level.t) : staged_copy_context list =
           plain_read a
       | _ -> false
     in
-    (* The fraction of an [i < c] guard's iterations it admits, as (admitted, extent), where [i] is
-       an enclosing loop's index from 0; [None] for any other guard. *)
+    (* The iterations an [i < c] guard admits, as (index, admitted), where [i] is an enclosing
+       loop's index from 0 -- at most what the enclosing guards already admit of it ([env] maps each
+       such index to that count, its extent where unguarded); [None] for any other guard. *)
     let rec admitted env (cond : Low_level.scalar_t) =
       match cond with
       | Low_level.Binop (Ops.Cmplt, (Embed_index (Idx.Iterator s), _), (Constant c, _)) -> (
           match List.Assoc.find env s ~equal:Idx.equal_symbol with
-          | Some extent when Float.is_integer c ->
-              Some [ (s, Int.clamp_exn (Float.to_int c) ~min:0 ~max:extent, extent) ]
+          | Some current when Float.is_integer c ->
+              Some [ (s, Int.clamp_exn (Float.to_int c) ~min:0 ~max:current) ]
           | _ -> None)
       | Binop (Ops.And, (a, _), (b, _)) -> (
           match Option.map2 (admitted env a) (admitted env b) ~f:( @ ) with
-          (* One index bounded twice is not two independent fractions: taken. *)
+          (* One index bounded twice in one conjunction: taken. *)
           | Some fs
-            when List.contains_dup fs ~compare:(fun (s1, _, _) (s2, _, _) ->
-                     Idx.compare_symbol s1 s2) ->
+            when List.contains_dup fs ~compare:(fun (s1, _) (s2, _) -> Idx.compare_symbol s1 s2) ->
               None
           | r -> r)
       | _ -> None
@@ -1030,17 +1030,20 @@ let staged_copies ~is_staged (code : Low_level.t) : staged_copy_context list =
           go ~ctx ~scale:(scale * extent) ~env body
       | Scan_loop { from_; to_; body; _ } ->
           go ~ctx ~scale:(scale * max 0 (to_ - from_ + 1)) ~env body
-      | If { cond = cond, _; body } ->
-          (* [scale] carries each guarded loop's extent, so the admitted count divides it out
-             exactly. *)
-          let scale =
-            match admitted env cond with
-            | Some fractions ->
-                List.fold fractions ~init:scale ~f:(fun scale (_, n, extent) ->
-                    if extent > 0 then scale / extent * n else scale)
-            | None -> scale
-          in
-          go ~ctx ~scale ~env body
+      | If { cond = cond, _; body } -> (
+          (* [scale] carries each guarded index's count as [env] has it -- its extent, or what an
+             enclosing guard admits of it -- so replacing that count with the new one is exact, and
+             nested guards on one index compose as their minimum. *)
+          match admitted env cond with
+          | Some bounds ->
+              let scale, env =
+                List.fold bounds ~init:(scale, env) ~f:(fun (scale, env) (s, n) ->
+                    let current = List.Assoc.find_exn env s ~equal:Idx.equal_symbol in
+                    ( (if current > 0 then scale / current * n else scale),
+                      List.Assoc.add env s n ~equal:Idx.equal_symbol ))
+              in
+              go ~ctx ~scale ~env body
+          | None -> go ~ctx ~scale ~env body)
       | Set { tn; llsc; _ } when is_staged tn && plain_read llsc ->
           add ctx
             (Float.of_int scale *. Float.of_int (Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec)))

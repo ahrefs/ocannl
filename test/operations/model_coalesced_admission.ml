@@ -203,5 +203,12 @@ let () =
   in
   p "under the staged-copy rate, a coal-k leaf strictly beats the uncoalesced walk's pick at b256"
     (strictly_better ~limits:rog_like);
-  p "without it, the coalesced menu finds nothing strictly below the uncoalesced pick"
-    (not (strictly_better ~limits:rog_without_copy_rate))
+  p
+    "without it, both walks return a pick, the uncoalesced one uncoalesced, and the coalesced \
+     menu's ranks no lower"
+    (match
+       ( search ~limits:rog_without_copy_rate ~coalesced:false,
+         search ~limits:rog_without_copy_rate ~coalesced:true )
+     with
+    | Some (p0, r0), Some (_, r1) -> Option.is_none p0.Autotune.sk_coalesce && Float.(r1 >= r0)
+    | _ -> false)

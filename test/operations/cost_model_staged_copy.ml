@@ -120,6 +120,23 @@ let () =
   | _ -> p "a listing at rate L re-scores at R by stg * (1/R - 1/L), over every context" false
 
 let () =
+  (* Nested guards on one index compose as their minimum, in either order. *)
+  let nw = 8 in
+  let a = fresh_tn "scc_g_a" [| nw |] and ta = fresh_tn "scc_g_ta" [| nw |] in
+  let is_staged tn = Ir.Tnode.equal tn ta in
+  let nested outer inner =
+    let w = Ll_test.sym () in
+    let guard n body = Ll_test.if_ (Ll_test.lt (Ll_test.embed w) (Ll_test.ic n)) body in
+    Ll_test.loop_n ~axis:LL.Workgroup w nw
+      (guard outer (guard inner (Ll_test.set ta [| it w |] (Ll_test.get a [| it w |]))))
+  in
+  (* 2 of 8 threads, 4-byte cells. *)
+  p "an outer [w < 4] and an inner [w < 2] admit 2 threads"
+    (List.equal Poly.equal (ctx_list (CM.staged_copies ~is_staged (nested 4 2))) [ (1, 8, 8.) ]);
+  p "an outer [w < 2] and an inner [w < 4] admit 2 threads"
+    (List.equal Poly.equal (ctx_list (CM.staged_copies ~is_staged (nested 2 4))) [ (1, 8, 8.) ])
+
+let () =
   (* What is not a copy, and what lends a copy no context. *)
   let nw = 4 and ns = 2 in
   let a = fresh_tn "scc_n_a" [| ns; nw |]
@@ -236,19 +253,61 @@ let stand_in =
   }
 
 (* The seeding gate reads neither the copy rate nor the tail: the term was fitted among staged
-   leaves, and the gate weighs a staged sketch against an unstaged preset. *)
+   leaves, and the gate weighs a staged sketch against an unstaged preset. Through the gate's own
+   ranker: the plan the untuned CUDA compile derives for a two-matmul chain (model_seeded_anchor's,
+   which the term priced in the gate stopped seeding on rog's CUDA) under a CUDA-shaped record is
+   the same plan, by its digest, with and without the copy rate -- and it seeds. *)
+let cuda_like =
+  {
+    stand_in with
+    cache_capacity_bytes = Some (12 * 1024 * 1024 * 1024);
+    cache_bandwidth = Some 1.8e12;
+    max_resident_threads = Some (46 * 1536);
+    dram_bandwidth = Some 6.0e11;
+  }
+
 let () =
-  let with_tiers =
-    { stand_in with cache_capacity_bytes = Some (1 lsl 30); cache_bandwidth = Some 1e12 }
+  let q = 128 in
+  let cell idx = Float.of_int (1 + (Array.fold idx ~init:0 ~f:( + ) % 7)) *. 0.125 in
+  let mat label = NTDSL.init ~l:label ~prec:Ir.Ops.single ~o:[ q ] ~i:[ q ] ~f:cell () in
+  let qa = mat "scc_ca" and qb = mat "scc_cb" and qc = mat "scc_cc" and qf = mat "scc_cf" in
+  let%op qd = qa + qb in
+  Train.set_materialized qd.Tensor.value;
+  let%op qe = qd * qc in
+  Train.set_materialized qe.Tensor.value;
+  let%op qg = qf * qe in
+  Train.set_materialized qg.Tensor.value;
+  let target = Ll_test.cuda_model_target ~limits:cuda_like () in
+  let facts = target.Autotune.mt_facts and capabilities = target.Autotune.mt_capabilities in
+  let plan ~tag limits =
+    let opt =
+      Context.lowered_for_decisions ~name:("scc_chain_" ^ tag) ~facts ~limits (Context.cpu ())
+        (Train.forward qg) Ir.Indexing.Empty
+    in
+    Autotune.seeded_plan
+      ~seed_gate:(Autotune.seeded_default_gate ~limits)
+      ~capabilities ~facts ~limits ~accum_prec:capabilities.Ir.Backend_intf.accum_prec
+      ~static_indices:[] opt
   in
-  let gate limits = Autotune.seeded_default_gate ~limits in
-  p "the auto gate is the same with and without the copy rate"
-    (match (gate with_tiers, gate { with_tiers with staged_copy_rate = None }) with
-    | (Autotune.Ranked _ as g1), (Autotune.Ranked _ as g2) -> Poly.equal g1 g2
-    | _ -> false);
-  p "and its launch fill is continuous"
-    (match gate with_tiers with
-    | Autotune.Ranked { fill = Some fm; _ } -> not fm.CM.fm_tail
+  let seeded_count = function
+    | Some { Autotune.sp_segments = Some (_, ds); _ } ->
+        List.count ds ~f:(function Autotune.Seeded_sketch _ -> true | _ -> false)
+    | _ -> 0
+  in
+  let with_rate = plan ~tag:"rate" cuda_like in
+  let without = plan ~tag:"norate" { cuda_like with staged_copy_rate = None } in
+  Stdio.eprintf
+    "cost_model_staged_copy: chain seeds %d segment(s) with the copy rate, %d without (not part of \
+     the golden)\n"
+    (seeded_count with_rate) (seeded_count without);
+  p "the auto gate (Ranked) is what derives the chain's plan here"
+    (match Autotune.seeded_default_gate ~limits:cuda_like with
+    | Autotune.Ranked _ -> true
+    | Autotune.Min_reduction _ -> false);
+  p "under a CUDA-shaped record the untuned plan seeds the chain" (seeded_count without >= 1);
+  p "and it is the same plan with the copy rate: the gate's ranker prices no copy term"
+    (match (with_rate, without) with
+    | Some a, Some b -> String.equal (Autotune.seeded_plan_digest a) (Autotune.seeded_plan_digest b)
     | _ -> false)
 
 let () =
