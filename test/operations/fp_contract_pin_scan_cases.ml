@@ -109,4 +109,57 @@ let got = Context.get_values ctx tensor
 let () = p "equal" (same_bits got.(0) 1.)
 |ocaml}
     );
+    ( "numeric collection predicate",
+      false,
+      {ocaml|
+open Verdict.Claims
+let got = Context.get_values ctx tensor
+let () = p "equal" (Array.equal Float.equal got [|1.|])
+|ocaml}
+    );
+    ( "indexed claim over low-level executed outputs",
+      true,
+      {ocaml|
+open Verdict.Claims
+let eq a b = Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b)
+let got = List.hd (Ll_test.execute ~name:"probe" () ~seed:[] ~read:[tensor])
+let () = p_alli "rounding" [0;1] ~f:(fun i _ -> eq got.(i) got.(i))
+|ocaml}
+    );
+    ( "qualified top-level p",
+      true,
+      {ocaml|
+let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let got = Context.get_values ctx tensor
+let () = Verdict.p "equal" (eq got.(0) 1.)
+|ocaml}
+    );
+    ( "Int32 bit pattern against encoding",
+      true,
+      {ocaml|
+open Verdict.Claims
+let got = Context.get_values ctx tensor
+let () = claim "rounding" (Int32.equal (Int32.bits_of_float got.(0)) 0x3e396287l)
+|ocaml}
+    );
+    ( "gated pairwise claim and census reader",
+      true,
+      {ocaml|
+open Verdict.Claims
+let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let values, _ = Ll_test.execute_with_census ~name:"probe" () ~seed:[] ~read:[tensor]
+let got = List.hd values
+let () = gated_all ~when_:true ~on:"cc" "equal" [got] ~f:(Array.equal eq [|1.|])
+|ocaml}
+    );
+    ( "shadowed low-level output module",
+      false,
+      {ocaml|
+open Verdict.Claims
+module Ll_test = struct let execute ~name:_ () ~seed:_ ~read:_ = [[|1.|]] end
+let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let got = List.hd (Ll_test.execute ~name:"probe" () ~seed:[] ~read:[tensor])
+let () = p "equal" (eq got.(0) 1.)
+|ocaml}
+    );
   ]

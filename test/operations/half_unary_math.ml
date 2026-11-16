@@ -20,6 +20,8 @@
    ([__float2half(expf(__half2float(x)))]), so both claims hold there too, over [Recip],
    [Recip_sqrt] and [Tanh_approx] besides. HIP keeps ROCm's OCML half functions. The claims are
    skipped elsewhere; every backend still compiles and runs the kernels. *)
+let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
+
 open Base
 open Ocannl.Operation.DSL_modules
 module LL = Ir.Low_level

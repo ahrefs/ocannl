@@ -10,6 +10,12 @@ case: code subject -- quantified predicate and output collection: true
 case: code subject -- unused comparator is not applied: true
 case: code subject -- shadowed claim: true
 case: code subject -- shadowed output module: true
+case: code subject -- numeric collection predicate: true
+case: code subject -- indexed claim over low-level executed outputs: true
+case: code subject -- qualified top-level p: true
+case: code subject -- Int32 bit pattern against encoding: true
+case: code subject -- gated pairwise claim and census reader: true
+case: code subject -- shadowed low-level output module: true
 case: a pinned claim is listed as pinned: true
 case: a marked claim is listed with its kind: true
 case: a claim with neither pin nor marker is refused: true
@@ -64,6 +70,9 @@ test/operations/gpu_conv_twin_tiles.ml -- exact-operands: Ll_test.exact_partials
 test/operations/gpu_kernel_cache.ml -- pinned off
 test/operations/gpu_packed_prec.ml -- no-contraction: each lane does one operation, an explicit fma among them; no product meets an add
 test/operations/grid_launch_floor.ml -- exact-operands: Bench_gebp products are multiples of an eighth and every sum stays exact in f32
+test/operations/half_float_power.ml -- pinned off
+test/operations/half_unary_math.ml -- pinned off
+test/operations/integer_power_domain.ml -- pinned off
 test/operations/lineage_recompile_step.ml -- exact-operands: integer inputs, eighth-step weights and a dyadic rate stay exact for the three steps
 test/operations/masked_persistent_fragment.ml -- not-cc: executed claims need a GPU advertising an f16 tile; cc skips them
 test/operations/matmul_interchange.ml -- exact-operands: positive quarters and eighths with an explicit fma; every gradient sum is exact
@@ -110,6 +119,7 @@ test/operations/tile_mma_geometry.ml -- exact-operands: quarter, integer and hal
 test/operations/tile_mma_narrow.ml -- exact-operands: dyadic operands keep every product and sum exact, the native f16 accumulators included
 test/operations/tune_footprint_default.ml -- exact-operands: small integer operands make every sum of products exact in f32
 test/operations/uint4x32_fixed_index_parity.ml -- no-contraction: threefry draws from an inlined and a materialized counter: bit operations only
+test/operations/unary_math_special_values.ml -- pinned off
 test/operations/vec_signed_zero.ml -- exact-operands: eighths and signed zeros; the fma leg is an explicit fma in both kernels
 test/operations/verdict_ratchet.ml -- not-executed: the bitwise text is a scan's fixture sources and justification prose
 test/operations/winograd_conv.ml -- exact-operands: bounded integer fixtures with dyadic transforms, every sum exact in f32
