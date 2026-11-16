@@ -1160,7 +1160,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   makes the nested wrapper retain its guardian and command-as-child topology.
   The leg compares that live topology with leg 99's `q-slot.sh`, rejects a twin
   with its guardian removed, follows `wait last` to the run's red verdict, and
-  reaps the background record before checking no `unpublished:` remains.
+  checks the red verdict before and after reaping the background record, with
+  no `queued:` or `unpublished:` in either observation.
   Status first marks the preceding green run; the fixture moves that mark and
   waits for the waiter to recreate it before releasing publication. Cleanup
   releases the shape children and waits for their parents to reap them before

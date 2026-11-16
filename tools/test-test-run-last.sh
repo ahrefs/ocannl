@@ -690,9 +690,18 @@ q_child_shape() { # command pid
     $1 == 1 { sub(/^[[:space:]]*[0-9]+[[:space:]]+/, ""); if ($0 == wanted) found=1 }
     END { exit !found }'
 }
+# Status boundary: exit 0, the exact red verdict, and no queued/unpublished
+# prefix. Other output is opaque. Both sides of the public reap use this check.
+q_failed_verdict() { # root state-root output
+  local root=$1 runs=$2 out=$3 rc
+  OCANNL_TOOL_TEST_RUNS=$runs "$root/tools/test-run.sh" status last >"$out" 2>&1
+  rc=$?
+  [ "$rc" = 0 ] && grep -qxF 'verdict: FAIL (exit 1)' "$out" &&
+    ! grep -qE '^(queued:|unpublished:)' "$out"
+}
 leg_99b() {
   local label='real fleet slot --bg follows queued last and matches the stand-in guardian shape'
-  local fw real_root real_runs real_bg real_pid real_dir real_rc real_green real_red real_detail=
+  local fw real_root real_runs real_bg real_pid real_dir real_rc real_green real_red shape_pid real_detail=
   . "$HERE/fleet-worker-candidates.sh"
   # --ci-shell hides fleet tables but the host can still answer by hostname.
   # Its explicit no-toolchain mode is also the no-real-fleet boundary.
@@ -730,7 +739,7 @@ leg_99b() {
   if [ "$real_rc" != 0 ] || ! q_until 20 test -s "$TMP/real.pid"; then
     touch "$TMP/real.release"
     real_dir=$(tail -n 1 "$TMP/real-launch.out")
-    [ ! -d "$real_dir" ] || "$(dirname "$fw")/bg-run.sh" wait "$real_dir" >/dev/null 2>&1
+    [ ! -d "$real_dir" ] || "$q_real_waiter" wait "$real_dir" >/dev/null 2>&1
     harness_abandon "real fleet launch did not become ready: exit $real_rc: $(cat "$TMP/real-launch.out")"
     return
   fi
@@ -747,8 +756,8 @@ EOF
   touch "$TMP/shape.slot"
   q_until 5 test -s "$TMP/shape.pid"
   if [ -s "$TMP/shape.pid" ]; then
-    read -r real_rc <"$TMP/shape.pid"
-    q_until 5 q_child_shape "$real_rc" || real_detail='stand-in lacks real guardian/child topology'
+    read -r shape_pid <"$TMP/shape.pid"
+    q_until 5 q_child_shape "$shape_pid" || real_detail='stand-in lacks real guardian/child topology'
   else real_detail='stand-in child never started'; fi
   sed '/^( (while kill -0 /d' "$q_slot" >"$TMP/no-guardian.sh"
   (cd "$q_root" && exec bash "$TMP/no-guardian.sh" "$TMP/control.slot" exec -- \
@@ -758,8 +767,8 @@ EOF
   touch "$TMP/control.slot"
   q_until 5 test -s "$TMP/control.pid"
   if [ -s "$TMP/control.pid" ]; then
-    read -r real_rc <"$TMP/control.pid"
-    q_until 2 q_child_shape "$real_rc" && real_detail='negative control accepted guardian-free stand-in'
+    read -r shape_pid <"$TMP/control.pid"
+    q_until 2 q_child_shape "$shape_pid" && real_detail='negative control accepted guardian-free stand-in'
   else real_detail='negative control child never started'; fi
   touch "$TMP/shape.release" "$TMP/control.release"
   q_release_all
@@ -777,19 +786,18 @@ EOF
   real_red=$(OCANNL_TOOL_TEST_RUNS=$real_runs "$real_root/tools/test-run.sh" paths run last)
   { [ "$real_rc" = 1 ] && [ "$real_red" != "$real_green" ] && grep -qF "$real_red" "$TMP/real-wait"; } ||
     real_detail="wait last: exit $real_rc: $(cat "$TMP/real-wait")"
+  q_failed_verdict "$real_root" "$real_runs" "$TMP/real-status" ||
+    real_detail="status before background reap: $(cat "$TMP/real-status")"
   # Reap the detached record through its public waiter before returning.
   real_dir=$(tail -n 1 "$TMP/real-launch.out")
   if [ -z "$real_dir" ]; then
     real_detail="no bg run directory: $(cat "$TMP/real-launch.out")"
   else
-    "$(dirname "$fw")/bg-run.sh" wait "$real_dir" >"$TMP/real-bg-wait" 2>&1
+    "$q_real_waiter" wait "$real_dir" >"$TMP/real-bg-wait" 2>&1
     [ "$?" = 0 ] && [ "$(cat "$real_dir/rc")" = 1 ] || real_detail="bg wait: $(cat "$TMP/real-bg-wait")"
   fi
-  OCANNL_TOOL_TEST_RUNS=$real_runs "$real_root/tools/test-run.sh" status last >"$TMP/real-status" 2>&1
-  real_rc=$?
-  { [ "$real_rc" = 0 ] && grep -q 'verdict: FAIL (exit 1)' "$TMP/real-status" &&
-    ! grep -q 'unpublished:' "$TMP/real-status"; } ||
-    real_detail="final status: exit $real_rc: $(cat "$TMP/real-status")"
+  q_failed_verdict "$real_root" "$real_runs" "$TMP/real-status" ||
+    real_detail="final status: $(cat "$TMP/real-status")"
   printf '  real fleet run: %s; background record: %s\n' \
     "$(OCANNL_TOOL_TEST_RUNS=$real_runs "$real_root/tools/test-run.sh" paths run last)" "$real_dir"
   if [ -z "$real_detail" ]; then report 0 "$label"; else report 1 "$label" "$real_detail"; fi
