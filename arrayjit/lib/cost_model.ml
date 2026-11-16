@@ -461,15 +461,21 @@ let carrier_chains ~is_private ~carrier (body : Low_level.t) =
         | _ -> foreign := written :: !foreign)
   in
   walk [] body;
-  (* A member's value reading a member node's cell other than its own target -- or another member's
-     local -- depends on another chain. *)
+  (* A chain reads only its own accumulator cell and values its reduction step does not produce: a
+     member's value reading any node or local the carrier's body writes -- another member's, or a
+     temporary that may carry one ([tmp = a[1]; a[0] += tmp]) -- other than its own target is not
+     proven independent; nor is a scope body's read, which the census does not inspect. *)
   let reads_other (own : chain_target) (sc : Low_level.scalar_t) =
     let member_node tn =
       List.exists !members ~f:(fun (t, _, _) ->
           match t with Chain_cell (tn', _) -> Tn.equal tn tn' | Chain_local _ -> false)
+      || List.exists !foreign ~f:(function `Node tn' -> Tn.equal tn tn' | `Local _ -> false)
     and member_local id =
       List.exists !members ~f:(fun (t, _, _) ->
           match t with Chain_local id' -> Low_level.equal_scope_id id id' | Chain_cell _ -> false)
+      || List.exists !foreign ~f:(function
+        | `Local id' -> Low_level.equal_scope_id id id'
+        | `Node _ -> false)
     in
     let rec go (sc : Low_level.scalar_t) =
       match sc with

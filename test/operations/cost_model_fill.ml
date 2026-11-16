@@ -332,6 +332,19 @@ let () =
   in
   p "an update gathering a member node at a runtime index is not proven independent: no chains"
     (chains_are ~private_:[ a ] gathered [ None ]);
+  (* A dependence carried by a temporary the step writes: [tmp = a[1]; a0 += tmp; a1 += x]. *)
+  let tv = fresh_tn "cf_dep_v" [| 1 |] in
+  let through_tmp =
+    Ll_test.loop_n k 8
+      (List.reduce_exn ~f:Ll_test.seq
+         [
+           Ll_test.set tv [| Ll_test.fixed 0 |] (Ll_test.get a [| Ll_test.fixed 1 |]);
+           upd 0 (Ll_test.get tv [| Ll_test.fixed 0 |]);
+           upd 1 xk;
+         ])
+  in
+  p "an update reading a temporary the reduction step writes is not proven independent: no chains"
+    (chains_are ~private_:[ a; tv ] through_tmp [ None ]);
   (* Inner loops that do not address distinct cells: [acc[i + j]] over i, j < 4 is 7 cells, not 16;
      and a looped member beside a single cell of the same node may overlap it. *)
   let s7 = fresh_tn "cf_dep_s" [| 7 |] in
