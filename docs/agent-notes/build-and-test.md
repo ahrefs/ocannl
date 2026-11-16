@@ -336,8 +336,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   is 35 members: four at once from a fresh clone on 2026-11-13 it took 499 s on mac-studio at load
   5 to 11 and 347 s on an idle minix-amd-linux (the `--toolchain` group alone 15 s and 11 s, the
   `--promotion` group 109 s and 92 s), against the 422 s and 344 s of the shell group the next
-  item's bound was sized with. The slowest honest run is then about 1060 s and 950 s, 1.7 times
-  under the 1800 s bound. That run found one member the merge build could not have passed on
+  item's bound was sized with. Those pre-record tier totals are about 1060 s and 950 s;
+  `.github/ship-pr-merge-build` owns the current estimate including record reads and training-reach
+  queries. That run found one member the merge build could not have passed on
   macOS: `tools/typecheck-scan-cases.sh` named its root by the logical path, and under `$TMPDIR`,
   where ship-pr builds a merge, that is `/var/...` while dune's workspace is `/private/var/...`,
   so dune refused every owning module ("is not in dune workspace"). It resolves the root with
@@ -5227,6 +5228,27 @@ the change reaches (they serialize on the training lock and never fit the 1800 s
 2026-11-13 the per-PR matrix ran that suite; from then until this landed a cross-cutting change
 merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundary; in brief:
 
+- **Training reach.** `prepush` prints each omitted training alias on stderr as
+  `test-run: prepush: train: ALIAS`, beside the `slow:` lines, including `--list`
+  and before a CROSS-CUTTING refusal (first-tier names are the full list's). The merge build reads
+  those anchored lines and the count together: names must be distinct canonical
+  `@DIR/train-NAME` operands, exist in Dune's alias listing, and match the count.
+  A disagreement, or names without a count, fails before reading the record.
+  With no names and a nonzero or unread count it retains the older `affected`
+  query and checks any count against that answer: intentional count-only protocol
+  compatibility, still requiring complete coverage. A normal merged tree ships
+  both tools together, and the base-alone comparison runs both base versions;
+  an older base does not itself create a mixed new-reader/old-producer case.
+  With this PR's two tools together, matching names avoid that query.
+- **Timing the reader.** `.github/ship-pr-merge-build` owns the measured figures,
+  their boundary and the computed full-build estimate. Reusable recipe: make a
+  `--no-local` scratch clone, seed both tools, merge a library-only head `--no-ff`,
+  and use an empty local bare repository as `OCANNL_TOOL_OWED_RUN_URL`. On the same
+  warm clone swap only the merge-build reader and time each invocation through
+  its missing-record refusal; check the trace for one versus zero extra `affected`
+  calls. This exercises real format, compile and scans without publishing a
+  scratch ref. It does not measure a full successful worst case or stalls at the
+  configured record-read caps.
 - **Where.** The ref `refs/owed-runs/<head sha>` on the PR repository (`OWED_RUN_URL` in the
   script; `OCANNL_TOOL_OWED_RUN_URL` overrides it for the harness and a fork). Its commit has the
   head as its only parent and the head's tree, and its message holds one `owed-run: v1 ...` line

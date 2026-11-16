@@ -50,12 +50,22 @@
 # narrow, 661 s and 731 s; the whole harness set, 35 members, 499 s (at load 5 to 11) and 347 s.
 # Unbounded, that is 1300 s and 1218 s, so the tests tier is capped: it builds at most 200 aliases (TESTS_MAX in the script),
 # about 320 s and 360 s at the measured 1.6 s and 1.8 s an alias, and a longer list is owed to
-# the PR's own recorded run. With the two asks of `affected` a cross-cutting change costs (about 50 s
-# each), the slowest honest run is then about 1060 s and 950 s; the third ask a change reaching
-# `train-` aliases adds to name them and the record's two reads (60 s each at most,
-# gh-ocannl-2218) put that at most near 1230 s and 1120 s, not re-timed. 1800 s is 1.46 times
-# that, and nine times the ordinary run: a merge whose change reaches some tens of tests and no harness took
-# 200 s and 179 s whole (ship-pr's dry run, `pr-review.sh merge-build`). It is also the 30
+# the PR's own recorded run. With the two asks of `affected` a cross-cutting change costs (about
+# 50 s each in that sample), those tier totals are about 1060 s and 950 s BEFORE the owed-record
+# reads. Current prepush names its omitted train- aliases even before a wide-tier refusal;
+# matching names replace the third affected ask with `dune show aliases DIR`. On 2026-11-16,
+# in an exclusive mac-studio measurement on one warm scratch clone, a real merge adding a
+# comment in tensor/einsum_parser.ml reached six train- aliases: the old reader took 100.11 s
+# with the third ask, the new one 76.60 s without it (one alias listing). Both ran format,
+# compile and scans, then refused the missing record. This measures the path TO that refusal,
+# not a successful maximum, the 200-alias tier or the whole harness set. It is one old/new pair,
+# not a fresh-clone or minix remeasurement (wave-20261115-ocannl, p2, run-8).
+# The full-build estimate remains COMPUTED: the earlier tier totals plus the record's two
+# capped reads (60 s each at most, gh-ocannl-2218) give about 1180 s and 1070 s, plus alias-listing
+# cost. A count-only compatibility report retains the third ask and the earlier
+# computed 1230 s / 1120 s estimate. Keep 1800 s: 1.46 times the larger legacy estimate, and
+# nine times the ordinary run: a merge reaching some tens of tests and no harness took 200 s
+# and 179 s whole (ship-pr's dry run, `pr-review.sh merge-build`). It is also the 30
 # minutes no CI job's cap goes past. A bound near a measured pass is what overran before: 1200 s
 # over a one-at-a-time shell group's 1167 s, at load 3.6 (gh-ocannl-1994). Re-measure when the
 # harness set or the per-alias cost grows: tools/merge-build-check.sh's header names the tiers,
