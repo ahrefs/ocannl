@@ -6246,6 +6246,27 @@ let draw_counter_leaves ineqs env =
               | _ -> acc)
       | _ -> acc)
 
+(* gh-ocannl-2223: one free component on each side of a concatenation with the same solved claim is
+   a closing dependency, not a basis-preserving subtraction. Keep both claims on the original
+   equation. The side with the smaller solved sum waits while the other free component closes; the
+   equation then determines its size and basis. Boundary: exactly one plain variable per side, equal
+   non-default solved claims, unequal solved sums. This adds no propagation of bounds through sums:
+   the store with a waiting-side [k >= 5_default] still refuses, as on the base. The driver's
+   final-fixpoint cycle breaker remains available. *)
+let concat_closing_dependent d1 d2 =
+  match (d1, d2) with
+  | Concat xs, Concat ys -> (
+      let sx, rx = partition_solved_dims (flatten_concat xs)
+      and sy, ry = partition_solved_dims (flatten_concat ys) in
+      match (rx, ry, reduce_solved_basis sx, reduce_solved_basis sy) with
+      | [ Var vx ], [ Var vy ], Some bx, Some by
+        when String.equal bx by && not (String.equal bx default_basis) ->
+          let sum_x = List.sum (module Int) sx ~f:(fun s -> s.d)
+          and sum_y = List.sum (module Int) sy ~f:(fun s -> s.d) in
+          if sum_x > sum_y then Some vy else if sum_y > sum_x then Some vx else None
+      | _ -> None)
+  | _ -> None
+
 let%debug4_sexp solve_inequalities ~(stage : stage)
     ?(discardable_vars : dim_var_set = dim_var_set_empty) (ineqs : constraint_ list) env :
     constraint_ list * _ =
@@ -6253,10 +6274,10 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
   let rec solve ?(unblocked_dims = dim_var_set_empty) ineqs (env : environment) :
       constraint_ list * _ =
     let sizes, ineqs = List.partition_tf ineqs ~f:(function Dim_size _ -> true | _ -> false) in
-    (* gh-ocannl-2156: a held window equation is a dependency for closing, too. Its plain extent
-       waits for the window; against a fixed extent, an open kernel waits for the iterator so kernel
-       inference can use it. Recompute after substitution each pass, retaining the closing
-       constraints until those equations settle. *)
+    (* gh-ocannl-2156, gh-ocannl-2223: held window and shared-claim concat equations also constrain
+       closing order. A window's plain extent waits for the window; against a fixed extent, an open
+       kernel waits for the iterator so kernel inference can use it. Recompute after substitution
+       each pass, retaining the closing constraints until those equations settle. *)
     let waiting_on_window (waiting, kernels) extent window =
       match (extent, window) with
       | Var v, Affine { conv = Some { kernel = Var _; use_padding = false; _ }; _ } ->
@@ -6272,7 +6293,13 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
         List.fold ineqs ~init:(dim_var_set_empty, dim_var_set_empty) ~f:(fun waiting -> function
           | Dim_eq { d1; d2; _ } ->
               let d1 = subst_dim env d1 and d2 = subst_dim env d2 in
-              waiting_on_window (waiting_on_window waiting d1 d2) d2 d1
+              let waiting, kernels = waiting_on_window (waiting_on_window waiting d1 d2) d2 d1 in
+              let waiting =
+                match concat_closing_dependent d1 d2 with
+                | Some v -> Set.add waiting v
+                | None -> waiting
+              in
+              (waiting, kernels)
           | _ -> waiting)
     in
     let deferred_dims =
