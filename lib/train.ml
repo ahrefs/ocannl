@@ -725,13 +725,7 @@ type shipped = {
 }
 
 (* The process-level failures no containment here absorbs. *)
-let must_propagate = function
-  | Out_of_memory | Stdlib.Sys.Break | Stack_overflow | Assert_failure _ -> true
-  (* A malformed registered setting (gh-ocannl-1332) is the configuration's failure, not an arm's or
-     a flip's: contained, it would ship whichever placement happens not to read the key, as though
-     the setting had been honored. *)
-  | Utils.Invalid_config_value _ -> true
-  | _ -> false
+let must_propagate = Ir.Schedule_outcome.must_propagate
 
 (* gh-ocannl-1859: giving back a context no caller will receive. A failed release is reported and
    never replaces the failure the caller has to act on. *)

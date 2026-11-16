@@ -42,9 +42,9 @@ let make_ctx () =
   if Ir.Backend_intf.renders_on_host_pool (Context.backend_facts ctx) then Context.cpu ~threads:2 ()
   else ctx
 
-let setup () =
+let setup ?(make_context = make_ctx) () =
   watchdog ();
-  let ctx, routine = Context.compile (make_ctx ()) comp Ir.Indexing.Empty in
+  let ctx, routine = Context.compile (make_context ()) comp Ir.Indexing.Empty in
   Stdio.eprintf "wedge fixture backend: %s\n%!" (Context.backend_name ctx);
   let ctx = Context.run ctx routine in
   p "the healthy wait completes" (Context.await_within ctx ~seconds:60.);
@@ -143,9 +143,11 @@ let event () =
   let module Backend = (val impl.bi_module) in
   let event = Backend.all_work ctx.device in
   Backend.sync event;
-  p "the healthy event sync completes" true;
-  mark ();
-  p "event sync on its marked owner raises Device_wedged" (refused (fun () -> Backend.sync event));
+  p "the healthy event sync completes" (Backend.is_done event);
+  let pending = ref event in
+  mark ~before_wait:(fun () -> pending := Backend.all_work ctx.device) ();
+  p "event sync on its marked owner raises Device_wedged"
+    (refused (fun () -> Backend.sync !pending));
   p "another bounded wait on the mark raises Device_wedged"
     (refused (fun () -> Backend.await_within ctx.device ~seconds:60.))
 
@@ -239,7 +241,7 @@ let placements () =
         | _ -> None
         | exception exn -> Some exn)
   in
-  p "a placement arm expired a real device wait" !fired;
+  p "the placement arm's injected failure fired after a real expiry" !fired;
   p "the placement search propagates the arm failure naming its bound"
     (Option.exists result ~f:(fun exn ->
          String.is_substring (Exn.to_string exn) ~substring:"host-side bound"));
@@ -250,3 +252,56 @@ let placements () =
       | _ -> false);
   p "the caller's later release propagates Device_wedged"
     (refused (fun () -> Context.release caller))
+
+(* Only multidev_cc: two real worker domains exercise the cross-device dependency path without
+   requiring two physical GPUs. Each source expiry is finite work, never a hanging kernel. *)
+let cross_device () =
+  let _, _, mark = setup ~make_context:(fun () -> Context.cpu ~threads:2 ()) () in
+  let module Backend = B.Multidev_cc_b in
+  let src_root = Backend.make_context (Backend.get_device ~ordinal:0) in
+  let dst_root = Backend.make_context (Backend.get_device ~ordinal:1) in
+  let tensor =
+    Operation.init ~l:"wedge_cross_device" ~prec:Ir.Ops.single ~o:[ 4 ]
+      ~f:(fun i -> Float.of_int (i.(0) + 1))
+      ~grad_spec:Tensor.Prohibit_grad ()
+  in
+  let tn = tensor.Tensor.value in
+  let host value =
+    Ir.Ndarray.init_array ~debug:"cross-device wedge" Ir.Ops.single ~dims:[| 4 |] ~padding:None
+      ~f:value
+  in
+  let values = host (fun i -> Float.of_int (i.(0) + 1)) in
+  let zeros = host (fun _ -> 0.) in
+  let src = Backend.init_from_host src_root tn values in
+  let dst = Backend.init_from_host dst_root tn zeros in
+  let copy () =
+    let routine = Option.value_exn (Backend.device_to_device tn ~into_merge_buffer:No ~dst ~src) in
+    Ir.Task.run routine.schedule
+  in
+  copy ();
+  Backend.await dst.device;
+  let downloaded = host (fun _ -> -1.) in
+  p "the healthy cross-device copy is available for readback" (Backend.to_host dst tn downloaded);
+  Backend.await dst.device;
+  p_all "the healthy cross-device copy computes the source values" [ 0; 1; 2; 3 ] ~f:(fun i ->
+      Float.(Ir.Ndarray.get_as_float downloaded [| i |] = Float.of_int (Int.succ i)));
+  let pending = ref (Backend.all_work src.device) in
+  mark
+    ~before_wait:(fun () ->
+      let event = Backend.all_work src.device in
+      pending := event;
+      Hashtbl.set src.device.updating_for ~key:tn ~data:event)
+    ();
+  p "the marked source has a pending writer event" (not (Backend.is_done !pending));
+  let before = AC.snapshot () in
+  p "a cross-device copy of the marked source raises Device_wedged" (refused copy);
+  p "the copy refusal frees no pools" ((AC.snapshot ()).pools_freed = before.pools_freed);
+  p "a queued wait on the marked source event raises Device_wedged"
+    (refused (fun () -> Backend.will_wait_for dst !pending));
+  p "the destination still completes its bounded wait"
+    (Backend.await_within dst.device ~seconds:60.);
+  let healthy_event = Backend.all_work dst.device in
+  Backend.sync healthy_event;
+  p "an event from the other device remains usable" (Backend.is_done healthy_event);
+  p "a marked destination refuses even a healthy source event"
+    (refused (fun () -> Backend.will_wait_for src healthy_event))

@@ -1702,7 +1702,10 @@ files.
   (`test/operations/wait_bound_device_wedged`, multidev_cc and Metal).
   The mark lives in `Backends.With_device_wedge_guard`, below the transfer layer (gh-ocannl-2192):
   device waits, bounded waits and event sync consult one atomic map. Events name their recording
-  device, so a marked device does not condemn another device's events. Delta unwind, failed-link
+  device, so a marked device does not condemn another device's events. Queued cross-device waits
+  check both the source event's owner and the destination before submitting anything: otherwise an
+  unmarked destination could wait forever behind a marked source. `wait_bound_cross_device` pins
+  both directions on two multidev_cc devices, alongside a healthy copy and an unaffected event. Delta unwind, failed-link
   delta cleanup and transfer cleanup propagate `Device_wedged` before any free or arena rollback:
   those unreachable pools deliberately leak until process exit, since outstanding kernels may
   still write them. If cleanup was already unwinding an interrupt, host OOM, stack overflow,

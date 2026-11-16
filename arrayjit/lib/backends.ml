@@ -461,11 +461,9 @@ let check_merge_buffer_static ~merge_buffer_node ~code_node =
 (* A wedge stops cleanup before any free, but must not turn an interrupt, host failure, invariant
    violation or invalid registered setting into an ordinary arm failure. *)
 let raise_wedged_cleanup ~original ~backtrace wedge =
-  match original with
-  | Out_of_memory | Stdlib.Sys.Break | Stack_overflow | Assert_failure _
-  | Utils.Invalid_config_value _ ->
-      Stdlib.Printexc.raise_with_backtrace original backtrace
-  | _ -> raise wedge
+  if Schedule_outcome.must_propagate original then
+    Stdlib.Printexc.raise_with_backtrace original backtrace
+  else raise wedge
 
 module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncing) = struct
   let wait_for_ready ~dst ~src tn =
@@ -1065,6 +1063,11 @@ module With_device_wedge_guard (Device : Lowered_backend) = struct
   let sync event =
     Option.iter (Device.event_device_id event) ~f:check_id;
     Device.sync event
+
+  let will_wait_for (ctx : context) event =
+    check_wedged ctx.device;
+    Option.iter (Device.event_device_id event) ~f:check_id;
+    Device.will_wait_for ctx event
 
   let await device =
     check_wedged device;

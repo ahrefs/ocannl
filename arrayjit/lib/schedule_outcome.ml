@@ -144,6 +144,10 @@ let strict_failure_classification =
 
 let is_oom_or_interrupt = function Out_of_memory | Stdlib.Sys.Break -> true | _ -> false
 let is_assert_or_stack = function Assert_failure _ | Stack_overflow -> true | _ -> false
+let is_process_fatal exn = is_oom_or_interrupt exn || is_assert_or_stack exn
+
+let must_propagate exn =
+  is_process_fatal exn || match exn with Utils.Invalid_config_value _ -> true | _ -> false
 
 let is_compile_side = function
   | Transform | Hardware_limits | Backend_codegen | Backend_compile | Backend_link -> true

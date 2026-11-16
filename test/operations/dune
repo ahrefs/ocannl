@@ -15184,6 +15184,14 @@
 ; control through the device's own bounded wait.
 
 (test
+ ; ocannl-backend: multidev_cc -- two explicit worker-domain devices, no GPU dependency.
+ (name wait_bound_cross_device)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules wait_bound_cross_device)
+ (libraries wait_wedge_fixture))
+
+(test
  (name wait_bound_declines)
  (package neural_nets_lib)
  (deps

@@ -1,0 +1,11 @@
+the healthy wait completes: true
+the healthy cross-device copy is available for readback: true
+the healthy cross-device copy computes the source values: true
+a zero bound expires on finite work: true
+the marked source has a pending writer event: true
+a cross-device copy of the marked source raises Device_wedged: true
+the copy refusal frees no pools: true
+a queued wait on the marked source event raises Device_wedged: true
+the destination still completes its bounded wait: true
+an event from the other device remains usable: true
+a marked destination refuses even a healthy source event: true
