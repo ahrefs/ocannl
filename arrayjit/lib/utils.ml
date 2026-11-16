@@ -1590,8 +1590,8 @@ cc_vector_bytes=0
 # what math is being done (they are the orthogonal axis; see the issue). fp16_arithmetic=auto
 # resolves deterministically per backend (gh-ocannl-680) -- wide on CUDA and HIP since
 # gh-ocannl-2195, so a tensorized f16 schedule accumulates as its serial twin does -- so pinning
-# the default keeps the principle: apart from the GPU fast-math keys above, this profile changes no math, and same-machine
-# runs stay reproducible.
+# the default keeps the principle: apart from the GPU fast-math keys above, this profile changes
+# no math, and same-machine runs stay reproducible.
 # bf16_arithmetic=auto likewise (gh-ocannl-838).
 tf32_matmuls=false
 fp16_arithmetic=auto

@@ -24,8 +24,9 @@
    bounded, because it accumulated wide. Also under the default, tile and serial agree within one
    f16 ulp of the result per cell plus the f32 accumulation term: the same width and the same single
    narrowing point, not bitwise (the f32 summation orders differ). At the long reductions, the
-   narrow tile's error is at least the default tile's and at most the per-step bound k * 2^-10: the
-   A/B observes the narrowing it is about. And no run produces a non-finite cell.
+   narrow tile's error is at least twice the default tile's (measured 6-24x) and at most the
+   per-step bound k * 2^-10, so a narrow arm resolving wide fails it: the A/B observes the narrowing
+   it is about. And no run produces a non-finite cell.
 
    The leg runs only where the backend resolves [Fp16_auto] wide and advertises the uniform-f16 tile
    (CUDA, HIP); elsewhere every claim skips. *)
@@ -239,11 +240,12 @@ let () =
           p_close label t.got s.got ~tol:(fun w -> f16_ulp w +. f32_term));
       if c.long then
         in_legf ~leg
-          "%s: the narrow tile's error is at least the default tile's and within the per-step \
-           bound k*2^-10"
+          "%s: the narrow tile's error is at least twice the default tile's and within the \
+           per-step bound k*2^-10"
           c.name (fun label ->
             let (narrow, _), _ = find "narrow" (get ()) in
             let (auto, _), _ = find "auto" (get ()) in
             p label
               Float.(
-                narrow.max_err >= auto.max_err && narrow.max_err <= Float.of_int c.k *. pow2 (-10))))
+                narrow.max_err >= 2. *. auto.max_err
+                && narrow.max_err <= Float.of_int c.k *. pow2 (-10))))

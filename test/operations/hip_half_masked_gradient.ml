@@ -11,6 +11,12 @@ module L = Ll_test
 module LL = Ir.Low_level
 module Ops = Ir.Ops
 
+(* The half [output] accumulation over [k] is the kernel shape that reproduced the gfx1102 hazard
+   with a storage-width accumulator; HIP's default resolves f16 accumulators wide since
+   gh-ocannl-2195, so the test names [Fp16_narrow] to keep that packed-half VGPR pattern. *)
+let () =
+  Ir.Numerics.set_policy { (Ir.Numerics.get ()) with fp16_arithmetic = Ir.Numerics.Fp16_narrow }
+
 let () =
   let ctx = Context.auto () in
   let backend = Context.backend_name ctx in

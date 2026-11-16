@@ -6,9 +6,9 @@ gemm_k1024: every tile renders tensor-unit intrinsics under both policies: true
 gemm_k1024: no run produces a non-finite cell: true
 gemm_k1024, default policy: the tile's and the serial loop's normalized errors are nonzero and within the wide bound 2^-11 + k*2^-23: true
 gemm_k1024, default policy: tile and serial loop agree within one f16 ulp per cell, plus the f32 accumulation term: true
-gemm_k1024: the narrow tile's error is at least the default tile's and within the per-step bound k*2^-10: true
+gemm_k1024: the narrow tile's error is at least twice the default tile's and within the per-step bound k*2^-10: true
 attn_pv: every tile renders tensor-unit intrinsics under both policies: true
 attn_pv: no run produces a non-finite cell: true
 attn_pv, default policy: the tile's and the serial loop's normalized errors are nonzero and within the wide bound 2^-11 + k*2^-23: true
 attn_pv, default policy: tile and serial loop agree within one f16 ulp per cell, plus the f32 accumulation term: true
-attn_pv: the narrow tile's error is at least the default tile's and within the per-step bound k*2^-10: true
+attn_pv: the narrow tile's error is at least twice the default tile's and within the per-step bound k*2^-10: true

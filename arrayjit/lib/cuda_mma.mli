@@ -19,7 +19,9 @@
 
 type m16n8k16_kind =
   | M16n8k16_bf16  (** Uniform bf16 (gh-ocannl-545): the combination wmma cannot express. *)
-  | M16n8k16_f16  (** Uniform f16 under [Numerics.Fp16_wide], per statement (gh-ocannl-680). *)
+  | M16n8k16_f16
+      (** Uniform f16 under the wide resolution ({!fp16_accum_wide}: [Fp16_wide], and since
+          gh-ocannl-2195 [Fp16_auto]), per statement (gh-ocannl-680). *)
 [@@deriving equal, sexp_of, enumerate]
 
 (** The inline-PTX arms. Both accumulate in the architected m16n8 f32 per-lane register layout,
@@ -35,7 +37,8 @@ type inline_ptx =
 (** The [nvcuda::wmma] C++-API arms (tensorize-mma T3). *)
 type wmma_kind =
   | Wmma_f16_f32
-  | Wmma_f16_f16  (** Gated off under [Numerics.Fp16_wide]. *)
+  | Wmma_f16_f16
+      (** Gated off under the wide resolution ({!fp16_accum_wide}): [Fp16_narrow] only. *)
   | Wmma_f16_wide
       (** f16 x f16 -> f32 fragments over an f16 destination converted at the [d] boundary
           (gh-ocannl-925): only a fragment scope renders it. *)
