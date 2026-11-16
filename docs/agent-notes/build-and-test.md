@@ -1718,7 +1718,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   the keeper closes fd 9 and streams but reserves the group until the lock frees.
   Live queries, changed tokens, old records without proof, and holders outside
   that group refuse. A `setsid` descendant requires manual inspection, never
-  deletion of the lock file. Lifecycle leg 123 pins recovery and these refusals.
+  deletion of the lock file. The waiting query wrapper forwards INT, TERM and HUP
+  to its isolated group and reaps the query. Zombie queries are exited identities,
+  not live queries; state and start token are checked separately. Lifecycle leg
+  123 pins recovery, refusals, cancellation and an intentionally unreaped query.
 - **`/proc/locks` names a flock's ACQUIRER, not its holders** (gh-ocannl-1107): the lock lives on
   the open file description, so after `take_lock`'s perl exits the line keeps its dead pid (0 from
   inside a pid namespace; some kernels drop the row) while the supervisor, dune and a `setsid`

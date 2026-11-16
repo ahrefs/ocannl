@@ -1773,6 +1773,18 @@ sub census_same {
   my ($p, $tok) = @_;
   defined $tok && length $tok && census_token($p) eq $tok;
 }
+# Identity can survive exit as a zombie; state is a separate liveness fact.
+sub census_zombie {
+  my $p = shift;
+  return 0 unless defined $p && $p =~ /\A[0-9]+\z/;
+  if (-d "/proc/self") {
+    open my $f, "<", "/proc/$p/stat" or return 0;
+    my $s = <$f> // "";
+    return $s =~ /^(?s:.*)\)\s+Z(?:\s|$)/;
+  }
+  my $s = qx{ps -o stat= -p $p 2>/dev/null};
+  return $s =~ /\A\s*Z/;
+}
 sub lock_census {
   my ($lock, $bound, @skip) = @_;
   my @st = stat($lock) or return ();
@@ -4210,14 +4222,35 @@ finish_run() { # rc -> append sentinel, record verdict
 hold_query_lock() {
   if [ "${OCANNL_TOOL_QUERY_GROUP:-}" != "$$" ]; then
     exec perl -MPOSIX -e '
-      my $p = fork(); die $! unless defined $p;
+      # Mask across fork and handler installation: cancellation must never
+      # land before the parent owns its child pid or before setsid completes.
+      my $blocked = POSIX::SigSet->new(SIGINT, SIGTERM, SIGHUP);
+      my $old = POSIX::SigSet->new();
+      sigprocmask(SIG_BLOCK, $blocked, $old) or die $!;
+      my ($p, $cancel, $deadline);
+      for my $sig (qw(INT TERM HUP)) {
+        $SIG{$sig} = sub {
+          $cancel ||= $sig;
+          kill($sig, -$p) or kill($sig, $p) if $p;
+        };
+      }
+      $p = fork(); die $! unless defined $p;
       if (!$p) {
+        $SIG{$_} = "DEFAULT" for qw(INT TERM HUP);
         setsid() >= 0 or die "cannot isolate query: $!";
         $ENV{OCANNL_TOOL_QUERY_GROUP} = $$;
         chdir shift @ARGV or die $!;
+        sigprocmask(SIG_SETMASK, $old) or die $!;
         exec @ARGV; die $!;
       }
-      waitpid($p, 0);
+      sigprocmask(SIG_SETMASK, $old) or die $!;
+      while (waitpid($p, WNOHANG) != $p) {
+        if ($cancel) {
+          $deadline //= time() + 2;
+          if (time() >= $deadline) { kill("KILL", -$p); kill("KILL", $p) }
+        }
+        select undef, undef, undef, .05;
+      }
       exit($? & 127 ? 128 + ($? & 127) : $? >> 8);
     ' "$caller_pwd" "$BASH" "$PWD/tools/test-run.sh" "$sub" "$@"
   fi
@@ -4249,6 +4282,9 @@ hold_query_lock() {
     use Fcntl ":flock";
     my ($owner, $verb, $query, $lock) = @ARGV;
     my $qt = census_token($query); length $qt or die "query identity missing";
+    # Keep the group reservation through a cooperative group cancellation;
+    # the query wrapper escalates only if its child fails to exit.
+    $SIG{$_} = "IGNORE" for qw(INT TERM HUP);
     my $keeper = fork(); die $! unless defined $keeper;
     if (!$keeper) {
       POSIX::close($_) for 3 .. 255;
@@ -4256,7 +4292,7 @@ hold_query_lock() {
       open STDOUT, ">", "/dev/null";
       open STDERR, ">", "/dev/null";
       while (1) {
-        unless (census_same($query, $qt)) {
+        unless (census_same($query, $qt) && !census_zombie($query)) {
           # Do not follow a later owner if its launch wins the unlock window.
           open my $o, "<", $owner or exit 0;
           my $r = <$o> // ""; close $o;
@@ -4492,8 +4528,14 @@ case $sub in
       refuse("missing query identity evidence") unless
         $kind eq "query" && defined $kt && !@extra &&
         $q =~ /\A[1-9][0-9]*\z/ && $k =~ /\A[1-9][0-9]*\z/ && length $qt && length $kt;
-      my $now = census_token($q);
-      refuse($now eq $qt ? "query is live" : "query pid token changed") if length $now;
+      sub query_exited {
+        my $now = census_token($q);
+        return unless length $now;
+        refuse("query pid token changed") unless $now eq $qt;
+        refuse("query is live (or state unreadable)") unless census_zombie($q);
+        refuse("query pid token changed") unless census_same($q, $qt);
+      }
+      query_exited();
       sub group_of {
         my $p = shift;
         my $g = qx{ps -o pgid= -p $p 2>/dev/null};
@@ -4509,7 +4551,7 @@ case $sub in
       sub proof {
         refuse("keeper pid token changed or missing") unless census_same($k, $kt);
         refuse("keeper left query group") unless group_of($k) eq $q;
-        refuse("query identity reappeared") if length census_token($q);
+        query_exited();
       }
       for my $signal (qw(TERM KILL)) {
         unless (owned()) { print "query lock is free or owner changed; nothing to reap\n"; exit 0 }
