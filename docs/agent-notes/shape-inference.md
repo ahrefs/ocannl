@@ -252,6 +252,12 @@ files.
   at application and the fixed-width size claim at definition. The invalid valid-3x3 residual in
   `scheme_strided_residual.ml` still forces its dims: the extents remain variables at registration,
   so held-size comparisons alone do not expose that contradiction before closure.
+  A discarded size probe is not a refusal oracle: the open store `n = conv(o, k)`, `n` refining
+  `o`, and held `k = 3` has the later solution `o = 1_(bcast_if_1)`, `n = 3_default`.
+  Substituting `k = 3_default` in a probe before those extents arrive instead raises the occurs
+  check. Discarding the probe's state does not make its premature refusal sound (gh-ocannl-2204
+  review counterexample, recorded on staging#2033). Numeric bound checks walk only the
+  dimensions reachable from held sizes, through GLBs and both bound-edge directions.
   The symbolic analog did not reproduce: `Shape.set_sym_dim` and every other `Shape` constructor
   mint only `default` symbols. Recapture across closure and the product-space proxy both preserve
   these. `Row.get_sym_dim ~basis` can build a named symbol in a hand-built solver store, but no

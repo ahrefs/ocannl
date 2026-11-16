@@ -6301,15 +6301,18 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
                nonnegative intervals; disjoint intervals prove a contradiction. Ordinary constraints
                have reached their fixpoint before this arm runs. Check once per size pass, including
                when its first constraint is already solved, using indexed size lookups. *)
-            let known =
+            let known, roots =
               List.fold sizes
-                ~init:(Map.empty (module Dim_var))
-                ~f:(fun known -> function
-                  | Dim_size { dim; size; _ } -> (
-                      match subst_dim env dim with
-                      | Var v -> Map.set known ~key:v ~data:size
-                      | _ -> known)
-                  | _ -> assert false)
+                ~init:(Map.empty (module Dim_var), dim_var_set_empty)
+                ~f:(fun (known, roots) -> function
+                  | Dim_size { dim; size; _ } ->
+                      let dim = subst_dim env dim in
+                      let roots = Set.union roots (vars_of_dim dim) in
+                      let known =
+                        match dim with Var v -> Map.set known ~key:v ~data:size | _ -> known
+                      in
+                      (known, roots)
+                  | _ -> (known, roots))
             in
             let add (lo1, hi1) (lo2, hi2) =
               (lo1 + lo2, Option.both hi1 hi2 |> Option.map ~f:(fun (a, b) -> a + b))
@@ -6358,11 +6361,28 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
               | Dim_ineq { res; opnd; _ } -> check ~broadcast:true res opnd
               | Dim_size { dim; size; _ } -> check ~broadcast:false dim (get_default_dim ~d:size ())
               | _ -> ());
-            List.iter (Utils.Tree_map.to_alist env.dim_env) ~f:(function
-              | v, Bounds_dim { glb; opnd; _ } ->
-                  Option.iter glb ~f:(fun glb -> check ~broadcast:true glb (Var v));
-                  List.iter opnd ~f:(fun w -> check ~broadcast:true (Var v) (Var w))
-              | _, Solved_dim _ -> ()));
+            (* Only bounds connected to the held sizes can gain numeric information from them.
+               Follow both edge directions and GLB variables; unrelated model dimensions stay out of
+               this pass. Each reachable entry is visited once. *)
+            let rec check_bounds seen = function
+              | [] -> ()
+              | v :: rest when Set.mem seen v -> check_bounds seen rest
+              | v :: rest -> (
+                  let seen = Set.add seen v in
+                  match find_dim env.dim_env v with
+                  | Some (Bounds_dim { glb; opnd; res; _ }) ->
+                      Option.iter glb ~f:(fun glb -> check ~broadcast:true glb (Var v));
+                      List.iter opnd ~f:(fun w -> check ~broadcast:true (Var v) (Var w));
+                      let glb_vars =
+                        Option.value_map glb ~default:[] ~f:(fun d ->
+                            Set.elements (vars_of_dim (subst_dim env d)))
+                      in
+                      check_bounds seen (glb_vars @ opnd @ res @ rest)
+                  | Some (Solved_dim d) ->
+                      check_bounds seen (Set.elements (vars_of_dim (subst_dim env d)) @ rest)
+                  | None -> check_bounds seen rest)
+            in
+            check_bounds dim_var_set_empty (Set.elements roots));
           match dim with
           | Dim { d; _ } when d = size -> ([], env)
           | (Var _ | Affine _ | Concat _) when not (is_stage2_up stage) -> ([ ineq ], env)
