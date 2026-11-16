@@ -137,9 +137,11 @@ let () =
               materialize tn;
               Some tn)
       in
-      let x = sym () in
+      (* One loop per node, each minting its own symbol: a routine binds a symbol once. *)
       let llc =
-        List.map nodes ~f:(fun tn -> loop_n x 1 (set tn [| iter x |] (c 1.)))
+        List.map nodes ~f:(fun tn ->
+            let x = sym () in
+            loop_n x 1 (set tn [| iter x |] (c 1.)))
         |> List.reduce_exn ~f:seq
       in
       let _held = link ~name:"clr_hold" (optimize ~materialized:nodes ~name:"clr_hold" llc) in
@@ -443,15 +445,14 @@ let () =
              ((ctx, routine), out))
         in
         let child = hold ~what ~before:(fun () -> ignore (Lazy.force prepared)) in
-        let leg =
-          Verdict.sub_leg outer ~on:backend_name
-            ~when_:
-              (lazy
-                (floats >= 1024
-                &&
-                let _, held, free1 = Lazy.force child in
-                held && free1 < reservation))
-        in
+        (* The gate reads only the device (enough free memory for a frame worth contending); the
+           child's hold is a claim of its own, so a child that never held fails the run loudly
+           rather than skipping the claims it was there to set up. *)
+        let leg = Verdict.sub_leg outer ~on:backend_name ~when_:(lazy (floats >= 1024)) in
+        in_legf ~leg "contended, %s: the child holds the memory, leaving less than the reservation"
+          what (fun label ->
+            let _, held, free1 = Lazy.force child in
+            p label (held && free1 < reservation));
         let run =
           lazy
             (let start = Unix.gettimeofday () in
