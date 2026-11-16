@@ -670,6 +670,11 @@ val cpu_pack_grid_chunk_bytes :
     [cc_grid_private_bytes_cap], and what the renderer's Grid record reports (gh-ocannl-1793,
     gh-ocannl-1856); [0] for a shape without a Grid loop. Exposed for tests. *)
 
+val cpu_mma_grid_updates_bound : matmul_site -> sketch_params -> cap:int -> int
+(** Saturating upper bound on the CPU tensorized site's per-Grid-launch update count. Serial shapes
+    and unknown fused epilogues return [cap]. Exposed to compare the seeding predicate with the
+    renderer's [Grid_below_min_updates] payload. *)
+
 val sketch_path_traffic_floor :
   limits:Ir.Backend_intf.hardware_limits -> Ir.Low_level.optimized -> Family_decision.path -> int
 (** Additional bytes every completion below a path must move beyond

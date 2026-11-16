@@ -55,6 +55,10 @@ let cpu_limits =
     simd_vector = { Ir.Vector_file.bytes = 32; registers = 16 };
   }
 
+(* These small fragment-pricing fixtures need Grid geometries even below the launch floor. Isolate
+   that economy gate only around them; floor eligibility is pinned against the renderer by
+   [autotune_grid_record]. Restore it before the rest of the enumeration tests. *)
+let without_launch_floor f = Scripted_search.with_settings [ ("cc_grid_min_updates", "0") ] f
 let f32 = Ir.Backend_intf.Mma_f32
 
 let gpu_plain_limits =
@@ -1437,39 +1441,40 @@ let () =
       pick_audit "cpu simd32 pick audit" ~limits:cpu_limits opt);
   (* The whole-K control (gh-ocannl-1676): a 64x16x64 site keeps the grid-outermost shapes, whose
      single 16-deep reduction block contracts nothing. *)
-  (let a16 =
-     NTDSL.init ~l:"a16" ~prec:Ir.Ops.single ~o:[ 64; 16 ]
-       ~f:(Ll_test.cycle ~dims:[| 64; 16 |] ~modulus:13 ~offset:(-6.) ~stride:0.25)
-       ()
-   in
-   let b16 =
-     TDSL.ndarray
-       (Array.init (16 * 64)
-          ~f:(Ll_test.cycle_flat ~dims:[| 16; 64 |] ~modulus:17 ~offset:(-8.) ~stride:0.125))
-       ~label:[ "b16" ] ~output_dims:[ 16; 64 ] ()
-   in
-   let mk16 =
-     with_lowering ~name:"sft_k16"
-       (let%op l16 = a16 +* "ik;kj=>ij" b16 in
-        l16)
-   in
-   match Autotune.matmul_sketch_tree ~is_gpu:false ~is_cpu:true ~limits:cpu_limits mk16 with
-   | None -> Stdio.printf "cpu k16: no site detected\n"
-   | Some tree ->
-       traffic_pins "cpu k16" ~limits:cpu_limits ~elt_bytes:4 ~m_extent:64 ~n_extent:64 tree mk16;
-       soundness_pins "cpu k16" ~limits:cpu_limits tree mk16;
-       fragment_pins "cpu k16" ~contracting:false ~m_extent:64 ~n_extent:64
-         ~regimes:
-           [
-             ( "grid-outermost packed, one reduction block: no fragment",
-               fun p ->
-                 cpu_packed p && grid_outermost p && p.Autotune.sk_bk >= 16 && not (certain mk16 p)
-             );
-           ]
-         tree mk16;
-       Verdict.p_none "cpu k16: no tensorized leaf contracts" (Sspace.enumerate tree)
-         ~f:(fun (_, p) -> certain mk16 p);
-       pick_audit "cpu k16 pick audit" ~limits:cpu_limits mk16);
+  without_launch_floor (fun () ->
+      let a16 =
+        NTDSL.init ~l:"a16" ~prec:Ir.Ops.single ~o:[ 64; 16 ]
+          ~f:(Ll_test.cycle ~dims:[| 64; 16 |] ~modulus:13 ~offset:(-6.) ~stride:0.25)
+          ()
+      in
+      let b16 =
+        TDSL.ndarray
+          (Array.init (16 * 64)
+             ~f:(Ll_test.cycle_flat ~dims:[| 16; 64 |] ~modulus:17 ~offset:(-8.) ~stride:0.125))
+          ~label:[ "b16" ] ~output_dims:[ 16; 64 ] ()
+      in
+      let mk16 =
+        with_lowering ~name:"sft_k16"
+          (let%op l16 = a16 +* "ik;kj=>ij" b16 in
+           l16)
+      in
+      match Autotune.matmul_sketch_tree ~is_gpu:false ~is_cpu:true ~limits:cpu_limits mk16 with
+      | None -> Stdio.printf "cpu k16: no site detected\n"
+      | Some tree ->
+          traffic_pins "cpu k16" ~limits:cpu_limits ~elt_bytes:4 ~m_extent:64 ~n_extent:64 tree mk16;
+          soundness_pins "cpu k16" ~limits:cpu_limits tree mk16;
+          fragment_pins "cpu k16" ~contracting:false ~m_extent:64 ~n_extent:64
+            ~regimes:
+              [
+                ( "grid-outermost packed, one reduction block: no fragment",
+                  fun p ->
+                    cpu_packed p && grid_outermost p && p.Autotune.sk_bk >= 16
+                    && not (certain mk16 p) );
+              ]
+            tree mk16;
+          Verdict.p_none "cpu k16: no tensorized leaf contracts" (Sspace.enumerate tree)
+            ~f:(fun (_, p) -> certain mk16 p);
+          pick_audit "cpu k16 pick audit" ~limits:cpu_limits mk16);
   (* gh-ocannl-1706: the fragments the floor now prices beyond the loop-order case. Three sites:
 
      - an outer contraction axis, [a[i,h,e] * b[h,e,j] => d[i,j]] with [h = 2] ([m_ko]): with [e =
@@ -1613,11 +1618,12 @@ let () =
           fun p ->
             pads_output ~m_extent:20 ~n_extent:64 p && p.Autotune.sk_bk >= 32 && scratches opt p );
       ]);
-  pins ~name:"cpu k-only pad" ~is_gpu:false ~m_extent:64 ~n_extent:20 col ~regimes:(fun opt ->
-      [
-        ( "reduction pad alone: no fragment",
-          fun p -> cpu_packed p && 20 % p.Autotune.sk_bk <> 0 && not (certain opt p) );
-      ]);
+  without_launch_floor (fun () ->
+      pins ~name:"cpu k-only pad" ~is_gpu:false ~m_extent:64 ~n_extent:20 col ~regimes:(fun opt ->
+          [
+            ( "reduction pad alone: no fragment",
+              fun p -> cpu_packed p && 20 % p.Autotune.sk_bk <> 0 && not (certain opt p) );
+          ]));
   check_wide_scope_edges ();
   (* Corner-judged box refutations: a workgroup-memory cap that admits only the smallest staged
      tiles refutes the large-tile half-boxes at their most favorable corner, pre-expansion — the

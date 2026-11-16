@@ -10,11 +10,11 @@ per-chunk B~ re-pack under the cap pool-parallelizes: true
 Grid census: under the cap, both Grid loops are on the pool, the accumulation loop's tiles counted: true
 per-chunk B~ re-pack over the cap declines to serial: true
 Grid census: over the cap, the accumulation loop is the one serial loop, with its bytes and the cap: true
-seeds: standard, both hoistable: total=20 whole=4 packed=12 hoist=8 grid=4 packrest=0
-seeds: transposed B, hoistable: total=16 whole=0 packed=12 hoist=8 grid=4 packrest=0
-seeds: computed A x hoistable B: total=22 whole=4 packed=14 hoist=10 grid=6 packrest=2
-seeds: hoistable A x computed transposed B: total=16 whole=0 packed=12 hoist=8 grid=4 packrest=2
-seeds: no hoistable operand: total=14 whole=4 packed=8 hoist=0 grid=4 packrest=2
+seeds: standard, both hoistable: total=18 whole=4 packed=10 hoist=8 grid=2 packrest=0
+seeds: transposed B, hoistable: total=14 whole=0 packed=10 hoist=8 grid=2 packrest=0
+seeds: computed A x hoistable B: total=20 whole=4 packed=12 hoist=10 grid=4 packrest=2
+seeds: hoistable A x computed transposed B: total=14 whole=0 packed=10 hoist=8 grid=2 packrest=2
+seeds: no hoistable operand: total=12 whole=4 packed=6 hoist=0 grid=2 packrest=2
 seeds: narrow columns (nj < lanes): total=8 whole=0 packed=8 hoist=4 grid=0 packrest=0
 seeds: f16 operands, f16 accumulator (advertised): mma seeds=5
 seeds: bf16 operands, f32 accumulator (advertised): mma seeds=5

@@ -1,6 +1,6 @@
 (* gh-ocannl-1702: an autotune report carries the renderer's Grid record per candidate;
    gh-ocannl-1793: the seeding pre-filter weighs what that record would refuse for the per-chunk
-   privatization cap.
+   privatization cap; gh-ocannl-1857: it also weighs the site launch floor.
 
    Every compiled routine records, for each outermost [Grid] loop, whether it rendered on the CPU
    pool or which rule kept it serial ([Context.routine.grid], gh-ocannl-1668). The serial loop
@@ -27,6 +27,13 @@
    cap (red before gh-ocannl-1793, which proposed them), and the 64^3 site's [16 x 64] f32 fragment
    is exactly [forced_cap], which the renderer admits (its decline is strictly over the cap), so it
    is proposed and renders on the pool.
+
+   The floor leg re-asks every Serial packed geometry as its Grid twin at 64^3, and the unsplit
+   whole-triple geometry with a 16-row Grid block at 32x16x16. The final census entry belongs to the
+   site (the earlier one zeroes the output). No proposed site may render serially for the floor.
+   Both witnesses are refused at the default floor, and every below-floor geometry is proposed and
+   renders on the pool when the floor is lowered to 4096. The same parameters connect the two runs;
+   an unrelated pool-rendered geometry cannot satisfy the control.
 
    The tuning leg searches the 64^3 site: no ranked candidate rendered serially for the cap, and the
    report still lists the Grid seeds the launch floor ([cc_grid_min_updates]) kept serial -- each
@@ -87,18 +94,19 @@ let () =
 
 (* The operands' init functions: they vary with every index pair, and their products are multiples
    of 1/4 small enough for the derivation below. *)
-let operand_inits n =
-  ( Ll_test.cycle ~dims:[| n; n |] ~modulus:13 ~offset:0. ~stride:0.25,
-    Ll_test.cycle ~dims:[| n; n |] ~modulus:17 ~offset:(-8.) ~stride:1. )
+let operand_inits ?rows ?depth n =
+  let m = Option.value rows ~default:n and k = Option.value depth ~default:n in
+  ( Ll_test.cycle ~dims:[| m; k |] ~modulus:13 ~offset:0. ~stride:0.25,
+    Ll_test.cycle ~dims:[| k; n |] ~modulus:17 ~offset:(-8.) ~stride:1. )
 
-(* An [n x n] product of two host-init constants -- both operands hoistable -- with the operands'
-   values. *)
-let matmul ~tag n =
-  let fa, fb = operand_inits n in
-  let av = Array.init (n * n) ~f:(fun t -> fa [| t / n; t % n |]) in
-  let bv = Array.init (n * n) ~f:(fun t -> fb [| t / n; t % n |]) in
-  let a = TDSL.ndarray av ~label:[ tag ^ "_a" ] ~output_dims:[ n; n ] () in
-  let b = TDSL.ndarray bv ~label:[ tag ^ "_b" ] ~output_dims:[ n; n ] () in
+(* A product of two host-init constants -- both operands hoistable -- with their values. *)
+let matmul ?rows ?depth ~tag n =
+  let m = Option.value rows ~default:n and k = Option.value depth ~default:n in
+  let fa, fb = operand_inits ?rows ?depth n in
+  let av = Array.init (m * k) ~f:(fun t -> fa [| t / k; t % k |]) in
+  let bv = Array.init (k * n) ~f:(fun t -> fb [| t / n; t % n |]) in
+  let a = TDSL.ndarray av ~label:[ tag ^ "_a" ] ~output_dims:[ m; k ] () in
+  let b = TDSL.ndarray bv ~label:[ tag ^ "_b" ] ~output_dims:[ k; n ] () in
   let%op c = a +* "ik;kj=>ij" b in
   (c, av, bv)
 
@@ -122,26 +130,44 @@ let pool_privatizing (g : Cs.grid_summary) =
 
 (* --- The seeding leg: the pre-filter against the renderer. *)
 
-type judged = { j_proposed : bool; j_grid : Cs.grid_summary option }
+type judged = {
+  j_params : Autotune.sketch_params;
+  j_dims : int * int * int;
+  j_bound : int;
+  j_padded : bool;
+  j_proposed : bool;
+  j_grid : Cs.grid_summary option;
+}
 
 let equal_params a b =
   Sexp.equal (Autotune.sexp_of_sketch_params a) (Autotune.sexp_of_sketch_params b)
 
-(* The hoisted-grid shape's geometries on the [n]-site: its proposed leaves, and each [Hoisted] leaf
+(* The selected shape's geometries on the site: its proposed leaves, and each [Hoisted] leaf
    re-asked with the Grid flag -- the hoisted-grid twin of that geometry, proposed or not. Each is
    compiled (its schedule applied as the search would) and its Grid record read. *)
-let judge_site n =
-  let tag = Printf.sprintf "agr_s%d" n in
-  let c, _, _ = matmul ~tag n in
+let judge_site ?rows ?depth ?(shape = `Hoisted) n =
+  let tag =
+    Printf.sprintf "agr_s%dx%dx%d_%s_f%d" (Option.value rows ~default:n) n
+      (Option.value depth ~default:n)
+      (match shape with `Hoisted -> "h" | `Grid -> "g" | `Whole -> "w")
+      (Cs.grid_min_updates ())
+  in
+  let c, _, _ = matmul ?rows ?depth ~tag n in
   let lowering = Ll_test.captured_lowering ~name:(tag ^ "_probe") (Train.forward c) in
   let limits = Context.hardware_limits (Context.auto ()) in
   let _family, seeds = Autotune.family_seeding ~is_gpu:false ~is_cpu:true ~limits lowering in
+  let site = Option.value_exn (Autotune.detect_matmul lowering.Ir.Low_level.llc) in
   let packed_hoisted (sp : Autotune.sketch_params) =
     sp.sk_mma && sp.sk_bk > 0 && sp.sk_hoist && not sp.sk_pack_rest
   in
   let candidates =
     List.filter_map seeds ~f:(fun sp ->
-        if packed_hoisted sp then Some { sp with sk_grid = true } else None)
+        match shape with
+        | `Whole when sp.sk_mma && sp.sk_bk = 0 && sp.sk_bm = 0 -> Some { sp with sk_bm = 16 }
+        | `Grid when sp.sk_mma && sp.sk_bk > 0 && (not sp.sk_hoist) && not sp.sk_pack_rest ->
+            Some { sp with sk_grid = true }
+        | `Hoisted when packed_hoisted sp -> Some { sp with sk_grid = true }
+        | _ -> None)
     |> List.dedup_and_sort ~compare:(fun a b ->
         Sexp.compare (Autotune.sexp_of_sketch_params a) (Autotune.sexp_of_sketch_params b))
   in
@@ -149,7 +175,7 @@ let judge_site n =
       let label = Autotune.sketch_params_label sp in
       let proposed = List.mem seeds sp ~equal:equal_params in
       let name = Printf.sprintf "%s_c%d" tag i in
-      let c, _, _ = matmul ~tag:name n in
+      let c, _, _ = matmul ?rows ?depth ~tag:name n in
       let grid =
         match
           Context.compile ~name
@@ -169,18 +195,51 @@ let judge_site n =
               (Exn.to_string exn);
             None
       in
-      Stdio.eprintf "agr: n=%d %s %s: %s (not part of the golden)\n%!" n
+      let bound = Autotune.cpu_mma_grid_updates_bound site sp ~cap:Int.max_value in
+      Stdio.eprintf "agr: %s %s %s (bound %d): %s (not part of the golden)\n%!" tag
         (if proposed then "proposed" else "refused")
-        label
+        label bound
         (Option.value_map grid ~default:"no record" ~f:Cs.grid_summary_string);
-      { j_proposed = proposed; j_grid = grid })
+      let divides b e = b = 0 || e % b = 0 in
+      {
+        j_params = sp;
+        j_dims = (site.m_ni, site.m_nj, site.m_nk);
+        j_bound = bound;
+        j_padded =
+          not
+            (divides sp.sk_bm site.m_ni && divides sp.sk_bn site.m_nj && divides sp.sk_bk site.m_nk);
+        j_proposed = proposed;
+        j_grid = grid;
+      })
 
-let judged = lazy (List.concat_map [ 64; 128 ] ~f:judge_site)
+let judged = lazy (List.concat_map [ 64; 128 ] ~f:(fun n -> judge_site n))
+
+(* The final census entry is the site launch; the preceding entry zeroes the output. Only the site
+   loop must justify the Grid shape: a serial zero nest is harmless. *)
+let site_below_floor g =
+  match List.last g.Cs.loops with
+  | Some { Cs.site = Grid_serial (Grid_below_min_updates _); _ } -> true
+  | _ -> false
+
+let floor_sites () = judge_site ~shape:`Grid 64 @ judge_site ~rows:72 ~depth:64 ~shape:`Grid 32
+let floor_judged = lazy (floor_sites ())
+let whole_floor_judged = lazy (judge_site ~rows:32 ~depth:16 ~shape:`Whole 16)
+
+let floor_control =
+  lazy
+    (Scripted_search.with_settings
+       [ ("cc_grid_min_updates", "4096") ]
+       (fun () -> floor_sites () @ judge_site ~rows:32 ~depth:16 ~shape:`Whole 16))
+
+let same_geometry a b = Poly.equal a.j_dims b.j_dims && equal_params a.j_params b.j_params
 let grid_of j ~f = Option.exists j.j_grid ~f
 
 let () =
   in_leg ~leg "agr-seed: every judged candidate compiled" (fun label ->
-      p_all label (Lazy.force judged) ~f:(fun j -> Option.is_some j.j_grid));
+      p_all label
+        (Lazy.force judged @ Lazy.force floor_judged @ Lazy.force whole_floor_judged
+       @ Lazy.force floor_control)
+        ~f:(fun j -> Option.is_some j.j_grid));
   in_leg ~leg "agr-seed: no proposed hoisted-grid seed renders a Grid loop serially for the cap"
     (fun label ->
       p_none label
@@ -348,6 +407,68 @@ let () =
     (fun label ->
       p_exists label (Lazy.force grid_judged) ~f:(fun j ->
           j.g_masked && j.g_proposed && g_grid_of j ~f:pool_privatizing))
+
+let () =
+  in_leg ~leg "agr-seed: no proposed packed Grid seed renders its site serially for the floor"
+    (fun label ->
+      p_all label (Lazy.force floor_judged) ~f:(fun j ->
+          (not j.j_proposed) || not (grid_of j ~f:site_below_floor)));
+  in_leg ~leg "agr-seed: the floor refuses a packed Grid geometry whose site renders below it"
+    (fun label ->
+      p_exists label (Lazy.force floor_judged) ~f:(fun j ->
+          (not j.j_proposed) && grid_of j ~f:site_below_floor));
+  in_leg ~leg "agr-seed: lowering the floor keeps each below-floor geometry on the pool"
+    (fun label ->
+      p_all label
+        (List.filter
+           (Lazy.force floor_judged @ Lazy.force whole_floor_judged)
+           ~f:(grid_of ~f:site_below_floor))
+        ~f:(fun refused ->
+          List.exists (Lazy.force floor_control) ~f:(fun j ->
+              same_geometry j refused && j.j_proposed
+              && grid_of j ~f:(fun g ->
+                  match List.last g.Cs.loops with
+                  | Some { Cs.site = Grid_pool _; _ } -> true
+                  | _ -> false))));
+  in_leg ~leg "agr-seed: every floor-only refusal renders its site below the floor" (fun label ->
+      p_all label
+        (List.filter
+           (Lazy.force floor_judged @ Lazy.force whole_floor_judged)
+           ~f:(fun j ->
+             (not j.j_proposed)
+             && List.exists (Lazy.force floor_control) ~f:(fun control ->
+                 same_geometry j control && control.j_proposed)))
+        ~f:(grid_of ~f:site_below_floor));
+  in_leg ~leg "agr-seed: the seeding bound never undercounts a below-floor site's renderer count"
+    (fun label ->
+      p_all label
+        (List.filter
+           (Lazy.force floor_judged @ Lazy.force whole_floor_judged)
+           ~f:(grid_of ~f:site_below_floor))
+        ~f:(fun j ->
+          grid_of j ~f:(fun g ->
+              match List.last g.Cs.loops with
+              | Some { Cs.site = Grid_serial (Grid_below_min_updates { updates; _ }); _ } ->
+                  updates <= j.j_bound
+              | _ -> false)));
+  in_leg ~leg "agr-seed: unpadded below-floor estimates equal the renderer count" (fun label ->
+      p_all label
+        (List.filter
+           (Lazy.force floor_judged @ Lazy.force whole_floor_judged)
+           ~f:(fun j -> (not j.j_padded) && grid_of j ~f:site_below_floor))
+        ~f:(fun j ->
+          grid_of j ~f:(fun g ->
+              match List.last g.Cs.loops with
+              | Some { Cs.site = Grid_serial (Grid_below_min_updates { updates; _ }); _ } ->
+                  updates = j.j_bound
+              | _ -> false)));
+  in_leg ~leg "agr-seed: no proposed whole-triple Grid seed renders its site serially for the floor"
+    (fun label ->
+      p_all label (Lazy.force whole_floor_judged) ~f:(fun j ->
+          (not j.j_proposed) || not (grid_of j ~f:site_below_floor)));
+  in_leg ~leg "agr-seed: the floor refuses a whole-triple Grid geometry below it" (fun label ->
+      p_exists label (Lazy.force whole_floor_judged) ~f:(fun j ->
+          (not j.j_proposed) && grid_of j ~f:site_below_floor))
 
 (* --- The tuning leg. *)
 

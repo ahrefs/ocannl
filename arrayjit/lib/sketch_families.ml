@@ -2686,6 +2686,77 @@ let cpu_pack_grid_chunk_bytes (site : matmul_site) ~shape ~prec_bytes (p : sketc
   cpu_pack_grid_chunk_tiles site ~shape ~prec_bytes p
   + cpu_pack_fragment_bytes site ~shape ~bm:p.sk_bm ~bn:p.sk_bn ~bk:p.sk_bk
 
+(* Upper bound on the renderer's [Cost_model.fork_join_updates] for a CPU tensorized site's Grid
+   launch (gh-ocannl-1857), saturated at the resolved floor. This reads the builder's geometry, not
+   the whole routine: the plain packed Grid launches once per enclosing column/reduction block.
+   Grid-outermost shapes instead contain those blocks. Packing stores and accumulator transfers
+   count as well as [Tile_mma]'s discounted MACs. Pads/edge partitions can only remove stores from
+   this full-block estimate; charging a fragment's two transfers per reduction block is deliberately
+   an upper bound.
+
+   Boundary: fused epilogues add stores not described by this geometry, so their bound is unknown
+   ([cap]) and they remain proposed. A serial shape likewise has no site Grid to refute. The zeroing
+   nest is independent and does not decide the site's Grid promise. *)
+let cpu_mma_grid_updates_bound (site : matmul_site) (p : sketch_params) ~cap =
+  let cap = Int.max 1 cap in
+  let add a b = if a >= cap - b then cap else a + b in
+  let mul a b = if a = 0 || b = 0 then 0 else if a > cap / b then cap else a * b in
+  let product ns = List.fold ns ~init:1 ~f:mul in
+  let blocks n b = if n = 0 then 0 else 1 + ((n - 1) / b) in
+  let bm = p.sk_bm in
+  if p.sk_epilogue || bm <= 0 || (p.sk_bk > 0 && not p.sk_grid) then cap
+  else
+    let packed = p.sk_bk > 0 in
+    let bn = if p.sk_bn = 0 then site.m_nj else p.sk_bn in
+    let bk = if packed then p.sk_bk else site.m_nk in
+    (* All current row-block geometries divide the discount exactly. Rounding UP here keeps this an
+       upper bound even if a future row-block menu does not. *)
+    let mac_rows = blocks bm Ir.Cost_model.tile_mma_macs_per_update in
+    let mma = product [ mac_rows; bn; bk ] in
+    let grid_outermost =
+      packed
+      && cpu_pack_grid_outermost ~sk_grid:p.sk_grid ~sk_hoist:p.sk_hoist
+           ~sk_pack_rest:p.sk_pack_rest
+    in
+    let in_kernel src =
+      Option.exists
+        (cpu_pack_stage site ~sk_hoist:p.sk_hoist ~sk_grid:p.sk_grid ~sk_pack_rest:p.sk_pack_rest
+           src)
+        ~f:(Poly.equal `In_kernel)
+    in
+    let packing =
+      if not packed then 0
+      else
+        add
+          (if in_kernel site.m_a then mul bm bk else 0)
+          (if grid_outermost && in_kernel site.m_b then mul bk bn else 0)
+    in
+    let fragment =
+      if
+        if packed then
+          cpu_pack_fragment site ~sk_hoist:p.sk_hoist ~sk_grid:p.sk_grid
+            ~sk_pack_rest:p.sk_pack_rest ~bm ~bn:p.sk_bn ~bk
+        else whole_triple_fragment site
+      then product [ 2; bm; bn ]
+      else 0
+    in
+    let body = add packing (add mma fragment) in
+    let reductions =
+      if grid_outermost then product (blocks site.m_nk bk :: List.map site.m_ko ~f:snd)
+      else if packed then 1
+      else product (List.map site.m_ko ~f:snd)
+    in
+    product
+      [
+        blocks site.m_ni bm;
+        (if grid_outermost then blocks site.m_nj bn else 1);
+        reductions;
+        (* Whole-triple [Tensorize] wraps its statement/transfers in an n-wide Workgroup loop. The
+           IR estimator charges that loop, even on cc. *)
+        (if packed then 1 else site.m_nj);
+        body;
+      ]
+
 (* gh-ocannl-1612: why [Sched.Fuse_epilogue] refuses the fused twin of EVERY completion of a CPU
    packed geometry, or [None] where it may admit one. Only the shapes that sink the row-block loop
    under the reduction-block loops are concerned ([cpu_pack_grid_outermost] false: Serial, Hoisted
@@ -4353,24 +4424,35 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
            measured win: off by default, since each twin is one more candidate per leaf. *)
         let rm_twin_seeded = Utils.registered_flag ~arg_name:"autotune_register_tile_rm_twin" in
         let leaf (p : sketch_params) =
-          let m = if p.sk_bm = 0 then site.m_ni else p.sk_bm in
-          let n = if p.sk_bn = 0 then site.m_nj else p.sk_bn in
-          let file = limits.Ir.Backend_intf.simd_vector in
-          let elt_bytes = max 1 (Ir.Ops.prec_in_bytes prec) in
-          match
-            Ir.Register_tile.alternatives ~file ~elt_bytes ~m ~n
-            @
-            if rm_twin_seeded then Option.to_list (Ir.Register_tile.rm_twin ~file ~elt_bytes ~m ~n)
-            else []
-          with
-          | [] -> leaf p
-          | alts ->
-              subt (fun () ->
-                  choice
-                    ((Family_decision.Register_tile None, leaf p)
-                    :: List.map alts ~f:(fun t ->
-                        (Family_decision.Register_tile (Some t), leaf { p with sk_tile = Some t }))
-                    ))
+          let floor = Ir.C_syntax.grid_min_updates () in
+          let updates = cpu_mma_grid_updates_bound site p ~cap:floor in
+          if floor > 0 && updates < floor then
+            Sspace.Refuted
+              (Printf.sprintf
+                 "site Grid launch has at most %d scalar updates, below cc_grid_min_updates=%d; %s"
+                 updates floor
+                 (if p.sk_bk > 0 then "the Serial packed shape keeps this geometry"
+                  else "the unsplit whole-triple shape stays serial"))
+          else
+            let m = if p.sk_bm = 0 then site.m_ni else p.sk_bm in
+            let n = if p.sk_bn = 0 then site.m_nj else p.sk_bn in
+            let file = limits.Ir.Backend_intf.simd_vector in
+            let elt_bytes = max 1 (Ir.Ops.prec_in_bytes prec) in
+            match
+              Ir.Register_tile.alternatives ~file ~elt_bytes ~m ~n
+              @
+              if rm_twin_seeded then
+                Option.to_list (Ir.Register_tile.rm_twin ~file ~elt_bytes ~m ~n)
+              else []
+            with
+            | [] -> leaf p
+            | alts ->
+                subt (fun () ->
+                    choice
+                      ((Family_decision.Register_tile None, leaf p)
+                      :: List.map alts ~f:(fun t ->
+                          (Family_decision.Register_tile (Some t), leaf { p with sk_tile = Some t }))
+                      ))
         in
         refute_unless
           [ (site.m_fma, "register tiling requires the fused accumulation form") ]

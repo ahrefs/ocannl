@@ -933,6 +933,9 @@ val cpu_pack_grid_chunk_bytes :
     [cc_grid_private_bytes_cap], and what the renderer's Grid record reports (gh-ocannl-1793,
     gh-ocannl-1856); [0] for a shape without a Grid loop. Exposed for tests. *)
 
+val cpu_mma_grid_updates_bound : matmul_site -> sketch_params -> cap:int -> int
+(** See {!Sketch_families.cpu_mma_grid_updates_bound}; exposed for renderer-census tests. *)
+
 val sketch_path_traffic_floor :
   limits:Ir.Backend_intf.hardware_limits -> Ir.Low_level.optimized -> Family_decision.path -> int
 (** The certain-traffic increment (bytes) of a family-tree decision path (gh-ocannl-514 phase 5):
