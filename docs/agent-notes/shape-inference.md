@@ -121,9 +121,9 @@ files.
   run `@test/operations/runtest-dropout_mask_varies`,
   `@test/operations/runtest-row_glb_reach_executed` and
   `@test/operations/runtest-shape_program_sweep`, inspect their draw probes (the sweep's stderr
-  counts each known entry), and record the runs and what they establish in the PR. `test/operations/dropout_mask_varies.ml` pins both a
-  mask that keeps some entries and drops others and raw draws distinct per element; the
-  `row_glb_reach_executed` probes cover branching and repeated consumers, including documented
+  counts each known entry), and record the runs and what they establish in the PR.
+  `test/operations/dropout_mask_varies.ml` pins both a mask that keeps some entries and drops
+  others and raw draws distinct per element; the `row_glb_reach_executed` probes cover branching and repeated consumers, including documented
   repetition cases rather than claiming every draw fills. The full green suite missed a
   constant dropout mask after a guess deletion (gh-ocannl-2185, staging#1927); the failure story
   and the dimension-role prerequisite for that guess are above.

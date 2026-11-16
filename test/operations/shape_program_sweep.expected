@@ -28,6 +28,8 @@ no program the oracle solves is refused, but for a listed cause: true
 no program raises anything but a shape error: true
 no program disagrees with the oracle: true
 executed programs occur, and every draw fills its oracle shape or is listed: true
+branching programs agree outright, no entry excusing them: true
+executed programs agree outright, every draw filling its oracle shape: true
 every known entry still occurs: true
 every corruption is judged a disagreement: true
 an accepted ill-typed program is judged a disagreement: true

@@ -30,35 +30,38 @@
    of its operand its own shape (siblings included) and what its consumers demand of it; compose and
    the specs map demands per axis ([Exact], [Bcast], [Min] for a fixed index). A parameter takes no
    batch axes; a draw's axis nothing sizes closes to 1. The solution is re-checked strictly.
-   Verdicts: - [Solved]: the shapes every node must take (compared modulo leading size-1 axes); -
+   Verdicts. [Solved] gives the shapes every node must take (compared modulo leading size-1 axes).
    [Ill_typed]: fixed shapes conflict, whatever the resolve-at-use nodes take (decided with them
-   empty, checking only what nothing can change) -- must be refused; - [Underspecified]: a parameter
-   sized only by a fixed index, refused at closure by design (docs/shape_inference.md) -- must be
-   refused; - [Inconclusive], no claim, counted on stderr by reason: demands that disagree at a
-   resolve-at-use node, a parameter axis nothing sizes (the solver's hidden-dimension policy), a
-   resolve-at-use node nothing sizes, a contraction between two open rows, a re-check failure.
+   empty, checking only what nothing can change); it must be refused. [Underspecified]: a parameter
+   sized only by a fixed index, refused at closure by design (docs/shape_inference.md); it must be
+   refused. [Inconclusive] makes no claim and is counted on stderr by reason: demands that disagree
+   at a resolve-at-use node, a parameter axis nothing sizes (the solver's hidden-dimension policy),
+   a resolve-at-use node nothing sizes, a contraction between two open rows, a re-check failure.
 
    CLAIMS (stdout): no program the oracle solves is refused but for a listed cause; every node's
    shape is the oracle's; every executed draw holds as many distinct values as its oracle shape has
    cells; every ill-typed or underspecified program is refused; nothing raises anything but
-   [Row.Shape_error]; the judge flags corrupted observations; and every entry of the known list
-   still occurs (a stale entry fails until it is removed: the entry's fix removes it). Counts go to
-   stderr.
+   [Row.Shape_error]; the judge flags corrupted observations; floors on the programs that agree
+   outright, branching and executed, so that no entry grows to excuse them; and every entry of the
+   known list still occurs (a stale entry fails until it is removed: the entry's fix removes it).
+   Counts go to stderr.
 
-   THE KNOWN LIST (gh-ocannl-2181's sweep, at its landing). An entry names the operations its cause
-   stands at; it excuses a node at or under one, or under the pointwise operation consuming one,
-   whose shape is the oracle's with some axes collapsed to 1 (and the draws there filling the shape
-   they closed to); an entry marked "refuses" also excuses a refusal of a program holding one: -
-   gh-ocannl-2180: the size-1 output axis of a literal or a fixed index takes over the last output
-   axes of everything broadcast with it (the dimension role), e.g. [(u + 1) *. c[5|3]]; - box_muller
-   (refuses): a [normal] draw closes to one value, its inner uniforms behind the clamp's literals
-   ([dropout_mask_varies] prints it); - proposed, found by this sweep (each with its fixed program
-   below): - a unary operation over a draw: [relu u *. c[|2,5]] closes [u] to one element; - a
-   pointwise operation with one draw under both operands (refuses): [(u *. u) + c[|2]]; - nested
-   branching (refuses): [c + (u + (v *. w))] closes [u]; [c + ((u + v) + w)] and [(u + v) *. (w + x)
-   *. c[|3]] are refused; - a pointwise operation with a constant of no axes (refuses): [((u + v) +
-   z) *. c[|3]]; - an einsum spec over a draw: [c[|3->2] * (u ++ "ab => a")] closes the kept axis to
-   1; - a compose over a draw: [(c[|3,2] *. v) *. (u * c[|5])] gives [u] no output axes. *)
+   THE KNOWN LIST (at this sweep's landing; [known] below). An entry names the operation its cause
+   stands at, with a draw under its operand; it excuses a node at or under one whose shape is the
+   oracle's with some axes collapsed to 1, its draws filling the shape they closed to. Where the
+   cause was seen to reach the siblings it is broadcast with, the entry also covers the pointwise
+   operation consuming one. A refusal is excused only with a message the entry was seen to give. The
+   entries. gh-ocannl-2180: the size-1 output axis of a literal or a fixed index takes over the last
+   output axes of everything broadcast with it (the dimension role), as in [(u + 1) *. c[5|3]].
+   box_muller: a [normal] draw closes to one value, its inner uniforms behind the clamp's literals
+   ([dropout_mask_varies] prints it). Then those this sweep found, each with its fixed program
+   below: a unary operation over a draw ([relu u *. c[|2,5]] closes [u] to one element); one draw
+   under both operands of a pointwise operation ([(u *. u) + c[|2]]); nested branching ([c + (u + (v
+   *. w))] closes [u], [c + ((u + v) + w)] is refused); a constant of no axes in a branching program
+   ([((u + v) + z) *. c[|3]]); an einsum spec over a draw ([c[|3->2] * (u ++ "ab => a")] closes the
+   kept axis to 1); a compose over a draw ([(c[|3,2] *. v) *. (u * c[|5])] gives [u] no output
+   axes); and a [uniform1]-initialized parameter sized only by a fixed index, accepted where a
+   default-initialized one is refused. *)
 
 open! Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -271,10 +274,10 @@ let combine ~param (ds : demand list) : (int list, string) Result.t =
 type oracle =
   | Solved of rows array
   | Ill_typed of string  (** must be refused *)
-  | Underspecified of string  (** refused at closure by design (docs/shape_inference.md) *)
+  | Underspecified of int option * string
+      (** refused at closure by design (docs/shape_inference.md); the parameter, when known *)
   | Inconclusive of string
 
-(* The demands every node receives, given the current forward shapes. *)
 (* The demands every node receives, given the current forward shapes. A consumer demands of its
    operand what the consumer has -- its own shape, siblings included -- and what its own consumers
    demand of it. [~use_min:false] drops the fixed index's lower bound. *)
@@ -381,8 +384,7 @@ let underdetermined (prog : program) =
         | Stretch x | Relu x | Neg x | Einsum (_, x) -> fixed.(x)
         | Add (x, y) | Mul (x, y) -> or3 fixed.(x) fixed.(y)
         | Compose (x, y) ->
-            let xb, xi, xo = fixed.(x) and yb, yi, yo = fixed.(y) in
-            ignore (xi, yo);
+            let xb, _, xo = fixed.(x) and yb, yi, _ = fixed.(y) in
             (xb || yb, yi, xo)));
   Array.existsi prog ~f:(fun _ node ->
       match node with
@@ -427,6 +429,8 @@ let fixpoint ~use_min (prog : program) =
 (* A parameter sized only by a fixed index is refused at closure by design; one with an axis nothing
    sizes is a forgotten hidden dimension, whose refusal the solver decides by its own policy (no
    claim). *)
+(* The node a fixpoint failure names ("%k: ..."). *)
+let failing_node e = Stdlib.Scanf.sscanf_opt e "%%%d:" Fn.id
 let is_policy e = String.is_suffix e ~suffix:min_only
 
 let solve (prog : program) : oracle =
@@ -434,7 +438,7 @@ let solve (prog : program) : oracle =
   | Some m -> Ill_typed m
   | None -> (
       match fixpoint ~use_min:true prog with
-      | Error e when is_policy e -> Underspecified e
+      | Error e when is_policy e -> Underspecified (failing_node e, e)
       | Error e -> Inconclusive e
       | Ok assign -> (
           match forward ~strict:true prog assign with
@@ -468,7 +472,7 @@ let solve (prog : program) : oracle =
                    design: without the index's bound it would have an axis nothing sizes. *)
                 match fixpoint ~use_min:false prog with
                 | Error e when String.is_suffix e ~suffix:hidden ->
-                    Underspecified ("sized only by a fixed index (" ^ e ^ ")")
+                    Underspecified (failing_node e, "sized only by a fixed index (" ^ e ^ ")")
                 | _ -> Solved s)))
 
 (* {2 The solver's side} *)
@@ -571,21 +575,29 @@ let over_lit (prog : program) =
   under prog ~is_x:(fun k node -> over.(k) && match node with Add _ | Mul _ -> true | _ -> false)
 
 (* The known lists. Each entry names the operations its cause stands at ([is_x]); it excuses a node
-   at or under one of them, or at or under the pointwise operation consuming one (the cause reaches
-   the siblings it is broadcast with) -- for a shape, only one that is the oracle's with some axes
-   collapsed to 1; for a refusal ([refuses]), any refusal of a program holding one. *)
-type known = { entry : string; is_x : program -> int -> node -> bool; refuses : bool }
+   at or under one of them -- with [reach], also at or under the pointwise operation consuming one
+   (through unary results), where the cause was seen to reach the siblings it is broadcast with --
+   and for a shape, only one that is the oracle's with some axes collapsed to 1. A refusal of a
+   program holding one is excused only when its message holds one of [refusals], the messages the
+   entry was seen to produce. *)
+type known = {
+  entry : string;
+  is_x : program -> int -> node -> bool;
+  reach : bool;
+  refusals : string list;
+}
 
-let region (prog : program) ~is_x =
+let region (prog : program) ~is_x ~reach =
   let base = Array.mapi prog ~f:(is_x prog) in
-  let base = Array.copy base in
-  Array.iteri prog ~f:(fun k node ->
-      match node with Stretch x | Relu x | Neg x -> if base.(x) then base.(k) <- true | _ -> ());
-  let ext =
-    Array.mapi prog ~f:(fun k node ->
-        base.(k) || match node with Add (x, y) | Mul (x, y) -> base.(x) || base.(y) | _ -> false)
-  in
-  under prog ~is_x:(fun k _ -> ext.(k))
+  if reach then (
+    Array.iteri prog ~f:(fun k node ->
+        match node with Stretch x | Relu x | Neg x -> if base.(x) then base.(k) <- true | _ -> ());
+    let ext =
+      Array.mapi prog ~f:(fun k node ->
+          base.(k) || match node with Add (x, y) | Mul (x, y) -> base.(x) || base.(y) | _ -> false)
+    in
+    under prog ~is_x:(fun k _ -> ext.(k)))
+  else under prog ~is_x:(fun k _ -> base.(k))
 
 let is_lit prog x = Poly.equal prog.(x) Lit
 let is_scalar_const prog x = match prog.(x) with Const r -> cells r = 1 | _ -> false
@@ -598,19 +610,29 @@ let rec branching prog = function
   | _ -> false
 
 let pointwise_with f = function Add (x, y) | Mul (x, y) -> f x || f y | _ -> false
+let mismatch = "solved dimensions for axis: mismatch"
+let axes_count = "Mismatching number of axes"
+let too_many = "Too many axes in an operand"
 
 let known : known list =
   [
-    { entry = known_lit; is_x = (fun prog _ -> pointwise_with (is_lit prog)); refuses = false };
+    {
+      entry = known_lit;
+      is_x = (fun prog _ -> pointwise_with (is_lit prog));
+      reach = true;
+      refusals = [];
+    };
     {
       entry = "box_muller: a normal draw";
       is_x = (fun _ _ node -> Poly.equal node (Draw Normal));
-      refuses = true;
+      reach = true;
+      refusals = [ too_many; axes_count ];
     };
     {
       entry = "proposed: a unary operation (relu, neg) over a draw";
-      is_x = (fun _ _ -> function Relu _ | Neg _ -> true | _ -> false);
-      refuses = false;
+      is_x = (fun prog _ -> function Relu x | Neg x -> is_open prog x | _ -> false);
+      reach = false;
+      refusals = [];
     };
     {
       entry = "proposed: a pointwise operation with one draw under both operands";
@@ -620,35 +642,43 @@ let known : known list =
               let o = opens prog in
               not (Set.is_empty (Set.inter o.(x) o.(y)))
           | _ -> false);
-      refuses = true;
+      reach = true;
+      refusals = [ mismatch; axes_count ];
     };
     {
       entry = "proposed: nested branching, a branching pointwise operation over another";
       is_x =
         (fun prog _ node ->
           branching prog node && pointwise_with (fun x -> branching prog prog.(x)) node);
-      refuses = true;
+      reach = true;
+      refusals = [ mismatch; axes_count ];
     };
     {
       entry = "proposed: a pointwise operation with a constant of no axes";
       is_x = (fun prog _ -> pointwise_with (is_scalar_const prog));
-      refuses = true;
+      reach = true;
+      refusals = [ mismatch; axes_count ];
     };
     {
       (* Excuses no shape (no node holds it): only the acceptance, in [judge]. *)
       entry = known_uniform1_param;
       is_x = (fun _ _ _ -> false);
-      refuses = false;
+      reach = false;
+      refusals = [];
     };
     {
       entry = "proposed: an einsum spec over a draw";
-      is_x = (fun _ _ -> function Einsum _ -> true | _ -> false);
-      refuses = false;
+      is_x = (fun prog _ -> function Einsum (_, x) -> is_open prog x | _ -> false);
+      (* Seen reaching siblings: [(neg (u ++ "ab => a") *. v) *. c[|5,2]] closes [v]. *)
+      reach = true;
+      refusals = [];
     };
     {
       entry = "proposed: a compose over a draw";
-      is_x = (fun _ _ -> function Compose _ -> true | _ -> false);
-      refuses = false;
+      is_x =
+        (fun prog _ -> function Compose (x, y) -> is_open prog x || is_open prog y | _ -> false);
+      reach = false;
+      refusals = [];
     };
   ]
 
@@ -678,18 +708,23 @@ let judge (prog : program) (oracle : oracle) (outcome : outcome) ~(fills : int o
   | Ill_typed _, Refused _ -> Agrees
   | Ill_typed why, Accepted _ -> Disagrees ("accepted an ill-typed program: " ^ why)
   | Underspecified _, Refused _ -> Agrees
-  | Underspecified why, Accepted _ ->
-      if Array.exists prog ~f:(Poly.equal (Param true)) then Known known_uniform1_param
-      else Disagrees ("accepted an underspecified program: " ^ why)
+  | Underspecified (node, why), Accepted _ -> (
+      match node with
+      | Some k when Poly.equal prog.(k) (Param true) -> Known known_uniform1_param
+      | _ -> Disagrees ("accepted an underspecified program: " ^ why))
   | Solved _, Refused msg -> (
-      match List.find known ~f:(fun e -> e.refuses && Array.existsi prog ~f:(e.is_x prog)) with
+      match
+        List.find known ~f:(fun e ->
+            List.exists e.refusals ~f:(fun sub -> String.is_substring msg ~substring:sub)
+            && Array.existsi prog ~f:(e.is_x prog))
+      with
       | Some e -> Known e.entry
       | None -> Disagrees ("refused a solvable program: " ^ msg))
   | Solved want, Accepted got -> (
       let nodes = List.init (Array.length prog) ~f:Fn.id in
       let mismatched = List.filter nodes ~f:(fun k -> not (same want.(k) got.(k))) in
       (* A known repeat explains a mismatch only in its predicted form. *)
-      let holds = List.map known ~f:(fun e -> (e.entry, region prog ~is_x:e.is_x)) in
+      let holds = List.map known ~f:(fun e -> (e.entry, region prog ~is_x:e.is_x ~reach:e.reach)) in
       let explained k =
         if collapse_of ~want:want.(k) ~got:got.(k) then
           List.find_map holds ~f:(fun (entry, at) ->
@@ -768,10 +803,8 @@ let fresh_size g w =
   | [] -> 11
   | l -> pick g l
 
-(* A sub-broadcast of the world's row: a suffix, some axes replaced by 1. *)
-let sub_row g r =
-  let r = List.drop r (Random.State.int g.st (List.length r + 1)) in
-  r
+(* A sub-broadcast of the world's row: a suffix of it (never a size-1 axis). *)
+let sub_row g r = List.drop r (Random.State.int g.st (List.length r + 1))
 
 let gen_const g w =
   let r = { b = sub_row g w.b; i = sub_row g w.i; o = sub_row g w.o } in
@@ -876,12 +909,7 @@ let branches (prog : program) =
   let consumers = Array.create ~len:n 0 in
   let branching = ref false in
   Array.iteri prog ~f:(fun k node ->
-      let args =
-        match node with
-        | Const _ | Lit | Draw _ | Param _ -> []
-        | Stretch x | Relu x | Neg x | Einsum (_, x) -> [ x ]
-        | Add (x, y) | Mul (x, y) | Compose (x, y) -> [ x; y ]
-      in
+      let args = args node in
       List.iter args ~f:(fun x -> consumers.(x) <- consumers.(x) + 1);
       (match args with [ x; y ] when under.(x) && under.(y) -> branching := true | _ -> ());
       under.(k) <- resolves_at_use node || List.exists args ~f:(fun x -> under.(x)));
@@ -1018,6 +1046,11 @@ type case = { name : string; prog : program; oracle : oracle; outcome : outcome 
 let num_programs = 2000
 let num_executed = 120
 
+(* Floors on the programs that agree outright (set a little under the counts at landing, which the
+   stderr prints): a known entry grown to excuse them would fail here. *)
+let strict_floor_branching = 650
+let strict_floor_executed = 90
+
 let () =
   let start = Unix.gettimeofday () in
   let st = Random.State.make [| 2181 |] in
@@ -1146,9 +1179,21 @@ let () =
           match j with Disagrees _ -> true | _ -> false);
       p_all ~min:50 "executed programs occur, and every draw fills its oracle shape or is listed"
         (List.filter random ~f:(fun (_, _, e) -> e))
-        ~f:(fun (_, j, _) -> match j with Agrees | Known _ -> true | _ -> false));
+        ~f:(fun (_, j, _) -> match j with Agrees | Known _ -> true | _ -> false);
+      (* The strict population: the floors above count excused cases too. *)
+      let agree = List.filter random ~f:(fun (_, j, _) -> Poly.equal j Agrees) in
+      let agree_branching = List.filter agree ~f:(fun (c, _, _) -> branches c.prog) in
+      let agree_executed = List.filter agree ~f:(fun (_, _, e) -> e) in
+      Stdio.eprintf
+        "(not part of the golden) agree outright: %d, of them branching %d, executed %d\n%!"
+        (List.length agree) (List.length agree_branching) (List.length agree_executed);
+      p_all ~min:strict_floor_branching "branching programs agree outright, no entry excusing them"
+        agree_branching ~f:(fun _ -> true);
+      p_all ~min:strict_floor_executed
+        "executed programs agree outright, every draw filling its oracle shape" agree_executed
+        ~f:(fun _ -> true));
   Verdict.case "the known lists" (fun () ->
-      p_all ~min:2 "every known entry still occurs" known_entries ~f:(fun e ->
+      p_all ~min:(List.length known) "every known entry still occurs" known_entries ~f:(fun e ->
           List.exists judged ~f:(fun (_, j, _) -> Poly.equal j (Known e))));
   Verdict.case "the judge flags corrupted observations" (fun () ->
       (* Take the agreeing executed fixed program with two draws and corrupt what was observed. *)
