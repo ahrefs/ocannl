@@ -159,6 +159,14 @@ files.
   middle (one ran ahead of `contraction_pointwise_closing`'s balanced-flank search; requiring a
   closed tail instead left a draw under an unbatched `c[|16]` repeating). Giving literals no axes is not a
   shortcut: it moved 27 test actions, a transformer's logits closing `2x3x1` among them.
+  A solved row passes its role on too (gh-ocannl-2247): when `unify_row` commits `v := value` for a
+  marked `v`, the dimension variables of `subst_row env value` take the mark. A draw read through an
+  einsum spec (`u ++ "ab => ba"`) is solved to the spec's axes, minted for the result; unmarked,
+  they closed minimal and the draw was one value. Only the `beg_handled` branch writes a
+  `Solved_row`; the other branch's bindings reach it recursively, so the rule lives there alone.
+  Measured over gh-ocannl-2244: 34 sweep programs agree that did not, and the einsum entry kept
+  only fixed indices (17 to 3, narrowed to them); no parameter's shape moved. Marking `Var` axes only, or adding the twin in `unify_dim`'s `Var` arm against an
+  `Affine`/`Concat`, changed no sweep program: nothing pins a draw through a windowed spec.
 - Solver deletion experiments: a green suite does not prove a guess or closing arm redundant
   unless executed pins check that draws vary across their use sites. Before making that claim,
   run `@test/operations/runtest-dropout_mask_varies`,

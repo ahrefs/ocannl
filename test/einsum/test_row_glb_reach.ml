@@ -218,3 +218,79 @@ let () =
   pf "the draw takes the use site's 5, the result with it, and the draw sizes its blocks"
     (once [ "[5]"; "[5]"; "[5]"; "2" ]);
   pf "the repeated bound closes the same" (twice [ "[5]"; "[5]"; "[5]"; "2" ])
+
+(* gh-ocannl-2247: [v = value] makes [value]'s axes [v]'s own, so a row that resolves at its use
+   sites passes its mark to the dimension variables of the value it is solved to. A draw read
+   through an einsum spec ([u ++ "ab => ba"]) is solved to the spec's axes, minted for the
+   operation's result: unmarked, they closed minimal and the draw repeated
+   (test/operations/row_glb_reach_executed pins the executed side). Each store is one Stage1 solve;
+   the claims read the marks. *)
+let () =
+  Verdict.case "a solved row passes its mark to the axes it absorbs" @@ fun () ->
+  let var () = Row.get_var () in
+  let marked () =
+    let r = fresh () in
+    Row.add_resolve_at_use (var_of r);
+    r
+  in
+  let flat beg_dims dims = { Row.beg_dims; dims; bcast = Broadcastable; prov = prov `Output } in
+  let stage1 eqs = ignore (Row.solve_inequalities ~stage:Stage1 eqs Row.empty_env : _ * _) in
+  let is_marked = Row.is_resolve_at_use_dim in
+  (* Both flanks of the absorbed value, and the equation's sides swapped. *)
+  let a = var () and b = var () in
+  stage1 [ eq (marked ()) (flat [ Var a ] [ Var b ]) ];
+  pf "a marked row's absorbed axes take the mark, both flanks" (is_marked a && is_marked b);
+  let a = var () and b = var () in
+  stage1 [ eq (flat [ Var a ] [ Var b ]) (marked ()) ];
+  pf "the same with the equation's sides swapped" (is_marked a && is_marked b);
+  let a = var () and b = var () in
+  stage1 [ eq (fresh ()) (flat [ Var a ] [ Var b ]) ];
+  pf "an unmarked row passes nothing" (not (is_marked a || is_marked b));
+  (* [[a].<v> = [a; c]]: the flank solves [a := c] first, so the value [a] is [c] when stored. *)
+  let a = var () and c = var () in
+  stage1 [ eq { (marked ()) with dims = [ Var a ] } (flat [] [ Var a; Var c ]) ];
+  pf "an axis the flank solved passes the mark to what it was solved to" (is_marked c);
+  (* An open remainder shares the mark, and passes it on when it is solved in turn. *)
+  let d = var () and e = var () and w = fresh () in
+  stage1 [ eq (marked ()) { w with dims = [ Var d ] }; eq w (flat [] [ Var e ]) ];
+  pf "the remainder takes the mark and passes it to its own axes"
+    (Row.is_resolve_at_use (var_of w) && is_marked d && is_marked e);
+  (* Composite axes: a stride's and a concatenation's variables. *)
+  let o = var () and p = var () and q = var () in
+  stage1
+    [
+      eq (marked ())
+        (flat []
+           [
+             Affine { stride = 2; over = Var o; conv = None; stride_offset = 0 };
+             Concat [ Var p; Var q ];
+             dim 3;
+           ]);
+    ];
+  pf "the variables of composite axes take the mark" (is_marked o && is_marked p && is_marked q);
+  (* [[x].<v> = <v2>.[y]], balanced flanks: Stage1 defers it, solving neither row. *)
+  let x = var () and y = var () in
+  stage1 [ eq { (marked ()) with beg_dims = [ Var x ] } { (fresh ()) with dims = [ Var y ] } ];
+  pf "a deferred equation marks no axis" (not (is_marked x || is_marked y));
+  (* The marks are module-level inference state, which a rewind puts back. *)
+  let a = var () in
+  let saved = Row.capture_globals () in
+  stage1 [ eq (marked ()) (flat [] [ Var a ]) ];
+  let held = is_marked a in
+  Row.restore_globals saved;
+  pf "a rewind takes the mark back" (held && not (is_marked a))
+
+(* What the mark does: a use site's 5 bounds the absorbed axis. Marked, the row closes to it;
+   unmarked, it closes minimal, as an operation result's axis does. *)
+let () =
+  Verdict.case "an absorbed axis closes by the row's role" @@ fun () ->
+  let store ~mark () =
+    let u = fresh () and d = Row.Var (Row.get_var ()) in
+    if mark then Row.add_resolve_at_use (var_of u);
+    let spec = { Row.beg_dims = []; dims = [ d ]; bcast = Broadcastable; prov = prov `Output } in
+    ([], [ u ], [ [ eq u spec; ineq (closed [ 5 ]) spec ] ], [])
+  in
+  let marked = closes "u := [d], [5] <= [d], u marked  (rows u)" (store ~mark:true) in
+  let unmarked = closes "u := [d], [5] <= [d], u unmarked  (rows u)" (store ~mark:false) in
+  pf "a marked row's absorbed axis closes to its use site" (marked [ "[5]" ]);
+  pf "an unmarked row's closes minimal" (unmarked [ "[1]" ])

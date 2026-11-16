@@ -3402,7 +3402,9 @@ let refuse_concat_component_guess env v =
    not silently widen an operation's result row beyond its arguments'. Registered for terminal rows
    (leaf tensors and parameters, from the [Terminal_row] dispatch), for parameter-initialization
    cones ([Tensor.param] via [Shape.set_resolve_at_use]: the init expression's job is to fill the
-   parameter's shape, so its intermediates widen to it), and for explicit [stretch] wrappers. *)
+   parameter's shape, so its intermediates widen to it), and for explicit [stretch] wrappers.
+   Unification shares the mark between two row variables, and [unify_row] passes it from a solved
+   variable to the dimension variables of its value (gh-ocannl-2247). *)
 let resolve_at_use = ref (Set.empty (module Row_var))
 
 let add_resolve_at_use v =
@@ -3876,6 +3878,16 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
         let result env =
           let unsolved, env =
             if beg_handled then (
+              (* [v = value] makes [value]'s axes [v]'s own, so they take [v]'s role: a row that
+                 resolves at its use sites passes the mark to the dimension variables it absorbs
+                 (gh-ocannl-2247). Without it, a draw read through an einsum spec ([u ++ "ab =>
+                 ba"]) took the spec's axes, minted for the operation's result, and closed minimal
+                 with them. This is the one write of a [Solved_row]: the branch below commits
+                 nothing itself, and every binding it emits reaches this branch. The value's row
+                 variable already shares the mark (above). Substituted first: flank unification can
+                 have solved one of its axes. *)
+              if is_resolve_at_use v then
+                Set.iter (dim_vars_of_row (subst_row env value)) ~f:add_resolve_at_use_dim;
               (* Substituting reads [v = value] into every entry bounded by [v], so it belongs to
                  this arm alone: below, [value] is what is left of the other side, and [v] is not it
                  (gh-ocannl-1955). *)

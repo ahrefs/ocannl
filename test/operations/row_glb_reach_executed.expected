@@ -38,6 +38,14 @@ u *. 2, then a fixed index, batch 4
   draw = 4|4, 16 distinct values for 16 cells
 u *. 2, then a fixed index, batch 4: every draw closes to 4|4: true
 u *. 2, then a fixed index, batch 4: every draw fills its use site: true
+(u ++ "ab => ba") *. c[|5,3]
+  draw = 3,5, 15 distinct values for 15 cells
+(u ++ "ab => ba") *. c[|5,3]: every draw closes to 3,5: true
+(u ++ "ab => ba") *. c[|5,3]: every draw fills its use site: true
+(u ++ "ab => a") *. c[5|3]
+  draw = 5|3,1, 15 distinct values for 15 cells
+(u ++ "ab => a") *. c[5|3]: every draw closes to 5|3,1: true
+(u ++ "ab => a") *. c[5|3]: every draw fills its use site: true
 relu u *. c[|2,5]
   draw = 2,5, 10 distinct values for 10 cells
 relu u *. c[|2,5]: every draw closes to 2,5: true

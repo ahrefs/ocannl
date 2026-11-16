@@ -25,3 +25,17 @@ two results: the leaf takes 3, and both results with it: true
   [5] [5] [5] 2
 the draw takes the use site's 5, the result with it, and the draw sizes its blocks: true
 the repeated bound closes the same: true
+a marked row's absorbed axes take the mark, both flanks: true
+the same with the equation's sides swapped: true
+an unmarked row passes nothing: true
+an axis the flank solved passes the mark to what it was solved to: true
+the remainder takes the mark and passes it to its own axes: true
+the variables of composite axes take the mark: true
+a deferred equation marks no axis: true
+a rewind takes the mark back: true
+u := [d], [5] <= [d], u marked  (rows u)
+  [5]
+u := [d], [5] <= [d], u unmarked  (rows u)
+  [1]
+a marked row's absorbed axis closes to its use site: true
+an unmarked row's closes minimal: true
