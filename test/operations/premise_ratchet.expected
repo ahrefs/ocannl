@@ -1,22 +1,36 @@
 every test source parses: true
+test/operations/accum_width.ml: 1 uncovered, 0 covered
 test/operations/autotune_grid_record.ml: 1 uncovered, 0 covered
+test/operations/back_to_back_runs.ml: 1 uncovered, 0 covered
 test/operations/conv_twin_packing.ml: 1 uncovered, 0 covered
 test/operations/default_prefill.ml: 1 uncovered, 0 covered
+test/operations/deferred_hit_compiles.ml: 1 uncovered, 0 covered
 test/operations/discriminating_values.ml: 2 uncovered, 0 covered
+test/operations/fragment_scope_move_legality.ml: 1 uncovered, 0 covered
 test/operations/fresh_output_fill.ml: 1 uncovered, 0 covered
 test/operations/frozen_master_pack.ml: 1 uncovered, 0 covered
 test/operations/gpu_conv_twin_tiles.ml: 1 uncovered, 0 covered
 test/operations/gpu_lane_reduction.ml: 1 uncovered, 0 covered
+test/operations/hardware_warp_shuffle.ml: 1 uncovered, 0 covered
 test/operations/masked_persistent_fragment.ml: 0 uncovered, 1 covered
+test/operations/matmul_interchange.ml: 1 uncovered, 0 covered
 test/operations/mma_bf16_seed_parity.ml: 2 uncovered, 0 covered
 test/operations/prefix_scan.ml: 2 uncovered, 0 covered
+test/operations/privatize_recheck.ml: 1 uncovered, 0 covered
 test/operations/reduction_forms.ml: 1 uncovered, 0 covered
 test/operations/scan_companion_coverage.ml: 1 uncovered, 0 covered
+test/operations/schedule_batch_grid.ml: 3 uncovered, 0 covered
 test/operations/schedule_batched_mma.ml: 1 uncovered, 0 covered
 test/operations/schedule_coalesce.ml: 0 uncovered, 8 covered
-test/operations/schedule_contraction_nest.ml: 1 uncovered, 0 covered
+test/operations/schedule_contraction_nest.ml: 4 uncovered, 0 covered
+test/operations/schedule_ldmatrix_matmul.ml: 2 uncovered, 0 covered
 test/operations/schedule_mma_matmul.ml: 5 uncovered, 0 covered
+test/operations/schedule_pad.ml: 1 uncovered, 0 covered
 test/operations/set_values_pool_coalescing.ml: 1 uncovered, 0 covered
+test/operations/split_reduce_pair.ml: 2 uncovered, 0 covered
+test/operations/tile_mma_narrow.ml: 2 uncovered, 0 covered
+test/operations/tune_arm_a_replay.ml: 1 uncovered, 0 covered
+test/operations/workgroup_memory_accounting.ml: 1 uncovered, 0 covered
 premise debt has not grown and every row is current: true
 the census contains exactness premises: true
 

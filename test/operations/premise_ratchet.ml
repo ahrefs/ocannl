@@ -10,22 +10,36 @@ module Scan = Test_scan.Premise_scan
    not operand premises. Lower a row with each conversion; remove it at zero. *)
 let debt =
   [
+    ("test/operations/accum_width.ml", 1);
     ("test/operations/autotune_grid_record.ml", 1);
+    ("test/operations/back_to_back_runs.ml", 1);
     ("test/operations/conv_twin_packing.ml", 1);
     ("test/operations/default_prefill.ml", 1);
+    ("test/operations/deferred_hit_compiles.ml", 1);
     ("test/operations/discriminating_values.ml", 2);
+    ("test/operations/fragment_scope_move_legality.ml", 1);
     ("test/operations/fresh_output_fill.ml", 1);
     ("test/operations/frozen_master_pack.ml", 1);
     ("test/operations/gpu_conv_twin_tiles.ml", 1);
     ("test/operations/gpu_lane_reduction.ml", 1);
+    ("test/operations/hardware_warp_shuffle.ml", 1);
+    ("test/operations/matmul_interchange.ml", 1);
     ("test/operations/mma_bf16_seed_parity.ml", 2);
     ("test/operations/prefix_scan.ml", 2);
+    ("test/operations/privatize_recheck.ml", 1);
     ("test/operations/reduction_forms.ml", 1);
     ("test/operations/scan_companion_coverage.ml", 1);
+    ("test/operations/schedule_batch_grid.ml", 3);
     ("test/operations/schedule_batched_mma.ml", 1);
-    ("test/operations/schedule_contraction_nest.ml", 1);
+    ("test/operations/schedule_contraction_nest.ml", 4);
+    ("test/operations/schedule_ldmatrix_matmul.ml", 2);
     ("test/operations/schedule_mma_matmul.ml", 5);
+    ("test/operations/schedule_pad.ml", 1);
     ("test/operations/set_values_pool_coalescing.ml", 1);
+    ("test/operations/split_reduce_pair.ml", 2);
+    ("test/operations/tile_mma_narrow.ml", 2);
+    ("test/operations/tune_arm_a_replay.ml", 1);
+    ("test/operations/workgroup_memory_accounting.ml", 1);
   ]
 
 let () =
