@@ -566,7 +566,7 @@ if leg == 'matrix':
 
 
 
-if leg == 'env-triggers':
+elif leg == 'env-triggers':
     def env_controls(text):
         unfiltered_triggers(text, ('push',))
         trigger = text.split('\non:\n', 1)[1].split('\nconcurrency:', 1)[0]
@@ -587,7 +587,7 @@ if leg == 'env-triggers':
     env_controls(env_source)
     # GitHub's `*` does not cross `/`: the patterns reach the opam files only while
     # every one of them sits at the root.
-    nested = subprocess.run(['git', '-C', str(Path(sys.argv[1]).resolve().parents[2]), 'ls-files', '--',
+    nested = subprocess.run(['git', '-C', str(root), 'ls-files', '--',
                              '*/*.opam', '*/*.opam.template', '*/dune-project'],
                             capture_output=True, text=True, check=True).stdout.split()
     assert not nested, 'opam inputs below the root, which the per-PR paths filter does not match: %s' % nested
@@ -611,13 +611,12 @@ if leg == 'env-triggers':
 
 
 
-if leg == 'train-shards':
+elif leg == 'train-shards':
     # The `train` shards together build exactly the tier `@train` builds. The tier
     # is read here on its own terms -- each tracked dune file's top-level `train`
     # aggregate, its `(alias train-<name>)` deps -- a reader deliberately simpler
     # than ci-shard.sh's, so a disagreement between the two is a red, not a shared
     # blind spot. ci-shard.sh's train mode runs no dune, so this needs none.
-    root = Path(sys.argv[1]).resolve().parents[2]
     listed = subprocess.run(['git', '-C', str(root), 'ls-files', '--', 'dune', '*/dune'],
                             capture_output=True, text=True, check=True).stdout.split()
     tier = set()
@@ -659,7 +658,7 @@ if leg == 'train-shards':
     print('PASS the train shards partition the tier the train aggregates define, every shard nonempty')
 
 
-if leg == 'workflow-readers':
+elif leg == 'workflow-readers':
     # Reader regression: script payload can itself contain YAML-like keys and lists.
     payload = "cat <<'EOF'\n- keep this dash\nrun: keep this text\nEOF\n"
     for header in ('    - run: |\n', '      run: |\n'):
@@ -683,7 +682,7 @@ if leg == 'workflow-readers':
 
 
 
-if leg == 'step-order':
+elif leg == 'step-order':
 
     main_config_order(source)
     env_release_order(env_source)
@@ -736,7 +735,7 @@ if leg == 'step-order':
 
 
 
-if leg == 'host-evidence':
+elif leg == 'host-evidence':
     # Host evidence (gh-ocannl-1948): pin the shared save path, program and
     # configuration directory, not identical command text. ci-env builds from the
     # root then runs from test/config: --release and --root cannot be combined.
@@ -812,7 +811,7 @@ if leg == 'host-evidence':
 
 
 
-if leg == 'depexts':
+elif leg == 'depexts':
     # Hermetic depext listing (gh-ocannl-1917): run all three actual scripts, with
     # only their external commands in PATH, no opam switch or Debian host required.
     def install_mode_flags(step):
@@ -977,7 +976,7 @@ sys.exit(int(os.environ['OPAM_RC' if name == 'opam' else 'DPKG_RC']))
     print('PASS the three depext scripts are identical apart from their resolver flags')
 
 
-if leg == 'weigh':
+elif leg == 'weigh':
     # The main shards' weigh step prints what `tools/ci-shard.sh merge-weights` reads back from a run's
     # log (gh-ocannl-1464): run the step's own script for each shard over a fixture trace, beside the
     # real tools, and merge the two jobs' output into the WEIGHTS block it stands for.
@@ -1029,7 +1028,7 @@ if leg == 'weigh':
     print("PASS the weigh step's output, merged over one run's main shards, is the WEIGHTS block")
 
 
-if leg == 'dispatch-guard':
+elif leg == 'dispatch-guard':
     # Run the exact bash guard from the workflow with git reporting a fixture HEAD
     # and gh answering the compare API for the one direction the guard must ask:
     # is the intended commit behind the dispatched head?
@@ -1231,7 +1230,7 @@ if leg == 'dispatch-guard':
 
 
 
-if leg == 'disk-watchdog':
+elif leg == 'disk-watchdog':
     # The disk watchdog (gh-ocannl-1771): run the start step's and the report step's own scripts with
     # stub df/sudo/pkill and the polls shortened, the free space moved under the watchdog's feet.
     def step_script(name):
@@ -1356,6 +1355,8 @@ if leg == 'disk-watchdog':
             ok = False
         assert not ok, 'accepted mutant: ' + label
         print('PASS rejected mutant: disk watchdog with', label)
+else:
+    raise AssertionError('unknown CI contract leg: ' + leg)
 PY
 
 run_contract() {

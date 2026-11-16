@@ -1184,9 +1184,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   over the selected run and count its `FAIL  ` lines.
 - `test/operations/ci_matrix.sh` gates independent contracts through `harness_leg_run`
   (gh-ocannl-2113): `--list-legs` names them, and `--only '^step-order$'` selects
-  the configuration/release ordering checks. Shared Python readers are staged once; each
-  selected leg runs in a fresh process, so an assertion fails that leg and later legs still
-  report. Keep fixtures inside their leg and shared readers outside every leg.
+  the configuration/release ordering checks. The embedded Python file is written once; its
+  shared prelude runs again in each selected leg's fresh process, so an assertion fails that
+  leg and later legs still report. Python refuses an unmatched contract name instead of
+  reporting a pass without running a block. Keep fixtures inside their leg and shared readers
+  outside every leg.
 - Testing another copy of the script (gh-ocannl-1925): `tools/test-test-run.sh --subject FILE`
   (or `OCANNL_TOOL_HARNESS_SUBJECT=FILE`; the option wins) runs the legs against FILE in place of
   `tools/test-run.sh`, so "this leg fails against the previous script" is
