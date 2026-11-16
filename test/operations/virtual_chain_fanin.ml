@@ -58,7 +58,8 @@
    loads (gh-ocannl-2128): a narrower select arm or setter is the wider one once the consumer's
    loads overlap the other, and the alternatives kept are bounded.
 
-   Phases 12-13 carry their own headers: a read at several sites, and a cell's sequenced setters. *)
+   Phases 12-14 carry their own headers: a read at several sites, a cell's sequenced setters, and an
+   arm re-reading an enclosing site. *)
 
 open Base
 open Ll_test
@@ -2760,7 +2761,7 @@ let phase12 () =
      (same got [ Array.init dim ~f:(fun j -> src j +. src (j + dim) +. v w j) ]));
   LL.virtualize_settings.max_inline_fanin <- saved_cap
 
-(* === Shared by phase 13: a concat [a] = [{x,y}] | [{z}] over [2*dim] cells and a few more
+(* === Shared by phases 13 and 14: a concat [a] = [{x,y}] | [{z}] over [2*dim] cells and a few more
    leaves, every leaf varying with its identity and its cell, away from zero. As in phase 12, a
    concat a reduction reads over every cell is allocated [3*dim] cells: one exactly [2*dim] long is
    materialized by the visit cap before the fan-in guard is asked. === *)
@@ -2772,6 +2773,8 @@ type seq_fixture = {
   su : Tn.t;
   sv : Tn.t;
   sw : Tn.t;
+  sm : Tn.t;
+  sn : Tn.t;
   sval : Tn.t -> int -> float;
   sseed : ?n:int -> Tn.t -> (Tn.t * float array) list;
 }
@@ -2804,7 +2807,7 @@ let seq_fixture ~first_id =
   let sseed ?(n = 2 * dim) out =
     (out, blank n) :: (sm, m_vals) :: (sn, n_vals) :: List.mapi leaves ~f:(fun k tn -> (tn, vals k))
   in
-  { sx; sy; sz; su; sv; sw; sval; sseed }
+  { sx; sy; sz; su; sv; sw; sm; sn; sval; sseed }
 
 (* [a]'s slice [part] := the sum of [ks] there. *)
 let slice_sum a part ks =
@@ -2998,6 +3001,104 @@ let phase13 () =
      (same got [ Array.init dim ~f:reduce_ref ]));
   LL.virtualize_settings.max_inline_fanin <- saved_cap
 
+(* === Phase 14: an arm re-reading an enclosing site runs nothing new (gh-ocannl-2228) ===
+
+   [c[j] := a[j] + where m[j] a[j] 1] over the concat: the arm re-reads the cell the statement
+   already read, so the cell's one slice runs once -- [{m,x,y}] = 3, where expanding the arm again
+   charged [{m,x,y,z}] = 4 and materialized [c] at cap 3. In both select readings and both
+   spellings. A nested arm re-reading the statement's site, under a second mask [n]: [{m,n,x,y}] = 4
+   at cap 4, where it was 5. Control: an arm reading ANOTHER cell, [a[j+dim]], still runs the other
+   slice -- 4, materialized at cap 3. With [c] now inlined, each leg executes against a reference
+   and a materialized reading of [a] and [c]. *)
+
+let phase14 () =
+  let saved_cap = LL.virtualize_settings.max_inline_fanin in
+  let f = seq_fixture ~first_id:9500 in
+  let cmk = node_factory ~first_id:9550 ~dims:[| 2 * dim |] () in
+  (* A consumer over [j < dim] owns [dim] cells: a node written over part of its cells lands the cap
+     on footprint-scoped scratch instead. *)
+  let dmk = node_factory ~first_id:9580 ~dims:[| dim |] () in
+  let v = f.sval and cells = 2 * dim in
+  let concat a = [ slice_sum a 0 [ f.sx; f.sy ]; slice_sum a 1 [ f.sz ] ] in
+  let a_ref i = if i < dim then v f.sx i +. v f.sy i else v f.sz i in
+  let where_at cond then_ else_ =
+    LL.Ternop (Ir.Ops.Where, (cond, single), (then_, single), (else_, single))
+  in
+  let not_ sc = LL.Unop (Ir.Ops.Not, (sc, single)) in
+  let one = LL.Constant 1. in
+  (* [select ~inverted cond arm] is [where cond arm 1], or its predicate-inverted, arm-swapped
+     spelling. *)
+  let select ~inverted cond arm =
+    if inverted then where_at (not_ cond) one arm else where_at cond arm one
+  in
+  let pick cond arm = if Float.(cond <> 0.) then arm else 1. in
+  let leg ~label ~blends ~cap ~extent ~rhs ~expected =
+    LL.virtualize_settings.max_inline_fanin <- cap;
+    let omk = if extent = cells then cmk else dmk in
+    let a = cmk ("ra_" ^ label) and c = omk ("rc_" ^ label) and out = omk ("ro_" ^ label) in
+    materialize out;
+    let consumer =
+      let j = sym () in
+      loop_n j extent (set c [| iter j |] (rhs a j))
+    in
+    let llc = List.reduce_exn ~f:seq (concat a @ [ consumer; copy_cells ~cells:extent out c ]) in
+    let name = "vcf_reread_" ^ label in
+    let o = optimize ~blends_value_selects:blends ~name llc in
+    let exec_ok =
+      parity ~blends ~name ~seed:(f.sseed ~n:extent out) ~materialized:[ a; c ] ~out
+        ~expected:(Array.init extent ~f:expected) llc o
+    in
+    (c, o, exec_ok)
+  in
+  List.iter [ false; true ] ~f:(fun blends ->
+      List.iter [ false; true ] ~f:(fun inverted ->
+          let reading = if blends then "blended" else "short-circuiting" in
+          let spelling = if inverted then "inverted" else "plain" in
+          let label = (if blends then "blend_" else "branch_") ^ spelling in
+          let prefix =
+            Printf.sprintf "arm re-reading the statement's cell, %s, %s: " reading spelling
+          in
+          let c, o, exec_ok =
+            leg ~label ~blends ~cap:3 ~extent:cells
+              ~rhs:(fun a j ->
+                add
+                  (get a [| iter j |])
+                  (select ~inverted (get f.sm [| iter j |]) (get a [| iter j |])))
+              ~expected:(fun j -> a_ref j +. pick (v f.sm j) (a_ref j))
+          in
+          p
+            (prefix ^ "charged one slice with the mask (3), inlined at cap 3")
+            (fanin_of o c = 3 && known_virtual o c);
+          p (prefix ^ "execution matches the reference and the materialized reading") exec_ok));
+  (let c, o, exec_ok =
+     leg ~label:"nested" ~blends:false ~cap:4 ~extent:cells
+       ~rhs:(fun a j ->
+         add
+           (get a [| iter j |])
+           (where_at
+              (get f.sm [| iter j |])
+              (where_at (get f.sn [| iter j |]) (get a [| iter j |]) one)
+              one))
+       ~expected:(fun j -> a_ref j +. pick (v f.sm j) (pick (v f.sn j) (a_ref j)))
+   in
+   p
+     "a nested arm re-reading the statement's cell: charged one slice with both masks (4), inlined \
+      at cap 4"
+     (fanin_of o c = 4 && known_virtual o c);
+   p "nested re-read: execution matches the reference and the materialized reading" exec_ok);
+  (let c, o, exec_ok =
+     leg ~label:"other_cell" ~blends:false ~cap:3 ~extent:dim
+       ~rhs:(fun a j ->
+         add
+           (get a [| iter j |])
+           (where_at (get f.sm [| iter j |]) (get a [| aff [ (1, j) ] dim |]) one))
+       ~expected:(fun j -> a_ref j +. pick (v f.sm j) (a_ref (j + dim)))
+   in
+   p "an arm reading another cell runs the other slice too (4), materialized by the fan-in cap"
+     (fanin_of o c = 4 && fanin_capped o c);
+   p "another cell: execution matches the reference and the materialized reading" exec_ok);
+  LL.virtualize_settings.max_inline_fanin <- saved_cap
+
 let () =
   phase1 ();
   phase1b ();
@@ -3016,4 +3117,5 @@ let () =
   phase10 ();
   phase11 ();
   phase12 ();
-  phase13 ()
+  phase13 ();
+  phase14 ()

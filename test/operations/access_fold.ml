@@ -460,7 +460,28 @@ let () =
    p "an iterated site is charged every alternative"
      (alts_eq
         (res (scope (loop ~upto:3 r (LL.Set_local (scope_id, add (get a [| iter r |]) (at d_))))))
-        [ [ b; c_; d_ ] ]));
+        [ [ b; c_; d_ ] ]);
+   (* gh-ocannl-2228: a site an enclosing level already read is the same cell, whose alternative
+      every path entering the arm carries: the arm runs nothing new there. *)
+   p "an arm re-reading the statement's site runs no second alternative"
+     (alts_eq (res (add (at a) (where_ (at d_) (at a) (at e_)))) [ [ b; d_; e_ ]; [ c_; d_; e_ ] ]);
+   p "an arm reading another site of the dependency runs a second alternative"
+     (alts_eq
+        (res (add (at a) (where_ (at d_) (at1 a) (at e_))))
+        [ [ b; c_; d_ ]; [ b; d_; e_ ]; [ c_; d_; e_ ] ]);
+   p "a nested arm re-reading its enclosing arm's site runs no second alternative"
+     (alts_eq
+        (res (where_ (at d_) (add (at a) (where_ (at e_) (at a) (at e_))) (at e_)))
+        [ [ b; d_; e_ ]; [ c_; d_; e_ ] ]);
+   p "a sibling arm's read does not discount the other arm's"
+     (alts_eq (res (where_ (at d_) (at a) (add (at a) (at e_)))) [ [ b; d_; e_ ]; [ c_; d_; e_ ] ]);
+   p "a site re-read under an iterated enclosing site adds nothing past the union"
+     (alts_eq
+        (res
+           (add
+              (scope (loop ~upto:3 r (LL.Set_local (scope_id, get a [| iter r |]))))
+              (where_ (at d_) (at a) (at e_))))
+        [ [ b; c_; d_; e_ ] ]));
   let tile =
     tile_mma
       ~d:(d_, [| fixed 0 |])

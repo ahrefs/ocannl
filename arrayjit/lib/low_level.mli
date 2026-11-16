@@ -440,7 +440,9 @@ type read_charge = {
       (** gh-ocannl-2196: per contributor of [loads], the distinct sites this level reads it at
           (this level: the statement, [Local_scope] bodies included, or one select arm). A node read
           at [k] sites evaluates [k] cells, so {!resolve_alternatives} charges it [k] of its
-          alternatives. *)
+          alternatives -- counting only sites no enclosing level of the same evaluation (the
+          statement, an arm holding this select) already read: those are the same cells
+          (gh-ocannl-2228). *)
   selects : select_charge list;  (** The value selects met at this level, program order. *)
 }
 [@@deriving sexp_of]
@@ -507,7 +509,10 @@ val resolve_alternatives :
     alternative [acc], one result per alternative of [q] (the transitive guard maps [acc] across a
     virtual dependency's own alternatives). Pruning to the antichain is exact, since [A ⊆ B] implies
     [A ∪ X ⊆ B ∪ X]: a narrower path is kept while it may still become the widest once the rest is
-    joined. Reading and admission as for {!resolve_charge}. *)
+    joined. Reading and admission as for {!resolve_charge}. A load at a site an enclosing level
+    already read is not expanded again (gh-ocannl-2228): every path entering the arm already carries
+    that cell's alternative. A re-read in a sibling select or a sibling arm still is (a path carries
+    one arm), the materializing direction. *)
 
 val evaluation_reads : blends:bool -> self:Tnode.t -> scalar_t -> Set.M(Tnode).t list
 (** {!resolve_charge} of {!read_charge}, each load charged as itself: a [Where] charges its

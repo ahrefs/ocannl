@@ -1688,11 +1688,11 @@ let speculable_select ~(cond : scalar_t) ~(arms : scalar_arg list) =
    kept ({!Read_site}, gh-ocannl-2196): [a[j] + a[j+dim]] evaluates two cells of [a], so two of its
    alternatives, where the same index twice is one cell. The level is the sink the read joins, so
    two arms of one select never pair, while a read beside a [Local_scope] body's does. A re-read
-   across levels -- an arm re-reading the statement's node -- is already charged again by
-   {!resolve_alternatives}' expansion of the arm. A site whose index mentions a loop the evaluation
-   iterates is [Iterated], charged every alternative: a loop inside the right-hand side, or one
-   absent from [self]'s written indices -- the caller's [~iterated] for a setter's enclosing
-   reduction, a stored computation's loops outside its [self] write. *)
+   across levels -- an arm re-reading a site of the statement or of an enclosing arm -- is the same
+   cell, and {!resolve_alternatives} does not expand it again (gh-ocannl-2228). A site whose index
+   mentions a loop the evaluation iterates is [Iterated], charged every alternative: a loop inside
+   the right-hand side, or one absent from [self]'s written indices -- the caller's [~iterated] for
+   a setter's enclosing reduction, a stored computation's loops outside its [self] write. *)
 type eval_reads = {
   e_stmt : read_charge;
   e_cur : read_charge;
@@ -1884,20 +1884,29 @@ let widest_alternatives alts =
 
 (* gh-ocannl-2196: how many of [q]'s alternatives one evaluation at this level runs -- one per
    distinct site, each a cell of its own. Past {!max_fanin_alternatives} sites nothing changes: a
-   node keeps at most that many alternatives, so that many expansions already reach their union. *)
-let site_multiplicity (c : read_charge) q =
+   node keeps at most that many alternatives, so that many expansions already reach their union.
+   gh-ocannl-2228: a site in [enclosing] -- one an enclosing level of the same evaluation (the
+   statement, or an arm holding this select) already read -- is the same cell, whose alternative
+   every path entering this level already carries, so it runs nothing new: an arm re-reading only
+   such sites costs [0]. An [Iterated] enclosing site already reached the union. *)
+let site_multiplicity ~(enclosing : Set.M(Read_site).t Map.M(Tn).t) (c : read_charge) q =
+  let iterated = Set.exists ~f:(function Read_site.Iterated _ -> true | _ -> false) in
+  let seen = Option.value (Map.find enclosing q) ~default:(Set.empty (module Read_site)) in
   match Map.find c.sites q with
   | None -> 1
-  | Some s when Set.exists s ~f:(function Read_site.Iterated _ -> true | _ -> false) ->
-      max_fanin_alternatives
-  | Some s -> Int.clamp_exn (Set.length s) ~min:1 ~max:max_fanin_alternatives
+  | Some _ when iterated seen -> 0
+  | Some s ->
+      let fresh = Set.diff s seen in
+      if iterated fresh then max_fanin_alternatives
+      else Int.min (Set.length fresh) max_fanin_alternatives
 
 (* [resolve_alternatives] continuing from [init] instead of the empty evaluation: the setters of one
    write-overlap group replay in sequence (gh-ocannl-2228), each path through the next setter joined
-   to each the earlier ones left. *)
+   to each the earlier ones left. The enclosing sites start empty for each setter: two setters'
+   equal index expressions need not name one cell. *)
 let resolve_alternatives_from ~blends ~expand ~init (c : read_charge) : Set.M(Tn).t list =
   let prune alts = fst (cap_alternatives alts) in
-  let rec go alts c =
+  let rec go ~enclosing alts c =
     let alts =
       Set.fold c.loads ~init:alts ~f:(fun alts q ->
           (* A node read at [k] distinct sites is expanded [k] times, pruned after each: the
@@ -1913,14 +1922,18 @@ let resolve_alternatives_from ~blends ~expand ~init (c : read_charge) : Set.M(Tn
               let alts' = step alts in
               if List.equal Set.equal alts alts' then alts else repeat (n - 1) alts'
           in
-          repeat (site_multiplicity c q - 1) (step alts))
+          match site_multiplicity ~enclosing c q with 0 -> alts | k -> repeat (k - 1) (step alts))
     in
+    (* Every alternative leaving the loads above carries their expansion, so the arms below see
+       these sites as already read; sibling arms and sibling selects do not (a path carries one
+       arm), so their re-reads stay charged -- the materializing direction. *)
+    let enclosing = Map.merge_skewed enclosing c.sites ~combine:(fun ~key:_ a b -> Set.union a b) in
     List.fold c.selects ~init:alts ~f:(fun alts s ->
-        if blends && s.speculable then List.fold s.arms ~init:alts ~f:go
+        if blends && s.speculable then List.fold s.arms ~init:alts ~f:(go ~enclosing)
         else if List.is_empty s.arms then alts
-        else prune (List.concat_map s.arms ~f:(go alts)))
+        else prune (List.concat_map s.arms ~f:(go ~enclosing alts)))
   in
-  go init c
+  go ~enclosing:(Map.empty (module Tn)) init c
 
 let resolve_alternatives ~blends ~expand (c : read_charge) : Set.M(Tn).t list =
   resolve_alternatives_from ~blends ~expand ~init:[ Set.empty (module Tn) ] c
@@ -11871,7 +11884,8 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
      {!max_fanin_alternatives}. A consumer reading a dependency at [k] distinct index sites in one
      evaluation runs [k] of its alternatives, and is charged the widest union of [k] of them,
      repetition allowed (gh-ocannl-2196, {!site_multiplicity}): [a[j] + a[j+dim]] over a concat
-     costs both slices.
+     costs both slices, while an arm re-reading a site its statement already read costs nothing more
+     (gh-ocannl-2228).
 
      A cycle of nodes still headed for inlining (gh-ocannl-1962) has no bottom to start from: a node
      with several setters can read, in one of them, a node reading the cells another of its setters

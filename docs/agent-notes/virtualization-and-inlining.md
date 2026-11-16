@@ -999,8 +999,9 @@ files.
   alternatives with repetition, the max over k-multisets. It is tighter than the union (three slices
   read at two sites cost the widest pair) and saturates at it (k is capped at
   `max_fanin_alternatives`). The level is the read's sink: the same index twice is one cell, two
-  arms of one select never pair, a read beside a `Local_scope` body's read does, and a re-read
-  across levels was already charged again by the arm's own expansion. A site whose index mentions a
+  arms of one select never pair, a read beside a `Local_scope` body's read does, and an arm
+  re-reading a site an enclosing level already read runs nothing new (gh-ocannl-2228; a re-read in
+  a sibling select or a sibling arm is still charged). A site whose index mentions a
   loop one evaluation iterates -- inside a `Local_scope` body, or an enclosing loop absent from the
   written indices (a reduction; `setter_facts` passes them as `~iterated`, a stored computation's
   are the loops absent from its `self` write) -- is `Read_site.Iterated` and charged every
@@ -1010,8 +1011,10 @@ files.
   orders, same-index and cap-equality controls, the three-slice tightness control, the two-site
   select in both spellings and readings, a reduction over both slices, cross-routine), 13 (a cell's
   sequenced setters: an init before a reduction, an update chain, disjoint slice groups, the
-  bridged-group over-charge, cross-routine components), each executed against a reference and a
-  materialized reading; `access_fold` pins the collector's site keys and the resolver.
+  bridged-group over-charge, cross-routine components) and 14 (an arm re-reading the statement's
+  cell in both readings and spellings, nested, and the other-cell control), each executed against a
+  reference and a materialized reading; `access_fold` pins the collector's site keys and the
+  resolver, enclosing-site reuse included.
 - **The fan-in traversal must not enter a node already materialized** (gh-ocannl-1777). A whole
   step's setter-reads graph is cyclic through its parameters (a parameter reads its gradient, which
   reads activations that read the parameter), and the cycle guard memoizes whatever it computed under

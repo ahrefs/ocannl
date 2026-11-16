@@ -307,3 +307,15 @@ bridged updates: execution matches the reference and the materialized reading: t
 cross-routine init and update: routine A commits the concat and the reduction virtual: true
 cross-routine init and update: the stored components replay together, so B's reader is charged 4, materialized by the fan-in cap: true
 cross-routine init and update: execution matches the reference: true
+arm re-reading the statement's cell, short-circuiting, plain: charged one slice with the mask (3), inlined at cap 3: true
+arm re-reading the statement's cell, short-circuiting, plain: execution matches the reference and the materialized reading: true
+arm re-reading the statement's cell, short-circuiting, inverted: charged one slice with the mask (3), inlined at cap 3: true
+arm re-reading the statement's cell, short-circuiting, inverted: execution matches the reference and the materialized reading: true
+arm re-reading the statement's cell, blended, plain: charged one slice with the mask (3), inlined at cap 3: true
+arm re-reading the statement's cell, blended, plain: execution matches the reference and the materialized reading: true
+arm re-reading the statement's cell, blended, inverted: charged one slice with the mask (3), inlined at cap 3: true
+arm re-reading the statement's cell, blended, inverted: execution matches the reference and the materialized reading: true
+a nested arm re-reading the statement's cell: charged one slice with both masks (4), inlined at cap 4: true
+nested re-read: execution matches the reference and the materialized reading: true
+an arm reading another cell runs the other slice too (4), materialized by the fan-in cap: true
+another cell: execution matches the reference and the materialized reading: true
