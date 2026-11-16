@@ -1054,16 +1054,27 @@ let check_no_duplicate_fragments ?name ctx (comp : Asgns.comp) =
             owner id)
       |> String.concat ~sep:"; "
     in
+    let guidance =
+      if List.for_all duplicates ~f:(fun ((_, side), _) -> Asgns.equal_side side Asgns.Fwd) then
+        "A fragment is compiled into one routine of a lineage. A %cd reader of a forward root \
+         embeds its whole forward code, including its inputs' fetches: running the named owning \
+         routine with Context.run computes that tensor too. Run that routine; or, when rebuilding \
+         the sequence, compile Train.forward on the tensor before constructing the reader so the \
+         reader reads the computed value. To compile an alternative version, compile from a \
+         context that does not descend from the owning routine (a sibling)."
+      else
+        "A fragment is compiled into one routine of a lineage -- a second copy of a backprop \
+         fragment would double-count a gradient. Run the earlier routine again with Context.run \
+         instead of recompiling it; to compile an alternative version, compile from a context that \
+         does not descend from that routine (a sibling)."
+    in
     raise
     @@ Utils.User_error
          (Printf.sprintf
             "Context.compile%s: this computation carries code fragments already compiled in this \
-             context's lineage: %s. A fragment is compiled into one routine of a lineage -- a \
-             second copy of a backprop fragment would double-count a gradient. Run the earlier \
-             routine again with Context.run instead of recompiling it; to compile an alternative \
-             version, compile from a context that does not descend from that routine (a sibling)."
+             context's lineage: %s. %s"
             (match name with None -> "" | Some n -> " (" ^ n ^ ")")
-            listed)
+            listed guidance)
 
 (* gh-ocannl-1744: [Tensor.op] carries a shared operand's gradient zeroing in its first-constructed
    consumer only -- together with the operand's backprop -- while every consumer's own gradient code

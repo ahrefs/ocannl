@@ -181,6 +181,13 @@ let () =
       let msg = LC.refusal "D" (fun () -> Train.update_once ctx1 loss) in
       p "D: the second, on the returned context, is refused naming loss's backprop fragment"
         (duplicate_named msg (LC.grad_of loss));
+      p "D: backprop duplicate keeps its existing guidance"
+        (String.is_suffix msg
+           ~suffix:
+             "A fragment is compiled into one routine of a lineage -- a second copy of a backprop \
+              fragment would double-count a gradient. Run the earlier routine again with \
+              Context.run instead of recompiling it; to compile an alternative version, compile \
+              from a context that does not descend from that routine (a sibling).");
       Option.iter
         (LC.accepted "D: the same compile as a sibling is accepted" (fun () ->
              Train.update_once ctx0 loss))

@@ -47,6 +47,15 @@ files.
   lineage to exercise lowering compiles an unowned copy (`Asgns.comp ~embedded asgns`). The
   `Train.*_once` functions mean "compile and run one time"; `forward_once` drops nothing, so a loss
   built after it trains through it (`lineage_fragments.ml`).
+- A `%cd` reader of a forward root embeds the WHOLE forward, including its input fetches
+  (gh-ocannl-2188). Compiling `[%cd out =: hs]` before `Train.forward hs` therefore makes the
+  reader the forward's owner in that lineage. Run the reader: it computes both `hs` and `out`.
+  To make separate routines, compile the forward before constructing the reader. The forward-only
+  duplicate refusal explains these orders and lists the owning routines; it describes `%cd`'s
+  semantics without claiming the fragments record which frontend syntax embedded them. Any
+  duplicate backprop fragment retains the double-count guidance. `sgd_computed_node` executes
+  both orders and prints the reader's owned fragments and full refusal to stderr; its new
+  guidance claims failed against the unchanged base diagnostic, while both value paths passed.
 - A shared gradient's life cycle is checked per lineage too (gh-ocannl-1744): `Asgns.comp`
   carries `zeroes` (tensor-generated zeroing: `Tensor.op`'s `zero_grads`, `force_param_diff`) and
   `accumulates` (the operands' gradients `own_grad_asn` writes, root or not), and

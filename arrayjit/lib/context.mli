@@ -245,7 +245,9 @@ val compile :
     double-count a gradient. Re-running the earlier routine is {!run}'s job; an alternative compile
     (another [lowered_transform], a placement arm) is compiled as a sibling, from a context that
     does not descend from the owner. The lineage records a routine's fragments only once its link
-    succeeds.
+    succeeds. For forward-only duplicates, the refusal also explains that a [%cd] reader embeds a
+    forward root's whole computation: run the named owning routine to compute that tensor, or
+    rebuild with [Train.forward] compiled before constructing the reader.
 
     Also refuses, the same way, a [comp] whose tensor-generated backprop accumulates into a gradient
     ({!Ir.Assignments.field-accumulates}) that the lineage cannot keep correct (gh-ocannl-1744),
