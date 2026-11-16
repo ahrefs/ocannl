@@ -79,26 +79,24 @@ let () =
              let%op y = x *. (2. *. uniform_at (step ())) in
              y)))
 
-(* Printed, not claimed: a normal draw over an unbatched vector closes to one value broadcast over
-   its use site, guess or not (also at 380ea6528, before gh-ocannl-2141): [box_muller] draws behind
-   the literals of its clamp, and its equality spec ties the result's row to theirs
-   (gh-ocannl-2180). *)
+(* gh-ocannl-2180: a normal draw over an unbatched vector closed to one value broadcast over its use
+   site: [box_muller] draws behind the literals of its clamp, a packed draw's row took its bound's
+   axes, and those closed minimal, as the results' axes they were. A parameter drawing the same way
+   is the control. *)
 let () =
-  let count name build =
-    let v = values ~seed:7 build in
-    Stdio.printf "%s: %d distinct values of %d\n" name
-      (Set.length (Set.of_array (module Float) v))
-      (Array.length v)
-  in
-  count "x *. normal_at step" (fun () ->
-      let x = ones [ 16 ] in
-      let%op y = x *. normal_at (step ()) in
-      y);
-  count "x *. normal ()" (fun () ->
-      let x = ones [ 16 ] in
-      let%op y = x *. normal () in
-      y);
-  count "x *. { w = normal () }" (fun () ->
-      let x = ones [ 16 ] in
-      let%op y = x *. { w = normal () } in
-      y)
+  Verdict.case "a normal draw sized by its use site" (fun () ->
+      distinct "x *. normal_at step"
+        (values ~seed:7 (fun () ->
+             let x = ones [ 16 ] in
+             let%op y = x *. normal_at (step ()) in
+             y));
+      distinct "x *. normal ()"
+        (values ~seed:7 (fun () ->
+             let x = ones [ 16 ] in
+             let%op y = x *. normal () in
+             y));
+      distinct "x *. { w = normal () }"
+        (values ~seed:7 (fun () ->
+             let x = ones [ 16 ] in
+             let%op y = x *. { w = normal () } in
+             y)))

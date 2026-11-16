@@ -4212,8 +4212,10 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(res : dim) ~(opnd : dim
              literal of [!.rate < uniform_at step] in [Nn_blocks.dropout]) closes to its use site
              rather than to 1. Deleted, dropout's mask was one value broadcast over its input. It
              fires only on a re-processed bound, so a solve can depend on whether a bound is
-             repeated (gh-ocannl-2141, pinned in test_row_bound_emissions); it goes once the
-             dimension a row adopts from its bound keeps the row's role. *)
+             repeated (gh-ocannl-2141, pinned in test_row_bound_emissions). A row closing to its
+             bound now takes axes of its own ([role_template], gh-ocannl-2180), but that does not
+             yet replace this: deleted on top of it, dropout's masks and raw [uniform_at] draws over
+             an unbatched vector still closed to one value or one block. *)
           ([ Dim_eq { d1 = opnd; d2 = res; origin } ], env)
       | ( Some (Bounds_dim { res = ress; origin = origin1; _ }),
           Some (Bounds_dim { res = recorded; _ }) )
@@ -5101,8 +5103,21 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
              [1_(bcast_if_1)] is most general; conflicting sizes or conflicting (named) bases
              generalize to that top — the deliberate-broadcast case (incompatible caps join to the
              top), not a basis-checking gap. The same join applies on both flanks. *)
+          (* gh-ocannl-2180: a join of two different variables keeps the existing GLB's, and taken
+             alone would drop the incoming one's relation to [opnd_v]: [dv ⊒ d1 ∧ dv ⊒ d2] is not
+             [dv ⊒ d2]. While the row is only a variable that relation has nowhere to live, so the
+             incoming inequality is held, unchanged, until the variable is solved (a row closing to
+             its GLB by role, [role_template]), when it relates the axes themselves. Re-processing
+             a held inequality joins the same variables again: the store and the held list stay as
+             they were. Dropped, a draw with two consumers behind literals ([(u + 1) + (u *. 2)])
+             took the size of one and broadcast into the other: inference accepted it and
+             projection refused [3 = 1]. *)
+          let dropped_var = ref false in
           let join_dim d1 d2 =
             match (d1, d2) with
+            | Var v1, Var v2 when not (equal_dim_var v1 v2) ->
+                dropped_var := true;
+                d2
             | Dim { d = 1; basis; _ }, _ when String.equal basis bcast_if_1 -> d1
             | _, Dim { d = 1; basis; _ } when String.equal basis bcast_if_1 -> d2
             | Dim { d = n1; _ }, Dim { d = n2; _ } when n1 <> n2 ->
@@ -5236,11 +5251,14 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
                    })
           in
           let ineqs =
-            (* Only a change of axes counts: the join mints a fresh broadcast top each time, and
-               keeps the incoming side's variable where both sides have one, so two GLBs differing
-               only in their variables would otherwise trade places forever along a diamond. *)
+            (* Only a change of axes counts: the join mints a fresh broadcast top each time, and two
+               GLBs differing only in their variables would otherwise trade places forever along a
+               diamond (the join kept the incoming side's variable before gh-ocannl-2180; it keeps
+               the existing one now, but a variable against a non-variable still keeps the
+               variable). *)
             if same_glb_axes glb glb2 then ineqs else forward_glb_to_operands glb opnd2 @ ineqs
           in
+          let ineqs = if !dropped_var then Row_ineq { res; opnd; origin } :: ineqs else ineqs in
           match glb with
           | { beg_dims = []; dims = [] | [ Dim { d = 1; _ } ]; bcast = Broadcastable; prov = _ } ->
               (Row_eq { r1 = row_of_var opnd_v opnd.prov; r2 = glb; origin } :: ineqs, env)
@@ -5355,6 +5373,44 @@ let is_safe_to_guess v =
   refuse_retired_read ~table:"safe_to_guess" (row_var_id v);
   Set.mem !safe_to_guess v
   || (Set.mem !used_in_pointwise v && not (Set.mem !used_in_spec_or_compose v))
+
+let dim_has_glb env v =
+  match find_dim env.dim_env v with Some (Bounds_dim { glb = Some _; _ }) -> true | _ -> false
+
+(* gh-ocannl-2180: the axes of [glb] (substituted) that a row closing to it by role takes as its
+   own: plain [Var]s that [own] selects (all of them by default). *)
+let role_axes ?(own = fun _ -> true) env (glb : row) =
+  let glb = subst_row env glb in
+  (glb, List.exists (glb.beg_dims @ glb.dims) ~f:(function Var v -> own v | _ -> false))
+
+(* gh-ocannl-2180: what a row that resolves at its use sites closes to, given its GLB. The GLB's
+   dimension variables belong to the operation results that minted them and carry their role (a
+   result's axis closes minimal); the row's own axes must carry the row's role. So each selected
+   axis ([role_axes]) is replaced by a fresh variable that resolves at its use sites, bounded by the
+   GLB's axis ([glb ⊑ template]) instead of being it. Concrete, symbolic and composite axes, the
+   axes [own] leaves, and the GLB's remainder are taken as they are. [None] when no axis is
+   selected: taking the GLB is then the same thing. *)
+let role_template ?(own = fun _ -> true) env origin (glb : row) : (row * constraint_ list) option =
+  let glb, any = role_axes ~own env glb in
+  if not any then None
+  else
+    let fresh = function
+      | Var v when own v ->
+          let v = get_var () in
+          add_resolve_at_use_dim v;
+          Var v
+      | d -> d
+    in
+    let template =
+      { glb with beg_dims = List.map glb.beg_dims ~f:fresh; dims = List.map glb.dims ~f:fresh }
+    in
+    Some (template, [ Row_ineq { res = glb; opnd = template; origin } ])
+
+(* The closing equation of row variable [v]'s row [r1] to [glb], by role ([role_template]). *)
+let close_to_glb_by_role ?own env origin ~r1 ~glb =
+  match role_template ?own env origin glb with
+  | None -> [ Row_eq { r1; r2 = glb; origin } ]
+  | Some (template, ineqs) -> Row_eq { r1; r2 = template; origin } :: ineqs
 
 let%track5_sexp rec eliminate_rows_constraint ~deferred_dims ~depth stage origin ~glb
     (rows : row list) (constr : row_constraint) env : constraint_ list * environment =
@@ -5903,7 +5959,7 @@ let%track5_sexp close_row_terminal ~deferred_dims ~(stage : stage) ~is_param ori
           term_dims ()
       | Some (Bounds_row { glb = Some glb; origin = glb_origin; _ }) when is_stage3_up stage ->
           let origin = merge_origins origin glb_origin in
-          Row_eq { r1; r2 = glb; origin } :: term_dims ()
+          close_to_glb_by_role env origin ~r1 ~glb @ term_dims ()
       | _ when is_stage6_up stage -> []
       | _ ->
           [%log6 "terminal row: keeping", (_r : row), "as", (r1 : row)];
@@ -6055,8 +6111,11 @@ let%track5_sexp process_shape_row ~deferred_dims ~(stage : stage) origin env
              parameters, parameter-initialization cones, explicit [stretch]) close to the GLB of
              their use sites' rows. Operation results close to an empty remainder: a use site must
              broadcast the result in, not silently widen it (the gh-ocannl-540 cast-twin trap). *)
-          let r2 = if is_in_param || is_resolve_at_use v then glb else empty_broadcastable in
-          (keep @ (Row_eq { r1; r2; origin } :: dim_eqs), env)
+          let closing =
+            if is_in_param || is_resolve_at_use v then close_to_glb_by_role env origin ~r1 ~glb
+            else [ Row_eq { r1; r2 = empty_broadcastable; origin } ]
+          in
+          (keep @ closing @ dim_eqs, env)
       | Some (Bounds_row { constr = Unconstrained; _ }) when not final ->
           (Shape_row (r, origin) :: dim_eqs, env)
       | Some (Bounds_row { constr = Unconstrained; _ }) when final ->
@@ -6076,6 +6135,31 @@ let%track5_sexp process_shape_row ~deferred_dims ~(stage : stage) origin env
              }) ->
           (* That's a greatest-lower-bound (most specific) value for a row. *)
           (keep @ (Row_eq { r1; r2 = glb; origin } :: dim_eqs), env)
+      | Some
+          (Bounds_row
+             {
+               glb = Some glb;
+               constr = Total_elems { numerator = Strided_var { round_up = true; _ }; _ };
+               is_in_param;
+               _;
+             })
+        when equal_stage stage Stage6a
+             && (is_in_param || is_resolve_at_use v)
+             && (let glb = subst_row env glb in
+                 is_broadcastable glb.bcast || List.is_empty glb.beg_dims)
+             && snd (role_axes ~own:(dim_has_glb env) env glb) ->
+          (* gh-ocannl-2180: a packed draw's row closes to its GLB only once the GLB's axes are
+             known, and an axis still open then is closed by its own rules (gh-ocannl-1961) -- for a
+             result's axis, minimal. Taking the axes by role first gives the draw axes of its own,
+             which take the use sites' bound at stage 6; the block count follows from them. Only an
+             axis a use site bounds is taken by role: one nothing bounds has nothing to take, and an
+             axis of its own would be sized by the block arithmetic (a whole block of 4 for [uniform
+             () + 1] alone) instead of closing minimal with the result. A GLB with leading axes over
+             an open middle waits: aligning its flanks is a balanced-flank choice still to be made
+             ([solve_closing_stages]); taken here, it refused [contraction_pointwise_closing]'s
+             satisfiable program. *)
+          let closing = close_to_glb_by_role ~own:(dim_has_glb env) env origin ~r1 ~glb in
+          (keep @ closing @ dim_eqs, env)
       | Some (Bounds_row { glb; constr; _ }) ->
           let ineqs, env =
             try

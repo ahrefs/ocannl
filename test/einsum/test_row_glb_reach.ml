@@ -167,3 +167,29 @@ let () =
           [] ))
   in
   pf "incompatible bounds join to the broadcast top" (shows [ "[3]"; "[4]"; "[1]"; "[1]" ])
+
+(* gh-ocannl-2180: a result with an axis of its own, a numeric literal's ([u + 1]), between a leaf
+   and its use site. The leaf closing to its bound took that axis itself, which closed minimal as a
+   result's does; it takes an axis of its own now, bounded by the result's, and the result's follows
+   from it. With two such results the GLB join keeps one axis variable, and the other result stays
+   related to the leaf through its held inequality: without it that result closed minimal under a
+   leaf of 3. *)
+let () =
+  Verdict.case "a leaf under results with axes of their own" @@ fun () ->
+  let with_axis () = { (fresh ()) with Row.dims = [ Row.Var (Row.get_var ()) ] } in
+  let leaf_under results () =
+    let l = fresh () in
+    Row.add_resolve_at_use (var_of l);
+    let rs = List.init results ~f:(fun _ -> with_axis ()) in
+    ( [ l ],
+      rs @ [ l ],
+      [ List.map rs ~f:(fun r -> ineq r l); List.map rs ~f:(fun r -> ineq (closed [ 3 ]) r) ],
+      [] )
+  in
+  let one = closes "[3] <= e <= leaf, e = ..,d  (rows e leaf)" (leaf_under 1) in
+  let two =
+    closes "[3] <= e1 <= leaf, [3] <= e2 <= leaf, e1 = ..,d1, e2 = ..,d2  (rows e1 e2 leaf)"
+      (leaf_under 2)
+  in
+  pf "one result: the leaf takes the use site's 3, and the result with it" (one [ "[3]"; "[3]" ]);
+  pf "two results: the leaf takes 3, and both results with it" (two [ "[3]"; "[3]"; "[3]" ])

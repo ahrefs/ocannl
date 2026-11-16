@@ -125,11 +125,22 @@ files.
   mutually-sole pair, since the closure re-solves every stage-1 constraint at Stage2, and it
   stands in for a dimension's role. Deleted (staging#1927), `Nn_blocks.dropout`'s mask closed to
   one value over its input and the full suite stayed green; `dropout_mask_varies` pins it now
-  (gh-ocannl-2185). Delete it only together with the role fix below, and run that pin. Still open: a dimension's role. A row closing to its GLB takes the GLB's dimension variables with the role of
-  the result that minted them, so a draw behind `u + 1` fills its batch and repeats along the
-  literal's size-1 output axis; with a constant that has no axes it fills. Giving literals no
-  axes is not a shortcut: it moved 27 test actions, a transformer's logits closing `2x3x1` among
-  them.
+  (gh-ocannl-2185). The role fix (gh-ocannl-2180, below) does not yet replace it: deleted on top
+  of that fix, `dropout_mask_varies`' masks and raw `uniform_at` draws over an unbatched
+  `term_init` vector still closed to one value or one block. Run that pin before deleting it.
+  A dimension's role (gh-ocannl-2180): a row closing to its GLB (`role_template`) takes fresh
+  resolve-at-use variables bounded by the GLB's axes, not the axes themselves, which keep the
+  role of the result that minted them (closing minimal: a draw behind `u + 1` used to repeat
+  along the literal's size-1 axis). Two traps. The GLB join of two different variables dropped
+  one result's relation to the row; adopting, that was harmless by luck, with axes of its own the
+  dropped result closed 1 over a leaf of 3 and projection refused `3 = 1` (the two-consumer pin):
+  the join now holds the incoming inequality until the row is solved. And a packed draw's row
+  closes through the Strided_var arms, not the close-to-GLB arm, so it needs its own `Stage6a`
+  arm, restricted to GLB axes a use site bounds (an unbounded one sized by the block arithmetic
+  turned `uniform () + 1` into 4 values) and to a GLB that is not leading axes over an open
+  middle (one ran ahead of `contraction_pointwise_closing`'s balanced-flank search; requiring a
+  closed tail instead left a draw under an unbatched `c[|16]` repeating). Giving literals no axes is not a
+  shortcut: it moved 27 test actions, a transformer's logits closing `2x3x1` among them.
 - Solver deletion experiments: a green suite does not prove a guess or closing arm redundant
   unless executed pins check that draws vary across their use sites. Before making that claim,
   run `@test/operations/runtest-dropout_mask_varies`,

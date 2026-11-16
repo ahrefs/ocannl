@@ -13,3 +13,9 @@ the sibling takes w's 5, and the draw sizes its blocks for it: true
 u1 <= e1 <= o <= leaf, u2 <= e2 <= o, u1 := [3], u2 := [4]  (rows u1 u2 o leaf)
   [3] [4] [1] [1]
 incompatible bounds join to the broadcast top: true
+[3] <= e <= leaf, e = ..,d  (rows e leaf)
+  [3] [3]
+[3] <= e1 <= leaf, [3] <= e2 <= leaf, e1 = ..,d1, e2 = ..,d2  (rows e1 e2 leaf)
+  [3] [3] [3]
+one result: the leaf takes the use site's 3, and the result with it: true
+two results: the leaf takes 3, and both results with it: true
