@@ -13,7 +13,7 @@ NOTE: this is an *outdated* design, it will be significantly affected by: removi
       - [Tracing via stdout](#tracing-via-stdout)
   - [Synchronization and data transfers](#synchronization-and-data-transfers)
     - [Data transfers](#data-transfers)
-      - [Automated transfers to / from host](#automated-transfers-to--from-host)
+      - [On-demand transfers to / from host](#on-demand-transfers-to--from-host)
 
 <!-- /TOC -->
 

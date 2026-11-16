@@ -237,7 +237,7 @@ For more details, see [CHANGES](CHANGES.md).
   * **v0.1.0**: a `Gccjit` backend, single and double precision floats, code compiled as a monolithic update step function.
 * **v0.0 Untagged**: basic design around shape inference, high-level and low-level code representation. Now-abandoned Meta-OCaml and OCaml backends.
 
-## Why not just use [OWL](https://ocaml.xyz/)?
+## Why not just use OWL?
 
 OCANNL follows different design choices than [OWL](https://ocaml.xyz/). For example:
 

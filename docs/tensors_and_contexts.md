@@ -29,9 +29,9 @@ This document describes how to work with tensors and execution contexts in OCANN
   - [Recovering a Session from a Failed Construction](#recovering-a-session-from-a-failed-construction)
 - [Randomness and Parameter Initialization](#randomness-and-parameter-initialization)
   - [Counter-Based PRNG](#counter-based-prng)
-  - [Initialization Functions](#initialization-functions)
-  - [Kaiming and Xavier Initialization](#kaiming-and-xavier-initialization)
-  - [Configuring Default Initialization](#configuring-default-initialization)
+  - [Randomness Operations](#randomness-operations)
+  - [Kaiming and Xavier Scaling Operations](#kaiming-and-xavier-scaling-operations)
+  - [Parameter Initialization](#parameter-initialization-1)
 - [Memory Management](#memory-management)
 
 ## Core Concepts

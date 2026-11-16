@@ -39,7 +39,12 @@ let () =
         let from_file =
           Option.value (List.Assoc.find aliases file.path ~equal:String.equal) ~default:file.path
         in
-        Scan.check ~exists:(Scan.path_exists ~files:paths) ~from_file
+        Scan.check ~exists:(Scan.path_exists ~files:paths)
+          ~read:(fun path ->
+            if List.mem paths path ~equal:String.equal then
+              Some (In_channel.read_all (Stdlib.Filename.concat root path))
+            else None)
+          ~from_file
           (In_channel.read_all file.on_disk)
         |> List.map ~f:(fun (target, message) ->
             eprintf "%s: %s: %s\n" file.path target message;

@@ -1326,10 +1326,10 @@ let slug heading =
     same-titled sections (Codex P2, round 1 on lukstafi/ocannl-staging#811); counting only the bare
     slug's repeats then collided with a heading whose own title is [Foo-1] (round 2), so every
     candidate is checked against every id already emitted. *)
-let heading_ids contents =
+let ids_of_headings headings =
   let taken = Hashtbl.create (module String) in
   let last_suffix = Hashtbl.create (module String) in
-  List.map (headings contents) ~f:(fun h ->
+  List.map headings ~f:(fun h ->
       let base = slug h in
       let rec allocate candidate =
         if not (Hashtbl.mem taken candidate) then candidate
@@ -1341,6 +1341,8 @@ let heading_ids contents =
       let id = allocate base in
       Hashtbl.set taken ~key:id ~data:();
       id)
+
+let heading_ids contents = ids_of_headings (headings contents)
 
 (** A link's DESTINATION, separated from its optional title. [(../agent-notes.md "Agent notes")] is
     a perfectly ordinary link, and comparing the whole parenthesised text against the index filename
@@ -1355,11 +1357,11 @@ let link_destination inside =
       | Some i -> String.prefix inside i
       | None -> inside)
 
-(** The navigable Markdown links of a line, outside inline code and HTML comments and excluding
-    images. A substring test used to call a file reachable when backlink-like bytes sat in a code
-    span, in a comment, or behind an image (Codex P2, round 1) — all three of which a reader cannot
-    follow. *)
-let markdown_links ?spans line =
+(** The navigable Markdown links of a line, outside inline code and HTML comments and, by default,
+    excluding images (the Markdown destination scan opts in). A substring test used to call a file
+    reachable when backlink-like bytes sat in a code span, in a comment, or behind an image (Codex
+    P2, round 1) — all three of which a reader cannot follow. *)
+let markdown_links ?(include_images = false) ?spans line =
   let spans = match spans with Some s -> s | None -> inert_of_line line in
   let n = String.length line in
   let rec go i acc =
@@ -1397,7 +1399,7 @@ let markdown_links ?spans line =
               let target =
                 link_destination (String.sub line ~pos:(close + 2) ~len:(rparen - close - 2))
               in
-              let acc = if image then acc else (text, target) :: acc in
+              let acc = if image && not include_images then acc else (text, target) :: acc in
               go (rparen + 1) acc
           | _ -> go (i + 1) acc)
       | _ -> go (i + 1) acc
@@ -1407,10 +1409,10 @@ let markdown_links ?spans line =
 
 (** Every navigable link of a whole file, read with the paragraph-aware span map so that a link on
     the middle line of a multiline code span is not one. *)
-let links_of contents =
+let links_of ?(include_images = false) contents =
   let map = (inert_by_line contents).ranges in
   List.concat_map (lines contents) ~f:(fun (lineno, l) ->
-      markdown_links ~spans:(spans_at map lineno) l)
+      markdown_links ~include_images ~spans:(spans_at map lineno) l)
 
 (** Where a relative link written IN [from_file] actually points, as a path in the same space as the
     scan's file keys. [from_file] is a file, so the link resolves against its DIRECTORY; [".."] pops
