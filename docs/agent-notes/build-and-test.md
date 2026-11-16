@@ -41,7 +41,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   detached (gh-ocannl-1236; The harness, shells and processes).
 
 - `markdown_links` (gh-ocannl-2006) joins `@scans`; its closed dialect is documented in
-  `Test_scan.Markdown_link_scan`. Fragments and images are unchecked; single-slash root-relative
+  `Test_scan.Markdown_link_scan`. Relative images must exist, and nonempty fragments on corpus
+  Markdown targets must name a supported ATX heading (gh-ocannl-2107). Unsupported heading syntax
+  refuses the linked file; the header owns the ASCII-plus-em-dash dialect and duplicate-ID rule.
+  Non-Markdown fragments, including source line links, are ignored; single-slash root-relative
   destinations are refused. A new symlinked document must join `aliases` in `markdown_links.ml`,
   since Dune materializes symlinks and its links otherwise resolve from the alias directory.
   Published-site exemptions are exact `(file, target)` pairs, not a blanket `.html` exemption.

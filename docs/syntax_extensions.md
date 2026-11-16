@@ -22,7 +22,7 @@
     - [The `label` parameter](#the-label-parameter)
     - [Parameters that need a unit parameter, or a label](#parameters-that-need-a-unit-parameter-or-a-label)
     - [Configuring inline declarations: inline output dimensions, initial values](#configuring-inline-declarations-inline-output-dimensions-initial-values)
-    - [Lifting of the applications of config arguments: if an error, refactor your code](#lifting-of-the-applications-of-config-arguments-if-an-error-refactor-your-code)
+    - [Need to lift the applications of configuration arguments (up to the unit parameter)](#need-to-lift-the-applications-of-configuration-arguments-up-to-the-unit-parameter)
   - [The syntax extension %%extend_dsls](#the-syntax-extension-extend_dsls)
   - [Implementation details](#implementation-details)
     - [The hard-coded to-the-power-of operator](#the-hard-coded-to-the-power-of-operator)
