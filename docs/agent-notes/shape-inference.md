@@ -249,7 +249,8 @@ files.
   dimension bounds (gh-ocannl-2204), using held variable sizes without assigning their bases.
   Unknown axes range from zero upward; an inequality whose operand can still be the size-1
   broadcast top stays possible. `scheme_error_locality` pins the concatenation's scheme refusal
-  at application and the fixed-width size claim at definition. The invalid valid-3x3 residual in
+  at application and the fixed-width size claim at definition. `concat_extraction` pins the existing
+  excess-component diagnosis too, with origins capped at zero as well as the default cap. The invalid valid-3x3 residual in
   `scheme_strided_residual.ml` still forces its dims: the extents remain variables at registration,
   so held-size comparisons alone do not expose that contradiction before closure.
   A discarded size probe is not a refusal oracle: the open store `n = conv(o, k)`, `n` refining

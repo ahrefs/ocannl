@@ -6352,9 +6352,15 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
                   in
                   let below hi lo = Option.value_map hi ~default:false ~f:(fun hi -> hi < lo) in
                   if (not may_be_top) && (below hi1 lo2 || below hi2 lo1) then
-                    raise
-                      (Shape_error
-                         ("size constraint is numerically inconsistent", [ Dim_mismatch [ d1; d2 ] ]))
+                    let message =
+                      match (subst_dim env d1, subst_dim env d2) with
+                      | Concat _, _ when below hi2 lo1 ->
+                          "concat: components exceed the concatenated size"
+                      | _, Concat _ when below hi1 lo2 ->
+                          "concat: components exceed the concatenated size"
+                      | _ -> "size constraint is numerically inconsistent"
+                    in
+                    raise (Shape_error (message, [ Dim_mismatch [ d1; d2 ] ]))
             in
             List.iter (ineqs @ sizes) ~f:(function
               | Dim_eq { d1; d2; _ } -> check ~broadcast:false d1 d2
