@@ -79,3 +79,40 @@ let () =
       Verdict.p "fragment cycle raises Session_error"
         (String.is_substring msg ~substring:"dependency cycle")
   | _ -> printf "fragment cycle raises Session_error: false\n"
+
+(* A slice reads its parent's value (gh-ocannl-2205). [parent]'s code is embedded in [owner], its
+   first consumer, then in [later]'s fragment; the slice [reader] is constructed before [later], so
+   by id its fragment comes first. Its only read of [parent] is the [Slice] itself: the ordering
+   must still put [later]'s fragment, which computes [parent], first. The slice is forced to copy (a
+   precision mismatch) and both it and [parent] are materialized, so the copy runs as its own loop
+   reading [parent]'s buffer, rather than being inlined into [out] past [later]'s fragment. *)
+let () =
+  let index, bindings = Train.IDX.get_static_symbol ~static_range:2 Train.IDX.empty in
+  let data =
+    NTDSL.init ~l:"ffo_slice_data" ~prec:Ir.Ops.single ~b:[ 2 ] ~i:[] ~o:[ 4 ]
+      ~f:(function [| b; j |] -> Float.of_int ((10 * b) + j + 1) | _ -> assert false)
+      ()
+  in
+  let parent = NTDSL.pointmul data (NTDSL.number 2.) () in
+  let owner = NTDSL.pointmul parent (NTDSL.number 3.) () in
+  let reader = NTDSL.slice index parent () in
+  let later = NTDSL.add owner (NTDSL.number 1.) () in
+  let out = NTDSL.add reader later () in
+  Ir.Tnode.update_prec reader.Tensor.value Ir.Ops.half;
+  List.iter [ parent; reader; out ] ~f:(fun t -> Train.set_materialized t.Tensor.value);
+  let base = Context.auto () in
+  let ctx, routine =
+    Context.compile ~name:"ffo_slice_order" base (Tensor.consume_forward_code out) bindings
+  in
+  Train.IDX.find_exn routine.bindings index := 1;
+  let ctx = Context.run ctx routine in
+  Verdict.p "the slice copies rather than aliasing its parent"
+    (not
+       (Ir.Assignments.slice_alias_eligible ~array:reader.Tensor.value ~sliced:parent.Tensor.value));
+  (* out[b, j] = 2 * (10 + j + 1) + 3 * 2 * (10 * b + j + 1) + 1 = 29 + 60 b + 8 j. *)
+  Verdict.p "a slice reader runs after the fragment computing its parent"
+    (Array.equal Float.equal
+       (Context.get_values ctx out.Tensor.value)
+       (Array.init 8 ~f:(fun i -> Float.of_int (29 + (60 * (i / 4)) + (8 * (i % 4))))));
+  Context.release ctx;
+  Context.release base

@@ -225,7 +225,7 @@ files.
   `with_saved_random_seed` scope since restored, or replaced by `set_random_seed` -- is repaired
   the same way (gh-ocannl-2119): `set_random_seed` registers every seed literal weakly with its
   fetch (`seed_literals`), and the outer `init_params` prepends the fetch of each registered seed
-  its program reads (`collect_nodes_guess_output`'s first set) and does not write
+  its program reads (`collect_value_reads`) and does not write
   (`collect_written`), once over the whole program. The rule, not a refusal, because the literal is
   immutable whichever singleton is current; `embedded_read_only`'s captured-seed cases pin the
   draws against a caller-seeded reference and a seed-8 control across nested, unwound, replaced
@@ -260,10 +260,24 @@ files.
   conv/transformer builds (including `buffer_aliasing`). Reversing graph construction still changes
   node-keyed random counters;
   cross-build loss comparisons therefore keep the fixture's label-keyed parameter uploads.
-  The dependency query adds slice-parent reads explicitly: `collect_nodes_guess_output` instead
-  classifies those parents as materialization outputs, so its first set alone misses the edge.
+  The dependency edges come from `Assignments.collect_value_reads` (below).
   A hand-built tensor record must keep its declared parameters reachable through `children`;
   initialization refuses an incomplete walk rather than silently omitting an initializer.
+
+- Two queries over assignments, two meanings (gh-ocannl-2205). `collect_value_reads` is the
+  source-value dependencies: operand `Node`s, `Rev_sides`' `lhs`, and every `Fetch.Slice`'s parent,
+  whether the slice copies or aliases (merge buffers and an accumulation's prior `lhs` value are
+  out; it forces nothing). `collect_nodes_guess_output` is the materialization guess: its second
+  set is what `Train.set_materialized` loops materialize, slice parents included unless the
+  sequence reads them again (`Seq`'s `o1 + o2 - (i1 + i2)`), and its first set is only that
+  subtraction's read term, which misses slice parents. A consumer ordering fragments, refusing a
+  pending owner or finding read seeds (`init_params`, `with_seed_fetches`, `Tensor.op`'s forward
+  `requires`, `forward_reads`, the backprop `all_read`) uses `collect_value_reads`; one wanting
+  every mentioned node (autotune's `program_nodes`, the splice's `mentioned`, `frontend_gate`)
+  takes the pair's union. An executed slice ordering needs the slice and its parent materialized
+  and the slice forced to copy, else the copy inlines into its reader and the misorder is masked:
+  `forward_fragment_order` and `consume_forward_code_reason` pin the two behaviours,
+  `value_reads_query` the contract.
 
 - `Tensor.ndarray`, `TDSL.ndarray`, `NTDSL.ndarray` and `Tensor.term_init` accept `?prec` at
   construction (gh-ocannl-2173). Above `limit_constant_fill_size` the host array must be allocated

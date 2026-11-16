@@ -263,7 +263,7 @@ let () =
           let owner_handout = Tensor.consume_forward_code owner in
           let handout = Tensor.consume_forward_code reader in
           p "the reader's own code reads the seed and does not write it"
-            (Set.mem (fst (Asgns.collect_nodes_guess_output reader.forward.asgns)) rs.value
+            (Set.mem (Asgns.collect_value_reads reader.forward.asgns) rs.value
             && not (Set.mem (Asgns.collect_written reader.forward.asgns) rs.value));
           p "the owner's handout is its own code: it writes the seed already"
             (phys_equal owner_handout owner.forward);

@@ -106,3 +106,25 @@ let () =
   in
   p "parameter backprop embedded after parameterization remains rejected"
     (has msg ~substring:"embedded in a tensor")
+
+(* A slice reads its parent's value (gh-ocannl-2205): a slice reader whose parent's code another
+   live root owns is refused like any other read of that node, until the owner is consumed. *)
+let () =
+  let index, _bindings = Ir.Indexing.get_static_symbol ~static_range:2 Ir.Indexing.Empty in
+  let data =
+    NTDSL.init ~l:"cfr_slice_data" ~prec:Ir.Ops.single ~b:[ 2 ] ~i:[] ~o:[ 2 ]
+      ~f:(function [| b; i |] -> Float.of_int ((10 * b) + i + 1) | _ -> assert false)
+      ()
+  in
+  let parent = NTDSL.O.relu data in
+  let owner = NTDSL.O.relu parent in
+  let reader = NTDSL.slice index parent () in
+  let msg =
+    rejection ~name:"slice reader conflict" (fun () -> Tensor.consume_forward_code reader)
+  in
+  p "a slice reader of a parent another root owns is refused"
+    (has msg ~substring:"conflicting roots");
+  p "the refused slice reader stays a root" (Tensor.is_fwd_root reader);
+  ignore (Tensor.consume_forward_code owner : Ir.Assignments.comp);
+  ignore (Tensor.consume_forward_code reader : Ir.Assignments.comp);
+  p "once the owner is consumed the slice reader is handed out" (not (Tensor.is_fwd_root reader))
