@@ -1791,10 +1791,17 @@ let resolve_alternatives ~blends ~expand (c : read_charge) : Set.M(Tn).t list =
           (* A node read at [k] distinct sites is expanded [k] times, pruned after each: the
              antichain of every union of [k] of its alternatives, repetition allowed, so the widest
              is the max over [k]-multisets -- exact where which cell runs which alternative is
-             unknown, and never past the union of them all. *)
-          Fn.apply_n_times ~n:(site_multiplicity c q)
-            (fun alts -> prune (List.concat_map alts ~f:(fun acc -> expand acc q)))
-            alts)
+             unknown, and never past the union of them all. A step that changes nothing is a
+             fixpoint of the (deterministic) step, so the rest are skipped: a dependency with one
+             alternative, the common case of an iterated read, costs two expansions. *)
+          let step alts = prune (List.concat_map alts ~f:(fun acc -> expand acc q)) in
+          let rec repeat n alts =
+            if n = 0 then alts
+            else
+              let alts' = step alts in
+              if List.equal Set.equal alts alts' then alts else repeat (n - 1) alts'
+          in
+          repeat (site_multiplicity c q - 1) (step alts))
     in
     List.fold c.selects ~init:alts ~f:(fun alts s ->
         if blends && s.speculable then List.fold s.arms ~init:alts ~f:go
