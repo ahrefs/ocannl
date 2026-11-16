@@ -15,6 +15,8 @@
 # graph needs the full opam switch, which this harness's CI job does not install.
 # The harness legs (gh-ocannl-1900) are read on a dune-free fixture and on this
 # repository's own harnesses; the latter reads the scan-case stubs directory:
+# The isolated-addition leg queries repository paths without opening them;
+# synthetic readers pin the conservative text fallback, including printed paths.
 # affected-reads: test/operations/scan_case_stubs/* --only '^harness legs of this repository$'
 set -u
 # The expected lists are sorted with `sort` and compared with the helper's
@@ -1562,6 +1564,26 @@ rhas() { # LABEL LINE: stdout carries exactly that line, exit 0, no warning
   if [ "$rc" = 0 ] && grep -qxF -- "$2" "$out" && ! grep -q '^affected: warning:' "$err"; then report 0 "$1"
   else report 1 "$1" "exit $rc; got [$(tr '\n' '|' <"$out")]; stderr: $(tr '\n' '|' <"$err")"; fi
 }
+if harness_leg 'isolated operations addition'; then
+  # Query the real shape: a new module and its stanza's file. Assemble the
+  # paths because this leg queries them; it does not read either as data.
+  operations=test/operations addition=isolated_2231
+  raffected --files "$operations/dune" "$operations/$addition.ml"
+  if [ "$rc" = 0 ] && [ ! -s "$out" ]; then
+    report 0 'an isolated operations addition reaches no repository harness'
+  else report 1 'an isolated operations addition reaches no repository harness' "exit $rc; $(cat "$out" "$err")"; fi
+  # A real read still reaches its harness. Text the reader cannot distinguish
+  # from a read (even a diagnostic printed by a fixture) stays conservative.
+  mkdir -p "$hrepo/$operations" || exit 2
+  : >"$hrepo/$operations/dune"
+  for command in cat printf; do
+    printf '%s\n' '#!/usr/bin/env bash' "$command '$operations/dune'" >"$hrepo/tools/test-c.sh"
+    haffected --harnesses --files "$operations/dune" "$operations/$addition.ml"
+    hexpect "$command mentioning the stanza file still reaches its harness" 0 tools/test-c.sh
+  done
+  hc_restore
+fi
+
 if harness_leg 'harness legs of this repository'; then
   raffected --files tools/test-run.sh
   rhas 'tools/test-run.sh reaches a member of its harness whole' tools/test-test-run-bisect.sh

@@ -819,8 +819,9 @@ case $REPEAT_TEST_MODE in
   # gh-ocannl-1281: a test whose GPU device initialization outlived the
   # in-process deadline -- its line, at a line's start, among an ordinary red
   # run's -- and a test quoting such a line, indented, which is no death.
+  # Synthetic location: this diagnostic does not read a repository dune file.
   wedged_init)
-    printf 'File "test/operations/dune", lines 3-9, characters 0-120:\n' >&2
+    printf 'File "fixture/device-init/dune", lines 3-9, characters 0-120:\n' >&2
     printf 'OCANNL device_init_deadline: hip device initialization did not finish within 120s; the device or driver is likely wedged. Dying by SIGALRM.\n' >&2
     exit 1 ;;
   # ...and the same line followed by more output than the digest's 10MB scan
@@ -830,7 +831,7 @@ case $REPEAT_TEST_MODE in
     perl -e 'my $l = ("y" x 99) . "\n"; print STDERR $l for 1 .. 110000'
     exit 1 ;;
   wedged_quoted)
-    printf 'File "test/operations/dune", lines 3-9, characters 0-120:\n' >&2
+    printf 'File "fixture/device-init/dune", lines 3-9, characters 0-120:\n' >&2
     printf '  child | OCANNL device_init_deadline: hip device initialization did not finish within 1s\n' >&2
     exit 1 ;;
   # An ordinary red run: a located error, exit 1 -- and the same with a test's
