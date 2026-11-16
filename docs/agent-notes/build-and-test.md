@@ -1071,6 +1071,28 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   a fail-fast twin that must lose the all-members oracle. Setup-hook fixtures derive their
   helper files from the hook's source directives and refuse unknown forms; an injected helper
   passes through this derivation and fails against the former fixed-list fixture.
+- The harness tier selects `/bin/bash` when that interpreter reports exactly 3.2
+  (gh-ocannl-2110), replacing the PATH Bash run on those hosts; other hosts keep the
+  dispatcher's Bash. This applies to full, `--affected`, CI and merge-build selections.
+  Each opening `HARNESS` line names its Bash version and path. Members are invoked
+  explicitly, and a private first PATH entry points `bash` to that interpreter, carrying
+  it through bare `bash`, env shebangs and members' `${BASH}` subject calls. An absolute
+  interpreter path remains an explicit choice. `--list` is unchanged and runs nothing.
+  There is no member skip list: a check requiring newer syntax gates on its running
+  `BASH_VERSINFO`, as the execution controls below do. The dispatcher's self-test pins
+  nested bare-Bash and env-shebang subjects with the `set -u` empty-array control at
+  widths 1 and 4; the same expansion passes under modern Bash. Its slot-command
+  assertions derive the fixture's interpreter from PATH, independently of the outer shell.
+  The modern-PATH witness is a separate leg: a PATH Bash older than 4.4 declares
+  it not applicable and names its version, so the 3.2 tier reports that absence.
+  One version helper owns both that gate and the empty-array expectations.
+  On macbook-pro, both full 35-member tiers passed at `--jobs 4`: 529.51 s
+  under Bash 3.2 and 533.74 s under Homebrew 5.3 (shared correctness slots,
+  not benchmark timings). Replacing keeps the local tier near nine minutes;
+  adding the modern tier serially would cost about 1063 s. Linux keeps modern
+  Bash coverage. The planted nested nounset empty array passed the base dispatcher
+  at widths 1 and 4 and failed the pinned leg at both widths; the same subject
+  exited 1 under `/bin/bash` 3.2 and 0 under Homebrew 5.3.
 - On a fleet box a harness run is a test batch like any other, and like `tools/test-run.sh` and
   `tools/fmt-check.sh` it takes one of the box's correctness slots itself, as `--cpu`
   (gh-ocannl-1576): after its arguments and skip lists pass, it runs itself again under `fleet-worker.sh execution

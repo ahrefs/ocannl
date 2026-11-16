@@ -12,6 +12,15 @@
 # Dune's own output (promotion, affected tests, the failed-rule listing), whose
 # missing-toolchain legs report counted skips. CI runs both after installing
 # its toolchain, and --promotion again at the declared Dune floor.
+# On hosts where /bin/bash reports exactly 3.2, selected members run under
+# /bin/bash instead of the PATH interpreter, including --affected and merge
+# builds. Else they run under this dispatcher's Bash; no 3.2 leg is claimed.
+# HARNESS opening lines name that interpreter. A private PATH entry carries it
+# to nested `bash` calls and `#!/usr/bin/env bash` subjects; ${BASH} also names
+# it in each member. Absolute interpreter paths intentionally remain explicit.
+# A check needing newer Bash syntax gates on its running BASH_VERSINFO and
+# declares itself not applicable; the dispatcher has no member skip list.
+# --list remains interpreter-independent and runs no members.
 # Every selected harness runs after ordinary failures; any failure exits 1.
 # HUP/INT/TERM stop immediately and preserve the interruption status.
 #
@@ -433,6 +442,16 @@ while read -r tier script; do
 done < <(manifest)
 [ "$total" -gt 0 ] || { echo "no harnesses selected" >&2; exit 2; }
 [ "$list" = 1 ] && exit 0
+# Pin both member interpreters and nested subjects, including env shebangs.
+member_bash=${BASH:-bash}
+if /bin/bash -c '[ "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}" = 3.2 ]' 2>/dev/null; then
+  member_bash=/bin/bash
+fi
+member_version=$("$member_bash" -c 'printf "%s.%s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"') || exit 2
+interpreter_dir=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-bash.XXXXXX") || exit 2
+scratch+=("$interpreter_dir")
+ln -s "$member_bash" "$interpreter_dir/bash" || exit 2
+export PATH="$interpreter_dir:$PATH"
 member_ended() { # INDEX RC: its closing line and what its status means for the run
   printf 'HARNESS %s exit: %s\n' "${run_scripts[$1]}" "$2"
   case $2 in
@@ -462,14 +481,14 @@ if [ "$jobs" = 1 ]; then
   for ((i = 0; i < total; i++)); do
     script=${run_scripts[i]}
     member_argv "$i"
-    printf '\nHARNESS %s (%s)\n' "${run_commands[i]}" "${run_tiers[i]}"
+    printf '\nHARNESS %s (%s; bash %s %s)\n' "${run_commands[i]}" "${run_tiers[i]}" "$member_version" "$member_bash"
     rc=0
     if [ "$ci_real_dune" = 1 ]; then
       # Kept for the PASS check below, and shown as it runs.
-      OCANNL_TOOL_HARNESS_NAME=$script "$root/$script" "${args[@]}" | tee "$outputs/${script//\//_}.out"
+      OCANNL_TOOL_HARNESS_NAME=$script "$member_bash" "$root/$script" ${args[@]+"${args[@]}"} | tee "$outputs/${script//\//_}.out"
       rc=${PIPESTATUS[0]}
     else
-      OCANNL_TOOL_HARNESS_NAME=$script "$root/$script" ${args[@]+"${args[@]}"} || rc=$?
+      OCANNL_TOOL_HARNESS_NAME=$script "$member_bash" "$root/$script" ${args[@]+"${args[@]}"} || rc=$?
     fi
     member_ended "$i" "$rc"
   done
@@ -499,13 +518,13 @@ else
     while [ "$started" -lt "$total" ] && [ "$running" -lt "$jobs" ]; do
       script=${run_scripts[started]}
       member_argv "$started"
-      OCANNL_TOOL_HARNESS_NAME=$script "$root/$script" ${args[@]+"${args[@]}"} \
+      OCANNL_TOOL_HARNESS_NAME=$script "$member_bash" "$root/$script" ${args[@]+"${args[@]}"} \
         >"$pool/$started.out" 2>&1 </dev/null &
       pids[started]=$!
       started=$((started + 1)) running=$((running + 1)) progressed=1
     done
     while [ "$printed" -lt "$started" ] && [ -n "${ended[printed]-}" ]; do
-      printf '\nHARNESS %s (%s)\n' "${run_commands[printed]}" "${run_tiers[printed]}"
+      printf '\nHARNESS %s (%s; bash %s %s)\n' "${run_commands[printed]}" "${run_tiers[printed]}" "$member_version" "$member_bash"
       cat "$pool/$printed.out"
       [ "$ci_real_dune" = 0 ] || cp "$pool/$printed.out" "$outputs/${run_scripts[printed]//\//_}.out"
       member_ended "$printed" "${ended[printed]}"
@@ -519,7 +538,7 @@ else
     # printed, in order, before the run ends with the interrupting status.
     stop_members
     for ((i = printed; i < started; i++)); do
-      printf '\nHARNESS %s (%s)\n' "${run_commands[i]}" "${run_tiers[i]}"
+      printf '\nHARNESS %s (%s; bash %s %s)\n' "${run_commands[i]}" "${run_tiers[i]}" "$member_version" "$member_bash"
       cat "$pool/$i.out"
       printf 'HARNESS %s exit: %s\n' "${run_scripts[i]}" "${ended[i]}"
     done
