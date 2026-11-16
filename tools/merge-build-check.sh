@@ -311,7 +311,7 @@ ask_tests() {
 # `train-` alias the change reaches, with `train_why` saying why. A reach it cannot read sets
 # `tests` to unread.
 owed_needs() {
-  local f n rc=0 verdict line
+  local f n counted rc=0 verdict line
   needs=() train_why=
   [ -z "$tests_owed" ] || needs+=(runtest)
   if [ "$tests_incomplete" = 1 ]; then
@@ -323,8 +323,8 @@ owed_needs() {
   # list's); a count of 0 needs no record, any other count or none read asks affected for them.
   f=$tests_dir/ask
   [ ! -f "$tests_dir/ask-first" ] || f=$tests_dir/ask-first
-  n=$(sed -n -E 's/.*left off: ([0-9]+) train-.*/\1/p' "$f" | tail -n 1)
-  [ "$n" != 0 ] || return 0
+  counted=$(sed -n -E 's/.*left off: ([0-9]+) train-.*/\1/p' "$f" | tail -n 1)
+  [ "$counted" != 0 ] || return 0
   "${BASH:-bash}" "$root/tools/test-run.sh" affected "$mb..$head" \
     >"$tests_dir/affected" 2>"$tests_dir/train-ask" </dev/null || rc=$?
   verdict=$(sed -n 's/^affected: verdict=//p' "$tests_dir/train-ask" | tail -n 1)
@@ -341,6 +341,12 @@ owed_needs() {
       @*/train-?*) needs+=("$line") n=$((n + 1)) ;;
     esac
   done <"$tests_dir/affected"
+  # prepush counted some, affected named none: the two answers disagree, and nothing here
+  # guesses which is right. (With no count read, none named is the answer.)
+  if [ "$n" = 0 ] && [ -n "$counted" ]; then
+    tests=unread tests_why="prepush counted $counted train- alias(es) the change reaches, but tools/test-run.sh affected ${mb:0:8}..${head:0:8} named none"
+    return
+  fi
   # No count: a merge that adds a training test reaches one alias more than its base alone.
   [ "$n" = 0 ] || train_why='the change reaches train- aliases, which this build does not run'
 }

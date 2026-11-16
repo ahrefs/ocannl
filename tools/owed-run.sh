@@ -35,7 +35,8 @@
 # the run records must cover every NEED, or one waiver must stand:
 #   FULL   cmd `runtest [-j N]`, or `build @runtest [@train] [-j N]`: covers `runtest`;
 #          (in every form, `-j N` and `--no-buffer` may stand anywhere after the subcommand, as
-#          tools/test-run.sh injects them: neither filters what runs);
+#          tools/test-run.sh injects them: neither filters what runs; a `fresh` run's injected
+#          `--build-dir=...` is refused like any other option, so record a `run`);
 #   TRAIN  cmd `build @train [-j N]` (with or without @runtest): covers `train` and every alias;
 #          cmd `build @test/training/train-NAME... [-j N]` covers the aliases it names.
 # Refused (exit 1, saying why and naming OWED_RUN_URL): no ref (missing); a ref the fetch could not
@@ -65,8 +66,10 @@ me=owed-run
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
 # The repository the records live in: the PR repository (AGENTS.md, Pull Requests).
 OWED_RUN_URL=${OCANNL_TOOL_OWED_RUN_URL:-https://github.com/lukstafi/ocannl-staging.git}
-# The longest a read or write of the repository may take, in seconds.
-FETCH_CAP=60
+# The longest a read or write of the repository may take, in seconds
+# (OCANNL_TOOL_OWED_RUN_FETCH_CAP overrides it, for the harness's hanging-transport row).
+FETCH_CAP=${OCANNL_TOOL_OWED_RUN_FETCH_CAP:-60}
+case $FETCH_CAP in '' | *[!0-9]* | 0) echo "$me: OCANNL_TOOL_OWED_RUN_FETCH_CAP must be a positive integer" >&2; exit 2 ;; esac
 SCHEMA=v1
 
 die() { echo "$me: $*" >&2; exit 2; }

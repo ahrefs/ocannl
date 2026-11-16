@@ -520,6 +520,21 @@ $(run_line "$APART_HEAD" 'build @test/training/train-a -j 1')"
   if [ "$rc" = 1 ] && [ "$(cat "$TMP/record")" = "$COMPILE" ] && has 'so the train- aliases the change reaches are not known'; then
     report 0 'a train- reach that cannot be asked fails the tier'
   else report 1 'a train- reach that cannot be asked fails the tier' "exit $rc; $(cat "$TMP/out")"; fi
+  printf '%s\n' '@a/runtest-x' >"$TMP/owed-affected-none"
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL FAKE_LIST=$TMP/owed-list FAKE_TRAIN_N=1 FAKE_AFFECTED=$TMP/owed-affected-none run "$TMP/dunebin"
+  if [ "$rc" = 1 ] && [ "$(cat "$TMP/record")" = "$COMPILE" ] &&
+     has 'prepush counted 1 train- alias(es) the change reaches, but tools/test-run.sh affected'; then
+    report 0 'a train- count affected names no alias for fails the tier, never reading as none'
+  else report 1 'a train- count affected names no alias for fails the tier, never reading as none' "exit $rc; $(cat "$TMP/out")"; fi
+  # A transport that hangs: the read's bound ends it, and the record reads as unreadable.
+  started=$SECONDS
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=protocol.ext.allow GIT_CONFIG_VALUE_0=always OCANNL_TOOL_OWED_RUN_FETCH_CAP=2 \
+    OCANNL_TOOL_OWED_RUN_URL='ext::sleep 30' FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
+  took=$((SECONDS - started))
+  if [ "$took" -lt 20 ]; then
+    refused "a record repository that hangs is cut off at its bound and refuses (unreadable, ${took}s < 20s)" \
+      "REFUSED -- refs/owed-runs/$APART_HEAD could not be read within 2s: unreadable (records on ext::sleep 30)"
+  else report 1 'a record repository that hangs is cut off at its bound' "took ${took}s: $(cat "$TMP/out")"; fi
   OCANNL_TOOL_OWED_RUN_URL=$TMP/nowhere.git FAKE_LIST=$TMP/owed-list FAKE_TRAIN_N=none run "$TMP/dunebin"
   if [ "$rc" = 0 ] && tiers | grep -qx "affected $(range_of)" && ! has owed-run; then
     report 0 'no train- count read asks affected, which here names none: nothing is owed'
