@@ -7383,16 +7383,26 @@ module Scope_order = struct
      decide a condition differently ([x / -0.0 > 0]), so they are different conditions (Codex review
      of the gh-ocannl-2213 PR). A key holds no [Local_scope] ({!arms}' and {!gate}'s [cond_defs]
      rule), so a leaf without a nested expression compares as {!equal_scalar_t} does. *)
-  let rec equal_cond (a : scalar_t) (b : scalar_t) =
-    let arg (x, p) (y, q) = Ops.equal_prec p q && equal_cond x y in
+  let rec equal_cond ~eval (a : scalar_t) (b : scalar_t) =
+    (* An operator's operands as [C_syntax.pp_scalar_op_at] renders them: at the precisions
+       {!operand_eval_precisions} gives, so an annotation a homogeneous operator overrides does not
+       tell two conditions apart (Codex review of the gh-ocannl-2213 PR). *)
+    let args op xs ys =
+      let ps = operand_eval_precisions ~eval op (Array.of_list (List.map xs ~f:snd)) in
+      let qs = operand_eval_precisions ~eval op (Array.of_list (List.map ys ~f:snd)) in
+      Array.for_all2_exn ps qs ~f:Ops.equal_prec
+      && List.for_alli xs ~f:(fun k (x, _) -> equal_cond ~eval:ps.(k) x (fst (List.nth_exn ys k)))
+    in
     match (a, b) with
     | Constant x, Constant y -> Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
-    | Unop (o, x), Unop (o', y) -> Ops.equal_unop o o' && arg x y
-    | Binop (o, x1, x2), Binop (o', y1, y2) -> Ops.equal_binop o o' && arg x1 y1 && arg x2 y2
+    | Unop (o, x), Unop (o', y) -> Ops.equal_unop o o' && args (Ops.Unop o) [ x ] [ y ]
+    | Binop (o, x1, x2), Binop (o', y1, y2) ->
+        Ops.equal_binop o o' && args (Ops.Binop o) [ x1; x2 ] [ y1; y2 ]
     | Ternop (o, x1, x2, x3), Ternop (o', y1, y2, y3) ->
-        Ops.equal_ternop o o' && arg x1 y1 && arg x2 y2 && arg x3 y3
+        Ops.equal_ternop o o' && args (Ops.Ternop o) [ x1; x2; x3 ] [ y1; y2; y3 ]
     | Get_dynamic x, Get_dynamic y ->
-        arg x.dyn_value y.dyn_value
+        Ops.equal_prec (snd x.dyn_value) (snd y.dyn_value)
+        && equal_cond ~eval:(snd x.dyn_value) (fst x.dyn_value) (fst y.dyn_value)
         && equal_scalar_t
              (Get_dynamic { x with dyn_value = (Constant 0., snd x.dyn_value) })
              (Get_dynamic { y with dyn_value = (Constant 0., snd x.dyn_value) })
@@ -7403,11 +7413,11 @@ module Scope_order = struct
     | Select a, Select b ->
         Ops.equal_prec a.prec b.prec
         && Bool.equal a.unconverted b.unconverted
-        && equal_cond a.cond b.cond
+        && equal_cond ~eval:a.prec a.cond b.cond
     | Gate a, Gate b ->
         Ops.equal_binop a.op b.op && Ops.equal_prec a.prec b.prec
         && Ops.equal_prec a.first_prec b.first_prec
-        && equal_cond a.first b.first
+        && equal_cond ~eval:a.first_prec a.first b.first
     | Select _, Gate _ | Gate _, Select _ -> false
 
   type 'p lit = { key : key; holds : bool; anywhere : bool; payload : 'p }

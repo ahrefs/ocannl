@@ -573,4 +573,16 @@ let () =
   p "an integer condition is one condition under an integer and a float select"
     (one_condition (cmp_at Ops.int32 Ops.Cmplt (embed i) (LL.Constant 1.)));
   p "a float-valued condition is two: only the float path converts it"
-    (not (one_condition (LL.Unop (Ops.Sin, (embed i, Ops.double)))))
+    (not (one_condition (LL.Unop (Ops.Sin, (embed i, Ops.double)))));
+  (* A homogeneous operator renders its operands at its own precision, whatever they are annotated
+     at, so the annotation tells no two conditions apart. *)
+  let select_key one_at : O.key =
+    Select
+      {
+        cond = LL.Binop (Ops.Cmplt, (embed i, Ops.int32), (LL.Constant 1., one_at));
+        prec = Ops.int32;
+        unconverted = false;
+      }
+  in
+  p "a homogeneous operand's annotation does not split a condition"
+    (O.equal_key (select_key single) (select_key Ops.int32))

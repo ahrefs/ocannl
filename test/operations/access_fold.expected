@@ -69,3 +69,4 @@ same_plan accepts a plan matched against itself: true
 same_plan refuses a plan whose conditions are one on one side and two on the other: true
 an integer condition is one condition under an integer and a float select: true
 a float-valued condition is two: only the float path converts it: true
+a homogeneous operand's annotation does not split a condition: true
