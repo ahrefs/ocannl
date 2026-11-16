@@ -1,6 +1,7 @@
 (* Array.equal is supplied by Base on the repository's OCaml 5.3 floor. *)
 module Array : sig
   val get : 'a array -> int -> 'a
+  val iteri : 'a array -> f:(int -> 'a -> unit) -> unit
   val equal : ('a -> 'a -> bool) -> 'a array -> 'a array -> bool
 end
 
@@ -35,4 +36,14 @@ module Ll_test : sig
     seed:(unit * float array) list ->
     read:unit list ->
     float array list * unit
+end
+
+module List : sig
+  val hd : 'a list -> 'a
+  val for_alli : 'a list -> f:(int -> 'a -> bool) -> bool
+  val iter : 'a list -> f:('a -> unit) -> unit
+  val map : 'a list -> f:('a -> 'b) -> 'b list
+  val map2_exn : 'a list -> 'b list -> f:('a -> 'b -> 'c) -> 'c list
+  val iter2_exn : 'a list -> 'b list -> f:('a -> 'b -> unit) -> unit
+  val zip_exn : 'a list -> 'b list -> ('a * 'b) list
 end

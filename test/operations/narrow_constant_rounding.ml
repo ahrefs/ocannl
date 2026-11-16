@@ -18,6 +18,9 @@
    Where the backend computes the format at storage width the first three read the same either way;
    the case still runs, and checks the value. *)
 
+(* cc-fp-contract: no-contraction -- compared kernels store literals, multiply by a folded constant,
+   or exponentiate; no product feeds an add *)
+
 open Base
 module LL = Ir.Low_level
 module Ops = Ir.Ops

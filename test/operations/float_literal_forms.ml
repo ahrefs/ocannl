@@ -39,6 +39,9 @@
    materialized node: through the [Assignments] pipeline a bare constant fill is the backend's
    business to inline or upload, and only an inlined one is about this printer. *)
 
+(* cc-fp-contract: no-contraction -- executed kernels only store constants; no arithmetic can
+   fuse *)
+
 open Base
 module LL = Ir.Low_level
 module Ops = Ir.Ops

@@ -15,6 +15,9 @@
    disabled, which compiles one program as before, so a run with [OCANNL_CUDA_KERNEL_CACHE_MIB=0] on
    CUDA must fail them -- the negative control. *)
 
+(* cc-fp-contract: same-shape -- joint and split compile the same kernels; only their grouping into
+   programs changes *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
