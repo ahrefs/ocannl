@@ -1524,6 +1524,15 @@ files.
   no twin: at 8 out-channels one or two vector columns leave no alternative at any width, which is
   why the conv seed counts there did not move. Not done: whether a partial vector's masked copies
   deserve a term of their own.
+- **CPU conv seed counts follow the seeding vector file, including its register count**
+  (gh-ocannl-1894). `schedule_conv_gemm` derives each flavor's auto tile plus
+  `Register_tile.alternatives` and the gated `Register_tile.rm_twin` at the detected conv's
+  micro-kernel extents; a row-panel flavor asks at its panel size. Read those extents from the
+  lowering, never from the seeds whose loss the count must detect. `narrowed_to_16` pins only
+  the width, keeping the device's register count, so even that population needs the derivation.
+  At the fixing base the native 64-byte and emulated 32-byte/16-register runs passed; the
+  16-byte/16-register run failed five counts, and enabling the two-row twin failed eleven,
+  including `cvs2` and `cvs2b`'s executed-seed populations. The golden stays backend-uniform.
 - **C-tile traffic cannot rank `rn` at a fixed lane width** (gh-ocannl-1099).
   Full passes plus the narrower column tail move `2 * rm * ceil(n/lanes)` C vectors per row
   band, independent of `rn`; charging `2 * rm * rn / k` at full `rn` on the tail pass, or once
