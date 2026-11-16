@@ -392,9 +392,11 @@
 # see tools/device-probe.sh). `repeat` takes both bounds too (see above).
 #
 # One run at a time per worktree, enforced with an flock: a second `run`/`start`/`repeat`
-# refuses loudly, pointing at the active run, instead of queueing behind dune's
+# refuses loudly, naming the run or query holding it, instead of queueing behind dune's
 # own lock -- "I lost track of a run so I started another" is exactly the spiral
-# this script exists to prevent. `stop` the active run if it is truly stale.
+# this script exists to prevent. Wait for a query; `stop` a truly stale run.
+# A run with a published verdict can still have descendants holding fd 9;
+# its refusal reports that verdict and says stopping that run is safe.
 # The lock, its owner pointer and the `last` pointer live under the runs
 # directory ($OCANNL_TOOL_TEST_RUNS, default ~/.ocannl-test-runs), keyed by the
 # worktree's path -- never in the worktree, which a run leaves exactly as it
@@ -1693,7 +1695,7 @@ wt_key=$(wt_key_of "$PWD")
 # one layer down, by dune's own `_build/.lock` -- two dune instances cannot
 # both build one tree -- but without this script's pointer at the run to stop.
 LOCK=$RUNS/lock-$wt_key   # the flock target: fd 9 of every process of a run
-OWNER=$RUNS/owner-$wt_key # the run directory holding the lock (see take_lock)
+OWNER=$RUNS/owner-$wt_key # run directory, or query<TAB>verb<TAB>pid (see take_lock)
 LAST=$RUNS/last-$wt_key   # the run this worktree published most recently
 QUEUED=$RUNS/queued-$wt_key # a launch seen in flight before this worktree's first run (see note_queued)
 
@@ -2345,10 +2347,25 @@ take_lock() {
       # HOLDER. %q, so a runs directory containing spaces or metacharacters
       # survives copy-pasting the recovery commands.
       owner=$(cat "$OWNER" 2>/dev/null)
-      owner=$(printf %q "${owner:-last}")
-      echo "test-run: another test-run is active in this worktree; check it with:" >&2
-      echo "  tools/test-run.sh status $owner" >&2
-      echo "(a stale one can be stopped with: tools/test-run.sh stop $owner)" >&2
+      case $owner in
+        query$'\t'*)
+          IFS=$'\t' read -r holder_kind holder_verb holder_pid <<<"$owner"
+          echo "test-run: an $holder_verb query (pid $holder_pid) holds this worktree's lock; wait for it" >&2
+          ;;
+        *)
+          holder_exit=$(cat "${owner:-/nonexistent}/exit" 2>/dev/null)
+          owner=$(printf %q "${owner:-last}")
+          echo "test-run: another test-run is active in this worktree; check it with:" >&2
+          echo "  tools/test-run.sh status $owner" >&2
+          case $holder_exit in
+            '' | *[!0-9]*) echo "(a stale one can be stopped with: tools/test-run.sh stop $owner)" >&2 ;;
+            *)
+              echo "  it already has a verdict (exit $holder_exit); leftover processes may still hold the lock" >&2
+              echo "  it is safe to stop this completed run: tools/test-run.sh stop $owner" >&2
+              ;;
+          esac
+          ;;
+      esac
       exit 2
       ;;
   esac
@@ -4179,7 +4196,9 @@ finish_run() { # rc -> append sentinel, record verdict
 # `aliases`): a dune started beside a run's dune contends for `_build`. So it
 # takes the worktree's run lock, as a run does, and holds it on fd 9 through
 # every dune it starts: a run refuses meanwhile, and the query refuses during
-# a run. (No owner pointer is published: this is not a run to point at.) Where
+# a run. The owner pointer records query<TAB>verb<TAB>pid, atomically with
+# acquisition as for a run. The pid is a diagnostic, never signal authority;
+# queries are waited for, not stopped through a completed run. Where
 # the previous version's in-tree lock exists it is held too, on fd 5, as
 # take_lock holds it, so a launcher of that version is refused meanwhile; it
 # is never created, nor removed, here.
@@ -4192,8 +4211,20 @@ hold_query_lock() {
   fi
   mkdir -p "$RUNS" || die "cannot create $RUNS"
   exec 9>>"$LOCK" || die "cannot open lock file $LOCK"
-  perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 3)' <&9 ||
-    die "a run is active in this worktree; $sub asks dune too, so wait for it (status last)"
+  perl -e '
+    use Fcntl ":flock";
+    exit 3 unless flock(STDIN, LOCK_EX | LOCK_NB);
+    my $tmp = "$ARGV[0].tmp.$$";
+    open(my $fh, ">", $tmp) or exit 2;
+    print $fh "query\t$ARGV[1]\t$ARGV[2]\n" or exit 2;
+    close $fh or exit 2;
+    rename($tmp, $ARGV[0]) or do { unlink $tmp; exit 2 };
+  ' "$OWNER" "$sub" "$$" <&9
+  case $? in
+    0) ;;
+    2) die "cannot record the query lock owner pointer at $OWNER" ;;
+    *) die "a run or query holds this worktree's lock; $sub asks dune too, so wait for it" ;;
+  esac
 }
 
 pp_scope=

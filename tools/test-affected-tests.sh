@@ -1136,7 +1136,7 @@ if harness_leg 'runner entry'; then
     rc=holder-$state
   fi
   wait "$holder"
-  if [ "$rc" = 2 ] && [ ! -s "$out" ] && grep -q 'a run is active in this worktree' "$err"; then
+  if [ "$rc" = 2 ] && [ ! -s "$out" ] && grep -q "a run or query holds this worktree's lock" "$err"; then
     report 0 'tools/test-run.sh affected refuses while a run holds the worktree'
   else report 1 'tools/test-run.sh affected refuses while a run holds the worktree' "exit $rc; $(cat "$out" "$err")"; fi
 fi
