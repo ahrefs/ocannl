@@ -4868,9 +4868,11 @@ let refuse_meaningless_concats (update_step : update_step) =
                        nothing. Name one component per tensor (x ++ \"a^b => a\" takes a segment; \
                        (x, y) ++^ \"a; b => a^b\" joins two)"]
               | _ -> ()));
-      (* Concatenations sharing a label, even transitively and across slots, select alternatives of
-         one product component. Integer segments have no symbols and join nothing. The accumulated
-         components are disjoint, so a new concatenation merges every one it meets. *)
+      (* Keep the per-concatenation check above for its more specific diagnostic; the fused check
+         subsumes its refusals. Concatenations sharing a label, even transitively and across slots,
+         select alternatives of one product component. Integer segments have no symbols and join
+         nothing. The accumulated components are disjoint, so a new concatenation merges every one
+         it meets. *)
       let product_components =
         List.fold (List.concat_map slots ~f:concats) ~init:[] ~f:(fun fused components ->
             let labels = in_concats [ Concat_spec components ] in
