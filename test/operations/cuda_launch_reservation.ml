@@ -33,13 +33,14 @@
    child process (this executable, re-run with [--hold]) takes nearly all the free memory in device
    buffers for two seconds, which would refuse every neighbour's allocation meanwhile. A launch
    whose reservation fits the device but not what the child left free is retried, and runs once the
-   child is gone, computing the right values: a plain launch and a graph's first run (its
-   instantiation) on CUDA or HIP, and on CUDA a cached graph's replay, which regrows the released
-   reservation: a refused graph launch drops its exec and runs the segments plainly, never
-   relaunching it (a relaunch faulted on rog-nv). Run it as [OCANNL_BACKEND=cuda dune build
-   test/operations/cuda_launch_reservation.exe] (or [hip]), then [./cuda_launch_reservation.exe
-   --contended] in [_build/default/test/operations], under an exclusive hold of the box; a false
-   claim exits 1.
+   child is gone, computing the right values, on CUDA: a plain launch, a graph's first run (its
+   instantiation), and a cached graph's replay, which regrows the released reservation -- a refused
+   graph launch drops its exec and runs the segments plainly, never relaunching it (a relaunch
+   faulted on rog-nv). On HIP the same holds are not refused at all (ROCr backs scratch on demand),
+   which the run pins instead: HIP's retry path is not reached. Run it as [OCANNL_BACKEND=cuda dune
+   build test/operations/cuda_launch_reservation.exe] (or [hip]), then
+   [./cuda_launch_reservation.exe --contended] in [_build/default/test/operations], under an
+   exclusive hold of the box; a false claim exits 1.
 
    The executed kernels discriminate: the frame is filled forward with [1 + x] and read back in
    REVERSE ([out[y] = n - y]), which also keeps the device compiler from forwarding each store to
@@ -473,10 +474,24 @@ let () =
              ignore (Unix.waitpid [] pid : int * Unix.process_status);
              (got, d))
         in
-        in_legf ~leg "contended, %s: the submission is retried, and not given up on" what
+        in_legf
+          ~leg:(Verdict.sub_leg leg ~when_:(lazy on_cuda) ~on:backend_name)
+          "contended, %s: the submission is retried, and not given up on" what
           (fun label ->
             match snd (Lazy.force run) with
             | [ retries; refusals; _; _ ] -> p label (retries >= 1 && refusals = 0)
+            | _ -> p label false);
+        (* Measured on tuf-amd-linux (discrete memory, ROCm): with the child leaving 380 MB of 8.4
+           GB free, a frame whose full-occupancy scratch would be 2 GiB launched at once. ROCr backs
+           scratch for the waves actually launched, on demand, so a one-work-item frame is never
+           refused, and HIP's retry path is not reached here. Pinned, so that a ROCr that starts
+           refusing turns this red and the retry claim above gets a HIP leg. *)
+        in_legf
+          ~leg:(Verdict.sub_leg leg ~when_:(lazy on_hip) ~on:backend_name)
+          "contended, %s: on HIP, the launch under the hold is not refused, so not retried" what
+          (fun label ->
+            match snd (Lazy.force run) with
+            | [ retries; refusals; _; _ ] -> p label (retries = 0 && refusals = 0)
             | _ -> p label false);
         in_legf ~leg "contended, %s: the retried kernels compute the right values" what
           (fun label ->

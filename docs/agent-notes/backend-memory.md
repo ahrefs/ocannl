@@ -505,8 +505,12 @@ files.
   runs HIP's scratch frame. By hand, under an exclusive hold, `--contended`
   outwaits a child process holding the memory in device buffers (a frame reservation is now
   released at once) for a plain launch, a graph's first instantiation and a cached replay, whose
-  refused exec must be dropped; in a shared batch that child refused its neighbours. `schedule_strided_1x1`'s
-  resnet-block row claims the reset on the real s11d_ref.
+  refused exec must be dropped. On HIP (tuf, discrete, ROCm) the same hold refuses nothing: ROCr
+  backs scratch for the waves actually launched, on demand, so a one-work-item frame whose
+  full-occupancy scratch would be 2 GiB launched at once with 380 MB free -- HIP's launch back-off
+  is in place but no run has reached it, and `--contended` pins the non-refusal. In a shared batch
+  that child refused its neighbours. `schedule_strided_1x1`'s resnet-block row claims the reset on
+  the real s11d_ref.
 - Raw-lowering test audit (gh-ocannl-2219): a `lowered_transform` that captures IR for a structural
   assertion need not launch that IR. `online_softmax_block`'s `forward` and `training`,
   `online_softmax`'s `training`, SGD `trajectory` and leaf-gradient legs, and `fused_classifier`
