@@ -4351,6 +4351,11 @@ if [ "$sub" = prepush ]; then
     pp_full_all=$pp_all
     pp_query --referenced-only
   fi
+  if [ "$pp_cross" = 1 ] && [ "$pp_tier" = 1 ]; then
+    # Counts explain the refusal; only the validated verdict above decides it.
+    pp_counts=$(sed -n 's/^affected: CROSS-CUTTING: \([0-9][0-9]*\) of the \([0-9][0-9]*\) per-test aliases rank first.*/\1 of \2 aliases/p' "$pp_dir/affected.err")
+    die "prepush: the first tier is itself cross-cutting (${pp_counts:-counts above}); no local tier run applies: run the tests that exercise the change and the applicable full-list slow- aliases, plus a full dune runtest on a CPU-only box before the merge, all named in the PR body; then dune build @check (AGENTS.md, gh-ocannl-2160); nothing run"
+  fi
   [ "$pp_cross" = 0 ] ||
     die "prepush: this change is CROSS-CUTTING (above), so the pre-push run is not this list: a full-suite run on a CPU-only box before the merge owns it but its slow- aliases; run those and the tests that exercise the change, named in the PR body with that run, then dune build @check (AGENTS.md, gh-ocannl-1765); nothing run"
   pp_collect
