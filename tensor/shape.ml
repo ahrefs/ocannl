@@ -6043,8 +6043,8 @@ module Scheme = struct
         if sabotaged No_end_validation then !state
         else snd (Row.solve_inequalities ~stage:Row.Stage1 constraints !state)
       in
-      (* As [finish_inference] filters the terminal rows of shapes still marked unused: the trace's
-         own such shapes can never be used afterwards. *)
+      (* The trace's own unused template shapes can never be used afterwards; their constraints must
+         not be carried to applications. *)
       let constraints =
         List.filter constraints ~f:(function
           | Row.Shape_row (r, _) | Terminal_row (_, r, _) ->
