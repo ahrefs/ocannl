@@ -2722,6 +2722,13 @@ files.
   The shared half RNG function returns `HALF_T`, while its OCaml wrapper explicitly extracts bits
   with `HALF_TO_UINT16`. `test_shared_builtins` executes separately compiled default and emulated
   half variants against the shipped stubs, with inlining disabled to exercise the C ABI.
+- Integer RNG parity must observe the result before storage (gh-ocannl-2203): signed -1 and
+  unsigned 255 have identical byte encodings. Both builtin emulation tests use
+  `test/support/integer_rng_probe.ml` to check scalar, vector-element and lane signedness and
+  widened values against input-bit extraction, including the C table. The byte vector ABI has
+  signed `int8x16_t` elements; scalar and lane byte returns are unsigned. Each signed-byte table
+  mutation passes byte parity but fails the result checks. Generic C arithmetic promotions and
+  parameter guards are outside this result contract.
 - What a builtin's parameter type is and what its call site passes are compared by the
   parameter guards (`C_syntax.Param_guards`, gh-ocannl-1768), a test seam `op_table_compile` runs
   its whole cc and Metal sweep under: each function a kernel's prelude defines is shadowed by a

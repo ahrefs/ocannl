@@ -57,6 +57,11 @@
  (libraries base stdio unix arrayjit.verdict))
 
 (library
+ (name integer_rng_probe)
+ (package neural_nets_lib)
+ (modules integer_rng_probe))
+
+(library
  (name test_utils)
  (package neural_nets_lib)
  (modules test_utils generated asm_census cache_plant)

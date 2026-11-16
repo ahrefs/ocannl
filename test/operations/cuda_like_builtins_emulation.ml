@@ -1,3 +1,7 @@
+(* Integer RNG results are also checked before storage, against independently extracted input
+   bits and signedness, including the C reference table. Generic C arithmetic promotions and
+   parameter guards are outside this contract. A signed-byte copy must pass byte parity and fail
+   the result checks. *)
 (* The CUDA and HIP definition tables' device-free conversion helpers (gh-ocannl-1353), compiled by
    the host C compiler beside the C table the cc backend prepends, and compared with it bitwise.
    Since the two tables became stdlib-only libraries, every PR compiles them as OCaml; this checks
@@ -228,6 +232,9 @@ let unbroken_macros = "#undef __hiloint2double\n#undef copysignf\n#undef copysig
    table and the other copies. *)
 let vendor_copy vendor ~prefix ~broken =
   let table = host_table vendor in
+  let table =
+    if prefix = vendor.name ^ "signed_" then Integer_rng_probe.signed_byte_table table else table
+  in
   let renames =
     List.map (fun k -> Printf.sprintf "#define %s %s%s\n" k prefix k) (keys table)
     |> String.concat ""
@@ -249,7 +256,10 @@ let vendor_copy vendor ~prefix ~broken =
       ])
 
 let impls =
-  List.concat_map (fun v -> [ (v, v.name ^ "_", false); (v, v.name ^ "broken_", true) ]) vendors
+  List.concat_map
+    (fun v ->
+      [ (v, v.name ^ "_", false); (v, v.name ^ "broken_", true); (v, v.name ^ "signed_", false) ])
+    vendors
 
 let all_probed = List.sort_uniq compare (List.concat_map probed vendors)
 
@@ -275,15 +285,27 @@ let probe ~vendor ~prefix key =
     | From_f64 -> "  double a; memcpy(&a, in, sizeof a);\n"
     | _ -> ""
   in
-  Printf.sprintf
-    "int %s(const unsigned int *in, int lane, unsigned char *out) {\n\
-    \  %suint4x32_t x; memcpy(x.v, in, sizeof x.v);\n\
-     %s  __typeof__(%s) r = %s;\n\
-    \  (void)x; (void)lane;\n\
-    \  memcpy(out, &r, sizeof r);\n\
-    \  return (int)sizeof r;\n\
-     }\n"
-    (probe_name ~prefix key) prefix arg call call
+  let bytes =
+    Printf.sprintf
+      "int %s(const unsigned int *in, int lane, unsigned char *out) {\n\
+      \  %suint4x32_t x; memcpy(x.v, in, sizeof x.v);\n\
+       %s  __typeof__(%s) r = %s;\n\
+      \  (void)x; (void)lane;\n\
+      \  memcpy(out, &r, sizeof r);\n\
+      \  return (int)sizeof r;\n\
+       }\n"
+      (probe_name ~prefix key) prefix arg call call
+  in
+  match Integer_rng_probe.check key with
+  | None -> bytes
+  | Some check ->
+      bytes
+      ^ Printf.sprintf
+          "int value_%s(const unsigned int *in, int lane, unsigned char *out) {\n\
+           %suint4x32_t x; memcpy(x.v, in, sizeof x.v);\n\
+           %s __typeof__(%s) r = %s; (void)out; (void)lane;\n\
+           %s}\n"
+          (probe_name ~prefix key) prefix arg call call check
 
 let fp8_probe ~prefix (key, typ) =
   let bits = if typ = "float" then "unsigned int" else "unsigned long long" in
@@ -463,11 +485,44 @@ let () =
           else
             p_all
               (v.label
-             ^ ": every probed conversion helper returns the C one's bytes, for every draw and lane"
-              )
+              ^
+              if prefix = v.name ^ "signed_" then
+                ": a signed-byte copy still passes the old byte comparison"
+              else
+                ": every probed conversion helper returns the C one's bytes, for every draw and \
+                 lane")
               (probed v)
               ~f:(agrees ~log:true ~label:v.label ~prefix))
         impls)
+
+let () =
+  case "integer RNG values before storage" @@ fun () ->
+  with_probes (fun lib ->
+      let keys = List.filter Integer_rng_probe.is_integer all_probed in
+      let correct prefix key =
+        let fn = bind lib ("value_" ^ probe_name ~prefix key) in
+        List.for_all
+          (fun words -> List.for_all (fun lane -> fst (run fn words lane) = 1) (lanes lib key))
+          draws
+      in
+      List.iter
+        (fun (label, prefix, keys) ->
+          p_all
+            (label
+           ^ ": integer scalar, vector and lane results have the expected value and signedness \
+              before storage")
+            keys ~f:(correct prefix))
+        (("C", "", keys)
+        :: List.map
+             (fun v -> (v.label, v.name ^ "_", List.filter Integer_rng_probe.is_integer (probed v)))
+             vendors);
+      List.iter
+        (fun v ->
+          p_exists
+            (v.label ^ ": a signed-byte copy fails the integer result checks")
+            (List.filter Integer_rng_probe.is_integer (probed v))
+            ~f:(fun key -> not (correct (v.name ^ "signed_") key)))
+        vendors)
 
 (* The narrow uniform draws below 1 (gh-ocannl-1434, gh-ocannl-1486). A half or bf16 draw used to be
    the f32 draw of its bits ROUNDED to the narrow format, which is exactly 1.0 for every f32 draw
