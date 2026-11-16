@@ -3042,6 +3042,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   what has no host-reachable buffer of its own: a `Local` node, a schedule-minted partial.
   `fresh_output_fill` pins the contract and holds `test/config` to it; the mutant tables are in
   lukstafi/ocannl-staging's gh-1873 and gh-1966 PR bodies.
+- The written-before-the-rule exactness debt is retired (gh-ocannl-1826):
+  `exact_partials_ratchet` keeps only its reasoned exemptions. Host arithmetic premises in
+  `hardware_warp_shuffle`, `tile_mma_narrow` and `schedule_ldmatrix_matmul` run outside backend
+  gates, so cc checks them even when it cannot execute the corresponding GPU rendering.
 - Host-side exactness premises share an index reader with initialization: wrap the value function
   in `Ll_test.operand ~b ~o ~i`, which checks rank and bounds against `b @ o @ i` before
   evaluating it (gh-ocannl-2176). This catches out-of-bounds permutations, not in-bounds ones:

@@ -12,19 +12,19 @@
    projection's shape) is a site over the coalesced [(h, e)]; a reduction one loop already splits
    keeps its uncoalesced site. - Executed parity: each site's prelude, compiled as the search's
    [F_split] candidate compiles it, computes bitwise the default pipeline's result and the exact
-   host sum. The inputs are dyadic (multiples of 1/16 and small enough that every partial sum is
-   exact in f32), so the split's reassociation cannot move a bit, and a dropped or doubled row moves
-   a cell. - The coalesced prelude round-trips through the schedule cache's saved form. -
-   [Autotune.detect_matmul] reads the accumulation form of a write inside a loop whose body is a
-   sequence (the shape of a split's first pass) instead of raising. - The untuned CUDA/HIP plan
-   splits the batch-8 bias gradient at a threshold its 1024-row chain meets, into 32 blocks (not
-   512: the block count stays within the square root of the chain), and the seeded routine keeps the
-   exact sums; off CUDA and HIP it splits nothing. - The contraction composition (gh-ocannl-1279):
-   the contraction-coalesced sketches' prefix coalesces exactly the [(h, e)] pair the split site
-   records; on the code that prefix prepares, the merged k is a single uncoalesced site whose
-   prelude, behind the prefix, gives the same exact sums; the split and the serial-K tiles label
-   apart; and the production out projection, far above [sr_out_max], is no site, though the split of
-   its merged k is a legal op and the contraction branch tiles that k 256 deep. *)
+   host sum. The host premise claims check the dyadic terms, so the split's reassociation cannot
+   move a bit, and a dropped or doubled row moves a cell. - The coalesced prelude round-trips
+   through the schedule cache's saved form. - [Autotune.detect_matmul] reads the accumulation form
+   of a write inside a loop whose body is a sequence (the shape of a split's first pass) instead of
+   raising. - The untuned CUDA/HIP plan splits the batch-8 bias gradient at a threshold its 1024-row
+   chain meets, into 32 blocks (not 512: the block count stays within the square root of the chain),
+   and the seeded routine keeps the exact sums; off CUDA and HIP it splits nothing. - The
+   contraction composition (gh-ocannl-1279): the contraction-coalesced sketches' prefix coalesces
+   exactly the [(h, e)] pair the split site records; on the code that prefix prepares, the merged k
+   is a single uncoalesced site whose prelude, behind the prefix, gives the same exact sums; the
+   split and the serial-K tiles label apart; and the production out projection, far above
+   [sr_out_max], is no site, though the split of its merged k is a legal op and the contraction
+   branch tiles that k 256 deep. *)
 
 (* cc-fp-contract: exact-operands -- sixteenths: every product and sum is exact in f32 *)
 
@@ -148,13 +148,19 @@ let bias_grad ~label ~table =
   in
   let g = (Option.value_exn ~here:[%here] b.Tensor.diff).Tensor.grad in
   Train.set_materialized g;
+  let term o r =
+    let wv = if table then w_values.((r % ns * no) + o) else 1. in
+    dy_values.((r * no) + o) *. wv
+  in
+  p_all "bias gradient terms have f32-exact partial sums"
+    (List.init no ~f:(fun o -> List.init (nb * ns) ~f:(term o)))
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   (* Exact in f64 and in f32 alike: every partial sum is a multiple of 1/256 below 2^11. *)
   let exact =
     Array.init no ~f:(fun o ->
         let acc = ref 0. in
         for r = 0 to (nb * ns) - 1 do
-          let wv = if table then w_values.((r % ns * no) + o) else 1. in
-          acc := !acc +. (dy_values.((r * no) + o) *. wv)
+          acc := !acc +. term o r
         done;
         !acc)
   in
@@ -236,6 +242,12 @@ let () =
   let%op d = w +* "jhe;bshe=>bsj" a in
   Train.set_materialized d.Tensor.value;
   let comp = named "srp_he" (Train.forward d) in
+  p_all "out-projection terms have f32-exact partial sums"
+    (Ll_test.reduction_cells
+       ~out:[| cb * cs; cj |]
+       ~over:[| ch * ce |]
+       (fun o r -> w_values.((o.(1) * ch * ce) + r.(0)) *. a_values.((o.(0) * ch * ce) + r.(0))))
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   (* Products of two multiples of 1/16 summed 256 at a time: multiples of 1/256 below 2^8. *)
   let exact =
     Array.init

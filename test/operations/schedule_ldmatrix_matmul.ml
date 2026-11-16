@@ -9,15 +9,14 @@
 
    What each leg pins:
 
-   - Bitwise parity against the serial twin. The inputs are exact in bf16 (resp. e5m2) and every
-   partial sum is exactly representable, so ANY correct accumulation order reproduces them exactly —
-   which makes parity a test of the per-lane element mapping, not of tolerance. A mis-derived
-   [ldmatrix] address or a wrong [.trans] gives a different product. - The emitted load form.
-   [ldmatrix]'s four bf16 shapes are selected by the operands' storage orientation: [.trans]
-   transposes each 8x8 tile on distribution, which is exactly the difference between an operand
-   stored in its role's orientation and its transpose. - The rendering census:
-   [Mma_intrinsics_ldmatrix], distinct from [Mma_intrinsics], so a sweep can tell which of the two
-   load paths a timing measured.
+   - Bitwise parity against the serial twin. The host claims below derive the operands' reduction
+   premises, so correct accumulation orders reproduce the same bits — which makes parity a test of
+   the per-lane element mapping, not of tolerance. A mis-derived [ldmatrix] address or a wrong
+   [.trans] gives a different product. - The emitted load form. [ldmatrix]'s four bf16 shapes are
+   selected by the operands' storage orientation: [.trans] transposes each 8x8 tile on distribution,
+   which is exactly the difference between an operand stored in its role's orientation and its
+   transpose. - The rendering census: [Mma_intrinsics_ldmatrix], distinct from [Mma_intrinsics], so
+   a sweep can tell which of the two load paths a timing measured.
 
    fp8's eligibility is one-sided per operand and the sides are opposite: [ldmatrix.b16] moves
    16-bit units, so it can build a register holding 4 fp8 bytes only when those bytes are contiguous
@@ -223,18 +222,44 @@ let leg ?schedule_of ~tag ~build ~src_a ~src_b ~swz_a ~swz_b ~check ~acc_prec ?(
     p struct_label (check ~what:name ~src ~census)
   end
 
-(* The bf16 inputs are multiples of 1/4 and 1/2 with 32-term sums bounded by 16, so every product is
-   a multiple of 1/8 and every partial sum is exactly representable in bf16's 8 mantissa bits: the
-   result is exact regardless of accumulation order or accumulator width. *)
-let bf_a = Ll_test.cycle ~dims:[| n; n |] ~modulus:3 ~offset:0. ~stride:0.25
-let bf_b = Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:(-2.) ~stride:0.5
+let bf_a =
+  Ll_test.operand ~b:[]
+    ~o:(Array.to_list [| n; n |])
+    ~i:[]
+    (Ll_test.cycle ~dims:[| n; n |] ~modulus:3 ~offset:0. ~stride:0.25)
+
+let bf_b =
+  Ll_test.operand ~b:[]
+    ~o:(Array.to_list [| n; n |])
+    ~i:[]
+    (Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:(-2.) ~stride:0.5)
 
 (* e5m2 has 2 mantissa bits: inputs from {-1,-0.5,0,0.5,1} and {-1.5..1.5 step 0.5} are exact, every
    product is a multiple of 0.25 bounded by 1.5, and a 32-term f32 sum of such products is exact. *)
-let f8_a = Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:(-2.) ~stride:0.5
-let f8_b = Ll_test.cycle ~dims:[| n; n |] ~modulus:7 ~offset:(-3.) ~stride:0.5
+let f8_a =
+  Ll_test.operand ~b:[]
+    ~o:(Array.to_list [| n; n |])
+    ~i:[]
+    (Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:(-2.) ~stride:0.5)
 
+let f8_b =
+  Ll_test.operand ~b:[]
+    ~o:(Array.to_list [| n; n |])
+    ~i:[]
+    (Ll_test.cycle ~dims:[| n; n |] ~modulus:7 ~offset:(-3.) ~stride:0.5)
+
+(* The bf16 inputs are multiples of 1/4 and 1/2 with 32-term sums bounded by 16, so every product is
+   a multiple of 1/8 and every partial sum is exactly representable in bf16's 8 mantissa bits: the
+   result is exact regardless of accumulation order or accumulator width. *)
 let () =
+  (* Swizzled tiles decline hardware MMA outside CUDA; CUDA accumulates in f32. Mixed-sign IEEE
+     reductions need the magnitude bound, not the WMMA sign premise. *)
+  p_all "bf16 ldmatrix operands have bf16-exact partial sums"
+    (Ll_test.matmul_products ~m:n ~n ~k:n bf_a bf_b)
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.bfloat16));
+  p_all "fp8 ldmatrix operands have f32-exact partial sums"
+    (Ll_test.matmul_products ~m:n ~n ~k:n f8_a f8_b)
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   let mk ~l ~prec ~f = NTDSL.init ~l ~prec ~i:[ n ] ~o:[ n ] ~f () in
   let mab = mk ~l:"lab" ~prec:Ir.Ops.bfloat16 ~f:bf_a in
   let mbb = mk ~l:"lbb" ~prec:Ir.Ops.bfloat16 ~f:bf_b in

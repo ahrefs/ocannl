@@ -1,3 +1,4 @@
+loss products and partial sums are f32-exact: true
 cold: not every schedule-cache store was refused: true
 cold: both arms searched, arm B after arm A, and arm A's crown shipped unsubstituted: true
 cold: the shipped report is arm A's: true

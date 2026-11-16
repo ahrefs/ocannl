@@ -31,8 +31,8 @@
    the block does not divide it; parity against the serial reference covers all three flavors.
 
    Executed assertions compare each candidate against a serial reference computed from the same
-   discriminating inputs; the input values vary with every index and keep all partial sums exactly
-   representable in f32, so bitwise equality is required regardless of accumulation-order changes
+   discriminating inputs; the input values vary with every index and their reduction premises are
+   checked below in f32, so bitwise equality is required regardless of accumulation-order changes
    from the tiling. *)
 
 (* cc-fp-contract: exact-operands -- products are small multiples of an eighth and sums stay exact
@@ -272,16 +272,24 @@ let () =
   (* Discriminating inputs: values vary with every index (the linear-index strides are coprime with
      the moduli), and all products are small multiples of 1/8 with partial sums far below 2^24, so
      f32 addition is exact in any order — bitwise parity is well-defined across tilings. *)
-  let x () =
-    NTDSL.init ~l:"bg_x" ~prec:Ir.Ops.single ~o:[ bb; ss; kk ]
-      ~f:(Ll_test.cycle ~dims:[| bb; ss; kk |] ~modulus:13 ~offset:0. ~stride:0.25)
-      ()
+  let x_f =
+    Ll_test.operand ~b:[]
+      ~o:(Array.to_list [| bb; ss; kk |])
+      ~i:[]
+      (Ll_test.cycle ~dims:[| bb; ss; kk |] ~modulus:13 ~offset:0. ~stride:0.25)
   in
-  let w () =
-    NTDSL.init ~l:"bg_w" ~prec:Ir.Ops.single ~o:[ hh; kk; jj ]
-      ~f:(Ll_test.cycle ~dims:[| hh; kk; jj |] ~modulus:11 ~offset:(-5.) ~stride:0.5)
-      ()
+  let x () = NTDSL.init ~l:"bg_x" ~prec:Ir.Ops.single ~o:[ bb; ss; kk ] ~f:x_f () in
+  let w_f =
+    Ll_test.operand ~b:[]
+      ~o:(Array.to_list [| hh; kk; jj |])
+      ~i:[]
+      (Ll_test.cycle ~dims:[| hh; kk; jj |] ~modulus:11 ~offset:(-5.) ~stride:0.5)
   in
+  let w () = NTDSL.init ~l:"bg_w" ~prec:Ir.Ops.single ~o:[ hh; kk; jj ] ~f:w_f () in
+  p_all "qkv operands have f32-exact partial sums"
+    (Ll_test.reduction_cells ~out:[| bb; hh; ss; jj |] ~over:[| kk |] (fun o r ->
+         x_f [| o.(0); o.(2); r.(0) |] *. w_f [| o.(1); r.(0); o.(3) |]))
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   (* --- The q/k/v shape: rank-4 output, two outer batch loops (batch, head) --- *)
   (* Slots: j-blocks 0, s-blocks 1, h 2 (extent 4: "% 4"), b 3 (stride 4: "/ 4"). *)
   let reg = fold_reg in
@@ -312,11 +320,17 @@ let () =
      indexes the weight alone, the site whose bgrid-in twin launches the heads beside the column
      blocks the way the heads-merged layout does. --- *)
   (* Batch-grid slots: e-blocks 0, s-blocks 1, h 2 (extent 4: "% 4"), b 3 (stride 4: "/ 4"). *)
-  let wp () =
-    NTDSL.init ~l:"bg_wp" ~prec:Ir.Ops.single ~o:[ hh; jj; kk ]
-      ~f:(Ll_test.cycle ~dims:[| hh; jj; kk |] ~modulus:11 ~offset:(-5.) ~stride:0.5)
-      ()
+  let wp_f =
+    Ll_test.operand ~b:[]
+      ~o:(Array.to_list [| hh; jj; kk |])
+      ~i:[]
+      (Ll_test.cycle ~dims:[| hh; jj; kk |] ~modulus:11 ~offset:(-5.) ~stride:0.5)
   in
+  let wp () = NTDSL.init ~l:"bg_wp" ~prec:Ir.Ops.single ~o:[ hh; jj; kk ] ~f:wp_f () in
+  p_all "projection operands have f32-exact partial sums"
+    (Ll_test.reduction_cells ~out:[| bb; ss; hh; jj |] ~over:[| kk |] (fun o r ->
+         x_f [| o.(0); o.(1); r.(0) |] *. wp_f [| o.(2); o.(3); r.(0) |]))
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   leg ~tag:"projection" ~batch_product:(bb * hh) ~interior:(hh, ss) ~fold_div:(reg ^ " / 4")
     ~fold_mod:(reg ^ " % 4")
     ~build:(fun () ->
@@ -329,16 +343,24 @@ let () =
   (* Slots: j-blocks 0, i-blocks 1, h 2 (extent 2: "% 2"), b 3 (stride 2: "/ 2"). The zero nest
      and the companionless site both hoist [h] above [i]; positional slot order must match. *)
   let bt = 2 and ss2 = 16 and hh2 = 2 and kk2 = 8 and jj2 = 32 in
-  let att () =
-    NTDSL.init ~l:"bg_att" ~prec:Ir.Ops.single ~o:[ bt; ss2; hh2; kk2 ]
-      ~f:(Ll_test.cycle ~dims:[| bt; ss2; hh2; kk2 |] ~modulus:11 ~offset:0. ~stride:0.125)
-      ()
+  let att_f =
+    Ll_test.operand ~b:[]
+      ~o:(Array.to_list [| bt; ss2; hh2; kk2 |])
+      ~i:[]
+      (Ll_test.cycle ~dims:[| bt; ss2; hh2; kk2 |] ~modulus:11 ~offset:0. ~stride:0.125)
   in
-  let v () =
-    NTDSL.init ~l:"bg_v" ~prec:Ir.Ops.single ~o:[ bt; kk2; hh2; jj2 ]
-      ~f:(Ll_test.cycle ~dims:[| bt; kk2; hh2; jj2 |] ~modulus:7 ~offset:(-3.) ~stride:0.5)
-      ()
+  let att () = NTDSL.init ~l:"bg_att" ~prec:Ir.Ops.single ~o:[ bt; ss2; hh2; kk2 ] ~f:att_f () in
+  let v_f =
+    Ll_test.operand ~b:[]
+      ~o:(Array.to_list [| bt; kk2; hh2; jj2 |])
+      ~i:[]
+      (Ll_test.cycle ~dims:[| bt; kk2; hh2; jj2 |] ~modulus:7 ~offset:(-3.) ~stride:0.5)
   in
+  let v () = NTDSL.init ~l:"bg_v" ~prec:Ir.Ops.single ~o:[ bt; kk2; hh2; jj2 ] ~f:v_f () in
+  p_all "interior batch operands have f32-exact partial sums"
+    (Ll_test.reduction_cells ~out:[| bt; ss2; hh2; jj2 |] ~over:[| kk2 |] (fun o r ->
+         att_f [| o.(0); o.(1); o.(2); r.(0) |] *. v_f [| o.(0); r.(0); o.(2); o.(3) |]))
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   leg ~tag:"interior" ~batch_product:(bt * hh2) ~interior:(hh2, ss2) ~fold_div:(reg ^ " / 2")
     ~fold_mod:(reg ^ " % 2")
     ~build:(fun () ->

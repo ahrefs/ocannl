@@ -20,13 +20,12 @@
    fwd: the forward product, contraction innermost -- the control the interchange leaves alone.
 
    Executed assertions compare against a serial reference computed on the host from the same
-   discriminating inputs: every cell is a small dyadic, so every partial sum is exact in f32 and
-   bitwise equality is required whatever the accumulation order; the inputs are strictly positive,
-   so every reference cell is nonzero and a candidate that drops a write cannot pass. GPU backends
-   execute the GPU sketch families, and the tensorized one where the device advertises an f32 tile
-   (Metal); cc executes the CPU ones; the interchange alone executes everywhere. The tensorized
-   schedules are pinned structurally (prefix, replay) on every backend under a synthetic f32 mma
-   capability. *)
+   discriminating inputs: the host premise claims below check the small dyadic cells, so bitwise
+   equality is required whatever the accumulation order; the inputs are strictly positive, so every
+   reference cell is nonzero and a candidate that drops a write cannot pass. GPU backends execute
+   the GPU sketch families, and the tensorized one where the device advertises an f32 tile (Metal);
+   cc executes the CPU ones; the interchange alone executes everywhere. The tensorized schedules are
+   pinned structurally (prefix, replay) on every backend under a synthetic f32 mma capability. *)
 
 (* cc-fp-contract: exact-operands -- positive quarters and eighths with an explicit fma; every
    gradient sum is exact *)
@@ -57,7 +56,7 @@ and ni = 64
 
 let node = Ll_test.node_factory ~first_id:118300 ~dims:[| 1 |] ()
 
-(* Strictly positive dyadic cells (offset 1): every product and partial sum is exact in f32. *)
+(* Strictly positive dyadic cells (offset 1), checked against the actual contractions below. *)
 let values ~dims ~modulus ~stride =
   let n = Array.fold dims ~init:1 ~f:( * ) in
   Array.init n ~f:(Ll_test.cycle_flat ~dims ~modulus ~offset:1. ~stride)
@@ -68,7 +67,9 @@ let w_dims = [| no; ni |]
 let dy_v = values ~dims:dy_dims ~modulus:7 ~stride:0.25
 let x_v = values ~dims:x_dims ~modulus:5 ~stride:0.125
 let w_v = values ~dims:w_dims ~modulus:5 ~stride:0.125
-let at dims v idcs = v.(Ll_test.flat ~dims idcs)
+
+let at dims v =
+  Ll_test.operand ~b:[] ~o:(Array.to_list dims) ~i:[] (fun idcs -> v.(Ll_test.flat ~dims idcs))
 
 type case = {
   tag : string;
@@ -427,6 +428,22 @@ let leg (c : case) ~expect_prefix ~ko_extents ~nk =
           family_claim label (run_family ~what:"cpu" cpu_seeds))
 
 let () =
+  let cells = Ll_test.reduction_cells in
+  let premises =
+    cells ~out:w_dims ~over:[| nb; ns |] (fun o r ->
+        at dy_dims dy_v [| r.(0); r.(1); o.(0) |] *. at x_dims x_v [| r.(0); r.(1); o.(1) |])
+    @ cells ~out:x_dims ~over:[| no |] (fun o r ->
+        at dy_dims dy_v [| o.(0); o.(1); r.(0) |] *. at w_dims w_v [| r.(0); o.(2) |])
+    @ cells ~out:[| ni; no |] ~over:[| nb; ns |] (fun o r ->
+        at dy_dims dy_v [| r.(0); r.(1); o.(1) |] *. at x_dims x_v [| r.(0); r.(1); o.(0) |])
+    @ cells ~out:hd_dims ~over:[| ns |] (fun o r ->
+        at sm_dims sm_v [| o.(0); r.(0); o.(2); o.(1) |]
+        *. at hd_dims hd_v [| o.(0); r.(0); o.(2); o.(3) |])
+    @ cells ~out:dy_dims ~over:[| ni |] (fun o r ->
+        at x_dims x_v [| o.(0); o.(1); r.(0) |] *. at w_dims w_v [| o.(2); r.(0) |])
+  in
+  p_all "all interchange fixtures have f32-exact partial sums" premises
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   p_all "reference: every weight-gradient cell is nonzero" (Array.to_list wgrad.want) ~f:(fun v ->
       Float.(v <> 0.));
   p_all "reference: every data-gradient cell is nonzero" (Array.to_list dgrad.want) ~f:(fun v ->

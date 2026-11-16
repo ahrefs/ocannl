@@ -1,3 +1,4 @@
+out-projection operands have f32-exact partial sums: true
 out_proj: the multi-axis contraction is detected as a matmul site: true
 out_proj: the outer contraction loops carry the expected extents: true
 out_proj: m_k is the innermost contraction loop: true
@@ -26,6 +27,7 @@ out_proj f32: the multi-axis site seeds a pipelined-staged tensorized candidate:
 out_proj f32: the pipelined-staged candidate compiles and runs: true
 out_proj f32: the pipelined-staged candidate matches the serial twin bitwise: true
 out_proj f32: the pipelined-staged candidate renders the tensor-core intrinsic: true
+awkward out-projection operands have f32-exact partial sums: true
 out_proj: the CPU k gate refutes on the site whose innermost extent it does not divide: true
 out_proj: a refuted k-extent names the innermost contraction extent, not the site's whole K: true
 single-axis: the same refuted k-extent keeps the bare k= witness: true
@@ -38,6 +40,7 @@ out_proj_odd: every padded GPU blocktile seed's schedule constructs: true
 out_proj_odd: every padded GPU blocktile seed validates: true
 out_proj_odd: every padded GPU blocktile seed compiles and runs: true
 out_proj_odd: every padded candidate matches the serial reference bitwise: true
+three-axis operands have f32-exact partial sums: true
 three_axis_companion: the multi-axis contraction is detected as a matmul site: true
 three_axis_companion: the outer contraction loops carry the expected extents: true
 three_axis_companion: m_k is the innermost contraction loop: true

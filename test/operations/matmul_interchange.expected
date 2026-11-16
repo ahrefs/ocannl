@@ -1,3 +1,4 @@
+all interchange fixtures have f32-exact partial sums: true
 reference: every weight-gradient cell is nonzero: true
 reference: every data-gradient cell is nonzero: true
 reference: every lm_head-gradient cell is nonzero: true

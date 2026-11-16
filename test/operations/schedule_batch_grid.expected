@@ -1,3 +1,4 @@
+qkv operands have f32-exact partial sums: true
 qkv: batch-grid twins are seeded: true
 qkv: one batch-grid twin per serial-batch geometry: true
 qkv: no bgrid-in twin on a site without interior batch loops: true
@@ -18,6 +19,7 @@ qkv_companion: the fold arithmetic decodes innermost-mod, outermost-div: true
 qkv_companion: every seed compiles and runs: true
 qkv_companion: every candidate matches the serial reference bitwise: true
 qkv_companion: the generated source folds the batch axes onto the .z register: true
+projection operands have f32-exact partial sums: true
 projection: batch-grid twins are seeded: true
 projection: one batch-grid twin per serial-batch geometry: true
 projection: one interior-inside-row-blocks (bgrid-in) twin per serial-batch geometry: true
@@ -30,6 +32,7 @@ projection: the fold arithmetic decodes innermost-mod, outermost-div: true
 projection: every seed compiles and runs: true
 projection: every candidate matches the serial reference bitwise: true
 projection: the generated source folds the batch axes onto the .z register: true
+interior batch operands have f32-exact partial sums: true
 interior: batch-grid twins are seeded: true
 interior: one batch-grid twin per serial-batch geometry: true
 interior: one interior-inside-row-blocks (bgrid-in) twin per serial-batch geometry: true

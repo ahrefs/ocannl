@@ -17,10 +17,9 @@
    counter back incremented. [runs] such runs with no sync between them must leave the counter at
    [runs]; an overlapping pair loses at least one increment. The increment is exact by construction:
    [outer * m] FMA steps of [1/(outer * m)] over a device-resident [ones] operand, so the compiler
-   cannot fold the spin (it cannot know [ones] holds ones) and every partial sum is a dyadic
-   rational the accumulator holds exactly up to the run count here. The read is data-bound to the
-   first step ([acc = counter; acc = fma(acc, ones[i], steps[i])]), so no compiler can sink the load
-   below the spin. *)
+   cannot fold the spin (it cannot know [ones] holds ones) and the host claim below checks the
+   increments through the run count here. The read is data-bound to the first step ([acc = counter;
+   acc = fma(acc, ones[i], steps[i])]), so no compiler can sink the load below the spin. *)
 
 open Base
 module Tn = Ir.Tnode
@@ -38,6 +37,16 @@ let runs = 16
 (* [1/(outer * m)] = 2^-18: [outer * m] steps of it sum to exactly 1, and [runs + k * 2^-18] stays
    exact in f32 while [runs] is below 2^5 (5 + 18 < 24 mantissa bits). *)
 let step = 1. /. Float.of_int (outer * m)
+let ones_values = Array.create ~len:m 1.
+let step_values = Array.create ~len:m step
+
+let () =
+  p_all "spin multiplicands preserve the accumulator" (Array.to_list ones_values)
+    ~f:(Float.equal 1.);
+  p_all "spin increments including the largest starting counter are f32-exact"
+    [ Float.of_int (runs - 1) :: List.init (outer * m) ~f:(fun k -> step_values.(k % m)) ]
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single))
+
 let counter = node "run_counter"
 let acc = node "spin_acc"
 let ones = node ~dims:[| m |] "spin_ones"
@@ -85,8 +94,8 @@ let compile ~name =
   let o = Ll_test.optimize ~materialized:[ counter; ones; steps ] ~name llc in
   let ctx = Context.auto () in
   let ctx, routine = Context.compile ~name ~prelowered:o ctx Ir.Assignments.empty_comp Idx.Empty in
-  let ctx = Context.set_values ctx ones (Array.create ~len:m 1.) in
-  let ctx = Context.set_values ctx steps (Array.create ~len:m step) in
+  let ctx = Context.set_values ctx ones ones_values in
+  let ctx = Context.set_values ctx steps step_values in
   let ctx = Context.set_values ctx counter [| 0. |] in
   (ctx, routine)
 

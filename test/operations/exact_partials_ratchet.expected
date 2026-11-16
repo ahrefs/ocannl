@@ -3,23 +3,8 @@ the reader read prose beside a derivation in some test source: true
 the walk read the arrayjit package's test sources too: true
 every sentence claiming the exactness of partial sums sits beside its derivation, or in its file's exemption row: true
 every exemption row is still earned: true
-test/operations/accum_width.ml -- 1 uncovered: written before the rule: derive the premise with Ll_test.exact_partials when next touched
-test/operations/back_to_back_runs.ml -- 1 uncovered: written before the rule: derive the premise with Ll_test.exact_partials when next touched
-test/operations/deferred_hit_compiles.ml -- 1 uncovered: written before the rule: derive the premise with Ll_test.exact_partials when next touched
 test/operations/discriminating_values.ml -- 1 uncovered: the drift claim exhibits its serial partial sums directly; an every-association derivation is the follow-up
-test/operations/fragment_scope_move_legality.ml -- 1 uncovered: written before the rule: derive the premise with Ll_test.exact_partials when next touched
-test/operations/hardware_warp_shuffle.ml -- 1 uncovered: written before the rule: derive the premise with Ll_test.exact_partials when next touched
-test/operations/matmul_interchange.ml -- 2 uncovered: written before the rule: derive the premise with Ll_test.exact_partials when next touched
-test/operations/privatize_recheck.ml -- 1 uncovered: written before the rule: derive the premise with Ll_test.exact_partials when next touched
 test/operations/scan_companion_coverage.ml -- 1 uncovered: leg 4 derives z's premise in its own item; this note on z's operands sits apart from it
-test/operations/schedule_batch_grid.ml -- 2 uncovered: written before the rule: derive the premise with Ll_test.exact_partials when next touched
-test/operations/schedule_contraction_nest.ml -- 2 uncovered: written before the rule: derive the premise with Ll_test.exact_partials when next touched
-test/operations/schedule_ldmatrix_matmul.ml -- 1 uncovered: written before the rule: derive the premise with Ll_test.exact_partials when next touched
-test/operations/schedule_pad.ml -- 1 uncovered: written before the rule: derive the premise with Ll_test.exact_partials when next touched
-test/operations/split_reduce_pair.ml -- 2 uncovered: written before the rule: derive the premise with Ll_test.exact_partials when next touched
-test/operations/tile_mma_narrow.ml -- 2 uncovered: written before the rule: derive the premise with Ll_test.exact_partials when next touched
-test/operations/tune_arm_a_replay.ml -- 1 uncovered: written before the rule: derive the premise with Ll_test.exact_partials when next touched
-test/operations/workgroup_memory_accounting.ml -- 1 uncovered: written before the rule: derive the premise with Ll_test.exact_partials when next touched
 test/support/ll_test.ml -- 4 uncovered: the harness's operand docs state the premises its helpers are built for, exact_partials' own included; a test derives them at its use
 test/support/exact_partials_scan.ml -- every sentence: the reader's own documentation quotes the phrases it reads
 test/operations/exact_partials_scan_cases.ml -- every sentence: the reader's cases plant the phrases on synthetic sources

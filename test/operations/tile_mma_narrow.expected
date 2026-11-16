@@ -1,3 +1,5 @@
+packed bf16 operands have bf16-exact partial sums: true
+packed half operands have half-exact partial sums: true
 bf16 packed+tensorized matmul matches the serial twin bitwise: true
 bf16 packing widens into f32 panels; only d crosses the narrow bridge: true
 bf16 matmul with inexact partial sums matches the serial twin bitwise (gh-ocannl-639): true

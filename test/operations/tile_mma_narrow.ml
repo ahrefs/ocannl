@@ -17,16 +17,15 @@
    bridges. Skipped (with a stderr note) where the toolchain has no [_Float16] at all — the
    forced-native kernel then fails to compile.
 
-   Inputs are exactly representable at their storage precision with all partial sums exact (the
-   [schedule_mma_matmul] discipline), so every parity check is BITWISE; the structural pins are what
-   assert the rendering. Since gh-ocannl-639 the bitwise parity no longer depends on that input
-   discipline for the accumulator: the serial fallback holds its accumulator at compute precision
-   across the whole k extent and narrows once, exactly like the register tiling — the final bf16
-   section checks the parity on inputs whose partial sums are NOT bf16-exact, which the pre-639
-   per-k-step narrowing would visibly split (test/operations/accum_width.ml pins that divergence as
-   its policy-off negative control). On GPU backends the trailing [Tensorize] is dropped (a
-   unit-lane [Tile_mma] must not reach hardware intrinsics): the widened packing is still exercised
-   for value parity. *)
+   The host derivations below check the operand premises for the initial packed matmuls, so every
+   parity check is BITWISE; the structural pins are what assert the rendering. Since gh-ocannl-639
+   the bitwise parity no longer depends on that input discipline for the accumulator: the serial
+   fallback holds its accumulator at compute precision across the whole k extent and narrows once,
+   exactly like the register tiling — the final bf16 section checks the parity on inputs whose
+   partial sums are NOT bf16-exact, which the pre-639 per-k-step narrowing would visibly split
+   (test/operations/accum_width.ml pins that divergence as its policy-off negative control). On GPU
+   backends the trailing [Tensorize] is dropped (a unit-lane [Tile_mma] must not reach hardware
+   intrinsics): the widened packing is still exercised for value parity. *)
 
 (* cc-fp-contract: exact-operands -- dyadic operands keep every product and sum exact, the native
    f16 accumulators included *)
@@ -137,20 +136,42 @@ let run_census ~name ?schedule (out : Tensor.t) =
 let run ~name ?schedule out = fst (run_census ~name ?schedule out)
 
 let () =
+  let ba =
+    Ll_test.operand ~b:[]
+      ~o:(Array.to_list [| n; n |])
+      ~i:[]
+      (Ll_test.cycle ~dims:[| n; n |] ~modulus:3 ~offset:0. ~stride:0.25)
+  in
+  let bb =
+    Ll_test.operand ~b:[]
+      ~o:(Array.to_list [| n; n |])
+      ~i:[]
+      (Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:(-2.) ~stride:0.5)
+  in
+  let ha =
+    Ll_test.operand ~b:[]
+      ~o:(Array.to_list [| n; n |])
+      ~i:[]
+      (Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:0. ~stride:0.125)
+  in
+  let hb =
+    Ll_test.operand ~b:[]
+      ~o:(Array.to_list [| n; n |])
+      ~i:[]
+      (Ll_test.cycle ~dims:[| n; n |] ~modulus:7 ~offset:(-3.) ~stride:0.25)
+  in
+  p_all "packed bf16 operands have bf16-exact partial sums"
+    (Ll_test.matmul_products ~m:n ~n ~k:n ba bb)
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.bfloat16));
+  p_all "packed half operands have half-exact partial sums"
+    (Ll_test.matmul_products ~m:n ~n ~k:n ha hb)
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.half));
   (* === bf16 storage, f32 compute, both panels widened at pack time === Inputs: a in {0, 1/4, 1/2},
      b in {-1, -1/2, 0, 1/2, 1}; every product is a multiple of 1/8 bounded by 1/2, and every
      partial sum over k = 64 is a multiple of 1/8 bounded by 32 — exactly representable in bf16's 8
      significand bits, so parity is bitwise on either rendering and accumulator width. *)
-  let mab =
-    NTDSL.init ~l:"mab" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ]
-      ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:3 ~offset:0. ~stride:0.25)
-      ()
-  in
-  let mbb =
-    NTDSL.init ~l:"mbb" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ]
-      ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:(-2.) ~stride:0.5)
-      ()
-  in
+  let mab = NTDSL.init ~l:"mab" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:ba () in
+  let mbb = NTDSL.init ~l:"mbb" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:bb () in
   let%op bc0 = mab * mbb in
   Tn.update_prec bc0.Tensor.value Ir.Ops.bfloat16;
   let want_b = nonzero "nrw_bf16_serial" (run ~name:"nrw_bf16_serial" bc0) in
@@ -219,16 +240,8 @@ let () =
   (* === half storage, hoisted f32 B~ panel (host-side converting pack) + in-kernel f32 A~ === *)
   (* Half leaves are minted at their precision ([ndarray] settles a leaf as [Specified] single);
      the B operand is additionally declared constant so the hoisted pack applies to it. *)
-  let mah =
-    NTDSL.init ~l:"mah" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ n ]
-      ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:0. ~stride:0.125)
-      ()
-  in
-  let mbh =
-    NTDSL.init ~l:"mbh" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ n ]
-      ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:7 ~offset:(-3.) ~stride:0.25)
-      ()
-  in
+  let mah = NTDSL.init ~l:"mah" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ n ] ~f:ha () in
+  let mbh = NTDSL.init ~l:"mbh" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ n ] ~f:hb () in
   Tn.set_host_constant mbh.Tensor.value;
   let%op hc0 = mah * mbh in
   Tn.update_prec hc0.Tensor.value Ir.Ops.half;

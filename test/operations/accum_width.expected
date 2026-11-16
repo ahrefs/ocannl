@@ -10,6 +10,7 @@ the declined Vectorized f16 reduction keeps f32 residency (equals the once-narro
 the serial f16 reduction under Fp16_wide + narrow_compute_f32=false equals the once-narrowed wide reference: true
 under Fp16_wide the f16 naive matmul equals the once-narrowed wide-accumulation reference: true
 the default-policy f16 matmul matches the wide reference exactly where the backend widens (CPU, CUDA, HIP) and diverges where it keeps storage residency (Metal): true
+bf16 matmul products have f32-exact partial sums: true
 bf16 naive matmul equals the once-narrowed wide-accumulation reference: true
 the emitted serial k-loop narrows the accumulator once per cell, not per step: true
 a merge-buffer read is not the accumulator's own cell (the update shape is recognized): true

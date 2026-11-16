@@ -12,7 +12,7 @@
    uncovered sentences EXACTLY, so converting one (deriving the premise with [exact_partials], or
    rewording a sentence whose claim was not about exactness) lowers the count in the same commit,
    and a new uncovered sentence anywhere fails. A row whose file has none left is stale and fails
-   too. Converted when a file is next touched; the four sites gh-ocannl-1729 named are converted. *)
+   too. gh-ocannl-1826 retired the written-before-the-rule rows; only reasoned exemptions remain. *)
 open Base
 open Stdio
 open Verdict.Claims
@@ -21,17 +21,7 @@ module Dune = Test_scan.Dune_stanza_scan
 module Sources = Test_scan.Config_key_scan
 
 let exemptions : Scan.exemption list =
-  let debt =
-    "written before the rule: derive the premise with Ll_test.exact_partials when next touched"
-  in
   [
-    { Scan.path = "test/operations/accum_width.ml"; allowance = Uncovered 1; reason = debt };
-    { Scan.path = "test/operations/back_to_back_runs.ml"; allowance = Uncovered 1; reason = debt };
-    {
-      Scan.path = "test/operations/deferred_hit_compiles.ml";
-      allowance = Uncovered 1;
-      reason = debt;
-    };
     {
       Scan.path = "test/operations/discriminating_values.ml";
       allowance = Uncovered 1;
@@ -40,42 +30,10 @@ let exemptions : Scan.exemption list =
          derivation is the follow-up";
     };
     {
-      Scan.path = "test/operations/fragment_scope_move_legality.ml";
-      allowance = Uncovered 1;
-      reason = debt;
-    };
-    {
-      Scan.path = "test/operations/hardware_warp_shuffle.ml";
-      allowance = Uncovered 1;
-      reason = debt;
-    };
-    { Scan.path = "test/operations/matmul_interchange.ml"; allowance = Uncovered 2; reason = debt };
-    { Scan.path = "test/operations/privatize_recheck.ml"; allowance = Uncovered 1; reason = debt };
-    {
       Scan.path = "test/operations/scan_companion_coverage.ml";
       allowance = Uncovered 1;
       reason =
         "leg 4 derives z's premise in its own item; this note on z's operands sits apart from it";
-    };
-    { Scan.path = "test/operations/schedule_batch_grid.ml"; allowance = Uncovered 2; reason = debt };
-    {
-      Scan.path = "test/operations/schedule_contraction_nest.ml";
-      allowance = Uncovered 2;
-      reason = debt;
-    };
-    {
-      Scan.path = "test/operations/schedule_ldmatrix_matmul.ml";
-      allowance = Uncovered 1;
-      reason = debt;
-    };
-    { Scan.path = "test/operations/schedule_pad.ml"; allowance = Uncovered 1; reason = debt };
-    { Scan.path = "test/operations/split_reduce_pair.ml"; allowance = Uncovered 2; reason = debt };
-    { Scan.path = "test/operations/tile_mma_narrow.ml"; allowance = Uncovered 2; reason = debt };
-    { Scan.path = "test/operations/tune_arm_a_replay.ml"; allowance = Uncovered 1; reason = debt };
-    {
-      Scan.path = "test/operations/workgroup_memory_accounting.ml";
-      allowance = Uncovered 1;
-      reason = debt;
     };
     {
       Scan.path = "test/support/ll_test.ml";

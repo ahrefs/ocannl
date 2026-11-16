@@ -1,3 +1,4 @@
+both fragment-scope bases have same-sign half-exact partial sums: true
 each serial reference is not all zeros: true
 each base marks a simdgroup fragment and has no fragment-scope violation: true
 each move's applied IR has exactly its expected violations (or none): true

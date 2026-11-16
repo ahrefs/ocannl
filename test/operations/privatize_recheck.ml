@@ -3,7 +3,7 @@
    over bf16 accumulators seeded at 256, where bf16's spacing is 2: each outer iteration adds 1.25
    in steps below 1, so a program narrowing once gives 258 (256 + 2.5), one narrowing per outer
    iteration gives 260 (257.25 rounds up, twice), and one narrowing per step stays at 256. The
-   inputs are dyadic, so every partial sum is exact in f32 whatever the order.
+   inputs are dyadic; the host premise claim below checks the f32 bound.
 
    1. The scope grammar and the tile's lifetime, refused at the op (gh-ocannl-1467). A [Local_scope]
    body is hoisted out of its position, so a later op that puts into the scope a materializing
@@ -57,6 +57,7 @@ module Numerics = Ir.Numerics
 module Outcome = Ir.Schedule_outcome
 open Verdict.Claims
 
+let initial = 256.0
 let bf16 = Ir.Ops.bfloat16
 let bin op a b = LL.Binop (op, (a, bf16), (b, bf16))
 let it = Ll_test.iter
@@ -337,11 +338,11 @@ let scope_legs () =
   (* The control: the same tile with nothing breaking its scope. *)
   let serial =
     let o, acc, x, _, _, _ = build_rst "prc_serial" in
-    exec ~name:"prc_serial" ~acc ~init:[| 256.0 |] ~x ~xs:xs_rst o
+    exec ~name:"prc_serial" ~acc ~init:[| initial |] ~x ~xs:xs_rst o
   in
   let o, acc, x, r, s, _ = build_rst "prc_ctl" in
   let ctl = Sched.apply [ pz ~target:acc ~over:r; unroll s ] o in
-  let values = exec ~name:"prc_ctl" ~acc ~init:[| 256.0 |] ~x ~xs:xs_rst ctl in
+  let values = exec ~name:"prc_ctl" ~acc ~init:[| initial |] ~x ~xs:xs_rst ctl in
   Stdio.eprintf "privatize_recheck: serial %s, control %s (not part of the golden)\n%!"
     (floats serial) (floats values);
   p claim_control
@@ -441,7 +442,7 @@ let provenance_legs () =
   let run_ik name sched =
     let o, acc, x, i, k = build_ik name in
     let scheduled = Sched.apply (sched ~acc ~i ~k) o in
-    (exec ~name ~acc ~init:[| 256.0; 256.0 |] ~x ~xs:xs_ik scheduled, scheduled.LL.llc)
+    (exec ~name ~acc ~init:[| initial; initial |] ~x ~xs:xs_ik scheduled, scheduled.LL.llc)
   in
   (* The cell varies under [i], which the [Swap] puts inside the reduction loop: code generation
      localizes no level of the split program, which narrows per step. *)
@@ -473,7 +474,7 @@ let provenance_legs () =
       @ if privatize then [ pz ~target:acc ~over:mo ] else []
     in
     let scheduled = Sched.apply ops o in
-    (exec ~name ~acc ~init:[| 256.0; 256.0 |] ~x ~xs:xs_ik scheduled, scheduled.LL.llc)
+    (exec ~name ~acc ~init:[| initial; initial |] ~x ~xs:xs_ik scheduled, scheduled.LL.llc)
   in
   let inside_twin, _ = run_ikm "prc_ikm_twin" ~privatize:false in
   let inside, inside_llc = run_ikm "prc_ikm_priv" ~privatize:true in
@@ -503,7 +504,7 @@ let minted_legs () =
   let run_ikm name sched =
     let o, acc, x, i, k, m = build_ikm name in
     let scheduled = Sched.apply (sched ~acc ~i ~k ~m) o in
-    (exec ~name ~acc ~init:[| 256.0; 256.0 |] ~x ~xs:xs_ik scheduled, scheduled.LL.llc)
+    (exec ~name ~acc ~init:[| initial; initial |] ~x ~xs:xs_ik scheduled, scheduled.LL.llc)
   in
   (* As [swapped_split]: the [Swap] puts the cell's [i] inside the reduction, so code generation
      localizes no level of the scheduled program, which narrows per step. *)
@@ -546,7 +547,7 @@ let minted_legs () =
       @ if privatize then [ pz ~target:acc ~over:(List.hd_exn segments) ] else []
     in
     let scheduled = Sched.apply ops o in
-    (exec ~name ~acc ~init:[| 256.0; 256.0 |] ~x ~xs:xs_ik scheduled, scheduled.LL.llc)
+    (exec ~name ~acc ~init:[| initial; initial |] ~x ~xs:xs_ik scheduled, scheduled.LL.llc)
   in
   let part_twin, _ = run_part "prc_part_twin" ~privatize:false in
   let part, part_llc = run_part "prc_part_priv" ~privatize:true in
@@ -594,6 +595,11 @@ let xs_ikm =
     0.25;
   |]
 
+let () =
+  p_all "all privatize fixtures including the accumulator seed have f32-exact partial sums"
+    (List.map [ xs_rst; xs_ik; xs_ikm ] ~f:(fun xs -> initial :: Array.to_list xs))
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single))
+
 let node_sr = Ll_test.node_factory ~prec:bf16 ~first_id:14200 ~dims:[| 2 |] ()
 
 (* [i { k { m { acc[i] += x[i, k, m] }; tot[i] += x[i, k, 0] } }]: [tot] is the [Split_reduce]
@@ -626,7 +632,7 @@ let build_ikm_tot name =
 
 let exec_tot ~name ~acc ~tot ~x o =
   Ll_test.execute ~name o
-    ~seed:[ (acc, [| 256.0; 256.0 |]); (tot, [| 0.0; 0.0 |]); (x, xs_ikm) ]
+    ~seed:[ (acc, [| initial; initial |]); (tot, [| 0.0; 0.0 |]); (x, xs_ikm) ]
     ~read:[ acc ]
   |> List.hd_exn |> Array.to_list
 

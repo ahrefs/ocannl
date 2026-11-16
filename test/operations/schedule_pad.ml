@@ -103,6 +103,13 @@ let mbv =
   Array.init (k_ext * n_ext)
     ~f:(Ll_test.cycle_flat ~dims:[| k_ext; n_ext |] ~modulus:17 ~offset:(-8.) ~stride:1.)
 
+let () =
+  p_all "padded matmul operands have f32-exact partial sums"
+    (Ll_test.matmul_products ~m:m_ext ~n:n_ext ~k:k_ext
+       (fun idcs -> mav.(Ll_test.flat ~dims:[| m_ext; k_ext |] idcs))
+       (fun idcs -> mbv.(Ll_test.flat ~dims:[| k_ext; n_ext |] idcs)))
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single))
+
 (* === CPU leg: padded packed GEBP (mirrors autotune's [cpu_mma_pack_sketch_schedule] with [bn = 0],
    plus the pads). Pad i to [bm], k to [bk]; split; sink to [k_o { i_o { i_i { j { k_i }}}}]; pack
    B~ [bk x n] at [k_o] and A~ [bm x bk] at [i_o]; tensorize with a unit lane. The pad guards
@@ -356,18 +363,18 @@ let () =
        Ir.C_syntax.Tensorized)
 
 (* === Every 16 x 16 CPU packed seed against the serial twin on NON-DYADIC operands, bitwise
-   (gh-ocannl-1682). The leg above runs dyadic operands, whose products and partial sums are exact
-   under any rounding, so it cannot tell one rounding per k step from two. Here every product and
-   partial sum rounds (steps of a tenth and of a third, cycled over prime moduli). The register tile
-   spells its update as an explicit FMA; the serial loop's [acc + a * b] is the C compiler's to
-   contract, and gcc's x86 tunings used to decline exactly this loop-carried chain while clang fused
-   it, so the seeds agreed with the serial loop on a Mac and missed it by an ulp on Linux
-   ([Cc_backend.fp_contract_flag] now turns that heuristic off). Under [cc_backend_fp_contract=off]
-   the tile renders its update unfused, as the serial loop computes it (gh-ocannl-1457), so the
-   claim holds there too; under [on] with a gcc before 14, or on a target without an FMA, nothing
-   contracts the serial loop while the tile fuses, so the claim is skipped there: a bitwise claim
-   there needs [fp_contract=true] (docs/agent-notes/backend-precision-and-simd.md). Each seed's
-   distance from the serial loop, and the compile line, go to stderr.
+   (gh-ocannl-1682). The leg above runs dyadic operands checked by the host premise claim, so it
+   cannot tell one rounding per k step from two. Here every product and partial sum rounds (steps of
+   a tenth and of a third, cycled over prime moduli). The register tile spells its update as an
+   explicit FMA; the serial loop's [acc + a * b] is the C compiler's to contract, and gcc's x86
+   tunings used to decline exactly this loop-carried chain while clang fused it, so the seeds agreed
+   with the serial loop on a Mac and missed it by an ulp on Linux ([Cc_backend.fp_contract_flag] now
+   turns that heuristic off). Under [cc_backend_fp_contract=off] the tile renders its update
+   unfused, as the serial loop computes it (gh-ocannl-1457), so the claim holds there too; under
+   [on] with a gcc before 14, or on a target without an FMA, nothing contracts the serial loop while
+   the tile fuses, so the claim is skipped there: a bitwise claim there needs [fp_contract=true]
+   (docs/agent-notes/backend-precision-and-simd.md). Each seed's distance from the serial loop, and
+   the compile line, go to stderr.
 
    The same seeds carry the k-block split (gh-ocannl-1670): every one, in each packing shape the
    site seeds, partitions its k-block loop at the last full block ([Sched.pad_edge_partition]: k =

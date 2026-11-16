@@ -32,9 +32,9 @@
    triple: every fixture, compiled anyway as a candidate, renders exactly as many lane-0 scalar
    fallbacks as the oracle finds violations in the IR it was compiled from, and at least one
    tensorized statement besides where it finds none — and computes the serial twin's values bitwise
-   (small NONNEGATIVE integer operands: every product and partial sum is exact in half, and every
-   product has one sign). The two bases compile there too, with no move, as the reference point. On
-   the C backends a scope and a bare [Tile_mma] render alike, so there is nothing to relate there.
+   (small NONNEGATIVE integer operands, whose premise the host claim below derives). The two bases
+   compile there too, with no move, as the reference point. On the C backends a scope and a bare
+   [Tile_mma] render alike, so there is nothing to relate there.
 
    Why one sign (gh-ocannl-1420): gfx11's WMMA instruction is not exactly rounded when products
    cancel — [1*1 + 1*(-1)] comes back as [-2^-24] from the raw builtin, on both accumulator widths,
@@ -196,15 +196,24 @@ let reasons =
 let () =
   (* Values [0 .. modulus - 1]: nonnegative, so no two products cancel (the header's "why one
      sign"), and every 64-term sum stays at most 512, exact in half. *)
-  let operand ~l ~dims ~modulus =
-    NTDSL.init ~l ~prec:Ir.Ops.half ~o:(Array.to_list dims)
-      ~f:(Ll_test.cycle ~dims ~modulus ~offset:0. ~stride:1.)
-      ()
+  let cells ~dims ~modulus =
+    Ll_test.operand ~b:[] ~o:(Array.to_list dims) ~i:[]
+      (Ll_test.cycle ~dims ~modulus ~offset:0. ~stride:1.)
   in
-  let ma = operand ~l:"ma" ~dims:[| n; n |] ~modulus:5 in
-  let mb = operand ~l:"mb" ~dims:[| n; n |] ~modulus:3 in
-  let x = operand ~l:"x" ~dims:[| n; 2; 32 |] ~modulus:5 in
-  let w = operand ~l:"w" ~dims:[| 2; 32; n |] ~modulus:3 in
+  let ma_f = cells ~dims:[| n; n |] ~modulus:5 in
+  let mb_f = cells ~dims:[| n; n |] ~modulus:3 in
+  let x_f = cells ~dims:[| n; 2; 32 |] ~modulus:5 in
+  let w_f = cells ~dims:[| 2; 32; n |] ~modulus:3 in
+  let operand ~l ~dims ~f = NTDSL.init ~l ~prec:Ir.Ops.half ~o:(Array.to_list dims) ~f () in
+  p_all "both fragment-scope bases have same-sign half-exact partial sums"
+    (Ll_test.matmul_products ~m:n ~n ~k:n ma_f mb_f
+    @ Ll_test.reduction_cells ~out:[| n; n |] ~over:[| 2; 32 |] (fun o k ->
+        x_f [| o.(0); k.(0); k.(1) |] *. w_f [| k.(0); k.(1); o.(1) |]))
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.half));
+  let ma = operand ~l:"ma" ~dims:[| n; n |] ~f:ma_f in
+  let mb = operand ~l:"mb" ~dims:[| n; n |] ~f:mb_f in
+  let x = operand ~l:"x" ~dims:[| n; 2; 32 |] ~f:x_f in
+  let w = operand ~l:"w" ~dims:[| 2; 32; n |] ~f:w_f in
   let half (t : Tensor.t) =
     Tn.update_prec t.Tensor.value Ir.Ops.half;
     t

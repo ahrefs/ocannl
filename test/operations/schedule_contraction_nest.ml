@@ -28,16 +28,16 @@
    it is where the gh-ocannl-683 extent label is read off.
 
    Executed assertions compare every candidate against a serial reference computed from the same
-   discriminating inputs. For the f32 legs the values vary with every index and keep all partial
-   sums exactly representable, so bitwise equality is required regardless of the accumulation order
-   a tiling imposes; every compared cell of the contraction's output is required nonzero, so a
-   candidate that drops a write and leaves the zero-initialized destination in place cannot pass
-   (the companion leg compares the materialized pre-relu result as well as the relu'd tail, which
-   legitimately zeros cells). GPU backends execute the blocktile family (workgroup-shared staging)
-   and, where the device advertises a uniform-bf16 tile, the tensorized family, bitwise against the
-   serial twin on exact same-sign data (the leg below says why); cc executes the CPU families
-   (packed and register-tiled pipelines included), so every backend executes a
-   multi-axis-contraction sketch. *)
+   discriminating inputs. For the f32 legs the values vary with every index and the host checks
+   below derive their reduction premises, so bitwise equality is required regardless of the
+   accumulation order a tiling imposes; every compared cell of the contraction's output is required
+   nonzero, so a candidate that drops a write and leaves the zero-initialized destination in place
+   cannot pass (the companion leg compares the materialized pre-relu result as well as the relu'd
+   tail, which legitimately zeros cells). GPU backends execute the blocktile family
+   (workgroup-shared staging) and, where the device advertises a uniform-bf16 tile, the tensorized
+   family, bitwise against the serial twin on exact same-sign data (the leg below says why); cc
+   executes the CPU families (packed and register-tiled pipelines included), so every backend
+   executes a multi-axis-contraction sketch. *)
 
 (* cc-fp-contract: exact-operands -- half-integer times quarter-step cycles, Ll_test.exact_partials
    for bf16 *)
@@ -352,14 +352,14 @@ let leg ~tag ~ko_extents ~nk ?(companion = false) ~build () =
 (* The tensorized pipelines through the real mma hook: an out projection at bf16 -- the one operand
    format the wmma backends and Metal all advertise in the uniform combination -- seeded against
    [Context.hardware_limits], executing one candidate per tensorized shape this site seeds
-   (unstaged, staged, batch-grid) and comparing it with the serial twin BITWISE -- the inputs keep
-   every partial sum exact in bf16 and every product of one sign, which is what makes gfx11's WMMA
-   exact (gh-ocannl-1420; on an inexact sum it is not correctly rounded, gh-ocannl-1509; the leg
-   held a 5% tolerance until gh-ocannl-1432) -- and checking that the emitted source reaches the
-   backend's intrinsic rather than the scalar fallback. Where the device advertises no such tile
-   (cc; an f32-only capability) the leg is reported skipped; where it does, a shape the site fails
-   to seed fails the shape's claims (gh-ocannl-1115) -- the gate is the capability, never the seeds
-   under test.
+   (unstaged, staged, batch-grid) and comparing it with the serial twin BITWISE -- the host claim in
+   the bf16 fixture derives its reduction premise, which is what makes gfx11's WMMA exact
+   (gh-ocannl-1420; on an inexact sum it is not correctly rounded, gh-ocannl-1509; the leg held a 5%
+   tolerance until gh-ocannl-1432) -- and checking that the emitted source reaches the backend's
+   intrinsic rather than the scalar fallback. Where the device advertises no such tile (cc; an
+   f32-only capability) the leg is reported skipped; where it does, a shape the site fails to seed
+   fails the shape's claims (gh-ocannl-1115) -- the gate is the capability, never the seeds under
+   test.
 
    No pipelined-staged shape here: depth twins are seeded only for staged operands of at least 4
    bytes -- the async arms' element floor ([Autotune.sketch_params.sk_depth]) -- so a bf16 site
@@ -659,16 +659,24 @@ let () =
      and no sum is zero, and every product is a small multiple of 1/8 with partial sums far below
      2^24, so f32 addition is exact in any order. *)
   let bb = 2 and ss = 64 and jj = 64 and hh = 4 and ee = 16 in
-  let w () =
-    NTDSL.init ~l:"cn_w" ~prec:Ir.Ops.single ~o:[ jj ] ~i:[ hh; ee ]
-      ~f:(Ll_test.cycle ~dims:[| jj; hh; ee |] ~modulus:11 ~offset:(-11.) ~stride:0.5)
-      ()
+  let w_f =
+    Ll_test.operand ~b:[]
+      ~o:(Array.to_list [| jj; hh; ee |])
+      ~i:[]
+      (Ll_test.cycle ~dims:[| jj; hh; ee |] ~modulus:11 ~offset:(-11.) ~stride:0.5)
   in
-  let att () =
-    NTDSL.init ~l:"cn_att" ~prec:Ir.Ops.single ~b:[ bb; ss ] ~o:[ hh; ee ]
-      ~f:(Ll_test.cycle ~dims:[| bb; ss; hh; ee |] ~modulus:13 ~offset:1. ~stride:0.25)
-      ()
+  let w () = NTDSL.init ~l:"cn_w" ~prec:Ir.Ops.single ~o:[ jj ] ~i:[ hh; ee ] ~f:w_f () in
+  let att_f =
+    Ll_test.operand ~b:[]
+      ~o:(Array.to_list [| bb; ss; hh; ee |])
+      ~i:[]
+      (Ll_test.cycle ~dims:[| bb; ss; hh; ee |] ~modulus:13 ~offset:1. ~stride:0.25)
   in
+  let att () = NTDSL.init ~l:"cn_att" ~prec:Ir.Ops.single ~b:[ bb; ss ] ~o:[ hh; ee ] ~f:att_f () in
+  p_all "out-projection operands have f32-exact partial sums"
+    (Ll_test.reduction_cells ~out:[| bb; ss; jj |] ~over:[| hh; ee |] (fun o r ->
+         w_f [| o.(2); r.(0); r.(1) |] *. att_f [| o.(0); o.(1); r.(0); r.(1) |]))
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   leg ~tag:"out_proj" ~ko_extents:[ hh ] ~nk:ee
     ~build:(fun () ->
       let wv = w () and av = att () in
@@ -683,16 +691,28 @@ let () =
   (* The same out projection at a head_dim the blocktile menu's k-extents do not divide, so the [bk]
      gate actually refutes, plus a single-axis control contracting over the same 12. *)
   let ee_odd = 12 in
+  let w_odd_f =
+    Ll_test.operand ~b:[]
+      ~o:(Array.to_list [| jj; hh; ee_odd |])
+      ~i:[]
+      (Ll_test.cycle ~dims:[| jj; hh; ee_odd |] ~modulus:11 ~offset:(-11.) ~stride:0.5)
+  in
   let w_odd () =
-    NTDSL.init ~l:"cn_w_odd" ~prec:Ir.Ops.single ~o:[ jj ] ~i:[ hh; ee_odd ]
-      ~f:(Ll_test.cycle ~dims:[| jj; hh; ee_odd |] ~modulus:11 ~offset:(-11.) ~stride:0.5)
-      ()
+    NTDSL.init ~l:"cn_w_odd" ~prec:Ir.Ops.single ~o:[ jj ] ~i:[ hh; ee_odd ] ~f:w_odd_f ()
+  in
+  let att_odd_f =
+    Ll_test.operand ~b:[]
+      ~o:(Array.to_list [| bb; ss; hh; ee_odd |])
+      ~i:[]
+      (Ll_test.cycle ~dims:[| bb; ss; hh; ee_odd |] ~modulus:13 ~offset:1. ~stride:0.25)
   in
   let att_odd () =
-    NTDSL.init ~l:"cn_att_odd" ~prec:Ir.Ops.single ~b:[ bb; ss ] ~o:[ hh; ee_odd ]
-      ~f:(Ll_test.cycle ~dims:[| bb; ss; hh; ee_odd |] ~modulus:13 ~offset:1. ~stride:0.25)
-      ()
+    NTDSL.init ~l:"cn_att_odd" ~prec:Ir.Ops.single ~b:[ bb; ss ] ~o:[ hh; ee_odd ] ~f:att_odd_f ()
   in
+  p_all "awkward out-projection operands have f32-exact partial sums"
+    (Ll_test.reduction_cells ~out:[| bb; ss; jj |] ~over:[| hh; ee_odd |] (fun o r ->
+         w_odd_f [| o.(2); r.(0); r.(1) |] *. att_odd_f [| o.(0); o.(1); r.(0); r.(1) |]))
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   let multi =
     k_witnesses ~name:"out_proj_witness" ~is_gpu:false ~prefix:"b=" (fun () ->
         let wv = w_odd () and av = att_odd () in
@@ -744,21 +764,29 @@ let () =
 
   (* --- A three-axis contraction with a materialized output feeding a bias+relu companion. --- *)
   let bb2 = 2 and ss2 = 32 and jj2 = 64 and gg = 2 and hh2 = 2 and ee2 = 16 in
-  let x () =
-    NTDSL.init ~l:"cn_x" ~prec:Ir.Ops.single ~o:[ bb2; ss2; gg; hh2; ee2 ]
-      ~f:(Ll_test.cycle ~dims:[| bb2; ss2; gg; hh2; ee2 |] ~modulus:13 ~offset:1. ~stride:0.25)
-      ()
+  let x_f =
+    Ll_test.operand ~b:[]
+      ~o:(Array.to_list [| bb2; ss2; gg; hh2; ee2 |])
+      ~i:[]
+      (Ll_test.cycle ~dims:[| bb2; ss2; gg; hh2; ee2 |] ~modulus:13 ~offset:1. ~stride:0.25)
   in
-  let w3 () =
-    NTDSL.init ~l:"cn_w3" ~prec:Ir.Ops.single ~o:[ jj2; gg; hh2; ee2 ]
-      ~f:(Ll_test.cycle ~dims:[| jj2; gg; hh2; ee2 |] ~modulus:11 ~offset:(-11.) ~stride:0.5)
-      ()
+  let x () = NTDSL.init ~l:"cn_x" ~prec:Ir.Ops.single ~o:[ bb2; ss2; gg; hh2; ee2 ] ~f:x_f () in
+  let w3_f =
+    Ll_test.operand ~b:[]
+      ~o:(Array.to_list [| jj2; gg; hh2; ee2 |])
+      ~i:[]
+      (Ll_test.cycle ~dims:[| jj2; gg; hh2; ee2 |] ~modulus:11 ~offset:(-11.) ~stride:0.5)
   in
+  let w3 () = NTDSL.init ~l:"cn_w3" ~prec:Ir.Ops.single ~o:[ jj2; gg; hh2; ee2 ] ~f:w3_f () in
   let bias () =
     NTDSL.init ~l:"cn_bias" ~prec:Ir.Ops.single ~o:[ jj2 ]
       ~f:(fun idcs -> (Float.of_int (idcs.(0) % 3) -. 1.) *. 0.5)
       ()
   in
+  p_all "three-axis operands have f32-exact partial sums"
+    (Ll_test.reduction_cells ~out:[| bb2; ss2; jj2 |] ~over:[| gg; hh2; ee2 |] (fun o r ->
+         w3_f [| o.(2); r.(0); r.(1); r.(2) |] *. x_f [| o.(0); o.(1); r.(0); r.(1); r.(2) |]))
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   leg ~tag:"three_axis_companion" ~ko_extents:[ gg; hh2 ] ~nk:ee2 ~companion:true
     ~build:(fun () ->
       let xv = x () and wv = w3 () and bv = bias () in

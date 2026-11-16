@@ -37,14 +37,21 @@ module Cache_plant = Test_utils.Cache_plant
 
 let n = 8
 
-let nd label modulus offset =
-  TDSL.ndarray
-    (Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus ~offset ~stride:0.5))
-    ~label:[ label ] ~output_dims:[ n; n ] ()
+let cells modulus offset =
+  Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus ~offset ~stride:0.5)
+
+let av = cells 7 (-3.)
+let bv = cells 5 (-2.)
+let nd label values = TDSL.ndarray values ~label:[ label ] ~output_dims:[ n; n ] ()
 
 (* Dyadic inputs: every product and partial sum is exact, so any schedule computes the same bits. *)
-let a = nd "a" 7 (-3.)
-let b = nd "b" 5 (-2.)
+let () =
+  p_all "loss products and partial sums are f32-exact"
+    [ Array.to_list (Array.mapi av ~f:(fun i a -> Float.max 0. (a *. bv.(i)))) ]
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single))
+
+let a = nd "a" av
+let b = nd "b" bv
 let%op x = a *. b
 let%op y = relu x
 let%op loss = y ++ "ij => 0"

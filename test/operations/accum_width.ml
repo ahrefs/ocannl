@@ -129,8 +129,17 @@ let n = 64
 (* The operands' cells are exact in bf16 while the k-sum's partials are not: see {!Ll_test.cycle}
    for why the cycles are shaped this way, and the header above for this pair's own arithmetic
    (products are multiples of 15/128, mean ~0.23). *)
-let fa = Ll_test.cycle ~dims:[| n; n |] ~modulus:3 ~offset:1. ~stride:0.375
-let fb = Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:(-1.5) ~stride:0.625
+let fa =
+  Ll_test.operand ~b:[]
+    ~o:(Array.to_list [| n; n |])
+    ~i:[]
+    (Ll_test.cycle ~dims:[| n; n |] ~modulus:3 ~offset:1. ~stride:0.375)
+
+let fb =
+  Ll_test.operand ~b:[]
+    ~o:(Array.to_list [| n; n |])
+    ~i:[]
+    (Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:(-1.5) ~stride:0.625)
 
 let fp8_fixture =
   {
@@ -423,6 +432,9 @@ let bf16_leg = Verdict.leg ~when_:widens_bf16 ~on:backend_name ()
 let bf16_cc_leg = Verdict.sub_leg bf16_leg ~when_:(lazy on_cpu) ~on:backend_name
 
 let default_bf16_block () =
+  p_all "bf16 matmul products have f32-exact partial sums"
+    (Ll_test.matmul_products ~m:n ~n ~k:n fa fb)
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   let leg = bf16_leg and cc_leg = bf16_cc_leg in
   let got =
     lazy

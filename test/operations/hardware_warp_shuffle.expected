@@ -39,6 +39,7 @@ a bf16 four-warp Workgroup_reduce stages its per-warp partials at the widened re
 the emitted shuffle declares its staging register and its per-warp slots at the residency type, never at bf16 storage: true
 an f16 accumulator whose residency stays narrow, as Fp16_narrow resolves it on every GPU backend, is refused by the warp-shuffle rendering (GPU) or runs serially (CPU): true
 a bf16 Workgroup_reduce whose contribution mentions an RNG conversion is refused where the residency is wider than storage (GPU) or runs serially (CPU): true
+f16 shuffle terms have f32-exact partial sums at both warp counts: true
 the old f16 four-warp mod7 fixture cannot distinguish wide from storage-staged trees: true
 the f16 single-warp rival-rendering values are pairwise distinct: true
 the f16 four-warp rival-rendering values are pairwise distinct: true
