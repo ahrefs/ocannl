@@ -1193,12 +1193,37 @@ harness_leg_run '123: exited query retained fd 9 recovery authenticates every ho
 # Fixed literal seams in a subject copy pause the keeper after successful flock
 # and publish the retry yield. Unknown source shapes fail setup. No real dune,
 # timing lottery, or production environment hook is used by this collision leg.
+# Recovery pauses the final unlock probe until either proof starts or group_of
+# has begun: the keeper really retires before each identity read (gh-ocannl-2239).
+# A fixture-only parent waits for the keeper, so even a non-reaping PID 1 cannot
+# leave its token behind as a zombie. The production fork/lifetime is unchanged.
 leg_124() {
   local mode launcher result keeper
   cp "$life_root/tools/test-run.sh" "$TMP/124-before"
   cp "$life_bin/dune" "$TMP/124-dune-before"
   if ! perl -0777 -e '
     my $s = <>;
+    my $fork = q~my $keeper = fork(); die $! unless defined $keeper;~;
+    my $reaper = q~pipe(my $read, my $write) or die $!;
+    my $parent = fork(); die $! unless defined $parent;
+    my $keeper;
+    if ($parent) {
+      close $write;
+      $keeper = <$read>; close $read;
+      die "fixture keeper pid missing" unless defined $keeper && $keeper =\~ /\A[0-9]+\n\z/;
+      chomp $keeper;
+    } else {
+      close $read;
+      $keeper = fork(); die $! unless defined $keeper;
+      if ($keeper) {
+        my $pipe = fileno($write);
+        POSIX::close($_) for grep { $_ != $pipe } 0 .. 255;
+        print $write "$keeper\n" or die $!; close $write;
+        waitpid($keeper, 0); exit 0;
+      }
+      close $write;
+    }~;
+    die "keeper fork seam missing or duplicated" unless ($s =~ s/\Q$fork\E/$reaper/g) == 1;
     my $seam = q~if (flock($f, LOCK_EX | LOCK_NB)) {~;
     my $at = index($s, $seam);
     die "keeper probe seam missing or duplicated" if $at < 0 || index($s, $seam, $at + 1) >= 0;
@@ -1206,6 +1231,9 @@ leg_124() {
       alarm 30;
       open my $ready, ">", "$ENV{LIFECYCLE_PREFIX}.probe-ready" or die $!; close $ready;
       while (!-e "$ENV{LIFECYCLE_PREFIX}.probe-release") { select undef, undef, undef, .01 }
+      if ($ENV{PROBE_HOLDER}) {
+        while (!-e "$ENV{LIFECYCLE_PREFIX}.retire-release") { select undef, undef, undef, .01 }
+      }
       alarm 0;
 ~;
     my $yield = q~select undef, undef, undef, .02;~;
@@ -1213,6 +1241,27 @@ leg_124() {
 ~;
     my $n = ($s =~ s/\Q$yield\E/$hook$yield/g);
     die "expected acquisition and recovery retry seams, got $n" unless $n == 2;
+    my $group = q~sub group_of {
+        my $p = shift;~;
+    my $helper = q~sub retire_keeper {
+        return unless -e "$ENV{LIFECYCLE_PREFIX}.probe-release";
+        open my $r, ">", "$ENV{LIFECYCLE_PREFIX}.retire-release" or die $!; close $r;
+        my $end = Time::HiRes::time() + 10;
+        while (census_same($k, $kt)) {
+          die "keeper did not retire" if Time::HiRes::time() >= $end;
+          select undef, undef, undef, .01;
+        }
+      }
+      ~;
+    my $retire = q~
+        retire_keeper() if $p == $k && $ENV{PROBE_MODE} ne "recovery-token";
+~;
+    die "recovery group seam missing" unless $s =~ s/\Q$group\E/$helper$group$retire/;
+    my $proof = q~sub proof {~;
+    my $token = q~
+        retire_keeper() if $ENV{PROBE_MODE} eq "recovery-token";
+~;
+    die "recovery proof seam missing" unless $s =~ s/\Q$proof\E/$proof$token/;
     print $s;
   ' "$SRC" >"$TMP/124-subject"; then
     report 1 'keeper probe: collision seams exist'; return
@@ -1235,11 +1284,12 @@ exec perl -e '
   while (!-s "$ARGV[0].probe-holder") { select undef, undef, undef, .01 }
 ' "$LIFECYCLE_PREFIX"
 EOF
-  for mode in launch recovery; do
+  for mode in launch recovery recovery-token; do
     unlink "$life_prefix.probe-ready" 2>/dev/null
     unlink "$life_prefix.probe-contended" 2>/dev/null
     unlink "$life_prefix.probe-release" 2>/dev/null
     unlink "$life_prefix.probe-holder" 2>/dev/null
+    unlink "$life_prefix.retire-release" 2>/dev/null
     if [ "$mode" = launch ]; then
       PROBE_HOLDER=0 life affected >"$TMP/124-query.out" 2>"$TMP/124-query.err"
       if ! await_fixture_ready "$life_prefix.probe-ready"; then
@@ -1251,7 +1301,7 @@ EOF
       PROBE_HOLDER=1 life affected >"$TMP/124-query.out" 2>"$TMP/124-query.err"
       ps_token "$(cat "$life_prefix.probe-holder")" >"$life_prefix.probe-holder-token"
       keeper=$(cut -f5 "$(life paths owner)")
-      life recover-query >"$TMP/124-result.out" 2>"$TMP/124-result.err" &
+      PROBE_MODE=$mode life recover-query >"$TMP/124-result.out" 2>"$TMP/124-result.err" &
     fi
     launcher=$!
     if ! await_fixture_ready "$life_prefix.probe-ready" ||
@@ -1266,9 +1316,11 @@ EOF
         report 0 'keeper probe: collided launch retries and succeeds'
       else report 1 'keeper probe: collided launch retries and succeeds' "exit $result; $(cat "$TMP/124-result.out" "$TMP/124-result.err")"; fi
     else
-      if [ "$result" = 0 ] && grep -q '^reaped exited query holders;' "$TMP/124-result.out"; then
-        report 0 'keeper probe: collided recovery settles and reports reaping'
-      else report 1 'keeper probe: collided recovery settles and reports reaping' "exit $result; $(cat "$TMP/124-result.out" "$TMP/124-result.err")"; fi
+      # Retirement may precede the first signal; both completion messages are valid.
+      if [ "$result" = 0 ] && [ -e "$life_prefix.retire-release" ] &&
+         grep -Eq '^(reaped exited query holders; worktree lock released|query lock is free or owner changed; nothing to reap)$' "$TMP/124-result.out"; then
+        report 0 "keeper probe: $mode settles after keeper retirement"
+      else report 1 "keeper probe: $mode settles after keeper retirement" "exit $result; $(cat "$TMP/124-result.out" "$TMP/124-result.err")"; fi
       harness_kill_recorded "$life_prefix.probe-holder" "$life_prefix.probe-holder-token"
     fi
     life_await_dead "$keeper" || report 1 "keeper probe: $mode keeper retires"
