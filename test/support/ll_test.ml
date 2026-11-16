@@ -1923,3 +1923,23 @@ let resident_regions src m =
           (load, beg, fin, store))
     in
     if ordered (-1) regions then Some r else None
+
+(** [single_trip_loops ~loops llc]: [llc] with every [For_loop] whose index satisfies [loops] cut to
+    its first iteration ([to_ = from_]), the rest of the code untouched. What it is for: code
+    lowering never emits, such as a convolution whose every kernel-window loop is retained at one
+    iteration (lowering drops extent-1 loops), where a recognizer or a transform must still be
+    judged (gh-ocannl-1856). The cells the cut iterations wrote are no longer written; the caller
+    owns what that means for its program. *)
+let single_trip_loops ~(loops : Ir.Indexing.symbol -> bool) (llc : LL.t) : LL.t =
+  let rec go (llc : LL.t) : LL.t =
+    match llc with
+    | For_loop ({ index; from_; body; _ } as fl) ->
+        For_loop { fl with to_ = (if loops index then from_ else fl.to_); body = go body }
+    | Seq (a, b) -> Seq (go a, go b)
+    | If ({ body; _ } as i) -> If { i with body = go body }
+    | Scan_loop ({ body; _ } as sl) -> Scan_loop { sl with body = go body }
+    | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier | Zero_out _
+    | Set _ | Set_dynamic _ | Set_from_vec _ | Set_local _ | Tile_mma _ ->
+        llc
+  in
+  go llc

@@ -3,6 +3,7 @@ mm: every seed's schedule applies: true
 mm: some seed's masked accumulator contracts at the loop site: true
 mm: every loop-site masked seed holds an unshared fragment over a shared scratch tile: true
 mm: a masked seed marks a persistent fragment exactly at the loop site: true
+mm: the traffic floor's pad-scratch predicate is the applied loop site, seed by seed: true
 mm: the seeding's pad verdict is the applied schedule's mask, seed by seed: true
 mm: the executed reference equals the premise's host sums: true
 mm: every loop-site seed matches the reference bitwise, run twice: true
@@ -12,6 +13,7 @@ cv: every seed's schedule applies: true
 cv: some seed's masked accumulator contracts at the loop site: true
 cv: every loop-site masked seed holds an unshared fragment over a shared scratch tile: true
 cv: a masked seed marks a persistent fragment exactly at the loop site: true
+cv: the traffic floor's pad-scratch predicate is the applied loop site, seed by seed: true
 cv: the seeding's pad verdict is the applied schedule's mask, seed by seed: true
 cv: the executed reference equals the premise's host sums: true
 cv: every loop-site seed matches the reference bitwise, run twice: true
@@ -20,6 +22,7 @@ nw: every seed's schedule applies: true
 nw: some seed's masked accumulator contracts at the loop site: true
 nw: every loop-site masked seed holds an unshared fragment over a shared scratch tile: true
 nw: a masked seed marks a persistent fragment exactly at the loop site: true
+nw: the traffic floor's pad-scratch predicate is the applied loop site, seed by seed: true
 nw: the seeding's pad verdict is the applied schedule's mask, seed by seed: true
 nw: for every loop-site seed's k block the data tell per-step narrowing from once-per-tile: true
 nw: every masked seed narrows its f32 accumulator once per tile, not per k block: true

@@ -406,8 +406,19 @@ files.
   `bm` box: divisibility is not monotone in the block size). One fragment however many reasons
   force it. `sketch_family_tree`'s `fragment_pins` checks the predicate against the applied
   schedules over every tensorized leaf, reading the fragment off `simdgroup_fragments` /
-  `masked_fragments`, not its label. Still unpriced (sound): the GPU masked loop site's second
-  tile (`pad_scratch`, gh-ocannl-1736) and conv's mask-forced fragments (a 1x1 window with pads).
+  `masked_fragments`, not its label. Since gh-ocannl-1856 the floor also prices the GPU masked
+  loop site's second tile (`pad_scratch`, gh-ocannl-1736: `gpu_mma_pad_scratch`, a staged masked
+  geometry whose reduction-block loop repeats; on the lattice, a box whose every completion is
+  masked and contracts at a loop; on conv's GPU leg, a masked geometry under a repeating window
+  loop) and conv's mask-forced fragments where no window loop repeats (`conv_fragment_certain` over
+  `conv_acc_masked`: the builders' own row and column pads). The second case is reachable only from
+  hand-built code — lowering drops extent-1 window loops and a lowered 1x1 conv is the matmul
+  family's (`conv_detection_boundary`) — so `conv_family_tree` narrows a lowered conv's window loops
+  to one iteration (`narrow_windows`). `sketch_family_tree`'s `fragment_pins` and
+  `conv_family_tree`'s `contraction_pins` read the scratch structurally (a fresh workgroup-shared
+  member of `masked_fragments` beside a fresh `simdgroup_fragments` one) and pin each minted
+  accumulator node's charge as an equality; `masked_persistent_fragment` checks the scratch
+  predicate against the applied loop site on the GPU legs.
   **Pruning at real conv incumbents needed both halves of the byte accounting tight**: the floor
   prices a windowed read by `Affine.image_cardinality_lb` (sumset/interval counting per
   coordinate, products over symbol-disjoint coordinates), and `analyze` caps a non-injective

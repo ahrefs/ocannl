@@ -237,7 +237,15 @@ let expected_inc ~elt_bytes ~m_extent ~n_extent opt (p : Autotune.sketch_params)
       2 * fm * fn * elt_bytes
     else 0
   in
-  if p.Autotune.sk_gpu then (if bk > 0 then 2 * tile else 0) + fragment
+  (* gh-ocannl-1856: a GPU masked loop site also mints the padded scratch tile, a second such node
+     ([fragment_pins] checks [Autotune.matmul_pad_scratch_certain] the same way). *)
+  let scratch =
+    if Autotune.matmul_pad_scratch_certain opt p then
+      let fm, fn = fragment_dims ~m_extent ~n_extent p in
+      2 * fm * fn * elt_bytes
+    else 0
+  in
+  if p.Autotune.sk_gpu then (if bk > 0 then 2 * tile else 0) + fragment + scratch
   else if p.Autotune.sk_mma && bk > 0 then
     let panels =
       if not (p.Autotune.sk_hoist || p.Autotune.sk_grid || p.Autotune.sk_pack_rest) then tile else 0
@@ -371,8 +379,8 @@ let soundness_pins name ~limits tree (opt : LL.optimized) =
    at its own storage width, [2 * rows * cols * width] for the leaf's own block. A leaf whose
    schedule fails to apply is counted, never silently passed, and each named regime must have a
    successful witness. *)
-let fragment_pins ?(contracting = true) name ~m_extent ~n_extent ~regimes tree (opt : LL.optimized)
-    =
+let fragment_pins ?(contracting = true) ?(scratching = false) name ~m_extent ~n_extent ~regimes tree
+    (opt : LL.optimized) =
   let base_sets = Set.union opt.LL.simdgroup_fragments opt.LL.masked_fragments in
   let tensorized =
     List.filter (Sspace.enumerate tree) ~f:(fun (_, p) ->
@@ -423,12 +431,51 @@ let fragment_pins ?(contracting = true) name ~m_extent ~n_extent ~regimes tree (
             let fm, fn = fragment_dims ~m_extent ~n_extent p in
             fp.Ir.Cost_model.fp_read_bytes + fp.Ir.Cost_model.fp_write_bytes = 2 * fm * fn * w
         | None -> false);
+  (* gh-ocannl-1856: the padded scratch tile of a GPU masked loop site
+     ([Autotune.matmul_pad_scratch_certain]), read structurally: a fresh pad-masked tile in
+     workgroup-shared memory beside a fresh persistent fragment (the statement site's single masked
+     tile is shared too, but no persistent fragment wraps it). Where minted it is charged written
+     and read once, exactly, like the fragment it stages. *)
+  let scratch_of (post : LL.optimized) =
+    match
+      ( fresh post.LL.simdgroup_fragments,
+        List.filter (fresh post.LL.masked_fragments) ~f:(Set.mem post.LL.workgroup_shared) )
+    with
+    | _ :: _, [ tn ] -> Some tn
+    | _ -> None
+  in
+  let scratch_certain p = Autotune.matmul_pad_scratch_certain opt p in
+  Stdio.printf "  %d staging a pad scratch by the predicate, %d staged one\n"
+    (List.count applied ~f:(fun (_, p, _, _) -> scratch_certain p))
+    (List.count applied ~f:(fun (_, _, post, _) -> Option.is_some (scratch_of post)));
+  Verdict.p_all
+    (name ^ ": a tensorized leaf stages a pad scratch tile exactly where the predicate says")
+    applied ~f:(fun (_, p, post, _) ->
+      Bool.equal (scratch_certain p) (Option.is_some (scratch_of post)));
+  (* [scratching] names a fixture with masked loop-site leaves; elsewhere no leaf stages one and the
+     charge claim has nothing to judge (the exactly-where claim above still covers them). *)
+  if scratching then
+    Verdict.p_all
+      (name ^ ": a pad scratch tile is charged its block, written and read once")
+      (List.filter applied ~f:(fun (_, p, _, _) -> scratch_certain p))
+      ~f:(fun (_, p, post, (s : Ir.Cost_model.summary)) ->
+        match
+          Option.bind (scratch_of post) ~f:(fun tn ->
+              Option.map (List.Assoc.find s.per_node tn ~equal:Ir.Tnode.equal) ~f:(fun fp ->
+                  (tn, fp)))
+        with
+        | Some (tn, fp) ->
+            let w = Ir.Ops.prec_in_bytes (Lazy.force tn.Ir.Tnode.storage_prec) in
+            let fm, fn = fragment_dims ~m_extent ~n_extent p in
+            fp.Ir.Cost_model.fp_read_bytes + fp.Ir.Cost_model.fp_write_bytes = 2 * fm * fn * w
+        | None -> false);
   List.iter regimes ~f:(fun (regime, f) ->
       let witnesses = List.count applied ~f:(fun (_, p, _, _) -> f p) in
       Stdio.printf "  %-48s %d applied leaves\n" regime witnesses;
       Verdict.p (name ^ ": regime witnessed: " ^ regime) (witnesses > 0))
 
 let certain opt p = Autotune.matmul_fragment_certain opt p
+let scratches opt p = Autotune.matmul_pad_scratch_certain opt p
 
 let cpu_packed (p : Autotune.sketch_params) =
   p.Autotune.sk_mma && (not p.Autotune.sk_gpu) && p.Autotune.sk_bk > 0
@@ -1342,12 +1389,14 @@ let () =
       traffic_pins "gpu staged lattice" ~limits:gpu_full_limits ~elt_bytes:4 ~m_extent:64
         ~n_extent:64 lifted mm2;
       soundness_pins "gpu staged lattice" ~limits:gpu_full_limits lifted mm2;
-      fragment_pins "gpu staged lattice" ~m_extent:64 ~n_extent:64
+      fragment_pins ~scratching:true "gpu staged lattice" ~m_extent:64 ~n_extent:64
         ~regimes:
           [
             ( "staged, two or more k blocks: a fragment",
               fun p -> p.Autotune.sk_bk > 0 && p.Autotune.sk_bk < 64 );
             ("unstaged whole-K: no fragment", fun p -> p.Autotune.sk_bk = 0);
+            ( "padded row box, k blocks repeat: a pad scratch",
+              fun p -> Autotune.matmul_pad_scratch_certain mm2 p );
           ]
         lifted mm2;
       (* Search over the lifted tree with the increment itself as the bound and an incumbent between
@@ -1466,14 +1515,26 @@ let () =
         let%op d = a +* "ik;kj=>ij" b in
         d)
   in
-  let pins ~name ~is_gpu ~m_extent ~n_extent ~regimes opt =
+  (* gh-ocannl-1856: a row-only pad, and the same under an outer contraction loop. *)
+  let row =
+    fixture ~name:"sft_row" ~l:"row" ~a_dims:[ 20; 64 ] ~b_dims:[ 64; 64 ] ~spec:(fun a b ->
+        let%op d = a +* "ik;kj=>ij" b in
+        d)
+  in
+  let mko_row =
+    fixture ~name:"sft_mko_row" ~l:"mkr" ~a_dims:[ 20; 2; 32 ] ~b_dims:[ 2; 32; 64 ]
+      ~spec:(fun a b ->
+        let%op d = a +* "ihe;hej=>ij" b in
+        d)
+  in
+  let pins ?scratching ~name ~is_gpu ~m_extent ~n_extent ~regimes opt =
     let limits = if is_gpu then gpu_full_limits else cpu_limits in
     match Autotune.matmul_sketch_tree ~is_gpu ~is_cpu:(not is_gpu) ~limits opt with
     | None -> Verdict.p (name ^ ": a matmul site is detected") false
     | Some tree ->
         traffic_pins name ~limits ~elt_bytes:4 ~m_extent ~n_extent tree opt;
         soundness_pins name ~limits tree opt;
-        fragment_pins name ~m_extent ~n_extent ~regimes:(regimes opt) tree opt;
+        fragment_pins ?scratching name ~m_extent ~n_extent ~regimes:(regimes opt) tree opt;
         pick_audit ~is_gpu (name ^ " pick audit") ~limits opt
   in
   pins ~name:"cpu outer contraction" ~is_gpu:false ~m_extent:64 ~n_extent:64 mko16
@@ -1501,23 +1562,52 @@ let () =
             && (not (grid_outermost p))
             && certain opt p );
       ]);
-  pins ~name:"gpu awkward 20^3" ~is_gpu:true ~m_extent:20 ~n_extent:20 awk ~regimes:(fun opt ->
+  pins ~scratching:true ~name:"gpu awkward 20^3" ~is_gpu:true ~m_extent:20 ~n_extent:20 awk
+    ~regimes:(fun opt ->
       [
-        ( "padded, one k block: a mask-forced fragment",
+        ( "padded, one k block: a mask-forced fragment, no pad scratch",
           fun p ->
-            pads_output ~m_extent:20 ~n_extent:20 p && p.Autotune.sk_bk >= 20 && certain opt p );
-        ( "padded, k blocks repeat: one fragment",
-          fun p -> pads_output ~m_extent:20 ~n_extent:20 p && p.Autotune.sk_bk < 20 && certain opt p
-        );
+            pads_output ~m_extent:20 ~n_extent:20 p
+            && p.Autotune.sk_bk >= 20 && certain opt p
+            && not (scratches opt p) );
+        ( "padded, k blocks repeat: a fragment and a pad scratch",
+          fun p ->
+            pads_output ~m_extent:20 ~n_extent:20 p
+            && p.Autotune.sk_bk < 20 && certain opt p && scratches opt p );
       ]);
-  pins ~name:"gpu column-only pad" ~is_gpu:true ~m_extent:64 ~n_extent:20 col ~regimes:(fun opt ->
+  pins ~scratching:true ~name:"gpu column-only pad" ~is_gpu:true ~m_extent:64 ~n_extent:20 col
+    ~regimes:(fun opt ->
       [
-        ( "column pad, one k block: a mask-forced fragment",
+        ( "column pad, one k block: a mask-forced fragment, no pad scratch",
           fun p ->
             pads_output ~m_extent:64 ~n_extent:20 p
             && p.Autotune.sk_bm > 0
             && 64 % p.Autotune.sk_bm = 0
-            && p.Autotune.sk_bk >= 20 && certain opt p );
+            && p.Autotune.sk_bk >= 20 && certain opt p
+            && not (scratches opt p) );
+        ( "column pad, k blocks repeat: a fragment and a pad scratch",
+          fun p ->
+            pads_output ~m_extent:64 ~n_extent:20 p
+            && p.Autotune.sk_bm > 0
+            && 64 % p.Autotune.sk_bm = 0
+            && p.Autotune.sk_bk < 20 && scratches opt p );
+      ]);
+  pins ~scratching:true ~name:"gpu row-only pad" ~is_gpu:true ~m_extent:20 ~n_extent:64 row
+    ~regimes:(fun opt ->
+      [
+        ( "row pad, k blocks repeat: a fragment and a pad scratch",
+          fun p ->
+            pads_output ~m_extent:20 ~n_extent:64 p
+            && p.Autotune.sk_bn > 0
+            && 64 % p.Autotune.sk_bn = 0
+            && p.Autotune.sk_bk < 64 && scratches opt p );
+      ]);
+  pins ~name:"gpu outer contraction, padded" ~scratching:true ~is_gpu:true ~m_extent:20 ~n_extent:64
+    mko_row ~regimes:(fun opt ->
+      [
+        ( "row pad, one k block under the outer loop: a fragment and a pad scratch",
+          fun p ->
+            pads_output ~m_extent:20 ~n_extent:64 p && p.Autotune.sk_bk >= 32 && scratches opt p );
       ]);
   pins ~name:"cpu k-only pad" ~is_gpu:false ~m_extent:64 ~n_extent:20 col ~regimes:(fun opt ->
       [
