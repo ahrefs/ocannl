@@ -22,7 +22,17 @@
  (modules cuda_backend cuda_backend_impl)
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL_CUDA_BACKEND))
- (libraries base cudajit_stub utils ir builtins_cc builtins_cuda)
+ (libraries
+  base
+  cudajit_stub
+  utils
+  ir
+  builtins_cc
+  builtins_cuda
+  integers
+  stdio
+  pprint
+  unix)
  (preprocess
   (pps
    ppx_compare

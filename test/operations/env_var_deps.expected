@@ -266,6 +266,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-epilogue_fusion_mma_seeds-tf32
   test/operations/dune                     @runtest-exact_partials_ratchet
   test/operations/dune                     @runtest-exit_stream_teardown
+  test/operations/dune                     @runtest-explicit_library_deps
   test/operations/dune                     @runtest-fast_math_libmvec
   test/operations/dune                     @runtest-fixed_name_temporaries-logged
   test/operations/dune                     @runtest-fixed_name_temporaries-plain
@@ -434,7 +435,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/training/dune                       @train-mlp_bn_names
   test/training/dune                       @train-mlp_names
   test/training/dune                       @train-transformer_names
-  benchmarks/runners/ocannl/dune (bin-smoke, metal-codegen) -- no gate: its bin-smoke action runs metal_queue_probe, linking metal, ctypes and unix without an OCANNL configuration reader; universe makes the canary rerun, but cannot check spellings
+  benchmarks/runners/ocannl/dune (bin-smoke, metal-codegen) -- no gate: its bin-smoke action runs metal_queue_probe, linking metal, ctypes, integers, sexplib0 and unix without an OCANNL configuration reader; universe makes the canary rerun, but cannot check spellings
   benchmarks/dune -- no gate: its one runtest action runs python3 over the benchmark orchestrator's own unit tests, which import no OCANNL executable -- there is no startup check in reach to gate, the same reason `config_dep_completeness` exempts it from the ocannl_config dependency
   arrayjit/vendor_stubs/cudajit/dune -- no gate: its actions diff checked-in interface copies against the installed cudajit's, or echo a skip line where it is absent (gh-ocannl-1652): they spawn no program, so no startup check is in reach to gate
   arrayjit/vendor_stubs/hipjit/dune -- no gate: its actions diff checked-in interface copies against the installed hipjit's, or echo a skip line where it is absent (gh-ocannl-1652): they spawn no program, so no startup check is in reach to gate

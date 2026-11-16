@@ -82,7 +82,13 @@
 (library
  (name test_metal_storage_mode_arm)
  (modules test_metal_storage_mode)
- (libraries base stdio metal_stub metal_backend_stub_check arrayjit.ir))
+ (libraries
+  base
+  stdio
+  metal_stub
+  metal_backend_stub_check
+  arrayjit.ir
+  arrayjit.utils))
 
 (rule
  (action
@@ -97,7 +103,8 @@
   arrayjit.verdict
   metal_stub
   metal_backend_stub_check
-  arrayjit.ir))
+  arrayjit.ir
+  arrayjit.utils))
 
 ; tools: fp8_soak, the shared program with both of its arms, so that each arm is checked against
 ; the signature fp8_soak.ml packs it under, not only on its own.
@@ -125,7 +132,8 @@
   cudajit_stub
   cuda_backend_stub_check
   hipjit_stub
-  hip_backend_stub_check))
+  hip_backend_stub_check
+  integers))
 
 ; tools: vendor_idents, the shared program with its three arms.
 
@@ -185,7 +193,9 @@
   cuda_wmma_floor_claims
   test_utils
   ll_test
-  cudajit_stub)
+  cudajit_stub
+  arrayjit.context
+  arrayjit.utils)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -200,7 +210,7 @@
 (library
  (name test_cuda_pool_offset_arm)
  (modules test_cuda_pool_offset)
- (libraries base stdio ocannl arrayjit.verdict)
+ (libraries base stdio ocannl arrayjit.verdict arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -213,7 +223,7 @@
 (library
  (name test_metal_pool_bindings_arm)
  (modules test_metal_pool_bindings)
- (libraries base stdio ocannl arrayjit.verdict)
+ (libraries base stdio ocannl arrayjit.verdict arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -226,7 +236,14 @@
 (library
  (name test_metal_guarded_gather_codegen_arm)
  (modules test_metal_guarded_gather_codegen)
- (libraries base stdio ocannl arrayjit.utils test_utils arrayjit.verdict)
+ (libraries
+  base
+  stdio
+  ocannl
+  arrayjit.utils
+  test_utils
+  arrayjit.verdict
+  arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -239,7 +256,14 @@
 (library
  (name test_metal_pool_slot_width_arm)
  (modules test_metal_pool_slot_width)
- (libraries base stdio ocannl arrayjit.utils test_utils arrayjit.verdict)
+ (libraries
+  base
+  stdio
+  ocannl
+  arrayjit.utils
+  test_utils
+  arrayjit.verdict
+  arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -252,4 +276,12 @@
 (library
  (name metal_gpu_core_count_arm)
  (modules metal_gpu_core_count)
- (libraries base stdio unix ocannl arrayjit.verdict))
+ (libraries
+  base
+  stdio
+  unix
+  ocannl
+  arrayjit.verdict
+  arrayjit.context
+  arrayjit.autotune
+  arrayjit.ir))

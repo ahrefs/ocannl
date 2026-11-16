@@ -6,6 +6,10 @@
 ; constraint in the generated opam files follows this line, so declaring 3.18 while requiring 3.20
 ; promised a toolchain on which `@metal-codegen` reaches nothing.
 
+; Hide undeclared transitive include directories; explicit re-exports and ppx runtimes stay visible.
+; The compile controls in test/operations/explicit_library_deps pin this policy.
+(implicit_transitive_deps false)
+
 (using ctypes 0.3)
 
 (using dune_site 0.1)

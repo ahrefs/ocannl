@@ -744,6 +744,12 @@ test_config_consistency.ml: [scanner-refusal:18e6c65c27f35f658858a12b7c8dfd72] l
 test_config_consistency.ml: [scanner-refusal:e72f69460ef84de5e85f6c2bbe7bef5b] docs/agent-notes/build-and-test.md (claim) is catalogued beside config_scan_lexing.expected, test_config_consistency.expected: true
 test_config_consistency.ml: [scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count (claim) is catalogued beside config_scan_lexing.expected, test_config_consistency.expected: true
 test_config_consistency.ml: [scanner-refusal:2314f0c5d2762ecb0069dfb64d5c8a54] known_config_keys (claim) is catalogued beside config_scan_lexing.expected, test_config_consistency.expected: true
+explicit_library_deps.ml has exactly the explicitly assigned refusal controls: true
+explicit_library_deps.ml: [scanner-refusal:79b83d87bc35a637a45c0dd6dc7479cf] explicit_library_deps (direct failure) is catalogued beside explicit_library_deps.expected: true
+explicit_library_deps.ml: [scanner-refusal:e2937f725c3dd416fbbbb047979dc15a] library declaration compiles (claim) is catalogued beside explicit_library_deps.expected: true
+explicit_library_deps.ml: [scanner-refusal:bd4e1515861d31f929904e3deb2b0b7b] undeclared transitive library (claim) is catalogued beside explicit_library_deps.expected: true
+explicit_library_deps.ml: [scanner-refusal:36550c0b9c79bcf4a0384888ee112619] declared library's re-export (claim) is catalogued beside explicit_library_deps.expected: true
+explicit_library_deps.ml: [scanner-refusal:068ac0a43201ecb7fea5899eba10c386] runtime dependency compiles (claim) is catalogued beside explicit_library_deps.expected: true
 unused_compiler_deps.ml has exactly the explicitly assigned refusal controls: true
 unused_compiler_deps.ml: [scanner-refusal:1262ba0367f56ab63b0ef45185bb1257] control stanza must (direct failure) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:1c8850699d8f9fec6290b9542a410741] an unreadable archive (claim) is catalogued beside unused_compiler_deps.expected: true

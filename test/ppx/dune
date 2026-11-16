@@ -205,7 +205,7 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries ocannl)
+ (libraries ocannl base)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -216,7 +216,7 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries ocannl))
+ (libraries ocannl base))
 
 ; Both sides of the golden are compiled, so the call shapes it pins are checked to type-check --
 ; the same pairing test_ppx_op uses. Neither executable does anything at run time: their toplevels
@@ -229,7 +229,7 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries ocannl)
+ (libraries ocannl base)
  (preprocess
   (pps ppx_ocannl)))
 
@@ -240,7 +240,7 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries ocannl))
+ (libraries ocannl base))
 
 ; The evaluation order of the components %op splices into a literal (gh-ocannl-1869). Both sides of
 ; the golden are compiled AND run: each reports, through Verdict, the order its components were

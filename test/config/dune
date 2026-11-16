@@ -16,7 +16,7 @@
  (package neural_nets_lib)
  (public_name ocannl_read_config)
  (modules ocannl_read_config)
- (libraries base arrayjit.utils config_reads))
+ (libraries base arrayjit.utils config_reads stdio))
 
 ; What the reader writes for the keys the backend setting decides, as a library of its own
 ; (gh-ocannl-1581): `codegen_text_inventory` reads `%{read:../config/ocannl_backend_extension.txt}`

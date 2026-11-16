@@ -25,7 +25,8 @@
   mtime.clock.os
   pprint
   ppx_minidebug.runtime
-  ppx_minidebug.db)
+  ppx_minidebug.db
+  re)
  (foreign_stubs
   (language c)
   (names utils_stubs))
@@ -66,7 +67,8 @@
   mtime.clock.os
   utils
   ppx_minidebug.runtime
-  ppx_minidebug.db)
+  ppx_minidebug.db
+  integers)
  (foreign_stubs
   (language c)
   (names builtins))
@@ -139,7 +141,10 @@
   utils
   ir
   builtins_cc
-  builtins_cuda)
+  builtins_cuda
+  integers
+  stdio
+  pprint)
  (preprocess
   (pps
    ppx_compare
@@ -157,7 +162,18 @@
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL_HIP_BACKEND))
  (modules hip_backend)
- (libraries base hipjit.hip hipjit.hiprtc utils ir builtins_cc builtins_hip)
+ (libraries
+  base
+  hipjit.hip
+  hipjit.hiprtc
+  utils
+  ir
+  builtins_cc
+  builtins_hip
+  integers
+  unix
+  stdio
+  pprint)
  (preprocess
   (pps
    ppx_compare
@@ -191,7 +207,12 @@
   utils
   ir
   builtins_cc
-  builtins_metal)
+  builtins_metal
+  integers
+  unix
+  ctypes
+  pprint
+  stdio)
  ; gh-ocannl-1638: the GPU core count Metal does not publish, read from the IORegistry.
  (foreign_stubs
   (language c)
@@ -277,7 +298,9 @@
    (metal_backend -> metal_backend_impl.metal.ml)
    (-> metal_backend_impl.missing.ml))
   ppx_minidebug.runtime
-  ppx_minidebug.db)
+  ppx_minidebug.db
+  unix
+  pprint)
  (preprocess
   (pps
    ppx_compare

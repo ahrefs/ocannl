@@ -29,7 +29,11 @@
   stdio
   unix
   mtime
-  mtime.clock.os)
+  mtime.clock.os
+  arrayjit.ir
+  arrayjit.context
+  arrayjit.autotune
+  arrayjit.utils)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -52,7 +56,7 @@
  (name bench_seed_parity)
  (package neural_nets_lib)
  (modules bench_seed_parity)
- (libraries base ocannl))
+ (libraries base ocannl arrayjit.ir arrayjit.autotune arrayjit.context))
 
 ; The post-compile re-timing of a shipped routine with a stated spread (gh-ocannl-1524): the
 ; tuner's own timing calls, repeated and interleaved, summarized as a median with its range and a
@@ -81,7 +85,7 @@
  (name bench_gpt_model)
  (package neural_nets_lib)
  (modules bench_gpt_model)
- (libraries base bench_harness ocannl)
+ (libraries base bench_harness ocannl arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -122,7 +126,11 @@
   stdio
   unix
   mtime
-  mtime.clock.os)
+  mtime.clock.os
+  arrayjit.context
+  arrayjit.ir
+  arrayjit.autotune
+  arrayjit.utils)
  (preprocess
   (pps ppx_here ppx_ocannl))
  (modes exe))
@@ -146,7 +154,12 @@
   metal_reassoc_probe
   metal_half_math_probe
   metal_f32_math_probe)
- (libraries metal ctypes arrayjit.ir arrayjit.metal_math_api_runtime)
+ (libraries
+  metal
+  ctypes
+  arrayjit.ir
+  arrayjit.metal_math_api_runtime
+  integers)
  (enabled_if
   (= %{system} macosx))
  (modes exe))
@@ -154,7 +167,7 @@
 (executable
  (name metal_queue_probe)
  (modules metal_queue_probe)
- (libraries metal ctypes unix)
+ (libraries metal ctypes unix sexplib0 integers)
  (enabled_if
   (= %{system} macosx))
  (modes exe))
@@ -195,7 +208,15 @@
 (executable
  (name bench_mma_register_scope_emit)
  (modules bench_mma_register_scope_emit)
- (libraries base bench_args ocannl stdio test_utils ll_test)
+ (libraries
+  base
+  bench_args
+  ocannl
+  stdio
+  test_utils
+  ll_test
+  arrayjit.utils
+  arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl))
  (modes exe))

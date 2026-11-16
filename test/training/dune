@@ -157,7 +157,14 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  arrayjit.ir
+  arrayjit.utils
+  arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -169,7 +176,16 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries ocannl dataprep)
+ (libraries
+  ocannl
+  dataprep
+  base
+  arrayjit.ir
+  arrayjit.utils
+  arrayjit.context
+  stdio
+  printbox
+  printbox-text)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -180,7 +196,16 @@
  ; each cell's summation order.
  (name bigram)
  (modules bigram)
- (libraries ocannl dataprep arrayjit.verdict)
+ (libraries
+  ocannl
+  dataprep
+  arrayjit.verdict
+  base
+  stdio
+  arrayjit.ir
+  arrayjit.utils
+  arrayjit.context
+  arrayjit.autotune)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -211,7 +236,13 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries ocannl dataprep arrayjit.verdict)
+ (libraries
+  ocannl
+  dataprep
+  arrayjit.verdict
+  base
+  arrayjit.utils
+  arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -246,7 +277,15 @@
 (executable
  (name mlp_names)
  (modules mlp_names)
- (libraries ocannl dataprep arrayjit.verdict training_golden)
+ (libraries
+  ocannl
+  dataprep
+  arrayjit.verdict
+  training_golden
+  base
+  stdio
+  arrayjit.utils
+  arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -274,7 +313,15 @@
 (executable
  (name mlp_bn_names)
  (modules mlp_bn_names)
- (libraries ocannl dataprep arrayjit.verdict training_golden)
+ (libraries
+  ocannl
+  dataprep
+  arrayjit.verdict
+  training_golden
+  base
+  stdio
+  arrayjit.utils
+  arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -311,7 +358,17 @@
  ; no computed number.
  (name circles_conv)
  (modules circles_conv)
- (libraries ocannl dataprep arrayjit.verdict training_golden)
+ (libraries
+  ocannl
+  dataprep
+  arrayjit.verdict
+  training_golden
+  base
+  stdio
+  arrayjit.ir
+  arrayjit.utils
+  arrayjit.context
+  arrayjit.autotune)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -345,7 +402,17 @@
 (executable
  (name mnist_conv)
  (modules mnist_conv)
- (libraries ocannl dataprep conv_data unix arrayjit.verdict)
+ (libraries
+  ocannl
+  dataprep
+  conv_data
+  unix
+  arrayjit.verdict
+  base
+  stdio
+  arrayjit.ir
+  arrayjit.utils
+  arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -375,7 +442,17 @@
 (executable
  (name cifar_conv)
  (modules cifar_conv)
- (libraries ocannl dataprep conv_data unix arrayjit.verdict)
+ (libraries
+  ocannl
+  dataprep
+  conv_data
+  unix
+  arrayjit.verdict
+  base
+  stdio
+  arrayjit.ir
+  arrayjit.utils
+  arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -407,7 +484,15 @@
  ; number.
  (name fsm_transformer)
  (modules fsm_transformer)
- (libraries ocannl arrayjit.verdict training_golden)
+ (libraries
+  ocannl
+  arrayjit.verdict
+  training_golden
+  base
+  arrayjit.utils
+  arrayjit.context
+  arrayjit.autotune
+  stdio)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -454,7 +539,16 @@
  ; each cell's summation order.
  (name transformer_names)
  (modules transformer_names)
- (libraries ocannl dataprep arrayjit.verdict training_golden)
+ (libraries
+  ocannl
+  dataprep
+  arrayjit.verdict
+  training_golden
+  base
+  stdio
+  arrayjit.utils
+  arrayjit.context
+  arrayjit.autotune)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -489,7 +583,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules tokenizer_roundtrip)
- (libraries base ocannl stdio dataprep arrayjit.verdict)
+ (libraries base ocannl stdio dataprep arrayjit.verdict arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -499,7 +593,17 @@
 (executable
  (name bench_circles_step)
  (modules bench_circles_step)
- (libraries ocannl dataprep unix ll_test)
+ (libraries
+  ocannl
+  dataprep
+  unix
+  ll_test
+  base
+  stdio
+  arrayjit.ir
+  arrayjit.utils
+  arrayjit.context
+  arrayjit.autotune)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -511,7 +615,15 @@
 (executable
  (name bench_mlp_bn_step)
  (modules bench_mlp_bn_step)
- (libraries base ocannl stdio dataprep unix bench_out)
+ (libraries
+  base
+  ocannl
+  stdio
+  dataprep
+  unix
+  bench_out
+  arrayjit.utils
+  arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -526,7 +638,13 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules virtual_grads_parity)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  arrayjit.context
+  arrayjit.utils)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -542,7 +660,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules mixed_prec_parity)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -566,7 +684,9 @@
   unix
   arrayjit.verdict
   fresh_process
-  stderr_capture)
+  stderr_capture
+  arrayjit.ir
+  arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -582,6 +702,6 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules loop_utils)
- (libraries base ocannl stdio arrayjit.verdict test_utils)
+ (libraries base ocannl stdio arrayjit.verdict test_utils arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))

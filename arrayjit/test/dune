@@ -99,7 +99,7 @@
  (package arrayjit)
  (modules test_schedule_outcome)
  (deps ocannl_config ocannl_ambient)
- (libraries base arrayjit.ir)
+ (libraries base arrayjit.ir arrayjit.utils)
  (preprocess
   (pps ppx_here)))
 
@@ -145,7 +145,14 @@
   ocannl_config
   ocannl_ambient
   (env_var OCANNL_BACKEND))
- (libraries arrayjit.ll_builders base stdio arrayjit.ir arrayjit.verdict))
+ (libraries
+  arrayjit.ll_builders
+  base
+  stdio
+  arrayjit.ir
+  arrayjit.verdict
+  pprint
+  arrayjit.utils))
 
 (test
  (name test_one_hot_gather_rewrite)
@@ -165,7 +172,7 @@
   ocannl_config
   ocannl_ambient
   (env_var OCANNL_BACKEND))
- (libraries arrayjit.ll_builders base stdio arrayjit.ir))
+ (libraries arrayjit.ll_builders base stdio arrayjit.ir pprint))
 
 (test
  ; ocannl-backend: none -- tests a pure compiler-option helper and selects no runtime backend.
@@ -267,7 +274,13 @@
   ocannl_config
   ocannl_ambient
   (env_var OCANNL_BACKEND))
- (libraries arrayjit.ll_builders base stdio arrayjit.ir arrayjit.verdict))
+ (libraries
+  arrayjit.ll_builders
+  base
+  stdio
+  arrayjit.ir
+  arrayjit.verdict
+  pprint))
 
 (test
  (name test_local_scope_init)
@@ -277,7 +290,7 @@
   ocannl_config
   ocannl_ambient
   (env_var OCANNL_BACKEND))
- (libraries arrayjit.ll_builders base stdio arrayjit.ir))
+ (libraries arrayjit.ll_builders base stdio arrayjit.ir pprint))
 
 (test
  (name test_slab_free_on_grow)
@@ -321,7 +334,8 @@
     arrayjit.ir
     ->
     test_metal_storage_mode.real.ml)
-   (-> test_metal_storage_mode.missing.ml))))
+   (-> test_metal_storage_mode.missing.ml))
+  arrayjit.utils))
 
 (test
  ; ocannl-backend: metal -- drives Metal_backend.Impl directly (alloc_pool, make_context,
@@ -338,7 +352,8 @@
    test_metal_alloc.ml
    from
    (metal arrayjit.metal_backend arrayjit.ir -> test_metal_alloc.real.ml)
-   (-> test_metal_alloc.missing.ml))))
+   (-> test_metal_alloc.missing.ml))
+  arrayjit.utils))
 
 ; The CUDA arm of gh-ocannl-536's failure classification. Same `select` reasoning as the Metal
 ; tests above: `arrayjit.cuda_backend` is `(optional)` on cudajit, and an `enabled_if` would not
@@ -375,7 +390,7 @@
  (package arrayjit)
  (modules test_cuda_arch_flags)
  (deps ocannl_config ocannl_ambient)
- (libraries base stdio arrayjit.ir))
+ (libraries base stdio arrayjit.ir arrayjit.utils))
 
 (test
  ; ocannl-backend: none -- links arrayjit.context for one pure function of it,
@@ -395,7 +410,14 @@
   ocannl_config
   ocannl_ambient
   (env_var OCANNL_BACKEND))
- (libraries arrayjit.ll_builders base stdio arrayjit.ir arrayjit.verdict))
+ (libraries
+  arrayjit.ll_builders
+  base
+  stdio
+  arrayjit.ir
+  arrayjit.verdict
+  pprint
+  arrayjit.utils))
 
 (test
  (name test_backend_selection)
@@ -405,7 +427,7 @@
   ocannl_config
   ocannl_ambient
   (env_var OCANNL_BACKEND))
- (libraries base arrayjit.ir arrayjit.context))
+ (libraries base arrayjit.ir arrayjit.context arrayjit.utils))
 
 (test
  (name test_multidev_error_propagation)
@@ -452,4 +474,10 @@
  (package arrayjit)
  (modules test_cuda_like_config)
  (deps ocannl_config ocannl_ambient)
- (libraries base pprint arrayjit.ir arrayjit.builtins_hip arrayjit.verdict))
+ (libraries
+  base
+  pprint
+  arrayjit.ir
+  arrayjit.builtins_hip
+  arrayjit.verdict
+  arrayjit.utils))
