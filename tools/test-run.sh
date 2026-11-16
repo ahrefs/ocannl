@@ -78,8 +78,10 @@
 # keeper's start token while alive. Recovery refuses a live query, changed query
 # identity, missing evidence, and ANY holder outside that group before signalling
 # anyone. Failed keeper proof refuses while the same lock remains held; a free
-# lock or changed owner needs no signals. A setsid descendant is deliberately unattributable: inspect
-# it manually with `lsof` on the lock from `paths lock`. Never delete the lock.
+# lock or changed owner ends this retirement path without further signals.
+# An ownership change after successful proof at the per-signal guard still
+# refuses. A setsid descendant is deliberately unattributable: inspect it
+# manually with `lsof` on the lock from `paths lock`. Never delete the lock.
 # The keeper closes fd 9 and all streams; it reserves the group until the query
 # exits and the lock becomes free. Old query records have no recovery authority.
 # INT/TERM/HUP are forwarded. SIGKILL or an unforwarded caller-group signal can

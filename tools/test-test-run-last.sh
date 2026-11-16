@@ -823,7 +823,8 @@ q_held_label="a launch a shell's own control flow holds is seen once its own pro
 q_root_label="a launch under another OCANNL_TOOL_TEST_RUNS named in its argv is no launch here; one exported alone is the loud over-read"
 q_detail=
 q_other=$TMP/queued-other-runs
-mkdir -p "$q_other"
+q_home=$TMP/queued-home
+mkdir -p "$q_other" "$q_home/.ocannl-test-runs"
 q_under() { # runs root subcommand [argv...]: that checkout's script under the named state root
   local runs=$1 root=$2
   shift 2
@@ -906,6 +907,13 @@ Q_WHY="[worktree: $q_provenance_root (cwd); unknown state root (not named in exe
   q_provenance 'exported root stays unknown' 3 0 3 "$q_root" tools/test-run.sh run build @red
 Q_OTHER_WHY="[worktree: $q_provenance_root (cwd); state root: $q_other (env assignment)]" \
   q_provenance 'explicit other root excludes this reader' 0 0 3 "$q_root" env "OCANNL_TOOL_TEST_RUNS=$q_other" tools/test-run.sh run build @red
+Q_OTHER_RUNS=$q_home/.ocannl-test-runs \
+Q_OTHER_WHY="[worktree: $q_provenance_root (cwd); state root: $q_home/.ocannl-test-runs (default under argv HOME)]" \
+  q_provenance 'default under argv HOME' 0 0 3 "$q_root" env -u OCANNL_TOOL_TEST_RUNS "HOME=$q_home" tools/test-run.sh run build @red
+Q_WHY="[worktree: $q_provenance_root (cwd); unknown state root (default HOME cleared in exec argv)]" \
+  q_provenance 'cleared default HOME' 3 0 3 "$q_root" env -i tools/test-run.sh run build @red
+Q_WHY="[worktree: $q_provenance_root (cwd); unknown state root (default HOME holds shell text)]" \
+  q_provenance 'shell text in default HOME' 3 0 3 "$q_root" env -u OCANNL_TOOL_TEST_RUNS -S 'HOME=${QUEUED_HOME} tools/test-run.sh run build @red'
 q_detail=
 # A wrapper outside any worktree, its command moved into this one; one in
 # this worktree, its command moved into the sibling (over-read before: the

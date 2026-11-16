@@ -1557,10 +1557,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   actual script-path, env-chdir or cwd ground, or the reason a namespace is
   unknown. Leg 105 pins these diagnostics beside the unchanged classification
   matrix; environments and shell text stay outside the reader boundary.
-  Leg 105c forces publication
-  on either side of the pointer read. The before seam depends on the existing
-  pointer retry: removing it marks the published repeat queued. The after seam
-  instead pins the sighting's mark on the first run; omitting the mark fails it.
+  Leg 105c forces publication on either side of the pointer read. The before
+  seam depends on the existing pointer retry: removing it marks the published
+  repeat queued. The after seam instead pins the sighting's mark on the first
+  run; omitting the mark fails it.
   This does not settle gh-ocannl-607: the gap is before any publication, so deriving `last` from the
   run directories would leave it exactly as it was. `list` lists this worktree's runs (by `wt`,
   `--all` for the state root's): the newest entry of a shared root is as likely a sibling
@@ -1758,9 +1758,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   query record, and recovery settles a keeper-only census before refusing it.
   A keeper can retire between the ownership and identity reads: failed keeper
   proof rechecks ownership, returning without signals if the lock is now free
-  or its owner changed. Leg 124 holds the real probe until the group read,
-  then lets the keeper retire; the former recovery refuses deterministically
-  (gh-ocannl-2239, reproduced in 3 of 24 loaded Mac runs before the fix).
+  or its owner changed. Leg 124 holds the real probe until either the token
+  or group read, then lets the keeper retire; the former recovery refuses
+  deterministically (gh-ocannl-2239, reproduced in 3 of 24 loaded Mac runs before
+  the fix). Its fixture-only parent reaps the keeper explicitly, so a container
+  PID 1 that leaves orphans as zombies cannot stall the retirement handshake.
   Zombie queries are exited identities,
   not live queries; state and start token are checked separately. Lifecycle leg
   123 pins recovery, refusals, cancellation and an intentionally unreaped query.
