@@ -773,6 +773,17 @@ files.
   searched, and a pass reports SEARCHED whenever ANY arm searched, so the mixed retry's compile cost
   wears a from-scratch label. Wipe it before quoting a search timing.
 
+- A direct TERM to a gh1002 cell's group does not reach the driver, which owns a separate
+  session (`gh1002_cells.run_in_own_group`; gh-ocannl-2001). After the cell exits its wait returns;
+  cleanup has two grace phases, a final reap and group observations, with no wait on the cell's
+  original timeout or cancellation signal. This is not a wall-clock bound on scheduling or the
+  process census. The rare 10 s test timeout did not reproduce in 200 repetitions beside eight
+  busy CPU workers on minix-amd-linux. Keep its response deadline: `communicate_direct_term` in
+  `benchmarks/test/test_cell_group.py` snapshots the marker and cell liveness on expiry, requests
+  a SIGUSR1 Python stack on driver stderr, then kills/reaps the driver; its extra diagnostic
+  second cannot turn the failed deadline into a pass. A deliberately waiting driver pins this
+  evidence; removing its traceback handler fails the pin.
+
 - Killing a runner from outside: the escalation to SIGKILL is owed to the process GROUP, never to
   the child's pipes (`cell_group.terminate`; gh-ocannl-842 unified the two hand-written versions
   in `gh675_cells.py` and `orchestrate.py`). A descendant that ignores SIGTERM but does not hold the
