@@ -5684,12 +5684,14 @@
  (libraries base stdio arrayjit.ir arrayjit.autotune arrayjit.verdict))
 
 (test
- ; ocannl-backend: cuda -- compile-only NVRTC witness, selected only for CUDA runs.
+ ; Compile-only NVRTC witness, selected only for CUDA runs. Context.auto reads the backend.
  (name cuda_wmma_floor)
  (package neural_nets_lib)
  (enabled_if
   (= %{env:OCANNL_BACKEND=cc} cuda))
- (deps ocannl_config)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (modules cuda_wmma_floor)
  (libraries
   base

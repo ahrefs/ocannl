@@ -84,9 +84,9 @@ let () =
         && has logic "__half2float" && has logic "__float2half");
       p "compute_75 PTX targets sm_75 and accumulates WMMA f16 products in f32"
         (check_ptx 75 source);
-      p "compute_70 has the same f32 WMMA instruction when NVRTC accepts the target"
-        (match compile 70 "extern \"C\" __global__ void target_probe() {}" with
-        | _ -> check_ptx 70 source
+      let accepts_70 =
+        match compile 70 "extern \"C\" __global__ void target_probe() {}" with
+        | _ -> true
         | exception Nvrtc.Nvrtc_error { status; message }
           when String.equal
                  (Sexp.to_string (Nvrtc.sexp_of_result status))
@@ -94,7 +94,14 @@ let () =
                && has message "invalid value for --gpu-architecture" ->
             Stdio.eprintf "compute_70 unavailable in installed NVRTC: %s (not part of the golden)\n"
               message;
-            true);
+            false
+      in
+      let leg =
+        Verdict.leg ~aggregation:`Environment ~when_:accepts_70
+          ~on:"NVRTC without compute_70 support" ()
+      in
+      in_leg ~leg "compute_70 PTX targets sm_70 and accumulates WMMA f16 products in f32"
+        (fun label -> p label (check_ptx 70 source));
       let shipping = M.gpu_arch_options ~target:M.Floor ~device_cc:120 source in
       p "the wide fragment alone ships at the toolkit-adjusted f16 floor"
         (List.equal String.equal shipping
