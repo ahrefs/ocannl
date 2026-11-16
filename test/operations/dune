@@ -14764,6 +14764,11 @@
  ; ocannl-backend: none -- links no backend: it reads dune files and compiled typed trees.
  (targets unused_compiler_deps.actual unused_compiler_deps.filelist)
  (package neural_nets_lib)
+ ; A package-filtered build (`dune build -p ...`, the opam with-test run, which implies the
+ ; release profile) disables the other packages' stanzas, so their object directories are absent
+ ; by design: the check reads the whole workspace and runs in the dev profile only.
+ (enabled_if
+  (= %{profile} dev))
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
@@ -14786,6 +14791,8 @@
 (rule
  (alias runtest-unused_compiler_deps)
  (package neural_nets_lib)
+ (enabled_if
+  (= %{profile} dev))
  (action
   (diff unused_compiler_deps.expected unused_compiler_deps.actual)))
 
