@@ -1473,15 +1473,15 @@ end = struct
                             would abort the queue rather than fail cleanly (gh-ocannl-533)"];
                      } ))
 
-  (* gh-ocannl-1872: the HIP twin of the CUDA launch's back-off (gh-ocannl-1773). A launch or a
-     graph launch the runtime refuses with [HIP_ERROR_OUT_OF_MEMORY] was refused before anything
-     ran, and under a concurrent GPU batch it can succeed once a neighbour releases memory, so it is
-     retried over the same pauses; on give-up the runtime's own exception is re-raised unchanged,
-     which is what the sweep's serial-rerun table keys on ([tools/sweep.sh] [ENVIRONMENT_REFUSALS]).
-     There is no hopeless shortcut and no reservation reset here: HIP's scratch is budgeted per
-     work-item and over-budget frames are declined at link ([validate_scratch_budget]), and
-     [hipLimitStackSize] does not govern scratch. The stderr line states the kernel's private
-     segment for the record. *)
+  (* gh-ocannl-1872: the HIP twin of the CUDA launch's back-off (gh-ocannl-1773). A launch, a
+     graph's instantiation or a graph launch the runtime refuses with [HIP_ERROR_OUT_OF_MEMORY] was
+     refused before anything ran, and under a concurrent GPU batch it can succeed once a neighbour
+     releases memory, so it is retried over the same pauses; on give-up the runtime's own exception
+     is re-raised unchanged, which is what the sweep's serial-rerun table keys on ([tools/sweep.sh]
+     [ENVIRONMENT_REFUSALS]). There is no hopeless shortcut and no reservation reset here: HIP's
+     scratch is budgeted per work-item and over-budget frames are declined at link
+     ([validate_scratch_budget]), and [hipLimitStackSize] does not govern scratch. The stderr line
+     states the kernel's private segment for the record. *)
   let launch_memory_backoff_seconds = [ 0.5; 1.; 2.; 4.; 8. ]
   let launch_memory_retries = Atomic.make 0
   let launch_memory_refusals = Atomic.make 0
@@ -1498,7 +1498,7 @@ end = struct
      them. *)
   let capturing : bool Stdlib.Domain.DLS.key = Stdlib.Domain.DLS.new_key (fun () -> false)
 
-  let launch_with_memory_backoff ~name ~(scratch : string Lazy.t) launch =
+  let launch_with_memory_backoff ?(verb = "launching") ~name ~(scratch : string Lazy.t) launch =
     let rec attempt pauses =
       try launch ()
       with exn when is_out_of_memory exn ->
@@ -1506,10 +1506,10 @@ end = struct
         let free, total = try H.Device.get_free_and_total_mem () with _ -> (-1, -1) in
         let give_up = List.is_empty pauses in
         Stdio.eprintf
-          "hip: launching %s was refused device memory (HIP_ERROR_OUT_OF_MEMORY): %s, with %d of \
-           %d B free; %s (gh-ocannl-1872)\n\
+          "hip: %s %s was refused device memory (HIP_ERROR_OUT_OF_MEMORY): %s, with %d of %d B \
+           free; %s (gh-ocannl-1872)\n\
            %!"
-          name (Lazy.force scratch) free total
+          verb name (Lazy.force scratch) free total
           (if give_up then "giving up after the back-off"
            else Printf.sprintf "retrying in %gs" (List.hd_exn pauses));
         if give_up then (
@@ -1720,9 +1720,14 @@ end = struct
             (try H.Graph.destroy (H.Graph.end_capture device.runner) with _ -> ());
             raise exn
         in
-        let exec = H.Graph.instantiate graph in
-        H.Graph.destroy graph;
-        exec
+        (* Instantiation gets the launches' back-off too: on CUDA it is where a graph's kernels
+           first reserve their local memory (gh-ocannl-1872), and HIP is held to the same shape. *)
+        Exn.protect
+          ~f:(fun () ->
+            launch_with_memory_backoff ~verb:"instantiating" ~name:("the graph of " ^ name)
+              ~scratch:(lazy (Printf.sprintf "a graph of %d kernels" (List.length tasks)))
+              (fun () -> H.Graph.instantiate graph))
+          ~finally:(fun () -> H.Graph.destroy graph)
       in
       Some
         ( Task.Task
@@ -1753,6 +1758,18 @@ end = struct
                                 Hashtbl.set cache ~key ~data:exec;
                                 Queue.enqueue order key;
                                 launch_graph exec
+                            | exception (H.Hip_error { message; _ } as exn)
+                              when is_out_of_memory exn ->
+                                (* Refused device memory after the back-off, which says nothing
+                                   about capture: run the segments plainly this time, where a
+                                   lasting refusal surfaces as the kernel launch's own, and capture
+                                   again on the next run (gh-ocannl-1872). *)
+                                Stdio.eprintf
+                                  "ocannl: the HIP graph of routine %s was refused device memory \
+                                   (%s); running its segments plainly this time\n\
+                                   %!"
+                                  name message;
+                                run_plain ()
                             | exception H.Hip_error { status; message } ->
                                 (* E.g. capture unsupported on this runtime: fall back to
                                    per-segment launches for this routine (same-stream FIFO supplies

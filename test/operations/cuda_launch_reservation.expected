@@ -4,6 +4,7 @@ hopeless: the context then runs a small-frame kernel correctly: true
 bound: an s11d_ref-sized frame (48 KiB for one thread) computes the right values: true
 bound: the device's free memory after its launch is within half its reservation of before it: true
 bound: its launch released the reservation once, and a small frame's none: true
+bound: a frame reserving a quarter more than the reset threshold resets, one a quarter less does not: true
 graph: the two-segment routine runs as a captured graph: true
 graph: it computes the right values: true
 graph: the free memory after the graph launch is within half the reservation of before it, released once: true

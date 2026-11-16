@@ -542,15 +542,9 @@ let structure_claim = function
       "a matmul site whose row is the minor output axis, read at stride 2 and strictly taller than \
        every output axis read at unit stride"
 
-(* gh-ocannl-1872: the CUDA backend's count of local-memory reservations released after a launch,
-   from its global debug info; [None] on a backend that does not report one. *)
-let local_memory_resets () =
-  match Context.global_debug_info (Context.auto ()) with
-  | Sexp.List (_ :: fields) ->
-      List.find_map fields ~f:(function
-        | Sexp.List [ Sexp.Atom "local_memory_resets"; Sexp.Atom n ] -> Int.of_string_opt n
-        | _ -> None)
-  | _ -> None
+(* gh-ocannl-1872: the CUDA backend's count of local-memory reservations released after a launch;
+   [None] on a backend that does not report one. *)
+let local_memory_resets () = Ll_test.debug_counter (Context.auto ()) "local_memory_resets"
 
 (* One site's claims, made in [leg] -- open everywhere unless a caller confines them to the backends
    that can evaluate the site, skipped by name elsewhere in the order this code makes them
@@ -599,8 +593,9 @@ let seed_leg ?(declines = false) ?(row = `Batch)
   (* gh-ocannl-1872: the block's unscheduled reference, s11d_ref, is one thread with a 48 KiB frame,
      whose local memory the driver reserves for every resident thread (3.3 GiB on rog-nv) and used
      to keep for the process's life. The CUDA backend releases it after the launch where the
-     reservation passes a sixteenth of the device's memory (its [local_memory_reset_share]), as on
-     every fleet device; elsewhere it keeps it by design, and the claim skips. *)
+     reservation passes the share of the device's memory its global debug info reports
+     ([local_memory_reset_share]), as on every fleet device; elsewhere it keeps it by design, and
+     the claim skips. *)
   (match s.build with
   | `Resnet_block ->
       let passes_share =
@@ -613,7 +608,9 @@ let seed_leg ?(declines = false) ?(row = `Batch)
               (Context.hardware_limits ctx).Ir.Backend_intf.max_resident_threads
           in
           let _, total = Option.value ~default:(0, 0) (Context.get_free_and_total_memory ctx) in
-          49152 * resident > total / 16)
+          match Ll_test.debug_counter ctx "local_memory_reset_share" with
+          | Some share -> 49152 * resident > total / share
+          | None -> false)
       in
       in_leg ~leg:(Verdict.sub_leg leg ~when_:passes_share ~on:backend_name)
         (what

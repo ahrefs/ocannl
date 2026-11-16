@@ -463,8 +463,10 @@ files.
   each exactly at `stack_threshold_in_bytes`), reserves 3.3 GiB, and under a second GPU batch
   `cu_launch_kernel` answered `CUDA_ERROR_OUT_OF_MEMORY` (the 2026-10-02 and 10-31 flakes). The
   launch, and since gh-ocannl-1872 the graph launch (`Cu.Graph.launch`, both the first after a
-  capture and a cached replay) and HIP's kernel and graph launches, back off over 15.5 s
-  (`launch_with_memory_backoff`; a stderr line per refusal states the reservation), CUDA at once
+  capture and a cached replay), CUDA and HIP graph instantiation (where a graph's kernels first
+  reserve: a hopeless CUDA frame is refused there) and HIP's kernel and graph launches, back off
+  over 15.5 s (`launch_with_memory_backoff`; a stderr line per refusal states the reservation),
+  an instantiation refused memory running the segments plainly that once, CUDA at once
   re-raising when the reservation exceeds total memory. The exception stays the binding's own:
   the sweep's serial rerun keys on its text (`cu_graph_launch`/`hip_graph_launch` rows included),
   and CUDA's `classify_failure` declines it `No_device_writes` in a search (HIP's does not classify
@@ -485,11 +487,13 @@ files.
   outside the back-off's handler, so its failure is never retried as a refused launch. During a
   stream capture the kernel tasks only record their depot into a per-domain collector, and the
   graph launch resets for them. The depot is a lower bound, so a frame that is all JIT spills is not
-  gated. Counted as `local_memory_resets`. HIP has no counterpart: its scratch is budgeted per
+  gated. Counted as `local_memory_resets`; the share itself is reported as
+  `local_memory_reset_share`, which tests size their frames from. HIP has no counterpart: its scratch is budgeted per
   work-item at link (below), and `hipLimitStackSize` does not govern it.
 - Guard for both: `test/operations/cuda_launch_reservation` declines a hopeless frame, plainly and
   in a graph; returns an s11d_ref-sized frame's free memory, plainly and in a graph; resets nothing
-  for a small frame; runs HIP's scratch frame. By hand, under an exclusive hold, `--contended`
+  for a small frame or one a quarter under the threshold, and resets for one a quarter over it;
+  runs HIP's scratch frame. By hand, under an exclusive hold, `--contended`
   outwaits a child process holding the memory in device buffers (a frame reservation is now
   released at once); in a shared batch that child refused its neighbours. `schedule_strided_1x1`'s
   resnet-block row claims the reset on the real s11d_ref.

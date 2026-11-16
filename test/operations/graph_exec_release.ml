@@ -39,15 +39,8 @@ let fissioned_chain () =
   let%op qg = qc * qe in
   Train.forward qg
 
-(* [live_graph_execs] in the backend's [Sexp.message]-shaped global debug info, if it reports
-   one. *)
-let live_graph_execs ctx =
-  match Context.global_debug_info ctx with
-  | Sexp.List (_ :: fields) ->
-      List.find_map fields ~f:(function
-        | Sexp.List [ Sexp.Atom "live_graph_execs"; Sexp.Atom n ] -> Int.of_string_opt n
-        | _ -> None)
-  | _ -> None
+(* [live_graph_execs] in the backend's global debug info, if it reports one. *)
+let live_graph_execs ctx = Ll_test.debug_counter ctx "live_graph_execs"
 
 let () =
   let comp = fissioned_chain () in

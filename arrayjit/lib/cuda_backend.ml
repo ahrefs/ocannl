@@ -1846,6 +1846,9 @@ end = struct
         ("launch_memory_refusals", [%sexp_of: int] @@ Atomic.get launch_memory_refusals);
         (* gh-ocannl-1872: local-memory reservations released after a gated launch. *)
         ("local_memory_resets", [%sexp_of: int] @@ Atomic.get local_memory_resets);
+        (* The gate's denominator: a reservation past [total memory / this] is reset. Reported so
+           tests size their frames from it rather than restating it. *)
+        ("local_memory_reset_share", [%sexp_of: int] local_memory_reset_share);
       ]
 
   let static_properties () =

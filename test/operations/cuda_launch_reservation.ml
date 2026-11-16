@@ -62,10 +62,6 @@ let hopeless_floats = 120_000
 (* s11d_ref's frame: three 16 KiB [Local] nodes, 48 KiB for its one thread. *)
 let s11d_floats = 12_288
 
-(* The CUDA backend's reset share ([Cuda_backend.local_memory_reset_share]): a reservation past this
-   fraction of device memory is released after its launch. *)
-let reset_share = 16
-
 (* A one-thread kernel whose frame is a [Local] array of [n] floats, filled forward and drained in
    reverse into the materialized [out]. With [~graph], a second statement adds one to [out] into a
    materialized [next], and the routine is cut into two segments there, so a GPU backend captures it
@@ -152,14 +148,7 @@ let () =
       Stdlib.exit 0
   | _ -> ()
 
-let counter ctx field =
-  match Context.global_debug_info ctx with
-  | Sexp.List (_ :: fields) ->
-      List.find_map fields ~f:(function
-        | Sexp.List [ Sexp.Atom f; Sexp.Atom n ] when String.equal f field -> Int.of_string_opt n
-        | _ -> None)
-  | _ -> None
-
+let counter = debug_counter
 let count ctx field = Option.value ~default:0 (counter ctx field)
 
 (* What [f] changed the named counters by. *)
@@ -239,15 +228,26 @@ let () =
 
     (* --- 2. Bound: an s11d_ref-sized frame's reservation is released after its launch. --- *)
     let reservation = lazy (s11d_floats * 4 * Lazy.force resident) in
+    (* The reset's threshold, [total memory / share], with the share the backend reports (its
+       [local_memory_reset_share]), so no claim here restates the gate. *)
+    let threshold =
+      lazy
+        (let _, total = free_and_total () in
+         Option.map (counter ctx "local_memory_reset_share") ~f:(fun share -> total / share))
+    in
     let fits =
       lazy
         (let free, total = free_and_total () in
          let r = Lazy.force reservation in
          Stdio.eprintf
-           "bound: an s11d_ref-sized frame reserves %d B; %d B free of %d B (not part of the golden)\n\
+           "bound: an s11d_ref-sized frame reserves %d B; %d B free of %d B, the reset threshold \
+            %s B (not part of the golden)\n\
             %!"
-           r free total;
-         r > total / reset_share && free > r + (r / 2))
+           r free total
+           (Option.value_map (Lazy.force threshold) ~default:"-" ~f:Int.to_string);
+         match Lazy.force threshold with
+         | Some threshold -> r > threshold && free > r + (r / 2)
+         | None -> false)
     in
     let bound = Verdict.sub_leg cuda ~on:backend_name ~when_:fits in
     let measured ~graph ~first_id ~name =
@@ -291,6 +291,28 @@ let () =
               run_frame ~ctx ~first_id:1773400 ~name:"clr_small" 256)
         in
         p label (List.equal Int.equal d [ 1 ] && List.equal Int.equal small [ 0 ]));
+    (* The gate's boundary, from both sides: frames sized a quarter above and a quarter below the
+       threshold, so the share cannot drift by more than that with every claim staying green. *)
+    in_leg ~leg:bound
+      "bound: a frame reserving a quarter more than the reset threshold resets, one a quarter less \
+       does not" (fun label ->
+        let threshold = Option.value_exn (Lazy.force threshold) in
+        let floats_for bytes = bytes / 4 / Lazy.force resident in
+        let resets_of ~first_id ~name n =
+          snd
+            (deltas ctx [ "local_memory_resets" ] (fun () ->
+                 Array.equal Float.equal (run_frame ~ctx ~first_id ~name n) (expected n)))
+        in
+        let above = floats_for (threshold + (threshold / 4))
+        and below = floats_for (threshold - (threshold / 4)) in
+        Stdio.eprintf
+          "bound: the threshold is %d B: %d floats per thread above it, %d below it (not part of \
+           the golden)\n\
+           %!"
+          threshold above below;
+        p label
+          (List.equal Int.equal (resets_of ~first_id:1773420 ~name:"clr_above" above) [ 1 ]
+          && List.equal Int.equal (resets_of ~first_id:1773440 ~name:"clr_below" below) [ 0 ]));
 
     (* --- 3. Graph: the same, launched as a captured graph. --- *)
     let graph_run =

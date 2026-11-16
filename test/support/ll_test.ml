@@ -538,6 +538,18 @@ let rejection_code (o : LL.optimized) tn =
    executions do not observe each other's decisions. *)
 let base_ctx = lazy (Context.auto ())
 
+(** [debug_counter ctx field] is the integer [field] of the backend's global debug info
+    ([Context.global_debug_info], a [Sexp.message] of [(field value)] pairs), [None] on a backend
+    that does not report it: the counters the GPU backends keep (graph execs held, launch back-offs,
+    local-memory resets) and the constants their gates read. *)
+let debug_counter ctx field =
+  match Context.global_debug_info ctx with
+  | Sexp.List (_ :: fields) ->
+      List.find_map fields ~f:(function
+        | Sexp.List [ Sexp.Atom f; Sexp.Atom n ] when String.equal f field -> Int.of_string_opt n
+        | _ -> None)
+  | _ -> None
+
 (** The backend's accumulator residency for a storage precision — the width a [Schedule.Privatize]
     tile is minted at ({!Ir.Schedule.privatize}'s [~accum_prec], gh-ocannl-1116) — read off the
     selected backend's {!Context.codegen_capabilities}, so a test asks code generation's own
