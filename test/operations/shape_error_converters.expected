@@ -1,0 +1,20 @@
+second payload names its own solve: true
+sexp_of_exn, second exception:
+(Shape_error "solved dimensions for axis: mismatch"
+ "conflicting sizes: 7 vs 11" "failed constraint: 'a = 11"
+ "from n2 (output) with second_attempt_right (output): pointwise_binary")
+sexp_of_exn prints the second payload: true
+Exn.to_string, second exception:
+(Shape_error "solved dimensions for axis: mismatch"
+  "conflicting sizes: 7 vs 11" "failed constraint: 'a = 11"
+  "from n2 (output) with second_attempt_right (output): pointwise_binary")
+Exn.to_string prints the second payload: true
+Printexc.to_string, second exception:
+Shape_error: solved dimensions for axis: mismatch
+  conflicting sizes: 7 vs 11
+  failed constraint: 'a = 11
+    from n2 (output) with second_attempt_right (output): pointwise_binary
+Printexc.to_string prints the second payload: true
+sexp_of_exn preserves the first exception after a later solve: true
+Exn.to_string preserves the first exception after a later solve: true
+Printexc.to_string preserves the first exception after a later solve: true
