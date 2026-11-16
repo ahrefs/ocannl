@@ -17,14 +17,30 @@ let bf16_accum_wide () =
   | Numerics.Bf16_narrow -> false
 
 (* Whether f16 reduction accumulators reside in f32 on this backend: under [Numerics.Fp16_wide], and
-   since gh-ocannl-2195 under [Fp16_auto] too -- only [Fp16_narrow] (the [performance] and
-   [approximate] profiles' setting) keeps gfx11's f16-accumulate WMMA and storage-width serial
-   accumulators. Why: gh-ocannl-2151's census measured gfx1151's f16 WMMA narrowing per ordered pair
-   (odd rows exchanging the two 8-term halves of each 16-deep block) where the storage-width serial
-   loop narrows per step, so under a narrow auto the value depended on whether the tuner crowned a
-   tile. The constant is published to seeding as [capability.mma_f16_auto_wide]. *)
+   since gh-ocannl-2195 under [Fp16_auto] too -- only an explicit [Fp16_narrow] keeps gfx11's
+   f16-accumulate WMMA and storage-width serial accumulators (the profiles' [Fp16_prefer_narrow] is
+   floored to auto here, [fp16_narrow_floored]). Why: gh-ocannl-2151's census measured gfx1151's f16
+   WMMA narrowing per ordered pair (odd rows exchanging the two 8-term halves of each 16-deep block)
+   where the storage-width serial loop narrows per step, so under a narrow auto the value depended
+   on whether the tuner crowned a tile. The constant is published to seeding as
+   [capability.mma_f16_auto_wide]. *)
 let fp16_auto_wide = true
-let fp16_accum_wide () = Numerics.fp16_accum_wide ~auto_wide:fp16_auto_wide ()
+
+(* Whether this backend floors [Numerics.Fp16_prefer_narrow] -- the [performance] and [approximate]
+   profiles' request -- to its auto (wide): yes (gh-ocannl-2233). On gfx11 the f16-accumulate WMMA
+   arm buys nothing: on gfx1151 its whole-output checksum misses the exact answer by 7.2% at n = k =
+   1024 and 82% at n = k = 2048 (the narrow serial loop by 0.11% and 0.19%), and the wide arm is
+   faster (0.57x and 0.60x on gfx1151's [mma_pd2], 0.21-0.34x on gfx1102's tensorized variants;
+   gh-ocannl-2195). The floor covers the serial residency too, through the one predicate below, so a
+   floored profile stays schedule-uniform. It is HIP-wide, not gfx11-only: these tables are
+   device-free, and gfx12, the other rocWMMA family, is unmeasured. An explicit [Fp16_narrow]
+   ([fp16_arithmetic=true]) still lifts it. Published to seeding as
+   [capability.mma_f16_narrow_floored]. *)
+let fp16_narrow_floored = true
+
+let fp16_accum_wide () =
+  Numerics.fp16_accum_wide ~auto_wide:fp16_auto_wide ~narrow_floored:fp16_narrow_floored ()
+
 let tile = 16
 
 (* The combination table both hooks consult: per storage triple, the precision the accumulator
@@ -85,6 +101,7 @@ let capability =
        no longer costs this backend its f16 tensor-unit legs (gh-ocannl-680's stated remainder). *)
     mma_f16_wide_acc_scopes = [ Backend_intf.Mma_per_statement; Backend_intf.Mma_fragment_scope ];
     mma_f16_auto_wide = fp16_auto_wide;
+    mma_f16_narrow_floored = fp16_narrow_floored;
     (* gh-ocannl-838: the uniform-bf16 arm swaps the same way under [Numerics.Bf16_wide], through
        rocWMMA's [(bf16, bf16, f32)] fragments and the same converted boundary. *)
     mma_bf16_wide_acc_scopes = [ Backend_intf.Mma_per_statement; Backend_intf.Mma_fragment_scope ];

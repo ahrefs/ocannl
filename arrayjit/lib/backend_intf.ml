@@ -202,6 +202,14 @@ type mma_capability = {
           uniform-f16 seeds of any scope missing from {!mma_f16_wide_acc_scopes}, exactly as under
           {!Numerics.Fp16_wide} (CUDA below sm_80 lists none). [true] on CUDA and HIP, [false] on
           Metal. *)
+  mma_f16_narrow_floored : bool; [@sexp_drop_default.equal] [@default false]
+      (** Whether the backend floors {!Numerics.Fp16_prefer_narrow} (the [performance] and
+          [approximate] profiles' request) to its {!Numerics.Fp16_auto} rather than resolving it as
+          {!Numerics.Fp16_narrow} — the backend's own [fp16_narrow_floored] constant, read through
+          the same {!Numerics.fp16_accum_wide} as its [accum_prec] and arm table, and carried here
+          for the same seeding gates as {!mma_f16_auto_wide} (gh-ocannl-2233). [true] on HIP,
+          [false] on CUDA and Metal. Rendered only when [true], so the descriptors that do not floor
+          keep the schedule-cache key they had (the descriptor is a [Key] field of the limits). *)
   mma_bf16_wide_acc_scopes : mma_emission_scope list;
       (** The bf16 twin of {!mma_f16_wide_acc_scopes}: the emission scopes in which the backend's
           uniform-bf16 arm holds the accumulator in f32 and converts once at that scope's [d]
@@ -579,8 +587,8 @@ let advertises_mma_format_in_scope (limits : hardware_limits) ~(policy : Numeric
       let has scopes = List.mem scopes scope ~equal:equal_mma_emission_scope in
       match (a, b, d) with
       | Mma_f16, Mma_f16, Mma_f16
-        when Numerics.fp16_mode_accum_wide ~auto_wide:mma.mma_f16_auto_wide policy.fp16_arithmetic
-        ->
+        when Numerics.fp16_mode_accum_wide ~auto_wide:mma.mma_f16_auto_wide
+               ~narrow_floored:mma.mma_f16_narrow_floored policy.fp16_arithmetic ->
           has mma.mma_f16_wide_acc_scopes
       | Mma_bf16, Mma_bf16, Mma_bf16
         when Numerics.equal_bf16_mode policy.bf16_arithmetic Numerics.Bf16_wide ->
@@ -1195,6 +1203,7 @@ let minimal_mma_capability =
     mma_format_tiles = [];
     mma_f16_wide_acc_scopes = [];
     mma_f16_auto_wide = false;
+    mma_f16_narrow_floored = false;
     mma_bf16_wide_acc_scopes = [];
     mma_staged_layouts = [];
     mma_pipeline_depths = [];

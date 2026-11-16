@@ -34,10 +34,27 @@
       mantissa and 65504 range for a doubled lane count. On targets that merely promote to float it
       is ignored (costs accuracy for no speed). On the GPU backends it keeps storage-width f16
       accumulators and the f16-accumulate tensor-unit arms — on CUDA and HIP not schedule-uniformly,
-      since those arms narrow at different points from the serial loop (gh-ocannl-2195); it is what
-      the [performance] and [approximate] profiles name, which is how they kept the narrow side when
-      auto moved. *)
-type fp16_mode = Fp16_auto | Fp16_narrow | Fp16_wide [@@deriving sexp, compare, equal, enumerate]
+      since those arms narrow at different points from the serial loop (gh-ocannl-2195). An explicit
+      request: every backend honors it, HIP's gfx11 f16-accumulate WMMA included.
+    - [Fp16_prefer_narrow] (config [prefer_narrow]; gh-ocannl-2233): [Fp16_narrow] wherever the
+      backend admits the narrow side as a trade, the backend's own [Fp16_auto] where it floors it
+      (its [fp16_narrow_floored] constant, read through {!fp16_resolve}). It is what the
+      [performance] and [approximate] profiles name. HIP floors it: gfx11's f16-accumulate WMMA
+      misses a whole-output checksum by 7% (k = 1024) and 82% (k = 2048) on gfx1151 and runs 3-5x
+      slower than the wide arm on gfx1102, so no profile wants it there; CUDA, Metal and the CPU
+      backends resolve it as [Fp16_narrow]. *)
+type fp16_mode = Fp16_auto | Fp16_narrow | Fp16_wide | Fp16_prefer_narrow
+[@@deriving sexp, compare, equal, enumerate]
+
+val fp16_mode_of_string : string -> fp16_mode
+(** The parse of the [fp16_arithmetic] setting, the one {!default} reads it with: [auto],
+    [prefer_narrow], or a boolean ([true] is {!Fp16_narrow}, [false] {!Fp16_wide}); case and
+    surrounding blanks ignored. Raises [Invalid_argument] on anything else. *)
+
+val fp16_resolve : narrow_floored:bool -> fp16_mode -> fp16_mode
+(** What a mode means on a backend that floors the profiles' narrow request exactly when
+    [narrow_floored]: {!Fp16_prefer_narrow} becomes {!Fp16_auto} there and {!Fp16_narrow} elsewhere;
+    every other mode is itself (gh-ocannl-2233). *)
 
 (** The bf16 accumulator mode (gh-ocannl-838), the same three-way shape as {!fp16_mode} so the
     policy surface stays one shape for both 16-bit float formats.
@@ -160,15 +177,17 @@ val set_policy : t -> unit
 (** Override the current policy before compilation. Already compiled routines retain their
     compilation policy. *)
 
-val fp16_mode_accum_wide : auto_wide:bool -> fp16_mode -> bool
+val fp16_mode_accum_wide : auto_wide:bool -> narrow_floored:bool -> fp16_mode -> bool
 (** Whether f16 reduction accumulators reside in f32 under the mode on a backend whose {!Fp16_auto}
-    resolves wide exactly when [auto_wide]: always under {!Fp16_wide}, never under {!Fp16_narrow}
-    (gh-ocannl-2195). *)
+    resolves wide exactly when [auto_wide] and which floors {!Fp16_prefer_narrow} exactly when
+    [narrow_floored]: always under {!Fp16_wide}, never under {!Fp16_narrow} (gh-ocannl-2195), and
+    {!Fp16_prefer_narrow} as {!fp16_resolve} maps it (gh-ocannl-2233). *)
 
-val fp16_accum_wide : auto_wide:bool -> unit -> bool
+val fp16_accum_wide : auto_wide:bool -> narrow_floored:bool -> unit -> bool
 (** {!fp16_mode_accum_wide} under the current policy: the one predicate behind every backend's
-    [accum_prec] and mma arms (each passing its own [fp16_auto_wide]) and the seeding gate (reading
-    it from [Backend_intf.mma_capability.mma_f16_auto_wide]). *)
+    [accum_prec] and mma arms (each passing its own [fp16_auto_wide] and [fp16_narrow_floored]) and
+    the seeding gate (reading both from [Backend_intf.mma_capability]'s [mma_f16_auto_wide] and
+    [mma_f16_narrow_floored]). *)
 
 val bf16_accum_wide : unit -> bool
 (** Whether the current policy explicitly requests {!Bf16_wide}. Backend resolution of {!Bf16_auto}

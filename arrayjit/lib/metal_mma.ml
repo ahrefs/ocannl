@@ -28,7 +28,14 @@ let bf16_accum_wide () =
    here; CUDA and HIP, whose f16-accumulate tensor units narrow at other points, resolve it wide.
    Published to seeding as [capability.mma_f16_auto_wide]. *)
 let fp16_auto_wide = false
-let fp16_accum_wide () = Numerics.fp16_accum_wide ~auto_wide:fp16_auto_wide ()
+
+(* Whether this backend floors [Numerics.Fp16_prefer_narrow] (the profiles' request) to its auto: no
+   (gh-ocannl-2233); it resolves as [Fp16_narrow], which is what auto means here anyway. Published
+   to seeding as [capability.mma_f16_narrow_floored]. *)
+let fp16_narrow_floored = false
+
+let fp16_accum_wide () =
+  Numerics.fp16_accum_wide ~auto_wide:fp16_auto_wide ~narrow_floored:fp16_narrow_floored ()
 
 (* The one combination resolver both MMA hooks consult: the precision a storage triple's accumulator
    fragment resides at, every fragment type then following from its precision ([Metal_backend]'s
@@ -99,6 +106,7 @@ let capability =
        storage elementwise at the outer boundary (gh-ocannl-837). *)
     mma_f16_wide_acc_scopes = [ Backend_intf.Mma_per_statement; Backend_intf.Mma_fragment_scope ];
     mma_f16_auto_wide = fp16_auto_wide;
+    mma_f16_narrow_floored = fp16_narrow_floored;
     (* gh-ocannl-923: the uniform-bf16 arm's wide counterpart, the same float accumulator and
        coordinate-table boundary in both hooks. *)
     mma_bf16_wide_acc_scopes = [ Backend_intf.Mma_per_statement; Backend_intf.Mma_fragment_scope ];

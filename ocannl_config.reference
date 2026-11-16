@@ -431,7 +431,8 @@
 # If true, the untuned CUDA/HIP default's reduction sink (above) also takes the sites whose
 # accumulator precision is wider than their storage precision (gh-ocannl-1405): a bf16 gradient on
 # CUDA (on HIP unless bf16_arithmetic=true), fp8 on both, f16 on both unless fp16_arithmetic=true
-# (auto resolves f16 wide there since gh-ocannl-2195), and on Metal under fp16_arithmetic=false. A
+# or, on CUDA only, prefer_narrow (auto resolves f16 wide there since gh-ocannl-2195, and HIP floors
+# prefer_narrow to auto, gh-ocannl-2233), and on Metal under fp16_arithmetic=false. A
 # sunk reduction (a bias or layer-norm parameter gradient) keeps its summation order but accumulates
 # at the accumulator precision and rounds to storage once, where the default rounds after every batch
 # row: results change, towards the exact sum. A numerics gate: on in the approximate profile, pinned
@@ -2018,8 +2019,15 @@
 #   Ignored on targets whose fp16 arithmetic is promoted to float (see cc_fp16_arithmetic),
 #   where it would cost accuracy for no speed. On the GPU backends it keeps storage-width f16
 #   accumulators and the f16-accumulate tensor-unit arms (on CUDA and HIP not schedule-uniformly:
-#   those arms narrow at other points than the serial loop). The performance and approximate
-#   profiles set it.
+#   those arms narrow at other points than the serial loop). An explicit request: every backend
+#   honors it, HIP's f16-accumulate WMMA included.
+# - "prefer_narrow" (gh-ocannl-2233): "true" wherever the backend admits the narrow side as a
+#   trade, and the backend's own "auto" where it floors it. HIP floors it, so there it resolves
+#   wide (serial loop and tensor-unit arm alike): on gfx11 the f16-accumulate WMMA misses a
+#   whole-output checksum by 7.2% (n=k=1024) and 82% (n=k=2048) on gfx1151 and runs slower than
+#   the wide arm (3-5x on gfx1102). The floor is HIP-wide (gfx12, unmeasured, included). CUDA,
+#   Metal and the CPU backends resolve it as "true". The performance and approximate profiles set
+#   it; set "true" explicitly to select HIP's narrow arm anyway.
 # Programmatic override: `Ir.Numerics.set_policy`.
 #fp16_arithmetic=auto
 
@@ -2355,10 +2363,12 @@
 # cc_backend_simd_flags=auto
 #
 # # Native 16-bit arithmetic where the target has it; ignored on targets that promote fp16 to
-# # float. On the GPU backends it keeps the f16-accumulate tensor units and storage-width f16
-# # accumulators -- on CUDA and HIP the narrow side of the trade auto no longer takes
-# # (gh-ocannl-2195), and the one result-changing key of this payload.
-# fp16_arithmetic=true
+# # float. On CUDA and Metal it keeps the f16-accumulate tensor units and storage-width f16
+# # accumulators -- on CUDA the narrow side of the trade auto no longer takes (gh-ocannl-2195), and
+# # the one result-changing key of this payload. HIP floors it to auto, wide (gh-ocannl-2233): gfx11's
+# # f16-accumulate WMMA misses whole-output checksums by 7-82% and runs slower than the wide arm, so
+# # no profile selects it; an explicit fp16_arithmetic=true still does.
+# fp16_arithmetic=prefer_narrow
 #
 # # The floating-point licences (fp_contract, fp_reassociate, fp_finite_math; gh-ocannl-998) stay
 # # at their defaults, off: they change results, which is the `approximate` profile's axis.
@@ -2383,15 +2393,15 @@
 # model_default_schedule=true
 # cc_backend_arch_flags=auto
 # cc_backend_simd_flags=auto
-# fp16_arithmetic=true
+# fp16_arithmetic=prefer_narrow
 #
 # # f32 matmul operands computed at tf32 (10-bit mantissa, f32 accumulation) on the backends with
 # # a tf32 tile shape (CUDA sm_80+); a no-op elsewhere.
 # tf32_matmuls=true
-# # The narrow side of the bf16 accumulator trade (gh-ocannl-838), symmetric with fp16_arithmetic
-# # above: never the strict f32 residency `false` requests. It resolves as auto everywhere except
-# # HIP and Metal, where auto went wide (gh-ocannl-1051, gh-ocannl-2029) and this keeps their
-# # bf16-accumulate tensor-unit arms.
+# # The narrow side of the bf16 accumulator trade (gh-ocannl-838), the twin of fp16_arithmetic
+# # above but with no backend floor: never the strict f32 residency `false` requests. It
+# # resolves as auto everywhere except HIP and Metal, where auto went wide (gh-ocannl-1051,
+# # gh-ocannl-2029) and this keeps their bf16-accumulate tensor-unit arms.
 # bf16_arithmetic=true
 # # The online-softmax attention rewrite (gh-ocannl-483): the softmax normalizer's summation is
 # # reassociated into a per-row scan, and the probabilities are never materialized.
@@ -2429,7 +2439,8 @@
 # # bounds the extra cost at two searches per arm while still exercising the refinement.
 # tune_inline_flips=2
 # # The untuned CUDA/HIP default also sinks the sites whose accumulator is wider than their storage
-# # (gh-ocannl-1405): a bf16 gradient on CUDA, fp8 on CUDA and HIP, f16 unless fp16_arithmetic=true. It
+# # (gh-ocannl-1405): a bf16 gradient on CUDA, fp8 on CUDA and HIP, f16 where fp16_arithmetic is auto
+# # or false (and on HIP, under this payload's floored prefer_narrow too). It
 # # seeds them in every profile (gh-ocannl-2195), since a seeded one keeps its result; a sunk one (a
 # # bias gradient) keeps its summation order but rounds to storage once instead of after every step.
 # gpu_default_seed_narrow_storage=true

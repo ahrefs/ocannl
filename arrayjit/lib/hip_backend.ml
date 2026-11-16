@@ -742,7 +742,8 @@ end = struct
        triples are seeded, so wherever the policy keeps the narrow ARM a 16-bit accumulator keeps
        its storage residency too — widening only the serial legs would re-introduce the
        serial-vs-mma width dependence gh-ocannl-639 removes. Which arm the policy picks is the
-       residency: f16 is WIDE unless [Fp16_narrow] (gh-ocannl-2195); bf16 is WIDE unless
+       residency: f16 is WIDE unless an explicit [Fp16_narrow] (gh-ocannl-2195; the profiles'
+       [Fp16_prefer_narrow] is floored to wide here, gh-ocannl-2233); bf16 is WIDE unless
        [Bf16_narrow] (gh-ocannl-1051, below). fp8 has an accumulator format on no backend (its
        serial arithmetic already bridges through float per operator), so it follows the CPU policy:
        f32 residency, one narrowing per nest, governed by the same [narrow_compute_f32] knob.
@@ -756,8 +757,9 @@ end = struct
        an f32 accumulator fragment — which is what takes the uniform-bf16 legs off gfx11's
        bf16-accumulate WMMA, whose result is not exactly rounded. Since gh-ocannl-1051 [Bf16_auto]
        resolves wide here too ([bf16_accum_wide] above); only [Bf16_narrow] keeps bf16 storage
-       residency. Likewise [Fp16_auto] since gh-ocannl-2195 ([Hip_mma.fp16_accum_wide]); only
-       [Fp16_narrow] keeps f16 storage residency and the f16-accumulate WMMA. *)
+       residency. Likewise [Fp16_auto] since gh-ocannl-2195 and [Fp16_prefer_narrow] since
+       gh-ocannl-2233 ([Hip_mma.fp16_accum_wide]); only an explicit [Fp16_narrow] keeps f16 storage
+       residency and the f16-accumulate WMMA. *)
     let accum_prec prec =
       match prec with
       | Ops.Half_prec _ when Hip_mma.fp16_accum_wide () -> Ops.single

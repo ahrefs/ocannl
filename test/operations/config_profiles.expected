@@ -59,7 +59,7 @@ Profile "performance" sets:
   model_default_schedule=true
   cc_backend_arch_flags=auto
   cc_backend_simd_flags=auto
-  fp16_arithmetic=true
+  fp16_arithmetic=prefer_narrow
 
 Profile "approximate" sets:
   autotune_search=true
@@ -68,7 +68,7 @@ Profile "approximate" sets:
   model_default_schedule=true
   cc_backend_arch_flags=auto
   cc_backend_simd_flags=auto
-  fp16_arithmetic=true
+  fp16_arithmetic=prefer_narrow
   tf32_matmuls=true
   bf16_arithmetic=true
   online_softmax=true

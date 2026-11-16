@@ -407,6 +407,8 @@
   (alias runtest-prefix_scan_fp_licences)
   (alias runtest-premise_ratchet)
   (alias runtest-premise_scan_cases)
+  (alias runtest-profile_fp16_floor-approximate)
+  (alias runtest-profile_fp16_floor-performance)
   (alias runtest-provenance_tag_inventory)
   (alias runtest-qkv_zero_init-approximate)
   (alias runtest-refused_action_streams)
@@ -10857,6 +10859,65 @@
   (env_var OCANNL_BACKEND))
  (modules product_tie_cancellation)
  (libraries base ocannl stdio arrayjit.verdict))
+
+; gh-ocannl-2233: no built-in profile selects HIP's f16-accumulate WMMA arm (HIP floors the
+; profiles' fp16_arithmetic=prefer_narrow to its wide auto), CUDA, Metal and the CPU backends resolve
+; the profiles as before, and an explicit fp16_arithmetic=true still selects the narrow arm. Pure
+; tables; the two variants rerun the live-resolution claims under a real profile selection, against
+; the same golden.
+
+(test
+ ; ocannl-backend: none -- evaluates the pure Ir.Hip_mma, Ir.Cuda_mma and Ir.Metal_mma tables and
+ ; Numerics' CPU resolution; no context, no device.
+ (name profile_fp16_floor)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules profile_fp16_floor)
+ (libraries base stdio arrayjit.ir arrayjit.utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- the same pure tables, under the performance profile picked on the
+ ; command line.
+ (target profile_fp16_floor-performance.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:profile_fp16_floor.exe}
+    --ocannl_profile=performance
+    --expect-profile=performance))))
+
+(rule
+ (alias runtest-profile_fp16_floor-performance)
+ (package neural_nets_lib)
+ (action
+  (diff profile_fp16_floor.expected profile_fp16_floor-performance.actual)))
+
+(rule
+ ; ocannl-backend: none -- the same pure tables, under the approximate profile picked on the
+ ; command line.
+ (target profile_fp16_floor-approximate.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:profile_fp16_floor.exe}
+    --ocannl_profile=approximate
+    --expect-profile=approximate))))
+
+(rule
+ (alias runtest-profile_fp16_floor-approximate)
+ (package neural_nets_lib)
+ (action
+  (diff profile_fp16_floor.expected profile_fp16_floor-approximate.actual)))
 
 (test
  ; ocannl-backend: none -- builds Row constraints by hand and solves their projection equations with

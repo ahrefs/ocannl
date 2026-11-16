@@ -10,6 +10,6 @@ cc_backend_simd_flags    = auto           (profile 'approximate' via the command
 cc_backend_fp_contract   = fast           (profile 'approximate' via the commandline)
 cc_backend_fast_math     = true           (profile 'approximate' via the commandline)
 cc_vector_bytes          = 64             (config file)
-fp16_arithmetic          = true           (profile 'approximate' via the commandline)
+fp16_arithmetic          = prefer_narrow  (profile 'approximate' via the commandline)
 tf32_matmuls             = true           (profile 'approximate' via the commandline)
 virtualize_max_visits    = 1              (default)

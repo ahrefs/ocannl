@@ -13,9 +13,14 @@ val fp16_auto_wide : bool
     storage-width half tile and serial loop are both per-step half FMAs (gh-ocannl-2151), so the
     narrow auto is schedule-uniform here. The value of the descriptor's [mma_f16_auto_wide]. *)
 
+val fp16_narrow_floored : bool
+(** Whether [Numerics.Fp16_prefer_narrow] (the profiles' request) resolves as this backend's auto
+    rather than as [Fp16_narrow]: [false] (gh-ocannl-2233). The value of the descriptor's
+    [mma_f16_narrow_floored]. *)
+
 val fp16_accum_wide : unit -> bool
-(** [Numerics.fp16_accum_wide ~auto_wide:fp16_auto_wide ()]: the predicate behind [accum_prec] and
-    {!mma_accumulator}. *)
+(** [Numerics.fp16_accum_wide ~auto_wide:fp16_auto_wide ~narrow_floored:fp16_narrow_floored ()]: the
+    predicate behind [accum_prec] and {!mma_accumulator}. *)
 
 val bf16_accum_wide : unit -> bool
 (** Whether bf16 reduction accumulators reside in f32 on this backend: under [Numerics.Bf16_wide],
