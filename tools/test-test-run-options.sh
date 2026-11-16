@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Refusal checks match literal reasons for the named fixture cases; they do not
+# parse complete usage output or classify arbitrary diagnostics.
 # Tests for tools/test-run.sh: the shared `group_alive` predicate its callers ask "is anything in this
 # process group still running?", the sentences `stop` prints about a surviving
 # process group (gh-ocannl-742), the read-only queries, and the launchers'
@@ -1313,11 +1315,20 @@ for query_ambient in "$TMP/query-ambient-file" "$TMP/query-ambient-missing/../ru
     "$repeat_root/tools/test-run.sh" lock-status "$query_dir" 2>"$TMP/query-error")
   query_rc=$?
   [ "$query_rc" = 0 ] && [ "$query_out" = idle ] || query_bad="lock-status: $query_rc:$query_out"
+  case $query_ambient in
+    "$TMP/query-ambient-file") query_reason="not a directory: $query_ambient" ;;
+    "$TMP/query-ambient-missing/../runs")
+      query_reason="cannot resolve missing state path containing ..: $query_ambient" ;;
+  esac
   for query_command in 'paths runs' 'paths runs fixture' 'lock-status'; do
     query_out=$(OCANNL_TOOL_TEST_RUNS="$query_ambient" \
       "$repeat_root/tools/test-run.sh" $query_command 2>"$TMP/query-error")
     query_rc=$?
-    [ "$query_rc" = 2 ] && [ -z "$query_out" ] || query_bad="$query_command: $query_rc:$query_out"
+    if [ "$query_rc" != 2 ] || [ -n "$query_out" ] \
+       || ! grep -qF -- "$query_reason" "$TMP/query-error"; then
+      query_bad="$query_command: rc=$query_rc stdout=$query_out stderr=$(cat "$TMP/query-error")"
+      break
+    fi
   done
   [ -z "$query_bad" ] || break
 done
