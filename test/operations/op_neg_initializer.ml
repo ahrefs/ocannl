@@ -19,6 +19,8 @@ let () =
   let result = TDSL.O.(positive + negative + tdsl + ntdsl) in
   let ctx = Train.forward_once (Context.cpu ()) result in
   let values t = Context.get_values ctx t.Tensor.value in
+  p "original initializer retains its nonzero values"
+    (Array.equal Float.equal (values positive) [| 2.; -4.; 8.; -16. |]);
   p "negated initializer is exactly the negation of the original"
     (Array.equal Float.equal (values negative) (Array.map (values positive) ~f:Float.neg));
   List.iter
