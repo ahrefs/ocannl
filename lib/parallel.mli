@@ -16,12 +16,13 @@ val shard_along : axis:int -> n_shards:int -> Tensor.t -> Tensor.t array
 (** Splits a literal tensor's host buffer into [n_shards] contiguous sub-arrays along [axis],
     copying the data (copy-on-shard; alias views are subtask 293a and out of scope here). Each
     sub-array is wrapped as a fresh batch-major tensor term so that every shard owns distinct
-    tnodes. *)
+    tnodes. Integer copies preserve all bits and omit padding margins. *)
 
 val gather : axis:int -> Tensor.t array -> Tensor.t
 (** Inverse of {!shard_along}: concatenates the shards' host values along [axis] into a fresh tensor
-    (copy-on-gather). Built at the host level; a graph-level concat via [Operation.concat] is the
-    eventual zero-copy form once slice-as-view (293a) lands. *)
+    (copy-on-gather). Shards must have the same logical shape and storage precision; incompatible
+    shards are refused. Integer copies preserve all bits. Built at the host level; a graph-level
+    concat via [Operation.concat] is the eventual zero-copy form once slice-as-view (293a) lands. *)
 
 type handle = {
   n_shards : int;

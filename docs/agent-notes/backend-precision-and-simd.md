@@ -541,6 +541,14 @@ files.
   that are not written are not checked. Packed uint4x32 and floating formats retain their codecs.
   `ndarray_flat_writer` pins refusals, endpoints and allocation without a device backend.
 
+- **Same-storage integer host relayouts preserve raw bits** (gh-ocannl-2199).
+  `Context.to_host`'s padded recompute blits typed contiguous interior runs with `Ndarray.apply2`, keeping
+  the fresh buffer's committed fringe. `Parallel.shard_along` and `gather` copy typed logical
+  slices; mixed storage precisions refuse. Float-valued reads retain their float contract.
+  Hoisted `Schedule.Stage` permits integer panels only without rounding at the source precision:
+  `exact_widening` admits only narrow-float widenings, and `hoisted_read_rounding` only f32 to half.
+  `integer_host_relayout` pins raw int64/uint64 edge bits through all three paths.
+
 - **An integer table arm is integer-TYPED, in its operands' common type** (gh-ocannl-1883). cc's
   integer `Max`/`Min`/`Relu`/`Satur01` were `fmax`/`fmin` calls, `Trunc` a `truncf` and `Not` a
   `? 1.0 : 0.0`; CUDA's and HIP's `Relu`/`Satur01`/`Trunc`/`Not`, and Metal's `Trunc`, `Satur01`

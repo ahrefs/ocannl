@@ -1604,6 +1604,8 @@ let pack_constant_tile ~round_value ~debug ~(src_nd : Ndarray.t) ~(src_dims : in
     in
     go 0
   in
+  (* Integer sources take the typed branch: [hoisted_read_rounding] rejects their rounded reads, and
+     [exact_widening] rejects every different panel precision. *)
   (if Option.is_none round_value && Ops.equal_prec src_prec prec then
      Ndarray.apply2
        {

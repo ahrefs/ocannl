@@ -1,0 +1,26 @@
+shards preserve every integer bit: true
+gather preserves every integer bit: true
+padded shard/gather preserves the logical cells: true
+hoisted stage replaces the integer source with one packed panel: true
+typed packing preserves every integer bit: true
+tile precision gate refuses integer widening: true
+hoisted rounding gate excludes integer sources: true
+float round trip loses odd low bits above 2^53: true
+float round trip refuses the upper endpoint rounded out of range: true
+padded intermediate is virtual: true
+padded recompute preserves every integer bit: true
+padded recompute restores the neutral fringe: true
+shards preserve every integer bit: true
+gather preserves every integer bit: true
+padded shard/gather preserves the logical cells: true
+hoisted stage replaces the integer source with one packed panel: true
+typed packing preserves every integer bit: true
+tile precision gate refuses integer widening: true
+hoisted rounding gate excludes integer sources: true
+float round trip loses odd low bits above 2^53: true
+float round trip refuses the upper endpoint rounded out of range: true
+padded intermediate is virtual: true
+padded recompute preserves every integer bit: true
+padded recompute restores the neutral fringe: true
+gather refuses mixed storage precisions: true
+gather refuses unequal batch lengths: true

@@ -1,6 +1,7 @@
 open Base
 module Tn = Ir.Tnode
 module Nd = Ir.Ndarray
+module Ops = Ir.Ops
 module Asgns = Ir.Assignments
 module Idx = Ir.Indexing
 module Task = Ir.Task
@@ -16,18 +17,46 @@ type reduction = Sum | Mean
 (* Host-side accessor for ndarray-backed (literal) tensors. After gh-ocannl-333 tensor data lives
    only on devices; the host-level sharding helpers below therefore operate on literal tensors whose
    initialization buffer is registered in [Host_inits]. *)
-let host_get (tn : Tn.t) =
+let host_data (tn : Tn.t) =
   match Ir.Host_inits.find tn with
   | Some nd ->
       let nd = Lazy.force nd in
       let padding = Option.map ~f:fst (Lazy.force tn.Tn.padding) in
-      fun idx -> Nd.get_as_float ?padding nd idx
+      (nd, padding)
   | None ->
       invalid_arg
         (Printf.sprintf
            "Parallel: tensor %s has no host-side data; only ndarray-backed (literal) tensors can \
             be sharded/gathered at the host level"
            (Tn.debug_name tn))
+
+(* Copy one axis-0 slice without converting integer values through float. [apply2] refuses mixed
+   precisions; the padding offsets address logical cells and leave the host source's halo alone. *)
+let copy_host_slice ~src ~dst ~src_start ~dst_start ~length =
+  let nd, padding = host_data src in
+  let src_start, padding =
+    match padding with
+    | None -> (src_start, None)
+    | Some pads ->
+        let left = if Array.is_empty pads then 0 else pads.(0).Ops.left in
+        ( src_start + left,
+          Some
+            (Array.mapi pads ~f:(fun axis pad ->
+                 if axis = 0 then Ops.{ left = 0; right = 0 } else pad)) )
+  in
+  Nd.apply2
+    {
+      f2 =
+        (fun source target ->
+          let source = Stdlib.Bigarray.Genarray.sub_left source src_start length in
+          let target = Stdlib.Bigarray.Genarray.sub_left target dst_start length in
+          match padding with
+          | None -> Stdlib.Bigarray.Genarray.blit source target
+          | Some padding ->
+              Nd.fold_bigarray ~padding source ~init:() ~f:(fun () idx value ->
+                  Stdlib.Bigarray.Genarray.set target idx value));
+    }
+    nd dst
 
 let host_values (t : Tensor.t) : float array =
   let tn = t.Tensor.value in
@@ -47,7 +76,7 @@ let shard_along ~axis ~n_shards (t : Tensor.t) : Tensor.t array =
       (Printf.sprintf "Parallel.shard_along: only axis=0 (leftmost batch axis) supported, got %d"
          axis);
   let tn = t.Tensor.value in
-  let dims = Lazy.force tn.Tn.dims in
+  let dims = Tn.dims_without_padding tn in
   if Array.length dims = 0 then
     invalid_arg "Parallel.shard_along: scalar tensor has no batch axis to shard";
   let batch = dims.(0) in
@@ -57,17 +86,13 @@ let shard_along ~axis ~n_shards (t : Tensor.t) : Tensor.t array =
          n_shards);
   let sub = batch / n_shards in
   let prec = Lazy.force tn.Tn.storage_prec in
-  let get = host_get tn in
   let rest = Array.subo dims ~pos:1 in
   Array.init n_shards ~f:(fun k ->
       let sub_dims = Array.append [| sub |] rest in
       let nd =
-        Nd.init_array ~debug:(Printf.sprintf "shard%d" k) prec ~dims:sub_dims ~padding:None
-          ~f:(fun idx ->
-            let src_idx = Array.copy idx in
-            src_idx.(0) <- idx.(0) + (k * sub);
-            get src_idx)
+        Nd.create_array ~debug:(Printf.sprintf "shard%d" k) prec ~dims:sub_dims ~padding:None
       in
+      copy_host_slice ~src:tn ~dst:nd ~src_start:(k * sub) ~dst_start:0 ~length:sub;
       TDSL.rebatch ~l:(Printf.sprintf "%s_shard%d" (Tn.label_name tn) k) nd ())
 
 let gather ~axis (shards : Tensor.t array) : Tensor.t =
@@ -77,25 +102,22 @@ let gather ~axis (shards : Tensor.t array) : Tensor.t =
       (Printf.sprintf "Parallel.gather: only axis=0 (leftmost batch axis) supported, got %d" axis);
   let n = Array.length shards in
   let tn0 = shards.(0).Tensor.value in
-  let dims0 = Lazy.force tn0.Tn.dims in
+  let dims0 = Tn.dims_without_padding tn0 in
+  if Array.is_empty dims0 then invalid_arg "Parallel.gather: scalar shard has no batch axis";
   let prec = Lazy.force tn0.Tn.storage_prec in
   let rest = Array.subo dims0 ~pos:1 in
   let sub = dims0.(0) in
   Array.iteri shards ~f:(fun i s ->
-      let d = Lazy.force s.Tensor.value.Tn.dims in
-      if Array.length d = 0 || not (Array.equal Int.equal (Array.subo d ~pos:1) rest) then
+      let d = Tn.dims_without_padding s.Tensor.value in
+      if not (Array.equal Int.equal d dims0) then
         invalid_arg
           (Printf.sprintf "Parallel.gather: shard %d has incompatible shape for axis-0 gather" i));
   let total = sub * n in
-  let gets = Array.map shards ~f:(fun s -> host_get s.Tensor.value) in
   let nd =
-    Nd.init_array ~debug:"gather" prec ~dims:(Array.append [| total |] rest) ~padding:None
-      ~f:(fun idx ->
-        let k = idx.(0) / sub in
-        let local = Array.copy idx in
-        local.(0) <- idx.(0) % sub;
-        gets.(k) local)
+    Nd.create_array ~debug:"gather" prec ~dims:(Array.append [| total |] rest) ~padding:None
   in
+  Array.iteri shards ~f:(fun k s ->
+      copy_host_slice ~src:s.Tensor.value ~dst:nd ~src_start:0 ~dst_start:(k * sub) ~length:sub);
   TDSL.rebatch ~l:"gathered" nd ()
 
 type handle = {
