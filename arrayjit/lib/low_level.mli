@@ -1901,16 +1901,20 @@ val local_reads : t -> int list
     runs under the disjunction of the conditions of its occurrences, of the reads of its local at
     operand position and, to a fixpoint, of the definitions reading it.
 
-    A condition is keyed by IR, not by its rendered text: the condition and the precision it renders
-    at for a short-circuiting [Where] ({!Select}); the operator, its first operand, the precision
-    that operand renders at and the operator's evaluation precision for a short-circuiting gate
-    ({!Gate}, whose test is that the second operand matters: at an integer compute precision the
-    operand renders at the integer precision and the test at a float one). Float constants compare
-    by their bits. Two conditions keyed alike are one value: a condition reads no scope local (the
-    [cond_defs] rule of {!arms}), and the bodies run before it write only their own locals. *)
+    The renderer partitions its conditions by their rendered tests ({!plan}'s [same]); the
+    derivation keys them by IR, and the renderer's check holds the two to one partition
+    ({!same_plan}). The IR key: the condition and the precision it renders at for a short-circuiting
+    [Where] ({!Select}); the operator, its first operand, the precision that operand renders at and
+    the operator's evaluation precision for a short-circuiting gate ({!Gate}, whose test is that the
+    second operand matters: at an integer compute precision the operand renders at the integer
+    precision and the test at a float one). Float constants compare by their bits. Two conditions
+    keyed alike are one value: a condition reads no scope local (the [cond_defs] rule of {!arms}),
+    and the bodies run before it write only their own locals. *)
 module Scope_order : sig
   type key =
-    | Select of { cond : scalar_t; prec : Ops.prec }
+    | Select of { cond : scalar_t; prec : Ops.prec; unconverted : bool }
+        (** [unconverted]: an operator condition at an integer compute precision rendered by
+            [C_syntax]'s [integer_op] as it stands, a float-valued one not converted to [prec]. *)
     | Gate of { op : Ops.binop; prec : Ops.prec; first : scalar_t; first_prec : Ops.prec }
 
   val equal_key : key -> key -> bool
@@ -1925,7 +1929,10 @@ module Scope_order : sig
   (** A scope's definition ([def = Some _]) or, with [def = None], a read of its local at operand
       position, under [guard], outermost first. *)
 
-  val equal_lit : 'p lit -> 'p lit -> bool
+  val same_cond : 'p lit -> 'q lit -> bool
+  (** Whether two literals test one condition, polarity aside: equal {!key}s. *)
+
+  val equal_lit : ?same:('p lit -> 'p lit -> bool) -> 'p lit -> 'p lit -> bool
   val evaluable_anywhere : scalar_t -> bool
 
   val arms :
@@ -1958,11 +1965,25 @@ module Scope_order : sig
             definitions. *)
   }
 
-  val plan : reads:('d -> int list) -> ('p, 'd) entry list -> ('p, 'd) plan
+  val plan :
+    ?same:('p lit -> 'p lit -> bool) ->
+    reads:('d -> int list) ->
+    ('p, 'd) entry list ->
+    ('p, 'd) plan
+  (** [same] (default {!same_cond}) tells which literals test one condition. The renderer passes
+      equality of their rendered tests: what it emits is then partitioned by what it spells, and
+      {!same_plan} checks the IR-keyed derivation against it. *)
+
   val order : ('p, 'd) plan -> (int * Access_fold.placement) list
 
-  val same_plan : ('p, 'd) plan -> ('q, 'e) plan -> bool
-  (** Equal orders, placements, declaration orders and conditions, payloads aside. *)
+  val same_plan :
+    ?same_a:('p lit -> 'p lit -> bool) ->
+    ?same_b:('q lit -> 'q lit -> bool) ->
+    ('p, 'd) plan ->
+    ('q, 'e) plan ->
+    bool
+  (** Equal orders, placements and declaration orders, and groups of the same shape and polarities
+      whose literals are one condition under [same_a] exactly where they are under [same_b]. *)
 
   type oracle = {
     short_circuits : prec:Ops.prec -> scalar_t -> bool;

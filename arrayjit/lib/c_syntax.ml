@@ -3382,6 +3382,19 @@ type local_def = (PPrint.document, scope_def) Low_level.Scope_order.entry
     and the conditions this occurrence is evaluated under, outermost first. A definition runs under
     the conditions every occurrence and every read of its local shares. *)
 
+(* gh-ocannl-2213: the renderer's own test of two conditions being one: their rendered tests are
+   spelled alike. A condition is pure and the bodies run before it write only their own locals, so
+   two spelled alike in one statement agree; the partition the renderer emits is then decided by
+   what it emits, whatever the IR key says, and [check_scope_order] holds the IR-keyed derivation to
+   it. *)
+let same_test (x : guard_lit) (y : guard_lit) =
+  let text (l : guard_lit) =
+    let buf = Buffer.create 64 in
+    PPrint.ToBuffer.compact buf l.payload;
+    Buffer.contents buf
+  in
+  phys_equal x.payload y.payload || String.equal (text x) (text y)
+
 let has_definitions (defs : local_def list) =
   List.exists defs ~f:(fun (d : local_def) -> Option.is_some d.def)
 
@@ -3704,9 +3717,9 @@ module C_syntax (B : C_syntax_config) = struct
 
   (* gh-ocannl-2145: a short-circuiting select's arm definitions run under its condition [e1],
      rendered at [cond_prec]. *)
-  let guard_arms ~cond:e1 ~cond_prec ~v1 ~cond_defs d2 d3 =
+  let guard_arms ?(unconverted = false) ~cond:e1 ~cond_prec ~v1 ~cond_defs d2 d3 =
     Low_level.Scope_order.arms
-      ~key:(Select { cond = v1; prec = cond_prec })
+      ~key:(Select { cond = v1; prec = cond_prec; unconverted })
       ~payload:e1 ~v1 ~cond_defs d2 d3
 
   (* gh-ocannl-2213: whether a [Where] or a blendable gate at [prec] short-circuits -- the one
@@ -3894,7 +3907,10 @@ module C_syntax (B : C_syntax_config) = struct
             let d2, e2 = render v2 in
             let d3, e3 = render v3 in
             (* A select at an integer precision short-circuits (gh-ocannl-2145). *)
-            ( d1 @ guard_arms ~cond:e1 ~cond_prec:v1_prec ~v1 ~cond_defs:d1 d2 d3,
+            ( d1
+              @ guard_arms
+                  ~unconverted:(Ops.is_integer v1_prec && is_op v1)
+                  ~cond:e1 ~cond_prec:v1_prec ~v1 ~cond_defs:d1 d2 d3,
               ternop_expr ~blend:false arms_prec op ~v1 ~v2 ~v3 e1 e2 e3 )
         | Follows_operands, _ when fv v1 || fv v2 || fv v3 ->
             let d1, e1 = widen v1 in
@@ -4831,7 +4847,7 @@ module C_syntax (B : C_syntax_config) = struct
   let check_scope_order ~stmt ~roots (plan : (_, _) Low_level.Scope_order.plan) =
     if not (List.is_empty plan.unconditional && List.is_empty plan.conditional) then (
       let derived = Low_level.Scope_order.derived_plan scope_order_oracle roots in
-      if not (Low_level.Scope_order.same_plan plan derived) then
+      if not (Low_level.Scope_order.same_plan ~same_a:same_test plan derived) then
         invalid_arg
           "C_syntax.pp_local_defs: the scope emission order Low_level.Scope_order derives from the \
            IR differs from the one rendered (gh-ocannl-2213)";
@@ -4844,7 +4860,9 @@ module C_syntax (B : C_syntax_config) = struct
 
   let pp_local_defs ?check (local_defs : local_def list) =
     let open PPrint in
-    let plan = Low_level.Scope_order.plan ~reads:(fun d -> Lazy.force d.reads) local_defs in
+    let plan =
+      Low_level.Scope_order.plan ~same:same_test ~reads:(fun d -> Lazy.force d.reads) local_defs
+    in
     Option.iter check ~f:(fun (stmt, roots) -> (check_scope_order ~stmt ~roots) plan);
     let root = List.map plan.unconditional ~f:(fun (_, def) -> def.decl ^^ hardline ^^ def.body) in
     let block doc = lbrace ^^ nest 2 (hardline ^^ doc) ^^ hardline ^^ rbrace in

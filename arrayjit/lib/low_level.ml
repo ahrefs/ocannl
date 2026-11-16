@@ -7376,7 +7376,7 @@ let local_reads (llc : t) : int list =
    ({!Scope_order.emission}). See the interface. *)
 module Scope_order = struct
   type key =
-    | Select of { cond : scalar_t; prec : Ops.prec }
+    | Select of { cond : scalar_t; prec : Ops.prec; unconverted : bool }
     | Gate of { op : Ops.binop; prec : Ops.prec; first : scalar_t; first_prec : Ops.prec }
 
   (* Structural, but a float constant by its bits: [0.0] and [-0.0] compare equal as floats yet can
@@ -7400,7 +7400,10 @@ module Scope_order = struct
 
   let equal_key a b =
     match (a, b) with
-    | Select a, Select b -> Ops.equal_prec a.prec b.prec && equal_cond a.cond b.cond
+    | Select a, Select b ->
+        Ops.equal_prec a.prec b.prec
+        && Bool.equal a.unconverted b.unconverted
+        && equal_cond a.cond b.cond
     | Gate a, Gate b ->
         Ops.equal_binop a.op b.op && Ops.equal_prec a.prec b.prec
         && Ops.equal_prec a.first_prec b.first_prec
@@ -7410,17 +7413,23 @@ module Scope_order = struct
   type 'p lit = { key : key; holds : bool; anywhere : bool; payload : 'p }
   type ('p, 'd) entry = { scope : int; guard : 'p lit list; def : 'd option }
 
-  let equal_lit x y = equal_key x.key y.key && Bool.equal x.holds y.holds
-  let equal_guard a b = List.equal equal_lit a b
+  let same_cond x y = equal_key x.key y.key
 
-  let equal_paths a b =
-    List.length a = List.length b && List.for_all a ~f:(fun p -> List.mem b p ~equal:equal_guard)
+  (* [same]: whether two literals test one condition, polarity aside -- {!same_cond} by default; the
+     renderer passes its own (see {!plan}). *)
+  let equal_lit ?(same = same_cond) x y = same x y && Bool.equal x.holds y.holds
+  let equal_guard ~same a b = List.equal (equal_lit ~same) a b
+
+  let equal_paths ~same a b =
+    List.length a = List.length b
+    && List.for_all a ~f:(fun p -> List.mem b p ~equal:(equal_guard ~same))
 
   (* The conditions a definition runs under, as a disjunction of [paths] (each a conjunction,
      outermost first), simplified: a path another one is a prefix of is absorbed, and two paths
      differing only in their last condition's polarity merge into their common prefix. [[[]]] is
      unconditional. *)
-  let rec normalize_guards paths =
+  let rec normalize_guards ~same paths =
+    let equal_guard = equal_guard ~same in
     let paths =
       List.fold paths ~init:[] ~f:(fun acc p ->
           if List.mem acc p ~equal:equal_guard then acc else acc @ [ p ])
@@ -7428,7 +7437,7 @@ module Scope_order = struct
     let rec is_prefix a b =
       match (a, b) with
       | [], _ -> true
-      | x :: a, y :: b -> equal_lit x y && is_prefix a b
+      | x :: a, y :: b -> equal_lit ~same x y && is_prefix a b
       | _, [] -> false
     in
     let absorbed =
@@ -7437,8 +7446,7 @@ module Scope_order = struct
     in
     let complementary p q =
       match (List.rev p, List.rev q) with
-      | x :: rp, y :: rq ->
-          equal_key x.key y.key && Bool.equal x.holds (not y.holds) && equal_guard rp rq
+      | x :: rp, y :: rq -> same x y && Bool.equal x.holds (not y.holds) && equal_guard rp rq
       | _ -> false
     in
     match
@@ -7448,7 +7456,7 @@ module Scope_order = struct
     | None -> absorbed
     | Some (p, q) ->
         let prefix = List.drop_last_exn p in
-        normalize_guards
+        normalize_guards ~same
           (prefix :: List.filter absorbed ~f:(fun r -> not (equal_guard r p || equal_guard r q)))
 
   let rec evaluable_anywhere (s : scalar_t) =
@@ -7488,7 +7496,9 @@ module Scope_order = struct
     groups : ('p lit list list * (int * 'd) list) list;
   }
 
-  let plan ~(reads : 'd -> int list) (entries : ('p, 'd) entry list) : ('p, 'd) plan =
+  let plan ?(same = same_cond) ~(reads : 'd -> int list) (entries : ('p, 'd) entry list) :
+      ('p, 'd) plan =
+    let normalize_guards = normalize_guards ~same and equal_paths = equal_paths ~same in
     let defs = List.filter_map entries ~f:(fun d -> Option.map d.def ~f:(fun s -> (d.scope, s))) in
     let sorted = List.dedup_and_sort defs ~compare:(fun (a, _) (b, _) -> Int.compare a b) in
     let by_scope = Hashtbl.create (module Int) in
@@ -7553,15 +7563,20 @@ module Scope_order = struct
     @ List.concat_mapi p.groups ~f:(fun i (_, defs) ->
         List.map defs ~f:(fun (s, _) -> (s, Access_fold.Conditional i)))
 
-  let same_plan (a : ('p, 'd) plan) (b : ('q, 'e) plan) =
+  let same_plan ?(same_a = same_cond) ?(same_b = same_cond) (a : ('p, 'd) plan) (b : ('q, 'e) plan)
+      =
+    (* The groups' literals, position by position: the same shape and polarities, and one condition
+       on one side exactly where it is one condition on the other. *)
+    let lits groups = List.concat_map groups ~f:(fun (paths, _) -> List.concat paths) in
     let shape groups =
-      List.map groups ~f:(fun (paths, _) ->
-          List.map paths ~f:(List.map ~f:(fun l -> (l.key, l.holds))))
+      List.map groups ~f:(fun (paths, _) -> List.map paths ~f:(List.map ~f:(fun l -> l.holds)))
     in
-    let equal_lit' (k1, h1) (k2, h2) = equal_key k1 k2 && Bool.equal h1 h2 in
+    let la = lits a.groups and lb = lits b.groups in
     List.equal (fun (x, px) (y, py) -> x = y && Poly.equal px py) (order a) (order b)
     && List.equal Int.equal (List.map a.conditional ~f:fst) (List.map b.conditional ~f:fst)
-    && List.equal (List.equal (List.equal equal_lit')) (shape a.groups) (shape b.groups)
+    && Poly.equal (shape a.groups) (shape b.groups)
+    && List.for_all2_exn la lb ~f:(fun x y ->
+        List.for_all2_exn la lb ~f:(fun x' y' -> Bool.equal (same_a x x') (same_b y y')))
 
   type oracle = {
     short_circuits : prec:Ops.prec -> scalar_t -> bool;
@@ -7594,7 +7609,10 @@ module Scope_order = struct
         let d2 = entries o ps.(1) v2 in
         let d3 = entries o ps.(2) v3 in
         if Ops.equal_ternop op Ops.Where && o.short_circuits ~prec s then
-          d1 @ arms ~key:(Select { cond = v1; prec = ps.(0) }) ~payload:() ~v1 ~cond_defs:d1 d2 d3
+          d1
+          @ arms
+              ~key:(Select { cond = v1; prec = ps.(0); unconverted = false })
+              ~payload:() ~v1 ~cond_defs:d1 d2 d3
         else List.concat [ d1; d2; d3 ]
     | Binop (Ops.ToPowOf, (base, _), (Constant exponent, _))
       when Ops.is_float prec && Float.is_finite exponent && Float.is_integer exponent ->
@@ -7673,7 +7691,11 @@ module Scope_order = struct
             let d2 = sub v2 in
             let d3 = sub v3 in
             d1
-            @ arms ~key:(Select { cond = v1; prec = v1_prec }) ~payload:() ~v1 ~cond_defs:d1 d2 d3
+            @ arms
+                ~key:
+                  (Select
+                     { cond = v1; prec = v1_prec; unconverted = Ops.is_integer v1_prec && is_op v1 })
+                ~payload:() ~v1 ~cond_defs:d1 d2 d3
         | Follows_operands, _ when fv v1 || fv v2 || fv v3 -> List.concat [ sub v1; sub v2; sub v3 ]
         | (Real_valued | Follows_operands | Truth | Integer_only | Projection | Integer_table), _ ->
             table ())

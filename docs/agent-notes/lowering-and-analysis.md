@@ -630,12 +630,15 @@ files.
   syntax at that precision, `speculable_select`, GPU NaN literals; an integer precision always
   short-circuits) and on the precision each scalar renders at, which is also part of a gate
   condition. So `e` comes from the backend's `Scope_order.oracle` (`C_syntax.scope_order_oracle`;
-  tests reach a compiled routine's through `C_syntax.scope_order_oracles`). Conditions are keyed by
-  IR (`Select`/`Gate` with the precision rendered at), not rendered text. Two derivations meet:
-  the renderer's entries, collected by `pp_scalar` as it renders, and `Scope_order.entries`, which
-  follows the same descent over the IR; `pp_local_defs` asserts on every statement with
-  definitions that their plans and the oracle's root precisions agree, so a drift fails the
-  compile loudly. Under `Emitted`, each top-level scope of a rendering unit is shown once, at its
+  tests reach a compiled routine's through `C_syntax.scope_order_oracles`). Two derivations meet:
+  the renderer's entries, collected by `pp_scalar` as it renders and partitioned by their rendered
+  tests (`plan ~same`), and `Scope_order.entries`, which follows the same descent over the IR and
+  keys conditions by IR (`Select`/`Gate`: the condition, the precisions it and its operand render
+  at, how `integer_op` renders it; float constants by bits). `pp_local_defs` asserts on every
+  statement with definitions that the two plans agree literal by literal and that the oracle's root
+  precisions are the rendered ones, so an IR key that merges or splits what the text does not is a
+  loud compile failure, never a regrouping (three such keys were caught in review, each a rendering
+  parameter the key lacked; rendering stays keyed by what it spells). Under `Emitted`, each top-level scope of a rendering unit is shown once, at its
   definition position (with `placement`, `gated` for a conditional one), then the operands with
   those scopes as leaves; it refuses `discarded_operands = Visit` and `fold_scalar`.
   `where_arm_scopes` checks the walk against kernel text on every row, with an operand-order

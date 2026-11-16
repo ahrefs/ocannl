@@ -65,3 +65,5 @@ conditions differing only in a zero's sign are two conditions: true
 one condition spelled twice is one condition: true
 a gate whose first operand renders at another precision is another condition: true
 a gate spelled twice is one condition: true
+same_plan accepts a plan matched against itself: true
+same_plan refuses a plan whose conditions are one on one side and two on the other: true

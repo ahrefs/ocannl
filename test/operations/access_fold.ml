@@ -498,7 +498,7 @@ let () =
       guard =
         [
           {
-            key = Select { cond = cond zero; prec = single };
+            key = Select { cond = cond zero; prec = single; unconverted = false };
             holds = true;
             anywhere = false;
             payload = ();
@@ -540,4 +540,11 @@ let () =
   in
   p "a gate whose first operand renders at another precision is another condition"
     (gate_groups Ops.int32 Ops.double = 2);
-  p "a gate spelled twice is one condition" (gate_groups Ops.int32 Ops.int32 = 1)
+  p "a gate spelled twice is one condition" (gate_groups Ops.int32 Ops.int32 = 1);
+  (* The renderer partitions by its own test of two conditions being one; [same_plan] holds the
+     IR-keyed derivation to it literal by literal, so a key the derivation merges or splits where
+     the rendering does not is a mismatch, not a silent regrouping. *)
+  let two = O.plan ~reads:Fn.id [ under 0. 1; under (-0.) 2 ] in
+  p "same_plan accepts a plan matched against itself" (O.same_plan two two);
+  p "same_plan refuses a plan whose conditions are one on one side and two on the other"
+    (not (O.same_plan ~same_a:(fun _ _ -> true) two two))
