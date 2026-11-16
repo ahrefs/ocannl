@@ -1,7 +1,7 @@
 the original store accepts all five witness shapes: true
 control: the witness with ordinary 1_default singletons is refused: true
 the inferred program is accepted: true
-inferred shapes: st=[1] p=[1;4;1] y=[1] q=[3;4;5] z=[3;4;5]
+inferred shapes: st=[5] p=[1;4;5] y=[1] q=[3;4;5] z=[3;4;5]
 the closing replayed its balanced-flank choice: true
 p is the contraction's [h; w] over st's row: true
 z is x's [3; 4; 5]: true

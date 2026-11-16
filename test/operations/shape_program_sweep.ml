@@ -62,15 +62,17 @@
    excuses (4 programs) are normals under a fixed index or a compose. Then those this sweep found,
    each with a fixed program below: nested branching (its fixed programs, [c + (u + (v *. w))] which
    closed [u] and [c + ((u + v) + w)] which was refused, agree since gh-ocannl-2244; random programs
-   whose branching pointwise operations nest still collapse); an einsum spec over a draw ([c[|3->2]
-   * (u ++ "ab => a")] closes the kept axis to 1; a compose whose left operand it is takes that row,
-   and a fixed index is such a spec); and a [uniform1]-initialized parameter sized only by a fixed
-   index, accepted where a default-initialized one is refused. Four more entries the sweep found are
-   fixed (gh-ocannl-2244): a draw under a unary operation ([relu u *. c[|2,5]]), under both operands
-   of a pointwise operation ([(u *. u) + c[|2]]) or under a compose ([(c[|3,2] *. v) *. (u *
-   c[|5])]), and a constant of no axes in a branching program ([((u + v) + z) *. c[|3]]), closed the
-   draw to one element: waiting on its bound's open tail at stage 6a, the draw was closed empty by
-   the result above it at 6b. Their fixed programs stay, and agree. *)
+   whose branching pointwise operations nest still collapse); a fixed index over a draw ([(stretch u
+   + stretch (stretch u)) ++ "...|3 => ...|0"]: once every einsum spec over a draw, [c[|3->2] * (u
+   ++ "ab => a")] closing the kept axis to 1, with a compose whose left operand it is taking that
+   row; since gh-ocannl-2247 a spec's axes take the draw's role, those programs agree, and of the
+   entry's 17 programs the 3 left are fixed indices); and a [uniform1]-initialized parameter sized
+   only by a fixed index, accepted where a default-initialized one is refused. Four more entries the
+   sweep found are fixed (gh-ocannl-2244): a draw under a unary operation ([relu u *. c[|2,5]]),
+   under both operands of a pointwise operation ([(u *. u) + c[|2]]) or under a compose ([(c[|3,2]
+   *. v) *. (u * c[|5])]), and a constant of no axes in a branching program ([((u + v) + z) *.
+   c[|3]]), closed the draw to one element: waiting on its bound's open tail at stage 6a, the draw
+   was closed empty by the result above it at 6b. Their fixed programs stay, and agree. *)
 
 open! Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -652,17 +654,12 @@ let known : known list =
       refusals = [];
     };
     {
-      entry = "proposed: an einsum spec over a draw";
-      is_x =
-        (fun prog _ ->
-          let over_draw = function Einsum (_, x) -> is_open prog x | _ -> false in
-          function
-          (* A compose whose left operand is such an einsum takes its output row from it, the kept
-             axis closed to 1 with it: [((u ++ "ab => a") * c[|2->5]) *. c[|2->7]]. *)
-          | Compose (x, _) -> over_draw prog.(x)
-          | node -> over_draw node);
-      (* Seen reaching siblings: [(neg (u ++ "ab => a") *. v) *. c[|5,2]] closes [v]. *)
-      reach = true;
+      entry = "proposed: a fixed index over a draw";
+      (* Was every einsum spec over a draw; since gh-ocannl-2247 a spec's axes take the draw's role,
+         and what is left is the fixed index: [(stretch u + stretch (stretch u)) ++ "...|3 =>
+         ...|0"]. *)
+      is_x = (fun prog _ -> function Einsum (Fixed_index, x) -> is_open prog x | _ -> false);
+      reach = false;
       refusals = [];
     };
   ]
@@ -966,6 +963,23 @@ let fixed_programs : (string * program) list =
       [|
         Const { empty with i = [ 3 ]; o = [ 2 ] }; Draw Uniform; Einsum (Reduce, 1); Compose (0, 2);
       |] );
+    (* gh-ocannl-2247: the draw takes the spec's axes, which resolve at their use sites with it. *)
+    ( "(u ++ \"ab => ba\") *. c[|5,3]",
+      [| Draw Uniform; Einsum (Transpose, 0); Const { empty with o = [ 5; 3 ] }; Mul (1, 2) |] );
+    (* The draw's sibling under a unary result: fixed by gh-ocannl-2244, the draw's spec axes by
+       gh-ocannl-2247. *)
+    ( "(neg (u ++ \"ab => a\") *. v) *. c[|5,2]",
+      [|
+        Draw Uniform;
+        Einsum (Reduce, 0);
+        Neg 1;
+        Draw Uniform;
+        Mul (2, 3);
+        Const { empty with o = [ 5; 2 ] };
+        Mul (4, 5);
+      |] );
+    ( "(stretch u + stretch (stretch u)) ++ \"...|3 => ...|0\"",
+      [| Draw Uniform; Stretch 0; Stretch 1; Add (1, 2); Einsum (Fixed_index, 3) |] );
     ( "(c[|3,2] *. v) *. (u * c[|5])",
       [|
         Const { empty with o = [ 3; 2 ] };

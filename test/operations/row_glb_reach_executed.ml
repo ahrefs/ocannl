@@ -23,6 +23,11 @@
    use site's axes were concrete: the draw waited at stage 6a and the result above it, closing at
    6b, closed it empty.
 
+   What changed with gh-ocannl-2247: a draw read through an einsum spec ([u ++ "ab => ba"]) is
+   solved to the spec's axes, minted for the operation's result, and they closed minimal: the draw
+   was one value under [c[|5,3]]. A solved row now passes its mark to the axes it absorbs, so they
+   resolve at their use sites as the draw does.
+
    What still repeats, and why: in [(u *. 2) *. 2, then a fixed index] the use site's size is a
    fixed index's lower bound on the outer result's axis, which is no GLB and does not travel down to
    the inner result; that one closes minimal, and the draw matches it. *)
@@ -157,7 +162,18 @@ let () =
       let u = TDSL.uniform () ~batch_dims:[ 4 ] () in
       let m = times2 u in
       let%op y = m ++ "...|3 => ...|0" in
-      ([ u ], m, y))
+      ([ u ], m, y));
+  (* gh-ocannl-2247: a draw read through an einsum spec is solved to the spec's axes; they take the
+     draw's role and fill the use site. *)
+  draws "(u ++ \"ab => ba\") *. c[|5,3]" ~want:"3,5" ~fills:(Some true) (fun () ->
+      let u = TDSL.uniform () () in
+      let c = NTDSL.reshape ~l:"c" ~b:[] ~o:[ 5; 3 ] (values 15) () in
+      let%op y = (u ++ "ab => ba") *. c in
+      ([ u ], y, y));
+  draws "(u ++ \"ab => a\") *. c[5|3]" ~want:"5|3,1" ~fills:(Some true) (fun () ->
+      let u = TDSL.uniform () () in
+      let%op y = (u ++ "ab => a") *. c53 () in
+      ([ u ], y, y))
 
 (* gh-ocannl-2244: a draw whose use site's axes are concrete, behind a result: a unary result, one
    draw as both operands of a pointwise result, a compose result. The use site's bound reached the

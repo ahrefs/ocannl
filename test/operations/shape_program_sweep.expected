@@ -12,7 +12,10 @@ relu u + c[|2,5]: agrees, executed
 c[|2,5] *. relu u: agrees, executed
 relu u *. c[|2,5]: agrees, executed
 (u *. u) + c[|2]: agrees, executed
-c[|3->2] * (u ++ "ab => a"): known: proposed: an einsum spec over a draw, executed
+c[|3->2] * (u ++ "ab => a"): agrees, executed
+(u ++ "ab => ba") *. c[|5,3]: agrees, executed
+(neg (u ++ "ab => a") *. v) *. c[|5,2]: agrees, executed
+(stretch u + stretch (stretch u)) ++ "...|3 => ...|0": known: proposed: a fixed index over a draw, executed
 (c[|3,2] *. v) *. (u * c[|5]): agrees, executed
 c + (u + (v *. w)): agrees, executed
 c + ((u + v) + w): agrees, executed

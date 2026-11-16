@@ -13,7 +13,8 @@ module Row = Ocannl.Row
    [<r>.[4]] (that row shares [st]'s resolve-at-use mark) then refuted it.
    [Row.solve_closing_stages] replays the closing with that trial one overlap larger; the second
    case executes what inference now infers, against a host oracle computed from the inferred leaf's
-   own shape and values. *)
+   own shape and values. Since gh-ocannl-2247 the draw [st], read through the contraction's [..c..]
+   row, takes that row's axes as its own and fills [x]'s 5 ([st=[5]], was [[1]]). *)
 let build () =
   let st = TDSL.uniform () () in
   let x = TDSL.range_of_shape ~output_dims:[ 3; 4; 5 ] () in
