@@ -5497,6 +5497,20 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   real scripts against a fake dune. On 2026-11-02 the parity leg's first run on master said
   `STEP BROKE`: building cifar_resnet raised `Shape_error: tracing the shape scheme model: occurs
   check failed` under the default `op_shape_schemes=check` (green with it `off`).
+- The in-flight view is `$STATE/runs/<stamp>.json` (schema 1, gh-ocannl-2220),
+  published before lanes fork, with the resolved full ref, controller pid, flags and ordered
+  lanes/units. One stable sibling lock serializes read/update/rename; unique File::Temp stages
+  never count as manifests. Readers open only the JSON, without taking the writer lock.
+  Unit outcomes are read from this run's history rows under the history lock on every update,
+  including the final write, which carries the run record's exit kind. History and the run record
+  remain the records. View failures warn on stderr and continue, including after publication of
+  the run record: they never stop units or change its status. An absent/stale view is not evidence
+  of missing history. A null exit kind with a dead local pid is inconclusive: cut off or stale;
+  consult the run record, and allow for pid reuse.
+  Times are controller-clock Unix seconds, including remote unit starts. Interrupted units retain
+  queued/running states rather than inventing skipped outcomes. A gated lane retains `gate`;
+  a lane refused its lab lock ends `done` with skipped units. The harness pins live transitions,
+  concurrent updates, cancellation and open-reader/held-lock negative controls.
 - **The per-run record `~/.ocannl-sweep/logs/<stamp>-run.tsv` is what a consumer reads; the stdout
   summary is for humans** (gh-ocannl-977). Its absence is itself a verdict: a run that refused at
   startup swept nothing and writes no record, which is what distinguishes that exit 2 from a
