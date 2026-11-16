@@ -1,0 +1,20 @@
+plain tail traces a scheme: true
+constrained tail traces a scheme: true
+constraint opt-out does not trace: true
+constraint opt-out does not execute the body at construction: true
+plain tail checks its scheme: true
+constrained tail checks its scheme: true
+constraint opt-out does not check: true
+constraint opt-out executes the body once at application: true
+constrained binary forwards a renamed label parameter: true
+constrained ternary forwards a renamed label parameter: true
+tail values agree: true
+opted-out tail values agree: true
+head values agree: true
+pipeline head values agree: true
+constructor grouping values agree: true
+argument grouping values agree: true
+uncurried binary values agree: true
+uncurried ternary values agree: true
+labelled binary values agree: true
+labelled ternary values agree: true
