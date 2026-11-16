@@ -76,7 +76,7 @@
 shared_through native
 
 # Leg 65: the run's first phase. The backends resolve in the supervisor's
-# child, after the run is published (gh-ocannl-1122), so a `stop` of the run
+# child, after the run is published (gh-ocannl-1106), so a `stop` of the run
 # reaches its supervisor as for any run: the child and the reader it waits on
 # are reaped, the launch exits 143 with the verdict recorded, dune never
 # started and the log says so, and the worktree is idle again. A reader held

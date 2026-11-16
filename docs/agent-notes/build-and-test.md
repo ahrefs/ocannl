@@ -1673,6 +1673,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   reports that verdict and safe `stop` recovery. Lifecycle leg 122 pins both refusal
   forms and immediate relaunch after exits 1 and 65; neither failure alone reproduced
   a leaked lock on macbook-pro, including under the parallel harness load.
+  Query ownership prevents `stop <last run>` from reaping query processes; recovery
+  for descendants left by an exited query is not provided here.
 - **`/proc/locks` names a flock's ACQUIRER, not its holders** (gh-ocannl-1107): the lock lives on
   the open file description, so after `take_lock`'s perl exits the line keeps its dead pid (0 from
   inside a pid namespace; some kernels drop the row) while the supervisor, dune and a `setsid`
