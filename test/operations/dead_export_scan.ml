@@ -108,6 +108,7 @@ let exempt_zero_reference_exports =
     "Operation.deinterleave_odd";
     "Operation.einmax1";
     "Operation.embed_dim";
+    "Operation.embed_self_id";
     "Operation.embed_symbol";
     "Operation.eq";
     "Operation.exp";
@@ -147,7 +148,6 @@ let exempt_zero_reference_exports =
     "Operation.threefry4x32_light";
     "Operation.transpose_op_of_spec";
     "Operation.uniform1";
-    "Operation.uniform_at";
     "Operation.uniform_at1";
     "Operation.wrap";
     "Ops.c_ptr_to_string";

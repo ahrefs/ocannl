@@ -109,33 +109,36 @@ let () =
 
 (* gh-ocannl-2141: what the raw draw's values rest on. [uniform_at] hashes each block's offset
    ([range_over_offsets], a leaf) with the key into the block counter, which the draw sizes from its
-   use site only in the final stage. The leaf, bounded below by the counter alone, must close after
-   it: closed first, it closed to 1, every block read offset 0, and 16 elements drew 4 values. Built
-   here by hand, as [Operation.uniform_at] builds it, to see the leaf and the counter. *)
+   use site only in the final stage. The leaf, bounded below by the counter, must close after it:
+   closed first, it closed to 1, every block read offset 0, and 16 elements drew 4 values. The
+   counter and the leaf are found under the real [uniform_at] result (its operand, and that
+   operand's [range_over_offsets] operand), so the pin follows the builder. *)
 let () =
   Verdict.case "a draw's offsets take its counter's size" (fun () ->
       List.iter [ 16; 10 ] ~f:(fun n ->
           Tensor.unsafe_reinitialize ();
           Tensor.set_random_seed ~seed:7 ();
           let x = ones [ n ] in
-          let key =
-            Ocannl.Operation.threefry4x32
-              (Ocannl.Operation.threefry4x32
-                 (Ocannl.Operation.embed_self_id ())
-                 (Tensor.get_random_seed ()) ())
-              (step ()) ()
-          in
+          let u = Ocannl.Operation.uniform_at (step ()) () in
+          let y = Ocannl.Operation.pointmul x u () in
+          let operands (t : Tensor.t) = List.map t.children ~f:(fun c -> c.Tensor.subtensor) in
+          let counter = List.hd (operands u) in
           let offsets =
-            Tensor.term ~fetch_op:Range_over_offsets ~grad_spec:Prohibit_grad
-              ~label:[ "range_over_offsets" ] ()
+            Option.bind counter ~f:(fun c ->
+                List.find (operands c) ~f:(fun t ->
+                    List.mem t.Tensor.value.Ir.Tnode.label "range_over_offsets" ~equal:String.equal))
           in
-          let counter = Ocannl.Operation.threefry4x32 key offsets () in
-          let y =
-            Ocannl.Operation.pointmul x (Ocannl.Operation.uint4x32_to_prec_uniform counter ()) ()
-          in
+          let name = "over " ^ Int.to_string n in
+          p
+            (name ^ ": uniform_at's counter has a range_over_offsets operand")
+            (Option.is_some offsets);
           let ctx = Ocannl.Train.forward_once (Context.auto ()) y in
           let numel t = Ir.Tnode.num_elems t.Tensor.value in
-          let name = "over " ^ Int.to_string n in
-          p (name ^ ": the counter holds one block per 4 elements") (numel counter = (n + 3) / 4);
-          p (name ^ ": the offsets leaf takes the counter's size") (numel offsets = numel counter);
+          (match (counter, offsets) with
+          | Some counter, Some offsets ->
+              p (name ^ ": the counter holds one block per 4 elements") (numel counter = (n + 3) / 4);
+              p
+                (name ^ ": the offsets leaf takes the counter's size")
+                (numel offsets = numel counter)
+          | _ -> ());
           Context.release ctx))

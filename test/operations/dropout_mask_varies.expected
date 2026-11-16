@@ -18,7 +18,9 @@ x *. (2 *. uniform_at step): every element draws its own value: true
 x *. normal_at step: every element draws its own value: true
 x *. normal (): every element draws its own value: true
 x *. { w = normal () }: every element draws its own value: true
+over 16: uniform_at's counter has a range_over_offsets operand: true
 over 16: the counter holds one block per 4 elements: true
 over 16: the offsets leaf takes the counter's size: true
+over 10: uniform_at's counter has a range_over_offsets operand: true
 over 10: the counter holds one block per 4 elements: true
 over 10: the offsets leaf takes the counter's size: true

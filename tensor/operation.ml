@@ -896,8 +896,8 @@ let uniform ?grad_spec () =
 
     Note: unlike {!uniform}, this stays pointwise (no [pin_counter_spec]): the user counter's shape
     must propagate to the result through the key operand, so the key slot cannot be reduced away.
-    Entropy across draws comes from the user counter; within one draw, [range_over_offsets] may
-    close smaller than the result and repeat values along broadcast axes. *)
+    Entropy across draws comes from the user counter; within one draw, [range_over_offsets] closes
+    after the draw sizes its block counter, so each block hashes its own offset (gh-ocannl-2141). *)
 let uniform_at ?grad_spec counter =
   uint4x32_to_prec_uniform ?grad_spec
     (threefry4x32

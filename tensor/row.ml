@@ -6206,12 +6206,12 @@ let is_draw_total = function
 (* gh-ocannl-2141: the leaf axes that wait for a packed draw to size its block counter. A round-up
    [Total_elems] (a packed draw, [Uint4x32_to_prec]) sizes its counter [var] only once its own bound
    is known, which can be in the final stage itself; a leaf axis that resolves at its use sites and
-   is bounded below by that counter alone -- the [range_over_offsets] axis under [uniform_at], which
-   [role_template] gave an axis of its own -- has no GLB until then, and the final stage's guess
-   would close it to 1 first: the counter's blocks would all read one offset and repeat the draw.
-   Such an axis waits; when the draw solves the counter, the re-emitted bound gives it its GLB. It
-   is a closing order, not an equation: the axis is only kept from guessing, and the final
-   fixpoint's [next_guess] still releases it if nothing sizes the counter.
+   is bounded below by that counter (whatever its other lower bounds) -- the [range_over_offsets]
+   axis under [uniform_at], which [role_template] gave an axis of its own -- has no GLB until then,
+   and the final stage's guess would close it to 1 first: the counter's blocks would all read one
+   offset and repeat the draw. Such an axis waits; when the draw solves the counter, the re-emitted
+   bound gives it its GLB. It is a closing order, not an equation: the axis is only kept from
+   guessing, and the final fixpoint's [next_guess] still releases it if nothing sizes the counter.
 
    Boundary: only the final stage (the only one that guesses such an axis), only a counter's direct
    upper bounds, and only an unconstrained, unbounded, non-parameter axis that resolves at use. A
