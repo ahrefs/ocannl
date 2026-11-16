@@ -56,10 +56,13 @@ let skipped = Verdict.skipped ~backend:backend_name
 
 (* The GPU backends whose code object a census can read (gh-ocannl-1695), by its dialect. Of them
    HIP blends, since AMDGPU branched on every census leg; CUDA keeps the short-circuiting spelling,
-   which ptxas if-converts on every one (a predicated load), so there the census claim holds of that
-   spelling. Metal is neither: no tool here reads what its compiler emits (the offline [metal]
-   compiler ships with full Xcode only, and Apple's GPU ISA has no public disassembler), so it keeps
-   the short-circuiting spelling and its census claims are skipped by name. *)
+   which ptxas if-converts at the shipping floor PTX target (a predicated load). At native sm_120,
+   ptxas 13.4 branches on four load-gating selects (gh-ocannl-1822). The CUDA assembly census is
+   therefore floor-target-only; native still executes every applicable value claim. This is a
+   compiler/target performance property, not a value-select semantic guarantee. Metal is neither: no
+   tool here reads what its compiler emits (the offline [metal] compiler ships with full Xcode only,
+   and Apple's GPU ISA has no public disassembler), so it keeps the short-circuiting spelling and
+   its census claims are skipped by name. *)
 let gpu_dialect =
   match backend_name with "cuda" -> Some Asm.Sass | "hip" -> Some Asm.Amdgpu | _ -> None
 
@@ -286,10 +289,23 @@ let gpu_branch_free dialect ~patterns name =
               && not (Set.is_empty anchor))
             sites)
 
-(* The census claim on whichever compiler the backend has: cc's host compiler, a GPU's code object,
-   or -- on Metal -- a skip naming why. *)
+(* The census reads only the emitted selects' source lines in the backend compiler's assembly.
+   CUDA's no-branch promise covers the shipping floor PTX policy only: sm_120 native PTX branches on
+   load-gating selects, whose values are nevertheless correct (gh-ocannl-1822). Keep the
+   short-circuiting renderer and its fan-in accounting; changing both to blend needs performance
+   evidence beyond this census. This scope applies to the pool kernel too. *)
 let census_claim ~patterns ~gpu_patterns claim name =
-  if on_cc then p claim (compiled_branch_free ~patterns name)
+  let claim = claim ^ " (CUDA: floor PTX target only)" in
+  if
+    String.equal backend_name "cuda"
+    && Ir.Cuda_mma.equal_ptx_target (Ir.Cuda_mma.current_ptx_target ()) Native
+  then (
+    Stdio.eprintf
+      "branchless_select: %s: CUDA native PTX is outside the no-branch claim: ptxas 13.4 branches \
+       on load-gating selects at sm_120 (gh-ocannl-1822); value claims remain active\n"
+      name;
+    Verdict.skipped ~aggregation:`Environment ~backend:"CUDA native PTX target" claim)
+  else if on_cc then p claim (compiled_branch_free ~patterns name)
   else
     match gpu_dialect with
     | Some dialect -> p_all claim (gpu_branch_free dialect ~patterns:gpu_patterns name) ~f:Fn.id

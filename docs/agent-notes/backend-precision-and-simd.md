@@ -1964,6 +1964,16 @@ files.
   because every leg's arithmetic is a single operation per lane. A parity leg over `a * b + c`
   would need `fp_contract` on, because HIP's `-ffast-math` contracts per kernel.
 ## Assembly census and compiler differences
+- **CUDA select branchlessness is scoped to the shipping floor PTX target** (gh-ocannl-1822).
+  On rog's sm_120 with ptxas 13.4, `branchless_select`'s floor-target census passes, while native
+  sm_120 PTX branches on `bs_where_zero`, `bs_relu_gate`, `bs_where_eq` and `bs_where_masked`.
+  Their bitwise value claims pass at both targets. The test labels its assembly claims
+  `CUDA: floor PTX target only` and records the native-target skips as environment-scoped, with
+  the reason on stderr; all applicable value claims still run natively. This scope also covers
+  the pool kernel's assembly claim. Keep CUDA's short-circuiting renderer and
+  `cuda_facts.blends_value_selects = false`: enabling blending would change both emission and the
+  inline fan-in guard's arm-load accounting, which this performance census does not justify.
+  A floor-policy pass is not evidence that native PTX stays branchless, nor a timing claim.
 - **Widths that no local hardware can execute still get checked, three ways.** gh-ocannl-621's
   AVX-512, AVX512-FP16 and aarch64 rows were written on a machine with none of them (QEMU's TCG
   implements neither AVX-512 nor AVX512-FP16 — `query-cpu-model-expansion` on `-cpu max` reports
