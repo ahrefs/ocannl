@@ -2726,7 +2726,8 @@ files.
   unsigned 255 have identical byte encodings. Both builtin emulation tests use
   `test/support/integer_rng_probe.ml` to check scalar, vector-element and lane signedness and
   widened values against input-bit extraction, including the C table. The byte vector ABI has
-  signed `int8x16_t` elements; scalar and lane byte returns are unsigned. Each signed-byte table
+  signed `int8x16_t` elements; scalar and lane byte returns are unsigned. The expected helper set
+  is derived from the oracle formats, and removing lane forms fails the coverage control. Each signed-byte table
   mutation passes byte parity but fails the result checks. Generic C arithmetic promotions and
   parameter guards are outside this result contract.
 - What a builtin's parameter type is and what its call site passes are compared by the

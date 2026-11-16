@@ -507,6 +507,9 @@ let () =
       in
       List.iter
         (fun (label, prefix, keys) ->
+          p
+            (label ^ ": integer probes cover every precision in scalar, vector and lane forms")
+            (Integer_rng_probe.has_all_forms keys);
           p_all
             (label
            ^ ": integer scalar, vector and lane results have the expected value and signedness \
@@ -516,6 +519,10 @@ let () =
         :: List.map
              (fun v -> (v.label, v.name ^ "_", List.filter Integer_rng_probe.is_integer (probed v)))
              vendors);
+      p "removing lane forms fails the integer probe coverage check"
+        (not
+           (Integer_rng_probe.has_all_forms
+              (List.filter (fun key -> not (String.ends_with ~suffix:"_lane" key)) keys)));
       List.iter
         (fun v ->
           p_exists

@@ -7,9 +7,13 @@ CUDA: a signed-byte copy still passes the old byte comparison: true
 HIP: every probed conversion helper returns the C one's bytes, for every draw and lane: true
 HIP: a copy whose __hiloint2double swaps its words differs from the C table somewhere: true
 HIP: a signed-byte copy still passes the old byte comparison: true
+C: integer probes cover every precision in scalar, vector and lane forms: true
 C: integer scalar, vector and lane results have the expected value and signedness before storage: true
+CUDA: integer probes cover every precision in scalar, vector and lane forms: true
 CUDA: integer scalar, vector and lane results have the expected value and signedness before storage: true
+HIP: integer probes cover every precision in scalar, vector and lane forms: true
 HIP: integer scalar, vector and lane results have the expected value and signedness before storage: true
+removing lane forms fails the integer probe coverage check: true
 CUDA: a signed-byte copy fails the integer result checks: true
 HIP: a signed-byte copy fails the integer result checks: true
 every half, bf16 and fp8 draw the C table defines is probed in the C and both vendor copies: true

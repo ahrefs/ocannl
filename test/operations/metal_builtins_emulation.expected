@@ -4,6 +4,8 @@ Metal: every excluded or Metal-only name is a function of the table: true
 Metal: the probed helpers take every probe shape: draws, lanes, counters, threefry, powers, codec: true
 Metal: every probed helper returns the C one's bytes, for every input and lane: true
 Metal: a copy whose uint4 indexing reverses its lanes differs from the C table somewhere: true
+C and Metal: integer probes cover every precision in scalar, vector and lane forms: true
+removing lane forms fails the integer probe coverage check: true
 C: integer scalar, vector and lane results have the expected value and signedness before storage: true
 Metal: integer scalar, vector and lane results have the expected value and signedness before storage: true
 Metal: a signed-byte copy still passes the old byte comparison: true

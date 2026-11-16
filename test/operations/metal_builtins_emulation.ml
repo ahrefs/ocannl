@@ -524,6 +524,12 @@ let () =
   case "integer RNG values before storage" @@ fun () ->
   let when_ = Lazy.force host_cxx in
   let keys = List.filter Integer_rng_probe.is_integer probed in
+  p "C and Metal: integer probes cover every precision in scalar, vector and lane forms"
+    (Integer_rng_probe.has_all_forms keys);
+  p "removing lane forms fails the integer probe coverage check"
+    (not
+       (Integer_rng_probe.has_all_forms
+          (List.filter (fun key -> not (String.ends_with ~suffix:"_lane" key)) keys)));
   let correct prefix key =
     List.for_all
       (fun words ->

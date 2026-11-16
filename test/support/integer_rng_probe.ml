@@ -11,6 +11,15 @@ let formats =
     ("uint64", 64, false);
   ]
 
+let expected_keys =
+  List.concat_map
+    (fun (prec, _, _) ->
+      let stem = "uint4x32_to_" ^ prec ^ "_uniform" in
+      List.map (fun suffix -> stem ^ suffix) [ ""; "_vec"; "_lane" ])
+    formats
+
+let has_all_forms keys = List.sort_uniq compare keys = List.sort compare expected_keys
+
 let format key =
   List.find_opt
     (fun (prec, _, _) ->
