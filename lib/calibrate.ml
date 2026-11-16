@@ -496,14 +496,26 @@ let form_fill ?(fill_chains = 1) ?chains form ~multiprocessors ~fill_threads ~bl
         *. Float.of_int (max 1 threads)
         /. (Float.of_int (max 1 multiprocessors) *. Float.of_int (max 1 fill_threads)))
 
-let effective_ops ?(form = Capped) ?fill_chains ~multiprocessors ~fill_threads
+let effective_ops ?(form = Capped) ?(fill_chains = 1) ~multiprocessors ~fill_threads
     (contexts : Ir.Cost_model.launch_context list) =
+  (* The score's own merge (gh-ocannl-1639): at cap 1 one context per launch shape, as before the
+     chain census. *)
+  let contexts =
+    Ir.Cost_model.fill_contexts
+      {
+        Ir.Cost_model.fm_multiprocessors = multiprocessors;
+        fm_fill_threads = fill_threads;
+        fm_tail = false;
+        fm_chains = fill_chains;
+      }
+      contexts
+  in
   List.fold contexts ~init:0. ~f:(fun acc (c : Ir.Cost_model.launch_context) ->
       if c.lc_tile_mma then acc
       else
         acc
         +. Float.of_int c.lc_ops
-           /. form_fill ?fill_chains ?chains:c.lc_chains form ~multiprocessors ~fill_threads
+           /. form_fill ~fill_chains ?chains:c.lc_chains form ~multiprocessors ~fill_threads
                 ~blocks:c.lc_blocks ~threads:c.lc_threads)
 
 let scalar_ops (contexts : Ir.Cost_model.launch_context list) =
@@ -573,7 +585,28 @@ let fit_fill ?(candidates = default_fill_candidates) ?(starved = 0.125) ?fill_ch
         List.filter g ~f:(fun p -> Float.(throughput p >= starved *. best)))
   in
   let kept = List.concat series in
-  if multiprocessors <= 0 then Fill_unfittable "the multiprocessor count must be positive"
+  (* gh-ocannl-1639: a cap the sweep's own threads do not reach would fit [t] under a credit the
+     sweep cannot identify -- reinterpreting it. Every scalar context must carry at least the cap
+     (an uncounted one, [None], reaches only a cap of 1). *)
+  let cap = Option.value fill_chains ~default:1 in
+  let short =
+    List.find_map timed ~f:(fun p ->
+        List.find_map p.lp_contexts ~f:(fun (c : Ir.Cost_model.launch_context) ->
+            if c.lc_tile_mma || c.lc_ops <= 0 then None
+            else
+              match c.lc_chains with
+              | Some n when n >= cap -> None
+              | chains -> Some (p.lp_geometry, chains)))
+  in
+  if cap > 1 && Option.is_some short then
+    let geometry, chains = Option.value_exn short in
+    Fill_unfittable
+      (Printf.sprintf
+         "the ILP cap of %d chains exceeds what the sweep's %s threads carry (%s): the sweep \
+          cannot identify the saturation under it"
+         cap geometry
+         (Option.value_map chains ~default:"uncounted" ~f:Int.to_string))
+  else if multiprocessors <= 0 then Fill_unfittable "the multiprocessor count must be positive"
   else if mixed then Fill_unfittable "a point carries tile-MMA work: the fill is a scalar fit"
   else if List.length kept < 3 then
     Fill_unfittable "fewer than three timed, unstarved points with operations"

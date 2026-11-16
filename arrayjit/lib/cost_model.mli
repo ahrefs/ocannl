@@ -372,6 +372,13 @@ val context_fill : ?chains:int -> fill_model -> blocks:int -> threads:int -> flo
     fitted on threads carrying at least [L] chains, and a thread with fewer counts as the fraction
     of one it fills. Without [chains], or at [L = 1], the thread-only fill, bitwise. *)
 
+val fill_contexts : fill_model -> launch_context list -> launch_context list
+(** The contexts as a fill model prices them (gh-ocannl-1639): those of one launch shape whose
+    chains it credits alike -- uncredited ([None], or at least [fm_chains]) or one count below it --
+    merged in first-reported order, operations summed, [lc_chains] the credited count. At
+    [fm_chains = 1] that is one context per launch shape, as before the chain census, so every sum
+    over them is the thread-only fill's bitwise. *)
+
 val launch_fill : fill_model -> launch_context list -> float
 (** The scalar contexts' work-weighted harmonic fill: total scalar operations over the sum of each
     context's operations divided by its fill. 1 without scalar work. A diagnostic: the score sums

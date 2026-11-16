@@ -39,12 +39,16 @@ a context at or past the cap fills bitwise as the thread-only fill at any cap: t
 the one-accumulator kernel scores bitwise as before at cap 1: true
 under the tail, 48 blocks of 64 one-chain threads fill 3/8, of four-chain ones 3/4: true
 equal launch shapes of 4 and 1 chains are two contexts, priced each over its own fill: true
+the mixed kernel's census splits one launch shape in two (1 and uncounted chains): true
+at cap 1 a split launch shape scores bitwise as with no census, where an unmerged sum would not: true
 the chains change no operation count: the contexts still sum to the census: true
 every scheduled blocktile leaf's reduction carries its register tile's tm*tn chains: true
 a 16-chain leaf ranks bitwise as thread-only under a cap of 8: true
 a fewer-chain leaf ranks no lower under a cap of 8: true
-under the running backend's own limits every leaf ranks bitwise as under the thread-only fill: true
+some under-filled fewer-chain leaf ranks strictly higher under a cap of 8: true
+the running backend advises no ILP cap: every leaf ranks bitwise as under the thread-only fill: true
 with the fill constants every plain leaf ranks strictly above its bgrid twin: true
 without them the twins tie, as before the launch fill: true
 every leaf's rank is at least its bound: true
 the best-ranked scalar leaf is a bgrid one: true
+every launch-sweep geometry's scheduled reduction carries 16 chains a thread: true

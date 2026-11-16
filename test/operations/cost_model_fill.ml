@@ -372,6 +372,52 @@ let () =
         let ops4 = Float.of_int (4 * ops) and ops1 = Float.of_int ops in
         Float.(leg = ((ops4 /. 0.25) +. (ops1 /. 0.0625)) /. issue)
     | None -> false);
+  (* At cap 1 the census changes nothing, bitwise, even where it splits one launch shape into
+     contexts of different chains: under a non-dyadic stand-in (P = 46, t = 256), 7 blocks of 16
+     threads with 2 and 3 operations a thread summed each over its own (rounded) fill differ from
+     their sum over it in the last ulp -- the score merges them back first. *)
+  let rog_like ~tail =
+    { CM.fm_multiprocessors = 46; fm_fill_threads = 256; fm_tail = tail; fm_chains = 1 }
+  in
+  let acc7, one7 = rt ~tag:"cf_m7" ~chains:1 ~nb:7 ~nw:16 ~nk:1 () in
+  let e = fresh_tn "cf_mix_e" [| 7; 16 |] and xe = fresh_tn "cf_mix_x" [| 7; 16 |] in
+  let mb = Ll_test.sym () and mw = Ll_test.sym () in
+  let xv = Ll_test.get xe [| it mb; it mw |] in
+  let elementwise_beside =
+    Ll_test.loop_n ~axis:LL.Grid mb 7
+      (Ll_test.loop_n ~axis:LL.Workgroup mw 16
+         (Ll_test.set e
+            [| it mb; it mw |]
+            (Ll_test.add (Ll_test.mul xv (Ll_test.add xv (Ll_test.c 0.5))) xv)))
+  in
+  let mixed = Ll_test.seq one7 elementwise_beside in
+  let private_ = [ acc7 ] in
+  let split model =
+    List.fold
+      (CM.launch_contexts ~is_private:(fun tn -> List.mem private_ tn ~equal:Tn.equal) mixed)
+      ~init:0.
+      ~f:(fun w c ->
+        w
+        +. Float.of_int c.CM.lc_ops
+           /. CM.context_fill ?chains:c.CM.lc_chains model ~blocks:c.CM.lc_blocks
+                ~threads:c.CM.lc_threads)
+  in
+  p "the mixed kernel's census splits one launch shape in two (1 and uncounted chains)"
+    (List.length (census ~private_ mixed) = 2);
+  p_all ~min:2
+    "at cap 1 a split launch shape scores bitwise as with no census, where an unmerged sum would \
+     not"
+    [ rog_like ~tail:false; rog_like ~tail:true ]
+    ~f:(fun model ->
+      let unsplit = compute ~launch:(model, CM.launch_contexts mixed) mixed in
+      Option.equal Float.equal (filled_under ~private_ model mixed) unsplit
+      && Float.equal
+           (CM.launch_fill model
+              (CM.launch_contexts
+                 ~is_private:(fun tn -> List.mem private_ tn ~equal:Tn.equal)
+                 mixed))
+           (CM.launch_fill model (CM.launch_contexts mixed))
+      && not (Option.equal Float.equal (Some (split model /. issue)) unsplit));
   p "the chains change no operation count: the contexts still sum to the census"
     (List.sum
        (module Int)
@@ -470,6 +516,11 @@ let () =
       match Autotune.ranking_ms ~limits:capped [ post ] with
       | Some (r, _) -> Float.(r >= rank)
       | None -> false);
+  p_exists "some under-filled fewer-chain leaf ranks strictly higher under a cap of 8" tiles4
+    ~f:(fun (_, rank, _, _, post) ->
+      match Autotune.ranking_ms ~limits:capped [ post ] with
+      | Some (r, _) -> Float.(r > rank)
+      | None -> false);
   (* gh-ocannl-1639 ships the census with no cap advised on any backend (the rog fit moved no order
      at the gh-1479 cells): under the running backend's own limits -- cc's, or CUDA's on its leg --
      every leaf ranks bitwise as under the thread-only fill. Setting a backend's [fill_chains] turns
@@ -479,13 +530,20 @@ let () =
   Stdio.eprintf "cost_model_fill: the running backend's fill model: %s (not part of the golden)\n"
     (Option.value_map (Autotune.ranking_fill_model ~limits:own) ~default:"none" ~f:(fun fm ->
          Sexp.to_string (CM.sexp_of_fill_model fm)));
-  p_all ~min:4
-    "under the running backend's own limits every leaf ranks bitwise as under the thread-only fill"
-    scored ~f:(fun (_, _, _, _, post) ->
-      Option.equal
-        (fun (r1, b1) (r2, b2) -> Float.equal r1 r2 && Float.equal b1 b2)
-        (Autotune.ranking_ms ~limits:own [ post ])
-        (Autotune.ranking_ms ~limits:thread_only [ post ]));
+  let fill_leg =
+    Verdict.leg
+      ~when_:(Option.is_some (Autotune.ranking_fill_model ~limits:own))
+      ~on:(match Utils.get_global_arg ~arg_name:"backend" ~default:"" with "" -> "cc" | b -> b)
+      ()
+  in
+  in_leg ~leg:fill_leg
+    "the running backend advises no ILP cap: every leaf ranks bitwise as under the thread-only fill"
+    (fun label ->
+      p_all ~min:4 label scored ~f:(fun (_, _, _, _, post) ->
+          Option.equal
+            (fun (r1, b1) (r2, b2) -> Float.equal r1 r2 && Float.equal b1 b2)
+            (Autotune.ranking_ms ~limits:own [ post ])
+            (Autotune.ranking_ms ~limits:thread_only [ post ])));
   let scored = List.map scored ~f:(fun (p, r, b, o, _) -> (p, r, b, o)) in
   List.iter scored ~f:(fun (p, rank, bound, off) ->
       Stdio.eprintf
@@ -512,3 +570,41 @@ let () =
     (match List.min_elt scored ~compare:(fun (_, a, _, _) (_, b, _, _) -> Float.compare a b) with
     | Some (p, _, _, _) -> p.Autotune.sk_batch_grid
     | None -> false)
+
+(* gh-ocannl-1639: the premise behind "no refit of fill_threads": the launch sweep's own kernels --
+   Calibrate.default_launch_geometries' pinned 4x4 leaves of [dw = dy +* "ko; ki => oi" x] -- carry
+   16 chains a thread, so every cap up to 16 leaves their fill, and the fit, as it was. *)
+let () =
+  let ctx = Context.cpu () in
+  let size = 128 and k = 64 in
+  let cyc len modulus stride =
+    Array.init len ~f:(fun c -> Float.of_int (1 + (c % modulus)) *. stride)
+  in
+  let dy =
+    NTDSL.ndarray (cyc (k * size) 7 0.25) ~label:[ "cf_sw_dy" ] ~output_dims:[ k; size ] ()
+  in
+  let x = NTDSL.ndarray (cyc (k * size) 5 0.125) ~label:[ "cf_sw_x" ] ~output_dims:[ k; size ] () in
+  let%op dw = dy +* "ko; ki => oi" x in
+  Train.set_materialized dw.Tensor.value;
+  let lowered =
+    Context.lowered_for_decisions ~name:"cf_sweep" ctx (Train.forward dw) Ir.Indexing.Empty
+  in
+  let geometries = Ocannl.Calibrate.default_launch_geometries in
+  let leaves =
+    match Autotune.matmul_sketch_tree ~is_gpu:true ~is_cpu:false ~limits:stand_in lowered with
+    | None -> []
+    | Some tree ->
+        List.filter (Ir.Schedule_space.leaves tree) ~f:(fun p ->
+            Autotune.scalar_blocktile p && (not p.Autotune.sk_batch_grid)
+            && List.mem geometries (p.sk_bm, p.sk_bn, p.sk_bk, p.sk_tm, p.sk_tn) ~equal:Poly.equal)
+  in
+  p_all ~min:(List.length geometries)
+    "every launch-sweep geometry's scheduled reduction carries 16 chains a thread" leaves
+    ~f:(fun p ->
+      match Ir.Schedule.apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p lowered) lowered with
+      | exception _ -> false
+      | post ->
+          CM.launch_contexts ~is_private:(CM.private_in post) post.LL.llc
+          |> List.max_elt ~compare:(fun a b -> Int.compare a.CM.lc_ops b.CM.lc_ops)
+          |> Option.bind ~f:(fun c -> c.CM.lc_chains)
+          |> Option.equal Int.equal (Some 16))

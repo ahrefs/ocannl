@@ -174,6 +174,11 @@ type launch_point = {
   lp_ms : float;  (** The routine's best synced wall time over the repeats, in milliseconds. *)
 }
 
+val default_launch_geometries : (int * int * int * int * int) list
+(** The pinned [(bm, bn, bk, tm, tn)] geometries {!launch_sweep} times by default -- 4x4 register
+    tiles, so its threads carry 16 accumulation chains each, the premise of the ILP cap's "no refit
+    up to 16" (gh-ocannl-1639; [cost_model_fill] pins their census). *)
+
 val launch_sweep :
   ?geometries:(int * int * int * int * int) list ->
   ?sizes:int list ->
@@ -253,4 +258,6 @@ val fit_fill :
     their geometry's best throughput are left out: a few warps per multiprocessor with no latency
     hidden sit on a regime the fill does not model, and fitting them inflates [t] until well-filled
     launches read as partial. The capped and uncapped forms coincide on points whose blocks are no
-    wider than [t]. [fill_chains] is {!effective_ops}'. *)
+    wider than [t]. [fill_chains] is {!effective_ops}'; a cap above the chains any of the points'
+    scalar contexts carry (an uncounted context carries 1) is unfittable: the sweep cannot identify
+    [t] under a credit its own threads never reach (gh-ocannl-1639). *)

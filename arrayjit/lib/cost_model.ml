@@ -1136,10 +1136,36 @@ let context_fill ?chains (fm : fill_model) ~blocks ~threads =
     let effective = Float.of_int b *. threads in
     Float.min 1. (effective /. (Float.of_int p *. Float.of_int t))
 
+(* The contexts as [fm] prices them: those of one launch shape whose chains it credits alike --
+   uncredited ([None], or at least the cap) or the same count below it -- merged, in first-reported
+   order, their operations summed as integers. At [fm_chains = 1] that is exactly one context per
+   launch shape, as {!launch_contexts} reported before the chain census split them, so the sums
+   below are the thread-only fill's bitwise. *)
+let fill_contexts (fm : fill_model) (contexts : launch_context list) =
+  let credited c =
+    match c.lc_chains with Some n when n >= 1 && n < fm.fm_chains -> Some n | _ -> None
+  in
+  let tbl = Hashtbl.Poly.create () and order = ref [] in
+  List.iter contexts ~f:(fun c ->
+      let key = (c.lc_blocks, c.lc_threads, c.lc_tile_mma, credited c) in
+      match Hashtbl.find tbl key with
+      | Some r -> r := !r + c.lc_ops
+      | None ->
+          Hashtbl.set tbl ~key ~data:(ref c.lc_ops);
+          order := key :: !order);
+  List.rev_map !order ~f:(fun ((b, t, tile, chains) as key) ->
+      {
+        lc_blocks = b;
+        lc_threads = t;
+        lc_tile_mma = tile;
+        lc_chains = chains;
+        lc_ops = !(Hashtbl.find_exn tbl key);
+      })
+
 (* One class of statements (scalar ones, or [Tile_mma] ones): its operations, and the sum over its
    contexts of each context's operations divided by its fill. *)
 let class_work fm (contexts : launch_context list) ~tile =
-  List.fold contexts ~init:(0., 0.) ~f:(fun (o, w) c ->
+  List.fold (fill_contexts fm contexts) ~init:(0., 0.) ~f:(fun (o, w) c ->
       if Bool.equal c.lc_tile_mma tile && c.lc_ops > 0 then
         let ops = Float.of_int c.lc_ops in
         ( o +. ops,

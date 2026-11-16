@@ -96,9 +96,9 @@ let () =
       lc_ops = ops;
     }
   in
-  let lpoint ?(tile = false) ?chains ?fill_chains ~blocks ~threads ops =
+  let lpoint ?(tile = false) ?chains ~blocks ~threads ops =
     let contexts = [ context ?chains ~blocks ~threads ~ops ~tile () ] in
-    let eff = Cal.effective_ops ?fill_chains ~multiprocessors:np ~fill_threads:t contexts in
+    let eff = Cal.effective_ops ~multiprocessors:np ~fill_threads:t contexts in
     {
       Cal.lp_geometry = Printf.sprintf "t%d" threads;
       lp_m = blocks;
@@ -126,11 +126,11 @@ let () =
      any cap up to 16 the fit is the thread-only one -- [fill_threads] needs no refit -- while a
      sweep of 4-chain threads generated under a cap of 8 is fitted back to [t] only when the fit
      reads the cap. *)
-  let chained ?fill_chains c =
+  let chained c =
     List.map [ 1; 4; 16; 64; 256; 1024 ] ~f:(fun b ->
-        lpoint ~chains:c ?fill_chains ~blocks:b ~threads:64 ((1 lsl 31) + (b * 4096)))
+        lpoint ~chains:c ~blocks:b ~threads:64 ((1 lsl 31) + (b * 4096)))
     @ List.map [ 1; 4; 16; 64; 256 ] ~f:(fun b ->
-        lpoint ~chains:c ?fill_chains ~blocks:b ~threads:256 ((1 lsl 30) + (b * 8192)))
+        lpoint ~chains:c ~blocks:b ~threads:256 ((1 lsl 30) + (b * 8192)))
   in
   let same_fit a b =
     match (a, b) with
@@ -144,15 +144,13 @@ let () =
       same_fit
         (Cal.fit_fill ~fill_chains:l ~multiprocessors:np (chained 16))
         (Cal.fit_fill ~multiprocessors:np sweep));
-  (let label = "a 4-chain sweep under a cap of 8 fits back to t when the fit reads the cap" in
-   p label
-     (match Cal.fit_fill ~fill_chains:8 ~multiprocessors:np (chained ~fill_chains:8 4) with
-     | Cal.Fill_fit f -> f.saturation = t && rel label f.rate rate && Float.(f.max_residual < 1e-6)
-     | Cal.Fill_unfittable _ -> false));
-  p "and away from t when it does not"
-    (match Cal.fit_fill ~multiprocessors:np (chained ~fill_chains:8 4) with
-    | Cal.Fill_fit f -> f.saturation <> t
-    | Cal.Fill_unfittable _ -> true);
+  let refused = function Cal.Fill_unfittable _ -> true | Cal.Fill_fit _ -> false in
+  p "a cap above the chains the sweep's threads carry is refused: it cannot identify t under it"
+    (refused (Cal.fit_fill ~fill_chains:8 ~multiprocessors:np (chained 4))
+    && refused (Cal.fit_fill ~fill_chains:32 ~multiprocessors:np (chained 16)));
+  p "an uncounted sweep is refused above a cap of 1, and fits at 1"
+    (refused (Cal.fit_fill ~fill_chains:2 ~multiprocessors:np sweep)
+    && not (refused (Cal.fit_fill ~fill_chains:1 ~multiprocessors:np sweep)));
   (* The pre-fill fit over a reduction-extent sweep of one partially filled launch (16 blocks of 64
      threads: fill 1024 / 8960) reads the full-fill rate times that fill -- the depressed rate the
      launch fit normalizes. *)
