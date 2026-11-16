@@ -179,3 +179,16 @@ a forward re-run after a part of the stepped node was replaced: re-running the f
 a forward re-run after a part of the stepped node was replaced: the refusal names hz: true
 a forward re-run after a part of the stepped node was replaced: the refusal names gh-ocannl-2027: true
 a forward re-run after a part of the stepped node was replaced: the refused run left the steps: true
+forward first: the reader reads hs: true
+reader first: owns the input fetch: true
+reader first: owns hs's computation: true
+reader first: later forward refused: true
+reader first: refusal names hs: true
+reader first: refusal names read_before: true
+reader first: refusal names %cd reader: true
+reader first: refusal names embeds: true
+reader first: refusal names computes: true
+reader first: refusal names Train.forward: true
+reader first: refusal names before constructing the reader: true
+reader first: running the embedding routine computes hs: true
+reader first: running the embedding routine computes out: true

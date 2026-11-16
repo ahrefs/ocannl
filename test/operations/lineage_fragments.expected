@@ -16,10 +16,12 @@ u is not stored by the once-run: true
 the loss over the once-run's virtual intermediate compiles and runs: true
 w.grad equals the materialized reference's: true
 C: the second, on the returned context, is refused naming t's forward fragment: true
+C: a repeated forward names the general rerun remedy: true
 C: the refusal left the first run's value: true
 C: the same compile as a sibling is accepted: true
 C: the sibling computes t: true
 D: the second, on the returned context, is refused naming loss's backprop fragment: true
+D: backprop duplicate keeps its existing guidance: true
 D: the same compile as a sibling is accepted: true
 D: the sibling trains w: true
 E: Train.forward t in the once-run's lineage is refused: true

@@ -166,6 +166,8 @@ let () =
       let msg = LC.refusal "C" (fun () -> Train.forward_once ctx1 t) in
       p "C: the second, on the returned context, is refused naming t's forward fragment"
         (duplicate_named msg t.value);
+      p "C: a repeated forward names the general rerun remedy"
+        (LC.has msg "Run the earlier routine again with Context.run instead of recompiling it");
       LC.exact "C: the refusal left the first run's value" (Context.get_values ctx1 t.value)
         [| 1.; 4.; 9. |];
       Option.iter
@@ -181,6 +183,13 @@ let () =
       let msg = LC.refusal "D" (fun () -> Train.update_once ctx1 loss) in
       p "D: the second, on the returned context, is refused naming loss's backprop fragment"
         (duplicate_named msg (LC.grad_of loss));
+      p "D: backprop duplicate keeps its existing guidance"
+        (String.is_suffix msg
+           ~suffix:
+             "A fragment is compiled into one routine of a lineage -- a second copy of a backprop \
+              fragment would double-count a gradient. Run the earlier routine again with \
+              Context.run instead of recompiling it; to compile an alternative version, compile \
+              from a context that does not descend from that routine (a sibling).");
       Option.iter
         (LC.accepted "D: the same compile as a sibling is accepted" (fun () ->
              Train.update_once ctx0 loss))

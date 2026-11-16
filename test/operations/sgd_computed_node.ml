@@ -750,6 +750,57 @@ let partial_replacement () =
   rerun_refused "a forward re-run after a part of the stepped node was replaced" ~ctx ~fwd
     ~node:"hz" ~stepped:[| 5.; 7.; 2.53125; 3.375 |] ~watched:hz
 
+(* gh-ocannl-2188: constructing a %cd reader first embeds the entire forward, not just the input's
+   fetch. Compiling that forward again in its lineage must explain both orders. *)
+let reader_forward_order () =
+  let make () =
+    let x = leaf ~l:"xpc" [| 1.; 2. |] in
+    let%op hs = x *. 2 in
+    let out = NTDSL.term ~label:[ "reader_out" ] ~output_dims:[ 2 ] () in
+    Train.set_materialized hs.Tensor.value;
+    Train.set_materialized out.Tensor.value;
+    (x, hs, out)
+  in
+  let _, hs, out = make () in
+  let ctx, fwd =
+    Context.compile ~name:"forward_before" (Context.auto ()) (Train.forward hs) IDX.empty
+  in
+  let ctx, reader = Context.compile ~name:"read_after" ctx [%cd out =: hs] IDX.empty in
+  let ctx = Context.run ctx fwd in
+  let ctx = Context.run ctx reader in
+  matches "forward first: the reader reads hs" (values ctx out) [| 2.; 4. |];
+  let x, hs, out = make () in
+  let read = [%cd out =: hs] in
+  Set.iter read.Asgns.owned ~f:(fun f ->
+      eprintf "reader owned: %s (not part of the golden)\n%!" (Asgns.Fragment.describe f));
+  Verdict.p "reader first: owns the input fetch" (Set.mem read.owned (x.Tensor.value, Asgns.Fwd));
+  Verdict.p "reader first: owns hs's computation" (Set.mem read.owned (hs.Tensor.value, Asgns.Fwd));
+  let ctx, reader = Context.compile ~name:"read_before" (Context.auto ()) read IDX.empty in
+  let msg =
+    match Context.compile ~name:"forward_after" ctx (Train.forward hs) IDX.empty with
+    | _ ->
+        Verdict.p "reader first: later forward refused" false;
+        ""
+    | exception Utils.User_error msg ->
+        eprintf "reader first: %s (not part of the golden)\n%!" msg;
+        Verdict.p "reader first: later forward refused" true;
+        msg
+  in
+  List.iter
+    [
+      "hs";
+      "read_before";
+      "%cd reader";
+      "embeds";
+      "computes";
+      "Train.forward";
+      "before constructing the reader";
+    ] ~f:(fun substring ->
+      Verdict.p ("reader first: refusal names " ^ substring) (String.is_substring msg ~substring));
+  let ctx = Context.run ctx reader in
+  matches "reader first: running the embedding routine computes hs" (values ctx hs) [| 2.; 4. |];
+  matches "reader first: running the embedding routine computes out" (values ctx out) [| 2.; 4. |]
+
 let () =
   classification ();
   computed_refused ();
@@ -766,4 +817,5 @@ let () =
   replaced_values ();
   persisting_host_write ();
   kept_through_members ();
-  partial_replacement ()
+  partial_replacement ();
+  reader_forward_order ()
