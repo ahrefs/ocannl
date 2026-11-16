@@ -620,6 +620,8 @@ let () =
       (* gh-ocannl-1600: its memory-transaction rate, likewise. *)
       ("model_transaction_rate", "");
       ("model_workgroup_bytes_per_multiprocessor", "");
+      (* gh-ocannl-1821: its staged-copy rate, likewise. *)
+      ("model_staged_copy_rate", "");
     ]
   in
   p "they are exactly the Untimed_model class" (same_keys model_keys Utils.Untimed_model);

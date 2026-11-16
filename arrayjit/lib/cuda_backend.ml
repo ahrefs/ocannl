@@ -1940,10 +1940,24 @@ end = struct
            transaction_rate = Some 1.0e12;
            (* gh-ocannl-1600: no occupancy capacity. At the gh-ocannl-1479 outproj cells on rog the
               physical 100 KiB per SM leaves the deep-K coalesced argmin 1.23x slower, and at b8 (64
-              blocks over 46 SMs) residency does not bind at all: the deep-K slowdown has another
-              mechanism, so the coalesced layouts stay out of model_default here. Overridable by
-              model_workgroup_bytes_per_multiprocessor. *)
+              blocks over 46 SMs) residency does not bind at all. With the staged-copy term below it
+              still hurts (gh-ocannl-1821: outproj b256 then picks a 64x64x32 coal-k tile 1.21x
+              slower than the fastest leaf), so the coalesced layouts enter model_default through
+              the copy rate instead. Overridable by model_workgroup_bytes_per_multiprocessor. *)
            workgroup_bytes_per_multiprocessor = None;
+           (* gh-ocannl-1821: the staged-copy rate, fitted on the gh-ocannl-1479 cells' timings on
+              rog-nv's RTX 5070 Ti (gh-ocannl-1600's M1 window, b36a8d66, five replicates per leaf;
+              benchmarks/gh1821_geometry_fit.py) together with the launch tail it switches on: the
+              copies' volume orders the 64-, 32- and 16-wide staged block tiles as measured
+              (within-cell R^2 0.71 alone, against 0.007 for the k-step count), and the tail keeps
+              the b8 cells -- 64 blocks of a 64-wide tile over 46 SMs -- on the 32-wide tiles that
+              measured faster there. Under both, the admitted+coalesced argmin is the fastest leaf
+              at outproj and qkv b256 (against 1.48x and 1.24x slower) and an uncoalesced leaf at
+              b8, agreement rising at every cell; any rate in 5e11-8e12 B/s does the same. One
+              device's constant for the class, over issue_rate above (refit both together); read by
+              model_default's ranking, not the auto seeding gate. Overridable by
+              model_staged_copy_rate. *)
+           staged_copy_rate = Some 1.0e12;
          })
     in
     (* gh-ocannl-572: the kernel source is a function of the lowered code, the device capabilities

@@ -36,7 +36,7 @@ let fresh_tn =
   fun label dims -> make ~dims label
 
 let it = Ll_test.iter
-let fm = { CM.fm_multiprocessors = 4; fm_fill_threads = 64 }
+let fm = { CM.fm_multiprocessors = 4; fm_fill_threads = 64; fm_tail = false }
 
 (* [d[...] += x[...] * y[...]]: two operations per cell. *)
 let mac d didx x xidx y yidx =

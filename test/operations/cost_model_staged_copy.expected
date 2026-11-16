@@ -1,0 +1,22 @@
+the census counts the copy's executions times its width, in its own context: true
+nothing is staged where no node is: true
+the term adds the filled bytes over the rate to the compute leg, exactly: true
+a rate of None leaves both legs bitwise as without the term: true
+a rate of 0 leaves both legs bitwise as without the term: true
+no copy leaves both legs bitwise as without the term: true
+the term never lowers the compute leg below the bound's: true
+two nests, two copy contexts: true
+a listing at rate L re-scores at R by stg * (1/R - 1/L), over every context: true
+only the operand copy counts, at the iterations its index guard admits, in its own context: true
+a kernel with a Tile_mma statement has no counted copies: true
+the tail is the continuous fill at B <= P: true
+and at B = P: true
+and at a saturated multiple of P: true
+48 saturated blocks over 32 multiprocessors fill 3/4 under the tail, all of it without: true
+unsaturated, the busiest multiprocessor's two blocks still fit its issue: no tail: true
+64 blocks of 256 threads over 46 multiprocessors fill 32/46: true
+the tail reaches the tile-MMA leg through the same fill: 48 one-lane blocks over 32, 4/3x: true
+the auto gate is the same with and without the copy rate: true
+and its launch fill is continuous: true
+every staged leaf's census equals M*N*K*(BM+BN)/(BM*BN) cells of 4 bytes: true
+a coalesced leaf is among them: true

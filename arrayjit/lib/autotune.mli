@@ -2337,11 +2337,18 @@ val ranking_workgroup_capacity : limits:Ir.Backend_intf.hardware_limits -> int o
     occupancy factor, and no coalesced leaves in {!model_default}) over the backend's advisory
     [workgroup_bytes_per_multiprocessor]. An [Untimed] reading, like {!ranking_capacity}. *)
 
+val ranking_staged_copy_rate : limits:Ir.Backend_intf.hardware_limits -> float option
+(** The ranking score's staged-copy rate, in bytes/s (gh-ocannl-1821,
+    {!Ir.Cost_model.staged_copies}): config [model_staged_copy_rate] ([none]: no staged-copy term, a
+    continuous launch fill, and no coalesced leaves admitted through it in {!model_default}) over
+    the backend's advisory [staged_copy_rate]. An [Untimed] reading, like {!ranking_capacity}. *)
+
 val ranking_fill_model : limits:Ir.Backend_intf.hardware_limits -> Ir.Cost_model.fill_model option
 (** The ranking score's launch fill model (gh-ocannl-1479, {!Ir.Cost_model.context_fill}): config
     [model_multiprocessors] and [model_fill_threads] (each [none]: no launch fill) over the
-    backend's advisory [multiprocessors] / [fill_threads]; [None] unless both resolve. An [Untimed]
-    reading, like {!ranking_capacity}. *)
+    backend's advisory [multiprocessors] / [fill_threads]; [None] unless both resolve. Continuous
+    ([fm_tail] off): the score switches the launch tail on exactly where it prices a staged-copy
+    rate (gh-ocannl-1821). An [Untimed] reading, like {!ranking_capacity}. *)
 
 val ranking_dram_bandwidth : limits:Ir.Backend_intf.hardware_limits -> float option
 (** The ranking score's achieved DRAM rate, in bytes/s (gh-ocannl-1442): config
@@ -2715,10 +2722,12 @@ val model_family_search :
 
 val model_ranks_coalesced : limits:Ir.Backend_intf.hardware_limits -> bool
 (** gh-ocannl-1600: whether {!model_default} ranks the coalesced layouts -- where the terms that
-    tell them from their uncoalesced twins are priced: {!ranking_transaction_rate},
-    {!ranking_workgroup_capacity}, the device residency and {!ranking_fill_model} all resolve (the
-    occupancy factor reads the last two) and the backend states its [simdgroup_width]. Its
-    numerics-preserving set then also admits a coalesced scalar blocktile. *)
+    tell them from their uncoalesced twins are priced: {!ranking_transaction_rate} resolves, the
+    backend states its [simdgroup_width], and a geometry term is priced: the occupancy factor
+    ({!ranking_workgroup_capacity}, the device residency and {!ranking_fill_model} all resolve) or,
+    since gh-ocannl-1821, the staged-copy term ({!ranking_staged_copy_rate} and
+    {!ranking_fill_model} resolve). Its numerics-preserving set then also admits a coalesced scalar
+    blocktile. *)
 
 type seeded_choice = {
   sd_seeded : (int * sketch_params) list;
@@ -2851,7 +2860,9 @@ type seed_gate =
           launch fill, gh-ocannl-1479), and its memory-transaction rate
           ({!ranking_transaction_rate}; [None]: no transaction term, gh-ocannl-1600) and its
           occupancy factor's capacity ({!ranking_workgroup_capacity}; [None]: no occupancy factor) —
-          so it seeds exactly where the cross-block re-reads the sketch removes are priced. The
+          never the staged-copy term ({!ranking_staged_copy_rate}, gh-ocannl-1821), fitted among
+          staged leaves only, while the gate weighs a staged sketch against an unstaged preset — so
+          it seeds exactly where the cross-block re-reads the sketch removes are priced. The
           geometry and the numerics-preserving candidate set are {!seeded_params}' either way. *)
 
 val seeded_default_gate : limits:Ir.Backend_intf.hardware_limits -> seed_gate
@@ -3050,6 +3061,12 @@ type explain_kernel = {
   ek_occupancy : float;
       (** Its occupancy as the compute leg divides by it ({!Ir.Cost_model.occupancy}; 1 where the
           score reads none). *)
+  ek_staged_bytes : float;
+      (** gh-ocannl-1821: its operand staging copies' bytes as the compute leg divides them by the
+          staged-copy rate ({!Ir.Cost_model.filled_staged_bytes}: over each context's fill), 0 where
+          no rate prices them. The leg adds them over the rate before the occupancy divides it, so a
+          listing scored at rate [L] re-scores at [R] by adding [stg * (1/R - 1/L) / occ] to [c]
+          (the launch tail stays on at both). *)
 }
 (** One kernel of an explained candidate: what [benchmarks/gh1442_agreement.py --fit-txn] re-scores
     offline, the candidate's score being the sum over its kernels of the larger leg. *)

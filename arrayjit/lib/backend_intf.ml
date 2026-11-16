@@ -466,6 +466,25 @@ type hardware_limits = {
           measured order (CUDA, gh-ocannl-1600) or is unmeasured. Overridable by config
           [model_workgroup_bytes_per_multiprocessor]. Same readers and same cache identity as
           {!field-cache_capacity_bytes}. *)
+  staged_copy_rate : float option; [@sexp.option]
+      (** [Untimed]: how many bytes per second a launch's operand staging copies move into workgroup
+          memory -- the rate of the ranking score's staged-copy term (gh-ocannl-1821,
+          {!Ir.Cost_model.staged_copies}): the bytes a scalar blocktile's copies write into its
+          staged tiles over every block and k-step ([M * N * K * (BM + BN) / (BM * BN)] cells), each
+          context's over its fill, added to the compute leg. What orders a site's staged block tiles
+          (64-, 32- and 16-wide) against each other, which the flat compute leg tied and the k-block
+          depth does not explain. Where it resolves, the launch fill also takes the launch tail
+          ({!Ir.Cost_model.context_fill}'s [fm_tail]): the two were fitted together, on top of
+          {!field-issue_rate} -- refit one, refit both. It is also the second half of
+          [model_default]'s gate on the coalesced layouts, beside {!field-transaction_rate}, as an
+          alternative to {!field-workgroup_bytes_per_multiprocessor}. A FITTED constant
+          ([benchmarks/gh1600_txn_fit.py --staged-rate], [benchmarks/gh1821_geometry_fit.py] on
+          listings without the kernels' [stg=]), per device class, in bytes of the staged node's
+          storage precision (fitted at f32). Overridable by config [model_staged_copy_rate]; [None]
+          where unmeasured, which adds no term, leaves the fill continuous and admits nothing. Read
+          by [model_default]'s ranking only: the [auto] seeding gate, which weighs a staged sketch
+          against an unstaged preset the term was not fitted for, prices neither the term nor the
+          tail. Same cache identity as {!field-cache_capacity_bytes}. *)
   native_fp16_arithmetic : bool;
       (** Whether 16-bit float arithmetic executes natively at twice f32's lane count
           (gh-ocannl-516: ARMv8.2-FP16, AVX512-FP16). [false] covers both "no [_Float16] on this
@@ -889,6 +908,7 @@ let no_hardware_limits =
     fill_threads = None;
     transaction_rate = None;
     workgroup_bytes_per_multiprocessor = None;
+    staged_copy_rate = None;
     native_fp16_arithmetic = false;
     simdgroup_width = None;
     lane_scalar_recompute_cheap = false;
@@ -1123,6 +1143,7 @@ let limits_key
        fill_threads = _;
        transaction_rate = _;
        workgroup_bytes_per_multiprocessor = _;
+       staged_copy_rate = _;
        native_fp16_arithmetic;
        simdgroup_width;
        lane_scalar_recompute_cheap;
@@ -1165,6 +1186,7 @@ type untimed_limits = {
   sector_rate : float option;  (** {!field-hardware_limits.transaction_rate}. *)
   workgroup_capacity : int option;
       (** {!field-hardware_limits.workgroup_bytes_per_multiprocessor}. *)
+  copy_rate : float option;  (** {!field-hardware_limits.staged_copy_rate}. *)
 }
 (** The [Untimed] fields' readings, the one accessor their readers go through
     ([test/operations/limits_field_classes] refuses a direct read elsewhere). *)
@@ -1182,6 +1204,7 @@ let untimed_limits (l : hardware_limits) : untimed_limits =
     saturation_threads = l.fill_threads;
     sector_rate = l.transaction_rate;
     workgroup_capacity = l.workgroup_bytes_per_multiprocessor;
+    copy_rate = l.staged_copy_rate;
   }
 
 (** A base for [{ minimal_mma_capability with ... }] literals, so adding a field to

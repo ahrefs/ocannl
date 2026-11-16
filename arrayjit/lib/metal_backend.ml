@@ -694,6 +694,8 @@ module Impl = struct
            (* gh-ocannl-1600: unmeasured; configured (model_transaction_rate), never advisory. *)
            transaction_rate = None;
            workgroup_bytes_per_multiprocessor = None;
+           (* gh-ocannl-1821: unmeasured; configured (model_staged_copy_rate), never advisory. *)
+           staged_copy_rate = None;
          })
     in
     fun () -> Lazy.force limits

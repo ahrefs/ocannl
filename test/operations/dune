@@ -5498,6 +5498,20 @@
  (action
   (diff cost_model_selection.expected cost_model_selection.actual)))
 
+;  The ranking score's staged-copy term and the launch tail it switches on (gh-ocannl-1821): the
+; census on hand-built kernels and at the lowered out projection's leaves, the exact term and its
+; bitwise-absent controls, and the tail's fills.
+
+(test
+ ; ocannl-backend: cc -- Context.cpu lowers the site; the census and the scores are hermetic and nothing compiles.
+ (name cost_model_staged_copy)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules cost_model_staged_copy)
+ (libraries base stdio ocannl arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_ocannl)))
+
 ;  The cost model's account of one inlined computation (gh-ocannl-637 Part 2): template_cost /
 ; recompute_cost / producer_cost against the kernel-level counts, the modeled flip-candidate
 ; pricing, and the proxy-vs-model ordering witness.

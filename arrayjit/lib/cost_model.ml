@@ -897,12 +897,25 @@ let launch_contexts (code : Low_level.t) : launch_context list =
   List.rev_map !order ~f:(fun ((b, t, tile) as key) ->
       { lc_blocks = b; lc_threads = t; lc_tile_mma = tile; lc_ops = !(Hashtbl.find_exn tbl key) })
 
-type fill_model = { fm_multiprocessors : int; fm_fill_threads : int } [@@deriving sexp_of]
+type fill_model = { fm_multiprocessors : int; fm_fill_threads : int; fm_tail : bool }
+[@@deriving sexp_of]
 
+(* gh-ocannl-1821: under [fm_tail], the launch tail. A launch of [B] blocks over [P] multiprocessors
+   puts [n = ceil (B / P)] blocks on the busiest multiprocessor, which runs them at [u n = min 1 (n
+   * min T t / t)] of its issue; the launch then fills [(B / P) * u n / n] of the device. That is
+   the continuous fill exactly where [B <= P], and where [B] is a multiple of [P] at saturation;
+   between multiples it is below it: 64 blocks over 46 multiprocessors leave 18 of them running two
+   blocks, so the launch fills 32/46 of the device rather than all of it. *)
 let context_fill (fm : fill_model) ~blocks ~threads =
-  let p = Float.of_int (max 1 fm.fm_multiprocessors) and t = max 1 fm.fm_fill_threads in
-  let effective = Float.of_int (max 1 blocks) *. Float.of_int (min (max 1 threads) t) in
-  Float.min 1. (effective /. (p *. Float.of_int t))
+  let p = max 1 fm.fm_multiprocessors and t = max 1 fm.fm_fill_threads in
+  let b = max 1 blocks and threads = min (max 1 threads) t in
+  if fm.fm_tail && b > p then
+    let n = (b + p - 1) / p in
+    let busiest = Float.min 1. (Float.of_int (n * threads) /. Float.of_int t) in
+    Float.of_int b /. Float.of_int p *. busiest /. Float.of_int n
+  else
+    let effective = Float.of_int b *. Float.of_int threads in
+    Float.min 1. (effective /. (Float.of_int p *. Float.of_int t))
 
 (* One class of statements (scalar ones, or [Tile_mma] ones): its operations, and the sum over its
    contexts of each context's operations divided by its fill. *)
@@ -925,6 +938,128 @@ let filled_work fm contexts ~tile work =
 let launch_fill fm contexts =
   let ops, weighted = class_work fm contexts ~tile:false in
   if Float.(ops <= 0.) then 1. else ops /. weighted
+
+(* {2 Staged operand copies — gh-ocannl-1821}
+
+   What orders a site's staged blocktile geometries against each other: the bytes the operand
+   staging copies move into workgroup memory, summed over every block and k-step, which is [M * N *
+   K * (BM + BN) / (BM * BN)] cells for a [BM x BN] block tile -- independent of the k-block depth.
+   At the gh-ocannl-1479 cells (rog, RTX 5070 Ti) this explained 71% of the within-cell variance of
+   the measured times of the staged leaves on its own, and the k-step count none (R^2 0.007, a zero
+   coefficient beside the others): the score's compute leg, flat across them, hid the 1.3-2x spread
+   between 64-, 32- and 16-wide block tiles that the memory leg's cache term counts but [max]
+   discards.
+
+   A copy is a [Set] into a staged node -- a workgroup-shared node that is not a fragment, which the
+   caller's [is_staged] says -- whose value is a plain read of an unstaged node: a [Get], possibly
+   behind a precision-preserving [Unop] or the [Where]-with-a-constant fringe guard a padded tile
+   renders. A zero fill (a constant), a reduction into a shared scratch (it carries operations), a
+   [Set_from_vec] and a [Set_dynamic] are not copies. A kernel with a [Tile_mma] statement has none:
+   the matrix units' fitted rate already prices their staging (gh-ocannl-1495). Each copy's bytes
+   are its executions times the staged node's element width, attributed to its parallel context.
+   Unlike the op census, a statement guard of the form [i < c] (a conjunction of them) on an
+   enclosing loop's index from 0 counts the iterations it admits: that is the shape of a partitioned
+   copy whose tile is narrower than the workgroup axis it spreads over (gh-ocannl-1661's restrict
+   fallback -- [if (ty < 8)] on 16 rows of threads for a k-block of 8), and taken, it doubled a
+   64-wide tile's volume to the 32-wide one's. Any other guard is taken. *)
+
+type staged_copy_context = { sc_blocks : int; sc_threads : int; sc_bytes : float }
+[@@deriving sexp_of]
+
+let staged_copies ~is_staged (code : Low_level.t) : staged_copy_context list =
+  let rec has_tile_mma (c : Low_level.t) =
+    match c with
+    | Low_level.Tile_mma _ -> true
+    | Seq (a, b) -> has_tile_mma a || has_tile_mma b
+    | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> has_tile_mma body
+    | _ -> false
+  in
+  if has_tile_mma code then []
+  else
+    let tbl = Hashtbl.Poly.create () and order = ref [] in
+    let add (ctx : par_ctx) bytes =
+      let key = (ctx.pc_blocks, ctx.pc_threads) in
+      match Hashtbl.find tbl key with
+      | Some r -> r := !r +. bytes
+      | None ->
+          Hashtbl.set tbl ~key ~data:(ref bytes);
+          order := key :: !order
+    in
+    let rec plain_read (sc : Low_level.scalar_t) =
+      match sc with
+      | Low_level.Get (src, _) -> not (is_staged src)
+      | Unop ((Ops.Identity | Ops.Round_prec), (a, _)) -> plain_read a
+      | Ternop (Ops.Where, _, (a, _), (Constant _, _))
+      | Ternop (Ops.Where, _, (Constant _, _), (a, _)) ->
+          plain_read a
+      | _ -> false
+    in
+    (* The fraction of an [i < c] guard's iterations it admits, as (admitted, extent), where [i] is
+       an enclosing loop's index from 0; [None] for any other guard. *)
+    let rec admitted env (cond : Low_level.scalar_t) =
+      match cond with
+      | Low_level.Binop (Ops.Cmplt, (Embed_index (Idx.Iterator s), _), (Constant c, _)) -> (
+          match List.Assoc.find env s ~equal:Idx.equal_symbol with
+          | Some extent when Float.is_integer c ->
+              Some [ (s, Int.clamp_exn (Float.to_int c) ~min:0 ~max:extent, extent) ]
+          | _ -> None)
+      | Binop (Ops.And, (a, _), (b, _)) -> (
+          match Option.map2 (admitted env a) (admitted env b) ~f:( @ ) with
+          (* One index bounded twice is not two independent fractions: taken. *)
+          | Some fs
+            when List.contains_dup fs ~compare:(fun (s1, _, _) (s2, _, _) ->
+                     Idx.compare_symbol s1 s2) ->
+              None
+          | r -> r)
+      | _ -> None
+    in
+    let rec go ~ctx ~scale ~env (c : Low_level.t) =
+      match c with
+      | Low_level.Seq (a, b) ->
+          go ~ctx ~scale ~env a;
+          go ~ctx ~scale ~env b
+      | For_loop { index; from_; to_; body; axis } ->
+          let extent = max 0 (to_ - from_ + 1) in
+          let ctx =
+            match Low_level.hardware_kind_of_axis axis with
+            | Some `Grid -> { ctx with pc_blocks = ctx.pc_blocks * extent }
+            | Some `Workgroup -> { ctx with pc_threads = ctx.pc_threads * extent }
+            | None -> ctx
+          in
+          let env = if from_ = 0 then (index, extent) :: env else env in
+          go ~ctx ~scale:(scale * extent) ~env body
+      | Scan_loop { from_; to_; body; _ } ->
+          go ~ctx ~scale:(scale * max 0 (to_ - from_ + 1)) ~env body
+      | If { cond = cond, _; body } ->
+          (* [scale] carries each guarded loop's extent, so the admitted count divides it out
+             exactly. *)
+          let scale =
+            match admitted env cond with
+            | Some fractions ->
+                List.fold fractions ~init:scale ~f:(fun scale (_, n, extent) ->
+                    if extent > 0 then scale / extent * n else scale)
+            | None -> scale
+          in
+          go ~ctx ~scale ~env body
+      | Set { tn; llsc; _ } when is_staged tn && plain_read llsc ->
+          add ctx
+            (Float.of_int scale *. Float.of_int (Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec)))
+      | _ -> ()
+    in
+    go ~ctx:top_ctx ~scale:1 ~env:[] code;
+    List.rev_map !order ~f:(fun ((b, t) as key) ->
+        { sc_blocks = b; sc_threads = t; sc_bytes = !(Hashtbl.find_exn tbl key) })
+
+(* The staged bytes as the compute leg divides them by the copy rate: each context's over its own
+   fill under a fill model, as counted without one. *)
+let filled_staged_bytes ?fill_model (copies : staged_copy_context list) =
+  List.sum
+    (module Float)
+    copies
+    ~f:(fun c ->
+      match fill_model with
+      | None -> c.sc_bytes
+      | Some fm -> c.sc_bytes /. context_fill fm ~blocks:c.sc_blocks ~threads:c.sc_threads)
 
 (* {2 Memory transactions — gh-ocannl-1600}
 
@@ -1271,8 +1406,8 @@ let ranking_mma_terms ?(mma_flops = 0) ?(device_gathers = 0) ?launch (s : summar
 
 let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?issue_rate ?dram_bandwidth ?mma_rate ?(mma_flops = 0) ?(device_gathers = 0) ?device_gather_rate
-    ?launch ?(transactions = []) ?transaction_rate ?occupancy (s : summary) (r : reuse option) :
-    float option * float option =
+    ?launch ?(transactions = []) ?transaction_rate ?(staged_copies = []) ?staged_copy_rate
+    ?occupancy (s : summary) (r : reuse option) : float option * float option =
   let total = Float.of_int (total_bytes s) in
   let memory =
     Option.map peak_memory_bandwidth ~f:(fun ceiling ->
@@ -1325,12 +1460,23 @@ let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
               if Float.(excess > 0.) then leg +. (excess /. rate) else leg
           | _ -> leg
         in
+        (* gh-ocannl-1821: the staged operand copies' bytes, each context's over its own fill, at
+           the fitted copy rate -- likewise an addition, and nothing without a rate or a copy. *)
+        let with_staged_copies leg =
+          match staged_copy_rate with
+          | Some rate when Float.(rate > 0.) ->
+              let bytes =
+                filled_staged_bytes ?fill_model:(Option.map launch ~f:fst) staged_copies
+              in
+              if Float.(bytes > 0.) then leg +. (bytes /. rate) else leg
+          | _ -> leg
+        in
         (* gh-ocannl-1600: the whole leg over the kernel's occupancy, where one is given below 1:
            its resident threads hide that much less latency. *)
         let with_occupancy leg =
           match occupancy with Some o when Float.(o > 0. && o < 1.) -> leg /. o | _ -> leg
         in
-        with_occupancy @@ with_transactions
+        with_occupancy @@ with_staged_copies @@ with_transactions
         @@
         match launch with
         | Some (fm, contexts) ->
@@ -1365,11 +1511,12 @@ let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
 
 let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch
-    ?transactions ?transaction_rate ?occupancy (s : summary) (r : reuse option) : float option =
+    ?transactions ?transaction_rate ?staged_copies ?staged_copy_rate ?occupancy (s : summary)
+    (r : reuse option) : float option =
   let compute, memory =
     ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
       ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch
-      ?transactions ?transaction_rate ?occupancy s r
+      ?transactions ?transaction_rate ?staged_copies ?staged_copy_rate ?occupancy s r
   in
   match List.filter_opt [ compute; memory ] with
   | [] -> None
@@ -1377,9 +1524,14 @@ let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes 
 
 let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?fill_model
-    ?transaction_rate ?lane_width ?max_resident_threads ~is_global (code : Low_level.t) :
-    float option =
+    ?transaction_rate ?lane_width ?max_resident_threads ?staged_copy_rate ?is_staged ~is_global
+    (code : Low_level.t) : float option =
   let s = analyze code in
+  let staged_copies =
+    match (staged_copy_rate, is_staged) with
+    | Some _, Some is_staged -> staged_copies ~is_staged code
+    | _ -> []
+  in
   let launch = Option.map fill_model ~f:(fun fm -> (fm, launch_contexts code)) in
   let transactions =
     match (transaction_rate, lane_width) with
@@ -1393,7 +1545,7 @@ let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
   in
   ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch
-    ~transactions ?transaction_rate s r
+    ~transactions ?transaction_rate ~staged_copies ?staged_copy_rate s r
 
 (* {2 Tile-MMA operand loads — gh-ocannl-1254}
 

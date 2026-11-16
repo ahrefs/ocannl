@@ -381,11 +381,11 @@ files.
   occupancy factor (`Cost_model.occupancy`: theoretical occupancy from
   `workgroup_bytes_per_multiprocessor`, the compute leg over it). `model_default` ranks the
   coalesced menu (inside `model_family_search`, after the tree, strict improvement only) only
-  where BOTH resolve. HIP RDNA ships the physical 131072 (LDS per WGP; HIP counts WGPs) and the
-  coalesced argmin at minix outproj b8/b256 is the fastest leaf (`64x64x32 coal-k`, 1.41x faster
-  than the uncoalesced pick); CUDA ships no capacity: physical 100 KiB leaves `64x64x32 coal-k`
-  1.23x slow, and at b8 (64 blocks over 46 SMs) residency cannot bind at all, so the CUDA
-  deep-K slowdown has another mechanism (open: profile it). Once the per-lane run is one
+  where the transaction rate resolves beside a geometry term: the occupancy capacity, or the
+  staged-copy rate (below). HIP RDNA ships the physical 131072 (LDS per WGP; HIP counts WGPs) and
+  the coalesced argmin at minix outproj b8/b256 is the fastest leaf (`64x64x32 coal-k`, 1.41x
+  faster than the uncoalesced pick); CUDA ships no capacity: physical 100 KiB leaves `64x64x32
+  coal-k` 1.21-1.23x slow, with or without the copy term. Once the per-lane run is one
   footprint, qkv and outproj carry no excess at all; only the weight gradient's transposed
   operand does (rates fitted there: CUDA 1e12, HIP 1e11, `benchmarks/gh1600_txn_fit.py`, which
   re-scores per kernel from `bench_rank_site`'s `rank-site: kernels` lines -- the routine's summed
@@ -399,6 +399,35 @@ files.
   `16x16x8/4x4 bgrid`, 1.8-2.6x slower (tuf, discrete RX 7700S, `ecb13bb8`). Block-level, no
   candidate at the gh-1479 cells carries excess (wgrad's transposed operand included), so the
   fitted rates are inert there.
+- **The staged-copy term orders a site's block tiles; the k-step count does not (gh-ocannl-1821).**
+  After gh-ocannl-1661 the compute leg was flat across the staged blocktile leaves (`c=1.263` ms
+  for every fill-1 leaf at rog's outproj b256) while they measured 1.3-2x apart by BLOCK tile: 64x64
+  0.50-0.61 ms, 32x32 0.66-0.74, 16x16/2x2 1.10-1.31. Within one block tile the k-block depth
+  barely moves the time and not monotonically (16x16/2x2: BK8 fastest), and a within-cell
+  regression over the five cells' staged leaves (rog M1, `b36a8d66`; `benchmarks/gh1821_geometry_fit.py
+  --regress`) gives log k-steps R^2 0.007 and a zero coefficient beside the others, against 0.71
+  for the copy volume per FMA `(BM+BN)/(BM*BN)`; a per-step cost, however small, picks 2x2 leaves
+  1.27-1.37x slow at b8. The memory leg's cache term already counted that volume -- `max` hid it
+  under the too-high compute leg. So `Cost_model.staged_copies` counts the bytes the operand
+  staging copies write into workgroup memory (a `Set` into a non-fragment workgroup-shared node
+  from a plain read; an `i < c` partition guard on a loop index counts what it admits, since
+  gh-1661's restrict fallback guards half the rows of threads), priced at `staged_copy_rate` in
+  the compute leg. Two traps: (1) the b8 cells reverse the order (64 blocks of a 64-wide tile over
+  46 SMs leave 18 SMs doing two blocks), so the rate also switches on the launch TAIL in
+  `context_fill` (`fm_tail`: `(B/P) * u(n) / n`, `n = ceil(B/P)`) -- and the tail alone, without
+  the copy term, picks 16-thread tiles 3-4x slow: they are one calibration; (2) tensorized
+  (`Tile_mma`) kernels are excluded, `mma_rate` already prices their staging; (3) the `auto`
+  seeding gate prices neither: it weighs a staged sketch against an UNSTAGED preset whose operand
+  loads the compute leg charges nothing for, and with the term it stopped seeding
+  `model_seeded_anchor`'s two-matmul chain on CUDA, a ranking nothing measured. CUDA ships 1e12 B/s
+  (any of 5e11-8e12 does the same at M1); the admitted+coalesced argmin is then the fastest leaf at
+  outproj and qkv b256 and an uncoalesced leaf at b8. HIP has none: on tuf (discrete) the term
+  favors the uncoalesced `64x64x8/4x4 bgrid` measured 4.5x slow there and its deep tiles need the
+  occupancy factor. Not modeled: BK order within one block tile (exact score ties, the walk's
+  listing order decides), per-thread register-tile reuse (2x2 vs 4x4 at equal block tile, 1.2x on
+  rog, 1.8x on tuf) and sub-warp blocks (16 threads: 2x on rog) -- left to gh-ocannl-1639's ILP
+  arc. Re-fit with `gh1600_txn_fit.py --staged-rate sweep --listed-staged-rate L` on listings
+  carrying `stg=`, judged against the cell's `nostg` arm (`gh1253_cells.sh`).
 - **Compare a plan and its rivals in ONE kernel decomposition** (gh-ocannl-1477). The ranking score
   sums `max(compute, memory)` per kernel, so a memory-bound kernel run on its own (the seeded plan's
   zero-fill, the default segmentation having no zero fold) is charged in full, while the same writes

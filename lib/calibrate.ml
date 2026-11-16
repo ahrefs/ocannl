@@ -481,7 +481,11 @@ let form_fill form ~multiprocessors ~fill_threads ~blocks ~threads =
   match form with
   | Capped ->
       Ir.Cost_model.context_fill
-        { Ir.Cost_model.fm_multiprocessors = multiprocessors; fm_fill_threads = fill_threads }
+        {
+          Ir.Cost_model.fm_multiprocessors = multiprocessors;
+          fm_fill_threads = fill_threads;
+          fm_tail = false;
+        }
         ~blocks ~threads
   | Uncapped ->
       Float.min 1.
