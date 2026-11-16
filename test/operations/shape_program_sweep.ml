@@ -51,13 +51,18 @@
    oracle's with some axes collapsed to 1, its draws filling the shape they closed to. Where the
    cause was seen to reach the siblings it is broadcast with, the entry also covers the pointwise
    operation consuming one. A refusal is excused only with a message the entry was seen to give. The
-   entries. gh-ocannl-2180's fixed-index input chain is fixed by gh-ocannl-2229: a
-   non-parameter minimum above 1 closes before minimal guesses, then stage 6 propagates its
-   concrete size through results to draws. The literal itself no longer makes a draw adopt its
-   axis: [(u + 1) *. c[5|3]] fills. [x[16] *. normal ()] agrees in both its shapes and its
-   executed distinct values; the judge checks both, not only fill.
+   entries. gh-ocannl-2180's fixed-index input chain is fixed by gh-ocannl-2229: a non-parameter
+   minimum above 1 closes before minimal guesses, then stage 6 propagates its concrete size through
+   results to draws. The literal itself no longer makes a draw adopt its axis: [(u + 1) *. c[5|3]]
+   fills. [x[16] *. normal ()] agrees in both its shapes and its executed distinct values; the judge
+   checks both, not only fill. On the initial base, this fix retired 36 of the literal entry's 54
+   programs and reattributed 10 to other entries. With gh-ocannl-2244 combined, its 8 residual
+   programs are 5 stretches adopting a fixed-index output's size-1 axis (#107, #557, #977, #1423,
+   #1572) and 3 literals after reductions (#536, #682, #1036). The role follows unary results after
+   its one pointwise consumer too (#557's relu); it does not excuse another pointwise hop. The
+   normal entry still covers one composed draw that repeats.
 
-   each with a fixed program below: nested branching (its fixed programs, [c + (u + (v *. w))] which
+   Other causes (each with a fixed program below): nested branching (its fixed programs, [c + (u + (v *. w))] which
    closed [u] and [c + ((u + v) + w)] which was refused, agree since gh-ocannl-2244; random programs
    whose branching pointwise operations nest still collapse); a fixed index over a draw ([(stretch u
    + stretch (stretch u)) ++ "...|3 => ...|0"]: once every einsum spec over a draw, [c[|3->2] * (u
@@ -596,7 +601,8 @@ let residual_axis_role (prog : program) =
    (through unary results), where the cause was seen to reach the siblings it is broadcast with --
    and for a shape, only one that is the oracle's with some axes collapsed to 1. A refusal of a
    program holding one is excused only when its message holds one of [refusals], the messages the
-   entry was seen to produce. *)
+   entry was seen to produce. The residual literal/fixed-index role also follows a unary suffix
+   after that single pointwise consumer; it never adds another pointwise hop. *)
 type known = {
   entry : string;
   is_x : program -> int -> node -> bool;
@@ -604,7 +610,7 @@ type known = {
   refusals : string list;
 }
 
-let region (prog : program) ~is_x ~reach =
+let region ?(unary_after_consumer = false) (prog : program) ~is_x ~reach =
   let base = Array.mapi prog ~f:(is_x prog) in
   if reach then (
     Array.iteri prog ~f:(fun k node ->
@@ -613,6 +619,12 @@ let region (prog : program) ~is_x ~reach =
       Array.mapi prog ~f:(fun k node ->
           base.(k) || match node with Add (x, y) | Mul (x, y) -> base.(x) || base.(y) | _ -> false)
     in
+    (* A unary suffix preserves the residual axis collapse after the one pointwise hop. Restricted
+       to the literal/fixed-index role entry: it must not reinstate the retired generic unary
+       exception (gh-ocannl-2244, random #557). *)
+    if unary_after_consumer then
+      Array.iteri prog ~f:(fun k node ->
+          match node with Stretch x | Relu x | Neg x -> if ext.(x) then ext.(k) <- true | _ -> ());
     under prog ~is_x:(fun k _ -> ext.(k)))
   else under prog ~is_x:(fun k _ -> base.(k))
 
@@ -706,7 +718,12 @@ let judge (prog : program) (oracle : oracle) (outcome : outcome) ~(fills : int o
       let nodes = List.init (Array.length prog) ~f:Fn.id in
       let mismatched = List.filter nodes ~f:(fun k -> not (same want.(k) got.(k))) in
       (* A known repeat explains a mismatch only in its predicted form. *)
-      let holds = List.map known ~f:(fun e -> (e.entry, region prog ~is_x:e.is_x ~reach:e.reach)) in
+      let holds =
+        List.map known ~f:(fun e ->
+            ( e.entry,
+              region ~unary_after_consumer:(String.equal e.entry known_lit) prog ~is_x:e.is_x
+                ~reach:e.reach ))
+      in
       let explained k =
         if collapse_of ~want:want.(k) ~got:got.(k) then
           List.find_map holds ~f:(fun (entry, at) ->
