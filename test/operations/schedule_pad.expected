@@ -1,3 +1,4 @@
+padded matmul operands have f32-exact partial sums: true
 padded packed matmul matches the serial twin bitwise: true
 padded 33x65x70 runs the register-tiled micro-kernel: true
 staged tiles zero-fill their fringe and the store-back is masked: true

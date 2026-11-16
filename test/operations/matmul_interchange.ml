@@ -20,13 +20,12 @@
    fwd: the forward product, contraction innermost -- the control the interchange leaves alone.
 
    Executed assertions compare against a serial reference computed on the host from the same
-   discriminating inputs: every cell is a small dyadic, so every partial sum is exact in f32 and
-   bitwise equality is required whatever the accumulation order; the inputs are strictly positive,
-   so every reference cell is nonzero and a candidate that drops a write cannot pass. GPU backends
-   execute the GPU sketch families, and the tensorized one where the device advertises an f32 tile
-   (Metal); cc executes the CPU ones; the interchange alone executes everywhere. The tensorized
-   schedules are pinned structurally (prefix, replay) on every backend under a synthetic f32 mma
-   capability. *)
+   discriminating inputs: the host premise claims below check the small dyadic cells, so bitwise
+   equality is required whatever the accumulation order; the inputs are strictly positive, so every
+   reference cell is nonzero and a candidate that drops a write cannot pass. GPU backends execute
+   the GPU sketch families, and the tensorized one where the device advertises an f32 tile (Metal);
+   cc executes the CPU ones; the interchange alone executes everywhere. The tensorized schedules are
+   pinned structurally (prefix, replay) on every backend under a synthetic f32 mma capability. *)
 
 (* cc-fp-contract: exact-operands -- positive quarters and eighths with an explicit fma; every
    gradient sum is exact *)
@@ -57,7 +56,7 @@ and ni = 64
 
 let node = Ll_test.node_factory ~first_id:118300 ~dims:[| 1 |] ()
 
-(* Strictly positive dyadic cells (offset 1): every product and partial sum is exact in f32. *)
+(* Strictly positive dyadic cells (offset 1), checked against the actual contractions below. *)
 let values ~dims ~modulus ~stride =
   let n = Array.fold dims ~init:1 ~f:( * ) in
   Array.init n ~f:(Ll_test.cycle_flat ~dims ~modulus ~offset:1. ~stride)
@@ -68,7 +67,9 @@ let w_dims = [| no; ni |]
 let dy_v = values ~dims:dy_dims ~modulus:7 ~stride:0.25
 let x_v = values ~dims:x_dims ~modulus:5 ~stride:0.125
 let w_v = values ~dims:w_dims ~modulus:5 ~stride:0.125
-let at dims v idcs = v.(Ll_test.flat ~dims idcs)
+
+let at dims v =
+  Ll_test.operand ~b:[] ~o:(Array.to_list dims) ~i:[] (fun idcs -> v.(Ll_test.flat ~dims idcs))
 
 type case = {
   tag : string;
@@ -76,7 +77,10 @@ type case = {
   out : Tn.t;
   seed : (Tn.t * float array) list;
   want : float array;
+  products : float list list;
 }
+
+let sums products = Array.of_list (List.map products ~f:(List.fold ~init:0. ~f:( +. )))
 
 let fma a b acc =
   LL.Ternop (Ir.Ops.FMA, (a, Ll_test.single), (b, Ll_test.single), (acc, Ll_test.single))
@@ -102,19 +106,12 @@ let wgrad =
                         (Ll_test.get x [| it b; it s; it i |])
                         (Ll_test.get dw [| it o; it i |])))))))
   in
-  let want =
-    Array.init (no * ni) ~f:(fun c ->
-        let cell = Ll_test.unflat ~dims:w_dims c in
-        let o = cell.(0) and i = cell.(1) in
-        let acc = ref 0. in
-        for b = 0 to nb - 1 do
-          for s = 0 to ns - 1 do
-            acc := !acc +. (at dy_dims dy_v [| b; s; o |] *. at x_dims x_v [| b; s; i |])
-          done
-        done;
-        !acc)
+  let products =
+    Ll_test.reduction_cells ~out:w_dims ~over:[| nb; ns |] (fun o r ->
+        at dy_dims dy_v [| r.(0); r.(1); o.(0) |] *. at x_dims x_v [| r.(0); r.(1); o.(1) |])
   in
-  { tag = "wgrad"; build; out = dw; seed = [ (dy, dy_v); (x, x_v) ]; want }
+  let want = sums products in
+  { tag = "wgrad"; build; out = dw; seed = [ (dy, dy_v); (x, x_v) ]; want; products }
 
 (* dx[b,s,i] = sum_o dy[b,s,o] * w[o,i], loops (b, s, o, i). *)
 let dgrad =
@@ -135,19 +132,12 @@ let dgrad =
                         (Ll_test.get w [| it o; it i |])
                         (Ll_test.get dx [| it b; it s; it i |])))))))
   in
-  let want =
-    Array.init
-      (nb * ns * ni)
-      ~f:(fun c ->
-        let cell = Ll_test.unflat ~dims:x_dims c in
-        let b = cell.(0) and s = cell.(1) and i = cell.(2) in
-        let acc = ref 0. in
-        for o = 0 to no - 1 do
-          acc := !acc +. (at dy_dims dy_v [| b; s; o |] *. at w_dims w_v [| o; i |])
-        done;
-        !acc)
+  let products =
+    Ll_test.reduction_cells ~out:x_dims ~over:[| no |] (fun o r ->
+        at dy_dims dy_v [| o.(0); o.(1); r.(0) |] *. at w_dims w_v [| r.(0); o.(2) |])
   in
-  { tag = "dgrad"; build; out = dx; seed = [ (dy, dy_v); (w, w_v) ]; want }
+  let want = sums products in
+  { tag = "dgrad"; build; out = dx; seed = [ (dy, dy_v); (w, w_v) ]; want; products }
 
 (* gh-ocannl-1325: the tied lm_head's weight gradient [wte.grad[e,v] += logits.grad[b,s,v] *
    x[b,s,e]], loops (b, s, v, e) -- the forward product's write order, so after the contraction sink
@@ -170,19 +160,12 @@ let lmhead =
                         (Ll_test.get x [| it b; it s; it e |])
                         (Ll_test.get dw [| it e; it v |])))))))
   in
-  let want =
-    Array.init (ni * no) ~f:(fun c ->
-        let cell = Ll_test.unflat ~dims:[| ni; no |] c in
-        let e = cell.(0) and v = cell.(1) in
-        let acc = ref 0. in
-        for b = 0 to nb - 1 do
-          for s = 0 to ns - 1 do
-            acc := !acc +. (at dy_dims dy_v [| b; s; v |] *. at x_dims x_v [| b; s; e |])
-          done
-        done;
-        !acc)
+  let products =
+    Ll_test.reduction_cells ~out:[| ni; no |] ~over:[| nb; ns |] (fun o r ->
+        at dy_dims dy_v [| r.(0); r.(1); o.(1) |] *. at x_dims x_v [| r.(0); r.(1); o.(0) |])
   in
-  { tag = "lmhead"; build; out = dw; seed = [ (dy, dy_v); (x, x_v) ]; want }
+  let want = sums products in
+  { tag = "lmhead"; build; out = dw; seed = [ (dy, dy_v); (x, x_v) ]; want; products }
 
 (* gh-ocannl-1325: attention's value gradient [v.grad[b,t,h,d] += softmax[b,s,h,t] *
    y.grad[b,s,h,d]], loops (b, s, h, d, t) -- the forward [y = softmax * v] product's order: the
@@ -215,19 +198,13 @@ let vgrad =
                            (Ll_test.get dy [| it b; it s; it h; it d |])
                            (Ll_test.get dv [| it b; it t; it h; it d |]))))))))
   in
-  let want =
-    Array.init
-      (nb * ns * nh * nd)
-      ~f:(fun c ->
-        let cell = Ll_test.unflat ~dims:hd_dims c in
-        let b = cell.(0) and t = cell.(1) and h = cell.(2) and d = cell.(3) in
-        let acc = ref 0. in
-        for s = 0 to ns - 1 do
-          acc := !acc +. (at sm_dims sm_v [| b; s; h; t |] *. at hd_dims hd_v [| b; s; h; d |])
-        done;
-        !acc)
+  let products =
+    Ll_test.reduction_cells ~out:hd_dims ~over:[| ns |] (fun o r ->
+        at sm_dims sm_v [| o.(0); r.(0); o.(2); o.(1) |]
+        *. at hd_dims hd_v [| o.(0); r.(0); o.(2); o.(3) |])
   in
-  { tag = "vgrad"; build; out = dv; seed = [ (sm, sm_v); (dy, hd_v) ]; want }
+  let want = sums products in
+  { tag = "vgrad"; build; out = dv; seed = [ (sm, sm_v); (dy, hd_v) ]; want; products }
 
 (* y[b,s,o] = sum_i x[b,s,i] * w[o,i], loops (b, s, o, i): already a plain site. *)
 let fwd_build () =
@@ -427,6 +404,13 @@ let leg (c : case) ~expect_prefix ~ko_extents ~nk =
           family_claim label (run_family ~what:"cpu" cpu_seeds))
 
 let () =
+  let premises =
+    List.concat_map [ wgrad; dgrad; lmhead; vgrad ] ~f:(fun c -> c.products)
+    @ Ll_test.reduction_cells ~out:dy_dims ~over:[| ni |] (fun o r ->
+        at x_dims x_v [| o.(0); o.(1); r.(0) |] *. at w_dims w_v [| o.(2); r.(0) |])
+  in
+  p_all "all interchange fixtures have f32-exact partial sums" premises
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   p_all "reference: every weight-gradient cell is nonzero" (Array.to_list wgrad.want) ~f:(fun v ->
       Float.(v <> 0.));
   p_all "reference: every data-gradient cell is nonzero" (Array.to_list dgrad.want) ~f:(fun v ->

@@ -840,7 +840,13 @@ let () =
    the shared slots' element type. Every f32 partial sum is a multiple of 1/1024 below 2^8, so the
    tree's reassociation is exact and the claims are bitwise rather than approximate. *)
 
-let f16_term k = 1.0 +. (Float.of_int (k % 11) /. 1024.0)
+let f16_term =
+  let term k = 1.0 +. (Float.of_int (k % 11) /. 1024.0) in
+  p_all "f16 shuffle terms have f32-exact partial sums at both warp counts"
+    (List.map [ 32; 128 ] ~f:(fun n -> List.init n ~f:term))
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
+  term
+
 let narrow_f16 x = Ir.Ops.half_to_single (Ir.Ops.single_to_half x)
 let f16_1w_fixture = { n = 32; term = f16_term; narrow = narrow_f16 }
 let f16_4w_fixture = { n = 128; term = f16_term; narrow = narrow_f16 }
