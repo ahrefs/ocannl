@@ -482,8 +482,10 @@ files.
   routine is compiled as a sibling from the initialization context (compiling the same fragments
   from a descendant is correctly refused by the lineage guard).
   `build_order_programs.observe` snapshots the unscheduled source, placements, digests and link
-  layout before compiling a separately named default-scheduled GPU routine for its nonzero and
-  changed-program loss controls. Its CPU and explicit scheduled arms retain their original runs.
+  layout before compiling a separately named default-scheduled GPU routine for its nonzero,
+  changed-program and cross-creation-order loss comparisons. The loss comparisons use the sibling
+  executions, each retaining its build's creation order; the raw snapshots pin source and layout.
+  Its CPU and explicit scheduled arms retain their original runs.
   Kept raw GPU launches: `build_order_programs.bump_pair` reads both outputs and the input to
   validate the bump allocator's layout/value relationship; `tile_mma_narrow.run_census`'s serial
   references are the independent per-operation rounding oracle for its explicitly packed/tiled
@@ -507,7 +509,9 @@ files.
   with no GPU co-tenants at open or close. Raw samples are on rog-nv-linux under
   `/home/lukstafi/wave-scratch/wave-20261116-ocannl/t2219/{baseline-native-v3,after-native-v1}/gpu-samples.csv`.
   These are sampled process peaks, not aggregate simultaneous use or timing measurements.
-  The two retained controls' peaks stayed unchanged. Do not use `dune --force` as evidence of fresh
+  The two retained controls' peaks stayed unchanged. All six audit tests also passed on Metal on
+  macbook-pro at `c2d07e7c3`, record `20261116T173946Z-58623` (cache disabled, `-j 4`).
+  Do not use `dune --force` as evidence of fresh
   test actions: the first audit attempt ran no tests. Disable the shared cache and change an
   action dependency, then confirm executable actions in the trace and process samples.
 

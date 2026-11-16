@@ -5898,8 +5898,8 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   native query therefore judges the journal on the CURRENT boot's kernel entries (`-b -n 1`) rather
   than the window's, and then answers for the window whatever it holds. The userspace half of an
   SDMA refusal, ROCr's `GpuAgent::ReleaseQueueMainScratch` assertion, is keyed in the unit's log by
-  `ENVIRONMENT_ASSERTIONS` in `tools/sweep.sh`, as glibc prints a failed assert. That matters because a list of names can only
-  ever grow AFTER a miss — rog-nv's `cu_device_primary_ctx_retain` cost a remote session to
+  `ENVIRONMENT_ASSERTIONS` in `tools/environment-refusals.sh`, as glibc prints a failed assert. That
+  matters because a list of names can only ever grow AFTER a miss — rog-nv's `cu_device_primary_ctx_retain` cost a remote session to
   attribute — and because some failures have no name to list at all: the 2026-09-15 minix runs
   produced `Command got signal SEGV`, which can never become a table row. A unit's collected evidence lives in a SIDECAR beside its log
   (`<stamp>-<machine>-<backend>.kernel-window`), and the trigger, the fingerprint and the record read
@@ -6239,7 +6239,6 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   failure in the batch: rerun affected stanzas at `-j 1` in `_build-native-ptx` before attributing
   them. Keeping orchestration in the floor avoids a second recovery mechanism in this diagnostic.
   Illegal-address and launch-resource errors remain target red, as do ordinary test failures.
-
 
 - A `git fetch` under git 2.55 (CI's ubuntu-latest, mac-studio; not the fleet's 2.53) starts a
   detached `git maintenance run --auto` whose worktree-prune task runs whenever a stale worktree

@@ -193,10 +193,12 @@ let observe ?(scheduled = false) ~name ~mint ~rev make =
       liveness_planned = linked.Context.ld_liveness_planned;
     }
   in
-  (* The unscheduled compile pins source, placements and allocator layout, all snapshotted above.
-     Its loss is just a nonzero/program-change control, supplied by a default-scheduled execution on
-     GPU: launching the capture itself pins a multi-GB local-memory reservation. CPU retains the
-     original raw execution; the explicitly scheduled arms execute as compiled. *)
+  (* The unscheduled compile pins source, placements and allocator layout, all snapshotted above. On
+     GPU the default-scheduled sibling supplies the nonzero/program-change controls and the
+     cross-creation-order loss equality: those claims compare sibling value runs, while source,
+     placement and layout equality above describe the raw compiles. Each sibling inherits its
+     build's creation order. Launching the raw capture pins a multi-GB local-memory reservation. CPU
+     retains the original raw execution; the explicitly scheduled arms execute as compiled. *)
   let loss_value =
     if scheduled || not (Ir.Backend_intf.binds_hardware_grid (Context.backend_facts ctx)) then
       (Context.get_values (Context.run ctx routine) loss.Tensor.value).(0)
