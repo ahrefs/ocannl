@@ -7155,7 +7155,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules forward_fragment_order)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -13037,6 +13037,15 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ (name slice_materialization_order)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules slice_materialization_order)
+ (libraries base ocannl arrayjit.verdict ll_test))
+
 ; gh-ocannl-1004: what Test_scan.Slot_kind says a dune argv reaches -- the half of the fleet slot's
 ; --cpu/--gpu decision that reads the backend markers -- on fixture trees built to separate the
 ; cases: per-test and aggregate aliases, @ and @@, runtest directories, compilation products, the
@@ -14946,7 +14955,7 @@
  (libraries base arrayjit.ir arrayjit.verdict ll_test))
 
 ; gh-ocannl-2205: Assignments.collect_value_reads, the source-value dependencies of a program, beside
-; the unchanged materialization guess collect_nodes_guess_output.
+; the unchanged materialization guess guess_materialized.
 
 (test
  ; ocannl-backend: none -- builds tensor graphs and hand-built assignments and queries them; nothing

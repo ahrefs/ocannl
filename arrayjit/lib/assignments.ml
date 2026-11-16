@@ -161,11 +161,13 @@ let persisting nodes c = { c with persists = Set.union c.persists (Set.of_list (
 let to_comp asgns = comp ~embedded:(Set.empty (module Tnode)) asgns
 let empty_comp = to_comp Noop
 
-(** The buffers an [accum_rhs] mentions, in argument order. For [Rev_sides] these are the WRITTEN-TO
-    buffers -- the constructor reverses the assignment's roles -- so a caller that cares about the
-    direction still matches [Rev_sides], but only for the direction. Destructuring the arities lives
-    here and nowhere else: before, four traversals each repeated it, so a new [accum_rhs]
-    constructor meant four silent omissions waiting to happen. *)
+(** The present buffers an [accum_rhs] mentions, in argument order. This is not one entry per
+    projection slot: absent [Rev_sides] targets are omitted, so it must not be used for projection
+    arity. For [Rev_sides] these are the WRITTEN-TO buffers -- the constructor reverses the
+    assignment's roles -- so a caller that cares about the direction still matches [Rev_sides], but
+    only for the direction. Destructuring the arities lives here and nowhere else: before, four
+    traversals each repeated it, so a new [accum_rhs] constructor meant four silent omissions
+    waiting to happen. *)
 let buffers_of_accum_rhs : accum_rhs -> buffer list = function
   | Ternop { rhs1; rhs2; rhs3; _ } -> [ rhs1; rhs2; rhs3 ]
   | Binop { rhs1; rhs2; _ } -> [ rhs1; rhs2 ]
@@ -257,11 +259,10 @@ let%debug3_sexp context_nodes ~(plc : Tn.Placements.t) (asgns : t) : Tn.t_set =
       | Fetch { array; _ } -> acc + one array
       | Noop | Seq _ | Block_comment _ -> acc)
 
-(** Documented in the interface. In the second set, returns the nodes that are not read from after
-    being written to; the first set is the read term that second set subtracts, which leaves a
-    [Fetch.Slice]'s parent out: the parent is in the second set, materialized to back a potential
-    zero-copy alias view (gh-ocannl-293 293a). *)
-let%debug3_sexp collect_nodes_guess_output (asgns : t) : Tn.t_set * Tn.t_set =
+(** The subtraction term is private: unlike value reads it excludes slice parents, which the
+    materialization guess retains to back potential alias views. Keep the original recursive
+    subtraction, including its treatment of reads on either side of a [Seq]. *)
+let%debug3_sexp guess_materialized (asgns : t) : Tn.t_set =
   let open Utils.Set_O in
   let empty = Set.empty (module Tn) in
   let one = Set.singleton (module Tn) in
@@ -287,7 +288,7 @@ let%debug3_sexp collect_nodes_guess_output (asgns : t) : Tn.t_set * Tn.t_set =
         (empty, Set.of_list (module Tn) [ array; sliced ])
     | Fetch { array; _ } -> (empty, one array)
   in
-  loop asgns
+  snd (loop asgns)
 
 (* Documented in the interface (gh-ocannl-2205). *)
 let collect_value_reads (asgns : t) : Tn.t_set =
@@ -304,8 +305,8 @@ let collect_value_reads (asgns : t) : Tn.t_set =
       | Fetch { fetch_op = Slice { sliced; _ }; _ } -> Set.add acc sliced
       | Fetch _ | Noop | Seq _ | Block_comment _ -> acc)
 
-(** All nodes that any assignment writes to (unlike the second set of {!collect_nodes_guess_output},
-    nodes also read within [asgns] are included). *)
+(** All nodes that any assignment writes to (unlike {!guess_materialized}, nodes also read within
+    [asgns] are included). *)
 let collect_written (asgns : t) : Tn.t_set =
   let open Utils.Set_O in
   let empty = Set.empty (module Tn) in
@@ -319,6 +320,9 @@ let collect_written (asgns : t) : Tn.t_set =
       | Accum_op { lhs; _ } | Set_vec_unop { lhs; _ } -> acc + one lhs
       | Fetch { array; _ } -> acc + one array
       | Noop | Seq _ | Block_comment _ -> acc)
+
+(** Every mentioned node, including slice parents and views, but excluding merge buffers. *)
+let collect_mentioned asgns = Set.union (collect_value_reads asgns) (collect_written asgns)
 
 (* Documented in the interface. *)
 let accumulates_from_zero (comp : comp) =
@@ -1773,7 +1777,8 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
                sub-range, potentially observed by a later routine) require the parent to own a
                persistent buffer in EVERY lineage that lowers this alias. Declare the intent
                globally, like the alias mark itself -- monotone and idempotent; mirrors
-               [collect_nodes_guess_output]'s materialization of slice parents. *)
+               [guess_materialized]'s materialization of slice parents. The dependency side is
+               recorded by [collect_value_reads], whether the slice aliases or copies. *)
             Tn.update_memory_mode sliced On_device (Site "27:slice-alias-parent");
             Tn.set_alias_of array ~parent:sliced ~batch_idx)
       | Fetch _ | Accum_op _ | Set_vec_unop _ | Noop | Seq _ | Block_comment _ -> ())

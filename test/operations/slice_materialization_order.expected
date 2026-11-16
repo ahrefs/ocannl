@@ -1,0 +1,2 @@
+the ordinary slice copies its parent: true
+the materialized slice reads its producer in order: true

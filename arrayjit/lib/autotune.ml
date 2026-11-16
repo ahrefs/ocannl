@@ -12561,10 +12561,7 @@ module Context_driver = struct
     | derived -> Some derived
     | exception Invalid_argument _ -> None
 
-  let program_nodes (comp : program) =
-    let ins, outs = Ir.Assignments.collect_nodes_guess_output comp.asgns in
-    Set.union ins outs
-
+  let program_nodes (comp : program) = Ir.Assignments.collect_mentioned comp.asgns
   let reuse_create = Ir.Lowering_reuse.create
   let reuse_reseed = Ir.Lowering_reuse.reseed
 end

@@ -148,13 +148,16 @@ val to_comp : t -> comp
 val empty_comp : comp
 val context_nodes : plc:Tnode.Placements.t -> t -> Tnode.t_set
 
-val collect_nodes_guess_output : t -> Tnode.t_set * Tnode.t_set
-(** [(inputs, outputs)]: the materialization guess. [outputs] are the nodes written and not read
-    afterwards, plus every [Fetch.Slice]'s parent and view, so a parent can back a zero-copy alias
-    view (gh-ocannl-293); it is the set to materialize. [inputs] is the read term [outputs]
-    subtracts (in a [Seq], [o1 + o2 - (i1 + i2)]), and it leaves a slice's parent out, so it is not
-    the set of nodes whose values the code reads: a dependency consumer uses {!collect_value_reads}.
-    The union of the two is every node the code mentions, merge buffers aside. *)
+val guess_materialized : t -> Tnode.t_set
+(** The materialization guess: nodes written and not read elsewhere in a sequence, plus every
+    [Fetch.Slice]'s parent and view so a parent can back a zero-copy alias view (gh-ocannl-293). A
+    slice parent read elsewhere in the sequence is subtracted too. This preserves the historical
+    recursive [Seq] subtraction, not a source-value dependency analysis: use {!collect_value_reads}
+    for dependencies and {!collect_mentioned} for every node named by the code. *)
+
+val collect_mentioned : t -> Tnode.t_set
+(** Every node the code mentions, including slice parents, views and written destinations, but
+    excluding [Merge_buffer] operands. Syntactic: forces no dims, projections or precision. *)
 
 val collect_value_reads : t -> Tnode.t_set
 (** The source-value dependencies of the code (gh-ocannl-2205): the nodes whose values it reads as
@@ -170,7 +173,7 @@ val collect_value_reads : t -> Tnode.t_set
     [initialize_neutral] reads from its own [lhs], which is a write ({!collect_written}), so a
     gradient accumulation is not a dependency on its target. Syntactic: it forces no dims,
     projections or precision and marks no alias, so it is usable before shape inference closes. The
-    materialization guess {!collect_nodes_guess_output} is unaffected by it. *)
+    materialization guess {!guess_materialized} is unaffected by it. *)
 
 val collect_written : t -> Tnode.t_set
 
