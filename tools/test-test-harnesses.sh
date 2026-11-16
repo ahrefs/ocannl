@@ -27,6 +27,17 @@ mkdir -p "$fixture/tools"
 fixture=$(CDPATH= cd -- "$fixture" && pwd)
 cp "$here/test-harnesses.sh" "$here/fleet-worker-candidates.sh" "$fixture/tools/"
 subject="$fixture/tools/test-harnesses.sh"
+# The fixture runs its env shebang through PATH, independently of our Bash.
+subject_bash=$(command -v bash)
+expected_member_bash=$subject_bash
+system_bash_version=$(/bin/bash -c 'printf "%s.%s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"' 2>/dev/null)
+if [ "$system_bash_version" = 3.2 ]; then
+  expected_member_bash=/bin/bash
+fi
+expected_member_version=$("$expected_member_bash" -c 'printf "%s.%s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"')
+# Empty arrays under nounset changed at 4.4, independently of the 3.2 leg.
+empty_array_rc=0
+case $expected_member_version in [0-3].*|4.[0-3]) empty_array_rc=1 ;; esac
 # Derive fixture membership through the public interface, rather than keeping
 # another list that would go stale as CI gains a harness.
 "$subject" --list >"$TMP/all" || exit 2
@@ -163,7 +174,7 @@ python3 - "$subject" "$TMP/fail-fast.sh" <<'PY_CONTROL'
 from pathlib import Path
 import sys
 text = Path(sys.argv[1]).read_text()
-anchor = '"$root/$script" ${args[@]+"${args[@]}"} || rc=$?'
+anchor = '"$member_bash" "$root/$script" ${args[@]+"${args[@]}"} || rc=$?'
 assert anchor in text
 Path(sys.argv[2]).write_text(text.replace(anchor, '"$root/$script" || exit 1'))
 PY_CONTROL
@@ -528,7 +539,7 @@ members_ran_in() { # GROUP WANT
 }
 slot_run -- --shell
 if [ "$got" = 0 ] && [ "$probes" = 1 ] && [ "$slot_calls" = "execution slot --wait 600 --cpu" ] &&
-   grep -qxF -- "execution slot --wait 600 --cpu -- ${BASH:-bash} $subject --shell" "$FAKE_FW_CALLS" &&
+   grep -qxF -- "execution slot --wait 600 --cpu -- $subject_bash $subject --shell" "$FAKE_FW_CALLS" &&
    members_ran_in shell 1 &&
    grep -Fq "harnesses: taking one of fakebox's 4 fleet correctness slots" "$TMP/out"; then
   report 0 'on a fleet box the run takes one --cpu slot, probed once, every member inside it'
@@ -620,7 +631,7 @@ if [ "$got" = 0 ] && [ ! -s "$FAKE_FW_CALLS" ] && [ ! -s "$RECORD" ] &&
 else report 1 '--affected --list prints the commands affected --harnesses prints and takes no slot' "$(af_detail)"; fi
 af_slot -- --affected --since HEAD~1
 if [ "$got" = 0 ] && af_ran && [ "$probes" = 1 ] && [ "$slot_calls" = "execution slot --wait 600 --cpu" ] &&
-   grep -qxF -- "execution slot --wait 600 --cpu -- ${BASH:-bash} $subject --affected --since HEAD~1" "$FAKE_FW_CALLS" &&
+   grep -qxF -- "execution slot --wait 600 --cpu -- $subject_bash $subject --affected --since HEAD~1" "$FAKE_FW_CALLS" &&
    [ "$(sed 's/.* //' "$SLOT_RECORD" | sort -u)" = slot=1 ] &&
    [ "$(grep -c '^harnesses: ' "$TMP/out")" = 2 ] && [ "$(tail -n 1 "$TMP/out")" = 'harnesses: 2 run, 0 failed' ] &&
    [ "$(grep -c '^affected: 2 harness command(s)' "$TMP/out")" = 1 ]; then
@@ -789,7 +800,7 @@ rm -rf "$BARRIER"; mkdir "$BARRIER"
 run --shell --jobs 3
 # What a run of one at a time prints, member by member, in the manifest's order.
 while IFS= read -r script; do
-  printf '\nHARNESS %s (shell)\nran %s\nHARNESS %s exit: 0\n' "$script" "$script" "$script"
+  printf '\nHARNESS %s (shell; bash %s %s)\nran %s\nHARNESS %s exit: 0\n' "$script" "$expected_member_version" "$expected_member_bash" "$script" "$script"
 done <"$TMP/shell" >"$TMP/jobs-want"
 printf '\nharnesses: %s run, 0 failed\n' "$(wc -l <"$TMP/shell" | tr -d ' ')" >>"$TMP/jobs-want"
 if [ "$got" = 0 ] && cmp -s "$TMP/jobs-want" "$TMP/out" && cmp -s <(sort "$TMP/shell") <(sort "$RECORD"); then
@@ -835,5 +846,41 @@ for jobs_argv in '--jobs' '--jobs 0' '--jobs x' '--jobs -1' '--jobs 2x'; do
 done
 if [ -z "$jobs_bad" ]; then report 0 '--jobs refuses anything but a positive integer before a member starts'
 else report 1 '--jobs refuses anything but a positive integer before a member starts' "$jobs_bad"; fi
+
+# A planted nounset empty array must redden the 3.2 leg, even when it is
+# inside a nested subject selected by env shebang or by a bare bash command.
+control_member=$(head -n 1 "$TMP/shell")
+cp "$fixture/$control_member" "$TMP/member-before-bash-control"
+cat >"$TMP/empty-array.sh" <<'EMPTY_ARRAY'
+#!/usr/bin/env bash
+set -u
+a=()
+printf '%s' "${a[@]}"
+EMPTY_ARRAY
+chmod +x "$TMP/empty-array.sh"
+export EMPTY_ARRAY_SUBJECT="$TMP/empty-array.sh"
+for control in member bash shebang; do
+  case $control in
+    member) cp "$TMP/empty-array.sh" "$fixture/$control_member" ;;
+    bash) printf '#!/usr/bin/env bash\nbash "$EMPTY_ARRAY_SUBJECT"\n' >"$fixture/$control_member" ;;
+    shebang) printf '#!/usr/bin/env bash\n"$EMPTY_ARRAY_SUBJECT"\n' >"$fixture/$control_member" ;;
+  esac
+  for width in 1 4; do
+    run --shell --jobs "$width"
+    want=$empty_array_rc
+    if [ "$got" = "$want" ] &&
+       grep -qF "(shell; bash $expected_member_version $expected_member_bash)" "$TMP/out" &&
+       { [ "$want" = 0 ] || { grep -q 'unbound variable' "$TMP/out" && grep -q ' run, 1 failed$' "$TMP/out"; }; }; then
+      report 0 "Bash interpreter: $control empty-array control under --jobs $width exits $want"
+    else report 1 "Bash interpreter: $control empty-array control under --jobs $width exits $want" "exit $got; $(tail -n 5 "$TMP/out")"; fi
+  done
+done
+cp "$TMP/member-before-bash-control" "$fixture/$control_member"
+# The same planted expansion passes under a modern Bash when one is on PATH.
+if "$subject_bash" -c '((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4)))'; then
+  control_rc=0
+  "$subject_bash" "$TMP/empty-array.sh" >"$TMP/modern-control" 2>&1 || control_rc=$?
+  report "$control_rc" 'Bash interpreter: empty-array control passes under the modern PATH Bash'
+fi
 
 finish
