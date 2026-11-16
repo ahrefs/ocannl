@@ -1152,6 +1152,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   is now the one command for a person: it runs every member, or with `--only` the members
   whose `--list-legs` shows a leg the selector matches, so `--only '^81:'` needs no member's
   name (leg 105 pins it); it takes no slot and is no member of the tier.
+- Leg 99b of `tools/test-test-run-last.sh` dogfoods the deployed fleet slot
+  (gh-ocannl-1926): `fleet_slot_probe` enables it; `none` and CI shell mode
+  skip it by name. A nested `execution slot --bg` starts immediately using the
+  enclosing slot, so its fixture holds the command before publication to make
+  `queued:` deterministic without acquiring more slots. A 60 s `--deadline`
+  makes the nested wrapper retain its guardian and command-as-child topology.
+  The leg compares that live topology with leg 99's `q-slot.sh`, rejects a twin
+  with its guardian removed, follows `wait last` to the run's red verdict, and
+  reaps the background record before checking no `unpublished:` remains.
+  Its shape boundary is only ps pid/ppid/exact command fields, not fleet source
+  parsing or a test of guardian signal handling. The stand-in already had the
+  guardian at the issue's implementation base; the missing pin was the real leg.
 - Real-dune harnesses matching diagnostics or promotion listings use
   `harness_dune_colour` from `scripts/harness-support.sh` at the fixture command,
   so setup-ocaml's `CLICOLOR_FORCE=1` presentation is exercised locally too

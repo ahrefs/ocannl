@@ -15,7 +15,11 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
-# Groups: #lifecycle (99, 105, 105b, 105c), #queries (100), #harness (102), #hermetic (70).
+# Shape-reading boundary (99b): only ps pid/ppid/exact command fields;
+# no shell text, fleet source, or environments. This pins guardian/child
+# topology while a fixture holds publication, not guardian signal handling.
+#
+# Groups: #lifecycle (99, 99b, 105, 105b, 105c), #queries (100), #harness (102), #hermetic (70).
 #
 # Legs:
 #  99. `wait last` and `status last` follow a launch still in flight
@@ -44,6 +48,9 @@
 #      CMD`): a `-c` string is never parsed. The slot this script takes itself is taken after
 #      publication: a run waiting for it is `last`, live, and its wait times
 #      out on it.
+#  99b. Real fleet --bg: queued status, wait through publication to red, then
+#      its own verdict without unpublished; compare guardian/child topology
+#      to q-slot, with a guardian-free negative control. Skips off fleet/CI.
 # 100. every `last` lookup stays in its own worktree: beside a sibling's newer
 #      red run in the same state root, `wait last`, `status last` and `paths
 #      run last` name the worktree's own, `list` lists only its runs (`--all`
@@ -89,6 +96,8 @@
 #      printed the copy's digest; the option outranks the variable, and a
 #      subject that is no file, or no value, is refused (gh-ocannl-1925).
 
+# Preserve the caller's fleet choice before common makes ordinary fixtures hermetic.
+last_fleet_worker=${OCANNL_TOOL_FLEET_WORKER-}
 . "$(cd "$(dirname "$0")" && pwd)/test-test-run-common.sh"
 
 
@@ -196,6 +205,7 @@ q_kill_all() {
     wait "$q_follow" 2>/dev/null
   fi
   # The runs this leg holds on a file: let them end on their own.
+  touch "$TMP/real.release" "$TMP/shape.release" "$TMP/control.release"
   touch "$TMP/queued.hold" "$TMP/queued.hold2" "$TMP/queued.slot" "$TMP/queued.sup" "$TMP/queued.preflight" 2>/dev/null
   return 0
 }
@@ -652,6 +662,116 @@ fi
 if [ -z "$q_detail" ]; then report 0 "$q_slot_label"; else report 1 "$q_slot_label" "$q_detail"; fi
 }
 harness_leg_run '99: wait last and status last follow a launch still in flight #lifecycle' leg_99
+
+# 99b reads only the renamed_dune shared stage and the local queued fixtures.
+shared_through renamed_dune
+# Shape boundary: ps pid/ppid/command fields only. A blocked command has a
+# distinct parent and an orphan of parent 1 with that parent's exact argv.
+# No shell text, fleet source, or process environment is parsed. This pins
+# the guardian/child topology, not the guardian's signal-handling internals.
+q_child_shape() { # command pid
+  local parent argv
+  parent=$(ps -o ppid= -p "$1" 2>/dev/null | tr -d ' ')
+  [ -n "$parent" ] && [ "$parent" != 1 ] || return 1
+  argv=$(ps -ww -o command= -p "$parent" 2>/dev/null) || return 1
+  [ -n "$argv" ] || return 1
+  ps -axww -o ppid= -o command= | awk -v wanted="$argv" '
+    $1 == 1 { sub(/^[[:space:]]*[0-9]+[[:space:]]+/, ""); if ($0 == wanted) found=1 }
+    END { exit !found }'
+}
+leg_99b() {
+  local label='real fleet slot --bg follows queued last and matches the stand-in guardian shape'
+  local fw real_root real_runs real_bg real_pid real_dir real_rc real_detail=
+  . "$HERE/fleet-worker-candidates.sh"
+  # --ci-shell hides fleet tables but the host can still answer by hostname.
+  # Its explicit no-toolchain mode is also the no-real-fleet boundary.
+  if [ "${OCANNL_TOOL_HARNESS_NO_DUNE:-0}" = 1 ] ||
+    ! OCANNL_TOOL_FLEET_WORKER=$last_fleet_worker fleet_slot_probe "$TMP/real-probe"; then
+    skip "$label" 'no real fleet slot probe (or CI shell mode)'
+    return
+  fi
+  fw=$fleet_slot_fw
+  real_root=$TMP/real-fleet-repo real_runs=$TMP/real-fleet-runs real_bg=$TMP/real-fleet-bg
+  mkdir -p "$real_root/tools" "$real_root/test/config" "$real_root/arrayjit/test" "$real_runs" "$real_bg"
+  cp "$SRC" "$real_root/tools/test-run.sh"
+  stage_sourced "$real_root" || { harness_abandon "$stage_error"; return; }
+  # A nested --bg reuses the enclosing slot and starts immediately. Hold the
+  # fixture BEFORE publication, rather than racing it or taking extra slots.
+  # --deadline makes even a nested slot supervise a child and guardian.
+  { printf '%s\n' '#!/usr/bin/env bash' \
+      'if [ "${1-}" = run ]; then' \
+      '  echo $$ >"$Q_REAL_PID"' \
+      '  while [ ! -e "$Q_REAL_RELEASE" ]; do sleep .1; done' \
+      'fi'; cat "$SRC"; } >"$real_root/tools/test-run.sh"
+  chmod +x "$real_root/tools/test-run.sh"
+  (cd "$real_root" && env OCANNL_TOOL_TEST_RUNS="$real_runs" OCANNL_TOOL_FLEET_WORKER=none \
+    PATH="$q_bin:$PATH" Q_REAL_PID="$TMP/real.pid" Q_REAL_RELEASE="$TMP/real.release" \
+    "$fw" execution slot --bg "$real_bg" --cpu --deadline 60 -- tools/test-run.sh run build @red) \
+    >"$TMP/real-launch.out" 2>&1
+  real_rc=$?
+  if [ "$real_rc" != 0 ] || ! q_until 20 test -s "$TMP/real.pid"; then
+    touch "$TMP/real.release"
+    real_dir=$(tail -n 1 "$TMP/real-launch.out")
+    [ ! -d "$real_dir" ] || "$(dirname "$fw")/bg-run.sh" wait "$real_dir" >/dev/null 2>&1
+    harness_abandon "real fleet launch did not become ready: exit $real_rc: $(cat "$TMP/real-launch.out")"
+    return
+  fi
+  read -r real_pid <"$TMP/real.pid"
+  q_until 5 q_child_shape "$real_pid" || real_detail='real wrapper lacks guardian/child topology'
+  # Same observation against the stand-in, and a deliberately guardian-free
+  # twin. The control removes only the fork line, leaving command-as-child.
+  cat >"$TMP/shape-child.sh" <<'EOF'
+#!/usr/bin/env bash
+echo $$ >"$1"
+while [ ! -e "$2" ]; do sleep .1; done
+EOF
+  q_wrap "$q_root" "$TMP/shape.slot" exec bash "$TMP/shape-child.sh" "$TMP/shape.pid" "$TMP/shape.release"
+  touch "$TMP/shape.slot"
+  q_until 5 test -s "$TMP/shape.pid"
+  if [ -s "$TMP/shape.pid" ]; then
+    read -r real_rc <"$TMP/shape.pid"
+    q_until 5 q_child_shape "$real_rc" || real_detail='stand-in lacks real guardian/child topology'
+  else real_detail='stand-in child never started'; fi
+  sed '/^( (while kill -0 /d' "$q_slot" >"$TMP/no-guardian.sh"
+  (cd "$q_root" && exec bash "$TMP/no-guardian.sh" "$TMP/control.slot" exec -- \
+    bash "$TMP/shape-child.sh" "$TMP/control.pid" "$TMP/control.release") &
+  local control=$!
+  q_wraps+=("$control:$TMP/control.slot")
+  touch "$TMP/control.slot"
+  q_until 5 test -s "$TMP/control.pid"
+  if [ -s "$TMP/control.pid" ]; then
+    read -r real_rc <"$TMP/control.pid"
+    q_until 2 q_child_shape "$real_rc" && real_detail='negative control accepted guardian-free stand-in'
+  else real_detail='negative control child never started'; fi
+  touch "$TMP/shape.release" "$TMP/control.release"
+  q_release_all
+  OCANNL_TOOL_TEST_RUNS=$real_runs "$real_root/tools/test-run.sh" status last >"$TMP/real-status" 2>&1
+  real_rc=$?
+  { [ "$real_rc" = 3 ] && grep -q '^queued:' "$TMP/real-status"; } ||
+    real_detail="queued status: exit $real_rc: $(cat "$TMP/real-status")"
+  OCANNL_TOOL_TEST_RUNS=$real_runs "$real_root/tools/test-run.sh" wait last --timeout 40 >"$TMP/real-wait" 2>&1 &
+  q_follow=$!
+  touch "$TMP/real.release"
+  wait "$q_follow"; real_rc=$?; q_follow=
+  [ "$real_rc" = 1 ] || real_detail="wait last: exit $real_rc: $(cat "$TMP/real-wait")"
+  # Reap the detached record through its public waiter before returning.
+  real_dir=$(tail -n 1 "$TMP/real-launch.out")
+  if [ -z "$real_dir" ]; then
+    real_detail="no bg run directory: $(cat "$TMP/real-launch.out")"
+  else
+    "$(dirname "$fw")/bg-run.sh" wait "$real_dir" >"$TMP/real-bg-wait" 2>&1
+    [ "$?" = 0 ] && [ "$(cat "$real_dir/rc")" = 1 ] || real_detail="bg wait: $(cat "$TMP/real-bg-wait")"
+  fi
+  OCANNL_TOOL_TEST_RUNS=$real_runs "$real_root/tools/test-run.sh" status last >"$TMP/real-status" 2>&1
+  real_rc=$?
+  { [ "$real_rc" = 0 ] && grep -q 'verdict: FAIL (exit 1)' "$TMP/real-status" &&
+    ! grep -q 'unpublished:' "$TMP/real-status"; } ||
+    real_detail="final status: exit $real_rc: $(cat "$TMP/real-status")"
+  printf '  real fleet run: %s; background record: %s\n' \
+    "$(OCANNL_TOOL_TEST_RUNS=$real_runs "$real_root/tools/test-run.sh" paths run last)" "$real_dir"
+  if [ -z "$real_detail" ]; then report 0 "$label"; else report 1 "$label" "$real_detail"; fi
+}
+harness_leg_run '99b: real fleet slot and stand-in shape #lifecycle' leg_99b
 
 # ---------------------------------------------------------------------------
 # Leg 105: the residuals of following a queued launch (gh-ocannl-1913)
