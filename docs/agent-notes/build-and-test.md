@@ -4780,6 +4780,20 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
 
 ### opam and caches in CI
 
+- `test/operations/apt_fallback.sh` extracts every "Update apt package index" literal
+  `run: |` block from `.github/workflows/*.yml` (gh-ocannl-2187), holds the five copies
+  equal ignoring the YAML block margin and full-line comments, and runs the real body
+  offline under the harness's Bash. Its header bounds the reader to this step dialect;
+  it does not compare metadata such as the Linux condition. A private PATH contains
+  only Python and strict `sudo`, `timeout` and `apt-get` stubs; every `/etc/apt` path
+  is redirected into scratch before execution, with a leftover-path refusal. The
+  fixtures cover direct and mirror-list sources in deb822 and one-line layouts,
+  first-attempt success, recovery after 124/137/100, and two failed capped attempts.
+  Exact source checks include security suite splitting and unrelated sources. Controls
+  reject timeout, Python-indentation and shell-continuation drift in one copy, and the first rewriter from staging#1934's
+  `f74120cfd6654f43ba371312742f1862cad7c7ca`: direct sources pass, both mirror-list
+  layouts fail. The historical heredoc is retained as fixture data, never run directly.
+
 - `test/operations/ci_matrix.sh` extracts and executes the three "List opam's missing
   system dependencies" run blocks from `ci.yml`, `gh-pages-api.yml` and `ci-env.yml`
   against stub `opam`/`dpkg-query` (gh-ocannl-1917). It compares the bodies apart from
