@@ -15,8 +15,11 @@
 
    The claims: no store's verdict or solution depends on order; an answer is accepted when stated up
    front; registering a store's constraints in one batch agrees with registering them one by one;
-   positive controls stay accepted, so refusing everything fails. Counts go to stderr. The search
-   runs whole: it takes well under a second. *)
+   positive controls stay accepted, so refusing everything fails. Nonidentity stride families
+   (gh-ocannl-2245) include plain and padded strides, solved inputs, identities and pairs; stride
+   families participate in every two-constraint store, while three-constraint stores retain the
+   original pool. A solved/pinned matrix checks both equation orientations and registration orders.
+   Counts go to stderr. The search runs whole: it takes well under a second. *)
 
 open! Base
 open Ocannl
@@ -61,6 +64,16 @@ let run batches =
 let window ?(stride = 1) ~kernel over =
   Row.Affine
     { stride; over; conv = Some { dilation = 1; kernel; use_padding = false }; stride_offset = 0 }
+
+let strided ?(padded = false) stride over =
+  Row.Affine
+    {
+      stride;
+      over;
+      conv =
+        (if padded then Some { dilation = 1; kernel = tagged 3 "h"; use_padding = true } else None);
+      stride_offset = 0;
+    }
 
 let tags = [ Row.default_basis; Row.bcast_if_1; "a"; "h" ]
 
@@ -122,7 +135,24 @@ let pool =
           };
         ])
   in
-  wins @ bounds @ kernels @ pairs @ concats
+  let strides =
+    List.concat_map [ false; true ] ~f:(fun padded ->
+        List.concat_map [ 1; 2 ] ~f:(fun stride ->
+            List.concat_map [ 1; 2 ] ~f:(fun d ->
+                List.map tags ~f:(fun t ->
+                    {
+                      name = Printf.sprintf "stride(p%b,s%d)(v)=%d %s" padded stride d t;
+                      mk = (fun v _ _ -> eq (strided ~padded stride (Var v)) (tagged d t));
+                    }))))
+  in
+  let stride_pairs =
+    List.map [ 1; 2 ] ~f:(fun stride ->
+        {
+          name = Printf.sprintf "stride(pair,s%d)" stride;
+          mk = (fun v u _ -> eq (strided 2 (Var v)) (strided stride (Var u)));
+        })
+  in
+  wins @ bounds @ kernels @ pairs @ concats @ strides @ stride_pairs
 
 let item name = List.find_exn pool ~f:(fun i -> String.equal i.name name)
 
@@ -211,19 +241,62 @@ let rec choose k = function
   | [] -> []
   | x :: xs -> List.map (choose (k - 1) xs) ~f:(fun c -> x :: c) @ choose k xs
 
+let stride_matrix () =
+  let cases =
+    List.cartesian_product [ false; true ] [ 1; 2 ]
+    |> List.concat_map ~f:(fun (padded, stride) ->
+        List.cartesian_product [ 1; 2 ] tags
+        |> List.concat_map ~f:(fun (d, basis) ->
+            List.cartesian_product tags [ false; true ]
+            |> List.map ~f:(fun (input_basis, reverse) ->
+                (padded, stride, d, basis, input_basis, reverse))))
+    |> List.concat_map ~f:(fun c -> List.map [ [ 0; 1 ]; [ 1; 0 ] ] ~f:(fun order -> (c, order)))
+  in
+  p_all "stride basis rule agrees with pinned extents in both orientations and orders" cases
+    ~f:(fun ((padded, stride, d, basis, input_basis, reverse), order) ->
+      let expected_basis =
+        if stride = 2 && d = 1 && String.equal basis Row.bcast_if_1 then Row.default_basis
+        else basis
+      in
+      let items =
+        [
+          { name = "pinned extent"; mk = (fun v _ _ -> eq (Var v) (tagged d basis)) };
+          {
+            name = "stride";
+            mk =
+              (fun v _ _ ->
+                let affine = strided ~padded stride (Var v)
+                and input = tagged (stride * d) input_basis in
+                if reverse then eq input affine else eq affine input);
+          };
+        ]
+      in
+      match solve items order with
+      | Accepted _ -> String.equal expected_basis input_basis
+      | Refused -> not (String.equal expected_basis input_basis))
+
 let () =
   (* As in [test_trial_rollback]: a third constraint is an open window, a shared kernel, a pair or a
      concatenation. *)
   let held =
     List.filter pool ~f:(fun i ->
         not
-          (String.is_prefix i.name ~prefix:"v>="
+          (String.is_prefix i.name ~prefix:"stride("
+          || String.is_prefix i.name ~prefix:"v>="
           || String.is_prefix i.name ~prefix:"w(s1,k1"
           || String.is_prefix i.name ~prefix:"w(s2"))
   in
   let stores =
     List.map (choose 2 pool @ choose 3 held) ~f:(fun items -> { items; outs = outcomes items })
   in
+  let original =
+    List.filter stores ~f:(fun { items; _ } ->
+        List.for_all items ~f:(fun i -> not (String.is_prefix i.name ~prefix:"stride(")))
+  in
+  Stdio.eprintf "%d original stores, %d accepted in some order (not part of the golden)\n"
+    (List.length original)
+    (List.count original ~f:(fun { outs; _ } ->
+         List.exists outs ~f:(function Accepted _ -> true | Refused -> false)));
   let accepted_runs =
     List.concat_map stores ~f:(fun { items; outs } ->
         List.filter_map
@@ -237,7 +310,22 @@ let () =
   in
   Stdio.eprintf "%d stores, %d accepted in some order, %d accepted runs (not part of the golden)\n"
     (List.length stores) accepted_stores (List.length accepted_runs);
+  let stride_top_stores =
+    let concat = item "[u; 2v]=[k; 2 default]" in
+    let pairs = List.filter pool ~f:(fun i -> String.is_prefix i.name ~prefix:"w(k3 ") in
+    let top_sources =
+      List.filter pool ~f:(fun i ->
+          String.is_prefix i.name ~prefix:"v>="
+          || String.is_prefix i.name ~prefix:"w(k3 "
+          || String.equal i.name "w(s1,k1 default)(v)=1 bcast_if_1"
+          || String.equal i.name "w(s1,k1 bcast_if_1)(v)=1 bcast_if_1")
+    in
+    List.map top_sources ~f:(fun i -> [ i; concat ])
+    @ List.map (choose 2 pairs) ~f:(fun is -> is @ [ concat ])
+  in
+  Stdio.eprintf "%d stride-top stores (not part of the golden)\n" (List.length stride_top_stores);
   let verdicts names = outcomes (List.map names ~f:item) in
+  Verdict.case "stride basis derivation" stride_matrix;
   Verdict.case "concatenations with tagged components settle alike in every order" (fun () ->
       p_none ~min:16000 "stores whose verdict or solution depends on the order" stores
         ~f:order_dependent;
@@ -288,6 +376,13 @@ let () =
           (* Diagnostic only: this bounded store is already refused on the base. Propagating its
              bound through the sum remains outside this closing-order correction. *)
           ());
+      p_all "a stride of the broadcast top settles in every order"
+        (List.concat_map stride_top_stores ~f:outcomes) ~f:(function
+        | Accepted _ -> true
+        | Refused -> false);
+      p_all "a filler stride cannot also supply a size-2 broadcast-atom claim"
+        (verdicts [ "[u; 2v]=[k; 2 default]"; "[u; 2v]=[k; 2 bcast_if_1]" ])
+        ~f:(equal_outcome Refused);
       p_all "the issue's example is refused in every order"
         (verdicts [ "w(s1,k3 default)(v)=3 default"; "[v; u]=4 default"; "[v; u]=4 bcast_if_1" ])
         ~f:(equal_outcome Refused);

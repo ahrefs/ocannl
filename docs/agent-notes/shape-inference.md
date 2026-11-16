@@ -98,6 +98,23 @@ files.
   96 inert-atom cases (`bcast_if_1` above size 1); equal solved sums still wait. This does not
   propagate bounds through sums: adding `k >= 5_default` to the example still refuses in every
   order, as it already did on the base (the test prints this diagnostic probe to stderr).
+- A nonidentity plain or padded stride derives `default` from a claim-free extent
+  (gh-ocannl-2245), through `stride_input_basis` in substitution and unification. Copying
+  `1_(bcast_if_1)`'s tag onto size 2 created a concatenation claim from a filler: 20 of
+  gh-ocannl-2191's refused stores return to solved. Its reported group of 25 also contained
+  five stores with both `[u; 2v]=[k; 2 default]` and `[u; 2v]=[k; 2 bcast_if_1]` (alone or
+  with one window pair). Their old all-top answer drops the explicit size-2 atom's claim,
+  so they remain refused; finding other sizes/tags is a separate concatenation search problem.
+  Twenty atom-counterpart stores become refused, leaving 1,689 accepted of the original 16,730.
+  Identity strides keep the tag; atoms keep their claim.
+  Reverse inference filters candidates through the forward rule and defers an ambiguous
+  size-1 result through the window settling mechanism. Thus `2_default / 2` can be
+  `1_default` or the top, while `2_(bcast_if_1) / 2` has no candidate and is refused.
+  Equal strides cannot cancel over open extents: that would equate tags the stride maps
+  together, reintroducing order dependence. They use the held padded-window pair path.
+  `test_concat_order_independence` checks the original pool, plain/padded stride families,
+  identities, pairs and a pinned matrix in both orientations and registration orders;
+  undoing the fix fails the settling claim and matrix while reaching every claim.
 - `Shape.compute_row_product` must not latch a product while the row still ends in an open
   `Row_var` — the historical bug silently resolved xavier/kaiming fan products to 1 for every
   `{ w }` param with an inferred input row (fixed; regression `test/operations/layer_norm_1d.ml`,
@@ -943,7 +960,7 @@ files.
   emits, and one that binds nothing settles nothing, or the fixpoint would repeat. `bcast_if_1`
   above size 1 is an atom in the rule, or the whole conv path would be ambiguous and every window
   output would leave Stage1; contested outputs are size 1 and those of a named kernel, and such an
-  output is unknown until closure if nothing else solves it. Padded windows take the extent's basis,
+  output is unknown until closure if nothing else solves it. Padded windows derive their basis from the stride rule above,
   whatever the kernel. A window pair with a kernel that claims a tag stays a `Dim_eq` after its size
   equation, since that equation carries no basis; once the reduction changes nothing, the pair alone
   stays, or a deferred reduction would pile up a copy a pass. Pinned by
