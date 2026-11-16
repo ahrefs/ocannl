@@ -543,8 +543,8 @@ files.
   A planted-fault control makes only virtual links read `(i,j)` instead of `(j,i)`; the default
   oracle reports 60,308 findings across both depths and all three consumer standings, failing
   semantic parity (staging PR for gh-ocannl-2249).
-  The original `src=reduce` negative control is the strict probe of before gh-ocannl-2145, which ran every discarded
-  arm's scopes (codegen hoisted them then), over the inliner without `guard_hoisted`: the table
+  The original `src=reduce` negative control is the strict probe of before gh-ocannl-2145,
+  which ran every discarded arm's scopes (codegen hoisted them then), over the inliner without `guard_hoisted`: the table
   reports 2,869 strict address faults, all in `src=reduce`, across axes/axes, axes/flat,
   axes/trail, flat/axes, flat/flat and flat/trail layout pairs in every standing (staging PR for
   gh-ocannl-2145). One reproducible descriptor in every standing is `2x2 src=reduce

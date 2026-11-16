@@ -74,6 +74,9 @@ type kind = Store | Accumulate | Reduce
 type comp = { write : access; kind : kind; complex : bool }
 type step = Zero | Write of int | Read of int
 type standing = Undecided | Declared | Inherited
+
+let all_standings = [ Undecided; Declared; Inherited ]
+
 type source = Input | Reduce_zero | Reduce_init | Reduce_chain of int
 
 let source_name = function
@@ -373,14 +376,19 @@ let build ?(materialized_src = false) prog ~declare =
       if materialized_src then materialize src else virtualize src;
       let input = mk ~dims:[| 4; 4; 2 |] "src_input" in
       let init_inputs, init =
-        if not (Poly.equal prog.source Reduce_zero) then (
-          let init = mk ~dims:src_dims "src_init" in
-          materialize init;
-          ([ (init, src_init_cells) ], Some init))
-        else ([], None)
+        match prog.source with
+        | Reduce_init | Reduce_chain _ ->
+            let init = mk ~dims:src_dims "src_init" in
+            materialize init;
+            ([ (init, src_init_cells) ], Some init)
+        | Input | Reduce_zero -> ([], None)
       in
       let init, init_code =
-        let depth = match prog.source with Reduce_chain depth -> depth | _ -> 0 in
+        let depth =
+          match prog.source with
+          | Reduce_chain depth -> depth
+          | Input | Reduce_zero | Reduce_init -> 0
+        in
         let rec links level prev code =
           if level > depth then (prev, code)
           else
@@ -828,7 +836,6 @@ let one_read reads = List.map reads ~f:(fun r -> [| r |])
 let one_component = [ [ Write 0; Read 0 ]; [ Zero; Write 0; Read 0 ] ]
 
 let enumerate dims =
-  let all_standings = [ Undecided; Declared; Inherited ] in
   let writes = dead_write dims :: accesses ~launch:false dims
   and reads = accesses ~launch:true dims in
   let core_writes = dead_write dims :: thinned (core ~dims writes)
@@ -1092,6 +1099,11 @@ let tier_b () =
 
 (* === The verdict === *)
 
+let nested_families =
+  List.concat_map nested_sources ~f:(fun source ->
+      List.map all_standings ~f:(fun standing ->
+          "comps=1 store " ^ standing_name standing ^ " src=" ^ source_name source))
+
 let audit_shards () =
   Stdio.printf "%d widened programs\n" !enumerated;
   Array.iteri shard_sizes ~f:(fun i n -> Stdio.printf "shard %d/%d: %d programs\n" i shard_count n);
@@ -1146,35 +1158,23 @@ let () =
           else acc)
     in
     List.iter
-      [
-        "comps=1 store undecided";
-        "comps=1 store declared";
-        "comps=1 store inherited";
-        "comps=2 store undecided";
-        "comps=2 store declared";
-        "comps=2 store inherited";
-        "comps=1 accumulate undecided";
-        "comps=1 reduce undecided";
-        "comps=1 store undecided src=reduce";
-        "comps=1 store declared src=reduce";
-        "comps=1 store inherited src=reduce";
-        "comps=1 store undecided src=reduce-init";
-        "comps=1 store declared src=reduce-init";
-        "comps=1 store inherited src=reduce-init";
-        "comps=1 store undecided src=reduce-chain-1";
-        "comps=1 store declared src=reduce-chain-1";
-        "comps=1 store inherited src=reduce-chain-1";
-        "comps=1 store undecided src=reduce-chain-2";
-        "comps=1 store declared src=reduce-chain-2";
-        "comps=1 store inherited src=reduce-chain-2";
-      ] ~f:(fun fam ->
+      ([
+         "comps=1 store undecided";
+         "comps=1 store declared";
+         "comps=1 store inherited";
+         "comps=2 store undecided";
+         "comps=2 store declared";
+         "comps=2 store inherited";
+         "comps=1 accumulate undecided";
+         "comps=1 reduce undecided";
+       ]
+      @ nested_families)
+      ~f:(fun fam ->
         pf "%s: some program inlined" fam (total fam "| inlined" >= 100);
         pf "%s: some program inlined under a guard" fam (total fam "| inlined-guarded" >= 100));
-    List.iter nested_sources ~f:(fun source ->
-        List.iter [ Undecided; Declared; Inherited ] ~f:(fun standing ->
-            let fam = "comps=1 store " ^ standing_name standing ^ " src=" ^ source_name source in
-            pf "%s: some program has a scope in a guarded arm" fam
-              (Option.value (Hashtbl.find guarded_scope_programs fam) ~default:0 >= 100)));
+    List.iter nested_families ~f:(fun fam ->
+        pf "%s: some program has a scope in a guarded arm" fam
+          (Option.value (Hashtbl.find guarded_scope_programs fam) ~default:0 >= 100));
     Hashtbl.iteri finding_classes ~f:(fun ~key ~data ->
         Stdio.eprintf "findings %s: %d (not part of the golden)\n%!" key data);
     p "every program kept to the semantics" (!programs_run >= 100_000 && !finding_count = 0);
