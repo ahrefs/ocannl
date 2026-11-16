@@ -17,6 +17,20 @@ finals: the failure is in the first finals window, with none admitted: true
 finals: the hang is counted once, as a gpu_hang decline: true
 finals: the lineage is poisoned with the hang's rendering: true
 finals: the failed re-time adds no admitted reading: true
+finals_compile: both attempts of one finals contender failed: true
+finals_compile: each failed attempt is counted under its cause key: true
+finals_compile: candidates_failed equals the decline sum including both failed attempts: true
+finals_compile: the search ends normally with a crown computing the untuned values: true
+finals_compile: the lineage is not poisoned: true
+finals_compile: only run failures roll back their execution claims: true
+finals_compile: the finals admit only the other contender's two windows: true
+finals_run: both attempts of one finals contender failed: true
+finals_run: each failed attempt is counted under its cause key: true
+finals_run: candidates_failed equals the decline sum including both failed attempts: true
+finals_run: the search ends normally with a crown computing the untuned values: true
+finals_run: the lineage is not poisoned: true
+finals_run: only run failures roll back their execution claims: true
+finals_run: the finals admit only the other contender's two windows: true
 finals expiry: the first finals wait expired, with none admitted: true
 finals expiry: the expiry is counted once under the wait-bound key: true
 finals expiry: the report ends the search at the contender's Sync: true

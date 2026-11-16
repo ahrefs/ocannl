@@ -12,6 +12,11 @@
    fault; the attribution control raises the same text as a plain [Failure], which stays an
    unattributed fatal failure with no decline.
 
+   Contained finals failures (gh-ocannl-2197) fail both recompiles, or both pre-dispatch runs, of
+   one saved contender: each attempt counts under its cause key, while rollback and normal
+   completion remain intact. The healthy run locates the first finals compile after search-only
+   compiles that deduplicate without adding a reading.
+
    On Metal, a leg checks the wiring the wrapper stands in for: the backend's own
    [Context.failure_classifier] classifies the same typed report. *)
 
@@ -50,15 +55,56 @@ let dispatched = ref false
 let fired : string option ref = ref None
 let poisoned : (string * exn) list ref = ref []
 
+(* Contained faults are injected only after the healthy search's first finals recompile. Match its
+   compile label, which can differ from the label used to time the saved contender. *)
+type contained_fault = Recompile | Run
+
+exception Contained_run
+
+let contained : (contained_fault * int * string) option ref = ref None
+let windows_completed = ref 0
+let compile_trace : (int * string) list ref = ref []
+let contained_attempts = ref 0
+let contained_routine = ref None
+let rollbacks = ref 0
+
+let contained_cause stage =
+  SO.Backend_rejected
+    { backend = "fixture"; stage; severity = SO.Expected; detail = "contained finals fault" }
+
 module Hang_driver = struct
   include Autotune.Context_driver
 
   let compile_outcome ?name ?lowered_transform ?prelowered ?reuse ~provenance ?candidate ?retain ctx
       comp bindings =
-    let outcome =
-      Autotune.Context_driver.compile_outcome ?name ?lowered_transform ?prelowered ?reuse
-        ~provenance ?candidate ?retain ctx comp bindings
+    Option.iter candidate ~f:(fun label ->
+        compile_trace := (!windows_completed, label) :: !compile_trace);
+    let aimed =
+      match (!contained, candidate) with
+      | Some (mode, before, label), Some c
+        when !windows_completed >= before && String.equal c label && !contained_attempts < 2 ->
+          Some mode
+      | _ -> None
     in
+    contained_routine := None;
+    let outcome =
+      match aimed with
+      | Some Recompile ->
+          Int.incr contained_attempts;
+          Error
+            (SO.Classified
+               {
+                 phase = SO.Backend_compile;
+                 cause = contained_cause "finals_compile";
+                 execution_effect = SO.No_device_writes;
+               })
+      | Some Run | None ->
+          Autotune.Context_driver.compile_outcome ?name ?lowered_transform ?prelowered ?reuse
+            ~provenance ?candidate ?retain ctx comp bindings
+    in
+    (match (aimed, outcome) with
+    | Some Run, Ok (_, routine) -> contained_routine := Some (routine_id routine)
+    | _ -> ());
     (match (outcome, candidate) with
     | Ok (_, routine), Some c ->
         Hashtbl.set compiled ~key:c ~data:(routine_id routine);
@@ -69,6 +115,10 @@ module Hang_driver = struct
     outcome
 
   let run ?timing ctx routine =
+    if Option.equal Int.equal !contained_routine (Some (routine_id routine)) then (
+      contained_routine := None;
+      Int.incr contained_attempts;
+      raise Contained_run);
     let ctx = Autotune.Context_driver.run ?timing ctx routine in
     if Option.equal Int.equal !target_routine (Some (routine_id routine)) && Option.is_none !fired
     then dispatched := true;
@@ -83,7 +133,15 @@ module Hang_driver = struct
         match injection with Report make -> raise (make label) | Expire_wait -> false)
     | _ -> completed
 
-  let failure_classifier _ctx = MF.classify_command_buffer_failure ~backend:"metal"
+  let failure_classifier _ctx phase = function
+    | Contained_run ->
+        Some
+          { SO.phase; cause = contained_cause "finals_run"; execution_effect = SO.No_device_writes }
+    | exn -> MF.classify_command_buffer_failure ~backend:"metal" phase exn
+
+  let rollback_execution ctx routine =
+    Int.incr rollbacks;
+    Autotune.Context_driver.rollback_execution ctx routine
 
   let poison_lineage ctx ~routine_name exn =
     poisoned := (routine_name, exn) :: !poisoned;
@@ -115,6 +173,9 @@ type run = {
   measured : string list;
   fired_at : string option;
   poisonings : (string * exn) list;
+  compiles : (int * string) list;
+  failed_attempts : int;
+  rolled_back : int;
 }
 
 (* One search of [comp] through the wrapped driver on a fresh cc context. With [?injection], the
@@ -122,7 +183,13 @@ type run = {
    times itself, so the search has an incumbent when it hangs. (This small search's later contenders
    are re-timed by its finals from saved forms, a path with no attempt.) A candidate whose compile
    is declined never dispatches, and the aim moves on to the next attempt. *)
-let search ?injection ?finals_at ?(finals = false) () =
+let search ?injection ?finals_at ?contained_fault ?(finals = false) () =
+  contained := contained_fault;
+  windows_completed := 0;
+  compile_trace := [];
+  contained_attempts := 0;
+  contained_routine := None;
+  rollbacks := 0;
   fault := injection;
   target := None;
   target_routine := None;
@@ -153,6 +220,7 @@ let search ?injection ?finals_at ?(finals = false) () =
       ~settings:[ ("autotune_composite_playoff_width", "0"); ("autotune_finals_margin", "0.1") ]
       ~measure:(fun w ->
         Int.incr windows;
+        Int.incr windows_completed;
         if finals then 10. else Float.of_int (10 + w.Scripted_search.ordinal))
       (fun () ->
         let ctx = Context.cpu () in
@@ -169,6 +237,7 @@ let search ?injection ?finals_at ?(finals = false) () =
         | exception exn -> Error exn)
   in
   fault := None;
+  contained := None;
   {
     result;
     report = !report;
@@ -176,6 +245,9 @@ let search ?injection ?finals_at ?(finals = false) () =
     measured = Scripted_search.measured record.Scripted_search.windows;
     fired_at = !fired;
     poisonings = List.rev !poisoned;
+    compiles = List.rev !compile_trace;
+    failed_attempts = !contained_attempts;
+    rolled_back = !rollbacks;
   }
 
 let hang_key = SO.Backend_rejected_key ("metal", MF.gpu_hang_stage, SO.Expected)
@@ -256,6 +328,47 @@ let () =
       | _ -> false);
   p "finals: the failed re-time adds no admitted reading"
     (List.count finals.measured ~f:(String.equal finals_label) = 1);
+  (* gh-ocannl-2197: fail both recompiles/windows of one saved contender. This leaves it without
+     finals readings, so finals_crown falls back normally to the search ranking. *)
+  (* The last compile before that first finals reading is its recompile: earlier compiles
+     at the same admitted-window count can be search candidates that deduplicated away. *)
+  let compile_label =
+    List.find_map_exn (List.rev control.compiles) ~f:(fun (at, label) ->
+        if at = before then Some label else None)
+  in
+  List.iter
+    [ (Recompile, "finals_compile"); (Run, "finals_run") ]
+    ~f:(fun (mode, stage) ->
+      let r = search ~finals:true ~contained_fault:(mode, before, compile_label) () in
+      Stdio.eprintf "%s target=%s attempts=%d rollbacks=%d (not part of the golden)\n%!" stage
+        compile_label r.failed_attempts r.rolled_back;
+      let claim suffix = stage ^ ": " ^ suffix in
+      let key = SO.Backend_rejected_key ("fixture", stage, SO.Expected) in
+      p (claim "both attempts of one finals contender failed") (r.failed_attempts = 2);
+      p
+        (claim "each failed attempt is counted under its cause key")
+        (match declines_for key r with
+        | [ d ] -> d.Autotune.count = r.failed_attempts && d.count = 2
+        | _ -> false);
+      p
+        (claim "candidates_failed equals the decline sum including both failed attempts")
+        (Option.exists r.report ~f:(fun rep ->
+             rep.Autotune.candidates_failed
+             = List.sum (module Int) rep.declines ~f:(fun d -> d.Autotune.count)
+             && Option.exists control.report ~f:(fun base ->
+                 rep.Autotune.candidates_failed = base.Autotune.candidates_failed + 2)));
+      p
+        (claim "the search ends normally with a crown computing the untuned values")
+        (Option.exists r.report ~f:(fun rep ->
+             match rep.Autotune.outcome with Autotune.Searched -> true | _ -> false)
+        && match r.result with Ok got -> Array.equal Float.equal got expected | Error _ -> false);
+      p_empty (claim "the lineage is not poisoned") ~over:r.attempts r.poisonings;
+      p
+        (claim "only run failures roll back their execution claims")
+        (r.rolled_back = match mode with Recompile -> 0 | Run -> 2);
+      p
+        (claim "the finals admit only the other contender's two windows")
+        (Option.exists r.report ~f:(fun rep -> rep.Autotune.finals_admitted = finals_timed - 2)));
   (* Returning false drives the host-side wait-bound classification itself, rather than substituting
      a backend exception for it. The same first finals window is targeted. *)
   let expired = search ~injection:Expire_wait ~finals:true ~finals_at:(before, target_label) () in

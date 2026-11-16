@@ -10987,9 +10987,10 @@ module Make (D : Driver) = struct
                the buffers a compile allocates afresh (an optimizer's state before its first step,
                say) are reset only by the next compile, so a reused compile's second window would
                start from state the first one trained -- every window starts as a search candidate's
-               single window does. A refused or failed finals window is the finals' own: it is not a
-               candidate refusal or decline, so it neither enters [timings_contended] nor makes the
-               search uncacheable; the contender is left with fewer readings, none making the finals
+               single window does. A refused finals window ([NOT TIMED]) is the finals' own: it
+               neither enters [timings_contended] nor makes the search uncacheable. A classified
+               recompile or run failure counts as a decline per failed attempt, as in [try_spec]. A
+               contained failure leaves the contender with fewer readings, none making the finals
                inconclusive ([finals_crown]). Under a budget, each recompile starts only while the
                elapsed time plus the projected compile cost ([projected_compile_s]) stays within it
                -- the projection a candidate attempt is held to -- and once one may not start, no
@@ -11023,6 +11024,7 @@ module Make (D : Driver) = struct
                     with
                     | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
                     | Error (Outcome.Classified classified) ->
+                        record_decline declines classified;
                         logf "%s: %s: recompile FAILED at %s %s" what label
                           (phase_label classified.phase)
                           (Outcome.detail_of_cause classified.cause)
@@ -11063,6 +11065,7 @@ module Make (D : Driver) = struct
                             logf "%s: %s: RUN FAILED at %s %s" what label
                               (phase_label classified.phase)
                               (Outcome.detail_of_cause classified.cause);
+                            record_decline declines classified;
                             (* As a candidate's run failure (see [try_spec]): one that wrote nothing
                                withdraws its executed claim; one that may have written condemns the
                                lineage. *)
@@ -11071,8 +11074,6 @@ module Make (D : Driver) = struct
                                 D.rollback_execution c.cctx (D.routine_id c.routine);
                                 release_candidate c
                             | Outcome.Writes_may_have_occurred ->
-                                (* As in [try_spec], count the decline before escalating it. *)
-                                record_decline declines classified;
                                 D.poison_lineage c.cctx ~routine_name:(D.routine_name c.routine)
                                   (Outcome.exception_of_cause classified.cause);
                                 release_candidate c;

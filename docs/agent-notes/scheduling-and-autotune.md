@@ -1674,9 +1674,12 @@ files.
   ending the search (gh-ocannl-2135), just as `try_spec` does. The same test locates the first beam
   finals window from a healthy search's report and injects at that window's wait on replay; its
   decline-count claims fail without the finals accounting, while the containment claims still pass.
-  Returning false at that wait also pins the host-side wait-bound path. This repair is scoped to
-  condemning finals re-times: classified recompile failures and contained `No_device_writes` finals
-  failures still lack census entries, a pre-existing accounting gap to address separately.
+  Returning false at that wait also pins the host-side wait-bound path. All classified finals
+  recompile and run failures now count once per failed attempt (gh-ocannl-2197), including contained
+  `No_device_writes` failures: the same contender can add two declines alongside its search reading.
+  The fixture fails both windows of one contender, separately at recompile and before dispatch,
+  and pins the cause-key counts, census sum, rollback and normal crown without poisoning; the count
+  claims fail on the base. A refused timing window (`NOT TIMED`) remains outside the decline census.
 - **Every timing wait is bounded on the host, and an expiry ends the search** (gh-ocannl-2134).
   `time_routine` waits through `D.await_within` (`Context.await_within`), never a bare `sync`:
   the bound on a wait closing `depth` launches is `max 60 s (20 x depth x reference)`
