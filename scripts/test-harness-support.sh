@@ -275,15 +275,54 @@ path=$(cat "$RECORD")
 if [ "$rc" = 143 ] && [ ! -d "$path" ] && grep -q '^aborted before finish (rc=143)$' "$TMP/out"; then report 0 'TERM exits 143 and cleans scratch'
 else report 1 'TERM exits 143 and cleans scratch'; fi
 for mode in abort errexit unfinished; do
-  case $mode in abort) want=50 ;; errexit) want=7 ;; unfinished) want=0 ;; esac
+  case $mode in abort) want=50 ;; errexit) want=7 ;; unfinished) want=1 ;; esac
   MODE=$mode probe; rc=$?
   path=$(cat "$RECORD")
   if [ "$rc" = "$want" ] && [ ! -d "$path" ] \
      && grep -q "^aborted before finish (rc=$want)$" "$TMP/out" \
      && ! grep -q 'legs passed\|leg(s) failed' "$TMP/out"; then
     report 0 "$mode reports unfinished harness and preserves exit $want"
-  else report 1 "$mode reports unfinished harness and preserves exit $want"; fi
+  else report 1 "$mode reports unfinished harness and preserves exit $want" "exit $rc; $(cat "$TMP/out")"; fi
 done
+# Bash parses and executes complete top-level commands in turn. A malformed
+# later command (including a function definition) reaches the installed EXIT
+# trap. All unfinished paths must be red, even after a failed leg.
+for ending in function top-level exit-zero fallthrough failed-abort; do
+  cat >"$TMP/malformed.sh" <<'ABORT_HEADER'
+. "$SUPPORT"
+harness_args
+harness_scratch abort-control
+printf '%s\n' "$TMP" >"$RECORD"
+report 0 'a leg before the abort'
+ABORT_HEADER
+  case $ending in
+    function) printf 'broken() {\n  )\n}\n' >>"$TMP/malformed.sh" ;;
+    top-level) printf ')\n' >>"$TMP/malformed.sh" ;;
+    exit-zero) printf 'exit 0\n' >>"$TMP/malformed.sh" ;;
+    fallthrough) printf ':\n' >>"$TMP/malformed.sh" ;;
+    failed-abort) printf "report 1 'a failed leg before the abort'\nexit 0\n" >>"$TMP/malformed.sh" ;;
+  esac
+  rc=0
+  "$BASH" "$TMP/malformed.sh" >"$TMP/out" 2>&1 || rc=$?
+  path=$(cat "$RECORD")
+  if [ "$rc" != 0 ] && [ ! -d "$path" ] \
+     && grep -qx 'PASS  a leg before the abort' "$TMP/out" \
+     && grep -q '^aborted before finish (rc=[1-9][0-9]*)$' "$TMP/out"; then
+    report 0 "$ending before finish exits nonzero, reports the abort and cleans scratch"
+  else report 1 "$ending before finish exits nonzero, reports the abort and cleans scratch" "exit $rc; $(cat "$TMP/out")"; fi
+  if [ "$ending" = failed-abort ]; then
+    grep -qx 'FAIL  a failed leg before the abort' "$TMP/out"
+    report "$?" 'the failed-abort control reached its failed leg'
+  fi
+done
+# An error in the first compound command prevents initialization itself. No
+# trap can run: Bash must supply the nonzero status without our diagnostic.
+printf 'if true; then\n. "$SUPPORT"\nharness_args\nharness_scratch never-created\n)\nfi\n' >"$TMP/unparsed.sh"
+rc=0
+"$BASH" "$TMP/unparsed.sh" >"$TMP/out" 2>&1 || rc=$?
+if [ "$rc" = 2 ] && ! grep -q 'aborted before finish' "$TMP/out"; then
+  report 0 'a parse error before initialization exits 2 without an installed EXIT trap'
+else report 1 'a parse error before initialization exits 2 without an installed EXIT trap' "exit $rc; $(cat "$TMP/out")"; fi
 # A run the host refuses as a whole (gh-ocannl-1940): one ABANDONED line, the
 # checks decided before it counted, nothing after it run, and exit 75 -- no
 # green footer, no failure footer, and no "aborted before finish".

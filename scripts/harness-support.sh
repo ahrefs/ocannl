@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Shared shell test contracts. Sourcing only defines functions; Dune actions
 # can use rejection checks without parsing arguments, installing traps or Dune.
+# Once harness_scratch installs EXIT cleanup, reaching finish is required:
+# unfinished status 0 becomes exit 1; existing nonzero statuses are preserved.
+# Parse errors before trap installation rely on Bash's own nonzero status.
 
 harness_args() {
   KEEP=0 failures=0 skipped=0 harness_finished=0
@@ -494,6 +497,7 @@ finish() {
 harness_cleanup() {
   local rc=$?
   if [ "${harness_finished:-0}" != 1 ]; then
+    [ "$rc" != 0 ] || rc=1
     if [ -n "${harness_leg_running:-}" ]; then
       printf 'aborted before finish (rc=%s) inside leg: %s\n' "$rc" "$harness_leg_running" >&2
     else
@@ -507,7 +511,9 @@ harness_cleanup() {
   elif [ -n "${TMP:-}" ] && [ -d "$TMP" ] && [ "$TMP" != / ]; then
     rm -rf "$TMP"
   fi
-  return 0
+  # Returning from an EXIT trap leaves the original shell status in place.
+  # Exit explicitly so an unfinished successful command cannot read as green.
+  exit "$rc"
 }
 harness_scratch() { # scratch prefix
   TMP=$(mktemp -d "${TMPDIR:-/tmp}/$1.XXXXXX" 2>/dev/null) || TMP=

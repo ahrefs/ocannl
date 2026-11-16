@@ -120,6 +120,43 @@ if [ "$got" = 1 ] && cmp -s "$TMP/all" "$RECORD" \
    && grep -q 'exit: 7' "$TMP/out" && grep -q '1 failed$' "$TMP/out"; then
   report 0 'a failing first harness stays red while every later harness runs'
 else report 1 'a failing first harness stays red while every later harness runs'; fi
+# A real support user with a malformed later function, rather than a stub's
+# explicit failure: both dispatcher paths must count its unfinished run as red.
+unset FAIL_MEMBER
+malformed_member=$(head -n 1 "$TMP/shell")
+cp "$fixture/$malformed_member" "$TMP/member-before-abort"
+cp "$here/../scripts/harness-support.sh" "$TMP/abort-support.sh"
+export ABORT_SUPPORT="$TMP/abort-support.sh"
+cat >"$fixture/$malformed_member" <<'MALFORMED'
+#!/usr/bin/env bash
+. "$ABORT_SUPPORT"
+harness_args "$@"
+harness_scratch dispatcher-abort
+report 0 'a leg before the syntax error'
+broken() {
+  )
+}
+finish
+MALFORMED
+for ending in malformed exit-zero; do
+  if [ "$ending" = exit-zero ]; then
+    sed '/broken()/,$d' "$fixture/$malformed_member" >"$TMP/early-exit-member"
+    printf 'exit 0\n' >>"$TMP/early-exit-member"
+    cat "$TMP/early-exit-member" >"$fixture/$malformed_member"
+  fi
+  for width in 1 4; do
+    run --shell --jobs "$width"
+    if [ "$got" = 1 ] && grep -qx 'PASS  a leg before the syntax error' "$TMP/out" \
+       && grep -q '^aborted before finish (rc=[1-9][0-9]*)$' "$TMP/out" \
+       && grep -q "^HARNESS $malformed_member exit: [1-9][0-9]*$" "$TMP/out" \
+       && grep -q ' run, 1 failed$' "$TMP/out"; then
+      report 0 "--jobs $width counts an $ending unfinished member as failed and shows its abort"
+    else report 1 "--jobs $width counts an $ending unfinished member as failed and shows its abort" "exit $got; $(tail -n 5 "$TMP/out")"; fi
+  done
+done
+cp "$TMP/member-before-abort" "$fixture/$malformed_member"
+export FAIL_MEMBER
+FAIL_MEMBER=$(head -n 1 "$TMP/all")
 # A fail-fast twin must lose the continuation property, proving the oracle
 # above sees the defect instead of merely observing a failing command.
 python3 - "$subject" "$TMP/fail-fast.sh" <<'PY_CONTROL'

@@ -1279,6 +1279,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   terminate a harness that started with only `set -u` (gh-ocannl-1178).
   Shared `harness_cleanup` prints `aborted before finish (rc=N)` if `finish` never ran,
   including signal exits, and still cleans scratch or identifies it with `--keep`.
+  An unfinished status 0 becomes exit 1 (gh-ocannl-2116); every nonzero status is
+  preserved, including 50 and TERM's 143. Cleanup explicitly exits with that status:
+  returning from an EXIT trap alone preserves the original status, including 0.
+  Bash parses complete top-level commands before executing them: a malformed later
+  function or top-level command can run the installed trap, whereas an error in
+  the compound command containing initialization prevents trap installation and
+  relies on Bash's own nonzero parser status. Controls cover both boundaries,
+  `exit 0`, falling off the end, and a failed leg followed by an early successful
+  exit. On minix-amd-linux's Bash 5.3.9 the parser cases already exited nonzero on
+  the base; the latter three reproduced the false green. The dispatcher controls
+  exercise malformed and early-successful members at `--jobs 1` and `--jobs 4`.
+  Bash 3.2 coverage is a separate interpreter leg; do not infer it from Bash 5.x.
 
 - `tools/test-run.sh` is the one way to run `dune runtest` / `dune build @slow` from a session;
   its header documents usage. It exists because every hand-rolled alternative has failed in
