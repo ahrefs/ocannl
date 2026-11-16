@@ -5350,6 +5350,18 @@ let role_axes ?(own = fun _ -> true) env (glb : row) =
   let glb = subst_row env glb in
   (glb, List.exists (glb.beg_dims @ glb.dims) ~f:(function Var v -> own v | _ -> false))
 
+(* gh-ocannl-2244: whether [glb] (substituted) has an axis a use site bounds, for a packed draw's
+   stage-6a closing: a concrete or symbolic axis, or a variable with a GLB of its own. A concrete
+   axis counts as much as a bounded variable: once the use site's axes are solved, the GLB carries
+   them as they are, and a draw that waited on them past stage 6a was closed empty by the result
+   above it closing at stage 6b ([relu u *. c[|2,5]]). *)
+let glb_has_bounded_axis env (glb : row) =
+  let glb = subst_row env glb in
+  List.exists (glb.beg_dims @ glb.dims) ~f:(function
+    | Dim _ | Sym _ -> true
+    | Var v -> dim_has_glb env v
+    | Affine _ | Concat _ -> false)
+
 (* gh-ocannl-2180: what a row that resolves at its use sites closes to, given its GLB. The GLB's
    dimension variables belong to the operation results that minted them and carry their role (a
    result's axis closes minimal); the row's own axes must carry the row's role. So each selected
@@ -6114,16 +6126,17 @@ let%track5_sexp process_shape_row ~deferred_dims ~(stage : stage) origin env
              && (is_in_param || is_resolve_at_use v)
              && (let glb = subst_row env glb in
                  is_broadcastable glb.bcast || List.is_empty glb.beg_dims)
-             && snd (role_axes ~own:(dim_has_glb env) env glb) ->
+             && glb_has_bounded_axis env glb ->
           (* gh-ocannl-2180: a packed draw's row closes to its GLB only once the GLB's axes are
              known, and an axis still open then is closed by its own rules (gh-ocannl-1961) -- for a
              result's axis, minimal. Taking the axes by role first gives the draw axes of its own,
              which take the use sites' bound at stage 6; the block count follows from them. Only an
              axis a use site bounds is taken by role: one nothing bounds has nothing to take, and an
              axis of its own would be sized by the block arithmetic (a whole block of 4 for [uniform
-             () + 1] alone) instead of closing minimal with the result. A GLB with leading axes over
-             an open middle waits: aligning its flanks is a balanced-flank choice still to be made
-             ([solve_closing_stages]); taken here, it refused [contraction_pointwise_closing]'s
+             () + 1] alone) instead of closing minimal with the result; an axis already concrete is
+             bounded too, and is taken as it is ({!glb_has_bounded_axis}). A GLB with leading axes
+             over an open middle waits: aligning its flanks is a balanced-flank choice still to be
+             made ([solve_closing_stages]); taken here, it refused [contraction_pointwise_closing]'s
              satisfiable program. *)
           let closing = close_to_glb_by_role ~own:(dim_has_glb env) env origin ~r1 ~glb in
           (keep @ closing @ dim_eqs, env)
@@ -6618,8 +6631,28 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
   (* gh-ocannl-1961: what closes a draw's rows reads the environment, which mid-pass lies: a solved
      bound has left its operands' [res] while the [Row_ineq] carrying it is still in the list. So
      from the stage the draw arms start, a draw runs only once everything else has settled. *)
+  (* gh-ocannl-2244: at stage 6a a packed draw's row closes to its GLB ([process_shape_row]), which
+     reads the environment the same way: it waits for the rest to settle too. Closed first, a draw
+     whose row a pending equation still relates to its own bound took a GLB that equation refutes
+     (the statistic of [row_closure_guess]'s refuted GLB took the whole spatial row). *)
+  let is_draw_row env = function
+    | Shape_row (r, _) when equal_stage stage Stage6a -> (
+        match (subst_row env r).bcast with
+        | Row_var v -> (
+            match find_row env.row_env v with
+            | Some
+                (Bounds_row
+                   { constr = Total_elems { numerator = Strided_var { round_up = true; _ }; _ }; _ })
+              ->
+                true
+            | _ -> false)
+        | Broadcastable -> false)
+    | _ -> false
+  in
   let rec draws_at_quiescence ineqs env =
-    let draws, others = List.partition_tf ineqs ~f:is_draw_total in
+    let draws, others =
+      List.partition_tf ineqs ~f:(fun c -> is_draw_total c || is_draw_row env c)
+    in
     let others, env = solve others env in
     let draws', env = solve draws env in
     if List.equal equal_constraint_up_to_origin draws' draws then (others @ draws, env)

@@ -117,10 +117,15 @@ files.
   and the program-level sweep `shape_program_sweep` (gh-ocannl-2181): 2000 seeded expression
   DAGs judged by a ground-row oracle that shares no code with the solver, with a known list of
   the repeats and refusals master still has. An entry's fix removes the entry: the sweep fails a
-  stale one. At its landing it found that staging#1917 itself made draws under a unary
-  operation, under a self-product and under a compose operand close to one element (all three
-  fill at `a98ee3785`), and that nested branching (`c + (u + (v *. w))`) still collapses or is
-  refused; each family has a fixed program in the test.
+  stale one. A packed draw must close in `Stage6a` whenever its GLB
+  has an axis a use site bounds, a concrete one included (`glb_has_bounded_axis`, gh-ocannl-2244):
+  waiting on the GLB's open tail, it was still open when the result above it closed empty at
+  `Stage6b`, which closed the draw empty too. That made draws under a unary operation, under a
+  self-product and under a compose operand close to one element (all three filled at `a98ee3785`,
+  through the deleted guess), and it was most of nested branching's (`c + (u + (v *. w))`); some
+  nested programs still collapse. The draw's closing reads the environment, so it runs at
+  quiescence too (`solve_inequalities`' `is_draw_row`): closed before a pending equation settled,
+  `row_closure_guess`'s refuted-GLB statistic took a GLB that equation refutes.
   The dimension twin of the guess is deleted too (`solve_dim_ineq`, gh-ocannl-2141): it fired on
   every mutually-sole pair, since the closure re-solves every stage-1 constraint at Stage2, so a
   solve depended on whether a bound was repeated (`test_row_bound_emissions` claims it does not).

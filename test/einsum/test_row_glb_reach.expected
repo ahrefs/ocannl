@@ -19,3 +19,9 @@ incompatible bounds join to the broadcast top: true
   [3] [3] [3]
 one result: the leaf takes the use site's 3, and the result with it: true
 two results: the leaf takes 3, and both results with it: true
+[5].<t> <= r <= u, draw over [u]  (rows u r y; counter)
+  [5] [5] [5] 2
+[5].<t> <= r <= u twice, draw over [u]  (rows u r y; counter)
+  [5] [5] [5] 2
+the draw takes the use site's 5, the result with it, and the draw sizes its blocks: true
+the repeated bound closes the same: true
