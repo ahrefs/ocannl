@@ -332,6 +332,7 @@
   (alias runtest-cc_toolchain_attribution-macro_label)
   (alias runtest-census_total_ratchet)
   (alias runtest-changelog_unreleased_scan)
+  (alias runtest-coalesce_numerics-no_hip_fast_math)
   (alias runtest-codegen_text_inventory)
   (alias runtest-codegen_text_inventory_control)
   (alias runtest-command_line_length_scan)
@@ -4499,6 +4500,26 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; HIP's precise compiler regime restores the bitwise leg; share the default golden.
+
+(rule
+ (target coalesce_numerics-no_hip_fast_math.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:coalesce_numerics.exe} --ocannl_hip_fast_math=false))))
+
+(rule
+ (alias runtest-coalesce_numerics-no_hip_fast_math)
+ (package neural_nets_lib)
+ (action
+  (diff coalesce_numerics.expected coalesce_numerics-no_hip_fast_math.actual)))
 
 (test
  (name codegen_fma_precision)

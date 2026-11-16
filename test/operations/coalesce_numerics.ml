@@ -33,13 +33,17 @@ let accum_prec = Ll_test.backend_accum_prec
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
 
-(* Where the GPU compiler holds a kernel's arithmetic still across kernels, so equal summation
-   orders mean equal bits. Not on HIP: hiprtc compiles under [-ffast-math], which licenses
-   contraction, and no configuration turns it off there (CUDA's is [cuda_fast_math]); whether an
-   [acc + a * b] fuses follows the surrounding kernel, and partitioning the staged copies
-   (gh-ocannl-1661) moved the 2x2 register-tile seeds' rounding at 2% of qkv's cells and 1% of
-   outproj's, identically across their geometries. There the bounded claims below stand in. *)
-let bitwise_gpu = on_gpu && not (String.equal backend_name "hip")
+(* HIP's fast-math contraction can move equal-order sums across kernels (gh-ocannl-1661). Its
+   precise regime pins contraction off (gh-ocannl-1779), restoring the bitwise claims. CUDA and
+   Metal retain their existing coverage: Metal does not advertise contraction-off. *)
+let bitwise_leg =
+  Verdict.leg
+    ~when_:
+      (on_gpu && ((not (String.equal backend_name "hip")) || Ll_test.backend_contraction_off ()))
+    ~on:
+      (if String.equal backend_name "hip" then "hip with compiler contraction enabled"
+       else backend_name)
+    ()
 
 (* Within 2^-16 of the output's largest magnitude: wide of contraction drift (a rounding per
    product), narrow of a lost, stale or misplaced product, which moves a cell by a product. *)
@@ -176,14 +180,15 @@ let leg ~tag ~layout cand reversed =
    in
    gated_all ~when_:on_gpu ~on:backend_name claim outs ~f:(fun (q, got) ->
        within ~what_ran:(label q) claim ~want got));
-  gated_all ~when_:bitwise_gpu ~on:backend_name
+  in_leg ~leg:bitwise_leg
     (Printf.sprintf "%s: the family's scalar blocktile seeds agree bitwise among themselves" tag)
-    outs ~f:(fun (q, got) ->
-      let ok = Array.equal Float.equal got want in
-      if not ok then
-        Stdio.eprintf "coalesce_numerics: %s family %s differs %s\n%!" tag (label q)
-          (difference got want);
-      ok);
+    (fun claim ->
+      p_all claim outs ~f:(fun (q, got) ->
+          let ok = Array.equal Float.equal got want in
+          if not ok then
+            Stdio.eprintf "coalesce_numerics: %s family %s differs %s\n%!" tag (label q)
+              (difference got want);
+          ok));
   (* The executed control: the first family seed run on the reversed inputs sums every cell's
      products in the reverse order, and some cell's bits change -- so the bitwise claims here would
      see a layout that reordered a cell's summation. *)
@@ -210,17 +215,18 @@ let leg ~tag ~layout cand reversed =
    in
    gated_all ~when_:on_gpu ~on:backend_name claim coal_outs ~f:(fun (q, got) ->
        Option.exists got ~f:(within ~what_ran:(label q) claim ~want)));
-  gated_all ~when_:bitwise_gpu ~on:backend_name
+  in_leg ~leg:bitwise_leg
     (Printf.sprintf "%s: every scalar blocktile %s seed computes the family's values bitwise" tag lt)
-    coal_outs ~f:(fun (q, got) ->
-      match got with
-      | Some got ->
-          let ok = Array.equal Float.equal got want in
-          if not ok then
-            Stdio.eprintf "coalesce_numerics: %s %s differs %s\n%!" tag (label q)
-              (difference got want);
-          ok
-      | None -> false)
+    (fun claim ->
+      p_all claim coal_outs ~f:(fun (q, got) ->
+          match got with
+          | Some got ->
+              let ok = Array.equal Float.equal got want in
+              if not ok then
+                Stdio.eprintf "coalesce_numerics: %s %s differs %s\n%!" tag (label q)
+                  (difference got want);
+              ok
+          | None -> false))
 
 (* {1 The control: the inputs make summation order visible} *)
 
