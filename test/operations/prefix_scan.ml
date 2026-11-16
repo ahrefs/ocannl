@@ -739,20 +739,25 @@ let () =
 let gate_base = ref 185800
 
 let build_gate ?(rws = 2) ?(op = Ir.Ops.Max) ?(fwd_mask = le) ?(t_mask = le)
-    ?(a_prec = Ir.Ops.single) ?(c_prec = Ir.Ops.single) ?(second_a_writer = false)
-    ?(compare_copy = false) ?(row_from_i = false) ?y_fill () =
+    ?(chain_prec = Ir.Ops.single) ?(v_prec = Ir.Ops.single) ?a_prec ?c_prec
+    ?(second_a_writer = false) ?(compare_copy = false) ?(row_from_i = false) ?y_fill () =
   let base = !gate_base in
   gate_base := base + 20;
   let fill = if Ir.Ops.equal_binop op Ir.Ops.Max then neg_inf else Float.infinity in
   let y_fill = Option.value y_fill ~default:fill in
+  let a_prec = Option.value a_prec ~default:chain_prec in
+  let c_prec = Option.value c_prec ~default:chain_prec in
   let mk = B.node_factory ~first_id:base ~dims:[| 1 |] () in
+  (* [chain_prec]: the forward's intermediates, the gate's and the target's precision. *)
+  let mkc = B.node_factory ~prec:chain_prec ~first_id:(base + 10) ~dims:[| 1 |] () in
   let ri = mk ~dims:[| n |] "gri" and rq = mk ~dims:[| n |] "grq" in
   let m = mk ~dims:[| n; n |] "gm" and mt = mk ~dims:[| n; n |] "gmt" in
-  let v = mk ~dims:[| rws; n |] "gv" and g = mk ~dims:[| rws; n |] "gg" in
-  let t = mk ~dims:[| rws; n |] "gt" in
+  let v = B.node_factory ~prec:v_prec ~first_id:(base + 18) ~dims:[| rws; n |] () "gv" in
+  let g = mkc ~dims:[| rws; n |] "gg" in
+  let t = mkc ~dims:[| rws; n |] "gt" in
   List.iter [ v; g; t ] ~f:B.materialize;
-  let pn = mk ~dims:[| rws; n; n |] "gp" and y = mk ~dims:[| rws; n |] "gy" in
-  let y_copy = mk ~dims:[| rws; n |] "gy_copy" in
+  let pn = mkc ~dims:[| rws; n; n |] "gp" and y = mkc ~dims:[| rws; n |] "gy" in
+  let y_copy = mkc ~dims:[| rws; n |] "gy_copy" in
   let cn = B.node_factory ~prec:c_prec ~first_id:(base + 17) ~dims:[| rws; n; n |] () "gc" in
   let an = B.node_factory ~prec:a_prec ~first_id:(base + 15) ~dims:[| rws; n; n |] () "ga" in
   let s () = B.sym () in
@@ -906,6 +911,10 @@ let () =
      2048 compare equal. *)
   left_composed "gg_narrow (the gate's equality is f16, the extremum f32)"
     (build_gate ~rws ~c_prec:Ir.Ops.half ());
+  (* An f16 chain over an f32 payload: [C] compares the stored, rounded [P], and a wide-compute
+     backend would compare the unrounded payload. *)
+  left_composed "gg_wide_payload (the payload is f32, the forward and its gate f16)"
+    (build_gate ~rws ~chain_prec:Ir.Ops.half ~v_prec:Ir.Ops.single ());
   (* The forward's row read at the input position: [Y[i, o]] and [P[i, i, o]], a diagonal walk the
      scan would not follow. *)
   left_composed ~rws:n "gg_row_from_i (the gate reads the forward's row at the input position)"

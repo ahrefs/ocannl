@@ -47,8 +47,11 @@ let lower_triangle n =
 
 let cumsum xs = Array.folding_map xs ~init:0. ~f:(fun s x -> (s +. x, s +. x))
 
-(* Compile [comp], run it [repeats] times after one warm run, and read [read] back. *)
+(* Compile [comp], run it [repeats] times after one warm run, and read [read] back. The compiled
+   context and its parent [ctx] are released before the next case: device pools stay resident until
+   then, and a size sweep would otherwise accumulate every case's buffers. *)
 let time ~repeats ~name ctx comp read =
+  let parent = ctx in
   let lowered = ref [] in
   let ctx, routine =
     Context.compile ~name
@@ -64,6 +67,8 @@ let time ~repeats ~name ctx comp read =
   Context.sync ctx;
   let stop = now () in
   let values = Context.get_values ctx read in
+  Context.release ctx;
+  Context.release parent;
   let n_scans = List.sum (module Int) !lowered ~f:(fun o -> scans o.LL.llc) in
   (seconds start stop /. Float.of_int repeats, values, n_scans)
 

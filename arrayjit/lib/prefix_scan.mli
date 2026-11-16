@@ -79,11 +79,13 @@
     equality of [Y] and the same [P] the forward reduces, read at the cells the substitution maps,
     [M'] the forward's relation read from the other side, the forward's rows mapped to indices free
     of both triangular coordinates (so the scan stays in one row), [A] at [T]'s precision and [C],
-    [P] and [Y] at it too (the equality computes at its node's precision, the scan's at [T]'s),
-    nothing writing what the scan reads between its readers and [T]. Only [T]'s nest is replaced;
-    the unread [C], [A] and [P] go with the optimizer. The tropical [@^+] backward gates differently
-    -- with no [where] filter, an output whose extremum is [-inf] gates its rejected positions too
-    -- and the [nonoverlapping] gate is another shape: both stay composed.
+    [P] and [Y] at it too (the equality computes at its node's precision, the scan's at [T]'s), the
+    payload a plain read of a node stored at [P]'s precision and the gradient one at [A]'s (the
+    composed form compares and sums their stored, rounded values; a backend may compute an
+    expression wider), nothing writing what the scan reads between its readers and [T]. Only [T]'s
+    nest is replaced; the unread [C], [A] and [P] go with the optimizer. The tropical [@^+] backward
+    gates differently -- with no [where] filter, an output whose extremum is [-inf] gates its
+    rejected positions too -- and the [nonoverlapping] gate is another shape: both stay composed.
 
     The gate's comparisons are the composed form's own, at its precisions; its sum is regrouped
     (from a run's end, as the suffix scan's), so it agrees bitwise on exact data and within rounding

@@ -194,6 +194,8 @@ gg_prec (the gate's product is f16, the target f32): the gate is left composed: 
 gg_prec (the gate's product is f16, the target f32): rewritten equals the composed execution bitwise: true
 gg_narrow (the gate's equality is f16, the extremum f32): the gate is left composed: true
 gg_narrow (the gate's equality is f16, the extremum f32): rewritten equals the composed execution bitwise: true
+gg_wide_payload (the payload is f32, the forward and its gate f16): the gate is left composed: true
+gg_wide_payload (the payload is f32, the forward and its gate f16): rewritten equals the composed execution bitwise: true
 gg_row_from_i (the gate reads the forward's row at the input position): the gate is left composed: true
 gg_row_from_i (the gate reads the forward's row at the input position): rewritten equals the composed execution bitwise: true
 --- leg 8: constant masks ---

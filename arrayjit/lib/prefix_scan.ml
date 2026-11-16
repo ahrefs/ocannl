@@ -717,7 +717,17 @@ let find_gate rt pos (n : nest) : gate option =
               Some (c, ci, u, u_prec)
           | _ -> None
         in
-        let* () = Option.some_if (Ops.equal_prec u_prec a_prec) () in
+        (* Likewise [A] stores the gradient rounded to its precision, and the scan sums [u] itself:
+           a plain read of a node stored at [A]'s precision. *)
+        let* () =
+          Option.some_if
+            (Ops.equal_prec u_prec a_prec
+            &&
+            match u with
+            | LL.Get (src, _) -> Ops.equal_prec (Lazy.force src.Tn.storage_prec) a_prec
+            | _ -> false)
+            ()
+        in
         let* () = Option.some_if (not (index_mentions q.index u)) () in
         let* () = Option.some_if (not (LL.scalar_mentions_tn t u)) () in
         (* [C[o, i] = (Y[o] = P[i, o])], defined once ahead of the accumulation. *)
@@ -829,6 +839,16 @@ let find_gate rt pos (n : nest) : gate option =
             in
             let* v = at_fwd_p fwd.payload in
             let* () = Option.some_if (not (LL.scalar_mentions_tn t v)) () in
+            (* [C] compares the STORED [P]; the scan compares [v] itself, which a backend may
+               compute wider than [P] stores (the CPU's wide compute of a narrow precision). Only a
+               plain read of a node stored at [P]'s precision is the same value either way. *)
+            let* () =
+              Option.some_if
+                (match v with
+                | LL.Get (src, _) -> Ops.equal_prec (Lazy.force src.Tn.storage_prec) y_prec
+                | _ -> false)
+                ()
+            in
             (* What the scan reads at [T]'s position: nothing writes it in between. *)
             let quiet ~from tns =
               List.for_all tns ~f:(fun tn ->
