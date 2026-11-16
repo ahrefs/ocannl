@@ -1,3 +1,7 @@
+(* Integer RNG results are also checked before storage, against independently extracted input
+   bits and signedness, including the C reference table. Generic C arithmetic promotions and
+   parameter guards are outside this contract. A signed-byte copy must pass byte parity and fail
+   the result checks. *)
 (* Metal's definition table (gh-ocannl-1580), compiled by the host C++ compiler beside the C table
    the cc backend prepends, and compared with it bitwise -- what [cuda_like_builtins_emulation] does
    for the CUDA and HIP tables. [Builtins_metal] is a stdlib-only library, so every PR compiles it
@@ -184,21 +188,39 @@ inline uint32_t rotate(uint32_t x, uint n) { return (x << n) | (x >> ((32u - n) 
 |}
     (if broken then "3 - i" else "i")
 
-let copies = [ ("ocannl_metal", "metal_", false); ("ocannl_metalbroken", "metalbroken_", true) ]
+let copies =
+  [
+    ("ocannl_metal", "metal_", false);
+    ("ocannl_metalbroken", "metalbroken_", true);
+    ("ocannl_metalsigned", "metalsigned_", false);
+  ]
+
 let probe_name ~prefix key = Printf.sprintf "probe_%s%s" prefix key
 
 (* Every probe has one C signature: eight words of input, a lane, and the result's bytes out; it
    returns the result's size. *)
-let probe ~extern ~name ~args ~call =
-  Printf.sprintf
-    "%sint %s(const unsigned int *in, int lane, unsigned char *out) {\n\
-     %s  __typeof__(%s) r = %s;\n\
-    \  (void)in; (void)lane;\n\
-    \  memcpy(out, &r, sizeof r);\n\
-    \  return (int)sizeof r;\n\
-     }\n"
-    (if extern then "extern \"C\" " else "")
-    name args call call
+let probe ~key ~extern ~name ~args ~call =
+  let bytes =
+    Printf.sprintf
+      "%sint %s(const unsigned int *in, int lane, unsigned char *out) {\n\
+       %s  __typeof__(%s) r = %s;\n\
+      \  (void)in; (void)lane;\n\
+      \  memcpy(out, &r, sizeof r);\n\
+      \  return (int)sizeof r;\n\
+       }\n"
+      (if extern then "extern \"C\" " else "")
+      name args call call
+  in
+  match Integer_rng_probe.check key with
+  | None -> bytes
+  | Some check ->
+      bytes
+      ^ Printf.sprintf
+          "%sint value_%s(const unsigned int *in, int lane, unsigned char *out) {\n\
+           %s __typeof__(%s) r = %s; (void)out; (void)lane;\n\
+           %s}\n"
+          (if extern then "extern \"C\" " else "")
+          name args call call check
 
 (* A shape's argument declarations and call: [draw] declares the [uint4] draw [x] and counter [c]
    from the eight words, [param] spells a counter helper's parameter type, [fn] the helper. *)
@@ -225,7 +247,7 @@ let c_probe key =
         "  uint4x32_t x, c; memcpy(x.v, in, sizeof x.v); memcpy(c.v, in + 4, sizeof c.v);\n\
         \  (void)x; (void)c;\n"
   in
-  probe ~extern:false ~name:(probe_name ~prefix:"c_" key) ~args ~call
+  probe ~key ~extern:false ~name:(probe_name ~prefix:"c_" key) ~args ~call
 
 let metal_probe ~ns ~prefix key =
   let fn = ns ^ "::" ^ key in
@@ -238,7 +260,7 @@ let metal_probe ~ns ~prefix key =
            \  (void)x; (void)c;\n"
            ns)
   in
-  probe ~extern:true ~name:(probe_name ~prefix key) ~args ~call
+  probe ~key ~extern:true ~name:(probe_name ~prefix key) ~args ~call
 
 (* The C table, as C, with the two narrow codecs the [half] and [bfloat] shims convert through. *)
 let c_source =
@@ -268,7 +290,10 @@ template <typename A, typename R> A ocannl_arg_of(R (*)(A));
     @ List.concat_map
         (fun (ns, _, broken) ->
           [ Printf.sprintf "namespace %s {" ns; shims ~broken ]
-          @ Ir.C_syntax.builtin_definitions metal ~keys:probed
+          @ Ir.C_syntax.builtin_definitions
+              (if ns = "ocannl_metalsigned" then Integer_rng_probe.signed_byte_table metal
+               else metal)
+              ~keys:probed
           @ [ "}" ])
         copies
     @ List.concat_map (fun (ns, prefix, _) -> List.map (metal_probe ~ns ~prefix) probed) copies)
@@ -494,3 +519,36 @@ let () =
   gated_exists ~aggregation:`Environment ~when_ ~on:no_cxx
     "Metal: a copy whose uint4 indexing reverses its lanes differs from the C table somewhere"
     probed ~f:(fun key -> not (agrees ~log:false ~prefix:"metalbroken_" key))
+
+let () =
+  case "integer RNG values before storage" @@ fun () ->
+  let when_ = Lazy.force host_cxx in
+  let keys = List.filter Integer_rng_probe.is_integer probed in
+  p "C and Metal: integer probes cover every precision in scalar, vector and lane forms"
+    (Integer_rng_probe.has_all_forms keys);
+  p "removing lane forms fails the integer probe coverage check"
+    (not
+       (Integer_rng_probe.has_all_forms
+          (List.filter (fun key -> not (String.ends_with ~suffix:"_lane" key)) keys)));
+  let correct prefix key =
+    List.for_all
+      (fun words ->
+        List.for_all
+          (fun lane -> fst (run ("value_" ^ probe_name ~prefix key) words lane) = 1)
+          (lanes key))
+      draws
+  in
+  List.iter
+    (fun (label, prefix) ->
+      gated_all ~aggregation:`Environment ~when_ ~on:no_cxx
+        (label
+       ^ ": integer scalar, vector and lane results have the expected value and signedness before \
+          storage")
+        keys ~f:(correct prefix))
+    [ ("C", "c_"); ("Metal", "metal_") ];
+  gated_all ~aggregation:`Environment ~when_ ~on:no_cxx
+    "Metal: a signed-byte copy still passes the old byte comparison" probed
+    ~f:(agrees ~log:true ~prefix:"metalsigned_");
+  gated_exists ~aggregation:`Environment ~when_ ~on:no_cxx
+    "Metal: a signed-byte copy fails the integer result checks" keys ~f:(fun key ->
+      not (correct "metalsigned_" key))

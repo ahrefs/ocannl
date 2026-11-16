@@ -5631,6 +5631,7 @@
  (modules cuda_like_builtins_emulation)
  (deps ocannl_config)
  (libraries
+  integer_rng_probe
   arrayjit.context
   arrayjit.ir
   arrayjit.builtins_cuda
@@ -9079,6 +9080,7 @@
  (modules metal_builtins_emulation)
  (deps ocannl_config)
  (libraries
+  integer_rng_probe
   arrayjit.context
   arrayjit.ir
   arrayjit.builtins_metal
