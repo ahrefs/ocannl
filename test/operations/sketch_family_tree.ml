@@ -58,17 +58,7 @@ let cpu_limits =
 (* These small fragment-pricing fixtures need Grid geometries even below the launch floor. Isolate
    that economy gate only around them; floor eligibility is pinned against the renderer by
    [autotune_grid_record]. Restore it before the rest of the enumeration tests. *)
-let without_launch_floor f =
-  let saved = Hashtbl.find Utils.config_file_args "cc_grid_min_updates" in
-  Exn.protect
-    ~f:(fun () ->
-      Hashtbl.set Utils.config_file_args ~key:"cc_grid_min_updates" ~data:"0";
-      f ())
-    ~finally:(fun () ->
-      match saved with
-      | Some v -> Hashtbl.set Utils.config_file_args ~key:"cc_grid_min_updates" ~data:v
-      | None -> Hashtbl.remove Utils.config_file_args "cc_grid_min_updates")
-
+let without_launch_floor f = Scripted_search.with_settings [ ("cc_grid_min_updates", "0") ] f
 let f32 = Ir.Backend_intf.Mma_f32
 
 let gpu_plain_limits =

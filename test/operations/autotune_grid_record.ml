@@ -132,6 +132,9 @@ let pool_privatizing (g : Cs.grid_summary) =
 
 type judged = {
   j_params : Autotune.sketch_params;
+  j_dims : int * int * int;
+  j_bound : int;
+  j_padded : bool;
   j_proposed : bool;
   j_grid : Cs.grid_summary option;
 }
@@ -153,6 +156,7 @@ let judge_site ?rows ?depth ?(shape = `Hoisted) n =
   let lowering = Ll_test.captured_lowering ~name:(tag ^ "_probe") (Train.forward c) in
   let limits = Context.hardware_limits (Context.auto ()) in
   let _family, seeds = Autotune.family_seeding ~is_gpu:false ~is_cpu:true ~limits lowering in
+  let site = Option.value_exn (Autotune.detect_matmul lowering.Ir.Low_level.llc) in
   let packed_hoisted (sp : Autotune.sketch_params) =
     sp.sk_mma && sp.sk_bk > 0 && sp.sk_hoist && not sp.sk_pack_rest
   in
@@ -191,11 +195,22 @@ let judge_site ?rows ?depth ?(shape = `Hoisted) n =
               (Exn.to_string exn);
             None
       in
-      Stdio.eprintf "agr: %s %s %s: %s (not part of the golden)\n%!" tag
+      let bound = Autotune.cpu_mma_grid_updates_bound site sp ~cap:Int.max_value in
+      Stdio.eprintf "agr: %s %s %s (bound %d): %s (not part of the golden)\n%!" tag
         (if proposed then "proposed" else "refused")
-        label
+        label bound
         (Option.value_map grid ~default:"no record" ~f:Cs.grid_summary_string);
-      { j_params = sp; j_proposed = proposed; j_grid = grid })
+      let divides b e = b = 0 || e % b = 0 in
+      {
+        j_params = sp;
+        j_dims = (site.m_ni, site.m_nj, site.m_nk);
+        j_bound = bound;
+        j_padded =
+          not
+            (divides sp.sk_bm site.m_ni && divides sp.sk_bn site.m_nj && divides sp.sk_bk site.m_nk);
+        j_proposed = proposed;
+        j_grid = grid;
+      })
 
 let judged = lazy (List.concat_map [ 64; 128 ] ~f:(fun n -> judge_site n))
 
@@ -206,21 +221,17 @@ let site_below_floor g =
   | Some { Cs.site = Grid_serial (Grid_below_min_updates _); _ } -> true
   | _ -> false
 
-let floor_judged = lazy (judge_site ~shape:`Grid 64)
+let floor_sites () = judge_site ~shape:`Grid 64 @ judge_site ~rows:72 ~depth:64 ~shape:`Grid 32
+let floor_judged = lazy (floor_sites ())
 let whole_floor_judged = lazy (judge_site ~rows:32 ~depth:16 ~shape:`Whole 16)
 
 let floor_control =
   lazy
-    (let saved = Hashtbl.find Utils.config_file_args "cc_grid_min_updates" in
-     Exn.protect
-       ~f:(fun () ->
-         Hashtbl.set Utils.config_file_args ~key:"cc_grid_min_updates" ~data:"4096";
-         judge_site ~shape:`Grid 64 @ judge_site ~rows:32 ~depth:16 ~shape:`Whole 16)
-       ~finally:(fun () ->
-         match saved with
-         | Some v -> Hashtbl.set Utils.config_file_args ~key:"cc_grid_min_updates" ~data:v
-         | None -> Hashtbl.remove Utils.config_file_args "cc_grid_min_updates"))
+    (Scripted_search.with_settings
+       [ ("cc_grid_min_updates", "4096") ]
+       (fun () -> floor_sites () @ judge_site ~rows:32 ~depth:16 ~shape:`Whole 16))
 
+let same_geometry a b = Poly.equal a.j_dims b.j_dims && equal_params a.j_params b.j_params
 let grid_of j ~f = Option.exists j.j_grid ~f
 
 let () =
@@ -414,12 +425,43 @@ let () =
            ~f:(grid_of ~f:site_below_floor))
         ~f:(fun refused ->
           List.exists (Lazy.force floor_control) ~f:(fun j ->
-              equal_params j.j_params refused.j_params
-              && j.j_proposed
+              same_geometry j refused && j.j_proposed
               && grid_of j ~f:(fun g ->
                   match List.last g.Cs.loops with
                   | Some { Cs.site = Grid_pool _; _ } -> true
                   | _ -> false))));
+  in_leg ~leg "agr-seed: every floor-only refusal renders its site below the floor" (fun label ->
+      p_all label
+        (List.filter
+           (Lazy.force floor_judged @ Lazy.force whole_floor_judged)
+           ~f:(fun j ->
+             (not j.j_proposed)
+             && List.exists (Lazy.force floor_control) ~f:(fun control ->
+                 same_geometry j control && control.j_proposed)))
+        ~f:(grid_of ~f:site_below_floor));
+  in_leg ~leg "agr-seed: the seeding bound never undercounts a below-floor site's renderer count"
+    (fun label ->
+      p_all label
+        (List.filter
+           (Lazy.force floor_judged @ Lazy.force whole_floor_judged)
+           ~f:(grid_of ~f:site_below_floor))
+        ~f:(fun j ->
+          grid_of j ~f:(fun g ->
+              match List.last g.Cs.loops with
+              | Some { Cs.site = Grid_serial (Grid_below_min_updates { updates; _ }); _ } ->
+                  updates <= j.j_bound
+              | _ -> false)));
+  in_leg ~leg "agr-seed: unpadded below-floor estimates equal the renderer count" (fun label ->
+      p_all label
+        (List.filter
+           (Lazy.force floor_judged @ Lazy.force whole_floor_judged)
+           ~f:(fun j -> (not j.j_padded) && grid_of j ~f:site_below_floor))
+        ~f:(fun j ->
+          grid_of j ~f:(fun g ->
+              match List.last g.Cs.loops with
+              | Some { Cs.site = Grid_serial (Grid_below_min_updates { updates; _ }); _ } ->
+                  updates = j.j_bound
+              | _ -> false)));
   in_leg ~leg "agr-seed: no proposed whole-triple Grid seed renders its site serially for the floor"
     (fun label ->
       p_all label (Lazy.force whole_floor_judged) ~f:(fun j ->

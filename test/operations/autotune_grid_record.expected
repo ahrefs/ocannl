@@ -13,6 +13,9 @@ agr-grid: a padded geometry inside the cap is proposed and privatizes on the poo
 agr-seed: no proposed packed Grid seed renders its site serially for the floor: true
 agr-seed: the floor refuses a packed Grid geometry whose site renders below it: true
 agr-seed: lowering the floor keeps each below-floor geometry on the pool: true
+agr-seed: every floor-only refusal renders its site below the floor: true
+agr-seed: the seeding bound never undercounts a below-floor site's renderer count: true
+agr-seed: unpadded below-floor estimates equal the renderer count: true
 agr-seed: no proposed whole-triple Grid seed renders its site serially for the floor: true
 agr-seed: the floor refuses a whole-triple Grid geometry below it: true
 agr: the timing policy kept no timed seed out of the ranking: true

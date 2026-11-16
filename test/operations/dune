@@ -1347,7 +1347,14 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules autotune_grid_record)
- (libraries base ocannl stdio arrayjit.verdict ll_test fissioned_chain)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  fissioned_chain
+  scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -13094,7 +13101,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules sketch_family_tree)
- (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (libraries base ocannl stdio arrayjit.verdict ll_test scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
