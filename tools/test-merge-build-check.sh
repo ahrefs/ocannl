@@ -17,8 +17,10 @@
 # quoted or malformed record each refuses a cross-cutting, over-bound, incomplete or train-
 # reaching change before anything is built; a full record, a union of records and a waiver
 # admit; the base alone never prints the merge's refusal line; and `record` certifies only a
-# finished, clean, cc run of an allowlisted command, `prune` only merged heads. The
-# #compile-output leg alone uses real
+# finished, clean, cc run of an allowlisted command, `prune` only merged heads.
+# Structured train-name rows require a count matching distinct names and an alias the
+# tree has; legacy count-only output still asks affected and must agree exactly.
+# The #compile-output leg alone uses real
 # dune and Python in a minimal isolated project: the repository's actual capped-fixture rule
 # runs twice, then with a planted failing case. It compares bytes and rejects the exact unittest
 # timing line; tracebacks and FAILED must survive. It does not scan Dune or Python source text.
@@ -44,6 +46,10 @@ mkdir -p "$TMP/dunebin" "$TMP/opambin" "$TMP/emptyopam"
 # The tests tier's build is the one that names a width (-j); FAKE_TESTS_RC fails it alone.
 cat >"$TMP/dunebin/dune" <<'FAKE'
 #!/bin/sh
+if [ "$1 $2" = 'show aliases' ]; then
+  printf '%s\n' train-a train-b
+  exit 0
+fi
 printf '%s\n' "$*" >>"$FAKE_RECORD"
 sleep "${FAKE_TIER_DELAY:-0}"
 case " $* " in *' -j '*) exit "${FAKE_TESTS_RC:-${FAKE_DUNE_RC:-0}}" ;; esac
@@ -106,6 +112,9 @@ FAKE
 #!/bin/sh
 printf '%s\n' "$*" >>"$FAKE_RECORD.tiers"
 count() {
+  if [ -n "${FAKE_TRAIN_NAMES:-}" ]; then
+    while IFS= read -r alias; do printf 'test-run: prepush: train: %s\n' "$alias" >&2; done <"$FAKE_TRAIN_NAMES"
+  fi
   [ "${FAKE_TRAIN_N:-0}" = none ] ||
     printf 'test-run: prepush: 1 of the 7 alias(es) the change lists; left off: %s train- (the nightly CI run) and 0 slow-\n' "${FAKE_TRAIN_N:-0}" >&2
 }
@@ -512,7 +521,7 @@ build --root . -j 4 @a/runtest-first" ] && has "owed-run: admitted run of 'runte
 
 $good
 $(run_line "$APART_HEAD" 'build @test/training/train-a -j 1')"
-  OCANNL_TOOL_OWED_RUN_URL=$bad FAKE_TRAIN_N=4 FAKE_AFFECTED=$TMP/owed-affected FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
+  OCANNL_TOOL_OWED_RUN_URL=$bad FAKE_TRAIN_N=1 FAKE_AFFECTED=$TMP/owed-affected FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
   if [ "$rc" = 0 ] && [ "$(grep -c 'owed-run: admitted run' "$TMP/out")" = 2 ] && tiers | grep -qx "affected $(range_of)"; then
     report 0 'two records whose union covers the suite and the train- alias admit the change'
   else report 1 'two records whose union covers the suite and the train- alias admit the change' "exit $rc; $(tiers); $(cat "$TMP/out")"; fi
@@ -526,6 +535,32 @@ $(run_line "$APART_HEAD" 'build @test/training/train-a -j 1')"
      has 'prepush counted 1 train- alias(es) the change reaches, but tools/test-run.sh affected'; then
     report 0 'a train- count affected names no alias for fails the tier, never reading as none'
   else report 1 'a train- count affected names no alias for fails the tier, never reading as none' "exit $rc; $(cat "$TMP/out")"; fi
+  # Structured names avoid affected, but never silently discard a disagreement.
+  unread_refused() {
+    if [ "$rc" = 1 ] && [ "$(cat "$TMP/record")" = "$COMPILE" ] &&
+       has "tests tier FAILED ($2)" && ! has owed-run; then
+      report 0 "$1"
+    else report 1 "$1" "exit $rc; $(cat "$TMP/out")"; fi
+  }
+  printf '%s\n' '@test/training/train-a' >"$TMP/train-names"
+  OCANNL_TOOL_OWED_RUN_URL=$bad FAKE_LIST=$TMP/owed-list FAKE_TRAIN_N=1 FAKE_TRAIN_NAMES=$TMP/train-names FAKE_AFF_RC=2 run "$TMP/dunebin"
+  if [ "$rc" = 0 ] && ! tiers | grep -q '^affected ' && has "admitted run of 'build @test/training/train-a -j 1'"; then
+    report 0 'matching prepush train- names admit the recorded run without a third affected ask'
+  else report 1 'matching prepush train- names admit the recorded run without a third affected ask' "exit $rc; $(tiers); $(cat "$TMP/out")"; fi
+  OCANNL_TOOL_OWED_RUN_URL=$bad FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_RC=2 FAKE_TIER_VERDICT=cross-cutting FAKE_TRAIN_N=1 FAKE_TRAIN_NAMES=$TMP/train-names FAKE_AFF_RC=2 run "$TMP/dunebin"
+  if [ "$rc" = 0 ] && ! tiers | grep -q '^affected ' && [ "$(grep -c 'owed-run: admitted run' "$TMP/out")" = 2 ]; then
+    report 0 'a wide first tier also names its training reach without a third affected ask'
+  else report 1 'a wide first tier also names its training reach without a third affected ask' "exit $rc; $(tiers); $(cat "$TMP/out")"; fi
+  OCANNL_TOOL_OWED_RUN_URL=$bad FAKE_LIST=$TMP/owed-list FAKE_TRAIN_N=2 FAKE_TRAIN_NAMES=$TMP/train-names run "$TMP/dunebin"
+  unread_refused 'prepush train- names must match the count exactly' 'prepush train- names disagree with its count (2)'
+  OCANNL_TOOL_OWED_RUN_URL=$bad FAKE_LIST=$TMP/owed-list FAKE_TRAIN_N=none FAKE_TRAIN_NAMES=$TMP/train-names run "$TMP/dunebin"
+  unread_refused 'prepush train- names without a count fail closed' 'prepush train- names disagree with its count (missing)'
+  printf '%s\n' '@test/training/train-a' '@test/training/train-a' >"$TMP/train-duplicates"
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL FAKE_LIST=$TMP/owed-list FAKE_TRAIN_N=2 FAKE_TRAIN_NAMES=$TMP/train-duplicates run "$TMP/dunebin"
+  unread_refused 'duplicate train- names cannot satisfy the count' 'prepush train- names disagree with its count (2)'
+  printf '%s\n' '@test/training/train-absent' >"$TMP/train-absent"
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL FAKE_LIST=$TMP/owed-list FAKE_TRAIN_N=1 FAKE_TRAIN_NAMES=$TMP/train-absent run "$TMP/dunebin"
+  unread_refused 'a named train- alias absent from the tree refuses even with an @train record' 'prepush named a train- alias this tree does not have: @test/training/train-absent'
   # A transport that hangs: the read's bound ends it, and the record reads as unreadable.
   started=$SECONDS
   GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=protocol.ext.allow GIT_CONFIG_VALUE_0=always OCANNL_TOOL_OWED_RUN_FETCH_CAP=2 \

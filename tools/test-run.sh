@@ -82,7 +82,8 @@
 # combined with `--list`. No per-PR CI job runs either family: the nightly
 # run builds `@train`, and no CI job runs `@slow`. So the `slow-` members left
 # off are named on stderr, each on a `prepush: slow:` line, and the `train-`
-# ones counted, for the caller to run those the change exercises. `--list` prints the list instead (a valid --targets-file,
+# ones named on `prepush: train:` lines, for the caller to run those the
+# change exercises. `--list` prints the list instead (a valid --targets-file,
 # empty when nothing is left) and runs nothing: the form for a
 # fleet leg, whose runner is one plain command line, `... execution leg ...
 # --file LIST -- env OCANNL_BACKEND=B tools/test-run.sh run --expect-backend B
@@ -4382,13 +4383,6 @@ if [ "$sub" = prepush ]; then
     pp_full_all=$pp_all
     pp_query --referenced-only
   fi
-  if [ "$pp_cross" = 1 ] && [ "$pp_tier" = 1 ]; then
-    # Counts explain the refusal; only the validated verdict above decides it.
-    pp_counts=$(sed -n 's/^affected: CROSS-CUTTING: \([0-9][0-9]*\) of the \([0-9][0-9]*\) per-test aliases rank first.*/\1 of \2 aliases/p' "$pp_dir/affected.err")
-    die "prepush: the first tier is itself cross-cutting (${pp_counts:-counts above}); no local tier run applies: run the tests that exercise the change and the applicable full-list slow- aliases, plus a full dune runtest on a CPU-only box before the merge, all named in the PR body; then dune build @check (AGENTS.md, gh-ocannl-2160); nothing run"
-  fi
-  [ "$pp_cross" = 0 ] ||
-    die "prepush: this change is CROSS-CUTTING (above), so the pre-push run is not this list: a full-suite run on a CPU-only box before the merge owns it but its slow- aliases; run those and the tests that exercise the change, named in the PR body with that run, then dune build @check (AGENTS.md, gh-ocannl-1765); nothing run"
   pp_collect
   if [ "$pp_tier" = 1 ]; then
     # CI runs no slow alias, including those ranked link-only in the full list.
@@ -4405,7 +4399,15 @@ if [ "$sub" = prepush ]; then
     else
       printf '\n'
     fi
+    [ ${#pp_train[@]} -eq 0 ] || printf 'test-run: prepush: train: %s\n' "${pp_train[@]}"
   } >&2
+  if [ "$pp_cross" = 1 ] && [ "$pp_tier" = 1 ]; then
+    # Counts explain the refusal; only the validated verdict above decides it.
+    pp_counts=$(sed -n 's/^affected: CROSS-CUTTING: \([0-9][0-9]*\) of the \([0-9][0-9]*\) per-test aliases rank first.*/\1 of \2 aliases/p' "$pp_dir/affected.err")
+    die "prepush: the first tier is itself cross-cutting (${pp_counts:-counts above}); no local tier run applies: run the tests that exercise the change and the applicable full-list slow- aliases, plus a full dune runtest on a CPU-only box before the merge, all named in the PR body; then dune build @check (AGENTS.md, gh-ocannl-2160); nothing run"
+  fi
+  [ "$pp_cross" = 0 ] ||
+    die "prepush: this change is CROSS-CUTTING (above), so the pre-push run is not this list: a full-suite run on a CPU-only box before the merge owns it but its slow- aliases; run those and the tests that exercise the change, named in the PR body with that run, then dune build @check (AGENTS.md, gh-ocannl-1765); nothing run"
   if [ "$pp_print" = 1 ]; then
     [ ${#pp_keep[@]} -eq 0 ] || printf '%s\n' "${pp_keep[@]}"
     [ "$pp_incomplete" = 0 ] ||

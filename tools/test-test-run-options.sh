@@ -2795,6 +2795,7 @@ pp_want='build -j 2 @a/runtest-x @@runtest-root @a/runtest-slow-ish @train-dir/r
 pp_probe pp-run 0 --since base build -j 2
 { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "$pp_want" ] && [ "$pp_asked" = "--since base" ] &&
   grep -qF 'prepush: 4 of the 7 alias(es) affected --since base lists; left off: 1 train-' <<<"$argv_err" &&
+  grep -qxF 'test-run: prepush: train: @b/train-z' <<<"$argv_err" &&
   grep -qxF 'test-run: prepush: slow: @a/slow-y' <<<"$argv_err" &&
   grep -qxF 'test-run: prepush: slow: @test/training/slow-w' <<<"$argv_err" &&
   grep -qxF 'affected: 7 alias(es) from 2 changed path(s)' <<<"$argv_err" &&
@@ -2822,6 +2823,7 @@ pp_range_check() {
     [ "$(cat "$TMP/pp-range.affected.harnesses")" = '--harnesses old..new' ] &&
     [ "$argv_out" = "$(printf '%s\n' '@a/runtest-x' '@@runtest-root' '@a/runtest-slow-ish' '@train-dir/runtest-q')" ] &&
     [ -z "$argv_calls" ] &&
+    grep -qxF 'test-run: prepush: train: @b/train-z' <<<"$argv_err" &&
     grep -qF 'prepush: 4 of the 7 alias(es) affected old..new lists; left off: 1 train-' <<<"$argv_err" &&
     grep -qxF 'test-run: prepush: harness: tools/test-x.sh' <<<"$argv_err" &&
     ! grep -qF -- ' --affected --since ' <<<"$argv_err" &&
@@ -2857,6 +2859,7 @@ pp_tier_check() {
     pp_probe "pp-tier-$mode" 0 --referenced-only --since base ${opts[@]+"${opts[@]}"}
     { [ "$argv_rc" = 0 ] && [ "$pp_asked" = $'--since base\n--referenced-only --since base' ] &&
       grep -qF 'FIRST TIER ONLY (--referenced-only)' <<<"$argv_err" &&
+      grep -qxF 'test-run: prepush: train: @b/train-z' <<<"$argv_err" &&
       grep -qxF 'test-run: prepush: slow: @a/slow-y' <<<"$argv_err" &&
       grep -qxF 'test-run: prepush: slow: @link/slow-only' <<<"$argv_err" &&
       grep -qF 'and 3 slow-' <<<"$argv_err" &&
@@ -3086,6 +3089,10 @@ for probe in "cc|$pp_out|$pp_cc_err|--since base|2|is CROSS-CUTTING" \
   { [ "$argv_rc" = "$want_rc" ] && [ -z "$argv_calls" ] && [ -z "$argv_out" ] && grep -qF -- "$want" <<<"$argv_err" &&
     [ -z "$(pp_left)" ]; } ||
     pp_detail="$tag: exit $argv_rc (want $want_rc); dune calls: ${argv_calls:-<none>}; out: $argv_out; stderr: $argv_err"
+  case $tag in cc*)
+    grep -qxF 'test-run: prepush: train: @b/train-z' <<<"$argv_err" ||
+      pp_detail="$tag: missing train name before cross-cutting refusal; $argv_err" ;;
+  esac
   case $tag in cc-tier*)
     for route in 'tests that exercise the change' 'applicable full-list slow- aliases' 'full dune runtest on a CPU-only box' 'all named in the PR body' 'then dune build @check'; do
       grep -qF "$route" <<<"$argv_err" || pp_detail="$tag: missing recovery route: $route; $argv_err"

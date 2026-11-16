@@ -35,10 +35,14 @@
 #            The `train-` aliases the change reaches (prepush leaves them off its list) never
 #            run here: they serialize on the training lock, and a cross-cutting change reaches
 #            most of them, past the bound. They are OWED too, whatever the list's answer.
-#            prepush counts them on stderr; a count of 0 asks nothing more, any other count (or
-#            none read) asks `tools/test-run.sh affected MERGE_BASE..HEAD_SIDE` for their names
-#            (the range positional, as prepush passes it; exit 0 with verdict ok or
-#            cross-cutting, or the tier fails).
+#            prepush names them on anchored `test-run: prepush: train: ALIAS` stderr lines.
+#            Only canonical @DIR/train-NAME operands are read; each must exist in Dune's
+#            alias listing, be distinct, and agree with the printed count, else the tier fails.
+#            With no names, a nonzero or missing count asks the legacy `affected
+#            MERGE_BASE..HEAD_SIDE` route for older base-side tools.
+#            A count must match that answer too. Other diagnostic text is not a name.
+#            The base-alone comparison can run the base's older prepush, so this compatibility
+#            route remains necessary; the merged tree itself uses one version of both scripts.
 #   OWED RECORD  what is OWED must be recorded for the PR's head, or the tier FAILS before it
 #            builds anything: `tools/owed-run.sh check HEAD_SIDE NEED...`, NEED `runtest` for
 #            an OWED list, `train` for an INCOMPLETE one, and each `train-` alias reached. The
@@ -319,11 +323,48 @@ owed_needs() {
     train_why='a changed path is UNMAPPED, so what it reaches of the train- aliases is unknown: every one of them is'
     return
   fi
-  # prepush counts the `train-` members it leaves off (the first tier's ask counts the default
-  # list's); a count of 0 needs no record, any other count or none read asks affected for them.
+  # Read only the anchored train-name lines and the existing count trailer. Names
+  # require a count, exact cardinality, distinct canonical @DIR/train-NAME operands
+  # and aliases Dune lists in this tree. Other diagnostics are not parsed as names.
+  # With no names, retain the legacy affected ask: the base-alone comparison can
+  # run an older prepush. New prepush reports names even before a wide-tier refusal.
   f=$tests_dir/ask
   [ ! -f "$tests_dir/ask-first" ] || f=$tests_dir/ask-first
   counted=$(sed -n -E 's/.*left off: ([0-9]+) train-.*/\1/p' "$f" | tail -n 1)
+  sed -n 's/^test-run: prepush: train: //p' "$f" >"$tests_dir/train-names"
+  if [ -s "$tests_dir/train-names" ]; then
+    n=$(grep -c . "$tests_dir/train-names")
+    if [ -z "$counted" ] || [ "$n" != "$counted" ] ||
+       [ "$(sort -u "$tests_dir/train-names" | grep -c .)" != "$n" ]; then
+      tests=unread tests_why="prepush train- names disagree with its count (${counted:-missing})"
+      return
+    fi
+    local dir last_dir= name
+    while IFS= read -r line; do
+      case $line in
+        *[!a-zA-Z0-9_@./-]* | *..* | *//* | @/* | *@*@* | '')
+          tests=unread tests_why="prepush printed an invalid train- alias: $line"; return ;;
+        @?*/train-?*) ;;
+        *) tests=unread tests_why="prepush printed an invalid train- alias: $line"; return ;;
+      esac
+      dir=${line%/*} dir=${dir#@} name=${line##*/}
+      case $name in train-?*) ;; *)
+        tests=unread tests_why="prepush printed an invalid train- alias: $line"; return ;;
+      esac
+      if [ "$dir" != "$last_dir" ]; then
+        if ! dune show aliases "$dir" >"$tests_dir/train-aliases" 2>&1 </dev/null; then
+          tests=unread tests_why="Dune could not list prepush's train- aliases in $dir"; return
+        fi
+        last_dir=$dir
+      fi
+      if ! grep -qxF "$name" "$tests_dir/train-aliases"; then
+        tests=unread tests_why="prepush named a train- alias this tree does not have: $line"; return
+      fi
+      needs+=("$line")
+    done <"$tests_dir/train-names"
+    train_why='the change reaches train- aliases, which this build does not run'
+    return
+  fi
   [ "$counted" != 0 ] || return 0
   "${BASH:-bash}" "$root/tools/test-run.sh" affected "$mb..$head" \
     >"$tests_dir/affected" 2>"$tests_dir/train-ask" </dev/null || rc=$?
@@ -341,10 +382,10 @@ owed_needs() {
       @*/train-?*) needs+=("$line") n=$((n + 1)) ;;
     esac
   done <"$tests_dir/affected"
-  # prepush counted some, affected named none: the two answers disagree, and nothing here
-  # guesses which is right. (With no count read, none named is the answer.)
-  if [ "$n" = 0 ] && [ -n "$counted" ]; then
-    tests=unread tests_why="prepush counted $counted train- alias(es) the change reaches, but tools/test-run.sh affected ${mb:0:8}..${head:0:8} named none"
+  # A legacy count must agree exactly with affected; nothing guesses which is right.
+  # With no count read, none named is the answer.
+  if [ -n "$counted" ] && [ "$n" != "$counted" ]; then
+    tests=unread tests_why="prepush counted $counted train- alias(es) the change reaches, but tools/test-run.sh affected ${mb:0:8}..${head:0:8} named $n"
     return
   fi
   # No count: a merge that adds a training test reaches one alias more than its base alone.

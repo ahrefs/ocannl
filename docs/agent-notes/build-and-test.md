@@ -5227,6 +5227,16 @@ the change reaches (they serialize on the training lock and never fit the 1800 s
 2026-11-13 the per-PR matrix ran that suite; from then until this landed a cross-cutting change
 merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundary; in brief:
 
+- **Training reach.** `prepush` prints each omitted training alias on stderr as
+  `test-run: prepush: train: ALIAS`, beside the `slow:` lines, including `--list`
+  and before a CROSS-CUTTING refusal (first-tier names are the full list's). The merge build reads
+  those anchored lines and the count together: names must be distinct canonical
+  `@DIR/train-NAME` operands, exist in Dune's alias listing, and match the count.
+  A disagreement, or names without a count, fails before reading the record.
+  With no names and a nonzero or unread count it retains the older `affected`
+  query and checks any count against that answer. This matters for ship-pr's
+  base-alone comparison, which runs the base's older tools. The ordinary merged
+  tree runs both tools from one revision, so matching names avoid that query.
 - **Where.** The ref `refs/owed-runs/<head sha>` on the PR repository (`OWED_RUN_URL` in the
   script; `OCANNL_TOOL_OWED_RUN_URL` overrides it for the harness and a fork). Its commit has the
   head as its only parent and the head's tree, and its message holds one `owed-run: v1 ...` line
