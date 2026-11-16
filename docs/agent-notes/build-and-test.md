@@ -3722,7 +3722,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   them: 184 aliases for a docs edit. A `dune` file edit is compared across revisions in an OLD
   probe (that file at the old revision): the rules of its directory's targets that differ, twins
   included, plus the library/executables/tests stanzas whose canonical form changed (flags live in
-  object rules not asked), by literal names dune lists; a changed form of another kind (`env`,
+  object rules not asked), by literal names dune lists. For compared files, literal test
+  module lists (or default test names) on either side supply the module ownership missing
+  from Dune's workspace description (gh-ocannl-2160). A new preprocessed test therefore
+  reaches its own aliases; a module added to an existing test reaches that whole stanza.
+  Nonliteral module sets stay unknown, and unexplained rules keep the directory fallback;
+  a changed form of another kind (`env`,
   `subdir`, `include`, ...), a renamed module the old file cannot describe, or `--files` (no
   revision) keeps the whole directory, and says why. A hand parser of `(deps)` and stanzas
   (staging#1336) did not converge in review: five rounds of missed forms, each an under-reach; the

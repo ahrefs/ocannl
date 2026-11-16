@@ -3068,8 +3068,9 @@ done
 pp_cc_err=$TMP/prepush-affected-cc.err
 printf '%s\n' 'affected: CROSS-CUTTING: 9 of the 10 per-test aliases rank first' 'affected: verdict=cross-cutting' >"$pp_cc_err"
 for probe in "cc|$pp_out|$pp_cc_err|--since base|2|is CROSS-CUTTING" \
-             "cc-tier|$pp_out|$pp_cc_err|--since base --referenced-only|2|is CROSS-CUTTING" \
-             "cc-tier-start|$pp_out|$pp_cc_err|--since base --referenced-only --start|2|is CROSS-CUTTING" \
+             "cc-tier|$pp_out|$pp_cc_err|--since base --referenced-only|2|the first tier is itself cross-cutting (9 of 10 aliases); no local tier run applies" \
+             "cc-tier-start|$pp_out|$pp_cc_err|--since base --referenced-only --start|2|the first tier is itself cross-cutting (9 of 10 aliases); no local tier run applies" \
+             "cc-tier-list|$pp_out|$pp_cc_err|--since base --referenced-only --list|2|the first tier is itself cross-cutting (9 of 10 aliases); no local tier run applies" \
              "cc-list|$pp_out|$pp_cc_err|--since base --list|2|is CROSS-CUTTING" \
              "aggregate|$TMP/prepush-aggregate.out|$pp_err|--since base|2|no per-test alias of runtest, slow or train: '@x/scans'" \
              "spaced|$TMP/prepush-spaced.out|$pp_err|--since base --list|2|no per-test alias of runtest, slow or train: '@x/runtest-a @x/runtest-b'" \
@@ -3085,8 +3086,22 @@ for probe in "cc|$pp_out|$pp_cc_err|--since base|2|is CROSS-CUTTING" \
   { [ "$argv_rc" = "$want_rc" ] && [ -z "$argv_calls" ] && [ -z "$argv_out" ] && grep -qF -- "$want" <<<"$argv_err" &&
     [ -z "$(pp_left)" ]; } ||
     pp_detail="$tag: exit $argv_rc (want $want_rc); dune calls: ${argv_calls:-<none>}; out: $argv_out; stderr: $argv_err"
+  case $tag in cc-tier*)
+    for route in 'tests that exercise the change' 'applicable full-list slow- aliases' 'full dune runtest on a CPU-only box' 'all named in the PR body' 'then dune build @check'; do
+      grep -qF "$route" <<<"$argv_err" || pp_detail="$tag: missing recovery route: $route; $argv_err"
+    done ;;
+  esac
 done
 if [ -z "$pp_detail" ]; then report 0 "$pp_refuse_label"; else report 1 "$pp_refuse_label" "$pp_detail"; fi
+# Negative control: undo only the dedicated first-tier refusal.
+perl -pe 's/if \[ "\$pp_cross" = 1 \] && \[ "\$pp_tier" = 1 \]; then/if false; then/' "$SRC" >"$repeat_root/tools/test-run.sh"
+PP_AFFECTED_OUT=$pp_out PP_AFFECTED_ERR=$pp_cc_err TMPDIR=$pp_tmp \
+  argv_probe pp-wide-control prepush --since base --referenced-only
+if [ "$argv_rc" = 2 ] && grep -qF 'this change is CROSS-CUTTING' <<<"$argv_err" &&
+   ! grep -qF 'the first tier is itself cross-cutting (9 of 10 aliases)' <<<"$argv_err"; then
+  report 0 'prepush wide first tier: reverting its message loses the oracle'
+else report 1 'prepush wide first tier: reverting its message loses the oracle' "$argv_err"; fi
+cp "$SRC" "$repeat_root/tools/test-run.sh"
 
 # The verdict is the trailer (gh-ocannl-1921): `STDERR LINES ('~' between
 # them)|affected's exit|prepush's exit|what its stderr says`, exit 0 a run of

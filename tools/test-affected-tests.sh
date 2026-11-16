@@ -1760,6 +1760,26 @@ if harness_leg 'probe dune edits'; then
   # shellcheck disable=SC2086
   expect 'without the probe, one new test stanza lists its whole directory' 0 $p3_all @p3/runtest-pc $p3_scan
   probe_leg 'with the probe, one new test stanza lists that test and the scan reading the dune file' "@p3/runtest-pc $p3_scan"
+  # Preprocessed tests are omitted by `dune describe workspace`; their
+  # generated rules must still have the owner declared by the compared forms.
+  printf '(test (name pc) (modules pc) (preprocess (action (cat %%{input-file}))))\n' >>"$repo/p3/dune"
+  printf 'let unused = ()\n' >"$repo/p3/pc.ml"
+  printf 'val unused : unit\n' >"$repo/p3/pc.mli"
+  affected HEAD
+  expect 'a new preprocessed test reaches only its alias and the dune reader' 0 @p3/runtest-pc "$p3_scan"
+  control 'literal test module ownership is what scopes new preprocessing rules' \
+    'my $mods = dfield($x->[0], "modules") // $r->{names};' 'my $mods = [];' \
+    HEAD -- @p3/runtest-pc "$p3_scan"
+  probe_restore
+  probe_edit 's/\(modules pa\)/(modules pa extra) (preprocess (action (cat %{input-file})))/' && {
+    printf 'let unused = ()\n' >"$repo/p3/extra.ml"
+    affected HEAD
+    expect 'a new module in an existing preprocessed test still reaches its owner and dune reader' 0 @p3/runtest-pa "$p3_scan"
+    probe_restore
+  }
+  # A preprocessing-looking rule with no declared owner keeps the fail-safe.
+  printf '(rule (target stray.pp.ml) (action (with-stdout-to %%{target} (echo x))))\n' >>"$repo/p3/dune"
+  probe_leg 'an ownerless preprocessing rule keeps the whole directory' "$p3_all $p3_scan"
   probe_edit 's/\(echo a\)\)\)/(echo b)))/' &&
     probe_leg 'an action-only edit lists the alias whose action it is' "@p3/runtest-act3 $p3_scan"
   probe_edit 's/\(echo m\)/(echo n)/' &&
@@ -1832,6 +1852,11 @@ if harness_leg 'probe library split'; then
   split_to() { # BIG-EXTRA: rewrite p7/dune with moved split out, BIG-EXTRA added to big's fields
     printf '(library (name big) (modules big) (libraries small)%s)\n(library (name small) (modules moved))\n' "$1" >"$repo/p7/dune"
   }
+  printf '(library (name big) (modules big moved added))\n' >"$repo/p7/dune"
+  printf 'let h () = ()\n' >"$repo/p7/added.ml"
+  affected HEAD
+  expect 'a module added to an existing library keeps all its linking dependents' 0 @p7/t/runtest-p7a @p7/t/runtest-p7b @p7/t/runtest-p7c
+  git_q clean -qf -- p7/added.ml
   split_to ''
   affected --referenced-only HEAD
   expect 'a library split in a dune file alone ranks first what names a module of either library' 0 @p7/t/runtest-p7a @p7/t/runtest-p7b

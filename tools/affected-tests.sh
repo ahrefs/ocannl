@@ -134,6 +134,10 @@
 #     the old revision. Both answer `dune show aliases`/`targets` and `dune
 #     rules` for every target of its directory, and their forms (dune's
 #     canonical text) are compared too.
+#     For these compared files, tests' literal `modules` lists (or their
+#     default names) on either side also own preprocessed rules and changed
+#     sources. Ordered sets and other nonliteral module forms keep the unknown
+#     owner fallback; an unexplained rule still reaches the whole directory.
 #
 # Boundary, as an allowlist. Whatever it does not cover is reported on stderr,
 # never silently dropped. THE CONVERTER IS A STRICT ALLOWLIST: it reads dune's
@@ -1795,6 +1799,27 @@ if (@scoped) {
       push @{$forms{$side}{$file}}, { dir => $d, head => $head, names => [grep { $_ ne "" } split /,/, $names],
                                       action => $act, vouched => $vouched, canon => $canon,
                                       attached => [grep { $_ ne "" } split /,/, $attached] };
+    }
+  }
+  # Dune omits tests' modules from its workspace description. For compared
+  # dune files only, literal module lists (or the default test names) on either
+  # side supply their owners. Unsupported ordered sets stay unknown. This maps
+  # new .pp.ml/.pp.mli rules without excusing genuinely ownerless rules, and
+  # keeps a module added to an existing test attached to that whole stanza.
+  for my $side ("new", "old") {
+    for my $file (sort keys %{$forms{$side} // {}}) {
+      for my $r (grep { $_->{vouched} && $_->{head} =~ /^(?:test|tests)$/ } @{$forms{$side}{$file}}) {
+        my $x = eval { parse_dune($r->{canon}, "a form of $file") };
+        next unless $x && @$x == 1 && ref $x->[0];
+        my $mods = dfield($x->[0], "modules") // $r->{names};
+        next if grep { ref $_ || !/^[A-Za-z][A-Za-z0-9_']*$/ } @$mods;
+        my @ix = grep { $st[$_]{kind} eq "tests" && $st[$_]{dir} eq $r->{dir}
+                        && join("\0", sort @{$st[$_]{names}}) eq join("\0", sort @{$r->{names}}) } 0 .. $#st;
+        for my $m (@$mods) {
+          my $k = "$r->{dir}\0" . ucfirst $m;
+          for my $i (@ix) { push @{$by_modkey{$k}}, $i unless grep { $_ == $i } @{$by_modkey{$k} // []} }
+        }
+      }
     }
   }
   # The `(alias)` stanzas of this side, by directory and name: what an alias a
