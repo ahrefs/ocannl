@@ -61,6 +61,14 @@ files.
   `st=[1]`, `p=[1;4;1]`, `y=[1]`, `q=z=[3;4;5]`. The added scalar witness (`st=[]`, `p=[1;5]`) is
   also valid, but it is not what the closing policy picks: it would need p's middle to skip its
   use-site close.
+- Deferral audit (gh-ocannl-2210): no two closed rows reach `solve_row_ineq`'s final
+  wildcard. The earlier closed-result rank check refuses a longer operand immediately
+  ("Too many axes in an operand"); all other closed pairs take the flat-pairing arm.
+  `test/einsum/test_row_self_reference.ml` pins every marker split of ranks 1 and 2 at
+  Stage1 and Stage7. The equal-variable surplus/shifted arms, leading-result-surplus
+  guard and open-result/closed-operand arm each require an open row. The stage-6 close
+  and rank-expansion template also re-emit the inequality, alongside an equation that
+  makes progress, and each requires an open row. No closing policy or error timing changed.
 - `Row.Concat` dimensions (block tensors, `^` in specs) are solved as ARITHMETIC SUMS, not
   structural lists: equality lives in `unify_dim` (single-component unwrap, `Concat=Dim`
   subtraction, cancel-common residuals, nested-`Concat` flattening), and the equal-arity
