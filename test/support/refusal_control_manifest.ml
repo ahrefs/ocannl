@@ -19,6 +19,13 @@ let raw_entries =
     ( "unused_compiler_deps.ml",
       [
         "[scanner-refusal:1262ba0367f56ab63b0ef45185bb1257] control stanza must";
+        "[scanner-refusal:1c8850699d8f9fec6290b9542a410741] an unreadable archive";
+        "[scanner-refusal:e25a1cf286ceb521ee4eb7746aad5229] archive tool producing";
+        "[scanner-refusal:ff2924c3a9869dd3bc7f7d72acd8ead1] malformed archive interface";
+        "[scanner-refusal:f684c2c391ba5d7246a2468a4d4584ca] failed archive query";
+        "[scanner-refusal:38b0123ae5353ab2b03e006a018d2bc6] shared local library";
+        "[scanner-refusal:8321fb2ab306d6d7f47b17136d308f5d] unique dependency-minimal archive";
+        "[scanner-refusal:9444a57b2ad4731e29ce408670e73e59] cyclic interface-only owners";
         "[scanner-refusal:ffa4bc91bdd9e0c6519d47ab6e078f3c] csexp reader refuses";
         "[scanner-refusal:b2e2da4cfdb3763209d5bb0bf037f3eb] description that is";
         "[scanner-refusal:cb9d50292bf8e1411a78fe56d95365d7] description entry of";
@@ -43,7 +50,7 @@ let raw_entries =
         "[scanner-refusal:7398f68cb579d4b59ac9ce927f234276] object directory holding";
         "[scanner-refusal:b1784c07fa1dac619848cd1b4a9d64f0] object directory holding";
         "[scanner-refusal:69ce705759093b5f97c6cc8e0413a500] description dune refuses";
-        "[scanner-refusal:100499646d6d4d69e702399dce61b260] unused_compiler_deps";
+        "[scanner-refusal:351ce2a461cb37393c61069ee2649d96] unused_compiler_deps";
         "[scanner-refusal:36778054d93aa08eac389989017aed7a] DUNE_SOURCEROOT";
         "[scanner-refusal:22c08112ff7b660af6dab49542313b14] compiler-libs.common";
         "[scanner-refusal:5c6002f7f040eddc8696d03b9a9bb9e2] the workspace description";
@@ -1181,7 +1188,7 @@ let raw_catalogue_only : (string * string) list =
   [
     ( "unused_compiler_deps.ml:1262ba0367f56ab63b0ef45185bb1257",
       "a defect in the check's own synthetic control text, not a malformed tree" );
-    ( "unused_compiler_deps.ml:100499646d6d4d69e702399dce61b260",
+    ( "unused_compiler_deps.ml:351ce2a461cb37393c61069ee2649d96",
       "decided by the argument vector its own dune rule writes" );
     ( "unused_compiler_deps.ml:36778054d93aa08eac389989017aed7a",
       "decided by dune, which sets DUNE_SOURCEROOT for every action; unset only outside the rule" );

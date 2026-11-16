@@ -101,12 +101,34 @@
  (libraries
   (re_export test_scan)))
 
-; A pinned gap: declared `compiler-libs.toplevel`, used only through `Location`, which the
-; `+compiler-libs` directory it shares with `compiler-libs.common` credits to both. Expected
-; unreported until units are owned by archive rather than by directory.
+; Location belongs to common's archive, so it cannot earn a toplevel declaration.
 
 (library
  (name ucd_gap_shared_directory)
  (package neural_nets_lib)
  (modules ucd_gap_shared_directory)
+ (libraries compiler-libs.toplevel))
+
+; A true toplevel use in the same shared directory still earns the declaration.
+
+(library
+ (name ucd_pass_toplevel)
+ (package neural_nets_lib)
+ (modules ucd_pass_toplevel)
+ (libraries compiler-libs.toplevel))
+
+; Interface-only compiler units have no implementation entry in the byte archive.
+
+(library
+ (name ucd_pass_interface_unit)
+ (package neural_nets_lib)
+ (modules ucd_pass_interface_unit)
+ (libraries compiler-libs.common))
+
+; Imported type-only interfaces must not credit a dependent archive.
+
+(library
+ (name ucd_flag_interface_unit_toplevel)
+ (package neural_nets_lib)
+ (modules ucd_flag_interface_unit_toplevel)
  (libraries compiler-libs.toplevel))

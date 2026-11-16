@@ -140,6 +140,7 @@
    (>= 5.3.0))
   dune
   dune-site
+  (ocamlfind :with-test)
   (base
    (>= v0.17.0))
   ; The same development tooling as arrayjit above, same pin, same filter.

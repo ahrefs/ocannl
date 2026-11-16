@@ -2595,9 +2595,23 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   modules references. Use is read from the typed trees of the stanza's `.cmt`/`.cmti` files
   (`test/support/cmt_references.ml`), so a ppx-generated, generated-module or `select`-chosen
   reference counts and a reference that only another library's interface loads does not: a direct
-  `ppxlib` beside a used `test_scan` is reported. A library owns the units of its `include_dirs`,
-  so libraries sharing one directory credit each other: an unused `compiler-libs.toplevel` beside a
-  `Location` use goes unreported (fixture `ucd_gap_shared_directory` pins the gap). `ll_test` is
+  `ppxlib` beside a used `test_scan` is reported. A library with its own include directory owns its
+  `.cmi` units. A compiler-reaching library
+  sharing a directory is owned by its byte archives instead (gh-ocannl-2248): dune-resolved
+  `ocamlfind` supplies the archive paths and dune-resolved `ocamlobjinfo` supplies their defined
+  units. A shared-directory interface-only `.cmi` has no archive definition: its candidates are
+  archives importing its interface, with consumers removed through the dependency graph. Exactly
+  one dependency-minimal candidate must remain; ambiguous or absent candidates refuse when the
+  unit is referenced. This preserves `Parsetree` under common without crediting toplevel for its
+  imports. Definitions always take precedence over imported interfaces. This interface-only
+  heuristic can produce a false unused-dependency finding when only a consumer imports a unit
+  belonging to another library.
+  An archive-less package owns no units; a failed query or
+  unreadable archive refuses without falling back to directory ownership. Shared local libraries
+  refuse because findlib cannot resolve their archives and `@check` does not build them.
+  `ucd_gap_shared_directory` now reports an unused `compiler-libs.toplevel` beside `Location`;
+  `ucd_pass_toplevel` and `ucd_pass_public_unwrapped` pin used toplevel/common declarations;
+  `ucd_pass_interface_unit` and `ucd_flag_interface_unit_toplevel` pin interface-only ownership. `ll_test` is
   covered by it like every stanza;
   it stays outside `test_utils_linkage`'s probe, since it links `ocannl`, so a USED
   compiler-reaching dependency added there is not refused by either check. A library declared
