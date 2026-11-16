@@ -6231,6 +6231,16 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
 
 ### Sweep units and verdicts
 
+- Floor/native-PTX runtime-refusal signatures have one owner, `tools/environment-refusals.sh`
+  (gh-ocannl-2219). It reads only its allowlisted uncaught exceptions/statuses and named runtime
+  assertion; the floor still combines that with its collected kernel window and serial recovery.
+  The native diagnostic instead returns exit 2, `unavailable: runtime refusal`, naming the matched
+  signature and leaving the target unjudged. It does not claim the environment caused every other
+  failure in the batch: rerun affected stanzas at `-j 1` in `_build-native-ptx` before attributing
+  them. Keeping orchestration in the floor avoids a second recovery mechanism in this diagnostic.
+  Illegal-address and launch-resource errors remain target red, as do ordinary test failures.
+
+
 - A `git fetch` under git 2.55 (CI's ubuntu-latest, mac-studio; not the fleet's 2.53) starts a
   detached `git maintenance run --auto` whose worktree-prune task runs whenever a stale worktree
   entry exists, and a prune beside a `git worktree add` deletes the entry the add has created and

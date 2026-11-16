@@ -162,8 +162,6 @@ let observe ?(scheduled = false) ~name ~mint ~rev make =
   in
   let lowered = List.hd_exn !captured in
   let linked = Context.link_delta pre_compile lowered routine.segments in
-  let ctx = Context.run ctx routine in
-  let loss_value = (Context.get_values ctx loss.Tensor.value).(0) in
   let source = if List.length routine.segments > 1 then name ^ "__seg" else name in
   let nodes = Hashtbl.keys lowered.LL.traced_store in
   let fresh =
@@ -179,7 +177,8 @@ let observe ?(scheduled = false) ~name ~mint ~rev make =
               (Tn.debug_memory_mode (Tn.Placements.get (Context.placements ctx) tn)))
         |> List.sort ~compare:String.compare;
       digests = List.map routine.segments ~f:(fun seg -> SC.digest (SC.canonicalize seg));
-      loss_value;
+      loss_value = 0.;
+      (* Filled after snapshotting the compile's metadata below. *)
       order = List.map (params @ List.map roles ~f:snd) ~f:rank;
       hash_order = List.map nodes ~f:label;
       param_labels = List.map params ~f:label;
@@ -194,6 +193,23 @@ let observe ?(scheduled = false) ~name ~mint ~rev make =
       liveness_planned = linked.Context.ld_liveness_planned;
     }
   in
+  (* The unscheduled compile pins source, placements and allocator layout, all snapshotted above.
+     Its loss is just a nonzero/program-change control, supplied by a default-scheduled execution on
+     GPU: launching the capture itself pins a multi-GB local-memory reservation. CPU retains the
+     original raw execution; the explicitly scheduled arms execute as compiled. *)
+  let loss_value =
+    if scheduled || not (Ir.Backend_intf.binds_hardware_grid (Context.backend_facts ctx)) then
+      (Context.get_values (Context.run ctx routine) loss.Tensor.value).(0)
+    else
+      let values_ctx, values_routine =
+        Context.compile ~name:(name ^ "_values") pre_compile step IDX.empty
+      in
+      let values_ctx = Context.run values_ctx values_routine in
+      let value = (Context.get_values values_ctx loss.Tensor.value).(0) in
+      Context.release values_ctx;
+      value
+  in
+  let outcome = { outcome with loss_value } in
   eprintf
     "%s mint %d rev %b (not part of the golden): %d segment(s), %d store nodes, %d params, loss \
      %.9g, creation ranks %s, scored %s, linked %s\n\

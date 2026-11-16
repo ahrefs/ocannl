@@ -128,7 +128,8 @@ let forward ?mask_fill ?dead ?(layers = 1) ?(d_k = 8) ?(prefix = 0) ~on ~block ~
         Context.compile ~name:"osb_forward"
           ~lowered_transform:(fun o ->
             captured := Some o;
-            [ o ])
+            Ir.Schedule.maybe_default_schedules ~facts:(Context.backend_facts ctx)
+              ~limits:(Context.hardware_limits ctx) ~static_indices:[] o)
           ctx t.Tensor.forward Ir.Indexing.Empty
       in
       let ctx = Context.run ctx routine in
@@ -704,7 +705,8 @@ let training ?mask_fill ?(prefix = 2) ~seq ~d_k ~on ~block ~bwd () =
         Context.compile
           ~lowered_transform:(fun o ->
             captured := Some o;
-            [ o ])
+            Ir.Schedule.maybe_default_schedules ~facts:(Context.backend_facts ctx)
+              ~limits:(Context.hardware_limits ctx) ~static_indices:[] o)
           ctx update Ir.Indexing.Empty
       in
       let ctx = Context.run ctx routine in

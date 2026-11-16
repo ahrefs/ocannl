@@ -189,7 +189,7 @@ let oracle s ~stride =
    tens of candidates. It returns the readback with the routine's mma census ([Context.routine.mma],
    gh-ocannl-1283): how its [Tile_mma] statements actually rendered, which a tensorized seed's
    values cannot tell (see {!leg}). *)
-let run_with name s ~lowered_transform =
+let run_with ?(should_run = fun () -> true) name s ~lowered_transform =
   let _, y = make s name in
   let init = init_params (Context.auto ()) s y in
   let ctx, routine =
@@ -198,13 +198,18 @@ let run_with name s ~lowered_transform =
   (* Run twice (the forward is idempotent): fresh buffers are already zero, so a seed's zero
      companion or zero segment that misses cells shows only over the first run's sums
      (gh-ocannl-1625). *)
-  let ctx = Context.run (Context.run ctx routine) routine in
-  let got = Context.get_values ctx y.Tensor.value in
+  let ctx, got =
+    if should_run () then
+      let ctx = Context.run (Context.run ctx routine) routine in
+      (ctx, Some (Context.get_values ctx y.Tensor.value, routine.Context.mma))
+    else (ctx, None)
+  in
   Context.release ctx;
   Context.release init;
-  (got, routine.Context.mma)
+  got
 
-let run_plain name s = fst (run_with name s ~lowered_transform:(fun opt -> [ opt ]))
+let run_plain name s =
+  fst (Option.value_exn (run_with name s ~lowered_transform:(fun opt -> [ opt ])))
 
 (* The tuner's per-segment flavor, mirrored ([Autotune.tune]'s [enum_fiss_entries] and its
    [F_sketch] candidates): the routine is fissioned with the default preset and the pipeline's own
@@ -253,12 +258,16 @@ let segment_seeds ?target ~seeds_of ~arity_cuts (opt : LL.optimized) =
    raises a typed [Schedule_outcome.Cause_at] while scheduling, and the tuner declines that
    candidate — skips it, never times it. The cause is caught inside the transform because
    [Context.compile] turns it back into a plain exception at its boundary; the declined candidate is
-   reported on stderr and yields [None] (its compile falls back to the unscheduled form, which is
-   not looked at). Any other exception stays fatal. *)
+   reported on stderr and yields [None]. Its fallback compile is retained, but never launched: those
+   values are discarded, and a raw launch can pin GBs of local memory (gh-ocannl-2219). Any other
+   exception stays fatal. *)
 let candidate name s transform =
   let declined = ref None in
   let got =
-    run_with name s ~lowered_transform:(fun opt ->
+    run_with
+      ~should_run:(fun () -> Option.is_none !declined)
+      name s
+      ~lowered_transform:(fun opt ->
         match transform opt with
         | opts -> opts
         | exception Ir.Schedule_outcome.Cause_at (phase, cause) ->
@@ -266,7 +275,7 @@ let candidate name s transform =
             [ opt ])
   in
   match !declined with
-  | None -> Some got
+  | None -> got
   | Some (phase, cause) ->
       Stdio.eprintf "%s: declined (the tuner skips it): %s (not part of the golden)\n%!" name
         (Sexp.to_string_hum

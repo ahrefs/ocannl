@@ -10,7 +10,7 @@ leg_root=$tmp/leg-scripts
 leg_bin=$tmp/leg-bin
 mkdir -p "$leg_root/tools" "$leg_bin"
 for leg in vendor-idents-check.sh cuda-tf32-parity.sh cuda-native-ptx-rerun.sh ci-failed-rules.sh \
-  credential-env.sh; do
+  credential-env.sh environment-refusals.sh; do
   cp "$leg_tools/$leg" "$leg_root/tools/$leg"
 done
 leg_calls=$tmp/leg-dune.calls
@@ -147,6 +147,28 @@ LEG_DUNE_OUT='Error: Alias "nope" specified on the command line is empty.' LEG_D
   run_leg cuda-native-ptx-rerun.sh
 [ "$leg_rc" -eq 1 ]
 [ "$(leg_verdict)" = 'cuda-native-ptx: verdict: NATIVE TARGET RED (dune exited 1; 1 failed rule: Error: Alias "nope" specified on the command line is empty.)' ]
+# gh-ocannl-2219: the launch-memory refusal from the native sweep is not a target verdict.
+# Both the binding's split status and a same-line status are recognized; sticky faults and
+# ordinary test failures still take the target-red arm above, never the refusal arm.
+for leg_status_layout in split inline; do
+  leg_refusal='Fatal error: exception cu_launch_kernel:'
+  if [ "$leg_status_layout" = split ]; then
+    leg_refusal+=$'\n  CUDA_ERROR_OUT_OF_MEMORY'
+  else
+    leg_refusal+=' CUDA_ERROR_OUT_OF_MEMORY'
+  fi
+  LEG_DUNE_OUT=$'File "test/operations/dune", line 1, characters 0-1:\n1 | (name online_softmax_block_mma)\n'"$leg_refusal" \
+    LEG_DUNE_RC=1 run_leg cuda-native-ptx-rerun.sh -j 8 @test/operations/runtest-online_softmax_block_mma
+  [ "$leg_rc" -eq 2 ]
+  [ "$(leg_verdict)" = 'cuda-native-ptx: verdict: unavailable: runtime refusal (cu_launch_kernel CUDA_ERROR_OUT_OF_MEMORY; native target unjudged; rerun affected stanzas at -j 1 in _build-native-ptx)' ]
+done
+for leg_launch_status in CUDA_ERROR_ILLEGAL_ADDRESS CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES INVALID_VALUE; do
+  LEG_DUNE_OUT=$'Fatal error: exception cu_launch_kernel:\n  '"$leg_launch_status" \
+    LEG_DUNE_RC=1 run_leg cuda-native-ptx-rerun.sh
+  [ "$leg_rc" -eq 1 ]
+  [ "$(leg_verdict)" = 'cuda-native-ptx: verdict: NATIVE TARGET RED (dune exited 1; no failed rule in its output)' ]
+done
+
 # Red stays red where nothing can be named: a dune that died mid-run, and the reader itself gone.
 LEG_DUNE_OUT='Killed' LEG_DUNE_RC=137 run_leg cuda-native-ptx-rerun.sh
 [ "$leg_rc" -eq 1 ]
