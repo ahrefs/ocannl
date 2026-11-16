@@ -333,53 +333,205 @@ type par_ctx = { pc_blocks : int; pc_threads : int }
 
 let top_ctx = { pc_blocks = 1; pc_threads = 1 }
 
+(* {2 Accumulation chains — gh-ocannl-1639}
+
+   How many independent accumulation chains a thread carries through one reduction step: what a
+   register tile buys in latency hiding that a one-accumulator thread can only buy with more
+   threads. The census reads the statement tree. A statement is a chain member when it is a
+   read-modify-write of a private accumulator cell -- [Set] of a node the caller's [is_private]
+   admits whose value reads that node at the same indices, or [Set_local id] reading [Get_local id]
+   -- with a {e carrier}: walking its enclosing loops outward, the loops whose index the target
+   mentions are passed (non-hardware ones only: each contributes its extent of distinct cells), and
+   the first non-hardware loop whose index the target does not mention carries the dependence. A
+   guard, a hardware loop or a [Scan_loop] met before the carrier ends the walk with no chain. The
+   carrier's chains are its members' distinct cells: each member's target (node and indices, so
+   repeated updates of one cell are one chain) times its passed loops' extents -- unrolled copies of
+   a register tile are distinct members. No credit where the carrier's body holds a barrier, or
+   where a member's value reads another member's accumulator (dependent chains). Anything else -- no
+   carrier, no read-modify-write, a shared or global accumulator, elementwise work -- is not counted
+   ([None]), which the launch fill reads as today's thread-only credit. Deliberately not counted:
+   independent iterations a compiler might interleave (they are serial work here), and a staging
+   copy's loads in flight. *)
+
+type chain_frame =
+  | Chain_loop of { index : Idx.symbol; extent : int; hardware : bool; body : Low_level.t }
+  | Chain_stop  (** A guard or a [Scan_loop]: no chain crosses it. *)
+
+type chain_target = Chain_cell of Tn.t * Idx.axis_index array | Chain_local of Low_level.scope_id
+
+let equal_chain_target a b =
+  match (a, b) with
+  | Chain_cell (t1, i1), Chain_cell (t2, i2) ->
+      Tn.equal t1 t2 && Array.equal Idx.equal_axis_index i1 i2
+  | Chain_local a, Chain_local b -> Low_level.equal_scope_id a b
+  | _ -> false
+
+(* The accumulator a statement read-modify-writes, if it is a private one. *)
+let chain_target ~is_private (c : Low_level.t) =
+  let rec reads_cell tn idcs (sc : Low_level.scalar_t) =
+    match sc with
+    | Low_level.Get (tn', idcs') -> Tn.equal tn tn' && Array.equal Idx.equal_axis_index idcs idcs'
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        reads_cell tn idcs a || reads_cell tn idcs b || reads_cell tn idcs c
+    | Binop (_, (a, _), (b, _)) -> reads_cell tn idcs a || reads_cell tn idcs b
+    | Unop (_, (a, _)) -> reads_cell tn idcs a
+    | _ -> false
+  in
+  let rec reads_local id (sc : Low_level.scalar_t) =
+    match sc with
+    | Low_level.Get_local id' -> Low_level.equal_scope_id id id'
+    | Ternop (_, (a, _), (b, _), (c, _)) -> reads_local id a || reads_local id b || reads_local id c
+    | Binop (_, (a, _), (b, _)) -> reads_local id a || reads_local id b
+    | Unop (_, (a, _)) -> reads_local id a
+    | _ -> false
+  in
+  match c with
+  | Low_level.Set { tn; idcs; llsc; _ } when is_private tn && reads_cell tn idcs llsc ->
+      Some (Chain_cell (tn, idcs), llsc)
+  | Set_local (id, llsc) when reads_local id llsc -> Some (Chain_local id, llsc)
+  | _ -> None
+
+let target_mentions target s =
+  match target with
+  | Chain_cell (_, idcs) -> Array.exists idcs ~f:(Idx.axis_index_mentions_symbol s)
+  | Chain_local _ -> false
+
+(* The carrier of a member with [target] under [frames] (innermost first): its index and body, and
+   the product of the passed loops' extents; [None] when the walk meets a stop first. *)
+let rec chain_carrier target ~passed = function
+  | [] | Chain_stop :: _ -> None
+  | Chain_loop { hardware = true; _ } :: _ -> None
+  | Chain_loop { index; extent; body; _ } :: rest ->
+      if target_mentions target index then chain_carrier target ~passed:(passed * extent) rest
+      else Some (index, body, passed)
+
+(* The chains of a carrier loop's body: [Some n] summing its members' distinct cells, [None] when
+   the body holds a barrier or a member reads another member's accumulator. *)
+let carrier_chains ~is_private ~carrier (body : Low_level.t) =
+  let members = ref [] and barrier = ref false in
+  let rec walk frames (c : Low_level.t) =
+    match c with
+    | Low_level.Seq (a, b) ->
+        walk frames a;
+        walk frames b
+    | For_loop { index; from_; to_; body; axis } ->
+        let extent = max 0 (to_ - from_ + 1) in
+        let hardware = Option.is_some (Low_level.hardware_kind_of_axis axis) in
+        walk (Chain_loop { index; extent; hardware; body } :: frames) body
+    | Scan_loop { body; _ } | If { body; _ } -> walk (Chain_stop :: frames) body
+    | Workgroup_barrier -> barrier := true
+    | Set _ | Set_local _ -> (
+        match chain_target ~is_private c with
+        | None -> ()
+        | Some (target, value) -> (
+            (* The carrier frame itself closes [frames]: a member's walk that passes every frame
+               below it reaches this body's carrier. *)
+            let outer = Chain_loop { index = carrier; extent = 1; hardware = false; body } in
+            match chain_carrier target ~passed:1 (frames @ [ outer ]) with
+            | Some (idx, _, passed) when Idx.equal_symbol idx carrier ->
+                if not (List.exists !members ~f:(fun (t, _, _) -> equal_chain_target t target)) then
+                  members := (target, passed, value) :: !members
+            | _ -> ()))
+    | _ -> ()
+  in
+  walk [] body;
+  (* A member's value reading a member node's cell other than its own target -- or another member's
+     local -- depends on another chain. *)
+  let reads_other (own : chain_target) (sc : Low_level.scalar_t) =
+    let member_node tn =
+      List.exists !members ~f:(fun (t, _, _) ->
+          match t with Chain_cell (tn', _) -> Tn.equal tn tn' | Chain_local _ -> false)
+    and member_local id =
+      List.exists !members ~f:(fun (t, _, _) ->
+          match t with Chain_local id' -> Low_level.equal_scope_id id id' | Chain_cell _ -> false)
+    in
+    let rec go (sc : Low_level.scalar_t) =
+      match sc with
+      | Low_level.Get (tn, idcs) ->
+          member_node tn && not (equal_chain_target (Chain_cell (tn, idcs)) own)
+      | Get_local id -> member_local id && not (equal_chain_target (Chain_local id) own)
+      | Ternop (_, (a, _), (b, _), (c, _)) -> go a || go b || go c
+      | Binop (_, (a, _), (b, _)) -> go a || go b
+      | Unop (_, (a, _)) -> go a
+      | Get_dynamic { dyn_value = dv, _; _ } -> go dv
+      | _ -> false
+    in
+    go sc
+  in
+  if !barrier || List.is_empty !members then None
+  else if List.exists !members ~f:(fun (t, _, v) -> reads_other t v) then None
+  else Some (List.sum (module Int) !members ~f:(fun (_, passed, _) -> passed))
+
 (* The op census {!analyze} charges, shared with {!launch_contexts}: [on_ops ctx ~tile ops] is
    called once per op-carrying statement of the statement tree with its parallel context, whether it
    is a [Tile_mma], and the ops it contributes to the total (a statement with none is not reported).
    The bodies of [Local_scope]s are counted into the statement that hoists them, in its context.
-   Returns the total and the [flops_approx] / [opaque] flags. *)
-let op_census ~on_ops (code : Low_level.t) : int * bool * bool =
+   With [is_private], each report also carries the statement's accumulation chains (gh-ocannl-1639,
+   {!chain_carrier}); without it every report carries [None] and no chain is looked for. Returns the
+   total and the [flops_approx] / [opaque] flags. *)
+let op_census ?is_private ~on_ops (code : Low_level.t) : int * bool * bool =
   let flops_approx = ref false and opaque = ref false in
-  let emit ~report ctx ~tile ops =
-    if report && ops > 0 then on_ops ctx ~tile ops;
+  let carriers = Hashtbl.create (module Idx.Symbol) in
+  let chains_of frames (c : Low_level.t) =
+    match is_private with
+    | None -> None
+    | Some is_private -> (
+        match chain_target ~is_private c with
+        | None -> None
+        | Some (target, _) -> (
+            match chain_carrier target ~passed:1 frames with
+            | None -> None
+            | Some (carrier, body, _) ->
+                Hashtbl.find_or_add carriers carrier ~default:(fun () ->
+                    carrier_chains ~is_private ~carrier body)))
+  in
+  let emit ?(chains = None) ~report ctx ~tile ops =
+    if report && ops > 0 then on_ops ctx ~tile ~chains ops;
     ops
   in
   (* [scale] is the product of enclosing loop extents, [env] their (symbol, extent) bindings —
      needed by [Tile_mma], whose 2*m*n*k multiply-adds are cooperative across its [lane] loop, not
      repeated per lane. [report] is off inside hoisted scope bodies, whose work their hoisting
      statement reports. *)
-  let rec go ~report ~ctx ~scale ~env (c : Low_level.t) : int =
+  let rec go ~report ~ctx ~scale ~env ~frames (c : Low_level.t) : int =
     match c with
     | Low_level.Noop | Comment _ | Zero_out _ | Declare_local _ | Workgroup_barrier -> 0
     | Staged_compilation _ ->
         opaque := true;
         0
-    | Seq (c1, c2) -> go ~report ~ctx ~scale ~env c1 + go ~report ~ctx ~scale ~env c2
+    | Seq (c1, c2) ->
+        go ~report ~ctx ~scale ~env ~frames c1 + go ~report ~ctx ~scale ~env ~frames c2
     | For_loop { index; from_; to_; body; axis; _ } ->
         let extent = max 0 (to_ - from_ + 1) in
+        let kind = Low_level.hardware_kind_of_axis axis in
         let ctx =
-          match Low_level.hardware_kind_of_axis axis with
+          match kind with
           | Some `Grid -> { ctx with pc_blocks = ctx.pc_blocks * extent }
           | Some `Workgroup -> { ctx with pc_threads = ctx.pc_threads * extent }
           | None -> ctx
         in
-        go ~report ~ctx ~scale:(scale * extent) ~env:((index, extent) :: env) body
+        let frames = Chain_loop { index; extent; hardware = Option.is_some kind; body } :: frames in
+        go ~report ~ctx ~scale:(scale * extent) ~env:((index, extent) :: env) ~frames body
     | Scan_loop { index; from_; to_; carried; body; _ } ->
         (* The inits run once; the body's work scales with the range like a serial loop's. *)
         let extent = max 0 (to_ - from_ + 1) in
         emit ~report ctx ~tile:false
           (scale * List.sum (module Int) carried ~f:(fun c -> sc_flops c.init))
-        + go ~report ~ctx ~scale:(scale * extent) ~env:((index, extent) :: env) body
-    | Set { llsc; _ } -> emit ~report ctx ~tile:false (scale * sc_flops llsc)
+        + go ~report ~ctx ~scale:(scale * extent) ~env:((index, extent) :: env)
+            ~frames:(Chain_stop :: frames) body
+    | Set { llsc; _ } ->
+        emit ~chains:(chains_of frames c) ~report ctx ~tile:false (scale * sc_flops llsc)
     | Set_dynamic { dyn_value = dv, _; llsc; _ } ->
         emit ~report ctx ~tile:false (scale * (sc_flops dv + sc_flops llsc))
     | Set_from_vec { length; arg = a, _; _ } ->
         emit ~report ctx ~tile:false (scale * (length + sc_flops a))
-    | Set_local (_, llsc) -> emit ~report ctx ~tile:false (scale * sc_flops llsc)
+    | Set_local (_, llsc) ->
+        emit ~chains:(chains_of frames c) ~report ctx ~tile:false (scale * sc_flops llsc)
     | If { cond = cnd, _; body } ->
         (* Guards-taken: the body is charged as if the guard always passes. *)
         flops_approx := true;
-        emit ~report ctx ~tile:false (scale * sc_flops cnd) + go ~report ~ctx ~scale ~env body
+        emit ~report ctx ~tile:false (scale * sc_flops cnd)
+        + go ~report ~ctx ~scale ~env ~frames:(Chain_stop :: frames) body
     | Tile_mma { m; n; k; lane; _ } ->
         let lane_extent =
           List.Assoc.find env lane ~equal:Idx.equal_symbol |> Option.value ~default:1
@@ -398,7 +550,8 @@ let op_census ~on_ops (code : Low_level.t) : int * bool * bool =
      hoisted or inline, is a guards-taken bound. *)
   and sc_split (sc : Low_level.scalar_t) : int * int =
     match sc with
-    | Low_level.Local_scope { body; _ } -> (0, go ~report:false ~ctx:top_ctx ~scale:1 ~env:[] body)
+    | Low_level.Local_scope { body; _ } ->
+        (0, go ~report:false ~ctx:top_ctx ~scale:1 ~env:[] ~frames:[ Chain_stop ] body)
     | Get_local _ | Get _ | Constant _ | Constant_bits _ | Embed_index _ -> (0, 0)
     | Get_merge_buffer _ ->
         (* Merge-buffer traffic is not represented by [affine_accesses] either: flag the
@@ -447,11 +600,11 @@ let op_census ~on_ops (code : Low_level.t) : int * bool * bool =
         let i1, h1 = arg a1 in
         (1 + i1, h1)
   and arg (sc, _prec) = sc_split sc in
-  let flops = go ~report:true ~ctx:top_ctx ~scale:1 ~env:[] code in
+  let flops = go ~report:true ~ctx:top_ctx ~scale:1 ~env:[] ~frames:[] code in
   (flops, !flops_approx, !opaque)
 
 let analyze (code : Low_level.t) : summary =
-  let flops, flops_approx, opaque = op_census ~on_ops:(fun _ ~tile:_ _ -> ()) code in
+  let flops, flops_approx, opaque = op_census ~on_ops:(fun _ ~tile:_ ~chains:_ _ -> ()) code in
   let read_uncertain, any_uncertain = access_uncertainty ~open_placement:(fun _ -> false) code in
   let per_node = footprints ~read_uncertain ~any_uncertain (Low_level.affine_accesses code) in
   {
@@ -709,6 +862,12 @@ let global_in (opt : Low_level.optimized) (tn : Tn.t) =
     (Tn.Placements.is_local_peek opt.Low_level.optimize_ctx.Low_level.placements tn
     || Set.mem opt.Low_level.workgroup_shared tn)
 
+(* gh-ocannl-1639: a per-thread node -- routine-local and not workgroup-shared -- whose cells an
+   accumulation chain can live in. *)
+let private_in (opt : Low_level.optimized) (tn : Tn.t) =
+  Tn.Placements.is_local_peek opt.Low_level.optimize_ctx.Low_level.placements tn
+  && not (Set.mem opt.Low_level.workgroup_shared tn)
+
 (* Each loop symbol's hardware axis, from the statement-level loops. Symbols this walk does not
    reach — the loops of an inlined [Local_scope] body, a [Scan_loop] index — read as serial: they
    are iterated inside one work item. *)
@@ -880,24 +1039,41 @@ let spills ?cache_capacity_bytes (r : reuse) =
    make a narrow contraction look full — which a kernel-wide {!Low_level.launch_dims} reading
    would. *)
 
-type launch_context = { lc_blocks : int; lc_threads : int; lc_tile_mma : bool; lc_ops : int }
+type launch_context = {
+  lc_blocks : int;
+  lc_threads : int;
+  lc_tile_mma : bool;
+  lc_chains : int option;
+  lc_ops : int;
+}
 [@@deriving sexp_of]
 
-let launch_contexts (code : Low_level.t) : launch_context list =
+let launch_contexts ?(is_private = fun _ -> false) (code : Low_level.t) : launch_context list =
   let tbl = Hashtbl.Poly.create () and order = ref [] in
   let _, _, _ =
-    op_census code ~on_ops:(fun ctx ~tile ops ->
-        let key = (ctx.pc_blocks, ctx.pc_threads, tile) in
+    op_census ~is_private code ~on_ops:(fun ctx ~tile ~chains ops ->
+        let key = (ctx.pc_blocks, ctx.pc_threads, tile, chains) in
         match Hashtbl.find tbl key with
         | Some r -> r := !r + ops
         | None ->
             Hashtbl.set tbl ~key ~data:(ref ops);
             order := key :: !order)
   in
-  List.rev_map !order ~f:(fun ((b, t, tile) as key) ->
-      { lc_blocks = b; lc_threads = t; lc_tile_mma = tile; lc_ops = !(Hashtbl.find_exn tbl key) })
+  List.rev_map !order ~f:(fun ((b, t, tile, chains) as key) ->
+      {
+        lc_blocks = b;
+        lc_threads = t;
+        lc_tile_mma = tile;
+        lc_chains = chains;
+        lc_ops = !(Hashtbl.find_exn tbl key);
+      })
 
-type fill_model = { fm_multiprocessors : int; fm_fill_threads : int; fm_tail : bool }
+type fill_model = {
+  fm_multiprocessors : int;
+  fm_fill_threads : int;
+  fm_tail : bool;
+  fm_chains : int;
+}
 [@@deriving sexp_of]
 
 (* gh-ocannl-1821: under [fm_tail], the launch tail. A launch of [B] blocks over [P] multiprocessors
@@ -905,16 +1081,29 @@ type fill_model = { fm_multiprocessors : int; fm_fill_threads : int; fm_tail : b
    * min T t / t)] of its issue; the launch then fills [(B / P) * u n / n] of the device. That is
    the continuous fill exactly where [B <= P], and where [B] is a multiple of [P] at saturation;
    between multiples it is below it: 64 blocks over 46 multiprocessors leave 18 of them running two
-   blocks, so the launch fills 32/46 of the device rather than all of it. *)
-let context_fill (fm : fill_model) ~blocks ~threads =
+   blocks, so the launch fills 32/46 of the device rather than all of it.
+
+   gh-ocannl-1639: a context whose threads carry [c] accumulation chains below the cap [L =
+   fm_chains] counts [T * c / L] threads in place of [T]: the fitted [t] saturates with threads that
+   each carry at least [L] chains (the calibration's register-tiled threads carry 16), so a thread
+   with fewer hides less of the latency on its own. [c] unknown ([None]) or at least [L], or [L =
+   1], is the thread-only fill, bitwise. *)
+let context_fill ?chains (fm : fill_model) ~blocks ~threads =
   let p = max 1 fm.fm_multiprocessors and t = max 1 fm.fm_fill_threads in
-  let b = max 1 blocks and threads = min (max 1 threads) t in
+  let b = max 1 blocks and threads = max 1 threads in
+  let threads =
+    match chains with
+    | Some c when c >= 1 && c < fm.fm_chains ->
+        Float.of_int threads *. Float.of_int c /. Float.of_int fm.fm_chains
+    | _ -> Float.of_int threads
+  in
+  let threads = Float.min threads (Float.of_int t) in
   if fm.fm_tail && b > p then
     let n = (b + p - 1) / p in
-    let busiest = Float.min 1. (Float.of_int (n * threads) /. Float.of_int t) in
+    let busiest = Float.min 1. (Float.of_int n *. threads /. Float.of_int t) in
     Float.of_int b /. Float.of_int p *. busiest /. Float.of_int n
   else
-    let effective = Float.of_int b *. Float.of_int threads in
+    let effective = Float.of_int b *. threads in
     Float.min 1. (effective /. (Float.of_int p *. Float.of_int t))
 
 (* One class of statements (scalar ones, or [Tile_mma] ones): its operations, and the sum over its
@@ -923,7 +1112,9 @@ let class_work fm (contexts : launch_context list) ~tile =
   List.fold contexts ~init:(0., 0.) ~f:(fun (o, w) c ->
       if Bool.equal c.lc_tile_mma tile && c.lc_ops > 0 then
         let ops = Float.of_int c.lc_ops in
-        (o +. ops, w +. (ops /. context_fill fm ~blocks:c.lc_blocks ~threads:c.lc_threads))
+        ( o +. ops,
+          w +. (ops /. context_fill ?chains:c.lc_chains fm ~blocks:c.lc_blocks ~threads:c.lc_threads)
+        )
       else (o, w))
 
 (* [work] operations of a class priced as the class's contexts price theirs: the class's own
@@ -1527,15 +1718,15 @@ let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes 
 
 let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?fill_model
-    ?transaction_rate ?lane_width ?max_resident_threads ?staged_copy_rate ?is_staged ~is_global
-    (code : Low_level.t) : float option =
+    ?transaction_rate ?lane_width ?max_resident_threads ?staged_copy_rate ?is_staged ?is_private
+    ~is_global (code : Low_level.t) : float option =
   let s = analyze code in
   let staged_copies =
     match (staged_copy_rate, is_staged) with
     | Some _, Some is_staged -> staged_copies ~is_staged code
     | _ -> []
   in
-  let launch = Option.map fill_model ~f:(fun fm -> (fm, launch_contexts code)) in
+  let launch = Option.map fill_model ~f:(fun fm -> (fm, launch_contexts ?is_private code)) in
   let transactions =
     match (transaction_rate, lane_width) with
     | Some _, Some lane_width -> memory_transactions ~lane_width ~is_global code

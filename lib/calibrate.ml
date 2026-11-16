@@ -313,7 +313,8 @@ let issue_sweep ?(m = 512) ?(n = 512) ?(ks = [ 256; 512; 1024; 2048; 4096; 8192;
                 ( s.Ir.Cost_model.flops - mma,
                   mma,
                   Autotune.ranking_ms ~capabilities ~limits [ o ],
-                  Ir.Cost_model.launch_contexts o.Ir.Low_level.llc )
+                  Ir.Cost_model.launch_contexts ~is_private:(Ir.Cost_model.private_in o)
+                    o.Ir.Low_level.llc )
             | None -> (0, 0, None, [])
           in
           let ctx' = Context.run run_ctx routine in
@@ -454,7 +455,8 @@ let launch_sweep ?(geometries = default_launch_geometries) ?(sizes = default_lau
                   (* The shipped kernels' contexts together: the zero nest's, if any, has no
                      operations and is absent. *)
                   List.concat_map routine.Context.segments ~f:(fun o ->
-                      Ir.Cost_model.launch_contexts o.Ir.Low_level.llc)
+                      Ir.Cost_model.launch_contexts ~is_private:(Ir.Cost_model.private_in o)
+                        o.Ir.Low_level.llc)
                 in
                 let ctx' = Context.run run_ctx routine in
                 Context.sync ctx';
@@ -477,14 +479,15 @@ let launch_sweep ?(geometries = default_launch_geometries) ?(sizes = default_lau
 
 type fill_form = Capped | Uncapped
 
-let form_fill form ~multiprocessors ~fill_threads ~blocks ~threads =
+let form_fill ?(fill_chains = 1) ?chains form ~multiprocessors ~fill_threads ~blocks ~threads =
   match form with
   | Capped ->
-      Ir.Cost_model.context_fill
+      Ir.Cost_model.context_fill ?chains
         {
           Ir.Cost_model.fm_multiprocessors = multiprocessors;
           fm_fill_threads = fill_threads;
           fm_tail = false;
+          fm_chains = fill_chains;
         }
         ~blocks ~threads
   | Uncapped ->
@@ -493,15 +496,15 @@ let form_fill form ~multiprocessors ~fill_threads ~blocks ~threads =
         *. Float.of_int (max 1 threads)
         /. (Float.of_int (max 1 multiprocessors) *. Float.of_int (max 1 fill_threads)))
 
-let effective_ops ?(form = Capped) ~multiprocessors ~fill_threads
+let effective_ops ?(form = Capped) ?fill_chains ~multiprocessors ~fill_threads
     (contexts : Ir.Cost_model.launch_context list) =
   List.fold contexts ~init:0. ~f:(fun acc (c : Ir.Cost_model.launch_context) ->
       if c.lc_tile_mma then acc
       else
         acc
         +. Float.of_int c.lc_ops
-           /. form_fill form ~multiprocessors ~fill_threads ~blocks:c.lc_blocks
-                ~threads:c.lc_threads)
+           /. form_fill ?fill_chains ?chains:c.lc_chains form ~multiprocessors ~fill_threads
+                ~blocks:c.lc_blocks ~threads:c.lc_threads)
 
 let scalar_ops (contexts : Ir.Cost_model.launch_context list) =
   List.sum (module Int) contexts ~f:(fun c -> if c.lc_tile_mma then 0 else c.lc_ops)
@@ -547,8 +550,8 @@ let default_fill_candidates =
 (* A point's achieved scalar throughput, operations per millisecond. *)
 let throughput p = Float.of_int (scalar_ops p.lp_contexts) /. p.lp_ms
 
-let fit_fill ?(candidates = default_fill_candidates) ?(starved = 0.125) ~multiprocessors
-    (points : launch_point list) : fill_fit =
+let fit_fill ?(candidates = default_fill_candidates) ?(starved = 0.125) ?fill_chains
+    ~multiprocessors (points : launch_point list) : fill_fit =
   let timed =
     List.filter points ~f:(fun p ->
         scalar_ops p.lp_contexts > 0 && Float.(p.lp_ms > 0.) && Float.is_finite p.lp_ms)
@@ -597,7 +600,9 @@ let fit_fill ?(candidates = default_fill_candidates) ?(starved = 0.125) ~multipr
         in
         Option.map lead ~f:(fun slope -> (t, (slope, sse, worst)))
     in
-    let effective form t p = effective_ops ~form ~multiprocessors ~fill_threads:t p.lp_contexts in
+    let effective form t p =
+      effective_ops ~form ?fill_chains ~multiprocessors ~fill_threads:t p.lp_contexts
+    in
     let best form =
       List.filter_map candidates ~f:(fit_with ~x:(effective form))
       |> List.min_elt ~compare:(fun (_, (_, e1, _)) (_, (_, e2, _)) -> Float.compare e1 e2)

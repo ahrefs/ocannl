@@ -1907,6 +1907,8 @@ end = struct
               the discrete class. Overridable by model_fill_threads. *)
            multiprocessors = min_over (fun (a : H.Device.attributes) -> a.multiprocessor_count);
            fill_threads = Some (if all_integrated then 384 else 512);
+           (* gh-ocannl-1639: unfitted -- no HIP leg measured the ILP cap: the thread-only fill. *)
+           fill_chains = None;
            (* gh-ocannl-1600: the memory-transaction rate, fitted (benchmarks/gh1600_txn_fit.py) on
               the gh-ocannl-1479 cells on the unified gfx1151 (minix, 2026-10-26, 630016bd): the qkv
               and outproj kernels carry no excess (a lane's innermost run is one footprint), the

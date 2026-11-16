@@ -1927,6 +1927,16 @@ end = struct
               constant for the class, overridable by model_fill_threads. *)
            multiprocessors = min_over (fun (a : Cu.Device.attributes) -> a.multiprocessor_count);
            fill_threads = Some 256;
+           (* gh-ocannl-1639: the launch fill's ILP cap stays unset (the thread-only fill). Fitted
+              rank-only on rog's RTX 5070 Ti against gh-1821's five gh-1479 cells (EXPLAIN_ONLY,
+              FILL_CHAINS=1..16, 65a02428; L=1 reproduces that window's shipped ranks exactly): no
+              cap above 1 raised any cell's pairwise agreement or moved an admitted+coalesced
+              argmin, and 16 lowered outproj b8's (84.9% -> 83.3%). The cap does fit the
+              under-filled 2x2/4x4 pairs at equal block tile -- mean |log(model/measured)| over 21
+              pairs 0.54 at L=1, 0.37 at 8, 0.31 at 12 -- but those leaves sit far from every
+              argmin, so it changes no ranking decision; set it with evidence from a site where an
+              under-filled one-accumulator candidate competes near the argmin. *)
+           fill_chains = None;
            (* gh-ocannl-1600: the memory-transaction rate, fitted (benchmarks/gh1600_txn_fit.py) on
               the gh-ocannl-1479 cells on rog-nv's RTX 5070 Ti (2026-10-26, 630016bd): once a lane's
               innermost run counts as one footprint (L1 serves it), the qkv and outproj kernels

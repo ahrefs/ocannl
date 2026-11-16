@@ -19,7 +19,15 @@
    blocktile leaf of the GPU matmul family under a CUDA-like stand-in record (hermetic: nothing is
    compiled, so the claims run on every backend): with the record's launch-fill constants each plain
    leaf ranks strictly above its [bgrid] twin and the best-ranked leaf is a [bgrid] one; without
-   them the twins tie, as before. Ranks go to stderr: device constants' quotients. *)
+   them the twins tie, as before. Ranks go to stderr: device constants' quotients.
+
+   gh-ocannl-1639, the per-thread ILP credit: the census of independent private accumulation chains
+   (register tiles unrolled or looped, one-accumulator reductions, and what counts none: global
+   accumulators, dependent or guarded updates, elementwise work), the capped normalized credit's
+   exact values at the stand-in with a cap of 4 (and the launch tail), the controls that keep it
+   bitwise the thread-only fill (cap 1, unknown chains, chains at the cap), the census on the
+   scheduled qkv leaves ([tm * tn]), and that no backend advises a cap: under the running backend's
+   own limits the ranking is the thread-only one. *)
 
 (* cc-fp-contract: not-executed -- the bitwise claim compares cost-model scores computed in OCaml *)
 
@@ -30,13 +38,14 @@ open Verdict.Claims
 module LL = Ir.Low_level
 module CM = Ir.Cost_model
 module BI = Ir.Backend_intf
+module Tn = Ir.Tnode
 
 let fresh_tn =
   let make = Ll_test.node_factory ~first_id:971_000_000 ~dims:[||] () in
   fun label dims -> make ~dims label
 
 let it = Ll_test.iter
-let fm = { CM.fm_multiprocessors = 4; fm_fill_threads = 64; fm_tail = false }
+let fm = { CM.fm_multiprocessors = 4; fm_fill_threads = 64; fm_tail = false; fm_chains = 1 }
 
 (* [d[...] += x[...] * y[...]]: two operations per cell. *)
 let mac d didx x xidx y yidx =
@@ -170,6 +179,177 @@ let () =
       | Some leg -> Float.(leg >= of_int (CM.analyze k).CM.flops /. peak)
       | None -> false)
 
+(* gh-ocannl-1639: the per-thread ILP credit. [rt ~chains] is a register-tiled nest: [nb] blocks of
+   [nw] threads, each accumulating [chains] private cells of [acc] over a serial reduction of [nk]
+   -- as [chains] sibling statements (the materializing unroll the GPU blocktile applies to its
+   register tile), or with [~unrolled:false] one statement under a serial loop over the cells. With
+   [~batch], a serial batch loop of that extent encloses the reduction: a plain leaf's. *)
+let rt ~tag ?(unrolled = true) ?(batch = 1) ~chains ~nb ~nw ~nk () =
+  let acc = fresh_tn (tag ^ "_acc") [| batch; nb; nw; chains |]
+  and x = fresh_tn (tag ^ "_x") [| batch; nb; nw; nk |]
+  and y = fresh_tn (tag ^ "_y") [| nk; chains |] in
+  let s = Ll_test.sym () and b = Ll_test.sym () and w = Ll_test.sym () and k = Ll_test.sym () in
+  let cell ci =
+    mac acc [| it s; it b; it w; ci |] x [| it s; it b; it w; it k |] y [| it k; ci |]
+  in
+  let body =
+    if unrolled then
+      List.reduce_exn ~f:Ll_test.seq (List.init chains ~f:(fun i -> cell (Ll_test.fixed i)))
+    else
+      let ci = Ll_test.sym () in
+      Ll_test.loop_n ci chains (cell (it ci))
+  in
+  ( acc,
+    Ll_test.loop_n ~axis:LL.Grid b nb
+      (Ll_test.loop_n ~axis:LL.Workgroup w nw (Ll_test.loop_n s batch (Ll_test.loop_n k nk body)))
+  )
+
+let census ?(private_ = []) code =
+  List.map
+    (CM.launch_contexts ~is_private:(fun tn -> List.mem private_ tn ~equal:Tn.equal) code)
+    ~f:(fun c -> c.CM.lc_chains)
+
+let chains_are ?private_ code expected =
+  List.equal (Option.equal Int.equal) (census ?private_ code) expected
+
+(* The stand-in fill model with an ILP cap of 4 chains a thread. *)
+let ilp = { fm with CM.fm_chains = 4 }
+
+let filled_under ?(private_ = []) model code =
+  compute
+    ~launch:
+      (model, CM.launch_contexts ~is_private:(fun tn -> List.mem private_ tn ~equal:Tn.equal) code)
+    code
+
+let () =
+  let acc4, tiled = rt ~tag:"cf_r4" ~chains:4 ~nb:4 ~nw:16 ~nk:8 () in
+  let acc1, single = rt ~tag:"cf_r1" ~chains:1 ~nb:4 ~nw:16 ~nk:8 () in
+  let acc16, wide = rt ~tag:"cf_r16" ~chains:16 ~nb:4 ~nw:16 ~nk:8 () in
+  let accl, looped = rt ~tag:"cf_rl" ~unrolled:false ~chains:4 ~nb:4 ~nw:16 ~nk:8 () in
+  let accd, deep = rt ~tag:"cf_rd" ~chains:4 ~nb:4 ~nw:16 ~nk:64 () in
+  let accp, plain = rt ~tag:"cf_rp" ~batch:8 ~chains:1 ~nb:4 ~nw:16 ~nk:8 () in
+  p "a 2x2 register tile's four unrolled accumulators are four chains a thread"
+    (chains_are ~private_:[ acc4 ] tiled [ Some 4 ]);
+  p "a one-accumulator reduction is one chain, a 4x4 tile sixteen"
+    (chains_are ~private_:[ acc1 ] single [ Some 1 ]
+    && chains_are ~private_:[ acc16 ] wide [ Some 16 ]);
+  p "a serial loop over the cells inside the reduction counts its extent"
+    (chains_are ~private_:[ accl ] looped [ Some 4 ]);
+  p "a deeper reduction alone does not change the count"
+    (chains_are ~private_:[ accd ] deep [ Some 4 ]);
+  p "a plain leaf's serial batch loop, outside the reduction, is serial work, not chains"
+    (chains_are ~private_:[ accp ] plain [ Some 1 ]);
+  p "a global (non-private) accumulator counts no chain" (chains_are tiled [ None ]);
+  (* One cell updated four times, four cells whose updates read each other, a guarded update, and
+     elementwise work. *)
+  let a = fresh_tn "cf_dep_a" [| 4 |] and x = fresh_tn "cf_dep_x" [| 8 |] in
+  let k = Ll_test.sym () in
+  let upd i v =
+    Ll_test.set a [| Ll_test.fixed i |] (Ll_test.add (Ll_test.get a [| Ll_test.fixed i |]) v)
+  in
+  let xk = Ll_test.get x [| it k |] in
+  let same =
+    Ll_test.loop_n k 8 (List.reduce_exn ~f:Ll_test.seq (List.init 4 ~f:(fun _ -> upd 0 xk)))
+  in
+  let linked =
+    Ll_test.loop_n k 8
+      (List.reduce_exn ~f:Ll_test.seq
+         (List.init 4 ~f:(fun i ->
+              upd i
+                (if i = 0 then xk else Ll_test.mul xk (Ll_test.get a [| Ll_test.fixed (i - 1) |])))))
+  in
+  let guarded = Ll_test.loop_n k 8 (Ll_test.if_ (Ll_test.c 1.) (upd 0 xk)) in
+  let e = fresh_tn "cf_dep_e" [| 8 |] in
+  let elementwise = Ll_test.loop_n k 8 (Ll_test.set e [| it k |] (Ll_test.mul xk xk)) in
+  p "four updates of one cell are one chain" (chains_are ~private_:[ a ] same [ Some 1 ]);
+  p "accumulators whose updates read each other are no independent chains"
+    (chains_are ~private_:[ a ] linked [ None ]);
+  p "a guarded update counts no chain" (chains_are ~private_:[ a ] guarded [ None ]);
+  p "elementwise work counts no chain" (chains_are ~private_:[ e ] elementwise [ None ]);
+  (* The fill: 4 blocks of 16 threads, a quarter of P = 4 at t = 64. With 4 chains a thread (at the
+     cap) the tile keeps that quarter; its one-accumulator twin's threads count a quarter each: 4 *
+     16 / 4 threads a block, a sixteenth of the device. *)
+  let ops = 4 * 16 * 8 * 2 in
+  p "at the cap, the register tile fills a quarter: bitwise its thread-only fill"
+    (Float.equal (CM.context_fill ~chains:4 ilp ~blocks:4 ~threads:16) 0.25
+    && Float.equal
+         (CM.context_fill ~chains:4 ilp ~blocks:4 ~threads:16)
+         (CM.context_fill fm ~blocks:4 ~threads:16));
+  p "its one-accumulator twin fills a sixteenth"
+    (Float.equal (CM.context_fill ~chains:1 ilp ~blocks:4 ~threads:16) 0.0625);
+  p "the compute legs are each kernel's operations over its fill: 4x the work at 4x the fill"
+    (match
+       (filled_under ~private_:[ acc4 ] ilp tiled, filled_under ~private_:[ acc1 ] ilp single)
+     with
+    | Some t4, Some t1 ->
+        let ops4 = Float.of_int (4 * ops) and ops1 = Float.of_int ops in
+        Float.(t4 = ops4 /. 0.25 /. issue) && Float.(t1 = ops1 /. 0.0625 /. issue)
+    | _ -> false);
+  p "so per operation the register-tiled context ranks strictly above its one-accumulator twin"
+    (match
+       (filled_under ~private_:[ acc4 ] ilp tiled, filled_under ~private_:[ acc1 ] ilp single)
+     with
+    | Some t4, Some t1 -> Float.(t4 /. 4. < t1)
+    | _ -> false);
+  p "one block of 4-chain threads still fills only its share: a sixteenth"
+    (Float.equal (CM.context_fill ~chains:4 ilp ~blocks:1 ~threads:16) 0.0625);
+  p_all ~min:4 "chains past the cap buy nothing more"
+    [ 4; 5; 16; 1 lsl 20 ]
+    ~f:(fun c -> Float.equal (CM.context_fill ~chains:c ilp ~blocks:4 ~threads:16) 0.25);
+  p "two chains under the cap of 4 count half a thread each"
+    (Float.equal (CM.context_fill ~chains:2 ilp ~blocks:4 ~threads:16) 0.125);
+  (* Controls: the cap of 1 is the thread-only fill for every chain count; unknown chains keep it at
+     every cap; and the gh-1479 kernels above score bitwise at cap 1. *)
+  let shapes = List.cartesian_product [ 1; 3; 4; 9 ] [ 1; 16; 64; 128 ] in
+  p_all ~min:16 "at cap 1 every chain count fills as the thread-only fill" shapes
+    ~f:(fun (blocks, threads) ->
+      List.for_all [ 1; 2; 4; 16 ] ~f:(fun c ->
+          Float.equal
+            (CM.context_fill ~chains:c fm ~blocks ~threads)
+            (CM.context_fill fm ~blocks ~threads)));
+  p_all ~min:16 "unknown chains fill as the thread-only fill at any cap" shapes
+    ~f:(fun (blocks, threads) ->
+      List.for_all [ 1; 2; 4; 16 ] ~f:(fun l ->
+          Float.equal
+            (CM.context_fill { fm with CM.fm_chains = l } ~blocks ~threads)
+            (CM.context_fill fm ~blocks ~threads)));
+  p_all ~min:16 "a context at or past the cap fills bitwise as the thread-only fill at any cap"
+    shapes ~f:(fun (blocks, threads) ->
+      List.for_all [ 1; 2; 4; 16 ] ~f:(fun l ->
+          Float.equal
+            (CM.context_fill ~chains:16 { fm with CM.fm_chains = l } ~blocks ~threads)
+            (CM.context_fill fm ~blocks ~threads)));
+  p "the one-accumulator kernel scores bitwise as before at cap 1"
+    (Option.equal Float.equal (filled_under ~private_:[ acc1 ] fm single) (filled single));
+  (* The tail: 48 blocks over 32 multiprocessors of t = 64, blocks of 64 threads: 16 of them run
+     two. Thread-only the busiest is full and the launch fills 48/32/2 = 3/4; one chain under a cap
+     of 4 counts 16 threads a block, the busiest runs at 32/64, and the launch fills 3/8. *)
+  let tail = { CM.fm_multiprocessors = 32; fm_fill_threads = 64; fm_tail = true; fm_chains = 4 } in
+  p "under the tail, 48 blocks of 64 one-chain threads fill 3/8, of four-chain ones 3/4"
+    (Float.equal (CM.context_fill ~chains:1 tail ~blocks:48 ~threads:64) 0.375
+    && Float.equal (CM.context_fill ~chains:4 tail ~blocks:48 ~threads:64) 0.75
+    && Float.equal
+         (CM.context_fill ~chains:4 tail ~blocks:48 ~threads:64)
+         (CM.context_fill { tail with fm_chains = 1 } ~blocks:48 ~threads:64));
+  (* Mixed chains in one launch shape: two contexts, each over its own fill. *)
+  let both = Ll_test.seq tiled single in
+  p "equal launch shapes of 4 and 1 chains are two contexts, priced each over its own fill"
+    (List.equal (Option.equal Int.equal)
+       (List.sort ~compare:(Option.compare Int.compare) (census ~private_:[ acc4; acc1 ] both))
+       [ Some 1; Some 4 ]
+    &&
+    match filled_under ~private_:[ acc4; acc1 ] ilp both with
+    | Some leg ->
+        let ops4 = Float.of_int (4 * ops) and ops1 = Float.of_int ops in
+        Float.(leg = ((ops4 /. 0.25) +. (ops1 /. 0.0625)) /. issue)
+    | None -> false);
+  p "the chains change no operation count: the contexts still sum to the census"
+    (List.sum
+       (module Int)
+       (CM.launch_contexts ~is_private:(fun tn -> Tn.equal tn acc4 || Tn.equal tn acc1) both)
+       ~f:(fun c -> c.CM.lc_ops)
+    = (CM.analyze both).CM.flops)
+
 (* The q/k/v projection at b8, scored per scalar blocktile leaf under a CUDA-like record. *)
 let stand_in =
   {
@@ -227,9 +407,57 @@ let () =
               ( Autotune.ranking_ms ~limits:stand_in [ post ],
                 Autotune.ranking_ms ~limits:without_fill [ post ] )
             with
-            | Some (rank, bound), Some (rank_off, _) -> Some (p, rank, bound, rank_off)
+            | Some (rank, bound), Some (rank_off, _) -> Some (p, rank, bound, rank_off, post)
             | _ -> None))
   in
+  (* gh-ocannl-1639: the census on the leaves as scheduled -- privatized, the register tile unrolled
+     -- and the cap's invariance on the 16-chain tiles the launch sweep fits [fill_threads] on. *)
+  let main_chains post =
+    CM.launch_contexts ~is_private:(CM.private_in post) post.LL.llc
+    |> List.max_elt ~compare:(fun a b -> Int.compare a.CM.lc_ops b.CM.lc_ops)
+    |> Option.bind ~f:(fun c -> c.CM.lc_chains)
+  in
+  List.iter scored ~f:(fun (p, _, _, _, post) ->
+      Stdio.eprintf "cost_model_fill: %s chains %s (not part of the golden)\n"
+        (Autotune.sketch_params_label p)
+        (Option.value_map (main_chains post) ~default:"none" ~f:Int.to_string));
+  p_all ~min:4 "every scheduled blocktile leaf's reduction carries its register tile's tm*tn chains"
+    scored ~f:(fun (p, _, _, _, post) ->
+      Option.equal Int.equal (main_chains post) (Some (p.Autotune.sk_tm * p.Autotune.sk_tn)));
+  let capped = { stand_in with fill_chains = Some 8 } in
+  let tiles16 =
+    List.filter scored ~f:(fun (p, _, _, _, _) -> p.Autotune.sk_tm * p.Autotune.sk_tn >= 16)
+  in
+  p_all ~min:2 "a 16-chain leaf ranks bitwise as thread-only under a cap of 8" tiles16
+    ~f:(fun (_, rank, _, _, post) ->
+      match Autotune.ranking_ms ~limits:capped [ post ] with
+      | Some (r, _) -> Float.equal r rank
+      | None -> false);
+  let tiles4 =
+    List.filter scored ~f:(fun (p, _, _, _, _) -> p.Autotune.sk_tm * p.Autotune.sk_tn < 8)
+  in
+  p_all ~min:2 "a fewer-chain leaf ranks no lower under a cap of 8" tiles4
+    ~f:(fun (_, rank, _, _, post) ->
+      match Autotune.ranking_ms ~limits:capped [ post ] with
+      | Some (r, _) -> Float.(r >= rank)
+      | None -> false);
+  (* gh-ocannl-1639 ships the census with no cap advised on any backend (the rog fit moved no order
+     at the gh-1479 cells): under the running backend's own limits -- cc's, or CUDA's on its leg --
+     every leaf ranks bitwise as under the thread-only fill. Setting a backend's [fill_chains] turns
+     this claim red: that is the change that needs its own evidence. *)
+  let own = Context.hardware_limits (Context.auto ()) in
+  let thread_only = { own with fill_chains = Some 1 } in
+  Stdio.eprintf "cost_model_fill: the running backend's fill model: %s (not part of the golden)\n"
+    (Option.value_map (Autotune.ranking_fill_model ~limits:own) ~default:"none" ~f:(fun fm ->
+         Sexp.to_string (CM.sexp_of_fill_model fm)));
+  p_all ~min:4
+    "under the running backend's own limits every leaf ranks bitwise as under the thread-only fill"
+    scored ~f:(fun (_, _, _, _, post) ->
+      Option.equal
+        (fun (r1, b1) (r2, b2) -> Float.equal r1 r2 && Float.equal b1 b2)
+        (Autotune.ranking_ms ~limits:own [ post ])
+        (Autotune.ranking_ms ~limits:thread_only [ post ]));
+  let scored = List.map scored ~f:(fun (p, r, b, o, _) -> (p, r, b, o)) in
   List.iter scored ~f:(fun (p, rank, bound, off) ->
       Stdio.eprintf
         "cost_model_fill: %s rank %.6f ms (no fill %.6f ms, bound %.6f ms) (not part of the golden)\n"

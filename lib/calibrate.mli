@@ -196,11 +196,16 @@ type fill_form =
 
 val effective_ops :
   ?form:fill_form ->
+  ?fill_chains:int ->
   multiprocessors:int ->
   fill_threads:int ->
   Ir.Cost_model.launch_context list ->
   float
-(** The scalar contexts' operations, each divided by its fill under [form] (default [Capped]). *)
+(** The scalar contexts' operations, each divided by its fill under [form] (default [Capped]). The
+    [Capped] form is the score's own {!Ir.Cost_model.context_fill}, with each context's accumulation
+    chains under the ILP cap [fill_chains] (gh-ocannl-1639; default 1, the thread-only fill). The
+    sweep's 4x4 tiles carry 16 chains, so under any cap up to 16 their fills, and a fit over them,
+    are the thread-only ones. *)
 
 type fill_fit =
   | Fill_fit of {
@@ -232,7 +237,12 @@ type fill_fit =
 val default_fill_candidates : int list
 
 val fit_fill :
-  ?candidates:int list -> ?starved:float -> multiprocessors:int -> launch_point list -> fill_fit
+  ?candidates:int list ->
+  ?starved:float ->
+  ?fill_chains:int ->
+  multiprocessors:int ->
+  launch_point list ->
+  fill_fit
 (** For each candidate [t] (default {!default_fill_candidates}), per geometry, the proportional fit
     [time = effective_ops / rate] minimizing the squared relative residuals — per geometry, as a
     wider tile reuses more and runs at its own rate while the saturation is the device's; relative,
@@ -243,4 +253,4 @@ val fit_fill :
     their geometry's best throughput are left out: a few warps per multiprocessor with no latency
     hidden sit on a regime the fill does not model, and fitting them inflates [t] until well-filled
     launches read as partial. The capped and uncapped forms coincide on points whose blocks are no
-    wider than [t]. *)
+    wider than [t]. [fill_chains] is {!effective_ops}'. *)

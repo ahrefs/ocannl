@@ -38,7 +38,7 @@ let fresh_tn =
   fun label dims -> make ~dims label
 
 let it = Ll_test.iter
-let fm = { CM.fm_multiprocessors = 4; fm_fill_threads = 64; fm_tail = false }
+let fm = { CM.fm_multiprocessors = 4; fm_fill_threads = 64; fm_tail = false; fm_chains = 1 }
 
 (* A staged k-step nest: [nb] blocks of [nw] threads, [ns] serial k-steps; each step copies one cell
    per thread from the global [a] into the staged [ta], and the block's threads then accumulate it
@@ -190,7 +190,7 @@ let () =
     (CM.staged_copies ~is_staged (Ll_test.seq copy mma))
 
 let () =
-  let tail = { CM.fm_multiprocessors = 32; fm_fill_threads = 64; fm_tail = true } in
+  let tail = { CM.fm_multiprocessors = 32; fm_fill_threads = 64; fm_tail = true; fm_chains = 1 } in
   let flat = { tail with fm_tail = false } in
   let both ~blocks ~threads =
     (CM.context_fill tail ~blocks ~threads, CM.context_fill flat ~blocks ~threads)
@@ -206,7 +206,7 @@ let () =
     (Poly.equal (both ~blocks:48 ~threads:64) (0.75, 1.));
   p "unsaturated, the busiest multiprocessor's two blocks still fit its issue: no tail"
     (Poly.equal (both ~blocks:40 ~threads:16) (0.3125, 0.3125));
-  let rog = { CM.fm_multiprocessors = 46; fm_fill_threads = 256; fm_tail = true } in
+  let rog = { CM.fm_multiprocessors = 46; fm_fill_threads = 256; fm_tail = true; fm_chains = 1 } in
   p "64 blocks of 256 threads over 46 multiprocessors fill 32/46"
     Float.(abs (CM.context_fill rog ~blocks:64 ~threads:256 -. (32. /. 46.)) < 1e-12);
   (* The tile-MMA leg divides by the same fill. *)
@@ -226,7 +226,9 @@ let () =
          ~launch:(fill, CM.launch_contexts mma)
          s None)
   in
-  let one_lane = { CM.fm_multiprocessors = 32; fm_fill_threads = 1; fm_tail = true } in
+  let one_lane =
+    { CM.fm_multiprocessors = 32; fm_fill_threads = 1; fm_tail = true; fm_chains = 1 }
+  in
   p "the tail reaches the tile-MMA leg through the same fill: 48 one-lane blocks over 32, 4/3x"
     (match (mma_leg one_lane, mma_leg { one_lane with fm_tail = false }) with
     | Some q, Some c ->
