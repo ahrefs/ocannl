@@ -3682,6 +3682,16 @@ let gate_census content =
                          (function_kind ~binding:None params (Pfunction_body body))
                          (List.map arguments ~f:fst) ->
                     run identity (self#bind_applied ~definition_env:scope env params arguments) body
+                | Some
+                    ( identity,
+                      ({ pexp_desc = Pexp_function (params, _, (Pfunction_cases _ as cases)); _ } as
+                       function_),
+                      scope )
+                  when fully_applies
+                         (function_kind ~binding:None params cases)
+                         (List.map arguments ~f:fst) ->
+                    (* A [function]'s cases, each a branch, under its implicit argument. *)
+                    run identity scope function_
                 | _ -> ())
             | _ -> ())
 
@@ -4460,6 +4470,9 @@ type deferred_skips =
       labelled : string list;
       runs : skip_effect;
       callback_skips : expression list;
+      defaults : (string * skip_effect) list;
+          (** What each optional parameter's default runs, by its label: run before the body by an
+              application omitting the label. *)
     }
       (** A function: its positional and required labelled parameters (a [function]'s implicit one
           among them), which an application must supply to run it; what an application runs ([runs],
@@ -4609,7 +4622,17 @@ let skip_list_census content =
           | Pexp_apply (callee, _) when is_evaluating_head callee -> Int.incr evaluating
           | Pexp_apply (callee, arguments) -> (
               match run_of callee arguments with
-              | Some (Skip_function { runs; _ }) -> run runs
+              | Some (Skip_function { runs; defaults; _ }) ->
+                  List.iter defaults ~f:(fun (label, default) ->
+                      if
+                        not
+                          (List.exists arguments ~f:(fun (given, _) ->
+                               match given with
+                               | Ppxlib.Asttypes.Labelled given | Optional given ->
+                                   String.equal given label
+                               | Nolabel -> false))
+                      then run default);
+                  run runs
               | Some (Skip_lazy { key; runs }) -> run ~through:key runs
               | None -> ())
           | _ -> ());
@@ -4678,6 +4701,13 @@ let skip_list_census content =
                      labelled;
                      runs = { run_skips; run_evaluating };
                      callback_skips = List.map whole ~f:fst;
+                     defaults =
+                       List.filter_map params ~f:(fun param ->
+                           match param.pparam_desc with
+                           | Pparam_val (Ppxlib.Asttypes.Optional label, Some default, _) ->
+                               let run_skips, run_evaluating = claims ~branches:false default in
+                               Some (label, { run_skips; run_evaluating })
+                           | _ -> None);
                    })
           | Pexp_lazy inner ->
               let run_skips = fst (claims ~branches:false inner) in
@@ -4749,7 +4779,7 @@ let skip_list_census content =
   let wrapper_skips name callee stored =
     match Option.bind (binding_of callee) ~f:deferred with
     | Some
-        (Skip_function { positional; labelled; runs = { run_evaluating = 0; _ }; callback_skips })
+        (Skip_function { positional; labelled; runs = { run_evaluating = 0; _ }; callback_skips; _ })
       when List.count stored ~f:(fun (label, _) -> Poly.equal label Ppxlib.Asttypes.Nolabel)
            + callback_arguments name
            >= positional

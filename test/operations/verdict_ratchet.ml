@@ -4951,6 +4951,16 @@ let () =
       check rows)|ocaml},
       [ "rows" ],
       1 );
+    ( "refuses a make function whose function-case local helper claims the gated population",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name () in
+  in_leg ~leg "all rows pass" (fun label ->
+      let check = function () -> p_all label rows ~f:Fn.id in
+      check ())|ocaml},
+      [ "rows" ],
+      1 );
     ( "refuses a make function whose local lazy it forces claims the gated population",
       {ocaml|open Verdict.Claims
 let () =

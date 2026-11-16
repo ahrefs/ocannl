@@ -405,6 +405,14 @@ let () = List.iter labels ~f:skip|ocaml},
         {ocaml|let skip = function label -> skipped label
 let () = Stdlib.List.iter skip [ "a"; "b" ]|ocaml},
         [ "iterated label" ] );
+      ( "a wrapper whose omitted optional default skips",
+        {ocaml|let skip ?(before = skipped "a") () = ignore before; skipped "b"
+let () = if on_gpu then run () else skip ()|ocaml},
+        [ "run 2 a" ] );
+      ( "a wrapper whose skipping optional default an application supplies",
+        {ocaml|let skip ?(before = skipped "a") () = ignore before; skipped "b"
+let () = if on_gpu then run () else skip ~before:() ()|ocaml},
+        [] );
       ( "a wrapper that also evaluates a claim",
         {ocaml|let both () = p "a" x; skipped "b"
 let () = if on_gpu then run () else (both (); skipped "c")|ocaml},

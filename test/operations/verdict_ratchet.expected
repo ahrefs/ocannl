@@ -716,6 +716,7 @@ refuses a make function given by name whose nested leg claims the gated populati
 refuses a make function a helper is handed, whose population its caller's gate reads: true
 refuses a make function whose local function it applies claims the gated population: true
 refuses a make function whose local function is handed the gated population: true
+refuses a make function whose function-case local helper claims the gated population: true
 refuses a make function whose local lazy it forces claims the gated population: true
 accepts a make function that never runs its local function claiming the population: true
 refuses a gated wrapper whose caller's gate reads the population it hands in: true

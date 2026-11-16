@@ -91,6 +91,8 @@ ok: skip list -- a wrapper of a wrapper run in a branch
 ok: skip list -- a one-skip wrapper applied twice in a branch
 ok: skip list -- a one-skip wrapper handed to an iteration
 ok: skip list -- a function-case wrapper handed to an iteration
+ok: skip list -- a wrapper whose omitted optional default skips
+ok: skip list -- a wrapper whose skipping optional default an application supplies
 ok: skip list -- a wrapper that also evaluates a claim
 ok: skip list -- a two-parameter wrapper an indexed iteration saturates
 ok: skip list -- a two-parameter wrapper a map only applies in part
