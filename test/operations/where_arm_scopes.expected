@@ -1,3 +1,33 @@
+was_key_arg1: Access_fold's Emitted mode walks the 2 scope bodies in the kernel's text order: true
+was_key_arg1: Access_fold's Emitted mode walks the 2 scope bodies in the kernel's text order: true
+was_key_arg1: the values are the closed form's: true
+was_key_arg1: condition text agrees exactly when the backend normalizes annotations alike: true
+was_key_arg1: Access_fold's Emitted mode walks the 2 scope bodies in the kernel's text order: true
+was_key_arg1: changing a rendered operand or precision changes the main logic: true
+was_key_arg1: IR key equality follows backend precision normalization: true
+was_key_arg1: a rendered difference keeps IR keys apart: true
+was_key_arg1: signed zero remains distinct: true
+was_key_arg1: explicit rounding retains its exact target: true
+was_key_arg2: Access_fold's Emitted mode walks the 2 scope bodies in the kernel's text order: true
+was_key_arg2: Access_fold's Emitted mode walks the 2 scope bodies in the kernel's text order: true
+was_key_arg2: the values are the closed form's: true
+was_key_arg2: condition text agrees exactly when the backend normalizes annotations alike: true
+was_key_arg2: Access_fold's Emitted mode walks the 2 scope bodies in the kernel's text order: true
+was_key_arg2: changing a rendered operand or precision changes the main logic: true
+was_key_arg2: IR key equality follows backend precision normalization: true
+was_key_arg2: a rendered difference keeps IR keys apart: true
+was_key_arg2: signed zero remains distinct: true
+was_key_arg2: explicit rounding retains its exact target: true
+was_key_precision: Access_fold's Emitted mode walks the 2 scope bodies in the kernel's text order: true
+was_key_precision: Access_fold's Emitted mode walks the 2 scope bodies in the kernel's text order: true
+was_key_precision: the values are the closed form's: true
+was_key_precision: condition text agrees exactly when the backend normalizes annotations alike: true
+was_key_precision: Access_fold's Emitted mode walks the 2 scope bodies in the kernel's text order: true
+was_key_precision: changing a rendered operand or precision changes the main logic: true
+was_key_precision: IR key equality follows backend precision normalization: true
+was_key_precision: a rendered difference keeps IR keys apart: true
+was_key_precision: signed zero remains distinct: true
+was_key_precision: explicit rounding retains its exact target: true
 was_emission_order: Access_fold's Emitted mode walks the 4 scope bodies in the kernel's text order: true
 was_emission_order: the values are the closed form's: true
 was_emission_order: the Emitted walk ends the same four bodies the operand-order walk visits: true

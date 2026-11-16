@@ -833,3 +833,14 @@ files.
   codegen-minted scope local, naming the cell only at the closing store. The decline is
   `Low_level.decide_accum_width`'s `Skip_debug_logging`, shared with `Schedule.Privatize` and the
   unroll mint, so logged candidates all stay per-step.
+
+- `Scope_order` condition equality normalizes heterogeneous operand annotations through the
+  backend oracle's `comp_prec`, in both `derived_plan` and the renderer's consistency comparison
+  (gh-ocannl-2241). Projections compare only the kept operand at the enclosing evaluation precision,
+  selected by `Ops.binop_conditionality`, matching `Access_fold`'s discarded-operand policy.
+  `Round_prec` retains its exact target; float constants retain their sign bits, and gate operand
+  precision and `unconverted` remain part of the key. `where_arm_scopes` compiles mixed spellings
+  beside identical-spelling twins and compares fresh main logic; changing a kept operand or a
+  rendered precision must still change both text and keys. These hand-built cases are premises
+  for the broader Where/scope generator (gh-ocannl-2250), not a claim that structural equality
+  recognizes every possible pair of identical rendered expressions.

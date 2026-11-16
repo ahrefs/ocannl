@@ -7502,41 +7502,58 @@ module Scope_order = struct
      decide a condition differently ([x / -0.0 > 0]), so they are different conditions (Codex review
      of the gh-ocannl-2213 PR). A key holds no [Local_scope] ({!arms}' and {!gate}'s [cond_defs]
      rule), so a leaf without a nested expression compares as {!equal_scalar_t} does. *)
-  let rec equal_cond ~eval (a : scalar_t) (b : scalar_t) =
+  let rec equal_cond ~comp_prec ~eval (a : scalar_t) (b : scalar_t) =
     (* An operator's operands as [C_syntax.pp_scalar_op_at] renders them: at the precisions
-       {!operand_eval_precisions} gives, so an annotation a homogeneous operator overrides does not
-       tell two conditions apart (Codex review of the gh-ocannl-2213 PR). *)
+       {!operand_eval_precisions} gives after [comp_prec] normalizes storage annotations, so an
+       annotation overridden by a homogeneous operator or widened by the backend does not tell
+       conditions apart (gh-ocannl-2241). [Round_prec] deliberately retains its exact target below.
+       Projections use {!Ops.binop_conditionality}, as [Access_fold]'s discarded-operand policy
+       does, and compare only the rendered operand at [eval], ignoring both annotations. *)
     let args op xs ys =
-      let ps = operand_eval_precisions ~eval op (Array.of_list (List.map xs ~f:snd)) in
-      let qs = operand_eval_precisions ~eval op (Array.of_list (List.map ys ~f:snd)) in
+      let ps =
+        operand_eval_precisions ~eval op
+          (Array.of_list (List.map xs ~f:(fun (_, p) -> comp_prec p)))
+      in
+      let qs =
+        operand_eval_precisions ~eval op
+          (Array.of_list (List.map ys ~f:(fun (_, p) -> comp_prec p)))
+      in
       Array.for_all2_exn ps qs ~f:Ops.equal_prec
-      && List.for_alli xs ~f:(fun k (x, _) -> equal_cond ~eval:ps.(k) x (fst (List.nth_exn ys k)))
+      && List.for_alli xs ~f:(fun k (x, _) ->
+          equal_cond ~comp_prec ~eval:ps.(k) x (fst (List.nth_exn ys k)))
     in
     match (a, b) with
     | Constant x, Constant y -> Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+    | Unop (Ops.Round_prec, (x, p)), Unop (Ops.Round_prec, (y, q)) ->
+        Ops.equal_prec p q && equal_cond ~comp_prec ~eval:p x y
     | Unop (o, x), Unop (o', y) -> Ops.equal_unop o o' && args (Ops.Unop o) [ x ] [ y ]
-    | Binop (o, x1, x2), Binop (o', y1, y2) ->
-        Ops.equal_binop o o' && args (Ops.Binop o) [ x1; x2 ] [ y1; y2 ]
+    | Binop (o, x1, x2), Binop (o', y1, y2) -> (
+        Ops.equal_binop o o'
+        &&
+        match Ops.binop_conditionality o with
+        | Only_first -> equal_cond ~comp_prec ~eval (fst x1) (fst y1)
+        | Only_second -> equal_cond ~comp_prec ~eval (fst x2) (fst y2)
+        | Both_operands | Gated_second -> args (Ops.Binop o) [ x1; x2 ] [ y1; y2 ])
     | Ternop (o, x1, x2, x3), Ternop (o', y1, y2, y3) ->
         Ops.equal_ternop o o' && args (Ops.Ternop o) [ x1; x2; x3 ] [ y1; y2; y3 ]
     | Get_dynamic x, Get_dynamic y ->
         Ops.equal_prec (snd x.dyn_value) (snd y.dyn_value)
-        && equal_cond ~eval:(snd x.dyn_value) (fst x.dyn_value) (fst y.dyn_value)
+        && equal_cond ~comp_prec ~eval:(snd x.dyn_value) (fst x.dyn_value) (fst y.dyn_value)
         && equal_scalar_t
              (Get_dynamic { x with dyn_value = (Constant 0., snd x.dyn_value) })
              (Get_dynamic { y with dyn_value = (Constant 0., snd x.dyn_value) })
     | _ -> equal_scalar_t a b
 
-  let equal_key a b =
+  let equal_key ?(comp_prec = Fn.id) a b =
     match (a, b) with
     | Select a, Select b ->
         Ops.equal_prec a.prec b.prec
         && Bool.equal a.unconverted b.unconverted
-        && equal_cond ~eval:a.prec a.cond b.cond
+        && equal_cond ~comp_prec ~eval:a.prec a.cond b.cond
     | Gate a, Gate b ->
         Ops.equal_binop a.op b.op && Ops.equal_prec a.prec b.prec
         && Ops.equal_prec a.first_prec b.first_prec
-        && equal_cond ~eval:a.first_prec a.first b.first
+        && equal_cond ~comp_prec ~eval:a.first_prec a.first b.first
     | Select _, Gate _ | Gate _, Select _ -> false
 
   type 'p lit = { key : key; holds : bool; anywhere : bool; payload : 'p }
@@ -7837,7 +7854,10 @@ module Scope_order = struct
   let statement_entries o (roots : (Ops.prec * scalar_t) list) =
     List.concat_map roots ~f:(fun (prec, s) -> entries o prec s)
 
-  let derived_plan o roots = plan ~reads:Lazy.force (statement_entries o roots)
+  let derived_plan o roots =
+    plan
+      ~same:(fun x y -> equal_key ~comp_prec:o.comp_prec x.key y.key)
+      ~reads:Lazy.force (statement_entries o roots)
 
   let emission o : Access_fold.emission =
     {

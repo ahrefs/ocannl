@@ -690,7 +690,101 @@ let row_emission_order () =
         (name ^ ": the operand-order walk visits them out of the kernel's order")
         (List.length operand = 4 && not (in_text_order operand))
 
+(* gh-ocannl-2241: hand-built conditions differing only in discarded projection operands or
+   heterogeneous annotations that compute at the same precision. Compile each beside its
+   spelled-alike twin, retaining the symbols, scopes and routine name so the entire main logic must
+   match. The mixed statement has two distinct scope definitions: grouping its conditions
+   differently is observable to check_scope_order, even though both expressions compute alike. *)
+let row_condition_key ~name ~precision ~negative condition =
+  let x = mk (name ^ "_x") and out = mk ~dims:[| n |] (name ^ "_out") in
+  let i = sym () in
+  let _, a = sum_scope x ~at:(in_range i) in
+  let _, b = sum_scope x ~at:(in_range i) in
+  let first = condition i false and second = condition i true in
+  let program second =
+    loop_n i n (set_at out (iter i) (add (where_ first a (c 0.)) (where_ second b (c 0.))))
+  in
+  let _, twin = run_row ~name ~inputs:[ x ] ~outputs:[ out ] (program first) in
+  let expect_same =
+    if not precision then true
+    else
+      match recorded name with
+      | None -> false
+      | Some (oracle, _) -> Ops.equal_prec (oracle.comp_prec Ops.fp8) (oracle.comp_prec single)
+  in
+  Generated.arm name;
+  let got, mixed = run_row ~name ~inputs:[ x ] ~outputs:[ out ] (program second) in
+  values name got [ Array.init n ~f:(fun k -> if k < 2 then 2. *. sum2 k else 0.) ];
+  p
+    (name ^ ": condition text agrees exactly when the backend normalizes annotations alike")
+    (Bool.equal expect_same (String.equal twin mixed));
+  let distinct = negative i in
+  Generated.arm name;
+  let _, changed = run_row ~name ~inputs:[ x ] ~outputs:[ out ] (program distinct) in
+  p
+    (name ^ ": changing a rendered operand or precision changes the main logic")
+    (not (String.equal twin changed));
+  match recorded name with
+  | None -> p (name ^ ": condition-key oracle was recorded") false
+  | Some (oracle, _) ->
+      let key cond =
+        LL.Scope_order.Select { cond; prec = Ops.index_prec (); unconverted = false }
+      in
+      let equal = LL.Scope_order.equal_key ~comp_prec:oracle.comp_prec in
+      p
+        (name ^ ": IR key equality follows backend precision normalization")
+        (Bool.equal expect_same (equal (key first) (key second)));
+      p
+        (name ^ ": a rendered difference keeps IR keys apart")
+        (not (equal (key first) (key distinct)));
+      p (name ^ ": signed zero remains distinct") (not (equal (key (c 0.)) (key (c (-0.)))));
+      p
+        (name ^ ": explicit rounding retains its exact target")
+        (not
+           (equal
+              (key (LL.Unop (Ops.Round_prec, (embed i, Ops.fp8))))
+              (key (LL.Unop (Ops.Round_prec, (embed i, single))))))
+
+let projection_condition ?(limit = 2) op i different =
+  let kept = lt (embed i) (ic limit) in
+  let dead = (ic (if different then 2 else 1), Ops.index_prec ()) in
+  match Ops.binop_conditionality op with
+  | Only_first -> LL.Binop (op, (kept, Ops.index_prec ()), dead)
+  | Only_second -> LL.Binop (op, dead, (kept, Ops.index_prec ()))
+  | Both_operands | Gated_second -> invalid_arg "projection fixture requires a projection"
+
+let precision_condition ?(prec = Ops.fp8) i different =
+  LL.Ternop
+    ( Ops.Where,
+      ( LL.Binop (Ops.Cmplt, (embed i, Ops.index_prec ()), (c 2., single)),
+        if different then prec else single ),
+      (c 1., single),
+      (c 0., single) )
+
+let row_condition_keys () =
+  List.iter
+    [
+      ( "was_key_arg1",
+        false,
+        projection_condition Ops.Arg1,
+        fun i -> projection_condition ~limit:3 Ops.Arg1 i false );
+      ( "was_key_arg2",
+        false,
+        projection_condition Ops.Arg2,
+        fun i -> projection_condition ~limit:3 Ops.Arg2 i false );
+      ( "was_key_precision",
+        true,
+        (fun i different -> precision_condition i different),
+        fun i -> precision_condition ~prec:Ops.int32 i true );
+    ]
+    ~f:(fun (name, precision, condition, negative) ->
+      try row_condition_key ~name ~precision ~negative condition
+      with Invalid_argument message ->
+        Stdio.eprintf "%s: %s\n%!" name message;
+        p (name ^ ": scope-order check accepts spelled-alike conditions") false)
+
 let () =
+  row_condition_keys ();
   row_emission_order ();
   row_then ();
   row_else ();
