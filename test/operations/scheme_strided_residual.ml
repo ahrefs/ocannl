@@ -375,9 +375,8 @@ let () =
       in
       List.iter [ true; false ] ~f:(fun first ->
           let order = if first then "shortcut first" else "pool first" in
-          (* The outputs merge, and the pair still owes its tags: a padded window passes its
-             output's tag on, a valid one derives it, and they differ at [1_(bcast_if_1)]
-             (gh-ocannl-2038). *)
+          (* The outputs merge, and the pair still owes its tags through each window's derivation
+             rule (gh-ocannl-2038, gh-ocannl-2245). *)
           p
             (order
            ^ ": the residual equation o_p = o_sc holds on unsolved widths, holding only the pair")
@@ -869,7 +868,7 @@ let () =
       in
       p_all ~min:512 "the output, kernel and input keep their tags or the system is refused" cells
         ~f:(fun cell -> List.for_all orders ~f:(agrees cell)));
-  Verdict.case "a padded window keeps its extent's basis, whatever the kernel" (fun () ->
+  Verdict.case "a padded window derives its basis from its extent, whatever the kernel" (fun () ->
       let cells = List.cartesian_product tags tags in
       let orders = permutations [ 0; 1; 2 ] in
       p_all ~min:16 "the input is the extent's, in every order" cells ~f:(fun (ob, kb) ->
@@ -1073,7 +1072,12 @@ let side_ksize = function Valid { ksize; _ } -> ksize | Padded _ -> 1
 (* The input a window derives from its solved output and kernel. *)
 let side_input side ~o:(od, ob) ~k:(kd, kb) =
   match side with
-  | Padded { stride } -> Some (stride * od, ob)
+  | Padded { stride } ->
+      (* gh-ocannl-2245: a nonidentity stride derives no claim from the broadcast top. *)
+      let basis =
+        if stride <> 1 && od = 1 && String.equal ob Row.bcast_if_1 then Row.default_basis else ob
+      in
+      Some (stride * od, basis)
   | Valid { stride; _ } ->
       let size = (stride * (od - 1)) + kd in
       let identity =

@@ -270,6 +270,12 @@ let is_reserved_basis b = String.equal b default_basis || String.equal b bcast_i
 let is_claim_free (s : solved_dim) =
   String.equal s.basis default_basis || (String.equal s.basis bcast_if_1 && s.d = 1)
 
+(* A nonidentity stride derives no claim from a claim-free extent (gh-ocannl-2245). Unlike the
+   identity it changes the size, so copying the broadcast top's tag would turn that filler into an
+   atom. Atoms, including [bcast_if_1] above size 1, keep their claim. *)
+let stride_input_basis ~stride (extent : solved_dim) =
+  if stride = 1 || not (is_claim_free extent) then extent.basis else default_basis
+
 (* The claim a solved component makes in concatenation arithmetic (gh-ocannl-2191): none for
    [default] and the broadcast top, as for windows, and none for an empty [0_(bcast_if_1)], the
    segment a discarded component closes to; every other tag claims, [bcast_if_1] above size 1
@@ -897,7 +903,7 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
       | Affine
           { stride; over = Dim s; conv = None | Some { use_padding = true; _ }; stride_offset = _ }
         ->
-          Dim { d = s.d * stride; basis = s.basis; proj_id = None }
+          Dim { d = s.d * stride; basis = stride_input_basis ~stride s; proj_id = None }
       | res -> res)
   | Concat dims -> (
       let dims = List.map dims ~f:(fun d -> s_dim_one ~keep_affine v ~value ~in_:d) in
@@ -2918,41 +2924,34 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
       unify_dim ?settling ~stage origin (over, dim) env
   | dim, Affine { stride; over; conv; stride_offset = _ } when is_identity_window ~stride ~conv ->
       unify_dim ?settling ~stage origin (over, dim) env
-  | ( Affine
-        {
-          stride = stride1;
-          over = over1;
-          conv = Some { use_padding = true; _ } | None;
-          stride_offset = _;
-        },
-      Affine
-        {
-          stride = stride2;
-          over = over2;
-          conv = Some { use_padding = true; _ } | None;
-          stride_offset = _;
-        } )
-    when stride1 % stride2 = 0 || stride2 % stride1 = 0 ->
-      (* Both have use_padding=true, we can simplify by dividing strides *)
-      unify_dim ?settling ~stage origin
-        ( Affine
-            {
-              stride = (if stride1 > stride2 then stride1 / stride2 else stride2 / stride1);
-              over = (if stride1 > stride2 then over1 else over2);
-              conv = None;
-              stride_offset = 0;
-            },
-          if stride1 > stride2 then over2 else over1 )
-        env
+  (* Nonidentity strides are not injective in their basis: cancelling common strides while outputs
+     are open would equate the top with [default]. The general padded pair arm below holds their
+     size equation until closure, as it does for valid windows. *)
   | Affine { stride; over = Dim s; conv = None | Some { use_padding = true; _ }; _ }, dim
   | dim, Affine { stride; over = Dim s; conv = None | Some { use_padding = true; _ }; _ } ->
       (* stride_offset doesn't contribute to shapes when conv = None or use_padding = true *)
-      unify_dim ?settling ~stage origin (get_dim ~d:(stride * s.d) ~basis:s.basis (), dim) env
+      unify_dim ?settling ~stage origin
+        (get_dim ~d:(stride * s.d) ~basis:(stride_input_basis ~stride s) (), dim)
+        env
   | Affine { stride; over; conv = None | Some { use_padding = true; _ }; _ }, Dim s
   | Dim s, Affine { stride; over; conv = None | Some { use_padding = true; _ }; _ } ->
       (* stride_offset doesn't contribute to shapes when conv = None or use_padding = true *)
       if s.d >= 0 && s.d % stride = 0 then
-        unify_dim ?settling ~stage origin (get_dim ~d:(s.d / stride) ~basis:s.basis (), over) env
+        let d = s.d / stride in
+        let solve_over basis = unify_dim ?settling ~stage origin (get_dim ~d ~basis (), over) env in
+        match
+          window_bases ~size:d ~tags:[ s.basis ] ~derives:(fun extent ->
+              String.equal (stride_input_basis ~stride extent) s.basis)
+        with
+        | [] ->
+            raise
+            @@ Shape_error ("stride: conflicting dimension bases", [ Dim_mismatch [ dim1; dim2 ] ])
+        | [ basis ] -> solve_over basis
+        | bases ->
+            settle_open bases ~solve:(fun basis ->
+                let constrs, env = solve_over basis in
+                let more, env = unify_dim ~stage origin (dim1, dim2) env in
+                (constrs @ more, env))
       else
         raise
         @@ Shape_error
@@ -3032,8 +3031,8 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
                  [ Dim_mismatch [ dim1; dim2 ] ] ))
   | ( Affine { stride = s1; over = o1; conv = None | Some { use_padding = true; _ }; _ },
       Affine { stride = s2; over = o2; conv = None | Some { use_padding = true; _ }; _ } ) ->
-      (* Strides that divide each other took the padded-pair arm above. A padded window or a plain
-         affine reads [input = s * o = s * (o - 1) + s]: its span is its stride. *)
+      (* A padded window or a plain affine reads [input = s * o = s * (o - 1) + s]: its span is its
+         stride. *)
       window_pair ~s1 ~span1:s1 ~o1 ~s2 ~span2:s2 ~o2 ()
   | ( Affine
         {
