@@ -916,8 +916,25 @@ let virtualize_settings =
     footprint_materialization;
   }
 
+(* gh-ocannl-2196: where one evaluation reads a contributor -- the index expression of a [Get], or a
+   gather's static indices with its spliced value. Two equal keys are one cell, so one setter. *)
+module Read_site = struct
+  module T = struct
+    type t =
+      | Static of Indexing.axis_index array
+      | Gather of { idcs : Indexing.axis_index array; dyn_axis : int; dyn_value : scalar_arg }
+    [@@deriving compare, sexp_of]
+  end
+
+  include T
+  include Comparator.Make (T)
+end
+
 type read_charge = {
   loads : Set.M(Tnode).t;  (** Contributors loaded whichever way the selects below go. *)
+  sites : Set.M(Read_site).t Map.M(Tnode).t;
+      (** gh-ocannl-2196: per contributor of [loads], the distinct sites this level reads it at. A
+          node read at [k] of them evaluates [k] cells, so [k] of its alternatives. *)
   selects : select_charge list;  (** The value selects met at this level, program order. *)
 }
 [@@deriving sexp_of]
@@ -972,7 +989,8 @@ type traced_array = {
           range-guarded setter per component costs one component per read. The per-setter maximum is
           this node's per-read charge; downstream, every setter's alternatives, narrower ones
           included, are joined with the consumer's own loads (gh-ocannl-2128), beside the union of
-          the tied maxima as a floor — bounded by {!max_fanin_alternatives}. *)
+          the tied maxima as a floor — bounded by {!max_fanin_alternatives}. A consumer reading the
+          node at [k] distinct sites is joined with [k] of them (gh-ocannl-2196). *)
   mutable inline_fanin : int;
       (** The transitive inline fan-in the guard computed for this node under the current
           placements: the number of distinct materialized nodes the node's fully-inlined computation
@@ -1555,11 +1573,22 @@ let speculable_select ~(cond : scalar_t) ~(arms : scalar_arg list) =
    join the STATEMENT sink, never an arm's: exact under a gate, whose hoisted definitions run
    unconditionally, and an upper charge under a short-circuiting [Where], whose arm definitions run
    under its condition (gh-ocannl-2145); - a dead loop's body replays zero times, and a [Tile_mma]
-   (constructed after the analyses) is opaque. *)
+   (constructed after the analyses) is opaque; - each contributor's distinct sites at its level are
+   kept ({!Read_site}, gh-ocannl-2196): [a[j] + a[j+dim]] evaluates two cells of [a], so two of its
+   alternatives, where the same index twice is one cell. The level is the sink the read joins, so
+   two arms of one select never pair, while a read beside a [Local_scope] body's does. A re-read
+   across levels -- an arm re-reading the statement's node -- is already charged again by
+   {!resolve_alternatives}' expansion of the arm. *)
 type eval_reads = { e_stmt : read_charge; e_cur : read_charge; e_saved : read_charge list }
 
-let empty_charge = { loads = Set.empty (module Tn); selects = [] }
-let merge_charges a b = { loads = Set.union a.loads b.loads; selects = a.selects @ b.selects }
+let empty_charge = { loads = Set.empty (module Tn); sites = Map.empty (module Tn); selects = [] }
+
+let merge_charges a b =
+  {
+    loads = Set.union a.loads b.loads;
+    sites = Map.merge_skewed a.sites b.sites ~combine:(fun ~key:_ s1 s2 -> Set.union s1 s2);
+    selects = a.selects @ b.selects;
+  }
 
 let eval_reads_traversal ~self =
   let open Access_fold in
@@ -1573,9 +1602,15 @@ let eval_reads_traversal ~self =
       scan_implicit = Skip;
     }
   in
-  let contributor acc q =
+  let contributor acc q site =
     if Tn.equal q self then acc
-    else { acc with e_cur = { acc.e_cur with loads = Set.add acc.e_cur.loads q } }
+    else
+      let sites =
+        Map.update acc.e_cur.sites q ~f:(function
+          | None -> Set.singleton (module Read_site) site
+          | Some s -> Set.add s site)
+      in
+      { acc with e_cur = { acc.e_cur with loads = Set.add acc.e_cur.loads q; sites } }
   in
   let hooks =
     {
@@ -1590,7 +1625,9 @@ let eval_reads_traversal ~self =
       after_scalar =
         (fun _ acc sc ->
           match sc with
-          | Get (q, _) | Get_dynamic { tn = q; _ } -> contributor acc q
+          | Get (q, idcs) -> contributor acc q (Read_site.Static idcs)
+          | Get_dynamic { tn = q; idcs; dyn_axis; dyn_value } ->
+              contributor acc q (Read_site.Gather { idcs; dyn_axis; dyn_value })
           | Local_scope _ -> (
               match acc.e_saved with
               | cur :: saved ->
@@ -1685,12 +1722,26 @@ let widest_alternatives alts =
   List.filter alts ~f:(fun s -> Set.length s = width)
   |> List.dedup_and_sort ~compare:Set.compare_direct
 
+(* gh-ocannl-2196: how many of [q]'s alternatives one evaluation at this level runs -- one per
+   distinct site, each a cell of its own. Past {!max_fanin_alternatives} sites nothing changes: a
+   node keeps at most that many alternatives, so that many expansions already reach their union. *)
+let site_multiplicity (c : read_charge) q =
+  match Map.find c.sites q with
+  | None -> 1
+  | Some s -> Int.clamp_exn (Set.length s) ~min:1 ~max:max_fanin_alternatives
+
 let resolve_alternatives ~blends ~expand (c : read_charge) : Set.M(Tn).t list =
   let prune alts = fst (cap_alternatives alts) in
   let rec go alts c =
     let alts =
       Set.fold c.loads ~init:alts ~f:(fun alts q ->
-          prune (List.concat_map alts ~f:(fun acc -> expand acc q)))
+          (* A node read at [k] distinct sites is expanded [k] times, pruned after each: the
+             antichain of every union of [k] of its alternatives, repetition allowed, so the widest
+             is the max over [k]-multisets -- exact where which cell runs which alternative is
+             unknown, and never past the union of them all. *)
+          Fn.apply_n_times ~n:(site_multiplicity c q)
+            (fun alts -> prune (List.concat_map alts ~f:(fun acc -> expand acc q)))
+            alts)
     in
     List.fold c.selects ~init:alts ~f:(fun alts s ->
         if blends && s.speculable then List.fold s.arms ~init:alts ~f:go
@@ -11152,7 +11203,10 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
      and arms included, and a consumer is charged the maximum over them joined with its own loads
      (gh-ocannl-2128): a narrower arm can be the wider one once the consumer's loads overlap the
      other. The union of the tied maxima stays an alternative (a floor: no charge is below the
-     one-set reading's), and the lists are bounded by {!max_fanin_alternatives}.
+     one-set reading's), and the lists are bounded by {!max_fanin_alternatives}. A consumer reading
+     a dependency at [k] distinct index sites in one evaluation runs [k] of its alternatives, and is
+     charged the widest union of [k] of them, repetition allowed (gh-ocannl-2196,
+     {!site_multiplicity}): [a[j] + a[j+dim]] over a concat costs both slices.
 
      A cycle of nodes still headed for inlining (gh-ocannl-1962) has no bottom to start from: a node
      with several setters can read, in one of them, a node reading the cells another of its setters
@@ -11187,7 +11241,7 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
       match Hashtbl.find traced_store tn with Some traced -> traced.setter_reads | None -> []
     in
     (* Every node a charge can load, whichever way its selects go. *)
-    let rec all_loads acc { loads; selects } =
+    let rec all_loads acc { loads; selects; sites = _ } =
       List.fold selects ~init:(Set.union acc loads) ~f:(fun acc { arms; _ } ->
           List.fold arms ~init:acc ~f:all_loads)
     in
@@ -11303,10 +11357,32 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
               let alts, capped = cap_alternatives (floor :: pairs) in
               (* gh-ocannl-2171: whether a test hits a fan-in tie or a narrower alternative is a
                  grep of this line. *)
-              if Utils.settings.log_level > 1 && List.length alts > 1 then
-                Stdio.eprintf "fan-in alternatives: %s keeps %d (own charge %d%s)\n%!"
-                  (Tn.debug_name tn) (List.length alts) fanin
-                  (if capped then ", capped" else "");
+              (if Utils.settings.log_level > 1 then
+                 (* gh-ocannl-2196: the inlined contributors an evaluation reads at several sites,
+                    with the most sites any one level reads each at (a materialized one counts once,
+                    however many sites read it). *)
+                 let multi =
+                   let rec go m c =
+                     let m =
+                       Map.fold c.sites ~init:m ~f:(fun ~key ~data m ->
+                           let k = Set.length data in
+                           if k < 2 || not (entered key) then m
+                           else Map.update m key ~f:(function None -> k | Some k' -> max k k'))
+                     in
+                     List.fold c.selects ~init:m ~f:(fun m s -> List.fold s.arms ~init:m ~f:go)
+                   in
+                   List.fold
+                     (setter_reads tn @ inherited_reads tn)
+                     ~init:(Map.empty (module Tnode))
+                     ~f:go
+                 in
+                 if List.length alts > 1 || not (Map.is_empty multi) then
+                   Stdio.eprintf "fan-in alternatives: %s keeps %d (own charge %d%s%s)\n%!"
+                     (Tn.debug_name tn) (List.length alts) fanin
+                     (if capped then ", capped" else "")
+                     (String.concat
+                        (List.map (Map.to_alist multi) ~f:(fun (q, k) ->
+                             Printf.sprintf ", multi-site %s x%d" (Tn.debug_name q) k))));
               (alts, fanin)
           | _ ->
               let members_set = Set.of_list (module Tnode) members in

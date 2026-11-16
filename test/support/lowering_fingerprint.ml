@@ -33,10 +33,16 @@ let namer ?known () =
             tok)
     | _ -> "t" ^ Int.to_string tn.Tn.uid
 
-(* A setter's charge: its loads, then each select's arms in braces separated by bars, a speculable
-   select's braces prefixed by a tilde. Destructured exhaustively, like [traced] below. *)
-let rec read_charge ~uids ({ loads; selects } : LL.read_charge) =
+(* A setter's charge: its loads, each node read at several sites with its site count (the sites
+   themselves name index symbols, which each lowering mints afresh), then each select's arms in
+   braces separated by bars, a speculable select's braces prefixed by a tilde. Destructured
+   exhaustively, like [traced] below. *)
+let rec read_charge ~uids ({ loads; sites; selects } : LL.read_charge) =
   uids (Set.to_list loads)
+  ^ String.concat
+      (List.filter_map (Map.to_alist sites) ~f:(fun (q, s) ->
+           if Set.length s < 2 then None
+           else Some (Printf.sprintf "*%s:%d" (uids [ q ]) (Set.length s))))
   ^ String.concat
       (List.map selects ~f:(fun ({ speculable; arms } : LL.select_charge) ->
            (if speculable then "~{" else "{")

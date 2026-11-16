@@ -388,8 +388,24 @@ val write_demand : t -> write_demand
     Scan bodies are entered (gh-ocannl-1134); a scan binder is reported with [axis = None]. Dead
     loops are entered: the walk is structural. *)
 
+(** gh-ocannl-2196: where one evaluation reads a contributor -- a [Get]'s index expression, or a
+    gather's static indices with its dynamic axis and spliced value. Equal keys name one cell. *)
+module Read_site : sig
+  type t =
+    | Static of Indexing.axis_index array
+    | Gather of { idcs : Indexing.axis_index array; dyn_axis : int; dyn_value : scalar_arg }
+  [@@deriving compare, sexp_of]
+
+  include Comparator.S with type t := t
+end
+
 type read_charge = {
   loads : Set.M(Tnode).t;  (** Contributors loaded whichever way the selects below go. *)
+  sites : Set.M(Read_site).t Map.M(Tnode).t;
+      (** gh-ocannl-2196: per contributor of [loads], the distinct sites this level reads it at
+          (this level: the statement, [Local_scope] bodies included, or one select arm). A node read
+          at [k] sites evaluates [k] cells, so {!resolve_alternatives} charges it [k] of its
+          alternatives. *)
   selects : select_charge list;  (** The value selects met at this level, program order. *)
 }
 [@@deriving sexp_of]

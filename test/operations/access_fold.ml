@@ -388,6 +388,48 @@ let () =
              ~b:(b, [| fixed 0 |])
              (put (at c_))))
        []);
+  (* gh-ocannl-2196: the distinct sites one level reads a contributor at. *)
+  let sites_of (c : LL.read_charge) q =
+    Option.value_map (Map.find c.sites q) ~default:0 ~f:Set.length
+  in
+  let sites sc q = sites_of (LL.read_charge ~self:out sc) q in
+  let at1 tn = get tn [| fixed 1 |] in
+  p "the same index read twice is one site" (sites (add (at a) (at a)) a = 1);
+  p "a stored computation's two sites are counted by the same collector"
+    (sites_of (LL.read_charge_of_proc ~self:out (put (add (at a) (at1 a)))) a = 2);
+  p "two distinct indices are two sites" (sites (add (at a) (at1 a)) a = 2);
+  p "a read outside a Local_scope and one inside it are two sites of the statement"
+    (sites (add (at a) (scope (LL.Set_local (scope_id, at1 a)))) a = 2);
+  p "gathers splicing different values are two sites, equal ones one"
+    (let g v = gather ~tn:b ~idcs:[| fixed 0 |] ~dyn_axis:0 ~dyn_value:(v, single) in
+     sites (add (g (at a)) (g (at1 a))) b = 2 && sites (add (g (at a)) (g (at a))) b = 1);
+  p "the setter's own reads and merge-buffer reads record no site"
+    (Map.is_empty
+       (LL.read_charge ~self:out
+          (add (add (at out) (at1 out)) (LL.Get_merge_buffer (a, [| fixed 1 |]))))
+         .sites);
+  p "reads in different arms of a select are never a pair: one site in each arm"
+    (let c = LL.read_charge ~self:out (where_ (at b) (at a) (at1 a)) in
+     sites_of c a = 0
+     && List.equal Int.equal
+          (List.concat_map c.selects ~f:(fun s -> List.map s.arms ~f:(fun arm -> sites_of arm a)))
+          [ 1; 1 ]);
+  (let c = LL.read_charge ~self:out (where_ (at b) (add (at a) (at1 a)) (at c_)) in
+   p "two sites in one arm are two sites of that arm"
+     (match c.selects with [ { arms = [ t; _ ]; _ } ] -> sites_of t a = 2 | _ -> false));
+  (* A dependency with alternatives [{b}] and [{c_}] (a concat, or a select's arms): one site keeps
+     both, two sites run two of them. *)
+  (let dep_alts = [ Set.singleton (module Tn) b; Set.singleton (module Tn) c_ ] in
+   let expand acc q =
+     if Tn.equal q a then List.map dep_alts ~f:(Set.union acc) else [ Set.add acc q ]
+   in
+   let res sc = LL.resolve_alternatives ~blends:false ~expand (LL.read_charge ~self:out sc) in
+   p "a one-site read keeps each alternative of the dependency"
+     (alts_eq (res (add (at a) (at d_))) [ [ b; d_ ]; [ c_; d_ ] ]);
+   p "a two-site read is charged two of the dependency's alternatives"
+     (alts_eq (res (add (add (at a) (at1 a)) (at d_))) [ [ b; c_; d_ ] ]);
+   p "the same index read twice is charged one alternative"
+     (alts_eq (res (add (add (at a) (at a)) (at d_))) [ [ b; d_ ]; [ c_; d_ ] ]));
   let tile =
     tile_mma
       ~d:(d_, [| fixed 0 |])

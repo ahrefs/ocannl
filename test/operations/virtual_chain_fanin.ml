@@ -2520,6 +2520,211 @@ let phase11 () =
            ~out ~expected llc o));
   LL.virtualize_settings.max_inline_fanin <- saved_cap
 
+(* === Phase 12: a read at two sites runs two alternatives (gh-ocannl-2196) ===
+
+   One evaluation of [c[j] := a[j] + a[j+dim] + w[j]] reads two cells of [a], so it runs two of
+   [a]'s alternatives. The concat writes [a]'s first slice from [x+y] and its second from [z]: [a]'s
+   own charge is 2, and [c]'s is [{x,y,z,w}] = 4, across cap 3 -- one alternative joined with [w],
+   the charge before, was 3. The select analog [p := where m (x+y) z] over two slices, read at
+   [p[j]] and [p[j+dim]] beside [w], with [m] differing between the two cells so both arms run in
+   one evaluation: [{m,x,y,z,w}] = 5 across cap 4, where one arm with [w] cost 4. Controls: the same
+   index read twice is one cell (charged one alternative); at a cap equal to the corrected charge
+   the consumer stays virtual; and the charge is the max over pairs of alternatives, not their union
+   -- a three-slice concat [{x,y}], [{z}], [{u}] read at two sites costs 3, where the union is 4. A
+   consumer an earlier routine committed [Virtual] replays its two-site read from the stored
+   computation (the other producer of the charge, [read_charge_of_proc]), with [a] already inlined
+   into it. Every leg executes against a reference and a materialized reading, with every producer
+   varying in its cell. *)
+
+let phase12 () =
+  let saved_cap = LL.virtualize_settings.max_inline_fanin in
+  let cells = 2 * dim in
+  let lmk = node_factory ~first_id:9200 ~dims:[| 3 * dim |] () in
+  let cmk = node_factory ~first_id:9300 ~dims:[| dim |] () in
+  let x = lmk "mx" and y = lmk "my" and z = lmk "mz" and u = lmk "mu" and w = lmk "mw" in
+  let m = lmk "mm" in
+  let leaves = [ x; y; z; u; w ] in
+  List.iter (m :: leaves) ~f:materialize;
+  let vals k = Array.init (3 * dim) ~f:(fun i -> Float.of_int ((100 * (k + 1)) + i + 1)) in
+  (* [m] differs between a cell and the one [dim] after it: parity of slice plus offset. *)
+  let m_vals =
+    Array.init (3 * dim) ~f:(fun i ->
+        weighted ~weights:[| 1; 1 |] ~modulus:2 ~offset:0. ~stride:1. [| i / dim; i % dim |])
+  in
+  let seed out =
+    (out, blank dim) :: (m, m_vals) :: List.mapi leaves ~f:(fun k tn -> (tn, vals k))
+  in
+  let v tn i =
+    match List.findi leaves ~f:(fun _ l -> Tn.equal l tn) with
+    | Some (k, _) -> (vals k).(i)
+    | None -> assert false
+  in
+  let is_fanin_cap o tn =
+    Option.equal Tn.equal_provenance (rejection_code o tn) (Some Tn.Inline_fanin_cap)
+  in
+  let fanin (o : LL.optimized) tn = (Hashtbl.find_exn o.traced_store tn).LL.inline_fanin in
+  let check_exec ?blends ~name ~materialized ~out ~expected llc o =
+    let got = execute ~name o ~seed:(seed out) ~read:[ out ] in
+    let mat_name = name ^ "_mat" in
+    let mat = optimize ?blends_value_selects:blends ~materialized ~name:mat_name llc in
+    let got_mat = execute ~name:mat_name mat ~seed:(seed out) ~read:[ out ] in
+    same got [ expected ] && same got got_mat
+  in
+  let slice_setter a part ks =
+    let i = sym () in
+    let idx = aff [ (1, i) ] (part * dim) in
+    loop_n i dim
+      (set a [| idx |] (List.reduce_exn ~f:add (List.map ks ~f:(fun tn -> get tn [| idx |]))))
+  in
+  let slice_ref parts i_cell =
+    let part = i_cell / dim in
+    List.fold (List.nth_exn parts part) ~init:0. ~f:(fun acc tn -> acc +. v tn i_cell)
+  in
+  (* [c[j] := a[j + o1] + a[j + o2] + extra[j]] for each offset pair. *)
+  let consumer ?(extra = [ w ]) ~offsets c_ a =
+    let j = sym () in
+    let reads = List.map offsets ~f:(fun o -> get a [| aff [ (1, j) ] o |]) in
+    loop_n j dim
+      (set c_
+         [| iter j |]
+         (List.reduce_exn ~f:add (reads @ List.map extra ~f:(fun tn -> get tn [| iter j |]))))
+  in
+  let copy dst src =
+    let i = sym () in
+    loop_n i dim (set dst [| iter i |] (get src [| iter i |]))
+  in
+  let consumer_ref ~src ~offsets ?(extra = [ w ]) j =
+    List.fold offsets ~init:0. ~f:(fun acc o -> acc +. src (j + o))
+    +. List.fold extra ~init:0. ~f:(fun acc tn -> acc +. v tn j)
+  in
+  (* The concat: two sites, then the same index twice, then the cap-equality leg. *)
+  let concat_parts = [ [ x; y ]; [ z ] ] in
+  let concat_leg ~label ~reverse ~cap ~offsets =
+    LL.virtualize_settings.max_inline_fanin <- cap;
+    let a = lmk ("ma_" ^ label) and c_ = cmk ("mc_" ^ label) and out = cmk ("mo_" ^ label) in
+    materialize out;
+    let setters = List.mapi concat_parts ~f:(fun part ks -> slice_setter a part ks) in
+    let setters = if reverse then List.rev setters else setters in
+    let llc = List.reduce_exn ~f:seq (setters @ [ consumer ~offsets c_ a; copy out c_ ]) in
+    let name = "vcf_sites_" ^ label in
+    let o = optimize ~name llc in
+    let expected = Array.init dim ~f:(consumer_ref ~src:(slice_ref concat_parts) ~offsets) in
+    (a, c_, o, check_exec ~name ~materialized:[ a; c_ ] ~out ~expected llc o)
+  in
+  List.iter [ false; true ] ~f:(fun reverse ->
+      let order = if reverse then "reverse" else "forward" in
+      let prefix = "two-site concat, " ^ order ^ ": " in
+      let a, c_, o, exec_ok =
+        concat_leg ~label:("cat_" ^ order) ~reverse ~cap:3 ~offsets:[ 0; dim ]
+      in
+      p
+        (prefix ^ "the producer is charged its wider setter (2), virtual at cap 3")
+        (fanin o a = 2 && known_virtual o a);
+      p
+        (prefix
+       ^ "the consumer is charged both slices joined with w (4), materialized by the fan-in cap")
+        (fanin o c_ = 4 && is_fanin_cap o c_);
+      p (prefix ^ "execution matches the reference and the materialized reading") exec_ok);
+  (let _, c_, o, exec_ok = concat_leg ~label:"cat_same" ~reverse:false ~cap:3 ~offsets:[ 0; 0 ] in
+   p "same-index concat: one cell, charged one slice joined with w (3), virtual at cap 3"
+     (fanin o c_ = 3 && known_virtual o c_);
+   p "same-index concat: execution matches the reference and the materialized reading" exec_ok);
+  (let _, c_, o, exec_ok = concat_leg ~label:"cat_eq" ~reverse:false ~cap:4 ~offsets:[ 0; dim ] in
+   p "two-site concat at cap 4: charged 4, virtual" (fanin o c_ = 4 && known_virtual o c_);
+   p "two-site concat at cap 4: execution matches the reference and the materialized reading"
+     exec_ok);
+  (* Tightness: three slices read at two sites cost the widest pair (3), not the union (4). *)
+  (let parts = [ [ x; y ]; [ z ]; [ u ] ] in
+   LL.virtualize_settings.max_inline_fanin <- 3;
+   let a = lmk "ma_three" and c_ = cmk "mc_three" and out = cmk "mo_three" in
+   materialize out;
+   let setters = List.mapi parts ~f:(fun part ks -> slice_setter a part ks) in
+   let offsets = [ 0; dim ] in
+   let llc = List.reduce_exn ~f:seq (setters @ [ consumer ~extra:[] ~offsets c_ a; copy out c_ ]) in
+   let o = optimize ~name:"vcf_sites_three" llc in
+   p
+     "two sites of a three-slice concat: charged the widest pair of slices (3), not their union \
+      (4), virtual at cap 3"
+     (fanin o c_ = 3 && known_virtual o c_);
+   p
+     "two sites of a three-slice concat: execution matches the reference and the materialized \
+      reading"
+     (check_exec ~name:"vcf_sites_three" ~materialized:[ a; c_ ] ~out
+        ~expected:(Array.init dim ~f:(consumer_ref ~src:(slice_ref parts) ~offsets ~extra:[]))
+        llc o));
+  (* The select over two slices, read at [j] and [j+dim]. *)
+  let where_at cond then_ else_ =
+    LL.Ternop (Ir.Ops.Where, (cond, single), (then_, single), (else_, single))
+  in
+  let select ~inverted idx =
+    let xy = add (get x idx) (get y idx) in
+    if inverted then where_at (LL.Unop (Ir.Ops.Not, (get m idx, single))) (get z idx) xy
+    else where_at (get m idx) xy (get z idx)
+  in
+  let select_ref i = if Float.(m_vals.(i) <> 0.) then v x i +. v y i else v z i in
+  List.iter [ false; true ] ~f:(fun blends ->
+      List.iter [ false; true ] ~f:(fun inverted ->
+          let spelling = if inverted then "inverted" else "plain" in
+          let reading = if blends then "blended" else "short-circuiting" in
+          let label = (if blends then "blend_" else "branch_") ^ spelling in
+          LL.virtualize_settings.max_inline_fanin <- 4;
+          let p_ = lmk ("mp_" ^ label) and c_ = cmk ("mq_" ^ label) and out = cmk ("mr_" ^ label) in
+          materialize out;
+          let producer =
+            let i = sym () in
+            loop_n i cells (set p_ [| iter i |] (select ~inverted [| iter i |]))
+          in
+          let offsets = [ 0; dim ] in
+          let llc = List.reduce_exn ~f:seq [ producer; consumer ~offsets c_ p_; copy out c_ ] in
+          let name = "vcf_sites_sel_" ^ label in
+          let o = optimize ~blends_value_selects:blends ~name llc in
+          let prefix = Printf.sprintf "two-site select, %s, %s: " reading spelling in
+          p
+            (prefix
+            ^
+            if blends then "the producer is charged the union of its arms (4), virtual at cap 4"
+            else "the producer is charged its wider arm (3), virtual at cap 4")
+            ((fanin o p_ = if blends then 4 else 3) && known_virtual o p_);
+          p
+            (prefix
+           ^ "the consumer is charged both arms joined with w (5), materialized by the fan-in cap")
+            (fanin o c_ = 5 && is_fanin_cap o c_);
+          p
+            (prefix ^ "execution matches the reference and the materialized reading")
+            (check_exec ~blends ~name ~materialized:[ p_; c_ ] ~out
+               ~expected:(Array.init dim ~f:(consumer_ref ~src:select_ref ~offsets))
+               llc o)));
+  (* Across routines: A commits the concat and its two-site reader [c] [Virtual] with the cap off;
+     B's [d := c + w] replays [c]'s stored computation, read through [read_charge_of_proc]. The
+     stored computation already carries [a] inlined at both sites, so its loads name both slices and
+     the base charged it right too: this leg pins the replay, not the multiplicity (the collector's
+     own stored-computation claim is in [access_fold]). *)
+  (let a = lmk "ma_x" and c_ = cmk "mc_x" and d = cmk "md_x" and out = cmk "mo_x" in
+   materialize out;
+   let ctx = LL.empty_optimize_ctx () in
+   LL.virtualize_settings.max_inline_fanin <- -1;
+   let offsets = [ 0; dim ] in
+   let setters = List.mapi concat_parts ~f:(fun part ks -> slice_setter a part ks) in
+   let o_a =
+     optimize_in ctx ~name:"vcf_sites_x_a"
+       (List.reduce_exn ~f:seq (setters @ [ consumer ~extra:[] ~offsets c_ a ]))
+   in
+   LL.virtualize_settings.max_inline_fanin <- 3;
+   let o_b =
+     optimize_in ctx ~name:"vcf_sites_x_b" (seq (consumer ~offsets:[ 0 ] d c_) (copy out d))
+   in
+   p "cross-routine two-site read: routine A commits the concat and its reader virtual"
+     (known_virtual o_a a && known_virtual o_a c_);
+   p
+     "cross-routine two-site read: the stored reader is charged both slices (3), so B's consumer \
+      with w (4) is materialized by the fan-in cap"
+     (fanin o_b c_ = 3 && fanin o_b d = 4 && is_fanin_cap o_b d);
+   let got = execute ~name:"vcf_sites_x_b" o_b ~seed:(seed out) ~read:[ out ] in
+   let src = slice_ref concat_parts in
+   p "cross-routine two-site read: execution matches the reference"
+     (same got [ Array.init dim ~f:(fun j -> src j +. src (j + dim) +. v w j) ]));
+  LL.virtualize_settings.max_inline_fanin <- saved_cap
+
 let () =
   phase1 ();
   phase1b ();
@@ -2536,4 +2741,5 @@ let () =
   phase8 ();
   phase9 ();
   phase10 ();
-  phase11 ()
+  phase11 ();
+  phase12 ()

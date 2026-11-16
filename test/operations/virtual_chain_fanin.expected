@@ -263,3 +263,30 @@ alternatives bound, forward: execution matches the reference and the materialize
 alternatives bound, reverse: the producer's own charge is its widest setter (2), taken before the cap merges: true
 alternatives bound, reverse: the consumer is charged the merged tail with its fresh input (exact maximum 3 plus one for the merge), materialized by the fan-in cap: true
 alternatives bound, reverse: execution matches the reference and the materialized reading: true
+two-site concat, forward: the producer is charged its wider setter (2), virtual at cap 3: true
+two-site concat, forward: the consumer is charged both slices joined with w (4), materialized by the fan-in cap: true
+two-site concat, forward: execution matches the reference and the materialized reading: true
+two-site concat, reverse: the producer is charged its wider setter (2), virtual at cap 3: true
+two-site concat, reverse: the consumer is charged both slices joined with w (4), materialized by the fan-in cap: true
+two-site concat, reverse: execution matches the reference and the materialized reading: true
+same-index concat: one cell, charged one slice joined with w (3), virtual at cap 3: true
+same-index concat: execution matches the reference and the materialized reading: true
+two-site concat at cap 4: charged 4, virtual: true
+two-site concat at cap 4: execution matches the reference and the materialized reading: true
+two sites of a three-slice concat: charged the widest pair of slices (3), not their union (4), virtual at cap 3: true
+two sites of a three-slice concat: execution matches the reference and the materialized reading: true
+two-site select, short-circuiting, plain: the producer is charged its wider arm (3), virtual at cap 4: true
+two-site select, short-circuiting, plain: the consumer is charged both arms joined with w (5), materialized by the fan-in cap: true
+two-site select, short-circuiting, plain: execution matches the reference and the materialized reading: true
+two-site select, short-circuiting, inverted: the producer is charged its wider arm (3), virtual at cap 4: true
+two-site select, short-circuiting, inverted: the consumer is charged both arms joined with w (5), materialized by the fan-in cap: true
+two-site select, short-circuiting, inverted: execution matches the reference and the materialized reading: true
+two-site select, blended, plain: the producer is charged the union of its arms (4), virtual at cap 4: true
+two-site select, blended, plain: the consumer is charged both arms joined with w (5), materialized by the fan-in cap: true
+two-site select, blended, plain: execution matches the reference and the materialized reading: true
+two-site select, blended, inverted: the producer is charged the union of its arms (4), virtual at cap 4: true
+two-site select, blended, inverted: the consumer is charged both arms joined with w (5), materialized by the fan-in cap: true
+two-site select, blended, inverted: execution matches the reference and the materialized reading: true
+cross-routine two-site read: routine A commits the concat and its reader virtual: true
+cross-routine two-site read: the stored reader is charged both slices (3), so B's consumer with w (4) is materialized by the fan-in cap: true
+cross-routine two-site read: execution matches the reference: true
