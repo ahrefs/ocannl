@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Refusal checks match literal reasons for the named fixture cases; they do not
+# parse complete usage output or classify arbitrary diagnostics.
 # Hermetic fixtures for tools/merge-build-replay.py over a synthetic repository: which first-parent
 # merges each input set would build (a path both sides changed, by either name of a rename; the
 # any-input trigger; an octopus merge and a merge inside a side branch left out), the paths it
@@ -340,11 +342,19 @@ fi
 if harness_leg 'usage errors exit 2 #usage'; then
   if [ -z "$FIXTURE" ]; then report 1 'usage' 'no fixture'; else
     for args in "--set nosuch" "--set ml=*.ml --set ml" "--set ml=a,,b" "--set ml=@ml" "--top -1" "--trigger sometimes"; do
+      case $args in
+        '--set nosuch') reason='no set named `nosuch`' ;;
+        '--set ml=*.ml --set ml') reason='--set ml: selected or defined twice' ;;
+        '--set ml=a,,b') reason="--set 'ml=a,,b': an empty glob" ;;
+        '--set ml=@ml') reason="--set 'ml=@ml': a set cannot include itself" ;;
+        '--top -1') reason='--top takes a count, 0 for all' ;;
+        '--trigger sometimes') reason="argument --trigger: invalid choice: 'sometimes'" ;;
+      esac
       # shellcheck disable=SC2086 # each case is a word list, its globs unexpanded
       set -f
       replay $args main
       set +f
-      if [ "$rc" = 2 ]; then report 0 "\`$args\` exits 2"; else report 1 "\`$args\` exits 2" "exit $rc; $(cat "$out")"; fi
+      if [ "$rc" = 2 ] && has "$reason"; then report 0 "\`$args\` exits 2"; else report 1 "\`$args\` exits 2" "exit $rc; $(cat "$out")"; fi
     done
   fi
 fi
