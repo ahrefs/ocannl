@@ -191,8 +191,8 @@ trap cleanup EXIT
 manifest_writer_contract() (
   set -e
   local writer=$tmp/manifest-writer.sh
-  sed -n '/^MANIFEST=$/,/^manifest_required() /p' "$sweep" >"$writer"
-  grep -q '^manifest_required() ' "$writer"
+  sed -n '/^MANIFEST=$/,/^manifest_update() /p' "$sweep" >"$writer"
+  grep -q '^manifest_update() ' "$writer"
   . "$writer"
   STATE=$tmp/writer-state
   mkdir -p "$STATE/runs"
@@ -202,10 +202,10 @@ manifest_writer_contract() (
   stamp=probe full_sha=0123456789012345678901234567890123456789 REF=master
   SLOW=1 FORCE=1 TARGET='test/einsum' ONLY=(cc cuda)
   die() { echo "$*" >&2; exit 1; }
-  manifest_required init local:cc: remote:cuda:host
+  manifest_update init local:cc: remote:cuda:host
   # Keep the old inode open across a replacement: an in-place writer changes it.
   exec 4<"$MANIFEST"
-  manifest_required start local cc
+  manifest_update start local cc
   perl -MJSON::PP -e '
     local $/; my $old = decode_json(<STDIN>);
     die "publication overwrote an open reader" unless $old->{lanes}[0]{units}[0]{state} eq "queued";
@@ -227,7 +227,7 @@ manifest_writer_contract() (
   until [ -e "$STATE/locked" ]; do
     [ "$ticks" -lt 500 ]; sleep .01; ticks=$((ticks + 1))
   done
-  (manifest_required lane remote gate; touch "$STATE/updated") &
+  (manifest_update lane remote gate; touch "$STATE/updated") &
   local updater=$!
   sleep .2
   local premature=0
@@ -238,9 +238,9 @@ manifest_writer_contract() (
   [ "$premature" = 0 ]
   # Both lanes modify a shared view concurrently; each history outcome survives.
   printf 'probe\tlocal\tcc\tsha\tpass\nprobe\tremote\tcuda\tsha\tgate\n' >"$HISTORY"
-  manifest_required lane local done &
+  manifest_update lane local done &
   local a=$!
-  manifest_required row remote cuda gate &
+  manifest_update row remote cuda &
   local b=$!
   wait "$a"; wait "$b"
   # A failed authoritative-record read must leave the view in flight.
@@ -253,7 +253,7 @@ manifest_writer_contract() (
     exit 1
   fi
   perl -MJSON::PP -e 'local $/; die "premature terminal view" if defined decode_json(<>)->{exit_kind}' "$MANIFEST"
-  manifest_required end cancelled
+  manifest_update end cancelled
   perl -MJSON::PP -e '
     local $/; my $v = decode_json(<>);
     die "lost lane update" unless $v->{lanes}[0]{state} eq "done" && $v->{lanes}[1]{state} eq "gate";
@@ -263,6 +263,21 @@ manifest_writer_contract() (
       && $v->{lanes}[1]{units}[0]{outcome} eq "gate";
     die "cancelled" unless $v->{exit_kind} eq "cancelled";
   ' "$MANIFEST"
+  # An unavailable view must not stop any operation or poison the record's status.
+  (
+    manifest() { return 1; }
+    for op in init lane start row end; do manifest_update "$op" local cc; done
+    UNITS=(local:cc:) run_sha=$full_sha execution=incremental
+    LANE_DIR=$STATE
+    wanted() { return 0; }
+    unit_memory() { echo -; }
+    run_rows() { return 0; }
+    write_run_record complete
+    [ -f "$RUN_RECORD" ]
+  ) 2>"$STATE/view-errors"
+  grep -qF "WARNING -- cannot publish view $MANIFEST" "$STATE/view-errors"
+  [ "$(grep -cF "WARNING -- cannot publish view" "$STATE/view-errors")" -eq 6 ]
+  [ "$(awk -F '\t' '$1 == "run" {print $8}' "$RUN_RECORD")" = complete ]
 )
 manifest_writer_contract
 if [ "${SWEEP_MANIFEST_WRITER_ONLY:-0}" = 1 ]; then exit 0; fi
@@ -3197,22 +3212,34 @@ aggregator_missing_record=$(sed -n 's/^run:  *//p' <<<"$aggregator_missing")
 # second it ends, so its retry can land on top of its logs, fingerprints and
 # record. Manifest-only seeds also cover death before any log or row. Seeding the next few seconds' stamps as taken forces the advance
 # whichever second the sweep starts in, rather than relying on it being slow.
-seeded_stamps=$(perl -MPOSIX -e \
-  'print join(" ", map { strftime("%Y%m%dT%H%M%SZ", gmtime(time + $_)) } 0 .. 5)')
-for seeded in $seeded_stamps; do : >"$state/runs/$seeded.json"; done
-stamp_advance=$(run_sweep_args --target stamp-probe)
-advanced_record=$(sed -n 's/^run:  *//p' <<<"$stamp_advance")
-advanced_stamp=$(basename "$advanced_record" -run.tsv)
-for seeded in $seeded_stamps; do
-  if [ "$advanced_stamp" = "$seeded" ]; then
-    printf 'sweep_harness: run stamp %s collided with a seeded artifact\n' "$advanced_stamp" >&2
-    exit 1
-  fi
+for seed_kind in log manifest; do
+  seeded_stamps=$(perl -MPOSIX -e \
+    'print join(" ", map { strftime("%Y%m%dT%H%M%SZ", gmtime(time + $_)) } 0 .. 5)')
+  for seeded in $seeded_stamps; do
+    if [ "$seed_kind" = log ]; then
+      : >"$state/logs/$seeded-seed.log"
+    else
+      printf '{}\n' >"$state/runs/$seeded.json"
+    fi
+  done
+  stamp_advance=$(run_sweep_args --target stamp-probe)
+  advanced_record=$(sed -n 's/^run:  *//p' <<<"$stamp_advance")
+  advanced_stamp=$(basename "$advanced_record" -run.tsv)
+  for seeded in $seeded_stamps; do
+    if [ "$advanced_stamp" = "$seeded" ]; then
+      printf 'sweep_harness: run stamp %s collided with a seeded %s\n' "$advanced_stamp" "$seed_kind" >&2
+      exit 1
+    fi
+  done
+  [ -n "$(awk -F '\t' -v s="$advanced_stamp" '$1 == s && $7 == "stamp-probe"' "$state/history.tsv")" ]
+  for seeded in $seeded_stamps; do
+    if [ "$seed_kind" = log ]; then
+      unlink "$state/logs/$seeded-seed.log"
+    else
+      unlink "$state/runs/$seeded.json"
+    fi
+  done
 done
-# And the advance is what produced that: the run's own history row carries the
-# same advanced stamp, so the row and its artifacts still name one run.
-[ -n "$(awk -F '\t' -v s="$advanced_stamp" '$1 == s && $7 == "stamp-probe"' "$state/history.tsv")" ]
-rm -f "$state"/logs/*-seed.log
 
 # The collection reads the journal ACROSS boots. `journalctl -k` is the same
 # kernel match plus an implied `-b`, which truncates the answer at the current

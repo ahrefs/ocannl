@@ -4,7 +4,7 @@
 # failure fingerprint for each.
 # Live view: $STATE/runs/<stamp>.json (schema 1), published before lanes start.
 # History and the run record remain authoritative. A dead local pid with no
-# exit_kind means cut off, subject to pid reuse; see manifest() for the contract.
+# exit_kind is inconclusive (cut off or stale); consult the run record.
 #
 # This exists because GitHub CI covers exactly one backend: test/config's
 # ocannl_config pins `backend=cc`, and the runners have no GPU. Metal, CUDA, HIP
@@ -1719,20 +1719,22 @@ record() {
     print $h "$ARGV[1]\n" or exit 1;
     close($h) or exit 1;' "$HISTORY" "$row" ||
     die "cannot record $1/$2 outcome in $HISTORY"
-  manifest_required row "$1" "$2" "$3"
+  manifest_update row "$1" "$2"
 }
 
 # In-flight view, schema 1: $STATE/runs/<stamp>.json. History and the run record
-# remain authoritative. A null exit_kind with a dead controller pid means cut off,
-# not completed (pid liveness is local to this host, and pid reuse is possible).
+# remain authoritative. A null exit_kind with a dead controller pid may be stale
+# or cut off; consult the record (pid liveness is local, and reuse is possible).
 # Times are controller-clock Unix seconds, including remote unit starts. Queued or
 # running units can remain on an ended run: they were interrupted, not skipped.
 # One stable flock serializes the entire read/modify/rename; locking the JSON inode
 # itself would lose exclusion when rename replaces it. File::Temp makes unique
 # sibling stages, unlinks failed stages, and a killed writer leaves only a private
 # stage, never a partial published view. Stages are not manifests; read *.json only.
+# View failures warn and continue; they never stop units or fail a published run
+# record. The view may be stale or absent, so consult history/the record on error.
 MANIFEST=
-manifest() { # init plan... | lane box state | start box backend | row box backend outcome | end kind
+manifest() { # init plan... | lane box state | start box backend | row box backend | end kind
   [ -n "$MANIFEST" ] || return 0
   perl - "$MANIFEST" "$HISTORY" "$stamp" "$full_sha" "$REF" "$SLOW" "$FORCE" "$TARGET" "$$" \
     "${ONLY[*]:-}" "$@" <<'PERL'
@@ -1800,7 +1802,7 @@ close($stage) or die $!;
 rename($name, $path) or die "manifest rename: $!";
 PERL
 }
-manifest_required() { manifest "$@" || die "cannot publish manifest $MANIFEST"; }
+manifest_update() { manifest "$@" || echo "sweep: WARNING -- cannot publish view $MANIFEST ($1); continuing without a fresh view" >&2; return 0; }
 
 # The per-run record (gh-ocannl-977): one machine-readable file beside the logs,
 # holding the three facts a consumer otherwise re-derives from this script's
@@ -1948,7 +1950,7 @@ write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-r
     rm -f "$stage"
     return 1
   }
-  manifest end "$kind"
+  manifest_update end "$kind"
 }
 
 # A unit's summary lines. Written to its lane's buffer rather than to stdout, and
@@ -2409,7 +2411,7 @@ run_unit() { # machine backend host
   local remote_prep remote rc elapsed outcome unreachable=skip unguarded hung unhealthy
   local refused take_slots= take_tokens= line
   WRITTEN_FINGERPRINT=
-  manifest_required start "$machine" "$backend"
+  manifest_update start "$machine" "$backend"
   CURRENT_UNIT=$machine/$backend
   UNGUARDED_SAID=0
   TOKEN_TAKE=
@@ -3027,7 +3029,7 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
     # A gated box is asked whether it is up BEFORE anything reserves it or dials it: asleep is its
     # ordinary state on a day nothing woke it, and every unit of the lane records `gate` saying so.
     if lab_box_gated "$lab_box" && ! lab_box_up "$lab_box"; then
-      manifest_required lane "$lane" gate
+      manifest_update lane "$lane" gate
       for unit in "${UNITS[@]}"; do
         IFS=: read -r machine backend host <<<"$unit"
         [ "$machine" = "$lane" ] || continue
@@ -3060,12 +3062,12 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
         sweep_state_update "$machine" "$backend" skip
         flush_lane_output || die "cannot publish the $machine/$backend summary to stdout"
       done
-      manifest_required lane "$lane" done
+      manifest_update lane "$lane" done
       : >"$LANE_DIR/lane-done.$lane" || die "cannot mark the $lane lane finished"
       exit 0
     fi
   fi
-  manifest_required lane "$lane" running
+  manifest_update lane "$lane" running
   # The fleet's execution registry is asked before every unit, under the lane's reservation: a unit
   # an exclusive measurement holds the box against is skipped, not run (see sweep_fleet_under_measurement).
   lane_names=
@@ -3114,7 +3116,7 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
   # reads its absence as a lane that stopped before finishing, so nothing may
   # come between this and the `exit` -- and a lane that dies or is signalled
   # anywhere above leaves it absent without having to know the record exists.
-  manifest_required lane "$lane" done
+  manifest_update lane "$lane" done
   : >"$LANE_DIR/lane-done.$lane" || die "cannot mark the $lane lane finished"
   exit 0
 }
@@ -3157,9 +3159,11 @@ sweep_fleet_probe
 # Lanes, in first-appearance order of the table's machine column: a new box or
 # a second backend on an existing box lands in the right lane with no other edit.
 LANES=()
+manifest_plan=()
 for unit in "${UNITS[@]}"; do
   IFS=: read -r machine backend host <<<"$unit"
   wanted "$backend" || continue
+  manifest_plan+=("$unit")
   contains "$machine" "${LANES[@]:-}" || LANES+=("$machine")
 done
 # The --only check above guarantees at least one selected unit.
@@ -3196,14 +3200,9 @@ echo
 # past a lane it could not see, which would keep running -- and holding fd 9 --
 # for the rest of its cap. Signals during the launch are only noted, and relayed
 # once every lane is registered.
-mkdir -p "$STATE/runs" || die "cannot create $STATE/runs"
+mkdir -p "$STATE/runs" || echo "sweep: WARNING -- cannot create view directory $STATE/runs; continuing" >&2
 MANIFEST=$STATE/runs/$stamp.json
-manifest_plan=()
-for unit in "${UNITS[@]}"; do
-  IFS=: read -r machine backend host <<<"$unit"
-  wanted "$backend" && manifest_plan+=("$unit")
-done
-manifest_required init "${manifest_plan[@]}"
+manifest_update init "${manifest_plan[@]}"
 
 LANE_PID_LIST=()
 pending_signal=

@@ -5498,7 +5498,10 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   never count as manifests. Readers open only the JSON, without taking the writer lock.
   Unit outcomes are read from this run's history rows under the history lock on every update,
   including the final write, which carries the run record's exit kind. History and the run record
-  remain the records; a null exit kind with a dead local pid means cut off, subject to pid reuse.
+  remain the records. View failures warn on stderr and continue, including after publication of
+  the run record: they never stop units or change its status. An absent/stale view is not evidence
+  of missing history. A null exit kind with a dead local pid is inconclusive: cut off or stale;
+  consult the run record, and allow for pid reuse.
   Times are controller-clock Unix seconds, including remote unit starts. Interrupted units retain
   queued/running states rather than inventing skipped outcomes. A gated lane retains `gate`;
   a lane refused its lab lock ends `done` with skipped units. The harness pins live transitions,
