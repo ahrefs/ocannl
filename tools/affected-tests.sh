@@ -270,7 +270,9 @@
 #     script through another must name it. It reaches its program too.
 #   - A harness's header (the comment block `--help` prints, from line 2) may
 #     declare legs: `# affected-reads: GLOB... [--only 'ERE']`, each GLOB a
-#     repository path in which `*` stands for any run of characters but `/`,
+#     repository path in which `*` stands for any run of characters but `/`.
+#     `**` is refused: use `*` within one segment and an explicit list of
+#     directories for depth. No recursive glob syntax is read;
 #     ERE the harness's `--only` selector (no quote, no tab). A changed path
 #     the text does not reach, matched by a declaration of a harness, reaches
 #     the legs it names (every leg without `--only`): the harness's word on
@@ -572,6 +574,8 @@ for my $h (@members) {
     my ($globs, $ere) = ($1, $2);
     my @re;
     for my $g (split / /, $globs) {
+      fail("$where: '$g' contains unsupported `**`; use `*` within one segment and an explicit list of directories for depth")
+        if index($g, "**") >= 0;
       $g =~ m{\A[A-Za-z0-9_.*][A-Za-z0-9_.*-]*(?:/[A-Za-z0-9_.*-]+)*\z} && $g !~ m{(?:\A|/)\.\.?(?:/|\z)}
         or fail("$where: '$g' is not a repository path glob (letters, digits, `_.-*`, `/` between parts, no `.` or `..` part)");
       my $re = join "[^/]*", map { quotemeta } split /\*/, $g, -1;

@@ -1367,14 +1367,22 @@ if harness_leg 'harness declarations'; then
 fi
 
 if harness_leg 'harness refusals'; then
+  mkdir -p "$hrepo/a/one" "$hrepo/dir" || exit 2
+  for f in a/one/b.py x.py dir/x.txt; do : >"$hrepo/$f"; done
+  git -C "$hrepo" add a/one/b.py x.py dir/x.txt || exit 2
   tab=$'\t'
   for bad in "# affected-reads:  data/x.txt" "# affected-reads: data/x.txt --only \"^1:\"" "#affected-reads: data/x.txt" \
-    "# affected-reads: ../data/x.txt" "# affected-reads: --only '^1:'" "# affected-reads: data/x.txt --only '^1:${tab}x'"; do
+    "# affected-reads: ../data/x.txt" "# affected-reads: --only '^1:'" "# affected-reads: data/x.txt --only '^1:${tab}x'" \
+    "# affected-reads: a/**/b.py" "# affected-reads: **.py" "# affected-reads: dir/**"; do
     { head -n 2 "$TMP/test-c.sh.orig"; printf '%s\n' "$bad"; tail -n +3 "$TMP/test-c.sh.orig"; } >"$hrepo/tools/test-c.sh"
-    haffected --harnesses --files data/x.txt
+    haffected --harnesses --files data/x.txt a/one/b.py x.py dir/x.txt
     hexpect "a malformed declaration stops the run: $bad" 2
   done
   herr 'naming its line' 'tools/test-c.sh:3:'
+  herr 'naming the supported patterns' 'use `*` within one segment and an explicit list of directories for depth'
+  { head -n 2 "$TMP/test-c.sh.orig"; printf '%s\n' "# affected-reads: data/*.txt"; tail -n +3 "$TMP/test-c.sh.orig"; } >"$hrepo/tools/test-c.sh"
+  haffected --harnesses --files data/x.txt
+  hexpect 'a single star within one segment stays accepted' 0 tools/test-c.sh
   { cat "$TMP/test-c.sh.orig"; printf '%s\n' "# affected-reads: data/x.txt"; } >"$hrepo/tools/test-c.sh"
   haffected --harnesses --files data/x.txt
   hexpect 'a declaration after the header stops the run' 2
