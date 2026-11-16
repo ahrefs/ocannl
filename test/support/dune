@@ -3,6 +3,8 @@
 ; layer. [test_scan] adds source readers and ppxlib: its compiler-libs dependency forces the
 ; compiler into each executable, even one that only calls a printer. [ll_test] links [ocannl],
 ; for the hand-built-Low_level harness. [test_utils_linkage] checks the actual linked unit census.
+; The other direction, a compiler-reaching library declared and never referenced, is
+; `unused_compiler_deps`'s (gh-ocannl-2118), which reads typed trees through [cmt_references].
 ;
 ; [arrayjit.utils] and [arrayjit.verdict] arrived with the generated-artifact reader (gh-ocannl-655),
 ; which resolves [build_files/] paths and reports a missing or overwritten artifact as a verdict.
@@ -157,6 +159,16 @@
  (package neural_nets_lib)
  (modules emitter_frontier)
  (libraries base compiler-libs.common))
+
+; The units a compiled module's typed tree names (gh-ocannl-2118), read from its `.cmt`/`.cmti`
+; for `unused_compiler_deps`. Through `compiler-libs`, so outside [test_scan] for the same reason
+; as the emitter frontier.
+
+(library
+ (name cmt_references)
+ (package neural_nets_lib)
+ (modules cmt_references)
+ (libraries compiler-libs.common))
 
 ; Weak witnesses and the finaliser-drained allocation window of the GC-reading tests: stdlib only,
 ; and outside [test_utils] so that an edit here reaches the tests that read the GC, not every test

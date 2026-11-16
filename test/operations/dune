@@ -201,6 +201,7 @@
   (alias runtest-tensorized_census_ratchet)
   (alias runtest-tensorized_census_scan_cases)
   (alias runtest-test_config_consistency)
+  (alias runtest-unused_compiler_deps)
   (alias runtest-vendor_stub_arms_scan)
   (alias runtest-vendor_stub_arms_scan_control)
   (alias runtest-verdict_ratchet)
@@ -430,6 +431,7 @@
   (alias runtest-top_down_prec-unoptimized)
   (alias runtest-transformer_test-origins_cap_0)
   (alias runtest-unary_math_special_values-reproducible)
+  (alias runtest-unused_compiler_deps)
   (alias runtest-vendor_stub_arms_scan)
   (alias runtest-vendor_stub_arms_scan_control)
   (alias runtest-verdict_quantified)
@@ -6545,7 +6547,7 @@
 (executable
  (name exact_partials_ratchet)
  (modules exact_partials_ratchet)
- (libraries base stdio prose_lexemes test_scan arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads test sources as text and as parse trees.
@@ -7195,7 +7197,7 @@
 (executable
  (name fp_contract_pin_scan)
  (modules fp_contract_pin_scan)
- (libraries base stdio prose_lexemes test_scan arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads test sources as text.
@@ -11109,6 +11111,8 @@
   shell_scripts_parse.expected
   test_config_consistency.ml
   test_config_consistency.expected
+  unused_compiler_deps.ml
+  unused_compiler_deps.expected
   verdict_ratchet.ml
   verdict_scan_cases.expected
   verdict_ratchet.expected
@@ -11191,6 +11195,8 @@
    shell_scripts_parse.expected
    test_config_consistency.ml
    config_scan_lexing.expected,test_config_consistency.expected
+   unused_compiler_deps.ml
+   unused_compiler_deps.expected
    verdict_ratchet.ml
    verdict_scan_cases.expected,verdict_ratchet.expected
    workflow_job_timeouts.ml
@@ -14735,6 +14741,53 @@
  (name runtest)
  (deps
   (alias runtest-uniform_rank_zero-logged)))
+
+; gh-ocannl-2118: no stanza declares a compiler-reaching library its compiled modules never
+; reference. It reads the dune files, the workspace description (`dune describe`, run by the check
+; against the source root with a private build directory) and the typed trees `@check` writes, so it
+; depends on the whole workspace's `@check`: in the merge build, which builds `@check` in the same
+; invocation, that costs nothing more. Its controls are `unused_compiler_deps_fixtures/`.
+
+(executable
+ (name unused_compiler_deps)
+ (modules unused_compiler_deps)
+ (libraries
+  base
+  stdio
+  unix
+  test_scan
+  test_utils
+  cmt_references
+  arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- links no backend: it reads dune files and compiled typed trees.
+ (targets unused_compiler_deps.actual unused_compiler_deps.filelist)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (alias_rec ../../check)
+  (glob_files_rec ../../dune)
+  ../../dune-project)
+ (action
+  (progn
+   (with-stdout-to
+    unused_compiler_deps.filelist
+    (echo "%{deps}"))
+   (with-stdout-to
+    unused_compiler_deps.actual
+    (run
+     %{dep:unused_compiler_deps.exe}
+     %{workspace_root}
+     %{bin:dune}
+     @unused_compiler_deps.filelist)))))
+
+(rule
+ (alias runtest-unused_compiler_deps)
+ (package neural_nets_lib)
+ (action
+  (diff unused_compiler_deps.expected unused_compiler_deps.actual)))
 
 ; gh-ocannl-1462: the upload-arena ownership checker on hand-built lineage state.
 

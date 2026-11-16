@@ -16,6 +16,40 @@ open Stdio
 
 let raw_entries =
   [
+    ( "unused_compiler_deps.ml",
+      [
+        "[scanner-refusal:1262ba0367f56ab63b0ef45185bb1257] control stanza must";
+        "[scanner-refusal:ffa4bc91bdd9e0c6519d47ab6e078f3c] csexp reader refuses";
+        "[scanner-refusal:b2e2da4cfdb3763209d5bb0bf037f3eb] description that is";
+        "[scanner-refusal:cb9d50292bf8e1411a78fe56d95365d7] description entry of";
+        "[scanner-refusal:f9ea26ffa524f825f454965f1ef68877] control library description";
+        "[scanner-refusal:e5da8bbf11bdc53c4c4f1d6394be7f88] outside the recognised";
+        "[scanner-refusal:d0dd9b0705f1359338d24f701064b435] context other than";
+        "[scanner-refusal:72246cd3e9e00d9ffa244cdd2bb49513] library without its";
+        "[scanner-refusal:92206b092da67b9faa6ae7b73171723f] library whose requires";
+        "[scanner-refusal:19d2ba86f2b359e5c32a81e81062f7c5] without its requires";
+        "[scanner-refusal:c0761275e39346be1c8837a5a85d98b6] a stanza without";
+        "[scanner-refusal:7a60a99f8c898d07163567eeff851cbc] another stanza carrying";
+        "[scanner-refusal:8e3c17c0968ce3e98f1d8ad0b89c6718] libraries is refused";
+        "[scanner-refusal:c319818e5b162fbc67bb85019fff6f99] libraries element of";
+        "[scanner-refusal:0a4b1d22d540d21f605c894b621ea1c1] outside the recognised";
+        "[scanner-refusal:ab518590d10da57cedc8d0717e63af61] holds is refused";
+        "[scanner-refusal:828116468b6f2911e974fddf4fe601d8] declared name nothing";
+        "[scanner-refusal:f0f1587aca0a7afae0b83e27bed22b38] enabled_if";
+        "[scanner-refusal:910c1650b37b93c2cd7917497f236fb2] enabled_if";
+        "[scanner-refusal:7398f68cb579d4b59ac9ce927f234276] object directory holding";
+        "[scanner-refusal:b1784c07fa1dac619848cd1b4a9d64f0] object directory holding";
+        "[scanner-refusal:69ce705759093b5f97c6cc8e0413a500] description dune refuses";
+        "[scanner-refusal:100499646d6d4d69e702399dce61b260] unused_compiler_deps";
+        "[scanner-refusal:36778054d93aa08eac389989017aed7a] DUNE_SOURCEROOT";
+        "[scanner-refusal:22c08112ff7b660af6dab49542313b14] compiler-libs.common";
+        "[scanner-refusal:5c6002f7f040eddc8696d03b9a9bb9e2] the workspace description";
+        "[scanner-refusal:448291c7f6134ac8fadedd8e1a4f787a] declares the library";
+        "[scanner-refusal:65e4156ccb9f193200c80820a12c6408] compiler-reaching library its";
+        "[scanner-refusal:76d536378a6e503a67ce436cfd76938d] fixture directory's stanzas";
+        "[scanner-refusal:67a884b3a6347974dc0b1b43122c4c21] derived as compiler-reaching";
+        "[scanner-refusal:4a372cdf7b39da35fd50d7a96957b75f] its expected libraries";
+      ] );
     ( "markdown_links.ml",
       [
         "[scanner-refusal:2f2dfef90107c2fbc43b20d212add0ef] Markdown corpus includes";
@@ -1135,6 +1169,12 @@ let raw_direct_evidence =
     is refused by [print]. *)
 let raw_catalogue_only : (string * string) list =
   [
+    ( "unused_compiler_deps.ml:1262ba0367f56ab63b0ef45185bb1257",
+      "a defect in the check's own synthetic control text, not a malformed tree" );
+    ( "unused_compiler_deps.ml:100499646d6d4d69e702399dce61b260",
+      "decided by the argument vector its own dune rule writes" );
+    ( "unused_compiler_deps.ml:36778054d93aa08eac389989017aed7a",
+      "decided by dune, which sets DUNE_SOURCEROOT for every action; unset only outside the rule" );
     ( "digest_completeness.ml:fc3ef3788212f2d1f5a9d9a46be3ca38",
       "decided by the library constant `Utils.config_key_classification` alone" );
     ( "digest_completeness.ml:dc9995a5d5b80370dc90971d3fd019df",

@@ -29,6 +29,7 @@ test/operations/atomic_file_rename_scan_fixture/dune: tests, exe-running rules
 test/operations/dune: tests, inline-test libraries, exe-running rules, exempt rules (gen_codec_header.exe, python3, handed %{dep:../../benchmarks/config_records.py}, python3, handed %{dep:bench_line_readers.py}, ../.., python3, handed %{dep:bin_cells.py}, %{dep:../../benchmarks/bin_cells.py}, %{dep:bin_cells_probe.exe}, %{dep:bench_design.expected}, python3, handed %{dep:gh1002_kernels.py}, %{dep:../../benchmarks/gh1002_cells.py}, python3, handed %{dep:gh1133_summary.py}, %{dep:../../benchmarks/gh1133_summary.py}, python3, handed %{dep:gpu_cotenants.py}, %{dep:../../benchmarks/gpu_cotenants.py}, python3, handed %{dep:kernel_attribution.py}, %{dep:../../benchmarks/kernel_attribution.py})
 test/operations/profiles/dune: tests, exe-running rules
 test/operations/startup_streams/dune: tests, exe-running rules
+test/operations/unused_compiler_deps_fixtures/dune: nothing that runs a test executable
 test/ppx/dune: tests, exe-running rules, exempt rules (pp.exe)
 test/support/dune: nothing that runs a test executable
 test/training/dune: tests, exe-running rules

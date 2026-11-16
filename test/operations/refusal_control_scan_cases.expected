@@ -740,6 +740,38 @@ test_config_consistency.ml: [scanner-refusal:18e6c65c27f35f658858a12b7c8dfd72] l
 test_config_consistency.ml: [scanner-refusal:e72f69460ef84de5e85f6c2bbe7bef5b] docs/agent-notes/build-and-test.md (claim) is catalogued beside config_scan_lexing.expected, test_config_consistency.expected: true
 test_config_consistency.ml: [scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count (claim) is catalogued beside config_scan_lexing.expected, test_config_consistency.expected: true
 test_config_consistency.ml: [scanner-refusal:2314f0c5d2762ecb0069dfb64d5c8a54] known_config_keys (claim) is catalogued beside config_scan_lexing.expected, test_config_consistency.expected: true
+unused_compiler_deps.ml has exactly the explicitly assigned refusal controls: true
+unused_compiler_deps.ml: [scanner-refusal:1262ba0367f56ab63b0ef45185bb1257] control stanza must (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:ffa4bc91bdd9e0c6519d47ab6e078f3c] csexp reader refuses (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:b2e2da4cfdb3763209d5bb0bf037f3eb] description that is (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:cb9d50292bf8e1411a78fe56d95365d7] description entry of (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:f9ea26ffa524f825f454965f1ef68877] control library description (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:e5da8bbf11bdc53c4c4f1d6394be7f88] outside the recognised (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:d0dd9b0705f1359338d24f701064b435] context other than (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:72246cd3e9e00d9ffa244cdd2bb49513] library without its (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:92206b092da67b9faa6ae7b73171723f] library whose requires (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:19d2ba86f2b359e5c32a81e81062f7c5] without its requires (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:c0761275e39346be1c8837a5a85d98b6] a stanza without (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:7a60a99f8c898d07163567eeff851cbc] another stanza carrying (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:8e3c17c0968ce3e98f1d8ad0b89c6718] libraries is refused (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:c319818e5b162fbc67bb85019fff6f99] libraries element of (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:0a4b1d22d540d21f605c894b621ea1c1] outside the recognised (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:ab518590d10da57cedc8d0717e63af61] holds is refused (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:828116468b6f2911e974fddf4fe601d8] declared name nothing (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:f0f1587aca0a7afae0b83e27bed22b38] enabled_if (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:910c1650b37b93c2cd7917497f236fb2] enabled_if (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:7398f68cb579d4b59ac9ce927f234276] object directory holding (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:b1784c07fa1dac619848cd1b4a9d64f0] object directory holding (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:69ce705759093b5f97c6cc8e0413a500] description dune refuses (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:100499646d6d4d69e702399dce61b260] unused_compiler_deps (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:36778054d93aa08eac389989017aed7a] DUNE_SOURCEROOT (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:22c08112ff7b660af6dab49542313b14] compiler-libs.common (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:5c6002f7f040eddc8696d03b9a9bb9e2] the workspace description (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:448291c7f6134ac8fadedd8e1a4f787a] declares the library (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:65e4156ccb9f193200c80820a12c6408] compiler-reaching library its (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:76d536378a6e503a67ce436cfd76938d] fixture directory's stanzas (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:67a884b3a6347974dc0b1b43122c4c21] derived as compiler-reaching (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:4a372cdf7b39da35fd50d7a96957b75f] its expected libraries (claim) is catalogued beside unused_compiler_deps.expected: true
 verdict_ratchet.ml has exactly the explicitly assigned refusal controls: true
 verdict_ratchet.ml: [scanner-refusal:977473ba169d481e2b57377845e9a8b8] exempted quantified bindings (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:52b0c212a9f1ba97a1400cd478d7cfda] shadowing definitions separate (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true

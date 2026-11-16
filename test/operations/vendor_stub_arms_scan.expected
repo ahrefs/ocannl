@@ -24,7 +24,8 @@ Vendor-gated select arms, each with the stand-in copy that compiles it:
   tools/vendor_idents_arm_metal.metal.ml -> arrayjit/vendor_stubs/arms/vendor_idents_arm_metal.ml
 
 Select arms gated on no vendor library (no copy demanded):
-  (none)
+  test/operations/unused_compiler_deps_fixtures/ucd_sel_unused.with_scan.ml
+  test/operations/unused_compiler_deps_fixtures/ucd_sel_used.with_scan.ml
 
 OK: every vendor-gated select arm is type-checked off its box, against the stand-ins.
 
