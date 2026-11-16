@@ -25,6 +25,8 @@ val discarding_symbols : (unit -> 'a) -> 'a
     name. Sound only when no symbol [f] mints outlives it. *)
 
 val symbol_ident : symbol -> string
+(** A C-family identifier in the [i] plus digits namespace. Symbol 386 spells [i0386] to avoid the
+    predefined [i386] macro and its free-name exclusion from kernel-key canonicalization. *)
 
 val in_symbol_ident_namespace : string -> bool
 (** Whether a name is spelled like {!symbol_ident} of some symbol, alone or behind a [_] suffix:

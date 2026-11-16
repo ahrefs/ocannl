@@ -167,3 +167,7 @@ val load_retrying_signing_refusal :
     on arm64 macOS before adding it: dyld keeps no verdict on a refused path, so a reload after the
     cause clears succeeds, while a library the policy keeps refusing is refused again. The other
     classes are not retried. Exposed for [test/operations/cc_load_refusal_classes]. *)
+
+val kernel_cache_stats : unit -> Ir.Kernel_code_cache.stats
+(** A snapshot of this process's cc kernel cache, for reuse-failure diagnostics. Includes groups
+    evicted since cache creation; no other executable can contribute entries or evictions. *)
