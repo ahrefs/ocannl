@@ -4181,49 +4181,14 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(res : dim) ~(opnd : dim
                         constr = constr2;
                         origin;
                       }) )
-      | ( Some
-            (Bounds_dim
-               {
-                 is_in_param = _;
-                 res = _;
-                 opnd = [ opnd1 ];
-                 glb = None;
-                 constr = constr1;
-                 origin = origin1;
-                 _;
-               }),
-          Some
-            (Bounds_dim
-               {
-                 is_in_param = _;
-                 res = [ res2 ];
-                 opnd = _;
-                 glb = None;
-                 constr = constr2;
-                 origin = origin2;
-                 _;
-               }) )
-        when is_stage2_up stage && equal_dim_var opnd_v opnd1 && equal_dim_var res_v res2
-             &&
-             match (constr1, constr2) with
-             | At_least_dim _, _ | _, At_least_dim _ -> false
-             | _ -> true ->
-          let origin = merge_origins origin (merge_origins origin1 origin2) in
-          (* A heuristic to reduce template variables coming from e.g. einsum notation expansion.
-             Vars carrying [At_least_dim] (fixed-index slots such as [=> ...|0]) are excluded: they
-             prefer resolving to the minimal dimension (broadcast into consumers), and equating them
-             with a consumer's axis would irreversibly adopt the consumer's dimension instead.
-
-             It also stands in for a dimension's role (gh-ocannl-2185, gh-ocannl-2180): the merge
-             ORs the resolve-at-use mark, so a draw's axis that a result's template minted (the
-             literal of [!.rate < uniform_at step] in [Nn_blocks.dropout]) closes to its use site
-             rather than to 1. Deleted, dropout's mask was one value broadcast over its input. It
-             fires only on a re-processed bound, so a solve can depend on whether a bound is
-             repeated (gh-ocannl-2141, pinned in test_row_bound_emissions). A row closing to its
-             bound now takes axes of its own ([role_template], gh-ocannl-2180), but that does not
-             yet replace this: deleted on top of it, dropout's masks and raw [uniform_at] draws over
-             an unbatched vector still closed to one value or one block. *)
-          ([ Dim_eq { d1 = opnd; d2 = res; origin } ], env)
+      (* No equation follows from two variables bounding only each other (gh-ocannl-2141, the
+         dimension twin of gh-ocannl-2126): [res ⊑ opnd] admits [opnd = 1_(bcast_if_1)] as well as
+         [res = opnd], and which one holds is for the closing stages to decide. A guess here matched
+         only a recorded edge, so it fired only on a re-processed bound and made a solve depend on
+         whether a bound was repeated. What it stood in for was a closing order: a leaf axis bounded
+         below by a packed draw's block counter (the [range_over_offsets] under [uniform_at]) must
+         close after the draw sizes the counter, which [solve_inequalities] ensures by deferring it
+         ([draw_counter_leaves]). *)
       | ( Some (Bounds_dim { res = ress; origin = origin1; _ }),
           Some (Bounds_dim { res = recorded; _ }) )
       (* A recorded edge passed this search when it was added, and repeating it adds no path: a
@@ -6245,6 +6210,47 @@ let is_draw_total = function
       round_up
   | _ -> false
 
+(* gh-ocannl-2141: the leaf axes that wait for a packed draw to size its block counter. A round-up
+   [Total_elems] (a packed draw, [Uint4x32_to_prec]) sizes its counter [var] only once its own bound
+   is known, which can be in the final stage itself; a leaf axis that resolves at its use sites and
+   is bounded below by that counter (whatever its other lower bounds) -- the [range_over_offsets]
+   axis under [uniform_at], which [role_template] gave an axis of its own -- has no GLB until then,
+   and the final stage's guess would close it to 1 first: the counter's blocks would all read one
+   offset and repeat the draw. Such an axis waits; when the draw solves the counter, the re-emitted
+   bound gives it its GLB. It is a closing order, not an equation: the axis is only kept from
+   guessing, and the final fixpoint's [next_guess] still releases it if nothing sizes the counter.
+
+   Boundary: only the final stage (the only one that guesses such an axis), only a counter's direct
+   upper bounds, and only an unconstrained, unbounded, non-parameter axis that resolves at use. A
+   wider rule -- any such axis waits for any open lower bound -- refuses satisfiable programs with a
+   fixed index over the draw (13 in [shape_program_sweep]). *)
+let draw_counter_leaves ineqs env =
+  let add_counter acc = function
+    | Total_elems { numerator = Strided_var { round_up = true; var; _ }; _ } ->
+        Set.union acc (vars_of_dim (subst_dim env (Var var)))
+    | _ -> acc
+  in
+  let counters =
+    List.fold ineqs ~init:dim_var_set_empty ~f:(fun acc -> function
+      | Rows_constr { constr; _ } -> add_counter acc constr
+      | _ -> acc)
+  in
+  let counters =
+    List.fold (Utils.Tree_map.to_alist env.row_env) ~init:counters ~f:(fun acc -> function
+      | _, Bounds_row { constr; _ } -> add_counter acc constr
+      | _, Solved_row _ -> acc)
+  in
+  Set.fold counters ~init:dim_var_set_empty ~f:(fun acc counter ->
+      match find_dim env.dim_env counter with
+      | Some (Bounds_dim { opnd; _ }) ->
+          List.fold opnd ~init:acc ~f:(fun acc v ->
+              match find_dim env.dim_env v with
+              | Some (Bounds_dim { glb = None; constr = Unconstrained_dim; is_in_param = false; _ })
+                when is_resolve_at_use_dim v ->
+                  Set.add acc v
+              | _ -> acc)
+      | _ -> acc)
+
 let%debug4_sexp solve_inequalities ~(stage : stage)
     ?(discardable_vars : dim_var_set = dim_var_set_empty) (ineqs : constraint_ list) env :
     constraint_ list * _ =
@@ -6273,6 +6279,10 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
               let d1 = subst_dim env d1 and d2 = subst_dim env d2 in
               waiting_on_window (waiting_on_window waiting d1 d2) d2 d1
           | _ -> waiting)
+    in
+    let deferred_dims =
+      if is_stage7 stage then Set.union deferred_dims (draw_counter_leaves ineqs env)
+      else deferred_dims
     in
     let deferred_dims = Set.diff deferred_dims unblocked_dims in
     let deferred_kernels = Set.diff deferred_kernels unblocked_dims in
