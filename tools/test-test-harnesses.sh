@@ -132,7 +132,7 @@ cat >"$fixture/$malformed_member" <<'MALFORMED'
 . "$ABORT_SUPPORT"
 harness_args "$@"
 harness_scratch dispatcher-abort
-report 0 'a leg before the syntax error'
+report 0 'a leg before the abort'
 broken() {
   )
 }
@@ -146,7 +146,7 @@ for ending in malformed exit-zero; do
   fi
   for width in 1 4; do
     run --shell --jobs "$width"
-    if [ "$got" = 1 ] && grep -qx 'PASS  a leg before the syntax error' "$TMP/out" \
+    if [ "$got" = 1 ] && grep -qx 'PASS  a leg before the abort' "$TMP/out" \
        && grep -q '^aborted before finish (rc=[1-9][0-9]*)$' "$TMP/out" \
        && grep -q "^HARNESS $malformed_member exit: [1-9][0-9]*$" "$TMP/out" \
        && grep -q ' run, 1 failed$' "$TMP/out"; then
