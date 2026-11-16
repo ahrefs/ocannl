@@ -4911,6 +4911,16 @@ let () =
   in_leg ~leg "all rows pass" make|ocaml},
       [],
       1 );
+    ( "refuses a make function given by name whose nested leg claims the gated population",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let always = Verdict.leg ~when_:true ~on:backend_name () in
+  let leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name () in
+  let make label = in_leg ~leg:always label (fun l -> p_all l rows ~f:Fn.id) in
+  in_leg ~leg "all rows pass" make|ocaml},
+      [ "rows" ],
+      2 );
     ( "refuses a make function a helper is handed, whose population its caller's gate reads",
       {ocaml|open Verdict.Claims
 let claims ~leg make = in_leg ~leg "all rows pass" make
@@ -4968,6 +4978,12 @@ let () =
   let rows = probe () in
   check ~when_:(not (List.is_empty rows)) "all rows pass" rows|ocaml},
       [ "rows" ],
+      1 );
+    ( "accepts a gated wrapper taking apart a tuple its caller hands in",
+      {ocaml|let check ~when_ pair =
+  Verdict.gated_all ~when_ ~on:"cc" "rows pass" (match pair with _, xs -> xs) ~f:Fn.id
+let () = check ~when_:on_gpu (on_gpu, rows)|ocaml},
+      [],
       1 );
     ( "accepts a gated wrapper applied twice whose gates each read only the other call's rows",
       {ocaml|let check ~when_ label rows = Verdict.gated_all ~when_ ~on:"cc" label rows ~f:Fn.id

@@ -2251,6 +2251,10 @@ let gate_census content =
 
       (* The definitions being replayed, against a function that calls itself. *)
       val replayed : int Hash_set.t = Hash_set.create (module Int)
+
+      (* In a replay, the functions handed to a leg claim met there: its make function, whose claims
+         are the replayed make function's too, so the collectors do not pause in it. *)
+      val replay_live : int Hash_set.t = Hash_set.create (module Int)
       val mutable collecting : (string * gate_denotation) list ref option = None
 
       (* The unlisted collection-module calls the claim being compared reaches. *)
@@ -2670,6 +2674,12 @@ let gate_census content =
                      && (not (Hashtbl.mem writes identity))
                      && not (Hashtbl.mem unlisted_writes identity) ->
                   go (Set.add seen identity) rhs_env rhs
+              | Some { identity; definition = None } when not (Set.mem seen identity) -> (
+                  (* A parameter is the argument of the one application it is read under
+                     (gh-ocannl-1893), so a pattern takes that argument's literal apart. *)
+                  match self#parameter_arguments identity with
+                  | [ (argument, argument_env) ] -> go (Set.add seen identity) argument_env argument
+                  | _ -> (expr, env, Set.to_list seen))
               | _ -> (expr, env, Set.to_list seen))
           | _ -> (expr, env, Set.to_list seen)
         in
@@ -3954,7 +3964,8 @@ let gate_census content =
             | (Pexp_function _ | Pexp_lazy _)
               when quiet = 0
                    && (not (List.is_empty leg_stack))
-                   && not (Hash_set.mem synchronous (position expr)) ->
+                   && (not (Hash_set.mem synchronous (position expr)))
+                   && not (replaying > 0 && Hash_set.mem replay_live (position expr)) ->
                 with_stack []
             | _ -> dispatch ())
 
@@ -4099,7 +4110,16 @@ let gate_census content =
                | Some (member, spelled, ambiguous) when self#recording ->
                    Hash_set.add leg_heads (position (strip_constraints callee));
                    self#leg_claim env expr ~member ~spelled ~ambiguous arguments
-               | _ -> ())
+               | Some _ ->
+                   (* A leg claim nested in a replayed function: its make function's claims are the
+                      enclosing make function's, as in the walk itself. *)
+                   List.iter arguments ~f:(fun (_, argument) ->
+                       match (strip_constraints argument).pexp_desc with
+                       | Pexp_function _ ->
+                           Hash_set.add replay_live (position argument);
+                           Hash_set.add replay_live (position (strip_constraints argument))
+                       | _ -> ())
+               | None -> ())
            | Pexp_ident _ when self#recording && not (Hash_set.mem leg_heads (position expr)) -> (
                match leg_member expr with
                | Some (_, spelled, _) ->
@@ -4352,6 +4372,7 @@ type skip_denotation = { is_skip : bool; bound : value_binding option }
 let skip_positions ~owners ast =
   let positions = Hash_set.create (module Int) in
   let uses = Hashtbl.create (module Int) in
+  let bound = Hash_set.create (module Int) in
   let verdicts loc =
     match Verdict_callee.resolve_at owners loc with
     | Some { ownership = Verdicts | Ambiguous | Free; _ } -> true
@@ -4414,7 +4435,9 @@ let skip_positions ~owners ast =
         | Lident name -> (
             match Lexical_scope.lookup env name with
             | Some (Some { bound = Some binding; _ }) ->
+                Hash_set.add bound ident.loc.loc_start.pos_cnum;
                 Hashtbl.set uses ~key:ident.loc.loc_start.pos_cnum ~data:binding
+            | Some (Some _) -> Hash_set.add bound ident.loc.loc_start.pos_cnum
             | _ -> ())
         | _ -> ()
     end
@@ -4422,7 +4445,7 @@ let skip_positions ~owners ast =
   ignore
     (walker#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } ast
       : structure);
-  (positions, uses)
+  (positions, uses, bound)
 
 (* What running a deferred skip value does: the skips its run code applies, outside the branches
    nested in it, in source order, and how many evaluating claims it makes anywhere. *)
@@ -4441,7 +4464,7 @@ type deferred_skips =
 let skip_list_census content =
   let ast = Read.structure_of content in
   let owners = Verdict_callee.of_structure ast in
-  let skips, uses = skip_positions ~owners ast in
+  let skips, uses, source_bound = skip_positions ~owners ast in
   let is_skip_head expr =
     match (strip_constraints expr).pexp_desc with
     | Pexp_ident { loc; _ } -> Hash_set.mem skips loc.loc_start.pos_cnum
@@ -4490,7 +4513,11 @@ let skip_list_census content =
   (* [Lazy.force], [Lazy.force_val], or [Base]'s unqualified [force] where the source binds none. *)
   let forces callee =
     match Read.longident_of (strip_constraints callee) with
-    | Some [ "force" ] -> Option.is_none (binding_of callee)
+    | Some [ "force" ] -> (
+        (* Unless the source binds a [force] of its own: a [let], a parameter, a pattern. *)
+        match (strip_constraints callee).pexp_desc with
+        | Pexp_ident { loc; _ } -> not (Hash_set.mem source_bound loc.loc_start.pos_cnum)
+        | _ -> false)
     | Some path -> (
         match List.rev path with ("force" | "force_val") :: "Lazy" :: _ -> true | _ -> false)
     | None -> false
@@ -4580,10 +4607,17 @@ let skip_list_census content =
                     | Pparam_val (Ppxlib.Asttypes.Labelled label, _, _) -> Some label
                     | _ -> None)
               in
+              (* A lazy the function allocates itself is a new cell at each application: its
+                 identity does not outlive one, unlike a lazy the function captures. *)
+              let start, stop = (rhs.pexp_loc.loc_start.pos_cnum, rhs.pexp_loc.loc_end.pos_cnum) in
               let run_skips =
-                match body with
-                | Pfunction_body body -> fst (claims ~branches:false body)
-                | Pfunction_cases _ -> []
+                (match body with
+                  | Pfunction_body body -> fst (claims ~branches:false body)
+                  | Pfunction_cases _ -> [])
+                |> List.map ~f:(fun (skip, key) ->
+                    match key with
+                    | Some key when start <= key && key < stop -> (skip, None)
+                    | _ -> (skip, key))
               in
               let run_evaluating = snd (claims ~branches:true rhs) in
               Some (Skip_function { positional; labelled; runs = { run_skips; run_evaluating } })
@@ -4639,7 +4673,13 @@ let skip_list_census content =
      element, and an index ([iteri], [mapi], ...), an accumulator ([fold]) or a second collection's
      element (a pairwise [iter2]) besides. *)
   let callback_arguments name =
-    1
+    (* A comparator takes two elements. *)
+    (if
+       List.mem
+         [ "sort"; "stable_sort"; "fast_sort"; "sort_uniq"; "merge"; "equal"; "compare" ]
+         name ~equal:String.equal
+     then 2
+     else 1)
     + (if String.is_suffix name ~suffix:"i" then 1 else 0)
     + (if String.is_prefix name ~prefix:"fold" then 1 else 0)
     + if String.is_substring name ~substring:"2" then 1 else 0
@@ -4754,6 +4794,19 @@ let skip_list_census content =
   in
   (* The skip callbacks a lazy sequence carries until something consumes it: [Seq.map skipped s],
      through the names it is bound to and the sequences it is built from. *)
+  (* The positional arguments of the collection function [name] that may be the collection it
+     consumes: the first in [Base]'s order, the last in [Stdlib]'s (two each for a pairwise one) --
+     never a fold's initial accumulator or another value between them. *)
+  let collection_positionals name arguments =
+    let positional =
+      List.filter_map arguments ~f:(function
+        | Ppxlib.Asttypes.Nolabel, argument -> Some argument
+        | _ -> None)
+    in
+    let n = List.length positional in
+    let pairwise = String.is_substring name ~substring:"2" in
+    List.filteri positional ~f:(fun i _ -> i = 0 || i = n - 1 || (pairwise && (i = 1 || i = n - 2)))
+  in
   let rec producer_skips seen expr =
     let expr = strip_constraints expr in
     match expr.pexp_desc with
@@ -4769,6 +4822,7 @@ let skip_list_census content =
           when List.mem sequence_families family ~equal:String.equal
                && not (runs_callback ~family name) ->
             let positional = ref 0 in
+            let collections = collection_positionals name arguments in
             List.concat_map arguments ~f:(fun (label, argument) ->
                 let index = !positional in
                 (match label with Ppxlib.Asttypes.Nolabel -> Int.incr positional | _ -> ());
@@ -4780,9 +4834,9 @@ let skip_list_census content =
                   else []
                 in
                 let built =
-                  match label with
-                  | Ppxlib.Asttypes.Nolabel -> producer_skips seen argument
-                  | _ -> []
+                  if List.exists collections ~f:(phys_equal argument) then
+                    producer_skips seen argument
+                  else []
                 in
                 List.filter (callback @ built) ~f:(Fn.non List.is_empty))
         | _ -> [])
@@ -4828,11 +4882,8 @@ let skip_list_census content =
                   Option.exists (collection_function name) ~f:(fun f -> f.consumes)
                   && fully name arguments
                 then
-                  List.iter arguments ~f:(fun (label, argument) ->
-                      match label with
-                      | Ppxlib.Asttypes.Nolabel ->
-                          List.iter (producer_skips [] argument) ~f:(report Iterated expr)
-                      | _ -> ()))
+                  List.iter (collection_positionals name arguments) ~f:(fun argument ->
+                      List.iter (producer_skips [] argument) ~f:(report Iterated expr)))
         | Pexp_for (_, _, _, _, body) | Pexp_while (_, body) ->
             report Iterated expr (skip_only body)
         | Pexp_ifthenelse (_, yes, no) ->

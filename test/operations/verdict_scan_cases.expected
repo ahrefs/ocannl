@@ -102,10 +102,14 @@ ok: skip list -- a lazy of two skips forced in a branch
 ok: skip list -- a lazy forced twice in a branch, which runs once
 ok: skip list -- a lazy of two skips a wrapper forces in a branch
 ok: skip list -- a lazy forced twice through a wrapper, which runs once
+ok: skip list -- a wrapper allocating its own lazy, applied twice in a branch
+ok: skip list -- a parameter named force, which is not the lazy force
 ok: skip list -- a lazy of skips nobody forces
 ok: skip list -- a lazy that also evaluates a claim
 ok: skip list -- a lazy sequence of skips a consumer runs
 ok: skip list -- a lazy sequence of skips materialised
+ok: skip list -- a lazy sequence a fold only carries as its accumulator
+ok: skip list -- a comparator wrapper a sort runs
 ok: skip list -- a sequence consumer the table marks consuming
 ok: skip list -- a sequence transformation that only builds
 ok: floor -- a floor of zero on an opened p_all

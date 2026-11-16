@@ -448,6 +448,14 @@ let () = if on_gpu then run () else force_skips ()|ocaml},
 let force_a () = Lazy.force skip_a
 let () = if on_gpu then run () else (force_a (); force_a ())|ocaml},
         [] );
+      ( "a wrapper allocating its own lazy, applied twice in a branch",
+        {ocaml|let skip () = let once = lazy (skipped "a") in Lazy.force once
+let () = if on_gpu then run () else (skip (); skip ())|ocaml},
+        [ "run 2 a" ] );
+      ( "a parameter named force, which is not the lazy force",
+        {ocaml|let deferred = lazy (skipped "a"; skipped "b")
+let run_with force = if on_gpu then () else force deferred|ocaml},
+        [] );
       ( "a lazy of skips nobody forces",
         {ocaml|let skips = lazy (skipped "a"; skipped "b")
 let () = if on_gpu then run () else ignore skips|ocaml},
@@ -464,6 +472,14 @@ let () = Stdlib.Seq.iter ignore deferred|ocaml},
         {ocaml|let () =
   ignore (Stdlib.List.of_seq (Stdlib.Seq.map (Verdict.skipped ~backend:backend_name) (Stdlib.List.to_seq labels)))|ocaml},
         [ "iterated Verdict.skipped ~backend:backend_name" ] );
+      ( "a lazy sequence a fold only carries as its accumulator",
+        {ocaml|let deferred = Stdlib.Seq.map (Verdict.skipped ~backend:backend_name) (Stdlib.List.to_seq labels)
+let () = ignore (Stdlib.List.fold_left (fun acc _ -> acc) deferred [ 1; 2 ])|ocaml},
+        [] );
+      ( "a comparator wrapper a sort runs",
+        {ocaml|let cmp a b = skipped "comparison"; Int.compare a b
+let () = ignore (Stdlib.List.sort cmp [ 2; 1 ])|ocaml},
+        [ "iterated comparison" ] );
       ( "a sequence consumer the table marks consuming",
         {ocaml|let () = ignore (Sequence.count labels ~f:(fun l -> skipped l; true))|ocaml},
         [ "iterated l" ] );

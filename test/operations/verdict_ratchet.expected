@@ -712,12 +712,14 @@ names a leg uncompared whose helper is also handed on as a value: true
 terminates on a helper that passes its leg back to itself: true
 refuses a make function given by name whose population the leg's gate reads: true
 accepts a make function given by name under an invariant gate: true
+refuses a make function given by name whose nested leg claims the gated population: true
 refuses a make function a helper is handed, whose population its caller's gate reads: true
 refuses a make function whose local function it applies claims the gated population: true
 refuses a make function whose local function is handed the gated population: true
 refuses a make function whose local lazy it forces claims the gated population: true
 accepts a make function that never runs its local function claiming the population: true
 refuses a gated wrapper whose caller's gate reads the population it hands in: true
+accepts a gated wrapper taking apart a tuple its caller hands in: true
 accepts a gated wrapper applied twice whose gates each read only the other call's rows: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
 refuses a leg claim it cannot complete, a planted hand-written skip list, a skip-list reader that raised, and a stale exemption: true
