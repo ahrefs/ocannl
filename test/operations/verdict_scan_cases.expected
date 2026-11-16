@@ -97,6 +97,7 @@ ok: skip list -- a callback whose skipping optional default the stored arguments
 ok: skip list -- a callback whose skipping optional default the call omits
 ok: skip list -- a wrapper whose evaluating default the stored arguments supply
 ok: skip list -- a wrapper whose evaluating default the call omits
+ok: skip list -- a wrapper whose skipping default a literal None leaves to run
 ok: skip list -- a wrapper that also evaluates a claim
 ok: skip list -- a two-parameter wrapper an indexed iteration saturates
 ok: skip list -- a two-parameter wrapper a map only applies in part

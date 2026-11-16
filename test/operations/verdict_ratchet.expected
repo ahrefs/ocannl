@@ -713,6 +713,8 @@ terminates on a helper that passes its leg back to itself: true
 refuses a make function given by name whose population the leg's gate reads: true
 accepts a make function given by name under an invariant gate: true
 refuses a make function given by name whose nested leg claims the gated population: true
+refuses a nested leg's make function given by name inside a replayed make function: true
+names a leg uncompared past the bound on the choices of applications it passes through: true
 refuses a make function a helper is handed, whose population its caller's gate reads: true
 refuses a make function whose local function it applies claims the gated population: true
 refuses a make function whose local function is handed the gated population: true

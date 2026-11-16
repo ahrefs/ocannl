@@ -4921,6 +4921,32 @@ let () =
   in_leg ~leg "all rows pass" make|ocaml},
       [ "rows" ],
       2 );
+    ( "refuses a nested leg's make function given by name inside a replayed make function",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let always = Verdict.leg ~when_:true ~on:backend_name () in
+  let leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name () in
+  let inner l = p_all l rows ~f:Fn.id in
+  let outer l = in_leg ~leg:always l inner in
+  in_leg ~leg "all rows pass" outer|ocaml},
+      [ "rows" ],
+      2 );
+    ( "names a leg uncompared past the bound on the choices of applications it passes through",
+      {ocaml|open Verdict.Claims
+let f0 ~leg = in_leg ~leg "all rows pass" (fun label -> p label true)
+let f1 ~leg = f0 ~leg; f0 ~leg
+let f2 ~leg = f1 ~leg; f1 ~leg
+let f3 ~leg = f2 ~leg; f2 ~leg
+let f4 ~leg = f3 ~leg; f3 ~leg
+let f5 ~leg = f4 ~leg; f4 ~leg
+let f6 ~leg = f5 ~leg; f5 ~leg
+let f7 ~leg = f6 ~leg; f6 ~leg
+let f8 ~leg = f7 ~leg; f7 ~leg
+let f9 ~leg = f8 ~leg; f8 ~leg
+let () = f9 ~leg:(Verdict.leg ~when_:on_gpu ~on:backend_name ())|ocaml},
+      [ "uncompared in_leg" ],
+      0 );
     ( "refuses a make function a helper is handed, whose population its caller's gate reads",
       {ocaml|open Verdict.Claims
 let claims ~leg make = in_leg ~leg "all rows pass" make

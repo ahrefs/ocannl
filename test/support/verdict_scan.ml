@@ -2123,6 +2123,13 @@ let gate_census content =
      a parameter forwarded to it is resolved through. *)
   let call_callers = Hashtbl.create (module Int) in
   (* Whether two choices of applications agree on every function both choose for. *)
+  (* Past 256 resolutions a leg is uncompared, not enumerated further: a tree of forwarding helpers
+     could otherwise make it exponential. *)
+  let bounded_resolutions resolutions =
+    if List.length resolutions > 256 then
+      Error "its leg reaches more than 256 choices of the applications it passes through"
+    else Ok resolutions
+  in
   let calls_compatible a b =
     List.for_all a ~f:(fun (owner, at) ->
         match List.Assoc.find b owner ~equal:Int.equal with
@@ -3331,10 +3338,11 @@ let gate_census content =
         (* Two parts of one leg: every pair of alternatives that agree on their applications. *)
         let both a b =
           Result.bind a ~f:(fun xs ->
-              Result.map b ~f:(fun ys ->
-                  List.concat_map xs ~f:(fun x ->
-                      List.filter_map ys ~f:(fun y ->
-                          if compatible x.calls y.calls then Some (merge x y) else None))))
+              Result.bind b ~f:(fun ys ->
+                  bounded_resolutions
+                    (List.concat_map xs ~f:(fun x ->
+                         List.filter_map ys ~f:(fun y ->
+                             if compatible x.calls y.calls then Some (merge x y) else None)))))
         in
         let gated gates = List.map ~f:(fun r -> { r with leg_gates = gates @ r.leg_gates }) in
         (* [seen]: the bindings on this path, so that two branches may share an ancestor leg. *)
@@ -3490,6 +3498,7 @@ let gate_census content =
                                "its leg reaches `%s`, a parameter of `%s`, which an application of \
                                 it does not supply"
                                name owner_name)))
+              |> fun resolutions -> Result.bind resolutions ~f:bounded_resolutions
 
       method helper env callee =
         let callee, callee_env = self#resolve_callee env callee in
@@ -4155,6 +4164,21 @@ let gate_census content =
                        | Pexp_function _ ->
                            Hash_set.add replay_live (position argument);
                            Hash_set.add replay_live (position (strip_constraints argument))
+                       | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+                           (* One given by name: its definition, replayed with the collectors. *)
+                           match Lexical_scope.lookup env name with
+                           | Some
+                               {
+                                 identity;
+                                 definition =
+                                   Some (({ pexp_desc = Pexp_function _; _ } as function_), scope);
+                               }
+                             when not (Hash_set.mem replayed identity) ->
+                               Hash_set.add replayed identity;
+                               Exn.protect
+                                 ~f:(fun () -> self#replay leg_stack scope function_)
+                                 ~finally:(fun () -> Hash_set.remove replayed identity)
+                           | _ -> ())
                        | _ -> ())
                | None -> ())
            | Pexp_ident _ when self#recording && not (Hash_set.mem leg_heads (position expr)) -> (
@@ -4612,6 +4636,19 @@ let skip_list_census content =
         | _ -> false)
     | None -> false
   in
+  (* Whether an argument supplies the optional parameter [label], so that its default does not run:
+     [~label:v], or [?label:e] -- except a literal [None], which runs the default. *)
+  let supplies_default label (given, value) =
+    match given with
+    | Ppxlib.Asttypes.Labelled given -> String.equal given label
+    | Optional given -> (
+        String.equal given label
+        &&
+        match (strip_constraints value).pexp_desc with
+        | Pexp_construct ({ txt = Ppxlib.Longident.Lident "None"; _ }, None) -> false
+        | _ -> true)
+    | Nolabel -> false
+  in
   let memo = Hashtbl.create (module Int) and in_progress = Hash_set.create (module Int) in
   (* The skips and evaluating claims [expr] applies, in source order; [~branches:false] stops at the
      branches nested in it and the functions written in it. A complete application of a deferred
@@ -4653,11 +4690,8 @@ let skip_list_census content =
                   List.iter defaults ~f:(fun (label, default) ->
                       if
                         not
-                          (List.exists arguments ~f:(fun (given, _) ->
-                               match given with
-                               | Ppxlib.Asttypes.Labelled given | Optional given ->
-                                   String.equal given label
-                               | Nolabel -> false))
+                          (List.exists arguments ~f:(fun (given, value) ->
+                               supplies_default label (given, value)))
                       then run default);
                   run runs
               | Some (Skip_lazy { key; runs }) -> run ~through:key runs
@@ -4830,13 +4864,7 @@ let skip_list_census content =
            makes the callback no skip wrapper. *)
         let omitted =
           List.filter_map defaults ~f:(fun (label, default) ->
-              if
-                List.exists stored ~f:(fun (given, _) ->
-                    match given with
-                    | Ppxlib.Asttypes.Labelled given | Optional given -> String.equal given label
-                    | Nolabel -> false)
-              then None
-              else Some default)
+              if List.exists stored ~f:(supplies_default label) then None else Some default)
         in
         if List.exists omitted ~f:(fun default -> default.run_evaluating > 0) then []
         else

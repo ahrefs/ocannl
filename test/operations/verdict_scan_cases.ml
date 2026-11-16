@@ -429,6 +429,10 @@ let () = Stdlib.List.iter (skip ~before:()) [ "a"; "b" ]|ocaml},
         {ocaml|let skip ?(before = p "setup" true) label = ignore before; skipped label
 let () = Stdlib.List.iter skip [ "a"; "b" ]|ocaml},
         [] );
+      ( "a wrapper whose skipping default a literal None leaves to run",
+        {ocaml|let skip ?(before = skipped "a") () = ignore before; skipped "b"
+let () = if on_gpu then run () else skip ?before:None ()|ocaml},
+        [ "run 2 a" ] );
       ( "a wrapper that also evaluates a claim",
         {ocaml|let both () = p "a" x; skipped "b"
 let () = if on_gpu then run () else (both (); skipped "c")|ocaml},
