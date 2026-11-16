@@ -15,7 +15,7 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
-# Groups: #lifecycle (65, 97, 40-47, 74, 122), #source (59-63, 66, 104), #hermetic (70).
+# Groups: #lifecycle (65, 97, 40-47, 74, 122, 123), #source (59-63, 66, 104), #hermetic (70).
 #
 # Legs:
 #  40-47. run/start lifecycle: completion, signals (a group TERM landing inside
@@ -32,6 +32,8 @@
 #      active affected query names itself, never the previous completed run.
 #      The query helper is a readiness-controlled stand-in, not a test of
 #      affected-tests.sh or Dune locking.
+# 123. exited query recovery authenticates its group keeper and every holder;
+#      live queries, mismatched tokens, unrelated and setsid holders refuse.
 #  74. fork TERM is deferred until the parent owns its child pid and the child
 #      resets its handlers; no-mask and inherited-handler controls prove both.
 #  65. a `stop`, or a signal to the launcher alone, while the backends
@@ -968,6 +970,140 @@ EOF
   unlink "$life_root/tools/affected-tests.sh"
 }
 harness_leg_run '122: failing batches release locks and refusals name the real holder #lifecycle' leg_122
+
+# Retained-query recovery boundary (gh-ocannl-2238): a fake dune backgrounds
+# an fd-9 holder and exits under the real affected entry point. We cover live
+# queries, a corrupted start token, unrelated openers and setsid escapees;
+# detached holders must be refused, not guessed from a stale parent pid.
+leg_123() {
+  local mode holder query_pid owner keeper escape
+  cp "$life_bin/dune" "$TMP/123-dune-before"
+  cat >"$life_root/tools/affected-tests.sh" <<'EOF'
+#!/usr/bin/env bash
+exec dune query-retain
+EOF
+  cat >"$life_bin/dune" <<'EOF'
+#!/usr/bin/env bash
+exec perl -MPOSIX -e '
+  if ($ENV{QUERY_MODE} eq "mixed") {
+    my $escape = fork(); die $! unless defined $escape;
+    if (!$escape) {
+      setsid() >= 0 or die $!;
+      alarm 90;
+      open my $r, ">", "$ARGV[0].escape" or die $!;
+      print $r "$$\n"; close $r;
+      while (1) { select undef, undef, undef, .05 }
+    }
+    while (!-s "$ARGV[0].escape") { select undef, undef, undef, .05 }
+  }
+  my $child = fork(); die $! unless defined $child;
+  if (!$child) {
+    setsid() >= 0 or die $! if $ENV{QUERY_MODE} eq "detached";
+    alarm 90;
+    open my $r, ">", "$ARGV[0].retained" or die $!;
+    print $r "$$\n"; close $r;
+    while (1) { select undef, undef, undef, .05 }
+  }
+  while (!-s "$ARGV[0].retained") { select undef, undef, undef, .05 }
+  if ($ENV{QUERY_MODE} =~ /^(live|query-token)$/) {
+    while (!-e "$ARGV[0].query-release") { select undef, undef, undef, .05 }
+  }
+' "$LIFECYCLE_PREFIX"
+EOF
+  owner=$(life paths owner)
+  for mode in live retained detached mixed unrelated token query-token; do
+    escape=
+    unlink "$life_prefix.escape" 2>/dev/null
+    unlink "$life_prefix.retained" 2>/dev/null
+    unlink "$life_prefix.query-release" 2>/dev/null
+    QUERY_MODE=$mode life affected >"$TMP/123-query.out" 2>"$TMP/123-query.err" &
+    query_pid=$!
+    if ! await_fixture_ready "$life_prefix.retained"; then
+      report 1 "query recovery: $mode fixture ready" "$(cat "$TMP/123-query.err")"
+      kill -KILL "$query_pid" 2>/dev/null; wait "$query_pid" 2>/dev/null; break
+    fi
+    holder=$(cat "$life_prefix.retained")
+    printf '%s\n' "$holder" >"$TMP/123-holder-pid"
+    ps_token "$holder" >"$TMP/123-holder-token"
+    case $mode in live | query-token) ;; *) wait "$query_pid" ;; esac
+    life_capture run --cap 30 ok
+    if [ "$life_rc" = 2 ] && grep -q 'query .*holds this worktree' "$TMP/lifecycle.err"; then
+      report 0 "query recovery: $mode retained fd 9 blocks launch"
+    else report 1 "query recovery: $mode retained fd 9 blocks launch"; fi
+    cp "$owner" "$TMP/123-owner"
+    keeper=$(cut -f5 "$TMP/123-owner")
+    if [ "$mode" = mixed ]; then
+      escape=$(cat "$life_prefix.escape")
+      ps_token "$escape" >"$life_prefix.escape-token"
+    fi
+    case $mode in
+      query-token)
+        perl -i -pe 'my @f = split /\t/; $f[3] = "wrong-query-token"; $_ = join("\t", @f)' "$owner"
+        ;;
+      token)
+        perl -i -pe 's/[^\t\n]+$/wrong-start-token/' "$owner"
+        ;;
+      unrelated)
+        # Drop only the retained child, then let an unrelated process acquire
+        # the same inode. The stale owner pointer alone must grant no authority.
+        harness_kill_recorded "$TMP/123-holder-pid" "$TMP/123-holder-token"; life_await_dead "$holder"
+        unlink "$life_prefix.unrelated-ready" 2>/dev/null
+        perl -MFcntl=:flock -e '
+          open my $f, ">>", $ARGV[0] or die $!;
+          flock($f, LOCK_EX|LOCK_NB) or die $!;
+          open my $r, ">", $ARGV[1] or die $!; close $r;
+          sleep 90;
+        ' "$(life paths lock)" "$life_prefix.unrelated-ready" &
+        life_pid=$! holder=$!
+        if ! await_fixture_ready "$life_prefix.unrelated-ready"; then
+          report 1 'query recovery: unrelated fixture ready'
+          kill -TERM "$holder" 2>/dev/null; life_wait_child; break
+        fi
+        printf '%s\n' "$holder" >"$TMP/123-holder-pid"
+        ps_token "$holder" >"$TMP/123-holder-token"
+        ;;
+    esac
+    life_capture recover-query
+    if [ "$mode" = retained ]; then
+      if [ "$life_rc" = 0 ] && life_await_dead "$holder"; then
+        report 0 'query recovery: exited query holder reaped by recorded identity'
+      else report 1 'query recovery: exited query holder reaped by recorded identity' "$(cat "$TMP/lifecycle.out" "$TMP/lifecycle.err")"; fi
+      # This launch is before fixture cleanup: on the base it stays refused.
+      life_capture run --cap 30 ok
+      life_check 0 'verdict: pass' 'recovery permits launch before manual cleanup'
+      harness_kill_recorded "$TMP/123-holder-pid" "$TMP/123-holder-token"
+      life_await_dead "$holder"
+    else
+      if [ "$life_rc" = 2 ] && ! life_dead "$holder" &&
+         { [ -z "$escape" ] || ! life_dead "$escape"; } &&
+         grep -q 'query recovery refused' "$TMP/lifecycle.err"; then
+        report 0 "query recovery: refuses $mode without reaping holder"
+      else report 1 "query recovery: refuses $mode without reaping holder" "$(cat "$TMP/lifecycle.out" "$TMP/lifecycle.err")"; fi
+      case $mode in live | query-token) touch "$life_prefix.query-release"; wait "$query_pid" ;; esac
+      harness_kill_recorded "$TMP/123-holder-pid" "$TMP/123-holder-token"
+      life_await_dead "$holder"
+      if [ -n "$escape" ]; then
+        harness_kill_recorded "$life_prefix.escape" "$life_prefix.escape-token"
+        life_await_dead "$escape"
+      fi
+      [ "$mode" != unrelated ] || life_wait_child
+    fi
+    cp "$TMP/123-owner" "$owner"
+    # Release checks use a real lock attempt, never a process disappearance.
+    life_capture lock-status
+    life_check 0 '^idle$' "query $mode fixture releases the lock"
+    # Old subjects have only three fields, so this is not their retirement test.
+    if [ -n "$keeper" ]; then
+      if life_await_dead "$keeper"; then report 0 "query recovery: $mode keeper retires"
+      else report 1 "query recovery: $mode keeper retires"; fi
+    fi
+  done
+  cp "$TMP/123-dune-before" "$life_bin/dune"
+  unlink "$life_root/tools/affected-tests.sh"
+  life_capture run --cap 30 ok
+  life_check 0 'verdict: pass' 'recovered query permits immediate launch'
+}
+harness_leg_run '123: exited query retained fd 9 recovery authenticates every holder #lifecycle' leg_123
 
 # ---------------------------------------------------------------------------
 # Legs 59-63 and 66: the source a run tested, recorded at launch (gh-ocannl-992)
