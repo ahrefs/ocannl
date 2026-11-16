@@ -2581,7 +2581,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   archives importing its interface, with consumers removed through the dependency graph. Exactly
   one dependency-minimal candidate must remain; ambiguous or absent candidates refuse when the
   unit is referenced. This preserves `Parsetree` under common without crediting toplevel for its
-  imports. Definitions always take precedence over imported interfaces.
+  imports. Definitions always take precedence over imported interfaces. This interface-only
+  heuristic can produce a false unused-dependency finding when only a consumer imports a unit
+  belonging to another library.
   An archive-less package owns no units; a failed query or
   unreadable archive refuses without falling back to directory ownership. Shared local libraries
   refuse because findlib cannot resolve their archives and `@check` does not build them.

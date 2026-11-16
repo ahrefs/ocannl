@@ -33,10 +33,11 @@
    candidates refuse when that unit is referenced; imports outside the library's include directories
    contribute nothing. Imported entries have two tab-separated fields (digest and unit); malformed
    entries refuse. This preserves type-only units such as [Parsetree] without crediting its users.
-   Archive-less findlib packages own no units. A failed query, unreadable archive or output without
-   definitions refuses without directory fallback. Shared local libraries refuse: findlib cannot
-   resolve their archives and [@check] does not build them. Non-compiler-reaching declarations stay
-   outside this check's scope.
+   The interface-only heuristic can misattribute a unit if its defining library never imports it but
+   a consumer does, producing a false unused-dependency finding. Archive-less findlib packages own
+   no units. A failed query, unreadable archive or output without definitions refuses without
+   directory fallback. Shared local libraries refuse: findlib cannot resolve their archives and
+   [@check] does not build them. Non-compiler-reaching declarations stay outside this check's scope.
 
    USE: the typed tree of every [.cmt]/[.cmti] in the stanza's byte object directory
    ([Cmt_references]): post-preprocessing, so generated modules, a [select]-chosen source and a

@@ -16,6 +16,7 @@ depends: [
   "ocaml" {>= "5.3.0"}
   "dune" {>= "3.20"}
   "dune-site"
+  "ocamlfind" {with-test}
   "base" {>= "v0.17.0"}
   "ocamlformat" {= "0.29.0" & with-dev-setup}
   "ocaml-lsp-server" {with-dev-setup}
