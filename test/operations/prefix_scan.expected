@@ -192,6 +192,10 @@ gg_fill (the extremum's fill is 0, not -inf): the gate is left composed: true
 gg_fill (the extremum's fill is 0, not -inf): rewritten equals the composed execution bitwise: true
 gg_prec (the gate's product is f16, the target f32): the gate is left composed: true
 gg_prec (the gate's product is f16, the target f32): rewritten equals the composed execution bitwise: true
+gg_narrow (the gate's equality is f16, the extremum f32): the gate is left composed: true
+gg_narrow (the gate's equality is f16, the extremum f32): rewritten equals the composed execution bitwise: true
+gg_row_from_i (the gate reads the forward's row at the input position): the gate is left composed: true
+gg_row_from_i (the gate reads the forward's row at the input position): rewritten equals the composed execution bitwise: true
 --- leg 8: constant masks ---
 literal (i <= o): an inclusive prefix: composed has no scan: true
 literal (i <= o): an inclusive prefix: rewritten has the expected scan: true

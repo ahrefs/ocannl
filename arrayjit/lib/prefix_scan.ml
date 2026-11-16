@@ -739,6 +739,17 @@ let find_gate rt pos (n : nest) : gate option =
             let* yf_pos, yr_pos =
               match writers rt y_tn with [ f; r ] when r < c_pos -> Some (f, r) | _ -> None
             in
+            (* The equality computes at its node's precision (a homogeneous operation's arguments
+               take the enclosing one), so the scan's -- at [T]'s -- is the same comparison only
+               when [C], [Y] and [T] share a precision; the run test, at the state's widening of it,
+               is then exact too. *)
+            let y_prec = Lazy.force y_tn.Tn.storage_prec in
+            let* () =
+              Option.some_if
+                (Ops.equal_prec (Lazy.force c_tn.Tn.storage_prec) y_prec
+                && Ops.equal_prec y_prec t_prec)
+                ()
+            in
             let* y_nest = rt.nests.(yr_pos) in
             let* fwd = find_site rt yr_pos y_nest in
             let* fill = neutral fwd.op in
@@ -778,9 +789,19 @@ let find_gate rt pos (n : nest) : gate option =
                 ()
             in
             let* () = Option.some_if (fwd.scan.from_ = r.from_ && fwd.scan.to_ = r.to_) () in
+            (* Every other loop of the forward is a row, and stays one: its image reads neither of
+               [T]'s triangular coordinates, or the scan would walk across rows (and could leave an
+               index unbound). *)
+            let triangular sym = Idx.equal_symbol sym r.index || Idx.equal_symbol sym q.index in
             let* () =
               Option.some_if
-                (List.for_all y_nest.loops ~f:(fun lp -> Option.is_some (phi lp.index)))
+                (List.for_all y_nest.loops ~f:(fun lp ->
+                     Idx.equal_symbol lp.index y_r.index
+                     || Idx.equal_symbol lp.index fwd.scan.index
+                     ||
+                     match Option.bind (phi lp.index) ~f:terms_of with
+                     | Some (terms, _) -> not (List.exists terms ~f:(fun (_, s) -> triangular s))
+                     | None -> false))
                 ()
             in
             let* p_mapped =

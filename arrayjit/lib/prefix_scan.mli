@@ -77,7 +77,9 @@
     guard. Max and Min, all four triangles. Recognized at [T]'s nest, by node identity and an index
     substitution: [A] a zero fill and exactly one accumulation covering it, [C] a single-writer
     equality of [Y] and the same [P] the forward reduces, read at the cells the substitution maps,
-    [M'] the forward's relation read from the other side, [A]'s precision [T]'s and [P]'s [Y]'s,
+    [M'] the forward's relation read from the other side, the forward's rows mapped to indices free
+    of both triangular coordinates (so the scan stays in one row), [A] at [T]'s precision and [C],
+    [P] and [Y] at it too (the equality computes at its node's precision, the scan's at [T]'s),
     nothing writing what the scan reads between its readers and [T]. Only [T]'s nest is replaced;
     the unread [C], [A] and [P] go with the optimizer. The tropical [@^+] backward gates differently
     -- with no [where] filter, an output whose extremum is [-inf] gates its rejected positions too

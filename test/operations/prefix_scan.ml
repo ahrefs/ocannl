@@ -739,7 +739,8 @@ let () =
 let gate_base = ref 185800
 
 let build_gate ?(rws = 2) ?(op = Ir.Ops.Max) ?(fwd_mask = le) ?(t_mask = le)
-    ?(a_prec = Ir.Ops.single) ?(second_a_writer = false) ?(compare_copy = false) ?y_fill () =
+    ?(a_prec = Ir.Ops.single) ?(c_prec = Ir.Ops.single) ?(second_a_writer = false)
+    ?(compare_copy = false) ?(row_from_i = false) ?y_fill () =
   let base = !gate_base in
   gate_base := base + 20;
   let fill = if Ir.Ops.equal_binop op Ir.Ops.Max then neg_inf else Float.infinity in
@@ -751,7 +752,8 @@ let build_gate ?(rws = 2) ?(op = Ir.Ops.Max) ?(fwd_mask = le) ?(t_mask = le)
   let t = mk ~dims:[| rws; n |] "gt" in
   List.iter [ v; g; t ] ~f:B.materialize;
   let pn = mk ~dims:[| rws; n; n |] "gp" and y = mk ~dims:[| rws; n |] "gy" in
-  let y_copy = mk ~dims:[| rws; n |] "gy_copy" and cn = mk ~dims:[| rws; n; n |] "gc" in
+  let y_copy = mk ~dims:[| rws; n |] "gy_copy" in
+  let cn = B.node_factory ~prec:c_prec ~first_id:(base + 17) ~dims:[| rws; n; n |] () "gc" in
   let an = B.node_factory ~prec:a_prec ~first_id:(base + 15) ~dims:[| rws; n; n |] () "ga" in
   let s () = B.sym () in
   let nest3 f =
@@ -809,8 +811,10 @@ let build_gate ?(rws = 2) ?(op = Ir.Ops.Max) ?(fwd_mask = le) ?(t_mask = le)
          else [])
       @ [
           nest3 (fun w o i ->
+              (* [row_from_i]: the comparison reads the forward's row at the input position. *)
+              let row = if row_from_i then i else w in
               B.set cn [| w; o; i |]
-                (B.binop_own Ir.Ops.Cmpeq (B.get cmp_y [| w; o |]) (B.get pn [| w; i; o |])));
+                (B.binop_own Ir.Ops.Cmpeq (B.get cmp_y [| row; o |]) (B.get pn [| row; i; o |])));
           B.zero an;
           accumulate_a ();
         ]
@@ -881,8 +885,10 @@ let () =
     ~t_mask:(fun ~row:_ a b -> B.binop_own Ir.Ops.Cmple b a)
     ~sel:(fun i o -> i >= o)
     ();
-  let left_composed label (llc, v, g, t) =
-    let rewritten, _, composed, scanned = run_gate ~name:label llc (v, g, t) in
+  let left_composed ?(rws = rws) label (llc, v, g, t) =
+    let rewritten, _, composed, scanned = run_gate ~name:label ~rws llc (v, g, t) in
+    report (label ^ ", composed") composed;
+    report (label ^ ", rewritten") scanned;
     pf "%s: the gate is left composed" label (gate_scans rewritten = 0);
     pf_all2 "%s: rewritten equals the composed execution bitwise" label scanned composed
       ~f:Float.equal
@@ -895,7 +901,15 @@ let () =
     (build_gate ~rws ~compare_copy:true ());
   left_composed "gg_fill (the extremum's fill is 0, not -inf)" (build_gate ~rws ~y_fill:0. ());
   left_composed "gg_prec (the gate's product is f16, the target f32)"
-    (build_gate ~rws ~a_prec:Ir.Ops.half ())
+    (build_gate ~rws ~a_prec:Ir.Ops.half ());
+  (* The gate's equality stored at f16 beside an f32 extremum: it computes at f16, where 2049 and
+     2048 compare equal. *)
+  left_composed "gg_narrow (the gate's equality is f16, the extremum f32)"
+    (build_gate ~rws ~c_prec:Ir.Ops.half ());
+  (* The forward's row read at the input position: [Y[i, o]] and [P[i, i, o]], a diagonal walk the
+     scan would not follow. *)
+  left_composed ~rws:n "gg_row_from_i (the gate reads the forward's row at the input position)"
+    (build_gate ~rws:n ~row_from_i:true ())
 
 (* {1 Leg 8: constant masks (gh-ocannl-1858)}
 
