@@ -494,10 +494,20 @@ files.
   capturing IR. Declined `schedule_strided_1x1.candidate` fallbacks are now compile-only:
   `run_with` returns no readback when the transform recorded a decline, and releases both contexts.
   Compile-only captures and declined-schedule probes in the other tests need no conversion.
+  Specifically, the retained serial rounding routines are `nrw_bf16_serial`,
+  `nrw_bf16_inexact_serial`, `nrw_half_serial` and `nrw_f16_serial`. The retained strided references
+  are `s11w_ref`, `s11r_ref`, `s11t_ref`, `s11d_ref`, `s11o_ref`, `s11v_ref`, `s11h_ref`,
+  `s11u_ref` and `s11p_ref`; the `s11c` unit-stride control is compile-only already.
   One-second `nvidia-smi` baseline samples on rog-nv-linux, native PTX at `-j 8`, reproduced
   peaks of 4468/3234/2444/1470/3964/3516 MiB for `online_softmax_block`/`build_order_programs`/
   `online_softmax`/`tile_mma_narrow`/`fused_classifier`/`schedule_strided_1x1`; test-run record
-  `20261116T155544Z-407184`, base `608c490e7`. Do not use `dune --force` as evidence of fresh
+  `20261116T155544Z-407184`, base `608c490e7`. After the audit, on `f0e652488`, the same six
+  processes peaked at 160/168/164/1470/170/3516 MiB respectively, record
+  `20261116T162527Z-1163468`. Both native-target batches ran at `-j 8` under exclusive holds,
+  with no GPU co-tenants at open or close. Raw samples are on rog-nv-linux under
+  `/home/lukstafi/wave-scratch/wave-20261116-ocannl/t2219/{baseline-native-v3,after-native-v1}/gpu-samples.csv`.
+  These are sampled process peaks, not aggregate simultaneous use or timing measurements.
+  The two retained controls' peaks stayed unchanged. Do not use `dune --force` as evidence of fresh
   test actions: the first audit attempt ran no tests. Disable the shared cache and change an
   action dependency, then confirm executable actions in the trace and process samples.
 
