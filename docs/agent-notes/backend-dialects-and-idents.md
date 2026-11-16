@@ -455,6 +455,12 @@ files.
   does not establish that macOS kills a hung kernel or that the driver reports the injected text;
   those remain the real-stall probe's job. The error substring stays the captured driver token
   until ocaml-metal exposes error codes and domains.
+- Bounded Metal waits must raise after every buffer-status reap (gh-ocannl-2209): failed buffers
+  stay in flight, so checking only covered completion spins to the deadline over a latched failure.
+  `metal_bounded_failure` scripts Pending then Error over finite work and pins the first typed
+  report before half a four-second bound, pending-only abandonment, and healthy completion in
+  separate processes because both failure and abandonment stay latched. `reap` still owns the
+  older-victim grace; the wait does not bypass it.
 - Whether macOS kills a kernel that never ends is not the backend's to decide, and it varies
   (gh-ocannl-2082). On mac-studio (M4 Max, macOS 27.2) the watchdog killed the test's kernel about
   3 s in on 2026-11-07. A day later, on both mac-studio and macbook-pro, the same test sat in

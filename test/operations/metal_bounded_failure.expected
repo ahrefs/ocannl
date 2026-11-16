@@ -1,0 +1,3 @@
+scripted failure raises first typed report before half the four-second bound: true
+pending buffer abandons at the bound and latches Device_wedged: true
+healthy bounded wait returns true: true

@@ -9100,6 +9100,22 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ (name metal_bounded_failure)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules metal_bounded_failure)
+ (libraries
+  base
+  stdio
+  unix
+  arrayjit.context
+  arrayjit.ir
+  arrayjit.verdict
+  ll_test))
+
 ; gh-ocannl-1580: the Metal table's device-free helpers, compiled as C++ beside the C table.
 
 (test

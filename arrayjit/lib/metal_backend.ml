@@ -208,9 +208,9 @@ let sync event =
    returns, [false] once the deadline passes with covered work unfinished, which latches
    [runner.abandoned]. Both of [sync]'s waits are bounded: each event wait is capped by the time
    left, and the covered buffers' completion, which [sync] waits for with [wait_until_completed], is
-   read off their statuses instead. A reported failure and completion are read before expiry at
-   every step, so a typed gh-ocannl-2089 hang report stays one, and work that finished while the
-   host was descheduled is not abandoned. *)
+   read off their statuses instead. Every poll starts by reaping and raising a reported failure;
+   completion is read before expiry, so a typed gh-ocannl-2089 hang report stays one, and work that
+   finished while the host was descheduled is not abandoned. *)
 let sync_until event ~clock ~deadline =
   let runner = event.owner in
   let remaining () = deadline -. (Mtime.Span.to_float_ns (Mtime_clock.count clock) /. 1e9) in
@@ -241,14 +241,16 @@ let sync_until event ~clock ~deadline =
         else wait_for_signal ()
   in
   let covered_unfinished () =
-    reap runner;
+    (* Failed buffers remain in flight. Surface the failure [reap] records before treating them as
+       unfinished work, rather than spinning until the bounded wait expires (gh-ocannl-2209). *)
+    raise_on_failure runner;
     List.exists runner.in_flight ~f:(fun tracked -> tracked.seq <= event.seq)
   in
   let rec wait_for_buffers () =
-    if not (covered_unfinished ()) then (
-      raise_on_failure runner;
-      true)
+    if not (covered_unfinished ()) then true
     else if Float.(remaining () <= 0.) then (
+      (* A failure may become observable between this poll's reap and the deadline check. Give it
+         precedence over latching abandonment, as before. *)
       raise_on_failure runner;
       abandon ())
     else (
