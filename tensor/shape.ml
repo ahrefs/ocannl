@@ -1045,7 +1045,7 @@ let refuse_nonpositive_coefficient ~spec ~axis ~what value =
     not create rows or variables here: their bookkeeping mutates the inference session. *)
 let affine_parameters ~spec axis_spec =
   match axis_spec with
-  | Affine_spec { stride; conv; stride_offset; _ } ->
+  | Affine_spec { stride; over_label; conv; stride_offset } ->
       let axis = lazy (render_affine_axis axis_spec) in
       let stride_int =
         try Int.of_string stride
@@ -1073,24 +1073,22 @@ let affine_parameters ~spec axis_spec =
       refuse_out_of_extent_offset ~spec ~stride:stride_int ~stride_offset
         ~conv:(Option.map conv ~f:(fun (_, _, padding) -> padding))
         ~axis;
-      (stride_int, conv)
+      (stride_int, over_label, conv, stride_offset)
   | Label _ | Fixed_index _ | Concat_spec _ -> invalid_arg "affine_parameters: not an affine axis"
 
+(** Every route converting a parsed affine spec to dimensions goes through here. The shared
+    parameter check also runs before registration, without allocating dimension variables. *)
 let affine_dim_of_spec ~spec ~dim_var_env axis_spec =
-  let stride, conv = affine_parameters ~spec axis_spec in
-  match axis_spec with
-  | Affine_spec { over_label; stride_offset; _ } ->
-      let dim label =
-        Row.Var
-          (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~name:label ()))
-      in
-      let over = dim over_label in
-      let conv =
-        Option.map conv ~f:(fun (dilation, label, use_padding) ->
-            { Row.dilation; kernel = dim label; use_padding })
-      in
-      Row.Affine { stride; over; conv; stride_offset }
-  | Label _ | Fixed_index _ | Concat_spec _ -> assert false
+  let stride, over_label, conv, stride_offset = affine_parameters ~spec axis_spec in
+  let dim label =
+    Row.Var (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~name:label ()))
+  in
+  let over = dim over_label in
+  let conv =
+    Option.map conv ~f:(fun (dilation, label, use_padding) ->
+        { Row.dilation; kernel = dim label; use_padding })
+  in
+  Row.Affine { stride; over; conv; stride_offset }
 
 let refuse_invalid_axis_spec ~spec = function
   | Affine_spec _ as axis -> ignore (affine_parameters ~spec axis)
@@ -4680,8 +4678,9 @@ let propagate_inline (update_step : update_step) : unit =
    definition. Every step is registered through [propagate_shapes] ([Tensor.register_update_step]),
    so projection derivation never meets a step these refuse. *)
 
-(* Read names directly from the parsed slots: building rows here would itself write the solver's
-   used-in-spec and safe-to-guess sets. No capture may be bound until all labels pass. *)
+(* Read parsed axes only: check names, affine parameters and empty concat components without
+   building rows, which would itself write the solver's used-in-spec and safe-to-guess sets. No
+   capture may be bound until all labels pass. *)
 let refuse_invalid_einsum_spec (update_step : update_step) =
   Option.iter (einsum_of_logic update_step.logic) ~f:(fun (einsum_spec, dim_refs) ->
       let spec = spec_text einsum_spec in
