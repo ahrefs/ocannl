@@ -16,8 +16,8 @@ let%expect_test "Pointwise multiplication dims 1" =
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
 
-  (* "Hey" is inferred to be a scalar. *)
-  let%op y = 2 *. { hey = 7.0 } in
+  (* State Hey's unit axis; its initializer fills but never sizes it. *)
+  let%op y = 2 *. { hey = 7.0; o = [ 1 ] } in
   let ctx = Train.forward_once ctx y in
 
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx y;
