@@ -1802,17 +1802,7 @@ let () =
             (Context.auto ())
             (named "cvr_site" (Train.forward (make "cvr_s")))
             Ir.Indexing.Empty);
-       match !site with
-       | None -> true
-       | Some site ->
-           let file = limits.Ir.Backend_intf.simd_vector
-           and m = site.Autotune.c_nrow
-           and n = site.Autotune.c_noc in
-           (* The seeder's own eligibility: the alternatives, and under
-              [autotune_register_tile_rm_twin] the two-row twin. *)
-           (not (List.is_empty (Ir.Register_tile.alternatives ~file ~elt_bytes:4 ~m ~n)))
-           || Utils.registered_flag ~arg_name:"autotune_register_tile_rm_twin"
-              && Option.is_some (Ir.Register_tile.rm_twin ~file ~elt_bytes:4 ~m ~n))
+       match !site with None -> true | Some site -> conv_tile_copies ~limits site () > 1)
   in
   let leg = Verdict.sub_leg cpu_leg ~when_:affords_twins ~on:backend_name in
   (* [~runs:2] for the twin, once for its sibling: both apply the same zero handling, so only a
