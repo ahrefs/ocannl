@@ -4455,9 +4455,17 @@ type skip_effect = { run_skips : (expression * int option) list; run_evaluating 
 
 (* A named binding of the source whose value runs claims later ({!skip_list_census}). *)
 type deferred_skips =
-  | Skip_function of { positional : int; labelled : string list; runs : skip_effect }
-      (** A function: its positional and required labelled parameters, which an application must
-          supply to run it. *)
+  | Skip_function of {
+      positional : int;
+      labelled : string list;
+      runs : skip_effect;
+      callback_skips : expression list;
+    }
+      (** A function: its positional and required labelled parameters (a [function]'s implicit one
+          among them), which an application must supply to run it; what an application runs ([runs],
+          its nested branches judged where they are written); and the skips it runs as a collection
+          function's callback -- its whole body, branches included, as an anonymous callback's is
+          read. *)
   | Skip_lazy of { key : int; runs : skip_effect }
       (** A [lazy], by its binding: memoised, so forcing it twice runs it once. *)
 
@@ -4511,6 +4519,44 @@ let skip_list_census content =
     | _ -> (callee, arguments)
   in
   (* [Lazy.force], [Lazy.force_val], or [Base]'s unqualified [force] where the source binds none. *)
+  (* The modules the source binds, by name: an alias to a path ([module L = List]) by the path's
+     last component, a structure of its own as [None]. By name across the source, not by scope: a
+     name bound both ways reads as the alias, the loud direction. *)
+  let module_bindings = Hashtbl.create (module String) in
+  let bind_module name (module_expr : module_expr) =
+    let rec peel me =
+      match me.pmod_desc with Pmod_constraint (inner, _) -> peel inner | _ -> me
+    in
+    match ((peel module_expr).pmod_desc, Hashtbl.find module_bindings name) with
+    | Pmod_ident { txt; _ }, _ ->
+        Hashtbl.set module_bindings ~key:name ~data:(Some (Ppxlib.Longident.last_exn txt))
+    | _, Some (Some _) -> ()
+    | _, _ -> Hashtbl.set module_bindings ~key:name ~data:None
+  in
+  let module_binder =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! module_binding binding =
+        Option.iter binding.pmb_name.txt ~f:(fun name -> bind_module name binding.pmb_expr);
+        super#module_binding binding
+
+      method! expression e =
+        (match e.pexp_desc with
+        | Pexp_letmodule ({ txt = Some name; _ }, module_expr, _) -> bind_module name module_expr
+        | _ -> ());
+        super#expression e
+    end
+  in
+  module_binder#structure ast;
+  let rec resolve_module seen name =
+    match Hashtbl.find module_bindings name with
+    | Some (Some target) when not (List.mem seen name ~equal:String.equal) ->
+        resolve_module (name :: seen) target
+    | Some (Some _) -> Some name
+    | Some None -> None
+    | None -> Some name
+  in
   let forces callee =
     match Read.longident_of (strip_constraints callee) with
     | Some [ "force" ] -> (
@@ -4519,7 +4565,11 @@ let skip_list_census content =
         | Pexp_ident { loc; _ } -> not (Hash_set.mem source_bound loc.loc_start.pos_cnum)
         | _ -> false)
     | Some path -> (
-        match List.rev path with ("force" | "force_val") :: "Lazy" :: _ -> true | _ -> false)
+        (* [Lazy.force], through the source's module aliases; not a [Lazy] of the source's own. *)
+        match List.rev path with
+        | ("force" | "force_val") :: module_ :: _ ->
+            Option.equal String.equal (resolve_module [] module_) (Some "Lazy")
+        | _ -> false)
     | None -> false
   in
   let memo = Hashtbl.create (module Int) and in_progress = Hash_set.create (module Int) in
@@ -4600,6 +4650,7 @@ let skip_list_census content =
                     match param.pparam_desc with
                     | Pparam_val (Ppxlib.Asttypes.Nolabel, _, _) -> true
                     | _ -> false)
+                + match body with Pfunction_cases _ -> 1 | Pfunction_body _ -> 0
               in
               let labelled =
                 List.filter_map params ~f:(fun param ->
@@ -4619,8 +4670,15 @@ let skip_list_census content =
                     | Some key when start <= key && key < stop -> (skip, None)
                     | _ -> (skip, key))
               in
-              let run_evaluating = snd (claims ~branches:true rhs) in
-              Some (Skip_function { positional; labelled; runs = { run_skips; run_evaluating } })
+              let whole, run_evaluating = claims ~branches:true rhs in
+              Some
+                (Skip_function
+                   {
+                     positional;
+                     labelled;
+                     runs = { run_skips; run_evaluating };
+                     callback_skips = List.map whole ~f:fst;
+                   })
           | Pexp_lazy inner ->
               let run_skips = fst (claims ~branches:false inner) in
               let run_evaluating = snd (claims ~branches:true rhs) in
@@ -4690,14 +4748,15 @@ let skip_list_census content =
      holds, and what [name] hands it supply every positional and required labelled parameter. *)
   let wrapper_skips name callee stored =
     match Option.bind (binding_of callee) ~f:deferred with
-    | Some (Skip_function { positional; labelled; runs = { run_skips; run_evaluating = 0 }; _ })
+    | Some
+        (Skip_function { positional; labelled; runs = { run_evaluating = 0; _ }; callback_skips })
       when List.count stored ~f:(fun (label, _) -> Poly.equal label Ppxlib.Asttypes.Nolabel)
            + callback_arguments name
            >= positional
            && List.for_all labelled ~f:(fun label ->
                List.exists stored ~f:(fun (given, _) ->
                    Poly.equal given (Ppxlib.Asttypes.Labelled label))) ->
-        List.map run_skips ~f:fst
+        callback_skips
     | _ -> []
   in
   let iterated_argument name argument =
@@ -4709,44 +4768,6 @@ let skip_list_census content =
     | Pexp_apply (callee, stored) -> wrapper_skips name callee stored
     | Pexp_function _ -> skip_only argument
     | _ -> []
-  in
-  (* The modules the source binds, by name: an alias to a path ([module L = List]) by the path's
-     last component, a structure of its own as [None]. By name across the source, not by scope: a
-     name bound both ways reads as the alias, the loud direction. *)
-  let module_bindings = Hashtbl.create (module String) in
-  let bind_module name (module_expr : module_expr) =
-    let rec peel me =
-      match me.pmod_desc with Pmod_constraint (inner, _) -> peel inner | _ -> me
-    in
-    match ((peel module_expr).pmod_desc, Hashtbl.find module_bindings name) with
-    | Pmod_ident { txt; _ }, _ ->
-        Hashtbl.set module_bindings ~key:name ~data:(Some (Ppxlib.Longident.last_exn txt))
-    | _, Some (Some _) -> ()
-    | _, _ -> Hashtbl.set module_bindings ~key:name ~data:None
-  in
-  let module_binder =
-    object
-      inherit Ast_traverse.iter as super
-
-      method! module_binding binding =
-        Option.iter binding.pmb_name.txt ~f:(fun name -> bind_module name binding.pmb_expr);
-        super#module_binding binding
-
-      method! expression e =
-        (match e.pexp_desc with
-        | Pexp_letmodule ({ txt = Some name; _ }, module_expr, _) -> bind_module name module_expr
-        | _ -> ());
-        super#expression e
-    end
-  in
-  module_binder#structure ast;
-  let rec resolve_module seen name =
-    match Hashtbl.find module_bindings name with
-    | Some (Some target) when not (List.mem seen name ~equal:String.equal) ->
-        resolve_module (name :: seen) target
-    | Some (Some _) -> Some name
-    | Some None -> None
-    | None -> Some name
   in
   (* The module and function name of a collection-module function [callee] spells, where it is one:
      its module component resolved through the source's module bindings ([resolve_module]). *)

@@ -401,6 +401,10 @@ let () = if on_gpu then check () else (skip "a"; skip "b")|ocaml},
         {ocaml|let skip l = Verdict.skipped ~backend:backend_name l
 let () = List.iter labels ~f:skip|ocaml},
         [ "iterated l" ] );
+      ( "a function-case wrapper handed to an iteration",
+        {ocaml|let skip = function label -> skipped label
+let () = Stdlib.List.iter skip [ "a"; "b" ]|ocaml},
+        [ "iterated label" ] );
       ( "a wrapper that also evaluates a claim",
         {ocaml|let both () = p "a" x; skipped "b"
 let () = if on_gpu then run () else (both (); skipped "c")|ocaml},
@@ -455,6 +459,11 @@ let () = if on_gpu then run () else (skip (); skip ())|ocaml},
       ( "a parameter named force, which is not the lazy force",
         {ocaml|let deferred = lazy (skipped "a"; skipped "b")
 let run_with force = if on_gpu then () else force deferred|ocaml},
+        [] );
+      ( "a source's own Lazy, whose force is no lazy force",
+        {ocaml|module Lazy = struct let force = ignore end
+let deferred = lazy (skipped "a"; skipped "b")
+let () = if on_gpu then run () else Lazy.force deferred|ocaml},
         [] );
       ( "a lazy of skips nobody forces",
         {ocaml|let skips = lazy (skipped "a"; skipped "b")

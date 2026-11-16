@@ -90,6 +90,7 @@ ok: skip list -- a wrapper of two skips run in a branch
 ok: skip list -- a wrapper of a wrapper run in a branch
 ok: skip list -- a one-skip wrapper applied twice in a branch
 ok: skip list -- a one-skip wrapper handed to an iteration
+ok: skip list -- a function-case wrapper handed to an iteration
 ok: skip list -- a wrapper that also evaluates a claim
 ok: skip list -- a two-parameter wrapper an indexed iteration saturates
 ok: skip list -- a two-parameter wrapper a map only applies in part
@@ -104,6 +105,7 @@ ok: skip list -- a lazy of two skips a wrapper forces in a branch
 ok: skip list -- a lazy forced twice through a wrapper, which runs once
 ok: skip list -- a wrapper allocating its own lazy, applied twice in a branch
 ok: skip list -- a parameter named force, which is not the lazy force
+ok: skip list -- a source's own Lazy, whose force is no lazy force
 ok: skip list -- a lazy of skips nobody forces
 ok: skip list -- a lazy that also evaluates a claim
 ok: skip list -- a lazy sequence of skips a consumer runs
