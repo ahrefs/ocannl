@@ -5,6 +5,8 @@ open Base
 open Verdict.Claims
 module MF = Ir.Metal_failure
 
+let scripted_error = "scripted bounded failure"
+let transition_seconds = 0.1
 let elapsed clock = Mtime.Span.to_float_ns (Mtime_clock.count clock) /. 1e9
 
 let submit ctx =
@@ -30,9 +32,9 @@ let child mode =
           let fail =
             String.equal mode "failure"
             && Option.value_map !waiting ~default:false ~f:(fun clock ->
-                !reads > 4 && Float.(elapsed clock >= 0.1))
+                !reads > 4 && Float.(elapsed clock >= transition_seconds))
           in
-          Some (if fail then MF.For_testing.Error (Some "scripted bounded failure") else Pending))
+          Some (if fail then MF.For_testing.Error (Some scripted_error) else Pending))
         else None)
       ~f:(fun () ->
         let ctx = submit ctx in
@@ -48,8 +50,11 @@ let child mode =
           seconds bound !reads;
         match (mode, result) with
         | ( "failure",
-            `Raised (MF.Command_buffer_failed { first_report = true; runs_kernels = true; _ }) ) ->
-            Float.(seconds < bound /. 2.)
+            `Raised
+              (MF.Command_buffer_failed
+                 { first_report = true; runs_kernels = true; error = Some error; _ }) ) ->
+            String.equal error scripted_error
+            && Float.(seconds >= transition_seconds && seconds < bound /. 2.)
         | "timeout", `Returned false ->
             let latched =
               try
