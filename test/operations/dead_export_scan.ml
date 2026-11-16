@@ -55,7 +55,6 @@ let exempt_zero_reference_exports =
     "Backend_impl.next_global_device_id";
     "Lexer.multichar_token";
     "Lexer.single_char_token";
-    "Ndarray.adjust_idx_for_padding";
     "Ndarray.big_ptr_to_string";
     "Ndarray.bigarray_start_not_managed";
     "Ndarray.c_ptr_to_string";

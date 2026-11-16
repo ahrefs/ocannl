@@ -2616,7 +2616,16 @@ let recompute_all_to_host ctx (reads : (Tn.t * Nd.t) list) : Nd.t list =
         | None -> nd
         | Some (padding, _) ->
             let fresh = host_buffer tn in
-            Nd.set_flat_values ~padding fresh (Nd.retrieve_flat_values ~padding nd);
+            Nd.apply2
+              {
+                f2 =
+                  (fun src dst ->
+                    Nd.fold_bigarray ~padding src ~init:() ~f:(fun () idx value ->
+                        Stdlib.Bigarray.Genarray.set dst
+                          (Nd.adjust_idx_for_padding ~padding idx)
+                          value));
+              }
+              nd fresh;
             fresh)
   in
   match read () with
