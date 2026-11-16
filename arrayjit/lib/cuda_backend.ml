@@ -37,6 +37,13 @@ module Device_config = struct
     dev : Cu.Device.t;
     primary_context : Cu.Context.t;
     set_builtins_in : Cu.Module.t -> unit;
+    resident_threads : int;
+        (** Multiprocessors x threads per multiprocessor: every thread the device can keep resident,
+            which the driver backs a kernel's local memory for (gh-ocannl-1773). *)
+    total_memory : int;
+    stack_size_baseline : int;
+        (** The primary context's [STACK_SIZE] limit when this device was set up, before any of our
+            launches grew it: what {!bound_local_memory} restores (gh-ocannl-1872). *)
   }
   [@@deriving sexp_of]
 
@@ -382,8 +389,20 @@ end = struct
       let dev = Cu.Device.get ~ordinal in
       let primary_context : Cu.Context.t = Cu.Context.get_primary dev in
       let set_builtins_in = set_builtins_for_device ~primary_context in
-      let dev = { dev; primary_context; set_builtins_in } in
+      let attributes = Cu.Device.get_attributes dev in
+      (* The memory query and the limit read below answer for the current context. *)
       set_ctx primary_context;
+      let dev =
+        {
+          dev;
+          primary_context;
+          set_builtins_in;
+          resident_threads =
+            attributes.multiprocessor_count * attributes.max_threads_per_multiprocessor;
+          total_memory = snd (Cu.Device.get_free_and_total_mem ());
+          stack_size_baseline = Cu.Context.get_limit Cu.Context.STACK_SIZE;
+        }
+      in
       if Utils.debug_log_from_routines () && not (Hash_set.mem initialized_devices ordinal) then
         Int.of_string_opt @@ Utils.get_global_arg ~arg_name:"cuda_printf_fifo_size" ~default:""
         |> Option.iter ~f:Cu.Context.(set_limit PRINTF_FIFO_SIZE);
@@ -1351,18 +1370,20 @@ end = struct
             run_module)
 
   (* gh-ocannl-1773: a launch can be refused device memory ([CUDA_ERROR_OUT_OF_MEMORY] out of
-     [cu_launch_kernel]) although it allocates no buffer. The driver backs every kernel's local
-     memory (its [__local_depot]: [Local] arrays, spills) for every thread the device can keep
-     resident -- per-thread bytes x threads per multiprocessor x multiprocessors, whatever the
-     launch geometry -- grows that reservation at the first launch needing more, and keeps it for
-     the context's life. Measured on rog-nv's RTX 5070 Ti (46 x 1536 resident threads): the
-     unscheduled [schedule_strided_1x1] resnet-block reference, one thread with a 48 KiB depot, took
-     the process from 160 MiB to 3520 MiB until it exited. Under a concurrent GPU batch that
-     reservation is what fails, and it can succeed once a neighbour process exits, so the launch
-     backs off and retries -- unless the reservation exceeds the device's total memory, which no
-     wait helps. The driver's own exception is re-raised when the back-off gives up: its text is
-     what the sweep's serial-rerun table keys on ([tools/sweep.sh] [ENVIRONMENT_REFUSALS]), and
-     [classify_failure] already contains it in a search as a [No_device_writes] decline. *)
+     [cu_launch_kernel], [cu_graph_instantiate_with_flags] or [cu_graph_launch]) although it
+     allocates no buffer. The driver backs every kernel's local memory (its [__local_depot]: [Local]
+     arrays, spills) for every thread the device can keep resident -- per-thread bytes x threads per
+     multiprocessor x multiprocessors, whatever the launch geometry -- and grows that reservation at
+     the first launch needing more. Measured on rog-nv's RTX 5070 Ti (46 x 1536 resident threads):
+     the unscheduled [schedule_strided_1x1] resnet-block reference, one thread with a 48 KiB depot,
+     reserves 3.3 GiB; the driver keeps a grown reservation until the context's stack limit is set
+     again, which {!bound_local_memory} now does for such frames (gh-ocannl-1872). Under a
+     concurrent GPU batch the reservation is what fails, and it can succeed once a neighbour
+     releases memory, so the launch backs off and retries -- unless the reservation exceeds the
+     device's total memory, which no wait helps. The driver's own exception is re-raised when the
+     back-off gives up: its text is what the sweep's serial-rerun table keys on ([tools/sweep.sh]
+     [ENVIRONMENT_REFUSALS]), and [classify_failure] already contains it in a search as a
+     [No_device_writes] decline. *)
   let launch_memory_backoff_seconds = [ 0.5; 1.; 2.; 4.; 8. ]
   let launch_memory_retries = Atomic.make 0
   let launch_memory_refusals = Atomic.make 0
@@ -1402,24 +1423,29 @@ end = struct
                 | Some (n, _) -> Option.value ~default:0 (Int.of_string_opt n)
                 | None -> 0))
 
-  let launch_with_memory_backoff ~(device : device) ~name ~ptx ~symbol launch =
+  (* The submission retry: [launch] is a synchronous driver submission (a kernel launch, a graph
+     launch) that a [CUDA_ERROR_OUT_OF_MEMORY] refuses before anything runs, so retrying it cannot
+     run work twice. [depot] is the per-thread local memory the submission's kernels declare (their
+     largest, for a graph), forced only on a refusal. Nothing after a successful submission runs
+     here: {!bound_local_memory} is the caller's, outside this handler. *)
+  let launch_with_memory_backoff ?(verb = "launching") ~(device : device) ~name
+      ~(depot : int Lazy.t) launch =
     let rec attempt pauses =
       try launch ()
       with exn when is_out_of_memory exn ->
         let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-        let a = Cu.Device.get_attributes device.dev.dev in
-        let resident = a.multiprocessor_count * a.max_threads_per_multiprocessor in
-        let depot = ptx_local_depot_bytes (Lazy.force ptx) ~symbol in
+        let resident = device.dev.resident_threads in
+        let depot = Lazy.force depot in
         let reservation = depot * resident in
         let free, total = try Cu.Device.get_free_and_total_mem () with _ -> (-1, -1) in
         let hopeless = total >= 0 && reservation > total in
         let give_up = hopeless || List.is_empty pauses in
         Stdio.eprintf
-          "cuda: launching %s was refused device memory (CUDA_ERROR_OUT_OF_MEMORY): its local \
-           memory reservation is %d B per thread x %d resident threads = %d B, with %d of %d B \
-           free; %s (gh-ocannl-1773)\n\
+          "cuda: %s %s was refused device memory (CUDA_ERROR_OUT_OF_MEMORY): its local memory \
+           reservation is %d B per thread x %d resident threads = %d B, with %d of %d B free; %s \
+           (gh-ocannl-1773)\n\
            %!"
-          name depot resident reservation free total
+          verb name depot resident reservation free total
           (if hopeless then "more than the device holds, so not retried"
            else if give_up then "giving up after the back-off"
            else Printf.sprintf "retrying in %gs" (List.hd_exn pauses));
@@ -1433,6 +1459,47 @@ end = struct
     in
     attempt launch_memory_backoff_seconds
 
+  (* gh-ocannl-1872: bound the reservation's LIFETIME. The driver grows the context's per-thread
+     local memory to the largest frame launched so far and never shrinks it on its own, so one
+     launch of a large-frame kernel held [depot x resident threads] for the rest of the process --
+     [schedule_strided_1x1]'s one-thread s11d_ref, 48 KiB x 70656 threads = 3.3 GiB on rog-nv, whose
+     neighbours' launches then failed. Setting [CU_LIMIT_STACK_SIZE] back to the context's baseline
+     releases it. Measured on rog-nv's RTX 5070 Ti (11.8 GB, 70656 resident threads, the 48 KiB
+     frame): the free memory returns in full (+3244 MiB), whether the kernel was launched plainly or
+     inside a graph whose exec stays alive; the call takes 1.5 ms on an idle device, and BLOCKS
+     until the context's preceding work completes; the next launch of the kernel regrows the
+     reservation, costing about 4 ms. Setting the limit to its current (grown) value frees nothing.
+     So the reset is gated to reservations past a share of device memory -- the s11d_ref class, all
+     but serial references -- where a host wait for the kernel and a few milliseconds per launch are
+     worth gigabytes returned to every neighbour; ordinary launches stay asynchronous. The estimate
+     is the PTX depot, a lower bound: a kernel whose growth is all JIT spills is not gated. *)
+  let local_memory_reset_share = 16
+  let local_memory_resets = Atomic.make 0
+
+  (* Graph launches refused device memory, whose exec was dropped for a plain run (see
+     [sequence_segments]'s [launch_graph]). *)
+  let graph_launch_memory_drops = Atomic.make 0
+
+  let passes_reset_share ~(device : device) ~depot =
+    let reservation = depot * device.dev.resident_threads in
+    reservation > 0 && reservation > device.dev.total_memory / local_memory_reset_share
+
+  (* While [sequence_segments] stream-captures a routine's segments, the kernel tasks it runs only
+     RECORD their launches: they must neither sleep through a back-off nor reset the limit (which
+     waits for the context's work) mid-capture. Instead each records its depot here, and the graph
+     launch uses their largest for its own back-off and reset. Per domain, since the capture runs
+     the tasks on the capturing domain. *)
+  let capture_depot : int ref option Stdlib.Domain.DLS.key =
+    Stdlib.Domain.DLS.new_key (fun () -> None)
+
+  (* After a successful submission: never inside the back-off's handler, so a failure here (it can
+     surface an earlier kernel's asynchronous fault) is never retried as a refused launch, and
+     propagates as the driver raised it. The current context is the launch's. *)
+  let bound_local_memory ~(device : device) ~depot =
+    if passes_reset_share ~device ~depot then (
+      Cu.Context.set_limit Cu.Context.STACK_SIZE device.dev.stack_size_baseline;
+      Atomic.incr local_memory_resets)
+
   let link_proc ~prior_context ~name ~symbol ~ptx ~(kparams : (string * kparam_source) list)
       ~(launch : Low_level.launch_dims) ~ctx_buffers lowered_bindings run_module =
     let func = Cu.Module.get_function run_module ~name:symbol in
@@ -1441,6 +1508,8 @@ end = struct
     (* Pre-resolve slab bases to keep the owning [Deviceptr.t]'s alive for the lifetime of the task
        closure; region views ([Tensor_at]) are non-owning and must not outlive the slab base. *)
     let ctx_bases = Map.map ctx_buffers ~f:(Slab.resolve_pool device) in
+    (* Parsed once, at the first launch: the gate of [bound_local_memory] reads it on every one. *)
+    let depot = lazy (ptx_local_depot_bytes (Lazy.force ptx) ~symbol) in
     let%diagn3_sexp work () : unit =
       let log_id = Utils.get_global_run_id () in
       let log_id_prefix = Int.to_string log_id ^ ": " in
@@ -1480,12 +1549,21 @@ end = struct
       (* Launch dimensions derived from hardware-annotated loops (axis-types proposal §4);
          all-Serial kernels launch 1x1x1, as before. Static [__shared__] declarations do not use the
          dynamic pool, so [shared_mem_bytes] stays 0. *)
+      let submit () =
+        S.launch_kernel func ~grid_dim_x:launch.Low_level.grid.(0)
+          ~grid_dim_y:launch.Low_level.grid.(1) ~grid_dim_z:launch.Low_level.grid.(2)
+          ~block_dim_x:launch.Low_level.block.(0) ~block_dim_y:launch.Low_level.block.(1)
+          ~block_dim_z:launch.Low_level.block.(2) ~shared_mem_bytes:0 device.runner args
+      in
       let launch_kernel () =
-        launch_with_memory_backoff ~device ~name ~ptx ~symbol (fun () ->
-            S.launch_kernel func ~grid_dim_x:launch.Low_level.grid.(0)
-              ~grid_dim_y:launch.Low_level.grid.(1) ~grid_dim_z:launch.Low_level.grid.(2)
-              ~block_dim_x:launch.Low_level.block.(0) ~block_dim_y:launch.Low_level.block.(1)
-              ~block_dim_z:launch.Low_level.block.(2) ~shared_mem_bytes:0 device.runner args)
+        match Stdlib.Domain.DLS.get capture_depot with
+        | Some largest ->
+            (* Recorded into a graph, not run: see [capture_depot]. *)
+            submit ();
+            largest := max !largest (Lazy.force depot)
+        | None ->
+            launch_with_memory_backoff ~device ~name ~depot submit;
+            bound_local_memory ~device ~depot:(Lazy.force depot)
       in
       if Utils.debug_log_from_routines () then
         (* The routine's log lines are device-side [printf]: under [debug_log_to_stream_files] the
@@ -1655,6 +1733,36 @@ end = struct
       let cache = graphs.cache and order = graphs.order in
       let broken = ref false in
       let run_plain () = List.iter tasks ~f:Task.run in
+      (* The largest local depot of the captured kernels (gh-ocannl-1872): every capture key records
+         the same kernels, so one value serves the routine, for the instantiation's back-off and the
+         reservation's reset after a graph launch. *)
+      let graph_depot = ref 0 in
+      (* A graph launch refused device memory is NEVER retried on its exec (gh-ocannl-1872).
+         Measured on rog-nv under a neighbour's hold: after a refused [cuGraphLaunch] of a cached
+         exec, the retry was accepted although the memory was still held, and the replay then
+         faulted ([CUDA_ERROR_LAUNCH_FAILED], sticky): the driver relaunched without regrowing the
+         reservation. So the refusal sets the stack limit back to the baseline, which puts the
+         driver's view of the reservation back in step, drops and destroys the exec, and runs the
+         segments plainly this time -- where each kernel launch backs off correctly, and a lasting
+         refusal surfaces as its own -- and the next run captures afresh. Called under
+         [graphs.lock]. *)
+      let launch_graph ~key exec =
+        match Cu.Graph.launch exec device.runner with
+        | () -> bound_local_memory ~device ~depot:!graph_depot
+        | exception (Cu.Cuda_error { message; _ } as exn) when is_out_of_memory exn ->
+            Atomic.incr graph_launch_memory_drops;
+            Stdio.eprintf
+              "cuda: launching the graph of %s was refused device memory (%s): dropping its exec \
+               and running its segments plainly this time (gh-ocannl-1872)\n\
+               %!"
+              name message;
+            Cu.Context.set_limit Cu.Context.STACK_SIZE device.dev.stack_size_baseline;
+            Hashtbl.remove cache key;
+            Queue.filter_inplace order ~f:(fun k -> not (String.equal k key));
+            Cu.Stream.synchronize device.runner;
+            Cu.Graph.exec_destroy exec;
+            run_plain ()
+      in
       let current_key () =
         let idx = List.map bindings ~f:(fun (_, r) -> Int.to_string !r) in
         let merge =
@@ -1676,16 +1784,26 @@ end = struct
         Cu.Graph.begin_capture ~mode:Cu.Graph.RELAXED device.runner;
         let graph =
           try
-            run_plain ();
+            let largest = ref 0 in
+            let prior = Stdlib.Domain.DLS.get capture_depot in
+            Stdlib.Domain.DLS.set capture_depot (Some largest);
+            Exn.protect ~f:run_plain ~finally:(fun () -> Stdlib.Domain.DLS.set capture_depot prior);
+            graph_depot := max !graph_depot !largest;
             Cu.Graph.end_capture device.runner
           with exn ->
             (* Terminate the capture before propagating, else the stream stays in capture mode. *)
             (try Cu.Graph.destroy (Cu.Graph.end_capture device.runner) with _ -> ());
             raise exn
         in
-        let exec = Cu.Graph.instantiate graph in
-        Cu.Graph.destroy graph;
-        exec
+        (* Instantiation is where a graph's kernels first reserve their local memory (measured on
+           rog-nv: a hopeless frame is refused by [cu_graph_instantiate_with_flags], not by the
+           launch), so it gets the launch's back-off too. *)
+        Exn.protect
+          ~f:(fun () ->
+            launch_with_memory_backoff ~verb:"instantiating" ~device ~name:("the graph of " ^ name)
+              ~depot:(lazy !graph_depot)
+              (fun () -> Cu.Graph.instantiate graph))
+          ~finally:(fun () -> Cu.Graph.destroy graph)
       in
       Some
         ( Task.Task
@@ -1702,7 +1820,7 @@ end = struct
                         set_ctx @@ ctx_of context;
                         let key = current_key () in
                         match Hashtbl.find cache key with
-                        | Some exec -> Cu.Graph.launch exec device.runner
+                        | Some exec -> launch_graph ~key exec
                         | None -> (
                             match capture () with
                             | exec ->
@@ -1715,7 +1833,19 @@ end = struct
                                   Hashtbl.remove cache victim);
                                 Hashtbl.set cache ~key ~data:exec;
                                 Queue.enqueue order key;
-                                Cu.Graph.launch exec device.runner
+                                launch_graph ~key exec
+                            | exception (Cu.Cuda_error { message; _ } as exn)
+                              when is_out_of_memory exn ->
+                                (* Refused device memory after the back-off, which says nothing
+                                   about capture: run the segments plainly this time, where a
+                                   lasting refusal surfaces as the kernel launch's own, and capture
+                                   again on the next run (gh-ocannl-1872). *)
+                                Stdio.eprintf
+                                  "ocannl: the CUDA graph of routine %s was refused device memory \
+                                   (%s); running its segments plainly this time\n\
+                                   %!"
+                                  name message;
+                                run_plain ()
                             | exception Cu.Cuda_error { status; message } ->
                                 (* E.g. capture unsupported on this driver: fall back to per-segment
                                    launches for this routine (same-stream FIFO supplies the segment
@@ -1738,6 +1868,12 @@ end = struct
         (* gh-ocannl-1773: launches refused device memory, retried and given up on. *)
         ("launch_memory_retries", [%sexp_of: int] @@ Atomic.get launch_memory_retries);
         ("launch_memory_refusals", [%sexp_of: int] @@ Atomic.get launch_memory_refusals);
+        (* gh-ocannl-1872: local-memory reservations released after a gated launch. *)
+        ("local_memory_resets", [%sexp_of: int] @@ Atomic.get local_memory_resets);
+        (* The gate's denominator: a reservation past [total memory / this] is reset. Reported so
+           tests size their frames from it rather than restating it. *)
+        ("local_memory_reset_share", [%sexp_of: int] local_memory_reset_share);
+        ("graph_launch_memory_drops", [%sexp_of: int] @@ Atomic.get graph_launch_memory_drops);
       ]
 
   let static_properties () =
