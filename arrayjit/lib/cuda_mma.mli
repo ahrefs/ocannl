@@ -56,10 +56,15 @@ val fp16_auto_wide : bool
     storage-width serial loop (per step) narrow at different points, so only the wide resolution is
     schedule-uniform. The value of the descriptor's [mma_f16_auto_wide]. *)
 
+val fp16_narrow_floored : bool
+(** Whether [Numerics.Fp16_prefer_narrow] (the profiles' request) resolves as this backend's auto
+    rather than as [Fp16_narrow]: [false] (gh-ocannl-2233) — sm_120's narrow tile is merely inexact.
+    The value of the descriptor's [mma_f16_narrow_floored]. *)
+
 val fp16_accum_wide : unit -> bool
-(** [Numerics.fp16_accum_wide ~auto_wide:fp16_auto_wide ()]: whether f16 reduction accumulators
-    reside in f32 here under the current policy — the predicate behind [accum_prec] and the arm
-    table. *)
+(** [Numerics.fp16_accum_wide ~auto_wide:fp16_auto_wide ~narrow_floored:fp16_narrow_floored ()]:
+    whether f16 reduction accumulators reside in f32 here under the current policy — the predicate
+    behind [accum_prec] and the arm table. *)
 
 val resolve_arm :
   a_prec:Ops.prec ->

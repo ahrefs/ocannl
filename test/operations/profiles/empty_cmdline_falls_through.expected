@@ -10,6 +10,6 @@ cc_backend_simd_flags    = auto           (profile 'performance' via the environ
 cc_backend_fp_contract   = auto           (default)
 cc_backend_fast_math     = false          (default)
 cc_vector_bytes          = 64             (config file)
-fp16_arithmetic          = true           (profile 'performance' via the environment)
+fp16_arithmetic          = prefer_narrow  (profile 'performance' via the environment)
 tf32_matmuls             = false          (default)
 virtualize_max_visits    = 1              (default)

@@ -28,8 +28,17 @@
    per-step bound k * 2^-10, so a narrow arm resolving wide fails it: the A/B observes the narrowing
    it is about. And no run produces a non-finite cell.
 
+   gh-ocannl-2233 adds the built-in profiles' f16 request, [performance] and [approximate], each run
+   under the policy its payload's [fp16_arithmetic] parses to ([Numerics.fp16_mode_of_profile]:
+   [prefer_narrow]). HIP floors it to its wide auto, so on HIP the profile runs are bitwise the
+   default's and within the same wide bound, and at the long reductions the explicit narrow tile's
+   error is at least twice theirs: the profiles no longer reach gfx11's f16-accumulate WMMA, while
+   an explicit [fp16_arithmetic=true] (the [narrow] rows) still does. On CUDA the profiles keep the
+   narrow side, so their runs are bitwise the explicit narrow ones.
+
    The leg runs only where the backend resolves [Fp16_auto] wide and advertises the uniform-f16 tile
-   (CUDA, HIP); elsewhere every claim skips. *)
+   (CUDA, HIP); elsewhere every claim skips. The profile claims split by backend into a HIP leg and
+   a CUDA leg. *)
 
 open Base
 open Ocannl
@@ -57,6 +66,10 @@ let capable =
           ~a:Ir.Backend_intf.Mma_f16 ~b:Ir.Backend_intf.Mma_f16 ~d:Ir.Backend_intf.Mma_f16))
 
 let leg = Verdict.leg ~when_:(Lazy.force capable) ~on:backend_name ()
+
+(* cc-fp-contract: not-cc -- the bitwise claims sit in the HIP and CUDA legs; cc skips them all *)
+let hip_leg = Verdict.leg ~when_:(Lazy.force capable && on_hip) ~on:backend_name ()
+let cuda_leg = Verdict.leg ~when_:(Lazy.force capable && on_cuda) ~on:backend_name ()
 let n = 32
 let bm = 16
 let simd_width = 32
@@ -173,7 +186,18 @@ let f16_ulp x =
     (* ax = m * 2^e with m in [0.5, 1): its binade is 2^(e - 1). *)
     pow2 (e - 11)
 
-let policies = [ ("auto", Numerics.Fp16_auto); ("narrow", Numerics.Fp16_narrow) ]
+(* The profiles' f16 request, read from their payload text as [Numerics.default] reads the
+   setting. *)
+let profile_mode name =
+  Option.value_exn
+    ~message:("the built-in profile " ^ name ^ " states no fp16_arithmetic")
+    (Numerics.fp16_mode_of_profile name)
+
+let profiles = [ "performance"; "approximate" ]
+
+let policies =
+  [ ("auto", Numerics.Fp16_auto); ("narrow", Numerics.Fp16_narrow) ]
+  @ List.map profiles ~f:(fun name -> (name, profile_mode name))
 
 let results =
   lazy
@@ -212,7 +236,7 @@ let () =
             Option.some_if (String.equal c'.name c.name) per_policy)
       in
       let bound = pow2 (-11) +. (Float.of_int c.k *. pow2 (-23)) in
-      in_legf ~leg "%s: every tile renders tensor-unit intrinsics under both policies" c.name
+      in_legf ~leg "%s: every tile renders tensor-unit intrinsics under every policy" c.name
         (fun label ->
           p_all label policies ~f:(fun (pname, _) ->
               let (_, census), _ = find pname (get ()) in
@@ -248,4 +272,39 @@ let () =
             p label
               Float.(
                 narrow.max_err >= 2. *. auto.max_err
-                && narrow.max_err <= Float.of_int c.k *. pow2 (-10))))
+                && narrow.max_err <= Float.of_int c.k *. pow2 (-10)));
+      let bitwise (m1 : measured) (m2 : measured) = Array.equal Float.equal m1.got m2.got in
+      in_legf ~leg:hip_leg
+        "%s, HIP: the performance and approximate runs' tile and serial errors are nonzero and \
+         within the wide bound 2^-11 + k*2^-23"
+        c.name (fun label ->
+          p_all label
+            (List.concat_map profiles ~f:(fun name ->
+                 let (t, _), (s, _) = find name (get ()) in
+                 [ t; s ]))
+            ~f:(fun m -> Float.(m.max_err > 0. && m.max_err <= bound)));
+      in_legf ~leg:hip_leg
+        "%s, HIP: the performance and approximate runs equal the default policy's bitwise, tile \
+         and serial"
+        c.name (fun label ->
+          let (at, _), (as_, _) = find "auto" (get ()) in
+          p_all label profiles ~f:(fun name ->
+              let (t, _), (s, _) = find name (get ()) in
+              bitwise t at && bitwise s as_));
+      if c.long then
+        in_legf ~leg:hip_leg
+          "%s, HIP: the explicit narrow tile's error is at least twice the performance and \
+           approximate tiles'"
+          c.name (fun label ->
+            let (narrow, _), _ = find "narrow" (get ()) in
+            p_all label profiles ~f:(fun name ->
+                let (t, _), _ = find name (get ()) in
+                Float.(narrow.max_err >= 2. *. t.max_err)));
+      in_legf ~leg:cuda_leg
+        "%s, CUDA: the performance and approximate runs equal the explicit narrow policy's \
+         bitwise, tile and serial"
+        c.name (fun label ->
+          let (nt, _), (ns, _) = find "narrow" (get ()) in
+          p_all label profiles ~f:(fun name ->
+              let (t, _), (s, _) = find name (get ()) in
+              bitwise t nt && bitwise s ns)))

@@ -251,19 +251,24 @@ let independent_residency prec =
   let narrow = policy.Numerics.narrow_compute_f32 in
   let fp16 = policy.Numerics.fp16_arithmetic in
   let explicit_wide_f16 = Numerics.equal_fp16_mode fp16 Numerics.Fp16_wide in
+  (* gh-ocannl-2233: the profiles' [Fp16_prefer_narrow] is [Fp16_narrow] on every backend but HIP,
+     which floors it to its auto: stated here per backend, not read off [fp16_narrow_floored]. *)
+  let narrow_f16 =
+    match fp16 with
+    | Numerics.Fp16_narrow | Numerics.Fp16_prefer_narrow -> true
+    | Numerics.Fp16_auto | Numerics.Fp16_wide -> false
+  in
   (* gh-ocannl-2195: CUDA's and HIP's auto resolves f16 wide too; only [Fp16_narrow] keeps storage
-     there. *)
-  let not_narrow_f16 = not (Numerics.equal_fp16_mode fp16 Numerics.Fp16_narrow) in
+     there (and on CUDA [Fp16_prefer_narrow]). *)
+  let not_narrow_f16 = not narrow_f16 in
+  let hip_not_narrow_f16 = not (Numerics.equal_fp16_mode fp16 Numerics.Fp16_narrow) in
   let wide_bf16 = Numerics.bf16_accum_wide () in
   match Lazy.force selected_backend with
   | "cc" | "multidev_cc" -> (
       match prec with
       | Ops.Half_prec _ when explicit_wide_f16 -> Wider
       | Ops.Bfloat16_prec _ when wide_bf16 -> Wider
-      | Ops.Half_prec _
-        when Numerics.equal_fp16_mode policy.fp16_arithmetic Numerics.Fp16_narrow
-             && Lazy.force native_fp16 ->
-          At_storage
+      | Ops.Half_prec _ when narrow_f16 && Lazy.force native_fp16 -> At_storage
       | _ when Ops.is_narrow_float prec && narrow -> Wider
       | _ -> At_storage)
   | "metal" -> (
@@ -283,7 +288,7 @@ let independent_residency prec =
       | _ -> At_storage)
   | "hip" -> (
       match prec with
-      | Ops.Half_prec _ when not_narrow_f16 -> Wider
+      | Ops.Half_prec _ when hip_not_narrow_f16 -> Wider
       (* gh-ocannl-1051: HIP's auto resolves bf16 wide too; only [Bf16_narrow] keeps storage. *)
       | Ops.Bfloat16_prec _
         when not (Numerics.equal_bf16_mode policy.Numerics.bf16_arithmetic Numerics.Bf16_narrow) ->

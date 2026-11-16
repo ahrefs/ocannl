@@ -136,7 +136,8 @@ let wide_acc_withholding (mma : Ir.Backend_intf.mma_capability) ~scope ~d_prec =
   in
   match d_prec with
   | Ir.Ops.Half_prec _
-    when Ir.Numerics.fp16_accum_wide ~auto_wide:mma.Ir.Backend_intf.mma_f16_auto_wide () ->
+    when Ir.Numerics.fp16_accum_wide ~auto_wide:mma.Ir.Backend_intf.mma_f16_auto_wide
+           ~narrow_floored:mma.Ir.Backend_intf.mma_f16_narrow_floored () ->
       withheld ~policy:"Fp16_wide (or a wide-resolving Fp16_auto) requires a wide uniform-f16"
         mma.Ir.Backend_intf.mma_f16_wide_acc_scopes
   | Ir.Ops.Bfloat16_prec _ when Ir.Numerics.bf16_accum_wide () ->

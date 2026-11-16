@@ -16,11 +16,19 @@ type arm = Inline_ptx of inline_ptx | Wmma of wmma_kind [@@deriving equal, sexp_
    f16-accumulate wmma triple narrows once per 16-deep block on sm_120 (gh-ocannl-2151's census)
    where the storage-width serial loop narrows per step, so under a narrow auto the value depended
    on whether the tuner crowned a tile; the wide resolution narrows once per nest in every schedule.
-   Only [Fp16_narrow] (the [performance] and [approximate] profiles' setting) keeps the
-   f16-accumulate arm. The one predicate behind [accum_prec] and {!resolve_arm}, and published to
-   seeding as [capability]'s [mma_f16_auto_wide]. *)
+   Only [Fp16_narrow], and the [performance] and [approximate] profiles' [Fp16_prefer_narrow] (not
+   floored here: [fp16_narrow_floored]), keep the f16-accumulate arm. The one predicate behind
+   [accum_prec] and {!resolve_arm}, and published to seeding as [capability]'s [mma_f16_auto_wide]
+   and [mma_f16_narrow_floored]. *)
 let fp16_auto_wide = true
-let fp16_accum_wide () = Numerics.fp16_accum_wide ~auto_wide:fp16_auto_wide ()
+
+(* Whether this backend floors [Numerics.Fp16_prefer_narrow] to its auto: no (gh-ocannl-2233). On
+   sm_120 the narrow tile misses a whole-output checksum by 0.014% (k = 1024) and 0.097% (k = 2048):
+   merely inexact, so the profiles keep the narrow side here. *)
+let fp16_narrow_floored = false
+
+let fp16_accum_wide () =
+  Numerics.fp16_accum_wide ~auto_wide:fp16_auto_wide ~narrow_floored:fp16_narrow_floored ()
 
 (* The one table from storage precisions, the numerics policy and the emission scope to an arm.
 
@@ -749,6 +757,7 @@ let capability ~cc =
               (Backend_intf.Mma_fragment_scope, Wmma Wmma_f16_wide);
             ];
         mma_f16_auto_wide = fp16_auto_wide;
+        mma_f16_narrow_floored = fp16_narrow_floored;
         (* gh-ocannl-838: the uniform-bf16 key is the same inline-PTX arm, f32 in hardware whatever
            the policy, so [Numerics.Bf16_wide] changes no rendering here. Since gh-ocannl-1063 a
            staged outer-k split keeps it f32 too: the persistent-fragment scope holds that arm's

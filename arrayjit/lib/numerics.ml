@@ -36,10 +36,53 @@ open Base
       mantissa and 65504 range for a doubled lane count. On targets that merely promote to float it
       is ignored (costs accuracy for no speed). On the GPU backends it keeps storage-width f16
       accumulators and the f16-accumulate tensor-unit arms — on CUDA and HIP not schedule-uniformly,
-      since those arms narrow at different points from the serial loop (gh-ocannl-2195); it is what
-      the [performance] and [approximate] profiles name, which is how they kept the narrow side when
-      auto moved. *)
-type fp16_mode = Fp16_auto | Fp16_narrow | Fp16_wide [@@deriving sexp, compare, equal, enumerate]
+      since those arms narrow at different points from the serial loop (gh-ocannl-2195). An explicit
+      request: every backend honors it, HIP's gfx11 f16-accumulate WMMA included.
+    - [Fp16_prefer_narrow] (config [prefer_narrow]; gh-ocannl-2233): [Fp16_narrow] wherever the
+      backend admits the narrow side as a trade, the backend's own [Fp16_auto] where it floors it
+      (its [fp16_narrow_floored] constant, read through {!fp16_resolve}). It is what the
+      [performance] and [approximate] profiles name. HIP floors it: gfx11's f16-accumulate WMMA
+      misses a whole-output checksum by 7% (k = 1024) and 82% (k = 2048) on gfx1151 and runs 3-5x
+      slower than the wide arm on gfx1102, so no profile wants it there; CUDA, Metal and the CPU
+      backends resolve it as [Fp16_narrow]. *)
+type fp16_mode = Fp16_auto | Fp16_narrow | Fp16_wide | Fp16_prefer_narrow
+[@@deriving sexp, compare, equal, enumerate]
+
+(** The parse of the [fp16_arithmetic] setting: [auto], [prefer_narrow], or a boolean ([true] is
+    {!Fp16_narrow}, [false] {!Fp16_wide}); case and surrounding blanks ignored. Raises
+    [Invalid_argument] on anything else. *)
+let fp16_mode_of_string s =
+  match String.lowercase (String.strip s) with
+  | "auto" -> Fp16_auto
+  | "prefer_narrow" -> Fp16_prefer_narrow
+  | s -> (
+      try
+        if Utils.bool_of_config_string ~arg_name:"fp16_arithmetic" s then Fp16_narrow else Fp16_wide
+      with Invalid_argument _ ->
+        invalid_arg
+          ("ocannl_fp16_arithmetic setting should be auto, prefer_narrow, true or false; found: "
+         ^ s))
+
+(** What [mode] means on a backend that floors the narrow side of the profiles' request exactly when
+    [narrow_floored]: {!Fp16_prefer_narrow} becomes the backend's {!Fp16_auto} there and
+    {!Fp16_narrow} elsewhere; every other mode is itself (gh-ocannl-2233). *)
+let fp16_resolve ~narrow_floored = function
+  | Fp16_prefer_narrow -> if narrow_floored then Fp16_auto else Fp16_narrow
+  | (Fp16_auto | Fp16_narrow | Fp16_wide) as mode -> mode
+
+(** The fp16 mode the built-in profile [name]'s payload states ([Utils.profile_payloads]), through
+    {!fp16_mode_of_string}; [None] when the payload leaves [fp16_arithmetic] unset. Raises
+    [Invalid_argument] on a name no built-in profile has. *)
+let fp16_mode_of_profile name =
+  match List.Assoc.find Utils.profile_payloads name ~equal:String.equal with
+  | None -> invalid_arg ("Numerics.fp16_mode_of_profile: no built-in profile " ^ name)
+  | Some text ->
+      let payload =
+        Utils.parse_config_lines ~source:("the built-in profile " ^ name) (String.split_lines text)
+      in
+      Option.map
+        (List.Assoc.find payload ~equal:String.equal "fp16_arithmetic")
+        ~f:fp16_mode_of_string
 
 (** The bf16 accumulator mode (gh-ocannl-838), the same three-way shape as {!fp16_mode} so the
     policy surface stays one shape for both 16-bit float formats.
@@ -143,13 +186,7 @@ let default () =
     tf32_matmuls = Utils.get_global_flag ~default:false ~arg_name:"tf32_matmuls";
     narrow_compute_f32 = Utils.get_global_flag ~default:true ~arg_name:"narrow_compute_f32";
     fp16_arithmetic =
-      (let s =
-         String.lowercase
-           (String.strip (Utils.get_global_arg ~default:"auto" ~arg_name:"fp16_arithmetic"))
-       in
-       if String.equal s "auto" then Fp16_auto
-       else if Utils.bool_of_config_string ~arg_name:"fp16_arithmetic" s then Fp16_narrow
-       else Fp16_wide);
+      fp16_mode_of_string (Utils.get_global_arg ~default:"auto" ~arg_name:"fp16_arithmetic");
     bf16_arithmetic =
       (let s =
          String.lowercase
@@ -182,20 +219,26 @@ let get () =
 let set_policy p = policy := Some p
 
 (** Whether f16 reduction accumulators reside in f32 under [mode] on a backend whose {!Fp16_auto}
-    resolves wide exactly when [auto_wide]: always under {!Fp16_wide} (gh-ocannl-680), never under
-    {!Fp16_narrow}, and [auto_wide] under {!Fp16_auto} (gh-ocannl-2195). The pure form, for callers
-    judging an explicit policy ([Backend_intf.advertises_mma_format_in_scope]). *)
-let fp16_mode_accum_wide ~auto_wide = function
+    resolves wide exactly when [auto_wide] and which floors {!Fp16_prefer_narrow} exactly when
+    [narrow_floored]: always under {!Fp16_wide} (gh-ocannl-680), never under {!Fp16_narrow},
+    [auto_wide] under {!Fp16_auto} (gh-ocannl-2195), and {!Fp16_prefer_narrow} as {!fp16_resolve}
+    maps it (gh-ocannl-2233). The pure form, for callers judging an explicit policy
+    ([Backend_intf.advertises_mma_format_in_scope]). *)
+let rec fp16_mode_accum_wide ~auto_wide ~narrow_floored mode =
+  match mode with
   | Fp16_wide -> true
   | Fp16_auto -> auto_wide
   | Fp16_narrow -> false
+  | Fp16_prefer_narrow as m ->
+      fp16_mode_accum_wide ~auto_wide ~narrow_floored (fp16_resolve ~narrow_floored m)
 
 (** {!fp16_mode_accum_wide} under the current policy. Consulted by every backend's [accum_prec] and
     mma arm table, each passing its own [fp16_auto_wide] constant, and by the mma accumulator-scope
     gate in [Sketch_families.wide_acc_withholding], which reads the same constant from
     [Backend_intf.mma_capability.mma_f16_auto_wide] — one predicate on both sides of the
     gh-ocannl-545 seam, so seeding and emission cannot drift apart on which f16 sites tensorize. *)
-let fp16_accum_wide ~auto_wide () = fp16_mode_accum_wide ~auto_wide (get ()).fp16_arithmetic
+let fp16_accum_wide ~auto_wide ~narrow_floored () =
+  fp16_mode_accum_wide ~auto_wide ~narrow_floored (get ()).fp16_arithmetic
 
 (** Whether the current policy is {!Bf16_wide}: bf16 reduction accumulators reside in f32 on every
     backend (gh-ocannl-838). The bf16 twin of {!fp16_accum_wide}, consulted on both sides of the
@@ -218,7 +261,9 @@ let bf16_accum_wide () =
 let cpu_compute_prec ~native_fp16_arithmetic (prec : Ops.prec) : Ops.prec =
   match prec with
   | Ops.Half_prec _
-    when (match (get ()).fp16_arithmetic with Fp16_narrow -> true | _ -> false)
+    when (match fp16_resolve ~narrow_floored:false (get ()).fp16_arithmetic with
+           | Fp16_narrow -> true
+           | _ -> false)
          && native_fp16_arithmetic ->
       prec
   | _ when Ops.is_narrow_float prec && (get ()).narrow_compute_f32 -> Ops.single
@@ -234,6 +279,6 @@ let cpu_compute_prec ~native_fp16_arithmetic (prec : Ops.prec) : Ops.prec =
     round 1 on staging PR #477). *)
 let cpu_accum_prec ~native_fp16_arithmetic (prec : Ops.prec) : Ops.prec =
   match prec with
-  | Ops.Half_prec _ when fp16_accum_wide ~auto_wide:false () -> Ops.single
+  | Ops.Half_prec _ when fp16_accum_wide ~auto_wide:false ~narrow_floored:false () -> Ops.single
   | Ops.Bfloat16_prec _ when bf16_accum_wide () -> Ops.single
   | _ -> cpu_compute_prec ~native_fp16_arithmetic prec

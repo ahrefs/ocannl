@@ -997,7 +997,16 @@ files.
   `hardware_warp_shuffle.ml`'s `Fp16_wide` legs, which execute the path the policy newly makes
   reachable: the f16 warp-shuffle rendering the residency gate refuses under `auto` (next bullet). The reproducible
   profile pins `fp16_arithmetic=auto` (the default, so the profile still changes no math); the
-  performance profile keeps `true`. The CUDA `(mma-f16)` per-statement arm and the scope-boundary
+  performance and approximate profiles set `prefer_narrow` (`Fp16_prefer_narrow`, gh-ocannl-2233):
+  `true` where the backend admits the narrow side, the backend's own auto where its
+  `fp16_narrow_floored` constant floors it. HIP floors it (gfx11's f16-accumulate WMMA misses
+  whole-output checksums by 7-82% and runs slower than the wide arm), for its serial residency and
+  its arm table alike through `Hip_mma.fp16_accum_wide`; an explicit `true` lifts the floor, so
+  HIP's narrow tests keep their reach. The constant rides the descriptor as
+  `mma_f16_narrow_floored` for the seeding gates, rendered only when `true` so a non-flooring
+  descriptor's cache key did not move. `profile_fp16_floor` pins each profile's resolution per
+  backend from the payload text, the explicit escape hatch, and the live resolution under
+  `--ocannl_profile`. The CUDA `(mma-f16)` per-statement arm and the scope-boundary
   discriminator were executed on sm_120 by gh-ocannl-836; HIP's two-scope arm was closed by
   gh-ocannl-789, CUDA's by gh-ocannl-925 (sm_120: the staged k=144 leg reads 2056, and 2048 with the
   wmma arm disabled).

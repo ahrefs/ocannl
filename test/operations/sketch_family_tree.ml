@@ -741,7 +741,7 @@ let () =
      advertised too, standing in for the f32-storage destinations the gate must NOT touch — the gate
      keys on the DESTINATION's storage precision, which for [opt_h] is f16. *)
   let f16t = Ir.Backend_intf.Mma_f16 in
-  let gpu_f16_limits ?(auto_wide = false) ~wide_scopes () =
+  let gpu_f16_limits ?(auto_wide = false) ?(narrow_floored = false) ~wide_scopes () =
     {
       Ir.Backend_intf.no_hardware_limits with
       mma =
@@ -752,6 +752,7 @@ let () =
             mma_format_tiles = [ ((f16t, f16t, f16t), (8, 8, 8)); ((f16t, f16t, f32), (8, 8, 8)) ];
             mma_f16_wide_acc_scopes = wide_scopes;
             mma_f16_auto_wide = auto_wide;
+            mma_f16_narrow_floored = narrow_floored;
           };
     }
   in
@@ -798,6 +799,24 @@ let () =
     && has_staged_mma f16_auto_wide_both
     && has_unstaged_mma f16_narrow_auto_wide_no_arm
     && has_staged_mma f16_narrow_auto_wide_no_arm);
+  (* gh-ocannl-2233: the profiles' [Fp16_prefer_narrow] on a wide-resolving auto with no wide scope:
+     a descriptor that floors it (HIP) withholds the uniform-f16 seeds as its auto does, one that
+     does not (CUDA) keeps them as [Fp16_narrow] does. *)
+  Numerics.set_policy { saved_policy with fp16_arithmetic = Numerics.Fp16_prefer_narrow };
+  let prefer_seeds ~narrow_floored =
+    Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false
+      ~limits:(gpu_f16_limits ~auto_wide:true ~narrow_floored ~wide_scopes:[] ())
+      opt_h
+  in
+  let f16_prefer_floored = prefer_seeds ~narrow_floored:true in
+  let f16_prefer_unfloored = prefer_seeds ~narrow_floored:false in
+  Numerics.set_policy saved_policy;
+  Verdict.p
+    "Fp16_prefer_narrow withholds the uniform-f16 mma seeds with no wide scope where the \
+     descriptor floors it, and keeps them where it does not"
+    (no_mma f16_prefer_floored
+    && has_unstaged_mma f16_prefer_unfloored
+    && has_staged_mma f16_prefer_unfloored);
   Numerics.set_policy { saved_policy with fp16_arithmetic = Numerics.Fp16_wide };
   let f16_wide_no_arm =
     section "half-prec gpu, f16 tiles, wide policy, no wide-accumulate scope" ~is_gpu:true

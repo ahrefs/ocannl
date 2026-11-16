@@ -135,7 +135,7 @@ let () =
   Stdio.eprintf "backend: %s (not part of the golden)\n%!" (Context.backend_name ctx);
   let saved = Numerics.get () in
   let policies =
-    List.concat_map [ Numerics.Fp16_auto; Fp16_narrow; Fp16_wide ] ~f:(fun fp16_arithmetic ->
+    List.concat_map Numerics.all_of_fp16_mode ~f:(fun fp16_arithmetic ->
         List.concat_map [ Numerics.Bf16_auto; Bf16_narrow; Bf16_wide ] ~f:(fun bf16_arithmetic ->
             List.concat_map [ true; false ] ~f:(fun narrow_compute_f32 ->
                 List.map [ false; true ] ~f:(fun tf32_matmuls ->
@@ -212,6 +212,27 @@ let () =
        let as_wide = String.equal auto (identity_of Numerics.Fp16_wide) in
        let as_narrow = String.equal auto (identity_of Numerics.Fp16_narrow) in
        p label (Bool.equal as_wide auto_wide_backend && Bool.equal as_narrow (not auto_wide_backend))));
+  (* gh-ocannl-2233: what the profiles' [Fp16_prefer_narrow] keys as, named per backend rather than
+     read off the backend's [fp16_narrow_floored] constant: HIP floors it to its auto, so it keys
+     with [Fp16_auto] and apart from [Fp16_narrow]; every other backend resolves it as
+     [Fp16_narrow], with whose identity it coincides. *)
+  (let backend = Context.backend_name ctx in
+   let floored = String.equal backend "hip" in
+   let identity_of fp16 =
+     List.find_map_exn rows ~f:(fun (policy, _, identity) ->
+         Option.some_if
+           (Numerics.equal_fp16_mode policy.Numerics.fp16_arithmetic fp16
+           && Numerics.equal_bf16_mode policy.bf16_arithmetic Numerics.Bf16_auto
+           && policy.narrow_compute_f32 && not policy.tf32_matmuls)
+           identity)
+   in
+   let prefer = identity_of Numerics.Fp16_prefer_narrow in
+   let as_auto = String.equal prefer (identity_of Numerics.Fp16_auto) in
+   let as_narrow = String.equal prefer (identity_of Numerics.Fp16_narrow) in
+   p
+     "Fp16_prefer_narrow keys with Fp16_narrow on every backend but HIP, and with Fp16_auto, apart \
+      from Fp16_narrow, on HIP"
+     (if floored then as_auto && not as_narrow else as_narrow));
   (let claim = "every uniform-storage arm accumulates at the backend's accum_prec" in
    match
      List.concat_map rows ~f:(fun (_, (_, uniform), _) ->
