@@ -26,6 +26,7 @@ a guarded update counts no chain: true
 a repeated target's later update reading another accumulator makes the chains dependent: true
 a guarded update coupling two accumulators makes the chains dependent: true
 two single cells no fixed component tells apart may alias: no chains: true
+an update reading through a scope body is not proven independent: no chains: true
 inner loops whose cells may alias prove no chains: true
 a looped member beside a single cell of its node may overlap it: no chains: true
 elementwise work counts no chain: true

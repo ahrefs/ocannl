@@ -476,6 +476,9 @@ let carrier_chains ~is_private ~carrier (body : Low_level.t) =
       | Low_level.Get (tn, idcs) ->
           member_node tn && not (equal_chain_target (Chain_cell (tn, idcs)) own)
       | Get_local id -> member_local id && not (equal_chain_target (Chain_local id) own)
+      (* A scope body's reads are the update's too (its operations are charged to it): not
+         inspected, so not proven independent. *)
+      | Local_scope _ -> true
       | Ternop (_, (a, _), (b, _), (c, _)) -> go a || go b || go c
       | Binop (_, (a, _), (b, _)) -> go a || go b
       | Unop (_, (a, _)) -> go a

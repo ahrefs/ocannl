@@ -307,6 +307,17 @@ let () =
   in
   p "two single cells no fixed component tells apart may alias: no chains"
     (chains_are ~private_:[ a ] maybe_one [ None ]);
+  (* An update whose contribution is a [Local_scope] reading another member: [a0 += scope(a1 * x);
+     a1 += x]. *)
+  let tmp = fresh_tn "cf_dep_t" [| 1 |] in
+  let scoped =
+    Ll_test.loop_n k 8
+      (Ll_test.seq
+         (upd 0 (Ll_test.scope tmp (Ll_test.mul (Ll_test.get a [| Ll_test.fixed 1 |]) xk)))
+         (upd 1 xk))
+  in
+  p "an update reading through a scope body is not proven independent: no chains"
+    (chains_are ~private_:[ a ] scoped [ None ]);
   (* Inner loops that do not address distinct cells: [acc[i + j]] over i, j < 4 is 7 cells, not 16;
      and a looped member beside a single cell of the same node may overlap it. *)
   let s7 = fresh_tn "cf_dep_s" [| 7 |] in
