@@ -375,10 +375,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `tools/test-run.sh run`'s digest carries a log path, a time and tallies no base-alone log
   repeats. Three answers run less than the list, each saying so on an `OWED` line. A CROSS-CUTTING
   change runs its first tier when that is narrow and nothing when it is wide too: the full suite
-  is longer than the build's bound, so such a change runs it before the merge on a CPU-only box
-  and names the run in the PR body, and the nightly CI run and the integration loop read the
-  merged tip. An INCOMPLETE list (a changed path UNMAPPED) runs what it holds: the gap is
-  `affected`'s to close, not a reason to refuse the merge that met it. A list that cannot be read
+  is longer than the build's bound, so such a change runs it before the merge on its final head
+  and records the run, which the tier reads (*The owed-run record*, below). An INCOMPLETE list (a
+  changed path UNMAPPED) runs what it holds, and owes the suite and every `train-` alias the same
+  way: the gap is `affected`'s to close, and a record covers it meanwhile. A list that cannot be read
   (a status and a verdict that do not belong together, no verdict line, a HEAD with no two sides)
   fails the tier, and so does a first tier that did not answer for itself: that ask prints the
   default list's trailer before the tier's, so one trailer is the default list's `cross-cutting`
@@ -4202,9 +4202,10 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   `test/operations/ci_matrix.sh` holds the per-PR job list and the clean room's paths. What the
   local gate does not read waits for the nightly run, the integration loops and the daily sweep:
   a test the change does not reach, a `slow-` or `train-` alias, a reached list past 200
-  aliases, other platforms, compilers and backends. The rest of a CROSS-CUTTING change's list
-  does not wait: it is owed before the merge, as a full `dune runtest` on a CPU-only box, cited
-  in the PR body (a wave worker requests it as a cc execution leg). Items in this section that
+  aliases, other platforms, compilers and backends. The rest of a CROSS-CUTTING change's list,
+  and the `train-` aliases a change reaches, do not wait: they are owed before the merge, as a
+  cc run on the final head that the merge build reads back (*The owed-run record*, below; a wave
+  worker requests the full suite as a cc execution leg). Items in this section that
   say what a PR's matrix run covered describe it as it ran until that day; the same matrix is the
   ordinary dispatch's now.
 
@@ -5216,6 +5217,48 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   `test-run.sh` now points `last` with a plain file holding the path (written through a temporary
   and renamed, so still atomic), which needs no symlink privilege on any platform. Reach for a
   pointer file, not a symlink, in anything that must work from Git Bash.
+
+## The owed-run record
+
+What the merge build does not run itself is OWED, and since gh-ocannl-2218 the tests tier reads a
+record of it instead of trusting a PR-body citation: a CROSS-CUTTING change's full suite (also a
+list over 200 aliases, and an INCOMPLETE one, which owes `@train` too), and every `train-` alias
+the change reaches (they serialize on the training lock and never fit the 1800 s bound). Until
+2026-11-13 the per-PR matrix ran that suite; from then until this landed a cross-cutting change
+merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundary; in brief:
+
+- **Where.** The ref `refs/owed-runs/<head sha>` on the PR repository (`OWED_RUN_URL` in the
+  script; `OCANNL_TOOL_OWED_RUN_URL` overrides it for the harness and a fork). Its commit has the
+  head as its only parent and the head's tree, and its message holds one `owed-run: v1 ...` line
+  per record. It does not move the PR's head, so it re-triggers no CI run, review round or
+  checkpoint. ship-pr's scratch repository has no remote, so the merge build fetches the ref from
+  that URL itself, bounded (60 s), and refuses when it cannot read it. A merge owing nothing
+  reads no record.
+- **What.** A finished, exit-0, clean-at-launch tools/test-run.sh run under `--expect-backend cc`
+  of `runtest`, `build @runtest [@train]`, `build @train` or `build @test/training/train-NAME...`
+  (each with an optional `-j N`), on the PR's head itself. Keyed by the head, not the merged
+  tree: a base that moved since leaves it standing (gh-ocannl-861), and any push after the run
+  stales it. So the owed run is the LAST run before the merge. Not certified: the ambient
+  environment beyond the backend, the box, an edit made and undone mid-run, and whether a line
+  was written by `record` or by hand (whoever can push can write one: attestation, as the
+  PR-body citation was).
+- **Recipe.** On the box that ran it, from the run's own worktree:
+  `env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc runtest -j 4`, then
+  `tools/owed-run.sh record last` (or `record <run dir>`). Where that box cannot push, or its
+  worktree is a far-side one, `tools/owed-run.sh record <run dir> --print` there and
+  `tools/owed-run.sh add '<the line>'` from a checkout that can. A `train-` record is the same
+  with `build @test/training/train-<name>... -j 1` (or `build @train`); records accumulate on the
+  head's ref and the reader takes their union.
+- **The way through.** A head no record can certify (a run whose record cannot be reached, a
+  release hotfix) takes `tools/owed-run.sh waive --head <sha> --reason '<the run it cites, or the
+  decision and who made it>'`: it admits exactly that head and is printed into the merge log.
+  ship-pr's `--override` does not pass the refusal: its line names the merged tree, which the
+  build of the base alone never prints, so the failure is always the merge's own
+  (`tools/test-merge-build-check.sh` pins both, and the one case where the two logs match: a
+  merge whose tree is the base's, which changes nothing).
+- **After the merge,** `tools/owed-run.sh prune <head sha>` (or bare `prune`, every merged head)
+  deletes the record refs of heads already on master; an open head's record stays.
+- The gate is witnessed only locally: the nightly `ci` run reads master, where there is no PR head.
 
 ## The cross-machine sweep
 

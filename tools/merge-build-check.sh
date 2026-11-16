@@ -23,15 +23,37 @@
 #              - CROSS-CUTTING (the list is most of the suite): its first tier runs
 #                (`prepush --referenced-only`) when that is narrow, nothing when it is wide too.
 #                The rest is OWED, said on a line of its own: the suite is longer than this
-#                build's bound, so a cross-cutting change runs it before the merge on a CPU-only
-#                box and names the run in the PR body (AGENTS.md), and the nightly CI run and the
-#                integration loop read the merged tip;
+#                build's bound, so a cross-cutting change runs it before the merge on the PR's
+#                head and records that run (OWED RECORD, below);
 #              - INCOMPLETE (a changed path is UNMAPPED): what the list holds runs, and the gap
-#                is OWED the same way. A mapping gap is `affected`'s to close, not a reason to
-#                refuse the merge that met it;
+#                is OWED the same way, with every `train-` alias too: what the unmapped path
+#                reaches is unknown. A mapping gap is `affected`'s to close; a record covers it
+#                meanwhile;
 #              - a list of more than TESTS_MAX aliases (200, sized below): it does not run, and
 #                is OWED: such a build would not fit the bound. A cross-cutting change's first
 #                tier is held to the same length.
+#            The `train-` aliases the change reaches (prepush leaves them off its list) never
+#            run here: they serialize on the training lock, and a cross-cutting change reaches
+#            most of them, past the bound. They are OWED too, whatever the list's answer.
+#            prepush counts them on stderr; a count of 0 asks nothing more, any other count (or
+#            none read) asks `tools/test-run.sh affected MERGE_BASE..HEAD_SIDE` for their names
+#            (the range positional, as prepush passes it; exit 0 with verdict ok or
+#            cross-cutting, or the tier fails).
+#   OWED RECORD  what is OWED must be recorded for the PR's head, or the tier FAILS before it
+#            builds anything: `tools/owed-run.sh check HEAD_SIDE NEED...`, NEED `runtest` for
+#            an OWED list, `train` for an INCOMPLETE one, and each `train-` alias reached. The
+#            record is the ref refs/owed-runs/<head sha> on the PR repository, fetched with a
+#            bound and failing closed; tools/owed-run.sh's header is its boundary (what it
+#            admits: a finished, clean, exit-0 `--expect-backend cc` run of the full suite or
+#            of the `train-` aliases, on the head itself, or a waiver for exactly that head;
+#            what it refuses: a missing, unreadable, stale, foreign, dirty, failed, non-cc,
+#            filtered or first-tier record). The record is keyed by the head, not the merged
+#            tree: a base that moved since leaves it standing (gh-ocannl-861: a green head
+#            merges as it is), and a push after the run stales it. The refusal names the
+#            MERGED tree, which ship-pr's build of the base alone (the base's tree, the same
+#            parents, so the same change and the same record) never prints: a missing record
+#            is the merge's own failure, which `--override` does not pass; a waiver is the way
+#            through. A merge owing nothing reads no record and needs no network.
 #            A list that cannot be read at all (prepush refusing for another reason, a failed
 #            or unanswered ask of either list, a list both cross-cutting and incomplete, of
 #            which no first tier can be asked, a HEAD with no two sides) fails the tier: nothing
@@ -228,12 +250,12 @@ read_parents() {
 
 # ask_tests asks the pre-push list of the head's change and sets `tests`: `list` (run
 # $tests_dir/list, with `tests_owed` saying what it leaves out, if anything), `owed` (nothing to
-# run here), or `unread`, with `tests_why`. The change is the two revisions' (MERGE_BASE..HEAD_SIDE),
+# run here), or `unread`, with `tests_why`; `tests_incomplete` 1 when a list read was INCOMPLETE. The change is the two revisions' (MERGE_BASE..HEAD_SIDE),
 # so the build of the base alone asks about the same one. The ask's own output is kept in
 # $tests_dir/ask: it names the list and its size, which differ between a merge and its base.
 ask_tests() {
   local rc=0 verdict
-  tests= tests_owed= tests_why=
+  tests= tests_owed= tests_why= tests_incomplete=0
   if [ -z "$mb" ]; then
     tests=unread tests_why='HEAD has no two sides with a merge base, so what the change reaches cannot be asked'
     return
@@ -243,7 +265,7 @@ ask_tests() {
   verdict=$(sed -n 's/^affected: verdict=//p' "$tests_dir/ask" | tail -n 1)
   case $rc/$verdict in
     0/ok) tests=list ;;
-    3/incomplete) tests=list tests_owed='the list is INCOMPLETE (a changed path is UNMAPPED), so what that path reaches' ;;
+    3/incomplete) tests=list tests_incomplete=1 tests_owed='the list is INCOMPLETE (a changed path is UNMAPPED), so what that path reaches' ;;
     2/cross-cutting,incomplete)
       # prepush asks no first tier of an incomplete list, and its refusal (2) is the status of its
       # other refusals too: nothing in this answer says the refusal was that one, so nothing here
@@ -265,7 +287,7 @@ ask_tests() {
       [ "$(grep -c '^affected: verdict=' "$tests_dir/ask-first")" = 2 ] || verdict='no trailer of its own'
       case $rc/$verdict in
         0/ok) tests=list tests_owed='the change is CROSS-CUTTING, so every per-test alias past its first tier' ;;
-        3/incomplete) tests=list tests_owed='the change is CROSS-CUTTING and its first tier INCOMPLETE (a changed path is UNMAPPED), so every per-test alias past what that tier holds' ;;
+        3/incomplete) tests=list tests_incomplete=1 tests_owed='the change is CROSS-CUTTING and its first tier INCOMPLETE (a changed path is UNMAPPED), so every per-test alias past what that tier holds' ;;
         2/cross-cutting | 2/cross-cutting,incomplete)
           tests=owed tests_owed='the change is CROSS-CUTTING with no narrow first tier, so the whole list' ;;
         *)
@@ -282,6 +304,51 @@ ask_tests() {
     esac
     tests=owed
   fi
+}
+
+# owed_needs sets `needs`, what tools/owed-run.sh must find recorded for the head (OWED RECORD in
+# the header): `runtest` for every OWED answer, `train` too for an INCOMPLETE one, and each
+# `train-` alias the change reaches, with `train_why` saying why. A reach it cannot read sets
+# `tests` to unread.
+owed_needs() {
+  local f n counted rc=0 verdict line
+  needs=() train_why=
+  [ -z "$tests_owed" ] || needs+=(runtest)
+  if [ "$tests_incomplete" = 1 ]; then
+    needs+=(train)
+    train_why='a changed path is UNMAPPED, so what it reaches of the train- aliases is unknown: every one of them is'
+    return
+  fi
+  # prepush counts the `train-` members it leaves off (the first tier's ask counts the default
+  # list's); a count of 0 needs no record, any other count or none read asks affected for them.
+  f=$tests_dir/ask
+  [ ! -f "$tests_dir/ask-first" ] || f=$tests_dir/ask-first
+  counted=$(sed -n -E 's/.*left off: ([0-9]+) train-.*/\1/p' "$f" | tail -n 1)
+  [ "$counted" != 0 ] || return 0
+  "${BASH:-bash}" "$root/tools/test-run.sh" affected "$mb..$head" \
+    >"$tests_dir/affected" 2>"$tests_dir/train-ask" </dev/null || rc=$?
+  verdict=$(sed -n 's/^affected: verdict=//p' "$tests_dir/train-ask" | tail -n 1)
+  case $rc/$verdict in
+    0/ok | 0/cross-cutting) ;;
+    *)
+      tests=unread tests_why="tools/test-run.sh affected ${mb:0:8}..${head:0:8} exited $rc with no verdict this script reads, so the train- aliases the change reaches are not known"
+      return ;;
+  esac
+  n=0
+  while IFS= read -r line; do
+    case $line in
+      *[[:space:]]* | '') ;;
+      @*/train-?*) needs+=("$line") n=$((n + 1)) ;;
+    esac
+  done <"$tests_dir/affected"
+  # prepush counted some, affected named none: the two answers disagree, and nothing here
+  # guesses which is right. (With no count read, none named is the answer.)
+  if [ "$n" = 0 ] && [ -n "$counted" ]; then
+    tests=unread tests_why="prepush counted $counted train- alias(es) the change reaches, but tools/test-run.sh affected ${mb:0:8}..${head:0:8} named none"
+    return
+  fi
+  # No count: a merge that adds a training test reaches one alias more than its base alone.
+  [ "$n" = 0 ] || train_why='the change reaches train- aliases, which this build does not run'
 }
 
 read_parents
@@ -341,8 +408,25 @@ if [ "$tests" = unread ]; then
   echo "$me: tests tier FAILED ($tests_why)" >&2
   exit 1
 fi
-[ -z "$tests_owed" ] ||
-  echo "$me: tests tier: OWED -- $tests_owed did not run here: a CPU-only box's run before the merge, named in the PR body, the nightly CI run and the integration loop cover it"
+owed_needs
+if [ "$tests" = unread ]; then
+  [ ! -s "$tests_dir/train-ask" ] || cat "$tests_dir/train-ask" >&2
+  echo "$me: tests tier FAILED ($tests_why)" >&2
+  exit 1
+fi
+if [ ${#needs[@]} -gt 0 ]; then
+  [ -z "$tests_owed" ] || echo "$me: tests tier: OWED -- $tests_owed did not run here"
+  [ "$train_why" = '' ] || echo "$me: tests tier: OWED -- $train_why"
+  rc=0
+  "${BASH:-bash}" "$root/tools/owed-run.sh" check "$head" "${needs[@]}" >"$tests_dir/owed" 2>&1 </dev/null || rc=$?
+  while IFS= read -r line; do [ -z "$line" ] || echo "$me:   $line"; done <"$tests_dir/owed"
+  if [ "$rc" != 0 ]; then
+    # The merged tree, which ship-pr's build of the base alone (the base's tree) never prints: a
+    # missing record is the merge's own failure, never a shared red `--override` would pass.
+    echo "$me: tests tier FAILED (no owed-run record for ${head:0:8} admits the merged tree $(git -C "$root" rev-parse 'HEAD^{tree}'): record the run with tools/owed-run.sh record, or waive it with tools/owed-run.sh waive; tools/owed-run.sh exit $rc)" >&2
+    exit 1
+  fi
+fi
 if [ "$tests" = list ] && [ -s "$tests_dir/list" ]; then
   targets=()
   while IFS= read -r line; do [ -z "$line" ] || targets+=("$line"); done <"$tests_dir/list"

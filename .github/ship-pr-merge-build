@@ -19,7 +19,9 @@
 # @test/operations/scans`, the per-test aliases the PR's change reaches (the pre-push list,
 # without its `slow-` and `train-` members), and the shell harnesses that change reaches, of
 # every group. The script's header says what each tier reads and what a
-# cross-cutting change is owed instead.
+# cross-cutting change is owed instead: a cc run on the PR's head, which the tests tier reads back
+# from refs/owed-runs/<head sha> on the PR repository and refuses the merge without
+# (tools/owed-run.sh, gh-ocannl-2218).
 #
 # Inputs. Under `trigger always` no input decides a build. The line stays for the trigger a
 # narrower future might name, and tools/merge-build-replay.py reads it to size one. What it
@@ -35,9 +37,9 @@
 # 2026-10-19, the OCaml-and-scripts list this replaced built 166 of them, adding `*.md` would
 # build 238 and every path builds 245, at about 100 s each (tools/merge-build-replay.py replays a
 # history against any glob sets, these lines by default). What stays outside the build under any
-# trigger: what the command does not run -- a test the change does not reach, a `slow-` or
-# `train-` alias, a GPU backend; those are the nightly CI run's and the integration loop's, on
-# master.
+# trigger: what the command does not run -- a test the change does not reach, a `slow-` alias,
+# a GPU backend; those are the nightly CI run's and the integration loop's, on master (a
+# `train-` alias the change reaches is owed, and recorded, as a cross-cutting suite is).
 #
 # Bound. `timeout` covers the command's slowest honest run: the format and compile tiers, the
 # widest list the tests tier can be handed, and the WHOLE harness set, which every fail-closed
@@ -48,9 +50,11 @@
 # narrow, 661 s and 731 s; the whole harness set, 35 members, 499 s (at load 5 to 11) and 347 s.
 # Unbounded, that is 1300 s and 1218 s, so the tests tier is capped: it builds at most 200 aliases (TESTS_MAX in the script),
 # about 320 s and 360 s at the measured 1.6 s and 1.8 s an alias, and a longer list is owed to
-# the PR's own run. With the two asks of `affected` a cross-cutting change costs (about 50 s
-# each), the slowest honest run is then about 1060 s and 950 s. 1800 s is 1.7 times that, and nine
-# times the ordinary run: a merge whose change reaches some tens of tests and no harness took
+# the PR's own recorded run. With the two asks of `affected` a cross-cutting change costs (about 50 s
+# each), the slowest honest run is then about 1060 s and 950 s; the third ask a change reaching
+# `train-` aliases adds to name them and the record's two reads (60 s each at most,
+# gh-ocannl-2218) put that at most near 1230 s and 1120 s, not re-timed. 1800 s is 1.46 times
+# that, and nine times the ordinary run: a merge whose change reaches some tens of tests and no harness took
 # 200 s and 179 s whole (ship-pr's dry run, `pr-review.sh merge-build`). It is also the 30
 # minutes no CI job's cap goes past. A bound near a measured pass is what overran before: 1200 s
 # over a one-at-a-time shell group's 1167 s, at load 3.6 (gh-ocannl-1994). Re-measure when the

@@ -33,11 +33,17 @@ AGENTS.md's dependency-pin guidance.
   `dune build @check -j 4`, each slot-wrapped. If the default list is CROSS-CUTTING, use
   `tools/test-run.sh prepush --referenced-only --since origin/@@MAIN@@ build -j 4` for its first
   tier **only if narrow**, plus tests exercising the change. No per-PR CI job runs the full list:
-  request it as a cc execution leg on a CPU-only box (`dune runtest`, the common brief's
-  execution request) and cite the run in the PR body before merging. If the first tier is itself
-  CROSS-CUTTING, run the tests exercising the change and name them in the PR body beside that
-  leg. Run applicable `slow-` and `train-` aliases named from the full list: no per-PR job runs
-  `@slow` or `@train`.
+  request it as a cc execution leg on a CPU-only box (`env OCANNL_BACKEND=cc tools/test-run.sh run
+  --expect-backend cc runtest -j 4`, the common brief's execution request) as the last run before
+  merging, on the final head, and record it with `tools/owed-run.sh record <its run dir>` (on the
+  box that ran it; there `record --print`, then `tools/owed-run.sh add '<line>'` from your
+  worktree): the merge build refuses the merge without that record, and a push after it stales
+  it. Cite the run in the PR body too. If the first tier is itself CROSS-CUTTING, run the tests
+  exercising the change and name them in the PR body beside that leg. Run applicable `slow-`
+  aliases named from the full list: no per-PR job runs `@slow`. The `train-` aliases the change
+  reaches are held to the same record (`build @test/training/train-<name>... -j 1`, or
+  `build @train`, under `--expect-backend cc`). After your merge, `tools/owed-run.sh prune <the
+  merged head sha>` deletes its record ref (build-and-test.md#the-owed-run-record).
   Follow the notes for `train-` members and shell harnesses; a long batch needs the common
   brief's execution request.
 - Select backend legs using AGENTS.md and the *Skip coverage* and *Codegen text inventory*

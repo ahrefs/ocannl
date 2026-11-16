@@ -11,11 +11,19 @@
 # narrows as the merge does, that this repository's mapping gives shared support the whole tier
 # and a manifest edit less, and that
 # .github/ship-pr-merge-build runs the script with every tracked path an input. Fake dune, opam,
-# formatter gate, pre-push list and harness tier. The #compile-output leg alone uses real
+# formatter gate, pre-push list and harness tier. The #owed legs read the owed-run record
+# (tools/owed-run.sh, gh-ocannl-2218) from local bare repositories standing for the PR repository,
+# never the real one: a missing, unreadable, foreign, stale, failed, dirty, non-cc, filtered,
+# quoted or malformed record each refuses a cross-cutting, over-bound, incomplete or train-
+# reaching change before anything is built; a full record, a union of records and a waiver
+# admit; the base alone never prints the merge's refusal line; and `record` certifies only a
+# finished, clean, cc run of an allowlisted command, `prune` only merged heads. The
+# #compile-output leg alone uses real
 # dune and Python in a minimal isolated project: the repository's actual capped-fixture rule
 # runs twice, then with a planted failing case. It compares bytes and rejects the exact unittest
 # timing line; tracebacks and FAILED must survive. It does not scan Dune or Python source text.
 # affected-reads: benchmarks/dune benchmarks/*.py benchmarks/test/*.py benchmarks/runners/*.py benchmarks/runners/*/*.py benchmarks/ocannl_config --only '#compile-output'
+# affected-reads: tools/owed-run.sh
 # Usage: tools/test-merge-build-check.sh [--keep] [--only REGEX]
 set -u
 . "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
@@ -60,7 +68,7 @@ mkdir -p "$TMP/gitbin" && ln -s "$GIT" "$TMP/gitbin/git"
 fixture() {
   R=$TMP/$1
   mkdir -p "$R/tools/sub"
-  cp "$HERE/merge-build-check.sh" "$HERE/opam-env.sh" "$R/tools/"
+  cp "$HERE/merge-build-check.sh" "$HERE/opam-env.sh" "$HERE/owed-run.sh" "$R/tools/"
   # The ask (--list) answers each path after --files from FAKE_REACH's `PATH<TAB>COMMAND` lines,
   # no such file reaching nothing, or fails: always with FAKE_ASK_RC, or naming FAKE_ASK_FAILS_ON.
   cat >"$R/tools/test-harnesses.sh" <<'FAKE'
@@ -86,7 +94,9 @@ FAKE
   # ($FAKE_RECORD.tiers), so the records the selection legs compare stay what they were. The list
   # is FAKE_LIST under the verdict FAKE_VERDICT and the status FAKE_PREPUSH_RC; the first tier is
   # FAKE_TIER_LIST under FAKE_TIER_VERDICT and FAKE_TIER_RC (its ask repeats the list's trailer
-  # first, as prepush's does). By default the change reaches no per-test alias.
+  # first, as prepush's does). Each ask counts FAKE_TRAIN_N train- members left off (0; `none`
+  # prints no count), and `affected` answers FAKE_AFFECTED under FAKE_AFF_VERDICT and FAKE_AFF_RC.
+  # By default the change reaches no per-test alias.
   cat >"$R/tools/fmt-check.sh" <<'FAKE'
 #!/bin/sh
 printf 'fmt scans=%s\n' "${OCANNL_TOOL_FMT_CHECK_SCANS-unset}" >>"$FAKE_RECORD.tiers"
@@ -95,15 +105,25 @@ FAKE
   cat >"$R/tools/test-run.sh" <<'FAKE'
 #!/bin/sh
 printf '%s\n' "$*" >>"$FAKE_RECORD.tiers"
+count() {
+  [ "${FAKE_TRAIN_N:-0}" = none ] ||
+    printf 'test-run: prepush: 1 of the 7 alias(es) the change lists; left off: %s train- (the nightly CI run) and 0 slow-\n' "${FAKE_TRAIN_N:-0}" >&2
+}
 case " $* " in
+  ' affected '*)
+    cat "${FAKE_AFFECTED:-/dev/null}"
+    [ "${FAKE_AFF_VERDICT-ok}" = none ] || printf 'affected: verdict=%s\n' "${FAKE_AFF_VERDICT-ok}" >&2
+    exit "${FAKE_AFF_RC:-0}" ;;
   *' --referenced-only '*)
     cat "${FAKE_TIER_LIST:-/dev/null}"
     printf 'affected: verdict=cross-cutting\n' >&2
+    count
     [ "${FAKE_TIER_VERDICT-ok}" = none ] || printf 'affected: verdict=%s\n' "${FAKE_TIER_VERDICT-ok}" >&2
     exit "${FAKE_TIER_RC:-0}" ;;
 esac
 cat "${FAKE_LIST:-/dev/null}"
 printf 'affected: 7 alias(es) from 2 changed path(s)\n' >&2
+[ "${FAKE_PREPUSH_RC:-0}" = 2 ] || count
 [ "${FAKE_VERDICT-ok}" = none ] || printf 'affected: verdict=%s\n' "${FAKE_VERDICT-ok}" >&2
 exit "${FAKE_PREPUSH_RC:-0}"
 FAKE
@@ -236,6 +256,26 @@ range_of() { # the head side's change, as the script asks it: MERGE_BASE..HEAD_S
     printf '%s..%s' "$(git -C "$R" merge-base "$b" "$h")" "$h"
 }
 tiers() { cat "$TMP/record.tiers"; }
+# The owed-run records (tools/owed-run.sh): local bare repositories stand for the PR repository,
+# so no fixture reads or writes the real one. OWED_EMPTY holds no record; OWED_FULL a full-suite
+# and @train run for APART's head.
+OWED_EMPTY=$TMP/owed-empty.git OWED_FULL=$TMP/owed-full.git
+git init -q --bare "$OWED_EMPTY" && git init -q --bare "$OWED_FULL"
+export OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY
+owed() { # URL ARG...: tools/owed-run.sh in R against the records at URL; its status in `orc`
+  local url=$1
+  shift
+  orc=0
+  (cd "$R" && PATH=$TMP/gitbin:$SYS_PATH OCANNL_TOOL_OWED_RUN_URL=$url "$BASH" tools/owed-run.sh "$@") \
+    >"$TMP/owed-out" 2>&1 || orc=$?
+}
+run_line() { # HEAD CMD [EXIT CLEAN BACKEND]: a run record's line, valid by default
+  printf 'owed-run: v1 run head=%s exit=%s clean=%s backend=%s source=fixture:/runs/1 cmd=%s' \
+    "$1" "${3:-0}" "${4:-yes}" "${5:-cc}" "$2"
+}
+APART_HEAD=$(git -C "$APART" rev-parse 'HEAD^2')
+R=$APART owed "$OWED_FULL" add "$(run_line "$APART_HEAD" 'build @runtest @train -j 4')"
+[ "$orc" = 0 ] || { echo "fixture: could not publish APART's record: $(cat "$TMP/owed-out")" >&2; exit 1; }
 if harness_leg 'the format tier runs first, its scans off, and a red one ends the run #tiers'; then
   R=$APART run "$TMP/dunebin"
   if [ "$rc" = 0 ] && [ "$(tiers | sed -n 1p)" = 'fmt scans=0' ] && has 'merge-build-check: format tier passed' &&
@@ -285,6 +325,8 @@ shell --jobs 4" ] && has 'tests tier: the change reaches no per-test alias' && h
 fi
 
 if harness_leg 'a list that is not the whole pre-push list says what is OWED; one not read fails #tiers'; then
+  # What is OWED here is recorded (OWED_FULL); the #owed leg reads the records themselves.
+  export OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL
   printf '%s\n' '@a/runtest-x' >"$TMP/list"
   printf '%s\n' '@a/runtest-first' >"$TMP/tier-list"
   ask="prepush --since $(R=$APART range_of) --list"
@@ -292,7 +334,8 @@ if harness_leg 'a list that is not the whole pre-push list says what is OWED; on
   FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/tier-list R=$APART run "$TMP/dunebin"
   if [ "$rc" = 0 ] && [ "$(cat "$TMP/record")" = "$COMPILE
 build --root . -j 4 @a/runtest-first" ] && [ "$(tiers | sed -n 2,3p)" = "$ask
-$first_ask" ] && has 'tests tier: OWED -- the change is CROSS-CUTTING, so every per-test alias past its first tier did not run here'; then
+$first_ask" ] && has 'tests tier: OWED -- the change is CROSS-CUTTING, so every per-test alias past its first tier did not run here' &&
+     has "owed-run: admitted run of 'build @runtest @train -j 4' for ${APART_HEAD:0:8} (fixture:/runs/1)"; then
     report 0 'a cross-cutting change builds its first tier and says the rest is owed'
   else report 1 'a cross-cutting change builds its first tier and says the rest is owed' "exit $rc; $(cat "$TMP/record"); $(tiers); $(cat "$TMP/out")"; fi
   FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/tier-list FAKE_TIER_RC=2 FAKE_TIER_VERDICT=cross-cutting R=$APART run "$TMP/dunebin"
@@ -372,6 +415,236 @@ build --root . -j 4 @a/runtest-first" ] && has 'tests tier: OWED -- the change i
      has 'tests tier FAILED (HEAD has no two sides with a merge base, so what the change reaches cannot be asked)'; then
     report 0 'a HEAD with no two sides fails the tests tier, asking nothing'
   else report 1 'a HEAD with no two sides fails the tests tier, asking nothing' "exit $rc; $(cat "$TMP/record"); $(tiers); $(cat "$TMP/out")"; fi
+  export OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY
+fi
+
+# The owed-run record (tools/owed-run.sh, gh-ocannl-2218): what is OWED is read from
+# refs/owed-runs/<head> on OCANNL_TOOL_OWED_RUN_URL, and each way a record can fail to stand for
+# the head refuses the merge before anything is built.
+plant() { # URL HEAD TREE PARENT MESSAGE: refs/owed-runs/HEAD at URL, any commit the caller makes
+  local c
+  c=$(printf '%s\n' "$5" | git -C "$R" commit-tree "$3" -p "$4") &&
+    git -C "$R" push -q -f "$1" "$c:refs/owed-runs/$2"
+}
+merged_tree() { git -C "$R" rev-parse 'HEAD^{tree}'; }
+if harness_leg 'what is OWED is read from the head'"'"'s record, and every other record refuses #owed'; then
+  printf '%s\n' '@a/runtest-first' >"$TMP/owed-tier"
+  R=$APART
+  tree=$(merged_tree)
+  refused() { # LABEL WANT: the run refused, built nothing past the compile tier, printed WANT
+    if [ "$rc" = 1 ] && [ "$(cat "$TMP/record")" = "$COMPILE" ] && has "$2" &&
+       has "tests tier FAILED (no owed-run record for ${APART_HEAD:0:8} admits the merged tree $tree" &&
+       ! has 'tests tier passed'; then
+      report 0 "$1"
+    else report 1 "$1" "exit $rc; $(cat "$TMP/record"); $(grep -e 'tests tier' -e owed-run "$TMP/out")"; fi
+  }
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
+  refused 'a cross-cutting change with no record is refused, its first tier unbuilt (missing)' \
+    "REFUSED -- no refs/owed-runs/$APART_HEAD: the head has no record (missing) (records on $OWED_EMPTY)"
+  OCANNL_TOOL_OWED_RUN_URL=$TMP/nowhere.git FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
+  refused 'a record repository that cannot be read refuses (unreadable)' \
+    "REFUSED -- refs/owed-runs/$APART_HEAD could not be read within 60s: unreadable (records on $TMP/nowhere.git)"
+  bad=$TMP/owed-bad.git
+  git init -q --bare "$bad"
+  good=$(run_line "$APART_HEAD" 'runtest -j 4')
+  base_sha=$(git -C "$R" rev-parse 'HEAD^1')
+  plant "$bad" "$APART_HEAD" "$APART_HEAD^{tree}" "$base_sha" "$good"
+  OCANNL_TOOL_OWED_RUN_URL=$bad FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
+  refused 'a record commit that is not the head'"'"'s child is refused (foreign)' "is not a child of ${APART_HEAD:0:8} alone: foreign"
+  plant "$bad" "$APART_HEAD" "$base_sha^{tree}" "$APART_HEAD" "$good"
+  OCANNL_TOOL_OWED_RUN_URL=$bad FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
+  refused 'a record commit carrying another tree is refused (foreign)' "carries another tree than ${APART_HEAD:0:8}'s: foreign"
+  for probe in \
+    "$(run_line "$base_sha" 'runtest -j 4')|a record of another head (${base_sha:0:8}): foreign|another head's line" \
+    "$(run_line "$APART_HEAD" 'runtest -j 4' 1)|a run that exited 1|a failed run" \
+    "$(run_line "$APART_HEAD" 'runtest -j 4' 0 no)|a run of a dirty checkout|a dirty run" \
+    "$(run_line "$APART_HEAD" 'runtest -j 4' 0 yes metal)|a run on backend metal, not cc|a metal run" \
+    "$(run_line "$APART_HEAD" 'build @a/runtest-first -j 4')|which is no full or train- run|a first-tier list" \
+    "$(run_line "$APART_HEAD" 'runtest test/operations')|which is no full or train- run|a directory-scoped run" \
+    "$(run_line "$APART_HEAD" 'build @runtest --force')|which is no full or train- run|an option" \
+    "$(run_line "$APART_HEAD" "build '@runtest'")|which is no full or train- run|a quoted token" \
+    "owed-run: v2 run head=$APART_HEAD exit=0|holds a line no v1 record reads|an unknown schema" \
+    "owed-run: v1 run head=$APART_HEAD exit=0 cmd=runtest|holds a line no v1 record reads|a malformed line"; do
+    line=${probe%%|*} rest=${probe#*|}
+    plant "$bad" "$APART_HEAD" "$APART_HEAD^{tree}" "$APART_HEAD" "owed-run record
+
+$good
+$line"
+    OCANNL_TOOL_OWED_RUN_URL=$bad FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
+    refused "a record holding ${rest#*|} beside a valid one is refused" "${rest%%|*}"
+  done
+  # Admitted: a full run, its first tier then built; a waiver, printed into the log.
+  plant "$bad" "$APART_HEAD" "$APART_HEAD^{tree}" "$APART_HEAD" "owed-run record
+
+$good"
+  OCANNL_TOOL_OWED_RUN_URL=$bad FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
+  if [ "$rc" = 0 ] && [ "$(cat "$TMP/record")" = "$COMPILE
+build --root . -j 4 @a/runtest-first" ] && has "owed-run: admitted run of 'runtest -j 4' for ${APART_HEAD:0:8} (fixture:/runs/1)"; then
+    report 0 'a full-suite record admits a cross-cutting change, whose first tier still builds'
+  else report 1 'a full-suite record admits a cross-cutting change, whose first tier still builds' "exit $rc; $(cat "$TMP/record"); $(cat "$TMP/out")"; fi
+  waivers=$TMP/owed-waiver.git
+  git init -q --bare "$waivers"
+  owed "$waivers" waive --head "$APART_HEAD" --reason 'run 20261116T0000Z on rog, the maintainer'
+  OCANNL_TOOL_OWED_RUN_URL=$waivers FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
+  if [ "$orc" = 0 ] && [ "$rc" = 0 ] && has "owed-run: admitted waiver for ${APART_HEAD:0:8} by fixture: run 20261116T0000Z on rog, the maintainer"; then
+    report 0 'a waiver for the head admits it and is printed into the log'
+  else report 1 'a waiver for the head admits it and is printed into the log' "waive exit $orc: $(cat "$TMP/owed-out"); exit $rc; $(cat "$TMP/out")"; fi
+  # The bound's share and an incomplete list are owed the same way.
+  i=0; : >"$TMP/owed-long"
+  while [ "$i" -lt 201 ]; do i=$((i + 1)); printf '@a/runtest-t%s\n' "$i" >>"$TMP/owed-long"; done
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_LIST=$TMP/owed-long run "$TMP/dunebin"
+  refused 'a list over the bound with no record is refused' "no refs/owed-runs/$APART_HEAD"
+  printf '%s\n' '@a/runtest-x' >"$TMP/owed-list"
+  OCANNL_TOOL_OWED_RUN_URL=$bad FAKE_LIST=$TMP/owed-list FAKE_PREPUSH_RC=3 FAKE_VERDICT=incomplete run "$TMP/dunebin"
+  refused 'an incomplete list needs every train- alias recorded too, not only the suite' 'covers no run of: train'
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL FAKE_LIST=$TMP/owed-list FAKE_PREPUSH_RC=3 FAKE_VERDICT=incomplete run "$TMP/dunebin"
+  if [ "$rc" = 0 ] && has "admitted run of 'build @runtest @train -j 4'"; then
+    report 0 'an incomplete list is admitted by a record of the suite and @train'
+  else report 1 'an incomplete list is admitted by a record of the suite and @train' "exit $rc; $(cat "$TMP/out")"; fi
+  # train- aliases: reached by a change that is neither cross-cutting nor incomplete.
+  printf '%s\n' '@a/runtest-x' '@test/training/train-a' >"$TMP/owed-affected"
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_LIST=$TMP/owed-list FAKE_TRAIN_N=1 FAKE_AFFECTED=$TMP/owed-affected run "$TMP/dunebin"
+  refused 'a reached train- alias with no record is refused, for a narrow change too' 'tests tier: OWED -- the change reaches train- aliases, which this build does not run'
+  plant "$bad" "$APART_HEAD" "$APART_HEAD^{tree}" "$APART_HEAD" "$(run_line "$APART_HEAD" 'build @test/training/train-b -j 1')"
+  OCANNL_TOOL_OWED_RUN_URL=$bad FAKE_LIST=$TMP/owed-list FAKE_TRAIN_N=1 FAKE_AFFECTED=$TMP/owed-affected run "$TMP/dunebin"
+  refused 'a record of another train- alias does not cover the one reached' 'covers no run of: @test/training/train-a'
+  plant "$bad" "$APART_HEAD" "$APART_HEAD^{tree}" "$APART_HEAD" "owed-run record
+
+$good
+$(run_line "$APART_HEAD" 'build @test/training/train-a -j 1')"
+  OCANNL_TOOL_OWED_RUN_URL=$bad FAKE_TRAIN_N=4 FAKE_AFFECTED=$TMP/owed-affected FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
+  if [ "$rc" = 0 ] && [ "$(grep -c 'owed-run: admitted run' "$TMP/out")" = 2 ] && tiers | grep -qx "affected $(range_of)"; then
+    report 0 'two records whose union covers the suite and the train- alias admit the change'
+  else report 1 'two records whose union covers the suite and the train- alias admit the change' "exit $rc; $(tiers); $(cat "$TMP/out")"; fi
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL FAKE_LIST=$TMP/owed-list FAKE_TRAIN_N=1 FAKE_AFF_RC=2 FAKE_AFF_VERDICT=none run "$TMP/dunebin"
+  if [ "$rc" = 1 ] && [ "$(cat "$TMP/record")" = "$COMPILE" ] && has 'so the train- aliases the change reaches are not known'; then
+    report 0 'a train- reach that cannot be asked fails the tier'
+  else report 1 'a train- reach that cannot be asked fails the tier' "exit $rc; $(cat "$TMP/out")"; fi
+  printf '%s\n' '@a/runtest-x' >"$TMP/owed-affected-none"
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL FAKE_LIST=$TMP/owed-list FAKE_TRAIN_N=1 FAKE_AFFECTED=$TMP/owed-affected-none run "$TMP/dunebin"
+  if [ "$rc" = 1 ] && [ "$(cat "$TMP/record")" = "$COMPILE" ] &&
+     has 'prepush counted 1 train- alias(es) the change reaches, but tools/test-run.sh affected'; then
+    report 0 'a train- count affected names no alias for fails the tier, never reading as none'
+  else report 1 'a train- count affected names no alias for fails the tier, never reading as none' "exit $rc; $(cat "$TMP/out")"; fi
+  # A transport that hangs: the read's bound ends it, and the record reads as unreadable.
+  started=$SECONDS
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=protocol.ext.allow GIT_CONFIG_VALUE_0=always OCANNL_TOOL_OWED_RUN_FETCH_CAP=2 \
+    OCANNL_TOOL_OWED_RUN_URL='ext::sleep 30' FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
+  took=$((SECONDS - started))
+  if [ "$took" -lt 20 ]; then
+    refused "a record repository that hangs is cut off at its bound and refuses (unreadable, ${took}s < 20s)" \
+      "REFUSED -- refs/owed-runs/$APART_HEAD could not be read within 2s: unreadable (records on ext::sleep 30)"
+  else report 1 'a record repository that hangs is cut off at its bound' "took ${took}s: $(cat "$TMP/out")"; fi
+  OCANNL_TOOL_OWED_RUN_URL=$TMP/nowhere.git FAKE_LIST=$TMP/owed-list FAKE_TRAIN_N=none run "$TMP/dunebin"
+  if [ "$rc" = 0 ] && tiers | grep -qx "affected $(range_of)" && ! has owed-run; then
+    report 0 'no train- count read asks affected, which here names none: nothing is owed'
+  else report 1 'no train- count read asks affected, which here names none: nothing is owed' "exit $rc; $(tiers); $(cat "$TMP/out")"; fi
+  OCANNL_TOOL_OWED_RUN_URL=$TMP/nowhere.git FAKE_LIST=$TMP/owed-list run "$TMP/dunebin"
+  if [ "$rc" = 0 ] && ! has owed-run && ! tiers | grep -q '^affected'; then
+    report 0 'a change owing nothing reads no record and asks nothing more'
+  else report 1 'a change owing nothing reads no record and asks nothing more' "exit $rc; $(tiers); $(cat "$TMP/out")"; fi
+  # A record of an older push is under the older head's name: the new head has none (stale).
+  fixture owed-stale
+  first x.ml && commit_on base
+  git -C "$R" checkout -q side && last x.ml && commit_on side && merge_side
+  owed "$OWED_FULL" add "$(run_line "$(git -C "$R" rev-parse 'HEAD^2')" 'runtest -j 4')"
+  git -C "$R" checkout -q side && last m.txt && commit_on side && merge_side
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
+  if [ "$orc" = 0 ] && [ "$rc" = 1 ] && has "no refs/owed-runs/$(git -C "$R" rev-parse 'HEAD^2'): the head has no record (missing)"; then
+    report 0 'a record of the head before a later push does not admit the new head (stale)'
+  else report 1 'a record of the head before a later push does not admit the new head (stale)' "add exit $orc; exit $rc; $(cat "$TMP/out")"; fi
+  # The build of the base alone (the base's tree, the merge's parents) reads the same change and
+  # the same missing record, but never the merge's own refusal line: the failure is the merge's.
+  R=$APART
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
+  cp "$TMP/out" "$TMP/owed-merge-out"
+  merge_rc=$rc
+  sha=$(git -C "$R" commit-tree 'HEAD^1^{tree}' -p 'HEAD^1' -p 'HEAD^2' -m 'the base alone') &&
+    git -C "$R" checkout -q --detach "$sha"
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
+  git -C "$R" checkout -q base
+  extra=$(grep -vxF -f "$TMP/out" "$TMP/owed-merge-out")
+  if [ "$merge_rc" = 1 ] && [ "$rc" = 1 ] && has "no refs/owed-runs/$APART_HEAD" &&
+     printf '%s\n' "$extra" | grep -qF "admits the merged tree $tree" && ! has "admits the merged tree $tree"; then
+    report 0 'the base alone fails without the merge'"'"'s refusal line, so the refusal is never a shared red'
+  else report 1 'the base alone fails without the merge'"'"'s refusal line, so the refusal is never a shared red' "exits $merge_rc/$rc; extra: $extra"; fi
+  # A merge whose tree is the base's (the head's change is in the base already) adds nothing:
+  # its log is the base alone's, and what it would admit changes nothing on the base.
+  fixture owed-same
+  first x.ml && commit_on base
+  git -C "$R" checkout -q side && first x.ml && commit_on side && merge_side
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
+  cp "$TMP/out" "$TMP/owed-same-out"
+  merge_rc=$rc
+  sha=$(git -C "$R" commit-tree 'HEAD^1^{tree}' -p 'HEAD^1' -p 'HEAD^2' -m 'the base alone') &&
+    git -C "$R" checkout -q --detach "$sha"
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
+  if [ "$(git -C "$R" rev-parse 'HEAD^1^{tree}')" = "$(git -C "$R" rev-parse 'base^{tree}')" ] &&
+     [ "$merge_rc" = 1 ] && [ "$rc" = 1 ] && cmp -s "$TMP/out" "$TMP/owed-same-out"; then
+    report 0 'a merge whose tree is the base'"'"'s logs as the base alone does (it changes nothing)'
+  else report 1 'a merge whose tree is the base'"'"'s logs as the base alone does (it changes nothing)' "exits $merge_rc/$rc; $(diff "$TMP/owed-same-out" "$TMP/out")"; fi
+fi
+
+# tools/owed-run.sh's own verbs: what `record` certifies from a run directory, and `prune`.
+if harness_leg 'record certifies only a finished, clean, cc run of an allowlisted command; prune #owed-run'; then
+  R=$APART
+  rundir() { # NAME EXIT DIRTY BACKEND CMD: a synthetic tools/test-run.sh run record
+    local d=$TMP/runs/$1
+    mkdir -p "$d"
+    printf '%s\n' "$APART_HEAD" >"$d/head"
+    [ "$2" = none ] || printf '%s\n' "$2" >"$d/exit"
+    printf '%s' "$3" >"$d/dirty"
+    [ "$4" = none ] || printf '%s\n' "$4" >"$d/expect-backend"
+    printf '%s \n' "$5" >"$d/cmd"
+    printf '%s' "$d"
+  }
+  owed "$OWED_EMPTY" record "$(rundir good 0 '' cc 'runtest -j 4')" --print
+  line=$(cat "$TMP/owed-out")
+  case $line in
+    "owed-run: v1 run head=$APART_HEAD exit=0 clean=yes backend=cc source="*":$TMP/runs/good cmd=runtest -j 4")
+      report 0 'record prints the line of a finished, clean, cc full-suite run' ;;
+    *) report 1 'record prints the line of a finished, clean, cc full-suite run' "exit $orc: $line" ;;
+  esac
+  rt=$TMP/owed-roundtrip.git
+  git init -q --bare "$rt"
+  owed "$rt" add "$line" && add_rc=$orc
+  owed "$rt" check "$APART_HEAD" runtest
+  if [ "$add_rc" = 0 ] && [ "$orc" = 0 ] && grep -qF "owed-run: admitted run of 'runtest -j 4'" "$TMP/owed-out"; then
+    report 0 'a printed line, added, is what check admits'
+  else report 1 'a printed line, added, is what check admits' "add $add_rc, check $orc: $(cat "$TMP/owed-out")"; fi
+  # tools/test-run.sh records the argv it ran, its injected width and --no-buffer included.
+  owed "$rt" record "$(rundir injected 0 '' cc 'build --no-buffer @test/training/train-a -j 1 -j 4')"
+  owed "$rt" check "$APART_HEAD" runtest @test/training/train-a
+  if [ "$orc" = 0 ] && [ "$(grep -c 'owed-run: admitted run' "$TMP/owed-out")" = 2 ]; then
+    report 0 'a single train- alias run as test-run.sh records it (--no-buffer, an injected -j) is recorded and admitted'
+  else report 1 'a single train- alias run as test-run.sh records it (--no-buffer, an injected -j) is recorded and admitted' "exit $orc: $(cat "$TMP/owed-out")"; fi
+  bad=
+  for probe in 'failed|1||cc|runtest -j 4' 'unfinished|none||cc|runtest -j 4' 'dirty|0| M x.ml|cc|runtest -j 4' \
+               'metal|0||metal|runtest -j 4' 'nobackend|0||none|runtest -j 4' \
+               'list|0||cc|build @test/operations/runtest-x -j 4' 'dir|0||cc|runtest test/operations'; do
+    IFS='|' read -r n e dty be c <<EOF
+$probe
+EOF
+    owed "$rt" record "$(rundir "$n" "$e" "$dty" "$be" "$c")"
+    [ "$orc" = 2 ] && ! grep -q published "$TMP/owed-out" || bad+=" [$n: exit $orc: $(cat "$TMP/owed-out")]"
+  done
+  if [ -z "$bad" ]; then
+    report 0 'record refuses a failed, unfinished, dirty, non-cc or filtered run, publishing nothing'
+  else report 1 'record refuses a failed, unfinished, dirty, non-cc or filtered run, publishing nothing' "$bad"; fi
+  # prune: a merged head's record goes, an unmerged one's stays.
+  pr=$TMP/owed-prune.git
+  git init -q --bare "$pr"
+  git -C "$R" push -q "$pr" base:refs/heads/master
+  git -C "$R" checkout -q side && last b.sh && commit_on side
+  open_head=$(git -C "$R" rev-parse HEAD)
+  git -C "$R" reset -q --hard HEAD^ && git -C "$R" checkout -q base
+  owed "$pr" add "$(run_line "$APART_HEAD" 'runtest -j 4')"
+  owed "$pr" add "$(run_line "$open_head" 'runtest -j 4')"
+  owed "$pr" prune
+  left=$(git -C "$R" ls-remote "$pr" 'refs/owed-runs/*' | awk '{ print $2 }')
+  if [ "$orc" = 0 ] && [ "$left" = "refs/owed-runs/$open_head" ] && grep -qF 'pruned 1 record(s) of merged heads' "$TMP/owed-out"; then
+    report 0 'prune deletes the merged head'"'"'s record and keeps the open one'"'"'s'
+  else report 1 'prune deletes the merged head'"'"'s record and keeps the open one'"'"'s' "exit $orc: $(cat "$TMP/owed-out"); left: $left"; fi
 fi
 
 # Use the same tree twice, but force each tier across a different whole-second duration.
