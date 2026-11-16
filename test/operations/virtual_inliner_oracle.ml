@@ -26,11 +26,10 @@
    finding. Both arms evaluate under [~strict:true], so the discarded arm of a select a backend may
    blend is held to its nodes' bounds as well ([strict_probe_controls] pin the probe). The
    [src=reduce] family makes [src] itself a virtual two-term reduction over a materialized input:
-   scopes then sit inside the replay's guarded arms throughout the table, including out-of-range
-   [src=reduce-init] additionally reads a materialized, index-varying initializer before that
-   reduction. Substitutions can be out of range, which codegen renders under the guard
-   (gh-ocannl-2145; before it, the inliner carried the guard into the scope body, gh-ocannl-2077's
-   [guard_hoisted]).
+   scopes then sit inside the replay's guarded arms throughout the table. [src=reduce-init]
+   additionally reads a materialized, index-varying initializer before that reduction. Substitutions
+   can be out of range, which codegen renders under the guard (gh-ocannl-2145; before it, the
+   inliner carried the guard into the scope body, gh-ocannl-2077's [guard_hoisted]).
 
    Tier B is the anchor. An interpreter agreeing only with itself would prove nothing, so a sample
    across the outcome buckets also compiles and runs on the selected backend, in both arms, against
