@@ -1,6 +1,6 @@
-warp-reduce terms have f32-exact partial sums: true
-warp-reduce terms have f32-exact partial sums: true
-warp-reduce terms have f32-exact partial sums: true
+wmem_wred32: warp-reduce terms have f32-exact partial sums: true
+wmem_wred64: warp-reduce terms have f32-exact partial sums: true
+wmem_wred128: warp-reduce terms have f32-exact partial sums: true
 every reduction runs and returns the sum: true
 the estimate charges exactly the warp-reduce partials the emitted kernel declares: true
 past one warp the emitted kernel declares warp-reduce partials: true

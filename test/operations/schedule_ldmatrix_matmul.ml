@@ -223,29 +223,21 @@ let leg ?schedule_of ~tag ~build ~src_a ~src_b ~swz_a ~swz_b ~check ~acc_prec ?(
   end
 
 let bf_a =
-  Ll_test.operand ~b:[]
-    ~o:(Array.to_list [| n; n |])
-    ~i:[]
+  Ll_test.operand ~b:[] ~o:[ n ] ~i:[ n ]
     (Ll_test.cycle ~dims:[| n; n |] ~modulus:3 ~offset:0. ~stride:0.25)
 
 let bf_b =
-  Ll_test.operand ~b:[]
-    ~o:(Array.to_list [| n; n |])
-    ~i:[]
+  Ll_test.operand ~b:[] ~o:[ n ] ~i:[ n ]
     (Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:(-2.) ~stride:0.5)
 
 (* e5m2 has 2 mantissa bits: inputs from {-1,-0.5,0,0.5,1} and {-1.5..1.5 step 0.5} are exact, every
    product is a multiple of 0.25 bounded by 1.5, and a 32-term f32 sum of such products is exact. *)
 let f8_a =
-  Ll_test.operand ~b:[]
-    ~o:(Array.to_list [| n; n |])
-    ~i:[]
+  Ll_test.operand ~b:[] ~o:[ n ] ~i:[ n ]
     (Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:(-2.) ~stride:0.5)
 
 let f8_b =
-  Ll_test.operand ~b:[]
-    ~o:(Array.to_list [| n; n |])
-    ~i:[]
+  Ll_test.operand ~b:[] ~o:[ n ] ~i:[ n ]
     (Ll_test.cycle ~dims:[| n; n |] ~modulus:7 ~offset:(-3.) ~stride:0.5)
 
 (* The bf16 inputs are multiples of 1/4 and 1/2 with 32-term sums bounded by 16, so every product is

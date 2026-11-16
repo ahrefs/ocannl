@@ -273,16 +273,12 @@ let () =
      the moduli), and all products are small multiples of 1/8 with partial sums far below 2^24, so
      f32 addition is exact in any order — bitwise parity is well-defined across tilings. *)
   let x_f =
-    Ll_test.operand ~b:[]
-      ~o:(Array.to_list [| bb; ss; kk |])
-      ~i:[]
+    Ll_test.operand ~b:[] ~o:[ bb; ss; kk ] ~i:[]
       (Ll_test.cycle ~dims:[| bb; ss; kk |] ~modulus:13 ~offset:0. ~stride:0.25)
   in
   let x () = NTDSL.init ~l:"bg_x" ~prec:Ir.Ops.single ~o:[ bb; ss; kk ] ~f:x_f () in
   let w_f =
-    Ll_test.operand ~b:[]
-      ~o:(Array.to_list [| hh; kk; jj |])
-      ~i:[]
+    Ll_test.operand ~b:[] ~o:[ hh; kk; jj ] ~i:[]
       (Ll_test.cycle ~dims:[| hh; kk; jj |] ~modulus:11 ~offset:(-5.) ~stride:0.5)
   in
   let w () = NTDSL.init ~l:"bg_w" ~prec:Ir.Ops.single ~o:[ hh; kk; jj ] ~f:w_f () in
@@ -321,9 +317,7 @@ let () =
      blocks the way the heads-merged layout does. --- *)
   (* Batch-grid slots: e-blocks 0, s-blocks 1, h 2 (extent 4: "% 4"), b 3 (stride 4: "/ 4"). *)
   let wp_f =
-    Ll_test.operand ~b:[]
-      ~o:(Array.to_list [| hh; jj; kk |])
-      ~i:[]
+    Ll_test.operand ~b:[] ~o:[ hh; jj; kk ] ~i:[]
       (Ll_test.cycle ~dims:[| hh; jj; kk |] ~modulus:11 ~offset:(-5.) ~stride:0.5)
   in
   let wp () = NTDSL.init ~l:"bg_wp" ~prec:Ir.Ops.single ~o:[ hh; jj; kk ] ~f:wp_f () in
@@ -344,16 +338,12 @@ let () =
      and the companionless site both hoist [h] above [i]; positional slot order must match. *)
   let bt = 2 and ss2 = 16 and hh2 = 2 and kk2 = 8 and jj2 = 32 in
   let att_f =
-    Ll_test.operand ~b:[]
-      ~o:(Array.to_list [| bt; ss2; hh2; kk2 |])
-      ~i:[]
+    Ll_test.operand ~b:[] ~o:[ bt; ss2; hh2; kk2 ] ~i:[]
       (Ll_test.cycle ~dims:[| bt; ss2; hh2; kk2 |] ~modulus:11 ~offset:0. ~stride:0.125)
   in
   let att () = NTDSL.init ~l:"bg_att" ~prec:Ir.Ops.single ~o:[ bt; ss2; hh2; kk2 ] ~f:att_f () in
   let v_f =
-    Ll_test.operand ~b:[]
-      ~o:(Array.to_list [| bt; kk2; hh2; jj2 |])
-      ~i:[]
+    Ll_test.operand ~b:[] ~o:[ bt; kk2; hh2; jj2 ] ~i:[]
       (Ll_test.cycle ~dims:[| bt; kk2; hh2; jj2 |] ~modulus:7 ~offset:(-3.) ~stride:0.5)
   in
   let v () = NTDSL.init ~l:"bg_v" ~prec:Ir.Ops.single ~o:[ bt; kk2; hh2; jj2 ] ~f:v_f () in

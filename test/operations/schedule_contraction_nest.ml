@@ -660,16 +660,12 @@ let () =
      2^24, so f32 addition is exact in any order. *)
   let bb = 2 and ss = 64 and jj = 64 and hh = 4 and ee = 16 in
   let w_f =
-    Ll_test.operand ~b:[]
-      ~o:(Array.to_list [| jj; hh; ee |])
-      ~i:[]
+    Ll_test.operand ~b:[] ~o:[ jj ] ~i:[ hh; ee ]
       (Ll_test.cycle ~dims:[| jj; hh; ee |] ~modulus:11 ~offset:(-11.) ~stride:0.5)
   in
   let w () = NTDSL.init ~l:"cn_w" ~prec:Ir.Ops.single ~o:[ jj ] ~i:[ hh; ee ] ~f:w_f () in
   let att_f =
-    Ll_test.operand ~b:[]
-      ~o:(Array.to_list [| bb; ss; hh; ee |])
-      ~i:[]
+    Ll_test.operand ~b:[ bb; ss ] ~o:[ hh; ee ] ~i:[]
       (Ll_test.cycle ~dims:[| bb; ss; hh; ee |] ~modulus:13 ~offset:1. ~stride:0.25)
   in
   let att () = NTDSL.init ~l:"cn_att" ~prec:Ir.Ops.single ~b:[ bb; ss ] ~o:[ hh; ee ] ~f:att_f () in
@@ -692,18 +688,14 @@ let () =
      gate actually refutes, plus a single-axis control contracting over the same 12. *)
   let ee_odd = 12 in
   let w_odd_f =
-    Ll_test.operand ~b:[]
-      ~o:(Array.to_list [| jj; hh; ee_odd |])
-      ~i:[]
+    Ll_test.operand ~b:[] ~o:[ jj ] ~i:[ hh; ee_odd ]
       (Ll_test.cycle ~dims:[| jj; hh; ee_odd |] ~modulus:11 ~offset:(-11.) ~stride:0.5)
   in
   let w_odd () =
     NTDSL.init ~l:"cn_w_odd" ~prec:Ir.Ops.single ~o:[ jj ] ~i:[ hh; ee_odd ] ~f:w_odd_f ()
   in
   let att_odd_f =
-    Ll_test.operand ~b:[]
-      ~o:(Array.to_list [| bb; ss; hh; ee_odd |])
-      ~i:[]
+    Ll_test.operand ~b:[ bb; ss ] ~o:[ hh; ee_odd ] ~i:[]
       (Ll_test.cycle ~dims:[| bb; ss; hh; ee_odd |] ~modulus:13 ~offset:1. ~stride:0.25)
   in
   let att_odd () =
@@ -765,16 +757,12 @@ let () =
   (* --- A three-axis contraction with a materialized output feeding a bias+relu companion. --- *)
   let bb2 = 2 and ss2 = 32 and jj2 = 64 and gg = 2 and hh2 = 2 and ee2 = 16 in
   let x_f =
-    Ll_test.operand ~b:[]
-      ~o:(Array.to_list [| bb2; ss2; gg; hh2; ee2 |])
-      ~i:[]
+    Ll_test.operand ~b:[] ~o:[ bb2; ss2; gg; hh2; ee2 ] ~i:[]
       (Ll_test.cycle ~dims:[| bb2; ss2; gg; hh2; ee2 |] ~modulus:13 ~offset:1. ~stride:0.25)
   in
   let x () = NTDSL.init ~l:"cn_x" ~prec:Ir.Ops.single ~o:[ bb2; ss2; gg; hh2; ee2 ] ~f:x_f () in
   let w3_f =
-    Ll_test.operand ~b:[]
-      ~o:(Array.to_list [| jj2; gg; hh2; ee2 |])
-      ~i:[]
+    Ll_test.operand ~b:[] ~o:[ jj2; gg; hh2; ee2 ] ~i:[]
       (Ll_test.cycle ~dims:[| jj2; gg; hh2; ee2 |] ~modulus:11 ~offset:(-11.) ~stride:0.5)
   in
   let w3 () = NTDSL.init ~l:"cn_w3" ~prec:Ir.Ops.single ~o:[ jj2; gg; hh2; ee2 ] ~f:w3_f () in

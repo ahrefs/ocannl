@@ -137,27 +137,19 @@ let run ~name ?schedule out = fst (run_census ~name ?schedule out)
 
 let () =
   let ba =
-    Ll_test.operand ~b:[]
-      ~o:(Array.to_list [| n; n |])
-      ~i:[]
+    Ll_test.operand ~b:[] ~o:[ n ] ~i:[ n ]
       (Ll_test.cycle ~dims:[| n; n |] ~modulus:3 ~offset:0. ~stride:0.25)
   in
   let bb =
-    Ll_test.operand ~b:[]
-      ~o:(Array.to_list [| n; n |])
-      ~i:[]
+    Ll_test.operand ~b:[] ~o:[ n ] ~i:[ n ]
       (Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:(-2.) ~stride:0.5)
   in
   let ha =
-    Ll_test.operand ~b:[]
-      ~o:(Array.to_list [| n; n |])
-      ~i:[]
+    Ll_test.operand ~b:[] ~o:[ n ] ~i:[ n ]
       (Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:0. ~stride:0.125)
   in
   let hb =
-    Ll_test.operand ~b:[]
-      ~o:(Array.to_list [| n; n |])
-      ~i:[]
+    Ll_test.operand ~b:[] ~o:[ n ] ~i:[ n ]
       (Ll_test.cycle ~dims:[| n; n |] ~modulus:7 ~offset:(-3.) ~stride:0.25)
   in
   p_all "packed bf16 operands have bf16-exact partial sums"

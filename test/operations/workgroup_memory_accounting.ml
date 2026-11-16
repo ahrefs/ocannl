@@ -76,7 +76,8 @@ let reduce_leg lanes =
   let name = Printf.sprintf "wmem_wred%d" lanes in
   (* Integer-valued terms: every partial sum is exact, whatever the association. *)
   let vv = Array.init lanes ~f:(fun k -> Float.of_int ((k * 7 % 13) - 4)) in
-  p_all "warp-reduce terms have f32-exact partial sums"
+  p_all
+    (name ^ ": warp-reduce terms have f32-exact partial sums")
     [ Array.to_list vv ]
     ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   let v = TDSL.ndarray vv ~label:[ name ^ "_v" ] ~output_dims:[ lanes ] () in

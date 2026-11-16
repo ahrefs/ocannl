@@ -130,15 +130,11 @@ let n = 64
    for why the cycles are shaped this way, and the header above for this pair's own arithmetic
    (products are multiples of 15/128, mean ~0.23). *)
 let fa =
-  Ll_test.operand ~b:[]
-    ~o:(Array.to_list [| n; n |])
-    ~i:[]
+  Ll_test.operand ~b:[] ~o:[ n ] ~i:[ n ]
     (Ll_test.cycle ~dims:[| n; n |] ~modulus:3 ~offset:1. ~stride:0.375)
 
 let fb =
-  Ll_test.operand ~b:[]
-    ~o:(Array.to_list [| n; n |])
-    ~i:[]
+  Ll_test.operand ~b:[] ~o:[ n ] ~i:[ n ]
     (Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:(-1.5) ~stride:0.625)
 
 let fp8_fixture =

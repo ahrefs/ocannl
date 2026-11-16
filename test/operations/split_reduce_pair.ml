@@ -152,7 +152,8 @@ let bias_grad ~label ~table =
     let wv = if table then w_values.((r % ns * no) + o) else 1. in
     dy_values.((r * no) + o) *. wv
   in
-  p_all "bias gradient terms have f32-exact partial sums"
+  p_all
+    (label ^ ": bias gradient terms have f32-exact partial sums")
     (List.init no ~f:(fun o -> List.init (nb * ns) ~f:(term o)))
     ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   (* Exact in f64 and in f32 alike: every partial sum is a multiple of 1/256 below 2^11. *)
@@ -242,24 +243,16 @@ let () =
   let%op d = w +* "jhe;bshe=>bsj" a in
   Train.set_materialized d.Tensor.value;
   let comp = named "srp_he" (Train.forward d) in
-  p_all "out-projection terms have f32-exact partial sums"
-    (Ll_test.reduction_cells
-       ~out:[| cb * cs; cj |]
-       ~over:[| ch * ce |]
-       (fun o r -> w_values.((o.(1) * ch * ce) + r.(0)) *. a_values.((o.(0) * ch * ce) + r.(0))))
-    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
-  (* Products of two multiples of 1/16 summed 256 at a time: multiples of 1/256 below 2^8. *)
-  let exact =
-    Array.init
-      (cb * cs * cj)
-      ~f:(fun c ->
-        let bs = c / cj and j = c % cj in
-        let acc = ref 0. in
-        for he = 0 to (ch * ce) - 1 do
-          acc := !acc +. (w_values.((j * ch * ce) + he) *. a_values.((bs * ch * ce) + he))
-        done;
-        !acc)
+  let cells =
+    Ll_test.reduction_cells
+      ~out:[| cb * cs; cj |]
+      ~over:[| ch * ce |]
+      (fun o r -> w_values.((o.(1) * ch * ce) + r.(0)) *. a_values.((o.(0) * ch * ce) + r.(0)))
   in
+  p_all "out-projection terms have f32-exact partial sums" cells
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
+  (* The reference sums precisely the cells whose premise is checked above. *)
+  let exact = Array.of_list (List.map cells ~f:(List.fold ~init:0. ~f:( +. ))) in
   let opt = capture comp in
   match site_of (Autotune.split_reduce_sites opt) d.Tensor.value with
   | None -> p "the two-axis contraction is a split-reduce site" false
