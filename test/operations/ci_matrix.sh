@@ -8,6 +8,9 @@
 # Boundary: read the current workflow expression/step dialect and tracked train
 # aggregates; unsupported syntax fails closed. Execute only extracted step bodies
 # with hermetic fixtures, not arbitrary YAML or commands hidden in actions/scripts.
+# Step-order trace protection reads direct one-line dune commands only, including
+# commands after the target build in its own step. Calls into scripts/actions
+# (even scripts known to call dune) are outside this check; their bodies are not read.
 # Named legs are independent; shared readers/setup run before each selected leg.
 # ocannl-harness: standalone
 # Usage: test/operations/ci_matrix.sh [--only REGEX|--list-legs|--keep|--help]
@@ -446,6 +449,27 @@ def main_config_order(text):
             assert not configured(step), 'OCANNL configuration dune step precedes shard build'
 
 
+
+def shard_trace_order(text):
+    steps = workflow_steps(text, 'run')
+    build = shard_build(steps)
+    weighing = [i for i, step in enumerate(steps) if re.search(
+        r"^ +(?:- )?name: Weigh the shard's units *$", step, re.M)]
+    assert len(weighing) == 1, 'shard weighing step missing or repeated'
+    weigh, = weighing
+    assert build < weigh, 'shard weighing must follow shard build'
+    commands = dune_commands(steps[build])
+    targets = [i for i, command in enumerate(commands)
+               if command[:2] == ['dune', 'build'] and '$targets' in command]
+    assert len(targets) == 1, 'shard target build command missing or repeated'
+    target, = targets
+    reason = ('dune command overwrites shard trace before weighing '
+              '(direct one-line commands only; script/action bodies are not inspected)')
+    assert not commands[target + 1:], reason
+    # Include the weighing step itself: dune there can clobber its input too.
+    assert not any(dune_commands(step) for step in steps[build + 1:weigh + 1]), reason
+
+
 def env_release_order(text):
     steps = workflow_steps(text, 'clean-room')
     for step in steps[package_build(steps) + 1:]:
@@ -685,6 +709,8 @@ elif leg == 'workflow-readers':
 elif leg == 'step-order':
 
     main_config_order(source)
+    shard_trace_order(source)
+    print('PASS shard trace survives direct dune commands until weighing (script/action bodies not inspected)')
     env_release_order(env_source)
     print('PASS OCANNL configuration dune steps follow the shard build')
     print('PASS ci-env dune steps after the package build use --release')
@@ -697,6 +723,51 @@ elif leg == 'step-order':
         mutant = source.replace(step, '', 1).replace(shard, step + shard, 1)
         rejects_order(main_config_order, mutant, 'configured step moved before shard build',
                       'configuration dune step precedes shard build')
+    weigh = steps[next(i for i, step in enumerate(steps) if
+                       re.search(r"^ +(?:- )?name: Weigh the shard's units *$", step, re.M))]
+    trace_reason = 'dune command overwrites shard trace before weighing'
+    print('PASS refusal reason:', trace_reason,
+          '(direct one-line commands only; script/action bodies are not inspected)')
+    for step in configured_steps:
+        mutant = source.replace(step, '', 1).replace(weigh, step + weigh, 1)
+        rejects_order(shard_trace_order, mutant, 'dune step moved between shard build and weighing',
+                      trace_reason)
+    for label, extra in (
+        ('inline dune between build and weighing', '    - run: dune build @check\n'),
+        ('block dune between build and weighing',
+         '    - run: |\n        opam exec -- dune build @check\n'),
+    ):
+        rejects_order(shard_trace_order, source.replace(weigh, extra + weigh, 1), label,
+                      trace_reason)
+    # Same-step commands and weighing-step commands share the trace hazard.
+    build_line, = [line for line in shard.splitlines(keepends=True)
+                   if 'dune build $targets' in line]
+    for suffix in ('\n        dune build @check', ' && dune build @check'):
+        mutant = source.replace(build_line, build_line.rstrip('\n') + suffix + '\n', 1)
+        rejects_order(shard_trace_order, mutant, 'dune after targets in shard step', trace_reason)
+    mutant = source.replace(weigh, weigh.replace('      run: |\n',
+                            '      run: |\n        dune build @check\n', 1), 1)
+    rejects_order(shard_trace_order, mutant, 'dune in weighing step', trace_reason)
+    for label, mutant, reason in (
+        ('missing target build command', source.replace('dune build $targets', 'dune build @check', 1),
+         'shard target build command missing or repeated'),
+        ('repeated target build command', source.replace(build_line, build_line + build_line, 1),
+         'shard target build command missing or repeated'),
+        ('missing weigh step', source.replace(weigh, '', 1), 'weighing step missing or repeated'),
+        ('repeated weigh step', source.replace(weigh, weigh + weigh, 1), 'weighing step missing or repeated'),
+        ('weigh before build', source.replace(weigh, '', 1).replace(shard, weigh + shard, 1),
+         'weighing must follow shard build'),
+    ):
+        rejects_order(shard_trace_order, mutant, label, reason)
+    for harmless in ('    - run: echo dune build is done\n',
+                     '    - run: echo "trace ready"\n'):
+        shard_trace_order(source.replace(weigh, harmless + weigh, 1))
+    print('PASS non-dune steps may separate shard build and weighing')
+    # A known dune-calling script is still outside dune_commands' direct-command
+    # boundary. Pin that limit rather than imply transitive script inspection.
+    shard_trace_order(source.replace(weigh,
+        '    - run: tools/test-typecheck-scan-cases.sh --only "#project"\n' + weigh, 1))
+    print('PASS script calls remain outside direct-command trace protection')
     # Also exercise run-line configuration through both supported scalar forms.
     for label, early in (
         ('inline configured dune before shard build',
