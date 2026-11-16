@@ -37,6 +37,14 @@ let%op internal_mismatch () x = x + ({ c3 = 0.; o = [ 3 ] } + { c4 = 0.; o = [ 4
 (* A residual connection around a hidden layer of fixed width. *)
 let%op residual4 () x = x + relu (({ w; o = [ 4 ] } * x) + { b = 0.; o = [ 4 ] })
 
+(* A valid 3x3 convolution cannot residual-add its 6x10 output to an 8x12 input. *)
+let valid3_residual () =
+  let c =
+    Ocannl.Nn_blocks.conv2d ~label:[ "valid3" ] ~kernel_size:3 ~use_padding:false ~out_channels:3 ()
+  in
+  let%op residual x = c x + x in
+  residual
+
 (* A spec that needs exactly two output axes. *)
 let%op two_axes () x = x ++ "...|ab => ...|a"
 
@@ -134,6 +142,8 @@ let catalogue wrap =
     unit_case "bias of the wrong width" "arg" bias5 x23;
     unit_case "contradicting parameters" "int" internal_mismatch x23;
     unit_case "residual around a wider layer" "arg" residual4 x23;
+    unit_case "valid 3x3 convolution residual" "arg" valid3_residual (fun () ->
+        leaf ~batch:[ 2 ] ~output:[ 8; 12; 3 ] "x");
     unit_case "too few axes for the spec" "arg" two_axes x23;
     unit_case "dimension and row variable share a name" "int" name_clash x23;
     unit_case "empty concatenation component" "int" concat_empty x23;

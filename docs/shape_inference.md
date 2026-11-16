@@ -596,6 +596,7 @@ A whole-stack trace costs less than one build of the same model, and the fractio
 | bias of the wrong width | yes | application (body) | application (scheme) |
 | contradicting parameters | no | application (body) | definition |
 | residual around a wider layer | yes | application (body) | application (scheme) |
+| valid 3x3 convolution residual | yes | closure | application (scheme) |
 | too few axes for the spec | yes | application (body) | application (scheme) |
 | dimension and row variable share a name | no | application (body) | definition |
 | empty concatenation component | no | application (body) | definition |
@@ -620,9 +621,12 @@ Numeric `Shape.set_dim` claims keep their basis pending while Stage 1 lacks one
 constraint store (gh-ocannl-2204). Disjoint size intervals refuse without solving variables or
 choosing tags: a captured concatenation component larger than its known axis is refused at the
 scheme application, and a fixed-width contradiction at the definition. Inline registration still
-leaves the concatenation's argument extent to closure. The invalid valid-3x3 convolution residual
-in `scheme_strided_residual.ml` also stays at closure: its held kernel sizes are known, but its
-extent variables are not yet numerically fixed. Checking held sizes does not close those variables.
+leaves the concatenation's argument extent to closure. Exact numeric sizes propagate through
+equalities and backward through affine window extents in a local map, without changing the solver
+environment. The valid-3x3 convolution residual in `scheme_strided_residual.ml` is refused at
+the checked application: its 8x12 argument and held kernel size 3 determine output extents 6x10, neither of
+which can broadcast back to the input. Its generic trace still keeps the extents open; the numeric
+check does not close them or choose their tags.
 
 The classes that stay late all need what a trace deliberately does not run, namely the closing stages. The trace validates at Stage 1 only, because the closing stages would default the generic arguments.
 

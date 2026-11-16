@@ -250,15 +250,19 @@ files.
   Unknown axes range from zero upward; an inequality whose operand can still be the size-1
   broadcast top stays possible. `scheme_error_locality` pins the concatenation's scheme refusal
   at application and the fixed-width size claim at definition. `concat_extraction` pins the existing
-  excess-component diagnosis too, with origins capped at zero as well as the default cap. The invalid valid-3x3 residual in
-  `scheme_strided_residual.ml` still forces its dims: the extents remain variables at registration,
-  so held-size comparisons alone do not expose that contradiction before closure.
+  excess-component diagnosis too, with origins capped at zero as well as the default cap.
+  The numeric check propagates exact sizes in a local map, forward through equalities and backward
+  through an affine's `over`; a dependency-indexed worklist retries only affected relations, and
+  each variable acquires a number once. These facts never enter the solver environment or choose
+  a basis. The valid-3x3 residual's trace has open extents, but its checked application supplies 8 and 12:
+  the known kernel size 3 determines 6 and 10, neither the broadcast top, so application refuses
+  before forcing dims (`scheme_strided_residual.ml`, also in `scheme_error_locality`).
   A discarded size probe is not a refusal oracle: the open store `n = conv(o, k)`, `n` refining
   `o`, and held `k = 3` has the later solution `o = 1_(bcast_if_1)`, `n = 3_default`.
   Substituting `k = 3_default` in a probe before those extents arrive instead raises the occurs
   check. Discarding the probe's state does not make its premature refusal sound (gh-ocannl-2204
   review counterexample, recorded on staging#2033). Numeric bound checks walk only the
-  dimensions reachable from held sizes, through GLBs and both bound-edge directions.
+  dimensions reachable from held or newly learned sizes, through GLBs and both bound-edge directions.
   The symbolic analog did not reproduce: `Shape.set_sym_dim` and every other `Shape` constructor
   mint only `default` symbols. Recapture across closure and the product-space proxy both preserve
   these. `Row.get_sym_dim ~basis` can build a named symbol in a hand-built solver store, but no

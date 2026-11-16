@@ -2,6 +2,7 @@ case | depends | off | check
 bias of the wrong width | arg | application:body | application:scheme
 contradicting parameters | int | application:body | definition:trace
 residual around a wider layer | arg | application:body | application:scheme
+valid 3x3 convolution residual | arg | closure | application:scheme
 too few axes for the spec | arg | application:body | application:scheme
 dimension and row variable share a name | int | application:body | definition:trace
 empty concatenation component | int | application:body | definition:trace
@@ -19,6 +20,7 @@ nested case | depends | check | re-checked | under an opted-out function
 bias of the wrong width | arg | application:scheme | application:scheme | application:scheme
 contradicting parameters | int | definition:trace | definition:trace | definition:trace
 residual around a wider layer | arg | application:scheme | application:scheme | application:scheme
+valid 3x3 convolution residual | arg | application:scheme | application:scheme | application:scheme
 too few axes for the spec | arg | application:scheme | application:scheme | application:scheme
 dimension and row variable share a name | int | definition:trace | definition:trace | definition:trace
 empty concatenation component | int | definition:trace | definition:trace | definition:trace
