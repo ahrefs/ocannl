@@ -65,6 +65,7 @@ tune_placements, recording a decision: nothing the call minted is left: true
 tune_placements, replaying it: what it returned computes: true
 tune_placements, replaying it: the caller's context still works: true
 tune_placements, replaying it: nothing the call minted is left: true
+the recorded and replayed decision is arm B: true
 the second call replayed a search: true
 tune_placements, on_ship: the caller sees the fault: true
 tune_placements, on_ship: the caller's context still works: true
