@@ -2,9 +2,11 @@ the operands, the reversed source and the slice parent are read; nothing else is
 a constant fetch's target, written then read, stays a read: true
 no destination is a read: true
 a merge buffer is not a read of its node: true
-the value reads are the materialization guess's read term plus the slice parent: true
+the mentions are all named nodes, merge buffer aside: true
 an unread slice parent is materialized with its view: true
+a slice mentions its parent and view: true
 a slice parent read later in the sequence leaves the materialization set: true
+the sequence mentions its slice, parent and destination: true
 while the value reads keep it: true
 one slice aliases its parent and the other copies it: true
 each slice's forward code reads the parent: true

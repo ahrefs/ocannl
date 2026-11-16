@@ -13037,6 +13037,15 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ (name slice_materialization_order)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules slice_materialization_order)
+ (libraries base ocannl arrayjit.verdict ll_test))
+
 ; gh-ocannl-1004: what Test_scan.Slot_kind says a dune argv reaches -- the half of the fleet slot's
 ; --cpu/--gpu decision that reads the backend markers -- on fixture trees built to separate the
 ; cases: per-test and aggregate aliases, @ and @@, runtest directories, compilation products, the

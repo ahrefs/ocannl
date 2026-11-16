@@ -283,15 +283,18 @@ files.
   API. A consumer ordering fragments, refusing a pending owner or finding read seeds uses
   `collect_value_reads`; one wanting every mentioned node (autotune's `program_nodes`, the splice's
   `mentioned`, `frontend_gate`, parameter program order) uses `collect_mentioned`, the union of
-  value reads and writes, merge buffers aside. An executed slice ordering needs the slice and its
-  parent materialized and the slice forced to copy (`Ll_test.materialize_copying_slice` with a
-  different `copy_prec` sets up both), else the copy inlines into its reader and masks the misorder.
+  value reads and writes, merge buffers aside. For ordinary slice-ordering fixtures, explicitly
+  materializing the slice and its parent and forcing a copy (`Ll_test.materialize_copying_slice`
+  with a different `copy_prec` sets up both) prevents inlining from masking a misorder. A precision
+  mismatch alone can leave the copy inlined into its later consumer.
   `forward_fragment_order` and `consume_forward_code_reason` pin the two behaviours,
-  `value_reads_query` the contract. The p1 negative control swapped just the slice reader and
-  parent-owner fragments in `forward_fragment_order`: with the helper its value claim failed
-  (mac-studio cc, `20261116T102549Z-67965`); retaining the precision mismatch but removing the
-  helper's materialization passed (`20261116T102629Z-81927`). Both records are under
-  `~/.ocannl-test-runs/`; the passing control demonstrates why forcing a copy alone is insufficient.
+  `value_reads_query` the query contract. The helper consolidates the existing setup in
+  `forward_fragment_order`; `build_order_programs`' initializer slices are parameters, which
+  already have `On_device` intent. Both existing cases reject a swapped order even without the
+  helper. `slice_materialization_order` uses ordinary, otherwise unmaterialized slices to pin the
+  missing distinction: swapping its producer and reader fails with the helper, but retaining the
+  precision mismatch alone allows inlining to mask the misorder. See
+  [the p1 PR](https://github.com/lukstafi/ocannl-staging/pull/2038) for control runs.
 
 - `Tensor.ndarray`, `TDSL.ndarray`, `NTDSL.ndarray` and `Tensor.term_init` accept `?prec` at
   construction (gh-ocannl-2173). Above `limit_constant_fill_size` the host array must be allocated
