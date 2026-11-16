@@ -2640,7 +2640,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   BOUNDED model of what runs, stated once in `verdict_scan.ml`'s skip-list header (*The model*):
   a function value or `lazy` is deferred unless a collection function calls it back, and a
   construct outside the model is read conservatively -- no skip list, an uncompared leg -- never
-  refused. Extending the model starts in that header.
+  refused. Extending the model starts in that header. Since gh-ocannl-1893 item 2 the model reads
+  DEFERRED SKIP VALUES where they run: a skip bound to a name of any spelling, a named skip wrapper
+  at a complete application (`let skip_both () = skipped "a"; skipped "b"` run in a branch is a
+  skip run), a stored partial iteration where its name completes it, a named `lazy` where it is
+  forced (once per branch), and a lazy sequence's callbacks where a consumer runs them; which
+  `Seq`/`Sequence` functions consume is the `consumes` column of `collection_functions`, the one
+  owner both readers ask.
   The item-1 migration of gh-ocannl-1893 removes the remaining exemptions. The cache-reuse
   claims in `cc_march_census` gate on the configured compiler's expanded compilation plan,
   classified before collecting the counters; an always-evaluated claim checks the plan's
@@ -2841,9 +2847,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `match`'s pick of a leg (its condition, scrutinee or guard a gate too) and a local function's body --
   and its population is what the claims its make function makes range over, and, on a path where
   none of those runs, everything the make function hands a helper. Both sides follow data thunks (`lazy`,
-  `Lazy.force`), the population side for `gated_*` claims too. A leg handed in as a parameter or
-  read from a field is the boundary, counted on stderr as uncompared, as a `gated_*` population
-  through a parameter is; a leg claim applied in part is refused as unread. Most of its mutation runs exit 4, not 1: the ratchet's trailing
+  `Lazy.force`), the population side for `gated_*` claims too. A leg or make function passed as a
+  parameter of a named function is resolved at that function's applications IN THE SAME SOURCE
+  (gh-ocannl-1893), one comparison per application chosen, so one call's gate never meets
+  another's population; a `gated_*` claim inside a named function is compared per application the
+  same way, and a make function given by name is read through its definition. A local function or
+  `lazy` a make function runs is its run code. What stays uncompared -- named site by site on the
+  ratchet's stderr -- is a leg read from a field or a destructured parameter, a function another
+  source applies, and a function handed on as a value; a leg claim applied in part is refused as
+  unread. Most of its mutation runs exit 4, not 1: the ratchet's trailing
   `OK:` row prints only on success (the manifest's gh-ocannl-1289 section says how they were
   read).
 - `verdict_ratchet`'s fifth reader is about a gate FOLDED INTO THE VALUE (gh-ocannl-1310):

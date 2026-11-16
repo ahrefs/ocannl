@@ -4775,12 +4775,292 @@ let gate_control_findings source =
   @ List.map census.Scan.uncompared_legs ~f:(fun (leg : Scan.unread_leg) ->
       "uncompared " ^ leg.leg_form)
 
+(* gh-ocannl-1893: a leg or a make function passed as a parameter is resolved at the applications of
+   its function in the source, one comparison per application; a make function given by name is read
+   through its definition; a local function or lazy a make function runs is its run code. Each row
+   also states how many claims were COMPARED -- leg claims plus [gated_*] claims, each site once,
+   whatever the number of call chains it is compared under -- so that a row expecting no finding
+   cannot pass by the claim going unread or uncompared. *)
+let leg_call_site_controls =
+  let helper =
+    {ocaml|open Verdict.Claims
+let check ~leg rows = in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)
+|ocaml}
+  in
+  [
+    ( "refuses a leg a helper is handed, gated by its caller on the population it hands in",
+      helper
+      ^ {ocaml|let () =
+  let rows = probe () in
+  check ~leg:(Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name ()) rows|ocaml},
+      [ "rows" ],
+      1 );
+    ( "accepts a leg a helper is handed, gated by its caller on an invariant",
+      helper
+      ^ {ocaml|let () = check ~leg:(Verdict.leg ~when_:on_gpu ~on:backend_name ()) (probe ())|ocaml},
+      [],
+      1 );
+    ( "refuses a positional leg parameter gated at its application",
+      {ocaml|open Verdict.Claims
+let check leg rows = in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)
+let () =
+  let rows = probe () in
+  check (Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name ()) rows|ocaml},
+      [ "rows" ],
+      1 );
+    ( "refuses an optional leg parameter one application supplies and another defaults",
+      {ocaml|open Verdict.Claims
+let default_leg = Verdict.leg ~when_:on_gpu ~on:backend_name ()
+let check ?(leg = default_leg) rows = in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)
+let () =
+  let rows = probe () in
+  check rows;
+  check ~leg:(Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name ()) rows|ocaml},
+      [ "rows" ],
+      1 );
+    ( "refuses a leg passed through two helpers",
+      helper
+      ^ {ocaml|let outer ~leg rows = check ~leg rows
+let () =
+  let rows = probe () in
+  outer ~leg:(Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name ()) rows|ocaml},
+      [ "rows" ],
+      1 );
+    ( "accepts a helper applied twice whose gates each read only the other call's rows",
+      helper
+      ^ {ocaml|let () =
+  let rows = probe () and others = probe () in
+  check ~leg:(Verdict.leg ~when_:(not (List.is_empty others)) ~on:backend_name ()) rows;
+  check ~leg:(Verdict.leg ~when_:on_gpu ~on:backend_name ()) others|ocaml},
+      [],
+      1 );
+    ( "refuses the one offending application of a helper applied twice",
+      helper
+      ^ {ocaml|let () =
+  let rows = probe () and others = probe () in
+  check ~leg:(Verdict.leg ~when_:on_gpu ~on:backend_name ()) others;
+  check ~leg:(Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name ()) rows|ocaml},
+      [ "rows" ],
+      1 );
+    ( "refuses a helper building its own leg from a gate its caller reads off the rows",
+      {ocaml|open Verdict.Claims
+let check ~when_ rows =
+  in_leg ~leg:(Verdict.leg ~when_ ~on:backend_name ()) "all rows pass" (fun label ->
+      p_all label rows ~f:Fn.id)
+let () =
+  let rows = probe () in
+  check ~when_:(not (List.is_empty rows)) rows|ocaml},
+      [ "rows" ],
+      1 );
+    ( "accepts a helper building its own leg, applied twice with each gate reading the other's rows",
+      {ocaml|open Verdict.Claims
+let check ~when_ rows =
+  in_leg ~leg:(Verdict.leg ~when_ ~on:backend_name ()) "all rows pass" (fun label ->
+      p_all label rows ~f:Fn.id)
+let () =
+  let rows = probe () and others = probe () in
+  check ~when_:(not (List.is_empty others)) rows;
+  check ~when_:true others|ocaml},
+      [],
+      1 );
+    ( "accepts a forwarding helper applied twice with each gate reading the other's rows",
+      {ocaml|open Verdict.Claims
+let check ~when_ rows =
+  in_leg ~leg:(Verdict.leg ~when_ ~on:backend_name ()) "all rows pass" (fun label ->
+      p_all label rows ~f:Fn.id)
+let outer ~when_ rows = check ~when_ rows
+let () =
+  let rows = probe () and others = probe () in
+  outer ~when_:(not (List.is_empty others)) rows;
+  outer ~when_:true others|ocaml},
+      [],
+      1 );
+    ( "names a leg uncompared whose helper is also handed on as a value",
+      helper
+      ^ {ocaml|let () =
+  check ~leg:(Verdict.leg ~when_:on_gpu ~on:backend_name ()) (probe ());
+  run_all [ check ]|ocaml},
+      [ "uncompared in_leg" ],
+      0 );
+    ( "terminates on a helper that passes its leg back to itself",
+      {ocaml|open Verdict.Claims
+let rec check ~leg n rows =
+  if n > 0 then (
+    in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id);
+    check ~leg (n - 1) rows)
+let () =
+  let rows = probe () in
+  check ~leg:(Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name ()) 2 rows|ocaml},
+      [ "rows" ],
+      1 );
+    ( "refuses a make function given by name whose population the leg's gate reads",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name () in
+  let make label = p_all label rows ~f:Fn.id in
+  in_leg ~leg "all rows pass" make|ocaml},
+      [ "rows" ],
+      1 );
+    ( "accepts a make function given by name under an invariant gate",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg = Verdict.leg ~when_:on_gpu ~on:backend_name () in
+  let make label = p_all label rows ~f:Fn.id in
+  in_leg ~leg "all rows pass" make|ocaml},
+      [],
+      1 );
+    ( "refuses a make function given by name whose nested leg claims the gated population",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let always = Verdict.leg ~when_:true ~on:backend_name () in
+  let leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name () in
+  let make label = in_leg ~leg:always label (fun l -> p_all l rows ~f:Fn.id) in
+  in_leg ~leg "all rows pass" make|ocaml},
+      [ "rows" ],
+      2 );
+    ( "refuses a nested leg's make function given by name inside a replayed make function",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let always = Verdict.leg ~when_:true ~on:backend_name () in
+  let leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name () in
+  let inner l = p_all l rows ~f:Fn.id in
+  let outer l = in_leg ~leg:always l inner in
+  in_leg ~leg "all rows pass" outer|ocaml},
+      [ "rows" ],
+      2 );
+    ( "names a leg uncompared past the bound on the choices of applications it passes through",
+      {ocaml|open Verdict.Claims
+let f0 ~leg = in_leg ~leg "all rows pass" (fun label -> p label true)
+let f1 ~leg = f0 ~leg; f0 ~leg
+let f2 ~leg = f1 ~leg; f1 ~leg
+let f3 ~leg = f2 ~leg; f2 ~leg
+let f4 ~leg = f3 ~leg; f3 ~leg
+let f5 ~leg = f4 ~leg; f4 ~leg
+let f6 ~leg = f5 ~leg; f5 ~leg
+let f7 ~leg = f6 ~leg; f6 ~leg
+let f8 ~leg = f7 ~leg; f7 ~leg
+let f9 ~leg = f8 ~leg; f8 ~leg
+let () = f9 ~leg:(Verdict.leg ~when_:on_gpu ~on:backend_name ())|ocaml},
+      [ "uncompared in_leg" ],
+      0 );
+    ( "refuses a make function a helper is handed, whose population its caller's gate reads",
+      {ocaml|open Verdict.Claims
+let claims ~leg make = in_leg ~leg "all rows pass" make
+let () =
+  let rows = probe () in
+  claims
+    ~leg:(Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name ())
+    (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      [ "rows" ],
+      1 );
+    ( "refuses a make function whose local function it applies claims the gated population",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name () in
+  in_leg ~leg "all rows pass" (fun label ->
+      let check () = p_all label rows ~f:Fn.id in
+      check ())|ocaml},
+      [ "rows" ],
+      1 );
+    ( "refuses a make function whose local function is handed the gated population",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name () in
+  in_leg ~leg "all rows pass" (fun label ->
+      let check xs = p_all label xs ~f:Fn.id in
+      check rows)|ocaml},
+      [ "rows" ],
+      1 );
+    ( "refuses a make function whose function-case local helper claims the gated population",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name () in
+  in_leg ~leg "all rows pass" (fun label ->
+      let check = function () -> p_all label rows ~f:Fn.id in
+      check ())|ocaml},
+      [ "rows" ],
+      1 );
+    ( "refuses a make function whose function-case local helper is handed the gated population",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name () in
+  in_leg ~leg "all rows pass" (fun label ->
+      let check = function xs -> p_all label xs ~f:Fn.id in
+      check rows)|ocaml},
+      [ "rows" ],
+      1 );
+    ( "refuses a make function whose local lazy it forces claims the gated population",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name () in
+  in_leg ~leg "all rows pass" (fun label ->
+      let verdict = lazy (p_all label rows ~f:Fn.id) in
+      Lazy.force verdict)|ocaml},
+      [ "rows" ],
+      1 );
+    ( "accepts a make function that never runs its local function claiming the population",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name () in
+  in_leg ~leg "all rows pass" (fun label ->
+      let check () = p_all label rows ~f:Fn.id in
+      ignore check;
+      p label true)|ocaml},
+      [],
+      1 );
+    ( "refuses a gated wrapper whose caller's gate reads the population it hands in",
+      {ocaml|let check ~when_ label rows = Verdict.gated_all ~when_ ~on:"cc" label rows ~f:Fn.id
+let () =
+  let rows = probe () in
+  check ~when_:(not (List.is_empty rows)) "all rows pass" rows|ocaml},
+      [ "rows" ],
+      1 );
+    ( "accepts a gated wrapper taking apart a tuple its caller hands in",
+      {ocaml|let check ~when_ pair =
+  Verdict.gated_all ~when_ ~on:"cc" "rows pass" (match pair with _, xs -> xs) ~f:Fn.id
+let () = check ~when_:on_gpu (on_gpu, rows)|ocaml},
+      [],
+      1 );
+    ( "accepts a gated wrapper applied twice whose gates each read only the other call's rows",
+      {ocaml|let check ~when_ label rows = Verdict.gated_all ~when_ ~on:"cc" label rows ~f:Fn.id
+let () =
+  let rows = probe () and others = probe () in
+  check ~when_:(not (List.is_empty others)) "these rows pass" rows;
+  check ~when_:true "those rows pass" others|ocaml},
+      [],
+      1 );
+  ]
+
 let run_gate_population_controls () =
   List.map gate_population_controls ~f:(fun (label, source, expected) ->
       let found = gate_control_findings source in
       let ok = List.equal String.equal found expected in
       if not ok then
         eprintf "gate-population control %S expected [%s], found [%s]\n" label
+          (String.concat ~sep:"; " expected)
+          (String.concat ~sep:"; " found);
+      (label, ok))
+  @ List.map leg_call_site_controls ~f:(fun (label, source, expected, compared) ->
+      let found =
+        gate_control_findings source
+        @
+        let census = Scan.gate_census source in
+        [ Printf.sprintf "%d compared" (census.Scan.leg_sites + census.Scan.gated_sites) ]
+      in
+      let expected = expected @ [ Printf.sprintf "%d compared" compared ] in
+      let ok = List.equal String.equal found expected in
+      if not ok then
+        eprintf "leg call-site control %S expected [%s], found [%s]\n" label
           (String.concat ~sep:"; " expected)
           (String.concat ~sep:"; " found);
       (label, ok))
@@ -5978,7 +6258,8 @@ let () =
   let gate_offenders = ref 0
   and gated_sites = ref 0
   and leg_sites = ref 0
-  and uncompared_legs = ref 0 in
+  and uncompared_legs = ref 0
+  and uncompared_sites = ref [] in
   let folded_offenders = ref 0 and folded_claim_sites = ref 0 in
   let skip_list_offenders = ref 0 and skips_read = ref 0 in
   let skip_list_exemptions =
@@ -6054,6 +6335,10 @@ let () =
           refuse_unlisted_gate ~fail ~source call);
       leg_sites := !leg_sites + gates.Scan.leg_sites;
       uncompared_legs := !uncompared_legs + List.length gates.Scan.uncompared_legs;
+      List.iter gates.Scan.uncompared_legs ~f:(fun (leg : Scan.unread_leg) ->
+          uncompared_sites :=
+            Printf.sprintf "  %s:%d %s: %s" source leg.leg_line leg.leg_form leg.why
+            :: !uncompared_sites);
       List.iter gates.Scan.unread_legs ~f:(fun leg ->
           Int.incr gate_offenders;
           refuse_unread_leg ~fail ~source leg);
@@ -6250,8 +6535,10 @@ let () =
   eprintf "Gated quantified claims whose gate and population were compared: %d.\n" !gated_sites;
   eprintf
     "Leg claims whose gates and population were compared: %d; whose leg or make function the \
-     reader could not follow (a parameter, a field, a make function given by name): %d.\n"
+     reader could not follow (a field, a function another source applies, a value handed on): %d.\n"
     !leg_sites !uncompared_legs;
+  (* Each one named (gh-ocannl-1893): the boundary the reader stops at, site by site. *)
+  List.iter (List.rev !uncompared_sites) ~f:(eprintf "%s\n");
   eprintf "Verdict claim labels read for line breaks: %d.\n" !label_sites;
   eprintf "Verdict claim values read for a folded gate: %d.\n" !folded_claim_sites;
   eprintf "Skips read for a hand-written skip list: %d.\n" !skips_read;

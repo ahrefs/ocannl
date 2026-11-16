@@ -31,6 +31,8 @@ val label : string
     spell qualified, the leg claim, and the names their gates, labels and populations read. *)
 module List : sig
   val iter : 'a list -> f:('a -> unit) -> unit
+  val iteri : 'a list -> f:(int -> 'a -> unit) -> unit
+  val map : 'a list -> f:('a -> 'b) -> 'b list
   val filter_map : 'a list -> f:('a -> 'b option) -> 'b list
   val singleton : 'a -> 'a list
   val length : 'a list -> int
@@ -43,6 +45,13 @@ end
 
 module Option : sig
   val iter : 'a option -> f:('a -> unit) -> unit
+end
+
+(** [Base]'s lazy sequence, at the least types the gh-ocannl-1893 consumer arms need: a consumer
+    ([count]) and a transformation that only builds ([filter]). *)
+module Sequence : sig
+  val count : 'a list -> f:('a -> bool) -> int
+  val filter : 'a list -> f:('a -> bool) -> 'a list
 end
 
 module Verdict : sig

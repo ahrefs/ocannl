@@ -885,6 +885,72 @@ The skip-list reader's cases are `verdict_scan_cases`' skip-list rows, run under
 | A lazy in a branch is deferred, as in a callback (PR review round 7) | `verdict_scan.ml`: branch counting reads lazies as run | a lazy a branch only builds | `20261102T222153Z-22786` |
 | An Option iteration runs at most once | `verdict_scan.ml`: Option read as a collection iteration | an Option iteration, which runs at most once | `20261102T202018Z-64542` |
 
+## gh-ocannl-1893 mutation runs
+
+The leg reader resolves a leg or a make function passed as a parameter at the applications of its
+function in the source, one comparison per application; follows a make function given by name to
+its definition; runs a local function or lazy a make function applies or forces; and compares a
+`gated_*` claim inside a named function once per application. Each leg call-site row also states how
+many leg claims were compared. Every run used tools/mutation-run.sh --batch on
+`test/support/verdict_scan.ml` with the focused alias, on a green baseline (`20261116T163843Z-9021`), and
+restored the source byte for byte.
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| A leg parameter is its applications' arguments | `verdict_scan.ml`: a parameter on a leg's way stays unresolved | Failed: `refuses a leg a helper is handed, gated by its caller on the population it hands in`; `accepts a leg a helper is handed, gated by its caller on an invariant`; `refuses a positional leg parameter gated at its application`; `refuses an optional leg parameter one application supplies and another defaults`; `refuses a leg passed through two helpers`; `refuses the one offending application of a helper applied twice`; `refuses a make function a helper is handed, whose population its caller's gate reads`; and the other leg call-site rows whose leg is a parameter, each then uncompared, among them terminates on a helper that passes its leg back to itself | `20261116T163901Z-25677` |
+| Each resolution is compared under its own applications | `verdict_scan.ml`: every resolution compared with no application chosen | Failed: `accepts a helper applied twice whose gates each read only the other call's rows` | `20261116T164023Z-82525` |
+| A claim is compared under each chain of applications reaching its enclosing function (local review round 2) | `verdict_scan.ml`: a leg comparison seeded with no chain | Failed: `accepts a helper building its own leg, applied twice with each gate reading the other's rows` | `20261116T174324Z-62202` (baseline `20261116T174306Z-50256`; the forwarding row's control fails too) |
+| A leg a helper builds from its own parameter reads its callers' arguments (local review round 2) | `verdict_scan.ml`: a parameter's arguments not followed | Failed: `refuses a helper building its own leg from a gate its caller reads off the rows`, with the rows of the parameter-following mutation above | `20261116T174506Z-33517` |
+| A chain follows a forwarded parameter up through its callers (local review round 2) | `verdict_scan.ml`: a chain stops at the first application | Failed: `accepts a forwarding helper applied twice with each gate reading the other's rows` | `20261116T174407Z-97506` |
+| A leg claim nested in a replayed make function keeps the collectors (PR review round 2) | `verdict_scan.ml`: the collectors pause in a nested leg's make function during a replay | Failed: `refuses a make function given by name whose nested leg claims the gated population` | `20261116T185915Z-32806` (baseline `20261116T185855Z-20100`) |
+| A pattern takes apart the one argument a parameter is read under (PR review round 2) | `verdict_scan.ml`: a parameter's literal not followed | Failed: `accepts a gated wrapper taking apart a tuple its caller hands in` | `20261116T190011Z-62216` |
+| A nested leg's make function given by name is replayed with the collectors (PR review round 8) | `verdict_scan.ml`: only a nested make function written in place is live | Failed: `refuses a nested leg's make function given by name inside a replayed make function` | `20261116T205309Z-7897` (baseline `20261116T205252Z-99793`) |
+| A leg's resolutions are bounded (PR review round 8) | `verdict_scan.ml`: no bound on resolutions | Failed: `names a leg uncompared past the bound on the choices of applications it passes through` | `20261116T205350Z-20101` |
+| A function spelled other than as an applied callee is not resolved | `verdict_scan.ml`: no escape check | Failed: `names a leg uncompared whose helper is also handed on as a value` | `20261116T164108Z-27757` |
+| A leg passed back to its own function adds no gate | `verdict_scan.ml`: the cycle reads as unresolved | Failed: `terminates on a helper that passes its leg back to itself` | `20261116T164155Z-61920` |
+| A make function given by name is its definition | `verdict_scan.ml`: a named make function not followed through its `let` | Failed: `refuses a make function given by name whose population the leg's gate reads`; `accepts a make function given by name under an invariant gate` | `20261116T164239Z-94253` |
+| A make function passed as a parameter is its applications' arguments | `verdict_scan.ml`: a make parameter not resolved | Failed: refuses a make function a helper is handed, whose population its caller's gate reads | `20261116T164321Z-32077` |
+| A local function or lazy a make function runs is its run code | `verdict_scan.ml`: no deferred value replayed | Failed: `refuses a make function whose local function it applies claims the gated population`; `refuses a make function whose local lazy it forces claims the gated population` | `20261116T164405Z-96070` |
+| A local function a make function runs takes that application's arguments (local review) | `verdict_scan.ml`: the body replayed in its definition's scope | Failed: `refuses a make function whose local function is handed the gated population` | `20261116T172759Z-4719` (baseline `20261116T172738Z-91350`) |
+| A `function` local helper a make function applies is its run code (PR review round 5) | `verdict_scan.ml`: only a helper with a plain body is replayed | Failed: `refuses a make function whose function-case local helper claims the gated population` | `20261116T200035Z-68840` (baseline `20261116T200017Z-54758`) |
+| A `function` local helper's pattern takes apart the argument it is applied to (PR review round 6) | `verdict_scan.ml`: the cases replayed with the implicit argument unbound | Failed: `refuses a make function whose function-case local helper is handed the gated population` | `20261116T202220Z-43003` (baseline `20261116T202202Z-21771`) |
+| A deferred value a make function never runs makes no claim | `verdict_scan.ml`: the collectors run on inside deferred values | Failed: `accepts a make function that never runs its local function claiming the population`; refuses a helper's population gate beside a claim only a deferred function makes | `20261116T163942Z-55810` |
+| A parameter is followed into its applications' arguments on both sides | `verdict_scan.ml`: a parameter's arguments not followed | Failed: `refuses a gated wrapper whose caller's gate reads the population it hands in`; and the refusing leg call-site rows, whose populations then stop at the helper's parameter | `20261116T164452Z-48019` |
+| A gated claim in a named function is compared once per application | `verdict_scan.ml`: one comparison with no application chosen | Failed: `accepts a gated wrapper applied twice whose gates each read only the other call's rows`; and the corpus claim, `placement_store`'s gated claim in a helper applied twice then refused by one call's gate meeting another's population | `20261116T164534Z-89969` |
+
+The skip-list reader's deferred skip values are `verdict_scan_cases`' skip-list rows, run under the
+`runtest-verdict_scan_cases` alias (baseline `20261116T164653Z-78465`; the two sequence rows ran again after the
+cases' `Sequence` spelling changed, on baseline `20261116T170703Z-74375`):
+
+| Mechanism | Mutation | Cases that failed | Run |
+|---|---|---|---|
+| A skip bound to a name of any spelling is a skip | `verdict_scan.ml`: only a `skipped` binding is a skip | a skip alias of another name handed to an iteration | `20261116T164717Z-3577` |
+| A skip wrapper's application runs its skips | `verdict_scan.ml`: a wrapper's application runs nothing | a wrapper of two skips run in a branch; a wrapper of a wrapper run in a branch; a one-skip wrapper applied twice in a branch | `20261116T164741Z-27501` |
+| A skip wrapper handed to an iteration is a skip handed there | `verdict_scan.ml`: a wrapper's name skips nothing as a callback | a one-skip wrapper handed to an iteration | `20261116T164801Z-44497` |
+| A deferred value that evaluates a claim is no skip wrapper | `verdict_scan.ml`: its evaluating claims ignored | a wrapper that also evaluates a claim; a lazy that also evaluates a claim | `20261116T164826Z-65460` |
+| A wrapper handed as a callback runs only where the call saturates it (local review) | `verdict_scan.ml`: saturation not checked | a two-parameter wrapper a map only applies in part | `20261116T172923Z-58444` (baseline `20261116T172842Z-36394`) |
+| Only a complete application runs a wrapper | `verdict_scan.ml`: completeness not checked | a wrapper applied in part | `20261116T164846Z-84672` |
+| A stored partial iteration is completed where its name is applied | `verdict_scan.ml`: an application of the name read as written | a partial iteration stored and applied later; a stored partial iteration applied through a pipeline | `20261116T164906Z-3127` |
+| A forced lazy runs its skips | `verdict_scan.ml`: nothing forces | a lazy of two skips forced in a branch | `20261116T164925Z-21095` |
+| A lazy forced through a wrapper keeps its identity (local review) | `verdict_scan.ml`: a wrapper's skips lose the lazy they run through | a lazy forced twice through a wrapper, which runs once | `20261116T172902Z-46656` (baseline `20261116T172842Z-36394`) |
+| A lazy a wrapper allocates is a new cell per application (PR review round 2) | `verdict_scan.ml`: its identity outlives the application | a wrapper allocating its own lazy, applied twice in a branch | `20261116T190133Z-99295` (baseline `20261116T190107Z-45369`) |
+| A `force` the source binds is not the lazy force (PR review round 2) | `verdict_scan.ml`: every unqualified `force` forces | a parameter named force, which is not the lazy force | `20261116T190202Z-59572` |
+| A consumer consumes only its collection argument (PR review round 2) | `verdict_scan.ml`: every positional argument read as consumed | a lazy sequence a fold only carries as its accumulator | `20261116T190225Z-2112` |
+| A comparator takes two elements (PR review round 2) | `verdict_scan.ml`: a comparator read as taking one | a comparator wrapper a sort runs | `20261116T190251Z-54932` |
+| A named callback's skips are its whole body's, a `function`'s cases included (PR review round 3) | `verdict_scan.ml`: a named callback runs only what an application runs | a function-case wrapper handed to an iteration | `20261116T191905Z-74421` (baseline `20261116T191846Z-44485`) |
+| `Lazy.force` is the standard library's only through the source's module bindings (PR review round 3) | `verdict_scan.ml`: every path ending in `Lazy.force` forces | a source's own Lazy, whose force is no lazy force | `20261116T191812Z-8877` (baseline `20261116T191747Z-66249`) |
+| A sequence constructor's element is stored, not consumed (PR review round 4) | `verdict_scan.ml`: a constructor's element read as a sequence it is built from | a lazy sequence stored as another sequence's element | `20261116T194018Z-25610` (baseline `20261116T193959Z-16811`) |
+| A stored iteration complete in one library's order only still awaits its collection (PR review round 4) | `verdict_scan.ml`: completion stops at either order's arity | a stored Stdlib iteration completed later | `20261116T194039Z-37166` |
+| An application omitting an optional parameter runs its default (PR review round 5) | `verdict_scan.ml`: defaults not run | a wrapper whose omitted optional default skips | `20261116T200207Z-27025` (baseline `20261116T200140Z-7821`) |
+| A named callback runs a default only where the stored arguments omit its label (PR review round 6) | `verdict_scan.ml`: a callback's defaults run whatever it is handed | a callback whose skipping optional default the stored arguments supply | `20261116T202320Z-90683` (baseline `20261116T202301Z-70657`) |
+| A default's evaluating claims count only where the call omits it (PR review round 7) | `verdict_scan.ml`: a wrapper's defaults count toward its own evaluating claims | a wrapper whose evaluating default the stored arguments supply | `20261116T203712Z-17894` (baseline `20261116T203656Z-3191`) |
+| A literal `?label:None` runs the default (PR review round 8) | `verdict_scan.ml`: every `?label:` argument supplies it | a wrapper whose skipping default a literal None leaves to run | `20261116T205449Z-46687` (baseline `20261116T205431Z-34858`) |
+| A summary keeps at most the skip cap's skips (PR review round 9) | `verdict_scan.ml`: no cap | a doubling chain of wrappers, read up to the skip cap | `20261116T211220Z-10145` (baseline `20261116T211203Z-2409`) |
+| A lazy runs once per branch | `verdict_scan.ml`: every force runs it | a lazy forced twice in a branch, which runs once | `20261116T164945Z-43669` |
+| A consumer runs the callbacks of the lazy sequence it is handed | `verdict_scan.ml`: producers not carried to their consumer | a lazy sequence of skips a consumer runs; a lazy sequence of skips materialised | `20261116T165005Z-74800` |
+| Which sequence functions consume is the table's | `verdict_scan.ml`: `count` dropped from the consuming group | a sequence consumer the table marks consuming | `20261116T170730Z-96728` |
+| A sequence function that does not consume only builds | `verdict_scan.ml`: every sequence function runs its callback | a sequence transformation that only builds; a lazy sequence a map only builds | `20261116T170801Z-18157` |
+
 ## gh-ocannl-1470 mutation runs
 
 The tolerance reader now also reads every other Verdict claim's arguments (`helper_claim_callees`:

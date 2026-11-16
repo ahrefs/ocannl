@@ -698,6 +698,33 @@ accepts a leg gated on a capability over a population built from the same progra
 accepts a sub-leg gated on an invariant its claims' population does not decide: true
 names a leg handed in as a parameter uncompared rather than counting it read: true
 names a leg claim applied in part instead of counting it clean: true
+refuses a leg a helper is handed, gated by its caller on the population it hands in: true
+accepts a leg a helper is handed, gated by its caller on an invariant: true
+refuses a positional leg parameter gated at its application: true
+refuses an optional leg parameter one application supplies and another defaults: true
+refuses a leg passed through two helpers: true
+accepts a helper applied twice whose gates each read only the other call's rows: true
+refuses the one offending application of a helper applied twice: true
+refuses a helper building its own leg from a gate its caller reads off the rows: true
+accepts a helper building its own leg, applied twice with each gate reading the other's rows: true
+accepts a forwarding helper applied twice with each gate reading the other's rows: true
+names a leg uncompared whose helper is also handed on as a value: true
+terminates on a helper that passes its leg back to itself: true
+refuses a make function given by name whose population the leg's gate reads: true
+accepts a make function given by name under an invariant gate: true
+refuses a make function given by name whose nested leg claims the gated population: true
+refuses a nested leg's make function given by name inside a replayed make function: true
+names a leg uncompared past the bound on the choices of applications it passes through: true
+refuses a make function a helper is handed, whose population its caller's gate reads: true
+refuses a make function whose local function it applies claims the gated population: true
+refuses a make function whose local function is handed the gated population: true
+refuses a make function whose function-case local helper claims the gated population: true
+refuses a make function whose function-case local helper is handed the gated population: true
+refuses a make function whose local lazy it forces claims the gated population: true
+accepts a make function that never runs its local function claiming the population: true
+refuses a gated wrapper whose caller's gate reads the population it hands in: true
+accepts a gated wrapper taking apart a tuple its caller hands in: true
+accepts a gated wrapper applied twice whose gates each read only the other call's rows: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
 refuses a leg claim it cannot complete, a planted hand-written skip list, a skip-list reader that raised, and a stale exemption: true
 a claim reader's exception on a source that parses reaches the scanner-defect refusal, not the parse one: true

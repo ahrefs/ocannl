@@ -1,33 +1,39 @@
+direct ordinary: a second window goes unadmitted only on degenerate clock readings: true
 direct ordinary: completed search computes the reference: true
 direct ordinary: search completed: true
 direct ordinary: the pinned-fastest first admitted window wins: true
 direct ordinary: working pools return to their starting count: true
 direct ordinary: working bytes return to their starting count: true
 direct ordinary: every created context was explicitly released: true
+direct timed: a second window goes unadmitted only on degenerate clock readings: true
 direct timed: injected at the second admitted window, the first nonwinner: true
 direct timed: callback exception propagates: true
 direct timed: partial report retains the pinned incumbent: true
 direct timed: working pools return to their starting count: true
 direct timed: working bytes return to their starting count: true
 direct timed: every created context was explicitly released: true
+direct calibration: a second window goes unadmitted only on degenerate clock readings: true
 direct calibration: injected at the second admitted window, the first nonwinner: true
 direct calibration: callback exception propagates: true
 direct calibration: partial report retains the pinned incumbent: true
 direct calibration: working pools return to their starting count: true
 direct calibration: working bytes return to their starting count: true
 direct calibration: every created context was explicitly released: true
+scratch ordinary: a second window goes unadmitted only on degenerate clock readings: true
 scratch ordinary: completed search computes the reference: true
 scratch ordinary: search completed: true
 scratch ordinary: the pinned-fastest first admitted window wins: true
 scratch ordinary: working pools return to their starting count: true
 scratch ordinary: working bytes return to their starting count: true
 scratch ordinary: every created context was explicitly released: true
+scratch timed: a second window goes unadmitted only on degenerate clock readings: true
 scratch timed: injected at the second admitted window, the first nonwinner: true
 scratch timed: callback exception propagates: true
 scratch timed: partial report retains the pinned incumbent: true
 scratch timed: working pools return to their starting count: true
 scratch timed: working bytes return to their starting count: true
 scratch timed: every created context was explicitly released: true
+scratch calibration: a second window goes unadmitted only on degenerate clock readings: true
 scratch calibration: injected at the second admitted window, the first nonwinner: true
 scratch calibration: callback exception propagates: true
 scratch calibration: partial report retains the pinned incumbent: true
@@ -36,7 +42,7 @@ scratch calibration: working bytes return to their starting count: true
 scratch calibration: every created context was explicitly released: true
 forced refusal direct timed: the search records its refused windows and admitted only the first: true
 forced refusal direct timed: every refused window is counted as a degenerate clock reading: true
-forced refusal direct timed: the second-window claims' gate opens on that record: true
+forced refusal direct timed: the missing second window is put down to degenerate clock readings: true
 forced refusal direct timed: with no second admitted window, nothing was injected: true
 forced refusal direct timed: working pools return to their starting count: true
 forced refusal direct timed: working bytes return to their starting count: true

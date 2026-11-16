@@ -213,9 +213,9 @@ let () =
   | "leg_closed" -> leg_body (fixture_leg false)
   | "leg_sub_closed" ->
       leg_body
-        (Verdict.sub_leg (fixture_leg true)
-           ~when_:(lazy (List.is_empty seeds))
-           ~on:"a fixture capability")
+        (* The inner gate is a constant: one read off [seeds], the population the leg's claims range
+           over, is the self-gate the ratchet refuses (gh-ocannl-1893). *)
+        (Verdict.sub_leg (fixture_leg true) ~when_:(lazy false) ~on:"a fixture capability")
   | "leg_sub_outer_closed" ->
       leg_body
         (Verdict.sub_leg (fixture_leg false)

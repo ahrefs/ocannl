@@ -84,6 +84,46 @@ ok: skip list -- a lazy sequence a map only builds
 ok: skip list -- a partial skip a loop body only builds
 ok: skip list -- a lazy a branch only builds
 ok: skip list -- an Option iteration, which runs at most once
+ok: skip list -- a skip alias of another name handed to an iteration
+ok: skip list -- a parameter that shares a skip alias's name
+ok: skip list -- a wrapper of two skips run in a branch
+ok: skip list -- a wrapper of a wrapper run in a branch
+ok: skip list -- a one-skip wrapper applied twice in a branch
+ok: skip list -- a one-skip wrapper handed to an iteration
+ok: skip list -- a function-case wrapper handed to an iteration
+ok: skip list -- a wrapper whose omitted optional default skips
+ok: skip list -- a wrapper whose skipping optional default an application supplies
+ok: skip list -- a callback whose skipping optional default the stored arguments supply
+ok: skip list -- a callback whose skipping optional default the call omits
+ok: skip list -- a wrapper whose evaluating default the stored arguments supply
+ok: skip list -- a wrapper whose evaluating default the call omits
+ok: skip list -- a wrapper whose skipping default a literal None leaves to run
+ok: skip list -- a doubling chain of wrappers, read up to the skip cap
+ok: skip list -- a wrapper that also evaluates a claim
+ok: skip list -- a two-parameter wrapper an indexed iteration saturates
+ok: skip list -- a two-parameter wrapper a map only applies in part
+ok: skip list -- a wrapper never applied
+ok: skip list -- a wrapper applied in part
+ok: skip list -- a wrapper a local binding shadows
+ok: skip list -- a partial iteration stored and applied later
+ok: skip list -- a stored Stdlib iteration completed later
+ok: skip list -- a stored partial iteration applied through a pipeline
+ok: skip list -- a lazy of two skips forced in a branch
+ok: skip list -- a lazy forced twice in a branch, which runs once
+ok: skip list -- a lazy of two skips a wrapper forces in a branch
+ok: skip list -- a lazy forced twice through a wrapper, which runs once
+ok: skip list -- a wrapper allocating its own lazy, applied twice in a branch
+ok: skip list -- a parameter named force, which is not the lazy force
+ok: skip list -- a source's own Lazy, whose force is no lazy force
+ok: skip list -- a lazy of skips nobody forces
+ok: skip list -- a lazy that also evaluates a claim
+ok: skip list -- a lazy sequence of skips a consumer runs
+ok: skip list -- a lazy sequence of skips materialised
+ok: skip list -- a lazy sequence a fold only carries as its accumulator
+ok: skip list -- a lazy sequence stored as another sequence's element
+ok: skip list -- a comparator wrapper a sort runs
+ok: skip list -- a sequence consumer the table marks consuming
+ok: skip list -- a sequence transformation that only builds
 ok: floor -- a floor of zero on an opened p_all
 ok: floor -- a negative floor, which the parser folds into one constant
 ok: floor -- a zero written in hexadecimal, with underscores, and under a type constraint

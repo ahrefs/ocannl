@@ -1267,17 +1267,53 @@ let tolerance_census content =
 
     The same model of what runs bounds the population: a function value or [lazy] inside the make
     function is deferred, and its claims are no population, unless a collection-module function
-    calls it back. A leg claim nested in a make function is a claim that make function makes: its
-    population is every enclosing leg's too. Anything else the reader cannot follow is outside the
-    model: such a leg is counted as UNCOMPARED (below), never refused.
+    calls it back, or the make function itself runs it (gh-ocannl-1893): a function defined inside
+    the make function and applied there by its name, or a [lazy] defined there and forced there by
+    its name ([Lazy.force], [Base]'s [force]), is walked again where it runs ({!replay}), its claims
+    the make function's. A leg claim nested in a make function is a claim that make function makes:
+    its population is every enclosing leg's too. Anything else the reader cannot follow is outside
+    the model: such a leg is counted as UNCOMPARED (below), never refused.
+
+    {3 A leg or make function passed as a parameter (gh-ocannl-1893)}
+
+    A parameter of a named function of the source -- a [let], top-level or local, recursive or not,
+    whose right-hand side is a function; a labelled, optional or positional parameter whose pattern
+    is a name -- is RESOLVED AT THE APPLICATIONS of that function in this source: the argument each
+    application supplies for it, by label or by position among the positional ones, in the scope the
+    application is written in, or, where an application omits an optional one, its default. A [~leg]
+    reaching such a parameter is followed into each application's argument, through any number of
+    calls (a parameter reached again on its own path, a function passing its leg back to itself,
+    adds no gate). Each choice of the applications on the way is one RESOLUTION ({!leg_resolution}),
+    and the claim is compared once per resolution, under that choice: there a parameter of a chosen
+    function, on either side, is the chosen application's argument alone, so one call's gate never
+    meets another call's population. Every claim inside a named function -- a leg claim, under each
+    of its resolutions, and a [gated_*] claim -- is also compared once per CALL CHAIN reaching that
+    function ({!call_chains}: an application of it, then one of the function that application is
+    written in, and so on up to code no function encloses, at most 256 chains), so a leg a helper
+    builds from its own [~when_] parameter, and
+    [let check ~when_ label xs = gated_all ~when_ ~on label xs ~f], are read at their callers, one
+    call at a time, through forwarding helpers too. A parameter of a function no resolution or chain
+    chose is followed into every application's argument (the loud direction). A make function given
+    by name is followed through a [let] to its definition, and through a parameter to each argument
+    as a [~leg] is, and the function found is walked again with the claim's collector ({!replay}); a
+    helper applied in its place keeps the helper rule above. A local function's application on a
+    [~leg]'s way binds its parameters to that application's arguments.
+
+    Where this stops, the leg is UNCOMPARED, with the reason: the function's name is spelled other
+    than as the callee of an application (handed on as a value, piped, qualified through a module
+    path), so not every application is seen; no application of this source supplies the parameter
+    (another source's applications are not read: the reader reads one source); an application omits
+    it, or passes an optional one as [?leg:]; the parameter is destructured (a record or tuple
+    pattern) or belongs to an anonymous function; or the leg is read from a field. Calls are
+    resolved within the source only, so a library module's function that other sources also apply is
+    compared at its own source's applications alone.
 
     A leg claim applied in part -- without its [~leg], its label and its make function in place, an
     [in_legf] with exactly as many arguments as its literal format takes before the make function
-    ({!format_arity}) -- or named as a value is reported unread. A complete one whose [~leg] reaches
-    a parameter, a pattern, a field, another module's value or an unqualified [leg] (an
-    [open Verdict]'s), or whose make function is a value given by name, is reported UNCOMPARED:
-    counted, and not refused, as a population threaded through a parameter is not read for a
-    [gated_*] claim.
+    ({!format_arity}) -- or named as a value is reported unread. A complete one whose [~leg] or make
+    function the reader cannot resolve as above -- a pattern, a field, another module's value, an
+    unqualified [leg] (an [open Verdict]'s) -- is reported UNCOMPARED: counted, named, and not
+    refused.
 
     {2 What is not read}
 
@@ -1287,20 +1323,22 @@ let tolerance_census content =
     reader reads, and any other is reported. The ones known to matter:
 
     The population is not followed through a call to any other function (a file-local
-    [gpu_seeds pre] stops at the call), through a record field, through a function parameter (the
-    caller's argument is not substituted), or through an unqualified name under an open of a
+    [gpu_seeds pre] stops at the call), through a record field, through a parameter of an anonymous
+    function or of a function whose applications are in another source (a named function's parameter
+    is its applications' arguments, above), or through an unqualified name under an open of a
     collection module ([List.(permute raw)]) that {!collection_functions} does not list: such a name
     is read as whatever else binds it, and is not reported as unlisted, since without the module's
     signature it cannot be told from a function of the source (a listed name there is the module's,
     {!resolve_callee}); a destructured [let] binds names that are followed no further, and a value
     reached through a module path ([M.rows]) is an identity on neither side. A gate threaded into a
-    wrapper as its own parameter ([let check ~when_ label xs = gated_all ~when_ ...]) is read at the
-    wrapper's definition, where it is a parameter, and not at its callers. A [gated] boolean that
-    quantifies nothing has no population: its comparisons and other calls are operands this reader
-    does not read, so [gated ~when_:(xs <> []) label (sum xs = want)] passes, and so does a gate
-    folded into a value ([p "…" ((not on_cpu) || ok)]), which {!folded_gate_census} reads instead.
-    Each of these is a place a population gate can hide from this reader; none is a place it reports
-    one that is not there.
+    wrapper as its own parameter is read at the wrapper's applications in this source, as above; a
+    wrapper only another source applies is read at its definition, where the gate is a parameter and
+    reads nothing. A [gated] boolean that quantifies nothing has no population: its comparisons and
+    other calls are operands this reader does not read, so
+    [gated ~when_:(xs <> []) label (sum xs = want)] passes, and so does a gate folded into a value
+    ([p "…" ((not on_cpu) || ok)]), which {!folded_gate_census} reads instead. Each of these is a
+    place a population gate can hide from this reader; none is a place it reports one that is not
+    there.
 
     A gated application the reader cannot complete — a partial application no [let] binds, a
     [let]-bound one that no use the reader resolves completes (reached only through a module path,
@@ -1502,7 +1540,34 @@ type leg_collector = {
   mutable branches : (int * int) list list;
       (** The branch spans of every [if], [match] and [function] in [make]: two points in different
           branches of one never run together. *)
+  make_span : int * int;
+      (** Where the make function is written: a local function or [lazy] defined there and applied
+          or forced there is run code of [make] (gh-ocannl-1893). *)
 }
+
+(** Where a parameter of a named function of the source takes its value from at an application of
+    the function (gh-ocannl-1893). *)
+type parameter_slot =
+  | Labelled_slot of string
+  | Optional_slot of string * (expression * (gate_denotation, gate_module) Lexical_scope.env) option
+      (** With its default, in the scope it is evaluated in, where it has one. *)
+  | Positional_slot of int  (** Among the function's positional parameters. *)
+
+type parameter_of = {
+  owner : int;  (** The function's binding identity. *)
+  owner_name : string;
+  slot : parameter_slot;
+}
+
+type leg_resolution = {
+  calls : (int * int) list;
+      (** A function's binding identity, and the position of the application its parameters took
+          their arguments from. *)
+  leg_gates : (expression * (gate_denotation, gate_module) Lexical_scope.env) list;
+  leg_ambiguous : bool;
+}
+(** One alternative way a leg's [~leg] reaches its gates: the applications chosen on the way, by
+    function, and the gates found under that choice. *)
 
 let gated_forms = [ "gated_all"; "gated_alli"; "gated_exists" ]
 
@@ -1644,6 +1709,13 @@ type collection_function = {
   quantifies : bool;
       (** True or false of every element, or of none: what a [gated] boolean is read through. *)
   writes : writes;
+  consumes : bool;
+      (** It runs its callback, or materialises its argument, before it returns even on a lazy
+          sequence ([Seq], [Sequence]): [iter], a fold, a quantifier, [find], [to_list],
+          [List.of_seq]. A sequence's [map], [filter] or [init] only builds a sequence that calls
+          its callback later, when something consumes it. The one owner of which sequence functions
+          run what they are handed: the skip-list reader's iterations and the gate reader's
+          synchronous callbacks both ask it. *)
 }
 
 (** The closed list of collection-module functions this reader knows (the ratchet scans test
@@ -1654,10 +1726,10 @@ type collection_function = {
     {!Only_in}. A collection-module function missing from the table is reported, not guessed: the
     claim it reaches is refused as unlisted, naming the function to add. *)
 let collection_functions =
-  let group builds ?(quantifies = false) ?(writes = Never) names =
+  let group builds ?(quantifies = false) ?(writes = Never) ?(consumes = false) names =
     String.split_on_chars names ~on:[ ' '; '\n' ]
     |> List.filter ~f:(Fn.non String.is_empty)
-    |> List.map ~f:(fun name -> (name, { builds; quantifies; writes }))
+    |> List.map ~f:(fun name -> (name, { builds; quantifies; writes; consumes }))
   in
   Map.of_alist_exn
     (module String)
@@ -1672,26 +1744,31 @@ let collection_functions =
             dedup_and_sort stable_dedup remove_consecutive_duplicates zip zip_exn unzip unzip3
             combine split partition_tf partitioni_tf partition_map partition_mapi partition
             partition3_map split_while split_on_chars split_on_char split_lines group groupi
-            sort_and_group of_list of_list_rev of_list_map of_list_mapi of_array of_seq of_char
-            of_char_list of_string to_list to_array to_seq to_seq_keys to_seq_values to_sequence
-            of_sequence to_alist of_alist of_alist_exn of_alist_multi of_alist_reduce of_alist_fold
+            sort_and_group of_list of_list_rev of_list_map of_list_mapi of_array of_char
+            of_char_list of_string to_seq to_seq_keys to_seq_values to_sequence to_alist of_alist of_alist_exn of_alist_multi of_alist_reduce of_alist_fold
             of_alist_or_error of_increasing_sequence of_sorted_array of_sorted_array_unchecked
             of_list_with_key of_list_with_key_exn of_list_with_key_multi data keys key_set
             of_key_set elements singleton return cons empty transpose transpose_exn intersperse
-            cartesian_product fold foldi fold_left fold_right fold_left2 fold_right2 fold2_exn
-            fold_until fold_result fold_map folding_map folding_mapi reduce reduce_exn
-            reduce_balanced reduce_balanced_exn sum count counti length min_elt max_elt min_elt_exn
-            max_elt_exn last last_exn hd hd_exn tl tl_exn value value_exn value_map value_or_thunk
-            bind join both first_some some some_if merge merge_skewed union union_list inter diff
-            symmetric_diff copy map_keys map_keys_exn filter_keys map_error ok ok_exn ok_or_failwith
-            error get_ok get_error to_option of_option all all_unit try_with call iter iteri iter2
-            iter2_exn iter_keys equal compare hash find_a_dup find_all_dups to_string escaped
+            cartesian_product fold_map folding_map folding_mapi hd hd_exn tl tl_exn value value_exn
+            value_map value_or_thunk bind join both first_some some some_if merge merge_skewed union
+            union_list inter diff symmetric_diff copy map_keys map_keys_exn filter_keys map_error ok
+            ok_exn ok_or_failwith error get_ok get_error to_option of_option all all_unit try_with
+            call hash to_string escaped
             lowercase uppercase capitalize uncapitalize strip lstrip rstrip trim tr prefix suffix
             chop_prefix chop_prefix_exn chop_prefix_if_exists chop_suffix chop_suffix_exn
             chop_suffix_if_exists drop_prefix drop_suffix substr_index substr_index_exn
             substr_index_all substr_replace_first substr_replace_all lsplit2 lsplit2_exn rsplit2
             rsplit2_exn index index_exn index_from rindex rindex_exn lfindi rfindi assoc assoc_opt
             inverse sexp_of_t t_of_sexp sexp_of_m__t m__t_of_sexp
+          |};
+         (* The same role, and they consume a lazy sequence: they run their callback, or walk the
+            whole sequence, before they return. *)
+         group Every_argument ~consumes:true
+           {|
+            fold foldi fold_left fold_right fold_left2 fold_right2 fold2_exn fold_until fold_result
+            reduce reduce_exn reduce_balanced reduce_balanced_exn sum count counti length min_elt
+            max_elt min_elt_exn max_elt_exn last last_exn iter iteri iter2 iter2_exn iter_keys
+            equal compare find_a_dup find_all_dups to_list to_array of_seq of_sequence
           |};
          (* Quantifiers, and the predicates true or false of a collection's elements as a whole
             (membership, order, presence): a gate closing on the collection hides a false one.
@@ -1700,25 +1777,28 @@ let collection_functions =
             ([is_substring], [is_prefix], ...), which test the text against a pattern argument:
             [foreign_c_stderr] gates on one control marker's presence and claims another's, by
             observation of the same capture, a design this reader leaves to its follow-up. *)
-         group Every_argument ~quantifies:true
+         group Every_argument ~quantifies:true ~consumes:true
            {|
             for_all for_alli for_all2 for_all2_exn exists existsi exists2 exists2_exn is_empty
             contains is_sorted is_sorted_strictly is_subset subset contains_dup is_some is_none
             is_ok is_error is_valid_utf_8
           |};
          group Every_argument {| is_prefix is_suffix is_substring starts_with ends_with |};
-         (* Selectors. *)
+         (* Selectors: the finders consume a lazy sequence up to what they find; [take] and [drop]
+            build a shorter one. *)
+         group Collection ~consumes:true
+           {| find find_exn find_opt findi find_index nth nth_exn nth_opt |};
          group Collection
            {|
-            find find_exn find_opt findi find_multi find_and_call find_index find_all nth nth_exn
-            nth_opt get unsafe_get take take_while drop drop_while drop_last drop_last_exn sub
+            find_multi find_and_call find_all get unsafe_get take take_while drop drop_while
+            drop_last drop_last_exn sub
             subo slice split_n chunks_of choose choose_exn peek peek_exn
             dequeue dequeue_exn pop pop_exn top top_exn
           |};
          (* Membership: a selector that is true or false of the collection, so a gate closing on the
             collection hides a failed membership claim. *)
-         group Collection ~quantifies:true {| mem mem_assoc |};
-         group Collection_and_callback {| find_map find_mapi find_map_exn |};
+         group Collection ~quantifies:true ~consumes:true {| mem mem_assoc |};
+         group Collection_and_callback ~consumes:true {| find_map find_mapi find_map_exn |};
          group After_count {| init |};
          group Filled_value {| make create create_float replicate make_matrix |};
          group Nothing {| range range' clear reset |};
@@ -1742,6 +1822,14 @@ let collection_functions =
        ])
 
 let collection_function name = Map.find collection_functions name
+
+(* Whether the collection-module function [name] runs what it is handed before it returns on a
+   module of [family]: always, except on a lazy sequence, where only a consumer does. *)
+let sequence_families = [ "Seq"; "Sequence" ]
+
+let runs_callback ~family name =
+  (not (List.mem sequence_families family ~equal:String.equal))
+  || Option.exists (collection_function name) ~f:(fun f -> f.consumes)
 
 let collection_arguments ~stdlib function_ arguments =
   let positional =
@@ -1793,10 +1881,11 @@ let rec strip_constraints expr =
     {!frame} of each point inside it.
 
     - A [while] loop, a [for] loop's body (not its bounds), and a function handed directly to a
-      function of a collection module other than [Seq] or [Sequence] in a position that module calls
-      before it returns (a [List.iter] callback: {!calls_back}), run synchronously, possibly many
-      times: a {!Loop}. A function handed in any other position ([List.singleton (fun () -> ...)])
-      may be stored and called later, like any other function value.
+      function of a collection module in a position that module calls before it returns (a
+      [List.iter] callback: {!calls_back}) -- on [Seq] or [Sequence], a function the table marks as
+      consuming ({!runs_callback}), not a lazy [map] -- run synchronously, possibly many times: a
+      {!Loop}. A function handed in any other position ([List.singleton (fun () -> ...)]) may be
+      stored and called later, like any other function value.
     - Any other function may run whenever it is called. It is ONCE when it is the right-hand side of
       a non-recursive local [let] whose name the source spells exactly once, as the callee of a full
       application outside the function's own body: then its body runs exactly where that call runs,
@@ -2023,6 +2112,32 @@ let gate_census content =
   let applications = Hashtbl.create (module Int) in
   let synchronous = Hash_set.create (module Int) in
   let function_bindings = Hashtbl.create (module Int) in
+  (* Every named function of the source -- a [let], top-level or local, recursive or not, whose
+     right-hand side is a function -- by the function's position: its binding's identity and name
+     (gh-ocannl-1893). *)
+  let named_functions = Hashtbl.create (module Int) in
+  (* Every application of a name the source binds, by the binding's identity: where the name is
+     spelled, the arguments, and the scope they are written in. *)
+  let call_sites = Hashtbl.create (module Int) in
+  (* The named function each application of a name is written in, by where the name is spelled: what
+     a parameter forwarded to it is resolved through. *)
+  let call_callers = Hashtbl.create (module Int) in
+  (* Whether two choices of applications agree on every function both choose for. *)
+  (* Past 256 resolutions a leg is uncompared, not enumerated further: a tree of forwarding helpers
+     could otherwise make it exponential. *)
+  let bounded_resolutions resolutions =
+    if List.length resolutions > 256 then
+      Error "its leg reaches more than 256 choices of the applications it passes through"
+    else Ok resolutions
+  in
+  let calls_compatible a b =
+    List.for_all a ~f:(fun (owner, at) ->
+        match List.Assoc.find b owner ~equal:Int.equal with
+        | Some other -> at = other
+        | None -> true)
+  in
+  (* The parameters of the named functions, by the parameter's identity. *)
+  let parameters = Hashtbl.create (module Int) in
   let next_frame = ref 0 in
   let once_calls = Hashtbl.create (module Int) in
   (* For {!precedes}: the operand spans of every expression whose operands are evaluated in an
@@ -2052,6 +2167,7 @@ let gate_census content =
   let pending = ref [] in
   let partials = ref [] and bound_partials = ref [] and consumed = Hash_set.create (module Int) in
   let position expr = expr.pexp_loc.loc_start.pos_cnum in
+  let span_of expr = (expr.pexp_loc.loc_start.pos_cnum, expr.pexp_loc.loc_end.pos_cnum) in
   (* The nodes a claim's resolution went through, made [consumed] only once the claim is read --
      compared, or reported unread -- so that a binding no read claim reaches stays uncompleted. *)
   let commit marks = Hash_set.iter marks ~f:(Hash_set.add consumed) in
@@ -2076,6 +2192,11 @@ let gate_census content =
       method! value_binding binding =
         bind binding.pvb_expr;
         if Option.is_some (Read.pattern_name binding.pvb_pat) then name_bound binding.pvb_expr;
+        (match (strip_constraints binding.pvb_expr, Read.pattern_name binding.pvb_pat) with
+        | ({ pexp_desc = Pexp_function _; _ } as function_), Some name ->
+            Hashtbl.set named_functions ~key:(position function_)
+              ~data:(binding.pvb_loc.loc_start.pos_cnum + 1, name)
+        | _ -> ());
         super#value_binding binding
 
       (* A structure's [let ... and ...] evaluates its right-hand sides in an unspecified order, as
@@ -2110,6 +2231,37 @@ let gate_census content =
       inherit [gate_denotation, gate_module] Lexical_scope.scoped as super
       val mutable next_local = 0
       val mutable quiet = 0
+
+      (* Above zero while a function is walked again for the populations of the leg claims its
+         claims belong to ({!replay}): nothing else is recorded then. *)
+      val mutable replaying = 0
+
+      (* The named function whose parameters are being bound, with the slot of each, by the
+         parameter pattern's position. *)
+      val mutable binding_function
+          : (int
+            * string
+            * ( int,
+                [ `Positional of int
+                | `Labelled of string
+                | `Optional of string * expression option ] )
+              Hashtbl.t)
+            option =
+        None
+
+      (* The applications a comparison is made under ({!leg_resolution}): a parameter of one of
+         these functions is the argument of that application alone. *)
+      val mutable context : (int * int) list = []
+
+      (* The named functions enclosing the node being walked, innermost first. *)
+      val mutable enclosing_functions : int list = []
+
+      (* The definitions being replayed, against a function that calls itself. *)
+      val replayed : int Hash_set.t = Hash_set.create (module Int)
+
+      (* In a replay, the functions handed to a leg claim met there: its make function, whose claims
+         are the replayed make function's too, so the collectors do not pause in it. *)
+      val replay_live : int Hash_set.t = Hash_set.create (module Int)
       val mutable collecting : (string * gate_denotation) list ref option = None
 
       (* The unlisted collection-module calls the claim being compared reaches. *)
@@ -2128,6 +2280,9 @@ let gate_census content =
          each enters. *)
       val body_frames : (int, frame_kind) Hashtbl.t = Hashtbl.create (module Int)
 
+      (* Whether the walk records what it meets: not inside {!identifiers}, nor in a replay. *)
+      method recording = quiet = 0 && replaying = 0
+
       method point_of expr =
         {
           at_start = expr.pexp_loc.loc_start.pos_cnum;
@@ -2144,7 +2299,7 @@ let gate_census content =
 
       method framed : 'a. kind:frame_kind -> start:int -> stop:int -> (unit -> 'a) -> 'a =
         fun ~kind ~start ~stop walk ->
-          if quiet > 0 then walk ()
+          if quiet > 0 || replaying > 0 then walk ()
           else (
             Int.incr next_frame;
             stack <-
@@ -2167,6 +2322,61 @@ let gate_census content =
               ~stop:module_expr.pmod_loc.loc_end.pos_cnum (fun () ->
                 super#module_expr env module_expr)
         | _ -> super#module_expr env module_expr
+
+      (* While a named function's parameters are bound and its body walked: the slot each parameter
+         takes its value from at an application ({!parameters}), and the function as the innermost
+         enclosing one (gh-ocannl-1893). *)
+      method function_scope : 'a. expression -> (unit -> 'a) -> 'a =
+        fun expr walk ->
+          let saved_binding = binding_function and saved_enclosing = enclosing_functions in
+          (match (expr.pexp_desc, Hashtbl.find named_functions (position expr)) with
+          | Pexp_function (params, _, _), Some (owner, name) ->
+              let slots = Hashtbl.create (module Int) in
+              let positional = ref 0 in
+              List.iter params ~f:(fun param ->
+                  match param.pparam_desc with
+                  | Pparam_val (label, default, pattern) ->
+                      let slot =
+                        match label with
+                        | Ppxlib.Asttypes.Nolabel ->
+                            let index = !positional in
+                            Int.incr positional;
+                            `Positional index
+                        | Labelled label -> `Labelled label
+                        | Optional label -> `Optional (label, default)
+                      in
+                      Hashtbl.set slots ~key:pattern.ppat_loc.loc_start.pos_cnum ~data:slot
+                  | Pparam_newtype _ -> ());
+              binding_function <- Some (owner, name, slots);
+              enclosing_functions <- owner :: enclosing_functions
+          | _ -> binding_function <- None);
+          Exn.protect ~f:walk ~finally:(fun () ->
+              binding_function <- saved_binding;
+              enclosing_functions <- saved_enclosing)
+
+      method! bind_parameter env label pattern =
+        let inner = super#bind_parameter env label pattern in
+        (match binding_function with
+        | Some (owner, owner_name, slots) when self#recording -> (
+            match
+              (Hashtbl.find slots pattern.ppat_loc.loc_start.pos_cnum, Read.pattern_name pattern)
+            with
+            | Some slot, Some name -> (
+                let slot =
+                  match slot with
+                  | `Positional index -> Positional_slot index
+                  | `Labelled label -> Labelled_slot label
+                  | `Optional (label, default) ->
+                      (* The default is evaluated where the parameter is bound. *)
+                      Optional_slot (label, Option.map default ~f:(fun d -> (d, env)))
+                in
+                match Lexical_scope.lookup inner name with
+                | Some { identity; _ } ->
+                    Hashtbl.set parameters ~key:identity ~data:{ owner; owner_name; slot }
+                | None -> ())
+            | _ -> ())
+        | _ -> ());
+        inner
 
       method note_unlisted callee =
         let spelled =
@@ -2408,7 +2618,7 @@ let gate_census content =
       method! attribute _ attr = attr
 
       method! ident env ident =
-        (match (quiet, ident.txt) with
+        (match (quiet + replaying, ident.txt) with
         | 0, Ppxlib.Longident.Lident name -> (
             match Lexical_scope.lookup env name with
             | Some { identity; _ } when identity > 0 ->
@@ -2449,6 +2659,8 @@ let gate_census content =
               if denotation.identity <> 0 && not (Hash_set.mem seen denotation.identity) then (
                 Hash_set.add seen denotation.identity;
                 Option.iter denotation.definition ~f:(fun (rhs, env) -> visit env rhs);
+                List.iter (self#parameter_arguments denotation.identity) ~f:(fun (argument, env) ->
+                    visit env argument);
                 List.iter (self#written denotation.identity) ~f:(fun (written, env) ->
                     visit env written)))
         in
@@ -2469,6 +2681,12 @@ let gate_census content =
                      && (not (Hashtbl.mem writes identity))
                      && not (Hashtbl.mem unlisted_writes identity) ->
                   go (Set.add seen identity) rhs_env rhs
+              | Some { identity; definition = None } when not (Set.mem seen identity) -> (
+                  (* A parameter is the argument of the one application it is read under
+                     (gh-ocannl-1893), so a pattern takes that argument's literal apart. *)
+                  match self#parameter_arguments identity with
+                  | [ (argument, argument_env) ] -> go (Set.add seen identity) argument_env argument
+                  | _ -> (expr, env, Set.to_list seen))
               | _ -> (expr, env, Set.to_list seen))
           | _ -> (expr, env, Set.to_list seen)
         in
@@ -2561,6 +2779,8 @@ let gate_census content =
                   if not (Hash_set.mem seen denotation.identity) then (
                     Hash_set.add seen denotation.identity;
                     Option.iter denotation.definition ~f:(fun (rhs, env) -> visit env rhs);
+                    List.iter (self#parameter_arguments denotation.identity)
+                      ~f:(fun (argument, env) -> visit env argument);
                     List.iter (self#written denotation.identity) ~f:(fun (written, env) ->
                         visit env written))
               | None -> Hash_set.add found (name, 0))
@@ -2688,6 +2908,8 @@ let gate_census content =
               | Some denotation when not (Hash_set.mem seen denotation.identity) ->
                   Hash_set.add seen denotation.identity;
                   Option.iter denotation.definition ~f:(fun (rhs, env) -> visit env rhs);
+                  List.iter (self#parameter_arguments denotation.identity)
+                    ~f:(fun (argument, env) -> visit env argument);
                   List.iter (self#written denotation.identity) ~f:(fun (written, env) ->
                       visit env written)
               | _ -> ())
@@ -2981,40 +3203,178 @@ let gate_census content =
          pick the leg, are gates too -- and the body of a local function it applies
          (gh-ocannl-1794). With whether a constructor was only ambiguously [Verdict]'s; [Error]
          names what it could not follow: a parameter, a field, another module's value. *)
+      (* The scope a function's body runs in at one application of it: each parameter whose pattern
+         is a name bound to the argument the application (written in [env]) supplies, or to its
+         default; the others to nothing the reader follows. *)
+      method bind_applied ~definition_env env params arguments =
+        let positional = ref 0 in
+        List.fold params ~init:definition_env ~f:(fun scope param ->
+            match param.pparam_desc with
+            | Pparam_val (label, default, pattern) -> (
+                let slot =
+                  match label with
+                  | Ppxlib.Asttypes.Nolabel ->
+                      let index = !positional in
+                      Int.incr positional;
+                      Positional_slot index
+                  | Labelled label -> Labelled_slot label
+                  | Optional label ->
+                      Optional_slot (label, Option.map default ~f:(fun d -> (d, scope)))
+                in
+                let bound value value_env name =
+                  Lexical_scope.bind_values scope [ name ]
+                    { (self#local) with definition = Some (value, value_env) }
+                in
+                match (Read.pattern_name pattern, self#argument_for slot arguments) with
+                | Some name, (`Given e | `Option e) -> bound e env name
+                | Some name, `Default (d, d_env) -> bound d d_env name
+                | _ -> self#bind_patterns scope [ pattern ])
+            | Pparam_newtype _ -> scope)
+
+      (* Where the parameter [identity] of a named function takes its value at the application
+         [arguments]: an argument, an optional parameter's default, an option passed with [?l:], or
+         nothing (an application in part). *)
+      method argument_for slot arguments =
+        let labelled kind label =
+          List.find_map arguments ~f:(fun (given, argument) ->
+              match (given, kind) with
+              | Ppxlib.Asttypes.Labelled given, `Labelled when String.equal given label ->
+                  Some argument
+              | Ppxlib.Asttypes.Optional given, `Optional when String.equal given label ->
+                  Some argument
+              | _ -> None)
+        in
+        match slot with
+        | Labelled_slot label -> (
+            match labelled `Labelled label with Some e -> `Given e | None -> `Missing)
+        | Optional_slot (label, default) -> (
+            match (labelled `Labelled label, labelled `Optional label, default) with
+            | Some e, _, _ -> `Given e
+            | None, Some e, _ -> `Option e
+            | None, None, Some (d, d_env) -> `Default (d, d_env)
+            | None, None, None -> `Missing)
+        | Positional_slot index -> (
+            match
+              List.nth
+                (List.filter_map arguments ~f:(function
+                  | Ppxlib.Asttypes.Nolabel, argument -> Some argument
+                  | _ -> None))
+                index
+            with
+            | Some e -> `Given e
+            | None -> `Missing)
+
+      (* Whether the source spells the named function [owner] anywhere but as the callee of an
+         application: handed on as a value, piped, so that not every application is seen. *)
+      method escapes owner =
+        let callees =
+          List.map (Hashtbl.find_multi call_sites owner) ~f:(fun (at, _, _) -> at)
+          |> Set.of_list (module Int)
+        in
+        List.exists (Hashtbl.find_multi references owner) ~f:(fun at -> not (Set.mem callees at))
+
+      (* Every chain of applications that reaches the named function [owner] -- an application of
+         it, then one of the function that application is written in, and so on up to code no
+         function of the source encloses -- so that a parameter forwarded through several calls is
+         read under one call of each. [[ [] ]] where [owner] is no function, or has no application
+         in the source; past 256 chains, too, where every parameter is read through every
+         application, the loud direction. *)
+      method call_chains owner =
+        (* Every chain ends in one terminal case or the other, so counting both bounds the total. *)
+        let produced = ref 0 in
+        let terminal chain =
+          Int.incr produced;
+          if !produced > 256 then raise Stdlib.Exit;
+          [ chain ]
+        in
+        let rec go seen owner =
+          match Hashtbl.find_multi call_sites owner with
+          | [] -> terminal []
+          | sites ->
+              List.concat_map sites ~f:(fun (at, _, _) ->
+                  match Option.join (Hashtbl.find call_callers at) with
+                  | Some caller when not (List.mem seen caller ~equal:Int.equal) ->
+                      List.map (go (caller :: seen) caller) ~f:(fun chain -> (owner, at) :: chain)
+                  | _ -> terminal [ (owner, at) ])
+        in
+        match owner with
+        | None -> [ [] ]
+        | Some owner -> ( try go [ owner ] owner with Stdlib.Exit -> [ [] ])
+
+      (* The applications a parameter of [owner] takes its arguments from: under {!context}, the one
+         chosen there; otherwise every one. *)
+      method sites owner =
+        let sites = Hashtbl.find_multi call_sites owner in
+        match List.Assoc.find context owner ~equal:Int.equal with
+        | Some chosen -> List.filter sites ~f:(fun (at, _, _) -> at = chosen)
+        | None -> sites
+
+      (* What a parameter of a named function is, for the gate and population sides: the argument
+         each application it is read under supplies (gh-ocannl-1893). Nothing for any other name. *)
+      method parameter_arguments identity =
+        match Hashtbl.find parameters identity with
+        | None -> []
+        | Some { owner; slot; _ } ->
+            List.concat_map (self#sites owner) ~f:(fun (_, arguments, site_env) ->
+                match self#argument_for slot arguments with
+                | `Given e | `Option e -> [ (e, site_env) ]
+                | `Default default -> [ default ]
+                | `Missing -> [])
+
+      (* A [~leg]'s gates, as the alternatives it may be resolved by ({!leg_resolution}): one per
+         choice of the applications a parameter on the way takes its argument from. *)
       method leg_gates env expr =
+        let single gates ambiguous =
+          [ { calls = []; leg_gates = gates; leg_ambiguous = ambiguous } ]
+        in
+        let compatible = calls_compatible in
+        let merge a b =
+          {
+            calls = List.dedup_and_sort (a.calls @ b.calls) ~compare:Poly.compare;
+            leg_gates = a.leg_gates @ b.leg_gates;
+            leg_ambiguous = a.leg_ambiguous || b.leg_ambiguous;
+          }
+        in
+        (* Two parts of one leg: every pair of alternatives that agree on their applications. *)
+        let both a b =
+          Result.bind a ~f:(fun xs ->
+              Result.bind b ~f:(fun ys ->
+                  bounded_resolutions
+                    (List.concat_map xs ~f:(fun x ->
+                         List.filter_map ys ~f:(fun y ->
+                             if compatible x.calls y.calls then Some (merge x y) else None)))))
+        in
+        let gated gates = List.map ~f:(fun r -> { r with leg_gates = gates @ r.leg_gates }) in
         (* [seen]: the bindings on this path, so that two branches may share an ancestor leg. *)
         let rec go seen env expr =
           let expr = strip_constraints expr in
-          let both a b =
-            Result.bind a ~f:(fun (gates, x) ->
-                Result.map b ~f:(fun (more, y) -> (gates @ more, x || y)))
-          in
           match expr.pexp_desc with
           | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
               match Lexical_scope.lookup env name with
               | Some { identity; definition = Some (rhs, rhs_env) } when not (Set.mem seen identity)
                 ->
                   go (Set.add seen identity) rhs_env rhs
+              | Some { identity; definition = None } when Hashtbl.mem parameters identity ->
+                  if Set.mem seen identity then
+                    (* A parameter passed back to its own function: the cycle adds no gate. *)
+                    Ok (single [] false)
+                  else self#through_parameter (go (Set.add seen identity)) name identity
               | _ ->
                   Error
                     (Printf.sprintf
                        "its leg reaches `%s`, a name bound to no definition the reader follows (a \
-                        parameter, a pattern, a recursive binding)"
+                        parameter of an anonymous function, a pattern, a recursive binding)"
                        name))
           | Pexp_sequence (_, inner) -> go seen env inner
           | Pexp_let (rec_flag, bindings, body) ->
               go seen (self#bind_group env bindings (self#denotations env rec_flag bindings)) body
-          | Pexp_ifthenelse (condition, yes, no) -> (
-              let branches =
-                both (go seen env yes)
-                  (Option.value_map no ~default:(Ok ([], false)) ~f:(go seen env))
-              in
-              match branches with
-              | Ok (gates, ambiguous) -> Ok ((condition, env) :: gates, ambiguous)
-              | Error _ as error -> error)
+          | Pexp_ifthenelse (condition, yes, no) ->
+              both (go seen env yes)
+                (Option.value_map no ~default:(Ok (single [] false)) ~f:(go seen env))
+              |> Result.map ~f:(gated [ (condition, env) ])
           | Pexp_match (scrutinee, cases) ->
               List.fold cases
-                ~init:(Ok ([ (scrutinee, env) ], false))
+                ~init:(Ok (single [ (scrutinee, env) ] false))
                 ~f:(fun acc case ->
                   let case_env = self#bind_parts env case.pc_lhs (scrutinee, env) in
                   (* A guard picks the case's leg as the scrutinee does. *)
@@ -3022,9 +3382,7 @@ let gate_census content =
                     Option.value_map case.pc_guard ~default:[] ~f:(fun guard ->
                         [ (guard, case_env) ])
                   in
-                  both
-                    (Result.map acc ~f:(fun (gates, x) -> (gates @ guard, x)))
-                    (go seen case_env case.pc_rhs))
+                  both (Result.map acc ~f:(gated guard)) (go seen case_env case.pc_rhs))
           | Pexp_apply (callee, arguments) -> (
               match Verdict_callee.resolve_leg owners callee with
               | Some { member; ownership = (Verdicts | Ambiguous) as ownership; _ } -> (
@@ -3043,10 +3401,15 @@ let gate_census content =
                   | None, _, _ ->
                       Error
                         (Printf.sprintf "its leg is a `%s` application without its `~when_`" member)
-                  | Some gate, "leg", _ -> Ok ([ gate ], ambiguous)
+                  | Some gate, "leg", _ -> Ok (single [ gate ] ambiguous)
                   | Some gate, _, Some outer ->
-                      Result.map (go seen env outer) ~f:(fun (gates, outer_ambiguous) ->
-                          (gates @ [ gate ], ambiguous || outer_ambiguous))
+                      Result.map (go seen env outer) ~f:(fun resolutions ->
+                          List.map resolutions ~f:(fun r ->
+                              {
+                                r with
+                                leg_gates = r.leg_gates @ [ gate ];
+                                leg_ambiguous = r.leg_ambiguous || ambiguous;
+                              }))
                   | Some _, _, None ->
                       Error
                         (Printf.sprintf "its leg is a `%s` application without its outer leg" member)
@@ -3054,8 +3417,9 @@ let gate_census content =
               | Some _ ->
                   Error "its leg is built by a `leg` or `sub_leg` that is not certainly `Verdict`'s"
               | None -> (
-                  (* A local function's application: what its body returns, its parameters bound to
-                     nothing the reader follows. *)
+                  (* A local function's application: what its body returns, each parameter bound to
+                     the argument this application supplies (or its default), the others to nothing
+                     the reader follows. *)
                   match (strip_constraints callee).pexp_desc with
                   | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
                       match Lexical_scope.lookup env name with
@@ -3069,13 +3433,7 @@ let gate_census content =
                           }
                         when not (Set.mem seen identity) ->
                           let seen = Set.add seen identity in
-                          let body_env =
-                            List.fold params ~init:definition_env ~f:(fun env param ->
-                                match param.pparam_desc with
-                                | Pparam_val (_, _, pattern) -> self#bind_patterns env [ pattern ]
-                                | Pparam_newtype _ -> env)
-                          in
-                          go seen body_env body
+                          go seen (self#bind_applied ~definition_env env params arguments) body
                       | _ ->
                           Error
                             (Printf.sprintf
@@ -3091,12 +3449,57 @@ let gate_census content =
                 (Printf.sprintf "its leg is `%s`, an expression the reader does not follow"
                    (Ppxlib.Pprintast.string_of_expression expr))
         in
-        go (Set.empty (module Int)) env expr
+        match go (Set.empty (module Int)) env expr with
+        | Ok [] ->
+            Error "no choice of the applications its leg passes through agrees on all of them"
+        | result -> result
 
-      (* Whether [callee] may be a helper making a claim from what it is handed: a function of this
-         source or of another module -- an unqualified name nothing binds is one an [open] brought
-         in -- not an operator, a standard library's function ({!standard_functions}) or a
-         collection module's (whose arguments, in a condition say, are no claim's population). *)
+      (* A parameter on a leg's way, resolved at the applications of its function in this source
+         (gh-ocannl-1893): one alternative per application, each with that application chosen. *)
+      method through_parameter go name identity =
+        let { owner; owner_name; slot } = Hashtbl.find_exn parameters identity in
+        if self#escapes owner then
+          Error
+            (Printf.sprintf
+               "its leg reaches `%s`, a parameter of `%s`, whose name the source also uses other \
+                than as the function it applies, so not every application is seen"
+               name owner_name)
+        else
+          match Hashtbl.find_multi call_sites owner with
+          | [] ->
+              Error
+                (Printf.sprintf
+                   "its leg reaches `%s`, a parameter of `%s`, which no application in this source \
+                    supplies (another source's applications are not read)"
+                   name owner_name)
+          | sites ->
+              List.fold (List.rev sites) ~init:(Ok []) ~f:(fun acc (at, arguments, site_env) ->
+                  Result.bind acc ~f:(fun acc ->
+                      let chosen resolutions =
+                        List.filter_map resolutions ~f:(fun r ->
+                            match List.Assoc.find r.calls owner ~equal:Int.equal with
+                            | Some other when other <> at -> None
+                            | Some _ -> Some r
+                            | None -> Some { r with calls = (owner, at) :: r.calls })
+                      in
+                      match self#argument_for slot arguments with
+                      | `Given e -> Result.map (go site_env e) ~f:(fun rs -> acc @ chosen rs)
+                      | `Default (d, d_env) ->
+                          Result.map (go d_env d) ~f:(fun rs -> acc @ chosen rs)
+                      | `Option _ ->
+                          Error
+                            (Printf.sprintf
+                               "its leg reaches `%s`, a parameter of `%s`, which an application \
+                                passes as an option (`?%s:`)"
+                               name owner_name name)
+                      | `Missing ->
+                          Error
+                            (Printf.sprintf
+                               "its leg reaches `%s`, a parameter of `%s`, which an application of \
+                                it does not supply"
+                               name owner_name)))
+              |> fun resolutions -> Result.bind resolutions ~f:bounded_resolutions
+
       method helper env callee =
         let callee, callee_env = self#resolve_callee env callee in
         match callee.pexp_desc with
@@ -3175,6 +3578,162 @@ let gate_census content =
       (* A leg claim [expr] applies, with its [~leg] and its make function in place: its comparison
          is queued and its collector registered, for the walk of [make] to fill. Applied in part, it
          is reported unread. *)
+      (* The make functions a leg claim's [make] names, under {!context} (gh-ocannl-1893): a
+         function written in place, a helper applied to its arguments, or a name followed through a
+         [let] to its definition and through a parameter to each argument its applications supply. *)
+      method make_functions env make =
+        let rec go seen env make =
+          let make = strip_constraints make in
+          match make.pexp_desc with
+          | Pexp_function _ -> Ok [ `Function (make, env) ]
+          | Pexp_apply (_, arguments) -> Ok [ `Helper (make, arguments, env) ]
+          | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+              match Lexical_scope.lookup env name with
+              | Some { identity; definition = Some (rhs, rhs_env) } when not (Set.mem seen identity)
+                ->
+                  go (Set.add seen identity) rhs_env rhs
+              | Some { identity; definition = None }
+                when Hashtbl.mem parameters identity && not (Set.mem seen identity) -> (
+                  let { owner; owner_name; slot } = Hashtbl.find_exn parameters identity in
+                  let unseen why =
+                    Error
+                      (Printf.sprintf "its make function is `%s`, a parameter of `%s`, %s" name
+                         owner_name why)
+                  in
+                  if self#escapes owner then
+                    unseen
+                      "whose name the source also uses other than as the function it applies, so \
+                       not every application is seen"
+                  else
+                    match self#sites owner with
+                    | [] ->
+                        unseen
+                          "which no application in this source supplies (another source's \
+                           applications are not read)"
+                    | sites ->
+                        List.fold sites ~init:(Ok []) ~f:(fun acc (_, arguments, site_env) ->
+                            Result.bind acc ~f:(fun acc ->
+                                match self#argument_for slot arguments with
+                                | `Given e ->
+                                    Result.map
+                                      (go (Set.add seen identity) site_env e)
+                                      ~f:(List.append acc)
+                                | `Default (d, d_env) ->
+                                    Result.map
+                                      (go (Set.add seen identity) d_env d)
+                                      ~f:(List.append acc)
+                                | `Option _ | `Missing ->
+                                    unseen "which an application of it does not supply")))
+              | _ ->
+                  Error
+                    (Printf.sprintf
+                       "its make function is `%s`, a value given by name that the reader does not \
+                        follow to a function"
+                       name))
+          | _ ->
+              Error
+                (Printf.sprintf
+                   "its make function is `%s`, an expression the reader does not follow"
+                   (Ppxlib.Pprintast.string_of_expression make))
+        in
+        go (Set.empty (module Int)) env make
+
+      (* Walk [expr] again, in [scope], for the populations its claims add to [stack]'s collectors:
+         a make function given by name, or a local function or [lazy] a make function runs. Nothing
+         else is recorded ({!recording}). *)
+      method replay stack scope expr =
+        let saved = leg_stack in
+        leg_stack <- stack;
+        replaying <- replaying + 1;
+        Exn.protect
+          ~f:(fun () -> ignore (self#visit scope expr : expression))
+          ~finally:(fun () ->
+            leg_stack <- saved;
+            replaying <- replaying - 1)
+
+      (* A deferred value a make function runs (gh-ocannl-1893): a local function defined inside it
+         and applied there, or a [lazy] defined inside it and forced there, is replayed with the
+         collectors live -- what it claims is a claim [make] makes. *)
+      method run_deferred env callee arguments =
+        match leg_stack with
+        | [] -> ()
+        | collector :: _ -> (
+            let start, stop = collector.make_span in
+            let inside (e, _) = start <= position e && position e < stop in
+            let definition name =
+              match Lexical_scope.lookup env name with
+              | Some { identity; definition = Some ((rhs, _) as definition) }
+                when inside definition && not (Hash_set.mem replayed identity) ->
+                  Some (identity, strip_constraints rhs, snd definition)
+              | _ -> None
+            in
+            let run identity scope expr =
+              Hash_set.add replayed identity;
+              Exn.protect
+                ~f:(fun () -> self#replay leg_stack scope expr)
+                ~finally:(fun () -> Hash_set.remove replayed identity)
+            in
+            match ((strip_constraints callee).pexp_desc, arguments) with
+            | _, [ (Ppxlib.Asttypes.Nolabel, thunk) ] when self#forces env callee -> (
+                match (strip_constraints thunk).pexp_desc with
+                | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+                    match definition name with
+                    | Some (identity, { pexp_desc = Pexp_lazy inner; _ }, scope) ->
+                        run identity scope inner
+                    | _ -> ())
+                | _ -> ())
+            | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ }, _ -> (
+                (* Its body, run where a complete application supplies every positional and required
+                   labelled parameter, each bound to what this application hands it. *)
+                match definition name with
+                | Some
+                    ( identity,
+                      { pexp_desc = Pexp_function (params, _, Pfunction_body body); _ },
+                      scope )
+                  when fully_applies
+                         (function_kind ~binding:None params (Pfunction_body body))
+                         (List.map arguments ~f:fst) ->
+                    run identity (self#bind_applied ~definition_env:scope env params arguments) body
+                | Some
+                    ( identity,
+                      {
+                        pexp_desc =
+                          Pexp_function (params, _, (Pfunction_cases (case_list, _, _) as cases));
+                        _;
+                      },
+                      scope )
+                  when fully_applies
+                         (function_kind ~binding:None params cases)
+                         (List.map arguments ~f:fst) -> (
+                    (* A [function]'s cases, each a branch, its pattern taking apart the implicit
+                       argument this application supplies: the positional one after the explicit
+                       parameters'. *)
+                    let explicit =
+                      List.count params ~f:(fun param ->
+                          match param.pparam_desc with
+                          | Pparam_val (Ppxlib.Asttypes.Nolabel, _, _) -> true
+                          | _ -> false)
+                    in
+                    let body_env = self#bind_applied ~definition_env:scope env params arguments in
+                    match
+                      List.nth
+                        (List.filter_map arguments ~f:(function
+                          | Ppxlib.Asttypes.Nolabel, argument -> Some argument
+                          | _ -> None))
+                        explicit
+                    with
+                    | Some implicit ->
+                        List.iter case_list ~f:(fun case ->
+                            let case_env = self#bind_parts body_env case.pc_lhs (implicit, env) in
+                            Option.iter case.pc_guard ~f:(run identity case_env);
+                            run identity case_env case.pc_rhs)
+                    | None -> ())
+                | _ -> ())
+            | _ -> ())
+
+      (* A leg claim [expr] applies, with its [~leg] and its make function in place: its comparison
+         is queued and its collector registered, for the walk of [make] to fill. Applied in part, it
+         is reported unread. *)
       method leg_claim env expr ~member ~spelled ~ambiguous arguments =
         let line = expr.pexp_loc.loc_start.pos_lnum in
         let positional =
@@ -3201,98 +3760,163 @@ let gate_census content =
             | _ -> None
         in
         match (leg, make) with
-        | Some leg, Some make ->
-            let collector = { populations = []; handed = []; branches = [] } in
-            (* A make function not written in place -- a helper applied to its arguments -- makes
-               its claim from what it is handed; one given by name, from what this reader cannot
-               see. *)
-            let make_by_name =
-              match (strip_constraints make).pexp_desc with
-              | Pexp_function _ -> false
-              | Pexp_apply (_, arguments) ->
-                  collector.handed <-
-                    List.map arguments ~f:(fun (_, argument) -> (position make, argument, env));
-                  false
-              | _ -> true
+        | Some leg, Some make -> (
+            (* The make function written in place is walked with this collector innermost; one given
+               by name is replayed into a collector of its own, under each resolution. *)
+            let in_place =
+              { populations = []; handed = []; branches = []; make_span = span_of make }
             in
             let point = self#point_of expr in
+            let enclosing = List.hd enclosing_functions in
+            (* The collectors [make] fills under the current {!context}: what each function it names
+               claims, and what each helper it names is handed. *)
+            let collectors () =
+              Result.map (self#make_functions env make) ~f:(fun made ->
+                  List.map made ~f:(function
+                    | `Function (function_, _) when phys_equal function_ (strip_constraints make) ->
+                        in_place
+                    | `Function (function_, scope) ->
+                        let collector =
+                          {
+                            populations = [];
+                            handed = [];
+                            branches = [];
+                            make_span = span_of function_;
+                          }
+                        in
+                        self#replay [ collector ] scope function_;
+                        collector
+                    | `Helper (helper, _, _) when phys_equal helper (strip_constraints make) ->
+                        in_place
+                    | `Helper (helper, helper_arguments, scope) ->
+                        {
+                          populations = [];
+                          handed =
+                            List.map helper_arguments ~f:(fun (_, argument) ->
+                                (position helper, argument, scope));
+                          branches = [];
+                          make_span = span_of helper;
+                        }))
+            in
+            (* The population bindings one collector's claims are built from. *)
+            let built_by collector =
+              let built = Hash_set.Poly.create () in
+              (* A helper's arguments are its claim's population on a path where no claim read in
+                 place runs: where every such claim sits in another branch of some conditional than
+                 the helper. *)
+              let disjoint a b =
+                List.exists collector.branches ~f:(fun spans ->
+                    let branch_of point =
+                      List.findi spans ~f:(fun _ (start, stop) -> start <= point && point < stop)
+                      |> Option.map ~f:fst
+                    in
+                    match (branch_of a, branch_of b) with Some i, Some j -> i <> j | _ -> false)
+              in
+              let populations =
+                List.map collector.populations ~f:(fun (_, e, boolean, e_env) ->
+                    (e, boolean, e_env))
+                @ List.filter_map collector.handed ~f:(fun (helper, e, e_env) ->
+                    if
+                      List.for_all collector.populations ~f:(fun (claim, _, _, _) ->
+                          disjoint claim helper)
+                    then Some (e, false, e_env)
+                    else None)
+              in
+              List.iter populations ~f:(fun (population, boolean, population_env) ->
+                  Hash_set.iter
+                    (if boolean then self#quantified population_env population
+                     else self#population population_env population)
+                    ~f:(Hash_set.add built));
+              built
+            in
             pending :=
               (fun () ->
                 unlisted_sink := [];
                 claim_point <- Some point;
+                let uncompared why =
+                  uncompared_legs :=
+                    { leg_form = spelled; leg_line = line; why } :: !uncompared_legs
+                in
                 match self#leg_gates env leg with
-                | Error why ->
-                    uncompared_legs :=
-                      { leg_form = spelled; leg_line = line; why } :: !uncompared_legs
-                | Ok _ when make_by_name ->
-                    uncompared_legs :=
-                      {
-                        leg_form = spelled;
-                        leg_line = line;
-                        why = "its make function is a value given by name, whose claim is not read";
-                      }
-                      :: !uncompared_legs
-                | Ok (gates, leg_ambiguous) ->
-                    Int.incr leg_sites;
-                    let reads = Hash_set.Poly.create () in
-                    List.iter gates ~f:(fun (gate, gate_env) ->
-                        Hash_set.iter (self#gate_reads gate_env gate) ~f:(Hash_set.add reads));
-                    let built = Hash_set.Poly.create () in
-                    (* No claim read in place: everything the make function hands to a call, the
-                       population of the claim a helper makes. *)
-                    (* A helper's arguments are its claim's population on a path where no claim
-                       read in place runs: where every such claim sits in another branch of some
-                       conditional than the helper. *)
-                    let disjoint a b =
-                      List.exists collector.branches ~f:(fun spans ->
-                          let branch_of point =
-                            List.findi spans ~f:(fun _ (start, stop) ->
-                                start <= point && point < stop)
-                            |> Option.map ~f:fst
-                          in
-                          match (branch_of a, branch_of b) with
-                          | Some i, Some j -> i <> j
-                          | _ -> false)
+                | Error why -> uncompared why
+                | Ok resolutions -> (
+                    (* Each resolution is compared under its own applications, so that one call's
+                       gate never meets another call's population. *)
+                    (* Under each chain of applications reaching the claim's enclosing function,
+                       too, so that a leg the helper builds from its own parameters is compared per
+                       call (gh-ocannl-1893, local review). *)
+                    let chains = self#call_chains enclosing in
+                    let resolutions =
+                      List.concat_map resolutions ~f:(fun resolution ->
+                          match
+                            List.filter_map chains ~f:(fun chain ->
+                                if calls_compatible resolution.calls chain then
+                                  Some
+                                    {
+                                      resolution with
+                                      calls =
+                                        List.dedup_and_sort (resolution.calls @ chain)
+                                          ~compare:Poly.compare;
+                                    }
+                                else None)
+                          with
+                          | [] -> [ resolution ]
+                          | chosen -> chosen)
                     in
-                    let populations =
-                      List.map collector.populations ~f:(fun (_, e, boolean, e_env) ->
-                          (e, boolean, e_env))
-                      @ List.filter_map collector.handed ~f:(fun (helper, e, e_env) ->
-                          if
-                            List.for_all collector.populations ~f:(fun (claim, _, _, _) ->
-                                disjoint claim helper)
-                          then Some (e, false, e_env)
-                          else None)
+                    let compared =
+                      List.map resolutions ~f:(fun resolution ->
+                          context <- resolution.calls;
+                          Exn.protect
+                            ~finally:(fun () -> context <- [])
+                            ~f:(fun () ->
+                              Result.map (collectors ()) ~f:(fun collectors ->
+                                  let reads = Hash_set.Poly.create () in
+                                  List.iter resolution.leg_gates ~f:(fun (gate, gate_env) ->
+                                      Hash_set.iter (self#gate_reads gate_env gate)
+                                        ~f:(Hash_set.add reads));
+                                  let shared =
+                                    List.concat_map collectors ~f:(fun collector ->
+                                        Hash_set.filter (built_by collector) ~f:(Hash_set.mem reads)
+                                        |> Hash_set.to_list |> List.map ~f:fst)
+                                  in
+                                  (resolution, shared))))
                     in
-                    List.iter populations ~f:(fun (population, boolean, population_env) ->
-                        Hash_set.iter
-                          (if boolean then self#quantified population_env population
-                           else self#population population_env population)
-                          ~f:(Hash_set.add built));
-                    let shared =
-                      Hash_set.filter built ~f:(Hash_set.mem reads)
-                      |> Hash_set.to_list |> List.map ~f:fst
-                      |> List.dedup_and_sort ~compare:String.compare
-                    in
-                    List.dedup_and_sort !unlisted_sink ~compare:Poly.compare
-                    |> List.iter ~f:(fun (callee, callee_line) ->
-                        unlisted :=
-                          { claim = spelled; claim_line = line; callee; callee_line } :: !unlisted);
-                    if not (List.is_empty shared) then
-                      readings :=
-                        {
-                          form = spelled;
-                          ambiguous = ambiguous || leg_ambiguous;
-                          line;
-                          gate =
-                            String.concat ~sep:" && "
-                              (List.map gates ~f:(fun (gate, _) ->
-                                   Ppxlib.Pprintast.string_of_expression gate));
-                          reads = shared;
-                        }
-                        :: !readings)
+                    match Result.all compared with
+                    | Error why -> uncompared why
+                    | Ok compared ->
+                        Int.incr leg_sites;
+                        List.dedup_and_sort !unlisted_sink ~compare:Poly.compare
+                        |> List.iter ~f:(fun (callee, callee_line) ->
+                            unlisted :=
+                              { claim = spelled; claim_line = line; callee; callee_line }
+                              :: !unlisted);
+                        let offending =
+                          List.filter compared ~f:(fun (_, shared) -> not (List.is_empty shared))
+                        in
+                        if not (List.is_empty offending) then
+                          readings :=
+                            {
+                              form = spelled;
+                              ambiguous =
+                                ambiguous
+                                || List.exists offending ~f:(fun (r, _) -> r.leg_ambiguous);
+                              line;
+                              gate =
+                                List.concat_map offending ~f:(fun (r, _) ->
+                                    List.map r.leg_gates ~f:(fun (gate, _) ->
+                                        Ppxlib.Pprintast.string_of_expression gate))
+                                |> List.dedup_and_sort ~compare:String.compare
+                                |> String.concat ~sep:" && ";
+                              reads =
+                                List.concat_map offending ~f:snd
+                                |> List.dedup_and_sort ~compare:String.compare;
+                            }
+                            :: !readings))
               :: !pending;
-            Hashtbl.set leg_makes ~key:(position make) ~data:collector
+            (* Not a name: what it names is replayed where the comparison resolves it. *)
+            match (strip_constraints make).pexp_desc with
+            | Pexp_ident _ -> ()
+            | _ -> Hashtbl.set leg_makes ~key:(position make) ~data:in_place)
         | _ ->
             unread_legs :=
               {
@@ -3386,12 +4010,13 @@ let gate_census content =
             | (Pexp_function _ | Pexp_lazy _)
               when quiet = 0
                    && (not (List.is_empty leg_stack))
-                   && not (Hash_set.mem synchronous (position expr)) ->
+                   && (not (Hash_set.mem synchronous (position expr)))
+                   && not (replaying > 0 && Hash_set.mem replay_live (position expr)) ->
                 with_stack []
             | _ -> dispatch ())
 
       method visit env expr =
-        (if quiet = 0 then
+        (if self#recording then
            let span e = (e.pexp_loc.loc_start.pos_cnum, e.pexp_loc.loc_end.pos_cnum) in
            let operands =
              match expr.pexp_desc with
@@ -3434,16 +4059,24 @@ let gate_census content =
                 | _ -> ())
             | _ -> ())
         | _ -> ());
-        (if quiet = 0 then
+        (if self#recording then
            match expr.pexp_desc with
            | Pexp_apply (callee, arguments) -> (
                (* [sample |> Queue.enqueue queue] is [Queue.enqueue queue sample]. *)
                (* What runs where: the application of a name, for {!once}; the functions a
                   collection-module function is handed, which it calls synchronously. *)
                (match (strip_constraints callee).pexp_desc with
-               | Pexp_ident { txt = Ppxlib.Longident.Lident _; loc } ->
+               | Pexp_ident { txt = Ppxlib.Longident.Lident name; loc } -> (
                    Hashtbl.set applications ~key:loc.loc_start.pos_cnum
-                     ~data:(List.map arguments ~f:fst, self#point_of expr)
+                     ~data:(List.map arguments ~f:fst, self#point_of expr);
+                   (* Where a parameter of a named function takes its value (gh-ocannl-1893). *)
+                   match Lexical_scope.lookup env name with
+                   | Some { identity; _ } when identity > 0 ->
+                       Hashtbl.add_multi call_sites ~key:identity
+                         ~data:(loc.loc_start.pos_cnum, arguments, env);
+                       Hashtbl.set call_callers ~key:loc.loc_start.pos_cnum
+                         ~data:(List.hd enclosing_functions)
+                   | _ -> ())
                | _ -> ());
                (* A pipeline is read as the application it spells, so that [rows |> List.iter ~f] is
                   complete; only a complete application calls its callback. *)
@@ -3459,7 +4092,7 @@ let gate_census content =
                    let arguments = applied_arguments in
                    match self#module_path callee_env prefix with
                    | Some (Collection_module { stdlib; family; _ })
-                     when (not (List.mem [ "Seq"; "Sequence" ] family ~equal:String.equal))
+                     when runs_callback ~family name
                           && applied_fully ~stdlib name (List.map arguments ~f:fst) ->
                        let positional = ref 0 in
                        List.iter arguments ~f:(fun (label, argument) ->
@@ -3518,12 +4151,37 @@ let gate_census content =
            match expr.pexp_desc with
            | Pexp_apply (callee, arguments) -> (
                self#collect_leg_population env expr callee arguments;
+               self#run_deferred env callee arguments;
                match leg_member callee with
-               | Some (member, spelled, ambiguous) ->
+               | Some (member, spelled, ambiguous) when self#recording ->
                    Hash_set.add leg_heads (position (strip_constraints callee));
                    self#leg_claim env expr ~member ~spelled ~ambiguous arguments
+               | Some _ ->
+                   (* A leg claim nested in a replayed function: its make function's claims are the
+                      enclosing make function's, as in the walk itself. *)
+                   List.iter arguments ~f:(fun (_, argument) ->
+                       match (strip_constraints argument).pexp_desc with
+                       | Pexp_function _ ->
+                           Hash_set.add replay_live (position argument);
+                           Hash_set.add replay_live (position (strip_constraints argument))
+                       | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+                           (* One given by name: its definition, replayed with the collectors. *)
+                           match Lexical_scope.lookup env name with
+                           | Some
+                               {
+                                 identity;
+                                 definition =
+                                   Some (({ pexp_desc = Pexp_function _; _ } as function_), scope);
+                               }
+                             when not (Hash_set.mem replayed identity) ->
+                               Hash_set.add replayed identity;
+                               Exn.protect
+                                 ~f:(fun () -> self#replay leg_stack scope function_)
+                                 ~finally:(fun () -> Hash_set.remove replayed identity)
+                           | _ -> ())
+                       | _ -> ())
                | None -> ())
-           | Pexp_ident _ when not (Hash_set.mem leg_heads (position expr)) -> (
+           | Pexp_ident _ when self#recording && not (Hash_set.mem leg_heads (position expr)) -> (
                match leg_member expr with
                | Some (_, spelled, _) ->
                    unread_legs :=
@@ -3535,7 +4193,7 @@ let gate_census content =
                      :: !unread_legs
                | None -> ())
            | _ -> ());
-        (if quiet = 0 && not (Hash_set.mem consumed (position expr)) then
+        (if self#recording && not (Hash_set.mem consumed (position expr)) then
            match expr.pexp_desc with
            | Pexp_ident _ -> (
                (* A claim named as a value rather than applied -- handed to [List.iter], say -- is
@@ -3570,19 +4228,29 @@ let gate_census content =
                        commit marks;
                        Int.incr gated_sites;
                        let point = self#point_of expr in
+                       let enclosing = List.hd enclosing_functions in
                        pending :=
                          (fun () ->
                            unlisted_sink := [];
                            claim_point <- Some point;
-                           let reads = self#gate_reads gate_env gate in
-                           let built =
-                             if String.equal member gated_boolean then
-                               self#quantified population_env population
-                             else self#population population_env population
-                           in
+                           (* Inside a named function its applications supply, compared once per
+                              application, so that one call's gate never meets another call's
+                              population (gh-ocannl-1893). *)
+                           let contexts = self#call_chains enclosing in
                            let shared =
-                             Hash_set.filter built ~f:(Hash_set.mem reads)
-                             |> Hash_set.to_list |> List.map ~f:fst
+                             List.concat_map contexts ~f:(fun calls ->
+                                 context <- calls;
+                                 Exn.protect
+                                   ~finally:(fun () -> context <- [])
+                                   ~f:(fun () ->
+                                     let reads = self#gate_reads gate_env gate in
+                                     let built =
+                                       if String.equal member gated_boolean then
+                                         self#quantified population_env population
+                                       else self#population population_env population
+                                     in
+                                     Hash_set.filter built ~f:(Hash_set.mem reads)
+                                     |> Hash_set.to_list |> List.map ~f:fst))
                              |> List.dedup_and_sort ~compare:String.compare
                            in
                            List.dedup_and_sort !unlisted_sink ~compare:Poly.compare
@@ -3621,14 +4289,15 @@ let gate_census content =
             walk ()
         | Pexp_while _ -> self#framed ~kind:Loop ~start ~stop walk
         | Pexp_function _ when Hash_set.mem synchronous (position expr) ->
-            self#framed ~kind:Loop ~start ~stop walk
+            self#framed ~kind:Loop ~start ~stop (fun () -> self#function_scope expr walk)
         | Pexp_function (params, _, body) ->
             self#framed
               ~kind:
                 (function_kind
                    ~binding:(Hashtbl.find function_bindings (position expr))
                    params body)
-              ~start ~stop walk
+              ~start ~stop
+              (fun () -> self#function_scope expr walk)
         | Pexp_lazy _ | Pexp_object _ -> self#framed ~kind:Deferred ~start ~stop walk
         | _ -> walk ()
     end
@@ -3676,20 +4345,39 @@ let gate_census content =
     it is never a reason to report one. Widening the model is a change to this header first.
 
     - A SKIP is a [skipped] {!Verdict_callee} reads as [Verdict]'s ([Verdict.skipped], an opened
-      one), or one a [let] of the source binds to a skip or its application (the per-test
-      [let skipped = Verdict.skipped ~backend:backend_name]), through [open]s of the standard
-      libraries; never a parameter or other binding of the name, nor another module's. A skip RUNS
-      where it is applied to its label (a positional argument); a partial skip is a callback, read
-      only where a collection function is handed it.
+      one), or a name of any spelling a [let] of the source binds to a skip or its application (the
+      per-test [let skipped = Verdict.skipped ~backend:backend_name], or [let skip = ...]), through
+      [open]s of the standard libraries; never a parameter or other binding of the name, nor another
+      module's. A skip RUNS where it is applied to its label (a positional argument); a partial skip
+      is a callback, read only where a collection function is handed it.
     - An EVALUATING claim is an application of any other {!Verdict_callee.members} name but [fail]
       and [case] that the resolver reads as [Verdict]'s.
     - What RUNS: the code written in place. A function value and a [lazy] are DEFERRED -- their
-      bodies are not read as run -- except a function a collection-module function calls back.
+      bodies are not read as run -- except a function a collection-module function calls back, and a
+      DEFERRED SKIP VALUE where it is run (gh-ocannl-1893).
+    - A DEFERRED SKIP VALUE is a function or a [lazy] a named [let] of the source binds (or a [let]
+      renaming one), resolved lexically, so a shadowing binding is not it. Its run code is its body
+      read as above, down to the branches nested in it, which are judged where they are written. It
+      RUNS where a complete application of its name supplies every positional and required labelled
+      parameter of the function, or where its name is forced ([Lazy.force], [Lazy.force_val],
+      [Base]'s unqualified [force]) -- a [lazy] once per branch, being memoised. There it runs its
+      run code: a SKIP WRAPPER (one whose body evaluates no claim, its nested branches included) its
+      skips, through wrappers of wrappers (a cycle runs nothing); any other its evaluating claims,
+      so a branch calling a function that evaluates a claim evaluates one. A skip wrapper's name, or
+      its partial application, handed where a collection function calls it back is a skip handed
+      there.
+    - A STORED ITERATION is a name a [let] binds to a partial application of a collection iteration
+      (one not {!applied_fully}), or to a renaming of one: an application of the name completes it,
+      the stored arguments followed by the new ones, and is read as that iteration.
     - A COLLECTION ITERATION is a complete ({!applied_fully}) application of a function of
       {!collection_modules} -- the module resolved through the source's own module aliases and
       structures, [Option] and [Result] excluded (at most one run), [Seq]/[Sequence] only through
-      their consuming functions -- written directly or through [|>]/[@@]; its argument is CALLED
-      BACK where {!calls_back} says so, in either library's order.
+      the functions {!collection_functions} marks as consuming ({!runs_callback}) -- written
+      directly or through [|>]/[@@]; its argument is CALLED BACK where {!calls_back} says so, in
+      either library's order. A complete application of a consuming function also calls back the
+      callbacks of a lazy sequence handed to it positionally: a [Seq]/[Sequence] function that does
+      not consume ([Seq.map skipped s]) carries its callback, through the names it is bound to and
+      the sequences it is built from, to the consumer that runs it.
     - A BRANCH is one branch of an [if], or one case of a [match] or [function].
 
     Two shapes are refused:
@@ -3701,15 +4389,17 @@ let gate_census content =
       makes a skip and no evaluating claim. A loop whose callback evaluates the claim on one side of
       its gate and skips it on the other is one claim written once, and passes;
     - a SKIP RUN: a branch whose run code applies two or more skips, read down to the branches
-      nested in it, which are judged on their own.
+      nested in it, which are judged on their own. A run is counted up to 64 skips, as each deferred
+      skip value's summary keeps at most that many, so a chain of wrappers that each run the
+      previous one twice stays linear.
 
     {2 Outside the model}
 
-    Known examples, each read as no skip list: a skip routed through a wrapper of another name
-    ([let skip_all () = skipped "a"; skipped "b"] applied in a branch); labels iterated by a
-    function of the source rather than a collection module's; a partial iteration stored and applied
-    later; a run of single skips spread across nested branches; a deferred value that some other
-    code forces or calls. *)
+    Known examples, each read as no skip list: labels iterated by a function of the source rather
+    than a collection module's; a run of single skips spread across nested branches; a deferred
+    value reached other than by its name -- stored in a container or a field, handed as an argument
+    and run through the parameter, or another module's; a stored iteration completed through a
+    parameter or a container; and a lazy sequence consumed by a function of the source. *)
 
 type skip_list_kind =
   | Iterated  (** A skip handed to an iteration, or a loop body that only skips. *)
@@ -3731,13 +4421,21 @@ type skip_list_census = {
 let skip_name = "skipped"
 let skip_list_unread_members = [ "fail"; "case"; skip_name ]
 
-(* The positions of the identifiers that are skips: a [skipped] {!Verdict_callee} reads as
-   [Verdict]'s (qualified, or unqualified where nothing of the source binds it), and an unqualified
-   [skipped] a [let] binds to a skip or a skip's application -- the per-test [let skipped =
-   Verdict.skipped ~backend:backend_name] -- but not a parameter, a pattern, a [let] of anything
-   else named [skipped], or another module's. *)
+(* What a name of the source denotes to the skip-list reader: whether it is a skip, and the named
+   [let] binding it resolves to, if one does -- what a deferred skip value ({!skip_list_census}) is
+   read from. *)
+type skip_denotation = { is_skip : bool; bound : value_binding option }
+
+(* The positions of the identifiers that are skips -- a [skipped] {!Verdict_callee} reads as
+   [Verdict]'s (qualified, or unqualified where nothing of the source binds it), and a name of any
+   spelling a [let] binds to a skip or a skip's application (the per-test [let skipped =
+   Verdict.skipped ~backend:backend_name], or [let skip = Verdict.skipped ~backend]), but not a
+   parameter, a pattern, a [let] of anything else, or another module's -- and, for every unqualified
+   name, the named [let] binding it resolves to, by the name's position. *)
 let skip_positions ~owners ast =
   let positions = Hash_set.create (module Int) in
+  let uses = Hashtbl.create (module Int) in
+  let bound = Hash_set.create (module Int) in
   let verdicts loc =
     match Verdict_callee.resolve_at owners loc with
     | Some { ownership = Verdicts | Ambiguous | Free; _ } -> true
@@ -3745,16 +4443,16 @@ let skip_positions ~owners ast =
   in
   let resolved env name loc =
     match Lexical_scope.lookup env name with
-    | Some (Some skip) -> skip
-    | Some None | None -> verdicts loc
+    | Some (Some { is_skip; _ }) -> is_skip
+    | Some None | None -> String.equal name skip_name && verdicts loc
   in
   let walker =
     object
-      inherit [bool option, bool] Lexical_scope.scoped
+      inherit [skip_denotation option, bool] Lexical_scope.scoped
 
-      (* [Some b]: the source binds the name, to a skip or not; [None]: an [open] or [include] may
-         have brought one in, which the resolver decides. *)
-      method local = Some false
+      (* [Some d]: the source binds the name, to a skip or not; [None]: an [open] or [include] may
+         have brought a [skipped] in, which the resolver decides. *)
+      method local = Some { is_skip = false; bound = None }
 
       (* A module's denotation: whether it may export a [skipped] -- a standard library does not
          ({!Verdict_callee.standard_libraries}); any other module, or [Verdict] itself, may. *)
@@ -3775,36 +4473,72 @@ let skip_positions ~owners ast =
       method! binding_denotes env binding =
         let rec skip_head expr =
           match (strip_constraints expr).pexp_desc with
-          | Pexp_ident { txt = Ppxlib.Longident.Lident name; loc } when String.equal name skip_name
-            ->
-              resolved env name loc
+          | Pexp_ident { txt = Ppxlib.Longident.Lident name; loc } -> resolved env name loc
           | Pexp_ident { txt = Ppxlib.Longident.Ldot (_, name); loc } ->
               String.equal name skip_name && verdicts loc
           | Pexp_apply (callee, _) -> skip_head callee
           | _ -> false
         in
-        Some (Option.is_some (Read.pattern_name binding.pvb_pat) && skip_head binding.pvb_expr)
+        let named = Option.is_some (Read.pattern_name binding.pvb_pat) in
+        Some
+          {
+            is_skip = named && skip_head binding.pvb_expr;
+            bound = (if named then Some binding else None);
+          }
 
       method! ident env ident =
         let skip =
           match ident.txt with
-          | Ppxlib.Longident.Lident name when String.equal name skip_name ->
-              resolved env name ident.loc
+          | Ppxlib.Longident.Lident name -> resolved env name ident.loc
           | Ldot (_, name) -> String.equal name skip_name && verdicts ident.loc
           | _ -> false
         in
-        if skip then Hash_set.add positions ident.loc.loc_start.pos_cnum
+        if skip then Hash_set.add positions ident.loc.loc_start.pos_cnum;
+        match ident.txt with
+        | Lident name -> (
+            match Lexical_scope.lookup env name with
+            | Some (Some { bound = Some binding; _ }) ->
+                Hash_set.add bound ident.loc.loc_start.pos_cnum;
+                Hashtbl.set uses ~key:ident.loc.loc_start.pos_cnum ~data:binding
+            | Some (Some _) -> Hash_set.add bound ident.loc.loc_start.pos_cnum
+            | _ -> ())
+        | _ -> ()
     end
   in
   ignore
     (walker#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } ast
       : structure);
-  positions
+  (positions, uses, bound)
+
+(* What running a deferred skip value does: the skips its run code applies, outside the branches
+   nested in it, in source order, and how many evaluating claims it makes anywhere. *)
+type skip_effect = { run_skips : (expression * int option) list; run_evaluating : int }
+(** Each skip with the [lazy] it runs through, by its binding, where it does: a lazy forced again in
+    the same branch -- directly or through a wrapper -- runs nothing the second time. *)
+
+(* A named binding of the source whose value runs claims later ({!skip_list_census}). *)
+type deferred_skips =
+  | Skip_function of {
+      positional : int;
+      labelled : string list;
+      runs : skip_effect;
+      callback_skips : expression list;
+      defaults : (string * skip_effect) list;
+          (** What each optional parameter's default runs, by its label: run before the body by an
+              application omitting the label. *)
+    }
+      (** A function: its positional and required labelled parameters (a [function]'s implicit one
+          among them), which an application must supply to run it; what an application runs ([runs],
+          its nested branches judged where they are written); and the skips it runs as a collection
+          function's callback -- its whole body, branches included, as an anonymous callback's is
+          read. *)
+  | Skip_lazy of { key : int; runs : skip_effect }
+      (** A [lazy], by its binding: memoised, so forcing it twice runs it once. *)
 
 let skip_list_census content =
   let ast = Read.structure_of content in
   let owners = Verdict_callee.of_structure ast in
-  let skips = skip_positions ~owners ast in
+  let skips, uses, source_bound = skip_positions ~owners ast in
   let is_skip_head expr =
     match (strip_constraints expr).pexp_desc with
     | Pexp_ident { loc; _ } -> Hash_set.mem skips loc.loc_start.pos_cnum
@@ -3831,72 +4565,26 @@ let skip_list_census content =
         | None -> Ppxlib.Pprintast.string_of_expression expr)
     | _ -> Ppxlib.Pprintast.string_of_expression expr
   in
-  (* The skips and evaluating claims [expr] applies, in source order; [~branches:false] stops at the
-     branches nested in it and the functions written in it. *)
-  let claims ~branches expr =
-    let root = expr in
-    let found_skips = ref [] and evaluating = ref 0 in
-    let reader =
-      object (self)
-        inherit Ast_traverse.iter as super
-
-        method! expression e =
-          (* Applied skips only: a skip handed on as a value is an iteration's argument, which the
-             walk reads where it is handed. *)
-          (match e.pexp_desc with
-          | Pexp_apply (callee, arguments)
-            when is_skip_head callee
-                 && List.exists arguments ~f:(fun (label, _) ->
-                     Poly.equal label Ppxlib.Asttypes.Nolabel) ->
-              (* A skip handed its label; a partial one is a callback, read where it is handed. *)
-              found_skips := e :: !found_skips
-          | Pexp_apply (callee, _) when is_evaluating_head callee -> Int.incr evaluating
-          | _ -> ());
-          match e.pexp_desc with
-          | Pexp_apply (callee, arguments) when is_skip_head callee ->
-              (* The skip's own head is not a second skip. *)
-              List.iter arguments ~f:(fun (_, argument) -> self#expression argument)
-          | (Pexp_function _ | Pexp_lazy _) when branches && not (phys_equal e root) ->
-              (* A function value or lazy inside the callback or loop body is deferred: what it
-                 skips is not skipped here. *)
-              ()
-          | (Pexp_ifthenelse _ | Pexp_match _ | Pexp_function _ | Pexp_lazy _) when not branches
-            -> (
-              match e.pexp_desc with
-              | Pexp_ifthenelse (condition, _, _) -> self#expression condition
-              | Pexp_match (scrutinee, _) -> self#expression scrutinee
-              | _ -> ())
-          | _ -> super#expression e
-      end
-    in
-    reader#expression expr;
-    (List.rev !found_skips, !evaluating)
+  (* The named [let] binding an unqualified name resolves to, lexically. *)
+  let binding_of expr =
+    match (strip_constraints expr).pexp_desc with
+    | Pexp_ident { txt = Ppxlib.Longident.Lident _; loc } ->
+        Hashtbl.find uses loc.loc_start.pos_cnum
+    | _ -> None
   in
-  let found = ref [] and skips_read = ref 0 in
-  let report kind (at : expression) skips =
-    match skips with
-    | first :: _ ->
-        found :=
-          {
-            skip_kind = kind;
-            skip_line = at.pexp_loc.loc_start.pos_lnum;
-            first_label = label_of first;
-          }
-          :: !found
-    | [] -> ()
+  let binding_key binding = binding.pvb_loc.loc_start.pos_cnum in
+  (* [labels |> List.iter ~f] and [List.iter ~f @@ labels] are the application they spell. *)
+  let normalize callee arguments =
+    match (Read.longident_of callee, arguments) with
+    | Some [ "|>" ], [ (Ppxlib.Asttypes.Nolabel, x); (Ppxlib.Asttypes.Nolabel, f) ]
+    | Some [ "@@" ], [ (Ppxlib.Asttypes.Nolabel, f); (Ppxlib.Asttypes.Nolabel, x) ] -> (
+        match (strip_constraints f).pexp_desc with
+        | Pexp_apply (inner, inner_arguments) ->
+            (inner, inner_arguments @ [ (Ppxlib.Asttypes.Nolabel, x) ])
+        | _ -> (f, [ (Ppxlib.Asttypes.Nolabel, x) ]))
+    | _ -> (callee, arguments)
   in
-  let skip_only expr =
-    let skips, evaluating = claims ~branches:true expr in
-    if evaluating = 0 then skips else []
-  in
-  let iterated_argument argument =
-    let argument = strip_constraints argument in
-    match argument.pexp_desc with
-    | Pexp_ident _ when is_skip_head argument -> [ argument ]
-    | Pexp_apply (callee, _) when is_skip_head callee -> [ argument ]
-    | Pexp_function _ -> skip_only argument
-    | _ -> []
-  in
+  (* [Lazy.force], [Lazy.force_val], or [Base]'s unqualified [force] where the source binds none. *)
   (* The modules the source binds, by name: an alias to a path ([module L = List]) by the path's
      last component, a structure of its own as [None]. By name across the source, not by scope: a
      name bound both ways reads as the alias, the loud direction. *)
@@ -3935,13 +4623,274 @@ let skip_list_census content =
     | Some None -> None
     | None -> Some name
   in
-  (* A lazy sequence's map or filter only builds it; these consume it, calling their callback. *)
-  let consuming =
-    [ "iter"; "iteri"; "fold"; "fold_left"; "for_all"; "exists"; "find"; "find_map" ]
+  let forces callee =
+    match Read.longident_of (strip_constraints callee) with
+    | Some [ "force" ] -> (
+        (* Unless the source binds a [force] of its own: a [let], a parameter, a pattern. *)
+        match (strip_constraints callee).pexp_desc with
+        | Pexp_ident { loc; _ } -> not (Hash_set.mem source_bound loc.loc_start.pos_cnum)
+        | _ -> false)
+    | Some path -> (
+        (* [Lazy.force], through the source's module aliases; not a [Lazy] of the source's own. *)
+        match List.rev path with
+        | ("force" | "force_val") :: module_ :: _ ->
+            Option.equal String.equal (resolve_module [] module_) (Some "Lazy")
+        | _ -> false)
+    | None -> false
   in
-  (* The function name of a collection-module function [callee] spells, where it is one: its module
-     component resolved through the source's module bindings ([resolve_module]). *)
-  let collection_iteration callee =
+  (* Whether an argument supplies the optional parameter [label], so that its default does not run:
+     [~label:v], or [?label:e] -- except a literal [None], which runs the default. *)
+  let supplies_default label (given, value) =
+    match given with
+    | Ppxlib.Asttypes.Labelled given -> String.equal given label
+    | Optional given -> (
+        String.equal given label
+        &&
+        match (strip_constraints value).pexp_desc with
+        | Pexp_construct ({ txt = Ppxlib.Longident.Lident "None"; _ }, None) -> false
+        | _ -> true)
+    | Nolabel -> false
+  in
+  let skip_cap = 64 in
+  let memo = Hashtbl.create (module Int) and in_progress = Hash_set.create (module Int) in
+  (* The skips and evaluating claims [expr] applies, in source order; [~branches:false] stops at the
+     branches nested in it and the functions written in it. A complete application of a deferred
+     skip function, or a force of a deferred skip lazy, runs what its run code runs: a skip wrapper
+     (one that evaluates nothing) its skips, any other its evaluating claims. *)
+  let rec claims ~branches expr =
+    let root = expr in
+    let found_skips = ref [] and evaluating = ref 0 in
+    let forced = Hash_set.create (module Int) in
+    let run ?through runs =
+      if runs.run_evaluating > 0 then evaluating := !evaluating + runs.run_evaluating
+      else
+        let fresh =
+          List.filter_map runs.run_skips ~f:(fun (skip, key) ->
+              let key = Option.first_some key through in
+              match key with Some key when Hash_set.mem forced key -> None | _ -> Some (skip, key))
+        in
+        List.iter fresh ~f:(fun (_, key) -> Option.iter key ~f:(Hash_set.add forced));
+        (* At most [skip_cap] skips are kept: a branch needs two to be refused, and a chain of
+           wrappers each running the previous one twice would otherwise grow exponentially. *)
+        let room = skip_cap - List.length !found_skips in
+        if room > 0 then found_skips := List.rev_append (List.take fresh room) !found_skips
+    in
+    let reader =
+      object (self)
+        inherit Ast_traverse.iter as super
+
+        method! expression e =
+          (* Applied skips only: a skip handed on as a value is an iteration's argument, which the
+             walk reads where it is handed. *)
+          (match e.pexp_desc with
+          | Pexp_apply (callee, arguments)
+            when is_skip_head callee
+                 && List.exists arguments ~f:(fun (label, _) ->
+                     Poly.equal label Ppxlib.Asttypes.Nolabel) ->
+              (* A skip handed its label; a partial one is a callback, read where it is handed. *)
+              found_skips := (e, None) :: !found_skips
+          | Pexp_apply (callee, _) when is_evaluating_head callee -> Int.incr evaluating
+          | Pexp_apply (callee, arguments) -> (
+              match run_of callee arguments with
+              | Some (Skip_function { runs; defaults; _ }) ->
+                  List.iter defaults ~f:(fun (label, default) ->
+                      if
+                        not
+                          (List.exists arguments ~f:(fun (given, value) ->
+                               supplies_default label (given, value)))
+                      then run default);
+                  run runs
+              | Some (Skip_lazy { key; runs }) -> run ~through:key runs
+              | None -> ())
+          | _ -> ());
+          match e.pexp_desc with
+          | Pexp_apply (callee, arguments) when is_skip_head callee ->
+              (* The skip's own head is not a second skip. *)
+              List.iter arguments ~f:(fun (_, argument) -> self#expression argument)
+          | (Pexp_function _ | Pexp_lazy _) when branches && not (phys_equal e root) ->
+              (* A function value or lazy inside the callback or loop body is deferred: what it
+                 skips is not skipped here. *)
+              ()
+          | (Pexp_ifthenelse _ | Pexp_match _ | Pexp_function _ | Pexp_lazy _) when not branches
+            -> (
+              match e.pexp_desc with
+              | Pexp_ifthenelse (condition, _, _) -> self#expression condition
+              | Pexp_match (scrutinee, _) -> self#expression scrutinee
+              | _ -> ())
+          | _ -> super#expression e
+      end
+    in
+    reader#expression expr;
+    (List.rev !found_skips, !evaluating)
+  (* The deferred skip value a named binding holds -- a function or a [lazy], or a renaming of one
+     -- read once; a cycle reads as nothing. *)
+  and deferred binding =
+    let key = binding_key binding in
+    match Hashtbl.find memo key with
+    | Some known -> known
+    | None when Hash_set.mem in_progress key -> None
+    | None ->
+        Hash_set.add in_progress key;
+        let rhs = strip_constraints binding.pvb_expr in
+        let result =
+          match rhs.pexp_desc with
+          | Pexp_function (params, _, body) ->
+              let positional =
+                List.count params ~f:(fun param ->
+                    match param.pparam_desc with
+                    | Pparam_val (Ppxlib.Asttypes.Nolabel, _, _) -> true
+                    | _ -> false)
+                + match body with Pfunction_cases _ -> 1 | Pfunction_body _ -> 0
+              in
+              let labelled =
+                List.filter_map params ~f:(fun param ->
+                    match param.pparam_desc with
+                    | Pparam_val (Ppxlib.Asttypes.Labelled label, _, _) -> Some label
+                    | _ -> None)
+              in
+              (* A lazy the function allocates itself is a new cell at each application: its
+                 identity does not outlive one, unlike a lazy the function captures. *)
+              let start, stop = (rhs.pexp_loc.loc_start.pos_cnum, rhs.pexp_loc.loc_end.pos_cnum) in
+              let run_skips =
+                (match body with
+                  | Pfunction_body body -> fst (claims ~branches:false body)
+                  | Pfunction_cases _ -> [])
+                |> List.map ~f:(fun (skip, key) ->
+                    match key with
+                    | Some key when start <= key && key < stop -> (skip, None)
+                    | _ -> (skip, key))
+              in
+              (* What the body runs, branches and a [function]'s cases included, apart from the
+                 defaults, which run only where an application omits their label. *)
+              let whole, run_evaluating =
+                let bodies =
+                  match body with
+                  | Pfunction_body body -> [ body ]
+                  | Pfunction_cases (cases, _, _) ->
+                      List.concat_map cases ~f:(fun case ->
+                          Option.to_list case.pc_guard @ [ case.pc_rhs ])
+                in
+                let read = List.map bodies ~f:(claims ~branches:true) in
+                (List.concat_map read ~f:fst, List.sum (module Int) read ~f:snd)
+              in
+              Some
+                (Skip_function
+                   {
+                     positional;
+                     labelled;
+                     runs = { run_skips; run_evaluating };
+                     callback_skips = List.map whole ~f:fst;
+                     defaults =
+                       List.filter_map params ~f:(fun param ->
+                           match param.pparam_desc with
+                           | Pparam_val (Ppxlib.Asttypes.Optional label, Some default, _) ->
+                               let run_skips, run_evaluating = claims ~branches:false default in
+                               Some (label, { run_skips; run_evaluating })
+                           | _ -> None);
+                   })
+          | Pexp_lazy inner ->
+              let run_skips = fst (claims ~branches:false inner) in
+              let run_evaluating = snd (claims ~branches:true rhs) in
+              Some (Skip_lazy { key; runs = { run_skips; run_evaluating } })
+          | Pexp_ident _ -> Option.bind (binding_of rhs) ~f:deferred
+          | _ -> None
+        in
+        Hash_set.remove in_progress key;
+        Hashtbl.set memo ~key ~data:result;
+        result
+  (* What an application runs of a deferred skip value: a complete application of a function's name,
+     or a force of a lazy's. *)
+  and run_of callee arguments =
+    if forces callee then
+      match arguments with
+      | [ (Ppxlib.Asttypes.Nolabel, thunk) ] -> (
+          match Option.bind (binding_of thunk) ~f:deferred with
+          | Some (Skip_lazy _) as lazy_ -> lazy_
+          | _ -> None)
+      | _ -> None
+    else
+      match Option.bind (binding_of callee) ~f:deferred with
+      | Some (Skip_function { positional; labelled; _ }) as function_
+        when List.count arguments ~f:(fun (label, _) -> Poly.equal label Ppxlib.Asttypes.Nolabel)
+             >= positional
+             && List.for_all labelled ~f:(fun label ->
+                 List.exists arguments ~f:(fun (given, _) ->
+                     Poly.equal given (Ppxlib.Asttypes.Labelled label))) ->
+          function_
+      | _ -> None
+  in
+  let found = ref [] and skips_read = ref 0 in
+  let report kind (at : expression) skips =
+    match skips with
+    | first :: _ ->
+        found :=
+          {
+            skip_kind = kind;
+            skip_line = at.pexp_loc.loc_start.pos_lnum;
+            first_label = label_of first;
+          }
+          :: !found
+    | [] -> ()
+  in
+  let skip_only expr =
+    let skips, evaluating = claims ~branches:true expr in
+    if evaluating = 0 then List.map skips ~f:fst else []
+  in
+  (* How many positional arguments a collection function [name] hands its callback at the least: the
+     element, and an index ([iteri], [mapi], ...), an accumulator ([fold]) or a second collection's
+     element (a pairwise [iter2]) besides. *)
+  let callback_arguments name =
+    (* A comparator takes two elements. *)
+    (if
+       List.mem
+         [ "sort"; "stable_sort"; "fast_sort"; "sort_uniq"; "merge"; "equal"; "compare" ]
+         name ~equal:String.equal
+     then 2
+     else 1)
+    + (if String.is_suffix name ~suffix:"i" then 1 else 0)
+    + (if String.is_prefix name ~prefix:"fold" then 1 else 0)
+    + if String.is_substring name ~substring:"2" then 1 else 0
+  in
+  (* The skips a skip wrapper named by [callee] runs as the callback of the collection function
+     [name], where it is one -- a function of the source whose run code skips and evaluates nothing
+     -- and the call saturates it: [stored], the arguments a partial application of it already
+     holds, and what [name] hands it supply every positional and required labelled parameter. *)
+  let wrapper_skips name callee stored =
+    match Option.bind (binding_of callee) ~f:deferred with
+    | Some
+        (Skip_function
+           { positional; labelled; runs = { run_evaluating = 0; _ }; callback_skips; defaults })
+      when List.count stored ~f:(fun (label, _) -> Poly.equal label Ppxlib.Asttypes.Nolabel)
+           + callback_arguments name
+           >= positional
+           && List.for_all labelled ~f:(fun label ->
+               List.exists stored ~f:(fun (given, _) ->
+                   Poly.equal given (Ppxlib.Asttypes.Labelled label))) ->
+        (* A default runs where the stored arguments omit its label; one that evaluates a claim then
+           makes the callback no skip wrapper. *)
+        let omitted =
+          List.filter_map defaults ~f:(fun (label, default) ->
+              if List.exists stored ~f:(supplies_default label) then None else Some default)
+        in
+        if List.exists omitted ~f:(fun default -> default.run_evaluating > 0) then []
+        else
+          List.concat_map omitted ~f:(fun default -> List.map default.run_skips ~f:fst)
+          @ callback_skips
+    | _ -> []
+  in
+  let iterated_argument name argument =
+    let argument = strip_constraints argument in
+    match argument.pexp_desc with
+    | Pexp_ident _ when is_skip_head argument -> [ argument ]
+    | Pexp_apply (callee, _) when is_skip_head callee -> [ argument ]
+    | Pexp_ident _ -> wrapper_skips name argument []
+    | Pexp_apply (callee, stored) -> wrapper_skips name callee stored
+    | Pexp_function _ -> skip_only argument
+    | _ -> []
+  in
+  (* The module and function name of a collection-module function [callee] spells, where it is one:
+     its module component resolved through the source's module bindings ([resolve_module]). *)
+  let collection_callee callee =
     match Read.longident_of (strip_constraints callee) with
     | Some (_ :: _ :: _ as path) -> (
         match resolve_module [] (List.nth_exn path (List.length path - 2)) with
@@ -3949,15 +4898,109 @@ let skip_list_census content =
         | Some module_ ->
             if
               List.mem collection_modules module_ ~equal:String.equal
-              && (not (List.mem [ "Option"; "Result" ] module_ ~equal:String.equal))
-              && ((not (List.mem [ "Seq"; "Sequence" ] module_ ~equal:String.equal))
-                 || List.mem consuming (List.last_exn path) ~equal:String.equal)
-            then Some (List.last_exn path)
+              && not (List.mem [ "Option"; "Result" ] module_ ~equal:String.equal)
+            then Some (module_, List.last_exn path)
             else None)
     | _ -> None
   in
+  (* The function name of a collection iteration [callee] spells: a lazy sequence's only where it
+     consumes the sequence ({!runs_callback}). *)
+  let collection_iteration callee =
+    match collection_callee callee with
+    | Some (family, name) when runs_callback ~family name -> Some name
+    | _ -> None
+  in
+  let fully name arguments =
+    let labels = List.map arguments ~f:fst in
+    applied_fully ~stdlib:false name labels || applied_fully ~stdlib:true name labels
+  in
+  (* An application of a name bound to a partial application -- [let skip_all = List.iter
+     ~f:skipped] ... [skip_all labels] -- is the application it completes: the stored arguments,
+     then the new ones, through every renaming on the way. *)
+  let rec completed seen callee arguments =
+    match binding_of callee with
+    | Some binding when not (List.mem seen (binding_key binding) ~equal:Int.equal) -> (
+        let seen = binding_key binding :: seen in
+        let rhs = strip_constraints binding.pvb_expr in
+        match rhs.pexp_desc with
+        | Pexp_ident _ -> completed seen rhs arguments
+        | Pexp_apply (inner, stored) -> (
+            let inner, stored = normalize inner stored in
+            (* A value already, where complete in both libraries' orders; complete in one only
+               ([Stdlib.List.iter f] meets [Base]'s one-positional arity), it may still await its
+               collection. *)
+            let labels = List.map stored ~f:fst in
+            match collection_iteration inner with
+            | Some name
+              when applied_fully ~stdlib:false name labels && applied_fully ~stdlib:true name labels
+              ->
+                (callee, arguments)
+            | _ -> completed seen inner (stored @ arguments))
+        | _ -> (callee, arguments))
+    | _ -> (callee, arguments)
+  in
+  (* The skip callbacks a lazy sequence carries until something consumes it: [Seq.map skipped s],
+     through the names it is bound to and the sequences it is built from. *)
+  (* The positional arguments of the collection function [name] that may be the collection it
+     consumes: the first in [Base]'s order, the last in [Stdlib]'s (two each for a pairwise one) --
+     never a fold's initial accumulator or another value between them. *)
+  let collection_positionals name arguments =
+    let positional =
+      List.filter_map arguments ~f:(function
+        | Ppxlib.Asttypes.Nolabel, argument -> Some argument
+        | _ -> None)
+    in
+    let n = List.length positional in
+    let pairwise = String.is_substring name ~substring:"2" in
+    List.filteri positional ~f:(fun i _ -> i = 0 || i = n - 1 || (pairwise && (i = 1 || i = n - 2)))
+  in
+  let sequence_element_constructors =
+    [ "return"; "singleton"; "repeat"; "forever"; "make"; "init"; "unfold"; "iterate"; "once" ]
+  in
+  let rec producer_skips seen expr =
+    let expr = strip_constraints expr in
+    match expr.pexp_desc with
+    | Pexp_ident _ -> (
+        match binding_of expr with
+        | Some binding when not (List.mem seen (binding_key binding) ~equal:Int.equal) ->
+            producer_skips (binding_key binding :: seen) binding.pvb_expr
+        | _ -> [])
+    | Pexp_apply (callee, arguments) -> (
+        let callee, arguments = normalize callee arguments in
+        match collection_callee callee with
+        | Some (family, name)
+          when List.mem sequence_families family ~equal:String.equal
+               && not (runs_callback ~family name) ->
+            let positional = ref 0 in
+            (* The sequences it is built from -- not the element a constructor stores ([Seq.return
+               s] holds [s] unconsumed, [Seq.cons x s] holds [x]). *)
+            let collections =
+              if List.mem sequence_element_constructors name ~equal:String.equal then []
+              else if String.equal name "cons" then
+                List.drop (collection_positionals name arguments) 1
+              else collection_positionals name arguments
+            in
+            List.concat_map arguments ~f:(fun (label, argument) ->
+                let index = !positional in
+                (match label with Ppxlib.Asttypes.Nolabel -> Int.incr positional | _ -> ());
+                let callback =
+                  if
+                    calls_back ~stdlib:false name label index
+                    || calls_back ~stdlib:true name label index
+                  then [ iterated_argument name argument ]
+                  else []
+                in
+                let built =
+                  if List.exists collections ~f:(phys_equal argument) then
+                    producer_skips seen argument
+                  else []
+                in
+                List.filter (callback @ built) ~f:(Fn.non List.is_empty))
+        | _ -> [])
+    | _ -> []
+  in
   let branch body =
-    let skips, _ = claims ~branches:false body in
+    let skips = List.map (fst (claims ~branches:false body)) ~f:fst in
     if List.length skips >= 2 then report (Skip_run (List.length skips)) body skips
   in
   let walker =
@@ -3968,17 +5011,12 @@ let skip_list_census content =
         (match expr.pexp_desc with
         | Pexp_ident _ when is_skip_head expr -> Int.incr skips_read
         | Pexp_apply (callee, arguments) ->
-            (* [labels |> List.iter ~f] and [List.iter ~f @@ labels] are the application they
-               spell. *)
+            let callee, arguments = normalize callee arguments in
             let callee, arguments =
-              match (Read.longident_of callee, arguments) with
-              | Some [ "|>" ], [ (Ppxlib.Asttypes.Nolabel, x); (Ppxlib.Asttypes.Nolabel, f) ]
-              | Some [ "@@" ], [ (Ppxlib.Asttypes.Nolabel, f); (Ppxlib.Asttypes.Nolabel, x) ] -> (
-                  match (strip_constraints f).pexp_desc with
-                  | Pexp_apply (inner, inner_arguments) ->
-                      (inner, inner_arguments @ [ (Ppxlib.Asttypes.Nolabel, x) ])
-                  | _ -> (f, [ (Ppxlib.Asttypes.Nolabel, x) ]))
-              | _ -> (callee, arguments)
+              let completed_callee, completed_arguments = completed [] callee arguments in
+              if Option.is_some (collection_iteration completed_callee) then
+                (completed_callee, completed_arguments)
+              else (callee, arguments)
             in
             Option.iter (collection_iteration callee) ~f:(fun name ->
                 (* Only an argument the function calls back is iterated over -- [List.iter]'s [~f],
@@ -3995,7 +5033,14 @@ let skip_list_census content =
                       && applied_fully ~stdlib:false name labels
                       || calls_back ~stdlib:true name label index
                          && applied_fully ~stdlib:true name labels
-                    then report Iterated expr (iterated_argument argument)))
+                    then report Iterated expr (iterated_argument name argument));
+                (* A consumer runs the callbacks of the lazy sequence it is handed. *)
+                if
+                  Option.exists (collection_function name) ~f:(fun f -> f.consumes)
+                  && fully name arguments
+                then
+                  List.iter (collection_positionals name arguments) ~f:(fun argument ->
+                      List.iter (producer_skips [] argument) ~f:(report Iterated expr)))
         | Pexp_for (_, _, _, _, body) | Pexp_while (_, body) ->
             report Iterated expr (skip_only body)
         | Pexp_ifthenelse (_, yes, no) ->
