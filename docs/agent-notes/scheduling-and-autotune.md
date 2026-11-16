@@ -1710,7 +1710,9 @@ files.
   those unreachable pools deliberately leak until process exit, since outstanding kernels may
   still write them. If cleanup was already unwinding an interrupt, host OOM, stack overflow,
   assertion or invalid registered setting, it preserves that original uncontainable exception
-  and backtrace while still freeing nothing. Ordinary reported worker errors retain best-effort cleanup. The separate
+  and backtrace while still freeing nothing. A marked Metal runner may reject allocation zero-fill
+  before a later fault-injection point; tests distinguish that early typed refusal from preserving
+  an exception the hook actually raised. Ordinary reported worker errors retain best-effort cleanup. The separate
   `wait_bound_delta_unwind`, `wait_bound_free_delta`, `wait_bound_transfer_cleanup`,
   `wait_bound_from_host`, `wait_bound_init_from_device` and `wait_bound_event_sync` executables
   pin those paths with finite work and a watchdog. `wait_bound_placements` preserves the API choice:

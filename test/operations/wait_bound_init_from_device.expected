@@ -6,5 +6,5 @@ the transfer cleanup was reached: true
 the transfer propagates Device_wedged: true
 the transfer allocated a pool: true
 the transfer leaves its pool allocated: true
-wedged transfer cleanup preserves uncontainable exceptions: true
-uncontainable transfer failures also leave every pool allocated: true
+marked transfer preserves injected uncontainable failures or refuses earlier: true
+these marked transfer trials leave every pool allocated: true

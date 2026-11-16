@@ -72,7 +72,11 @@ let uncontainable_failures =
     Utils.Invalid_config_value { key = "profile"; value = "invalid"; expected = "a profile" };
   ]
 
-let preserves_failure point failure f =
+(* A backend may refuse before the injection point once it is marked. Metal does so when allocation
+   zero-fill reaches its abandoned runner, before [Link_after_delta]. There is no pending injected
+   exception in that case. Once the hook fires, require the exact original exception: a later wedge
+   must never count as preserving it. *)
+let preserves_failure_or_refuses_early point failure f =
   let fired = ref false in
   match
     FI.with_callback
@@ -83,7 +87,13 @@ let preserves_failure point failure f =
       ~f
   with
   | _ -> false
-  | exception exn -> !fired && phys_equal exn failure
+  | exception exn ->
+      if !fired then phys_equal exn failure
+      else (
+        Stdio.eprintf "%s: injection not reached; observed %s (not part of the golden)\n%!"
+          (Sexp.to_string (FI.sexp_of_point point))
+          (Exn.to_string exn);
+        wedged exn)
 
 let cleanup point =
   let _, _, mark = setup () in
@@ -130,11 +140,11 @@ let cleanup point =
     (after.working_pools_allocated + after.constant_pools_allocated
     > before.working_pools_allocated + before.constant_pools_allocated);
   p "no pool is freed under outstanding work" (after.pools_freed = before.pools_freed);
-  p_all "wedged delta cleanup preserves uncontainable exceptions" uncontainable_failures
-    ~f:(fun failure ->
-      preserves_failure point failure (fun () ->
+  p_all "marked delta preserves injected uncontainable failures or refuses earlier"
+    uncontainable_failures ~f:(fun failure ->
+      preserves_failure_or_refuses_early point failure (fun () ->
           Context.compile (make_ctx ()) small_comp Ir.Indexing.Empty));
-  p "uncontainable delta failures also leave every pool allocated"
+  p "these marked delta trials leave every pool allocated"
     ((AC.snapshot ()).pools_freed = after.pools_freed)
 
 let event () =
@@ -202,11 +212,11 @@ let transfer ~cleanup ~device_copy =
   p "the transfer allocated a pool" (after.working_pools_allocated > before.working_pools_allocated);
   p "the transfer leaves its pool allocated" (after.pools_freed = before.pools_freed);
   (* Inject before the copy, so these additional checks submit no work to the marked device. *)
-  p_all "wedged transfer cleanup preserves uncontainable exceptions" uncontainable_failures
-    ~f:(fun failure ->
-      preserves_failure FI.Transfer_pool_allocated failure (fun () ->
+  p_all "marked transfer preserves injected uncontainable failures or refuses earlier"
+    uncontainable_failures ~f:(fun failure ->
+      preserves_failure_or_refuses_early FI.Transfer_pool_allocated failure (fun () ->
           Backend.init_from_host ctx tn host));
-  p "uncontainable transfer failures also leave every pool allocated"
+  p "these marked transfer trials leave every pool allocated"
     ((AC.snapshot ()).pools_freed = after.pools_freed)
 
 (* The arm keeps its original failure; the caller's later release deliberately propagates the

@@ -6,5 +6,5 @@ the allocation failure seam fired: true
 the failed compile propagates Device_wedged: true
 the failed compile allocated pools: true
 no pool is freed under outstanding work: true
-wedged delta cleanup preserves uncontainable exceptions: true
-uncontainable delta failures also leave every pool allocated: true
+marked delta preserves injected uncontainable failures or refuses earlier: true
+these marked delta trials leave every pool allocated: true
