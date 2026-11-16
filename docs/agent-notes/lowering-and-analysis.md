@@ -798,10 +798,15 @@ files.
   resemble. A declaration inside a loop or guard therefore cannot serve a read or write after it
   or in a sibling block. It must also come first in the walk (gh-ocannl-2100): C declares a
   `Declare_local` where it stands, so an access ahead of it in the same block is an undeclared
-  identifier. The walk's order is the rendering's except at hoisted definitions, which render
-  ahead of their statement wherever the walk meets them, so a declaration inside a `Local_scope`
-  body that does not enclose the access is not ordered. `Local_scope` binders themselves retain
-  existence-only checking because `C_syntax.pp_local_defs` orders them. A binder's diagnostic
+  identifier. `C_syntax.compile_proc` runs the gate twice: on the caller's tree in operand order,
+  where hoisted definitions render ahead of their statement wherever the walk meets them, so a
+  declaration inside a `Local_scope` body that does not enclose the access is not ordered; and,
+  after `collapse_exact_scopes`, on the tree that renders, under the backend's `Emitted` order
+  (gh-ocannl-2213), where precedence is plain walk order across hoisted definitions too and a
+  conditional definition's body is the block of its group's `if`. The second run is on the
+  collapsed tree because a single-assignment scope renders as an expression where it stands, and
+  ordering its pre-collapse definition refused code that compiles. `Local_scope` binders
+  themselves retain existence-only checking because `C_syntax.pp_local_defs` orders them. A binder's diagnostic
   names every enclosing body, innermost first ("in a guard body inside a loop body"),
   reconstructed from the gate's own stack of loop, scan and guard statements filtered to the ones
   whose body `Access_fold`'s context says encloses it. This is still no definite-initialization

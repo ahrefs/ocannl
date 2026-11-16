@@ -1209,12 +1209,16 @@ val validate_scope_bodies : t -> unit
     being the probes that must stay conservative on IR they may not trust. The optimization pipeline
     satisfies the contract by construction. *)
 
-val unbound_local_violation : t -> string option
+val unbound_local_violation : ?emission:Access_fold.emission -> t -> string option
 (** gh-ocannl-1973: the predicate form of {!validate_local_binders} — [None] when every scope local
     the rendered code accesses has a binder, else a description of the first access without one,
-    naming the local, the access, and the scope body it sits in with that scope's {!scope_mint}. *)
+    naming the local, the access, and the scope body it sits in with that scope's {!scope_mint}.
+    [emission] (gh-ocannl-2213): the backend's scope emission order, under which an explicit
+    declaration must precede its accesses in the order the code renders, hoisted definitions
+    included, and a conditional definition's declarations are seen only inside its [if]; without it,
+    a declaration inside a hoisted definition counts as preceding every access outside it. *)
 
-val validate_local_binders : ?site:string -> t -> unit
+val validate_local_binders : ?site:string -> ?emission:Access_fold.emission -> t -> unit
 (** gh-ocannl-1973: every [Get_local] and [Set_local] the code renders names a local the routine
     binds SOMEWHERE — by a [Local_scope] of that {!scope_id} (the whole id, as codegen spells it), a
     [Declare_local], or a [Scan_loop]'s carried pair. Raises [Invalid_argument], prefixed with

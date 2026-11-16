@@ -9841,6 +9841,14 @@ module C_syntax (B : C_syntax_config) = struct
     (* gh-ocannl-1887: past the gates, which judge what the caller built, and ahead of the render
        context, so that every analysis below reads the tree that renders. *)
     let llc = collapse_exact_scopes llc in
+    (* gh-ocannl-2213: again, on the tree that renders, in the order it renders: an explicit
+       declaration must precede its accesses across this backend's hoisted definitions too, and a
+       conditional definition's declarations stay inside its [if]. After the collapse, whose scopes
+       render as expressions where they stand; the gate above judged the caller's tree and names the
+       scope bodies it built. *)
+    Low_level.validate_local_binders ~site:"C_syntax.compile_proc"
+      ~emission:(Low_level.Scope_order.emission scope_order_oracle)
+      llc;
     (* Launch-extent guards (construct-then-fold, axis-types proposal §2), only for kinds this
        backend binds in hardware -- the serial fallback iterates the true extent. *)
     let llc =

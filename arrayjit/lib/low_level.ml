@@ -7978,10 +7978,13 @@ let validate_scope_bodies (llc : t) : unit =
 
     A visible explicit declaration must also precede the access in rendering order (gh-ocannl-2100):
     C declares a [Declare_local] where it stands, so a read or write ahead of it in the same block
-    names an identifier not yet declared. The walk's order is the rendering's except across hoisted
-    definitions: a declaration inside a [Local_scope] body that does not enclose the access renders
-    with that definition, ahead of the statement, wherever the walk met it, so it keeps the
-    visibility-only rule. This is still not a definite-initialization check.
+    names an identifier not yet declared. Given the backend's [emission] (gh-ocannl-2213, as
+    [C_syntax.compile_proc] passes it), the walk is [Access_fold]'s [Emitted] one, whose order is
+    the rendering's across hoisted definitions too, so precedence is plain walk order, and a
+    conditional definition's body is a block of its own (its [if]'s, shared by its group). Without
+    it the walk is in operand order, where a declaration inside a [Local_scope] body that does not
+    enclose the access renders with that definition, ahead of the statement, wherever the walk met
+    it, so it keeps the visibility-only rule. This is still not a definite-initialization check.
 
     Both sides follow the rendering: a projection's discarded operand is skipped, since
     [C_syntax.pp_scalar] never renders it -- a read there strands nothing, and a binder there
@@ -7989,14 +7992,14 @@ let validate_scope_bodies (llc : t) : unit =
     spells a local from both the integer and the node, so a binder sharing only the integer is a
     different C variable. A [Staged_compilation] callback's text is not inspected; IR locals are
     bound by IR constructs. *)
-let unbound_local_violation (llc : t) : string option =
+let unbound_local_violation ?emission (llc : t) : string option =
   let open Access_fold in
   let policy =
     {
       discarded_operands = Skip;
       gated_operands = Visit;
       dead_loops = Visit;
-      local_scopes = Visit;
+      local_scopes = (match emission with Some e -> Emitted e | None -> Visit);
       guards = Track;
       (* Initializer definitions live in the synthetic Set_local's block. *)
       scan_implicit = Visit;
@@ -8088,10 +8091,27 @@ let unbound_local_violation (llc : t) : string option =
     if opens_block stmt then blocks := List.tl_exn !blocks;
     match stmt with For_loop _ | Scan_loop _ | If _ -> nest := List.tl_exn !nest | _ -> ()
   in
+  (* gh-ocannl-2213: under [Emitted], the definitions of one conditional group render in the block
+     of its [if], one per group of the statement whose block is innermost. *)
+  let group_blocks = Hashtbl.Poly.create () in
+  let opens_group_block ctx =
+    match ctx.placement with
+    | Some (Conditional g) when Option.is_some emission -> Some g
+    | Some (Conditional _ | Unconditional) | None -> None
+  in
   let scalar ctx () = function
     | Local_scope { id; mint; _ } ->
         Hash_set.add bound id;
         Hash_set.add hoisted id;
+        (* Only at the node's definition position: [Emitted] shows it to no other. *)
+        Option.iter (opens_group_block ctx) ~f:(fun g ->
+            let key = (List.hd !blocks, g) in
+            let block =
+              Hashtbl.find_or_add group_blocks key ~default:(fun () ->
+                  Int.incr next_block;
+                  !next_block)
+            in
+            blocks := block :: !blocks);
         enclosing := (id, mint) :: !enclosing;
         Continue ()
     | Get_local id ->
@@ -8099,8 +8119,10 @@ let unbound_local_violation (llc : t) : string option =
         Continue ()
     | _ -> Continue ()
   in
-  let after_scalar _ () = function
-    | Local_scope _ -> enclosing := List.tl_exn !enclosing
+  let after_scalar ctx () = function
+    | Local_scope _ ->
+        enclosing := List.tl_exn !enclosing;
+        if Option.is_some (opens_group_block ctx) then blocks := List.tl_exn !blocks
     | _ -> ()
   in
   fold ~policy
@@ -8124,7 +8146,8 @@ let unbound_local_violation (llc : t) : string option =
          ordered. *)
       let precedes ((_, _, _, declaration_scopes, declaration_order), _) =
         declaration_order < access_order
-        || not (List.is_suffix access_scopes ~suffix:declaration_scopes ~equal:equal_scope_id)
+        || Option.is_none emission
+           && not (List.is_suffix access_scopes ~suffix:declaration_scopes ~equal:equal_scope_id)
       in
       let visible =
         Hash_set.mem hoisted id || List.exists declarations ~f:(fun d -> in_scope d && precedes d)
@@ -8163,8 +8186,9 @@ let unbound_local_violation (llc : t) : string option =
            ^ " -- the pass that removed or renamed its binder left this access behind \
               (gh-ocannl-1973)"))
 
-let validate_local_binders ?(site = "Low_level.validate_local_binders") (llc : t) : unit =
-  Option.iter (unbound_local_violation llc) ~f:(fun msg -> invalid_arg (site ^ ": " ^ msg))
+let validate_local_binders ?(site = "Low_level.validate_local_binders") ?emission (llc : t) : unit =
+  Option.iter (unbound_local_violation ?emission llc) ~f:(fun msg ->
+      invalid_arg (site ^ ": " ^ msg))
 
 (** {2 Hardware axis analyses}
 
