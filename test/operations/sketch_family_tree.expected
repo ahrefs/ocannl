@@ -1,4 +1,4 @@
-== cpu simd32: 22 seeds ==
+== cpu simd32: 20 seeds ==
  0  gpu:false mma:false simd:0  bm:16  bn:16  bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
  1  gpu:false mma:false simd:0  bm:8   bn:8   bk:8   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
  2  gpu:false mma:false simd:0  bm:16  bn:16  bk:16  tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
@@ -19,8 +19,6 @@
 17  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:true packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
 18  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:true packrest:true epi:false swz:- depth:1
 19  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:true packrest:true epi:false swz:- depth:1 tile:rm4 rn2 lanes8
-20  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1
-21  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
 == gpu plain: 10 seeds ==
  0  gpu:true mma:false simd:0  bm:64  bn:64  bk:8   tm:4 tn:4 hoist:false grid:false packrest:false epi:false swz:- depth:1
  1  gpu:true mma:false simd:0  bm:32  bn:32  bk:8   tm:4 tn:4 hoist:false grid:false packrest:false epi:false swz:- depth:1
@@ -49,7 +47,7 @@
 13  gpu:true mma:true simd:32 bm:32  bn:32  bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
 14  gpu:true mma:true simd:32 bm:32  bn:32  bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:b128 depth:1
 15  gpu:true mma:true simd:32 bm:32  bn:32  bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:2
-== cpu simd32 tree: 22 choice nodes, depth 6 ==
+== cpu simd32 tree: 21 choice nodes, depth 6 ==
 fusion = unfused
   pipeline = blocktile
     packing = in-kernel
@@ -130,13 +128,9 @@ fusion = unfused
         geometry = bm64 bn0 bk256  [refuted: bm=64 gives 1 row block(s); a Grid split needs at least 2]
         geometry = bm128 bn128 bk128  [refuted: bm=128 gives 1 row block(s); a Grid split needs at least 2]
         geometry = bm64 bn128 bk256  [refuted: bm=64 gives 1 row block(s); a Grid split needs at least 2]
-        geometry = bm16 bn0 bk16
-          register-tile = auto
-            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1
-          register-tile = rm4 rn2 lanes8
-            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+        geometry = bm16 bn0 bk16  [refuted: site Grid launch has at most 5120 scalar updates, below cc_grid_min_updates=16384; the Serial packed shape keeps this geometry]
 fusion = fused  [refuted: Schedule.Fuse_epilogue: no statement follows the reduction over mm]
-last leaf's decision path: fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm16 bn0 bk16 > register-tile=rm4 rn2 lanes8
+last leaf's decision path: fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted-grid-pack-rest > geometry=bm16 bn0 bk16 > register-tile=rm4 rn2 lanes8
 tree leaves = flat enumeration: true
 == gpu staged+depth tree: 9 choice nodes, depth 4 ==
 fusion = unfused
@@ -197,7 +191,7 @@ gpu staged+depth: the root commits the family, matmul then conv: true
 gpu staged+depth: below the root, the matmul child is the matmul family's own tree: true
 gpu staged+depth: the refutations are the matmul family's, then the conv family's no-site witness: true
 gpu staged+depth: the combined view's leaves are the seed list: true
-== cpu simd32 pad waste (threshold 2x the menu's least): 22 seeds proposed, 12 excluded ==
+== cpu simd32 pad waste (threshold 2x the menu's least): 20 seeds proposed, 12 excluded ==
     4.00x (4.00x its menu's least)  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
     4.00x (4.00x its menu's least)  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
     8.00x (8.00x its menu's least)  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
@@ -229,7 +223,7 @@ tree leaves = flat enumeration: true
   fusion=unfused > pipeline=tensorized > geometry=bm32 bn32 bk32 > twin=depth2: padded site (row, column or reduction pad): a conservative policy pending measurement, not a hardware limit; the twin was judged (Codex P2 on PR #303) on the barrier-bracketed per-call arm, which a masked loop-site accumulator no longer takes (gh-ocannl-1736)
   fusion=unfused > pipeline=tensorized > geometry=bm32 bn32 bk16 > twin=depth2: padded site (row, column or reduction pad): a conservative policy pending measurement, not a hardware limit; the twin was judged (Codex P2 on PR #303) on the barrier-bracketed per-call arm, which a masked loop-site accumulator no longer takes (gh-ocannl-1736)
   fusion=unfused > pipeline=tensorized > geometry=lattice: beyond the curated menu (search economy): the staged tile-size lattice; config model_default_geometry_lattice lifts it for the model-argmin search
-== awkward 20^3 cpu: 4 seeds ==
+== awkward 20^3 cpu: 2 seeds ==
 tree leaves = flat enumeration: true
 -- refuted --
   fusion=unfused > pipeline=blocktile > packing=in-kernel > geometry=b16: b=16 does not divide m=20
@@ -244,10 +238,12 @@ tree leaves = flat enumeration: true
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid-pack-rest > geometry=bm64 bn0 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid-pack-rest > geometry=bm128 bn128 bk128: bm=128 gives 1 row block(s); a Grid split needs at least 2
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid-pack-rest > geometry=bm64 bn128 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid-pack-rest > geometry=bm16 bn0 bk16: site Grid launch has at most 6144 scalar updates, below cc_grid_min_updates=16384; the Serial packed shape keeps this geometry
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm64 bn0 bk64: bm=64 gives 1 row block(s); a Grid split needs at least 2
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm64 bn0 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm128 bn128 bk128: bm=128 gives 1 row block(s); a Grid split needs at least 2
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm64 bn128 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm16 bn0 bk16: site Grid launch has at most 2432 scalar updates, below cc_grid_min_updates=16384; the Serial packed shape keeps this geometry
   fusion=fused: Schedule.Fuse_epilogue: no statement follows the reduction over awk
 -- excluded --
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=serial > geometry=bm64 bn0 bk64: pad waste: padding m=20 to 64, k=20 to 64 does 10.24x the site's work, 4.00x the 2.56x of this menu's least-padded geometry, at or above the 2x search-economy threshold (config autotune_pad_waste_max)
@@ -259,7 +255,7 @@ tree leaves = flat enumeration: true
 awkward 20^3 gpu: no proposed seed pads at the threshold times its menu's least-padded seed: true
 awkward 20^3 gpu: lifting the pad-waste policy proposes the proposed seeds plus the excluded ones: true
 awkward 20^3 gpu: every lifted pad-waste exclusion re-proposes only seeds at the threshold times their menu's least-padded proposed seed: true
-== awkward 20^3 cpu pad waste (threshold 2x the menu's least): 4 seeds proposed, 6 excluded ==
+== awkward 20^3 cpu pad waste (threshold 2x the menu's least): 2 seeds proposed, 6 excluded ==
    10.24x (4.00x its menu's least)  gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
    40.96x (16.00x its menu's least)  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
   262.14x (102.40x its menu's least)  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
@@ -269,7 +265,7 @@ awkward 20^3 gpu: every lifted pad-waste exclusion re-proposes only seeds at the
 awkward 20^3 cpu: no proposed seed pads at the threshold times its menu's least-padded seed: true
 awkward 20^3 cpu: lifting the pad-waste policy proposes the proposed seeds plus the excluded ones: true
 awkward 20^3 cpu: every lifted pad-waste exclusion re-proposes only seeds at the threshold times their menu's least-padded proposed seed: true
-== half-prec cpu seeds: 14 seeds ==
+== half-prec cpu seeds: 12 seeds ==
  0  gpu:false mma:false simd:0  bm:16  bn:16  bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
  1  gpu:false mma:false simd:0  bm:8   bn:8   bk:8   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
  2  gpu:false mma:true simd:0  bm:0   bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
@@ -282,9 +278,7 @@ awkward 20^3 cpu: every lifted pad-waste exclusion re-proposes only seeds at the
  9  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
 10  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1 packprec:single
 11  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
-12  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 packprec:single
-13  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
-== half-prec cpu: 14 seeds ==
+== half-prec cpu: 12 seeds ==
 tree leaves = flat enumeration: true
 -- refuted --
   fusion=unfused > pipeline=blocktile > packing=hoisted: hoisted packing needs a host-init-backed constant operand; neither operand is one
@@ -300,6 +294,7 @@ tree leaves = flat enumeration: true
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm64 bn0 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm128 bn128 bk128: bm=128 gives 1 row block(s); a Grid split needs at least 2
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm64 bn128 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm16 bn0 bk16: site Grid launch has at most 5120 scalar updates, below cc_grid_min_updates=16384; the Serial packed shape keeps this geometry
   fusion=fused: Schedule.Fuse_epilogue: no statement follows the reduction over hmm
 -- excluded --
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=serial > geometry=bm64 bn0 bk256: pad waste: padding k=64 to 256 does 4.00x the site's work, 4.00x the 1.00x of this menu's least-padded geometry, at or above the 2x search-economy threshold (config autotune_pad_waste_max)
@@ -316,7 +311,7 @@ tree leaves = flat enumeration: true
   fusion=unfused > pipeline=blocktile > packing=hoisted: hoisted packing needs a host-init-backed constant operand; neither operand is one
   fusion=unfused > pipeline=tensorized: register tiling requires uniform vector-capable compute precisions (f32/f64, or fp16 where arithmetic is native)
   fusion=fused: Schedule.Fuse_epilogue: no statement follows the reduction over hmm
-== half-prec cpu seeds, native fp16: 14 seeds ==
+== half-prec cpu seeds, native fp16: 12 seeds ==
  0  gpu:false mma:false simd:0  bm:16  bn:16  bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
  1  gpu:false mma:false simd:0  bm:8   bn:8   bk:8   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
  2  gpu:false mma:true simd:0  bm:0   bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
@@ -329,9 +324,7 @@ tree leaves = flat enumeration: true
  9  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn3 lanes16
 10  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1
 11  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1 tile:rm4 rn3 lanes16
-12  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1
-13  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 tile:rm4 rn3 lanes16
-== half-prec cpu seeds, fp16 policy on promoted target: 14 seeds ==
+== half-prec cpu seeds, fp16 policy on promoted target: 12 seeds ==
  0  gpu:false mma:false simd:0  bm:16  bn:16  bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
  1  gpu:false mma:false simd:0  bm:8   bn:8   bk:8   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
  2  gpu:false mma:true simd:0  bm:0   bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
@@ -344,8 +337,6 @@ tree leaves = flat enumeration: true
  9  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
 10  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1 packprec:single
 11  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
-12  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 packprec:single
-13  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
 == half-prec gpu, f16 tiles, default policy: 10 seeds ==
  0  gpu:true mma:false simd:0  bm:64  bn:64  bk:8   tm:4 tn:4 hoist:false grid:false packrest:false epi:false swz:- depth:1
  1  gpu:true mma:false simd:0  bm:32  bn:32  bk:8   tm:4 tn:4 hoist:false grid:false packrest:false epi:false swz:- depth:1
@@ -391,7 +382,7 @@ the wide-f16 policy withholds uniform-f16 mma seeds exactly in unsupported emiss
 placement eligibility omits a wide-f16 site with no applicable MMA scope: true
 the wide-f16 policy under narrow_compute_f32 off omits the CPU register-tiled candidates (accumulator residency diverges from compute): true
 the wide-bf16 policy withholds uniform-bf16 mma seeds exactly in unsupported emission scopes, and the wide-f16 policy leaves them alone: true
-== transposed-B cpu: 10 seeds ==
+== transposed-B cpu: 8 seeds ==
 tree leaves = flat enumeration: true
 -- refuted --
   fusion=unfused > pipeline=blocktile > packing=hoisted: hoisted packing needs a host-init-backed constant operand; neither operand is one
@@ -407,6 +398,7 @@ tree leaves = flat enumeration: true
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm64 bn0 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm128 bn128 bk128: bm=128 gives 1 row block(s); a Grid split needs at least 2
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm64 bn128 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm16 bn0 bk16: site Grid launch has at most 5120 scalar updates, below cc_grid_min_updates=16384; the Serial packed shape keeps this geometry
   fusion=fused: Schedule.Fuse_epilogue: no statement follows the reduction over tmm
 -- excluded --
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=serial > geometry=bm64 bn0 bk256: pad waste: padding k=64 to 256 does 4.00x the site's work, 4.00x the 1.00x of this menu's least-padded geometry, at or above the 2x search-economy threshold (config autotune_pad_waste_max)
@@ -434,21 +426,19 @@ tree leaves = flat enumeration: true
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted-grid-pack-rest: CPU companions (gh-ocannl-1609): the packed Grid shape's row-block loop binds a hardware dimension beside 2 companion nest(s) writing materialized cred; valid on the fork-join model, excluded as search economy -- measured: no win (M4 Pro, see ahrefs/ocannl#1609)
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid-pack-rest: CPU companions (gh-ocannl-1609): the packed Grid shape's row-block loop binds a hardware dimension beside 2 companion nest(s) writing materialized cred; valid on the fork-join model, excluded as search economy -- measured: no win (M4 Pro, see ahrefs/ocannl#1609)
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid: CPU companions (gh-ocannl-1609): the packed Grid shape's row-block loop binds a hardware dimension beside 2 companion nest(s) writing materialized cred; valid on the fork-join model, excluded as search economy -- measured: no win (M4 Pro, see ahrefs/ocannl#1609)
-companion-reduction cpu: 12 leaves, 22 lifted
-== companion-reduction cpu lifted: 22 leaf paths, 22 applied; floor 65792 bytes ==
+companion-reduction cpu: 12 leaves, 20 lifted
+== companion-reduction cpu lifted: 20 leaf paths, 20 applied; floor 65792 bytes ==
 companion-reduction cpu lifted: the freshly minted nodes are charged at least the increment: true
 companion-reduction cpu lifted: at every prefix the composed floor is within the leaf's analyzed bytes: true
 == companion-reduction cpu pick audit: 12 leaves scored exhaustively; the walk scores 8 (2 fathomed), the floor-only walk 12 ==
 companion-reduction cpu pick audit: the walk's pick is the exhaustive first argmin: true
 companion-reduction cpu pick audit: the raised bound scores no more leaves than the floor alone: true
 lifted-lattice search over the refuted family: 2 expanded, 0 scored, 3 refuted
-== out-projection cpu: 6 seeds ==
+== out-projection cpu: 4 seeds ==
  0  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
  1  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
  2  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1
  3  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1 tile:rm4 rn2 lanes8
- 4  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1
- 5  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
 == out-projection gpu staged+depth: 14 seeds ==
  0  gpu:true mma:false simd:0  bm:64  bn:64  bk:8   tm:4 tn:4 hoist:false grid:false packrest:false epi:false swz:- depth:1
  1  gpu:true mma:false simd:0  bm:32  bn:32  bk:8   tm:4 tn:4 hoist:false grid:false packrest:false epi:false swz:- depth:1
@@ -464,7 +454,7 @@ lifted-lattice search over the refuted family: 2 expanded, 0 scored, 3 refuted
 11  gpu:true mma:true simd:32 bm:32  bn:32  bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:b128 depth:1
 12  gpu:true mma:true simd:32 bm:32  bn:32  bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
 13  gpu:true mma:true simd:32 bm:32  bn:32  bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:b128 depth:1
-== out-projection cpu tree: 12 choice nodes, depth 6 ==
+== out-projection cpu tree: 11 choice nodes, depth 6 ==
 fusion = unfused
   pipeline = blocktile
     packing = in-kernel
@@ -502,13 +492,9 @@ fusion = unfused
         geometry = bm64 bn0 bk256  [refuted: bm=64 gives 1 row block(s); a Grid split needs at least 2]
         geometry = bm128 bn128 bk128  [refuted: bm=128 gives 1 row block(s); a Grid split needs at least 2]
         geometry = bm64 bn128 bk256  [refuted: bm=64 gives 1 row block(s); a Grid split needs at least 2]
-        geometry = bm16 bn0 bk16
-          register-tile = auto
-            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1
-          register-tile = rm4 rn2 lanes8
-            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+        geometry = bm16 bn0 bk16  [refuted: site Grid launch has at most 5120 scalar updates, below cc_grid_min_updates=16384; the Serial packed shape keeps this geometry]
 fusion = fused  [refuted: Schedule.Fuse_epilogue: no statement follows the reduction over oproj]
-last leaf's decision path: fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm16 bn0 bk16 > register-tile=rm4 rn2 lanes8
+last leaf's decision path: fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid-pack-rest > geometry=bm16 bn0 bk16 > register-tile=rm4 rn2 lanes8
 tree leaves = flat enumeration: true
 == out-projection gpu staged+depth tree: 10 choice nodes, depth 5 ==
 fusion = unfused
@@ -580,6 +566,7 @@ tree leaves = flat enumeration: true
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm64 bn0 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm128 bn128 bk128: bm=128 gives 1 row block(s); a Grid split needs at least 2
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm64 bn128 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm16 bn0 bk16: site Grid launch has at most 5120 scalar updates, below cc_grid_min_updates=16384; the Serial packed shape keeps this geometry
   fusion=fused: Schedule.Fuse_epilogue: no statement follows the reduction over oproj
 -- excluded --
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=serial > geometry=bm64 bn0 bk64: pad waste: padding k=12 to 64 does 5.33x the site's work, 4.00x the 1.33x of this menu's least-padded geometry, at or above the 2x search-economy threshold (config autotune_pad_waste_max)
@@ -707,7 +694,7 @@ gpu staged lattice: regime witnessed: unstaged whole-K: no fragment: true
   padded row box, k blocks repeat: a pad scratch   28 applied leaves
 gpu staged lattice: regime witnessed: padded row box, k blocks repeat: a pad scratch: true
 lifted search at incumbent 6000: 18 expanded, 6 scored, 17 fathomed, 1 refuted, 0 excluded
-== cpu simd32: certain-traffic increments over 22 leaf paths ==
+== cpu simd32: certain-traffic increments over 20 leaf paths ==
   levels on the leaf paths: fusion, geometry, packing, packing-shape, pipeline, register-tile, row-block, tensorized-form
   priced above the schedule-invariant floor: 8; max increment 32768 bytes
 cpu simd32: every leaf's increment is the traffic its own parameters imply: true
@@ -719,21 +706,21 @@ cpu simd32: every leaf path commits its pipeline's shape level: true
   unpriced geometry          0 bytes
     fusion=unfused > pipeline=blocktile > packing=in-kernel > geometry=b16
   lattice leaf               (none in this tree)
-== cpu simd32: 22 leaf paths, 22 applied; floor 49152 bytes ==
+== cpu simd32: 20 leaf paths, 20 applied; floor 49152 bytes ==
 cpu simd32: the freshly minted nodes are charged at least the increment: true
 cpu simd32: at every prefix the composed floor is within the leaf's analyzed bytes: true
-== cpu simd32: 18 tensorized leaves, 18 applied, 0 refused; 4 contracting by the predicate, 4 contracted ==
+== cpu simd32: 16 tensorized leaves, 16 applied, 0 refused; 4 contracting by the predicate, 4 contracted ==
 cpu simd32: a tensorized leaf contracts its accumulator exactly where the predicate says: true
 cpu simd32: a contracting leaf's fragment is charged its block, written and read once: true
   0 staging a pad scratch by the predicate, 0 staged one
 cpu simd32: a tensorized leaf stages a pad scratch tile exactly where the predicate says: true
   grid-outermost packed, k blocks repeat: a fragment 4 applied leaves
 cpu simd32: regime witnessed: grid-outermost packed, k blocks repeat: a fragment: true
-  packed, no fragment                              10 applied leaves
+  packed, no fragment                              8 applied leaves
 cpu simd32: regime witnessed: packed, no fragment: true
   whole-triple, no outer loop: no fragment         4 applied leaves
 cpu simd32: regime witnessed: whole-triple, no outer loop: no fragment: true
-== cpu simd32 pick audit: 22 leaves scored exhaustively; the walk scores 2 (2 fathomed), the floor-only walk 2 ==
+== cpu simd32 pick audit: 20 leaves scored exhaustively; the walk scores 2 (2 fathomed), the floor-only walk 2 ==
 cpu simd32 pick audit: the walk's pick is the exhaustive first argmin: true
 cpu simd32 pick audit: the raised bound scores no more leaves than the floor alone: true
 == cpu k16: certain-traffic increments over 18 leaf paths ==
@@ -761,7 +748,7 @@ cpu k16: no tensorized leaf contracts: true
 == cpu k16 pick audit: 18 leaves scored exhaustively; the walk scores 16 (1 fathomed), the floor-only walk 18 ==
 cpu k16 pick audit: the walk's pick is the exhaustive first argmin: true
 cpu k16 pick audit: the raised bound scores no more leaves than the floor alone: true
-== cpu outer contraction: certain-traffic increments over 18 leaf paths ==
+== cpu outer contraction: certain-traffic increments over 16 leaf paths ==
   levels on the leaf paths: fusion, geometry, packing, packing-shape, pipeline, register-tile, row-block, tensorized-form
   priced above the schedule-invariant floor: 10; max increment 32768 bytes
 cpu outer contraction: every leaf's increment is the traffic its own parameters imply: true
@@ -773,21 +760,21 @@ cpu outer contraction: every leaf path commits its pipeline's shape level: true
   unpriced geometry          0 bytes
     fusion=unfused > pipeline=blocktile > packing=in-kernel > geometry=b16
   lattice leaf               (none in this tree)
-== cpu outer contraction: 18 leaf paths, 18 applied; floor 32768 bytes ==
+== cpu outer contraction: 16 leaf paths, 16 applied; floor 32768 bytes ==
 cpu outer contraction: the freshly minted nodes are charged at least the increment: true
 cpu outer contraction: at every prefix the composed floor is within the leaf's analyzed bytes: true
-== cpu outer contraction: 14 tensorized leaves, 14 applied, 0 refused; 8 contracting by the predicate, 8 contracted ==
+== cpu outer contraction: 12 tensorized leaves, 12 applied, 0 refused; 8 contracting by the predicate, 8 contracted ==
 cpu outer contraction: a tensorized leaf contracts its accumulator exactly where the predicate says: true
 cpu outer contraction: a contracting leaf's fragment is charged its block, written and read once: true
   0 staging a pad scratch by the predicate, 0 staged one
 cpu outer contraction: a tensorized leaf stages a pad scratch tile exactly where the predicate says: true
   grid-outermost packed, one k block, outer loop: a fragment 4 applied leaves
 cpu outer contraction: regime witnessed: grid-outermost packed, one k block, outer loop: a fragment: true
-  packed, rows inside the reduction: no fragment   6 applied leaves
+  packed, rows inside the reduction: no fragment   4 applied leaves
 cpu outer contraction: regime witnessed: packed, rows inside the reduction: no fragment: true
   whole-triple under the outer loop: a fragment    4 applied leaves
 cpu outer contraction: regime witnessed: whole-triple under the outer loop: a fragment: true
-== cpu outer contraction pick audit: 18 leaves scored exhaustively; the walk scores 8 (5 fathomed), the floor-only walk 18 ==
+== cpu outer contraction pick audit: 16 leaves scored exhaustively; the walk scores 6 (5 fathomed), the floor-only walk 16 ==
 cpu outer contraction pick audit: the walk's pick is the exhaustive first argmin: true
 cpu outer contraction pick audit: the raised bound scores no more leaves than the floor alone: true
 == gpu outer contraction: certain-traffic increments over 16 leaf paths ==
@@ -816,9 +803,9 @@ gpu outer contraction: regime witnessed: staged, one k block, outer loop: a frag
 == gpu outer contraction pick audit: 16 leaves scored exhaustively; the walk scores 3 (3 fathomed), the floor-only walk 3 ==
 gpu outer contraction pick audit: the walk's pick is the exhaustive first argmin: true
 gpu outer contraction pick audit: the raised bound scores no more leaves than the floor alone: true
-== cpu awkward 20^3: certain-traffic increments over 5 leaf paths ==
+== cpu awkward 20^3: certain-traffic increments over 3 leaf paths ==
   levels on the leaf paths: fusion, geometry, packing-shape, pipeline, row-block, tensorized-form
-  priced above the schedule-invariant floor: 4; max increment 4864 bytes
+  priced above the schedule-invariant floor: 2; max increment 4864 bytes
 cpu awkward 20^3: every leaf's increment is the traffic its own parameters imply: true
 cpu awkward 20^3: the increment is monotone along every path's prefixes: true
 cpu awkward 20^3: the staging commitments price above the floor: true
@@ -828,17 +815,17 @@ cpu awkward 20^3: every leaf path commits its pipeline's shape level: true
   unpriced geometry          0 bytes
     fusion=unfused > pipeline=tensorized > tensorized-form=whole-triple > row-block=bm0
   lattice leaf               (none in this tree)
-== cpu awkward 20^3: 5 leaf paths, 5 applied; floor 4800 bytes ==
+== cpu awkward 20^3: 3 leaf paths, 3 applied; floor 4800 bytes ==
 cpu awkward 20^3: the freshly minted nodes are charged at least the increment: true
 cpu awkward 20^3: at every prefix the composed floor is within the leaf's analyzed bytes: true
-== cpu awkward 20^3: 5 tensorized leaves, 5 applied, 0 refused; 4 contracting by the predicate, 4 contracted ==
+== cpu awkward 20^3: 3 tensorized leaves, 3 applied, 0 refused; 2 contracting by the predicate, 2 contracted ==
 cpu awkward 20^3: a tensorized leaf contracts its accumulator exactly where the predicate says: true
 cpu awkward 20^3: a contracting leaf's fragment is charged its block, written and read once: true
   0 staging a pad scratch by the predicate, 0 staged one
 cpu awkward 20^3: a tensorized leaf stages a pad scratch tile exactly where the predicate says: true
-  padded rows, serial shape: a mask-forced fragment 3 applied leaves
+  padded rows, serial shape: a mask-forced fragment 2 applied leaves
 cpu awkward 20^3: regime witnessed: padded rows, serial shape: a mask-forced fragment: true
-== cpu awkward 20^3 pick audit: 5 leaves scored exhaustively; the walk scores 1 (4 fathomed), the floor-only walk 5 ==
+== cpu awkward 20^3 pick audit: 3 leaves scored exhaustively; the walk scores 1 (2 fathomed), the floor-only walk 3 ==
 cpu awkward 20^3 pick audit: the walk's pick is the exhaustive first argmin: true
 cpu awkward 20^3 pick audit: the raised bound scores no more leaves than the floor alone: true
 == gpu awkward 20^3: certain-traffic increments over 10 leaf paths ==

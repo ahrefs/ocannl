@@ -1460,9 +1460,16 @@ files.
   `cpu_pack_grid_chunk_bytes`, which the same test pins equal to the renderer's recorded private
   bytes on padded plain-`grid` sites. Those sites pad only rows and columns: with a k pad too
   (40^3 and 72^3 at bk=16) the renderer keeps the row-block loop serial for another reason, the
-  A~ tile "accessed outside the loop body" (its privatization rule), before any cap is read. Not weighed: the launch floor (the
-  in-kernel `Grid` shape's row-block launch sits under the k-blocks and is below it at 64^3, so it
-  is timed serial).
+  A~ tile "accessed outside the loop body" (its privatization rule), before any cap is read. The launch floor is weighed by
+  `cpu_mma_grid_updates_bound` (gh-ocannl-1857), a saturating upper bound using the renderer's
+  resolved `C_syntax.grid_min_updates ()` and `Cost_model.tile_mma_macs_per_update`: packing
+  and fragment-transfer stores count, enclosing serial blocks do not. At 64^3 the plain packed
+  Grid site's 5120 updates are below the default floor; a 32x16x16 whole-triple row-block
+  launch has 8192 (its Workgroup lane loop counts too). Both are refuted, with the serial forms
+  available; `autotune_grid_record` pairs each refusal with its renderer census and keeps the
+  same geometry on the pool at a 4096 floor. Full padded blocks and repeated fragment transfers
+  make the bound conservative; fused epilogues remain unknown and are retained because their
+  additional stores are outside this geometry estimate.
 - **A test decides how a `Tile_mma` rendered from the census, never the source** (gh-ocannl-1316).
   The lane-0 fallback's `if (lane == 0)` guard also wraps the C backends' register tiling, so
   `"== 0)"` never told the two apart; "no intrinsic spelling" says nothing about a statement that
