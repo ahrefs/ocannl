@@ -89,6 +89,13 @@ files.
   answer stated first (`test/einsum/test_concat_order_independence.ml`). Still open: a residual
   variable whose tag is not forced (claim-free or the size's claim) takes the claim, so a later
   `u = 3_default` meets it in one order and not the other (gh-ocannl-2095's algebra).
+  With one free variable per side and unequal solved sums carrying the same claim, close the
+  component on the larger-sum side first, while the smaller-sum side waits (gh-ocannl-2223).
+  Keep the original equation: even if the nonzero arithmetic residual retains the shared claim,
+  dropping its other copy falsely refuses a later `k = 3_default`. The order-independence test
+  pins both that later constraint and the open examples (`u = 1`, `k = 3_a`, and `h`). This returns
+  the two rule-consistent deferrals from staging#2006's 297 newly refused stores plus one of its
+  96 inert-atom cases (`bcast_if_1` above size 1); equal solved sums still wait.
 - `Shape.compute_row_product` must not latch a product while the row still ends in an open
   `Row_var` — the historical bug silently resolved xavier/kaiming fan products to 1 for every
   `{ w }` param with an inferred input row (fixed; regression `test/operations/layer_norm_1d.ml`,

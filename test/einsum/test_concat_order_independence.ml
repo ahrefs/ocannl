@@ -239,6 +239,43 @@ let () =
         ~f:refuses_own_answer;
       p_none ~min:16000 "stores registered in one batch settling otherwise" stores ~f:batch_differs;
       p "over 1,500 stores are accepted, so refusing everything fails" (accepted_stores > 1500);
+      List.iter [ "a"; "h"; Row.bcast_if_1 ] ~f:(fun tag ->
+          p_all
+            ("shared claim with a zero residual settles to u = 1, k = 3_" ^ tag)
+            (let names = [ "w(s2,k3 default)(v)=5 " ^ tag; "[u; 2v]=[k; 2 " ^ tag ^ "]" ] in
+             let outs = verdicts names in
+             Stdio.eprintf "shared-claim control: %s => %s (not part of the golden)\n"
+               (String.concat ~sep:" ; " names)
+               (String.concat ~sep:" | " (List.map outs ~f:outcome_to_string));
+             outs)
+            ~f:(function
+              | Accepted sol ->
+                  let has n d basis =
+                    Option.equal
+                      (fun (d1, b1) (d2, b2) -> d1 = d2 && String.equal b1 b2)
+                      (List.Assoc.find_exn sol ~equal:String.equal n)
+                      (Some (d, basis))
+                  in
+                  has "v" 2 tag && has "u" 1 Row.bcast_if_1 && has "k" 3 tag
+              | Refused -> false));
+      List.iter [ "a"; "h"; Row.bcast_if_1 ] ~f:(fun tag ->
+          let items =
+            List.map [ "w(s2,k3 default)(v)=5 " ^ tag; "[u; 2v]=[k; 2 " ^ tag ^ "]" ] ~f:item
+            @ [
+                {
+                  name = "k = 3 default";
+                  mk = (fun _ _ k -> eq (Var k) (tagged 3 Row.default_basis));
+                };
+              ]
+          in
+          p_all ("a later plain k keeps both concatenations' shared claim " ^ tag) (outcomes items)
+            ~f:(function
+            | Accepted sol ->
+                Option.equal
+                  (fun (d1, b1) (d2, b2) -> d1 = d2 && String.equal b1 b2)
+                  (List.Assoc.find_exn sol ~equal:String.equal "u")
+                  (Some (1, tag))
+            | Refused -> false));
       p_all "the issue's example is refused in every order"
         (verdicts [ "w(s1,k3 default)(v)=3 default"; "[v; u]=4 default"; "[v; u]=4 bcast_if_1" ])
         ~f:(equal_outcome Refused);
