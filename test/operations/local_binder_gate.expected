@@ -66,3 +66,10 @@ lbg_write_bound: the gate leaves it alone, and it runs: true
 lbg_discarded_read: the gate leaves it alone, and it runs: true
 lbg_discarded: the compile gate refuses it: true
 lbg_discarded: the refusal names the access, the local and where it sits: true
+lbg_hoisted_order: the compile gate refuses it: true
+lbg_hoisted_order: the refusal names the access, the local and where it sits: true
+lbg_hoisted_order_writer_first: the gate leaves it alone, and it runs: true
+lbg_conditional_decl: the compile gate refuses it: true
+lbg_conditional_decl: the refusal names the access, the local and where it sits: true
+lbg_conditional_decl_inside: the gate leaves it alone, and it runs: true
+lbg_set_local_target: the gate leaves it alone, and it runs: true

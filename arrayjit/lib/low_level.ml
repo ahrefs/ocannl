@@ -299,12 +299,15 @@ module Access_fold = struct
   type visit = Visit | Skip
   type guards = Track | Ignore
   type implicit = Explicit | Scan_init | Scan_rotate
+  type placement = Unconditional | Conditional of int
+  type emission = { order : t -> scalar_t list -> (int * placement) list }
+  type scopes = Visit | Skip | Emitted of emission
 
   type policy = {
     discarded_operands : visit;
     gated_operands : visit;
     dead_loops : visit;
-    local_scopes : visit;
+    local_scopes : scopes;
     guards : guards;
     scan_implicit : visit;
   }
@@ -326,6 +329,7 @@ module Access_fold = struct
     scope_depth : int;
     implicit : implicit;
     loops : binder list;
+    placement : placement option;
   }
 
   type 'a descent = Continue of 'a | Prune of 'a
@@ -358,9 +362,17 @@ module Access_fold = struct
       scope_depth = 0;
       implicit = Explicit;
       loops = [];
+      placement = None;
     }
 
   let traversal ~policy ~hooks =
+    (match (policy.local_scopes, policy.discarded_operands) with
+    | Emitted _, Visit ->
+        invalid_arg
+          "Access_fold: local_scopes = Emitted refuses discarded_operands = Visit: an operand the \
+           renderer never renders has no emission position"
+    | _ -> ());
+    let emitted = match policy.local_scopes with Emitted e -> Some e | Visit | Skip -> None in
     let rec stmt ctx acc code =
       match hooks.statement ctx acc code with
       | Prune acc -> acc
@@ -379,7 +391,7 @@ module Access_fold = struct
                       match policy.scan_implicit with
                       | Visit ->
                           stmt { ctx with implicit = Scan_init } acc (Set_local (c.prev, c.init))
-                      | Skip -> scalar ctx acc c.init)
+                      | Skip -> unit ctx acc (Set_local (c.prev, c.init)) [ c.init ])
                 in
                 let binder = { index; from_; to_; axis = None } in
                 let acc = loop ctx acc binder body in
@@ -398,7 +410,7 @@ module Access_fold = struct
                           acc
                           (Set_local (c.prev, Get_local c.next))))
             | If { cond; body } ->
-                let acc = scalar ctx acc (fst cond) in
+                let acc = unit ctx acc code [ fst cond ] in
                 let ctx =
                   match policy.guards with
                   | Track -> { ctx with guards = cond :: ctx.guards }
@@ -406,58 +418,142 @@ module Access_fold = struct
                 in
                 stmt ctx acc body
             | Tile_mma { fallback; _ } -> stmt ctx acc fallback
-            | Set { llsc; _ } | Set_local (_, llsc) -> scalar ctx acc llsc
-            | Set_from_vec { arg; _ } -> scalar ctx acc (fst arg)
-            | Set_dynamic { dyn_value; llsc; _ } -> scalar ctx (scalar ctx acc (fst dyn_value)) llsc
+            | Set { llsc; _ } | Set_local (_, llsc) -> unit ctx acc code [ llsc ]
+            | Set_from_vec { arg; _ } -> unit ctx acc code [ fst arg ]
+            | Set_dynamic { dyn_value; llsc; _ } -> unit ctx acc code [ fst dyn_value; llsc ]
           in
           hooks.after_statement ctx acc code
     and loop ctx acc (b : binder) body =
-      if b.to_ < b.from_ && Poly.equal policy.dead_loops Skip then acc
+      let skip_dead = match policy.dead_loops with Skip -> true | Visit -> false in
+      if b.to_ < b.from_ && skip_dead then acc
       else stmt { ctx with live = ctx.live && b.to_ >= b.from_; loops = b :: ctx.loops } acc body
-    and scalar ctx acc code =
-      match hooks.scalar ctx acc code with
+    (* A rendering unit [code] with scalars [roots]: under [Emitted], its top-level scope
+       definitions first, in emission order, then the operands with those scopes as leaves. *)
+    and unit ctx acc code roots =
+      match emitted with
+      | None -> List.fold roots ~init:acc ~f:(scalar ctx)
+      | Some e ->
+          let scopes = top_level_scopes roots in
+          let acc =
+            if List.is_empty scopes then acc
+            else
+              let order = e.order code roots in
+              List.iter scopes ~f:(fun (id, _) ->
+                  if not (List.exists order ~f:(fun (o, _) -> o = id)) then
+                    invalid_arg
+                      (Printf.sprintf
+                         "Access_fold: the emission order of a statement omits its scope %d -- the \
+                          order's derivation and the fold disagree on what the statement renders"
+                         id));
+              List.fold order ~init:acc ~f:(fun acc (id, placement) ->
+                  match List.Assoc.find scopes id ~equal:Int.equal with
+                  | None -> acc (* Under a skipped gated operand. *)
+                  | Some node -> define ctx acc placement node)
+          in
+          List.fold roots ~init:acc ~f:(scalar ctx)
+    (* A scope definition at its emission position: once, whatever its occurrences. *)
+    and define ctx acc placement node =
+      let conditional = match placement with Conditional _ -> true | Unconditional -> false in
+      let ctx = { ctx with gated = conditional || ctx.arm; arm = conditional || ctx.arm } in
+      let ctx = { ctx with placement = Some placement } in
+      match hooks.scalar ctx acc node with
       | Prune acc -> acc
       | Continue acc ->
           let acc =
-            match code with
-            | Constant _ | Constant_bits _ | Embed_index _ | Get_local _ | Get _
-            | Get_merge_buffer _ ->
-                acc
-            | Get_dynamic { dyn_value; _ } -> scalar ctx acc (fst dyn_value)
-            | Local_scope { body; _ } -> (
-                match policy.local_scopes with
-                | Skip -> acc
-                | Visit ->
-                    (* Scope definitions are hoisted out of a gate, but remain inside enclosing
-                       statement guards and, rendered under its condition, a [Where] arm
-                       (gh-ocannl-2145). Discarded operands never reach this point unless the caller
-                       explicitly requested structural traversal. *)
-                    stmt { ctx with scope_depth = ctx.scope_depth + 1; gated = ctx.arm } acc body)
-            | Unop (_, a) -> scalar ctx acc (fst a)
-            | Binop (op, a, b) ->
-                let first, second =
-                  match Ops.binop_conditionality op with
-                  | Ops.Both_operands -> (`Always, `Always)
-                  | Ops.Gated_second -> (`Always, `Gated)
-                  | Ops.Only_first -> (`Always, `Discarded)
-                  | Ops.Only_second -> (`Discarded, `Always)
-                in
-                operand ctx (operand ctx acc first a) second b
-            | Ternop (op, a, b, c) -> (
-                let acc = scalar ctx acc (fst a) in
-                match Ops.ternop_conditionality op with
-                | Ops.All_three -> operand ctx (operand ctx acc `Always b) `Always c
-                | Ops.Cond_and_one_arm -> (
-                    match policy.gated_operands with
-                    | Skip -> acc
-                    | Visit ->
-                        let ctx = { ctx with gated = true; arm = true } in
-                        hooks.branches ctx acc ~select:code
-                          [
-                            (fun acc -> scalar ctx acc (fst b)); (fun acc -> scalar ctx acc (fst c));
-                          ]))
+            match node with
+            | Local_scope { body; _ } ->
+                stmt { ctx with scope_depth = ctx.scope_depth + 1 } acc body
+            | _ -> acc
           in
-          hooks.after_scalar ctx acc code
+          hooks.after_scalar ctx acc node
+    (* The top-level [Local_scope]s of [roots] the walk reaches, by id, first occurrence first: the
+       operand walk's own descent, never into a scope body. *)
+    and top_level_scopes roots =
+      let found = ref [] in
+      let rec go (s : scalar_t) =
+        match s with
+        | Local_scope { id; _ } ->
+            if not (List.Assoc.mem !found id.scope_id ~equal:Int.equal) then
+              found := (id.scope_id, s) :: !found
+        | Constant _ | Constant_bits _ | Embed_index _ | Get_local _ | Get _ | Get_merge_buffer _ ->
+            ()
+        | Get_dynamic { dyn_value; _ } -> go (fst dyn_value)
+        | Unop (_, a) -> go (fst a)
+        | Binop (op, a, b) -> (
+            match Ops.binop_conditionality op with
+            | Ops.Both_operands ->
+                go (fst a);
+                go (fst b)
+            | Ops.Gated_second -> (
+                go (fst a);
+                match policy.gated_operands with Skip -> () | Visit -> go (fst b))
+            | Ops.Only_first -> go (fst a)
+            | Ops.Only_second -> go (fst b))
+        | Ternop (op, a, b, c) -> (
+            go (fst a);
+            match Ops.ternop_conditionality op with
+            | Ops.All_three ->
+                go (fst b);
+                go (fst c)
+            | Ops.Cond_and_one_arm -> (
+                match policy.gated_operands with
+                | Skip -> ()
+                | Visit ->
+                    go (fst b);
+                    go (fst c)))
+      in
+      List.iter roots ~f:go;
+      List.rev !found
+    and scalar ctx acc code =
+      match (code, emitted) with
+      | Local_scope _, Some _ -> acc
+      | _ -> (
+          match hooks.scalar ctx acc code with
+          | Prune acc -> acc
+          | Continue acc ->
+              let acc =
+                match code with
+                | Constant _ | Constant_bits _ | Embed_index _ | Get_local _ | Get _
+                | Get_merge_buffer _ ->
+                    acc
+                | Get_dynamic { dyn_value; _ } -> scalar ctx acc (fst dyn_value)
+                | Local_scope { body; _ } -> (
+                    match policy.local_scopes with
+                    | Skip | Emitted _ -> acc
+                    | Visit ->
+                        (* Scope definitions are hoisted out of a gate, but remain inside enclosing
+                           statement guards and, rendered under its condition, a [Where] arm
+                           (gh-ocannl-2145). Discarded operands never reach this point unless the
+                           caller explicitly requested structural traversal. *)
+                        stmt
+                          { ctx with scope_depth = ctx.scope_depth + 1; gated = ctx.arm }
+                          acc body)
+                | Unop (_, a) -> scalar ctx acc (fst a)
+                | Binop (op, a, b) ->
+                    let first, second =
+                      match Ops.binop_conditionality op with
+                      | Ops.Both_operands -> (`Always, `Always)
+                      | Ops.Gated_second -> (`Always, `Gated)
+                      | Ops.Only_first -> (`Always, `Discarded)
+                      | Ops.Only_second -> (`Discarded, `Always)
+                    in
+                    operand ctx (operand ctx acc first a) second b
+                | Ternop (op, a, b, c) -> (
+                    let acc = scalar ctx acc (fst a) in
+                    match Ops.ternop_conditionality op with
+                    | Ops.All_three -> operand ctx (operand ctx acc `Always b) `Always c
+                    | Ops.Cond_and_one_arm -> (
+                        match policy.gated_operands with
+                        | Skip -> acc
+                        | Visit ->
+                            let ctx = { ctx with gated = true; arm = true } in
+                            hooks.branches ctx acc ~select:code
+                              [
+                                (fun acc -> scalar ctx acc (fst b));
+                                (fun acc -> scalar ctx acc (fst c));
+                              ]))
+              in
+              hooks.after_scalar ctx acc code)
     and operand ctx acc kind arg =
       match kind with
       | `Always -> scalar ctx acc (fst arg)
@@ -471,7 +567,13 @@ module Access_fold = struct
     (stmt, scalar)
 
   let fold ~policy ~hooks ~init code = (fst (traversal ~policy ~hooks)) initial init code
-  let fold_scalar ~policy ~hooks ~init sc = (snd (traversal ~policy ~hooks)) initial init sc
+
+  let fold_scalar ~policy ~hooks ~init sc =
+    (match policy.local_scopes with
+    | Emitted _ ->
+        invalid_arg "Access_fold.fold_scalar: a bare expression is no rendering unit for Emitted"
+    | Visit | Skip -> ());
+    (snd (traversal ~policy ~hooks)) initial init sc
 end
 
 (** The tensor node a statement writes ITSELF -- not through a sub-statement -- or [None]
@@ -7388,6 +7490,368 @@ let local_reads (llc : t) : int list =
   fold ~policy ~hooks:{ (hooks ()) with scalar } ~init:[] llc
   |> List.dedup_and_sort ~compare:Int.compare
 
+(* gh-ocannl-2213: the order a statement's scope definitions are emitted in, shared by the renderer
+   ([C_syntax.pp_local_defs] renders {!Scope_order.plan}) and by [Access_fold]'s [Emitted] mode
+   ({!Scope_order.emission}). See the interface. *)
+module Scope_order = struct
+  type key =
+    | Select of { cond : scalar_t; prec : Ops.prec; unconverted : bool }
+    | Gate of { op : Ops.binop; prec : Ops.prec; first : scalar_t; first_prec : Ops.prec }
+
+  (* Structural, but a float constant by its bits: [0.0] and [-0.0] compare equal as floats yet can
+     decide a condition differently ([x / -0.0 > 0]), so they are different conditions (Codex review
+     of the gh-ocannl-2213 PR). A key holds no [Local_scope] ({!arms}' and {!gate}'s [cond_defs]
+     rule), so a leaf without a nested expression compares as {!equal_scalar_t} does. *)
+  let rec equal_cond ~eval (a : scalar_t) (b : scalar_t) =
+    (* An operator's operands as [C_syntax.pp_scalar_op_at] renders them: at the precisions
+       {!operand_eval_precisions} gives, so an annotation a homogeneous operator overrides does not
+       tell two conditions apart (Codex review of the gh-ocannl-2213 PR). *)
+    let args op xs ys =
+      let ps = operand_eval_precisions ~eval op (Array.of_list (List.map xs ~f:snd)) in
+      let qs = operand_eval_precisions ~eval op (Array.of_list (List.map ys ~f:snd)) in
+      Array.for_all2_exn ps qs ~f:Ops.equal_prec
+      && List.for_alli xs ~f:(fun k (x, _) -> equal_cond ~eval:ps.(k) x (fst (List.nth_exn ys k)))
+    in
+    match (a, b) with
+    | Constant x, Constant y -> Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+    | Unop (o, x), Unop (o', y) -> Ops.equal_unop o o' && args (Ops.Unop o) [ x ] [ y ]
+    | Binop (o, x1, x2), Binop (o', y1, y2) ->
+        Ops.equal_binop o o' && args (Ops.Binop o) [ x1; x2 ] [ y1; y2 ]
+    | Ternop (o, x1, x2, x3), Ternop (o', y1, y2, y3) ->
+        Ops.equal_ternop o o' && args (Ops.Ternop o) [ x1; x2; x3 ] [ y1; y2; y3 ]
+    | Get_dynamic x, Get_dynamic y ->
+        Ops.equal_prec (snd x.dyn_value) (snd y.dyn_value)
+        && equal_cond ~eval:(snd x.dyn_value) (fst x.dyn_value) (fst y.dyn_value)
+        && equal_scalar_t
+             (Get_dynamic { x with dyn_value = (Constant 0., snd x.dyn_value) })
+             (Get_dynamic { y with dyn_value = (Constant 0., snd x.dyn_value) })
+    | _ -> equal_scalar_t a b
+
+  let equal_key a b =
+    match (a, b) with
+    | Select a, Select b ->
+        Ops.equal_prec a.prec b.prec
+        && Bool.equal a.unconverted b.unconverted
+        && equal_cond ~eval:a.prec a.cond b.cond
+    | Gate a, Gate b ->
+        Ops.equal_binop a.op b.op && Ops.equal_prec a.prec b.prec
+        && Ops.equal_prec a.first_prec b.first_prec
+        && equal_cond ~eval:a.first_prec a.first b.first
+    | Select _, Gate _ | Gate _, Select _ -> false
+
+  type 'p lit = { key : key; holds : bool; anywhere : bool; payload : 'p }
+  type ('p, 'd) entry = { scope : int; guard : 'p lit list; def : 'd option }
+
+  let same_cond x y = equal_key x.key y.key
+
+  (* [same]: whether two literals test one condition, polarity aside -- {!same_cond} by default; the
+     renderer passes its own (see {!plan}). *)
+  let equal_lit ?(same = same_cond) x y = same x y && Bool.equal x.holds y.holds
+  let equal_guard ~same a b = List.equal (equal_lit ~same) a b
+
+  let equal_paths ~same a b =
+    List.length a = List.length b
+    && List.for_all a ~f:(fun p -> List.mem b p ~equal:(equal_guard ~same))
+
+  (* The conditions a definition runs under, as a disjunction of [paths] (each a conjunction,
+     outermost first), simplified: a path another one is a prefix of is absorbed, and two paths
+     differing only in their last condition's polarity merge into their common prefix. [[[]]] is
+     unconditional. *)
+  let rec normalize_guards ~same paths =
+    let equal_guard = equal_guard ~same in
+    let paths =
+      List.fold paths ~init:[] ~f:(fun acc p ->
+          if List.mem acc p ~equal:equal_guard then acc else acc @ [ p ])
+    in
+    let rec is_prefix a b =
+      match (a, b) with
+      | [], _ -> true
+      | x :: a, y :: b -> equal_lit ~same x y && is_prefix a b
+      | _, [] -> false
+    in
+    let absorbed =
+      List.filter paths ~f:(fun p ->
+          not (List.exists paths ~f:(fun q -> (not (equal_guard p q)) && is_prefix q p)))
+    in
+    let complementary p q =
+      match (List.rev p, List.rev q) with
+      | x :: rp, y :: rq -> same x y && Bool.equal x.holds (not y.holds) && equal_guard rp rq
+      | _ -> false
+    in
+    match
+      List.find_map absorbed ~f:(fun p ->
+          Option.map (List.find absorbed ~f:(complementary p)) ~f:(fun q -> (p, q)))
+    with
+    | None -> absorbed
+    | Some (p, q) ->
+        let prefix = List.drop_last_exn p in
+        normalize_guards ~same
+          (prefix :: List.filter absorbed ~f:(fun r -> not (equal_guard r p || equal_guard r q)))
+
+  let rec evaluable_anywhere (s : scalar_t) =
+    match s with
+    | Constant _ | Constant_bits _ | Embed_index _ -> true
+    | Get _ | Get_dynamic _ | Get_merge_buffer _ | Get_local _ | Local_scope _ -> false
+    | Binop ((Ops.Div | Ops.Mod), _, _) -> false
+    | Binop (_, (a, _), (b, _)) -> evaluable_anywhere a && evaluable_anywhere b
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        evaluable_anywhere a && evaluable_anywhere b && evaluable_anywhere c
+    | Unop (_, (a, _)) -> evaluable_anywhere a
+
+  let only_anywhere entries =
+    List.map entries ~f:(fun d -> { d with guard = List.filter d.guard ~f:(fun l -> l.anywhere) })
+
+  let arms ~key ~payload ~(v1 : scalar_t) ~cond_defs d_then d_else =
+    if List.is_empty d_then && List.is_empty d_else then []
+    else if not (List.is_empty cond_defs) then only_anywhere (d_then @ d_else)
+    else
+      let anywhere = evaluable_anywhere v1 in
+      let under holds =
+        List.map ~f:(fun d -> { d with guard = { key; holds; anywhere; payload } :: d.guard })
+      in
+      under true d_then @ under false d_else
+
+  let gate ~key ~payload ~(v1 : scalar_t) ~cond_defs d2 =
+    if not (List.exists d2 ~f:(fun d -> not (List.is_empty d.guard))) then d2
+    else if not (List.is_empty cond_defs) then only_anywhere d2
+    else
+      let lit = { key; holds = true; anywhere = evaluable_anywhere v1; payload = payload () } in
+      List.map d2 ~f:(fun d ->
+          if List.is_empty d.guard then d else { d with guard = lit :: d.guard })
+
+  type ('p, 'd) plan = {
+    unconditional : (int * 'd) list;
+    conditional : (int * 'd) list;
+    groups : ('p lit list list * (int * 'd) list) list;
+  }
+
+  let plan ?(same = same_cond) ~(reads : 'd -> int list) (entries : ('p, 'd) entry list) :
+      ('p, 'd) plan =
+    let normalize_guards = normalize_guards ~same and equal_paths = equal_paths ~same in
+    let defs = List.filter_map entries ~f:(fun d -> Option.map d.def ~f:(fun s -> (d.scope, s))) in
+    let sorted = List.dedup_and_sort defs ~compare:(fun (a, _) (b, _) -> Int.compare a b) in
+    let by_scope = Hashtbl.create (module Int) in
+    List.iter sorted ~f:(fun (scope, def) -> Hashtbl.set by_scope ~key:scope ~data:def);
+    (* Each definition's conditions, a disjunction ({!normalize_guards}). *)
+    let guards = Hashtbl.create (module Int) in
+    List.iter entries ~f:(fun d ->
+        if Hashtbl.mem by_scope d.scope then Hashtbl.add_multi guards ~key:d.scope ~data:d.guard);
+    Hashtbl.map_inplace guards ~f:normalize_guards;
+    let changed = ref true in
+    while !changed do
+      changed := false;
+      List.iter sorted ~f:(fun (scope, def) ->
+          let g = Hashtbl.find_exn guards scope in
+          List.iter (reads def) ~f:(fun r ->
+              match Hashtbl.find guards r with
+              | Some gr when r <> scope ->
+                  let gr' = normalize_guards (gr @ g) in
+                  if not (equal_paths gr gr') then (
+                    Hashtbl.set guards ~key:r ~data:gr';
+                    changed := true)
+              | _ -> ()))
+    done;
+    let unconditional, conditional =
+      List.partition_tf sorted ~f:(fun (s, _) ->
+          match Hashtbl.find_exn guards s with [ [] ] -> true | _ -> false)
+    in
+    (* The definitions [group], in ascending scope id except that one follows the sibling
+       definitions of [group] its body reads (gh-ocannl-1895). *)
+    let ordered group =
+      let in_group = Hash_set.of_list (module Int) (List.map group ~f:fst) in
+      let emitted = Hash_set.create (module Int) in
+      let rec emit acc (scope, def) =
+        if Hash_set.mem emitted scope then acc
+        else (
+          Hash_set.add emitted scope;
+          let siblings =
+            List.filter_map (reads def) ~f:(fun r ->
+                if Hash_set.mem in_group r then
+                  Option.map (Hashtbl.find by_scope r) ~f:(fun d -> (r, d))
+                else None)
+          in
+          (scope, def) :: List.fold siblings ~init:acc ~f:emit)
+      in
+      List.rev (List.fold group ~init:[] ~f:emit)
+    in
+    (* The conditional definitions in one dependency order across all their conditions, and
+       consecutive ones under the same conditions in one group. *)
+    let groups =
+      List.fold (ordered conditional) ~init:[] ~f:(fun acc (scope, def) ->
+          let paths = Hashtbl.find_exn guards scope in
+          match acc with
+          | (paths', defs) :: rest when equal_paths paths paths' ->
+              (paths', (scope, def) :: defs) :: rest
+          | _ -> (paths, [ (scope, def) ]) :: acc)
+      |> List.rev_map ~f:(fun (paths, defs) -> (paths, List.rev defs))
+    in
+    { unconditional = ordered unconditional; conditional; groups }
+
+  let order (p : _ plan) : (int * Access_fold.placement) list =
+    List.map p.unconditional ~f:(fun (s, _) -> (s, Access_fold.Unconditional))
+    @ List.concat_mapi p.groups ~f:(fun i (_, defs) ->
+        List.map defs ~f:(fun (s, _) -> (s, Access_fold.Conditional i)))
+
+  let same_plan ?(same_a = same_cond) ?(same_b = same_cond) (a : ('p, 'd) plan) (b : ('q, 'e) plan)
+      =
+    (* The groups' literals, position by position: the same shape and polarities, and one condition
+       on one side exactly where it is one condition on the other. *)
+    let lits groups = List.concat_map groups ~f:(fun (paths, _) -> List.concat paths) in
+    let shape groups =
+      List.map groups ~f:(fun (paths, _) -> List.map paths ~f:(List.map ~f:(fun l -> l.holds)))
+    in
+    let la = lits a.groups and lb = lits b.groups in
+    List.equal (fun (x, px) (y, py) -> x = y && Poly.equal px py) (order a) (order b)
+    && List.equal Int.equal (List.map a.conditional ~f:fst) (List.map b.conditional ~f:fst)
+    && Poly.equal (shape a.groups) (shape b.groups)
+    && List.for_all2_exn la lb ~f:(fun x y ->
+        List.for_all2_exn la lb ~f:(fun x' y' -> Bool.equal (same_a x x') (same_b y y')))
+
+  type oracle = {
+    short_circuits : prec:Ops.prec -> scalar_t -> bool;
+    comp_prec : Ops.prec -> Ops.prec;
+    int_math_prec : Ops.prec;
+    root_precs : t -> Ops.prec list;
+  }
+
+  let is_op : scalar_t -> bool = function Unop _ | Binop _ | Ternop _ -> true | _ -> false
+
+  (* The renderer's entries of [s] rendered at [prec]: [C_syntax.pp_scalar]'s descent, its operator
+     arms ([pp_scalar_op_at], and [integer_op] at an integer compute precision) followed operand by
+     operand, with their precisions and their short-circuit decisions. *)
+  let rec entries o prec (s : scalar_t) : (unit, int list Lazy.t) entry list =
+    match s with
+    | Local_scope { id; body; _ } ->
+        [ { scope = id.scope_id; guard = []; def = Some (lazy (local_reads body)) } ]
+    | Get_local id -> [ { scope = id.scope_id; guard = []; def = None } ]
+    | Get_dynamic { dyn_value = iv, iprec; _ } -> entries o iprec iv
+    | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> []
+    | Unop _ | Binop _ | Ternop _ ->
+        if Ops.is_integer prec then integer_op o prec s else op_at o prec s
+
+  and op_at o prec s =
+    let cp = o.comp_prec in
+    match s with
+    | Ternop (op, (v1, p1), (v2, p2), (v3, p3)) ->
+        let ps = operand_eval_precisions ~eval:prec (Ops.Ternop op) [| cp p1; cp p2; cp p3 |] in
+        let d1 = entries o ps.(0) v1 in
+        let d2 = entries o ps.(1) v2 in
+        let d3 = entries o ps.(2) v3 in
+        if Ops.equal_ternop op Ops.Where && o.short_circuits ~prec s then
+          d1
+          @ arms
+              ~key:(Select { cond = v1; prec = ps.(0); unconverted = false })
+              ~payload:() ~v1 ~cond_defs:d1 d2 d3
+        else List.concat [ d1; d2; d3 ]
+    | Binop (Ops.ToPowOf, (base, _), (Constant exponent, _))
+      when Ops.is_float prec && Float.is_finite exponent && Float.is_integer exponent ->
+        entries o prec base
+    | Binop (op, (v1, p1), (v2, p2)) -> (
+        match Ops.binop_conditionality op with
+        | Ops.Only_first -> entries o prec v1
+        | Ops.Only_second -> entries o prec v2
+        | Ops.Both_operands | Ops.Gated_second -> (
+            let ps = operand_eval_precisions ~eval:prec (Ops.Binop op) [| cp p1; cp p2 |] in
+            let d1 = entries o ps.(0) v1 in
+            let d2 = entries o ps.(1) v2 in
+            let blended =
+              match op with
+              | Ops.Relu_gate | Ops.Satur01_gate -> not (o.short_circuits ~prec s)
+              | _ -> false
+            in
+            match Ops.binop_conditionality op with
+            | Ops.Gated_second when not blended ->
+                d1
+                @ gate
+                    ~key:(Gate { op; prec; first = v1; first_prec = ps.(0) })
+                    ~payload:(fun () -> ())
+                    ~v1 ~cond_defs:d1 d2
+            | _ -> d1 @ d2))
+    | Unop (Ops.Round_prec, (v, t)) ->
+        let ps = operand_eval_precisions ~eval:prec (Ops.Unop Ops.Round_prec) [| t |] in
+        entries o ps.(0) v
+    | Unop (op, (v, vp)) ->
+        let ps = operand_eval_precisions ~eval:prec (Ops.Unop op) [| cp vp |] in
+        entries o ps.(0) v
+    | _ -> invalid_arg "Low_level.Scope_order.entries: not an operator node"
+
+  and integer_op o p s =
+    let fv = float_valued in
+    let sub v = if is_op v then integer_op o p v else entries o p v in
+    let table () = op_at o p s in
+    match s with
+    | Unop (op, (v, _)) -> (
+        match Ops.unop_integer_valuation op with
+        | Real_valued -> sub v
+        | (Follows_operands | Truth) when fv v -> sub v
+        | Follows_operands | Truth | Integer_only | Projection | Integer_table -> table ())
+    | Binop (op, (v1, _), (v2, _)) -> (
+        let any = fv v1 || fv v2 in
+        let both ~at =
+          let d1 = sub v1 in
+          let d2 = sub v2 in
+          match Ops.binop_conditionality op with
+          | Ops.Gated_second ->
+              d1
+              @ gate
+                  ~key:(Gate { op; prec = at; first = v1; first_prec = p })
+                  ~payload:(fun () -> ())
+                  ~v1 ~cond_defs:d1 d2
+          | Ops.Both_operands | Ops.Only_first | Ops.Only_second -> d1 @ d2
+        in
+        match Ops.binop_integer_valuation op with
+        | Real_valued -> both ~at:o.int_math_prec
+        | (Follows_operands | Truth) when any -> both ~at:o.int_math_prec
+        | Integer_only when any -> both ~at:p
+        | Projection -> (
+            match Ops.binop_conditionality op with
+            | Ops.Only_first -> sub v1
+            | Ops.Only_second -> sub v2
+            | Ops.Both_operands | Ops.Gated_second -> table ())
+        | Follows_operands | Truth | Integer_only | Integer_table -> table ())
+    | Ternop (op, (v1, v1_prec), (v2, _), (v3, _)) -> (
+        match (Ops.ternop_integer_valuation op, op) with
+        | Follows_operands, Ops.Where ->
+            let v1_prec = o.comp_prec v1_prec in
+            let d1 =
+              if Ops.is_integer v1_prec && is_op v1 then integer_op o v1_prec v1
+              else entries o v1_prec v1
+            in
+            let d2 = sub v2 in
+            let d3 = sub v3 in
+            d1
+            @ arms
+                ~key:
+                  (Select
+                     {
+                       cond = v1;
+                       prec = v1_prec;
+                       unconverted = Ops.is_integer v1_prec && is_op v1 && fv v1;
+                     })
+                ~payload:() ~v1 ~cond_defs:d1 d2 d3
+        | Follows_operands, _ when fv v1 || fv v2 || fv v3 -> List.concat [ sub v1; sub v2; sub v3 ]
+        | (Real_valued | Follows_operands | Truth | Integer_only | Projection | Integer_table), _ ->
+            table ())
+    | _ -> invalid_arg "Low_level.Scope_order.entries: not an operator node"
+
+  let statement_entries o (roots : (Ops.prec * scalar_t) list) =
+    List.concat_map roots ~f:(fun (prec, s) -> entries o prec s)
+
+  let derived_plan o roots = plan ~reads:Lazy.force (statement_entries o roots)
+
+  let emission o : Access_fold.emission =
+    {
+      order =
+        (fun unit roots ->
+          let precs = o.root_precs unit in
+          if List.length precs <> List.length roots then
+            invalid_arg
+              "Low_level.Scope_order.emission: the oracle's root precisions do not match the \
+               statement's scalars";
+          order (derived_plan o (List.zip_exn precs roots)));
+    }
+end
+
 (** Returns [true] if the given [scope_id] is read (via [Get_local]) before the first definitely
     executed [Set_local] to that id in [body]. Used to decide whether a [Local_scope] or hoisted
     [Declare_local] needs a zero initializer. A loop body write is only considered definite when the
@@ -7690,10 +8154,13 @@ let validate_scope_bodies (llc : t) : unit =
 
     A visible explicit declaration must also precede the access in rendering order (gh-ocannl-2100):
     C declares a [Declare_local] where it stands, so a read or write ahead of it in the same block
-    names an identifier not yet declared. The walk's order is the rendering's except across hoisted
-    definitions: a declaration inside a [Local_scope] body that does not enclose the access renders
-    with that definition, ahead of the statement, wherever the walk met it, so it keeps the
-    visibility-only rule. This is still not a definite-initialization check.
+    names an identifier not yet declared. Given the backend's [emission] (gh-ocannl-2213, as
+    [C_syntax.compile_proc] passes it), the walk is [Access_fold]'s [Emitted] one, whose order is
+    the rendering's across hoisted definitions too, so precedence is plain walk order, and a
+    conditional definition's body is a block of its own (its [if]'s, shared by its group). Without
+    it the walk is in operand order, where a declaration inside a [Local_scope] body that does not
+    enclose the access renders with that definition, ahead of the statement, wherever the walk met
+    it, so it keeps the visibility-only rule. This is still not a definite-initialization check.
 
     Both sides follow the rendering: a projection's discarded operand is skipped, since
     [C_syntax.pp_scalar] never renders it -- a read there strands nothing, and a binder there
@@ -7701,14 +8168,14 @@ let validate_scope_bodies (llc : t) : unit =
     spells a local from both the integer and the node, so a binder sharing only the integer is a
     different C variable. A [Staged_compilation] callback's text is not inspected; IR locals are
     bound by IR constructs. *)
-let unbound_local_violation (llc : t) : string option =
+let unbound_local_violation ?emission (llc : t) : string option =
   let open Access_fold in
   let policy =
     {
       discarded_operands = Skip;
       gated_operands = Visit;
       dead_loops = Visit;
-      local_scopes = Visit;
+      local_scopes = (match emission with Some e -> Emitted e | None -> Visit);
       guards = Track;
       (* Initializer definitions live in the synthetic Set_local's block. *)
       scan_implicit = Visit;
@@ -7791,19 +8258,41 @@ let unbound_local_violation (llc : t) : string option =
     | If { cond; _ } ->
         nest := `Guard cond :: !nest;
         Continue ()
-    | Set_local (id, _) ->
+    | Set_local (id, _) when Option.is_none emission ->
         access ctx "Set_local" id;
         Continue ()
     | _ -> Continue ()
   in
-  let after_statement _ () stmt =
+  let after_statement ctx () stmt =
+    (* Under [Emitted], the target is named where it renders: after the definitions hoisted from its
+       value, which the walk has just visited, inside the statement's block. *)
+    (match stmt with
+    | Set_local (id, _) when Option.is_some emission -> access ctx "Set_local" id
+    | _ -> ());
     if opens_block stmt then blocks := List.tl_exn !blocks;
     match stmt with For_loop _ | Scan_loop _ | If _ -> nest := List.tl_exn !nest | _ -> ()
+  in
+  (* gh-ocannl-2213: under [Emitted], the definitions of one conditional group render in the block
+     of its [if], one per group of the statement whose block is innermost. *)
+  let group_blocks = Hashtbl.Poly.create () in
+  let opens_group_block ctx =
+    match ctx.placement with
+    | Some (Conditional g) when Option.is_some emission -> Some g
+    | Some (Conditional _ | Unconditional) | None -> None
   in
   let scalar ctx () = function
     | Local_scope { id; mint; _ } ->
         Hash_set.add bound id;
         Hash_set.add hoisted id;
+        (* Only at the node's definition position: [Emitted] shows it to no other. *)
+        Option.iter (opens_group_block ctx) ~f:(fun g ->
+            let key = (List.hd !blocks, g) in
+            let block =
+              Hashtbl.find_or_add group_blocks key ~default:(fun () ->
+                  Int.incr next_block;
+                  !next_block)
+            in
+            blocks := block :: !blocks);
         enclosing := (id, mint) :: !enclosing;
         Continue ()
     | Get_local id ->
@@ -7811,8 +8300,10 @@ let unbound_local_violation (llc : t) : string option =
         Continue ()
     | _ -> Continue ()
   in
-  let after_scalar _ () = function
-    | Local_scope _ -> enclosing := List.tl_exn !enclosing
+  let after_scalar ctx () = function
+    | Local_scope _ ->
+        enclosing := List.tl_exn !enclosing;
+        if Option.is_some (opens_group_block ctx) then blocks := List.tl_exn !blocks
     | _ -> ()
   in
   fold ~policy
@@ -7836,7 +8327,8 @@ let unbound_local_violation (llc : t) : string option =
          ordered. *)
       let precedes ((_, _, _, declaration_scopes, declaration_order), _) =
         declaration_order < access_order
-        || not (List.is_suffix access_scopes ~suffix:declaration_scopes ~equal:equal_scope_id)
+        || Option.is_none emission
+           && not (List.is_suffix access_scopes ~suffix:declaration_scopes ~equal:equal_scope_id)
       in
       let visible =
         Hash_set.mem hoisted id || List.exists declarations ~f:(fun d -> in_scope d && precedes d)
@@ -7875,8 +8367,9 @@ let unbound_local_violation (llc : t) : string option =
            ^ " -- the pass that removed or renamed its binder left this access behind \
               (gh-ocannl-1973)"))
 
-let validate_local_binders ?(site = "Low_level.validate_local_binders") (llc : t) : unit =
-  Option.iter (unbound_local_violation llc) ~f:(fun msg -> invalid_arg (site ^ ": " ^ msg))
+let validate_local_binders ?(site = "Low_level.validate_local_binders") ?emission (llc : t) : unit =
+  Option.iter (unbound_local_violation ?emission llc) ~f:(fun msg ->
+      invalid_arg (site ^ ": " ^ msg))
 
 (** {2 Hardware axis analyses}
 

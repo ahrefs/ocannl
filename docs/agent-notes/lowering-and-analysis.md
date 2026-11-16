@@ -617,7 +617,32 @@ files.
   its known ones and refuses whatever else `direct_write` calls a write, as `trace_node_facts` does.
   Rewriters, affine path construction, `check_and_store_virtual`'s legality walk and cleanup's
   placement-dependent survival checks retain their own semantics; do not infer execution order
-  among hoisted sibling scope definitions from scalar source order.
+  among hoisted sibling scope definitions from scalar source order: an analysis that needs it walks
+  the `Emitted` mode (next bullet).
+
+- `Access_fold`'s `local_scopes = Emitted e` walks scope definitions in the order
+  `C_syntax.pp_local_defs` emits them (gh-ocannl-2213). The order lives in one place,
+  `Low_level.Scope_order.plan` (dedup, occurrence and read guards, propagation through
+  `local_reads`, the unconditional/conditional partition, ascending ids with read dependencies
+  first, consecutive equal-condition groups); the renderer renders it and `Scope_order.emission`
+  hands it to the fold. It is NOT a function of the IR alone: whether an arm's definitions are
+  conditional depends on whether the backend blends the select (`blend_for`: the dialect's blend
+  syntax at that precision, `speculable_select`, GPU NaN literals; an integer precision always
+  short-circuits) and on the precision each scalar renders at, which is also part of a gate
+  condition. So `e` comes from the backend's `Scope_order.oracle` (`C_syntax.scope_order_oracle`;
+  tests reach a compiled routine's through `C_syntax.scope_order_oracles`). Two derivations meet:
+  the renderer's entries, collected by `pp_scalar` as it renders and partitioned by their rendered
+  tests (`plan ~same`), and `Scope_order.entries`, which follows the same descent over the IR and
+  keys conditions by IR (`Select`/`Gate`: the condition, the precisions it and its operand render
+  at, how `integer_op` renders it; float constants by bits). `pp_local_defs` asserts on every
+  statement with definitions that the two plans agree literal by literal and that the oracle's root
+  precisions are the rendered ones, so an IR key that merges or splits what the text does not is a
+  loud compile failure, never a regrouping (three such keys were caught in review, each a rendering
+  parameter the key lacked; rendering stays keyed by what it spells). Under `Emitted`, each top-level scope of a rendering unit is shown once, at its
+  definition position (with `placement`, `gated` for a conditional one), then the operands with
+  those scopes as leaves; it refuses `discarded_operands = Visit` and `fold_scalar`.
+  `where_arm_scopes` checks the walk against kernel text on every row, with an operand-order
+  negative control (`was_emission_order`).
 
 - `Indexing.affine` is the construction boundary for affine indices (gh-ocannl-774): its private
   payload preserves pattern matching while forcing coalescing and `Fixed_idx`/`Iterator`
@@ -776,10 +801,15 @@ files.
   resemble. A declaration inside a loop or guard therefore cannot serve a read or write after it
   or in a sibling block. It must also come first in the walk (gh-ocannl-2100): C declares a
   `Declare_local` where it stands, so an access ahead of it in the same block is an undeclared
-  identifier. The walk's order is the rendering's except at hoisted definitions, which render
-  ahead of their statement wherever the walk meets them, so a declaration inside a `Local_scope`
-  body that does not enclose the access is not ordered. `Local_scope` binders themselves retain
-  existence-only checking because `C_syntax.pp_local_defs` orders them. A binder's diagnostic
+  identifier. `C_syntax.compile_proc` runs the gate twice: on the caller's tree in operand order,
+  where hoisted definitions render ahead of their statement wherever the walk meets them, so a
+  declaration inside a `Local_scope` body that does not enclose the access is not ordered; and,
+  after `collapse_exact_scopes`, on the tree that renders, under the backend's `Emitted` order
+  (gh-ocannl-2213), where precedence is plain walk order across hoisted definitions too and a
+  conditional definition's body is the block of its group's `if`. The second run is on the
+  collapsed tree because a single-assignment scope renders as an expression where it stands, and
+  ordering its pre-collapse definition refused code that compiles. `Local_scope` binders
+  themselves retain existence-only checking because `C_syntax.pp_local_defs` orders them. A binder's diagnostic
   names every enclosing body, innermost first ("in a guard body inside a loop body"),
   reconstructed from the gate's own stack of loop, scan and guard statements filtered to the ones
   whose body `Access_fold`'s context says encloses it. This is still no definite-initialization

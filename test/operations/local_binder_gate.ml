@@ -7,9 +7,10 @@
    executed, since the gate is only worth having if it leaves valid code alone.
 
    The gate checks lexical visibility for explicit declarations and scan state, and that an explicit
-   declaration precedes its accesses (gh-ocannl-2100), but does not order hoisted Local_scope
-   definitions: the rows of [local_scope_sibling_reads] are the routines an ordering rule would
-   refuse, and they compile under it. *)
+   declaration precedes its accesses (gh-ocannl-2100) in the order the backend emits hoisted
+   definitions in (gh-ocannl-2213), but does not order hoisted Local_scope definitions' own locals:
+   the rows of [local_scope_sibling_reads] are the routines such an ordering rule would refuse, and
+   they compile under it. *)
 
 open Base
 open Ll_test
@@ -235,6 +236,72 @@ let row_order name ~binder_context block =
   accepted (name ^ "_hoisted") ~raw ~out ~want:10.
     (block (set out cell (add (LL.Get_local ia) (scope_of ~orig_indices:cell ib definition))))
 
+(* gh-ocannl-2213: under the backend's emission order, a declaration in one hoisted definition
+   precedes an access in a sibling only where the renderer emits it first. [r] reads [ia], which
+   [w]'s body declares; the scopes render by ascending id, neither reading the other's local, so
+   minted reader first, [r]'s body names [ia] ahead of its declaration -- which the operand-order
+   rule, counting a hoisted declaration as preceding everything outside it, let through to the C
+   compiler. Minted writer first, it runs. [r]'s body takes two assignments, so the renderer's exact
+   collapse keeps it a definition. *)
+let row_hoisted_order () =
+  let name = "lbg_hoisted_order" in
+  let a, b, out, raw = program name in
+  let ia = LL.get_scope a in
+  let statement ~reader_first =
+    let first = LL.get_scope b in
+    let second = LL.get_scope b in
+    let r, w = if reader_first then (first, second) else (second, first) in
+    let reader =
+      scope_of ~orig_indices:cell r
+        (seq (LL.Set_local (r, LL.Get_local ia)) (LL.Set_local (r, add (LL.Get_local r) (c 1.))))
+    in
+    let writer =
+      scope_of ~orig_indices:cell w
+        (LL.unflat_lines
+           [ declare_local ia; LL.Set_local (ia, c 5.); LL.Set_local (w, LL.Get_local ia) ])
+    in
+    set out cell (add reader writer)
+  in
+  refused name ~raw (statement ~reader_first:true)
+    ~naming:[ "Get_local of " ^ local ia (name ^ "_a"); "ahead of its declaration" ];
+  accepted (name ^ "_writer_first") ~raw ~out ~want:11. (statement ~reader_first:false)
+
+(* gh-ocannl-2213: a definition under a short-circuiting select's condition renders inside that
+   condition's [if] block, so a declaration in its body is not seen by the statement's expression.
+   The condition tests an index, so no backend blends the select. *)
+let row_conditional_decl () =
+  let name = "lbg_conditional_decl" in
+  let a, b, out, raw = program name in
+  let ia = LL.get_scope a and w = LL.get_scope b in
+  let i = sym () in
+  let writer =
+    scope_of ~orig_indices:cell w
+      (LL.unflat_lines
+         [ declare_local ia; LL.Set_local (ia, c 5.); LL.Set_local (w, LL.Get_local ia) ])
+  in
+  let statement value = loop ~upto:0 i (set out cell value) in
+  refused name ~raw
+    (statement (add (where_ (lt (embed i) (ic 1)) writer (c 0.)) (LL.Get_local ia)))
+    ~naming:[ "Get_local of " ^ local ia (name ^ "_a"); "outside its lexical scope" ];
+  accepted (name ^ "_inside") ~raw ~out ~want:5.
+    (statement (where_ (lt (embed i) (ic 1)) writer (c 0.)))
+
+(* gh-ocannl-2213: a [Set_local]'s target is named after the definitions hoisted from its value, in
+   the same block, so a declaration in one of them precedes the assignment (local review of the
+   gh-ocannl-2213 PR). *)
+let row_set_local_target () =
+  let name = "lbg_set_local_target" in
+  let a, b, out, raw = program name in
+  let ia = LL.get_scope a and ib = LL.get_scope b in
+  let definition =
+    scope_of ~orig_indices:cell ib
+      (LL.unflat_lines
+         [
+           declare_local ia; LL.Set_local (ia, c 5.); LL.Set_local (ib, add (LL.Get_local ia) (c 1.));
+         ])
+  in
+  accepted name ~raw ~out ~want:7. (seq (LL.Set_local (ia, definition)) (set out cell (c 7.)))
+
 (* gh-ocannl-2100: the binder's diagnostic names every enclosure, innermost first. *)
 let row_nested_binder name ~binder_context nest =
   let a, _, out, raw = program name in
@@ -282,4 +349,7 @@ let () =
   case "other_node" row_other_node;
   case "write" row_write;
   case "discarded" row_discarded;
+  case "hoisted_order" row_hoisted_order;
+  case "conditional_decl" row_conditional_decl;
+  case "set_local_target" row_set_local_target;
   Stdio.printf "%!"

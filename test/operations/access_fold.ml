@@ -22,8 +22,8 @@ let at tn = get tn [| fixed 0 |]
 let put sc = set_at out (fixed 0) sc
 let scope_id = LL.get_scope st
 
-let scope body : LL.scalar_t =
-  Local_scope { id = scope_id; body; orig_indices = [| fixed 0 |]; mint = Inlined_computation }
+let scope ?(id = scope_id) body : LL.scalar_t =
+  Local_scope { id; body; orig_indices = [| fixed 0 |]; mint = Inlined_computation }
 
 let reads policy code =
   let hooks =
@@ -478,3 +478,184 @@ let () =
     (same_loops
        (Some (List.map demand.binders ~f:(fun (b : F.binder) -> (b.index, b.axis))))
        [ (i, Some LL.Serial); (j, None); (k, Some LL.Unrolled) ])
+
+(* gh-ocannl-2213: [Emitted] visits each top-level scope of a rendering unit once, at its definition
+   position and in its emission's order, with its node's events around its body, then the unit's
+   operands with those scopes as leaves. The emission here is hand-written -- the order and the
+   placements are its to give; [where_arm_scopes] checks the renderer's against the kernel text. *)
+let () =
+  let s1 = mk "emit_s1" and s2 = mk "emit_s2" and c_ = mk "emit_c" in
+  let id1 = LL.get_scope s1 and id2 = LL.get_scope s2 in
+  let def1 = scope ~id:id1 (LL.Set_local (id1, at a))
+  and def2 = scope ~id:id2 (LL.Set_local (id2, at b)) in
+  let code = put (add (at c_) (add def1 (add def2 def1))) in
+  let order = [ (id2.scope_id, F.Unconditional); (id1.scope_id, F.Conditional 0) ] in
+  let emission : F.emission = { order = (fun _ _ -> order) } in
+  let events (local_scopes : F.scopes) code =
+    let hooks =
+      {
+        (F.hooks ()) with
+        scalar =
+          (fun ctx acc sc ->
+            match sc with
+            | LL.Local_scope { id; _ } ->
+                Continue (`Enter (id.scope_id, ctx.F.placement, ctx.gated) :: acc)
+            | _ -> Continue acc);
+        after_scalar =
+          (fun _ acc sc ->
+            match sc with
+            | LL.Local_scope { id; _ } -> `Exit id.scope_id :: acc
+            | LL.Get (tn, _) -> `Read tn.Tn.id :: acc
+            | _ -> acc);
+      }
+    in
+    List.rev (F.fold ~policy:{ policy with local_scopes } ~hooks ~init:[] code)
+  in
+  let emitted = events (Emitted emission) code in
+  p "Emitted visits each definition once, in the emission's order, then the operands"
+    (Poly.equal emitted
+       [
+         `Enter (id2.scope_id, Some F.Unconditional, false);
+         `Read b.Tn.id;
+         `Exit id2.scope_id;
+         `Enter (id1.scope_id, Some (F.Conditional 0), true);
+         `Read a.Tn.id;
+         `Exit id1.scope_id;
+         `Read c_.Tn.id;
+       ]);
+  p "the operand-order walk visits every occurrence where it stands"
+    (Poly.equal (events Visit code)
+       [
+         `Read c_.Tn.id;
+         `Enter (id1.scope_id, None, false);
+         `Read a.Tn.id;
+         `Exit id1.scope_id;
+         `Enter (id2.scope_id, None, false);
+         `Read b.Tn.id;
+         `Exit id2.scope_id;
+         `Enter (id1.scope_id, None, false);
+         `Read a.Tn.id;
+         `Exit id1.scope_id;
+       ]);
+  let refuses f = match f () with _ -> false | exception Invalid_argument _ -> true in
+  p "Emitted refuses an emission order that omits one of the unit's scopes"
+    (refuses (fun () ->
+         events (Emitted { order = (fun _ _ -> [ (id2.scope_id, F.Unconditional) ]) }) code));
+  p "Emitted refuses a structural visit of discarded operands"
+    (refuses (fun () ->
+         F.fold
+           ~policy:{ policy with local_scopes = Emitted emission; discarded_operands = Visit }
+           ~hooks:(F.hooks ()) ~init:() code));
+  p "Emitted refuses a bare expression"
+    (refuses (fun () ->
+         F.fold_scalar
+           ~policy:{ policy with local_scopes = Emitted emission }
+           ~hooks:(F.hooks ()) ~init:() def1))
+
+(* gh-ocannl-2213: [Scope_order]'s condition keys tell a float constant by its bits. [x / 0.0 > 0]
+   and [x / -0.0 > 0] decide differently, so definitions under the two run under different
+   conditions; under one condition spelled twice they share a group (Codex review of the
+   gh-ocannl-2213 PR). *)
+let () =
+  let module O = LL.Scope_order in
+  let i = sym () in
+  let cond zero =
+    LL.Binop
+      ( Ops.Cmplt,
+        (LL.Constant 0., single),
+        (binop Ops.Div (add (embed i) (LL.Constant 1.)) (LL.Constant zero), single) )
+  in
+  let under zero scope : (unit, int list) O.entry =
+    {
+      scope;
+      guard =
+        [
+          {
+            key = Select { cond = cond zero; prec = single; unconverted = false };
+            holds = true;
+            anywhere = false;
+            payload = ();
+          };
+        ];
+      def = Some [];
+    }
+  in
+  let groups a b = List.length (O.plan ~reads:Fn.id [ under a 1; under b 2 ]).groups in
+  p "conditions differing only in a zero's sign are two conditions" (groups 0. (-0.) = 2);
+  p "one condition spelled twice is one condition" (groups (-0.) (-0.) = 1);
+  (* A gate's test over the same first operand renders differently where that operand renders at an
+     integer precision before the test widens it ([integer_op]) and where it renders at the test's
+     own float precision. *)
+  let gate_under first_prec scope : (unit, int list) O.entry =
+    {
+      scope;
+      guard =
+        [
+          {
+            key =
+              Gate
+                {
+                  op = Ops.Relu_gate;
+                  prec = Ops.double;
+                  first = add (embed i) (LL.Constant 0.5);
+                  first_prec;
+                };
+            holds = true;
+            anywhere = true;
+            payload = ();
+          };
+        ];
+      def = Some [];
+    }
+  in
+  let gate_groups a b =
+    List.length (O.plan ~reads:Fn.id [ gate_under a 1; gate_under b 2 ]).groups
+  in
+  p "a gate whose first operand renders at another precision is another condition"
+    (gate_groups Ops.int32 Ops.double = 2);
+  p "a gate spelled twice is one condition" (gate_groups Ops.int32 Ops.int32 = 1);
+  (* The renderer partitions by its own test of two conditions being one; [same_plan] holds the
+     IR-keyed derivation to it literal by literal, so a key the derivation merges or splits where
+     the rendering does not is a mismatch, not a silent regrouping. *)
+  let two = O.plan ~reads:Fn.id [ under 0. 1; under (-0.) 2 ] in
+  p "same_plan accepts a plan matched against itself" (O.same_plan two two);
+  p "same_plan refuses a plan whose conditions are one on one side and two on the other"
+    (not (O.same_plan ~same_a:(fun _ _ -> true) two two));
+  (* An integer condition renders alike under an integer select ([integer_op]) and a float one, so
+     the two keys are one condition; a float-valued one is converted only on the float path. *)
+  let oracle : O.oracle =
+    {
+      short_circuits = (fun ~prec:_ _ -> true);
+      comp_prec = Fn.id;
+      int_math_prec = Ops.double;
+      root_precs = (fun _ -> []);
+    }
+  in
+  let body_scope = scope (LL.Set_local (scope_id, at a)) in
+  let key_at prec cond =
+    let select =
+      LL.Ternop (Ops.Where, (cond, Ops.int32), (body_scope, prec), (LL.Constant 0., prec))
+    in
+    match O.entries oracle prec select with [ { guard = [ l ]; _ } ] -> Some l.key | _ -> None
+  in
+  let one_condition cond =
+    match (key_at Ops.int32 cond, key_at Ops.double cond) with
+    | Some k, Some k' -> O.equal_key k k'
+    | _ -> false
+  in
+  p "an integer condition is one condition under an integer and a float select"
+    (one_condition (cmp_at Ops.int32 Ops.Cmplt (embed i) (LL.Constant 1.)));
+  p "a float-valued condition is two: only the float path converts it"
+    (not (one_condition (LL.Unop (Ops.Sin, (embed i, Ops.double)))));
+  (* A homogeneous operator renders its operands at its own precision, whatever they are annotated
+     at, so the annotation tells no two conditions apart. *)
+  let select_key one_at : O.key =
+    Select
+      {
+        cond = LL.Binop (Ops.Cmplt, (embed i, Ops.int32), (LL.Constant 1., one_at));
+        prec = Ops.int32;
+        unconverted = false;
+      }
+  in
+  p "a homogeneous operand's annotation does not split a condition"
+    (O.equal_key (select_key single) (select_key Ops.int32))

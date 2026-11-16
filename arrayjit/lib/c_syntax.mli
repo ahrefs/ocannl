@@ -60,6 +60,15 @@ type mma_rendering =
   | Mma_scalar_fallback
 [@@deriving sexp_of, equal]
 
+val scope_order_oracles_enabled : unit -> bool ref
+(** Off by default: whether [compile_proc] records {!scope_order_oracles} (gh-ocannl-2213). *)
+
+val scope_order_oracles : unit -> (string * (Low_level.Scope_order.oracle * Low_level.t)) list ref
+(** This domain's record of the scope emission oracle each routine compiled with, and of the tree
+    the emitted-order binder gate judged (after the exact-scope collapse), most recent first -- a
+    test seam, so a test walks [Low_level.Access_fold]'s [Emitted] mode with its backend's own facts
+    ({!Low_level.Scope_order.emission}) over the tree that renders. *)
+
 val mma_census : unit -> (string * mma_rendering) list ref
 (** This domain's [Tile_mma] census: (kernel name, rendering) entries, most recent first. *)
 

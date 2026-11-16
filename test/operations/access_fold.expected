@@ -71,3 +71,17 @@ the same index read twice is charged one alternative: true
 an iterated site is charged every alternative: true
 the write demand enters a scan body, counts a Tile_mma once as its accumulator, and skips expressions: true
 the write demand reports every binder in program order, a scan's with no axis: true
+Emitted visits each definition once, in the emission's order, then the operands: true
+the operand-order walk visits every occurrence where it stands: true
+Emitted refuses an emission order that omits one of the unit's scopes: true
+Emitted refuses a structural visit of discarded operands: true
+Emitted refuses a bare expression: true
+conditions differing only in a zero's sign are two conditions: true
+one condition spelled twice is one condition: true
+a gate whose first operand renders at another precision is another condition: true
+a gate spelled twice is one condition: true
+same_plan accepts a plan matched against itself: true
+same_plan refuses a plan whose conditions are one on one side and two on the other: true
+an integer condition is one condition under an integer and a float select: true
+a float-valued condition is two: only the float path converts it: true
+a homogeneous operand's annotation does not split a condition: true
