@@ -63,3 +63,5 @@ Emitted refuses a structural visit of discarded operands: true
 Emitted refuses a bare expression: true
 conditions differing only in a zero's sign are two conditions: true
 one condition spelled twice is one condition: true
+a gate whose first operand renders at another precision is another condition: true
+a gate spelled twice is one condition: true

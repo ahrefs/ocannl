@@ -3690,7 +3690,7 @@ module C_syntax (B : C_syntax_config) = struct
      operand at [1] and at [0] give different results, spelled in the dialect's own syntax -- so the
      [Where]'s condition is never tested where the operator skipped it. Its other definitions still
      run ahead of the statement. *)
-  let gate_entries prec op ~v1 ~d1 e1 d2 =
+  let gate_entries prec op ~v1 ~first_prec ~d1 e1 d2 =
     let payload () =
       let open PPrint in
       let lit c = string (B.constant_literal prec c) in
@@ -3698,7 +3698,9 @@ module C_syntax (B : C_syntax_config) = struct
       ^^ string " != "
       ^^ parens (B.binop_syntax prec op e1 (lit 0.))
     in
-    Low_level.Scope_order.gate ~key:(Gate { op; prec; first = v1 }) ~payload ~v1 ~cond_defs:d1 d2
+    Low_level.Scope_order.gate
+      ~key:(Gate { op; prec; first = v1; first_prec })
+      ~payload ~v1 ~cond_defs:d1 d2
 
   (* gh-ocannl-2145: a short-circuiting select's arm definitions run under its condition [e1],
      rendered at [cond_prec]. *)
@@ -3774,7 +3776,8 @@ module C_syntax (B : C_syntax_config) = struct
             in
             let defs =
               match Ops.binop_conditionality op with
-              | Ops.Gated_second when not blended -> d1 @ gate_entries prec op ~v1 ~d1 e1 d2
+              | Ops.Gated_second when not blended ->
+                  d1 @ gate_entries prec op ~v1 ~first_prec:ps.(0) ~d1 e1 d2
               | _ -> List.concat [ d1; d2 ]
             in
             let expr = binop_expr prec op ~v1 ~v2 e1 e2 in
@@ -3855,7 +3858,7 @@ module C_syntax (B : C_syntax_config) = struct
           let d1, e1 = render v1 in
           let d2, e2 = render v2 in
           match Ops.binop_conditionality op with
-          | Ops.Gated_second -> (d1 @ gate_entries at op ~v1 ~d1 e1 d2, e1, e2)
+          | Ops.Gated_second -> (d1 @ gate_entries at op ~v1 ~first_prec:p ~d1 e1 d2, e1, e2)
           | Ops.Both_operands | Ops.Only_first | Ops.Only_second -> (d1 @ d2, e1, e2)
         in
         match Ops.binop_integer_valuation op with

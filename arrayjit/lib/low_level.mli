@@ -1902,14 +1902,16 @@ val local_reads : t -> int list
     operand position and, to a fixpoint, of the definitions reading it.
 
     A condition is keyed by IR, not by its rendered text: the condition and the precision it renders
-    at for a short-circuiting [Where] ({!Select}), the operator, its first operand and its
-    evaluation precision for a short-circuiting gate ({!Gate}, whose test is that the second operand
-    matters). Two conditions keyed alike are one value: a condition reads no scope local (the
+    at for a short-circuiting [Where] ({!Select}); the operator, its first operand, the precision
+    that operand renders at and the operator's evaluation precision for a short-circuiting gate
+    ({!Gate}, whose test is that the second operand matters: at an integer compute precision the
+    operand renders at the integer precision and the test at a float one). Float constants compare
+    by their bits. Two conditions keyed alike are one value: a condition reads no scope local (the
     [cond_defs] rule of {!arms}), and the bodies run before it write only their own locals. *)
 module Scope_order : sig
   type key =
     | Select of { cond : scalar_t; prec : Ops.prec }
-    | Gate of { op : Ops.binop; prec : Ops.prec; first : scalar_t }
+    | Gate of { op : Ops.binop; prec : Ops.prec; first : scalar_t; first_prec : Ops.prec }
 
   val equal_key : key -> key -> bool
 

@@ -7377,7 +7377,7 @@ let local_reads (llc : t) : int list =
 module Scope_order = struct
   type key =
     | Select of { cond : scalar_t; prec : Ops.prec }
-    | Gate of { op : Ops.binop; prec : Ops.prec; first : scalar_t }
+    | Gate of { op : Ops.binop; prec : Ops.prec; first : scalar_t; first_prec : Ops.prec }
 
   (* Structural, but a float constant by its bits: [0.0] and [-0.0] compare equal as floats yet can
      decide a condition differently ([x / -0.0 > 0]), so they are different conditions (Codex review
@@ -7402,7 +7402,9 @@ module Scope_order = struct
     match (a, b) with
     | Select a, Select b -> Ops.equal_prec a.prec b.prec && equal_cond a.cond b.cond
     | Gate a, Gate b ->
-        Ops.equal_binop a.op b.op && Ops.equal_prec a.prec b.prec && equal_cond a.first b.first
+        Ops.equal_binop a.op b.op && Ops.equal_prec a.prec b.prec
+        && Ops.equal_prec a.first_prec b.first_prec
+        && equal_cond a.first b.first
     | Select _, Gate _ | Gate _, Select _ -> false
 
   type 'p lit = { key : key; holds : bool; anywhere : bool; payload : 'p }
@@ -7614,7 +7616,7 @@ module Scope_order = struct
             | Ops.Gated_second when not blended ->
                 d1
                 @ gate
-                    ~key:(Gate { op; prec; first = v1 })
+                    ~key:(Gate { op; prec; first = v1; first_prec = ps.(0) })
                     ~payload:(fun () -> ())
                     ~v1 ~cond_defs:d1 d2
             | _ -> d1 @ d2))
@@ -7645,7 +7647,7 @@ module Scope_order = struct
           | Ops.Gated_second ->
               d1
               @ gate
-                  ~key:(Gate { op; prec = at; first = v1 })
+                  ~key:(Gate { op; prec = at; first = v1; first_prec = p })
                   ~payload:(fun () -> ())
                   ~v1 ~cond_defs:d1 d2
           | Ops.Both_operands | Ops.Only_first | Ops.Only_second -> d1 @ d2

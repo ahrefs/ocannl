@@ -509,4 +509,35 @@ let () =
   in
   let groups a b = List.length (O.plan ~reads:Fn.id [ under a 1; under b 2 ]).groups in
   p "conditions differing only in a zero's sign are two conditions" (groups 0. (-0.) = 2);
-  p "one condition spelled twice is one condition" (groups (-0.) (-0.) = 1)
+  p "one condition spelled twice is one condition" (groups (-0.) (-0.) = 1);
+  (* A gate's test over the same first operand renders differently where that operand renders at an
+     integer precision before the test widens it ([integer_op]) and where it renders at the test's
+     own float precision. *)
+  let gate_under first_prec scope : (unit, int list) O.entry =
+    {
+      scope;
+      guard =
+        [
+          {
+            key =
+              Gate
+                {
+                  op = Ops.Relu_gate;
+                  prec = Ops.double;
+                  first = add (embed i) (LL.Constant 0.5);
+                  first_prec;
+                };
+            holds = true;
+            anywhere = true;
+            payload = ();
+          };
+        ];
+      def = Some [];
+    }
+  in
+  let gate_groups a b =
+    List.length (O.plan ~reads:Fn.id [ gate_under a 1; gate_under b 2 ]).groups
+  in
+  p "a gate whose first operand renders at another precision is another condition"
+    (gate_groups Ops.int32 Ops.double = 2);
+  p "a gate spelled twice is one condition" (gate_groups Ops.int32 Ops.int32 = 1)
