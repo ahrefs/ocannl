@@ -4389,7 +4389,9 @@ let gate_census content =
       makes a skip and no evaluating claim. A loop whose callback evaluates the claim on one side of
       its gate and skips it on the other is one claim written once, and passes;
     - a SKIP RUN: a branch whose run code applies two or more skips, read down to the branches
-      nested in it, which are judged on their own.
+      nested in it, which are judged on their own. A run is counted up to 64 skips, as each deferred
+      skip value's summary keeps at most that many, so a chain of wrappers that each run the
+      previous one twice stays linear.
 
     {2 Outside the model}
 
@@ -4649,6 +4651,7 @@ let skip_list_census content =
         | _ -> true)
     | Nolabel -> false
   in
+  let skip_cap = 64 in
   let memo = Hashtbl.create (module Int) and in_progress = Hash_set.create (module Int) in
   (* The skips and evaluating claims [expr] applies, in source order; [~branches:false] stops at the
      branches nested in it and the functions written in it. A complete application of a deferred
@@ -4667,7 +4670,10 @@ let skip_list_census content =
               match key with Some key when Hash_set.mem forced key -> None | _ -> Some (skip, key))
         in
         List.iter fresh ~f:(fun (_, key) -> Option.iter key ~f:(Hash_set.add forced));
-        found_skips := List.rev_append fresh !found_skips
+        (* At most [skip_cap] skips are kept: a branch needs two to be refused, and a chain of
+           wrappers each running the previous one twice would otherwise grow exponentially. *)
+        let room = skip_cap - List.length !found_skips in
+        if room > 0 then found_skips := List.rev_append (List.take fresh room) !found_skips
     in
     let reader =
       object (self)

@@ -433,6 +433,17 @@ let () = Stdlib.List.iter skip [ "a"; "b" ]|ocaml},
         {ocaml|let skip ?(before = skipped "a") () = ignore before; skipped "b"
 let () = if on_gpu then run () else skip ?before:None ()|ocaml},
         [ "run 2 a" ] );
+      ( "a doubling chain of wrappers, read up to the skip cap",
+        {ocaml|let f0 () = skipped "a"
+let f1 () = f0 (); f0 ()
+let f2 () = f1 (); f1 ()
+let f3 () = f2 (); f2 ()
+let f4 () = f3 (); f3 ()
+let f5 () = f4 (); f4 ()
+let f6 () = f5 (); f5 ()
+let f7 () = f6 (); f6 ()
+let () = if on_gpu then run () else f7 ()|ocaml},
+        [ "run 64 a" ] );
       ( "a wrapper that also evaluates a claim",
         {ocaml|let both () = p "a" x; skipped "b"
 let () = if on_gpu then run () else (both (); skipped "c")|ocaml},
