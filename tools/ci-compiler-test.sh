@@ -58,6 +58,8 @@
 # compiler wrappers log every invocation, so a cached build or an alias that
 # never reaches the requested compiler fails rather than being certified.
 
+. "$(dirname -- "$0")/isolated-apt.sh"
+
 set -u
 # shellcheck source=../scripts/process-group.sh
 . "$(dirname -- "${BASH_SOURCE[0]}")/../scripts/process-group.sh"
@@ -395,33 +397,12 @@ if [ -n "$toolchain" ] && [ -x "$gcc_binary" ]; then
 else
   [ -r "$gcc_keyring" ] || die "the Ubuntu archive keyring is absent: $gcc_keyring"
   gcc_apt="$scratch/gcc-apt"
-  mkdir -p "$gcc_apt/lists/partial" "$gcc_apt/archives/partial" "$gcc_apt/sourceparts" \
-    "$gcc_apt/trustedparts" "$gcc_apt/cache" "$gcc_deb_dir" "$gcc_prefix" ||
+  mkdir -p "$gcc_deb_dir" "$gcc_prefix" || die "cannot stage GCC directories"
+  isolated_apt_setup "$gcc_apt" "$gcc_keyring" http://archive.ubuntu.com/ubuntu \
+    "main universe" "$gcc_suite" "$gcc_suite-updates" "$gcc_suite-security" ||
     die "cannot stage the isolated $gcc_suite index"
-  : >"$gcc_apt/sources.list" || die "cannot write the isolated $gcc_suite source"
-  # An empty dpkg status too: the host's would offer its own installed gcc-13
-  # (resolute's 13.4) as the candidate, which the noble index cannot serve.
-  : >"$gcc_apt/status" || die "cannot write the isolated $gcc_suite status"
-  for s in "$gcc_suite" "$gcc_suite-updates" "$gcc_suite-security"; do
-    printf 'deb [arch=amd64 signed-by=%s] http://archive.ubuntu.com/ubuntu %s main universe\n' \
-      "$gcc_keyring" "$s" >>"$gcc_apt/sources.list" ||
-      die "cannot write the isolated $gcc_suite source"
-  done
-  # Disable global trust stores; each source names its signing key.
-  gcc_apt_options=(
-    -o "Dir::Etc::sourcelist=$gcc_apt/sources.list"
-    -o "Dir::Etc::sourceparts=$gcc_apt/sourceparts"
-    -o "Dir::Etc::trusted="
-    -o "Dir::Etc::trustedparts=$gcc_apt/trustedparts"
-    -o "Dir::State::lists=$gcc_apt/lists"
-    -o "Dir::State::status=$gcc_apt/status"
-    -o "Dir::Cache=$gcc_apt/cache"
-    -o "Dir::Cache::archives=$gcc_apt/archives"
-    -o APT::Architecture=amd64
-    -o APT::Architectures=amd64
-    -o Acquire::Languages=none
-    -o APT::Get::List-Cleanup=0
-  )
+  gcc_apt_options=("${isolated_apt_options[@]}"
+    -o APT::Architecture=amd64 -o APT::Architectures=amd64 -o Acquire::Languages=none)
   echo "ci-compiler-test: GCC 13 source: Ubuntu $gcc_suite (isolated scratch index)"
   update_index "$gcc_suite" -q "${gcc_apt_options[@]}"
   echo "ci-compiler-test: apt download (GCC 13 host):"
@@ -446,23 +427,10 @@ if [ "$aarch64_clang" -eq 1 ]; then
     '' | *[!a-z0-9]*) die "unsupported VERSION_CODENAME for apt.llvm.org: $llvm_codename" ;;
   esac
   llvm_apt="$scratch/llvm-apt"
-  llvm_lists="$llvm_apt/lists"
-  llvm_archives="$llvm_apt/archives"
-  llvm_sourceparts="$llvm_apt/sourceparts"
-  llvm_trustedparts="$llvm_apt/trusted.gpg.d"
-  llvm_source="$llvm_apt/llvm.list"
   llvm_key="$llvm_apt/apt.llvm.org.asc"
-  mkdir -p "$llvm_lists/partial" "$llvm_archives/partial" "$llvm_sourceparts" \
-    "$llvm_trustedparts" "$llvm_apt/cache" || die "cannot stage the isolated apt.llvm.org index"
   llvm_url="https://apt.llvm.org/$llvm_codename/"
   llvm_suite="llvm-toolchain-$llvm_codename-21"
-  printf 'deb [signed-by=%s] %s %s main\n' "$llvm_key" "$llvm_url" "$llvm_suite" >"$llvm_source" ||
-    die "cannot write the isolated apt.llvm.org source"
-  # An empty dpkg status, as the GCC index has: a host with its distribution's
-  # own clang-21 installed (resolute's 1:21.1.8-6ubuntu1 on minix) would offer
-  # that version as the candidate, which apt.llvm.org's index cannot serve
-  # ("Can't find a source to download version ...", gh-ocannl-1852).
-  : >"$llvm_apt/status" || die "cannot write the isolated apt.llvm.org status"
+  mkdir -p "$llvm_apt" || die "cannot stage apt.llvm.org"
   echo "ci-compiler-test: fetching pinned apt.llvm.org signing key"
   run_tracked curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o "$llvm_key" ||
     die "cannot fetch the apt.llvm.org signing key"
@@ -471,18 +439,9 @@ if [ "$aarch64_clang" -eq 1 ]; then
   expected_llvm_key_sha=8b2a587ffd672c4687e7581dad4b2f6c1bb2ad6b480cd9771ba2ff48e0b8c75d
   [ "$llvm_key_sha" = "$expected_llvm_key_sha" ] ||
     die "apt.llvm.org signing key digest changed: $llvm_key_sha (expected $expected_llvm_key_sha)"
-  # trustedparts stays empty: the pinned key belongs only to this source.
-  llvm_apt_options=(
-    -o "Dir::Etc::sourcelist=$llvm_source"
-    -o "Dir::Etc::sourceparts=$llvm_sourceparts"
-    -o "Dir::Etc::trusted="
-    -o "Dir::Etc::trustedparts=$llvm_trustedparts"
-    -o "Dir::State::lists=$llvm_lists"
-    -o "Dir::State::status=$llvm_apt/status"
-    -o "Dir::Cache=$llvm_apt/cache"
-    -o "Dir::Cache::archives=$llvm_archives"
-    -o APT::Get::List-Cleanup=0
-  )
+  isolated_apt_setup "$llvm_apt" "$llvm_key" "$llvm_url" main "$llvm_suite" ||
+    die "cannot stage the isolated apt.llvm.org index"
+  llvm_apt_options=("${isolated_apt_options[@]}")
   echo "ci-compiler-test: apt.llvm.org source: $llvm_url $llvm_suite (isolated scratch index)"
   echo "ci-compiler-test: apt.llvm.org key sha256: $llvm_key_sha"
   update_index "apt.llvm.org ($llvm_codename)" "${llvm_apt_options[@]}"

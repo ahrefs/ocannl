@@ -37,6 +37,8 @@
 # Only `cc1` runs: the census compiles to assembly (`-S`), so no binutils are
 # staged, and the arm64 libc headers come from the same index.
 
+. "$(dirname -- "$0")/isolated-apt.sh"
+
 set -u
 
 die() { echo "ci-aarch64-cross: $*" >&2; exit 2; }
@@ -71,21 +73,11 @@ done
 
 apt_dir="$prefix.apt"
 debs="$prefix.debs"
-mkdir -p "$apt_dir/lists/partial" "$apt_dir/archives/partial" "$apt_dir/sourceparts" \
-  "$apt_dir/trustedparts" "$debs" "$prefix" || die "cannot stage $prefix"
-: >"$apt_dir/sources.list"
-for s in "$suite" "$suite-updates" "$suite-security"; do
-  printf 'deb [arch=amd64 signed-by=%s] http://archive.ubuntu.com/ubuntu %s main universe\n' \
-    "$keyring" "$s" >>"$apt_dir/sources.list"
-done
-# Disable global trust stores; each source names its signing key.
-apt_options=(
-  -o "Dir::Etc::sourcelist=$apt_dir/sources.list"
-  -o "Dir::Etc::sourceparts=$apt_dir/sourceparts"
-  -o "Dir::Etc::trusted="
-  -o "Dir::Etc::trustedparts=$apt_dir/trustedparts"
-  -o "Dir::State::lists=$apt_dir/lists"
-  -o "Dir::Cache::archives=$apt_dir/archives"
+mkdir -p "$debs" "$prefix" || die "cannot stage $prefix"
+isolated_apt_setup "$apt_dir" "$keyring" http://archive.ubuntu.com/ubuntu \
+  "main universe" "$suite" "$suite-updates" "$suite-security" ||
+  die "cannot stage the isolated $suite index"
+apt_options=("${isolated_apt_options[@]}"
   -o APT::Architecture=amd64
   -o APT::Architectures=amd64
   -o Acquire::Languages=none

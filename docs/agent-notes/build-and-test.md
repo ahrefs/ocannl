@@ -4619,6 +4619,14 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   ubuntu leg's (16 bytes against 32 or 64; `macos-latest` is ARM too, so per PR only ubuntu sees
   it). The local proxy is a targeted rerun at `OCANNL_CC_VECTOR_BYTES=32` in a stanza that declares it; when and
   why: [backend-precision-and-simd.md](backend-precision-and-simd.md#simd-widths-and-narrow-storage-performance).
+- The compiler staging scripts share `tools/isolated-apt.sh` (gh-ocannl-2125):
+  `tools/test-isolated-apt.sh` runs its real apt setup against a local signed archive,
+  without network or compiler downloads. It checks source-specific and disabled global
+  trust separately, forces real cache generation into writable fixture directories,
+  and checks effective status because update only reads it. Missing apt is an observed
+  not-applicable leg; other missing tools fail. The shell harness manifest runs it,
+  first on CI in the nightly harnesses job, including Ubuntu 24.04 apt 2 wording.
+
 - `tools/ci-compiler-test.sh` is the cheap local proxy for a compiler-sensitive Ubuntu CI failure
   (gh-ocannl-846): it downloads the GCC 13 packages with `apt-get download`, extracts them into a
   scratch prefix with `dpkg-deb -x`, and runs exactly one named `runtest-` alias in a fresh Dune
