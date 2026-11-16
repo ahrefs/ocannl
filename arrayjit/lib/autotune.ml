@@ -7196,9 +7196,7 @@ module Make (D : Driver) = struct
        what tells them from their twins -- a rate resolved and a lane width stated. Elsewhere the
        candidate set is exactly as before. *)
       let coalesced = model_ranks_coalesced ~limits in
-      let admits (_ : LL.optimized) p =
-        model_admits ~coalesced ~seeding:(Lazy.force seeding_here) p
-      in
+      let admits p = model_admits ~coalesced ~seeding:(Lazy.force seeding_here) p in
       (* gh-ocannl-1477: under seeding, a walk's threshold is the seeded plan's own sketch on the
          searched program, scored as its leaves are ({!model_seeded_anchors}), where it is below the
          incumbent: a leaf that only ties the seeded geometry never displaces the seeded plan, while
@@ -7234,7 +7232,7 @@ module Make (D : Driver) = struct
         match
           model_family_search
             ~on_rejected:(fun () -> Int.incr n_rejected)
-            ~admit:(admits base_opt)
+            ~admit:admits
             ~on_excluded:(fun () -> Int.incr n_excluded)
             ~coalesced ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices ~peak_flops
             ~peak_memory_bandwidth ~score:score_valid ~incumbent base_opt

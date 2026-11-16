@@ -16,6 +16,24 @@ structural, fp8: the gate leaves the seeded sketches as they are: true
 structural, fp8: the gate adds the sink of the bias gradient: true
 structural, fp8: with the key unset the plan decides as with the gate off: true
 structural control, fp8: under an accumulator that does not widen, the gate changes nothing: true
+bfloat16 (default arithmetic): the weight gradient is not trivially zero: true
+where accum_prec widens bfloat16 (default arithmetic), with the gate off the weight gradient is seeded: true
+where accum_prec widens bfloat16 (default arithmetic), the seeded routine compiles without falling back: true
+bfloat16 (default arithmetic): with the gate off the weight gradient is bitwise the default pipeline's: true
+bfloat16 (default arithmetic): with the gate off the bias gradient is bitwise the default pipeline's: true
+where accum_prec widens bfloat16 (default arithmetic), some default weight-gradient cell is further than one bfloat16 rounding from the f64 reference (the parity's power): true
+half (default arithmetic): the weight gradient is not trivially zero: true
+where accum_prec widens half (default arithmetic), with the gate off the weight gradient is seeded: true
+where accum_prec widens half (default arithmetic), the seeded routine compiles without falling back: true
+half (default arithmetic): with the gate off the weight gradient is bitwise the default pipeline's: true
+half (default arithmetic): with the gate off the bias gradient is bitwise the default pipeline's: true
+where accum_prec widens half (default arithmetic), some default weight-gradient cell is further than one half rounding from the f64 reference (the parity's power): true
+fp8 (default arithmetic): the weight gradient is not trivially zero: true
+where accum_prec widens fp8 (default arithmetic), with the gate off the weight gradient is seeded: true
+where accum_prec widens fp8 (default arithmetic), the seeded routine compiles without falling back: true
+fp8 (default arithmetic): with the gate off the weight gradient is bitwise the default pipeline's: true
+fp8 (default arithmetic): with the gate off the bias gradient is bitwise the default pipeline's: true
+where accum_prec widens fp8 (default arithmetic), some default weight-gradient cell is further than one fp8 rounding from the f64 reference (the parity's power): true
 bfloat16: the weight gradient is not trivially zero: true
 where accum_prec widens bfloat16, with the gate off the weight gradient is seeded: true
 where accum_prec widens bfloat16, the seeded routine compiles without falling back: true

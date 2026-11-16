@@ -21,15 +21,15 @@
    under a widening [accum_prec] (bf16, f16, fp8) seeds the weight gradient with the gate off, while
    only the gate adds the sink. 3. Executed, per precision (bf16, f16, fp8): one dense layer with
    narrow weight and bias gradients, the inputs NOT dyadic, compiled on the default pipeline and
-   through the seeded default, under the [reproducible] profile's arithmetic (no compiler
-   contraction, [fp_contract=false]). Where the seeded default runs and [accum_prec] widens the
-   precision (the backend's own resolution), the weight gradient is seeded with the gate off and
-   stays bitwise the default's, and some default cell is further than one rounding from the f64
-   reference, so a seeded schedule narrowing elsewhere than the default would show. For bf16 the
-   gate on also sinks the bias gradient, which then is closer to an f64 host reference than the
-   default's, and within one bf16 rounding of it in every cell, which the default's is not. Where
-   nothing widens, the gate changes nothing. 4. Configuration: the key reaches the seeded default
-   and [model_default] when no override is passed. *)
+   through the seeded default, under the default arithmetic (fast math on, explicit FMAs) and under
+   the [reproducible] profile's (no contraction anywhere). Where the seeded default runs and
+   [accum_prec] widens the precision (the backend's own resolution), the weight gradient is seeded
+   with the gate off and stays bitwise the default's, and some default cell is further than one
+   rounding from the f64 reference, so a seeded schedule narrowing elsewhere than the default would
+   show. For bf16 the gate on also sinks the bias gradient, which then is closer to an f64 host
+   reference than the default's, and within one bf16 rounding of it in every cell, which the
+   default's is not. Where nothing widens, the gate changes nothing. 4. Configuration: the key
+   reaches the seeded default and [model_default] when no override is passed. *)
 
 (* cc-fp-contract: same-shape -- on cc both seeded and model defaults compile the plain default
    pipeline *)
@@ -44,19 +44,27 @@ module LL = Ir.Low_level
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let key = "gpu_default_seed_narrow_storage"
 
-(* The [reproducible] profile's arithmetic (gh-ocannl-2195's contract: bitwise under it): no
-   contraction by OCANNL's rewrites nor by the GPU compiler, so the bitwise claims are about
-   summation order and rounding count, not the GPU compiler's per-kernel contraction. Stated
-   explicitly rather than through the profile, which would also pin the gate under test. *)
-let () =
+(* The two arithmetics the seeding's parity is executed under (part 3). [`Default]: the default
+   user's -- the GPU compilers' fast math on, as it defaults -- with every product accumulation an
+   explicit FMA ([fp_contract=true], as seeded_default pins it), so that the bitwise claims are
+   about summation order and rounding count, not the GPU compiler's per-kernel contraction.
+   [`Reproducible]: the [reproducible] profile's ([fp_contract=false], both fast-math keys off), no
+   contraction anywhere -- gh-ocannl-2195's contract. Stated key by key rather than through the
+   profile, which would also pin the gate under test; read per compile, so a later setting governs
+   the later compiles. *)
+let set_arithmetic arith =
+  let fp_contract, fast_math =
+    match arith with `Default -> ("true", "true") | `Reproducible -> ("false", "false")
+  in
   List.iter
     [
-      ("OCANNL_FP_CONTRACT", "false");
-      ("OCANNL_CUDA_FAST_MATH", "false");
-      ("OCANNL_HIP_FAST_MATH", "false");
+      ("OCANNL_FP_CONTRACT", fp_contract);
+      ("OCANNL_CUDA_FAST_MATH", fast_math);
+      ("OCANNL_HIP_FAST_MATH", fast_math);
     ]
     ~f:(fun (k, v) -> Unix.putenv k v)
 
+let () = set_arithmetic `Default
 let bf16 = Ir.Ops.bfloat16
 let precs = [ bf16; Ir.Ops.half; Ir.Ops.fp8 ]
 let name prec = Ir.Ops.prec_string prec
@@ -272,41 +280,53 @@ let () =
    rounding from the f64 reference, so the default rounds more than once per cell, and a seeded
    schedule rounding at other points (a tile held wide across the whole reduction, say) would differ
    there. *)
-let defaults =
+let parity ~arith =
+  set_arithmetic arith;
+  (* The reproducible run's labels are the ones the golden has always carried. *)
+  let tag l =
+    match arith with `Reproducible -> l.tag | `Default -> l.tag ^ " (default arithmetic)"
+  in
   List.map layers ~f:(fun (prec, l) ->
       let widens = widens_here prec in
-      Stdio.eprintf "seeded_narrow_storage: %s widens=%b on %s (not part of the golden)\n%!" l.tag
+      Stdio.eprintf "seeded_narrow_storage: %s widens=%b on %s (not part of the golden)\n%!" (tag l)
         widens backend_name;
       let ((w_default, b_default) as default) = run l Context.compile in
       let (w_off, b_off), r_off = seeded ~seed_narrow:false l in
       List.iter (census r_off) ~f:(fun line ->
-          Stdio.eprintf "%s, gate off: %s (not part of the golden)\n" l.tag line);
-      p_exists (l.tag ^ ": the weight gradient is not trivially zero") (Array.to_list w_default)
+          Stdio.eprintf "%s, gate off: %s (not part of the golden)\n" (tag l) line);
+      p_exists
+        (tag l ^ ": the weight gradient is not trivially zero")
+        (Array.to_list w_default)
         ~f:(fun v -> Float.(abs v > 1e-3));
       Verdict.gated ~when_:widens ~on:backend_name
         (Printf.sprintf
-           "where accum_prec widens %s, with the gate off the weight gradient is seeded" l.tag)
+           "where accum_prec widens %s, with the gate off the weight gradient is seeded" (tag l))
         (not (List.is_empty r_off.sd_seeded));
       Verdict.gated ~when_:widens ~on:backend_name
         (Printf.sprintf
-           "where accum_prec widens %s, the seeded routine compiles without falling back" l.tag)
+           "where accum_prec widens %s, the seeded routine compiles without falling back" (tag l))
         (not r_off.sd_fell_back);
       p_all2
-        (l.tag ^ ": with the gate off the weight gradient is bitwise the default pipeline's")
+        (tag l ^ ": with the gate off the weight gradient is bitwise the default pipeline's")
         w_off w_default ~f:bitwise;
       p_all2
-        (l.tag ^ ": with the gate off the bias gradient is bitwise the default pipeline's")
+        (tag l ^ ": with the gate off the bias gradient is bitwise the default pipeline's")
         b_off b_default ~f:bitwise;
       Verdict.gated_exists ~when_:widens ~on:backend_name
         (Printf.sprintf
            "where accum_prec widens %s, some default weight-gradient cell is further than one %s \
             rounding from the f64 reference (the parity's power)"
-           l.tag l.tag)
+           (tag l) l.tag)
         (List.zip_exn (Array.to_list w_default) (Array.to_list wgrad_ref))
         ~f:(fun (g, r) -> Float.(abs (g -. r) > one_rounding prec r));
-      Stdio.eprintf "%s abs error vs f64: weight %g, bias %g (not part of the golden)\n%!" l.tag
+      Stdio.eprintf "%s abs error vs f64: weight %g, bias %g (not part of the golden)\n%!" (tag l)
         (error w_default wgrad_ref) (error b_default bgrad_ref);
       (prec, (l, default, r_off)))
+
+let (_ : (Ir.Ops.prec * (layer * (float array * float array) * Autotune.seeded_choice)) list) =
+  parity ~arith:`Default
+
+let defaults = parity ~arith:`Reproducible
 
 (* The gate, on bf16: it adds the sink of the bias gradient, which changes it towards the exact sum,
    and leaves the seeded weight gradient as it was. *)
