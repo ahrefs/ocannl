@@ -72,6 +72,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `benchmarks/`, so `env_var_deps` cannot derive it. It is listed so every push through
   `tools/fmt-check.sh` checks fixture guards: fixtures are copied from neighbours, and a local
   corpus is no reason to let their startup races return.
+  Its unittest runner omits only the exact elapsed-time summary (gh-ocannl-2217): compile-tier
+  logs participate in ship-pr's base-alone comparison, which compares literal lines, including
+  absolute paths. `tools/test-merge-build-check.sh`'s `#compile-output` leg runs the actual Dune
+  rule twice in an isolated project and plants a failing case to retain traceback, FAILED summary
+  and nonzero status. It exercises output rather than recognizing source forms; the fake-dune
+  tier fixtures cannot see diagnostics from the real compile tier.
 - **What reaches the scans is wider than what looks like infrastructure.** Two members of
   `@test/operations/scans` census sources across the tree, tests included, so a test-only edit can
   turn them red with no config key, stanza or new file in the diff. `codegen_text_inventory`
