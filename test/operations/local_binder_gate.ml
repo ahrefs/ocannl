@@ -286,6 +286,22 @@ let row_conditional_decl () =
   accepted (name ^ "_inside") ~raw ~out ~want:5.
     (statement (where_ (lt (embed i) (ic 1)) writer (c 0.)))
 
+(* gh-ocannl-2213: a [Set_local]'s target is named after the definitions hoisted from its value, in
+   the same block, so a declaration in one of them precedes the assignment (local review of the
+   gh-ocannl-2213 PR). *)
+let row_set_local_target () =
+  let name = "lbg_set_local_target" in
+  let a, b, out, raw = program name in
+  let ia = LL.get_scope a and ib = LL.get_scope b in
+  let definition =
+    scope_of ~orig_indices:cell ib
+      (LL.unflat_lines
+         [
+           declare_local ia; LL.Set_local (ia, c 5.); LL.Set_local (ib, add (LL.Get_local ia) (c 1.));
+         ])
+  in
+  accepted name ~raw ~out ~want:7. (seq (LL.Set_local (ia, definition)) (set out cell (c 7.)))
+
 (* gh-ocannl-2100: the binder's diagnostic names every enclosure, innermost first. *)
 let row_nested_binder name ~binder_context nest =
   let a, _, out, raw = program name in
@@ -335,4 +351,5 @@ let () =
   case "discarded" row_discarded;
   case "hoisted_order" row_hoisted_order;
   case "conditional_decl" row_conditional_decl;
+  case "set_local_target" row_set_local_target;
   Stdio.printf "%!"

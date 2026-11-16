@@ -8082,12 +8082,17 @@ let unbound_local_violation ?emission (llc : t) : string option =
     | If { cond; _ } ->
         nest := `Guard cond :: !nest;
         Continue ()
-    | Set_local (id, _) ->
+    | Set_local (id, _) when Option.is_none emission ->
         access ctx "Set_local" id;
         Continue ()
     | _ -> Continue ()
   in
-  let after_statement _ () stmt =
+  let after_statement ctx () stmt =
+    (* Under [Emitted], the target is named where it renders: after the definitions hoisted from its
+       value, which the walk has just visited, inside the statement's block. *)
+    (match stmt with
+    | Set_local (id, _) when Option.is_some emission -> access ctx "Set_local" id
+    | _ -> ());
     if opens_block stmt then blocks := List.tl_exn !blocks;
     match stmt with For_loop _ | Scan_loop _ | If _ -> nest := List.tl_exn !nest | _ -> ()
   in
