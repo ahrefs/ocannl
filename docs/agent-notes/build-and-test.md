@@ -5240,20 +5240,15 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   both tools together, and the base-alone comparison runs both base versions;
   an older base does not itself create a mixed new-reader/old-producer case.
   With this PR's two tools together, matching names avoid that query.
-- **Timing the reader.** In an exclusive mac-studio window on 2026-11-16, a real
-  scratch merge adding a comment in `tensor/einsum_parser.ml` reached six training
-  aliases. On the same warm clone the old reader took 100.11 s (third query present),
-  the new one 76.60 s (no third query, one alias listing). Both refused the missing
-  record after real format, compile and scans. The source was `d49a880e6`, the
-  measurement `wave-20261115-ocannl-p2-mac-studio-1`, record `p2/runs/run-8` in that
-  wave's scratch directory. This is one old/new pair through a refusal, not a full
-  successful worst case or a minix timing. Recipe: a `--no-local` scratch clone,
-  these tools in the seed, a library-only head merged `--no-ff`, and an empty local
-  bare repository as `OCANNL_TOOL_OWED_RUN_URL`; swap only the merge-build reader,
-  time each invocation, and check the trace for one versus zero extra `affected`
-  calls and the missing-record refusal. No scratch ref needs publishing. The full
-  bound in `.github/ship-pr-merge-build` remains computed from earlier tier timings
-  and the configured record-read caps.
+- **Timing the reader.** `.github/ship-pr-merge-build` owns the measured figures,
+  their boundary and the computed full-build estimate. Reusable recipe: make a
+  `--no-local` scratch clone, seed both tools, merge a library-only head `--no-ff`,
+  and use an empty local bare repository as `OCANNL_TOOL_OWED_RUN_URL`. On the same
+  warm clone swap only the merge-build reader and time each invocation through
+  its missing-record refusal; check the trace for one versus zero extra `affected`
+  calls. This exercises real format, compile and scans without publishing a
+  scratch ref. It does not measure a full successful worst case or stalls at the
+  configured record-read caps.
 - **Where.** The ref `refs/owed-runs/<head sha>` on the PR repository (`OWED_RUN_URL` in the
   script; `OCANNL_TOOL_OWED_RUN_URL` overrides it for the harness and a fork). Its commit has the
   head as its only parent and the head's tree, and its message holds one `owed-run: v1 ...` line

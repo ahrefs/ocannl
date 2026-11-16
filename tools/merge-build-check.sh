@@ -352,7 +352,7 @@ owed_needs() {
         tests=unread tests_why="prepush printed an invalid train- alias: $line"; return ;;
       esac
       if [ "$dir" != "$last_dir" ]; then
-        if ! dune show aliases "$dir" >"$tests_dir/train-aliases" 2>&1 </dev/null; then
+        if ! dune show aliases --root . "$dir" >"$tests_dir/train-aliases" 2>&1 </dev/null; then
           tests=unread tests_why="Dune could not list prepush's train- aliases in $dir"; return
         fi
         last_dir=$dir

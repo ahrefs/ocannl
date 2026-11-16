@@ -47,6 +47,7 @@ mkdir -p "$TMP/dunebin" "$TMP/opambin" "$TMP/emptyopam"
 cat >"$TMP/dunebin/dune" <<'FAKE'
 #!/bin/sh
 if [ "$1 $2" = 'show aliases' ]; then
+  [ "$*" = 'show aliases --root . test/training' ] || exit 2
   printf '%s\n' train-a train-b
   exit 0
 fi
@@ -558,6 +559,9 @@ $(run_line "$APART_HEAD" 'build @test/training/train-a -j 1')"
   printf '%s\n' '@test/training/train-a' '@test/training/train-a' >"$TMP/train-duplicates"
   OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL FAKE_LIST=$TMP/owed-list FAKE_TRAIN_N=2 FAKE_TRAIN_NAMES=$TMP/train-duplicates run "$TMP/dunebin"
   unread_refused 'duplicate train- names cannot satisfy the count' 'prepush train- names disagree with its count (2)'
+  printf '%s\n' '@missing/train-a' >"$TMP/train-missing-dir"
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL FAKE_LIST=$TMP/owed-list FAKE_TRAIN_N=1 FAKE_TRAIN_NAMES=$TMP/train-missing-dir run "$TMP/dunebin"
+  unread_refused 'an unreadable training alias directory fails before reading a record' "Dune could not list prepush's train- aliases in missing"
   printf '%s\n' '@test/training/train-absent' >"$TMP/train-absent"
   OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL FAKE_LIST=$TMP/owed-list FAKE_TRAIN_N=1 FAKE_TRAIN_NAMES=$TMP/train-absent run "$TMP/dunebin"
   unread_refused 'a named train- alias absent from the tree refuses even with an @train record' 'prepush named a train- alias this tree does not have: @test/training/train-absent'
