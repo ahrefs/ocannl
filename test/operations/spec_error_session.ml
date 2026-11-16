@@ -33,7 +33,8 @@ let () =
     ]
   in
   List.iter forms ~f:(fun (name, valid, wrong_count, build) ->
-      List.iter [ "arity"; "clash"; "capture" ] ~f:(fun kind ->
+      List.iter [ "arity"; "clash"; "capture"; "offset"; "stride"; "dilation"; "padding"; "empty" ]
+        ~f:(fun kind ->
           let xs = List.init 3 ~f:(fun _ -> leaf ()) in
           let spec, refs, message =
             match kind with
@@ -42,6 +43,17 @@ let () =
                 ( String.substr_replace_all valid ~pattern:"a" ~with_:"..a..a",
                   [],
                   "both a dimension variable and a row variable" )
+            | "offset" | "stride" | "dilation" | "padding" | "empty" ->
+                let axis, message =
+                  match kind with
+                  | "offset" -> ("2*a+3", "is not smaller than its stride 2")
+                  | "stride" -> ("0*a", "has stride 0")
+                  | "dilation" -> ("a<+0*k", "has dilation 0")
+                  | "padding" -> ("a+k", "use_padding must be specified")
+                  | _ -> ("0^a", "a concatenation component of size 0 is empty")
+                in
+                (* Only the first operand changes; the result remains a plain axis. *)
+                (String.substr_replace_first valid ~pattern:"a" ~with_:axis, [], message)
             | _ ->
                 ( valid,
                   List.map [ "a"; "missing" ] ~f:Shape.get_variable_ref,
@@ -51,6 +63,7 @@ let () =
             match build spec refs xs with
             | _ -> None
             | exception Row.Shape_error (msg, _) -> Some msg
+            | exception Failure msg -> Some msg
           in
           p
             (name ^ " " ^ kind ^ " reports its spec error")
@@ -65,3 +78,24 @@ let () =
           in
           p (name ^ " " ^ kind ^ " permits an unrelated operation") unrelated;
           if Option.is_some (Shape.taint_provenance ()) then Tensor.rewind_to_last_closure ()))
+
+let () =
+  let sym, _ = Ir.Indexing.get_static_symbol ~static_range:2 Ir.Indexing.Empty in
+  let dim = Shape.get_variable_ref "extent" in
+  Shape.set_sym_dim dim sym;
+  let x = NTDSL.range_of_shape ~batch_dims:[ 2 ] ~output_dims:[ 3 ] () in
+  let refused =
+    match NTDSL.slice sym x () with
+    | _ -> false
+    | exception Row.Shape_error (msg, _) -> contains msg "cannot also slice a batch axis"
+  in
+  p "extent reused as batch slice reports its role error" refused;
+  p "extent reused as batch slice leaves the session untainted"
+    (Option.is_none (Shape.taint_provenance ()));
+  let unrelated =
+    match NTDSL.einsum1 "a => a" (leaf ()) () with
+    | _ -> true
+    | exception Row.Shape_error _ -> false
+  in
+  p "extent reused as batch slice permits an unrelated operation" unrelated;
+  if Option.is_some (Shape.taint_provenance ()) then Tensor.rewind_to_last_closure ()
