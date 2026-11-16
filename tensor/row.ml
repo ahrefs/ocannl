@@ -3075,14 +3075,15 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
          its stride (gh-ocannl-1823). *)
       let span2 = effective_kernel_span ~dilation:d2 ~kernel_size:k2.d in
       window_pair ~kernels:[ k2 ] ~s1 ~span1:s1 ~o1 ~s2 ~span2 ~o2 ()
+  (* A kernel can be a concatenation residual or a window itself. Rigid symbolic kernels have no
+     variables to solve and still take the ordinary mismatch check. Keep the guarded arms separate:
+     either side may be a window, and a failed or-pattern guard would skip the other side. *)
   | Affine { conv = Some { kernel; use_padding = false; _ }; _ }, _
     when not (Set.is_empty (vars_of_dim kernel)) ->
       ([ held ], env)
   | _, Affine { conv = Some { kernel; use_padding = false; _ }; _ }
     when not (Set.is_empty (vars_of_dim kernel)) ->
-      (* A kernel can be a concatenation residual or a window itself. Rigid symbolic kernels have no
-         variables to solve and still take the ordinary mismatch check. *)
-      ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)
+      ([ held ], env)
   | Var v, dim2 | dim2, Var v ->
       if dim_var_occurs_in_dim v dim2 then
         raise

@@ -385,10 +385,11 @@ let () =
   Verdict.case "stride basis derivation" stride_matrix;
   Verdict.case "stride pair solutions" stride_pair_controls;
   Verdict.case "concatenations with tagged components settle alike in every order" (fun () ->
-      p "exactly two stores are named as #2095 exceptions" (List.count stores ~f:known_2095 = 2);
+      p "exactly two order-dependent stores are #2095 residue"
+        (List.count dependent ~f:known_2095 = 2);
       p_none ~min:16000 "stores whose verdict or solution depends on the order, except #2095"
         (List.filter stores ~f:(Fn.non known_2095))
-        ~f:(fun store -> List.mem dependent store ~equal:phys_equal);
+        ~f:order_dependent;
       p_none ~min:7000 "accepted answers refused when stated up front" accepted_runs
         ~f:refuses_own_answer;
       p_none ~min:16000 "stores registered in one batch settling otherwise" stores ~f:batch_differs;

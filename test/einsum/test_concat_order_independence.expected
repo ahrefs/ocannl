@@ -1,7 +1,7 @@
 stride basis rule agrees with pinned extents in both orientations and orders: true
 pinned stride pairs size the other extent in both orders: true
 open stride pairs close to equal sized extents: true
-exactly two stores are named as #2095 exceptions: true
+exactly two order-dependent stores are #2095 residue: true
 stores whose verdict or solution depends on the order, except #2095: true
 accepted answers refused when stated up front: true
 stores registered in one batch settling otherwise: true
