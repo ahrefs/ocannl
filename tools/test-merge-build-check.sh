@@ -11,7 +11,11 @@
 # narrows as the merge does, that this repository's mapping gives shared support the whole tier
 # and a manifest edit less, and that
 # .github/ship-pr-merge-build runs the script with every tracked path an input. Fake dune, opam,
-# formatter gate, pre-push list and harness tier: no build runs.
+# formatter gate, pre-push list and harness tier. The #compile-output leg alone uses real
+# dune and Python in a minimal isolated project: the repository's actual capped-fixture rule
+# runs twice, then with a planted failing case. It compares bytes and rejects the exact unittest
+# timing line; tracebacks and FAILED must survive. It does not scan Dune or Python source text.
+# affected-reads: benchmarks/dune benchmarks/*.py benchmarks/test/*.py benchmarks/runners/**/*.py --only '#compile-output'
 # Usage: tools/test-merge-build-check.sh [--keep] [--only REGEX]
 set -u
 . "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
@@ -630,4 +634,60 @@ if harness_leg 'the merge-build config runs this script, and every tracked path 
     report 1 "$label" "$unmatched is tracked, but no input glob (${globs[*]}) matches it: a clash in it would skip the build"
   else report 0 "$label ($n paths)"; fi
 fi
+
+if harness_leg 'the real compile-tier fixture rule has stable output and retains failures #compile-output'; then
+  stable_label='the actual compile-tier rule emits identical timing-free logs twice'
+  failure_label='the actual compile-tier rule retains the failing traceback, summary and status'
+  if ! harness_real_dune; then
+    skip "$stable_label" "$harness_dune_absent"
+    skip "$failure_label" "$harness_dune_absent"
+  else
+    harness_require python3
+    real=$TMP/real-compile
+    mkdir -p "$real/benchmarks"
+    # Copy Python inputs, preserving their relative names, and the actual rule. No shared _build.
+    python3 - "$HERE/../benchmarks" "$real/benchmarks" <<'PYTHON'
+from pathlib import Path
+import shutil
+import sys
+source, target = map(Path, sys.argv[1:])
+for path in [source / "dune", source / "ocannl_config", *source.rglob("*.py")]:
+    if "_build" in path.parts or "__pycache__" in path.parts:
+        continue
+    dest = target / path.relative_to(source)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(path, dest)
+PYTHON
+    printf '(lang dune 3.20)\n' >"$real/dune-project"
+    rc_a=0 rc_b=0 rc_bad=0
+    harness_dune_colour "$harness_dune" build --root "$real" --force @benchmarks/runtest-capped_fixture_scan >"$TMP/real-a" 2>&1 || rc_a=$?
+    harness_dune_colour "$harness_dune" build --root "$real" --force @benchmarks/runtest-capped_fixture_scan >"$TMP/real-b" 2>&1 || rc_b=$?
+    harness_plain "$TMP/real-a" >"$TMP/real-a-plain"
+    if [ "$rc_a" = 0 ] && [ "$rc_b" = 0 ] && cmp -s "$TMP/real-a" "$TMP/real-b" &&
+       ! grep -Eq '^Ran [0-9]+ tests? in [0-9]+\.[0-9]{3}s$' "$TMP/real-a-plain" &&
+       grep -qx 'OK' "$TMP/real-a-plain"; then
+      report 0 "$stable_label"
+    else
+      report 1 "$stable_label" "exits $rc_a/$rc_b: $(cat "$TMP/real-a" "$TMP/real-b")"
+    fi
+    cat >>"$real/benchmarks/test/test_cell_group.py" <<'PYTHON'
+
+def planted_compile_failure(self):
+    raise AssertionError("planted compile-tier failure")
+
+CellGroupTest.test_capped_evidence_scan_controls = planted_compile_failure
+PYTHON
+    harness_dune_colour "$harness_dune" build --root "$real" --force @benchmarks/runtest-capped_fixture_scan >"$TMP/real-bad" 2>&1 || rc_bad=$?
+    harness_plain "$TMP/real-bad" >"$TMP/real-bad-plain"
+    if [ "$rc_bad" = 1 ] && grep -q 'Traceback (most recent call last):' "$TMP/real-bad-plain" &&
+       grep -q 'AssertionError: planted compile-tier failure' "$TMP/real-bad-plain" &&
+       grep -qx 'FAILED (failures=1)' "$TMP/real-bad-plain" &&
+       ! grep -Eq '^Ran [0-9]+ tests? in [0-9]+\.[0-9]{3}s$' "$TMP/real-bad-plain"; then
+      report 0 "$failure_label"
+    else
+      report 1 "$failure_label" "exit $rc_bad: $(cat "$TMP/real-bad")"
+    fi
+  fi
+fi
+
 finish

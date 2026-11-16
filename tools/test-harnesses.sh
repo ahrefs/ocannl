@@ -225,6 +225,7 @@ real_dune_legs() {
   printf '%s\t%s\n' tools/test-test-run-options.sh '^(89|107|120):'
   printf '%s\t%s\n' tools/test-test-run-digest.sh '^(80b|84|92b):'
   printf '%s\t%s\n' tools/test-test-run-bisect.sh '^(79|121):'
+  printf '%s\t%s\n' tools/test-merge-build-check.sh '#compile-output'
 }
 members() {
   local tier script

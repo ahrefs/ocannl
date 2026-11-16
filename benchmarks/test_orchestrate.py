@@ -8900,5 +8900,30 @@ def table_row_literals(source, builders):
     return found
 
 
+class TimingFreeTestRunner(unittest.TextTestRunner):
+    """Keep unittest diagnostics, omitting only its complete elapsed-time summary.
+
+    The capped-fixture rule is part of the merge build's compile tier. Its log is
+    compared with a fresh build of the base, where wall times necessarily differ.
+    """
+
+    class Stream:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __getattr__(self, name):
+            return getattr(self.stream, name)
+
+        def writeln(self, text=None):
+            if isinstance(text, str) and re.fullmatch(
+                    r"Ran [0-9]+ tests? in [0-9]+\.[0-9]{3}s", text):
+                return
+            self.stream.writeln(text)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.stream = self.Stream(self.stream)
+
+
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(testRunner=TimingFreeTestRunner)
