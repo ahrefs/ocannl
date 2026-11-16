@@ -1020,7 +1020,8 @@ let operators =
       ("<>", "ne");
     ]
 
-let add_module_qualifier_to_applied_function ?(module_name = "NTDSL") expr =
+let add_module_qualifier_to_applied_function ?(module_name = "NTDSL")
+    ?(is_primitive = fun _ -> false) expr =
   let qualify_if_needed fn =
     match fn.pexp_desc with
     | Pexp_ident { txt = Lident name; loc } ->
@@ -1041,8 +1042,8 @@ let add_module_qualifier_to_applied_function ?(module_name = "NTDSL") expr =
         let qualified_fn = qualify_if_needed fn in
         let args =
           match fn with
-          | { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ } when Hashtbl.mem operators name
-            ->
+          | { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
+            when Hashtbl.mem operators name || is_primitive name ->
               (* [Ppx_op.translate] supplies the O operator's absent label. Leave it unapplied on
                  the qualified operation: the initializer still needs a full [Tensor.op_fun], whose
                  label will be supplied by [param]. The extend_dsls caller reaches this helper

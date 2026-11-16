@@ -18,6 +18,9 @@ let () =
       ("subtraction initializer", [%op { w = source - 2.0 }], [| 0.; -6.; 6.; -18. |]);
       ("multiplication initializer", [%op { w = source *. 2.0 }], [| 4.; -8.; 16.; -32. |]);
       ("division initializer", [%op { w = source /. 2.0 }], [| 1.; -2.; 4.; -8. |]);
+      ("named binary initializer", [%op { w = add source other }], [| 3.; -2.; 5.; -12. |]);
+      ("named unary initializer", [%op { w = relu source }], [| 2.; 0.; 8.; 0. |]);
+      ("named ternary initializer", [%op { w = fma source 2.0 3.0 }], [| 7.; -5.; 19.; -29. |]);
       ("binary head", [%op (add : _) (source, other)], [| 3.; -2.; 5.; -12. |]);
       ( "binary head and tuple",
         [%op (add : _) ((source, other) : Tensor.t * Tensor.t)],

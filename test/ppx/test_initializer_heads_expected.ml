@@ -35,6 +35,26 @@ let binary_div source =
                         (NTDSL.pointdiv source (TDSL.number ?label:None 2.0)))
          "w") () in
     w
+let named_binary source other =
+  let open! TDSL.O in
+    let w =
+      (TDSL.param ?more_label:None ?value:None ?values:None
+         ?param_init:(Some (NTDSL.add source other)) "w") () in
+    w
+let named_unary source =
+  let open! TDSL.O in
+    let w =
+      (TDSL.param ?more_label:None ?value:None ?values:None
+         ?param_init:(Some (NTDSL.relu source)) "w") () in
+    w
+let named_ternary source =
+  let open! TDSL.O in
+    let w =
+      (TDSL.param ?more_label:None ?value:None ?values:None
+         ?param_init:(Some
+                        (NTDSL.fma source (TDSL.number ?label:None 2.0)
+                           (TDSL.number ?label:None 3.0))) "w") () in
+    w
 let binary_head x y = let open! TDSL.O in ((add : _) ?label:(Some [])) x y
 let binary_both x y =
   let open! TDSL.O in
@@ -54,4 +74,5 @@ let ternary_both x =
     __fn __a __b __c
 let _ =
   (binary_tensor, binary_literal, binary_sub, binary_mul, binary_div,
-    binary_head, binary_both, ternary_head, ternary_both)
+    named_binary, named_unary, named_ternary, binary_head, binary_both,
+    ternary_head, ternary_both)

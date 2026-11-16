@@ -36,10 +36,13 @@ files.
   fails inference (gh-ocannl-1507). A lifted initializer cannot name one; a capture that would
   shadow a lifted name is a clash, found through the `ocannl.bound_capture` marker `let_opt` checks.
 - Inline initializer qualification drops the generated `?label:None` for every operator in
-  `Ppx_shared.operators` (gh-ocannl-2237), retaining the full `Tensor.op_fun` that `param`
+  `Ppx_shared.operators` and named heads recognized by `Ppx_op.is_op_primitive`
+  (gh-ocannl-2237), retaining the full `Tensor.op_fun` that `param`
   labels. Binary tensor/tensor and tensor/literal initializers are pinned by
   `test_initializer_heads` (expansion and compilation) and `op_initializer_heads` (cc values).
-  The table has no ternary operator. Restoring both ppx sources to `bd88ebdc` makes the
+  The symbol table has no ternary operator; named `fma` is covered alongside `add` and `relu`.
+  The named-head negative control fails at `00229bff` (`20261116T210932Z-2276423`).
+  Restoring both ppx sources to `bd88ebdc` makes the
   expansion diff and compilation fail (negative control: `20261116T205411Z-1824622`).
 - Unary minus in an inline initializer qualifies to `NTDSL.neg` (gh-ocannl-2201), leaving
   its final `()` for parameter construction. Qualification drops the translated operator's
@@ -160,16 +163,16 @@ files.
   constrained returned function, DSL-head classification reaches constrained heads (including
   partial pipelines), and tuple grouping reaches constrained tuples. Uncurried binary/ternary
   calls recognize constrained identifier heads too (gh-ocannl-2237; `test_initializer_heads`),
-  preserving the head annotations, and keep the tuple's type check by destructuring the translated constrained tuple once before
-  the curried call. The head and tuple are bound together so the generated component binders
-  cannot capture a renamed result-label parameter. Constraint-level `[@ocannl.no_scheme]` stops
-  tail marking before translation propagates the opt-out. Only tuple classification looks through
-  constraints in grouping; numeric and array/list axis annotations retain their existing
-  precedence. `test/ppx/test_classification_constraints` pins the expansions and
-  `test/operations/op_classification_constraints` executes cc value parity and scheme trace/check
-  events. The negative control restored `3ac86187`'s `ppx_op.ml` (the original control revision,
-  before later rebases) and made the new expansion golden fail in all three regions: missing
-  scheme, extra site wrappers, untranslated tuple elements and uncurried calls.
+  preserving the head annotations, and keep the tuple's type check by destructuring the translated
+  constrained tuple once before the curried call. The head and tuple are bound together so the
+  generated component binders cannot capture a renamed result-label parameter. Constraint-level
+  `[@ocannl.no_scheme]` stops tail marking before translation propagates the opt-out. Only tuple
+  classification looks through constraints in grouping; numeric and array/list axis annotations
+  retain their existing precedence. `test/ppx/test_classification_constraints` pins the expansions
+  and `test/operations/op_classification_constraints` executes cc value parity and scheme
+  trace/check events. The negative control restored `3ac86187`'s `ppx_op.ml` (the original control
+  revision, before later rebases) and made the new expansion golden fail in all three regions:
+  missing scheme, extra site wrappers, untranslated tuple elements and uncurried calls.
 - `%cd` composition seams verified by ppx expansion (gh-465, `Train.sgd_one`/`grad_update`): an
   OCaml variable of `Asgns.comp` type in statement position splices verbatim (so a
   programmatically built fragment can sit inside a `%cd` body); an inline declaration `{ x }`

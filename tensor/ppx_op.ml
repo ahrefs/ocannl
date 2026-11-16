@@ -94,7 +94,8 @@ let guard_late ~late ~decl (e : expression) =
 let late_binder ~late construct pat =
   List.map (Set.to_list (collect_pat_idents pat)) ~f:(fun n -> (n, Body_binder construct)) @ late
 
-let make_p ~dsl_name ~opt_label ~late ~loc ?value ?values ?param_init ~extra_args name =
+let make_p ~dsl_name ~opt_label ~late ~loc ?is_primitive ?value ?values ?param_init ~extra_args name
+    =
   let guard = guard_late ~late ~decl:name.txt in
   let param_init = Option.map param_init ~f:guard in
   let extra_args = List.map extra_args ~f:(fun (label, value) -> (label, guard value)) in
@@ -103,7 +104,9 @@ let make_p ~dsl_name ~opt_label ~late ~loc ?value ?values ?param_init ~extra_arg
   let values = match values with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
   let param_init =
     match param_init with
-    | Some c -> [%expr Some [%e add_module_qualifier_to_applied_function ~module_name:"NTDSL" c]]
+    | Some c ->
+        [%expr
+          Some [%e add_module_qualifier_to_applied_function ~module_name:"NTDSL" ?is_primitive c]]
     | None -> [%expr None]
   in
   let extra_args =
@@ -131,9 +134,11 @@ let make_p ~dsl_name ~opt_label ~late ~loc ?value ?values ?param_init ~extra_arg
   in
   [%expr [%e with_extra_args] ()]
 
-let make_vb ~dsl_name ~opt_label ~late ?value ?param_init ~extra_args ~loc name =
+let make_vb ~dsl_name ~opt_label ~late ?is_primitive ?value ?param_init ~extra_args ~loc name =
   let pat = Ast_helper.Pat.var ~loc:name.loc name in
-  let v = make_p ~dsl_name ~opt_label ~late ~loc ?value ?param_init ~extra_args name in
+  let v =
+    make_p ~dsl_name ~opt_label ~late ~loc ?is_primitive ?value ?param_init ~extra_args name
+  in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
@@ -988,7 +993,10 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
                 (vbs, Some (strip_at_site e))
           in
           let name = { loc = first_label.loc; txt = tensor_name } in
-          let pat, vb = make_vb ~dsl_name ~opt_label ~late ?param_init ~extra_args ~loc name in
+          let pat, vb =
+            make_vb ~dsl_name ~opt_label ~late ~is_primitive:is_op_primitive ?param_init ~extra_args
+              ~loc name
+          in
           (* Combine with any bindings from the initialization *)
           let all_vbs = reduce_vbss [ init_vbs; [ vb ] ] in
           (all_vbs, pat2expr pat)
