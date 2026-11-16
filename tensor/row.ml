@@ -6295,6 +6295,74 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
           unify_dim ~stage origin (d1, d2) env
       | Dim_size { dim; size; origin } -> (
           let dim = subst_dim env dim in
+          if (not (is_stage2_up stage)) && phys_equal ineq (List.hd_exn sizes) then (
+            (* Check arithmetic without solving a variable or choosing a basis. A held size supplies
+               a number, including inside a pending sum or window. Unknown dimensions stay in
+               nonnegative intervals; disjoint intervals prove a contradiction. Ordinary constraints
+               have reached their fixpoint before this arm runs. Check once per size pass, including
+               when its first constraint is already solved, using indexed size lookups. *)
+            let known =
+              List.fold sizes
+                ~init:(Map.empty (module Dim_var))
+                ~f:(fun known -> function
+                  | Dim_size { dim; size; _ } -> (
+                      match subst_dim env dim with
+                      | Var v -> Map.set known ~key:v ~data:size
+                      | _ -> known)
+                  | _ -> assert false)
+            in
+            let add (lo1, hi1) (lo2, hi2) =
+              (lo1 + lo2, Option.both hi1 hi2 |> Option.map ~f:(fun (a, b) -> a + b))
+            in
+            let scale k (lo, hi) = (k * lo, Option.map hi ~f:(( * ) k)) in
+            let constant n = (n, Some n) in
+            let rec numeric dim =
+              match subst_dim env dim with
+              | Dim { d; _ } -> Some (constant d)
+              | Sym _ -> None
+              | Var v ->
+                  Some (match Map.find known v with Some n -> constant n | None -> (0, None))
+              | Concat dims ->
+                  List.fold dims
+                    ~init:(Some (constant 0))
+                    ~f:(fun acc d ->
+                      Option.both acc (numeric d) |> Option.map ~f:(fun (a, b) -> add a b))
+              | Affine { stride; over; conv; _ } ->
+                  Option.bind (numeric over) ~f:(fun over ->
+                      let over = scale stride over in
+                      match conv with
+                      | None | Some { use_padding = true; _ } -> Some over
+                      | Some { dilation; kernel; use_padding = false } ->
+                          Option.map (numeric kernel) ~f:(fun kernel ->
+                              add
+                                (add over (scale dilation kernel))
+                                (constant (1 - dilation - stride))))
+            in
+            let check ~broadcast d1 d2 =
+              match Option.both (numeric d1) (numeric d2) with
+              | None -> ()
+              | Some ((lo1, hi1), (lo2, hi2)) ->
+                  (* A size-only operand whose interval includes 1 may be the broadcast top. *)
+                  let may_be_top =
+                    broadcast && lo2 <= 1
+                    && Option.value_map hi2 ~default:true ~f:(fun hi -> hi >= 1)
+                  in
+                  let below hi lo = Option.value_map hi ~default:false ~f:(fun hi -> hi < lo) in
+                  if (not may_be_top) && (below hi1 lo2 || below hi2 lo1) then
+                    raise
+                      (Shape_error
+                         ("size constraint is numerically inconsistent", [ Dim_mismatch [ d1; d2 ] ]))
+            in
+            List.iter (ineqs @ sizes) ~f:(function
+              | Dim_eq { d1; d2; _ } -> check ~broadcast:false d1 d2
+              | Dim_ineq { res; opnd; _ } -> check ~broadcast:true res opnd
+              | Dim_size { dim; size; _ } -> check ~broadcast:false dim (get_default_dim ~d:size ())
+              | _ -> ());
+            List.iter (Utils.Tree_map.to_alist env.dim_env) ~f:(function
+              | v, Bounds_dim { glb; opnd; _ } ->
+                  Option.iter glb ~f:(fun glb -> check ~broadcast:true glb (Var v));
+                  List.iter opnd ~f:(fun w -> check ~broadcast:true (Var v) (Var w))
+              | _, Solved_dim _ -> ()));
           match dim with
           | Dim { d; _ } when d = size -> ([], env)
           | (Var _ | Affine _ | Concat _) when not (is_stage2_up stage) -> ([ ineq ], env)

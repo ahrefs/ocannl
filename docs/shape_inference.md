@@ -599,9 +599,9 @@ A whole-stack trace costs less than one build of the same model, and the fractio
 | too few axes for the spec | yes | application (body) | application (scheme) |
 | dimension and row variable share a name | no | application (body) | definition |
 | empty concatenation component | no | application (body) | definition |
-| concatenation component exceeds the axis | yes | closure | closure |
+| concatenation component exceeds the axis | yes | closure | application (scheme) |
 | trailing equality with a fixed-width tensor | yes | closure | application (scheme) |
-| `set_dim` against a fixed width | no | application (body) | application (scheme) |
+| `set_dim` against a fixed width | no | application (body) | definition |
 | `set_dim` twice, no `()` stage | no | application (body) | application (trace) |
 | window kernel nothing sizes | no | application (body) | definition |
 | undetermined concatenation components | no | closure | closure |
@@ -615,10 +615,14 @@ The mode-independent facts are claimed:
 - no error surfaces later under a scheme.
 
 Three kinds of error move earlier. An argument-independent contradiction moves to the definition, or to the first application for a function without a `()` stage. So does a window kernel nothing can size, which no contradiction shows: the spec and its captures decide it. An argument-dependent error is reported at the application before the body runs, naming the function and the argument, and, when the application is evaluated inside one written in `%op` code, the file and line of the innermost such (gh-ocannl-2007). That includes a trailing `Shape.infer_equal` constraint that inline registration leaves to the closure.
-Numeric `Shape.set_dim` claims remain pending while Stage 1 lacks a basis (gh-ocannl-2131), so an
-oversized captured concatenation component can wait until closure in both modes; a fixed-width
-contradiction can move from the definition to the application. Those programs still refuse before
-compilation.
+Numeric `Shape.set_dim` claims keep their basis pending while Stage 1 lacks one
+(gh-ocannl-2131), but their sizes are checked against the numeric information already in the
+constraint store (gh-ocannl-2204). Disjoint size intervals refuse without solving variables or
+choosing tags: a captured concatenation component larger than its known axis is refused at the
+scheme application, and a fixed-width contradiction at the definition. Inline registration still
+leaves the concatenation's argument extent to closure. The invalid valid-3x3 convolution residual
+in `scheme_strided_residual.ml` also stays at closure: its held kernel sizes are known, but its
+extent variables are not yet numerically fixed. Checking held sizes does not close those variables.
 
 The classes that stay late all need what a trace deliberately does not run, namely the closing stages. The trace validates at Stage 1 only, because the closing stages would default the generic arguments.
 
