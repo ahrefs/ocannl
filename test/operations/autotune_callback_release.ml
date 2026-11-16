@@ -37,10 +37,18 @@ let starved_on = "degenerate clock readings refused timing windows before a seco
 
 (* A retry is owed exactly when this holds: fewer than two windows admitted, AND the search's own
    record says a window was refused for a degenerate clock reading -- the one refusal the
-   uncontended scope leaves an [Isolated] search. The claims needing the second window are gated on
-   the admitted windows alone, and an always-evaluated claim says a missing second window was this
-   refusal: a gate reading [report], which those claims quantify, would let a regression that marks
-   every window unreadable turn them into skips (gh-ocannl-1115, gh-ocannl-1893). *)
+   uncontended scope leaves an [Isolated] search.
+
+   The claims needing the second window are gated on the second window existing, and an
+   always-evaluated claim on each unforced leg says a missing second window was this refusal. That
+   is the same set of outcomes the gate [not starved] gave -- a search that stops producing a second
+   candidate, or whose windows were refused for any other cause, still fails, now on the cause claim
+   -- with the cause judgment a row of the transcript instead of part of a gate reading the [report]
+   those claims quantify, which [verdict_ratchet] refuses (gh-ocannl-1893). It is still an ACCEPTED
+   ENVIRONMENT GATE on the search's own refusal record: a regression that classified every window as
+   a degenerate clock reading would skip these claims, as it did before, and shows only as an
+   environment skip in the skip aggregation; the forced-refusal leg pins that the refusal is counted
+   under that cause. *)
 let starved ~admitted (report : Autotune.report option) =
   List.length admitted < 2 && Option.exists report ~f:(fun r -> r.Autotune.timings_unreadable > 0)
 
@@ -191,7 +199,7 @@ let () =
           (name ^ ": every refused window is counted as a degenerate clock reading")
           (Option.exists report ~f:(fun r ->
                r.Autotune.timings_unreadable = r.Autotune.timings_contended));
-        p (name ^ ": the second-window claims' gate opens on that record") starved;
+        p (name ^ ": the missing second window is put down to degenerate clock readings") starved;
         p
           (name ^ ": with no second admitted window, nothing was injected")
           (Option.is_none injected_at

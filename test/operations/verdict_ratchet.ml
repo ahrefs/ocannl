@@ -4778,8 +4778,9 @@ let gate_control_findings source =
 (* gh-ocannl-1893: a leg or a make function passed as a parameter is resolved at the applications of
    its function in the source, one comparison per application; a make function given by name is read
    through its definition; a local function or lazy a make function runs is its run code. Each row
-   also states how many leg claims were COMPARED, so that a row expecting no finding cannot pass by
-   the claim going unread or uncompared. *)
+   also states how many claims were COMPARED -- leg claims plus [gated_*] claims, each site once,
+   whatever the number of call chains it is compared under -- so that a row expecting no finding
+   cannot pass by the claim going unread or uncompared. *)
 let leg_call_site_controls =
   let helper =
     {ocaml|open Verdict.Claims
@@ -4967,7 +4968,7 @@ let () =
   let rows = probe () in
   check ~when_:(not (List.is_empty rows)) "all rows pass" rows|ocaml},
       [ "rows" ],
-      0 );
+      1 );
     ( "accepts a gated wrapper applied twice whose gates each read only the other call's rows",
       {ocaml|let check ~when_ label rows = Verdict.gated_all ~when_ ~on:"cc" label rows ~f:Fn.id
 let () =
@@ -4975,7 +4976,7 @@ let () =
   check ~when_:(not (List.is_empty others)) "these rows pass" rows;
   check ~when_:true "those rows pass" others|ocaml},
       [],
-      0 );
+      1 );
   ]
 
 let run_gate_population_controls () =
@@ -4990,7 +4991,9 @@ let run_gate_population_controls () =
   @ List.map leg_call_site_controls ~f:(fun (label, source, expected, compared) ->
       let found =
         gate_control_findings source
-        @ [ Printf.sprintf "%d compared" (Scan.gate_census source).Scan.leg_sites ]
+        @
+        let census = Scan.gate_census source in
+        [ Printf.sprintf "%d compared" (census.Scan.leg_sites + census.Scan.gated_sites) ]
       in
       let expected = expected @ [ Printf.sprintf "%d compared" compared ] in
       let ok = List.equal String.equal found expected in
