@@ -1485,16 +1485,23 @@ let cache_reuse_probe ~exe ~root =
   let profiling, _ = run ~compiler:(Cc_backend.compiler_command () ^ " -fprofile-arcs") "profile" in
   Verdict.p "output-name-sensitive profiling bypasses listing memoization"
     (String.equal profiling "0 0 1");
-  let reuse = "a fresh process reuses an identical-source census listing" in
-  let invalidation = "a source change invalidates the census listing cache" in
-  if String.equal cold "0 0 1" && String.equal warm "0 0 1" && String.equal changed "0 0 1" then (
-    let backend = "configured compiler (listing memoization bypassed)" in
-    Verdict.skipped ~aggregation:`Environment ~backend reuse;
-    Verdict.skipped ~aggregation:`Environment ~backend invalidation)
-  else (
-    Verdict.p reuse
-      (String.equal cold "0 1 0" && String.equal warm "1 0 0" && String.equal first second);
-    Verdict.p invalidation (String.equal changed "0 1 0" && not (String.equal first third)))
+  (* Run-decided outcome, not a capability gate: the counters themselves establish bypass. Each
+     callback either evaluates or skips its one claim (Verdict_scan.skip_list_census). *)
+  let bypassed =
+    String.equal cold "0 0 1" && String.equal warm "0 0 1" && String.equal changed "0 0 1"
+  in
+  List.iter
+    [
+      ( "a fresh process reuses an identical-source census listing",
+        String.equal cold "0 1 0" && String.equal warm "1 0 0" && String.equal first second );
+      ( "a source change invalidates the census listing cache",
+        String.equal changed "0 1 0" && not (String.equal first third) );
+    ]
+    ~f:(fun (label, ok) ->
+      if bypassed then
+        Verdict.skipped ~aggregation:`Environment
+          ~backend:"configured compiler (listing memoization bypassed)" label
+      else Verdict.p label ok)
 
 let cache_policy_probes () =
   Verdict.p_all "profile and coverage generation bypass listing memoization"

@@ -444,21 +444,20 @@ let () =
   ignore (L.link ~name:case.name scheduled : Context.t * Context.routine);
   let omits = "lred_bound32: the emitted kernel does not spell the all-reduce" in
   let binds = "lred_bound32: the emitted kernel binds the reduction loop instead of looping it" in
-  if not gpu then (
-    skipped ~backend:backend_name omits;
-    skipped ~backend:backend_name binds)
-  else (
-    Generated.assert_omits ~routine:case.name ~contains:all_reduce_marker omits;
-    (* Positively, whatever the dialect's index type: the loop's symbol is assigned from the
-       workgroup [.x] register, and it has no serial loop's [= 0] start. *)
-    let register = match backend_name with "metal" -> "lid.x" | _ -> "threadIdx.x" in
-    let ident = Ir.Indexing.symbol_ident case.e_sym in
-    let src = Generated.read case.name in
-    p binds
-      (List.exists (String.split_lines src) ~f:(fun line ->
-           String.is_substring line ~substring:(" " ^ ident ^ " = (")
-           && String.is_substring line ~substring:register)
-      && not (String.is_substring src ~substring:(" " ^ ident ^ " = 0;"))))
+  let leg = Verdict.leg ~when_:gpu ~on:backend_name () in
+  in_leg ~leg omits (fun label ->
+      Generated.assert_omits ~routine:case.name ~contains:all_reduce_marker label);
+  in_leg ~leg binds (fun label ->
+      (* Positively, whatever the dialect's index type: the loop's symbol is assigned from the
+         workgroup [.x] register, and it has no serial loop's [= 0] start. *)
+      let register = match backend_name with "metal" -> "lid.x" | _ -> "threadIdx.x" in
+      let ident = Ir.Indexing.symbol_ident case.e_sym in
+      let src = Generated.read case.name in
+      p label
+        (List.exists (String.split_lines src) ~f:(fun line ->
+             String.is_substring line ~substring:(" " ^ ident ^ " = (")
+             && String.is_substring line ~substring:register)
+        && not (String.is_substring src ~substring:(" " ^ ident ^ " = 0;"))))
 
 let () =
   printf "--- leg 9: auto resolves from the device's economics ---\n";
@@ -590,13 +589,12 @@ let () =
   ignore (L.link ~name:case.name scheduled : Context.t * Context.routine);
   let omits = "lred_guard_flag64: the emitted kernel does not spell the all-reduce" in
   let loops = "lred_guard_flag64: the emitted kernel loops the reduction in every lane" in
-  if not gpu then (
-    skipped ~backend:backend_name omits;
-    skipped ~backend:backend_name loops)
-  else (
-    Generated.assert_omits ~routine:case.name ~contains:all_reduce_marker omits;
-    let ident = Ir.Indexing.symbol_ident case.e_sym in
-    p loops (String.is_substring (Generated.read case.name) ~substring:(" " ^ ident ^ " = 0;")));
+  let leg = Verdict.leg ~when_:gpu ~on:backend_name () in
+  in_leg ~leg omits (fun label ->
+      Generated.assert_omits ~routine:case.name ~contains:all_reduce_marker label);
+  in_leg ~leg loops (fun label ->
+      let ident = Ir.Indexing.symbol_ident case.e_sym in
+      p label (String.is_substring (Generated.read case.name) ~substring:(" " ^ ident ^ " = 0;")));
   (* Copies sharing one reduction symbol (staging#1028 review round 2): unrolling [s] keeps [e] in
      every copy; the first copy's guard [0 < 1 || flag] simplifies away, the others keep the
      lane-dependent flag. The renderer meets each copy by its symbol, so admitting the safe copy
@@ -760,10 +758,9 @@ let () =
     expected ~f:Float.equal;
   let omits = "lred_guard_flag32: the emitted kernel does not spell the all-reduce" in
   let loops = "lred_guard_flag32: the emitted kernel loops the reduction in every lane" in
-  if not gpu then (
-    skipped ~backend:backend_name omits;
-    skipped ~backend:backend_name loops)
-  else (
-    Generated.assert_omits ~routine:case.name ~contains:all_reduce_marker omits;
-    let ident = Ir.Indexing.symbol_ident case.e_sym in
-    p loops (String.is_substring (Generated.read case.name) ~substring:(" " ^ ident ^ " = 0;")))
+  let leg = Verdict.leg ~when_:gpu ~on:backend_name () in
+  in_leg ~leg omits (fun label ->
+      Generated.assert_omits ~routine:case.name ~contains:all_reduce_marker label);
+  in_leg ~leg loops (fun label ->
+      let ident = Ir.Indexing.symbol_ident case.e_sym in
+      p label (String.is_substring (Generated.read case.name) ~substring:(" " ^ ident ^ " = 0;")))

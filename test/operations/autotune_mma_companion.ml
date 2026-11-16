@@ -122,42 +122,45 @@ let () =
   let rendered_claim =
     "mc: every unfused GPU tensorized seed renders tensorized per its mma census"
   in
-  (match
-     Ll_test.tensorized_matmul_capability ~is_gpu ~is_cpu:false ~limits ~a:x.Tensor.value
-       ~b:w.Tensor.value ~d:z.Tensor.value
-   with
-  | `Withheld aggregation ->
-      Verdict.skipped ~aggregation ~backend:backend_name claim;
-      Verdict.skipped ~aggregation ~backend:backend_name rendered_claim
-  | `Advertised ->
-      let results =
-        List.init n_seeds ~f:(fun k ->
-            let transform opt =
-              let p = List.nth_exn (seeds_of opt) k in
-              Sched.apply (Autotune.sketch_schedule ~accum_prec ~p opt) opt
-            in
-            match
-              let sctx, sroutine =
-                Context.compile
-                  ~lowered_transform:(fun o -> [ transform o ])
-                  (Context.auto ()) comp Ir.Indexing.Empty
-              in
-              let sctx = Context.run sctx sroutine in
-              (Context.get_values sctx y.Tensor.value, sroutine.Context.mma)
-            with
-            | got, census ->
-                if not (Ll_test.rendered_tensorized census) then
-                  Stdio.eprintf "mc: GPU tensorized seed %d rendered %s\n" k
-                    (Ir.C_syntax.mma_summary_string census);
-                ( Verdict.within ~what_ran:(Printf.sprintf "seed %d" k) claim got expected
-                    ~tol:(fun _ -> 1e-3),
-                  Ll_test.rendered_tensorized census )
-            | exception exn ->
-                Stdio.eprintf "mc: GPU tensorized seed %d FAILED %s\n" k (Exn.to_string exn);
-                (false, false))
-      in
-      p_all claim results ~f:fst;
-      p_all rendered_claim results ~f:snd);
+  let capability =
+    Ll_test.tensorized_matmul_capability ~is_gpu ~is_cpu:false ~limits ~a:x.Tensor.value
+      ~b:w.Tensor.value ~d:z.Tensor.value
+  in
+  let when_, aggregation =
+    match capability with
+    | `Advertised -> (true, `Backend)
+    | `Withheld aggregation -> (false, aggregation)
+  in
+  let leg = Verdict.leg ~when_ ~aggregation ~on:backend_name () in
+  let results =
+    lazy
+      (List.init n_seeds ~f:(fun k ->
+           let transform opt =
+             let p = List.nth_exn (seeds_of opt) k in
+             Sched.apply (Autotune.sketch_schedule ~accum_prec ~p opt) opt
+           in
+           match
+             let sctx, sroutine =
+               Context.compile
+                 ~lowered_transform:(fun o -> [ transform o ])
+                 (Context.auto ()) comp Ir.Indexing.Empty
+             in
+             let sctx = Context.run sctx sroutine in
+             (Context.get_values sctx y.Tensor.value, sroutine.Context.mma)
+           with
+           | got, census ->
+               if not (Ll_test.rendered_tensorized census) then
+                 Stdio.eprintf "mc: GPU tensorized seed %d rendered %s\n" k
+                   (Ir.C_syntax.mma_summary_string census);
+               ( Verdict.within ~what_ran:(Printf.sprintf "seed %d" k) claim got expected
+                   ~tol:(fun _ -> 1e-3),
+                 Ll_test.rendered_tensorized census )
+           | exception exn ->
+               Stdio.eprintf "mc: GPU tensorized seed %d FAILED %s\n" k (Exn.to_string exn);
+               (false, false)))
+  in
+  in_leg ~leg claim (fun label -> p_all label (Lazy.force results) ~f:fst);
+  in_leg ~leg rendered_claim (fun label -> p_all label (Lazy.force results) ~f:snd);
 
   let reports = ref [] in
   let ctx = Context.auto () in

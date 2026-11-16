@@ -712,16 +712,17 @@ let () =
     (values bf16_1w_values) ~equal:Float.equal ~to_string:Float.to_string;
   p_pairwise_distinct "the bf16 four-warp rival-rendering values are pairwise distinct"
     (values bf16_4w_values) ~equal:Float.equal ~to_string:Float.to_string;
-  if widens_bf16 then begin
-    p claim_bf16_1w
-      (Float.equal (bf16_sum ~name:"bf16_1warp_wshfl" bf16_1w_fixture) bf16_1w_values.once_narrowed);
-    p claim_bf16_4w
-      (Float.equal (bf16_sum ~name:"bf16_4warp_wshfl" bf16_4w_fixture) bf16_4w_values.once_narrowed)
-  end
-  else begin
-    skipped claim_bf16_1w;
-    skipped claim_bf16_4w
-  end;
+  let leg = Verdict.leg ~when_:widens_bf16 ~on:backend_name () in
+  in_leg ~leg claim_bf16_1w (fun label ->
+      p label
+        (Float.equal
+           (bf16_sum ~name:"bf16_1warp_wshfl" bf16_1w_fixture)
+           bf16_1w_values.once_narrowed));
+  in_leg ~leg claim_bf16_4w (fun label ->
+      p label
+        (Float.equal
+           (bf16_sum ~name:"bf16_4warp_wshfl" bf16_4w_fixture)
+           bf16_4w_values.once_narrowed));
   if on_gpu && widens_bf16 then begin
     let src = Generated.read "bf16_4warp_wshfl" in
     let has sub = String.is_substring src ~substring:sub in
