@@ -1699,6 +1699,10 @@ end
 module type Backend_device_common = sig
   include Device
 
+  val event_device_id : event -> int option
+  (** The device that recorded the event. [None] only for the synchronous CPU backend, whose events
+      are already complete and whose waits cannot expire. Used by the shared wedge guard. *)
+
   val sync : event -> unit
   (** Blocks till the event completes, if it's not done already.
 

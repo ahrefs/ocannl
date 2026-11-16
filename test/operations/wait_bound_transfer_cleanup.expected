@@ -1,0 +1,10 @@
+the healthy wait completes: true
+the healthy transfer allocates and frees its destination pool: true
+a zero bound expires on finite work: true
+the transfer seam expired the wait: true
+the transfer cleanup was reached: true
+the transfer propagates Device_wedged: true
+the transfer allocated a pool: true
+the transfer leaves its pool allocated: true
+marked transfer preserves injected uncontainable failures or refuses earlier: true
+these marked transfer trials leave every pool allocated: true

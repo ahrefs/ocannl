@@ -209,6 +209,15 @@ exception
 type provenance = Candidate | Cache_replay | Advisory | User_schedule
 [@@deriving sexp_of, compare, equal]
 
+val is_process_fatal : exn -> bool
+(** Interrupt, host OOM, assertion or stack overflow: failures best-effort reporting must preserve.
+*)
+
+val must_propagate : exn -> bool
+(** {!is_process_fatal}, plus an invalid registered setting. Cleanup and placement-arm containment
+    preserve configuration failures too: unlike a reporting callback's failure, an invalid setting
+    belongs to the whole call, not to the schedule that happened to read it first. *)
+
 val protect :
   ?strict:bool ->
   classify_backend:(phase -> exn -> classified_cause option) ->

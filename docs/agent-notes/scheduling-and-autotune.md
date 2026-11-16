@@ -1700,6 +1700,25 @@ files.
   means a driver wrapper injecting at the timing wait overrides `await_within`, not `sync`); the
   real expiry and mark run on a finite kernel against a zero bound
   (`test/operations/wait_bound_device_wedged`, multidev_cc and Metal).
+  The mark lives in `Backends.With_device_wedge_guard`, below the transfer layer (gh-ocannl-2192):
+  device waits, bounded waits and event sync consult one atomic map. Events name their recording
+  device, so a marked device does not condemn another device's events. Queued cross-device waits
+  check both the source event's owner and the destination before submitting anything: otherwise an
+  unmarked destination could wait forever behind a marked source. `wait_bound_cross_device` pins
+  both directions on two multidev_cc devices, alongside a healthy copy and an unaffected event. Delta unwind, failed-link
+  delta cleanup and transfer cleanup propagate `Device_wedged` before any free or arena rollback:
+  those unreachable pools deliberately leak until process exit, since outstanding kernels may
+  still write them. If cleanup was already unwinding an interrupt, host OOM, stack overflow,
+  assertion or invalid registered setting, it preserves that original uncontainable exception
+  and backtrace while still freeing nothing. A marked Metal runner may reject allocation zero-fill
+  before a later fault-injection point; tests distinguish that early typed refusal from preserving
+  an exception the hook actually raised. Ordinary reported worker errors retain best-effort cleanup. The separate
+  `wait_bound_delta_unwind`, `wait_bound_free_delta`, `wait_bound_transfer_cleanup`,
+  `wait_bound_from_host`, `wait_bound_init_from_device` and `wait_bound_event_sync` executables
+  pin those paths with finite work and a watchdog. `wait_bound_placements` preserves the API choice:
+  `Train.tune_placements` propagates the arm's original failure; the caller's later release raises
+  `Device_wedged` independently. This only covers waits after a bound expired in the same process:
+  `schedule_partition` runs no tuner, so its HIP reset hang cannot be explained by this mark.
 - A typed cause is not automatically a containable one. `Schedule_outcome.uncontainable` names the
   causes `protect` makes `Fatal` although typed, the fatal record keeping them in `cause`: today the
   cc backend's `dlopen`, `artifact_missing`, and `codesign` rejections at `Backend_link`

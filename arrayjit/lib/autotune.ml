@@ -682,9 +682,7 @@ let abandon_verdict rule ~k ~steps =
    and swallowing it (on a path that is already failing) would, for a caller that CONTAINS the
    failure per arm, let a long search carry on through a Ctrl-C (gh-ocannl-550). Same set
    {!Ir.Schedule_outcome.classify_raw} refuses to classify. *)
-let process_fatal_exn = function
-  | Out_of_memory | Stdlib.Sys.Break | Stack_overflow | Assert_failure _ -> true
-  | _ -> false
+let process_fatal_exn = Outcome.is_process_fatal
 
 type decline_acc = { mutable da_count : int; mutable da_details : string list }
 

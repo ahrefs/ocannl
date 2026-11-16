@@ -458,6 +458,13 @@ let check_merge_buffer_static ~merge_buffer_node ~code_node =
            ("Merge buffer mismatch at link time: the linked context provides "
           ^ name merge_buffer_node ^ ", but the linked code expects " ^ name code_node)
 
+(* A wedge stops cleanup before any free, but must not turn an interrupt, host failure, invariant
+   violation or invalid registered setting into an ordinary arm failure. *)
+let raise_wedged_cleanup ~original ~backtrace wedge =
+  if Schedule_outcome.must_propagate original then
+    Stdlib.Printexc.raise_with_backtrace original backtrace
+  else raise wedge
+
 module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncing) = struct
   let wait_for_ready ~dst ~src tn =
     let s = src.device in
@@ -533,13 +540,18 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     | result -> result
     | exception exn ->
         let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-        (* Synchronize best-effort, but do not let a sticky worker/stream error suppress the only
+        (* Device_wedged deliberately leaves the slot allocated: it may still be written by an
+           abandoned kernel. Other sticky errors preserve the ordinary best-effort cleanup.
+           Synchronize best-effort, but do not let a sticky worker/stream error suppress the only
            owner capable of releasing this unreachable fresh pool. Multidev keeps [dev_error] after
            reporting it, so retrying await can deterministically re-raise. *)
         (try
            Resource_fault_injection.hit Transfer_cleanup_before_await;
            Backend.await device
-         with _ -> ());
+         with
+        | Backend_intf.Device_wedged _ as wedge ->
+            raise_wedged_cleanup ~original:exn ~backtrace wedge
+        | _ -> ());
         (try release () with _ -> ());
         Stdlib.Printexc.raise_with_backtrace exn backtrace
 
@@ -1026,31 +1038,42 @@ struct
     schedule_task s (Task.Task { context_lifetime = (src, dst); description; work })
 end
 
-module Raise_backend (Device : Lowered_backend) : Backend = struct
+(* gh-ocannl-2192: below every shared wait, including transfer and delta cleanup. Events carry their
+   recording device id, so waiting on one consults the very same mark as device waits. *)
+module With_device_wedge_guard (Device : Lowered_backend) = struct
   include Device
-  include Add_buffer_retrieval_and_syncing (Device)
 
   (* gh-ocannl-2134: the devices a bounded wait gave up on, by [device_id], with what expired. Read
      on every [await], written once per expiry; any domain may wait. *)
-  let wedged : (int, string, Int.comparator_witness) Map.t Atomic.t =
+  let wedged : (int, string * string, Int.comparator_witness) Map.t Atomic.t =
     Atomic.make (Map.empty (module Int))
 
-  let check_wedged (device : device) =
+  let check_id device_id =
     Option.iter
-      (Map.find (Atomic.get wedged) device.device_id)
-      ~f:(fun detail ->
-        raise (Backend_intf.Device_wedged { device = Device.get_name device; detail }))
+      (Map.find (Atomic.get wedged) device_id)
+      ~f:(fun (device, detail) -> raise (Backend_intf.Device_wedged { device; detail }))
 
   let rec mark_wedged (device : device) detail =
     let before = Atomic.get wedged in
-    let after = Map.set before ~key:device.device_id ~data:detail in
+    let after = Map.set before ~key:device.device_id ~data:(Device.get_name device, detail) in
     if not (Atomic.compare_and_set wedged before after) then mark_wedged device detail
+
+  let check_wedged (device : device) = check_id device.device_id
+
+  let sync event =
+    Option.iter (Device.event_device_id event) ~f:check_id;
+    Device.sync event
+
+  let will_wait_for (ctx : context) event =
+    check_wedged ctx.device;
+    Option.iter (Device.event_device_id event) ~f:check_id;
+    Device.will_wait_for ctx event
 
   let await device =
     check_wedged device;
     Device.await device
 
-  let await_within device ~seconds =
+  let bounded_wait device ~seconds =
     check_wedged device;
     let completed =
       match Device.bounded_await with
@@ -1065,6 +1088,16 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     else (
       mark_wedged device (Printf.sprintf "work outstanding past a %gs wait" seconds);
       false)
+
+  let bounded_await = Some bounded_wait
+end
+
+module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
+  module Device = With_device_wedge_guard (Raw_device)
+  include Device
+  include Add_buffer_retrieval_and_syncing (Device)
+
+  let await_within = Option.value_exn Device.bounded_await
 
   type fissioned = { batch : Device.code_batch; count : int } [@@deriving sexp_of]
 
@@ -1468,8 +1501,10 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     let tx = new_pool_tx ~name in
     let cache_inserts = ref [] in
     let unwind_partial_delta () =
-      (* The uploads scheduled above are asynchronous, so the pools must not be freed under them. *)
-      (try Device.await device with _ -> ());
+      (* The uploads scheduled above are asynchronous, so the pools must not be freed under them.
+         Device_wedged deliberately leaks this delta: work may still write it, and this device takes
+         no further work. The outer best-effort handler must preserve that refusal too. *)
+      (try Device.await device with Backend_intf.Device_wedged _ as exn -> raise exn | _ -> ());
       (* Constant-cache entries this call inserted point INTO the pools about to go, so they have to
          come out first or a later context would resolve a freed slab. Entries that were already
          there belong to earlier compiles and are untouched. *)
@@ -1535,9 +1570,12 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     | () -> ()
     | exception exn ->
         let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-        (* Best-effort: giving the slabs back must not replace the allocation failure the caller has
-           to classify (an out-of-memory decline being the whole point). *)
-        (try unwind_partial_delta () with _ -> ());
+        (* Best-effort, except a wedge refuses before freeing. Preserve uncontainable failures even
+           then; ordinary allocation failures give way to the device-wide refusal. *)
+        (try unwind_partial_delta () with
+        | Backend_intf.Device_wedged _ as wedge ->
+            raise_wedged_cleanup ~original:exn ~backtrace wedge
+        | _ -> ());
         Stdlib.Printexc.raise_with_backtrace exn backtrace);
     !ctx_buffers
 
@@ -1739,8 +1777,11 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
        [Device.from_host], so a delta being discarded after a failed link can still have writes in
        flight — and freeing the slab under them is device corruption, on a path that is otherwise a
        contained candidate decline the search carries on from. Best-effort: the device may already
-       be refusing work, and that must not replace the link failure the caller has to classify. *)
-    (try Device.await context.device with _ -> ());
+       be refusing work. Device_wedged is the exception: propagate it and deliberately leak the
+       delta rather than free memory an abandoned kernel may still be writing. *)
+    (try Device.await context.device with
+    | Backend_intf.Device_wedged _ as exn -> raise exn
+    | _ -> ());
     Option.iter free_pool ~f:(fun free_pool ->
         free_owned_pools ~device:context.device ~root:context.constant_root ~free_pool
           ~owned_elsewhere:(Map.mem context.ctx_buffers) ctx_buffers;
@@ -1766,8 +1807,11 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     | result -> result
     | exception exn ->
         let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-        (* Best-effort, and it must not replace the link failure the caller has to classify. *)
-        (try free_delta context ctx_buffers with _ -> ());
+        (* Best-effort, except the wedge refusal: do not free an outstanding delta. *)
+        (try free_delta context ctx_buffers with
+        | Backend_intf.Device_wedged _ as wedge ->
+            raise_wedged_cleanup ~original:exn ~backtrace wedge
+        | _ -> ());
         Stdlib.Printexc.raise_with_backtrace exn backtrace
 
   let%debug3_sexp link context (code : code) =

@@ -41,7 +41,7 @@ module Device_config = struct
   [@@deriving sexp_of]
 
   type runner = Cu.Stream.t [@@deriving sexp_of]
-  type event = Cu.Delimited_event.t [@@deriving sexp_of]
+  type event = { device_id : int; raw : Cu.Delimited_event.t } [@@deriving sexp_of]
 
   let name = "cuda"
 end
@@ -192,10 +192,13 @@ end = struct
   include Backend_buffer
 
   let ctx_of (context : context) = context.device.dev.primary_context
-  let is_done event = Cu.Delimited_event.query event
-  let will_wait_for context event = Cu.Delimited_event.wait context.device.runner event
-  let sync event = Cu.Delimited_event.synchronize event
-  let all_work device = Cu.Delimited_event.record device.runner
+  let event_device_id event = Some event.device_id
+  let is_done event = Cu.Delimited_event.query event.raw
+  let will_wait_for context event = Cu.Delimited_event.wait context.device.runner event.raw
+  let sync event = Cu.Delimited_event.synchronize event.raw
+
+  let all_work (device : device) =
+    { device_id = device.device_id; raw = Cu.Delimited_event.record device.runner }
 
   (* Driver initialization and device discovery are lazy: the singleton [Impl] module initializes at
      program startup (Backends instantiates it eagerly for nameable types), and cudajit is a depopt

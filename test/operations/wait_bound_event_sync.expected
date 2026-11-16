@@ -1,0 +1,5 @@
+the healthy wait completes: true
+the healthy event sync completes: true
+a zero bound expires on finite work: true
+event sync on its marked owner raises Device_wedged: true
+another bounded wait on the mark raises Device_wedged: true

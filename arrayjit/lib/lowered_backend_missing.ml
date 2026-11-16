@@ -55,6 +55,8 @@ struct
   let sexp_of_buffer_ptr _buffer_ptr =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
+  let event_device_id _event = None
+
   let sync _event =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 

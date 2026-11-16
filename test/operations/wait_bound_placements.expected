@@ -1,0 +1,6 @@
+the healthy wait completes: true
+a zero bound expires on finite work: true
+the placement arm's injected failure fired after a real expiry: true
+the placement search propagates the arm failure naming its bound: true
+the arm report retains the failed search: true
+the caller's later release propagates Device_wedged: true
