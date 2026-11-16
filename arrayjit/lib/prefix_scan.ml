@@ -50,20 +50,23 @@ let state_owner (tn : Tn.t) = Tn.Weak_table.find_opt owners tn
 
 (* The carried state's precision: the target's widened to f32, f64 kept. A target that is not a
    float declines: an f32 state would round an integer sum the composed reduction holds exactly. *)
-let state_prec (tn : Tn.t) =
-  match Lazy.force tn.Tn.storage_prec with
+let state_prec_of_prec = function
   | Ops.Double_prec _ as p -> Some p
   | Ops.Single_prec _ | Ops.Half_prec _ | Ops.Bfloat16_prec _ | Ops.Fp8_prec _ -> Some Ops.single
   | _ -> None
 
-let state_node ~(y : Tn.t) ~ordinal prec =
+let state_prec (tn : Tn.t) = state_prec_of_prec (Lazy.force tn.Tn.storage_prec)
+
+(* [role] tells the carried values of one site apart: the gradient gate's scan carries the run's sum
+   and the previous extremum, which must not share a node. *)
+let state_node ?(role = "") ~(y : Tn.t) ~ordinal prec =
   Hashtbl.find_or_add
     (Tn.memo_bucket minted y ~create:(fun () -> Hashtbl.create (module Site_key)))
-    (y.Tn.uid, ordinal, Ops.prec_string prec)
+    (y.Tn.uid, ordinal, role ^ Ops.prec_string prec)
     ~default:(fun () ->
       let tn =
         Tn.create ~namespace (Tn.Specified prec) ~id:(fresh_id ())
-          ~label:("prefix_state" :: y.Tn.label)
+          ~label:((if String.is_empty role then "prefix_state" else "prefix_" ^ role) :: y.Tn.label)
           ~unpadded_dims:(lazy [| 1 |])
           ~padding:(lazy None)
           ()
@@ -149,6 +152,55 @@ let representable dom =
 
 let max_depth = 8
 
+(* A read of a host constant (an [ndarray] literal, gh-ocannl-1858) at subscripts affine in [r] and
+   [q]: the cells it reads over the whole [(r, q)] square, each subscript in range, must be a
+   function of [d = r - q] alone -- bit for bit, so a [-0.] and a [0.] differ. O(extent^2) once, the
+   size of the data itself; a square past [max_host_square] cells declines. The data's precision and
+   the node's join the precisions the values must be exact in. A node without that declaration
+   ([Operation.init]: mutable host data by contract) is never read here. *)
+let max_host_square = 1 lsl 24
+
+let host_constant_read dom (tn : Tn.t) (idcs : Idx.axis_index array) : value option =
+  let* data = Host_inits.find tn in
+  let nd = Lazy.force data in
+  let dims = Ndarray.dims nd in
+  let extent = dom.hi - dom.lo + 1 in
+  let* forms =
+    Array.to_list idcs
+    |> List.map ~f:(fun i ->
+        match lin_of_index dom i with Some (Lin { cr; cq; c }) -> Some (cr, cq, c) | _ -> None)
+    |> Option.all
+  in
+  let forms = Array.of_list forms in
+  if Array.length forms <> Array.length dims || extent * extent > max_host_square then None
+  else
+    let span = dom.hi - dom.lo in
+    let table = Array.create ~len:((2 * span) + 1) None in
+    let cell r q =
+      let idx = Array.map forms ~f:(fun (cr, cq, c) -> (cr * r) + (cq * q) + Float.to_int c) in
+      if Array.for_alli idx ~f:(fun a k -> k >= 0 && k < dims.(a)) then
+        Some (Ndarray.get_as_float nd idx)
+      else None
+    in
+    let consistent =
+      List.for_all (List.range ~stop:`inclusive dom.lo dom.hi) ~f:(fun r ->
+          List.for_all (List.range ~stop:`inclusive dom.lo dom.hi) ~f:(fun q ->
+              match cell r q with
+              | None -> false
+              | Some v -> (
+                  let slot = r - q + span in
+                  match table.(slot) with
+                  | None ->
+                      table.(slot) <- Some v;
+                      true
+                  | Some w -> Int64.equal (Int64.bits_of_float v) (Int64.bits_of_float w))))
+    in
+    if not consistent then None
+    else (
+      dom.precs <- Ndarray.get_prec nd :: Lazy.force tn.Tn.storage_prec :: dom.precs;
+      let table = Array.map table ~f:(fun v -> Option.value_exn v) in
+      Some (D (fun d -> table.(d + span))))
+
 (* The affine form's coefficients stay far inside an OCaml [int], so its arithmetic cannot wrap: a
    scale is an integer of at most f32's exact reach, and a coefficient past [2^30] declines (no
    index grid representable in any supported precision needs one). *)
@@ -212,6 +264,11 @@ let rec eval (rt : routine) dom ~before ~depth sub (s : LL.scalar_t) : value opt
                 let* v = eval rt dom ~before:pos ~depth:(depth - 1) sub' n.llsc in
                 note v
             | _ -> None)
+        | [] when Tn.known_host_constant tn ->
+            (* No writer here, and values declared forever equal to the registered host data, which
+               no routine or host write can change (gh-ocannl-2021): the data is the mask. *)
+            let* v = host_constant_read dom tn idcs in
+            note v
         | _ -> None)
   | LL.Unop (op, a) -> (
       let* a = arg a in
@@ -539,6 +596,249 @@ let find_site rt pos (n : nest) : site option =
         in
         Some { rows; y; y_idcs = n.idcs; op; scan = q; shape; payload })
 
+(* {1 The extremum's gradient gate (gh-ocannl-1858)}
+
+   The backward of a cumulative max (min) through [einmax1]'s product-space gate lowers to
+
+   - [P[i, o] = where(M(i, o), v[i], -inf)], [Y[o] = -inf], [Y[o] = max(Y[o], P[i, o])] -- the
+   forward, which [find_site] reads; - [C[o, i] = (Y[o] = P[i, o])], then [A[i, o] = 0], [A[i, o] +=
+   where(C[o, i], g[o], 0)]; - [T[i] += where(M(i, o), A[i, o], 0)], reducing over [o]: O(n^2).
+
+   So [T[i] += sum over the [o] selecting [i] of [Y[o] == v[i]] g[o]]: every position attaining an
+   output's extremum takes its whole upstream gradient (duplication, the tie rule [einmax1]
+   documents). [Y] reduces over nested selections, so it is monotone along the forward's direction,
+   and with [o*] the first output selecting [i], [Y[o] == v[i]] iff [v[i] == Y[o*]] and [Y[o] ==
+   Y[o*]] -- a sandwich, in the IEEE order where the two zeros are equal. The outputs equal to
+   [Y[o*]] from [o*] on are a run, so [T[i] += [v[i] == Y[o*]] R[o*]], where [R] sums [g] over the
+   rest of a run: a scan in the reverse direction carrying the run's sum and the previous [Y],
+   restarting the sum where [Y] changes. The sum is regrouped (from the run's end), the comparisons
+   are the composed form's own. *)
+
+type gate = {
+  g_rows : loop list;
+  g_t : Tn.t;
+  g_t_idcs : Idx.axis_index array;
+  g_scan : loop;  (** [T]'s output loop over [i]: the scan's position [p]. *)
+  g_shape : triangle;  (** [T]'s own triangle: the reverse of the forward's. *)
+  g_y : LL.scalar_t;  (** [Y] at the forward output [p]. *)
+  g_y_prec : Ops.prec;
+  g_v : LL.scalar_t;  (** The forward payload at [p]. *)
+  g_eq : LL.scalar_t -> LL.scalar_t -> LL.scalar_t;
+      (** [v == y] with [C]'s own operand order and precisions. *)
+  g_u : LL.scalar_t;  (** The upstream gradient at the forward output [p]. *)
+  g_u_prec : Ops.prec;
+}
+
+let flip = function LL.Forward -> LL.Backward | LL.Backward -> LL.Forward
+
+(* [sub] from a nest's target subscripts (plain iterators, or a fixed index matched exactly) to the
+   indices a read of its node uses. *)
+let unify (target : Idx.axis_index array) (read : Idx.axis_index array) =
+  if Array.length target <> Array.length read then None
+  else
+    let* pairs =
+      Array.to_list (Array.zip_exn target read)
+      |> List.map ~f:(function
+        | Idx.Iterator s, i -> Some (Some (s, i))
+        | Idx.Fixed_idx k, Idx.Fixed_idx k' when k = k' -> Some None
+        | _ -> None)
+      |> Option.all
+    in
+    let pairs = List.filter_opt pairs in
+    Some (fun s -> List.Assoc.find pairs ~equal:Idx.equal_symbol s)
+
+let instantiate (n : nest) read =
+  Option.bind (unify n.idcs read) ~f:(fun sub -> subst_scalar sub n.llsc)
+
+let fill_of rt pos ~(tn : Tn.t) =
+  match rt.stmts.(pos) with
+  | LL.Zero_out tn' when Tn.equal tn tn' -> Some 0.
+  | _ -> (
+      match rt.nests.(pos) with
+      | Some ({ llsc = LL.Constant c; _ } as n) when Tn.equal n.tn tn && covers_whole n -> Some c
+      | _ -> None)
+
+let find_gate rt pos (n : nest) : gate option =
+  let* op, rhs = reduction n in
+  let* () = Option.some_if (Ops.equal_binop op Ops.Add) () in
+  let* () = Option.some_if (not (Array.existsi rt.opaque ~f:(fun i o -> o && i <= pos))) () in
+  let t = n.tn in
+  let t_prec = Lazy.force t.Tn.storage_prec in
+  let* _ = state_prec t in
+  let* outputs =
+    Array.to_list n.idcs
+    |> List.map ~f:(function
+      | Idx.Iterator s -> Some (Some s)
+      | Idx.Fixed_idx _ -> Some None
+      | _ -> None)
+    |> Option.all |> Option.map ~f:List.filter_opt
+  in
+  let* () = Option.some_if (not (List.contains_dup outputs ~compare:Idx.compare_symbol)) () in
+  let is_output s = List.mem outputs s ~equal:Idx.equal_symbol in
+  let* r =
+    match List.filter n.loops ~f:(fun lp -> not (is_output lp.index)) with
+    | [ r ] when r.from_ < r.to_ -> Some r
+    | _ -> None
+  in
+  List.find_map n.loops ~f:(fun q ->
+      if (not (is_output q.index)) || q.from_ <> r.from_ || q.to_ <> r.to_ then None
+      else
+        let dom =
+          { r = r.index; q = q.index; lo = r.from_; hi = r.to_; precs = [ t_prec ]; values = [] }
+        in
+        let at_p s =
+          subst_scalar
+            (fun s -> Option.some_if (Idx.equal_symbol s r.index) (Idx.Iterator q.index))
+            s
+        in
+        let* a, shape = split rt dom ~pos ~op:Ops.Add rhs in
+        (* [A[i, o]]: one zero fill, then one accumulation covering it, both ahead of [T]'s. *)
+        let* a_tn, a_idcs = match a with LL.Get (tn, idcs) -> Some (tn, idcs) | _ -> None in
+        let* () = Option.some_if (index_mentions q.index a) () in
+        let a_prec = Lazy.force a_tn.Tn.storage_prec in
+        let* () = Option.some_if (Ops.equal_prec a_prec t_prec) () in
+        let* z_pos, g_pos =
+          match writers rt a_tn with [ z; g ] when g < pos -> Some (z, g) | _ -> None
+        in
+        let* zero = fill_of rt z_pos ~tn:a_tn in
+        let* () = Option.some_if (Float.equal zero 0.) () in
+        let* g_nest = rt.nests.(g_pos) in
+        let* () = Option.some_if (covers_whole g_nest) () in
+        let* g_op, g_rhs = reduction g_nest in
+        let* () = Option.some_if (Ops.equal_binop g_op Ops.Add) () in
+        (* [A += where(C, u, 0)], in [T]'s coordinates. *)
+        let* g_rhs =
+          Option.bind (unify g_nest.idcs a_idcs) ~f:(fun sub -> subst_scalar sub g_rhs)
+        in
+        let* c_tn, c_idcs, u, u_prec =
+          match g_rhs with
+          | LL.Ternop (Ops.Where, (LL.Get (c, ci), _), (u, u_prec), (z, _))
+            when is_const rt dom ~before:g_pos 0. z ->
+              Some (c, ci, u, u_prec)
+          | _ -> None
+        in
+        let* () = Option.some_if (Ops.equal_prec u_prec a_prec) () in
+        let* () = Option.some_if (not (index_mentions q.index u)) () in
+        let* () = Option.some_if (not (LL.scalar_mentions_tn t u)) () in
+        (* [C[o, i] = (Y[o] = P[i, o])], defined once ahead of the accumulation. *)
+        let* c_pos, c_nest = definition rt c_tn in
+        let* () = Option.some_if (c_pos < g_pos && covers_whole c_nest) () in
+        let* c_body = instantiate c_nest c_idcs in
+        let* (ya, ia, pa), (yb, ib, pb) =
+          match c_body with
+          | LL.Binop (Ops.Cmpeq, (LL.Get (ya, ia), pa), (LL.Get (yb, ib), pb)) ->
+              Some ((ya, ia, pa), (yb, ib, pb))
+          | _ -> None
+        in
+        let cmp x y = LL.Binop (Ops.Cmpeq, (x, pa), (y, pb)) in
+        (* Either operand may be the extremum. *)
+        List.find_map
+          [ ((ya, ia), (yb, ib), fun ~v ~y -> cmp y v); ((yb, ib), (ya, ia), fun ~v ~y -> cmp v y) ]
+          ~f:(fun ((y_tn, y_read), (p_tn, p_read), eq) ->
+            (* [Y]: the neutral fill, then a forward the scan recognizer accepts, reading [P]. *)
+            let* yf_pos, yr_pos =
+              match writers rt y_tn with [ f; r ] when r < c_pos -> Some (f, r) | _ -> None
+            in
+            let* y_nest = rt.nests.(yr_pos) in
+            let* fwd = find_site rt yr_pos y_nest in
+            let* fill = neutral fwd.op in
+            let* () =
+              Option.some_if (Ops.equal_binop fwd.op Ops.Max || Ops.equal_binop fwd.op Ops.Min) ()
+            in
+            let* y_fill = fill_of rt yf_pos ~tn:y_tn in
+            let* () = Option.some_if (Float.equal y_fill fill) () in
+            let* y_op, y_rhs = accumulation y_nest in
+            let* () = Option.some_if (Ops.equal_binop y_op fwd.op) () in
+            let* p_fwd_read =
+              match y_rhs with LL.Get (p', ip) when Tn.equal p' p_tn -> Some ip | _ -> None
+            in
+            (* The forward's coordinates in [T]'s: its outputs as [C] reads [Y], its reduced loop
+               [i]. *)
+            let y_outputs =
+              Array.to_list y_nest.idcs
+              |> List.filter_map ~f:(function Idx.Iterator s -> Some s | _ -> None)
+            in
+            let* y_r =
+              match
+                List.filter y_nest.loops ~f:(fun lp ->
+                    not (List.mem y_outputs lp.index ~equal:Idx.equal_symbol))
+              with
+              | [ lp ] -> Some lp
+              | _ -> None
+            in
+            let* sub_y = unify y_nest.idcs y_read in
+            let phi s =
+              if Idx.equal_symbol s y_r.index then Some (Idx.Iterator q.index) else sub_y s
+            in
+            let* () =
+              Option.some_if
+                (match phi fwd.scan.index with
+                | Some (Idx.Iterator s) -> Idx.equal_symbol s r.index
+                | _ -> false)
+                ()
+            in
+            let* () = Option.some_if (fwd.scan.from_ = r.from_ && fwd.scan.to_ = r.to_) () in
+            let* () =
+              Option.some_if
+                (List.for_all y_nest.loops ~f:(fun lp -> Option.is_some (phi lp.index)))
+                ()
+            in
+            let* p_mapped =
+              Array.to_list p_fwd_read
+              |> List.map ~f:(subst_idx phi)
+              |> Option.all |> Option.map ~f:Array.of_list
+            in
+            let* () = Option.some_if ([%equal: Idx.axis_index array] p_mapped p_read) () in
+            (* One relation: [T]'s triangle is the forward's, read from the other side. *)
+            let* () =
+              Option.some_if
+                (LL.equal_scan_direction shape.direction (flip fwd.shape.direction)
+                && Bool.equal shape.inclusive fwd.shape.inclusive)
+                ()
+            in
+            (* What the scan reads at [T]'s position: nothing writes it in between. *)
+            let* () =
+              Option.some_if (not (List.exists [ y_tn; p_tn; a_tn; c_tn ] ~f:(Tn.equal t))) ()
+            in
+            let at_fwd_p s =
+              subst_scalar
+                (fun s ->
+                  if Idx.equal_symbol s fwd.scan.index then Some (Idx.Iterator q.index) else phi s)
+                s
+            in
+            let* v = at_fwd_p fwd.payload in
+            let* () = Option.some_if (not (LL.scalar_mentions_tn t v)) () in
+            let quiet ~from tns =
+              List.for_all tns ~f:(fun tn ->
+                  List.for_all (writers rt tn) ~f:(fun w -> w < from || w >= pos))
+            in
+            let* () =
+              Option.some_if
+                (quiet ~from:yr_pos (read_nodes v) && quiet ~from:g_pos (read_nodes u))
+                ()
+            in
+            let* y_at = at_p (LL.Get (y_tn, y_read)) in
+            let* u_at = at_p u in
+            let* () = representable dom in
+            let rows =
+              List.filter n.loops ~f:(fun lp ->
+                  not (Idx.equal_symbol lp.index r.index || Idx.equal_symbol lp.index q.index))
+            in
+            Some
+              {
+                g_rows = rows;
+                g_t = t;
+                g_t_idcs = n.idcs;
+                g_scan = q;
+                g_shape = shape;
+                g_y = y_at;
+                g_y_prec = Lazy.force y_tn.Tn.storage_prec;
+                g_v = v;
+                g_eq = (fun v y -> eq ~v ~y);
+                g_u = u_at;
+                g_u_prec = u_prec;
+              }))
+
 (* {1 Emission} *)
 
 let emit ~ordinal (s : site) : LL.t =
@@ -583,6 +883,70 @@ let emit ~ordinal (s : site) : LL.t =
          body;
        })
 
+let emit_gate ~ordinal (g : gate) : LL.t =
+  let open LL in
+  let sprec = Option.value_exn (state_prec g.g_t) in
+  let yprec = Option.value_exn (state_prec_of_prec g.g_y_prec) in
+  let sum_tn = state_node ~y:g.g_t ~ordinal sprec in
+  let ext_tn = state_node ~role:"extremum" ~y:g.g_t ~ordinal yprec in
+  let s = { prev = get_scope sum_tn; next = get_scope sum_tn; init = Constant 0. } in
+  let e = { prev = get_scope ext_tn; next = get_scope ext_tn; init = Constant 0. } in
+  let where_ c a b = apply_op (Ops.Ternop Ops.Where) [| c; a; b |] in
+  (* The run continues while the extremum holds; the first step's [prev] is [init], under a zero
+     sum, so it never matters. *)
+  let same = Binop (Ops.Cmpeq, (Get_local e.prev, g.g_y_prec), (g.g_y, g.g_y_prec)) in
+  let sum_step =
+    Set_local
+      ( s.next,
+        Binop (Ops.Add, (g.g_u, g.g_u_prec), (where_ same (Get_local s.prev) (Constant 0.), sprec))
+      )
+  in
+  let ext_step = Set_local (e.next, g.g_y) in
+  let store x =
+    Set
+      {
+        tn = g.g_t;
+        idcs = g.g_t_idcs;
+        llsc = apply_op (Ops.Binop Ops.Add) [| Get (g.g_t, g.g_t_idcs); x |];
+        debug = "";
+      }
+  in
+  let body =
+    if g.g_shape.inclusive then
+      unflat_lines
+        [ sum_step; ext_step; store (where_ (g.g_eq g.g_v g.g_y) (Get_local s.next) (Constant 0.)) ]
+    else
+      (* A strict selection's first output is the one after [i]: the state before the step. The
+         scan's first position selects nothing, and its payload -- which the composed form never
+         compared -- may be out of range there, so that step stays behind an index guard. *)
+      let iprec = Ops.index_prec () in
+      let at = Embed_index (Idx.Iterator g.g_scan.index) in
+      let not_first =
+        match g.g_shape.direction with
+        | Backward -> Binop (Ops.Cmplt, (at, iprec), (Constant (Float.of_int g.g_scan.to_), iprec))
+        | Forward -> Binop (Ops.Cmplt, (Constant (Float.of_int g.g_scan.from_), iprec), (at, iprec))
+      in
+      unflat_lines
+        [
+          store
+            (where_ not_first
+               (where_ (g.g_eq g.g_v (Get_local e.prev)) (Get_local s.prev) (Constant 0.))
+               (Constant 0.));
+          sum_step;
+          ext_step;
+        ]
+  in
+  wrap g.g_rows
+    (Scan_loop
+       {
+         index = g.g_scan.index;
+         from_ = g.g_scan.from_;
+         to_ = g.g_scan.to_;
+         direction = g.g_shape.direction;
+         carried = [ s; e ];
+         body;
+       })
+
 (* The scans into each target already in the routine, by the targets' uids: a later fixpoint round
    numbers its sites after them. *)
 let existing_scans (stmts : LL.t array) =
@@ -593,8 +957,10 @@ let existing_scans (stmts : LL.t array) =
         go b
     | LL.For_loop { body; _ } -> go body
     | LL.Scan_loop { carried; body; _ } ->
-        List.iter carried ~f:(fun (c : LL.carried) ->
-            Option.iter (state_owner c.prev.tn) ~f:(fun y -> Hashtbl.incr counts y));
+        (* One per scan: the gradient gate's carries two states into one target. *)
+        Option.iter
+          (List.find_map carried ~f:(fun (c : LL.carried) -> state_owner c.prev.tn))
+          ~f:(fun y -> Hashtbl.incr counts y);
         go body
     | _ -> ()
   in
@@ -607,14 +973,20 @@ let rewrite (llc : LL.t) : LL.t =
     Array.to_list rt.nests
     |> List.filter_mapi ~f:(fun pos n ->
         Option.bind n ~f:(fun n ->
-            if rt.opaque.(pos) then None else Option.map (find_site rt pos n) ~f:(fun s -> (pos, s))))
+            if rt.opaque.(pos) then None
+            else
+              match find_site rt pos n with
+              | Some s -> Some (pos, `Prefix s)
+              | None -> Option.map (find_gate rt pos n) ~f:(fun g -> (pos, `Gate g))))
   in
   if List.is_empty sites then llc
   else
     let stmts = Array.copy rt.stmts in
     let ordinals = existing_scans rt.stmts in
-    List.iter sites ~f:(fun (pos, s) ->
-        let ordinal = Option.value (Hashtbl.find ordinals s.y.Tn.uid) ~default:0 in
-        Hashtbl.set ordinals ~key:s.y.Tn.uid ~data:(ordinal + 1);
-        stmts.(pos) <- emit ~ordinal s);
+    List.iter sites ~f:(fun (pos, site) ->
+        let target = match site with `Prefix s -> s.y | `Gate g -> g.g_t in
+        let ordinal = Option.value (Hashtbl.find ordinals target.Tn.uid) ~default:0 in
+        Hashtbl.set ordinals ~key:target.Tn.uid ~data:(ordinal + 1);
+        stmts.(pos) <-
+          (match site with `Prefix s -> emit ~ordinal s | `Gate g -> emit_gate ~ordinal g));
     LL.unflat_lines (Array.to_list stmts)

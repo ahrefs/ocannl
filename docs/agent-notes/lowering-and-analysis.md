@@ -788,7 +788,16 @@ files.
   (`runtest-prefix_scan_fp_licences`); (e) over one cell the triangle is a constant, which the
   member reads as a payload factor, so a singleton extent is left alone. The mask's definitions
   are not removed: the virtualizer drops the unread chain, and `test/operations/prefix_scan` pins
-  that no `[n, n]` node is written after the rewrite.
+  that no `[n, n]` node is written after the rewrite. (f) The cummax backward (gh-ocannl-1858) is a
+  multi-nest pattern -- `einmax1`'s gate `C = (Y = P)`, its product `A = 0 + where(C, g, 0)`, the
+  `where`'s reduction into the target -- recognized at the target's nest by node identity and an
+  index substitution into the forward's coordinates, never by labels; it is O(n) because the
+  prefix extremum is monotone, so the gated outputs are a run of equal extrema, and its tie rule
+  (duplication) is kept by gating on the first selecting output. The tropical `@^+` gate is a
+  different rule (no `where` filter: an output at `-inf` gates rejected positions) and stays
+  composed. (g) A mask with no writer in the routine is read from its `Host_inits` data only under
+  `Tn.known_host_constant` (an `ndarray` literal): `Operation.init` data is mutable by contract (a
+  host write after compiling changes it), so a lowering-time proof from it would be unsound.
 
 - The local-binder exit gate checks lexical visibility for `Declare_local` and scan-carried
   locals (gh-ocannl-2050), with whole scope-id identity. A binder serves an access when three
