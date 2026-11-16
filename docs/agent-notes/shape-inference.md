@@ -147,7 +147,7 @@ files.
   until the draw sizes the counter. Keep it narrow: deferring every resolve-at-use axis with an
   open lower bound refused 13 oracle-solvable `shape_program_sweep` programs with a fixed index.
   A fixed-index input's minimum above 1 must settle before those final minimal guesses
-  (gh-ocannl-2229). With no GLB and no parameter role, stage 7 first closes that axis to its
+  (gh-ocannl-2229). With no GLB and no parameter role, and outside held window/concat dependencies, stage 7 closes it to its
   minimum, then repeats stage 6a/6b to propagate the concrete size to leaves before results close.
   This fills the draw under two or three pointwise results before a fixed index; copying the
   minimum down a broadcast inequality would instead forbid its operand from broadcasting.

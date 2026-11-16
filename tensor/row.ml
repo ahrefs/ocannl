@@ -6300,9 +6300,7 @@ let closing_dim_dependencies ineqs env =
         let d1 = subst_dim env d1 and d2 = subst_dim env d2 in
         let waiting, kernels = waiting_on_window (waiting_on_window waiting d1 d2) d2 d1 in
         let waiting =
-          match concat_closing_dependent d1 d2 with
-          | Some v -> Set.add waiting v
-          | None -> waiting
+          match concat_closing_dependent d1 d2 with Some v -> Set.add waiting v | None -> waiting
         in
         (waiting, kernels)
     | _ -> waiting)
@@ -6317,10 +6315,10 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
      guesses 1 before the outer result's index sizes it, so [u] repeats.
 
      Boundary: only non-parameter axes eligible for closing, with no GLB and a minimum above 1. This
-     also respects held window and shared-claim concat dependencies. It is a closing order, not a stronger broadcast
-     inequality: an operand may still be top. In particular [=> ...|0] outputs keep their stage-7
-     minimal rule (layer_norm's mean must broadcast), and a fixed index alone still cannot size a
-     parameter. *)
+     also respects held window and shared-claim concat dependencies. It is a closing order, not a
+     stronger broadcast inequality: an operand may still be top. In particular [=> ...|0] outputs
+     keep their stage-7 minimal rule (layer_norm's mean must broadcast), and a fixed index alone
+     still cannot size a parameter. *)
   let ineqs, env =
     if not (is_stage7 stage) then (ineqs, env)
     else
