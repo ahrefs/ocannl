@@ -4623,7 +4623,10 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   `tools/test-isolated-apt.sh` runs its real apt setup against a local signed archive,
   without network or compiler downloads. It checks source-specific and disabled global
   trust separately, forces real cache generation into writable fixture directories,
-  and checks effective status because update only reads it. Missing apt is an observed
+  and checks effective status because update only reads it. Standing controls remove
+  signed-by, restore host trust, leak caches, and reject a real missing-suite error as
+  a signature refusal. Failure logs print before the errexit leg reports its failure.
+  Missing apt is an observed
   not-applicable leg; other missing tools fail. The shell harness manifest runs it,
   first on CI in the nightly harnesses job, including Ubuntu 24.04 apt 2 wording.
 

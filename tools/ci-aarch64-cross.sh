@@ -37,7 +37,8 @@
 # Only `cc1` runs: the census compiles to assembly (`-S`), so no binutils are
 # staged, and the arm64 libc headers come from the same index.
 
-. "$(dirname -- "$0")/isolated-apt.sh"
+# shellcheck source=isolated-apt.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/isolated-apt.sh"
 
 set -u
 

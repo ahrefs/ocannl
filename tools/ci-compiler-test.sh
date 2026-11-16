@@ -58,7 +58,8 @@
 # compiler wrappers log every invocation, so a cached build or an alias that
 # never reaches the requested compiler fails rather than being certified.
 
-. "$(dirname -- "$0")/isolated-apt.sh"
+# shellcheck source=isolated-apt.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/isolated-apt.sh"
 
 set -u
 # shellcheck source=../scripts/process-group.sh
