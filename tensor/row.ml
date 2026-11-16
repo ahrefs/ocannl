@@ -6250,7 +6250,8 @@ let draw_counter_leaves ineqs env =
    a closing dependency, not a basis-preserving subtraction. Keep both claims on the original
    equation. The side with the smaller solved sum waits while the other free component closes; the
    equation then determines its size and basis. Boundary: exactly one plain variable per side, equal
-   non-default solved claims, unequal solved sums. Known bounds still propagate, and the driver's
+   non-default solved claims, unequal solved sums. This adds no propagation of bounds through sums:
+   the store with a waiting-side [k >= 5_default] still refuses, as on the base. The driver's
    final-fixpoint cycle breaker remains available. *)
 let concat_closing_dependent d1 d2 =
   match (d1, d2) with

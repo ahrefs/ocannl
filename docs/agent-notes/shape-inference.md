@@ -95,7 +95,9 @@ files.
   dropping its other copy falsely refuses a later `k = 3_default`. The order-independence test
   pins both that later constraint and the open examples (`u = 1`, `k = 3_a`, and `h`). This returns
   the two rule-consistent deferrals from staging#2006's 297 newly refused stores plus one of its
-  96 inert-atom cases (`bcast_if_1` above size 1); equal solved sums still wait.
+  96 inert-atom cases (`bcast_if_1` above size 1); equal solved sums still wait. This does not
+  propagate bounds through sums: adding `k >= 5_default` to the example still refuses in every
+  order, as it already did on the base (the test prints this diagnostic probe to stderr).
 - `Shape.compute_row_product` must not latch a product while the row still ends in an open
   `Row_var` — the historical bug silently resolved xavier/kaiming fan products to 1 for every
   `{ w }` param with an inferred input row (fixed; regression `test/operations/layer_norm_1d.ml`,

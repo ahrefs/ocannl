@@ -134,6 +134,12 @@ let solution_to_string (sol : solution) =
     (List.map sol ~f:(fun (n, x) ->
          n ^ "=" ^ match x with Some (d, b) -> Printf.sprintf "%d of %s" d b | None -> "unsized"))
 
+let has sol name d basis =
+  Option.equal
+    (fun (d1, b1) (d2, b2) -> d1 = d2 && String.equal b1 b2)
+    (List.Assoc.find_exn sol ~equal:String.equal name)
+    (Some (d, basis))
+
 type outcome = Refused | Accepted of solution
 
 let outcome_to_string = function Refused -> "refused" | Accepted sol -> solution_to_string sol
@@ -250,13 +256,7 @@ let () =
              outs)
             ~f:(function
               | Accepted sol ->
-                  let has n d basis =
-                    Option.equal
-                      (fun (d1, b1) (d2, b2) -> d1 = d2 && String.equal b1 b2)
-                      (List.Assoc.find_exn sol ~equal:String.equal n)
-                      (Some (d, basis))
-                  in
-                  has "v" 2 tag && has "u" 1 Row.bcast_if_1 && has "k" 3 tag
+                  has sol "v" 2 tag && has sol "u" 1 Row.bcast_if_1 && has sol "k" 3 tag
               | Refused -> false));
       List.iter [ "a"; "h"; Row.bcast_if_1 ] ~f:(fun tag ->
           let items =
@@ -270,12 +270,24 @@ let () =
           in
           p_all ("a later plain k keeps both concatenations' shared claim " ^ tag) (outcomes items)
             ~f:(function
-            | Accepted sol ->
-                Option.equal
-                  (fun (d1, b1) (d2, b2) -> d1 = d2 && String.equal b1 b2)
-                  (List.Assoc.find_exn sol ~equal:String.equal "u")
-                  (Some (1, tag))
+            | Accepted sol -> has sol "u" 1 tag
             | Refused -> false));
+      List.iter [ "a"; "h"; Row.bcast_if_1 ] ~f:(fun tag ->
+          let items =
+            List.map [ "w(s2,k3 default)(v)=5 " ^ tag; "[u; 2v]=[k; 2 " ^ tag ^ "]" ] ~f:item
+            @ [
+                {
+                  name = "k >= 5 default";
+                  mk = (fun _ _ k -> ineq (tagged 5 Row.default_basis) (Var k));
+                };
+              ]
+          in
+          let outs = outcomes items in
+          Stdio.eprintf "waiting-side bound: %s => %s (not part of the golden)\n" (store_name items)
+            (String.concat ~sep:" | " (List.map outs ~f:outcome_to_string));
+          (* Diagnostic only: this bounded store is already refused on the base. Propagating its
+             bound through the sum remains outside this closing-order correction. *)
+          ());
       p_all "the issue's example is refused in every order"
         (verdicts [ "w(s1,k3 default)(v)=3 default"; "[v; u]=4 default"; "[v; u]=4 bcast_if_1" ])
         ~f:(equal_outcome Refused);
