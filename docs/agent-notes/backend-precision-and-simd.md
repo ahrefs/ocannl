@@ -2605,6 +2605,10 @@ files.
   for throughput. Both are performance-graded follow-ups. `reproducible` states it `false` and
   `approximate` `true` -- its default, stated so the regime report names an explicit `false`
   beside that profile; `cuda_fast_math` likewise since this PR (`config_profiles`).
+- **HIP fmod must classify either NaN operand by bits** (gh-ocannl-1909): ROCm returned
+  the dividend for a NaN divisor under fast math plus `-fhonor-nans`, at f32, half, bfloat16
+  and f64 on gfx1151. `Builtins_hip.ocannl_fmodf` and `ocannl_fmod` now select NaN for
+  a NaN divisor too; `unary_math_special_values` already crosses NaN with every operand.
 - **HIP exact schedule claims follow the compiler regime** (gh-ocannl-1835):
   `coalesce_numerics` opens its bitwise leg on HIP only when
   `Ll_test.backend_contraction_off ()` holds; `-no_hip_fast_math` names that run, while the default
