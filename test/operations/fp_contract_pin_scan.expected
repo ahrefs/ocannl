@@ -16,6 +16,19 @@ case: code subject -- qualified top-level p: true
 case: code subject -- Int32 bit pattern against encoding: true
 case: code subject -- gated pairwise claim and census reader: true
 case: code subject -- shadowed low-level output module: true
+case: code subject -- helper tuple and labelled argument: true
+case: code subject -- helper call sites union to a fixpoint: true
+case: code subject -- recursive helper argument: true
+case: code subject -- helper parameter rebound to host value: true
+case: code subject -- helper callee shadowed: true
+case: code subject -- uncalled escaping helper stays unknown: true
+case: code subject -- iter2 tuple callback: true
+case: code subject -- callback parameter shadows an output: true
+case: code subject -- callback parameter rebound to host: true
+case: code subject -- callback module shadowed: true
+case: code subject -- map callback tuple: true
+case: code subject -- iteri index is not an element: true
+case: code subject -- unary helper inside quantified callback: true
 case: a pinned claim is listed as pinned: true
 case: a marked claim is listed with its kind: true
 case: a claim with neither pin nor marker is refused: true
@@ -61,11 +74,13 @@ test/operations/cuda_like_builtins_emulation.ml -- no-contraction: host probes o
 test/operations/division_special_values.ml -- no-contraction: every kernel divides or takes a reciprocal of a stored operand; no product feeds an add, so contraction has nothing to fuse.
 test/operations/epilogue_fusion_single_trip_sweep.ml -- exact-operands: quarters and small integers, every sum far inside f32's mantissa
 test/operations/fixed_name_temporaries.ml -- no-contraction: the claim compares two threefry draws converted to uniform floats
+test/operations/float_literal_forms.ml -- no-contraction: executed kernels only store constants; no arithmetic can fuse
 test/operations/fp_contract_pin_scan.ml -- not-executed: its bitwise text is fixture sources and claim names, no kernels
 test/operations/fp_licence_values.ml -- pinned off
 test/operations/fragment_scope_move_legality.ml -- not-cc: executed parity needs a GPU advertising a half tile; C backends compile nothing
 test/operations/frozen_master_pack.ml -- exact-operands: conversion legs only copy; every dyadic matmul partial sum is f32-exact.
 test/operations/gebp_padded_parity.ml -- exact-operands: Bench_gebp products are multiples of an eighth and every sum stays exact in f32
+test/operations/gpu_compile_programs.ml -- same-shape: joint and split compile the same kernels; only their grouping into programs changes
 test/operations/gpu_conv_twin_tiles.ml -- exact-operands: Ll_test.exact_partials derives the f32 reduction premise from the initialized operands after their required rounding.
 test/operations/gpu_kernel_cache.ml -- pinned off
 test/operations/gpu_packed_prec.ml -- no-contraction: each lane does one operation, an explicit fma among them; no product meets an add
@@ -79,6 +94,7 @@ test/operations/masked_persistent_fragment.ml -- not-cc: executed claims need a 
 test/operations/matmul_interchange.ml -- exact-operands: positive quarters and eighths with an explicit fma; every gradient sum is exact
 test/operations/mma_bf16_seed_parity.ml -- not-cc: every device bitwise claim is a GPU leg; on cc it skips and nothing executes
 test/operations/model_seeded_anchor.ml -- not-cc: the bitwise claim is gated on CUDA or HIP model seeding; cc skips it
+test/operations/narrow_constant_rounding.ml -- no-contraction: compared kernels store literals, multiply by a folded constant, or exponentiate; no product feeds an add
 test/operations/narrow_storage_compute.ml -- pinned off
 test/operations/nonoverlap_pool_grads.ml -- exact-operands: small integer inputs and a unit loss gradient; every max, product and sum exact
 test/operations/prefix_scan.ml -- exact-operands: every product multiplies by an exact 0/1 selector, and the integer data's sums are derived exact below

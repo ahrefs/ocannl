@@ -20,8 +20,8 @@
 
    Recognised forms (closed): Int64.equal or Int32.equal with at least one operand summary reaching
    Int64.bits_of_float or Int32.bits_of_float, including comparison to a literal bit encoding;
-   Array.equal/List.equal with such a predicate; local binary functions and aliases. Numeric
-   Float.equal alone is outside this bit-pattern extension.
+   Array.equal/List.equal with such a predicate; local functions with known arity and aliases.
+   Numeric Float.equal alone is outside this bit-pattern extension.
 
    Claims are derived from Verdict.Claims exports and the existing Verdict_scan.leg_population_slots
    model, whose coverage verdict_ratchet checks against those exports. Boolean_at/Boolean_last read
@@ -36,10 +36,16 @@
    Ll_test.execute_with_census with an optimized program and labelled read. A recognised claim must
    reach both an applied comparator and an output-read dependency. Summaries union expression
    children and tuple bindings: conservative dependency accounting, not per-element provenance.
-   Function parameters are unknown. Mutable storage, external helper bodies, higher-order iterator
-   parameters and exported module-structure values remain outside this extension. Calls have an
-   identifier claim callee and operands in one application node; operator-based application, bare
-   external-reader aliases and recursive-group forward dependencies are not reconstructed.
+   Local function parameters union the arguments of lexically resolved calls in this file, to a
+   finite monotone fixpoint (recursive calls included). Escaping helpers receive no evidence from
+   unknown external callers; uncalled parameters stay unknown. The List/Array iter, iteri, map,
+   mapi, for_all, for_alli, iter2[_exn] and map2[_exn] table maps collection dependencies into
+   inline labelled f callbacks, treating a comparator callback as applied (index parameters stay
+   unknown), including tuple patterns. Tuple components share their collection's union; this is not
+   per-element provenance. Other higher-order calls, mutable storage, external helper bodies and
+   exported module-structure values remain outside this extension. Calls have an identifier claim
+   callee and operands in one application node; operator-based application, partial helper
+   applications, omitted optional defaults and bare external-reader aliases are not reconstructed.
 
    - A PIN: the string literal [OCANNL_CC_BACKEND_FP_CONTRACT] whose next string literal is [off]
    (the [Unix.putenv] the pinned tests do at module initialization). A pin made elsewhere -- a dune
@@ -120,9 +126,24 @@ let parse_marker text =
           else Ok (kind, reason))
 
 (* Dependency summaries are lexical, not a file-wide search for a familiar helper name. *)
-type evidence = { comparator : bool; compared : bool; output : bool; bits : bool; claim : bool }
+type evidence = {
+  comparator : bool;
+  compared : bool;
+  output : bool;
+  bits : bool;
+  claim : bool;
+  helpers : int list;
+}
 
-let unknown = { comparator = false; compared = false; output = false; bits = false; claim = false }
+let unknown =
+  {
+    comparator = false;
+    compared = false;
+    output = false;
+    bits = false;
+    claim = false;
+    helpers = [];
+  }
 
 let union a b =
   {
@@ -131,6 +152,7 @@ let union a b =
     output = a.output || b.output;
     bits = a.bits || b.bits;
     claim = false;
+    helpers = List.dedup_and_sort (a.helpers @ b.helpers) ~compare:Int.compare;
   }
 
 (* The export set is read from Verdict itself; argument positions come from the existing population
@@ -152,9 +174,59 @@ let load_claim_slots content =
       | None when List.mem Verdict_scan.leg_slotless_members name ~equal:String.equal -> slots
       | None -> failwith ("Verdict.Claims member has no argument model: " ^ name))
 
+(* One mapping per family, shared by both modules. Integers select positional collections; None is
+   an iterator index rather than an element. Unknown paths receive no mapping. *)
+let callback_slots path =
+  List.find_map [ "List."; "Array." ] ~f:(fun prefix ->
+      Option.bind (String.chop_prefix path ~prefix) ~f:(fun name ->
+          List.Assoc.find
+            [
+              ("iter", [ Some 0 ]);
+              ("map", [ Some 0 ]);
+              ("iteri", [ None; Some 0 ]);
+              ("mapi", [ None; Some 0 ]);
+              ("for_all", [ Some 0 ]);
+              ("for_alli", [ None; Some 0 ]);
+              ("iter2", [ Some 0; Some 1 ]);
+              ("iter2_exn", [ Some 0; Some 1 ]);
+              ("map2", [ Some 0; Some 1 ]);
+              ("map2_exn", [ Some 0; Some 1 ]);
+            ]
+            name ~equal:String.equal))
+
 let code_claim_lines content =
+  let ast = Parse.implementation (Lexing.from_string content) in
+  let functions = Hashtbl.create (module Int) in
+  let parameters = Hashtbl.create (module Int) in
+  let changed = ref false in
   let lines = ref [] in
-  let walker =
+  let grow pattern summary =
+    let key = pattern.ppat_loc.loc_start.pos_cnum in
+    let old = Option.value (Hashtbl.find parameters key) ~default:unknown in
+    let next = union old summary in
+    if not (Poly.equal old next) then (
+      changed := true;
+      Hashtbl.set parameters ~key ~data:next)
+  in
+  let collector =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression e =
+        (match e.pexp_desc with
+        | Pexp_function (params, _, _) ->
+            Hashtbl.set functions ~key:e.pexp_loc.loc_start.pos_cnum
+              ~data:
+                (List.filter_map params ~f:(fun p ->
+                     match p.pparam_desc with
+                     | Pparam_val (label, _, pat) -> Some (label, pat)
+                     | Pparam_newtype _ -> None))
+        | _ -> ());
+        super#expression e
+    end
+  in
+  collector#structure ast;
+  let walker () =
     object (self)
       inherit [evidence, string] Scope.scoped as super
       val mutable evidence = unknown
@@ -169,6 +241,16 @@ let code_claim_lines content =
              ~f:
                (List.find_map ~f:(fun (scope, node, summary) ->
                     if phys_equal scope env && phys_equal node e then Some summary else None))
+
+      method! bind_parameter env _ pattern =
+        let summary =
+          Option.value
+            (Hashtbl.find parameters pattern.ppat_loc.loc_start.pos_cnum)
+            ~default:unknown
+        in
+        self#forget
+          (Scope.bind_values env (Scope.pattern_vars [ pattern ]) summary)
+          (Scope.pattern_unpacks [ pattern ])
 
       method local = unknown
       method! shadowed = Some "?"
@@ -229,6 +311,36 @@ let code_claim_lines content =
               List.filter_map args ~f:(function Nolabel, arg -> Some arg | _ -> None)
             in
             let fn_summary = self#summary env fn in
+            List.iter fn_summary.helpers ~f:(fun key ->
+                Option.iter (Hashtbl.find functions key) ~f:(fun params ->
+                    let remaining = ref args in
+                    List.iter params ~f:(fun (label, pattern) ->
+                        let matching, rest =
+                          List.partition_tf !remaining ~f:(fun (actual, _) ->
+                              match (label, actual) with
+                              | (Labelled a | Optional a), (Labelled b | Optional b) ->
+                                  String.equal a b
+                              | Nolabel, Nolabel -> true
+                              | _ -> false)
+                        in
+                        match matching with
+                        | (_, arg) :: later ->
+                            remaining := later @ rest;
+                            grow pattern (self#summary env arg)
+                        | [] -> ())));
+            Option.iter (callback_slots path) ~f:(fun slots ->
+                List.iter args ~f:(function
+                  | Labelled "f", callback ->
+                      Option.iter (Hashtbl.find functions callback.pexp_loc.loc_start.pos_cnum)
+                        ~f:(fun params ->
+                          List.iteri params ~f:(fun i (_, pattern) ->
+                              Option.iter
+                                (List.nth slots i |> Option.join)
+                                ~f:(fun slot ->
+                                  Option.iter (List.nth positional slot) ~f:(fun arg ->
+                                      grow pattern (self#summary env arg)))))
+                  | _ -> ()));
+
             let is_bits =
               List.mem [ "Int64.bits_of_float"; "Int32.bits_of_float" ] path ~equal:String.equal
               && List.length positional = 1
@@ -242,7 +354,21 @@ let code_claim_lines content =
               List.mem [ "Array.equal"; "List.equal" ] path ~equal:String.equal
               && match values with v :: _ -> v.comparator | [] -> false
             in
-            let applied = fn_summary.comparator && List.length positional >= 2 in
+            let callback_compared =
+              Option.is_some (callback_slots path)
+              && List.exists args ~f:(function
+                | Labelled "f", callback -> (self#summary env callback).comparator
+                | _ -> false)
+            in
+            let applied =
+              fn_summary.comparator
+              &&
+              if List.is_empty fn_summary.helpers then List.length positional >= 2
+              else
+                List.exists fn_summary.helpers ~f:(fun key ->
+                    Option.value_map (Hashtbl.find functions key) ~default:false ~f:(fun params ->
+                        List.length args >= List.length params))
+            in
             evidence <-
               union evidence
                 {
@@ -259,7 +385,9 @@ let code_claim_lines content =
                     (collection_equality && List.length positional < 3)
                     || (fn_summary.comparator && not applied);
                   compared =
-                    bit_equality || (collection_equality && List.length positional >= 3) || applied;
+                    callback_compared || bit_equality
+                    || (collection_equality && List.length positional >= 3)
+                    || applied;
                 };
             let slot =
               match fn.pexp_desc with
@@ -306,7 +434,16 @@ let code_claim_lines content =
             let body = evidence in
             evidence <-
               union saved
-                { body with comparator = body.comparator || body.compared; compared = false };
+                {
+                  body with
+                  comparator = body.comparator || body.compared;
+                  compared = false;
+                  helpers = [ e.pexp_loc.loc_start.pos_cnum ];
+                };
+            result
+        | Pexp_apply _ ->
+            let result = super#expression env e in
+            evidence <- { evidence with helpers = [] };
             result
         | _ -> super#expression env e
 
@@ -321,9 +458,14 @@ let code_claim_lines content =
         | _ -> env
     end
   in
-  let ast = Parse.implementation (Lexing.from_string content) in
-  ignore
-    (walker#structure { Scope.frames = []; modules = Map.empty (module String) } ast : structure);
+  let rec pass () =
+    changed := false;
+    ignore
+      ((walker ())#structure { Scope.frames = []; modules = Map.empty (module String) } ast
+        : structure);
+    if !changed then pass ()
+  in
+  pass ();
   List.dedup_and_sort !lines ~compare:Int.compare
 
 let read content =

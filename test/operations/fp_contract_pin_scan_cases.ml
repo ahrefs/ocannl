@@ -162,4 +162,121 @@ let got = List.hd (Ll_test.execute ~name:"probe" () ~seed:[] ~read:[tensor])
 let () = p "equal" (eq got.(0) 1.)
 |ocaml}
     );
+    ( "helper tuple and labelled argument",
+      true,
+      {ocaml|
+open Verdict.Claims
+let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let report ~label (got, expected) = p label (eq got.(0) expected)
+let () = report ~label:"equal" (Context.get_values ctx tensor, 1.)
+|ocaml}
+    );
+    ( "helper call sites union to a fixpoint",
+      true,
+      {ocaml|
+open Verdict.Claims
+let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let report got = p "equal" (eq got 1.)
+let middle x = report x
+let () = report 1.; middle (Context.get_values ctx tensor).(0)
+|ocaml}
+    );
+    ( "recursive helper argument",
+      true,
+      {ocaml|
+open Verdict.Claims
+let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let rec report n got = if n = 0 then p "equal" (eq got 1.) else report (n - 1) got
+let () = report 2 (Context.get_values ctx tensor).(0)
+|ocaml}
+    );
+    ( "helper parameter rebound to host value",
+      false,
+      {ocaml|
+open Verdict.Claims
+let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let report got = let got = 1. in p "equal" (eq got 1.)
+let () = report (Context.get_values ctx tensor).(0)
+|ocaml}
+    );
+    ( "helper callee shadowed",
+      false,
+      {ocaml|
+open Verdict.Claims
+let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let report got = p "equal" (eq got 1.)
+let () = let report _ = () in report (Context.get_values ctx tensor).(0)
+|ocaml}
+    );
+    ( "uncalled escaping helper stays unknown",
+      false,
+      {ocaml|
+open Verdict.Claims
+let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let report got = p "equal" (eq got 1.)
+let escaped = report
+|ocaml}
+    );
+    ( "iter2 tuple callback",
+      true,
+      {ocaml|
+open Verdict.Claims
+let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let got = [Context.get_values ctx tensor]
+let () = List.iter2_exn [()] (List.zip_exn got got) ~f:(fun _ (joint, split) -> p "equal" (Array.equal eq joint split))
+|ocaml}
+    );
+    ( "callback parameter shadows an output",
+      false,
+      {ocaml|
+open Verdict.Claims
+let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let got = Context.get_values ctx tensor
+let () = List.iter [1.] ~f:(fun got -> p "equal" (eq got 1.))
+|ocaml}
+    );
+    ( "callback parameter rebound to host",
+      false,
+      {ocaml|
+open Verdict.Claims
+let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let () = List.iter [Context.get_values ctx tensor] ~f:(fun got -> let got = [|1.|] in p "equal" (Array.equal eq got [|1.|]))
+|ocaml}
+    );
+    ( "callback module shadowed",
+      false,
+      {ocaml|
+open Verdict.Claims
+let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+module List = struct let iter _ ~f = f 1. end
+let () = List.iter [Context.get_values ctx tensor] ~f:(fun got -> p "equal" (eq got 1.))
+|ocaml}
+    );
+    ( "map callback tuple",
+      true,
+      {ocaml|
+open Verdict.Claims
+let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let () = ignore (List.map [Context.get_values ctx tensor, 1.] ~f:(fun (got, want) -> p "equal" (eq got.(0) want)))
+|ocaml}
+    );
+    ( "iteri index is not an element",
+      false,
+      {ocaml|
+open Verdict.Claims
+let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let () = Array.iteri [|Context.get_values ctx tensor|] ~f:(fun i _ -> p "equal" (eq (float_of_int i) 1.))
+|ocaml}
+    );
+    ( "unary helper inside quantified callback",
+      true,
+      {ocaml|
+open Verdict.Claims
+let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let report got =
+  let ok i = eq got.(i) 1. in
+  p "equal" (List.for_alli [()] ~f:(fun i _ -> ok i))
+let () = report (Context.get_values ctx tensor)
+|ocaml}
+    );
   ]
