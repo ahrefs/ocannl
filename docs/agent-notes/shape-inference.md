@@ -194,6 +194,12 @@ files.
   middle (one ran ahead of `contraction_pointwise_closing`'s balanced-flank search; requiring a
   closed tail instead left a draw under an unbatched `c[|16]` repeating). Giving literals no axes is not a
   shortcut: it moved 27 test actions, a transformer's logits closing `2x3x1` among them.
+  A mixed variable/concrete GLB join (gh-ocannl-2224) keeps the concrete axis and holds the
+  displaced variable's bound: the incoming inequality or the old GLB, by orientation. Keeping the
+  variable alone made `(u *. c[3]) + reduce (u + 1)` draw once for three cells. The late-tail
+  fixture in `row_glb_reach_executed` holds a packed draw's GLB tail open through stage 6a, then
+  closes it at stage 6b: `eliminate_row_constraint` rereads it and retains its three cells, so a
+  closed tail cannot strand that draw on the minimal path merely by missing the stage-6a arm.
   A solved row passes its role on too (gh-ocannl-2247): when `unify_row` commits `v := value` for a
   marked `v`, the dimension variables of `subst_row env value` take the mark. A draw read through an
   einsum spec (`u ++ "ab => ba"`) is solved to the spec's axes, minted for the result; unmarked,

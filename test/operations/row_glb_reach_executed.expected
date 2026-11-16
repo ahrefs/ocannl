@@ -152,3 +152,18 @@ nested log, reshape, leaf first
   draw = 16, 16 distinct values for 16 cells
 nested log, reshape, leaf first: every draw closes to 16: true
 nested log, reshape, leaf first: every draw fills its use site: true
+(u *. c[|3]) + reduce (u + 1), mixed separate bounds
+  draw = 3, 3 distinct values for 3 cells
+(u *. c[|3]) + reduce (u + 1), mixed separate bounds: every draw closes to 3: true
+(u *. c[|3]) + reduce (u + 1), mixed separate bounds: every draw fills its use site: true
+reduce (u + 1) + (u *. c[|3]), mixed separate bounds reversed
+  draw = 3, 3 distinct values for 3 cells
+reduce (u + 1) + (u *. c[|3]), mixed separate bounds reversed: every draw closes to 3: true
+reduce (u + 1) + (u *. c[|3]), mixed separate bounds reversed: every draw fills its use site: true
+late-tail fixture: the packed draw is open after Stage6a: true
+late-tail fixture: the closed GLB is retained: true
+late-tail fixture: three cells use one counter block: true
+packed draw with a GLB tail closed at Stage6b
+  draw = 3, 3 distinct values for 3 cells
+packed draw with a GLB tail closed at Stage6b: every draw closes to 3: true
+packed draw with a GLB tail closed at Stage6b: every draw fills its use site: true

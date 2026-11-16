@@ -291,3 +291,95 @@ let () =
                   in
                   let%op y = x *. noise in
                   (used, y, y)))))
+
+(* gh-ocannl-2224: reducing the second consumer keeps its axis separate from the concrete bound.
+   Without that reduction the final pointwise result sizes both consumers alike. *)
+let () =
+  draws "(u *. c[|3]) + reduce (u + 1), mixed separate bounds" ~want:"3" ~fills:(Some true)
+    (fun () ->
+      let u = TDSL.uniform () () in
+      let c = const [ 3 ] in
+      let%op r = plus1 u ++ "a => 0" in
+      let%op y = (u *. c) + r in
+      ([ u ], y, y));
+  draws "reduce (u + 1) + (u *. c[|3]), mixed separate bounds reversed" ~want:"3" ~fills:(Some true)
+    (fun () ->
+      let u = TDSL.uniform () () in
+      let c = const [ 3 ] in
+      let%op r = plus1 u ++ "a => 0" in
+      let%op y = r + (u *. c) in
+      ([ u ], y, y))
+
+(* gh-ocannl-2224: the late-tail boundary is staged deliberately: all ordinary program constraints
+   register before closing. A packed draw's GLB has a concrete leading axis over a tail held open
+   through Stage6a; supply the tail equation at Stage6b. This exercises the fallback's GLB read,
+   rather than the Stage6a role arm. Execute a packed draw at the resulting extent too. *)
+module Row = Ocannl.Row
+
+let late_tail_dims () =
+  let prov = Row.provenance ~sh_id:2224 ~kind:`Output in
+  let fresh () = Row.get_row_for_var prov (Row.get_row_var ()) in
+  let draw = fresh () and tail = fresh () in
+  let v = match draw.bcast with Row_var v -> v | Broadcastable -> assert false in
+  Row.add_resolve_at_use v;
+  let glb = { tail with beg_dims = [ Row.get_default_dim ~d:3 () ] } in
+  let counter = Row.get_var () in
+  let origin = [] in
+  let constraints =
+    [
+      Row.Shape_row (draw, origin);
+      Row.Row_ineq { res = glb; opnd = draw; origin };
+      Row.Rows_constr
+        {
+          r = [ draw ];
+          constr =
+            Total_elems
+              {
+                numerator =
+                  Strided_var
+                    {
+                      coeff = Utils.safe_lazy "late-tail block" (fun () -> 4);
+                      var = counter;
+                      denom = 1;
+                      round_up = true;
+                    };
+                divided_by = [];
+                keep_axis = false;
+              };
+          origin;
+        };
+    ]
+  in
+  let pending, env =
+    List.fold [ Row.Stage1; Stage2; Stage3; Stage4; Stage5; Stage6a ]
+      ~init:(constraints, Row.empty_env) ~f:(fun (cs, env) stage ->
+        Row.solve_inequalities ~stage cs env)
+  in
+  p "late-tail fixture: the packed draw is open after Stage6a"
+    (match (Row.subst_row env draw).bcast with Row_var _ -> true | Broadcastable -> false);
+  let empty = { tail with bcast = Broadcastable } in
+  let pending, env =
+    Row.solve_inequalities ~stage:Stage6b
+      (Row.Row_eq { r1 = tail; r2 = empty; origin } :: pending)
+      env
+  in
+  let pending, env = Row.solve_inequalities ~stage:Stage7 pending env in
+  Shape.refuse_unsolved ~where:"late packed draw tail" pending;
+  let solved = Row.subst_row env draw in
+  p "late-tail fixture: the closed GLB is retained"
+    (Row.is_broadcastable solved.bcast
+    && List.equal Int.equal
+         (List.map (solved.beg_dims @ solved.dims) ~f:(function Row.Dim { d; _ } -> d | _ -> 0))
+         [ 3 ]);
+  p "late-tail fixture: three cells use one counter block"
+    (Option.equal Int.equal (Row.get_dim_val env counter) (Some 1));
+  List.map (solved.beg_dims @ solved.dims) ~f:(fun d ->
+      match d with Row.Dim { d; _ } -> d | _ -> failwith "late-tail dimension unresolved")
+
+let () =
+  draws "packed draw with a GLB tail closed at Stage6b" ~want:"3" ~fills:(Some true) (fun () ->
+      let dims = late_tail_dims () in
+      let u = TDSL.uniform () ~output_dims:dims () in
+      let c = const [ 3 ] in
+      let%op y = u *. c in
+      ([ u ], y, y))
