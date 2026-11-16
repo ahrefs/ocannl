@@ -14,13 +14,17 @@
    fp16 mode is read from its payload text ([Utils.profile_payloads]) through
    [Numerics.fp16_mode_of_string], the parse [Numerics.default] applies to the setting.
 
-   Claims, per built-in profile: - HIP: the uniform-f16 storage triple's accumulator is f32 and f16
+   Claims, per built-in profile. On HIP, the uniform-f16 storage triple's accumulator is f32 and f16
    reduction accumulators reside in f32 (the floor reaches the serial loop too, so width stays
-   schedule-uniform); - CUDA, Metal and the CPU backends: the profile's tables equal the tables
+   schedule-uniform). On CUDA, Metal and the CPU backends, the profile's tables equal the tables
    under the setting the profile resolved to before the floor -- [true] for [performance] and
    [approximate], [auto] for [reproducible] -- a judgment list, stated per profile below, that a new
-   profile must join. And once: HIP under an explicit [fp16_arithmetic=true] keeps the f16
-   accumulator.
+   profile must join. On HIP and CUDA, the seeding gate
+   [Backend_intf.advertises_mma_format_in_scope] on a descriptor with no wide-accumulator scope
+   admits the uniform-f16 triple exactly where the backend's own arm accumulates at f16, so the
+   descriptor's [mma_f16_narrow_floored] and the arm table cannot drift apart. And once, under an
+   explicit [fp16_arithmetic=true]: HIP keeps its f16 accumulator, and the seeding gate agrees there
+   too.
 
    The live claims check this process's own resolution: the policy's fp16 mode is the parse of the
    configured value, which comes from the profile the run expects ([--expect-profile=NAME], absent
@@ -84,10 +88,44 @@ let hip_narrow () =
     | None -> false)
   && not (Ir.Hip_mma.fp16_accum_wide ())
 
-let payload_mode text =
-  Utils.parse_config_lines ~source:"profile" (String.split_lines text)
-  |> (fun kvs -> List.Assoc.find kvs ~equal:String.equal "fp16_arithmetic")
-  |> Option.value ~default:"auto" |> N.fp16_mode_of_string
+let payload_mode name =
+  Option.value_exn
+    ~message:("the built-in profile " ^ name ^ " states no fp16_arithmetic")
+    (N.fp16_mode_of_profile name)
+
+(* The seeding gate ([Backend_intf.advertises_mma_format_in_scope], reading the descriptor's
+   [mma_f16_auto_wide] and [mma_f16_narrow_floored]) against the arm table, on a descriptor with its
+   wide-accumulator scopes removed: there it must admit the uniform-f16 triple exactly where the arm
+   accumulates at f16, in each scope, on HIP and on CUDA (sm_120: every arm's floor met). *)
+let f16t = BI.Mma_f16
+
+let seeding_rows () =
+  let policy = N.get () in
+  let no_wide (mma : BI.mma_capability) =
+    { BI.no_hardware_limits with mma = Some { mma with BI.mma_f16_wide_acc_scopes = [] } }
+  in
+  let hip_arm_narrow ~scope:_ =
+    match Ir.Hip_mma.mma_accumulator ~a_prec:Ops.half ~b_prec:Ops.half ~d_prec:Ops.half with
+    | Some (acc, _, _) -> Some (Ops.equal_prec acc Ops.half)
+    | None -> None
+  in
+  let cuda_arm_narrow ~scope =
+    Option.map (Ir.Cuda_mma.mma_arm ~a_prec:Ops.half ~b_prec:Ops.half ~d_prec:Ops.half ~scope)
+      ~f:(fun arm -> Ops.equal_prec arm.BI.arm_accumulator Ops.half)
+  in
+  let cases =
+    [
+      (no_wide Ir.Hip_mma.capability, hip_arm_narrow);
+      (no_wide (Option.value_exn (Ir.Cuda_mma.capability ~cc:120)), cuda_arm_narrow);
+    ]
+  in
+  List.concat_map cases ~f:(fun (limits, arm_narrow) ->
+      List.map scopes ~f:(fun scope ->
+          match arm_narrow ~scope with
+          | None -> false
+          | Some narrow ->
+              Bool.equal narrow
+                (BI.advertises_mma_format_in_scope limits ~policy ~scope ~a:f16t ~b:f16t ~d:f16t)))
 
 (* The judgment list: the setting each built-in profile's f16 request resolved as on the
    non-flooring backends before gh-ocannl-2233. *)
@@ -96,10 +134,16 @@ let resolved_before = [ ("reproducible", "auto"); ("performance", "true"); ("app
 let () =
   p_all "every built-in profile has a stated pre-floor resolution" Utils.profile_payloads
     ~f:(fun (name, _) -> List.Assoc.mem resolved_before name ~equal:String.equal);
-  List.iter Utils.profile_payloads ~f:(fun (name, text) ->
-      let mode = payload_mode text in
+  List.iter Utils.profile_payloads ~f:(fun (name, _) ->
+      let mode = payload_mode name in
       pf "%s: HIP's uniform-f16 arm accumulates in f32, and so do its f16 serial accumulators" name
         (with_mode mode hip_wide);
+      p_all
+        (Printf.sprintf
+           "%s: with no wide-accumulator scope, HIP's and CUDA's seeding judgment admits the \
+            uniform-f16 triple exactly where the arm accumulates at f16, in both scopes"
+           name)
+        (with_mode mode seeding_rows) ~f:Fn.id;
       match List.Assoc.find resolved_before name ~equal:String.equal with
       | None -> ()
       | Some before ->
@@ -112,7 +156,12 @@ let () =
   p
     "explicit fp16_arithmetic=true: HIP keeps its f16-accumulate arm and storage-width serial \
      accumulators"
-    (with_mode (N.fp16_mode_of_string "true") hip_narrow)
+    (with_mode (N.fp16_mode_of_string "true") hip_narrow);
+  p_all
+    "explicit fp16_arithmetic=true: the seeding judgment agrees with HIP's and CUDA's arm tables \
+     there too"
+    (with_mode (N.fp16_mode_of_string "true") seeding_rows)
+    ~f:Fn.id
 
 (* The live resolution of this process. *)
 let expected_profile =

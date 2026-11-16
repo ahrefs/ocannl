@@ -10,5 +10,6 @@ across policies, the codegen identity moves exactly when the backend's resolutio
 some policy pair resolves apart on this backend: true
 some distinct policy pair resolves alike on this backend: true
 on a GPU backend, Fp16_auto keys with Fp16_wide and apart from Fp16_narrow exactly where the backend resolves it wide (CUDA, HIP), and the other way round elsewhere (Metal): true
+Fp16_prefer_narrow keys with Fp16_narrow on every backend but HIP, and with Fp16_auto, apart from Fp16_narrow, on HIP: true
 every uniform-storage arm accumulates at the backend's accum_prec: true
 the codegen identity is stable within one policy: true

@@ -56,6 +56,11 @@ val fp16_resolve : narrow_floored:bool -> fp16_mode -> fp16_mode
     [narrow_floored]: {!Fp16_prefer_narrow} becomes {!Fp16_auto} there and {!Fp16_narrow} elsewhere;
     every other mode is itself (gh-ocannl-2233). *)
 
+val fp16_mode_of_profile : string -> fp16_mode option
+(** The fp16 mode the built-in profile [name]'s payload states, through {!fp16_mode_of_string};
+    [None] when the payload leaves [fp16_arithmetic] unset. Raises [Invalid_argument] on a name no
+    built-in profile has. *)
+
 (** The bf16 accumulator mode (gh-ocannl-838), the same three-way shape as {!fp16_mode} so the
     policy surface stays one shape for both 16-bit float formats.
 

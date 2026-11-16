@@ -1,17 +1,21 @@
 every built-in profile has a stated pre-floor resolution: true
 reproducible: HIP's uniform-f16 arm accumulates in f32, and so do its f16 serial accumulators: true
+reproducible: with no wide-accumulator scope, HIP's and CUDA's seeding judgment admits the uniform-f16 triple exactly where the arm accumulates at f16, in both scopes: true
 reproducible: CUDA's tables equal those under fp16_arithmetic=auto, both populated: true
 reproducible: Metal's tables equal those under fp16_arithmetic=auto, both populated: true
 reproducible: cc's tables equal those under fp16_arithmetic=auto, both populated: true
 performance: HIP's uniform-f16 arm accumulates in f32, and so do its f16 serial accumulators: true
+performance: with no wide-accumulator scope, HIP's and CUDA's seeding judgment admits the uniform-f16 triple exactly where the arm accumulates at f16, in both scopes: true
 performance: CUDA's tables equal those under fp16_arithmetic=true, both populated: true
 performance: Metal's tables equal those under fp16_arithmetic=true, both populated: true
 performance: cc's tables equal those under fp16_arithmetic=true, both populated: true
 approximate: HIP's uniform-f16 arm accumulates in f32, and so do its f16 serial accumulators: true
+approximate: with no wide-accumulator scope, HIP's and CUDA's seeding judgment admits the uniform-f16 triple exactly where the arm accumulates at f16, in both scopes: true
 approximate: CUDA's tables equal those under fp16_arithmetic=true, both populated: true
 approximate: Metal's tables equal those under fp16_arithmetic=true, both populated: true
 approximate: cc's tables equal those under fp16_arithmetic=true, both populated: true
 explicit fp16_arithmetic=true: HIP keeps its f16-accumulate arm and storage-width serial accumulators: true
+explicit fp16_arithmetic=true: the seeding judgment agrees with HIP's and CUDA's arm tables there too: true
 live: the policy's fp16 mode is the parse of the configured value: true
 live: fp16_arithmetic comes from the profile the run expects (none: from no profile): true
 live: HIP's uniform-f16 arm is narrow only under an explicit fp16_arithmetic=true: true

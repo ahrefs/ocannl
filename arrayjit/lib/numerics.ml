@@ -70,6 +70,20 @@ let fp16_resolve ~narrow_floored = function
   | Fp16_prefer_narrow -> if narrow_floored then Fp16_auto else Fp16_narrow
   | (Fp16_auto | Fp16_narrow | Fp16_wide) as mode -> mode
 
+(** The fp16 mode the built-in profile [name]'s payload states ([Utils.profile_payloads]), through
+    {!fp16_mode_of_string}; [None] when the payload leaves [fp16_arithmetic] unset. Raises
+    [Invalid_argument] on a name no built-in profile has. *)
+let fp16_mode_of_profile name =
+  match List.Assoc.find Utils.profile_payloads name ~equal:String.equal with
+  | None -> invalid_arg ("Numerics.fp16_mode_of_profile: no built-in profile " ^ name)
+  | Some text ->
+      let payload =
+        Utils.parse_config_lines ~source:("the built-in profile " ^ name) (String.split_lines text)
+      in
+      Option.map
+        (List.Assoc.find payload ~equal:String.equal "fp16_arithmetic")
+        ~f:fp16_mode_of_string
+
 (** The bf16 accumulator mode (gh-ocannl-838), the same three-way shape as {!fp16_mode} so the
     policy surface stays one shape for both 16-bit float formats.
 
@@ -210,13 +224,13 @@ let set_policy p = policy := Some p
     [auto_wide] under {!Fp16_auto} (gh-ocannl-2195), and {!Fp16_prefer_narrow} as {!fp16_resolve}
     maps it (gh-ocannl-2233). The pure form, for callers judging an explicit policy
     ([Backend_intf.advertises_mma_format_in_scope]). *)
-let fp16_mode_accum_wide ~auto_wide ~narrow_floored mode =
+let rec fp16_mode_accum_wide ~auto_wide ~narrow_floored mode =
   match mode with
   | Fp16_wide -> true
   | Fp16_auto -> auto_wide
   | Fp16_narrow -> false
-  (* [fp16_resolve]'s two images: this backend's [Fp16_auto] when floored, else [Fp16_narrow]. *)
-  | Fp16_prefer_narrow -> narrow_floored && auto_wide
+  | Fp16_prefer_narrow as m ->
+      fp16_mode_accum_wide ~auto_wide ~narrow_floored (fp16_resolve ~narrow_floored m)
 
 (** {!fp16_mode_accum_wide} under the current policy. Consulted by every backend's [accum_prec] and
     mma arm table, each passing its own [fp16_auto_wide] constant, and by the mma accumulator-scope
@@ -249,7 +263,7 @@ let cpu_compute_prec ~native_fp16_arithmetic (prec : Ops.prec) : Ops.prec =
   | Ops.Half_prec _
     when (match fp16_resolve ~narrow_floored:false (get ()).fp16_arithmetic with
            | Fp16_narrow -> true
-           | Fp16_auto | Fp16_wide | Fp16_prefer_narrow -> false)
+           | _ -> false)
          && native_fp16_arithmetic ->
       prec
   | _ when Ops.is_narrow_float prec && (get ()).narrow_compute_f32 -> Ops.single

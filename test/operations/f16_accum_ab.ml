@@ -29,12 +29,12 @@
    it is about. And no run produces a non-finite cell.
 
    gh-ocannl-2233 adds the built-in profiles' f16 request, [performance] and [approximate], each run
-   under the policy its payload's [fp16_arithmetic] parses to ([Numerics.fp16_mode_of_string] over
-   [Utils.profile_payloads]: [prefer_narrow]). HIP floors it to its wide auto, so on HIP the profile
-   runs are bitwise the default's and within the same wide bound, and at the long reductions the
-   explicit narrow tile's error is at least twice theirs: the profiles no longer reach gfx11's
-   f16-accumulate WMMA, while an explicit [fp16_arithmetic=true] (the [narrow] rows) still does. On
-   CUDA the profiles keep the narrow side, so their runs are bitwise the explicit narrow ones.
+   under the policy its payload's [fp16_arithmetic] parses to ([Numerics.fp16_mode_of_profile]:
+   [prefer_narrow]). HIP floors it to its wide auto, so on HIP the profile runs are bitwise the
+   default's and within the same wide bound, and at the long reductions the explicit narrow tile's
+   error is at least twice theirs: the profiles no longer reach gfx11's f16-accumulate WMMA, while
+   an explicit [fp16_arithmetic=true] (the [narrow] rows) still does. On CUDA the profiles keep the
+   narrow side, so their runs are bitwise the explicit narrow ones.
 
    The leg runs only where the backend resolves [Fp16_auto] wide and advertises the uniform-f16 tile
    (CUDA, HIP); elsewhere every claim skips. The profile claims split by backend into a HIP leg and
@@ -189,10 +189,9 @@ let f16_ulp x =
 (* The profiles' f16 request, read from their payload text as [Numerics.default] reads the
    setting. *)
 let profile_mode name =
-  Utils.parse_config_lines ~source:name
-    (String.split_lines (List.Assoc.find_exn Utils.profile_payloads name ~equal:String.equal))
-  |> (fun kvs -> List.Assoc.find kvs ~equal:String.equal "fp16_arithmetic")
-  |> Option.value ~default:"auto" |> Numerics.fp16_mode_of_string
+  Option.value_exn
+    ~message:("the built-in profile " ^ name ^ " states no fp16_arithmetic")
+    (Numerics.fp16_mode_of_profile name)
 
 let profiles = [ "performance"; "approximate" ]
 
