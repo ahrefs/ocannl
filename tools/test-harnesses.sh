@@ -209,6 +209,7 @@ shell tools/test-ci-times.sh
 shell tools/test-ci-durations.sh
 shell tools/test-ci-shard.sh
 shell tools/test-action-durations.sh
+shell test/operations/apt_fallback.sh
 shell test/operations/ci_matrix.sh
 shell tools/test-machine-verify.sh
 shell tools/test-merge-build-check.sh
