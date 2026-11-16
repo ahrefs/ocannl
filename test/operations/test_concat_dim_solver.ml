@@ -298,7 +298,87 @@ let test_concrete_concat () =
      meets a solved size, so a claim-free [2^3] taking [rgb 5] could later take [hsv 5] too, merging
      the two silently. gh-ocannl-2095 is the sound alternative (integer components as slices of the
      partner's basis). *)
-  refuses "a plain 2^3 against a named 5" [ eq c23 (dim ~basis:"rgb" 5) ] ~needle:"different bases"
+  refuses "a plain 2^3 against a named 5" [ eq c23 (dim ~basis:"rgb" 5) ] ~needle:"different bases";
+  refuses "a named 1^3 against a plain 4"
+    [ eq (Row.Concat [ dim ~basis:"rgb" 1; dim ~basis:"rgb" 3 ]) (dim 4) ]
+    ~needle:"different bases"
+
+(* gh-ocannl-2191: a component's basis is decided as the fully solved axis is checked, so each
+   system below gets one verdict whichever of its equations is solved first. *)
+let test_tagged_components_any_order () =
+  Stdio.printf "Tagged components: one verdict in either order\n";
+  let solve_in_turn cs =
+    List.fold cs
+      ~init:(`Ok ([], Row.empty_env))
+      ~f:(fun acc c ->
+        match acc with
+        | `Ok (deferred, env) -> run_solve_env ~stage:Stage4 (deferred @ [ c ]) env
+        | other -> other)
+  in
+  let value env v =
+    match Row.get_dim_from_env env v with
+    | Some (Row.Dim { d; basis; _ }) -> Printf.sprintf "%d of %s" d basis
+    | _ -> "unsized"
+  in
+  let in_both_orders name (mk : unit -> Row.dim_var * Row.constraint_ * Row.constraint_) ~want =
+    let verdict first =
+      let u, c1, c2 = mk () in
+      match solve_in_turn (if first then [ c1; c2 ] else [ c2; c1 ]) with
+      | `Ok (_, env) -> "u = " ^ value env u
+      | `Shape _ -> "refused"
+      | `Other e -> "regression: " ^ e
+    in
+    let v1 = verdict true and v2 = verdict false in
+    if String.equal v1 want && String.equal v2 want then
+      Stdio.printf "  PASS: %s: %s in either order\n" name want
+    else fail "%s: %s, then %s, want %s" name v1 v2 want
+  in
+  let rgb = "rgb" in
+  let concat_of a u = Row.Concat [ Row.Var a; Row.Var u ] in
+  in_both_orders "[a; u] = 4, a = 1 rgb: a claim against a plain size"
+    (fun () ->
+      let a = Row.get_var () and u = Row.get_var () in
+      (u, eq (concat_of a u) (dim 4), eq (Row.Var a) (dim ~basis:rgb 1)))
+    ~want:"refused";
+  in_both_orders "4 = [a; u], a = 1 rgb: the other orientation"
+    (fun () ->
+      let a = Row.get_var () and u = Row.get_var () in
+      (u, eq (dim 4) (concat_of a u), eq (Row.Var a) (dim ~basis:rgb 1)))
+    ~want:"refused";
+  in_both_orders "[a; u] = 4 rgb, a = 1 rgb"
+    (fun () ->
+      let a = Row.get_var () and u = Row.get_var () in
+      (u, eq (concat_of a u) (dim ~basis:rgb 4), eq (Row.Var a) (dim ~basis:rgb 1)))
+    ~want:"u = 3 of rgb";
+  in_both_orders "[a; u] = 4, a = 3 bcast_if_1: an atom above size 1"
+    (fun () ->
+      let a = Row.get_var () and u = Row.get_var () in
+      (u, eq (concat_of a u) (dim 4), eq (Row.Var a) (dim ~basis:Row.bcast_if_1 3)))
+    ~want:"refused";
+  in_both_orders "[a; u] = 4, a = 1 bcast_if_1: the claim-free top"
+    (fun () ->
+      let a = Row.get_var () and u = Row.get_var () in
+      (u, eq (concat_of a u) (dim 4), eq (Row.Var a) (dim ~basis:Row.bcast_if_1 1)))
+    ~want:"u = 3 of default";
+  in_both_orders "[a; u] = 3 rgb, a = 0 bcast_if_1: an empty segment claims nothing"
+    (fun () ->
+      let a = Row.get_var () and u = Row.get_var () in
+      (u, eq (concat_of a u) (dim ~basis:rgb 3), eq (Row.Var a) (dim ~basis:Row.bcast_if_1 0)))
+    ~want:"u = 3 of rgb";
+  in_both_orders "[u; 2] = [k; 2 rgb], k = 3: a zero residual keeps its claim"
+    (fun () ->
+      let u = Row.get_var () and k = Row.get_var () in
+      ( u,
+        eq (Row.Concat [ Row.Var u; dim 2 ]) (Row.Concat [ Row.Var k; dim ~basis:rgb 2 ]),
+        eq (Row.Var k) (dim 3) ))
+    ~want:"u = 3 of rgb";
+  in_both_orders "[u; 2 rgb] = [k; 2 rgb], k = 3 hsv: claimed components do not cancel"
+    (fun () ->
+      let u = Row.get_var () and k = Row.get_var () in
+      ( u,
+        eq (Row.Concat [ Row.Var u; dim ~basis:rgb 2 ]) (Row.Concat [ Row.Var k; dim ~basis:rgb 2 ]),
+        eq (Row.Var k) (dim ~basis:"hsv" 3) ))
+    ~want:"refused"
 
 let () =
   Stdio.printf "=== Concat dim-solver hardening (solver-level) ===\n";
@@ -311,4 +391,5 @@ let () =
   test_nested_concat_flattened ();
   test_ac3_affine_residual_not_overconstrained ();
   test_concrete_concat ();
+  test_tagged_components_any_order ();
   Stdio.printf "=== Done ===\n"
