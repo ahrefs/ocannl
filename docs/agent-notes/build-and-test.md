@@ -1219,7 +1219,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   ungated/unknown/missing harness, each replay usage error, and each invalid ambient
   state root respectively. Query commands sharing a root validator share that root's
   reason, including its path; `query-error` is read and included in failure detail.
-  Negative controls replaced each loop's subject call with a stand-in printing an
+  One-off scratch negative controls (not retained in the harnesses) replaced each
+  loop's subject call with a stand-in printing an
   unrelated diagnostic and exiting 2: the former predicates accepted it, the revised
   predicates rejected it. These checks match literal diagnostic fragments for the
   named fixture cases, not complete usage output or arbitrary refusal messages.
