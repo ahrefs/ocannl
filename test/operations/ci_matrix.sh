@@ -437,6 +437,11 @@ def shard_build(steps):
                         'tools/ci-shard.sh targets' in workflow_script(step), 'shard')
 
 
+def shard_weighing(steps):
+    return unique_build(steps, lambda step: re.search(r'^ +(?:- )?run:', step, re.M) and
+                        'tools/ci-shard.sh weigh' in workflow_script(step), 'shard weighing')
+
+
 def package_build(steps):
     return unique_build(steps, lambda step: any(cmd[:2] == ['dune', 'build'] and '-p' in cmd
                         for cmd in dune_commands(step)), 'package')
@@ -449,14 +454,10 @@ def main_config_order(text):
             assert not configured(step), 'OCANNL configuration dune step precedes shard build'
 
 
-
 def shard_trace_order(text):
     steps = workflow_steps(text, 'run')
     build = shard_build(steps)
-    weighing = [i for i, step in enumerate(steps) if re.search(
-        r"^ +(?:- )?name: Weigh the shard's units *$", step, re.M)]
-    assert len(weighing) == 1, 'shard weighing step missing or repeated'
-    weigh, = weighing
+    weigh = shard_weighing(steps)
     assert build < weigh, 'shard weighing must follow shard build'
     commands = dune_commands(steps[build])
     targets = [i for i, command in enumerate(commands)
@@ -723,10 +724,9 @@ elif leg == 'step-order':
         mutant = source.replace(step, '', 1).replace(shard, step + shard, 1)
         rejects_order(main_config_order, mutant, 'configured step moved before shard build',
                       'configuration dune step precedes shard build')
-    weigh = steps[next(i for i, step in enumerate(steps) if
-                       re.search(r"^ +(?:- )?name: Weigh the shard's units *$", step, re.M))]
+    weigh = steps[shard_weighing(steps)]
     trace_reason = 'dune command overwrites shard trace before weighing'
-    print('PASS refusal reason:', trace_reason,
+    print('Refusal reason:', trace_reason,
           '(direct one-line commands only; script/action bodies are not inspected)')
     for step in configured_steps:
         mutant = source.replace(step, '', 1).replace(weigh, step + weigh, 1)
@@ -753,12 +753,18 @@ elif leg == 'step-order':
          'shard target build command missing or repeated'),
         ('repeated target build command', source.replace(build_line, build_line + build_line, 1),
          'shard target build command missing or repeated'),
-        ('missing weigh step', source.replace(weigh, '', 1), 'weighing step missing or repeated'),
-        ('repeated weigh step', source.replace(weigh, weigh + weigh, 1), 'weighing step missing or repeated'),
+        ('missing weigh step', source.replace(weigh, '', 1), 'shard weighing build missing or repeated'),
+        ('repeated weigh step', source.replace(weigh, weigh + weigh, 1), 'shard weighing build missing or repeated'),
+        ('repeated weigh step with another name', source.replace(weigh, weigh +
+         weigh.replace("Weigh the shard's units", 'Another weighing'), 1),
+         'shard weighing build missing or repeated'),
         ('weigh before build', source.replace(weigh, '', 1).replace(shard, weigh + shard, 1),
          'weighing must follow shard build'),
     ):
         rejects_order(shard_trace_order, mutant, label, reason)
+    shard_trace_order(source.replace("- name: Weigh the shard's units\n",
+                                    '- name: Renamed weighing\n', 1))
+    print('PASS weighing identity follows its command through a step rename')
     for harmless in ('    - run: echo dune build is done\n',
                      '    - run: echo "trace ready"\n'):
         shard_trace_order(source.replace(weigh, harmless + weigh, 1))
