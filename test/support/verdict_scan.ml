@@ -3172,6 +3172,34 @@ let gate_census content =
          pick the leg, are gates too -- and the body of a local function it applies
          (gh-ocannl-1794). With whether a constructor was only ambiguously [Verdict]'s; [Error]
          names what it could not follow: a parameter, a field, another module's value. *)
+      (* The scope a function's body runs in at one application of it: each parameter whose pattern
+         is a name bound to the argument the application (written in [env]) supplies, or to its
+         default; the others to nothing the reader follows. *)
+      method bind_applied ~definition_env env params arguments =
+        let positional = ref 0 in
+        List.fold params ~init:definition_env ~f:(fun scope param ->
+            match param.pparam_desc with
+            | Pparam_val (label, default, pattern) -> (
+                let slot =
+                  match label with
+                  | Ppxlib.Asttypes.Nolabel ->
+                      let index = !positional in
+                      Int.incr positional;
+                      Positional_slot index
+                  | Labelled label -> Labelled_slot label
+                  | Optional label ->
+                      Optional_slot (label, Option.map default ~f:(fun d -> (d, scope)))
+                in
+                let bound value value_env name =
+                  Lexical_scope.bind_values scope [ name ]
+                    { (self#local) with definition = Some (value, value_env) }
+                in
+                match (Read.pattern_name pattern, self#argument_for slot arguments) with
+                | Some name, (`Given e | `Option e) -> bound e env name
+                | Some name, `Default (d, d_env) -> bound d d_env name
+                | _ -> self#bind_patterns scope [ pattern ])
+            | Pparam_newtype _ -> scope)
+
       (* Where the parameter [identity] of a named function takes its value at the application
          [arguments]: an argument, an optional parameter's default, an option passed with [?l:], or
          nothing (an application in part). *)
@@ -3350,35 +3378,7 @@ let gate_census content =
                           }
                         when not (Set.mem seen identity) ->
                           let seen = Set.add seen identity in
-                          let positional = ref 0 in
-                          let body_env =
-                            List.fold params ~init:definition_env ~f:(fun scope param ->
-                                match param.pparam_desc with
-                                | Pparam_val (label, default, pattern) -> (
-                                    let slot =
-                                      match label with
-                                      | Ppxlib.Asttypes.Nolabel ->
-                                          let index = !positional in
-                                          Int.incr positional;
-                                          Positional_slot index
-                                      | Labelled label -> Labelled_slot label
-                                      | Optional label ->
-                                          Optional_slot
-                                            (label, Option.map default ~f:(fun d -> (d, scope)))
-                                    in
-                                    let bound value value_env name =
-                                      Lexical_scope.bind_values scope [ name ]
-                                        { (self#local) with definition = Some (value, value_env) }
-                                    in
-                                    match
-                                      (Read.pattern_name pattern, self#argument_for slot arguments)
-                                    with
-                                    | Some name, (`Given e | `Option e) -> bound e env name
-                                    | Some name, `Default (d, d_env) -> bound d d_env name
-                                    | _ -> self#bind_patterns scope [ pattern ])
-                                | Pparam_newtype _ -> scope)
-                          in
-                          go seen body_env body
+                          go seen (self#bind_applied ~definition_env env params arguments) body
                       | _ ->
                           Error
                             (Printf.sprintf
@@ -3627,9 +3627,17 @@ let gate_census content =
                     | _ -> ())
                 | _ -> ())
             | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ }, _ -> (
+                (* Its body, run where a complete application supplies every positional and required
+                   labelled parameter, each bound to what this application hands it. *)
                 match definition name with
-                | Some (identity, ({ pexp_desc = Pexp_function _; _ } as function_), scope) ->
-                    run identity scope function_
+                | Some
+                    ( identity,
+                      { pexp_desc = Pexp_function (params, _, Pfunction_body body); _ },
+                      scope )
+                  when fully_applies
+                         (function_kind ~binding:None params (Pfunction_body body))
+                         (List.map arguments ~f:fst) ->
+                    run identity (self#bind_applied ~definition_env:scope env params arguments) body
                 | _ -> ())
             | _ -> ())
 
@@ -4367,7 +4375,9 @@ let skip_positions ~owners ast =
 
 (* What running a deferred skip value does: the skips its run code applies, outside the branches
    nested in it, in source order, and how many evaluating claims it makes anywhere. *)
-type skip_effect = { run_skips : expression list; run_evaluating : int }
+type skip_effect = { run_skips : (expression * int option) list; run_evaluating : int }
+(** Each skip with the [lazy] it runs through, by its binding, where it does: a lazy forced again in
+    the same branch -- directly or through a wrapper -- runs nothing the second time. *)
 
 (* A named binding of the source whose value runs claims later ({!skip_list_census}). *)
 type deferred_skips =
@@ -4443,9 +4453,16 @@ let skip_list_census content =
     let root = expr in
     let found_skips = ref [] and evaluating = ref 0 in
     let forced = Hash_set.create (module Int) in
-    let run runs =
+    let run ?through runs =
       if runs.run_evaluating > 0 then evaluating := !evaluating + runs.run_evaluating
-      else found_skips := List.rev_append runs.run_skips !found_skips
+      else
+        let fresh =
+          List.filter_map runs.run_skips ~f:(fun (skip, key) ->
+              let key = Option.first_some key through in
+              match key with Some key when Hash_set.mem forced key -> None | _ -> Some (skip, key))
+        in
+        List.iter fresh ~f:(fun (_, key) -> Option.iter key ~f:(Hash_set.add forced));
+        found_skips := List.rev_append fresh !found_skips
     in
     let reader =
       object (self)
@@ -4460,15 +4477,12 @@ let skip_list_census content =
                  && List.exists arguments ~f:(fun (label, _) ->
                      Poly.equal label Ppxlib.Asttypes.Nolabel) ->
               (* A skip handed its label; a partial one is a callback, read where it is handed. *)
-              found_skips := e :: !found_skips
+              found_skips := (e, None) :: !found_skips
           | Pexp_apply (callee, _) when is_evaluating_head callee -> Int.incr evaluating
           | Pexp_apply (callee, arguments) -> (
               match run_of callee arguments with
               | Some (Skip_function { runs; _ }) -> run runs
-              | Some (Skip_lazy { key; runs }) ->
-                  if not (Hash_set.mem forced key) then (
-                    Hash_set.add forced key;
-                    run runs)
+              | Some (Skip_lazy { key; runs }) -> run ~through:key runs
               | None -> ())
           | _ -> ());
           match e.pexp_desc with
@@ -4568,22 +4582,40 @@ let skip_list_census content =
   in
   let skip_only expr =
     let skips, evaluating = claims ~branches:true expr in
-    if evaluating = 0 then skips else []
+    if evaluating = 0 then List.map skips ~f:fst else []
   in
-  (* The skips a skip wrapper named by [callee] runs, where it is one: a function of the source
-     whose run code skips and evaluates nothing. *)
-  let wrapper_skips callee =
+  (* How many positional arguments a collection function [name] hands its callback at the least: the
+     element, and an index ([iteri], [mapi], ...), an accumulator ([fold]) or a second collection's
+     element (a pairwise [iter2]) besides. *)
+  let callback_arguments name =
+    1
+    + (if String.is_suffix name ~suffix:"i" then 1 else 0)
+    + (if String.is_prefix name ~prefix:"fold" then 1 else 0)
+    + if String.is_substring name ~substring:"2" then 1 else 0
+  in
+  (* The skips a skip wrapper named by [callee] runs as the callback of the collection function
+     [name], where it is one -- a function of the source whose run code skips and evaluates nothing
+     -- and the call saturates it: [stored], the arguments a partial application of it already
+     holds, and what [name] hands it supply every positional and required labelled parameter. *)
+  let wrapper_skips name callee stored =
     match Option.bind (binding_of callee) ~f:deferred with
-    | Some (Skip_function { runs = { run_skips; run_evaluating = 0 }; _ }) -> run_skips
+    | Some (Skip_function { positional; labelled; runs = { run_skips; run_evaluating = 0 }; _ })
+      when List.count stored ~f:(fun (label, _) -> Poly.equal label Ppxlib.Asttypes.Nolabel)
+           + callback_arguments name
+           >= positional
+           && List.for_all labelled ~f:(fun label ->
+               List.exists stored ~f:(fun (given, _) ->
+                   Poly.equal given (Ppxlib.Asttypes.Labelled label))) ->
+        List.map run_skips ~f:fst
     | _ -> []
   in
-  let iterated_argument argument =
+  let iterated_argument name argument =
     let argument = strip_constraints argument in
     match argument.pexp_desc with
     | Pexp_ident _ when is_skip_head argument -> [ argument ]
     | Pexp_apply (callee, _) when is_skip_head callee -> [ argument ]
-    | Pexp_ident _ -> wrapper_skips argument
-    | Pexp_apply (callee, _) -> wrapper_skips callee
+    | Pexp_ident _ -> wrapper_skips name argument []
+    | Pexp_apply (callee, stored) -> wrapper_skips name callee stored
     | Pexp_function _ -> skip_only argument
     | _ -> []
   in
@@ -4693,7 +4725,7 @@ let skip_list_census content =
                   if
                     calls_back ~stdlib:false name label index
                     || calls_back ~stdlib:true name label index
-                  then [ iterated_argument argument ]
+                  then [ iterated_argument name argument ]
                   else []
                 in
                 let built =
@@ -4706,7 +4738,7 @@ let skip_list_census content =
     | _ -> []
   in
   let branch body =
-    let skips, _ = claims ~branches:false body in
+    let skips = List.map (fst (claims ~branches:false body)) ~f:fst in
     if List.length skips >= 2 then report (Skip_run (List.length skips)) body skips
   in
   let walker =
@@ -4739,7 +4771,7 @@ let skip_list_census content =
                       && applied_fully ~stdlib:false name labels
                       || calls_back ~stdlib:true name label index
                          && applied_fully ~stdlib:true name labels
-                    then report Iterated expr (iterated_argument argument));
+                    then report Iterated expr (iterated_argument name argument));
                 (* A consumer runs the callbacks of the lazy sequence it is handed. *)
                 if
                   Option.exists (collection_function name) ~f:(fun f -> f.consumes)

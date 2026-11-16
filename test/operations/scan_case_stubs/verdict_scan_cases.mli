@@ -31,6 +31,8 @@ val label : string
     spell qualified, the leg claim, and the names their gates, labels and populations read. *)
 module List : sig
   val iter : 'a list -> f:('a -> unit) -> unit
+  val iteri : 'a list -> f:(int -> 'a -> unit) -> unit
+  val map : 'a list -> f:('a -> 'b) -> 'b list
   val filter_map : 'a list -> f:('a -> 'b option) -> 'b list
   val singleton : 'a -> 'a list
   val length : 'a list -> int

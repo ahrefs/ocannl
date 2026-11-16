@@ -405,6 +405,14 @@ let () = List.iter labels ~f:skip|ocaml},
         {ocaml|let both () = p "a" x; skipped "b"
 let () = if on_gpu then run () else (both (); skipped "c")|ocaml},
         [] );
+      ( "a two-parameter wrapper an indexed iteration saturates",
+        {ocaml|let skip_pair _ l = skipped l
+let () = List.iteri labels ~f:skip_pair|ocaml},
+        [ "iterated l" ] );
+      ( "a two-parameter wrapper a map only applies in part",
+        {ocaml|let skip_two a b = skipped a; skipped b
+let () = ignore (List.map labels ~f:skip_two)|ocaml},
+        [] );
       ("a wrapper never applied", {ocaml|let skip_both () = skipped "a"; skipped "b"|ocaml}, []);
       ( "a wrapper applied in part",
         {ocaml|let skip_two a b = skipped a; skipped b
@@ -429,6 +437,16 @@ let () = if on_gpu then run () else Lazy.force skips|ocaml},
       ( "a lazy forced twice in a branch, which runs once",
         {ocaml|let skip_a = lazy (skipped "a")
 let () = if on_gpu then run () else (Lazy.force skip_a; Lazy.force skip_a)|ocaml},
+        [] );
+      ( "a lazy of two skips a wrapper forces in a branch",
+        {ocaml|let skips = lazy (skipped "a"; skipped "b")
+let force_skips () = Lazy.force skips
+let () = if on_gpu then run () else force_skips ()|ocaml},
+        [ "run 2 a" ] );
+      ( "a lazy forced twice through a wrapper, which runs once",
+        {ocaml|let skip_a = lazy (skipped "a")
+let force_a () = Lazy.force skip_a
+let () = if on_gpu then run () else (force_a (); force_a ())|ocaml},
         [] );
       ( "a lazy of skips nobody forces",
         {ocaml|let skips = lazy (skipped "a"; skipped "b")
