@@ -336,8 +336,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   is 35 members: four at once from a fresh clone on 2026-11-13 it took 499 s on mac-studio at load
   5 to 11 and 347 s on an idle minix-amd-linux (the `--toolchain` group alone 15 s and 11 s, the
   `--promotion` group 109 s and 92 s), against the 422 s and 344 s of the shell group the next
-  item's bound was sized with. The slowest honest run is then about 1060 s and 950 s, 1.7 times
-  under the 1800 s bound. That run found one member the merge build could not have passed on
+  item's bound was sized with. Those pre-record tier totals are about 1060 s and 950 s;
+  `.github/ship-pr-merge-build` owns the current estimate including record reads and training-reach
+  queries. That run found one member the merge build could not have passed on
   macOS: `tools/typecheck-scan-cases.sh` named its root by the logical path, and under `$TMPDIR`,
   where ship-pr builds a merge, that is `/var/...` while dune's workspace is `/private/var/...`,
   so dune refused every owning module ("is not in dune workspace"). It resolves the root with
@@ -5234,9 +5235,25 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   `@DIR/train-NAME` operands, exist in Dune's alias listing, and match the count.
   A disagreement, or names without a count, fails before reading the record.
   With no names and a nonzero or unread count it retains the older `affected`
-  query and checks any count against that answer. This matters for ship-pr's
-  base-alone comparison, which runs the base's older tools. The ordinary merged
-  tree runs both tools from one revision, so matching names avoid that query.
+  query and checks any count against that answer: intentional count-only protocol
+  compatibility, still requiring complete coverage. A normal merged tree ships
+  both tools together, and the base-alone comparison runs both base versions;
+  an older base does not itself create a mixed new-reader/old-producer case.
+  With this PR's two tools together, matching names avoid that query.
+- **Timing the reader.** In an exclusive mac-studio window on 2026-11-16, a real
+  scratch merge adding a comment in `tensor/einsum_parser.ml` reached six training
+  aliases. On the same warm clone the old reader took 100.11 s (third query present),
+  the new one 76.60 s (no third query, one alias listing). Both refused the missing
+  record after real format, compile and scans. The source was `d49a880e6`, the
+  measurement `wave-20261115-ocannl-p2-mac-studio-1`, record `p2/runs/run-8` in that
+  wave's scratch directory. This is one old/new pair through a refusal, not a full
+  successful worst case or a minix timing. Recipe: a `--no-local` scratch clone,
+  these tools in the seed, a library-only head merged `--no-ff`, and an empty local
+  bare repository as `OCANNL_TOOL_OWED_RUN_URL`; swap only the merge-build reader,
+  time each invocation, and check the trace for one versus zero extra `affected`
+  calls and the missing-record refusal. No scratch ref needs publishing. The full
+  bound in `.github/ship-pr-merge-build` remains computed from earlier tier timings
+  and the configured record-read caps.
 - **Where.** The ref `refs/owed-runs/<head sha>` on the PR repository (`OWED_RUN_URL` in the
   script; `OCANNL_TOOL_OWED_RUN_URL` overrides it for the harness and a fork). Its commit has the
   head as its only parent and the head's tree, and its message holds one `owed-run: v1 ...` line

@@ -39,10 +39,10 @@
 #            Only canonical @DIR/train-NAME operands are read; each must exist in Dune's
 #            alias listing, be distinct, and agree with the printed count, else the tier fails.
 #            With no names, a nonzero or missing count asks the legacy `affected
-#            MERGE_BASE..HEAD_SIDE` route for older base-side tools.
+#            MERGE_BASE..HEAD_SIDE` route for count-only protocol compatibility.
 #            A count must match that answer too. Other diagnostic text is not a name.
-#            The base-alone comparison can run the base's older prepush, so this compatibility
-#            route remains necessary; the merged tree itself uses one version of both scripts.
+#            The merged tree ships both tools together; the base-alone comparison also runs
+#            both base versions. An older base alone does not create a mixed-version case.
 #   OWED RECORD  what is OWED must be recorded for the PR's head, or the tier FAILS before it
 #            builds anything: `tools/owed-run.sh check HEAD_SIDE NEED...`, NEED `runtest` for
 #            an OWED list, `train` for an INCOMPLETE one, and each `train-` alias reached. The
@@ -326,8 +326,8 @@ owed_needs() {
   # Read only the anchored train-name lines and the existing count trailer. Names
   # require a count, exact cardinality, distinct canonical @DIR/train-NAME operands
   # and aliases Dune lists in this tree. Other diagnostics are not parsed as names.
-  # With no names, retain the legacy affected ask: the base-alone comparison can
-  # run an older prepush. New prepush reports names even before a wide-tier refusal.
+  # With no names, retain the legacy affected ask as count-only protocol compatibility.
+  # Normal merged and base-alone trees each ship their own pair of tools together.
   f=$tests_dir/ask
   [ ! -f "$tests_dir/ask-first" ] || f=$tests_dir/ask-first
   counted=$(sed -n -E 's/.*left off: ([0-9]+) train-.*/\1/p' "$f" | tail -n 1)
