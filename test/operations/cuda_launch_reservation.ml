@@ -167,6 +167,13 @@ let () =
   let cuda = Verdict.leg ~when_:on_cuda ~on:backend_name () in
   let hip = Verdict.leg ~when_:on_hip ~on:backend_name () in
   let gpu = Verdict.leg ~when_:(on_cuda || on_hip) ~on:backend_name () in
+  (* Graph claims need [sequence_segments] to capture: it skips capture under
+     [gpu_graph_capture=false] and while routines log, as [graph_exec_release] gates too. *)
+  let capturing =
+    lazy
+      (Utils.get_global_flag ~default:true ~arg_name:"gpu_graph_capture"
+      && not (Utils.debug_log_from_routines ()))
+  in
   let resident =
     lazy
       (Option.value ~default:0 (Context.hardware_limits ctx).Ir.Backend_intf.max_resident_threads)
@@ -319,6 +326,8 @@ let () =
           && List.equal Int.equal (resets_of ~first_id:1773440 ~name:"clr_below" below) [ 0 ]));
 
     (* --- 3. Graph: the same, launched as a captured graph. --- *)
+    let graph_bound = Verdict.sub_leg bound ~when_:capturing ~on:backend_name in
+    let graph_hopeless = Verdict.sub_leg hopeless ~when_:capturing ~on:backend_name in
     let graph_run =
       lazy
         (let r, d =
@@ -327,18 +336,18 @@ let () =
          in
          (r, d))
     in
-    in_leg ~leg:bound "graph: the two-segment routine runs as a captured graph" (fun label ->
+    in_leg ~leg:graph_bound "graph: the two-segment routine runs as a captured graph" (fun label ->
         p label (List.equal Int.equal (snd (Lazy.force graph_run)) [ 1 ]));
-    in_leg ~leg:bound "graph: it computes the right values" (fun label ->
+    in_leg ~leg:graph_bound "graph: it computes the right values" (fun label ->
         let (got, _, _, _), _ = Lazy.force graph_run in
         p label (Array.equal Float.equal got (expected ~graph:true s11d_floats)));
-    in_leg ~leg:bound
+    in_leg ~leg:graph_bound
       "graph: the free memory after the graph launch is within half the reservation of before it, \
        released once" (fun label ->
         let ((_, _, _, d) as r), _ = Lazy.force graph_run in
         p label (returned label r && List.equal Int.equal d [ 1 ]));
     let hopeless_graph = hopeless_run ~graph:true ~first_id:1773600 ~name:"clr_hopeless_graph" in
-    in_leg ~leg:hopeless
+    in_leg ~leg:graph_hopeless
       "graph: a hopeless frame in a graph is refused at its instantiation, then as its plain \
        launch, and declined as the driver's out-of-memory refusal, without a retry" (fun label ->
         (* Two refusals, no retry: the instantiation's back-off gives up at once and the routine
@@ -424,8 +433,14 @@ let () =
     let cases =
       [
         ("plain", `Plain, gpu, 1773200);
-        ("graph, first capture", `First_capture, gpu, 1773800);
-        ("graph, cached replay", `Replay, cuda, 1773850);
+        ( "graph, first capture",
+          `First_capture,
+          Verdict.sub_leg gpu ~when_:capturing ~on:backend_name,
+          1773800 );
+        ( "graph, cached replay",
+          `Replay,
+          Verdict.sub_leg cuda ~when_:capturing ~on:backend_name,
+          1773850 );
       ]
     in
     List.iter cases ~f:(fun (what, case, outer, first_id) ->
