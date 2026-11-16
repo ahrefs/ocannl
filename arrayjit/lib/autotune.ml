@@ -3171,6 +3171,13 @@ let ranking_staged_copy_rate ~limits =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   resolve staged_copy_rate_override u.copy_rate
 
+(* gh-ocannl-1639: the launch fill's ILP cap as resolved, 1 (the thread-only fill) where neither the
+   config nor the backend states one -- read on its own, so a calibration whose fill model does not
+   resolve yet still fits under the cap the score will read. *)
+let ranking_fill_chains ~limits =
+  let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
+  Option.value ~default:1 (resolve fill_chains_override u.chain_cap)
+
 (* The launch fill as resolved: continuous ([fm_tail] off). The score switches the tail on where it
    prices a staged-copy rate (segments_legs, gh-ocannl-1821). The ILP cap (gh-ocannl-1639) is 1 --
    the thread-only fill -- unless [fill_chains] resolves. *)
@@ -3181,8 +3188,13 @@ let ranking_fill_model ~limits : CM.fill_model option =
       resolve fill_threads_override u.saturation_threads )
   with
   | Some fm_multiprocessors, Some fm_fill_threads ->
-      let fm_chains = Option.value ~default:1 (resolve fill_chains_override u.chain_cap) in
-      Some { CM.fm_multiprocessors; fm_fill_threads; fm_tail = false; fm_chains }
+      Some
+        {
+          CM.fm_multiprocessors;
+          fm_fill_threads;
+          fm_tail = false;
+          fm_chains = ranking_fill_chains ~limits;
+        }
   | _ -> None
 
 type kernel_legs = {

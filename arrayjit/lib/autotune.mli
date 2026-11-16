@@ -2383,6 +2383,13 @@ val ranking_staged_copy_rate : limits:Ir.Backend_intf.hardware_limits -> float o
     continuous launch fill, and no coalesced leaves admitted through it in {!model_default}) over
     the backend's advisory [staged_copy_rate]. An [Untimed] reading, like {!ranking_capacity}. *)
 
+val ranking_fill_chains : limits:Ir.Backend_intf.hardware_limits -> int
+(** The launch fill's per-thread ILP cap (gh-ocannl-1639, {!Ir.Cost_model.fill_model}'s
+    [fm_chains]): config [model_fill_chains] ([none]: 1) over the backend's advisory [fill_chains],
+    1 -- the thread-only fill -- where neither states one. Resolved on its own, whether or not the
+    fill model's other two constants do: [tools/calibrate_issue_rate.exe] fits [fill_threads] under
+    it. An [Untimed] reading, like {!ranking_capacity}. *)
+
 val ranking_fill_model : limits:Ir.Backend_intf.hardware_limits -> Ir.Cost_model.fill_model option
 (** The ranking score's launch fill model (gh-ocannl-1479, {!Ir.Cost_model.context_fill}): config
     [model_multiprocessors] and [model_fill_threads] (each [none]: no launch fill) over the

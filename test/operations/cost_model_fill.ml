@@ -215,6 +215,15 @@ let chains_are ?private_ code expected =
 (* The stand-in fill model with an ILP cap of 4 chains a thread. *)
 let ilp = { fm with CM.fm_chains = 4 }
 
+(* The cap resolves on its own, so a calibration whose fill model does not yet resolve still fits
+   under the cap the score will read. *)
+let () =
+  let only_cap = { BI.no_hardware_limits with fill_chains = Some 8 } in
+  p "the ILP cap resolves without the fill model's other constants, and is 1 where none is stated"
+    (Autotune.ranking_fill_chains ~limits:only_cap = 8
+    && Option.is_none (Autotune.ranking_fill_model ~limits:only_cap)
+    && Autotune.ranking_fill_chains ~limits:BI.no_hardware_limits = 1)
+
 let filled_under ?(private_ = []) model code =
   compute
     ~launch:
@@ -273,6 +282,31 @@ let () =
   in
   p "a repeated target's later update reading another accumulator makes the chains dependent"
     (chains_are ~private_:[ a ] late [ None ]);
+  (* A guarded update coupling them: [a0 += x; a1 += x; if c then a0 += a1]. It counts no chain of
+     its own, and still couples the two it writes and reads. *)
+  let coupled =
+    Ll_test.loop_n k 8
+      (List.reduce_exn ~f:Ll_test.seq
+         [
+           upd 0 xk;
+           upd 1 xk;
+           Ll_test.if_ (Ll_test.c 1.) (upd 0 (Ll_test.get a [| Ll_test.fixed 1 |]));
+         ])
+  in
+  p "a guarded update coupling two accumulators makes the chains dependent"
+    (chains_are ~private_:[ a ] coupled [ None ]);
+  (* Single cells no fixed component tells apart: [a[i] += x; a[0] += x] under an enclosing i < 2 --
+     at i = 0 they are one chain. *)
+  let oi = Ll_test.sym () in
+  let maybe_one =
+    Ll_test.loop_n oi 2
+      (Ll_test.loop_n k 8
+         (Ll_test.seq
+            (Ll_test.set a [| it oi |] (Ll_test.add (Ll_test.get a [| it oi |]) xk))
+            (upd 0 xk)))
+  in
+  p "two single cells no fixed component tells apart may alias: no chains"
+    (chains_are ~private_:[ a ] maybe_one [ None ]);
   (* Inner loops that do not address distinct cells: [acc[i + j]] over i, j < 4 is 7 cells, not 16;
      and a looped member beside a single cell of the same node may overlap it. *)
   let s7 = fresh_tn "cf_dep_s" [| 7 |] in

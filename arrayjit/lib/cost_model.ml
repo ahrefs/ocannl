@@ -348,11 +348,14 @@ let top_ctx = { pc_blocks = 1; pc_threads = 1 }
    repeated updates of one cell are one chain) times its passed loops' extents -- unrolled copies of
    a register tile are distinct members. A passed loop counts only where it addresses distinct cells
    (its index one plain-iterator component); a looped member beside another member of its node may
-   overlap it. No credit where the carrier's body holds a barrier, or where any update reads another
-   member's accumulator (dependent chains). Anything else -- no carrier, no read-modify-write, a
-   shared or global accumulator, elementwise work -- is not counted ([None]), which the launch fill
-   reads as today's thread-only credit. Deliberately not counted: independent iterations a compiler
-   might interleave (they are serial work here), and a staging copy's loads in flight. *)
+   overlap it, and two single cells of one node count apart only where a component fixes them apart
+   ([acc[0, j]], [acc[1, j]]; [a[i]] beside [a[0]] may be one cell). No credit where the carrier's
+   body holds a barrier, where any update reads another member's accumulator (dependent chains), or
+   where any other write of the body -- a guarded update, one under a deeper carrier, a scatter --
+   lands on a member's accumulator. Anything else -- no carrier, no read-modify-write, a shared or
+   global accumulator, elementwise work -- is not counted ([None]), which the launch fill reads as
+   today's thread-only credit. Deliberately not counted: independent iterations a compiler might
+   interleave (they are serial work here), and a staging copy's loads in flight. *)
 
 type chain_frame =
   | Chain_loop of { index : Idx.symbol; extent : int; hardware : bool; body : Low_level.t }
@@ -425,6 +428,9 @@ let carrier_chains ~is_private ~carrier (body : Low_level.t) =
   (* [members]: one entry per distinct target, what is counted; [updates]: every member update, what
      the dependence check reads -- a later update of a counted target may read another. *)
   let members = ref [] and updates = ref [] and barrier = ref false in
+  (* Every other write of the body -- guarded, under a deeper carrier, a scatter -- by its node or
+     local: one landing on a counted member's accumulator couples the chains. *)
+  let foreign = ref [] in
   let rec walk frames (c : Low_level.t) =
     match c with
     | Low_level.Seq (a, b) ->
@@ -436,20 +442,23 @@ let carrier_chains ~is_private ~carrier (body : Low_level.t) =
         walk (Chain_loop { index; extent; hardware; body } :: frames) body
     | Scan_loop { body; _ } | If { body; _ } -> walk (Chain_stop :: frames) body
     | Workgroup_barrier -> barrier := true
-    | Set _ | Set_local _ -> (
-        match chain_target ~is_private c with
-        | None -> ()
-        | Some (target, value) -> (
-            (* The carrier frame itself closes [frames]: a member's walk that passes every frame
-               below it reaches this body's carrier. *)
-            let outer = Chain_loop { index = carrier; extent = 1; hardware = false; body } in
-            match chain_carrier target ~passed:1 (frames @ [ outer ]) with
-            | Some (idx, _, passed) when Idx.equal_symbol idx carrier ->
-                updates := (target, value) :: !updates;
-                if not (List.exists !members ~f:(fun (t, _, _) -> equal_chain_target t target)) then
-                  members := (target, passed, value) :: !members
-            | _ -> ()))
+    | Set { tn; _ } -> update frames c (`Node tn)
+    | Set_local (id, _) -> update frames c (`Local id)
+    | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } -> foreign := `Node tn :: !foreign
     | _ -> ()
+  and update frames (c : Low_level.t) written =
+    match chain_target ~is_private c with
+    | None -> foreign := written :: !foreign
+    | Some (target, value) -> (
+        (* The carrier frame itself closes [frames]: a member's walk that passes every frame below
+           it reaches this body's carrier. *)
+        let outer = Chain_loop { index = carrier; extent = 1; hardware = false; body } in
+        match chain_carrier target ~passed:1 (frames @ [ outer ]) with
+        | Some (idx, _, passed) when Idx.equal_symbol idx carrier ->
+            updates := (target, value) :: !updates;
+            if not (List.exists !members ~f:(fun (t, _, _) -> equal_chain_target t target)) then
+              members := (target, passed, value) :: !members
+        | _ -> foreign := written :: !foreign)
   in
   walk [] body;
   (* A member's value reading a member node's cell other than its own target -- or another member's
@@ -488,7 +497,32 @@ let carrier_chains ~is_private ~carrier (body : Low_level.t) =
                 match t' with Chain_cell (tn', _) -> Tn.equal tn tn' | Chain_local _ -> false)
             > 1)
   in
-  if !barrier || List.is_empty !members || overlapping then None
+  let coupled =
+    List.exists !foreign ~f:(fun w ->
+        List.exists !members ~f:(fun (t, _, _) ->
+            match (w, t) with
+            | `Node tn, Chain_cell (tn', _) -> Tn.equal tn tn'
+            | `Local id, Chain_local id' -> Low_level.equal_scope_id id id'
+            | _ -> false))
+  in
+  (* Two single-cell targets of one node are disjoint where some component fixes them apart ([acc[0,
+     j]] and [acc[1, j]]: the unrolled register tile); any other pair ([a[i]] beside [a[0]], with
+     [i] an enclosing loop's) may name one cell. *)
+  let disjoint i1 i2 =
+    Array.length i1 = Array.length i2
+    && Array.exists2_exn i1 i2 ~f:(fun a b ->
+        match (a, b) with Idx.Fixed_idx x, Idx.Fixed_idx y -> x <> y | _ -> false)
+  in
+  let aliasing =
+    List.exists !members ~f:(fun (t, _, _) ->
+        List.exists !members ~f:(fun (t', _, _) ->
+            (not (phys_equal t t'))
+            &&
+            match (t, t') with
+            | Chain_cell (tn, i1), Chain_cell (tn', i2) -> Tn.equal tn tn' && not (disjoint i1 i2)
+            | _ -> false))
+  in
+  if !barrier || List.is_empty !members || overlapping || aliasing || coupled then None
   else if List.exists !updates ~f:(fun (t, v) -> reads_other t v) then None
   else Some (List.sum (module Int) !members ~f:(fun (_, passed, _) -> passed))
 

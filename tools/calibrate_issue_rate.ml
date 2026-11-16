@@ -97,10 +97,7 @@ let () =
   in
   (* gh-ocannl-1639: the ILP cap as the score resolves it -- the sweep cannot identify it (its tiles
      all carry 16 chains), but the fits read every kernel's fill as the score does. *)
-  let fill_chains =
-    Option.value_map (Autotune.ranking_fill_model ~limits) ~default:1 ~f:(fun fm ->
-        fm.Ir.Cost_model.fm_chains)
-  in
+  let fill_chains = Autotune.ranking_fill_chains ~limits in
   if fill_chains > 1 then
     Stdio.printf "# the fill's ILP cap: %d chains a thread (model_fill_chains; not fitted here)\n"
       fill_chains;

@@ -342,9 +342,11 @@ val launch_contexts : ?is_private:(Tnode.t -> bool) -> Low_level.t -> launch_con
     and is uncounted), the first non-hardware loop whose index the target does not mention. A guard,
     a hardware loop or a [Scan_loop] met first leaves it uncounted. The carrier's chains sum its
     members' distinct cells (repeated updates of one cell are one chain); a barrier in the carrier's
-    body, any update reading another member's accumulator, or a looped member beside another member
-    of its node (they may overlap) leaves the whole carrier uncounted. A serial loop outside the
-    carrier -- a plain leaf's batch loop -- is never credited: its iterations are serial work. *)
+    body, any update reading another member's accumulator, any other write of the body (a guarded
+    update, a scatter) landing on a member's accumulator, a looped member beside another member of
+    its node, or two members of one node no fixed component tells apart (they may overlap: [a[i]]
+    beside [a[0]]) leaves the whole carrier uncounted. A serial loop outside the carrier -- a plain
+    leaf's batch loop -- is never credited: its iterations are serial work. *)
 
 type fill_model = {
   fm_multiprocessors : int;
