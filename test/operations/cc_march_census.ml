@@ -2515,6 +2515,16 @@ let census ~exe ~root ~piece ~width ~fp16 ~columns =
      before, and over the 72 16-byte tile rows the three majors now read the same totals: 80 scalar
      FP instructions, no stack reference.
 
+     The clang 21 aarch64 proxy (gh-ocannl-1934) arrived red on eight wide-fp16 rows: [mma/f16w] and
+     [rt/n99/f16w/alt4x6x4], both ARM targets at -O2 and -O3, each with four stack references. These
+     were real vector spills in the k-loop, not the READER: [str q31, [sp]], [ldr q1, [sp, #16]],
+     [str q1, [sp, #16]], [ldr q31, [sp]]. Argument loads and frame-record traffic were outside it.
+     The EMISSION widened each row's A scalar separately; clang kept four live alongside 24
+     accumulators and six B vectors, exceeding NEON's 32 registers. Empty scheduling fences did not
+     cure it. The clang aarch64 arm now widens four fp16 A values together with one [fcvtl] and
+     supplies the FMAs from lanes of that vector, as the bf16 arm already does. gcc's per-row fp16
+     form stays unchanged; the reader and resident claim stay strict.
+
      A defect found here again is a failure of this claim, which is the point: fix it, or reinstate
      the class list and its reproduction claim with the defect named -- asked of the column's
      compiler ([__clang__] in its predefined macros) where it is one compiler's. *)

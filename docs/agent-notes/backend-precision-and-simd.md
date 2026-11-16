@@ -1973,6 +1973,14 @@ files.
   because every leg's arithmetic is a single operation per lane. A parity leg over `a * b + c`
   would need `fp_contract` on, because HIP's `-ffast-math` contracts per kernel.
 ## Assembly census and compiler differences
+- **clang 21 aarch64 fp16 register tiles pack the A column** (gh-ocannl-1934).
+  Eight resident 4x6 rows in the wide-fp16 census had four real k-loop vector stack
+  references: two accumulator spill/reload pairs, not stack-passed pointer arguments
+  or frame records. Four independently widened A scalars plus 24 accumulators and six
+  B vectors exceed NEON's 32 registers. Empty fences still spill; one packed [fcvtl]
+  supplies four FMA lane operands instead. [OCANNL_VEC_WIDEN_HALF_ROWS_X4] selects that
+  form only for clang on aarch64 with native half and convertvector support; gcc and
+  x86 retain their per-row form. Keep the reader and resident claim unchanged.
 - **CUDA select branchlessness is scoped to the shipping floor PTX target** (gh-ocannl-1822).
   On rog's sm_120 with ptxas 13.4, `branchless_select`'s floor-target census passes, while native
   sm_120 PTX branches on `bs_where_zero`, `bs_relu_gate`, `bs_where_eq` and `bs_where_masked`.
