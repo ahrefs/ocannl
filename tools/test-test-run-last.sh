@@ -194,18 +194,29 @@ q_wrap() { # root release exec|refuse argv...
 # The leg's own processes, for the harness's interrupted exit (cleanup_fixture):
 # a wrapper still waiting would poll a release file the cleanup deletes, forever.
 q_kill_all() {
-  local w
+  local w bg
+  # Keep the shape parents alive to reap their children after release. Killing
+  # the parents first can orphan a sleeper that misses a short-lived release.
+  touch "$TMP/real.release" "$TMP/shape.release" "$TMP/control.release"
   for w in ${q_wraps[@]+"${q_wraps[@]}"}; do
-    kill -KILL "${w%%:*}" 2>/dev/null
+    case ${w#*:} in
+      "$TMP/shape.slot" | "$TMP/control.slot") touch "${w#*:}" ;;
+      *) kill -KILL "${w%%:*}" 2>/dev/null ;;
+    esac
     wait "${w%%:*}" 2>/dev/null
   done
+  if [ -s "$TMP/real-launch.out" ] && [ -n "${q_real_waiter:-}" ]; then
+    bg=$(tail -n 1 "$TMP/real-launch.out")
+    case $bg in
+      "$TMP/real-fleet-bg/"*) "$q_real_waiter" wait "$bg" >/dev/null 2>&1 ;;
+    esac
+  fi
   q_wraps=()
   if [ -n "${q_follow:-}" ]; then
     kill -KILL "$q_follow" 2>/dev/null
     wait "$q_follow" 2>/dev/null
   fi
   # The runs this leg holds on a file: let them end on their own.
-  touch "$TMP/real.release" "$TMP/shape.release" "$TMP/control.release"
   touch "$TMP/queued.hold" "$TMP/queued.hold2" "$TMP/queued.slot" "$TMP/queued.sup" "$TMP/queued.preflight" 2>/dev/null
   return 0
 }
@@ -681,7 +692,7 @@ q_child_shape() { # command pid
 }
 leg_99b() {
   local label='real fleet slot --bg follows queued last and matches the stand-in guardian shape'
-  local fw real_root real_runs real_bg real_pid real_dir real_rc real_detail=
+  local fw real_root real_runs real_bg real_pid real_dir real_rc real_green real_red real_detail=
   . "$HERE/fleet-worker-candidates.sh"
   # --ci-shell hides fleet tables but the host can still answer by hostname.
   # Its explicit no-toolchain mode is also the no-real-fleet boundary.
@@ -691,13 +702,19 @@ leg_99b() {
     return
   fi
   fw=$fleet_slot_fw
+  q_real_waiter=$(dirname "$fw")/bg-run.sh
   real_root=$TMP/real-fleet-repo real_runs=$TMP/real-fleet-runs real_bg=$TMP/real-fleet-bg
   mkdir -p "$real_root/tools" "$real_root/test/config" "$real_root/arrayjit/test" "$real_runs" "$real_bg"
   cp "$SRC" "$real_root/tools/test-run.sh"
   stage_sourced "$real_root" || { harness_abandon "$stage_error"; return; }
+  OCANNL_TOOL_TEST_RUNS=$real_runs PATH="$q_bin:$PATH" "$real_root/tools/test-run.sh" run build @ok >"$TMP/real-green" 2>&1 ||
+    { harness_abandon "green fixture run failed: $(cat "$TMP/real-green")"; return; }
+  real_green=$(OCANNL_TOOL_TEST_RUNS=$real_runs "$real_root/tools/test-run.sh" paths run last)
   # A nested --bg reuses the enclosing slot and starts immediately. Hold the
   # fixture BEFORE publication, rather than racing it or taking extra slots.
   # --deadline makes even a nested slot supervise a child and guardian.
+  # Keep the state root in wrapper argv and qualify the script's worktree:
+  # environment-only/relative launches over-read other parallel fixtures.
   { printf '%s\n' '#!/usr/bin/env bash' \
       'if [ "${1-}" = run ]; then' \
       '  echo $$ >"$Q_REAL_PID"' \
@@ -706,7 +723,8 @@ leg_99b() {
   chmod +x "$real_root/tools/test-run.sh"
   (cd "$real_root" && env OCANNL_TOOL_TEST_RUNS="$real_runs" OCANNL_TOOL_FLEET_WORKER=none \
     PATH="$q_bin:$PATH" Q_REAL_PID="$TMP/real.pid" Q_REAL_RELEASE="$TMP/real.release" \
-    "$fw" execution slot --bg "$real_bg" --cpu --deadline 60 -- tools/test-run.sh run build @red) \
+    "$fw" execution slot --bg "$real_bg" --cpu --deadline 60 -- \
+      env "OCANNL_TOOL_TEST_RUNS=$real_runs" "$real_root/tools/test-run.sh" run build @red) \
     >"$TMP/real-launch.out" 2>&1
   real_rc=$?
   if [ "$real_rc" != 0 ] || ! q_until 20 test -s "$TMP/real.pid"; then
@@ -749,11 +767,16 @@ EOF
   real_rc=$?
   { [ "$real_rc" = 3 ] && grep -q '^queued:' "$TMP/real-status"; } ||
     real_detail="queued status: exit $real_rc: $(cat "$TMP/real-status")"
+  # Clear status's observation; only the new waiter can recreate this mark.
+  mv "$real_green/queued-after" "$TMP/status-observed" || real_detail='status did not mark the queued launch'
   OCANNL_TOOL_TEST_RUNS=$real_runs "$real_root/tools/test-run.sh" wait last --timeout 40 >"$TMP/real-wait" 2>&1 &
   q_follow=$!
+  q_until 5 test -e "$real_green/queued-after" || real_detail='waiter never observed the queued launch'
   touch "$TMP/real.release"
   wait "$q_follow"; real_rc=$?; q_follow=
-  [ "$real_rc" = 1 ] || real_detail="wait last: exit $real_rc: $(cat "$TMP/real-wait")"
+  real_red=$(OCANNL_TOOL_TEST_RUNS=$real_runs "$real_root/tools/test-run.sh" paths run last)
+  { [ "$real_rc" = 1 ] && [ "$real_red" != "$real_green" ] && grep -qF "$real_red" "$TMP/real-wait"; } ||
+    real_detail="wait last: exit $real_rc: $(cat "$TMP/real-wait")"
   # Reap the detached record through its public waiter before returning.
   real_dir=$(tail -n 1 "$TMP/real-launch.out")
   if [ -z "$real_dir" ]; then
