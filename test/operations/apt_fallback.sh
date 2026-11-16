@@ -67,7 +67,7 @@ def equivalent(copies):
 copies = [(f'{p.name}:{i + 1}', body)
           for p in sorted((root / '.github/workflows').glob('*.yml'))
           for i, body in enumerate(extract(p.read_text()))]
-# Five is the regression floor; discovery also includes new copies automatically.
+# Exactly today's five: a new or lost copy must update this census.
 assert len(copies) == 5, [name for name, _ in copies]
 equivalent(copies)
 print('PASS all five discovered apt steps are equivalent')
