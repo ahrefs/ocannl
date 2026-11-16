@@ -23,6 +23,15 @@ files.
   pushes what it returns onto `active_constraints`, never asserts it empty: `deduce_within`
   (`~deduced:Input_equals_output`) defers an unpadded window over an open kernel and a held window
   pair (gh-ocannl-2030, `test/einsum/input_equals_output_deferral.ml`).
+- A valid window's kernel can be a composite expression (gh-ocannl-2254): concatenation
+  cancellation can bind it to `[2v; 1]`. Infer its size through `unify_dim` on that expression,
+  then recheck the window's forward basis rule only once substitution sizes the kernel. If its
+  own equation defers, retain the window without recursing on it. Pass `settling` through the
+  inverse and its single concat residual so a nested stride chooses its basis at the fixpoint,
+  rather than a shape-row guess (gh-ocannl-2245's filler rule makes this choice ambiguous). Deferral and the shared
+  `closing_dim_dependencies` reader include every kernel variable inside `Concat` and `Affine`,
+  in ordinary closing and the stage-7 fixed-index prepass; rigid symbolic kernels cannot equal a
+  concrete size. Pins: `test_concat_order_independence.ml`.
 - A stored round-up total can retain a dimension solved at Stage1, when its coefficient must
   stay lazy (gh-ocannl-2032). `apply_row_constraint` normalizes both sides of `row_conjunction`:
   a range against a stale `Strided_var` defers, and an early `Shape_row` adds a copy each pass.

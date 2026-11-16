@@ -2995,12 +2995,8 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
         raise
         @@ Shape_error
              ("solved dimensions for axis: incompatible stride", [ Dim_mismatch [ dim1; dim2 ] ])
-  | ( Affine
-        { stride; over = Dim s; conv = Some { dilation; kernel = Var v; use_padding = false }; _ },
-      Dim i )
-  | ( Dim i,
-      Affine
-        { stride; over = Dim s; conv = Some { dilation; kernel = Var v; use_padding = false }; _ } )
+  | Affine { stride; over = Dim s; conv = Some { dilation; kernel; use_padding = false }; _ }, Dim i
+  | Dim i, Affine { stride; over = Dim s; conv = Some { dilation; kernel; use_padding = false }; _ }
     -> (
       (* Infer kernel dimension from the relationship: input_size = stride * (output_size - 1) +
          effective_kernel_span effective_kernel_span = input_size - stride * (output_size - 1) *)
@@ -3012,9 +3008,20 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
              (gh-ocannl-1824: a kernel solved before the equation met the solved arms' check, one
              inferred here skipped it). *)
           let solve_kernel basis =
-            let constrs, env = unify_dim ~stage origin (Var v, get_dim ~d:k ~basis ()) env in
-            let more, env = unify_dim ~stage origin (dim1, dim2) env in
-            (constrs @ more, env)
+            (* A nested stride may itself need a basis choice at the fixpoint. Its inverse is part
+               of this window equation, so it receives the same settling capability. *)
+            let constrs, env' =
+              unify_dim ?settling ~stage origin (kernel, get_dim ~d:k ~basis ()) env
+            in
+            (* A composite kernel can defer its own equation. Re-enter the window only once
+               substitution sizes it. With no binding, the window already carries that equation:
+               adding its deferred inverse each pass would grow the list forever. *)
+            match subst_dim env' kernel with
+            | Dim _ ->
+                let more, env' = unify_dim ~stage origin (dim1, dim2) env' in
+                (constrs @ more, env')
+            | _ when phys_equal env' env -> ([ held ], env')
+            | _ -> (constrs @ [ held ], env')
           in
           match window_kernel_bases ~stride ~dilation ~size:k ~input:i ~extent:s with
           | [] ->
@@ -3072,10 +3079,15 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
          its stride (gh-ocannl-1823). *)
       let span2 = effective_kernel_span ~dilation:d2 ~kernel_size:k2.d in
       window_pair ~kernels:[ k2 ] ~s1 ~span1:s1 ~o1 ~s2 ~span2 ~o2 ()
-  | Affine { conv = Some { kernel = Var _; use_padding = false; _ }; _ }, _
-  | _, Affine { conv = Some { kernel = Var _; use_padding = false; _ }; _ } ->
-      (* Can't compute offset until kernel dimension is resolved; defer *)
-      ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)
+  (* A kernel can be a concatenation residual or a window itself. Rigid symbolic kernels have no
+     variables to solve and still take the ordinary mismatch check. Keep the guarded arms separate:
+     either side may be a window, and a failed or-pattern guard would skip the other side. *)
+  | Affine { conv = Some { kernel; use_padding = false; _ }; _ }, _
+    when not (Set.is_empty (vars_of_dim kernel)) ->
+      ([ held ], env)
+  | _, Affine { conv = Some { kernel; use_padding = false; _ }; _ }
+    when not (Set.is_empty (vars_of_dim kernel)) ->
+      ([ held ], env)
   | Var v, dim2 | dim2, Var v ->
       if dim_var_occurs_in_dim v dim2 then
         raise
@@ -3317,7 +3329,11 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
              gh-ocannl-2095. *)
           unify_dim ~stage origin (get_dim ~d:sum ~basis:solved_basis (), d) env
       | [ c ] ->
-          unify_dim ~stage origin (c, get_dim ~d:residual ~basis:(Lazy.force residual_basis) ()) env
+          (* Subtracting solved components leaves an equivalent equation: a window in the residual
+             still needs to settle as part of the original equation. *)
+          unify_dim ?settling ~stage origin
+            (c, get_dim ~d:residual ~basis:(Lazy.force residual_basis) ())
+            env
       | _ ->
           (* Multiple unsolved components remain: defer the NORMALIZED residual (solved components
              subtracted), not the original equation, so the arithmetic progress is not lost and the
@@ -6337,11 +6353,13 @@ let concat_closing_dependent d1 d2 =
 let closing_dim_dependencies ineqs env =
   let waiting_on_window (waiting, kernels) extent window =
     match (extent, window) with
-    | Var v, Affine { conv = Some { kernel = Var _; use_padding = false; _ }; _ } ->
+    | Var v, Affine { conv = Some { kernel; use_padding = false; _ }; _ }
+      when not (Set.is_empty (vars_of_dim kernel)) ->
         (Set.add waiting v, kernels)
-    | Dim _, Affine { over; conv = Some { kernel = Var k; use_padding = false; _ }; _ }
+    | Dim _, Affine { over; conv = Some { kernel; use_padding = false; _ }; _ }
       when not (Set.is_empty (vars_of_dim over)) ->
-        (Set.add waiting k, Set.add kernels k)
+        let kernel_vars = vars_of_dim kernel in
+        (Set.union waiting kernel_vars, Set.union kernels kernel_vars)
     | _ -> (waiting, kernels)
   in
   List.fold ineqs ~init:(dim_var_set_empty, dim_var_set_empty) ~f:(fun waiting -> function
