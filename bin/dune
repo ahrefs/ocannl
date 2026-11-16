@@ -163,6 +163,7 @@
    (run %{exe:narrow_storage_bench.exe} 2 1 1 --ocannl_backend=cc)
    (run %{exe:narrow_gebp_bench.exe} f32 2 1 1 1 --ocannl_backend=cc)
    (run %{exe:device_props.exe} --ocannl_backend=cc)
+   (run %{exe:prefix_scan_bench.exe} 1 32 --ocannl_backend=cc)
    ; --allow-unmeasured: this canary asks whether the pipeline runs end to end, and a shared CI
    ; runner can refuse every timing window of a 2x2 cell for host contention (gh-ocannl-855) --
    ; a fact about the machine, not about the code path. The refusal still prints its `!!` line;
@@ -229,6 +230,18 @@
 ; Readback of the backend's queried device properties and derived hardware limits (gh-ocannl-684).
 ; No positional geometry, so no bench_args; the backend comes from the library's own --ocannl_*
 ; scan, and must be pinned explicitly (the bin/ cwd trap).
+
+; gh-ocannl-1858: the prefix-scan rewrite's serial scan against the composed form it replaces.
+
+(executable
+ (package neural_nets_lib)
+ (public_name prefix_scan_bench)
+ (name prefix_scan_bench)
+ (modules prefix_scan_bench)
+ (libraries ocannl base stdio time_now bench_out)
+ (preprocess
+  (pps ppx_here ppx_ocannl))
+ (modes exe))
 
 (executable
  (package neural_nets_lib)
