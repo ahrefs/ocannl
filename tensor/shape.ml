@@ -955,6 +955,15 @@ let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
 
 let concat_component_text = function Concat_label l -> l | Concat_size n -> Int.to_string n
 
+let refuse_empty_concat_component ~spec n =
+  if n <= 0 then
+    raise
+    @@ Row.Shape_error
+         ( [%string
+             "einsum spec %{spec}: a concatenation component of size %{n#Int} is empty; drop it \
+              from the concatenation"],
+           [] )
+
 (** The dimension of one component of a concatenated axis: a label's variable (shared with the
     spec's other slots through [dim_var_env]), or a fixed size no other slot names. A fixed size
     carries no projection id: projection derivation gives it a fresh one, so the component is a
@@ -967,14 +976,9 @@ let concat_component_dim ~spec ~dim_var_env = function
       in
       Row.add_concat_component v;
       Row.Var v
-  | Concat_size n when n <= 0 ->
-      raise
-      @@ Row.Shape_error
-           ( [%string
-               "einsum spec %{spec}: a concatenation component of size %{n#Int} is empty; drop it \
-                from the concatenation"],
-             [] )
-  | Concat_size n -> Row.get_default_dim ~d:n ()
+  | Concat_size n ->
+      refuse_empty_concat_component ~spec n;
+      Row.get_default_dim ~d:n ()
 
 (** Renders an affine axis spec as the einsum grammar reads it back ([[s*]o[=|<][+off]+[d*]k], or
     [s*o[+off]] without a window), for refusal messages. *)
@@ -1037,10 +1041,9 @@ let refuse_nonpositive_coefficient ~spec ~axis ~what value =
               to the same cell"],
            [] )
 
-(** The dimension of an affine axis spec. Refuses the coefficients and the offsets the dimension
-    formulas cannot size ([refuse_nonpositive_coefficient], [refuse_out_of_extent_offset]); every
-    route converting a parsed spec to dimensions goes through here. *)
-let affine_dim_of_spec ~spec ~dim_var_env axis_spec =
+(** Pure validation of a parsed affine axis, shared by registration preflight and elaboration. Do
+    not create rows or variables here: their bookkeeping mutates the inference session. *)
+let affine_parameters ~spec axis_spec =
   match axis_spec with
   | Affine_spec { stride; over_label; conv; stride_offset } ->
       let axis = lazy (render_affine_axis axis_spec) in
@@ -1049,11 +1052,6 @@ let affine_dim_of_spec ~spec ~dim_var_env axis_spec =
         with _ -> failwith ("Invalid stride value (expected integer): " ^ stride)
       in
       refuse_nonpositive_coefficient ~spec ~axis ~what:"stride" stride_int;
-      let over_dim =
-        Row.Var
-          (Hashtbl.find_or_add dim_var_env over_label ~default:(fun () ->
-               Row.get_var ~name:over_label ()))
-      in
       let conv =
         Option.map conv ~f:(fun { dilation; kernel_label; use_padding } ->
             let dilation_int =
@@ -1070,18 +1068,35 @@ let affine_dim_of_spec ~spec ~dim_var_env axis_spec =
                     "use_padding must be specified in convolution spec (use = for true, < for \
                      false)"
             in
-            let kernel =
-              Row.Var
-                (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
-                     Row.get_var ~name:kernel_label ()))
-            in
-            { Row.dilation = dilation_int; kernel; use_padding = use_padding_bool })
+            (dilation_int, kernel_label, use_padding_bool))
       in
       refuse_out_of_extent_offset ~spec ~stride:stride_int ~stride_offset
-        ~conv:(Option.map conv ~f:(fun c -> c.use_padding))
+        ~conv:(Option.map conv ~f:(fun (_, _, padding) -> padding))
         ~axis;
-      Row.Affine { stride = stride_int; over = over_dim; conv; stride_offset }
-  | Label _ | Fixed_index _ | Concat_spec _ -> invalid_arg "affine_dim_of_spec: not an affine axis"
+      (stride_int, over_label, conv, stride_offset)
+  | Label _ | Fixed_index _ | Concat_spec _ -> invalid_arg "affine_parameters: not an affine axis"
+
+(** Every route converting a parsed affine spec to dimensions goes through here. The shared
+    parameter check also runs before registration, without allocating dimension variables. *)
+let affine_dim_of_spec ~spec ~dim_var_env axis_spec =
+  let stride, over_label, conv, stride_offset = affine_parameters ~spec axis_spec in
+  let dim label =
+    Row.Var (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~name:label ()))
+  in
+  let over = dim over_label in
+  let conv =
+    Option.map conv ~f:(fun (dilation, label, use_padding) ->
+        { Row.dilation; kernel = dim label; use_padding })
+  in
+  Row.Affine { stride; over; conv; stride_offset }
+
+let refuse_invalid_axis_spec ~spec = function
+  | Affine_spec _ as axis -> ignore (affine_parameters ~spec axis)
+  | Concat_spec components ->
+      List.iter components ~f:(function
+        | Concat_size n -> refuse_empty_concat_component ~spec n
+        | Concat_label _ -> ())
+  | Label _ | Fixed_index _ -> ()
 
 let einsum_slot_spec_to_dims_bio ?(fixed_index = `Pin_var) ~spec_text ~sh_id ~row_var_env
     ~dim_var_env labels =
@@ -4663,8 +4678,9 @@ let propagate_inline (update_step : update_step) : unit =
    definition. Every step is registered through [propagate_shapes] ([Tensor.register_update_step]),
    so projection derivation never meets a step these refuse. *)
 
-(* Read names directly from the parsed slots: building rows here would itself write the solver's
-   used-in-spec and safe-to-guess sets. No capture may be bound until all labels pass. *)
+(* Read parsed axes only: check names, affine parameters and empty concat components without
+   building rows, which would itself write the solver's used-in-spec and safe-to-guess sets. No
+   capture may be bound until all labels pass. *)
 let refuse_invalid_einsum_spec (update_step : update_step) =
   Option.iter (einsum_of_logic update_step.logic) ~f:(fun (einsum_spec, dim_refs) ->
       let spec = spec_text einsum_spec in
@@ -4694,7 +4710,9 @@ let refuse_invalid_einsum_spec (update_step : update_step) =
           List.iter rows ~f:(fun name -> Hashtbl.set row_var_env ~key:name ~data:()));
       check_dim_row_var_name_clash ~spec ~error_trace:[ Shape_mismatch error_shapes ] dim_var_env
         row_var_env;
-      check_capture_labels ~spec:einsum_spec ~dim_var_env ~row_var_env ~error_shapes dim_refs)
+      check_capture_labels ~spec:einsum_spec ~dim_var_env ~row_var_env ~error_shapes dim_refs;
+      List.iter (rhses @ [ lhs ]) ~f:(fun slot ->
+          Map.iter slot.labels ~f:(refuse_invalid_axis_spec ~spec)))
 
 (* {!refuse_result_side_padded_window} over the step's result slot. *)
 let refuse_result_side_padded_windows (update_step : update_step) =
