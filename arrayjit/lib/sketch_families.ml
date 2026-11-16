@@ -1947,28 +1947,32 @@ let cpu_companion_writes ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.sym
               (List.dedup_and_sort ~compare:String.compare
                  (List.map needs ~f:(materialized_writes ~plc)))))
 
-(* The CPU companion geometry (gh-ocannl-1609): the default CPU preset's own per-nest geometry for
-   each companion nest — the [Grid] [Retype]s of [Sched.default_cpu ~min_work:0] whose loop belongs
-   to a statement of the companion demand. One hazard-proven loop per nest, or none: a companion the
-   preset cannot prove stays serial, which the fork-join model admits. Ungated, like the tuner's
-   [Search] presets and [conv_aligned_grid]: the renderer's launch floor ([cc_grid_min_updates])
-   still renders a dispatch too small to pay serially.
+(* The CPU companion geometry (gh-ocannl-1609, gh-ocannl-1843): the default CPU preset's own
+   per-nest geometry for each companion nest — the [Grid] [Retype]s of [Sched.default_cpu] whose
+   loop belongs to a statement of the companion demand. One hazard-proven loop per nest, or none: a
+   companion the preset cannot prove stays serial, which the fork-join model admits. Gated at the
+   configured work threshold ([cpu_schedule_min_work]), as the untuned default is: the threshold
+   counts what the renderer's launch floor ([cc_grid_min_updates]) counts, so a companion too small
+   to pay a fork/join keeps its serial code, and the cost model, which reads a [Grid] iteration as a
+   resident block ([Cost_model.reuse_traffic]), prices a seed's companions as the default's own
+   (ungated, a companion below the threshold charged a seed for a dispatch the default never makes,
+   and [cost_model_selection]'s capacity pick went to the default).
 
    Sound for any site geometry on a fork-join renderer: the proof is over the companion's OWN
    iterations, on a statement the site's ops do not touch (they rewrite the site nest and the tiles
    they mint; the fused flavor's tail, which [Fuse_epilogue] moves, is [skip]ped), and statements
-   are ordered by the joins. On [validate_parallel]'s side the companion write under its own [Grid]
-   loop must cover every active slot: it covers [Grid] slot 0, so a site that binds [Grid] slot 0
-   alone with a unit [Tensorize] lane (the packed Grid shapes, the conv Grid and row-panel shapes)
-   can take it, while the whole-triple form's [Workgroup] lane at [m_nj] is an active slot no
-   companion loop covers — that form leaves its companions serial. *)
+   are ordered by the joins. On [validate_parallel ~fork_join]'s side a write's only concurrent slot
+   is its own dispatch (gh-ocannl-1843): the site's [Workgroup] lanes and [Grid] loops render
+   serially or in the site's own dispatch, so every CPU flavor takes it — the all-serial ones (the
+   packed Serial / Hoisted shapes, the scalar blocktile, the conv serial flavor), the whole-triple
+   form beside its [Workgroup] lane at [m_nj], and the Grid shapes. *)
 let cpu_companion_geometry ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbol list)
     ~(expanded_zeros : Ir.Tnode.t list) (opt : LL.optimized) : Sched.schedule =
   match companion_demand ~site_syms ~skip ~expanded_zeros opt with
   | [] -> []
   | needs ->
       let syms = List.concat_map needs ~f:nest_loop_syms in
-      List.filter (Sched.default_cpu ~min_work:0 opt) ~f:(function
+      List.filter (Sched.default_cpu opt) ~f:(function
         | Sched.Retype { axis; ty = LL.Grid } -> List.mem syms axis ~equal:Idx.equal_symbol
         | _ -> false)
 
@@ -1991,7 +1995,7 @@ let cpu_mma_companion_geometry ~(opt : LL.optimized) ~(fused : bool) (site : mat
 (* The policy exclusion of a CPU flavor whose site binds a hardware dimension, beside companions
    (gh-ocannl-1609). Before the fork-join validator (gh-ocannl-1458) such a flavor failed
    [validate_parallel] at every compile and the tree refuted it (gh-ocannl-1561); on the fork-join
-   model it is valid — its companions run serially or take {!cpu_companion_geometry} — so it is
+   model it is valid — its companions take {!cpu_companion_geometry} (gh-ocannl-1843) — so it is
    [Excluded], a search-economy verdict a driver may lift, with [child] its payload. Companion-free
    sites are untouched. *)
 let cpu_companion_witness_prefix = "CPU companions (gh-ocannl-1609):"
@@ -2347,7 +2351,8 @@ let strided_row_in_place_witness (site : matmul_site) ~what =
 (* The CPU operand-packing matmul (schedule_cpu_pack_matmul.ml): all-serial tiling with the tile
    loops sunk to [i_o j_o k_o k_i i_i j_i], operands packed into contiguous stack scratch, output
    privatized across the k-block loop. With [sk_hoist], constant operands are instead packed once at
-   link time into the per-device constant pool. *)
+   link time into the per-device constant pool. Companions take {!cpu_companion_geometry}
+   ([family_schedule]). *)
 let cpu_sketch_schedule ~accum_prec (site : matmul_site)
     { sk_bm = bm; sk_bn = bn; sk_bk = bk; sk_hoist; _ } : Sched.schedule =
   let sp_i, _, i_i = Sched.split ~axis:site.m_i ~factor:bm ~outer:LL.Serial ~inner:LL.Serial in
@@ -2514,7 +2519,8 @@ let gpu_mma_sketch_schedule ~(opt : LL.optimized) (site : matmul_site)
    vector registers held across the k-loop, edges as narrower tiles. The zeroing's column loop
    becomes the Workgroup axis with the lane width matching its extent (coverage rule; the lane loop
    renders serially on the C backends). With [sk_bm > 0] the row loops split into pool-parallel Grid
-   blocks; [sk_bm = 0] keeps the single-statement form. *)
+   blocks; [sk_bm = 0] keeps the single-statement form. Companions take {!cpu_companion_geometry}
+   ([family_schedule]). *)
 let cpu_mma_sketch_schedule (site : matmul_site) { sk_bm = bm; sk_tile = tile; _ } : Sched.schedule
     =
   let zops =
@@ -3178,7 +3184,10 @@ let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
       Sched.tensorize ?tile ~i:site.c_row ~j:site.c_oc ~k:site.c_red ~simd_width:1 ()
     in
     let zops, grid_ops =
-      if not sk_grid then ([], [])
+      if not sk_grid then
+        (* The serial flavor: the conv nest stays serial, its companions take their own per-nest
+           geometry (gh-ocannl-1843). *)
+        ([], conv_direct_companion_geometry ~opt ~fused:sk_epilogue site)
       else if List.length (conv_real_stmts site opt) > 2 then
         match conv_aligned_grid site opt with
         | Some sched -> ([], drop_tail_retypes sched)
@@ -3363,18 +3372,17 @@ let family_schedule ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
           (* [opt] is now the code the site was detected on; [prefix] (the enabling interchange,
              empty for a site the plain matcher finds) takes the caller's code there. *)
           let sched =
-            if p.sk_mma then
-              if p.sk_gpu then gpu_mma_sketch_schedule ~opt site p
-              else if p.sk_bk > 0 then
-                (* The packed Grid shapes bind [Grid] slot 0 alone (a unit lane), so their
-                   companions take the default preset's per-nest geometry (gh-ocannl-1609); the
-                   whole-triple form's companions stay serial ({!cpu_companion_geometry}). *)
-                cpu_mma_pack_sketch_schedule site p
-                @
-                if p.sk_grid then cpu_mma_companion_geometry ~opt ~fused:p.sk_epilogue site else []
-              else cpu_mma_sketch_schedule site p
-            else if p.sk_gpu then gpu_sketch_schedule ~accum_prec ~opt site p
-            else cpu_sketch_schedule ~accum_prec site p
+            if p.sk_gpu then
+              if p.sk_mma then gpu_mma_sketch_schedule ~opt site p
+              else gpu_sketch_schedule ~accum_prec ~opt site p
+            else
+              (* Every CPU flavor's companions take the default preset's per-nest geometry
+                 (gh-ocannl-1609, gh-ocannl-1843): the packed shapes, the whole-triple form and the
+                 scalar blocktile alike ({!cpu_companion_geometry}). *)
+              (if not p.sk_mma then cpu_sketch_schedule ~accum_prec site p
+               else if p.sk_bk > 0 then cpu_mma_pack_sketch_schedule site p
+               else cpu_mma_sketch_schedule site p)
+              @ cpu_mma_companion_geometry ~opt ~fused:p.sk_epilogue site
           in
           (prefix @ sched, site.m_d)
   in
@@ -4511,9 +4519,9 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                         "stored B has no role symbol on its minor axis: whole-triple reads B in \
                          place and cannot satisfy Tensorize's role check"
                   | Some _ ->
-                      (* Every [bm] of the form keeps the [Workgroup] lane at [m_nj], an active slot
-                         no companion loop covers, so the form's companions stay serial — valid on
-                         the fork-join model — and the exclusion is the form's. *)
+                      (* Every [bm] of the form keeps the [Workgroup] lane at [m_nj] beside its
+                         companions, which take their per-nest geometry — valid on the fork-join
+                         model (gh-ocannl-1843) — and the exclusion is the form's. *)
                       cpu_companion_exclusion ~what:"the whole-triple form's Workgroup lane"
                         (Lazy.force cpu_companions) (fun () -> subt (fun () -> whole ())))
             in

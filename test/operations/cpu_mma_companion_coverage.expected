@@ -6,9 +6,16 @@ diag8: the lift recovers the whole-triple form: true
 diag8: every recovered seed binds a hardware dimension: true
 diag8: every recovered seed passes validate_parallel in fork-join mode: true
 diag8: no recovered whole-triple seed passes the hardware-thread mode: true
-diag8: every recovered whole-triple seed leaves the companion serial: true
+diag8: every recovered whole-triple seed gives the companion the preset's Grid geometry: true
+diag8: premise: all-serial seeds are offered (packed Serial / Hoisted, blocktile): true
+diag8: every offered all-serial seed gives the companion the preset's Grid geometry: true
+diag8: every offered all-serial seed leaves every writer of the site's target serial: true
+diag8: every offered all-serial seed passes validate_parallel in fork-join mode: true
 diag8: premise: the reference output varies and has no zero cell: true
 diag8: every recovered seed computes the output bit for bit: true
+diag8: every recovered whole-triple and packed Grid seed renders the companion as a pool dispatch: true
+diag8_serial: every offered all-serial seed computes the output bit for bit: true
+diag8: every offered all-serial seed renders the companion as a pool dispatch: true
 diag64: premise: the matmul site writes the materialized product: true
 diag64: premise: CPU tensorized seeds are offered: true
 diag64: no offered seed is the whole-triple form: true
@@ -20,11 +27,17 @@ diag64: the lift recovers a packed Grid shape: true
 diag64: every recovered seed binds a hardware dimension: true
 diag64: every recovered seed passes validate_parallel in fork-join mode: true
 diag64: no recovered whole-triple seed passes the hardware-thread mode: true
-diag64: every recovered whole-triple seed leaves the companion serial: true
+diag64: every recovered whole-triple seed gives the companion the preset's Grid geometry: true
+diag64: premise: all-serial seeds are offered (packed Serial / Hoisted, blocktile): true
+diag64: every offered all-serial seed gives the companion the preset's Grid geometry: true
+diag64: every offered all-serial seed leaves every writer of the site's target serial: true
+diag64: every offered all-serial seed passes validate_parallel in fork-join mode: true
 diag64: every recovered packed Grid seed gives the companion a Grid loop: true
 diag64: premise: the reference output varies and has no zero cell: true
 diag64: every recovered seed computes the output bit for bit: true
-diag64: every recovered packed Grid seed renders the companion as a pool dispatch: true
+diag64: every recovered whole-triple and packed Grid seed renders the companion as a pool dispatch: true
+diag64_serial: every offered all-serial seed computes the output bit for bit: true
+diag64: every offered all-serial seed renders the companion as a pool dispatch: true
 control: the whole-triple form is offered: true
 control: a packed Grid shape is offered: true
 control: every offered seed passes validate_parallel in fork-join mode: true
@@ -40,4 +53,22 @@ tail64: every unfused seed computes the output bit for bit: true
 tail64_back: every recovered seed computes the output bit for bit: true
 tail64: the fused flavor keeps the whole-triple form, and it passes validate_parallel: true
 tail64_fused: every fused whole-triple seed computes the output bit for bit: true
+tail64: premise: unfused all-serial seeds are offered: true
+tail64: every unfused all-serial seed gives the tail the preset's Grid geometry: true
+tail64: premise: fused all-serial seeds are offered: true
+tail64: no fused seed retypes a loop of the tail its fusion relocates: true
+tail64_fserial: every fused all-serial seed computes the output bit for bit: true
+sum64: premise: the matmul site writes the materialized product: true
+sum64: premise: the preset gives the total no Grid loop: true
+sum64: no offered or recovered seed gives the total a Grid loop: true
+sum64: premise: the reference total is one positive cell: true
+sum64: every offered seed computes the output bit for bit: true
+floor8: every offered all-serial seed still annotates the companion: true
+floor8: premise: the reference output varies and has no zero cell: true
+floor8: every offered all-serial seed computes the output bit for bit: true
+floor8: no seed renders the companion as a pool dispatch under the floor: true
+gate8: premise: ungated, the preset gives the companion a Grid loop: true
+gate8: at the default threshold the preset gives the companion no Grid loop: true
+gate8: premise: all-serial seeds are offered: true
+gate8: at the default threshold no offered or recovered seed gives it a Grid loop: true
 cpu_mma_companion_coverage: done

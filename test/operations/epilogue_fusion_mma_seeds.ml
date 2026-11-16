@@ -112,7 +112,9 @@ let census tag ~m ~n ~k =
         in
         match Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q scratch) scratch with
         | post -> (
-            match LL.validate_parallel post.LL.optimize_ctx.placements post.LL.llc with
+            match
+              LL.validate_parallel ~fork_join:is_cpu post.LL.optimize_ctx.placements post.LL.llc
+            with
             | () -> true
             | exception Invalid_argument _ -> false)
         | exception Invalid_argument _ -> false)
@@ -182,7 +184,9 @@ let census tag ~m ~n ~k =
     in
     match Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q scratch) scratch with
     | post -> (
-        match LL.validate_parallel post.LL.optimize_ctx.placements post.LL.llc with
+        match
+          LL.validate_parallel ~fork_join:is_cpu post.LL.optimize_ctx.placements post.LL.llc
+        with
         | () -> Ok post
         | exception Invalid_argument msg -> Error msg)
     | exception Invalid_argument msg -> Error msg

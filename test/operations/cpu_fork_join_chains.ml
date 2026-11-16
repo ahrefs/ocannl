@@ -16,7 +16,12 @@
    production. Every leg executes the scheduled kernel against the unscheduled one, bit for bit:
    every cell keeps its reduction order. Producers are discriminating ([Ll_test.tick] / [tag]), and
    each leg checks the C backend renders every [Grid] loop the schedule placed on its pool, so the
-   parity is not that of two serial runs. The affine legality crosscheck is on throughout. *)
+   parity is not that of two serial runs. The affine legality crosscheck is on throughout.
+
+   Legs 8-11 (gh-ocannl-1843) hand-annotate their programs instead: the validator's own fork-join
+   slot rule -- a write's only concurrent slot is its dispatch -- beside a non-unit [Workgroup] lane
+   and beside a two-level [Grid] nest, each executed; the whole-node [Zero_out] it still refuses;
+   and a colliding store it admits, which the renderer refuses. *)
 open Base
 module LL = Ir.Low_level
 module Sched = Ir.Schedule
@@ -295,3 +300,106 @@ let () =
   grid_writer "pipeline: the large copy is Grid-typed" all copy;
   renders_on_pool "pipeline" all src;
   parity "pipeline" got want
+
+(* 8-10 (gh-ocannl-1843): [validate_parallel ~fork_join] counts only a write's real slot. On a
+   fork-join renderer a write under a [Grid] loop has one concurrent dimension, its dispatch (the
+   outermost enclosing [Grid] loop); a [Workgroup] lane and a nested [Grid] loop render serially, so
+   no sibling nest's annotation can replicate the write. Each program is hand-annotated (no preset),
+   accepted in fork-join mode and refused in hardware-thread mode -- before gh-ocannl-1843 the
+   fork-join mode refused it too, on the sibling's slot -- and executes bit for bit against the same
+   program with every loop serial, with a serial sibling reading the companion's output. *)
+let validates ~fork_join (o : LL.optimized) =
+  match LL.validate_parallel ~fork_join o.LL.optimize_ctx.LL.placements o.LL.llc with
+  | () -> true
+  | exception Invalid_argument msg ->
+      Stdio.eprintf "validate_parallel ~fork_join:%b (not part of the golden): %s\n%!" fork_join msg;
+      false
+
+let slot_leg ~leg ~name ~materialized ~read build =
+  let o = Ll_test.optimize ~materialized ~name (build ~annotated:true) in
+  p (leg ^ ": fork-join validation accepts the program") (validates ~fork_join:true o);
+  p (leg ^ ": hardware-thread validation refuses it") (not (validates ~fork_join:false o));
+  let got = Ll_test.execute ~ctx:(Context.cpu ()) ~name o ~seed:[] ~read in
+  let src = Generated.read name in
+  let serial = Ll_test.optimize ~materialized ~name:(name ^ "_serial") (build ~annotated:false) in
+  let want = Ll_test.execute ~ctx:(Context.cpu ()) ~name:(name ^ "_serial") serial ~seed:[] ~read in
+  (o.LL.llc, src, got, want)
+
+(* 8. A materialized writer under one [Grid] loop beside a nest whose loop is a non-unit [Workgroup]
+   lane -- the whole-triple form's zeroing lane, beside a companion. *)
+let () =
+  let n = 32768 and w = 8 in
+  let a = mk "a8" [| w |] and b = mk "b8" [| n |] and r = mk "r8" [| n |] in
+  let build ~annotated =
+    let ax kind = if annotated then kind else LL.Serial in
+    let i = sym () and k = sym () and k' = sym () in
+    LL.unflat_lines
+      [
+        loop_n ~axis:(ax LL.Workgroup) i w (set_at a (iter i) (tick i));
+        loop_n ~axis:(ax LL.Grid) k n (set_at b (iter k) (mul (tick k) (get a [| aff [] 3 |])));
+        loop_n k' n (set_at r (iter k') (add (get b [| iter k' |]) (c 1.)));
+      ]
+  in
+  let llc, src, got, want =
+    slot_leg ~leg:"lane" ~name:"fj_lane" ~materialized:[ a; b; r ] ~read:[ a; b; r ] build
+  in
+  grid_writer "lane: the companion's nest is Grid-typed" llc b;
+  renders_on_pool "lane" llc src;
+  parity "lane" got want
+
+(* 9. A materialized writer under one [Grid] loop beside a nest with two [Grid] levels -- unequal
+   depths, so the sibling's outer loop is [Grid] slot 1, which the writer's nest does not have. *)
+let () =
+  let q = 128 and n = 32768 in
+  let a = mk "a9" [| q; q |] and b = mk "b9" [| n |] and r = mk "r9" [| n |] in
+  let build ~annotated =
+    let ax kind = if annotated then kind else LL.Serial in
+    let i = sym () and j = sym () and k = sym () and k' = sym () in
+    LL.unflat_lines
+      [
+        loop_n ~axis:(ax LL.Grid) i q
+          (loop_n ~axis:(ax LL.Grid) j q (set a [| iter i; iter j |] (tag i j)));
+        loop_n ~axis:(ax LL.Grid) k n
+          (set_at b (iter k) (add (tick k) (get a [| aff [] 5; aff [] 7 |])));
+        loop_n k' n (set_at r (iter k') (mul (get b [| iter k' |]) (c 2.)));
+      ]
+  in
+  let llc, src, got, want =
+    slot_leg ~leg:"depths" ~name:"fj_depths" ~materialized:[ a; b; r ] ~read:[ a; b; r ] build
+  in
+  grid_writer "depths: the two-level nest is Grid-typed" llc a;
+  grid_writer "depths: the companion's nest is Grid-typed" llc b;
+  (* One dispatch per nest: the inner Grid loop renders serially inside the outer one's chunks. *)
+  p "depths: each Grid nest renders as one pool dispatch" (pool_rendered src = 2);
+  parity "depths" got want
+
+(* 10. What fork-join mode still refuses: a whole-node [Zero_out] of a materialized node under a
+   [Grid] loop, which every iteration would run over the whole node. *)
+let () =
+  let n = 64 in
+  let a = mk "a10" [| n |] in
+  let k = sym () in
+  let llc =
+    LL.unflat_lines
+      [ loop_n ~axis:LL.Grid k n (LL.unflat_lines [ LL.Zero_out a; set_at a (iter k) (tick k) ]) ]
+  in
+  let o = Ll_test.optimize ~materialized:[ a ] ~name:"fj_zero" llc in
+  p "zero: fork-join validation refuses a whole-node Zero_out under a Grid loop"
+    (not (validates ~fork_join:true o))
+
+(* 11. What fork-join mode does not judge: a colliding store under a hand-annotated [Grid] loop --
+   every iteration writes one cell. Iteration independence is the annotating pass's obligation and
+   the renderer's: the validator admits the program, and the renderer's store-separation check
+   ([refuse_unseparated_thread_write], gh-ocannl-959) refuses it, so no data race is rendered. *)
+let () =
+  let n = 32768 in
+  let s = mk "s11" [| 1 |] in
+  let k = sym () in
+  let llc = LL.unflat_lines [ loop_n ~axis:LL.Grid k n (set_at s (aff [] 0) (tick k)) ] in
+  let o = Ll_test.optimize ~materialized:[ s ] ~name:"fj_collide" llc in
+  p "collide: fork-join validation admits the colliding store" (validates ~fork_join:true o);
+  p "collide: the renderer refuses the store as written from more than one thread"
+    (match Ll_test.execute ~ctx:(Context.cpu ()) ~name:"fj_collide" o ~seed:[] ~read:[ s ] with
+    | exception Invalid_argument msg ->
+        String.is_substring msg ~substring:"from more than one thread"
+    | _ -> false)

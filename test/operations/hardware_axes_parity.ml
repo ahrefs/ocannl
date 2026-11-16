@@ -136,8 +136,11 @@ let () =
   (* --- Negative: partial hardware coverage is rejected (PR #89 review) --- *)
   (* Launch dimensions are global to the kernel: with the first nest annotated Grid+Workgroup
      (block.x = 8), a sibling Grid-only nest would execute its materialized write once per thread
-     of the workgroup — racing or repeating the update. [validate_parallel] must reject this, on
-     every backend (the check is backend-independent). *)
+     of the workgroup — racing or repeating the update. The hardware-thread rule of
+     [validate_parallel] rejects this whatever the backend. A backend that launches nothing (the C
+     backends' fork-join pool, gh-ocannl-1458) compiles it: there the sibling's write has one
+     concurrent dimension, its own dispatch, and the [Workgroup] loop renders serially
+     (gh-ocannl-1843). *)
   let annotate_mixed (opt : LL.optimized) : LL.optimized =
     let first = ref true in
     let rec map_inner (llc : LL.t) : LL.t =
@@ -161,17 +164,33 @@ let () =
   let%op c2m = e *. f in
   let mixed_comp = named "combo_mixed" (Asgns.sequence [ Train.forward c1m; Train.forward c2m ]) in
   let ctx_m = Context.auto () in
-  match
+  let annotated = ref None in
+  let compiled =
     try
       ignore
         (Context.compile
-           ~lowered_transform:(fun o -> [ annotate_mixed o ])
+           ~lowered_transform:(fun o ->
+             let a = annotate_mixed o in
+             annotated := Some a;
+             [ a ])
            ctx_m mixed_comp Ir.Indexing.Empty
           : Context.t * Context.routine);
       None
     with Invalid_argument msg -> Some msg
-  with
-  | Some msg ->
-      p "partial hardware coverage rejected"
-        (String.is_substring msg ~substring:"all active hardware dimensions")
-  | None -> p "partial hardware coverage rejected" false
+  in
+  p "partial hardware coverage rejected by the hardware-thread rule"
+    (match !annotated with
+    | None -> false
+    | Some o -> (
+        match LL.validate_parallel o.LL.optimize_ctx.LL.placements o.LL.llc with
+        | () -> false
+        | exception Invalid_argument msg ->
+            String.is_substring msg ~substring:"all active hardware dimensions"));
+  let fork_join =
+    Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)
+  in
+  p "the backend's compile follows its own model (rejected when launching, admitted fork-join)"
+    (match compiled with
+    | Some msg ->
+        (not fork_join) && String.is_substring msg ~substring:"all active hardware dimensions"
+    | None -> fork_join)

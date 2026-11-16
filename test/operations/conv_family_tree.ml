@@ -1002,6 +1002,9 @@ let () =
    so the relu passes all of them and the output stays discriminating. *)
 let () =
   let tag = "conv_tail_exec" in
+  (* The companion geometry is gated at the default preset's work threshold (gh-ocannl-1843); off
+     for this small tail, so it is annotated. *)
+  Hashtbl.set Utils.config_file_args ~key:"cpu_schedule_min_work" ~data:"0";
   let out = make_conv ~tail:true ~bias_shift:1000. "cte" ~b:2 ~h:11 ~ic:4 ~oc:8 in
   let comp = Train.forward out in
   let recovered opt =
@@ -1059,25 +1062,59 @@ let () =
           | exception exn ->
               Stdio.eprintf "%s: %s: %s\n%!" tag (show q) (Exn.to_string exn);
               false));
+  let executes ~what ~enum indexed =
+    p_all
+      (tag ^ ": every " ^ what ^ " computes the output bit for bit")
+      indexed
+      ~f:(fun (idx, q) ->
+        let transform opt =
+          match List.nth (enum opt) idx with
+          | Some q' when Poly.equal q' q ->
+              [
+                Sched.apply
+                  (Autotune.sketch_schedule ~accum_prec:Ll_test.backend_accum_prec ~p:q' opt)
+                  opt;
+              ]
+          | _ -> failwith (Printf.sprintf "leaf %d is gone from the compile's lowering" idx)
+        in
+        match run ~transform () with
+        | got ->
+            Array.length got = Array.length expected
+            && Array.for_all2_exn got expected ~f:(fun g r ->
+                Int64.equal (Int64.bits_of_float g) (Int64.bits_of_float r))
+        | exception exn ->
+            Stdio.eprintf "%s: leaf %d (%s) FAILED %s\n%!" tag idx (show q) (Exn.to_string exn);
+            false)
+  in
+  executes ~what:"recovered leaf" ~enum:recovered (List.mapi back ~f:(fun i q -> (i, q)));
+  (* gh-ocannl-1843: the production serial flavor (no Grid loop of its own, unsplit row) gives the
+     tail its own per-nest Grid loop too. *)
+  let offered opt =
+    match Autotune.conv_sketch_tree ~is_gpu:false ~is_cpu:true ~limits:cpu_limits opt with
+    | None -> []
+    | Some tree -> Sspace.leaves tree
+  in
+  let serial =
+    List.filter_mapi (offered opt) ~f:(fun i q ->
+        Option.some_if
+          ((not q.Autotune.sk_grid) && q.Autotune.sk_bm = 0 && not q.Autotune.sk_epilogue)
+          (i, q))
+  in
+  p_exists (tag ^ ": premise: the unfused serial flavor is offered") serial ~f:(fun _ -> true);
   p_all
-    (tag ^ ": every recovered leaf computes the output bit for bit")
-    (List.mapi back ~f:(fun i q -> (i, q)))
-    ~f:(fun (idx, q) ->
-      let transform opt =
-        match List.nth (recovered opt) idx with
-        | Some q' when Poly.equal q' q ->
-            [
-              Sched.apply
-                (Autotune.sketch_schedule ~accum_prec:Ll_test.backend_accum_prec ~p:q' opt)
-                opt;
-            ]
-        | _ -> failwith (Printf.sprintf "leaf %d is gone from the compile's lowering" idx)
-      in
-      match run ~transform () with
-      | got ->
-          Array.length got = Array.length expected
-          && Array.for_all2_exn got expected ~f:(fun g r ->
-              Int64.equal (Int64.bits_of_float g) (Int64.bits_of_float r))
-      | exception exn ->
-          Stdio.eprintf "%s: leaf %d (%s) FAILED %s\n%!" tag idx (show q) (Exn.to_string exn);
-          false)
+    (tag ^ ": every unfused serial leaf validates in fork-join mode and gives the tail a Grid loop")
+    serial ~f:(fun (_, q) ->
+      match apply_leaf opt q with
+      | None -> false
+      | Some post -> (
+          tail_on_grid post
+          &&
+          match
+            LL.validate_parallel ~fork_join:true post.LL.optimize_ctx.LL.placements post.LL.llc
+          with
+          | () -> true
+          | exception exn ->
+              Stdio.eprintf "%s: %s: %s\n%!" tag (show q) (Exn.to_string exn);
+              false));
+  executes ~what:"unfused serial leaf" ~enum:offered serial;
+  Hashtbl.remove Utils.config_file_args "cpu_schedule_min_work"

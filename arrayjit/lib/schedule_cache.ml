@@ -872,8 +872,9 @@ type entry = {
    22: gh-ocannl-1725 -- the storing search's beam finals record, so every replay explains its times
    23: gh-ocannl-1697 -- split singles re-derived inside the seeded plan, unsplit and new sites too
    24: gh-ocannl-2079 -- NaN-free frozen f32 masters under half twins gain hoisted packing seeds
+   25: gh-ocannl-1843 -- CPU seeds' companions take the default preset's per-nest Grid geometry
 *)
-let entry_version = 24
+let entry_version = 25
 
 let sanitize name =
   String.map name ~f:(fun c ->

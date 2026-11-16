@@ -7,9 +7,10 @@
 
    The scenario here is that escape, reproduced with an explicit transform instead of a model pick
    (the model's picks are envelope- and backend-dependent; the failure mode is not): a kernel whose
-   first nest is Grid+Workgroup-annotated and whose second is Grid-only, so the second nest's
-   materialized write is not covered by all active hardware dimensions. The rejection is
-   backend-independent (test/operations/hardware_axes_parity.ml pins it directly).
+   first nest is Grid+Workgroup-annotated and zeroes its whole materialized output inside its [Grid]
+   loop, which every iteration would run over the whole node. The rejection is backend-independent:
+   the fork-join validation of the C backends keeps it (gh-ocannl-1843; the partial-coverage kernel
+   this test used before is valid there, hardware_axes_parity pins both).
 
    Run by a rule (not a test stanza) with --ocannl_backend=cc and the model_peak_* envelope
    overrides pinned, like cost_model_selection.ml: the C backends carry no advisory envelope
@@ -25,9 +26,10 @@ open Verdict.Claims
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
-(* Every top-level nest annotated Grid, with the FIRST one's inner loop additionally Workgroup: the
-   launch then has an active workgroup dimension that the second nest's write does not cover. *)
-let annotate_mixed (opt : LL.optimized) : LL.optimized list =
+(* Every top-level nest annotated Grid, with the FIRST one's inner loop additionally Workgroup and a
+   whole-node [Zero_out] of the node it writes ([zero], the pair's first output) at the head of its
+   [Grid] loop's body. *)
+let annotate_mixed ~(zero : Ir.Tnode.t) (opt : LL.optimized) : LL.optimized list =
   let first = ref true in
   let rec map_inner (llc : LL.t) : LL.t =
     match llc with
@@ -39,7 +41,7 @@ let annotate_mixed (opt : LL.optimized) : LL.optimized list =
     match llc with
     | LL.Seq (x, y) -> LL.Seq (map_outer x, map_outer y)
     | LL.For_loop fc ->
-        let body = if !first then map_inner fc.body else fc.body in
+        let body = if !first then LL.Seq (LL.Zero_out zero, map_inner fc.body) else fc.body in
         first := false;
         LL.For_loop { fc with axis = LL.Grid; body }
     | other -> other
@@ -74,23 +76,26 @@ let values name ctx (c : Tensor.t) (d : Tensor.t) =
 
 let () =
   (* --- The escape: the rejection happens in codegen, past the transform seam --- *)
-  let _c, _d, comp = pair "escape" in
+  let c, _d, comp = pair "escape" in
   let raised =
     try
       ignore
-        (Context.compile ~lowered_transform:annotate_mixed (Context.auto ()) comp Ir.Indexing.Empty
+        (Context.compile
+           ~lowered_transform:(annotate_mixed ~zero:c.Tensor.value)
+           (Context.auto ()) comp Ir.Indexing.Empty
           : Context.t * Context.routine);
       None
     with Invalid_argument msg -> Some msg
   in
   p "an unguarded compile of the rejected transform raises out of Context.compile"
     (match raised with
-    | Some msg -> String.is_substring msg ~substring:"all active hardware dimensions"
+    | Some msg -> String.is_substring msg ~substring:"Zero_out of materialized node"
     | None -> false);
 
-  let _c, _d, comp = pair "classified" in
+  let c, _d, comp = pair "classified" in
   let classified =
-    Context.compile_outcome ~lowered_transform:annotate_mixed
+    Context.compile_outcome
+      ~lowered_transform:(annotate_mixed ~zero:c.Tensor.value)
       ~provenance:Ir.Schedule_outcome.Candidate ~candidate:"bad-annotation" (Context.auto ()) comp
       Ir.Indexing.Empty
   in
@@ -114,18 +119,19 @@ let () =
   let ctx, routine =
     Autotune.compile_advisory
       ~on_fallback:(fun exn -> fell_back := Some (Exn.to_string exn))
-      annotate_mixed (Context.auto ()) comp Ir.Indexing.Empty
+      (annotate_mixed ~zero:c.Tensor.value)
+      (Context.auto ()) comp Ir.Indexing.Empty
   in
   let ctx = Context.run ctx routine in
   p "compile_advisory falls back on a transform rejected downstream of the seam"
     (match !fell_back with
-    | Some msg -> String.is_substring msg ~substring:"all active hardware dimensions"
+    | Some msg -> String.is_substring msg ~substring:"Zero_out of materialized node"
     | None -> false);
   p "the fallback routine computes the default pipeline's values"
     (values "the fallback routine computes the default pipeline's values" ctx c d);
 
   (* --- ... and not when the caller says there is nothing to fall back to (Codex P2) --- *)
-  let _c, _d, comp = pair "nogate" in
+  let c, _d, comp = pair "nogate" in
   let fell_back = ref None in
   let raised =
     try
@@ -133,14 +139,15 @@ let () =
         (Autotune.compile_advisory
            ~on_fallback:(fun exn -> fell_back := Some (Exn.to_string exn))
            ~fallback_if:(fun () -> false)
-           annotate_mixed (Context.auto ()) comp Ir.Indexing.Empty
+           (annotate_mixed ~zero:c.Tensor.value)
+           (Context.auto ()) comp Ir.Indexing.Empty
           : Context.t * Context.routine);
       None
     with Invalid_argument msg -> Some msg
   in
   p "fallback_if false re-raises instead of recompiling"
     ((match raised with
-       | Some msg -> String.is_substring msg ~substring:"all active hardware dimensions"
+       | Some msg -> String.is_substring msg ~substring:"Zero_out of materialized node"
        | None -> false)
     && Option.is_none !fell_back);
 
