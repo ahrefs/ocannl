@@ -495,7 +495,9 @@ class CellGroupTest(unittest.TestCase):
     def gh1002_driver(self, child_source, pidfile, timeout=30):
         driver = subprocess.Popen(
             self.python(
-                "import subprocess, sys, gh1002_cells as driver\n"
+                "import faulthandler, signal, subprocess, sys, gh1002_cells as driver\n"
+                "if hasattr(signal, 'SIGUSR1'):\n"
+                "    faulthandler.register(signal.SIGUSR1)\n"
                 "from test.test_cell_group import cap_counted_from\n"
                 "driver._cancellation.install()\n"
                 "driver.CELL_TERMINATE_GRACE_S = 0.1\n"
@@ -522,6 +524,56 @@ class CellGroupTest(unittest.TestCase):
         self.addCleanup(cleanup)
         return driver
 
+    def communicate_direct_term(self, driver, pid, marker, timeout=10):
+        """Keep the response deadline; on failure collect the driver's stack before killing it.
+
+        SIGUSR1 is installed before the cell can publish. The extra second is diagnostic
+        collection after a failed deadline, never extra time in which the test can pass.
+        """
+        try:
+            return driver.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            marker_written = marker.exists()
+            marker_text = marker.read_text() if marker_written else None
+            cell_alive = self.alive(pid)
+            if driver.poll() is None:
+                with contextlib.suppress(ProcessLookupError):
+                    driver.send_signal(signal.SIGUSR1)
+            try:
+                out, err = driver.communicate(timeout=1)
+            except subprocess.TimeoutExpired:
+                driver.kill()
+                out, err = driver.communicate(timeout=10)
+            self.fail(
+                f"gh1002 driver exceeded {timeout}s: marker_written={marker_written}, "
+                f"cell_alive={cell_alive}, marker={marker_text!r}, "
+                f"driver_returncode={driver.returncode}\n"
+                f"driver stdout:\n{out}\ndriver stderr (SIGUSR1 stack):\n{err}"
+            )
+
+    @unittest.skipUnless(os.name == "posix", "driver stack diagnostics require SIGUSR1")
+    def test_gh1002_direct_term_timeout_reports_wait_and_cell_state(self):
+        pidfile = self.dir / "gh1002-diagnostic.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        marker = self.dir / "not-written"
+        driver = self.gh1002_driver(
+            "import sys, time\n"
+            + publish_pid("sys.argv[1]", "os.getpid()")
+            + "time.sleep(300)\n",
+            pidfile,
+        )
+        self.wait_file(pidfile)
+        pid = int(pidfile.read_text())
+        # Withhold TERM deliberately: the live wait must be visible, rather than just a
+        # TimeoutExpired mentioning the Popen argv. Cleanup still owns the parked cell.
+        with self.assertRaises(AssertionError) as failure:
+            self.communicate_direct_term(driver, pid, marker, timeout=0.1)
+        message = str(failure.exception)
+        self.assertIn("marker_written=False, cell_alive=True", message)
+        self.assertIn("driver stderr (SIGUSR1 stack):", message)
+        self.assertIn("run_in_own_group", message)
+        self.assertIn("test_cell_group.py", message)
+
     @unittest.skipUnless(os.name == "posix", "direct group signals require POSIX")
     def test_gh1002_cell_receives_direct_group_sigterm(self):
         pidfile = self.dir / "gh1002-direct.pid"
@@ -538,7 +590,7 @@ class CellGroupTest(unittest.TestCase):
         self.wait_file(pidfile)
         pid = int(pidfile.read_text())
         os.killpg(pid, signal.SIGTERM)
-        out, err = driver.communicate(timeout=10)
+        out, err = self.communicate_direct_term(driver, pid, marker)
         self.assertEqual(driver.returncode, 0, err)
         self.assertEqual(out.strip(), "0")
         self.assertEqual(marker.read_text(), "TERM")
