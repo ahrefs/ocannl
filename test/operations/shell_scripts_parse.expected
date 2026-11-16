@@ -653,6 +653,7 @@ tools/fmt-check.sh parses: true
 tools/gpu-tokens.sh parses: true
 tools/harness-legs-alone.sh parses: true
 tools/hip-wmma-probe.sh parses: true
+tools/isolated-apt.sh parses: true
 tools/kernel-window.sh parses: true
 tools/lab-map.sh parses: true
 tools/machine-verify-far.sh parses: true
@@ -689,6 +690,8 @@ tools/test-fmt-check.sh parses: true
 tools/test-harness-legs-alone.sh uses the shared harness contract: true
 tools/test-harness-legs-alone.sh parses: true
 tools/test-harnesses.sh parses: true
+tools/test-isolated-apt.sh uses the shared harness contract: true
+tools/test-isolated-apt.sh parses: true
 tools/test-machine-verify.sh uses the shared harness contract: true
 tools/test-machine-verify.sh parses: true
 tools/test-merge-build-check.sh uses the shared harness contract: true
