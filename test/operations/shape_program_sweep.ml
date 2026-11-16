@@ -33,10 +33,10 @@
    Verdicts. [Solved] gives the shapes every node must take (compared modulo leading size-1 axes).
    [Ill_typed]: fixed shapes conflict, whatever the resolve-at-use nodes take (decided with them
    empty, checking only what nothing can change); it must be refused. [Underspecified]: a parameter
-   sized only by a fixed index, refused at closure by design (docs/shape_inference.md); it must be
-   refused. [Inconclusive] makes no claim and is counted on stderr by reason: demands that disagree
-   at a resolve-at-use node, a parameter axis nothing sizes (the solver's hidden-dimension policy),
-   a resolve-at-use node nothing sizes, a contraction between two open rows, a re-check failure.
+   sized only by a fixed index or an output row nothing sizes, refused at closure by design
+   (docs/shape_inference.md); it must be refused. [Inconclusive] makes no claim and is counted on
+   stderr by reason: demands that disagree at a resolve-at-use node, a resolve-at-use node nothing
+   sizes, a contraction between two open rows, a re-check failure.
 
    CLAIMS (stdout): no program the oracle solves is refused but for a listed cause; every node's
    shape is the oracle's; every executed draw holds as many distinct values as its oracle shape has
@@ -62,10 +62,9 @@
    executed fill; the judge checks every program node's shape, not just its draws.
 
    Other remaining causes: one observed normal-draw repeat; 3 fixed-index programs, including
-   [(stretch u + stretch (stretch u)) ++ "...|3 => ...|0"]; and 20 [uniform1]-initialized parameters
-   sized only by a fixed index, accepted where default-initialized ones are refused. The fixed-index
-   entry used to cover all einsum specs over draws; since gh-ocannl-2247 passes a solved row's role
-   to its axes, only fixed indices remain.
+   [(stretch u + stretch (stretch u)) ++ "...|3 => ...|0"]. The fixed-index entry used to cover all
+   einsum specs over draws; since gh-ocannl-2247 passes a solved row's role to its axes, only fixed
+   indices remain.
 
    Retired entries retain their agreeing fixed programs: gh-ocannl-2244 fixes a draw under a unary
    operation, under both operands of a pointwise operation, under a compose, and a no-axis constant
@@ -435,12 +434,11 @@ let fixpoint ~use_min (prog : program) =
   in
   iterate 0
 
-(* A parameter sized only by a fixed index is refused at closure by design; one with an axis nothing
-   sizes is a forgotten hidden dimension, whose refusal the solver decides by its own policy (no
-   claim). *)
+(* Both fixed-index-only sizes and forgotten parameter dimensions are refused at closure,
+   regardless of initializer (gh-ocannl-2236). *)
 (* The node a fixpoint failure names ("%k: ..."). *)
 let failing_node e = Stdlib.Scanf.sscanf_opt e "%%%d:" Fn.id
-let is_policy e = String.is_suffix e ~suffix:min_only
+let is_policy e = String.is_suffix e ~suffix:min_only || String.is_suffix e ~suffix:hidden
 
 let solve (prog : program) : oracle =
   match ill_typed prog with
@@ -465,7 +463,7 @@ let solve (prog : program) : oracle =
               then Inconclusive "a resolve-at-use node nothing sizes"
               else if
                 Array.existsi prog ~f:(fun k node -> is_param node && List.is_empty (strip s.(k).o))
-              then Inconclusive "a parameter whose output row nothing sizes"
+              then Underspecified (None, "a parameter whose output row nothing sizes")
               else if
                 Array.exists prog ~f:(function
                   | Compose (x, y) ->
@@ -562,9 +560,6 @@ let open_under (prog : program) =
 
 let known_lit = "gh-ocannl-2180: a fixed-index output axis through stretch"
 
-let known_uniform1_param =
-  "proposed: a parameter initialized by uniform1 and sized only by a fixed index is accepted"
-
 (* The output row's last axes taken over by one size-1 axis: everything else as the oracle says. *)
 let output_collapse ~want ~got =
   let w = strip want.o in
@@ -631,13 +626,6 @@ let known : known list =
       refusals = [ too_many; axes_count ];
     };
     {
-      (* Excuses no shape (no node holds it): only the acceptance, in [judge]. *)
-      entry = known_uniform1_param;
-      is_x = (fun _ _ _ -> false);
-      reach = false;
-      refusals = [];
-    };
-    {
       entry = "proposed: a fixed index over a draw";
       (* Was every einsum spec over a draw; since gh-ocannl-2247 a spec's axes take the draw's role,
          and what is left is the fixed index: [(stretch u + stretch (stretch u)) ++ "...|3 =>
@@ -674,10 +662,7 @@ let judge (prog : program) (oracle : oracle) (outcome : outcome) ~(fills : int o
   | Ill_typed _, Refused _ -> Agrees
   | Ill_typed why, Accepted _ -> Disagrees ("accepted an ill-typed program: " ^ why)
   | Underspecified _, Refused _ -> Agrees
-  | Underspecified (node, why), Accepted _ -> (
-      match node with
-      | Some k when Poly.equal prog.(k) (Param true) -> Known known_uniform1_param
-      | _ -> Disagrees ("accepted an underspecified program: " ^ why))
+  | Underspecified (_, why), Accepted _ -> Disagrees ("accepted an underspecified program: " ^ why)
   | Solved _, Refused msg -> (
       match
         List.find known ~f:(fun e ->

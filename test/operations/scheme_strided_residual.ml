@@ -96,12 +96,13 @@ let make_windows_2_3 () =
    and two stacked (cifar_resnet stacks three): the second block composes the first's widths into
    the mixed padded/valid arm again. *)
 let make_net net =
-  let b1 = make_s2_block ~name:"s2" in
   match net with
   | `S2 ->
+      let b1 = make_s2_block ~name:"s2" in
       let%op s2_block x = b1 x in
       ("s2_block", s2_block)
   | `S2_s3 ->
+      let b1 = make_s2_block ~name:"s2" in
       let b2 = make_s2_block ~name:"s3" in
       let%op s2_s3_blocks x = b2 (b1 x) in
       ("s2_s3_blocks", s2_s3_blocks)

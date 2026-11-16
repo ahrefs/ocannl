@@ -173,6 +173,11 @@ files.
   This fills the draw under two or three pointwise results before a fixed index; copying the
   minimum down a broadcast inequality would instead forbid its operand from broadcasting.
   Size-1 fixed-index outputs keep their existing minimal rule, and parameters remain excluded.
+  Exclusion includes the unresolved dimension-bound component connected to a parameter
+  (gh-ocannl-2236, staging#2041 reconciliation): a non-parameter result's guessed minimum can
+  otherwise flow back as a GLB and size the parameter. This is eligibility for the early guess,
+  not a transfer of parameter roles to initializer-private axes. The matrix pins both refusal
+  from an index alone and acceptance when a real use sizes the parameter before indexing it.
   The sweep pins the identities and acceptance of the 13 programs the broad deferral refused.
   Its residual literal entry now covers only five stretches adopting a fixed-index output axis;
   the reduction half retires with gh-ocannl-2247, as does the nested-branching entry when the fixes
@@ -213,6 +218,14 @@ files.
   repetition cases rather than claiming every draw fills. The full green suite missed a
   constant dropout mask after a guess deletion (gh-ocannl-2185, staging#1927); the failure story
   and what that guess stood in for are above.
+- Parameter closure is initializer independent (gh-ocannl-2236). Keep `Terminal_row`s on unused
+  parameters, retain the original full row terminal when closing a row to its GLB, carry
+  `is_in_param` through dimension substitutions, and mark substituted axes.
+  Otherwise `uniform1` fixed-index-only axes take the ordinary minimum-size guess. Decide forgotten
+  dimensions only at the final stage: `checkpoint_rewind`'s valid suffix bounds arrive late.
+  `Row.parameter_outputs` also refuses an inferred output closing empty. Output rows have no
+  implicit-omission exception, even if the initializer unified one with its omitted input. Input
+  omission comes from the parameter declaration itself, not the initializer's choice of row marks.
 - Implicit (omitted) row specs are shared and safe-to-guess; an explicit `...` stays strict; row
   variables in kernel slots need the `|` prefix. Symbolic extents (`Row.Sym`, gh-490) are rigid:
   equal only to themselves, materialized at their declared maximum; `Total_elems` against them
@@ -876,7 +889,9 @@ files.
 - A rank-cycle error is usually a consequence: find the commitment that made it (gh-ocannl-1955).
   Two sit in the closing path. An equation left with `beg_handled = false` solves neither variable,
   and `value` there is the rest of the other side, so `visit_rows_for_row_solution` (which reads
-  `v = value` into every bound through `v`) runs only on the arm recording the solution. And closing
+  `v = value` into every bound through `v`) runs only on the arm recording the solution. The same
+  applies to parameter terminal marks: emitting one on the residual remainder can falsely mark
+  another row and its dimensions as parameters (gh-ocannl-2236). And closing
   a row to its GLB is a choice, so every close reads the entry through `rank_refutes_glb`, a
   read-only query of the rank graph: `entry_for_closing` for the terminal close and
   `process_shape_row`, `eliminate_row_constraint` when it re-reads the GLB from the environment

@@ -634,6 +634,20 @@ The classes that stay late all need what a trace deliberately does not run, name
 - *Underspecification: a forgotten hidden dimension, a parameter sized by a fixed index.* Reported at the closure by design (gh-ocannl-1803). Reporting anticipated underspecification early is too ambitious for the core calculus in the general case, and the fixed-index case alone does not justify an analysis: if one is ever done, it should cover the whole class. The closure's messages already name the cause. Do not re-file either as a missing scheme check. The unsized kernel above is not part of this class: the spec decides it, so no analysis is involved.
 - *The abstract cyclic permutation*: an incompleteness of the closing policy, not a contradiction. A trace must not report it.
 
+A parameter's initializer fills its shape; it does not decide whether an unspecified
+parameter shape may be guessed (gh-ocannl-2236). An axis sized only by a fixed index is
+refused, and an inferred output row nothing sizes is a forgotten hidden dimension. The
+same refusal applies to `{p}`, `neg {p}`, and a parameter beside a constant, with the
+default initializer, `uniform1`, or another initializer. State the parameter dimensions
+explicitly or supply a use that sizes them. The omitted-row exception is unchanged for
+batch and input rows: an omitted row spec may close empty. Omitting both input dimensions
+and input axis labels in the parameter declaration grants this permission to its input
+row, independently of the initializer. Output rows are never
+implicitly omitted, so an initializer's omitted input row cannot grant that permission
+to its parameter's output.
+A parameter constructed in a session but never used is also refused at that session's
+closure if its shape is unspecified; construct parameters only on the path that uses them.
+
 ## Projections inference
 
 Unlike shape inference proper, constraints that participate in projections inference pertain to a single assignment, and projection equations only tie individual instances of tensor accesses in the assignments. In particular even if the same tensor repeats in the assignments, the distinct instances will have different projection ids and participate in disjoint equations, so that they can be indexed differently.

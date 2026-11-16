@@ -4,6 +4,10 @@ transformer_with_loss logits dims: 2x3x5
 transformer_with_loss logits: every value is finite: true
 transformer_with_loss loss dims: 1
 transformer_with_loss loss: every value is finite: true
+transformer_without_positions logits dims: 2x3x5
+transformer_without_positions logits: every value is finite: true
+transformer_without_positions loss dims: 1
+transformer_without_positions loss: every value is finite: true
 lenet logits dims: 2x10
 lenet logits: every value is finite: true
 sokoban_cnn action_logits dims: 2x4

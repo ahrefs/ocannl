@@ -188,6 +188,9 @@ let outcome (mode : mode) case =
     Result.bind
       (match case.define with Some d -> at Definition d | None -> Ok ())
       ~f:(fun () ->
+        (* The definition probe and application build separate closures. Do not leave the probe's
+           unapplied parameters in the application's inference session. *)
+        Tensor.unsafe_reinitialize ();
         Result.bind (at Application case.apply) ~f:(fun y ->
             at Closure (fun () -> ignore (Shape.to_dims y.Tensor.shape : int array))))
   in

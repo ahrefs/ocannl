@@ -110,8 +110,8 @@ val reset_transient : unit -> unit
 
 type globals
 (** The solver's module-level inference state -- the pending role claims, the safe-to-guess,
-    use-site-resolution and concatenation-component sets, the rank graph and the template cache --
-    as persistent values (gh-ocannl-903). *)
+    use-site-resolution and concatenation-component sets, parameter-output checks, the rank graph
+    and the template cache -- as persistent values (gh-ocannl-903). *)
 
 val capture_globals : unit -> globals
 (** A pointer capture, O(1): what a checkpoint records. *)
@@ -371,6 +371,12 @@ type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6a | Stage6b | St
 val add_safe_to_guess : row_var -> unit
 (** Mark a row variable as allowed to be empty even if it's in a parameter. *)
 
+val register_parameter_output : t -> constraint_origin list -> unit
+(** Require an inferred parameter output to have axes; an explicit scalar rank stays valid. *)
+
+val check_parameter_outputs : environment -> unit
+(** Validate registered parameter outputs after the closing stages. *)
+
 val add_used_in_spec_or_compose : row_var -> unit
 (** Mark a row variable as used in an einsum spec or compose shape update. Meant specifically for
     input rows, to indicate that the variable should not be guessed empty when it ends up in a
@@ -569,10 +575,10 @@ val has_lazy_coefficient : constraint_ -> bool
     provenance. The product ties of capture references are constants. *)
 
 type marks
-(** The additions to the per-variable policy sets (and the pending symbol-role claims) since a
-    {!capture_globals}. *)
+(** The additions to the per-variable policy sets, parameter-output checks and symbol-role claims
+    since a {!capture_globals}. *)
 
-val marks_since : globals -> marks
+val marks_since : ?parameter_is_used:(t -> bool) -> globals -> marks
 
 val add_marks : renaming -> marks -> unit
 (** Re-adds the marks through the sets' writers, renaming the variables. *)

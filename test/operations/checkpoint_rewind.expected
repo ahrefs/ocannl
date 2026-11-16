@@ -1,4 +1,5 @@
 control: every prefix closes with the suffix: true
+control: the suffix sizes the parameter output: true
 soak, a failing construction rewound: the held tensors look as before the checkpoint: true
 soak, a failing construction rewound: the window's tensors are refused, naming the rewind: true
 soak, a failing construction rewound: the seed cache holds no discarded seed: true

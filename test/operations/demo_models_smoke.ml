@@ -50,35 +50,39 @@ let pin_width t k =
   let%op pinned = t +++ "... | c; | c => ... | c" pin in
   pinned
 
+let transformer_outputs ~pos_embed () =
+  let vocab = 5 and seq = 3 in
+  let model =
+    Demo_models.transformer ~label:[ "t" ] ~num_encoder_layers:1 ~num_decoder_layers:1 ~num_heads:2
+      ~d_enc:8 ~d_dec:8 ~d_ff:16 ~pos_embed ()
+  in
+  let one_hot l ~shift =
+    NTDSL.init ~l ~prec:Ir.Ops.single ~b:[ 2; seq ] ~i:[] ~o:[ vocab ]
+      ~f:(function [| b; s; v |] -> if v = (b + s + shift) % vocab then 1. else 0. | _ -> 0.)
+      ()
+  in
+  let mask =
+    NTDSL.init ~l:"mask" ~prec:Ir.Ops.single ~b:[ seq ] ~i:[ seq ] ~o:[]
+      ~f:(function [| s; t |] -> if s >= t then 1. else 0. | _ -> 0.)
+      ()
+  in
+  let loss, logits =
+    Demo_models.transformer_with_loss ~label:[ "tl" ] ~model () ~train_step:None
+      ~src:(one_hot "src" ~shift:0) ~tgt_input:(one_hot "tgt_input" ~shift:1)
+      ~tgt_target:(one_hot "tgt_target" ~shift:2) ~mask
+  in
+  (* The loss embeds the logits, so it alone is forwarded. *)
+  ([ loss ], [ ("logits", logits); ("loss", loss) ])
+
 let () =
   smoke "multi_head_att_workshop" ~outputs:(fun () ->
       let x = TDSL.range_of_shape ~label:[ "tokens" ] ~batch_dims:[ 2; 3 ] ~output_dims:[ 8 ] () in
       let att = Demo_models.multi_head_att_workshop ~num_heads:2 ~d_k:4 ~d_v:4 () in
       let y = pin_width (att x) 8 in
       ([ y ], [ ("output", y) ]));
-  smoke "transformer_with_loss" ~outputs:(fun () ->
-      let vocab = 5 and seq = 3 in
-      let model =
-        Demo_models.transformer ~label:[ "t" ] ~num_encoder_layers:1 ~num_decoder_layers:1
-          ~num_heads:2 ~d_enc:8 ~d_dec:8 ~d_ff:16 ()
-      in
-      let one_hot l ~shift =
-        NTDSL.init ~l ~prec:Ir.Ops.single ~b:[ 2; seq ] ~i:[] ~o:[ vocab ]
-          ~f:(function [| b; s; v |] -> if v = (b + s + shift) % vocab then 1. else 0. | _ -> 0.)
-          ()
-      in
-      let mask =
-        NTDSL.init ~l:"mask" ~prec:Ir.Ops.single ~b:[ seq ] ~i:[ seq ] ~o:[]
-          ~f:(function [| s; t |] -> if s >= t then 1. else 0. | _ -> 0.)
-          ()
-      in
-      let loss, logits =
-        Demo_models.transformer_with_loss ~label:[ "tl" ] ~model () ~train_step:None
-          ~src:(one_hot "src" ~shift:0) ~tgt_input:(one_hot "tgt_input" ~shift:1)
-          ~tgt_target:(one_hot "tgt_target" ~shift:2) ~mask
-      in
-      (* The loss embeds the logits, so it alone is forwarded. *)
-      ([ loss ], [ ("logits", logits); ("loss", loss) ]));
+  smoke "transformer_with_loss" ~outputs:(transformer_outputs ~pos_embed:Nn_blocks.Learned_additive);
+  smoke "transformer_without_positions"
+    ~outputs:(transformer_outputs ~pos_embed:Nn_blocks.No_pos_embed);
   smoke "lenet" ~outputs:(fun () ->
       let logits = pin_width (Demo_models.lenet () ~train_step:None (images ~h:8 ~w:8 ~c:1)) 10 in
       ([ logits ], [ ("logits", logits) ]));

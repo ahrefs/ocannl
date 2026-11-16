@@ -3758,7 +3758,7 @@ let set_scale ~factor delayed_ref_large delayed_ref_small =
             (* Defensive: already caught by the top-of-function row guard. *)
             assert false)
 
-let set_terminal ~is_param (sh : t) =
+let set_terminal ?(implicit_input = false) ~is_param (sh : t) =
   mark_unused sh.id;
   let get_origin kind =
     Row.
@@ -3770,6 +3770,13 @@ let set_terminal ~is_param (sh : t) =
         operation = Some "set_terminal";
       }
   in
+  if is_param then (
+    Row.register_parameter_output sh.output [ get_origin `Output ];
+    (* Omission belongs to the declaration, independently of the initializer's rows. *)
+    if implicit_input then
+      match (Row.subst_row !state sh.input).bcast with
+      | Row.Row_var v -> Row.add_safe_to_guess v
+      | Row.Broadcastable -> ());
   active_constraints :=
     Row.Terminal_row (is_param, sh.batch, [ get_origin `Batch ])
     :: Row.Terminal_row (is_param, sh.input, [ get_origin `Input ])
@@ -4966,7 +4973,8 @@ let%debug4_sexp finish_inference_body (() : unit) : unit =
     };
   let unsolved =
     List.filter !active_constraints ~f:(function
-      | Shape_row (r, _) | Terminal_row (_, r, _) ->
+      | Terminal_row (true, _, _) -> true
+      | Shape_row (r, _) | Terminal_row (false, r, _) ->
           not (List.exists (Row.row_shapes r) ~f:(Set.mem !unused_shapes))
       | _ -> true)
   in
@@ -4987,6 +4995,7 @@ let%debug4_sexp finish_inference_body (() : unit) : unit =
   let unsolved, env = Row.solve_inequalities ~stage:Stage5 unsolved env in
   (* One search over the closing stages' balanced-flank choices (gh-ocannl-2154). *)
   let unsolved, env = Row.solve_closing_stages ~stages:[ Stage6a; Stage6b; Stage7 ] unsolved env in
+  Row.check_parameter_outputs env;
   refuse_unsolved ~where:"finish_inference" unsolved;
   let _active_update_steps : update_step list = !active_update_steps in
   List.iter ~f:(apply_env_step ~closure:true env) !active_update_steps;
@@ -6021,7 +6030,12 @@ module Scheme = struct
           "the function writes a capture reference made outside it other than by binding it in an \
            operation, which a scheme cannot carry per application -- make the reference inside the \
            function, or apply the function inline";
-      let marks = Row.marks_since row_globals in
+      let unused_end = !unused_shapes in
+      let own_unused = Set.diff unused_end unused_start in
+      let marks =
+        Row.marks_since row_globals ~parameter_is_used:(fun r ->
+            not (List.exists (Row.row_shapes r) ~f:(Set.mem own_unused)))
+      in
       (* Validation: the trailing setters ([set_dim], [infer_equal], [set_terminal]) push
          constraints without solving them, so the whole window is solved once more -- Stage1 only:
          the closing stages would default the generic arguments. *)
@@ -6029,10 +6043,8 @@ module Scheme = struct
         if sabotaged No_end_validation then !state
         else snd (Row.solve_inequalities ~stage:Row.Stage1 constraints !state)
       in
-      let unused_end = !unused_shapes in
-      (* As [finish_inference] filters the terminal rows of shapes still marked unused: the trace's
-         own such shapes can never be used afterwards. *)
-      let own_unused = Set.diff unused_end unused_start in
+      (* The trace's own unused template shapes can never be used afterwards; their constraints must
+         not be carried to applications. *)
       let constraints =
         List.filter constraints ~f:(function
           | Row.Shape_row (r, _) | Terminal_row (_, r, _) ->

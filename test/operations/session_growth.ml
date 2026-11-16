@@ -48,7 +48,7 @@ let leaf () =
 let[@inline never] build () =
   let x = leaf () in
   let%op part = x ++ "2^o => o" in
-  let%op h = ({ sg_w; o = [ 8 ] } * part) + { sg_b; o = [ 8 ] } in
+  let%op h = ({ sg_w } * part) + { sg_b; o = [ 8 ] } in
   let%op y = relu h in
   y
 
