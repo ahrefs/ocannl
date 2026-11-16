@@ -973,14 +973,7 @@ query_refusal_matches() { # RC STDOUT STDERR_FILE REASON
   [ "$1" = 2 ] && [ -z "$2" ] && grep -qF -- "$4" "$3"
 }
 query_refused() { # REASON; query_rc/query_out/query-error are the real result
-  local control_rc=0 control_out
-  control_out=$("$TMP/query-unrelated" 2>"$TMP/query-unrelated-error") || control_rc=$?
-  if [ "$control_rc" != 2 ] || [ -n "$control_out" ] \
-     || ! grep -qxF 'unrelated refusal control' "$TMP/query-unrelated-error"; then
-    report 1 'negative control: unrelated query subject ran' "exit $control_rc; $control_out"
-    return 1
-  fi
-  if query_refusal_matches "$control_rc" "$control_out" "$TMP/query-unrelated-error" "$1"; then
+  if query_refusal_matches "$query_control_rc" "$query_control_out" "$TMP/query-unrelated-error" "$1"; then
     report 1 "negative control: query refusal rejects unrelated exit 2: $1"
     return 1
   fi
@@ -994,6 +987,15 @@ echo 'unrelated refusal control' >&2
 exit 2
 STUB
 chmod +x "$TMP/query-unrelated"
+# Cache the fixed subject's result; every reason still exercises the predicate.
+query_control_rc=0
+query_control_out=$("$TMP/query-unrelated" 2>"$TMP/query-unrelated-error") || query_control_rc=$?
+if [ "$query_control_rc" != 2 ] || [ -n "$query_control_out" ] \
+   || ! grep -qxF 'unrelated refusal control' "$TMP/query-unrelated-error"; then
+  report 1 'negative control: unrelated query subject ran' "exit $query_control_rc; $query_control_out"
+  return
+fi
+report 0 'negative control: unrelated query subject ran'
 query_runs=$TMP/query-state/runs
 query_expected=$(cd "$TMP" && pwd -P)/query-state/runs
 query() {

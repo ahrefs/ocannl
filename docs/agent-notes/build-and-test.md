@@ -1264,7 +1264,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   to reject it (gh-ocannl-2240). Each rejected stand-in is a PASS of the control;
   accepting it fails the harness. The query leg applies the same control to its
   argument, missing-run, ambiguous-root, lock-inspection, metadata and last-pointer
-  refusal checks. These checks match literal diagnostic fragments for the named
+  refusal checks. Malformed last-pointer records, directories and legacy symlinks
+  share the missing/empty-state diagnostic; the pin does not distinguish those causes.
+  These checks match literal diagnostic fragments for the named
   fixture cases, not complete usage output or arbitrary refusal messages.
 - **A harness whose checks are bare commands under errexit runs each leg contained**
   (gh-ocannl-1539): `harness_leg_run_errexit 'NAME' leg_N` runs the body in a subshell of its own
