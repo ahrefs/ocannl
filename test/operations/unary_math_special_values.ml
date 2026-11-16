@@ -103,6 +103,8 @@
 
    A claim that does not apply to a backend is skipped there ([SKIPPED on <backend>] on stderr), and
    its label names where it is skipped and why. Every backend compiles and runs every kernel. *)
+let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
+
 open Base
 open Ocannl.Operation.DSL_modules
 module LL = Ir.Low_level

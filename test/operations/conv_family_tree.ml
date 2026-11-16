@@ -45,6 +45,8 @@
    leaves, and its pick is the exhaustive first argmin over the same leaves scored the same way;
    with the incumbent at the family's floor it fathoms instead of scoring. *)
 
+let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

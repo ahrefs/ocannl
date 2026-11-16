@@ -2,6 +2,8 @@
    algebra simplifier. Rounding is that algorithm's rounding, not libm pow's rounding. NaN^0 = 1;
    other NaN powers are NaN. Odd powers preserve the sign of zero and infinity; negative powers
    reciprocate the positive power. Fractional powers retain the vendor policy. *)
+let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
+
 open Base
 open Ocannl.Operation.DSL_modules
 module LL = Ir.Low_level

@@ -39,6 +39,8 @@ open Verdict.Claims
 module Asgns = Ir.Assignments
 module CC = Ir.Compile_cost
 
+let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
+
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 

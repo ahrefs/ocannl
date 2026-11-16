@@ -13,6 +13,8 @@
    ulps, fast math included) plus the single rounding to half, and nothing coarser: the reference
    values are all normal halves, so a 2^-10 relative bound is one step of the half grid (two steps
    of the finer grid just below a power of two, when [want] is one). *)
+let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
+
 open Base
 open Ocannl.Operation.DSL_modules
 module LL = Ir.Low_level
