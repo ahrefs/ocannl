@@ -10,9 +10,11 @@
    dispatch joined before the next statement, code outside [Grid] loops runs once, and a write's
    only concurrent slot is its own dispatch ([Low_level.validate_parallel ~fork_join],
    gh-ocannl-1458 and gh-ocannl-1843, which the cc compile path passes). So every flavor's
-   companions take [Sketch_families.cpu_companion_geometry] -- the [Grid] choices [Sched.default_cpu
-   ~min_work:0] makes on the companion's own loops, which the claims derive rather than restate. The
-   tree offers the hardware-binding flavors only after [Autotune.lift_cpu_companions].
+   companions take [Sketch_families.cpu_companion_geometry] -- the [Grid] choices
+   [Sched.default_cpu] makes on the companion's own loops (here at [cpu_schedule_min_work=0]), which
+   the claims derive rather than restate; at the default threshold a companion too small to pay a
+   fork/join takes none (the gate leg). The tree offers the hardware-binding flavors only after
+   [Autotune.lift_cpu_companions].
 
    Seeding uses synthetic limits (a 32-byte vector file), so the offered set is machine-independent.
    The renderer's launch floor is disabled ([cc_grid_min_updates=0]), and with it the preset's work
@@ -37,7 +39,8 @@
    whole-triple form and retypes no loop of the tail. 5. A total sum of the product, a companion the
    preset's hazard proof cannot split: it stays serial in every seed, which still computes it bit
    for bit. 6. The floor: a positive launch floor renders the diag8 companion's [Grid] loop
-   serially. *)
+   serially. 7. The gate: at the default work threshold the diag8 companion takes no [Grid] loop in
+   any seed, as in the preset. *)
 
 let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
 
@@ -148,16 +151,21 @@ let grid_written opt sp tn =
   List.exists (writer_loops (applied opt sp).LL.llc tn) ~f:(fun (_, axis) ->
       LL.equal_axis_type axis LL.Grid)
 
-(* The [Grid] loops, anywhere in the top-level nests of [llc] writing [tn], sorted. *)
-let grid_loops_writing (llc : LL.t) tn =
+(* Every loop, anywhere in the top-level nests of [llc] writing [tn], with its axis. *)
+let loops_writing (llc : LL.t) tn =
   List.concat_map (LL.flat_lines [ llc ]) ~f:(fun nest ->
       if not (List.mem (written nest) tn ~equal:Tn.equal) then []
       else
         let acc = ref [] in
         Ll_test.walk nest ~on_stmt:(function
-          | LL.For_loop { index; axis = LL.Grid; _ } -> acc := index :: !acc
+          | LL.For_loop { index; axis; _ } -> acc := (index, axis) :: !acc
           | _ -> ());
         !acc)
+
+(* The [Grid] loops among them, sorted. *)
+let grid_loops_writing (llc : LL.t) tn =
+  List.filter_map (loops_writing llc tn) ~f:(fun (index, axis) ->
+      Option.some_if (LL.equal_axis_type axis LL.Grid) index)
   |> List.dedup_and_sort ~compare:Ir.Indexing.compare_symbol
 
 (* The geometry the default CPU preset gives [tn]'s writers, as [cpu_companion_geometry] asks it:
@@ -171,17 +179,6 @@ let takes_preset_geometry opt tn sp =
   let want = preset_grid opt tn in
   (not (List.is_empty want))
   && List.equal Ir.Indexing.equal_symbol (grid_loops_writing (applied opt sp).LL.llc tn) want
-
-(* The loops of the top-level nests of [llc] writing [tn]. *)
-let loops_writing (llc : LL.t) tn =
-  List.concat_map (LL.flat_lines [ llc ]) ~f:(fun nest ->
-      if not (List.mem (written nest) tn ~equal:Tn.equal) then []
-      else
-        let acc = ref [] in
-        Ll_test.walk nest ~on_stmt:(function
-          | LL.For_loop { index; _ } -> acc := index :: !acc
-          | _ -> ());
-        !acc)
 
 (* Positive integer operands: every product sum is exact in single precision and the diagonal is
    clear of the zero init. *)
@@ -439,7 +436,7 @@ let () =
   (* The negative control: the fused flavor's tail is a statement the site's own op
      ([Fuse_epilogue]) relocates, so the companion geometry skips it -- no fused seed retypes a loop
      of the tail. *)
-  let tail_loops = loops_writing opt.LL.llc out.Tensor.value in
+  let tail_loops = List.map (loops_writing opt.LL.llc out.Tensor.value) ~f:fst in
   let fused = List.filter indexed ~f:(fun (_, sp) -> sp.sk_epilogue) in
   p_exists "tail64: premise: fused all-serial seeds are offered" fused ~f:(fun (_, sp) ->
       all_serial sp);
@@ -513,5 +510,34 @@ let () =
     serial_offered;
   p (tag ^ ": no seed renders the companion as a pool dispatch under the floor") (not !any_pool);
   Hashtbl.set Utils.config_file_args ~key:"cc_grid_min_updates" ~data:"0"
+
+(* Leg 7: the gate. The companion geometry is gated at the default preset's work threshold
+   ([cpu_schedule_min_work], the launch floor's twin, gh-ocannl-1843): at its configured default the
+   diag8 companion, eight cells, is too small to pay a fork/join, so the preset leaves it serial and
+   so does every seed -- its code is the serial companion's. *)
+let () =
+  let tag = "gate8" in
+  let x = ints (tag ^ "_x") ~rows:8 ~cols:32 7 in
+  let y = ints (tag ^ "_y") ~rows:32 ~cols:8 5 in
+  let%op a = x +* "ik; kj => ij" y in
+  let%op d = a ++ "ii => i" in
+  let comp = Train.forward d in
+  let mat = [ a.Tensor.value ] in
+  let opt =
+    Context.lowered_for_decisions ~materialized:mat (Context.cpu ()) comp Ir.Indexing.Empty
+  in
+  let companion = d.Tensor.value in
+  p_exists (tag ^ ": premise: ungated, the preset gives the companion a Grid loop") [ companion ]
+    ~f:(fun tn -> not (List.is_empty (preset_grid opt tn)));
+  Hashtbl.remove Utils.config_file_args "cpu_schedule_min_work";
+  let offered = seeds opt and back = recovered opt in
+  p_empty
+    (tag ^ ": at the default threshold the preset gives the companion no Grid loop")
+    ~over:[ companion ] (preset_grid opt companion);
+  p_exists (tag ^ ": premise: all-serial seeds are offered") offered ~f:all_serial;
+  p_none (tag ^ ": at the default threshold no offered or recovered seed gives it a Grid loop")
+    (offered @ back) ~f:(fun sp ->
+      not (List.is_empty (grid_loops_writing (applied opt sp).LL.llc companion)));
+  Hashtbl.set Utils.config_file_args ~key:"cpu_schedule_min_work" ~data:"0"
 
 let () = Stdio.printf "cpu_mma_companion_coverage: done\n"

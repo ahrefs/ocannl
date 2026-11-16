@@ -10369,14 +10369,14 @@ let validate_parallel ?(warp_size = 0) ?(reassociable = fun _ -> false) ?(fork_j
        dimension, the only failure the coverage rule detects -- which is why it exists for
        kernel-global launch dimensions alone -- and the slot a fork-join write could miss is its own
        dispatch, which encloses it by definition. Under [fork_join] the coverage rule therefore
-       counts nothing, for any write ([covered_write_applies]). What stays: a whole-node [Zero_out]
+       counts nothing, for any write ([gpu_coverage_rule]). What stays: a whole-node [Zero_out]
        under a [Grid] loop (every iteration zeroes the whole node, a real race), and every
        structural rule above and in [Tile_mma]'s arm. Iteration independence within a dispatch was
        never this function's to prove: the annotating pass's hazard proof, [parallel_grid_safe] and
        the renderer's store-separation check decide it. *)
-    let covered_write_applies = not fork_join in
+    let gpu_coverage_rule = not fork_join in
     let rec check_writes ~covered ~enclosing ~in_grid llc =
-      let coverage_applies = in_grid || not fork_join in
+      let zero_out_refused = in_grid || gpu_coverage_rule in
       match llc with
       | For_loop { index; body; axis; _ } ->
           let covered =
@@ -10395,7 +10395,7 @@ let validate_parallel ?(warp_size = 0) ?(reassociable = fun _ -> false) ?(fork_j
       | If { body; _ } -> check_writes ~covered ~enclosing ~in_grid body
       | Zero_out tn ->
           if
-            coverage_applies
+            zero_out_refused
             && (not (List.is_empty active))
             && Tn.Placements.is_materialized_force plc tn (Site "160:parallel-validation")
           then
@@ -10406,7 +10406,7 @@ let validate_parallel ?(warp_size = 0) ?(reassociable = fun _ -> false) ?(fork_j
                 (Schedule.Expand_zero expands the init into a loop nest the same geometry ops can \
                 annotate)")
       | Set { tn; _ } | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } ->
-          if covered_write_applies then check_covered_write ~covered tn
+          if gpu_coverage_rule then check_covered_write ~covered tn
       | Tile_mma { d = d_tn, d_idcs; a = _, a_idcs; b = _, b_idcs; lane; _ } ->
           (* The cooperating [lane] axis must be a real enclosing [Workgroup]-typed loop: the launch
              needs its threads, hardware backends reach the intrinsic on all of them together, and
@@ -10427,8 +10427,9 @@ let validate_parallel ?(warp_size = 0) ?(reassociable = fun _ -> false) ?(fork_j
                   ("Low_level.validate_parallel: Tile_mma base indices must not mention the lane \
                     axis " ^ Indexing.symbol_ident lane ^ " (the tile is jointly owned)"));
           (* The tile store covers the lane slot by decree (the statement is nested under the lane
-             loop, adding its slot to [covered]); other active slots follow the ordinary rule. *)
-          if covered_write_applies then check_covered_write ~covered d_tn
+             loop, adding its slot to [covered]); under hardware-thread mode the other active slots
+             follow the ordinary rule, and under [fork_join] none is counted. *)
+          if gpu_coverage_rule then check_covered_write ~covered d_tn
       | Noop | Comment _ | Staged_compilation _ | Set_local _ | Declare_local _ | Workgroup_barrier
         ->
           ()

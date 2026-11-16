@@ -103,12 +103,12 @@ files.
   the site's own store in every tensorized CPU seed (`missing: Grid slot 0`), the packed Serial
   shapes included, and a sibling's `Workgroup` lane or deeper `Grid` nest refused the companion. A
   colliding store under a hand-annotated `Grid` loop passes the validator; the renderer's
-  store-separation check refuses it (`cpu_fork_join_chains` legs 8-11). Soundness, why it holds for ANY cc schedule:
-  statements are ordered by the joins; a `Local` is privatized only when all its kernel accesses
-  sit in one loop body; within a dispatch the hazard proof, `parallel_grid_safe` and
-  `refuse_unseparated_thread_write` decide. Fission is unchanged (it still cuts at GPU-unaligned
-  materialized edges on CPU, harmless but no longer needed). The sketch families' CPU companion
-  rule follows this model (gh-ocannl-1609, next section).
+  store-separation check refuses it (`cpu_fork_join_chains` legs 8-11). Soundness, why it holds
+  for ANY cc schedule: statements are ordered by the joins; a `Local` is privatized only when all
+  its kernel accesses sit in one loop body; within a dispatch the hazard proof,
+  `parallel_grid_safe` and `refuse_unseparated_thread_write` decide. Fission is unchanged (it
+  still cuts at GPU-unaligned materialized edges on CPU, harmless but no longer needed). The
+  sketch families' CPU companion rule follows this model (gh-ocannl-1609, next section).
 - **The CPU threshold is work per dispatch** (gh-ocannl-1458): `cpu_schedule_min_work` (16384)
   against `Cost_model.fork_join_updates` of the candidate loop alone -- the SAME count the
   renderer's launch floor (`cc_grid_min_updates`, gh-ocannl-1564) applies to every pool launch, so
