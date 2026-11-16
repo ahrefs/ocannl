@@ -12142,9 +12142,9 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
- ; cc-vector-width: independent -- the conv family's seed counts read the width only through gates
- ; passing at 16, 32 and 64 bytes, and through register-tile alternatives none of its 8-channel
- ; sites has at any width; the 64-channel cvr leg skips where the width affords no twin.
+ ; cc-vector-width: independent -- CPU counts derive register-tile twins at each site's extents
+ ; from the seeding limits, including its register count and the optional two-row twin. The cvr
+ ; leg gates on that same eligibility rather than on the seeds it checks.
  (name schedule_conv_gemm)
  (package neural_nets_lib)
  (deps

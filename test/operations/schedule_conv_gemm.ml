@@ -136,6 +136,41 @@ let advertised_tile_divides ~m ~n ~k =
 let narrowed_to_16 (device : Ir.Backend_intf.hardware_limits) =
   { device with simd_vector = { device.simd_vector with bytes = 16 } }
 
+(* Count each flavor's auto tile plus the independently eligible register-tile twins, never the
+   seeder output being checked. All sites below compute in f32. A panel uses its own row extent;
+   width and register count come from the exact limits used by seeding. *)
+let cpu_tile_copies ~limits ~m ~n =
+  let file = limits.Ir.Backend_intf.simd_vector in
+  1
+  + List.length (Ir.Register_tile.alternatives ~file ~elt_bytes:4 ~m ~n)
+  +
+  if Utils.registered_flag ~arg_name:"autotune_register_tile_rm_twin" then
+    if Option.is_some (Ir.Register_tile.rm_twin ~file ~elt_bytes:4 ~m ~n) then 1 else 0
+  else 0
+
+let conv_tile_copies ~limits (site : Autotune.conv_site) ?rows () =
+  cpu_tile_copies ~limits
+    ~m:(Option.value rows ~default:site.Autotune.c_nrow)
+    ~n:site.Autotune.c_noc
+
+(* Lower a fresh instance of the graph: compiling consumes its forward code. This probe reads only
+   the contraction extents, so losing a seed cannot weaken the expected count. *)
+let probe_cpu_conv_copies ~tag make =
+  if not on_cpu then fun ?rows:_ () -> 1
+  else
+    let ctx = Context.auto () in
+    let limits = Context.hardware_limits ctx in
+    let site = ref None in
+    ignore
+      (Context.compile
+         ~lowered_transform:(fun o ->
+           site := Autotune.detect_conv o.LL.llc;
+           [ o ])
+         ctx
+         (named (tag ^ "_count") (Train.forward (make (tag ^ "_count"))))
+         Ir.Indexing.Empty);
+    conv_tile_copies ~limits (Option.value_exn !site)
+
 let make_x tag =
   NTDSL.init ~l:(tag ^ "x") ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 11; 11; 4 ]
     ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
@@ -172,7 +207,7 @@ let run_plain name y =
 let () =
   (* === detect_conv across stride/padding variants (via the conv2d block: random params are fine,
      only the lowered structure is inspected) === *)
-  let detect_leg tag ~stride ~use_padding ~want_stride ~want_offset ~want_row ~want_seeds =
+  let detect_leg tag ~stride ~use_padding ~want_stride ~want_offset ~want_row =
     (* The padded leg's input goes through the padding-aware constructor: its layout commits at
        first compilation WITH the conv's halo, and the lowered access is then offset-free in buffer
        space — a valid conv over the physically padded buffer. *)
@@ -184,8 +219,8 @@ let () =
     let site = ref None in
     let n_seeds = ref (-1) in
     let ctx = Context.auto () in
-    (* Pin the vector width so the C-backend seed-count assertion is backend-independent (the check
-       always passes is_cpu; only [limits] would otherwise vary per device). *)
+    (* Pin the width; the register count still follows the device, so derive the tile twins under
+       these same limits (the check always passes is_cpu). *)
     let limits = narrowed_to_16 (Context.hardware_limits ctx) in
     let transform (opt : LL.optimized) =
       site := Autotune.detect_conv opt.LL.llc;
@@ -207,7 +242,10 @@ let () =
        would leave uncovered, so the conv family tree refutes it (gh-ocannl-697; it used to be
        proposed and fail validation). A strided row seeds the same three (gh-ocannl-502): the
        compacting [Stage] packs the strided window densely, so the pipeline applies exactly as on a
-       unit-stride row. *)
+       unit-stride row. Each of these three flavors carries its eligible register-tile twins. *)
+    let want_seeds =
+      Option.value_map !site ~default:0 ~f:(fun site -> 3 * conv_tile_copies ~limits site ())
+    in
     p (tag ^ " C-backend conv seeds") (!n_seeds = want_seeds);
     match !site with
     | None -> p (tag ^ " detected") false
@@ -221,12 +259,9 @@ let () =
             && cx.Autotune.cx_offset = want_offset
             && cx.Autotune.cx_nk = 3)
   in
-  detect_leg "cvd_s1v" ~stride:1 ~use_padding:false ~want_stride:1 ~want_offset:0 ~want_row:9
-    ~want_seeds:3;
-  detect_leg "cvd_s2v" ~stride:2 ~use_padding:false ~want_stride:2 ~want_offset:0 ~want_row:5
-    ~want_seeds:3;
-  detect_leg "cvd_s1p" ~stride:1 ~use_padding:true ~want_stride:1 ~want_offset:0 ~want_row:11
-    ~want_seeds:3;
+  detect_leg "cvd_s1v" ~stride:1 ~use_padding:false ~want_stride:1 ~want_offset:0 ~want_row:9;
+  detect_leg "cvd_s2v" ~stride:2 ~use_padding:false ~want_stride:2 ~want_offset:0 ~want_row:5;
+  detect_leg "cvd_s1p" ~stride:1 ~use_padding:true ~want_stride:1 ~want_offset:0 ~want_row:11;
 
   (* === Pattern discipline: a matmul is not a conv site === *)
   (let ma =
@@ -427,13 +462,18 @@ let () =
      value-checked, so a seed that proposes an unsound schedule would be crowned silently: each seed
      the wave proposes on a stride-2 conv gets its own compile and is compared against the natural
      form. The conv-alone graph carries its own [Zero_out], so the proposals are the serial pipeline
-     and its Grid twin (whose zero expansion adopts the same geometry). === *)
+     and its Grid twin (whose zero expansion adopts the same geometry), each carrying the
+     register-tile alternatives at the detected site. === *)
   (let cvs2 =
      lazy
        (let limits = narrowed_to_16 (Context.hardware_limits (Context.auto ())) in
         let seeds = ref [] in
+        let copies = ref 0 in
         (let _, _, y = make_conv_s2v "cvs2_p" in
          let transform (opt : LL.optimized) =
+           copies :=
+             Option.value_map (Autotune.detect_conv opt.LL.llc) ~default:0 ~f:(fun site ->
+                 conv_tile_copies ~limits site ());
            seeds := Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits opt;
            opt
          in
@@ -447,7 +487,7 @@ let () =
           let _, _, y = make_conv_s2v "cvs2_r" in
           run_plain "cvs2_ref" y
         in
-        (!seeds, want2))
+        (!seeds, want2, !copies))
    in
    let run_seed want2 i p_ =
      let tag = Printf.sprintf "cvs2_%d" i in
@@ -473,14 +513,14 @@ let () =
    in
    in_leg ~leg:cpu_leg "cvs2: the stride-2 conv seeds are the serial pipeline and its Grid twin"
      (fun label ->
-       let seeds, _ = Lazy.force cvs2 in
+       let seeds, _, copies = Lazy.force cvs2 in
        p_all label seeds ~f:(fun s ->
-           List.length seeds = 2
+           List.length seeds = 2 * copies
            && s.Autotune.sk_conv && (not s.Autotune.sk_gpu)
-           && List.count seeds ~f:(fun t -> t.Autotune.sk_grid) = 1));
+           && List.count seeds ~f:(fun t -> t.Autotune.sk_grid) = copies));
    let results =
      lazy
-       (let seeds, want2 = Lazy.force cvs2 in
+       (let seeds, want2, _ = Lazy.force cvs2 in
         List.mapi seeds ~f:(run_seed want2))
    in
    in_leg ~leg:cpu_leg
@@ -545,6 +585,11 @@ let () =
     let _, _, _, y = make_tail "cvt_r" in
     run_plain "cvt_ref" y
   in
+  let cvt_copies =
+    probe_cpu_conv_copies ~tag:"cvt" (fun tag ->
+        let _, _, _, y = make_tail tag in
+        y)
+  in
   let _, _, _, y = make_tail "cvt_t" in
   let reports = ref [] in
   let ctx = Context.auto () in
@@ -563,12 +608,14 @@ let () =
   | [ r ] ->
       show_counts "cvt" r;
       (* cc: serial, its fused twin, and the fused Grid flavor (the unfused Grid one refuted on its
-         uncovered tail). metal: the whole-routine zeroed site's two GPU staged flavors, fused only
-         (gh-ocannl-503) -- their unfused flavor is refuted on companion coverage (gh-ocannl-697),
-         the [cvzt] leg below; a GPU leg that cannot seed an f32 site proposes none. *)
+         uncovered tail), each carrying its eligible register-tile twins. metal: the whole-routine
+         zeroed site's two GPU staged flavors, fused only (gh-ocannl-503) -- their unfused flavor is
+         refuted on companion coverage (gh-ocannl-697), the [cvzt] leg below; a GPU leg that cannot
+         seed an f32 site proposes none. *)
       p "conv sketches seeded (serial+grid, with fused-epilogue twins)"
         (if on_cpu then
-           r.Autotune.sketch_candidates = 3 && r.Autotune.epilogue_sketch_candidates = 2
+           r.Autotune.sketch_candidates = 3 * cvt_copies ()
+           && r.Autotune.epilogue_sketch_candidates = 2 * cvt_copies ()
          else if has_uniform_f32_mma then
            r.Autotune.sketch_candidates = 2 && r.Autotune.epilogue_sketch_candidates = 2
          else if Lazy.force gpu_capable then r.Autotune.sketch_candidates > 0
@@ -1064,6 +1111,11 @@ let () =
   let cvu_dedup_label =
     "cvu: every per-segment GPU candidate dedups against its whole-routine twin (none timed)"
   in
+  let cvu_copies =
+    probe_cpu_conv_copies ~tag:"cvu" (fun tag ->
+        let _, _, y = make_conv8 tag in
+        y)
+  in
   let _, _, y = make_conv8 "cvu_t" in
   let reports = ref [] in
   let ctx = Context.auto () in
@@ -1081,15 +1133,16 @@ let () =
   (match !reports with
   | [ r ] ->
       show_counts "cvu" r;
-      (* metal: the whole-extent staged flavor plus its pd2 pipelined twin (gh-ocannl-487), on the
+      (* cc: serial + Grid, each with its eligible register-tile twins, whole and per segment.
+         metal: the whole-extent staged flavor plus its pd2 pipelined twin (gh-ocannl-487), on the
          whole routine (gh-ocannl-503) and per fission segment. *)
       p "cvu: conv seeds per fission segment (GPU staged on metal; serial+grid on cc)"
         (if has_uniform_f32_mma then
            r.Autotune.sketch_candidates = 2 && r.Autotune.fiss_sketch_candidates = 2
          else if on_cpu then
-           r.Autotune.sketch_candidates = 2
-           && r.Autotune.fiss_sketch_candidates = 2
-           && r.Autotune.fiss_sketch_timed = 2
+           r.Autotune.sketch_candidates = 2 * cvu_copies ()
+           && r.Autotune.fiss_sketch_candidates = 2 * cvu_copies ()
+           && r.Autotune.fiss_sketch_timed = 2 * cvu_copies ()
          else true);
       (* No per-segment candidate is timed: GPU fission folds the conv's zero into a per-cell
          companion of the one segment, and the whole-routine pipeline expands it into that same nest
@@ -1187,6 +1240,11 @@ let () =
     "cvu2: every per-segment GPU stride-2 candidate dedups against its whole-routine twin (none \
      timed)"
   in
+  let cvu2_copies =
+    probe_cpu_conv_copies ~tag:"cvu2" (fun tag ->
+        let _, _, y = make_conv8_s2 tag in
+        y)
+  in
   let _, _, y = make_conv8_s2 "cvu2_t" in
   let reports = ref [] in
   let ctx = Context.auto () in
@@ -1204,15 +1262,16 @@ let () =
   (match !reports with
   | [ r ] ->
       show_counts "cvu2" r;
-      (* metal: the staged flavor plus its pd2 pipelined twin (gh-ocannl-487), on the whole routine
+      (* cc: serial + Grid, each with its eligible register-tile twins, whole and per segment.
+         metal: the staged flavor plus its pd2 pipelined twin (gh-ocannl-487), on the whole routine
          and per segment, where each dedups against its whole-routine twin (see [cvu]). *)
       p "cvu2: stride-2 conv seeds per fission segment (GPU staged on metal; serial+grid on cc)"
         (if has_uniform_f32_mma then
            r.Autotune.sketch_candidates = 2 && r.Autotune.fiss_sketch_candidates = 2
          else if on_cpu then
-           r.Autotune.sketch_candidates = 2
-           && r.Autotune.fiss_sketch_candidates = 2
-           && r.Autotune.fiss_sketch_timed = 2
+           r.Autotune.sketch_candidates = 2 * cvu2_copies ()
+           && r.Autotune.fiss_sketch_candidates = 2 * cvu2_copies ()
+           && r.Autotune.fiss_sketch_timed = 2 * cvu2_copies ()
          else true);
       claim_dedup "cvu2" r cvu2_dedup_label (r.Autotune.fiss_sketch_timed = 0)
   | _ ->
@@ -1248,6 +1307,7 @@ let () =
           run_plain "cvs2b_ref" y
         in
         let seeds = ref [] in
+        let expected = ref 0 in
         (* The seeding target is the unzeroed [`Normal] segment (the conv's [Zero_out] fissions into
            its own [`Zeros] segment) — the same tuples [Autotune.tune]'s per-segment seeding
            consumes. A preset that schedules nothing lets the segments coalesce and the preset
@@ -1255,10 +1315,15 @@ let () =
         (let _, _, y = make_conv_s2_r12 "cvs2b_p" in
          ignore
            (run_fiss_sched "cvs2b_probe" y ~conv_sched:(fun site seg ->
-                if not site.Autotune.c_zeroed then
-                  seeds := Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits seg;
+                if not site.Autotune.c_zeroed then (
+                  (* Serial + Grid at the full row extent, plus the 8-row panel; each carries its
+                     own eligible register-tile twins. *)
+                  expected :=
+                    (2 * conv_tile_copies ~limits site ())
+                    + conv_tile_copies ~limits site ~rows:8 ();
+                  seeds := Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits seg);
                 [])));
-        (!seeds, want12))
+        (!seeds, want12, !expected))
    in
    let run_seed want12 i p_ =
      let tag = Printf.sprintf "cvs2b_%d" i in
@@ -1274,14 +1339,14 @@ let () =
    in
    in_leg ~leg:cpu_leg "cvs2b: the strided non-dividing row seeds a padded row-panel flavor"
      (fun label ->
-       let seeds, _ = Lazy.force cvs2b in
+       let seeds, _, expected = Lazy.force cvs2b in
        p_all label seeds ~f:(fun s ->
            List.exists seeds ~f:(fun t -> t.Autotune.sk_bm = 8)
-           && List.length seeds = 3
+           && List.length seeds = expected
            && s.Autotune.sk_conv));
    let results =
      lazy
-       (let seeds, want12 = Lazy.force cvs2b in
+       (let seeds, want12, _ = Lazy.force cvs2b in
         List.mapi seeds ~f:(run_seed want12))
    in
    in_leg ~leg:cpu_leg
@@ -1396,6 +1461,11 @@ let () =
      ones — an extra CPU cache-panel seed (bm=8, two panels) and an extra GPU threadgroup-block seed
      — and the tuned routine still matches the untuned twin. --- *)
   clean_cache "autotune_cache_conv_blocked";
+  let cvb_copies =
+    probe_cpu_conv_copies ~tag:"cvb" (fun tag ->
+        let _, _, y = make_conv16 tag in
+        y)
+  in
   let _, _, y = make_conv16 "cvb_t" in
   let reports = ref [] in
   let ctx = Context.auto () in
@@ -1413,12 +1483,13 @@ let () =
   (match !reports with
   | [ r ] ->
       show_counts "cvb" r;
-      (* cc per-segment: serial + grid + one row-block panel (bm=8, 16/8=2 panels) = 3. metal
-         per-segment: whole-extent staged + one threadgroup-block (bm=8), each with its pd2
-         pipelined twin (gh-ocannl-487) = 4. *)
+      (* cc per-segment: serial + grid + one row-block panel (bm=8, 16/8=2 panels), each with twins
+         at its own row extent. metal per-segment: whole-extent staged + one threadgroup-block
+         (bm=8), each with its pd2 pipelined twin (gh-ocannl-487) = 4. *)
       p "cvb: blocked flavors seeded per fission segment"
         (if has_uniform_f32_mma then r.Autotune.fiss_sketch_candidates = 4
-         else if on_cpu then r.Autotune.fiss_sketch_candidates = 3
+         else if on_cpu then
+           r.Autotune.fiss_sketch_candidates = (2 * cvb_copies ()) + cvb_copies ~rows:8 ()
          else true)
   | _ -> p "cvb: blocked flavors seeded per fission segment" false);
   p_close "cvb: tuned blocked conv matches the untuned twin within tolerance" got_b want16
@@ -1530,6 +1601,11 @@ let () =
        let _, census = Lazy.force cvmb in
        claim_tensorized label (rendered_tensorized census)));
   clean_cache "autotune_cache_conv_merged_blocked";
+  let cvmb_copies =
+    probe_cpu_conv_copies ~tag:"cvmb" (fun tag ->
+        let _, _, y = make_merged16 tag in
+        y)
+  in
   let _, _, y = make_merged16 "cvmb_t" in
   let reports = ref [] in
   let ctx = Context.auto () in
@@ -1548,12 +1624,15 @@ let () =
   | [ r ] ->
       show_counts "cvmb" r;
       (* cc merged fission segment: serial + aligned-grid + one serial row-block panel, each with
-         its fused-epilogue twin (gh-ocannl-501) = 6, all compiling (the aligned twins omit the
-         preset [Retype] on the consumed tail nest — fuse-before-annotate). A GPU with the f32
-         capability seeds the staged flavors on the merged segment, its companions covered
-         (gh-ocannl-1406; every such seed executed in conv_merged_gpu_seeds). *)
+         its fused-epilogue twin (gh-ocannl-501) and register-tile twins at its own row extent, all
+         compiling (the aligned twins omit the preset [Retype] on the consumed tail nest —
+         fuse-before-annotate). A GPU with the f32 capability seeds the staged flavors on the merged
+         segment, its companions covered (gh-ocannl-1406; every such seed executed in
+         conv_merged_gpu_seeds). *)
       p "cvmb: blocked flavor seeded on the merged fission segment"
-        (if on_cpu then r.Autotune.fiss_sketch_candidates = 6 && r.Autotune.fiss_sketch_timed = 6
+        (if on_cpu then
+           let expected = (4 * cvmb_copies ()) + (2 * cvmb_copies ~rows:8 ()) in
+           r.Autotune.fiss_sketch_candidates = expected && r.Autotune.fiss_sketch_timed = expected
          else if Lazy.force gpu_capable then r.Autotune.fiss_sketch_candidates > 0
          else true)
   | _ -> p "cvmb: blocked flavor seeded on the merged fission segment" false);
@@ -1623,6 +1702,11 @@ let () =
        let _, census = Lazy.force cva in
        claim_tensorized label (rendered_tensorized census)));
   clean_cache "autotune_cache_conv_aligned";
+  let cva_copies =
+    probe_cpu_conv_copies ~tag:"cva" (fun tag ->
+        let _, _, y = make_merged tag in
+        y)
+  in
   let _, _, y = make_merged "cva_t" in
   let reports = ref [] in
   let ctx = Context.auto () in
@@ -1643,16 +1727,16 @@ let () =
       (* cc: the whole routine, as each fission segment, seeds serial + aligned-grid, each with its
          fused-epilogue twin (the routine's top-level [Zero_out] of the conv output runs once on the
          calling thread, so the CPU preset still retypes the conv nest there, gh-ocannl-1458); per
-         fission segment all four are timed (the aligned twin compiles by fuse-before-annotate,
-         gh-ocannl-501). A GPU with the f32 capability seeds the staged flavors on the whole routine
-         and the merged segment, whose companions take the site's geometry (gh-ocannl-1406); one
-         without seeds nothing. *)
+         fission segment all four flavors and their register-tile twins are timed (the aligned twin
+         compiles by fuse-before-annotate, gh-ocannl-501). A GPU with the f32 capability seeds the
+         staged flavors on the whole routine and the merged segment, whose companions take the
+         site's geometry (gh-ocannl-1406); one without seeds nothing. *)
       p "cva: aligned-grid conv seeded and timed on the merged fission segment"
         (if on_cpu then
-           r.Autotune.sketch_candidates = 4
-           && r.Autotune.epilogue_sketch_candidates = 2
-           && r.Autotune.fiss_sketch_candidates = 4
-           && r.Autotune.fiss_sketch_timed = 4
+           r.Autotune.sketch_candidates = 4 * cva_copies ()
+           && r.Autotune.epilogue_sketch_candidates = 2 * cva_copies ()
+           && r.Autotune.fiss_sketch_candidates = 4 * cva_copies ()
+           && r.Autotune.fiss_sketch_timed = 4 * cva_copies ()
          else if Lazy.force gpu_capable then
            r.Autotune.sketch_candidates > 0 && r.Autotune.fiss_sketch_candidates > 0
          else r.Autotune.sketch_candidates = 0 && r.Autotune.fiss_sketch_candidates = 0)
