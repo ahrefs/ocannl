@@ -30,6 +30,9 @@ let raw_entries =
         "[scanner-refusal:19d2ba86f2b359e5c32a81e81062f7c5] without its requires";
         "[scanner-refusal:c0761275e39346be1c8837a5a85d98b6] a stanza without";
         "[scanner-refusal:7a60a99f8c898d07163567eeff851cbc] another stanza carrying";
+        "[scanner-refusal:1987016d8fdca3b45ba0d604394f8ec5] include stanza hiding";
+        "[scanner-refusal:9a0fb44910c66f1c9dcd5eed94766764] while its declaration";
+        "[scanner-refusal:973eea87de432c77fdffdc995b8c64f3] row whose declaration";
         "[scanner-refusal:8e3c17c0968ce3e98f1d8ad0b89c6718] libraries is refused";
         "[scanner-refusal:c319818e5b162fbc67bb85019fff6f99] libraries element of";
         "[scanner-refusal:0a4b1d22d540d21f605c894b621ea1c1] outside the recognised";

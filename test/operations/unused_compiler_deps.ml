@@ -9,36 +9,49 @@
 
    {1 Sources of truth}
 
-   - DECLARATIONS: each stanza's own [(libraries ...)] field, read from the dune files the rule
-   hands over, through [Test_scan.Dune_stanza_scan]. Not [dune describe]: it omits [(test)] and
-   [(tests)] stanzas, and its [requires] adds the ppx runtime libraries the stanza never wrote
-   ([ppxlib.ast], from metaquot, is itself compiler-reaching). - IDENTITY AND REACH: [dune describe
-   workspace --format csexp], run by this program against the source root ([DUNE_SOURCEROOT]) with a
-   private [--build-dir] in the action's temporary directory, so it never shares the running build's
-   lock. It is dune's own resolution of public and private names and of external findlib libraries
-   with their [requires]; an external library only a [(test)] stanza declares is absent there, and
-   is resolved the same way through a throwaway probe project. A library is COMPILER-REACHING when
-   its [requires] closure holds [compiler-libs.common], the library that owns [ocamlcommon] -- the
-   definition of the property, not a list: every scanner library falls out of the walk. A library
-   owns the units whose [.cmi] files its [include_dirs] hold. - USE: the typed tree of every
-   [.cmt]/[.cmti] in the stanza's byte object directory ([Cmt_references]): post-preprocessing, so
-   generated modules, a [select]-chosen source and a ppx-produced reference count; resolved, so a
-   wrapped or opened name reads as its library's unit, and a unit only another library's interface
-   loads does not. The rule depends on the workspace's [@check], which writes those files.
+   DECLARATIONS: each stanza's own [(libraries ...)] field, read from the dune files the rule hands
+   over, through [Test_scan.Dune_stanza_scan]. Not [dune describe]: it omits [(test)] and [(tests)]
+   stanzas, and its [requires] adds the ppx runtime libraries the stanza never wrote ([ppxlib.ast],
+   from metaquot, is itself compiler-reaching).
+
+   IDENTITY AND REACH: [dune describe workspace --format csexp], run by this program against the
+   source root ([DUNE_SOURCEROOT]) with a private [--build-dir] in the action's temporary directory,
+   so it never shares the running build's lock. It is dune's own resolution of public and private
+   names and of external findlib libraries with their [requires]; an external library only a
+   [(test)] stanza declares is absent there, and is resolved the same way through a throwaway probe
+   project. A library is COMPILER-REACHING when its [requires] closure holds [compiler-libs.common],
+   the library that owns [ocamlcommon] -- the definition of the property, not a list: every scanner
+   library falls out of the walk.
+
+   OWNERSHIP: a library owns the units whose [.cmi] files its [include_dirs] hold. Libraries sharing
+   a directory share its units: the [compiler-libs.*] subpackages all live in [+compiler-libs], so a
+   declared [compiler-libs.toplevel] used only through [Location] reads as used. That gap is a
+   missed finding, never a false one; the fixture [ucd_gap_shared_directory] pins it, so closing it
+   (owning units by archive) shows up as a golden change.
+
+   USE: the typed tree of every [.cmt]/[.cmti] in the stanza's byte object directory
+   ([Cmt_references]): post-preprocessing, so generated modules, a [select]-chosen source and a
+   ppx-produced reference count; resolved, so a wrapped or opened name reads as its library's unit,
+   and a unit only another library's interface loads does not. The rule depends on the workspace's
+   [@check], which writes those files.
 
    {1 Recognised forms (closed)}
 
-   - Stanzas: [library], [executable], [executables], [test], [tests], also inside [(subdir ...)].
-   Any other stanza carrying a [libraries] field is refused. - [libraries] elements: a library name;
-   [(re_export <name>)], exempt by form (the export serves the dependants, which this check reads in
-   their own right); [(select <target> from (<libs> -> <file>) ... (-> <file>))], whose first arm
-   dune can satisfy contributes its positive libraries. Anything else, and any [%{...}] in the
-   field, is refused. - Object directories: [<dir>/.<name>.objs/byte] for a library, [<dir>/.<first
-   name>.eobjs/byte] for the executables kinds. A stanza without one is inactive in this build
-   context only when it carries [enabled_if] or [optional]; otherwise it is refused, as is a
-   directory holding no [.cmt], an unreadable [.cmt], a declared name nothing resolves, malformed
-   describe output, and a describe entry or field outside [build_context], [root], [library],
-   [executables] and the library fields read here.
+   Stanzas: [library], [executable], [executables], [test], [tests], also inside [(subdir ...)]. An
+   [include] or [dynamic_include] stanza is refused (its stanzas live in a file not read), as is any
+   other stanza carrying a [libraries] field.
+
+   [libraries] elements: a library name; [(re_export <name>)], exempt by form (the export serves the
+   dependants, which this check reads in their own right); [(select <target> from (<libs> -> <file>)
+   ... (-> <file>))], whose first arm dune can satisfy contributes its positive libraries. Anything
+   else, and any [%{...}] in the field, is refused.
+
+   Object directories: [<dir>/.<name>.objs/byte] for a library, [<dir>/.<first name>.eobjs/byte] for
+   the executables kinds. A stanza without one is inactive in this build context only when it
+   carries [enabled_if] or [optional]; otherwise it is refused, as is a directory holding no [.cmt],
+   an unreadable [.cmt], a declared name nothing resolves, malformed describe output, and a describe
+   entry or field outside [build_context], [root], [library], [executables] and the library fields
+   read here.
 
    It does not judge libraries that are not compiler-reaching (an unused [stdio] is outside its
    scope), or stanzas inactive in this build context (another backend's, an optional library's). A
@@ -75,6 +88,8 @@ let fixture_expectations =
     ("ucd_pass_select_arm_used", []);
     ("ucd_pass_re_export", []);
     ("ucd_pass_rewriter_registration", []);
+    (* A KNOWN miss, not a pass: see OWNERSHIP in the header. *)
+    ("ucd_gap_shared_directory", []);
   ]
 
 let compiler_root = "compiler-libs.common"
@@ -315,6 +330,10 @@ let rec collect_stanzas ~dir forms =
           | [] ->
               refuse "%s/dune: a %s stanza without a name" dir head;
               [])
+      | Sexp.List (Sexp.Atom (("include" | "dynamic_include") as head) :: _) ->
+          (* The stanzas behind it live in a file this check does not read. *)
+          refuse "%s/dune: an %s stanza, whose stanzas this check cannot read" dir head;
+          []
       | Sexp.List (Sexp.Atom head :: _) ->
           if Option.is_some (Scan.field form "libraries") then
             refuse "%s/dune: a %s stanza carries a libraries field" dir head;
@@ -403,6 +422,12 @@ let referenced_units dir =
                | Error e -> Error e))
 
 type finding = { stanza : stanza; library : string; path : string list }
+
+(* An exemption row is earned while the check would report its declaration without it. *)
+let earned findings (dir, name, library, _reason) =
+  List.exists findings ~f:(fun f ->
+      String.equal f.stanza.dir dir && String.equal f.stanza.name name
+      && String.equal f.library library)
 
 (* What the check knows of the libraries, built from the descriptions and the dune files. *)
 type world = {
@@ -537,6 +562,17 @@ let controls ~dune =
     (refuses (fun () ->
          ignore
            (collect_stanzas ~dir:"synthetic" (Scan.stanzas "(frob (libraries a))") : stanza list)));
+  p "an include stanza, hiding stanzas in a file not read, is refused"
+    (refuses (fun () ->
+         ignore (collect_stanzas ~dir:"synthetic" (Scan.stanzas "(include dune.inc)") : stanza list)));
+  (let stanza = stanza_of "(library (name a) (libraries b))" in
+   let row = ("synthetic", "a", "b", "a control row") in
+   let finding library = { stanza; library; path = [ library ] } in
+   p "an exemption row is earned while its declaration would be reported"
+     (earned [ finding "b" ] row);
+   p_none "an exemption row whose declaration is used, or gone, is no longer earned"
+     [ []; [ finding "c" ] ]
+     ~f:(fun findings -> earned findings row));
   p "a pform in libraries is refused" (refuses (judged "(library (name a) (libraries %{x}))"));
   p "a libraries element of another form is refused"
     (refuses (judged "(library (name a) (libraries (frob x)))"));
@@ -713,10 +749,7 @@ let () =
   p_empty "every dune file and the workspace description lie within the recognised forms"
     ~over:stanzas (List.rev !refusals);
   p_all "every exemption row is still earned: its stanza declares the library and uses none of it"
-    exemptions ~f:(fun (dir, name, library, _) ->
-      List.exists real ~f:(fun f ->
-          String.equal f.stanza.dir dir && String.equal f.stanza.name name
-          && String.equal f.library library));
+    exemptions ~f:(earned real);
   p_empty "no stanza declares a compiler-reaching library its modules never reference"
     ~over:real_checked reported;
   (* The compiled controls. *)

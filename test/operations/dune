@@ -7197,7 +7197,7 @@
 (executable
  (name fp_contract_pin_scan)
  (modules fp_contract_pin_scan)
- (libraries base stdio test_scan arrayjit.verdict))
+ (libraries base stdio prose_lexemes test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads test sources as text.

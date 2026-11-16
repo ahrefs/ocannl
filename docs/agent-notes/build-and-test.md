@@ -2454,7 +2454,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   modules references. Use is read from the typed trees of the stanza's `.cmt`/`.cmti` files
   (`test/support/cmt_references.ml`), so a ppx-generated, generated-module or `select`-chosen
   reference counts and a reference that only another library's interface loads does not: a direct
-  `ppxlib` beside a used `test_scan` is reported. `ll_test` is covered by it like every stanza;
+  `ppxlib` beside a used `test_scan` is reported. A library owns the units of its `include_dirs`,
+  so libraries sharing one directory credit each other: an unused `compiler-libs.toplevel` beside a
+  `Location` use goes unreported (fixture `ucd_gap_shared_directory` pins the gap). `ll_test` is
+  covered by it like every stanza;
   it stays outside `test_utils_linkage`'s probe, since it links `ocannl`, so a USED
   compiler-reaching dependency added there is not refused by either check. A library declared
   only for a side effect -- an external deriver linked so it registers -- takes an exact row in the

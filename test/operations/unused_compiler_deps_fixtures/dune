@@ -100,3 +100,13 @@
  (modules ucd_pass_re_export)
  (libraries
   (re_export test_scan)))
+
+; A pinned gap: declared `compiler-libs.toplevel`, used only through `Location`, which the
+; `+compiler-libs` directory it shares with `compiler-libs.common` credits to both. Expected
+; unreported until units are owned by archive rather than by directory.
+
+(library
+ (name ucd_gap_shared_directory)
+ (package neural_nets_lib)
+ (modules ucd_gap_shared_directory)
+ (libraries compiler-libs.toplevel))
