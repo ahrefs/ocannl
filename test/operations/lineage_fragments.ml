@@ -166,6 +166,8 @@ let () =
       let msg = LC.refusal "C" (fun () -> Train.forward_once ctx1 t) in
       p "C: the second, on the returned context, is refused naming t's forward fragment"
         (duplicate_named msg t.value);
+      p "C: a repeated forward names the general rerun remedy"
+        (LC.has msg "Run the earlier routine again with Context.run instead of recompiling it");
       LC.exact "C: the refusal left the first run's value" (Context.get_values ctx1 t.value)
         [| 1.; 4.; 9. |];
       Option.iter

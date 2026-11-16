@@ -51,7 +51,8 @@ files.
   (gh-ocannl-2188). Compiling `[%cd out =: hs]` before `Train.forward hs` therefore makes the
   reader the forward's owner in that lineage. Run the reader: it computes both `hs` and `out`.
   To make separate routines, compile the forward before constructing the reader. The forward-only
-  duplicate refusal explains these orders and lists the owning routines; it describes `%cd`'s
+  duplicate refusal leads with `Context.run` for any replay, then conditionally explains these
+  reader orders and lists the owning routines; it describes `%cd`'s
   semantics without claiming the fragments record which frontend syntax embedded them. Any
   duplicate backprop fragment retains the double-count guidance. `sgd_computed_node` executes
   both orders and prints the reader's owned fragments and full refusal to stderr; its new

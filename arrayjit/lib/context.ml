@@ -1056,10 +1056,11 @@ let check_no_duplicate_fragments ?name ctx (comp : Asgns.comp) =
     in
     let guidance =
       if List.for_all duplicates ~f:(fun ((_, side), _) -> Asgns.equal_side side Asgns.Fwd) then
-        "A fragment is compiled into one routine of a lineage. A %cd reader of a forward root \
-         embeds its whole forward code, including its inputs' fetches: running the named owning \
-         routine with Context.run computes that tensor too. Run that routine; or, when rebuilding \
-         the sequence, compile Train.forward on the tensor before constructing the reader so the \
+        "A fragment is compiled into one routine of a lineage. Run the earlier routine again with \
+         Context.run instead of recompiling it. If the owner is a %cd reader of a forward root, it \
+         embeds its whole forward code, including its inputs' fetches: running that routine \
+         computes the tensor too. To keep separate forward and reader routines, rebuild the \
+         sequence and compile Train.forward on the tensor before constructing the reader so the \
          reader reads the computed value. To compile an alternative version, compile from a \
          context that does not descend from the owning routine (a sibling)."
       else
