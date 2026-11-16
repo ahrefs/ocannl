@@ -210,9 +210,9 @@ parameter</a></li>
 need a unit parameter, or a label</a></li>
 <li><a href="#configuring-inline-declarations-inline-output-dimensions-initial-values">Configuring
 inline declarations: inline output dimensions, initial values</a></li>
-<li><a href="#lifting-of-the-applications-of-config-arguments-if-an-error-refactor-your-code">Lifting
-of the applications of config arguments: if an error, refactor your
-code</a></li>
+<li><a href="#need-to-lift-the-applications-of-configuration-arguments-up-to-the-unit-parameter">Need
+to lift the applications of configuration arguments (up to the unit
+parameter)</a></li>
 </ul></li>
 <li><a href="#the-syntax-extension-extend_dsls">The syntax extension
 %%extend_dsls</a></li>
@@ -1727,14 +1727,21 @@ segments back, and a dropped segment gets none. These forms, binary ones
 <code>test/einsum/concat_segment_correspondence.ml</code>
 (gh-ocannl-2087).</p>
 <p><strong>What a concatenated axis cannot say</strong>: a concatenated
-axis is one axis of alternatives, so a position lies in one segment.
-Five forms therefore have no meaning, and are refused with a shape error
-when the operation is built, whatever the sizes (gh-ocannl-2017):</p>
+axis is one axis of alternatives, so a position lies in one segment. Six
+forms therefore have no meaning, and are refused with a shape error when
+the operation is built, whatever the sizes (gh-ocannl-2017):</p>
 <ul>
 <li>One tensor’s axes needing two components of the same concatenation:
 <code>p^q =&gt; p, q</code>, <code>a, b =&gt; a^b</code>,
 <code>a, b; c =&gt; a^b^c</code>. No position has both. Name one
 component per tensor.</li>
+<li>One tensor’s axes needing two alternatives of a fused product
+component: <code>a^b; a^c =&gt; b, c</code>. Concatenations sharing
+labels, even transitively across tensors, form one connected set of
+alternatives (<code>a</code>, <code>b</code>, <code>c</code> here). No
+position has both <code>b</code> and <code>c</code>. Name one
+alternative per tensor; <code>a^b; a^c =&gt; a</code> stays valid
+(gh-ocannl-2198).</li>
 <li>A result concatenation no component of which an operand names:
 <code>a =&gt; 2^3</code>, <code>c =&gt; a^b</code>,
 <code>p^q =&gt; r^s</code>, <code>2^3 =&gt; 2^3</code>. Nothing says
