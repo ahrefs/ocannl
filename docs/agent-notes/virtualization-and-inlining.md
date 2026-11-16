@@ -516,7 +516,7 @@ files.
   replay computes it independently and the materialized twin computes both producers. It crosses
   core writes with every read, with and without zero, in all three standings. Every accepted
   nested program must keep `src` virtual and leave no read of it, and each standing must retain
-  at least 100 programs with scopes in `Where` arms. Eight of the 32 compiled anchors come
+  at least 100 programs with scopes in `Where` arms. Eight compiled anchors come
   specifically from those programs. The `src=reduce-init` family (gh-ocannl-2202) repeats that
   bounded cross with a materialized `[4; 4]` initializer read before the reduction. Its
   `101 + 5 * (4*i + j)` seed distinguishes both indices and stays clear of zero; independent replay
@@ -528,7 +528,22 @@ files.
   compiled-anchor claims, and reaches all 71 verdict/census rows. The permanent self-control
   compares that dropped-read descriptor against the read-initialized replay. The original
   `src=reduce` census and correctness-run durations are recorded in staging#1924.
-  Its negative control is the strict probe of before gh-ocannl-2145, which ran every discarded
+  The `src=reduce-chain-1/2` families (gh-ocannl-2249) add one/two virtual initializer
+  links on the same bounded cross. The seed remains materialized; link `d` reads its predecessor
+  at `(j,i)` and adds `211*d + 13*i + j`. Replay evaluates this descriptor arithmetic directly,
+  never the IR. The two link outputs have index strides `(18,21)` and `(34,19)`, respectively:
+  all 16 cells are nonzero, distinct and exact in f32. Twins materialize every link. All three
+  consumer standings apply, but links themselves remain declared virtual, like `src`; inherited
+  link placement is deliberately not another grammar dimension. Accepted programs must keep every
+  link virtual with no surviving read. Each depth has its own inlining/guard/scope floors and
+  eight guarded compiled anchors, raising the compiled sample to 48 without shrinking the 16
+  ordinary anchors. Two dropped-link self-controls pin replay discrimination. Each depth adds
+  120,258 default and 324,486 widened programs: totals 823,764 and 10,307,080, respectively,
+  with 2,576,770 programs per widened shard and unchanged 600-second shard budgets.
+  A planted-fault control makes only virtual links read `(i,j)` instead of `(j,i)`; the default
+  oracle reports 60,308 findings across both depths and all three consumer standings, failing
+  semantic parity (staging PR for gh-ocannl-2249).
+  The original `src=reduce` negative control is the strict probe of before gh-ocannl-2145, which ran every discarded
   arm's scopes (codegen hoisted them then), over the inliner without `guard_hoisted`: the table
   reports 2,869 strict address faults, all in `src=reduce`, across axes/axes, axes/flat,
   axes/trail, flat/axes, flat/flat and flat/trail layout pairs in every standing (staging PR for

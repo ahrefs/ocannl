@@ -1,8 +1,8 @@
-9658108 widened programs
-shard 0/4: 2414527 programs
-shard 1/4: 2414527 programs
-shard 2/4: 2414527 programs
-shard 3/4: 2414527 programs
+10307080 widened programs
+shard 0/4: 2576770 programs
+shard 1/4: 2576770 programs
+shard 2/4: 2576770 programs
+shard 3/4: 2576770 programs
 the widened census is unchanged: true
 every ordinal belongs to exactly one shard: true
 each shard has a balanced share of the census: true
