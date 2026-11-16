@@ -517,8 +517,17 @@ files.
   core writes with every read, with and without zero, in all three standings. Every accepted
   nested program must keep `src` virtual and leave no read of it, and each standing must retain
   at least 100 programs with scopes in `Where` arms. Eight of the 32 compiled anchors come
-  specifically from those programs; the ordinary families share the other 24. The census and
-  correctness-run durations before and after the extension are recorded in staging#1924.
+  specifically from those programs. The `src=reduce-init` family (gh-ocannl-2202) repeats that
+  bounded cross with a materialized `[4; 4]` initializer read before the reduction. Its
+  `101 + 5 * (4*i + j)` seed distinguishes both indices and stays clear of zero; independent replay
+  starts its sum from that cell, and materialized twins compute the initializer read too. Each
+  source family owns its guarded-scope floors and eight compiled anchors; ordinary families
+  share the other 16. The extension adds 120,258 default programs (40,086 per standing) and
+  324,486 widened programs, for 9,658,108 total. Its test-builder negative control replaces the
+  initializer read with zero: the default run reports 107,196 findings, fails both semantic and
+  compiled-anchor claims, and reaches all 71 verdict/census rows. The permanent self-control
+  compares that dropped-read descriptor against the read-initialized replay. The original
+  `src=reduce` census and correctness-run durations are recorded in staging#1924.
   Its negative control is the strict probe of before gh-ocannl-2145, which ran every discarded
   arm's scopes (codegen hoisted them then), over the inliner without `guard_hoisted`: the table
   reports 2,869 strict address faults, all in `src=reduce`, across axes/axes, axes/flat,
