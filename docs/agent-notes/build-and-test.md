@@ -3128,7 +3128,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `fresh_output_fill` pins the contract and holds `test/config` to it; the mutant tables are in
   lukstafi/ocannl-staging's gh-1873 and gh-1966 PR bodies.
 - The written-before-the-rule exactness debt is retired (gh-ocannl-1826):
-  `exact_partials_ratchet` keeps only its reasoned exemptions. Host arithmetic premises in
+  `exact_partials_ratchet` keeps reasoned exemptions. Its gh-ocannl-2227 reader expansion also
+  recognizes exact-partials and sum-word/any-order premises (the header owns the closed forms);
+  newly visible debt has exact per-file counts and reasons in its exemption rows. A sentence's
+  `exactly once` narrowing is outside the new forms: they require the word `exact`.
+  Host arithmetic premises in
   `hardware_warp_shuffle`, `tile_mma_narrow` and `schedule_ldmatrix_matmul` run outside backend
   gates, so cc checks them even when it cannot execute the corresponding GPU rendering.
 - Host-side exactness premises share an index reader with initialization: wrap the value function

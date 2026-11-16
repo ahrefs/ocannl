@@ -17,12 +17,16 @@
     - THE TEXT: every comment (documentation comments included) and every string literal of the
       source, as {!Prose_lexemes} reads them with the compiler's lexer.
     - A CLAIM: one sentence of that text — split at [.], [;], [!] or [?] followed by whitespace or
-      the end, and at a blank line — holding both the phrase [partial sum] or [partial sums] (one
-      word each, any case, hyphenated or not) and the word [exact] or [exactly]. Words are maximal
-      runs of letters, digits, [_] and [']: [exact_partials] and [inexact] are words of their own,
-      neither of them [exact], and [f32-exact] holds the word [exact].
-    - WHAT IT DOES NOT READ: any other wording of the premise ("every association rounds nowhere",
-      "the accumulation is exact", "dyadic inputs: any schedule computes the same bits"). A missed
+      the end, and at a blank line — holding one of these closed forms (any case, hyphenated or
+      not): [partial sum] or [partial sums] with [exact] or [exactly]; [exact partials]; or a sum
+      word ([sum], [sums], [partials], [addition], [accumulation], [association]) with [exact] and
+      an order marker ([any order], [every order], [any association], [every association]). The
+      words and marker may occur in either order anywhere in the same sentence; the words within
+      each bracketed phrase are adjacent. Words are maximal runs of letters, digits, [_] and [']:
+      [exact_partials] and [inexact] are words of their own, neither of them [exact], and
+      [f32-exact] holds the word [exact].
+    - WHAT IT DOES NOT READ: any other wording of the premise ("the inputs are exact", "the
+      accumulation is exact", "dyadic inputs: any schedule computes the same bits"). A missed
       phrasing is a gap of this lint, not a pass the rule grants; widening the list is one follow-up
       issue, not a review round.
     - NEGATION, read crudely: a sentence holding any of the words {!negations} ([not], [never],
@@ -101,13 +105,30 @@ let negations = [ "not"; "never"; "inexact"; "round"; "rounds"; "isn't"; "aren't
 
 (** Whether one sentence's words state the premise, as the header defines it. *)
 let states_exact_partials sentence_words =
-  let rec has_phrase = function
-    | "partial" :: ("sum" | "sums") :: _ -> true
-    | _ :: rest -> has_phrase rest
+  let rec has_phrase first seconds = function
+    | a :: b :: _ when String.equal a first && List.mem seconds b ~equal:String.equal -> true
+    | _ :: rest -> has_phrase first seconds rest
     | [] -> false
   in
-  has_phrase sentence_words
-  && List.exists sentence_words ~f:(fun w -> String.equal w "exact" || String.equal w "exactly")
+  let has_exact =
+    List.exists sentence_words ~f:(fun w -> String.equal w "exact" || String.equal w "exactly")
+  in
+  let has_sum_word =
+    List.exists sentence_words
+      ~f:
+        (List.mem
+           [ "sum"; "sums"; "partials"; "addition"; "accumulation"; "association" ]
+           ~equal:String.equal)
+  in
+  let has_order_marker =
+    has_phrase "any" [ "order"; "association" ] sentence_words
+    || has_phrase "every" [ "order"; "association" ] sentence_words
+  in
+  (has_phrase "exact" [ "partials" ] sentence_words
+  || has_exact
+     && (has_phrase "partial" [ "sum"; "sums" ] sentence_words
+        || (List.mem sentence_words "exact" ~equal:String.equal && has_sum_word && has_order_marker)
+        ))
   && not (List.exists sentence_words ~f:(List.mem negations ~equal:String.equal))
 
 type claim = { line : int; offset : int; sentence : string }

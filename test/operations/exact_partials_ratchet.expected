@@ -3,6 +3,16 @@ the reader read prose beside a derivation in some test source: true
 the walk read the arrayjit package's test sources too: true
 every sentence claiming the exactness of partial sums sits beside its derivation, or in its file's exemption row: true
 every exemption row is still earned: true
+test/einsum/padded_operand_offset_windows.ml -- 1 uncovered: gh-ocannl-2227 debt: the header claims integer window sums are exact; derive each forward and gradient reduction from its operands
+test/einsum/result_side_affine_forms.ml -- 1 uncovered: gh-ocannl-2227 debt: the header claims integer affine-form sums are exact; derive the individual reduction fixtures
+test/einsum/result_side_padded_window.ml -- 1 uncovered: gh-ocannl-2227 debt: the header claims integer transposed-convolution sums are exact; derive the individual window fixtures
+test/operations/autotune_report_drops.ml -- 1 uncovered: gh-ocannl-2227 debt: the row-input initializer claims any-order exactness; derive each row from av beside that initializer
+test/operations/autotune_staffed_singles.ml -- 1 uncovered: gh-ocannl-2227 debt: the two-site split-reduce leg claims dyadic sums are exact; derive both matvec product populations
+test/operations/named_form_spec_identifiers.ml -- 1 uncovered: gh-ocannl-2227 debt: the header claims integer sums are exact; derive each named-form reduction from xs and taps
+test/operations/padded_conv_init_leaf.ml -- 1 uncovered: gh-ocannl-2227 debt: the header claims integer convolution sums are exact; derive the forward and gradient product populations
+test/operations/padded_window_margin_writes.ml -- 1 uncovered: gh-ocannl-2227 debt: the header claims integer window sums are exact; derive the forward and gradient product populations
+test/operations/schedule_coalesce.ml -- 3 uncovered: gh-ocannl-2227 debt: two overview claims sit apart from the executed legs that derive them; the fused bias-plus-relu leg still needs its own product and bias derivation
+test/operations/schedule_contraction_nest.ml -- 1 uncovered: gh-ocannl-2227 debt: the pipelined_leg overview sits on that helper rather than the calling item that derives its operand premise
 test/operations/discriminating_values.ml -- 1 uncovered: the drift claim exhibits its serial partial sums directly; an every-association derivation is the follow-up
 test/operations/scan_companion_coverage.ml -- 1 uncovered: leg 4 derives z's premise in its own item; this note on z's operands sits apart from it
 test/support/ll_test.ml -- 4 uncovered: the harness's operand docs state the premises its helpers are built for, exact_partials' own included; a test derives them at its use
