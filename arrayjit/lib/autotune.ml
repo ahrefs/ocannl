@@ -5371,7 +5371,8 @@ let seeded_default_gate ~limits =
 let reduction_sink_enabled () = Utils.registered_flag ~arg_name:"gpu_default_reduction_sink"
 
 (* gh-ocannl-1405: whether the untuned plan also takes the sites whose accumulator precision widens
-   their storage precision (a bf16 weight gradient on CUDA, fp8 on CUDA and HIP): seeded, sunk and
+   their storage precision (a bf16 weight gradient on CUDA, fp8 on CUDA and HIP, and since
+   gh-ocannl-2195 f16 on CUDA and HIP under the default [fp16_arithmetic]): seeded, sunk and
    admitted to the model's numerics-preserving set. Seeding one keeps its result: the sketch's
    [Privatize] mints its tile wide only where the default's serial rendering widens too
    (gh-ocannl-1151), so a backprop weight gradient, which the default narrows after every batch row,

@@ -23,6 +23,7 @@ default policy, bf16: some seeded tile renders the simdgroup intrinsics: true
 default policy, bf16: every seeded tile that ran equals the serial rendering bitwise: true
 default policy, f16: some seeded tile renders the simdgroup intrinsics: true
 default policy, f16: every seeded tile that ran equals the serial rendering bitwise: true
+default policy, f16 on HIP: every seeded tile that ran is within one f16 ulp of the serial rendering (gfx11 WMMA's mixed-sign residue): true
 Metal's capabilities fingerprint under Bf16_auto equals Bf16_wide's and differs from Bf16_narrow's: true
 f16 one-block: every product and partial is exact in f32, with one-sign products: true
 f16 one-block: per-step differs from both wider models: true
@@ -30,6 +31,9 @@ f16 one-block: per-block equals once only for a single block: true
 f16 one-block: HIP ordered pairs differ from all three baseline models: true
 f16 one-block: the narrow tile renders tensor-unit intrinsics: true
 f16 one-block: the serial loop equals the per-step model: true
+f16 one-block, default policy on CUDA and HIP: the tile renders tensor-unit intrinsics: true
+f16 one-block, default policy on CUDA and HIP: the tile equals the once-narrowed model: true
+f16 one-block, default policy on CUDA and HIP: the serial loop equals the once-narrowed model: true
 f16 one-block: the tensor unit equals the measured family model: true
 f16 four-block: every product and partial is exact in f32, with one-sign products: true
 f16 four-block: per-step differs from both wider models: true
@@ -37,4 +41,7 @@ f16 four-block: per-block equals once only for a single block: true
 f16 four-block: HIP ordered pairs differ from all three baseline models: true
 f16 four-block: the narrow tile renders tensor-unit intrinsics: true
 f16 four-block: the serial loop equals the per-step model: true
+f16 four-block, default policy on CUDA and HIP: the tile renders tensor-unit intrinsics: true
+f16 four-block, default policy on CUDA and HIP: the tile equals the once-narrowed model: true
+f16 four-block, default policy on CUDA and HIP: the serial loop equals the once-narrowed model: true
 f16 four-block: the tensor unit equals the measured family model: true

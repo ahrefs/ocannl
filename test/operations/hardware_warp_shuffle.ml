@@ -21,12 +21,11 @@
    node's storage precision, so a bf16 reduction on a backend that widens bf16 shuffles f32 and
    narrows once into the cell — the same width its serial rendering accumulates at (bf16 on CUDA,
    and on HIP and Metal since their [Bf16_auto] resolves wide, gh-ocannl-1051 and gh-ocannl-2029).
-   Where the residency stays narrow (bf16 on HIP and Metal under [Bf16_narrow]; f16 under the
-   default [fp16_arithmetic] policy) there is nothing wider to shuffle and the rendering keeps
-   refusing loudly.
+   Where the residency stays narrow (bf16 on HIP and Metal under [Bf16_narrow]; f16 under
+   [Fp16_narrow]) there is nothing wider to shuffle and the rendering keeps refusing loudly.
 
-   f16's residency is a POLICY question (gh-ocannl-680), so it gets both legs: the refusal under the
-   default policy, and — at the very end of this file, under [Numerics.Fp16_wide] — the twin of the
+   f16's residency is a POLICY question (gh-ocannl-680), so it gets both legs: the refusal under
+   [Fp16_narrow], and — at the very end of this file, under [Numerics.Fp16_wide] — the twin of the
    bf16 legs, where every backend resolves f16 accumulators to f32 and the shuffle carries float. *)
 
 open Base
@@ -705,8 +704,8 @@ let claim_bf16_types =
    never at bf16 storage"
 
 let claim_narrow_refused =
-  "an f16 accumulator whose residency stays narrow, as the default fp16_arithmetic policy resolves \
-   it on every GPU backend, is refused by the warp-shuffle rendering (GPU) or runs serially (CPU)"
+  "an f16 accumulator whose residency stays narrow, as Fp16_narrow resolves it on every GPU \
+   backend, is refused by the warp-shuffle rendering (GPU) or runs serially (CPU)"
 
 let () =
   p_pairwise_distinct "the bf16 single-warp rival-rendering values are pairwise distinct"
@@ -732,17 +731,14 @@ let () =
       && not (has "__nv_bfloat16 wred_partials_"))
   end
   else skipped claim_bf16_types;
-  (* The other half of the gate: under the default [fp16_arithmetic] policy f16 resolves to itself
-     on every GPU backend (CUDA's seeded wmma triple accumulates f16 natively, RDNA has genuine f16
-     accumulator variants, MSL's [half] is a native scalar), so there is no wider value to shuffle
-     and the rendering must keep refusing — loudly, since binding the index like a plain [Workgroup]
-     axis would race the accumulator. On the C backends [warp_size = 0] and the loop is simply
-     serial, which is its correct meaning. This pins what [Fp16_auto] resolves to TODAY, not a
-     contract that it always will (gh-ocannl-680 keeps latitude to resolve wide on hardware where
-     wide f16 accumulate is free); the wide policy's twin legs are at the end of this file. The leg
-     pins [Fp16_auto] rather than inheriting it: the stanza declares OCANNL_FP16_ARITHMETIC, and
-     under an ambient [Fp16_wide] the GPU rendering would shuffle float and the refusal claimed of
-     the default policy would test the wide one instead (gh-ocannl-1078). *)
+  (* The other half of the gate: under [Fp16_narrow] f16 resolves to itself on every GPU backend
+     (CUDA's f16-accumulate wmma triple, RDNA's genuine f16 accumulator variants, MSL's native
+     [half] scalar), so there is no wider value to shuffle and the rendering must keep refusing —
+     loudly, since binding the index like a plain [Workgroup] axis would race the accumulator. On
+     the C backends [warp_size = 0] and the loop is simply serial, which is its correct meaning. The
+     leg names [Fp16_narrow] rather than the default: [Fp16_auto] resolves wide on CUDA and HIP
+     since gh-ocannl-2195, and under an ambient policy the claim would test whichever mode the
+     environment set (gh-ocannl-1078). The wide policy's twin legs are at the end of this file. *)
   let n = 32 in
   let hv = Array.init n ~f:(fun k -> Float.of_int (k % 5) *. 0.5) in
   let expected = Array.fold hv ~init:0. ~f:( +. ) in
@@ -757,7 +753,9 @@ let () =
                (L.get hs.Tensor.value [| f0 |], half),
                (L.get hx.Tensor.value [| it i |], half) )))
   in
-  Test_utils.with_fp16_auto (fun () ->
+  Test_utils.with_policy
+    (fun pol -> { pol with Numerics.fp16_arithmetic = Numerics.Fp16_narrow })
+    (fun () ->
       if on_gpu then
         match
           try

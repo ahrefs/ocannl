@@ -48,6 +48,29 @@ proof: a weighted double sum can in principle collide.
 Exit statuses: 0, or 1 only for a bf16 cell whose log carries the pre-78d664c1 bench's rounding
 verdict ("WRONG RESULT") and no SIZE mismatch -- a size mismatch is never rounding. Any FAILED
 variant or missing timing line fails the run.
+
+HALF (mode "ab" with PREC `half`, gh-ocannl-2195's gh2195_f16_ab.sh: the fp16_arithmetic arms
+`false`, wide, and `true`, narrow, on CUDA and HIP). The cells, arms and checks above are the
+same, at `half` in place of `bfloat16`, except where bf16's reasons do not carry over:
+- The f32 control is still the exact answer: the operands are exact in f16 too (ma's 1/16
+  multiples below 3 need six significand bits, f16 has eleven).
+- STRUCTURE holds as for bf16: the wide cells and the narrow SERIAL legs lie within REL_BOUND, and
+  the narrow tensorized pair is bounded only below (non-degenerate), its error REPORTED. Bounding it
+  structurally was this driver's first reading, and the gfx1151 window refuted it (gh-ocannl-2195,
+  minix run-44): the narrow f16 WMMA's checksum missed the exact one by 0.072 at n = 1024 and by
+  0.822 at n = 2048, where the narrow serial legs missed by 0.0011 and 0.0019 -- the per-pair
+  narrowing of gfx11's f16-accumulate WMMA grows grossly with k, as its bf16 twin does.
+- The two tensorized pipelinings print IDENTICAL checksums in BOTH arms: the pipelining depth is
+  bitwise neutral by the transform's invariant (bin/schedule_bench.ml), whatever the accumulator.
+- TENSORIZED applies to both arms' f16 mma cells, as to bf16's.
+- Reported, not checked: whether the wide arm's five variants share one checksum. Every partial
+  sum is exact in f32 here, so an f32-accumulating variant stores round_f16(exact) whatever its
+  order, and a variant off the shared value narrowed somewhere (or, on HIP, met gfx11's mixed-sign
+  WMMA ulps, gh-ocannl-1420) -- evidence about the arm, not a corrupt cell.
+- f16 holds schedule_bench's exact verdict only to k = 5, below every size the mma variants
+  accept, so the bench reports its cell differences as rounding (a NOTE, exit 0); a cell that
+  exits nonzero is a problem here exactly as in bf16's ab mode (bin_cells' clean-cell rule), and
+  the WRONG RESULT exemption above belongs to the split mode's pre-78d664c1 logs alone.
 """
 import glob
 import os
@@ -64,6 +87,9 @@ DIGITS = set()
 # The structural bound (see above): five times the ~5% a legitimately per-step-narrowed 2048-term
 # bf16 cell shows on minix and tuf, a quarter of what a zeroed output shows.
 REL_BOUND = 0.25
+# The treatment precisions mode "ab" validates (the f32 control is `single` for both): bf16 for the
+# gh-ocannl-1051 drivers, half for gh2195_f16_ab.sh (see HALF above).
+NARROW_PRECS = ("bfloat16", "half")
 
 
 def digits(chk):
@@ -121,7 +147,7 @@ def add_cell(cells, problems, name, key, parsed):
             problems.append(f"{name}: MISSING timing for {v}")
             continue
         census = parsed[v][2]
-        if key["prec"] == "bfloat16" and v.startswith("mma") and (
+        if key["prec"] in NARROW_PRECS and v.startswith("mma") and (
             "Mma_intrinsics" not in census or "fallback" in census
         ):
             problems.append(f"{name}: {v} did not tensorize [{census}]")
@@ -149,14 +175,17 @@ def load(out, pattern, key_of, layouts=(bench_output.TIMING_CENSUSES,)):
     return cells, problems
 
 
-ARM_RE = re.compile(r"(true|false)-(bfloat16|single)")
+def arm_re(prec):
+    """The ab driver's arm names at treatment precision `prec`: `<flag>-<prec>` or `<flag>-single`."""
+    return re.compile(rf"(true|false)-({prec}|single)")
 
 
-def load_runs(out):
+def load_runs(out, prec="bfloat16"):
     """The ab driver's cells: one bin_cells run per size under `out` (`n<size>/`), each cell named
-    by its arm `<bf16_arithmetic>-<prec>`. A cell its run did not find clean, a run missing a
-    planned cell or failing a run-level check, an unnamed arm and a stray run directory are
-    problems."""
+    by its arm `<flag>-<prec>` (the bf16_arithmetic or fp16_arithmetic value). A cell its run did
+    not find clean, a run missing a planned cell or failing a run-level check, an unnamed arm (one
+    at another treatment precision included) and a stray run directory are problems."""
+    arm_names = arm_re(prec)
     cells, problems = {}, []
     for run in sorted(glob.glob(os.path.join(out, "n*"))):
         name = os.path.basename(run)
@@ -179,7 +208,7 @@ def load_runs(out):
                      for p in cell_runner.run_level_problems(manifest, records)]
         for r in records:
             cell = f"{name} cell {r['cell']} ({display_value(r['arm'])})"
-            arm = ARM_RE.fullmatch(r["arm"])
+            arm = arm_names.fullmatch(r["arm"])
             if not arm:
                 problems.append(f"{cell}: not an arm this driver can name")
                 continue
@@ -219,15 +248,17 @@ def med(xs):
     return statistics.median(x for x, _, _ in xs)
 
 
-def ab(out, label):
-    cells, problems = load_runs(out)
+def ab(out, label, prec="bfloat16"):
+    """Mode "ab" at treatment precision `prec` (`bfloat16`, or `half`: see HALF above)."""
+    half = prec == "half"
+    cells, problems = load_runs(out, prec)
     sizes = sorted({k[0] for k in cells})
     for size in sizes:
         chk = {}
         for arm in ("true", "false"):
-            for prec in ("bfloat16", "single"):
+            for p in (prec, "single"):
                 for v in VARIANTS:
-                    chk[(arm, prec, v)] = checksum_of(cells, (size, arm, prec, v), problems)
+                    chk[(arm, p, v)] = checksum_of(cells, (size, arm, p, v), problems)
         exact = chk[("false", "single", "parallel")]
         if exact is None:
             continue
@@ -237,14 +268,20 @@ def ab(out, label):
                 if c is not None and c != exact:
                     problems.append(f"n={size} {arm} f32 control {v}: checksum differs from the exact one")
         for v in VARIANTS:
-            c = chk[("false", "bfloat16", v)]
+            c = chk[("false", prec, v)]
             if c is not None and rel(c, exact) > REL_BOUND:
                 problems.append(f"n={size} wide {v}: checksum off the exact one by {rel(c, exact):.3g}")
+        # The narrow tensorized pair is gross by design on gfx11 (bf16 and f16 alike) and bounded
+        # only below (non-degenerate); its error is reported. The serial legs take the bound.
         for v in ("parallel", "smem", "regtile"):
-            c = chk[("true", "bfloat16", v)]
+            c = chk[("true", prec, v)]
             if c is not None and rel(c, exact) > REL_BOUND:
                 problems.append(f"n={size} narrow {v}: checksum off the exact one by {rel(c, exact):.3g}")
-        p1, p2 = chk[("true", "bfloat16", "mma_pd1")], chk[("true", "bfloat16", "mma_pd2")]
+        if half:
+            w1, w2 = chk[("false", prec, "mma_pd1")], chk[("false", prec, "mma_pd2")]
+            if w1 is not None and w2 is not None and w1 != w2:
+                problems.append(f"n={size} wide mma_pd1/mma_pd2: checksums differ ({w1} vs {w2})")
+        p1, p2 = chk[("true", prec, "mma_pd1")], chk[("true", prec, "mma_pd2")]
         if p1 is not None and p2 is not None and p1 != p2:
             problems.append(f"n={size} narrow mma_pd1/mma_pd2: checksums differ ({p1} vs {p2})")
         for v, c in (("mma_pd1", p1), ("mma_pd2", p2)):
@@ -252,12 +289,26 @@ def ab(out, label):
                 problems.append(f"n={size} narrow {v}: checksum {c} degenerate against exact {exact}")
         if p1 is not None:
             print(f"n={size}: narrow tensorized checksum off the exact one by {rel(p1, exact):.3g} "
-                  f"(the arm's accuracy, reported not bounded)")
+                  + "(the arm's accuracy, reported not bounded)")
+        if half:
+            wide = {v: chk[("false", prec, v)] for v in VARIANTS}
+            if None not in wide.values():
+                groups = {}
+                for v, c in wide.items():
+                    groups.setdefault(c, []).append(v)
+                shared = max(groups.values(), key=len)
+                print(f"n={size}: wide arm: {len(shared)} of {len(VARIANTS)} variants share one "
+                      f"checksum ({', '.join(shared)}), off the exact one by "
+                      f"{rel(wide[shared[0]], exact):.3g}"
+                      + ("" if len(groups) == 1 else
+                         "; others: " + ", ".join(f"{', '.join(vs)} at {rel(c, exact):.3g}"
+                                                  for c, vs in groups.items() if vs is not shared))
+                      + " (reported, not checked)")
     shown, rows = display_value(label), []
     for size in sizes:
         for v in VARIANTS:
             try:
-                a, w = cells[(size, "true", "bfloat16", v)], cells[(size, "false", "bfloat16", v)]
+                a, w = cells[(size, "true", prec, v)], cells[(size, "false", prec, v)]
                 ca, cw = cells[(size, "true", "single", v)], cells[(size, "false", "single", v)]
             except KeyError:
                 rows.append((shown, str(size), v, "missing", "missing", "", "", "", ""))
@@ -309,8 +360,15 @@ def split(out, label):
 
 
 if __name__ == "__main__":
+    # ab OUT LABEL [PREC]: PREC is the treatment precision, bfloat16 (the default) or half.
     mode, out, label = sys.argv[1], sys.argv[2], sys.argv[3]
-    problems = {"ab": ab, "split": split}[mode](out, label)
+    if mode == "ab":
+        prec = sys.argv[4] if len(sys.argv) > 4 else "bfloat16"
+        if prec not in NARROW_PRECS or len(sys.argv) > 5:
+            sys.exit(f"usage: gh1051_cells.py ab OUT LABEL [{'|'.join(NARROW_PRECS)}]")
+        problems = ab(out, label, prec)
+    else:
+        problems = {"split": split}[mode](out, label)
     # %.10g never prints more than ten significant digits and %.17g is lossless whatever it prints
     # (it drops trailing zeros), so a longer checksum anywhere proves the lossless renderer.
     if max(DIGITS, default=0) > 10:

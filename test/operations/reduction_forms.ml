@@ -251,12 +251,16 @@ let of_resolved prec resolved = if same_prec resolved prec then At_storage else 
 let independent_residency prec =
   let policy = Numerics.get () in
   let narrow = policy.Numerics.narrow_compute_f32 in
-  let wide_f16 = Numerics.fp16_accum_wide () in
+  let fp16 = policy.Numerics.fp16_arithmetic in
+  let explicit_wide_f16 = Numerics.equal_fp16_mode fp16 Numerics.Fp16_wide in
+  (* gh-ocannl-2195: CUDA's and HIP's auto resolves f16 wide too; only [Fp16_narrow] keeps storage
+     there. *)
+  let not_narrow_f16 = not (Numerics.equal_fp16_mode fp16 Numerics.Fp16_narrow) in
   let wide_bf16 = Numerics.bf16_accum_wide () in
   match Lazy.force selected_backend with
   | "cc" | "multidev_cc" -> (
       match prec with
-      | Ops.Half_prec _ when wide_f16 -> Wider
+      | Ops.Half_prec _ when explicit_wide_f16 -> Wider
       | Ops.Bfloat16_prec _ when wide_bf16 -> Wider
       | Ops.Half_prec _
         when Numerics.equal_fp16_mode policy.fp16_arithmetic Numerics.Fp16_narrow
@@ -266,7 +270,7 @@ let independent_residency prec =
       | _ -> At_storage)
   | "metal" -> (
       match prec with
-      | Ops.Half_prec _ when wide_f16 -> Wider
+      | Ops.Half_prec _ when explicit_wide_f16 -> Wider
       (* gh-ocannl-2029: Metal's auto resolves bf16 wide too; only [Bf16_narrow] keeps storage. *)
       | Ops.Bfloat16_prec _
         when not (Numerics.equal_bf16_mode policy.Numerics.bf16_arithmetic Numerics.Bf16_narrow) ->
@@ -276,12 +280,12 @@ let independent_residency prec =
   | "cuda" -> (
       match prec with
       | Ops.Bfloat16_prec _ -> Wider
-      | Ops.Half_prec _ when wide_f16 -> Wider
+      | Ops.Half_prec _ when not_narrow_f16 -> Wider
       | Ops.Fp8_prec _ when narrow -> Wider
       | _ -> At_storage)
   | "hip" -> (
       match prec with
-      | Ops.Half_prec _ when wide_f16 -> Wider
+      | Ops.Half_prec _ when not_narrow_f16 -> Wider
       (* gh-ocannl-1051: HIP's auto resolves bf16 wide too; only [Bf16_narrow] keeps storage. *)
       | Ops.Bfloat16_prec _
         when not (Numerics.equal_bf16_mode policy.Numerics.bf16_arithmetic Numerics.Bf16_narrow) ->

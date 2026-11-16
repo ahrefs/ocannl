@@ -867,7 +867,7 @@ files.
   rounds found them drifting one capability at a time (guards, scope-form bases, the logging
   decline); extend nest recognition only there. The
   widening is inert wherever `acc_prec` is the identity (f32/f64; GPU backends per their
-  residency table above, e.g. f16 there under `Fp16_auto`; `narrow_compute_f32=false` except
+  residency table above, e.g. f16 there under `Fp16_narrow`; `narrow_compute_f32=false` except
   f16-under-`Fp16_wide`; native fp16 under `Fp16_narrow`), and it declines twice more: under
   `debug_log_from_routines` (the per-step `Set` form keeps the trace node-addressed: each step
   logs the source assignment and the node's cell, where the localized scope's would log a
@@ -931,12 +931,16 @@ files.
   into the residency gate described in the next bullet.
 - **f16 residency is the ternary `fp16_arithmetic` policy's question** (gh-ocannl-680, refining
   gh-ocannl-516's boolean; config `auto|true|false`, default `auto`, old boolean spellings intact).
-  `Numerics.fp16_mode`: `Fp16_auto` keeps each backend's structural residency — CPU computes f16 in
-  f32 under `narrow_compute_f32`, GPUs keep storage-width f16 accumulators mirroring the
-  f16-accumulate triple every backend seeds — so `auto` changes nothing numerically vs. the old
-  default, but residency is now POLICY rather than a consequence of seeding; matching widths do
-  not imply matching narrowing points (the f16 census below). `Fp16_narrow`
-  (`true`) is unchanged gh-516 opt-in. `Fp16_wide` (`false` — note the repurposing: an explicit
+  `Numerics.fp16_mode`: `Fp16_auto` is each backend's own resolution, its `fp16_auto_wide`
+  constant read through the one predicate `Numerics.fp16_accum_wide ~auto_wide` — CPU computes f16
+  in f32 under `narrow_compute_f32`; CUDA and HIP resolve it WIDE since gh-ocannl-2195 (as
+  `Fp16_wide`), because their f16-accumulate tensor units narrow at other points than the per-step
+  serial loop (the f16 census below), so a narrow default made values depend on the crowned
+  schedule; Metal stays narrow (its half tile and serial loop are both per-step, bitwise equal).
+  The seeding side reads the same constant from `mma_capability.mma_f16_auto_wide`, so under a
+  wide-resolving auto CUDA below sm_80 (no wide scope) withholds its uniform-f16 seeds exactly as
+  under `Fp16_wide`. `Fp16_narrow` (`true`) is the gh-516 CPU opt-in and, on the GPUs, the
+  f16-accumulate arms (what `performance`/`approximate` set). `Fp16_wide` (`false` — note the repurposing: an explicit
   old-style `false` now REQUESTS strict wide) gives f16 accumulators f32 residency on every
   backend, `narrow_compute_f32=false` included: each backend's `accum_prec` widens `Half`, and the
   mma story is per-EMISSION-SCOPE all-or-nothing (gh-ocannl-545, gh-ocannl-836), through the
@@ -966,11 +970,10 @@ files.
   staged. Placement enablement applies the same resolver to its unstaged eligibility gate, so a
   device with no applicable wide scope cannot spend its placement budget unlocking an empty
   family. Since gh-ocannl-925 no tensor-core backend trades multi-statement f16 legs under the wide
-  policy (CUDA below sm_80 advertises no wide scope at all). `auto`
-  deliberately RETAINS LATITUDE to later resolve wide on hardware where wide f16 accumulate is
-  free (datacenter NVIDIA runs f32-accumulate f16 mma at full rate; GeForce halves it) — do not
-  write code or tests assuming `auto ≡ narrow` as a contract; `accum_width.ml`'s default-policy
-  legs pin auto's CURRENT resolution and say so. Pinned by: `accum_width.ml`'s universal f16 legs
+  policy (CUDA below sm_80 advertises no wide scope at all). The resolution is per backend — do
+  not write code or tests assuming `auto` equals either explicit mode; a test about the narrow
+  arms names `Fp16_narrow` (`Test_utils.with_fp16_narrow`), and `accum_width.ml`'s default-policy
+  legs name each backend's resolution independently. Pinned by: `accum_width.ml`'s universal f16 legs
   (scalar 2048+1×8 discriminates 2056 wide vs 2048 per-step; matmul parity vs once-narrowed wide
   reference under `Fp16_wide` on every backend — inputs exact in f32 so schedule reassociation
   cannot break bitwise equality), `sketch_family_tree.ml`'s seeding-gate section (mma seeds present
@@ -1114,9 +1117,13 @@ files.
   pair model matches all 2048 cells over both depths, while omitting the odd-row permutation
   misses 244 cells at k=16 and 250 at k=64. These are observations on normal, same-sign data,
   not vendor guarantees about hidden accumulator formats or untested devices. The serial FMA
-  rounds per step on the three measured devices. Runtime policy is unchanged: current CUDA/HIP
-  `Fp16_auto`/`Fp16_narrow` residency alone does not make a tensorized schedule bitwise equal to
-  the serial rendering. No speed claim or default-policy change follows from this probe.
+  rounds per step on the three measured devices. Under `Fp16_narrow` the CUDA/HIP storage-width
+  residency alone does not make a tensorized schedule bitwise equal to the serial rendering; that
+  is why gh-ocannl-2195 resolved CUDA/HIP `Fp16_auto` wide, where the same fixtures' tile and
+  serial loop both equal the once-narrowed model (the test's default-policy legs). Wide fixes the
+  width and the single narrowing point, not bitwise equality on general inputs: tensor-unit f32
+  accumulation is not an IEEE per-step chain, and `test/operations/f16_accum_ab` bounds the
+  difference (one f16 ulp plus the f32 accumulation term) and measures error against f64.
   The test reads the executing device family once from `Context.static_properties` and selects
   expectations from `measured_f16_models`. Missing f16 MMA capability skips the tensor-unit leg;
   an unregistered family with that capability runs and reports model mismatches on stderr, but
@@ -1488,7 +1495,7 @@ files.
   fallback for a half-operand, float-destination `Tile_mma` renders `fma((float)a, (float)b, acc)`
   in f32, which is exact wherever the intrinsic is (the f16→f32 k-split returns 2056 on both).
   Discriminate the fallback with the census/structure claim, and give the value claim a NARROW
-  accumulator as its negative control (an f16 destination under `Fp16_auto` returns 2048 in both
+  accumulator as its negative control (an f16 destination under `Fp16_narrow` returns 2048 in both
   scopes); a half-accumulator mutant of the mixed arm fails the value claims (2048), a declining
   mutant only the structure ones.
 ## Warp reductions and hardware ownership
@@ -1500,7 +1507,7 @@ files.
   `accum_prec`'d, so nothing else moves). A bf16 `Workgroup_reduce` on CUDA therefore shuffles
   `float` and computes exactly what its serial rendering does, and no backend needs a narrow
   `ocannl_shfl_xor` overload — the two float/double ones remain the whole ask. The gate is on the
-  RESIDENCY, not on storage: f16 under `Fp16_auto`/`Fp16_narrow`, and bf16 on HIP and Metal
+  RESIDENCY, not on storage: f16 under `Fp16_narrow` (and under `Fp16_auto` on Metal), and bf16 on HIP and Metal
   under `Bf16_narrow` (under `auto` their bf16 residency is f32 since gh-ocannl-1051 and
   gh-ocannl-2029, so they shuffle `float` as CUDA does) still raise (`accumulator residency` in the message) rather than gaining an untested narrow-shuffle
   path, since a plain hardware binding would race the accumulator; under `Fp16_wide` the f16

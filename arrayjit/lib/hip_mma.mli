@@ -8,6 +8,17 @@
     The backend still gates the descriptor at the device level (gfx11/gfx12 wave32 with discoverable
     rocWMMA headers), which is why no arm names a floor. *)
 
+val fp16_auto_wide : bool
+(** Whether [Numerics.Fp16_auto] resolves wide on this backend: [true] since gh-ocannl-2195 — the
+    f16-accumulate tensor unit (gfx1151 narrows per ordered pair, gh-ocannl-2151) and the
+    storage-width serial loop (per step) narrow at different points, so only the wide resolution is
+    schedule-uniform. The value of the descriptor's [mma_f16_auto_wide]. *)
+
+val fp16_accum_wide : unit -> bool
+(** [Numerics.fp16_accum_wide ~auto_wide:fp16_auto_wide ()]: whether f16 reduction accumulators
+    reside in f32 here under the current policy — the predicate behind [accum_prec] and the arm
+    table. *)
+
 val bf16_accum_wide : unit -> bool
 (** Whether bf16 reduction accumulators reside in f32 on this backend: under [Numerics.Bf16_wide],
     and since gh-ocannl-1051 under [Bf16_auto] too -- only [Bf16_narrow] keeps gfx11's

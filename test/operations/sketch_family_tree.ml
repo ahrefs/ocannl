@@ -741,7 +741,7 @@ let () =
      advertised too, standing in for the f32-storage destinations the gate must NOT touch — the gate
      keys on the DESTINATION's storage precision, which for [opt_h] is f16. *)
   let f16t = Ir.Backend_intf.Mma_f16 in
-  let gpu_f16_limits ~wide_scopes =
+  let gpu_f16_limits ?(auto_wide = false) ~wide_scopes () =
     {
       Ir.Backend_intf.no_hardware_limits with
       mma =
@@ -751,6 +751,7 @@ let () =
             mma_tile = (8, 8, 8);
             mma_format_tiles = [ ((f16t, f16t, f16t), (8, 8, 8)); ((f16t, f16t, f32), (8, 8, 8)) ];
             mma_f16_wide_acc_scopes = wide_scopes;
+            mma_f16_auto_wide = auto_wide;
           };
     }
   in
@@ -769,28 +770,58 @@ let () =
   in
   let f16_default =
     section "half-prec gpu, f16 tiles, default policy" ~is_gpu:true ~is_cpu:false
-      ~limits:(gpu_f16_limits ~wide_scopes:[]) opt_h
+      ~limits:(gpu_f16_limits ~wide_scopes:[] ())
+      opt_h
   in
+  (* gh-ocannl-2195: a backend whose [Fp16_auto] resolves wide (CUDA, HIP) gates the default policy
+     as [Fp16_wide] gates every backend — CUDA below sm_80 advertises no wide scope, so its
+     auto-resolved uniform-f16 seeds are withheld — while [Fp16_narrow] keeps them. The same
+     capability with [mma_f16_auto_wide = false] is the [f16_default] section above. *)
+  let auto_wide_seeds ~wide_scopes =
+    Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false
+      ~limits:(gpu_f16_limits ~auto_wide:true ~wide_scopes ())
+      opt_h
+  in
+  let f16_auto_wide_no_arm = auto_wide_seeds ~wide_scopes:[] in
+  let f16_auto_wide_both =
+    auto_wide_seeds
+      ~wide_scopes:[ Ir.Backend_intf.Mma_per_statement; Ir.Backend_intf.Mma_fragment_scope ]
+  in
+  Numerics.set_policy { saved_policy with fp16_arithmetic = Numerics.Fp16_narrow };
+  let f16_narrow_auto_wide_no_arm = auto_wide_seeds ~wide_scopes:[] in
+  Numerics.set_policy saved_policy;
+  Verdict.p
+    "a backend whose Fp16_auto resolves wide withholds the default policy's uniform-f16 mma seeds \
+     where it has no wide scope, keeps them in both scopes, and Fp16_narrow keeps them"
+    (no_mma f16_auto_wide_no_arm
+    && has_unstaged_mma f16_auto_wide_both
+    && has_staged_mma f16_auto_wide_both
+    && has_unstaged_mma f16_narrow_auto_wide_no_arm
+    && has_staged_mma f16_narrow_auto_wide_no_arm);
   Numerics.set_policy { saved_policy with fp16_arithmetic = Numerics.Fp16_wide };
   let f16_wide_no_arm =
     section "half-prec gpu, f16 tiles, wide policy, no wide-accumulate scope" ~is_gpu:true
-      ~is_cpu:false ~limits:(gpu_f16_limits ~wide_scopes:[]) opt_h
+      ~is_cpu:false
+      ~limits:(gpu_f16_limits ~wide_scopes:[] ())
+      opt_h
   in
   let f16_wide_no_arm_enablement, f16_wide_no_arm_disablement =
-    Autotune.placement_enablement ~is_gpu:true ~limits:(gpu_f16_limits ~wide_scopes:[])
+    Autotune.placement_enablement ~is_gpu:true
+      ~limits:(gpu_f16_limits ~wide_scopes:[] ())
       ~static_indices:[] ~base:opt_h ~allmat:opt_h
   in
   let f16_wide_statement =
     section "half-prec gpu, f16 tiles, wide policy, per-statement scope only" ~is_gpu:true
       ~is_cpu:false
-      ~limits:(gpu_f16_limits ~wide_scopes:[ Ir.Backend_intf.Mma_per_statement ])
+      ~limits:(gpu_f16_limits ~wide_scopes:[ Ir.Backend_intf.Mma_per_statement ] ())
       opt_h
   in
   let f16_wide_both =
     section "half-prec gpu, f16 tiles, wide policy, both emission scopes" ~is_gpu:true ~is_cpu:false
       ~limits:
         (gpu_f16_limits
-           ~wide_scopes:[ Ir.Backend_intf.Mma_per_statement; Ir.Backend_intf.Mma_fragment_scope ])
+           ~wide_scopes:[ Ir.Backend_intf.Mma_per_statement; Ir.Backend_intf.Mma_fragment_scope ]
+           ())
       opt_h
   in
   (* A zero explicit k-block is only statement-scoped when the contraction has one axis. With an
@@ -806,10 +837,11 @@ let () =
       Ir.Backend_intf.mma_emission_scope_of_sexp
         (Ir.Backend_intf.sexp_of_mma_emission_scope per_statement)
     in
-    let statement_limits = gpu_f16_limits ~wide_scopes:[ Ir.Backend_intf.Mma_per_statement ] in
+    let statement_limits = gpu_f16_limits ~wide_scopes:[ Ir.Backend_intf.Mma_per_statement ] () in
     let both_limits =
       gpu_f16_limits
         ~wide_scopes:[ Ir.Backend_intf.Mma_per_statement; Ir.Backend_intf.Mma_fragment_scope ]
+        ()
     in
     let seeds limits opt = Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits opt in
     (* A staged split whose padded block count is one does not extend the accumulator beyond its

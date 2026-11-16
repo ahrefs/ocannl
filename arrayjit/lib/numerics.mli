@@ -11,14 +11,16 @@
 
 (** The fp16 compute/accumulator mode (gh-ocannl-680, refining gh-ocannl-516's boolean).
 
-    - [Fp16_auto] (the default): each backend's structural residency. On the CPU backends f16
-      computes in f32 (under {!field-narrow_compute_f32}); on the GPU backends f16 arithmetic is
-      native and reduction accumulators keep storage residency, mirroring the tensor-unit triples
-      every backend seeds at f16 accumulate. The auto resolution is per BACKEND and deliberately
-      retains latitude: on hardware where a wide f16 accumulate costs nothing (datacenter-class
-      NVIDIA runs f32-accumulate f16 mma at full rate) a later refinement may resolve it wide, so do
-      not write code that assumes [Fp16_auto] equals [Fp16_narrow] — ask the backend's
-      [accum_prec]/seeding instead.
+    - [Fp16_auto] (the default): each backend's own resolution, the backend's [fp16_auto_wide]
+      constant read through {!fp16_accum_wide}. On the CPU backends f16 computes in f32 (under
+      {!field-narrow_compute_f32}). CUDA and HIP resolve it WIDE since gh-ocannl-2195 (as
+      [Fp16_wide]: [Cuda_mma.fp16_auto_wide], [Hip_mma.fp16_auto_wide]): their f16-accumulate tensor
+      units narrow per 16-deep block (sm_120) or per ordered pair (gfx1151) where a storage-width
+      serial loop narrows per step (gh-ocannl-2151's census), so under a narrow default a value
+      depended on which schedule the tuner crowned. Metal keeps storage residency
+      ([Metal_mma.fp16_auto_wide]): both its f16 tile and its serial loop are per-step half FMAs,
+      bitwise equal. The resolution is per BACKEND: do not write code that assumes [Fp16_auto]
+      equals either explicit mode — ask the backend's [accum_prec]/seeding instead.
     - [Fp16_wide] (config [false]): f16 reduction accumulators reside in f32 on every backend,
       narrowing once per nest — the strict cross-backend-uniform semantics. Backends whose
       tensor-unit f16 legs cannot accumulate f32 in the required emission scope
@@ -30,8 +32,11 @@
     - [Fp16_narrow] (config [true]): compute fp16 in fp16 on CPU targets that have native 16-bit
       arithmetic (ARMv8.2-FP16, AVX512-FP16) — gh-ocannl-516's opt-in, trading fp16's 10-bit
       mantissa and 65504 range for a doubled lane count. On targets that merely promote to float it
-      is ignored (costs accuracy for no speed), and the GPU backends behave as under [Fp16_auto]
-      (their f16 arithmetic is native narrow already). *)
+      is ignored (costs accuracy for no speed). On the GPU backends it keeps storage-width f16
+      accumulators and the f16-accumulate tensor-unit arms — on CUDA and HIP not schedule-uniformly,
+      since those arms narrow at different points from the serial loop (gh-ocannl-2195); it is what
+      the [performance] and [approximate] profiles name, which is how they kept the narrow side when
+      auto moved. *)
 type fp16_mode = Fp16_auto | Fp16_narrow | Fp16_wide [@@deriving sexp, compare, equal, enumerate]
 
 (** The bf16 accumulator mode (gh-ocannl-838), the same three-way shape as {!fp16_mode} so the
@@ -155,8 +160,15 @@ val set_policy : t -> unit
 (** Override the current policy before compilation. Already compiled routines retain their
     compilation policy. *)
 
-val fp16_accum_wide : unit -> bool
-(** Whether the current policy explicitly requests {!Fp16_wide}. *)
+val fp16_mode_accum_wide : auto_wide:bool -> fp16_mode -> bool
+(** Whether f16 reduction accumulators reside in f32 under the mode on a backend whose {!Fp16_auto}
+    resolves wide exactly when [auto_wide]: always under {!Fp16_wide}, never under {!Fp16_narrow}
+    (gh-ocannl-2195). *)
+
+val fp16_accum_wide : auto_wide:bool -> unit -> bool
+(** {!fp16_mode_accum_wide} under the current policy: the one predicate behind every backend's
+    [accum_prec] and mma arms (each passing its own [fp16_auto_wide]) and the seeding gate (reading
+    it from [Backend_intf.mma_capability.mma_f16_auto_wide]). *)
 
 val bf16_accum_wide : unit -> bool
 (** Whether the current policy explicitly requests {!Bf16_wide}. Backend resolution of {!Bf16_auto}

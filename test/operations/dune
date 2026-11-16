@@ -6637,6 +6637,24 @@
  (action
   (diff exit_stream_teardown.expected exit_stream_teardown.actual)))
 
+; gh-ocannl-2195: the accuracy half of the f16 accumulation A/B -- the default (wide on CUDA and HIP)
+; and fp16_arithmetic=true (the narrow tensor units) against an f64 reference, on a GEMM and an
+; attention value product. Digits on stderr, two-sided claims on stdout; skips off CUDA and HIP.
+
+(test
+ (name f16_accum_ab)
+ (package neural_nets_lib)
+ ; The serial twins are explicit FMA chains, as in mma_bf16_seed_parity.
+ (action
+  (run %{test} --ocannl_fp_contract=true))
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules f16_accum_ab)
+ (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-2075: f64 narrowed to half and bfloat16 rounds once, on the device and through the host's
 ; writers, checked against a midpoint oracle over every code boundary.
 

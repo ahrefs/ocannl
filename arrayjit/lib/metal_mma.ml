@@ -22,6 +22,14 @@ let bf16_accum_wide () =
   | Numerics.Bf16_auto | Numerics.Bf16_wide -> true
   | Numerics.Bf16_narrow -> false
 
+(* Whether [Numerics.Fp16_auto] resolves wide on this backend: no (gh-ocannl-2195). The
+   storage-width [simdgroup_half8x8] accumulate and the half serial loop are both per-step half FMAs
+   on the M4 Max (gh-ocannl-2151's census), bitwise equal, so the narrow auto is schedule-uniform
+   here; CUDA and HIP, whose f16-accumulate tensor units narrow at other points, resolve it wide.
+   Published to seeding as [capability.mma_f16_auto_wide]. *)
+let fp16_auto_wide = false
+let fp16_accum_wide () = Numerics.fp16_accum_wide ~auto_wide:fp16_auto_wide ()
+
 (* The one combination resolver both MMA hooks consult: the precision a storage triple's accumulator
    fragment resides at, every fragment type then following from its precision ([Metal_backend]'s
    [mma_fragment_types]); its [mma_d_boundary_lines] converts at the destination boundary exactly
@@ -42,8 +50,7 @@ let mma_accumulator ~d_prec ~a_prec ~b_prec =
      directly, in both emission scopes. Independent of [fp16_arithmetic], which is about f16
      DESTINATIONS. *)
   | Ops.Half_prec _, Ops.Half_prec _, Ops.Single_prec _ -> Some Ops.single
-  | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ when Numerics.fp16_accum_wide () ->
-      Some Ops.single
+  | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ when fp16_accum_wide () -> Some Ops.single
   | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ -> Some Ops.half
   (* The bf16 twins of the two f16 arms above (gh-ocannl-923, completing gh-ocannl-838's [Bf16_wide]
      on Metal): [simdgroup_multiply_accumulate] is generic over its operand element type, and bfloat
@@ -91,6 +98,7 @@ let capability =
        accumulator. [mma_syntax]/[mma_fragment_syntax] bridge that accumulator to f16 destination
        storage elementwise at the outer boundary (gh-ocannl-837). *)
     mma_f16_wide_acc_scopes = [ Backend_intf.Mma_per_statement; Backend_intf.Mma_fragment_scope ];
+    mma_f16_auto_wide = fp16_auto_wide;
     (* gh-ocannl-923: the uniform-bf16 arm's wide counterpart, the same float accumulator and
        coordinate-table boundary in both hooks. *)
     mma_bf16_wide_acc_scopes = [ Backend_intf.Mma_per_statement; Backend_intf.Mma_fragment_scope ];

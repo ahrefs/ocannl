@@ -19,7 +19,9 @@
 
 type m16n8k16_kind =
   | M16n8k16_bf16  (** Uniform bf16 (gh-ocannl-545): the combination wmma cannot express. *)
-  | M16n8k16_f16  (** Uniform f16 under [Numerics.Fp16_wide], per statement (gh-ocannl-680). *)
+  | M16n8k16_f16
+      (** Uniform f16 under the wide resolution ({!fp16_accum_wide}: [Fp16_wide], and since
+          gh-ocannl-2195 [Fp16_auto]), per statement (gh-ocannl-680). *)
 [@@deriving equal, sexp_of, enumerate]
 
 (** The inline-PTX arms. Both accumulate in the architected m16n8 f32 per-lane register layout,
@@ -35,7 +37,8 @@ type inline_ptx =
 (** The [nvcuda::wmma] C++-API arms (tensorize-mma T3). *)
 type wmma_kind =
   | Wmma_f16_f32
-  | Wmma_f16_f16  (** Gated off under [Numerics.Fp16_wide]. *)
+  | Wmma_f16_f16
+      (** Gated off under the wide resolution ({!fp16_accum_wide}): [Fp16_narrow] only. *)
   | Wmma_f16_wide
       (** f16 x f16 -> f32 fragments over an f16 destination converted at the [d] boundary
           (gh-ocannl-925): only a fragment scope renders it. *)
@@ -46,6 +49,17 @@ type wmma_kind =
 (** Every tensor-core rendering the CUDA hooks can emit. [all_of_arm] enumerates them, so a table
     over arms (the arch-target markers, the floors' minimum) covers a new arm automatically. *)
 type arm = Inline_ptx of inline_ptx | Wmma of wmma_kind [@@deriving equal, sexp_of, enumerate]
+
+val fp16_auto_wide : bool
+(** Whether [Numerics.Fp16_auto] resolves wide on this backend: [true] since gh-ocannl-2195 — the
+    f16-accumulate tensor unit (sm_120 narrows per 16-deep block, gh-ocannl-2151) and the
+    storage-width serial loop (per step) narrow at different points, so only the wide resolution is
+    schedule-uniform. The value of the descriptor's [mma_f16_auto_wide]. *)
+
+val fp16_accum_wide : unit -> bool
+(** [Numerics.fp16_accum_wide ~auto_wide:fp16_auto_wide ()]: whether f16 reduction accumulators
+    reside in f32 here under the current policy — the predicate behind [accum_prec] and the arm
+    table. *)
 
 val resolve_arm :
   a_prec:Ops.prec ->

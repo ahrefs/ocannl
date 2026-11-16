@@ -118,6 +118,45 @@ let f16_mma_capable =
           (Ir.Backend_intf.Mma_f16, Ir.Backend_intf.Mma_f16, Ir.Backend_intf.Mma_f16)
           ~equal:Ir.Backend_intf.equal_mma_format_triple)
 
+(* The default-policy f16 seed-parity legs: Metal M4 Max (narrow, both legs per-step), and since
+   gh-ocannl-2195 every f16-capable CUDA and HIP device (wide). The bitwise claim holds on Metal and
+   CUDA (sm_120: 0 of 1024 cells differ in every seed); gfx11's f32-accumulate WMMA is not exactly
+   rounded over mixed-sign products (gh-ocannl-1420), so on HIP the claim is the bound instead
+   (gfx1151: 30 of 1024 cells differ in every seed on these signed, f32-exact inputs, where the
+   one-sign census fixtures below agree bitwise). *)
+(* Whether the default policy's uniform-f16 tile is available per statement, by the descriptor's own
+   judgment: CUDA sm_70-sm_75 advertise the triple but no wide scope, so under the wide-resolving
+   auto (gh-ocannl-2195) their uniform-f16 seeds are withheld and the default legs have nothing to
+   compare. *)
+let f16_auto_capable =
+  lazy
+    (on_gpu
+    && Test_utils.with_fp16_auto (fun () ->
+        Ir.Backend_intf.advertises_mma_format_in_scope
+          (Context.hardware_limits (Context.auto ()))
+          ~policy:(Numerics.get ()) ~scope:Ir.Backend_intf.Mma_per_statement
+          ~a:Ir.Backend_intf.Mma_f16 ~b:Ir.Backend_intf.Mma_f16 ~d:Ir.Backend_intf.Mma_f16))
+
+let f16_default_parity_leg () =
+  if on_metal then measured_metal_leg ()
+  else
+    Verdict.leg ~when_:((on_cuda || on_hip) && Lazy.force f16_auto_capable) ~on:(family_label ()) ()
+
+let f16_default_bitwise_leg () =
+  if on_metal then measured_metal_leg ()
+  else Verdict.leg ~when_:(on_cuda && Lazy.force f16_auto_capable) ~on:(family_label ()) ()
+
+let f16_default_bound_leg () =
+  Verdict.leg ~when_:(on_hip && Lazy.force f16_auto_capable) ~on:(family_label ()) ()
+
+(* One f16 ulp of [x]: the spacing of x's binade, the subnormal spacing below 2^-14. *)
+let f16_ulp x =
+  let ax = Float.abs x in
+  if Float.(ax < ldexp 1. (-14)) then Float.ldexp 1. (-24)
+  else
+    let _, e = Float.frexp ax in
+    Float.ldexp 1. (e - 11)
+
 let () =
   p_all "device properties select measured models, including missing fields"
     [
@@ -436,17 +475,29 @@ let () =
   List.iter
     [ ("bf16", fst); ("f16", snd) ]
     ~f:(fun (what, pick) ->
-      let parity_leg = if String.equal what "f16" then measured_metal_leg () else leg in
+      (* gh-ocannl-2195: the f16 leg runs on CUDA and HIP too, whose default resolves f16 wide — the
+         claim the narrow default could not make there. *)
+      let f16 = String.equal what "f16" in
+      let parity_leg = if f16 then f16_default_parity_leg () else leg in
+      let bitwise_leg = if f16 then f16_default_bitwise_leg () else leg in
       in_legf ~leg:parity_leg
         "default policy, %s: some seeded tile renders the simdgroup intrinsics" what (fun label ->
           let _, results = pick (Lazy.force parity) in
           p_exists label results ~f:(fun (_, _, census) ->
               List.exists census ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics)));
-      in_legf ~leg:parity_leg
+      in_legf ~leg:bitwise_leg
         "default policy, %s: every seeded tile that ran equals the serial rendering bitwise" what
         (fun label ->
           let serial, results = pick (Lazy.force parity) in
-          p_all label results ~f:(fun (_, got, _) -> Array.equal Float.equal got serial)))
+          p_all label results ~f:(fun (_, got, _) -> Array.equal Float.equal got serial)));
+  in_leg ~leg:(f16_default_bound_leg ())
+    "default policy, f16 on HIP: every seeded tile that ran is within one f16 ulp of the serial \
+     rendering (gfx11 WMMA's mixed-sign residue)" (fun label ->
+      let serial, results = snd (Lazy.force parity) in
+      p_close label
+        (Array.concat (List.map results ~f:(fun (_, got, _) -> got)))
+        (Array.concat (List.map results ~f:(fun _ -> serial)))
+        ~tol:f16_ulp)
 
 (* === Cache identity follows the resolution by derivation (gh-ocannl-1117/1153) === *)
 (* The schedule cache hashes [Backend_intf.codegen_capabilities_fingerprint], which tabulates the
@@ -556,6 +607,45 @@ let () =
       in_legf ~leg:gpu_leg "f16 %s: the serial loop equals the per-step model" depth (fun label ->
           let serial, _, _ = Lazy.force pair in
           p_all2 label serial step ~f:Float.equal);
+      (* gh-ocannl-2195: under the default [Fp16_auto] CUDA and HIP accumulate f16 in f32 in the
+         tile and the serial loop alike, so on these exact-partials fixtures both equal the
+         once-narrowed model bitwise — at four blocks the model every measured narrow arm misses.
+         Metal's default stays narrow (per-step tile and loop) and the leg skips there. *)
+      let auto_leg =
+        Verdict.leg
+          ~when_:(Lazy.force f16_auto_capable && (on_cuda || on_hip))
+          ~on:(family_label ()) ()
+      in
+      let auto_pair =
+        lazy
+          (Test_utils.with_fp16_auto (fun () ->
+               let serial, tile, census =
+                 fixture_pair_at ~fa ~fb ~prec:Ir.Ops.half ~k
+                   ~tag:(Printf.sprintf "bsp_f16_auto_k%d" k)
+                   ()
+               in
+               Stdio.eprintf
+                 "f16 default policy: device=%s k=%d tile mismatches vs once=%d, serial vs once=%d \
+                  (not part of the golden)\n\
+                  %!"
+                 (family_label ()) k (count_mismatches tile once) (count_mismatches serial once);
+               (serial, tile, census)))
+      in
+      in_legf ~leg:auto_leg
+        "f16 %s, default policy on CUDA and HIP: the tile renders tensor-unit intrinsics" depth
+        (fun label ->
+          let _, _, census = Lazy.force auto_pair in
+          p label (Ll_test.all_rendered ~what:label Ir.C_syntax.Mma_intrinsics census));
+      in_legf ~leg:auto_leg
+        "f16 %s, default policy on CUDA and HIP: the tile equals the once-narrowed model" depth
+        (fun label ->
+          let _, tile, _ = Lazy.force auto_pair in
+          p_all2 label tile once ~f:Float.equal);
+      in_legf ~leg:auto_leg
+        "f16 %s, default policy on CUDA and HIP: the serial loop equals the once-narrowed model"
+        depth (fun label ->
+          let serial, _, _ = Lazy.force auto_pair in
+          p_all2 label serial once ~f:Float.equal);
       in_legf ~leg:model_leg "f16 %s: the tensor unit equals the measured family model" depth
         (fun label ->
           let _, tile, _ = Lazy.force pair in

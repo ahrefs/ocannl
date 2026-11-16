@@ -16,6 +16,15 @@ let bf16_accum_wide () =
   | Numerics.Bf16_auto | Numerics.Bf16_wide -> true
   | Numerics.Bf16_narrow -> false
 
+(* Whether f16 reduction accumulators reside in f32 on this backend: under [Numerics.Fp16_wide], and
+   since gh-ocannl-2195 under [Fp16_auto] too -- only [Fp16_narrow] (the [performance] and
+   [approximate] profiles' setting) keeps gfx11's f16-accumulate WMMA and storage-width serial
+   accumulators. Why: gh-ocannl-2151's census measured gfx1151's f16 WMMA narrowing per ordered pair
+   (odd rows exchanging the two 8-term halves of each 16-deep block) where the storage-width serial
+   loop narrows per step, so under a narrow auto the value depended on whether the tuner crowned a
+   tile. The constant is published to seeding as [capability.mma_f16_auto_wide]. *)
+let fp16_auto_wide = true
+let fp16_accum_wide () = Numerics.fp16_accum_wide ~auto_wide:fp16_auto_wide ()
 let tile = 16
 
 (* The combination table both hooks consult: per storage triple, the precision the accumulator
@@ -29,12 +38,13 @@ let mma_accumulator ~a_prec ~b_prec ~d_prec =
   match (a_prec, b_prec, d_prec) with
   | Ops.Half_prec _, Ops.Half_prec _, Ops.Single_prec _ -> Some (Ops.single, 8, 4)
   (* The uniform-f16 arm's accumulator follows the [Numerics] policy, and the two arms are mutually
-     exclusive by construction. Under [Fp16_auto]/[Fp16_narrow] the accumulator fragment is itself
-     f16, so the [d] boundary is rocWMMA's own load/store. Under [Fp16_wide] (gh-ocannl-789) the
-     accumulator is [float] against the same f16 STORAGE, and [mma_d_boundary_lines] converts once
-     at each end -- which is what lets [mma_f16_wide_acc_scopes] advertise both scopes and the
-     uniform-f16 seeds survive the wide policy on this backend. *)
-  | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ when Numerics.fp16_accum_wide () ->
+     exclusive by construction. Under [Fp16_narrow] the accumulator fragment is itself f16, so the
+     [d] boundary is rocWMMA's own load/store. Under [Fp16_wide] (gh-ocannl-789), and since
+     gh-ocannl-2195 under [Fp16_auto] ([fp16_accum_wide]), the accumulator is [float] against the
+     same f16 STORAGE, and [mma_d_boundary_lines] converts once at each end -- which is what lets
+     [mma_f16_wide_acc_scopes] advertise both scopes and the uniform-f16 seeds survive the wide
+     policy on this backend. *)
+  | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ when fp16_accum_wide () ->
       Some (Ops.single, 8, 8)
   | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ -> Some (Ops.half, 8, 8)
   | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Single_prec _ -> Some (Ops.single, 8, 4)
@@ -74,6 +84,7 @@ let capability =
        destination and [mma_d_boundary_lines] converts elementwise at each end — so the wide policy
        no longer costs this backend its f16 tensor-unit legs (gh-ocannl-680's stated remainder). *)
     mma_f16_wide_acc_scopes = [ Backend_intf.Mma_per_statement; Backend_intf.Mma_fragment_scope ];
+    mma_f16_auto_wide = fp16_auto_wide;
     (* gh-ocannl-838: the uniform-bf16 arm swaps the same way under [Numerics.Bf16_wide], through
        rocWMMA's [(bf16, bf16, f32)] fragments and the same converted boundary. *)
     mma_bf16_wide_acc_scopes = [ Backend_intf.Mma_per_statement; Backend_intf.Mma_fragment_scope ];

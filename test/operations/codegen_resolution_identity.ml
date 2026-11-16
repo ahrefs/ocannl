@@ -187,6 +187,31 @@ let () =
   p_exists "some policy pair resolves apart on this backend" pairs ~f:(fun pair ->
       not (same_resolution pair));
   p_exists "some distinct policy pair resolves alike on this backend" pairs ~f:same_resolution;
+  (* gh-ocannl-2195: what [Fp16_auto] keys as on the GPU backends, named per backend rather than
+     read off the backend's [fp16_auto_wide] constant (that would bless a regression in both): CUDA
+     and HIP resolve it wide, so it keys with [Fp16_wide] and apart from [Fp16_narrow]; Metal keeps
+     it narrow, the other way round. The CPU backends' auto is their f32 compute, neither mode's
+     resolution in every policy corner, so they skip. *)
+  (let backend = Context.backend_name ctx in
+   let auto_wide_backend = List.mem [ "cuda"; "hip" ] backend ~equal:String.equal in
+   let leg =
+     Verdict.leg ~when_:(auto_wide_backend || String.equal backend "metal") ~on:backend ()
+   in
+   in_leg ~leg
+     "on a GPU backend, Fp16_auto keys with Fp16_wide and apart from Fp16_narrow exactly where the \
+      backend resolves it wide (CUDA, HIP), and the other way round elsewhere (Metal)" (fun label ->
+       let identity_of fp16 =
+         List.find_map_exn rows ~f:(fun (policy, _, identity) ->
+             Option.some_if
+               (Numerics.equal_fp16_mode policy.Numerics.fp16_arithmetic fp16
+               && Numerics.equal_bf16_mode policy.bf16_arithmetic Numerics.Bf16_auto
+               && policy.narrow_compute_f32 && not policy.tf32_matmuls)
+               identity)
+       in
+       let auto = identity_of Numerics.Fp16_auto in
+       let as_wide = String.equal auto (identity_of Numerics.Fp16_wide) in
+       let as_narrow = String.equal auto (identity_of Numerics.Fp16_narrow) in
+       p label (Bool.equal as_wide auto_wide_backend && Bool.equal as_narrow (not auto_wide_backend))));
   (let claim = "every uniform-storage arm accumulates at the backend's accum_prec" in
    match
      List.concat_map rows ~f:(fun (_, (_, uniform), _) ->

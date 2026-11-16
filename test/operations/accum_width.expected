@@ -1,13 +1,15 @@
 the fp8 scalar rival-rendering values are pairwise distinct: true
 the f16 scalar rival-rendering values are pairwise distinct: true
-the default-policy f16 reduction takes the backend's declared residency (2048 + 1x8: wide 2056 on CPU, per-step 2048 on GPU): true
+the default-policy f16 reduction takes the backend's declared residency (2048 + 1x8: wide 2056 on CPU, CUDA and HIP, per-step 2048 on Metal): true
+on a GPU backend the default f16 residency does not depend on narrow_compute_f32: true
+on a GPU backend Fp16_narrow keeps the f16 reduction at storage width (2048 + 1x8 stays 2048): true
 Fp16_wide widens the f16 reduction on this backend too (2048 + 1x8 gives 2056): true
 Fp16_wide holds the f32 residency even under narrow_compute_f32=false (2048 + 1x8 gives 2056): true
 a Vectorized f16 reduction under Fp16_wide + narrow_compute_f32=false declines the SIMD chains: true
 the declined Vectorized f16 reduction keeps f32 residency (equals the once-narrowed wide reference): true
 the serial f16 reduction under Fp16_wide + narrow_compute_f32=false equals the once-narrowed wide reference: true
 under Fp16_wide the f16 naive matmul equals the once-narrowed wide-accumulation reference: true
-the default-policy f16 matmul matches the wide reference exactly where the backend widens (CPU) and diverges where it keeps storage residency (GPU): true
+the default-policy f16 matmul matches the wide reference exactly where the backend widens (CPU, CUDA, HIP) and diverges where it keeps storage residency (Metal): true
 bf16 naive matmul equals the once-narrowed wide-accumulation reference: true
 the emitted serial k-loop narrows the accumulator once per cell, not per step: true
 a merge-buffer read is not the accumulator's own cell (the update shape is recognized): true

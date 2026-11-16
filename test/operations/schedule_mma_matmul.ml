@@ -603,14 +603,23 @@ let () =
    in
    p "tensorized structure as expected" ok);
 
+  (* The half leg's policy: [Fp16_narrow] on the GPUs, naming their f16-accumulate arms (the default
+     is the wide arm on CUDA and HIP since gh-ocannl-2195); the default on the C backends, where
+     [Fp16_narrow] would compute f16 natively on a native-fp16 target instead of bridging it. *)
+  let with_half_leg_policy f =
+    if on_gpu then Test_utils.with_fp16_narrow f else Test_utils.with_fp16_auto f
+  in
   (* --- Half precision: [simdgroup_half8x8] on Metal, the wmma f16 path on CUDA (T3 draft), rocWMMA
-     on HIP, the scalar fallback on the C backends. The inputs are NONNEGATIVE multiples of 1/8 and
-     1/4 with 32-term sums bounded by 24, so every product and partial sum is exactly representable
-     in f16 (multiples of 1/32 below 2^10): the result is EXACT regardless of accumulation order,
-     and parity is bitwise on every backend and either rendering path. One sign matters as much as
-     exactness: gfx11's WMMA is exactly rounded only when every product shares a sign
-     (gh-ocannl-1420), and with [mbh] signed the staged f16 -> f32 leg below missed by f32 ulps on
-     HIP (gh-ocannl-1432). The premise is derived from the init functions, not restated. --- *)
+     on HIP, the scalar fallback on the C backends. Compiled under [Fp16_narrow], whose uniform-f16
+     arms are the f16-accumulate ones on every GPU backend ([Fp16_auto] resolves wide on CUDA and
+     HIP since gh-ocannl-2195; the [Fp16_wide] legs below cover that arm). The inputs are
+     NONNEGATIVE multiples of 1/8 and 1/4 with 32-term sums bounded by 24, so every product and
+     partial sum is exactly representable in f16 (multiples of 1/32 below 2^10): the result is EXACT
+     regardless of accumulation order, and parity is bitwise on every backend and either rendering
+     path. One sign matters as much as exactness: gfx11's WMMA is exactly rounded only when every
+     product shares a sign (gh-ocannl-1420), and with [mbh] signed the staged f16 -> f32 leg below
+     missed by f32 ulps on HIP (gh-ocannl-1432). The premise is derived from the init functions, not
+     restated. --- *)
   let mah_f = Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:0. ~stride:0.125 in
   let mbh_f = Ll_test.cycle ~dims:[| n; n |] ~modulus:7 ~offset:0. ~stride:0.25 in
   p_all
@@ -624,7 +633,7 @@ let () =
   Tn.update_prec mch0.Tensor.value Ir.Ops.half;
   let ctx_hs = Context.auto () in
   let ctx_hs, routine_hs =
-    Test_utils.with_fp16_auto (fun () ->
+    with_half_leg_policy (fun () ->
         Context.compile
           ~lowered_transform:(fun opt -> [ opt ])
           ctx_hs
@@ -638,7 +647,7 @@ let () =
   let transform_h opt = Sched.apply (mma_schedule ~out:mch1.Tensor.value opt) opt in
   let ctx_h = Context.auto () in
   let ctx_h, routine_h =
-    Test_utils.with_fp16_auto (fun () ->
+    with_half_leg_policy (fun () ->
         Context.compile
           ~lowered_transform:(fun o -> [ transform_h o ])
           ctx_h
@@ -657,7 +666,7 @@ let () =
       only what the advertised rendering looks like. *)
    let advertised_h, census_ok =
      (* Read under the policy the leg compiled with. *)
-     Test_utils.with_fp16_auto (fun () ->
+     with_half_leg_policy (fun () ->
          ( advertised ~a_prec:half ~b_prec:half ~d_prec:half,
            census_agrees_with_capability ~what:"half" ~a_prec:half ~b_prec:half ~d_prec:half
              (renderings routine_h) ))
@@ -668,7 +677,7 @@ let () =
      if on_metal then (not advertised_h) || (has "simdgroup_half8x8" && not (has "__mma_dstage"))
      else if on_hip then
        if advertised_h then
-         (* HIP: the rocWMMA f16 intrinsic (verified on gfx1151). Under the DEFAULT policy the
+         (* HIP: the rocWMMA f16 intrinsic (verified on gfx1151). Under [Fp16_narrow] the
             accumulator fragment is itself f16, so no [d]-boundary conversion is emitted — the
             complement of the [Fp16_wide] leg below, which is what keeps the two arms from being
             told apart only by a claim that would pass on either (gh-ocannl-789). *)
@@ -1920,9 +1929,9 @@ let () =
 
   (* --- The same staged half composition with a uniform-f16 accumulator (gh-ocannl-480): the leg
      that exercises the same-type accumulator fragment element (half, not f32) on every tensor-core
-     backend — including Metal's [simdgroup_half8x8], the default-policy complement of the converted
-     wide arm below. Same f16-exact inputs, so parity with the half serial twin stays bitwise.
-     --- *)
+     backend — including Metal's [simdgroup_half8x8], under [Fp16_narrow]: the narrow complement of
+     the converted wide arm below ([Fp16_auto] is that wide arm on CUDA and HIP, gh-ocannl-2195).
+     Same f16-exact inputs, so parity with the half serial twin stays bitwise. --- *)
   let%op mchu = mah * mbh in
   Tn.update_prec mchu.Tensor.value Ir.Ops.half;
   let hu_staged =
@@ -1935,7 +1944,7 @@ let () =
        in
        let ctx_u = Context.auto () in
        let ctx_u, routine_u =
-         Test_utils.with_fp16_auto (fun () ->
+         Test_utils.with_fp16_narrow (fun () ->
              Context.compile
                ~lowered_transform:(fun o -> [ transform_hu o ])
                ctx_u
@@ -1959,7 +1968,7 @@ let () =
          must record the lane-0 fallback. Read under the policy the leg compiled with. *)
       let half = Ir.Ops.half in
       let ok =
-        Test_utils.with_fp16_auto (fun () ->
+        Test_utils.with_fp16_narrow (fun () ->
             census_agrees_with_capability ~what:"staged uniform-f16" ~a_prec:half ~b_prec:half
               ~d_prec:half (renderings routine_u)
             && ((not (advertised ~a_prec:half ~b_prec:half ~d_prec:half))
@@ -1999,45 +2008,45 @@ let () =
       ~when_:(on_metal || (on_hip && Lazy.force hip_mma) || Lazy.force cuda_f16_wide_fragment)
       ~on:backend_name ()
   in
-  let fw =
-    lazy
-      (let kw = 144 in
-       let fwsa =
-         NTDSL.init ~l:"fwsa" ~prec:Ir.Ops.half ~i:[ kw ] ~o:[ n ]
-           ~f:(fun idcs -> if idcs.(1) % bm = 0 then 1. else 0.)
-           ()
-       in
-       let fwsb =
-         NTDSL.init ~l:"fwsb" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ kw ]
-           ~f:(fun idcs -> if idcs.(0) % bm <> 0 then 0. else if idcs.(0) = 0 then 2048. else 1.)
-           ()
-       in
-       Numerics.set_policy { saved_policy with fp16_arithmetic = Numerics.Fp16_wide };
-       let%op mchfw = fwsa * fwsb in
-       Tn.update_prec mchfw.Tensor.value Ir.Ops.half;
-       let transform_fw opt =
-         Sched.apply
-           (staged_schedule ~out:mchfw.Tensor.value ~src_a:fwsa.Tensor.value
-              ~src_b:fwsb.Tensor.value opt)
-           opt
-       in
-       let ctx_fw = Context.auto () in
-       let ctx_fw, routine_fw =
-         Context.compile
-           ~lowered_transform:(fun o -> [ transform_fw o ])
-           ctx_fw
-           (named "mm_huw_staged_mma" (Train.forward mchfw))
-           Ir.Indexing.Empty
-       in
-       let census_fw = renderings routine_fw in
-       let ctx_fw = run_prefilled ctx_fw routine_fw mchfw in
-       let got_fw = Context.get_values ctx_fw mchfw.Tensor.value in
-       Numerics.set_policy saved_policy;
-       Stdio.eprintf
-         "schedule_mma_matmul: staged Fp16_wide k=144 cell 0 on %s: %g (not part of the golden)\n%!"
-         backend_name got_fw.(0);
-       (got_fw, census_fw))
+  let fw_run ~mode ~name =
+    let kw = 144 in
+    let fwsa =
+      NTDSL.init ~l:"fwsa" ~prec:Ir.Ops.half ~i:[ kw ] ~o:[ n ]
+        ~f:(fun idcs -> if idcs.(1) % bm = 0 then 1. else 0.)
+        ()
+    in
+    let fwsb =
+      NTDSL.init ~l:"fwsb" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ kw ]
+        ~f:(fun idcs -> if idcs.(0) % bm <> 0 then 0. else if idcs.(0) = 0 then 2048. else 1.)
+        ()
+    in
+    Numerics.set_policy { saved_policy with fp16_arithmetic = mode };
+    let%op mchfw = fwsa * fwsb in
+    Tn.update_prec mchfw.Tensor.value Ir.Ops.half;
+    let transform_fw opt =
+      Sched.apply
+        (staged_schedule ~out:mchfw.Tensor.value ~src_a:fwsa.Tensor.value ~src_b:fwsb.Tensor.value
+           opt)
+        opt
+    in
+    let ctx_fw = Context.auto () in
+    let ctx_fw, routine_fw =
+      Context.compile
+        ~lowered_transform:(fun o -> [ transform_fw o ])
+        ctx_fw
+        (named name (Train.forward mchfw))
+        Ir.Indexing.Empty
+    in
+    let census_fw = renderings routine_fw in
+    let ctx_fw = run_prefilled ctx_fw routine_fw mchfw in
+    let got_fw = Context.get_values ctx_fw mchfw.Tensor.value in
+    Numerics.set_policy saved_policy;
+    Stdio.eprintf
+      "schedule_mma_matmul: staged %s k=144 cell 0 on %s: %g (not part of the golden)\n%!" name
+      backend_name got_fw.(0);
+    (got_fw, census_fw)
   in
+  let fw = lazy (fw_run ~mode:Numerics.Fp16_wide ~name:"mm_huw_staged_mma") in
   in_leg ~leg:fw_leg
     "staged+tensorized Fp16_wide matmul equals the once-narrowed wide reference bitwise"
     (fun label ->
@@ -2066,6 +2075,29 @@ let () =
           && (not (has "store_matrix_sync(__mma_dp"))
           && not (has "mma.sync.aligned")));
 
+  (* gh-ocannl-2195: on CUDA and HIP the DEFAULT policy is this wide arm. The same k=144
+     discriminator under [Fp16_auto] must reach 2056 through the converted fragment boundary, where
+     before gh-ocannl-2195 its f16 accumulator fragment narrowed at every k_o block and read 2048;
+     on Metal the default keeps [simdgroup_half8x8] (the narrow complement above) and the leg
+     skips. *)
+  let fa_leg =
+    Verdict.leg
+      ~when_:((on_hip && Lazy.force hip_mma) || Lazy.force cuda_f16_wide_fragment)
+      ~on:backend_name ()
+  in
+  let fw_auto = lazy (fw_run ~mode:Numerics.Fp16_auto ~name:"mm_hua_staged_mma") in
+  in_leg ~leg:fa_leg
+    "on CUDA and HIP the default policy's staged+tensorized uniform-f16 matmul equals the \
+     once-narrowed wide reference bitwise" (fun label ->
+      let got, _ = Lazy.force fw_auto in
+      p_all label (Array.to_list got) ~f:(Float.equal 2056.));
+  in_leg ~leg:fa_leg
+    "on CUDA and HIP the default policy's staged uniform-f16 fragment converts d once" (fun label ->
+      let _, census = Lazy.force fw_auto in
+      p label
+        (Ll_test.all_rendered ~what:"staged Fp16_auto" Ir.C_syntax.Mma_intrinsics census
+        && staged_half_resident ~converted_d:true (Generated.read "mm_hua_staged_mma")));
+
   (* --- f16 operands into f32 STORAGE under the k-split discriminator (gh-ocannl-923), in BOTH
      emission scopes: the unstaged schedule keeps the whole k=144 reduction in one [Tile_mma]
      (per-statement: [mma_syntax] loads and stores [d] around it), the staged one splits it into
@@ -2074,23 +2106,23 @@ let () =
      accumulator reaches 2056 exactly in either scope; a half one — any arm that accumulated at the
      operands' width — rounds every 2049 back to the even 2048, per [simdgroup_multiply_accumulate]
      call, and ends at 2048. Two-sided: the negative control renders the same two compositions into
-     an f16 destination under [Fp16_auto], whose uniform-f16 arm accumulates in [simdgroup_half8x8],
-     and must NOT reach 2056 — so passing the value claims is evidence of the f32 accumulator, not a
-     property of easy inputs. The value claims cannot tell the tensor unit from Metal's scalar
-     fallback for this triple (which accumulates in f32 too and also reaches 2056); the structure
-     claims do, and fail on it. CUDA runs it too since gh-ocannl-925 (wmma's [__half] x [__half] ->
-     [float] fragments, loading and storing the f32 [d] unconverted; the control's uniform-f16 arm
-     is the [__half] accumulator fragment), and so does HIP since gh-ocannl-1432 (rocWMMA's
-     [float16_t] x [float16_t] -> [float] fragments; the control's uniform-f16 arm is the
-     [float16_t] accumulator fragment): every product is nonnegative, where gfx11's WMMA is exactly
-     rounded (gh-ocannl-1420), so the claims stay bitwise there too. The CPU backends cannot stage.
-     --- *)
+     an f16 destination under [Fp16_narrow], whose uniform-f16 arm accumulates in
+     [simdgroup_half8x8], and must NOT reach 2056 — so passing the value claims is evidence of the
+     f32 accumulator, not a property of easy inputs. The value claims cannot tell the tensor unit
+     from Metal's scalar fallback for this triple (which accumulates in f32 too and also reaches
+     2056); the structure claims do, and fail on it. CUDA runs it too since gh-ocannl-925 (wmma's
+     [__half] x [__half] -> [float] fragments, loading and storing the f32 [d] unconverted; the
+     control's uniform-f16 arm is the [__half] accumulator fragment), and so does HIP since
+     gh-ocannl-1432 (rocWMMA's [float16_t] x [float16_t] -> [float] fragments; the control's
+     uniform-f16 arm is the [float16_t] accumulator fragment): every product is nonnegative, where
+     gfx11's WMMA is exactly rounded (gh-ocannl-1420), so the claims stay bitwise there too. The CPU
+     backends cannot stage. --- *)
   let claim_h32k_value scope =
     Printf.sprintf "f16->f32 k-split, %s scope: every cell accumulates to 2056 in f32" scope
   in
   let claim_h32k_control scope =
     Printf.sprintf
-      "f16->f16 k-split under Fp16_auto, %s scope: no cell reaches 2056 (the discriminator \
+      "f16->f16 k-split under Fp16_narrow, %s scope: no cell reaches 2056 (the discriminator \
        discriminates)"
       scope
   in
@@ -2136,11 +2168,11 @@ let () =
          (Array.to_list (Context.get_values ctx t.Tensor.value), census, Generated.read name)
        in
        (* The f16 -> f32 arm is policy-independent, so it runs under the ambient policy (the stanza
-          declares OCANNL_FP16_ARITHMETIC); the control pins [Fp16_auto], whose uniform-f16 arm is
-          the narrow one. *)
+          declares OCANNL_FP16_ARITHMETIC); the control pins [Fp16_narrow], whose uniform-f16 arm is
+          the narrow one on every backend ([Fp16_auto] is wide on CUDA and HIP, gh-ocannl-2195). *)
        let direct = run ~staged:false ~d_prec:Ir.Ops.single ~name:"mm_h32k_mma" in
        let staged = run ~staged:true ~d_prec:Ir.Ops.single ~name:"mm_h32k_staged_mma" in
-       Numerics.set_policy { saved_policy with fp16_arithmetic = Numerics.Fp16_auto };
+       Numerics.set_policy { saved_policy with fp16_arithmetic = Numerics.Fp16_narrow };
        let ctl_direct, _, _ = run ~staged:false ~d_prec:Ir.Ops.half ~name:"mm_h16k_mma" in
        let ctl_staged, _, _ = run ~staged:true ~d_prec:Ir.Ops.half ~name:"mm_h16k_staged_mma" in
        Numerics.set_policy saved_policy;
@@ -2765,6 +2797,16 @@ let () =
              pol with
              fp16_arithmetic = Numerics.Fp16_auto;
              bf16_arithmetic = Numerics.Bf16_auto;
+             tf32_matmuls = false;
+           } );
+       (* gh-ocannl-2195: the narrow arms, which the default no longer names on CUDA and HIP. *)
+       ( "Fp16_narrow/Bf16_narrow",
+         "nrw",
+         fun (pol : Numerics.t) ->
+           {
+             pol with
+             fp16_arithmetic = Numerics.Fp16_narrow;
+             bf16_arithmetic = Numerics.Bf16_narrow;
              tf32_matmuls = false;
            } );
        ( "Fp16_wide/Bf16_wide",

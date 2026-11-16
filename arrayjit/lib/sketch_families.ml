@@ -123,15 +123,21 @@ let mma_format_triples ~a_prec ~b_prec ~d_prec =
    [mma_bf16_wide_acc_scopes] — HIP's converted rocWMMA boundary serves both scopes, CUDA's
    inline-PTX arm (f32 accumulate in hardware) both since gh-ocannl-1063, and Metal's converted
    [thread_elements()] boundary both since gh-ocannl-923. The witness names whichever policy
-   withheld the seed. *)
+   withheld the seed.
+
+   gh-ocannl-2195: [Fp16_auto] resolves wide on CUDA and HIP, so the f16 question is the backend's
+   resolution ([mma_f16_auto_wide], read through the same [Numerics.fp16_accum_wide] as its
+   [accum_prec] and arm table), not the configured mode alone: CUDA below sm_80 has no wide
+   uniform-f16 arm in either scope, and its auto-resolved uniform-f16 seeds are withheld here. *)
 let wide_acc_withholding (mma : Ir.Backend_intf.mma_capability) ~scope ~d_prec =
   let withheld ~policy scopes =
     if List.mem scopes scope ~equal:Ir.Backend_intf.equal_mma_emission_scope then None
     else Some policy
   in
   match d_prec with
-  | Ir.Ops.Half_prec _ when Ir.Numerics.fp16_accum_wide () ->
-      withheld ~policy:"Fp16_wide requires a wide uniform-f16"
+  | Ir.Ops.Half_prec _
+    when Ir.Numerics.fp16_accum_wide ~auto_wide:mma.Ir.Backend_intf.mma_f16_auto_wide () ->
+      withheld ~policy:"Fp16_wide (or a wide-resolving Fp16_auto) requires a wide uniform-f16"
         mma.Ir.Backend_intf.mma_f16_wide_acc_scopes
   | Ir.Ops.Bfloat16_prec _ when Ir.Numerics.bf16_accum_wide () ->
       withheld ~policy:"Bf16_wide requires a wide uniform-bf16"
