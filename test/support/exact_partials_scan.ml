@@ -24,7 +24,10 @@
       words and marker may occur in either order anywhere in the same sentence; the words within
       each bracketed phrase are adjacent. Words are maximal runs of letters, digits, [_] and [']:
       [exact_partials] and [inexact] are words of their own, neither of them [exact], and
-      [f32-exact] holds the word [exact].
+      [f32-exact] holds the word [exact]. The lists are {!sum_words} and {!order_markers}. An
+      association marker itself supplies the sum word: [exact in any association] and
+      [exact in every association] count, even in "the inputs are exact in any association". This
+      lexical reader does not resolve the sentence's subject.
     - WHAT IT DOES NOT READ: any other wording of the premise ("the inputs are exact", "the
       accumulation is exact", "dyadic inputs: any schedule computes the same bits"). A missed
       phrasing is a gap of this lint, not a pass the rule grants; widening the list is one follow-up
@@ -103,33 +106,29 @@ let sentences text =
 (** The words that make a sentence no claim (the header's NEGATION bullet). *)
 let negations = [ "not"; "never"; "inexact"; "round"; "rounds"; "isn't"; "aren't" ]
 
+(** Sum words of the closed order-based form (including a marker's own [association]). *)
+let sum_words = [ "sum"; "sums"; "partials"; "addition"; "accumulation"; "association" ]
+
+(** Adjacent word pairs that mark arbitrary accumulation order. *)
+let order_markers =
+  [ ("any", "order"); ("every", "order"); ("any", "association"); ("every", "association") ]
+
 (** Whether one sentence's words state the premise, as the header defines it. *)
 let states_exact_partials sentence_words =
-  let rec has_phrase first seconds = function
-    | a :: b :: _ when String.equal a first && List.mem seconds b ~equal:String.equal -> true
-    | _ :: rest -> has_phrase first seconds rest
-    | [] -> false
+  let has word = List.mem sentence_words word ~equal:String.equal in
+  let has_phrase (first, second) =
+    let rec walk = function
+      | a :: b :: _ when String.equal a first && String.equal b second -> true
+      | _ :: rest -> walk rest
+      | [] -> false
+    in
+    walk sentence_words
   in
-  let has_exact =
-    List.exists sentence_words ~f:(fun w -> String.equal w "exact" || String.equal w "exactly")
-  in
-  let has_sum_word =
-    List.exists sentence_words
-      ~f:
-        (List.mem
-           [ "sum"; "sums"; "partials"; "addition"; "accumulation"; "association" ]
-           ~equal:String.equal)
-  in
-  let has_order_marker =
-    has_phrase "any" [ "order"; "association" ] sentence_words
-    || has_phrase "every" [ "order"; "association" ] sentence_words
-  in
-  (has_phrase "exact" [ "partials" ] sentence_words
-  || has_exact
-     && (has_phrase "partial" [ "sum"; "sums" ] sentence_words
-        || (List.mem sentence_words "exact" ~equal:String.equal && has_sum_word && has_order_marker)
-        ))
-  && not (List.exists sentence_words ~f:(List.mem negations ~equal:String.equal))
+  (has_phrase ("exact", "partials")
+  || (has "exact" || has "exactly")
+     && (has_phrase ("partial", "sum") || has_phrase ("partial", "sums"))
+  || (has "exact" && List.exists sum_words ~f:has && List.exists order_markers ~f:has_phrase))
+  && not (List.exists negations ~f:has)
 
 type claim = { line : int; offset : int; sentence : string }
 (** One claim: the line its lexeme starts on, and the sentence with its whitespace collapsed. *)

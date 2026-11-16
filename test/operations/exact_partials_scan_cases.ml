@@ -52,7 +52,15 @@ let () =
           Printf.sprintf "(* in %s the %s is exact *)" marker sum;
         ])
   in
-  let new_sources = short_sources @ order_sources in
+  let association_sources =
+    [
+      "(* exact in any association *)";
+      "(* exact in every association *)";
+      "(* the inputs are exact in any association *)";
+      "(* the inputs are exact in every association *)";
+    ]
+  in
+  let new_sources = short_sources @ order_sources @ association_sources in
   Stdio.eprintf "new-form controls: %d of %d recognized (not part of the golden)\n"
     (List.count new_sources ~f:(fun source -> claim_count source = 1))
     (List.length new_sources);
@@ -60,7 +68,9 @@ let () =
       claim_count source = 1);
   p_all "each sum word with exactness and each order marker states the premise in either order"
     order_sources ~f:(fun source -> claim_count source = 1);
-  p_all "new forms still need exactness, a sum word and an adjacent order marker"
+  p_all "an association marker itself supplies the sum word" association_sources ~f:(fun source ->
+      claim_count source = 1);
+  p_all "nearby wording outside the closed forms is not a claim"
     [
       "(* the inputs are exact in any order *)";
       "(* exactly two grid loops *)";

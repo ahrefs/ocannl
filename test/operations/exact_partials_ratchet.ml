@@ -58,6 +58,18 @@ let exemptions : Scan.exemption list =
          both matvec product populations";
     };
     {
+      Scan.path = "test/operations/discriminating_values.ml";
+      allowance = Uncovered 1;
+      reason =
+        "the drift claim exhibits its serial partial sums directly; an every-association \
+         derivation is the follow-up";
+    };
+    {
+      Scan.path = "test/operations/exact_partials_scan_cases.ml";
+      allowance = Every;
+      reason = "the reader's cases plant the phrases on synthetic sources";
+    };
+    {
       Scan.path = "test/operations/named_form_spec_identifiers.ml";
       allowance = Uncovered 1;
       reason =
@@ -79,6 +91,12 @@ let exemptions : Scan.exemption list =
          and gradient product populations";
     };
     {
+      Scan.path = "test/operations/scan_companion_coverage.ml";
+      allowance = Uncovered 1;
+      reason =
+        "leg 4 derives z's premise in its own item; this note on z's operands sits apart from it";
+    };
+    {
       Scan.path = "test/operations/schedule_coalesce.ml";
       allowance = Uncovered 3;
       reason =
@@ -93,17 +111,9 @@ let exemptions : Scan.exemption list =
          calling item that derives its operand premise";
     };
     {
-      Scan.path = "test/operations/discriminating_values.ml";
-      allowance = Uncovered 1;
-      reason =
-        "the drift claim exhibits its serial partial sums directly; an every-association \
-         derivation is the follow-up";
-    };
-    {
-      Scan.path = "test/operations/scan_companion_coverage.ml";
-      allowance = Uncovered 1;
-      reason =
-        "leg 4 derives z's premise in its own item; this note on z's operands sits apart from it";
+      Scan.path = "test/support/exact_partials_scan.ml";
+      allowance = Every;
+      reason = "the reader's own documentation quotes the phrases it reads";
     };
     {
       Scan.path = "test/support/ll_test.ml";
@@ -111,16 +121,6 @@ let exemptions : Scan.exemption list =
       reason =
         "the harness's operand docs state the premises its helpers are built for, exact_partials' \
          own included; a test derives them at its use";
-    };
-    {
-      Scan.path = "test/support/exact_partials_scan.ml";
-      allowance = Every;
-      reason = "the reader's own documentation quotes the phrases it reads";
-    };
-    {
-      Scan.path = "test/operations/exact_partials_scan_cases.ml";
-      allowance = Every;
-      reason = "the reader's cases plant the phrases on synthetic sources";
     };
   ]
 

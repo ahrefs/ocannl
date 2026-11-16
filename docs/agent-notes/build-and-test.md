@@ -3132,9 +3132,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   recognizes exact-partials and sum-word/any-order premises (the header owns the closed forms);
   newly visible debt has exact per-file counts and reasons in its exemption rows. A sentence's
   `exactly once` narrowing is outside the new forms: they require the word `exact`.
-  Host arithmetic premises in
-  `hardware_warp_shuffle`, `tile_mma_narrow` and `schedule_ldmatrix_matmul` run outside backend
-  gates, so cc checks them even when it cannot execute the corresponding GPU rendering.
+  An association marker supplies the sum word itself; the lexical reader does not resolve the
+  sentence's subject. Host arithmetic premises in `hardware_warp_shuffle`, `tile_mma_narrow` and
+  `schedule_ldmatrix_matmul` run outside backend gates, so cc checks them even when it cannot
+  execute the corresponding GPU rendering.
 - Host-side exactness premises share an index reader with initialization: wrap the value function
   in `Ll_test.operand ~b ~o ~i`, which checks rank and bounds against `b @ o @ i` before
   evaluating it (gh-ocannl-2176). This catches out-of-bounds permutations, not in-bounds ones:
