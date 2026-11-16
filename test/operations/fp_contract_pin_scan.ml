@@ -15,15 +15,34 @@
    - THE SUBJECT: a test source (test/ and arrayjit/test/, as [Ll_test_scan.test_source] has it) one
    of whose string literals -- a Verdict claim's name, in practice -- holds [bitwise], [bit-for-bit]
    or [bit-identical], in any case. Read with the compiler's lexer ({!Prose_lexemes}), so a comment
-   saying "bitwise" is not a claim. A bitwise comparison whose claim text says neither (a bare
-   [Float.equal] under "matches") is this lint's gap, not a pass. - A PIN: the string literal
-   [OCANNL_CC_BACKEND_FP_CONTRACT] whose next string literal is [off] (the [Unix.putenv] the pinned
-   tests do at module initialization). A pin made elsewhere -- a dune stanza's flag or profile, a
-   directory's ocannl_config -- is not read: such a source carries a marker instead, or pins
-   in-process too. - A MARKER: a comment whose whole text is [cc-fp-contract], a colon, a kind, [--]
-   and a reason of at least two words. Every comment holding the sentinel followed by a colon must
-   be one, so a misspelt kind or a missing reason fails rather than reads as absent. The kinds, a
-   closed vocabulary ([kinds] below), each name why contraction cannot reach the claim.
+   saying "bitwise" is not a claim. Also reads the closed code forms below through ppxlib and
+   Lexical_scope.
+
+   Recognised forms (closed): Int64.equal whose two operand summaries reach Int64.bits_of_float;
+   Array.equal or List.equal with that predicate and two collections (a partial application to the
+   predicate may be aliased); local binary function bindings and identifier aliases of these
+   comparators. No comparator-name heuristic and no Float.equal (numeric equality is not bit
+   equality). Verdict.Claims.p and Verdict.claim read their second unlabelled argument;
+   Verdict.Claims.gated reads the same argument, and p_all/p_exists/p_none read the collection
+   (second unlabelled argument) and labelled f together. Open Verdict.Claims and qualified calls are
+   read, with lexical value and module shadowing. An argument must contain a comparator application
+   AND a Context.get_values application or a local binding/helper containing that read. Summaries
+   union dependencies through expression children and tuple bindings: they are conservative, not a
+   proof of element provenance. Function parameters are unknown; propagation through higher-order
+   iteration, mutable storage, external helpers, unmodelled opens, module structures and other
+   claim/comparator forms is deliberately outside this extension. Claim calls have an identifier
+   callee and both unlabelled arguments in one application node; comparator calls carry both
+   operands in one node. Applications through operators, bare aliases of external reader functions,
+   and forward dependencies within recursive groups are not rebuilt.
+
+   - A PIN: the string literal [OCANNL_CC_BACKEND_FP_CONTRACT] whose next string literal is [off]
+   (the [Unix.putenv] the pinned tests do at module initialization). A pin made elsewhere -- a dune
+   stanza's flag or profile, a directory's ocannl_config -- is not read: such a source carries a
+   marker instead, or pins in-process too. - A MARKER: a comment whose whole text is
+   [cc-fp-contract], a colon, a kind, [--] and a reason of at least two words. Every comment holding
+   the sentinel followed by a colon must be one, so a misspelt kind or a missing reason fails rather
+   than reads as absent. The kinds, a closed vocabulary ([kinds] below), each name why contraction
+   cannot reach the claim.
 
    Every subject is listed in the golden with its disposition, so the list is the review surface: a
    new bitwise claim lands with its pin or its marker in the same diff. A source with a pin AND a
@@ -34,6 +53,8 @@ open Stdio
 open Verdict.Claims
 module Dune = Test_scan.Dune_stanza_scan
 module Sources = Test_scan.Config_key_scan
+open Ppxlib
+module Scope = Test_scan.Lexical_scope
 
 (* cc-fp-contract: not-executed -- its bitwise text is fixture sources and claim names, no
    kernels *)
@@ -92,6 +113,164 @@ let parse_marker text =
             Error "the reason needs at least two words"
           else Ok (kind, reason))
 
+(* Dependency summaries are lexical, not a file-wide search for a familiar helper name. *)
+type evidence = { comparator : bool; compared : bool; output : bool; bits : bool; claim : bool }
+
+let unknown = { comparator = false; compared = false; output = false; bits = false; claim = false }
+
+let union a b =
+  {
+    comparator = a.comparator || b.comparator;
+    compared = a.compared || b.compared;
+    output = a.output || b.output;
+    bits = a.bits || b.bits;
+    claim = false;
+  }
+
+let code_claim_lines content =
+  let lines = ref [] in
+  let walker =
+    object (self)
+      inherit [evidence, string] Scope.scoped as super
+      val mutable evidence = unknown
+      val cache = Hashtbl.Poly.create ()
+      method local = unknown
+      method! shadowed = Some "?"
+
+      method module_path env path =
+        let rec resolve = function
+          | Longident.Lident name ->
+              Some (Option.value (Map.find env.Scope.modules name) ~default:name)
+          | Ldot (prefix, name) -> Option.map (resolve prefix) ~f:(fun p -> p ^ "." ^ name)
+          | Lapply _ -> None
+        in
+        resolve path
+
+      method path env e =
+        match e.pexp_desc with
+        | Pexp_ident { txt = Lident name; _ } ->
+            if Option.is_some (Scope.lookup env name) then "?" else name
+        | Pexp_ident { txt = Ldot (prefix, name); _ } ->
+            Option.value_map (self#module_path env prefix) ~default:"?" ~f:(fun p -> p ^ "." ^ name)
+        | _ -> "?"
+
+      method summary env e =
+        Hashtbl.find_or_add cache (env, e.pexp_loc) ~default:(fun () ->
+            let saved = evidence in
+            evidence <- unknown;
+            ignore (self#expression env e : expression);
+            let result = evidence in
+            evidence <- saved;
+            match e.pexp_desc with
+            | Pexp_function _ ->
+                { result with comparator = result.comparator || result.compared; compared = false }
+            | _ -> result)
+
+      method! binding_denotes env binding = self#summary env binding.pvb_expr
+
+      method! ident env ident =
+        match ident.txt with
+        | Lident name ->
+            Option.iter (Scope.lookup env name) ~f:(fun s -> evidence <- union evidence s)
+        | _ -> ()
+
+      method! expression env e =
+        match Hashtbl.find cache (env, e.pexp_loc) with
+        | Some summary ->
+            evidence <- union evidence summary;
+            e
+        | None -> self#walk env e
+
+      method walk env e =
+        (match e.pexp_desc with
+        | Pexp_apply (fn, args) -> (
+            let path = self#path env fn in
+            let values = List.map args ~f:(fun (_, arg) -> self#summary env arg) in
+            let positional =
+              List.filter_map args ~f:(function Nolabel, arg -> Some arg | _ -> None)
+            in
+            let fn_summary = self#summary env fn in
+            let is_bits = String.equal path "Int64.bits_of_float" && List.length positional = 1 in
+            let bit_equality =
+              String.equal path "Int64.equal"
+              && List.length values = 2
+              && List.for_all values ~f:(fun v -> v.bits)
+            in
+            let collection_equality =
+              List.mem [ "Array.equal"; "List.equal" ] path ~equal:String.equal
+              && match values with v :: _ -> v.comparator | [] -> false
+            in
+            let applied = fn_summary.comparator && List.length positional >= 2 in
+            evidence <-
+              union evidence
+                {
+                  unknown with
+                  bits = is_bits;
+                  output = String.equal path "Context.get_values" && List.length positional >= 2;
+                  comparator =
+                    (collection_equality && List.length positional < 3)
+                    || (fn_summary.comparator && not applied);
+                  compared =
+                    bit_equality || (collection_equality && List.length positional >= 3) || applied;
+                };
+            let claim =
+              match fn.pexp_desc with
+              | Pexp_ident { txt = Lident name; _ } ->
+                  Option.value_map (Scope.lookup env name) ~default:false ~f:(fun s -> s.claim)
+              | _ ->
+                  List.mem
+                    [
+                      "Verdict.Claims.p";
+                      "Verdict.Claims.gated";
+                      "Verdict.Claims.p_all";
+                      "Verdict.Claims.p_exists";
+                      "Verdict.Claims.p_none";
+                      "Verdict.claim";
+                    ]
+                    path ~equal:String.equal
+            in
+            if claim then
+              match positional with
+              | _name :: argument :: _ ->
+                  let summary =
+                    List.fold args ~init:(self#summary env argument) ~f:(fun acc -> function
+                      | Labelled "f", arg ->
+                          let s = self#summary env arg in
+                          union acc { s with compared = s.compared || s.comparator }
+                      | _ -> acc)
+                  in
+                  if summary.compared && summary.output then
+                    lines := e.pexp_loc.loc_start.pos_lnum :: !lines
+              | _ -> ())
+        | _ -> ());
+        match e.pexp_desc with
+        | Pexp_function _ ->
+            let saved = evidence in
+            evidence <- unknown;
+            let result = super#expression env e in
+            let body = evidence in
+            evidence <-
+              union saved
+                { body with comparator = body.comparator || body.compared; compared = false };
+            result
+        | _ -> super#expression env e
+
+      method! opened ~top:_ ~include_:_ env denotes =
+        match denotes with
+        | Some "Verdict.Claims" ->
+            let names = [ "p"; "gated"; "p_all"; "p_exists"; "p_none" ] in
+            Scope.push_frame env
+              (Map.of_alist_exn
+                 (module String)
+                 (List.map names ~f:(fun name -> (name, { unknown with claim = true }))))
+        | _ -> env
+    end
+  in
+  let ast = Parse.implementation (Lexing.from_string content) in
+  ignore
+    (walker#structure { Scope.frames = []; modules = Map.empty (module String) } ast : structure);
+  List.dedup_and_sort !lines ~compare:Int.compare
+
 let read content =
   let lexemes = Prose_lexemes.of_source content in
   let literals =
@@ -119,7 +298,7 @@ let read content =
             Some (l.line, parse_marker l.text)
         | Comment | String_literal -> None)
   in
-  { claim_lines; pinned = pinned literals; markers }
+  { claim_lines = claim_lines @ code_claim_lines content; pinned = pinned literals; markers }
 
 (* The source's disposition, or why it has none. [None] for a source outside the subject. *)
 let judge reading =
@@ -154,6 +333,10 @@ let cases () =
   let pin = "let () = Unix.putenv \"OCANNL_CC_BACKEND_FP_CONTRACT\" \"off\"\n" in
   let marker kind reason = Printf.sprintf "(* %s %s -- %s *)\n" sentinel kind reason in
   let refused src = match judge_text src with Some (Error _) -> true | _ -> false in
+  List.iter Fp_contract_pin_scan_cases.cases ~f:(fun (name, subject, source) ->
+      p ("case: code subject -- " ^ name)
+        (Test_scan.Scan_attempt.attempted ~what:"fp-contract code subjects" ~name ~default:false
+           (fun () -> Bool.equal subject (refused source))));
   p "case: a pinned claim is listed as pinned"
     (match judge_text (pin ^ claim) with Some (Ok Pinned) -> true | _ -> false);
   p "case: a marked claim is listed with its kind"
@@ -198,9 +381,13 @@ let () =
   in
   let read_sources, unlexed =
     List.partition_map sources ~f:(fun source ->
-        match judge_text (In_channel.read_all (Map.find_exn on_disk source)) with
-        | verdict -> First (source, verdict)
-        | exception exn -> Second (source ^ ": " ^ Stdlib.Printexc.to_string exn))
+        match
+          Test_scan.Scan_attempt.run (fun () ->
+              judge_text (In_channel.read_all (Map.find_exn on_disk source)))
+        with
+        | Scanned verdict -> First (source, verdict)
+        | Unparsed why -> Second (source ^ ": does not parse: " ^ why)
+        | Raised why -> Second (source ^ ": scanner raised: " ^ why))
   in
   let listed =
     List.filter_map read_sources ~f:(fun (source, v) -> Option.map v ~f:(fun v -> (source, v)))
@@ -229,7 +416,7 @@ let () =
     ~over:listed refusals;
   printf "\nKinds:\n";
   List.iter kinds ~f:(fun (kind, meaning) -> printf "%s -- %s\n" kind meaning);
-  printf "\nTest sources whose string literals claim bitwise equality:\n";
+  printf "\nTest sources with bitwise equality subjects:\n";
   List.iter entries ~f:(fun (source, d) ->
       match d with
       | Pinned -> printf "%s -- pinned off\n" source

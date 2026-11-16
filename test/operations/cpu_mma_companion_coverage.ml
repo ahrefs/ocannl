@@ -32,6 +32,8 @@
    no hardware-binding shape and its lift recovers them, all computing the output bit for bit; the
    fused flavor (whose fusion relocates the tail) keeps the whole-triple form. *)
 
+let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

@@ -429,7 +429,10 @@ files.
   `-ffp-contract=on` as `off` in C, `auto` and `fast` contract by kernel shape (the two entries
   above), and only the AVX512-FP16 CI runners compute f16 natively -- no fleet box has
   `avx512_fp16`, so a native-fp16 VALUE claim is checked on CI alone. `test/operations/fp_contract_pin_scan`
-  lists every test source whose string literals claim bitwise equality, each either pinned
+  lists every test source whose string literals claim bitwise equality or whose recognised Verdict
+  argument reaches a bit comparator and a `Context.get_values` read (gh-ocannl-1851); its header
+  owns the closed forms and dependency-summary boundary. Numeric `Float.equal` alone is outside
+  that extension. Each subject is either pinned
   in-process (`Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"` before the first compile) or
   carrying one marker comment `cc-fp-contract` + colon + `<kind> -- <reason>`, the kinds a closed
   vocabulary the scan's golden prints (`exact-operands`, `no-contraction`, `same-shape`, `gated`,
