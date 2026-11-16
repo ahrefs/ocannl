@@ -257,14 +257,27 @@ if [ "$rc" = 0 ] && has "logs: $kept" && [ -s "$kept/fixtures_gated.sh/full" ] \
   report 0 '--logs keeps every run, and a named harness replaces the manifest'
 else report 1 '--logs keeps every run, and a named harness replaces the manifest' "exit $rc; $(cat "$TMP/out")"; fi
 
+refusal_matches() {
+  [ "$rc" = 2 ] && grep -qF -- "$reason" "$TMP/out" && ! grep -q 'ALONE' "$TMP/out"
+}
+cat >"$TMP/unrelated-subject" <<'STUB'
+#!/bin/bash
+echo 'unrelated refusal control' >&2
+exit 2
+STUB
+chmod +x "$TMP/unrelated-subject"
 for refused in 'fixtures/ungated.sh' '--bogus' 'fixtures/missing.sh'; do
   case $refused in
     fixtures/ungated.sh) reason='fixtures/ungated.sh lists no leg (exit 0;' ;;
     --bogus) reason="unknown argument '--bogus'" ;;
     fixtures/missing.sh) reason='no harness fixtures/missing.sh' ;;
   esac
+  SUBJECT="$TMP/unrelated-subject" run "$refused"
+  if [ "$rc" != 2 ] || ! grep -qxF 'unrelated refusal control' "$TMP/out" || refusal_matches; then
+    report 1 "negative control: refusal rejects unrelated exit 2: $refused"
+  else report 0 "negative control: refusal rejects unrelated exit 2: $refused"; fi
   run "$refused"
-  if [ "$rc" = 2 ] && grep -qF -- "$reason" "$TMP/out" && ! grep -q 'ALONE' "$TMP/out"; then
+  if refusal_matches; then
     report 0 "refused with exit 2: $refused"
   else report 1 "refused with exit 2: $refused" "exit $rc; $(cat "$TMP/out")"; fi
 done

@@ -365,8 +365,10 @@ if harness_leg 'comments directives refuse only when the config is read #comment
   fi
 fi
 
+usage_refusal_matches() { [ "$rc" = 2 ] && has "$reason"; }
 if harness_leg 'usage errors exit 2 #usage'; then
   if [ -z "$FIXTURE" ]; then report 1 'usage' 'no fixture'; else
+    printf 'import sys\nprint("unrelated refusal control", file=sys.stderr)\nsys.exit(2)\n' >"$TMP/unrelated-subject.py"
     for args in "--set nosuch" "--set ml=*.ml --set ml" "--set ml=a,,b" "--set ml=@ml" "--top -1" "--trigger sometimes"; do
       case $args in
         '--set nosuch') reason='no set named `nosuch`' ;;
@@ -378,9 +380,13 @@ if harness_leg 'usage errors exit 2 #usage'; then
       esac
       # shellcheck disable=SC2086 # each case is a word list, its globs unexpanded
       set -f
+      SRC="$TMP/unrelated-subject.py" replay $args main
+      if [ "$rc" != 2 ] || ! has 'unrelated refusal control' || usage_refusal_matches; then
+        report 1 "negative control: usage rejects unrelated exit 2: $args"
+      else report 0 "negative control: usage rejects unrelated exit 2: $args"; fi
       replay $args main
       set +f
-      if [ "$rc" = 2 ] && has "$reason"; then report 0 "\`$args\` exits 2"; else report 1 "\`$args\` exits 2" "exit $rc; $(cat "$out")"; fi
+      if usage_refusal_matches; then report 0 "\`$args\` exits 2"; else report 1 "\`$args\` exits 2" "exit $rc; $(cat "$out")"; fi
     done
   fi
 fi
