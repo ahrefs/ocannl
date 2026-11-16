@@ -41,6 +41,7 @@ every compile line reads as a compile record: true
 a compile record's kernel counts read in order: true
 trace-has answers what the trace holds: true
 trace-digest counts the attempts: true
+trace-has distinguishes complete and incomplete fixed summaries: true
 == the rank-site lines (bench_rank_site)
 several candidates are explained, each with its kernels line: true
 one pick, of an explained candidate, at the rank its explain line states: true

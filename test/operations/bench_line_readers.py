@@ -9,6 +9,9 @@ emitters), and every reader in benchmarks/bench_output.py runs over them -- with
 own functions that consume them -- its fields checked against what the same run states another way:
 a timing line against its `bench-result:` record, a kernel row against the table's own count, the
 trace's events against its summary's totals, a pick against the explain line of the label it picked.
+The complete/incomplete predicate additionally reads two fixed summary texts: the live search's
+completion is diagnostic only, since timing calls can raise under load. This test checks captured
+formats and reader behavior; it does not assert that a live timing search has no raised calls.
 benchmarks/test/test_bench_line_scan.py keeps the readers in bench_output.
 
 Usage: bench_line_readers.py ROOT, ROOT holding benchmarks/ and the captured
@@ -184,24 +187,44 @@ print("== the timing trace (Bench_harness.install_timing_trace)")
 err = captured("trace", "log")
 path = root / "test/operations/bench_lines_trace.log"
 summary = bench_output.trace_summary(err)
+# Keep the producer's full summary in failures, including INCOMPLETE and its raised-call count.
+# The current trace does not identify the raised calls or their exceptions.
+trace_detail = " | ".join(line for line in err.splitlines()
+                          if line.startswith("timing-trace: summary: ")) or "no trace summary"
+print(f"live trace (not part of the golden): {trace_detail}", file=sys.stderr)
 attempts = bench_output.trace_events(err, "attempt")
 calls = bench_output.trace_events(err, "call")
 compiles = bench_output.trace_events(err, "compile")
-claim("the search printed a summary", summary is not None)
+claim("the search printed a summary", summary is not None, trace_detail)
 claim("the summary's attempts and timing calls are the trace's attempt and call lines",
       summary["attempts"] == len(attempts) > 0 and summary["calls"] == len(calls) > 0,
-      f"{summary} vs {len(attempts)} attempts, {len(calls)} calls")
+      f"{summary} vs {len(attempts)} attempts, {len(calls)} calls; {trace_detail}")
 traces = bench_output.compile_traces(err)
 claim("every compile line reads as a compile record", len(traces) == len(compiles) > 0,
-      f"{len(traces)} of {len(compiles)}")
+      f"{len(traces)} of {len(compiles)}; {trace_detail}")
 p_all("a compile record's kernel counts read in order", traces,
       lambda t: 0 <= t["kernels_compiled"] <= t["kernels"] and t["wall"] >= 0)
-want = {"summary": 0, "timing-calls": 0, "attempt": 0, "search-done": 0, "incomplete": 3}
+want = {"summary": 0, "timing-calls": 0, "attempt": 0, "search-done": 0}
 got = {p: cli("trace-has", path, p)[0] for p in want}
-claim("trace-has answers what the trace holds", got == want, repr(got))
+claim("trace-has answers what the trace holds", got == want, f"{got}; {trace_detail}")
 code, out = cli("trace-digest", path)
 claim("trace-digest counts the attempts", code == 0
       and out.splitlines()[0] == f"candidate attempts {len(attempts)}", repr(out[:200]))
+# The live outcome above must not decide a reader claim (gh-ocannl-1992). Pin both CLI
+# exits on fixed text, independent of which candidates the live search managed to time.
+complete = ("timing-trace: summary: 1.0s wall, 2 candidate attempts, 1 timing calls, 3 launches, "
+            "calib 0.10 s (0 calls untagged), timed 0.20 s; depth histogram (calls x depth): 1x1; "
+            "0 calls reused 0 calibration batches as their window")
+incomplete = complete + ("; INCOMPLETE: 1 tagged timing calls raised after validation, "
+                         "and their cost is in none of these totals")
+with tempfile.TemporaryDirectory() as scratch:
+    fixture = Path(scratch) / "trace.log"
+    results = []
+    for text in (complete, incomplete):
+        fixture.write_text(text + "\n")
+        results.append(cli("trace-has", fixture, "incomplete")[0])
+    claim("trace-has distinguishes complete and incomplete fixed summaries",
+          results == [3, 0], f"exits {results}, expected [3, 0]; {incomplete}")
 exercised.add("timing_trace")
 
 # ---------------------------------------------------------------------------------------------
