@@ -21,8 +21,11 @@
 #   cuda-tf32-parity: verdict: NO PARITY SUMMARY         1  status 0 with no summary: nothing judged
 #   cuda-tf32-parity: verdict: STEP BROKE (...)          1  bench_conv_diag stopped before a verdict:
 #                                                           the model did not build or run
-#   cuda-tf32-parity: verdict: unavailable: ...          2  no fixture, or the build failed
-# Its boundary: it reads bench_conv_diag's exit status, its `parity (` summary line and its first
+#   cuda-tf32-parity: verdict: unavailable: ...          2  missing fixture/python3, invalid digest, or build failed
+# Fixture readiness: python3 and fixture_digest.py --check must accept the bytes against
+# THIS checkout's benchmarks/fixtures/DIGESTS.txt, never the fixture directory's record.
+# A mismatch or any checker failure refuses the leg before Dune; no parity was judged.
+# Its output boundary: it reads bench_conv_diag's exit status, its `parity (` summary line and its first
 # `Fatal error:` line, nothing else of its output.
 set -u
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
@@ -44,6 +47,10 @@ done
 [ -n "$fixtures" ] || { echo "usage: tools/cuda-tf32-parity.sh --fixture-dir DIR" >&2; exit 2; }
 fixture=$fixtures/cifar_resnet.safetensors
 [ -r "$fixture" ] || verdict 2 "unavailable: no $fixture"
+command -v python3 >/dev/null 2>&1 || verdict 2 "unavailable: no python3 (fixture digest unverified)"
+python3 "$root/benchmarks/fixture_digest.py" --check \
+  --digests "$root/benchmarks/fixtures/DIGESTS.txt" "$fixture" ||
+  verdict 2 "unavailable: fixture digest check failed for $fixture"
 
 # Dune records the environment of every process it spawns in _build/trace.csexp (gh-ocannl-1280).
 # shellcheck source=credential-env.sh
