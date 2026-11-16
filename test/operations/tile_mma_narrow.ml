@@ -267,50 +267,64 @@ let () =
    Tn.update_prec fc0.Tensor.value Ir.Ops.half;
    let%op fc1 = mah * mbh in
    Tn.update_prec fc1.Tensor.value Ir.Ops.half;
-   let parity_name = "pure-f16 packed+tensorized matmul matches the serial twin bitwise" in
-   let structure_name = "pure-f16 register tiling: half lanes, identity bridges" in
-   match
-     let want_f = nonzero "nrw_f16_serial" (run ~name:"nrw_f16_serial" fc0) in
-     let got_f =
-       run_census ~name:"nrw_f16_packed"
-         ~schedule:
-           (composed_schedule ~hoist_b:false ~tile_prec:None ~a:mah.Tensor.value ~b:mbh.Tensor.value)
-         fc1
-     in
-     (want_f, got_f)
-   with
-   | want_f, (got_f, census_f) ->
-       p_all2 parity_name got_f want_f ~f:Float.equal;
-       let src = Generated.read "nrw_f16_packed" in
-       let has s = String.is_substring src ~substring:s in
-       let count_sub sub =
-         String.substr_index_all src ~may_overlap:false ~pattern:sub |> List.length
+   let result =
+     match
+       let want_f = nonzero "nrw_f16_serial" (run ~name:"nrw_f16_serial" fc0) in
+       let got_f =
+         run_census ~name:"nrw_f16_packed"
+           ~schedule:
+             (composed_schedule ~hoist_b:false ~tile_prec:None ~a:mah.Tensor.value
+                ~b:mbh.Tensor.value)
+           fc1
        in
-       p structure_name
-         (rendered_as_scheduled ~what:"nrw_f16_packed" census_f
-         && ((not on_cpu)
-            (* Half-typed tiles, an [ocannl_vec<2*f32 lanes>h] register file, no narrow bridge —
-               storage and compute coincide. *)
-            || count_sub "HALF_T tile_" = 2
-               && (not (has "narrow storage bridged"))
-               && has half_vec_typ))
-   | exception e ->
-       (* The one condition verified to warrant a skip: the generated kernel failed to COMPILE over
-          the half type ([Backend_rejected]'s detail quotes the compiler output, which names
-          [HALF_T]/[_Float16] when the type is the problem). In fact even a no-[_Float16] toolchain
-          is expected to run this leg — [HALF_T] is then [uint16_t] and every half operation the
-          tiling emits routes through the emulation-safe [OCANNL_HALF_FMA] / [HALF_TO_FLOAT] macros,
-          the same ones the serial twin uses — so this arm should never fire; it exists so an exotic
-          toolchain reads as a loud skip rather than a red suite. Every other failure (schedule
-          construction, runtime, parity readback) propagates: a swallowed exception here would
-          false-green exactly when the implementation breaks. *)
-       let msg = Exn.to_string e in
-       let mentions s = String.is_substring msg ~substring:s in
-       if mentions "failed to compile" && (mentions "_Float16" || mentions "HALF_T") then (
-         Stdio.eprintf "pure-f16 leg unavailable, toolchain rejected the half kernel (%s)\n%!" msg;
-         Verdict.skipped ~aggregation:`Environment ~backend:backend_name parity_name;
-         Verdict.skipped ~aggregation:`Environment ~backend:backend_name structure_name)
-       else raise e);
+       (want_f, got_f)
+     with
+     | want_f, got_f -> Some (want_f, got_f)
+     | exception e ->
+         (* The one condition verified to warrant a skip: the generated kernel failed to COMPILE
+            over the half type ([Backend_rejected]'s detail quotes the compiler output, which names
+            [HALF_T]/[_Float16] when the type is the problem). In fact even a no-[_Float16]
+            toolchain is expected to run this leg — [HALF_T] is then [uint16_t] and every half
+            operation the tiling emits routes through the emulation-safe [OCANNL_HALF_FMA] /
+            [HALF_TO_FLOAT] macros, the same ones the serial twin uses — so this arm should never
+            fire; it exists so an exotic toolchain reads as a loud skip rather than a red suite.
+            Every other failure (schedule construction, runtime, parity readback) propagates: a
+            swallowed exception here would false-green exactly when the implementation breaks. *)
+         let msg = Exn.to_string e in
+         let mentions s = String.is_substring msg ~substring:s in
+         if mentions "failed to compile" && (mentions "_Float16" || mentions "HALF_T") then (
+           Stdio.eprintf "pure-f16 leg unavailable, toolchain rejected the half kernel (%s)\n%!" msg;
+           None)
+         else raise e
+   in
+   (* One run-decided claim per callback: availability is the compile outcome above, never a leg
+      gate on the values being tested. The scanner explicitly accepts this shape. *)
+   List.iter
+     [
+       ("pure-f16 packed+tensorized matmul matches the serial twin bitwise", `Parity);
+       ("pure-f16 register tiling: half lanes, identity bridges", `Structure);
+     ]
+     ~f:(fun (label, kind) ->
+       match result with
+       | None -> Verdict.skipped ~aggregation:`Environment ~backend:backend_name label
+       | Some (want_f, (got_f, census_f)) -> (
+           match kind with
+           | `Parity -> p_all2 label got_f want_f ~f:Float.equal
+           | `Structure ->
+               let src = Generated.read "nrw_f16_packed" in
+               let has s = String.is_substring src ~substring:s in
+               let count_sub sub =
+                 String.substr_index_all src ~may_overlap:false ~pattern:sub |> List.length
+               in
+               p label
+                 (rendered_as_scheduled ~what:"nrw_f16_packed" census_f
+                 && ((not on_cpu)
+                    (* Half-typed tiles, an [ocannl_vec<2*f32 lanes>h] register file, no narrow
+                       bridge — storage and compute coincide. *)
+                    || count_sub "HALF_T tile_" = 2
+                       && (not (has "narrow storage bridged"))
+                       && has half_vec_typ)))));
+
   Numerics.set_policy saved_policy
 
 (* === gh-ocannl-1975: a virtual cast twin on the tile path ===

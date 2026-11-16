@@ -31,46 +31,54 @@ let oracle ~narrow x n =
   in
   if n < 0 then narrow (1. /. positive) else positive
 
-let run ~prec ~name ~narrow =
+let run ?(when_ = true) ~prec ~name ~narrow () =
   Verdict.case name (fun () ->
       let cases = List.concat_map bases ~f:(fun x -> List.map exponents ~f:(fun n -> (x, n))) in
-      let len = List.length cases in
-      let node = Ll_test.node_factory ~prec ~first_id:18100 ~dims:[| len |] () in
-      let input = node "ipow_input" and output = node "ipow_output" in
-      List.iter [ input; output ] ~f:Ll_test.materialize;
-      let body =
-        List.foldi cases ~init:LL.Noop ~f:(fun i acc (_, n) ->
-            let value =
-              LL.Binop
-                ( ToPowOf,
-                  (Ll_test.get input [| Ll_test.fixed i |], prec),
-                  (Ll_test.c (Float.of_int n), prec) )
-            in
-            Ll_test.seq acc (Ll_test.set output [| Ll_test.fixed i |] value))
+      let leg = Verdict.leg ~when_ ~on:backend_name () in
+      let evidence =
+        lazy
+          (let len = List.length cases in
+           let node = Ll_test.node_factory ~prec ~first_id:18100 ~dims:[| len |] () in
+           let input = node "ipow_input" and output = node "ipow_output" in
+           List.iter [ input; output ] ~f:Ll_test.materialize;
+           let body =
+             List.foldi cases ~init:LL.Noop ~f:(fun i acc (_, n) ->
+                 let value =
+                   LL.Binop
+                     ( ToPowOf,
+                       (Ll_test.get input [| Ll_test.fixed i |], prec),
+                       (Ll_test.c (Float.of_int n), prec) )
+                 in
+                 Ll_test.seq acc (Ll_test.set output [| Ll_test.fixed i |] value))
+           in
+           let o = Ll_test.optimize ~name body in
+           let input_values = Array.of_list_map cases ~f:(fun (x, _) -> narrow x) in
+           let got =
+             List.hd_exn
+               (Ll_test.execute ~name o
+                  ~seed:[ (input, input_values); (output, Ll_test.blank len) ]
+                  ~read:[ output ])
+           in
+           got)
       in
-      let o = Ll_test.optimize ~name body in
-      let input_values = Array.of_list_map cases ~f:(fun (x, _) -> narrow x) in
-      let got =
-        List.hd_exn
-          (Ll_test.execute ~name o
-             ~seed:[ (input, input_values); (output, Ll_test.blank len) ]
-             ~read:[ output ])
-      in
-      p_alli
+      in_leg ~leg
         (name ^ ": integer powers match independent multiplication including exceptional values")
-        cases ~f:(fun i (x, n) ->
-          let want = oracle ~narrow (narrow x) n in
-          let ok = bitwise got.(i) want in
-          if not ok then
-            Stdio.eprintf "(not part of the golden) %h^%d: got %h want %h\n" x n got.(i) want;
-          ok);
-      let src = Generated.read name in
-      p
-        (name ^ ": known integers bypass floating pow")
-        (String.is_substring src ~substring:"ocannl_powi_"
-        && not (String.is_substring src ~substring:"powf(")))
+        (fun label ->
+          let got = Lazy.force evidence in
+          p_alli label cases ~f:(fun i (x, n) ->
+              let want = oracle ~narrow (narrow x) n in
+              let ok = bitwise got.(i) want in
+              if not ok then
+                Stdio.eprintf "(not part of the golden) %h^%d: got %h want %h\n" x n got.(i) want;
+              ok));
+      in_leg ~leg (name ^ ": known integers bypass floating pow") (fun label ->
+          ignore (Lazy.force evidence);
+          let src = Generated.read name in
+          p label
+            (String.is_substring src ~substring:"ocannl_powi_"
+            && not (String.is_substring src ~substring:"powf("))))
 
-let () = run ~prec:Ops.single ~name:"ipow_f32" ~narrow:f32
+let () = run ~prec:Ops.single ~name:"ipow_f32" ~narrow:f32 ()
 
 let () =
   Verdict.case "constant rounding" (fun () ->
@@ -203,17 +211,13 @@ let () =
       LL.optimize_integer_pow := false)
 
 let () =
-  run ~prec:Ops.half ~name:"ipow_f16" ~narrow:(fun x ->
-      Ops.half_to_single (Ops.single_to_half (f32 x)))
+  run ~prec:Ops.half ~name:"ipow_f16"
+    ~narrow:(fun x -> Ops.half_to_single (Ops.single_to_half (f32 x)))
+    ()
 
 let () =
-  if (Context.codegen_capabilities (Context.auto ())).supports_f64 then
-    run ~prec:Ops.double ~name:"ipow_f64" ~narrow:Fn.id
-  else begin
-    Verdict.skipped ~backend:backend_name
-      "ipow_f64: integer powers match independent multiplication including exceptional values";
-    Verdict.skipped ~backend:backend_name "ipow_f64: known integers bypass floating pow"
-  end
+  run ~when_:(Context.codegen_capabilities (Context.auto ())).supports_f64 ~prec:Ops.double
+    ~name:"ipow_f64" ~narrow:Fn.id ()
 
 (* Exponents outside every machine int range still retain parity and sign, without narrowing a
    host-double exponent to float. *)

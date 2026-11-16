@@ -816,6 +816,7 @@ let raw_entries =
         "[scanner-refusal:b58d64bebca3825149316fa29084d773] which reads";
         "[scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised";
         "[scanner-refusal:0de32014cb53ae9628faaa035dbb0ac7] starting with";
+        "[scanner-refusal:6e412a3ea539daeb755ee0d61f3d40f7] exempt_skip_lists";
         "[scanner-refusal:cccb6b32fe71c4e65b2b51a39ea8c519] skip-list reader raised";
         "[scanner-refusal:f3e306858423827e6575d13a17d57af6] check cannot vouch";
         "[scanner-refusal:4b8222a751df16e2ca351f7bacca5583] claim readers raised";
@@ -832,7 +833,6 @@ let raw_entries =
         "[scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's";
         "[scanner-refusal:53b71ea33a69d24c941985f4eb35406b] prints the claim";
         "[scanner-refusal:7d1962ff34bbe1ed7b89a535dc0cfd7e] exempted literals that";
-        "[scanner-refusal:6e412a3ea539daeb755ee0d61f3d40f7] exempt_skip_lists";
         "[scanner-refusal:ad023891a3bd7827b3905292c487055b] claim-shaped literal any";
         "[scanner-refusal:e1354d390a356f0c79420c25232b0b42] planted canaries the";
         "[scanner-refusal:b3bbed986e758647a2db67f9428972c6] claims through Verdict";
@@ -1143,7 +1143,8 @@ let raw_direct_evidence =
     ( "verdict_ratchet.ml:e1354d390a356f0c79420c25232b0b42",
       "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true" );
     ( "verdict_ratchet.ml:6e412a3ea539daeb755ee0d61f3d40f7",
-      "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true" );
+      "refuses a leg claim it cannot complete, a planted hand-written skip list, a skip-list \
+       reader that raised, and a stale exemption: true" );
     ( "env_var_deps.ml:02e183a4105132ec092206c1d35d6247",
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:0deef0cb94c45615f32ee84ac2e76f8e",

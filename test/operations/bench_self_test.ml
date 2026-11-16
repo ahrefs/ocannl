@@ -392,93 +392,117 @@ let () =
     let j = try Yojson.Safe.from_string line with _ -> `Null in
     (j, List.rev !started, !kernels, wall_s)
   in
-  let stalled_labels =
-    [
-      "a stalled kernel timing is cut short: the instrument returns in a fraction of the stall";
-      "and the instrument reports no-kernel, naming the budget it ran past";
-      "the over-budget cell still emits its result line with its timings";
-      "and with one loss per parity step";
-      "an inherited alarm due after the instrument keeps the time it had left";
-      "and its disposition: the inherited handler is the one that fires";
-      "an inherited alarm due before the budget still fires, cutting the instrument at it";
-    ]
+  let leg =
+    Verdict.leg ~when_:H.instrument_preemptible ~aggregation:`Environment
+      ~on:"windows (no interval timer)" ()
   in
-  if H.instrument_preemptible then (
-    let stall_s = 120. in
-    (* Timed from the instrument's own start, as the inherited-alarm leg below is: the cell's wall
-       time also holds the compile and the measured steps, which a loaded box stretches by seconds
-       (the race staging#1287 fixed for that leg). An instrument never reached leaves the start at
-       0., an instrument time of decades, so the claim fails rather than passing vacuously. *)
-    let instrument_t0 = ref 0. in
-    let j, _, _, wall_s =
-      run
-        ~before_instrument:(fun () -> instrument_t0 := Unix.gettimeofday ())
-        ~budget_s:0.5 ~stall_s ()
-    in
-    let instrument_s = Unix.gettimeofday () -. !instrument_t0 in
-    let dk = Option.value (field j "dominant_kernel") ~default:`Null in
-    Stdio.eprintf
-      "bench_self_test: over-budget dominant kernel %s; instrument %.1f s, cell %.1f s\n%!"
-      (Yojson.Safe.to_string dk) instrument_s wall_s;
-    let label n = List.nth_exn stalled_labels n in
-    Verdict.p (label 0) Float.(instrument_s < stall_s /. 4.);
-    Verdict.p (label 1)
-      (is_str dk "verdict" "no-kernel"
-      && Option.value_map (string_field dk "note") ~default:false ~f:(fun note ->
-          String.is_substring note ~substring:"instrument over budget"
-          && String.is_substring note ~substring:"BENCH_DOMINANT_KERNEL_BUDGET_S"));
-    let step_ms = Option.value (field j "step_ms") ~default:`Null in
-    Verdict.p (label 2)
-      (Option.value_map (number step_ms "p50") ~default:false ~f:(fun t -> Float.(t > 0.))
-      && Option.value_map (number j "queued_step_ms") ~default:false ~f:(fun t -> Float.(t > 0.)));
-    Verdict.p (label 3)
-      (match field j "losses" with
-      | Some (`List l) -> List.length l = H.self_test_protocol.H.parity_steps
-      | _ -> false);
-    (* Review round 2: a driver's cap set with [alarm] before [exec] is an interval timer the runner
-       inherits. Stood in by one whose handler only records that it fired. *)
-    let fired = ref false in
-    let previous =
-      Stdlib.Sys.signal Stdlib.Sys.sigalrm (Stdlib.Sys.Signal_handle (fun _ -> fired := true))
-    in
-    let set value =
-      ignore
-        (Unix.setitimer Unix.ITIMER_REAL { Unix.it_interval = 0.; it_value = value }
-          : Unix.interval_timer_status)
-    in
-    set 1000.;
-    ignore (run ~budget_s:0.5 ~stall_s ());
-    let left = (Unix.getitimer Unix.ITIMER_REAL).Unix.it_value in
-    (* Whose handler is installed is read by firing it. *)
-    set 0.01;
-    Unix.sleepf 0.2;
-    Verdict.p (label 4) Float.(left > 900. && left <= 1000.);
-    Verdict.p (label 5) !fired;
-    (* The alarm due before the budget is armed as the instrument starts, not before the run: armed
-       ahead of compiling and the timed steps, a loaded box spends its second before the instrument
-       is reached (tuf-amd-linux's full-suite run compiled this step in 1.8 s), the alarm fires
-       there, and the instrument meets no alarm at all. *)
-    fired := false;
-    instrument_t0 := 0.;
-    let fired_early = ref true in
-    let before_instrument () =
-      fired_early := !fired;
-      instrument_t0 := Unix.gettimeofday ();
-      set 1.
-    in
-    let j, _, _, _ = run ~before_instrument ~budget_s:60. ~stall_s () in
-    let instrument_s = Unix.gettimeofday () -. !instrument_t0 in
-    Unix.sleepf 0.2;
-    let dk = Option.value (field j "dominant_kernel") ~default:`Null in
-    Verdict.p (label 6)
-      ((not !fired_early) && !fired
-      && Float.(instrument_s < stall_s /. 4.)
-      && is_str dk "verdict" "no-kernel");
-    set 0.;
-    Stdlib.Sys.set_signal Stdlib.Sys.sigalrm previous)
-  else
-    List.iter stalled_labels ~f:(fun label ->
-        Verdict.skipped ~aggregation:`Environment ~backend:"windows (no interval timer)" label);
+  let stall_s = 120. in
+  let stalled =
+    lazy
+      ((* Timed from the instrument's own start, as the inherited-alarm leg below is: the cell's
+          wall time also holds the compile and the measured steps, which a loaded box stretches by
+          seconds (the race staging#1287 fixed for that leg). An instrument never reached leaves the
+          start at 0., an instrument time of decades, so the claim fails rather than passing
+          vacuously. *)
+       let instrument_t0 = ref 0. in
+       let j, _, _, wall_s =
+         run
+           ~before_instrument:(fun () -> instrument_t0 := Unix.gettimeofday ())
+           ~budget_s:0.5 ~stall_s ()
+       in
+       let instrument_s = Unix.gettimeofday () -. !instrument_t0 in
+       let dk = Option.value (field j "dominant_kernel") ~default:`Null in
+       Stdio.eprintf
+         "bench_self_test: over-budget dominant kernel %s; instrument %.1f s, cell %.1f s\n%!"
+         (Yojson.Safe.to_string dk) instrument_s wall_s;
+       (j, dk, instrument_s))
+  in
+  Verdict.in_leg ~leg
+    "a stalled kernel timing is cut short: the instrument returns in a fraction of the stall"
+    (fun label ->
+      let _, _, instrument_s = Lazy.force stalled in
+      Verdict.p label Float.(instrument_s < stall_s /. 4.));
+  Verdict.in_leg ~leg "and the instrument reports no-kernel, naming the budget it ran past"
+    (fun label ->
+      let _, dk, _ = Lazy.force stalled in
+      Verdict.p label
+        (is_str dk "verdict" "no-kernel"
+        && Option.value_map (string_field dk "note") ~default:false ~f:(fun note ->
+            String.is_substring note ~substring:"instrument over budget"
+            && String.is_substring note ~substring:"BENCH_DOMINANT_KERNEL_BUDGET_S")));
+  Verdict.in_leg ~leg "the over-budget cell still emits its result line with its timings"
+    (fun label ->
+      let j, _, _ = Lazy.force stalled in
+      let step_ms = Option.value (field j "step_ms") ~default:`Null in
+      Verdict.p label
+        (Option.value_map (number step_ms "p50") ~default:false ~f:(fun t -> Float.(t > 0.))
+        && Option.value_map (number j "queued_step_ms") ~default:false ~f:(fun t -> Float.(t > 0.))
+        ));
+  Verdict.in_leg ~leg "and with one loss per parity step" (fun label ->
+      let j, _, _ = Lazy.force stalled in
+      Verdict.p label
+        (match field j "losses" with
+        | Some (`List l) -> List.length l = H.self_test_protocol.H.parity_steps
+        | _ -> false));
+  let alarms =
+    lazy
+      ((* Review round 2: a driver's cap set with [alarm] before [exec] is an interval timer the
+          runner inherits. Stood in by one whose handler only records that it fired. *)
+       let fired = ref false in
+       let previous =
+         Stdlib.Sys.signal Stdlib.Sys.sigalrm (Stdlib.Sys.Signal_handle (fun _ -> fired := true))
+       in
+       let set value =
+         ignore
+           (Unix.setitimer Unix.ITIMER_REAL { Unix.it_interval = 0.; it_value = value }
+             : Unix.interval_timer_status)
+       in
+       set 1000.;
+       ignore (run ~budget_s:0.5 ~stall_s ());
+       let left = (Unix.getitimer Unix.ITIMER_REAL).Unix.it_value in
+       (* Whose handler is installed is read by firing it. *)
+       set 0.01;
+       Unix.sleepf 0.2;
+       let remaining_ok = Float.(left > 900. && left <= 1000.) in
+       let handler_ok = !fired in
+       (* The alarm due before the budget is armed as the instrument starts, not before the run:
+          armed ahead of compiling and the timed steps, a loaded box spends its second before the
+          instrument is reached (tuf-amd-linux's full-suite run compiled this step in 1.8 s), the
+          alarm fires there, and the instrument meets no alarm at all. *)
+       fired := false;
+       let instrument_t0 = ref 0. in
+       let fired_early = ref true in
+       let before_instrument () =
+         fired_early := !fired;
+         instrument_t0 := Unix.gettimeofday ();
+         set 1.
+       in
+       let j, _, _, _ = run ~before_instrument ~budget_s:60. ~stall_s () in
+       let instrument_s = Unix.gettimeofday () -. !instrument_t0 in
+       Unix.sleepf 0.2;
+       let dk = Option.value (field j "dominant_kernel") ~default:`Null in
+       let early_ok =
+         (not !fired_early) && !fired
+         && Float.(instrument_s < stall_s /. 4.)
+         && is_str dk "verdict" "no-kernel"
+       in
+       set 0.;
+       Stdlib.Sys.set_signal Stdlib.Sys.sigalrm previous;
+       (remaining_ok, handler_ok, early_ok))
+  in
+  Verdict.in_leg ~leg "an inherited alarm due after the instrument keeps the time it had left"
+    (fun label ->
+      let a, _, _ = Lazy.force alarms in
+      Verdict.p label a);
+  Verdict.in_leg ~leg "and its disposition: the inherited handler is the one that fires"
+    (fun label ->
+      let _, b, _ = Lazy.force alarms in
+      Verdict.p label b);
+  Verdict.in_leg ~leg
+    "an inherited alarm due before the budget still fires, cutting the instrument at it"
+    (fun label ->
+      let _, _, c = Lazy.force alarms in
+      Verdict.p label c);
   let j, started, kernels, _ = run ~budget_s:3600. ~stall_s:0. () in
   Verdict.p "under a budget nothing reaches, the instrument starts every kernel"
     (kernels >= 1 && List.equal Int.equal started (List.init kernels ~f:Fn.id));

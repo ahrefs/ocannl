@@ -94,8 +94,6 @@ let codegen_capabilities = Context.codegen_capabilities (Context.auto ())
 
 open Verdict.Claims
 
-let skipped = Verdict.skipped ~backend:backend_name
-
 (* {1 The reduction}
 
    [out[r] = sum_k x[r, k]] over [rows] x [cols]. Small on purpose: every member compiles its own
@@ -2152,165 +2150,172 @@ let () =
             (* Built before the availability check: a shape's extra VERIFY claims are printed on the
                skipped path too, and only the program knows what they are. *)
             let prog = make ~prec ~shape:m.shape () in
-            if not (m.available prec_name) then begin
-              (* Every claim an evaluable leg prints, in the same order: the golden is one file for
-                 all backends, so a claim emitted only on the available path leaves a hole rather
-                 than a skip. *)
-              List.iter prog.verify ~f:(fun (claim, _, _) ->
-                  skipped (Printf.sprintf "%s @ %s: %s" m.slug prec_name claim));
-              skipped evidence_claim;
-              skipped form_claim;
-              skipped peel_claim;
-              skipped value_claim
-            end
-            else begin
-              let name = Printf.sprintf "rf_%s_%s" (routine_stem m.slug) prec_name in
-              let sched = m.sched prog in
-              let got, verified, (before, after, per_op), peel = execute ~name ~prog ~sched in
-              (* The peel census of this kernel, on stderr: it names backend kernels and counts
-                 sites the surrounding structure decides, so it is a diagnostic; the CLAIM it
-                 supports is on stdout. *)
-              Stdio.eprintf "  %s peel census: %s\n%!" name (Cs.peel_summary_string peel);
-              (* Every node the shape writes, not only the accumulator. *)
-              List.iter verified ~f:(fun (claim, values, want) ->
-                  let ok = agrees values want in
-                  if not ok then
-                    Stdio.eprintf "  %s: %s -- got [%s] want [%s]\n" name claim (show values)
-                      (show want);
-                  p (Printf.sprintf "%s @ %s: %s" m.slug prec_name claim) ok);
-              (* The op is bound to an observable effect: a non-empty schedule must have CHANGED the
-                 lowered IR, and one that names an axis kind must have left that kind in it. *)
-              (match (before, after) with
-              | Some b, Some a ->
-                  let changed =
-                    (List.is_empty sched || not (Sexp.equal (LL.sexp_of_t b) (LL.sexp_of_t a)))
-                    && (List.is_empty per_op
-                       || (List.length per_op = List.length sched && List.for_all per_op ~f:Fn.id))
-                  in
-                  let axis_ok =
-                    match m.expect_axis with
-                    | None -> true
-                    | Some ty -> List.exists (axis_kinds a) ~f:(fun k -> LL.equal_axis_type k ty)
-                  in
-                  if not (changed && axis_ok) then
-                    (* Phrased with [%s] rather than a trailing [%b] on purpose: this is a
-                       failure-only diagnostic beside the real claim, and a format ending on a bare
-                       boolean behind a separator is exactly the self-decided-verdict shape
-                       [verdict_ratchet] hunts. Better to say it in words than to earn an
-                       exemption. *)
-                    Stdio.eprintf
-                      "  %s: the schedule left no mark -- IR changed: %s, named axis kind present: \
-                       %s\n"
-                      name (Bool.to_string changed) (Bool.to_string axis_ok);
-                  p evidence_claim (changed && axis_ok)
-              | _ ->
-                  Stdio.eprintf "  %s: the lowered transform was never invoked\n" name;
-                  p evidence_claim false);
-              let src = Generated.read name in
-              let updates = scope_update_statements src in
-              let extra_ok =
-                List.for_all m.extra ~f:(fun sub ->
-                    List.exists updates ~f:(fun st -> String.is_substring st ~substring:sub))
-              in
-              if not extra_ok then
-                Stdio.eprintf "  %s: no scope-local assignment among %d contains all of [%s]\n" name
-                  (List.length updates) (String.concat ~sep:"; " m.extra);
-              (match read_form src ~label:"rfout" with
-              | None ->
-                  Stdio.eprintf "  %s: no accumulator identifier in the emitted kernel\n" name;
-                  p form_claim false
-              | Some reading ->
-                  let rendered = form_of reading in
-                  (* The coarse form is not the whole claim: a localizing composition must close the
-                     cell exactly as often as it opens the output loop's body, and touch the node no
-                     more than that (Codex P2, round 1). The declining and partial forms are
-                     identified by what they do to the node in the first place, so the count adds
-                     nothing there. *)
-                  let sites_ok =
-                    match m.expect with
-                    | Localized ->
-                        reading.stores_from_local = m.store_sites
-                        && reading.node_accesses <= 2 * m.store_sites
-                        (* And NOTHING closes a partial into another node on the way (Codex P2,
-                           round 11). A split, partition or unroll regression that started closing
-                           intermediate partials elsewhere before the single final store would keep
-                           the Localized reading and every count above — and on a backend whose
-                           accumulator already resides at storage width, the added store/reload
-                           seams need not move the executed value either. Foreign stores belong to
-                           the explicit partials form, which declares how many it has. *)
-                        && reading.foreign_local_stores = m.foreign_sites
-                    | Simd | Warp ->
-                        (* A vector or shuffle epilogue closes the cell ONCE per nest, and may spell
-                           that as [out[i] = out[i] + vred_total] rather than as a store from a
-                           scope local — textually a read-modify-write, but one per nest instead of
-                           one per step, which is the whole distinction. Either spelling counts, and
-                           the access bound is what refuses a regression that closed once per
-                           chain. *)
-                        reading.stores_from_local + reading.rmw_statements = m.store_sites
-                        && reading.node_accesses <= 2 * m.store_sites
-                        (* And no partial closed elsewhere on the way, exactly as for an ordinary
-                           localized member (Codex P2, round 12 — the round-11 fix belonged here too
-                           and I applied it to one arm only). A SIMD or shuffle renderer that began
-                           closing intermediate partials into another node would keep its marker,
-                           its single target epilogue and these target-only counts, and the f32
-                           legs' exactly-representable arithmetic would absorb the added
-                           store/reload seams. *)
-                        && reading.foreign_local_stores = m.foreign_sites
-                    | Rmw ->
-                        reading.rmw_statements = m.rmw_sites
-                        && reading.node_accesses <= 2 * m.rmw_sites
-                    | Partials_combine ->
-                        reading.foreign_local_stores = m.foreign_sites
-                        && reading.rmw_statements = m.rmw_sites
-                        && reading.stores_from_local = 0
-                        && reading.node_accesses <= 2 * m.rmw_sites
-                        && reading.foreign_accesses = m.foreign_accesses
-                    | Mma_fallback ->
-                        (* No table member claims it: the contraction leg is separate and does its
-                           own site check, against a bound of its own (the einsum lowering's
-                           whole-node zero-init is a third touch the members do not have). *)
-                        true
-                    | Unrecognized ->
-                        (* No member claims it; [same_form] already fails. *)
-                        false
-                  in
-                  if not sites_ok then
-                    Stdio.eprintf
-                      "  %s: %d closing store(s), %d rmw statement(s), %d foreign store(s), %d \
-                       node subscript(s); expected %d store / %d rmw / %d foreign sites\n"
-                      name reading.stores_from_local reading.rmw_statements
-                      reading.foreign_local_stores reading.node_accesses m.store_sites m.rmw_sites
-                      m.foreign_sites;
-                  if not (same_form rendered m.expect) then
-                    Stdio.eprintf
-                      "  %s: rendered %s, claimed %s (node subscripts %d, rmw statements %d, \
-                       stores from a local %d, foreign local stores %d)\n"
-                      name (form_name rendered) (form_name m.expect) reading.node_accesses
-                      reading.rmw_statements reading.stores_from_local reading.foreign_local_stores;
-                  p form_claim (same_form rendered m.expect && sites_ok && extra_ok));
-              (* And the DECISION, which the form above cannot deliver (gh-ocannl-733). Read off the
-                 routine's peel census rather than off the emitted text: a member declaring a peel
-                 its kernel did not perform fails here even when every textual claim holds, which is
-                 the whole of what this instrument adds. *)
-              check_peel ~name ~claim:peel_claim ~statements:(statements src) peel m.peel;
-              let want =
-                match m.reference with
-                | Baseline -> baseline prec_name
-                | Guarded_baseline -> guarded_baseline prec_name
-                | Mixed_baseline -> mixed_baseline prec_name
-                | Per_step -> per_step_ref ~terms:(terms_of_shape m.shape) ~from:seed_value prec
-                | Owned_cell -> (
-                    let from _ = 0.0 in
-                    let full (_ : int) = cols in
-                    match expected_residency prec with
-                    | Wider -> whole_nest_ref ~terms:full ~from prec
-                    | At_storage -> per_step_ref ~terms:full ~from prec)
-                | Rng_baseline -> rng_baseline prec_name
-              in
-              let ok = agrees got want in
-              if not ok then Stdio.eprintf "  %s: got [%s] want [%s]\n" name (show got) (show want);
-              p value_claim ok
-            end
+            let leg = Verdict.leg ~when_:(m.available prec_name) ~on:backend_name () in
+            let name = Printf.sprintf "rf_%s_%s" (routine_stem m.slug) prec_name in
+            let sched = lazy (m.sched prog) in
+            let evidence =
+              lazy
+                (let sched = Lazy.force sched in
+                 let result = execute ~name ~prog ~sched in
+                 let _, _, _, peel = result in
+                 (* The peel census of this kernel, on stderr: it names backend kernels and counts
+                    sites the surrounding structure decides, so it is a diagnostic; the CLAIM it
+                    supports is on stdout. *)
+                 Stdio.eprintf "  %s peel census: %s\n%!" name (Cs.peel_summary_string peel);
+                 result)
+            in
+            List.iteri prog.verify ~f:(fun i (claim, _, _) ->
+                in_legf ~leg "%s @ %s: %s" m.slug prec_name claim (fun label ->
+                    let _, verified, _, _ = Lazy.force evidence in
+                    let _, values, want = List.nth_exn verified i in
+                    let ok = agrees values want in
+                    if not ok then
+                      Stdio.eprintf "  %s: %s -- got [%s] want [%s]\n" name claim (show values)
+                        (show want);
+                    p label ok));
+            in_leg ~leg evidence_claim (fun label ->
+                let sched = Lazy.force sched in
+                let _, _, (before, after, per_op), _ = Lazy.force evidence in
+                (* The op is bound to an observable effect: a non-empty schedule must have CHANGED
+                   the lowered IR, and one that names an axis kind must have left that kind in
+                   it. *)
+                match (before, after) with
+                | Some b, Some a ->
+                    let changed =
+                      (List.is_empty sched || not (Sexp.equal (LL.sexp_of_t b) (LL.sexp_of_t a)))
+                      && (List.is_empty per_op
+                         || (List.length per_op = List.length sched && List.for_all per_op ~f:Fn.id)
+                         )
+                    in
+                    let axis_ok =
+                      match m.expect_axis with
+                      | None -> true
+                      | Some ty -> List.exists (axis_kinds a) ~f:(fun k -> LL.equal_axis_type k ty)
+                    in
+                    if not (changed && axis_ok) then
+                      (* Phrased with [%s] rather than a trailing [%b] on purpose: this is a
+                         failure-only diagnostic beside the real claim, and a format ending on a
+                         bare boolean behind a separator is exactly the self-decided-verdict shape
+                         [verdict_ratchet] hunts. Better to say it in words than to earn an
+                         exemption. *)
+                      Stdio.eprintf
+                        "  %s: the schedule left no mark -- IR changed: %s, named axis kind \
+                         present: %s\n"
+                        name (Bool.to_string changed) (Bool.to_string axis_ok);
+                    p label (changed && axis_ok)
+                | _ ->
+                    Stdio.eprintf "  %s: the lowered transform was never invoked\n" name;
+                    p label false);
+            in_leg ~leg form_claim (fun label ->
+                ignore (Lazy.force evidence);
+                let src = Generated.read name in
+                let updates = scope_update_statements src in
+                let extra_ok =
+                  List.for_all m.extra ~f:(fun sub ->
+                      List.exists updates ~f:(fun st -> String.is_substring st ~substring:sub))
+                in
+                if not extra_ok then
+                  Stdio.eprintf "  %s: no scope-local assignment among %d contains all of [%s]\n"
+                    name (List.length updates) (String.concat ~sep:"; " m.extra);
+                match read_form src ~label:"rfout" with
+                | None ->
+                    Stdio.eprintf "  %s: no accumulator identifier in the emitted kernel\n" name;
+                    p label false
+                | Some reading ->
+                    let rendered = form_of reading in
+                    (* The coarse form is not the whole claim: a localizing composition must close
+                       the cell exactly as often as it opens the output loop's body, and touch the
+                       node no more than that (Codex P2, round 1). The declining and partial forms
+                       are identified by what they do to the node in the first place, so the count
+                       adds nothing there. *)
+                    let sites_ok =
+                      match m.expect with
+                      | Localized ->
+                          reading.stores_from_local = m.store_sites
+                          && reading.node_accesses <= 2 * m.store_sites
+                          (* And NOTHING closes a partial into another node on the way (Codex P2,
+                             round 11). A split, partition or unroll regression that started closing
+                             intermediate partials elsewhere before the single final store would
+                             keep the Localized reading and every count above — and on a backend
+                             whose accumulator already resides at storage width, the added
+                             store/reload seams need not move the executed value either. Foreign
+                             stores belong to the explicit partials form, which declares how many it
+                             has. *)
+                          && reading.foreign_local_stores = m.foreign_sites
+                      | Simd | Warp ->
+                          (* A vector or shuffle epilogue closes the cell ONCE per nest, and may
+                             spell that as [out[i] = out[i] + vred_total] rather than as a store
+                             from a scope local — textually a read-modify-write, but one per nest
+                             instead of one per step, which is the whole distinction. Either
+                             spelling counts, and the access bound is what refuses a regression that
+                             closed once per chain. *)
+                          reading.stores_from_local + reading.rmw_statements = m.store_sites
+                          && reading.node_accesses <= 2 * m.store_sites
+                          (* And no partial closed elsewhere on the way, exactly as for an ordinary
+                             localized member (Codex P2, round 12 — the round-11 fix belonged here
+                             too and I applied it to one arm only). A SIMD or shuffle renderer that
+                             began closing intermediate partials into another node would keep its
+                             marker, its single target epilogue and these target-only counts, and
+                             the f32 legs' exactly-representable arithmetic would absorb the added
+                             store/reload seams. *)
+                          && reading.foreign_local_stores = m.foreign_sites
+                      | Rmw ->
+                          reading.rmw_statements = m.rmw_sites
+                          && reading.node_accesses <= 2 * m.rmw_sites
+                      | Partials_combine ->
+                          reading.foreign_local_stores = m.foreign_sites
+                          && reading.rmw_statements = m.rmw_sites
+                          && reading.stores_from_local = 0
+                          && reading.node_accesses <= 2 * m.rmw_sites
+                          && reading.foreign_accesses = m.foreign_accesses
+                      | Mma_fallback ->
+                          (* No table member claims it: the contraction leg is separate and does its
+                             own site check, against a bound of its own (the einsum lowering's
+                             whole-node zero-init is a third touch the members do not have). *)
+                          true
+                      | Unrecognized ->
+                          (* No member claims it; [same_form] already fails. *)
+                          false
+                    in
+                    if not sites_ok then
+                      Stdio.eprintf
+                        "  %s: %d closing store(s), %d rmw statement(s), %d foreign store(s), %d \
+                         node subscript(s); expected %d store / %d rmw / %d foreign sites\n"
+                        name reading.stores_from_local reading.rmw_statements
+                        reading.foreign_local_stores reading.node_accesses m.store_sites m.rmw_sites
+                        m.foreign_sites;
+                    if not (same_form rendered m.expect) then
+                      Stdio.eprintf
+                        "  %s: rendered %s, claimed %s (node subscripts %d, rmw statements %d, \
+                         stores from a local %d, foreign local stores %d)\n"
+                        name (form_name rendered) (form_name m.expect) reading.node_accesses
+                        reading.rmw_statements reading.stores_from_local
+                        reading.foreign_local_stores;
+                    p label (same_form rendered m.expect && sites_ok && extra_ok));
+            in_leg ~leg peel_claim (fun label ->
+                let _, _, _, peel = Lazy.force evidence in
+                let src = Generated.read name in
+                check_peel ~name ~claim:label ~statements:(statements src) peel m.peel);
+            in_leg ~leg value_claim (fun label ->
+                let got, _, _, _ = Lazy.force evidence in
+                let want =
+                  match m.reference with
+                  | Baseline -> baseline prec_name
+                  | Guarded_baseline -> guarded_baseline prec_name
+                  | Mixed_baseline -> mixed_baseline prec_name
+                  | Per_step -> per_step_ref ~terms:(terms_of_shape m.shape) ~from:seed_value prec
+                  | Owned_cell -> (
+                      let from _ = 0.0 in
+                      let full (_ : int) = cols in
+                      match expected_residency prec with
+                      | Wider -> whole_nest_ref ~terms:full ~from prec
+                      | At_storage -> per_step_ref ~terms:full ~from prec)
+                  | Rng_baseline -> rng_baseline prec_name
+                in
+                let ok = agrees got want in
+                if not ok then
+                  Stdio.eprintf "  %s: got [%s] want [%s]\n" name (show got) (show want);
+                p label ok)
           end))
 
 (* {1 The [Tile_mma] fallback}
@@ -2390,25 +2395,22 @@ let () =
         Printf.sprintf "tile-mma-fallback @ %s: codegen's peel decided what the leg declares"
           prec_name
       in
-      if not on_cpu then begin
-        skipped form_claim;
-        skipped peel_claim;
-        skipped value_claim
-      end
-      else begin
-        let plain = mma_matmul ~tag:("rfmma_p_" ^ prec_name) ~prec in
-        let want, _, _ =
-          mma_run ~name:("rf_mma_plain_" ^ prec_name) ~out:plain.Tensor.value ~tensorize:false
-            (Train.forward plain)
-        in
-        let tiled = mma_matmul ~tag:("rfmma_t_" ^ prec_name) ~prec in
-        let got, census, peel =
-          mma_run ~name:("rf_mma_fallback_" ^ prec_name) ~out:tiled.Tensor.value ~tensorize:true
-            (Train.forward tiled)
-        in
-        Stdio.eprintf "  rf_mma_fallback_%s peel census: %s\n%!" prec_name
-          (Cs.peel_summary_string peel);
-        (* The census says every [Tile_mma] statement declined; it says NOTHING about how the
+      let leg = Verdict.leg ~when_:on_cpu ~on:backend_name () in
+      let evidence =
+        lazy
+          (let plain = mma_matmul ~tag:("rfmma_p_" ^ prec_name) ~prec in
+           let want, _, _ =
+             mma_run ~name:("rf_mma_plain_" ^ prec_name) ~out:plain.Tensor.value ~tensorize:false
+               (Train.forward plain)
+           in
+           let tiled = mma_matmul ~tag:("rfmma_t_" ^ prec_name) ~prec in
+           let got, census, peel =
+             mma_run ~name:("rf_mma_fallback_" ^ prec_name) ~out:tiled.Tensor.value ~tensorize:true
+               (Train.forward tiled)
+           in
+           Stdio.eprintf "  rf_mma_fallback_%s peel census: %s\n%!" prec_name
+             (Cs.peel_summary_string peel);
+           (* The census says every [Tile_mma] statement declined; it says NOTHING about how the
            nested fallback reduction then rendered (Codex P2, round 3). If localization inside the
            fallback regressed to per-step read-modify-writes the census would be unchanged, and
            these small exactly-representable products give the same value either way — so the
@@ -2418,60 +2420,68 @@ let () =
            before the contraction, which the hand-built members do not have (they seed their
            accumulator from the host instead). It writes the cell once and mentions no local, so it
            cannot be confused with a closing store. *)
-        (* [%op mc = ...] labels the node ["*._mc"] — the operator and the binding name — while
+           (* [%op mc = ...] labels the node ["*._mc"] — the operator and the binding name — while
            codegen names it [mc]. Take the trailing identifier of the label, which is the part the
            code name is derived from. *)
-        let label =
-          let l = Tn.label tiled.Tensor.value in
-          let b = ref (String.length l) in
-          while !b > 0 && is_ident_char l.[!b - 1] do
-            Int.decr b
-          done;
-          String.lstrip ~drop:(Char.equal '_') (String.drop_prefix l !b)
-        in
-        let src = Generated.read ("rf_mma_fallback_" ^ prec_name) in
-        let localized =
-          match read_form src ~label with
-          | None ->
-              Stdio.eprintf "  rf_mma_fallback_%s: no accumulator identifier in the kernel\n"
-                prec_name;
-              false
-          | Some reading ->
-              let ok =
-                same_form (form_of reading) Localized
-                && reading.stores_from_local = 1 && reading.node_accesses <= 3
-                (* And nothing closed elsewhere on the way, as every other localized form in the
-                   table now requires (Codex P2, round 13). A fallback that began closing
-                   intermediate partials into another node would keep its single [mc] store, its
-                   Scalar_fallback census and this leg's exact f32 comparison. *)
-                && reading.foreign_local_stores = 0
-                && reading.foreign_accesses = 0
-              in
-              if not ok then
-                Stdio.eprintf
-                  "  rf_mma_fallback_%s: fallback rendered %s (%d subscripts, %d rmw, %d local \
-                   stores)\n"
-                  prec_name
-                  (form_name (form_of reading))
-                  reading.node_accesses reading.rmw_statements reading.stores_from_local;
-              ok
-        in
-        p form_claim
-          (Cs.equal_tensorization census.Cs.tensorization Cs.Scalar_fallback
-          && census.Cs.statements > 0
-          && census.Cs.scalar_fallbacks = census.Cs.statements
-          && localized);
-        (* And, as for every table member, WHICH decision localized that fallback reduction
-           (gh-ocannl-733): codegen's peel, at the contraction's own reduction level. The textual
-           reading above says a scope is there; only the census says the peel put it there. *)
-        check_peel ~name:("rf_mma_fallback_" ^ prec_name) ~claim:peel_claim
-          ~statements:(statements src) peel mma_fallback_peel;
-        let ok = agrees got want in
-        if not ok then
-          Stdio.eprintf "  rf_mma_fallback_%s: got [%s] want [%s]\n" prec_name (show got)
-            (show want);
-        p value_claim ok
-      end)
+           let label =
+             let l = Tn.label tiled.Tensor.value in
+             let b = ref (String.length l) in
+             while !b > 0 && is_ident_char l.[!b - 1] do
+               Int.decr b
+             done;
+             String.lstrip ~drop:(Char.equal '_') (String.drop_prefix l !b)
+           in
+           let src = Generated.read ("rf_mma_fallback_" ^ prec_name) in
+           let localized =
+             match read_form src ~label with
+             | None ->
+                 Stdio.eprintf "  rf_mma_fallback_%s: no accumulator identifier in the kernel\n"
+                   prec_name;
+                 false
+             | Some reading ->
+                 let ok =
+                   same_form (form_of reading) Localized
+                   && reading.stores_from_local = 1 && reading.node_accesses <= 3
+                   (* And nothing closed elsewhere on the way, as every other localized form in the
+                      table now requires (Codex P2, round 13). A fallback that began closing
+                      intermediate partials into another node would keep its single [mc] store, its
+                      Scalar_fallback census and this leg's exact f32 comparison. *)
+                   && reading.foreign_local_stores = 0
+                   && reading.foreign_accesses = 0
+                 in
+                 if not ok then
+                   Stdio.eprintf
+                     "  rf_mma_fallback_%s: fallback rendered %s (%d subscripts, %d rmw, %d local \
+                      stores)\n"
+                     prec_name
+                     (form_name (form_of reading))
+                     reading.node_accesses reading.rmw_statements reading.stores_from_local;
+                 ok
+           in
+           (want, got, census, peel, localized))
+      in
+      in_leg ~leg form_claim (fun label ->
+          let _, _, census, _, localized = Lazy.force evidence in
+          p label
+            (Cs.equal_tensorization census.Cs.tensorization Cs.Scalar_fallback
+            && census.Cs.statements > 0
+            && census.Cs.scalar_fallbacks = census.Cs.statements
+            && localized));
+      in_leg ~leg peel_claim (fun label ->
+          let _, _, _, peel, _ = Lazy.force evidence in
+          let src = Generated.read ("rf_mma_fallback_" ^ prec_name) in
+          (* And, as for every table member, WHICH decision localized that fallback reduction
+             (gh-ocannl-733): codegen's peel, at the contraction's own reduction level. The textual
+             reading above says a scope is there; only the census says the peel put it there. *)
+          check_peel ~name:("rf_mma_fallback_" ^ prec_name) ~claim:label
+            ~statements:(statements src) peel mma_fallback_peel);
+      in_leg ~leg value_claim (fun label ->
+          let want, got, _, _, _ = Lazy.force evidence in
+          let ok = agrees got want in
+          if not ok then
+            Stdio.eprintf "  rf_mma_fallback_%s: got [%s] want [%s]\n" prec_name (show got)
+              (show want);
+          p label ok))
 
 (* {1 The reading is backend-independent}
 
