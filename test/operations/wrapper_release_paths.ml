@@ -251,17 +251,39 @@ let () =
       p "the timing context stays usable" (still_usable timing_ctx);
       Context.release timing_ctx;
       (ctx, computed));
-  (* A second call over one program replays the first's recorded decision. *)
+  (* Record arm B's nonempty placement decision so replay mints a context whose release this case
+     exercises (gh-ocannl-2208). Script the arms' readings, not [ship_arm]: forced shipping bypasses
+     the placement store. Admit the scripted windows even under load; execution stays real. The
+     positional reports advance the script from arm A (2 ms) to arm B (1 ms). *)
   let t, comp = tunable () in
   let outcomes = ref [] in
+  let recorded = ref None and replayed = ref None in
   let report r = outcomes := r.Autotune.outcome :: !outcomes in
   returned "tune_placements, recording a decision" (fun root ->
-      let ctx, routine = tune ~cache_dir ~report root t (Ll_test.unowned_copy comp) in
+      let ctx, routine =
+        Autotune.with_uncontended_test_windows (fun () ->
+            Autotune.Seam.with_value Autotune.on_candidate_measured
+              (fun ~label:_ ~digest:_ _ -> if List.is_empty !outcomes then 2. else 1.)
+              (fun () ->
+                tune ~cache_dir ~report
+                  ~on_ship:(fun s -> recorded := Some s)
+                  root t (Ll_test.unowned_copy comp)))
+      in
       (ctx, all_finite (Context.run ctx routine) t));
   outcomes := [];
   returned "tune_placements, replaying it" (fun root ->
-      let ctx, routine = tune ~cache_dir ~report root t (Ll_test.unowned_copy comp) in
+      let ctx, routine =
+        tune ~cache_dir ~report
+          ~on_ship:(fun s -> replayed := Some s)
+          root t (Ll_test.unowned_copy comp)
+      in
       (ctx, all_finite (Context.run ctx routine) t));
+  p "the recorded and replayed decision is arm B"
+    (match (!recorded, !replayed) with
+    | Some a, Some b ->
+        String.equal a.Train.ship_arm "B" && String.equal b.Train.ship_arm "B"
+        && b.Train.ship_replayed
+    | _ -> false);
   p "the second call replayed a search"
     (List.exists !outcomes ~f:(function Autotune.Cache_replay -> true | _ -> false));
   let tune_raising name f =
