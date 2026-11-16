@@ -209,6 +209,12 @@ files.
   repetition cases rather than claiming every draw fills. The full green suite missed a
   constant dropout mask after a guess deletion (gh-ocannl-2185, staging#1927); the failure story
   and what that guess stood in for are above.
+- Parameter closure is independent of the initializer (gh-ocannl-2236). Keep parameter
+  `Terminal_row`s even on an unused root; unification must carry `is_in_param` onto the
+  replacement row/dimension and terminal dispatch must mark substituted axes. Otherwise a
+  `uniform1` parameter's fixed-index-only axis takes the ordinary minimum-size guess.
+  `Row.parameter_outputs` checks that an inferred output did not close empty: output rows have
+  no implicit-omission exception, even if the initializer unified one with its omitted input.
 - Implicit (omitted) row specs are shared and safe-to-guess; an explicit `...` stays strict; row
   variables in kernel slots need the `|` prefix. Symbolic extents (`Row.Sym`, gh-490) are rigid:
   equal only to themselves, materialized at their declared maximum; `Total_elems` against them

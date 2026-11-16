@@ -3770,6 +3770,7 @@ let set_terminal ~is_param (sh : t) =
         operation = Some "set_terminal";
       }
   in
+  if is_param then Row.register_parameter_output sh.output [ get_origin `Output ];
   active_constraints :=
     Row.Terminal_row (is_param, sh.batch, [ get_origin `Batch ])
     :: Row.Terminal_row (is_param, sh.input, [ get_origin `Input ])
@@ -4966,7 +4967,8 @@ let%debug4_sexp finish_inference_body (() : unit) : unit =
     };
   let unsolved =
     List.filter !active_constraints ~f:(function
-      | Shape_row (r, _) | Terminal_row (_, r, _) ->
+      | Terminal_row (true, _, _) -> true
+      | Shape_row (r, _) | Terminal_row (false, r, _) ->
           not (List.exists (Row.row_shapes r) ~f:(Set.mem !unused_shapes))
       | _ -> true)
   in
@@ -4987,6 +4989,7 @@ let%debug4_sexp finish_inference_body (() : unit) : unit =
   let unsolved, env = Row.solve_inequalities ~stage:Stage5 unsolved env in
   (* One search over the closing stages' balanced-flank choices (gh-ocannl-2154). *)
   let unsolved, env = Row.solve_closing_stages ~stages:[ Stage6a; Stage6b; Stage7 ] unsolved env in
+  Row.check_parameter_outputs env;
   refuse_unsolved ~where:"finish_inference" unsolved;
   let _active_update_steps : update_step list = !active_update_steps in
   List.iter ~f:(apply_env_step ~closure:true env) !active_update_steps;

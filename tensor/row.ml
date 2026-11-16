@@ -3107,9 +3107,9 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
             let dims = visit_dims () in
             record_dim_solution env v ~value:dim2 dims (visit_rows ())
         | Some (Solved_dim _) -> assert false
-        | Some (Bounds_dim { is_in_param = _; res; opnd; glb; constr; origin = origin1; _ } as in_)
-          ->
+        | Some (Bounds_dim { is_in_param; res; opnd; glb; constr; origin = origin1; _ } as in_) ->
             let origin = merge_origins origin origin1 in
+            if is_in_param then ineqs := Terminal_dim (true, dim2, origin) :: !ineqs;
             let from_ = [%sexp_of: dim_var * dim_entry] (v, drop_origin in_) in
             let dims = visit_dims () in
             List.iter res ~f:(fun res ->
@@ -3355,6 +3355,27 @@ let add_safe_to_guess v =
   if not (Set.mem !safe_to_guess v) then (
     note_mutation ();
     safe_to_guess := Set.add !safe_to_guess v)
+
+(* Parameter output rows have no omitted-row exception: unlike batch and input,
+   [Shape.axes_spec_to_dims_bio] always treats an output row as explicit. An initializer may
+   nevertheless unify it with its own omitted input row; that permission cannot size a parameter. *)
+let parameter_outputs = ref []
+
+let register_parameter_output r origin =
+  match r.bcast with
+  | Broadcastable -> () (* Explicitly stated rank, including a scalar parameter. *)
+  | Row_var _ ->
+      note_mutation ();
+      parameter_outputs := (r, origin) :: !parameter_outputs
+
+let check_parameter_outputs env =
+  List.iter !parameter_outputs ~f:(fun (r, origin) ->
+      let sized = subst_row env r in
+      if List.is_empty (sized.beg_dims @ sized.dims) then
+        raise
+        @@ Shape_error
+             ( "You forgot to specify the hidden dimension(s) 4",
+               [ Constraint_failed (Terminal_row (true, r, origin)); Row_mismatch [ sized ] ] ))
 
 let used_in_spec_or_compose = ref (Set.empty (module Row_var))
 let used_in_pointwise = ref (Set.empty (module Row_var))
@@ -3645,6 +3666,7 @@ type globals = {
   g_pending_roles : (Ir.Indexing.static_symbol * [ `Extent | `Slice ]) list;
   g_resolve_at_use_dim : Set.M(Dim_var).t;
   g_safe_to_guess : Set.M(Row_var).t;
+  g_parameter_outputs : (row * constraint_origin list) list;
   g_used_in_spec_or_compose : Set.M(Row_var).t;
   g_used_in_pointwise : Set.M(Row_var).t;
   g_concat_component_vars : Set.M(Dim_var).t;
@@ -3661,6 +3683,7 @@ let capture_globals () =
     g_pending_roles = !pending_roles;
     g_resolve_at_use_dim = !resolve_at_use_dim;
     g_safe_to_guess = !safe_to_guess;
+    g_parameter_outputs = !parameter_outputs;
     g_used_in_spec_or_compose = !used_in_spec_or_compose;
     g_used_in_pointwise = !used_in_pointwise;
     g_concat_component_vars = !concat_component_vars;
@@ -3677,6 +3700,7 @@ let restore_globals
       g_pending_roles;
       g_resolve_at_use_dim;
       g_safe_to_guess;
+      g_parameter_outputs;
       g_used_in_spec_or_compose;
       g_used_in_pointwise;
       g_concat_component_vars;
@@ -3690,6 +3714,7 @@ let restore_globals
   pending_roles := g_pending_roles;
   resolve_at_use_dim := g_resolve_at_use_dim;
   safe_to_guess := g_safe_to_guess;
+  parameter_outputs := g_parameter_outputs;
   used_in_spec_or_compose := g_used_in_spec_or_compose;
   used_in_pointwise := g_used_in_pointwise;
   concat_component_vars := g_concat_component_vars;
@@ -4026,8 +4051,9 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
         match find_row env.row_env v with
         | None -> result env
         | Some (Solved_row _) -> assert false
-        | Some (Bounds_row { is_in_param = _; res; opnd; glb; constr; origin = origin1 }) ->
+        | Some (Bounds_row { is_in_param; res; opnd; glb; constr; origin = origin1 }) ->
             let origin = merge_origins origin origin1 in
+            if is_in_param then ineqs := Terminal_row (true, value, origin) :: !ineqs;
             let env =
               if beg_handled then (
                 List.iter res ~f:(fun res ->
@@ -4458,6 +4484,7 @@ let retire_closed_variables () =
     retired_reserved_floor := !reserved_uid);
   resolve_at_use_dim := dim_var_set_empty;
   safe_to_guess := row_var_set_empty;
+  parameter_outputs := [];
   used_in_spec_or_compose := row_var_set_empty;
   used_in_pointwise := row_var_set_empty;
   concat_component_vars := dim_var_set_empty;
@@ -4473,6 +4500,7 @@ let solver_census () =
     ("pending_roles", List.length !pending_roles);
     ("resolve_at_use_dim", Set.length !resolve_at_use_dim);
     ("safe_to_guess", Set.length !safe_to_guess);
+    ("parameter_outputs", List.length !parameter_outputs);
     ("used_in_spec_or_compose", Set.length !used_in_spec_or_compose);
     ("used_in_pointwise", Set.length !used_in_pointwise);
     ("concat_component_vars", Set.length !concat_component_vars);
@@ -4489,6 +4517,7 @@ let globals_differences
       g_pending_roles = a1;
       g_resolve_at_use_dim = a2;
       g_safe_to_guess = a3;
+      g_parameter_outputs = a13;
       g_used_in_spec_or_compose = a4;
       g_used_in_pointwise = a5;
       g_concat_component_vars = a6;
@@ -4503,6 +4532,7 @@ let globals_differences
       g_pending_roles = b1;
       g_resolve_at_use_dim = b2;
       g_safe_to_guess = b3;
+      g_parameter_outputs = b13;
       g_used_in_spec_or_compose = b4;
       g_used_in_pointwise = b5;
       g_concat_component_vars = b6;
@@ -4518,6 +4548,7 @@ let globals_differences
       ("Row.pending_roles", phys_equal a1 b1);
       ("Row.resolve_at_use_dim", phys_equal a2 b2);
       ("Row.safe_to_guess", phys_equal a3 b3);
+      ("Row.parameter_outputs", phys_equal a13 b13);
       ("Row.used_in_spec_or_compose", phys_equal a4 b4);
       ("Row.used_in_pointwise", phys_equal a5 b5);
       ("Row.concat_component_vars", phys_equal a6 b6);
@@ -4659,6 +4690,7 @@ type marks = {
   m_pending_roles : (Ir.Indexing.static_symbol * [ `Extent | `Slice ]) list;
   m_resolve_at_use_dim : dim_var list;
   m_safe_to_guess : row_var list;
+  m_parameter_outputs : (row * constraint_origin list) list;
   m_used_in_spec_or_compose : row_var list;
   m_used_in_pointwise : row_var list;
   m_concat_component_vars : dim_var list;
@@ -4676,6 +4708,9 @@ let marks_since (g : globals) =
     m_pending_roles = roles_since [] !pending_roles;
     m_resolve_at_use_dim = diff !resolve_at_use_dim g.g_resolve_at_use_dim;
     m_safe_to_guess = diff !safe_to_guess g.g_safe_to_guess;
+    m_parameter_outputs =
+      List.take !parameter_outputs
+        (List.length !parameter_outputs - List.length g.g_parameter_outputs);
     m_used_in_spec_or_compose = diff !used_in_spec_or_compose g.g_used_in_spec_or_compose;
     m_used_in_pointwise = diff !used_in_pointwise g.g_used_in_pointwise;
     m_concat_component_vars = diff !concat_component_vars g.g_concat_component_vars;
@@ -4683,6 +4718,8 @@ let marks_since (g : globals) =
   }
 
 let add_marks rn m =
+  List.iter m.m_parameter_outputs ~f:(fun (r, origin) ->
+      register_parameter_output (rename_row rn r) origin);
   List.iter m.m_pending_roles ~f:(fun (sym, role) -> claim_symbol_role sym role);
   List.iter m.m_resolve_at_use_dim ~f:(fun v -> add_resolve_at_use_dim (rn.rn_dim v));
   List.iter m.m_safe_to_guess ~f:(fun v -> add_safe_to_guess (rn.rn_row v));
@@ -6598,6 +6635,11 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
       | Terminal_row (is_param, r, origin) ->
           let env = update_row_is_param r is_param env in
           let r = subst_row env r in
+          let env = update_row_is_param r is_param env in
+          let env =
+            List.fold (r.beg_dims @ r.dims) ~init:env ~f:(fun env d ->
+                update_dim_is_param d is_param env)
+          in
           (* Terminal (leaf and parameter) rows resolve at their use sites — protect them from the
              close-down default of [process_shape_row] (gh-ocannl-544). *)
           (match r.bcast with Row_var v -> add_resolve_at_use v | Broadcastable -> ());

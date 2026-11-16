@@ -1,18 +1,7 @@
 Testing default lone parameter -- corner case
-┌──────────────────────┐
-│[9]: *._w_o shape 0:1 │
-│┌┬──────────┐         │
-│││axis 0    │         │
-│├┼──────────┤         │
-│││ -2.50e-2 │         │
-│└┴──────────┘         │
-└──────────────────────┘
-grad_*._w_o <not-computed>
-Lone parameter took the heuristic's default shape; no error
+Got acceptable error: You forgot to specify the hidden dimension(s) 1
 Testing lone parameter 1D -- corner case
-[5]: w_o shape  
-scalar 4.49e-1
-grad_w_o <not-computed>
+Got acceptable error: You forgot to specify the hidden dimension(s) 4
 Testing default linear operation
 Got expected error: You forgot to specify the hidden dimension(s) 4
 Testing default affine operation with propagated dimensions
@@ -34,3 +23,43 @@ Testing bias parameter 1D
 Got expected error: You forgot to specify the hidden dimension(s) 4
 Testing fixed-index axes consumed by a parameter
 Got expected error: Unresolved parameter dimension: a parameter axis is sized only by a fixed-index output axis of einsum spec "... | h, w, ..c.. => ... | 0, 0, ..c..". A fixed index bounds an axis from below (here: at least 1) but does not determine its size; reduce the axis away instead of fixing an index, or specify the parameter's dimension explicitly
+default parameter: alone: true
+default parameter: neg: true
+default parameter: constant: true
+default parameter: empty output use: true
+default parameter: fixed index: true
+default parameter: wrapped fixed index: true
+uniform1 parameter: alone: true
+uniform1 parameter: neg: true
+uniform1 parameter: constant: true
+uniform1 parameter: empty output use: true
+uniform1 parameter: fixed index: true
+uniform1 parameter: wrapped fixed index: true
+normal parameter: alone: true
+normal parameter: neg: true
+normal parameter: constant: true
+normal parameter: empty output use: true
+normal parameter: fixed index: true
+normal parameter: wrapped fixed index: true
+zero parameter: alone: true
+zero parameter: neg: true
+zero parameter: constant: true
+zero parameter: empty output use: true
+zero parameter: fixed index: true
+zero parameter: wrapped fixed index: true
+default parameter: sized: true
+default parameter: explicit unit axis: true
+default parameter: omitted row: true
+default parameter: schemed omitted row: true
+uniform1 parameter: sized: true
+uniform1 parameter: explicit unit axis: true
+uniform1 parameter: omitted row: true
+uniform1 parameter: schemed omitted row: true
+normal parameter: sized: true
+normal parameter: explicit unit axis: true
+normal parameter: omitted row: true
+normal parameter: schemed omitted row: true
+zero parameter: sized: true
+zero parameter: explicit unit axis: true
+zero parameter: omitted row: true
+zero parameter: schemed omitted row: true
