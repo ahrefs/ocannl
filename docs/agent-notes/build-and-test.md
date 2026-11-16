@@ -1518,8 +1518,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   one fact stored is the sighting (a `queued-after` mark in the run `last` named then, or
   `queued-<key>` before the first run), since a launch that left without publishing leaves
   nothing else; a mark is a file's existence per run, so no late reader can overwrite a newer
-  sighting. This
-  does not settle gh-ocannl-607: the gap is before any publication, so deriving `last` from the
+  sighting. An intentionally unreadable `env -C` operand in a harness must still
+  name its fixture's state root in exec argv: otherwise its unknown directory and
+  unknown state root make it a queued launch in every concurrent fixture
+  (gh-ocannl-2124). Leg 105b holds two such wrappers at a readiness seam and
+  replays the former unqualified argv only inside one reader's census, so its
+  negative control cannot contaminate other workers. Leg 105c forces publication
+  on either side of the pointer read. The before seam depends on the existing
+  pointer retry: removing it marks the published repeat queued. The after seam
+  instead pins the sighting's mark on the first run; omitting the mark fails it.
+  This does not settle gh-ocannl-607: the gap is before any publication, so deriving `last` from the
   run directories would leave it exactly as it was. `list` lists this worktree's runs (by `wt`,
   `--all` for the state root's): the newest entry of a shared root is as likely a sibling
   checkout's, and an `ls -td` there read one. Legs 99-100 and 105 of `tools/test-test-run-last.sh`.
