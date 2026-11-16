@@ -341,4 +341,41 @@ let () = p "equal" (let _unused = List.map2_exn [got] ~f:(fun x () ->
   Int64.equal (Int64.bits_of_float x.(0)) 0L) in Float.equal got.(0) 1.)
 |ocaml}
     );
+    ( "fully applied returned collection predicate",
+      true,
+      {ocaml|
+open Verdict.Claims
+let same_bits x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let eq xs = Array.equal same_bits xs
+let () = p "equal" (eq (Context.get_values ctx tensor) [|1.|])
+|ocaml}
+    );
+    ( "unused returned collection predicate",
+      false,
+      {ocaml|
+open Verdict.Claims
+let same_bits x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let eq xs = Array.equal same_bits xs
+let got = Context.get_values ctx tensor
+let () = p "equal" (let _unused = eq got in Float.equal got.(0) 1.)
+|ocaml}
+    );
+    ( "fully applied returned comparator identifier",
+      true,
+      {ocaml|
+open Verdict.Claims
+let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let make () = eq
+let () = p "equal" (make () (Context.get_values ctx tensor).(0) 1.)
+|ocaml}
+    );
+    ( "fully applied returned unary comparator",
+      true,
+      {ocaml|
+open Verdict.Claims
+let eq x = Int64.equal (Int64.bits_of_float x) 0L
+let make () = eq
+let () = p "equal" (make () (Context.get_values ctx tensor).(0))
+|ocaml}
+    );
   ]

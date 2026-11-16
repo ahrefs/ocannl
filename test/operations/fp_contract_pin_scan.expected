@@ -36,6 +36,10 @@ case: code subject -- fully applied nested lambda comparator: true
 case: code subject -- iterator does not saturate a returned closure: true
 case: code subject -- iterator missing its second collection does not invoke callback: true
 case: code subject -- partial map does not apply comparator callback: true
+case: code subject -- fully applied returned collection predicate: true
+case: code subject -- unused returned collection predicate: true
+case: code subject -- fully applied returned comparator identifier: true
+case: code subject -- fully applied returned unary comparator: true
 case: a pinned claim is listed as pinned: true
 case: a marked claim is listed with its kind: true
 case: a claim with neither pin nor marker is refused: true

@@ -39,17 +39,18 @@
    Ordinary function parameters ([fun x ->] or [let f x =]) union the arguments of fully applied
    lexical calls in this file, to a finite monotone fixpoint (recursive calls included).
    Unconstrained nested ordinary lambdas are flattened to count their full arity; returning a
-   comparator identifier does not execute it. Escaping helpers receive no evidence from unknown
-   external callers; uncalled parameters stay unknown. The List/Array iter, iteri, map, mapi,
-   for_all, for_alli, iter2[_exn] and map2[_exn] table maps collection dependencies into inline
-   labelled f callbacks with ordinary parameters, requiring every mapped positional collection
-   before invoking a callback, and treating a fully saturated comparator callback as applied (index
-   parameters stay unknown), including tuple patterns. Tuple components share their collection's
-   union; this is not per-element provenance. Other higher-order calls, mutable storage, external
-   helper bodies and exported module-structure values remain outside this extension. Calls have an
-   identifier claim callee and operands in one application node; operator-based application, partial
-   helper applications, function-case parameters, omitted optional defaults and bare external-reader
-   aliases are not reconstructed.
+   comparator identifier does not execute it. Comparator summaries retain the number of remaining
+   arguments, so a single application can invoke a returned predicate too. Escaping helpers receive
+   no evidence from unknown external callers; uncalled parameters stay unknown. The List/Array iter,
+   iteri, map, mapi, for_all, for_alli, iter2[_exn] and map2[_exn] table maps collection
+   dependencies into inline labelled f callbacks with ordinary parameters, requiring every mapped
+   positional collection before invoking a callback, and treating a fully saturated comparator
+   callback as applied (index parameters stay unknown), including tuple patterns. Tuple components
+   share their collection's union; this is not per-element provenance. Other higher-order calls,
+   mutable storage, external helper bodies and exported module-structure values remain outside this
+   extension. Calls have an identifier claim callee and operands in one application node;
+   operator-based application, partial helper applications, function-case parameters, omitted
+   optional defaults and bare external-reader aliases are not reconstructed.
 
    - A PIN: the string literal [OCANNL_CC_BACKEND_FP_CONTRACT] whose next string literal is [off]
    (the [Unix.putenv] the pinned tests do at module initialization). A pin made elsewhere -- a dune
@@ -137,7 +138,7 @@ type evidence = {
   bits : bool;
   claim : bool;
   helpers : int list;
-  call_compared : bool;
+  arity : int option; (* Remaining arguments before a comparator executes. *)
 }
 
 let unknown =
@@ -148,7 +149,7 @@ let unknown =
     bits = false;
     claim = false;
     helpers = [];
-    call_compared = false;
+    arity = None;
   }
 
 let union a b =
@@ -158,7 +159,7 @@ let union a b =
     output = a.output || b.output;
     bits = a.bits || b.bits;
     claim = false;
-    call_compared = a.call_compared || b.call_compared;
+    arity = Option.merge a.arity b.arity ~f:Int.min;
     helpers = List.dedup_and_sort (a.helpers @ b.helpers) ~compare:Int.compare;
   }
 
@@ -325,6 +326,7 @@ let code_claim_lines content =
             result
 
       method walk env e =
+        let callable = ref None in
         (match e.pexp_desc with
         | Pexp_apply (fn, args) ->
             let path = self#path env fn in
@@ -389,25 +391,22 @@ let code_claim_lines content =
               && List.exists args ~f:(function
                 | Labelled "f", callback ->
                     let summary = self#summary env callback in
-                    if List.is_empty summary.helpers then summary.comparator
-                    else
-                      summary.call_compared
-                      && Option.value_map callback_mapping ~default:false ~f:(fun slots ->
-                          List.exists summary.helpers ~f:(fun key ->
-                              Option.value_map (Hashtbl.find functions key) ~default:false
-                                ~f:(fun params -> List.length params <= List.length slots)))
+                    summary.comparator
+                    && Option.value_map callback_mapping ~default:false ~f:(fun slots ->
+                        Option.value summary.arity ~default:2 <= List.length slots)
                 | _ -> false)
             in
             let applied =
-              fn_summary.comparator
-              &&
-              if List.is_empty fn_summary.helpers then List.length positional >= 2
-              else
-                fn_summary.call_compared
-                && List.exists fn_summary.helpers ~f:(fun key ->
-                    Option.value_map (Hashtbl.find functions key) ~default:false ~f:(fun params ->
-                        List.length args >= List.length params))
+              fn_summary.comparator && Option.value fn_summary.arity ~default:2 <= List.length args
             in
+            (if collection_equality then
+               let remaining = Int.max 0 (3 - List.length positional) in
+               callable := Some (remaining > 0, if remaining > 0 then Some remaining else None)
+             else if fn_summary.comparator then
+               let remaining =
+                 Int.max 0 (Option.value fn_summary.arity ~default:2 - List.length args)
+               in
+               callable := Some (remaining > 0, if remaining > 0 then Some remaining else None));
             evidence <-
               union evidence
                 {
@@ -477,13 +476,21 @@ let code_claim_lines content =
                   body with
                   comparator = body.comparator || body.compared;
                   compared = false;
-                  call_compared = body.compared;
+                  arity =
+                    (let count =
+                       List.length (Hashtbl.find_exn functions e.pexp_loc.loc_start.pos_cnum)
+                     in
+                     if body.compared then Some count
+                     else if body.comparator then Some (count + Option.value body.arity ~default:2)
+                     else None);
                   helpers = [ e.pexp_loc.loc_start.pos_cnum ];
                 };
             result
         | Pexp_apply _ ->
             let result = super#expression env e in
             evidence <- { evidence with helpers = [] };
+            Option.iter !callable ~f:(fun (comparator, arity) ->
+                evidence <- { evidence with comparator; arity });
             result
         | _ -> super#expression env e
 
