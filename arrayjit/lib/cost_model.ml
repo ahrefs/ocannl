@@ -346,12 +346,13 @@ let top_ctx = { pc_blocks = 1; pc_threads = 1 }
    guard, a hardware loop or a [Scan_loop] met before the carrier ends the walk with no chain. The
    carrier's chains are its members' distinct cells: each member's target (node and indices, so
    repeated updates of one cell are one chain) times its passed loops' extents -- unrolled copies of
-   a register tile are distinct members. No credit where the carrier's body holds a barrier, or
-   where a member's value reads another member's accumulator (dependent chains). Anything else -- no
-   carrier, no read-modify-write, a shared or global accumulator, elementwise work -- is not counted
-   ([None]), which the launch fill reads as today's thread-only credit. Deliberately not counted:
-   independent iterations a compiler might interleave (they are serial work here), and a staging
-   copy's loads in flight. *)
+   a register tile are distinct members. A passed loop counts only where it addresses distinct cells
+   (its index one plain-iterator component); a looped member beside another member of its node may
+   overlap it. No credit where the carrier's body holds a barrier, or where any update reads another
+   member's accumulator (dependent chains). Anything else -- no carrier, no read-modify-write, a
+   shared or global accumulator, elementwise work -- is not counted ([None]), which the launch fill
+   reads as today's thread-only credit. Deliberately not counted: independent iterations a compiler
+   might interleave (they are serial work here), and a staging copy's loads in flight. *)
 
 type chain_frame =
   | Chain_loop of { index : Idx.symbol; extent : int; hardware : bool; body : Low_level.t }
@@ -396,19 +397,34 @@ let target_mentions target s =
   | Chain_cell (_, idcs) -> Array.exists idcs ~f:(Idx.axis_index_mentions_symbol s)
   | Chain_local _ -> false
 
+(* Whether a passed loop's iterations write distinct cells of [target]: its index is exactly one
+   component, a plain iterator, which no other component mentions. Anything else ([acc[i + j]], an
+   index in two components, a [Concat]) may alias cells, so its extent proves no chains. *)
+let passes_injectively target s =
+  match target with
+  | Chain_local _ -> false
+  | Chain_cell (_, idcs) ->
+      Array.count idcs ~f:(Idx.axis_index_mentions_symbol s) = 1
+      && Array.exists idcs ~f:(function Idx.Iterator s' -> Idx.equal_symbol s s' | _ -> false)
+
 (* The carrier of a member with [target] under [frames] (innermost first): its index and body, and
-   the product of the passed loops' extents; [None] when the walk meets a stop first. *)
+   the product of the passed loops' extents; [None] when the walk meets a stop first, or a passed
+   loop that does not address distinct cells. *)
 let rec chain_carrier target ~passed = function
   | [] | Chain_stop :: _ -> None
   | Chain_loop { hardware = true; _ } :: _ -> None
   | Chain_loop { index; extent; body; _ } :: rest ->
-      if target_mentions target index then chain_carrier target ~passed:(passed * extent) rest
+      if target_mentions target index then
+        if passes_injectively target index then chain_carrier target ~passed:(passed * extent) rest
+        else None
       else Some (index, body, passed)
 
 (* The chains of a carrier loop's body: [Some n] summing its members' distinct cells, [None] when
    the body holds a barrier or a member reads another member's accumulator. *)
 let carrier_chains ~is_private ~carrier (body : Low_level.t) =
-  let members = ref [] and barrier = ref false in
+  (* [members]: one entry per distinct target, what is counted; [updates]: every member update, what
+     the dependence check reads -- a later update of a counted target may read another. *)
+  let members = ref [] and updates = ref [] and barrier = ref false in
   let rec walk frames (c : Low_level.t) =
     match c with
     | Low_level.Seq (a, b) ->
@@ -429,6 +445,7 @@ let carrier_chains ~is_private ~carrier (body : Low_level.t) =
             let outer = Chain_loop { index = carrier; extent = 1; hardware = false; body } in
             match chain_carrier target ~passed:1 (frames @ [ outer ]) with
             | Some (idx, _, passed) when Idx.equal_symbol idx carrier ->
+                updates := (target, value) :: !updates;
                 if not (List.exists !members ~f:(fun (t, _, _) -> equal_chain_target t target)) then
                   members := (target, passed, value) :: !members
             | _ -> ()))
@@ -458,8 +475,21 @@ let carrier_chains ~is_private ~carrier (body : Low_level.t) =
     in
     go sc
   in
-  if !barrier || List.is_empty !members then None
-  else if List.exists !members ~f:(fun (t, _, v) -> reads_other t v) then None
+  (* Distinct targets of one node are disjoint only while they are single cells: a member spanning a
+     passed loop's cells beside another member of its node may overlap it. *)
+  let overlapping =
+    List.exists !members ~f:(fun (t, passed, _) ->
+        passed > 1
+        &&
+        match t with
+        | Chain_local _ -> false
+        | Chain_cell (tn, _) ->
+            List.count !members ~f:(fun (t', _, _) ->
+                match t' with Chain_cell (tn', _) -> Tn.equal tn tn' | Chain_local _ -> false)
+            > 1)
+  in
+  if !barrier || List.is_empty !members || overlapping then None
+  else if List.exists !updates ~f:(fun (t, v) -> reads_other t v) then None
   else Some (List.sum (module Int) !members ~f:(fun (_, passed, _) -> passed))
 
 (* The op census {!analyze} charges, shared with {!launch_contexts}: [on_ops ctx ~tile ops] is

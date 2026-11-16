@@ -265,6 +265,35 @@ let () =
   p "accumulators whose updates read each other are no independent chains"
     (chains_are ~private_:[ a ] linked [ None ]);
   p "a guarded update counts no chain" (chains_are ~private_:[ a ] guarded [ None ]);
+  (* A repeated target's later update reading another accumulator: [a0 += x; a1 += x; a0 += a1]. *)
+  let late =
+    Ll_test.loop_n k 8
+      (List.reduce_exn ~f:Ll_test.seq
+         [ upd 0 xk; upd 1 xk; upd 0 (Ll_test.get a [| Ll_test.fixed 1 |]) ])
+  in
+  p "a repeated target's later update reading another accumulator makes the chains dependent"
+    (chains_are ~private_:[ a ] late [ None ]);
+  (* Inner loops that do not address distinct cells: [acc[i + j]] over i, j < 4 is 7 cells, not 16;
+     and a looped member beside a single cell of the same node may overlap it. *)
+  let s7 = fresh_tn "cf_dep_s" [| 7 |] in
+  let i = Ll_test.sym () and j = Ll_test.sym () in
+  let sum_idx = Ll_test.aff [ (1, i); (1, j) ] 0 in
+  let aliased =
+    Ll_test.loop_n k 8
+      (Ll_test.loop_n i 4
+         (Ll_test.loop_n j 4
+            (Ll_test.set s7 [| sum_idx |] (Ll_test.add (Ll_test.get s7 [| sum_idx |]) xk))))
+  in
+  p "inner loops whose cells may alias prove no chains"
+    (chains_are ~private_:[ s7 ] aliased [ None ]);
+  let overlap =
+    Ll_test.loop_n k 8
+      (Ll_test.seq
+         (Ll_test.loop_n i 4 (Ll_test.set a [| it i |] (Ll_test.add (Ll_test.get a [| it i |]) xk)))
+         (upd 2 xk))
+  in
+  p "a looped member beside a single cell of its node may overlap it: no chains"
+    (chains_are ~private_:[ a ] overlap [ None ]);
   p "elementwise work counts no chain" (chains_are ~private_:[ e ] elementwise [ None ]);
   (* The fill: 4 blocks of 16 threads, a quarter of P = 4 at t = 64. With 4 chains a thread (at the
      cap) the tile keeps that quarter; its one-accumulator twin's threads count a quarter each: 4 *
