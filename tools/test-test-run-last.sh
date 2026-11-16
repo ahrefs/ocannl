@@ -76,6 +76,8 @@
 #      sees neither. The former unqualified argv is the contamination control.
 # 105c. a fake at the census/pointer seam publishes a completed repeat on
 #      either side of the pointer read; its verdict is never marked queued.
+#      The no-retry control covers the before seam. The after seam also pins
+#      the sighting's mark on the first run, with an omitted-mark control.
 #      Only the census and pointer are faked; follow_last and its mark readers
 #      are extracted from the subject. The extraction allowlist is follow_last,
 #      note_queued and queued_unpublished: an exact top-level function header
@@ -854,11 +856,11 @@ q_until 10 test -e "$TMP/isolation-a.ready" && q_until 10 test -e "$TMP/isolatio
 for state in "$q_runs" "$foreign"; do
   rc=0
   OCANNL_TOOL_TEST_RUNS=$state PATH=$q_bin:$PATH "$q_root/tools/test-run.sh" status last >"$TMP/isolation.out" 2>&1 || rc=$?
-  [ "$rc" = 3 ] && grep -q '^queued:' "$TMP/isolation.out" || detail="own fixture $state: exit $rc: $(cat "$TMP/isolation.out")"
+  [ "$rc" = 3 ] && grep -q '^queued:' "$TMP/isolation.out" || detail="${detail:+$detail; }own fixture $state: exit $rc: $(cat "$TMP/isolation.out")"
 done
 rc=0
 OCANNL_TOOL_TEST_RUNS=$observer PATH=$q_bin:$PATH "$q_root/tools/test-run.sh" status last >"$TMP/isolation.out" 2>&1 || rc=$?
-[ "$rc" = 0 ] || detail="independent observer: exit $rc (want 0): $(cat "$TMP/isolation.out")"
+[ "$rc" = 0 ] || detail="${detail:+$detail; }independent observer: exit $rc (want 0): $(cat "$TMP/isolation.out")"
 if [ -z "$detail" ]; then
   report 0 "two simultaneous unknown-directory fixtures are invisible under another state root"
 else
@@ -905,14 +907,19 @@ done
 # that read. The next read must follow the completed repeat in either case.
 local seam rc variant source
 # This mutation changes only the retry, leaving the same census and pointers.
-# It must mark the newly published repeat and fail the functional check.
+# On the before seam it must mark the newly published repeat and fail.
 sed 's/    \[ "$run_dir" != "$before" \] || break/    break/' "$extracted" >"$TMP/follow-no-retry.sh"
 if cmp -s "$extracted" "$TMP/follow-no-retry.sh"; then
   harness_abandon "cannot remove the follow_last retry for its control"; return
 fi
-for variant in before after no-retry; do
+sed 's/  \[ -z "$pending_out" \] || note_queued "$run_dir"/  :/' "$extracted" >"$TMP/follow-no-mark.sh"
+if cmp -s "$extracted" "$TMP/follow-no-mark.sh"; then
+  harness_abandon "cannot remove the sighting mark for its control"; return
+fi
+for variant in before after no-retry no-mark; do
   seam=$variant source=$extracted
   if [ "$variant" = no-retry ]; then seam=before; source=$TMP/follow-no-retry.sh; fi
+  if [ "$variant" = no-mark ]; then seam=after; source=$TMP/follow-no-mark.sh; fi
   (
     . "$source"
     first=$TMP/follow-$variant/first repeat=$TMP/follow-$variant/repeat
@@ -932,13 +939,19 @@ for variant in before after no-retry; do
       fi
     }
     follow_last
+    if [ "$seam" = after ] && [ ! -e "$first/queued-after" ]; then
+      echo "the sighting was not marked on the first run"
+      exit 1
+    fi
     follow_last
     [ "$run_dir" = "$repeat" ] && [ -z "$pending_out" ] && ! queued_unpublished "$repeat"
   ) >"$TMP/follow-$variant.out" 2>&1
   rc=$?
-  if [ "$variant" = no-retry ]; then
-    if [ "$rc" = 1 ]; then report 0 "negative control: removing the pointer retry queues a published repeat"
-    else report 1 "negative control: removing the pointer retry queues a published repeat" "exit $rc (want 1)"; fi
+  if [ "$variant" = no-retry ] || [ "$variant" = no-mark ]; then
+    local label="negative control: removing the pointer retry queues a published repeat"
+    if [ "$variant" = no-mark ]; then label="negative control: omitting the sighting mark loses the first run's refusal"; fi
+    if [ "$rc" = 1 ]; then report 0 "$label"
+    else report 1 "$label" "exit $rc (want 1)"; fi
   else
     report "$rc" "a completed repeat published $seam the pointer read is never queued" "$(cat "$TMP/follow-$variant.out")"
   fi
