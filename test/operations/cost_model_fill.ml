@@ -351,6 +351,28 @@ let () =
   in
   p "a member zeroed inside the reduction step carries no chain"
     (chains_are ~private_:[ a ] zeroed [ None ]);
+  (* A local declared inside the step is reset every step, not carried. *)
+  let lid = Ir.Low_level.get_scope a in
+  let declared =
+    Ll_test.loop_n k 8
+      (List.reduce_exn ~f:Ll_test.seq
+         [
+           Ll_test.declare_local ~needs_init:true lid;
+           LL.Set_local (lid, Ll_test.add (LL.Get_local lid) xk);
+         ])
+  in
+  p "a local declared inside the reduction step carries no chain" (chains_are declared [ None ]);
+  (* Two loops of one index symbol (a materialized unroll copies bodies with their indices) are two
+     carriers: 1 and 2 chains. *)
+  let twins =
+    Ll_test.seq
+      (Ll_test.loop_n k 8 (upd 0 xk))
+      (Ll_test.loop_n k 8 (Ll_test.seq (upd 0 xk) (upd 1 xk)))
+  in
+  p "two carriers sharing an index symbol are counted each on its own body"
+    (List.equal (Option.equal Int.equal)
+       (List.sort ~compare:(Option.compare Int.compare) (census ~private_:[ a ] twins))
+       [ Some 1; Some 2 ]);
   (* Inner loops that do not address distinct cells: [acc[i + j]] over i, j < 4 is 7 cells, not 16;
      and a looped member beside a single cell of the same node may overlap it. *)
   let s7 = fresh_tn "cf_dep_s" [| 7 |] in

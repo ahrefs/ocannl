@@ -448,7 +448,9 @@ let carrier_chains ~is_private ~carrier (body : Low_level.t) =
         foreign := `Node tn :: !foreign
     (* Opaque code may write anything: as a barrier, it leaves the carrier uncounted. *)
     | Staged_compilation _ -> barrier := true
-    | Noop | Comment _ | Declare_local _ -> ()
+    (* A local declared inside the step lives one step: it is reset, not carried. *)
+    | Declare_local { id; _ } -> foreign := `Local id :: !foreign
+    | Noop | Comment _ -> ()
   and update frames (c : Low_level.t) written =
     match chain_target ~is_private c with
     | None -> foreign := written :: !foreign
@@ -549,7 +551,9 @@ let carrier_chains ~is_private ~carrier (body : Low_level.t) =
    total and the [flops_approx] / [opaque] flags. *)
 let op_census ?is_private ~on_ops (code : Low_level.t) : int * bool * bool =
   let flops_approx = ref false and opaque = ref false in
-  let carriers = Hashtbl.create (module Idx.Symbol) in
+  (* Keyed by the carrier loop's body itself, not its index: a materialized unroll copies a body
+     with its loop indices, so one symbol can carry loops of different bodies. *)
+  let carriers = ref [] in
   let chains_of frames (c : Low_level.t) =
     match is_private with
     | None -> None
@@ -559,9 +563,13 @@ let op_census ?is_private ~on_ops (code : Low_level.t) : int * bool * bool =
         | Some (target, _) -> (
             match chain_carrier target ~passed:1 frames with
             | None -> None
-            | Some (carrier, body, _) ->
-                Hashtbl.find_or_add carriers carrier ~default:(fun () ->
-                    carrier_chains ~is_private ~carrier body)))
+            | Some (carrier, body, _) -> (
+                match List.Assoc.find !carriers body ~equal:phys_equal with
+                | Some chains -> chains
+                | None ->
+                    let chains = carrier_chains ~is_private ~carrier body in
+                    carriers := (body, chains) :: !carriers;
+                    chains)))
   in
   let emit ?(chains = None) ~report ctx ~tile ops =
     if report && ops > 0 then on_ops ctx ~tile ~chains ops;
