@@ -15,7 +15,7 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
-# Groups: #lifecycle (99, 105), #queries (100), #harness (102), #hermetic (70).
+# Groups: #lifecycle (99, 105, 105b, 105c), #queries (100), #harness (102), #hermetic (70).
 #
 # Legs:
 #  99. `wait last` and `status last` follow a launch still in flight
@@ -71,6 +71,16 @@
 #      is unknown and so here, a root holding whitespace is read exact from
 #      /proc and never excludes a launch elsewhere, and one exported alone is
 #      the loud over-read on every host (environments are never read).
+# 105b. two simultaneous unknown-directory fixtures identify their state roots
+#      in exec argv: both see their own queued launch, an independent observer
+#      sees neither. The former unqualified argv is the contamination control.
+# 105c. a fake at the census/pointer seam publishes a completed repeat on
+#      either side of the pointer read; its verdict is never marked queued.
+#      Only the census and pointer are faked; follow_last and its mark readers
+#      are extracted from the subject. The extraction allowlist is follow_last,
+#      note_queued and queued_unpublished: an exact top-level function header
+#      through the next unindented closing brace. No shell text or process
+#      environment is interpreted by these fixtures or the production census.
 # 102 sits last: this harness, run on leg 99 with --subject naming a copy of
 #      the script whose `prepush --list` rule is taken out of proc_table_perl,
 #      exits 1 with exactly the one check that rule answers failed, having
@@ -134,12 +144,21 @@ q_last() { q "$1" paths run last 2>/dev/null; }
 # carrying its very argv, alone once the wrapper is gone. And one that
 # runs CMD first and then lives on, in a subshell, until RELEASE: the shape of
 # a wrapper winding down after its batch (the subshell is its fork).
+# An unknown directory intentionally belongs to every possible worktree, but
+# its fixture still has a known state root. Put that identity in EXEC ARGV:
+# exporting it alone would make this wrapper a launch in every parallel fixture.
+q_unknown_chdir() { # state root -> q_unknown argv (the unread operand stays literal)
+  # Only the unread directory goes through -S. The root stays one exact argv
+  # word even when its path holds whitespace (/proc preserves those words).
+  q_unknown=(env -S '-C ${QUEUED_REPO}' "OCANNL_TOOL_TEST_RUNS=$1" tools/test-run.sh run build @red)
+}
 q_slot=$TMP/q-slot.sh q_linger_sh=$TMP/q-linger.sh
 cat >"$q_slot" <<'EOF'
 #!/usr/bin/env bash
 release=$1 how=$2
 shift 3
 main=$$
+: >"$release.ready"
 ( (while kill -0 "$main" 2>/dev/null; do sleep .1; done; sleep 1) </dev/null >/dev/null 2>&1 & )
 while ! rm "$release" 2>/dev/null; do sleep .1; done
 [ "$how" = exec ] || exit 75
@@ -807,11 +826,125 @@ q_case 0 0 3 "$q_root" env "OCANNL_TOOL_TEST_RUNS=$q_other" tools/test-run.sh ru
   Q_OTHER_RUNS="$q_root/~/queued-tilde" q_case 0 0 3 "$q_root" env 'OCANNL_TOOL_TEST_RUNS=~/queued-tilde' tools/test-run.sh run build @red &&
   Q_OTHER_RUNS="$q_other " q_case 0 0 3 "$q_root" env "OCANNL_TOOL_TEST_RUNS=$q_other " tools/test-run.sh run build @red &&
   q_case 3 0 3 "$q_root" env -S 'OCANNL_TOOL_TEST_RUNS=${HOME}/queued-unread tools/test-run.sh run build @red' &&
-  q_case 3 3 - "$TMP" env -S '-C ${QUEUED_REPO} tools/test-run.sh run build @red' &&
+  q_unknown_chdir "$q_runs" && q_case 3 3 - "$TMP" "${q_unknown[@]}" &&
   Q_ENV_RUNS=$q_other q_case 3 0 3 "$q_root" tools/test-run.sh run build @red || :
 if [ -z "$q_detail" ]; then report 0 "$q_root_label"; else report 1 "$q_root_label" "$q_detail"; fi
 }
 harness_leg_run '105: the residuals of following a queued launch: env -C, a shell-held launch, another state root #lifecycle' leg_105
+
+
+leg_105b() {
+local foreign=$TMP/isolation-foreign-runs observer=$TMP/isolation-observer-runs
+local detail= rc
+mkdir -p "$foreign" "$observer"
+# Each state root has its own completed green run before the two fixtures
+# queue. The observer reads the same worktree under its own independent root.
+for state in "$q_runs" "$foreign" "$observer"; do
+  OCANNL_TOOL_TEST_RUNS=$state PATH=$q_bin:$PATH "$q_root/tools/test-run.sh" run build @ok >/dev/null 2>&1 ||
+    { harness_abandon "cannot seed isolation state $state"; return; }
+done
+q_unknown_chdir "$q_runs"
+q_wrap "$TMP" "$TMP/isolation-a" exec "${q_unknown[@]}"
+q_unknown_chdir "$foreign"
+q_wrap "$TMP" "$TMP/isolation-b" exec "${q_unknown[@]}"
+q_until 10 test -e "$TMP/isolation-a.ready" && q_until 10 test -e "$TMP/isolation-b.ready" ||
+  { harness_abandon "the two isolation wrappers did not become ready"; q_kill_all; return; }
+# Reading queued proves each wrapper reached the census; no timing-only
+# assumption that its argv was installed before the observer reads it.
+for state in "$q_runs" "$foreign"; do
+  rc=0
+  OCANNL_TOOL_TEST_RUNS=$state PATH=$q_bin:$PATH "$q_root/tools/test-run.sh" status last >"$TMP/isolation.out" 2>&1 || rc=$?
+  [ "$rc" = 3 ] && grep -q '^queued:' "$TMP/isolation.out" || detail="own fixture $state: exit $rc: $(cat "$TMP/isolation.out")"
+done
+rc=0
+OCANNL_TOOL_TEST_RUNS=$observer PATH=$q_bin:$PATH "$q_root/tools/test-run.sh" status last >"$TMP/isolation.out" 2>&1 || rc=$?
+[ "$rc" = 0 ] || detail="independent observer: exit $rc (want 0): $(cat "$TMP/isolation.out")"
+if [ -z "$detail" ]; then
+  report 0 "two simultaneous unknown-directory fixtures are invisible under another state root"
+else
+  report 1 "two simultaneous unknown-directory fixtures are invisible under another state root" "$detail"
+fi
+# Replay the former argv only in this reader's process-table snapshot. A
+# genuinely unqualified wrapper on the host would contaminate OTHER workers
+# while this control ran, recreating precisely the flake being fixed.
+local control=$TMP/isolation-control.sh
+Q_OLD_ARGV='  @w = grep { length } map { s/OCANNL_TOOL_TEST_RUNS=\Q$ENV{Q_OLD_RUNS}\E(?: )?//g; $_ } @w;' \
+  perl -0777 -pe '
+    BEGIN { $n = 0 }
+    $n += s/^(  my \(\$at, \$ww\) = positions\(\@w\);)$/$ENV{Q_OLD_ARGV}."\n".$1/me;
+    END { die "no unique census seam\n" unless $n == 1 }
+  ' "$q_root/tools/test-run.sh" >"$control"
+if [ "$?" != 0 ]; then
+  harness_abandon "cannot build the former-argv census control"; q_kill_all; return
+fi
+cp "$control" "$q_root/tools/test-run.sh"
+rc=0
+Q_OLD_RUNS=$foreign OCANNL_TOOL_TEST_RUNS=$observer PATH=$q_bin:$PATH "$q_root/tools/test-run.sh" status last >"$TMP/isolation.out" 2>&1 || rc=$?
+cp "$SRC" "$q_root/tools/test-run.sh"
+if [ "$rc" = 3 ] && grep -q '^queued:' "$TMP/isolation.out"; then
+  report 0 "negative control: the former unqualified fixture contaminates another state root"
+else
+  report 1 "negative control: the former unqualified fixture contaminates another state root" "exit $rc: $(cat "$TMP/isolation.out")"
+fi
+q_kill_all
+}
+harness_leg_run '105b: simultaneous fixtures isolate unknown directories by state root #lifecycle' leg_105b
+
+leg_105c() {
+local fn extracted=$TMP/follow-extracted.sh
+: >"$extracted"
+for fn in follow_last note_queued queued_unpublished; do
+  sed -n "/^$fn() {/,/^}/p" "$SRC" >"$TMP/follow-one.sh"
+  if ! grep -q "^$fn() {" "$TMP/follow-one.sh" || [ "$(tail -n1 "$TMP/follow-one.sh")" != '}' ]; then
+    harness_abandon "cannot extract $fn from $SRC"; return
+  fi
+  cat "$TMP/follow-one.sh" >>"$extracted"
+done
+# Execute the real reader against a deterministic census/pointer seam. One
+# publication happens before the second pointer read; the other just after
+# that read. The next read must follow the completed repeat in either case.
+local seam rc variant source
+# This mutation changes only the retry, leaving the same census and pointers.
+# It must mark the newly published repeat and fail the functional check.
+sed 's/    \[ "$run_dir" != "$before" \] || break/    break/' "$extracted" >"$TMP/follow-no-retry.sh"
+if cmp -s "$extracted" "$TMP/follow-no-retry.sh"; then
+  harness_abandon "cannot remove the follow_last retry for its control"; return
+fi
+for variant in before after no-retry; do
+  seam=$variant source=$extracted
+  if [ "$variant" = no-retry ]; then seam=before; source=$TMP/follow-no-retry.sh; fi
+  (
+    . "$source"
+    first=$TMP/follow-$variant/first repeat=$TMP/follow-$variant/repeat
+    mkdir -p "$first" "$repeat"
+    QUEUED=$TMP/follow-$variant/queued
+    pointer=$first seen=0 reads=0
+    last_quietly() {
+      run_dir=$pointer
+      reads=$((reads + 1))
+      if [ "$seam" = after ] && [ "$reads" = 2 ]; then pointer=$repeat; fi
+    }
+    pending_launches() {
+      pending_out=
+      if [ "$seen" = 0 ]; then
+        seen=1 pending_out='123 queued repeat'
+        [ "$seam" != before ] || pointer=$repeat
+      fi
+    }
+    follow_last
+    follow_last
+    [ "$run_dir" = "$repeat" ] && [ -z "$pending_out" ] && ! queued_unpublished "$repeat"
+  ) >"$TMP/follow-$variant.out" 2>&1
+  rc=$?
+  if [ "$variant" = no-retry ]; then
+    if [ "$rc" = 1 ]; then report 0 "negative control: removing the pointer retry queues a published repeat"
+    else report 1 "negative control: removing the pointer retry queues a published repeat" "exit $rc (want 1)"; fi
+  else
+    report "$rc" "a completed repeat published $seam the pointer read is never queued" "$(cat "$TMP/follow-$variant.out")"
+  fi
+done
+}
+harness_leg_run '105c: publication across the census and pointer read never queues the completed repeat #lifecycle' leg_105c
 
 leg_100() {
 q_sib_label="every last lookup stays in its own worktree beside a sibling's newer run"
