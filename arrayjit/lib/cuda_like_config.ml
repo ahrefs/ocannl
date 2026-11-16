@@ -20,11 +20,11 @@ module Cuda = struct
   let fp8_typ = "__nv_fp8_e5m2"
   let bf16_arithmetic_intrinsics = true
 
-  (* gh-ocannl-1695: ptxas (13.4, sm_120) if-converts every value select OCANNL emits -- serial,
-     grid-parallel and bounds-guarded legs alike, a predicated load where the short-circuiting
-     spelling reads an arm -- so CUDA keeps that spelling ([branchless_select]'s census, which the
-     blend-off control at 2f2c7219 left green on CUDA): [cuda_facts.blends_value_selects] is
-     false. *)
+  (* gh-ocannl-1695: at the shipping floor PTX target, ptxas (13.4, sm_120) if-converts the value
+     selects in [branchless_select]'s census. Native sm_120 PTX instead branches on load-gating
+     selects (gh-ocannl-1822); the no-branch claim is floor-target-only. CUDA keeps short-circuiting
+     [?:] and [cuda_facts.blends_value_selects = false]: blending would also change the inline
+     fan-in guard's load accounting, without performance evidence here. *)
   let bf16_relu = ("__hmax_nan(__ushort_as_bfloat16((unsigned short)0x0000U), ", ")")
 
   (* [tanh.approx.f32], a hardware approximation, under fast math only: with [cuda_fast_math] off

@@ -54,12 +54,9 @@ let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~d
 let on_cc = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)
 let skipped = Verdict.skipped ~backend:backend_name
 
-(* The GPU backends whose code object a census can read (gh-ocannl-1695), by its dialect. Of them
-   HIP blends, since AMDGPU branched on every census leg; CUDA keeps the short-circuiting spelling,
-   which ptxas if-converts on every one (a predicated load), so there the census claim holds of that
-   spelling. Metal is neither: no tool here reads what its compiler emits (the offline [metal]
-   compiler ships with full Xcode only, and Apple's GPU ISA has no public disassembler), so it keeps
-   the short-circuiting spelling and its census claims are skipped by name. *)
+(* The GPU assembly dialects this census can read (gh-ocannl-1695). Metal has no public disassembler
+   here, so its assembly claims skip. CUDA's target boundary is in [census_claim]; select-emission
+   policy belongs to [Cuda_like_config.Cuda]. *)
 let gpu_dialect =
   match backend_name with "cuda" -> Some Asm.Sass | "hip" -> Some Asm.Amdgpu | _ -> None
 
@@ -286,19 +283,31 @@ let gpu_branch_free dialect ~patterns name =
               && not (Set.is_empty anchor))
             sites)
 
-(* The census claim on whichever compiler the backend has: cc's host compiler, a GPU's code object,
-   or -- on Metal -- a skip naming why. *)
+(* Read emitted select source lines in the backend compiler's assembly. CUDA's claim covers the
+   floor PTX target policy only, including the pool kernel (gh-ocannl-1822). *)
 let census_claim ~patterns ~gpu_patterns claim name =
-  if on_cc then p claim (compiled_branch_free ~patterns name)
-  else
-    match gpu_dialect with
-    | Some dialect -> p_all claim (gpu_branch_free dialect ~patterns:gpu_patterns name) ~f:Fn.id
-    | None ->
-        Stdio.eprintf
-          "branchless_select: %s: no census on %s: no tool here reads its compiler's output (not \
-           part of the golden)\n"
-          name backend_name;
-        skipped claim
+  let claim = claim ^ " (CUDA: floor PTX target only)" in
+  let native_cuda =
+    String.equal backend_name "cuda"
+    && Ir.Cuda_mma.equal_ptx_target (Ir.Cuda_mma.current_ptx_target ()) Native
+  in
+  if native_cuda then
+    Stdio.eprintf
+      "branchless_select: %s: native PTX is outside the floor-target claim (gh-ocannl-1822: seen \
+       with ptxas 13.4 at sm_120); value claims remain active\n"
+      name;
+  Verdict.gate ~aggregation:`Environment ~when_:(not native_cuda) ~on:"CUDA native PTX target" claim
+    (fun () ->
+      if on_cc then p claim (compiled_branch_free ~patterns name)
+      else
+        match gpu_dialect with
+        | Some dialect -> p_all claim (gpu_branch_free dialect ~patterns:gpu_patterns name) ~f:Fn.id
+        | None ->
+            Stdio.eprintf
+              "branchless_select: %s: no census on %s: no tool here reads its compiler's output \
+               (not part of the golden)\n"
+              name backend_name;
+            skipped claim)
 
 (* === The value legs. === *)
 
