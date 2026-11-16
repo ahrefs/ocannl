@@ -149,12 +149,13 @@ files.
   calls keep the tuple's type check by destructuring the translated constrained tuple once before
   the curried call. The head and tuple are bound together so the generated component binders
   cannot capture a renamed result-label parameter. Constraint-level `[@ocannl.no_scheme]` stops
-  tail marking before translation propagates the opt-out. Only tuple classification looks through constraints in grouping; numeric and
-  array/list axis annotations retain their existing precedence. `test/ppx/test_classification_constraints`
-  pins the expansions and `test/operations/op_classification_constraints` executes cc value parity
-  and scheme trace/check events. Restoring base `3ac86187`'s `ppx_op.ml` makes the new expansion
-  golden fail in all three regions: missing scheme, extra site wrappers, untranslated tuple
-  elements and uncurried calls.
+  tail marking before translation propagates the opt-out. Only tuple classification looks through
+  constraints in grouping; numeric and array/list axis annotations retain their existing
+  precedence. `test/ppx/test_classification_constraints` pins the expansions and
+  `test/operations/op_classification_constraints` executes cc value parity and scheme trace/check
+  events. The negative control restored `3ac86187`'s `ppx_op.ml` (the original control revision,
+  before later rebases) and made the new expansion golden fail in all three regions: missing
+  scheme, extra site wrappers, untranslated tuple elements and uncurried calls.
 - `%cd` composition seams verified by ppx expansion (gh-465, `Train.sgd_one`/`grad_update`): an
   OCaml variable of `Asgns.comp` type in statement position splices verbatim (so a
   programmatically built fragment can sit inside a `%cd` body); an inline declaration `{ x }`
