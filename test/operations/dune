@@ -10191,6 +10191,16 @@
   (pps ppx_ocannl)))
 
 (test
+ ; ocannl-backend: cc -- tests ppx initializer and call wiring through Context.cpu.
+ (name op_initializer_heads)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules op_initializer_heads)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_ocannl)))
+
+(test
  (name op_legality)
  (package neural_nets_lib)
  (deps

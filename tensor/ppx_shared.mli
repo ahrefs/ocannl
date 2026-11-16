@@ -147,5 +147,8 @@ val ndarray_op :
   ?axis_labels:expression -> ?label:expression -> ndarray_fn:expression -> expression -> expression
 (** Applies [ndarray_fn] to an ndarray literal's values, then batch/input/output axes and [()]. *)
 
-val add_module_qualifier_to_applied_function : ?module_name:string -> expression -> expression
-(** Qualifies tail applications' functions by [module_name] (default [NTDSL]), [*] as [matmul]. *)
+val add_module_qualifier_to_applied_function :
+  ?module_name:string -> ?is_primitive:(string -> bool) -> expression -> expression
+(** Qualifies tail applications' functions by [module_name] (default [NTDSL]), [*] as [matmul].
+    Removes absent optional labels on mapped operators and heads recognized by [is_primitive]
+    (default: none), preserving the full initializer signature after [%op] translation. *)

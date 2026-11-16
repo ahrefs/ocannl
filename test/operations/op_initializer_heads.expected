@@ -1,0 +1,12 @@
+tensor initializer computes its expected values: true
+literal initializer computes its expected values: true
+subtraction initializer computes its expected values: true
+multiplication initializer computes its expected values: true
+division initializer computes its expected values: true
+named binary initializer computes its expected values: true
+named unary initializer computes its expected values: true
+named ternary initializer computes its expected values: true
+binary head computes its expected values: true
+binary head and tuple computes its expected values: true
+ternary head computes its expected values: true
+ternary head and tuple computes its expected values: true
