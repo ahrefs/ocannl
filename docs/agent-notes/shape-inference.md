@@ -93,8 +93,8 @@ files.
   `Row_var` — the historical bug silently resolved xavier/kaiming fan products to 1 for every
   `{ w }` param with an inferred input row (fixed; regression `test/operations/layer_norm_1d.ml`,
   `test_default_init_std.ml`). Fixed-index output axes (`=> ...|0`, recognized via their
-  `At_least_dim`) must not be equated by the stage-2 singleton-bounds heuristic, so that they
-  broadcast at stage 7 (layer_norm's mean over a 1-D input once took dim 4).
+  `At_least_dim`) close minimal at stage 7 and broadcast into their consumers; equating one with a
+  consumer's axis once made layer_norm's mean over a 1-D input take dim 4.
 - Row closing goes by role, not by distance (gh-ocannl-2126). A row's GLB is forwarded along every
   variable-to-variable bound (`solve_row_ineq`'s `glb_forward` and `forward_glb_to_operands`), as a
   dimension's is. A row that resolves at its use sites closes to it. An operation result takes no
@@ -121,13 +121,17 @@ files.
   operation, under a self-product and under a compose operand close to one element (all three
   fill at `a98ee3785`), and that nested branching (`c + (u + (v *. w))`) still collapses or is
   refused; each family has a fixed program in the test.
-  The dimension twin of the guess stays (`solve_dim_ineq`, gh-ocannl-2141): it fires on every
-  mutually-sole pair, since the closure re-solves every stage-1 constraint at Stage2, and it
-  stands in for a dimension's role. Deleted (staging#1927), `Nn_blocks.dropout`'s mask closed to
-  one value over its input and the full suite stayed green; `dropout_mask_varies` pins it now
-  (gh-ocannl-2185). The role fix (gh-ocannl-2180, below) does not yet replace it: deleted on top
-  of that fix, `dropout_mask_varies`' masks and raw `uniform_at` draws over an unbatched
-  `term_init` vector still closed to one value or one block. Run that pin before deleting it.
+  The dimension twin of the guess is deleted too (`solve_dim_ineq`, gh-ocannl-2141): it fired on
+  every mutually-sole pair, since the closure re-solves every stage-1 constraint at Stage2, so a
+  solve depended on whether a bound was repeated (`test_row_bound_emissions` claims it does not).
+  Its first deletion (staging#1927) made `Nn_blocks.dropout`'s mask one value with the full suite
+  green (gh-ocannl-2185); on top of the role fix (gh-ocannl-2180, below) one case was left, and
+  it was a closing order, not a role: `uniform_at`'s `range_over_offsets` leaf axis is bounded
+  below only by the packed draw's block counter, which the draw sizes in the final stage itself,
+  and the final stage's guess closed the leaf to 1 first (16 elements drew 4 values). The guess
+  had equated the leaf with the counter. Now `draw_counter_leaves` defers such a leaf at Stage7
+  until the draw sizes the counter. Keep it narrow: deferring every resolve-at-use axis with an
+  open lower bound refused 13 oracle-solvable `shape_program_sweep` programs with a fixed index.
   A dimension's role (gh-ocannl-2180): a row closing to its GLB (`role_template`) takes fresh
   resolve-at-use variables bounded by the GLB's axes, not the axes themselves, which keep the
   role of the result that minted them (closing minimal: a draw behind `u + 1` used to repeat
@@ -151,7 +155,7 @@ files.
   others and raw draws distinct per element; the `row_glb_reach_executed` probes cover branching and repeated consumers, including documented
   repetition cases rather than claiming every draw fills. The full green suite missed a
   constant dropout mask after a guess deletion (gh-ocannl-2185, staging#1927); the failure story
-  and the dimension-role prerequisite for that guess are above.
+  and what that guess stood in for are above.
 - Implicit (omitted) row specs are shared and safe-to-guess; an explicit `...` stays strict; row
   variables in kernel slots need the `|` prefix. Symbolic extents (`Row.Sym`, gh-490) are rigid:
   equal only to themselves, materialized at their declared maximum; `Total_elems` against them

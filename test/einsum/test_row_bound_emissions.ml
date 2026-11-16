@@ -427,17 +427,14 @@ let () =
       p_none ~min:1000 "repeating a recorded bound in the stage-2 call changes no store's outcome"
         outcomes ~f:(fun o -> not (same o)))
 
-(* The dimension twin of the row guess (gh-ocannl-2141). From Stage2 on, re-processing a recorded
-   [d1 ⊑ d2] whose variables are each the other's only bound equates them, which a solution need not
-   do: [3 ⊑ 1_(bcast_if_1)] holds unequal. It matches only an edge already recorded, so it fires
-   only on a repeated bound -- and the closure repeats every bound, re-solving its stage-1
-   constraints at Stage2. Deleting it made [Nn_blocks.dropout]'s mask one value broadcast over its
-   input (gh-ocannl-2185): its merge carries a draw's resolve-at-use mark onto the axis a result's
-   template minted (gh-ocannl-2180), so it stays until that axis keeps its row's role. What does not
-   depend on the repeat is claimed; what does is printed, not claimed, so the guess's removal shows
-   as a diff. Each claim states a store a solution exists for, and claims it is solved with the
-   dimensions, sizes and bases, that solution prescribes, or a store none exists for, and claims it
-   is refused. *)
+(* The dimension twin of the row guess (gh-ocannl-2141). A Stage2 guess equated a recorded [d1 ⊑ d2]
+   whose variables were each the other's only bound, which a solution need not do: [3 ⊑
+   1_(bcast_if_1)] holds unequal. It matched only an edge already recorded, so it fired only on a
+   repeated bound -- and the closure repeats every bound, re-solving its stage-1 constraints at
+   Stage2. It is deleted; what it stood in for, a draw's counter leaf closing after the draw, is a
+   closing order now (test/operations/dropout_mask_varies). Each claim states a store a solution
+   exists for, and claims it is solved with the dimensions, sizes and bases, that solution
+   prescribes, or a store none exists for, and claims it is refused. *)
 
 let dim_ineq res opnd = Row.Dim_ineq { res; opnd; from_ = Sexp.Atom "test"; origin }
 let dim_eq d1 d2 = Row.Dim_eq { d1; d2; origin }
@@ -494,21 +491,29 @@ let () =
       p "the bound repeated last: solved alike"
         (dims_to
            [ default 3; top_ ]
-           (pair (fun d1 d2 -> [ [ three d1; to_top d2; dim_ineq d1 d2 ] ]))));
-  (* Where the repeat comes before an equation the guess equates the pair first, and the store is
-     refused. A guess made at the repeat-only call's fixpoint would do the same. *)
-  let show = function
-    | Ok dims ->
-        String.concat ~sep:" "
-          (List.map dims ~f:(function Some (d, b) -> Int.to_string d ^ "_" ^ b | None -> "?"))
-    | Error msg -> "Shape_error: " ^ msg
-  in
-  Stdio.printf "the dim twin, the bound repeated first: %s\n"
-    (show (pair (fun d1 d2 -> [ [ dim_ineq d1 d2; three d1; to_top d2 ] ])));
-  Stdio.printf "the dim twin, the equations swapped, the bound repeated first: %s\n"
-    (show (pair (fun d1 d2 -> [ [ dim_ineq d1 d2; to_top d2; three d1 ] ])));
-  Stdio.printf "the dim twin, the bound repeated alone, then a call per equation: %s\n"
-    (show (pair (fun d1 d2 -> [ [ dim_ineq d1 d2 ]; [ three d1 ]; [ to_top d2 ] ])));
+           (pair (fun d1 d2 -> [ [ three d1; to_top d2; dim_ineq d1 d2 ] ])));
+      (* Where the repeat comes before an equation, the deleted guess equated the pair first and
+         refused the store; a guess made at the repeat-only call's fixpoint would do the same. *)
+      p "the bound repeated first: solved alike"
+        (dims_to
+           [ default 3; top_ ]
+           (pair (fun d1 d2 -> [ [ dim_ineq d1 d2; three d1; to_top d2 ] ])));
+      p "the equations swapped, the bound repeated first: solved alike"
+        (dims_to
+           [ default 3; top_ ]
+           (pair (fun d1 d2 -> [ [ dim_ineq d1 d2; to_top d2; three d1 ] ])));
+      p "the equations swapped, the bound repeated last: solved alike"
+        (dims_to
+           [ default 3; top_ ]
+           (pair (fun d1 d2 -> [ [ to_top d2; three d1; dim_ineq d1 d2 ] ])));
+      p "the bound repeated alone, then a call per equation: solved alike"
+        (dims_to
+           [ default 3; top_ ]
+           (pair (fun d1 d2 -> [ [ dim_ineq d1 d2 ]; [ three d1 ]; [ to_top d2 ] ])));
+      p "the bound repeated alone, then a call per equation, swapped: solved alike"
+        (dims_to
+           [ default 3; top_ ]
+           (pair (fun d1 d2 -> [ [ dim_ineq d1 d2 ]; [ to_top d2 ]; [ three d1 ] ]))));
   Verdict.case "what a dimension bound still decides" (fun () ->
       p "d1<=d2 repeated, d1=3, d2=3: solved, equal"
         (dims_to
@@ -676,8 +681,9 @@ let () =
         (List.length solved > 0 && List.length solved < List.length outcomes);
       p_all ~min:500 "every dimension solution satisfies its store, on ground dimensions" solved
         ~f:(fun ((early, late, _), dims) -> List.for_all (early @ late) ~f:(dim_holds dims));
-      (* What the guess may do: refuse a store, or close it otherwise, but every solution it gives
-         still satisfies the store, and it solves nothing the single statement refused. *)
+      (* Every solution given with a bound repeated still satisfies the store, and a repeat changes
+         no store's outcome at all (gh-ocannl-2141: the deleted guess changed 21 stores by a repeat
+         and 43 by the re-solve). *)
       let repeated =
         List.concat_map outcomes ~f:(fun ((early, late, _), _, b, c) ->
             List.filter_map [ b; c ] ~f:(fun r ->
@@ -686,11 +692,7 @@ let () =
       p_all ~min:500
         "every solution with a bound repeated satisfies its store, on ground dimensions" repeated
         ~f:(fun (steps, dims) -> List.for_all steps ~f:(dim_holds dims));
-      p_none ~min:1000 "a repeated bound solves no store the single statement refused" outcomes
-        ~f:(fun (_, a, b, c) -> Result.is_error a && (Result.is_ok b || Result.is_ok c)));
-  (* Printed, not claimed: how many stores the repeat still decides (gh-ocannl-2141). *)
-  Stdio.printf
-    "the dimension sweep, stores changed by repeating a bound: %d; by re-solving stage 1 at stage \
-     2: %d\n"
-    (List.count outcomes ~f:(fun (_, a, b, _) -> not (same a b)))
-    (List.count outcomes ~f:(fun (_, a, _, c) -> not (same a c)))
+      p_none ~min:1000 "repeating a recorded bound in the stage-2 call changes no dimension store"
+        outcomes ~f:(fun (_, a, b, _) -> not (same a b));
+      p_none ~min:1000 "re-solving stage 1 at stage 2 changes no dimension store" outcomes
+        ~f:(fun (_, a, _, c) -> not (same a c)))

@@ -108,7 +108,6 @@ let exempt_zero_reference_exports =
     "Operation.deinterleave_odd";
     "Operation.einmax1";
     "Operation.embed_dim";
-    "Operation.embed_self_id";
     "Operation.embed_symbol";
     "Operation.eq";
     "Operation.exp";

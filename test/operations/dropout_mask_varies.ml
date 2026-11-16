@@ -62,6 +62,12 @@ let () =
              let x = ones [ 16 ] in
              let%op y = x *. uniform_at (step ()) in
              y));
+      (* Not a whole number of blocks: the counter takes 3 blocks of 4, the last one partly. *)
+      distinct "x[10] *. uniform_at step"
+        (values ~seed:7 (fun () ->
+             let x = ones [ 10 ] in
+             let%op y = x *. uniform_at (step ()) in
+             y));
       distinct "x *. (uniform_at step + 1)"
         (values ~seed:7 (fun () ->
              let x = ones [ 16 ] in
@@ -100,3 +106,36 @@ let () =
              let x = ones [ 16 ] in
              let%op y = x *. { w = normal () } in
              y)))
+
+(* gh-ocannl-2141: what the raw draw's values rest on. [uniform_at] hashes each block's offset
+   ([range_over_offsets], a leaf) with the key into the block counter, which the draw sizes from its
+   use site only in the final stage. The leaf, bounded below by the counter alone, must close after
+   it: closed first, it closed to 1, every block read offset 0, and 16 elements drew 4 values. Built
+   here by hand, as [Operation.uniform_at] builds it, to see the leaf and the counter. *)
+let () =
+  Verdict.case "a draw's offsets take its counter's size" (fun () ->
+      List.iter [ 16; 10 ] ~f:(fun n ->
+          Tensor.unsafe_reinitialize ();
+          Tensor.set_random_seed ~seed:7 ();
+          let x = ones [ n ] in
+          let key =
+            Ocannl.Operation.threefry4x32
+              (Ocannl.Operation.threefry4x32
+                 (Ocannl.Operation.embed_self_id ())
+                 (Tensor.get_random_seed ()) ())
+              (step ()) ()
+          in
+          let offsets =
+            Tensor.term ~fetch_op:Range_over_offsets ~grad_spec:Prohibit_grad
+              ~label:[ "range_over_offsets" ] ()
+          in
+          let counter = Ocannl.Operation.threefry4x32 key offsets () in
+          let y =
+            Ocannl.Operation.pointmul x (Ocannl.Operation.uint4x32_to_prec_uniform counter ()) ()
+          in
+          let ctx = Ocannl.Train.forward_once (Context.auto ()) y in
+          let numel t = Ir.Tnode.num_elems t.Tensor.value in
+          let name = "over " ^ Int.to_string n in
+          p (name ^ ": the counter holds one block per 4 elements") (numel counter = (n + 3) / 4);
+          p (name ^ ": the offsets leaf takes the counter's size") (numel offsets = numel counter);
+          Context.release ctx))
