@@ -362,7 +362,7 @@ let () =
     (Ir.C_syntax.equal_tensorization routine.Context.mma.Ir.C_syntax.tensorization
        Ir.C_syntax.Tensorized)
 
-(* === Every 16 x 16 CPU packed seed against the serial twin on NON-DYADIC operands, bitwise
+(* === Every 16 x 16 CPU packed composition against the serial twin on NON-DYADIC operands, bitwise
    (gh-ocannl-1682). The leg above runs dyadic operands checked by the host premise claim, so it
    cannot tell one rounding per k step from two. Here every product and partial sum rounds (steps of
    a tenth and of a third, cycled over prime moduli). The register tile spells its update as an
@@ -376,16 +376,16 @@ let () =
    (docs/agent-notes/backend-precision-and-simd.md). Each seed's distance from the serial loop, and
    the compile line, go to stderr.
 
-   The same seeds carry the k-block split (gh-ocannl-1670): every one, in each packing shape the
-   site seeds, partitions its k-block loop at the last full block ([Sched.pad_edge_partition]: k =
-   70 gives 4 full blocks and an edge block), so the serial-twin claim above covers the split seeds.
-   Each seed also runs with its [Partition] dropped (the unsplit composition the tuner seeded
-   before), bitwise equal to the split run under every contraction mode: a reorder of the k-chain,
-   or a multiply-add fused on one side only, would show on these operands. Structurally, the edge
-   segment keeps every [Where] the unsplit k-block loop held and the full segment holds no more;
-   where a seed packs in the kernel, the full segment holds fewer, having shed the k edge guards of
-   the zero-fringe packing nests (a hoisted operand's fringe is filled at link time, outside every k
-   loop). === *)
+   These compositions carry the k-block split (gh-ocannl-1670), including the Serial seed's Grid
+   twin even when the launch floor prunes it from the timing menu: every one partitions its k-block
+   loop at the last full block ([Sched.pad_edge_partition]: k = 70 gives 4 full blocks and an edge
+   block), so the serial-twin claim above covers the split seeds. Each composition also runs with
+   its [Partition] dropped (the unsplit composition the tuner seeded before), bitwise equal to the
+   split run under every contraction mode: a reorder of the k-chain, or a multiply-add fused on one
+   side only, would show on these operands. Structurally, the edge segment keeps every [Where] the
+   unsplit k-block loop held and the full segment holds no more; where a composition packs in the
+   kernel, the full segment holds fewer, having shed the k edge guards of the zero-fringe packing
+   nests (a hoisted operand's fringe is filled at link time, outside every k loop). === *)
 let () =
   let mav =
     Array.init (m_ext * k_ext)
@@ -417,13 +417,30 @@ let () =
     let ctx, routine =
       Context.compile
         ~lowered_transform:(fun opt ->
-          seeds :=
+          let proposed =
             List.filter
               (Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits:cpu_limits opt)
               ~f:(fun p ->
                 p.Autotune.sk_mma && (not p.Autotune.sk_gpu) && p.Autotune.sk_bm = bm
                 && p.Autotune.sk_bk = bk && (not p.Autotune.sk_epilogue)
-                && Option.is_none p.Autotune.sk_tile);
+                && Option.is_none p.Autotune.sk_tile)
+          in
+          (* This leg tests packing/partition composition, including its Grid variant, even when the
+             launch floor removes that variant from the timing menu (gh-ocannl-1857). Derive it from
+             the Serial seed and keep the two-shape population floor below. *)
+          let grid_twins =
+            List.filter_map proposed ~f:(fun p ->
+                if not (p.Autotune.sk_hoist || p.sk_grid || p.sk_pack_rest) then
+                  Some { p with sk_grid = true }
+                else None)
+            |> List.filter ~f:(fun twin ->
+                not
+                  (List.exists proposed ~f:(fun p ->
+                       Sexp.equal
+                         (Autotune.sexp_of_sketch_params p)
+                         (Autotune.sexp_of_sketch_params twin))))
+          in
+          seeds := proposed @ grid_twins;
           [ opt ])
         (Context.auto ())
         (named "nondyadic_serial" (Train.forward nc0))
@@ -533,14 +550,14 @@ let () =
             Array.foldi got ~init:0. ~f:(fun i acc g -> Float.max acc (Float.abs (g -. want.(i))))
           in
           Stdio.eprintf
-            "non-dyadic packed seed %d hoist=%b grid=%b pack_rest=%b: max |packed - serial| = %h \
-             (not part of the golden)\n\
+            "non-dyadic packed composition %d hoist=%b grid=%b pack_rest=%b: max |packed - serial| \
+             = %h (not part of the golden)\n\
              %!"
             i p.sk_hoist p.sk_grid p.sk_pack_rest max_diff;
           (p, tensorized, got, unsplit, partition, guards))
   in
   gated_all ~min:2 ~when_:on_cpu ~on:backend_name
-    "every 16x16 packed seed's routine is labeled tensorized" runs
+    "every 16x16 packed composition's routine is labeled tensorized" runs
     ~f:(fun (_, tensorized, _, _, _, _) -> tensorized);
   gated_all
     ~aggregation:(if on_cpu then `Environment else `Backend)
@@ -548,7 +565,7 @@ let () =
     ~on:
       (if on_cpu then "a kernel compile whose serial loop and tile round differently"
        else backend_name)
-    "every 16x16 packed seed matches the serial twin bitwise on non-dyadic operands" runs
+    "every 16x16 packed composition matches the serial twin bitwise on non-dyadic operands" runs
     ~f:(fun (_, _, got, _, _, _) -> Array.equal Float.equal got want);
   let shapes =
     List.dedup_and_sort
@@ -556,18 +573,19 @@ let () =
            (p.sk_hoist, p.sk_grid, p.sk_pack_rest)))
       ~compare:Poly.compare
   in
-  gated ~when_:on_cpu ~on:backend_name "the 16x16 packed seeds span at least two packing shapes"
+  gated ~when_:on_cpu ~on:backend_name
+    "the 16x16 packed compositions span at least two packing shapes"
     (List.length shapes >= 2);
   gated_all ~when_:on_cpu ~on:backend_name
-    "every 16x16 packed seed partitions its k-block loop at the last full block" runs
+    "every 16x16 packed composition partitions its k-block loop at the last full block" runs
     ~f:(fun (_, _, _, _, partition, _) ->
       match partition with Some (_, [ b ], [ _; _ ]) -> b = k_ext / bk | _ -> false);
   gated_all ~when_:on_cpu ~on:backend_name
-    "every k-split packed seed matches its unsplit composition bitwise" runs
+    "every k-split packed composition matches its unsplit composition bitwise" runs
     ~f:(fun (_, _, got, unsplit, _, _) -> Array.equal Float.equal got unsplit);
   gated_all ~when_:on_cpu ~on:backend_name
-    "every k-split packed seed's edge k segment keeps the unsplit k-block loop's Wheres, its full \
-     segment no more"
+    "every k-split packed composition's edge k segment keeps the unsplit k-block loop's Wheres, \
+     its full segment no more"
     runs ~f:(fun (_, _, _, _, _, guards) ->
       match guards with
       | Some (full, edge, unsplit) -> edge = unsplit && full <= unsplit
@@ -575,7 +593,7 @@ let () =
   (* Both operands are constants here, so a hoisting shape packs neither in the kernel: its k loop
      holds no packing nest, only the row mask's guards. *)
   gated_all ~min:2 ~when_:on_cpu ~on:backend_name
-    "every in-kernel-packing seed's full k segment sheds k edge guards"
+    "every in-kernel-packing composition's full k segment sheds k edge guards"
     (List.filter runs ~f:(fun ((p : Autotune.sketch_params), _, _, _, _, _) -> not p.sk_hoist))
     ~f:(fun (_, _, _, _, _, guards) ->
       match guards with Some (full, _, unsplit) -> full < unsplit | None -> false)

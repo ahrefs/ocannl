@@ -1470,7 +1470,9 @@ files.
   same geometry on the pool at a 4096 floor. The check is two-sided: a refusal admitted at
   the lowered floor must render below the original floor, and the typed renderer count must
   not exceed the bound (equal on unpadded witnesses). A 72x32x64 padded witness detects a
-  dropped fragment term. Full padded blocks and repeated fragment transfers
+  dropped fragment term. `schedule_pad` derives the Serial seed's Grid twin explicitly so the
+  partition-composition test retains both in-kernel packing shapes even when seeding prunes the
+  Grid launch. Full padded blocks and repeated fragment transfers
   make the bound conservative; fused epilogues remain unknown and are retained because their
   additional stores are outside this geometry estimate.
 - **A test decides how a `Tile_mma` rendered from the census, never the source** (gh-ocannl-1316).
