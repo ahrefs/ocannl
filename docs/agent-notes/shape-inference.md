@@ -200,6 +200,12 @@ files.
   fixture in `row_glb_reach_executed` holds a packed draw's GLB tail open through stage 6a, then
   closes it at stage 6b: `eliminate_row_constraint` rereads it and retains its three cells, so a
   closed tail cannot strand that draw on the minimal path merely by missing the stage-6a arm.
+  The late-tail pin is a staged store; no natural program reaching that exact path was found,
+  and its configured draw is an execution smoke check, not an execution through stage 6b.
+  Mixed `Var`/`Sym` or `Affine` joins remain outside this numeric fix; there is no claim that
+  those joins preserve both bounds. Packed `Total_elems` rejects symbolic axes, so a symbolic
+  regression needs a different supported path. The mixed row-store pins in `test_row_glb_reach`
+  distinguish holding the old GLB: without it the displaced result closes 1 while its draw is 3.
   A solved row passes its role on too (gh-ocannl-2247): when `unify_row` commits `v := value` for a
   marked `v`, the dimension variables of `subst_row env value` take the mark. A draw read through an
   einsum spec (`u ++ "ab => ba"`) is solved to the spec's axes, minted for the result; unmarked,

@@ -19,6 +19,12 @@ incompatible bounds join to the broadcast top: true
   [3] [3] [3]
 one result: the leaf takes the use site's 3, and the result with it: true
 two results: the leaf takes 3, and both results with it: true
+variable bound, then concrete 3  (rows result draw; counter)
+  [3] [3] 1
+concrete 3, then variable bound  (rows result draw; counter)
+  [3] [3] 1
+the displaced old variable remains related to the draw: true
+the displaced incoming variable remains related to the draw: true
 [5].<t> <= r <= u, draw over [u]  (rows u r y; counter)
   [5] [5] [5] 2
 [5].<t> <= r <= u twice, draw over [u]  (rows u r y; counter)

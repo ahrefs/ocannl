@@ -194,6 +194,37 @@ let () =
   pf "one result: the leaf takes the use site's 3, and the result with it" (one [ "[3]"; "[3]" ]);
   pf "two results: the leaf takes 3, and both results with it" (two [ "[3]"; "[3]"; "[3]" ])
 
+(* gh-ocannl-2224: each mixed orientation retains the displaced variable's relation. A closed row
+   with its own result axis has no other equation that could repair a lost bound. *)
+let () =
+  Verdict.case "mixed bounds retain both consumers" @@ fun () ->
+  let store ~concrete_first () =
+    let u = fresh () in
+    Row.add_resolve_at_use (var_of u);
+    let r = { (closed []) with dims = [ Row.Var (Row.get_var ()) ] } in
+    let counter, total = draw [ u ] in
+    let bounds =
+      if concrete_first then [ [ ineq (closed [ 3 ]) u ]; [ ineq r u ] ]
+      else [ [ ineq r u ]; [ ineq (closed [ 3 ]) u ] ]
+    in
+    ( [],
+      [ r; u ],
+      bounds @ [ [ total ] ],
+      [ (fun env -> Option.value_map (Row.get_dim_val env counter) ~default:"?" ~f:Int.to_string) ]
+    )
+  in
+  let variable_first =
+    closes "variable bound, then concrete 3  (rows result draw; counter)"
+      (store ~concrete_first:false)
+  in
+  let concrete_first =
+    closes "concrete 3, then variable bound  (rows result draw; counter)"
+      (store ~concrete_first:true)
+  in
+  pf "the displaced old variable remains related to the draw" (variable_first [ "[3]"; "[3]"; "1" ]);
+  pf "the displaced incoming variable remains related to the draw"
+    (concrete_first [ "[3]"; "[3]"; "1" ])
+
 (* gh-ocannl-2244: a packed draw under one result, below a result row with a concrete axis and an
    open tail ([relu u *. c[|5]]: the product's row is [5].<t>). The draw's GLB, [5].<t>, has no
    variable axis; the draw waited at stage 6a on its open tail, and the result between, closing

@@ -161,9 +161,9 @@ reduce (u + 1) + (u *. c[|3]), mixed separate bounds reversed
 reduce (u + 1) + (u *. c[|3]), mixed separate bounds reversed: every draw closes to 3: true
 reduce (u + 1) + (u *. c[|3]), mixed separate bounds reversed: every draw fills its use site: true
 late-tail fixture: the packed draw is open after Stage6a: true
-late-tail fixture: the closed GLB is retained: true
+late-tail fixture: the closed GLB is retained at Stage6b: true
 late-tail fixture: three cells use one counter block: true
-packed draw with a GLB tail closed at Stage6b
+packed draw using late-tail fixture dimensions (smoke)
   draw = 3, 3 distinct values for 3 cells
-packed draw with a GLB tail closed at Stage6b: every draw closes to 3: true
-packed draw with a GLB tail closed at Stage6b: every draw fills its use site: true
+packed draw using late-tail fixture dimensions (smoke): every draw closes to 3: true
+packed draw using late-tail fixture dimensions (smoke): every draw fills its use site: true

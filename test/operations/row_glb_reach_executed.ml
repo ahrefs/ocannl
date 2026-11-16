@@ -313,7 +313,9 @@ let () =
 (* gh-ocannl-2224: the late-tail boundary is staged deliberately: all ordinary program constraints
    register before closing. A packed draw's GLB has a concrete leading axis over a tail held open
    through Stage6a; supply the tail equation at Stage6b. This exercises the fallback's GLB read,
-   rather than the Stage6a role arm. Execute a packed draw at the resulting extent too. *)
+   rather than the Stage6a role arm. No natural program reaching this exact late-tail path was
+   found; the solver claims pin that path, and the draw configured from its dimensions is a smoke
+   check. *)
 module Row = Ocannl.Row
 
 let late_tail_dims () =
@@ -363,21 +365,22 @@ let late_tail_dims () =
       (Row.Row_eq { r1 = tail; r2 = empty; origin } :: pending)
       env
   in
-  let pending, env = Row.solve_inequalities ~stage:Stage7 pending env in
-  Shape.refuse_unsolved ~where:"late packed draw tail" pending;
   let solved = Row.subst_row env draw in
-  p "late-tail fixture: the closed GLB is retained"
+  p "late-tail fixture: the closed GLB is retained at Stage6b"
     (Row.is_broadcastable solved.bcast
     && List.equal Int.equal
          (List.map (solved.beg_dims @ solved.dims) ~f:(function Row.Dim { d; _ } -> d | _ -> 0))
          [ 3 ]);
   p "late-tail fixture: three cells use one counter block"
     (Option.equal Int.equal (Row.get_dim_val env counter) (Some 1));
+  let pending, _env = Row.solve_inequalities ~stage:Stage7 pending env in
+  Shape.refuse_unsolved ~where:"late packed draw tail" pending;
   List.map (solved.beg_dims @ solved.dims) ~f:(fun d ->
       match d with Row.Dim { d; _ } -> d | _ -> failwith "late-tail dimension unresolved")
 
 let () =
-  draws "packed draw with a GLB tail closed at Stage6b" ~want:"3" ~fills:(Some true) (fun () ->
+  draws "packed draw using late-tail fixture dimensions (smoke)" ~want:"3" ~fills:(Some true)
+    (fun () ->
       let dims = late_tail_dims () in
       let u = TDSL.uniform () ~output_dims:dims () in
       let c = const [ 3 ] in
