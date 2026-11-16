@@ -12891,6 +12891,14 @@
  (modules shape_error_converters)
  (libraries base ocannl stdio arrayjit.verdict))
 
+(test
+ ; ocannl-backend: none -- shape-only diagnostic fixtures; no backend runs.
+ (name shape_error_sites)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules shape_error_sites)
+ (libraries base ocannl stdio arrayjit.verdict))
+
 ; gh-ocannl-1506: Shape.t is a private record behind the closed-shape guard's setters. Real ocamlc
 ; programs against the built interface: reads compile, every write and construction is rejected.
 ; gh-ocannl-1573 and gh-ocannl-1624 extended it to the rest of gh-ocannl-903's frontier, Indexing's

@@ -6480,6 +6480,171 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
     in
     let deferred_dims = Set.diff deferred_dims unblocked_dims in
     let deferred_kernels = Set.diff deferred_kernels unblocked_dims in
+    (* A held-size pass checks many relations. Attribute each refusal to the relation being compared
+       or inverted, before the per-constraint handler can prefix it. *)
+    let with_constraint source f =
+      try f ()
+      with Shape_error (message, trace) ->
+        let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+        Stdlib.Printexc.raise_with_backtrace
+          (Shape_error (message, Constraint_failed source :: trace))
+          backtrace
+    in
+    let check_held_sizes env =
+      (* Check arithmetic without solving a variable or choosing a basis. A held size supplies a
+         number, including inside a pending sum or window. Unknown dimensions stay in nonnegative
+         intervals; disjoint intervals prove a contradiction. Ordinary constraints have reached
+         their fixpoint before this arm runs. Check once per size pass, including when its first
+         constraint is already solved, using indexed size lookups. *)
+      let known, roots =
+        List.fold sizes
+          ~init:(Map.empty (module Dim_var), dim_var_set_empty)
+          ~f:(fun (known, roots) -> function
+            | Dim_size { dim; size; _ } ->
+                let dim = subst_dim env dim in
+                let roots = Set.union roots (vars_of_dim dim) in
+                let known =
+                  match dim with Var v -> Map.set known ~key:v ~data:size | _ -> known
+                in
+                (known, roots)
+            | _ -> (known, roots))
+      in
+      let known = ref known in
+      let watchers = ref (Map.empty (module Dim_var)) in
+      let pending_relations = Queue.create () and pending_vars = Queue.create () in
+      let add (lo1, hi1) (lo2, hi2) =
+        (lo1 + lo2, Option.both hi1 hi2 |> Option.map ~f:(fun (a, b) -> a + b))
+      in
+      let scale k (lo, hi) = (k * lo, Option.map hi ~f:(( * ) k)) in
+      let constant n = (n, Some n) in
+      let rec numeric dim =
+        match subst_dim env dim with
+        | Dim { d; _ } -> Some (constant d)
+        | Sym _ -> None
+        | Var v -> Some (match Map.find !known v with Some n -> constant n | None -> (0, None))
+        | Concat dims ->
+            List.fold dims
+              ~init:(Some (constant 0))
+              ~f:(fun acc d -> Option.both acc (numeric d) |> Option.map ~f:(fun (a, b) -> add a b))
+        | Affine { stride; over; conv; _ } ->
+            Option.bind (numeric over) ~f:(fun over ->
+                let over = scale stride over in
+                match conv with
+                | None | Some { use_padding = true; _ } -> Some over
+                | Some { dilation; kernel; use_padding = false } ->
+                    Option.map (numeric kernel) ~f:(fun kernel ->
+                        add (add over (scale dilation kernel)) (constant (1 - dilation - stride))))
+      in
+      let check ~broadcast d1 d2 =
+        match Option.both (numeric d1) (numeric d2) with
+        | None -> ()
+        | Some ((lo1, hi1), (lo2, hi2)) ->
+            (* A size-only operand whose interval includes 1 may be the broadcast top. *)
+            let may_be_top =
+              broadcast && lo2 <= 1 && Option.value_map hi2 ~default:true ~f:(fun hi -> hi >= 1)
+            in
+            let below hi lo = Option.value_map hi ~default:false ~f:(fun hi -> hi < lo) in
+            if (not may_be_top) && (below hi1 lo2 || below hi2 lo1) then
+              let is_concat d = match subst_dim env d with Concat _ -> true | _ -> false in
+              let message =
+                if (is_concat d1 && below hi2 lo1) || (is_concat d2 && below hi1 lo2) then
+                  concat_excess_msg
+                else "size constraint is numerically inconsistent"
+              in
+              raise (Shape_error (message, [ Dim_mismatch [ d1; d2 ] ]))
+      in
+      let exact d =
+        Option.bind (numeric d) ~f:(fun (lo, hi) ->
+            Option.some_if (Option.equal Int.equal hi (Some lo)) lo)
+      in
+      let add_relation source ~broadcast d1 d2 =
+        let relation = (source, broadcast, d1, d2) in
+        let vars = Set.union (vars_of_dim (subst_dim env d1)) (vars_of_dim (subst_dim env d2)) in
+        Set.iter vars ~f:(fun v -> watchers := Map.add_multi !watchers ~key:v ~data:relation);
+        Queue.enqueue pending_relations relation
+      in
+      (* Exact numeric facts are local to this check. Inverting a window learns its extent, never
+         its tag. Each variable is learned once; only its dependent relations retry. *)
+      let rec learn dim size =
+        check ~broadcast:false dim (get_default_dim ~d:size ());
+        match subst_dim env dim with
+        | Var v when not (Map.mem !known v) ->
+            known := Map.set !known ~key:v ~data:size;
+            List.iter
+              (Option.value (Map.find !watchers v) ~default:[])
+              ~f:(Queue.enqueue pending_relations);
+            Queue.enqueue pending_vars v
+        | Affine { stride; over; conv; _ } when stride > 0 ->
+            let offset, minimum =
+              match conv with
+              | None | Some { use_padding = true; _ } -> (Some 0, 0)
+              | Some { dilation; kernel; use_padding = false } ->
+                  ( Option.map (exact kernel) ~f:(fun kernel ->
+                        effective_kernel_span ~dilation ~kernel_size:kernel - stride),
+                    stride )
+            in
+            Option.iter offset ~f:(fun offset ->
+                let remainder = size - offset in
+                if remainder < minimum || remainder % stride <> 0 then
+                  raise
+                    (Shape_error
+                       ( "solved dimensions for axis: incompatible stride",
+                         [ Dim_mismatch [ dim; get_default_dim ~d:size () ] ] ));
+                learn over (remainder / stride))
+        | _ -> ()
+      in
+      List.iter (ineqs @ sizes) ~f:(fun source ->
+          match source with
+          | Dim_eq { d1; d2; _ } -> add_relation source ~broadcast:false d1 d2
+          | Dim_ineq { res; opnd; _ } -> add_relation source ~broadcast:true res opnd
+          | Dim_size { dim; size; _ } ->
+              add_relation source ~broadcast:false dim (get_default_dim ~d:size ())
+          | _ -> ());
+      (* Discover only bounds reachable from held or newly learned sizes. Indexing the relations
+         lets an exact affine inverse reach its pointwise bounds without rescanning the model's
+         whole environment or repeatedly sweeping all pending equations. *)
+      Set.iter roots ~f:(Queue.enqueue pending_vars);
+      let seen = ref dim_var_set_empty in
+      while not (Queue.is_empty pending_vars && Queue.is_empty pending_relations) do
+        match Queue.dequeue pending_vars with
+        | Some v when Set.mem !seen v -> ()
+        | Some v -> (
+            seen := Set.add !seen v;
+            match find_dim env.dim_env v with
+            | Some (Bounds_dim { glb; opnd; res; origin; _ }) ->
+                Option.iter glb ~f:(fun glb ->
+                    add_relation
+                      (Dim_ineq
+                         { res = glb; opnd = Var v; from_ = Sexp.Atom "held-size bound"; origin })
+                      ~broadcast:true glb (Var v));
+                List.iter opnd ~f:(fun w ->
+                    add_relation
+                      (Dim_ineq
+                         { res = Var v; opnd = Var w; from_ = Sexp.Atom "held-size bound"; origin })
+                      ~broadcast:true (Var v) (Var w));
+                let glb_vars =
+                  Option.value_map glb ~default:[] ~f:(fun d ->
+                      Set.elements (vars_of_dim (subst_dim env d)))
+                in
+                List.iter (glb_vars @ opnd @ res) ~f:(Queue.enqueue pending_vars)
+            | Some (Solved_dim d) ->
+                Set.iter (vars_of_dim (subst_dim env d)) ~f:(Queue.enqueue pending_vars)
+            | None -> ())
+        | None ->
+            Option.iter (Queue.dequeue pending_relations) ~f:(fun (source, broadcast, d1, d2) ->
+                with_constraint source (fun () ->
+                    check ~broadcast d1 d2;
+                    let may_be_top =
+                      match numeric d2 with
+                      | None -> true
+                      | Some (lo, hi) ->
+                          lo <= 1 && Option.value_map hi ~default:true ~f:(fun n -> n >= 1)
+                    in
+                    if not (broadcast && may_be_top) then (
+                      Option.iter (exact d1) ~f:(learn d2);
+                      Option.iter (exact d2) ~f:(learn d1))))
+      done
+    in
     (* Process a single constraint and return new constraints + updated env *)
     let process_constraint env ineq =
       match ineq with
@@ -6489,156 +6654,6 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
           unify_dim ~stage origin (d1, d2) env
       | Dim_size { dim; size; origin } -> (
           let dim = subst_dim env dim in
-          if (not (is_stage2_up stage)) && phys_equal ineq (List.hd_exn sizes) then (
-            (* Check arithmetic without solving a variable or choosing a basis. A held size supplies
-               a number, including inside a pending sum or window. Unknown dimensions stay in
-               nonnegative intervals; disjoint intervals prove a contradiction. Ordinary constraints
-               have reached their fixpoint before this arm runs. Check once per size pass, including
-               when its first constraint is already solved, using indexed size lookups. *)
-            let known, roots =
-              List.fold sizes
-                ~init:(Map.empty (module Dim_var), dim_var_set_empty)
-                ~f:(fun (known, roots) -> function
-                  | Dim_size { dim; size; _ } ->
-                      let dim = subst_dim env dim in
-                      let roots = Set.union roots (vars_of_dim dim) in
-                      let known =
-                        match dim with Var v -> Map.set known ~key:v ~data:size | _ -> known
-                      in
-                      (known, roots)
-                  | _ -> (known, roots))
-            in
-            let known = ref known in
-            let watchers = ref (Map.empty (module Dim_var)) in
-            let pending_relations = Queue.create () and pending_vars = Queue.create () in
-            let add (lo1, hi1) (lo2, hi2) =
-              (lo1 + lo2, Option.both hi1 hi2 |> Option.map ~f:(fun (a, b) -> a + b))
-            in
-            let scale k (lo, hi) = (k * lo, Option.map hi ~f:(( * ) k)) in
-            let constant n = (n, Some n) in
-            let rec numeric dim =
-              match subst_dim env dim with
-              | Dim { d; _ } -> Some (constant d)
-              | Sym _ -> None
-              | Var v ->
-                  Some (match Map.find !known v with Some n -> constant n | None -> (0, None))
-              | Concat dims ->
-                  List.fold dims
-                    ~init:(Some (constant 0))
-                    ~f:(fun acc d ->
-                      Option.both acc (numeric d) |> Option.map ~f:(fun (a, b) -> add a b))
-              | Affine { stride; over; conv; _ } ->
-                  Option.bind (numeric over) ~f:(fun over ->
-                      let over = scale stride over in
-                      match conv with
-                      | None | Some { use_padding = true; _ } -> Some over
-                      | Some { dilation; kernel; use_padding = false } ->
-                          Option.map (numeric kernel) ~f:(fun kernel ->
-                              add
-                                (add over (scale dilation kernel))
-                                (constant (1 - dilation - stride))))
-            in
-            let check ~broadcast d1 d2 =
-              match Option.both (numeric d1) (numeric d2) with
-              | None -> ()
-              | Some ((lo1, hi1), (lo2, hi2)) ->
-                  (* A size-only operand whose interval includes 1 may be the broadcast top. *)
-                  let may_be_top =
-                    broadcast && lo2 <= 1
-                    && Option.value_map hi2 ~default:true ~f:(fun hi -> hi >= 1)
-                  in
-                  let below hi lo = Option.value_map hi ~default:false ~f:(fun hi -> hi < lo) in
-                  if (not may_be_top) && (below hi1 lo2 || below hi2 lo1) then
-                    let is_concat d = match subst_dim env d with Concat _ -> true | _ -> false in
-                    let message =
-                      if (is_concat d1 && below hi2 lo1) || (is_concat d2 && below hi1 lo2) then
-                        concat_excess_msg
-                      else "size constraint is numerically inconsistent"
-                    in
-                    raise (Shape_error (message, [ Dim_mismatch [ d1; d2 ] ]))
-            in
-            let exact d =
-              Option.bind (numeric d) ~f:(fun (lo, hi) ->
-                  Option.some_if (Option.equal Int.equal hi (Some lo)) lo)
-            in
-            let add_relation ~broadcast d1 d2 =
-              let relation = (broadcast, d1, d2) in
-              let vars =
-                Set.union (vars_of_dim (subst_dim env d1)) (vars_of_dim (subst_dim env d2))
-              in
-              Set.iter vars ~f:(fun v -> watchers := Map.add_multi !watchers ~key:v ~data:relation);
-              Queue.enqueue pending_relations relation
-            in
-            (* Exact numeric facts are local to this check. Inverting a window learns its extent,
-               never its tag. Each variable is learned once; only its dependent relations retry. *)
-            let rec learn dim size =
-              check ~broadcast:false dim (get_default_dim ~d:size ());
-              match subst_dim env dim with
-              | Var v when not (Map.mem !known v) ->
-                  known := Map.set !known ~key:v ~data:size;
-                  List.iter
-                    (Option.value (Map.find !watchers v) ~default:[])
-                    ~f:(Queue.enqueue pending_relations);
-                  Queue.enqueue pending_vars v
-              | Affine { stride; over; conv; _ } when stride > 0 ->
-                  let offset =
-                    match conv with
-                    | None | Some { use_padding = true; _ } -> Some 0
-                    | Some { dilation; kernel; use_padding = false } ->
-                        Option.map (exact kernel) ~f:(fun kernel ->
-                            effective_kernel_span ~dilation ~kernel_size:kernel - stride)
-                  in
-                  Option.iter offset ~f:(fun offset ->
-                      let remainder = size - offset in
-                      if remainder < 0 || remainder % stride <> 0 then
-                        raise
-                          (Shape_error
-                             ( "solved dimensions for axis: incompatible stride",
-                               [ Dim_mismatch [ dim; get_default_dim ~d:size () ] ] ));
-                      learn over (remainder / stride))
-              | _ -> ()
-            in
-            List.iter (ineqs @ sizes) ~f:(function
-              | Dim_eq { d1; d2; _ } -> add_relation ~broadcast:false d1 d2
-              | Dim_ineq { res; opnd; _ } -> add_relation ~broadcast:true res opnd
-              | Dim_size { dim; size; _ } ->
-                  add_relation ~broadcast:false dim (get_default_dim ~d:size ())
-              | _ -> ());
-            (* Discover only bounds reachable from held or newly learned sizes. Indexing the
-               relations lets an exact affine inverse reach its pointwise bounds without rescanning
-               the model's whole environment or repeatedly sweeping all pending equations. *)
-            Set.iter roots ~f:(Queue.enqueue pending_vars);
-            let seen = ref dim_var_set_empty in
-            while not (Queue.is_empty pending_vars && Queue.is_empty pending_relations) do
-              match Queue.dequeue pending_vars with
-              | Some v when Set.mem !seen v -> ()
-              | Some v -> (
-                  seen := Set.add !seen v;
-                  match find_dim env.dim_env v with
-                  | Some (Bounds_dim { glb; opnd; res; _ }) ->
-                      Option.iter glb ~f:(fun glb -> add_relation ~broadcast:true glb (Var v));
-                      List.iter opnd ~f:(fun w -> add_relation ~broadcast:true (Var v) (Var w));
-                      let glb_vars =
-                        Option.value_map glb ~default:[] ~f:(fun d ->
-                            Set.elements (vars_of_dim (subst_dim env d)))
-                      in
-                      List.iter (glb_vars @ opnd @ res) ~f:(Queue.enqueue pending_vars)
-                  | Some (Solved_dim d) ->
-                      Set.iter (vars_of_dim (subst_dim env d)) ~f:(Queue.enqueue pending_vars)
-                  | None -> ())
-              | None ->
-                  Option.iter (Queue.dequeue pending_relations) ~f:(fun (broadcast, d1, d2) ->
-                      check ~broadcast d1 d2;
-                      let may_be_top =
-                        match numeric d2 with
-                        | None -> true
-                        | Some (lo, hi) ->
-                            lo <= 1 && Option.value_map hi ~default:true ~f:(fun n -> n >= 1)
-                      in
-                      if not (broadcast && may_be_top) then (
-                        Option.iter (exact d1) ~f:(learn d2);
-                        Option.iter (exact d2) ~f:(learn d1)))
-            done);
           match dim with
           | Dim { d; _ } when d = size -> ([], env)
           | (Var _ | Affine _ | Concat _) when not (is_stage2_up stage) -> ([ ineq ], env)
@@ -6731,6 +6746,10 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
 
     (* Fold function that processes constraint, propagates origin, and handles errors *)
     let f (ineqs, env) ineq =
+      (match ineq with
+      | Dim_size _ when (not (is_stage2_up stage)) && phys_equal ineq (List.hd_exn sizes) ->
+          check_held_sizes env
+      | _ -> ());
       try
         let more_ineqs, env = process_constraint env ineq in
         (more_ineqs @ ineqs, env)
@@ -6897,7 +6916,8 @@ let solve_closing_stages ~(stages : stage list) ?discardable_vars (ineqs : const
     match run floors with
     | result -> result
     | exception (Shape_error _ as error) -> (
-        let first = Option.value first_error ~default:error in
+        let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+        let first = Option.value first_error ~default:(error, backtrace) in
         match next_floors () with
         | Some floors when attempt < max_closing_attempts ->
             restore_globals globals;
@@ -6905,7 +6925,8 @@ let solve_closing_stages ~(stages : stage list) ?discardable_vars (ineqs : const
             search (attempt + 1) floors (Some first)
         | _ ->
             if attempt > 1 then restore_globals globals;
-            raise first)
+            let error, backtrace = first in
+            Stdlib.Printexc.raise_with_backtrace error backtrace)
     | exception error ->
         if attempt > 1 then restore_globals globals;
         raise error
