@@ -99,7 +99,14 @@ files.
   output row). Probe a change here on programs whose chains BRANCH, a result of two draws or a
   parameter behind a pointwise result of two parameters: a unary chain exercises none of the
   three. Pins: `test_row_glb_reach` (chains of every length), `row_glb_reach_executed`,
-  `test_row_bound_emissions` (neither a repeated bound nor the old emission changes a store).
+  `test_row_bound_emissions` (neither a repeated bound nor the old emission changes a store),
+  and the program-level sweep `shape_program_sweep` (gh-ocannl-2181): 2000 seeded expression
+  DAGs judged by a ground-row oracle that shares no code with the solver, with a known list of
+  the repeats and refusals master still has. An entry's fix removes the entry: the sweep fails a
+  stale one. At its landing it found that staging#1917 itself made draws under a unary
+  operation, under a self-product and under a compose operand close to one element (all three
+  fill at `a98ee3785`), and that nested branching (`c + (u + (v *. w))`) still collapses or is
+  refused; each family has a fixed program in the test.
   The dimension twin of the guess stays (`solve_dim_ineq`, gh-ocannl-2141): it fires on every
   mutually-sole pair, since the closure re-solves every stage-1 constraint at Stage2, and it
   stands in for a dimension's role. Deleted (staging#1927), `Nn_blocks.dropout`'s mask closed to
@@ -111,9 +118,10 @@ files.
   them.
 - Solver deletion experiments: a green suite does not prove a guess or closing arm redundant
   unless executed pins check that draws vary across their use sites. Before making that claim,
-  run `@test/operations/runtest-dropout_mask_varies` and
-  `@test/operations/runtest-row_glb_reach_executed`, inspect their draw probes, and record the
-  runs and what they establish in the PR. `test/operations/dropout_mask_varies.ml` pins both a
+  run `@test/operations/runtest-dropout_mask_varies`,
+  `@test/operations/runtest-row_glb_reach_executed` and
+  `@test/operations/runtest-shape_program_sweep`, inspect their draw probes (the sweep's stderr
+  counts each known entry), and record the runs and what they establish in the PR. `test/operations/dropout_mask_varies.ml` pins both a
   mask that keeps some entries and drops others and raw draws distinct per element; the
   `row_glb_reach_executed` probes cover branching and repeated consumers, including documented
   repetition cases rather than claiming every draw fills. The full green suite missed a

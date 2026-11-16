@@ -1,0 +1,49 @@
+(u + v) *. c[5|3], two draws: agrees, executed
+[1;2] + (({w} + {v}) * [3;4;5]): agrees, executed
+((u + 1) + (u *. 2)) *. c[5|3], one draw with two consumers: known: gh-ocannl-2180: the size-1 output axis of a literal or a fixed index, executed
+(u + 1) *. c[5|3]: known: gh-ocannl-2180: the size-1 output axis of a literal or a fixed index, executed
+(u + z) *. c[5|3], z a constant with no axes: agrees, executed
+(u + z) + (u *. z), z with no axes, *. c[5|3]: agrees, executed
+x[16] *. normal (): known: box_muller: a normal draw, executed
+c[|2,5] + u: agrees, executed
+u + c[|2,5]: agrees, executed
+c[|2,5] + relu u: known: proposed: a unary operation (relu, neg) over a draw, executed
+relu u + c[|2,5]: known: proposed: a unary operation (relu, neg) over a draw, executed
+c[|2,5] *. relu u: known: proposed: a unary operation (relu, neg) over a draw, executed
+relu u *. c[|2,5]: known: proposed: a unary operation (relu, neg) over a draw, executed
+(u *. u) + c[|2]: known: proposed: a pointwise operation with one draw under both operands, executed
+c[|3->2] * (u ++ "ab => a"): known: proposed: an einsum spec over a draw, executed
+(c[|3,2] *. v) *. (u * c[|5]): known: proposed: a compose over a draw, executed
+c + (u + (v *. w)): known: proposed: nested branching, a branching pointwise operation over another, executed
+c + ((u + v) + w): known: proposed: nested branching, a branching pointwise operation over another
+(u + (v + w)) *. c[5|3]: agrees, executed
+((u + v) *. c[5|3]) + w: agrees, executed
+((u + v) + z) *. c[|3]: known: proposed: a pointwise operation with a constant of no axes, executed
+(u + v) *. (w + x) *. c[|3]: known: proposed: nested branching, a branching pointwise operation over another
+every fixed program agrees with the oracle or is a listed known case: true
+the oracle solves programs and the solver accepts them: true
+programs whose fixed shapes conflict occur, and every one is refused: true
+branching programs occur, and none disagrees with the oracle: true
+no program the oracle solves is refused, but for a listed cause: true
+no program raises anything but a shape error: true
+no program disagrees with the oracle: true
+executed programs occur, and every draw fills its oracle shape or is listed: true
+every known entry still occurs: true
+every corruption is judged a disagreement: true
+an accepted ill-typed program is judged a disagreement: true
+late binding, sized before: the draw fills its use site: true
+late binding, sized after: the draw fills its use site: true
+a size set after the row closed reaches the tied dimension: true
+capture mutation, sized true/false, forward: the basis propagates across the equality: true
+capture mutation, sized true/false, forward: a different basis is refused: true
+capture mutation, sized false/true, reversed: the basis propagates across the equality: true
+capture mutation, sized false/true, reversed: a different basis is refused: true
+capture mutation, sized true/true, forward: the basis propagates across the equality: true
+capture mutation, sized true/true, forward: a different basis is refused: true
+reuse DAG, consumer widths 3,4,5: accepted, the result takes the consumer's widths: true
+reuse DAG, consumer widths 3,5,4: accepted, the result takes the consumer's widths: true
+product tie, concatenation, a known prefix: the parts take their sizes: true
+product tie, stride, a known prefix: the parts take their sizes: true
+product tie, stride, a downstream consumer: the parts take their sizes: true
+product tie, concatenation, the component sized late: the parts take their sizes: true
+product tie, an unsized concatenation component: refused, not guessed: true
