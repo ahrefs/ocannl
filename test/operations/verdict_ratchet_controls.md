@@ -887,6 +887,27 @@ The skip-list reader's cases are `verdict_scan_cases`' skip-list rows, run under
 
 ## gh-ocannl-1893 mutation runs
 
+The leg reader resolves a leg or a make function passed as a parameter at the applications of its
+function in the source, one comparison per application; follows a make function given by name to
+its definition; runs a local function or lazy a make function applies or forces; and compares a
+`gated_*` claim inside a named function once per application. Each leg call-site row also states how
+many leg claims were compared. Every run used tools/mutation-run.sh --batch on
+`test/support/verdict_scan.ml` with the focused alias, on a green baseline (`20261116T163843Z-9021`), and
+restored the source byte for byte.
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| A leg parameter is its applications' arguments | `verdict_scan.ml`: a parameter on a leg's way stays unresolved | Failed: `refuses a leg a helper is handed, gated by its caller on the population it hands in`; `accepts a leg a helper is handed, gated by its caller on an invariant`; `refuses a positional leg parameter gated at its application`; `refuses an optional leg parameter one application supplies and another defaults`; `refuses a leg passed through two helpers`; `refuses the one offending application of a helper applied twice`; `refuses a make function a helper is handed, whose population its caller's gate reads`; and the other leg call-site rows whose leg is a parameter, each then uncompared, among them terminates on a helper that passes its leg back to itself | `20261116T163901Z-25677` |
+| Each resolution is compared under its own applications | `verdict_scan.ml`: every resolution compared with no application chosen | Failed: `accepts a helper applied twice whose gates each read only the other call's rows` | `20261116T164023Z-82525` |
+| A function spelled other than as an applied callee is not resolved | `verdict_scan.ml`: no escape check | Failed: `names a leg uncompared whose helper is also handed on as a value` | `20261116T164108Z-27757` |
+| A leg passed back to its own function adds no gate | `verdict_scan.ml`: the cycle reads as unresolved | Failed: `terminates on a helper that passes its leg back to itself` | `20261116T164155Z-61920` |
+| A make function given by name is its definition | `verdict_scan.ml`: a named make function not followed through its `let` | Failed: `refuses a make function given by name whose population the leg's gate reads`; `accepts a make function given by name under an invariant gate` | `20261116T164239Z-94253` |
+| A make function passed as a parameter is its applications' arguments | `verdict_scan.ml`: a make parameter not resolved | Failed: refuses a make function a helper is handed, whose population its caller's gate reads | `20261116T164321Z-32077` |
+| A local function or lazy a make function runs is its run code | `verdict_scan.ml`: no deferred value replayed | Failed: `refuses a make function whose local function it applies claims the gated population`; `refuses a make function whose local lazy it forces claims the gated population` | `20261116T164405Z-96070` |
+| A deferred value a make function never runs makes no claim | `verdict_scan.ml`: the collectors run on inside deferred values | Failed: `accepts a make function that never runs its local function claiming the population`; refuses a helper's population gate beside a claim only a deferred function makes | `20261116T163942Z-55810` |
+| A parameter is followed into its applications' arguments on both sides | `verdict_scan.ml`: a parameter's arguments not followed | Failed: `refuses a gated wrapper whose caller's gate reads the population it hands in`; and the refusing leg call-site rows, whose populations then stop at the helper's parameter | `20261116T164452Z-48019` |
+| A gated claim in a named function is compared once per application | `verdict_scan.ml`: one comparison with no application chosen | Failed: `accepts a gated wrapper applied twice whose gates each read only the other call's rows`; and the corpus claim, `placement_store`'s gated claim in a helper applied twice then refused by one call's gate meeting another's population | `20261116T164534Z-89969` |
+
 The skip-list reader's deferred skip values are `verdict_scan_cases`' skip-list rows, run under the
 `runtest-verdict_scan_cases` alias (baseline `20261116T164653Z-78465`; the two sequence rows ran again after the
 cases' `Sequence` spelling changed, on baseline `20261116T170703Z-74375`):

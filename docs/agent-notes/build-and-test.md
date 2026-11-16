@@ -2785,9 +2785,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `match`'s pick of a leg (its condition, scrutinee or guard a gate too) and a local function's body --
   and its population is what the claims its make function makes range over, and, on a path where
   none of those runs, everything the make function hands a helper. Both sides follow data thunks (`lazy`,
-  `Lazy.force`), the population side for `gated_*` claims too. A leg handed in as a parameter or
-  read from a field is the boundary, counted on stderr as uncompared, as a `gated_*` population
-  through a parameter is; a leg claim applied in part is refused as unread. Most of its mutation runs exit 4, not 1: the ratchet's trailing
+  `Lazy.force`), the population side for `gated_*` claims too. A leg or make function passed as a
+  parameter of a named function is resolved at that function's applications IN THE SAME SOURCE
+  (gh-ocannl-1893), one comparison per application chosen, so one call's gate never meets
+  another's population; a `gated_*` claim inside a named function is compared per application the
+  same way, and a make function given by name is read through its definition. A local function or
+  `lazy` a make function runs is its run code. What stays uncompared -- named site by site on the
+  ratchet's stderr -- is a leg read from a field or a destructured parameter, a function another
+  source applies, and a function handed on as a value; a leg claim applied in part is refused as
+  unread. Most of its mutation runs exit 4, not 1: the ratchet's trailing
   `OK:` row prints only on success (the manifest's gh-ocannl-1289 section says how they were
   read).
 - `verdict_ratchet`'s fifth reader is about a gate FOLDED INTO THE VALUE (gh-ocannl-1310):

@@ -35,9 +35,12 @@ exception Callback_failure
 let attempts = 3
 let starved_on = "degenerate clock readings refused timing windows before a second was admitted"
 
-(* The claims needing the second admitted window are skipped exactly when this holds: fewer than two
-   windows admitted, AND the search's own record says a window was refused for a degenerate clock
-   reading -- the one refusal the uncontended scope leaves an [Isolated] search. *)
+(* A retry is owed exactly when this holds: fewer than two windows admitted, AND the search's own
+   record says a window was refused for a degenerate clock reading -- the one refusal the
+   uncontended scope leaves an [Isolated] search. The claims needing the second window are gated on
+   the admitted windows alone, and an always-evaluated claim says a missing second window was this
+   refusal: a gate reading [report], which those claims quantify, would let a regression that marks
+   every window unreadable turn them into skips (gh-ocannl-1115, gh-ocannl-1893). *)
 let starved ~admitted (report : Autotune.report option) =
   List.length admitted < 2 && Option.exists report ~f:(fun r -> r.Autotune.timings_unreadable > 0)
 
@@ -160,9 +163,14 @@ let () =
       (after.contexts_released - before.contexts_released)
       (after.live_constant_pools - before.live_constant_pools);
     let starved = starved ~admitted report in
+    let second_admitted = List.length admitted >= 2 in
     let needs_second label b =
-      gated ~aggregation:`Environment ~when_:(not starved) ~on:starved_on label b
+      gated ~aggregation:`Environment ~when_:second_admitted ~on:starved_on label b
     in
+    if Option.is_none refuse_after then
+      p
+        (name ^ ": a second window goes unadmitted only on degenerate clock readings")
+        (second_admitted || starved);
     let first_admitted = List.hd admitted in
     (* The report's own accounting, its winner and its best time against what the seam pinned. *)
     let report_pins r =
