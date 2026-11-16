@@ -15,7 +15,7 @@
 # dune and Python in a minimal isolated project: the repository's actual capped-fixture rule
 # runs twice, then with a planted failing case. It compares bytes and rejects the exact unittest
 # timing line; tracebacks and FAILED must survive. It does not scan Dune or Python source text.
-# affected-reads: benchmarks/dune benchmarks/*.py benchmarks/test/*.py benchmarks/runners/**/*.py --only '#compile-output'
+# affected-reads: benchmarks/dune benchmarks/*.py benchmarks/test/*.py benchmarks/runners/*.py benchmarks/runners/*/*.py benchmarks/ocannl_config --only '#compile-output'
 # Usage: tools/test-merge-build-check.sh [--keep] [--only REGEX]
 set -u
 . "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
