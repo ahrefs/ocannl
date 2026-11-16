@@ -817,7 +817,7 @@ let find_gate rt pos (n : nest) : gate option =
                 && Bool.equal shape.inclusive fwd.shape.inclusive)
                 ()
             in
-            (* What the scan reads at [T]'s position: nothing writes it in between. *)
+            (* [T] is none of the nodes the gate reads. *)
             let* () =
               Option.some_if (not (List.exists [ y_tn; p_tn; a_tn; c_tn ] ~f:(Tn.equal t))) ()
             in
@@ -829,6 +829,7 @@ let find_gate rt pos (n : nest) : gate option =
             in
             let* v = at_fwd_p fwd.payload in
             let* () = Option.some_if (not (LL.scalar_mentions_tn t v)) () in
+            (* What the scan reads at [T]'s position: nothing writes it in between. *)
             let quiet ~from tns =
               List.for_all tns ~f:(fun tn ->
                   List.for_all (writers rt tn) ~f:(fun w -> w < from || w >= pos))
@@ -853,7 +854,7 @@ let find_gate rt pos (n : nest) : gate option =
                 g_scan = q;
                 g_shape = shape;
                 g_y = y_at;
-                g_y_prec = Lazy.force y_tn.Tn.storage_prec;
+                g_y_prec = y_prec;
                 g_v = v;
                 g_eq = (fun v y -> eq ~v ~y);
                 g_u = u_at;
