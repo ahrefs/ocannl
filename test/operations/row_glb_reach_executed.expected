@@ -80,3 +80,75 @@ relu (relu u) *. c[|2,5]: every draw fills its use site: true
 [1;2] + relu (relu (({w} * [3;4;5]) *. ({v} * [6;7])))
   3->2, 2->2
 [1;2] + relu (relu (({w} * [3;4;5]) *. ({v} * [6;7]))): the parameters take the shapes their use sites give: true
+scaled log, term_init, draws first
+  draw = 16, 16 distinct values for 16 cells
+scaled log, term_init, draws first: every draw closes to 16: true
+scaled log, term_init, draws first: every draw fills its use site: true
+box muller, term_init, draws first
+  draw = 16, 16 distinct values for 16 cells
+  draw = 16, 16 distinct values for 16 cells
+box muller, term_init, draws first: every draw closes to 16: true
+box muller, term_init, draws first: every draw fills its use site: true
+sum, term_init, draws first
+  draw = 16, 16 distinct values for 16 cells
+  draw = 16, 16 distinct values for 16 cells
+sum, term_init, draws first: every draw closes to 16: true
+sum, term_init, draws first: every draw fills its use site: true
+nested log, term_init, draws first
+  draw = 16, 16 distinct values for 16 cells
+nested log, term_init, draws first: every draw closes to 16: true
+nested log, term_init, draws first: every draw fills its use site: true
+scaled log, term_init, leaf first
+  draw = 16, 16 distinct values for 16 cells
+scaled log, term_init, leaf first: every draw closes to 16: true
+scaled log, term_init, leaf first: every draw fills its use site: true
+box muller, term_init, leaf first
+  draw = 16, 16 distinct values for 16 cells
+  draw = 16, 16 distinct values for 16 cells
+box muller, term_init, leaf first: every draw closes to 16: true
+box muller, term_init, leaf first: every draw fills its use site: true
+sum, term_init, leaf first
+  draw = 16, 16 distinct values for 16 cells
+  draw = 16, 16 distinct values for 16 cells
+sum, term_init, leaf first: every draw closes to 16: true
+sum, term_init, leaf first: every draw fills its use site: true
+nested log, term_init, leaf first
+  draw = 16, 16 distinct values for 16 cells
+nested log, term_init, leaf first: every draw closes to 16: true
+nested log, term_init, leaf first: every draw fills its use site: true
+scaled log, reshape, draws first
+  draw = 16, 16 distinct values for 16 cells
+scaled log, reshape, draws first: every draw closes to 16: true
+scaled log, reshape, draws first: every draw fills its use site: true
+box muller, reshape, draws first
+  draw = 16, 16 distinct values for 16 cells
+  draw = 16, 16 distinct values for 16 cells
+box muller, reshape, draws first: every draw closes to 16: true
+box muller, reshape, draws first: every draw fills its use site: true
+sum, reshape, draws first
+  draw = 16, 16 distinct values for 16 cells
+  draw = 16, 16 distinct values for 16 cells
+sum, reshape, draws first: every draw closes to 16: true
+sum, reshape, draws first: every draw fills its use site: true
+nested log, reshape, draws first
+  draw = 16, 16 distinct values for 16 cells
+nested log, reshape, draws first: every draw closes to 16: true
+nested log, reshape, draws first: every draw fills its use site: true
+scaled log, reshape, leaf first
+  draw = 16, 16 distinct values for 16 cells
+scaled log, reshape, leaf first: every draw closes to 16: true
+scaled log, reshape, leaf first: every draw fills its use site: true
+box muller, reshape, leaf first
+  draw = 16, 16 distinct values for 16 cells
+  draw = 16, 16 distinct values for 16 cells
+box muller, reshape, leaf first: every draw closes to 16: true
+box muller, reshape, leaf first: every draw fills its use site: true
+sum, reshape, leaf first
+  draw = 16, 16 distinct values for 16 cells
+  draw = 16, 16 distinct values for 16 cells
+sum, reshape, leaf first: every draw closes to 16: true
+sum, reshape, leaf first: every draw fills its use site: true
+nested log, reshape, leaf first
+  draw = 16, 16 distinct values for 16 cells
+nested log, reshape, leaf first: every draw closes to 16: true
+nested log, reshape, leaf first: every draw fills its use site: true

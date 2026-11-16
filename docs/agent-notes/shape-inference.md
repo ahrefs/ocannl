@@ -177,6 +177,10 @@ files.
   Its residual literal entry now covers only five stretches adopting a fixed-index output axis;
   the reduction half retires with gh-ocannl-2247, as does the nested-branching entry when the fixes
   are combined. `x[16] *. normal ()` agrees in both internal shapes and executed fill.
+  The unbatched `term_init` and `reshape` programs from gh-ocannl-2225 also fill on
+  `44404a7fb`: scaled log, Box-Muller-shaped arithmetic, two draws added, and nested log,
+  with the leaf created before or after the whole draw expression. The executed reach test
+  pins all 16 cases; these reported refusals and repetitions no longer reproduce.
   A dimension's role (gh-ocannl-2180): a row closing to its GLB (`role_template`) takes fresh
   resolve-at-use variables bounded by the GLB's axes, not the axes themselves, which keep the
   role of the result that minted them (closing minimal: a draw behind `u + 1` used to repeat

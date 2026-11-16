@@ -231,3 +231,63 @@ let () =
       let%op h = { w = uniform1 () } * [ 3; 4; 5 ] *. ({ v = uniform1 () } * [ 6; 7 ]) in
       let%op y = [ 1; 2 ] + relu (relu h) in
       ([ w; v ], y))
+
+(* gh-ocannl-2225: these formerly refused or repeated over an unbatched use site. Both leaf
+   constructors and both creation orders already fill after gh-ocannl-2244/2247/2229. Build the
+   whole noise expression before or after the leaf, so its intermediate rows change age too. Only
+   the draws' values are claimed: nested log is undefined on these uniform draws. *)
+let () =
+  let programs =
+    [
+      ( "scaled log",
+        fun () ->
+          let u = TDSL.uniform () () in
+          let%op n = 2. *. log u in
+          ([ u ], n) );
+      ( "box muller",
+        fun () ->
+          let u = TDSL.uniform () () and v = TDSL.uniform () () in
+          let%op n = -2. *. log (1. + (2. *. u)) *. cos v in
+          ([ u; v ], n) );
+      ( "sum",
+        fun () ->
+          let u = TDSL.uniform () () and v = TDSL.uniform () () in
+          let%op n = u + v in
+          ([ u; v ], n) );
+      ( "nested log",
+        fun () ->
+          let u = TDSL.uniform () () in
+          let%op n = log (log u) in
+          ([ u ], n) );
+    ]
+  in
+  List.iter [ false; true ] ~f:(fun reshape ->
+      List.iter [ false; true ] ~f:(fun leaf_first ->
+          List.iter programs ~f:(fun (program, make_noise) ->
+              let name =
+                Printf.sprintf "%s, %s, %s" program
+                  (if reshape then "reshape" else "term_init")
+                  (if leaf_first then "leaf first" else "draws first")
+              in
+              draws name ~want:"16" ~fills:(Some true) (fun () ->
+                  let make_leaf () =
+                    let ones = Array.create ~len:16 1. in
+                    if reshape then
+                      NTDSL.reshape ~l:"x" ~b:[] ~o:[ 16 ]
+                        (Ir.Ndarray.init_array ~debug:"x" Ir.Ops.single ~dims:[| 16 |] ~padding:None
+                           ~f:(fun _ -> 1.))
+                        ()
+                    else Tensor.term_init ones ()
+                  in
+                  let used, noise, x =
+                    if leaf_first then
+                      let x = make_leaf () in
+                      let used, noise = make_noise () in
+                      (used, noise, x)
+                    else
+                      let used, noise = make_noise () in
+                      let x = make_leaf () in
+                      (used, noise, x)
+                  in
+                  let%op y = x *. noise in
+                  (used, y, y)))))
