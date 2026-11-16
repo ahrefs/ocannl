@@ -204,7 +204,10 @@ let find pname per_policy = List.Assoc.find_exn per_policy pname ~equal:String.e
 
 let () =
   List.iter contractions ~f:(fun c ->
-      let get () = List.Assoc.find_exn (Lazy.force results) c ~equal:Poly.equal in
+      let get () =
+        List.find_map_exn (Lazy.force results) ~f:(fun (c', per_policy) ->
+            Option.some_if (String.equal c'.name c.name) per_policy)
+      in
       let bound = pow2 (-11) +. (Float.of_int c.k *. pow2 (-23)) in
       in_legf ~leg "%s: every tile renders tensor-unit intrinsics under both policies" c.name
         (fun label ->

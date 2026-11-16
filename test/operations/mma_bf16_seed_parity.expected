@@ -23,6 +23,7 @@ default policy, bf16: some seeded tile renders the simdgroup intrinsics: true
 default policy, bf16: every seeded tile that ran equals the serial rendering bitwise: true
 default policy, f16: some seeded tile renders the simdgroup intrinsics: true
 default policy, f16: every seeded tile that ran equals the serial rendering bitwise: true
+default policy, f16 on HIP: every seeded tile that ran is within one f16 ulp of the serial rendering (gfx11 WMMA's mixed-sign residue): true
 Metal's capabilities fingerprint under Bf16_auto equals Bf16_wide's and differs from Bf16_narrow's: true
 f16 one-block: every product and partial is exact in f32, with one-sign products: true
 f16 one-block: per-step differs from both wider models: true
