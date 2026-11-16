@@ -824,8 +824,12 @@ files.
   and `Printexc.to_string` (`shape_error_converters`, gh-ocannl-2211). For a probe, match the caught
   `Row.Shape_error (msg, trace)` and print `Shape.error_to_string_hum msg trace` alongside its
   backtrace; this renders that payload, just as the converters do. A closing replay can deliberately
-  re-raise its first trial's error (`Row.solve_closing_stages` above), so a later backtrace alone
-  does not identify which trial supplied the payload.
+  re-raise its first trial's error (`Row.solve_closing_stages` above); it keeps that trial's raw
+  backtrace alongside the payload (gh-ocannl-2243), so both identify the same failure. Held-size
+  arithmetic checks likewise attach the equation, inequality or size being compared/inverted,
+  rather than the first held size that triggers the pass. Environment-derived bounds are named
+  as inequalities. An unpadded inverse requires an input at least as large as its effective
+  kernel span, just as the unifier does; it must not temporarily learn an empty output.
 - A check that reports at the definition needs its verdict to hold for EVERY application, and for
   whatever else holds the function's tensors (gh-ocannl-1803). Reachability from the boundary rows
   does not decide that: an inline `{ w }` is an anchor built before the trace, and a padded kernel

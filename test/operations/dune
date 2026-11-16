@@ -12876,6 +12876,14 @@
 ; records and setters and Tnode's delayed precision among them.
 
 (test
+ ; ocannl-backend: none -- shape-only diagnostic fixtures; no backend runs.
+ (name shape_error_sites)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules shape_error_sites)
+ (libraries base ocannl stdio arrayjit.verdict))
+
+(test
  ; ocannl-backend: none -- invokes ocamlc on snippets against the built Shape interface; it executes no backend.
  (name shape_private_compile_control)
  (package neural_nets_lib)

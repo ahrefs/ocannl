@@ -1,0 +1,8 @@
+the inconsistent second size is refused: true
+the trace starts with the second size: true
+the unifier refuses the too-short input: true
+the held inverse refuses at Stage1 with the unifier message: true
+the inverse names the held window size: true
+both attempts refuse, with exactly one replay: true
+the first failure payload is unchanged: true
+the first frame names the original solver raise function: true
