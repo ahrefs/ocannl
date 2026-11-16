@@ -275,6 +275,49 @@ let stride_matrix () =
       | Accepted _ -> String.equal expected_basis input_basis
       | Refused -> not (String.equal expected_basis input_basis))
 
+let stride_pair_controls () =
+  let pairs =
+    List.cartesian_product [ false; true ] [ false; true ]
+    |> List.concat_map ~f:(fun (left, right) ->
+        List.map [ false; true ] ~f:(fun reverse ->
+            {
+              name = "stride pair";
+              mk =
+                (fun v u _ ->
+                  let lhs = strided ~padded:left 2 (Var v)
+                  and rhs = strided ~padded:right 2 (Var u) in
+                  if reverse then eq rhs lhs else eq lhs rhs);
+            }))
+  in
+  let pinned =
+    List.cartesian_product pairs [ (2, "a"); (4, Row.default_basis); (1, Row.bcast_if_1) ]
+    |> List.concat_map ~f:(fun (pair, (d, basis)) ->
+        let pin = { name = "pin"; mk = (fun v _ _ -> eq (Var v) (tagged d basis)) } in
+        List.map [ [ 0; 1 ]; [ 1; 0 ] ] ~f:(fun order -> (pair, pin, d, basis, order)))
+  in
+  p_all ~min:48 "pinned stride pairs size the other extent in both orders" pinned
+    ~f:(fun (pair, pin, d, basis, order) ->
+      match solve [ pair; pin ] order with
+      | Refused -> false
+      | Accepted sol ->
+          let expected =
+            if d = 1 && String.equal basis Row.bcast_if_1 then Row.default_basis else basis
+          in
+          Option.equal
+            (fun (d1, b1) (d2, b2) -> d1 = d2 && String.equal b1 b2)
+            (List.Assoc.find_exn sol ~equal:String.equal "u")
+            (Some (d, expected)));
+  p_all ~min:8 "open stride pairs close to equal sized extents" pairs ~f:(fun pair ->
+      match solve [ pair ] [ 0 ] with
+      | Refused -> false
+      | Accepted sol -> (
+          match
+            ( List.Assoc.find_exn sol ~equal:String.equal "v",
+              List.Assoc.find_exn sol ~equal:String.equal "u" )
+          with
+          | Some (d1, b1), Some (d2, b2) -> d1 > 0 && d1 = d2 && String.equal b1 b2
+          | _ -> false))
+
 let () =
   (* As in [test_trial_rollback]: a third constraint is an open window, a shared kernel, a pair or a
      concatenation. *)
@@ -326,6 +369,7 @@ let () =
   Stdio.eprintf "%d stride-top stores (not part of the golden)\n" (List.length stride_top_stores);
   let verdicts names = outcomes (List.map names ~f:item) in
   Verdict.case "stride basis derivation" stride_matrix;
+  Verdict.case "stride pair solutions" stride_pair_controls;
   Verdict.case "concatenations with tagged components settle alike in every order" (fun () ->
       p_none ~min:16000 "stores whose verdict or solution depends on the order" stores
         ~f:order_dependent;
@@ -376,7 +420,8 @@ let () =
           (* Diagnostic only: this bounded store is already refused on the base. Propagating its
              bound through the sum remains outside this closing-order correction. *)
           ());
-      p_all "a stride of the broadcast top settles in every order"
+      (* Twenty stores yield 64 orderings: the floor guards the name-based selection. *)
+      p_all ~min:64 "a stride of the broadcast top settles in every order"
         (List.concat_map stride_top_stores ~f:outcomes) ~f:(function
         | Accepted _ -> true
         | Refused -> false);

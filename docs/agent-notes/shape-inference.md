@@ -960,8 +960,8 @@ files.
   emits, and one that binds nothing settles nothing, or the fixpoint would repeat. `bcast_if_1`
   above size 1 is an atom in the rule, or the whole conv path would be ambiguous and every window
   output would leave Stage1; contested outputs are size 1 and those of a named kernel, and such an
-  output is unknown until closure if nothing else solves it. Padded windows derive their basis from the stride rule above,
-  whatever the kernel. A window pair with a kernel that claims a tag stays a `Dim_eq` after its size
+  output is unknown until closure if nothing else solves it. Padded windows derive their basis
+  from the stride rule above, whatever the kernel. A window pair with a kernel that claims a tag stays a `Dim_eq` after its size
   equation, since that equation carries no basis; once the reduction changes nothing, the pair alone
   stays, or a deferred reduction would pile up a copy a pass. Pinned by
   `test/operations/scheme_strided_residual`'s matrix over tags, window shapes and orders.
