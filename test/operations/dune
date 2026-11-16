@@ -13457,6 +13457,8 @@
   ../../tools/vendor-idents-check.sh
   ../../tools/cuda-tf32-parity.sh
   ../../tools/cuda-native-ptx-rerun.sh
+  ; shared floor/native runtime-refusal signatures and matcher (gh-ocannl-2219)
+  ../../tools/environment-refusals.sh
   ; the reader the native-PTX leg's verdict names failed rules through (gh-ocannl-2005)
   ../../tools/ci-failed-rules.sh
   sweep_harness.sh

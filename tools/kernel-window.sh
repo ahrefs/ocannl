@@ -59,8 +59,8 @@ utc_of() { # epoch-seconds -> the stamp format, so a window reads like every oth
 #
 # A GPU unit on a WSL box reaches its device through /dev/dxg, and a lost message
 # on that Hyper-V ring surfaces in userspace as whatever exception the binding
-# happened to be making at the time. `ENVIRONMENT_REFUSALS` lists the names seen
-# so far, and a list of names can only ever grow AFTER a miss: rog-nv's
+# happened to be making at the time. `ENVIRONMENT_REFUSALS` in environment-refusals.sh lists the
+# names seen so far, and a list of names can only ever grow AFTER a miss: rog-nv's
 # CUDA_ERROR_OUT_OF_MEMORY at `cu_device_primary_ctx_retain` cost a remote session
 # to attribute (gh-ocannl-979), and a SEGV -- which the 2026-09-15 minix runs also
 # produced -- can never become a name entry at all. The kernel says it plainly in
@@ -123,7 +123,7 @@ dxg_window_summary() { # start-utc end-utc [boot-verdict] -- kernel lines on std
 #     word: rog-nv's NIC driver logs `RTL8125B, ..., XID 641` at every boot.
 # The userspace half of the SDMA refusal -- ROCr's `GpuAgent::ReleaseQueueMainScratch` assertion,
 # which is how the process whose queue was refused dies -- is not a kernel line; the sweep reads it
-# from the unit's log instead (ENVIRONMENT_ASSERTIONS in tools/sweep.sh).
+# from the unit's log instead (ENVIRONMENT_ASSERTIONS in tools/environment-refusals.sh).
 #
 # NOT counted, and shown: any other driver line. rog-nv's journal holds 57 `NVRM: VM: invalid mmap
 # context` lines and an `NVRM: API mismatch` from the last minutes of a driver upgrade before its

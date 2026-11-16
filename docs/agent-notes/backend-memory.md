@@ -473,6 +473,48 @@ files.
   Guard: `test/operations/cuda_launch_reservation` (a hopeless frame declined; by hand, under an
   exclusive hold, `--contended` outwaits a child process holding the memory -- in a shared batch
   that child refused its neighbours, `schedule_strided_1x1` among them).
+- Raw-lowering test audit (gh-ocannl-2219): a `lowered_transform` that captures IR for a structural
+  assertion need not launch that IR. `online_softmax_block`'s `forward` and `training`,
+  `online_softmax`'s `training`, SGD `trajectory` and leaf-gradient legs, and `fused_classifier`
+  capture before applying default schedules. Their value claims use scheduled execution.
+  `online_softmax.training` also retains a compile-only raw routine for its unscheduled interface
+  assertion: fission's promoted scratch makes the scheduled interface a different set. Its value
+  routine is compiled as a sibling from the initialization context (compiling the same fragments
+  from a descendant is correctly refused by the lineage guard).
+  `build_order_programs.observe` snapshots the unscheduled source, placements, digests and link
+  layout before compiling a separately named default-scheduled GPU routine for its nonzero,
+  changed-program and cross-creation-order loss comparisons. The loss comparisons use the sibling
+  executions, each retaining its build's creation order; the raw snapshots pin source and layout.
+  Its CPU and explicit scheduled arms retain their original runs.
+  Kept raw GPU launches: `build_order_programs.bump_pair` reads both outputs and the input to
+  validate the bump allocator's layout/value relationship; `tile_mma_narrow.run_census`'s serial
+  references are the independent per-operation rounding oracle for its explicitly packed/tiled
+  executions (including the inexact bf16 case); and `schedule_strided_1x1.run_plain` references
+  are the unscheduled numerical oracle for whole and per-segment candidates. In particular
+  `s11d_ref` remains the launch-memory acceptance witness. Explicit candidate/packing schedules
+  in the latter two tests are also retained: they exercise those schedules rather than merely
+  capturing IR. Declined `schedule_strided_1x1.candidate` fallbacks are now compile-only:
+  `run_with` returns no readback when the transform recorded a decline, and releases both contexts.
+  Compile-only captures and declined-schedule probes in the other tests need no conversion.
+  Specifically, the retained serial rounding routines are `nrw_bf16_serial`,
+  `nrw_bf16_inexact_serial`, `nrw_half_serial` and `nrw_f16_serial`. The retained strided references
+  are `s11w_ref`, `s11r_ref`, `s11t_ref`, `s11d_ref`, `s11o_ref`, `s11v_ref`, `s11h_ref`,
+  `s11u_ref` and `s11p_ref`; the `s11c` unit-stride control is compile-only already.
+  One-second `nvidia-smi` baseline samples on rog-nv-linux, native PTX at `-j 8`, reproduced
+  peaks of 4468/3234/2444/1470/3964/3516 MiB for `online_softmax_block`/`build_order_programs`/
+  `online_softmax`/`tile_mma_narrow`/`fused_classifier`/`schedule_strided_1x1`; test-run record
+  `20261116T155544Z-407184`, base `608c490e7`. After the audit, on `f0e652488`, the same six
+  processes peaked at 160/168/164/1470/170/3516 MiB respectively, record
+  `20261116T162527Z-1163468`. Both native-target batches ran at `-j 8` under exclusive holds,
+  with no GPU co-tenants at open or close. Raw samples are on rog-nv-linux under
+  `/home/lukstafi/wave-scratch/wave-20261116-ocannl/t2219/{baseline-native-v3,after-native-v1}/gpu-samples.csv`.
+  These are sampled process peaks, not aggregate simultaneous use or timing measurements.
+  The two retained controls' peaks stayed unchanged. All six audit tests also passed on Metal on
+  macbook-pro at `c2d07e7c3`, record `20261116T173946Z-58623` (cache disabled, `-j 4`).
+  Do not use `dune --force` as evidence of fresh
+  test actions: the first audit attempt ran no tests. Disable the shared cache and change an
+  action dependency, then confirm executable actions in the trace and process samples.
+
 - Building a test kernel that actually *has* a big scratch frame takes care: write the `Local`
   array in one loop and read it back in REVERSE in another. A forward read in the same order lets
   the compiler forward each store to its load and delete the array, leaving nothing to reject.

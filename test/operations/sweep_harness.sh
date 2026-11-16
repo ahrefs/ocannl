@@ -2231,7 +2231,7 @@ for dest_bad in minix-amd-linux rog-nv-win rog-lan -oProxyCommand=true alice@rog
 done
 
 # An environment-red unit -- a red whose log carries a runtime-refusal signature
-# from sweep.sh's ENVIRONMENT_REFUSALS table -- reruns its failing stanzas one at
+# from environment-refusals.sh's ENVIRONMENT_REFUSALS table -- reruns its failing stanzas one at
 # a time at `-j 1` and records which stayed red (gh-ocannl-945). The fixture is
 # the 2026-09-05 minix/hip shape: one stanza refused at hip_init, one that
 # crashed after (no signature of its own, still a red stanza), a multi-name
@@ -2243,7 +2243,7 @@ done
 # unit with this log is the opposing control further down); the remote ones
 # would reach for ssh. A red metal unit also collects its RTC context first,
 # which is one more dune call between the suite and the rerun.
-# ROCr's abort after a refused SDMA queue, as one log line (ENVIRONMENT_ASSERTIONS in the sweep).
+# ROCr's abort after a refused SDMA queue, as one log line (ENVIRONMENT_ASSERTIONS in environment-refusals.sh).
 native_abort_fixture='schedule_conv_gemm.exe: ./runtime/hsa-runtime/core/runtime/amd_gpu_agent.cpp:2003: virtual void rocr::AMD::GpuAgent::ReleaseQueueMainScratch(rocr::AMD::ScratchInfo&): Assertion `scratch.main_queue_base'"'"' failed.'
 environment_failure='File "test/dune", line 2, characters 7-28:
 2 |  (alias runtest-serial-probe)

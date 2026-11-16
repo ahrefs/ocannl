@@ -686,12 +686,20 @@ let training ?mask_fill ?(layers = 1) ?(prefix = 2) ~d_k ~on ~bwd () =
   let update = Train.grad_update loss in
   let ctx = Train.init_params (Context.auto ()) Ir.Indexing.Empty loss in
   let captured = ref None in
-  let ctx, routine =
+  let raw_ctx, raw_routine =
     Context.compile
       ~lowered_transform:(fun o ->
         captured := Some o;
         [ o ])
       ctx update Ir.Indexing.Empty
+  in
+  (* This leg pins the unscheduled interface: scheduling promotes scratch between kernels, so its
+     argument set answers a different question. Keep that compile-only on GPU and execute a
+     default-scheduled sibling from the initialization context, not its descendant. *)
+  let interface = Set.union raw_routine.Context.inputs raw_routine.Context.outputs in
+  let on_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts ctx) in
+  let ctx, routine =
+    if on_gpu then Context.compile ctx update Ir.Indexing.Empty else (raw_ctx, raw_routine)
   in
   let read ctx =
     List.map params ~f:(fun p ->
@@ -714,12 +722,14 @@ let training ?mask_fill ?(layers = 1) ?(prefix = 2) ~d_k ~on ~bwd () =
   let h2, m2 = LL.analysis_cache_stats () in
   let raw_step = Ir.Assignments.to_low_level update.Ir.Assignments.asgns in
   reset_gates ();
+  if on_gpu then Context.release raw_ctx;
+  Context.release ctx;
   {
     loss;
     grads;
     again;
     optimized = Option.value_exn !captured;
-    interface = Set.union routine.Context.inputs routine.Context.outputs;
+    interface;
     raw_step;
     cache = (h2 - h1, m2 - m1);
   }
@@ -863,7 +873,8 @@ let () =
       Context.compile
         ~lowered_transform:(fun o ->
           captured := Some o;
-          [ o ])
+          Ir.Schedule.maybe_default_schedules ~facts:(Context.backend_facts ctx)
+            ~limits:(Context.hardware_limits ctx) ~static_indices:[] o)
         ctx
         (Ir.Assignments.sequence [ update; sgd ])
         Ir.Indexing.Empty
@@ -997,12 +1008,14 @@ let leaf ?(prec = Ir.Ops.single) ?(fill = Float.neg_infinity) ?(tied = false)
   let ctx =
     if grads then
       let update = Train.grad_update loss in
+      let ctx = Context.auto () in
       let ctx, routine =
         Context.compile
           ~lowered_transform:(fun o ->
             captured := Some o;
-            [ o ])
-          (Context.auto ()) update Ir.Indexing.Empty
+            Ir.Schedule.maybe_default_schedules ~facts:(Context.backend_facts ctx)
+              ~limits:(Context.hardware_limits ctx) ~static_indices:[] o)
+          ctx update Ir.Indexing.Empty
       in
       Context.run ctx routine
     else Train.forward_once (Context.auto ()) loss

@@ -23,8 +23,14 @@
 #                                                       after a green floor unit); the failed rules
 #                                                       are counted and the first few named
 #   cuda-native-ptx: verdict: unavailable: ...        2  the run could not start (the credential scrub)
-# Its boundary: it reads dune's exit status and what tools/ci-failed-rules.sh --names reads of its
-# output, nothing else of it. A red run that reader names nothing in (dune killed, say) is still red.
+#   cuda-native-ptx: verdict: unavailable: runtime refusal (...) 2  a shared allowlisted refusal
+# Its boundary: reads dune's status, tools/ci-failed-rules.sh --names, and only the exception/status
+# and assertion allowlist in tools/environment-refusals.sh. It reads no kernel journal. A red run
+# without a refusal stays red even when no rule is named (dune killed, say). A refusal leaves the
+# native target unjudged, including any other failures in that batch: rerun the affected stanzas
+# serially in _build-native-ptx before attributing them. Unlike the floor sweep, this diagnostic
+# does not automate the serial recovery: that orchestration belongs to sweep.sh; reporting the
+# refusal here avoids a second recovery implementation and a false target-miscompile verdict.
 set -u
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
 cd "$root" || exit 2
@@ -42,6 +48,9 @@ verdict() { # status text
 eval "$(credential_env_scrub_text)" ||
   verdict 2 "unavailable: cannot remove credential variables:$credential_env_left"
 
+# shellcheck source=environment-refusals.sh
+. tools/environment-refusals.sh || verdict 2 "unavailable: cannot read tools/environment-refusals.sh"
+
 work=$(mktemp -d "${TMPDIR:-/tmp}/cuda-native-ptx.XXXXXX") ||
   verdict 2 "unavailable: no temporary directory"
 trap 'rm -rf "$work"' EXIT
@@ -51,6 +60,8 @@ OCANNL_BACKEND=cuda OCANNL_CUDA_PTX_TARGET=native dune build --build-dir _build-
 rc=$?
 cat "$work/out"
 [ "$rc" != 0 ] || verdict 0 "holds (dune build $*: the suite passes at the native PTX target)"
+refusal=$(environment_log_refusal "$work/out") || refusal=
+[ -z "$refusal" ] || verdict 2 "unavailable: runtime refusal ($refusal; native target unjudged; rerun affected stanzas at -j 1 in _build-native-ptx)"
 rules=$(bash tools/ci-failed-rules.sh --names "$work/out" 2>/dev/null) || rules=
 [ -n "$rules" ] || verdict 1 "NATIVE TARGET RED (dune exited $rc; no failed rule in its output)"
 count=$(printf '%s\n' "$rules" | grep -c .)

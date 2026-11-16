@@ -60,7 +60,8 @@ let () =
     Context.compile
       ~lowered_transform:(fun opt ->
         stash := Some opt;
-        [ opt ])
+        Sched.maybe_default_schedules ~facts:(Context.backend_facts ctx)
+          ~limits:(Context.hardware_limits ctx) ~static_indices:[] opt)
       ctx update IDX.empty
   in
   let ctx = Context.run ctx routine in
