@@ -778,7 +778,14 @@ let () =
   let surgered ~batched ~surgery tag =
     let ma, mb, prod, mc = make_padded_graph ~batched tag in
     let verdict = ref None in
+    let batch_loop = ref None in
     let transform opt =
+      (* The batch loop: the outermost loop of the matmul nest, the deepest one. *)
+      (let paths = Ll_test.nest_paths opt.LL.llc in
+       let depth = List.fold paths ~init:0 ~f:(fun d p -> Int.max d (List.length p)) in
+       match List.find_exn paths ~f:(fun p -> List.length p = depth) with
+       | [ b; _; _; _ ] -> batch_loop := Some b
+       | _ -> ());
       let first = ref None in
       let partition ~i_o:_ ~k_o =
         let op, segs = Sched.partition ~axis:k_o ~breakpoints:[ 1 ] in
@@ -792,24 +799,25 @@ let () =
       opt
     in
     ignore (run_with ("epf_partition_surgery_" ^ tag) transform mc : float array);
-    Option.value_exn ~here:[%here] !verdict
+    (Option.value_exn ~here:[%here] !verdict, !batch_loop)
   in
   let unrecognized ~acc:_ seg llc = serialize_segment seg llc in
   p
     "epf_partition_surgery: a later segment under a batch loop, after an unrecognized \
      batch-indexed writer, fuses"
-    (Option.is_none (surgered ~batched:true ~surgery:unrecognized "8g"));
+    (Option.is_none (fst (surgered ~batched:true ~surgery:unrecognized "8g")));
   p "epf_partition_surgery control: the same surgery on the unbatched program fuses"
-    (Option.is_none (surgered ~batched:false ~surgery:unrecognized "8c"));
+    (Option.is_none (fst (surgered ~batched:false ~surgery:unrecognized "8c")));
   let label =
     "epf_partition_surgery: an earlier segment rewriting batch row 0 in every batch iteration \
-     refuses the fusion, naming the enclosing loop"
+     refuses the fusion, naming the batch loop"
   in
   (match surgered ~batched:true ~surgery:rebind_batch "8o" with
-  | Some msg ->
+  | Some msg, Some b ->
       Stdio.eprintf "epf_partition_surgery overlap: %s (not part of the golden)\n%!" msg;
       p label
         (String.is_substring msg ~substring:"Schedule.Fuse_epilogue"
-        && String.is_substring msg ~substring:"enclosing loop")
-  | None -> p label false);
+        && String.is_substring msg ~substring:("enclosing loop " ^ Ir.Indexing.symbol_ident b ^ " ")
+        )
+  | _ -> p label false);
   ignore prod4

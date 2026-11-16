@@ -27,4 +27,4 @@ epf_partition_multitrip (a later k segment of two trips) rejected with a targete
 epf_partition_rowedge (a later row-block segment) rejected with a targeted error: true
 epf_partition_surgery: a later segment under a batch loop, after an unrecognized batch-indexed writer, fuses: true
 epf_partition_surgery control: the same surgery on the unbatched program fuses: true
-epf_partition_surgery: an earlier segment rewriting batch row 0 in every batch iteration refuses the fusion, naming the enclosing loop: true
+epf_partition_surgery: an earlier segment rewriting batch row 0 in every batch iteration refuses the fusion, naming the batch loop: true
