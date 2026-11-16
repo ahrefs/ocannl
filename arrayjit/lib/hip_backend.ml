@@ -1485,6 +1485,7 @@ end = struct
   let launch_memory_backoff_seconds = [ 0.5; 1.; 2.; 4.; 8. ]
   let launch_memory_retries = Atomic.make 0
   let launch_memory_refusals = Atomic.make 0
+  let graph_launch_memory_drops = Atomic.make 0
 
   let is_out_of_memory = function
     | H.Hip_error { status; _ } -> (
@@ -1697,10 +1698,26 @@ end = struct
         in
         String.concat ~sep:";" (idx @ merge)
       in
-      let launch_graph exec =
-        launch_with_memory_backoff ~name:("the graph of " ^ name)
-          ~scratch:(lazy (Printf.sprintf "a graph of %d kernels" (List.length tasks)))
-          (fun () -> H.Graph.launch exec device.runner)
+      (* A graph launch refused device memory is never retried on its exec: on CUDA such a retry was
+         accepted with the memory still held and the replay then faulted (gh-ocannl-1872), and HIP
+         is held to the same shape. The exec is dropped and destroyed, the segments run plainly this
+         time, where each kernel launch backs off, and the next run captures afresh. Called under
+         [graphs.lock]. *)
+      let launch_graph ~key exec =
+        match H.Graph.launch exec device.runner with
+        | () -> ()
+        | exception (H.Hip_error { message; _ } as exn) when is_out_of_memory exn ->
+            Atomic.incr graph_launch_memory_drops;
+            Stdio.eprintf
+              "hip: launching the graph of %s was refused device memory (%s): dropping its exec \
+               and running its segments plainly this time (gh-ocannl-1872)\n\
+               %!"
+              name message;
+            Hashtbl.remove cache key;
+            Queue.filter_inplace order ~f:(fun k -> not (String.equal k key));
+            H.Stream.synchronize device.runner;
+            H.Graph.exec_destroy exec;
+            run_plain ()
       in
       let capture () =
         (* RELAXED, not THREAD_LOCAL: GC finalizers (module unloads, buffer frees of dead handles)
@@ -1744,7 +1761,7 @@ end = struct
                         set_ctx @@ ctx_of context;
                         let key = current_key () in
                         match Hashtbl.find cache key with
-                        | Some exec -> launch_graph exec
+                        | Some exec -> launch_graph ~key exec
                         | None -> (
                             match capture () with
                             | exec ->
@@ -1757,7 +1774,7 @@ end = struct
                                   Hashtbl.remove cache victim);
                                 Hashtbl.set cache ~key ~data:exec;
                                 Queue.enqueue order key;
-                                launch_graph exec
+                                launch_graph ~key exec
                             | exception (H.Hip_error { message; _ } as exn)
                               when is_out_of_memory exn ->
                                 (* Refused device memory after the back-off, which says nothing
@@ -1792,6 +1809,7 @@ end = struct
         (* gh-ocannl-1872: launches refused device memory, retried and given up on. *)
         ("launch_memory_retries", [%sexp_of: int] @@ Atomic.get launch_memory_retries);
         ("launch_memory_refusals", [%sexp_of: int] @@ Atomic.get launch_memory_refusals);
+        ("graph_launch_memory_drops", [%sexp_of: int] @@ Atomic.get graph_launch_memory_drops);
       ]
 
   let static_properties () =

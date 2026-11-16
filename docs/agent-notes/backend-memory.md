@@ -462,15 +462,24 @@ files.
   resnet-block reference (s11d_ref), ONE thread with a 48 KiB depot (three 16 KiB `Local` nodes,
   each exactly at `stack_threshold_in_bytes`), reserves 3.3 GiB, and under a second GPU batch
   `cu_launch_kernel` answered `CUDA_ERROR_OUT_OF_MEMORY` (the 2026-10-02 and 10-31 flakes). The
-  launch, and since gh-ocannl-1872 the graph launch (`Cu.Graph.launch`, both the first after a
-  capture and a cached replay), CUDA and HIP graph instantiation (where a graph's kernels first
-  reserve: a hopeless CUDA frame is refused there) and HIP's kernel and graph launches, back off
+  kernel launch, and since gh-ocannl-1872 CUDA and HIP graph instantiation (where a graph's
+  kernels first reserve: a hopeless CUDA frame is refused there) and HIP's kernel launch, back off
   over 15.5 s (`launch_with_memory_backoff`; a stderr line per refusal states the reservation),
-  an instantiation refused memory running the segments plainly that once, CUDA at once
-  re-raising when the reservation exceeds total memory. The exception stays the binding's own:
-  the sweep's serial rerun keys on its text (`cu_graph_launch`/`hip_graph_launch` rows included),
-  and CUDA's `classify_failure` declines it `No_device_writes` in a search (HIP's does not classify
-  it). The global debug info counts `launch_memory_retries` and `launch_memory_refusals`.
+  CUDA at once re-raising when the reservation exceeds total memory. An instantiation refused
+  memory runs the segments plainly that once. The exception stays the binding's own: the sweep's
+  serial rerun keys on its text, and CUDA's `classify_failure` declines it `No_device_writes` in a
+  search (HIP's does not classify it). The global debug info counts `launch_memory_retries` and
+  `launch_memory_refusals`.
+- **A refused graph LAUNCH is never retried on its exec** (gh-ocannl-1872). Measured on rog-nv
+  under a neighbour's hold: after `cuGraphLaunch` of a cached exec answered
+  `CUDA_ERROR_OUT_OF_MEMORY`, its retry was accepted with the memory still held, and the replay
+  faulted (`CUDA_ERROR_LAUNCH_FAILED`, sticky): the driver relaunched without regrowing the
+  reservation, while plain launches and instantiation kept refusing until memory was free. So
+  `sequence_segments`' `launch_graph` sets the stack limit back to the baseline (re-syncing the
+  driver's view of the reservation), drops and destroys the exec, runs the segments plainly that
+  once, where each kernel launch backs off, and captures afresh on the next run. HIP drops the
+  exec the same way, with no limit to reset. Counted as `graph_launch_memory_drops`; no
+  `cu_graph_launch` or `hip_graph_launch` exception escapes for memory.
 - **The driver keeps a grown local-memory reservation until the context's stack limit is set
   again** (gh-ocannl-1872). Nothing shrinks it on its own, so one s11d_ref launch used to pin its
   process at +3.3 GiB until exit, starving `-j 8` neighbours. `cuCtxSetLimit(STACK_SIZE, baseline)`
@@ -495,7 +504,8 @@ files.
   for a small frame or one a quarter under the threshold, and resets for one a quarter over it;
   runs HIP's scratch frame. By hand, under an exclusive hold, `--contended`
   outwaits a child process holding the memory in device buffers (a frame reservation is now
-  released at once); in a shared batch that child refused its neighbours. `schedule_strided_1x1`'s
+  released at once) for a plain launch, a graph's first instantiation and a cached replay, whose
+  refused exec must be dropped; in a shared batch that child refused its neighbours. `schedule_strided_1x1`'s
   resnet-block row claims the reset on the real s11d_ref.
 - Raw-lowering test audit (gh-ocannl-2219): a `lowered_transform` that captures IR for a structural
   assertion need not launch that IR. `online_softmax_block`'s `forward` and `training`,

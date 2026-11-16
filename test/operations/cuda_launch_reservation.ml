@@ -35,7 +35,8 @@
    whose reservation fits the device but not what the child left free is retried, and runs once the
    child is gone, computing the right values: a plain launch and a graph's first run (its
    instantiation) on CUDA or HIP, and on CUDA a cached graph's replay, which regrows the released
-   reservation. Run it as [OCANNL_BACKEND=cuda dune build
+   reservation: a refused graph launch drops its exec and runs the segments plainly, never
+   relaunching it (a relaunch faulted on rog-nv). Run it as [OCANNL_BACKEND=cuda dune build
    test/operations/cuda_launch_reservation.exe] (or [hip]), then [./cuda_launch_reservation.exe
    --contended] in [_build/default/test/operations], under an exclusive hold of the box; a false
    claim exits 1.
@@ -457,7 +458,9 @@ let () =
           lazy
             (let start = Unix.gettimeofday () in
              let got, d =
-               deltas ctx backoff (fun () ->
+               deltas ctx
+                 (backoff @ [ "graph_launch_memory_drops"; "live_graph_execs" ])
+                 (fun () ->
                    let linked, out = Lazy.force prepared in
                    Context.get_values (run_linked linked ~seed:[]) out)
              in
@@ -473,11 +476,23 @@ let () =
         in_legf ~leg "contended, %s: the submission is retried, and not given up on" what
           (fun label ->
             match snd (Lazy.force run) with
-            | [ retries; refusals ] -> p label (retries >= 1 && refusals = 0)
+            | [ retries; refusals; _; _ ] -> p label (retries >= 1 && refusals = 0)
             | _ -> p label false);
         in_legf ~leg "contended, %s: the retried kernels compute the right values" what
           (fun label ->
             p label (Array.equal Float.equal (fst (Lazy.force run)) (expected ~graph floats)));
+        (* The cached replay's graph launch is the one refused: its exec must be dropped, not
+           relaunched -- a relaunch after the refusal ran without its reservation and faulted on
+           rog-nv -- and the run left to the plain launches, which recapture nothing. *)
+        (match case with
+        | `Replay ->
+            in_legf ~leg
+              "contended, %s: the refused graph launch dropped its exec, leaving none cached" what
+              (fun label ->
+                match snd (Lazy.force run) with
+                | [ _; _; drops; live ] -> p label (drops = 1 && live = -1)
+                | _ -> p label false)
+        | `Plain | `First_capture -> ());
         if Lazy.is_val child && not (Lazy.is_val run) then
           let pid, _, _ = Lazy.force child in
           ignore (Unix.waitpid [] pid : int * Unix.process_status))
