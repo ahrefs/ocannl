@@ -28,9 +28,9 @@
    was one value under [c[|5,3]]. A solved row now passes its mark to the axes it absorbs, so they
    resolve at their use sites as the draw does.
 
-   What still repeats, and why: in [(u *. 2) *. 2, then a fixed index] the use site's size is a
-   fixed index's lower bound on the outer result's axis, which is no GLB and does not travel down to
-   the inner result; that one closes minimal, and the draw matches it. *)
+   What changed with gh-ocannl-2229: a fixed-index input's minimum above 1 closes before
+   unconstrained results guess minimal. The concrete size then travels through the existing
+   leaf-before-result stages, so both two-result and three-result chains fill the indexed axis. *)
 
 open! Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -153,9 +153,15 @@ let () =
       ([ u ], y, y));
   (* gh-ocannl-1961's executed shape: the use site's bound arrives at the final stage, through a
      fixed index, and a chain of two operation results stands between it and the draw. *)
-  draws "(u *. 2) *. 2, then a fixed index, batch 4" ~want:"4|1" ~fills:(Some false) (fun () ->
+  draws "(u *. 2) *. 2, then a fixed index, batch 4" ~want:"4|4" ~fills:(Some true) (fun () ->
       let u = TDSL.uniform () ~batch_dims:[ 4 ] () in
       let m = times2 (times2 u) in
+      let%op y = m ++ "...|3 => ...|0" in
+      ([ u ], m, y));
+  draws "((u *. 2) *. 2) *. 2, then a fixed index, batch 4" ~want:"4|4" ~fills:(Some true)
+    (fun () ->
+      let u = TDSL.uniform () ~batch_dims:[ 4 ] () in
+      let m = times2 (times2 (times2 u)) in
       let%op y = m ++ "...|3 => ...|0" in
       ([ u ], m, y));
   draws "u *. 2, then a fixed index, batch 4" ~want:"4|4" ~fills:(Some true) (fun () ->

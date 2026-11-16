@@ -31,9 +31,13 @@ u + 1, nothing sizing u
   draw = 1, 1 distinct values for 1 cells
 u + 1, nothing sizing u: every draw closes to 1: true
 (u *. 2) *. 2, then a fixed index, batch 4
-  draw = 4|1, 4 distinct values for 16 cells
-(u *. 2) *. 2, then a fixed index, batch 4: every draw closes to 4|1: true
-(u *. 2) *. 2, then a fixed index, batch 4: every draw repeats along its use site: true
+  draw = 4|4, 16 distinct values for 16 cells
+(u *. 2) *. 2, then a fixed index, batch 4: every draw closes to 4|4: true
+(u *. 2) *. 2, then a fixed index, batch 4: every draw fills its use site: true
+((u *. 2) *. 2) *. 2, then a fixed index, batch 4
+  draw = 4|4, 16 distinct values for 16 cells
+((u *. 2) *. 2) *. 2, then a fixed index, batch 4: every draw closes to 4|4: true
+((u *. 2) *. 2) *. 2, then a fixed index, batch 4: every draw fills its use site: true
 u *. 2, then a fixed index, batch 4
   draw = 4|4, 16 distinct values for 16 cells
 u *. 2, then a fixed index, batch 4: every draw closes to 4|4: true
