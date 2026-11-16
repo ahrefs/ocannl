@@ -373,6 +373,85 @@ let () = List.iter labels ~f:skipped|ocaml},
       ( "an Option iteration, which runs at most once",
         {ocaml|let () = Option.iter maybe_label ~f:skipped|ocaml},
         [] );
+      (* gh-ocannl-1893: deferred skip values -- a skip bound to another name, a skip wrapper run by
+         its application, a partial iteration completed where its name is applied, a lazy run where
+         it is forced, a lazy sequence's callbacks run where it is consumed -- each beside the inert
+         value it must not be confused with. *)
+      ( "a skip alias of another name handed to an iteration",
+        {ocaml|let skip = Verdict.skipped ~backend:backend_name
+let () = List.iter labels ~f:skip|ocaml},
+        [ "iterated skip" ] );
+      ( "a parameter that shares a skip alias's name",
+        {ocaml|let run ~skip = List.iter labels ~f:skip|ocaml},
+        [] );
+      ( "a wrapper of two skips run in a branch",
+        {ocaml|let skip_both () = skipped "a"; skipped "b"
+let () = if on_gpu then (p "a" x; p "b" y) else skip_both ()|ocaml},
+        [ "run 2 a" ] );
+      ( "a wrapper of a wrapper run in a branch",
+        {ocaml|let skip_a () = skipped "a"
+let skip_both () = skip_a (); skipped "b"
+let () = if on_gpu then run () else skip_both ()|ocaml},
+        [ "run 2 a" ] );
+      ( "a one-skip wrapper applied twice in a branch",
+        {ocaml|let skip l = Verdict.skipped ~backend:backend_name l
+let () = if on_gpu then check () else (skip "a"; skip "b")|ocaml},
+        [ "run 2 l" ] );
+      ( "a one-skip wrapper handed to an iteration",
+        {ocaml|let skip l = Verdict.skipped ~backend:backend_name l
+let () = List.iter labels ~f:skip|ocaml},
+        [ "iterated l" ] );
+      ( "a wrapper that also evaluates a claim",
+        {ocaml|let both () = p "a" x; skipped "b"
+let () = if on_gpu then run () else (both (); skipped "c")|ocaml},
+        [] );
+      ("a wrapper never applied", {ocaml|let skip_both () = skipped "a"; skipped "b"|ocaml}, []);
+      ( "a wrapper applied in part",
+        {ocaml|let skip_two a b = skipped a; skipped b
+let () = if on_gpu then run () else ignore (skip_two "a")|ocaml},
+        [] );
+      ( "a wrapper a local binding shadows",
+        {ocaml|let skip_both () = skipped "a"; skipped "b"
+let () = let skip_both () = () in if on_gpu then run () else skip_both ()|ocaml},
+        [] );
+      ( "a partial iteration stored and applied later",
+        {ocaml|let skip_labels = List.iter ~f:(Verdict.skipped ~backend:backend_name)
+let () = if on_gpu then run () else skip_labels labels|ocaml},
+        [ "iterated Verdict.skipped ~backend:backend_name" ] );
+      ( "a stored partial iteration applied through a pipeline",
+        {ocaml|let skip_labels = List.iter ~f:(Verdict.skipped ~backend:backend_name)
+let () = labels |> skip_labels|ocaml},
+        [ "iterated Verdict.skipped ~backend:backend_name" ] );
+      ( "a lazy of two skips forced in a branch",
+        {ocaml|let skips = lazy (skipped "a"; skipped "b")
+let () = if on_gpu then run () else Lazy.force skips|ocaml},
+        [ "run 2 a" ] );
+      ( "a lazy forced twice in a branch, which runs once",
+        {ocaml|let skip_a = lazy (skipped "a")
+let () = if on_gpu then run () else (Lazy.force skip_a; Lazy.force skip_a)|ocaml},
+        [] );
+      ( "a lazy of skips nobody forces",
+        {ocaml|let skips = lazy (skipped "a"; skipped "b")
+let () = if on_gpu then run () else ignore skips|ocaml},
+        [] );
+      ( "a lazy that also evaluates a claim",
+        {ocaml|let checks = lazy (p "a" x; skipped "b")
+let () = if on_gpu then run () else (Lazy.force checks; skipped "c")|ocaml},
+        [] );
+      ( "a lazy sequence of skips a consumer runs",
+        {ocaml|let deferred = Stdlib.Seq.map (Verdict.skipped ~backend:backend_name) (Stdlib.List.to_seq labels)
+let () = Stdlib.Seq.iter ignore deferred|ocaml},
+        [ "iterated Verdict.skipped ~backend:backend_name" ] );
+      ( "a lazy sequence of skips materialised",
+        {ocaml|let () =
+  ignore (Stdlib.List.of_seq (Stdlib.Seq.map (Verdict.skipped ~backend:backend_name) (Stdlib.List.to_seq labels)))|ocaml},
+        [ "iterated Verdict.skipped ~backend:backend_name" ] );
+      ( "a sequence consumer the table marks consuming",
+        {ocaml|let () = ignore (Sequence.count labels ~f:(fun l -> skipped l; true))|ocaml},
+        [ "iterated l" ] );
+      ( "a sequence transformation that only builds",
+        {ocaml|let () = ignore (Sequence.filter labels ~f:(fun l -> skipped l; true))|ocaml},
+        [] );
     ]
     ~f:(fun (name, source, expected) ->
       let found =

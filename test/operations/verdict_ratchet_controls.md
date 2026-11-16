@@ -885,6 +885,26 @@ The skip-list reader's cases are `verdict_scan_cases`' skip-list rows, run under
 | A lazy in a branch is deferred, as in a callback (PR review round 7) | `verdict_scan.ml`: branch counting reads lazies as run | a lazy a branch only builds | `20261102T222153Z-22786` |
 | An Option iteration runs at most once | `verdict_scan.ml`: Option read as a collection iteration | an Option iteration, which runs at most once | `20261102T202018Z-64542` |
 
+## gh-ocannl-1893 mutation runs
+
+The skip-list reader's deferred skip values are `verdict_scan_cases`' skip-list rows, run under the
+`runtest-verdict_scan_cases` alias (baseline `20261116T164653Z-78465`; the two sequence rows ran again after the
+cases' `Sequence` spelling changed, on baseline `20261116T170703Z-74375`):
+
+| Mechanism | Mutation | Cases that failed | Run |
+|---|---|---|---|
+| A skip bound to a name of any spelling is a skip | `verdict_scan.ml`: only a `skipped` binding is a skip | a skip alias of another name handed to an iteration | `20261116T164717Z-3577` |
+| A skip wrapper's application runs its skips | `verdict_scan.ml`: a wrapper's application runs nothing | a wrapper of two skips run in a branch; a wrapper of a wrapper run in a branch; a one-skip wrapper applied twice in a branch | `20261116T164741Z-27501` |
+| A skip wrapper handed to an iteration is a skip handed there | `verdict_scan.ml`: a wrapper's name skips nothing as a callback | a one-skip wrapper handed to an iteration | `20261116T164801Z-44497` |
+| A deferred value that evaluates a claim is no skip wrapper | `verdict_scan.ml`: its evaluating claims ignored | a wrapper that also evaluates a claim; a lazy that also evaluates a claim | `20261116T164826Z-65460` |
+| Only a complete application runs a wrapper | `verdict_scan.ml`: completeness not checked | a wrapper applied in part | `20261116T164846Z-84672` |
+| A stored partial iteration is completed where its name is applied | `verdict_scan.ml`: an application of the name read as written | a partial iteration stored and applied later; a stored partial iteration applied through a pipeline | `20261116T164906Z-3127` |
+| A forced lazy runs its skips | `verdict_scan.ml`: nothing forces | a lazy of two skips forced in a branch | `20261116T164925Z-21095` |
+| A lazy runs once per branch | `verdict_scan.ml`: every force runs it | a lazy forced twice in a branch, which runs once | `20261116T164945Z-43669` |
+| A consumer runs the callbacks of the lazy sequence it is handed | `verdict_scan.ml`: producers not carried to their consumer | a lazy sequence of skips a consumer runs; a lazy sequence of skips materialised | `20261116T165005Z-74800` |
+| Which sequence functions consume is the table's | `verdict_scan.ml`: `count` dropped from the consuming group | a sequence consumer the table marks consuming | `20261116T170730Z-96728` |
+| A sequence function that does not consume only builds | `verdict_scan.ml`: every sequence function runs its callback | a sequence transformation that only builds; a lazy sequence a map only builds | `20261116T170801Z-18157` |
+
 ## gh-ocannl-1470 mutation runs
 
 The tolerance reader now also reads every other Verdict claim's arguments (`helper_claim_callees`:

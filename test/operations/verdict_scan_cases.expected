@@ -84,6 +84,26 @@ ok: skip list -- a lazy sequence a map only builds
 ok: skip list -- a partial skip a loop body only builds
 ok: skip list -- a lazy a branch only builds
 ok: skip list -- an Option iteration, which runs at most once
+ok: skip list -- a skip alias of another name handed to an iteration
+ok: skip list -- a parameter that shares a skip alias's name
+ok: skip list -- a wrapper of two skips run in a branch
+ok: skip list -- a wrapper of a wrapper run in a branch
+ok: skip list -- a one-skip wrapper applied twice in a branch
+ok: skip list -- a one-skip wrapper handed to an iteration
+ok: skip list -- a wrapper that also evaluates a claim
+ok: skip list -- a wrapper never applied
+ok: skip list -- a wrapper applied in part
+ok: skip list -- a wrapper a local binding shadows
+ok: skip list -- a partial iteration stored and applied later
+ok: skip list -- a stored partial iteration applied through a pipeline
+ok: skip list -- a lazy of two skips forced in a branch
+ok: skip list -- a lazy forced twice in a branch, which runs once
+ok: skip list -- a lazy of skips nobody forces
+ok: skip list -- a lazy that also evaluates a claim
+ok: skip list -- a lazy sequence of skips a consumer runs
+ok: skip list -- a lazy sequence of skips materialised
+ok: skip list -- a sequence consumer the table marks consuming
+ok: skip list -- a sequence transformation that only builds
 ok: floor -- a floor of zero on an opened p_all
 ok: floor -- a negative floor, which the parser folds into one constant
 ok: floor -- a zero written in hexadecimal, with underscores, and under a type constraint

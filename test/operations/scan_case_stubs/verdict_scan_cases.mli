@@ -45,6 +45,13 @@ module Option : sig
   val iter : 'a option -> f:('a -> unit) -> unit
 end
 
+(** [Base]'s lazy sequence, at the least types the gh-ocannl-1893 consumer arms need: a consumer
+    ([count]) and a transformation that only builds ([filter]). *)
+module Sequence : sig
+  val count : 'a list -> f:('a -> bool) -> int
+  val filter : 'a list -> f:('a -> bool) -> 'a list
+end
+
 module Verdict : sig
   type leg
 
