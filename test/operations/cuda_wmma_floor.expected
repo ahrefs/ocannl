@@ -1,0 +1,6 @@
+the witness renders the wide fragment scope and both destination conversions: true
+compute_75 PTX targets sm_75 and accumulates WMMA f16 products in f32: true
+compute_70 PTX targets sm_70 and accumulates WMMA f16 products in f32: true
+the wide fragment alone ships at the toolkit-adjusted f16 floor: true
+cp.async still raises a wide-f16 kernel to the async-copy floor: true
+compute_75 refuses the otherwise compilable WMMA bf16 control: true

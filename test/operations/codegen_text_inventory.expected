@@ -162,6 +162,13 @@ test/operations/cpu_vectorized.ml [run by @test/operations/runtest-cpu_vectorize
     "float4_t"
     "reinterpret_cast"
     "vector_size"
+test/operations/cuda_wmma_floor.real.ml [run by @test/operations/runtest-cuda_wmma_floor; also pins text this scan cannot name: untraced callback, opaque aggregate component, unvalidated haystack]
+    "(wmma-f16-wide)"
+    ".target sm_" ^ ...
+    "__float2half"
+    "__half2float"
+    "wmma fragment reduction body begins"
+    "wmma.mma.sync.aligned.row.row.m16n16k16.f32.f32"
 test/operations/declared_temporaries.ml [run by @test/operations/runtest-declared_temporaries-logged, @test/operations/runtest-declared_temporaries-plain; also pins text this scan cannot name: untraced callback]
 test/operations/f64_narrowing_parity.ml [run by @test/operations/runtest-f64_narrowing_parity; also pins text this scan cannot name: untraced callback, opaque aggregate component, mutation or unseen buffer write]
 test/operations/fission_replay_segmentation.ml [run by @test/operations/runtest-fission_replay_segmentation]
@@ -675,6 +682,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-cpu_scratch_matmul_grid
 @test/operations/runtest-cpu_simd_reduction
 @test/operations/runtest-cpu_vectorized
+@test/operations/runtest-cuda_wmma_floor
 @test/operations/runtest-declared_temporaries-logged
 @test/operations/runtest-declared_temporaries-plain
 @test/operations/runtest-f64_narrowing_parity
@@ -1125,6 +1133,7 @@ test/operations/cc_half_excess_precision.ml [calls cc's compiler; run by @test/o
 test/operations/cc_load_refusal_classes.ml [calls cc's compiler; run by @test/operations/runtest-cc_load_refusal_classes]
 test/operations/cc_march_census.ml [calls cc's compiler; run by @test/operations/runtest-cc_march_census-emission, @test/operations/runtest-cc_march_census-emission-outlined, @test/operations/runtest-cc_march_census-w16_native_foreign, @test/operations/runtest-cc_march_census-w16_native_host, @test/operations/runtest-cc_march_census-w16_wide_foreign, @test/operations/runtest-cc_march_census-w16_wide_host, @test/operations/runtest-cc_march_census-w32_native_foreign, @test/operations/runtest-cc_march_census-w32_native_host, @test/operations/runtest-cc_march_census-w32_wide_foreign, @test/operations/runtest-cc_march_census-w32_wide_host, @test/operations/runtest-cc_march_census-w64_native_foreign, @test/operations/runtest-cc_march_census-w64_native_host, @test/operations/runtest-cc_march_census-w64_wide_foreign, @test/operations/runtest-cc_march_census-w64_wide_host]
 test/operations/cuda_like_builtins_emulation.ml [calls cc's compiler; run by @test/operations/runtest-cuda_like_builtins_emulation]
+test/operations/cuda_wmma_floor.real.ml [calls cuda's compiler; run by @test/operations/runtest-cuda_wmma_floor]
 test/operations/metal_builtins_emulation.ml [calls cc's compiler; run by @test/operations/runtest-metal_builtins_emulation]
 test/operations/runtime_power_fast_math_emulation.ml [calls cc's compiler; run by @test/operations/runtest-runtime_power_fast_math_emulation]
 test/operations/schedule_pad.ml [calls cc's compiler; run by @test/operations/runtest-schedule_pad, @test/operations/runtest-schedule_pad-contract_off]
@@ -1159,6 +1168,7 @@ cc:
   @test/operations/runtest-schedule_pad-contract_off
 cuda:
   @arrayjit/test/runtest-test_cuda_classify_failure
+  @test/operations/runtest-cuda_wmma_floor
 hip:
   @arrayjit/test/runtest-test_hip_compile_failure_options
   @arrayjit/test/runtest-test_hip_driver_init_deadline

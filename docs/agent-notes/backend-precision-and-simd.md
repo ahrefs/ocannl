@@ -953,8 +953,9 @@ files.
   serial loop (the f16 census below), so a narrow default made values depend on the crowned
   schedule; Metal stays narrow (its half tile and serial loop are both per-step, bitwise equal).
   The seeding side reads the same constant from `mma_capability.mma_f16_auto_wide`, so under a
-  wide-resolving auto CUDA below sm_80 (no wide scope) withholds its uniform-f16 seeds exactly as
-  under `Fp16_wide`. `Fp16_narrow` (`true`) is the gh-516 CPU opt-in and, on the GPUs, the
+  wide-resolving auto CUDA sm_70-79 admits fragment-only uniform-f16 seeds and withholds
+  per-statement seeds, exactly as under `Fp16_wide` (gh-ocannl-2251). `Fp16_narrow` (`true`) is
+  the gh-516 CPU opt-in and, on the GPUs, the
   f16-accumulate arms (what `performance`/`approximate` set). `Fp16_wide` (`false` — note the repurposing: an explicit
   old-style `false` now REQUESTS strict wide) gives f16 accumulators f32 residency on every
   backend, `narrow_compute_f32=false` included: each backend's `accum_prec` widens `Half`, and the
@@ -965,8 +966,16 @@ files.
   are shared by .f16/.bf16; marker `(mma-f16)`, arch floor 80 from `Cuda_mma.arm_floor`), and its
   f16-accumulate wmma combo is gated off. The persistent-fragment scope is wmma's `__half` x
   `__half` -> `float` fragments behind a converted `d` boundary since gh-ocannl-925 (the
-  `wmma-f16-wide` combo, `wc_d_cvt`; see the coordinate-table bullet below); before it the list
-  was `[Mma_per_statement]`, which kept only candidates whose emitted accumulator has no enclosing
+  `wmma-f16-wide` combo, `wc_d_cvt`; see the coordinate-table bullet below); its instruction
+  floor is sm_70, independently of the per-statement m16n8k16 arm (gh-ocannl-2251).
+  `cuda_wmma_floor` recompiles the freshly rendered converted boundary at compute_75 and checks
+  f32 WMMA PTX, with bf16 refused at that target. NVRTC 13.5.37 rejects compute_70; older NVRTC
+  is probed there too when accepted. Its `cuda_wmma_floor-missing` alias forces the missing-NVRTC
+  arm and checks the same golden while recording environment skips for its claims. No sm_70-79
+  execution is implied. Lowering this floor also
+  lowers shipping PTX on later devices to compute_75 unless another marker (notably `cp.async`)
+  requires 80. Before gh-ocannl-925 the list was `[Mma_per_statement]`, which kept only
+  candidates whose emitted accumulator has no enclosing
   reduction loop with extent greater than one. That includes the unstaged rank-2 forms and a staged
   matmul whose padded k-block count is one; a multi-axis matmul's inherited contraction loops, a
   multi-block staged matmul, and a multi-window convolution require `Mma_fragment_scope`. A detected convolution with only extent-one kernel-window loops likewise
@@ -985,7 +994,7 @@ files.
   staged. Placement enablement applies the same resolver to its unstaged eligibility gate, so a
   device with no applicable wide scope cannot spend its placement budget unlocking an empty
   family. Since gh-ocannl-925 no tensor-core backend trades multi-statement f16 legs under the wide
-  policy (CUDA below sm_80 advertises no wide scope at all). The resolution is per backend — do
+  policy (CUDA sm_70-79 advertises only the fragment scope). The resolution is per backend — do
   not write code or tests assuming `auto` equals either explicit mode; a test about the narrow
   arms names `Fp16_narrow` (`Test_utils.with_fp16_narrow`), and `accum_width.ml`'s default-policy
   legs name each backend's resolution independently. Pinned by: `accum_width.ml`'s universal f16 legs

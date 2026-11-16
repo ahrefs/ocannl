@@ -72,15 +72,16 @@ let resolve_arm ~a_prec ~b_prec ~d_prec ~scope =
       Some (Wmma Wmma_tf32)
   | _ -> None
 
-(* The arch floors: wmma's 16-bit f16 forms are sm_70+ (Volta tensor cores); its bf16, tf32 and
-   converted wide-f16 forms, and the m16n8k16 [mma.sync] forms, sm_80+ (Ampere); m16n8k32 over e5m2
-   sm_89+ (Ada). The ONLY place CUDA's mma cutoffs are written: [capability], [mma_arm] and
-   [gpu_arch_options] read them from here. *)
+(* Instruction floors: all wmma f16 forms use Volta's sm_70+ fragments, including wide-f16's f32
+   accumulator with element-wise conversions at the d boundary (gh-ocannl-2251). Those conversions
+   add no tensor-instruction requirement. Wmma bf16/tf32 and m16n8k16 [mma.sync] require sm_80+
+   (Ampere); m16n8k32 over e5m2 requires sm_89+ (Ada). The ONLY place CUDA's mma cutoffs are
+   written: [capability], [mma_arm] and [gpu_arch_options] read them from here. *)
 let arm_floor = function
   | Inline_ptx Fp8_m16n8k32 -> 89
   | Inline_ptx (M16n8k16 (M16n8k16_bf16 | M16n8k16_f16)) -> 80
-  | Wmma (Wmma_f16_f32 | Wmma_f16_f16) -> 70
-  | Wmma (Wmma_f16_wide | Wmma_bf16 | Wmma_tf32) -> 80
+  | Wmma (Wmma_f16_f32 | Wmma_f16_f16 | Wmma_f16_wide) -> 70
+  | Wmma (Wmma_bf16 | Wmma_tf32) -> 80
 
 let arm_marker = function
   | Inline_ptx Fp8_m16n8k32 -> "mma-fp8"

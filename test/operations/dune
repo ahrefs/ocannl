@@ -1,3 +1,7 @@
+(rule
+ (action
+  (copy# cuda_wmma_floor.missing.ml cuda_wmma_floor_missing.ml)))
+
 (copy_files
  (files ../config/ambient/ocannl_config))
 
@@ -5703,6 +5707,63 @@
  (deps ocannl_config)
  (modules cuda_mma_cutoffs)
  (libraries base stdio arrayjit.ir arrayjit.autotune arrayjit.verdict))
+
+(test
+ ; Compile-only NVRTC witness, selected only for CUDA runs. Context.auto reads the backend.
+ (name cuda_wmma_floor)
+ (package neural_nets_lib)
+ (enabled_if
+  (= %{env:OCANNL_BACKEND=cc} cuda))
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules cuda_wmma_floor)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  cuda_wmma_floor_claims
+  test_utils
+  ll_test
+  (select
+   cuda_wmma_floor.ml
+   from
+   (cudajit.nvrtc -> cuda_wmma_floor.real.ml)
+   (-> cuda_wmma_floor.missing.ml)))
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ ; ocannl-backend: none -- exercises the missing-toolkit arm without loading a backend.
+ (alias runtest-cuda_wmma_floor-missing)
+ (targets cuda_wmma_floor_missing.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  cuda_wmma_floor.expected)
+ (action
+  (progn
+   (with-stdout-to
+    cuda_wmma_floor_missing.actual
+    (run %{exe:cuda_wmma_floor_missing.exe} --forced))
+   (diff cuda_wmma_floor.expected cuda_wmma_floor_missing.actual))))
+
+(alias
+ (name runtest)
+ (deps
+  (alias runtest-cuda_wmma_floor-missing)))
+
+(library
+ (name cuda_wmma_floor_claims)
+ (modules cuda_wmma_floor_claims)
+ (libraries arrayjit.verdict))
+
+(executable
+ (name cuda_wmma_floor_missing)
+ (modules cuda_wmma_floor_missing)
+ (libraries stdio arrayjit.verdict cuda_wmma_floor_claims))
 
 ; gh-ocannl-2011: data-backed leaves keep their stated precision under a consumer, whether or not it
 ; was read first; a leaf with no data takes top-down precision and refuses a link after a read.

@@ -1988,7 +1988,7 @@ let () =
      converted fragment path. On CUDA the per-statement wide arm is inline PTX; before gh-ocannl-925
      this composition rendered it once per [k_o] block and read 2048 — the fragment scope is wmma's
      f32 accumulator fragments behind the table-addressed element conversion, where the device
-     advertises it (sm_80+). --- *)
+     advertises it (sm_70+). --- *)
   (* gh-ocannl-1032: on HIP this leg's whole subject is the converted [d] boundary in the FRAGMENT
      scope, which exists only where a tensor unit does. With no advertised tile-MMA the composition
      declines to the scalar fallback, which has no accumulator fragment to convert — there is no

@@ -86,6 +86,10 @@ let () =
     List.filter ccs ~f:(fun cc ->
         cc > 0 && not (Option.equal BI.equal_mma_capability (capability cc) (capability (cc - 1))))
   in
+  List.iter descriptor_cutoffs ~f:(fun cc ->
+      let mma = Option.value_exn (capability cc) in
+      Stdio.printf "sm_%d wide-f16 scopes: %s\n" cc
+        (Sexp.to_string (List.sexp_of_t BI.sexp_of_mma_emission_scope mma.mma_f16_wide_acc_scopes)));
   let resolver_floors =
     List.concat_map policies ~f:(fun policy ->
         under policy (fun () ->
