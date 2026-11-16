@@ -4,6 +4,12 @@ agr-seed: no proposed hoisted-grid seed renders a Grid loop serially for the cap
 agr-seed: every refused geometry the renderer would privatize is over the cap: true
 agr-seed: the pre-filter refuses a geometry whose fragment is over the cap: true
 agr-seed: the pre-filter keeps a geometry that privatizes on the pool within the cap: true
+agr-grid: every judged plain-Grid candidate compiled: true
+agr-grid: the pre-filter weighs what the renderer privatizes, byte for byte: true
+agr-grid: no proposed plain-Grid seed renders a Grid loop serially for the cap: true
+agr-grid: every refused geometry the renderer would privatize is over the cap: true
+agr-grid: a padded geometry whose A~ tile fits is refused for its mask-forced fragment: true
+agr-grid: a padded geometry inside the cap is proposed and privatizes on the pool: true
 agr: the timing policy kept no timed seed out of the ranking: true
 agr: no ranked candidate rendered a Grid loop serially for the cap: true
 agr: a ranked Grid seed's record shows a loop serial for the launch floor: true

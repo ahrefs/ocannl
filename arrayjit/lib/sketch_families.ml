@@ -2657,6 +2657,32 @@ let cpu_pack_fragment_bytes (site : matmul_site) ~shape ~bm ~bn ~bk =
     bm * bn_eff * Ir.Ops.prec_in_bytes (Lazy.force site.m_d.Ir.Tnode.storage_prec)
   else 0
 
+(* gh-ocannl-1856: the in-kernel packed tiles a packing [shape] places inside its row-block [Grid]
+   loop's body, which the renderer privatizes per chunk, at the packing element size [prec_bytes]:
+   the plain [grid] shape's per-row-block A~ tile (its read-only B~ panel sits above the row blocks
+   and is shared); the per-chunk packing shapes' non-hoistable tiles (the builder hoists every
+   hoistable source in the grid-outermost form whatever [sk_hoist]: both tiles on a no-hoistable
+   site, the in-kernel one on a one-hoistable site); nothing for the hoisted-only Grid shape, whose
+   panels live in the constant pool, and nothing for the shapes with no Grid loop. *)
+let cpu_pack_grid_chunk_tiles (site : matmul_site) ~shape ~prec_bytes (p : sketch_params) =
+  let bn_eff = if p.sk_bn = 0 then site.m_nj else p.sk_bn in
+  let a_tile = p.sk_bm * p.sk_bk * prec_bytes and b_tile = p.sk_bk * bn_eff * prec_bytes in
+  match shape with
+  | `Grid -> a_tile
+  | `Grid_pack_rest | `Hoisted_grid_pack_rest ->
+      (if site_hoistable site site.m_a then 0 else a_tile)
+      + if site_hoistable site site.m_b then 0 else b_tile
+  | `Hoisted_grid | `Serial | `Hoisted -> 0
+
+(* The known per-chunk locals of a Grid packing shape's row-block body, the sum the renderer's
+   [Grid_private_over_cap] / [Grid_pool] report (gh-ocannl-1793): its in-kernel tiles plus the
+   accumulator fragment its contraction mints inside that body, by the loop order or the pad masks
+   ([cpu_pack_fragment_bytes]; on the plain [grid] shape a pad-masked statement-site tile, since
+   gh-ocannl-1706). One spelling for the seeding pre-filter and its test. *)
+let cpu_pack_grid_chunk_bytes (site : matmul_site) ~shape ~prec_bytes (p : sketch_params) =
+  cpu_pack_grid_chunk_tiles site ~shape ~prec_bytes p
+  + cpu_pack_fragment_bytes site ~shape ~bm:p.sk_bm ~bn:p.sk_bn ~bk:p.sk_bk
+
 (* gh-ocannl-1612: why [Sched.Fuse_epilogue] refuses the fused twin of EVERY completion of a CPU
    packed geometry, or [None] where it may admit one. Only the shapes that sink the row-block loop
    under the reduction-block loops are concerned ([cpu_pack_grid_outermost] false: Serial, Hoisted
@@ -4506,17 +4532,17 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                  tiles ([tiles]) plus, under a grid-outermost shape, the [bm x bn] accumulator
                  fragment its contraction mints inside that body — by the loop order or the pad
                  masks ([cpu_pack_fragment_bytes], gh-ocannl-1793, gh-ocannl-1706) — the renderer's
-                 [Grid_private_over_cap] sums the same locals. Other per-chunk locals can still trip
-                 the cap at render (the plain [grid] shape's pad-masked statement-site tile, which
-                 its branch does not weigh); passing here is necessary, not sufficient (the
-                 routine's Grid census and the decline diagnostics cover the rest). The renderer's
-                 own resolved cap, so the two cannot disagree about it. *)
+                 [Grid_private_over_cap] sums the same locals ([cpu_pack_grid_chunk_bytes]; the
+                 plain [grid] shape's pad-masked statement-site tile included, gh-ocannl-1856, which
+                 test/operations/autotune_grid_record pins equal to the renderer's record). Other
+                 per-chunk locals could still trip the cap at render; passing here is necessary, not
+                 sufficient (the routine's Grid census and the decline diagnostics cover the rest).
+                 The renderer's own resolved cap, so the two cannot disagree about it. *)
               let chunk_cap = Lazy.force Ir.C_syntax.per_chunk_private_bytes_cap in
-              let over_chunk_cap ~shape ~what ~tiles p =
-                let fragment =
-                  cpu_pack_fragment_bytes site ~shape ~bm:p.sk_bm ~bn:p.sk_bn ~bk:p.sk_bk
-                in
-                let bytes = tiles + fragment in
+              let over_chunk_cap ~shape ~what p =
+                let tiles = cpu_pack_grid_chunk_tiles site ~shape ~prec_bytes p in
+                let bytes = cpu_pack_grid_chunk_bytes site ~shape ~prec_bytes p in
+                let fragment = bytes - tiles in
                 if bytes > chunk_cap then
                   let fragment_what () =
                     Printf.sprintf "the contracted %dx%d accumulator fragment" p.sk_bm
@@ -4638,7 +4664,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                               else
                                 (* No in-kernel tile: the hoisted panels live in the constant pool,
                                    and the rest is read in place. *)
-                                match over_chunk_cap ~shape:`Hoisted_grid ~what:"" ~tiles:0 p with
+                                match over_chunk_cap ~shape:`Hoisted_grid ~what:"" p with
                                 | Some w -> Sspace.Refuted w
                                 | None -> leaf (with_packing_shape `Hoisted_grid p))) );
                   ( Family_decision.Packing_shape `Hoisted_grid_pack_rest,
@@ -4657,7 +4683,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                                          else
                                            match
                                              over_chunk_cap ~shape:`Hoisted_grid_pack_rest ~what:""
-                                               ~tiles:0 p
+                                               p
                                            with
                                            | Some w -> Sspace.Refuted w
                                            | None ->
@@ -4667,18 +4693,14 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                       companion_excluded @@ fun () ->
                       subt (fun () ->
                           geoms ~f:(fun p _ _ ->
-                              let bn_eff = if p.sk_bn = 0 then site.m_nj else p.sk_bn in
                               (* The non-hoistable operand's in-kernel packing Stage lands inside
-                                 the Grid body and privatizes per chunk. *)
-                              let rest_tile =
-                                if site_hoistable site site.m_a then p.sk_bk * bn_eff * prec_bytes
-                                else p.sk_bm * p.sk_bk * prec_bytes
-                              in
+                                 the Grid body and privatizes per chunk
+                                 ([cpu_pack_grid_chunk_tiles]). *)
                               if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
                               else
                                 match
                                   over_chunk_cap ~shape:`Hoisted_grid_pack_rest
-                                    ~what:"per-chunk packed tile" ~tiles:rest_tile p
+                                    ~what:"per-chunk packed tile" p
                                 with
                                 | Some w -> Sspace.Refuted w
                                 | None -> leaf (with_packing_shape `Hoisted_grid_pack_rest p))) );
@@ -4686,19 +4708,14 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                     (* The builder hoists every hoistable source in the grid-outermost form
                        regardless of [sk_hoist], so only the non-hoistable tiles privatize per chunk
                        — the cap judges exactly those (on a no-hoistable site this is both tiles; on
-                       a lifted one-hoistable site, just the in-kernel one). *)
-                    let privatized_bytes p =
-                      let bn_eff = if p.sk_bn = 0 then site.m_nj else p.sk_bn in
-                      (if site_hoistable site site.m_a then 0 else p.sk_bm * p.sk_bk * prec_bytes)
-                      + if site_hoistable site site.m_b then 0 else p.sk_bk * bn_eff * prec_bytes
-                    in
+                       a lifted one-hoistable site, just the in-kernel one:
+                       [cpu_pack_grid_chunk_tiles]). *)
                     let judged () =
                       geoms ~f:(fun p _ _ ->
                           if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
                           else
                             match
-                              over_chunk_cap ~shape:`Grid_pack_rest ~what:"per-chunk packed tiles"
-                                ~tiles:(privatized_bytes p) p
+                              over_chunk_cap ~shape:`Grid_pack_rest ~what:"per-chunk packed tiles" p
                             with
                             | Some w -> Sspace.Refuted w
                             | None -> leaf (with_packing_shape `Grid_pack_rest p))
@@ -4723,15 +4740,15 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                                 (* The per-row-block A~ tile privatizes per chunk; the read-only B~
                                    panel is shared and does not count against the cap. The row
                                    blocks sit inside the reduction blocks, so no loop contracts the
-                                   accumulator; a pad-masked statement-site fragment is not weighed
-                                   here (necessary, not sufficient, as above). *)
-                                let a_tile = p.sk_bm * p.sk_bk * prec_bytes in
+                                   accumulator, but a padded row or column block forces a
+                                   statement-site fragment inside the row-block body, which is
+                                   weighed with it ([cpu_pack_grid_chunk_bytes]). *)
                                 if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
                                 else
                                   fused_partial ~shape:`Grid p @@ fun () ->
                                   match
                                     over_chunk_cap ~shape:`Grid ~what:"per-chunk privatized A~ tile"
-                                      ~tiles:a_tile p
+                                      p
                                   with
                                   | Some w -> Sspace.Refuted w
                                   | None -> leaf (with_packing_shape `Grid p))) );

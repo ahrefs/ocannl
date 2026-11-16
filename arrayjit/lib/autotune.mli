@@ -919,6 +919,19 @@ val conv_pad_scratch_certain : conv_site -> gpu:bool -> masked:bool -> bool
 (** Whether it also mints the padded scratch tile: a masked window-loop site on the GPU leg
     (gh-ocannl-1736, gh-ocannl-1856). *)
 
+val cpu_pack_grid_chunk_bytes :
+  matmul_site ->
+  shape:[ `Serial | `Hoisted | `Hoisted_grid | `Hoisted_grid_pack_rest | `Grid_pack_rest | `Grid ] ->
+  prec_bytes:int ->
+  sketch_params ->
+  int
+(** The known per-chunk locals of a CPU packed shape's row-block [Grid] body, in bytes, at the
+    packing element size [prec_bytes]: its in-kernel packed tiles plus the accumulator fragment its
+    contraction mints there, by the loop order or the pad masks — on the plain [grid] shape a
+    pad-masked statement-site tile (gh-ocannl-1706). What the seeding pre-filter weighs against
+    [cc_grid_private_bytes_cap], and what the renderer's Grid record reports (gh-ocannl-1793,
+    gh-ocannl-1856); [0] for a shape without a Grid loop. Exposed for tests. *)
+
 val sketch_path_traffic_floor :
   limits:Ir.Backend_intf.hardware_limits -> Ir.Low_level.optimized -> Family_decision.path -> int
 (** The certain-traffic increment (bytes) of a family-tree decision path (gh-ocannl-514 phase 5):

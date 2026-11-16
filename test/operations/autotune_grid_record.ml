@@ -199,6 +199,156 @@ let () =
     (fun label ->
       p_exists label (Lazy.force judged) ~f:(fun j -> j.j_proposed && grid_of j ~f:pool_privatizing))
 
+(* --- The plain-Grid seeding leg (gh-ocannl-1856): the pre-filter's weighed bytes against the
+   renderer's record, where the pad masks force the fragment.
+
+   The plain [grid] packing shape sinks its row-block [Grid] loop under the reduction blocks, so no
+   loop contracts the accumulator; but a row or column block that does not divide its extent forces
+   [Tensorize]'s contraction at the statement site, inside the row-block body, and the renderer
+   privatizes that [bm x bn] tile per chunk beside the A~ tile. On a site no menu block divides,
+   every plain-Grid geometry the shared menu proposes for the [Serial] shape is re-asked under the
+   Grid shape (proposed or not) and compiled. The pre-filter's sum
+   ([Autotune.cpu_pack_grid_chunk_bytes], what it weighs) is the renderer's recorded private bytes
+   on every candidate whose row-block loop privatizes; a proposed one renders no loop serially for
+   the cap and a refused one is over it; a padded geometry whose A~ tile alone fits under the cap is
+   refused because its fragment does not, and a padded one inside the cap stays proposed and renders
+   on the pool. *)
+
+type grid_judged = {
+  g_proposed : bool;
+  g_masked : bool;
+  g_a_tile : int;
+  g_weighed : int;
+  g_grid : Cs.grid_summary option;
+}
+
+(* An [m x k] by [k x n] product of two host-init constants. *)
+let rect_matmul ~tag ~m ~k ~n =
+  let fa = Ll_test.cycle ~dims:[| m; k |] ~modulus:13 ~offset:0. ~stride:0.25
+  and fb = Ll_test.cycle ~dims:[| k; n |] ~modulus:17 ~offset:(-8.) ~stride:1. in
+  let a =
+    TDSL.ndarray
+      (Array.init (m * k) ~f:(fun t -> fa [| t / k; t % k |]))
+      ~label:[ tag ^ "_a" ]
+      ~output_dims:[ m; k ] ()
+  in
+  let b =
+    TDSL.ndarray
+      (Array.init (k * n) ~f:(fun t -> fb [| t / n; t % n |]))
+      ~label:[ tag ^ "_b" ]
+      ~output_dims:[ k; n ] ()
+  in
+  let%op c = a +* "ik;kj=>ij" b in
+  c
+
+let recorded_private (g : Cs.grid_summary) =
+  List.filter_map g.loops ~f:(fun e ->
+      match e.Cs.site with
+      | Cs.Grid_pool { private_bytes } when private_bytes > 0 -> Some private_bytes
+      | Cs.Grid_serial (Grid_private_over_cap { private_bytes; _ }) -> Some private_bytes
+      | _ -> None)
+
+let judge_plain_grid (m, k, n) =
+  let tag = Printf.sprintf "agr_g%dx%dx%d" m k n in
+  let c = rect_matmul ~tag ~m ~k ~n in
+  let lowering = Ll_test.captured_lowering ~name:(tag ^ "_probe") (Train.forward c) in
+  let site = Option.value_exn (Autotune.detect_matmul lowering.Ir.Low_level.llc) in
+  let limits = Context.hardware_limits (Context.auto ()) in
+  let _family, seeds = Autotune.family_seeding ~is_gpu:false ~is_cpu:true ~limits lowering in
+  let serial_packed (sp : Autotune.sketch_params) =
+    sp.sk_mma && sp.sk_bk > 0 && (not sp.sk_hoist) && (not sp.sk_grid) && not sp.sk_pack_rest
+  in
+  let candidates =
+    List.filter_map seeds ~f:(fun sp ->
+        if serial_packed sp then Some { sp with sk_grid = true } else None)
+    |> List.dedup_and_sort ~compare:(fun a b ->
+        Sexp.compare (Autotune.sexp_of_sketch_params a) (Autotune.sexp_of_sketch_params b))
+  in
+  List.mapi candidates ~f:(fun i sp ->
+      let label = Autotune.sketch_params_label sp in
+      let proposed = List.mem seeds sp ~equal:equal_params in
+      let prec_bytes =
+        Ir.Ops.prec_in_bytes
+          (Option.value sp.sk_pack_prec ~default:(Lazy.force site.m_a.Ir.Tnode.storage_prec))
+      in
+      let divides b e = b <= e && e % b = 0 in
+      let masked = (not (divides sp.sk_bm m)) || (sp.sk_bn > 0 && not (divides sp.sk_bn n)) in
+      let weighed = Autotune.cpu_pack_grid_chunk_bytes site ~shape:`Grid ~prec_bytes sp in
+      let name = Printf.sprintf "%s_c%d" tag i in
+      let c = rect_matmul ~tag:name ~m ~k ~n in
+      let grid =
+        match
+          Context.compile ~name
+            ~lowered_transform:(fun opt ->
+              [
+                Ir.Schedule.apply
+                  (Autotune.sketch_schedule ~accum_prec:Ll_test.backend_accum_prec ~p:sp opt)
+                  opt;
+              ])
+            (Context.auto ()) (Train.forward c) Ir.Indexing.Empty
+        with
+        | ctx, routine ->
+            Context.release ctx;
+            Some routine.Context.grid
+        | exception exn ->
+            Stdio.eprintf "agr: %s: did not compile (not part of the golden): %s\n%!" label
+              (Exn.to_string exn);
+            None
+      in
+      Stdio.eprintf "agr: %dx%dx%d %s %s%s, weighed %d bytes: %s (not part of the golden)\n%!" m k n
+        (if proposed then "proposed" else "refused")
+        label
+        (if masked then " (padded)" else "")
+        weighed
+        (Option.value_map grid ~default:"no record" ~f:Cs.grid_summary_string);
+      {
+        g_proposed = proposed;
+        g_masked = masked;
+        g_a_tile = sp.sk_bm * sp.sk_bk * prec_bytes;
+        g_weighed = weighed;
+        g_grid = grid;
+      })
+
+let grid_judged =
+  (* No menu row block divides 40, 72 or 200 rows; every reduction block divides 64. At 40x64x64 the
+     [16 x 64] f32 fragment alone is the cap, so with the [16 x 16] A~ tile the geometry is over it;
+     at 200x64x32 the [16 x 32] fragment and the A~ tile fit, and the row-block launch is past
+     [cc_grid_min_updates] (at 72 rows it is not, so the loop stays serial for the floor). *)
+  lazy (List.concat_map [ (40, 64, 64); (72, 64, 32); (200, 64, 32) ] ~f:judge_plain_grid)
+
+let g_grid_of j ~f = Option.exists j.g_grid ~f
+
+let () =
+  in_leg ~leg "agr-grid: every judged plain-Grid candidate compiled" (fun label ->
+      p_all label (Lazy.force grid_judged) ~f:(fun j -> Option.is_some j.g_grid));
+  in_leg ~leg "agr-grid: the pre-filter weighs what the renderer privatizes, byte for byte"
+    (fun label ->
+      p_all label
+        (List.filter (Lazy.force grid_judged) ~f:(fun j ->
+             g_grid_of j ~f:(fun g -> not (List.is_empty (recorded_private g)))))
+        ~f:(fun j ->
+          g_grid_of j ~f:(fun g -> List.for_all (recorded_private g) ~f:(fun b -> b = j.g_weighed))));
+  in_leg ~leg "agr-grid: no proposed plain-Grid seed renders a Grid loop serially for the cap"
+    (fun label ->
+      p_none label
+        (List.filter (Lazy.force grid_judged) ~f:(fun j -> j.g_proposed))
+        ~f:(g_grid_of ~f:over_cap));
+  in_leg ~leg "agr-grid: every refused geometry the renderer would privatize is over the cap"
+    (fun label ->
+      p_all label
+        (List.filter (Lazy.force grid_judged) ~f:(fun j ->
+             (not j.g_proposed) && g_grid_of j ~f:(fun g -> over_cap g || pool_privatizing g)))
+        ~f:(g_grid_of ~f:over_cap));
+  in_leg ~leg
+    "agr-grid: a padded geometry whose A~ tile fits is refused for its mask-forced fragment"
+    (fun label ->
+      p_exists label (Lazy.force grid_judged) ~f:(fun j ->
+          j.g_masked && j.g_a_tile <= forced_cap && (not j.g_proposed) && g_grid_of j ~f:over_cap));
+  in_leg ~leg "agr-grid: a padded geometry inside the cap is proposed and privatizes on the pool"
+    (fun label ->
+      p_exists label (Lazy.force grid_judged) ~f:(fun j ->
+          j.g_masked && j.g_proposed && g_grid_of j ~f:pool_privatizing))
+
 (* --- The tuning leg. *)
 
 let n = 64
