@@ -3942,7 +3942,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     `affected: harness: CMD` lines, counted in the closing summary when there are any (`..., and N
     harness command(s), named above`, gh-ocannl-1929); `--harnesses` prints only those commands,
     on stdout, and asks dune nothing (under a second here). A header declares the legs that read files its code does
-    not name, `# affected-reads: GLOB... [--only 'ERE']`; a declaration only adds, never narrowing
+    not name, `# affected-reads: GLOB... [--only 'ERE']`; `*` matches within one segment,
+    `**` is refused (exit 2): list directories explicitly for depth. A declaration only adds, never narrowing
     what the text reaches: `tools/test-typecheck-scan-cases.sh` sends the scan-case tables and
     `scan_case_stubs/*` to its legs 1 and 10, its engine to every leg, so a stub edit is mapped
     there rather than UNMAPPED (gh-ocannl-1584), and `tensor/ppx_*.ml` to its `#project` legs 10

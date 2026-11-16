@@ -1249,7 +1249,7 @@ fi
 # `dune` on PATH that records being called, so `--harnesses` is shown to ask
 # dune nothing.
 hrepo=$TMP/hproj
-mkdir -p "$hrepo/tools/pkg" "$hrepo/data" "$TMP/nodune" || exit 2
+mkdir -p "$hrepo/tools/pkg" "$hrepo/data" "$hrepo/a/one" "$hrepo/dir" "$TMP/nodune" || exit 2
 cp "$HERE/affected-tests.sh" "$hrepo/tools/" || exit 2
 printf '#!/bin/sh\n: >"%s/dune-called"\nexit 97\n' "$TMP" >"$TMP/nodune/dune" && chmod +x "$TMP/nodune/dune" || exit 2
 cat >"$hrepo/tools/test-harnesses.sh" <<'STUB'
@@ -1288,7 +1288,7 @@ mark='# affected-reads:'
 printf '%s\n' '#!/usr/bin/env bash' '# Harness c.' "$mark data/*.tbl --only '^(1|3):'" "$mark data/two.tbl --only '^5 two:'" \
   "$mark data/all.cfg" 'cat data/three.tbl' '. tools/clib.sh' >"$hrepo/tools/test-c.sh" || exit 2
 for f in tools/lib.sh tools/dyn.sh tools/late.sh tools/other.sh tools/clib.sh tools/helper.py tools/pkg/mod.py \
-  tools/sib.py tools/gen.ml data/one.tbl data/two.tbl data/three.tbl data/all.cfg data/x.txt; do : >"$hrepo/$f"; done
+  tools/sib.py tools/gen.ml data/one.tbl data/two.tbl data/three.tbl data/all.cfg data/x.txt a/one/b.py x.py dir/x.txt; do : >"$hrepo/$f"; done
 git -C "$hrepo" -c user.name=t -c user.email=t@t -c commit.gpgsign=false init -q &&
   git -C "$hrepo" add -A && git -C "$hrepo" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -qm fixture ||
   exit 2
@@ -1369,12 +1369,22 @@ fi
 if harness_leg 'harness refusals'; then
   tab=$'\t'
   for bad in "# affected-reads:  data/x.txt" "# affected-reads: data/x.txt --only \"^1:\"" "#affected-reads: data/x.txt" \
-    "# affected-reads: ../data/x.txt" "# affected-reads: --only '^1:'" "# affected-reads: data/x.txt --only '^1:${tab}x'"; do
+    "# affected-reads: ../data/x.txt" "# affected-reads: --only '^1:'" "# affected-reads: data/x.txt --only '^1:${tab}x'" \
+    "# affected-reads: a/**/b.py" "# affected-reads: **.py" "# affected-reads: dir/**"; do
     { head -n 2 "$TMP/test-c.sh.orig"; printf '%s\n' "$bad"; tail -n +3 "$TMP/test-c.sh.orig"; } >"$hrepo/tools/test-c.sh"
-    haffected --harnesses --files data/x.txt
+    haffected --harnesses --files data/x.txt a/one/b.py x.py dir/x.txt
     hexpect "a malformed declaration stops the run: $bad" 2
+    case "$bad" in
+      *'**'*)
+        herr "naming its line: $bad" 'tools/test-c.sh:3:'
+        herr "naming the refused pattern: $bad" 'contains unsupported `**`'
+        herr "naming the supported patterns: $bad" 'use `*` within one segment and an explicit list of directories for depth'
+        ;;
+    esac
   done
-  herr 'naming its line' 'tools/test-c.sh:3:'
+  { head -n 2 "$TMP/test-c.sh.orig"; printf '%s\n' "# affected-reads: data/*.txt"; tail -n +3 "$TMP/test-c.sh.orig"; } >"$hrepo/tools/test-c.sh"
+  haffected --harnesses --files data/x.txt
+  hexpect 'a single star within one segment stays accepted' 0 tools/test-c.sh
   { cat "$TMP/test-c.sh.orig"; printf '%s\n' "# affected-reads: data/x.txt"; } >"$hrepo/tools/test-c.sh"
   haffected --harnesses --files data/x.txt
   hexpect 'a declaration after the header stops the run' 2
