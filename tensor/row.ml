@@ -3374,7 +3374,7 @@ let check_parameter_outputs env =
       if List.is_empty (sized.beg_dims @ sized.dims) then
         raise
         @@ Shape_error
-             ( "You forgot to specify the hidden dimension(s) 4",
+             ( "You forgot to specify the hidden dimension(s): parameter output row closed empty",
                [ Constraint_failed (Terminal_row (true, r, origin)); Row_mismatch [ sized ] ] ))
 
 let used_in_spec_or_compose = ref (Set.empty (module Row_var))

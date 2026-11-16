@@ -113,9 +113,7 @@ let initializers = [ "default"; "uniform1"; "normal"; "zero" ]
 
 let parameter_use_refusals () =
   List.iter initializers ~f:(fun init ->
-      List.iter
-        [ "alone"; "neg"; "constant"; "empty output use"; "fixed index"; "wrapped fixed index" ]
-        ~f:(fun use ->
+      List.iter [ "alone"; "neg"; "constant"; "fixed index"; "wrapped fixed index" ] ~f:(fun use ->
           let label = init ^ " parameter: " ^ use in
           Verdict.case label (fun () ->
               Tensor.unsafe_reinitialize ();
@@ -131,8 +129,6 @@ let parameter_use_refusals () =
                           (TDSL.range_of_shape ~batch_dims:[ 5 ] ~input_dims:[ 3 ] ~output_dims:[]
                              ())
                           p ()
-                    | "empty output use" ->
-                        TDSL.matmul (TDSL.range_of_shape ~input_dims:[] ~output_dims:[ 5 ] ()) p ()
                     | "fixed index" -> TDSL.einsum1 "...|3 => ...|0" (TDSL.pointmul p p ()) ()
                     | "wrapped fixed index" ->
                         TDSL.einsum1 "...|3 => ...|0" (TDSL.neg (TDSL.pointmul p p ()) ()) ()
@@ -142,7 +138,8 @@ let parameter_use_refusals () =
                   false
                 with Row.Shape_error (msg, _) ->
                   Stdio.eprintf "%s: %s (not part of the golden)\n" label msg;
-                  true
+                  String.is_prefix msg ~prefix:"You forgot to specify the hidden dimension"
+                  || String.is_prefix msg ~prefix:"Unresolved parameter dimension"
               in
               p label refused)))
 

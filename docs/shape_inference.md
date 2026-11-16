@@ -645,6 +645,8 @@ and input axis labels in the parameter declaration grants this permission to its
 row, independently of the initializer. Output rows are never
 implicitly omitted, so an initializer's omitted input row cannot grant that permission
 to its parameter's output.
+A parameter constructed in a session but never used is also refused at that session's
+closure if its shape is unspecified; construct parameters only on the path that uses them.
 
 ## Projections inference
 
