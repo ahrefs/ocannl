@@ -542,7 +542,7 @@ files.
   `ndarray_flat_writer` pins refusals, endpoints and allocation without a device backend.
 
 - **Same-storage integer host relayouts preserve raw bits** (gh-ocannl-2199).
-  `Context.to_host`'s padded recompute copies only the interior with `Ndarray.apply2`, keeping
+  `Context.to_host`'s padded recompute blits typed contiguous interior runs with `Ndarray.apply2`, keeping
   the fresh buffer's committed fringe. `Parallel.shard_along` and `gather` copy typed logical
   slices; mixed storage precisions refuse. Float-valued reads retain their float contract.
   Hoisted `Schedule.Stage` permits integer panels only without rounding at the source precision:

@@ -101,7 +101,7 @@ let device prec id =
   let v =
     Tn.create (Tn.Specified prec) ~id:(id + 3) ~label:[ "relayout_virtual" ]
       ~unpadded_dims:(lazy dims)
-      ~padding:(lazy (Some (pads, 0.)))
+      ~padding:(lazy (Some (pads, 5.)))
       ()
   in
   let output = node "relayout_output" in
@@ -131,7 +131,7 @@ let device prec id =
     ~f:Int64.equal;
   p "padded recompute restores the neutral fringe"
     (match nd with
-    | Nd.Int64_nd a | Nd.Uint64_nd a -> Int64.equal (A.get a [| 0; 0 |]) 0L
+    | Nd.Int64_nd a | Nd.Uint64_nd a -> Int64.equal (A.get a [| 0; 0 |]) 5L
     | _ -> false);
   Context.release ctx
 

@@ -2620,10 +2620,14 @@ let recompute_all_to_host ctx (reads : (Tn.t * Nd.t) list) : Nd.t list =
               {
                 f2 =
                   (fun src dst ->
-                    Nd.fold_bigarray ~padding src ~init:() ~f:(fun () idx value ->
-                        Stdlib.Bigarray.Genarray.set dst
-                          (Nd.adjust_idx_for_padding ~padding idx)
-                          value));
+                    let dims = Stdlib.Bigarray.Genarray.dims src in
+                    let n = Array.fold dims ~init:1 ~f:( * ) in
+                    let src = Stdlib.Bigarray.reshape_1 src n in
+                    let dst = Stdlib.Bigarray.reshape_1 dst n in
+                    Nd.iter_interior_runs ~padding dims ~f:(fun lo hi ->
+                        Stdlib.Bigarray.Array1.blit
+                          (Stdlib.Bigarray.Array1.sub src lo (hi - lo))
+                          (Stdlib.Bigarray.Array1.sub dst lo (hi - lo))));
               }
               nd fresh;
             fresh)

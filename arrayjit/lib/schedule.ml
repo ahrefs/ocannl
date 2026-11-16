@@ -1604,25 +1604,24 @@ let pack_constant_tile ~round_value ~debug ~(src_nd : Ndarray.t) ~(src_dims : in
     in
     go 0
   in
-  if Option.is_none round_value && Ops.equal_prec src_prec prec then
-    Ndarray.apply2
-      {
-        f2 =
-          (fun src dstb ->
-            pack ~set_elem:(fun () ->
-                Stdlib.Bigarray.Genarray.set dstb dst_idx (Stdlib.Bigarray.Genarray.get src src_idx)));
-      }
-      src_nd dst
-  else (
-    (* Integer stages admit neither rounding nor widening. Keep that invariant at the host
-       conversion seam too, so a future caller cannot silently round integer storage. *)
-    if Ops.is_integer src_prec then
-      refuse "Schedule.Stage: integer host packing requires equal precision without rounding";
-    (* An unrounded pack only widens exactly (gh-ocannl-575). A rounded pack first narrows at the
-       read's precision, even when source and panel are both f32. *)
-    let round = Option.value round_value ~default:Fn.id in
-    pack ~set_elem:(fun () ->
-        Ndarray.set_from_float dst dst_idx (round (Ndarray.get_as_float src_nd src_idx))));
+  (* Integer sources take the typed branch: [hoisted_read_rounding] rejects their rounded reads, and
+     [exact_widening] rejects every different panel precision. *)
+  (if Option.is_none round_value && Ops.equal_prec src_prec prec then
+     Ndarray.apply2
+       {
+         f2 =
+           (fun src dstb ->
+             pack ~set_elem:(fun () ->
+                 Stdlib.Bigarray.Genarray.set dstb dst_idx
+                   (Stdlib.Bigarray.Genarray.get src src_idx)));
+       }
+       src_nd dst
+   else
+     (* An unrounded pack only widens exactly (gh-ocannl-575). A rounded pack first narrows at the
+        read's precision, even when source and panel are both f32. *)
+     let round = Option.value round_value ~default:Fn.id in
+     pack ~set_elem:(fun () ->
+         Ndarray.set_from_float dst dst_idx (round (Ndarray.get_as_float src_nd src_idx))));
   dst
 
 (* "[Tile_mma] is a barrier": the intrinsic's emission contract brackets the block in workgroup
