@@ -668,29 +668,53 @@ if [ "$life_posix" = 1 ] && [ "$have_state" = 1 ] && [ "$have_pgid" = 1 ]; then
   # Load put it there by chance in CI; this cat shim puts it there every time.
   # The launcher's `cat <run>/resolved`, just before its attached wait, arms
   # it; the next `cat <run>/pid` -- that wait's first probe, in the launcher's
-  # process group -- sends TERM to its own group and dies of it. The control
-  # runs the launcher with plain sup_alive in that loop: it must report the
-  # run dead while the supervisor goes on to publish the cancellation.
+  # process group -- sends TERM to its own group and dies of it. Both probe
+  # variants see that same signal. The shim first stops the owned supervisor
+  # and observes its stopped state, keeping cancellation from ending its life
+  # before the settled probe can retry. The wrapper records the probe result
+  # and signal count before resuming it; final launcher status is no oracle.
   life_real_cat=$(command -v cat)
   for probe_case in settled control; do
-    cp "$SRC" "$life_root/tools/test-run.sh"
-    if [ "$probe_case" = control ]; then
-      probe_n=$(grep -c 'while sup_alive_settled "\$run_dir"; do wait_tick "\$sup"' "$SRC")
-      sed 's/while sup_alive_settled "\$run_dir"; do wait_tick "\$sup"/while sup_alive "$run_dir"; do wait_tick "$sup"/' \
-        "$SRC" >"$life_root/tools/test-run.sh"
-      if [ "$probe_n" != 1 ] ||
-         grep -q 'while sup_alive_settled "\$run_dir"; do wait' "$life_root/tools/test-run.sh"; then
-        report 1 'lifecycle: probe control extraction' "matches=$probe_n"; return 1
-      fi
+    probe_n=$(grep -c 'while sup_alive_settled "\$run_dir"; do wait_tick "\$sup"' "$SRC")
+    awk -v prefix="$life_prefix" -v variant="$probe_case" '
+      /while sup_alive_settled "\$run_dir"; do wait_tick "\$sup"/ {
+        fn = variant == "settled" ? "sup_alive_settled" : "sup_alive"
+        print "      probe_control() {"
+        print "        local result seen=$sigs_seen signalled=no-signal"
+        print "        " fn " \"$1\"; result=$?"
+        print "        if [ ! -e \"" prefix ".probe-verdict\" ]; then"
+        print "          [ \"$seen\" = \"$sigs_seen\" ] || signalled=signalled"
+        print "          printf '\''%s %s\\n'\'' \"$result\" \"$signalled\" >\"" prefix ".probe-verdict\""
+        print "          kill -CONT \"$sup\""
+        print "        fi"
+        print "        return \"$result\""
+        print "      }"
+        sub(/sup_alive_settled/, "probe_control")
+      }
+      { print }
+    ' "$SRC" >"$life_root/tools/test-run.sh"
+    if [ "$probe_n" != 1 ] ||
+       grep -q 'while sup_alive_settled "\$run_dir"; do wait' "$life_root/tools/test-run.sh"; then
+      report 1 'lifecycle: probe control extraction' "matches=$probe_n"; return 1
     fi
-    rm -f "$life_prefix.ready" "$life_prefix.release" "$life_prefix.probe-armed" "$life_prefix.probe-fired"
+    rm -f "$life_prefix.ready" "$life_prefix.release" "$life_prefix.probe-armed" "$life_prefix.probe-fired" "$life_prefix.probe-verdict"
     cat >"$life_bin/cat" <<EOF
 #!/usr/bin/env bash
+$(declare -f pstate)
 case \${1:-} in
   */resolved) printf '%s\n' "\${1%/resolved}" >"$life_prefix.probe-armed" ;;
   */pid)
     if [ "\$("$life_real_cat" "$life_prefix.probe-armed" 2>/dev/null)/pid" = "\$1" ] &&
        mv "$life_prefix.probe-armed" "$life_prefix.probe-fired" 2>/dev/null; then
+      # Hold the supervisor alive for the paired retry, acknowledging STOP
+      # before delivering the same in-probe TERM in both variants.
+      supervisor=\$("$life_real_cat" "\$1")
+      kill -STOP "\$supervisor" || exit 1
+      for ((attempt=0; attempt<300; attempt++)); do
+        case \$(pstate "\$supervisor") in T|t) break ;; esac
+        sleep .05
+      done
+      case \$(pstate "\$supervisor") in T|t) ;; *) exit 1 ;; esac
       kill -TERM 0
       exit 143
     fi ;;
@@ -706,15 +730,25 @@ EOF
       report 1 "lifecycle: $probe_case: the group TERM landed inside the launcher's probe" \
         "exit $life_rc; $(cat "$TMP/lifecycle.out" "$TMP/lifecycle.err")"
     elif [ "$probe_case" = settled ]; then
+      if [ "$(cat "$life_prefix.probe-verdict" 2>/dev/null)" = '0 signalled' ]; then
+        report 0 'lifecycle: settled probe retries the interrupted read and records live'
+      else report 1 'lifecycle: settled probe retries the interrupted read and records live' \
+        "$(cat "$life_prefix.probe-verdict" 2>/dev/null)"; fi
       life_check 143 'verdict: CANCELLED' 'a group TERM inside the attached probe still returns cancellation'
       if [ "$(cat "$life_run/exit")" = 143 ] && [ "$(tail -n 1 "$life_run/log")" = 'exit: 143' ]; then
         report 0 'lifecycle: probe-killing group TERM publishes the matching verdict and sentinel'
       else report 1 'lifecycle: probe-killing group TERM publishes the matching verdict and sentinel'; fi
       life_no_survivors 'probe-killing group TERM'
     else
-      # The supervisor was alive all along: it publishes after the launcher
-      # gave up on it, which is the CI signature, verdict file and all.
-      if [ "$life_rc" = 1 ] && grep -q 'died without recording a verdict' "$TMP/lifecycle.out" &&
+      # The plain probe answered dead after TERM interrupted its read. The
+      # same wrapper around the settled probe above must answer live instead.
+      # The result was recorded before resuming the supervisor. Either final
+      # launcher status is possible:
+      # DIED if it wins the race, CANCELLED if publication wins it.
+      probe_finished=0
+      if { [ "$life_rc" = 1 ] && grep -q 'died without recording a verdict' "$TMP/lifecycle.out"; } ||
+         { [ "$life_rc" = 143 ] && grep -q 'verdict: CANCELLED' "$TMP/lifecycle.out"; }; then probe_finished=1; fi
+      if [ "$probe_finished" = 1 ] && [ "$(cat "$life_prefix.probe-verdict" 2>/dev/null)" = '1 signalled' ] &&
          await_fixture_ready "$life_run/exit" && [ "$(cat "$life_run/exit")" = 143 ] &&
          life_await_dead "$(cat "$life_run/pid")"; then
         report 0 'negative control: an unsettled probe reports a live supervisor dead'

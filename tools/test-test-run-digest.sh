@@ -42,6 +42,8 @@
 #      dune's complaint: `run`/`wait` exit 2 over a RECORDED exit 1, `status`
 #      keeps its publication 0, and dune was invoked exactly once; the
 #      launch's own prelude in the log (backends, width) does not hide it.
+#      Readers select that recorded run by identity; queued/unpublished
+#      launches and `last` following are outside this classification leg.
 #  36. controls: a red run (`Error:`/`File` lines, exit 1) still digests as
 #      FAIL with exit 1 and that fingerprint, also where dune is made to
 #      color them (CLICOLOR_FORCE=1) -- including one whose output opens with
@@ -604,21 +606,25 @@ for probe in "usage_option|build @cheap --frobnicate" \
     refused_detail="$mode: recorded status is not dune's 1: $(cat "$argv_dir/exit" 2>/dev/null; tail -n 1 "$argv_dir/log" 2>/dev/null)"
     break
   fi
-  argv_runs=$refused_runs argv_probe "refused-$mode-status" status last
+  # This leg asks about the invocation it just recorded, not a queued
+  # launch. A last-reader can observe its own refused child's tail as a
+  # later launch (gh-ocannl-2140); select the recorded run by identity.
+  refused_dir=$argv_dir
+  argv_runs=$refused_runs argv_probe "refused-$mode-status" status "$refused_dir"
   if [ "$argv_rc" != 0 ] || [ "$argv_calls" != "" ]; then
-    refused_detail="$mode: status last exited $argv_rc (want 0: publication, not the verdict); calls: $argv_calls"; break
+    refused_detail="$mode: status by identity exited $argv_rc (want 0: publication, not the verdict); calls: $argv_calls"; break
   fi
   case $argv_out in
     *"$refused_verdict"*) ;;
-    *) refused_detail="$mode: status last lost the verdict: $argv_out"; break ;;
+    *) refused_detail="$mode: status by identity lost the verdict: $argv_out"; break ;;
   esac
-  argv_runs=$refused_runs argv_probe "refused-$mode-wait" wait last
+  argv_runs=$refused_runs argv_probe "refused-$mode-wait" wait "$refused_dir"
   if [ "$argv_rc" != 2 ] || [ "$argv_calls" != "" ]; then
-    refused_detail="$mode: wait last exited $argv_rc (want 2); calls: $argv_calls"; break
+    refused_detail="$mode: wait by identity exited $argv_rc (want 2); calls: $argv_calls"; break
   fi
   case $argv_out in
     *"$refused_verdict"*"  $want1"*) ;;
-    *) refused_detail="$mode: wait last lost the verdict: $argv_out"; break ;;
+    *) refused_detail="$mode: wait by identity lost the verdict: $argv_out"; break ;;
   esac
 done
 argv_mode= argv_runs=

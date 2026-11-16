@@ -1293,6 +1293,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   its leg's number in the selector if it is a new leg -- the job names the check it did not see
   pass. A nested run of a harness copy unsets the record variable with the others.
 
+- The three gh-ocannl-2140 fixtures separate a response verdict from teardown
+  and later publication. `wait_signal_race.py` keeps its five-second cancellation
+  oracle, then reaps the owned foreground control without a separate ten-second
+  cleanup deadline; cleanup exceptions retain the captured fixture output.
+  Digest leg 35 reads the invocation's recorded run by identity: its claim is
+  refusal classification, not following queued launches with `last`. Lifecycle's
+  paired probes both receive TERM inside their read. The fixture holds the owned
+  supervisor stopped until the wrapper records each answer and whether the
+  signal count changed: plain returns dead, settled retries and returns live.
+  Resuming it afterwards prevents cancellation publication from racing either
+  record. The genuinely killed-supervisor control still requires DIED.
+
 - Shell harness checks capture failures with `command || rc=$?`, preserving the caller's
   `errexit` state; an unconditional `set -e` after a check makes later unguarded failures
   terminate a harness that started with only `set -u` (gh-ocannl-1178).
