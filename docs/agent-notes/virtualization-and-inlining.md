@@ -908,7 +908,8 @@ files.
   (default 16) — remember it when a structural expectation assumes inlining.
 - Wide-fanin producers are forced `Never_virtual 41` by `virtualize_max_inline_fanin` (default 8,
   gh-573): a node whose fully-inlined computation would load more than that many distinct
-  materialized nodes — accumulated through chains of virtual producers, per setter — materializes,
+  materialized nodes — accumulated through chains of virtual producers, per write-overlap group of
+  setters (`traced_array.setter_groups`) — materializes,
   resetting the fan-in downstream. This is the guard that breaks residual-stream-style running sums
   (per-cell multiplicity passes the visit cap because copy-position reads are rmw-exempt, yet each
   consumer re-sums the whole prefix); a structural expectation assuming a deep all-virtual chain
@@ -956,16 +957,17 @@ files.
   which reading it asks for. Admission is judged before inlining at the arms' annotations, while the
   renderer judges it after virtualization at the compute precision (and HIP keeps `?:` over a NaN
   literal): the guard can charge the union where the select ends up branching, never the reverse --
-  the materializing direction. The per-setter maximum across components is untouched: each
-  component's update sits under an index-only `Where` no backend blends. A known under-count that
-  remains: overlapping components (two bodies run where both guards hold). Pins: `virtual_chain_fanin`
+  the materializing direction. Across components the charge is per write-overlap group
+  (gh-ocannl-2228; `setter_groups` owns the rule): disjoint components each sit under an index-only
+  `Where` no backend blends, and components whose writes may share a cell are charged together.
+  Pins: `virtual_chain_fanin`
   phases 1c, 1d (the arm chosen after expansion) and 2b/2c (two-sided on the running backend),
   `access_fold`, `backend_facts`, and `op_table_compile` against the emitted kernels.
 - **A node passes downstream its ALTERNATIVES, and a consumer is charged the maximum over them
   joined with its own loads** (gh-ocannl-2047, gh-ocannl-2098, gh-ocannl-2128). An alternative is a
-  load set one read of one cell can run: one per setter (a read executes one setter), one per
-  short-circuiting select arm, and for a node with both local setters and inherited components the
-  union of one of each. Choosing before the consumer's loads are joined under-counts: `p := where m
+  load set one read of one cell can run: one per write-overlap group of setters (a read replays
+  every setter of its group, in sequence), one per short-circuiting select arm, and for a node with
+  both local setters and inherited components the union of one group of each. Choosing before the consumer's loads are joined under-counts: `p := where m
   (x+y) z` read by `c := p + x + y + w` costs `{m,x,y,w}` = 4 through the wider arm, but the cells
   with `m = 0` run `{m,z,x,y,w}` = 5; a narrower setter is the same. `resolve_alternatives` keeps
   every MAXIMAL set (the antichain under inclusion; exact, since `A ⊆ B` gives `A ∪ X ⊆ B ∪ X`) in
@@ -1006,9 +1008,10 @@ files.
   carries its dependencies inlined, so the inherited path rarely meets a multi-site `Get`; the
   collector is one either way. Pins: `virtual_chain_fanin` phase 12 (two-site concat in both setter
   orders, same-index and cap-equality controls, the three-slice tightness control, the two-site
-  select in both spellings and readings, a reduction over both slices, cross-routine), each executed
-  against a reference and a materialized reading; `access_fold` pins the collector's site keys and
-  the resolver.
+  select in both spellings and readings, a reduction over both slices, cross-routine), 13 (a cell's
+  sequenced setters: an init before a reduction, an update chain, disjoint slice groups, the
+  bridged-group over-charge, cross-routine components), each executed against a reference and a
+  materialized reading; `access_fold` pins the collector's site keys and the resolver.
 - **The fan-in traversal must not enter a node already materialized** (gh-ocannl-1777). A whole
   step's setter-reads graph is cyclic through its parameters (a parameter reads its gradient, which
   reads activations that read the parameter), and the cycle guard memoizes whatever it computed under

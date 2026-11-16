@@ -56,7 +56,9 @@
 
    Phase 11 charges a consumer the maximum over a dependency's alternatives joined with its own
    loads (gh-ocannl-2128): a narrower select arm or setter is the wider one once the consumer's
-   loads overlap the other, and the alternatives kept are bounded. *)
+   loads overlap the other, and the alternatives kept are bounded.
+
+   Phases 12-13 carry their own headers: a read at several sites, and a cell's sequenced setters. *)
 
 open Base
 open Ll_test
@@ -2758,6 +2760,244 @@ let phase12 () =
      (same got [ Array.init dim ~f:(fun j -> src j +. src (j + dim) +. v w j) ]));
   LL.virtualize_settings.max_inline_fanin <- saved_cap
 
+(* === Shared by phase 13: a concat [a] = [{x,y}] | [{z}] over [2*dim] cells and a few more
+   leaves, every leaf varying with its identity and its cell, away from zero. As in phase 12, a
+   concat a reduction reads over every cell is allocated [3*dim] cells: one exactly [2*dim] long is
+   materialized by the visit cap before the fan-in guard is asked. === *)
+
+type seq_fixture = {
+  sx : Tn.t;
+  sy : Tn.t;
+  sz : Tn.t;
+  su : Tn.t;
+  sv : Tn.t;
+  sw : Tn.t;
+  sval : Tn.t -> int -> float;
+  sseed : ?n:int -> Tn.t -> (Tn.t * float array) list;
+}
+
+let seq_fixture ~first_id =
+  let mk = node_factory ~first_id ~dims:[| 3 * dim |] () in
+  let sx = mk "sx" and sy = mk "sy" and sz = mk "sz" and su = mk "su" and sv = mk "sv" in
+  let sw = mk "sw" and sm = mk "sm" and sn = mk "sn" in
+  let leaves = [ sx; sy; sz; su; sv; sw ] in
+  List.iter (sm :: sn :: leaves) ~f:materialize;
+  let vals k = Array.init (3 * dim) ~f:(fun i -> Float.of_int ((100 * (k + 1)) + i + 1)) in
+  (* Masks taking both values within each slice: [m] the cell's parity, [n] that of slice plus
+     offset -- equal to [m] in the first slice, its negation in the second. *)
+  let m_vals =
+    Array.init (3 * dim) ~f:(fun i ->
+        weighted ~weights:[| 1 |] ~modulus:2 ~offset:0. ~stride:1. [| i |])
+  in
+  let n_vals =
+    Array.init (3 * dim) ~f:(fun i ->
+        weighted ~weights:[| 1; 1 |] ~modulus:2 ~offset:0. ~stride:1. [| i / dim; i % dim |])
+  in
+  let sval tn i =
+    if Tn.equal tn sm then m_vals.(i)
+    else if Tn.equal tn sn then n_vals.(i)
+    else
+      match List.findi leaves ~f:(fun _ l -> Tn.equal l tn) with
+      | Some (k, _) -> (vals k).(i)
+      | None -> assert false
+  in
+  let sseed ?(n = 2 * dim) out =
+    (out, blank n) :: (sm, m_vals) :: (sn, n_vals) :: List.mapi leaves ~f:(fun k tn -> (tn, vals k))
+  in
+  { sx; sy; sz; su; sv; sw; sval; sseed }
+
+(* [a]'s slice [part] := the sum of [ks] there. *)
+let slice_sum a part ks =
+  let i = sym () in
+  let idx = aff [ (1, i) ] (part * dim) in
+  loop_n i dim
+    (set a [| idx |] (List.reduce_exn ~f:add (List.map ks ~f:(fun tn -> get tn [| idx |]))))
+
+let copy_cells ~cells dst src =
+  let i = sym () in
+  loop_n i cells (set dst [| iter i |] (get src [| iter i |]))
+
+let fanin_of (o : LL.optimized) tn = (Hashtbl.find_exn o.traced_store tn).LL.inline_fanin
+
+let fanin_capped o tn =
+  Option.equal Tn.equal_provenance (rejection_code o tn) (Some Tn.Inline_fanin_cap)
+
+(* [out] after [o], against [expected] and against the reading materializing [materialized]. *)
+let parity ?blends ~name ~seed ~materialized ~out ~expected llc o =
+  let got = execute ~name o ~seed ~read:[ out ] in
+  let mat_name = name ^ "_mat" in
+  let mat = optimize ?blends_value_selects:blends ~materialized ~name:mat_name llc in
+  let got_mat = execute ~name:mat_name mat ~seed ~read:[ out ] in
+  same got [ expected ] && same got got_mat
+
+(* === Phase 13: a cell's setters replay in sequence (gh-ocannl-2228) ===
+
+   The inliner replays every setter whose write covers the read cell: [c := w] then [c += a[k]] runs
+   both. So setters are charged per write-overlap group, the union along a group and the maximum
+   across groups. The issue's reduction: [c[j] := w[j]], then [c[j] += a[k]] over both slices of the
+   concat -- [{w,x,y,z}] = 4, where the per-setter maximum charged 3 and kept [c] virtual at cap 3.
+   A plain chain [c := x+y; c += y+z; c += z+w] costs [{x,y,z,w}] = 4 (shared inputs once), where
+   the maximum was 2. Controls: at a cap equal to the charge the node stays virtual; two slice
+   groups, each its own init/update chain, cost the wider group (3), never the blanket union (5); a
+   broad init bridging two disjoint updates is charged their whole union (4, the stated conservative
+   boundary, where a cell runs at most 3). Across routines, a stored init and stored update replay
+   together: the later routine's reader is charged 4. Every leg executes against a reference and a
+   materialized reading. *)
+
+let phase13 () =
+  let saved_cap = LL.virtualize_settings.max_inline_fanin in
+  let f = seq_fixture ~first_id:9400 in
+  let cmk = node_factory ~first_id:9450 ~dims:[| 2 * dim |] () in
+  (* The reduction's nodes: one cell per [j < dim]; its concat as phase 12's. *)
+  let rmk = node_factory ~first_id:9480 ~dims:[| dim |] () in
+  let amk = node_factory ~first_id:9490 ~dims:[| 3 * dim |] () in
+  let v = f.sval and cells = 2 * dim in
+  let concat a = [ slice_sum a 0 [ f.sx; f.sy ]; slice_sum a 1 [ f.sz ] ] in
+  let concat_ref i = if i < dim then v f.sx i +. v f.sy i else v f.sz i in
+  (* [c[j] := w[j]], then [c[j] += a[k]] over [k < cells]. *)
+  let init_reduce c a =
+    let j = sym () and j' = sym () and k = sym () in
+    [
+      loop_n j dim (set c [| iter j |] (get f.sw [| iter j |]));
+      loop_n j' dim
+        (loop_n k cells (set c [| iter j' |] (add (get c [| iter j' |]) (get a [| iter k |]))));
+    ]
+  in
+  let reduce_ref j = v f.sw j +. List.sum (module Float) (List.init cells ~f:Fn.id) ~f:concat_ref in
+  List.iter [ 3; 4 ] ~f:(fun cap ->
+      LL.virtualize_settings.max_inline_fanin <- cap;
+      let label = Printf.sprintf "red_cap%d" cap in
+      let a = amk ("sa_" ^ label) and c = rmk ("sc_" ^ label) and out = rmk ("so_" ^ label) in
+      materialize out;
+      let llc =
+        List.reduce_exn ~f:seq (concat a @ init_reduce c a @ [ copy_cells ~cells:dim out c ])
+      in
+      let name = "vcf_seq_" ^ label in
+      let o = optimize ~name llc in
+      let prefix = Printf.sprintf "init then reduction over a concat, cap %d: " cap in
+      if cap = 3 then
+        p
+          (prefix ^ "charged the init and both slices (4), materialized by the fan-in cap")
+          (fanin_of o c = 4 && fanin_capped o c)
+      else p (prefix ^ "charged 4, virtual at the cap") (fanin_of o c = 4 && known_virtual o c);
+      p
+        (prefix ^ "execution matches the reference and the materialized reading")
+        (parity ~name ~seed:(f.sseed ~n:dim out) ~materialized:[ a; c ] ~out
+           ~expected:(Array.init dim ~f:reduce_ref) llc o));
+  (* The plain chain: three overlapping setters sharing inputs. *)
+  let chain c ks_list =
+    List.mapi ks_list ~f:(fun n ks ->
+        let i = sym () in
+        let rhs = List.reduce_exn ~f:add (List.map ks ~f:(fun tn -> get tn [| iter i |])) in
+        loop_n i cells (set c [| iter i |] (if n = 0 then rhs else add (get c [| iter i |]) rhs)))
+  in
+  let chain_ks = [ [ f.sx; f.sy ]; [ f.sy; f.sz ]; [ f.sz; f.sw ] ] in
+  let sum_ref ks i = List.fold ks ~init:0. ~f:(fun acc tn -> acc +. v tn i) in
+  List.iter [ 3; 4 ] ~f:(fun cap ->
+      LL.virtualize_settings.max_inline_fanin <- cap;
+      let label = Printf.sprintf "chain_cap%d" cap in
+      let c = cmk ("sc_" ^ label) and out = cmk ("so_" ^ label) in
+      materialize out;
+      let llc = List.reduce_exn ~f:seq (chain c chain_ks @ [ copy_cells ~cells out c ]) in
+      let name = "vcf_seq_" ^ label in
+      let o = optimize ~name llc in
+      let prefix = Printf.sprintf "a three-setter update chain, cap %d: " cap in
+      if cap = 3 then
+        p
+          (prefix ^ "charged its four distinct inputs, materialized by the fan-in cap")
+          (fanin_of o c = 4 && fanin_capped o c)
+      else p (prefix ^ "charged 4, virtual at the cap") (fanin_of o c = 4 && known_virtual o c);
+      p
+        (prefix ^ "execution matches the reference and the materialized reading")
+        (parity ~name ~seed:(f.sseed out) ~materialized:[ c ] ~out
+           ~expected:(Array.init cells ~f:(sum_ref (List.concat chain_ks)))
+           llc o));
+  LL.virtualize_settings.max_inline_fanin <- 3;
+  (* Two slice groups, each an init and an update: [{x,y}] and [{z,u,v}]. *)
+  let slice_chain c part ks_list =
+    List.mapi ks_list ~f:(fun n ks ->
+        let i = sym () in
+        let idx = aff [ (1, i) ] (part * dim) in
+        let rhs = List.reduce_exn ~f:add (List.map ks ~f:(fun tn -> get tn [| idx |])) in
+        loop_n i dim (set c [| idx |] (if n = 0 then rhs else add (get c [| idx |]) rhs)))
+  in
+  (let c = cmk "sc_groups" and out = cmk "so_groups" in
+   materialize out;
+   let g0 = [ [ f.sx ]; [ f.sy ] ] and g1 = [ [ f.sz ]; [ f.su; f.sv ] ] in
+   let llc =
+     List.reduce_exn ~f:seq (slice_chain c 0 g0 @ slice_chain c 1 g1 @ [ copy_cells ~cells out c ])
+   in
+   let o = optimize ~name:"vcf_seq_groups" llc in
+   p
+     "two slice groups, each an init and an update: charged the wider group (3), not their union \
+      (5), virtual at cap 3"
+     (fanin_of o c = 3 && known_virtual o c);
+   p "two slice groups: execution matches the reference and the materialized reading"
+     (parity ~name:"vcf_seq_groups" ~seed:(f.sseed out) ~materialized:[ c ] ~out
+        ~expected:
+          (Array.init cells ~f:(fun i -> sum_ref (List.concat (if i < dim then g0 else g1)) i))
+        llc o));
+  (let c = cmk "sc_bridge" and out = cmk "so_bridge" in
+   materialize out;
+   let init =
+     let i = sym () in
+     loop_n i cells (set c [| iter i |] (get f.sw [| iter i |]))
+   in
+   let updates = [ [ [ f.sx ] ]; [ [ f.sy; f.sz ] ] ] in
+   let update part ks =
+     let i = sym () in
+     let idx = aff [ (1, i) ] (part * dim) in
+     loop_n i dim
+       (set c [| idx |]
+          (add (get c [| idx |])
+             (List.reduce_exn ~f:add (List.map ks ~f:(fun tn -> get tn [| idx |])))))
+   in
+   let llc =
+     List.reduce_exn ~f:seq
+       ((init :: List.mapi updates ~f:(fun part ks -> update part (List.concat ks)))
+       @ [ copy_cells ~cells out c ])
+   in
+   let o = optimize ~name:"vcf_seq_bridge" llc in
+   p
+     "a broad init bridging two disjoint updates: one group, charged its union (4, a cell runs at \
+      most 3), materialized by the fan-in cap"
+     (fanin_of o c = 4 && fanin_capped o c);
+   p "bridged updates: execution matches the reference and the materialized reading"
+     (parity ~name:"vcf_seq_bridge" ~seed:(f.sseed out) ~materialized:[ c ] ~out
+        ~expected:
+          (Array.init cells ~f:(fun i ->
+               v f.sw i +. sum_ref (List.concat (List.nth_exn updates (i / dim))) i))
+        llc o));
+  (* Across routines: A commits the concat and [c]'s init and update [Virtual] with the cap off; B's
+     copy replays both stored components. *)
+  (let a = amk "sa_x" and c = rmk "sc_x" and d = rmk "sd_x" and out = rmk "so_x" in
+   materialize out;
+   let ctx = LL.empty_optimize_ctx () in
+   LL.virtualize_settings.max_inline_fanin <- -1;
+   (* Nothing reads [c] in A, so the reduction's [dim] reads of each cell of [a] are what the visit
+      cap sees: lift it there, so A defers the concat too. *)
+   let saved_visits = LL.virtualize_settings.max_visits in
+   LL.virtualize_settings.max_visits <- dim;
+   let o_a =
+     optimize_in ctx ~name:"vcf_seq_x_a" (List.reduce_exn ~f:seq (concat a @ init_reduce c a))
+   in
+   LL.virtualize_settings.max_visits <- saved_visits;
+   LL.virtualize_settings.max_inline_fanin <- 3;
+   let o_b =
+     optimize_in ctx ~name:"vcf_seq_x_b"
+       (seq (copy_cells ~cells:dim d c) (copy_cells ~cells:dim out d))
+   in
+   p "cross-routine init and update: routine A commits the concat and the reduction virtual"
+     (known_virtual o_a a && known_virtual o_a c);
+   p
+     "cross-routine init and update: the stored components replay together, so B's reader is \
+      charged 4, materialized by the fan-in cap"
+     (fanin_of o_b d = 4 && fanin_capped o_b d);
+   let got = execute ~name:"vcf_seq_x_b" o_b ~seed:(f.sseed ~n:dim out) ~read:[ out ] in
+   p "cross-routine init and update: execution matches the reference"
+     (same got [ Array.init dim ~f:reduce_ref ]));
+  LL.virtualize_settings.max_inline_fanin <- saved_cap
+
 let () =
   phase1 ();
   phase1b ();
@@ -2775,4 +3015,5 @@ let () =
   phase9 ();
   phase10 ();
   phase11 ();
-  phase12 ()
+  phase12 ();
+  phase13 ()

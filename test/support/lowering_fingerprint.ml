@@ -69,7 +69,7 @@ let traced ~uids
        is_range_producer;
        inline_reduction_extent;
        read_by_other;
-       setter_reads;
+       setter_groups;
        inline_fanin;
      } :
       LL.traced_array) =
@@ -77,7 +77,9 @@ let traced ~uids
     zeroed_out read_before_write read_only is_scalar_constexpr is_accessing is_complex
     prefers_virtual_one_hot has_non_one_hot_setter is_range_producer read_by_other
     inline_reduction_extent inline_fanin
-    (String.concat ~sep:";" (List.map setter_reads ~f:(read_charge ~uids)))
+    (String.concat ~sep:";"
+       (List.map setter_groups ~f:(fun g ->
+            String.concat ~sep:"+" (List.map g ~f:(read_charge ~uids)))))
 
 (* A stored computation: its index tuple's symbols are free in its code, so they are registered
    first, in tuple order, and the tuple renders positionally. *)

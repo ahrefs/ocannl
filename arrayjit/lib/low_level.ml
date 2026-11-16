@@ -1082,19 +1082,26 @@ type traced_array = {
           own read-modify-write does not. A node never read in the routine has no inlining cost, so
           the recompute-cost guard must not materialize it (it may instead be dropped as a committed
           virtual computation, or inlined by a later routine in the lineage). *)
-  mutable setter_reads : read_charge list;
-      (** Per setter statement ([Set]/[Set_from_vec]), the tensor nodes its right-hand side reads,
-          its value selects' arms kept apart ({!read_charge}) — including reads inside [Local_scope]
-          bodies in the right-hand side (their loads execute per evaluation of the setter), and
-          excluding the node's own read-modify-write self-reads (when inlined they become the local
-          accumulator, not a load). Decision-independent analysis fact behind the transitive
-          inline-fanin guard (gh-573): a read of a cell executes one setter's computation, so the
-          guard takes the per-setter maximum, not the union — a Block/concat node written by one
-          range-guarded setter per component costs one component per read. The per-setter maximum is
-          this node's per-read charge; downstream, every setter's alternatives, narrower ones
-          included, are joined with the consumer's own loads (gh-ocannl-2128), beside the union of
-          the tied maxima as a floor — bounded by {!max_fanin_alternatives}. A consumer reading the
-          node at [k] distinct sites is joined with [k] of them (gh-ocannl-2196). *)
+  mutable setter_groups : read_charge list list;
+      (** The node's setter statements ([Set]/[Set_from_vec]) as their right-hand sides' fan-in
+          contributors, value selects' arms kept apart ({!read_charge}) — including reads inside
+          [Local_scope] bodies in the right-hand side (their loads execute per evaluation of the
+          setter), and excluding the node's own read-modify-write self-reads (when inlined they
+          become the local accumulator, not a load). Grouped by write overlap (gh-ocannl-2228): two
+          setters whose writes {!Affine.may_touch_same_cell} cannot prove disjoint share a group,
+          transitively, and each group lists its setters in program order. The groups are pairwise
+          disjoint in the cells they write, so a read of one cell replays the setters of one group:
+          all of them, since the inliner replays every component covering the cell (an init followed
+          by its read-modify-write updates). Decision-independent analysis fact behind the
+          transitive inline-fanin guard (gh-573), which charges a group every setter in sequence and
+          takes the maximum across groups — a Block/concat node written by one range-guarded setter
+          per component costs one component per read. Grouping is conservative: a broad setter
+          bridging disjoint ones, a setter under an [If], or two setters reading the same cell of a
+          dependency charge more than one cell runs (the materializing direction). The per-group
+          maximum is this node's per-read charge; downstream, every group's alternatives, narrower
+          ones included, are joined with the consumer's own loads (gh-ocannl-2128), beside the union
+          of the tied maxima as a floor — bounded by {!max_fanin_alternatives}. A consumer reading
+          the node at [k] distinct sites is joined with [k] of them (gh-ocannl-2196). *)
   mutable inline_fanin : int;
       (** The transitive inline fan-in the guard computed for this node under the current
           placements: the number of distinct materialized nodes the node's fully-inlined computation
@@ -1381,7 +1388,7 @@ let get_node store tn =
         is_range_producer = false;
         inline_reduction_extent = 1;
         read_by_other = false;
-        setter_reads = [];
+        setter_groups = [];
         inline_fanin = 1;
       })
 
@@ -1666,7 +1673,7 @@ let speculable_select ~(cond : scalar_t) ~(arms : scalar_arg list) =
 
 (* gh-ocannl-1451: the one read collector -- the tensor nodes one evaluation of a setter of [self]
    loads, as the transitive inline-fanin guard (gh-573) charges them. Shared by [trace_node_facts]'
-   per-setter [setter_reads] and the guard's replay of a computation an earlier routine stored, so
+   per-setter [setter_groups] and the guard's replay of a computation an earlier routine stored, so
    the two can no longer drift. Its algebra: - a [Get] or [Get_dynamic] of a node other than [self]
    is a contributor (a gather is a read of its table, recorded after its index expression, which
    evaluates first; gh-ocannl-1327); - a projection's discarded operand is not evaluated, a gated
@@ -1885,7 +1892,10 @@ let site_multiplicity (c : read_charge) q =
       max_fanin_alternatives
   | Some s -> Int.clamp_exn (Set.length s) ~min:1 ~max:max_fanin_alternatives
 
-let resolve_alternatives ~blends ~expand (c : read_charge) : Set.M(Tn).t list =
+(* [resolve_alternatives] continuing from [init] instead of the empty evaluation: the setters of one
+   write-overlap group replay in sequence (gh-ocannl-2228), each path through the next setter joined
+   to each the earlier ones left. *)
+let resolve_alternatives_from ~blends ~expand ~init (c : read_charge) : Set.M(Tn).t list =
   let prune alts = fst (cap_alternatives alts) in
   let rec go alts c =
     let alts =
@@ -1910,7 +1920,10 @@ let resolve_alternatives ~blends ~expand (c : read_charge) : Set.M(Tn).t list =
         else if List.is_empty s.arms then alts
         else prune (List.concat_map s.arms ~f:(go alts)))
   in
-  go [ Set.empty (module Tn) ] c
+  go init c
+
+let resolve_alternatives ~blends ~expand (c : read_charge) : Set.M(Tn).t list =
+  resolve_alternatives_from ~blends ~expand ~init:[ Set.empty (module Tn) ] c
 
 let resolve_charge ~blends ~expand (c : read_charge) : Set.M(Tn).t list =
   widest_alternatives (resolve_alternatives ~blends ~expand:(fun acc q -> [ expand acc q ]) c)
@@ -1924,6 +1937,68 @@ let evaluation_reads ~blends ~(self : Tn.t) (llsc : scalar_t) : Set.M(Tn).t list
     computation of [self]. *)
 let evaluation_reads_of_proc ~blends ~(self : Tn.t) (code : t) : Set.M(Tn).t list =
   resolve_charge ~blends ~expand:Set.add (read_charge_of_proc ~self code)
+
+(* Inclusive value bounds of a static symbol, matching the runtime validation of static bindings
+   ([Indexing]): a symbol [used_as_extent] takes values in [0, r] (extents size buffers), while a
+   plain static is a strict index in [0, r) — universalizing a read over the impossible cell [r]
+   would spuriously decline coverage of fully-covered static-slice routines. *)
+let static_bounds (static_indices : Indexing.static_symbol list) s =
+  List.find_map static_indices ~f:(fun ss ->
+      if Indexing.equal_symbol ss.Indexing.static_symbol s then
+        Option.map ss.static_range ~f:(fun r -> if ss.used_as_extent then (0, r) else (0, r - 1))
+      else None)
+
+(* gh-ocannl-2228: the write a setter statement makes, as the affine engine reads it -- the fields
+   {!Affine.may_touch_same_cell} consults: the map, the enclosing loops (outermost first) and a
+   vectorized write's run. Built at the setter itself, so no association with another walk's
+   accesses is needed. *)
+let setter_write_access ~(tn : Tn.t) ~idcs ~vec_len ~loops : Tn.t Affine.access =
+  {
+    Affine.a_tn = tn;
+    a_map = idcs;
+    a_write = true;
+    a_dyn_axis = None;
+    a_whole = false;
+    a_vec_last = vec_len > 0;
+    a_vec_len = vec_len;
+    a_guarded = false;
+    a_gated = false;
+    a_rmw = false;
+    a_val_syms = [];
+    a_stmt_write = None;
+    a_loops = loops;
+    a_path = [];
+  }
+
+(* Whether a charge loads nothing whichever way its selects go: a constant init, a [Zero_out]. *)
+let rec loads_nothing (c : read_charge) =
+  Set.is_empty c.loads && List.for_all c.selects ~f:(fun s -> List.for_all s.arms ~f:loads_nothing)
+
+(* gh-ocannl-2228: [items] (in program order) partitioned into the connected components of [touch]
+   -- two items whose writes may share a cell are in one group, transitively -- each group in
+   program order, the groups ordered by their first member. Different groups write disjoint cells.
+   An item whose charge loads nothing touches nothing: it adds no load to a group, so it must not
+   bridge two (a whole-node init before a concat's components). *)
+let write_overlap_groups (items : ('w * read_charge) list) ~(touch : 'w -> 'w -> bool) =
+  let items = Array.of_list items in
+  let n = Array.length items in
+  let parent = Array.init n ~f:Fn.id in
+  let rec find i = if parent.(i) = i then i else find parent.(i) in
+  for i = 0 to n - 1 do
+    for j = i + 1 to n - 1 do
+      let ri = find i and rj = find j in
+      let (wi, ci), (wj, cj) = (items.(i), items.(j)) in
+      if ri <> rj && (not (loads_nothing ci)) && (not (loads_nothing cj)) && touch wi wj then
+        parent.(Int.max ri rj) <- Int.min ri rj
+    done
+  done;
+  let groups = Hashtbl.create (module Int) in
+  for i = n - 1 downto 0 do
+    Hashtbl.add_multi groups ~key:(find i) ~data:items.(i)
+  done;
+  Hashtbl.to_alist groups
+  |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+  |> List.map ~f:(fun (_, g) -> List.map g ~f:snd)
 
 (* Structural facts pass (gh-554): a single non-enumerating program-order traversal computing the
    per-node facts of {!traced_array} that are not affine questions — setter/reader structure,
@@ -1976,7 +2051,12 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
      body's statements, an [If] condition and a scan's inits push [None]. *)
   let lhs : (Tn.t * Indexing.axis_index array) option list ref = ref [] in
   let current_lhs () = match !lhs with top :: _ -> top | [] -> None in
-  let setter_facts ctx ~tn ~idcs ~(rhs : scalar_t) =
+  (* gh-ocannl-2228: each node's setters with their write accesses, latest first; grouped by write
+     overlap into [setter_groups] once the walk is done. *)
+  let setters : (Tn.t, (Tn.t Affine.access * read_charge) list) Hashtbl.t =
+    Hashtbl.create (module Tnode)
+  in
+  let setter_facts ?(vec_len = 0) (ctx : Access_fold.context) ~tn ~idcs ~(rhs : scalar_t) =
     let traced : traced_array = get_node traced_store tn in
     let loop_ranges = loop_ranges ctx in
     (* gh-ocannl-2196: the enclosing loops absent from the written indices are a reduction one read
@@ -1987,7 +2067,12 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
       |> List.filter ~f:(fun s -> not (Set.mem own s))
       |> Set.of_list (module Indexing.Symbol)
     in
-    traced.setter_reads <- read_charge ~iterated ~self:tn rhs :: traced.setter_reads;
+    let write =
+      setter_write_access ~tn ~idcs ~vec_len
+        ~loops:
+          (List.rev_map ctx.loops ~f:(fun (b : Access_fold.binder) -> (b.index, (b.from_, b.to_))))
+    in
+    Hashtbl.add_multi setters ~key:tn ~data:(write, read_charge ~iterated ~self:tn rhs);
     traced.inline_reduction_extent <-
       max traced.inline_reduction_extent (reduction_extent loop_ranges idcs);
     (traced, loop_ranges)
@@ -2061,8 +2146,8 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
            first-seen (trace) order. Sharing a symbol no longer marks tensors [is_complex] -- only
            genuine computation complexity does (see #134). *)
         track_symbol reverse_node_map tn idcs ~enclosing:ctx.loops
-    | Set_from_vec { tn; idcs; length = _; vec_unop = _; arg = arg, _; debug = _ } ->
-        let traced, _ = setter_facts ctx ~tn ~idcs ~rhs:arg in
+    | Set_from_vec { tn; idcs; length; vec_unop = _; arg = arg, _; debug = _ } ->
+        let traced, _ = setter_facts ~vec_len:length ctx ~tn ~idcs ~rhs:arg in
         (* Vector operations cannot be scalar constexpr or one-hot selectors. *)
         traced.is_scalar_constexpr <- false;
         traced.has_non_one_hot_setter <- true;
@@ -2121,7 +2206,13 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
   in
   fold ~policy
     ~hooks:{ statement; scalar; after_statement; after_scalar; branches = in_order }
-    ~init:() llc
+    ~init:() llc;
+  let static_range = static_bounds static_indices in
+  Hashtbl.iteri setters ~f:(fun ~key:tn ~data ->
+      let traced : traced_array = get_node traced_store tn in
+      let dims = Lazy.force tn.Tn.dims in
+      traced.setter_groups <-
+        write_overlap_groups (List.rev data) ~touch:(Affine.may_touch_same_cell ~static_range ~dims))
 
 (* Review round 2 of the gh-610/611 PR: the refusal of a cross-routine merge splice, shared by the
    consumption-time check ([inline_computation]) and the store that a capture walk's merge-tainted
@@ -11127,28 +11218,18 @@ let statics_set_of static_indices =
 
 (* The [inline_complex_computations] read-modify-write exemption over access records: a read at its
    enclosing statement's write position (same {!same_position} map as the write the read is
-   subordinate to — [a_stmt_write] — whichever nodes are involved) is a self-read of the
-   statement's own store, not a visit — exactly the reads the retired concrete tracer never
-   recorded. A dynamic coordinate is a position only when read and write share it: a gather inside
-   a static write, a static read inside a scatter, or a gather of another runtime row than the
-   scatter's records no [a_stmt_write], and is never exempt (gh-ocannl-1244). Statement subordination, not program-path matching: an [If] condition's read shares
-   its path with the guarded body's write but executes before it, so it is never exempt. Shared by
-   {!reads_covered_query} and {!read_multiplicity_query} — but the two consumers read it
-   differently (gh-ocannl-618): for per-cell visit counting the exemption is always right (the
-   statement's own store is not a visit), while for the routine INTERFACE it is not a coverage
-   fact — the cells an exempt read touches still carry their incoming values unless a prior write
-   definitely covers them, so the coverage query reports exemption-dependent coverage as its own
-   verdict rather than folding it into [`Covered]. *)
-(* Inclusive value bounds of a static symbol, matching the runtime validation of static bindings
-   ([Indexing]): a symbol [used_as_extent] takes values in [0, r] (extents size buffers), while a
-   plain static is a strict index in [0, r) — universalizing a read over the impossible cell [r]
-   would spuriously decline coverage of fully-covered static-slice routines. *)
-let static_bounds (static_indices : Indexing.static_symbol list) s =
-  List.find_map static_indices ~f:(fun ss ->
-      if Indexing.equal_symbol ss.Indexing.static_symbol s then
-        Option.map ss.static_range ~f:(fun r -> if ss.used_as_extent then (0, r) else (0, r - 1))
-      else None)
-
+   subordinate to — [a_stmt_write] — whichever nodes are involved) is a self-read of the statement's
+   own store, not a visit — exactly the reads the retired concrete tracer never recorded. A dynamic
+   coordinate is a position only when read and write share it: a gather inside a static write, a
+   static read inside a scatter, or a gather of another runtime row than the scatter's records no
+   [a_stmt_write], and is never exempt (gh-ocannl-1244). Statement subordination, not program-path
+   matching: an [If] condition's read shares its path with the guarded body's write but executes
+   before it, so it is never exempt. Shared by {!reads_covered_query} and {!read_multiplicity_query}
+   — but the two consumers read it differently (gh-ocannl-618): for per-cell visit counting the
+   exemption is always right (the statement's own store is not a visit), while for the routine
+   INTERFACE it is not a coverage fact — the cells an exempt read touches still carry their incoming
+   values unless a prior write definitely covers them, so the coverage query reports
+   exemption-dependent coverage as its own verdict rather than folding it into [`Covered]. *)
 let rmw_exempt ~statics_set (r : _ Affine.access) =
   virtualize_settings.inline_complex_computations
   && Option.exists r.Affine.a_stmt_write ~f:(fun w ->
@@ -11772,29 +11853,32 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
      dependencies' fan-in sets; when the set outgrows the cap, the node is materialized (provenance
      41 — a heuristic policy decision, [`Inline]-flippable like the other caps), which resets the
      fan-in of everything downstream: the chain materializes once per ~cap contributors instead of
-     once per consumer. Per-setter maximum, not union across setters — a read of one cell executes
-     one setter's computation; tied maxima are unioned only for downstream expansion (Block/concat
-     range-guarded setters, each component under an index-only guard no backend blends). Within a
-     setter a value select is charged as the backend renders it (gh-ocannl-1775, {!resolve_charge}
-     and {!resolve_alternatives} in [max_expansion] below): the union of its arms where it blends;
-     where it short-circuits, the arm whose reads are the most AFTER transitive expansion
-     (gh-ocannl-1874) -- an arm loading one virtual node can replay more than an arm loading three
-     materialized ones; tied arms, like tied setters, are each a per-read charge and unioned
-     downstream (gh-ocannl-2098). A dependency passes downstream its ALTERNATIVES, narrower setters
-     and arms included, and a consumer is charged the maximum over them joined with its own loads
-     (gh-ocannl-2128): a narrower arm can be the wider one once the consumer's loads overlap the
-     other. The union of the tied maxima stays an alternative (a floor: no charge is below the
-     one-set reading's), and the lists are bounded by {!max_fanin_alternatives}. A consumer reading
-     a dependency at [k] distinct index sites in one evaluation runs [k] of its alternatives, and is
-     charged the widest union of [k] of them, repetition allowed (gh-ocannl-2196,
-     {!site_multiplicity}): [a[j] + a[j+dim]] over a concat costs both slices.
+     once per consumer. A read of one cell replays every setter whose write covers it, in program
+     order -- an init and its read-modify-write updates -- so the setters are charged per
+     write-overlap group ([setter_groups], gh-ocannl-2228): the union along a group, the maximum
+     across groups, which write disjoint cells; tied maxima are unioned only for downstream
+     expansion (Block/concat range-guarded setters, each component under an index-only guard no
+     backend blends, one per group). Within a setter a value select is charged as the backend
+     renders it (gh-ocannl-1775, {!resolve_charge} and {!resolve_alternatives} in [max_expansion]
+     below): the union of its arms where it blends; where it short-circuits, the arm whose reads are
+     the most AFTER transitive expansion (gh-ocannl-1874) -- an arm loading one virtual node can
+     replay more than an arm loading three materialized ones; tied arms, like tied groups, are each
+     a per-read charge and unioned downstream (gh-ocannl-2098). A dependency passes downstream its
+     ALTERNATIVES, narrower groups and arms included, and a consumer is charged the maximum over
+     them joined with its own loads (gh-ocannl-2128): a narrower arm can be the wider one once the
+     consumer's loads overlap the other. The union of the tied maxima stays an alternative (a floor:
+     no charge is below the one-set reading's), and the lists are bounded by
+     {!max_fanin_alternatives}. A consumer reading a dependency at [k] distinct index sites in one
+     evaluation runs [k] of its alternatives, and is charged the widest union of [k] of them,
+     repetition allowed (gh-ocannl-2196, {!site_multiplicity}): [a[j] + a[j+dim]] over a concat
+     costs both slices.
 
      A cycle of nodes still headed for inlining (gh-ocannl-1962) has no bottom to start from: a node
      with several setters can read, in one of them, a node reading the cells another of its setters
      wrote ([a] over its first half, [b] from it, [a]'s second half from [b]), every read covered.
      So the graph is condensed first and walked dependencies first, and a strongly connected
      component is charged as one: its members share the union of what all their charges load from
-     outside it, across setters and across select arms, because both "one setter per read" and "one
+     outside it, across groups and across select arms, because both "one group per read" and "one
      arm per evaluation" hold per cell, and a chain through a cycle evaluates several cells. The set
      is finished before any member lands, each member lands on its own eligibility, and nothing
      reads the traversal: a component's set is a commutative union over facts of the program and
@@ -11805,29 +11889,47 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
        routine's own setters. Used for a dependency this routine only READS whose definition an
        earlier routine in the lineage committed [Virtual] — its traced entry here has no setters,
        but its computation will be replayed all the same. A node committed [Virtual] by an earlier
-       routine: its stored computation's reads stand in for setters this routine does not see (one
-       stored component ≈ one setter, so the same per-setter maximum applies). Computed even when
-       this routine sets the node too — a read replays the stored definition AND the local updates,
-       and the local update's excluded self-read must not hide the prefix — so the inherited maximum
+       routine: its stored components' reads stand in for setters this routine does not see, grouped
+       by write overlap as [setter_groups] are (gh-ocannl-2228: a component's writes are its code's
+       affine writes of the node; the earlier routine's static ranges are unknown here, so a static
+       symbol is unbounded -- conservative), each group charged as one. Computed even when this
+       routine sets the node too — a read replays the stored definition AND the local updates, and
+       the local update's excluded self-read must not hide the prefix — so the inherited maximum
        unions with the local one. Only prior routines' components exist here: this routine's are
        stored later, by the virtualizer this pass feeds. *)
-    let inherited_reads tn =
-      if not (Tn.Placements.known_virtual plc tn) then []
-      else
-        match Hashtbl.find optim_ctx.computations tn with
-        | Some comps -> List.map comps ~f:(fun (_, code) -> read_charge_of_proc ~self:tn code)
-        | None -> []
+    let inherited_memo = Hashtbl.create (module Tnode) in
+    let inherited_groups tn =
+      Hashtbl.find_or_add inherited_memo tn ~default:(fun () ->
+          if not (Tn.Placements.known_virtual plc tn) then []
+          else
+            match Hashtbl.find optim_ctx.computations tn with
+            | None -> []
+            | Some comps ->
+                let dims = Lazy.force tn.Tn.dims in
+                (* Stored latest first ([instantiate_computations] replays them reversed). *)
+                List.rev_map comps ~f:(fun (_, code) ->
+                    let writes =
+                      List.filter (affine_accesses code) ~f:(fun (a : _ Affine.access) ->
+                          a.a_write && Tn.equal a.a_tn tn)
+                    in
+                    (writes, read_charge_of_proc ~self:tn code))
+                |> write_overlap_groups ~touch:(fun w1 w2 ->
+                    (* A component showing no write of the node cannot be placed: it overlaps. *)
+                    List.is_empty w1 || List.is_empty w2
+                    || List.exists w1 ~f:(fun a ->
+                        List.exists w2 ~f:(fun b -> Affine.may_touch_same_cell ~dims a b))))
     in
-    let setter_reads tn =
-      match Hashtbl.find traced_store tn with Some traced -> traced.setter_reads | None -> []
+    let setter_groups tn =
+      match Hashtbl.find traced_store tn with Some traced -> traced.setter_groups | None -> []
     in
+    let all_charges tn = List.concat (setter_groups tn @ inherited_groups tn) in
     (* Every node a charge can load, whichever way its selects go. *)
     let rec all_loads acc { loads; selects; sites = _ } =
       List.fold selects ~init:(Set.union acc loads) ~f:(fun acc { arms; _ } ->
           List.fold arms ~init:acc ~f:all_loads)
     in
     let charge_loads tn =
-      List.fold (setter_reads tn @ inherited_reads tn) ~init:(Set.empty (module Tnode)) ~f:all_loads
+      List.fold (all_charges tn) ~init:(Set.empty (module Tnode)) ~f:all_loads
     in
     (* A dependency already materialized contributes itself, and is not entered: expanding it could
        not change its decision (the cap only materializes), and the setter-reads graph of a whole
@@ -11887,23 +11989,28 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
       else List.map (Hashtbl.find_exn memo p) ~f:(Set.union acc)
     in
     let union_all = List.fold ~init:(Set.empty (module Tnode)) ~f:Set.union in
-    (* Over the per-setter charges (see [setter_reads]), each resolved under the backend's reading
-       of a select with every load expanded first, so a short-circuiting select is charged by its
-       arms' expansions (gh-ocannl-1874): every setter's alternatives, the narrower ones included,
-       so a consumer is charged the maximum over them joined with its own loads (gh-ocannl-2128),
-       and the equal widest -- across setters (gh-ocannl-2047) and across a short-circuiting
-       select's tied arms (gh-ocannl-2098) -- whose union stays a floor of what goes downstream, so
-       commuting independent setters or respelling a select cannot change it. The node's own charge
-       stays per-read: the union of ties can be wider than any one of them. *)
-    let max_expansion charges =
+    (* Over the write-overlap groups (see [setter_groups]), each group's setters resolved in
+       sequence ({!resolve_alternatives_from}: a read of one cell replays every setter of its group,
+       gh-ocannl-2228) under the backend's reading of a select with every load expanded first, so a
+       short-circuiting select is charged by its arms' expansions (gh-ocannl-1874): every group's
+       alternatives, the narrower ones included, so a consumer is charged the maximum over them
+       joined with its own loads (gh-ocannl-2128), and the equal widest -- across groups
+       (gh-ocannl-2047) and across a short-circuiting select's tied arms (gh-ocannl-2098) -- whose
+       union stays a floor of what goes downstream, so commuting independent setters or respelling a
+       select cannot change it. The node's own charge stays per-read: the union of ties can be wider
+       than any one of them. *)
+    let max_expansion groups =
       (* An absent side contributes no loads to a local/inherited pair. *)
-      List.fold charges
+      List.fold groups
         ~init:(0, [ Set.empty (module Tnode) ], [ Set.empty (module Tnode) ])
-        ~f:(fun (width, best, all) charge ->
+        ~f:(fun (width, best, all) group ->
           let alts =
-            resolve_alternatives ~blends:blends_value_selects
-              ~expand:(expand ~inside:(fun _ -> false))
-              charge
+            List.fold group
+              ~init:[ Set.empty (module Tnode) ]
+              ~f:(fun init charge ->
+                resolve_alternatives_from ~blends:blends_value_selects
+                  ~expand:(expand ~inside:(fun _ -> false))
+                  ~init charge)
           in
           let wide = widest_alternatives alts in
           let n = Set.length (List.hd_exn wide) in
@@ -11919,17 +12026,17 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
         let s, fanin =
           match members with
           | [ tn ]
-            when Option.is_none (Hashtbl.find traced_store tn) && List.is_empty (inherited_reads tn)
-            ->
+            when Option.is_none (Hashtbl.find traced_store tn)
+                 && List.is_empty (inherited_groups tn) ->
               ([ Set.singleton (module Tnode) tn ], 1)
           | [ tn ] ->
-              let local_best, local = max_expansion (setter_reads tn) in
-              let inherited_best, inherited = max_expansion (inherited_reads tn) in
-              (* A read replays one local setter and one inherited component: the pairs' unions are
-                 the alternatives, and the widest is this node's per-read charge, taken before the
-                 cap merges any tail (a concat of nine single-source slices still costs 1). The
-                 union of all tied contributors stays a floor downstream (gh-ocannl-2047,
-                 gh-ocannl-2098): choosing one tied pair would reintroduce order dependence. *)
+              let local_best, local = max_expansion (setter_groups tn) in
+              let inherited_best, inherited = max_expansion (inherited_groups tn) in
+              (* A read replays one local group and one inherited group: the pairs' unions are the
+                 alternatives, and the widest is this node's per-read charge, taken before the cap
+                 merges any tail (a concat of nine single-source slices still costs 1). The union of
+                 all tied contributors stays a floor downstream (gh-ocannl-2047, gh-ocannl-2098):
+                 choosing one tied pair would reintroduce order dependence. *)
               let pairs =
                 List.concat_map local ~f:(fun a -> List.map inherited ~f:(fun b -> Set.union a b))
               in
@@ -11960,15 +12067,21 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
                      in
                      List.fold c.selects ~init:m ~f:(fun m s -> List.fold s.arms ~init:m ~f:go)
                    in
-                   List.fold
-                     (setter_reads tn @ inherited_reads tn)
-                     ~init:(Map.empty (module Tnode))
-                     ~f:go
+                   List.fold (all_charges tn) ~init:(Map.empty (module Tnode)) ~f:go
                  in
-                 if List.length alts > 1 || not (Map.is_empty multi) then
-                   Stdio.eprintf "fan-in alternatives: %s keeps %d (own charge %d%s%s)\n%!"
+                 (* gh-ocannl-2228: the most setters one read replays in sequence. *)
+                 let sequenced =
+                   List.fold
+                     (setter_groups tn @ inherited_groups tn)
+                     ~init:1
+                     ~f:(fun k g -> Int.max k (List.length g))
+                 in
+                 if List.length alts > 1 || sequenced > 1 || not (Map.is_empty multi) then
+                   Stdio.eprintf "fan-in alternatives: %s keeps %d (own charge %d%s%s%s)\n%!"
                      (Tn.debug_name tn) (List.length alts) fanin
                      (if capped then ", capped" else "")
+                     (if sequenced > 1 then Printf.sprintf ", sequenced setters %d" sequenced
+                      else "")
                      (String.concat
                         (List.map (Map.to_alist multi) ~f:(fun (q, k) ->
                              if k = Int.max_value then
