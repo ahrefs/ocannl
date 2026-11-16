@@ -184,6 +184,98 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Writer contract in isolation, using the actual function body. This fixture reads
+# only the published JSON and holds its stable lock; it does not infer progress
+# from logs or inspect staging files. Open-reader control rejects in-place writes,
+# and a held-lock control rejects unserialized read/modify/write mutants.
+manifest_writer_contract() (
+  set -e
+  local writer=$tmp/manifest-writer.sh
+  sed -n '/^MANIFEST=$/,/^manifest_required() /p' "$sweep" >"$writer"
+  grep -q '^manifest_required() ' "$writer"
+  . "$writer"
+  STATE=$tmp/writer-state
+  mkdir -p "$STATE/runs"
+  HISTORY=$STATE/history.tsv
+  : >"$HISTORY"
+  MANIFEST=$STATE/runs/probe.json
+  stamp=probe full_sha=0123456789012345678901234567890123456789 REF=master
+  SLOW=1 FORCE=1 TARGET='test/einsum' ONLY=(cc cuda)
+  die() { echo "$*" >&2; exit 1; }
+  manifest_required init local:cc: remote:cuda:host
+  # Keep the old inode open across a replacement: an in-place writer changes it.
+  exec 4<"$MANIFEST"
+  manifest_required start local cc
+  perl -MJSON::PP -e '
+    local $/; my $old = decode_json(<STDIN>);
+    die "publication overwrote an open reader" unless $old->{lanes}[0]{units}[0]{state} eq "queued";
+  ' <&4
+  exec 4<&-
+  perl -MJSON::PP -e '
+    local $/; my $v = decode_json(<>); my $u = $v->{lanes}[0]{units}[0];
+    die "running transition" unless $u->{state} eq "running" && $u->{started_at};
+    die "run metadata" unless $v->{slow} == 1 && $v->{force} == 1 && $v->{pid} > 0
+      && $v->{target} eq "test/einsum" && @{$v->{only}} == 2 && length($v->{ref}) == 40;
+  ' "$MANIFEST"
+  # A writer must wait on the same stable lock across inode replacements.
+  perl -e 'use Fcntl ":flock";
+    open(my $l, ">>", $ARGV[0]) or die $!; flock($l, LOCK_EX) or die $!;
+    open(my $r, ">", $ARGV[1]) or die $!; close $r;
+    while (!-e $ARGV[2]) { select undef, undef, undef, .01; }
+  ' "$MANIFEST.lock" "$STATE/locked" "$STATE/release" &
+  local locker=$! ticks=0
+  until [ -e "$STATE/locked" ]; do
+    [ "$ticks" -lt 500 ]; sleep .01; ticks=$((ticks + 1))
+  done
+  (manifest_required lane remote gate; touch "$STATE/updated") &
+  local updater=$!
+  sleep .2
+  local premature=0
+  [ ! -e "$STATE/updated" ] || premature=1
+  touch "$STATE/release"
+  wait "$locker"
+  wait "$updater"
+  [ "$premature" = 0 ]
+  # Both lanes modify a shared view concurrently; each history outcome survives.
+  printf 'probe\tlocal\tcc\tsha\tpass\nprobe\tremote\tcuda\tsha\tgate\n' >"$HISTORY"
+  manifest_required lane local done &
+  local a=$!
+  manifest_required row remote cuda gate &
+  local b=$!
+  wait "$a"; wait "$b"
+  manifest_required end cancelled
+  perl -MJSON::PP -e '
+    local $/; my $v = decode_json(<>);
+    die "lost lane update" unless $v->{lanes}[0]{state} eq "done" && $v->{lanes}[1]{state} eq "gate";
+    die "lost outcomes" unless $v->{lanes}[0]{units}[0]{state} eq "done"
+      && $v->{lanes}[0]{units}[0]{outcome} eq "pass"
+      && $v->{lanes}[1]{units}[0]{state} eq "skipped"
+      && $v->{lanes}[1]{units}[0]{outcome} eq "gate";
+    die "cancelled" unless $v->{exit_kind} eq "cancelled";
+  ' "$MANIFEST"
+)
+manifest_writer_contract
+if [ "${SWEEP_MANIFEST_WRITER_ONLY:-0}" = 1 ]; then exit 0; fi
+
+# Read the real path by the run record locator, without guessing a stamp.
+manifest_for_record() { printf '%s/runs/%s.json' "$state" "$(basename "$1" -run.tsv)"; }
+manifest_finished() { # record kind
+  perl -MJSON::PP -e '
+    my $path = shift; my $kind = shift; open(my $f, "<", $path) or die $!;
+    local $/; my $v = decode_json(<$f>);
+    die "exit kind" unless $v->{exit_kind} eq $kind;
+    die "planned lanes absent" unless @{$v->{lanes}};
+    for my $l (@{$v->{lanes}}) {
+      die "unfinished lane" unless $l->{state} =~ /^(done|gate)$/;
+      die "empty lane" unless @{$l->{units}};
+      for my $u (@{$l->{units}}) {
+        die "outcome missing" unless defined $u->{outcome};
+        die "unfinished unit" unless $u->{state} =~ /^(done|skipped)$/;
+      }
+    }
+  ' "$(manifest_for_record "$1")" "$2"
+}
+
 origin=$tmp/origin.git
 main=$tmp/main
 state=$tmp/state
@@ -2644,6 +2736,13 @@ grep -q '^  rog-nv/cuda: skip (unreachable)$' <<<"$lanes"
 grep -q '^  minix/hip: skip (unreachable)$' <<<"$lanes"
 grep -q '^  minix/multidev_cc: skip (unreachable)$' <<<"$lanes"
 [ ! -e "$tmp/lanes.overlap" ]
+manifest_finished "$(sed -n 's/^run:  *//p' <<<"$lanes")" complete
+perl -MJSON::PP -e '
+  local $/; my $v = decode_json(<>);
+  my @gated = grep {$_->{box} eq "tuf"} @{$v->{lanes}};
+  die "gated lane" unless @gated == 1 && $gated[0]{state} eq "gate";
+' "$(manifest_for_record "$(sed -n 's/^run:  *//p' <<<"$lanes")")"
+
 
 # The same ambient-leak control as the hostile backend above, for the lab lock directory, which is
 # inherited the same way and fails far more quietly. A nested sweep that reached the REAL directory
@@ -2839,10 +2938,34 @@ printf 'another lane (pid 1)\n' >"$lane_lock_at"
 exec 6>>"$lane_lock_at"
 perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 1)' <&6
 : >"$ssh_calls"
+# While the real lane waits on this held lab lock, every planned unit is visible.
+SWEEP_TEST_LAB_LOCK_WAIT=3 run_sweep_args --only cuda --target manifest-lock-probe \
+  >"$tmp/manifest-lock.out" 2>"$tmp/manifest-lock.err" &
+manifest_lock_pid=$!
+holder_pid=$manifest_lock_pid
+waited=0
+until grep -q '^sweep ' "$tmp/manifest-lock.out" && ls "$state/runs/"*.json >/dev/null 2>&1; do
+  [ "$waited" -lt "$wait_ticks" ]; sleep .05; waited=$((waited + 1))
+done
+manifest_lock_stamp=$(sed -n 's/^sweep \([0-9TZ]*\) .*/\1/p' "$tmp/manifest-lock.out")
+# The header precedes publication; wait for this stamp, not an earlier manifest.
+waited=0
+until [ -f "$state/runs/$manifest_lock_stamp.json" ]; do
+  [ "$waited" -lt "$wait_ticks" ]; sleep .01; waited=$((waited + 1))
+done
+perl -MJSON::PP -e '
+  local $/; my $v = decode_json(<>); my $l = $v->{lanes}[0];
+  die "waiting lock" unless $l->{state} eq "waiting-lock";
+  die "queued" unless $l->{units}[0]{state} eq "queued" && !defined $l->{units}[0]{started_at};
+' "$state/runs/$manifest_lock_stamp.json"
+wait "$manifest_lock_pid"
+holder_pid=
+manifest_finished "$(sed -n 's/^run:  *//p' "$tmp/manifest-lock.out")" complete
 lane_lock_linux=$(SWEEP_TEST_LAB_LOCK_WAIT=0 \
   run_sweep_args --only cuda --target lane-lock-linux-probe)
 grep -q '^destinations: rog-nv=rog-nv-linux$' <<<"$lane_lock_linux"
 grep -q '^  rog-nv/cuda: skip (box rog reserved by another lane (pid 1))$' <<<"$lane_lock_linux"
+manifest_finished "$(sed -n 's/^run:  *//p' <<<"$lane_lock_linux")" complete
 lane_lock_wsl=$(SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh SWEEP_TEST_LAB_LOCK_WAIT=0 \
   run_sweep_args --only cuda --target lane-lock-wsl-probe)
 grep -q '^destinations: rog-nv=rog-nv-wsl$' <<<"$lane_lock_wsl"
@@ -3062,11 +3185,11 @@ aggregator_missing_record=$(sed -n 's/^run:  *//p' <<<"$aggregator_missing")
 # The stamp names every per-run artifact, and two invocations a second apart can
 # otherwise choose the same one -- a cancelled run releases the lock inside the
 # second it ends, so its retry can land on top of its logs, fingerprints and
-# record. Seeding the next few seconds' stamps as taken forces the advance
+# record. Manifest-only seeds also cover death before any log or row. Seeding the next few seconds' stamps as taken forces the advance
 # whichever second the sweep starts in, rather than relying on it being slow.
 seeded_stamps=$(perl -MPOSIX -e \
   'print join(" ", map { strftime("%Y%m%dT%H%M%SZ", gmtime(time + $_)) } 0 .. 5)')
-for seeded in $seeded_stamps; do : >"$state/logs/$seeded-seed.log"; done
+for seeded in $seeded_stamps; do : >"$state/runs/$seeded.json"; done
 stamp_advance=$(run_sweep_args --target stamp-probe)
 advanced_record=$(sed -n 's/^run:  *//p' <<<"$stamp_advance")
 advanced_stamp=$(basename "$advanced_record" -run.tsv)
@@ -3930,6 +4053,16 @@ cancel_sweep() { # pid|group
   # ready was cancelled anyway and whatever the cancel then observed was read as the real thing.
   [ -e "$prefix.ready" ]
   [ -e "$prefix.ssh-running" ]
+  local live_stamp
+  live_stamp=$(sed -n 's/^sweep \([0-9TZ]*\) .*/\1/p' "$prefix.out")
+  perl -MJSON::PP -e '
+    local $/; my $v = decode_json(<>);
+    die "premature end" if defined $v->{exit_kind};
+    for my $l (@{$v->{lanes}}) {
+      die "lane not running" unless $l->{state} eq "running";
+      die "unit not running" unless $l->{units}[0]{state} eq "running" && $l->{units}[0]{started_at};
+    }
+  ' "$state/runs/$live_stamp.json"
   case $how in
     pid) kill -TERM "$pid" ;;
     group) kill -TERM -- "-$pid" ;;
@@ -3966,6 +4099,8 @@ cancel_sweep() { # pid|group
   cancel_record=$(sed -n 's/^run:  *//p' "$prefix.out")
   [ -f "$cancel_record" ]
   [ "$(awk -F '\t' '$1 == "run" { print $8 }' "$cancel_record")" = cancelled ]
+  perl -MJSON::PP -e 'local $/; die "cancelled manifest" unless decode_json(<>)->{exit_kind} eq "cancelled"' \
+    "$(manifest_for_record "$cancel_record")"
 }
 # Called directly, not captured: errexit does not reach inside a command
 # substitution, and the assertions are in the function.
