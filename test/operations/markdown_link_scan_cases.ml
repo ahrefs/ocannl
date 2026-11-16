@@ -57,6 +57,7 @@ let () =
       ("# Same\n# Same-1\n# Same", "same-2");
       ("# With `inline_code` and *emphasis*", "with-inline_code-and-emphasis");
       ("# A — B", "a--b");
+      ("# Valid\n\n    value\n    ---", "valid");
       ("   ### Heading ###", "heading");
       ("# Heading#", "heading");
       ("# Heading\n```md\n# Heading\n```\n# Heading", "heading-1");
@@ -67,6 +68,12 @@ let () =
     (List.concat_map valid ~f:(fun (contents, anchor) -> check contents ("[a](#" ^ anchor ^ ")")));
   let unsupported =
     [
+      "> # Same";
+      "- # Same";
+      "1. # Same";
+      "1. Item\n\n    # Same";
+      "1. Item\n\n    Same\n    ---";
+      "> Same\n> ---";
       "Title\n======";
       "Title\n--";
       "# [linked](target.md)";
