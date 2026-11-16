@@ -669,21 +669,34 @@ if [ "$life_posix" = 1 ] && [ "$have_state" = 1 ] && [ "$have_pgid" = 1 ]; then
   # The launcher's `cat <run>/resolved`, just before its attached wait, arms
   # it; the next `cat <run>/pid` -- that wait's first probe, in the launcher's
   # process group -- sends TERM to its own group and dies of it. The control
-  # runs the launcher with plain sup_alive in that loop: it must report the
-  # run dead while the supervisor goes on to publish the cancellation.
+  # runs plain sup_alive and records its answer and the owned supervisor's
+  # liveness BEFORE sending TERM. Its false-dead answer is the control's
+  # verdict; cancellation publication cannot race that record (gh-ocannl-2140).
   life_real_cat=$(command -v cat)
   for probe_case in settled control; do
     cp "$SRC" "$life_root/tools/test-run.sh"
     if [ "$probe_case" = control ]; then
       probe_n=$(grep -c 'while sup_alive_settled "\$run_dir"; do wait_tick "\$sup"' "$SRC")
-      sed 's/while sup_alive_settled "\$run_dir"; do wait_tick "\$sup"/while sup_alive "$run_dir"; do wait_tick "$sup"/' \
-        "$SRC" >"$life_root/tools/test-run.sh"
+      awk -v prefix="$life_prefix" '
+        /while sup_alive_settled "\$run_dir"; do wait_tick "\$sup"/ {
+          print "      probe_control() {"
+          print "        local result live=0"
+          print "        sup_alive \"$1\"; result=$?"
+          print "        if [ ! -e \"$1/exit\" ] && proc_alive \"$1/pid\" \"$1/ptoken\"; then live=1; fi"
+          print "        printf '\''%s %s\\n'\'' \"$result\" \"$live\" >\"" prefix ".probe-verdict\""
+          print "        kill -TERM 0"
+          print "        return \"$result\""
+          print "      }"
+          sub(/sup_alive_settled/, "probe_control")
+        }
+        { print }
+      ' "$SRC" >"$life_root/tools/test-run.sh"
       if [ "$probe_n" != 1 ] ||
          grep -q 'while sup_alive_settled "\$run_dir"; do wait' "$life_root/tools/test-run.sh"; then
         report 1 'lifecycle: probe control extraction' "matches=$probe_n"; return 1
       fi
     fi
-    rm -f "$life_prefix.ready" "$life_prefix.release" "$life_prefix.probe-armed" "$life_prefix.probe-fired"
+    rm -f "$life_prefix.ready" "$life_prefix.release" "$life_prefix.probe-armed" "$life_prefix.probe-fired" "$life_prefix.probe-verdict"
     cat >"$life_bin/cat" <<EOF
 #!/usr/bin/env bash
 case \${1:-} in
@@ -691,7 +704,10 @@ case \${1:-} in
   */pid)
     if [ "\$("$life_real_cat" "$life_prefix.probe-armed" 2>/dev/null)/pid" = "\$1" ] &&
        mv "$life_prefix.probe-armed" "$life_prefix.probe-fired" 2>/dev/null; then
-      kill -TERM 0
+      # The production leg kills the probe with its group. The control
+      # returns the same failed probe first. Its caller records the result
+      # before signalling, so cancellation cannot mask the false-dead answer.
+      [ "$probe_case" != settled ] || kill -TERM 0
       exit 143
     fi ;;
 esac
@@ -712,9 +728,13 @@ EOF
       else report 1 'lifecycle: probe-killing group TERM publishes the matching verdict and sentinel'; fi
       life_no_survivors 'probe-killing group TERM'
     else
-      # The supervisor was alive all along: it publishes after the launcher
-      # gave up on it, which is the CI signature, verdict file and all.
-      if [ "$life_rc" = 1 ] && grep -q 'died without recording a verdict' "$TMP/lifecycle.out" &&
+      # The plain probe answered dead (1) for its still-live owned child (1).
+      # That record precedes TERM. Either final launcher status is possible:
+      # DIED if it wins the race, CANCELLED if publication wins it.
+      probe_finished=0
+      if { [ "$life_rc" = 1 ] && grep -q 'died without recording a verdict' "$TMP/lifecycle.out"; } ||
+         { [ "$life_rc" = 143 ] && grep -q 'verdict: CANCELLED' "$TMP/lifecycle.out"; }; then probe_finished=1; fi
+      if [ "$probe_finished" = 1 ] && [ "$(cat "$life_prefix.probe-verdict" 2>/dev/null)" = '1 1' ] &&
          await_fixture_ready "$life_run/exit" && [ "$(cat "$life_run/exit")" = 143 ] &&
          life_await_dead "$(cat "$life_run/pid")"; then
         report 0 'negative control: an unsettled probe reports a live supervisor dead'

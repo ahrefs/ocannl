@@ -1274,6 +1274,24 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   its leg's number in the selector if it is a new leg -- the job names the check it did not see
   pass. A nested run of a harness copy unsets the record variable with the others.
 
+- The three gh-ocannl-2140 fixtures separate a response verdict from teardown
+  and later publication. `wait_signal_race.py` keeps its five-second cancellation
+  oracle, then reaps the owned foreground control without a separate ten-second
+  cleanup deadline; cleanup exceptions retain the captured fixture output.
+  Digest leg 35 reads the invocation's recorded run by identity, leaving queued
+  launch following to the last-reader member (gh-ocannl-2124). Lifecycle's
+  failed-probe control records its false-dead answer and the owned supervisor's
+  liveness before sending TERM, so cancellation cannot mask the probe verdict;
+  the production leg still sends group TERM inside the probe, and the genuinely
+  killed-supervisor control still requires DIED. Local loaded runs are the
+  evidence for these fixes; the nightly Shell harnesses job is the later witness.
+  On minix-amd-linux, base `d08ac8e45` had no natural failure in 20 cancellation,
+  20 digest, ten lifecycle-signal and 20 setup-1b attempts, with four harness
+  lanes and four CPU burners. Ten head attempts per leg passed. An injected
+  eleven-second foreground-driver cleanup delay fails the base's ten-second
+  wait and passes with the reap fix; the five-second oracle rejects the
+  foreground twin in both. Setup 1b stays outside this fix without a reproduction.
+
 - Shell harness checks capture failures with `command || rc=$?`, preserving the caller's
   `errexit` state; an unconditional `set -e` after a check makes later unguarded failures
   terminate a harness that started with only `set -u` (gh-ocannl-1178).

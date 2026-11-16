@@ -233,11 +233,21 @@ def check_cancellation(harness):
                                 timed_out = True
                                 break
                 finally:
-                    if process.returncode is None:
-                        # The mutant's shell defers TERM, but its driver is in
-                        # this still-owned group and cancels all trial groups.
-                        os.killpg(process.pid, signal.SIGTERM)
-                        process.wait(timeout=10)
+                    try:
+                        if process.returncode is None:
+                            # The mutant's shell defers TERM, but its driver is
+                            # in this still-owned group and cancels trial groups.
+                            os.killpg(process.pid, signal.SIGTERM)
+                            # Cleanup has no response oracle of its own. Reap
+                            # the owned shell without a separate short bound;
+                            # the enclosing leg owns the run bound. The exact
+                            # five-second verdict above is already recorded.
+                            process.wait()
+                    except BaseException:
+                        output.seek(0)
+                        print(output.read().decode(errors="replace"),
+                              file=sys.stderr, flush=True)
+                        raise
                 if process.returncode != 143 or timed_out != foreground:
                     output.seek(0)
                     raise RuntimeError(f"foreground={foreground}: timeout={timed_out}, "
