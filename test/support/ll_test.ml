@@ -1923,3 +1923,50 @@ let resident_regions src m =
           (load, beg, fin, store))
     in
     if ordered (-1) regions then Some r else None
+
+(** [single_trip_loops ~loops llc]: [llc] with every [For_loop] whose index satisfies [loops] cut to
+    its first iteration ([to_ = from_]), the rest of the code untouched. What it is for: code
+    lowering never emits, such as a convolution whose every kernel-window loop is retained at one
+    iteration (lowering drops extent-1 loops), where a recognizer or a transform must still be
+    judged (gh-ocannl-1856). The cells the cut iterations wrote are no longer written; the caller
+    owns what that means for its program. *)
+let single_trip_loops ~(loops : Ir.Indexing.symbol -> bool) (llc : LL.t) : LL.t =
+  let rec go (llc : LL.t) : LL.t =
+    match llc with
+    | For_loop ({ index; from_; body; _ } as fl) ->
+        For_loop { fl with to_ = (if loops index then from_ else fl.to_); body = go body }
+    | Seq (a, b) -> Seq (go a, go b)
+    | If ({ body; _ } as i) -> If { i with body = go body }
+    | Scan_loop ({ body; _ } as sl) -> Scan_loop { sl with body = go body }
+    | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier | Zero_out _
+    | Set _ | Set_dynamic _ | Set_from_vec _ | Set_local _ | Tile_mma _ ->
+        llc
+  in
+  go llc
+
+(** [pad_scratch_of ~base post]: the padded scratch tile [Schedule.contract_tensorized_accumulator]
+    minted in [post] (an application of a schedule to [base]), if any — read structurally, never by
+    label: a fresh member of [masked_fragments] in workgroup-shared memory beside a fresh persistent
+    fragment ([simdgroup_fragments]); the statement site's single masked tile is shared too, but no
+    persistent fragment wraps it (gh-ocannl-1736). Fresh means absent from [base]'s fragment sets.
+    One reading for every test that pins the scratch tile (gh-ocannl-1856). *)
+let pad_scratch_of ~(base : LL.optimized) (post : LL.optimized) : Tn.t option =
+  let base_sets = Set.union base.LL.simdgroup_fragments base.LL.masked_fragments in
+  let fresh set = Set.to_list (Set.diff set base_sets) in
+  match
+    ( fresh post.LL.simdgroup_fragments,
+      List.filter (fresh post.LL.masked_fragments) ~f:(Set.mem post.LL.workgroup_shared) )
+  with
+  | _ :: _, [ tn ] -> Some tn
+  | _ -> None
+
+(** [charged_once summary tn ~m ~n]: whether {!Ir.Cost_model.analyze} charged [tn] exactly one whole
+    [m x n] tile written and one read, at [tn]'s storage width — what a fresh accumulator fragment
+    or scratch tile costs (gh-ocannl-1601, gh-ocannl-1856). [false] when [tn] is not charged at all.
+*)
+let charged_once (s : Ir.Cost_model.summary) (tn : Tn.t) ~m ~n =
+  match List.Assoc.find s.Ir.Cost_model.per_node tn ~equal:Tn.equal with
+  | Some fp ->
+      fp.Ir.Cost_model.fp_read_bytes + fp.Ir.Cost_model.fp_write_bytes
+      = 2 * m * n * Ir.Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec)
+  | None -> false

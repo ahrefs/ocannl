@@ -896,6 +896,42 @@ val matmul_fragment_certain : Ir.Low_level.optimized -> sketch_params -> bool
     order and staging read. [false] off the uncoalesced matmul tensorized sketches. Exposed for
     tests, which check it against the applied schedules. *)
 
+val matmul_pad_scratch_certain : Ir.Low_level.optimized -> sketch_params -> bool
+(** Whether every application of the GPU tensorized matmul sketch [p] to [opt] also has
+    [Schedule.contract_tensorized_accumulator] mint the padded [pad_scratch] tile (gh-ocannl-1736) —
+    a second fresh [bm x bn] node at the output's storage precision, which
+    {!sketch_path_traffic_floor} prices beside the fragment (gh-ocannl-1856): a staged geometry
+    whose row or column block does not divide its extent, contracted at a loop (a reduction-block
+    loop of two or more iterations). The statement site keeps one masked tile, the CPU pipelines a
+    local array. [false] off the uncoalesced GPU matmul tensorized sketches. Exposed for tests. *)
+
+val conv_acc_masked : conv_site -> sketch_params -> bool
+(** Whether the conv geometry [p] pad-masks its accumulator: a row or column pad on the GPU leg (a
+    reduction pad masks nothing), a row panel not dividing the row on the CPU leg — what the
+    builders pad (gh-ocannl-1856). Exposed for tests. *)
+
+val conv_fragment_certain : conv_site -> masked:bool -> bool
+(** Whether every completion of a conv geometry with accumulator masks [masked] mints the
+    accumulator fragment: a kernel-window loop of two or more iterations, or the masks, which force
+    the contraction at the statement site (gh-ocannl-1601, gh-ocannl-1856). *)
+
+val conv_pad_scratch_certain : conv_site -> gpu:bool -> masked:bool -> bool
+(** Whether it also mints the padded scratch tile: a masked window-loop site on the GPU leg
+    (gh-ocannl-1736, gh-ocannl-1856). *)
+
+val cpu_pack_grid_chunk_bytes :
+  matmul_site ->
+  shape:[ `Serial | `Hoisted | `Hoisted_grid | `Hoisted_grid_pack_rest | `Grid_pack_rest | `Grid ] ->
+  prec_bytes:int ->
+  sketch_params ->
+  int
+(** The known per-chunk locals of a CPU packed shape's row-block [Grid] body, in bytes, at the
+    packing element size [prec_bytes]: its in-kernel packed tiles plus the accumulator fragment its
+    contraction mints there, by the loop order or the pad masks — on the plain [grid] shape a
+    pad-masked statement-site tile (gh-ocannl-1706). What the seeding pre-filter weighs against
+    [cc_grid_private_bytes_cap], and what the renderer's Grid record reports (gh-ocannl-1793,
+    gh-ocannl-1856); [0] for a shape without a Grid loop. Exposed for tests. *)
+
 val sketch_path_traffic_floor :
   limits:Ir.Backend_intf.hardware_limits -> Ir.Low_level.optimized -> Family_decision.path -> int
 (** The certain-traffic increment (bytes) of a family-tree decision path (gh-ocannl-514 phase 5):

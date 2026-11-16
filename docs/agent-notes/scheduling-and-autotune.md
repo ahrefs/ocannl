@@ -406,8 +406,19 @@ files.
   `bm` box: divisibility is not monotone in the block size). One fragment however many reasons
   force it. `sketch_family_tree`'s `fragment_pins` checks the predicate against the applied
   schedules over every tensorized leaf, reading the fragment off `simdgroup_fragments` /
-  `masked_fragments`, not its label. Still unpriced (sound): the GPU masked loop site's second
-  tile (`pad_scratch`, gh-ocannl-1736) and conv's mask-forced fragments (a 1x1 window with pads).
+  `masked_fragments`, not its label. Since gh-ocannl-1856 the floor also prices the GPU masked
+  loop site's second tile (`pad_scratch`, gh-ocannl-1736: `gpu_mma_pad_scratch`, a staged masked
+  geometry whose reduction-block loop repeats; on the lattice, a box whose every completion is
+  masked and contracts at a loop; on conv's GPU leg, a masked geometry under a repeating window
+  loop) and conv's mask-forced fragments where no window loop repeats (`conv_fragment_certain` over
+  `conv_acc_masked`: the builders' own row and column pads). The second case is reachable only from
+  hand-built code — lowering drops extent-1 window loops and a lowered 1x1 conv is the matmul
+  family's (`conv_detection_boundary`) — so `conv_family_tree` narrows a lowered conv's window loops
+  to one iteration (`narrow_windows`). `sketch_family_tree`'s `fragment_pins` and
+  `conv_family_tree`'s `contraction_pins` read the scratch structurally (a fresh workgroup-shared
+  member of `masked_fragments` beside a fresh `simdgroup_fragments` one) and pin each minted
+  accumulator node's charge as an equality; `masked_persistent_fragment` checks the scratch
+  predicate against the applied loop site on the GPU legs.
   **Pruning at real conv incumbents needed both halves of the byte accounting tight**: the floor
   prices a windowed read by `Affine.image_cardinality_lb` (sumset/interval counting per
   coordinate, products over symbol-disjoint coordinates), and `analyze` caps a non-injective
@@ -1443,9 +1454,15 @@ files.
   whether the loop order or the pad masks mint it (`cpu_pack_fragment_bytes`, gh-ocannl-1793,
   gh-ocannl-1706), the sum the renderer's `Grid_private_over_cap` reports. Refusing a geometry moves the shape's pad-waste minimum, so a padded geometry can surface
   in its place; `test/operations/autotune_grid_record` compiles every hoisted-grid geometry of two
-  sites and pins proposed-iff-within-cap against each record. Not weighed: the plain `grid` shape's
-  pad-masked statement-site tile, and the launch floor (the in-kernel `Grid` shape's
-  row-block launch sits under the k-blocks and is below it at 64^3, so it is timed serial).
+  sites and pins proposed-iff-within-cap against each record. The plain `grid` shape's pad-masked
+  statement-site tile IS weighed (since gh-ocannl-1706, through `cpu_pack_acc_masked`; comments
+  saying otherwise were stale until gh-ocannl-1856): the shape's per-chunk sum is one spelling,
+  `cpu_pack_grid_chunk_bytes`, which the same test pins equal to the renderer's recorded private
+  bytes on padded plain-`grid` sites. Those sites pad only rows and columns: with a k pad too
+  (40^3 and 72^3 at bk=16) the renderer keeps the row-block loop serial for another reason, the
+  A~ tile "accessed outside the loop body" (its privatization rule), before any cap is read. Not weighed: the launch floor (the
+  in-kernel `Grid` shape's row-block launch sits under the k-blocks and is below it at 64^3, so it
+  is timed serial).
 - **A test decides how a `Tile_mma` rendered from the census, never the source** (gh-ocannl-1316).
   The lane-0 fallback's `if (lane == 0)` guard also wraps the C backends' register tiling, so
   `"== 0)"` never told the two apart; "no intrinsic spelling" says nothing about a statement that

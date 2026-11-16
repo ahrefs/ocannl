@@ -16,7 +16,9 @@
    - some seed of each graph is masked at the loop site, and each such seed holds its fragment over
    a workgroup-shared scratch tile, with no fragment-scope violation; - a statement-site masked seed
    marks no persistent fragment; - the seeding's pad verdict ([Autotune.seeding_seed_pads], which
-   the census prints) agrees with the applied schedule's [masked_fragments], seed by seed.
+   the census prints) agrees with the applied schedule's [masked_fragments], seed by seed; - the
+   predicate the traffic floor prices the scratch tile by (gh-ocannl-1856) holds exactly on the
+   loop-site seeds.
 
    On a GPU whose seeder advertises the f16 -> f32 tile, every loop-site seed is compiled, run twice
    and compared with the unscheduled reference bitwise; where the fragment scope is advertised its
@@ -152,7 +154,17 @@ let statement_site s =
 let masks_accumulator pads =
   List.exists pads ~f:(fun (sp : Autotune.seed_pad) -> Autotune.pad_masks_accumulator sp.pad_role)
 
-let structural_claims tag (seeds : seed list) =
+(* gh-ocannl-1856: the predicate the traffic floor prices the scratch tile by, on the seed's own
+   parameters: [Autotune.matmul_pad_scratch_certain] on the matmul family,
+   [Autotune.conv_pad_scratch_certain] over [Autotune.conv_acc_masked] on the conv family. *)
+let scratch_predicate (lowering : LL.optimized) (sp : Autotune.sketch_params) =
+  if sp.Autotune.sk_conv then
+    Option.exists (Autotune.detect_conv lowering.LL.llc) ~f:(fun site ->
+        Autotune.conv_pad_scratch_certain site ~gpu:sp.Autotune.sk_gpu
+          ~masked:(Autotune.conv_acc_masked site sp))
+  else Autotune.matmul_pad_scratch_certain lowering sp
+
+let structural_claims tag lowering (seeds : seed list) =
   Stdio.eprintf
     "%s: %d seeds, %d loop-site masked, %d statement-site masked (not part of the golden)\n" tag
     (List.length seeds) (List.count seeds ~f:loop_site)
@@ -180,6 +192,10 @@ let structural_claims tag (seeds : seed list) =
     ~f:(fun s ->
       Bool.equal (loop_site s)
         (Option.exists s.applied ~f:(fun o -> not (Set.is_empty o.LL.simdgroup_fragments))));
+  p_all
+    (tag ^ ": the traffic floor's pad-scratch predicate is the applied loop site, seed by seed")
+    (List.filter seeds ~f:(fun s -> Option.is_some s.applied))
+    ~f:(fun s -> Bool.equal (scratch_predicate lowering s.sp) (loop_site s));
   p_all
     (tag ^ ": the seeding's pad verdict is the applied schedule's mask, seed by seed")
     (List.filter seeds ~f:(fun s -> Option.is_some s.pads && Option.is_some s.applied))
@@ -355,7 +371,7 @@ let narrow_claims () =
         Ll_test.captured_lowering ~name:(tag ^ "_probe") (Train.forward (make_narrow (tag ^ "p"))))
   in
   let seeds = wide (fun () -> seeds_of ~d_prec:half lowering) in
-  structural_claims tag seeds;
+  structural_claims tag lowering seeds;
   p_all
     (tag
    ^ ": for every loop-site seed's k block the data tell per-step narrowing from once-per-tile")
@@ -424,7 +440,7 @@ let () =
         Ll_test.captured_lowering ~name:(tag ^ "_probe") (Train.forward (make (tag ^ "p")))
       in
       let seeds = seeds_of ~d_prec:single lowering in
-      structural_claims tag seeds;
+      structural_claims tag lowering seeds;
       let want = reference ~make tag in
       p_all2
         (tag ^ ": the executed reference equals the premise's host sums")

@@ -492,32 +492,42 @@ let make_narrow_conv tag ~b ~h ~ic ~oc =
    row tile the seed carries in [sk_tm]; the GPU leg pads the out-channel and reduction extents to
    the multiples it carries in [sk_bn]/[sk_bk] (0 = already a multiple). A tile is at the packing
    precision where it differs from its operand's, else at the operand's. *)
-let expected_conv_inc (site : Autotune.conv_site) (p : Autotune.sketch_params) =
+(* The GEMM extents a leaf's own parameters imply: the row block or panel (else the whole row, padded
+   to [sk_tm] on the GPU leg), the reduction and the out-channel (padded to [sk_bk]/[sk_bn] on the
+   GPU leg). *)
+let conv_mkn (site : Autotune.conv_site) (p : Autotune.sketch_params) =
   let pad n t = if t = 0 then n else (n + t - 1) / t * t in
+  if p.Autotune.sk_gpu then
+    ( (if p.Autotune.sk_bm > 0 then p.Autotune.sk_bm else pad site.Autotune.c_nrow p.Autotune.sk_tm),
+      pad site.Autotune.c_nred p.Autotune.sk_bk,
+      pad site.Autotune.c_noc p.Autotune.sk_bn )
+  else
+    ( (if p.Autotune.sk_bm > 0 then p.Autotune.sk_bm else site.Autotune.c_nrow),
+      site.Autotune.c_nred,
+      site.Autotune.c_noc )
+
+let expected_conv_inc (site : Autotune.conv_site) (p : Autotune.sketch_params) =
   let width (tn : Ir.Tnode.t) =
     let sp = Lazy.force tn.Ir.Tnode.storage_prec in
     match p.Autotune.sk_pack_prec with
     | Some q when not (Ir.Ops.equal_prec q sp) -> Ir.Ops.prec_in_bytes q
     | _ -> Ir.Ops.prec_in_bytes sp
   in
-  let m, k, n =
-    if p.Autotune.sk_gpu then
-      ( (if p.Autotune.sk_bm > 0 then p.Autotune.sk_bm else pad site.Autotune.c_nrow p.Autotune.sk_tm),
-        pad site.Autotune.c_nred p.Autotune.sk_bk,
-        pad site.Autotune.c_noc p.Autotune.sk_bn )
-    else
-      ( (if p.Autotune.sk_bm > 0 then p.Autotune.sk_bm else site.Autotune.c_nrow),
-        site.Autotune.c_nred,
-        site.Autotune.c_noc )
-  in
-  let fragment =
-    (* gh-ocannl-1601: the accumulator fragment Tensorize's contraction mints across the
-       kernel-window chain: [m x n] at the output's storage width, written and read. *)
-    if List.exists site.Autotune.c_axes ~f:(fun cx -> cx.Autotune.cx_nk >= 2) then
+  let m, k, n = conv_mkn site p in
+  (* gh-ocannl-1601 / gh-ocannl-1856: the accumulator fragment Tensorize's contraction mints across
+     the kernel-window chain, or at the statement site where pad masks force it, [m x n] at the
+     output's storage width, written and read; a masked window-loop site on the GPU leg also stages
+     it through a padded scratch tile of the same size. [contraction_pins] judges both predicates
+     against the applied schedules. *)
+  let masked = Autotune.conv_acc_masked site p in
+  let accumulator certain =
+    if certain then
       2 * m * n * Ir.Ops.prec_in_bytes (Lazy.force site.Autotune.c_d.Ir.Tnode.storage_prec)
     else 0
   in
-  (2 * ((m * k * width site.Autotune.c_a) + (k * n * width site.Autotune.c_b))) + fragment
+  (2 * ((m * k * width site.Autotune.c_a) + (k * n * width site.Autotune.c_b)))
+  + accumulator (Autotune.conv_fragment_certain site ~masked)
+  + accumulator (Autotune.conv_pad_scratch_certain site ~gpu:p.Autotune.sk_gpu ~masked)
 
 let prefixes path =
   List.folding_map path ~init:[] ~f:(fun acc entry ->
@@ -604,6 +614,79 @@ let traffic_floor_pins ?(lift = Fn.id) name ~is_gpu ~limits base =
           | _ -> false)
   | _ -> p (name ^ ": the conv family claims the site") false
 
+(* gh-ocannl-1856: the two contraction predicates the increment reads
+   ([Autotune.conv_fragment_certain] over [Autotune.conv_acc_masked], and
+   [Autotune.conv_pad_scratch_certain]) judged against what every applied leaf's
+   [Schedule.contract_tensorized_accumulator] did, read structurally off the fresh members of the
+   applied code's fragment sets, never by label: a contraction minted a fragment exactly where the
+   first says, a padded scratch tile (a fresh pad-masked tile in workgroup-shared memory beside a
+   fresh persistent fragment) exactly where the second says, and each minted node is charged its [m
+   x n] block written and read once, exactly. [regimes] are coverage requirements over the leaves'
+   own parameters, each needing an applied witness. *)
+let contraction_pins ?(minting = true) name ~is_gpu ~limits ~regimes base =
+  match
+    ( Autotune.detect_conv base.LL.llc,
+      Autotune.sketch_family_tree ~is_gpu ~is_cpu:(not is_gpu) ~limits base )
+  with
+  | Some site, Some tree ->
+      let base_sets = Set.union base.LL.simdgroup_fragments base.LL.masked_fragments in
+      let applied =
+        List.filter_map (Sspace.enumerate tree) ~f:(fun (_, p) ->
+            Option.map (apply_leaf base p) ~f:(fun post -> (p, post, CM.analyze post.LL.llc)))
+      in
+      let fresh set = Set.to_list (Set.diff set base_sets) in
+      let accumulators (post : LL.optimized) =
+        fresh post.LL.simdgroup_fragments @ fresh post.LL.masked_fragments
+      in
+      let scratch_of = Ll_test.pad_scratch_of ~base in
+      let masked p = Autotune.conv_acc_masked site p in
+      let fragment_certain p = Autotune.conv_fragment_certain site ~masked:(masked p) in
+      let scratch_certain p =
+        Autotune.conv_pad_scratch_certain site ~gpu:p.Autotune.sk_gpu ~masked:(masked p)
+      in
+      Stdio.printf
+        "== %s: %d applied leaves; %d contracting and %d staging a pad scratch by the predicates, \
+         %d and %d by the schedules ==\n"
+        name (List.length applied)
+        (List.count applied ~f:(fun (p, _, _) -> fragment_certain p))
+        (List.count applied ~f:(fun (p, _, _) -> scratch_certain p))
+        (List.count applied ~f:(fun (_, post, _) -> not (List.is_empty (accumulators post))))
+        (List.count applied ~f:(fun (_, post, _) -> Option.is_some (scratch_of post)));
+      p_all (name ^ ": a leaf contracts its accumulator exactly where the predicate says") applied
+        ~f:(fun (p, post, _) ->
+          Bool.equal (fragment_certain p) (not (List.is_empty (accumulators post))));
+      p_all (name ^ ": a leaf stages a pad scratch tile exactly where the predicate says") applied
+        ~f:(fun (p, post, _) -> Bool.equal (scratch_certain p) (Option.is_some (scratch_of post)));
+      (* [minting:false] names the control none of whose leaves contracts, where the charge claim
+         has nothing to judge. *)
+      if minting then
+        p_all
+          (name ^ ": every minted accumulator node is charged its block, written and read once")
+          (List.concat_map applied ~f:(fun (p, post, s) ->
+               List.map (accumulators post) ~f:(fun tn -> (p, tn, s))))
+          ~f:(fun (p, tn, s) ->
+            let m, _, n = conv_mkn site p in
+            Ll_test.charged_once s tn ~m ~n);
+      List.iter regimes ~f:(fun (regime, f) ->
+          let witnesses = List.count applied ~f:(fun (p, _, _) -> f site p) in
+          Stdio.printf "  %-56s %d applied leaves\n" regime witnesses;
+          p (name ^ ": regime witnessed: " ^ regime) (witnesses > 0))
+  | _ -> p (name ^ ": the conv family claims the site") false
+
+(* gh-ocannl-1856: a conv whose every kernel-window loop runs once. Lowering drops extent-1 loops,
+   and the matcher refuses the fixed index that leaves (test/operations/conv_detection_boundary: an
+   all-singleton window is the matmul family's), so no lowered graph reaches the conv family with
+   one. Hand-built [Low_level] code can: here a lowered 3x3 conv's window loops are narrowed to
+   their first iteration (a valid conv reading one window position), which [Autotune.detect_conv]
+   claims with every window extent 1. There no window loop contracts, and only the pad masks force
+   the fragment, at the statement site. *)
+let narrow_windows (base : LL.optimized) =
+  let site = Option.value_exn (Autotune.detect_conv base.LL.llc) in
+  let window s =
+    List.exists site.Autotune.c_axes ~f:(fun cx -> Ir.Indexing.equal_symbol cx.Autotune.cx_k s)
+  in
+  { (scratch base) with LL.llc = Ll_test.single_trip_loops ~loops:window base.LL.llc }
+
 let () =
   let narrow_cpu = { cpu_limits with Ir.Backend_intf.native_fp16_arithmetic = false } in
   let masked = lowering "cft_tf_masked" (make_conv "tm" ~b:2 ~h:11 ~ic:4 ~oc:8) in
@@ -624,7 +707,71 @@ let () =
   traffic_floor_pins "floor, stride 2, cpu" ~is_gpu:false ~limits:cpu_limits strided;
   traffic_floor_pins "floor, stride 2, gpu" ~is_gpu:true ~limits:gpu_limits strided;
   traffic_floor_pins "floor, f16 operands packed at f32, cpu" ~is_gpu:false ~limits:narrow_cpu
-    narrow
+    narrow;
+  (* gh-ocannl-1856: the contraction predicates against the applied leaves, on the window-loop sites
+     and on their narrowed single-extent twins; and the narrowed twins' floors. *)
+  let masked_p site p = Autotune.conv_acc_masked site p in
+  let window site = Autotune.conv_fragment_certain site ~masked:false in
+  let regime_masked_window =
+    ("masked, window loop: a fragment", fun site p -> window site && masked_p site p)
+  and regime_unmasked_window =
+    ("unmasked, window loop: a fragment", fun site p -> window site && not (masked_p site p))
+  and regime_masked_single =
+    ( "masked, single-extent window: a mask-forced fragment",
+      fun site p -> (not (window site)) && masked_p site p )
+  and regime_unmasked_single =
+    ( "unmasked, single-extent window: nothing contracts",
+      fun site p -> (not (window site)) && not (masked_p site p) )
+  in
+  let gpu_scratch =
+    ( "masked GPU window loop: a pad scratch",
+      fun site p -> Autotune.conv_pad_scratch_certain site ~gpu:true ~masked:(masked_p site p) )
+  in
+  contraction_pins "contraction, masked 9-row, gpu" ~is_gpu:true ~limits:gpu_limits
+    ~regimes:[ regime_masked_window; gpu_scratch ]
+    masked;
+  contraction_pins "contraction, dividing 16-row, gpu" ~is_gpu:true ~limits:gpu_limits
+    ~regimes:[ regime_unmasked_window ] dividing;
+  (* The CPU row panels exist on the tuner's fission segments only (a whole-routine lowering's
+     whole-node [Zero_out] refutes them, [c_zeroed]): the segment the tuner enumerates under a CPU
+     target. *)
+  let cpu_segment base =
+    List.find_map_exn
+      (snd
+         (Ll_test.tuner_segments
+            ~target:{ Ll_test.is_gpu = false; is_cpu = true; limits = cpu_limits }
+            base))
+      ~f:(fun (_, pre, _, _) ->
+        Option.some_if (Option.is_some (Autotune.detect_conv pre.LL.llc)) pre)
+  in
+  let masked_seg = cpu_segment masked in
+  traffic_floor_pins "floor, masked 9-row segment, cpu" ~is_gpu:false ~limits:cpu_limits masked_seg;
+  contraction_pins "contraction, masked 9-row segment, cpu" ~is_gpu:false ~limits:cpu_limits
+    ~regimes:[ regime_masked_window; regime_unmasked_window ]
+    masked_seg;
+  let masked1 = narrow_windows masked and dividing1 = narrow_windows dividing in
+  let masked1_seg = narrow_windows masked_seg in
+  p "the narrowed conv is claimed by the conv family with every window extent 1"
+    (Option.is_none (Autotune.detect_matmul masked1.LL.llc)
+    && Option.exists (Autotune.detect_conv masked1.LL.llc) ~f:(fun site ->
+        (not (List.is_empty site.Autotune.c_axes))
+        && List.for_all site.Autotune.c_axes ~f:(fun cx -> cx.Autotune.cx_nk = 1)));
+  traffic_floor_pins "floor, single-extent window, masked 9-row, cpu" ~is_gpu:false
+    ~limits:cpu_limits masked1;
+  traffic_floor_pins "floor, single-extent window, masked 9-row, gpu" ~is_gpu:true
+    ~limits:gpu_limits masked1;
+  traffic_floor_pins "floor, single-extent window, dividing 16-row, cpu" ~is_gpu:false
+    ~limits:cpu_limits dividing1;
+  traffic_floor_pins "floor, single-extent window, masked 9-row segment, cpu" ~is_gpu:false
+    ~limits:cpu_limits masked1_seg;
+  contraction_pins "contraction, single-extent window, masked 9-row segment, cpu" ~is_gpu:false
+    ~limits:cpu_limits
+    ~regimes:[ regime_masked_single; regime_unmasked_single ]
+    masked1_seg;
+  contraction_pins "contraction, single-extent window, masked 9-row, gpu" ~is_gpu:true
+    ~limits:gpu_limits ~regimes:[ regime_masked_single ] masked1;
+  contraction_pins ~minting:false "contraction, single-extent window, dividing 16-row, gpu"
+    ~is_gpu:true ~limits:gpu_limits ~regimes:[ regime_unmasked_single ] dividing1
 
 (* Pruning: the walk on a memory-dominated envelope, with the incumbent strictly between the
    schedule-invariant floor's bound and the largest raised bound ([inc_max - 1] bytes above the
