@@ -292,3 +292,33 @@ a reduction over a concat's two slices: execution matches the reference and the 
 cross-routine two-site read: routine A commits the concat and its reader virtual: true
 cross-routine two-site read: the stored reader is charged both slices (3), so B's consumer with w (4) is materialized by the fan-in cap: true
 cross-routine two-site read: execution matches the reference: true
+init then reduction over a concat, cap 3: charged the init and both slices (4), materialized by the fan-in cap: true
+init then reduction over a concat, cap 3: execution matches the reference and the materialized reading: true
+init then reduction over a concat, cap 4: charged 4, virtual at the cap: true
+init then reduction over a concat, cap 4: execution matches the reference and the materialized reading: true
+a three-setter update chain, cap 3: charged its four distinct inputs, materialized by the fan-in cap: true
+a three-setter update chain, cap 3: execution matches the reference and the materialized reading: true
+a three-setter update chain, cap 4: charged 4, virtual at the cap: true
+a three-setter update chain, cap 4: execution matches the reference and the materialized reading: true
+two slice groups, each an init and an update: charged the wider group (3), not their union (5), virtual at cap 3: true
+two slice groups: execution matches the reference and the materialized reading: true
+a broad init bridging two disjoint updates: one group, charged its union (4, a cell runs at most 3), materialized by the fan-in cap: true
+bridged updates: execution matches the reference and the materialized reading: true
+cross-routine init and update: routine A commits the concat and the reduction virtual: true
+cross-routine init and update: the stored components replay together, so B's reader is charged 4, materialized by the fan-in cap: true
+cross-routine init and update: execution matches the reference: true
+cross-routine disjoint components: routine A commits the concat virtual: true
+cross-routine disjoint components: kept apart, so B's one-site reader is charged one slice with w (3), virtual at cap 3: true
+cross-routine disjoint components: execution matches the reference: true
+arm re-reading the statement's cell, short-circuiting, plain: charged one slice with the mask (3), inlined at cap 3: true
+arm re-reading the statement's cell, short-circuiting, plain: execution matches the reference and the materialized reading: true
+arm re-reading the statement's cell, short-circuiting, inverted: charged one slice with the mask (3), inlined at cap 3: true
+arm re-reading the statement's cell, short-circuiting, inverted: execution matches the reference and the materialized reading: true
+arm re-reading the statement's cell, blended, plain: charged one slice with the mask (3), inlined at cap 3: true
+arm re-reading the statement's cell, blended, plain: execution matches the reference and the materialized reading: true
+arm re-reading the statement's cell, blended, inverted: charged one slice with the mask (3), inlined at cap 3: true
+arm re-reading the statement's cell, blended, inverted: execution matches the reference and the materialized reading: true
+a nested arm re-reading the statement's cell: charged one slice with both masks (4), inlined at cap 4: true
+nested re-read: execution matches the reference and the materialized reading: true
+an arm reading another cell runs the other slice too (4), materialized by the fan-in cap: true
+another cell: execution matches the reference and the materialized reading: true

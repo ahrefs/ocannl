@@ -69,6 +69,11 @@ a one-site read keeps each alternative of the dependency: true
 a two-site read is charged two of the dependency's alternatives: true
 the same index read twice is charged one alternative: true
 an iterated site is charged every alternative: true
+an arm re-reading the statement's site runs no second alternative: true
+an arm reading another site of the dependency runs a second alternative: true
+a nested arm re-reading its enclosing arm's site runs no second alternative: true
+a sibling arm's read does not discount the other arm's: true
+a site re-read under an iterated enclosing site adds nothing past the union: true
 the write demand enters a scan body, counts a Tile_mma once as its accumulator, and skips expressions: true
 the write demand reports every binder in program order, a scan's with no axis: true
 Emitted visits each definition once, in the emission's order, then the operands: true

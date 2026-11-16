@@ -440,7 +440,9 @@ type read_charge = {
       (** gh-ocannl-2196: per contributor of [loads], the distinct sites this level reads it at
           (this level: the statement, [Local_scope] bodies included, or one select arm). A node read
           at [k] sites evaluates [k] cells, so {!resolve_alternatives} charges it [k] of its
-          alternatives. *)
+          alternatives -- counting only sites no enclosing level of the same evaluation (the
+          statement, an arm holding this select) already read: those are the same cells
+          (gh-ocannl-2228). *)
   selects : select_charge list;  (** The value selects met at this level, program order. *)
 }
 [@@deriving sexp_of]
@@ -460,7 +462,7 @@ and select_charge = {
 val read_charge : ?iterated:Set.M(Indexing.Symbol).t -> self:Tnode.t -> scalar_t -> read_charge
 (** The one read collector (gh-ocannl-1451): the tensor nodes one evaluation of [llsc], the
     right-hand side of a setter of [self], loads -- the transitive inline-fanin guard's contributors
-    (gh-573), shared by [trace_node_facts]' per-setter [setter_reads] and the guard's replay of
+    (gh-573), shared by [trace_node_facts]' per-setter [setter_groups] and the guard's replay of
     stored computations. [self] and merge-buffer reads are excluded, a gather counts its table,
     projection-discarded operands are not evaluated, and a [Where]'s arms are kept apart as a
     {!select_charge}, with whether {!speculable_select} admits it. Admission is judged at the arms'
@@ -507,7 +509,10 @@ val resolve_alternatives :
     alternative [acc], one result per alternative of [q] (the transitive guard maps [acc] across a
     virtual dependency's own alternatives). Pruning to the antichain is exact, since [A ⊆ B] implies
     [A ∪ X ⊆ B ∪ X]: a narrower path is kept while it may still become the widest once the rest is
-    joined. Reading and admission as for {!resolve_charge}. *)
+    joined. Reading and admission as for {!resolve_charge}. A load at a site an enclosing level
+    already read is not expanded again (gh-ocannl-2228): every path entering the arm already carries
+    that cell's alternative. A re-read in a sibling select or a sibling arm still is (a path carries
+    one arm), the materializing direction. *)
 
 val evaluation_reads : blends:bool -> self:Tnode.t -> scalar_t -> Set.M(Tnode).t list
 (** {!resolve_charge} of {!read_charge}, each load charged as itself: a [Where] charges its
@@ -1467,12 +1472,16 @@ type traced_array = {
           read-multiplicity metric, same-cell reads count, while a setter's own read-modify-write
           does not. Gates the recompute-cost guard: a node never read in the routine has no inlining
           cost, so it must stay eligible for virtual dead-code elimination. *)
-  mutable setter_reads : read_charge list;
-      (** Per setter statement ([Set]/[Set_from_vec]), the tensor nodes its right-hand side reads,
-          its value selects' arms kept apart ({!read_charge}) — including reads inside [Local_scope]
-          bodies, excluding the node's own read-modify-write self-reads. Analysis fact behind the
-          transitive inline-fanin guard (gh-573), which takes the per-setter maximum (a read of one
-          cell executes one setter's computation). *)
+  mutable setter_groups : read_charge list list;
+      (** The node's setter statements ([Set]/[Set_from_vec]) as their right-hand sides' fan-in
+          contributors ({!read_charge}) — including reads inside [Local_scope] bodies, excluding the
+          node's own read-modify-write self-reads — grouped by write overlap (gh-ocannl-2228): two
+          setters whose writes {!Affine.may_touch_same_cell} cannot prove disjoint share a group,
+          transitively, each group in program order; a setter loading nothing joins no other.
+          Analysis fact behind the transitive inline-fanin guard (gh-573): a read of one cell
+          replays every setter of one group (an init and its updates), so a group is charged its
+          setters in sequence and the guard takes the maximum across groups, which write disjoint
+          cells. *)
   mutable inline_fanin : int;
       (** The transitive inline fan-in [decide_placements] computed for this node under the current
           placements (at least 1); multiplies into the proxy [fa_recompute_cost] (gh-ocannl-637: the
