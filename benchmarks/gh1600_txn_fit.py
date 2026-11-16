@@ -147,7 +147,7 @@ def load_cell(spec):
     name, rest = spec.split("=", 1)
     tsv, explain = rest.split(",", 1)
     # gh-ocannl-1821: an optional third listing, the cell's `nostg` reference (--staged-rate).
-    explain, _, _reference = explain.partition(",")
+    explain, _, reference = explain.partition(",")
     reps = replicates(tsv)
     cands = {}
     bad = []
@@ -162,7 +162,7 @@ def load_cell(spec):
         cands[label] = {"times": reps[row], "median": statistics.median(reps[row]), "pos": pos,
                         "admitted": adm, "kernels": kernels,
                         "uncovered": sum(k["unc"] for k in kernels)}
-    return name, cands, bad
+    return name, cands, bad, (tsv, reference) if reference else None
 
 
 def spread_of(cands):
@@ -223,7 +223,7 @@ def main():
         occ = (int(cap), int(tpm))
     cells = []
     for spec in args.cells:
-        name, cands, bad = load_cell(spec)
+        name, cands, bad, reference = load_cell(spec)
         if args.no_coalesced:
             cands = {l: c for l, c in cands.items() if "coal-" not in l}
         if bad:
@@ -242,12 +242,14 @@ def main():
             # gh-ocannl-1821: the comparison is against the cell's fill-only reference, its `nostg`
             # listing, scored as listed -- the staged term cannot be subtracted back out of this
             # one, since the rate also switched the launch tail on.
-            reference = spec.split("=", 1)[1].split(",")
-            if len(reference) < 3 or not reference[2]:
+            if reference is None:
                 print(f"gh1600_txn_fit: {name}: --staged-rate needs the cell's nostg listing as"
                       " NAME=TSV,LISTING,NOSTG_LISTING", file=sys.stderr)
                 return 2
-            _, ref_cands, ref_bad = load_cell(f"{name}={reference[0]},{reference[2]}")
+            _, ref_cands, ref_bad, _ = load_cell(f"{name}={reference[0]},{reference[1]}")
+            # The same population as the re-scored listing's.
+            if args.no_coalesced:
+                ref_cands = {l: c for l, c in ref_cands.items() if "coal-" not in l}
             if ref_bad:
                 print(f"gh1600_txn_fit: {name}: the nostg listing does not rebuild from its kernel"
                       " legs", file=sys.stderr)
