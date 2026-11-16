@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Hermetic cross-run timing fixtures, including per-job shares and missing steps.
 # Fake gh serves JSON lines: no network, credentials or performance campaign.
-# Run with --keep to retain exact stdout, stderr and API calls on failure.
+# Failure details read only this run's captured status, streams and fake API calls;
+# they compare calls to the fixture list, and stdout only to an explicit golden.
+# They do not diagnose host resource limits or inspect real GitHub calls.
+# Run with --keep to retain the artifacts too; failures print evidence without it.
 set -u
 . "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
 harness_args "$@"
@@ -102,6 +105,24 @@ run_subject() {
     bash "$subject" --branch master -n 8 "$@" >"$TMP/runs/$label/stdout" 2>"$TMP/runs/$label/stderr" || rc=$?
   printf '%s\n' "$rc" >"$TMP/runs/$label/rc"
 }
+# Print evidence before cleanup, including a signal exit with empty stderr.
+# A diff's nonzero status is evidence here, not the helper's outcome.
+subject_detail() { # LABEL [EXPECTED_STDOUT]
+  local run="$TMP/runs/$1" expected_calls="$TMP/calls"
+  case $1 in invalid|base) expected_calls=/dev/null ;; esac
+  printf 'subject exit: %s\n' "$(cat "$run/rc")"
+  printf '%s\n' 'stderr (empty if nothing follows):'
+  cat "$run/stderr"
+  printf '%s\n' 'API calls diff (expected -> actual; empty means equal):'
+  diff -u "$expected_calls" "$run/calls" || :
+  if [ $# -gt 1 ]; then
+    printf '%s\n' 'stdout diff (expected -> actual; empty means equal):'
+    diff -u "$2" "$run/stdout" || :
+  else
+    printf '%s\n' 'stdout:'
+    cat "$run/stdout"
+  fi
+}
 oracle() {
   run_subject "$1" "$2" --job '^Ubuntu$' --step 'Build and test|Dune checks'
   [ "$(cat "$TMP/runs/$2/rc")" = 0 ] && cmp -s "$TMP/expected" "$TMP/runs/$2/stdout" \
@@ -109,17 +130,17 @@ oracle() {
 }
 if oracle "$HERE/ci-durations.sh" shipping; then
   report 0 "cross-run selectors: exact distributions, paired share/rest and API calls"
-else report 1 "cross-run selectors" "see $TMP/runs/shipping"; fi
+else report 1 "cross-run selectors" "$(subject_detail shipping "$TMP/expected")"; fi
 run_subject "$HERE/ci-durations.sh" jobs --job '^Ubuntu$'
 if [ "$(cat "$TMP/runs/jobs/rc")" = 0 ] \
   && grep -qE '^Ubuntu \[success\] +6 +0.0 +10.0 +20.0$' "$TMP/runs/jobs/stdout"; then
   report 0 "whole-job aggregation retains zero and conclusion grouping"
-else report 1 "whole-job aggregation"; fi
+else report 1 "whole-job aggregation" "$(subject_detail jobs)"; fi
 run_subject "$HERE/ci-durations.sh" invalid --step '['
 if [ "$(cat "$TMP/runs/invalid/rc")" != 0 ] && [ ! -s "$TMP/runs/invalid/calls" ] \
   && grep -q 'unterminated character set' "$TMP/runs/invalid/stderr"; then
   report 0 "invalid selectors fail before API calls"
-else report 1 "invalid selector guard"; fi
+else report 1 "invalid selector guard" "$(subject_detail invalid)"; fi
 # Restore the pre-selector interface without depending on Git history (CI
 # checkouts can be shallow). The original base was also rejected locally.
 python3 - "$HERE/ci-durations.sh" "$TMP/base.sh" <<'PYTHON'
@@ -133,25 +154,25 @@ PYTHON
 run_subject "$TMP/base.sh" base --job '^Ubuntu$' --step 'Build and test|Dune checks'
 if [ "$(cat "$TMP/runs/base/rc")" != 0 ] && grep -q 'unknown argument: --job' "$TMP/runs/base/stderr"; then
   report 0 "negative control: pre-selector interface refuses selection request"
-else report 1 "selector-interface negative control"; fi
+else report 1 "selector-interface negative control" "$(subject_detail base)"; fi
 # Dropping the shared sign guard must pollute step statistics, not fail to launch.
 mkdir -p "$TMP/sign-mutant"
 cp "$HERE/ci-durations.sh" "$TMP/sign-mutant/ci-durations.sh"
 sed 's/return d if d >= 0 else None/return d/' "$HERE/ci-timing.py" >"$TMP/sign-mutant/ci-timing.py"
 if oracle "$TMP/sign-mutant/ci-durations.sh" negative; then
-  report 1 "negative control: shared interval sign guard"
+  report 1 "negative control: shared interval sign guard" "$(subject_detail negative "$TMP/expected")"
 elif [ "$(cat "$TMP/runs/negative/rc")" = 0 ] && grep -q 'step: 4 -0.0' "$TMP/runs/negative/stdout"; then
   report 0 "negative control: shared interval sign guard changes measured population"
-else report 1 "sign mutation rejected for unrelated reason"; fi
+else report 1 "sign mutation rejected for unrelated reason" "$(subject_detail negative "$TMP/expected")"; fi
 # Restoring inclusion of skipped alternatives must change the sample population.
 mkdir -p "$TMP/skip-mutant"
 cp "$HERE/ci-durations.sh" "$TMP/skip-mutant/ci-durations.sh"
 sed 's/selected = \[s for s in selected if s.get("conclusion") != "skipped"\]/selected = selected/' \
   "$HERE/ci-timing.py" >"$TMP/skip-mutant/ci-timing.py"
 if oracle "$TMP/skip-mutant/ci-durations.sh" skipped-alternative; then
-  report 1 "negative control: skipped alternatives excluded"
+  report 1 "negative control: skipped alternatives excluded" "$(subject_detail skipped-alternative "$TMP/expected")"
 elif [ "$(cat "$TMP/runs/skipped-alternative/rc")" = 0 ] \
   && grep -q 'step: 3 0.0 10.0 18.0' "$TMP/runs/skipped-alternative/stdout"; then
   report 0 "negative control: skipped alternatives change the measured population"
-else report 1 "skip mutation rejected for unrelated reason"; fi
+else report 1 "skip mutation rejected for unrelated reason" "$(subject_detail skipped-alternative "$TMP/expected")"; fi
 finish

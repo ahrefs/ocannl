@@ -1145,6 +1145,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   of 40 with `LANG=C`; one such crash reddened the first `--jobs 4` run of the tier. It shows as
   a subject exiting 139 with nothing on stderr, and
   `~/Library/Logs/DiagnosticReports/bash-*.ips` names `libintl_setlocale`.
+- `tools/test-ci-durations.sh` prints each failed subject's exit status, stderr,
+  API-call diff and stdout (a golden diff for selector checks), before scratch cleanup
+  (gh-ocannl-1993). Read these before guessing API ordering: the fetch loop is sequential.
+  `--keep` additionally retains fixtures and raw streams; it is not needed for the failure
+  evidence in the harness log. A status 139 with empty stderr can be the locale crash above.
 - Selecting legs (gh-ocannl-1202): a harness built on `harness_leg` takes `--only REGEX` over its
   leg names, and the members of `tools/test-test-run.sh` close each name with its one group, so
   `--only '#lifecycle'` runs the run/start lifecycle legs with the signal legs and both fork
