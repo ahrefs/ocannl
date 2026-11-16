@@ -594,6 +594,14 @@ let rec is_dsl_application_head fn =
   | Pexp_apply (head, _) | Pexp_constraint (head, _) -> is_dsl_application_head head
   | _ -> false
 
+(* Uncurried syntax accepts the same constrained identifier heads as curried calls. Keep the
+   original expression in the expansion so its annotations still type-check. *)
+let rec is_uncurried_op table fn =
+  match fn.pexp_desc with
+  | Pexp_ident { txt = Lident name; _ } -> is_op_primitive name && Hashtbl.mem table name
+  | Pexp_constraint (inner, _) -> is_uncurried_op table inner
+  | _ -> false
+
 (* A function application in [%op] code, run with its source site recorded (gh-ocannl-2007): the
    shape-scheme check of an application inside it names the line. The DSL's operators, and the named
    einsum forms that spell them, are not wrapped; any other application may be (or reach) a schemed
@@ -1040,13 +1048,9 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
   (* A constrained tuple is still an uncurried call. Keep the type check on the translated tuple,
      evaluating it once before passing its components to the curried DSL operation. The head
      (including its result-label expression) also stays outside the generated binders' scope. *)
-  | [%expr
-      [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } as op]
-        [%e? { pexp_desc = Pexp_constraint _; _ } as arg]]
-    when is_op_primitive op_ident
-         && ((Hashtbl.mem binary_ops op_ident && Option.equal Int.equal (tuple_arity arg) (Some 2))
-            || Hashtbl.mem ternary_ops op_ident
-               && Option.equal Int.equal (tuple_arity arg) (Some 3)) ->
+  | [%expr [%e? op] [%e? { pexp_desc = Pexp_constraint _; _ } as arg]]
+    when (is_uncurried_op binary_ops op && Option.equal Int.equal (tuple_arity arg) (Some 2))
+         || (is_uncurried_op ternary_ops op && Option.equal Int.equal (tuple_arity arg) (Some 3)) ->
       let vbs, arg = loop_grouping arg in
       let head = [%expr [%e op] ?label:[%e opt_expr ~loc label]] in
       let result =
@@ -1064,18 +1068,12 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       (vbs, result)
   (* The uncurried forms [op (a, b)] and [op (a, b, c)]: the call head is the operator alone, as in
      the curried form (gh-ocannl-1986). *)
-  | [%expr
-      [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } as op]
-        ([%e? expr2], [%e? expr3])]
-    when is_op_primitive op_ident && Hashtbl.mem binary_ops op_ident ->
+  | [%expr [%e? op] ([%e? expr2], [%e? expr3])] when is_uncurried_op binary_ops op ->
       let e1 = [%expr [%e op] ?label:[%e opt_expr ~loc label]] in
       let vbs2, e2 = loop expr2 in
       let vbs3, e3 = loop expr3 in
       (reduce_vbss [ vbs2; vbs3 ], [%expr [%e e1] [%e e2] [%e e3]])
-  | [%expr
-      [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } as op]
-        ([%e? expr2], [%e? expr3], [%e? expr4])]
-    when is_op_primitive op_ident && Hashtbl.mem ternary_ops op_ident ->
+  | [%expr [%e? op] ([%e? expr2], [%e? expr3], [%e? expr4])] when is_uncurried_op ternary_ops op ->
       let e1 = [%expr [%e op] ?label:[%e opt_expr ~loc label]] in
       let vbs2, e2 = loop expr2 in
       let vbs3, e3 = loop expr3 in

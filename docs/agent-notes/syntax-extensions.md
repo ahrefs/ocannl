@@ -35,6 +35,12 @@ files.
   alike, because a shared `delayed_var_ref` pins the first call's solution and a second size then
   fails inference (gh-ocannl-1507). A lifted initializer cannot name one; a capture that would
   shadow a lifted name is a clash, found through the `ocannl.bound_capture` marker `let_opt` checks.
+- Inline initializer qualification drops the generated `?label:None` for every operator in
+  `Ppx_shared.operators` (gh-ocannl-2237), retaining the full `Tensor.op_fun` that `param`
+  labels. Binary tensor/tensor and tensor/literal initializers are pinned by
+  `test_initializer_heads` (expansion and compilation) and `op_initializer_heads` (cc values).
+  The table has no ternary operator. Restoring both ppx sources to `bd88ebdc` makes the
+  expansion diff and compilation fail (negative control: `20261116T205411Z-1824622`).
 - Unary minus in an inline initializer qualifies to `NTDSL.neg` (gh-ocannl-2201), leaving
   its final `()` for parameter construction. Qualification drops the translated operator's
   generated `?label:None`, so the initializer retains the full `Tensor.op_fun` label argument.
@@ -153,7 +159,8 @@ files.
 - Classification through expression constraints (gh-ocannl-2200): `mark_tail` reaches a
   constrained returned function, DSL-head classification reaches constrained heads (including
   partial pipelines), and tuple grouping reaches constrained tuples. Uncurried binary/ternary
-  calls keep the tuple's type check by destructuring the translated constrained tuple once before
+  calls recognize constrained identifier heads too (gh-ocannl-2237; `test_initializer_heads`),
+  preserving the head annotations, and keep the tuple's type check by destructuring the translated constrained tuple once before
   the curried call. The head and tuple are bound together so the generated component binders
   cannot capture a renamed result-label parameter. Constraint-level `[@ocannl.no_scheme]` stops
   tail marking before translation propagates the opt-out. Only tuple classification looks through
