@@ -953,8 +953,8 @@ files.
   phases 1c, 1d (the arm chosen after expansion) and 2b/2c (two-sided on the running backend),
   `access_fold`, `backend_facts`, and `op_table_compile` against the emitted kernels.
 - **A node passes downstream its ALTERNATIVES, and a consumer is charged the maximum over them
-  joined with its own loads** (gh-ocannl-2047, gh-ocannl-2098, gh-ocannl-2128). An alternative is
-  a load set one read of one cell can run: one per setter (a read executes one setter), one per
+  joined with its own loads** (gh-ocannl-2047, gh-ocannl-2098, gh-ocannl-2128). An alternative is a
+  load set one read of one cell can run: one per setter (a read executes one setter), one per
   short-circuiting select arm, and for a node with both local setters and inherited components the
   union of one of each. Choosing before the consumer's loads are joined under-counts: `p := where m
   (x+y) z` read by `c := p + x + y + w` costs `{m,x,y,w}` = 4 through the wider arm, but the cells
@@ -962,26 +962,44 @@ files.
   every MAXIMAL set (the antichain under inclusion; exact, since `A ⊆ B` gives `A ∪ X ⊆ B ∪ X`) in
   its beam over loads and selects, and the guard's memo holds each node's list. The node's OWN
   charge stays per-read: the widest alternative (a concat of nine single-source components costs 1,
-  not 9). Two conservative rules sit on top. First, the union of the tied widest sets stays one
-  more alternative -- a floor, so no downstream charge is below the one-set reading's and
-  commuting tied setters or respelling a select (`where (not m) (y+z) (x+y)`) cannot move one; it
-  over-counts a consumer of mutually exclusive ties, which also happens to cover a consumer reading
-  SEVERAL cells of a multi-alternative producer in one evaluation (`a[j] + a[j+dim]` across two
-  components), a case the per-cell max does not see -- an under-count that remains for narrower
-  setters and arms. Second, every list is capped at `Low_level.max_fanin_alternatives` (8): past
-  it the antichain, ordered by cardinality then `Set.compare_direct` (node creation order),
-  keeps its first 7 and unions the rest into one, a superset of real paths, so a capped charge can
-  only be higher (k successive incomparable selects otherwise hold 2^k sets; with equal widths
-  the merged tail can swallow the whole list). The own charge is taken before the memo is
-  capped. Cycles keep their shared union charge above. With `log_level > 1` the guard prints
-  `fan-in alternatives: <node> keeps <n> (own charge <w>[, capped])` to stderr for each node
-  keeping more than one, so "does test X hit a fan-in tie or a narrower alternative?" is a grep.
-  Pins: `virtual_chain_fanin` phase 8 (tied setters in both orders), 9 (local x inherited ties),
-  10 (tied arms in both spellings, cross-routine, successive selects) and 11 (narrower arms and
-  setters, the fresh-input control that is charged the max not the union, a virtual copy, a
-  materialized producer, cross-routine, and the cap's merged tail in both setter orders), each
-  executed against a reference and a materialized reading; `access_fold` pins the antichain and the
-  cap against an enumerated oracle.
+  not 9). Two conservative rules sit on top. First, the union of the tied widest sets stays one more
+  alternative -- a floor, so no downstream charge is below the one-set reading's and commuting tied
+  setters or respelling a select (`where (not m) (y+z) (x+y)`) cannot move one; it over-counts a
+  consumer of mutually exclusive ties. Second, every list is capped at
+  `Low_level.max_fanin_alternatives` (8): past it the antichain, ordered by cardinality then
+  `Set.compare_direct` (node creation order), keeps its first 7 and unions the rest into one, a
+  superset of real paths, so a capped charge can only be higher (k successive incomparable selects
+  otherwise hold 2^k sets; with equal widths the merged tail can swallow the whole list). The own
+  charge is taken before the memo is capped. Cycles keep their shared union charge above. With
+  `log_level > 1` the guard prints `fan-in alternatives: <node> keeps <n> (own charge <w>[,
+  capped][, multi-site <dep> x<k>|iterated])` to stderr for each node keeping more than one or
+  reading an inlined dependency at several sites, so "does test X hit a fan-in tie, a narrower
+  alternative or a multi-site read?" is a grep. Pins: `virtual_chain_fanin` phase 8 (tied setters in
+  both orders), 9 (local x inherited ties), 10 (tied arms in both spellings, cross-routine,
+  successive selects) and 11 (narrower arms and setters, the fresh-input control that is charged the
+  max not the union, a virtual copy, a materialized producer, cross-routine, and the cap's merged
+  tail in both setter orders), each executed against a reference and a materialized reading;
+  `access_fold` pins the antichain and the cap against an enumerated oracle.
+- **A read at k distinct sites runs k alternatives** (gh-ocannl-2196). The per-cell maximum sees one
+  evaluation of the producer per load, but `c[j] := a[j] + a[j+dim]` over a concat evaluates two
+  cells, so two setters' computations. `read_charge.sites` keeps each contributor's distinct
+  `Read_site`s per level (a `Get`'s index array; a gather's indices, axis and spliced value), and
+  `resolve_alternatives` expands a k-site load k times, pruning after each: the widest union of k
+  alternatives with repetition, the max over k-multisets. It is tighter than the union (three slices
+  read at two sites cost the widest pair) and saturates at it (k is capped at
+  `max_fanin_alternatives`). The level is the read's sink: the same index twice is one cell, two
+  arms of one select never pair, a read beside a `Local_scope` body's read does, and a re-read
+  across levels was already charged again by the arm's own expansion. A site whose index mentions a
+  loop one evaluation iterates -- inside a `Local_scope` body, or an enclosing loop absent from the
+  written indices (a reduction; `setter_facts` passes them as `~iterated`, a stored computation's
+  are the loops absent from its `self` write) -- is `Read_site.Iterated` and charged every
+  alternative. A materialized dependency still counts once. Note that a stored computation usually
+  carries its dependencies inlined, so the inherited path rarely meets a multi-site `Get`; the
+  collector is one either way. Pins: `virtual_chain_fanin` phase 12 (two-site concat in both setter
+  orders, same-index and cap-equality controls, the three-slice tightness control, the two-site
+  select in both spellings and readings, a reduction over both slices, cross-routine), each executed
+  against a reference and a materialized reading; `access_fold` pins the collector's site keys and
+  the resolver.
 - **The fan-in traversal must not enter a node already materialized** (gh-ocannl-1777). A whole
   step's setter-reads graph is cyclic through its parameters (a parameter reads its gradient, which
   reads activations that read the parameter), and the cycle guard memoizes whatever it computed under

@@ -54,5 +54,20 @@ a gather charges its index and its table: true
 a projection charges only its rendered operand: true
 a stored computation's dead loop replays nothing: true
 a stored computation's Tile_mma is opaque: true
+the same index read twice is one site: true
+a stored computation's two sites are counted by the same collector: true
+two distinct indices are two sites: true
+a read outside a Local_scope and one inside it are two sites of the statement: true
+gathers splicing different values are two sites, equal ones one: true
+the setter's own reads and merge-buffer reads record no site: true
+reads in different arms of a select are never a pair: one site in each arm: true
+two sites in one arm are two sites of that arm: true
+a site under a loop inside a Local_scope body is iterated: true
+a site under an enclosing reduction loop the caller names is iterated, a fixed one not: true
+a stored computation's reduction loop is iterated, its written loop not: true
+a one-site read keeps each alternative of the dependency: true
+a two-site read is charged two of the dependency's alternatives: true
+the same index read twice is charged one alternative: true
+an iterated site is charged every alternative: true
 the write demand enters a scan body, counts a Tile_mma once as its accumulator, and skips expressions: true
 the write demand reports every binder in program order, a scan's with no axis: true
