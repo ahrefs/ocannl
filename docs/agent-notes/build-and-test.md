@@ -5582,6 +5582,12 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   said as `<box>: box check: ready`, `ENVIRONMENT GAP (not a test failure)` with the GAP lines,
   `not at <sha>` for a ref without the script, or `could not run`, and logged to
   `logs/<stamp>-<box>-box-check.log`; no history row, unit state or run-record field reads it.
+- The tf32 parity leg checks fixture content with `benchmarks/fixture_digest.py --check`
+  against the running checkout's `benchmarks/fixtures/DIGESTS.txt`, even when the bytes live in
+  the box's main checkout (gh-ocannl-1855). Missing Python or any failed check is unavailable
+  (exit 2), before Dune; it is no seed-parity verdict. `sweep_leg_scripts.sh` pins changed
+  payload refusal, a misleading adjacent record, and the restored matching control.
+
 - **A GPU unit whose suite ran is followed by its backend's diagnostic legs** (gh-ocannl-1705; the
   first was gh-ocannl-1658's WMMA probe): one row per leg in `DIAGNOSTIC_LEGS` (backend, `ran` or
   `green`, `gpu` or not, log suffix, label, verdict prefix, command, what a WARNING means), each a

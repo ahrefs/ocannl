@@ -71,7 +71,40 @@ run_leg cuda-tf32-parity.sh --fixture-dir "$leg_fixtures"
 [ "$leg_rc" -eq 2 ]
 [ "$(leg_verdict)" = "cuda-tf32-parity: verdict: unavailable: no $leg_fixtures/cifar_resnet.safetensors" ]
 [ ! -s "$leg_calls" ]
-: >"$leg_fixtures/cifar_resnet.safetensors"
+# Use the real stdlib-only parser and a tiny safetensors file; Dune alone is fake.
+mkdir -p "$leg_root/benchmarks/fixtures"
+cp "$leg_tools/../benchmarks/fixture_digest.py" "$leg_root/benchmarks/"
+printf '# measurement-boxes: rog-nv\n' >"$leg_root/benchmarks/fixtures/DIGESTS.txt"
+python3 - "$leg_fixtures/cifar_resnet.safetensors" <<'EOF_LEG_FIXTURE'
+import json, struct, sys
+from pathlib import Path
+header = json.dumps({"x": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]}}).encode()
+Path(sys.argv[1]).write_bytes(struct.pack("<Q", len(header)) + header + b"x")
+EOF_LEG_FIXTURE
+python3 "$leg_root/benchmarks/fixture_digest.py" --record --origin rog-nv \
+  --digests "$leg_root/benchmarks/fixtures/DIGESTS.txt" \
+  "$leg_fixtures/cifar_resnet.safetensors" >/dev/null
+# Corrupt the payload, not its structure. Even a stale record beside the fixture must not win.
+cp "$leg_root/benchmarks/fixtures/DIGESTS.txt" "$leg_fixtures/DIGESTS.txt"
+python3 - "$leg_fixtures/cifar_resnet.safetensors" <<'EOF_LEG_MUTATE'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+p.write_bytes(p.read_bytes()[:-1] + b"y")
+EOF_LEG_MUTATE
+python3 "$leg_root/benchmarks/fixture_digest.py" --record --origin rog-nv \
+  --digests "$leg_fixtures/DIGESTS.txt" "$leg_fixtures/cifar_resnet.safetensors" >/dev/null
+run_leg cuda-tf32-parity.sh --fixture-dir "$leg_fixtures"
+[ "$leg_rc" -eq 2 ]
+[ "$(leg_verdict)" = "cuda-tf32-parity: verdict: unavailable: fixture digest check failed for $leg_fixtures/cifar_resnet.safetensors" ]
+[ ! -s "$leg_calls" ]
+# Restore the recorded payload: the existing success and failure controls must still reach Dune.
+python3 - "$leg_fixtures/cifar_resnet.safetensors" <<'EOF_LEG_RESTORE'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+p.write_bytes(p.read_bytes()[:-1] + b"x")
+EOF_LEG_RESTORE
 LEG_DUNE_OUT='parity seed 1 F_sketch[x]: MATCH worst 1e-06
 parity (seeds as proposed): backend cuda, 32 seeds, 0 failed at tolerance 0.001' LEG_DUNE_RC=0 \
   run_leg cuda-tf32-parity.sh --fixture-dir "$leg_fixtures"
