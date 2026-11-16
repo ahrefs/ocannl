@@ -67,8 +67,9 @@
 # cell differences as rounding and exits 0). benchmarks/gh1051_cells.py's mode "ab" at PREC half
 # (shared with gh1051_bf16_ab.sh at bfloat16; its HALF section) reads each size's bin_cells run and
 # checks every cell's verdict there and its whole-output checksums -- determinism across rounds,
-# the f32 control equal to the exact answer, every f16 cell (both arms, tensorized pair included)
-# within a structural bound of it, identical checksums from the two tensorized pipelinings in each
+# the f32 control equal to the exact answer, every wide f16 cell and the narrow serial legs within
+# a structural bound of it (the narrow tensorized pair is gross on gfx11 and only reported, its
+# non-degeneracy checked), identical checksums from the two tensorized pipelinings in each
 # arm, every tensorized f16 cell's census reporting intrinsics -- and prints the table; any failure
 # fails the run.
 set -u

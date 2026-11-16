@@ -54,10 +54,12 @@ HALF (mode "ab" with PREC `half`, gh-ocannl-2195's gh2195_f16_ab.sh: the fp16_ar
 same, at `half` in place of `bfloat16`, except where bf16's reasons do not carry over:
 - The f32 control is still the exact answer: the operands are exact in f16 too (ma's 1/16
   multiples below 3 need six significand bits, f16 has eleven).
-- STRUCTURE holds for EVERY f16 cell, the narrow tensorized pair included: f16's narrow
-  tensor-unit arms narrow per 16-deep block (sm_120) or per ordered pair (gfx1151) at eleven bits,
-  which is no grosser than the per-step serial loop, so REL_BOUND bounds them as it bounds the rest
-  (and implies non-degeneracy, still checked).
+- STRUCTURE holds as for bf16: the wide cells and the narrow SERIAL legs lie within REL_BOUND, and
+  the narrow tensorized pair is bounded only below (non-degenerate), its error REPORTED. Bounding it
+  structurally was this driver's first reading, and the gfx1151 window refuted it (gh-ocannl-2195,
+  minix run-44): the narrow f16 WMMA's checksum missed the exact one by 0.072 at n = 1024 and by
+  0.822 at n = 2048, where the narrow serial legs missed by 0.0011 and 0.0019 -- the per-pair
+  narrowing of gfx11's f16-accumulate WMMA grows grossly with k, as its bf16 twin does.
 - The two tensorized pipelinings print IDENTICAL checksums in BOTH arms: the pipelining depth is
   bitwise neutral by the transform's invariant (bin/schedule_bench.ml), whatever the accumulator.
 - TENSORIZED applies to both arms' f16 mma cells, as to bf16's.
@@ -269,9 +271,9 @@ def ab(out, label, prec="bfloat16"):
             c = chk[("false", prec, v)]
             if c is not None and rel(c, exact) > REL_BOUND:
                 problems.append(f"n={size} wide {v}: checksum off the exact one by {rel(c, exact):.3g}")
-        # bf16's narrow tensorized pair is gross by design and bounded only below (non-degenerate);
-        # f16's is not, and takes the structural bound with the serial legs.
-        for v in VARIANTS if half else ("parallel", "smem", "regtile"):
+        # The narrow tensorized pair is gross by design on gfx11 (bf16 and f16 alike) and bounded
+        # only below (non-degenerate); its error is reported. The serial legs take the bound.
+        for v in ("parallel", "smem", "regtile"):
             c = chk[("true", prec, v)]
             if c is not None and rel(c, exact) > REL_BOUND:
                 problems.append(f"n={size} narrow {v}: checksum off the exact one by {rel(c, exact):.3g}")
@@ -287,8 +289,7 @@ def ab(out, label, prec="bfloat16"):
                 problems.append(f"n={size} narrow {v}: checksum {c} degenerate against exact {exact}")
         if p1 is not None:
             print(f"n={size}: narrow tensorized checksum off the exact one by {rel(p1, exact):.3g} "
-                  + ("(the arm's accuracy, reported; bounded only structurally)" if half else
-                     "(the arm's accuracy, reported not bounded)"))
+                  + "(the arm's accuracy, reported not bounded)")
         if half:
             wide = {v: chk[("false", prec, v)] for v in VARIANTS}
             if None not in wide.values():
