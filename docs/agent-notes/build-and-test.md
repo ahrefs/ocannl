@@ -1201,8 +1201,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   over the selected run and count its `FAIL  ` lines.
 - `test/operations/ci_matrix.sh` gates independent contracts through `harness_leg_run`
   (gh-ocannl-2113): `--list-legs` names them, and `--only '^step-order$'` selects
-  the configuration/release ordering checks. The embedded Python file is written once; its
-  shared prelude runs again in each selected leg's fresh process, so an assertion fails that
+  the configuration/release ordering checks and shard-trace protection (gh-ocannl-2115).
+  The latter derives the build with `shard_build` and requires exactly one step calling
+  `tools/ci-shard.sh weigh` (`shard_weighing`), after that build. No direct one-line dune command may
+  follow `dune build $targets` in the build step or run through the weighing step.
+  Calls into scripts/actions, even scripts known to invoke dune, remain outside
+  `dune_commands`' direct-command boundary; the diagnostic says so. Mutants cover
+  reordered dune steps, same-step commands and missing/repeated/reordered weighing;
+  non-dune intervening steps pass. The moved configured dune step passed the base
+  check before this rule (macbook-pro, `/bin/bash` 3.2.57). The opening head accepted
+  a repeated weighing under another step name; command-based identity refuses it,
+  while a harmless step rename passes. The embedded Python file is written once;
+  its shared prelude runs again in each selected leg's fresh process, so an assertion fails that
   leg and later legs still report. Python refuses an unmatched contract name instead of
   reporting a pass without running a block. Keep fixtures inside their leg and shared readers
   outside every leg.
