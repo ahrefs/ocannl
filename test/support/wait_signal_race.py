@@ -238,10 +238,10 @@ def check_cancellation(harness):
                             # The mutant's shell defers TERM, but its driver is
                             # in this still-owned group and cancels trial groups.
                             os.killpg(process.pid, signal.SIGTERM)
-                            # Cleanup has no response oracle of its own. Reap
-                            # the owned shell without a separate short bound;
-                            # the enclosing leg owns the run bound. The exact
-                            # five-second verdict above is already recorded.
+                            # Reap the owned shell without a separate cleanup
+                            # timeout; only the CI job supplies an outer limit.
+                            # The exact five-second response verdict above is
+                            # already recorded, independently of this teardown.
                             process.wait()
                     except BaseException:
                         output.seek(0)

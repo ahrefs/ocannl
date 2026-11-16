@@ -43,7 +43,7 @@
 #      keeps its publication 0, and dune was invoked exactly once; the
 #      launch's own prelude in the log (backends, width) does not hide it.
 #      Readers select that recorded run by identity; queued/unpublished
-#      launches and `last` following belong to the last-reader member.
+#      launches and `last` following are outside this classification leg.
 #  36. controls: a red run (`Error:`/`File` lines, exit 1) still digests as
 #      FAIL with exit 1 and that fingerprint, also where dune is made to
 #      color them (CLICOLOR_FORCE=1) -- including one whose output opens with
