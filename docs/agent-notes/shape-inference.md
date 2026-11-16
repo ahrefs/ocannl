@@ -75,6 +75,20 @@ files.
   all-`Var` pairing must fire at ANY solver stage or incremental Stage-1 solving livelocks.
   Solver-level facts are testable directly via `Row.solve_inequalities` on hand-built
   constraints (`test/operations/test_concat_dim_solver.ml`).
+- A concatenation arm may decide a basis only as the fully solved check would (gh-ocannl-2191):
+  the axis takes its components' one claim (`concat_claim`: none for `default` and `bcast_if_1`
+  at size <= 1), and an arm that cannot keep that exact defers the unchanged equation. Three arms
+  decided on partial information, so the verdict followed constraint order (96 of t2129's 16730
+  systems): `bcast_if_1` above size 1 was claim-free in concatenations only (fixing that alone left
+  96); the `Concat = Dim` residual merged a solved claim with a `default` size the fully solved arm
+  refuses; and the `Concat = Concat` arms dropped a side's claim (subtracting a solved side,
+  cancelling to a zero residual, `cancel_common_dims` cancelling `2_a` against `2_a`). Reading
+  `bcast_if_1` as claim-free at every size instead also ends the order dependence, but the solver
+  then refuses its own answers: `subst_dim` sums solved concatenations into plain Dims, which Dim
+  equality compares strictly. The recipe that caught both: re-solve each accepted store with its
+  answer stated first (`test/einsum/test_concat_order_independence.ml`). Still open: a residual
+  variable whose tag is not forced (claim-free or the size's claim) takes the claim, so a later
+  `u = 3_default` meets it in one order and not the other (gh-ocannl-2095's algebra).
 - `Shape.compute_row_product` must not latch a product while the row still ends in an open
   `Row_var` — the historical bug silently resolved xavier/kaiming fan products to 1 for every
   `{ w }` param with an inferred input row (fixed; regression `test/operations/layer_norm_1d.ml`,
@@ -486,8 +500,9 @@ files.
   and concatenations, in every order, it changed only four verdicts, each from refused in every
   order to order-dependent. With no concatenation involved, no system was order-dependent with or
   without it. The 96 order-dependent systems that do exist on the base all mix a window with
-  concatenations of tagged components: that is the concatenation arithmetic's basis handling, not
-  vetting.
+  concatenations of tagged components: that was the concatenation arithmetic's basis handling, not
+  vetting (gh-ocannl-2191, above); the four were its `Concat = Dim` residual arm, refused in every
+  order now.
 - That spurious axis is also how a shape defect reaches the SCHEDULER, which is where it actually
   got noticed: `Tensorize`'s role check rejects an operand mentioning the third micro symbol, and
   `Stage`'s insertion point L\* is "the deepest loop carrying an outer-part symbol", so an operand

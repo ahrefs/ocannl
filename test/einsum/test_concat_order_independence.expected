@@ -1,0 +1,8 @@
+stores whose verdict or solution depends on the order: true
+accepted answers refused when stated up front: true
+stores registered in one batch settling otherwise: true
+over 1,500 stores are accepted, so refusing everything fails: true
+the issue's example is refused in every order: true
+and so is #1935's held-set vetting case, a named claim against a plain size: true
+control: [v; u] = 4 a with v = 1 a takes u = 3 a in every order: true
+control: [u; 2v] = [k; 2 a] with k = 3 default takes u = 3 a in every order: true

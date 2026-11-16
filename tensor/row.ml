@@ -262,14 +262,6 @@ let get_sym_dim ?(basis = default_basis) ?proj_id sym =
 (* The reserved tags ([default], [bcast_if_1]) carry no naming claim. *)
 let is_reserved_basis b = String.equal b default_basis || String.equal b bcast_if_1
 
-(* Combine the bases of two components of a concatenated dimension. A named tag wins over a reserved
-   (claim-free) tag; two distinct named tags are a conflict handled by [on_conflict]. *)
-let merge_derived_basis ~on_conflict b1 b2 =
-  if String.equal b1 b2 then b1
-  else if is_reserved_basis b1 then b2
-  else if is_reserved_basis b2 then b1
-  else on_conflict ()
-
 (* The basis a valid window derives for its input from its extent's and its kernel's
    (gh-ocannl-1968). [default] and the top [1_(bcast_if_1)] make no claim, and every other tag is an
    atom, which includes [bcast_if_1] at any size but 1 (the inert atom of docs/shape_inference.md).
@@ -277,6 +269,18 @@ let merge_derived_basis ~on_conflict b1 b2 =
    unless both are the top. [None] is a conflict. *)
 let is_claim_free (s : solved_dim) =
   String.equal s.basis default_basis || (String.equal s.basis bcast_if_1 && s.d = 1)
+
+(* The claim a solved component makes in concatenation arithmetic (gh-ocannl-2191): none for
+   [default] and the broadcast top, as for windows, and none for an empty [0_(bcast_if_1)], the
+   segment a discarded component closes to; every other tag claims, [bcast_if_1] above size 1
+   included. The claims of a concatenated axis's components must agree, and the axis takes the one
+   claim, else [default]. *)
+let concat_claim (s : solved_dim) =
+  if String.equal s.basis default_basis || (String.equal s.basis bcast_if_1 && s.d <= 1) then None
+  else Some s.basis
+
+let concat_claims (solved : solved_dim list) =
+  List.filter_map solved ~f:concat_claim |> List.dedup_and_sort ~compare:String.compare
 
 let window_input_basis ~(extent : solved_dim) ~(kernel : solved_dim) =
   if String.equal extent.basis kernel.basis then Some extent.basis
@@ -829,17 +833,11 @@ let rec dim_to_int_exn = function
 (* The axis a concatenation of solved components is: their sum. *)
 let sum_solved_components (solved_dims : solved_dim list) =
   let total_d = List.sum (module Int) solved_dims ~f:(fun s -> s.d) in
-  (* Reserved (claim-free) tags don't constrain the concat basis; all named tags must agree, and the
-     concatenated axis takes that common named tag (else [default], which a named size then refuses:
-     the short-term rule of gh-ocannl-2093, explained at [unify_dim]'s fully solved [Concat]/[Dim]
-     arm). *)
-  let named_bases =
-    List.filter_map solved_dims ~f:(fun s ->
-        if is_reserved_basis s.basis then None else Some s.basis)
-    |> List.dedup_and_sort ~compare:String.compare
-  in
+  (* The components' claims ([concat_claim]) must agree, and the concatenated axis takes the one
+     claim (else [default], which a named size then refuses: the short-term rule of gh-ocannl-2093,
+     explained at [unify_dim]'s fully solved [Concat]/[Dim] arm). *)
   let basis =
-    match named_bases with
+    match concat_claims solved_dims with
     | [] -> default_basis
     | [ b ] -> b
     | _ ->
@@ -2414,13 +2412,18 @@ let rec dim_var_occurs_in_dim (v : dim_var) (d : dim) : bool =
 let rec flatten_concat (dims : dim list) : dim list =
   List.concat_map dims ~f:(function Concat inner -> flatten_concat inner | d -> [ d ])
 
-(* Multiset cancellation of structurally-equal components from both sides. *)
+(* Multiset cancellation of structurally-equal components from both sides. A solved component that
+   claims a tag stays: its claim belongs to both sides' bases, and cancelled away it would leave
+   [[u; 2_a] = [k; 2_a]] as [u = k], which says nothing of [a] (gh-ocannl-2191). *)
 let cancel_common_dims (xs : dim list) (ys : dim list) : dim list * dim list =
   let kept_rev, ys =
     List.fold xs ~init:([], ys) ~f:(fun (kept, ys) x ->
-        match List.findi ys ~f:(fun _ y -> equal_dim x y) with
-        | Some (i, _) -> (kept, List.filteri ys ~f:(fun j _ -> j <> i))
-        | None -> (x :: kept, ys))
+        match x with
+        | Dim s when Option.is_some (concat_claim s) -> (x :: kept, ys)
+        | _ -> (
+            match List.findi ys ~f:(fun _ y -> equal_dim x y) with
+            | Some (i, _) -> (kept, List.filteri ys ~f:(fun j _ -> j <> i))
+            | None -> (x :: kept, ys)))
   in
   (List.rev kept_rev, ys)
 
@@ -2428,17 +2431,10 @@ let cancel_common_dims (xs : dim list) (ys : dim list) : dim list * dim list =
 let partition_solved_dims (dims : dim list) : solved_dim list * dim list =
   List.partition_map dims ~f:(function Dim s -> Either.First s | d -> Either.Second d)
 
-(* Reduce the basis tags of solved components: reserved (claim-free) tags ([default], [bcast_if_1])
-   drop out; all named tags must agree (and the residual takes that named tag), otherwise [default].
-   [None] flags a genuine named-tag conflict. *)
+(* The basis of solved components, by [sum_solved_components]'s rule: their one claim
+   ([concat_claim]), else [default]. [None] flags two distinct claims. *)
 let reduce_solved_basis (solved : solved_dim list) : string option =
-  match
-    List.filter_map solved ~f:(fun s -> if is_reserved_basis s.basis then None else Some s.basis)
-    |> List.dedup_and_sort ~compare:String.compare
-  with
-  | [] -> Some default_basis
-  | [ b ] -> Some b
-  | _ -> None
+  match concat_claims solved with [] -> Some default_basis | [ b ] -> Some b | _ -> None
 
 (* gh-ocannl-544, dim-level counterpart of [resolve_at_use] (defined below): marked dimension
    variables may close to the GLB of their use sites at stage 6+; unmarked, unconstrained ones are
@@ -3173,13 +3169,14 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
             (get_dim ~d:sum_x ~basis:basis_x (), get_dim ~d:sum_y ~basis:basis_y ())
             env
       | [], _ ->
-          let residual = sum_x - sum_y in
-          if residual < 0 then exceed ();
-          unify_dim ~stage origin (Concat rest_y, get_dim ~d:residual ~basis:basis_x ()) env
+          (* A fully solved side is a solved size: the other side meets it whole, its own solved
+             claims included, by the [Concat]/[Dim] arm (subtracting them here dropped their claims,
+             gh-ocannl-2191). *)
+          if sum_x < sum_y then exceed ();
+          unify_dim ~stage origin (Concat ys, get_dim ~d:sum_x ~basis:basis_x ()) env
       | _, [] ->
-          let residual = sum_y - sum_x in
-          if residual < 0 then exceed ();
-          unify_dim ~stage origin (Concat rest_x, get_dim ~d:residual ~basis:basis_y ()) env
+          if sum_y < sum_x then exceed ();
+          unify_dim ~stage origin (Concat xs, get_dim ~d:sum_y ~basis:basis_y ()) env
       | _, _
         when let is_var = function Var _ -> true | _ -> false in
              (* The pairing arm requires BOTH residuals to be variables-only. Solved [Dim]s are
@@ -3192,6 +3189,14 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
                 Such cases fall through to the arithmetic-cancellation arm, which cancels the common
                 solved size and defers. *)
              List.for_all rest_x ~f:is_var && List.for_all rest_y ~f:is_var
+             (* Equating the oldest variables discharges the equation once the rest is solved, and
+                with it what a solved claim asked of the variables: [[u; 2] = [k; 2_rgb]] paired [u
+                = k] and refused [[2] = [2_rgb]], though [k = 3] arriving first gives [u = 3_rgb];
+                [[u; 2_rgb] = [k; 2_rgb]] paired and later took [k = 3_hsv]. So no solved claim may
+                stand on either side; the equation waits for its components instead
+                (gh-ocannl-2191). *)
+             && String.equal basis_x default_basis
+             && String.equal basis_y default_basis
              &&
              (* Original pure-nested-stacking case (PR #64): equal arity, no solved component on
                 either side. Fires at ANY stage — the nested-stacking concat components are linked
@@ -3223,27 +3228,36 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
           let eq_constr, env = unify_dim ~stage origin (Var vx, Var vy) env in
           let more, env = unify_dim ~stage origin (dim1, dim2) env in
           (eq_constr @ more, env)
-      | _, _ ->
+      | _, _ -> (
           (* Both sides still have unsolved residuals (and at least one side carries a solved size
              or a non-variable residual). Normalize the solved [Dim] components by cancelling the
              common solved size from both sides, so at most one side carries the remaining solved
              size (proposal: "normalize solved Dim components so that only one side carries the
-             remaining solved size"). The surviving non-neutral basis carries onto the residual;
-             distinct non-neutral bases conflict. No negative size can arise here since the
-             cancelled amount is the smaller of the two sums. *)
+             remaining solved size"). Distinct claims conflict. Each side keeps its own claim on its
+             own residual, so the normalized equation demands what the original does. A side whose
+             claim would be dropped (a zero residual, or a size-1 [bcast_if_1] one, which is the
+             claim-free top) defers the equation unchanged: moving the claim across, or dropping it,
+             decides a basis by whichever equation arrived first (gh-ocannl-2191). No negative size
+             can arise here since the cancelled amount is the smaller of the two sums. *)
           let common = Int.min sum_x sum_y in
-          let residual_basis =
-            merge_derived_basis basis_x basis_y ~on_conflict:(fun () ->
-                raise
-                @@ Shape_error
-                     ("concat: conflicting dimension bases", [ Dim_mismatch [ dim1; dim2 ] ]))
-          in
-          let with_residual rest sum =
+          if
+            (not (String.equal basis_x default_basis))
+            && (not (String.equal basis_y default_basis))
+            && not (String.equal basis_x basis_y)
+          then
+            raise
+            @@ Shape_error ("concat: conflicting dimension bases", [ Dim_mismatch [ dim1; dim2 ] ]);
+          let with_residual rest sum basis =
             let r = sum - common in
-            if r = 0 then Concat rest else Concat (rest @ [ get_dim ~d:r ~basis:residual_basis () ])
+            let claims = not (String.equal basis default_basis) in
+            let res = { d = r; basis; proj_id = None } in
+            if claims && (r = 0 || Option.is_none (concat_claim res)) then None
+            else if r = 0 then Some (Concat rest)
+            else Some (Concat (rest @ [ Dim res ]))
           in
-          ( [ Dim_eq { d1 = with_residual rest_x sum_x; d2 = with_residual rest_y sum_y; origin } ],
-            env ))
+          match (with_residual rest_x sum_x basis_x, with_residual rest_y sum_y basis_y) with
+          | Some d1, Some d2 -> ([ Dim_eq { d1; d2; origin } ], env)
+          | _ -> ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)))
   | Concat xs, (Dim n as d) | (Dim n as d), Concat xs -> (
       (* A concatenated axis equals a solved size: subtract the solved components and bind/defer the
          residual. *)
@@ -3262,12 +3276,31 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
         raise
         @@ Shape_error
              ("concat: components exceed the concatenated size", [ Dim_mismatch [ dim1; dim2 ] ]);
+      let conflict () =
+        raise @@ Shape_error ("concat: conflicting dimension bases", [ Dim_mismatch [ dim1; dim2 ] ])
+      in
+      (* The residual takes [n]'s own tag, the only basis the whole sum can meet [n] under once
+         solved: a solved claim other than [n]'s is refused now, as the fully solved arm below
+         refuses it later, [n]'s [default] included (gh-ocannl-2191; merging the claim into the
+         residual accepted [[1_a; u] = 4_default] while [[1_a; 3_a] = 4_default] is refused). The
+         broadcast top keeps the solved claim, as before. *)
+      let top = String.equal n.basis bcast_if_1 && n.d <= 1 in
       let residual_basis =
-        merge_derived_basis solved_basis n.basis ~on_conflict:(fun () ->
-            raise
-            @@ Shape_error ("concat: conflicting dimension bases", [ Dim_mismatch [ dim1; dim2 ] ]))
+        if String.equal solved_basis default_basis || String.equal solved_basis n.basis then n.basis
+        else if top then solved_basis
+        else conflict ()
+      in
+      (* [n]'s claim must land on an unsolved component when no solved one carries it. A size-1
+         [bcast_if_1] residual is the claim-free top: one unknown component cannot carry the claim,
+         and several defer unchanged until one is solved. *)
+      let lost_claim =
+        Option.is_some (concat_claim n)
+        && String.equal solved_basis default_basis
+        && Option.is_none (concat_claim { d = residual; basis = residual_basis; proj_id = None })
       in
       match rest with
+      | [ _ ] when lost_claim -> conflict ()
+      | _ :: _ :: _ when lost_claim -> ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)
       | [] ->
           (* Fully solved: the sum meets [d] under [solved_basis], not [residual_basis]. A residual
              component is a variable, and binding it records the merged tag, so a named size claims

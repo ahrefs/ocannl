@@ -422,6 +422,14 @@
  (libraries base ocannl stdio arrayjit.verdict))
 
 (test
+ (name test_concat_order_independence)
+ (package neural_nets_lib)
+ ; ocannl-backend: none -- drives the row solver directly, nothing is compiled
+ (deps ocannl_config)
+ (modules test_concat_order_independence)
+ (libraries base ocannl stdio arrayjit.verdict))
+
+(test
  (name test_trial_rollback)
  (package neural_nets_lib)
  ; ocannl-backend: none -- drives the row solver directly, nothing is compiled
