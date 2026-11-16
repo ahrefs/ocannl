@@ -542,16 +542,29 @@ let structure_claim = function
       "a matmul site whose row is the minor output axis, read at stride 2 and strictly taller than \
        every output axis read at unit stride"
 
+(* gh-ocannl-1872: the CUDA backend's count of local-memory reservations released after a launch,
+   from its global debug info; [None] on a backend that does not report one. *)
+let local_memory_resets () =
+  match Context.global_debug_info (Context.auto ()) with
+  | Sexp.List (_ :: fields) ->
+      List.find_map fields ~f:(function
+        | Sexp.List [ Sexp.Atom "local_memory_resets"; Sexp.Atom n ] -> Int.of_string_opt n
+        | _ -> None)
+  | _ -> None
+
 (* One site's claims, made in [leg] -- open everywhere unless a caller confines them to the backends
    that can evaluate the site, skipped by name elsewhere in the order this code makes them
    (gh-ocannl-1703). Everything the claims rest on is computed lazily, in this order, only where the
    leg is open; the probed site is returned the same way. *)
 let seed_leg ?(declines = false) ?(row = `Batch)
     ?(leg = Verdict.leg ~when_:true ~on:backend_name ()) ~what ~tag s =
+  let ref_resets = ref None in
   let base =
     lazy
       (let o = probe ~tag s in
+       let resets_before = local_memory_resets () in
        let unscheduled = run_plain (tag ^ "_ref") s in
+       ref_resets := Option.map2 (local_memory_resets ()) resets_before ~f:( - );
        (match s.build with
        | `Einsum _ -> ()
        | `Resnet_block ->
@@ -583,6 +596,32 @@ let seed_leg ?(declines = false) ?(row = `Batch)
     (fun label ->
       let o = Lazy.force o in
       p label (match row with `Batch -> stride_on_batch_loops o | `Strided -> stride_on_row o));
+  (* gh-ocannl-1872: the block's unscheduled reference, s11d_ref, is one thread with a 48 KiB frame,
+     whose local memory the driver reserves for every resident thread (3.3 GiB on rog-nv) and used
+     to keep for the process's life. The CUDA backend releases it after the launch where the
+     reservation passes a sixteenth of the device's memory (its [local_memory_reset_share]), as on
+     every fleet device; elsewhere it keeps it by design, and the claim skips. *)
+  (match s.build with
+  | `Resnet_block ->
+      let passes_share =
+        lazy
+          (String.equal backend_name "cuda"
+          &&
+          let ctx = Context.auto () in
+          let resident =
+            Option.value ~default:0
+              (Context.hardware_limits ctx).Ir.Backend_intf.max_resident_threads
+          in
+          let _, total = Option.value ~default:(0, 0) (Context.get_free_and_total_memory ctx) in
+          49152 * resident > total / 16)
+      in
+      in_leg ~leg:(Verdict.sub_leg leg ~when_:passes_share ~on:backend_name)
+        (what
+       ^ ": on CUDA, the unscheduled reference's launch released its local-memory reservation \
+          after running") (fun label ->
+          ignore (Lazy.force base : probed * float array);
+          p label (match !ref_resets with Some d -> d >= 1 | None -> false))
+  | `Einsum _ -> ());
   (* Which run diverged from which form and by how much, so a red claim names its seed: the
      differing cells, the worst one with both values, and the form's magnitude, on stderr. *)
   let close ~tol ~against ~want name what_ran got =

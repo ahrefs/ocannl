@@ -1473,6 +1473,55 @@ end = struct
                             would abort the queue rather than fail cleanly (gh-ocannl-533)"];
                      } ))
 
+  (* gh-ocannl-1872: the HIP twin of the CUDA launch's back-off (gh-ocannl-1773). A launch or a
+     graph launch the runtime refuses with [HIP_ERROR_OUT_OF_MEMORY] was refused before anything
+     ran, and under a concurrent GPU batch it can succeed once a neighbour releases memory, so it is
+     retried over the same pauses; on give-up the runtime's own exception is re-raised unchanged,
+     which is what the sweep's serial-rerun table keys on ([tools/sweep.sh] [ENVIRONMENT_REFUSALS]).
+     There is no hopeless shortcut and no reservation reset here: HIP's scratch is budgeted per
+     work-item and over-budget frames are declined at link ([validate_scratch_budget]), and
+     [hipLimitStackSize] does not govern scratch. The stderr line states the kernel's private
+     segment for the record. *)
+  let launch_memory_backoff_seconds = [ 0.5; 1.; 2.; 4.; 8. ]
+  let launch_memory_retries = Atomic.make 0
+  let launch_memory_refusals = Atomic.make 0
+
+  let is_out_of_memory = function
+    | H.Hip_error { status; _ } -> (
+        match H.sexp_of_result status with
+        | Sexp.Atom "HIP_ERROR_OUT_OF_MEMORY" -> true
+        | _ -> false)
+    | _ -> false
+
+  (* While [sequence_segments] stream-captures a routine's segments, kernel launches are only
+     recorded: they must not sleep through a back-off mid-capture. The graph launch backs off for
+     them. *)
+  let capturing : bool Stdlib.Domain.DLS.key = Stdlib.Domain.DLS.new_key (fun () -> false)
+
+  let launch_with_memory_backoff ~name ~(scratch : string Lazy.t) launch =
+    let rec attempt pauses =
+      try launch ()
+      with exn when is_out_of_memory exn ->
+        let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+        let free, total = try H.Device.get_free_and_total_mem () with _ -> (-1, -1) in
+        let give_up = List.is_empty pauses in
+        Stdio.eprintf
+          "hip: launching %s was refused device memory (HIP_ERROR_OUT_OF_MEMORY): %s, with %d of \
+           %d B free; %s (gh-ocannl-1872)\n\
+           %!"
+          name (Lazy.force scratch) free total
+          (if give_up then "giving up after the back-off"
+           else Printf.sprintf "retrying in %gs" (List.hd_exn pauses));
+        if give_up then (
+          Atomic.incr launch_memory_refusals;
+          Stdlib.Printexc.raise_with_backtrace exn backtrace)
+        else (
+          Atomic.incr launch_memory_retries;
+          Unix.sleepf (List.hd_exn pauses);
+          attempt (List.tl_exn pauses))
+    in
+    attempt launch_memory_backoff_seconds
+
   let link_proc ~prior_context ~name ~symbol ~(kparams : (string * kparam_source) list)
       ~(launch : Low_level.launch_dims) ~ctx_buffers lowered_bindings run_module =
     let func = H.Module.get_function run_module ~name:symbol in
@@ -1520,11 +1569,27 @@ end = struct
       (* Launch dimensions derived from hardware-annotated loops (axis-types proposal §4);
          all-Serial kernels launch 1x1x1, as before. Static [__shared__] declarations do not use the
          dynamic pool, so [shared_mem_bytes] stays 0. *)
-      let launch_kernel () =
+      let submit () =
         S.launch_kernel func ~grid_dim_x:launch.Low_level.grid.(0)
           ~grid_dim_y:launch.Low_level.grid.(1) ~grid_dim_z:launch.Low_level.grid.(2)
           ~block_dim_x:launch.Low_level.block.(0) ~block_dim_y:launch.Low_level.block.(1)
           ~block_dim_z:launch.Low_level.block.(2) ~shared_mem_bytes:0 device.runner args
+      in
+      let launch_kernel () =
+        if Stdlib.Domain.DLS.get capturing then submit ()
+        else
+          launch_with_memory_backoff ~name
+            ~scratch:
+              (lazy
+                (let attrs, _ = scratch_budget_of_device device in
+                 let per_item =
+                   H.Module.get_function_attribute func H.Module.HIP_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES
+                 in
+                 let resident = attrs.max_threads_per_multiprocessor * attrs.multiprocessor_count in
+                 Printf.sprintf
+                   "its private segment is %d B per work-item x %d resident work-items = %d B"
+                   per_item resident (per_item * resident)))
+            submit
       in
       if Utils.debug_log_from_routines () then
         (* The routine's log lines are device-side [printf]: under [debug_log_to_stream_files] the
@@ -1632,6 +1697,11 @@ end = struct
         in
         String.concat ~sep:";" (idx @ merge)
       in
+      let launch_graph exec =
+        launch_with_memory_backoff ~name:("the graph of " ^ name)
+          ~scratch:(lazy (Printf.sprintf "a graph of %d kernels" (List.length tasks)))
+          (fun () -> H.Graph.launch exec device.runner)
+      in
       let capture () =
         (* RELAXED, not THREAD_LOCAL: GC finalizers (module unloads, buffer frees of dead handles)
            can fire at any allocation point on the capturing thread, and stricter modes make the
@@ -1641,7 +1711,9 @@ end = struct
         H.Graph.begin_capture ~mode:H.Graph.RELAXED device.runner;
         let graph =
           try
-            run_plain ();
+            let prior = Stdlib.Domain.DLS.get capturing in
+            Stdlib.Domain.DLS.set capturing true;
+            Exn.protect ~f:run_plain ~finally:(fun () -> Stdlib.Domain.DLS.set capturing prior);
             H.Graph.end_capture device.runner
           with exn ->
             (* Terminate the capture before propagating, else the stream stays in capture mode. *)
@@ -1667,7 +1739,7 @@ end = struct
                         set_ctx @@ ctx_of context;
                         let key = current_key () in
                         match Hashtbl.find cache key with
-                        | Some exec -> H.Graph.launch exec device.runner
+                        | Some exec -> launch_graph exec
                         | None -> (
                             match capture () with
                             | exec ->
@@ -1680,7 +1752,7 @@ end = struct
                                   Hashtbl.remove cache victim);
                                 Hashtbl.set cache ~key ~data:exec;
                                 Queue.enqueue order key;
-                                H.Graph.launch exec device.runner
+                                launch_graph exec
                             | exception H.Hip_error { status; message } ->
                                 (* E.g. capture unsupported on this runtime: fall back to
                                    per-segment launches for this routine (same-stream FIFO supplies
@@ -1700,6 +1772,9 @@ end = struct
       [
         ("live_streams", [%sexp_of: int] @@ H.Stream.get_total_live_streams ());
         ("live_graph_execs", [%sexp_of: int] @@ live_graph_execs ());
+        (* gh-ocannl-1872: launches refused device memory, retried and given up on. *)
+        ("launch_memory_retries", [%sexp_of: int] @@ Atomic.get launch_memory_retries);
+        ("launch_memory_refusals", [%sexp_of: int] @@ Atomic.get launch_memory_refusals);
       ]
 
   let static_properties () =
