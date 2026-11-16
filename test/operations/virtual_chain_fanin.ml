@@ -2694,6 +2694,39 @@ let phase12 () =
             (check_exec ~blends ~name ~materialized:[ p_; c_ ] ~out
                ~expected:(Array.init dim ~f:(consumer_ref ~src:select_ref ~offsets))
                llc o)));
+  (* An iterated site: [c[j] := 0], then [c[j] += a[k] + w[j]] over [k < 2*dim] -- one read of a
+     cell of [c] replays the reduction, so both slices: [{x,y,z,w}] = 4 across cap 3. *)
+  (LL.virtualize_settings.max_inline_fanin <- 3;
+   let a = lmk "ma_red" and c_ = cmk "mc_red" and out = cmk "mo_red" in
+   materialize out;
+   let setters = List.mapi concat_parts ~f:(fun part ks -> slice_setter a part ks) in
+   let reducer =
+     let j = sym () and k = sym () in
+     seq
+       (loop_n j dim (set c_ [| iter j |] (LL.Constant 0.)))
+       (let j = sym () in
+        loop_n j dim
+          (loop_n k cells
+             (set c_
+                [| iter j |]
+                (add (get c_ [| iter j |]) (add (get a [| iter k |]) (get w [| iter j |]))))))
+   in
+   let llc = List.reduce_exn ~f:seq (setters @ [ reducer; copy out c_ ]) in
+   let o = optimize ~name:"vcf_sites_red" llc in
+   p
+     "a reduction over a concat's two slices: charged both slices joined with w (4), materialized \
+      by the fan-in cap"
+     (fanin o c_ = 4 && is_fanin_cap o c_);
+   p
+     "a reduction over a concat's two slices: execution matches the reference and the materialized \
+      reading"
+     (check_exec ~name:"vcf_sites_red" ~materialized:[ a; c_ ] ~out
+        ~expected:
+          (let total =
+             List.sum (module Float) (List.init cells ~f:Fn.id) ~f:(slice_ref concat_parts)
+           in
+           Array.init dim ~f:(fun j -> total +. (Float.of_int cells *. v w j)))
+        llc o));
   (* Across routines: A commits the concat and its two-site reader [c] [Virtual] with the cap off;
      B's [d := c + w] replays [c]'s stored computation, read through [read_charge_of_proc]. The
      stored computation already carries [a] inlined at both sites, so its loads name both slices and

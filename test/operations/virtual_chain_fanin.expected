@@ -287,6 +287,8 @@ two-site select, blended, plain: execution matches the reference and the materia
 two-site select, blended, inverted: the producer is charged the union of its arms (4), virtual at cap 4: true
 two-site select, blended, inverted: the consumer is charged both arms joined with w (5), materialized by the fan-in cap: true
 two-site select, blended, inverted: execution matches the reference and the materialized reading: true
+a reduction over a concat's two slices: charged both slices joined with w (4), materialized by the fan-in cap: true
+a reduction over a concat's two slices: execution matches the reference and the materialized reading: true
 cross-routine two-site read: routine A commits the concat and its reader virtual: true
 cross-routine two-site read: the stored reader is charged both slices (3), so B's consumer with w (4) is materialized by the fan-in cap: true
 cross-routine two-site read: execution matches the reference: true

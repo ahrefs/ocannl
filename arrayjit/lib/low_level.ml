@@ -923,6 +923,8 @@ module Read_site = struct
     type t =
       | Static of Indexing.axis_index array
       | Gather of { idcs : Indexing.axis_index array; dyn_axis : int; dyn_value : scalar_arg }
+      | Iterated of t
+          (** The site's index mentions a loop one evaluation iterates: it reads many cells. *)
     [@@deriving compare, sexp_of]
   end
 
@@ -1578,8 +1580,18 @@ let speculable_select ~(cond : scalar_t) ~(arms : scalar_arg list) =
    alternatives, where the same index twice is one cell. The level is the sink the read joins, so
    two arms of one select never pair, while a read beside a [Local_scope] body's does. A re-read
    across levels -- an arm re-reading the statement's node -- is already charged again by
-   {!resolve_alternatives}' expansion of the arm. *)
-type eval_reads = { e_stmt : read_charge; e_cur : read_charge; e_saved : read_charge list }
+   {!resolve_alternatives}' expansion of the arm. A site whose index mentions a loop the evaluation
+   iterates is [Iterated], charged every alternative: a loop inside the right-hand side, or one
+   absent from [self]'s written indices -- the caller's [~iterated] for a setter's enclosing
+   reduction, a stored computation's loops outside its [self] write. *)
+type eval_reads = {
+  e_stmt : read_charge;
+  e_cur : read_charge;
+  e_saved : read_charge list;
+  e_defining : Set.M(Indexing.Symbol).t;
+      (** The index symbols of the innermost [self] write met: its loops pick the cell, one per
+          evaluation, so they are not iterated by it. *)
+}
 
 let empty_charge = { loads = Set.empty (module Tn); sites = Map.empty (module Tn); selects = [] }
 
@@ -1590,7 +1602,14 @@ let merge_charges a b =
     selects = a.selects @ b.selects;
   }
 
-let eval_reads_traversal ~self =
+let index_symbols idcs =
+  Array.fold idcs ~init:[] ~f:(fun acc -> function
+    | Indexing.Iterator s -> s :: acc
+    | Affine { symbols; _ } -> List.map symbols ~f:snd @ acc
+    | Concat syms -> syms @ acc
+    | Fixed_idx _ | Sub_axis -> acc)
+
+let eval_reads_traversal ~self ~iterated =
   let open Access_fold in
   let policy =
     {
@@ -1602,7 +1621,17 @@ let eval_reads_traversal ~self =
       scan_implicit = Skip;
     }
   in
-  let contributor acc q site =
+  (* gh-ocannl-2196: a site whose index mentions a loop the evaluation itself iterates -- one inside
+     the right-hand side (a [Local_scope] body's), or an enclosing loop absent from [self]'s own
+     indices (a reduction, [iterated] where the caller knows it) -- reads a cell per trip. *)
+  let iterates (ctx : context) acc idcs =
+    List.exists (index_symbols idcs) ~f:(fun s ->
+        Set.mem iterated s
+        || List.exists ctx.loops ~f:(fun (b : binder) -> Indexing.equal_symbol b.index s)
+           && not (Set.mem acc.e_defining s))
+  in
+  let contributor ctx acc q idcs site =
+    let site = if iterates ctx acc idcs then Read_site.Iterated site else site in
     if Tn.equal q self then acc
     else
       let sites =
@@ -1614,7 +1643,14 @@ let eval_reads_traversal ~self =
   in
   let hooks =
     {
-      statement = (fun _ acc stmt -> match stmt with Tile_mma _ -> Prune acc | _ -> Continue acc);
+      statement =
+        (fun _ acc stmt ->
+          match stmt with
+          | Tile_mma _ -> Prune acc
+          | (Set { tn; idcs; _ } | Set_from_vec { tn; idcs; _ }) when Tn.equal tn self ->
+              Continue
+                { acc with e_defining = Set.of_list (module Indexing.Symbol) (index_symbols idcs) }
+          | _ -> Continue acc);
       scalar =
         (fun _ acc sc ->
           match sc with
@@ -1623,15 +1659,20 @@ let eval_reads_traversal ~self =
           | _ -> Continue acc);
       after_statement = (fun _ acc _ -> acc);
       after_scalar =
-        (fun _ acc sc ->
+        (fun ctx acc sc ->
           match sc with
-          | Get (q, idcs) -> contributor acc q (Read_site.Static idcs)
+          | Get (q, idcs) -> contributor ctx acc q idcs (Read_site.Static idcs)
           | Get_dynamic { tn = q; idcs; dyn_axis; dyn_value } ->
-              contributor acc q (Read_site.Gather { idcs; dyn_axis; dyn_value })
+              contributor ctx acc q idcs (Read_site.Gather { idcs; dyn_axis; dyn_value })
           | Local_scope _ -> (
               match acc.e_saved with
               | cur :: saved ->
-                  { e_stmt = merge_charges acc.e_stmt acc.e_cur; e_cur = cur; e_saved = saved }
+                  {
+                    acc with
+                    e_stmt = merge_charges acc.e_stmt acc.e_cur;
+                    e_cur = cur;
+                    e_saved = saved;
+                  }
               | [] -> assert false)
           | _ -> acc);
       branches =
@@ -1650,19 +1691,29 @@ let eval_reads_traversal ~self =
           { acc' with e_cur = { acc.e_cur with selects = acc.e_cur.selects @ [ select ] } });
     }
   in
-  (policy, hooks, { e_stmt = empty_charge; e_cur = empty_charge; e_saved = [] })
+  ( policy,
+    hooks,
+    {
+      e_stmt = empty_charge;
+      e_cur = empty_charge;
+      e_saved = [];
+      e_defining = Set.empty (module Indexing.Symbol);
+    } )
 
 let eval_reads_result r = merge_charges r.e_stmt r.e_cur
 
 (** See the comment above {!eval_reads}: the contributors of one evaluation of [llsc], the
     right-hand side of a setter of [self], its selects unresolved. *)
-let read_charge ~(self : Tn.t) (llsc : scalar_t) : read_charge =
-  let policy, hooks, init = eval_reads_traversal ~self in
+let read_charge ?(iterated = Set.empty (module Indexing.Symbol)) ~(self : Tn.t) (llsc : scalar_t) :
+    read_charge =
+  let policy, hooks, init = eval_reads_traversal ~self ~iterated in
   eval_reads_result (Access_fold.fold_scalar ~policy ~hooks ~init llsc)
 
 (** {!read_charge} of a statement: one replay of [code], a stored computation of [self]. *)
 let read_charge_of_proc ~(self : Tn.t) (code : t) : read_charge =
-  let policy, hooks, init = eval_reads_traversal ~self in
+  let policy, hooks, init =
+    eval_reads_traversal ~self ~iterated:(Set.empty (module Indexing.Symbol))
+  in
   eval_reads_result (Access_fold.fold ~policy ~hooks ~init code)
 
 (* gh-ocannl-1874: a charge's contributors, each load folded in by [expand] (the transitive guard
@@ -1728,6 +1779,8 @@ let widest_alternatives alts =
 let site_multiplicity (c : read_charge) q =
   match Map.find c.sites q with
   | None -> 1
+  | Some s when Set.exists s ~f:(function Read_site.Iterated _ -> true | _ -> false) ->
+      max_fanin_alternatives
   | Some s -> Int.clamp_exn (Set.length s) ~min:1 ~max:max_fanin_alternatives
 
 let resolve_alternatives ~blends ~expand (c : read_charge) : Set.M(Tn).t list =
@@ -1816,8 +1869,16 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
   let current_lhs () = match !lhs with top :: _ -> top | [] -> None in
   let setter_facts ctx ~tn ~idcs ~(rhs : scalar_t) =
     let traced : traced_array = get_node traced_store tn in
-    traced.setter_reads <- read_charge ~self:tn rhs :: traced.setter_reads;
     let loop_ranges = loop_ranges ctx in
+    (* gh-ocannl-2196: the enclosing loops absent from the written indices are a reduction one read
+       of a cell replays, so a site mentioning one reads a cell per trip. *)
+    let iterated =
+      let own = Set.of_list (module Indexing.Symbol) (index_symbols idcs) in
+      Map.keys loop_ranges
+      |> List.filter ~f:(fun s -> not (Set.mem own s))
+      |> Set.of_list (module Indexing.Symbol)
+    in
+    traced.setter_reads <- read_charge ~iterated ~self:tn rhs :: traced.setter_reads;
     traced.inline_reduction_extent <-
       max traced.inline_reduction_extent (reduction_extent loop_ranges idcs);
     (traced, loop_ranges)
@@ -11365,7 +11426,15 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
                    let rec go m c =
                      let m =
                        Map.fold c.sites ~init:m ~f:(fun ~key ~data m ->
-                           let k = Set.length data in
+                           (* An iterated site reads every alternative: ranked above any count. *)
+                           let k =
+                             if
+                               Set.exists data ~f:(function
+                                 | Read_site.Iterated _ -> true
+                                 | _ -> false)
+                             then Int.max_value
+                             else Set.length data
+                           in
                            if k < 2 || not (entered key) then m
                            else Map.update m key ~f:(function None -> k | Some k' -> max k k'))
                      in
@@ -11382,7 +11451,9 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
                      (if capped then ", capped" else "")
                      (String.concat
                         (List.map (Map.to_alist multi) ~f:(fun (q, k) ->
-                             Printf.sprintf ", multi-site %s x%d" (Tn.debug_name q) k))));
+                             if k = Int.max_value then
+                               Printf.sprintf ", multi-site %s iterated" (Tn.debug_name q)
+                             else Printf.sprintf ", multi-site %s x%d" (Tn.debug_name q) k))));
               (alts, fanin)
           | _ ->
               let members_set = Set.of_list (module Tnode) members in

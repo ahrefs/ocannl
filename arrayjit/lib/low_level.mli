@@ -394,6 +394,10 @@ module Read_site : sig
   type t =
     | Static of Indexing.axis_index array
     | Gather of { idcs : Indexing.axis_index array; dyn_axis : int; dyn_value : scalar_arg }
+    | Iterated of t
+        (** The site's index mentions a loop one evaluation iterates -- inside the right-hand side,
+            or an enclosing reduction loop absent from the written indices -- so it reads a cell per
+            trip, and is charged every alternative. *)
   [@@deriving compare, sexp_of]
 
   include Comparator.S with type t := t
@@ -422,7 +426,7 @@ and select_charge = {
   arms : read_charge list;  (** One per arm, in order; exactly one runs where it short-circuits. *)
 }
 
-val read_charge : self:Tnode.t -> scalar_t -> read_charge
+val read_charge : ?iterated:Set.M(Indexing.Symbol).t -> self:Tnode.t -> scalar_t -> read_charge
 (** The one read collector (gh-ocannl-1451): the tensor nodes one evaluation of [llsc], the
     right-hand side of a setter of [self], loads -- the transitive inline-fanin guard's contributors
     (gh-573), shared by [trace_node_facts]' per-setter [setter_reads] and the guard's replay of

@@ -417,6 +417,33 @@ let () =
   (let c = LL.read_charge ~self:out (where_ (at b) (add (at a) (at1 a)) (at c_)) in
    p "two sites in one arm are two sites of that arm"
      (match c.selects with [ { arms = [ t; _ ]; _ } ] -> sites_of t a = 2 | _ -> false));
+  (* An iterated site: its index mentions a loop the evaluation runs, so it reads a cell per
+     trip. *)
+  let iterated_of (c : LL.read_charge) q =
+    Option.exists (Map.find c.sites q)
+      ~f:(Set.exists ~f:(function LL.Read_site.Iterated _ -> true | _ -> false))
+  in
+  let r = sym () in
+  p "a site under a loop inside a Local_scope body is iterated"
+    (iterated_of
+       (LL.read_charge ~self:out
+          (scope (loop ~upto:3 r (LL.Set_local (scope_id, get a [| iter r |])))))
+       a);
+  p "a site under an enclosing reduction loop the caller names is iterated, a fixed one not"
+    (let c =
+       LL.read_charge
+         ~iterated:(Set.singleton (module Ir.Indexing.Symbol) r)
+         ~self:out
+         (add (get a [| iter r |]) (at b))
+     in
+     iterated_of c a && not (iterated_of c b));
+  p "a stored computation's reduction loop is iterated, its written loop not"
+    (iterated_of (LL.read_charge_of_proc ~self:out (loop ~upto:3 r (put (get a [| iter r |])))) a
+    && not
+         (iterated_of
+            (LL.read_charge_of_proc ~self:out
+               (loop ~upto:3 r (set_at out (iter r) (get a [| iter r |]))))
+            a));
   (* A dependency with alternatives [{b}] and [{c_}] (a concat, or a select's arms): one site keeps
      both, two sites run two of them. *)
   (let dep_alts = [ Set.singleton (module Tn) b; Set.singleton (module Tn) c_ ] in
@@ -429,7 +456,11 @@ let () =
    p "a two-site read is charged two of the dependency's alternatives"
      (alts_eq (res (add (add (at a) (at1 a)) (at d_))) [ [ b; c_; d_ ] ]);
    p "the same index read twice is charged one alternative"
-     (alts_eq (res (add (add (at a) (at a)) (at d_))) [ [ b; d_ ]; [ c_; d_ ] ]));
+     (alts_eq (res (add (add (at a) (at a)) (at d_))) [ [ b; d_ ]; [ c_; d_ ] ]);
+   p "an iterated site is charged every alternative"
+     (alts_eq
+        (res (scope (loop ~upto:3 r (LL.Set_local (scope_id, add (get a [| iter r |]) (at d_))))))
+        [ [ b; c_; d_ ] ]));
   let tile =
     tile_mma
       ~d:(d_, [| fixed 0 |])

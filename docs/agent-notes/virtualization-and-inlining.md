@@ -971,7 +971,7 @@ files.
   only be higher (k successive incomparable selects otherwise hold 2^k sets; with equal widths
   the merged tail can swallow the whole list). The own charge is taken before the memo is
   capped. Cycles keep their shared union charge above. With `log_level > 1` the guard prints
-  `fan-in alternatives: <node> keeps <n> (own charge <w>[, capped][, multi-site <dep> x<k>])` to
+  `fan-in alternatives: <node> keeps <n> (own charge <w>[, capped][, multi-site <dep> x<k>|iterated])` to
   stderr for each node keeping more than one or reading an inlined dependency at several sites, so
   "does test X hit a fan-in tie, a narrower alternative or a multi-site read?" is a grep.
   Pins: `virtual_chain_fanin` phase 8 (tied setters in both orders), 9 (local x inherited ties),
@@ -989,12 +989,15 @@ files.
   read at two sites cost the widest pair) and saturates at it (k is capped at
   `max_fanin_alternatives`). The level is the read's sink: the same index twice is one cell, two
   arms of one select never pair, a read beside a `Local_scope` body's read does, and a re-read
-  across levels was already charged again by the arm's own expansion. A materialized dependency
-  still counts once. Note that a stored computation usually carries its dependencies inlined, so the
+  across levels was already charged again by the arm's own expansion. A site whose index mentions
+  a loop one evaluation iterates -- inside a `Local_scope` body, or an enclosing loop absent from
+  the written indices (a reduction; `setter_facts` passes them as `~iterated`, a stored
+  computation's are the loops absent from its `self` write) -- is `Read_site.Iterated` and charged
+  every alternative. A materialized dependency still counts once. Note that a stored computation usually carries its dependencies inlined, so the
   inherited path rarely meets a multi-site `Get`; the collector is one either way. Pins:
   `virtual_chain_fanin` phase 12 (two-site concat in both setter orders, same-index and cap-equality
   controls, the three-slice tightness control, the two-site select in both spellings and readings,
-  cross-routine), each executed against a reference and a materialized reading; `access_fold` pins
+  a reduction over both slices, cross-routine), each executed against a reference and a materialized reading; `access_fold` pins
   the collector's site keys and the resolver.
 - **The fan-in traversal must not enter a node already materialized** (gh-ocannl-1777). A whole
   step's setter-reads graph is cyclic through its parameters (a parameter reads its gradient, which
