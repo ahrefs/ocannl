@@ -16,6 +16,13 @@ See the `Important Debug Settings` list in `AGENTS.md` for the config keys that 
 
 ## Tracing library internals with ppx_minidebug (e.g. the shape/row solver)
 
+- When a probe catches `Row.Shape_error (msg, trace)`, print `Shape.error_to_string_hum msg trace`
+  alongside the backtrace, from that same handler. The registered `sexp_of_exn`, `Exn.to_string`
+  and `Printexc.to_string` retain the caught payload across two failures and a reset
+  (`test/operations/shape_error_converters.ml`, gh-ocannl-2211). A closing replay deliberately
+  re-raises its first trial's error when its search gives up (`Row.solve_closing_stages`), so the
+  backtrace of that re-raise can be later than the error's origin.
+
 - High-level `%debug5_sexp`/`%track5_sexp` etc. log statements are stripped at COMPILE time; each module has its own gate env var: `[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_ROW"]` at the top of `row.ml`, similarly `..._SHAPE`, `..._TNODE`, `..._ASSIGNMENTS`, `..._CC_BACKEND`, etc. (grep for `global_debug_log_level_from_env_var`)
 - Every gate is declared as a `preprocessor_deps` `(env_var ...)` of the library whose modules read it (gh-ocannl-628), so setting one re-preprocesses those modules by itself: `OCANNL_LOG_LEVEL_ROW=9 OCANNL_LOG_LEVEL_SHAPE=9 dune build ...`. Adding a gate to a module means adding it to that library's `preprocessor_deps` too, which `test/operations/env_var_deps` checks
 - At runtime, pass `--ocannl_log_level=9` and run from a directory with an `ocannl_config` on its ancestor path (e.g. `test/config/`); logs land in `log_files/`

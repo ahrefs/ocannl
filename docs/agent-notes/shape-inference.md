@@ -744,6 +744,12 @@ files.
   part in reading order with explicit `let`s: a `[%string]` or list literal evaluates its parts
   back to front, which would name the variables right to left. A golden prints the rendering, not
   the sexp (`scheme_error_rendering` pins it with a reserved-id control).
+  Two caught failures and a session reset retain their own text in `sexp_of_exn`, `Exn.to_string`
+  and `Printexc.to_string` (`shape_error_converters`, gh-ocannl-2211). For a probe, match the caught
+  `Row.Shape_error (msg, trace)` and print `Shape.error_to_string_hum msg trace` alongside its
+  backtrace; this renders that payload, just as the converters do. A closing replay can deliberately
+  re-raise its first trial's error (`Row.solve_closing_stages` above), so a later backtrace alone
+  does not identify which trial supplied the payload.
 - A check that reports at the definition needs its verdict to hold for EVERY application, and for
   whatever else holds the function's tensors (gh-ocannl-1803). Reachability from the boundary rows
   does not decide that: an inline `{ w }` is an anchor built before the trace, and a padded kernel
