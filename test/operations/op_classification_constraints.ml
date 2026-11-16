@@ -20,8 +20,18 @@ let ternary_plain x = [%op fma (x, 2.0, 3.0)]
 let ternary_typed x =
   [%op fma (((x, 2.0, 3.0) : Tensor.t * Tensor.t * Tensor.t) : Tensor.t * Tensor.t * Tensor.t)]
 
+let%op labelled_binary ~label:__a x = add ((x, x) : Tensor.t * Tensor.t)
+let%op labelled_ternary ~label:__b x = fma ((x, x, x) : Tensor.t * Tensor.t * Tensor.t)
 let argument_plain x = [%op fst (x + 1.0, x + 2.0)]
 let argument_typed x = [%op fst ((x + 1.0, x + 2.0) : Tensor.t * Tensor.t)]
+let optout_calls = ref 0
+
+let%op tail_optout () =
+  (fun x ->
+     Int.incr optout_calls;
+     x + 1.0
+    : Tensor.t -> Tensor.t)
+    [@ocannl.no_scheme]
 
 let events f =
   let log = ref [] in
@@ -35,16 +45,24 @@ let () =
   let traced = function Tensor.Scheme.Traced _ -> true | _ -> false in
   p_exists "plain tail traces a scheme" plain_trace ~f:traced;
   p_exists "constrained tail traces a scheme" typed_trace ~f:traced;
+  let opted_out, optout_trace = events tail_optout in
+  (* No events is the intended passing case, beside the schemed witness above. *)
+  p_empty "constraint opt-out does not trace" ~over:plain_trace optout_trace;
+  p "constraint opt-out does not execute the body at construction" (Int.equal !optout_calls 0);
   let x = Tensor.term_init [| 2.; 5.; -3. |] ~output_dims:[ 3 ] ~grad_spec:Prohibit_grad () in
   let a, plain_checks = events (fun () -> plain x) in
   let b, typed_checks = events (fun () -> typed x) in
   let checked = function Tensor.Scheme.Checked _ -> true | _ -> false in
   p_exists "plain tail checks its scheme" plain_checks ~f:checked;
   p_exists "constrained tail checks its scheme" typed_checks ~f:checked;
+  let opted_value, optout_checks = events (fun () -> opted_out x) in
+  p_empty "constraint opt-out does not check" ~over:plain_checks optout_checks;
+  p "constraint opt-out executes the body once at application" (Int.equal !optout_calls 1);
   let pair = function Some (a, b) -> [ a; b ] | None -> assert false in
   let cases =
     [
       ("tail", [ a ], [ b ]);
+      ("opted-out tail", [ a ], [ opted_value ]);
       ("head", [ head_plain x ], [ head_typed x ]);
       ("pipeline head", [ pipeline_plain x ], [ pipeline_typed x ]);
       ("constructor grouping", pair (grouping_plain x), pair (grouping_typed x));
@@ -52,6 +70,19 @@ let () =
       ("uncurried binary", [ binary_plain x ], [ binary_typed x ]);
       ("uncurried ternary", [ ternary_plain x ], [ ternary_typed x ]);
     ]
+  in
+  let named_binary = labelled_binary ~label:[ "binary caller" ] x in
+  let named_ternary = labelled_ternary ~label:[ "ternary caller" ] x in
+  p "constrained binary forwards a renamed label parameter"
+    (List.mem named_binary.Tensor.value.label "binary caller" ~equal:String.equal);
+  p "constrained ternary forwards a renamed label parameter"
+    (List.mem named_ternary.Tensor.value.label "ternary caller" ~equal:String.equal);
+  let cases =
+    cases
+    @ [
+        ("labelled binary", [ head_plain x ], [ named_binary ]);
+        ("labelled ternary", [ TDSL.O.fma x x x ], [ named_ternary ]);
+      ]
   in
   let outputs = List.concat_map cases ~f:(fun (_, a, b) -> a @ b) in
   List.iter outputs ~f:(fun t -> Train.set_materialized t.Tensor.value);

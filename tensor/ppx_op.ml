@@ -468,7 +468,7 @@ let eligible_function (e : expression) =
 let rec mark_tail ~name (e : expression) =
   match e.pexp_desc with
   | Pexp_function _ -> if eligible_function e then mark_schemed ~name e else e
-  | Pexp_constraint (body, typ) ->
+  | Pexp_constraint (body, typ) when not (opted_out e) ->
       { e with pexp_desc = Pexp_constraint (mark_tail ~name body, typ) }
   | Pexp_let (rf, vbs, body) -> { e with pexp_desc = Pexp_let (rf, vbs, mark_tail ~name body) }
   | Pexp_sequence (e1, e2) -> { e with pexp_desc = Pexp_sequence (e1, mark_tail ~name e2) }
@@ -1038,7 +1038,8 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
         (no_vbs, ndarray_op ?label ~ndarray_fn:(dsl_fn "ndarray") expr)
       else translate_block_tensor ~loc ~loop:block_loop ~label ~opt_label `Input elems
   (* A constrained tuple is still an uncurried call. Keep the type check on the translated tuple,
-     evaluating it once before passing its components to the curried DSL operation. *)
+     evaluating it once before passing its components to the curried DSL operation. The head
+     (including its result-label expression) also stays outside the generated binders' scope. *)
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } as op]
         [%e? { pexp_desc = Pexp_constraint _; _ } as arg]]
@@ -1052,12 +1053,12 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
         match tuple_arity arg with
         | Some 2 ->
             [%expr
-              let __a, __b = [%e arg] in
-              [%e head] __a __b]
+              let __fn, (__a, __b) = ([%e head], [%e arg]) in
+              __fn __a __b]
         | Some 3 ->
             [%expr
-              let __a, __b, __c = [%e arg] in
-              [%e head] __a __b __c]
+              let __fn, (__a, __b, __c) = ([%e head], [%e arg]) in
+              __fn __a __b __c]
         | _ -> assert false
       in
       (vbs, result)

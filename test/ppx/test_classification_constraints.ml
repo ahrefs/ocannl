@@ -15,6 +15,18 @@ let ternary_plain x = [%op fma (x, 2.0, 3.0)]
 let ternary_typed x =
   [%op fma (((x, 2.0, 3.0) : Tensor.t * Tensor.t * Tensor.t) : Tensor.t * Tensor.t * Tensor.t)]
 
+let optout_calls = ref 0
+
+let%op tail_optout () =
+  (fun x ->
+     Stdlib.incr optout_calls;
+     x + 1.0
+    : Tensor.t -> Tensor.t)
+    [@ocannl.no_scheme]
+
+let%op labelled_binary ~label:__a x = add ((x, x) : Tensor.t * Tensor.t)
+let%op labelled_ternary ~label:__b x = fma ((x, x, x) : Tensor.t * Tensor.t * Tensor.t)
+
 let _ =
   ( tail_plain,
     tail_typed,
@@ -27,4 +39,7 @@ let _ =
     binary_plain,
     binary_typed,
     ternary_plain,
-    ternary_typed )
+    ternary_typed,
+    tail_optout,
+    labelled_binary,
+    labelled_ternary )

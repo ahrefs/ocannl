@@ -147,7 +147,9 @@ files.
   constrained returned function, DSL-head classification reaches constrained heads (including
   partial pipelines), and tuple grouping reaches constrained tuples. Uncurried binary/ternary
   calls keep the tuple's type check by destructuring the translated constrained tuple once before
-  the curried call. Only tuple classification looks through constraints in grouping; numeric and
+  the curried call. The head and tuple are bound together so the generated component binders
+  cannot capture a renamed result-label parameter. Constraint-level `[@ocannl.no_scheme]` stops
+  tail marking before translation propagates the opt-out. Only tuple classification looks through constraints in grouping; numeric and
   array/list axis annotations retain their existing precedence. `test/ppx/test_classification_constraints`
   pins the expansions and `test/operations/op_classification_constraints` executes cc value parity
   and scheme trace/check events. Restoring base `3ac86187`'s `ppx_op.ml` makes the new expansion
