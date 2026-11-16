@@ -4730,8 +4730,8 @@ let skip_list_census content =
                       List.concat_map cases ~f:(fun case ->
                           Option.to_list case.pc_guard @ [ case.pc_rhs ])
                 in
-                ( List.concat_map bodies ~f:(fun body -> fst (claims ~branches:true body)),
-                  snd (claims ~branches:true rhs) )
+                let read = List.map bodies ~f:(claims ~branches:true) in
+                (List.concat_map read ~f:fst, List.sum (module Int) read ~f:snd)
               in
               Some
                 (Skip_function
@@ -4826,16 +4826,22 @@ let skip_list_census content =
            && List.for_all labelled ~f:(fun label ->
                List.exists stored ~f:(fun (given, _) ->
                    Poly.equal given (Ppxlib.Asttypes.Labelled label))) ->
-        (* A default runs where the stored arguments omit its label. *)
-        List.concat_map defaults ~f:(fun (label, default) ->
-            if
-              List.exists stored ~f:(fun (given, _) ->
-                  match given with
-                  | Ppxlib.Asttypes.Labelled given | Optional given -> String.equal given label
-                  | Nolabel -> false)
-            then []
-            else List.map default.run_skips ~f:fst)
-        @ callback_skips
+        (* A default runs where the stored arguments omit its label; one that evaluates a claim then
+           makes the callback no skip wrapper. *)
+        let omitted =
+          List.filter_map defaults ~f:(fun (label, default) ->
+              if
+                List.exists stored ~f:(fun (given, _) ->
+                    match given with
+                    | Ppxlib.Asttypes.Labelled given | Optional given -> String.equal given label
+                    | Nolabel -> false)
+              then None
+              else Some default)
+        in
+        if List.exists omitted ~f:(fun default -> default.run_evaluating > 0) then []
+        else
+          List.concat_map omitted ~f:(fun default -> List.map default.run_skips ~f:fst)
+          @ callback_skips
     | _ -> []
   in
   let iterated_argument name argument =

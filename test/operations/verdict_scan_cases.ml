@@ -421,6 +421,14 @@ let () = Stdlib.List.iter (skip ~before:()) [ (); () ]|ocaml},
         {ocaml|let skip ?(before = skipped "a") () = ignore before
 let () = Stdlib.List.iter skip [ (); () ]|ocaml},
         [ "iterated a" ] );
+      ( "a wrapper whose evaluating default the stored arguments supply",
+        {ocaml|let skip ?(before = p "setup" true) label = ignore before; skipped label
+let () = Stdlib.List.iter (skip ~before:()) [ "a"; "b" ]|ocaml},
+        [ "iterated label" ] );
+      ( "a wrapper whose evaluating default the call omits",
+        {ocaml|let skip ?(before = p "setup" true) label = ignore before; skipped label
+let () = Stdlib.List.iter skip [ "a"; "b" ]|ocaml},
+        [] );
       ( "a wrapper that also evaluates a claim",
         {ocaml|let both () = p "a" x; skipped "b"
 let () = if on_gpu then run () else (both (); skipped "c")|ocaml},
