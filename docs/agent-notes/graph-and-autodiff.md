@@ -274,20 +274,24 @@ files.
   A hand-built tensor record must keep its declared parameters reachable through `children`;
   initialization refuses an incomplete walk rather than silently omitting an initializer.
 
-- Two queries over assignments, two meanings (gh-ocannl-2205). `collect_value_reads` is the
+- Three queries over assignments (gh-ocannl-2205). `collect_value_reads` is the
   source-value dependencies: operand `Node`s, `Rev_sides`' `lhs`, and every `Fetch.Slice`'s parent,
   whether the slice copies or aliases (merge buffers and an accumulation's prior `lhs` value are
-  out; it forces nothing). `collect_nodes_guess_output` is the materialization guess: its second
-  set is what `Train.set_materialized` loops materialize, slice parents included unless the
-  sequence reads them again (`Seq`'s `o1 + o2 - (i1 + i2)`), and its first set is only that
-  subtraction's read term, which misses slice parents. A consumer ordering fragments, refusing a
-  pending owner or finding read seeds (`init_params`, `with_seed_fetches`, `Tensor.op`'s forward
-  `requires`, `forward_reads`, the backprop `all_read`) uses `collect_value_reads`; one wanting
-  every mentioned node (autotune's `program_nodes`, the splice's `mentioned`, `frontend_gate`)
-  takes the pair's union. An executed slice ordering needs the slice and its parent materialized
-  and the slice forced to copy, else the copy inlines into its reader and the misorder is masked:
+  out; it forces nothing). `guess_materialized` is what `Train.set_materialized` loops materialize,
+  slice parents included unless the sequence reads them again (the historical recursive `Seq`
+  subtraction is unchanged). Its private subtraction term misses slice parents and is not a reads
+  API. A consumer ordering fragments, refusing a pending owner or finding read seeds uses
+  `collect_value_reads`; one wanting every mentioned node (autotune's `program_nodes`, the splice's
+  `mentioned`, `frontend_gate`, parameter program order) uses `collect_mentioned`, the union of
+  value reads and writes, merge buffers aside. An executed slice ordering needs the slice and its
+  parent materialized and the slice forced to copy (`Ll_test.materialize_copying_slice` with a
+  different `copy_prec` sets up both), else the copy inlines into its reader and masks the misorder.
   `forward_fragment_order` and `consume_forward_code_reason` pin the two behaviours,
-  `value_reads_query` the contract.
+  `value_reads_query` the contract. The p1 negative control swapped just the slice reader and
+  parent-owner fragments in `forward_fragment_order`: with the helper its value claim failed
+  (mac-studio cc, `20261116T102549Z-67965`); retaining the precision mismatch but removing the
+  helper's materialization passed (`20261116T102629Z-81927`). Both records are under
+  `~/.ocannl-test-runs/`; the passing control demonstrates why forcing a copy alone is insufficient.
 
 - `Tensor.ndarray`, `TDSL.ndarray`, `NTDSL.ndarray` and `Tensor.term_init` accept `?prec` at
   construction (gh-ocannl-2173). Above `limit_constant_fill_size` the host array must be allocated

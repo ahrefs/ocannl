@@ -676,8 +676,7 @@ let params_in_program_order (t : t) =
     let positions = Hashtbl.create (module Tn) in
     ignore
       (Asgns.fold_leaves t.forward.asgns ~init:0 ~f:(fun pos leaf ->
-           let read, output = Asgns.collect_nodes_guess_output leaf in
-           Set.iter (Set.union read output) ~f:(fun tn ->
+           Set.iter (Asgns.collect_mentioned leaf) ~f:(fun tn ->
                if not (Hashtbl.mem positions tn) then Hashtbl.set positions ~key:tn ~data:pos);
            pos + 1)
         : int);

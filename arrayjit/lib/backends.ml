@@ -1256,8 +1256,7 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
       | Assignments.Noop -> raw
       | _ ->
           let (inputs, _), _ = Low_level.input_and_output_nodes lowered in
-          let reads, writes = Assignments.collect_nodes_guess_output comp.asgns in
-          let mentioned = Set.union reads writes in
+          let mentioned = Assignments.collect_mentioned comp.asgns in
           (* A RECONCILE-FLIPPED read-before-write input overrides the mention filter (round 6): a
              comp that writes a node AFTER consuming an inherited computation reading it mentions
              the node only as a write, yet the splice needs its entry value. The key is

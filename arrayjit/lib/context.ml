@@ -890,7 +890,7 @@ let payload_of (r : _ BI.routine) =
 let frontend_gate ?prelowered comp =
   !Tn.session_gate ();
   Option.iter !Tn.validity_check ~f:(fun check ->
-      let read, written = Ir.Assignments.collect_nodes_guess_output comp.Ir.Assignments.asgns in
+      let mentioned = Ir.Assignments.collect_mentioned comp.Ir.Assignments.asgns in
       (* The fragment metadata's nodes too (gh-ocannl-1724): optimization may have removed the code
          that mentions them, and a stale handle must not get past the gate as metadata. *)
       let fragment_nodes fragments =
@@ -900,8 +900,7 @@ let frontend_gate ?prelowered comp =
         (Set.union_list
            (module Tn)
            [
-             read;
-             written;
+             mentioned;
              comp.Ir.Assignments.embedded_nodes;
              fragment_nodes comp.Asgns.owned;
              fragment_nodes comp.Asgns.requires;

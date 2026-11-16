@@ -42,6 +42,16 @@
 open Base
 include Ll_builders
 
+(** Materialize a slice and its parent before compilation, setting the slice to [copy_prec]. Choose
+    [copy_prec] different from the parent's known precision to force a copy, and use exact small
+    values so conversion preserves the oracle. No precision cell is forced here: settling the parent
+    before setting all sibling slices can settle those slices too. This prevents inlining or
+    aliasing from hiding a reader scheduled before its producer. *)
+let materialize_copying_slice ~copy_prec ~(array : Tn.t) ~(sliced : Tn.t) =
+  Tn.update_prec array copy_prec;
+  materialize sliced;
+  materialize array
+
 (** {1 Discriminating producer values}
 
     A producer that writes a constant makes an executed leg blind to WHICH iteration supplied a cell

@@ -363,9 +363,9 @@ let () =
             ~tol:(fun _ -> 1e-6))
   | _ -> assert false
 
-(* Slice parents are materialization outputs of collect_nodes_guess_output, and execution
-   dependencies through collect_value_reads (gh-ocannl-2205). A precision mismatch forces copies so
-   reading before the owner cannot hide behind aliasing the buffer the owner later fills. *)
+(* Slice parents are materialization outputs of guess_materialized, and execution dependencies
+   through collect_value_reads (gh-ocannl-2205). A precision mismatch forces copies so reading
+   before the owner cannot hide behind aliasing the buffer the owner later fills. *)
 let () =
   Verdict.case "slice initializer dependencies" (fun () ->
       Tensor.unsafe_reinitialize ();
@@ -378,7 +378,9 @@ let () =
       let shared = NTDSL.pointmul data (NTDSL.number 2.) () in
       let first = TDSL.param "init_slice_owner" ~param_init:(NTDSL.slice index shared) () in
       let second = TDSL.param "init_slice_reader" ~param_init:(NTDSL.slice index shared) () in
-      List.iter [ first; second ] ~f:(fun t -> Tn.update_prec t.Tensor.value Ir.Ops.half);
+      List.iter [ first; second ] ~f:(fun t ->
+          Ll_test.materialize_copying_slice ~copy_prec:Ir.Ops.half ~array:t.Tensor.value
+            ~sliced:shared.value);
       let%op out = second + first in
       let base = Context.auto () in
       let ctx, routine =

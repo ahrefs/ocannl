@@ -40,12 +40,12 @@ let grad_of t = (Option.value_exn ~here:[%here] t.Tensor.diff).Tensor.grad
    structural pin of which gate formulation was built (the cheap gate's proxies typically virtualize
    away entirely in the lowered code, which is the point of the specialization). *)
 let mentions_label ~sub (update : Asgns.comp) : bool =
-  let nodes, guessed = Asgns.collect_nodes_guess_output update.Asgns.asgns in
+  let nodes = Asgns.collect_mentioned update.Asgns.asgns in
   let mem set =
     Set.exists set ~f:(fun tn ->
         List.exists tn.Tn.label ~f:(fun l -> String.is_substring l ~substring:sub))
   in
-  mem nodes || mem guessed
+  mem nodes
 
 (* [max_pool2d] with the gradient gate forced, mirroring its dispatch shadow — the product-space
    twin for the parity legs (and, forced true, a canary that the shadow mechanism itself works). *)

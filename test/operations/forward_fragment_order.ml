@@ -98,8 +98,9 @@ let () =
   let reader = NTDSL.slice index parent () in
   let later = NTDSL.add owner (NTDSL.number 1.) () in
   let out = NTDSL.add reader later () in
-  Ir.Tnode.update_prec reader.Tensor.value Ir.Ops.half;
-  List.iter [ parent; reader; out ] ~f:(fun t -> Train.set_materialized t.Tensor.value);
+  Ll_test.materialize_copying_slice ~copy_prec:Ir.Ops.half ~array:reader.Tensor.value
+    ~sliced:parent.Tensor.value;
+  Train.set_materialized out.Tensor.value;
   let base = Context.auto () in
   let ctx, routine =
     Context.compile ~name:"ffo_slice_order" base (Tensor.consume_forward_code out) bindings

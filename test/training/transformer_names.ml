@@ -166,9 +166,7 @@ let () =
 
   (* Compile training routine *)
   let train_comp = Asgns.sequence [ update; sgd ] in
-  Set.iter
-    (snd @@ Asgns.collect_nodes_guess_output train_comp.Asgns.asgns)
-    ~f:Train.set_materialized;
+  Set.iter (Asgns.guess_materialized train_comp.Asgns.asgns) ~f:Train.set_materialized;
   (* Tune the step schedule empirically. [rounds:0] keeps only the preset seed candidates, which all
      preserve reduction order and, since gh-ocannl-1682 on gcc too, per-step rounding (the packed
      seeds' explicit FMA against the serial loop's contracted one; [schedule_pad] pins it) — the
@@ -183,9 +181,7 @@ let () =
   let ctx, sgd_step = Autotune.tune ~rounds:0 ~timing_ctx:scratch ctx train_comp bindings in
 
   (* Compile inference routine *)
-  Set.iter
-    (snd @@ Asgns.collect_nodes_guess_output infer_comp.Asgns.asgns)
-    ~f:Train.set_materialized;
+  Set.iter (Asgns.guess_materialized infer_comp.Asgns.asgns) ~f:Train.set_materialized;
   let infer_comp =
     { infer_comp with Asgns.embedded_nodes = Set.add infer_comp.Asgns.embedded_nodes mask.value }
   in

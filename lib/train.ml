@@ -2064,7 +2064,7 @@ let%track7_sexp to_routine (ctx : Context.t) ?(output_cd_file = false) ?budget ?
   if output_cd_file then dump_cd_file ~caller:"Train.to_routine" bindings comp;
   (* Materialize the guessed output nodes so they persist across calls and are inspectable on demand
      via the context (gh-ocannl-333). *)
-  Set.iter (snd @@ Asgns.collect_nodes_guess_output comp.Asgns.asgns) ~f:set_materialized;
+  Set.iter (Asgns.guess_materialized comp.Asgns.asgns) ~f:set_materialized;
   (* gh-ocannl-498: budget planning goes AFTER the output-materialization intent above (those nodes
      must not be flip candidates) and BEFORE the compile whose placements it steers. Off by default:
      with no budget this is the identity and the compile below is unchanged. *)
@@ -2105,7 +2105,7 @@ let init_params ?(reinit_all = false) ctx bindings t =
   in
   let host_params = collect_host_params (Set.empty (module Tn)) t in
   (* Materialize the parameters being initialized so they persist and are inspectable on demand. *)
-  Set.iter (snd @@ Asgns.collect_nodes_guess_output comp.Asgns.asgns) ~f:set_materialized;
+  Set.iter (Asgns.guess_materialized comp.Asgns.asgns) ~f:set_materialized;
   (* Linking initializes newly allocated literal buffers. Reinitialization must also restore
      existing host-backed parameters (gh-ocannl-641), which have no executable forward initializer.
      Upload after compilation finalizes shapes, before running computed initializers that may read

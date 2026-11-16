@@ -1,6 +1,6 @@
 (* gh-ocannl-2205: [Assignments.collect_value_reads] is the set of nodes whose values a program
    reads as operands -- a slice's parent included, whether the slice copies or aliases -- while
-   [collect_nodes_guess_output], the materialization guess, keeps its own read term and output set.
+   [guess_materialized] keeps its private subtraction term; [collect_mentioned] names all nodes.
    Every lazy dimension and projection below fails when forced: the query is syntactic. *)
 
 open Base
@@ -70,8 +70,11 @@ let () =
         (Set.equal reads (set [ const; rev_src; vec_src; parent ]));
       p "a constant fetch's target, written then read, stays a read" (Set.mem reads const);
       p_none "no destination is a read" [ dst; rev_dst; vec_dst; view ] ~f:(Set.mem reads);
-      p "a merge buffer is not a read of its node" (not (Set.mem reads merged));
-      let inputs, _ = Asgns.collect_nodes_guess_output code in
+      p "a merge buffer is not a read of its node"
+        ((not (Set.mem reads merged))
+        && Set.equal (Asgns.collect_mentioned code)
+             (set [ const; dst; rev_src; rev_dst; vec_src; vec_dst; parent; view ]));
+      let inputs = set [ const; rev_src; vec_src ] in
       p "the value reads are the materialization guess's read term plus the slice parent"
         (Set.equal reads (Set.add inputs parent))
 
@@ -88,13 +91,15 @@ let () =
         dims = unforced "dims";
       }
   in
-  let inputs, outputs = Asgns.collect_nodes_guess_output slice in
+  let outputs = Asgns.guess_materialized slice in
   p "an unread slice parent is materialized with its view"
-    (Set.is_empty inputs && Set.equal outputs (set [ parent; view ]));
+    (Set.equal (Asgns.collect_mentioned slice) (set [ parent; view ])
+    && Set.equal outputs (set [ parent; view ]));
   let read_later = Asgns.Seq (slice, accum dst (Unop { op = Identity; rhs = Node parent })) in
-  let inputs, outputs = Asgns.collect_nodes_guess_output read_later in
+  let outputs = Asgns.guess_materialized read_later in
   p "a slice parent read later in the sequence leaves the materialization set"
-    (Set.equal inputs (set [ parent ]) && Set.equal outputs (set [ view; dst ]));
+    (Set.equal (Asgns.collect_mentioned read_later) (set [ parent; view; dst ])
+    && Set.equal outputs (set [ view; dst ]));
   p "while the value reads keep it"
     (Set.equal (Asgns.collect_value_reads read_later) (set [ parent ]))
 
