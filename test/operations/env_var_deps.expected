@@ -391,6 +391,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @slow-virtual_inliner_oracle-widen-1
   test/operations/dune                     @slow-virtual_inliner_oracle-widen-2
   test/operations/dune                     @slow-virtual_inliner_oracle-widen-3
+  test/operations/dune                     @slow-where_scope_generator-widen
   test/operations/profiles/dune            @runtest
   test/operations/profiles/dune            @runtest-empty_cmdline_falls_through
   test/operations/profiles/dune            @runtest-env_spelling_gate

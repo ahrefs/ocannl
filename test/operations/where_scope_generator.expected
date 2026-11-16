@@ -1,0 +1,37 @@
+5196 programs, at most 2 scope-bearing slots
+sel: f32=256 i32=256
+nest-then: f32=630 i32=630
+nest-else: f32=630 i32=630
+siblings: f32=646 i32=646
+gate-idx: f32=109 i32=109
+gate-data: f32=109 i32=109
+keep1: f32=109 i32=109
+keep2: f32=109 i32=109
+no compile refused a generated program: true
+every program's compiled values are the replay's: true
+every program's strict-interpreted twin computes the replay's values: true
+every program's Emitted walk ends its scope bodies in the kernel's text order: true
+every program's text reads each scope local only after its definition: true
+every program's Emitted walk ends a body after the bodies it reads: true
+no kernel names the scope of a discarded projection operand: true
+every rendered scope's local is named in the kernel: true
+control: with a read local's definition moved after its readers, the text reader flags the read: true
+reader control: a read ahead of the last assignment is flagged: true
+reader control: the same lines definition-first are not: true
+reader control: a declaration and an accumulation step are not reads: true
+reader control: a read of a local never assigned is flagged: true
+reader control: a fragment spelling the local names it: true
+reader control: v17_ is not a mention of scope 7: true
+programs whose kernel holds a scope body (at least 2598): true
+programs with a conditional group of definitions (at least 3000): true
+programs with two conditional groups (at least 1000): true
+programs reading a scope local where it is not defined (at least 1500): true
+control: the planted group swap is out of the kernel's text order: true
+control: where a group-1 body reads a group-0 local, the swap breaks the read order: true
+control: programs whose operand order is not the kernel's order (at least 1000): true
+f32: the compiled values differ from the replay wherever it says they change: true
+i32: the compiled values differ from the replay wherever it says they change: true
+where the backend blends a data select, its arm definitions render unconditionally: true
+where the backend short-circuits a data select, its arm definitions render under its condition: true
+every disagreement is a known finding: true
+the generator completed within its wall-time bound: true

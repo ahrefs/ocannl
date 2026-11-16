@@ -73,57 +73,11 @@ let raw ~inputs ~outputs =
        (List.concat_map outputs ~f:(fun out ->
             List.map inputs ~f:(fun x -> set_at out (iter i) (get x [| iter i |])))))
 
-(* gh-ocannl-2213: the scope bodies of [llc] as [Access_fold] walks them under [local_scopes], each
-   when its walk ends -- a body ends after the definitions nested in it -- paired with the line of
-   [source] holding its last assignment ([None]: no line assigns it). [llc] is the tree the
-   compile's emitted-order binder gate judged, after the exact-scope collapse
-   ({!Ir.C_syntax.scope_order_oracles}): the tree that renders, so every body it holds is in the
-   text. A local spells its scope id first ([v<id>_], {!Ir.Low_level.scope_local_name}) and a
-   declaration starts with its type, so a line assigning it is one starting with the local and an
-   [=]: a wrapped operand line can start with a read of it. *)
-let body_ends local_scopes (llc : LL.t) source =
-  let policy : LL.Access_fold.policy =
-    {
-      discarded_operands = Skip;
-      gated_operands = Visit;
-      dead_loops = Visit;
-      local_scopes;
-      guards = Ignore;
-      scan_implicit = Visit;
-    }
-  in
-  let after_scalar _ acc = function
-    | LL.Local_scope { id; _ } -> id.LL.scope_id :: acc
-    | _ -> acc
-  in
-  let visits =
-    List.rev
-      (LL.Access_fold.fold ~policy
-         ~hooks:{ (LL.Access_fold.hooks ()) with after_scalar }
-         ~init:[] llc)
-  in
-  let lines = List.mapi (String.split_lines source) ~f:(fun k l -> (k, String.lstrip l)) in
-  List.map visits ~f:(fun id ->
-      let prefix = "v" ^ Int.to_string id ^ "_" in
-      let assigns l =
-        match String.chop_prefix l ~prefix with
-        | None -> false
-        | Some rest ->
-            let rest =
-              String.lstrip ~drop:(fun ch -> Char.is_alphanum ch || Char.equal ch '_') rest
-            in
-            String.is_prefix rest ~prefix:" = "
-      in
-      (id, List.rev lines |> List.find ~f:(fun (_, l) -> assigns l) |> Option.map ~f:fst))
-
-(* Every body found in the text, each once, and in text order. *)
-let in_text_order ends =
-  match Option.all (List.map ends ~f:snd) with
-  | None -> false
-  | Some ks ->
-      List.is_sorted_strictly ks ~compare:Int.compare
-      && not (List.contains_dup (List.map ends ~f:fst) ~compare:Int.compare)
-
+(* gh-ocannl-2213: the scope bodies as [Access_fold] walks them, each paired with the kernel line
+   holding its last assignment, and whether they are in text order: {!Scope_emission}'s reader,
+   shared with [where_scope_generator]. *)
+let body_ends = Scope_emission.body_ends
+let in_text_order = Scope_emission.in_text_order
 let recorded name = List.Assoc.find !(Ir.C_syntax.scope_order_oracles ()) name ~equal:String.equal
 
 (* The fold's [Emitted] mode, under the oracle the routine compiled with and over the tree it
