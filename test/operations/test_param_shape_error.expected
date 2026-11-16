@@ -44,21 +44,25 @@ zero parameter: constant: true
 zero parameter: fixed index: true
 zero parameter: wrapped fixed index: true
 default parameter: sized: true
+default parameter: sized fixed index: true
 default parameter: explicit unit axis: true
 default parameter: declared output: true
 default parameter: omitted row: true
 default parameter: schemed omitted row: true
 uniform1 parameter: sized: true
+uniform1 parameter: sized fixed index: true
 uniform1 parameter: explicit unit axis: true
 uniform1 parameter: declared output: true
 uniform1 parameter: omitted row: true
 uniform1 parameter: schemed omitted row: true
 normal parameter: sized: true
+normal parameter: sized fixed index: true
 normal parameter: explicit unit axis: true
 normal parameter: declared output: true
 normal parameter: omitted row: true
 normal parameter: schemed omitted row: true
 zero parameter: sized: true
+zero parameter: sized fixed index: true
 zero parameter: explicit unit axis: true
 zero parameter: declared output: true
 zero parameter: omitted row: true

@@ -173,6 +173,11 @@ files.
   This fills the draw under two or three pointwise results before a fixed index; copying the
   minimum down a broadcast inequality would instead forbid its operand from broadcasting.
   Size-1 fixed-index outputs keep their existing minimal rule, and parameters remain excluded.
+  Exclusion includes the unresolved dimension-bound component connected to a parameter
+  (gh-ocannl-2236, staging#2041 reconciliation): a non-parameter result's guessed minimum can
+  otherwise flow back as a GLB and size the parameter. This is eligibility for the early guess,
+  not a transfer of parameter roles to initializer-private axes. The matrix pins both refusal
+  from an index alone and acceptance when a real use sizes the parameter before indexing it.
   The sweep pins the identities and acceptance of the 13 programs the broad deferral refused.
   Its residual literal entry now covers only five stretches adopting a fixed-index output axis;
   the reduction half retires with gh-ocannl-2247, as does the nested-branching entry when the fixes

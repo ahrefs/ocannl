@@ -6363,17 +6363,47 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
      stages propagate the concrete bound. Otherwise an intermediate result in [(u *. 2) *. 2]
      guesses 1 before the outer result's index sizes it, so [u] repeats.
 
-     Boundary: only non-parameter axes eligible for closing, with no GLB and a minimum above 1. This
-     also respects held window and shared-claim concat dependencies. It is a closing order, not a
-     stronger broadcast inequality: an operand may still be top. In particular [=> ...|0] outputs
-     keep their stage-7 minimal rule (layer_norm's mean must broadcast), and a fixed index alone
-     still cannot size a parameter. *)
+     Boundary: only non-parameter axes outside a parameter's unresolved bound component, with no GLB
+     and a minimum above 1. This also respects held window and shared-claim concat dependencies. It
+     is a closing order, not a stronger broadcast inequality: an operand may still be top. In
+     particular [=> ...|0] outputs keep their stage-7 minimal rule (layer_norm's mean must
+     broadcast), and a fixed index alone still cannot size a parameter. *)
   let ineqs, env =
     if not (is_stage7 stage) then (ineqs, env)
     else
       let waiting, _ = closing_dim_dependencies ineqs env in
+      let entries = Utils.Tree_map.to_alist env.dim_env in
+      (* A minimum chosen for a result can flow back through its broadcast bounds and size a
+         parameter. Exclude that whole unresolved bound component from this early guess, without
+         changing its members' roles or the later closing rules (gh-ocannl-2236). *)
+      let rec parameter_bounds seen = function
+        | [] -> seen
+        | v :: rest when Set.mem seen v -> parameter_bounds seen rest
+        | v :: rest ->
+            let seen = Set.add seen v in
+            let more =
+              match find_dim env.dim_env v with
+              | Some (Bounds_dim { res; opnd; glb; _ }) ->
+                  res @ opnd
+                  @ Option.value_map glb ~default:[] ~f:(fun d ->
+                      Set.to_list (vars_of_dim (subst_dim env d)))
+              | Some (Solved_dim d) -> Set.to_list (vars_of_dim (subst_dim env d))
+              | None -> []
+            in
+            parameter_bounds seen (more @ rest)
+      in
+      let parameter_axes =
+        List.filter_map entries ~f:(function
+          | v, Bounds_dim { is_in_param = true; _ } -> Some v
+          | _ -> None)
+        @ List.concat_map ineqs ~f:(function
+          | Terminal_row (true, r, _) -> Set.to_list (dim_vars_of_row (subst_row env r))
+          | Terminal_dim (true, d, _) -> Set.to_list (vars_of_dim (subst_dim env d))
+          | _ -> [])
+        |> parameter_bounds dim_var_set_empty
+      in
       let fixed =
-        Utils.Tree_map.to_alist env.dim_env
+        entries
         |> List.filter_map ~f:(fun (v, entry) ->
             match entry with
             | Bounds_dim
@@ -6386,6 +6416,7 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
                   _;
                 }
               when d_min > 1
+                   && (not (Set.mem parameter_axes v))
                    && (not (Set.mem waiting v))
                    && can_guess_dim_to_one env has_uniq_constr_unless ->
                 Some (Dim_eq { d1 = Var v; d2 = get_default_dim ~d:d_min (); origin })

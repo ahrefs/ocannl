@@ -146,8 +146,14 @@ let parameter_use_refusals () =
 let parameter_use_acceptances () =
   List.iter initializers ~f:(fun init ->
       List.iter
-        [ "sized"; "explicit unit axis"; "declared output"; "omitted row"; "schemed omitted row" ]
-        ~f:(fun use ->
+        [
+          "sized";
+          "sized fixed index";
+          "explicit unit axis";
+          "declared output";
+          "omitted row";
+          "schemed omitted row";
+        ] ~f:(fun use ->
           let label = init ^ " parameter: " ^ use in
           Verdict.case label (fun () ->
               Tensor.unsafe_reinitialize ();
@@ -163,6 +169,11 @@ let parameter_use_acceptances () =
                     let p = parameter init () in
                     let c = TDSL.range_of_shape ~input_dims:[] ~output_dims:[ 3 ] () in
                     (p, TDSL.add c p (), [| 3 |])
+                | "sized fixed index" ->
+                    let p = parameter init () in
+                    let c = TDSL.range_of_shape ~input_dims:[] ~output_dims:[ 4 ] () in
+                    let sized = TDSL.pointmul c p () in
+                    (p, TDSL.einsum1 "...|3 => ...|0" sized (), [| 4 |])
                 | "omitted row" ->
                     let p = parameter init () in
                     let root = TDSL.einsum1 "i => i" p ~output_dims:[ 3 ] () in

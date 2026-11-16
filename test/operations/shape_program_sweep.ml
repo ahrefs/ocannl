@@ -62,9 +62,9 @@
    executed fill; the judge checks every program node's shape, not just its draws.
 
    Other remaining causes: one observed normal-draw repeat; 3 fixed-index programs, including
-   [(stretch u + stretch (stretch u)) ++ "...|3 => ...|0"]. The fixed-index
-   entry used to cover all einsum specs over draws; since gh-ocannl-2247 passes a solved row's role
-   to its axes, only fixed indices remain.
+   [(stretch u + stretch (stretch u)) ++ "...|3 => ...|0"]. The fixed-index entry used to cover all
+   einsum specs over draws; since gh-ocannl-2247 passes a solved row's role to its axes, only fixed
+   indices remain.
 
    Retired entries retain their agreeing fixed programs: gh-ocannl-2244 fixes a draw under a unary
    operation, under both operands of a pointwise operation, under a compose, and a no-axis constant
