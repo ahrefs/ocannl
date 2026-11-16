@@ -164,15 +164,12 @@ let () =
        else "hand-set half: the draw and the operations over it stay single")
       draw_and_above
       ~f:(fun t -> is_prec t Ir.Ops.single);
-    initial_values base_ctx root w
+    Array.of_list (initial_values base_ctx root w)
   in
   let hand_set = narrow_initial ~policy:false in
   let policy_set = narrow_initial ~policy:true in
-  p "policy half: initial value count matches the hand-set parameter"
-    (Int.equal (List.length policy_set) (List.length hand_set));
-  p_all "policy half: initial values equal the hand-set parameter bit for bit"
-    (List.zip_exn policy_set hand_set) ~f:(fun (a, b) ->
-      Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b));
+  p_all2 ~min:4096 "policy half: initial values equal the hand-set parameter bit for bit" policy_set
+    hand_set ~f:(fun a b -> Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b));
 
   Tensor.unsafe_reinitialize ();
   let base_ctx = Context.cpu () in

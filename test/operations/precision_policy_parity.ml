@@ -164,9 +164,10 @@ let () =
     { PP.param_prec = None; activation_prec = Some Ir.Ops.half; grad_prec = None };
   master_leg ~name:"uniform half" ~input_l:"xd" (PP.uniform Ir.Ops.half);
 
-  (* A node both an initializer and the model read is an activation, although the walk reaches the
-     initializer first ([w] precedes [shared] in [y]). [param_prec] is a value here: a node the
-     policy left alone would follow its consumers into the same answer. *)
+  (* A node both an initializer and the model read is an activation: the policy does not descend
+     into a parameter's initializer, so it reaches [shared] only through the model (gh-ocannl-2055).
+     [param_prec] is a value here: a node the policy left alone would follow its consumers into the
+     same answer. *)
   let shared = NTDSL.number 3. in
   let w = TDSL.param ~param_init:(NTDSL.pointmul shared (NTDSL.number 2.)) "shared_w" () in
   let%op y = w *. shared in

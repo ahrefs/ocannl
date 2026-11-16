@@ -1344,8 +1344,9 @@ files.
   `Tn.follow_prec`, which promotes and never narrows; the linked node answers bottom-up readers
   with its pre-link precision, `Tn.bottom_up_prec`, because the parameter may be inferred from a
   consumer reading that very node -- a plain `update_infer_prec` there is a lazy cycle,
-  `CamlinternalLazy.Undefined` at the first force; `init_prec_follows_param` pins both, plus bitwise parity of policy-set and hand-set half
-  parameters and policy-assigned double draws that are not f32-representable).
+  `CamlinternalLazy.Undefined` at the first force; `init_prec_follows_param` pins both, plus bitwise
+  parity of policy-set and hand-set half parameters and policy-assigned double draws that are not
+  f32-representable).
   `test_uniform_virtual_lane`'s `draw into` rows, which narrow the draw with
   `Tn.update_prec`,
   pin the parity; diagnosis recipe: run on cc under `debug_check_lane_bounds=true` (gh-ocannl-1867),
