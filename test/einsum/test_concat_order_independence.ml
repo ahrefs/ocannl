@@ -16,10 +16,13 @@
    The claims: no store's verdict or solution depends on order; an answer is accepted when stated up
    front; registering a store's constraints in one batch agrees with registering them one by one;
    positive controls stay accepted, so refusing everything fails. Nonidentity stride families
-   (gh-ocannl-2245) include plain and padded strides, solved inputs, identities and pairs; stride
-   families participate in every two-constraint store, while three-constraint stores retain the
-   original pool. A solved/pinned matrix checks both equation orientations and registration orders.
-   Counts go to stderr. The search runs whole: it takes well under a second. *)
+   (gh-ocannl-2245) include plain and padded strides, solved inputs, identities and pairs. Strides
+   enter every two-constraint store; three-constraint stores use the window/concat pool, including
+   gh-ocannl-2254's fixed [u = 3 T] family. A solved/pinned matrix checks both equation orientations
+   and registration orders. Before adding the stride families, the fixed family gave 21,124 stores,
+   14 order-dependent before its fix: 12 from composite window kernels and two from
+   gh-ocannl-2095's residual basis choice. Those two stores remain named, counted exceptions; every
+   other store remains subject to all three claims. Counts go to stderr. The search runs whole. *)
 
 open! Base
 open Ocannl
@@ -134,6 +137,9 @@ let pool =
             mk = (fun v u _ -> eq (Row.Concat [ Var v; Var u ]) (tagged 4 t));
           };
         ])
+  and fixed =
+    List.map tags ~f:(fun t ->
+        { name = Printf.sprintf "u=3 %s" t; mk = (fun _ u _ -> eq (Var u) (tagged 3 t)) })
   in
   let strides =
     List.concat_map [ false; true ] ~f:(fun padded ->
@@ -152,7 +158,7 @@ let pool =
           mk = (fun v u _ -> eq (strided 2 (Var v)) (strided stride (Var u)));
         })
   in
-  wins @ bounds @ kernels @ pairs @ concats @ strides @ stride_pairs
+  wins @ bounds @ kernels @ pairs @ concats @ fixed @ strides @ stride_pairs
 
 let item name = List.find_exn pool ~f:(fun i -> String.equal i.name name)
 
@@ -367,12 +373,22 @@ let () =
     @ List.map (choose 2 pairs) ~f:(fun is -> is @ [ concat ])
   in
   Stdio.eprintf "%d stride-top stores (not part of the golden)\n" (List.length stride_top_stores);
+  let known_2095 { items; _ } =
+    List.exists [ "a"; "h" ] ~f:(fun tag ->
+        String.equal (store_name items)
+          (Printf.sprintf "w(s1,k3 default)(v)=3 %s ; [v; u]=4 %s ; u=3 default" tag tag))
+  in
+  let dependent = List.filter stores ~f:order_dependent in
+  Stdio.eprintf "%d order-dependent stores, %d named #2095 exceptions (not part of the golden)\n"
+    (List.length dependent) (List.count stores ~f:known_2095);
   let verdicts names = outcomes (List.map names ~f:item) in
   Verdict.case "stride basis derivation" stride_matrix;
   Verdict.case "stride pair solutions" stride_pair_controls;
   Verdict.case "concatenations with tagged components settle alike in every order" (fun () ->
-      p_none ~min:16000 "stores whose verdict or solution depends on the order" stores
-        ~f:order_dependent;
+      p "exactly two stores are named as #2095 exceptions" (List.count stores ~f:known_2095 = 2);
+      p_none ~min:16000 "stores whose verdict or solution depends on the order, except #2095"
+        (List.filter stores ~f:(Fn.non known_2095))
+        ~f:(fun store -> List.mem dependent store ~equal:phys_equal);
       p_none ~min:7000 "accepted answers refused when stated up front" accepted_runs
         ~f:refuses_own_answer;
       p_none ~min:16000 "stores registered in one batch settling otherwise" stores ~f:batch_differs;
@@ -428,6 +444,25 @@ let () =
       p_all "a filler stride cannot also supply a size-2 broadcast-atom claim"
         (verdicts [ "[u; 2v]=[k; 2 default]"; "[u; 2v]=[k; 2 bcast_if_1]" ])
         ~f:(equal_outcome Refused);
+      let kernel_controls =
+        List.concat_map [ Row.default_basis; Row.bcast_if_1 ] ~f:(fun et ->
+            List.concat_map tags ~f:(fun it ->
+                let fixed_tags =
+                  if String.equal it "a" || String.equal it "h" then [ Row.default_basis; it ]
+                  else [ Row.default_basis ]
+                in
+                List.concat_map fixed_tags ~f:(fun xt ->
+                    verdicts
+                      [
+                        Printf.sprintf "w(k)(1 %s)=3 %s" et it;
+                        "[u; 2v]=[k; 2 default]";
+                        Printf.sprintf "u=3 %s" xt;
+                      ])))
+      in
+      p_all ~min:72 "all twelve composite-kernel stores are accepted in all six orders"
+        kernel_controls ~f:(function
+        | Accepted _ -> true
+        | Refused -> false);
       p_all "the issue's example is refused in every order"
         (verdicts [ "w(s1,k3 default)(v)=3 default"; "[v; u]=4 default"; "[v; u]=4 bcast_if_1" ])
         ~f:(equal_outcome Refused);
@@ -452,3 +487,71 @@ let () =
                 (List.Assoc.find_exn sol ~equal:String.equal "u")
                 (Some (3, "a"))
           | Refused -> false))
+
+(* Composite kernels meet the same arithmetic and closing rules as a bare variable. These probes
+   also exercise a kernel equation that cannot solve eagerly, so recursing on the unchanged window
+   would livelock. *)
+let () =
+  let dim d = tagged d Row.default_basis in
+  let affine v = Row.Affine { stride = 2; over = Row.Var v; conv = None; stride_offset = 0 } in
+  let settled batches =
+    match run batches with Ok ([], env) -> Some env | Ok (_ :: _, _) | Error _ -> None
+  in
+  let sized env v d =
+    match Row.get_dim_from_env env v with
+    | Some (Dim { d = actual; basis; _ }) -> actual = d && String.equal basis Row.default_basis
+    | _ -> false
+  in
+  Verdict.case "composite window kernel arithmetic and deferral" (fun () ->
+      let v = Row.get_var () in
+      p "an affine kernel is solved through its expression"
+        (Option.value_map
+           (settled [ (Row.Stage1, [ eq (window ~kernel:(affine v) (dim 1)) (dim 4) ]) ])
+           ~default:false
+           ~f:(fun env -> sized env v 2));
+      let v = Row.get_var () and u = Row.get_var () in
+      let kernel = Row.Concat [ Var v; Var u ] in
+      let held = eq (window ~kernel (dim 1)) (dim 3) in
+      p "a multi-variable kernel equation defers, then drains after a component is sized"
+        (match run [ (Row.Stage1, [ held ]) ] with
+        | Ok (_ :: _, _) ->
+            Option.value_map
+              (settled [ (Row.Stage1, [ held ]); (Row.Stage1, [ eq (Var u) (dim 1) ]) ])
+              ~default:false
+              ~f:(fun env -> sized env v 2 && sized env u 1)
+        | _ -> false);
+      let v = Row.get_var () and u = Row.get_var () in
+      let kernel = Row.Concat [ affine v; dim 1 ] in
+      Row.add_resolve_at_use_dim u;
+      p "composite kernel variables wait for the iterator before guessing"
+        (Option.value_map
+           (settled
+              ([ (Row.Stage1, [ eq (window ~kernel (Var u)) (dim 7); ineq (dim 3) (Var u) ]) ]
+              @ List.map [ Row.Stage2; Stage3 ] ~f:(fun stage -> (stage, []))
+              @ [ (Row.Stage4, [ close [ v; u ] ]) ]
+              @ List.map closing ~f:(fun stage -> (stage, []))))
+           ~default:false
+           ~f:(fun env -> sized env v 2 && sized env u 3));
+      let v = Row.get_var () and u = Row.get_var () in
+      let kernel = Row.Concat [ affine v; dim 1 ] in
+      p "an unbounded iterator closes before the composite kernel variables"
+        (Option.value_map
+           (settled
+              ([ (Row.Stage1, [ eq (window ~kernel (Var u)) (dim 7) ]) ]
+              @ List.map [ Row.Stage2; Stage3 ] ~f:(fun stage -> (stage, []))
+              @ [ (Row.Stage4, [ close [ v; u ] ]) ]
+              @ List.map closing ~f:(fun stage -> (stage, []))))
+           ~default:false
+           ~f:(fun env ->
+             sized env v 3
+             &&
+             match Row.get_dim_from_env env u with
+             | Some (Dim { d = 1; basis; _ }) -> String.equal basis Row.bcast_if_1
+             | _ -> false));
+      let sym, _ = Ir.Indexing.get_static_symbol ~static_range:3 Ir.Indexing.Empty in
+      p "a rigid symbolic kernel cannot be equated with a concrete kernel size"
+        (match
+           run [ (Row.Stage1, [ eq (window ~kernel:(Row.get_sym_dim sym) (dim 1)) (dim 3) ]) ]
+         with
+        | Error _ -> true
+        | Ok _ -> false))

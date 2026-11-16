@@ -1,7 +1,8 @@
 stride basis rule agrees with pinned extents in both orientations and orders: true
 pinned stride pairs size the other extent in both orders: true
 open stride pairs close to equal sized extents: true
-stores whose verdict or solution depends on the order: true
+exactly two stores are named as #2095 exceptions: true
+stores whose verdict or solution depends on the order, except #2095: true
 accepted answers refused when stated up front: true
 stores registered in one batch settling otherwise: true
 over 1,500 stores are accepted, so refusing everything fails: true
@@ -13,7 +14,13 @@ a later plain k keeps both concatenations' shared claim h: true
 a later plain k keeps both concatenations' shared claim bcast_if_1: true
 a stride of the broadcast top settles in every order: true
 a filler stride cannot also supply a size-2 broadcast-atom claim: true
+all twelve composite-kernel stores are accepted in all six orders: true
 the issue's example is refused in every order: true
 and so is #1935's held-set vetting case, a named claim against a plain size: true
 control: [v; u] = 4 a with v = 1 a takes u = 3 a in every order: true
 control: [u; 2v] = [k; 2 a] with k = 3 default takes u = 3 a in every order: true
+an affine kernel is solved through its expression: true
+a multi-variable kernel equation defers, then drains after a component is sized: true
+composite kernel variables wait for the iterator before guessing: true
+an unbounded iterator closes before the composite kernel variables: true
+a rigid symbolic kernel cannot be equated with a concrete kernel size: true
