@@ -594,6 +594,10 @@ exact_partials_ratchet.ml: [scanner-refusal:958e88eddd55da1a156f3795cd586c78] be
 exact_partials_ratchet.ml: [scanner-refusal:b30b6b3be7749ff984d2979f5a8fe292] arrayjit package's test (claim) is catalogued beside exact_partials_ratchet.expected, exact_partials_scan_cases.expected: true
 exact_partials_ratchet.ml: [scanner-refusal:392052035d276f11311768815316b580] every sentence claiming (claim) is catalogued beside exact_partials_ratchet.expected, exact_partials_scan_cases.expected: true
 exact_partials_ratchet.ml: [scanner-refusal:fa85b1960c6367c9216c627d02ede0e7] every exemption row (claim) is catalogued beside exact_partials_ratchet.expected, exact_partials_scan_cases.expected: true
+premise_ratchet.ml has exactly the explicitly assigned refusal controls: true
+premise_ratchet.ml: [scanner-refusal:b58a95cec37dfce6d01a2e4de53038d6] test source parses (claim) is catalogued beside premise_ratchet.expected, premise_scan_cases.expected: true
+premise_ratchet.ml: [scanner-refusal:e74f4879325b87eebe84c1ce30d37ed2] premise debt has (claim) is catalogued beside premise_ratchet.expected, premise_scan_cases.expected: true
+premise_ratchet.ml: [scanner-refusal:b35b45534098c6165bc2d50aab63313c] contains exactness premises (claim) is catalogued beside premise_ratchet.expected, premise_scan_cases.expected: true
 fp_contract_pin_scan.ml has exactly the explicitly assigned refusal controls: true
 fp_contract_pin_scan.ml: [scanner-refusal:106879e8d84d7b106e818ac1ddc61a4f] listed as pinned (claim) is catalogued beside fp_contract_pin_scan.expected: true
 fp_contract_pin_scan.ml: [scanner-refusal:777651b1b86abfe512e2d3a3f485ce6d] marked claim is (claim) is catalogued beside fp_contract_pin_scan.expected: true

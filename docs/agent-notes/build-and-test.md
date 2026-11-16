@@ -2969,6 +2969,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `<name>-unoptimized.ll` and `<name>.ll` under the gate a backend's own lowering uses, in
   `_build/default/<test dir>/build_files/<exe>/` (`ll_test_dump` pins it). `optimize_scoped` optimizes
   `raw`, so those two files are `raw`'s; the backend's source for the routine shows the scoped program.
+- `premise_ratchet` (gh-ocannl-2194) holds per-file exact counts of `Ll_test.exact_partials`
+  applications outside `Premise_scan`'s closed checked-products/reference protocol. Local reader/comparison wrappers,
+  reduction cells and executed-reference wrappers cover the coalescing and masked fragment sites.
+  Unknown forms stay debt; a row is not a diagnosis of a wrong premise. Convert when next touched and
+  lower its row in the same commit; stale rows and new uncovered sites both fail.
 - `ll_test_ratchet` prints an adopted-but-still-hand-building census (gh-ocannl-1090): the same
   syntactic record and private-traversal counts, sorted by source path, for adopted sources with
   either count nonzero. These golden rows are informative and promotable, with no growth cap;

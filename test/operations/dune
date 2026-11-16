@@ -185,6 +185,8 @@
   (alias runtest-operand_key_scan_cases)
   (alias runtest-optional_arg_inventory)
   (alias runtest-optional_arg_inventory_control)
+  (alias runtest-premise_ratchet)
+  (alias runtest-premise_scan_cases)
   (alias runtest-provenance_tag_inventory)
   (alias runtest-provenance_tag_scan_cases)
   (alias runtest-refusal_control_scan_cases)
@@ -403,6 +405,8 @@
   (alias runtest-placement_search_parity)
   (alias runtest-placement_surface)
   (alias runtest-prefix_scan_fp_licences)
+  (alias runtest-premise_ratchet)
+  (alias runtest-premise_scan_cases)
   (alias runtest-provenance_tag_inventory)
   (alias runtest-qkv_zero_init-approximate)
   (alias runtest-refused_action_streams)
@@ -10747,6 +10751,38 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(executable
+ (name premise_ratchet)
+ (modules premise_ratchet)
+ (libraries base stdio test_scan arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- AST-only test premise census.
+ (targets premise_ratchet.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (source_tree ../..)
+  (sandbox always))
+ (action
+  (with-stdout-to
+   premise_ratchet.actual
+   (run %{dep:premise_ratchet.exe} %{workspace_root}))))
+
+(rule
+ (alias runtest-premise_ratchet)
+ (package neural_nets_lib)
+ (action
+  (diff premise_ratchet.expected premise_ratchet.actual)))
+
+(test
+ ; ocannl-backend: none -- synthetic parse-tree controls.
+ (name premise_scan_cases)
+ (modules premise_scan_cases)
+ (libraries base test_scan arrayjit.verdict)
+ (deps ocannl_config))
+
 (rule
  (alias runtest-primitive_ops)
  (package neural_nets_lib)
@@ -11150,6 +11186,9 @@
   exact_partials_ratchet.ml
   exact_partials_ratchet.expected
   exact_partials_scan_cases.expected
+  premise_ratchet.ml
+  premise_ratchet.expected
+  premise_scan_cases.expected
   fp_contract_pin_scan.ml
   fp_contract_pin_scan.expected
   operand_key_ratchet.ml
@@ -11245,6 +11284,8 @@
    ll_test_ratchet.expected,ll_test_scan_cases.expected
    exact_partials_ratchet.ml
    exact_partials_ratchet.expected,exact_partials_scan_cases.expected
+   premise_ratchet.ml
+   premise_ratchet.expected,premise_scan_cases.expected
    fp_contract_pin_scan.ml
    fp_contract_pin_scan.expected
    operand_key_ratchet.ml

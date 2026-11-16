@@ -105,6 +105,7 @@
   ll_test_scan
   operand_key_scan
   exact_partials_scan
+  premise_scan
   mutation_serial_scan
   open_node_scan
   debug_name_scan

@@ -115,6 +115,9 @@ module Exact_partials_scan = Exact_partials_scan
 (** Prose claiming the exactness of partial sums, and whether an [Ll_test.exact_partials] derivation
     stands beside it (gh-ocannl-1729). *)
 
+module Premise_scan = Premise_scan
+(** Checked operand and executed-reference provenance for exactness-premise applications. *)
+
 module Mutation_serial_scan = Mutation_serial_scan
 (** Holding every write to the inference session's module-level mutable state to
     [Row.note_mutation], or to an in-place classification (gh-ocannl-1506). *)
