@@ -702,7 +702,9 @@ let () =
                   >= 3. * grown (fun (t, _, b) -> over_build (t, b)) cycle_walk)));
       (* gh-ocannl-1977: a bare row variable's solution emitted past the entries it bounds, so a
          residual stack stored the transitive closure of its row bounds and re-emitted each pair per
-         solution. The control is that emission, which closes the same shapes. *)
+         solution. The control restores that emission and, since gh-ocannl-2182, the entry's
+         GLB-to-value and result-to-value emissions for values with axes too. It closes the same
+         shapes. *)
       let resnet_doublings =
         List.zip_exn (List.drop_last_exn resnet_builds) (List.tl_exn resnet_builds)
       in

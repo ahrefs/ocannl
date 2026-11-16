@@ -10,8 +10,8 @@
 
     The sweep holds the solver to the constraints themselves and to the emission it replaced, on
     seeded random stores: every solution it reports must satisfy its store, checked here on ground
-    rows, and no store the old emission solved may be refused. Differences in how a store closes are
-    expected, and counted on stderr. *)
+    rows. The original and reduced emissions must give the same refusal or the same ground rows for
+    every store; stderr counts differences, and the claim below rejects any. *)
 
 open! Base
 open Ocannl
@@ -68,7 +68,9 @@ let scenario name ~leaves ~rows steps =
         (String.concat ~sep:" " (List.map rows ~f:(fun r -> "[" ^ axes env r ^ "]")))
   | exception Row.Shape_error (msg, _) -> Stdio.printf "%s: Shape_error: %s\n" name msg
 
-(* What must go past the entry. *)
+(* End-to-end bound reach, now carried by GLB forwarding even without the visit emissions
+   (gh-ocannl-2126, gh-ocannl-2182). These scenarios pin the closed rows, not which mechanism
+   transports the bound. The retained operand-side visit has a cost pin in [scheme_payoff]. *)
 let () =
   let v = fresh () and e = fresh () and l = fresh () in
   scenario "a value with axes reaches the far operand: v <= e <= leaf, v := [3]" ~leaves:[ l ]
@@ -79,7 +81,7 @@ let () =
     ~rows:[ v; e; u ]
     [ [ ineq (closed [ 7 ]) e; ineq e v ]; [ eq v u ] ]
 
-(* What need not: every fact still arrives through the entry. *)
+(* Result-side and alias paths: every fact still arrives through the entry. *)
 let () =
   let v = fresh () and e = fresh () and r = fresh () in
   scenario "the result side, value with axes: r <= e <= v, v := [5]" ~leaves:[ r ] ~rows:[ r; e; v ]
