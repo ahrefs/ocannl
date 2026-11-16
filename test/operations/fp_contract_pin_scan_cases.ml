@@ -279,4 +279,23 @@ let report got =
 let () = report (Context.get_values ctx tensor)
 |ocaml}
     );
+    ( "unused comparator factory is not a comparison",
+      false,
+      {ocaml|
+open Verdict.Claims
+let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let make () = eq
+let got = Context.get_values ctx tensor
+let () = p "equal" (let _unused = make () in Float.equal got.(0) 1.)
+|ocaml}
+    );
+    ( "callback returns an unused comparator",
+      false,
+      {ocaml|
+open Verdict.Claims
+let eq x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let got = Context.get_values ctx tensor
+let () = p "equal" (let _unused = List.map [got] ~f:(fun _ -> eq) in Float.equal got.(0) 1.)
+|ocaml}
+    );
   ]

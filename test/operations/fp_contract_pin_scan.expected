@@ -29,6 +29,8 @@ case: code subject -- callback module shadowed: true
 case: code subject -- map callback tuple: true
 case: code subject -- iteri index is not an element: true
 case: code subject -- unary helper inside quantified callback: true
+case: code subject -- unused comparator factory is not a comparison: true
+case: code subject -- callback returns an unused comparator: true
 case: a pinned claim is listed as pinned: true
 case: a marked claim is listed with its kind: true
 case: a claim with neither pin nor marker is refused: true

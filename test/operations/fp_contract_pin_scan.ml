@@ -36,16 +36,17 @@
    Ll_test.execute_with_census with an optimized program and labelled read. A recognised claim must
    reach both an applied comparator and an output-read dependency. Summaries union expression
    children and tuple bindings: conservative dependency accounting, not per-element provenance.
-   Local function parameters union the arguments of lexically resolved calls in this file, to a
-   finite monotone fixpoint (recursive calls included). Escaping helpers receive no evidence from
-   unknown external callers; uncalled parameters stay unknown. The List/Array iter, iteri, map,
-   mapi, for_all, for_alli, iter2[_exn] and map2[_exn] table maps collection dependencies into
-   inline labelled f callbacks, treating a comparator callback as applied (index parameters stay
-   unknown), including tuple patterns. Tuple components share their collection's union; this is not
-   per-element provenance. Other higher-order calls, mutable storage, external helper bodies and
-   exported module-structure values remain outside this extension. Calls have an identifier claim
-   callee and operands in one application node; operator-based application, partial helper
-   applications, omitted optional defaults and bare external-reader aliases are not reconstructed.
+   Ordinary function parameters ([fun x ->] or [let f x =]) union the arguments of lexically
+   resolved calls in this file, to a finite monotone fixpoint (recursive calls included). Escaping
+   helpers receive no evidence from unknown external callers; uncalled parameters stay unknown. The
+   List/Array iter, iteri, map, mapi, for_all, for_alli, iter2[_exn] and map2[_exn] table maps
+   collection dependencies into inline labelled f callbacks with ordinary parameters, treating a
+   comparator callback as applied (index parameters stay unknown), including tuple patterns. Tuple
+   components share their collection's union; this is not per-element provenance. Other higher-order
+   calls, mutable storage, external helper bodies and exported module-structure values remain
+   outside this extension. Calls have an identifier claim callee and operands in one application
+   node; operator-based application, partial helper applications, function-case parameters, omitted
+   optional defaults and bare external-reader aliases are not reconstructed.
 
    - A PIN: the string literal [OCANNL_CC_BACKEND_FP_CONTRACT] whose next string literal is [off]
    (the [Unix.putenv] the pinned tests do at module initialization). A pin made elsewhere -- a dune
@@ -133,6 +134,7 @@ type evidence = {
   bits : bool;
   claim : bool;
   helpers : int list;
+  call_compared : bool;
 }
 
 let unknown =
@@ -143,6 +145,7 @@ let unknown =
     bits = false;
     claim = false;
     helpers = [];
+    call_compared = false;
   }
 
 let union a b =
@@ -152,6 +155,7 @@ let union a b =
     output = a.output || b.output;
     bits = a.bits || b.bits;
     claim = false;
+    call_compared = a.call_compared || b.call_compared;
     helpers = List.dedup_and_sort (a.helpers @ b.helpers) ~compare:Int.compare;
   }
 
@@ -357,7 +361,10 @@ let code_claim_lines content =
             let callback_compared =
               Option.is_some (callback_slots path)
               && List.exists args ~f:(function
-                | Labelled "f", callback -> (self#summary env callback).comparator
+                | Labelled "f", callback ->
+                    let summary = self#summary env callback in
+                    if List.is_empty summary.helpers then summary.comparator
+                    else summary.call_compared
                 | _ -> false)
             in
             let applied =
@@ -365,7 +372,8 @@ let code_claim_lines content =
               &&
               if List.is_empty fn_summary.helpers then List.length positional >= 2
               else
-                List.exists fn_summary.helpers ~f:(fun key ->
+                fn_summary.call_compared
+                && List.exists fn_summary.helpers ~f:(fun key ->
                     Option.value_map (Hashtbl.find functions key) ~default:false ~f:(fun params ->
                         List.length args >= List.length params))
             in
@@ -438,6 +446,7 @@ let code_claim_lines content =
                   body with
                   comparator = body.comparator || body.compared;
                   compared = false;
+                  call_compared = body.compared;
                   helpers = [ e.pexp_loc.loc_start.pos_cnum ];
                 };
             result
