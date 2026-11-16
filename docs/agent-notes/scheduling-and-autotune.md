@@ -2999,6 +2999,13 @@ files.
   directory across two-arm scenarios — set `tune_placement_store=false` (or pass
   `~placement_store:false`; gh-ocannl-1020) rather than deleting the `placements-` entries:
   `autotune_arm_containment`'s rule passes it on the command line.
+- **A replay lifecycle fixture needs a nonempty recorded placement** (gh-ocannl-2208).
+  `Default` is recorded but applies empty decision lists and mints no replay context;
+  `Materialize_all` applies the embedded nodes. `wrapper_release_paths` scripts the recording
+  arms' admitted readings through `on_candidate_measured` (A slower than B), under
+  `with_uncontended_test_windows`, so the store records B independent of load. A forced
+  `ship_arm` cannot seed this fixture: it bypasses the placement store entirely. Removing the
+  replay application's `decided` tracking must fail the replay case's allocation census.
 - **A test claiming that a store or a replay happened waives on the cache's REPORTED refusal, not
   on a reference context** (gh-ocannl-1040/1043). Every store and lookup absorbs a filesystem
   refusal by design: the lock, the regime stamp, the write, or a Windows commit that outlives
