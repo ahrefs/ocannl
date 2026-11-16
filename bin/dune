@@ -159,7 +159,15 @@
    (run %{exe:compilation_speed.exe} 1 --ocannl_backend=cc)
    (run %{exe:schedule_bench.exe} 2 1 2 2 1 --ocannl_backend=cc)
    (run %{exe:cpu_vectorization_bench.exe} 2 1 --ocannl_backend=cc)
-   (run %{exe:companion_flavor_bench.exe} diag 8 4 1 --ocannl_backend=cc)
+   ; --allow-unmeasured: a refused timing is the machine's verdict, as for the next canary.
+   (run
+    %{exe:companion_flavor_bench.exe}
+    diag
+    8
+    4
+    1
+    --allow-unmeasured
+    --ocannl_backend=cc)
    (run %{exe:narrow_storage_bench.exe} 2 1 1 --ocannl_backend=cc)
    (run %{exe:narrow_gebp_bench.exe} f32 2 1 1 1 --ocannl_backend=cc)
    (run %{exe:device_props.exe} --ocannl_backend=cc)
@@ -178,6 +186,8 @@
     --ocannl_backend=cc))))
 
 (executable
+ ; cc-vector-width: independent -- it claims nothing about what a search seeds or crowns: every
+ ; variant, the tuned crown included, is checked only against the default's output, exactly.
  (package neural_nets_lib)
  (public_name companion_flavor_bench)
  (name companion_flavor_bench)

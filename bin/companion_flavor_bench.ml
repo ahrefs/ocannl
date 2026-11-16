@@ -13,14 +13,25 @@
 
    Workloads: - [diag N K]: tune_footprint_default's routine in its materialize-all arm, an [N x K]
    by [K x N] product (materialized) read through its diagonal -- the companion. Defaults 8 32, the
-   routine's own geometry. - [conv B]: the cifar_resnet stage-1 conv with its bias + relu tail, [B]
-   images of 32x32x16 into 16 channels through a padded 3x3 window (default 64, the workload's
-   batch).
+   routine's own geometry. - [tail M N K]: an [M x K] by [K x N] product (materialized) with a bias
+   + relu tail, the companion of the unfused flavors -- one large enough to clear the renderer's
+   launch floor (gh-ocannl-1843). Defaults 256 256 64. - [conv B]: the cifar_resnet stage-1 conv
+   with its bias + relu tail, [B] images of 32x32x16 into 16 channels through a padded 3x3 window
+   (default 64, the workload's batch).
 
-   Usage: companion_flavor_bench diag [N K] [repeats] | companion_flavor_bench conv [B] [repeats]
-   (repeats default 16). Measure through benchmarks/bin_cells.py; the backend is pinned to cc unless
-   one is configured. Every variant prints its [bench-result] line; a failed check exits 1 after all
-   have reported. *)
+   After the seeds, the [tuned] variant is the tuner's own crown (gh-ocannl-1843): a full
+   [Autotune.tune] search with the disk cache disabled, its winner's label printed as a [crown]
+   line, then checked and timed like every seed. A search that refused a timing window for
+   contention, timed nothing or did not search is reported as a failed variant, not a crown. The
+   harness uses only APIs older than gh-ocannl-1843, so one source builds at a base and at a head
+   and [bin_cells.py --arm-exe] pairs their variants by label.
+
+   Usage: companion_flavor_bench diag [N K] [repeats] | companion_flavor_bench tail [M N K]
+   [repeats] | companion_flavor_bench conv [B] [repeats] (repeats default 16). Measure through
+   benchmarks/bin_cells.py; the backend is pinned to cc unless one is configured. Every timed
+   variant prints its [bench-result] line; a failed check exits 1 after all have reported, and a
+   timing refused for host contention (no result line) exits 3, the box's verdict, unless
+   [--allow-unmeasured] (the bin-smoke canary's, which asks only whether the pipeline runs). *)
 
 open Base
 open Ocannl
@@ -78,6 +89,29 @@ let diag ~n ~k =
     w_exact = true;
   }
 
+let tail ~m ~n ~k =
+  let x = ints "cfb_tx" ~rows:m ~cols:k 7 in
+  let y = ints "cfb_ty" ~rows:k ~cols:n 5 in
+  (* The bias lifts every sum above zero, so the relu passes every cell and the output
+     discriminates. *)
+  let bias =
+    TDSL.ndarray
+      (Array.init n ~f:(fun i -> Float.of_int (300 + (i % 5))))
+      ~label:[ "cfb_tbias" ] ~output_dims:[ n ] ()
+  in
+  let%op prod = x +* "ik; kj => ij" y in
+  let%op out = relu (prod + bias) in
+  let mat = [ prod.Tensor.value ] in
+  {
+    w_name = Printf.sprintf "tail%dx%dx%d" m n k;
+    w_segment = false;
+    w_comp = Train.forward out;
+    w_out = out;
+    w_mat = mat;
+    w_ctx = Context.decide_materialized (make_ctx ()) mat;
+    w_exact = true;
+  }
+
 let conv ~b =
   let x0 =
     NTDSL.init ~l:"cfb_x0" ~prec:Ir.Ops.single ~b:[ b ] ~o:[ 32; 32; 16 ]
@@ -123,10 +157,15 @@ let () =
         let n = Bench_args.int args 1 ~name:"N" ~default:8 in
         let k = Bench_args.int args 2 ~name:"K" ~default:32 in
         (diag ~n ~k, Bench_args.int args 3 ~name:"repeats" ~default:16)
+    | "tail" ->
+        let m = Bench_args.int args 1 ~name:"M" ~default:256 in
+        let n = Bench_args.int args 2 ~name:"N" ~default:256 in
+        let k = Bench_args.int args 3 ~name:"K" ~default:64 in
+        (tail ~m ~n ~k, Bench_args.int args 4 ~name:"repeats" ~default:16)
     | "conv" ->
         let b = Bench_args.int args 1 ~name:"B" ~default:64 in
         (conv ~b, Bench_args.int args 2 ~name:"repeats" ~default:16)
-    | other -> Bench_args.bad args "unknown workload %S (diag or conv)" other
+    | other -> Bench_args.bad args "unknown workload %S (diag, tail or conv)" other
   in
   let limits = Context.hardware_limits w.w_ctx in
   let accum_prec = Fn.id in
@@ -217,7 +256,7 @@ let () =
     | values, ms -> Ok (values, ms)
     | exception exn -> Error (Exn.to_string exn)
   in
-  let failed = ref 0 in
+  let failed = ref 0 and refused = ref 0 in
   let report ~variant ~reference result =
     match result with
     | Error why ->
@@ -242,11 +281,15 @@ let () =
                    else "output differs from the default's beyond 1e-4 relative")
         in
         (match check with Bench_out.Failed _ -> Int.incr failed | _ -> ());
-        let seconds = Option.value_map ms ~default:Float.nan ~f:(fun ms -> ms /. 1000.) in
-        p "  %-48s %s\n" variant
-          (Option.value_map ms ~default:"timing refused" ~f:(fun ms ->
-               Printf.sprintf "%.3f us" (ms *. 1000.)));
-        Bench_out.result ~variant ~check ~seconds;
+        (match ms with
+        | Some ms ->
+            p "  %-48s %.3f us\n" variant (ms *. 1000.);
+            Bench_out.result ~variant ~check ~seconds:(ms /. 1000.)
+        | None ->
+            (* The timer refused every window for host contention: the box's verdict, not the
+               variant's, so no result line -- the run exits 3 (benchmarks/bin_cells.py). *)
+            Int.incr refused;
+            p "  %-48s timing refused (host contention)\n" variant);
         ms
   in
   let reference, default_ms =
@@ -265,9 +308,66 @@ let () =
   in
   let prod_ms = timed ~kind:"prod" ~enum:production prod in
   let back_ms = timed ~kind:"rec" ~enum:recovered back in
+  (* The tuner's crown: a searched [Autotune.tune] with the disk cache disabled, admitted only as a
+     completed, uncontended search that timed a winner. *)
+  let crown_ms =
+    let variant = "tuned" in
+    let lbl = ref "" and best = ref Float.nan and outcome = ref None and contended = ref 0 in
+    let tuned () =
+      Autotune.tune ~name:variant ~search:true ~cache_dir:""
+        ~report:(fun (r : Autotune.report) ->
+          lbl := r.Autotune.best_label;
+          best := r.Autotune.best_ms;
+          contended := r.Autotune.timings_contended;
+          outcome := Some r.Autotune.outcome)
+        w.w_ctx (named variant w.w_comp) Ir.Indexing.Empty
+    in
+    let result =
+      match tuned () with
+      | exception exn -> Error (Exn.to_string exn)
+      | ctx, routine -> (
+          let admitted =
+            match !outcome with
+            | Some Autotune.Searched when !contended > 0 ->
+                (* A truncated comparison crowns nothing; like a refused timing, host contention. *)
+                Error
+                  (Printf.sprintf "contended: the search refused %d timing window(s)" !contended)
+            | Some Autotune.Searched when Float.is_finite !best && not (String.is_empty !lbl) ->
+                Ok ()
+            | Some Autotune.Searched -> Error "the search timed no candidate"
+            | Some o -> Error ("the tune did not search: " ^ Autotune.outcome_name o)
+            | None -> Error "the tune reported nothing"
+          in
+          match admitted with
+          | Error why ->
+              Context.release ctx;
+              Error why
+          | Ok () -> (
+              match
+                let ctx = Context.run ctx routine in
+                let values = Context.get_values ctx w.w_out.Tensor.value in
+                let r = Autotune.time_routine ~timing:Autotune.Queued ~repeats ctx routine in
+                Context.release ctx;
+                (values, Autotune.admitted_timing_ms r)
+              with
+              | v -> Ok v
+              | exception exn -> Error (Exn.to_string exn)))
+    in
+    p "crown %s: %s (search best %.4f ms)\n" w.w_name
+      (if String.is_empty !lbl then "-" else !lbl)
+      !best;
+    match result with
+    | Error why when String.is_prefix why ~prefix:"contended:" ->
+        Int.incr refused;
+        p "  %-48s timing refused (%s)\n" variant why;
+        None
+    | _ -> report ~variant ~reference result
+  in
   let best l = List.min_elt (List.map l ~f:snd) ~compare:Float.compare in
   let show = Option.value_map ~default:"-" ~f:(fun ms -> Printf.sprintf "%.3f us" (ms *. 1000.)) in
-  p "summary %s: default %s; best production %s\n" w.w_name (show default_ms) (show (best prod_ms));
+  p "summary %s: default %s; best production %s; tuned %s\n" w.w_name (show default_ms)
+    (show (best prod_ms))
+    (show crown_ms);
   List.iter
     (List.dedup_and_sort ~compare:String.compare (List.map back_ms ~f:fst))
     ~f:(fun cls ->
@@ -276,3 +376,6 @@ let () =
   if !failed > 0 then (
     p "companion_flavor_bench: %d variant(s) failed\n" !failed;
     Stdlib.exit 1)
+  else if !refused > 0 && not (Bench_args.flag args ~name:"allow-unmeasured") then (
+    p "companion_flavor_bench: %d variant(s) refused for host contention\n" !refused;
+    Stdlib.exit 3)
