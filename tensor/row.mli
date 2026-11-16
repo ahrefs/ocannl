@@ -154,8 +154,9 @@ val row_visit_emissions : unit -> int
 val reset_row_visit_emissions : unit -> unit
 
 val with_transitive_row_emissions : (unit -> 'a) -> 'a
-(** Runs the function with a bare row variable's solution also emitting the inequalities past the
-    entries bounded by it, as it did before gh-ocannl-1977: a test's reference, which stores the
+(** Restores the original row-visit emissions: the entry's GLB to the value, its other results to
+    the value, and the value to its operands even for a bare variable (gh-ocannl-1977,
+    gh-ocannl-2182). The store sweep and [scheme_payoff] use this reference, which stores the
     transitive closure of the row bounds. *)
 
 val dim_cycle_visits : unit -> int
