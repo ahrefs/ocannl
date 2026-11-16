@@ -61,8 +61,9 @@
    compared, at the exact tolerance, against its own segmentation on the default preset — the run it
    replaces one segment's schedule of — and that reference is compared against the unscheduled form
    up to f32 rounding. HIP additionally checks whole-routine seeds and default-preset segmentations
-   with zero tolerance, under both hip_fast_math regimes (gh-ocannl-1835); CUDA and Metal retain the
-   rounding allowance. This leg covers each seed alone, not recombined tuner candidates. *)
+   with zero tolerance under the selected hip_fast_math regime (both regimes were checked on gfx1151
+   and gfx1102 in gh-ocannl-1835); CUDA and Metal retain the rounding allowance. This leg covers
+   each seed alone, not recombined tuner candidates. *)
 
 open Base
 open Ocannl
@@ -768,11 +769,6 @@ let seed_leg ?(declines = false) ?(row = `Batch)
           ~f:Fn.id);
     let hip_leg = Verdict.leg ~when_:(String.equal backend_name "hip") ~on:backend_name () in
     let hip_exact ~against ~want name what_ran got =
-      let max_diff =
-        Array.fold2_exn got want ~init:0. ~f:(fun m g w -> Float.max m (Float.abs (g -. w)))
-      in
-      Stdio.eprintf "%s: %s against %s: max |diff| %.9g (not part of the golden)\n%!" name what_ran
-        against max_diff;
       close ~tol:(fun _ -> 0.) ~against ~want name what_ran got
     in
     (* HIP may propose only segment seeds for this block. Quantify their union, so an empty

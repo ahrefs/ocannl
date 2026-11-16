@@ -2610,7 +2610,8 @@ files.
   `Ll_test.backend_contraction_off ()` holds; `-no_hip_fast_math` names that run, while the default
   regime names its skips. CUDA/Metal keep their existing coverage independently of that capability.
   `schedule_strided_1x1`'s HIP leg compares the block's whole seeds and default-preset segmentations
-  with zero tolerance. It quantifies their union: HIP may seed only segments, so requiring a
+  with zero tolerance under the selected math regime (both HIP regimes were checked in that PR).
+  It quantifies their union: HIP may seed only segments, so requiring a
   nonempty whole-seed population would refuse correct runs; losing both populations still fails.
 - **CUDA and HIP compile with fast-math umbrellas by default; Metal pins safe arithmetic while
   retaining fast math functions**: CUDA passes `--use_fast_math` (unless `cuda_fast_math` is off,
