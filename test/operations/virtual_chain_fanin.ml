@@ -2844,7 +2844,8 @@ let parity ?blends ~name ~seed ~materialized ~out ~expected llc o =
    groups, each its own init/update chain, cost the wider group (3), never the blanket union (5); a
    broad init bridging two disjoint updates is charged their whole union (4, the stated conservative
    boundary, where a cell runs at most 3). Across routines, a stored init and stored update replay
-   together: the later routine's reader is charged 4. Every leg executes against a reference and a
+   together: the later routine's reader is charged 4, while a stored concat's disjoint components
+   stay apart: a one-site reader is charged one slice. Every leg executes against a reference and a
    materialized reading. *)
 
 let phase13 () =
@@ -2999,6 +3000,28 @@ let phase13 () =
    let got = execute ~name:"vcf_seq_x_b" o_b ~seed:(f.sseed ~n:dim out) ~read:[ out ] in
    p "cross-routine init and update: execution matches the reference"
      (same got [ Array.init dim ~f:reduce_ref ]));
+  (* Control across routines: A commits the concat alone; B's [d[j] := a[j] + w[j]] reads it at one
+     site. The stored components write disjoint slices, so they stay apart: [{x,y,w}] = 3, virtual
+     at cap 3 -- grouping them would charge [{x,y,z,w}] = 4. *)
+  (let a = cmk "sa_xd" and d = cmk "sd_xd" and out = cmk "so_xd" in
+   materialize out;
+   let ctx = LL.empty_optimize_ctx () in
+   LL.virtualize_settings.max_inline_fanin <- -1;
+   let o_a = optimize_in ctx ~name:"vcf_seq_xd_a" (List.reduce_exn ~f:seq (concat a)) in
+   LL.virtualize_settings.max_inline_fanin <- 3;
+   let reader =
+     let j = sym () in
+     loop_n j cells (set d [| iter j |] (add (get a [| iter j |]) (get f.sw [| iter j |])))
+   in
+   let o_b = optimize_in ctx ~name:"vcf_seq_xd_b" (seq reader (copy_cells ~cells out d)) in
+   p "cross-routine disjoint components: routine A commits the concat virtual" (known_virtual o_a a);
+   p
+     "cross-routine disjoint components: kept apart, so B's one-site reader is charged one slice \
+      with w (3), virtual at cap 3"
+     (fanin_of o_b d = 3 && known_virtual o_b d);
+   let got = execute ~name:"vcf_seq_xd_b" o_b ~seed:(f.sseed out) ~read:[ out ] in
+   p "cross-routine disjoint components: execution matches the reference"
+     (same got [ Array.init cells ~f:(fun j -> concat_ref j +. v f.sw j) ]));
   LL.virtualize_settings.max_inline_fanin <- saved_cap
 
 (* === Phase 14: an arm re-reading an enclosing site runs nothing new (gh-ocannl-2228) ===
