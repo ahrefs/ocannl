@@ -1,6 +1,10 @@
 a sentence holding [partial sum(s)] and [exact] or [exactly] is a claim: true
 its nearest neighbours are not: a negation, another word, a sentence apart: true
-a known gap, pinned: bare [partials] is not the phrase: true
+short exact-partials wording states the premise: true
+each sum word with exactness and each order marker states the premise in either order: true
+an association marker itself supplies the sum word: true
+nearby wording outside the closed forms is not a claim: true
+the crude negation rule excludes every new form even when it negates another property: true
 a decimal point ends no sentence: the phrase and [exact] around 0.5 are one claim: true
 the claim is reported whitespace-collapsed, one per sentence: true
 a comment holding a string with a comment's closing delimiter is one comment: true

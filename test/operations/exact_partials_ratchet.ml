@@ -23,11 +23,72 @@ module Sources = Test_scan.Config_key_scan
 let exemptions : Scan.exemption list =
   [
     {
+      Scan.path = "test/einsum/padded_operand_offset_windows.ml";
+      allowance = Uncovered 1;
+      reason =
+        "gh-ocannl-2227 debt: the header claims integer window sums are exact; derive each forward \
+         and gradient reduction from its operands";
+    };
+    {
+      Scan.path = "test/einsum/result_side_affine_forms.ml";
+      allowance = Uncovered 1;
+      reason =
+        "gh-ocannl-2227 debt: the header claims integer affine-form sums are exact; derive the \
+         individual reduction fixtures";
+    };
+    {
+      Scan.path = "test/einsum/result_side_padded_window.ml";
+      allowance = Uncovered 1;
+      reason =
+        "gh-ocannl-2227 debt: the header claims integer transposed-convolution sums are exact; \
+         derive the individual window fixtures";
+    };
+    {
+      Scan.path = "test/operations/autotune_report_drops.ml";
+      allowance = Uncovered 1;
+      reason =
+        "gh-ocannl-2227 debt: the row-input initializer claims any-order exactness; derive each \
+         row from av beside that initializer";
+    };
+    {
+      Scan.path = "test/operations/autotune_staffed_singles.ml";
+      allowance = Uncovered 1;
+      reason =
+        "gh-ocannl-2227 debt: the two-site split-reduce leg claims dyadic sums are exact; derive \
+         both matvec product populations";
+    };
+    {
       Scan.path = "test/operations/discriminating_values.ml";
       allowance = Uncovered 1;
       reason =
         "the drift claim exhibits its serial partial sums directly; an every-association \
          derivation is the follow-up";
+    };
+    {
+      Scan.path = "test/operations/exact_partials_scan_cases.ml";
+      allowance = Every;
+      reason = "the reader's cases plant the phrases on synthetic sources";
+    };
+    {
+      Scan.path = "test/operations/named_form_spec_identifiers.ml";
+      allowance = Uncovered 1;
+      reason =
+        "gh-ocannl-2227 debt: the header claims integer sums are exact; derive each named-form \
+         reduction from xs and taps";
+    };
+    {
+      Scan.path = "test/operations/padded_conv_init_leaf.ml";
+      allowance = Uncovered 1;
+      reason =
+        "gh-ocannl-2227 debt: the header claims integer convolution sums are exact; derive the \
+         forward and gradient product populations";
+    };
+    {
+      Scan.path = "test/operations/padded_window_margin_writes.ml";
+      allowance = Uncovered 1;
+      reason =
+        "gh-ocannl-2227 debt: the header claims integer window sums are exact; derive the forward \
+         and gradient product populations";
     };
     {
       Scan.path = "test/operations/scan_companion_coverage.ml";
@@ -36,11 +97,18 @@ let exemptions : Scan.exemption list =
         "leg 4 derives z's premise in its own item; this note on z's operands sits apart from it";
     };
     {
-      Scan.path = "test/support/ll_test.ml";
-      allowance = Uncovered 4;
+      Scan.path = "test/operations/schedule_coalesce.ml";
+      allowance = Uncovered 3;
       reason =
-        "the harness's operand docs state the premises its helpers are built for, exact_partials' \
-         own included; a test derives them at its use";
+        "gh-ocannl-2227 debt: two overview claims sit apart from the executed legs that derive \
+         them; the fused bias-plus-relu leg still needs its own product and bias derivation";
+    };
+    {
+      Scan.path = "test/operations/schedule_contraction_nest.ml";
+      allowance = Uncovered 1;
+      reason =
+        "gh-ocannl-2227 debt: the pipelined_leg overview sits on that helper rather than the \
+         calling item that derives its operand premise";
     };
     {
       Scan.path = "test/support/exact_partials_scan.ml";
@@ -48,9 +116,11 @@ let exemptions : Scan.exemption list =
       reason = "the reader's own documentation quotes the phrases it reads";
     };
     {
-      Scan.path = "test/operations/exact_partials_scan_cases.ml";
-      allowance = Every;
-      reason = "the reader's cases plant the phrases on synthetic sources";
+      Scan.path = "test/support/ll_test.ml";
+      allowance = Uncovered 4;
+      reason =
+        "the harness's operand docs state the premises its helpers are built for, exact_partials' \
+         own included; a test derives them at its use";
     };
   ]
 

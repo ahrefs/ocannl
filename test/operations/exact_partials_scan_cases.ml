@@ -42,8 +42,53 @@ let () =
       "(* partial sums are computed here\n\n   and exact *)";
       "(* the partial products are exact *)";
     ] ~f:(fun source -> claim_count source = 0);
-  p "a known gap, pinned: bare [partials] is not the phrase"
-    (claim_count "(* exact partials, so any association agrees *)" = 0);
+  let short_sources = [ "(* with the exact partials *)"; "(* EXACT-PARTIALS *)" ] in
+  let sum_words = [ "sum"; "sums"; "partials"; "addition"; "accumulation"; "association" ] in
+  let markers = [ "any order"; "every order"; "any association"; "every association" ] in
+  let order_sources =
+    List.concat_map (List.cartesian_product sum_words markers) ~f:(fun (sum, marker) ->
+        [
+          Printf.sprintf "(* %s is exact in %s *)" sum marker;
+          Printf.sprintf "(* in %s the %s is exact *)" marker sum;
+        ])
+  in
+  let association_sources =
+    [
+      "(* exact in any association *)";
+      "(* exact in every association *)";
+      "(* the inputs are exact in any association *)";
+      "(* the inputs are exact in every association *)";
+    ]
+  in
+  let new_sources = short_sources @ order_sources @ association_sources in
+  Stdio.eprintf "new-form controls: %d of %d recognized (not part of the golden)\n"
+    (List.count new_sources ~f:(fun source -> claim_count source = 1))
+    (List.length new_sources);
+  p_all "short exact-partials wording states the premise" short_sources ~f:(fun source ->
+      claim_count source = 1);
+  p_all "each sum word with exactness and each order marker states the premise in either order"
+    order_sources ~f:(fun source -> claim_count source = 1);
+  p_all "an association marker itself supplies the sum word" association_sources ~f:(fun source ->
+      claim_count source = 1);
+  p_all "nearby wording outside the closed forms is not a claim"
+    [
+      "(* the inputs are exact in any order *)";
+      "(* exactly two grid loops *)";
+      "(* every association of the sums narrows exactly once *)";
+      "(* the host computes an exact sum *)";
+      "(* addition is exact *)";
+      "(* sums in any order *)";
+      "(* sums are exact in a fixed order *)";
+      "(* sums are exact in any chosen order *)";
+      "(* sums are exact. Any order agrees. *)";
+      "(* sums are exact\n\nany order agrees *)";
+      "(* the exact partial products *)";
+      "(* inexact partials *)";
+      "let exact_partials = 1";
+    ] ~f:(fun source -> claim_count source = 0);
+  p_all "the crude negation rule excludes every new form even when it negates another property"
+    ("exact partials" :: List.map sum_words ~f:(fun sum -> sum ^ " is exact in every association"))
+    ~f:(fun phrase -> claim_count ("(* " ^ phrase ^ ", not approximate *)") = 0);
   p "a decimal point ends no sentence: the phrase and [exact] around 0.5 are one claim"
     (claim_count "(* the partial sums of 0.5 and 0.25 are exact *)" = 1);
   p "the claim is reported whitespace-collapsed, one per sentence"
