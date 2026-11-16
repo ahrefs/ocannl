@@ -295,7 +295,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `input` lines and the shell tier's `SHELL_GLOB`, read from where each is defined. Spell a time
   and a zone in `--since`/`--until`: git fills a bare date with the current time of day and a
   zoneless one with the local zone. `tools/test-merge-build-replay.sh` pins its shell-tier replay
-  to the script's own `--plan` merge by merge.
+  to the script's own `--plan` merge by merge. When the replay reads the config (its `config`
+  set, including `@config`, or its default trigger), it refuses `comments` directives with exit 2:
+  it does not model comment-only changes. Explicit named sets plus an explicit trigger never
+  read that config; `command` and `timeout` affect execution, which the replay does not model.
 - The merge build's harness tier runs the shell harnesses the PR's own change reaches, of every
   group, and its bound holds the whole set (gh-ocannl-1994). Until 2026-11-13 it was a shell tier
   that ran only when BOTH sides changed a script, the `--shell` group alone, because remote CI
