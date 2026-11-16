@@ -970,7 +970,9 @@ files.
   floor is sm_70, independently of the per-statement m16n8k16 arm (gh-ocannl-2251).
   `cuda_wmma_floor` recompiles the freshly rendered converted boundary at compute_75 and checks
   f32 WMMA PTX, with bf16 refused at that target. NVRTC 13.5.37 rejects compute_70; older NVRTC
-  is probed there too when accepted. No sm_70-79 execution is implied. Lowering this floor also
+  is probed there too when accepted. Its `cuda_wmma_floor-missing` alias forces the missing-NVRTC
+  arm and checks the same golden while recording environment skips for its claims. No sm_70-79
+  execution is implied. Lowering this floor also
   lowers shipping PTX on later devices to compute_75 unless another marker (notably `cp.async`)
   requires 80. Before gh-ocannl-925 the list was `[Mma_per_statement]`, which kept only
   candidates whose emitted accumulator has no enclosing

@@ -182,6 +182,7 @@
   stdio
   ocannl
   arrayjit.verdict
+  cuda_wmma_floor_claims
   test_utils
   ll_test
   cudajit_stub)

@@ -7,11 +7,11 @@
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
-open Verdict.Claims
 module LL = Ir.Low_level
 module S = Ir.Schedule
 module M = Ir.Cuda_mma
 module G = Test_utils.Generated
+module Claims = Cuda_wmma_floor_claims
 
 let render ~name ~ab_prec ~d_prec =
   let a = NTDSL.init ~l:"floor_a" ~prec:ab_prec ~i:[ 32 ] ~o:[ 32 ] ~f:(fun _ -> 1.) () in
@@ -70,20 +70,39 @@ let check_ptx arch source =
   has ptx (".target sm_" ^ Int.to_string arch)
   && has ptx "wmma.mma.sync.aligned.row.row.m16n16k16.f32.f32"
 
+let bf16_refused () =
+  let kind = M.Wmma_bf16 in
+  let bf16 =
+    String.concat ~sep:"\n"
+      ([
+         "#include <mma.h>";
+         "#include <cuda_bf16.h>";
+         "extern \"C\" __global__ void bf16_control(const __nv_bfloat16 *__mma_ap, const \
+          __nv_bfloat16 *__mma_bp, float *d) {";
+         M.wmma_frag_typ kind "accumulator" "float" None ^ " __mma_acc[1][1];";
+         "nvcuda::wmma::fill_fragment(__mma_acc[0][0], 0.0f);";
+       ]
+      @ M.wmma_k_loop_lines kind ~acc:"__mma_acc" ~ta:false ~tb:false ~lda:16 ~ldb:16 ~m:16 ~n:16
+          ~k:16
+      @ [
+          "nvcuda::wmma::store_matrix_sync(d, __mma_acc[0][0], 16, nvcuda::wmma::mem_row_major);";
+          "}";
+        ])
+  in
+  ignore (compile 80 bf16);
+  match compile 75 bf16 with
+  | _ -> false
+  | exception Nvrtc.Nvrtc_error { status; message } ->
+      Stdio.eprintf "bf16 control refusal: %s (not part of the golden)\n" message;
+      String.equal (Sexp.to_string (Nvrtc.sexp_of_result status)) "NVRTC_ERROR_COMPILATION"
+
 let () =
   Utils.settings.output_debug_files_in_build_directory <- true;
   G.init ~backend_name:"cuda";
   Test_utils.with_policy
     (fun p -> { p with fp16_arithmetic = Ir.Numerics.Fp16_wide })
     (fun () ->
-      let source = render ~name:"wmma_floor_half" ~ab_prec:Ir.Ops.half ~d_prec:Ir.Ops.half in
-      let logic = G.main_logic source in
-      p "the witness renders the wide fragment scope and both destination conversions"
-        (has logic "(wmma-f16-wide)"
-        && has logic "wmma fragment reduction body begins"
-        && has logic "__half2float" && has logic "__float2half");
-      p "compute_75 PTX targets sm_75 and accumulates WMMA f16 products in f32"
-        (check_ptx 75 source);
+      let source = lazy (render ~name:"wmma_floor_half" ~ab_prec:Ir.Ops.half ~d_prec:Ir.Ops.half) in
       let accepts_70 =
         match compile 70 "extern \"C\" __global__ void target_probe() {}" with
         | _ -> true
@@ -96,43 +115,26 @@ let () =
               message;
             false
       in
-      let leg =
+      let leg = Verdict.leg ~when_:true ~on:"NVRTC bindings unavailable" () in
+      let compute_70_leg =
         Verdict.leg ~aggregation:`Environment ~when_:accepts_70
           ~on:"NVRTC without compute_70 support" ()
       in
-      in_leg ~leg "compute_70 PTX targets sm_70 and accumulates WMMA f16 products in f32"
-        (fun label -> p label (check_ptx 70 source));
-      let shipping = M.gpu_arch_options ~target:M.Floor ~device_cc:120 source in
-      p "the wide fragment alone ships at the toolkit-adjusted f16 floor"
-        (List.equal String.equal shipping
-           (M.gpu_arch_options ~target:M.Floor ~device_cc:120 "nvcuda::wmma"));
-      p "cp.async still raises a wide-f16 kernel to the async-copy floor"
-        (List.equal String.equal
-           (M.gpu_arch_options ~target:M.Floor ~device_cc:120 (source ^ "\n/* cp.async. */"))
-           (M.gpu_arch_options ~target:M.Floor ~device_cc:120 "cp.async."));
-      let kind = M.Wmma_bf16 in
-      let bf16 =
-        String.concat ~sep:"\n"
-          ([
-             "#include <mma.h>";
-             "#include <cuda_bf16.h>";
-             "extern \"C\" __global__ void bf16_control(const __nv_bfloat16 *__mma_ap, const \
-              __nv_bfloat16 *__mma_bp, float *d) {";
-             M.wmma_frag_typ kind "accumulator" "float" None ^ " __mma_acc[1][1];";
-             "nvcuda::wmma::fill_fragment(__mma_acc[0][0], 0.0f);";
-           ]
-          @ M.wmma_k_loop_lines kind ~acc:"__mma_acc" ~ta:false ~tb:false ~lda:16 ~ldb:16 ~m:16
-              ~n:16 ~k:16
-          @ [
-              "nvcuda::wmma::store_matrix_sync(d, __mma_acc[0][0], 16, \
-               nvcuda::wmma::mem_row_major);";
-              "}";
-            ])
-      in
-      ignore (compile 80 bf16);
-      p "compute_75 refuses the otherwise compilable WMMA bf16 control"
-        (match compile 75 bf16 with
-        | _ -> false
-        | exception Nvrtc.Nvrtc_error { status; message } ->
-            Stdio.eprintf "bf16 control refusal: %s (not part of the golden)\n" message;
-            String.equal (Sexp.to_string (Nvrtc.sexp_of_result status)) "NVRTC_ERROR_COMPILATION"))
+      Claims.run ~leg ~compute_70_leg (function
+        | Claims.Wide_fragment ->
+            let logic = G.main_logic (Lazy.force source) in
+            has logic "(wmma-f16-wide)"
+            && has logic "wmma fragment reduction body begins"
+            && has logic "__half2float" && has logic "__float2half"
+        | Compute_75 -> check_ptx 75 (Lazy.force source)
+        | Compute_70 -> check_ptx 70 (Lazy.force source)
+        | Shipping_floor ->
+            List.equal String.equal
+              (M.gpu_arch_options ~target:M.Floor ~device_cc:120 (Lazy.force source))
+              (M.gpu_arch_options ~target:M.Floor ~device_cc:120 "nvcuda::wmma")
+        | Async_floor ->
+            List.equal String.equal
+              (M.gpu_arch_options ~target:M.Floor ~device_cc:120
+                 (Lazy.force source ^ "\n/* cp.async. */"))
+              (M.gpu_arch_options ~target:M.Floor ~device_cc:120 "cp.async.")
+        | Bf16_refusal -> bf16_refused ()))

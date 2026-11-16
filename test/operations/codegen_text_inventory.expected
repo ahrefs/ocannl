@@ -162,7 +162,7 @@ test/operations/cpu_vectorized.ml [run by @test/operations/runtest-cpu_vectorize
     "float4_t"
     "reinterpret_cast"
     "vector_size"
-test/operations/cuda_wmma_floor.real.ml [run by @test/operations/runtest-cuda_wmma_floor; also pins text this scan cannot name: untraced callback, unvalidated haystack]
+test/operations/cuda_wmma_floor.real.ml [run by @test/operations/runtest-cuda_wmma_floor; also pins text this scan cannot name: untraced callback, opaque aggregate component, unvalidated haystack]
     "(wmma-f16-wide)"
     ".target sm_" ^ ...
     "__float2half"
