@@ -90,10 +90,20 @@ files.
   (`nest_chain ~max_chain:1 ~shared_locals:true`) and proves `nest_hazards` over that ONE symbol:
   a two-symbol proof is not a proof for its first symbol, and only one loop goes parallel. The
   validator side is `validate_parallel ~fork_join` (C_syntax derives it from "binds no hardware
-  `Grid` index"; `Autotune.validate_segments_for_model` takes it from `is_cpu`): a materialized
-  write or `Zero_out` under no `Grid` loop is exempt from coverage, writes under one keep the rule.
-  Without it a per-nest decision is impossible -- a serial materialized-writing nest beside a
-  `Grid` one is a GPU race and was rejected. Soundness, why it holds for ANY cc schedule:
+  `Grid` index"; `Autotune.validate_segments_for_model` takes it from `is_cpu`): it counts no slot
+  for any write (gh-ocannl-1843), and only a whole-node `Zero_out` under a `Grid` loop stays
+  refused. Without it a per-nest decision is impossible -- a serial materialized-writing nest
+  beside a `Grid` one is a GPU race and was rejected. Why no slot is counted: the renderer
+  pool-dispatches only the OUTERMOST `Grid` loop of a statement path (it does not descend into a
+  `Grid` body; a declined loop renders serial), and inner `Grid` loops, `Workgroup` and `Tile_mma`
+  lane loops run serially in the chunk, so a write's only concurrent dimension is its own
+  dispatch, which encloses it; the GPU coverage rule exists because launch dimensions are
+  kernel-global, which a dispatch is not. Before gh-ocannl-1843 writes under a `Grid` loop kept the
+  rule and a `Tile_mma` store was held to it even under none, so a companion's `Grid` loop refused
+  the site's own store in every tensorized CPU seed (`missing: Grid slot 0`), the packed Serial
+  shapes included, and a sibling's `Workgroup` lane or deeper `Grid` nest refused the companion. A
+  colliding store under a hand-annotated `Grid` loop passes the validator; the renderer's
+  store-separation check refuses it (`cpu_fork_join_chains` legs 8-11). Soundness, why it holds for ANY cc schedule:
   statements are ordered by the joins; a `Local` is privatized only when all its kernel accesses
   sit in one loop body; within a dispatch the hazard proof, `parallel_grid_safe` and
   `refuse_unseparated_thread_write` decide. Fission is unchanged (it still cuts at GPU-unaligned
@@ -443,12 +453,17 @@ files.
   Grid / row-panel shapes -- are valid beside a materialized companion on cc: each `Grid` loop is a
   joined dispatch and a serial companion runs once (`validate_parallel ~fork_join`, which both the
   cc compile path and the tuner pass). `cpu_companion_geometry` gives a companion the default
-  preset's own per-nest choice (`Sched.default_cpu ~min_work:0` filtered to the companion demand;
-  the renderer's launch floor still decides at run time) where the site binds `Grid` slot 0 alone
-  with a unit lane (the packed Grid and conv direct shapes). The whole-triple form's active
-  `Workgroup` lane is a slot no companion loop covers, so its companions stay serial -- a unit lane
-  (`simd_width:1`) there would let them take Grid too, untried because it changes every
-  whole-triple seed's code. These flavors are `Excluded` beside companions
+  preset's own per-nest choice (`Sched.default_cpu` filtered to the companion demand, gated at the
+  configured `cpu_schedule_min_work` since gh-ocannl-1843: ungated, a companion below the floor
+  charged a seed a `Grid` block in `Cost_model.reuse_traffic` the default never pays, and
+  `cost_model_selection`'s capacity pick went to the default) in EVERY CPU flavor (gh-ocannl-1843,
+  appended once in `family_schedule` and in the conv builder's serial flavor): the Grid shapes,
+  the whole-triple form (its `Workgroup` lane is no hardware slot on cc), and the all-serial
+  flavors -- the packed Serial / Hoisted shapes, the scalar blocktile and the conv serial flavor,
+  whose companions ran on one core before. The demand's rules hold the boundary: the fused flavor's
+  tail (which `Fuse_epilogue` relocates) is skipped, the site's own zero excluded, and a companion
+  the preset cannot prove stays serial (`cpu_mma_companion_coverage`'s tail64 / sum64 legs). The
+  hardware-binding flavors are `Excluded` beside companions
   (`cpu_companion_exclusion`, witness prefix `cpu_companion_witness_prefix`), never `Refuted`: a
   witness must not claim a legality failure that does not happen, and companion-free sites keep
   their leaves unchanged. `Autotune.lift_cpu_companions` re-proposes them; measured: no win (M4 Pro,

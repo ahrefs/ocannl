@@ -133,13 +133,13 @@ let mma_limits =
 (* Every seed's schedule applied as the pure IR transform it is -- backend-independent. Returns the
    seeds whose schedule constructs and validates, and the ones that construct but fail
    [validate_parallel]; a construction failure is reported and counted against the claim. *)
-let constructs_and_validates ~tag ~what seeds opt =
+let constructs_and_validates ~fork_join ~tag ~what seeds opt =
   let ok = ref true in
   let valid, invalid =
     List.partition_tf seeds ~f:(fun q ->
         match Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q opt) opt with
         | o -> (
-            match LL.validate_parallel o.LL.optimize_ctx.LL.placements o.LL.llc with
+            match LL.validate_parallel ~fork_join o.LL.optimize_ctx.LL.placements o.LL.llc with
             | () -> true
             | exception _ -> false)
         | exception exn ->
@@ -217,7 +217,9 @@ let leg ~tag ~ko_extents ~nk ?(companion = false) ~build () =
   let gpu_seeds =
     unfused_seeds ~is_gpu:true ~is_cpu:false ~limits:Ir.Backend_intf.no_hardware_limits opt
   in
-  let _, gpu_invalid = constructs_and_validates ~tag ~what:"GPU blocktile" gpu_seeds opt in
+  let _, gpu_invalid =
+    constructs_and_validates ~fork_join:false ~tag ~what:"GPU blocktile" gpu_seeds opt
+  in
   p_empty (tag ^ ": every GPU blocktile seed validates") ~over:gpu_seeds gpu_invalid;
   (* The geometry the untiled kernel never had: every seed tiles the output across a workgroup, and
      the batch-grid twins spread the batch across blocks (a 64x64 block tile of a 64x64 site is one
@@ -233,7 +235,9 @@ let leg ~tag ~ko_extents ~nk ?(companion = false) ~build () =
     unfused_seeds ~is_gpu:true ~is_cpu:false ~limits:mma_limits opt
     |> List.filter ~f:(fun q -> q.Autotune.sk_mma)
   in
-  let _, mma_invalid = constructs_and_validates ~tag ~what:"GPU tensorized" mma_seeds opt in
+  let _, mma_invalid =
+    constructs_and_validates ~fork_join:false ~tag ~what:"GPU tensorized" mma_seeds opt
+  in
   p_empty (tag ^ ": every GPU tensorized seed validates") ~over:mma_seeds mma_invalid;
   p
     (tag ^ ": the tensorized seeds include unstaged, staged and pipelined-staged geometries")
@@ -245,7 +249,9 @@ let leg ~tag ~ko_extents ~nk ?(companion = false) ~build () =
     if on_gpu then Ir.Backend_intf.no_hardware_limits else Context.hardware_limits (Context.auto ())
   in
   let cpu_seeds = unfused_seeds ~is_gpu:false ~is_cpu:true ~limits:cpu_limits opt in
-  let cpu_valid, cpu_invalid = constructs_and_validates ~tag ~what:"CPU" cpu_seeds opt in
+  let cpu_valid, cpu_invalid =
+    constructs_and_validates ~fork_join:true ~tag ~what:"CPU" cpu_seeds opt
+  in
   (* The shapes binding a hardware dimension -- the pool-parallel Grid shapes and the whole-triple
      form's Workgroup lane -- used to be seeded beside a companion and decline at validation (before
      the fork-join validator, gh-ocannl-1458); gh-ocannl-1561 refuted them at seeding, and since
@@ -633,7 +639,9 @@ let padded_leg ~tag ~nk ~build () =
       List.exists (Autotune.sketch_schedule ~accum_prec ~p:q opt) ~f:(function
         | Sched.Pad _ -> true
         | _ -> false));
-  let _, invalid = constructs_and_validates ~tag ~what:"padded GPU blocktile" seeds opt in
+  let _, invalid =
+    constructs_and_validates ~fork_join:false ~tag ~what:"padded GPU blocktile" seeds opt
+  in
   p_empty (tag ^ ": every padded GPU blocktile seed validates") ~over:seeds invalid;
   if not on_gpu then
     Stdio.eprintf

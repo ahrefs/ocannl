@@ -1,36 +1,43 @@
-(* gh-ocannl-1609 (after gh-ocannl-1561): the CPU tensorized matmul flavors that bind a hardware
-   dimension, beside a companion nest, are valid on the C backends' fork-join model, and the family
-   tree EXCLUDES them as search economy rather than refuting them.
+(* gh-ocannl-1609 (after gh-ocannl-1561), gh-ocannl-1843: every CPU tensorized matmul flavor, and
+   the scalar blocktile, gives the companion nests beside it the default CPU preset's own per-nest
+   geometry, and the family tree EXCLUDES the flavors that bind a hardware dimension beside a
+   companion as search economy rather than refuting them.
 
    The whole-triple [Tile_mma] form retypes the zeroing's column loop to a [Workgroup] axis at the
    [Tensorize] lane width [m_nj] (plus a [Grid] row split when [sk_bm > 0]); the packed Grid shapes
-   [Grid]-type their row-block loop. Under hardware-thread launch semantics a nest beside the matmul
-   writing a materialized node would have to sit under loops covering those dimensions, and
-   gh-ocannl-1561 refuted the flavors on it. The C backends do not launch: each pool-parallel [Grid]
-   loop is one dispatch joined before the next statement, and code outside [Grid] loops runs once
-   ([Low_level.validate_parallel ~fork_join], gh-ocannl-1458, which the cc compile path passes). So
-   the companions either run serially (the whole-triple form, whose active [Workgroup] lane no
-   companion loop covers) or take the default preset's per-nest geometry (the packed Grid shapes,
-   [Sketch_families.cpu_companion_geometry]). The tree offers neither by default -- [Excluded] until
-   a measurement shows them winning -- and [Autotune.lift_cpu_companions] lifts them.
+   [Grid]-type their row-block loop; the packed Serial / Hoisted shapes and the blocktile annotate
+   nothing of the site. The C backends launch nothing: each pool-parallel [Grid] loop is one
+   dispatch joined before the next statement, code outside [Grid] loops runs once, and a write's
+   only concurrent slot is its own dispatch ([Low_level.validate_parallel ~fork_join],
+   gh-ocannl-1458 and gh-ocannl-1843, which the cc compile path passes). So every flavor's
+   companions take [Sketch_families.cpu_companion_geometry] -- the [Grid] choices [Sched.default_cpu
+   ~min_work:0] makes on the companion's own loops, which the claims derive rather than restate. The
+   tree offers the hardware-binding flavors only after [Autotune.lift_cpu_companions].
 
    Seeding uses synthetic limits (a 32-byte vector file), so the offered set is machine-independent.
-   The renderer's launch floor is disabled ([cc_grid_min_updates=0]) so every [Grid] loop of these
-   small routines renders on the pool, the companions' included.
+   The renderer's launch floor is disabled ([cc_grid_min_updates=0]), and with it the preset's work
+   threshold ([cpu_schedule_min_work=0], which the companion geometry is gated at), so every [Grid]
+   loop of these small routines is annotated and renders on the pool, the companions' included --
+   except in the floor leg, which restores a positive floor and sees the same annotation render
+   serially.
 
    1. diag8: an 8x32 by 32x8 product, [a] materialized, read through its diagonal [d] (the
    companion). The production tree offers no whole-triple seed and excludes the form naming [d]; the
-   lift recovers it. Every recovered seed passes [validate_parallel ~fork_join:true], fails the
-   hardware-thread mode (the whole-triple form's companion misses the active [Workgroup] slot -- the
-   negative control that shows the fork-join mode is what admits it), leaves the companion serial,
-   and computes [d] bit for bit across two runs (integer inputs, exact sums; the second run catches
-   a missed zeroing). 2. diag64: tall enough for the Grid shapes (four 16-row blocks); the same,
-   plus the packed Grid shapes are excluded and recovered, and in each recovered Grid seed the
-   companion's own [Grid] loop renders as a pool dispatch. 3. Control, the 64-row product with no
-   companion: the whole-triple form and a packed Grid shape are offered, and nothing is excluded on
-   companions. 4. A bias-add + relu tail beside the materialized product: the unfused flavor offers
-   no hardware-binding shape and its lift recovers them, all computing the output bit for bit; the
-   fused flavor (whose fusion relocates the tail) keeps the whole-triple form. *)
+   lift recovers it. Every all-serial seed offered and every recovered seed gives the companion the
+   preset's geometry and leaves the site's target (its zeroing included) as the flavor writes it,
+   passes [validate_parallel ~fork_join:true] (the recovered whole-triple seeds fail the
+   hardware-thread mode: the negative control that shows the fork-join mode is what admits them),
+   renders the companion as a pool dispatch, and computes [d] bit for bit across two runs (integer
+   inputs, exact sums; the second run catches a missed zeroing). 2. diag64: tall enough for the Grid
+   shapes (four 16-row blocks); the same, plus the packed Grid shapes are excluded and recovered. 3.
+   Control, the 64-row product with no companion: the whole-triple form and a packed Grid shape are
+   offered, and nothing is excluded on companions. 4. A bias-add + relu tail beside the materialized
+   product: the unfused flavor offers no hardware-binding shape and its lift recovers them, all
+   computing the output bit for bit; the fused flavor (whose fusion relocates the tail) keeps the
+   whole-triple form and retypes no loop of the tail. 5. A total sum of the product, a companion the
+   preset's hazard proof cannot split: it stays serial in every seed, which still computes it bit
+   for bit. 6. The floor: a positive launch floor renders the diag8 companion's [Grid] loop
+   serially. *)
 
 let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
 
@@ -49,6 +56,10 @@ let backend_name = "cc"
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 let () = Generated.init ~backend_name
 let () = Hashtbl.set Utils.config_file_args ~key:"cc_grid_min_updates" ~data:"0"
+
+(* The companion geometry is gated at the default preset's work threshold, the floor's twin; both
+   off, so these small companions are annotated and rendered on the pool. *)
+let () = Hashtbl.set Utils.config_file_args ~key:"cpu_schedule_min_work" ~data:"0"
 let accum_prec = Ll_test.backend_accum_prec
 
 let cpu_limits =
@@ -91,6 +102,11 @@ let packed_grid (sp : Autotune.sketch_params) = sp.sk_mma && sp.sk_bk > 0 && sp.
 let grid_shape (sp : Autotune.sketch_params) = sp.sk_grid || (whole_triple sp && sp.sk_bm > 0)
 let grid_shape_or_whole sp = grid_shape sp || whole_triple sp
 
+(* The flavors that annotate nothing of the site: the packed Serial / Hoisted shapes and the scalar
+   blocktile (gh-ocannl-1843). *)
+let all_serial (sp : Autotune.sketch_params) =
+  (not sp.sk_gpu) && ((not sp.sk_mma) || (sp.sk_bk > 0 && not sp.sk_grid))
+
 let site_writes opt (t : Tensor.t) =
   match fst (seeding opt) with
   | Autotune.Seeding_matmul { site; _ } -> Tn.equal site.Autotune.m_d t.Tensor.value
@@ -131,6 +147,41 @@ let writer_loops (llc : LL.t) tn =
 let grid_written opt sp tn =
   List.exists (writer_loops (applied opt sp).LL.llc tn) ~f:(fun (_, axis) ->
       LL.equal_axis_type axis LL.Grid)
+
+(* The [Grid] loops, anywhere in the top-level nests of [llc] writing [tn], sorted. *)
+let grid_loops_writing (llc : LL.t) tn =
+  List.concat_map (LL.flat_lines [ llc ]) ~f:(fun nest ->
+      if not (List.mem (written nest) tn ~equal:Tn.equal) then []
+      else
+        let acc = ref [] in
+        Ll_test.walk nest ~on_stmt:(function
+          | LL.For_loop { index; axis = LL.Grid; _ } -> acc := index :: !acc
+          | _ -> ());
+        !acc)
+  |> List.dedup_and_sort ~compare:Ir.Indexing.compare_symbol
+
+(* The geometry the default CPU preset gives [tn]'s writers, as [cpu_companion_geometry] asks it:
+   the relationship every flavor's companion is pinned to, derived, not restated. *)
+let preset_grid opt tn =
+  let s = scratch opt in
+  grid_loops_writing (Sched.apply (Sched.default_cpu s) s).LL.llc tn
+
+(* A seed gives the companion [tn] exactly the preset's geometry, a non-empty one. *)
+let takes_preset_geometry opt tn sp =
+  let want = preset_grid opt tn in
+  (not (List.is_empty want))
+  && List.equal Ir.Indexing.equal_symbol (grid_loops_writing (applied opt sp).LL.llc tn) want
+
+(* The loops of the top-level nests of [llc] writing [tn]. *)
+let loops_writing (llc : LL.t) tn =
+  List.concat_map (LL.flat_lines [ llc ]) ~f:(fun nest ->
+      if not (List.mem (written nest) tn ~equal:Tn.equal) then []
+      else
+        let acc = ref [] in
+        Ll_test.walk nest ~on_stmt:(function
+          | LL.For_loop { index; _ } -> acc := index :: !acc
+          | _ -> ());
+        !acc)
 
 (* Positive integer operands: every product sum is exact in single precision and the diagonal is
    clear of the zero init. *)
@@ -259,8 +310,23 @@ let companion_leg ~tag ~n ~k ~grid =
     (tag ^ ": no recovered whole-triple seed passes the hardware-thread mode")
     (List.filter back ~f:whole_triple)
     ~f:(validates ~loud:false ~fork_join:false ~tag opt);
-  p_none (tag ^ ": every recovered whole-triple seed leaves the companion serial")
-    (List.filter back ~f:whole_triple) ~f:(fun sp -> grid_written opt sp companion);
+  p_all
+    (tag ^ ": every recovered whole-triple seed gives the companion the preset's Grid geometry")
+    (List.filter back ~f:whole_triple)
+    ~f:(takes_preset_geometry opt companion);
+  let serial_offered = List.filter offered ~f:all_serial in
+  p_exists (tag ^ ": premise: all-serial seeds are offered (packed Serial / Hoisted, blocktile)")
+    serial_offered ~f:(fun sp -> sp.sk_mma && sp.sk_bk > 0);
+  p_all
+    (tag ^ ": every offered all-serial seed gives the companion the preset's Grid geometry")
+    serial_offered
+    ~f:(takes_preset_geometry opt companion);
+  p_all (tag ^ ": every offered all-serial seed leaves every writer of the site's target serial")
+    serial_offered ~f:(fun sp ->
+      List.is_empty (grid_loops_writing (applied opt sp).LL.llc a.Tensor.value));
+  p_all
+    (tag ^ ": every offered all-serial seed passes validate_parallel in fork-join mode")
+    serial_offered ~f:(validates_cc ~tag opt);
   if grid then
     p_all (tag ^ ": every recovered packed Grid seed gives the companion a Grid loop")
       (List.filter back ~f:packed_grid) ~f:(fun sp -> grid_written opt sp companion);
@@ -268,12 +334,25 @@ let companion_leg ~tag ~n ~k ~grid =
   let pool_ok = ref true in
   p_executed ~tag ~enum:recovered ~mat ~expected comp d
     ~on_post:(fun sp name post ->
-      if packed_grid sp && not (pool_rendered_writers ~companion name post) then (
+      if (packed_grid sp || whole_triple sp) && not (pool_rendered_writers ~companion name post)
+      then (
         Stdio.eprintf "%s: %s: the companion's Grid loop is not pool-rendered\n%!" tag (label sp);
         pool_ok := false))
     (List.mapi back ~f:(fun i sp -> (i, sp)));
-  if grid then
-    p (tag ^ ": every recovered packed Grid seed renders the companion as a pool dispatch") !pool_ok
+  p
+    (tag
+   ^ ": every recovered whole-triple and packed Grid seed renders the companion as a pool dispatch"
+    )
+    !pool_ok;
+  let serial_pool = ref true in
+  p_executed ~what:"offered all-serial seed" ~tag:(tag ^ "_serial") ~enum:seeds ~mat ~expected comp
+    d
+    ~on_post:(fun sp name post ->
+      if not (pool_rendered_writers ~companion name post) then (
+        Stdio.eprintf "%s: %s: the companion's Grid loop is not pool-rendered\n%!" tag (label sp);
+        serial_pool := false))
+    (List.filter_mapi offered ~f:(fun i sp -> Option.some_if (all_serial sp) (i, sp)));
+  p (tag ^ ": every offered all-serial seed renders the companion as a pool dispatch") !serial_pool
 
 (* Leg 1: the issue's routine. *)
 let () = companion_leg ~tag:"diag8" ~n:8 ~k:32 ~grid:false
@@ -351,6 +430,88 @@ let () =
   p_all "tail64: the fused flavor keeps the whole-triple form, and it passes validate_parallel"
     fused_whole ~f:(fun (_, sp) -> validates_cc ~tag opt sp);
   p_executed ~what:"fused whole-triple seed" ~tag:(tag ^ "_fused") ~enum:seeds ~mat ~expected comp
-    out fused_whole
+    out fused_whole;
+  (* gh-ocannl-1843: the unfused all-serial seeds' tail takes the preset's geometry. *)
+  let unfused_serial = List.filter unfused ~f:(fun (_, sp) -> all_serial sp) in
+  p_exists "tail64: premise: unfused all-serial seeds are offered" unfused_serial ~f:(fun _ -> true);
+  p_all "tail64: every unfused all-serial seed gives the tail the preset's Grid geometry"
+    unfused_serial ~f:(fun (_, sp) -> takes_preset_geometry opt out.Tensor.value sp);
+  (* The negative control: the fused flavor's tail is a statement the site's own op
+     ([Fuse_epilogue]) relocates, so the companion geometry skips it -- no fused seed retypes a loop
+     of the tail. *)
+  let tail_loops = loops_writing opt.LL.llc out.Tensor.value in
+  let fused = List.filter indexed ~f:(fun (_, sp) -> sp.sk_epilogue) in
+  p_exists "tail64: premise: fused all-serial seeds are offered" fused ~f:(fun (_, sp) ->
+      all_serial sp);
+  p_none "tail64: no fused seed retypes a loop of the tail its fusion relocates" fused
+    ~f:(fun (_, sp) ->
+      List.exists
+        (Autotune.sketch_schedule ~accum_prec ~p:sp (scratch opt))
+        ~f:(function
+          | Sched.Retype { axis; _ } -> List.mem tail_loops axis ~equal:Ir.Indexing.equal_symbol
+          | _ -> false));
+  p_executed ~what:"fused all-serial seed" ~tag:(tag ^ "_fserial") ~enum:seeds ~mat ~expected comp
+    out
+    (List.filter fused ~f:(fun (_, sp) -> all_serial sp))
+
+(* Leg 5: a companion the preset cannot split -- the total sum of the product writes one cell from
+   every iteration, so its hazard proof fails for every loop and the nest stays serial in every
+   seed, which still computes it bit for bit. *)
+let () =
+  let tag = "sum64" in
+  let x = ints "sum_x" ~rows:64 ~cols:32 7 in
+  let y = ints "sum_y" ~rows:32 ~cols:64 5 in
+  let%op prod = x +* "ik; kj => ij" y in
+  let%op total = prod ++ "ij => 0" in
+  let comp = Train.forward total in
+  let mat = [ prod.Tensor.value ] in
+  let opt =
+    Context.lowered_for_decisions ~materialized:mat (Context.cpu ()) comp Ir.Indexing.Empty
+  in
+  let offered = seeds opt and back = recovered opt in
+  let companion = total.Tensor.value in
+  p (tag ^ ": premise: the matmul site writes the materialized product") (site_writes opt prod);
+  p_empty
+    (tag ^ ": premise: the preset gives the total no Grid loop")
+    ~over:[ companion ] (preset_grid opt companion);
+  p_none (tag ^ ": no offered or recovered seed gives the total a Grid loop") (offered @ back)
+    ~f:(fun sp -> not (List.is_empty (grid_loops_writing (applied opt sp).LL.llc companion)));
+  (* A scalar output: the premise is that it clears the zero init, which a seed dropping the
+     accumulation could not match. *)
+  let expected, _ = values ~name:(tag ^ "_ref") ~mat comp total in
+  p
+    (tag ^ ": premise: the reference total is one positive cell")
+    (Array.length expected = 1 && Float.(expected.(0) > 0.));
+  p_executed ~what:"offered seed" ~tag ~enum:seeds ~mat ~expected comp total
+    (List.mapi offered ~f:(fun i sp -> (i, sp)))
+
+(* Leg 6: the floor. Annotation is not execution: with a positive launch floor the renderer runs the
+   diag8 companion's tiny [Grid] loop serially, as the default pipeline would. *)
+let () =
+  let tag = "floor8" in
+  Hashtbl.set Utils.config_file_args ~key:"cc_grid_min_updates" ~data:"16384";
+  let x = ints (tag ^ "_x") ~rows:8 ~cols:32 7 in
+  let y = ints (tag ^ "_y") ~rows:32 ~cols:8 5 in
+  let%op a = x +* "ik; kj => ij" y in
+  let%op d = a ++ "ii => i" in
+  let comp = Train.forward d in
+  let mat = [ a.Tensor.value ] in
+  let opt =
+    Context.lowered_for_decisions ~materialized:mat (Context.cpu ()) comp Ir.Indexing.Empty
+  in
+  let companion = d.Tensor.value in
+  let serial_offered =
+    List.filter_mapi (seeds opt) ~f:(fun i sp -> Option.some_if (all_serial sp) (i, sp))
+  in
+  p_all (tag ^ ": every offered all-serial seed still annotates the companion") serial_offered
+    ~f:(fun (_, sp) -> takes_preset_geometry opt companion sp);
+  let expected = reference ~tag ~mat comp d in
+  let any_pool = ref false in
+  p_executed ~what:"offered all-serial seed" ~tag ~enum:seeds ~mat ~expected comp d
+    ~on_post:(fun _ name post ->
+      if pool_rendered_writers ~companion name post then any_pool := true)
+    serial_offered;
+  p (tag ^ ": no seed renders the companion as a pool dispatch under the floor") (not !any_pool);
+  Hashtbl.set Utils.config_file_args ~key:"cc_grid_min_updates" ~data:"0"
 
 let () = Stdio.printf "cpu_mma_companion_coverage: done\n"

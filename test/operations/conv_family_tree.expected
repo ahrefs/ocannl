@@ -338,3 +338,6 @@ conv_tail_exec: premise: the reference output varies and has no zero cell: true
 conv_tail_exec: the lift recovers an unfused Grid flavor: true
 conv_tail_exec: every recovered leaf validates in fork-join mode and gives the tail a Grid loop: true
 conv_tail_exec: every recovered leaf computes the output bit for bit: true
+conv_tail_exec: premise: the unfused serial flavor is offered: true
+conv_tail_exec: every unfused serial leaf validates in fork-join mode and gives the tail a Grid loop: true
+conv_tail_exec: every unfused serial leaf computes the output bit for bit: true
