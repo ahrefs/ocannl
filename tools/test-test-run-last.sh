@@ -78,6 +78,10 @@
 #      is unknown and so here, a root holding whitespace is read exact from
 #      /proc and never excludes a launch elsewhere, and one exported alone is
 #      the loud over-read on every host (environments are never read).
+#      Provenance pins read the one queued line through status, naming script
+#      path, env -C, cwd, unknown directory and known/unknown state roots;
+#      the same cross-worktree/root status matrix pins classification. They
+#      interpret neither process environments nor shell control flow.
 # 105b. two simultaneous unknown-directory fixtures identify their state roots
 #      in exec argv: both see their own queued launch, an independent observer
 #      sees neither. The former unqualified argv is the contamination control.
@@ -861,10 +865,48 @@ q_case() { # want-root want-sib want-other dir argv...: the statuses wanted in q
   q "$q_root" run build @ok >/dev/null 2>&1
   q "$q_sib" run build @ok >/dev/null 2>&1
   q_under "$other" "$q_root" run build @ok >/dev/null 2>&1
+  if [ -n "${Q_WHY:-}" ]; then
+    if [ "$(grep -c '^queued:' <<<"$out_root")" != 1 ] || ! grep -qF "$Q_WHY" <<<"$out_root"; then
+      q_detail="queued provenance wanted $Q_WHY: $out_root"; return 1
+    fi
+  fi
+  if [ -n "${Q_OTHER_WHY:-}" ]; then
+    if [ "$(grep -c '^queued:' <<<"$q_out")" != 1 ] || ! grep -qF "$Q_OTHER_WHY" <<<"$q_out"; then
+      q_detail="other-root provenance wanted $Q_OTHER_WHY: $q_out"; return 1
+    fi
+  fi
   [ "$rc_root" = "$want_root" ] && [ "$rc_sib" = "$want_sib" ] && [ "$q_rc" = "$want_other" ] && return 0
   q_detail="status last beside a queued \`$*\` from $dir: $rc_root in the worktree, $rc_sib in the sibling, $q_rc under the other root (want $want_root, $want_sib, $want_other): $out_root | $out_sib | $q_out"
   return 1
 }
+# One queued line per ground, alongside the unchanged classification matrix.
+# Only exec-argv assignments name a known root; exported values stay unknown.
+q_provenance_root=$(cd "$q_root" && pwd -P)
+q_provenance() {
+  local label=$1
+  shift
+  q_detail=
+  if q_case "$@"; then report 0 "queued provenance: $label"
+  else report 1 "queued provenance: $label" "$q_detail"; fi
+}
+Q_WHY="[worktree: $q_provenance_root (script path); state root: $q_runs (env assignment)]" \
+  q_provenance 'script path and explicit state root' 3 0 0 "$TMP" env "OCANNL_TOOL_TEST_RUNS=$q_runs" "$q_root/tools/test-run.sh" run build @red
+Q_WHY="[worktree: $q_provenance_root (env -C); state root: $q_runs (env assignment)]" \
+  q_provenance 'env -C' 3 0 0 "$TMP" env -C "$q_root" "OCANNL_TOOL_TEST_RUNS=$q_runs" tools/test-run.sh run build @red
+Q_WHY="[worktree: $q_provenance_root (cwd); state root: $q_runs (env assignment)]" \
+  q_provenance 'cwd' 3 0 0 "$q_root" env "OCANNL_TOOL_TEST_RUNS=$q_runs" tools/test-run.sh run build @red
+q_unknown_chdir "$q_runs"
+Q_WHY="[unknown directory (shell text in env -C); state root: $q_runs (env assignment)]" \
+  q_provenance 'unknown directory' 3 3 0 "$TMP" "${q_unknown[@]}"
+Q_WHY="[worktree: $q_provenance_root (cwd); unknown state root (default HOME not named in exec argv)]" \
+  q_provenance 'unknown default HOME' 3 0 3 "$q_root" env -u OCANNL_TOOL_TEST_RUNS tools/test-run.sh run build @red
+Q_WHY="[worktree: $q_provenance_root (cwd); unknown state root (shell text in OCANNL_TOOL_TEST_RUNS)]" \
+  q_provenance 'shell text in state root' 3 0 3 "$q_root" env -S 'OCANNL_TOOL_TEST_RUNS=${HOME}/queued-unread tools/test-run.sh run build @red'
+Q_WHY="[worktree: $q_provenance_root (cwd); unknown state root (not named in exec argv)]" \
+  q_provenance 'exported root stays unknown' 3 0 3 "$q_root" tools/test-run.sh run build @red
+Q_OTHER_WHY="[worktree: $q_provenance_root (cwd); state root: $q_other (env assignment)]" \
+  q_provenance 'explicit other root excludes this reader' 0 0 3 "$q_root" env "OCANNL_TOOL_TEST_RUNS=$q_other" tools/test-run.sh run build @red
+q_detail=
 # A wrapper outside any worktree, its command moved into this one; one in
 # this worktree, its command moved into the sibling (over-read before: the
 # relative word resolved against the wrapper's directory); a `--chdir=DIR`
@@ -1007,7 +1049,7 @@ q_until 10 test -e "$TMP/isolation-a.ready" && q_until 10 test -e "$TMP/isolatio
 for state in "$q_runs" "$foreign"; do
   rc=0
   OCANNL_TOOL_TEST_RUNS=$state PATH=$q_bin:$PATH "$q_root/tools/test-run.sh" status last >"$TMP/isolation.out" 2>&1 || rc=$?
-  [ "$rc" = 3 ] && grep -q '^queued:' "$TMP/isolation.out" || detail="${detail:+$detail; }own fixture $state: exit $rc: $(cat "$TMP/isolation.out")"
+  [ "$rc" = 3 ] && grep -qF "[unknown directory (shell text in env -C); state root: $state (env assignment)]" "$TMP/isolation.out" || detail="${detail:+$detail; }own fixture $state: exit $rc: $(cat "$TMP/isolation.out")"
 done
 rc=0
 OCANNL_TOOL_TEST_RUNS=$observer PATH=$q_bin:$PATH "$q_root/tools/test-run.sh" status last >"$TMP/isolation.out" 2>&1 || rc=$?

@@ -1193,6 +1193,8 @@ harness_leg_run '123: exited query retained fd 9 recovery authenticates every ho
 # Fixed literal seams in a subject copy pause the keeper after successful flock
 # and publish the retry yield. Unknown source shapes fail setup. No real dune,
 # timing lottery, or production environment hook is used by this collision leg.
+# Recovery also pauses the final unlock probe until group_of has begun: the
+# keeper really retires between the ownership and group reads (gh-ocannl-2239).
 leg_124() {
   local mode launcher result keeper
   cp "$life_root/tools/test-run.sh" "$TMP/124-before"
@@ -1206,6 +1208,9 @@ leg_124() {
       alarm 30;
       open my $ready, ">", "$ENV{LIFECYCLE_PREFIX}.probe-ready" or die $!; close $ready;
       while (!-e "$ENV{LIFECYCLE_PREFIX}.probe-release") { select undef, undef, undef, .01 }
+      if ($ENV{PROBE_HOLDER}) {
+        while (!-e "$ENV{LIFECYCLE_PREFIX}.retire-release") { select undef, undef, undef, .01 }
+      }
       alarm 0;
 ~;
     my $yield = q~select undef, undef, undef, .02;~;
@@ -1213,6 +1218,19 @@ leg_124() {
 ~;
     my $n = ($s =~ s/\Q$yield\E/$hook$yield/g);
     die "expected acquisition and recovery retry seams, got $n" unless $n == 2;
+    my $group = q~sub group_of {
+        my $p = shift;~;
+    my $retire = q~
+        if ($p == $k && -e "$ENV{LIFECYCLE_PREFIX}.probe-release") {
+          open my $r, ">", "$ENV{LIFECYCLE_PREFIX}.retire-release" or die $!; close $r;
+          my $end = Time::HiRes::time() + 10;
+          while (census_same($k, $kt)) {
+            die "keeper did not retire" if Time::HiRes::time() >= $end;
+            select undef, undef, undef, .01;
+          }
+        }
+~;
+    die "recovery group seam missing" unless $s =~ s/\Q$group\E/$group$retire/;
     print $s;
   ' "$SRC" >"$TMP/124-subject"; then
     report 1 'keeper probe: collision seams exist'; return
@@ -1266,9 +1284,10 @@ EOF
         report 0 'keeper probe: collided launch retries and succeeds'
       else report 1 'keeper probe: collided launch retries and succeeds' "exit $result; $(cat "$TMP/124-result.out" "$TMP/124-result.err")"; fi
     else
-      if [ "$result" = 0 ] && grep -q '^reaped exited query holders;' "$TMP/124-result.out"; then
-        report 0 'keeper probe: collided recovery settles and reports reaping'
-      else report 1 'keeper probe: collided recovery settles and reports reaping' "exit $result; $(cat "$TMP/124-result.out" "$TMP/124-result.err")"; fi
+      if [ "$result" = 0 ] && [ -e "$life_prefix.retire-release" ] &&
+         grep -q '^reaped exited query holders;' "$TMP/124-result.out"; then
+        report 0 'keeper probe: collided recovery settles after keeper retirement'
+      else report 1 'keeper probe: collided recovery settles after keeper retirement' "exit $result; $(cat "$TMP/124-result.out" "$TMP/124-result.err")"; fi
       harness_kill_recorded "$life_prefix.probe-holder" "$life_prefix.probe-holder-token"
     fi
     life_await_dead "$keeper" || report 1 "keeper probe: $mode keeper retires"

@@ -76,8 +76,9 @@
 # Query recovery boundary: `recover-query` reads only this worktree/state root's
 # owner pointer and lock census. Queries record a dedicated process group and a
 # keeper's start token while alive. Recovery refuses a live query, changed query
-# or keeper identity, missing evidence, and ANY holder outside that group before
-# signalling anyone. A setsid descendant is deliberately unattributable: inspect
+# identity, missing evidence, and ANY holder outside that group before signalling
+# anyone. Failed keeper proof refuses while the same lock remains held; a free
+# lock or changed owner needs no signals. A setsid descendant is deliberately unattributable: inspect
 # it manually with `lsof` on the lock from `paths lock`. Never delete the lock.
 # The keeper closes fd 9 and all streams; it reserves the group until the query
 # exits and the lock becomes free. Old query records have no recovery authority.
@@ -200,6 +201,12 @@
 # run (`unpublished:`; status 1, wait 2), which stays readable by name. A named
 # run (`wait RUN`) is waited for alone, as before. `list` lists this
 # worktree's runs only (`--all`: the whole state root's).
+# Each queued census line is PID [worktree and state-root provenance] ARGV.
+# Its boundary is exec argv plus cwd: script path, env -C and env assignments
+# are recognized; shell text and process environments are never interpreted.
+# Unknown directories/roots remain included, with the reason printed. The
+# `queued: a launch in this worktree has not published its run yet:` prefix
+# and the argv truncation budget are stable.
 #
 # Read-only queries: `paths run [RUN|last]` resolves a recorded run (default last).
 # `paths worktree|runs|lock|owner|last [RUN|last]` without a run names THIS
@@ -3394,7 +3401,7 @@ sub positions {
   $text = @w unless defined $text;
   my @starts = (0, grep { $w[$_ - 1] eq "--" } 1 .. $text - 1);
   for my $j (@starts) {
-    my ($dir, $runs_at, $home_at, $dir_unknown);
+    my ($dir, $runs_at, $home_at, $dir_unknown, $runs_text, $home_text);
     while ($j <= $#w) {
       (my $b = base($w[$j])) =~ s/\A-//;
       $b =~ s/\.exe\z//;
@@ -3420,14 +3427,14 @@ sub positions {
             my ($opt, $val) = ($w[$j], undef);
             my @short;
             if ($opt =~ /\A--(unset|chdir|ignore-environment|argv0|split-string)(?:=(.*))?\z/s) { ($opt, $val) = ($1, $2) }
-            elsif ($opt eq "-") { $runs_at = ""; $home_at = ""; $opt = "" }
+            elsif ($opt eq "-") { $runs_at = ""; $home_at = ""; $runs_text = $home_text = 0; $opt = "" }
             elsif ($opt =~ /\A-([^-].*)\z/s) { @short = split //, $1; $opt = "" }
-            elsif ($opt =~ /\AOCANNL_TOOL_TEST_RUNS=(.*)\z/s) { $runs_at = plain($1) ? $1 : undef; $opt = "" }
-            elsif ($opt =~ /\AHOME=(.*)\z/s) { $home_at = plain($1) ? $1 : undef; $opt = "" }
+            elsif ($opt =~ /\AOCANNL_TOOL_TEST_RUNS=(.*)\z/s) { $runs_text = !plain($1); $runs_at = $runs_text ? undef : $1; $opt = "" }
+            elsif ($opt =~ /\AHOME=(.*)\z/s) { $home_text = !plain($1); $home_at = $home_text ? undef : $1; $opt = "" }
             else { $opt = "" }
             while (@short) {
               my $o = shift @short;
-              if ($o eq "i") { $runs_at = ""; $home_at = "" }
+              if ($o eq "i") { $runs_at = ""; $home_at = ""; $runs_text = $home_text = 0 }
               elsif ($o =~ /\A[uCPaLUS]\z/) {
                 $opt = $o eq "u" ? "unset" : $o eq "C" ? "chdir" : $o eq "S" ? "split-string" : "operand";
                 $val = join("", @short) if @short;
@@ -3441,13 +3448,13 @@ sub positions {
               next;
             }
             if (length $opt) {
-              if ($opt eq "ignore-environment") { $runs_at = ""; $home_at = "" }
+              if ($opt eq "ignore-environment") { $runs_at = ""; $home_at = ""; $runs_text = $home_text = 0 }
               else {
                 unless (defined $val) { $val = $w[$j + 1] if $j < $#w; $j++ }
                 if (defined $val && $opt eq "chdir") { if (plain($val)) { $dir = env_dir($entry, $val) } else { $dir = undef; $dir_unknown = 1 } }
                 elsif (defined $val && $opt eq "unset") {
-                  $runs_at = "" if $val eq "OCANNL_TOOL_TEST_RUNS";
-                  $home_at = "" if $val eq "HOME";
+                  if ($val eq "OCANNL_TOOL_TEST_RUNS") { $runs_at = ""; $runs_text = 0 }
+                  if ($val eq "HOME") { $home_at = ""; $home_text = 0 }
                 }
               }
             }
@@ -3467,7 +3474,7 @@ sub positions {
         last if $j > $#w || $w[$j] eq "-c";
         if ($w[$j] eq "--") { $j++; next }
       }
-      $at{$j} = { dir => $dir, runs => $runs_at, home => $home_at, dir_unknown => $dir_unknown } unless exists $at{$j};
+      $at{$j} = { dir => $dir, runs => $runs_at, home => $home_at, dir_unknown => $dir_unknown, runs_text => $runs_text, home_text => $home_text } unless exists $at{$j};
       last;
     }
   }
@@ -3524,22 +3531,32 @@ sub same_root {
   my %of_b = map { norm($_) => 1 } logical($b), physical($b), physical(logical($b));
   return scalar grep { $of_b{norm($_)} } logical($a), physical($a), physical(logical($a));
 }
+my $state_provenance;
 sub runs_here {
   my ($pos) = @_;
   my ($v, $h) = defined $pos ? ($pos->{runs}, $pos->{home}) : (undef, undef);
+  $state_provenance = "unknown state root (" .
+    ($pos && $pos->{runs_text} ? "shell text in OCANNL_TOOL_TEST_RUNS" : "not named in exec argv") . ")";
   return 1 unless defined $v;
   my $here = defined $runs && length $runs ? $runs
     : defined $ENV{HOME} && length $ENV{HOME} ? "$ENV{HOME}/.ocannl-test-runs" : undef;
+  $state_provenance = "unknown state root (reader root unavailable)";
   return 1 unless defined $here;
   # A root holding whitespace: a table without /proc splits it, so the
   # spelling of this root cannot be recognized -- no launch is excluded by it.
+  $state_provenance = "unknown state root (reader root has whitespace in ps table)";
   return 1 if $here =~ /\s/ && !%argv;
+  my $how = "env assignment";
   if (!length $v) {
+    $state_provenance = "unknown state root (default HOME " .
+      ($pos && $pos->{home_text} ? "holds shell text" : defined $h ? "cleared in exec argv" : "not named in exec argv") . ")";
     return 1 unless defined $h && length $h;
+    $how = "default under argv HOME";
     $v = "$h/.ocannl-test-runs";
   }
   # The script reads a relative root after its own cd to the worktree root.
   $v = "$root/$v" unless absolute($v);
+  $state_provenance = "state root: $v ($how)";
   return same_root($v, $here);
 }
 # Processes of this uid by argv: an orphan of parent 1 carrying the argv of a
@@ -3580,14 +3597,14 @@ for my $p (sort { $a <=> $b } keys %args) {
   next unless @w && base($w[0]) =~ $prog;
   my ($at, $ww) = positions(@w);
   @w = @$ww; # an attached `-S` string split off its option
-  my ($hit, $hit_at) = (0, undef);
+  my ($hit, $hit_at, $worktree_provenance) = (0, undef, undef);
   for my $i (0 .. $#w - 1) {
     last if base($w[$i]) eq "ssh" || ($w[$i] eq "execution" && $w[$i + 1] eq "leg");
     next unless base($w[$i]) eq "test-run.sh" && $verb{$w[$i + 1]};
     next if $w[$i + 1] eq "prepush" && grep { /\A--list(?:=|\z)/ } @w[$i + 2 .. $#w];
     # A relative script word behind a `-C` whose operand is unread text: the
     # directory is unknown, so the launch may be of this worktree -- here.
-    if ($at->{$i} && $at->{$i}{dir_unknown} && $w[$i] !~ m{\A[/~]}) { $hit = 1; $hit_at = $at->{$i}; next }
+    if ($at->{$i} && $at->{$i}{dir_unknown} && $w[$i] !~ m{\A[/~]}) { $hit = 1; $hit_at = $at->{$i}; $worktree_provenance = "unknown directory (shell text in env -C)"; next }
     my $found;
     for my $j (reverse(($i > 8 ? $i - 8 : 0) .. $i)) {
       my $path = join(" ", @w[$j .. $i]);
@@ -3603,12 +3620,17 @@ for my $p (sort { $a <=> $b } keys %args) {
       (my $dir = $path) =~ s{/[^/]*\z}{};
       my $r = Cwd::abs_path("$dir/..");
       $found = 1;
-      if ($at->{$j} && defined $r && $r eq $root) { $hit = 1; $hit_at = $at->{$j} }
+      if ($at->{$j} && defined $r && $r eq $root) { $hit = 1; $hit_at = $at->{$j};
+        my $how = $w[$j] =~ m{\A[/~]} ? "script path" : defined $hit_at->{dir} ? "env -C" : "cwd";
+        $worktree_provenance = "worktree: $r ($how)";
+      }
       last;
     }
     next if $found || $w[$i] =~ m{\A[/~]} || !$at->{$i};
     my $c = dir_at($p, $at->{$i});
-    if (defined $c && (Cwd::abs_path($c) // "") eq $root) { $hit = 1; $hit_at = $at->{$i} }
+    if (defined $c && (Cwd::abs_path($c) // "") eq $root) { $hit = 1; $hit_at = $at->{$i};
+      $worktree_provenance = "worktree: $root (" . (defined $hit_at->{dir} ? "env -C" : "cwd") . ")";
+    }
   }
   next unless $hit && !credited($p) && runs_here($hit_at);
   # Asked only of a launch, as it reads directories (lsof on a Mac).
@@ -3623,10 +3645,14 @@ for my $p (sort { $a <=> $b } keys %args) {
     my $born = started($p);
     next if defined $credit && defined $born && $born <= $credit;
   }
-  print "$p ", substr($args{$p}, 0, 240), "\n";
+  # Provenance follows the PID; argv keeps its existing 240-character budget.
+  # Read exec argv and cwd only, never environments or shell control flow.
+  my $why = "$worktree_provenance; $state_provenance";
+  $why =~ s/[\r\n\t]/ /g;
+  print "$p [$why] ", substr($args{$p}, 0, 240), "\n";
 }
 '
-# Sets pending_out to one "PID ARGV" line per launch of this worktree in flight
+# Sets pending_out to one "PID [PROVENANCE] ARGV" line per launch of this worktree in flight
 # that no run of it recorded as its own chain. 1, with
 # pending_out empty, when the table cannot be read -- said once on stderr, and
 # then nothing is in flight: the reader degrades to the answer it gave before.
@@ -4574,8 +4600,17 @@ case $sub in
         return !flock($l, LOCK_EX | LOCK_NB);
       }
       sub proof {
-        refuse("keeper pid token changed or missing") unless census_same($k, $kt);
-        refuse("keeper left query group") unless group_of($k) eq $q;
+        # The keeper may retire after owned() observed its unlock probe.
+        # A failed identity grants no signal authority; a now-free lock (or
+        # changed owner) needs no recovery. Otherwise retain the refusal.
+        unless (census_same($k, $kt)) {
+          recovered() unless owned();
+          refuse("keeper pid token changed or missing");
+        }
+        unless (group_of($k) eq $q) {
+          recovered() unless owned();
+          refuse("keeper left query group");
+        }
         query_exited();
       }
       my $sent = 0;
