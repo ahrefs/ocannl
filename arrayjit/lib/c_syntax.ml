@@ -4847,7 +4847,11 @@ module C_syntax (B : C_syntax_config) = struct
   let check_scope_order ~stmt ~roots (plan : (_, _) Low_level.Scope_order.plan) =
     if not (List.is_empty plan.unconditional && List.is_empty plan.conditional) then (
       let derived = Low_level.Scope_order.derived_plan scope_order_oracle roots in
-      if not (Low_level.Scope_order.same_plan ~same_a:same_test plan derived) then
+      let same_ir x y =
+        Low_level.Scope_order.equal_key ~comp_prec x.Low_level.Scope_order.key
+          y.Low_level.Scope_order.key
+      in
+      if not (Low_level.Scope_order.same_plan ~same_a:same_test ~same_b:same_ir plan derived) then
         invalid_arg
           "C_syntax.pp_local_defs: the scope emission order Low_level.Scope_order derives from the \
            IR differs from the one rendered (gh-ocannl-2213)";

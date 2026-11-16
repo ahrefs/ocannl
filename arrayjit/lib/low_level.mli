@@ -1938,7 +1938,9 @@ module Scope_order : sig
             [prec]; any other renders alike on both paths. *)
     | Gate of { op : Ops.binop; prec : Ops.prec; first : scalar_t; first_prec : Ops.prec }
 
-  val equal_key : key -> key -> bool
+  val equal_key : ?comp_prec:(Ops.prec -> Ops.prec) -> key -> key -> bool
+  (** Normalize heterogeneous operand annotations through the backend's [comp_prec] (identity by
+      default). Projection-discarded operands are ignored; [Round_prec] keeps its exact target. *)
 
   type 'p lit = { key : key; holds : bool; anywhere : bool; payload : 'p }
   (** One condition an occurrence is evaluated under: [holds] in the then-arm, not in the else-arm.
