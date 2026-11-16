@@ -1259,11 +1259,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   ungated/unknown/missing harness, each replay usage error, and each invalid ambient
   state root respectively. Query commands sharing a root validator share that root's
   reason, including its path; `query-error` is read and included in failure detail.
-  One-off scratch negative controls (not retained in the harnesses) replaced each
-  loop's subject call with a stand-in printing an
-  unrelated diagnostic and exiting 2: the former predicates accepted it, the revised
-  predicates rejected it. These checks match literal diagnostic fragments for the
-  named fixture cases, not complete usage output or arbitrary refusal messages.
+  Standing negative controls in those three harnesses substitute a subject printing
+  an unrelated diagnostic and exiting 2, then require the real refusal predicate
+  to reject it (gh-ocannl-2240). Each rejected stand-in is a PASS of the control;
+  accepting it fails the harness. The query leg applies the same control to its
+  argument, missing-run, ambiguous-root, lock-inspection, metadata and last-pointer
+  refusal checks. Malformed last-pointer records, directories and legacy symlinks
+  share the missing/empty-state diagnostic; the pin does not distinguish those causes.
+  These checks match literal diagnostic fragments for the named
+  fixture cases, not complete usage output or arbitrary refusal messages.
 - **A harness whose checks are bare commands under errexit runs each leg contained**
   (gh-ocannl-1539): `harness_leg_run_errexit 'NAME' leg_N` runs the body in a subshell of its own
   (`harness_errexit_subshell`, a function whose body is a `( )`, so its `set -eE` is its own and

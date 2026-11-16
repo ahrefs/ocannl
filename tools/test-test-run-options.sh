@@ -968,7 +968,34 @@ harness_leg_run '101: one rendering of a start token #stop' leg_101
 shared_through repeat_root
 # Read-only query contract: no state store, no first run, and no lock file yet.
 # The fixture root (not the caller's cwd) owns all omitted-RUN queries.
+# The real refusal and its unrelated-exit-2 subject use this same predicate.
+query_refusal_matches() { # RC STDOUT STDERR_FILE REASON
+  [ "$1" = 2 ] && [ -z "$2" ] && grep -qF -- "$4" "$3"
+}
+query_refused() { # REASON; query_rc/query_out/query-error are the real result
+  if query_refusal_matches "$query_control_rc" "$query_control_out" "$TMP/query-unrelated-error" "$1"; then
+    report 1 "negative control: query refusal rejects unrelated exit 2: $1"
+    return 1
+  fi
+  report 0 "negative control: query refusal rejects unrelated exit 2: $1"
+  query_refusal_matches "$query_rc" "$query_out" "$TMP/query-error" "$1"
+}
 leg_39() {
+cat >"$TMP/query-unrelated" <<'STUB'
+#!/bin/bash
+echo 'unrelated refusal control' >&2
+exit 2
+STUB
+chmod +x "$TMP/query-unrelated"
+# Cache the fixed subject's result; every reason still exercises the predicate.
+query_control_rc=0
+query_control_out=$("$TMP/query-unrelated" 2>"$TMP/query-unrelated-error") || query_control_rc=$?
+if [ "$query_control_rc" != 2 ] || [ -n "$query_control_out" ] \
+   || ! grep -qxF 'unrelated refusal control' "$TMP/query-unrelated-error"; then
+  report 1 'negative control: unrelated query subject ran' "exit $query_control_rc; $query_control_out"
+  return
+fi
+report 0 'negative control: unrelated query subject ran'
 query_runs=$TMP/query-state/runs
 query_expected=$(cd "$TMP" && pwd -P)/query-state/runs
 query() {
@@ -994,10 +1021,17 @@ query_bad=
 for args in 'paths' 'paths bogus' 'paths lock last extra' 'paths run' \
             'paths run missing' 'paths lock missing' 'lock-status last' \
             'lock-status last extra'; do
+  case $args in
+    paths | 'paths lock last extra') query_reason='usage: paths FIELD [RUN|last]' ;;
+    'paths bogus') query_reason='unknown path field: bogus (run, worktree, runs, lock, owner, last)' ;;
+    'paths run' | 'lock-status last') query_reason='no runs recorded for this worktree' ;;
+    'paths run missing' | 'paths lock missing') query_reason="no such run: missing (neither a directory nor an entry under $query_expected)" ;;
+    'lock-status last extra') query_reason='usage: lock-status [RUN|last]' ;;
+  esac
   query_out=$(query $args 2>"$TMP/query-error")
   query_rc=$?
-  if [ "$query_rc" != 2 ] || [ -n "$query_out" ] || [ ! -s "$TMP/query-error" ]; then
-    query_bad="$args: rc=$query_rc output=$query_out"; break
+  if ! query_refused "$query_reason"; then
+    query_bad="$args: rc=$query_rc output=$query_out stderr=$(cat "$TMP/query-error")"; break
   fi
 done
 if [ -z "$query_bad" ] && [ ! -e "$TMP/query-state" ]; then
@@ -1044,7 +1078,7 @@ for query_break in $'\n' $'\r'; do
     if [ "$query_rc" != 2 ] || [ -n "$query_out" ] \
        || ! grep -q 'single-line paths' "$TMP/query-error" \
        || [ -e "$query_break_root" ]; then
-      query_bad="$query_command: rc=$query_rc output=$query_out"; break
+      query_bad="$query_command: rc=$query_rc output=$query_out stderr=$(cat "$TMP/query-error")"; break
     fi
   done
   [ -z "$query_bad" ] || break
@@ -1100,8 +1134,8 @@ if [ -L "$repeat_root/query-parent-link" ]; then
     query_out=$(OCANNL_TOOL_TEST_RUNS=query-parent-link/../fresh \
       "$repeat_root/tools/test-run.sh" $query_command 2>"$TMP/query-error")
     query_rc=$?
-    if [ "$query_rc" != 2 ] || [ -n "$query_out" ] || [ ! -s "$TMP/query-error" ]; then
-      query_bad="$query_command: rc=$query_rc output=$query_out"; break
+    if ! query_refused "cannot resolve missing state path with ambiguous symlink parent traversal"; then
+      query_bad="$query_command: rc=$query_rc output=$query_out stderr=$(cat "$TMP/query-error")"; break
     fi
   done
   [ ! -e "$TMP/query-parent-outside/fresh" ] && [ ! -e "$repeat_root/fresh" ] || query_bad="query created state"
@@ -1324,8 +1358,7 @@ for query_ambient in "$TMP/query-ambient-file" "$TMP/query-ambient-missing/../ru
     query_out=$(OCANNL_TOOL_TEST_RUNS="$query_ambient" \
       "$repeat_root/tools/test-run.sh" $query_command 2>"$TMP/query-error")
     query_rc=$?
-    if [ "$query_rc" != 2 ] || [ -n "$query_out" ] \
-       || ! grep -qF -- "$query_reason" "$TMP/query-error"; then
+    if ! query_refused "$query_reason"; then
       query_bad="$query_command: rc=$query_rc stdout=$query_out stderr=$(cat "$TMP/query-error")"
       break
     fi
@@ -1347,8 +1380,8 @@ query_bad=
 for query_command in 'paths run' 'paths lock' 'lock-status'; do
   query_out=$(query $query_command "$query_missing_absolute" 2>"$TMP/query-error")
   query_rc=$?
-  if [ "$query_rc" != 2 ] || [ -n "$query_out" ] || [ ! -s "$TMP/query-error" ]; then
-    query_bad="$query_command: rc=$query_rc output=$query_out"; break
+  if ! query_refused "no such run: $query_missing_absolute"; then
+    query_bad="$query_command: rc=$query_rc output=$query_out stderr=$(cat "$TMP/query-error")"; break
   fi
 done
 if [ -z "$query_bad" ] && [ ! -e "$query_missing_absolute" ] && [ ! -e "$query_lock" ]; then
@@ -1427,10 +1460,10 @@ fi
 rm "$query_lock"
 mkdir "$query_lock"
 query_out=$(query lock-status 2>"$TMP/query-error"); query_rc=$?
-if [ "$query_rc" = 2 ] && [ -z "$query_out" ] && [ -d "$query_lock" ]; then
+if query_refused "cannot inspect worktree lock" && [ -d "$query_lock" ]; then
   report 0 "queries: an uninspectable lock is an error, never idle"
 else
-  report 1 "queries: an uninspectable lock is an error, never idle" "rc=$query_rc output=$query_out"
+  report 1 "queries: an uninspectable lock is an error, never idle" "rc=$query_rc output=$query_out stderr=$(cat "$TMP/query-error")"
 fi
 rmdir "$query_lock"
 # Drive-form records are absolute only on Windows. Both recorded path fields
@@ -1480,8 +1513,8 @@ for query_metadata in empty relative multiline directory trailing_blank untermin
     for query_command in 'paths runs' 'paths lock' 'lock-status'; do
       query_out=$(query $query_command "$query_ref" 2>"$TMP/query-error")
       query_rc=$?
-      if [ "$query_rc" != 2 ] || [ -n "$query_out" ] || [ ! -s "$TMP/query-error" ]; then
-        query_bad="$query_metadata $query_command $query_ref: rc=$query_rc output=$query_out"; break
+      if ! query_refused "run has unavailable or invalid path metadata: $query_dir"; then
+        query_bad="$query_metadata $query_command $query_ref: rc=$query_rc output=$query_out stderr=$(cat "$TMP/query-error")"; break
       fi
     done
     [ -z "$query_bad" ] || break
@@ -1506,8 +1539,8 @@ for query_pointer_kind in trailing_blank unterminated; do
   for query_command in 'paths run' 'paths runs' 'lock-status'; do
     query_out=$(query $query_command last 2>"$TMP/query-error")
     query_rc=$?
-    if [ "$query_rc" != 2 ] || [ -n "$query_out" ] || [ ! -s "$TMP/query-error" ]; then
-      query_bad="$query_pointer_kind $query_command: rc=$query_rc output=$query_out"; break
+    if ! query_refused "no runs recorded for this worktree"; then
+      query_bad="$query_pointer_kind $query_command: rc=$query_rc output=$query_out stderr=$(cat "$TMP/query-error")"; break
     fi
   done
   [ -z "$query_bad" ] || break
@@ -1528,8 +1561,8 @@ query_bad=
 for query_command in 'paths run' 'paths lock' 'lock-status'; do
   query_out=$(query $query_command last 2>"$TMP/query-error")
   query_rc=$?
-  if [ "$query_rc" != 2 ] || [ -n "$query_out" ] || [ ! -s "$TMP/query-error" ]; then
-    query_bad="$query_command: rc=$query_rc output=$query_out"; break
+  if ! query_refused "no runs recorded for this worktree"; then
+    query_bad="$query_command: rc=$query_rc output=$query_out stderr=$(cat "$TMP/query-error")"; break
   fi
 done
 if [ -z "$query_bad" ] && [ -d "$query_last" ] && [ ! -e "$query_lock" ]; then
@@ -1551,8 +1584,8 @@ if [ "$query_line_paths" = 1 ] && [ -L "$TMP/query-state-link" ]; then
   for query_command in 'paths run' 'paths lock' 'lock-status'; do
     query_out=$(query $query_command last 2>"$TMP/query-error")
     query_rc=$?
-    if [ "$query_rc" != 2 ] || [ -n "$query_out" ] || [ ! -s "$TMP/query-error" ]; then
-      query_bad="$query_command: rc=$query_rc output=$query_out"; break
+    if ! query_refused "no runs recorded for this worktree"; then
+      query_bad="$query_command: rc=$query_rc output=$query_out stderr=$(cat "$TMP/query-error")"; break
     fi
   done
   [ -L "$query_last" ] || query_bad="query replaced the legacy pointer"
