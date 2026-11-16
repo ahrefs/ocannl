@@ -30,7 +30,6 @@ stretch (stretch (stretch u)) *. c[5|3]: every draw fills its use site: true
 u + 1, nothing sizing u
   draw = 1, 1 distinct values for 1 cells
 u + 1, nothing sizing u: every draw closes to 1: true
-u + 1, nothing sizing u: every draw fills its use site: true
 (u *. 2) *. 2, then a fixed index, batch 4
   draw = 4|1, 4 distinct values for 16 cells
 (u *. 2) *. 2, then a fixed index, batch 4: every draw closes to 4|1: true

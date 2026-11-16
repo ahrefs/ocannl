@@ -50,8 +50,9 @@ let observe build =
   (List.map draws ~f:(fun u -> (shape u, unique (Context.get_values ctx u.Tensor.value))), cells use)
 
 (* [want] is the shape every draw of the case closes to. A draw that fills holds a value per cell of
-   its use site; one that repeats holds fewer. *)
-let draws name ~want ~fills build =
+   its use site; one that repeats holds fewer. [~fills:None] makes no such claim: where the use site
+   has one cell, filling it is [1 = 1] whatever the solver did. *)
+let draws name ~want ~(fills : bool option) build =
   Verdict.case name @@ fun () ->
   let seen, total = observe build in
   Stdio.printf "%s\n" name;
@@ -61,11 +62,13 @@ let draws name ~want ~fills build =
     (name ^ ": every draw closes to " ^ want)
     seen
     ~f:(fun (shape, _) -> String.equal shape want);
-  if fills then
-    p_all ~min:1 (name ^ ": every draw fills its use site") seen ~f:(fun (_, n) -> n = total)
-  else
-    p_all ~min:1 (name ^ ": every draw repeats along its use site") seen ~f:(fun (_, n) ->
-        n < total)
+  match fills with
+  | None -> ()
+  | Some true ->
+      p_all ~min:1 (name ^ ": every draw fills its use site") seen ~f:(fun (_, n) -> n = total)
+  | Some false ->
+      p_all ~min:1 (name ^ ": every draw repeats along its use site") seen ~f:(fun (_, n) ->
+          n < total)
 
 (* The parameters' shapes after the program ran. *)
 let params name ~want build =
@@ -93,55 +96,55 @@ let stretched r =
 let c53 () = NTDSL.reshape ~l:"c" ~b:[ 5 ] ~o:[ 3 ] (values 15) ()
 
 let () =
-  draws "u *. c[5|3]" ~want:"5|3" ~fills:true (fun () ->
+  draws "u *. c[5|3]" ~want:"5|3" ~fills:(Some true) (fun () ->
       let u = TDSL.uniform () () in
       let%op y = u *. c53 () in
       ([ u ], y, y));
-  draws "stretch (stretch (stretch u)) *. c[5|3]" ~want:"5|3" ~fills:true (fun () ->
+  draws "stretch (stretch (stretch u)) *. c[5|3]" ~want:"5|3" ~fills:(Some true) (fun () ->
       let u = TDSL.uniform () () in
       let%op y = stretched (stretched (stretched u)) *. c53 () in
       ([ u ], y, y));
   (* A chain that branches: neither draw is the result's only argument. *)
-  draws "(u + v) *. c[5|3], two draws" ~want:"5|3" ~fills:true (fun () ->
+  draws "(u + v) *. c[5|3], two draws" ~want:"5|3" ~fills:(Some true) (fun () ->
       let u = TDSL.uniform () () and v = TDSL.uniform () () in
       let%op y = (u + v) *. c53 () in
       ([ u; v ], y, y));
   (* A constant with no axes gives the result no axis of its own. *)
-  draws "(u + z) *. c[5|3], z a constant with no axes" ~want:"5|3" ~fills:true (fun () ->
+  draws "(u + z) *. c[5|3], z a constant with no axes" ~want:"5|3" ~fills:(Some true) (fun () ->
       let u = TDSL.uniform () () in
       let z = NTDSL.reshape ~l:"z" ~b:[] ~o:[] (values 1) () in
       let%op y = (u + z) *. c53 () in
       ([ u ], y, y));
   (* A literal has one size-1 output axis of its own, which the draw does not adopt. *)
-  draws "(u + 1) *. c[5|3]" ~want:"5|3" ~fills:true (fun () ->
+  draws "(u + 1) *. c[5|3]" ~want:"5|3" ~fills:(Some true) (fun () ->
       let u = TDSL.uniform () () in
       let%op y = plus1 u *. c53 () in
       ([ u ], y, y));
-  draws "((u + 1) + (u *. 2)) *. c[5|3], one draw with two consumers" ~want:"5|3" ~fills:true
+  draws "((u + 1) + (u *. 2)) *. c[5|3], one draw with two consumers" ~want:"5|3" ~fills:(Some true)
     (fun () ->
       let u = TDSL.uniform () () in
       let%op y = (plus1 u + times2 u) *. c53 () in
       ([ u ], y, y));
   (* Unbatched: the draw's bound is the result's open row with one axis, no batch to fill. *)
-  draws "(u + 1) *. c[16]" ~want:"16" ~fills:true (fun () ->
+  draws "(u + 1) *. c[16]" ~want:"16" ~fills:(Some true) (fun () ->
       let u = TDSL.uniform () () in
       let c = NTDSL.reshape ~l:"c" ~b:[] ~o:[ 16 ] (values 16) () in
       let%op y = plus1 u *. c in
       ([ u ], y, y));
   (* Control: nothing sizes the draw, so it closes minimal with the literal's axis (an axis of its
      own would have been sized by the packed draw's block, 4). *)
-  draws "u + 1, nothing sizing u" ~want:"1" ~fills:true (fun () ->
+  draws "u + 1, nothing sizing u" ~want:"1" ~fills:None (fun () ->
       let u = TDSL.uniform () () in
       let y = plus1 u in
       ([ u ], y, y));
   (* gh-ocannl-1961's executed shape: the use site's bound arrives at the final stage, through a
      fixed index, and a chain of two operation results stands between it and the draw. *)
-  draws "(u *. 2) *. 2, then a fixed index, batch 4" ~want:"4|1" ~fills:false (fun () ->
+  draws "(u *. 2) *. 2, then a fixed index, batch 4" ~want:"4|1" ~fills:(Some false) (fun () ->
       let u = TDSL.uniform () ~batch_dims:[ 4 ] () in
       let m = times2 (times2 u) in
       let%op y = m ++ "...|3 => ...|0" in
       ([ u ], m, y));
-  draws "u *. 2, then a fixed index, batch 4" ~want:"4|4" ~fills:true (fun () ->
+  draws "u *. 2, then a fixed index, batch 4" ~want:"4|4" ~fills:(Some true) (fun () ->
       let u = TDSL.uniform () ~batch_dims:[ 4 ] () in
       let m = times2 u in
       let%op y = m ++ "...|3 => ...|0" in
