@@ -3909,7 +3909,7 @@ module C_syntax (B : C_syntax_config) = struct
             (* A select at an integer precision short-circuits (gh-ocannl-2145). *)
             ( d1
               @ guard_arms
-                  ~unconverted:(Ops.is_integer v1_prec && is_op v1)
+                  ~unconverted:(Ops.is_integer v1_prec && is_op v1 && fv v1)
                   ~cond:e1 ~cond_prec:v1_prec ~v1 ~cond_defs:d1 d2 d3,
               ternop_expr ~blend:false arms_prec op ~v1 ~v2 ~v3 e1 e2 e3 )
         | Follows_operands, _ when fv v1 || fv v2 || fv v3 ->

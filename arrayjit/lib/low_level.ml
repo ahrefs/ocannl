@@ -7694,7 +7694,11 @@ module Scope_order = struct
             @ arms
                 ~key:
                   (Select
-                     { cond = v1; prec = v1_prec; unconverted = Ops.is_integer v1_prec && is_op v1 })
+                     {
+                       cond = v1;
+                       prec = v1_prec;
+                       unconverted = Ops.is_integer v1_prec && is_op v1 && fv v1;
+                     })
                 ~payload:() ~v1 ~cond_defs:d1 d2 d3
         | Follows_operands, _ when fv v1 || fv v2 || fv v3 -> List.concat [ sub v1; sub v2; sub v3 ]
         | (Real_valued | Follows_operands | Truth | Integer_only | Projection | Integer_table), _ ->

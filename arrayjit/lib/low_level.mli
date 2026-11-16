@@ -1913,8 +1913,9 @@ val local_reads : t -> int list
 module Scope_order : sig
   type key =
     | Select of { cond : scalar_t; prec : Ops.prec; unconverted : bool }
-        (** [unconverted]: an operator condition at an integer compute precision rendered by
-            [C_syntax]'s [integer_op] as it stands, a float-valued one not converted to [prec]. *)
+        (** [unconverted]: a float-valued operator condition at an integer compute precision, which
+            [C_syntax]'s [integer_op] renders as it stands where the float path converts it to
+            [prec]; any other renders alike on both paths. *)
     | Gate of { op : Ops.binop; prec : Ops.prec; first : scalar_t; first_prec : Ops.prec }
 
   val equal_key : key -> key -> bool

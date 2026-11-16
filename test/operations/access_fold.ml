@@ -547,4 +547,30 @@ let () =
   let two = O.plan ~reads:Fn.id [ under 0. 1; under (-0.) 2 ] in
   p "same_plan accepts a plan matched against itself" (O.same_plan two two);
   p "same_plan refuses a plan whose conditions are one on one side and two on the other"
-    (not (O.same_plan ~same_a:(fun _ _ -> true) two two))
+    (not (O.same_plan ~same_a:(fun _ _ -> true) two two));
+  (* An integer condition renders alike under an integer select ([integer_op]) and a float one, so
+     the two keys are one condition; a float-valued one is converted only on the float path. *)
+  let oracle : O.oracle =
+    {
+      short_circuits = (fun ~prec:_ _ -> true);
+      comp_prec = Fn.id;
+      int_math_prec = Ops.double;
+      root_precs = (fun _ -> []);
+    }
+  in
+  let body_scope = scope (LL.Set_local (scope_id, at a)) in
+  let key_at prec cond =
+    let select =
+      LL.Ternop (Ops.Where, (cond, Ops.int32), (body_scope, prec), (LL.Constant 0., prec))
+    in
+    match O.entries oracle prec select with [ { guard = [ l ]; _ } ] -> Some l.key | _ -> None
+  in
+  let one_condition cond =
+    match (key_at Ops.int32 cond, key_at Ops.double cond) with
+    | Some k, Some k' -> O.equal_key k k'
+    | _ -> false
+  in
+  p "an integer condition is one condition under an integer and a float select"
+    (one_condition (cmp_at Ops.int32 Ops.Cmplt (embed i) (LL.Constant 1.)));
+  p "a float-valued condition is two: only the float path converts it"
+    (not (one_condition (LL.Unop (Ops.Sin, (embed i, Ops.double)))))
