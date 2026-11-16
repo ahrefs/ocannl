@@ -1,0 +1,3 @@
+negated initializer is exactly the negation of the original: true
+extend_dsls TDSL negates its argument: true
+extend_dsls NTDSL negates its argument: true
