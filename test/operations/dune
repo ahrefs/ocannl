@@ -99,7 +99,8 @@
   (alias slow-hip_scratch_tune_survives)
   (alias slow-metal_gpu_hang_failure)
   (alias slow-tune_ship_arm)
-  (alias slow-virtual_inliner_oracle-widen)))
+  (alias slow-virtual_inliner_oracle-widen)
+  (alias slow-where_scope_generator-widen)))
 
 ; The repo-wide scans, as one family (gh-ocannl-703). These parse the repository's own
 ; sources, dune files and documentation rather than compiling anything, so they are cheap -- and
@@ -15593,9 +15594,56 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules where_arm_scopes)
- (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  test_utils
+  ll_test
+  scope_emission)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-2250: a property-based generator of Where/scope programs. Each program's Emitted walk is
+; held to its kernel's text order and its values to a strict-interpreted twin and a descriptor
+; replay; the census on stdout is the grammar's. Picks its backend from the environment.
+
+(test
+ (name where_scope_generator)
+ (package neural_nets_lib)
+ (locks /ocannl_where_scope_generator)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules where_scope_generator)
+ (libraries
+  base
+  ocannl
+  stdio
+  mtime.clock.os
+  arrayjit.verdict
+  test_utils
+  ll_test
+  scope_emission)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; The widened grammar (three scope-bearing slots): for someone changing scope emission. It shares
+; the default run's lock, since both write the same kernel sources, and the training lock with the
+; other slow rules. No golden: its census differs from the default run's by construction; its
+; claims and FINDING stderr lines judge it.
+
+(rule
+ (alias slow-where_scope_generator-widen)
+ (package neural_nets_lib)
+ (locks /ocannl_training_test /ocannl_where_scope_generator)
+ (deps
+  (alias slow-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (run %{dep:where_scope_generator.exe} --widen)))
 
 ; The Winograd F(2x2, 3x3) conv rewrite (gh-ocannl-505): exact and tolerance parity against the
 ; direct form, structure, declines. Picks its backend from the environment.

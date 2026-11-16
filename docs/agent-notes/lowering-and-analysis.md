@@ -642,7 +642,18 @@ files.
   definition position (with `placement`, `gated` for a conditional one), then the operands with
   those scopes as leaves; it refuses `discarded_operands = Visit` and `fold_scalar`.
   `where_arm_scopes` checks the walk against kernel text on every row, with an operand-order
-  negative control (`was_emission_order`).
+  negative control (`was_emission_order`); both read the text through `test/support/scope_emission.ml`.
+  `where_scope_generator` (gh-ocannl-2250) does the same over an enumerated grammar of `Where`,
+  gate and projection skeletons with scopes in arms, beside them, shared by CSE and read across
+  bodies (the bound is in its header), and adds two relationships the plan cannot satisfy by
+  construction: the text reads no local ahead of its definition, and the compiled values equal a
+  descriptor replay and `interpret ~strict:true`. Two grammar rules are the IR's contracts, not
+  findings, which the generator broke first: a gate guards no definition (an out-of-range read sits
+  under a select of its own, `speculable_select`'s invariant), and nothing outside a scope body reads
+  a local defined in it (the CSE resets its table per body). To interpret CSE'd IR, interpret its
+  self-contained twin (each read of a shared local spelled as a copy of its scope): the lazy
+  interpreter does not hoist definitions. `--only <descriptor> [--brief]` dumps a program,
+  `--plant-swap` shows the order check failing, `--widen` is `slow-where_scope_generator-widen`.
 
 - `Indexing.affine` is the construction boundary for affine indices (gh-ocannl-774): its private
   payload preserves pattern matching while forcing coalescing and `Fixed_idx`/`Iterator`

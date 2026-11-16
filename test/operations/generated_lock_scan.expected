@@ -13,6 +13,7 @@ Programs calling Generated.init that several stanzas run:
   test/operations/schedule_pad.exe: every runner holds test/operations/schedule_pad
   test/operations/test_uniform_virtual_lane.exe: every runner holds test/operations/test_uniform_virtual_lane
   test/operations/thread_private_gate.exe: every runner holds test/operations/thread_private_gate
+  test/operations/where_scope_generator.exe: every runner holds /ocannl_where_scope_generator
 
 OK: every such program's runners share a lock, or its stanza says why none is needed.
 

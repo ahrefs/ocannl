@@ -217,6 +217,15 @@
  (modules ll_test)
  (libraries base stdio ocannl arrayjit.ll_builders arrayjit.verdict))
 
+; Reading scope definitions back out of a kernel's text: the [Access_fold] [Emitted] walk's text
+; order and the dependency order of what renders (gh-ocannl-2213, gh-ocannl-2250).
+
+(library
+ (name scope_emission)
+ (package neural_nets_lib)
+ (modules scope_emission)
+ (libraries base arrayjit.ir))
+
 ; The two-matmul fissioned chain of the scripted-ranking autotune tests and its small seeding menu
 ; (the roofline pre-filter's settings, and the claim that guards the claims built on them).
 
