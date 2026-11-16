@@ -275,7 +275,8 @@ elif [[ ${RANK_ONLY:-0} == 1 ]]; then
   echo "   RANK_ONLY: agreement cells only, under the shipped constants"
   if [[ ${FIT_FILL:-0} == 1 ]]; then
     fitted_arm=fitted
-    cell issue "$issue" --repeats=10 ${mp_flag[@]+"${mp_flag[@]}"}
+    # The cap under fit reaches the calibration too: its fit refuses a cap its sweep cannot identify.
+    cell issue "$issue" --repeats=10 ${mp_flag[@]+"${mp_flag[@]}"} ${ilp_flag[@]+"${ilp_flag[@]}"}
     issue_flags
     echo "   FIT_FILL: listing and pick cells under ${model[*]:-the shipped constants}"
   fi

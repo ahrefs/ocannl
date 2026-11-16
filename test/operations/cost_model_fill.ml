@@ -318,6 +318,20 @@ let () =
   in
   p "an update reading through a scope body is not proven independent: no chains"
     (chains_are ~private_:[ a ] scoped [ None ]);
+  (* A runtime-indexed read of a member node may land on any member's cell: [a0 += a[dyn]; a1 +=
+     x]. *)
+  let gathered =
+    Ll_test.loop_n k 8
+      (Ll_test.seq
+         (upd 0
+            (Ll_test.gather ~tn:a
+               ~idcs:[| Ll_test.fixed 0 |]
+               ~dyn_axis:0
+               ~dyn_value:(Ll_test.c 1., Ir.Ops.int32)))
+         (upd 1 xk))
+  in
+  p "an update gathering a member node at a runtime index is not proven independent: no chains"
+    (chains_are ~private_:[ a ] gathered [ None ]);
   (* Inner loops that do not address distinct cells: [acc[i + j]] over i, j < 4 is 7 cells, not 16;
      and a looped member beside a single cell of the same node may overlap it. *)
   let s7 = fresh_tn "cf_dep_s" [| 7 |] in

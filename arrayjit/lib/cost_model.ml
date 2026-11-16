@@ -482,7 +482,9 @@ let carrier_chains ~is_private ~carrier (body : Low_level.t) =
       | Ternop (_, (a, _), (b, _), (c, _)) -> go a || go b || go c
       | Binop (_, (a, _), (b, _)) -> go a || go b
       | Unop (_, (a, _)) -> go a
-      | Get_dynamic { dyn_value = dv, _; _ } -> go dv
+      (* A runtime-indexed read of a member node may land on any of its cells. *)
+      | Get_dynamic { tn; dyn_value = dv, _; _ } -> member_node tn || go dv
+      | Get_merge_buffer (tn, _) -> member_node tn
       | _ -> false
     in
     go sc
