@@ -5368,17 +5368,18 @@ let seeded_default_gate ~limits =
    seed below their write loops ({!reduction_sink}). *)
 let reduction_sink_enabled () = Utils.registered_flag ~arg_name:"gpu_default_reduction_sink"
 
-(* gh-ocannl-1405: whether the untuned plan also takes the sites whose accumulator precision widens
-   their storage precision (a bf16 weight gradient on CUDA, fp8 on CUDA and HIP, and since
-   gh-ocannl-2195 f16 on CUDA and HIP under the default [fp16_arithmetic]): seeded, sunk and
-   admitted to the model's numerics-preserving set. Seeding one keeps its result: the sketch's
-   [Privatize] mints its tile wide only where the default's serial rendering widens too
-   (gh-ocannl-1151), so a backprop weight gradient, which the default narrows after every batch row,
-   keeps a storage-precision tile and the same narrowing points (measured bitwise on CUDA,
-   test/operations/seeded_narrow_storage). Sinking one does not: the sunk reduction's accumulator is
-   localized below its write loops, where code generation widens it, so it rounds to storage once
-   instead of after every row -- an accuracy gain that changes the result, hence a numerics gate:
-   off by default, on in the [approximate] profile, pinned off in [reproducible]. *)
+(* gh-ocannl-1405: whether the untuned plan's reduction sink, and only the sink, also takes the
+   sites whose accumulator precision widens their storage precision (a bf16 weight gradient on CUDA,
+   fp8 on CUDA and HIP, and since gh-ocannl-2195 f16 on CUDA and HIP under the default
+   [fp16_arithmetic]). Sinking one changes its result: the sunk reduction's accumulator is localized
+   below its write loops, where code generation widens it, so it rounds to storage once instead of
+   after every row -- an accuracy gain that changes the result, hence a numerics gate: off by
+   default, on in the [approximate] profile, pinned off in [reproducible]. The seeding takes those
+   sites in every profile (gh-ocannl-2195): the sketch's [Privatize] mints its tile wide only where
+   the default's serial rendering widens too, by the one accumulator-width decision both ask
+   ([Low_level.decide_accum_width], gh-ocannl-1151), so a seeded site keeps the default's narrowing
+   points and summation order (executed per precision, test/operations/ seeded_narrow_storage). The
+   key's name predates that split. *)
 let seed_narrow_storage_enabled () =
   Utils.get_global_flag ~default:false ~arg_name:"gpu_default_seed_narrow_storage"
 
@@ -5399,35 +5400,17 @@ let scalar_blocktile p =
   && Option.is_none p.sk_coalesce && (not p.sk_batch_inner) && Option.is_none p.sk_swizzle
   && p.sk_depth = 1
 
-(* Whether a site's output keeps its accumulator at its storage precision under [accum_prec]: a
-   sketch keeps its accumulator at [accum_prec] across the whole reduction, where the default
-   pipeline stores a wider accumulator back at the output's precision after every contraction step
-   whose loop encloses the write loops (a backprop weight gradient) -- such a sketch would round
-   less often than the default. *)
-let accumulates_at_storage ~accum_prec (site : matmul_site) =
-  let d_prec = Lazy.force site.m_d.Ir.Tnode.storage_prec in
-  Ir.Ops.equal_prec (accum_prec d_prec) d_prec
-
 (* [Error] names the refusing gate, for the seeding census (gh-ocannl-1407). [capabilities] are the
    compiling context's, so the family's workgroup-memory refutation charges the tiles as the gate
    that judges the seeded kernel does ([Sched.kernel_workgroup_bytes], gh-ocannl-1330). *)
-let seeded_params_judged ?capabilities ?(admit_narrow = false) ~limits ~accum_prec ~min_reduction
-    (seg : LL.optimized) : (sketch_params, string) Result.t =
+let seeded_params_judged ?capabilities ~limits ~min_reduction (seg : LL.optimized) :
+    (sketch_params, string) Result.t =
   match detect_matmul_canonical seg with
   | None -> Error "no matmul site"
   | Some (site, _, _) when site_reduction_extent site < min_reduction ->
       Error
         (Printf.sprintf "site %s: reduction extent %d is under the seeding threshold %d"
            (Ir.Tnode.debug_name site.m_d) (site_reduction_extent site) min_reduction)
-  | Some (site, _, _) when not (admit_narrow || accumulates_at_storage ~accum_prec site) ->
-      (* Left to the default unless the narrow-storage admission (gh-ocannl-1405, the [approximate]
-         profile's) takes it, which {!seed_narrow_storage_enabled} explains. *)
-      Error
-        (Printf.sprintf
-           "site %s: the accumulator precision widens its %s storage, so a sketch would change the \
-            result"
-           (Ir.Tnode.debug_name site.m_d)
-           (Ir.Ops.prec_string (Lazy.force site.m_d.Ir.Tnode.storage_prec)))
   | Some (site, _, _) -> (
       match matmul_sketch_tree ?capabilities ~is_gpu:true ~is_cpu:false ~limits seg with
       | None -> Error "no matmul site"
@@ -5488,9 +5471,8 @@ let seeded_params_judged ?capabilities ?(admit_narrow = false) ~limits ~accum_pr
                        (Ir.Tnode.debug_name site.m_d) (List.length leaves)
                        (List.length (Sspace.refutations tree))))))
 
-let seeded_params ?capabilities ?admit_narrow ~limits ~accum_prec ~min_reduction seg =
-  Result.ok
-    (seeded_params_judged ?capabilities ?admit_narrow ~limits ~accum_prec ~min_reduction seg)
+let seeded_params ?capabilities ~limits ~min_reduction seg =
+  Result.ok (seeded_params_judged ?capabilities ~limits ~min_reduction seg)
 
 (* The untuned split runs wherever the seeded default does (gh-ocannl-1325, gh-ocannl-1412). It was
    CUDA's alone until its first pass ran the block loop outside the cell loops ([sr_block_hoist]):
@@ -5708,14 +5690,13 @@ let seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices ~capacity ~c
    on the segment alone, or [None] where the segment keeps its preset. Also the staffed search's
    start (gh-ocannl-1138), which applies it to each key's own segment. The judgment's [Error]
    names the refusing gate, for the seeding census (gh-ocannl-1407). *)
-let seeded_segment_judgment ~capabilities ~limits ~accum_prec ~admit_narrow ~static_indices ~gate
-    ~ranked_below (pre : LL.optimized) : (sketch_params, string) Result.t =
+let seeded_segment_judgment ~capabilities ~limits ~accum_prec ~static_indices ~gate ~ranked_below
+    (pre : LL.optimized) : (sketch_params, string) Result.t =
   let candidate =
     match gate with
     | Min_reduction n when n <= 0 ->
         Error "sketch seeding is off (gpu_default_sketch_min_reduction=0)"
-    | Min_reduction min_reduction ->
-        seeded_params_judged ~capabilities ~admit_narrow ~limits ~accum_prec ~min_reduction pre
+    | Min_reduction min_reduction -> seeded_params_judged ~capabilities ~limits ~min_reduction pre
     | Ranked
         {
           capacity;
@@ -5728,9 +5709,7 @@ let seeded_segment_judgment ~capabilities ~limits ~accum_prec ~admit_narrow ~sta
           sector_rate;
           wg_capacity;
         } -> (
-        match
-          seeded_params_judged ~capabilities ~admit_narrow ~limits ~accum_prec ~min_reduction:1 pre
-        with
+        match seeded_params_judged ~capabilities ~limits ~min_reduction:1 pre with
         | Ok p
           when ranked_below ~capacity ~cache_bandwidth:cache_rate ~issue_rate:scalar_rate
                  ~dram_bandwidth:dram_rate ~mma_rate:matrix_rate ~device_gather_rate:gather_rate
@@ -5763,11 +5742,11 @@ let seeded_segment_judgment ~capabilities ~limits ~accum_prec ~admit_narrow ~sta
           Error
             (sketch_params_label p ^ " declined on the segment: " ^ Outcome.detail_of_cause cause))
 
-let seeded_segment_params ~capabilities ~limits ~accum_prec ~admit_narrow ~static_indices ~gate
-    ~ranked_below pre =
+let seeded_segment_params ~capabilities ~limits ~accum_prec ~static_indices ~gate ~ranked_below pre
+    =
   Result.ok
-    (seeded_segment_judgment ~capabilities ~limits ~accum_prec ~admit_narrow ~static_indices ~gate
-       ~ranked_below pre)
+    (seeded_segment_judgment ~capabilities ~limits ~accum_prec ~static_indices ~gate ~ranked_below
+       pre)
 
 let seeded_decisions ?memo ?(census = true) ~capabilities ~limits ~accum_prec ~admit_narrow
     ~static_indices ~gate ~ranked_below ~sink_enabled (opt : LL.optimized) =
@@ -5815,8 +5794,8 @@ let seeded_decisions ?memo ?(census = true) ~capabilities ~limits ~accum_prec ~a
     | `Normal, _ ->
         Hashtbl.find_or_add decided (Lazy.force key) ~default:(fun () ->
             let judged =
-              seeded_segment_judgment ~capabilities ~limits ~accum_prec ~admit_narrow
-                ~static_indices ~gate ~ranked_below pre
+              seeded_segment_judgment ~capabilities ~limits ~accum_prec ~static_indices ~gate
+                ~ranked_below pre
             in
             census_verdict ~key
               (match judged with
@@ -5974,8 +5953,8 @@ let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narr
           let rec start =
             {
               decide =
-                seeded_segment_params ~capabilities ~limits ~accum_prec ~admit_narrow
-                  ~static_indices ~gate ~ranked_below;
+                seeded_segment_params ~capabilities ~limits ~accum_prec ~static_indices ~gate
+                  ~ranked_below;
               gate_tag;
               rederive =
                 (fun memo split opt ->
@@ -6087,27 +6066,17 @@ let model_ranks_coalesced ~limits =
   && Option.is_some (ranking_fill_model ~limits)
   && Option.is_some limits.Ir.Backend_intf.simdgroup_width
 
-let model_admits ?(coalesced = false) ~seeding ~accum_prec (base_opt : LL.optimized) =
-  (* gh-ocannl-1405: a narrow-storage site is in the set exactly where the seeded plan admits it, so
-     the model's pick still changes no result the seeded plan would not. *)
-  let admit_narrow = match seeding with Some (_, _, _, admit) -> admit | None -> false in
-  let preserving =
-    lazy
-      (admit_narrow
-      ||
-      match detect_matmul_canonical base_opt with
-      | Some (site, _, _) -> accumulates_at_storage ~accum_prec site
-      | None -> true)
-  in
+let model_admits ?(coalesced = false) ~seeding p =
+  (* gh-ocannl-1405, gh-ocannl-2195: a site whose accumulator widens its storage is in the set as it
+     is in the seeded plan's, in every profile -- a scalar blocktile keeps the default's narrowing
+     points ([seed_narrow_storage_enabled] says why) -- so the model's pick still changes no result
+     the seeded plan would not. *)
   (* gh-ocannl-1600: with the memory-transaction term priced ([coalesced]), a coalesced layout of a
      scalar blocktile is in the set too: it keeps every cell's summation order
      (test/operations/coalesce_numerics), and the score can now tell it from its twin. Its other
      restrictions are the blocktile's own, so a staged tensorized [coal-k] leaf stays out. *)
-  let scalar p =
-    scalar_blocktile p
-    || (coalesced && Option.is_some p.sk_coalesce && scalar_blocktile { p with sk_coalesce = None })
-  in
-  fun p -> Option.is_none seeding || (scalar p && Lazy.force preserving)
+  Option.is_none seeding || scalar_blocktile p
+  || (coalesced && Option.is_some p.sk_coalesce && scalar_blocktile { p with sk_coalesce = None })
 
 (* gh-ocannl-1477: the seeded plan's own sketches on a program [model_default] searches -- the whole
    routine, or one keyed segment of its per-segment substitution: each scalar blocktile the plan
@@ -7227,9 +7196,7 @@ module Make (D : Driver) = struct
        what tells them from their twins -- a rate resolved and a lane width stated. Elsewhere the
        candidate set is exactly as before. *)
       let coalesced = model_ranks_coalesced ~limits in
-      let admits base_opt =
-        model_admits ~coalesced ~seeding:(Lazy.force seeding_here) ~accum_prec base_opt
-      in
+      let admits p = model_admits ~coalesced ~seeding:(Lazy.force seeding_here) p in
       (* gh-ocannl-1477: under seeding, a walk's threshold is the seeded plan's own sketch on the
          searched program, scored as its leaves are ({!model_seeded_anchors}), where it is below the
          incumbent: a leaf that only ties the seeded geometry never displaces the seeded plan, while
@@ -7265,7 +7232,7 @@ module Make (D : Driver) = struct
         match
           model_family_search
             ~on_rejected:(fun () -> Int.incr n_rejected)
-            ~admit:(admits base_opt)
+            ~admit:admits
             ~on_excluded:(fun () -> Int.incr n_excluded)
             ~coalesced ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices ~peak_flops
             ~peak_memory_bandwidth ~score:score_valid ~incumbent base_opt
@@ -7920,9 +7887,7 @@ module Make (D : Driver) = struct
                 (if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree)
           | None -> []
         in
-        let listed =
-          explain_leaves ~label ~admits:(model_admits ~seeding ~accum_prec prog) prog leaves
-        in
+        let listed = explain_leaves ~label ~admits:(fun p -> model_admits ~seeding p) prog leaves in
         let rank (_, ex) = Option.value ex.ex_rank_ms ~default:Float.infinity in
         let anchors =
           List.map (model_seeded_anchors ~limits ~accum_prec ~static_indices ~seeded prog)
@@ -7948,9 +7913,8 @@ module Make (D : Driver) = struct
       let coalesced_explains ?(label = fun p -> spec_label (Whole (W_sketch p))) prog =
         if not (coalesced || model_ranks_coalesced ~limits) then []
         else
-          let admits = model_admits ~seeding ~accum_prec prog in
           explain_leaves ~label
-            ~admits:(fun p -> admits { p with sk_coalesce = None })
+            ~admits:(fun p -> model_admits ~seeding { p with sk_coalesce = None })
             prog
             (coalesced_seed_params ~capabilities:caps ~is_gpu ~is_cpu ~limits prog)
       in

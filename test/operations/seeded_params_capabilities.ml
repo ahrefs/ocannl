@@ -56,8 +56,7 @@ let () =
       Ir.Indexing.Empty
   in
   let seeded ?capabilities cap =
-    Autotune.seeded_params ?capabilities ~limits:(limits_at cap) ~accum_prec ~min_reduction:1
-      (scratch lowered)
+    Autotune.seeded_params ?capabilities ~limits:(limits_at cap) ~min_reduction:1 (scratch lowered)
   in
   let unconstrained = seeded ~capabilities:standin None in
   p "the rule seeds the matmul with no workgroup-memory limit" (Option.is_some unconstrained);
