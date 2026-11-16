@@ -1444,7 +1444,19 @@ let cache_reuse_probe ~exe ~root =
   mkdir_p dir;
   let src = Stdlib.Filename.concat dir "census_cache_probe.c" in
   let cache = Stdlib.Filename.concat dir "cache" in
-  let run ?(compiler = Cc_backend.compiler_command ()) name =
+  let compiler = Cc_backend.compiler_command () in
+  let source = "int census_cache_probe(int x) { return x + 1; }\n" in
+  (* Classify the cause before collecting any counters. A cache that starts bypassing an ordinary
+     plan must fail the reuse claims, never decide their availability. *)
+  let mutable_inputs =
+    let t : Census.toolchain =
+      { label = "cache probe"; command = compiler; march = ""; note = "" }
+    in
+    match Census.compilation_plan t ~opt_level:2 ~source with
+    | Ok plan -> plan_has_mutable_codegen_inputs plan
+    | Error out -> failwith ("cannot inspect the configured compiler's cache-probe plan: " ^ out)
+  in
+  let run ?(compiler = compiler) name =
     let asm = Stdlib.Filename.concat dir (name ^ ".s") in
     let report = Stdlib.Filename.concat dir (name ^ ".counts") in
     let log = Stdlib.Filename.concat dir (name ^ ".log") in
@@ -1477,7 +1489,7 @@ let cache_reuse_probe ~exe ~root =
     (match status with Unix.WEXITED 0 -> () | _ -> failwith (Stdio.In_channel.read_all log));
     (Stdio.In_channel.read_all report, Stdio.In_channel.read_all asm)
   in
-  Stdio.Out_channel.write_all src ~data:"int census_cache_probe(int x) { return x + 1; }\n";
+  Stdio.Out_channel.write_all src ~data:source;
   let cold, first = run "cold" in
   let warm, second = run "warm" in
   Stdio.Out_channel.write_all src ~data:"int census_cache_probe(int x) { return x + 2; }\n";
@@ -1485,23 +1497,20 @@ let cache_reuse_probe ~exe ~root =
   let profiling, _ = run ~compiler:(Cc_backend.compiler_command () ^ " -fprofile-arcs") "profile" in
   Verdict.p "output-name-sensitive profiling bypasses listing memoization"
     (String.equal profiling "0 0 1");
-  (* Run-decided outcome, not a capability gate: the counters themselves establish bypass. Each
-     callback either evaluates or skips its one claim (Verdict_scan.skip_list_census). *)
-  let bypassed =
-    String.equal cold "0 0 1" && String.equal warm "0 0 1" && String.equal changed "0 0 1"
+  let leg =
+    Verdict.leg ~when_:(not mutable_inputs) ~aggregation:`Environment
+      ~on:"configured compiler (mutable code-generation inputs)" ()
   in
-  List.iter
-    [
-      ( "a fresh process reuses an identical-source census listing",
-        String.equal cold "0 1 0" && String.equal warm "1 0 0" && String.equal first second );
-      ( "a source change invalidates the census listing cache",
-        String.equal changed "0 1 0" && not (String.equal first third) );
-    ]
-    ~f:(fun (label, ok) ->
-      if bypassed then
-        Verdict.skipped ~aggregation:`Environment
-          ~backend:"configured compiler (listing memoization bypassed)" label
-      else Verdict.p label ok)
+  Verdict.in_leg ~leg "a fresh process reuses an identical-source census listing" (fun label ->
+      Verdict.p label
+        (String.equal cold "0 1 0" && String.equal warm "1 0 0" && String.equal first second));
+  Verdict.in_leg ~leg "a source change invalidates the census listing cache" (fun label ->
+      Verdict.p label (String.equal changed "0 1 0" && not (String.equal first third)));
+  let expected_counts =
+    if mutable_inputs then [| "0 0 1"; "0 0 1"; "0 0 1" |] else [| "0 1 0"; "1 0 0"; "0 1 0" |]
+  in
+  Verdict.p_all2 "the configured compiler's lookup counters follow its compilation plan"
+    [| cold; warm; changed |] expected_counts ~f:String.equal
 
 let cache_policy_probes () =
   Verdict.p_all "profile and coverage generation bypass listing memoization"

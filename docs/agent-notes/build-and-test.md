@@ -2531,14 +2531,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   a function value or `lazy` is deferred unless a collection function calls it back, and a
   construct outside the model is read conservatively -- no skip list, an uncompared leg -- never
   refused. Extending the model starts in that header.
-  The item-1 migration of gh-ocannl-1893 removes the remaining exemptions without treating
-  run-decided outcomes as capability gates: `cc_march_census` learns bypass from the actual
-  census counters, and `tile_mma_narrow` recognizes half-type rejection from compiling the actual
-  kernel. Each iterates its claims once, with a callback that either evaluates or skips its
-  one label -- the accepted iteration shape in `skip_list_census`'s header. Neither observation
-  goes into a leg's `~when_`. For program-declared VERIFY claims (`reduction_forms`), iterate
-  the declaration's labels through `in_legf` on every backend and defer execution/readback;
-  availability is independent of those values.
+  The item-1 migration of gh-ocannl-1893 removes the remaining exemptions. The cache-reuse
+  claims in `cc_march_census` gate on the configured compiler's expanded compilation plan,
+  classified before collecting the counters; an always-evaluated claim checks the plan's
+  expected lookup sequence, including all bypasses for a mutable-input plan. Counters never decide availability, even in a per-claim callback: an ordinary
+  compiler whose cache stops engaging must fail. `tile_mma_narrow` instead recognizes a half-type
+  rejection from compiling the actual kernel, then either evaluates or skips each claim once in
+  the iteration shape `skip_list_census` accepts. Its gate is that narrowly recognized compile
+  outcome, not the parity or structural values. For program-declared VERIFY claims
+  (`reduction_forms`), iterate the declaration's labels through `in_legf` on every backend and
+  defer execution/readback; availability is independent of those values.
 - A negative control confirms the run REACHED its last row, not only that `FAIL:` lines appeared
   (gh-ocannl-1067): the claims it printed, passed plus failed, number the golden's lines, or the
   rows run under `Verdict.case`. A raise ends a run at the case that raised, and the rows after it

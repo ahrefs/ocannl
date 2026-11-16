@@ -1143,8 +1143,8 @@ let raw_direct_evidence =
     ( "verdict_ratchet.ml:e1354d390a356f0c79420c25232b0b42",
       "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true" );
     ( "verdict_ratchet.ml:6e412a3ea539daeb755ee0d61f3d40f7",
-      "refuses a leg claim it cannot complete, a planted hand-written skip list, and a skip-list \
-       reader that raised: true" );
+      "refuses a leg claim it cannot complete, a planted hand-written skip list, a skip-list \
+       reader that raised, and a stale exemption: true" );
     ( "env_var_deps.ml:02e183a4105132ec092206c1d35d6247",
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:0deef0cb94c45615f32ee84ac2e76f8e",

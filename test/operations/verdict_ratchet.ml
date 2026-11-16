@@ -4840,6 +4840,13 @@ let refuse_skip_list ~fail ~source (site : Scan.skip_list) =
        | Scan.Skip_run n -> Printf.sprintf "applies %d skips in one branch" n)
        site.Scan.first_label)
 
+let stale_skip_list_exemptions ~exemptions ~found =
+  List.filter_map exemptions ~f:(fun (key, sites, _) ->
+      let count = Option.value (Hashtbl.find found key) ~default:0 in
+      if count = sites then None
+      else Some (Printf.sprintf "%s (exempted %d, found %d)" key sites count))
+  |> Set.of_list (module String)
+
 let refuse_stale_skip_lists ~fail stale_skip_lists =
   if not (Set.is_empty stale_skip_lists) then
     fail
@@ -5055,10 +5062,19 @@ let run_leg_and_skip_list_refusal_control () =
       (refuse_skip_list ~source:"fixture.ml" ~fail:(fun _ ->
            refused_list := true;
            Test_scan.Refusal_control_manifest.observe_failure ~source ~format:skip_list_format));
-  (* With no production exemptions left, a synthetic missing site keeps this refusal live. *)
-  refuse_stale_skip_lists
-    (Set.singleton (module String) "fixture.ml:gone (exempted 1, found 0)")
-    ~fail:(fun _ ->
+  (* Count a synthetic exemption against real found-count tables, including both drift directions,
+     so the production table being empty cannot leave the comparison untested. *)
+  let exemptions = [ ("fixture.ml:claim", 1, "synthetic control") ] in
+  let counts n = Hashtbl.of_alist_exn (module String) [ ("fixture.ml:claim", n) ] in
+  let stale = stale_skip_list_exemptions ~exemptions ~found:(counts 2) in
+  let counts_compared =
+    Set.equal stale (Set.singleton (module String) "fixture.ml:claim (exempted 1, found 2)")
+    && Set.is_empty (stale_skip_list_exemptions ~exemptions ~found:(counts 1))
+    && Set.equal
+         (stale_skip_list_exemptions ~exemptions ~found:(Hashtbl.create (module String)))
+         (Set.singleton (module String) "fixture.ml:claim (exempted 1, found 0)")
+  in
+  refuse_stale_skip_lists stale ~fail:(fun _ ->
       refused_stale := true;
       Test_scan.Refusal_control_manifest.observe_failure ~source ~format:stale_format);
   ignore
@@ -5069,9 +5085,9 @@ let run_leg_and_skip_list_refusal_control () =
        ~census:(fun _ -> raise Stdlib.Exit)
        "let () = ()"
       : Scan.skip_list_census);
-  ( "refuses a leg claim it cannot complete, a planted hand-written skip list, and a skip-list \
-     reader that raised",
-    !refused_leg && !refused_list && !refused_raise && !refused_stale )
+  ( "refuses a leg claim it cannot complete, a planted hand-written skip list, a skip-list reader \
+     that raised, and a stale exemption",
+    !refused_leg && !refused_list && !refused_raise && !refused_stale && counts_compared )
 
 (* {1 A gate is a skip, not a disjunct of the claim (gh-ocannl-1310)}
 
@@ -6192,11 +6208,7 @@ let () =
          (String.concat ~sep:", " (Set.to_list stale)));
   refuse_stale_quantified ~fail stale_quantified;
   let stale_skip_lists =
-    List.filter_map exempt_skip_lists ~f:(fun (key, sites, _) ->
-        let found = Option.value (Hashtbl.find skip_lists_exempted key) ~default:0 in
-        if found = sites then None
-        else Some (Printf.sprintf "%s (exempted %d, found %d)" key sites found))
-    |> Set.of_list (module String)
+    stale_skip_list_exemptions ~exemptions:exempt_skip_lists ~found:skip_lists_exempted
   in
   refuse_stale_skip_lists ~fail stale_skip_lists;
   let stale_floors =

@@ -699,7 +699,7 @@ accepts a sub-leg gated on an invariant its claims' population does not decide: 
 names a leg handed in as a parameter uncompared rather than counting it read: true
 names a leg claim applied in part instead of counting it clean: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
-refuses a leg claim it cannot complete, a planted hand-written skip list, and a skip-list reader that raised: true
+refuses a leg claim it cannot complete, a planted hand-written skip list, a skip-list reader that raised, and a stale exemption: true
 a claim reader's exception on a source that parses reaches the scanner-defect refusal, not the parse one: true
 a syntax matrix cell whose reader raises reads as a reader defect, not a parse failure: true
 refuses a negated backend gate folded into a claim's value: true
