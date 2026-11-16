@@ -5341,6 +5341,11 @@ let is_safe_to_guess v =
   Set.mem !safe_to_guess v
   || (Set.mem !used_in_pointwise v && not (Set.mem !used_in_spec_or_compose v))
 
+(* A packed draw's total ([Uint4x32_to_prec]): a round-up [Total_elems] over a block counter. *)
+let is_packed_draw_constr = function
+  | Total_elems { numerator = Strided_var { round_up = true; _ }; _ } -> true
+  | _ -> false
+
 let dim_has_glb env v =
   match find_dim env.dim_env v with Some (Bounds_dim { glb = Some _; _ }) -> true | _ -> false
 
@@ -5417,11 +5422,7 @@ let%track5_sexp rec eliminate_rows_constraint ~deferred_dims ~depth stage origin
                one without closes earlier. Not before stage 5 (gh-ocannl-1961): a variable shared
                with another row's [Total_elems] shows no bound at all until that stage sizes the
                row, and from then on [solve_inequalities] runs draws at quiescence. *)
-            let round_up_numerator =
-              match constr with
-              | Total_elems { numerator = Strided_var { round_up = true; _ }; _ } -> true
-              | _ -> false
-            in
+            let round_up_numerator = is_packed_draw_constr constr in
             let unconditional_close =
               if round_up_numerator then is_stage7 stage else is_stage5_up stage
             in
@@ -6114,15 +6115,8 @@ let%track5_sexp process_shape_row ~deferred_dims ~(stage : stage) origin env
              }) ->
           (* That's a greatest-lower-bound (most specific) value for a row. *)
           (keep @ (Row_eq { r1; r2 = glb; origin } :: dim_eqs), env)
-      | Some
-          (Bounds_row
-             {
-               glb = Some glb;
-               constr = Total_elems { numerator = Strided_var { round_up = true; _ }; _ };
-               is_in_param;
-               _;
-             })
-        when equal_stage stage Stage6a
+      | Some (Bounds_row { glb = Some glb; constr; is_in_param; _ })
+        when is_packed_draw_constr constr && equal_stage stage Stage6a
              && (is_in_param || is_resolve_at_use v)
              && (let glb = subst_row env glb in
                  is_broadcastable glb.bcast || List.is_empty glb.beg_dims)
@@ -6214,8 +6208,7 @@ let update_row_is_param r is_p env =
     | _ -> env
 
 let is_draw_total = function
-  | Rows_constr { constr = Total_elems { numerator = Strided_var { round_up; _ }; _ }; _ } ->
-      round_up
+  | Rows_constr { constr; _ } -> is_packed_draw_constr constr
   | _ -> false
 
 (* gh-ocannl-2141: the leaf axes that wait for a packed draw to size its block counter. A round-up
@@ -6634,17 +6627,15 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
   (* gh-ocannl-2244: at stage 6a a packed draw's row closes to its GLB ([process_shape_row]), which
      reads the environment the same way: it waits for the rest to settle too. Closed first, a draw
      whose row a pending equation still relates to its own bound took a GLB that equation refutes
-     (the statistic of [row_closure_guess]'s refuted GLB took the whole spatial row). *)
+     (the statistic of [row_closure_guess]'s refuted GLB took the whole spatial row). Every packed
+     draw's row waits, not only one that arm will close: whichever arm closes it reads the
+     environment, and waiting changes no closing, only its order. *)
   let is_draw_row env = function
     | Shape_row (r, _) when equal_stage stage Stage6a -> (
         match (subst_row env r).bcast with
         | Row_var v -> (
             match find_row env.row_env v with
-            | Some
-                (Bounds_row
-                   { constr = Total_elems { numerator = Strided_var { round_up = true; _ }; _ }; _ })
-              ->
-                true
+            | Some (Bounds_row { constr; _ }) -> is_packed_draw_constr constr
             | _ -> false)
         | Broadcastable -> false)
     | _ -> false
