@@ -20,6 +20,7 @@ let raw_entries =
       [
         "[scanner-refusal:79b83d87bc35a637a45c0dd6dc7479cf] explicit_library_deps";
         "[scanner-refusal:e2937f725c3dd416fbbbb047979dc15a] library declaration compiles";
+        "[scanner-refusal:8261260fa2908a6e512581ef47939697] undeclared use compiles";
         "[scanner-refusal:bd4e1515861d31f929904e3deb2b0b7b] undeclared transitive library";
         "[scanner-refusal:36550c0b9c79bcf4a0384888ee112619] declared library's re-export";
         "[scanner-refusal:068ac0a43201ecb7fea5899eba10c386] runtime dependency compiles";

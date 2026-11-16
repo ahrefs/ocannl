@@ -4498,7 +4498,8 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   review caught `pprint` missing from the real CUDA stanza and `stdio` plus `pprint` missing
   from the real HIP stanza although both stand-ins compiled. `vendor_stub_arms_scan` deliberately
   leaves linkage parity outside its boundary. A stub is a check of signatures only: it proves
-  nothing about the vendor library's behavior, so a change to a backend's runtime behavior still needs its box. A NEW vendor-gated
+  nothing about the vendor library's behavior, so a change to a backend's runtime behavior still
+  needs its box. A NEW vendor-gated
   `select` arm that no library under `arrayjit/vendor_stubs/` copies and compiles is refused by
   `test/operations/vendor_stub_arms_scan` (a `@scans` member), naming its dune file: copy it into
   `arms/dune` as its siblings are. The vendor libraries are derived from the stand-in tree.

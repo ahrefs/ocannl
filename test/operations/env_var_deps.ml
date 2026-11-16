@@ -348,14 +348,15 @@ let is_gate ?(subdir = "") ?programs ~stanzas stanza =
               ~f:(fun (_, runners) ->
                 List.exists runners ~f:(fun (runner, _) -> Sexp.equal runner stanza))))
 
-(* The mixed-file exemption belongs to one configuration-free canary, not to arbitrary members of
-   its aliases. Resolve every reachable action and keep the owner's explicit module/library contract
-   closed. Unsupported launchers cannot inherit the exemption. *)
+(* The canary owner's closed library contract; synthetic fixtures derive their linkage from it. *)
 let configuration_free_canary_libraries = [ "ctypes"; "integers"; "metal"; "sexplib0"; "unix" ]
 
 let configuration_free_canary_linkage =
   "(libraries " ^ String.concat ~sep:" " configuration_free_canary_libraries ^ ")"
 
+(* The mixed-file exemption belongs to one configuration-free canary, not to arbitrary members of
+   its aliases. Resolve every reachable action and keep the owner's explicit module/library contract
+   closed. Unsupported launchers cannot inherit the exemption. *)
 let configuration_free_canary_alias ~subdir ~stanzas alias =
   let atoms field stanza =
     match Scan.field stanza field with
