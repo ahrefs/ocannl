@@ -119,3 +119,109 @@ a min whose rejected cells are 0, not +inf: left alone: true
 --- leg 5: an infinite payload ---
 rewritten: the prefix before the infinity is the finite cumulative sum: true
 rewritten: every sum from the infinity on is +inf: true
+--- leg 6: the cummax backward ---
+negatives with repeated maxima: composed has no scan: true
+negatives with repeated maxima: rewritten scans the cummax and its gradient gate (backward), and writes no n x n node: true
+negatives with repeated maxima: rewritten y and x.grad equal the composed bitwise: true
+negatives with repeated maxima: rewritten x.grad equals the tie-rule oracle: true
+a repeated maximum separated by losing values: composed has no scan: true
+a repeated maximum separated by losing values: rewritten scans the cummax and its gradient gate (backward), and writes no n x n node: true
+a repeated maximum separated by losing values: rewritten y and x.grad equal the composed bitwise: true
+a repeated maximum separated by losing values: rewritten x.grad equals the tie-rule oracle: true
+all equal: composed has no scan: true
+all equal: rewritten scans the cummax and its gradient gate (backward), and writes no n x n node: true
+all equal: rewritten y and x.grad equal the composed bitwise: true
+all equal: rewritten x.grad equals the tie-rule oracle: true
+strictly increasing: composed has no scan: true
+strictly increasing: rewritten scans the cummax and its gradient gate (backward), and writes no n x n node: true
+strictly increasing: rewritten y and x.grad equal the composed bitwise: true
+strictly increasing: rewritten x.grad equals the tie-rule oracle: true
+strictly decreasing: composed has no scan: true
+strictly decreasing: rewritten scans the cummax and its gradient gate (backward), and writes no n x n node: true
+strictly decreasing: rewritten y and x.grad equal the composed bitwise: true
+strictly decreasing: rewritten x.grad equals the tie-rule oracle: true
+strict, the first prefix empty: composed has no scan: true
+strict, the first prefix empty: rewritten scans the cummax and its gradient gate (backward), and writes no n x n node: true
+strict, the first prefix empty: rewritten y and x.grad equal the composed bitwise: true
+strict, the first prefix empty: rewritten x.grad equals the tie-rule oracle: true
+strict, separated ties: composed has no scan: true
+strict, separated ties: rewritten scans the cummax and its gradient gate (backward), and writes no n x n node: true
+strict, separated ties: rewritten y and x.grad equal the composed bitwise: true
+strict, separated ties: rewritten x.grad equals the tie-rule oracle: true
+suffix (a reversed cummax): composed has no scan: true
+suffix (a reversed cummax): rewritten scans the cummax and its gradient gate (forward), and writes no n x n node: true
+suffix (a reversed cummax): rewritten y and x.grad equal the composed bitwise: true
+suffix (a reversed cummax): rewritten x.grad equals the tie-rule oracle: true
+suffix, separated ties: composed has no scan: true
+suffix, separated ties: rewritten scans the cummax and its gradient gate (forward), and writes no n x n node: true
+suffix, separated ties: rewritten y and x.grad equal the composed bitwise: true
+suffix, separated ties: rewritten x.grad equals the tie-rule oracle: true
+a sibling lowering of the rewritten cummax step hits the analysis cache: true
+non-dyadic: the gate is rewritten: true
+non-dyadic: rewritten x.grad matches the composed within 1e-5 relative: true
+tropical @^+: its gradient gate is left composed: true
+tropical @^+: rewritten x.grad equals the composed bitwise: true
+--- leg 7: hand-built gradient gates, executed ---
+gg_max: the rewrite emits the forward scan and its gate scan: true
+gg_max: the gate scan survives optimization: true
+gg_max: rewritten equals the composed execution bitwise: true
+gg_max: rewritten equals the tie-rule oracle: true
+gg_max: the rewrite is idempotent: true
+gg_min (a cummin): the rewrite emits the forward scan and its gate scan: true
+gg_min (a cummin): the gate scan survives optimization: true
+gg_min (a cummin): rewritten equals the composed execution bitwise: true
+gg_min (a cummin): rewritten equals the tie-rule oracle: true
+gg_min (a cummin): the rewrite is idempotent: true
+gg_min_strict: the rewrite emits the forward scan and its gate scan: true
+gg_min_strict: the gate scan survives optimization: true
+gg_min_strict: rewritten equals the composed execution bitwise: true
+gg_min_strict: rewritten equals the tie-rule oracle: true
+gg_min_strict: the rewrite is idempotent: true
+gg_max_suffix: the rewrite emits the forward scan and its gate scan: true
+gg_max_suffix: the gate scan survives optimization: true
+gg_max_suffix: rewritten equals the composed execution bitwise: true
+gg_max_suffix: rewritten equals the tie-rule oracle: true
+gg_max_suffix: the rewrite is idempotent: true
+gg_mismatched (the gate's triangle is strict, the forward's is not): the gate is left composed: true
+gg_mismatched (the gate's triangle is strict, the forward's is not): rewritten equals the composed execution bitwise: true
+gg_second_writer (a second contribution into the gate's product): the gate is left composed: true
+gg_second_writer (a second contribution into the gate's product): rewritten equals the composed execution bitwise: true
+gg_copy (the gate compares a copy of the extremum): the gate is left composed: true
+gg_copy (the gate compares a copy of the extremum): rewritten equals the composed execution bitwise: true
+gg_fill (the extremum's fill is 0, not -inf): the gate is left composed: true
+gg_fill (the extremum's fill is 0, not -inf): rewritten equals the composed execution bitwise: true
+gg_prec (the gate's product is f16, the target f32): the gate is left composed: true
+gg_prec (the gate's product is f16, the target f32): rewritten equals the composed execution bitwise: true
+gg_narrow (the gate's equality is f16, the extremum f32): the gate is left composed: true
+gg_narrow (the gate's equality is f16, the extremum f32): rewritten equals the composed execution bitwise: true
+gg_wide_payload (the payload is f32, the forward and its gate f16): the gate is left composed: true
+gg_wide_payload (the payload is f32, the forward and its gate f16): rewritten equals the composed execution bitwise: true
+gg_row_from_i (the gate reads the forward's row at the input position): the gate is left composed: true
+gg_row_from_i (the gate reads the forward's row at the input position): rewritten equals the composed execution bitwise: true
+--- leg 8: constant masks ---
+literal (i <= o): an inclusive prefix: composed has no scan: true
+literal (i <= o): an inclusive prefix: rewritten has the expected scan: true
+literal (i <= o): an inclusive prefix: rewritten writes no n x n node: true
+literal (i <= o): an inclusive prefix: rewritten equals the composed result bitwise: true
+literal (i <= o): an inclusive prefix: rewritten equals the host oracle: true
+literal (i < o): an exclusive prefix: composed has no scan: true
+literal (i < o): an exclusive prefix: rewritten has the expected scan: true
+literal (i < o): an exclusive prefix: rewritten writes no n x n node: true
+literal (i < o): an exclusive prefix: rewritten equals the composed result bitwise: true
+literal (i < o): an exclusive prefix: rewritten equals the host oracle: true
+literal (i >= o): an inclusive suffix: composed has no scan: true
+literal (i >= o): an inclusive suffix: rewritten has the expected scan: true
+literal (i >= o): an inclusive suffix: rewritten writes no n x n node: true
+literal (i >= o): an inclusive suffix: rewritten equals the composed result bitwise: true
+literal (i >= o): an inclusive suffix: rewritten equals the host oracle: true
+literal (i > o): an exclusive suffix: composed has no scan: true
+literal (i > o): an exclusive suffix: rewritten has the expected scan: true
+literal (i > o): an exclusive suffix: rewritten writes no n x n node: true
+literal (i > o): an exclusive suffix: rewritten equals the composed result bitwise: true
+literal (i > o): an exclusive suffix: rewritten equals the host oracle: true
+a literal one cell off the triangle is left alone: true
+the near-triangle literal: rewritten equals the composed bitwise: true
+the near-triangle literal: rewritten equals the host product: true
+an NTDSL.init triangle (mutable host data) is left alone: true
+the init triangle: the routine computes the prefix sums: true
+the init triangle, rewritten by the host: the same routine computes the suffix sums: true
