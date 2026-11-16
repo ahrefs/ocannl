@@ -996,7 +996,13 @@ files.
   exactly the two the producers print, refusing a third rather than guessing;
   `test/operations/bench_line_readers` runs every reader, and the drivers' functions over it, on
   lines the producers print on cc (a new format adds a capture there, or says in `FORMATS` why no
-  CPU run prints it), and `benchmarks/test/test_bench_line_scan.py` refuses a bench-line pattern in
+  CPU run prints it). Its `trace-has incomplete` predicate is pinned on fixed complete and
+  incomplete summaries (gh-ocannl-1992), never on the live search's success under load: CLI exit 0
+  means the predicate HOLDS, so an all-zero exit-status dict includes an incomplete summary,
+  not an empty trace. The live summary goes to stderr `(not part of the golden)` and trace-claim
+  failure details, preserving its `INCOMPLETE:` count. The trace currently does not name the
+  raised calls or exceptions; adding failure observation to the timing path is separate from
+  this reader test. `benchmarks/test/test_bench_line_scan.py` refuses a bench-line pattern in
   any other script. A stub bench in `test_cells.py` prints the real format, trailing census
   included. A bench that refuses its measurement for host
   contention exits 3, and the drivers keep that apart from a failure (a 1 outranks a 3).
