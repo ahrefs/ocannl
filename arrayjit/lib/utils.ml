@@ -413,7 +413,7 @@ let config_key_classification : (config_key_class * string * string list) list =
       "a GPU compile knob (gh-ocannl-1710, gh-ocannl-1779): it picks nvrtc's or hiprtc's math \
        switches -- and on CUDA the f32 tanh and half function spellings -- when a kernel is \
        rendered and compiled, after the lowered code the digest names; the backend's tag carries \
-       the precise regime as a component derived from those switches",
+       the math regime as a component derived from those switches",
       [ "cuda_fast_math"; "hip_fast_math" ] );
     ( Keyed "codegen",
       "a CUDA compile knob (gh-ocannl-1705): it picks the nvrtc target arch, the floor that ships \

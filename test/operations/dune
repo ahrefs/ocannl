@@ -3032,13 +3032,12 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-; gh-ocannl-1779: the same executable with HIP's fast math off (hip_fast_math=false, as the
-; reproducible profile sets it -- the key alone, since the profile's cc pins move the cc compiler's
-; select lowering, which the default run's census already covers): there HIP honors NaN, and its
-; NaN-condition selects are held to the select's semantics exactly (ahrefs/ocannl#1647's HIP
-; entries but bs_sat01_gate are fast math's). No other backend reads the key. The golden is the
-; default run's. Both runs share the build_files/branchless_select/ that
-; Generated.init empties, hence the shared lock.
+; gh-ocannl-1779/1909: run the explicit HIP IEEE vector (hip_fast_math=false) as well as the
+; measured default. Both honor NaN and meet the select's value semantics, apart from the
+; cross-backend bs_sat01_gate semantics gap. State the key alone: the reproducible profile's cc
+; pins would also move cc's select lowering, already covered by the default census. No other
+; backend reads this key. Both runs use the default golden and share the Generated.init artifact
+; directory, hence the shared lock.
 
 (rule
  (target branchless_select-no_hip_fast_math.actual)
@@ -6979,10 +6978,10 @@
   (env_var OCANNL_BACKEND))
  (libraries base ocannl stdio arrayjit.verdict ll_test arrayjit.utils))
 
-; gh-ocannl-1779: the same executable under the reproducible profile, which turns HIP's fast math
-; off (hip_fast_math=false): there HIP's f32 and half division are IEEE, held to both claims, and
-; the negative control's leg is skipped. CUDA's f32 likewise (cuda_fast_math=false). The golden
-; is the default run's.
+; gh-ocannl-1779/1909: run reproducible's explicit contraction-off vector too. HIP division is
+; exact under both policies; reproducible also makes CUDA's f32 division exact
+; (cuda_fast_math=false). The host-side oracle rejection control runs under either policy, and
+; both rules use the same golden.
 
 (rule
  (target division_special_values-reproducible.actual)

@@ -41,23 +41,19 @@ let hip_target_options ~target_archs =
   then [ "-Xclang"; "-target-feature"; "-Xclang"; "-real-true16" ]
   else []
 
-(* gh-ocannl-1779: the math switches, by the [hip_fast_math] key -- the HIP counterpart of
-   [nvrtc_math_options]. On (the default, [performance] and [approximate]), the umbrella with its
-   overrides, as above. Off (what [profile=reproducible] sets), no umbrella and the IEEE switches
-   spelled out, so a hiprtc default cannot move one. Contraction is the one that matters most:
-   [-ffp-contract=fast] is what loses the low part of ROCm's extended-precision f64 [pow] (204-206
-   ulps, gh-ocannl-1730). Measured on gfx1151 for gh-ocannl-1779 with [unary_math_special_values]:
-   this vector, and this vector without [-ffp-contract=off] (hiprtc's own default), hold f64 [pow]
-   to 2 ulps; with [-ffp-contract=fast] in its place, [pow(2^-1000, 1)] is 204 ulps off again and
-   f32 functions leave their stated ulps. hipcc's driver defaults to fast-honor-pragmas, so the
-   default is not one to rely on: [-ffp-contract=off] is the counterpart of the [reproducible]
-   payload's [cc_backend_fp_contract=off] and of nvrtc's [--fmad=false]. [-fno-associative-math] is
-   clang's default without the umbrella; it stays spelled so the gh-ocannl-735 reduction-order guard
-   is a member of both vectors. The off state is "clang's IEEE semantics, contraction off", not
-   strict arithmetic in every respect: explicit intrinsics the codegen asks for ([__builtin_fma],
-   the [Builtins_hip] wrappers, which are IEEE under either state) stay what they are. *)
+(* gh-ocannl-1909: the default HIP policy keeps the umbrella, then restores exact division,
+   non-approximate functions and NaN semantics, and limits contraction to source expressions. On
+   tuf/gfx1102 discrete memory, untuned gpt2_mini_train (4 layers, width 256, sequence 128, batch
+   8), this vector cost 1.057x the old vector [1.046, 1.062] over 12 paired rounds; an identical
+   control ranged [0.997, 1.008]. We accept that cost for exact normalization quotients,
+   NaN-preserving selection and f64 pow's 2-ulp bound. No gfx1151 timing was taken.
+   [hip_fast_math=false], selected by reproducible, still pins contraction OFF. [on] is not [off]:
+   the compiler_contraction_off capability, and t1835's exact schedule gate, stay closed for the
+   default. Explicit fma intrinsics remain explicit under either policy. *)
 let hip_math_options ~fast_math =
-  if fast_math then clang_fast_math_options ~reassociate:false
+  if fast_math then
+    clang_fast_math_options ~reassociate:false
+    @ [ "-fno-reciprocal-math"; "-fno-approx-func"; "-ffp-contract=on"; "-fhonor-nans" ]
   else
     [
       "-ffp-contract=off";

@@ -112,13 +112,14 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
 }|},
       [] );
     (* gh-ocannl-1684: under [-ffast-math] ROCm's [fmodf] returns the signed zero of [x] where C
-       returns NaN, for [fmod(+-0, +-0)] and [fmod(+-inf, +-inf)] on gfx1102. C's NaN domain short
-       of a NaN operand -- an infinite dividend or a zero modulus -- is classified by the bits and
-       the NaN chosen as bits in an integer select, as in [ocannl_sinf]; a NaN operand propagates
-       through [fmodf] itself. *)
+       returns NaN, for [fmod(+-0, +-0)] and [fmod(+-inf, +-inf)] on gfx1102. C's NaN domain -- a
+       nonfinite dividend, a NaN modulus or a zero modulus -- is classified by the bits and the NaN
+       chosen as bits in an integer select, as in [ocannl_sinf]. Do not delegate NaN propagation to
+       ROCm: under fast math plus [-fhonor-nans], [fmod(x, NaN)] returned [x] (gh-ocannl-1909). *)
     ( "ocannl_fmodf",
       {|__device__ __forceinline__ float ocannl_fmodf(float x, float y) {
   return __uint_as_float(((__float_as_uint(x) & 0x7FFFFFFFu) >= 0x7F800000u
+                          || (__float_as_uint(y) & 0x7FFFFFFFu) > 0x7F800000u
                           || (__float_as_uint(y) & 0x7FFFFFFFu) == 0u)
                              ? 0x7FC00000u
                              : __float_as_uint(fmodf(x, y)));
@@ -130,6 +131,7 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
       {|__device__ __forceinline__ double ocannl_fmod(double x, double y) {
   return __longlong_as_double(
       (((unsigned long long)__double_as_longlong(x) & 0x7FFFFFFFFFFFFFFFull) >= 0x7FF0000000000000ull
+       || ((unsigned long long)__double_as_longlong(y) & 0x7FFFFFFFFFFFFFFFull) > 0x7FF0000000000000ull
        || ((unsigned long long)__double_as_longlong(y) & 0x7FFFFFFFFFFFFFFFull) == 0ull)
           ? 0x7FF8000000000000ll
           : __double_as_longlong(fmod(x, y)));

@@ -491,29 +491,16 @@ let legs =
    is skipped on its backend only, with every disagreeing cell printed to stderr (and a note once
    none disagrees); every other backend, and every other claim, stays exact.
 
-   HIP's NaN-condition entries are fast math's: with [hip_fast_math] off, as [profile=reproducible]
-   sets it (gh-ocannl-1779; the [-no_hip_fast_math] rule), hiprtc honors NaN and every one of them
-   matched on gfx1151, so they are recorded under fast math only and the claims hold exactly there.
-   [bs_sat01_gate] is the semantics gap above and stays under either policy. *)
-let hip_fast_math = Ir.Cuda_like_config.hip_fast_math ()
-
+   HIP honors NaNs under both policies since gh-ocannl-1909; its five NaN-condition entries are
+   lifted. [bs_sat01_gate] is the semantics gap above and stays under either policy. *)
 let known_divergence_1647 =
-  [
-    ("bs_sat01_gate", "cuda", true);
-    ("bs_sat01_gate", "metal", true);
-    ("bs_sat01_gate", "hip", true);
-    ("bs_where_f32", "hip", hip_fast_math);
-    ("bs_where_hcond", "hip", hip_fast_math);
-    ("bs_where_bf16", "hip", hip_fast_math);
-    ("bs_where_zero", "hip", hip_fast_math);
-    ("bs_nested_guard", "hip", hip_fast_math);
-  ]
+  [ ("bs_sat01_gate", "cuda"); ("bs_sat01_gate", "metal"); ("bs_sat01_gate", "hip") ]
 
 (* [name]'s bitwise value claim, or its gated skip where ahrefs/ocannl#1647 records it failing. *)
 let values_claim ~name claim got want =
   let diverges =
-    List.exists known_divergence_1647 ~f:(fun (leg, backend, recorded) ->
-        recorded && String.equal leg name && String.is_substring backend_name ~substring:backend)
+    List.exists known_divergence_1647 ~f:(fun (leg, backend) ->
+        String.equal leg name && String.is_substring backend_name ~substring:backend)
   in
   if diverges then (
     Array.iteri got ~f:(fun i v ->
