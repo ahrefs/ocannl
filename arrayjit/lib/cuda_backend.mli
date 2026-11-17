@@ -7,6 +7,11 @@ module Impl : sig
       initializes the devices), and the routine-name mangling. *)
 end
 
+val with_select_rendering : blend:bool -> (unit -> 'a) -> 'a * string list
+(** Run a synchronous comparison on the calling domain with CUDA's value selects rendered in the
+    chosen form and return the full emitted source of each compile in order. This diagnostic
+    override applies to rendering only, so both arms can use the same lowered and scheduled IR. *)
+
 val cuda_include_options : unit -> string list
 (** The [-I] options an nvrtc compile needs in order to find the CUDA toolkit headers
     ([<cuda_fp8.h>], [<cuda_fp16.h>], [<mma.h>]): CUDA_PATH where it is set, the no-spaces junction
