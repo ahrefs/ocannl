@@ -862,6 +862,9 @@ include (
 let no_vbs = []
 let reduce_vbss vbss = List.concat vbss
 
+(* Whether evaluating [e] can have no effect: a variable or a constant. *)
+let has_no_effect e = match e.pexp_desc with Pexp_ident _ | Pexp_constant _ -> true | _ -> false
+
 (** [in_source_order ~loc ~prefix exprs ~f] is [f exprs'], with the effects of [exprs] run in source
     order (gh-ocannl-1770, gh-ocannl-1869). OCaml evaluates the elements of a list, array or tuple
     literal, and the arguments of an application, right to left, so effectful expressions spliced
@@ -897,9 +900,6 @@ let in_source_order ~loc ~prefix exprs ~f =
     unmentioned prefix
   in
   let last = List.length exprs - 1 in
-  let has_no_effect e =
-    match e.pexp_desc with Pexp_ident _ | Pexp_constant _ -> true | _ -> false
-  in
   let named =
     List.mapi exprs ~f:(fun i e ->
         if i = last || has_no_effect e then (None, e)
@@ -1067,8 +1067,7 @@ let add_module_qualifier_to_applied_function ?(module_name = "NTDSL")
         (* The infix application evaluates the exponent first, as OCaml runs arguments right to
            left. Swapped, an effectful base would run first: bind the exponent before it. *)
         match operands with
-        | [ (_, ({ pexp_desc = Pexp_ident _ | Pexp_constant _; _ } as base)); (_, exponent) ] ->
-            pointpow exponent base
+        | [ (_, base); (_, exponent) ] when has_no_effect base -> pointpow exponent base
         | [ (_, base); (_, exponent) ] ->
             in_source_order ~loc ~prefix:"__exponent" [ exponent; base ] ~f:(function
               | [ exponent; base ] -> pointpow exponent base
