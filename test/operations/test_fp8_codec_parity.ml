@@ -236,6 +236,7 @@ let () =
       1.375;
     |]
   in
+  (* A distinct routine name keeps this conversion's emitted kernel available for inspection. *)
   let bf16_device = narrow_on_device ~label:[ "codec_bf16" ] ~src_prec:Ir.Ops.bfloat16 bf16_vals in
   p_all2 "the device narrows bf16 to e5m2 exactly as the host does" bf16_device
     (narrow_on_host bf16_vals) ~f:same_bits
