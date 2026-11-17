@@ -1646,17 +1646,33 @@ fi
 
 if harness_leg 'source-only reach'; then
   # gh-ocannl-2292: a source edit selects no harness that only spells its path
-  # in fixture text. Fake diagnostics, a trace location, fixture repositories'
-  # dune files and PATH stubs spelled these; they now use fixture-only paths
-  # and basenames. Each is spelled here in two parts, so this harness's own
-  # text names none of them. The empty list is a judgment: no harness reads
-  # these files. A harness that comes to read one adds its exception here.
+  # in fixture text. Fake diagnostics, trace locations and executables, table
+  # labels, fixture repositories' dune files and PATH stubs spelled each of
+  # these; they now use fixture-only paths and basenames. Each is spelled here
+  # in two parts (`DIR/STEM EXT`), so this harness's own text names none of
+  # them. Independent expectations, as in the leg above: a path defaults to
+  # no harness, the judgment that none reads it; a harness that reads one
+  # (a declaration included) gets its line in the case below.
   ld=lib'/dune' bd=bin'/dune' rw=tensor/row'.ml' sj=test/einsum/surjectivity'.ml'
-  for path in "$sj" "$rw" "$ld" "$bd"; do
+  for path in "$sj" "$rw" "$ld" "$bd"; do printf '%s\n' "$path"; done >"$TMP/source-only"
+  for src in 'tensor/tensor .ml' 'tensor/shape .ml' 'arrayjit/lib/low_level .ml' 'arrayjit/lib/autotune .ml' \
+    'arrayjit/lib/metal_backend .ml' 'arrayjit/lib/backends .ml' 'arrayjit/lib/online_softmax .ml' \
+    'test/support/ll_test .ml' 'test/support/generated .ml' 'test/training/cifar_conv .ml' \
+    'test/training/fsm_transformer .ml' 'test/operations/online_softmax .ml' 'test/operations/env_var_deps .ml' \
+    'test/operations/cc_march_census .ml' 'test/operations/cc_temp_ownership .ml' \
+    'test/operations/sweep_harness_driver .ml' 'test/operations/placement_store .ml' \
+    'benchmarks/test_orchestrate .py'; do
+    printf '%s\n' "${src% *}${src#* }"
+  done >>"$TMP/source-only"
+  while IFS= read -r path; do
     raffected --files "$path"
-    if [ "$rc" = 0 ] && [ ! -s "$out" ]; then report 0 "$path alone selects no harness"
-    else report 1 "$path alone selects no harness" "exit $rc; got [$(tr '\n' '|' <"$out")]"; fi
-  done
+    case $path in
+      benchmarks/*.py) printf '%s\n' "tools/test-merge-build-check.sh --only '#compile-output'" >"$TMP/want" ;;
+      *) : >"$TMP/want" ;;
+    esac
+    if [ "$rc" = 0 ] && cmp -s "$TMP/want" "$out"; then report 0 "$path alone selects only the harnesses reading it"
+    else report 1 "$path alone selects only the harnesses reading it" "exit $rc; got [$(tr '\n' '|' <"$out")]"; fi
+  done <"$TMP/source-only"
   # The reader is unchanged: each spelling the fixtures moved away from still
   # reaches a harness carrying it, a read or a mention the reader cannot tell
   # from one (the conservative fallback the cat and printf controls above pin).
