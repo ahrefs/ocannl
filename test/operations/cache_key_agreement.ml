@@ -417,6 +417,19 @@ let () =
 
 let () =
   let ctx = Context.auto () in
+  let backend = Context.backend_name ctx in
+  Verdict.in_leg
+    ~leg:(Verdict.leg ~when_:(String.equal backend "hip") ~on:backend ())
+    "HIP cache identity contains the selected production math switches, including the default \
+     regime"
+    (fun label ->
+      let switches =
+        Ir.Compiler_options.render
+          (Ir.Compiler_options.hip_math_options ~fast_math:(Ir.Cuda_like_config.hip_fast_math ()))
+      in
+      let tag = Option.value (Context.hardware_limits ctx).codegen_tag ~default:"" in
+      Stdio.eprintf "HIP cache math switches: %s; backend tag: %s\n" switches tag;
+      Verdict.p label (String.is_substring tag ~substring:("/hiprtc-math:" ^ switches)));
   (* A flip a commandline or environment statement outranks is not made, and says so as a skip
      rather than leaving a claim that reads as if it had been (Codex P2, round 3): rerunning a test
      under an [OCANNL_<KEY>] is supported, and the key it states is the one this run cannot flip.

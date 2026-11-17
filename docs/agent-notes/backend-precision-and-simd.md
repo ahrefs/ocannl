@@ -2584,27 +2584,20 @@ files.
   the architecture (only the intrinsics vary by sm), so no sm_89-vs-sm_120 measurement gates it.
   Pinned by `test_cuda_like_config` (every half row under both values) and on CUDA by
   `half_unary_math-reproducible` (the relationship claim Metal's half functions already met).
-- **HIP's fast math is a key too, off under `reproducible`** (gh-ocannl-1779): `hip_fast_math`
-  (default `true`, one reader `Cuda_like_config.hip_fast_math`) picks
-  `Compiler_options.hip_math_options` -- the umbrella with its overrides, or no umbrella and
-  `-ffp-contract=off -fno-associative-math -fhip-fp32-correctly-rounded-divide-sqrt
-  -fno-gpu-flush-denormals-to-zero -fno-gpu-approx-transcendentals`. It changes no rendering: the
-  `Builtins_hip` wrappers (`ocannl_div_f64`, sin/cos/sqrt/fmod) are IEEE under either state. Keyed as
-  `/hiprtc-math:<switches>` in HIP's `codegen_tag`, precise regime only. Measured on gfx1151
-  (`unary_math_special_values`): precise holds f64 `pow` to cc's and CUDA's 2 ulps; the vector
-  WITHOUT `-ffp-contract=off` (hiprtc's own default) did too, and with `-ffp-contract=fast` in
-  its place `pow(2^-1000, 1)` was 204 ulps off again and f32 functions left their stated ulps --
-  contraction is the 1730 loss, and `off` is spelled so no toolchain default can move it. Precise
-  f32 and half division is bitwise IEEE (`division_special_values-reproducible`). It lifts five of
-  `branchless_select`'s six HIP `known_divergence_1647` entries (`bs_where_f32`, `bs_where_hcond`,
-  `bs_where_bf16`, `bs_where_zero`, `bs_nested_guard`; gated on the key, held exactly by
-  `branchless_select-no_hip_fast_math`); `bs_sat01_gate` is the cross-backend semantics gap and stays.
-  The DEFAULT is unchanged: `-fhonor-nans` after the fast umbrella lifts the same five but makes the
-  `ocannl_fmod*` wrappers return `x` for `fmod(x, NaN)` at every precision (their NaN test is
-  shaped for finite-math), so it is no drop-in; `-ffp-contract=on` for the default is unmeasured
-  for throughput. Both are performance-graded follow-ups. `reproducible` states it `false` and
-  `approximate` `true` -- its default, stated so the regime report names an explicit `false`
-  beside that profile; `cuda_fast_math` likewise since this PR (`config_profiles`).
+- **HIP's math policies restore exact division and honor NaN** (gh-ocannl-1779, gh-ocannl-1909):
+  `hip_fast_math=true` keeps the umbrella, reduction-order guard and infinity override, then adds
+  `-fno-reciprocal-math -fno-approx-func -ffp-contract=on -fhonor-nans`.
+  This cost 1.057x [1.046, 1.062] per untuned `gpt2_mini_train` step on gfx1102 discrete memory
+  (12 paired rounds; identical control [0.997, 1.008]); the accepted cost buys exact normalization
+  quotients, NaN selection and f64 pow within 2 ulps. Gfx1151 was not measured; the decision rests
+  on tuf alone. Full matrix and provenance are on gh-ocannl-1909.
+  `hip_fast_math=false` (`reproducible`) retains its explicit IEEE vector with contraction off.
+  Both regimes now carry `/hiprtc-math:<switches>` in HIP's `codegen_tag`, derived from the compile
+  builder: the new default component invalidates every old approximate-division crown.
+  `cache_key_agreement` pins that relationship; `test_hip_compile_options` pins both vectors.
+  `division_special_values` and `unary_math_special_values` require the exact contracts under
+  both policies; `branchless_select` lifts all five HIP NaN-condition divergences. The
+  `bs_sat01_gate` cross-backend semantics gap remains.
 - **HIP fmod must classify either NaN operand by bits** (gh-ocannl-1909): ROCm returned
   the dividend for a NaN divisor under fast math plus `-fhonor-nans`, at f32, half, bfloat16
   and f64 on gfx1151. `Builtins_hip.ocannl_fmodf` and `ocannl_fmod` now select NaN for
@@ -2632,10 +2625,11 @@ files.
   element, `Nn_blocks.default_mask_fill`), and under bare `-ffast-math` that only survived by
   accident of which optimization hiprtc happened to pick — adding `-fno-associative-math` changed
   the pick and `half_softmax`'s causally masked rows started reading `exp(0)`/`exp(1)` where the
-  mask demands exact zeros (gh-ocannl-735, found on the ROCm validation run). NaN stays unhonored,
-  because it is only ever tested for, never emitted as a value. So a device-side
-  non-finiteness test must be a RANGE COMPARE of a runtime value (`-3e38 < x && x < 3e38`); `x <> x`
-  and `x - x = 0` fold to a constant, silently disabling an overflow gate (the shape
+  mask demands exact zeros (gh-ocannl-735, found on the ROCm validation run). Since gh-ocannl-1909 HIP additionally honors NaNs, above; a range compare remains
+  the portable test across backends and compiler policies. So a device-side
+  non-finiteness test uses a RANGE COMPARE of a runtime value (`-3e38 < x && x < 3e38`); on
+  policies that do not honor NaN, `x <> x` and `x - x = 0` fold to a constant, silently disabling
+  an overflow gate (the shape
   `Mixed_prec.gated_scaled_update` needs). It is the same reason `Builtins_metal`'s fp8 codec is
   written in integer/bitcast form rather than float arithmetic.
 - **HIP's f64 division is a builtin expansion, because no hiprtc lever reaches f64 alone**
@@ -2648,12 +2642,12 @@ files.
   ROCm's `__ocml_div_rte_f64` is declared in `math_fwd.h` but absent from the device library.
   `Builtins_hip.ocannl_div_f64` writes out LLVM's own `LowerFDIV64` in `__builtin_amdgcn_div_scale`
   / `rcp` / `__builtin_fma` / `div_fmas` / `div_fixup`, and `Cuda_like_config`'s `div_f64` routes
-  f64 `Div` and `Recip` through it. HIP's f32, half and bfloat16 division stay the estimate,
+  f64 `Div` and `Recip` through it. Before gh-ocannl-1909 HIP's f32, half and bfloat16 division stayed the estimate,
   as CUDA's f32 does under `--use_fast_math`. That is a recorded boundary of the fast policy:
   1-ulp quotients (`3 / 3 = 1 - 2^-24`), subnormal divisors overflowing, and f32 divisors from
-  2^126 flushing their reciprocal (`inf / FLT_MAX` NaN). A `hip_fast_math` key (gh-ocannl-1779)
-  that drops the umbrella is what lifts it. The helper is correct under either policy. Pinned by
-  `division_special_values`, whose HIP f32 leg is the on-device negative control.
+  2^126 flushing their reciprocal (`inf / FLT_MAX` NaN). Both current policies lift it: the measured default removes reciprocal math and approximate
+  functions (gh-ocannl-1909), while `hip_fast_math=false` drops the umbrella (gh-ocannl-1779). The helper is correct under either policy. Pinned by
+  `division_special_values`, whose exact HIP f32 claims fail under the old compiler vector.
 - **gfx1102 compiles without `real-true16`, and HIPRTC never gets `-amdgpu-waitcnt-*`**
   (`Compiler_options.hip_target_options`, gh-ocannl-1182/1222). In true16 mode, 16-bit values live
   in VGPR halves, and a pending D16 high-half load raced a low-half update of the same register,
@@ -2986,11 +2980,11 @@ files.
   `ocannl_fmod` (the dialect's `fmod_f64`). `1.0 / sqrt(x)` becomes a Newton-refined reciprocal-root
   estimate, NaN at ±0 and +inf; the dialect's `recip_sqrt_f64` renders ROCm's `rsqrt` instead,
   which is C's there. The same estimate makes **every f64 division** NaN for `x / 0`, `x / inf` and
-  overflowing quotients (hipcc probe; outside this audit, unfixed). And `pow` (`__ocml_pow_f64`)
+  overflowing quotients (hipcc probe; later fixed by the gh-ocannl-1782 division wrapper). And `pow` (`__ocml_pow_f64`)
   loses the low part of its extended-precision `y log x` to `-ffp-contract=fast`: about 205 ulps
   where `|y log2 |x||` is 500-1000, exact again under `-ffp-contract=on` (and not restored by
-  `-fno-approx-func` or `-fno-unsafe-math-optimizations`). Recorded, not fixed: the test holds
-  HIP's f64 `pow` to `2 + 2 |y log2 |x||` ulps. A hipcc probe with the backend's own flags
+  `-fno-approx-func` or `-fno-unsafe-math-optimizations`). The old default recorded that loss;
+  gh-ocannl-1909 selects contraction on and now requires 2 ulps under both HIP policies. A hipcc probe with the backend's own flags
   (`-O3 -ffast-math -fno-associative-math -fhonor-infinities --offload-arch=gfx1102`) reproduced
   each hiprtc departure it was compared against, bit for bit: a fast way to bisect a flag.
 

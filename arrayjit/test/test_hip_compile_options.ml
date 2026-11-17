@@ -15,8 +15,31 @@ let build ?(fast_math = true) ~uses_rocwmma ~with_debug () =
 let () =
   let cases =
     [
-      (false, false, [ "-Ihip"; "-ffast-math"; "-fno-associative-math"; "-fhonor-infinities" ]);
-      (false, true, [ "-Ihip"; "-ffast-math"; "-fno-associative-math"; "-fhonor-infinities"; "-g" ]);
+      ( false,
+        false,
+        [
+          "-Ihip";
+          "-ffast-math";
+          "-fno-associative-math";
+          "-fhonor-infinities";
+          "-fno-reciprocal-math";
+          "-fno-approx-func";
+          "-ffp-contract=on";
+          "-fhonor-nans";
+        ] );
+      ( false,
+        true,
+        [
+          "-Ihip";
+          "-ffast-math";
+          "-fno-associative-math";
+          "-fhonor-infinities";
+          "-fno-reciprocal-math";
+          "-fno-approx-func";
+          "-ffp-contract=on";
+          "-fhonor-nans";
+          "-g";
+        ] );
       ( true,
         false,
         [
@@ -26,6 +49,10 @@ let () =
           "-ffast-math";
           "-fno-associative-math";
           "-fhonor-infinities";
+          "-fno-reciprocal-math";
+          "-fno-approx-func";
+          "-ffp-contract=on";
+          "-fhonor-nans";
         ] );
       ( true,
         true,
@@ -36,6 +63,10 @@ let () =
           "-ffast-math";
           "-fno-associative-math";
           "-fhonor-infinities";
+          "-fno-reciprocal-math";
+          "-fno-approx-func";
+          "-ffp-contract=on";
+          "-fhonor-nans";
           "-g";
         ] );
     ]
@@ -49,8 +80,9 @@ let () =
       Stdio.eprintf "rocwmma=%b debug=%b:\n  got:  %s\n  want: %s\n" uses_rocwmma with_debug
         (Ir.Compiler_options.render (build ~uses_rocwmma ~with_debug ()))
         (Ir.Compiler_options.render want));
-  Verdict.p_all "every HIPRTC variant keeps both fast-math overrides, in order, after the umbrella"
-    cases ~f:(fun (uses_rocwmma, with_debug, want) ->
+  Verdict.p_all
+    "every HIPRTC variant keeps the measured math overrides, in order, after the umbrella" cases
+    ~f:(fun (uses_rocwmma, with_debug, want) ->
       List.equal String.equal (build ~uses_rocwmma ~with_debug ()) want);
   let affected =
     [ [ "gfx1102" ]; [ "gfx1102:xnack-" ]; [ "gfx1151"; "gfx1102" ]; [ "gfx1102"; "gfx1100" ] ]

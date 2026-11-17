@@ -15,15 +15,9 @@
    now renders through [Builtins_hip.ocannl_div_f64], LLVM's correctly rounded expansion in target
    builtins, which no fast-math flag reaches, so HIP's f64 is held to both claims.
 
-   HIP's f32 and half division (and bfloat16, through f32) stay fast math's estimate, as CUDA's f32
-   is under [--use_fast_math]: a recorded boundary of the fast policy -- [hip_fast_math] off
-   (gh-ocannl-1779, what [profile=reproducible] sets) drops the umbrella and makes them IEEE, held
-   to both claims like every other precision (the [-reproducible] rule). Measured on
-   gfx1151: quotients 1 ulp off ([3 / 3] is [1 - 2^-24], [1 / 0.75] [0x1.555554p+0]), a subnormal
-   divisor's reciprocal overflowing to infinity, an f32 divisor from 2^126 up flushing its
-   reciprocal to zero ([1 / FLT_MAX] is 0, [inf / FLT_MAX] NaN), half [+-0 / subnormal] NaN. Those
-   backends are held to the estimate's own contract instead -- the special values C's and 2 ulps
-   elsewhere, over the pairs with no subnormal operand or quotient and an f32 divisor below 2^126.
+   Since gh-ocannl-1909 HIP disables reciprocal math and approximate functions under both
+   policies, so every HIP precision meets the exact claims. CUDA's f32 under --use_fast_math
+   remains an estimate, held to its special-value and 2-ulp contract over normal operands.
 
    The operand classes split the claims. With one operand among +-0, +-inf and NaN and the other
    normal (or special too), the quotient is decided by the special operand alone: every IEEE backend
@@ -32,8 +26,8 @@
    IEEE backends but Metal, which flushes f32 subnormals in its arithmetic, are held to the
    correctly rounded quotient there.
 
-   The negative control runs on the device: HIP's f32 division is the same kind of estimate its f64
-   division was, and the judgement of the special-operand claim must reject some of its results. *)
+   The previous HIP policy failed the exact f32 claims on device (gh-ocannl-1782); restoring
+   that vector is a negative control for the default-policy change. *)
 (* cc-fp-contract: no-contraction -- every kernel divides or takes a reciprocal of a stored operand;
    no product feeds an add, so contraction has nothing to fuse. *)
 open Base
@@ -46,9 +40,7 @@ let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~d
 let () = Stdio.eprintf "division-special-values backend: %s\n" backend_name
 let is_metal = String.equal backend_name "metal"
 let is_cuda = String.equal backend_name "cuda"
-let is_hip = String.equal backend_name "hip"
 let cuda_fast_math = Ir.Cuda_like_config.cuda_fast_math ()
-let hip_fast_math = Ir.Cuda_like_config.hip_fast_math ()
 let f32 x = Int32.float_of_bits (Int32.bits_of_float x)
 let f16 x = Ops.half_to_single (Ops.single_to_half (f32 x))
 let specials = [ -0.; 0.; Float.infinity; Float.neg_infinity; Float.nan ]
@@ -176,12 +168,9 @@ let judge c ((name, x, y, v) as r) =
 let decided_by_special c (_, x, y, _) =
   (is_special x || is_special y) && not (is_subnormal c x || is_subnormal c y)
 
-(* Whether this backend renders [c]'s division as a reciprocal estimate, [x * rcp(y)]: HIP's f32 and
-   half under [-ffast-math] ([hip_fast_math]), and CUDA's f32 under [--use_fast_math]
-   ([--prec-div=false]). *)
-let estimates c =
-  (is_hip && hip_fast_math && not (Ops.equal_prec c.prec Ops.double))
-  || (is_cuda && cuda_fast_math && Ops.equal_prec c.prec Ops.single)
+(* CUDA's f32 division under --use_fast_math is a reciprocal estimate. HIP is exact under both
+   policies since gh-ocannl-1909. *)
+let estimates c = is_cuda && cuda_fast_math && Ops.equal_prec c.prec Ops.single
 
 (* The pairs an estimate's contract covers: no subnormal operand or quotient, and for f32 a divisor
    below 2^126, whose reciprocal is subnormal -- flushed, so [inf / FLT_MAX] is [inf * 0], NaN, and
@@ -217,7 +206,7 @@ let () =
                "%s x / y and 1 / y with an operand among +-0, +-inf and NaN and the other normal \
                 or special: C's quotient, NaN where C gives NaN and otherwise bitwise (skipped on \
                 Metal at f64, which it has not, and where the division is a reciprocal estimate: \
-                HIP's f32 and half, CUDA's f32 under --use_fast_math)"
+                CUDA's f32 under --use_fast_math)"
                c.label) (fun label ->
               p_all label (List.filter (Lazy.force results) ~f:(decided_by_special c)) ~f:(judge c));
           Verdict.in_leg
@@ -235,25 +224,12 @@ let () =
             Verdict.in_leg
               ~leg:(Verdict.leg ~when_:(estimates c) ~on:backend_name ())
               (Printf.sprintf
-                 "%s x / y and 1 / y where the division is a reciprocal estimate (HIP under \
-                  -ffast-math, CUDA's f32 under --use_fast_math), with no subnormal operand or \
-                  quotient and an f32 divisor below 2^126: NaN, the signed zeros and the \
-                  infinities C's, otherwise within 2 ulps of C's quotient"
+                 "%s x / y and 1 / y where the division is a reciprocal estimate (CUDA's f32 under \
+                  --use_fast_math), with no subnormal operand or quotient and an f32 divisor below \
+                  2^126: NaN, the signed zeros and the infinities C's, otherwise within 2 ulps of \
+                  C's quotient"
                  c.label)
               (fun label ->
                 p_all label
                   (List.filter (Lazy.force results) ~f:(estimate_domain c))
-                  ~f:(within_estimate c)));
-      (* The negative control, on the device: HIP's f32 division is still the reciprocal estimate
-         its f64 division was, and the judgement of the first claim must reject some of its results
-         -- [+-inf / FLT_MAX] is NaN there. [hip_fast_math] off (gh-ocannl-1779) turns the estimate
-         off, so this leg opens only where it is on. *)
-      let f32_case = List.nth_exn cases 1 and f32_results = List.nth_exn results 1 in
-      Verdict.in_leg
-        ~leg:(Verdict.leg ~when_:(is_hip && hip_fast_math) ~on:backend_name ())
-        "negative control: HIP's f32 x / y under -ffast-math, a reciprocal estimate, departs from \
-         C's quotient on some pair with a special operand, where the f32 claim above would fail it"
-        (fun label ->
-          p_exists label
-            (List.filter (Lazy.force f32_results) ~f:(decided_by_special f32_case))
-            ~f:(fun r -> not (exact f32_case r))))
+                  ~f:(within_estimate c))))
