@@ -172,6 +172,7 @@ relu u + (c[2,5] ++ "ab => ab...")
   draw = 2,5, 10 distinct values for 10 cells
 relu u + (c[2,5] ++ "ab => ab..."): every draw closes to 2,5: true
 relu u + (c[2,5] ++ "ab => ab..."): every draw fills its use site: true
+both uses can broadcast a one-block draw when their block counts would differ: true
 late-tail fixture: the packed draw is open after Stage6a: true
 late-tail fixture: the closed GLB is retained at Stage6b: true
 late-tail fixture: three cells use one counter block: true

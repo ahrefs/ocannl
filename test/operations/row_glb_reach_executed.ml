@@ -329,6 +329,24 @@ let () =
       let%op y = relu u + (c ++ "ab => ab...") in
       ([ u ], y, y))
 
+(* Sizing either conversion to its use would fix the shared counter to two or three blocks while the
+   other conversion can still broadcast from a scalar. *)
+let () =
+  Verdict.case "draws sharing a packed counter" @@ fun () ->
+  Tensor.unsafe_reinitialize ();
+  let offsets = NTDSL.term ~fetch_op:Range_over_offsets () in
+  let bits =
+    TDSL.threefry4x32 ~spec:"..p..|..q..->..r..; ..b.. => ..b.." (TDSL.embed_self_id ()) offsets ()
+  in
+  let u = TDSL.uint4x32_to_prec_uniform bits () in
+  let v = TDSL.uint4x32_to_prec_uniform bits () in
+  let c8 = const [ 8 ] and c12 = const [ 12 ] in
+  let%op y = relu u + (c8 ++ "a => a...") in
+  let%op z = relu v + (c12 ++ "a => a...") in
+  p_all ~min:5 "both uses can broadcast a one-block draw when their block counts would differ"
+    [ (bits, [ 1 ]); (u, []); (v, []); (y, [ 8 ]); (z, [ 12 ]) ]
+    ~f:(fun (t, want) -> List.equal Int.equal (Array.to_list (Shape.to_dims t.Tensor.shape)) want)
+
 (* gh-ocannl-2224: the late-tail boundary is staged deliberately: ordinary program constraints
    register before closing. The GLB has a leading axis over a tail held open through Stage6a; supply
    the tail equation at Stage6b. Concrete axes already work through generic elimination, but an
