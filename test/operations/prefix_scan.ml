@@ -739,27 +739,31 @@ let () =
 let gate_base = ref 185800
 
 let build_gate ?(rws = 2) ?(op = Ir.Ops.Max) ?(fwd_mask = le) ?(t_mask = le)
-    ?(chain_prec = Ir.Ops.single) ?(v_prec = Ir.Ops.single) ?a_prec ?c_prec
-    ?(second_a_writer = false) ?(compare_copy = false) ?(row_from_i = false) ?y_fill () =
+    ?(chain_prec = Ir.Ops.single) ?(v_prec = Ir.Ops.single) ?a_prec ?c_prec ?g_prec ?g_read_prec
+    ?(second_a_writer = false) ?(compare_copy = false) ?(row_from_i = false)
+    ?(materialize_product = false) ?y_fill () =
   let base = !gate_base in
   gate_base := base + 20;
   let fill = if Ir.Ops.equal_binop op Ir.Ops.Max then neg_inf else Float.infinity in
   let y_fill = Option.value y_fill ~default:fill in
   let a_prec = Option.value a_prec ~default:chain_prec in
   let c_prec = Option.value c_prec ~default:chain_prec in
+  let g_prec = Option.value g_prec ~default:chain_prec in
+  let g_read_prec = Option.value g_read_prec ~default:g_prec in
   let mk = B.node_factory ~first_id:base ~dims:[| 1 |] () in
   (* [chain_prec]: the forward's intermediates, the gate's and the target's precision. *)
-  let mkc = B.node_factory ~prec:chain_prec ~first_id:(base + 10) ~dims:[| 1 |] () in
+  let mkc = B.node_factory ~prec:chain_prec ~first_id:(base + 11) ~dims:[| 1 |] () in
   let ri = mk ~dims:[| n |] "gri" and rq = mk ~dims:[| n |] "grq" in
   let m = mk ~dims:[| n; n |] "gm" and mt = mk ~dims:[| n; n |] "gmt" in
   let v = B.node_factory ~prec:v_prec ~first_id:(base + 18) ~dims:[| rws; n |] () "gv" in
-  let g = mkc ~dims:[| rws; n |] "gg" in
+  let g = B.node_factory ~prec:g_prec ~first_id:(base + 10) ~dims:[| rws; n |] () "gg" in
   let t = mkc ~dims:[| rws; n |] "gt" in
   List.iter [ v; g; t ] ~f:B.materialize;
   let pn = mkc ~dims:[| rws; n; n |] "gp" and y = mkc ~dims:[| rws; n |] "gy" in
   let y_copy = mkc ~dims:[| rws; n |] "gy_copy" in
   let cn = B.node_factory ~prec:c_prec ~first_id:(base + 17) ~dims:[| rws; n; n |] () "gc" in
   let an = B.node_factory ~prec:a_prec ~first_id:(base + 15) ~dims:[| rws; n; n |] () "ga" in
+  if materialize_product then B.materialize an;
   let s () = B.sym () in
   let nest3 f =
     let w = s () and a = s () and b = s () in
@@ -792,7 +796,11 @@ let build_gate ?(rws = 2) ?(op = Ir.Ops.Max) ?(fwd_mask = le) ?(t_mask = le)
         B.set an [| w; i; o |]
           (B.add_own
              (B.get an [| w; i; o |])
-             (B.where_own (B.get cn [| w; o; i |]) (B.get g [| w; o |]) (B.c 0.))))
+             (LL.Ternop
+                ( Ir.Ops.Where,
+                  (B.get cn [| w; o; i |], c_prec),
+                  (B.get g [| w; o |], g_read_prec),
+                  (B.c 0., Ir.Ops.single) ))))
   in
   let llc =
     LL.unflat_lines
@@ -834,20 +842,25 @@ let build_gate ?(rws = 2) ?(op = Ir.Ops.Max) ?(fwd_mask = le) ?(t_mask = le)
   in
   (llc, v, g, t)
 
-let gate_seed ~rws =
+let gate_seed ?(gradient_offset = 1.) ~rws () =
   let v = payload ~rws ~len:n in
   let dims = [| rws; n |] in
   (* Upstream gradients clear of zero, and a target holding earlier contributions. *)
-  let g = Array.init (rws * n) ~f:(Ll_test.cycle_flat ~dims ~modulus:11 ~offset:1. ~stride:1.) in
+  let g =
+    Array.init (rws * n)
+      ~f:(Ll_test.cycle_flat ~dims ~modulus:11 ~offset:gradient_offset ~stride:1.)
+  in
   let t = Array.init (rws * n) ~f:(Ll_test.cycle_flat ~dims ~modulus:9 ~offset:(-4.) ~stride:1.) in
   (v, g, t)
 
-let run_gate ~name ?(rws = 2) llc (v, g, t) =
-  let vs, gs, ts = gate_seed ~rws in
+let run_gate ~name ?(rws = 2) ?gradient_offset ?(prepare_rewritten = Fn.id) llc (v, g, t) =
+  let vs, gs, ts = gate_seed ?gradient_offset ~rws () in
   let rewritten = Prefix_scan.rewrite llc in
   let seed = [ (v, vs); (g, gs); (t, ts) ] in
   let _, composed = B.optimize_and_execute ~name:(name ^ "_comp") llc ~seed ~read:[ t ] in
-  let o, scanned = B.optimize_and_execute ~name:(name ^ "_scan") rewritten ~seed ~read:[ t ] in
+  let o, scanned =
+    B.optimize_and_execute ~name:(name ^ "_scan") (prepare_rewritten rewritten) ~seed ~read:[ t ]
+  in
   (rewritten, o, List.hd_exn composed, List.hd_exn scanned)
 
 let () =
@@ -856,7 +869,7 @@ let () =
   let recognized name ~op_fn ~fill ~sel ?op ?fwd_mask ?t_mask () =
     let llc, v, g, t = build_gate ~rws ?op ?fwd_mask ?t_mask () in
     let rewritten, o, composed, scanned = run_gate ~name llc (v, g, t) in
-    let vs, gs, ts = gate_seed ~rws in
+    let vs, gs, ts = gate_seed ~rws () in
     let want =
       Array.concat
         (List.init rws ~f:(fun row ->
@@ -890,8 +903,10 @@ let () =
     ~t_mask:(fun ~row:_ a b -> B.binop_own Ir.Ops.Cmple b a)
     ~sel:(fun i o -> i >= o)
     ();
-  let left_composed ?(rws = rws) label (llc, v, g, t) =
-    let rewritten, _, composed, scanned = run_gate ~name:label ~rws llc (v, g, t) in
+  let left_composed ?(rws = rws) ?gradient_offset ?prepare_rewritten label (llc, v, g, t) =
+    let rewritten, _, composed, scanned =
+      run_gate ~name:label ~rws ?gradient_offset ?prepare_rewritten llc (v, g, t)
+    in
     report (label ^ ", composed") composed;
     report (label ^ ", rewritten") scanned;
     pf "%s: the gate is left composed" label (gate_scans rewritten = 0);
@@ -918,7 +933,15 @@ let () =
   (* The forward's row read at the input position: [Y[i, o]] and [P[i, i, o]], a diagonal walk the
      scan would not follow. *)
   left_composed ~rws:n "gg_row_from_i (the gate reads the forward's row at the input position)"
-    (build_gate ~rws:n ~row_from_i:true ())
+    (build_gate ~rws:n ~row_from_i:true ());
+  (* The f16 read annotation passes the read-precision check, leaving the f32 storage check to
+     reject the gate. Keep the product stored so the composed execution rounds odd gradients above
+     2048 before summing them. If the rewrite moves the read into an f32 sum, re-describe its
+     operand annotation for execution so the parity claim can see the arithmetic. *)
+  left_composed ~gradient_offset:2049. ~prepare_rewritten:LL.describe_operand_precisions
+    "gg_wide_grad (the upstream gradient is f32, the gate's product f16)"
+    (build_gate ~rws ~chain_prec:Ir.Ops.half ~v_prec:Ir.Ops.half ~g_prec:Ir.Ops.single
+       ~g_read_prec:Ir.Ops.half ~materialize_product:true ())
 
 (* {1 Leg 8: constant masks (gh-ocannl-1858)}
 

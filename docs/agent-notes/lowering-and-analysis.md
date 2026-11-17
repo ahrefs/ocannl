@@ -804,7 +804,10 @@ files.
   `where`'s reduction into the target -- recognized at the target's nest by node identity and an
   index substitution into the forward's coordinates, never by labels; it is O(n) because the
   prefix extremum is monotone, so the gated outputs are a run of equal extrema, and its tie rule
-  (duplication) is kept by gating on the first selecting output. The tropical `@^+` gate is a
+  (duplication) is kept by gating on the first selecting output. The gradient operand must be a
+  plain read from a node stored at `A`'s precision. `gg_wide_grad` annotates the read at f16 to
+  reach the storage check and keeps the f16 product materialized so the composed form rounds its
+  f32 input before the reduction. The tropical `@^+` gate is a
   different rule (no `where` filter: an output at `-inf` gates rejected positions) and stays
   composed. (g) A mask with no writer in the routine is read from its `Host_inits` data only under
   `Tn.known_host_constant` (an `ndarray` literal): `Operation.init` data is mutable by contract (a
