@@ -30,7 +30,11 @@
 
    What changed with gh-ocannl-2229: a fixed-index input's minimum above 1 closes before
    unconstrained results guess minimal. The concrete size then travels through the existing
-   leaf-before-result stages, so both two-result and three-result chains fill the indexed axis. *)
+   leaf-before-result stages, so both two-result and three-result chains fill the indexed axis.
+
+   With gh-ocannl-2257, the open result remainder in [relu u + (c[3] ++ "a => a...")] settles at
+   stage 6a. Previously [relu] closed empty at stage 6b and the draw closed against it, giving one
+   value for three cells. *)
 
 open! Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -329,8 +333,8 @@ let () =
       let%op y = relu u + (c ++ "ab => ab...") in
       ([ u ], y, y))
 
-(* Sizing either conversion to its use would fix the shared counter to two or three blocks while the
-   other conversion can still broadcast from a scalar. *)
+(* Eight cells require two blocks and twelve require three. With one shared counter the conversions
+   each close to a scalar and repeat its value across their respective use sites. *)
 let () =
   Verdict.case "draws sharing a packed counter" @@ fun () ->
   Tensor.unsafe_reinitialize ();

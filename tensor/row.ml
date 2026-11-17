@@ -5425,9 +5425,11 @@ let is_safe_to_guess v =
   || (Set.mem !used_in_pointwise v && not (Set.mem !used_in_spec_or_compose v))
 
 (* A packed draw's total ([Uint4x32_to_prec]): a round-up [Total_elems] over a block counter. *)
-let is_packed_draw_constr = function
-  | Total_elems { numerator = Strided_var { round_up = true; _ }; _ } -> true
-  | _ -> false
+let packed_draw_counter = function
+  | Total_elems { numerator = Strided_var { round_up = true; var; _ }; _ } -> Some var
+  | _ -> None
+
+let is_packed_draw_constr constr = Option.is_some (packed_draw_counter constr)
 
 let dim_has_glb env v =
   match find_dim env.dim_env v with Some (Bounds_dim { glb = Some _; _ }) -> true | _ -> false
@@ -6321,10 +6323,9 @@ let is_draw_total = function
    wider rule -- any such axis waits for any open lower bound -- refuses satisfiable programs with a
    fixed index over the draw (13 in [shape_program_sweep]). *)
 let draw_counter_leaves ineqs env =
-  let add_counter acc = function
-    | Total_elems { numerator = Strided_var { round_up = true; var; _ }; _ } ->
-        Set.union acc (vars_of_dim (subst_dim env (Var var)))
-    | _ -> acc
+  let add_counter acc constr =
+    Option.fold (packed_draw_counter constr) ~init:acc ~f:(fun acc var ->
+        Set.union acc (vars_of_dim (subst_dim env (Var var))))
   in
   let counters =
     List.fold ineqs ~init:dim_var_set_empty ~f:(fun acc -> function
@@ -6930,15 +6931,10 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
         Set.for_all (mentioning env.rows_mentioning_row tail ~empty:row_var_set_empty)
           ~f:(fun draw ->
             match find_row env.row_env draw with
-            | Some
-                (Bounds_row
-                   {
-                     glb = Some glb;
-                     constr = Total_elems { numerator = Strided_var { round_up = true; var; _ }; _ };
-                     _;
-                   })
+            | Some (Bounds_row { glb = Some glb; constr; _ })
               when Option.exists (row_var glb) ~f:(equal_row_var tail) ->
-                exclusive_counter draw var
+                Option.value_map (packed_draw_counter constr) ~default:true
+                  ~f:(exclusive_counter draw)
             | _ -> true)
       in
       let rec unsized_results seen = function
