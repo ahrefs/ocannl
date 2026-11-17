@@ -222,9 +222,9 @@ files.
   regression needs a different supported path. The mixed row-store pins in `test_row_glb_reach`
   distinguish holding the old GLB: without it the displaced result closes 1 while its draw is 3.
   A solved row passes its role on too (gh-ocannl-2247): when `unify_row` commits `v := value` for a
-  marked `v`, the dimension variables of `subst_row env value` take the mark. A draw read through an
-  einsum spec (`u ++ "ab => ba"`) is solved to the spec's axes, minted for the result; unmarked,
-  they closed minimal and the draw was one value. Only the `beg_handled` branch writes a
+  marked `v`, the variables that determine the extents of `subst_row env value` take the mark.
+  A draw read through an einsum spec (`u ++ "ab => ba"`) is solved to the spec's axes, minted for
+  the result; unmarked, they closed minimal and the draw was one value. Only the `beg_handled` branch writes a
   `Solved_row`; the other branch's bindings reach it recursively, so the rule lives there alone.
   Measured over gh-ocannl-2244: 34 sweep programs agree that did not, and the einsum entry kept
   only fixed indices (17 to 3, narrowed to them); no parameter's shape moved.
@@ -232,9 +232,10 @@ files.
   taps each. A draw read directly by the spec needs the row mark to reach the window's variables.
   An identity einsum first gives the draw a marked dimension variable, so `unify_dim` has to
   pass the mark to the variables determining the affine extent. Dropping either transfer makes its
-  probe fail the six-cell fill claim. A padded kernel needs its own sizing use, since only the
-  output axis and stride determine the padded extent. `padded_operand_offset_windows` pins the
-  refusal of a kernel reached only by a pointwise use site after a relabeled draw.
+  probe fail the six-cell fill claim. Both transfers follow extent dependencies. A padded kernel
+  needs its own sizing use, since only the output axis and stride determine the padded extent.
+  `padded_operand_offset_windows` pins the refusal of a kernel reached only by a pointwise use site
+  for direct and relabeled draw reads.
 - Solver deletion experiments: a green suite does not prove a guess or closing arm redundant
   unless executed pins check that draws vary across their use sites. Before making that claim,
   run `@test/operations/runtest-dropout_mask_varies`,

@@ -101,6 +101,8 @@ kernel carried by the result, captured and set: extent: true
 kernel carried by the result, captured and set: values: true
 kernel carried by the result, sized by an einsum consumer: extent: true
 kernel carried by the result, sized by an einsum consumer: values: true
+direct padded draw, kernel only broadcast at its use site: refused, naming the unsized kernel and the remedies: true
+direct padded draw, kernel only broadcast at its use site: refused after it: true
 padded draw, kernel only broadcast at its use site: refused, naming the unsized kernel and the remedies: true
 padded draw, kernel only broadcast at its use site: refused after it: true
 zero dilation, padded window: affine axis `o=+0*k` in einsum spec "s, o=+0*k; k => s, o" has dilation 0, which must be at least 1: at 0 every position of its label would map to the same cell
