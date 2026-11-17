@@ -225,6 +225,64 @@ let () =
   pf "the displaced incoming variable remains related to the draw"
     (concrete_first [ "[3]"; "[3]"; "1" ])
 
+(* gh-ocannl-2269: keep both bounds available for equalities that can reconcile them. At Stage6a the
+   solver refuses a pair that still needs an unsupported join on an open row. *)
+let () =
+  Verdict.case "mixed symbolic and composite bounds" @@ fun () ->
+  let check kind composite =
+    List.iter [ true; false ] ~f:(fun composite_first ->
+        let u = fresh () in
+        let variable = Row.Var (Row.get_var ()) in
+        let first, second =
+          if composite_first then (composite, variable) else (variable, composite)
+        in
+        let bound axis = ineq { (closed []) with dims = [ axis ] } u in
+        let pending, env = Row.solve_inequalities ~stage:Stage1 [ bound first ] Row.empty_env in
+        let pending, env = Row.solve_inequalities ~stage:Stage1 (bound second :: pending) env in
+        let refused =
+          match Row.solve_inequalities ~stage:Stage6a pending env with
+          | _ -> false
+          | exception Row.Shape_error (msg, _) ->
+              String.equal msg
+                (Printf.sprintf
+                   "Row GLB cannot join a dimension variable with a %s (gh-ocannl-2269)" kind)
+        in
+        pf "%s is refused when it is the %s GLB bound" kind
+          (if composite_first then "existing" else "incoming")
+          refused)
+  in
+  let sym, _ = Ir.Indexing.get_static_symbol ~static_range:3 Ir.Indexing.Empty in
+  check "symbolic dimension" (Row.get_sym_dim sym);
+  check "stride or window"
+    (Affine { stride = 2; over = Var (Row.get_var ()); conv = None; stride_offset = 0 });
+  check "concatenation" (Concat [ Var (Row.get_var ()); dim 2 ])
+
+(* Stage1 still receives equalities that can make the two bounds agree. *)
+let () =
+  Verdict.case "a later equality reconciles mixed bounds" @@ fun () ->
+  let reconciled order =
+    let u = fresh () in
+    let variable = Row.Var (Row.get_var ()) in
+    let symbol, _ = Ir.Indexing.get_static_symbol ~static_range:3 Ir.Indexing.Empty in
+    let sym = Row.get_sym_dim symbol in
+    let axis d = { (closed []) with dims = [ d ] } in
+    let first = ineq (axis variable) u and second = ineq (axis sym) u in
+    let tie = Row.Dim_eq { d1 = variable; d2 = sym; origin } in
+    let close = eq u (axis sym) in
+    match solve ~leaves:[] ~rows:[] (order first second tie close) with
+    | env ->
+        let row = Row.subst_row env u in
+        (match row.bcast with Broadcastable -> true | Row_var _ -> false)
+        && List.equal Row.equal_dim row.dims [ sym ]
+    | exception Row.Shape_error _ -> false
+  in
+  p "equal bounds settle when the equality comes first"
+    (reconciled (fun first second tie close -> [ [ tie; first; second; close ] ]));
+  p "equal bounds settle when the equality follows both bounds in one batch"
+    (reconciled (fun first second tie close -> [ [ first; second; tie; close ] ]));
+  p "equal bounds settle when the equality arrives in a later batch"
+    (reconciled (fun first second tie close -> [ [ first ]; [ second ]; [ tie; close ] ]))
+
 (* gh-ocannl-2244: a packed draw under one result, below a result row with a concrete axis and an
    open tail ([relu u *. c[|5]]: the product's row is [5].<t>). The draw's GLB, [5].<t>, has no
    variable axis; the draw waited at stage 6a on its open tail, and the result between, closing

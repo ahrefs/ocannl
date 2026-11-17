@@ -25,6 +25,15 @@ concrete 3, then variable bound  (rows result draw; counter)
   [3] [3] 1
 the displaced old variable remains related to the draw: true
 the displaced incoming variable remains related to the draw: true
+symbolic dimension is refused when it is the existing GLB bound: true
+symbolic dimension is refused when it is the incoming GLB bound: true
+stride or window is refused when it is the existing GLB bound: true
+stride or window is refused when it is the incoming GLB bound: true
+concatenation is refused when it is the existing GLB bound: true
+concatenation is refused when it is the incoming GLB bound: true
+equal bounds settle when the equality comes first: true
+equal bounds settle when the equality follows both bounds in one batch: true
+equal bounds settle when the equality arrives in a later batch: true
 [5].<t> <= r <= u, draw over [u]  (rows u r y; counter)
   [5] [5] [5] 2
 [5].<t> <= r <= u twice, draw over [u]  (rows u r y; counter)
