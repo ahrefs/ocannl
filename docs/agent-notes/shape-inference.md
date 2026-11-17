@@ -118,7 +118,13 @@ files.
   (`k >= 2_default`) stays refused: closing `k` there would have the equation size `u` to 0,
   which concatenation arithmetic accepts for a non-discardable component although `u = 0` stated
   first is refused.
-  Several free components and equal sums still wait without bounds.
+  The test's bounded sub-search (gh-ocannl-2223's store with at most one bound on `k` and one on
+  `u`, sizes 2-6, every tag: 1,764 stores) measures the reach: 177 accepted on the base, 213
+  after, the 36 new all refused before, no accepted store changed. A bound on the closing side
+  stays refused unless it carries the shared claim: the equation sizes `u` with the claim, so
+  `k >= 5_default ; u >= 3_default` meets `u = 3_a` against `3_default` and is refused, as on
+  the base, though `u = 3_default, k = 5_default` is a ground answer. Several free components and
+  equal sums still wait without bounds.
 - A nonidentity plain or padded stride derives `default` from a claim-free extent
   (gh-ocannl-2245), through `stride_input_basis` in substitution and unification. Copying
   `1_(bcast_if_1)`'s tag onto size 2 created a concatenation claim from a filler: 20 of

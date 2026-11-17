@@ -380,6 +380,66 @@ let () =
         String.equal (store_name items)
           (Printf.sprintf "w(s1,k3 default)(v)=3 %s ; [v; u]=4 %s ; u=3 default" tag tag))
   in
+  (* gh-ocannl-2268's sub-search: gh-ocannl-2223's store with at most one bound on [k] and at most
+     one on [u], sizes 2-6, every tag on the bounds and on the store. The pool above bounds only
+     [v], so it never reaches [concat_bounded_waiting]; this does. Its reach: a non-default shared
+     claim and a bound on [k] above the sum difference plus 1 (here 3). *)
+  let bounded_stores =
+    let bound name pick =
+      None
+      :: List.concat_map [ 2; 3; 4; 5; 6 ] ~f:(fun d ->
+          List.map tags ~f:(fun t ->
+              Some
+                {
+                  name = Printf.sprintf "%s >= %d %s" name d t;
+                  mk = (fun _ u k -> ineq (tagged d t) (Var (pick u k)));
+                }))
+    in
+    List.concat_map tags ~f:(fun t ->
+        List.concat_map
+          (bound "k" (fun _ k -> k))
+          ~f:(fun kb ->
+            List.map
+              (bound "u" (fun u _ -> u))
+              ~f:(fun ub ->
+                let items =
+                  List.map [ "w(s2,k3 default)(v)=5 " ^ t; "[u; 2v]=[k; 2 " ^ t ^ "]" ] ~f:item
+                  @ Option.to_list kb @ Option.to_list ub
+                in
+                let in_reach =
+                  (not (String.equal t Row.default_basis))
+                  && Option.exists kb ~f:(fun b ->
+                      List.exists [ 4; 5; 6 ] ~f:(fun d ->
+                          String.is_prefix b.name ~prefix:(Printf.sprintf "k >= %d " d)))
+                in
+                ({ items; outs = outcomes items }, in_reach))))
+  in
+  let bounded_accepted =
+    List.count bounded_stores ~f:(fun ({ outs; _ }, _) ->
+        List.exists outs ~f:(function Accepted _ -> true | Refused -> false))
+  and reach_accepted =
+    List.count bounded_stores ~f:(fun ({ outs; _ }, in_reach) ->
+        in_reach && List.exists outs ~f:(function Accepted _ -> true | Refused -> false))
+  in
+  Stdio.eprintf
+    "%d bounded stores, %d accepted in some order; %d in the rule's reach, %d of them accepted \
+     (not part of the golden)\n"
+    (List.length bounded_stores) bounded_accepted
+    (List.count bounded_stores ~f:snd)
+    reach_accepted;
+  (* A component sized 0 by concatenation arithmetic, refused when stated first with a named tag:
+     present on the base, outside this rule's reach (a [default] claim), and a separate
+     follow-up. *)
+  let zero_component (_, _, sol) =
+    List.exists sol ~f:(fun (_, x) -> Option.exists x ~f:(fun (d, _) -> d = 0))
+  in
+  let bounded_runs =
+    List.concat_map bounded_stores ~f:(fun ({ items; outs }, _) ->
+        List.filter_map
+          (List.zip_exn (orders items) outs)
+          ~f:(fun (order, out) ->
+            match out with Refused -> None | Accepted sol -> Some (items, order, sol)))
+  in
   let dependent = List.filter stores ~f:order_dependent in
   Stdio.eprintf "%d order-dependent stores, %d named #2095 exceptions (not part of the golden)\n"
     (List.length dependent) (List.count stores ~f:known_2095);
@@ -489,6 +549,54 @@ let () =
               | Accepted sol ->
                   has sol "v" 2 tag && has sol "u" 1 Row.bcast_if_1 && has sol "k" 3 tag
               | Refused -> false));
+      let bounded = List.map bounded_stores ~f:fst in
+      p_none ~min:1700 "bounded stores whose verdict or solution depends on the order" bounded
+        ~f:order_dependent;
+      p "exactly eighteen bounded runs (three stores) size a component to 0"
+        (List.count bounded_runs ~f:zero_component = 18);
+      p_all ~min:18 "each of them under a default claim, outside the rule's reach"
+        (List.filter bounded_runs ~f:zero_component) ~f:(fun (items, _, _) ->
+          String.is_prefix (store_name items) ~prefix:"w(s2,k3 default)(v)=5 default ;");
+      p_none ~min:1000 "bounded accepted answers refused when stated up front, except size 0"
+        (List.filter bounded_runs ~f:(Fn.non zero_component))
+        ~f:refuses_own_answer;
+      (* What the rule newly solves, derived from its reach: a bound on k at d > 3, tagged default
+         or with the shared claim, and no bound on u or one u = d - 2 meets with the shared
+         claim. *)
+      let newly_solved =
+        List.concat_map [ "a"; "h"; Row.bcast_if_1 ] ~f:(fun t ->
+            List.concat_map [ 4; 5; 6 ] ~f:(fun d ->
+                List.concat_map [ Row.default_basis; t ] ~f:(fun kt ->
+                    List.map
+                      [ []; [ Printf.sprintf "u >= %d %s" (d - 2) t ] ]
+                      ~f:(fun ub ->
+                        ( t,
+                          d,
+                          kt,
+                          [
+                            "w(s2,k3 default)(v)=5 " ^ t;
+                            "[u; 2v]=[k; 2 " ^ t ^ "]";
+                            Printf.sprintf "k >= %d %s" d kt;
+                          ]
+                          @ ub )))))
+      in
+      p_all ~min:36
+        "a bounded waiting side above the sum's minimum settles to its bound in every order"
+        newly_solved ~f:(fun (t, d, kt, names) ->
+          match
+            List.find bounded ~f:(fun { items; _ } ->
+                String.equal (store_name items) (String.concat ~sep:" ; " names))
+          with
+          | None -> false
+          | Some { outs; _ } ->
+              (not (List.is_empty outs))
+              && List.for_all outs ~f:(function
+                | Accepted sol -> has sol "u" (d - 2) t && has sol "k" d kt
+                | Refused -> false));
+      p_none ~min:1700 "bounded stores registered in one batch settling otherwise" bounded
+        ~f:batch_differs;
+      p "over 700 bounded stores are in the rule's reach, over 30 of them accepted"
+        (List.count bounded_stores ~f:snd > 700 && reach_accepted > 30);
       (* Twenty stores yield 64 orderings: the floor guards the name-based selection. *)
       p_all ~min:64 "a stride of the broadcast top settles in every order"
         (List.concat_map stride_top_stores ~f:outcomes) ~f:(function
