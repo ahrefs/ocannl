@@ -1,8 +1,6 @@
 (* gh-ocannl-2281. Replay fixed CUDA kernel segments with the two value-select renderings at both
-   PTX targets. Context.compile bypasses the schedule cache. Use OCANNL_BACKEND=cuda
-   OCANNL_CUDA_KERNEL_CACHE_MIB=0 dune exec \ benchmarks/runners/ocannl/bench_cuda_select.exe --
-   [elements] [--dry-run] An exclusive measurement session and a ready measurement box are required
-   for timings.
+   PTX targets. Context.compile bypasses the schedule cache. The CUDA value-select benchmark section
+   of benchmarks/README.md gives the hermetic invocation and readiness checks.
 
    The source check reads only this compile's returned CUDA source. It detects the renderer's first
    arm local by its declared name and compares the control source byte for byte. Branch instructions
@@ -228,6 +226,13 @@ let compare_code ~root ~target ~control work f =
   Exn.protect
     ~finally:(fun () -> Context.release (fst short))
     ~f:(fun () ->
+      let expected_native = Printf.sprintf "sm_%d" cc_a in
+      let is_native = Mma.equal_ptx_target target Mma.Native in
+      if (not is_native) && String.equal arch_a expected_native then
+        failwith
+          (Printf.sprintf
+             "%s: floor and native PTX coincide at %s. This sweep needs distinct targets." work.name
+             arch_a);
       let blend, src_b, cc_b, arch_b = compile ~root ~target ~blend:true work in
       Exn.protect
         ~finally:(fun () -> Context.release (fst blend))
@@ -241,11 +246,9 @@ let compare_code ~root ~target ~control work f =
             else (not (has_local src_a)) && has_local src_b
           in
           Verdict.pass_fail (label ^ " emitted rendering") matches;
-          let expected_native = Printf.sprintf "sm_%d" cc_a in
-          let is_native = Mma.equal_ptx_target target Mma.Native in
           Verdict.pass_fail (label ^ " actual PTX targets")
             (cc_a = cc_b && String.equal arch_a arch_b
-            && Bool.(String.equal arch_a expected_native = is_native));
+            && ((not is_native) || String.equal arch_a expected_native));
           if Verdict.any_failed () then failwith (label ^ ": source or PTX check failed");
           f ~label short blend))
 
@@ -256,15 +259,18 @@ let () =
   if elements % 256 <> 0 then invalid_arg "elements must be a multiple of 256";
   if not (String.equal (Utils.get_global_arg ~arg_name:"cuda_kernel_cache_mib" ~default:"64") "0")
   then invalid_arg "set OCANNL_CUDA_KERNEL_CACHE_MIB=0 to witness every PTX compile";
-  let root = Context.cuda () in
+  let root = Context.auto () in
   Exn.protect
     ~finally:(fun () -> Context.release root)
     ~f:(fun () ->
+      let backend = Context.backend_name root in
+      if not (String.equal backend "cuda") then
+        invalid_arg "bench_cuda_select requires --ocannl_backend=cuda";
       let calls = Bench_retime.calls_of_env () in
       p
         "backend=%s elements=%d pool_images=%d mask_density=1/32,31/32 timing=queued calls=%d \
          dry_run=%b\n"
-        (Context.backend_name root) elements (elements / 16) calls dry;
+        backend elements (elements / 16) calls dry;
       let node = Ll_test.node_factory ~first_id:20000 ~dims:[| elements |] () in
       let control = pointwise ~elements ~node Control in
       let workloads =
