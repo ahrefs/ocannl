@@ -540,9 +540,13 @@ files.
   ordinary anchors. Two dropped-link self-controls pin replay discrimination. Each depth adds
   120,258 default and 324,486 widened programs: totals 823,764 and 10,307,080, respectively,
   with 2,576,770 programs per widened shard and unchanged 600-second shard budgets.
-  A planted-fault control makes only virtual links read `(i,j)` instead of `(j,i)`; the default
-  oracle reports 60,308 findings across both depths and all three consumer standings, failing
-  semantic parity (staging PR for gh-ocannl-2249).
+  For each chain depth, Tier B requires a guarded anchor whose consumer reaches a write that
+  reads unequal source coordinates (gh-ocannl-2259). The descriptor decides which write reaches
+  the consumer, including overwrites within its loop. Guarded buckets prefer those witnesses.
+  If the stride misses them, the last pick gives way to a witness from an unsampled bucket.
+  The built oracle's `--plant-transpose` control makes only virtual links read `(i,j)` in place
+  of `(j,i)`. It reports 60,308 Tier A findings and fails compiled parity, naming mismatched
+  anchors on stderr. The original sample passed compiled parity under the same fault.
   The original `src=reduce` negative control is the strict probe of before gh-ocannl-2145,
   which ran every discarded arm's scopes (codegen hoisted them then), over the inliner without `guard_hoisted`: the table
   reports 2,869 strict address faults, all in `src=reduce`, across axes/axes, axes/flat,
