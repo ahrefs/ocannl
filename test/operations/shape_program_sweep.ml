@@ -56,8 +56,8 @@
    _build/default/test/operations && ./shape_program_sweep.exe --list-known 2>/abs/path/listing
    >/dev/null)], then [grep '^KNOWN <entry> |' /abs/path/listing]. The listing is written even when
    a claim fails (the run then exits 1). Line formats are at [known_line] below. Under the flag
-   stdout gains two claims tying the listing to the judgements; without it stdout and every verdict
-   are the golden's.
+   stdout gains three claims tying the listing to the judgements; without it stdout and every
+   verdict are the golden's.
 
    THE KNOWN LIST ([known] below). An entry excuses only the oracle's shape with axes collapsed to
    1, its draws filling the shape they closed to, at or under its named cause. [reach] additionally
@@ -1104,11 +1104,11 @@ let fixed_programs : (string * program) list =
 type case = { name : string; prog : program; oracle : oracle; outcome : outcome }
 
 let num_programs = 2000
+let num_executed = 120
 
 (* The listing above, on stderr, for a direct run of the built executable from
    [_build/default/test/operations] (which finds [ocannl_config] there). *)
 let list_known = Array.mem (Sys.get_argv ()) "--list-known" ~equal:String.equal
-let num_executed = 120
 
 (* Floors on the programs that agree outright (set a little under the counts at landing, which the
    stderr prints): a known entry grown to excuse them would fail here. *)
@@ -1154,11 +1154,13 @@ let () =
               | [ f ] -> Hashtbl.set fills ~key:c.name ~data:f
               | _ -> assert false
               | exception e -> Hashtbl.set exec_failed ~key:c.name ~data:(Exn.to_string e)));
+  (* What [judge] saw and the listing prints. *)
+  let fills_of c =
+    Option.value (Hashtbl.find fills c.name) ~default:(Array.map c.prog ~f:(fun _ -> None))
+  in
   let judged =
     List.map cases ~f:(fun c ->
-        let f =
-          Option.value (Hashtbl.find fills c.name) ~default:(Array.map c.prog ~f:(fun _ -> None))
-        in
+        let f = fills_of c in
         let j =
           match Hashtbl.find exec_failed c.name with
           | Some e -> Disagrees ("execution raised " ^ e)
@@ -1207,7 +1209,6 @@ let () =
   let listing =
     if not list_known then []
     else
-      let no_fills c = Array.map c.prog ~f:(fun _ -> None) in
       List.concat_map known_entries ~f:(fun e ->
           List.filter_map judged ~f:(fun (c, j, _) ->
               match j with
@@ -1216,10 +1217,7 @@ let () =
               | _ -> None))
       @ List.filter_map judged ~f:(fun (c, j, _) ->
           match c.outcome with
-          | Accepted got ->
-              Some
-                (shapes_line c.name c.prog c.oracle got j
-                   ~fills:(Option.value (Hashtbl.find fills c.name) ~default:(no_fills c)))
+          | Accepted got -> Some (shapes_line c.name c.prog c.oracle got j ~fills:(fills_of c))
           | _ -> None)
   in
   List.iter listing ~f:(fun line -> Stdio.Out_channel.output_lines Stdio.stderr [ line ]);
@@ -1361,8 +1359,11 @@ let () =
          with
         | Disagrees _ -> true
         | _ -> false));
-  (* Only under [--list-known], so stdout is the golden's without it: the lines printed above,
-     counted by their own prefix, against the judgements the counts and claims read. *)
+  (* Only under [--list-known], so stdout is the golden's without it. The first two pin only the
+     line counts: the lines printed above, counted by their own prefix, against the judgements the
+     counts and claims read. The third pins what an excuse says: a solver shape exactly when the
+     cause is not a refusal, a collapse that differs from the oracle's shape, a fill that falls
+     short of the cells. *)
   if list_known then
     Verdict.case "the known listing" (fun () ->
         p_all ~min:(List.length known)
@@ -1372,7 +1373,16 @@ let () =
             = count (fun (_, j, _) -> is_known e j));
         p "the listing gives the shapes of every accepted program"
           (List.count listing ~f:(String.is_prefix ~prefix:"SHAPES ")
-          = count (fun (c, _, _) -> match c.outcome with Accepted _ -> true | _ -> false)))
+          = count (fun (c, _, _) -> match c.outcome with Accepted _ -> true | _ -> false));
+        p_all ~min:(List.length known) "every listed excuse is consistent with its cause"
+          (List.concat_map judged ~f:(fun (_, j, _) ->
+               match j with Known (x, also) -> x :: also | _ -> []))
+          ~f:(fun (x : excuse) ->
+            match (x.cause, x.got) with
+            | Refusal _, None -> true
+            | Collapse, Some g -> not (same x.want g)
+            | Fill (d, c), Some _ -> d <> c
+            | _ -> false))
 
 (* {2 The seed families (wave-20261111-ocannl's comment on gh-ocannl-2181)}
 
