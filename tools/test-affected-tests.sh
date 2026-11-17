@@ -654,6 +654,26 @@ if harness_leg 'verdict trailer'; then
   if [ -z "$vt_detail" ]; then report 0 "$vt_label"; else report 1 "$vt_label" "$vt_detail"; fi
 fi
 
+if harness_leg 'cross-cutting opens stderr and leaves the verdict trailer last'; then
+  affected --files dune-project lib/leaf.ml
+  trailer
+  if [ "$rc" = 0 ] && [ "$verdict" = cross-cutting ] &&
+     head -n 1 "$err" | grep -q '^affected: CROSS-CUTTING:' &&
+     grep -q '^affected: CROSS-CUTTING reason: dune-project (' "$err"; then
+    report 0 'the cross-cutting banner comes first, its contributor is named, and the only trailer stays last'
+  else report 1 'the cross-cutting banner comes first, its contributor is named, and the only trailer stays last' \
+    "exit $rc; first: $(head -n 1 "$err"); last: $(tail -n 1 "$err")"; fi
+  rc=0
+  (cd "$TMP" && harness_dune_colour "$repo/tools/affected-tests.sh" \
+    --files lib/core.ml lib/leaf.ml lib/stubbed.ml lib/myppx.ml) >"$TMP/combined" 2>&1 || rc=$?
+  if [ "$rc" = 0 ] && head -n 1 "$TMP/combined" | grep -q '^affected: CROSS-CUTTING: full list' &&
+     grep -q '^affected: link-only: ' "$TMP/combined" &&
+     [ "$(tail -n 1 "$TMP/combined")" = 'affected: verdict=cross-cutting' ]; then
+    report 0 'the wide-list banner precedes even stdout aliases when both streams are combined'
+  else report 1 'the wide-list banner precedes even stdout aliases when both streams are combined' \
+    "exit $rc; first: $(head -n 1 "$TMP/combined"); last: $(tail -n 1 "$TMP/combined")"; fi
+fi
+
 if harness_leg 'link-only'; then
   # Ranked, not dropped (gh-ocannl-1431): what names the changed module is printed first,
   # what only links its library last, and both are printed unless --referenced-only.
@@ -2057,7 +2077,7 @@ if harness_leg 'probe controls'; then
   probe_restore
   probe_edit 's/\(echo m\)/(echo n)/' &&
     control 'a stanza'"'"'s link rule is what reaches a link_deps consumer' \
-      'for (@{$stanza_rule{$t}}) { $hit{$_} = $whole_hit{$_} = 1; $hit_why{$_} //= $why }' '' \
+      'for (@{$stanza_rule{$t}}) { $hit{$_} = $whole_hit{$_} = 1; hit_reason($_, $delta_paths{$p}, $why) }' '' \
       HEAD -- @p3/runtest-reads3 @p3/runtest-lk $p3_scan
   probe_restore
   probe_edit 's/\(test \(name pa\) \(modules pa\)\)/(test (name pa) (modules pa) (flags (:standard -w -a)))/' &&

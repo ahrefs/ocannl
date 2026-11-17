@@ -20,6 +20,8 @@
 # finished, clean, cc run of an allowlisted command, `prune` only merged heads.
 # Structured train-name rows require a count matching distinct names and an alias the
 # tree has; legacy count-only output still asks affected and must agree exactly.
+# The branch plan uses the chosen base's merged tree and the real record check,
+# distinguishing conflict, narrow reach, and wide reach with or without a record.
 # The #compile-output leg alone uses real
 # dune and Python in a minimal isolated project: the repository's actual capped-fixture rule
 # runs twice, then with a planted failing case. It compares bytes and rejects the exact unittest
@@ -112,6 +114,17 @@ FAKE
   cat >"$R/tools/test-run.sh" <<'FAKE'
 #!/bin/sh
 printf '%s\n' "$*" >>"$FAKE_RECORD.tiers"
+if [ -n "${FAKE_PLAN_BASE:-}" ]; then
+  [ "$(git rev-parse 'HEAD^1')" = "$FAKE_PLAN_BASE" ] &&
+    [ "$(git rev-parse 'HEAD^2')" = "$FAKE_PLAN_HEAD" ] &&
+    [ "$(git rev-parse --show-toplevel)" != "$FAKE_PLAN_CALLER" ] || exit 7
+fi
+if [ "${FAKE_CROSS_ON_MOVED_BASE:-0}" = 1 ] && [ -f moved-marker ]; then
+  FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_RC=2 FAKE_TIER_VERDICT=cross-cutting
+fi
+reason() {
+  [ -z "${FAKE_REASON:-}" ] || printf 'affected: CROSS-CUTTING reason: %s\n' "$FAKE_REASON" >&2
+}
 count() {
   if [ -n "${FAKE_TRAIN_NAMES:-}" ]; then
     while IFS= read -r alias; do printf 'test-run: prepush: train: %s\n' "$alias" >&2; done <"$FAKE_TRAIN_NAMES"
@@ -126,12 +139,14 @@ case " $* " in
     exit "${FAKE_AFF_RC:-0}" ;;
   *' --referenced-only '*)
     cat "${FAKE_TIER_LIST:-/dev/null}"
+    reason
     printf 'affected: verdict=cross-cutting\n' >&2
     count
     [ "${FAKE_TIER_VERDICT-ok}" = none ] || printf 'affected: verdict=%s\n' "${FAKE_TIER_VERDICT-ok}" >&2
     exit "${FAKE_TIER_RC:-0}" ;;
 esac
 cat "${FAKE_LIST:-/dev/null}"
+reason
 printf 'affected: 7 alias(es) from 2 changed path(s)\n' >&2
 [ "${FAKE_PREPUSH_RC:-0}" = 2 ] || count
 [ "${FAKE_VERDICT-ok}" = none ] || printf 'affected: verdict=%s\n' "${FAKE_VERDICT-ok}" >&2
@@ -286,6 +301,60 @@ run_line() { # HEAD CMD [EXIT CLEAN BACKEND]: a run record's line, valid by defa
 APART_HEAD=$(git -C "$APART" rev-parse 'HEAD^2')
 R=$APART owed "$OWED_FULL" add "$(run_line "$APART_HEAD" 'build @runtest @train -j 4')"
 [ "$orc" = 0 ] || { echo "fixture: could not publish APART's record: $(cat "$TMP/owed-out")" >&2; exit 1; }
+if harness_leg 'a branch plan reads the selected merge and its record without building #branch-plan'; then
+  fixture branch-plan
+  fork=$(git -C "$R" rev-parse HEAD)
+  first r.txt && commit_on base
+  # The current base can bring its own merge gate changes along with its inputs.
+  gate=$R/tools/merge-build-check.sh
+  {
+    IFS= read -r shebang
+    printf '%s\n' "$shebang" "echo 'fixture: merge gate from the moved base'"
+    cat
+  } <"$gate" >"$gate.new" && chmod +x "$gate.new" && mv "$gate.new" "$gate"
+  touch "$R/moved-marker" && commit_on base
+  tip=$(git -C "$R" rev-parse HEAD)
+  git -C "$R" checkout -q side && last r.txt && commit_on side
+  side=$(git -C "$R" rev-parse HEAD)
+  owed "$OWED_FULL" add "$(run_line "$side" 'runtest -j 4')"
+  [ "$orc" = 0 ] || { echo "fixture: the branch plan record could not be published" >&2; exit 1; }
+  # A dirty caller is outside the committed merge. In particular, a caller-side
+  # copy of the probe input must not influence the plan against the fork.
+  touch "$R/moved-marker"
+  before=$(git -C "$R" status --porcelain)
+  plan_branch() {
+    FAKE_PLAN_CALLER=$R FAKE_PLAN_BASE=$1 FAKE_PLAN_HEAD=$side run "$TMP/dunebin" --plan --base "$1"
+  }
+  planned() {
+    if [ "$rc" = 0 ] && [ ! -s "$TMP/record" ] && grep -qx "prepush --since $fork..$side --list" "$TMP/record.tiers" &&
+       ! grep -q '^fmt ' "$TMP/record.tiers" && [ "$(git -C "$R" rev-parse HEAD)" = "$side" ] &&
+       [ "$(git -C "$R" status --porcelain)" = "$before" ] && has "$2" && has "$3"; then
+      report 0 "$1"
+    else report 1 "$1" "exit $rc; $(cat "$TMP/record"); $(tiers); $(cat "$TMP/out")"; fi
+  }
+  FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_REASON='x.ml (6 aliases)' plan_branch "$tip"
+  planned 'a cross-cutting branch plan names the need and missing record' \
+    'tests plan: CROSS-CUTTING (first tier selected)' 'owed-run needs: runtest (record does not admit'
+  FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL plan_branch "$tip"
+  planned 'a cross-cutting branch plan reads a record of the head' \
+    'tests plan: CROSS-CUTTING (first tier selected)' 'owed-run needs: runtest (record admits)'
+  FAKE_CROSS_ON_MOVED_BASE=1 plan_branch "$fork"
+  planned 'a narrow branch plan owes no record' 'tests plan: narrow' 'owed-run needs: none'
+  FAKE_CROSS_ON_MOVED_BASE=1 plan_branch "$tip"
+  planned 'the same head is cross-cutting with no first tier against the moved base' \
+    'tests plan: CROSS-CUTTING (no first tier selected)' 'owed-run needs: runtest (record does not admit'
+  if has 'fixture: merge gate from the moved base'; then
+    report 0 'the candidate plan uses the merge gate version the base brought'
+  else report 1 'the candidate plan uses the merge gate version the base brought' "$(cat "$TMP/out")"; fi
+  # The side needs a conflicting edit to the same line, relative to the fork.
+  { echo conflict; tail -n +2 "$R/r.txt"; } >"$R/r.txt.new" && mv "$R/r.txt.new" "$R/r.txt" && commit_on side
+  side=$(git -C "$R" rev-parse HEAD)
+  plan_branch "$tip"
+  if [ "$rc" = 1 ] && has 'plan: merge conflict' && has r.txt &&
+     [ ! -s "$TMP/record" ] && [ ! -s "$TMP/record.tiers" ]; then
+    report 0 'a conflicting branch plan reports the conflict before any tier is asked'
+  else report 1 'a conflicting branch plan reports the conflict before any tier is asked' "exit $rc; $(cat "$TMP/out")"; fi
+fi
 if harness_leg 'the format tier runs first, its scans off, and a red one ends the run #tiers'; then
   R=$APART run "$TMP/dunebin"
   if [ "$rc" = 0 ] && [ "$(tiers | sed -n 1p)" = 'fmt scans=0' ] && has 'merge-build-check: format tier passed' &&
@@ -437,6 +506,24 @@ plant() { # URL HEAD TREE PARENT MESSAGE: refs/owed-runs/HEAD at URL, any commit
     git -C "$R" push -q -f "$1" "$c:refs/owed-runs/$2"
 }
 merged_tree() { git -C "$R" rev-parse 'HEAD^{tree}'; }
+if harness_leg 'a cross-cutting refusal carries the merged tree and its reason #owed-reason'; then
+  R=$APART
+  tree=$(merged_tree)
+  FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_REASON='x.ml (6 aliases)' run "$TMP/dunebin"
+  cp "$TMP/out" "$TMP/owed-reason-merge"
+  merge_rc=$rc
+  sha=$(git -C "$R" commit-tree 'HEAD^1^{tree}' -p 'HEAD^1' -p 'HEAD^2' -m 'the base alone') &&
+    git -C "$R" checkout -q --detach "$sha"
+  FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_REASON='m.txt (5 aliases)' run "$TMP/dunebin"
+  git -C "$R" checkout -q base
+  if [ "$merge_rc" = 1 ] && [ "$rc" = 1 ] &&
+     grep -qFx 'merge-build-check: tests tier: CROSS-CUTTING reason: x.ml (6 aliases)' "$TMP/owed-reason-merge" &&
+     has 'tests tier: CROSS-CUTTING reason: m.txt (5 aliases)' &&
+     grep -vxF -f "$TMP/out" "$TMP/owed-reason-merge" | grep -qF "admits the merged tree $tree"; then
+    report 0 "the refusal prints its reason and remains the merge's own failure when the base's reason differs"
+  else report 1 "the refusal prints its reason and remains the merge's own failure when the base's reason differs" \
+    "exits $merge_rc/$rc; $(cat "$TMP/owed-reason-merge" "$TMP/out")"; fi
+fi
 if harness_leg 'what is OWED is read from the head'"'"'s record, and every other record refuses #owed'; then
   printf '%s\n' '@a/runtest-first' >"$TMP/owed-tier"
   R=$APART

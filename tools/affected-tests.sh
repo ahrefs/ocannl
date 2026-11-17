@@ -294,8 +294,12 @@
 # refuses a stderr without it). `cross-cutting`: the first tier spans over half
 # the per-test aliases, or the printed list does though its first tier does not
 # (gh-ocannl-1996: a library module most tests only link; `--referenced-only`
-# prints the first tier alone, so it is judged on that); the CROSS-CUTTING line
-# says which, and who runs the list then;
+# prints the first tier alone, so it is judged on that). CROSS-CUTTING opens
+# stderr. Its reason lists up to three changed paths with the widest observed
+# reach among the counted aliases (first tier when that is wide, otherwise
+# the full list). Counts can overlap; they come from the existing reach
+# witnesses, not a rerun with each path in isolation. The detailed line below
+# the listing says which threshold was crossed and who runs the list;
 # `incomplete`: a changed path is UNMAPPED, which is also what exit 3 says.
 # Both are decided in one place, `verdict` in the reader below. No trailer on
 # exit 2, nor under `--harnesses`, which prints no alias list to judge.
@@ -361,6 +365,11 @@ if [ "$harnesses" = 1 ]; then
   [ "$gpu_gated" = 0 ] || die "--harnesses and --gpu-gated print different lists ($usage)"
   [ "$referenced_only" = 0 ] || die "--harnesses prints no alias, so --referenced-only has nothing to leave off ($usage)"
   [ ! -s "$tmp/why" ] || die "--harnesses prints no alias, so --why has none to explain ($usage)"
+else
+  # Reach diagnostics are produced as the graph is read. Give the completed
+  # verdict first use of stderr, including on the probe's fallback path.
+  exec 3>&2 2>"$tmp/diagnostics" || die "cannot buffer diagnostics"
+  trap 'cat "$tmp/diagnostics" >&3; rm -rf "${tmp:?}"' EXIT
 fi
 if [ "${1:-}" = --files ]; then
   shift
@@ -1732,8 +1741,13 @@ if (open my $hr, "<", "$tmp/harness-read") {
 # For `--why` (gh-ocannl-1711), the first changed path behind each of those:
 # a hit stanza's, a dune directory's, a data directory's, any data at all, and
 # per changed path and alias the own target whose rule reads it.
-my (%hit_why, %dune_why, %data_why, %read_via, %direct_why);
+my (%hit_why, %hit_path, %dune_why, %data_why, %read_via, %direct_why, %direct_path);
 my $any_data_why;
+sub hit_reason {
+  my ($i, $path, $why) = @_;
+  $hit_path{$i} //= $path;
+  $hit_why{$i} //= $why;
+}
 # How a stanza was hit: by changed modules it owns (NAME => 1), or as a whole
 # (a generated module, a stub, a changed stanza, a tests directory's modules).
 my (%mod_hit, %whole_hit, %mod_paths);
@@ -2044,14 +2058,15 @@ if (@scoped) {
     my @by_membership = grep { !$whole{$_} } sort { $a <=> $b } keys %split;
     for my $i (@by_membership) {
       $hit{$i} = 1;
-      $hit_why{$i} //= "$f (a compared dune edit changed only its modules or libraries)";
+      hit_reason($i, $f, "$f (a compared dune edit changed only its modules or libraries)");
       for my $m (keys %{$st[$i]{mods}}, keys %{$split_mods{$i} // {}}) { $mod_hit{$i}{$m} = 1; $mod_paths{$m}{"\0membership"} = 1 }
     }
     $hit{$_} = $whole_hit{$_} = 1 for keys %whole;
-    $hit_why{$_} //= "$f (a compared dune edit changed the stanza as a whole)" for keys %whole;
+    hit_reason($_, $f, "$f (a compared dune edit changed the stanza as a whole)") for keys %whole;
     $direct{"\@$_"} //= $direct_here{$_} for keys %direct_here;
     $direct_why{"\@$_"} //= "$f, compared with the old revision: $direct_here{$_}" for keys %direct_here;
-    $delta_paths{$_} = 1 for @paths;
+    $direct_path{"\@$_"} //= $f for keys %direct_here;
+    $delta_paths{$_} //= $f for @paths;
     push @parts, scalar(keys %whole) . " stanza(s) changed as a whole" if %whole;
     push @parts, scalar(@by_membership) . " library stanza(s) changed only in their modules or libraries (" .
       join(", ", map { label($_) } @by_membership) . "), reached by their modules" if @by_membership;
@@ -2073,14 +2088,14 @@ for my $p (@changed) {
     my %seen_g;
     my @g = grep { !$seen_g{$_}++ } map { @{$generated{$_}} } @gen;
     $hit{$_} = $whole_hit{$_} = 1 for @g;
-    $hit_why{$_} //= "$p (the rule generating " . join(", ", @gen) . " reads it)" for @g;
+    hit_reason($_, $p, "$p (the rule generating " . join(", ", @gen) . " reads it)") for @g;
     push @parts, "the rule generating " . join(", ", @gen) . " reads it: " . join(", ", map { label($_) } @g);
   }
   for my $o (grep { /\.o$/ && reads($_, $p, $d, $b) } @stub_targets) {
     my @libs = sort keys %{$obj_libs{$o} // {}};
     my @o = obj_owners($o);
     $hit{$_} = $whole_hit{$_} = 1 for @o;
-    $hit_why{$_} //= "$p (compiled into the stub object $o)" for @o;
+    hit_reason($_, $p, "$p (compiled into the stub object $o)") for @o;
     push @parts, "compiled into $o, " . (@libs ? "bundled by " . join(", ", map { label($_) } @libs)
       : "which no stub archive bundles, so every executable and test stanza of its directory (" . scalar(@o) . ")");
   }
@@ -2096,7 +2111,7 @@ for my $p (@changed) {
       # as `dune-project`'s language and extensions do: every directory under it.
       for (grep { under($_, $root) } $root, keys %$aliases) { $dune_dirs{$_} = 1; $dune_why{$_} //= $p }
       my @here = grep { under($st[$_]{dir}, $root) } 0 .. $#st;
-      $hit_why{$_} //= "$p (a dune file over its directory, not compared across revisions)" for @here;
+      hit_reason($_, $p, "$p (a dune file over its directory, not compared across revisions)") for @here;
       push @ix, @here;
       # Its rules make the files there: a rule elsewhere reading one of them (a
       # fixture's generated sources) reads the change.
@@ -2140,8 +2155,8 @@ for my $p (@changed) {
   }
   $hit{$_} = 1 for @ix;
   unless (@frag_of || $b =~ /^dune(?:-project|-workspace)?$/) {
-    $hit_why{$_} //= "$p (" . (defined $by_module ? "its module $by_module" : $unmapped ? "a module no stanza of this build owns"
-      : "a module of a tests stanza of its directory") . ")" for @ix;
+    hit_reason($_, $p, "$p (" . (defined $by_module ? "its module $by_module" : $unmapped ? "a module no stanza of this build owns"
+      : "a module of a tests stanza of its directory") . ")") for @ix;
   }
   if (defined $by_module) { $mod_hit{$_}{$by_module} = 1 for @ix; $mod_paths{$by_module}{$p} = 1 } else { $whole_hit{$_} = 1 for @ix }
   push @parts, "read by the rules of $n_read alias(es)" if $n_read;
@@ -2194,15 +2209,15 @@ if (%delta_paths) {
     }
     my $why = "$p (a target whose rule a compared dune edit changed)";
     for my $g (grep { reads($_, $p, $d, $b) } sort keys %generated) {
-      for (@{$generated{$g}}) { $hit{$_} = $whole_hit{$_} = 1; $hit_why{$_} //= $why }
+      for (@{$generated{$g}}) { $hit{$_} = $whole_hit{$_} = 1; hit_reason($_, $delta_paths{$p}, $why) }
     }
     for my $o (grep { /\.o$/ && reads($_, $p, $d, $b) } @stub_targets) {
-      for (obj_owners($o)) { $hit{$_} = $whole_hit{$_} = 1; $hit_why{$_} //= $why }
+      for (obj_owners($o)) { $hit{$_} = $whole_hit{$_} = 1; hit_reason($_, $delta_paths{$p}, $why) }
     }
     # A stanza's own module sources are its modules, not inputs of this kind.
     for my $t (grep { reads($_, $p, $d, $b) } sort keys %stanza_rule) {
       next if $b =~ /\.mli?$/ && grep { $_ eq $p } map { @$_ } values %{$st[$stanza_rule{$t}[0]]{mods} // {}};
-      for (@{$stanza_rule{$t}}) { $hit{$_} = $whole_hit{$_} = 1; $hit_why{$_} //= $why }
+      for (@{$stanza_rule{$t}}) { $hit{$_} = $whole_hit{$_} = 1; hit_reason($_, $delta_paths{$p}, $why) }
     }
     for (@{$copies{$p} // []}) { $data_dirs{$_} = 1; $data_why{$_} //= $p }
   }
@@ -2748,7 +2763,7 @@ sub reach_chain {   # INDEX TARGET -> (indices from INDEX to the target), or ()
       for (my $k = $i; $k != -1; $k = $prev{$k}) { unshift @c, $k }
       return @c;
     }
-    for my $j (@{$st[$i]{to}}) { next if exists $prev{$j}; $prev{$j} = $i; push @q, $j }
+    for my $j (nsort(@{$st[$i]{to}})) { next if exists $prev{$j}; $prev{$j} = $i; push @q, $j }
   }
   return ();
 }
@@ -3034,6 +3049,88 @@ if (%unmapped_mod) {
   }
 }
 
+# A first tier spanning most of the suite (gh-ocannl-1765): the ranking cannot
+# narrow this change, so say so, and who runs the whole list -- except its
+# `slow-` aliases, which no CI job runs (local review): those stay local.
+# A printed list spanning most of the suite over a narrower first tier
+# (gh-ocannl-1996) is no pre-push run either: `low_level.ml` lists 815 of the
+# 825 per-test aliases, 436 of them link-only, and that list cannot run on a
+# shared box. The ranking did narrow it, so that line names the first tier as
+# where the local run starts. Two thresholds, each its own function, equal today.
+# The verdict (gh-ocannl-1921; the header states the contract) is decided here
+# and nowhere else: the CROSS-CUTTING line, the INCOMPLETE note, the exit
+# status and the trailer all read it.
+sub first_tier_wide {   # (first-tier aliases, per-test aliases)
+  my ($n_first, $n_all) = @_;
+  return $n_all && 2 * $n_first > $n_all;
+}
+sub list_wide {   # (printed aliases, per-test aliases)
+  my ($n_listed, $n_all) = @_;
+  return $n_all && 2 * $n_listed > $n_all;
+}
+sub verdict {   # (first-tier aliases, printed aliases, per-test aliases, UNMAPPED paths) -> the trailer's conditions
+  my ($n_first, $n_listed, $n_all, $n_unmapped) = @_;
+  my @v;
+  push @v, "cross-cutting" if first_tier_wide($n_first, $n_all) || list_wide($n_listed, $n_all);
+  push @v, "incomplete" if $n_unmapped;
+  return @v;
+}
+# Count observed reach from the same seeds that the ranking and --why use.
+# Attribute an owner to its nearest hit, and an alias without a witness of
+# its own to a needed alias that carries one. Count each path once per alias.
+sub cross_reason {
+  my (%by_alias_path, %owner_path, %dir_path, %needs_alias, %count);
+  for my $p (sort keys %read_by) {
+    $by_alias_path{$_}{$delta_paths{$p} // $p} = 1 for keys %{$read_by{$p}};
+  }
+  for my $i (nsort(keys %reached)) {
+    my @chain = reach_chain($i, sub { $hit_path{$_[0]} });
+    next unless @chain;
+    $owner_path{$i} = $hit_path{$chain[-1]};
+    $dir_path{$st[$i]{dir}} //= $owner_path{$i};
+  }
+  $dir_path{(dir_of($_))[0]} = $_ for reverse @changed;
+  for my $a (grep { $tier{$_->{name}} } @al) {
+    my ($n, $d) = @$a{qw(name dir)};
+    my $paths = $by_alias_path{$n} //= {};
+    my $data_path = $data_why{$d} // $any_data_why;
+    $data_path = $delta_paths{$data_path} // $data_path if defined $data_path;
+    $paths->{$_} = 1 for grep { defined }
+      $dune_why{$d}, $direct_path{$n}, @owner_path{@{$a->{by_owner}}},
+      ($a->{opaque_listed} ? $data_path : ()),
+      ($a->{unknown_touched} ? $dir_path{$d} : ());
+    $needs_alias{$n} = [ sort grep { $tier{$_} } map { keys %{$adeps{$_} // {}} } @{$a->{own}} ];
+  }
+  for my $n (@_) {
+    my @queue = ($n);
+    my %seen;
+    while (defined(my $alias = shift @queue)) {
+      next if $seen{$alias}++;
+      my @paths = keys %{$by_alias_path{$alias} // {}};
+      if (@paths) { $count{$_}++ for @paths; last }
+      push @queue, @{$needs_alias{$alias} // []};
+    }
+  }
+  my @top = sort { $count{$b} <=> $count{$a} || $a cmp $b } keys %count;
+  splice @top, 3 if @top > 3;
+  return join(", ", map { sprintf "%s (%d aliases)", s/[^[:print:]]/?/gr, $count{$_} } @top);
+}
+my $n_all = 0;
+$n_all += $_ for values %total;
+my $n_first = keys %out;
+my $n_listed = $n_first + ($referenced_only ? 0 : @link_only);
+my %verdict = map { $_ => 1 } verdict($n_first, $n_listed, $n_all, scalar @unmapped);
+if ($verdict{"cross-cutting"}) {
+  my $first_wide = first_tier_wide($n_first, $n_all);
+  my $reason = cross_reason(keys %out, $first_wide ? () : @link_only);
+  # FD 3 is the original stderr, before the shell buffered other diagnostics.
+  open my $first, ">&=3" or die "cannot open first diagnostic: $!";
+  printf $first "affected: CROSS-CUTTING: %s spans most of the suite (%d of %d aliases)\n",
+    $first_wide ? "first tier" : "full list", $first_wide ? $n_first : $n_listed, $n_all;
+  printf $first "affected: CROSS-CUTTING reason: %s\n", $reason if length $reason;
+  close $first or die "cannot write first diagnostic: $!";
+}
+
 my @selected = grep { !$gpu_gated || $gpu_reason{$_} }
   (sort(keys %out), $referenced_only ? () : @link_only);
 print "$_\n" for @selected;
@@ -3096,39 +3193,7 @@ my $n_harness = 0;
     close $fh;
   }
 }
-# A first tier spanning most of the suite (gh-ocannl-1765): the ranking cannot
-# narrow this change, so say so, and who runs the whole list -- except its
-# `slow-` aliases, which no CI job runs (local review): those stay local.
-# A printed list spanning most of the suite over a narrower first tier
-# (gh-ocannl-1996) is no pre-push run either: `low_level.ml` lists 815 of the
-# 825 per-test aliases, 436 of them link-only, and that list cannot run on a
-# shared box. The ranking did narrow it, so that line names the first tier as
-# where the local run starts. Two thresholds, each its own function, equal today.
-# The verdict (gh-ocannl-1921; the header states the contract) is decided here
-# and nowhere else: the CROSS-CUTTING line, the INCOMPLETE note, the exit
-# status and the trailer all read it.
-sub first_tier_wide {   # (first-tier aliases, per-test aliases)
-  my ($n_first, $n_all) = @_;
-  return $n_all && 2 * $n_first > $n_all;
-}
-sub list_wide {   # (printed aliases, per-test aliases)
-  my ($n_listed, $n_all) = @_;
-  return $n_all && 2 * $n_listed > $n_all;
-}
-sub verdict {   # (first-tier aliases, printed aliases, per-test aliases, UNMAPPED paths) -> the trailer's conditions
-  my ($n_first, $n_listed, $n_all, $n_unmapped) = @_;
-  my @v;
-  push @v, "cross-cutting" if first_tier_wide($n_first, $n_all) || list_wide($n_listed, $n_all);
-  push @v, "incomplete" if $n_unmapped;
-  return @v;
-}
-my %verdict;
 {
-  my $n_all = 0;
-  $n_all += $_ for values %total;
-  my $n_first = keys %out;
-  my $n_listed = $n_first + ($referenced_only ? 0 : @link_only);
-  %verdict = map { $_ => 1 } verdict($n_first, $n_listed, $n_all, scalar @unmapped);
   my @slow = sort grep { m{(?:^\@|/)slow-[^/]*$} } keys %out, @link_only;   # link-only ones too: CI runs none
   my $slow = @slow ? sprintf(" but its %d slow- alias(es), which no CI job runs: run those locally too", scalar @slow) : "";
   if (!$verdict{"cross-cutting"}) {
