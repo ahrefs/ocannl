@@ -8272,9 +8272,14 @@ let validate_scope_bodies (llc : t) : unit =
     backend compiler's "undeclared identifier" on a kernel they did not write.
 
     [Declare_local] and scan-carried locals additionally require lexical visibility
-    (gh-ocannl-2050). Their enclosing statement blocks must enclose the access too. [Local_scope]
-    definitions retain the existence-only rule: [C_syntax.pp_local_defs] orders those definitions,
-    and replicating that order here caused false rejections (gh-ocannl-584).
+    (gh-ocannl-2050). Their enclosing statement blocks must enclose the access too. Under
+    [emission], on the tree that renders, a [Local_scope] definition is held to containment only
+    (gh-ocannl-2258): the scope bodies enclosing it must enclose the access, since the renderer
+    declares it inside each of their C blocks however it orders it; without [emission], to existence
+    only, since a single-assignment scope the collapse turns into an expression no longer encloses
+    anything. Never to order: [C_syntax.pp_local_defs] orders those definitions, and replicating
+    that order here caused false rejections (gh-ocannl-584). Within one body, or across statements
+    at one level, any definition of the id serves.
 
     A visible explicit declaration must also precede the access in rendering order (gh-ocannl-2100):
     C declares a [Declare_local] where it stands, so a read or write ahead of it in the same block
@@ -8306,7 +8311,9 @@ let unbound_local_violation ?emission (llc : t) : string option =
     }
   in
   let bound = Hash_set.create (module Scope_id) in
-  let hoisted = Hash_set.create (module Scope_id) in
+  (* gh-ocannl-2258: each [Local_scope] binder's enclosing bodies, innermost first, and the
+     innermost one's mint, for the diagnostic. *)
+  let scope_binders = Hashtbl.create (module Scope_id) in
   let lexical = Hashtbl.create (module Scope_id) in
   let blocks = ref [] and next_block = ref 0 in
   (* A statement containing scalar definitions renders them in a block shared by its operands. Do
@@ -8407,7 +8414,8 @@ let unbound_local_violation ?emission (llc : t) : string option =
   let scalar ctx () = function
     | Local_scope { id; mint; _ } ->
         Hash_set.add bound id;
-        Hash_set.add hoisted id;
+        Hashtbl.add_multi scope_binders ~key:id
+          ~data:(List.map !enclosing ~f:fst, List.hd !enclosing);
         (* Only at the node's definition position: [Emitted] shows it to no other. *)
         Option.iter (opens_group_block ctx) ~f:(fun g ->
             let key = (List.hd !blocks, g) in
@@ -8454,8 +8462,17 @@ let unbound_local_violation ?emission (llc : t) : string option =
         || Option.is_none emission
            && not (List.is_suffix access_scopes ~suffix:declaration_scopes ~equal:equal_scope_id)
       in
+      (* gh-ocannl-2258: a [Local_scope]'s definition renders inside the C block of every body
+         enclosing it, wherever [pp_local_defs] orders it, so it serves only an access those bodies
+         enclose too: containment, never order (gh-ocannl-584). Judged on the tree that renders,
+         under [emission]: before [C_syntax.collapse_exact_scopes], a single-assignment scope's body
+         still encloses definitions that render where the scope stands. *)
+      let scopes = Hashtbl.find_multi scope_binders id in
+      let contains (chain, _) = List.is_suffix access_scopes ~suffix:chain ~equal:equal_scope_id in
       let visible =
-        Hash_set.mem hoisted id || List.exists declarations ~f:(fun d -> in_scope d && precedes d)
+        (if Option.is_some emission then List.exists scopes ~f:contains
+         else not (List.is_empty scopes))
+        || List.exists declarations ~f:(fun d -> in_scope d && precedes d)
       in
       let found () = String.concat ~sep:"; " (List.map declarations ~f:snd) in
       if visible then None
@@ -8473,7 +8490,23 @@ let unbound_local_violation ?emission (llc : t) : string option =
           |> Option.value_map ~default:"" ~f:(fun b ->
               "; " ^ local b ^ " shares its integer but names another node, a different local")
         in
-        if List.exists declarations ~f:in_scope then
+        let body_of (_, owner) =
+          match owner with
+          | None -> "at statement level"
+          | Some (s, mint) ->
+              "the body of local scope " ^ local s ^ " ("
+              ^ Sexp.to_string (sexp_of_scope_mint mint)
+              ^ ")"
+        in
+        if List.is_empty declarations && not (List.is_empty scopes) then
+          Some
+            ("a " ^ what ^ " of " ^ local id ^ " " ^ where
+           ^ " accesses a local defined only inside "
+            ^ String.concat ~sep:"; " (List.map scopes ~f:body_of)
+            ^ ": a Local_scope's definition is visible only to the bodies enclosing it, and \
+               renders inside their C blocks, so the backend compiler would report an undeclared \
+               identifier (gh-ocannl-2258)")
+        else if List.exists declarations ~f:in_scope then
           Some
             ("a " ^ what ^ " of " ^ local id ^ " " ^ where
            ^ " accesses a local ahead of its declaration: the binder in scope of it renders after \

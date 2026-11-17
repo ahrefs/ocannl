@@ -142,9 +142,16 @@ files.
   compiler's undeclared identifier. It follows the rendering on both sides (a projection's
   discarded operand neither reads nor binds). For a `Declare_local` or scan state it also refuses
   a binder the access cannot see or that renders after it (gh-ocannl-2050, gh-ocannl-2100; the
-  ancestry rule is in lowering-and-analysis.md); a `Local_scope` binder is held to existence only,
-  since `pp_local_defs` decides its order; `local_binder_gate` pins the refusals beside
-  the same routines bound and executed.
+  ancestry rule is in lowering-and-analysis.md). A `Local_scope` binder is held to CONTAINMENT
+  only (gh-ocannl-2258), on the collapsed tree's `Emitted` run (a single-assignment scope collapses
+  into an expression and stops enclosing anything, so the operand-order run keeps existence only):
+  the scope bodies enclosing it must enclose the access, since the renderer
+  declares a definition inside the C block of each body holding it, wherever `pp_local_defs`
+  orders it. That is not gh-ocannl-584's reverted ordering rule, which had to re-derive the
+  emission order: no placement the renderer chooses moves a definition out of its body, only IR
+  passes do (CSE never makes such a read: it forgets a body's definitions on exit; the hoist
+  rebinds through `Declare_local`). Order and blocks within one body stay unchecked.
+  `local_binder_gate` pins the refusals beside the same routines bound and executed.
   `Low_level.validate_scope_bodies` enforces it at BOTH ends of the pipeline: `optimize_proc` on the
   way in (ahead of the analysis cache, so a digest hit cannot skip it — and before the hoist can
   launder a body write into a top-level statement that no later gate would recognize) and

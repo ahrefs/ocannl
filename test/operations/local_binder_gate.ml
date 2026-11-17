@@ -313,6 +313,43 @@ let row_nested_binder name ~binder_context nest =
     ~naming:
       [ "Get_local of " ^ local ia (name ^ "_a"); "outside its lexical scope"; binder_context ]
 
+(* gh-ocannl-2258: a scope's local read outside the body that defines it. [a]'s scope sits only
+   inside [b]'s body; the renderer declares it inside that body's C block, so a read from statement
+   level, or from a sibling body, is an undeclared identifier. Inside its owner it runs, as does
+   [row_body]'s twin, an outer definition read inside a later body. Every body takes two steps, so
+   [C_syntax.collapse_exact_scopes] keeps it: a single-assignment scope renders as an expression
+   where it stands, its definitions with it, and that compiles. *)
+let row_nested_only () =
+  let name = "lbg_nested_only" in
+  let a, b, out, raw = program name in
+  let ia = LL.get_scope a and ib = LL.get_scope b in
+  let two_step id v =
+    scope_of ~orig_indices:cell id
+      (seq (LL.Set_local (id, v)) (LL.Set_local (id, add (LL.Get_local id) (c 0.))))
+  in
+  let owner = two_step ib (add (two_step ia (c 5.)) (c 1.)) in
+  refused name ~raw
+    (set out cell (add owner (LL.Get_local ia)))
+    ~naming:
+      [
+        "Get_local of " ^ local ia (name ^ "_a") ^ " at statement level";
+        "defined only inside the body of local scope " ^ local ib (name ^ "_b");
+        "(gh-ocannl-2258)";
+      ];
+  let ib' = LL.get_scope b in
+  refused (name ^ "_sibling") ~raw
+    (set out cell (add owner (two_step ib' (add (LL.Get_local ia) (c 1.)))))
+    ~naming:
+      [
+        "Get_local of "
+        ^ local ia (name ^ "_a")
+        ^ " inside the body of local scope "
+        ^ local ib' (name ^ "_b");
+        "defined only inside the body of local scope " ^ local ib (name ^ "_b");
+      ];
+  accepted (name ^ "_owner") ~raw ~out ~want:10.
+    (set out cell (two_step (LL.get_scope b) (add (two_step ia (c 5.)) (LL.Get_local ia))))
+
 let () =
   case "order" (fun () ->
       row_order "lbg_order" ~binder_context:"Declare_local at statement level" Fn.id);
@@ -352,4 +389,5 @@ let () =
   case "hoisted_order" row_hoisted_order;
   case "conditional_decl" row_conditional_decl;
   case "set_local_target" row_set_local_target;
+  case "nested_only" row_nested_only;
   Stdio.printf "%!"

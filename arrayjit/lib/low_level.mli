@@ -1250,12 +1250,15 @@ val validate_local_binders : ?site:string -> ?emission:Access_fold.emission -> t
     [site], on the first access that names none: the local a pass stranded by removing or renaming
     its binder, which would otherwise surface as the backend compiler's undeclared identifier.
 
-    It checks that a binder exists, not that it is emitted ahead of the access or in a block the
-    access can see: emission order belongs to [C_syntax.pp_local_defs], and a rule second-guessing
-    it rejects valid pipeline output (gh-ocannl-584 review rounds 4-5). A projection's discarded
-    operand is skipped on both sides, as the renderer skips it. Applied by [C_syntax.compile_proc]
-    on the way out, where every pass and schedule transform has run and a [?prelowered] routine
-    arrives too. *)
+    Under [emission] (the tree that renders), a [Local_scope] binder serves only the accesses that
+    every scope body enclosing it encloses too (gh-ocannl-2258: the renderer declares it inside
+    those bodies' C blocks); a [Declare_local] or scan-carried one must also be lexically visible
+    and precede the access (gh-ocannl-2050, gh-ocannl-2100). It never checks that a [Local_scope]
+    definition is emitted ahead of the access: that order belongs to [C_syntax.pp_local_defs], and a
+    rule second-guessing it rejects valid pipeline output (gh-ocannl-584 review rounds 4-5). A
+    projection's discarded operand is skipped on both sides, as the renderer skips it. Applied by
+    [C_syntax.compile_proc] on the way out, where every pass and schedule transform has run and a
+    [?prelowered] routine arrives too. *)
 
 val validate_scan_loops : Tnode.Placements.t -> t -> unit
 (** gh-ocannl-696: the well-formedness contract of {!t.Scan_loop} -- one state node DECLARED virtual
