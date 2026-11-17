@@ -221,6 +221,13 @@ files.
   those joins preserve both bounds. Packed `Total_elems` rejects symbolic axes, so a symbolic
   regression needs a different supported path. The mixed row-store pins in `test_row_glb_reach`
   distinguish holding the old GLB: without it the displaced result closes 1 while its draw is 3.
+  An einsum can leave a result's remainder open after its leading axes are known (gh-ocannl-2257).
+  In `relu u + (c[3] ++ "a => a...")`, Stage6a held the packed draw's leading GLB. Stage6b then
+  closed `relu` empty in `process_shape_row`, and `solve_row_ineq` closed the draw empty against it.
+  At Stage6a quiescence, a packed draw with a fully sized leading flank and an open result
+  remainder can settle the remainder first if its connected bare rows are unsized ordinary
+  results and no held structural constraint still bears on them. The existing packed-role arm
+  then reads a closed GLB. The executed test checks both operand orders and a two-axis prefix.
   A solved row passes its role on too (gh-ocannl-2247): when `unify_row` commits `v := value` for a
   marked `v`, the dimension variables of `subst_row env value` take the mark. A draw read through an
   einsum spec (`u ++ "ab => ba"`) is solved to the spec's axes, minted for the result; unmarked,

@@ -6857,14 +6857,79 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
         | Broadcastable -> false)
     | _ -> false
   in
+  (* gh-ocannl-2257: a leading GLB may be waiting only for empty result remainders, as in [relu u +
+     (c ++ "a => a...")]. If the unary result closes first, its empty row becomes the draw's bound.
+     Settle the GLB's remainder while that result is still open. The remainder and its operands must
+     be ordinary unsized result rows linked by stored bare inequalities. A held structural
+     constraint could still supply axes or require a flank alignment. *)
+  let close_packed_glb_remainder others draws env =
+    let rec unsized_results seen = function
+      | [] -> Some seen
+      | v :: rest when Set.mem seen v -> unsized_results seen rest
+      | v :: rest when not (is_resolve_at_use v) -> (
+          match find_row env.row_env v with
+          | Some
+              (Bounds_row { is_in_param = false; glb = None; constr = Unconstrained; res; opnd; _ })
+            ->
+              unsized_results (Set.add seen v) (res @ opnd @ rest)
+          | _ -> None)
+      | _ -> None
+    in
+    let held vars =
+      let mentions = function Row_var w -> Set.mem vars w | Broadcastable -> false in
+      let mentions_row r = mentions (subst_row env r).bcast in
+      let mentions_or_depends r =
+        match (subst_row env r).bcast with
+        | Row_var w when not (Set.mem vars w) -> (
+            match find_row env.row_env w with
+            | Some (Bounds_row { glb = Some glb; _ }) -> mentions_row glb
+            | _ -> false)
+        | bcast -> mentions bcast
+      in
+      List.exists (others @ draws) ~f:(function
+        | Row_eq { r1; r2; _ } -> mentions_or_depends r1 || mentions_or_depends r2
+        | Row_ineq { res; opnd; _ } -> mentions_or_depends res || mentions_or_depends opnd
+        | Rows_constr { r; _ } -> List.exists r ~f:mentions_row
+        | Terminal_row (_, r, _) -> mentions_row r
+        | _ -> false)
+    in
+    List.find_map draws ~f:(function
+      | Shape_row (r, origin) -> (
+          match (subst_row env r).bcast with
+          | Row_var v when is_resolve_at_use v -> (
+              match entry_for_closing env v with
+              | Some (Bounds_row { is_in_param = false; glb = Some glb; constr; _ })
+                when is_packed_draw_constr constr -> (
+                  match subst_row env glb with
+                  | { beg_dims = _ :: _ as beg_dims; dims = []; bcast = Row_var tail; prov }
+                    when known_dims_product beg_dims -> (
+                      match find_row env.row_env tail with
+                      | Some (Bounds_row { res = []; opnd = _ :: _; _ }) -> (
+                          match unsized_results row_var_set_empty [ tail ] with
+                          | Some vars when not (held vars) ->
+                              let r1 = row_of_var tail prov in
+                              Some (Row_eq { r1; r2 = { r1 with bcast = Broadcastable }; origin })
+                          | _ -> None)
+                      | _ -> None)
+                  | _ -> None)
+              | _ -> None)
+          | _ -> None)
+      | _ -> None)
+  in
   let rec draws_at_quiescence ineqs env =
     let draws, others =
       List.partition_tf ineqs ~f:(fun c -> is_draw_total c || is_draw_row env c)
     in
     let others, env = solve others env in
     let draws', env = solve draws env in
-    if List.equal equal_constraint_up_to_origin draws' draws then (others @ draws, env)
-    else draws_at_quiescence (others @ draws') env
+    if not (List.equal equal_constraint_up_to_origin draws' draws) then
+      draws_at_quiescence (others @ draws') env
+    else
+      match
+        if equal_stage stage Stage6a then close_packed_glb_remainder others draws env else None
+      with
+      | Some closing -> draws_at_quiescence ((closing :: others) @ draws) env
+      | None -> (others @ draws, env)
   in
   match stage with
   | Stage5 | Stage6a | Stage6b -> draws_at_quiescence ineqs env

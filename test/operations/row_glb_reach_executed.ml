@@ -310,6 +310,25 @@ let () =
       let%op y = r + (u *. c) in
       ([ u ], y, y))
 
+(* The varying constant would make the sum vary even with a scalar draw. Check the materialized draw
+   against the use site's cells. *)
+let () =
+  draws "relu u + (c[3] ++ \"a => a...\")" ~want:"3" ~fills:(Some true) (fun () ->
+      let u = TDSL.uniform () () in
+      let c = const [ 3 ] in
+      let%op y = relu u + (c ++ "a => a...") in
+      ([ u ], y, y));
+  draws "(c[3] ++ \"a => a...\") + relu u" ~want:"3" ~fills:(Some true) (fun () ->
+      let u = TDSL.uniform () () in
+      let c = const [ 3 ] in
+      let%op y = c ++ "a => a..." + relu u in
+      ([ u ], y, y));
+  draws "relu u + (c[2,5] ++ \"ab => ab...\")" ~want:"2,5" ~fills:(Some true) (fun () ->
+      let u = TDSL.uniform () () in
+      let c = const [ 2; 5 ] in
+      let%op y = relu u + (c ++ "ab => ab...") in
+      ([ u ], y, y))
+
 (* gh-ocannl-2224: the late-tail boundary is staged deliberately: ordinary program constraints
    register before closing. The GLB has a leading axis over a tail held open through Stage6a; supply
    the tail equation at Stage6b. Concrete axes already work through generic elimination, but an
