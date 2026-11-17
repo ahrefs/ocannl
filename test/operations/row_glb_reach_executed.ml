@@ -30,7 +30,11 @@
 
    What changed with gh-ocannl-2229: a fixed-index input's minimum above 1 closes before
    unconstrained results guess minimal. The concrete size then travels through the existing
-   leaf-before-result stages, so both two-result and three-result chains fill the indexed axis. *)
+   leaf-before-result stages, so both two-result and three-result chains fill the indexed axis.
+
+   With gh-ocannl-2257, the open result remainder in [relu u + (c[3] ++ "a => a...")] settles at
+   stage 6a. Previously [relu] closed empty at stage 6b and the draw closed against it, giving one
+   value for three cells. *)
 
 open! Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -324,6 +328,43 @@ let () =
       let%op r = plus1 u ++ "a => 0" in
       let%op y = r + (u *. c) in
       ([ u ], y, y))
+
+(* The varying constant would make the sum vary even with a scalar draw. Check the materialized draw
+   against the use site's cells. *)
+let () =
+  draws "relu u + (c[3] ++ \"a => a...\")" ~want:"3" ~fills:(Some true) (fun () ->
+      let u = TDSL.uniform () () in
+      let c = const [ 3 ] in
+      let%op y = relu u + (c ++ "a => a...") in
+      ([ u ], y, y));
+  draws "(c[3] ++ \"a => a...\") + relu u" ~want:"3" ~fills:(Some true) (fun () ->
+      let u = TDSL.uniform () () in
+      let c = const [ 3 ] in
+      let%op y = c ++ "a => a..." + relu u in
+      ([ u ], y, y));
+  draws "relu u + (c[2,5] ++ \"ab => ab...\")" ~want:"2,5" ~fills:(Some true) (fun () ->
+      let u = TDSL.uniform () () in
+      let c = const [ 2; 5 ] in
+      let%op y = relu u + (c ++ "ab => ab...") in
+      ([ u ], y, y))
+
+(* Eight cells require two blocks and twelve require three. With one shared counter the conversions
+   each close to a scalar and repeat its value across their respective use sites. *)
+let () =
+  Verdict.case "draws sharing a packed counter" @@ fun () ->
+  Tensor.unsafe_reinitialize ();
+  let offsets = NTDSL.term ~fetch_op:Range_over_offsets () in
+  let bits =
+    TDSL.threefry4x32 ~spec:"..p..|..q..->..r..; ..b.. => ..b.." (TDSL.embed_self_id ()) offsets ()
+  in
+  let u = TDSL.uint4x32_to_prec_uniform bits () in
+  let v = TDSL.uint4x32_to_prec_uniform bits () in
+  let c8 = const [ 8 ] and c12 = const [ 12 ] in
+  let%op y = relu u + (c8 ++ "a => a...") in
+  let%op z = relu v + (c12 ++ "a => a...") in
+  p_all ~min:5 "both uses can broadcast a one-block draw when their block counts would differ"
+    [ (bits, [ 1 ]); (u, []); (v, []); (y, [ 8 ]); (z, [ 12 ]) ]
+    ~f:(fun (t, want) -> List.equal Int.equal (Array.to_list (Shape.to_dims t.Tensor.shape)) want)
 
 (* gh-ocannl-2224: the late-tail boundary is staged deliberately: ordinary program constraints
    register before closing. The GLB has a leading axis over a tail held open through Stage6a; supply

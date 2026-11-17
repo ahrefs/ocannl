@@ -5443,9 +5443,11 @@ let is_safe_to_guess v =
   || (Set.mem !used_in_pointwise v && not (Set.mem !used_in_spec_or_compose v))
 
 (* A packed draw's total ([Uint4x32_to_prec]): a round-up [Total_elems] over a block counter. *)
-let is_packed_draw_constr = function
-  | Total_elems { numerator = Strided_var { round_up = true; _ }; _ } -> true
-  | _ -> false
+let packed_draw_counter = function
+  | Total_elems { numerator = Strided_var { round_up = true; var; _ }; _ } -> Some var
+  | _ -> None
+
+let is_packed_draw_constr constr = Option.is_some (packed_draw_counter constr)
 
 let dim_has_glb env v =
   match find_dim env.dim_env v with Some (Bounds_dim { glb = Some _; _ }) -> true | _ -> false
@@ -6339,10 +6341,9 @@ let is_draw_total = function
    wider rule -- any such axis waits for any open lower bound -- refuses satisfiable programs with a
    fixed index over the draw (13 in [shape_program_sweep]). *)
 let draw_counter_leaves ineqs env =
-  let add_counter acc = function
-    | Total_elems { numerator = Strided_var { round_up = true; var; _ }; _ } ->
-        Set.union acc (vars_of_dim (subst_dim env (Var var)))
-    | _ -> acc
+  let add_counter acc constr =
+    Option.fold (packed_draw_counter constr) ~init:acc ~f:(fun acc var ->
+        Set.union acc (vars_of_dim (subst_dim env (Var var))))
   in
   let counters =
     List.fold ineqs ~init:dim_var_set_empty ~f:(fun acc -> function
@@ -6875,14 +6876,127 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
         | Broadcastable -> false)
     | _ -> false
   in
+  (* gh-ocannl-2257: a leading GLB may be waiting only for empty result remainders, as in [relu u +
+     (c ++ "a => a...")]. If the unary result closes first, its empty row becomes the draw's bound.
+     Settle the GLB's remainder while that result is still open. The remainder and its operands must
+     be ordinary unsized result rows linked by stored bare inequalities. A held structural
+     constraint could still supply axes or require a flank alignment. A draw's counter must belong
+     to that total alone: letting the draw size a shared counter would commit the other draw's size
+     too. *)
+  let close_packed_glb_remainders others draws env =
+    let row_var r =
+      match (subst_row env r).bcast with Row_var v -> Some v | Broadcastable -> None
+    in
+    let candidates =
+      List.filter_map draws ~f:(function
+        | Shape_row (r, origin) -> (
+            match row_var r with
+            | Some v when is_resolve_at_use v -> (
+                match entry_for_closing env v with
+                | Some (Bounds_row { is_in_param = false; glb = Some glb; constr; _ })
+                  when is_packed_draw_constr constr -> (
+                    match subst_row env glb with
+                    | { beg_dims = _ :: _ as beg_dims; dims = []; bcast = Row_var tail; prov }
+                      when known_dims_product beg_dims ->
+                        Some (tail, prov, origin)
+                    | _ -> None)
+                | _ -> None)
+            | _ -> None)
+        | _ -> None)
+    in
+    if List.is_empty candidates then []
+    else
+      let total_vars = function
+        | Total_elems _ as constr ->
+            Set.fold (row_constraint_dim_vars constr) ~init:dim_var_set_empty ~f:(fun vars v ->
+                Set.union vars (vars_of_dim (subst_dim env (Var v))))
+        | _ -> dim_var_set_empty
+      in
+      let add_row vars r = Option.fold (row_var r) ~init:vars ~f:Set.add in
+      let add_row_with_bound vars r =
+        match row_var r with
+        | Some v -> (
+            let vars = Set.add vars v in
+            match find_row env.row_env v with
+            | Some (Bounds_row { glb = Some glb; _ }) -> add_row vars glb
+            | _ -> vars)
+        | None -> vars
+      in
+      let held_rows, held_totals =
+        List.fold (others @ draws) ~init:(row_var_set_empty, dim_var_set_empty)
+          ~f:(fun (rows, totals) -> function
+          | Row_eq { r1; r2; _ } -> (add_row_with_bound (add_row_with_bound rows r1) r2, totals)
+          | Row_ineq { res; opnd; _ } ->
+              (add_row_with_bound (add_row_with_bound rows res) opnd, totals)
+          | Rows_constr { r; constr; _ } ->
+              (List.fold r ~init:rows ~f:add_row, Set.union totals (total_vars constr))
+          | Terminal_row (_, r, _) -> (add_row rows r, totals)
+          | _ -> (rows, totals))
+      in
+      let exclusive_counter draw counter =
+        match subst_dim env (Var counter) with
+        | Var counter when not (Set.mem held_totals counter) ->
+            Set.for_all (mentioning env.rows_mentioning_dim counter ~empty:row_var_set_empty)
+              ~f:(fun v ->
+                equal_row_var v draw
+                ||
+                match find_row env.row_env v with
+                | Some (Bounds_row { constr; _ }) -> not (Set.mem (total_vars constr) counter)
+                | _ -> true)
+        | _ -> false
+      in
+      let counters_are_exclusive tail =
+        Set.for_all (mentioning env.rows_mentioning_row tail ~empty:row_var_set_empty)
+          ~f:(fun draw ->
+            match find_row env.row_env draw with
+            | Some (Bounds_row { glb = Some glb; constr; _ })
+              when Option.exists (row_var glb) ~f:(equal_row_var tail) ->
+                Option.value_map (packed_draw_counter constr) ~default:true
+                  ~f:(exclusive_counter draw)
+            | _ -> true)
+      in
+      let rec unsized_results seen = function
+        | [] -> true
+        | v :: rest when Set.mem seen v -> unsized_results seen rest
+        | v :: rest when not (Set.mem held_rows v || is_resolve_at_use v) -> (
+            match find_row env.row_env v with
+            | Some
+                (Bounds_row
+                   { is_in_param = false; glb = None; constr = Unconstrained; res; opnd; _ }) ->
+                unsized_results (Set.add seen v) (res @ opnd @ rest)
+            | _ -> false)
+        | _ -> false
+      in
+      (* All selected remainders close empty and the connected rows have no held relation that could
+         change the choice. Submit them together before re-solving the draws. *)
+      List.fold candidates
+        ~init:(Map.empty (module Row_var))
+        ~f:(fun closings (tail, prov, origin) ->
+          match find_row env.row_env tail with
+          | Some (Bounds_row { res = []; opnd = _ :: _; _ })
+            when (not (Map.mem closings tail))
+                 && unsized_results row_var_set_empty [ tail ]
+                 && counters_are_exclusive tail ->
+              let r1 = row_of_var tail prov in
+              Map.set closings ~key:tail
+                ~data:(Row_eq { r1; r2 = { r1 with bcast = Broadcastable }; origin })
+          | _ -> closings)
+      |> Map.data
+  in
   let rec draws_at_quiescence ineqs env =
     let draws, others =
       List.partition_tf ineqs ~f:(fun c -> is_draw_total c || is_draw_row env c)
     in
     let others, env = solve others env in
     let draws', env = solve draws env in
-    if List.equal equal_constraint_up_to_origin draws' draws then (others @ draws, env)
-    else draws_at_quiescence (others @ draws') env
+    if not (List.equal equal_constraint_up_to_origin draws' draws) then
+      draws_at_quiescence (others @ draws') env
+    else
+      match
+        if equal_stage stage Stage6a then close_packed_glb_remainders others draws env else []
+      with
+      | [] -> (others @ draws, env)
+      | closings -> draws_at_quiescence (closings @ others @ draws) env
   in
   match stage with
   | Stage5 | Stage6a | Stage6b -> draws_at_quiescence ineqs env

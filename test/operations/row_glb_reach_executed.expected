@@ -168,6 +168,19 @@ reduce (u + 1) + (u *. c[|3]), mixed separate bounds reversed
   draw = 3, 3 distinct values for 3 cells
 reduce (u + 1) + (u *. c[|3]), mixed separate bounds reversed: every draw closes to 3: true
 reduce (u + 1) + (u *. c[|3]), mixed separate bounds reversed: every draw fills its use site: true
+relu u + (c[3] ++ "a => a...")
+  draw = 3, 3 distinct values for 3 cells
+relu u + (c[3] ++ "a => a..."): every draw closes to 3: true
+relu u + (c[3] ++ "a => a..."): every draw fills its use site: true
+(c[3] ++ "a => a...") + relu u
+  draw = 3, 3 distinct values for 3 cells
+(c[3] ++ "a => a...") + relu u: every draw closes to 3: true
+(c[3] ++ "a => a...") + relu u: every draw fills its use site: true
+relu u + (c[2,5] ++ "ab => ab...")
+  draw = 2,5, 10 distinct values for 10 cells
+relu u + (c[2,5] ++ "ab => ab..."): every draw closes to 2,5: true
+relu u + (c[2,5] ++ "ab => ab..."): every draw fills its use site: true
+both uses can broadcast a one-block draw when their block counts would differ: true
 late-tail fixture: the packed draw is open after Stage6a: true
 late-tail fixture: the closed GLB is retained at Stage6b: true
 late-tail fixture: three cells use one counter block: true
