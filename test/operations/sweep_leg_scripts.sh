@@ -115,6 +115,7 @@ awk '
   END { if (removed != 1) exit 1 }
 ' "$leg_root/tools/cuda-tf32-parity.sh" >"$leg_root/tools/cuda-tf32-parity-no-guard.sh"
 leg_path=$leg_python_free run_leg cuda-tf32-parity-no-guard.sh --fixture-dir "$leg_fixtures"
+rm -- "$leg_root/tools/cuda-tf32-parity-no-guard.sh"
 if leg_missing_python_refused; then
   echo 'missing-Python fixture accepted a script without the guard' >&2
   exit 1
