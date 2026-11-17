@@ -5954,10 +5954,15 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   `--ocannl_backend` adds its name), and anything unreadable — a build or read that fails, an
   answer outside the tool's grammar — is every backend: `--gpu`, the slot's fail-closed default,
   and the tightest width. `tools/test-test-run.sh` leg 57 fails a new tracked
-  `ocannl_config` naming a backend outside those directories. The slot's wait (600 s,
-  `OCANNL_TOOL_SLOT_WAIT`, at most half of `--cap`, so a refusal returns before the cap's alarm)
-  comes out of the cap; a refused or unreachable slot
-  is the verdict `SLOT REFUSED`, exit 75, never a test verdict. `repeat` takes no slot (wrap it
+  `ocannl_config` naming a backend outside those directories. The announcement describes
+  the nested-slot rule from the probe's slot and GPU-token counts (gh-ocannl-2287).
+  The fleet validates the enclosing slot and reuses it for a CPU batch or a GPU batch
+  whose slot number is within the token count. A GPU batch in a slot above that count
+  is refused, so a box where every slot is a token can reuse any validated enclosing slot
+  for either kind of batch. Leg 53a of `tools/test-test-run-devices.sh` covers these outcomes.
+  The slot's wait (600 s, `OCANNL_TOOL_SLOT_WAIT`, at most half of `--cap`) comes out of the cap
+  so a refusal returns before the cap's alarm. A refused or unreachable slot yields
+  `SLOT REFUSED` and exit 75. `repeat` takes no slot (wrap it
   yourself), `OCANNL_TOOL_FLEET_WORKER=none` turns it off, and a box outside the fleet runs as
   before, silently. A measurement runs as `fleet-worker.sh execution hold --request <request_id>
   -- tools/test-run.sh ...`, with no slot override: the hold exports `FLEET_MEASUREMENT_HELD`, and
