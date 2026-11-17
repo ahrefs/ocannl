@@ -2543,6 +2543,16 @@ let phase11 () =
    the cells it writes, except in that second landing leg. Every leg executes against a reference
    and a materialized reading, with every producer varying in its cell. *)
 
+(* The routine's footprint scratch nodes (gh-ocannl-616): a cap landing on footprint-scoped scratch
+   leaves its producer virtual with no read surviving, exactly as inlining does, so a claim that a
+   node was inlined also asks that no scratch was minted. *)
+let footprint_scratches (o : LL.optimized) =
+  Hashtbl.keys o.LL.traced_store
+  |> List.filter ~f:(fun tn -> String.equal tn.Tn.namespace LL.footprint_namespace)
+
+let no_footprint_scratch name (o : LL.optimized) =
+  p_empty name ~over:(Hashtbl.keys o.LL.traced_store) (footprint_scratches o)
+
 let phase12 () =
   let saved_cap = LL.virtualize_settings.max_inline_fanin in
   let cells = 2 * dim in
@@ -2735,6 +2745,9 @@ let phase12 () =
    let o = optimize ~name:"vcf_sites_red" llc in
    p "a reduction over a concat's two slices, visit cap at dim: the concat is inlined"
      (known_virtual o a && count_get o a = 0);
+   no_footprint_scratch
+     "a reduction over a concat's two slices, visit cap at dim: no cap landed on footprint scratch"
+     o;
    p
      "a reduction over a concat's two slices: charged both slices joined with w (4), materialized \
       by the fan-in cap"
@@ -2767,19 +2780,14 @@ let phase12 () =
       let llc = List.reduce_exn ~f:seq (setters @ [ reducer c_ a ]) in
       let name = "vcf_sites_" ^ label in
       let o = optimize ~name llc in
-      let scratches =
-        Hashtbl.keys o.LL.traced_store
-        |> List.filter ~f:(fun tn -> String.equal tn.Tn.namespace LL.footprint_namespace)
-      in
+      let scratches = footprint_scratches o in
       let prefix = Printf.sprintf "the visit cap on a %d-cell concat read over %d: " size cells in
       if size = cells then (
         p
           (prefix ^ "materialized whole, with the visit cap's provenance")
           (known_non_virtual o a
           && Option.equal Tn.equal_provenance (rejection_code o a) (Some Tn.Visit_cap));
-        p_empty
-          (prefix ^ "no node of the routine is footprint scratch")
-          ~over:(Hashtbl.keys o.LL.traced_store) scratches)
+        no_footprint_scratch (prefix ^ "no node of the routine is footprint scratch") o)
       else
         p
           (prefix
@@ -2960,6 +2968,7 @@ let phase13 () =
       p
         (prefix ^ "the concat is inlined (visit cap at dim)")
         (known_virtual o a && count_get o a = 0);
+      no_footprint_scratch (prefix ^ "no cap landed on footprint scratch") o;
       if cap = 3 then
         p
           (prefix ^ "charged the init and both slices (4), materialized by the fan-in cap")
