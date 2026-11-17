@@ -8,6 +8,6 @@ at sm_75's resolution the per-statement witness renders the m16n8k8 arm and both
 compute_75 PTX of the m16n8k8 witness targets sm_75 and carries the m16n8k8 instruction: true
 the m16n8k8 witness ships at the arm's floor, compute_75: true
 the driver's PTX assembler loads the m16n8k8 witness at sm_75: true
-the driver's PTX assembler refuses the m16n8k8 witness retargeted to sm_70, naming the shape: true
+the driver's PTX assembler refuses the m16n8k8 witness retargeted to sm_70 as invalid PTX: true
 the driver's PTX assembler loads the m16n8k16 f16 statement control at sm_80: true
-the driver's PTX assembler refuses the m16n8k16 f16 statement control at sm_75, naming the shape: true
+the driver's PTX assembler refuses the m16n8k16 f16 statement control retargeted to sm_75 as invalid PTX: true

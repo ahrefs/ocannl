@@ -44,10 +44,10 @@ let run ~leg ~compute_70_leg ~jit_70_leg check =
   in_leg ~leg "the driver's PTX assembler loads the m16n8k8 witness at sm_75" (fun label ->
       p label (check K8_loads_at_75));
   in_leg ~leg:jit_70_leg
-    "the driver's PTX assembler refuses the m16n8k8 witness retargeted to sm_70, naming the shape"
+    "the driver's PTX assembler refuses the m16n8k8 witness retargeted to sm_70 as invalid PTX"
     (fun label -> p label (check K8_refused_at_70));
   in_leg ~leg "the driver's PTX assembler loads the m16n8k16 f16 statement control at sm_80"
     (fun label -> p label (check K16_loads_at_80));
   in_leg ~leg
-    "the driver's PTX assembler refuses the m16n8k16 f16 statement control at sm_75, naming the \
-     shape" (fun label -> p label (check K16_refused_at_75))
+    "the driver's PTX assembler refuses the m16n8k16 f16 statement control retargeted to sm_75 as \
+     invalid PTX" (fun label -> p label (check K16_refused_at_75))

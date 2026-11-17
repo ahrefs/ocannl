@@ -12,9 +12,10 @@
    The witness asks the driver's (the JIT behind [cuModuleLoadDataEx], which checks each instruction
    against the module's [.target]) to load the PTX, with no kernel launched: the m16n8k8 witness at
    sm_75 and retargeted to sm_70, and an m16n8k16 f16 statement from the shared emitter -- the arm
-   the base rendered per statement at every capability -- at sm_80 and sm_75. A refusal must name
-   the instruction's shape in the JIT's log, and the sm_70 refusal is claimed only where the JIT
-   loads a kernel with no tensor instruction retargeted the same way. *)
+   the base rendered per statement at every capability -- at sm_80 and retargeted to sm_75. Each
+   refusal is of the very text that loads at the instruction's floor with only its [.target]
+   directive changed, answered as invalid PTX; the sm_70 refusal is claimed only where the JIT loads
+   a kernel with no tensor instruction retargeted the same way. *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -109,35 +110,35 @@ let retarget ptx ~sm =
   |> String.concat ~sep:"\n"
 
 (* Whether the driver's PTX assembler loads [ptx] into a module on the first device: [Ok ()], or
-   [Error log] with the JIT's error log. No kernel is launched. *)
+   [Error status]. No kernel is launched. No JIT option is passed: under cudajit 0.8.0 an
+   [ERROR_LOG_BUFFER] made every load answer [CUDA_ERROR_INVALID_VALUE] on rog-nv, so a refusal is
+   told apart by its status, against the same text loading at the instruction's floor. *)
 let jit_load ptx =
   ignore (Context.auto ());
   Cu.Context.set_current (Cu.Context.get_primary (Cu.Device.get ~ordinal:0));
   (* The image the driver reads is a NUL-terminated string, as nvrtc's own PTX buffer is. *)
   let image = Ctypes.CArray.of_string (ptx ^ "\000") in
-  let log = Stdlib.Bigarray.(Array1.create char c_layout 16384) in
-  Stdlib.Bigarray.Array1.fill log '\000';
   match
     Cu.Module.load_data_ex
       { Nvrtc.log = None; ptx = Ctypes.CArray.start image; ptx_length = String.length ptx }
-      [ Cu.Module.ERROR_LOG_BUFFER log ]
+      []
   with
   | (_ : Cu.Module.t) ->
       ignore (Stdlib.Sys.opaque_identity image);
       Ok ()
   | exception Cu.Cuda_error { status; message } ->
       ignore (Stdlib.Sys.opaque_identity image);
-      let text = String.init (Stdlib.Bigarray.Array1.dim log) ~f:(Stdlib.Bigarray.Array1.get log) in
-      let text =
-        Option.value_map (String.index text '\000') ~default:text ~f:(String.prefix text)
-      in
-      Stdio.eprintf "driver JIT refusal: %s %s: %s (not part of the golden)\n" message
-        (Sexp.to_string (Cu.sexp_of_result status))
-        (String.substr_replace_all text ~pattern:"\n" ~with_:" | ");
-      Error text
+      let status = Sexp.to_string (Cu.sexp_of_result status) in
+      Stdio.eprintf "driver JIT refusal: %s %s (not part of the golden)\n" message status;
+      Error status
 
 let loads ptx = Result.is_ok (jit_load ptx)
-let refused ~naming ptx = match jit_load ptx with Ok () -> false | Error log -> has log naming
+
+(* The assembler's refusal of an instruction its [.target] lacks. *)
+let refused ptx =
+  match jit_load ptx with
+  | Ok () -> false
+  | Error status -> String.equal status "CUDA_ERROR_INVALID_PTX"
 
 (* The m16n8k16 f16 statement the base rendered per statement at every capability, from the shared
    emitter with no capability gate: one 16x8x16 tile over 16-bit operands at [__mma_ap] / [__mma_bp]
@@ -214,6 +215,7 @@ let () =
       in
       let k8_ptx = lazy (compile k8_floor (Lazy.force k8_source)) in
       let k8_instruction = "mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32" in
+      let k16_ptx = lazy (compile 80 (Lazy.force k16_control)) in
       let accepts_70 =
         match compile 70 "extern \"C\" __global__ void target_probe() {}" with
         | _ -> true
@@ -268,7 +270,6 @@ let () =
               (M.gpu_arch_options ~target:M.Floor ~device_cc:120 (Lazy.force k8_source))
               [ "--gpu-architecture=compute_" ^ Int.to_string k8_floor ]
         | K8_loads_at_75 -> loads (Lazy.force k8_ptx)
-        | K8_refused_at_70 -> refused ~naming:"m16n8k8" (retarget (Lazy.force k8_ptx) ~sm:70)
-        | K16_loads_at_80 -> loads (compile 80 (Lazy.force k16_control))
-        | K16_refused_at_75 ->
-            refused ~naming:"m16n8k16" (compile k8_floor (Lazy.force k16_control))))
+        | K8_refused_at_70 -> refused (retarget (Lazy.force k8_ptx) ~sm:70)
+        | K16_loads_at_80 -> loads (Lazy.force k16_ptx)
+        | K16_refused_at_75 -> refused (retarget (Lazy.force k16_ptx) ~sm:k8_floor)))
