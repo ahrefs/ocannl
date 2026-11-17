@@ -295,7 +295,9 @@
 # the per-test aliases, or the printed list does though its first tier does not
 # (gh-ocannl-1996: a library module most tests only link; `--referenced-only`
 # prints the first tier alone, so it is judged on that). CROSS-CUTTING opens
-# stderr. Its reason lists up to three changed paths with the widest observed
+# stderr. Alias queries buffer their other diagnostics until exit, so the
+# banner also precedes the alias list when stdout and stderr are combined.
+# Its reason lists up to three changed paths with the widest observed
 # reach among the counted aliases (first tier when that is wide, otherwise
 # the full list). Counts can overlap; they come from the existing reach
 # witnesses, not a rerun with each path in isolation. The detailed line below
@@ -2753,6 +2755,7 @@ sub tok_where {
 }
 # The breadth-first chain from a reached stanza down its `to` edges (a library
 # it requires, a generator its stub runs) to the nearest one TARGET accepts.
+# Stanza index breaks ties between shortest routes for reproducible explanations.
 sub reach_chain {   # INDEX TARGET -> (indices from INDEX to the target), or ()
   my ($o, $target) = @_;
   my %prev = ($o => -1);
