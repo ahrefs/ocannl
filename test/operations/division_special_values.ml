@@ -197,6 +197,16 @@ let within_estimate c ((name, x, y, v) as r) =
 
 let () =
   Verdict.case "division special values" (fun () ->
+      (* Documented outputs of HIP's former estimate policy. Keep the rejection oracle live on every
+         backend, independently of which compiler policy the device currently selects. *)
+      let at prec = List.find_exn cases ~f:(fun c -> Ops.equal_prec c.prec prec) in
+      p_all ~min:3 "division oracle rejects the documented wrong f32 and half estimate results"
+        [
+          (at Ops.single, ("div", 3., 3., 0x1.fffffep-1));
+          (at Ops.single, ("div", Float.infinity, 0x1.fffffep127, Float.nan));
+          (at Ops.half, ("div", 0., 0x1p-24, Float.nan));
+        ]
+        ~f:(fun (c, result) -> not (exact c result));
       let results = List.mapi cases ~f:(fun ci c -> lazy (run c ~first_id:(22000 + (100 * ci)))) in
       List.iter2_exn cases results ~f:(fun c results ->
           let has_prec = not (is_metal && Ops.equal_prec c.prec Ops.double) in

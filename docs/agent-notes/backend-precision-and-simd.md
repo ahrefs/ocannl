@@ -2625,12 +2625,13 @@ files.
   element, `Nn_blocks.default_mask_fill`), and under bare `-ffast-math` that only survived by
   accident of which optimization hiprtc happened to pick — adding `-fno-associative-math` changed
   the pick and `half_softmax`'s causally masked rows started reading `exp(0)`/`exp(1)` where the
-  mask demands exact zeros (gh-ocannl-735, found on the ROCm validation run). Since gh-ocannl-1909 HIP additionally honors NaNs, above; a range compare remains
-  the portable test across backends and compiler policies. So a device-side
-  non-finiteness test uses a RANGE COMPARE of a runtime value (`-3e38 < x && x < 3e38`); on
+  mask demands exact zeros (gh-ocannl-735, found on the ROCm validation run).
+  Since gh-ocannl-1909 HIP also honors NaNs; a range compare remains the portable test across
+  backends and compiler policies. A device-side non-finiteness test uses a RANGE COMPARE of a
+  runtime value (`-3e38 < x && x < 3e38`); on
   policies that do not honor NaN, `x <> x` and `x - x = 0` fold to a constant, silently disabling
-  an overflow gate (the shape
-  `Mixed_prec.gated_scaled_update` needs). It is the same reason `Builtins_metal`'s fp8 codec is
+  an overflow gate (the shape `Mixed_prec.gated_scaled_update` needs). It is the same reason
+  `Builtins_metal`'s fp8 codec is
   written in integer/bitcast form rather than float arithmetic.
 - **HIP's f64 division is a builtin expansion, because no hiprtc lever reaches f64 alone**
   (gh-ocannl-1782). Under `-ffast-math`, hiprtc rendered f64 `x / y` as a Newton-refined reciprocal
@@ -2642,11 +2643,14 @@ files.
   ROCm's `__ocml_div_rte_f64` is declared in `math_fwd.h` but absent from the device library.
   `Builtins_hip.ocannl_div_f64` writes out LLVM's own `LowerFDIV64` in `__builtin_amdgcn_div_scale`
   / `rcp` / `__builtin_fma` / `div_fmas` / `div_fixup`, and `Cuda_like_config`'s `div_f64` routes
-  f64 `Div` and `Recip` through it. Before gh-ocannl-1909 HIP's f32, half and bfloat16 division stayed the estimate,
+  f64 `Div` and `Recip` through it. Before gh-ocannl-1909 HIP's f32, half and bfloat16 division
+  stayed the estimate,
   as CUDA's f32 does under `--use_fast_math`. That is a recorded boundary of the fast policy:
   1-ulp quotients (`3 / 3 = 1 - 2^-24`), subnormal divisors overflowing, and f32 divisors from
-  2^126 flushing their reciprocal (`inf / FLT_MAX` NaN). Both current policies lift it: the measured default removes reciprocal math and approximate
-  functions (gh-ocannl-1909), while `hip_fast_math=false` drops the umbrella (gh-ocannl-1779). The helper is correct under either policy. Pinned by
+  2^126 flushing their reciprocal (`inf / FLT_MAX` NaN). Both current policies lift it: the measured
+  default removes reciprocal math and approximate
+  functions (gh-ocannl-1909), while `hip_fast_math=false` drops the umbrella (gh-ocannl-1779). The
+  helper is correct under either policy. Pinned by
   `division_special_values`, whose exact HIP f32 claims fail under the old compiler vector.
 - **gfx1102 compiles without `real-true16`, and HIPRTC never gets `-amdgpu-waitcnt-*`**
   (`Compiler_options.hip_target_options`, gh-ocannl-1182/1222). In true16 mode, 16-bit values live
@@ -2980,11 +2984,13 @@ files.
   `ocannl_fmod` (the dialect's `fmod_f64`). `1.0 / sqrt(x)` becomes a Newton-refined reciprocal-root
   estimate, NaN at ±0 and +inf; the dialect's `recip_sqrt_f64` renders ROCm's `rsqrt` instead,
   which is C's there. The same estimate makes **every f64 division** NaN for `x / 0`, `x / inf` and
-  overflowing quotients (hipcc probe; later fixed by the gh-ocannl-1782 division wrapper). And `pow` (`__ocml_pow_f64`)
+  overflowing quotients (hipcc probe; later fixed by the gh-ocannl-1782 division wrapper). And `pow`
+  (`__ocml_pow_f64`)
   loses the low part of its extended-precision `y log x` to `-ffp-contract=fast`: about 205 ulps
   where `|y log2 |x||` is 500-1000, exact again under `-ffp-contract=on` (and not restored by
   `-fno-approx-func` or `-fno-unsafe-math-optimizations`). The old default recorded that loss;
-  gh-ocannl-1909 selects contraction on and now requires 2 ulps under both HIP policies. A hipcc probe with the backend's own flags
+  gh-ocannl-1909 selects contraction on and now requires 2 ulps under both HIP policies. A hipcc
+  probe with the backend's own flags
   (`-O3 -ffast-math -fno-associative-math -fhonor-infinities --offload-arch=gfx1102`) reproduced
   each hiprtc departure it was compared against, bit for bit: a fast way to bisect a flag.
 

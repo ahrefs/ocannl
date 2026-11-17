@@ -100,10 +100,10 @@ module Hip = struct
   let fmod_f64 = "ocannl_fmod"
   let recip_sqrt_f64 = ("rsqrt(", ")")
 
-  (* gh-ocannl-1782: under [-ffast-math], f64 [/] is a reciprocal estimate, NaN for every [x / 0],
-     [x / inf] and overflowing quotient; [Builtins_hip.ocannl_div_f64] is the IEEE quotient. It does
-     not depend on the umbrella, so [hip_fast_math] off (gh-ocannl-1779), which drops [-ffast-math],
-     leaves it correct; only f32 and half division change with that key. *)
+  (* gh-ocannl-1782: the former default's reciprocal estimate made f64 [/] NaN for [x / 0], [x /
+     inf] and overflowing quotients; [Builtins_hip.ocannl_div_f64] supplies the IEEE quotient. Since
+     gh-ocannl-1909 both policies disable reciprocal math and approximate functions. The explicit
+     f64 expansion remains correct under either vector, independently of that policy. *)
   let div_f64 = Some "ocannl_div_f64"
 
   (* ROCm's subnormal guard is one funnel for conversion and every operator arity. *)

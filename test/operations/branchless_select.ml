@@ -494,15 +494,13 @@ let legs =
    HIP honors NaNs under both policies since gh-ocannl-1909; its five NaN-condition entries are
    lifted. [bs_sat01_gate] is the semantics gap above and stays under either policy. *)
 let known_divergence_1647 =
-  [
-    ("bs_sat01_gate", "cuda", true); ("bs_sat01_gate", "metal", true); ("bs_sat01_gate", "hip", true);
-  ]
+  [ ("bs_sat01_gate", "cuda"); ("bs_sat01_gate", "metal"); ("bs_sat01_gate", "hip") ]
 
 (* [name]'s bitwise value claim, or its gated skip where ahrefs/ocannl#1647 records it failing. *)
 let values_claim ~name claim got want =
   let diverges =
-    List.exists known_divergence_1647 ~f:(fun (leg, backend, recorded) ->
-        recorded && String.equal leg name && String.is_substring backend_name ~substring:backend)
+    List.exists known_divergence_1647 ~f:(fun (leg, backend) ->
+        String.equal leg name && String.is_substring backend_name ~substring:backend)
   in
   if diverges then (
     Array.iteri got ~f:(fun i v ->
