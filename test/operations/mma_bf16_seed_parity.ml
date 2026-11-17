@@ -354,7 +354,7 @@ let () =
     (differ per_step32 per_block32 && differ per_step32 once32 && differ per_block32 once32);
   let pairs =
     lazy
-      (List.map [ Numerics.Bf16_auto; Numerics.Bf16_wide; Numerics.Bf16_narrow ] ~f:(fun mode ->
+      (List.map Numerics.all_of_bf16_mode ~f:(fun mode ->
            (mode, [ (8, fixture_pair ~mode ~k:8); (32, fixture_pair ~mode ~k:32) ])))
   in
   let get mode k =
@@ -375,9 +375,16 @@ let () =
       (count_mismatches serial once)
   in
   if on_metal then
-    List.iter [ Numerics.Bf16_auto; Numerics.Bf16_wide; Numerics.Bf16_narrow ] ~f:(fun mode ->
+    List.iter Numerics.all_of_bf16_mode ~f:(fun mode ->
         List.iter [ 8; 32 ] ~f:(fun k -> report mode k));
-  List.iter [ Numerics.Bf16_auto; Numerics.Bf16_wide ] ~f:(fun mode ->
+  (* The modes Metal resolves wide, each mode's answer stated by an exhaustive match
+     (gh-ocannl-2260): a new mode is a compile error here, not silently left out of the bitwise
+     claims. *)
+  let metal_resolves_wide = function
+    | Numerics.Bf16_auto | Numerics.Bf16_wide -> true
+    | Numerics.Bf16_narrow -> false
+  in
+  List.iter (List.filter Numerics.all_of_bf16_mode ~f:metal_resolves_wide) ~f:(fun mode ->
       List.iter
         [ (8, once8); (32, once32) ]
         ~f:(fun (k, once) ->

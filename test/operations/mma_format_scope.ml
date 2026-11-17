@@ -4,8 +4,11 @@
    gh-ocannl-2195) the uniform-f16 triple needs a wide scope exactly as under [Fp16_wide]; and both
    values of [mma_f16_narrow_floored] (gh-ocannl-2233): the profiles' [Fp16_prefer_narrow] needs one
    exactly where the descriptor floors it to a wide-resolving auto (HIP), and never elsewhere, where
-   it means [Fp16_narrow]. The grid takes every fp16 mode ([Numerics.all_of_fp16_mode]); the oracle
-   states each mode's wide condition itself rather than calling the resolution under test. *)
+   it means [Fp16_narrow]. The grid takes every fp16 and bf16 mode ([Numerics.all_of_fp16_mode],
+   [Numerics.all_of_bf16_mode]); the oracle states each mode's wide condition itself, through an
+   exhaustive match, rather than calling the resolution under test, so a new mode is a compile error
+   here rather than a silent [false] (gh-ocannl-2260). The claim's minimum row count is the product
+   of the grid's own lists. *)
 open Base
 open Verdict.Claims
 module BI = Ir.Backend_intf
@@ -21,6 +24,7 @@ let policy : N.t =
 
 let scopes = [ BI.Mma_per_statement; BI.Mma_fragment_scope ]
 let scope_sets = [ []; [ BI.Mma_per_statement ]; [ BI.Mma_fragment_scope ]; scopes ]
+let bools = [ false; true ]
 let formats = [ BI.Mma_f32; BI.Mma_f16; BI.Mma_bf16; BI.Mma_fp8_e5m2; BI.Mma_tf32 ]
 
 let triples =
@@ -47,10 +51,10 @@ let () =
     List.concat_map scope_sets ~f:(fun half_scopes ->
         List.concat_map scope_sets ~f:(fun bf_scopes ->
             List.concat_map N.all_of_fp16_mode ~f:(fun fp16 ->
-                List.concat_map [ false; true ] ~f:(fun auto_wide ->
-                    List.concat_map [ false; true ] ~f:(fun narrow_floored ->
-                        List.concat_map [ N.Bf16_auto; N.Bf16_narrow; N.Bf16_wide ] ~f:(fun bf16 ->
-                            List.concat_map [ false; true ] ~f:(fun tf32 ->
+                List.concat_map bools ~f:(fun auto_wide ->
+                    List.concat_map bools ~f:(fun narrow_floored ->
+                        List.concat_map N.all_of_bf16_mode ~f:(fun bf16 ->
+                            List.concat_map bools ~f:(fun tf32 ->
                                 List.concat_map scopes ~f:(fun scope ->
                                     let policy =
                                       {
@@ -83,6 +87,11 @@ let () =
                                       | N.Fp16_narrow -> false
                                       | N.Fp16_prefer_narrow -> narrow_floored && auto_wide
                                     in
+                                    let bf16_wide =
+                                      match bf16 with
+                                      | N.Bf16_wide -> true
+                                      | N.Bf16_auto | N.Bf16_narrow -> false
+                                    in
                                     List.map triples ~f:(fun ((a, b, d) as triple) ->
                                         let expected =
                                           List.mem advertised triple
@@ -96,14 +105,18 @@ let () =
                                           | BI.Mma_f16, BI.Mma_f16, BI.Mma_f16 when f16_wide ->
                                               List.mem half_scopes scope
                                                 ~equal:BI.equal_mma_emission_scope
-                                          | BI.Mma_bf16, BI.Mma_bf16, BI.Mma_bf16
-                                            when N.equal_bf16_mode bf16 N.Bf16_wide ->
+                                          | BI.Mma_bf16, BI.Mma_bf16, BI.Mma_bf16 when bf16_wide ->
                                               List.mem bf_scopes scope
                                                 ~equal:BI.equal_mma_emission_scope
                                           | _ -> true
                                         in
                                         (expected, check limits policy scope (a, b, d)))))))))))
   in
-  p_all ~min:384000
+  let grid_size =
+    List.length scope_sets * List.length scope_sets * List.length N.all_of_fp16_mode
+    * List.length bools * List.length bools * List.length N.all_of_bf16_mode * List.length bools
+    * List.length scopes * List.length triples
+  in
+  p_all ~min:grid_size
     "format scope judgment respects both policy gates, both scope lists and the full triple" rows
     ~f:(fun (expected, actual) -> Bool.equal expected actual)
