@@ -2895,6 +2895,7 @@ type seed_gate =
       fill : Ir.Cost_model.fill_model option;
       sector_rate : float option;
       wg_capacity : int option;
+      copy_rate : float option;
     }
       (** The [auto] gate: a segment whose {!seeded_params} sketch the ranking score
           ({!Ir.Cost_model.ranking_seconds}) puts strictly below the default preset of the same
@@ -2906,11 +2907,11 @@ type seed_gate =
           no gather term, gh-ocannl-1495), and its launch fill ({!ranking_fill_model}; [None]: no
           launch fill, gh-ocannl-1479), and its memory-transaction rate
           ({!ranking_transaction_rate}; [None]: no transaction term, gh-ocannl-1600) and its
-          occupancy factor's capacity ({!ranking_workgroup_capacity}; [None]: no occupancy factor) —
-          never the staged-copy term ({!ranking_staged_copy_rate}, gh-ocannl-1821), fitted among
-          staged leaves only, while the gate weighs a staged sketch against an unstaged preset — so
-          it seeds exactly where the cross-block re-reads the sketch removes are priced. The
-          geometry and the numerics-preserving candidate set are {!seeded_params}' either way. *)
+          occupancy factor's capacity ({!ranking_workgroup_capacity}; [None]: no occupancy factor).
+          The delivery rate ({!ranking_staged_copy_rate}) prices both the staged copies and the
+          direct global operand reads on either schedule (gh-ocannl-2279). [None] omits that term
+          and uses continuous launch fill. The geometry and the numerics-preserving candidate set
+          are {!seeded_params}' either way. *)
 
 val seeded_default_gate : limits:Ir.Backend_intf.hardware_limits -> seed_gate
 (** Config [gpu_default_sketch_min_reduction]: an integer is [Min_reduction]; [auto] is [Ranked]

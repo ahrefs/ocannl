@@ -64,10 +64,10 @@ let staged_kernel ~tag ~nb ~nw ~ns =
 let peak = 1024.
 let issue = 256.
 
-let legs ?staged_copies ?staged_copy_rate ?(fill = fm) code =
+let legs ?staged_copies ?direct_loads ?staged_copy_rate ?(fill = fm) code =
   CM.ranking_legs_of ~peak_flops:peak ~peak_memory_bandwidth:peak ~issue_rate:issue
     ~launch:(fill, CM.launch_contexts code)
-    ?staged_copies ?staged_copy_rate (CM.analyze code) None
+    ?staged_copies ?direct_loads ?staged_copy_rate (CM.analyze code) None
 
 let legs_equal (c1, m1) (c2, m2) = Option.equal Float.equal c1 c2 && Option.equal Float.equal m1 m2
 let ctx_list copies = List.map copies ~f:(fun c -> (c.CM.sc_blocks, c.CM.sc_threads, c.CM.sc_bytes))
@@ -236,6 +236,87 @@ let () =
         Float.equal c (ops /. peak) && Float.equal q (ops /. 0.75 /. peak)
     | _ -> false)
 
+let () =
+  let half = Ll_test.node_factory ~prec:Ir.Ops.half ~first_id:972_100_000 ~dims:[| 1 |] () in
+  let a = half "scc_load_a"
+  and ta = fresh_tn "scc_load_ta" [| 4 |]
+  and d = fresh_tn "scc_load_d" [| 2; 4 |]
+  and local = fresh_tn "scc_load_local" [| 4 |]
+  and out = fresh_tn "scc_load_out" [| 4; 64 |] in
+  let g = Ll_test.sym () and w = Ll_test.sym () and k = Ll_test.sym () in
+  let read = Ll_test.get a [| Ll_test.fixed 0 |] in
+  let copy =
+    Ll_test.if_ (Ll_test.lt (Ll_test.embed w) (Ll_test.ic 2)) (Ll_test.set ta [| it w |] read)
+  in
+  let body ~mixed =
+    let idx = [| it g; it w |] in
+    let first = if mixed then Ll_test.get ta [| it w |] else read in
+    let local_read = Ll_test.scope local read in
+    let rhs = Ll_test.add first (Ll_test.add read (Ll_test.add local_read local_read)) in
+    let rhs = Ll_test.add rhs (Ll_test.get local [| it w |]) in
+    let rhs = LL.Binop (Ir.Ops.Arg1, (rhs, Ir.Ops.single), (read, Ir.Ops.single)) in
+    let write = Ll_test.set d idx (Ll_test.add (Ll_test.get d idx) rhs) in
+    let reduction = Ll_test.loop_n k 3 write in
+    let nest =
+      if mixed then Ll_test.seq (Ll_test.loop_n (Ll_test.sym ()) 3 copy) reduction else reduction
+    in
+    Ll_test.loop_n ~axis:LL.Grid g 2 (Ll_test.loop_n ~axis:LL.Workgroup w 4 nest)
+  in
+  let is_staged = Ir.Tnode.equal ta in
+  let is_global tn = not (is_staged tn || Ir.Tnode.equal local tn) in
+  let copies code = CM.operand_deliveries ~is_staged ~is_global code in
+  let plain = body ~mixed:false in
+  let staged, direct = copies plain in
+  p "a plain reduction pays for each issued operand read of the same cell"
+    (Poly.equal (ctx_list staged, ctx_list direct) ([], [ (2, 4, 144.) ]));
+  let b = Ll_test.sym () and t = Ll_test.sym () in
+  let packed_node =
+    Ll_test.node_factory ~prec:Ir.Ops.uint4x32 ~first_id:972_200_000 ~dims:[| 1 |] ()
+      "scc_load_packed"
+  in
+  let unpacked = fresh_tn "scc_load_unpacked" [| 4; 64; 4 |] in
+  let pointwise =
+    let idx = [| it b; it t |] in
+    Ll_test.if_
+      (Ll_test.lt read (Ll_test.c 1.))
+      (Ll_test.set out idx (Ll_test.add (Ll_test.get out idx) read))
+  in
+  let unpack =
+    Ll_test.set_from_vec ~length:4 ~vec_unop:Ir.Ops.Uint4x32_to_prec_uniform unpacked
+      [| it b; it t; Ll_test.fixed 0 |]
+      (Ll_test.get packed_node [| Ll_test.fixed 0 |], Ir.Ops.uint4x32)
+  in
+  let sibling =
+    Ll_test.loop_n ~axis:LL.Grid b 4
+      (Ll_test.loop_n ~axis:LL.Workgroup t 64 (Ll_test.seq pointwise unpack))
+  in
+  p "a guard, a pointwise self-read and a packed operand each issue their own load"
+    (let _, direct = copies sibling in
+     (* One predicate and one RHS half, one f32 self-read and one 16-byte packed operand. *)
+     Poly.equal (ctx_list direct) [ (4, 64, 6144.) ]);
+  let mixed = Ll_test.seq (body ~mixed:true) sibling in
+  let staged, direct = copies mixed in
+  p "a mixed reduction charges the guarded copy once and each direct global read"
+    (Poly.equal
+       (ctx_list staged, ctx_list direct)
+       ([ (2, 4, 48.) ], [ (2, 4, 96.); (4, 64, 6144.) ]));
+  let base = legs mixed in
+  let priced = legs ~staged_copies:staged ~direct_loads:direct ~staged_copy_rate:8. mixed in
+  (* The 2-by-4 context has fill 1/32 and the sibling fills the device: ((48 + 96) * 32 + 6144) / 8
+     = 1344. *)
+  p "both delivery paths add filled bytes over the same rate to compute alone"
+    (match (base, priced) with
+    | (Some c0, m0), (Some c1, m1) -> Float.equal c1 (c0 +. 1344.) && Option.equal Float.equal m0 m1
+    | _ -> false);
+  p "direct loads and staging copies with no rate leave both legs bitwise unchanged"
+    (legs_equal base (legs ~staged_copies:staged ~direct_loads:direct mixed));
+  let at tn = (tn, [| Ll_test.fixed 0; Ll_test.fixed 0 |]) in
+  let mma = Ll_test.tile_mma ~d:(at d) ~a:(at out) ~b:(at out) LL.Noop in
+  p_empty "the operand delivery census leaves Tile_mma kernels to their own rates"
+    ~over:(staged @ direct)
+    (let staged, direct = copies (Ll_test.seq mixed mma) in
+     staged @ direct)
+
 (* The out projection at b8: each scalar blocktile leaf's census against its block tile. *)
 let stand_in =
   {
@@ -254,11 +335,8 @@ let stand_in =
     staged_copy_rate = Some 1.0e12;
   }
 
-(* The seeding gate reads neither the copy rate nor the tail: the term was fitted among staged
-   leaves, and the gate weighs a staged sketch against an unstaged preset. Through the gate's own
-   ranker: the plan the untuned CUDA compile derives for a two-matmul chain (model_seeded_anchor's,
-   which the term priced in the gate stopped seeding on rog's CUDA) under a CUDA-shaped record is
-   the same plan, by its digest, with and without the copy rate -- and it seeds. *)
+(* The auto gate compares both delivery paths. A copy-only score dropped both seeds of this
+   two-matmul chain (model_seeded_anchor's) on CUDA. *)
 let cuda_like =
   {
     stand_in with
@@ -281,15 +359,13 @@ let () =
   Train.set_materialized qg.Tensor.value;
   let target = Ll_test.cuda_model_target ~limits:cuda_like () in
   let facts = target.Autotune.mt_facts and capabilities = target.Autotune.mt_capabilities in
-  let plan ~tag limits =
+  let plan ?seed_gate ~tag limits =
     let opt =
       Context.lowered_for_decisions ~name:("scc_chain_" ^ tag) ~facts ~limits (Context.cpu ())
         (Train.forward qg) Ir.Indexing.Empty
     in
-    Autotune.seeded_plan
-      ~seed_gate:(Autotune.seeded_default_gate ~limits)
-      ~capabilities ~facts ~limits ~accum_prec:capabilities.Ir.Backend_intf.accum_prec
-      ~static_indices:[] opt
+    Autotune.seeded_plan ?seed_gate ~capabilities ~facts ~limits
+      ~accum_prec:capabilities.Ir.Backend_intf.accum_prec ~static_indices:[] opt
   in
   let seeded_count = function
     | Some { Autotune.sp_segments = Some (_, ds); _ } ->
@@ -306,11 +382,27 @@ let () =
     (match Autotune.seeded_default_gate ~limits:cuda_like with
     | Autotune.Ranked _ -> true
     | Autotune.Min_reduction _ -> false);
-  p "under a CUDA-shaped record the untuned plan seeds the chain" (seeded_count without >= 1);
-  p "and it is the same plan with the copy rate: the gate's ranker prices no copy term"
-    (match (with_rate, without) with
-    | Some a, Some b -> String.equal (Autotune.seeded_plan_digest a) (Autotune.seeded_plan_digest b)
-    | _ -> false)
+  p "the no-rate gate seeds both products of the chain" (seeded_count without = 2);
+  p "pricing both delivery paths keeps the two CUDA-shaped seeds" (seeded_count with_rate = 2);
+  (* With no fill, transaction or cache tier and compute dominant, the unstaged and staged
+     arithmetic tie. Operand delivery breaks the tie because staging reuses each copied cell. *)
+  let tied =
+    {
+      cuda_like with
+      issue_rate = Some 1.0e6;
+      cache_bandwidth = None;
+      fill_threads = None;
+      transaction_rate = None;
+      staged_copy_rate = None;
+    }
+  in
+  let rated = { tied with staged_copy_rate = Some 1.0e9 } in
+  let unpriced = plan ~seed_gate:(Autotune.seeded_default_gate ~limits:tied) ~tag:"tied" rated in
+  let priced = plan ~tag:"delivery" rated in
+  Stdio.eprintf "cost_model_staged_copy: tie fixture seeds %d with delivery, %d without\n"
+    (seeded_count priced) (seeded_count unpriced);
+  p "the actual gate's delivery charge separates the tied arithmetic"
+    (seeded_count unpriced = 0 && seeded_count priced = 2)
 
 let () =
   let ctx = Context.cpu () in

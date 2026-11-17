@@ -460,7 +460,7 @@ let () =
    on: two gates differing only in the issue rate, or only in the DRAM rate, tag apart. *)
 let () =
   let rated_limits = { limits with peak_flops = Some c_flops; peak_memory_bandwidth = Some c_bw } in
-  let tag ?scalar_rate ?dram_rate ?matrix_rate ?gather_rate ?sector_rate () =
+  let tag ?scalar_rate ?dram_rate ?matrix_rate ?gather_rate ?sector_rate ?copy_rate () =
     Autotune.seeded_plan
       ~seed_gate:
         (Autotune.Ranked
@@ -474,6 +474,7 @@ let () =
              fill = None;
              sector_rate;
              wg_capacity = None;
+             copy_rate;
            })
       ~facts:Ir.Backend_intf.cuda_facts ~limits:rated_limits ~accum_prec:Fn.id ~static_indices:[]
       (hermetic base)
@@ -494,7 +495,9 @@ let () =
     (apart (tag ~dram_rate:r_dram ()) (tag ~dram_rate:r_dram ~gather_rate:r_gather ()));
   (* gh-ocannl-1600: and the memory-transaction rate, only where set. *)
   p "the staffed start's gate tag tells two memory-transaction rates apart"
-    (apart (tag ~dram_rate:r_dram ()) (tag ~dram_rate:r_dram ~sector_rate:2e11 ()))
+    (apart (tag ~dram_rate:r_dram ()) (tag ~dram_rate:r_dram ~sector_rate:2e11 ()));
+  p "the staffed start's gate tag tells two operand delivery rates apart"
+    (apart (tag ~dram_rate:r_dram ~copy_rate:1e12 ()) (tag ~dram_rate:r_dram ~copy_rate:2e12 ()))
 
 (* gh-ocannl-1633: the serial re-reads of a one-block nest. The unscheduled wgrad is one block (no
    [Grid] loop), so the per-block charge alone requested its distinct cells whatever the capacity.

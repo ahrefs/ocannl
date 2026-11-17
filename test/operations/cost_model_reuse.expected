@@ -43,6 +43,7 @@ the staffed start's gate tag tells two DRAM rates apart: true
 the staffed start's gate tag tells two tile-MMA rates apart: true
 the staffed start's gate tag tells two device-gather rates apart: true
 the staffed start's gate tag tells two memory-transaction rates apart: true
+the staffed start's gate tag tells two operand delivery rates apart: true
 serial: with no capacity a one-block nest requests its distinct bytes: true
 serial: at capacity (the nest's bytes) it requests its distinct bytes: true
 serial: past capacity, where every loop's iteration fits, it requests its distinct bytes: true

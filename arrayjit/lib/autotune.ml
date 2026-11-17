@@ -3236,8 +3236,8 @@ type kernel_legs = {
    [summaries_roofline] is. *)
 let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate
     ?device_gather_rate ?fill_model ?transaction_rate ?workgroup_capacity ?staged_copy_rate
-    ?(count_transactions = false) ~peak_flops ~peak_memory_bandwidth ~limits
-    (segs : LL.optimized list) : (float * kernel_legs list) option =
+    ?(count_transactions = false) ?(price_direct_loads = false) ~peak_flops ~peak_memory_bandwidth
+    ~limits (segs : LL.optimized list) : (float * kernel_legs list) option =
   (* Each reading only where no explicit value replaces it: a caller's gate isolates the score from
      the configuration it overrides, a malformed override of it included. *)
   let max_resident_threads = (Ir.Backend_intf.untimed_limits limits).resident_threads in
@@ -3333,22 +3333,23 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
               let transactions = count None in
               (* gh-ocannl-1821: the operand staging copies, where a copy rate prices them: into a
                  workgroup-shared node that is not a fragment. *)
-              let staged_copies =
+              let staged_copies, direct_loads =
                 match staged_copy_rate with
-                | None -> []
+                | None -> ([], [])
                 | Some _ ->
                     let is_staged tn =
                       Set.mem o.LL.workgroup_shared tn
                       && (not (Set.mem o.LL.simdgroup_fragments tn))
                       && not (Set.mem o.LL.masked_fragments tn)
                     in
-                    CM.staged_copies ~is_staged o.LL.llc
+                    let is_global = if price_direct_loads then Some (CM.global_in o) else None in
+                    CM.operand_deliveries ?is_global ~is_staged o.LL.llc
               in
               let kl_compute, kl_memory =
                 CM.ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes
                   ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate ~mma_flops ~device_gathers
                   ?device_gather_rate ?launch ~transactions ?transaction_rate ~staged_copies
-                  ?staged_copy_rate ?occupancy s reuse
+                  ~direct_loads ?staged_copy_rate ?occupancy s reuse
               in
               let filled ts = CM.filled_transactions ?fill_model:(Option.map launch ~f:fst) ts in
               let kl_mma_work, kl_device_gathers =
@@ -3390,11 +3391,12 @@ let kernel_rank { kl_compute; kl_memory; _ } =
    explicit [capacity] / [cache_bandwidth] (the gate's own, or a test's) overrides the readings. *)
 let segments_ranking ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate
     ?device_gather_rate ?fill_model ?transaction_rate ?workgroup_capacity ?staged_copy_rate
-    ~peak_flops ~peak_memory_bandwidth ~limits (segs : LL.optimized list) : (float * float) option =
+    ?price_direct_loads ~peak_flops ~peak_memory_bandwidth ~limits (segs : LL.optimized list) :
+    (float * float) option =
   Option.map
     (segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate
        ?device_gather_rate ?fill_model ?transaction_rate ?workgroup_capacity ?staged_copy_rate
-       ~peak_flops ~peak_memory_bandwidth ~limits segs) ~f:(fun (bound, legs) ->
+       ?price_direct_loads ~peak_flops ~peak_memory_bandwidth ~limits segs) ~f:(fun (bound, legs) ->
       (List.fold legs ~init:0. ~f:(fun acc l -> acc +. kernel_rank l), bound))
 
 let ranking_ms ?capabilities ~limits segs =
@@ -5353,6 +5355,7 @@ type seed_gate =
       fill : Ir.Cost_model.fill_model option;
       sector_rate : float option;
       wg_capacity : int option;
+      copy_rate : float option;
     }
 
 (* The threshold [auto] falls back to where the device publishes no capacity (gh-ocannl-1253):
@@ -5375,6 +5378,7 @@ let seed_gate_tag = function
         fill;
         sector_rate;
         wg_capacity;
+        copy_rate;
       } ->
       let rate = Option.value_map ~default:"none" ~f:Float.to_string in
       (* gh-ocannl-1495: the tile-MMA and device-gather rates only where set, so a gate without them
@@ -5394,6 +5398,7 @@ let seed_gate_tag = function
       (* gh-ocannl-1600: likewise only where set. *)
       ^ set "sector_rate" sector_rate
       ^ Option.value_map wg_capacity ~default:"" ~f:(Printf.sprintf " wg_capacity=%d")
+      ^ set "copy_rate" copy_rate
 
 (* The configured gate, unresolved: [`Auto] or a threshold. *)
 let seed_gate_setting () =
@@ -5428,6 +5433,7 @@ let seeded_default_gate ~limits =
               fill = ranking_fill_model ~limits;
               sector_rate = ranking_transaction_rate ~limits;
               wg_capacity = ranking_workgroup_capacity ~limits;
+              copy_rate = ranking_staged_copy_rate ~limits;
             })
 
 (* The seeded geometries in preference order: the largest block tile first, for its operand reuse,
@@ -5735,7 +5741,7 @@ let seeded_split ~facts ~min_serial ~static_indices (opt : LL.optimized) =
    a builder or transform bug and propagates (gh-ocannl-1390). *)
 let seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices ~capacity ~cache_bandwidth
     ~issue_rate ~dram_bandwidth ~mma_rate ~device_gather_rate ~fill_model ~transaction_rate
-    ~workgroup_capacity p pre =
+    ~workgroup_capacity ~staged_copy_rate p pre =
   let peak_flops, peak_memory_bandwidth = envelope ~limits in
   let rank sched =
     match Sched.apply_classified ~static_indices (sched ()) (scratch_of pre) with
@@ -5743,14 +5749,9 @@ let seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices ~capacity ~c
     | post ->
         Option.map
           (segments_ranking ~capabilities ~capacity ~cache_bandwidth ~issue_rate ~dram_bandwidth
-             ~mma_rate ~device_gather_rate ~fill_model ~transaction_rate
-             ~workgroup_capacity
-               (* gh-ocannl-1821: no staged-copy term (and so no launch tail) in the gate: it was
-                  fitted among staged blocktile leaves, and the gate weighs a staged sketch against
-                  an unstaged preset, whose operand loads the compute leg charges nothing for --
-                  priced here, the term declined seeding a two-matmul chain on CUDA that nothing
-                  measured. *)
-             ~staged_copy_rate:None ~peak_flops ~peak_memory_bandwidth ~limits [ post ])
+             ~mma_rate ~device_gather_rate ~fill_model ~transaction_rate ~workgroup_capacity
+             ~staged_copy_rate ~price_direct_loads:true ~peak_flops ~peak_memory_bandwidth ~limits
+             [ post ])
           ~f:fst
   in
   match
@@ -5785,13 +5786,14 @@ let seeded_segment_judgment ~capabilities ~limits ~accum_prec ~static_indices ~g
           fill;
           sector_rate;
           wg_capacity;
+          copy_rate;
         } -> (
         match seeded_params_judged ~capabilities ~limits ~min_reduction:1 pre with
         | Ok p
           when ranked_below ~capacity ~cache_bandwidth:cache_rate ~issue_rate:scalar_rate
                  ~dram_bandwidth:dram_rate ~mma_rate:matrix_rate ~device_gather_rate:gather_rate
-                 ~fill_model:fill ~transaction_rate:sector_rate ~workgroup_capacity:wg_capacity p
-                 pre ->
+                 ~fill_model:fill ~transaction_rate:sector_rate ~workgroup_capacity:wg_capacity
+                 ~staged_copy_rate:copy_rate p pre ->
             Ok p
         | Ok p ->
             Error
