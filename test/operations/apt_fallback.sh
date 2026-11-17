@@ -7,6 +7,8 @@
 # refuse any occurrence left over. A private PATH exposes only Python and strict
 # sudo/timeout/apt-get stubs: no real sudo, timeout, apt, network or root is needed.
 # The historical control covers PR #1934's first rewriter, not its whole workflow.
+# Refusal controls replace exactly one literal raise in a scratch body and
+# require it to reach the stubbed second attempt.
 # affected-reads: .github/workflows/*.yml
 # ocannl-harness: standalone
 # Usage: test/operations/apt_fallback.sh [--keep|--help]
@@ -88,6 +90,7 @@ for label, old, new in (
 
 azure = 'azure.archive.ubuntu.com'
 other = 'deb https://example.invalid/third-party stable main\n'
+azure_mirrors = f'# ignored mirror\nhttps://{azure}/ubuntu\n'
 
 
 def sources(layout, indirect, fallback=False):
@@ -151,35 +154,40 @@ def redirect(script, apt):
 serial = 0
 
 
-def run_case(script, layout, indirect, codes):
+def run_fixture(script, filename, original, mirror_list, codes):
     global serial
     serial += 1
     run = scratch / str(serial)
     apt = run / 'apt'
     (apt / 'sources.list.d').mkdir(parents=True)
-    filename, original = sources(layout, indirect)
     original = original.replace('/etc/apt', str(apt))
-    (apt / filename).write_text(original)
-    mirror_list = '# ignored mirror\nhttps://azure.archive.ubuntu.com/ubuntu\n'
+    source = apt / filename
+    source.write_text(original)
     (apt / 'apt-mirrors.txt').write_text(mirror_list)
     body = redirect(script, apt)
     env = dict(PATH=str(bin_dir), APT_FIXTURE=str(run), APT_SOURCE=filename,
                APT_CODES=json.dumps(codes), LC_ALL='C')
     result = subprocess.run([bash, '--noprofile', '--norc', '-e', '-c', body],
                             env=env, cwd=run, text=True, capture_output=True, timeout=15)
+    return run, source, original, result
+
+
+def run_case(script, layout, indirect, codes):
+    filename, original = sources(layout, indirect)
+    run, source, original, result = run_fixture(script, filename, original, azure_mirrors, codes)
     output = result.stdout + result.stderr
     count = int((run / 'count').read_text())
     expected_count = 1 if codes[0] == 0 else 2
     assert count == expected_count, (layout, indirect, codes, count, output)
     assert (run / 'snapshot-0').read_text() == original
     expected = sources(layout, indirect, fallback=True)[1] if expected_count == 2 else original
-    assert (apt / filename).read_text() == expected, (layout, indirect, output)
+    assert source.read_text() == expected, (layout, indirect, output)
     if expected_count == 2:
         assert (run / 'snapshot-1').read_text() == expected
         assert '::warning title=apt-get update::attempt 1 of 2' in output
         reason = 'stalled past 240s (apt mirror stall)' if codes[0] in (124, 137) else f'failed with exit {codes[0]}'
         assert reason in output, output
-    assert (apt / 'apt-mirrors.txt').read_text() == mirror_list
+    assert (run / 'apt/apt-mirrors.txt').read_text() == azure_mirrors
     calls = [json.loads(line) for line in (run / 'calls').read_text().splitlines()]
     assert sum(name == 'timeout' for name, _ in calls) == expected_count
     assert sum(name == 'sudo' for name, _ in calls) == expected_count + (expected_count == 2)
@@ -193,12 +201,51 @@ def run_case(script, layout, indirect, codes):
     return output
 
 
+def refusal_case(script, label, filename, original, mirror_list, diagnostic, guard, bypass):
+    def observe(body):
+        run, source, before, result = run_fixture(body, filename, original, mirror_list, [124, 0])
+        calls = [json.loads(line) for line in (run / 'calls').read_text().splitlines()]
+        attempts = sum(name == 'apt-get' for name, _ in calls)
+        assert (run / 'snapshot-0').read_text() == before
+        assert (run / 'apt/apt-mirrors.txt').read_text() == mirror_list
+        expected_line = diagnostic.format(path=source)
+        refused = (result.returncode != 0 and attempts == 1 and source.read_text() == before
+                   and expected_line in result.stderr.splitlines())
+        return refused, attempts, result
+
+    refused, attempts, result = observe(script)
+    assert refused, (label, attempts, result.returncode, result.stdout, result.stderr)
+    print(f'PASS {label}: exit {result.returncode}, one apt attempt, source unchanged, {result.stderr.strip()}')
+
+    assert script.splitlines().count(guard) == 1, ('refusal guard missing or duplicated', label)
+    mutant = script.replace(guard + '\n', bypass + '\n', 1)
+    refused, attempts, result = observe(mutant)
+    assert not refused and attempts == 2 and result.returncode == 0, (
+        label, attempts, result.returncode, result.stdout, result.stderr)
+    print(f'PASS rejected guard removal for {label}: exit {result.returncode}, {attempts} apt attempts')
+
+
 script = copies[0][1]
 for layout in ('deb822', 'one-line'):
     for indirect in (False, True):
         for codes in ([0], [124, 0], [137, 0], [100, 0], [100, 100], [124, 137]):
             run_case(script, layout, indirect, codes)
             print(f'PASS {layout} indirect={indirect} apt exits={codes}')
+
+filename, original = sources('deb822', False)
+# Leave the unrelated deb822 block's Suites in place to distinguish the Azure block.
+without_suites, changed = re.subn(r'^Suites: noble .*\n', '', original, flags=re.M)
+assert changed == 1
+diagnostic = "::error::Cannot find Suites in {path}'s Azure source"
+refusal_case(script, 'Azure deb822 block without Suites', filename, without_suites, azure_mirrors,
+             diagnostic, f'                raise SystemExit(f"{diagnostic}")', '                continue')
+
+filename, original = sources('one-line', True)
+diagnostic = ('::error title=apt-get update::Cannot switch mirrors: neither Ubuntu source file '
+              'contains Azure or references its verified apt-mirrors.txt list')
+refusal_case(script, 'mirror list without Azure', filename, original,
+             'https://archive.ubuntu.com/ubuntu\n', diagnostic,
+             f'    raise SystemExit("{diagnostic}")', '    pass')
 
 old = (root / 'test/operations/fixtures/apt_fallback_1934_first.py').read_text()
 pattern = r"(sudo python3 - <<'PYTHON'\n).*?(\nPYTHON)"

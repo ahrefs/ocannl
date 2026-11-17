@@ -5,6 +5,7 @@
 # the environment the leg pins, and answers with a canned report and status. Each leg's verdict line
 # and status are held to its documented table, the WARNING arm (status 1) firing exactly where its
 # condition holds and staying quiet otherwise, and no credential reaches dune. No backend runs.
+# The missing-Python control removes only the literal command-v/verdict guard from a scratch copy.
 leg_tools=$(cd "$(dirname "$sweep")" && pwd)
 leg_root=$tmp/leg-scripts
 leg_bin=$tmp/leg-bin
@@ -32,8 +33,9 @@ run_leg() { # script args... -- its output in leg_out, its status in leg_rc
   # Unset what the legs pin: an ambient one (the native-PTX leg reruns this very harness) would
   # otherwise read as the leg's own.
   leg_rc=0
-  leg_out=$(env -u OCANNL_BACKEND -u OCANNL_CUDA_PTX_TARGET -u OCANNL_TF32_MATMULS -u BENCH_PARITY \
-    -u BENCH_MATERIALIZE -u BENCH_FIXTURE PATH="$leg_bin:$PATH" LEG_DUNE_CALLS="$leg_calls" \
+  # A Bash startup hook could also restore host tools to a fixture PATH.
+  leg_out=$(env -u BASH_ENV -u OCANNL_BACKEND -u OCANNL_CUDA_PTX_TARGET -u OCANNL_TF32_MATMULS -u BENCH_PARITY \
+    -u BENCH_MATERIALIZE -u BENCH_FIXTURE PATH="${leg_path:-$leg_bin:$PATH}" LEG_DUNE_CALLS="$leg_calls" \
     GH_TOKEN=fixture-not-a-token FOO_API_KEY=fixture-not-a-key \
     bash "$leg_root/tools/$1" "${@:2}" 2>&1) || leg_rc=$?
 }
@@ -84,6 +86,44 @@ EOF_LEG_FIXTURE
 python3 "$leg_root/benchmarks/fixture_digest.py" --record --origin rog-nv \
   --digests "$leg_root/benchmarks/fixtures/DIGESTS.txt" \
   "$leg_fixtures/cifar_resnet.safetensors" >/dev/null
+
+# A private allowlist also excludes macOS's /usr/bin/python3 shim.
+leg_python_free=$tmp/leg-python-free
+mkdir "$leg_python_free"
+(
+  # Git Bash's default copies executables away from their DLLs.
+  export MSYS=winsymlinks:sys
+  for tool in bash sh dirname env mktemp cat grep tail rm; do
+    ln -s "$(command -v "$tool")" "$leg_python_free/$tool"
+  done
+  ln -s "$leg_bin/dune" "$leg_python_free/dune"
+)
+env -u BASH_ENV PATH="$leg_python_free" bash -c '! command -v python3 >/dev/null 2>&1'
+
+leg_missing_python_refused() {
+  [ "$leg_rc" -eq 2 ] &&
+    [ "$(leg_verdict)" = 'cuda-tf32-parity: verdict: unavailable: no python3 (fixture digest unverified)' ] &&
+    [ ! -s "$leg_calls" ]
+}
+leg_path=$leg_python_free run_leg cuda-tf32-parity.sh --fixture-dir "$leg_fixtures"
+leg_missing_python_refused
+printf 'PASS missing Python: exit %s, no Dune calls, %s\n' "$leg_rc" "$(leg_verdict)"
+
+awk '
+  /^command -v python3 .* \|\| verdict 2 "unavailable: no python3 .+"$/ { removed++; next }
+  { print }
+  END { if (removed != 1) exit 1 }
+' "$leg_root/tools/cuda-tf32-parity.sh" >"$leg_root/tools/cuda-tf32-parity-no-guard.sh"
+leg_path=$leg_python_free run_leg cuda-tf32-parity-no-guard.sh --fixture-dir "$leg_fixtures"
+if leg_missing_python_refused; then
+  echo 'missing-Python fixture accepted a script without the guard' >&2
+  exit 1
+fi
+[ "$leg_rc" -eq 2 ]
+[ "$(leg_verdict)" = "cuda-tf32-parity: verdict: unavailable: fixture digest check failed for $leg_fixtures/cifar_resnet.safetensors" ]
+[ ! -s "$leg_calls" ]
+printf 'PASS rejected missing-Python guard removal: exit %s, %s\n' "$leg_rc" "$(leg_verdict)"
+
 # Corrupt the payload, not its structure. Even a stale record beside the fixture must not win.
 cp "$leg_root/benchmarks/fixtures/DIGESTS.txt" "$leg_fixtures/DIGESTS.txt"
 python3 - "$leg_fixtures/cifar_resnet.safetensors" <<'EOF_LEG_MUTATE'

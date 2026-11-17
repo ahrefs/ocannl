@@ -1214,8 +1214,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   while a harmless step rename passes. The embedded Python file is written once;
   its shared prelude runs again in each selected leg's fresh process, so an assertion fails that
   leg and later legs still report. Python refuses an unmatched contract name instead of
-  reporting a pass without running a block. Keep fixtures inside their leg and shared readers
-  outside every leg.
+  reporting a pass without running a block. The `unknown-contract` leg (gh-ocannl-2265)
+  renames one live Bash gate in a private copy, runs it alone and checks exit 1 with the
+  Python diagnostic. With the dispatch refusal removed that same gate exits 0.
+  Keep fixtures inside their leg and shared readers outside every leg.
 - Testing another copy of the script (gh-ocannl-1925): `tools/test-test-run.sh --subject FILE`
   (or `OCANNL_TOOL_HARNESS_SUBJECT=FILE`; the option wins) runs the legs against FILE in place of
   `tools/test-run.sh`, so "this leg fails against the previous script" is
@@ -4898,6 +4900,9 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   is redirected into scratch before execution, with a leftover-path refusal. The
   fixtures cover direct and mirror-list sources in deb822 and one-line layouts,
   first-attempt success, recovery after 124/137/100, and two failed capped attempts.
+  A deb822 Azure block without Suites and a mirror list without Azure each refuse with
+  the exact diagnostic, one attempt and an unchanged source (gh-ocannl-2265). Bypassing
+  each refusal in a scratch body lets the same input reach a successful second attempt.
   Exact source checks include security suite splitting and unrelated sources. Controls
   reject timeout, Python-indentation and shell-continuation drift in one copy, and the first rewriter from staging#1934's
   `f74120cfd6654f43ba371312742f1862cad7c7ca`: direct sources pass, both mirror-list
@@ -5646,7 +5651,10 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   fingerprint. Each script also runs by hand, from any directory, after a toolkit upgrade. A new leg
   is a row and a script with that contract; `sweep_remote_fixture.sh` drives the rows through
   stand-ins (and the `native-on-red`, `diag-leg-without-token` mutants), `sweep_leg_scripts.sh` the
-  real scripts against a fake dune. On 2026-11-02 the parity leg's first run on master said
+  real scripts against a fake dune. Its missing-Python fixture uses a private tool allowlist
+  to exclude the macOS system Python shim (gh-ocannl-2265). With the guard removed, the same
+  exit 2 comes from the digest checker fallback, so the exact verdict distinguishes them.
+  On 2026-11-02 the parity leg's first run on master said
   `STEP BROKE`: building cifar_resnet raised `Shape_error: tracing the shape scheme model: occurs
   check failed` under the default `op_shape_schemes=check` (green with it `off`).
 - The in-flight view is `$STATE/runs/<stamp>.json` (schema 1, gh-ocannl-2220),
