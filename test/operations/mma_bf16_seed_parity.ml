@@ -125,9 +125,9 @@ let f16_mma_capable =
    (gfx1151: 30 of 1024 cells differ in every seed on these signed, f32-exact inputs, where the
    one-sign census fixtures below agree bitwise). *)
 (* Whether the default policy's uniform-f16 tile is available per statement, by the descriptor's own
-   judgment: CUDA sm_70-sm_75 advertise the triple but no wide scope, so under the wide-resolving
-   auto (gh-ocannl-2195) their uniform-f16 seeds are withheld and the default legs have nothing to
-   compare. *)
+   judgment: CUDA sm_70-sm_74 advertise the triple but no per-statement wide scope, so under the
+   wide-resolving auto (gh-ocannl-2195) their per-statement uniform-f16 seeds are withheld and the
+   default legs have nothing to compare (sm_75-79 have one since gh-ocannl-2284). *)
 let f16_auto_capable =
   lazy
     (on_gpu

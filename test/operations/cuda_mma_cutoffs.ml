@@ -52,12 +52,13 @@ let capabilities = Array.of_list_map ccs ~f:(fun cc -> M.capability ~cc)
 let capability cc = capabilities.(cc)
 
 (* The resolver's verdict at [cc]: the arm the hooks select for these storage precisions, if any,
-   and whether the device meets its floor. Both hooks dispatch on [Cuda_mma.resolve_arm], which
-   [mma_arm] projects, and a hook that declines its arm on capability declines to the scalar
-   fallback, never to another arm (gh-ocannl-1232), so the selected arm's floor is the hooks' whole
-   capability gate. *)
+   and whether the device meets its floor. Both hooks dispatch on [Cuda_mma.resolve_arm] at the
+   device's own capability (which since gh-ocannl-2284 picks among arms: uniform f16 per statement
+   is m16n8k8 below m16n8k16's floor), which [mma_arm] projects, and a hook that declines its arm on
+   capability declines to the scalar fallback, never to another arm (gh-ocannl-1232), so the
+   selected arm's floor is the hooks' whole capability gate. *)
 let resolver_admits ~cc ~scope (a_prec, b_prec, d_prec) =
-  match M.mma_arm ~a_prec ~b_prec ~d_prec ~scope with
+  match M.mma_arm ~cc ~a_prec ~b_prec ~d_prec ~scope with
   | None -> false
   | Some { BI.arm_floor; _ } -> Option.for_all arm_floor ~f:(fun floor -> cc >= floor)
 
@@ -90,13 +91,17 @@ let () =
       let mma = Option.value_exn (capability cc) in
       Stdio.printf "sm_%d wide-f16 scopes: %s\n" cc
         (Sexp.to_string (List.sexp_of_t BI.sexp_of_mma_emission_scope mma.mma_f16_wide_acc_scopes)));
+  (* Every floor the resolver's arm checks at some capability of the sweep: the arm itself depends
+     on the capability, so no single one shows every floor. *)
   let resolver_floors =
     List.concat_map policies ~f:(fun policy ->
         under policy (fun () ->
             List.concat_map scopes ~f:(fun scope ->
-                List.filter_map triples ~f:(fun (a_prec, b_prec, d_prec) ->
-                    Option.bind (M.mma_arm ~a_prec ~b_prec ~d_prec ~scope) ~f:(fun arm ->
-                        arm.BI.arm_floor)))))
+                List.concat_map triples ~f:(fun (a_prec, b_prec, d_prec) ->
+                    List.filter_map ccs ~f:(fun cc ->
+                        Option.bind (M.mma_arm ~cc ~a_prec ~b_prec ~d_prec ~scope) ~f:(fun arm ->
+                            arm.BI.arm_floor))
+                    |> dedup))))
     |> dedup
   in
   Stdio.eprintf

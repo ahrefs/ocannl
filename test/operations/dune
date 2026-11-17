@@ -6414,8 +6414,32 @@
  (modules cuda_mma_cutoffs)
  (libraries base stdio arrayjit.ir arrayjit.autotune arrayjit.verdict))
 
+; gh-ocannl-2284: the m16n8k8 per-statement uniform-f16 arm, forced on the attached CUDA device
+; through Cuda_mma.with_resolution_ceiling, against the m16n8k16 arm and the serial rendering. The
+; premises and the serial reference run on every backend; every tile claim is a CUDA leg.
+
 (test
- ; Compile-only NVRTC witness, selected only for CUDA runs. Context.auto reads the backend.
+ (name cuda_mma_k8_parity)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules cuda_mma_k8_parity)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  test_utils
+  arrayjit.utils
+  arrayjit.context)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ ; NVRTC and driver-JIT witness (modules loaded, no kernel launched), selected only for CUDA runs.
+ ; Context.auto reads the backend.
  (name cuda_wmma_floor)
  (package neural_nets_lib)
  (enabled_if
@@ -6435,7 +6459,7 @@
   (select
    cuda_wmma_floor.ml
    from
-   (cudajit.nvrtc -> cuda_wmma_floor.real.ml)
+   (cudajit.nvrtc cudajit.cuda ctypes -> cuda_wmma_floor.real.ml)
    (-> cuda_wmma_floor.missing.ml))
   arrayjit.context
   arrayjit.utils)

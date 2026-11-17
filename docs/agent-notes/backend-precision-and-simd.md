@@ -953,8 +953,9 @@ files.
   serial loop (the f16 census below), so a narrow default made values depend on the crowned
   schedule; Metal stays narrow (its half tile and serial loop are both per-step, bitwise equal).
   The seeding side reads the same constant from `mma_capability.mma_f16_auto_wide`, so under a
-  wide-resolving auto CUDA sm_70-79 admits fragment-only uniform-f16 seeds and withholds
-  per-statement seeds, exactly as under `Fp16_wide` (gh-ocannl-2251). `Fp16_narrow` (`true`) is
+  wide-resolving auto CUDA sm_70-74 admits fragment-only uniform-f16 seeds and withholds
+  per-statement seeds, exactly as under `Fp16_wide` (gh-ocannl-2251); sm_75-79 admits both since
+  gh-ocannl-2284's m16n8k8 arm. `Fp16_narrow` (`true`) is
   the gh-516 CPU opt-in and, on the GPUs, the
   f16-accumulate arms (what `performance`/`approximate` set). `Fp16_wide` (`false` — note the repurposing: an explicit
   old-style `false` now REQUESTS strict wide) gives f16 accumulators f32 residency on every
@@ -962,9 +963,23 @@ files.
   mma story is per-EMISSION-SCOPE all-or-nothing (gh-ocannl-545, gh-ocannl-836), through the
   `Numerics.fp16_accum_wide` policy predicate and the backend capability's scope list. On CUDA
   sm_80+ the per-statement uniform-f16 statement routes to the f32-accumulate inline-PTX m16n8k16
-  arm (the bf16 uniform arm's body parameterized by `mma16_spellings` — the PTX fragment layouts
+  arm (the bf16 uniform arm's body parameterized by `m16n8k16_spelling` — the PTX fragment layouts
   are shared by .f16/.bf16; marker `(mma-f16)`, arch floor 80 from `Cuda_mma.arm_floor`), and its
-  f16-accumulate wmma combo is gated off. The persistent-fragment scope is wmma's `__half` x
+  f16-accumulate wmma combo is gated off. On sm_75-79 it routes to `M16n8k8_f16` instead
+  (gh-ocannl-2284; marker `(mma-f16-k8)`, floor 75): m16n8k8's fragments are m16n8k16's first `k`
+  half, so the same body renders `depth / 8` halves per instruction, with the same converted `d`.
+  `Cuda_mma.f16_wide_arm ~cc` is the one place that choice is made, read by `resolve_arm ~cc` and
+  by `capability`'s `mma_f16_wide_acc_scopes`, so the resolver depends on the device's capability
+  for this triple alone — it picks among arms, never whether one exists (`cuda_mma_arms`). The
+  arm gathers plain operands only (`Cuda_mma.arm_reads_swizzled`): no seed stages uniform f16
+  swizzled. NVRTC passes inline `asm` through to PTX unassembled, so an `mma.sync` shape's floor
+  is shown by the driver's PTX assembler (`cuModuleLoadDataEx`), not by an NVRTC refusal:
+  `cuda_wmma_floor` loads the m16n8k8 witness at sm_75 and has it refused retargeted to sm_70,
+  and the m16n8k16 f16 control at sm_80 and refused at sm_75. To execute an older device's arm
+  on a newer one, `Cuda_mma.with_resolution_ceiling ~cc` caps only the resolution (acceptance,
+  descriptor and nvrtc target keep the device's own capability; no config key or library module
+  enters it): `cuda_mma_k8_parity` runs m16n8k8 on sm_120 bitwise against m16n8k16 and the serial
+  loop. The persistent-fragment scope is wmma's `__half` x
   `__half` -> `float` fragments behind a converted `d` boundary since gh-ocannl-925 (the
   `wmma-f16-wide` combo, `wc_d_cvt`; see the coordinate-table bullet below); its instruction
   floor is sm_70, independently of the per-statement m16n8k16 arm (gh-ocannl-2251).
@@ -972,7 +987,7 @@ files.
   f32 WMMA PTX, with bf16 refused at that target. NVRTC 13.5.37 rejects compute_70; older NVRTC
   is probed there too when accepted. Its `cuda_wmma_floor-missing` alias forces the missing-NVRTC
   arm and checks the same golden while recording environment skips for its claims. No sm_70-79
-  execution is implied. Lowering this floor also
+  execution is implied (the m16n8k8 arm's execution is `cuda_mma_k8_parity`'s, on a later device). Lowering this floor also
   lowers shipping PTX on later devices to compute_75 unless another marker (notably `cp.async`)
   requires 80. Before gh-ocannl-925 the list was `[Mma_per_statement]`, which kept only
   candidates whose emitted accumulator has no enclosing
@@ -994,7 +1009,7 @@ files.
   staged. Placement enablement applies the same resolver to its unstaged eligibility gate, so a
   device with no applicable wide scope cannot spend its placement budget unlocking an empty
   family. Since gh-ocannl-925 no tensor-core backend trades multi-statement f16 legs under the wide
-  policy (CUDA sm_70-79 advertises only the fragment scope). The resolution is per backend — do
+  policy (CUDA sm_70-74 advertises only the fragment scope). The resolution is per backend — do
   not write code or tests assuming `auto` equals either explicit mode; a test about the narrow
   arms names `Fp16_narrow` (`Test_utils.with_fp16_narrow`), and `accum_width.ml`'s default-policy
   legs name each backend's resolution independently. Pinned by: `accum_width.ml`'s universal f16 legs

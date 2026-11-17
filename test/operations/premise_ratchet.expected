@@ -3,6 +3,7 @@ test/operations/accum_width.ml: 1 uncovered, 0 covered
 test/operations/autotune_grid_record.ml: 1 uncovered, 0 covered
 test/operations/back_to_back_runs.ml: 1 uncovered, 0 covered
 test/operations/conv_twin_packing.ml: 1 uncovered, 0 covered
+test/operations/cuda_mma_k8_parity.ml: 0 uncovered, 1 covered
 test/operations/default_prefill.ml: 1 uncovered, 0 covered
 test/operations/deferred_hit_compiles.ml: 1 uncovered, 0 covered
 test/operations/discriminating_values.ml: 2 uncovered, 0 covered

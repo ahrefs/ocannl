@@ -1,11 +1,31 @@
-cuda: the descriptor admits a storage triple, scope and policy exactly where the arm table has an arm: true
-cuda: some storage triple has an arm: true
-cuda: some storage triple has no arm: true
-cuda: every advertised format triple is reached by a storage triple with an arm: true
-cuda: every staged layout's format triple has a format tile: true
-cuda: the operand loads are described exactly where the arm table has an arm: true
-cuda: every rendered reduction loop loads its operands as the cost model counts them: true
-cuda: some rendered reduction loop loads an operand through ldmatrix: true
+cuda sm_70: the descriptor admits a storage triple, scope and policy exactly where the arm table has an arm: true
+cuda sm_70: some storage triple has an arm: true
+cuda sm_70: some storage triple has no arm: true
+cuda sm_70: every advertised format triple is reached by a storage triple with an arm: true
+cuda sm_70: the operand loads are described exactly where the arm table has an arm: true
+cuda sm_70: every rendered reduction loop loads its operands as the cost model counts them: true
+cuda sm_75: the descriptor admits a storage triple, scope and policy exactly where the arm table has an arm: true
+cuda sm_75: some storage triple has an arm: true
+cuda sm_75: some storage triple has no arm: true
+cuda sm_75: every advertised format triple is reached by a storage triple with an arm: true
+cuda sm_75: the operand loads are described exactly where the arm table has an arm: true
+cuda sm_75: every rendered reduction loop loads its operands as the cost model counts them: true
+cuda sm_80: the descriptor admits a storage triple, scope and policy exactly where the arm table has an arm: true
+cuda sm_80: some storage triple has an arm: true
+cuda sm_80: some storage triple has no arm: true
+cuda sm_80: every advertised format triple is reached by a storage triple with an arm: true
+cuda sm_80: every staged layout's format triple has a format tile: true
+cuda sm_80: the operand loads are described exactly where the arm table has an arm: true
+cuda sm_80: every rendered reduction loop loads its operands as the cost model counts them: true
+cuda sm_80: some rendered reduction loop loads an operand through ldmatrix: true
+cuda sm_89: the descriptor admits a storage triple, scope and policy exactly where the arm table has an arm: true
+cuda sm_89: some storage triple has an arm: true
+cuda sm_89: some storage triple has no arm: true
+cuda sm_89: every advertised format triple is reached by a storage triple with an arm: true
+cuda sm_89: every staged layout's format triple has a format tile: true
+cuda sm_89: the operand loads are described exactly where the arm table has an arm: true
+cuda sm_89: every rendered reduction loop loads its operands as the cost model counts them: true
+cuda sm_89: some rendered reduction loop loads an operand through ldmatrix: true
 metal: the descriptor admits a storage triple, scope and policy exactly where the arm table has an arm: true
 metal: some storage triple has an arm: true
 metal: some storage triple has no arm: true

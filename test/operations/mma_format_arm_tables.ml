@@ -9,10 +9,10 @@
    label (gh-ocannl-545); an arm the descriptor never admits is a rendering no seed reaches.
    [schedule_mma_matmul]'s format-triple leg ties them by rendering, which needs the matching GPU;
    here both tables are evaluated as functions, with no device and no toolkit, for every backend:
-   CUDA's [Ir.Cuda_mma] at a compute capability that meets every arm's floor (the floors' own axis
-   is [cuda_mma_cutoffs]'), Metal's [Ir.Metal_mma] and HIP's [Ir.Hip_mma] (the descriptors their
-   backends install when the device set qualifies), and cc's live tables, which advertise no format
-   and have no arm.
+   CUDA's [Ir.Cuda_mma] at every arm's floor (the floors' own axis is [cuda_mma_cutoffs]'; since
+   gh-ocannl-2284 no single capability renders every arm), Metal's [Ir.Metal_mma] and HIP's
+   [Ir.Hip_mma] (the descriptors their backends install when the device set qualifies), and cc's
+   live tables, which advertise no format and have no arm.
 
    Nothing below names a format, an arm or a policy. The descriptor is read through the consumer's
    own lookup ([Autotune.mma_tile_for_precisions_in_scope], the policy-resolved format triples and
@@ -89,10 +89,10 @@ type table = {
           the backend's acceptance declines the operands. *)
 }
 
-(* The lowest compute capability every CUDA arm emits at: above it the descriptor and the resolver
-   both stop changing. *)
-let cuda_cc =
-  Option.value_exn (List.max_elt (List.map Cuda.all_of_arm ~f:Cuda.arm_floor) ~compare:Int.compare)
+(* Every CUDA arm's floor: the capabilities where the descriptor and the resolver can change, and
+   since gh-ocannl-2284 where the resolver picks among arms (uniform f16 per statement is m16n8k8
+   below m16n8k16's floor), so no one capability renders every arm. Each gets its own table. *)
+let cuda_ccs = List.dedup_and_sort ~compare:Int.compare (List.map Cuda.all_of_arm ~f:Cuda.arm_floor)
 
 (* Leading dimensions no tile constraint cares about: the counter reads loop structure, not
    addresses. *)
@@ -111,88 +111,90 @@ let destination = function
 let rendered_by arm render ~a_prec ~b_prec ~d_prec ~scope =
   Option.map (arm ~a_prec ~b_prec ~d_prec ~scope) ~f:(fun _ -> render)
 
+let cuda_table cuda_cc =
+  {
+    name = Printf.sprintf "cuda sm_%d" cuda_cc;
+    mma = Cuda.capability ~cc:cuda_cc;
+    arm = Cuda.mma_arm ~cc:cuda_cc;
+    device_floor = Some cuda_cc;
+    fragments = Cuda.operand_fragments ~cc:cuda_cc;
+    loads = Cuda.operand_loads ~cc:cuda_cc;
+    k_loop =
+      (fun ~a_prec ~b_prec ~d_prec ~scope ->
+        match Cuda.resolve_arm ~cc:cuda_cc ~a_prec ~b_prec ~d_prec ~scope with
+        | Some (Cuda.Wmma kind) ->
+            Some
+              (fun ~ta ~tb ~a ~b ~m ~n ~k ->
+                Option.some_if
+                  (Cuda.wmma_accepts kind ~cc:cuda_cc ~m ~n ~k ~d:(destination scope) ~a:(lda, a)
+                     ~b:(ldb, b))
+                  (Cuda.wmma_k_loop_lines kind ~acc:"acc" ~ta ~tb ~lda ~ldb ~m ~n ~k))
+        | Some (Cuda.Inline_ptx inline) ->
+            (* A fragment scope's nested calls are update-only against its register array. *)
+            let resident =
+              match scope with BI.Mma_fragment_scope -> Some "acc" | BI.Mma_per_statement -> None
+            in
+            Some
+              (fun ~ta ~tb ~a ~b ~m ~n ~k ->
+                Option.some_if
+                  (Cuda.inline_ptx_accepts inline ~cc:cuda_cc ~m ~n ~k ~a ~b)
+                  (snd
+                     (Cuda.inline_ptx_statement_lines inline ~a_prec ~b_prec ~resident ~ta ~tb ~lda
+                        ~ldb ~ldd ~a_swz:(Cuda.ldmatrix_eligible a)
+                        ~b_swz:(Cuda.ldmatrix_eligible b) ~m ~n ~k)))
+        | None -> None);
+  }
+
 let tables =
   let cpu = Context.cpu () in
   let cpu_caps = Context.codegen_capabilities cpu in
-  [
-    {
-      name = "cuda";
-      mma = Cuda.capability ~cc:cuda_cc;
-      arm = Cuda.mma_arm;
-      device_floor = Some cuda_cc;
-      fragments = Cuda.operand_fragments;
-      loads = Cuda.operand_loads;
-      k_loop =
-        (fun ~a_prec ~b_prec ~d_prec ~scope ->
-          match Cuda.resolve_arm ~a_prec ~b_prec ~d_prec ~scope with
-          | Some (Cuda.Wmma kind) ->
-              Some
-                (fun ~ta ~tb ~a ~b ~m ~n ~k ->
-                  Option.some_if
-                    (Cuda.wmma_accepts kind ~cc:cuda_cc ~m ~n ~k ~d:(destination scope) ~a:(lda, a)
-                       ~b:(ldb, b))
-                    (Cuda.wmma_k_loop_lines kind ~acc:"acc" ~ta ~tb ~lda ~ldb ~m ~n ~k))
-          | Some (Cuda.Inline_ptx inline) ->
-              (* A fragment scope's nested calls are update-only against its register array. *)
-              let resident =
-                match scope with
-                | BI.Mma_fragment_scope -> Some "acc"
-                | BI.Mma_per_statement -> None
-              in
-              Some
-                (fun ~ta ~tb ~a ~b ~m ~n ~k ->
-                  Option.some_if
-                    (Cuda.inline_ptx_accepts inline ~cc:cuda_cc ~m ~n ~k ~a ~b)
-                    (snd
-                       (Cuda.inline_ptx_statement_lines inline ~a_prec ~b_prec ~resident ~ta ~tb
-                          ~lda ~ldb ~ldd ~a_swz:(Cuda.ldmatrix_eligible a)
-                          ~b_swz:(Cuda.ldmatrix_eligible b) ~m ~n ~k)))
-          | None -> None);
-    };
-    {
-      name = "metal";
-      mma = Some Ir.Metal_mma.capability;
-      arm = Ir.Metal_mma.mma_arm;
-      device_floor = None;
-      fragments = Ir.Metal_mma.operand_fragments;
-      loads = Ir.Metal_mma.operand_loads;
-      k_loop =
-        (* [Metal_mma] states no acceptance predicate of its own; its hooks take plain operands only
-           (no [ldmatrix] analogue, gh-ocannl-1456). *)
-        rendered_by Ir.Metal_mma.mma_arm (fun ~ta ~tb ~a:(_, a_layout) ~b:(_, b_layout) ~m ~n ~k ->
-            let plain = function `Plain -> true | `Swizzled_b128 -> false in
-            Option.some_if
-              (plain a_layout && plain b_layout)
-              (Ir.Metal_mma.k_loop_lines ~a_frag:"A" ~b_frag:"B" ~acc:"acc" ~ta ~tb ~lda ~ldb ~m ~n
-                 ~k));
-    };
-    {
-      name = "hip";
-      mma = Some Ir.Hip_mma.capability;
-      arm = Ir.Hip_mma.mma_arm;
-      device_floor = None;
-      fragments = Ir.Hip_mma.operand_fragments;
-      loads = Ir.Hip_mma.operand_loads;
-      k_loop =
-        (fun ~a_prec ~b_prec ~d_prec ~scope ->
-          rendered_by Ir.Hip_mma.mma_arm
-            (fun ~ta ~tb ~a ~b ~m ~n ~k ->
+  List.map cuda_ccs ~f:cuda_table
+  @ [
+      {
+        name = "metal";
+        mma = Some Ir.Metal_mma.capability;
+        arm = Ir.Metal_mma.mma_arm;
+        device_floor = None;
+        fragments = Ir.Metal_mma.operand_fragments;
+        loads = Ir.Metal_mma.operand_loads;
+        k_loop =
+          (* [Metal_mma] states no acceptance predicate of its own; its hooks take plain operands
+             only (no [ldmatrix] analogue, gh-ocannl-1456). *)
+          rendered_by Ir.Metal_mma.mma_arm
+            (fun ~ta ~tb ~a:(_, a_layout) ~b:(_, b_layout) ~m ~n ~k ->
+              let plain = function `Plain -> true | `Swizzled_b128 -> false in
               Option.some_if
-                (Ir.Hip_mma.accepts ~a_prec ~b_prec ~d_prec ~m ~n ~k ~d:(destination scope)
-                   ~a:(lda, a) ~b:(ldb, b))
-                (Ir.Hip_mma.k_loop_lines ~ab_typ:"AB" ~acc:"acc" ~ta ~tb ~lda ~ldb ~m ~n ~k))
-            ~a_prec ~b_prec ~d_prec ~scope);
-    };
-    {
-      name = "cc";
-      mma = (Context.hardware_limits cpu).BI.mma;
-      arm = cpu_caps.BI.mma_arm;
-      device_floor = None;
-      fragments = cpu_caps.BI.mma_operand_fragments;
-      loads = cpu_caps.BI.mma_operand_loads;
-      k_loop = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
-    };
-  ]
+                (plain a_layout && plain b_layout)
+                (Ir.Metal_mma.k_loop_lines ~a_frag:"A" ~b_frag:"B" ~acc:"acc" ~ta ~tb ~lda ~ldb ~m
+                   ~n ~k));
+      };
+      {
+        name = "hip";
+        mma = Some Ir.Hip_mma.capability;
+        arm = Ir.Hip_mma.mma_arm;
+        device_floor = None;
+        fragments = Ir.Hip_mma.operand_fragments;
+        loads = Ir.Hip_mma.operand_loads;
+        k_loop =
+          (fun ~a_prec ~b_prec ~d_prec ~scope ->
+            rendered_by Ir.Hip_mma.mma_arm
+              (fun ~ta ~tb ~a ~b ~m ~n ~k ->
+                Option.some_if
+                  (Ir.Hip_mma.accepts ~a_prec ~b_prec ~d_prec ~m ~n ~k ~d:(destination scope)
+                     ~a:(lda, a) ~b:(ldb, b))
+                  (Ir.Hip_mma.k_loop_lines ~ab_typ:"AB" ~acc:"acc" ~ta ~tb ~lda ~ldb ~m ~n ~k))
+              ~a_prec ~b_prec ~d_prec ~scope);
+      };
+      {
+        name = "cc";
+        mma = (Context.hardware_limits cpu).BI.mma;
+        arm = cpu_caps.BI.mma_arm;
+        device_floor = None;
+        fragments = cpu_caps.BI.mma_operand_fragments;
+        loads = cpu_caps.BI.mma_operand_loads;
+        k_loop = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
+      };
+    ]
 
 let triples =
   List.concat_map Ir.Ops.all_precs ~f:(fun a_prec ->
@@ -416,8 +418,13 @@ let () =
          ^ ": every rendered reduction loop loads its operands as the cost model counts them")
           (List.filter_map counted ~f:(fun c -> c.agrees))
           ~f:Fn.id;
-      (* The [ldmatrix] loads a description names are counted somewhere, not only declined. *)
-      if List.exists counted ~f:(fun c -> c.ldmatrix) then
+      (* The [ldmatrix] loads a description names are counted somewhere, not only declined, on a
+         device whose descriptor stages a swizzled layout for them: below every staging arm's floor
+         (CUDA sm_70 and sm_75) the arms that would load through [ldmatrix] all decline. *)
+      let stages =
+        Option.exists table.mma ~f:(fun mma -> not (List.is_empty mma.BI.mma_staged_layouts))
+      in
+      if stages && List.exists counted ~f:(fun c -> c.ldmatrix) then
         p_exists (table.name ^ ": some rendered reduction loop loads an operand through ldmatrix")
           counted ~f:(fun c -> c.ldmatrix && Option.is_some c.agrees));
   N.set_policy saved

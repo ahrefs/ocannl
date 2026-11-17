@@ -608,18 +608,20 @@ end = struct
       (* gh-ocannl-680: [Fp16_wide] gives f16 accumulators f32 residency on every backend, and since
          gh-ocannl-2195 so does [Fp16_auto] here ([Cuda_mma.fp16_accum_wide]); the uniform-f16 mma
          legs keep width-uniform with it through the f32-accumulate inline-PTX m16n8k16 arm per
-         statement and the wmma f32 fragments with a converted [d] in fragment scope
-         (gh-ocannl-925), both in [mma_f16_wide_acc_scopes]. Under [Fp16_narrow] f16 keeps storage
-         residency, matching the f16-accumulate wmma triple. *)
+         statement (m16n8k8 below sm_80, gh-ocannl-2284) and the wmma f32 fragments with a converted
+         [d] in fragment scope (gh-ocannl-925), both in [mma_f16_wide_acc_scopes]. Under
+         [Fp16_narrow] f16 keeps storage residency, matching the f16-accumulate wmma triple. *)
       | Ops.Half_prec _ when Cuda_mma.fp16_accum_wide () -> Ops.single
       | Ops.Fp8_prec _ when (Numerics.get ()).Numerics.narrow_compute_f32 -> Ops.single
       | _ -> prec
 
     (* The arm variant both mma hooks dispatch on, projected: [Cuda_mma.resolve_arm] and its floors,
-       markers and tiles are pure functions of precisions, policy and scope, kept outside this
-       [cudajit]-gated library so they are tested wherever OCANNL builds (gh-ocannl-1214,
-       gh-ocannl-1232). *)
-    let mma_arm = Cuda_mma.mma_arm
+       markers and tiles are pure functions of precisions, policy, scope and compute capability,
+       kept outside this [cudajit]-gated library so they are tested wherever OCANNL builds
+       (gh-ocannl-1214, gh-ocannl-1232). Resolved at the attached devices' minimum capability, as
+       the hooks resolve it (gh-ocannl-2284: uniform f16 per statement is m16n8k8 below sm_80). *)
+    let mma_arm ~a_prec ~b_prec ~d_prec ~scope =
+      Cuda_mma.mma_arm ~cc:(min_compute_capability ()) ~a_prec ~b_prec ~d_prec ~scope
 
     (* The converted [d] boundary of a wmma accumulator-fragment array whose element type is not the
        destination's storage type (gh-ocannl-925, [wc_d_cvt]): [`Load] fills [frag][__mi][__ni] from
@@ -699,8 +701,11 @@ end = struct
           Cuda_mma.ldmatrix_eligible (space, layout)
       | `Fragment _, (`Plain | `Swizzled_b128) -> false
 
-    let mma_operand_loads = Cuda_mma.operand_loads
-    let mma_operand_fragments = Cuda_mma.operand_fragments
+    let mma_operand_loads ~a_prec ~b_prec ~d_prec ~scope =
+      Cuda_mma.operand_loads ~cc:(min_compute_capability ()) ~a_prec ~b_prec ~d_prec ~scope
+
+    let mma_operand_fragments ~a_prec ~b_prec ~d_prec ~scope =
+      Cuda_mma.operand_fragments ~cc:(min_compute_capability ()) ~a_prec ~b_prec ~d_prec ~scope
 
     (* The inline-PTX arms' one operand predicate ([Cuda_mma.inline_ptx_accepts], gh-ocannl-1511),
        shared by statement and scope at this device's compute capability; a [`Fragment] operand is
@@ -757,7 +762,7 @@ end = struct
              every other call is a per-statement one. Each arm's conditions below decline to the
              caller's scalar fallback, never to another arm. *)
           let arm =
-            Cuda_mma.resolve_arm ~a_prec ~b_prec ~d_prec
+            Cuda_mma.resolve_arm ~cc:(min_compute_capability ()) ~a_prec ~b_prec ~d_prec
               ~scope:
                 (match d_space with
                 | `Fragment _ -> Backend_intf.Mma_fragment_scope
@@ -799,7 +804,8 @@ end = struct
                       string
                         (Printf.sprintf "const unsigned char *%s = (const unsigned char *)(" name)
                       ^^ ptr ^^ string ");"
-                  | Cuda_mma.M16n8k16 _ -> ptr_decl name ("const " ^ elt_typ) ptr
+                  | Cuda_mma.M16n8k16 _ | Cuda_mma.M16n8k8_f16 ->
+                      ptr_decl name ("const " ^ elt_typ) ptr
                 in
                 let body ~a_ptr ~b_ptr =
                   (match resident with
@@ -863,7 +869,7 @@ end = struct
                         ^^ hardline ^^ rbrace))
               (* A converted destination (gh-ocannl-925) renders only against the fragment array
                  above: the per-statement scope never resolves to such an arm (the wide-f16
-                 statement is the inline-PTX m16n8k16 arm's), so the guard only keeps a
+                 statement is an inline-PTX arm's, m16n8k16 or m16n8k8), so the guard only keeps a
                  self-contained rendering from ever being minted for one. *)
               | (`Device | `Shared | `Thread) as d_space
                 when Option.is_none d_cvt && accepts (`Addressed (ldd, (d_space, d_layout))) ->
@@ -961,7 +967,8 @@ end = struct
               ^^ hardline ^^ rbrace)
           in
           match
-            Cuda_mma.resolve_arm ~a_prec ~b_prec ~d_prec ~scope:Backend_intf.Mma_fragment_scope
+            Cuda_mma.resolve_arm ~cc:(min_compute_capability ()) ~a_prec ~b_prec ~d_prec
+              ~scope:Backend_intf.Mma_fragment_scope
           with
           | Some (Cuda_mma.Inline_ptx inline as arm)
             when plain d_layout && loadable d_space

@@ -204,7 +204,7 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-; test/operations: compile-only WMMA floor witness, also names the NVRTC bindings.
+; test/operations: the WMMA and m16n8k8 floor witness, also names the NVRTC and driver bindings.
 
 (rule
  (action
@@ -222,6 +222,7 @@
   test_utils
   ll_test
   cudajit_stub
+  ctypes
   arrayjit.context
   arrayjit.utils)
  (preprocess
