@@ -86,7 +86,20 @@ files.
   those dropped index guards (Codex review, rounds 2-6). Under a blend (cc and HIP at a
   float precision, `speculable_select`, whose conditions never mention an index) both arms run by
   contract, so nothing is guarded and no branch is added; a gate's operand keeps its hoisted
-  definitions too (a value test, never a range guard). `hoist_cross_statement_cse` lifts a shared
+  definitions too (a value test, never a range guard). Both licences rest on lowering's invariant
+  that a read able to leave its node sits under an index guard of its own, which
+  `Low_level.validate_guarded_reads` checks at both pipeline ends (gh-ocannl-2258): a `Get` whose
+  index the loop ranges PROVABLY place outside the node's buffer (indices are buffer coordinates,
+  margins included) must sit under an `If` or a `Where` arm testing an index (reading no scope
+  local), or, inline only, under any select or gate whose condition mentions an index (it never
+  blends; a gate only with routine logging off). A gate guards no definition and a value condition
+  guards nothing; a definition is as protected as its least protected occurrence (CSE's
+  `Get_local` uses included, a read inside a body counting wherever that body runs). The exit gate
+  reads the collapsed tree; the entry gate judges a single assignment no local reads as its value,
+  so the two agree on what the collapse inlines. Protection is structural (a wrong-polarity guard
+  passes), and unknown coordinates, `Get_dynamic` and merge buffers get no verdict.
+  `where_arm_scopes` pins the refused shapes (never launched) beside running twins, at both
+  gates. `hoist_cross_statement_cse` lifts a shared
   group only when some member sits outside every `Where` arm, since its lifted body runs
   unconditionally. `Access_fold` keeps `gated` through a `Where` arm's scope bodies (its `arm`
   flag; a gate's still clears it), which the prologue's gated-node decline and the cost floor read.

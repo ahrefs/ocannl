@@ -839,11 +839,11 @@ files.
   ordering its pre-collapse definition refused code that compiles. `Local_scope` binders
   themselves are held to body containment only, on that second run (gh-ocannl-2258: every scope
   body enclosing the definition encloses the access), never to order, because
-  `C_syntax.pp_local_defs` orders them. A binder's diagnostic
-  names every enclosing body, innermost first ("in a guard body inside a loop body"),
-  reconstructed from the gate's own stack of loop, scan and guard statements filtered to the ones
-  whose body `Access_fold`'s context says encloses it. This is still no definite-initialization
-  check. `local_binder_gate` pins refusals and executed in-scope accesses;
+  `C_syntax.pp_local_defs` orders them. A binder's diagnostic names every enclosing body,
+  innermost first ("in a guard body inside a loop body"), reconstructed from the gate's own stack
+  of loop, scan and guard statements filtered to the ones whose body `Access_fold`'s context says
+  encloses it. This is still no definite-initialization check. `local_binder_gate` pins refusals
+  and executed in-scope accesses;
   `local_scope_sibling_reads` protects the hoisted-definition ordering boundary.
 
 - Routine logging traces every `Local_scope` definition a statement renders, wherever the scope

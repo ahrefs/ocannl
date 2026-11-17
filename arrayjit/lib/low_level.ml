@@ -8528,6 +8528,364 @@ let validate_local_binders ?(site = "Low_level.validate_local_binders") ?emissio
   Option.iter (unbound_local_violation ?emission llc) ~f:(fun msg ->
       invalid_arg (site ^ ": " ^ msg))
 
+(** gh-ocannl-2258: the invariant [speculable_select] and [C_syntax]'s [gate_entries] rely on, as a
+    check -- a tensor read the loop ranges can place outside its node sits under an index guard that
+    still protects it where it renders. Lowering emits a read that can be out of range only under a
+    select of its own (the inliner's guarded replay, padding and concatenation guards), and the
+    renderer is free to evaluate everything else eagerly: a select on a value may blend (both arms
+    run), and a gated operator's definitions that no select holds run ahead of its test. A pass that
+    produced [relu_gate(1 - i, (m < 1 ? k : off))] would read [off]'s cells off the buffer at every
+    iteration the gate rejects (a SIGBUS on cc, values correct-looking elsewhere).
+
+    What it reads, and what it deliberately does not:
+    - "Out of range" is PROVED, never presumed: each component of a [Get]'s index, as an exact
+      integer interval over the enclosing [For_loop] / [Scan_loop] ranges (those inside scope bodies
+      included) and the declared [static_range]s, against the node's buffer extent [[0, dim - 1]]
+      (low-level indices are buffer coordinates, a padded node's margins included: lowering shifts
+      them by the left margin), a component after a run of [Sub_axis] against the run's flattened
+      extent. An unknown component ([Concat], a symbol with no declared range), an index of another
+      length than the node's dims, or a dead loop gives no verdict and is accepted. [Get_dynamic]'s
+      indices (its dynamic slot is a placeholder) and merge-buffer reads are not judged; its
+      [dyn_value] is walked as any scalar. Tensor-node bounds candidates are never consulted.
+    - Protection is STRUCTURAL: whether a guard implies the range (its polarity, its bound) is not
+      checked. An index guard is a condition that mentions an index (outside discarded projection
+      operands) and reads no scope local (gh-ocannl-2145: a condition reading a scope local guards
+      nothing). An [If] whose condition mentions an index protects its body, local reads included:
+      it is a real C [if], which nothing is hoisted past or blended through. A [Where] on an index
+      guard protects its arms -- inline reads and definitions; under an enclosing select or gate
+      whose condition reads a local, the renderer keeps such a guard on a definition only when it is
+      evaluable anywhere ({!Scope_order.evaluable_anywhere}), and so does this check. A select or
+      gated operator ([Relu_gate], [Satur01_gate], [And], [Or]) whose condition mentions an index at
+      all, local reads included, never blends ([speculable_select]), so it short-circuits on every
+      backend and protects the INLINE reads of what it selects, the conditions of the selects inside
+      it included -- a gate only while routine logging is off, since [C_syntax.debug_float] prints
+      its operands under the guard around it. A gate protects no definition: [gate_entries] hoists
+      every definition no select holds ahead of the statement. A condition that mentions no index
+      protects nothing: a backend may blend it.
+    - A [Local_scope] body's reads are protected as far as its definition is, relative to the
+      innermost enclosing body. A definition is unprotected when any occurrence is -- its own, or a
+      [Get_local] of its local (a CSE'd copy), directly or inside another unprotected body: a least
+      fixpoint, the disjunction [C_syntax.pp_local_defs] runs a definition under. A read inside a
+      body makes the definition it reads run wherever that body's does, whatever guards sit inside
+      the body ([Scope_order.plan] follows [local_reads]); at statement level a use carries its own
+      select conditions.
+    - At [C_syntax.compile_proc] it reads the tree that renders, after [collapse_exact_scopes]: a
+      single-assignment scope renders inline, where the operator around it short-circuits it.
+    - A projection's discarded operand is skipped, as the renderer skips it. *)
+let unguarded_read_violation ?(inline_single_assignments = false)
+    ?(static_indices : Indexing.static_symbol list = []) (llc : t) : string option =
+  (* The loop and static ranges, as the interval machinery holds them ({!ienv_of_static_indices},
+     {!ienv_extend}); a tensor node's bounds candidate never enters a verdict. *)
+  let static_env = ienv_of_static_indices ~node_bounds:false static_indices in
+  let interval ienv (idx : Indexing.axis_index) =
+    match idx with
+    | Indexing.Sub_axis | Concat _ -> None
+    | Fixed_idx _ | Iterator _ | Affine _ ->
+        let iv = interval_of_index ienv idx in
+        if iv.Interval.exact && iv.integral && Float.is_finite iv.lo && Float.is_finite iv.hi then
+          Some (Float.to_int iv.lo, Float.to_int iv.hi)
+        else None
+  in
+  (* The first axis a read provably leaves, as a description. *)
+  let out_of_range env tn idcs =
+    match Lazy.force tn.Tn.dims with
+    | exception _ -> None
+    | dims when Array.length dims <> Array.length idcs -> None
+    | dims ->
+        (* Buffer coordinates: lowering has already shifted a padded node's semantic index by its
+           left margin ([Assignments]' [apply_padding_offset]), so the margins are in range. A
+           component after a run of [Sub_axis] is a flattened index over the run's extents and its
+           own ([Indexing.Sub_axis]). *)
+        let extent k =
+          let rec run j acc =
+            if j >= 0 && Indexing.equal_axis_index idcs.(j) Sub_axis then
+              run (j - 1) (dims.(j) * acc)
+            else acc
+          in
+          Some (0, run (k - 1) dims.(k) - 1)
+        in
+        Array.find_mapi idcs ~f:(fun k idx ->
+            Option.bind
+              (Option.both (interval env idx) (extent k))
+              ~f:(fun ((lo, hi), (first, last)) ->
+                if lo < first || hi > last then
+                  Some
+                    (Printf.sprintf
+                       "axis %d of its index %s spans [%d, %d] over its loops, outside its extent \
+                        [%d, %d]"
+                       k
+                       (Sexp.to_string ([%sexp_of: Indexing.axis_index array] idcs))
+                       lo hi first last)
+                else None))
+  in
+  let rec mentions_index (s : scalar_t) =
+    match s with
+    | Embed_index _ -> true
+    | Get _ | Get_local _ | Get_merge_buffer _ | Local_scope _ | Constant _ | Constant_bits _ ->
+        false
+    | Get_dynamic { dyn_value = v, _; _ } -> mentions_index v
+    | Unop (_, (a, _)) -> mentions_index a
+    | Binop (op, (a, _), (b, _)) -> (
+        match Ops.binop_conditionality op with
+        | Ops.Only_first -> mentions_index a
+        | Ops.Only_second -> mentions_index b
+        | Ops.Both_operands | Ops.Gated_second -> mentions_index a || mentions_index b)
+    | Ternop (_, (a, _), (b, _), (c, _)) -> mentions_index a || mentions_index b || mentions_index c
+  in
+  let rec reads_local (s : scalar_t) =
+    match s with
+    | Local_scope _ | Get_local _ -> true
+    | Embed_index _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ -> false
+    | Get_dynamic { dyn_value = v, _; _ } -> reads_local v
+    | Unop (_, (a, _)) -> reads_local a
+    | Binop (op, (a, _), (b, _)) -> (
+        match Ops.binop_conditionality op with
+        | Ops.Only_first -> reads_local a
+        | Ops.Only_second -> reads_local b
+        | Ops.Both_operands | Ops.Gated_second -> reads_local a || reads_local b)
+    | Ternop (_, (a, _), (b, _), (c, _)) -> reads_local a || reads_local b || reads_local c
+  in
+  let index_guard c = mentions_index c && not (reads_local c) in
+  (* The locals some [Get_local] reads: a scope one of them names is shared, never collapsed. *)
+  let read_locals = Hash_set.create (module Scope_id) in
+  let rec collect_reads (s : scalar_t) =
+    match s with
+    | Get_local id -> Hash_set.add read_locals id
+    | Local_scope { body; _ } -> collect_stmt body
+    | Constant _ | Constant_bits _ | Embed_index _ | Get _ | Get_merge_buffer _ -> ()
+    | Get_dynamic { dyn_value = v, _; _ } | Unop (_, (v, _)) -> collect_reads v
+    | Binop (_, (a, _), (b, _)) ->
+        collect_reads a;
+        collect_reads b
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        collect_reads a;
+        collect_reads b;
+        collect_reads c
+  and collect_stmt (code : t) =
+    match code with
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier ->
+        ()
+    | Seq (a, b) ->
+        collect_stmt a;
+        collect_stmt b
+    | For_loop { body; _ } | Tile_mma { fallback = body; _ } -> collect_stmt body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun c -> collect_reads c.init);
+        collect_stmt body
+    | If { cond = c, _; body } ->
+        collect_reads c;
+        collect_stmt body
+    | Set { llsc; _ } | Set_local (_, llsc) -> collect_reads llsc
+    | Set_from_vec { arg = a, _; _ } -> collect_reads a
+    | Set_dynamic { dyn_value = v, _; llsc; _ } ->
+        collect_reads v;
+        collect_reads llsc
+  in
+  if inline_single_assignments then collect_stmt llc;
+  (* Routine logging prints a gated operator's operands under the guard around it, not behind the
+     operator's own test ([C_syntax.debug_float]), so with it on a gate protects no inline read. *)
+  let logging = Utils.debug_log_from_routines () in
+  (* A select or gate whose condition mentions an index anywhere (as [speculable_select] reads it,
+     discarded operands and local reads included) never blends: it short-circuits on every backend,
+     so it protects the inline reads of what it selects, whatever else its condition tests. *)
+  let rec never_blends (s : scalar_t) =
+    match s with
+    | Embed_index _ -> true
+    | Get _ | Get_local _ | Get_merge_buffer _ | Local_scope _ | Constant _ | Constant_bits _ ->
+        false
+    | Get_dynamic { dyn_value = v, _; _ } -> never_blends v
+    | Unop (_, (a, _)) -> never_blends a
+    | Binop (_, (a, _), (b, _)) -> never_blends a || never_blends b
+    | Ternop (_, (a, _), (b, _), (c, _)) -> never_blends a || never_blends b || never_blends c
+  in
+  (* [inline]: the position's inline reads are protected; [def]: a definition or use here is;
+     [anywhere_only]: an enclosing condition of this body reads a local, so a new guard protects
+     definitions only if evaluable anywhere; [why]: the constructs around the position that do not
+     protect it, innermost first. *)
+  let module St = struct
+    type t = { inline : bool; def : bool; anywhere_only : bool; why : string list }
+  end in
+  let fresh = { St.inline = false; def = false; anywhere_only = false; why = [] } in
+  let guarded (st : St.t) c =
+    {
+      st with
+      St.inline = true;
+      def = st.def || (not st.anywhere_only) || Scope_order.evaluable_anywhere c;
+    }
+  in
+  (* Occurrences of each scope: (protected, innermost enclosing scope, why). *)
+  let occurrences = Hashtbl.create (module Int) in
+  let mints = Hashtbl.create (module Int) in
+  let reads = ref [] in
+  let occur ~kind (st : St.t) owner (id : scope_id) =
+    Hashtbl.add_multi occurrences ~key:id.scope_id ~data:(st.def, owner, (kind, st.why))
+  in
+  let rec scalar env (st : St.t) owner (s : scalar_t) =
+    match s with
+    | Constant _ | Constant_bits _ | Embed_index _ | Get_merge_buffer _ -> ()
+    | Get (tn, idcs) ->
+        if not st.inline then
+          Option.iter (out_of_range env tn idcs) ~f:(fun what ->
+              reads := (tn, what, owner, st.why) :: !reads)
+    | Get_dynamic { dyn_value = v, _; _ } -> scalar env st owner v
+    | Get_local id ->
+        (* Inside a body, a read of another local makes that definition run wherever the reader's
+           does: [Scope_order.plan] follows [local_reads], which no guard inside the body narrows.
+           At statement level, a use carries its own select conditions. *)
+        let st = if Option.is_some owner then { st with St.def = false } else st in
+        occur ~kind:"read" st owner id
+    | Local_scope { id; body = Set_local (id', value); _ }
+      when inline_single_assignments && equal_scope_id id id' && not (Hash_set.mem read_locals id)
+      ->
+        (* Before [C_syntax.collapse_exact_scopes], a single assignment no local reads may render
+           inline where it stands, so it is judged as its value there. A superset of what collapses:
+           the exit gate judges what survives as a definition. *)
+        scalar env st owner value
+    | Local_scope { id; body; mint; _ } ->
+        occur ~kind:"defined" st owner id;
+        Hashtbl.set mints ~key:id.scope_id ~data:(id, mint);
+        stmt env fresh (Some id.scope_id) body
+    | Unop (_, (a, _)) -> scalar env st owner a
+    | Binop (op, (a, _), (b, _)) -> (
+        match Ops.binop_conditionality op with
+        | Ops.Both_operands ->
+            scalar env st owner a;
+            scalar env st owner b
+        | Ops.Only_first -> scalar env st owner a
+        | Ops.Only_second -> scalar env st owner b
+        | Ops.Gated_second ->
+            scalar env st owner a;
+            let name = Sexp.to_string (Ops.sexp_of_binop op) in
+            let st' =
+              {
+                st with
+                St.inline = st.inline || (never_blends a && not logging);
+                anywhere_only = st.anywhere_only || reads_local a;
+                why =
+                  (if never_blends a then
+                     "in the second operand of " ^ name
+                     ^ ", whose definitions no select holds render ahead of its test: a gate \
+                        guards no definition"
+                   else
+                     "in the second operand of " ^ name
+                     ^ ", whose first operand tests no index: a backend may blend it, and its \
+                        definitions no select holds render ahead of its test")
+                  :: st.why;
+              }
+            in
+            scalar env st' owner b)
+    | Ternop (op, (a, _), (b, _), (c, _)) -> (
+        scalar env st owner a;
+        match Ops.ternop_conditionality op with
+        | Ops.All_three ->
+            scalar env st owner b;
+            scalar env st owner c
+        | Ops.Cond_and_one_arm ->
+            let st' =
+              if index_guard a then guarded st a
+              else
+                {
+                  st with
+                  St.inline = st.inline || never_blends a;
+                  anywhere_only = st.anywhere_only || reads_local a;
+                  why =
+                    (if never_blends a then
+                       "in an arm of a select whose condition reads a scope local, which guards no \
+                        definition"
+                     else
+                       "in an arm of a select whose condition tests no index: a backend may \
+                        evaluate both arms (a blend)")
+                    :: st.why;
+                }
+            in
+            scalar env st' owner b;
+            scalar env st' owner c)
+  and stmt env (st : St.t) owner (code : t) =
+    match code with
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier ->
+        ()
+    | Seq (a, b) ->
+        stmt env st owner a;
+        stmt env st owner b
+    | For_loop { index; from_; to_; body; _ } ->
+        if from_ <= to_ then stmt (ienv_extend env index ~from_ ~to_) st owner body
+    | Scan_loop { index; from_; to_; carried; body; _ } ->
+        List.iter carried ~f:(fun c -> scalar env st owner c.init);
+        if from_ <= to_ then stmt (ienv_extend env index ~from_ ~to_) st owner body
+    | If { cond = c, _; body } ->
+        scalar env st owner c;
+        (* A real C [if] around its whole body: nothing in it is hoisted past the test or blended,
+           so a condition mentioning an index guards it even when it reads a local. *)
+        stmt env
+          (if never_blends c then { st with St.inline = true; def = true } else st)
+          owner body
+    | Tile_mma { fallback; _ } -> stmt env st owner fallback
+    | Set { llsc; _ } | Set_local (_, llsc) -> scalar env st owner llsc
+    | Set_from_vec { arg = a, _; _ } -> scalar env st owner a
+    | Set_dynamic { dyn_value = v, _; llsc; _ } ->
+        scalar env st owner v;
+        scalar env st owner llsc
+  in
+  stmt static_env fresh None llc;
+  (* The least fixpoint: a scope runs unprotected when some occurrence of it does. Each keeps the
+     occurrence that decided it, whose owner was decided strictly earlier: the diagnostic's
+     chain. *)
+  let unprotected = Hashtbl.create (module Int) in
+  let runs_unprotected = function None -> true | Some s -> Hashtbl.mem unprotected s in
+  let changed = ref true in
+  while !changed do
+    changed := false;
+    Hashtbl.iteri occurrences ~f:(fun ~key ~data ->
+        if not (Hashtbl.mem unprotected key) then
+          List.rev data
+          |> List.find ~f:(fun (def, owner, _) -> (not def) && runs_unprotected owner)
+          |> Option.iter ~f:(fun (_, owner, how) ->
+              Hashtbl.set unprotected ~key ~data:(owner, how);
+              changed := true))
+  done;
+  let why = function
+    | [] -> "with no index guard (a Where or If testing an index) around it"
+    | constructs -> String.concat ~sep:", " constructs
+  in
+  let local s =
+    match Hashtbl.find mints s with
+    | Some (id, mint) ->
+        scope_local_prefix s ^ Tn.debug_name id.tn ^ " ("
+        ^ Sexp.to_string (sexp_of_scope_mint mint)
+        ^ ")"
+    | None -> Int.to_string s
+  in
+  (* Why a scope runs unprotected: the first such occurrence's construct, outermost scope last. *)
+  let rec placement s =
+    match Hashtbl.find unprotected s with
+    | None -> ""
+    | Some (owner, (kind, constructs)) -> (
+        "; local scope " ^ local s ^ " is " ^ kind ^ " " ^ why constructs
+        ^
+        match owner with
+        | Some o -> " inside the body of local scope " ^ local o ^ placement o
+        | None -> " at statement level")
+  in
+  List.rev !reads
+  |> List.find_map ~f:(fun (node, what, owner, constructs) ->
+      if not (runs_unprotected owner) then None
+      else
+        let where =
+          match owner with
+          | None -> " " ^ why constructs
+          | Some s -> " in the body of local scope " ^ local s ^ placement s
+        in
+        Some
+          ("a read of " ^ Tn.debug_name node ^ " can be out of range -- " ^ what
+         ^ " -- and no index guard protects it where it renders:" ^ where
+         ^ ". Lowering emits a read that can leave its node only under an index guard of its own \
+            (gh-ocannl-2258)"))
+
+let validate_guarded_reads ?(site = "Low_level.validate_guarded_reads") ?inline_single_assignments
+    ?static_indices (llc : t) : unit =
+  Option.iter (unguarded_read_violation ?inline_single_assignments ?static_indices llc)
+    ~f:(fun msg -> invalid_arg (site ^ ": " ^ msg))
+
 (** {2 Hardware axis analyses}
 
     Phase B of docs/design/axis-types-for-loops.md: pure analyses of hardware-annotated loops.
@@ -13827,6 +14185,10 @@ let optimize_proc ~blends_value_selects (input_ctx : optimize_ctx) static_indice
      impure body's write out of any [Local_scope] -- past the later check, and executing once
      instead of once per user statement. Catch it while it is still visibly a body. *)
   validate_scope_bodies llc;
+  (* gh-ocannl-2258: a read that can leave its node sits under an index guard of its own, same
+     two-gate discipline (codegen holds the exit gate). *)
+  validate_guarded_reads ~site:"Low_level.optimize_proc" ~inline_single_assignments:true
+    ~static_indices llc;
   (* gh-ocannl-696: the scan contract, same two-gate discipline (codegen holds the exit gate). *)
   validate_scan_loops input_ctx.placements llc;
   (* gh-ocannl-1402: one binder per loop symbol, no free symbol -- a lowering generator's defect,

@@ -1260,6 +1260,36 @@ val validate_local_binders : ?site:string -> ?emission:Access_fold.emission -> t
     [C_syntax.compile_proc] on the way out, where every pass and schedule transform has run and a
     [?prelowered] routine arrives too. *)
 
+val unguarded_read_violation :
+  ?inline_single_assignments:bool ->
+  ?static_indices:Indexing.static_symbol list ->
+  t ->
+  string option
+(** gh-ocannl-2258: the predicate form of {!validate_guarded_reads} -- [None] when every tensor read
+    the loop ranges can place outside its node sits under an index guard that protects it where it
+    renders, else a description of the first one, naming the node, the axis and its interval, the
+    scope bodies it sits in and the construct each runs unprotected in. [inline_single_assignments]
+    (default [false]): judge a single-assignment scope no [Get_local] reads as its value where it
+    stands, as [C_syntax.collapse_exact_scopes] may render it -- the view of the tree ahead of the
+    collapse, which [optimize_proc]'s entry gate reads; the exit gate reads the collapsed tree. *)
+
+val validate_guarded_reads :
+  ?site:string ->
+  ?inline_single_assignments:bool ->
+  ?static_indices:Indexing.static_symbol list ->
+  t ->
+  unit
+(** gh-ocannl-2258: the invariant [speculable_select]'s blends and [C_syntax]'s gate hoisting rely
+    on: lowering emits a read that can leave its node only under an index guard of its own -- an
+    [If] or a [Where] arm whose condition tests an index and reads no scope local, or, for an inline
+    read, any select or gated operator whose condition mentions an index (it never blends, so it
+    short-circuits on every backend). A gate guards no definition (its definitions no select holds
+    render ahead of its test), and a value condition guards nothing (a backend may blend it). Out of
+    range is proved over the loop ranges and declared static ranges against the node's buffer
+    extent, never presumed; protection is structural (a guard is not checked to imply the range).
+    Raises [Invalid_argument], prefixed with [site]. Applied at both ends of the pipeline, like
+    {!validate_scope_bodies}. The full boundary is at the implementation. *)
+
 val validate_scan_loops : Tnode.Placements.t -> t -> unit
 (** gh-ocannl-696: the well-formedness contract of {!t.Scan_loop} -- one state node DECLARED virtual
     per carried pair, ids pairwise distinct across the list, inits free of carried state and of the

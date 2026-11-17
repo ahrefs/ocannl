@@ -88,3 +88,33 @@ was_value_test_range: every read of was_value_test_range_x sits under its condit
 was_value_test_nested: Access_fold's Emitted mode walks the 2 scope bodies in the kernel's text order: true
 was_value_test_nested: the values are the closed form's: true
 was_value_test_nested: no test ahead of the statement reads x where only the value test protects it: true
+was_gate_blend: the IR check names the unprotected read: true
+was_gate_blend: the compile gate refuses it: true
+was_gate_blend: the refusal names the read and what fails to protect it: true
+was_gate_blend_in_range: Access_fold's Emitted mode walks the 1 scope bodies in the kernel's text order: true
+was_gate_blend_in_range: the values are the closed form's: true
+was_gate_direct: the IR check names the unprotected read: true
+was_gate_direct: the compile gate refuses it: true
+was_gate_direct: the refusal names the read and what fails to protect it: true
+was_blend_off: the IR check names the unprotected read: true
+was_blend_off: the compile gate refuses it: true
+was_blend_off: the refusal names the read and what fails to protect it: true
+was_unprotected_use: the IR check names the unprotected read: true
+was_unprotected_use: the compile gate refuses it: true
+was_unprotected_use: the refusal names the read and what fails to protect it: true
+was_protected_in_gate: the IR check accepts it: true
+was_protected_in_gate: Access_fold's Emitted mode walks the 1 scope bodies in the kernel's text order: true
+was_protected_in_gate: the values are the closed form's: true
+was_protected_around_gate: the IR check accepts it: true
+was_protected_around_gate: Access_fold's Emitted mode walks the 1 scope bodies in the kernel's text order: true
+was_protected_around_gate: the values are the closed form's: true
+was_protected_if: the IR check accepts it: true
+was_protected_if: Access_fold's Emitted mode walks the 1 scope bodies in the kernel's text order: true
+was_protected_if: the values are the closed form's: true
+was_body_reader_guard: the IR check names the unprotected read: true
+was_body_reader_guard: the compile gate refuses it: true
+was_body_reader_guard: the refusal names the read and what fails to protect it: true
+was_gate_collapsed: the values are the closed form's: true
+was_entry_direct: the entry gate refuses it, naming the read: true
+was_entry_collapsed: the entry view credits the single assignment as inline: true
+was_entry_collapsed: the values are the closed form's: true
