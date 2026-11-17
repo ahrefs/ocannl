@@ -781,7 +781,7 @@ let dump prog =
 let () =
   let started = Mtime_clock.counter () in
   let seconds () = Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9 in
-  let bound = if widen then 1200. else 120. in
+  let batch_seconds = ref [] in
   match only with
   | Some sub ->
       List.iter programs ~f:(fun prog ->
@@ -796,7 +796,11 @@ let () =
         List.concat_map [ single; Ops.int32 ] ~f:(fun prec ->
             List.chunks_of (by_prec prec) ~length:batch_size
             |> List.concat_mapi ~f:(fun k progs ->
-                run_batch ~name:(Printf.sprintf "wsg_%s%d" (prec_name prec) k) progs))
+                let name = Printf.sprintf "wsg_%s%d" (prec_name prec) k in
+                let before = seconds () in
+                let outcomes = run_batch ~name progs in
+                batch_seconds := (name, seconds () -. before) :: !batch_seconds;
+                outcomes))
       in
       let checked =
         List.filter outcomes ~f:(fun o ->
@@ -804,6 +808,7 @@ let () =
       in
       let total = List.length programs in
       let floor = total / 2 in
+      let floor_batches = total / batch_size / 2 in
       p_all ~min:floor "no compile refused a generated program" checked ~f:(fun o ->
           Option.is_none o.refused);
       p_all ~min:floor "every program's compiled values are the replay's" checked ~f:(fun o ->
@@ -886,7 +891,7 @@ let () =
       Stdio.eprintf
         "where_scope_generator on %s: %d programs, %d findings, %d with conditional groups, %d \
          with two, %d with dependent groups, %d out of operand order, %d reading a local where it \
-         is not defined, %.2f s / %.0f s bound (not part of the golden)\n\
+         is not defined, %.2f s in all (not part of the golden)\n\
          %!"
         backend_name total (List.length !findings)
         (List.count checked ~f:(fun o -> o.groups >= 1))
@@ -894,6 +899,26 @@ let () =
         (List.count checked ~f:(fun o -> o.dependent_groups))
         (List.count checked ~f:(fun o -> o.operand_out_of_order))
         (List.count checked ~f:(fun o -> o.shared))
-        (seconds ()) bound;
+        (seconds ());
       p_empty ~min:floor "every disagreement is a known finding" ~over:checked !findings;
-      p "the generator completed within its wall-time bound" Float.(seconds () <= bound)
+      (* The wall-time claim is relative to this run, so a slow or loaded box cannot fail it: a cost
+         blow-up in part of the grammar lands in the batches holding it, and stands out against the
+         run's own median batch (the slowest is 1.5 medians on cc, multidev_cc and Metal); so does a
+         refused batch's retry, one compile per program, where a compile's fixed cost dominates (cc:
+         about 26 medians). A slowdown every batch shares is the box's or the backend's, not this
+         generator's to judge: no absolute bound or single-compile unit holds across boxes and
+         backends (multidev_cc on minix took 185 s, Metal 20 s; Metal's shader cache makes a lone
+         compile 4-13 ms). *)
+      let times = List.map !batch_seconds ~f:snd |> List.sort ~compare:Float.compare in
+      let median = List.nth_exn times (List.length times / 2) in
+      let slowest_name, slowest =
+        Option.value_exn
+          (List.max_elt !batch_seconds ~compare:(fun (_, a) (_, b) -> Float.compare a b))
+      in
+      Stdio.eprintf
+        "where_scope_generator batch times: median %.3f s, slowest %.3f s (%s) (not part of the \
+         golden)\n\
+         %!"
+        median slowest slowest_name;
+      p_all ~min:floor_batches "no batch took more than 10 times the median batch" !batch_seconds
+        ~f:(fun (_, t) -> Float.(t <= 10. * median))

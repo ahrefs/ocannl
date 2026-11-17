@@ -34,4 +34,4 @@ i32: the compiled values differ from the replay wherever it says they change: tr
 where the backend blends a data select, its arm definitions render unconditionally: true
 where the backend short-circuits a data select, its arm definitions render under its condition: true
 every disagreement is a known finding: true
-the generator completed within its wall-time bound: true
+no batch took more than 10 times the median batch: true
