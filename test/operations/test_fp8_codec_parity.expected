@@ -40,3 +40,4 @@ narrowing f64 to fp8 rounds once, not twice: true
 fp8 arithmetic underflow: (2^-16) ** 5 -> 0x0p+0
 magnitudes far below the smallest subnormal narrow to zero: true
 an fp8 operator's underflowing result narrows to zero too: true
+the device narrows bf16 to e5m2 exactly as the host does: true

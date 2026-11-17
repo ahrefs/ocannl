@@ -20,6 +20,8 @@
    saturates to the largest finite while HIP keeps it infinite, and the SIGN of a NaN, which CUDA
    drops and HIP keeps. Each is asserted below only up to the property all four agree on. *)
 
+(* cc-fp-contract: no-contraction -- narrowing uses a product by one, with no addition to fuse *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -42,7 +44,7 @@ let skipped = Verdict.skipped ~backend:backend_name
    assumed: with the source materialized, HIP's underflow defect (gh-ocannl-647) is reproducible
    through this test and its guard is observable; without it, the leg passes in both regimes and
    pins nothing. *)
-let narrow_on_device ?(src_prec = Ir.Ops.single) values =
+let narrow_on_device ?label ?(src_prec = Ir.Ops.single) values =
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
   let src =
@@ -50,16 +52,16 @@ let narrow_on_device ?(src_prec = Ir.Ops.single) values =
       ~output_dims:[ Array.length values ]
       ~top_down_prec:false ()
   in
-  (* The source stays f32, EXPLICITLY. Precision inference otherwise flows the destination's fp8
-     backwards into it, and then the kernel is [dst[i] = src[i]] over two fp8 buffers — a byte copy,
-     with the narrowing having happened on the host when the source was filled. The test then
-     compares the host codec with itself and passes on every backend while emitting no conversion at
-     all. [~top_down_prec:false] and the explicit [update_prec] together are what make the emitted
-     statement a conversion; the generated source is the check ([dst[i] = (fp8)(src[i])], src
-     declared [float *]). *)
+  (* The source stays at [src_prec], EXPLICITLY. Precision inference otherwise flows the
+     destination's fp8 backwards into it, and then the kernel is [dst[i] = src[i]] over two fp8
+     buffers — a byte copy, with the narrowing having happened on the host when the source was
+     filled. The test then compares the host codec with itself and passes on every backend while
+     emitting no conversion at all. [~top_down_prec:false] and the explicit [update_prec] together
+     are what make the emitted statement a conversion; the generated source is the check (a
+     conversion of [src[i]] from a buffer declared at [src_prec]). *)
   Ir.Tnode.update_prec src.Tensor.value src_prec;
   Train.set_materialized src.Tensor.value;
-  let dst = TDSL.O.( *. ) src (TDSL.number 1.0) in
+  let dst = TDSL.O.( *. ) ?label src (TDSL.number 1.0) in
   Ir.Tnode.update_prec dst.Tensor.value Ir.Ops.fp8;
   Train.set_materialized dst.Tensor.value;
   let ctx = Train.forward_once ctx dst in
@@ -70,6 +72,7 @@ let narrow_on_host values =
   Array.map values ~f:(fun v -> Ir.Ops.fp8_to_single (Ir.Ops.single_to_fp8 v))
 
 let two_pow n = Float.(2. ** of_int n)
+let same_bits a b = Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b)
 
 let named name (comp : Ir.Assignments.comp) : Ir.Assignments.comp =
   { comp with asgns = Ir.Assignments.Block_comment (name, comp.asgns) }
@@ -121,10 +124,9 @@ let () =
      it platform-independent (AGENTS.md). *)
   Stdio.printf "narrowed (input -> e5m2):\n";
   Array.iteri decisive ~f:(fun i v -> Stdio.printf "  %h -> %h\n" v device.(i));
-  let same a b = Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b) in
   let disagreements =
     Array.filter_mapi decisive ~f:(fun i v ->
-        if same host.(i) device.(i) then None
+        if same_bits host.(i) device.(i) then None
         else Some (Printf.sprintf "%h: host %h, device %h" v host.(i) device.(i)))
   in
   Array.iter disagreements ~f:(fun d -> Stdio.eprintf "fp8 narrowing disagreement: %s\n" d);
@@ -209,4 +211,31 @@ let () =
   let tiny = [| 4.1359e-25; 8.27e-25; 1.65e-24; 3.31e-24; -4.1359e-25 |] in
   let tdev = narrow_on_device tiny in
   p_all claim (Array.to_list tdev) ~f:(fun x -> Float.(x = 0.));
-  p arith_claim Float.(pow_narrowed = 0.)
+  p arith_claim Float.(pow_narrowed = 0.);
+
+  (* All inputs are exactly representable in bf16. The tiny values hit ROCm's broken window
+     (gh-ocannl-647), far below the e5m2 subnormals and rounding ties used as controls. Compare bits
+     so underflow must also preserve the sign of zero. *)
+  let bf16_vals =
+    [|
+      0x1p-81;
+      -0x1p-81;
+      0x1p-80;
+      -0x1p-80;
+      0x1p-79;
+      -0x1p-79;
+      0x1p-78;
+      -0x1p-78;
+      0x1.4p-80;
+      -0x1.4p-80;
+      0x1.8p-79;
+      -0x1.8p-79;
+      0x1p-16;
+      -0x1.4p-15;
+      0x1p-17;
+      1.375;
+    |]
+  in
+  let bf16_device = narrow_on_device ~label:[ "codec_bf16" ] ~src_prec:Ir.Ops.bfloat16 bf16_vals in
+  p_all2 "the device narrows bf16 to e5m2 exactly as the host does" bf16_device
+    (narrow_on_host bf16_vals) ~f:same_bits
