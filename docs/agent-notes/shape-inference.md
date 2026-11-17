@@ -217,13 +217,13 @@ files.
   `row_glb_reach_executed` pins concrete and bounded-variable late tails in staged stores; the
   variable case drew once for three cells before the retry. No natural program reaching that exact
   path was found; the staged store pins it and its configured draw is an execution smoke check.
-  A mixed row GLB join of a variable with `Sym`, `Affine` or `Concat` holds the incoming
-  inequality so a subsequent equality can reconcile the bounds (gh-ocannl-2269). If the join
-  still has this form in Stage6a, it raises `Shape_error` in either orientation. The cc einsum,
-  conv/pool and program sweep census found zero such joins, including a draw used by a valid
-  window and an open pointwise consumer. Packed `Total_elems` rejects symbolic axes. The staged
-  stores in `test_row_glb_reach` pin the refusals and late equality. Its numeric pins distinguish
-  holding the old GLB: without it the displaced result closes to 1 while its draw is 3.
+  A mixed row GLB join of a variable with `Sym`, `Affine` or `Concat` keeps the existing axis in
+  both orientations and holds the incoming inequality for a subsequent equality (gh-ocannl-2269).
+  If the join still has this form in Stage6a, it raises `Shape_error`. The cc census of einsum,
+  conv/pool, operations concatenation and program sweep tests found zero such joins, including a
+  draw used by a valid window and an open pointwise consumer. Packed `Total_elems` rejects symbolic
+  axes. The staged stores in `test_row_glb_reach` pin the refusals and late equality. Its numeric
+  pins distinguish holding the old GLB: without it the displaced result closes to 1 while its draw is 3.
   An einsum can leave a result's remainder open after its leading axes are known (gh-ocannl-2257).
   In `relu u + (c[3] ++ "a => a...")`, Stage6a held the packed draw's leading GLB. Stage6b then
   closed `relu` empty in `process_shape_row`, and `solve_row_ineq` closed the draw empty against it.

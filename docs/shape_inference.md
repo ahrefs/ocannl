@@ -240,9 +240,11 @@ We tie the direction of inequalities with capturing information in the structure
 
 When a row's GLB joins a dimension variable with a concrete axis other than the broadcast top, it
 keeps the concrete axis and holds the variable's bound (gh-ocannl-2224). A join between a dimension
-variable and a symbolic dimension, a stride or window, or a concatenation holds the incoming
-inequality so an equality can reconcile the bounds (gh-ocannl-2269). If the join still has this form
-in `Stage6a` as rows close by role, it raises `Shape_error` in either orientation.
+variable and a symbolic dimension, a stride or window, or a concatenation keeps the existing GLB
+axis and holds the incoming inequality so an equality can reconcile the bounds (gh-ocannl-2269).
+If the join still has this form in `Stage6a` as rows close by role, it raises `Shape_error` in
+either orientation. From `Stage6b` onward, the branch preceding the GLB merge handles every open
+row by emitting an equation for its middle.
 
 The entry point to shape inference is the shape logic specification, that each operation instance needs to provide. There are shortcuts in the syntax extension `%cd` to make it painless.
 

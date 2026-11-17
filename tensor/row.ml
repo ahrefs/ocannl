@@ -5169,8 +5169,9 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
           let hold_old_glb = ref false in
           let join_dim d1 d2 =
             let hold_mixed kind =
-              (* Give equalities a chance to reconcile the bounds before rows close by role. Stage6a
-                 is the last stage that can reach this join. *)
+              (* Give equalities a chance to reconcile the bounds before rows close by role. From
+                 Stage6b on, the open-row arm above emits an equation for the middle before this arm
+                 can run. *)
               if equal_stage stage Stage6a then
                 raise
                   (Shape_error
