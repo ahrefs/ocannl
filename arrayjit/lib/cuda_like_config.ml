@@ -235,17 +235,19 @@ module Hip = struct
     | Uint64_prec _, Bfloat16_prec _ ->
         ("__ushort_as_bfloat16(ocannl_uint64_to_bfloat16_bits(", "))")
     | _, Bfloat16_prec _ -> ("__float2bfloat16((float)(", "))")
-    | Bfloat16_prec _, _ -> ("(" ^ typ_of_prec to_ ^ ")(__bfloat162float(", "))")
     (* Through the same funnel as the operator bridges. A helper and not a ternary wrapped around
        the operand: a [convert_precision] pair brackets ONE occurrence of its expression, and a
        ternary would name it twice. Float helper arguments state their conversion explicitly,
-       including integer and bool sources; double sources retain their double helper. *)
+       including integer and bool sources; double sources retain their double helper. Match fp8
+       before the general bf16 cast so the exact bf16-to-float widening still reaches the guard. *)
     | _, Fp8_prec _ -> (
         let fn = fp8_from_prec_fn from in
         match from with
         | Ops.Half_prec _ -> (fn ^ "(__half2float(", "))")
+        | Ops.Bfloat16_prec _ -> (fn ^ "(__bfloat162float(", "))")
         | Ops.Double_prec _ -> (fn ^ "(", ")")
         | _ -> (fn ^ "((float)(", "))"))
+    | Bfloat16_prec _, _ -> ("(" ^ typ_of_prec to_ ^ ")(__bfloat162float(", "))")
     | Fp8_prec _, Half_prec _ -> ("__float2half((float)(", "))")
     | ( Fp8_prec _,
         (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _)
