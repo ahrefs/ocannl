@@ -15,7 +15,7 @@
    from metaquot, is itself compiler-reaching).
 
    IDENTITY AND REACH: [dune describe workspace --format csexp], run by this program against the
-   source root ([DUNE_SOURCEROOT]) with a private [--build-dir] in the action's temporary directory,
+   source root ([DUNE_SOURCEROOT]) with a private [--build-dir] under a per-process temporary root,
    so it never shares the running build's lock. It is dune's own resolution of public and private
    names and of external findlib libraries with their [requires]; an external library only a
    [(test)] stanza declares is absent there, and is resolved the same way through a throwaway probe
@@ -171,7 +171,10 @@ type library = {
   include_dirs : string list;
 }
 
-let temp name = Stdlib.Filename.concat (Stdlib.Filename.get_temp_dir_name ()) name
+(* Dune can give concurrent actions the same TMPDIR. Each invocation owns its nested builds and tool
+   output. *)
+let temp_root = lazy (Stdlib.Filename.temp_dir "unused-compiler-deps-" "")
+let temp name = Stdlib.Filename.concat (Lazy.force temp_root) name
 
 (* [dune describe workspace] of the project rooted at [root], in a build directory of its own. *)
 let run_describe ~dune ~root ~tag =
@@ -217,7 +220,7 @@ let run_describe ~dune ~root ~tag =
    unavailable name drops out there as it would in the build. *)
 let probe_project ~tag dune_text =
   let root = temp ("ucd-" ^ tag) in
-  (try Unix.mkdir root 0o755 with Unix.Unix_error (EEXIST, _, _) -> ());
+  Unix.mkdir root 0o755;
   Out_channel.write_all (root ^ "/dune-project") ~data:"(lang dune 3.20)\n";
   Out_channel.write_all (root ^ "/dune") ~data:dune_text;
   root
@@ -298,15 +301,14 @@ let cmi_units dir =
             Option.map (String.chop_suffix f ~suffix:".cmi") ~f:String.capitalize))
 
 (* These tools are action arguments resolved by dune, not shell commands found on PATH. *)
-let capture tool args =
+let capture ~stderr tool args =
   let out = temp "ucd-tool-output" in
   try
     let fd = Unix.openfile out [ O_WRONLY; O_CREAT; O_TRUNC ] 0o644 in
     let pid =
       Exn.protect
         ~finally:(fun () -> Unix.close fd)
-        ~f:(fun () ->
-          Unix.create_process tool (Array.of_list (tool :: args)) Unix.stdin fd Unix.stderr)
+        ~f:(fun () -> Unix.create_process tool (Array.of_list (tool :: args)) Unix.stdin fd stderr)
     in
     let _, status = Unix.waitpid [] pid in
     match status with WEXITED 0 -> Ok (In_channel.read_all out) | _ -> Error "tool did not exit 0"
@@ -342,19 +344,21 @@ let read_archive ~archive text =
     in
     { definitions; interfaces }
 
-let archive_units ~objinfo archive =
-  match capture objinfo [ archive ] with
+let archive_units ?(stderr = Unix.stderr) ~objinfo archive =
+  match capture ~stderr objinfo [ archive ] with
   | Error e ->
       refuse "archive %s: %s" archive e;
       empty_archive
   | Ok text -> read_archive ~archive text
 
-let shared_units ~findlib ~objinfo l =
+let shared_units ?(stderr = Unix.stderr) ~findlib ~objinfo l =
   if l.local then (
     refuse "shared include directory: cannot resolve local archives for %s" l.lib_name;
     empty_archive)
   else
-    match capture findlib [ "query"; "-predicates"; "byte"; "-format"; "%+a"; l.lib_name ] with
+    match
+      capture ~stderr findlib [ "query"; "-predicates"; "byte"; "-format"; "%+a"; l.lib_name ]
+    with
     | Error e ->
         refuse "archive query for %s: %s" l.lib_name e;
         empty_archive
@@ -362,7 +366,7 @@ let shared_units ~findlib ~objinfo l =
         String.split_lines text
         |> List.filter ~f:(fun line -> not (String.is_empty line))
         |> List.fold ~init:empty_archive ~f:(fun acc path ->
-            let info = archive_units ~objinfo path in
+            let info = archive_units ~stderr ~objinfo path in
             {
               definitions = info.definitions @ acc.definitions;
               interfaces = info.interfaces @ acc.interfaces;
@@ -601,7 +605,7 @@ let refuses f =
   refusals := saved;
   raised || recorded
 
-let controls ~dune ~objinfo =
+let controls ~dune ~objinfo ~tool_stderr =
   let stanza_of text =
     match collect_stanzas ~dir:"synthetic" (Scan.stanzas text) with
     | [ s ] -> s
@@ -609,13 +613,15 @@ let controls ~dune ~objinfo =
   in
   let empty_dir = temp "ucd-control-empty" in
   let corrupt_dir = temp "ucd-control-corrupt" in
-  List.iter [ empty_dir; corrupt_dir ] ~f:(fun d ->
-      try Unix.mkdir d 0o755 with Unix.Unix_error (EEXIST, _, _) -> ());
+  List.iter [ empty_dir; corrupt_dir ] ~f:(fun d -> Unix.mkdir d 0o755);
   Out_channel.write_all (corrupt_dir ^ "/m.cmt") ~data:"not a cmt";
   p "an unreadable archive is refused"
-    (refuses (fun () -> ignore (archive_units ~objinfo (empty_dir ^ "/missing.cma") : archive_info)));
+    (refuses (fun () ->
+         ignore
+           (archive_units ~stderr:tool_stderr ~objinfo (empty_dir ^ "/missing.cma") : archive_info)));
   p "an archive tool producing no unit definitions is refused"
-    (refuses (fun () -> ignore (archive_units ~objinfo:dune "--version" : archive_info)));
+    (refuses (fun () ->
+         ignore (archive_units ~stderr:tool_stderr ~objinfo:dune "--version" : archive_info)));
   p "malformed archive interface entries are refused"
     (refuses (fun () ->
          ignore
@@ -626,7 +632,8 @@ let controls ~dune ~objinfo =
     { lib_name = "missing"; uid = "missing"; local = false; requires = []; include_dirs = [] }
   in
   p "a failed archive query is refused"
-    (refuses (fun () -> ignore (shared_units ~findlib:dune ~objinfo shared : archive_info)));
+    (refuses (fun () ->
+         ignore (shared_units ~stderr:tool_stderr ~findlib:dune ~objinfo shared : archive_info)));
   p "a shared local library is refused"
     (refuses (fun () ->
          ignore (shared_units ~findlib:dune ~objinfo { shared with local = true } : archive_info)));
@@ -755,7 +762,12 @@ let () =
     | Some r -> r
     | None -> failwith "DUNE_SOURCEROOT is unset: run this through its dune rule"
   in
-  controls ~dune ~objinfo;
+  let (), control_stderr =
+    Stderr_capture.capture ~temp_dir:(Lazy.force temp_root) (fun () ->
+        Out_channel.with_file Stdlib.Filename.null ~f:(fun sink ->
+            controls ~dune ~objinfo ~tool_stderr:(Unix.descr_of_out_channel sink)))
+  in
+  p "the synthetic tool calls leave action stderr empty" (String.is_empty control_stderr);
   let describe ~root ~tag =
     match run_describe ~dune ~root ~tag with
     | Error e ->

@@ -1463,6 +1463,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   deadline is 124, and `status` exits 0 published / 3 running / 1 died without a verdict — it
   reports publication, never the verdict. `tools/test-test-run.sh` legs 29–32 pin all of this
   against a fixture dune that emits dune's exact refusal stderr, with the red-run and guard controls.
+  The fingerprint matches lines across the batch log. Attribute a red from the failed Dune
+  action block and its verdict: in gh-ocannl-2299, a passing archive refusal leaked its child
+  tool's stderr while `where_scope_generator` failed its wall-time claim.
   One refusal is asked of dune BEFORE the batch (gh-ocannl-1448): a `dune build` alias operand dune
   does not know (`@test/operations/runtest-misspelt`) used to surface only after the launch had
   resolved the backends, waited for and taken the fleet slot and probed the device. `_resolve`
