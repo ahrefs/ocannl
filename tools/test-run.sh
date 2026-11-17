@@ -857,22 +857,22 @@ slot_box= slot_slots= slot_tokens=
 slot_kind=        # cpu or gpu, once plan_batch has resolved the batch
 # Reuse/refusal wording follows lukstafi/ludics lib/ludics/fleetworker/slot.py's judge_nested (THE NESTED SLOT); change both together.
 plan_slot_kind() { # after plan_batch
-  local what nested
+  local what gpu_request nested
   [ -n "$slot_fw" ] || return 0
   slot_kind=$(batch_kind)
-  if [ "$slot_kind" = cpu ]; then
-    what="--cpu: none of its backends ($(batch_summary)) holds a GPU"
-  elif [ "$slot_tokens" -lt "$slot_slots" ]; then
-    what="--gpu, one of its $slot_tokens GPU tokens: it can hold $(batch_summary)"
-  else
-    what="--gpu (any slot may hold the GPU here): it can hold $(batch_summary)"
-  fi
-  # Describe the rule from the probe's counts. The fleet validates the
-  # enclosing slot and decides whether to reuse it.
+  # Acquisition and reuse read the same split between GPU tokens and
+  # other slots. The fleet validates the enclosing slot and decides its reuse.
   if [ "$slot_tokens" -lt "$slot_slots" ]; then
+    gpu_request="--gpu, one of its $slot_tokens GPU tokens"
     nested="On this box, a GPU batch is refused if its validated enclosing slot is numbered above $slot_tokens."
   else
+    gpu_request="--gpu (any slot may hold the GPU here)"
     nested="On this box, a GPU batch can reuse any validated enclosing slot."
+  fi
+  if [ "$slot_kind" = cpu ]; then
+    what="--cpu: none of its backends ($(batch_summary)) holds a GPU"
+  else
+    what="$gpu_request: it can hold $(batch_summary)"
   fi
   slot_announce="requesting one of $slot_box's $slot_slots fleet correctness slots if no enclosing slot is reusable (gh-ocannl-1004),
   as $what. Acquisition timeout: ${slot_wait}s.
