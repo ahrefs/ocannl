@@ -1067,8 +1067,12 @@ than the driver (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` at module load), run it wi
 ### Isolated virtual-twin GPU matmul
 
 `dune exec bin/twin_tile_bench.exe -- 256 --dry-run --ocannl_backend=metal` compiles and checks
-all whole-site sketch seeds and the four default GPU presets for a matmul whose two
-f16 operands are virtual casts of f32 masters (gh-ocannl-2080). It also exercises
+all whole-site sketch seeds and the default pipeline's fissioned GPU presets (configured
+thresholds, and block sizes 64-512 at the search's thresholds: the tuner's `F_preset` seeds) for
+a matmul whose two f16 operands are virtual casts of f32 masters (gh-ocannl-2080). Each seed
+prints the launch geometry of every kernel it ships and fails when one launches a single
+thread: `Schedule.default_gpu` on the whole unsegmented routine is that serial fallback
+(gh-ocannl-2114). It also exercises
 the recipe's `Train.tune_placements` search; its dry-run readings are diagnostics. The fixture is generated
 in memory; no external fixture is loaded. Sizes must be multiples of 32. Run the dry
 leg before requesting an exclusive measurement window.
@@ -1079,11 +1083,13 @@ Use the main checkout's `benchmarks/fixtures` directory as the recorded store,
 even though this probe loads no external fixture: `--box-only` still checks the
 recorded bytes.
 Then run the same binary without `--dry-run`, selecting `metal`, `cuda` or `hip`.
-It reports the actual zero-beam-round autotuner crown separately from a whole-site
-seed comparison: the fastest emitted tensor seed versus the fastest non-tensor seed
-or default preset. Seven fresh queued timing pairs alternate their visiting order.
+It reports the actual zero-beam-round autotuner crown separately from a seed comparison:
+the fastest emitted tensor seed versus the fastest non-tensor seed, with the fastest
+fissioned default preset beside both. Seven fresh queued timing triples cycle through every
+visiting order of the three; `preset_tile_ratio` and `preset_non_tile_ratio` are the preset over
+each seed finalist.
 This comparison does not claim that the non-tensor seed is the best possible fissioned
-schedule. The census comes from the compiled routines, and every candidate and both
+schedule. The census comes from the compiled routines, and every candidate and all three
 finalists must pass an analytical value check before timing is accepted. Do not use
 correctness-slot dry runs as performance evidence; identify the hardware and memory
 architecture alongside measurements.

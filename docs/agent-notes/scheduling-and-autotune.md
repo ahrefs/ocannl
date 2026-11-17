@@ -504,6 +504,20 @@ files.
   output is cheap beside the GEMM), and the grid-outermost shapes already give the
   tail-after-the-whole-reduction order. A test that read a tree change through a flag-flipped
   population (`epilogue_fusion_single_trip_sweep` flips `ss_whole`) still sees these twins, refused.
+- `Schedule.default_gpu` called on an UNSEGMENTED routine is the serial fallback at a
+  contraction (gh-ocannl-2114): the lowered accumulation opens with a bare `zero_out` of its
+  materialized output, `scan_accesses` bails on it as documented, and the schedule is empty -- a 1x1
+  kernel. `bin/twin_tile_bench`'s four manual presets did this and read ~233 ms against ~0.09 ms
+  seeds on a 256^3 Metal matmul (lukstafi/ocannl-staging#1836); `fold_mma_schedule` never applies
+  there either (it wants an attention fold site with a `Scan_loop`). Every production caller
+  segments first -- `maybe_default_schedules` and `Autotune.tuner_fission` put the zero in a segment
+  of its own, and `gpu_elide_covered_zeros` then drops it -- except with `schedule_fission=false`,
+  where the serial fallback is the documented behaviour. The tuner's whole-routine `W_preset`
+  candidates produce the same empty schedule, dedup to the baseline's digest and are refused before
+  codegen as binding no hardware dimension (gh-ocannl-532, visible under `autotune_log`). A bench or
+  test comparing "the default preset" goes through `Autotune.tuner_fission` with
+  `Autotune.segment_preset` (the `F_preset` seeds) and asserts every shipped segment's
+  `Low_level.launch_dims` binds a thread past one, as `twin_tile_bench` now does.
 ## Family decisions and launch geometry
 - **The family tree's decisions are DATA, and reading one back means matching on it — never
   re-parsing a label** (gh-ocannl-591). `Ir.Schedule_space` is parameterized over the decision type
