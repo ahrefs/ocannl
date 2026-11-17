@@ -117,8 +117,9 @@ let () =
           fun o ->
             [ Ir.Schedule.apply (Autotune.sketch_schedule ~accum_prec:caps.accum_prec ~p:q o) o ] ))
     @ List.map [ None; Some 64; Some 128; Some 256; Some 512 ] ~f:(fun block_size ->
-        (* [None]: the configured thresholds, the untuned default pipeline itself; a block size: the
-           search's ungated preset at it -- the tuner's [F_preset] seeds. *)
+        (* The tuner's [F_preset] seeds, fissioned whatever [schedule_fission] says, as the tuner's
+           are. [None]: the configured thresholds -- under the default configuration the untuned
+           pipeline's own schedule; a block size: the search's ungated preset at it. *)
         let presets = if Option.is_none block_size then `Config else `Search in
         ( (match block_size with
           | None -> "F_preset[bs=cfg cfg-thresh]"
@@ -185,8 +186,12 @@ let () =
       let ms = Array.create ~len:3 0. in
       List.iter orders.(rep % Array.length orders) ~f:(fun i -> ms.(i) <- measure finalists.(i));
       let tile_ms = ms.(0) and scalar_ms = ms.(1) and preset_ms = ms.(2) in
-      p "paired rep=%d tile_ms=%.6f non_tile_ms=%.6f preset_ms=%.6f ratio=%.6f preset_ratio=%.6f\n"
-        rep tile_ms scalar_ms preset_ms (tile_ms /. scalar_ms)
-        (preset_ms /. Float.min tile_ms scalar_ms)
+      (* The preset against each fixed finalist: a ratio over the lower of two noisy readings would
+         exceed 1 in most triples even for equally fast schedules. *)
+      p
+        "paired rep=%d tile_ms=%.6f non_tile_ms=%.6f preset_ms=%.6f ratio=%.6f \
+         preset_tile_ratio=%.6f preset_non_tile_ratio=%.6f\n"
+        rep tile_ms scalar_ms preset_ms (tile_ms /. scalar_ms) (preset_ms /. tile_ms)
+        (preset_ms /. scalar_ms)
     done;
     Array.iter finalists ~f:(fun f -> Context.release (fst f)))

@@ -1086,7 +1086,8 @@ Then run the same binary without `--dry-run`, selecting `metal`, `cuda` or `hip`
 It reports the actual zero-beam-round autotuner crown separately from a seed comparison:
 the fastest emitted tensor seed versus the fastest non-tensor seed, with the fastest
 fissioned default preset beside both. Seven fresh queued timing triples cycle through every
-visiting order of the three; `preset_ratio` is the preset over the faster seed.
+visiting order of the three; `preset_tile_ratio` and `preset_non_tile_ratio` are the preset over
+each seed finalist.
 This comparison does not claim that the non-tensor seed is the best possible fissioned
 schedule. The census comes from the compiled routines, and every candidate and all three
 finalists must pass an analytical value check before timing is accepted. Do not use
