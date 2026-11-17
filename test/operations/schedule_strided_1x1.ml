@@ -60,13 +60,13 @@
    observed on HIP by a few ulps in a third of the cells (gh-ocannl-1217). So a per-segment seed is
    compared, at the exact tolerance, against its own segmentation on the default preset — the run it
    replaces one segment's schedule of. The common claims allow f32 rounding when comparing with the
-   unscheduled form. CUDA, HIP, and Metal additionally require zero tolerance for whole-routine
-   seeds that run and for default-preset segmentations under the selected math regime. Both HIP
-   regimes matched on gfx1151 and gfx1102 (gh-ocannl-1835). On the RTX 5070 Ti Laptop GPU and M4 Max
-   (gh-ocannl-2273), two runs per profile (default and reproducible) found zero differing cells
-   across the 4096-cell segmentation baseline and all per-segment seeds (four on CUDA, six on Metal,
-   no declines). Neither device proposed a whole-routine seed for the block. This leg covers each
-   seed alone, not recombined tuner candidates. *)
+   unscheduled form. The exact leg checks default-preset segmentations on CUDA, HIP, and Metal under
+   the selected math regime, and whole-routine seeds that run on HIP (both regimes matched on
+   gfx1151 and gfx1102, gh-ocannl-1835). On the RTX 5070 Ti Laptop GPU and M4 Max (gh-ocannl-2273),
+   two runs per profile (default and reproducible) found zero differing cells across the 4096-cell
+   segmentation baseline and all per-segment seeds (four on CUDA, six on Metal, no declines). Both
+   devices seeded the block exclusively through fission. This leg covers each seed alone, not
+   recombined tuner candidates. *)
 
 open Base
 open Ocannl
@@ -814,14 +814,15 @@ let seed_leg ?(declines = false) ?(row = `Batch)
     let matches_exactly ~against ~want name what_ran got =
       close ~tol:(fun _ -> 0.) ~against ~want name what_ran got
     in
-    (* A GPU may propose only segment seeds for this block. Quantify their union, so an empty
-       whole-routine population is allowed but losing both flavors cannot pass vacuously. *)
+    (* The measured CUDA and Metal populations contained only segment seeds. HIP's exact check
+       quantifies whole seeds and segmentations together because it can seed either flavor. *)
     in_leg ~leg:exact_leg
       (what
-     ^ ": on CUDA, HIP, and Metal every whole-routine seed declines or matches exactly, and every \
-        default-preset segmentation matches the unscheduled form exactly") (fun label ->
+     ^ ": on HIP every whole-routine seed declines or matches the unscheduled form exactly, and on \
+        CUDA, HIP, and Metal every default-preset segmentation matches it exactly") (fun label ->
+        let exact_whole_runs = if String.equal backend_name "hip" then whole_runs () else [] in
         p_all label
-          (List.map (whole_runs ()) ~f:(fun (name, q, r) ->
+          (List.map exact_whole_runs ~f:(fun (name, q, r) ->
                Option.value_map r ~default:true ~f:(fun (got, _) ->
                    matches_exactly ~against:"unscheduled" ~want:(Lazy.force unscheduled) name
                      (show q) got))

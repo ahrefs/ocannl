@@ -2617,13 +2617,13 @@ files.
   `coalesce_numerics` opens its bitwise leg on HIP only when
   `Ll_test.backend_contraction_off ()` holds; `-no_hip_fast_math` names that run, while the default
   regime names its skips. CUDA/Metal keep their existing coverage independently of that capability.
-- **Strided 1x1 parity on CUDA, HIP, and Metal uses zero tolerance for whole-routine seeds that run
-  and default-preset segmentations** (`schedule_strided_1x1`, gh-ocannl-1835, gh-ocannl-2273).
+- **Strided 1x1 parity uses zero tolerance for CUDA, HIP, and Metal default-preset segmentations
+  and for HIP whole-routine seeds that run** (`schedule_strided_1x1`, gh-ocannl-1835, gh-ocannl-2273).
   The leg uses the selected math regime. On the RTX 5070 Ti Laptop GPU and M4 Max, two runs per
   profile (default and reproducible) found 0 ULP difference over all 4096 cells of the only
   segmentation, and across every per-segment seed against that segmentation (four on CUDA, six on
-  Metal, no declines). The exact leg quantifies whole seeds and segmentation baselines together
-  because a GPU can seed the block solely through fission.
+  Metal, no declines). Both devices seeded the block exclusively through fission. HIP's exact
+  leg quantifies whole seeds and segmentation baselines together because it can seed either flavor.
 - **CUDA and HIP compile with fast-math umbrellas by default; Metal pins safe arithmetic while
   retaining fast math functions**: CUDA passes `--use_fast_math` (unless `cuda_fast_math` is off,
   above), HIP `-ffast-math` (unless `hip_fast_math` is off, above), and Metal selects
