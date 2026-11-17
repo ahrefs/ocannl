@@ -61,6 +61,7 @@ let raw_entries =
         "[scanner-refusal:69ce705759093b5f97c6cc8e0413a500] description dune refuses";
         "[scanner-refusal:351ce2a461cb37393c61069ee2649d96] unused_compiler_deps";
         "[scanner-refusal:36778054d93aa08eac389989017aed7a] DUNE_SOURCEROOT";
+        "[scanner-refusal:044e249871007719b6bc46d149189c1d] synthetic tool calls";
         "[scanner-refusal:22c08112ff7b660af6dab49542313b14] compiler-libs.common";
         "[scanner-refusal:5c6002f7f040eddc8696d03b9a9bb9e2] the workspace description";
         "[scanner-refusal:448291c7f6134ac8fadedd8e1a4f787a] declares the library";

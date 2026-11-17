@@ -17390,6 +17390,7 @@
  (modules unused_compiler_deps)
  (libraries
   base
+  stderr_capture
   stdio
   unix
   test_scan
