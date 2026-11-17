@@ -16,11 +16,12 @@
    it. Values are small dyadics, compared exactly, through [Ll_test.interpret], the IR's reference
    semantics (a scope body runs where its scope is read):
 
-   - the entry gate: [optimize] refuses the program, naming [validate_scope_bodies]; - past
-   [optimize] (the [?prelowered] form), [Fuse_epilogue] refuses it, naming scope purity, both probed
-   and through [Schedule.apply]. On the base it fused: the accumulation-nest site put the tail right
-   after the reduction loop, before the scope body's write; - the premise: that relocation, built by
-   hand and interpreted, computes different values from the unfused program; - the control: the same
+   The claims. First, the entry gate: [optimize] refuses the program, naming
+   [validate_scope_bodies]. Second, past [optimize] (the [?prelowered] form), [Fuse_epilogue]
+   refuses it, naming scope purity and the [Set] of [acc], both probed and through [Schedule.apply];
+   on the base it fused, the accumulation-nest site putting the tail right after the reduction loop,
+   before the scope body's write. Third, the premise: that relocation, built by hand and
+   interpreted, computes different values from the unfused program. Fourth, the control: the same
    program with a pure scope body fuses, values equal. *)
 
 open Base
@@ -85,11 +86,11 @@ let interpreted c llc =
 
 let fuse c o = Sched.apply [ Sched.Fuse_epilogue { target = c.acc; shared = false } ] o
 
-let names_purity ~what msg =
+let names_purity ~what ~acc msg =
   Stdio.eprintf "%s: %s (not part of the golden)\n%!" what msg;
   String.is_substring msg ~substring:"Schedule.Fuse_epilogue"
   && String.is_substring msg ~substring:"impure scope body"
-  && String.is_substring msg ~substring:"Set writes the tensor node"
+  && String.is_substring msg ~substring:("Set writes the tensor node " ^ Tn.debug_name acc)
 
 let () =
   let impure = program "i" ~impure:true in
@@ -105,12 +106,12 @@ let () =
   (* Past the entry gate. *)
   p "prelowered: Fuse_epilogue's probe refuses the impure scope body, naming scope purity"
     (match Sched.fuse_epilogue_witness ~target:impure.acc (record ~name:"ep2266_probe" impure) with
-    | Some msg -> names_purity ~what:"probe" msg
+    | Some msg -> names_purity ~what:"probe" ~acc:impure.acc msg
     | None -> false);
   p "prelowered: Schedule.apply refuses it too, naming scope purity"
     (match fuse impure (record ~name:"ep2266_apply" impure) with
     | _ -> false
-    | exception Invalid_argument msg -> names_purity ~what:"apply" msg);
+    | exception Invalid_argument msg -> names_purity ~what:"apply" ~acc:impure.acc msg);
   (* The premise: the fusion the base performed changes the program's values. *)
   let relocated = program "r" ~relocated:true ~impure:true in
   p_exists "premise: the base's relocation computes different values from the unfused program"
