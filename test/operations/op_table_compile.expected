@@ -78,5 +78,5 @@ uint64 Not is an integer truth, dividing as an integer: true
 int32 Trunc is exact above 2^24: true
 int64 Max is exact above 2^53: true
 int64 Relu is exact above 2^53: true
-every function of the cc and Metal tables is guarded or named as skipped: true
+every function of all four builtin tables is guarded or named as skipped: true
 every function named as skipped is one the guards skip: true

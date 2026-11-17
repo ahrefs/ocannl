@@ -299,3 +299,9 @@
   arrayjit.autotune)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(library
+ (name op_table_cases)
+ (package neural_nets_lib)
+ (modules op_table_cases)
+ (libraries base arrayjit.ir ll_test))

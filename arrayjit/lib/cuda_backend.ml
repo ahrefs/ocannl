@@ -1025,54 +1025,6 @@ end = struct
                    ~title:(Printf.sprintf "{ /* wmma fragment %dx%d across k_o */" m n)
                    ~lines_before ~lines_after)
           | _ -> None)
-
-    let convert_precision ~from ~to_ =
-      match (from, to_) with
-      | Ops.Double_prec _, Ops.Double_prec _
-      | Single_prec _, Single_prec _
-      | Half_prec _, Half_prec _
-      | Byte_prec _, Byte_prec _
-      | Uint16_prec _, Uint16_prec _
-      | Int32_prec _, Int32_prec _
-      | Int64_prec _, Int64_prec _
-      | Uint4x32_prec _, Uint4x32_prec _
-      | Bfloat16_prec _, Bfloat16_prec _
-      | Fp8_prec _, Fp8_prec _
-      | Void_prec, Void_prec ->
-          ("", "")
-      | Double_prec _, Half_prec _ -> ("__double2half(", ")")
-      | Single_prec _, Half_prec _ -> ("__float2half(", ")")
-      | Byte_prec _, Half_prec _ -> ("__ushort2half_rn((unsigned short int)", ")")
-      | Double_prec _, Uint4x32_prec _ -> ("double_to_uint4x32(", ")")
-      | Single_prec _, Uint4x32_prec _ -> ("single_to_uint4x32(", ")")
-      (* A plain conversion out of a block is refused, as on every backend (gh-ocannl-1785): these
-         arms used to read lane 0's bits. *)
-      | Uint4x32_prec _, _ -> Ops.no_plain_uint4x32_conversion ~to_
-      | Byte_prec _, Uint4x32_prec _ -> ("byte_to_uint4x32(", ")")
-      | Uint16_prec _, Uint4x32_prec _ -> ("uint16_to_uint4x32(", ")")
-      | Bfloat16_prec _, Uint4x32_prec _ -> ("bfloat16_to_uint4x32(", ")")
-      | Half_prec _, Uint4x32_prec _ -> ("half_to_uint4x32(", ")")
-      | Fp8_prec _, Uint4x32_prec _ -> ("fp8_to_uint4x32(", ")")
-      | ( Fp8_prec _,
-          (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _)
-        ) ->
-          (* __nv_fp8_e5m2 has no integer conversion operators: a C-style cast to an integer type
-             would resolve through the saturating [operator unsigned char] (wrong for negative
-             values). Convert via float, like the CC backend. *)
-          ("(" ^ typ_of_prec to_ ^ ")((float)(", "))")
-      (* The integer counter conversions MUST call the builtins, which spread the bits across all
-         four uint4x32 lanes (golden-ratio / MMIX / rotation mixing). The raw struct literal below
-         only fills lane 0, leaving lanes 1-3 zero; with the 2-round light threefry used for
-         parameter init that produces near-identical outputs for consecutive counters (periodicity),
-         so random inits diverge from CC/Metal. [Ops.index_prec] is signed [int32] (or [int64] under
-         [large_models]), so the signed arms are the conversion hit by every PRNG init loop, e.g.
-         centered [uniform1] parameter initialization (task-04f97340). *)
-      | Int32_prec _, Uint4x32_prec _ -> ("int32_to_uint4x32(", ")")
-      | Int64_prec _, Uint4x32_prec _ -> ("int64_to_uint4x32(", ")")
-      | Uint32_prec _, Uint4x32_prec _ -> ("uint32_to_uint4x32(", ")")
-      | Uint64_prec _, Uint4x32_prec _ -> ("uint64_to_uint4x32(", ")")
-      | _, Uint4x32_prec _ -> ("{(unsigned int)(", "), 0, 0, 0}")
-      | _ -> ("(" ^ typ_of_prec to_ ^ ")(", ")")
   end
 
   let backend_facts = Backend_intf.cuda_facts

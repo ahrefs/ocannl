@@ -6377,6 +6377,8 @@
  (modules cuda_like_builtins_emulation)
  (deps ocannl_config)
  (libraries
+  op_table_cases
+  ll_test
   integer_rng_probe
   arrayjit.context
   arrayjit.ir
@@ -6385,7 +6387,8 @@
   arrayjit.verdict
   ctypes
   ctypes.foreign
-  integers))
+  integers
+  pprint))
 
 ; gh-ocannl-1232: CUDA's mma arms resolve once, in `Ir.Cuda_mma.resolve_arm`, which both hooks
 ; dispatch on. The table's shape -- where the scopes split a triple, which arms ever resolve -- as
@@ -11770,6 +11773,9 @@
   (env_var OCANNL_BACKEND))
  (modules op_table_compile)
  (libraries
+  arrayjit.builtins_cuda
+  arrayjit.builtins_hip
+  op_table_cases
   base
   ocannl
   stdio

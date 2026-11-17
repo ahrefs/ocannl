@@ -163,6 +163,7 @@ test/operations/cpu_vectorized.ml [run by @test/operations/runtest-cpu_vectorize
     "float4_t"
     "reinterpret_cast"
     "vector_size"
+test/operations/cuda_like_builtins_emulation.ml [renders generated text in memory; run by @test/operations/runtest-cuda_like_builtins_emulation]
 test/operations/cuda_wmma_floor.real.ml [run by @test/operations/runtest-cuda_wmma_floor; also pins text this scan cannot name: untraced callback, opaque aggregate component, unvalidated haystack]
     "(wmma-f16-wide)"
     ".target sm_" ^ ...
@@ -284,7 +285,7 @@ test/operations/narrow_storage_compute.ml [run by @test/operations/runtest-narro
     "vector_size"
 test/operations/online_softmax_block_mma.ml [run by @test/operations/runtest-online_softmax_block_mma]
     "simdgroup_multiply_accumulate"
-test/operations/op_table_compile.ml [run by @test/operations/runtest-op_table_compile; also pins text this scan cannot name: untraced callback, opaque aggregate component, mutation or unseen buffer write, rebound parameter]
+test/operations/op_table_compile.ml [run by @test/operations/runtest-op_table_compile; also pins text this scan cannot name: untraced callback, opaque aggregate component, mutation or unseen buffer write]
 test/operations/reduction_accumulator_residency.ml [run by @test/operations/runtest-reduction_accumulator_residency; also pins text this scan cannot name: untraced callback]
     " " ^ ...
     "["
@@ -684,6 +685,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-cpu_scratch_matmul_grid
 @test/operations/runtest-cpu_simd_reduction
 @test/operations/runtest-cpu_vectorized
+@test/operations/runtest-cuda_like_builtins_emulation
 @test/operations/runtest-cuda_wmma_floor
 @test/operations/runtest-declared_temporaries-logged
 @test/operations/runtest-declared_temporaries-plain
