@@ -132,6 +132,10 @@ val pair_conflict :
     identity: the parallel symbols of the left copy paired with those of the right copy (for
     same-nest analyses, pairs of the form [(p, p)]).
 
+    [Same_thread] can follow from a chain of per-coordinate equalities through shared and
+    independently iterated variables. Each edge is an exact unit difference with zero offset or
+    follows from mixed-radix injectivity on the per-pair combined bounds.
+
     Sound and conservative: [Disjoint] and [Same_thread] are proven; everything else is
     [Cross_thread]. *)
 

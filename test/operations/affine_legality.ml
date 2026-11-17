@@ -245,6 +245,21 @@ let () =
     ~pairs:[ (p, p) ]
     ~left:[| Idx.Iterator g; Idx.Iterator p |]
     ~right:[| Idx.Iterator g; Idx.Iterator p |];
+  (* A common cell can have [p_L = g] and [p_R = g + 1], e.g. [g = 0]. *)
+  let left = [| Idx.Iterator p; aff [ (1, g) ] 1 |] in
+  let right = [| Idx.Iterator g; Idx.Iterator p |] in
+  let ranges = [ (p, r3); (g, r3) ] in
+  let dup = dup_of [ p ] in
+  let pairs = [ (p, p) ] in
+  Verdict.p "an offset breaks a shared-symbol thread equality"
+    (match
+       ( Aff.pair_conflict ~left_range:(find_range ranges) ~right_range:(find_range ranges)
+           ~dup_left:dup ~dup_right:dup ~pairs ~left:(view_in ~rank:2 left)
+           ~right:(view_in ~rank:2 right),
+         oracle_conflict ~oracle_ranges:ranges ~dup_left:dup ~dup_right:dup ~pairs ~left ~right )
+     with
+    | Aff.Cross_thread _, `Cross_thread -> true
+    | _ -> false);
   (* Cross-nest: distinct symbol sets, thread identity via pairing. *)
   check_conflict ~name:"cross-nest aligned"
     ~query_ranges:[ (i0, r3); (j0, r3); (u, r3); (v, r3) ]

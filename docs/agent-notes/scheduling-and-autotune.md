@@ -2508,9 +2508,10 @@ files.
   0 was descended under any enclosing loop with no such check (`epilogue_fusion_loop_dependence`'s
   hand-built programs fused there, and their relocation, interpreted, miscomputes). A batch loop
   passes (the earlier segment's writes are indexed by it as the store-back is); an outer
-  contraction loop never reaches it (the surplus check refuses it first). The check is sound, not
-  exact: the engine does not chain equalities across axes, so a transposed write `acc[b2, b1]`
-  refuses even at the inner loop. `schedule_epilogue_fusion`'s `epf_partition_*` legs pin it:
+  contraction loop never reaches it (the surplus check refuses it first). For a transposed write
+  `acc[b2, b1]` the two coordinates force both inner iterations to equal the shared `b1`; the
+  outer loop still refuses because `(0, 1)` and `(1, 0)` can meet (`epilogue_fusion_loop_dependence`,
+  gh-ocannl-2277). `schedule_epilogue_fusion`'s `epf_partition_*` legs pin it:
   unbatched and batched fusion (bitwise equal to two-kernel and to the unfused pipeline),
   multi-trip, row edge, an unrecognized batch-indexed earlier writer (fuses), and one rebound to
   batch row 0 (refused); the sweep's `ksplit1` and `ksplit1b` claim Partition-carrying twins are
