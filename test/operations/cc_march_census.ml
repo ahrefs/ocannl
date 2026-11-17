@@ -530,11 +530,11 @@ let build (emit_dir : string) =
      so they are emitted once, by the native-fp16 child, rather than compiled twice in eight
      columns. *)
   let native_fp16 = Ir.Ops.equal_prec (comp_prec Ir.Ops.half) Ir.Ops.half in
-  (* The head of the bf16 tile's A-splat binding at the lane count its default geometry renders: the
+  (* The head of a narrow tile's A-splat binding at the lane count its default geometry renders: the
      row macro where the renderer widens the A column by row groups, the scalar conversion
      otherwise. *)
-  let bf16_a_binding =
-    let comp = comp_prec Ir.Ops.bfloat16 in
+  let a_binding store_prec ~scalar =
+    let comp = comp_prec store_prec in
     let lanes =
       Option.map
         (Ir.Register_tile.default ~file ~elt_bytes:(Ir.Ops.prec_in_bytes comp) ~m:mma_m ~n:mma_n)
@@ -542,10 +542,10 @@ let build (emit_dir : string) =
     in
     match
       Option.bind lanes ~f:(fun lanes ->
-          Ir.C_syntax.vec_widen_rows_macros ~store_prec:Ir.Ops.bfloat16 ~prec:comp ~lanes)
+          Ir.C_syntax.vec_widen_rows_macros ~store_prec ~prec:comp ~lanes)
     with
     | Some (_, row) -> row ^ "("
-    | None -> "bfloat16_to_single("
+    | None -> scalar
   in
   let reduction_groups, tiles =
     if native_fp16 then
@@ -565,11 +565,21 @@ let build (emit_dir : string) =
              the C tile cross through [vec_bridge]'s bf16 arms. *)
           ( "bf16",
             Ir.Ops.bfloat16,
-            [ "tmma_as_0__ = " ^ bf16_a_binding; ", tmma_b_0__, &tmma_b__[" ] );
+            [
+              "tmma_as_0__ = " ^ a_binding Ir.Ops.bfloat16 ~scalar:"bfloat16_to_single(";
+              ", tmma_b_0__, &tmma_b__[";
+            ] );
         ] )
     else
       ( [ ("f16w", Ir.Ops.half) ],
-        [ ("f16w", Ir.Ops.half, [ "tmma_as_0__ = HALF_TO_FLOAT("; ", tmma_b_0__, &tmma_b__[" ]) ] )
+        [
+          ( "f16w",
+            Ir.Ops.half,
+            [
+              "tmma_as_0__ = " ^ a_binding Ir.Ops.half ~scalar:"HALF_TO_FLOAT(";
+              ", tmma_b_0__, &tmma_b__[";
+            ] );
+        ] )
   in
   (* The main kernel's tiles are the renderer's default geometry over the [n = 192] site, whose full
      passes cover it (see the fixture header), so each is one [Full] row. The geometry is the one

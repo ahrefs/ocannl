@@ -7376,7 +7376,13 @@ module C_syntax (B : C_syntax_config) = struct
           let a_rows =
             Option.map (vec_widen_rows_macros ~store_prec:a_store_prec ~prec ~lanes)
               ~f:(fun (pack, row) ->
-                let u16, u32 = bf16_bit_typedefs ~lanes ~need_typedef in
+                let pack_types =
+                  match a_store_prec with
+                  | Ops.Bfloat16_prec _ ->
+                      let u16, u32 = bf16_bit_typedefs ~lanes ~need_typedef in
+                      [ u16; u32; vtyp ]
+                  | _ -> [ vtyp ]
+                in
                 let packed r = Printf.sprintf "tmma_ap_%d__" (r / lanes) in
                 let pack_call ~i ~rows r =
                   if r % lanes <> 0 then []
@@ -7385,7 +7391,7 @@ module C_syntax (B : C_syntax_config) = struct
                       string
                         (Printf.sprintf "%s(%s);" pack
                            (String.concat ~sep:", "
-                              ([ u16; u32; vtyp; packed r ]
+                              ((pack_types @ [ packed r ])
                               @ List.init lanes ~f:(fun l ->
                                   if r + l < rows then
                                     a_raw ~row:(row_expr ~i (r + l)) ~l:"tmma_l__"

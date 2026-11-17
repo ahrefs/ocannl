@@ -1341,12 +1341,11 @@ ARRAYJIT_BUILTIN_LINKAGE HALF_T double_to_half(double f)
     (* clang's aarch64 fp16 tiles need the same packed A-column lifetime as bf16 (gh-ocannl-1934):
        four scalar widenings otherwise hold four SIMD registers and spill two accumulators of a 4x6
        tile. One [fcvtl] supplies four FMA lane operands. Keep gcc and x86 on their existing per-row
-       form. The first two arguments share the bf16 pack-call signature; the half group needs
-       neither integer vector type. *)
+       form. The half group needs no integer vector type. *)
     ( "OCANNL_VEC_WIDEN_HALF_ROWS_X4",
       {|
 #if defined(__aarch64__) && defined(__clang__) && HAS_NATIVE_FLOAT16 && OCANNL_HAS_CONVERTVECTOR
-  #define OCANNL_VEC_WIDEN_HALF_ROWS_X4(U16V, U32V, FV, dst, a0, a1, a2, a3) \
+  #define OCANNL_VEC_WIDEN_HALF_ROWS_X4(FV, dst, a0, a1, a2, a3) \
     FV dst; do { \
       typedef HALF_T ocannl_rh4__ __attribute__((vector_size(8))); \
       ocannl_rh4__ ocannl_rh__ = {(a0), (a1), (a2), (a3)}; \
@@ -1354,7 +1353,7 @@ ARRAYJIT_BUILTIN_LINKAGE HALF_T double_to_half(double f)
     } while (0)
   #define OCANNL_VEC_WIDENED_HALF_ROW_X4(packed, lane, widened) ((packed)[lane])
 #else
-  #define OCANNL_VEC_WIDEN_HALF_ROWS_X4(U16V, U32V, FV, dst, a0, a1, a2, a3) do { } while (0)
+  #define OCANNL_VEC_WIDEN_HALF_ROWS_X4(FV, dst, a0, a1, a2, a3) do { } while (0)
   #define OCANNL_VEC_WIDENED_HALF_ROW_X4(packed, lane, widened) (widened)
 #endif
 |},
