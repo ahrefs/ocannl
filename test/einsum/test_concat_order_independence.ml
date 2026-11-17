@@ -22,7 +22,9 @@
    and registration orders. Before adding the stride families, the fixed family gave 21,124 stores,
    14 order-dependent before its fix: 12 from composite window kernels and two from gh-ocannl-2095's
    residual basis choice. Those two stores remain named, counted exceptions; every other store
-   remains subject to all three claims. Counts go to stderr. The search runs whole. *)
+   remains subject to all three claims. gh-ocannl-2268 adds a waiting-side use-site bound to
+   gh-ocannl-2223's shared-claim example, solved in every order. Counts go to stderr. The search
+   runs whole. *)
 
 open! Base
 open Ocannl
@@ -421,22 +423,72 @@ let () =
             ~f:(function
             | Accepted sol -> has sol "u" 1 tag
             | Refused -> false));
+      (* gh-ocannl-2268: a use-site bound on the waiting side. The sum forces k above 1, so k takes
+         its bound and the equation sizes u with the shared claim: the answer accepted when stated
+         up front. A bound below the sum's minimum (k >= u + 2 >= 3) stays refused, and one at it
+         keeps the base's closing order (the local review's store). *)
       List.iter [ "a"; "h"; Row.bcast_if_1 ] ~f:(fun tag ->
-          let items =
+          let bounded d =
             List.map [ "w(s2,k3 default)(v)=5 " ^ tag; "[u; 2v]=[k; 2 " ^ tag ^ "]" ] ~f:item
             @ [
                 {
-                  name = "k >= 5 default";
-                  mk = (fun _ _ k -> ineq (tagged 5 Row.default_basis) (Var k));
+                  name = Printf.sprintf "k >= %d default" d;
+                  mk = (fun _ _ k -> ineq (tagged d Row.default_basis) (Var k));
                 };
               ]
+          in
+          let items = bounded 5 in
+          let ground = function
+            | Accepted sol ->
+                has sol "v" 2 tag && has sol "u" 3 tag && has sol "k" 5 Row.default_basis
+            | Refused -> false
           in
           let outs = outcomes items in
           Stdio.eprintf "waiting-side bound: %s => %s (not part of the golden)\n" (store_name items)
             (String.concat ~sep:" | " (List.map outs ~f:outcome_to_string));
-          (* Diagnostic only: this bounded store is already refused on the base. Propagating its
-             bound through the sum remains outside this closing-order correction. *)
-          ());
+          p_all ~min:6
+            ("a waiting-side k >= 5_default settles to u = 3_" ^ tag
+           ^ ", k = 5_default in every order")
+            outs ~f:ground;
+          p
+            ("and so does registering that store in one batch, " ^ tag)
+            (ground (solve ~batched:true items [ 0; 1; 2 ]));
+          p_all ~min:6
+            ("u = 3_" ^ tag ^ ", k = 5_default is accepted when stated up front in every order")
+            (orders items)
+            ~f:(fun order ->
+              ground
+                (solve
+                   ~pins:
+                     [
+                       ("v", Some (2, tag)); ("u", Some (3, tag)); ("k", Some (5, Row.default_basis));
+                     ]
+                   items order));
+          p_all ~min:6
+            ("a waiting-side k >= 2_default, below the sum's minimum, is refused in every order, "
+           ^ tag)
+            (outcomes (bounded 2))
+            ~f:(equal_outcome Refused);
+          (* At the sum's minimum the closing side's guess already reaches k's bound and stays
+             claim-free, as u's own plain bound needs: k is not closed first there. *)
+          let at_minimum =
+            List.map [ "w(s2,k3 default)(v)=5 " ^ tag; "[u; 2v]=[k; 2 " ^ tag ^ "]" ] ~f:item
+            @ [
+                { name = "k >= 3 " ^ tag; mk = (fun _ _ k -> ineq (tagged 3 tag) (Var k)) };
+                {
+                  name = "u >= 2 default";
+                  mk = (fun _ u _ -> ineq (tagged 2 Row.default_basis) (Var u));
+                };
+              ]
+          in
+          p_all ~min:24
+            ("k >= 3_" ^ tag ^ " with u >= 2_default settles to u = 1_bcast_if_1, k = 3_" ^ tag
+           ^ " in every order")
+            (outcomes at_minimum)
+            ~f:(function
+              | Accepted sol ->
+                  has sol "v" 2 tag && has sol "u" 1 Row.bcast_if_1 && has sol "k" 3 tag
+              | Refused -> false));
       (* Twenty stores yield 64 orderings: the floor guards the name-based selection. *)
       p_all ~min:64 "a stride of the broadcast top settles in every order"
         (List.concat_map stride_top_stores ~f:outcomes) ~f:(function
