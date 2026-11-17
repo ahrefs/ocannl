@@ -542,7 +542,7 @@ test/operations/test_uniform_virtual_lane.ml [run by @test/operations/runtest-te
     "_uniform_lane("
     "_uniform_vec("
 test/operations/thread_private_gate.ml [run by @test/operations/runtest-thread_private_gate, @test/operations/runtest-thread_private_gate-outlined; also pins text this scan cannot name: untraced callback]
-test/operations/tile_bf16_row_groups.ml [run by @test/operations/runtest-tile_bf16_row_groups]
+test/operations/tile_bf16_row_groups.ml [run by @test/operations/runtest-tile_bf16_row_groups; also pins text this scan cannot name: computed fragment]
     "4-lane float"
     "row tail 3"
     ... ^ "("

@@ -2337,7 +2337,7 @@ let minted_derivations =
     own scalar. [pack] widens one k step's A elements of [lanes] consecutive rows into one vector
     and [row] reads one row's widened scalar back out of it; see {!Builtins_cc} for their arms.
 
-    Only bf16 storage under 4 lanes of f32, i.e. the 16-byte vector NEON has. There the packed
+    bf16 and fp16 storage under 4 lanes of f32, i.e. the 16-byte vector NEON has. There the packed
     column costs nothing: NEON's [fmla] takes its multiplier from a vector LANE ([v6.s[r]]), so the
     rows' splats share one register. Per-row scalar widenings ([ldrh], [fmov], [shl]) are what
     aarch64 gcc's -O3 pre-RA scheduler hoisted above the FMAs, holding all four live at once: a 4x6
@@ -2345,13 +2345,16 @@ let minted_derivations =
     two accumulators spilled on every k step. x86 has no by-element FMA, so packing there adds a
     shuffle per row (and a stack spill at some widths). The x86 arms of these builtins therefore
     reduce to exactly the per-row rendering. fp16 storage widens with one [fcvt], which gcc
-    schedules without the spill, so it keeps the per-row form. aarch64 gcc 13's scheduler hoists the
-    rows' A loads even with nothing to widen, which the tile's [OCANNL_TILE_FENCE] between rows
-    answers instead (gh-ocannl-1158). *)
+    schedules without the spill. clang 21 hoists four such values and spills two accumulators
+    (gh-ocannl-1934), so its aarch64 arm packs the fp16 column too; gcc keeps the per-row form.
+    aarch64 gcc 13's scheduler hoists the rows' A loads even with nothing to widen, which the tile's
+    [OCANNL_TILE_FENCE] between rows answers instead (gh-ocannl-1158). *)
 let vec_widen_rows_macros ~store_prec ~prec ~lanes =
   match (store_prec, prec, lanes) with
   | Ops.Bfloat16_prec _, Ops.Single_prec _, 4 ->
       Some ("OCANNL_VEC_WIDEN_BFLOAT16_ROWS_X4", "OCANNL_VEC_WIDENED_ROW_X4")
+  | Ops.Half_prec _, Ops.Single_prec _, 4 ->
+      Some ("OCANNL_VEC_WIDEN_HALF_ROWS_X4", "OCANNL_VEC_WIDENED_HALF_ROW_X4")
   | _ -> None
 
 (** The words the C language itself reserves, plus the scaffolding names this module's rendering
@@ -7373,7 +7376,13 @@ module C_syntax (B : C_syntax_config) = struct
           let a_rows =
             Option.map (vec_widen_rows_macros ~store_prec:a_store_prec ~prec ~lanes)
               ~f:(fun (pack, row) ->
-                let u16, u32 = bf16_bit_typedefs ~lanes ~need_typedef in
+                let pack_types =
+                  match a_store_prec with
+                  | Ops.Bfloat16_prec _ ->
+                      let u16, u32 = bf16_bit_typedefs ~lanes ~need_typedef in
+                      [ u16; u32; vtyp ]
+                  | _ -> [ vtyp ]
+                in
                 let packed r = Printf.sprintf "tmma_ap_%d__" (r / lanes) in
                 let pack_call ~i ~rows r =
                   if r % lanes <> 0 then []
@@ -7382,7 +7391,7 @@ module C_syntax (B : C_syntax_config) = struct
                       string
                         (Printf.sprintf "%s(%s);" pack
                            (String.concat ~sep:", "
-                              ([ u16; u32; vtyp; packed r ]
+                              ((pack_types @ [ packed r ])
                               @ List.init lanes ~f:(fun l ->
                                   if r + l < rows then
                                     a_raw ~row:(row_expr ~i (r + l)) ~l:"tmma_l__"

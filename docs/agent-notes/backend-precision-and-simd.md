@@ -2152,6 +2152,17 @@ files.
   bisect a flag like this, first cut the tile into a standalone `.c` and count stack references in
   its innermost `fmla` loop: the loop's label moves with the flags, so the census's own `.L` names
   do not carry over.
+- **clang 21 aarch64 fp16 register tiles pack the A column** (gh-ocannl-1934).
+  Eight resident 4x6 rows in the wide-fp16 census had four real k-loop vector stack
+  references: two accumulator spill/reload pairs, not stack-passed pointer arguments
+  or frame records. Four independently widened A scalars plus 24 accumulators and six
+  B vectors exceed NEON's 32 registers. Empty fences still spill; one packed `fcvtl`
+  supplies four FMA lane operands instead. `OCANNL_VEC_WIDEN_HALF_ROWS_X4` selects that
+  form only for clang on aarch64 with native half and convertvector support; gcc and
+  x86 retain their per-row form. Keep the reader and resident claim unchanged.
+  `tile_bf16_row_groups` covers both formats: all 65536 codes and a padded last
+  group against serial execution and an independent exact-value/NaN oracle. On an
+  arm64 clang host it executes the new fp16 packed arm.
 - **A census reading is a fact about the emission AND about the compiler, and CI runs two of them**
   (gh-ocannl-752). The extended fixture passed on a gcc 15.2 box and was red on BOTH CI legs, in two
   unrelated ways, neither reachable from a gcc-only host. (a) **Line attribution.** A row is found
