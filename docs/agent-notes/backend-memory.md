@@ -552,7 +552,12 @@ files.
   Do not use `dune --force` as evidence of fresh
   test actions: the first audit attempt ran no tests. Disable the shared cache and change an
   action dependency, then confirm executable actions in the trace and process samples.
-
+- For an opt-in Linux CUDA census (gh-ocannl-2291), run `env OCANNL_BACKEND=cuda python3
+  tools/gpu-memory-census.py -- --expect-backend cuda build @DIR/runtest-NAME -j 4`. Its
+  `gpu-memory-census.json` sits in the foreground run record. The timing reader shares its
+  allowlisted process rows before the runner deletes the raw trace. Readable polls inside an
+  owned PID's traced lifetime give its sampled process peak and count. Unseen rows stay unknown,
+  unread probes say UNREAD, and a cached batch says when no test ran.
 - Building a test kernel that actually *has* a big scratch frame takes care: write the `Local`
   array in one loop and read it back in REVERSE in another. A forward read in the same order lets
   the compiler forward each store to its load and delete the array, leaving nothing to reject.

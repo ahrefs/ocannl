@@ -85,7 +85,7 @@ def run_bounded(argv):
     return done.returncode, done.stdout.decode("utf-8", "replace")
 
 
-def probe_nvidia(binary):
+def probe_nvidia(binary, *, require_memory=False):
     """(probe entry, {pid: fields}) from nvidia-smi's compute-apps list."""
     path = shutil.which(binary)
     if path is None:
@@ -102,12 +102,17 @@ def probe_nvidia(binary):
             continue
         fields = [part.strip() for part in line.split(",")]
         if not (fields[0].isdecimal() and fields[0].isascii()):
+            if require_memory:
+                return {"probe": "nvidia-smi", "status": "unreadable", "detail": ""}, {}
             skipped += 1
             continue
         # One row per process AND GPU: a process on two GPUs is one entry, its memory summed.
         entry = found.setdefault(int(fields[0]), {})
         if len(fields) >= 3 and fields[-1].isdecimal() and fields[-1].isascii():
             entry["gpu_memory_mib"] = entry.get("gpu_memory_mib", 0) + int(fields[-1])
+        elif require_memory:
+            # A missing device row could make even a known PID's total too low.
+            return {"probe": "nvidia-smi", "status": "unreadable", "detail": ""}, {}
     detail = "skipped %d unreadable line(s)" % skipped if skipped else ""
     return {"probe": "nvidia-smi", "status": "ran", "detail": detail}, found
 

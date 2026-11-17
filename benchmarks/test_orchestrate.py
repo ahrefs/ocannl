@@ -29,6 +29,7 @@ import orchestrate
 import strict_json
 from runners import bench_common
 from test.test_cell_group import CellGroupTest  # imported so unittest.main includes shared tests
+from test.test_gpu_memory_census import GpuMemoryCensusTest  # same unittest discovery
 from test.test_bench_line_scan import BenchLineReaderScanTest  # noqa: F401  (likewise)
 from test_cells import (  # noqa: F401  (likewise)
     AbDriverTest, CellCommandTest, ConfigRecordsExpectTest, Gh1051AbDriverTest, Gh1180DriverTest,
