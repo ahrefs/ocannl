@@ -74,10 +74,14 @@
    #977, #1423, #1572). [(u + 1) *. c[5|3]] and [x[16] *. normal ()] agree in both shapes and
    executed fill; the judge checks every program node's shape, not just its draws.
 
-   Other remaining causes: one observed normal-draw repeat; 3 fixed-index programs, including
-   [(stretch u + stretch (stretch u)) ++ "...|3 => ...|0"]. The fixed-index entry used to cover all
-   einsum specs over draws; since gh-ocannl-2247 passes a solved row's role to its axes, only fixed
-   indices remain.
+   Other remaining causes: one observed normal-draw repeat; 4 fixed-index programs, two shapes
+   (gh-ocannl-2270) each a fixed program and a random one: a draw behind a stretch, [(stretch u +
+   stretch (stretch u)) ++ "...|3 => ...|0"] (#1237), and a reduction of a draw beside a draw, [((u1
+   ++ "ab => a") *. v) ++ "...|3 => ...|0"] (#1132, under a batch constant). The fixed index's lower
+   bound sizes the pointwise result but not the draw behind the stretch or the reduction, which
+   closes to 1; with a constant of the size it demands in its place both programs agree (the
+   controls beside them). The fixed-index entry used to cover all einsum specs over draws; since
+   gh-ocannl-2247 passes a solved row's role to its axes, only fixed indices remain.
 
    Retired entries retain their agreeing fixed programs: gh-ocannl-2244 fixes a draw under a unary
    operation, under both operands of a pointwise operation, under a compose, and a no-axis constant
@@ -651,8 +655,8 @@ let known : known list =
     {
       entry = "proposed: a fixed index over a draw";
       (* Was every einsum spec over a draw; since gh-ocannl-2247 a spec's axes take the draw's role,
-         and what is left is the fixed index: [(stretch u + stretch (stretch u)) ++ "...|3 =>
-         ...|0"]. *)
+         and what is left is the fixed index's lower bound missing a draw behind a stretch or a
+         reduction: the two fixed programs beside their constant controls (gh-ocannl-2270). *)
       is_x = (fun prog _ -> function Einsum (Fixed_index, x) -> is_open prog x | _ -> false);
       reach = false;
       refusals = [];
@@ -760,6 +764,22 @@ let judge (prog : program) (oracle : oracle) (outcome : outcome) ~(fills : int o
               with
               | x :: rest -> Known (x, rest)
               | [] -> Agrees)))
+
+(* For a fixed program's golden line: the nodes a known entry excuses, each with the shape the
+   solver gave it, so the line pins where the collapse is and not only the entry's name. *)
+let show_excused_nodes = function
+  | Known (x, rest) ->
+      let excuses = x :: rest in
+      let nodes =
+        List.dedup_and_sort ~compare:Int.compare (List.map excuses ~f:(fun (e : excuse) -> e.node))
+      in
+      " at "
+      ^ String.concat ~sep:", "
+          (List.map nodes ~f:(fun k ->
+               let e = List.find_exn excuses ~f:(fun (e : excuse) -> e.node = k) in
+               Printf.sprintf "%%%d %s" k
+                 (Option.value_map e.got ~default:"refused" ~f:(fun g -> "[" ^ show_rows g ^ "]"))))
+  | _ -> ""
 
 let show_judgement = function
   | Agrees -> "agrees"
@@ -1039,8 +1059,27 @@ let fixed_programs : (string * program) list =
         Const { empty with o = [ 5; 2 ] };
         Mul (4, 5);
       |] );
+    (* The fixed-index entry's two shapes (gh-ocannl-2270), each beside its control: the same
+       program with the fixed index replaced by a constant of the size the index demands. The
+       controls agree, so the excused collapse is the fixed index's, not the stretch's or the
+       reduction's. The stretch shape is random #1237; the reduction shape is random #1132. *)
     ( "(stretch u + stretch (stretch u)) ++ \"...|3 => ...|0\"",
       [| Draw Uniform; Stretch 0; Stretch 1; Add (1, 2); Einsum (Fixed_index, 3) |] );
+    ( "(stretch u + stretch (stretch u)) *. c[|4]",
+      [|
+        Draw Uniform; Stretch 0; Stretch 1; Add (1, 2); Const { empty with o = [ 4 ] }; Mul (3, 4);
+      |] );
+    ( "((u1 ++ \"ab => a\") *. v) ++ \"...|3 => ...|0\"",
+      [| Draw Uniform1; Einsum (Reduce, 0); Draw Uniform; Mul (1, 2); Einsum (Fixed_index, 3) |] );
+    ( "((u1 ++ \"ab => a\") *. v) *. c[|4]",
+      [|
+        Draw Uniform1;
+        Einsum (Reduce, 0);
+        Draw Uniform;
+        Mul (1, 2);
+        Const { empty with o = [ 4 ] };
+        Mul (3, 4);
+      |] );
     ( "(c[|3,2] *. v) *. (u * c[|5])",
       [|
         Const { empty with o = [ 3; 2 ] };
@@ -1284,7 +1323,7 @@ let () =
       List.iter
         (List.take judged (List.length fixed_programs))
         ~f:(fun (c, j, executed) ->
-          Stdio.printf "%s: %s%s\n" c.name (show_judgement j)
+          Stdio.printf "%s: %s%s%s\n" c.name (show_judgement j) (show_excused_nodes j)
             (if executed then ", executed" else ""));
       p_all ~min:1 "every fixed program agrees with the oracle or is a listed known case"
         (List.take judged (List.length fixed_programs))

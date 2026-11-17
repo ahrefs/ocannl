@@ -17,7 +17,10 @@ relu u *. c[|2,5]: agrees, executed
 c[|3->2] * (u ++ "ab => a"): agrees, executed
 (u ++ "ab => ba") *. c[|5,3]: agrees, executed
 (neg (u ++ "ab => a") *. v) *. c[|5,2]: agrees, executed
-(stretch u + stretch (stretch u)) ++ "...|3 => ...|0": known: proposed: a fixed index over a draw, executed
+(stretch u + stretch (stretch u)) ++ "...|3 => ...|0": known: proposed: a fixed index over a draw at %0 [|], executed
+(stretch u + stretch (stretch u)) *. c[|4]: agrees, executed
+((u1 ++ "ab => a") *. v) ++ "...|3 => ...|0": known: proposed: a fixed index over a draw at %0 [|1,1], %1 [|1], executed
+((u1 ++ "ab => a") *. v) *. c[|4]: agrees, executed
 (c[|3,2] *. v) *. (u * c[|5]): agrees, executed
 c + (u + (v *. w)): agrees, executed
 c + ((u + v) + w): agrees, executed
