@@ -4262,14 +4262,23 @@ let apply_tensorize op (opt : Low_level.optimized) : Low_level.optimized =
     no write of [target] in its body, in another iteration, may touch a cell the relocated tail read
     — a write textually before the site runs again after it in the next iteration. Writes are read
     from [affine_relations] (scalar-scope bodies and [Tile_mma] fallbacks included) and judged with
-    [Affine.pair_conflict]; an undecided one refuses. Nodes related by buffer aliasing
-    ([Tnode.alias_of]) are not analyzed — sole-consumption is judged by node identity. *)
+    [Affine.pair_conflict]; an undecided one refuses. A routine holding an impure scope body (a
+    tensor write inside a [Local_scope], which only a [?prelowered] routine can bring here) is
+    refused first, since the plain-write sites' scanners do not look inside scope bodies
+    (gh-ocannl-2266). Nodes related by buffer aliasing ([Tnode.alias_of]) are not analyzed —
+    sole-consumption is judged by node identity. *)
 let settled_on_device plc tn =
   match Tn.Placements.get plc tn with Some (Tn.On_device, _) -> true | _ -> false
 
 let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.optimized =
   let open Low_level in
   let fail msg = refuse ("Schedule.Fuse_epilogue: " ^ msg) in
+  (* gh-ocannl-2266: the write inventory below is complete only over pure scope bodies (see the
+     scanners' comment), so purity is checked first, before anything reads a write. *)
+  Option.iter (scope_purity_violation opt.llc) ~f:(fun msg ->
+      fail
+        ("the routine holds an impure scope body, whose tensor writes this op's write inventory \
+          does not read: " ^ msg));
   (* Earlier ops in the same schedule leave constructed-then-folded guards ([Split] remainders,
      [Stage] edge guards) that [apply]'s trailing simplify has not erased yet; fold them now so the
      recognition below sees the guard-free structure it targets (transforms fold their own guards,
@@ -4279,7 +4288,30 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
   let dims = Lazy.force target.Tn.dims in
   let rank = Array.length dims in
   let idx_mentions = Indexing.axis_index_mentions_symbol in
-  (* --- Generic statement scanners. --- *)
+  (* --- Generic statement scanners. [writes_tn] does not descend into [Local_scope] bodies, and
+     neither do the plain-write sites (sites 2 and 3's [find_write]) nor the statement-level layout
+     that read it. They need not (gh-ocannl-2266): no tensor write sits in a scope body here. Scope
+     purity ({!Low_level.scope_purity_violation}, gh-ocannl-584) bans [Set], [Zero_out],
+     [Set_dynamic], [Set_from_vec] and [Tile_mma] in every scope body, and it holds from lowering to
+     this op: - [Low_level.optimize_proc] checks it on entry ([validate_scope_bodies]), after the
+     rewrite tier, which [Assignments.lower] runs ahead of [optimize]. - The optimizer's passes keep
+     it. The inliner ([instantiate_computations]) builds a scope body from the inlined node's
+     computation. It drops that computation's [Set], [Zero_out] and [Set_from_vec], and rewrites the
+     node's own setters into [Set_local] of the scope's id. A computation holding a [Tile_mma],
+     [Set_dynamic], guard or staged code never becomes virtual ([check_and_store_virtual]). CSE,
+     rounding and [simplify_llc] rebuild or collapse bodies without adding statements to them.
+     [hoist_cross_statement_cse] moves bodies OUT of scopes, and checks purity itself first. -
+     Between [optimize] and the schedule, [Backends.maybe_sink_zeros] only reorders top-level
+     [Zero_out]s. - Every earlier op of this schedule went through {!apply_opt_op}'s scope-grammar
+     gate, which refuses an op that leaves an impure body its input did not hold (gh-ocannl-1467).
+     That covers the scopes the ops mint themselves (a materializing [Unroll] or [Partition]). -
+     [C_syntax.compile_proc] checks it again on exit. The one input that skips the entry gate is a
+     [?prelowered] routine: hand-built IR, compiled as written. The grammar gate leaves a violation
+     already present on entry to the exit gate, so such a routine reaches this op with its impure
+     body intact. That is why the op refuses one itself, first (above), rather than missing its
+     writes. With that check, [writes_tn] and [affine_relations] agree on every tensor write;
+     [target_writes] also counts an opaque [Staged_compilation] as a possible write. Pinned by
+     [test/operations/epilogue_fusion_scope_purity]. --- *)
   let rec writes_tn tn = function
     | Set { tn = t; _ } | Zero_out t | Set_dynamic { tn = t; _ } | Set_from_vec { tn = t; _ } ->
         Tn.equal t tn
@@ -4556,10 +4588,11 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
   let cover_env ~shifted env =
     List.filter env ~f:(fun (s, _) -> not (List.mem shifted s ~equal:Indexing.equal_symbol))
   in
-  (* The accumulator's writes, from the one access inventory ([affine_relations]): it sees writes
-     inside scalar [Local_scope] bodies and through a [Tile_mma]'s fallback, which the statement-
-     level [writes_tn] does not. An opaque [Staged_compilation] enumerates nothing, so it counts as
-     a possible write. *)
+  (* The accumulator's writes, from the one access inventory ([affine_relations]), with each write's
+     index map and loop ranges, which the dependence check below needs and the statement-level
+     [writes_tn] does not give. It would see writes inside scalar [Local_scope] bodies too, but the
+     purity check above leaves none (gh-ocannl-2266). An opaque [Staged_compilation] enumerates
+     nothing, so it counts as a possible write. *)
   let target_writes llc =
     let accs, effects = affine_relations llc in
     ( List.filter accs ~f:(fun (a : Tn.t Affine.access) -> a.a_write && Tn.equal a.a_tn target),

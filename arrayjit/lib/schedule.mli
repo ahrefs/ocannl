@@ -447,10 +447,12 @@ type optop =
           writes inside it (gh-ocannl-1844): {!Affine.pair_conflict} proves that no such write, in
           another iteration of the loop, touches a cell the relocated tail read — a write textually
           before the site runs again after it in the next iteration. An undecided write (whole-node,
-          opaque staged code, an index the engine cannot separate) refuses. The store-back of
-          [target] itself is kept. Elementwise tails never reorder the reduction, so on the C
-          backends the fused values are bitwise equal to the two-kernel form. Apply after
-          [Tensorize]/[Privatize].
+          opaque staged code, an index the engine cannot separate) refuses. A routine holding an
+          impure scope body ({!Low_level.scope_purity_violation}: a tensor write inside a
+          [Local_scope], which only a [?prelowered] routine brings past [optimize]'s entry gate) is
+          refused before any write is read (gh-ocannl-2266). The store-back of [target] itself is
+          kept. Elementwise tails never reorder the reduction, so on the C backends the fused values
+          are bitwise equal to the two-kernel form. Apply after [Tensorize]/[Privatize].
 
           [shared] (GPU only, requires the fragment site): the fused tail is often [target]'s last
           consumer, so placement makes [target] routine-local — a per-thread array the fragment
