@@ -570,16 +570,25 @@ type row_var_set = Set.M(Row_var).t [@@deriving sexp_of]
 
 let row_var_set_empty : row_var_set = Set.empty (module Row_var)
 
-let rec vars_of_dim = function
+let rec collect_dim_vars ~extent_only = function
   | Dim _ | Sym _ -> Set.empty (module Dim_var)
   | Var v -> Set.singleton (module Dim_var) v
-  | Affine { over; conv = None; _ } -> vars_of_dim over
-  | Affine { over; conv = Some { kernel; _ }; _ } ->
-      Set.union (vars_of_dim over) (vars_of_dim kernel)
-  | Concat dims -> Set.union_list (module Dim_var) (List.map dims ~f:vars_of_dim)
+  | Affine { over; conv; _ } -> (
+      let over_vars = collect_dim_vars ~extent_only over in
+      match conv with
+      | Some { kernel; use_padding; _ } when (not extent_only) || not use_padding ->
+          Set.union over_vars (collect_dim_vars ~extent_only kernel)
+      | _ -> over_vars)
+  | Concat dims ->
+      Set.union_list (module Dim_var) (List.map dims ~f:(collect_dim_vars ~extent_only))
 
-let vars_of_dims dims = Set.union_list (module Dim_var) (List.map dims ~f:vars_of_dim)
-let dim_vars_of_row (r : t) = Set.union (vars_of_dims r.beg_dims) (vars_of_dims r.dims)
+let vars_of_dim = collect_dim_vars ~extent_only:false
+
+let vars_of_dims ?(extent_only = false) dims =
+  Set.union_list (module Dim_var) (List.map dims ~f:(collect_dim_vars ~extent_only))
+
+let dim_vars_of_row ?(extent_only = false) (r : t) =
+  Set.union (vars_of_dims ~extent_only r.beg_dims) (vars_of_dims ~extent_only r.dims)
 
 (* What a solution's visit of an entry reads (gh-ocannl-1904): the dimension variables
    [s_dim_one_in_entry] / [s_dim_one_in_row_entry] substitute or react to, and the row variables
@@ -606,7 +615,9 @@ let row_entry_dim_mentions : row_entry -> dim_var_set = function
   | Solved_row r -> dim_vars_of_row r
   | Bounds_row { glb; constr; _ } ->
       Set.union (row_constraint_dim_vars constr)
-        (Option.value_map glb ~default:(Set.empty (module Dim_var)) ~f:dim_vars_of_row)
+        (Option.value_map glb
+           ~default:(Set.empty (module Dim_var))
+           ~f:(dim_vars_of_row ~extent_only:false))
 
 let row_entry_row_mentions : row_entry -> row_var_set = function
   | Solved_row { bcast = Row_var v; _ } -> Set.singleton (module Row_var) v
@@ -3094,11 +3105,16 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
         @@ Shape_error
              ( "occurs check failed: dimension variable occurs in its own definition",
                [ Dim_mismatch [ Var v; dim2 ] ] );
-      (* Unification merges the axes, so use-site resolvability is shared (gh-ocannl-544). *)
+      (* Unification merges the axes, so use-site resolvability is shared (gh-ocannl-544). A marked
+         axis equated to a window passes the mark to the variables that determine its extent
+         (gh-ocannl-2271). A padded kernel needs its own sizing use because the padded extent
+         depends only on the output axis and stride. *)
       (match dim2 with
       | Var v2 ->
           if is_resolve_at_use_dim v then add_resolve_at_use_dim v2;
           if is_resolve_at_use_dim v2 then add_resolve_at_use_dim v
+      | Affine _ when is_resolve_at_use_dim v ->
+          Set.iter (collect_dim_vars ~extent_only:true dim2) ~f:add_resolve_at_use_dim
       | _ -> ());
       let ineqs = ref [] in
       ineqs_from_reapply_rows_constr := [];
@@ -3919,15 +3935,17 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
           let unsolved, env =
             if beg_handled then (
               (* [v = value] makes [value]'s axes [v]'s own, so they take [v]'s role: a row that
-                 resolves at its use sites passes the mark to the dimension variables it absorbs
-                 (gh-ocannl-2247). Without it, a draw read through an einsum spec ([u ++ "ab =>
-                 ba"]) took the spec's axes, minted for the operation's result, and closed minimal
-                 with them. This is the one write of a [Solved_row]: the branch below commits
-                 nothing itself, and every binding it emits reaches this branch. The value's row
-                 variable already shares the mark (above). Substituted first: flank unification can
-                 have solved one of its axes. *)
+                 resolves at its use sites passes the mark to the variables that determine the
+                 extents it absorbs (gh-ocannl-2247, gh-ocannl-2271). Without it, a draw read
+                 through an einsum spec ([u ++ "ab => ba"]) took the spec's axes, minted for the
+                 operation's result, and closed minimal with them. This is the one write of a
+                 [Solved_row]: the branch below commits nothing itself, and every binding it emits
+                 reaches this branch. The value's row variable already shares the mark (above).
+                 Substituted first: flank unification can have solved one of its axes. *)
               if is_resolve_at_use v then
-                Set.iter (dim_vars_of_row (subst_row env value)) ~f:add_resolve_at_use_dim;
+                Set.iter
+                  (dim_vars_of_row ~extent_only:true (subst_row env value))
+                  ~f:add_resolve_at_use_dim;
               (* Substituting reads [v = value] into every entry bounded by [v], so it belongs to
                  this arm alone: below, [value] is what is left of the other side, and [v] is not it
                  (gh-ocannl-1955). *)
