@@ -2536,8 +2536,12 @@ let phase11 () =
    -- a three-slice concat [{x,y}], [{z}], [{u}] read at two sites costs 3, where the union is 4. A
    consumer an earlier routine committed [Virtual] replays its two-site read from the stored
    computation (the other producer of the charge, [read_charge_of_proc]), with [a] already inlined
-   into it. Every leg executes against a reference and a materialized reading, with every producer
-   varying in its cell. *)
+   into it. A reduction over both slices reads each cell of [a] [dim] times, past the default visit
+   cap: its leg lifts that cap to reach the fan-in guard, and two landing legs pin what the cap does
+   at its default -- a concat sized exactly to the read materialized whole ([Visit_cap]), the same
+   concat with spare cells footprint-scoped onto scratch (gh-ocannl-616). Every concat is sized to
+   the cells it writes, except in that second landing leg. Every leg executes against a reference
+   and a materialized reading, with every producer varying in its cell. *)
 
 let phase12 () =
   let saved_cap = LL.virtualize_settings.max_inline_fanin in
@@ -2604,7 +2608,9 @@ let phase12 () =
   let concat_parts = [ [ x; y ]; [ z ] ] in
   let concat_leg ~label ~reverse ~cap ~offsets =
     LL.virtualize_settings.max_inline_fanin <- cap;
-    let a = lmk ("ma_" ^ label) and c_ = cmk ("mc_" ^ label) and out = cmk ("mo_" ^ label) in
+    let a = lmk ~dims:[| cells |] ("ma_" ^ label)
+    and c_ = cmk ("mc_" ^ label)
+    and out = cmk ("mo_" ^ label) in
     materialize out;
     let setters = List.mapi concat_parts ~f:(fun part ks -> slice_setter a part ks) in
     let setters = if reverse then List.rev setters else setters in
@@ -2671,7 +2677,9 @@ let phase12 () =
           let reading = if blends then "blended" else "short-circuiting" in
           let label = (if blends then "blend_" else "branch_") ^ spelling in
           LL.virtualize_settings.max_inline_fanin <- 4;
-          let p_ = lmk ("mp_" ^ label) and c_ = cmk ("mq_" ^ label) and out = cmk ("mr_" ^ label) in
+          let p_ = lmk ~dims:[| cells |] ("mp_" ^ label)
+          and c_ = cmk ("mq_" ^ label)
+          and out = cmk ("mr_" ^ label) in
           materialize out;
           let producer =
             let i = sym () in
@@ -2698,24 +2706,35 @@ let phase12 () =
                ~expected:(Array.init dim ~f:(consumer_ref ~src:select_ref ~offsets))
                llc o)));
   (* An iterated site: [c[j] := 0], then [c[j] += a[k] + w[j]] over [k < 2*dim] -- one read of a
-     cell of [c] replays the reduction, so both slices: [{x,y,z,w}] = 4 across cap 3. *)
+     cell of [c] replays the reduction, so both slices: [{x,y,z,w}] = 4 across cap 3. Each cell of
+     [a] is read [dim] times, past the visit cap's default of 1, which would land on [a] first (see
+     the landing legs below) and reset [c]'s fan-in: the leg lifts the visit cap to [dim], so [a] is
+     inlined and the fan-in guard is what decides [c]. *)
+  let reducer c_ a =
+    let j = sym () and k = sym () in
+    seq
+      (loop_n j dim (set c_ [| iter j |] (LL.Constant 0.)))
+      (let j = sym () in
+       loop_n j dim
+         (loop_n k cells
+            (set c_
+               [| iter j |]
+               (add (get c_ [| iter j |]) (add (get a [| iter k |]) (get w [| iter j |]))))))
+  in
+  let reduced =
+    let total = List.sum (module Float) (List.init cells ~f:Fn.id) ~f:(slice_ref concat_parts) in
+    Array.init dim ~f:(fun j -> total +. (Float.of_int cells *. v w j))
+  in
+  let saved_visits = LL.virtualize_settings.max_visits in
   (LL.virtualize_settings.max_inline_fanin <- 3;
-   let a = lmk "ma_red" and c_ = cmk "mc_red" and out = cmk "mo_red" in
+   LL.virtualize_settings.max_visits <- dim;
+   let a = lmk ~dims:[| cells |] "ma_red" and c_ = cmk "mc_red" and out = cmk "mo_red" in
    materialize out;
    let setters = List.mapi concat_parts ~f:(fun part ks -> slice_setter a part ks) in
-   let reducer =
-     let j = sym () and k = sym () in
-     seq
-       (loop_n j dim (set c_ [| iter j |] (LL.Constant 0.)))
-       (let j = sym () in
-        loop_n j dim
-          (loop_n k cells
-             (set c_
-                [| iter j |]
-                (add (get c_ [| iter j |]) (add (get a [| iter k |]) (get w [| iter j |]))))))
-   in
-   let llc = List.reduce_exn ~f:seq (setters @ [ reducer; copy out c_ ]) in
+   let llc = List.reduce_exn ~f:seq (setters @ [ reducer c_ a; copy out c_ ]) in
    let o = optimize ~name:"vcf_sites_red" llc in
+   p "a reduction over a concat's two slices, visit cap at dim: the concat is inlined"
+     (known_virtual o a && count_get o a = 0);
    p
      "a reduction over a concat's two slices: charged both slices joined with w (4), materialized \
       by the fan-in cap"
@@ -2723,19 +2742,71 @@ let phase12 () =
    p
      "a reduction over a concat's two slices: execution matches the reference and the materialized \
       reading"
-     (check_exec ~name:"vcf_sites_red" ~materialized:[ a; c_ ] ~out
-        ~expected:
-          (let total =
-             List.sum (module Float) (List.init cells ~f:Fn.id) ~f:(slice_ref concat_parts)
-           in
-           Array.init dim ~f:(fun j -> total +. (Float.of_int cells *. v w j)))
-        llc o));
+     (check_exec ~name:"vcf_sites_red" ~materialized:[ a; c_ ] ~out ~expected:reduced llc o);
+   LL.virtualize_settings.max_visits <- saved_visits);
+  (* The landing rule the leg above steps around (gh-ocannl-616, [Low_level.decide_placements]'s
+     [land_on_cap]): at the default visit cap, the reduction's [dim] reads of each cell of [a] trip
+     it, and WHERE it lands depends on [a]'s size. Sized exactly [2*dim], the reader's box holds as
+     many cells as [a] has, so the footprint form is no cheaper and [a] is materialized whole, with
+     the visit cap's provenance. Allocated [3*dim] and written over [2*dim], the box holds fewer
+     cells than [a]: [a] is footprint-scoped, every read served from one scratch node (the
+     [footprint] namespace) of the box's [2*dim] cells. [c] is materialized, so [a]'s is the only
+     decision either leg pins. The legs state the visit cap and the footprint form they pin, so an
+     ambient override of either cannot turn them into a different test. *)
+  let saved_footprint = LL.virtualize_settings.footprint_materialization in
+  List.iter
+    [ cells; 3 * dim ]
+    ~f:(fun size ->
+      LL.virtualize_settings.max_inline_fanin <- -1;
+      LL.virtualize_settings.max_visits <- 1;
+      LL.virtualize_settings.footprint_materialization <- true;
+      let label = Printf.sprintf "land%d" size in
+      let a = lmk ~dims:[| size |] ("ma_" ^ label) and c_ = cmk ("mc_" ^ label) in
+      materialize c_;
+      let setters = List.mapi concat_parts ~f:(fun part ks -> slice_setter a part ks) in
+      let llc = List.reduce_exn ~f:seq (setters @ [ reducer c_ a ]) in
+      let name = "vcf_sites_" ^ label in
+      let o = optimize ~name llc in
+      let scratches =
+        Hashtbl.keys o.LL.traced_store
+        |> List.filter ~f:(fun tn -> String.equal tn.Tn.namespace LL.footprint_namespace)
+      in
+      let prefix = Printf.sprintf "the visit cap on a %d-cell concat read over %d: " size cells in
+      if size = cells then (
+        p
+          (prefix ^ "materialized whole, with the visit cap's provenance")
+          (known_non_virtual o a
+          && Option.equal Tn.equal_provenance (rejection_code o a) (Some Tn.Visit_cap));
+        p_empty
+          (prefix ^ "no node of the routine is footprint scratch")
+          ~over:(Hashtbl.keys o.LL.traced_store) scratches)
+      else
+        p
+          (prefix
+         ^ "footprint-scoped: virtual, read only through one scratch shaped like the read box")
+          (known_virtual o a
+          && count_get o a = 0
+          &&
+          match scratches with
+          | [ s ] ->
+              Array.equal Int.equal (Lazy.force s.Tn.dims) [| cells |]
+              && count_set o s = 1
+              && count_get o s = 1
+          | _ -> false);
+      p
+        (prefix ^ "execution matches the reference and the materialized reading")
+        (check_exec ~name ~materialized:[ a ] ~out:c_ ~expected:reduced llc o));
+  LL.virtualize_settings.max_visits <- saved_visits;
+  LL.virtualize_settings.footprint_materialization <- saved_footprint;
   (* Across routines: A commits the concat and its two-site reader [c] [Virtual] with the cap off;
      B's [d := c + w] replays [c]'s stored computation, read through [read_charge_of_proc]. The
      stored computation already carries [a] inlined at both sites, so its loads name both slices and
      the base charged it right too: this leg pins the replay, not the multiplicity (the collector's
      own stored-computation claim is in [access_fold]). *)
-  (let a = lmk "ma_x" and c_ = cmk "mc_x" and d = cmk "md_x" and out = cmk "mo_x" in
+  (let a = lmk ~dims:[| cells |] "ma_x"
+   and c_ = cmk "mc_x"
+   and d = cmk "md_x"
+   and out = cmk "mo_x" in
    materialize out;
    let ctx = LL.empty_optimize_ctx () in
    LL.virtualize_settings.max_inline_fanin <- -1;
@@ -2762,9 +2833,10 @@ let phase12 () =
   LL.virtualize_settings.max_inline_fanin <- saved_cap
 
 (* === Shared by phases 13 and 14: a concat [a] = [{x,y}] | [{z}] over [2*dim] cells and a few more
-   leaves, every leaf varying with its identity and its cell, away from zero. As in phase 12, a
-   concat a reduction reads over every cell is allocated [3*dim] cells: one exactly [2*dim] long is
-   materialized by the visit cap before the fan-in guard is asked. === *)
+   leaves, every leaf varying with its identity and its cell, away from zero. Every node is sized
+   exactly to the cells the phases write or read: spare cells move where a cap lands (phase 12's
+   landing legs), so a leg that reaches the fan-in guard past the visit cap lifts the cap explicitly
+   instead. === *)
 
 type seq_fixture = {
   sx : Tn.t;
@@ -2780,20 +2852,20 @@ type seq_fixture = {
 }
 
 let seq_fixture ~first_id =
-  let mk = node_factory ~first_id ~dims:[| 3 * dim |] () in
+  let mk = node_factory ~first_id ~dims:[| 2 * dim |] () in
   let sx = mk "sx" and sy = mk "sy" and sz = mk "sz" and su = mk "su" and sv = mk "sv" in
   let sw = mk "sw" and sm = mk "sm" and sn = mk "sn" in
   let leaves = [ sx; sy; sz; su; sv; sw ] in
   List.iter (sm :: sn :: leaves) ~f:materialize;
-  let vals k = Array.init (3 * dim) ~f:(fun i -> Float.of_int ((100 * (k + 1)) + i + 1)) in
+  let vals k = Array.init (2 * dim) ~f:(fun i -> Float.of_int ((100 * (k + 1)) + i + 1)) in
   (* Masks taking both values within each slice: [m] the cell's parity, [n] that of slice plus
      offset -- equal to [m] in the first slice, its negation in the second. *)
   let m_vals =
-    Array.init (3 * dim) ~f:(fun i ->
+    Array.init (2 * dim) ~f:(fun i ->
         weighted ~weights:[| 1 |] ~modulus:2 ~offset:0. ~stride:1. [| i |])
   in
   let n_vals =
-    Array.init (3 * dim) ~f:(fun i ->
+    Array.init (2 * dim) ~f:(fun i ->
         weighted ~weights:[| 1; 1 |] ~modulus:2 ~offset:0. ~stride:1. [| i / dim; i % dim |])
   in
   let sval tn i =
@@ -2852,9 +2924,9 @@ let phase13 () =
   let saved_cap = LL.virtualize_settings.max_inline_fanin in
   let f = seq_fixture ~first_id:9400 in
   let cmk = node_factory ~first_id:9450 ~dims:[| 2 * dim |] () in
-  (* The reduction's nodes: one cell per [j < dim]; its concat as phase 12's. *)
+  (* The reduction's nodes: one cell per [j < dim]. Its concat is [cmk]'s, sized exactly to the
+     [2*dim] cells it writes. *)
   let rmk = node_factory ~first_id:9480 ~dims:[| dim |] () in
-  let amk = node_factory ~first_id:9490 ~dims:[| 3 * dim |] () in
   let v = f.sval and cells = 2 * dim in
   let concat a = [ slice_sum a 0 [ f.sx; f.sy ]; slice_sum a 1 [ f.sz ] ] in
   let concat_ref i = if i < dim then v f.sx i +. v f.sy i else v f.sz i in
@@ -2868,10 +2940,16 @@ let phase13 () =
     ]
   in
   let reduce_ref j = v f.sw j +. List.sum (module Float) (List.init cells ~f:Fn.id) ~f:concat_ref in
+  (* The reduction reads each cell of [a] [dim] times, past the visit cap's default of 1: as in
+     phase 12's reduction leg, the cap is lifted to [dim] so [a] is inlined and the fan-in guard
+     decides [c]. At the default, the cap would land on [a] first (materializing it whole: phase
+     12's landing legs) and reset [c]'s fan-in. *)
+  let saved_visits = LL.virtualize_settings.max_visits in
   List.iter [ 3; 4 ] ~f:(fun cap ->
       LL.virtualize_settings.max_inline_fanin <- cap;
+      LL.virtualize_settings.max_visits <- dim;
       let label = Printf.sprintf "red_cap%d" cap in
-      let a = amk ("sa_" ^ label) and c = rmk ("sc_" ^ label) and out = rmk ("so_" ^ label) in
+      let a = cmk ("sa_" ^ label) and c = rmk ("sc_" ^ label) and out = rmk ("so_" ^ label) in
       materialize out;
       let llc =
         List.reduce_exn ~f:seq (concat a @ init_reduce c a @ [ copy_cells ~cells:dim out c ])
@@ -2879,6 +2957,9 @@ let phase13 () =
       let name = "vcf_seq_" ^ label in
       let o = optimize ~name llc in
       let prefix = Printf.sprintf "init then reduction over a concat, cap %d: " cap in
+      p
+        (prefix ^ "the concat is inlined (visit cap at dim)")
+        (known_virtual o a && count_get o a = 0);
       if cap = 3 then
         p
           (prefix ^ "charged the init and both slices (4), materialized by the fan-in cap")
@@ -2887,7 +2968,8 @@ let phase13 () =
       p
         (prefix ^ "execution matches the reference and the materialized reading")
         (parity ~name ~seed:(f.sseed ~n:dim out) ~materialized:[ a; c ] ~out
-           ~expected:(Array.init dim ~f:reduce_ref) llc o));
+           ~expected:(Array.init dim ~f:reduce_ref) llc o);
+      LL.virtualize_settings.max_visits <- saved_visits);
   (* The plain chain: three overlapping setters sharing inputs. *)
   let chain c ks_list =
     List.mapi ks_list ~f:(fun n ks ->
@@ -2974,13 +3056,12 @@ let phase13 () =
         llc o));
   (* Across routines: A commits the concat and [c]'s init and update [Virtual] with the cap off; B's
      copy replays both stored components. *)
-  (let a = amk "sa_x" and c = rmk "sc_x" and d = rmk "sd_x" and out = rmk "so_x" in
+  (let a = cmk "sa_x" and c = rmk "sc_x" and d = rmk "sd_x" and out = rmk "so_x" in
    materialize out;
    let ctx = LL.empty_optimize_ctx () in
    LL.virtualize_settings.max_inline_fanin <- -1;
    (* Nothing reads [c] in A, so the reduction's [dim] reads of each cell of [a] are what the visit
       cap sees: lift it there, so A defers the concat too. *)
-   let saved_visits = LL.virtualize_settings.max_visits in
    LL.virtualize_settings.max_visits <- dim;
    let o_a =
      optimize_in ctx ~name:"vcf_seq_x_a" (List.reduce_exn ~f:seq (concat a @ init_reduce c a))
@@ -3039,7 +3120,8 @@ let phase14 () =
   let f = seq_fixture ~first_id:9500 in
   let cmk = node_factory ~first_id:9550 ~dims:[| 2 * dim |] () in
   (* A consumer over [j < dim] owns [dim] cells: a node written over part of its cells lands the cap
-     on footprint-scoped scratch instead. *)
+     on footprint-scoped scratch instead (phase 12's landing legs), with no [Inline_fanin_cap]
+     provenance to pin. *)
   let dmk = node_factory ~first_id:9580 ~dims:[| dim |] () in
   let v = f.sval and cells = 2 * dim in
   let concat a = [ slice_sum a 0 [ f.sx; f.sy ]; slice_sum a 1 [ f.sz ] ] in

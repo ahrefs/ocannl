@@ -287,13 +287,21 @@ two-site select, blended, plain: execution matches the reference and the materia
 two-site select, blended, inverted: the producer is charged the union of its arms (4), virtual at cap 4: true
 two-site select, blended, inverted: the consumer is charged both arms joined with w (5), materialized by the fan-in cap: true
 two-site select, blended, inverted: execution matches the reference and the materialized reading: true
+a reduction over a concat's two slices, visit cap at dim: the concat is inlined: true
 a reduction over a concat's two slices: charged both slices joined with w (4), materialized by the fan-in cap: true
 a reduction over a concat's two slices: execution matches the reference and the materialized reading: true
+the visit cap on a 8-cell concat read over 8: materialized whole, with the visit cap's provenance: true
+the visit cap on a 8-cell concat read over 8: no node of the routine is footprint scratch: true
+the visit cap on a 8-cell concat read over 8: execution matches the reference and the materialized reading: true
+the visit cap on a 12-cell concat read over 8: footprint-scoped: virtual, read only through one scratch shaped like the read box: true
+the visit cap on a 12-cell concat read over 8: execution matches the reference and the materialized reading: true
 cross-routine two-site read: routine A commits the concat and its reader virtual: true
 cross-routine two-site read: the stored reader is charged both slices (3), so B's consumer with w (4) is materialized by the fan-in cap: true
 cross-routine two-site read: execution matches the reference: true
+init then reduction over a concat, cap 3: the concat is inlined (visit cap at dim): true
 init then reduction over a concat, cap 3: charged the init and both slices (4), materialized by the fan-in cap: true
 init then reduction over a concat, cap 3: execution matches the reference and the materialized reading: true
+init then reduction over a concat, cap 4: the concat is inlined (visit cap at dim): true
 init then reduction over a concat, cap 4: charged 4, virtual at the cap: true
 init then reduction over a concat, cap 4: execution matches the reference and the materialized reading: true
 a three-setter update chain, cap 3: charged its four distinct inputs, materialized by the fan-in cap: true
