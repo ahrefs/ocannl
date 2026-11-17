@@ -35,6 +35,51 @@ let binary_div source =
                         (NTDSL.pointdiv source (TDSL.number ?label:None 2.0)))
          "w") () in
     w
+let power_int source =
+  let open! TDSL.O in
+    let w =
+      (TDSL.param ?more_label:None ?value:None ?values:None
+         ?param_init:(Some (NTDSL.pointpow (Float.of_int 2) source)) "w") () in
+    w
+let power_float source =
+  let open! TDSL.O in
+    let w =
+      (TDSL.param ?more_label:None ?value:None ?values:None
+         ?param_init:(Some (NTDSL.pointpow 2.0 source)) "w") () in
+    w
+let power_expr source e =
+  let open! TDSL.O in
+    let w =
+      (TDSL.param ?more_label:None ?value:None ?values:None
+         ?param_init:(Some (NTDSL.pointpow e source)) "w") () in
+    w
+let power_effectful source n =
+  let open! TDSL.O in
+    let w =
+      (TDSL.param ?more_label:None ?value:None ?values:None
+         ?param_init:(Some
+                        (let __exponent1 = Float.of_int (!n) in
+                         NTDSL.pointpow __exponent1 (incr n; source))) "w")
+        () in
+    w
+module Custom_power =
+  struct
+    module TDSL =
+      struct
+        include TDSL
+        module O =
+          struct
+            include TDSL.O
+            let ( **. ) base _exponent = NTDSL.relu base
+          end
+      end
+    let explicit_power source e =
+      let open! TDSL.O in
+        let w =
+          (TDSL.param ?more_label:None ?value:None ?values:None
+             ?param_init:(Some (TDSL.O.( **. ) source e)) "w") () in
+        w
+  end
 let named_binary source other =
   let open! TDSL.O in
     let w =
@@ -74,5 +119,6 @@ let ternary_both x =
     __fn __a __b __c
 let _ =
   (binary_tensor, binary_literal, binary_sub, binary_mul, binary_div,
-    named_binary, named_unary, named_ternary, binary_head, binary_both,
-    ternary_head, ternary_both)
+    power_int, power_float, power_expr, power_effectful,
+    Custom_power.explicit_power, named_binary, named_unary, named_ternary,
+    binary_head, binary_both, ternary_head, ternary_both)

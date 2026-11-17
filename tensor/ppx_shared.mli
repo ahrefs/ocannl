@@ -147,8 +147,13 @@ val ndarray_op :
   ?axis_labels:expression -> ?label:expression -> ndarray_fn:expression -> expression -> expression
 (** Applies [ndarray_fn] to an ndarray literal's values, then batch/input/output axes and [()]. *)
 
+val power_head : loc:location -> expression
+(** The head [Ppx_op.translate]'s power arms apply, [TDSL.O.( **. )], in the infix order: base, then
+    exponent. *)
+
 val add_module_qualifier_to_applied_function :
   ?module_name:string -> ?is_primitive:(string -> bool) -> expression -> expression
 (** Qualifies tail applications' functions by [module_name] (default [NTDSL]), [*] as [matmul].
     Removes absent optional labels on mapped operators and heads recognized by [is_primitive]
-    (default: none), preserving the full initializer signature after [%op] translation. *)
+    (default: none), preserving the full initializer signature after [%op] translation. A
+    {!power_head} application becomes the module's [pointpow], exponent first. *)
