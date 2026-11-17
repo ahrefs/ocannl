@@ -666,8 +666,8 @@ let () =
      extent), the weight is strictly negative and the activation strictly positive so no product
      and no sum is zero, and every product is a small multiple of 1/8 with partial sums far below
      2^24, so f32 addition is exact in any order -- derived below from the readers, and compared
-     with a serial run. The operands are half-integers and quarter steps of at most four
-     significant bits, so [pipelined_leg]'s tf32 rendering reads them unchanged. *)
+     with a serial run. The operands are half-integers and quarter steps that tf32's 11 significant
+     bits hold, so [pipelined_leg]'s tf32 rendering reads them unchanged -- derived below too. *)
   let bb = 2 and ss = 64 and jj = 64 and hh = 4 and ee = 16 in
   let w_f =
     Ll_test.operand ~b:[] ~o:[ jj ] ~i:[ hh; ee ]
@@ -685,6 +685,20 @@ let () =
   in
   p_all "out-projection operands have f32-exact partial sums" products
     ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
+  (* tf32 keeps f16's significand ([Ir.Ops] has no tf32 precision): a value is unchanged by it when
+     its odd significand, [|v|] over its finest grain, is below [2^11]. *)
+  let tf32_bits = Ir.Ops.significand_bits Ir.Ops.half in
+  let held_by_tf32 v =
+    match Ll_test.grain_exponent v with
+    | None -> true
+    | Some g -> Float.(abs v < ldexp 1. Int.(tf32_bits + g))
+  in
+  let values dims f =
+    List.init (Array.fold dims ~init:1 ~f:( * )) ~f:(fun i -> f (Ll_test.unflat ~dims i))
+  in
+  p_all "out-projection operands are unchanged at tf32's significand"
+    (values [| jj; hh; ee |] w_f @ values [| bb; ss; hh; ee |] att_f)
+    ~f:held_by_tf32;
   let projection () =
     let wv = w () and av = att () in
     let%op out = wv * av in

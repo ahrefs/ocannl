@@ -1,4 +1,5 @@
 out-projection operands have f32-exact partial sums: true
+out-projection operands are unchanged at tf32's significand: true
 out-projection: the serial run computes the premise's host sums: true
 out_proj: the multi-axis contraction is detected as a matmul site: true
 out_proj: the outer contraction loops carry the expected extents: true

@@ -3241,8 +3241,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
 - Deriving a premise for a `%op` test in `premise_ratchet`'s protocol (gh-ocannl-2272): the
   reference must be `Context.get_values` of a `Context.run` result in the same file, so a test
   reading values after `Train.forward_once` or `Train.update_once` compiles through
-  `Train.to_routine` and runs with `Context.run` instead (the same compile, for a program with no
-  parameters), in a local wrapper if it likes. A padded window's or a transposed convolution's
+  `Train.to_routine` and runs with `Context.run` instead, in a local wrapper if it likes. That is
+  the same budgeted compile for a program with no parameters, with one difference: `to_routine`
+  also materializes the outputs `Asgns.guess_materialized` names, where `run_once` materializes
+  only its tensor -- so a test reading a value virtualization could touch materializes it
+  explicitly first. A padded window's or a transposed convolution's
   cell is a `reduction_cells` cell over every tap or pair, its operand read through an
   `Ll_test.operand` with one zero cell appended, the coordinate function sending a margin tap or a
   pair that misses the cell there; a file of many forms keeps that in one local helper that builds
