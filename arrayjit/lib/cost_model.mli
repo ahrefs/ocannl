@@ -462,10 +462,10 @@ val operand_deliveries :
   staged_copy_context list * staged_copy_context list
 (** Staged copies as above, and, with [is_global], the scheduled scalar operands read directly from
     global storage (gh-ocannl-2279). Each read uses the source storage width, including repeats of
-    the same cell. A staged copy accounts for its own source. A serial reduction's repeated
-    self-reads are excluded when {!Low_level.decide_accum_width} localizes its raw update. Scope
-    definitions count once per rendering unit. Unknown conditions are taken. Both lists are empty in
-    a [Tile_mma] kernel. *)
+    the same cell. A staged copy accounts for its own source. When {!Low_level.decide_accum_width}
+    localizes a raw serial reduction, the census excludes its accumulator reads, including any
+    initial load introduced by code generation. Scope definitions count once per statement or scan
+    initializer. Unknown conditions are taken. Both lists are empty in a [Tile_mma] kernel. *)
 
 val filled_staged_bytes : ?fill_model:fill_model -> staged_copy_context list -> float
 (** The delivery bytes as the compute leg divides them by the copy rate: each context's over its

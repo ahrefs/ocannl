@@ -1402,8 +1402,8 @@ let operand_deliveries ?is_global ~is_staged (code : Low_level.t) =
     and reads ~ctx ~scale ~env ?self roots =
       Option.iter direct ~f:(fun (is_global, (add_direct, _)) ->
           let add tn = if scale > 0 && is_global tn then add_direct ctx (bytes scale tn) in
-          (* The renderer emits one definition per scope ID in a rendering unit. This census takes
-             guards on both arms, so only the IDs matter, not their emission order. *)
+          (* The renderer emits a scope ID once per statement or scan initializer. The census counts
+             both arms with their guards taken, so their order is immaterial. *)
           let emitted = lazy (Hash_set.create (module Low_level.Scope_id)) in
           let scalar _ () (sc : Low_level.scalar_t) =
             (match sc with
