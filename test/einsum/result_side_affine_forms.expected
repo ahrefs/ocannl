@@ -8,44 +8,82 @@ binary stride and offset 2*i+1: extent: true
 binary stride and offset 2*i+1: values: true
 interleave (%cd ~logic 2*i and 2*i+1): extent: true
 interleave (%cd ~logic 2*i and 2*i+1): values: true
+binary window i<+k: every partial sum of every cell is exact in f32: true
 binary window i<+k: extent: true
 binary window i<+k: values: true
+binary window i<+k: the premise's host sums are the executed values: true
+binary strided window 2*i<+k: every partial sum of every cell is exact in f32: true
 binary strided window 2*i<+k: extent: true
 binary strided window 2*i<+k: values: true
+binary strided window 2*i<+k: the premise's host sums are the executed values: true
+binary dilated window i<+2*k: every partial sum of every cell is exact in f32: true
 binary dilated window i<+2*k: extent: true
 binary dilated window i<+2*k: values: true
+binary dilated window i<+2*k: the premise's host sums are the executed values: true
+binary strided dilated window 2*i<+3*k: every partial sum of every cell is exact in f32: true
 binary strided dilated window 2*i<+3*k: extent: true
 binary strided dilated window 2*i<+3*k: values: true
+binary strided dilated window 2*i<+3*k: the premise's host sums are the executed values: true
+padded transposed conv recipe: 2*i<+2*k, then a one-hot crop, padding 2: every partial sum of every cell is exact in f32: true
 padded transposed conv recipe: 2*i<+2*k, then a one-hot crop, padding 2: extent: true
 padded transposed conv recipe: 2*i<+2*k, then a one-hot crop, padding 2: values: true
+padded transposed conv recipe: 2*i<+2*k, then a one-hot crop, padding 2: the premise's host sums are the executed values: true
+padded transposed conv recipe: 2*i<+k, then a one-hot crop, padding 1, output_padding 1: every partial sum of every cell is exact in f32: true
 padded transposed conv recipe: 2*i<+k, then a one-hot crop, padding 1, output_padding 1: extent: true
 padded transposed conv recipe: 2*i<+k, then a one-hot crop, padding 1, output_padding 1: values: true
+padded transposed conv recipe: 2*i<+k, then a one-hot crop, padding 1, output_padding 1: the premise's host sums are the executed values: true
+padded transposed conv recipe: 3*i<+k, crop the start, append a zero, output_padding 2: every partial sum of every cell is exact in f32: true
 padded transposed conv recipe: 3*i<+k, crop the start, append a zero, output_padding 2: extent: true
 padded transposed conv recipe: 3*i<+k, crop the start, append a zero, output_padding 2: values: true
+padded transposed conv recipe: 3*i<+k, crop the start, append a zero, output_padding 2: the premise's host sums are the executed values: true
+padded transposed conv recipe: 2*i<+2*k, then a slice, padding 2: every partial sum of every cell is exact in f32: true
 padded transposed conv recipe: 2*i<+2*k, then a slice, padding 2: extent: true
 padded transposed conv recipe: 2*i<+2*k, then a slice, padding 2: values: true
+padded transposed conv recipe: 2*i<+2*k, then a slice, padding 2: the premise's host sums are the executed values: true
+padded transposed conv recipe: 2*i<+k, then a captured slice, padding 1, output_padding 1: every partial sum of every cell is exact in f32: true
 padded transposed conv recipe: 2*i<+k, then a captured slice, padding 1, output_padding 1: extent: true
 padded transposed conv recipe: 2*i<+k, then a captured slice, padding 1, output_padding 1: values: true
+padded transposed conv recipe: 2*i<+k, then a captured slice, padding 1, output_padding 1: the premise's host sums are the executed values: true
+padded transposed conv recipe: 3*i<+k, slice the start, pad the end, output_padding 2: every partial sum of every cell is exact in f32: true
 padded transposed conv recipe: 3*i<+k, slice the start, pad the end, output_padding 2: extent: true
 padded transposed conv recipe: 3*i<+k, slice the start, pad the end, output_padding 2: values: true
+padded transposed conv recipe: 3*i<+k, slice the start, pad the end, output_padding 2: the premise's host sums are the executed values: true
 unary multi-term i<+3*j: extent: true
 unary multi-term i<+3*j: values: true
+unary window, kernel captured and set: every partial sum of every cell is exact in f32: true
 unary window, kernel captured and set: extent: true
 unary window, kernel captured and set: values: true
+unary window, kernel captured and set: the premise's host sums are the executed values: true
 unary window, kernel unbound (closes to 1): extent: true
 unary window, kernel unbound (closes to 1): values: true
+ternary window i<+k: every partial sum of every cell is exact in f32: true
 ternary window i<+k: extent: true
 ternary window i<+k: values: true
+ternary window i<+k: the premise's host sums are the executed values: true
+binary two windows i<+k, j<+l: every partial sum of every cell is exact in f32: true
 binary two windows i<+k, j<+l: extent: true
 binary two windows i<+k, j<+l: values: true
+binary two windows i<+k, j<+l: the premise's host sums are the executed values: true
+batch-axis window b<+k: every partial sum of every cell is exact in f32: true
 batch-axis window b<+k: extent: true
 batch-axis window b<+k: values: true
+batch-axis window b<+k: the premise's host sums are the executed values: true
+input-axis window i<+k: every partial sum of every cell is exact in f32: true
 input-axis window i<+k: extent: true
 input-axis window i<+k: values: true
+input-axis window i<+k: the premise's host sums are the executed values: true
+legacy + with use_padding = false: every partial sum of every cell is exact in f32: true
 legacy + with use_padding = false: extent: true
 legacy + with use_padding = false: values: true
+legacy + with use_padding = false: the premise's host sums are the executed values: true
+%cd ~logic window 2*i<+k: every partial sum of every cell is exact in f32: true
 %cd ~logic window 2*i<+k: extent: true
 %cd ~logic window 2*i<+k: values: true
+%cd ~logic window 2*i<+k: the premise's host sums are the executed values: true
+d/da of the strided dilated window: every partial sum of every cell is exact in f32: true
+d/dw of the strided dilated window: every partial sum of every cell is exact in f32: true
+d/da of the strided dilated window: the premise's host sums are the executed values: true
+d/dw of the strided dilated window: the premise's host sums are the executed values: true
 d/da of the strided dilated window: true
 d/dw of the strided dilated window: true
 d/da of the stride-and-offset scatter: true

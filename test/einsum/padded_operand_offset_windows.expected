@@ -1,91 +1,175 @@
+2*o=+1+k, kernel 3: every partial sum of every cell is exact in f32: true
 2*o=+1+k, kernel 3: extent: true
 2*o=+1+k, kernel 3: values: true
+2*o=+1+k, kernel 3: the premise's host sums are the executed values: true
+3*o=+2+k, kernel 3: every partial sum of every cell is exact in f32: true
 3*o=+2+k, kernel 3: extent: true
 3*o=+2+k, kernel 3: values: true
+3*o=+2+k, kernel 3: the premise's host sums are the executed values: true
+3*o=+1+k, kernel 4: every partial sum of every cell is exact in f32: true
 3*o=+1+k, kernel 4: extent: true
 3*o=+1+k, kernel 4: values: true
+3*o=+1+k, kernel 4: the premise's host sums are the executed values: true
+2*o=+1+k, kernel 2: every partial sum of every cell is exact in f32: true
 2*o=+1+k, kernel 2: extent: true
 2*o=+1+k, kernel 2: values: true
+2*o=+1+k, kernel 2: the premise's host sums are the executed values: true
+2*o=+1+2*k, kernel 3: every partial sum of every cell is exact in f32: true
 2*o=+1+2*k, kernel 3: extent: true
 2*o=+1+2*k, kernel 3: values: true
+2*o=+1+2*k, kernel 3: the premise's host sums are the executed values: true
+o=+1+k (offset at the stride), kernel 3: every partial sum of every cell is exact in f32: true
 o=+1+k (offset at the stride), kernel 3: extent: true
 o=+1+k (offset at the stride), kernel 3: values: true
+o=+1+k (offset at the stride), kernel 3: the premise's host sums are the executed values: true
+o=+2+k (offset past the stride), kernel 3: every partial sum of every cell is exact in f32: true
 o=+2+k (offset past the stride), kernel 3: extent: true
 o=+2+k (offset past the stride), kernel 3: values: true
+o=+2+k (offset past the stride), kernel 3: the premise's host sums are the executed values: true
+2*o=+5+k (offset past the stride), kernel 3: every partial sum of every cell is exact in f32: true
 2*o=+5+k (offset past the stride), kernel 3: extent: true
 2*o=+5+k (offset past the stride), kernel 3: values: true
+2*o=+5+k (offset past the stride), kernel 3: the premise's host sums are the executed values: true
+o=+2*k (dilated, no offset), kernel 3: every partial sum of every cell is exact in f32: true
 o=+2*k (dilated, no offset), kernel 3: extent: true
 o=+2*k (dilated, no offset), kernel 3: values: true
+o=+2*k (dilated, no offset), kernel 3: the premise's host sums are the executed values: true
+2*o=+2*k, kernel 3: every partial sum of every cell is exact in f32: true
 2*o=+2*k, kernel 3: extent: true
 2*o=+2*k, kernel 3: values: true
+2*o=+2*k, kernel 3: the premise's host sums are the executed values: true
+o=+1+3*k, kernel 2: every partial sum of every cell is exact in f32: true
 o=+1+3*k, kernel 2: extent: true
 o=+1+3*k, kernel 2: values: true
+o=+1+3*k, kernel 2: the premise's host sums are the executed values: true
 max 2*o=+1+k, kernel 3: extent: true
 max 2*o=+1+k, kernel 3: values: true
 max o=+2+k (an all-outside window is the neutral element), kernel 3: extent: true
 max o=+2+k (an all-outside window is the neutral element), kernel 3: values: true
 max o=+1+2*k, kernel 3: extent: true
 max o=+1+2*k, kernel 3: values: true
+%op, identifier stride and dilation: stride*o=+1+dilation*k: every partial sum of every cell is exact in f32: true
 %op, identifier stride and dilation: stride*o=+1+dilation*k: extent: true
 %op, identifier stride and dilation: stride*o=+1+dilation*k: values: true
+%op, identifier stride and dilation: stride*o=+1+dilation*k: the premise's host sums are the executed values: true
+sum pool, captured kernel over stretch 1.0: 2*o=+1+k: every partial sum of every cell is exact in f32: true
 sum pool, captured kernel over stretch 1.0: 2*o=+1+k: extent: true
 sum pool, captured kernel over stretch 1.0: 2*o=+1+k: values: true
+sum pool, captured kernel over stretch 1.0: 2*o=+1+k: the premise's host sums are the executed values: true
+ternary 2*o=+1+k: every partial sum of every cell is exact in f32: true
 ternary 2*o=+1+k: extent: true
 ternary 2*o=+1+k: values: true
+ternary 2*o=+1+k: the premise's host sums are the executed values: true
+two padded windows 2*a=+1+k, b=+1+2*l: every partial sum of every cell is exact in f32: true
 two padded windows 2*a=+1+k, b=+1+2*l: extent: true
 two padded windows 2*a=+1+k, b=+1+2*l: values: true
+two padded windows 2*a=+1+k, b=+1+2*l: the premise's host sums are the executed values: true
+%cd ~logic 2*o=+1+2*k: every partial sum of every cell is exact in f32: true
 %cd ~logic 2*o=+1+2*k: extent: true
 %cd ~logic 2*o=+1+2*k: values: true
+%cd ~logic 2*o=+1+2*k: the premise's host sums are the executed values: true
+gradient of 2*o=+1+2*k: every partial sum of every d/dx cell is exact in f32: true
+gradient of 2*o=+1+2*k: every partial sum of every d/dw cell is exact in f32: true
+gradient of 2*o=+1+2*k: d/dx: the premise's host sums are the executed values: true
+gradient of 2*o=+1+2*k: d/dw: the premise's host sums are the executed values: true
 gradient of 2*o=+1+2*k: d/dx: true
 gradient of 2*o=+1+2*k: d/dw: true
+gradient of o=+2+k: every partial sum of every d/dx cell is exact in f32: true
+gradient of o=+2+k: every partial sum of every d/dw cell is exact in f32: true
+gradient of o=+2+k: d/dx: the premise's host sums are the executed values: true
+gradient of o=+2+k: d/dw: the premise's host sums are the executed values: true
 gradient of o=+2+k: d/dx: true
 gradient of o=+2+k: d/dw: true
+gradient of max 2*o=+1+k: every partial sum of every d/dx cell is exact in f32: true
+gradient of max 2*o=+1+k: every partial sum of every d/dw cell is exact in f32: true
+gradient of max 2*o=+1+k: d/dx: the premise's host sums are the executed values: true
+gradient of max 2*o=+1+k: d/dw: the premise's host sums are the executed values: true
 gradient of max 2*o=+1+k: d/dx: true
 gradient of max 2*o=+1+k: d/dw: true
+one-operand padded sum 2*o=+1+k, kernel 3: every partial sum of every cell is exact in f32: true
 one-operand padded sum 2*o=+1+k, kernel 3: extent: true
 one-operand padded sum 2*o=+1+k, kernel 3: values: true
+one-operand padded sum 2*o=+1+k, kernel 3: the premise's host sums are the executed values: true
+one-operand padded sum o=+2*k (dilated), kernel 3: every partial sum of every cell is exact in f32: true
 one-operand padded sum o=+2*k (dilated), kernel 3: extent: true
 one-operand padded sum o=+2*k (dilated), kernel 3: values: true
+one-operand padded sum o=+2*k (dilated), kernel 3: the premise's host sums are the executed values: true
+one-operand padded sum 3*o=+1+k, kernel 4, raw ~capture_dims: every partial sum of every cell is exact in f32: true
 one-operand padded sum 3*o=+1+k, kernel 4, raw ~capture_dims: extent: true
 one-operand padded sum 3*o=+1+k, kernel 4, raw ~capture_dims: values: true
+one-operand padded sum 3*o=+1+k, kernel 4, raw ~capture_dims: the premise's host sums are the executed values: true
+one-operand valid sum 2*o<+k, kernel 3: every partial sum of every cell is exact in f32: true
 one-operand valid sum 2*o<+k, kernel 3: extent: true
 one-operand valid sum 2*o<+k, kernel 3: values: true
+one-operand valid sum 2*o<+k, kernel 3: the premise's host sums are the executed values: true
+one-operand valid sum o<+2*k (dilated), kernel 2: every partial sum of every cell is exact in f32: true
 one-operand valid sum o<+2*k (dilated), kernel 2: extent: true
 one-operand valid sum o<+2*k (dilated), kernel 2: values: true
+one-operand valid sum o<+2*k (dilated), kernel 2: the premise's host sums are the executed values: true
 one-operand padded max 2*o=+1+k, kernel 3: extent: true
 one-operand padded max 2*o=+1+k, kernel 3: values: true
 one-operand valid max 2*o<+k, kernel 2: extent: true
 one-operand valid max 2*o<+k, kernel 2: values: true
+one-operand valid sum 2*o<+k, kernel uncaptured: o = 1, k = 8: every partial sum of every cell is exact in f32: true
 one-operand valid sum 2*o<+k, kernel uncaptured: o = 1, k = 8: extent: true
 one-operand valid sum 2*o<+k, kernel uncaptured: o = 1, k = 8: values: true
+one-operand valid sum 2*o<+k, kernel uncaptured: o = 1, k = 8: the premise's host sums are the executed values: true
 one-operand padded 2-D max pool 2*a=+k, 2*b=+l, window 3: extent: true
 one-operand padded 2-D max pool 2*a=+k, 2*b=+l, window 3: values: true
+gradient of one-operand padded sum 2*o=+1+2*k: every partial sum of every d/dx cell is exact in f32: true
+gradient of one-operand padded sum 2*o=+1+2*k: d/dx: the premise's host sums are the executed values: true
 gradient of one-operand padded sum 2*o=+1+2*k: d/dx: true
+gradient of one-operand padded max 2*o=+1+k: every partial sum of every d/dx cell is exact in f32: true
+gradient of one-operand padded max 2*o=+1+k: d/dx: the premise's host sums are the executed values: true
 gradient of one-operand padded max 2*o=+1+k: d/dx: true
+binary padded sum 2*o=+1+k; s, kernel 3 on neither operand: every partial sum of every cell is exact in f32: true
 binary padded sum 2*o=+1+k; s, kernel 3 on neither operand: extent: true
 binary padded sum 2*o=+1+k; s, kernel 3 on neither operand: values: true
+binary padded sum 2*o=+1+k; s, kernel 3 on neither operand: the premise's host sums are the executed values: true
 binary padded max 2*o=+1+k; s, kernel 3 on neither operand: extent: true
 binary padded max 2*o=+1+k; s, kernel 3 on neither operand: values: true
+gradient of binary padded sum 2*o=+1+k; s, kernel on neither operand: every partial sum of every d/dx cell is exact in f32: true
+gradient of binary padded sum 2*o=+1+k; s, kernel on neither operand: d/dx: the premise's host sums are the executed values: true
 gradient of binary padded sum 2*o=+1+k; s, kernel on neither operand: d/dx: true
+gradient of binary padded max 2*o=+1+k; s, kernel on neither operand: every partial sum of every d/dx cell is exact in f32: true
+gradient of binary padded max 2*o=+1+k; s, kernel on neither operand: d/dx: the premise's host sums are the executed values: true
 gradient of binary padded max 2*o=+1+k; s, kernel on neither operand: d/dx: true
+torch 'same' o=+k, kernel 2: every partial sum of every cell is exact in f32: true
 torch 'same' o=+k, kernel 2: extent: true
 torch 'same' o=+k, kernel 2: values: true
+torch 'same' o=+k, kernel 2: the premise's host sums are the executed values: true
+torch 'same' o=+k, kernel 4: every partial sum of every cell is exact in f32: true
 torch 'same' o=+k, kernel 4: extent: true
 torch 'same' o=+k, kernel 4: values: true
+torch 'same' o=+k, kernel 4: the premise's host sums are the executed values: true
+torch 'same' o=+3*k, kernel 2 (span 4): every partial sum of every cell is exact in f32: true
 torch 'same' o=+3*k, kernel 2 (span 4): extent: true
 torch 'same' o=+3*k, kernel 2 (span 4): values: true
+torch 'same' o=+3*k, kernel 2 (span 4): the premise's host sums are the executed values: true
+torch 'same' o=+3*k, kernel 4 (span 10): every partial sum of every cell is exact in f32: true
 torch 'same' o=+3*k, kernel 4 (span 10): extent: true
 torch 'same' o=+3*k, kernel 4 (span 10): values: true
+torch 'same' o=+3*k, kernel 4 (span 10): the premise's host sums are the executed values: true
+torch 2/2 conv 2*o=+k, kernel 2: every partial sum of every cell is exact in f32: true
 torch 2/2 conv 2*o=+k, kernel 2: extent: true
 torch 2/2 conv 2*o=+k, kernel 2: values: true
+torch 2/2 conv 2*o=+k, kernel 2: the premise's host sums are the executed values: true
 torch 2/2 max pool 2*o=+k, window 2: extent: true
 torch 2/2 max pool 2*o=+k, window 2: values: true
 torch stride-1 max pool o=+k, window 4: extent: true
 torch stride-1 max pool o=+k, window 4: values: true
 torch Nn_blocks.max_pool2d ~use_padding:true, default 2/2: extent: true
 torch Nn_blocks.max_pool2d ~use_padding:true, default 2/2: values: true
+torch gradient of o=+k, kernel 4: every partial sum of every d/dx cell is exact in f32: true
+torch gradient of o=+k, kernel 4: every partial sum of every d/dw cell is exact in f32: true
+torch gradient of o=+k, kernel 4: d/dx: the premise's host sums are the executed values: true
+torch gradient of o=+k, kernel 4: d/dw: the premise's host sums are the executed values: true
 torch gradient of o=+k, kernel 4: d/dx: true
 torch gradient of o=+k, kernel 4: d/dw: true
+gradient of max 2*o=+k, window 2: every partial sum of every d/dx cell is exact in f32: true
+gradient of max 2*o=+k, window 2: every partial sum of every d/dw cell is exact in f32: true
+gradient of max 2*o=+k, window 2: d/dx: the premise's host sums are the executed values: true
+gradient of max 2*o=+k, window 2: d/dw: the premise's host sums are the executed values: true
 gradient of max 2*o=+k, window 2: d/dx: true
 gradient of max 2*o=+k, window 2: d/dw: true
 margins of o=+k, kernel 2: left 0, right 1: true

@@ -3232,12 +3232,22 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
 - The written-before-the-rule exactness debt is retired (gh-ocannl-1826):
   `exact_partials_ratchet` keeps reasoned exemptions. Its gh-ocannl-2227 reader expansion also
   recognizes exact-partials and sum-word/any-order premises (the header owns the closed forms);
-  newly visible debt has exact per-file counts and reasons in its exemption rows. A sentence's
+  the debt it made visible is derived (gh-ocannl-2272), and only reasoned exemptions remain. A sentence's
   `exactly once` narrowing is outside the new forms: they require the word `exact`.
   An association marker supplies the sum word itself; the lexical reader does not resolve the
   sentence's subject. Host arithmetic premises in `hardware_warp_shuffle`, `tile_mma_narrow` and
   `schedule_ldmatrix_matmul` run outside backend gates, so cc checks them even when it cannot
   execute the corresponding GPU rendering.
+- Deriving a premise for a `%op` test in `premise_ratchet`'s protocol (gh-ocannl-2272): the
+  reference must be `Context.get_values` of a `Context.run` result in the same file, so a test
+  reading values after `Train.forward_once` or `Train.update_once` compiles through
+  `Train.to_routine` and runs with `Context.run` instead (the same compile, for a program with no
+  parameters), in a local wrapper if it likes. A padded window's or a transposed convolution's
+  cell is a `reduction_cells` cell over every tap or pair, its operand read through an
+  `Ll_test.operand` with one zero cell appended, the coordinate function sending a margin tap or a
+  pair that misses the cell there; a file of many forms keeps that in one local helper that builds
+  the products, runs the form and compares, since a wrapper may not return products. Spell the
+  comparator `Float.equal`: an alias such as `let exact = Float.equal` grants nothing.
 - Host-side exactness premises share an index reader with initialization: wrap the value function
   in `Ll_test.operand ~b ~o ~i`, which checks rank and bounds against `b @ o @ i` before
   evaluating it (gh-ocannl-2176). This catches out-of-bounds permutations, not in-bounds ones:

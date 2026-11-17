@@ -143,6 +143,8 @@ ckt_f16: no cell of the serial reference is zero: true
 ckt_f16: the device seeds a tensorized contraction tile crossing heads: true
 ckt_f16: every tensorized contraction seed executes to the serial reference bitwise: true
 ckt_f16: every tensorized contraction seed renders tensorized per its mma census: true
+ckf: every partial sum of every pre-activation cell is exact in f32: true
+ckf: the executed reference equals the premise's host sums: true
 ckf: the relu discriminates: the reference has positive and zero cells: true
 ckf: every fused scalar contraction twin applies and validates: true
 ckf: every fused scalar contraction twin drops the tail statement its unfused sibling keeps: true
@@ -151,6 +153,8 @@ ckf: every fused tensorized (synthetic f32 tile) contraction twin drops the tail
 ckf: every fused scalar contraction twin executes to the reference bitwise: true
 ckf: every fused tensorized contraction twin executes to the reference bitwise: true
 ckf: every fused tensorized contraction twin renders tensorized per its mma census: true
+ckf_odd: every partial sum of every pre-activation cell is exact in f32: true
+ckf_odd: the executed reference equals the premise's host sums: true
 ckf_odd: the relu discriminates: the reference has positive and zero cells: true
 ckf_odd: every fused scalar contraction twin applies and validates: true
 ckf_odd: every fused scalar contraction twin drops the tail statement its unfused sibling keeps: true

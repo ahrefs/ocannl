@@ -11178,7 +11178,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules named_form_spec_identifiers)
- (libraries base ocannl stdio arrayjit.verdict arrayjit.context)
+ (libraries base ocannl stdio arrayjit.verdict arrayjit.context ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -12095,7 +12095,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules padded_conv_init_leaf)
- (libraries base ocannl arrayjit.verdict arrayjit.context stdio)
+ (libraries base ocannl arrayjit.verdict arrayjit.context ll_test stdio)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -12108,7 +12108,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules padded_window_margin_writes)
- (libraries base ocannl arrayjit.verdict arrayjit.context)
+ (libraries base ocannl arrayjit.verdict arrayjit.context ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

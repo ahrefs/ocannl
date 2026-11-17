@@ -31,7 +31,7 @@ let debt =
     ("test/operations/scan_companion_coverage.ml", 1);
     ("test/operations/schedule_batch_grid.ml", 3);
     ("test/operations/schedule_batched_mma.ml", 1);
-    ("test/operations/schedule_contraction_nest.ml", 4);
+    ("test/operations/schedule_contraction_nest.ml", 3);
     ("test/operations/schedule_ldmatrix_matmul.ml", 2);
     ("test/operations/schedule_mma_matmul.ml", 5);
     ("test/operations/schedule_pad.ml", 1);

@@ -495,10 +495,10 @@ let bf16_leg ~tag ~build =
    projection: its staged operands clear the async arms' 4-byte element floor the bf16 leg sits
    below. Metal advertises a uniform-f32 tile; CUDA sm_80+ tensorizes f32 operands only as tf32, so
    the leg runs under [tf32_matmuls] -- scoped to the leg, since the policy is process-wide. The
-   inputs (half-integers against quarter steps, sums far below 2^24) are exact in tf32 and in f32 in
-   any order, so the candidate must match the serial twin bitwise. The gate is the seeder's own
-   format resolution against the device's advertised depths, never the seed list under test; HIP
-   advertises no pipeline depth, so the leg is skipped there and on the CPU backends. *)
+   candidate must match the serial twin bitwise, on the premise its caller derives from the
+   operands' readers (the out projection's item below). The gate is the seeder's own format
+   resolution against the device's advertised depths, never the seed list under test; HIP advertises
+   no pipeline depth, so the leg is skipped there and on the CPU backends. *)
 let pipelined_leg ~tag ~build =
   let saved = Ir.Numerics.get () in
   Ir.Numerics.set_policy { saved with tf32_matmuls = true };
@@ -665,7 +665,9 @@ let () =
   (* Discriminating inputs: values vary with every index (the moduli are coprime with every axis
      extent), the weight is strictly negative and the activation strictly positive so no product
      and no sum is zero, and every product is a small multiple of 1/8 with partial sums far below
-     2^24, so f32 addition is exact in any order. *)
+     2^24, so f32 addition is exact in any order -- derived below from the readers, and compared
+     with a serial run. The operands are half-integers and quarter steps of at most four
+     significant bits, so [pipelined_leg]'s tf32 rendering reads them unchanged. *)
   let bb = 2 and ss = 64 and jj = 64 and hh = 4 and ee = 16 in
   let w_f =
     Ll_test.operand ~b:[] ~o:[ jj ] ~i:[ hh; ee ]
@@ -677,10 +679,27 @@ let () =
       (Ll_test.cycle ~dims:[| bb; ss; hh; ee |] ~modulus:13 ~offset:1. ~stride:0.25)
   in
   let att () = NTDSL.init ~l:"cn_att" ~prec:Ir.Ops.single ~b:[ bb; ss ] ~o:[ hh; ee ] ~f:att_f () in
-  p_all "out-projection operands have f32-exact partial sums"
-    (Ll_test.reduction_cells ~out:[| bb; ss; jj |] ~over:[| hh; ee |] (fun o r ->
-         w_f [| o.(2); r.(0); r.(1) |] *. att_f [| o.(0); o.(1); r.(0); r.(1) |]))
+  let products =
+    Ll_test.reduction_cells ~out:[| bb; ss; jj |] ~over:[| hh; ee |] (fun o r ->
+        w_f [| o.(2); r.(0); r.(1) |] *. att_f [| o.(0); o.(1); r.(0); r.(1) |])
+  in
+  p_all "out-projection operands have f32-exact partial sums" products
     ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
+  let projection () =
+    let wv = w () and av = att () in
+    let%op out = wv * av in
+    out
+  in
+  let reference = projection () in
+  let ctx, routine =
+    Context.compile (Context.auto ())
+      (named "out_proj_premise" (Train.forward reference))
+      Ir.Indexing.Empty
+  in
+  p_all2 "out-projection: the serial run computes the premise's host sums"
+    (Context.get_values (Context.run ctx routine) reference.Tensor.value)
+    (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id)))
+    ~f:Float.equal;
   leg ~tag:"out_proj" ~ko_extents:[ hh ] ~nk:ee
     ~build:(fun () ->
       let wv = w () and av = att () in

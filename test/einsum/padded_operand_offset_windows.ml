@@ -8,14 +8,14 @@
    yields the neutral element.
 
    Each form below runs and is compared, extent included, against [padded_window], computed here in
-   plain OCaml from that definition alone; the values are small integers, so every sum is exact in
-   single precision on any backend and in any order. The forms: the offset below, at and past the
-   stride, with odd, even and dilated kernels; the raw-string, [%op] (identifier coefficients),
-   [%cd] with [~logic], captured-kernel (a padded sum pool) and ternary routes; two padded windows
-   in one operand; the max family; and the gradients, d/dx and d/dw, of a strided, dilated window
-   with an offset, of an offset past the stride, and of a max-family window. The even-span anchor
-   that [padded_window] encodes is itself checked against literal PyTorch outputs, under "Even spans
-   against PyTorch" below.
+   plain OCaml from that definition alone; the values are small integers, and each form that sums
+   derives its bitwise premise from its operands ([exact_sum], and the gradients' own). The forms:
+   the offset below, at and past the stride, with odd, even and dilated kernels; the raw-string,
+   [%op] (identifier coefficients), [%cd] with [~logic], captured-kernel (a padded sum pool) and
+   ternary routes; two padded windows in one operand; the max family; and the gradients, d/dx and
+   d/dw, of a strided, dilated window with an offset, of an offset past the stride, and of a
+   max-family window. The even-span anchor that [padded_window] encodes is itself checked against
+   literal PyTorch outputs, under "Even spans against PyTorch" below.
 
    The audit found the dilated window wrong: its margins were sized by the undilated kernel
    ([left=K/2]), so [o=+2*k] over a kernel of 3 read [o-1], [o+1], [o+3] instead of the centered
@@ -93,17 +93,96 @@ let executes label ~dims ~want build =
           pf "%s: executes" label false
       | got -> matches label ~dims ~want got)
 
+(* {2 The bitwise premise}
+
+   A max-family window adds one tap to one cell and takes a maximum, so its cells hold no partial
+   sum; every form that sums derives its premise from its operands. *)
+
+(* [vals] as an operand reader with one zero cell appended: the index [Array.length vals] stands for
+   a tap that reads a margin, or a term no tap reaches. *)
+let with_zero vals =
+  let len = Array.length vals in
+  Ll_test.operand ~b:[] ~o:[ len + 1 ] ~i:[] (fun ix -> if ix.(0) < len then vals.(ix.(0)) else 0.)
+
+(* The operand position result [o]'s tap [k] reads, or [n] -- the appended zero -- for a tap that
+   reads the padding. *)
+let tap_index win ~n ~kk o k =
+  match List.nth_exn (taps win ~n ~kk o) k with c, _, true -> c | _ -> n
+
+(* A max window's argmax tap [(c, k)] for result [o], [None] for an all-outside window. *)
+let argmax win ~n x w o =
+  List.filter (taps win ~n ~kk:(Array.length w) o) ~f:(fun (_, _, inside) -> inside)
+  |> List.max_elt ~compare:(fun (c1, k1, _) (c2, k2, _) ->
+      Float.compare (x.(c1) +. w.(k1)) (x.(c2) +. w.(k2)))
+  |> Option.map ~f:(fun (c, k, _) -> (c, k))
+
+(* The compile and run [Train.forward_once] and [Train.update_once] perform for a program with no
+   parameters, returning the run's context: a premise's executed reference is read from it. *)
+let run comp =
+  let ctx, routine = Train.to_routine (Context.auto ()) Ir.Indexing.Empty comp in
+  Context.run ctx routine
+
+let sig_bits = Ir.Ops.significand_bits Ir.Ops.single
+
+let check_sums label products got =
+  p_all2
+    (label ^ ": the premise's host sums are the executed values")
+    got
+    (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id)))
+    ~f:Float.equal
+
+(* A form that sums, with its bitwise premise derived from its operands: each result cell [o] sums
+   [x.(x_at o r) * w.(w_at o r)] over every index [r] of [over], an index past an operand's data
+   reading its appended zero (a padding tap). The products are small positive integers, so every
+   partial sum of every cell is exact in single precision, in any order, which the [p_all] below
+   checks rather than this sentence asserts; and the executed values are these host sums as well as
+   the oracle [want]. *)
+let exact_sum label ~dims ~want ~over ~x ~x_at ~w ~w_at build =
+  case label (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let x_r = with_zero x and w_r = with_zero w in
+      let products =
+        Ll_test.reduction_cells ~out:dims ~over (fun o r ->
+            x_r [| x_at o r |] *. w_r [| w_at o r |])
+      in
+      p_all
+        (label ^ ": every partial sum of every cell is exact in f32")
+        products
+        ~f:(Ll_test.exact_partials ~sig_bits);
+      let t = build () in
+      Train.set_materialized t.Tensor.value;
+      let ctx = run (Train.forward t) in
+      let got = Context.get_values ctx t.Tensor.value in
+      matches label ~dims ~want (Ir.Tnode.dims_without_padding t.Tensor.value, got);
+      check_sums label products got)
+
+(* A 1-D padded window over [x] by the kernel [w]: [exact_sum]'s cells over the kernel's taps. *)
+let window_sum label win ~x ~w build =
+  let n = Array.length x and kk = Array.length w in
+  exact_sum label
+    ~dims:[| 1; n / win.stride |]
+    ~want:(padded_window win x w) ~over:[| kk |] ~x
+    ~x_at:(fun o r -> tap_index win ~n ~kk o.(1) r.(0))
+    ~w
+    ~w_at:(fun _ r -> r.(0))
+    build
+
 (* A binary padded window over a [1; n] operand, from a plain string. *)
 let binary ?(reduce = `Sum) label win ~n ~w spec =
-  executes label
-    ~dims:[| 1; n / win.stride |]
-    ~want:(padded_window ~reduce win (ramp n) w)
-    (fun () ->
-      let x = computed [ 1; n ] (ramp n) in
-      let wt = ndarray [ Array.length w ] w in
-      match reduce with
-      | `Sum -> Operation.einsum spec ~grad_spec:pg x wt ()
-      | `Max -> Operation.tropical spec ~grad_spec:pg x wt ())
+  let build () =
+    let x = computed [ 1; n ] (ramp n) in
+    let wt = ndarray [ Array.length w ] w in
+    match reduce with
+    | `Sum -> Operation.einsum spec ~grad_spec:pg x wt ()
+    | `Max -> Operation.tropical spec ~grad_spec:pg x wt ()
+  in
+  match reduce with
+  | `Sum -> window_sum label win ~x:(ramp n) ~w build
+  | `Max ->
+      executes label
+        ~dims:[| 1; n / win.stride |]
+        ~want:(padded_window ~reduce win (ramp n) w)
+        build
 
 let run_forms () =
   binary "2*o=+1+k, kernel 3"
@@ -149,8 +228,7 @@ let run_forms () =
     { stride = 1; offset = 1; dilation = 2 }
     ~n:6 ~w:k3 "s, o=+1+2*k; k => s, o";
   (let win = { stride = 2; offset = 1; dilation = 2 } in
-   executes "%op, identifier stride and dilation: stride*o=+1+dilation*k" ~dims:[| 1; 4 |]
-     ~want:(padded_window win (ramp 8) k3)
+   window_sum "%op, identifier stride and dilation: stride*o=+1+dilation*k" win ~x:(ramp 8) ~w:k3
      (fun () ->
        let stride = win.stride and dilation = win.dilation in
        let x = computed [ 1; 8 ] (ramp 8) in
@@ -159,19 +237,14 @@ let run_forms () =
   (* A padded sum pool: the kernel label is captured and set, and the kernel is a stretched constant
      1, the pooling layers' idiom ([Nn_blocks.max_pool2d]). The one-operand route, with no kernel
      tensor, is executed under "One-operand windows" below. *)
-  executes "sum pool, captured kernel over stretch 1.0: 2*o=+1+k" ~dims:[| 1; 4 |]
-    ~want:(padded_window { stride = 2; offset = 1; dilation = 1 } (ramp 8) (Array.create ~len:3 1.))
-    (fun () ->
+  window_sum "sum pool, captured kernel over stretch 1.0: 2*o=+1+k"
+    { stride = 2; offset = 1; dilation = 1 } ~x:(ramp 8) ~w:(Array.create ~len:3 1.) (fun () ->
       let x = computed [ 1; 8 ] (ramp 8) in
       let%op r = x +* "s, 2*o=+1+k; k => s, o" [ "k" ] (stretch 1.0) in
       Shape.set_dim k 3;
       r);
-  executes "ternary 2*o=+1+k" ~dims:[| 1; 4 |]
-    ~want:
-      (padded_window
-         { stride = 2; offset = 1; dilation = 1 }
-         (ramp 8) (Array.map2_exn k3 k3b ~f:( *. )))
-    (fun () ->
+  window_sum "ternary 2*o=+1+k" { stride = 2; offset = 1; dilation = 1 }
+    ~x:(ramp 8) ~w:(Array.map2_exn k3 k3b ~f:( *. )) (fun () ->
       Operation.einsum3 "s, 2*o=+1+k; k; k => s, o" ~grad_spec:pg
         (computed [ 1; 8 ] (ramp 8))
         (ndarray [ 3 ] k3) (ndarray [ 3 ] k3b) ());
@@ -197,9 +270,15 @@ let run_forms () =
                ~f:(fun (c, l, c_in) ->
                  if r_in && c_in then x_vals.((r * n2) + c) *. w_vals.((k * 2) + l) else 0.)))
    in
-   executes "two padded windows 2*a=+1+k, b=+1+2*l"
+   exact_sum "two padded windows 2*a=+1+k, b=+1+2*l"
      ~dims:[| n1 / 2; n2 |]
-     ~want
+     ~want ~over:[| 3; 2 |] ~x:x_vals
+     ~x_at:(fun o r ->
+       let row = tap_index rows ~n:n1 ~kk:3 o.(0) r.(0)
+       and col = tap_index cols ~n:n2 ~kk:2 o.(1) r.(1) in
+       if row < n1 && col < n2 then (row * n2) + col else n1 * n2)
+     ~w:w_vals
+     ~w_at:(fun _ r -> (r.(0) * 2) + r.(1))
      (fun () ->
        let x = computed ~spec:"a, b => a, b" [ n1; n2 ] x_vals in
        let w = ndarray [ 3; 2 ] w_vals in
@@ -207,22 +286,29 @@ let run_forms () =
   case "%cd ~logic 2*o=+1+2*k" (fun () ->
       Tensor.unsafe_reinitialize ();
       let label = "%cd ~logic 2*o=+1+2*k" in
-      match
-        let x = computed [ 1; 8 ] (ramp 8) in
-        let w = ndarray [ 3 ] k3 in
-        let%cd asn = { sm } =:+ x * w ~logic:"s, 2*o=+1+2*k; k => s, o" in
-        Train.set_materialized sm.Tensor.value;
-        let ctx = Context.auto () in
-        let ctx, routine = Context.compile ~name:"cd_padded" ctx asn Ir.Indexing.Empty in
-        read (Context.run ctx routine) sm
-      with
-      | exception e ->
-          Stdio.eprintf "%s: raised %s\n%!" label (exn_message e);
-          pf "%s: executes" label false
-      | got ->
-          matches label ~dims:[| 1; 4 |]
-            ~want:(padded_window { stride = 2; offset = 1; dilation = 2 } (ramp 8) k3)
-            got)
+      let win = { stride = 2; offset = 1; dilation = 2 } in
+      (* The premise as [exact_sum] derives it, for the assignment's own compile. *)
+      let x_r = with_zero (ramp 8) and w_r = with_zero k3 in
+      let products =
+        Ll_test.reduction_cells ~out:[| 1; 4 |] ~over:[| 3 |] (fun o r ->
+            x_r [| tap_index win ~n:8 ~kk:3 o.(1) r.(0) |] *. w_r [| r.(0) |])
+      in
+      p_all
+        (label ^ ": every partial sum of every cell is exact in f32")
+        products
+        ~f:(Ll_test.exact_partials ~sig_bits);
+      let x = computed [ 1; 8 ] (ramp 8) in
+      let w = ndarray [ 3 ] k3 in
+      let%cd asn = { sm } =:+ x * w ~logic:"s, 2*o=+1+2*k; k => s, o" in
+      Train.set_materialized sm.Tensor.value;
+      let ctx = Context.auto () in
+      let ctx, routine = Context.compile ~name:"cd_padded" ctx asn Ir.Indexing.Empty in
+      let ctx = Context.run ctx routine in
+      let got = Context.get_values ctx sm.Tensor.value in
+      matches label ~dims:[| 1; 4 |]
+        ~want:(padded_window win (ramp 8) k3)
+        (Ir.Tnode.dims_without_padding sm.Tensor.value, got);
+      check_sums label products got)
 
 (* {2 Gradients}
 
@@ -272,10 +358,55 @@ let gradient ?(reduce = `Sum) ?want label win ~n ~w spec =
       let%op loss = (r *. c) ++ "s, o => 0" in
       Train.set_materialized (grad_of x);
       Train.set_materialized (grad_of wt);
-      let ctx = Train.update_once ~output_cd_file:false (Context.auto ()) loss in
+      (* The bitwise premise, from the operands' own data. A sum window's [dx] cell [p] sums [c.(o)
+         * w.(k)] over the taps [(o, k)] reading [p], and its [dw] cell [k] sums [c.(o) * x.(the tap
+         (o, k))] over [o], a padding tap reading zero; a max window's cells sum [c.(o)] over the
+         windows whose argmax tap reads them. Every term is a small positive integer, so every
+         partial sum of every cell is exact in f32, in any order. *)
+      let kk = Array.length w in
+      let c_r = with_zero (Array.init m ~f:(fun o -> Float.of_int (o + 1)))
+      and x_r = with_zero (ramp n)
+      and w_r = with_zero w in
+      let dx_products, dw_products =
+        match reduce with
+        | `Sum ->
+            ( Ll_test.reduction_cells ~out:[| 1; n |] ~over:[| m; kk |] (fun o r ->
+                  c_r [| (if tap_index win ~n ~kk r.(0) r.(1) = o.(1) then r.(0) else m) |]
+                  *. w_r [| r.(1) |]),
+              Ll_test.reduction_cells ~out:[| kk |] ~over:[| m |] (fun o r ->
+                  c_r [| r.(0) |] *. x_r [| tap_index win ~n ~kk r.(0) o.(0) |]) )
+        | `Max ->
+            ( Ll_test.reduction_cells ~out:[| 1; n |] ~over:[| m |] (fun o r ->
+                  c_r
+                    [|
+                      (if
+                         Option.exists (argmax win ~n (ramp n) w r.(0)) ~f:(fun (c, _) -> c = o.(1))
+                       then r.(0)
+                       else m);
+                    |]),
+              Ll_test.reduction_cells ~out:[| kk |] ~over:[| m |] (fun o r ->
+                  c_r
+                    [|
+                      (if
+                         Option.exists (argmax win ~n (ramp n) w r.(0)) ~f:(fun (_, k) -> k = o.(0))
+                       then r.(0)
+                       else m);
+                    |]) )
+      in
+      p_all
+        (label ^ ": every partial sum of every d/dx cell is exact in f32")
+        dx_products
+        ~f:(Ll_test.exact_partials ~sig_bits);
+      p_all
+        (label ^ ": every partial sum of every d/dw cell is exact in f32")
+        dw_products
+        ~f:(Ll_test.exact_partials ~sig_bits);
+      let ctx = run (Train.grad_update loss) in
       let dx, dw =
         match want with Some want -> want | None -> oracle_grads ~reduce win (ramp n) w
       in
+      check_sums (label ^ ": d/dx") dx_products (Context.get_values ctx (grad_of x));
+      check_sums (label ^ ": d/dw") dw_products (Context.get_values ctx (grad_of wt));
       pf_all2 "%s: d/dx" label (Context.get_values ctx (grad_of x)) dx ~f:Float.equal;
       pf_all2 "%s: d/dw" label (Context.get_values ctx (grad_of wt)) dw ~f:Float.equal)
 
@@ -316,23 +447,20 @@ let ones kk = Array.create ~len:kk 1.
 let zeros kk = Array.create ~len:kk 0.
 
 let run_unary_forms () =
-  executes "one-operand padded sum 2*o=+1+k, kernel 3" ~dims:[| 1; 4 |]
-    ~want:(padded_window { stride = 2; offset = 1; dilation = 1 } (ramp 8) (ones 3))
-    (fun () ->
+  window_sum "one-operand padded sum 2*o=+1+k, kernel 3" { stride = 2; offset = 1; dilation = 1 }
+    ~x:(ramp 8) ~w:(ones 3) (fun () ->
       let x = computed [ 1; 8 ] (ramp 8) in
       let%op r = x ++ "s, 2*o=+1+k => s, o" [ "k" ] in
       Shape.set_dim k 3;
       r);
-  executes "one-operand padded sum o=+2*k (dilated), kernel 3" ~dims:[| 1; 6 |]
-    ~want:(padded_window { stride = 1; offset = 0; dilation = 2 } (ramp 6) (ones 3))
-    (fun () ->
+  window_sum "one-operand padded sum o=+2*k (dilated), kernel 3"
+    { stride = 1; offset = 0; dilation = 2 } ~x:(ramp 6) ~w:(ones 3) (fun () ->
       let x = computed [ 1; 6 ] (ramp 6) in
       let%op r = x ++ "s, o=+2*k => s, o" [ "k" ] in
       Shape.set_dim k 3;
       r);
-  executes "one-operand padded sum 3*o=+1+k, kernel 4, raw ~capture_dims" ~dims:[| 1; 3 |]
-    ~want:(padded_window { stride = 3; offset = 1; dilation = 1 } (ramp 9) (ones 4))
-    (fun () ->
+  window_sum "one-operand padded sum 3*o=+1+k, kernel 4, raw ~capture_dims"
+    { stride = 3; offset = 1; dilation = 1 } ~x:(ramp 9) ~w:(ones 4) (fun () ->
       let k = Shape.get_variable_ref "k" in
       let r =
         Operation.einsum1 ~capture_dims:[ k ] "s, 3*o=+1+k => s, o" ~grad_spec:pg
@@ -341,15 +469,23 @@ let run_unary_forms () =
       in
       Shape.set_dim k 4;
       r);
-  executes "one-operand valid sum 2*o<+k, kernel 3" ~dims:[| 1; 4 |]
+  exact_sum "one-operand valid sum 2*o<+k, kernel 3" ~dims:[| 1; 4 |]
     ~want:(valid_window ~stride:2 ~dilation:1 (ramp 9) ~kk:3)
+    ~over:[| 3 |] ~x:(ramp 9)
+    ~x_at:(fun o r -> (2 * o.(1)) + (1 * r.(0)))
+    ~w:(ones 3)
+    ~w_at:(fun _ r -> r.(0))
     (fun () ->
       let x = computed [ 1; 9 ] (ramp 9) in
       let%op r = x ++ "s, 2*o<+k => s, o" [ "k" ] in
       Shape.set_dim k 3;
       r);
-  executes "one-operand valid sum o<+2*k (dilated), kernel 2" ~dims:[| 1; 4 |]
+  exact_sum "one-operand valid sum o<+2*k (dilated), kernel 2" ~dims:[| 1; 4 |]
     ~want:(valid_window ~stride:1 ~dilation:2 (ramp 6) ~kk:2)
+    ~over:[| 2 |] ~x:(ramp 6)
+    ~x_at:(fun o r -> (1 * o.(1)) + (2 * r.(0)))
+    ~w:(ones 2)
+    ~w_at:(fun _ r -> r.(0))
     (fun () ->
       let x = computed [ 1; 6 ] (ramp 6) in
       let%op r = x ++ "s, o<+2*k => s, o" [ "k" ] in
@@ -373,8 +509,12 @@ let run_unary_forms () =
      equation determines the kernel once the output is known, and least commitment closes the output
      at 1, so the kernel spans the whole input: a full reduction, not a pool. The trap
      docs/syntax_extensions.md describes. *)
-  executes "one-operand valid sum 2*o<+k, kernel uncaptured: o = 1, k = 8" ~dims:[| 1; 1 |]
+  exact_sum "one-operand valid sum 2*o<+k, kernel uncaptured: o = 1, k = 8" ~dims:[| 1; 1 |]
     ~want:(valid_window ~stride:2 ~dilation:1 (ramp 8) ~kk:8)
+    ~over:[| 8 |] ~x:(ramp 8)
+    ~x_at:(fun o r -> (2 * o.(1)) + (1 * r.(0)))
+    ~w:(ones 8)
+    ~w_at:(fun _ r -> r.(0))
     (fun () ->
       let x = computed [ 1; 8 ] (ramp 8) in
       [%op x ++ "s, 2*o<+k => s, o"]);
@@ -442,9 +582,33 @@ let unary_gradient ?(reduce = `Sum) label win ~n ~kk build =
       let r = build x in
       let%op loss = (r *. c) ++ "s, o => 0" in
       Train.set_materialized (grad_of x);
-      let ctx = Train.update_once ~output_cd_file:false (Context.auto ()) loss in
       let w = match reduce with `Sum -> ones kk | `Max -> zeros kk in
+      (* The bitwise premise, as [gradient] derives it: the [dx] cell [p] sums [c.(o)] over the taps
+         [(o, k)] reading [p] (a sum window), or over the windows whose argmax tap reads it (a max
+         window). Every term is a small positive integer, so every partial sum of every cell is
+         exact in f32, in any order. *)
+      let c_r = with_zero (Array.init m ~f:(fun o -> Float.of_int (o + 1))) in
+      let dx_products =
+        match reduce with
+        | `Sum ->
+            Ll_test.reduction_cells ~out:[| 1; n |] ~over:[| m; kk |] (fun o r ->
+                c_r [| (if tap_index win ~n ~kk r.(0) r.(1) = o.(1) then r.(0) else m) |])
+        | `Max ->
+            Ll_test.reduction_cells ~out:[| 1; n |] ~over:[| m |] (fun o r ->
+                c_r
+                  [|
+                    (if Option.exists (argmax win ~n (ramp n) w r.(0)) ~f:(fun (c, _) -> c = o.(1))
+                     then r.(0)
+                     else m);
+                  |])
+      in
+      p_all
+        (label ^ ": every partial sum of every d/dx cell is exact in f32")
+        dx_products
+        ~f:(Ll_test.exact_partials ~sig_bits);
+      let ctx = run (Train.grad_update loss) in
       let dx, _ = oracle_grads ~reduce win (ramp n) w in
+      check_sums (label ^ ": d/dx") dx_products (Context.get_values ctx (grad_of x));
       pf_all2 "%s: d/dx" label (Context.get_values ctx (grad_of x)) dx ~f:Float.equal)
 
 let run_unary_gradients () =
@@ -473,29 +637,36 @@ let run_unary_gradients () =
    padding='same') * c).sum()] with [c = torch.arange(1., 7.)]. *)
 
 let run_pytorch_oracle () =
-  let same label ~n ~w ~want spec =
-    executes label ~dims:[| 1; n |] ~want (fun () ->
+  (* [~want] is PyTorch's; the premise's products come from [taps], whose anchor these pin. *)
+  let same label win ~n ~w ~want spec =
+    let kk = Array.length w in
+    exact_sum label
+      ~dims:[| 1; n / win.stride |]
+      ~want ~over:[| kk |] ~x:(ramp n)
+      ~x_at:(fun o r -> tap_index win ~n ~kk o.(1) r.(0))
+      ~w
+      ~w_at:(fun _ r -> r.(0))
+      (fun () ->
         Operation.einsum spec ~grad_spec:pg
           (computed [ 1; n ] (ramp n))
           (ndarray [ Array.length w ] w)
           ())
   in
-  same "torch 'same' o=+k, kernel 2" ~n:6 ~w:k2 ~want:[| 7.; 11.; 15.; 19.; 23.; 6. |]
+  let stride1 dilation = { stride = 1; offset = 0; dilation } in
+  same "torch 'same' o=+k, kernel 2" (stride1 1) ~n:6 ~w:k2 ~want:[| 7.; 11.; 15.; 19.; 23.; 6. |]
     "s, o=+k; k => s, o";
-  same "torch 'same' o=+k, kernel 4" ~n:6 ~w:k4
+  same "torch 'same' o=+k, kernel 4" (stride1 1) ~n:6 ~w:k4
     ~want:[| 34.; 49.; 64.; 79.; 38.; 17. |]
     "s, o=+k; k => s, o";
-  same "torch 'same' o=+3*k, kernel 2 (span 4)" ~n:8 ~w:k2
+  same "torch 'same' o=+3*k, kernel 2 (span 4)" (stride1 3) ~n:8 ~w:k2
     ~want:[| 9.; 13.; 17.; 21.; 25.; 29.; 6.; 7. |]
     "s, o=+3*k; k => s, o";
-  same "torch 'same' o=+3*k, kernel 4 (span 10)" ~n:12 ~w:k4
+  same "torch 'same' o=+3*k, kernel 4 (span 10)" (stride1 3) ~n:12 ~w:k4
     ~want:[| 60.; 74.; 88.; 102.; 117.; 132.; 147.; 58.; 65.; 72.; 27.; 30. |]
     "s, o=+3*k; k => s, o";
-  executes "torch 2/2 conv 2*o=+k, kernel 2" ~dims:[| 1; 4 |] ~want:[| 7.; 15.; 23.; 31. |]
-    (fun () ->
-      Operation.einsum "s, 2*o=+k; k => s, o" ~grad_spec:pg
-        (computed [ 1; 8 ] (ramp 8))
-        (ndarray [ 2 ] k2) ());
+  same "torch 2/2 conv 2*o=+k, kernel 2"
+    { stride = 2; offset = 0; dilation = 1 }
+    ~n:8 ~w:k2 ~want:[| 7.; 15.; 23.; 31. |] "s, 2*o=+k; k => s, o";
   executes "torch 2/2 max pool 2*o=+k, window 2" ~dims:[| 1; 4 |] ~want:[| 3.; 9.; 6.; 8. |]
     (fun () ->
       let x = computed [ 1; 8 ] [| 3.; 1.; 4.; 9.; 2.; 6.; 5.; 8. |] in
@@ -579,9 +750,8 @@ let run_pytorch_oracle () =
    window above. *)
 let run_uncarried_kernel_binary () =
   let win = { stride = 2; offset = 1; dilation = 1 } in
-  executes "binary padded sum 2*o=+1+k; s, kernel 3 on neither operand" ~dims:[| 1; 4 |]
-    ~want:(padded_window win (ramp 8) (ones 3))
-    (fun () ->
+  window_sum "binary padded sum 2*o=+1+k; s, kernel 3 on neither operand" win ~x:(ramp 8)
+    ~w:(ones 3) (fun () ->
       let x = computed [ 1; 8 ] (ramp 8) in
       let y = ndarray [ 1 ] [| 1. |] in
       let%op r = x +* "s, 2*o=+1+k; s => s, o" [ "k" ] y in
