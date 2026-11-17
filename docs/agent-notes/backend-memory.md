@@ -506,7 +506,9 @@ files.
   original declaration would have initialized it. The owning stream orders allocation before the
   launch and free after it. Capturing those operations creates graph allocation and free nodes, so
   cached replay preserves the lifetime and independently linked uses can share the kernel code.
-  The compiler enables this ABI on a device set with stream-ordered memory pools. The reset and
+  Plain scratch allocation has its own memory back-off before kernel submission. Capture records
+  the allocation with no retry inside capture. The compiler enables this ABI on a device set with
+  stream-ordered memory pools. The reset and
   back-off still use the emitted PTX depot for multi-thread kernels and for other remaining local
   memory. Separate per-thread slices and total-size accounting would be needed for multi-thread
   scratch. The CUDA regression checks three live slices and initialization on a second run, plain

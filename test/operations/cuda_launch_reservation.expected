@@ -15,5 +15,9 @@ serial scratch: free memory stays clear of a depot-sized reservation without a r
 serial scratch: graph capture and cached replay compute the right values: true
 serial scratch: graph capture and replay stay clear of a depot-sized reservation: true
 serial scratch: the cutoff still permits a one-thread local depot: true
+serial scratch: plain failure after allocation frees exactly once and a retry runs: true
+serial scratch: plain failure at cleanup frees exactly once and a retry runs: true
+serial scratch: capture failure after allocation frees exactly once and a retry runs: true
+serial scratch: capture failure at cleanup frees exactly once and a retry runs: true
 hip: a scratch frame for one work-item computes the right values: true
 hip: the backend reports the launch back-off's counters, and it was not needed: true

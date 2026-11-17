@@ -53,6 +53,10 @@ open Base
 open Ll_test
 open Verdict.Claims
 module SO = Ir.Schedule_outcome
+module FI = Ir.Resource_fault_injection
+
+exception Scratch_fault
+
 module Generated = Test_utils.Generated
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
@@ -409,9 +413,14 @@ let () =
       Verdict.sub_leg cuda ~when_:supported ~on:backend_name
     in
     let serial_graph = Verdict.sub_leg serial_scratch ~when_:capturing ~on:backend_name in
+    let serial_cells = s11d_floats / 3 in
+    let serial_expected ~graph =
+      Array.init serial_cells ~f:(fun y ->
+          Float.of_int ((7 * (serial_cells - y)) + if graph then 1 else 0))
+    in
     let serial_measurement ~graph ~first_id ~name =
       lazy
-        (let n = s11d_floats / 3 in
+        (let n = serial_cells in
          let linked, out =
            link_program ~ctx ~name ~graph (serial_frame_program ~first_id ~name ~graph n)
          in
@@ -424,14 +433,14 @@ let () =
          in
          let (ran, got), first = run linked in
          let free1, _ = free_and_total () in
+         (* Replay must write the result again using the cached graph's original output buffer. *)
+         let ran = Context.set_values ran out (Array.create ~len:n 0.) in
          let (_, replayed), second = run (ran, snd linked) in
          let free2, _ = free_and_total () in
-         let want =
-           Array.init n ~f:(fun y -> Float.of_int ((7 * (n - y)) + if graph then 1 else 0))
-         in
+         let want = serial_expected ~graph in
          Stdio.eprintf
-           "%s: %d B of private arrays, %d B of estimated depot reservation on base, free \
-            before             %d B, after %d B and after replay %d B (not part of the golden)\n\
+           "%s: %d B frame, %d B base depot estimate. Free before %d B, after %d B, after replay \
+            %d B (not part of the golden)\n\
             %!"
            name (s11d_floats * 4) (Lazy.force reservation) free0 free1 free2;
          ( Array.equal Float.equal got want && Array.equal Float.equal replayed want,
@@ -486,6 +495,47 @@ let () =
           (Array.equal Float.equal values (expected n)
           && String.is_substring (Generated.read ~ext:".ptx" name) ~substring:"__local_depot"
           && not (String.is_substring (Generated.read name) ~substring:"ocannl_serial_scratch")));
+
+    (* Each scratch lifetime is counted around the real driver calls. A graph failure must also
+       leave the stream ready to capture again, with no executable published by the failed run. *)
+    List.iter
+      [ (false, "plain", serial_scratch, 1774300); (true, "capture", serial_graph, 1774400) ]
+      ~f:(fun (graph, kind, leg, first_id) ->
+        List.iteri
+          [ (FI.Cuda_scratch_allocated, "after allocation"); (FI.Cuda_scratch_freed, "at cleanup") ]
+          ~f:(fun i (fault, phase) ->
+            in_legf ~leg "serial scratch: %s failure %s frees exactly once and a retry runs" kind
+              phase (fun label ->
+                let name = Printf.sprintf "clr_fault_%s_%d" kind i in
+                let linked, out =
+                  link_program ~ctx ~name ~graph
+                    (serial_frame_program ~first_id:(first_id + (10 * i)) ~name ~graph serial_cells)
+                in
+                let events = ref [] in
+                let callback = function
+                  | (FI.Cuda_scratch_allocated | FI.Cuda_scratch_freed) as point ->
+                      events := point :: !events;
+                      if FI.equal_point point fault then raise Scratch_fault
+                  | _ -> ()
+                in
+                let failed, cached =
+                  deltas ctx [ "live_graph_execs" ] (fun () ->
+                      match FI.with_callback callback ~f:(fun () -> run_linked linked ~seed:[]) with
+                      | exception Scratch_fault -> true
+                      | _ -> false)
+                in
+                let value, rebuilt =
+                  deltas ctx [ "live_graph_execs" ] (fun () ->
+                      let ran = run_linked linked ~seed:[] in
+                      Context.get_values ran out)
+                in
+                p label
+                  (failed
+                  && List.equal FI.equal_point (List.rev !events)
+                       [ FI.Cuda_scratch_allocated; FI.Cuda_scratch_freed ]
+                  && List.equal Int.equal cached [ 0 ]
+                  && List.equal Int.equal rebuilt [ (if graph then 1 else 0) ]
+                  && Array.equal Float.equal value (serial_expected ~graph)))));
 
     (* --- 4. HIP: the scratch frame runs; the back-off is in place and untouched. --- *)
     let hip_floats =

@@ -17,6 +17,8 @@ type point =
   | Schedule_cache_before_commit
   | Schedule_cache_before_replay
   | Run_before_launch
+  | Cuda_scratch_allocated
+  | Cuda_scratch_freed
 [@@deriving sexp, equal]
 
 (* One callback per domain, like [Autotune.Seam] (which this module cannot reuse: [Schedule_cache]
