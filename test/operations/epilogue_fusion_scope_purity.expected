@@ -1,0 +1,7 @@
+entry gate: optimize refuses a tensor write inside a scope body, naming validate_scope_bodies: true
+prelowered: Fuse_epilogue's probe refuses the impure scope body, naming scope purity: true
+prelowered: Schedule.apply refuses it too, naming scope purity: true
+premise: the base's relocation computes different values from the unfused program: true
+control: the same program with a pure scope body fuses: true
+control: fused values equal the unfused program: true
+epilogue_fusion_scope_purity: done

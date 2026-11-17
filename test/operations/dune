@@ -7412,6 +7412,21 @@
    epilogue_fusion_mma_seeds.expected
    epilogue_fusion_mma_seeds-tf32.actual)))
 
+; gh-ocannl-2266: Fuse_epilogue refuses a tensor write inside a scope body (past optimize's entry
+; gate, the ?prelowered form) instead of misreading its write inventory; hand-built programs
+; executed through Ll_test.interpret.
+
+(test
+ ; ocannl-backend: none -- hand-built IR judged by Schedule and run by Ll_test.interpret; nothing
+ ; compiles or runs on a backend.
+ (name epilogue_fusion_scope_purity)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules epilogue_fusion_scope_purity)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1712: every whole-routine seed's fused-epilogue twin, executed bitwise against the
 ; unfused reference, on sites whose seeds produce single-trip loops and partitioned segments.
 
