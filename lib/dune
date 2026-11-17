@@ -15,7 +15,9 @@
   arrayjit.memory_budget
   arrayjit.autotune
   ocannl_tensor
-  yojson)
+  yojson
+  sexplib
+  str)
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL_TRAIN))
  (preprocess

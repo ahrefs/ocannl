@@ -193,7 +193,7 @@
  (name lineage_claims)
  (package neural_nets_lib)
  (modules lineage_claims)
- (libraries base stdio ocannl arrayjit.verdict)
+ (libraries base stdio ocannl arrayjit.verdict arrayjit.utils)
  (preprocess
   (pps ppx_here)))
 
@@ -215,7 +215,16 @@
  (name ll_test)
  (package neural_nets_lib)
  (modules ll_test)
- (libraries base stdio ocannl arrayjit.ll_builders arrayjit.verdict))
+ (libraries
+  base
+  stdio
+  ocannl
+  arrayjit.ll_builders
+  arrayjit.verdict
+  arrayjit.utils
+  arrayjit.context
+  arrayjit.ir
+  arrayjit.autotune))
 
 ; Reading scope definitions back out of a kernel's text: the [Access_fold] [Emitted] walk's text
 ; order and the dependency order of what renders (gh-ocannl-2213, gh-ocannl-2250).
@@ -233,7 +242,14 @@
  (name fissioned_chain)
  (package neural_nets_lib)
  (modules fissioned_chain)
- (libraries base stdio ocannl arrayjit.utils arrayjit.verdict ll_test)
+ (libraries
+  base
+  stdio
+  ocannl
+  arrayjit.utils
+  arrayjit.verdict
+  ll_test
+  arrayjit.context)
  (preprocess
   (pps ppx_ocannl)))
 
@@ -254,7 +270,7 @@
  (name scripted_search)
  (package neural_nets_lib)
  (modules scripted_search)
- (libraries base ocannl arrayjit.utils))
+ (libraries base ocannl arrayjit.utils arrayjit.autotune arrayjit.context))
 
 ; gh-ocannl-1526: the structural fingerprint of a lowered routine the lowering-reuse tests compare
 ; a search's reused lowering with a fresh one by.
@@ -271,6 +287,15 @@
  (name wait_wedge_fixture)
  (package neural_nets_lib)
  (modules wait_wedge_fixture)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (libraries
+  base
+  ocannl
+  stdio
+  unix
+  arrayjit.verdict
+  ll_test
+  arrayjit.context
+  arrayjit.utils
+  arrayjit.autotune)
  (preprocess
   (pps ppx_here ppx_ocannl)))

@@ -16,6 +16,15 @@ open Stdio
 
 let raw_entries =
   [
+    ( "explicit_library_deps.ml",
+      [
+        "[scanner-refusal:79b83d87bc35a637a45c0dd6dc7479cf] explicit_library_deps";
+        "[scanner-refusal:e2937f725c3dd416fbbbb047979dc15a] library declaration compiles";
+        "[scanner-refusal:8261260fa2908a6e512581ef47939697] undeclared use compiles";
+        "[scanner-refusal:bd4e1515861d31f929904e3deb2b0b7b] undeclared transitive library";
+        "[scanner-refusal:36550c0b9c79bcf4a0384888ee112619] declared library's re-export";
+        "[scanner-refusal:068ac0a43201ecb7fea5899eba10c386] runtime dependency compiles";
+      ] );
     ( "unused_compiler_deps.ml",
       [
         "[scanner-refusal:1262ba0367f56ab63b0ef45185bb1257] control stanza must";
@@ -1186,6 +1195,8 @@ let raw_direct_evidence =
     is refused by [print]. *)
 let raw_catalogue_only : (string * string) list =
   [
+    ( "explicit_library_deps.ml:79b83d87bc35a637a45c0dd6dc7479cf",
+      "decided by the argument vector its own dune rule writes" );
     ( "unused_compiler_deps.ml:1262ba0367f56ab63b0ef45185bb1257",
       "a defect in the check's own synthetic control text, not a malformed tree" );
     ( "unused_compiler_deps.ml:351ce2a461cb37393c61069ee2649d96",

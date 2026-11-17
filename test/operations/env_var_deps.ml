@@ -134,9 +134,9 @@ let gateless_dirs =
   [
     ( "benchmarks/runners/ocannl/dune",
       ( Some [ "bin-smoke"; "metal-codegen" ],
-        "its bin-smoke action runs metal_queue_probe, linking metal, ctypes and unix without an \
-         OCANNL configuration reader; universe makes the canary rerun, but cannot check spellings"
-      ) );
+        "its bin-smoke action runs metal_queue_probe, linking metal, ctypes, integers, sexplib0 \
+         and unix without an OCANNL configuration reader; universe makes the canary rerun, but \
+         cannot check spellings" ) );
     ( "benchmarks/dune",
       ( None,
         "its one runtest action runs python3 over the benchmark orchestrator's own unit tests, \
@@ -348,6 +348,12 @@ let is_gate ?(subdir = "") ?programs ~stanzas stanza =
               ~f:(fun (_, runners) ->
                 List.exists runners ~f:(fun (runner, _) -> Sexp.equal runner stanza))))
 
+(* The canary owner's closed library contract; synthetic fixtures derive their linkage from it. *)
+let configuration_free_canary_libraries = [ "ctypes"; "integers"; "metal"; "sexplib0"; "unix" ]
+
+let configuration_free_canary_linkage =
+  "(libraries " ^ String.concat ~sep:" " configuration_free_canary_libraries ^ ")"
+
 (* The mixed-file exemption belongs to one configuration-free canary, not to arbitrary members of
    its aliases. Resolve every reachable action and keep the owner's explicit module/library contract
    closed. Unsupported launchers cannot inherit the exemption. *)
@@ -372,7 +378,7 @@ let configuration_free_canary_alias ~subdir ~stanzas alias =
          && List.equal String.equal (Scan.names_of owner) [ "metal_queue_probe" ]
          && Option.equal (List.equal Sexp.equal) (Scan.field owner "modules")
               (Some [ Sexp.Atom "metal_queue_probe" ])
-         && List.equal String.equal (atoms "libraries" owner) [ "ctypes"; "metal"; "unix" ]
+         && List.equal String.equal (atoms "libraries" owner) configuration_free_canary_libraries
          && Option.value_map (Scan.field owner "libraries") ~default:false
               ~f:(List.for_all ~f:(function Sexp.Atom _ -> true | _ -> false)) ->
       let reached = Scan.aliases_reached_from stanzas alias in
@@ -3666,8 +3672,8 @@ let control_context () =
                 "(test (name gateless) (deps (universe) (env_var %s)) (modules gateless))\n"
                 Scan.backend_env_var
           | Some aliases ->
-              "(executable (name metal_queue_probe) (modules metal_queue_probe) (libraries metal \
-               ctypes unix))\n"
+              "(executable (name metal_queue_probe) (modules metal_queue_probe) "
+              ^ configuration_free_canary_linkage ^ ")\n"
               ^ String.concat ~sep:""
                   (List.map aliases ~f:(fun alias ->
                        Printf.sprintf
@@ -5302,7 +5308,10 @@ let gateless_scope_control () =
          ^ ") (deps ocannl_config) (action (run %{dep:reader.exe})))\n"));
   Verdict.p_all "canary owner linkage or module drift cannot inherit a configuration-free exemption"
     [
-      ("(libraries metal ctypes unix)", "(libraries metal ctypes unix arrayjit.utils)");
+      ( configuration_free_canary_linkage,
+        "(libraries "
+        ^ String.concat ~sep:" " (configuration_free_canary_libraries @ [ "arrayjit.utils" ])
+        ^ ")" );
       ("(modules metal_queue_probe)", "(modules metal_queue_probe reader)");
     ]
     ~f:(fun (original, replacement) ->

@@ -2589,7 +2589,21 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   Compare clean builds with the same aliases before attributing disk growth to source changes;
   old build trees can contain only a subset of the currently declared executables.
 
-- The other direction is `unused_compiler_deps` (a `scans` member, gh-ocannl-2118): no stanza of
+- Direct library uses must be declared: `dune-project` sets
+  `(implicit_transitive_deps false)` project-wide (gh-ocannl-2234). Dune exposes the declared
+  libraries, their explicit `re_export` dependencies and the ppx runtime libraries it injects;
+  other transitive include directories are hidden. This is compiler enforcement, including
+  generated code, rather than a source-reference scan. It has include-directory granularity:
+  packages sharing one directory, such as `compiler-libs.*`, are not separated by it.
+  `explicit_library_deps` (in `scans`) copies the project's actual language and visibility
+  setting into isolated builds and checks undeclared refusal, explicit acceptance, re-export
+  acceptance and an injected metaquot runtime. Package-filtered verification first builds
+  `-p arrayjit`, installs it into a scratch prefix and runs `-p neural_nets_lib` with that
+  prefix in `OCAMLPATH`; no shared switch installation is needed. Helpers needed by both
+  packages use public names, including `tools/host_caps`'s `arrayjit.context`.
+
+- The declared-but-unused direction is `unused_compiler_deps` (a `scans` member,
+  gh-ocannl-2118): no stanza of
   the workspace declares a compiler-reaching library -- one whose dependency closure holds
   `compiler-libs.common`, derived from `dune describe`, never listed -- that none of its compiled
   modules references. Use is read from the typed trees of the stanza's `.cmt`/`.cmti` files
@@ -4478,8 +4492,14 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   `env_var_deps` reads the backend copies but not `arms/`, whose sources it already reads at their
   own `select`. An arm compiled as a library module is checked slightly more permissively than in
   its executable (an unused top-level value is an error only under the executable's empty
-  interface). A stub is a check of signatures only: it proves nothing about the vendor library's
-  behavior, so a change to a backend's runtime behavior still needs its box. A NEW vendor-gated
+  interface). Stand-in compilation uses the stand-in stanza's library list, so it cannot
+  validate the real optional stanza's declarations. With `implicit_transitive_deps` disabled,
+  compare their common libraries after vendor-package substitutions: gh-ocannl-2234's local
+  review caught `pprint` missing from the real CUDA stanza and `stdio` plus `pprint` missing
+  from the real HIP stanza although both stand-ins compiled. `vendor_stub_arms_scan` deliberately
+  leaves linkage parity outside its boundary. A stub is a check of signatures only: it proves
+  nothing about the vendor library's behavior, so a change to a backend's runtime behavior still
+  needs its box. A NEW vendor-gated
   `select` arm that no library under `arrayjit/vendor_stubs/` copies and compiles is refused by
   `test/operations/vendor_stub_arms_scan` (a `@scans` member), naming its dune file: copy it into
   `arms/dune` as its siblings are. The vendor libraries are derived from the stand-in tree.

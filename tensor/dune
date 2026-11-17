@@ -35,7 +35,8 @@
   ppx_here.runtime-lib
   ppx_minidebug.runtime
   arrayjit.ir
-  arrayjit.context)
+  arrayjit.context
+  pprint)
  ; The per-module tracing gates ppx_minidebug reads while PREPROCESSING row.ml, shape.ml and
  ; tensor.ml, so that `OCANNL_LOG_LEVEL_ROW=9 dune build ...` re-preprocesses them instead of
  ; returning the stripped modules built without it (gh-ocannl-628).

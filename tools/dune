@@ -32,7 +32,7 @@
 (executable
  (name calibrate_bandwidth)
  (modules calibrate_bandwidth)
- (libraries base stdio utils ir context ocannl))
+ (libraries base stdio utils ir context ocannl arrayjit.autotune))
 
 ; gh-ocannl-657: the GPU half of the e5m2 codec verification. A tool rather than a test because it
 ; needs a GPU and sweeps 2^32 float patterns plus 17.2e9 doubles; the CPU half is
@@ -73,7 +73,8 @@
    fp8_soak_hip.ml
    from
    (hipjit.hip hipjit.hiprtc arrayjit.hip_backend -> fp8_soak_hip.hipjit.ml)
-   (-> fp8_soak_hip.missing.ml)))
+   (-> fp8_soak_hip.missing.ml))
+  integers)
  (foreign_stubs
   (language c)
   (names fp8_soak_stubs)))
@@ -120,7 +121,7 @@
 (executable
  (name host_caps)
  (modules host_caps)
- (libraries base stdio context))
+ (libraries base stdio arrayjit.context))
 
 ; Parse a spec string without writing a program around it: the reading the PPXs give a literal
 ; spec (einsum first, then axis labels), or the parser's error with its hints.
@@ -136,9 +137,9 @@
 (executable
  (name calibrate_cache_capacity)
  (modules calibrate_cache_capacity)
- (libraries base stdio utils ir context ocannl))
+ (libraries base stdio utils ir context ocannl arrayjit.autotune))
 
 (executable
  (name calibrate_issue_rate)
  (modules calibrate_issue_rate)
- (libraries base stdio utils context ocannl))
+ (libraries base stdio utils context ocannl arrayjit.autotune arrayjit.ir))

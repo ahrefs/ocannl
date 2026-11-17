@@ -22,7 +22,17 @@
  (modules hip_backend hip_backend_impl)
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL_HIP_BACKEND))
- (libraries base hipjit_stub utils ir builtins_cc builtins_hip)
+ (libraries
+  base
+  hipjit_stub
+  utils
+  ir
+  builtins_cc
+  builtins_hip
+  integers
+  unix
+  stdio
+  pprint)
  (preprocess
   (pps
    ppx_compare

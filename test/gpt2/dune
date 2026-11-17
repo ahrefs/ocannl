@@ -65,7 +65,7 @@
 (executable
  (name gpt2_dry_run)
  (modules gpt2_dry_run)
- (libraries base ocannl stdio gpt2_model arrayjit.verdict)
+ (libraries base ocannl stdio gpt2_model arrayjit.verdict arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -80,7 +80,7 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries base ocannl stdio gpt2_model arrayjit.verdict)
+ (libraries base ocannl stdio gpt2_model arrayjit.verdict arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -109,6 +109,13 @@
 (executable
  (name gpt2_generate)
  (modules gpt2_generate)
- (libraries base ocannl stdio dataprep gpt2_model bench_args)
+ (libraries
+  base
+  ocannl
+  stdio
+  dataprep
+  gpt2_model
+  bench_args
+  arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl ppx_string)))

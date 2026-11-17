@@ -27,7 +27,20 @@
  (modules metal_backend metal_backend_impl metal_math_api_runtime)
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL_METAL_BACKEND))
- (libraries base metal_stub utils ir builtins_cc builtins_metal)
+ (libraries
+  base
+  metal_stub
+  utils
+  ir
+  builtins_cc
+  builtins_metal
+  integers
+  unix
+  mtime
+  mtime.clock.os
+  ctypes
+  pprint
+  stdio)
  (preprocess
   (per_module
    ((pps
