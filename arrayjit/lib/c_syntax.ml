@@ -814,7 +814,8 @@ type select_blend =
 
 (** How a dialect spells a builtin's parameter guard ({!Param_guards}): [C_guards] a compile-time
     assertion over the operand's [__typeof__] (GNU C), [Cxx_guards] a braced initialization, which
-    C++ (and so MSL) rejects when it narrows. *)
+    C++ (and so MSL) rejects when it narrows, with an additional refusal of class operands
+    converting by value into integer parameters. *)
 type param_guard_dialect = C_guards | Cxx_guards
 
 (** How a dialect spells a result-type probe ({!Result_type_probes}): [C_probes] a statement
@@ -1901,7 +1902,9 @@ let builtin_definitions builtins ~keys =
     floating, a narrower floating type, or an integer type whose range does not hold the operand's
     all fail, while a type the parameter holds exactly (a promotion, a wider type) passes. In C it
     is a [_Static_assert] over [__typeof__] of the argument, which evaluates the argument once, and
-    in the C++ dialects the braced initialization itself. A failing guard fails the kernel's
+    in the C++ dialects the braced initialization at the call site itself (preserving a literal's
+    constant-expression exemption), plus a class-to-integer refusal for CUDA/HIP floating wrappers.
+    The C guard remains type-based and has no constant exemption. A failing guard fails the kernel's
     compile, which is what [test/operations/op_table_compile] claims never happens to an in-domain
     arm.
 
@@ -2123,7 +2126,43 @@ end = struct
   __builtin_types_compatible_p(__typeof__(x), P), msg); (x); })|}
     | Cxx_guards ->
         {|/* gh-ocannl-1768: builtin parameter guards. A braced initialization rejects a narrowing. */
-template <typename P, typename A> inline P ocannl_param_guard__(A x) { return P{x}; }|}
+#if defined(__METAL_VERSION__)
+// MSL has native floating types, explicit reference address spaces and no inheritance.
+// Its narrowing rule needs only the original expression at the initialization site.
+template <typename P> using ocannl_param_metal_type__ = P;
+#define ocannl_pg_cxx__(P, x) ocannl_param_metal_type__<P>{(x)}
+#else
+template <typename T> struct ocannl_pg_plain__ { using type = T; };
+template <typename T> struct ocannl_pg_plain__<T&> : ocannl_pg_plain__<T> {};
+template <typename T> struct ocannl_pg_plain__<T&&> : ocannl_pg_plain__<T> {};
+template <typename T> struct ocannl_pg_integer__ { static constexpr bool value = false; };
+#define ocannl_pg_integer_decl__(T) \
+  template <> struct ocannl_pg_integer__<T> { static constexpr bool value = true; };
+ocannl_pg_integer_decl__(bool)
+ocannl_pg_integer_decl__(char)
+ocannl_pg_integer_decl__(signed char)
+ocannl_pg_integer_decl__(unsigned char)
+ocannl_pg_integer_decl__(short)
+ocannl_pg_integer_decl__(unsigned short)
+ocannl_pg_integer_decl__(int)
+ocannl_pg_integer_decl__(unsigned int)
+ocannl_pg_integer_decl__(long)
+ocannl_pg_integer_decl__(unsigned long)
+ocannl_pg_integer_decl__(long long)
+ocannl_pg_integer_decl__(unsigned long long)
+#undef ocannl_pg_integer_decl__
+template <typename T> struct ocannl_pg_integer__<const T> : ocannl_pg_integer__<T> {};
+template <typename P, typename A> struct ocannl_pg_check__ {
+  // Vendor float classes have integer conversion operators: list initialization alone accepts
+  // half-by-VALUE into an integer. Require an explicit conversion for that boundary too.
+  static_assert(!ocannl_pg_integer__<P>::value ||
+                !__is_class(typename ocannl_pg_plain__<A>::type),
+                "gh-ocannl-1768: a class operand converts by value to an integer parameter");
+  using type = P;
+};
+template <typename P, typename A> using ocannl_param_type__ = typename ocannl_pg_check__<P, A>::type;
+#define ocannl_pg_cxx__(P, x) ocannl_param_type__<P, decltype((x))>{(x)}
+#endif|}
 
   let guard dialect ~key types =
     let args = List.mapi types ~f:(fun i _ -> Printf.sprintf "ocannl_pg_a%d__" i) in
@@ -2135,7 +2174,7 @@ template <typename P, typename A> inline P ocannl_param_guard__(A x) { return P{
                 "%s(%s, %s, \"gh-ocannl-1768: %s's parameter %d (%s) narrows its operand\")"
                 (if is_scalar ty then "ocannl_pg_scalar__" else "ocannl_pg_exact__")
                 ty a key (i + 1) ty
-          | Cxx_guards -> Printf.sprintf "ocannl_param_guard__<%s>(%s)" ty a)
+          | Cxx_guards -> Printf.sprintf "ocannl_pg_cxx__(%s, %s)" ty a)
     in
     Printf.sprintf "#define %s(%s) (%s)(%s)" key (String.concat ~sep:", " args) key
       (String.concat ~sep:", " guarded)

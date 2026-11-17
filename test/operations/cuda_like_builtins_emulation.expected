@@ -1,3 +1,29 @@
+CUDA: every host render refusal is one the C reference refuses too: true
+CUDA: the host shared-arm preflight emitted guards: true
+CUDA: op_table_compile's shared scalar and packed-lane arms compile guarded on the host: true
+HIP: every host render refusal is one the C reference refuses too: true
+HIP: the host shared-arm preflight emitted guards: true
+HIP: op_table_compile's shared scalar and packed-lane arms compile guarded on the host: true
+CUDA: the backend declares C++ builtin guards: true
+CUDA: host conversion arms compile guarded: true
+CUDA: a class with an integer conversion compiles unguarded: true
+CUDA: a class with an integer conversion fails guarded: true
+CUDA: host gh-1704 control compiles unguarded: true
+CUDA: host gh-1704 control fails guarded: true
+CUDA: an exactly held double literal passes a float parameter guard: true
+CUDA: a double local fails the same float parameter guard: true
+CUDA: an in-range int literal passes an unsigned parameter guard: true
+CUDA: an int local fails the same unsigned parameter guard: true
+HIP: the backend declares C++ builtin guards: true
+HIP: host conversion arms compile guarded: true
+HIP: a class with an integer conversion compiles unguarded: true
+HIP: a class with an integer conversion fails guarded: true
+HIP: host gh-1704 control compiles unguarded: true
+HIP: host gh-1704 control fails guarded: true
+HIP: an exactly held double literal passes a float parameter guard: true
+HIP: a double local fails the same float parameter guard: true
+HIP: an in-range int literal passes an unsigned parameter guard: true
+HIP: an int local fails the same unsigned parameter guard: true
 CUDA: every function the table shares with the C table is probed or excluded with a reason: true
 HIP: every function the table shares with the C table is probed or excluded with a reason: true
 HIP: each fp8 guard is in the table and casts once, as the probe's substitution expects: true

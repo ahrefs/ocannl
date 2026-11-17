@@ -2806,13 +2806,36 @@ files.
   parameter guards are outside this result contract.
 - What a builtin's parameter type is and what its call site passes are compared by the
   parameter guards (`C_syntax.Param_guards`, gh-ocannl-1768), a test seam `op_table_compile` runs
-  its whole cc and Metal sweep under: each function a kernel's prelude defines is shadowed by a
+  its whole cc, Metal, CUDA and HIP sweep under: each function a kernel's prelude defines is shadowed by a
   macro whose guard fails the compile when the operand's type narrows into the parameter's (C++'s
   narrowing rule; in C a `_Static_assert` over `__typeof__`). Their first run found the store
   conversions into bf16 and fp8 passing `int` (a comparison) and `double` (a `0.0` or `1.0 /`
   literal) to `float` parameters; the C and Metal conversions now cast to `float` first, which is
-  value-neutral. A guarded argument loses a literal's constant exemption, so a guarded kernel
-  calling `ocannl_shfl_xor(v, 16)` would fail: extend the seam to warp kernels with that in mind.
+  value-neutral. Since gh-ocannl-1864, the C++ guard is a type-alias braced initialization
+  at the call site: it needs no host/device helper function and keeps the constant-expression
+  exemption (`0.5` into float, `16` into unsigned int), while a typed double/int local fails.
+  This also keeps `ocannl_shfl_xor(v, 16)` valid. A type-only assertion additionally rejects
+  class operands to integer parameters: CUDA's `__half::operator unsigned short()` otherwise
+  makes the reverted half-by-value defect pass even list initialization. A host class with that
+  conversion operator pins this; C++ host legs declare half as a class regardless of whether the
+  C codec has native `_Float16` support. Metal uses a separate, plain call-site alias: its floats
+  and vectors are native types, and MSL rejects both C++ inheritance and unqualified reference
+  specializations. The native Metal negative control still rejects half-to-integer narrowing.
+  The host C++ preflight does not define `__METAL_VERSION__`, so it checks only the CUDA/HIP
+  guard branch; the native Metal leg is the coverage of the MSL branch.
+  The C guard deliberately stays type-based:
+  no constant exemption is promised there. `cuda_like_builtins_emulation` compiles its
+  conversion-helper arms and `op_table_compile`'s shared scalar/packed-lane arms in C++ under each
+  backend's declared guards before device runs (`test/support/op_table_cases.ml` owns both arm
+  lists). The CUDA/HIP conversion renderers live beside their shared scalar tables in
+  `Cuda_like_config`, so the host leg compiles the actual conversion spellings too. Literal/local
+  pairs and the reverted half-by-value conversion are compile controls. The full-arm host leg's
+  additional shims model intrinsic types, not device numerical values or vendor overload sets;
+  the native compiler legs remain necessary. This preflight found HIP fp8 comparison/logical
+  results passing `bool` to its float narrowing helper, and integer-to-fp8 calls relying on implicit
+  conversion to float; both now state the same conversion explicitly (double sources retain their
+  double helper). As in the Metal emulation, only mingw without a C++ front end skips these host
+  compile claims as an Environment leg.
   Its sibling seam `C_syntax.Result_type_probes` (gh-ocannl-2117) checks the other side of a call,
   what an expression's type IS: `pp_scalar` wraps each node `Low_level.typed_at` calls typed in a
   GNU C statement expression or a C++ template deducing its argument's type, so the probe never

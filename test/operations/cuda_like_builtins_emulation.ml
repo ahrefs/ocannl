@@ -1,6 +1,6 @@
 (* Integer RNG results are also checked before storage, against independently extracted input
    bits and signedness, including the C reference table. Generic C arithmetic promotions and
-   parameter guards are outside this contract. A signed-byte copy must pass byte parity and fail
+   parameter guards have a separate compile-only C++ leg below. A signed-byte copy must pass byte parity and fail
    the result checks. *)
 (* The CUDA and HIP definition tables' device-free conversion helpers (gh-ocannl-1353), compiled by
    the host C compiler beside the C table the cc backend prepends, and compared with it bitwise.
@@ -29,10 +29,53 @@ open Verdict.Claims
 module B = Context.Builtins_cc
 module Cc = Context.Cc_backend
 
-type vendor = { name : string; label : string; table : (string * string * string list) list }
+module Cuda_config =
+  Ir.Cuda_like_config.Make
+    (struct
+      include Ir.Cuda_like_config.Cuda
 
-let cuda = { name = "cuda"; label = "CUDA"; table = Builtins_cuda.builtins }
-let hip = { name = "hip"; label = "HIP"; table = Builtins_hip.builtins }
+      let builtins = Builtins_cuda.builtins
+      let extra_blacklist = []
+    end)
+    (struct
+      let procs = [||]
+    end)
+
+module Hip_config =
+  Ir.Cuda_like_config.Make
+    (struct
+      include Ir.Cuda_like_config.Hip
+
+      let builtins = Builtins_hip.builtins
+      let extra_blacklist = []
+    end)
+    (struct
+      let procs = [||]
+    end)
+
+type vendor = {
+  name : string;
+  label : string;
+  table : (string * string * string list) list;
+  guard_dialect : Ir.C_syntax.param_guard_dialect option;
+}
+
+let cuda =
+  {
+    name = "cuda";
+    label = "CUDA";
+    table = Builtins_cuda.builtins;
+    guard_dialect = Cuda_config.builtin_param_guards;
+  }
+
+let hip =
+  {
+    name = "hip";
+    label = "HIP";
+    table = Builtins_hip.builtins;
+    guard_dialect = Hip_config.builtin_param_guards;
+  }
+
 let vendors = [ cuda; hip ]
 
 (* How a probe calls a helper, read off its name: the emitted names follow [Ops.prec_string]. *)
@@ -209,6 +252,33 @@ static inline __hip_fp8_e5m2 ocannl_shim_fp8_of_double(double x) { __hip_fp8_e5m
   _Generic((v), float: ocannl_shim_fp8_of_single, double: ocannl_shim_fp8_of_double)(v)
 |}
 
+(* Compile-only C++ legs use class signatures for half, even when the C codec emulates HALF_T with
+   storage bits. No definition is linked or executed here. *)
+let guard_shims =
+  replace_all ~sub:"typedef HALF_T __half;"
+    ~by:
+      {|struct __half {
+  unsigned short ocannl_bits;
+  __half() = default;
+  template<typename T> __half(T);
+  operator float() const;
+  operator unsigned short() const;
+  template<typename T> explicit operator T() const;
+  explicit operator bool() const;
+  friend __half operator+(__half, __half);
+  friend __half operator-(__half, __half);
+  friend __half operator*(__half, __half);
+  friend __half operator/(__half, __half);
+  friend __half operator-(__half);
+  friend bool operator<(__half, __half);
+  friend bool operator<=(__half, __half);
+  friend bool operator>(__half, __half);
+  friend bool operator>=(__half, __half);
+  friend bool operator==(__half, __half);
+  friend bool operator!=(__half, __half);
+};|}
+    shims
+
 (* HIP's bf16 conversion is the same function under its own type. *)
 let hip_bf16_shims =
   {|
@@ -336,6 +406,301 @@ let probe_source =
           @ if v.name = "hip" then List.map (fp8_probe ~prefix) fp8_guards else [])
         impls
     @ [ c_fp8_probes ])
+
+(* gh-ocannl-1864: host compilation of the conversion-helper arms also used by op_table_compile.
+   Boundary: the device-free helpers selected by [probed], with the same host codec/intrinsic shims
+   as the value comparison. This is not an emulation of device-only math, shuffles, or the vendor
+   class constructors. C++ list initialization checks the original expression, not a function
+   parameter. *)
+let guarded_host_source vendor ~guard ~broken ~body =
+  let module G = Ir.C_syntax.Param_guards in
+  let table =
+    List.map
+      (fun (key, definition, deps) ->
+        if broken && key = "half_to_uint4x32" then
+          (key, Op_table_cases.reverted_1704_cuda_like, deps)
+        else (key, definition, deps))
+      (host_table vendor)
+  in
+  let definitions = Ir.C_syntax.builtin_definitions table ~keys:(probed vendor) in
+  let guards =
+    match (guard, vendor.guard_dialect) with
+    | false, _ | _, None -> []
+    | true, Some dialect ->
+        G.prelude dialect
+        :: List.filter_map
+             (fun (key, definition, _) ->
+               if not (List.mem definition definitions) then None
+               else
+                 match G.parameter_types ~key definition with
+                 | Ok (_ :: _ as types) -> Some (G.guard dialect ~key types)
+                 | _ -> None)
+             table
+  in
+  String.concat "\n"
+    ([ B.includes ]
+    @ Ir.C_syntax.builtin_definitions B.builtins
+        ~keys:[ "HALF_T"; "FLOAT_TO_HALF"; "single_to_bfloat16"; "single_to_fp8"; "double_to_fp8" ]
+    @ [ guard_shims; (if vendor.name = "hip" then hip_bf16_shims else ""); "namespace vendor {" ]
+    @ definitions @ [ "}" ] @ guards
+    @ [ "namespace vendor {"; body; "}" ])
+
+let host_compiles source =
+  let src = Filename.temp_file "ocannl_param_guards_" ".cpp" in
+  let log = Filename.temp_file "ocannl_param_guards_" ".log" in
+  Fun.protect
+    ~finally:(fun () -> List.iter Sys.remove [ src; log ])
+    (fun () ->
+      let out = open_out_bin src in
+      output_string out source;
+      close_out out;
+      let command =
+        Printf.sprintf "%s -x c++ -std=c++17 -Werror=narrowing -fsyntax-only %s >%s 2>&1"
+          (Cc.compiler_command ()) (Filename.quote src) (Filename.quote log)
+      in
+      let ok = Sys.command command = 0 in
+      if not ok then (
+        let ic = open_in_bin log in
+        prerr_string (really_input_string ic (in_channel_length ic));
+        close_in ic);
+      ok)
+
+(* Match metal_builtins_emulation's existing environment boundary: mingw may omit its C++ front end.
+   Elsewhere a missing compiler fails the positive compile claim. *)
+let host_guard_leg =
+  Verdict.leg ~aggregation:`Environment
+    ~when_:((not Sys.win32) || host_compiles "int ocannl_cxx_probe() { return 0; }")
+    ~on:"mingw with no C++ front end" ()
+
+(* Type shims for the full operator-arm preflight. These compile the actual table text and rendered
+   operands; device intrinsic VALUES and vendor overload resolution remain the device sweep's
+   contract. In particular the separate class control models CUDA half's integer conversion, which
+   the native host half used here does not have. *)
+let operator_shims vendor =
+  let classes =
+    List.fold_left
+      (fun text typ ->
+        let definition =
+          replace_all ~sub:"CLASS" ~by:typ
+            {|struct CLASS {
+  uint16_t ocannl_bits;
+  CLASS() = default;
+  template<typename T> CLASS(T x):ocannl_bits((uint16_t)(float)x) {}
+  operator float() const { return (float)ocannl_bits; }
+  template<typename T> explicit operator T() const { return (T)ocannl_bits; }
+  friend CLASS operator+(CLASS a,CLASS b) { return CLASS((float)a+(float)b); }
+  friend CLASS operator-(CLASS a,CLASS b) { return CLASS((float)a-(float)b); }
+  friend CLASS operator*(CLASS a,CLASS b) { return CLASS((float)a*(float)b); }
+  friend CLASS operator/(CLASS a,CLASS b) { return CLASS((float)a/(float)b); }
+};|}
+        in
+        replace_all
+          ~sub:("typedef struct { uint16_t ocannl_bits; } " ^ typ ^ ";")
+          ~by:definition text)
+      guard_shims
+      [ "__nv_bfloat16"; "__hip_bfloat16" ]
+  in
+  let classes =
+    List.fold_left
+      (fun text (typ, storage) ->
+        replace_all
+          ~sub:("typedef struct { " ^ storage ^ " __x; } " ^ typ ^ ";")
+          ~by:
+            (Printf.sprintf
+               "struct %s { %s __x; %s() = default; template<typename T> %s(T x):__x((unsigned \
+                char)(float)x) {} operator float() const { return (float)__x; } operator __half() \
+                const { return (__half)__x; } };"
+               typ storage typ typ)
+          text)
+      classes
+      [ ("__nv_fp8_e5m2", "__nv_fp8_storage_t"); ("__hip_fp8_e5m2", "__hip_fp8_storage_t") ]
+  in
+  classes
+  ^ {|
+#define __global__
+typedef unsigned int uint;
+struct uint4 { unsigned int x,y,z,w; };
+static inline uint4 make_uint4(unsigned int x,unsigned int y,unsigned int z,unsigned int w) { return {x,y,z,w}; }
+static inline unsigned int __funnelshift_l(unsigned int a,unsigned int b,unsigned int n) { return (a << n) | (b >> ((32-n)&31)); }
+static inline double __longlong_as_double(long long x) { double d; memcpy(&d,&x,sizeof d); return d; }
+static inline float __int_as_float(int x) { float f; memcpy(&f,&x,sizeof f); return f; }
+static inline float __half2float(__half x) { return (float)x; }
+static inline __half __double2half(double x) { return (__half)x; }
+static inline __half __ushort2half_rn(unsigned short x) { return (__half)x; }
+static inline __half __ushort_as_half(unsigned short x) { __half h; memcpy(&h,&x,sizeof h); return h; }
+template<typename T> T __hadd(T a,T b) { return T((float)a+(float)b); }
+template<typename T> T __hsub(T a,T b) { return T((float)a-(float)b); }
+template<typename T> T __hmul(T a,T b) { return T((float)a*(float)b); }
+template<typename T> T __hdiv(T a,T b) { return T((float)a/(float)b); }
+template<typename T> T __hmax(T a,T b) { return T(fmaxf((float)a,(float)b)); }
+template<typename T> T __hmin(T a,T b) { return T(fminf((float)a,(float)b)); }
+template<typename T> T __hmax_nan(T a,T b) { return __hmax(a,b); }
+template<typename T> T __hmin_nan(T a,T b) { return __hmin(a,b); }
+template<typename T> T __hneg(T a) { return T(-(float)a); }
+template<typename T> T __habs(T a) { return T(fabsf((float)a)); }
+template<typename T> T __hfma(T a,T b,T c) { return T(fmaf((float)a,(float)b,(float)c)); }
+template<typename T> bool __hgt(T a,T b) { return (float)a>(float)b; }
+template<typename T> bool __hlt(T a,T b) { return (float)a<(float)b; }
+#define ocannl_host_half_unary__(name, expr) static inline __half name(__half x) { return (__half)(expr); }
+ocannl_host_half_unary__(hexp, expf((float)x))
+ocannl_host_half_unary__(hexp2, exp2f((float)x))
+ocannl_host_half_unary__(hlog, logf((float)x))
+ocannl_host_half_unary__(hlog2, log2f((float)x))
+ocannl_host_half_unary__(hsin, sinf((float)x))
+ocannl_host_half_unary__(hcos, cosf((float)x))
+ocannl_host_half_unary__(hsqrt, sqrtf((float)x))
+ocannl_host_half_unary__(hrsqrt, 1.0f/sqrtf((float)x))
+ocannl_host_half_unary__(hrcp, 1.0f/(float)x)
+#undef ocannl_host_half_unary__
+extern double rsqrt(double x);
+#define __tanhf tanhf
+#define __fmaf_rn fmaf
+static inline double __builtin_amdgcn_div_scale(double x,double,bool,bool *s) { *s=false; return x; }
+static inline double __builtin_amdgcn_rcp(double x) { return 1.0/x; }
+static inline double __builtin_amdgcn_div_fmas(double x,double y,double z,bool) { return fma(x,y,z); }
+static inline double __builtin_amdgcn_div_fixup(double x,double,double) { return x; }
+|}
+  ^ Printf.sprintf "\nstatic inline float __bfloat162float(%s x) { return (float)x; }\n"
+      (if vendor.name = "hip" then "__hip_bfloat16" else "__nv_bfloat16")
+  ^
+  if vendor.name = "hip" then
+    "\n\
+     #define __float2bfloat16(x) __hip_bfloat16(x)\n\
+     #define __ushort_as_bfloat16(x) __hip_bfloat16(x)\n"
+  else
+    "\n\
+     static inline __half htanh_approx(__half x) { return (__half)tanhf((float)x); }\n\
+     #define __ushort_as_bfloat16(x) __nv_bfloat16(x)\n"
+
+module Cuda_syntax = Ir.C_syntax.C_syntax (Cuda_config)
+module Hip_syntax = Ir.C_syntax.C_syntax (Hip_config)
+
+let host_operator_source vendor =
+  let module Cases = Op_table_cases in
+  let names = ref [] in
+  let render name optimized =
+    let idx = Ir.Indexing.bound_symbols Ir.Indexing.Empty in
+    let _, doc, _ =
+      if vendor.name = "cuda" then Cuda_syntax.compile_proc ~name idx optimized
+      else Hip_syntax.compile_proc ~name idx optimized
+    in
+    doc
+  in
+  let docs = ref [] in
+  let refused = ref [] in
+  let attempted = ref [] in
+  let precs = Ir.Ops.storage_precs in
+  List.iter
+    (fun store ->
+      let arms =
+        Cases.arms_at ~precs store @ Cases.vector_arms ~style:`Packed_struct ~compute:store
+      in
+      let o = Cases.operands ~precs ~n_arms:(List.length arms) store in
+      List.iteri
+        (fun k arm ->
+          attempted := (store, arm) :: !attempted;
+          let name = Printf.sprintf "host_%s_%s_%d" vendor.name (Ir.Ops.prec_string store) k in
+          let llc, written =
+            if Cases.is_vector_arm arm then Cases.vector_statement o arm
+            else (Cases.statement o k arm, [])
+          in
+          let optimized = Ll_test.optimize ~materialized:(Cases.nodes o @ written) ~name llc in
+          try
+            let text = render name { optimized with Ir.Low_level.llc } in
+            names := name :: !names;
+            docs := text :: !docs
+          with Invalid_argument why ->
+            refused := (store, arm) :: !refused;
+            Printf.eprintf "(not part of the golden) %s %s %s refused: %s\n" vendor.label
+              (Ir.Ops.prec_string store) (Cases.arm_name arm) why)
+        arms)
+    precs;
+  Printf.eprintf
+    "(not part of the golden) %s: %d shared arms rendered, %d refused before compilation\n"
+    vendor.label (List.length !docs) (List.length !refused);
+  let includes =
+    String.concat "\n"
+      ([ B.includes ]
+      @ Ir.C_syntax.builtin_definitions B.builtins
+          ~keys:
+            [ "HALF_T"; "FLOAT_TO_HALF"; "single_to_bfloat16"; "single_to_fp8"; "double_to_fp8" ]
+      @ [ operator_shims vendor ])
+  in
+  let proc_doc = PPrint.separate PPrint.hardline (List.rev !docs) in
+  let source =
+    if vendor.name = "cuda" then
+      Cuda_syntax.filter_and_prepend_builtins ~routine_names:!names ~includes ~builtins:vendor.table
+        ~proc_doc ()
+    else
+      Hip_syntax.filter_and_prepend_builtins ~routine_names:!names ~includes ~builtins:vendor.table
+        ~proc_doc ()
+  in
+  (source, !attempted, !refused)
+
+let () =
+  case "shared operator arms under emulated CUDA-like guards" @@ fun () ->
+  List.iter
+    (fun v ->
+      let before = Ir.C_syntax.Param_guards.emitted () in
+      let source, attempted, refused =
+        Ir.C_syntax.Param_guards.with_guards (fun () -> host_operator_source v)
+      in
+      p_empty
+        (v.label ^ ": every host render refusal is one the C reference refuses too")
+        ~over:attempted
+        (List.filter
+           (fun (store, arm) -> not (Op_table_cases.c_reference_refuses ~store ~compute:store arm))
+           refused);
+      p
+        (v.label ^ ": the host shared-arm preflight emitted guards")
+        (Ir.C_syntax.Param_guards.emitted () > before);
+      Verdict.in_leg ~leg:host_guard_leg
+        (v.label
+       ^ ": op_table_compile's shared scalar and packed-lane arms compile guarded on the host")
+        (fun label -> p label (host_compiles source)))
+    vendors
+
+let () =
+  case "CUDA-like parameter guards on the host" @@ fun () ->
+  List.iter
+    (fun v ->
+      p
+        (v.label ^ ": the backend declares C++ builtin guards")
+        (v.guard_dialect = Some Ir.C_syntax.Cxx_guards);
+      let compile ?(broken = false) ~guard body =
+        host_compiles (guarded_host_source v ~guard ~broken ~body)
+      in
+      let check suffix make =
+        Verdict.in_leg ~leg:host_guard_leg (v.label ^ suffix) (fun label -> p label (make ()))
+      in
+      let arms =
+        String.concat "\n" (List.map (probe ~vendor:(Some v.name) ~prefix:"") (probed v))
+      in
+      check ": host conversion arms compile guarded" (fun () -> compile ~guard:true arms);
+      let class_call =
+        "struct half_class { operator unsigned short() const { return 1; } }; void \
+         control(half_class x) { (void)uint16_to_uint4x32(x); }"
+      in
+      check ": a class with an integer conversion compiles unguarded" (fun () ->
+          compile ~guard:false class_call);
+      check ": a class with an integer conversion fails guarded" (fun () ->
+          not (compile ~guard:true class_call));
+      let half_call = "void control(__half x) { (void)half_to_uint4x32(x); }" in
+      check ": host gh-1704 control compiles unguarded" (fun () ->
+          compile ~broken:true ~guard:false half_call);
+      check ": host gh-1704 control fails guarded" (fun () ->
+          not (compile ~broken:true ~guard:true half_call));
+      check ": an exactly held double literal passes a float parameter guard" (fun () ->
+          compile ~guard:true "void control() { (void)single_to_uint4x32(0.5); }");
+      check ": a double local fails the same float parameter guard" (fun () ->
+          not
+            (compile ~guard:true "void control() { double x = 0.5; (void)single_to_uint4x32(x); }"));
+      check ": an in-range int literal passes an unsigned parameter guard" (fun () ->
+          compile ~guard:true "void control() { (void)uint32_to_single_uniform(16); }");
+      check ": an int local fails the same unsigned parameter guard" (fun () ->
+          not
+            (compile ~guard:true "void control() { int x = 16; (void)uint32_to_single_uniform(x); }")))
+    vendors
 
 (* Compiles [probe_source] into a shared library and hands it to [f]. An implicit declaration is an
    error, as clang already makes it: it is what a definition missing from a dependency list looks

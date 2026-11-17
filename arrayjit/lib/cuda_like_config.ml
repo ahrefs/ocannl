@@ -54,12 +54,60 @@ module Cuda = struct
 
   (* nvrtc's [--use_fast_math] touches only f32 division ([--prec-div=false]): f64 [/] is IEEE. *)
   let div_f64 = None
-  let fp8_from_float_fn = "(__nv_fp8_e5m2)"
+  let fp8_from_float_syntax = ("(__nv_fp8_e5m2)(", ")")
   let conditional_includes = [ ("nvcuda::wmma", "#include <mma.h>") ]
 
   (* gh-ocannl-707, gh-ocannl-1338: the names nvrtc fails to compile as a kernel name after the
      prelude, measured by [tools/vendor_idents.exe]. *)
   let vendor_routine_idents = Vendor_idents_cuda.names
+
+  let convert_precision ~typ_of_prec ~from ~to_ =
+    match (from, to_) with
+    | Ops.Double_prec _, Ops.Double_prec _
+    | Single_prec _, Single_prec _
+    | Half_prec _, Half_prec _
+    | Byte_prec _, Byte_prec _
+    | Uint16_prec _, Uint16_prec _
+    | Int32_prec _, Int32_prec _
+    | Int64_prec _, Int64_prec _
+    | Uint4x32_prec _, Uint4x32_prec _
+    | Bfloat16_prec _, Bfloat16_prec _
+    | Fp8_prec _, Fp8_prec _
+    | Void_prec, Void_prec ->
+        ("", "")
+    | Double_prec _, Half_prec _ -> ("__double2half(", ")")
+    | Single_prec _, Half_prec _ -> ("__float2half(", ")")
+    | Byte_prec _, Half_prec _ -> ("__ushort2half_rn((unsigned short int)", ")")
+    | Double_prec _, Uint4x32_prec _ -> ("double_to_uint4x32(", ")")
+    | Single_prec _, Uint4x32_prec _ -> ("single_to_uint4x32(", ")")
+    (* A plain conversion out of a block is refused, as on every backend (gh-ocannl-1785): these
+       arms used to read lane 0's bits. *)
+    | Uint4x32_prec _, _ -> Ops.no_plain_uint4x32_conversion ~to_
+    | Byte_prec _, Uint4x32_prec _ -> ("byte_to_uint4x32(", ")")
+    | Uint16_prec _, Uint4x32_prec _ -> ("uint16_to_uint4x32(", ")")
+    | Bfloat16_prec _, Uint4x32_prec _ -> ("bfloat16_to_uint4x32(", ")")
+    | Half_prec _, Uint4x32_prec _ -> ("half_to_uint4x32(", ")")
+    | Fp8_prec _, Uint4x32_prec _ -> ("fp8_to_uint4x32(", ")")
+    | ( Fp8_prec _,
+        (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _)
+      ) ->
+        (* __nv_fp8_e5m2 has no integer conversion operators: a C-style cast to an integer type
+           would resolve through the saturating [operator unsigned char] (wrong for negative
+           values). Convert via float, like the CC backend. *)
+        ("(" ^ typ_of_prec to_ ^ ")((float)(", "))")
+    (* The integer counter conversions MUST call the builtins, which spread the bits across all four
+       uint4x32 lanes (golden-ratio / MMIX / rotation mixing). The raw struct literal below only
+       fills lane 0, leaving lanes 1-3 zero; with the 2-round light threefry used for parameter init
+       that produces near-identical outputs for consecutive counters (periodicity), so random inits
+       diverge from CC/Metal. [Ops.index_prec] is signed [int32] (or [int64] under [large_models]),
+       so the signed arms are the conversion hit by every PRNG init loop, e.g. centered [uniform1]
+       parameter initialization (task-04f97340). *)
+    | Int32_prec _, Uint4x32_prec _ -> ("int32_to_uint4x32(", ")")
+    | Int64_prec _, Uint4x32_prec _ -> ("int64_to_uint4x32(", ")")
+    | Uint32_prec _, Uint4x32_prec _ -> ("uint32_to_uint4x32(", ")")
+    | Uint64_prec _, Uint4x32_prec _ -> ("uint64_to_uint4x32(", ")")
+    | _, Uint4x32_prec _ -> ("{(unsigned int)(", "), 0, 0, 0}")
+    | _ -> ("(" ^ typ_of_prec to_ ^ ")(", ")")
 end
 
 module Hip = struct
@@ -106,17 +154,107 @@ module Hip = struct
      f64 expansion remains correct under either vector, independently of that policy. *)
   let div_f64 = Some "ocannl_div_f64"
 
-  (* ROCm's subnormal guard is one funnel for conversion and every operator arity. *)
+  (* THE float-to-fp8 narrowing HIP emits — the operator bridges, which compute in float and narrow
+     the result, and [convert_precision]'s conversions. It is ALWAYS the guarded helper, never the
+     platform's own cast: ROCm's software float-to-e5m2 conversion shifts out of range for
+     magnitudes around 4e-25 to 3.3e-24 and returns codes as large as 2^-14 where the answer is a
+     signed zero (gh-ocannl-647, filed upstream as https://github.com/ROCm/rocm-systems/issues/10591
+     — that fix landing is what retires this helper). The guard pre-rounds only that range, which
+     rounds to zero anyway, so it is exact everywhere, and this backend's fp8 output matches CUDA,
+     cc, Metal and the host codec on every input.
+
+     One funnel rather than four call sites, because the first version of this guarded
+     [convert_precision] alone and left fp8 ARITHMETIC results narrowing through bare casts — an fp8
+     [**.] whose f32 result lands in ROCm's broken window still produced a spurious value (Codex P2
+     on PR #372). A fifth narrowing site cannot repeat that without going through here.
+
+     Which spelling narrows a value of precision [from]: the helpers are per-source-width on
+     purpose, since a double handed to the float helper would narrow at the call and round twice
+     (gh-ocannl-648), which the platform's own cast does not do. *)
   let fp8_from_prec_fn = function
     | Ops.Double_prec _ -> "ocannl_double_to_fp8_uniform"
     | _ -> "ocannl_single_to_fp8_uniform"
 
-  let fp8_from_float_fn = fp8_from_prec_fn Ops.single
+  let fp8_from_float_syntax = (fp8_from_prec_fn Ops.single ^ "((float)(", "))")
   let conditional_includes = [ ("rocwmma::", "#include <rocwmma/rocwmma.hpp>") ]
 
   (* gh-ocannl-707, gh-ocannl-1338: the names hiprtc fails to compile as a kernel name after the
      prelude, measured by [tools/vendor_idents.exe]. *)
   let vendor_routine_idents = Vendor_idents_hip.names
+
+  let convert_precision ~typ_of_prec ~from ~to_ =
+    match (from, to_) with
+    | Ops.Double_prec _, Ops.Double_prec _
+    | Single_prec _, Single_prec _
+    | Half_prec _, Half_prec _
+    | Byte_prec _, Byte_prec _
+    | Uint16_prec _, Uint16_prec _
+    | Int32_prec _, Int32_prec _
+    | Int64_prec _, Int64_prec _
+    | Uint4x32_prec _, Uint4x32_prec _
+    | Bfloat16_prec _, Bfloat16_prec _
+    | Fp8_prec _, Fp8_prec _
+    | Void_prec, Void_prec ->
+        ("", "")
+    (* One rounding, not two through float (gh-ocannl-2075): hip_fp16.h has no [__double2half]. *)
+    | Double_prec _, Half_prec _ -> ("ocannl_double_to_half(", ")")
+    | Single_prec _, Half_prec _ -> ("__float2half(", ")")
+    | Byte_prec _, Half_prec _ -> ("__ushort2half_rn((unsigned short int)", ")")
+    | Double_prec _, Uint4x32_prec _ -> ("double_to_uint4x32(", ")")
+    | Single_prec _, Uint4x32_prec _ -> ("single_to_uint4x32(", ")")
+    (* A plain conversion out of a block is refused, as on every backend (gh-ocannl-1785): this arm
+       used to read lane 0's bits. *)
+    | Uint4x32_prec _, _ -> Ops.no_plain_uint4x32_conversion ~to_
+    | Byte_prec _, Uint4x32_prec _ -> ("byte_to_uint4x32(", ")")
+    | Uint16_prec _, Uint4x32_prec _ -> ("uint16_to_uint4x32(", ")")
+    | Bfloat16_prec _, Uint4x32_prec _ -> ("bfloat16_to_uint4x32(", ")")
+    | Half_prec _, Uint4x32_prec _ -> ("half_to_uint4x32(", ")")
+    | Fp8_prec _, Uint4x32_prec _ -> ("fp8_to_uint4x32(", ")")
+    (* The integer counter conversions MUST call the builtins, which spread the bits across all four
+       uint4x32 lanes (golden-ratio / MMIX / rotation mixing). The raw struct literal below only
+       fills lane 0, leaving lanes 1-3 zero; with the 2-round light threefry used for parameter init
+       that produces near-identical outputs for consecutive counters (periodicity), so random inits
+       diverge from CC/Metal. [Ops.index_prec] is signed [int32] (or [int64] under [large_models]),
+       so the signed arms are the conversion hit by every PRNG init loop, e.g. centered [uniform1]
+       parameter initialization (task-04f97340). *)
+    | Int32_prec _, Uint4x32_prec _ -> ("int32_to_uint4x32(", ")")
+    | Int64_prec _, Uint4x32_prec _ -> ("int64_to_uint4x32(", ")")
+    | Uint32_prec _, Uint4x32_prec _ -> ("uint32_to_uint4x32(", ")")
+    | Uint64_prec _, Uint4x32_prec _ -> ("uint64_to_uint4x32(", ")")
+    | _, Uint4x32_prec _ -> ("{(unsigned int)(", "), 0, 0, 0}")
+    (* [__hip_bfloat16] has constructors from float, double, short, unsigned short, ... and [__half]
+       has several conversion operators, so C-style casts between them are ambiguous (observed with
+       ROCm 7.1 hiprtc); route through float explicitly. Same precaution for the half <-> fp8
+       pairs. *)
+    | Half_prec _, Bfloat16_prec _ -> ("__float2bfloat16(__half2float(", "))")
+    | Bfloat16_prec _, Half_prec _ -> ("__float2half(__bfloat162float(", "))")
+    | Double_prec _, Bfloat16_prec _ -> ("ocannl_double_to_bfloat16(", ")")
+    | (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _), Bfloat16_prec _ ->
+        ("ocannl_double_to_bfloat16((double)(", "))")
+    | Int64_prec _, Bfloat16_prec _ -> ("__ushort_as_bfloat16(ocannl_int64_to_bfloat16_bits(", "))")
+    | Uint64_prec _, Bfloat16_prec _ ->
+        ("__ushort_as_bfloat16(ocannl_uint64_to_bfloat16_bits(", "))")
+    | _, Bfloat16_prec _ -> ("__float2bfloat16((float)(", "))")
+    | Bfloat16_prec _, _ -> ("(" ^ typ_of_prec to_ ^ ")(__bfloat162float(", "))")
+    (* Through the same funnel as the operator bridges. A helper and not a ternary wrapped around
+       the operand: a [convert_precision] pair brackets ONE occurrence of its expression, and a
+       ternary would name it twice. Float helper arguments state their conversion explicitly,
+       including integer and bool sources; double sources retain their double helper. *)
+    | _, Fp8_prec _ -> (
+        let fn = fp8_from_prec_fn from in
+        match from with
+        | Ops.Half_prec _ -> (fn ^ "(__half2float(", "))")
+        | Ops.Double_prec _ -> (fn ^ "(", ")")
+        | _ -> (fn ^ "((float)(", "))"))
+    | Fp8_prec _, Half_prec _ -> ("__float2half((float)(", "))")
+    | ( Fp8_prec _,
+        (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _)
+      ) ->
+        (* __hip_fp8_e5m2's integer conversion operators saturate (wrong for negative values into
+           unsigned types) and overlap enough to make direct casts ambiguity-prone; convert via
+           float, like the CC backend. *)
+        ("(" ^ typ_of_prec to_ ^ ")((float)(", "))")
+    | _ -> ("(" ^ typ_of_prec to_ ^ ")(", ")")
 end
 
 (** Shared CUDA/HIP scalar semantics. Hardware MMA, asynchronous copies and conversions with
@@ -158,8 +296,11 @@ module Make (Dialect : sig
 
   (* The f64 [Div] (and [Recip], as [1.0 / x]) function, where a plain [/] is not IEEE. *)
   val div_f64 : string option
-  val fp8_from_float_fn : string
+  val fp8_from_float_syntax : string * string
   val vendor_routine_idents : string list
+
+  val convert_precision :
+    typ_of_prec:(Ops.prec -> string) -> from:Ops.prec -> to_:Ops.prec -> string * string
 end) (Input : sig
   val procs : Low_level.t array
 end) =
@@ -183,8 +324,13 @@ struct
   (* gh-ocannl-1338: the vendor headers' global types and macros ([half2], [float4], [CUDARTAPI],
      [HIPRT_INF_FP16]) cannot be shadowed by, or expand into, a node's identifier. *)
   let node_ident_prefix = Dialect.backend_facts.Backend_intf.node_ident_prefix
-  let fp8_from_float doc = PPrint.(group (string Dialect.fp8_from_float_fn ^^ parens doc))
+
+  let fp8_from_float doc =
+    let fp8_prefix, fp8_suffix = Dialect.fp8_from_float_syntax in
+    PPrint.(group (string fp8_prefix ^^ doc ^^ string fp8_suffix))
+
   let main_kernel_prefix = "extern \"C\" __global__"
+  let builtin_param_guards = Some C_syntax.Cxx_guards
   let result_type_probes = C_syntax.Cxx_probes "__device__ __forceinline__"
 
   (* An all-Serial kernel launches 1x1x1, so no single-thread guard is needed; annotated kernels
@@ -243,6 +389,8 @@ struct
     | Ops.Void_prec -> "void"
     | Ops.Uint32_prec _ -> "unsigned int"
     | Ops.Uint64_prec _ -> "unsigned long long"
+
+  let convert_precision = Dialect.convert_precision ~typ_of_prec
 
   let vec_typ_of_prec ~length prec =
     match (prec, length) with
