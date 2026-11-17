@@ -2769,23 +2769,27 @@ sub reach_chain {   # INDEX TARGET -> (indices from INDEX to the target), or ()
 }
 sub chain_text { join(" -> ", map { label($_) } @_) }
 # Whether a reached owner's code names a changed module's changed part, and
-# why: (1, WHY) when it does, or ranks first for another reason; (0, WHY) when
-# it is link-only on its own account. `link_only` reads the first answer;
-# `--why` prints the second.
-sub owner_names {
+# why: (1, WHY, PATHS) when it does or ranks first for another reason;
+# (0, WHY) when it is link-only on its own account. PATHS records any known
+# changed paths that earned the first-tier rank. `link_only` reads the rank;
+# `--why` prints the explanation and the cross-cutting summary counts paths.
+sub read_owner_names {
   my ($o) = @_;
   return (1, "nothing is ranked: no module of a library changed by name (a stanza or a generated file did, or only data)")
     unless $rank_links;
-  return (1, "it is itself reached by " . ($hit_why{$o} // "a changed path") . ", so no name says what changed there") if $hit{$o};
+  return (1, "it is itself reached by " . ($hit_why{$o} // "a changed path") . ", so no name says what changed there",
+    [$hit_path{$o}]) if $hit{$o};
   if ($reached_whole{$o}) {
     my @c = reach_chain($o, sub { $whole_hit{$_[0]} || grep { $reached{$_} } @{$st[$_[0]]{gen_to} // []} });
     return (1, "it links what a changed path reached as a whole, under no name it would show: "
-      . chain_text(@c) . ", which " . ($hit_why{$c[-1]} // "a changed path") . " reached") if @c && $whole_hit{$c[-1]};
+      . chain_text(@c) . ", which " . ($hit_why{$c[-1]} // "a changed path") . " reached",
+      [$hit_path{$c[-1]}]) if @c && $whole_hit{$c[-1]};
     if (@c) {
       my ($g) = grep { $reached{$_} } @{$st[$c[-1]]{gen_to}};
       my @gc = reach_chain($g, sub { $hit{$_[0]} });
       return (1, "it compiles what a reached generator writes (a header, a module), under no name it would show: "
-        . chain_text(@c, @gc) . ", which " . ($hit_why{$gc[-1] // $g} // "a changed path") . " reached");
+        . chain_text(@c, @gc) . ", which " . ($hit_why{$gc[-1] // $g} // "a changed path") . " reached",
+        [$hit_path{$gc[-1] // $g}]);
     }
     return (1, "it links what a changed path reached as a whole (a stub, a generated module), under no name it would show");
   }
@@ -2811,10 +2815,18 @@ sub owner_names {
         : "`$n`, re-exporting $m from " . join("/", @by) . ": " . join(" and ", map { tok_where($o, $through->($_, $n)) } @by);
     }
     my $defs = $mod_defs{$m};
-    if (@as && !$defs) { return (1, "it names $m: " . join("; ", @as) . "; and $m changed as a whole") }
+    my @paths = sort grep { $_ ne "\0membership" } keys %{$mod_paths{$m}};
+    if (@as && !$defs) {
+      return (1, "it names $m: " . join("; ", @as) . "; and $m changed as a whole",
+        [grep { !$path_defs{$_} } @paths]);
+    }
     if (@as) {
       my @d = sort grep { $tok->{$_} } keys %$defs;
-      return (1, "it names $m: " . join("; ", @as) . "; and its changed definition(s): " . join("; ", map { tok_where($o, $_) } @d)) if @d;
+      if (@d) {
+        my @witnesses = grep { my $p = $_; grep { $path_defs{$p}{$_} } @d } @paths;
+        return (1, "it names $m: " . join("; ", @as) . "; and its changed definition(s): " . join("; ", map { tok_where($o, $_) } @d),
+          \@witnesses);
+      }
       push @missed, "names $m (" . join("; ", @as) . ") but " . (%$defs ? "none of its changed definitions (" . join(", ", sort keys %$defs) . ")"
         : "no definition of it changed (only comments or blank lines did)");
     } else {
@@ -2825,6 +2837,8 @@ sub owner_names {
   }
   return (0, "its code (its sources, its project ppx's, the helper definitions it names) " . join("; ", @missed));
 }
+my %owner_names;
+sub owner_names { @{$owner_names{$_[0]} //= [read_owner_names($_[0])]} }
 sub link_only {   # reached owners -> true when none of them names a changed module's changed part
   return 0 unless $rank_links;
   for my $o (@_) { return 0 if (owner_names($o))[0] }
@@ -2870,6 +2884,7 @@ for my $a (@al) {
   if ($dune_dirs{$a->{dir}} || $read_any{$a->{name}} || $direct{$a->{name}}) { $tier{$a->{name}} = "main" }
   elsif ($blind) { $tier{$a->{name}} = @by_owner ? "main" : "guess" }
   elsif (@by_owner) { $tier{$a->{name}} = link_only(@by_owner) ? "link" : "main" }
+  $a->{own_tier} = $tier{$a->{name}};
 }
 # An alias whose own rules need a listed alias (an ambient gate such as
 # `runtest-env_spelling_gate`) is listed too, in that alias's tier, to a
@@ -3076,8 +3091,8 @@ sub verdict {   # (first-tier aliases, printed aliases, per-test aliases, UNMAPP
   return @v;
 }
 # Count observed reach from the same seeds that the ranking and --why use.
-# Attribute an owner to its nearest hit, and an alias without a witness of
-# its own to a needed alias that carries one. Count each path once per alias.
+# Prefer the owner's source witnesses when a reference earned the first tier.
+# A promoted alias follows a dependency in its new tier. Count a path once per alias.
 sub cross_reason {
   my (%by_alias_path, %owner_path, %dir_path, %needs_alias, %count);
   for my $p (sort keys %read_by) {
@@ -3092,14 +3107,23 @@ sub cross_reason {
   $dir_path{(dir_of($_))[0]} = $_ for reverse @changed;
   for my $a (grep { $tier{$_->{name}} } @al) {
     my ($n, $d) = @$a{qw(name dir)};
+    my $first = $tier{$n} ne "link";
+    $needs_alias{$n} = [ sort grep { $tier{$_} && ($first ? $tier{$_} ne "link" : $tier{$_} eq "link") }
+      map { keys %{$adeps{$_} // {}} } @{$a->{own}} ];
+    next if !$a->{own_tier} || ($first && $a->{own_tier} eq "link");
+    my @owners;
+    for my $o (@{$a->{by_owner}}) {
+      my ($named, undef, $witnesses) = owner_names($o);
+      next if $first && !$named;
+      push @owners, $first && $witnesses && @$witnesses ? @$witnesses : $owner_path{$o};
+    }
     my $paths = $by_alias_path{$n} //= {};
     my $data_path = $data_why{$d} // $any_data_why;
     $data_path = $delta_paths{$data_path} // $data_path if defined $data_path;
     $paths->{$_} = 1 for grep { defined }
-      $dune_why{$d}, $direct_path{$n}, @owner_path{@{$a->{by_owner}}},
+      $dune_why{$d}, $direct_path{$n}, @owners,
       ($a->{opaque_listed} ? $data_path : ()),
       ($a->{unknown_touched} ? $dir_path{$d} : ());
-    $needs_alias{$n} = [ sort grep { $tier{$_} } map { keys %{$adeps{$_} // {}} } @{$a->{own}} ];
   }
   for my $n (@_) {
     my @queue = ($n);

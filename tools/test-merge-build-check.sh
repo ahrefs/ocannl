@@ -62,6 +62,7 @@ FAKE
 cat >"$TMP/opambin/opam" <<FAKE
 #!/bin/sh
 [ "\$*" = 'env --shell=sh' ] || { echo "unexpected opam call: \$*" >&2; exit 64; }
+[ -z "\${FAKE_OPAM_ROOT:-}" ] || [ "\$(pwd -P)" = "\$FAKE_OPAM_ROOT" ] || exit 42
 echo "PATH='$TMP/dunebin':\"\\\$PATH\"; export PATH;"
 FAKE
 # An opam whose switch has no dune.
@@ -121,6 +122,12 @@ if [ -n "${FAKE_PLAN_BASE:-}" ]; then
 fi
 if [ "${FAKE_CROSS_ON_MOVED_BASE:-0}" = 1 ] && [ -f moved-marker ]; then
   FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_RC=2 FAKE_TIER_VERDICT=cross-cutting
+fi
+if [ "${FAKE_BAD_RULES:-0}" = 1 ]; then
+  raw="${TMPDIR:-/tmp}/affected-dune-rules.$$.txt"
+  printf '%s\n' 'raw rejected Dune answer' >"$raw" || exit 8
+  printf 'affected: rejected Dune answer, saved to %s\n' "$raw" >&2
+  exit 2
 fi
 reason() {
   [ -z "${FAKE_REASON:-}" ] || printf 'affected: CROSS-CUTTING reason: %s\n' "$FAKE_REASON" >&2
@@ -323,7 +330,7 @@ if harness_leg 'a branch plan reads the selected merge and its record without bu
   touch "$R/moved-marker"
   before=$(git -C "$R" status --porcelain)
   plan_branch() {
-    FAKE_PLAN_CALLER=$R FAKE_PLAN_BASE=$1 FAKE_PLAN_HEAD=$side run "$TMP/dunebin" --plan --base "$1"
+    FAKE_PLAN_CALLER=$R FAKE_PLAN_BASE=$1 FAKE_PLAN_HEAD=$side run "${2:-$TMP/dunebin}" --plan --base "$1"
   }
   planned() {
     if [ "$rc" = 0 ] && [ ! -s "$TMP/record" ] && grep -qx "prepush --since $fork..$side --list" "$TMP/record.tiers" &&
@@ -346,6 +353,14 @@ if harness_leg 'a branch plan reads the selected merge and its record without bu
   if has 'fixture: merge gate from the moved base'; then
     report 0 'the candidate plan uses the merge gate version the base brought'
   else report 1 'the candidate plan uses the merge gate version the base brought' "$(cat "$TMP/out")"; fi
+  FAKE_OPAM_ROOT=$(cd "$R" && pwd -P) plan_branch "$fork" "$TMP/opambin"
+  planned 'a branch plan resolves checkout-local opam before querying the candidate' \
+    'dune is not on PATH; sourcing tools/opam-env.sh' 'owed-run needs: none'
+  FAKE_BAD_RULES=1 TMPDIR=$TMP plan_branch "$fork"
+  raw=$(sed -n 's/^affected: rejected Dune answer, saved to //p' "$TMP/out")
+  if [ "$rc" = 1 ] && [ -n "$raw" ] && grep -qx 'raw rejected Dune answer' "$raw"; then
+    report 0 'the recorded raw Dune answer survives plan cleanup'
+  else report 1 'the recorded raw Dune answer survives plan cleanup' "exit $rc; $(cat "$TMP/out")"; fi
   # The side needs a conflicting edit to the same line, relative to the fork.
   { echo conflict; tail -n +2 "$R/r.txt"; } >"$R/r.txt.new" && mv "$R/r.txt.new" "$R/r.txt" && commit_on side
   side=$(git -C "$R" rev-parse HEAD)

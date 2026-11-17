@@ -674,6 +674,25 @@ if harness_leg 'cross-cutting opens stderr and leaves the verdict trailer last';
     "exit $rc; first: $(head -n 1 "$TMP/combined"); last: $(tail -n 1 "$TMP/combined")"; fi
 fi
 
+if harness_leg 'cross-cutting names the ranked source path'; then
+  mkdir -p "$repo/ranked"
+  for i in $(seq 1 32); do
+    printf '(test (name uses_%s) (modules uses_%s) (libraries core))\n' "$i" "$i" >>"$repo/ranked/dune"
+    printf 'let () = ignore Core.H.used\n' >"$repo/ranked/uses_$i.ml"
+  done
+  git_q add ranked && git_q commit -qm rank-fixture || exit 2
+  printf '\n(* A comment-only edit in the same library. *)\n' >>"$repo/lib/core.ml"
+  printf 'let used = 4\nlet unused = 2\n' >"$repo/lib/helper.ml"
+  affected --referenced-only --since HEAD
+  trailer
+  if [ "$rc" = 0 ] && [ "$verdict" = cross-cutting ] &&
+     grep -q '^affected: CROSS-CUTTING reason: lib/helper.ml (' "$err"; then
+    report 0 'the definition named by the first tier outranks a comment-only change to its library'
+  else report 1 'the definition named by the first tier outranks a comment-only change to its library' \
+    "exit $rc, verdict $verdict; $(head -n 2 "$err")"; fi
+  git_q reset -q --hard HEAD~1 || exit 2
+fi
+
 if harness_leg 'link-only'; then
   # Ranked, not dropped (gh-ocannl-1431): what names the changed module is printed first,
   # what only links its library last, and both are printed unless --referenced-only.

@@ -511,10 +511,15 @@ branch_plan() (
     die_plan 'cannot create the candidate commit'
   git -c core.hooksPath=/dev/null checkout --quiet --detach "$commit" ||
     die_plan 'cannot check out the candidate merge'
+  # A local opam switch is visible from the original checkout only.
+  cd "$root" || die_plan 'cannot enter the head checkout'
+  find_dune
+  cd "$scratch/checkout" || die_plan 'cannot enter the candidate repository'
   set -- --plan-merge
   [ "$all" = 0 ] || set -- "$@" --all
   rc=0
-  TMPDIR="$scratch" "${BASH:-bash}" tools/merge-build-check.sh "$@" </dev/null || rc=$?
+  # Affected retains rejected Dune output in TMPDIR for inspection.
+  TMPDIR="$scratch_parent" "${BASH:-bash}" tools/merge-build-check.sh "$@" </dev/null || rc=$?
   [ "$rc" != 2 ] || die_plan 'the candidate merge does not support plan queries'
   exit "$rc"
 )
