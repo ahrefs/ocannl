@@ -113,23 +113,26 @@ let retarget ptx ~sm =
 let jit_load ptx =
   ignore (Context.auto ());
   Cu.Context.set_current (Cu.Context.get_primary (Cu.Device.get ~ordinal:0));
-  let image = Ctypes.CArray.of_string ptx in
+  (* The image the driver reads is a NUL-terminated string, as nvrtc's own PTX buffer is. *)
+  let image = Ctypes.CArray.of_string (ptx ^ "\000") in
   let log = Stdlib.Bigarray.(Array1.create char c_layout 16384) in
   Stdlib.Bigarray.Array1.fill log '\000';
   match
     Cu.Module.load_data_ex
-      { Nvrtc.log = None; ptx = Ctypes.CArray.start image; ptx_length = Ctypes.CArray.length image }
+      { Nvrtc.log = None; ptx = Ctypes.CArray.start image; ptx_length = String.length ptx }
       [ Cu.Module.ERROR_LOG_BUFFER log ]
   with
   | (_ : Cu.Module.t) ->
       ignore (Stdlib.Sys.opaque_identity image);
       Ok ()
-  | exception Cu.Cuda_error { message; _ } ->
+  | exception Cu.Cuda_error { status; message } ->
+      ignore (Stdlib.Sys.opaque_identity image);
       let text = String.init (Stdlib.Bigarray.Array1.dim log) ~f:(Stdlib.Bigarray.Array1.get log) in
       let text =
         Option.value_map (String.index text '\000') ~default:text ~f:(String.prefix text)
       in
-      Stdio.eprintf "driver JIT refusal: %s: %s (not part of the golden)\n" message
+      Stdio.eprintf "driver JIT refusal: %s %s: %s (not part of the golden)\n" message
+        (Sexp.to_string (Cu.sexp_of_result status))
         (String.substr_replace_all text ~pattern:"\n" ~with_:" | ");
       Error text
 
