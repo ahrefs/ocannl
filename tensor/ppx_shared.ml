@@ -1020,6 +1020,15 @@ let operators =
       ("<>", "ne");
     ]
 
+(* [Ppx_op.translate]'s power arms apply this head in [**.]'s infix order, base then exponent,
+   keeping a literal exponent a float rather than a tensor. Its ghost location tells it from a
+   [TDSL.O.( **. )] the user wrote, which keeps its explicit qualifier. *)
+let power_head_lid = Ldot (Ldot (Lident "TDSL", "O"), "**.")
+
+let power_head ~loc =
+  let loc = { loc with loc_ghost = true } in
+  Ast_builder.Default.pexp_ident ~loc { txt = power_head_lid; loc }
+
 let add_module_qualifier_to_applied_function ?(module_name = "NTDSL")
     ?(is_primitive = fun _ -> false) expr =
   let qualify_if_needed fn =
@@ -1037,6 +1046,34 @@ let add_module_qualifier_to_applied_function ?(module_name = "NTDSL")
   let rec process_expr expr =
     let loc = expr.pexp_loc in
     match expr.pexp_desc with
+    | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; pexp_loc = { loc_ghost = true; _ }; _ }, args)
+      when Poly.equal txt power_head_lid
+           && List.count args ~f:(function Nolabel, _ -> true | _ -> false) = 2 -> (
+        (* A translated power (gh-ocannl-2274). The named [pointpow] takes the exponent first, the
+           opposite of the infix order, and it is the module's own: without gradients in [NTDSL]. As
+           for the operators below, the absent label stays unapplied for [param] to supply. *)
+        let labelled, operands =
+          List.partition_tf args ~f:(function Nolabel, _ -> false | _ -> true)
+        in
+        let labelled =
+          List.filter labelled ~f:(function Optional "label", [%expr None] -> false | _ -> true)
+        in
+        let pointpow exponent base =
+          Ast_builder.Default.pexp_apply ~loc
+            (Ast_builder.Default.pexp_ident ~loc
+               { txt = Ldot (Lident module_name, "pointpow"); loc })
+            (labelled @ [ (Nolabel, exponent); (Nolabel, base) ])
+        in
+        (* The infix application evaluates the exponent first, as OCaml runs arguments right to
+           left. Swapped, an effectful base would run first: bind the exponent before it. *)
+        match operands with
+        | [ (_, ({ pexp_desc = Pexp_ident _ | Pexp_constant _; _ } as base)); (_, exponent) ] ->
+            pointpow exponent base
+        | [ (_, base); (_, exponent) ] ->
+            in_source_order ~loc ~prefix:"__exponent" [ exponent; base ] ~f:(function
+              | [ exponent; base ] -> pointpow exponent base
+              | _ -> expr)
+        | _ -> expr)
     | Pexp_apply (_, _) ->
         let fn, args = decompose_app expr [] in
         let qualified_fn = qualify_if_needed fn in

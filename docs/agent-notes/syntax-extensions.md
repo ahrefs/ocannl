@@ -51,6 +51,17 @@ files.
   `op_neg_initializer` anchors the original values to nonzero literals before checking their
   negation: forcing both parameter readbacks to zero must fail that anchor, even though the
   relative negation still passes.
+- A power in an inline initializer (`{ w = source **. 2 }`, gh-ocannl-2274) is the one operator
+  `translate` emits already qualified, as `Ppx_shared.power_head` (`TDSL.O.( **. )`, base then
+  exponent, so a literal exponent stays a float). The qualifier recognizes that head and emits
+  `NTDSL.pointpow exponent base`: the named form takes the exponent FIRST, so requalifying the
+  head alone would compute `exponent ** source`. The swap binds the exponent ahead of an
+  effectful base (`in_source_order`), keeping the infix right-to-left evaluation, and the head's
+  ghost location tells it from a `TDSL.O.( **. )` the user wrote, which keeps its qualifier.
+  Pinned by `test_initializer_heads` and
+  `op_initializer_heads` (`source **. 2` from `[2; -4; 8; -16]` is `[4; 16; 64; 256]`; the
+  swapped order gives fractions). `%extend_dsls` qualifies before translation, so a raw `**.`
+  there still maps through `operators` to `pointpow` in infix order (unexercised).
 - Label sources: only a toplevel `%op` function WITHOUT `()` reads its tensor parameters' labels
   into the result's (the no-unit arm of `translate`); with `()`, no tensor parameter is one.
   Without `()`, an unlabelled parameter is read as `p.Tensor.value.Ir.Tnode.label`, so an unlabelled non-tensor is
