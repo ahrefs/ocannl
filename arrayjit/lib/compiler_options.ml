@@ -42,11 +42,19 @@ let hip_target_options ~target_archs =
   else []
 
 (* gh-ocannl-1909: the default HIP policy keeps the umbrella, then restores exact division,
-   non-approximate functions and NaN semantics, and limits contraction to source expressions. On
-   tuf/gfx1102 discrete memory, untuned gpt2_mini_train (4 layers, width 256, sequence 128, batch
-   8), this vector cost 1.057x the old vector [1.046, 1.062] over 12 paired rounds; an identical
-   control ranged [0.997, 1.008]. We accept that cost for exact normalization quotients,
-   NaN-preserving selection and f64 pow's 2-ulp bound. No gfx1151 timing was taken.
+   non-approximate functions and NaN semantics, and limits contraction to source expressions. We
+   accept its cost for exact normalization quotients, NaN-preserving selection and f64 pow's 2-ulp
+   bound. Per untuned gpt2_mini_train step (4 layers, width 256, sequence 128, batch 8), over the
+   old vector, 12 paired rounds with an identical control: f32 on tuf/gfx1102, discrete memory,
+   1.057x [1.046, 1.062], control [0.997, 1.008]; f32 on minix/gfx1151, unified memory
+   (gh-ocannl-2298), 1.057x [0.957, 1.086], control [0.913, 1.090] -- wide because each arm's
+   processes fall in a fast or a slow mode, and within each mode this vector's cells clear every old
+   and control cell by ~5-6%; bf16 mixed precision on minix/gfx1151, unified memory, 0.987x [0.939,
+   1.023], faster in 11 of 12 rounds, control [0.963, 1.027]: no cost. The f32 cost is
+   [-fno-approx-func]'s: without it the vector is 1.006x on gfx1151 (on gfx1102,
+   [-fno-reciprocal-math] alone was 1.005x and with [-fno-approx-func] 1.059x). It is also what
+   makes f32 and half division exact: dropping it fails [division_special_values]' three
+   exact-quotient claims on gfx1151, so narrowing the vector would give up what the cost buys.
    [hip_fast_math=false], selected by reproducible, still pins contraction OFF. [on] is not [off]:
    the compiler_contraction_off capability, and t1835's exact schedule gate, stay closed for the
    default. Explicit fma intrinsics remain explicit under either policy. *)

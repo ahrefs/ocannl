@@ -1531,8 +1531,9 @@
 # of cuda_fast_math. On (the default, and under the `performance` and `approximate` profiles): hiprtc
 # gets `-ffast-math -fno-associative-math -fhonor-infinities -fno-reciprocal-math
 # -fno-approx-func -ffp-contract=on -fhonor-nans` (gh-ocannl-1909). Exact division and NaN
-# selection, and f64 pow within 2 ulps, cost 5.7% per untuned gpt2_mini_train step on tuf
-# (gfx1102, discrete memory); gfx1151 was not measured. Contraction stays allowed within source
+# selection, and f64 pow within 2 ulps, cost 5.7% per untuned f32 gpt2_mini_train step on both
+# tuf (gfx1102, discrete memory) and minix (gfx1151, unified memory), and nothing measurable on
+# its bf16 mixed-precision step on minix (gh-ocannl-2298). Contraction stays allowed within source
 # expressions. Off (`reproducible`): no umbrella and exactly `-ffp-contract=off
 # -fno-associative-math -fhip-fp32-correctly-rounded-divide-sqrt
 # -fno-gpu-flush-denormals-to-zero -fno-gpu-approx-transcendentals`.
