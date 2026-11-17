@@ -37,7 +37,9 @@
 
    Tier B is the anchor. An interpreter agreeing only with itself would prove nothing, so a sample
    across the outcome buckets also compiles and runs on the selected backend, in both arms, against
-   the same replay.
+   the same replay. Each chain depth keeps a guarded sample whose output reaches a source read at
+   unequal coordinates. [--plant-transpose] replaces [(j,i)] by [(i,j)] in virtual initializer
+   links, leaving the materialized twins and replay correct, so both tiers must detect it.
 
    A program's descriptor is its name. [--only <substring>] prints the raw and optimized code of the
    programs whose descriptor contains it and checks nothing, for a finding printed on stderr;
@@ -53,6 +55,9 @@ open Base
 open Ll_test
 open Verdict.Claims
 
+let argv = Sys.get_argv ()
+let has_arg flag = Array.mem argv flag ~equal:String.equal
+let plant_transpose = has_arg "--plant-transpose"
 let mk = node_factory ~first_id:5_000_000 ~dims:[| 3 |] ()
 
 (* === The grammar === *)
@@ -313,9 +318,8 @@ let source_cells prog =
         !sum)
   else src_cells
 
-let entries prog =
-  Array.init (Array.fold prog.dims ~init:1 ~f:( * )) ~f:(fun i -> -.(100. +. Float.of_int i))
-
+let numel dims = Array.fold dims ~init:1 ~f:( * )
+let entries prog = Array.init (numel prog.dims) ~f:(fun i -> -.(100. +. Float.of_int i))
 let out_len a = List.fold a.ranges ~init:1 ~f:(fun acc (_, (lo, hi)) -> acc * (hi - lo + 1))
 
 (* The output offset of one read iteration, in the nest's own order, and the term the consumer adds
@@ -328,12 +332,13 @@ let out_terms a =
   (terms, off)
 
 let consumer_base = 20000.
+let write_slot_value ~used env slot = if List.mem used slot ~equal:Int.equal then env.(slot) else 0
 
 (* Values identify the component, every symbol of its iteration, and stay small integers: exact in
    the single precision Tier B stores them at, off the entries (negative) and the sentinel. *)
 let write_value ~src_values ~comp_i env ~k ~used c =
   let base = Float.of_int (1 + (100 * comp_i)) in
-  let at slot = if List.mem used slot ~equal:Int.equal then env.(slot) else 0 in
+  let at = write_slot_value ~used env in
   (if c.complex then src_values.((4 * at 0) + at 1) else Float.of_int ((10 * at 0) + at 1))
   +. base
   +. (1000. *. Float.of_int k)
@@ -368,6 +373,26 @@ let replay prog =
     | Read i -> apply_read i prog.read_accesses.(i));
   outs
 
+(* In the bounded chain grammar, the read sees the last write to its cell. A transpose of any
+   initializer link changes a non-diagonal source read, and each preceding link swaps the axes
+   without making them equal. *)
+let reads_off_diagonal prog =
+  match (prog.source, prog.comps, prog.read_accesses, prog.steps) with
+  | ( Reduce_chain _,
+      [| { write; kind = Store; complex = true } |],
+      [| read |],
+      ([ Write 0; Read 0 ] | [ Zero; Write 0; Read 0 ]) ) ->
+      let used = slots_of write.pos in
+      let off_diagonal = Array.create ~len:(numel prog.dims) false in
+      iter_box write.ranges ~f:(fun env ->
+          let at = write_slot_value ~used env in
+          off_diagonal.(cell_of ~dims:prog.dims write.pos env) <- at 0 <> at 1);
+      let found = ref false in
+      iter_box read.ranges ~f:(fun env ->
+          if off_diagonal.(cell_of ~dims:prog.dims read.pos env) then found := true);
+      !found
+  | _ -> false
+
 let build ?(materialized_src = false) prog ~declare =
   let x = mk ~dims:prog.dims "x" and src = mk ~dims:src_dims "src" in
   let init_links = ref [] in
@@ -396,9 +421,13 @@ let build ?(materialized_src = false) prog ~declare =
             init_links := init_node :: !init_links;
             if materialized_src then materialize init_node else virtualize init_node;
             let i = sym () and j = sym () in
+            let from =
+              if plant_transpose && not materialized_src then [| iter i; iter j |]
+              else [| iter j; iter i |]
+            in
             let value =
               add
-                (get (Option.value_exn prev) [| iter j; iter i |])
+                (get (Option.value_exn prev) from)
                 (add (c (Float.of_int (211 * level))) (add (mul (c 13.) (embed i)) (embed j)))
             in
             let body = loop_n i 4 (loop_n j 4 (set init_node [| iter i; iter j |] value)) in
@@ -600,8 +629,8 @@ let family prog =
     (standing_name prog.standing)
   ^ if Poly.equal prog.source Input then "" else " src=" ^ source_name prog.source
 
-(* Per bucket, the first program that fell in it: the candidates for Tier B. A program of a family
-   the compiled leg cannot seed (a two-routine one) is not one. *)
+(* Tier B takes one candidate per bucket, favoring a transpose witness in guarded chain buckets.
+   Two-routine programs require an input the compiled arm cannot seed. *)
 let anchors = Hashtbl.create (module String)
 let guarded_anchors = Hashtbl.create (module String)
 
@@ -649,8 +678,12 @@ let check_program prog =
       match prog.standing with
       | Inherited -> ()
       | Undecided | Declared ->
-          ignore
-            (Hashtbl.add guarded_anchors ~key:(anchor_key prog) ~data:prog : [ `Ok | `Duplicate ]))
+          let off_diagonal = reads_off_diagonal prog in
+          Hashtbl.update guarded_anchors (anchor_key prog) ~f:(function
+            | Some ((_, previous_off_diagonal) as previous)
+              when previous_off_diagonal || not off_diagonal ->
+                previous
+            | _ -> (prog, off_diagonal)))
   in
   let no_read b os =
     if not (Poly.equal prog.source Input) then
@@ -711,8 +744,6 @@ let check_program prog =
    slice; --check-shards audits that same selector cheaply. *)
 let shard_count = 4
 let widened_census = 10_307_080
-let argv = Sys.get_argv ()
-let has_arg flag = Array.mem argv flag ~equal:String.equal
 
 let arg flag =
   Array.findi argv ~f:(fun _ a -> String.equal a flag)
@@ -788,8 +819,6 @@ let shapes =
     [| 2; 3 |];
     [| 3; 2 |];
   ]
-
-let numel dims = Array.fold dims ~init:1 ~f:( * )
 
 (* A loop that never runs: the one write that leaves the node with no stored computation. *)
 let dead_write dims =
@@ -1039,6 +1068,7 @@ let strict_probe_controls () =
 
 (* === Tier B: compiled and run === *)
 
+let nested_anchor_limit = 8
 let ordinary_anchor_limit = 16
 
 let run_anchor i prog =
@@ -1073,7 +1103,8 @@ let run_anchor i prog =
   matches twin && (refused || matches virtual_arm)
 
 let tier_b () =
-  let candidates = sorted_values anchors and nested = sorted_values guarded_anchors in
+  let candidates = sorted_values anchors in
+  let nested = List.map (sorted_values guarded_anchors) ~f:fst in
   let ordinary = List.filter candidates ~f:(fun p -> Poly.equal p.source Input) in
   let sample limit xs =
     let step = Int.max 1 (List.length xs / limit) in
@@ -1081,10 +1112,28 @@ let tier_b () =
   in
   let nested_samples =
     List.concat_map nested_sources ~f:(fun source ->
-        let picked = sample 8 (List.filter nested ~f:(fun p -> Poly.equal p.source source)) in
+        let candidates = List.filter nested ~f:(fun p -> Poly.equal p.source source) in
+        let picked = sample nested_anchor_limit candidates in
+        let picked =
+          if List.exists picked ~f:reads_off_diagonal then picked
+          else
+            (* The stride may miss the witness bucket. Keep the budget by replacing its last
+               pick. *)
+            match List.find candidates ~f:reads_off_diagonal with
+            | Some witness -> List.take picked (nested_anchor_limit - 1) @ [ witness ]
+            | None -> picked
+        in
         pf "compiled anchors include eight %s producers with guarded-arm scopes"
           (source_name source)
-          (List.length picked = 8);
+          (List.length picked = nested_anchor_limit);
+        (match source with
+        | Reduce_chain _ ->
+            p_exists
+              (Printf.sprintf
+                 "compiled anchors include a %s producer reading off the source diagonal"
+                 (source_name source))
+              picked ~f:reads_off_diagonal
+        | Input | Reduce_zero | Reduce_init -> ());
         picked)
   in
   let picked = nested_samples @ sample ordinary_anchor_limit ordinary in

@@ -94,6 +94,8 @@ strict probe: plain read past s in a projection's unrendered operand: lazy passe
 compiled anchors include eight reduce producers with guarded-arm scopes: true
 compiled anchors include eight reduce-init producers with guarded-arm scopes: true
 compiled anchors include eight reduce-chain-1 producers with guarded-arm scopes: true
+compiled anchors include a reduce-chain-1 producer reading off the source diagonal: true
 compiled anchors include eight reduce-chain-2 producers with guarded-arm scopes: true
+compiled anchors include a reduce-chain-2 producer reading off the source diagonal: true
 a compiled program computes the interpreter's values, in both arms: true
 the oracle completed within its wall-time bound: true
