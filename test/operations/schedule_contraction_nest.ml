@@ -691,8 +691,11 @@ let () =
     out
   in
   let reference = projection () in
+  (* Serial, as [run_serial]: the identity transform keeps the default scheduler out of it. *)
   let ctx, routine =
-    Context.compile (Context.auto ())
+    Context.compile
+      ~lowered_transform:(fun opt -> [ opt ])
+      (Context.auto ())
       (named "out_proj_premise" (Train.forward reference))
       Ir.Indexing.Empty
   in

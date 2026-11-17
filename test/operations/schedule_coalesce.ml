@@ -1515,6 +1515,15 @@ let fused_leg ~tag ~bb ~ss ~jj ~hh ~ee =
       Train.set_materialized prod.Tensor.value;
       let fwd = named (tag ^ "_ep") (Train.forward out) in
       let want = run_with fwd out Fn.id in
+      (* The reference the candidates are held to, a graph materializing [prod], tied to the same
+         host sums. *)
+      p_all2
+        (tag ^ ": the reference is the relu of the premise's host sums")
+        want
+        (Array.of_list
+           (List.map products ~f:(fun terms ->
+                Float.max 0. (List.sum (module Float) terms ~f:Fn.id))))
+        ~f:Float.equal;
       p
         (tag ^ ": the relu discriminates: the reference has positive and zero cells")
         (Array.exists want ~f:(fun v -> Float.(v > 0.))
