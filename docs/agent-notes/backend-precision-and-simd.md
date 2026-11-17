@@ -1139,19 +1139,20 @@ files.
 - **Metal's wide bf16 accumulation is costly only on simdgroup tiles; `auto` stays wide**
   (gh-ocannl-2150, `benchmarks/gh1051_bf16_ab.sh ... metal`, 16 paired rounds, f32 drift control
   source-proven identical across the arms, `auto`'s sources proven identical to `false`'s). Every row
-  below is the M4 Max (mac-studio, 40-core GPU), macOS 27.2.1, at 015dd4fd; ratios are wide/narrow,
+  below is the M4 Max (mac-studio, 40-core GPU), macOS 27.2.1; ratios are wide/narrow,
   median (range), control beside. GEMM tiles: `mma_pd1`/`mma_pd2` 1.80 (1.48-2.62) / 1.97
   (1.70-2.70) at n = 1024 (control 1.00 / 0.99), 3.66 (3.43-3.98) / 3.36 (3.17-4.16) at n = 2048
   (control 1.00 / 1.00) -- the `simdgroup_float8x8`-over-bfloat tile runs at the f32 tile's speed
   (~9 ms at 2048 against ~2.5 ms for the bfloat accumulator). Serial legs: within the control's
   spread at 1024 and for parallel/smem at 2048; regtile 1.135 (1.06-1.31) at 2048 (control 1.02).
-  Fastest variant per arm (a tile narrow, regtile wide -- what a tuner choosing among them pays):
-  1.21 (0.82-1.99) at 1024 (control 1.02, 0.73-1.38), 1.26 (1.16-1.41) at 2048 (control 1.02).
+  Fastest variant per arm by median (`mma_pd1` narrow, regtile wide), the two schedules paired --
+  what a tuner crowning each arm's fastest pays: 1.14 (0.82-1.99) at 1024 (control 1.02,
+  0.73-1.38), 1.24 (1.16-1.33) at 2048 (control 1.02, 0.98-1.07).
   Training: gpt2_mini_train's untuned bf16 step 0.990 (0.940-1.004) (f32 control 0.999) -- its
   untuned plan ships no tile in either arm, so only the serial accumulators move (2 of its 4
   generated sources differ). Accuracy beside it (whole-output checksum error against the exact
   answer): wide 0.00027 everywhere, narrow tile 0.005-0.0065, narrow serial 0.014-0.034. Decision:
-  keep `Bf16_auto` wide on Metal -- the untuned default pays nothing, a tuned bf16 GEMM about 1.2x,
+  keep `Bf16_auto` wide on Metal -- the untuned default pays nothing, a tuned bf16 GEMM 1.14-1.24x,
   for a 20-125x smaller error and tile/serial value parity (a crown changes no value). The tile
   speed stays one setting away: `bf16_arithmetic=true`, which the `approximate` profile already
   pins; no profile payload changed.

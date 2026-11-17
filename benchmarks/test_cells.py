@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -717,7 +718,8 @@ class Gh1253FlipDriverTest(DriverTreeTest):
 # control's exact answer, near it for the wide and the narrow serial legs, and a gross but shared
 # value for the narrow tensorized pair; with debug files on, one generated source (EXT) under the
 # cell's build_files/<prefix>/ that the bf16 policy does not reach at f32 and does reach at bf16
-# (unless SAME_BF16 says the stub ignores the arm there: the treatment-unreached negative control).
+# (unless SAME_BF16 says the stub ignores the arm there: the treatment-unreached negative control;
+# NO_NARROW_SOURCE has the narrow bf16 run write none, which must not read as a difference).
 SCHEDULE_BODY = """
 import json, os
 opt = {a.split("=", 1)[0][len("--ocannl_"):]: a.split("=", 1)[1] for a in argv if "=" in a}
@@ -726,7 +728,8 @@ if opt.get("output_debug_files_in_build_directory") == "true":
     d = os.path.join("build_files", opt["build_files_prefix"])
     os.makedirs(d)
     reach = "" if prec == "single" or SAME_BF16 else " acc=" + ("bf16" if narrow else "f32")
-    open(os.path.join(d, "mm.EXT"), "w").write("kernel " + prec + reach + "\\n")
+    if not (NO_NARROW_SOURCE and narrow and prec == "bfloat16"):
+        open(os.path.join(d, "mm.EXT"), "w").write("kernel " + prec + reach + "\\n")
 for v in ("parallel", "smem", "regtile", "mma_pd1", "mma_pd2"):
     mma = v.startswith("mma")
     if prec == "single":
@@ -762,12 +765,14 @@ print(json.dumps({"framework": "ocannl", "storage_precision": prec,
 
 @POSIX_ONLY
 class Gh1051AbDriverTest(StubRunTest):
-    def measure(self, backend="hip", census="Mma_intrinsics 2", same_bf16=False, fixture=False):
+    def measure(self, backend="hip", census="Mma_intrinsics 2", same_bf16=False, fixture=False,
+                no_narrow_source=False, mode="train"):
         ext = {"hip": "hip", "metal": "metal"}[backend]
         root = self.dir / "root"
         write_stub(root / "_build/default/bin/schedule_bench.exe",
                    SCHEDULE_BODY.replace("MMA_CENSUS", census).replace("EXT", ext)
-                   .replace("SAME_BF16", repr(same_bf16)))
+                   .replace("SAME_BF16", repr(same_bf16))
+                   .replace("NO_NARROW_SOURCE", repr(no_narrow_source)))
         write_stub(root / "_build/default/benchmarks/runners/ocannl/bench_gpt.exe",
                    TRAIN_BODY.replace("EXT", ext))
         dune = self.fakebin / "dune"
@@ -777,13 +782,14 @@ class Gh1051AbDriverTest(StubRunTest):
         lead = []
         if fixture:
             fx = self.dir / "fx.safetensors"
-            fx.write_text("weights")
+            header = json.dumps({"__metadata__": {"mode": mode}}).encode()
+            fx.write_bytes(struct.pack("<Q", len(header)) + header)
             lead = ["--skip-box-check", "--training-fixture", str(fx)]
         proc = self.run_tool([box_gate.BASH, str(HERE / "gh1051_bf16_ab.sh"), *lead, str(root),
                               backend, "stub", "4", "64"],
                              {"TMPDIR": str(self.dir / "tmp"), "OCANNL_BF16_ARITHMETIC": "auto"})
-        raw = Path(re.search(r"raw=(\S+)", proc.stdout).group(1))
-        return proc, raw
+        m = re.search(r"raw=(\S+)", proc.stdout)
+        return proc, (Path(m.group(1)) if m else None)
 
     def test_four_interleaved_arms_validated_and_tabled(self):
         proc, raw = self.measure()
@@ -800,6 +806,8 @@ class Gh1051AbDriverTest(StubRunTest):
         # The ratios are paired per round: equal stub timings read 1.000 with no spread.
         self.assertIn("| stub | 64 | mma_pd1 |", proc.stdout)
         self.assertIn("| 1.000 (1.000-1.000) | 1.000 (1.000-1.000) |", proc.stdout)
+        self.assertIn("n=64 treatment: fastest variant by median narrow parallel, wide parallel; "
+                      "those two schedules' paired wide/narrow 1.000 (1.000-1.000)", proc.stdout)
         records = self.records(raw / "n64")
         self.assertEqual(len(records), 16)
         self.assertEqual({r["arm"] for r in records},
@@ -825,6 +833,20 @@ class Gh1051AbDriverTest(StubRunTest):
         self.assertIn("TREATMENT UNREACHED (schedule_bench)", proc.stdout)
         self.assertFalse((raw / "n64").exists())
 
+    def test_a_missing_narrow_source_is_no_evidence_of_reach(self):
+        # One side of the comparison empty: diff -r differs, but that proves nothing.
+        proc, raw = self.measure(backend="metal", no_narrow_source=True)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("TREATMENT UNREACHED (schedule_bench): the bf16 generated .metal across "
+                      "arms: error (1 and 0 files)", proc.stdout)
+        self.assertFalse((raw / "n64").exists())
+
+    def test_an_inference_fixture_is_refused_for_the_training_row(self):
+        proc, raw = self.measure(backend="metal", fixture=True, mode="infer")
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("must be a training one (metadata mode=train), got mode='infer'", proc.stdout)
+        self.assertIsNone(raw)
+
     def test_a_tensorized_cell_that_fell_back_invalidates_the_run(self):
         proc, _ = self.measure(census="scalar fallback")
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
@@ -841,7 +863,7 @@ class Gh1051AbDriverTest(StubRunTest):
                       proc.stdout)
         self.assertIn("| stub | fx | f32 | 5.000 | 5.000 | 1.000 (1.000-1.000) | 0 of 4 |",
                       proc.stdout)
-        self.assertIn("no seeding census logged in either arm", proc.stdout)
+        self.assertIn("untuned seeding: no seeding census logged in either arm", proc.stdout)
         records = self.records(raw / "untuned")
         self.assertEqual(len(records), 16)
         self.assertEqual({r["env"]["BENCH_DOMINANT_KERNEL"] for r in records}, {"0"})

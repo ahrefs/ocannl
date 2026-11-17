@@ -51,8 +51,9 @@
 # gh1051_bf16_ab.sh's training row): every cell clean, each cell's result line reporting the
 # storage precision its arm asked for, and each arm's seeding census (the `seeded_default:` line
 # autotune_log prints) the same in every round; whether the two f16 arms' censuses differ is
-# REPORTED -- identical censuses mean the treatment does not reach this
-# workload's untuned plan and the row is a second control, not a failure. The f32 arms are its drift
+# REPORTED -- identical censuses mean the arms seed the same choices, which does not show by itself
+# whether the accumulator width reaches this row's codegen (no source proof runs for this row);
+# either way it is not a failure. The f32 arms are its drift
 # control, timed but not source-proven (the proof below covers schedule_bench's kernels).
 #
 # DRIFT CONTROL (the A/B protocol in docs/agent-notes/training-and-performance.md): next to every

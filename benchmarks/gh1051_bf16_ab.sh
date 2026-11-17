@@ -76,6 +76,15 @@ if [ "${1-}" = --training-fixture ]; then
   [ -f "$2" ] || { echo "no such fixture: $2"; exit 2; }
   FIXTURE=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")
   case $FIXTURE in *.safetensors) ;; *) echo "the training fixture must be a .safetensors file, got $2"; exit 2 ;; esac
+  # bench_gpt picks its step from the fixture's metadata: an inference fixture (mode=infer) would
+  # time a forward-only step in the training row.
+  mode=$(python3 -c 'import struct, sys
+sys.path.insert(0, sys.argv[1])
+import strict_json
+f = open(sys.argv[2], "rb"); n = struct.unpack("<Q", f.read(8))[0]
+print(strict_json.loads(f.read(n).decode()).get("__metadata__", {}).get("mode", ""))' \
+    "$HERE" "$FIXTURE" 2>/dev/null)
+  [ "$mode" = train ] || { echo "the training fixture must be a training one (metadata mode=train), got mode='$mode': $2"; exit 2; }
   shift 2
 fi
 [ $# -ge 3 ] || { echo "$USAGE"; exit 2; }
@@ -147,20 +156,37 @@ identity_run() {
   cp "$dir/build_files/$prefix"/*."$EXT" "$OUT/identity_${tag}_${prec}_$arm/" 2>/dev/null
 }
 
+# The source collection of one identity run, as a file count: 0 when the run wrote none or the copy
+# failed, which no comparison below may read as evidence either way.
+n_sources() { find "$1" -name "*.$EXT" 2>/dev/null | wc -l | tr -d ' '; }
+
+# diff -r's verdict on two source collections: same (0), differ (1), or error (2, or both sides
+# empty) -- an I/O error is never read as "differ".
+compare_sources() {
+  local na nb
+  na=$(n_sources "$1") nb=$(n_sources "$2")
+  [ "$na" -gt 0 ] && [ "$nb" -gt 0 ] || { echo error; return; }
+  diff -r "$1" "$2" >/dev/null 2>&1
+  case $? in 0) echo same ;; 1) echo differ ;; *) echo error ;; esac
+}
+
 # The proof for one bench TAG: its f32 sources identical across the arms (the drift control), its
-# bf16 sources different (the treatment reaches codegen). Stops the driver when either fails.
+# bf16 sources different (the treatment reaches codegen). Each needs both arms' sources written and
+# compared without error. Stops the driver when either fails.
 prove() {
   local tag=$1 what=$2 d="$OUT/identity_$1"
-  local n_src n_bf n_diff
-  n_src=$(find "${d}_single_false" -name "*.$EXT" | wc -l | tr -d ' ')
-  if [ "$n_src" -eq 0 ] || ! diff -r "${d}_single_false" "${d}_single_true" >/dev/null; then
-    echo "DRIFT CONTROL INVALID ($what): the f32 control's generated .$EXT differs across arms (or none was written: $n_src files)"
+  local n_src n_bf n_diff v
+  n_src=$(n_sources "${d}_single_false")
+  v=$(compare_sources "${d}_single_false" "${d}_single_true")
+  if [ "$v" != same ]; then
+    echo "DRIFT CONTROL INVALID ($what): the f32 control's generated .$EXT across arms: $v ($n_src and $(n_sources "${d}_single_true") files)"
     exit 1
   fi
   echo "drift control ($what): $n_src generated f32 kernels byte-identical across arms"
-  n_bf=$(find "${d}_bfloat16_false" -name "*.$EXT" | wc -l | tr -d ' ')
-  if [ "$n_bf" -eq 0 ] || diff -r "${d}_bfloat16_false" "${d}_bfloat16_true" >/dev/null; then
-    echo "TREATMENT UNREACHED ($what): the bf16 generated .$EXT is identical across arms (or none was written: $n_bf files)"
+  n_bf=$(n_sources "${d}_bfloat16_false")
+  v=$(compare_sources "${d}_bfloat16_false" "${d}_bfloat16_true")
+  if [ "$v" != differ ]; then
+    echo "TREATMENT UNREACHED ($what): the bf16 generated .$EXT across arms: $v ($n_bf and $(n_sources "${d}_bfloat16_true") files)"
     exit 1
   fi
   n_diff=$(diff -rq "${d}_bfloat16_false" "${d}_bfloat16_true" | wc -l | tr -d ' ')
@@ -178,14 +204,12 @@ prove gemm schedule_bench
 identity_run gemm bfloat16 auto bfloat16 \
   "$BENCH" "${SIZES[0]}" 10 "${SIZES[0]}" "${SIZES[0]}" 0 --ocannl_default_prec=bfloat16
 AUTO="$OUT/identity_gemm_bfloat16_auto"
-if [ -z "$(find "$AUTO" -name "*.$EXT")" ]; then
-  echo "auto (schedule_bench, bf16): no source written; which arm auto resolves to is unknown"
-elif diff -r "$AUTO" "$OUT/identity_gemm_bfloat16_false" >/dev/null; then
+if [ "$(compare_sources "$AUTO" "$OUT/identity_gemm_bfloat16_false")" = same ]; then
   echo "auto (schedule_bench, bf16): byte-identical to the wide arm (false) -- auto resolves wide here"
-elif diff -r "$AUTO" "$OUT/identity_gemm_bfloat16_true" >/dev/null; then
+elif [ "$(compare_sources "$AUTO" "$OUT/identity_gemm_bfloat16_true")" = same ]; then
   echo "auto (schedule_bench, bf16): byte-identical to the narrow arm (true) -- auto resolves narrow here"
 else
-  echo "auto (schedule_bench, bf16): matches neither arm's sources"
+  echo "auto (schedule_bench, bf16): matches neither arm's sources ($(n_sources "$AUTO") files written)"
 fi
 
 # The training row's proof, before any timing.

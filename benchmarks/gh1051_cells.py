@@ -78,10 +78,10 @@ paired round by round -- each round's wide and narrow cells of one size and prec
 pass of the mirrored rotation -- as the median and range of the per-round ratios; the control's
 range is the session's drift a treatment ratio is read against. Before gh-ocannl-2150 the columns
 divided the arms' medians, which hid that range. Reported beside the table, per size and precision:
-each arm's fastest variant by median and the paired ratio of the per-round fastest-variant times --
-what a tuner choosing among these five variants pays for the wide arm, which differs from any one
-variant's ratio when the arms' fastest variants differ (on Metal the narrow arm's is a tile and the
-wide arm's the serial regtile, gh-ocannl-2150).
+each arm's fastest variant by median and the paired ratio of those two fixed schedules' round
+timings -- what a tuner crowning each arm's fastest of these five variants pays for the wide arm,
+which differs from any one variant's ratio when the arms' fastest variants differ (on Metal the
+narrow arm's is a tile and the wide arm's the serial regtile, gh-ocannl-2150).
 
 METAL (gh-ocannl-2150, the bf16_arithmetic arms on Apple GPUs). The checks above carry over, with
 the narrow arm's reasons changed but not its checks: Metal's narrow tensorized arm (the
@@ -100,9 +100,10 @@ Its checks: every planned cell ran and is clean, each cell's result line reports
 precision its arm asked for, and each arm's seeding census (the `seeded_default:` lines
 autotune_log prints) is the same in every round. Whether the two treatment arms' censuses differ is
 REPORTED, as is each arm's shipped tensorization (the result line's `shipped_mma`), which says
-whether the row reaches a tensor-unit arm at all: identical logged censuses mean the treatment does not reach the seeded untuned plan (the
-row is then a second control); a backend whose untuned compile logs no census (Metal) cannot be
-read that way, and the bf16 driver proves reach from the generated sources instead.
+whether the row reaches a tensor-unit arm at all. Identical censuses mean the arms seed the same
+choices, not that the treatment misses the row's codegen: an accumulator width can change inside a
+seeded choice. Reach is the generated sources' question, which the bf16 driver's source proof
+answers (gh2195_f16_ab.sh runs none for this row).
 """
 import glob
 import os
@@ -353,17 +354,15 @@ def ab(out, label, prec="bfloat16"):
                       + " (reported, not checked)")
     for size in sizes:
         for p, what in ((prec, "treatment"), ("single", "f32 control")):
-            best = {}
-            for arm in ("false", "true"):
-                per = [rounds.get((size, arm, p, v), {}) for v in VARIANTS]
-                common = set.intersection(*(set(x) for x in per)) if all(per) else set()
-                best[arm] = {r: min(x[r] for x in per) for r in common}
-                best[arm + "_v"] = min(VARIANTS, key=lambda v, arm=arm: statistics.median(
+            def fastest(arm):
+                return min(VARIANTS, key=lambda v: statistics.median(
                     rounds.get((size, arm, p, v), {}).values() or [float("inf")]))
-            print(f"n={size} {what}: fastest variant narrow {best['true_v']}, wide "
-                  f"{best['false_v']}; per-round fastest-variant wide/narrow "
-                  f"{paired(best['false'], best['true'])} (what a tuner choosing among these "
-                  "variants pays)")
+
+            nv, wv = fastest("true"), fastest("false")
+            print(f"n={size} {what}: fastest variant by median narrow {nv}, wide {wv}; those two "
+                  "schedules' paired wide/narrow "
+                  f"{paired(rounds.get((size, 'false', p, wv), {}), rounds.get((size, 'true', p, nv), {}))}"
+                  " (what a tuner crowning each arm's fastest of these variants pays)")
     shown, rows = display_value(label), []
     for size in sizes:
         for v in VARIANTS:
@@ -452,14 +451,14 @@ def untuned(run, label, fixture, prec):
     wide, narrow = census.get(("false", prec)), census.get(("true", prec))
     if wide and narrow and len(wide) == len(narrow) == 1:
         if wide == narrow == {()}:
-            print("untuned treatment reach: no seeding census logged in either arm (the seeded "
-                  "untuned plan does not run here), so the census cannot tell; the driver's source "
-                  "proof, where it ran one, can")
+            print("untuned seeding: no seeding census logged in either arm (the seeded untuned "
+                  "plan does not run here); the driver's source proof, where it ran one, says "
+                  "whether the treatment reaches this row's codegen")
         else:
-            print(f"untuned treatment reach: the two {STORAGE_LABEL[prec]} arms' seeding censuses "
-                  + ("are IDENTICAL -- the treatment does not reach this workload's untuned plan; "
-                     f"the {STORAGE_LABEL[prec]} row is a second control" if wide == narrow
-                     else "differ"))
+            print(f"untuned seeding: the two {STORAGE_LABEL[prec]} arms' seeding censuses "
+                  + ("are IDENTICAL -- the arms seed the same choices; the census alone does not "
+                     "show whether the accumulator width reaches this row's codegen"
+                     if wide == narrow else "differ -- the arms seed different choices"))
     rows, shown = [], display_value(label)
     for p in (prec, "single"):
         w, n = ms.get(("false", p), {}), ms.get(("true", p), {})
