@@ -544,6 +544,19 @@ end = struct
   }
   [@@deriving sexp_of]
 
+  let serial_private_array_stack_bytes = 16 * 1024
+
+  (* CUDA programs are shared across the attached devices. Emit the scratch ABI only when each of
+     them can run the stream-ordered allocation used by both plain and graph launches. *)
+  let stream_ordered_scratch_supported =
+    lazy
+      (Utils.with_device_init_deadline ~backend_name:name (fun () ->
+           let count = num_devices () in
+           count > 0
+           && List.for_all (List.init count ~f:Fn.id) ~f:(fun ordinal ->
+               let props = Cu.Device.get_attributes (Cu.Device.get ~ordinal) in
+               props.memory_pools_supported)))
+
   module Cuda_syntax_config (Input : sig
     val procs : Low_level.t array
   end) =
@@ -562,6 +575,9 @@ end = struct
           let extra_blacklist = []
         end)
         (Input)
+
+    let serial_device_scratch_budget () =
+      Option.some_if (Lazy.force stream_ordered_scratch_supported) serial_private_array_stack_bytes
 
     (* gh-ocannl-487 phase 2: [cp.async] staging for software-pipelined tiles (the
        [ocannl_cp_async*] builtins; their name doubles as the [Cuda_mma.gpu_arch_options] floor
@@ -1478,6 +1494,17 @@ end = struct
     let ctx_bases = Map.map ctx_buffers ~f:(Slab.resolve_pool device) in
     (* Parsed once, at the first launch: the gate of [bound_local_memory] reads it on every one. *)
     let depot = lazy (ptx_local_depot_bytes (Lazy.force ptx) ~symbol) in
+    let scratch, params =
+      List.partition_map kparams ~f:(function
+        | _, Kparam_serial_scratch bytes -> First bytes
+        | param -> Second param)
+    in
+    let scratch =
+      match scratch with
+      | [] -> None
+      | [ bytes ] -> Some bytes
+      | _ -> invalid_arg "Cuda_backend.link: multiple serial scratch parameters"
+    in
     let%diagn3_sexp work () : unit =
       let log_id = Utils.get_global_run_id () in
       let log_id_prefix = Int.to_string log_id ^ ": " in
@@ -1492,7 +1519,8 @@ end = struct
       let args : S.kernel_param list =
         (* TODO: should we prohibit or warn about local-only tensors that are in
            prior_context.ctx_buffers? *)
-        List.map kparams ~f:(function
+        List.map params ~f:(function
+          | _name, Kparam_serial_scratch _ -> assert false
           | _name, Kparam_ptr tn ->
               let loc = Option.value_exn ~here:[%here] @@ Map.find ctx_buffers tn in
               let base = Map.find_exn ctx_bases tn in
@@ -1517,21 +1545,36 @@ end = struct
       (* Launch dimensions derived from hardware-annotated loops (axis-types proposal §4);
          all-Serial kernels launch 1x1x1, as before. Static [__shared__] declarations do not use the
          dynamic pool, so [shared_mem_bytes] stays 0. *)
-      let submit () =
+      let submit args () =
         S.launch_kernel func ~grid_dim_x:launch.Low_level.grid.(0)
           ~grid_dim_y:launch.Low_level.grid.(1) ~grid_dim_z:launch.Low_level.grid.(2)
           ~block_dim_x:launch.Low_level.block.(0) ~block_dim_y:launch.Low_level.block.(1)
           ~block_dim_z:launch.Low_level.block.(2) ~shared_mem_bytes:0 device.runner args
       in
       let launch_kernel () =
-        match Stdlib.Domain.DLS.get capture_depot with
-        | Some largest ->
-            (* Recorded into a graph, not run: see [capture_depot]. *)
-            submit ();
-            largest := max !largest (Lazy.force depot)
-        | None ->
-            launch_with_memory_backoff ~device ~name ~depot submit;
-            bound_local_memory ~device ~depot:(Lazy.force depot)
+        let capture = Stdlib.Domain.DLS.get capture_depot in
+        let launch args =
+          match capture with
+          | Some _ -> submit args ()
+          | None -> launch_with_memory_backoff ~device ~name ~depot (submit args)
+        in
+        (match scratch with
+        | None -> launch args
+        | Some size_in_bytes -> (
+            (* An allocation and free in the same stream delimit this invocation. During capture
+               they become graph nodes, so neither a cached graph nor shared PTX owns writable
+               scratch outside an invocation. The free stays outside the launch retry. *)
+            let ptr = S.mem_alloc device.runner ~size_in_bytes in
+            match launch (args @ [ S.Tensor ptr ]) with
+            | () -> S.mem_free device.runner ptr
+            | exception exn ->
+                let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+                (* A submission can invalidate a capture. Its abort path discards those nodes. *)
+                (try S.mem_free device.runner ptr with _ -> ());
+                Stdlib.Printexc.raise_with_backtrace exn backtrace));
+        match capture with
+        | Some largest -> largest := max !largest (Lazy.force depot)
+        | None -> bound_local_memory ~device ~depot:(Lazy.force depot)
       in
       if Utils.debug_log_from_routines () then
         (* The routine's log lines are device-side [printf]: under [debug_log_to_stream_files] the
@@ -1841,6 +1884,10 @@ end = struct
         (* The gate's denominator: a reservation past [total memory / this] is reset. Reported so
            tests size their frames from it rather than restating it. *)
         ("local_memory_reset_share", [%sexp_of: int] local_memory_reset_share);
+        ( "serial_device_scratch_budget",
+          [%sexp_of: int]
+            (if Lazy.force stream_ordered_scratch_supported then serial_private_array_stack_bytes
+             else 0) );
         ("graph_launch_memory_drops", [%sexp_of: int] @@ Atomic.get graph_launch_memory_drops);
       ]
 

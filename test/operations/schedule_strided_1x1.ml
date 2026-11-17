@@ -596,18 +596,19 @@ let seed_leg ?(declines = false) ?(row = `Batch)
     (fun label ->
       let o = Lazy.force o in
       p label (match row with `Batch -> stride_on_batch_loops o | `Strided -> stride_on_row o));
-  (* gh-ocannl-1872: the block's unscheduled reference, s11d_ref, is one thread with a 48 KiB frame,
-     whose local memory the driver reserves for every resident thread (3.3 GiB on rog-nv) and used
-     to keep for the process's life. The CUDA backend releases it after the launch where the
-     reservation passes the share of the device's memory its global debug info reports
-     ([local_memory_reset_share]), as on every fleet device; elsewhere it keeps it by design, and
-     the claim skips. *)
+  (* The real s11d_ref is one thread with a 48 KiB frame. CUDA's private scratch buffer avoids
+     growing a depot that would otherwise need its stack-size reset on fleet devices. *)
   (match s.build with
   | `Resnet_block ->
-      let passes_share =
+      let uses_scratch =
         lazy
           (String.equal backend_name "cuda"
+          && Option.value_map
+               (Ll_test.debug_counter (Context.auto ()) "serial_device_scratch_budget")
+               ~default:true
+               ~f:(fun budget -> budget > 0 && budget < 49152)
           &&
+          (* Count a reset only where this device would have needed one for the old depot. *)
           let ctx = Context.auto () in
           let resident =
             Option.value ~default:0
@@ -618,12 +619,11 @@ let seed_leg ?(declines = false) ?(row = `Batch)
           | Some share -> 49152 * resident > total / share
           | None -> false)
       in
-      in_leg ~leg:(Verdict.sub_leg leg ~when_:passes_share ~on:backend_name)
-        (what
-       ^ ": on CUDA, the unscheduled reference's launch released its local-memory reservation \
-          after running") (fun label ->
+      in_leg ~leg:(Verdict.sub_leg leg ~when_:uses_scratch ~on:backend_name)
+        (what ^ ": on CUDA, the unscheduled reference runs without a local-memory reset")
+        (fun label ->
           ignore (Lazy.force base : probed * float array);
-          p label (match !ref_resets with Some d -> d >= 1 | None -> false))
+          p label (Option.equal Int.equal !ref_resets (Some 0)))
   | `Einsum _ -> ());
   (* Which run diverged from which form and by how much, so a red claim names its seed: the
      differing cells, the worst one with both values, and the form's magnitude, on stderr. *)

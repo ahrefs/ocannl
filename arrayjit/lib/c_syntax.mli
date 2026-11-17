@@ -736,8 +736,12 @@ module type C_syntax_config = sig
       pool-parallel [Grid] chunk's privatized tiles beyond [chunk_stack_locals_bytes], smallest
       first on the stack. A heap array is [malloc]ed ([calloc]ed where its declaration
       zero-initializes) [Ops.buffer_alignment]-aligned where the stack array would be declared, and
-      freed at the end of the same scope. [false] (the {!Pure_C_config} default) for the GPU
-      backends, whose thread-private arrays have no heap to go to. *)
+      freed at the end of the same scope. GPU backends use [false], the {!Pure_C_config} default. *)
+
+  val serial_device_scratch_budget : unit -> int option
+  (** Maximum combined aligned private array bytes to leave in a one-thread kernel's local memory.
+      Past the budget the ordinary function-scope private arrays become slices of one scratch
+      parameter. [None] keeps the backend's ordinary declarations. *)
 
   val warp_size : int
   (** SIMD-group (warp) width for the warp-shuffle rendering of [Workgroup_reduce] accumulation

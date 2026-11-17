@@ -1,7 +1,7 @@
 hopeless: the launch is declined as the driver's out-of-memory refusal, with no device writes: true
 hopeless: refused once, without a retry: true
 hopeless: the context then runs a small-frame kernel correctly: true
-bound: an s11d_ref-sized frame (48 KiB for one thread) computes the right values: true
+bound: a two-block kernel with a 48 KiB frame per thread computes the right values: true
 bound: the device's free memory after its launch is within half its reservation of before it: true
 bound: its launch released the reservation once, and a small frame's none: true
 bound: a frame reserving a quarter more than the reset threshold resets, one a quarter less does not: true
@@ -9,5 +9,11 @@ graph: the two-segment routine runs as a captured graph: true
 graph: it computes the right values: true
 graph: the free memory after the graph launch is within half the reservation of before it, released once: true
 graph: a hopeless frame in a graph is refused at its instantiation, then as its plain launch, and declined as the driver's out-of-memory refusal, without a retry: true
+serial scratch: three private arrays compute the right values on both runs: true
+serial scratch: the emitted one-thread frame uses the device buffer: true
+serial scratch: free memory stays clear of a depot-sized reservation without a reset: true
+serial scratch: graph capture and cached replay compute the right values: true
+serial scratch: graph capture and replay stay clear of a depot-sized reservation: true
+serial scratch: the cutoff still permits a one-thread local depot: true
 hip: a scratch frame for one work-item computes the right values: true
 hip: the backend reports the launch back-off's counters, and it was not needed: true

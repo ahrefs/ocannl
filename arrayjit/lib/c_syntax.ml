@@ -1240,8 +1240,12 @@ module type C_syntax_config = sig
       pool-parallel [Grid] chunk's privatized tiles beyond [chunk_stack_locals_bytes], smallest
       first on the stack. A heap array is [malloc]ed ([calloc]ed where its declaration
       zero-initializes) [Ops.buffer_alignment]-aligned where the stack array would be declared, and
-      freed at the end of the same scope. [false] (the {!Pure_C_config} default) for the GPU
-      backends, whose thread-private arrays have no heap to go to. *)
+      freed at the end of the same scope. GPU backends use [false], the {!Pure_C_config} default. *)
+
+  val serial_device_scratch_budget : unit -> int option
+  (** Maximum combined aligned private array bytes to leave in a one-thread kernel's local memory.
+      Past the budget the ordinary function-scope private arrays become slices of one scratch
+      parameter. [None] keeps the backend's ordinary declarations. *)
 
   val warp_size : int
   (** SIMD-group (warp) width for the warp-shuffle rendering of [Workgroup_reduce] accumulation
@@ -3150,6 +3154,7 @@ struct
 
   let aligned_local_attr = Some (Printf.sprintf "__attribute__((aligned(%d)))" Ops.buffer_alignment)
   let heap_local_arrays = false
+  let serial_device_scratch_budget () = None
 
   (* No shuffle intrinsics on plain C backends: a [Workgroup_reduce] accumulation loop renders as
      the serial fallback, which is exactly its serial meaning. *)
@@ -3491,6 +3496,8 @@ module C_syntax (B : C_syntax_config) = struct
           heap_local_lines ~typ ~ident:"?" ~elems:1 ~zero_init))
       ~f:extract_idents
     |> List.dedup_and_sort ~compare:String.compare
+
+  let serial_scratch_ident = "ocannl_serial_scratch"
 
   let ident_blacklist =
     B.ident_blacklist
@@ -9970,21 +9977,6 @@ module C_syntax (B : C_syntax_config) = struct
       derive_kparams ~llc ~traced_store ~placements:optimize_ctx.Low_level.placements
         ~alias_candidates:optimize_ctx.Low_level.alias_candidates ~merge_node ~idx_params
     in
-    let args_docs =
-      List.mapi params ~f:(fun pos (name, _) ->
-          string (B.buffer_prefix ^ name ^ B.buffer_suffix ~pos))
-      @ List.map B.extra_args ~f:string
-    in
-    (* Built once the body has rendered: whether the kernel needs [OCANNL_WIDE_VECTOR_KERNEL] is
-       which vectors its renderings declared (gh-ocannl-1103). *)
-    let func_header () =
-      string
-        (if !(ctx.widest_vector_bytes) <= 32 then B.main_kernel_prefix
-         else if String.is_empty B.main_kernel_prefix then "OCANNL_WIDE_VECTOR_KERNEL"
-         else "OCANNL_WIDE_VECTOR_KERNEL " ^ B.main_kernel_prefix)
-      ^^ space ^^ string "void" ^^ space ^^ string name
-      ^^ nest 4 (lparen ^^ hardline ^^ separate (comma ^^ hardline) args_docs ^^ rparen)
-    in
     let body = ref empty in
     if not (String.is_empty B.kernel_prep_line) then
       body := !body ^^ string B.kernel_prep_line ^^ semi ^^ hardline;
@@ -10021,7 +10013,7 @@ module C_syntax (B : C_syntax_config) = struct
                     B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
                       ~base_message_literal:base_msg
                       ~args_docs:[ string @@ "(" ^ B.buffer_prefix ^ "void*)merge_buffer" ]
-                | Log_file_name -> empty (* Already handled by fopen or if it's just an ID *)
+                | Kparam_serial_scratch _ | Log_file_name -> empty
                 | Kparam_ptr tn ->
                     let base_msg =
                       Printf.sprintf "%s &[%d] = %%p\n" p_name_and_type (Tnode.num_elems tn)
@@ -10135,13 +10127,40 @@ module C_syntax (B : C_syntax_config) = struct
                  && not (Set.mem !(ctx.unscoped_simdgroup_fragments) tn)))
             (tn, Hashtbl.find_exn traced_store tn))
     in
+    let private_arrays =
+      List.filter_map declared ~f:(fun (tn, _) ->
+          Option.some_if (not (Set.mem workgroup_shared tn)) tn)
+    in
     (* gh-ocannl-1669: the thread-private ones past the function scope's stack budget are heap
        arrays, freed after the main logic. *)
-    let heap =
-      heap_locals ~budget:routine_stack_locals_bytes
-        (List.filter_map declared ~f:(fun (tn, _) ->
-             Option.some_if (not (Set.mem workgroup_shared tn)) tn))
+    let heap = heap_locals ~budget:routine_stack_locals_bytes private_arrays in
+    (* A single private array left in a CUDA depot can still cost a copy per resident thread. Once
+       the combined frame exceeds the budget, give all of its arrays device slices. *)
+    let scratch_frame =
+      let one = Array.for_all ~f:(Int.equal 1) in
+      if one launch.grid && one launch.block then
+        Option.bind (B.serial_device_scratch_budget ()) ~f:(fun budget ->
+            let overflow () =
+              invalid_arg "serial device scratch frame exceeds addressable memory"
+            in
+            let bytes, frame =
+              List.fold private_arrays
+                ~init:(0, Map.empty (module Tn))
+                ~f:(fun (used, frame) tn ->
+                  let elems = Tn.num_elems tn in
+                  let width = Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec) in
+                  if elems < 0 || elems > Int.max_value / width then overflow ();
+                  let size = elems * width in
+                  let align = Ops.buffer_alignment in
+                  let padding = (align - (used % align)) % align in
+                  if used > Int.max_value - padding - size then overflow ();
+                  let offset = used + padding in
+                  (offset + size, Map.set frame ~key:tn ~data:(offset, size)))
+            in
+            Option.some_if (bytes > budget) (bytes, frame))
+      else None
     in
+    let scratch_arrays = Option.value_map scratch_frame ~default:(Map.empty (module Tn)) ~f:snd in
     let local_decls =
       string "/* Local declarations and initialization. */"
       ^^ hardline
@@ -10182,13 +10201,51 @@ module C_syntax (B : C_syntax_config) = struct
              else (
                outlined_locals :=
                  (B.typ_of_prec @@ Lazy.force tn.storage_prec, get_ident tn) :: !outlined_locals;
-               local_array_decl
-                 ~alias_ptr:(Set.mem !(ctx.current_local_ptr_alias) tn)
-                 ~heap:(Set.mem heap tn) ~zero_init:node.Low_level.zero_initialized_by_code tn
-               ^^ hardline))
+               let zero_init = node.Low_level.zero_initialized_by_code in
+               let decl =
+                 match Map.find scratch_arrays tn with
+                 | None ->
+                     local_array_decl
+                       ~alias_ptr:(Set.mem !(ctx.current_local_ptr_alias) tn)
+                       ~heap:(Set.mem heap tn) ~zero_init tn
+                 | Some (offset, bytes) ->
+                     let typ = B.typ_of_prec (Lazy.force tn.storage_prec) in
+                     let ident = get_ident tn in
+                     let decl =
+                       string
+                         (Printf.sprintf "%s *const %s = (%s *)(%s + %d);" typ ident typ
+                            serial_scratch_ident offset)
+                     in
+                     if zero_init then
+                       decl ^^ hardline ^^ string (Printf.sprintf "memset(%s, 0, %d);" ident bytes)
+                     else decl
+               in
+               decl ^^ hardline))
            declared
     in
     body := !body ^^ local_decls ^^ hardline;
+    let params =
+      match scratch_frame with
+      | None -> params
+      | Some (bytes, _) ->
+          params
+          @ [ ("unsigned char *__restrict__ " ^ serial_scratch_ident, Kparam_serial_scratch bytes) ]
+    in
+    let args_docs =
+      List.mapi params ~f:(fun pos (name, _) ->
+          string (B.buffer_prefix ^ name ^ B.buffer_suffix ~pos))
+      @ List.map B.extra_args ~f:string
+    in
+    (* Built once the body has rendered: whether the kernel needs [OCANNL_WIDE_VECTOR_KERNEL] is
+       which vectors its renderings declared (gh-ocannl-1103). *)
+    let func_header () =
+      string
+        (if !(ctx.widest_vector_bytes) <= 32 then B.main_kernel_prefix
+         else if String.is_empty B.main_kernel_prefix then "OCANNL_WIDE_VECTOR_KERNEL"
+         else "OCANNL_WIDE_VECTOR_KERNEL " ^ B.main_kernel_prefix)
+      ^^ space ^^ string "void" ^^ space ^^ string name
+      ^^ nest 4 (lparen ^^ hardline ^^ separate (comma ^^ hardline) args_docs ^^ rparen)
+    in
     (* gh-ocannl-1255: kernel-scope scratch of the accepted tile-MMA emissions (Metal's converted
        destination boundary's coordinate table), declared and initialized once, before the main
        logic, whose emission scopes each open with a barrier ahead of their first read of it. *)

@@ -163,6 +163,9 @@ test/operations/cpu_vectorized.ml [run by @test/operations/runtest-cpu_vectorize
     "float4_t"
     "reinterpret_cast"
     "vector_size"
+test/operations/cuda_launch_reservation.ml [run by @test/operations/runtest-cuda_launch_reservation]
+    "__local_depot"
+    "ocannl_serial_scratch"
 test/operations/cuda_like_builtins_emulation.ml [renders generated text in memory; run by @test/operations/runtest-cuda_like_builtins_emulation]
 test/operations/cuda_wmma_floor.real.ml [run by @test/operations/runtest-cuda_wmma_floor; also pins text this scan cannot name: untraced callback, opaque aggregate component, unvalidated haystack]
     "(wmma-f16-wide)"
@@ -685,6 +688,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-cpu_scratch_matmul_grid
 @test/operations/runtest-cpu_simd_reduction
 @test/operations/runtest-cpu_vectorized
+@test/operations/runtest-cuda_launch_reservation
 @test/operations/runtest-cuda_like_builtins_emulation
 @test/operations/runtest-cuda_wmma_floor
 @test/operations/runtest-declared_temporaries-logged

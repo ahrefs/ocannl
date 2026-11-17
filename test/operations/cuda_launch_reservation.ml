@@ -20,14 +20,15 @@
    reservation holds nothing. Bound: an s11d_ref-sized frame runs, and the device's free memory
    after it is back within half the reservation of where it was before (on the base it stayed a
    whole reservation lower), while a small frame resets nothing, so ordinary launches stay
-   asynchronous. This arm takes the 3.3 GiB for the kernel's duration, as [schedule_strided_1x1]
-   does, and is skipped when the device does not have that free. Graph: the same frame as one
-   segment of a two-segment routine, which [sequence_segments] captures as a CUDA graph, whose
-   launch releases the reservation too. A hopeless frame in a graph is refused at the graph's
-   instantiation, where its kernels first reserve (measured on rog-nv), at once, and then as the
-   plain launch the routine falls back to. The default run, on HIP: the scratch frame runs, and the
-   back-off's counters are reported and untouched; the free memory around it goes to stderr, for the
-   record.
+   asynchronous. These depot witnesses launch two blocks, so their frame remains thread-private. The
+   serial witness uses three simultaneously live 16 KiB arrays and checks that its launch avoids the
+   old reservation, computes the right values on reuse, and works in a cached graph. Graph: the
+   two-block depot frame as one segment of a two-segment routine, which [sequence_segments] captures
+   as a CUDA graph, whose launch releases the reservation too. A hopeless frame in a graph is
+   refused at the graph's instantiation, where its kernels first reserve (measured on rog-nv), at
+   once, and then as the plain launch the routine falls back to. The default run, on HIP: the
+   scratch frame runs, and the back-off's counters are reported and untouched; the free memory
+   around it goes to stderr, for the record.
 
    [--contended] is the retried case, and it needs the device to itself, so no alias runs it: a
    child process (this executable, re-run with [--hold]) takes nearly all the free memory in device
@@ -52,6 +53,7 @@ open Base
 open Ll_test
 open Verdict.Claims
 module SO = Ir.Schedule_outcome
+module Generated = Test_utils.Generated
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_cuda = String.equal backend_name "cuda"
@@ -68,34 +70,69 @@ let s11d_floats = 12_288
    reverse into the materialized [out]. With [~graph], a second statement adds one to [out] into a
    materialized [next], and the routine is cut into two segments there, so a GPU backend captures it
    as a graph: [n - y + 1] then. Returns the program and the node to read. *)
-let frame_program ~first_id ~name ?(graph = false) n =
-  let mk = node_factory ~first_id ~dims:[| n |] () in
-  let out = mk "clr_out" in
+let frame_program ~first_id ~name ?(graph = false) ?(multi = false) n =
+  let outputs = if multi then 2 * n else n in
+  let mk_output = node_factory ~first_id ~dims:[| outputs |] () in
+  let out = mk_output "clr_out" in
   materialize out;
-  let frame = mk "clr_frame" in
+  let frame = node_factory ~first_id:(first_id + 2) ~dims:[| n |] () "clr_frame" in
   Tn.update_memory_mode frame Tn.Local (Site "99:test-setup");
-  let x = sym () and y = sym () in
+  let x = sym () and y = sym () and block = sym () in
+  let offset = if multi then aff [ (n, block); (1, y) ] 0 else iter y in
   let fill_drain =
     seq
       (loop_n x n (set frame [| iter x |] (tick x)))
-      (loop_n y n (set out [| iter y |] (get frame [| aff [ (-1, y) ] (n - 1) |])))
+      (loop_n y n (set out [| offset |] (get frame [| aff [ (-1, y) ] (n - 1) |])))
   in
+  let fill_drain = if multi then loop_n ~axis:Grid block 2 fill_drain else fill_drain in
   if not graph then (optimize ~materialized:[ out ] ~name fill_drain, out)
   else
-    let next = mk "clr_next" in
+    let next = mk_output "clr_next" in
     materialize next;
     let z = sym () in
     let llc =
-      seq fill_drain (loop_n z n (set next [| iter z |] (add (c 1.) (get out [| iter z |]))))
+      seq fill_drain (loop_n z outputs (set next [| iter z |] (add (c 1.) (get out [| iter z |]))))
     in
     (optimize ~materialized:[ out; next ] ~name llc, next)
+
+(* s11d_ref has three simultaneously live arrays. Different values keep overlapping slices visible,
+   and [c_frame] reads its declaration's zero on each invocation. *)
+let serial_frame_program ~first_id ~name ~graph n =
+  let mk = node_factory ~first_id ~dims:[| n |] () in
+  let a = mk "serial_a" and b = mk "serial_b" and c_frame = mk "serial_c" in
+  List.iter [ a; b; c_frame ] ~f:(fun tn ->
+      Tn.update_memory_mode tn Tn.Local (Site "99:test-setup"));
+  let out = mk "serial_out" in
+  materialize out;
+  let x = sym () and y = sym () in
+  let value = tick x and forward = [| iter x |] and reverse = [| aff [ (-1, y) ] (n - 1) |] in
+  let fill =
+    loop_n x n
+      (seq (set a forward value)
+         (seq
+            (set b forward (mul (c 2.) value))
+            (set c_frame forward (add (get c_frame forward) (mul (c 4.) value)))))
+  in
+  let drain =
+    loop_n y n
+      (set out [| iter y |] (add (get a reverse) (add (get b reverse) (get c_frame reverse))))
+  in
+  let frame = seq (zero c_frame) (seq fill drain) in
+  if not graph then (optimize ~materialized:[ out ] ~name frame, out)
+  else
+    let next = mk "serial_next" in
+    materialize next;
+    let z = sym () in
+    let consume = loop_n z n (set next [| iter z |] (add (get out [| iter z |]) (c 1.))) in
+    (optimize ~materialized:[ out; next ] ~name (seq frame consume), next)
 
 (* The graph routine's two segments: the frame's fill and drain, then the consumer. A recorded
    segmentation is applied as given, never coalesced, so the cut is the test's. *)
 let two_segments (o : Ir.Low_level.optimized) =
+  let frame_statements = List.length (Ir.Low_level.flat_lines [ o.llc ]) - 1 in
   let _, tuples =
     Ir.Schedule.fission_segmented
-      ~replay:([ (`Solo, 2); (`Solo, 1) ], fun _ _ -> None)
+      ~replay:([ (`Solo, frame_statements); (`Solo, 1) ], fun _ _ -> None)
       ~preset:(fun _ -> [])
       ~zero_sched:(fun _ -> [])
       ~static_indices:[] o
@@ -112,12 +149,14 @@ let link_program ?ctx ~name ~graph (o, out) =
   in
   (linked, out)
 
-let expected ?(graph = false) n =
-  Array.init n ~f:(fun y -> Float.of_int (n - y + if graph then 1 else 0))
+let expected ?(graph = false) ?(multi = false) n =
+  Array.init
+    (if multi then 2 * n else n)
+    ~f:(fun y -> Float.of_int (n - (y % n) + if graph then 1 else 0))
 
-let run_frame ?ctx ?(graph = false) ~first_id ~name n =
+let run_frame ?ctx ?(graph = false) ?(multi = false) ~first_id ~name n =
   let (ctx, routine), out =
-    link_program ?ctx ~name ~graph (frame_program ~first_id ~name ~graph n)
+    link_program ?ctx ~name ~graph (frame_program ~first_id ~name ~graph ~multi n)
   in
   Context.get_values (run_linked (ctx, routine) ~seed:[]) out
 
@@ -163,6 +202,9 @@ let deltas ctx fields f =
 
 let () =
   let ctx = Context.auto () in
+  if on_cuda then (
+    Utils.settings.output_debug_files_in_build_directory <- true;
+    Generated.init ~backend_name);
   Stdio.eprintf "backend: %s (not part of the golden)\n%!" (Context.backend_name ctx);
   let cuda = Verdict.leg ~when_:on_cuda ~on:backend_name () in
   let hip = Verdict.leg ~when_:on_hip ~on:backend_name () in
@@ -207,7 +249,8 @@ let () =
     lazy
       (deltas ctx backoff (fun () ->
            let linked, out =
-             link_program ~name ~graph (frame_program ~first_id ~name ~graph hopeless_floats)
+             link_program ~name ~graph
+               (frame_program ~first_id ~name ~graph ~multi:true hopeless_floats)
            in
            let r =
              SO.protect ~classify_backend:(Context.failure_classifier ctx)
@@ -266,7 +309,7 @@ let () =
         (let free0, _ = free_and_total () in
          let got, d =
            deltas ctx [ "local_memory_resets" ] (fun () ->
-               run_frame ~ctx ~graph ~first_id ~name s11d_floats)
+               run_frame ~ctx ~graph ~multi:true ~first_id ~name s11d_floats)
          in
          let free1, _ = free_and_total () in
          Stdio.eprintf
@@ -287,10 +330,10 @@ let () =
     in
     let plain = measured ~graph:false ~first_id:1773300 ~name:"clr_s11d" in
     in_leg ~leg:bound
-      "bound: an s11d_ref-sized frame (48 KiB for one thread) computes the right values"
+      "bound: a two-block kernel with a 48 KiB frame per thread computes the right values"
       (fun label ->
         let got, _, _, _ = Lazy.force plain in
-        p label (Array.equal Float.equal got (expected s11d_floats)));
+        p label (Array.equal Float.equal got (expected ~multi:true s11d_floats)));
     in_leg ~leg:bound
       "bound: the device's free memory after its launch is within half its reservation of before it"
       (fun label -> p label (returned label (Lazy.force plain)));
@@ -312,7 +355,9 @@ let () =
         let resets_of ~first_id ~name n =
           snd
             (deltas ctx [ "local_memory_resets" ] (fun () ->
-                 Array.equal Float.equal (run_frame ~ctx ~first_id ~name n) (expected n)))
+                 Array.equal Float.equal
+                   (run_frame ~ctx ~multi:true ~first_id ~name n)
+                   (expected ~multi:true n)))
         in
         let above = floats_for (threshold + (threshold / 4))
         and below = floats_for (threshold - (threshold / 4)) in
@@ -340,7 +385,7 @@ let () =
         p label (List.equal Int.equal (snd (Lazy.force graph_run)) [ 1 ]));
     in_leg ~leg:graph_bound "graph: it computes the right values" (fun label ->
         let (got, _, _, _), _ = Lazy.force graph_run in
-        p label (Array.equal Float.equal got (expected ~graph:true s11d_floats)));
+        p label (Array.equal Float.equal got (expected ~graph:true ~multi:true s11d_floats)));
     in_leg ~leg:graph_bound
       "graph: the free memory after the graph launch is within half the reservation of before it, \
        released once" (fun label ->
@@ -354,6 +399,93 @@ let () =
            runs its segments plainly, where the kernel launch's gives up too. *)
         let r, d = Lazy.force hopeless_graph in
         p label (declined_oom r && List.equal Int.equal d [ 0; 2 ]));
+
+    let serial_scratch =
+      let supported =
+        lazy
+          (Option.value_map (counter ctx "serial_device_scratch_budget") ~default:true
+             ~f:(fun bytes -> bytes > 0))
+      in
+      Verdict.sub_leg cuda ~when_:supported ~on:backend_name
+    in
+    let serial_graph = Verdict.sub_leg serial_scratch ~when_:capturing ~on:backend_name in
+    let serial_measurement ~graph ~first_id ~name =
+      lazy
+        (let n = s11d_floats / 3 in
+         let linked, out =
+           link_program ~ctx ~name ~graph (serial_frame_program ~first_id ~name ~graph n)
+         in
+         let free0, _ = free_and_total () in
+         let fields = [ "local_memory_resets"; "live_graph_execs" ] in
+         let run linked =
+           deltas ctx fields (fun () ->
+               let ran = run_linked linked ~seed:[] in
+               (ran, Context.get_values ran out))
+         in
+         let (ran, got), first = run linked in
+         let free1, _ = free_and_total () in
+         let (_, replayed), second = run (ran, snd linked) in
+         let free2, _ = free_and_total () in
+         let want =
+           Array.init n ~f:(fun y -> Float.of_int ((7 * (n - y)) + if graph then 1 else 0))
+         in
+         Stdio.eprintf
+           "%s: %d B of private arrays, %d B of estimated depot reservation on base, free \
+            before             %d B, after %d B and after replay %d B (not part of the golden)\n\
+            %!"
+           name (s11d_floats * 4) (Lazy.force reservation) free0 free1 free2;
+         ( Array.equal Float.equal got want && Array.equal Float.equal replayed want,
+           [| Float.of_int free1; Float.of_int free2 |],
+           Float.of_int free0,
+           first,
+           second ))
+    in
+    let serial_name = "clr_serial_frame" in
+    let plain_serial = serial_measurement ~graph:false ~first_id:1774000 ~name:serial_name in
+    let graph_serial = serial_measurement ~graph:true ~first_id:1774100 ~name:"clr_serial_graph" in
+    in_leg ~leg:serial_scratch
+      "serial scratch: three private arrays compute the right values on both runs" (fun label ->
+        let values, _, _, _, _ = Lazy.force plain_serial in
+        p label values);
+    in_leg ~leg:serial_scratch "serial scratch: the emitted one-thread frame uses the device buffer"
+      (fun label ->
+        ignore (Lazy.force plain_serial);
+        p label
+          (String.is_substring (Generated.read serial_name) ~substring:"ocannl_serial_scratch"
+          && not
+               (String.is_substring
+                  (Generated.read ~ext:".ptx" serial_name)
+                  ~substring:"__local_depot")));
+    let scratch_headroom label (_, available, before, first, second) =
+      (* The before/after oracle reads device-wide free memory, so it admits the same neighbour
+         noise as the depot test. The emitted PTX and reset count pin placement independently. *)
+      let tol _ = Float.of_int (Lazy.force reservation / 2) in
+      let free = Verdict.within label available [| before; before |] ~tol in
+      p label (free && Int.equal (List.hd_exn first) 0 && Int.equal (List.hd_exn second) 0)
+    in
+    in_leg ~leg:serial_scratch
+      "serial scratch: free memory stays clear of a depot-sized reservation without a reset"
+      (fun label -> scratch_headroom label (Lazy.force plain_serial));
+    in_leg ~leg:serial_graph
+      "serial scratch: graph capture and cached replay compute the right values" (fun label ->
+        let values, _, _, first, second = Lazy.force graph_serial in
+        p label
+          (values && List.equal Int.equal first [ 0; 1 ] && List.equal Int.equal second [ 0; 0 ]));
+    in_leg ~leg:serial_graph
+      "serial scratch: graph capture and replay stay clear of a depot-sized reservation"
+      (fun label -> scratch_headroom label (Lazy.force graph_serial));
+    in_leg ~leg:serial_scratch "serial scratch: the cutoff still permits a one-thread local depot"
+      (fun label ->
+        let budget =
+          Option.value ~default:(s11d_floats / 3 * 4) (counter ctx "serial_device_scratch_budget")
+        in
+        let n = budget / 4 in
+        let name = "clr_stack_boundary" in
+        let values = run_frame ~ctx ~first_id:1774200 ~name n in
+        p label
+          (Array.equal Float.equal values (expected n)
+          && String.is_substring (Generated.read ~ext:".ptx" name) ~substring:"__local_depot"
+          && not (String.is_substring (Generated.read name) ~substring:"ocannl_serial_scratch")));
 
     (* --- 4. HIP: the scratch frame runs; the back-off is in place and untouched. --- *)
     let hip_floats =
@@ -449,7 +581,8 @@ let () =
         let prepared =
           lazy
             (let (ctx, routine), out =
-               link_program ~ctx ~name ~graph (frame_program ~first_id ~name ~graph floats)
+               link_program ~ctx ~name ~graph
+                 (frame_program ~first_id ~name ~graph ~multi:on_cuda floats)
              in
              let ctx =
                match case with
@@ -510,7 +643,10 @@ let () =
             | _ -> p label false);
         in_legf ~leg "contended, %s: the retried kernels compute the right values" what
           (fun label ->
-            p label (Array.equal Float.equal (fst (Lazy.force run)) (expected ~graph floats)));
+            p label
+              (Array.equal Float.equal
+                 (fst (Lazy.force run))
+                 (expected ~graph ~multi:on_cuda floats)));
         (* The cached replay's graph launch is the one refused: its exec must be dropped, not
            relaunched -- a relaunch after the refusal ran without its reservation and faulted on
            rog-nv -- and the run left to the plain launches, which recapture nothing. *)

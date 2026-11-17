@@ -6364,6 +6364,7 @@
   unix
   arrayjit.verdict
   ll_test
+  test_utils
   arrayjit.ir
   arrayjit.utils
   arrayjit.context)

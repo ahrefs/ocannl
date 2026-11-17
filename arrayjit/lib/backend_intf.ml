@@ -1399,6 +1399,9 @@ type kparam_source =
   | Log_file_name
   | Merge_buffer
   | Kparam_ptr of Tnode.t
+  | Kparam_serial_scratch of int
+      (** Bytes of private device storage for a one-thread CUDA kernel. The launch owns the buffer,
+          so it is absent from the routine's logical inputs and outputs. *)
   | Kparam_pool_slab of int
       (** gh-ocannl-344: the [i]-th pool base-pointer parameter of a pooled kernel (Metal). A fixed
           number of these is emitted; at link the backend binds slab [i] to the pool assigned index
