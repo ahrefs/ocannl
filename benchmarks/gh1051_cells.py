@@ -466,11 +466,10 @@ def untuned(run, label, fixture, prec):
         if not common:
             rows.append((shown, display_value(fixture), want[p], "missing", "missing", "", ""))
             continue
-        ratios = [w[k] / n[k] for k in common]
+        slower = sum(w[k] > n[k] for k in common)
         rows.append((shown, display_value(fixture), want[p],
                      f"{statistics.median(n.values()):.3f}", f"{statistics.median(w.values()):.3f}",
-                     f"{statistics.median(ratios):.3f} ({min(ratios):.3f}-{max(ratios):.3f})",
-                     f"{sum(x > 1 for x in ratios)} of {len(ratios)}"))
+                     paired(w, n), f"{slower} of {len(common)}"))
     print()
     print("\n".join(table_lines(
         ["memory", "untuned default (bench_gpt)", "prec", "narrow (true) step p50 ms",

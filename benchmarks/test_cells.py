@@ -714,14 +714,38 @@ class Gh1253FlipDriverTest(DriverTreeTest):
         self.assertIn('fx gate=auto pass=1 FAILED: "exited 1"', (self.out / "summary.txt").read_text())
 
 
+# A stub cell's round, read off its bin_cells directory (`cells/<NNN>-<arm>/`, four arms a round;
+# an identity run's directory has no number and reads as round 0), and the per-round factors:
+# DRIFT moves both arms of a round alike (x1, x4, x1, x4), SKEW is the wide arm's own per-round
+# cost (1.1, 1.3, 1.1, 1.3). Paired by round, wide/narrow reads 1.200 (1.100-1.300); the arms'
+# medians divided read 1.260; and per-round minima over all variants, which take round 1's smem,
+# read 1.100 (1.000-1.300) -- so a test can tell the three apart.
+STUB_ROUND = """
+import re
+_m = re.match(r"(\\d+)-", os.path.basename(os.getcwd()))
+rnd = int(_m.group(1)) // 4 if _m else 0
+drift, skew = (1.0, 4.0)[rnd % 2], (1.1, 1.3)[rnd % 2]
+"""
+
 # bin/schedule_bench as gh1051_bf16_ab.sh reads it: five timing lines whose checksums are the f32
 # control's exact answer, near it for the wide and the narrow serial legs, and a gross but shared
 # value for the narrow tensorized pair; with debug files on, one generated source (EXT) under the
 # cell's build_files/<prefix>/ that the bf16 policy does not reach at f32 and does reach at bf16
 # (unless SAME_BF16 says the stub ignores the arm there: the treatment-unreached negative control;
 # NO_NARROW_SOURCE has the narrow bf16 run write none, which must not read as a difference).
+# The bf16 timings vary by ROUND and variant so that the three readings of a wide/narrow ratio
+# disagree (see STUB_ROUND): the narrow arm's fastest is mma_pd1, the wide arm's regtile, except
+# that in round 1 the wide smem beats regtile once.
 SCHEDULE_BODY = """
 import json, os
+""" + STUB_ROUND + """
+def ms(v):
+    if prec == "single":
+        return 1.0
+    if narrow:
+        return {"mma_pd1": 0.5, "mma_pd2": 0.7}.get(v, 2.0) * drift
+    return {"regtile": 0.5 * skew, "mma_pd1": 3.0, "mma_pd2": 3.0,
+            "smem": 0.5 if rnd == 1 else 2.0}.get(v, 2.0) * drift
 opt = {a.split("=", 1)[0][len("--ocannl_"):]: a.split("=", 1)[1] for a in argv if "=" in a}
 narrow, prec = opt["bf16_arithmetic"] == "true", opt["default_prec"]
 if opt.get("output_debug_files_in_build_directory") == "true":
@@ -739,16 +763,17 @@ for v in ("parallel", "smem", "regtile", "mma_pd1", "mma_pd2"):
     else:
         chk = "102/204" if narrow else "101/202"
     census = "MMA_CENSUS" if mma and prec == "bfloat16" else "no tile MMA"
-    print(f"{v:<10} 1.000 ms  2.00 GFLOP/s  (spot [65] 1.0, chk {chk}, agrees (0 of 4))  [{census}] [grid: no Grid loop]")
-    print("bench-result: " + json.dumps({"variant": v, "seconds": 0.001, "check": "unchecked",
+    print(f"{v:<10} {ms(v):.3f} ms  2.00 GFLOP/s  (spot [65] 1.0, chk {chk}, agrees (0 of 4))  [{census}] [grid: no Grid loop]")
+    print("bench-result: " + json.dumps({"variant": v, "seconds": ms(v) / 1000, "check": "unchecked",
                                           "check_note": "rounding expected"}))
 """
 
 # bench_gpt as the training row reads it: a result line at the storage precision BENCH_PRECISION
-# asked for, the narrow bf16 step slower than the wide one; with debug files on, one generated
+# asked for, the wide bf16 step slower than the narrow one by STUB_ROUND's skew; with debug files on, one generated
 # source that only the bf16 arms' accumulator moves.
 TRAIN_BODY = """
 import json, os
+""" + STUB_ROUND + """
 opt = {a.split("=", 1)[0][len("--ocannl_"):]: a.split("=", 1)[1] for a in argv if "=" in a}
 narrow, prec = opt["bf16_arithmetic"] == "true", os.environ["BENCH_PRECISION"]
 assert os.environ["BENCH_DOMINANT_KERNEL"] == "0" and os.environ["BENCH_TUNE"] == "0"
@@ -757,7 +782,7 @@ if opt.get("output_debug_files_in_build_directory") == "true":
     os.makedirs(d)
     reach = " acc=" + ("bf16" if narrow else "f32") if prec == "bf16" else ""
     open(os.path.join(d, "step.EXT"), "w").write("kernel " + prec + reach + "\\n")
-step = 5.0 if prec == "f32" else (4.0 if narrow else 4.4)
+step = (5.0 if prec == "f32" else 4.0 if narrow else 4.0 * skew) * drift
 print(json.dumps({"framework": "ocannl", "storage_precision": prec,
                   "step_ms": {"p10": step, "p50": step, "p90": step}, "losses": [1.0, 0.5]}))
 """
@@ -803,11 +828,14 @@ class Gh1051AbDriverTest(StubRunTest):
         # The stub writes no `auto` arm of its own, so auto's bf16 source matches the wide one.
         self.assertIn("auto (schedule_bench, bf16): byte-identical to the wide arm (false)",
                       proc.stdout)
-        # The ratios are paired per round: equal stub timings read 1.000 with no spread.
-        self.assertIn("| stub | 64 | mma_pd1 |", proc.stdout)
-        self.assertIn("| 1.000 (1.000-1.000) | 1.000 (1.000-1.000) |", proc.stdout)
-        self.assertIn("n=64 treatment: fastest variant by median narrow parallel, wide parallel; "
-                      "those two schedules' paired wide/narrow 1.000 (1.000-1.000)", proc.stdout)
+        # The table's ratios are paired per round: regtile's wide/narrow is 0.275 and 0.325 in
+        # alternate rounds (the arms' medians divided would read 0.315), its f32 control 1.000.
+        self.assertRegex(proc.stdout, r"\| stub \| 64 \| regtile \| [^\n]*\| 0\.300 \(0\.275-0\.325\) "
+                                      r"\| 1\.000 \(1\.000-1\.000\) \|")
+        # The fastest-variant line pairs the two schedules it names, which differ by arm; per-round
+        # minima would take round 1's wide smem and read 1.100 (1.000-1.300).
+        self.assertRegex(proc.stdout, r"n=64 treatment: fastest variant[^\n]* narrow mma_pd1, wide "
+                                      r"regtile;[^\n]* wide/narrow 1\.200 \(1\.100-1\.300\)")
         records = self.records(raw / "n64")
         self.assertEqual(len(records), 16)
         self.assertEqual({r["arm"] for r in records},
@@ -858,10 +886,11 @@ class Gh1051AbDriverTest(StubRunTest):
         self.assertIn("drift control (bench_gpt): 1 generated f32 kernels", proc.stdout)
         self.assertIn("treatment reach (bench_gpt): 1 of 1 generated bf16 sources differ",
                       proc.stdout)
-        # Wide 4.4 against narrow 4.0 in every round; the f32 control 5.0 against 5.0.
-        self.assertIn("| stub | fx | bf16 | 4.000 | 4.400 | 1.100 (1.100-1.100) | 4 of 4 |",
+        # STUB_ROUND's skew paired by round (the medians, 10.0 and 12.6, would divide to 1.260);
+        # the f32 control 1.000 under the same drift.
+        self.assertIn("| stub | fx | bf16 | 10.000 | 12.600 | 1.200 (1.100-1.300) | 4 of 4 |",
                       proc.stdout)
-        self.assertIn("| stub | fx | f32 | 5.000 | 5.000 | 1.000 (1.000-1.000) | 0 of 4 |",
+        self.assertIn("| stub | fx | f32 | 12.500 | 12.500 | 1.000 (1.000-1.000) | 0 of 4 |",
                       proc.stdout)
         self.assertIn("untuned seeding: no seeding census logged in either arm", proc.stdout)
         records = self.records(raw / "untuned")
