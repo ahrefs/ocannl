@@ -449,6 +449,20 @@ type hardware_limits = {
           advisories where measured, overridable by config [model_fill_threads]; [None] elsewhere,
           which leaves the compute leg as before. Same readers and same cache identity as
           {!field-cache_capacity_bytes}. *)
+  fill_chains : int option; [@sexp.option]
+      (** [Untimed]: the independent accumulation chains a thread must carry to count as a whole
+          thread in the launch fill -- the cap [L] of its per-thread ILP credit (gh-ocannl-1639,
+          {!Ir.Cost_model.context_fill}'s [fm_chains]): a context whose threads carry [c < L] chains
+          ({!Ir.Cost_model.launch_contexts}' census: a register tile's [rm * rn] private
+          accumulators) counts [T * c / L] threads. {!field-fill_threads} was fitted on 4x4 register
+          tiles (16 chains a thread), so at any [L <= 16] every calibration kernel's fill, and with
+          it {!field-fill_threads} and {!field-issue_rate}, is unchanged: the cap needs no refit of
+          either, and above 16 they would need one. A FITTED constant, per device class,
+          ranking-only (the launch sweep cannot identify it: its threads all carry 16 chains).
+          Overridable by config [model_fill_chains]; [None] where unfitted, which is [L = 1], the
+          thread-only fill -- every backend today: the rog fit moved no ranking decision
+          (cuda_backend.ml has the evidence). Read wherever the fill model is, the [auto] seeding
+          gate included. Same cache identity as {!field-cache_capacity_bytes}. *)
   transaction_rate : float option; [@sexp.option]
       (** [Untimed]: how many excess 32-byte memory sectors a device serves per second -- the rate
           of the ranking score's memory-transaction term (gh-ocannl-1600,
@@ -914,6 +928,7 @@ let no_hardware_limits =
     device_gather_rate = None;
     multiprocessors = None;
     fill_threads = None;
+    fill_chains = None;
     transaction_rate = None;
     workgroup_bytes_per_multiprocessor = None;
     staged_copy_rate = None;
@@ -1149,6 +1164,7 @@ let limits_key
        device_gather_rate = _;
        multiprocessors = _;
        fill_threads = _;
+       fill_chains = _;
        transaction_rate = _;
        workgroup_bytes_per_multiprocessor = _;
        staged_copy_rate = _;
@@ -1191,6 +1207,7 @@ type untimed_limits = {
   gather_rate : float option;  (** {!field-hardware_limits.device_gather_rate}. *)
   core_count : int option;  (** {!field-hardware_limits.multiprocessors}. *)
   saturation_threads : int option;  (** {!field-hardware_limits.fill_threads}. *)
+  chain_cap : int option;  (** {!field-hardware_limits.fill_chains}. *)
   sector_rate : float option;  (** {!field-hardware_limits.transaction_rate}. *)
   workgroup_capacity : int option;
       (** {!field-hardware_limits.workgroup_bytes_per_multiprocessor}. *)
@@ -1210,6 +1227,7 @@ let untimed_limits (l : hardware_limits) : untimed_limits =
     gather_rate = l.device_gather_rate;
     core_count = l.multiprocessors;
     saturation_threads = l.fill_threads;
+    chain_cap = l.fill_chains;
     sector_rate = l.transaction_rate;
     workgroup_capacity = l.workgroup_bytes_per_multiprocessor;
     copy_rate = l.staged_copy_rate;

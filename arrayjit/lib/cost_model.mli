@@ -239,7 +239,10 @@ val roofline_seconds :
       blocks-over-multiprocessors factor is what orders a plain tensorized leaf against its [bgrid]
       twin. Without a fill model the compute leg is exactly as before. A launch-shape proxy, not an
       occupancy model: no registers, shared memory, wave quantization, or the block a wider sibling
-      nest allocates.
+      nest allocates. Per-thread ILP (gh-ocannl-1639): a scalar context whose threads carry fewer
+      independent accumulation chains than the fill model's cap ({!launch_contexts}' census, a
+      register tile's [rm * rn]) counts that fraction of its threads ({!context_fill}); staged
+      copies, transactions and [Tile_mma] contexts keep the thread-only fill.
     - Memory transactions (gh-ocannl-1600). Given the kernel's {!memory_transactions} and a
       [transaction_rate] (sectors/s), the excess sector transactions of its global accesses -- per
       launch block, the sectors touched beyond the compact count for the same distinct bytes, each
@@ -284,6 +287,11 @@ val global_in : Low_level.optimized -> Tnode.t -> bool
 (** Whether a node lives in global memory under the specialization's placements: neither [Local]
     (thread-private scratch, {!Tnode.Placements.is_local_peek}) nor a workgroup-shared tile. *)
 
+val private_in : Low_level.optimized -> Tnode.t -> bool
+(** Whether a node is per-thread under the specialization's placements: [Local] and not a
+    workgroup-shared tile -- where {!launch_contexts}' accumulation chains may live
+    (gh-ocannl-1639). *)
+
 val reuse_traffic :
   ?cache_capacity_bytes:int ->
   ?max_resident_threads:int ->
@@ -302,32 +310,76 @@ val requested_bytes : summary -> reuse -> int
 val spills : ?cache_capacity_bytes:int -> reuse -> bool
 (** Whether the working set exceeds the capacity ([false] without one). *)
 
-type launch_context = { lc_blocks : int; lc_threads : int; lc_tile_mma : bool; lc_ops : int }
+type launch_context = {
+  lc_blocks : int;
+  lc_threads : int;
+  lc_tile_mma : bool;
+  lc_chains : int option;
+      (** gh-ocannl-1639: the independent accumulation chains each thread carries through one step
+          of the statements' reduction -- the distinct private accumulator cells a carrier loop's
+          body read-modify-writes, a register tile's [rm * rn] -- or [None] where the census counts
+          none (no carrier, no read-modify-write, a shared or global accumulator, elementwise work,
+          a guard, dependent chains). *)
+  lc_ops : int;
+}
 [@@deriving sexp_of]
 (** One op-carrying parallel context of a kernel (gh-ocannl-1479): the statements whose enclosing
     [Grid] loop extents multiply to [lc_blocks] and enclosing [Workgroup] / [Workgroup_reduce]
-    extents to [lc_threads], split by whether they are [Tile_mma] statements, and their operations —
-    {!analyze}'s census (one walk), attributed per statement: a hoisted [Local_scope] body counts in
-    its hoisting statement's context. *)
+    extents to [lc_threads], split by whether they are [Tile_mma] statements and by their chains,
+    and their operations — {!analyze}'s census (one walk), attributed per statement: a hoisted
+    [Local_scope] body counts in its hoisting statement's context. *)
 
-val launch_contexts : Low_level.t -> launch_context list
+val launch_contexts : ?is_private:(Tnode.t -> bool) -> Low_level.t -> launch_context list
 (** In first-reported order, one entry per distinct context; contexts with no operations (zero
-    nests, copies) are absent. The [lc_ops] sum to {!analyze}'s [flops]. *)
+    nests, copies) are absent. The [lc_ops] sum to {!analyze}'s [flops]. [is_private] (default: no
+    node; {!private_in} for an optimized kernel) says which nodes' cells count as accumulation
+    chains; scoped locals ([Set_local]) always do.
 
-type fill_model = { fm_multiprocessors : int; fm_fill_threads : int; fm_tail : bool }
+    The chain census: a statement is a chain member when it read-modify-writes a private accumulator
+    cell and has a carrier -- walking its enclosing loops outward, past the non-hardware loops whose
+    index its target mentions (each multiplies its distinct cells by its extent, and only where that
+    index is one plain-iterator component no other component mentions: [acc[i + j]] may alias cells
+    and is uncounted), the first non-hardware loop whose index the target does not mention. A guard,
+    a hardware loop or a [Scan_loop] met first leaves it uncounted. The carrier's chains sum its
+    members' distinct cells (repeated updates of one cell are one chain); a barrier in the carrier's
+    body, any update reading another member's accumulator, any other write of the body (a guarded
+    update, a scatter) landing on a member's accumulator, a looped member beside another member of
+    its node, or two members of one node no fixed component tells apart (they may overlap: [a[i]]
+    beside [a[0]]) leaves the whole carrier uncounted. A serial loop outside the carrier -- a plain
+    leaf's batch loop -- is never credited: its iterations are serial work. *)
+
+type fill_model = {
+  fm_multiprocessors : int;
+  fm_fill_threads : int;
+  fm_tail : bool;
+  fm_chains : int;
+}
 [@@deriving sexp_of]
 (** The device's launch shape as the score reads it: [fm_multiprocessors] multiprocessors, each
     saturating its scalar issue at [fm_fill_threads] threads — a fitted constant
     ([tools/calibrate_issue_rate.exe]), not the physical residency. [fm_tail] (gh-ocannl-1821)
     quantizes the fill by the launch tail ({!context_fill}); the ranking score sets it exactly where
-    a staged-copy rate is priced, the two being one calibration. *)
+    a staged-copy rate is priced, the two being one calibration. [fm_chains] (gh-ocannl-1639) is the
+    accumulation chains a thread needs to carry to count as a whole thread: the cap [L] of the
+    per-thread ILP credit, 1 for the thread-only fill. *)
 
-val context_fill : fill_model -> blocks:int -> threads:int -> float
-(** [min 1 (B * min T t / (P * t))]: the fraction of the device's saturated issue a launch of [B]
+val context_fill : ?chains:int -> fill_model -> blocks:int -> threads:int -> float
+(** [min 1 (B * min T' t / (P * t))]: the fraction of the device's saturated issue a launch of [B]
     blocks of [T] threads reaches, each block counting at most one multiprocessor's saturating
     share. Under [fm_tail], where [B > P]: [(B / P) * u n / n] with [n = ceil (B / P)] the busiest
-    multiprocessor's blocks and [u n = min 1 (n * min T t / t)] its issue -- below the continuous
-    fill between multiples of [P], equal to it at a saturated multiple. Positive, at most 1. *)
+    multiprocessor's blocks and [u n = min 1 (n * min T' t / t)] its issue -- below the continuous
+    fill between multiples of [P], equal to it at a saturated multiple. Positive, at most 1.
+
+    [T' = T * c / L] for [chains = c] below [L = fm_chains] (gh-ocannl-1639), else [T]: [t] is
+    fitted on threads carrying at least [L] chains, and a thread with fewer counts as the fraction
+    of one it fills. Without [chains], or at [L = 1], the thread-only fill, bitwise. *)
+
+val fill_contexts : fill_model -> launch_context list -> launch_context list
+(** The contexts as a fill model prices them (gh-ocannl-1639): those of one launch shape whose
+    chains it credits alike -- uncredited ([None], or at least [fm_chains]) or one count below it --
+    merged in first-reported order, operations summed, [lc_chains] the credited count. At
+    [fm_chains = 1] that is one context per launch shape, as before the chain census, so every sum
+    over them is the thread-only fill's bitwise. *)
 
 val launch_fill : fill_model -> launch_context list -> float
 (** The scalar contexts' work-weighted harmonic fill: total scalar operations over the sum of each
@@ -494,14 +546,15 @@ val ranking_seconds :
   ?max_resident_threads:int ->
   ?staged_copy_rate:float ->
   ?is_staged:(Tnode.t -> bool) ->
+  ?is_private:(Tnode.t -> bool) ->
   is_global:(Tnode.t -> bool) ->
   Low_level.t ->
   float option
-(** {!ranking_seconds_of} over {!analyze}, {!launch_contexts} when a fill model is given, and, when
-    a capacity or a cache bandwidth is given, {!reuse_traffic}; with both a transaction rate and a
-    lane width, {!memory_transactions}; with both a staged-copy rate and [is_staged],
-    {!staged_copies}. A ranking score, not a runtime prediction — and, unlike {!roofline_seconds},
-    not a lower bound either. *)
+(** {!ranking_seconds_of} over {!analyze}, {!launch_contexts} (with [is_private]) when a fill model
+    is given, and, when a capacity or a cache bandwidth is given, {!reuse_traffic}; with both a
+    transaction rate and a lane width, {!memory_transactions}; with both a staged-copy rate and
+    [is_staged], {!staged_copies}. A ranking score, not a runtime prediction — and, unlike
+    {!roofline_seconds}, not a lower bound either. *)
 
 (** {2 Tile-MMA operand loads (gh-ocannl-1254)}
 

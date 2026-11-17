@@ -81,6 +81,10 @@
 # the shipped arm is judged against; its kernel lines' stg= are what gh1600_txn_fit.py
 # --staged-rate re-scores. With BENCH_PICK=1 each arm prints model_default's pick, so `nostg`'s is
 # the pick before the term.
+# gh-ocannl-1639: and a `noilp` arm (model_fill_chains none: the thread-only launch fill, no
+# per-thread ILP credit) -- the reference the shipped arm's chain credit is judged against.
+# FILL_CHAINS=L states the ILP cap to the fitted/shipped arm (and to EXPLAIN_ONLY's shipped arm,
+# which is how a cap is fitted: one EXPLAIN_ONLY run per candidate L against one timed run's rows).
 # FIT_FILL=1 with RANK_ONLY=1 runs the issue cell first (MULTIPROCESSORS=P passes --multiprocessors,
 # needed only where the device reports none: a non-AGX Metal GPU) and passes its fitted constants to the listing and pick
 # cells, which otherwise run the shipped ones. PICK_GATE0=1 adds pick cells with the seeding off
@@ -246,7 +250,10 @@ cell() {
 # reach the later cells. Empty otherwise; the failure is already counted.
 fitted() { if $last_ok; then sed -n "s/^$1=//p" "$2" | tail -1; fi; }
 
-model=()
+# gh-ocannl-1639: the ILP cap under fit, stated to the arms that carry the model flags.
+ilp_flag=()
+if [[ -n "${FILL_CHAINS:-}" ]]; then ilp_flag=("--ocannl_model_fill_chains=$FILL_CHAINS"); fi
+model=(${ilp_flag[@]+"${ilp_flag[@]}"})
 tiers=()
 fitted_arm=fitted
 # The issue cell's fitted constants: the rate always, the launch fill's two when its fit held.
@@ -268,14 +275,15 @@ elif [[ ${RANK_ONLY:-0} == 1 ]]; then
   echo "   RANK_ONLY: agreement cells only, under the shipped constants"
   if [[ ${FIT_FILL:-0} == 1 ]]; then
     fitted_arm=fitted
-    cell issue "$issue" --repeats=10 ${mp_flag[@]+"${mp_flag[@]}"}
+    # The cap under fit reaches the calibration too: its fit refuses a cap its sweep cannot identify.
+    cell issue "$issue" --repeats=10 ${mp_flag[@]+"${mp_flag[@]}"} ${ilp_flag[@]+"${ilp_flag[@]}"}
     issue_flags
     echo "   FIT_FILL: listing and pick cells under ${model[*]:-the shipped constants}"
   fi
 else
   cell bandwidth "$bandwidth" \
     "--ocannl_autotune_calibration_file=$out/calibration.tsv"
-  model=()
+  model=(${ilp_flag[@]+"${ilp_flag[@]}"})
   bw=$(fitted model_peak_memory_bandwidth "$out/bandwidth.out")
   if [[ -n "$bw" ]]; then model+=("--ocannl_model_dram_bandwidth=$bw"); fi
   echo "   model flags after bandwidth: ${model[*]:-none}"
@@ -341,7 +349,7 @@ for site in $sites; do
   name=$(site_name "$site")
   if [[ -n "$rows_dir" ]]; then
     cell "rank_${name}_${fitted_arm}" env BENCH_TUNE=0 BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
-      --ocannl_gpu_default_sketch_min_reduction=32
+      --ocannl_gpu_default_sketch_min_reduction=32 ${ilp_flag[@]+"${ilp_flag[@]}"}
     cell "rank_${name}_ceilings" env BENCH_TUNE=0 BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
       --ocannl_gpu_default_sketch_min_reduction=32 "${ceilings[@]}"
     fit=()
@@ -398,6 +406,14 @@ for site in $sites; do
   cell "rank_${name}_nostg" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
     --ocannl_gpu_default_sketch_min_reduction=32 \
     ${model[@]+"${model[@]}"} --ocannl_model_staged_copy_rate=none
+  # gh-ocannl-1639: the same constants with the thread-only launch fill (no ILP cap stated).
+  noilp=()
+  for flag in ${model[@]+"${model[@]}"}; do
+    case "$flag" in --ocannl_model_fill_chains=*) ;; *) noilp+=("$flag") ;; esac
+  done
+  cell "rank_${name}_noilp" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
+    --ocannl_gpu_default_sketch_min_reduction=32 \
+    ${noilp[@]+"${noilp[@]}"} --ocannl_model_fill_chains=none
   picks=()
   if [[ ${RANK_ONLY:-0} == 1 ]]; then
     pick_cells=()
@@ -439,7 +455,7 @@ for site in $sites; do
       "ceilings=$out/rank_${name}_ceilings.out" "nofill=$out/rank_${name}_nofill.out" \
       "nomma=$out/rank_${name}_nomma.out" "mmaonly=$out/rank_${name}_mmaonly.out" \
       "noocc=$out/rank_${name}_noocc.out" "notxn=$out/rank_${name}_notxn.out" \
-      "nostg=$out/rank_${name}_nostg.out" \
+      "nostg=$out/rank_${name}_nostg.out" "noilp=$out/rank_${name}_noilp.out" \
       "${fitted_arm}=$out/rank_${name}_${fitted_arm}.out" ${fit[@]+"${fit[@]}"} \
       ${picks[@]+"${picks[@]}"} |
       tee "$out/rank_${name}_agreement.txt" || failed=$((failed + 1))

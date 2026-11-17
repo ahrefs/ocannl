@@ -116,6 +116,10 @@ let reached_unread_exemptions =
       "read by the seeded plan's auto gate, which tune seeds first; the plan it resolves to joins \
        the identity as its digest, and the staffed start's gate tag carries the launch fill \
        (gh-ocannl-1479)" );
+    ( "model_fill_chains",
+      "read by the seeded plan's auto gate, which tune seeds first; the plan it resolves to joins \
+       the identity as its digest, and the staffed start's gate tag carries the launch fill's ILP \
+       cap (gh-ocannl-1639)" );
     ( "model_transaction_rate",
       "read by the seeded plan's auto gate, which tune seeds first; the plan it resolves to joins \
        the identity as its digest, and the staffed start's gate tag carries the rate \

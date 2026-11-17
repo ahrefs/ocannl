@@ -425,9 +425,28 @@ files.
   favors the uncoalesced `64x64x8/4x4 bgrid` measured 4.5x slow there and its deep tiles need the
   occupancy factor. Not modeled: BK order within one block tile (exact score ties, the walk's
   listing order decides), per-thread register-tile reuse (2x2 vs 4x4 at equal block tile, 1.2x on
-  rog, 1.8x on tuf) and sub-warp blocks (16 threads: 2x on rog) -- left to gh-ocannl-1639's ILP
-  arc. Re-fit with `gh1600_txn_fit.py --staged-rate sweep --listed-staged-rate L` on listings
+  rog, 1.8x on tuf) and sub-warp blocks (16 threads: 2x on rog) -- saturated effects, which
+  gh-ocannl-1639's fill credit (below) cannot reach. Re-fit with `gh1600_txn_fit.py --staged-rate sweep --listed-staged-rate L` on listings
   carrying `stg=`, judged against the cell's `nostg` arm (`gh1253_cells.sh`).
+- **The launch fill can credit per-thread ILP, but no backend advises a cap (gh-ocannl-1639).**
+  `Cost_model.launch_contexts ~is_private` counts each scalar context's independent accumulation
+  chains per thread: the distinct private accumulator cells one step of a reduction
+  read-modify-writes (the blocktile's unrolled `rm*rn` register tile; a one-accumulator reduction
+  is 1). `context_fill` then counts `T*c/L` threads where `c < L = fm_chains`, else `T`. Three
+  things to keep: (1) the credit is NORMALIZED, not `T*c` -- `fill_threads` was fitted on 4x4
+  tiles (16 chains a thread), so any cap up to 16 leaves every calibration kernel's fill, and with
+  it `fill_threads`/`issue_rate`, bitwise; a `T*c` credit at the shipped `t` would call a 16-thread
+  4x4 block a full multiprocessor and silently reinterpret `t`; (2) what the census cannot prove
+  (no carrier loop, a shared or global accumulator, a guard, updates reading each other,
+  elementwise work, copies, transactions, `Tile_mma`) is `None`, the thread-only fill, so the cap
+  debits only proven low-ILP reductions; (3) a plain leaf's serial batch loop is outside the
+  carrier and never credited (gh-1479's fix stands). The fit (rog, gh-1821's window rows,
+  `FILL_CHAINS=L EXPLAIN_ONLY=... gh1253_cells.sh`) moved no pairwise order and no argmin at the
+  five gh-1479 cells for any L <= 12, and L = 16 lowered outproj b8's agreement: the only leaves
+  the cap moves are the under-filled plain ones, far from every argmin, though it fits their
+  2x2/4x4 ratios (mean |log| error 0.54 -> 0.31 at L = 12). So `fill_chains` is `None` on CUDA,
+  HIP and Metal; a cap needs a site where an under-filled one-accumulator candidate competes near
+  the argmin (a small-batch site against the untuned preset). The `noilp` arm is its reference.
 - **Compare a plan and its rivals in ONE kernel decomposition** (gh-ocannl-1477). The ranking score
   sums `max(compute, memory)` per kernel, so a memory-bound kernel run on its own (the seeded plan's
   zero-fill, the default segmentation having no zero fold) is charged in full, while the same writes

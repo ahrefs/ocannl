@@ -1342,6 +1342,19 @@
 # Unset/empty uses the backend's value. Same readers and cache identity as model_cache_capacity.
 #model_fill_threads=
 
+# gh-ocannl-1639: overrides the backend's advisory ILP cap of the launch fill above: the
+# independent accumulation chains a thread must carry to count as a whole thread. A context whose
+# threads each carry c < L chains -- the distinct private accumulator cells one step of its
+# reduction read-modify-writes, a register tile's rm*rn -- counts T*c/L threads in place of T, so a
+# one-accumulator reduction fills less than a register-tiled one at equal threads. Contexts the
+# census counts no chains for (elementwise work, shared or global accumulators) keep the
+# thread-only fill. model_fill_threads was fitted on 4x4 register tiles (16 chains), so any cap up
+# to 16 needs no refit of it or of model_issue_rate. No backend advises a cap yet (gh-ocannl-1639's
+# fit on rog moved no ranking decision). A positive integer; `none` (or 1) is the thread-only
+# fill. Unset/empty uses the backend's value. Same readers and cache identity as
+# model_cache_capacity.
+#model_fill_chains=
+
 # gh-ocannl-1600: overrides the backend's advisory memory-transaction rate of the ranking score, in
 # excess 32-byte sectors per second. Per global access, the sectors the launch block's lanes (.x
 # fastest; its lane groups of simdgroup_width lanes share what L1 serves) touch beyond the compact

@@ -72,6 +72,7 @@ let full =
     device_gather_rate = Some 3e10;
     multiprocessors = Some 64;
     fill_threads = Some 256;
+    fill_chains = Some 8;
     transaction_rate = Some 2e11;
     workgroup_bytes_per_multiprocessor = Some 131072;
     staged_copy_rate = Some 1e12;
@@ -109,6 +110,7 @@ let toggles : (string * (BI.hardware_limits -> BI.hardware_limits)) list =
     ("device_gather_rate", fun l -> { l with device_gather_rate = Some 1. });
     ("multiprocessors", fun l -> { l with multiprocessors = Some 1 });
     ("fill_threads", fun l -> { l with fill_threads = Some 1 });
+    ("fill_chains", fun l -> { l with fill_chains = Some 1 });
     ("transaction_rate", fun l -> { l with transaction_rate = Some 1. });
     ( "workgroup_bytes_per_multiprocessor",
       fun l -> { l with workgroup_bytes_per_multiprocessor = Some 1 } );
@@ -146,7 +148,7 @@ let () =
   p_all ~min:1 "every toggle here names a field of the record" names ~f:(fun f ->
       List.mem all_fields f ~equal:String.equal);
   (* The ranking score's capacity, residency, its cache, issue, DRAM, tile-MMA, device-gather,
-     memory-transaction and staged-copy rates, its launch fill's two constants and its occupancy
+     memory-transaction and staged-copy rates, its launch fill's three constants and its occupancy
      capacity. *)
   p "the Untimed fields are the ranking score's capacities, residency, seven rates and launch fill"
     (List.equal String.equal
@@ -156,6 +158,7 @@ let () =
          "cache_capacity_bytes";
          "device_gather_rate";
          "dram_bandwidth";
+         "fill_chains";
          "fill_threads";
          "issue_rate";
          "max_resident_threads";
@@ -203,6 +206,7 @@ let presets =
         device_gather_rate = Some 2.9e10;
         multiprocessors = Some 70;
         fill_threads = Some 128;
+        fill_chains = Some 8;
         transaction_rate = Some 2e11;
         workgroup_bytes_per_multiprocessor = Some 65536;
         staged_copy_rate = Some 1e12;
@@ -226,6 +230,7 @@ let () =
           device_gather_rate = None;
           multiprocessors = None;
           fill_threads = None;
+          fill_chains = None;
           transaction_rate = None;
           workgroup_bytes_per_multiprocessor = None;
           staged_copy_rate = None;

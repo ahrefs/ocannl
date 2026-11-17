@@ -3118,6 +3118,14 @@ let fill_threads_override =
     (parse_count ~key:"model_fill_threads" ~what:"thread count per multiprocessor"
        (Utils.get_global_arg ~arg_name:"model_fill_threads" ~default:""))
 
+(* gh-ocannl-1639: the launch fill's per-thread ILP cap -- config [model_fill_chains] (a positive
+   integer; [none]: 1, the thread-only fill) -- beats the backend's advisory [fill_chains]. Same
+   readers and class as the rates above. *)
+let fill_chains_override =
+  lazy
+    (parse_count ~key:"model_fill_chains" ~what:"accumulation chain count per thread"
+       (Utils.get_global_arg ~arg_name:"model_fill_chains" ~default:""))
+
 (* gh-ocannl-1600: the occupancy factor's workgroup capacity per multiprocessor (bytes; [none]: no
    occupancy factor, and no coalesced layouts in [model_default]) beats the backend's advisory
    [workgroup_bytes_per_multiprocessor]. Same readers and class as the rates above. *)
@@ -3163,8 +3171,16 @@ let ranking_staged_copy_rate ~limits =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   resolve staged_copy_rate_override u.copy_rate
 
+(* gh-ocannl-1639: the launch fill's ILP cap as resolved, 1 (the thread-only fill) where neither the
+   config nor the backend states one -- read on its own, so a calibration whose fill model does not
+   resolve yet still fits under the cap the score will read. *)
+let ranking_fill_chains ~limits =
+  let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
+  Option.value ~default:1 (resolve fill_chains_override u.chain_cap)
+
 (* The launch fill as resolved: continuous ([fm_tail] off). The score switches the tail on where it
-   prices a staged-copy rate (segments_legs, gh-ocannl-1821). *)
+   prices a staged-copy rate (segments_legs, gh-ocannl-1821). The ILP cap (gh-ocannl-1639) is 1 --
+   the thread-only fill -- unless [fill_chains] resolves. *)
 let ranking_fill_model ~limits : CM.fill_model option =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   match
@@ -3172,7 +3188,13 @@ let ranking_fill_model ~limits : CM.fill_model option =
       resolve fill_threads_override u.saturation_threads )
   with
   | Some fm_multiprocessors, Some fm_fill_threads ->
-      Some { CM.fm_multiprocessors; fm_fill_threads; fm_tail = false }
+      Some
+        {
+          CM.fm_multiprocessors;
+          fm_fill_threads;
+          fm_tail = false;
+          fm_chains = ranking_fill_chains ~limits;
+        }
   | _ -> None
 
 type kernel_legs = {
@@ -3279,7 +3301,10 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
               in
               (* gh-ocannl-1479: the compute nests' own launches, whether or not the cache tiers are
                  on. *)
-              let launch = Option.map fill_model ~f:(fun fm -> (fm, CM.launch_contexts o.LL.llc)) in
+              let launch =
+                Option.map fill_model ~f:(fun fm ->
+                    (fm, CM.launch_contexts ~is_private:(CM.private_in o) o.LL.llc))
+              in
               (* gh-ocannl-1442: tile-MMA work runs on the matrix units only where the backend's own
                  hook accepts it; without the capabilities to ask, all of it is priced as scalar
                  work. gh-ocannl-1495: the per-lane gathers its operands issue from device memory,
@@ -5362,8 +5387,10 @@ let seed_gate_tag = function
         (rate cache_rate) (rate scalar_rate) (rate dram_rate) (set "matrix_rate" matrix_rate)
         (set "gather_rate" gather_rate)
         (Option.value_map fill ~default:""
-           ~f:(fun { Ir.Cost_model.fm_multiprocessors; fm_fill_threads; fm_tail = _ } ->
-             Printf.sprintf " fill=%dx%d" fm_multiprocessors fm_fill_threads))
+           ~f:(fun { Ir.Cost_model.fm_multiprocessors; fm_fill_threads; fm_tail = _; fm_chains } ->
+             if fm_chains > 1 then
+               Printf.sprintf " fill=%dx%dc%d" fm_multiprocessors fm_fill_threads fm_chains
+             else Printf.sprintf " fill=%dx%d" fm_multiprocessors fm_fill_threads))
       (* gh-ocannl-1600: likewise only where set. *)
       ^ set "sector_rate" sector_rate
       ^ Option.value_map wg_capacity ~default:"" ~f:(Printf.sprintf " wg_capacity=%d")

@@ -6,6 +6,9 @@ on CUDA/HIP every swept extent is timed, seeded as one scalar kernel's contracti
 on CUDA/HIP the kernel's operations grow with the reduction extent: true
 where the seeded default does not apply, the sweep refuses rather than time the default: true
 the fill fit recovers the saturating threads and the full-fill rate: true
+a 16-chain sweep fits bitwise as thread-only under every cap up to 16: true
+a cap above the chains the sweep's threads carry is refused: it cannot identify t under it: true
+an uncounted sweep is refused above a cap of 1, and fits at 1: true
 the pre-fill fit over a partially filled launch reads the full-fill rate times its fill: true
 under the fill model the same sweep reads the full-fill rate: true
 the uncapped form fits the capped sweep worse: true

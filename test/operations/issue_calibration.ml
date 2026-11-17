@@ -9,6 +9,9 @@
    refuse rather than time the default's kernel under the sketch's name. No time reaches the
    golden. *)
 
+(* cc-fp-contract: not-executed -- the bitwise claim compares two fill fits computed in OCaml over
+   synthetic sweeps *)
+
 open Base
 open Verdict.Claims
 module Cal = Ocannl.Calibrate
@@ -84,11 +87,17 @@ let () =
    never leaves full fill identifies no saturation, and tile-MMA work or too few points refuse. *)
 let () =
   let np = 70 and t = 128 and rate = 4e12 and latency = 0.01 in
-  let context ~blocks ~threads ~ops ~tile =
-    { Ir.Cost_model.lc_blocks = blocks; lc_threads = threads; lc_tile_mma = tile; lc_ops = ops }
+  let context ?chains ~blocks ~threads ~ops ~tile () =
+    {
+      Ir.Cost_model.lc_blocks = blocks;
+      lc_threads = threads;
+      lc_tile_mma = tile;
+      lc_chains = chains;
+      lc_ops = ops;
+    }
   in
-  let lpoint ?(tile = false) ~blocks ~threads ops =
-    let contexts = [ context ~blocks ~threads ~ops ~tile ] in
+  let lpoint ?(tile = false) ?chains ~blocks ~threads ops =
+    let contexts = [ context ?chains ~blocks ~threads ~ops ~tile () ] in
     let eff = Cal.effective_ops ~multiprocessors:np ~fill_threads:t contexts in
     {
       Cal.lp_geometry = Printf.sprintf "t%d" threads;
@@ -113,6 +122,35 @@ let () =
      (match Cal.fit_fill ~multiprocessors:np sweep with
      | Cal.Fill_fit f -> f.saturation = t && rel label f.rate rate && Float.(f.max_residual < 1e-6)
      | Cal.Fill_unfittable _ -> false));
+  (* gh-ocannl-1639: the ILP cap. The launch sweep's 4x4 tiles carry 16 chains a thread, so under
+     any cap up to 16 the fit is the thread-only one -- [fill_threads] needs no refit -- while a
+     sweep of 4-chain threads generated under a cap of 8 is fitted back to [t] only when the fit
+     reads the cap. *)
+  let chained c =
+    List.map [ 1; 4; 16; 64; 256; 1024 ] ~f:(fun b ->
+        lpoint ~chains:c ~blocks:b ~threads:64 ((1 lsl 31) + (b * 4096)))
+    @ List.map [ 1; 4; 16; 64; 256 ] ~f:(fun b ->
+        lpoint ~chains:c ~blocks:b ~threads:256 ((1 lsl 30) + (b * 8192)))
+  in
+  let same_fit a b =
+    match (a, b) with
+    | Cal.Fill_fit f, Cal.Fill_fit g ->
+        f.saturation = g.saturation && Float.equal f.rate g.rate
+        && Float.equal f.max_residual g.max_residual
+    | _ -> false
+  in
+  p_all ~min:4 "a 16-chain sweep fits bitwise as thread-only under every cap up to 16"
+    [ 1; 2; 8; 16 ] ~f:(fun l ->
+      same_fit
+        (Cal.fit_fill ~fill_chains:l ~multiprocessors:np (chained 16))
+        (Cal.fit_fill ~multiprocessors:np sweep));
+  let refused = function Cal.Fill_unfittable _ -> true | Cal.Fill_fit _ -> false in
+  p "a cap above the chains the sweep's threads carry is refused: it cannot identify t under it"
+    (refused (Cal.fit_fill ~fill_chains:8 ~multiprocessors:np (chained 4))
+    && refused (Cal.fit_fill ~fill_chains:32 ~multiprocessors:np (chained 16)));
+  p "an uncounted sweep is refused above a cap of 1, and fits at 1"
+    (refused (Cal.fit_fill ~fill_chains:2 ~multiprocessors:np sweep)
+    && not (refused (Cal.fit_fill ~fill_chains:1 ~multiprocessors:np sweep)));
   (* The pre-fill fit over a reduction-extent sweep of one partially filled launch (16 blocks of 64
      threads: fill 1024 / 8960) reads the full-fill rate times that fill -- the depressed rate the
      launch fit normalizes. *)
@@ -122,7 +160,7 @@ let () =
         let ops = g * (1 lsl 28) in
         {
           (point ~ops ~ms:(latency +. (Float.of_int ops /. partial_fill /. rate *. 1e3))) with
-          Cal.ip_contexts = [ context ~blocks:16 ~threads:64 ~ops ~tile:false ];
+          Cal.ip_contexts = [ context ~blocks:16 ~threads:64 ~ops ~tile:false () ];
         })
   in
   (let label =
@@ -137,7 +175,13 @@ let () =
    p label
      (match
         Cal.fit_issue_rate
-          ~fill:{ Ir.Cost_model.fm_multiprocessors = np; fm_fill_threads = t; fm_tail = false }
+          ~fill:
+            {
+              Ir.Cost_model.fm_multiprocessors = np;
+              fm_fill_threads = t;
+              fm_tail = false;
+              fm_chains = 1;
+            }
           ksweep
       with
      | Cal.Issue_fit { rate = normalized; _ } -> rel label normalized rate

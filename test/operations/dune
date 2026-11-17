@@ -5449,10 +5449,11 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
- ; ocannl-backend: cc -- Context.cpu selects cc directly; the lowering is hermetic and nothing compiles.
  (name cost_model_fill)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (modules cost_model_fill)
  (libraries base stdio ocannl arrayjit.verdict ll_test)
  (preprocess

@@ -617,6 +617,8 @@ let () =
       (* gh-ocannl-1479: its launch fill's two constants, likewise. *)
       ("model_multiprocessors", "");
       ("model_fill_threads", "");
+      (* gh-ocannl-1639: its ILP cap, likewise. *)
+      ("model_fill_chains", "");
       (* gh-ocannl-1600: its memory-transaction rate, likewise. *)
       ("model_transaction_rate", "");
       ("model_workgroup_bytes_per_multiprocessor", "");

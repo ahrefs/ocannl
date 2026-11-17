@@ -13,7 +13,51 @@ the tile-MMA statement is one tile context of 1 block: true
 accepted tile-MMA work prices at the ceiling times its context's fill: true
 declined tile-MMA work prices at the issue rate times its context's fill: true
 the filled compute leg is never below the roofline's compute leg: true
+the ILP cap resolves without the fill model's other constants, and is 1 where none is stated: true
+a 2x2 register tile's four unrolled accumulators are four chains a thread: true
+a one-accumulator reduction is one chain, a 4x4 tile sixteen: true
+a serial loop over the cells inside the reduction counts its extent: true
+a deeper reduction alone does not change the count: true
+a plain leaf's serial batch loop, outside the reduction, is serial work, not chains: true
+a global (non-private) accumulator counts no chain: true
+four updates of one cell are one chain: true
+accumulators whose updates read each other are no independent chains: true
+a guarded update counts no chain: true
+a repeated target's later update reading another accumulator makes the chains dependent: true
+a guarded update coupling two accumulators makes the chains dependent: true
+two single cells no fixed component tells apart may alias: no chains: true
+an update reading through a scope body is not proven independent: no chains: true
+an update gathering a member node at a runtime index is not proven independent: no chains: true
+an update reading a temporary the reduction step writes is not proven independent: no chains: true
+a member zeroed inside the reduction step carries no chain: true
+a local declared inside the reduction step carries no chain: true
+two carriers sharing an index symbol are counted each on its own body: true
+inner loops whose cells may alias prove no chains: true
+a looped member beside a single cell of its node may overlap it: no chains: true
+elementwise work counts no chain: true
+at the cap, the register tile fills a quarter: bitwise its thread-only fill: true
+its one-accumulator twin fills a sixteenth: true
+the compute legs are each kernel's operations over its fill: 4x the work at 4x the fill: true
+so per operation the register-tiled context ranks strictly above its one-accumulator twin: true
+one block of 4-chain threads still fills only its share: a sixteenth: true
+chains past the cap buy nothing more: true
+two chains under the cap of 4 count half a thread each: true
+at cap 1 every chain count fills as the thread-only fill: true
+unknown chains fill as the thread-only fill at any cap: true
+a context at or past the cap fills bitwise as the thread-only fill at any cap: true
+the one-accumulator kernel scores bitwise as before at cap 1: true
+under the tail, 48 blocks of 64 one-chain threads fill 3/8, of four-chain ones 3/4: true
+equal launch shapes of 4 and 1 chains are two contexts, priced each over its own fill: true
+the mixed kernel's census splits one launch shape in two (1 and uncounted chains): true
+at cap 1 a split launch shape scores bitwise as with no census, where an unmerged sum would not: true
+the chains change no operation count: the contexts still sum to the census: true
+every scheduled blocktile leaf's reduction carries its register tile's tm*tn chains: true
+a 16-chain leaf ranks bitwise as thread-only under a cap of 8: true
+a fewer-chain leaf ranks no lower under a cap of 8: true
+some under-filled fewer-chain leaf ranks strictly higher under a cap of 8: true
+the running backend advises no ILP cap: every leaf ranks bitwise as under the thread-only fill: true
 with the fill constants every plain leaf ranks strictly above its bgrid twin: true
 without them the twins tie, as before the launch fill: true
 every leaf's rank is at least its bound: true
 the best-ranked scalar leaf is a bgrid one: true
+every launch-sweep geometry's scheduled reduction carries 16 chains a thread: true

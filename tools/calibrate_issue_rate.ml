@@ -95,6 +95,12 @@ let () =
         if not (List.is_empty points) then Stdio.printf "# no raw issue rate: %s\n" why;
         None
   in
+  (* gh-ocannl-1639: the ILP cap as the score resolves it -- the sweep cannot identify it (its tiles
+     all carry 16 chains), but the fits read every kernel's fill as the score does. *)
+  let fill_chains = Autotune.ranking_fill_chains ~limits in
+  if fill_chains > 1 then
+    Stdio.printf "# the fill's ILP cap: %d chains a thread (model_fill_chains; not fitted here)\n"
+      fill_chains;
   let fill =
     if not !launch then None
     else
@@ -109,7 +115,7 @@ let () =
           None
       | Some p -> (
           let lpoints = Cal.launch_sweep ?sizes:!sizes ?repeats:!repeats ctx in
-          match Cal.fit_fill ~multiprocessors:p lpoints with
+          match Cal.fit_fill ~fill_chains ~multiprocessors:p lpoints with
           | Cal.Fill_unfittable why ->
               Stdio.printf "# launch sweep (%d points): no fill fit: %s\n" (List.length lpoints) why;
               None
@@ -118,7 +124,8 @@ let () =
                 let ops =
                   Float.of_int (List.sum (module Int) ctxs ~f:(fun c -> c.Ir.Cost_model.lc_ops))
                 in
-                ops /. Cal.effective_ops ~multiprocessors:p ~fill_threads:f.saturation ctxs
+                ops
+                /. Cal.effective_ops ~fill_chains ~multiprocessors:p ~fill_threads:f.saturation ctxs
               in
               Stdio.printf "# launch sweep, %d multiprocessors\n" p;
               Stdio.printf "# %14s %6s %8s %14s %10s %8s %12s %12s\n" "geometry" "size" "k"
@@ -128,7 +135,7 @@ let () =
                     List.sum (module Int) lp.Cal.lp_contexts ~f:(fun c -> c.Ir.Cost_model.lc_ops)
                   in
                   let pred =
-                    Cal.effective_ops ~multiprocessors:p ~fill_threads:f.saturation
+                    Cal.effective_ops ~fill_chains ~multiprocessors:p ~fill_threads:f.saturation
                       lp.Cal.lp_contexts
                     /. f.rate *. 1e3
                   in
@@ -156,7 +163,7 @@ let () =
                   if not (List.is_empty ip.Cal.ip_contexts) then
                     Stdio.printf "# k-sweep k=%d: measured %.4f ms, fill %.4f, predicted %.4f ms\n"
                       ip.Cal.ip_k ip.Cal.ip_ms (fill_of ip.Cal.ip_contexts)
-                      (Cal.effective_ops ~multiprocessors:p ~fill_threads:f.saturation
+                      (Cal.effective_ops ~fill_chains ~multiprocessors:p ~fill_threads:f.saturation
                          ip.Cal.ip_contexts
                       /. f.rate *. 1e3));
               Some (f.rate, f.saturation, f.cores))
@@ -174,6 +181,7 @@ let () =
                 Ir.Cost_model.fm_multiprocessors = cores;
                 fm_fill_threads = saturation;
                 fm_tail = false;
+                fm_chains = fill_chains;
               }
             points
         with
