@@ -5,9 +5,11 @@
 ; compiled only the stub. Here every arm is copied under the module name its executable gives it
 ; and compiled, one library per executable, with that executable's libraries and preprocessing --
 ; the vendor packages replaced by their stand-ins, and the vendor backends by the `typecheck/`
-; copies one directory over. An executable whose arm reaches no vendor module at all (the
-; `test/operations` arms, which drive the backend through `Context`) needs no stand-in: its copy
-; compiles against `ocannl` alone. Nothing links these libraries.
+; copies one directory over; `test/operations/vendor_stub_arms_scan` refuses a library or ppx a
+; library here declares and its executable does not (gh-ocannl-2288), so a package stand-in goes
+; only where the executable names the package itself. An executable whose arm reaches no vendor
+; module at all (the `test/operations` arms, which drive the backend through `Context`) needs no
+; stand-in: its copy compiles against `ocannl` alone. Nothing links these libraries.
 ;
 ; A library compiles an arm slightly more permissively than its executable: a top-level value no
 ; module uses is an error in an executable (dune gives its modules an empty interface) and silent
@@ -169,11 +171,8 @@
   base
   stdio
   arrayjit.ir
-  cudajit_stub
   cuda_backend_stub_check
-  hipjit_stub
   hip_backend_stub_check
-  metal_stub
   metal_backend_stub_check))
 
 ; benchmarks/runners/ocannl: bench_cuda_select uses the CUDA backend's compile scope.

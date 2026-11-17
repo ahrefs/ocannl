@@ -1,7 +1,9 @@
 ; `arrayjit/lib/hip_backend.ml` compiled against the `hipjit` stand-in one directory up
-; (`arrayjit/vendor_stubs/dune` describes the arrangement). The stanza mirrors the `hip_backend`
-; library in `arrayjit/lib/dune` -- same preprocessing, same `arrayjit` libraries -- with
-; `hipjit_stub` in place of `hipjit.hip` and `hipjit.hiprtc`.
+; (`arrayjit/vendor_stubs/dune` describes the arrangement). One library per genuine stanza: the
+; first mirrors the `hip_backend` library in `arrayjit/lib/dune` -- same preprocessing, same
+; libraries, with `hipjit_stub` in place of `hipjit.hip` and `hipjit.hiprtc` -- and the second
+; compiles the `select` arm `arrayjit.context` compiles. `test/operations/vendor_stub_arms_scan`
+; refuses a library here that the genuine stanza does not declare (gh-ocannl-2288).
 
 (copy_files#
  (files ../../../lib/hip_backend.{ml,mli}))
@@ -19,7 +21,7 @@
 (library
  (name hip_backend_stub_check)
  (wrapped false)
- (modules hip_backend hip_backend_impl)
+ (modules hip_backend)
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL_HIP_BACKEND))
  (libraries
@@ -42,3 +44,12 @@
    ppx_string
    ppx_variants_conv
    ppx_minidebug)))
+
+; The arm on its own, as `arrayjit.context` compiles it: with that library's `ir`, and the backend
+; its `select` condition names.
+
+(library
+ (name hip_backend_impl_arm)
+ (wrapped false)
+ (modules hip_backend_impl)
+ (libraries ir hip_backend_stub_check))

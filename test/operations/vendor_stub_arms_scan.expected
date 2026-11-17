@@ -1,7 +1,7 @@
 every vendor-gated select arm the census finds is compiled by a stand-in copy: true
 
 Vendor packages with a stand-in: cudajit, hipjit, metal
-Vendor backend libraries: arrayjit.cuda_backend, arrayjit.hip_backend, arrayjit.metal_backend, cuda_backend, hip_backend, metal_backend
+Vendor backend libraries: arrayjit.cuda_backend, arrayjit.hip_backend, arrayjit.metal_backend, arrayjit.metal_math_api_runtime, cuda_backend, hip_backend, metal_backend, metal_math_api_runtime
 
 Vendor-gated select arms, each with the stand-in copy that compiles it:
   arrayjit/lib/cuda_backend_impl.cudajit.ml -> arrayjit/vendor_stubs/cudajit/typecheck/cuda_backend_impl.ml
