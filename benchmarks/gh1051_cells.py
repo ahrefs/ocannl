@@ -1,7 +1,8 @@
 """Shared cell parsing, validation and tables for the gh-ocannl-1051 drivers.
 
-Used by gh1051_bf16_ab.sh (mode "ab") and gh1051_boundary_split.sh (mode "split"), so that the
-two cannot drift apart on what a valid cell is. The ab driver's cells are bin_cells.py runs, one
+Used by gh1051_bf16_ab.sh (modes "ab" and "untuned", on HIP and, since gh-ocannl-2150, Metal),
+gh2195_f16_ab.sh (the same two modes at `half`) and gh1051_boundary_split.sh (mode "split"), so
+that they cannot drift apart on what a valid cell is. The ab driver's cells are bin_cells.py runs, one
 per size (`load_runs`: a cell counts only when its run found it clean -- exit 0, its resolved
 configuration its command line, no failed output check); the split driver keeps its own cell logs
 (`load`), since the two revisions it measures predate the configuration stream.
@@ -71,6 +72,37 @@ same, at `half` in place of `bfloat16`, except where bf16's reasons do not carry
   accept, so the bench reports its cell differences as rounding (a NOTE, exit 0); a cell that
   exits nonzero is a problem here exactly as in bf16's ab mode (bin_cells' clean-cell rule), and
   the WRONG RESULT exemption above belongs to the split mode's pre-78d664c1 logs alone.
+
+PAIRED RATIOS (mode "ab"). The table's wide/narrow columns, treatment and f32 control alike, are
+paired round by round -- each round's wide and narrow cells of one size and precision ran in one
+pass of the mirrored rotation -- as the median and range of the per-round ratios; the control's
+range is the session's drift a treatment ratio is read against. Before gh-ocannl-2150 the columns
+divided the arms' medians, which hid that range. Reported beside the table, per size and precision:
+each arm's fastest variant by median and the paired ratio of the per-round fastest-variant times --
+what a tuner choosing among these five variants pays for the wide arm, which differs from any one
+variant's ratio when the arms' fastest variants differ (on Metal the narrow arm's is a tile and the
+wide arm's the serial regtile, gh-ocannl-2150).
+
+METAL (gh-ocannl-2150, the bf16_arithmetic arms on Apple GPUs). The checks above carry over, with
+the narrow arm's reasons changed but not its checks: Metal's narrow tensorized arm (the
+`simdgroup_bfloat8x8` accumulator) sums each 8-deep k block in f32 and rounds to bf16 once per block
+(docs/agent-notes/backend-precision-and-simd.md, gh-ocannl-2029), so it is MORE accurate than the
+narrow serial legs' per-step bfloat FMA rather than gross as gfx11's is; it is still bounded only
+below (non-degenerate) and its error reported, since no structural bound separates a k-blocked
+narrowing from a corrupt kernel any better here. TENSORIZED reads Metal's census the same way
+(`Mma_intrinsics`, no scalar fallback).
+
+UNTUNED (mode "untuned RUN LABEL FIXTURE PREC"): the drivers' training row, one bin_cells
+`--reader record` run of bench_gpt's untuned step (no search) on a recorded fixture, four arms
+`<flag>-<PREC>` and `<flag>-single`, metric step_ms.p50, its wide/narrow ratio paired by round.
+Moved here from gh2195_f16_ab.sh's inline summary so the bf16 driver reads the row the same way.
+Its checks: every planned cell ran and is clean, each cell's result line reports the storage
+precision its arm asked for, and each arm's seeding census (the `seeded_default:` lines
+autotune_log prints) is the same in every round. Whether the two treatment arms' censuses differ is
+REPORTED, as is each arm's shipped tensorization (the result line's `shipped_mma`), which says
+whether the row reaches a tensor-unit arm at all: identical logged censuses mean the treatment does not reach the seeded untuned plan (the
+row is then a second control); a backend whose untuned compile logs no census (Metal) cannot be
+read that way, and the bf16 driver proves reach from the generated sources instead.
 """
 import glob
 import os
@@ -139,9 +171,10 @@ def rel(a, b):
     return max(abs(x - y) / max(abs(y), 1e-300) for x, y in zip(a, b))
 
 
-def add_cell(cells, problems, name, key, parsed):
+def add_cell(cells, problems, name, key, parsed, rounds=None, round_=None):
     """One cell's timings into `cells`, keyed (size, arm, prec, variant); a missing variant or a
-    tensorized one that did not tensorize is a problem of `name`."""
+    tensorized one that did not tensorize is a problem of `name`. With `rounds` (a dict) and the
+    cell's `round_`, each timing also goes to `rounds[key][round_]`, which the ab table pairs."""
     for v in VARIANTS:
         if v not in parsed:
             problems.append(f"{name}: MISSING timing for {v}")
@@ -151,9 +184,10 @@ def add_cell(cells, problems, name, key, parsed):
             "Mma_intrinsics" not in census or "fallback" in census
         ):
             problems.append(f"{name}: {v} did not tensorize [{census}]")
-        cells.setdefault(tuple(key[k] for k in ("size", "arm", "prec")) + (v,), []).append(
-            parsed[v]
-        )
+        k = tuple(key[k] for k in ("size", "arm", "prec")) + (v,)
+        cells.setdefault(k, []).append(parsed[v])
+        if rounds is not None:
+            rounds.setdefault(k, {})[round_] = parsed[v][0]
 
 
 def load(out, pattern, key_of, layouts=(bench_output.TIMING_CENSUSES,)):
@@ -184,9 +218,10 @@ def load_runs(out, prec="bfloat16"):
     """The ab driver's cells: one bin_cells run per size under `out` (`n<size>/`), each cell named
     by its arm `<flag>-<prec>` (the bf16_arithmetic or fp16_arithmetic value). A cell its run did
     not find clean, a run missing a planned cell or failing a run-level check, an unnamed arm (one
-    at another treatment precision included) and a stray run directory are problems."""
+    at another treatment precision included) and a stray run directory are problems. Returns the
+    cells, the problems, and each cell's timing per round (`add_cell`'s `rounds`)."""
     arm_names = arm_re(prec)
-    cells, problems = {}, []
+    cells, problems, rounds = {}, [], {}
     for run in sorted(glob.glob(os.path.join(out, "n*"))):
         name = os.path.basename(run)
         m = re.fullmatch(r"n(\d+)", name)
@@ -224,10 +259,10 @@ def load_runs(out, prec="bfloat16"):
                 problems.append(f"{cell}: {display_value(str(e))}")
                 continue
             add_cell(cells, problems, cell, {"size": size, "arm": arm.group(1),
-                                             "prec": arm.group(2)}, parsed)
+                                             "prec": arm.group(2)}, parsed, rounds, r["round"])
     if not cells and not problems:
         problems.append("no bin_cells run under the output directory")
-    return cells, problems
+    return cells, problems, rounds
 
 
 def checksum_of(cells, key, problems):
@@ -248,10 +283,22 @@ def med(xs):
     return statistics.median(x for x, _, _ in xs)
 
 
+def paired(wide, narrow):
+    """The wide/narrow ratio paired round by round -- each round's two cells of one size and
+    precision ran in the same pass of the mirrored rotation -- as `median (min-max)`, over the rounds
+    both arms have; "missing" when they share none. Rounds are paired rather than medians divided
+    because a round's drift moves both of its cells (the A/B protocol)."""
+    common = sorted(set(wide) & set(narrow))
+    if not common:
+        return "missing"
+    ratios = [wide[r] / narrow[r] for r in common]
+    return f"{statistics.median(ratios):.3f} ({min(ratios):.3f}-{max(ratios):.3f})"
+
+
 def ab(out, label, prec="bfloat16"):
     """Mode "ab" at treatment precision `prec` (`bfloat16`, or `half`: see HALF above)."""
     half = prec == "half"
-    cells, problems = load_runs(out, prec)
+    cells, problems, rounds = load_runs(out, prec)
     sizes = sorted({k[0] for k in cells})
     for size in sizes:
         chk = {}
@@ -304,6 +351,19 @@ def ab(out, label, prec="bfloat16"):
                          "; others: " + ", ".join(f"{', '.join(vs)} at {rel(c, exact):.3g}"
                                                   for c, vs in groups.items() if vs is not shared))
                       + " (reported, not checked)")
+    for size in sizes:
+        for p, what in ((prec, "treatment"), ("single", "f32 control")):
+            best = {}
+            for arm in ("false", "true"):
+                per = [rounds.get((size, arm, p, v), {}) for v in VARIANTS]
+                common = set.intersection(*(set(x) for x in per)) if all(per) else set()
+                best[arm] = {r: min(x[r] for x in per) for r in common}
+                best[arm + "_v"] = min(VARIANTS, key=lambda v, arm=arm: statistics.median(
+                    rounds.get((size, arm, p, v), {}).values() or [float("inf")]))
+            print(f"n={size} {what}: fastest variant narrow {best['true_v']}, wide "
+                  f"{best['false_v']}; per-round fastest-variant wide/narrow "
+                  f"{paired(best['false'], best['true'])} (what a tuner choosing among these "
+                  "variants pays)")
     shown, rows = display_value(label), []
     for size in sizes:
         for v in VARIANTS:
@@ -315,13 +375,109 @@ def ab(out, label, prec="bfloat16"):
                 continue
             exact = cw[0][1]
             err = f"{rel(a[0][1], exact):.2g} / {rel(w[0][1], exact):.2g}"
-            rows.append((shown, str(size), v, fmt(a), fmt(w), f"{med(w) / med(a):.3f}",
-                         f"{med(cw) / med(ca):.3f}", err, w[0][2]))
+            def per_round(arm, p):
+                return rounds.get((size, arm, p, v), {})
+
+            rows.append((shown, str(size), v, fmt(a), fmt(w),
+                         paired(per_round("false", prec), per_round("true", prec)),
+                         paired(per_round("false", "single"), per_round("true", "single")),
+                         err, w[0][2]))
     print()
     print("\n".join(table_lines(
-        ["memory", "n", "variant", "narrow (true) ms", "wide (false) ms", "wide/narrow",
-         "f32 control wide/narrow", "chk err narrow / wide", "census (wide)"], rows)))
+        ["memory", "n", "variant", "narrow (true) ms", "wide (false) ms",
+         "paired wide/narrow (range)", "f32 control paired wide/narrow (range)",
+         "chk err narrow / wide", "census (wide)"], rows)))
     return problems
+
+
+# The storage-precision labels bench_gpt's result line prints (Bench_harness.precision_label) for
+# each treatment precision and the f32 control.
+STORAGE_LABEL = {"bfloat16": "bf16", "half": "f16", "single": "f32"}
+
+
+def untuned(run, label, fixture, prec):
+    """Mode "untuned": the untuned-default training row, one bin_cells `--reader record` run of
+    bench_gpt (see UNTUNED above) at treatment precision `prec`; prints its table and returns the
+    problems."""
+    want = {prec: STORAGE_LABEL[prec], "single": "f32"}
+    problems = []
+    try:
+        manifest, records = cell_runner.read_run(run)
+    except (OSError, ValueError) as e:
+        return [f"untuned: no complete bin_cells run ({display_value(str(e))})"]
+    planned = sum(len(order) for order in manifest["orders"])
+    if len(records) != planned:
+        problems.append(f"{len(records)} of {planned} planned cells ran")
+    problems += [display_value(p) for p in cell_runner.run_level_problems(manifest, records)]
+    # (arm, prec) -> {round: step p50 ms}; -> {census tuple}; -> {shipped tensorization}
+    ms, census, shipped = {}, {}, {}
+    for r in records:
+        cell = f"cell {r['cell']} ({display_value(r['arm'])})"
+        flag, _, p = r["arm"].partition("-")
+        if flag not in ("false", "true") or p not in want:
+            problems.append(f"{cell}: not an arm this driver can name")
+            continue
+        if not r["ok"]:
+            problems.append(f"{cell}: {display_value('; '.join(r['problems']))}")
+            continue
+        try:
+            rec = bench_output.result_record(cell_runner.cell_stream(run, r, "stdout"))
+            got = bench_output.field(rec, "storage_precision")
+            step = bench_output.field(rec, "step_ms.p50")
+        except (KeyError, ValueError, TypeError) as e:
+            problems.append(f"{cell}: unreadable result line ({display_value(str(e))})")
+            continue
+        if got != want[p]:
+            problems.append(f"{cell}: ran at storage precision {display_value(str(got))}, "
+                            f"not {want[p]}")
+        ms.setdefault((flag, p), {})[r["round"]] = step
+        try:
+            shipped.setdefault((flag, p), set()).add(
+                str(bench_output.field(rec, "shipped_mma.tensorization")))
+        except (KeyError, ValueError, TypeError):
+            shipped.setdefault((flag, p), set()).add("not reported")
+        _, lines = bench_output.seeded_default(cell_runner.cell_stream(run, r, "stderr"))
+        census.setdefault((flag, p), set()).add(tuple(lines))
+    for key, seen in sorted(census.items()):
+        if len(seen) != 1:
+            problems.append(f"{'-'.join(key)}: the seeding census differs across rounds "
+                            f"({len(seen)} distinct)")
+    for flag in ("false", "true"):
+        for lines in sorted(census.get((flag, prec), set())):
+            print(log_line(f"untuned {flag}-{prec} census: "
+                           f"{display_value(' | '.join(lines)) if lines else 'none logged'}"))
+    for key, seen in sorted(shipped.items()):
+        print(log_line(f"untuned {'-'.join(key)} shipped tensorization: "
+                       f"{display_value(', '.join(sorted(seen)))}"))
+    wide, narrow = census.get(("false", prec)), census.get(("true", prec))
+    if wide and narrow and len(wide) == len(narrow) == 1:
+        if wide == narrow == {()}:
+            print("untuned treatment reach: no seeding census logged in either arm (the seeded "
+                  "untuned plan does not run here), so the census cannot tell; the driver's source "
+                  "proof, where it ran one, can")
+        else:
+            print(f"untuned treatment reach: the two {STORAGE_LABEL[prec]} arms' seeding censuses "
+                  + ("are IDENTICAL -- the treatment does not reach this workload's untuned plan; "
+                     f"the {STORAGE_LABEL[prec]} row is a second control" if wide == narrow
+                     else "differ"))
+    rows, shown = [], display_value(label)
+    for p in (prec, "single"):
+        w, n = ms.get(("false", p), {}), ms.get(("true", p), {})
+        common = sorted(set(w) & set(n))
+        if not common:
+            rows.append((shown, display_value(fixture), want[p], "missing", "missing", "", ""))
+            continue
+        ratios = [w[k] / n[k] for k in common]
+        rows.append((shown, display_value(fixture), want[p],
+                     f"{statistics.median(n.values()):.3f}", f"{statistics.median(w.values()):.3f}",
+                     f"{statistics.median(ratios):.3f} ({min(ratios):.3f}-{max(ratios):.3f})",
+                     f"{sum(x > 1 for x in ratios)} of {len(ratios)}"))
+    print()
+    print("\n".join(table_lines(
+        ["memory", "untuned default (bench_gpt)", "prec", "narrow (true) step p50 ms",
+         "wide (false) step p50 ms", "paired wide/narrow (range)", "rounds wide slower"], rows)))
+    print(f"(paired sign tests and parity losses: {display_value(run)}/report.md)")
+    return [f"untuned: {p}" for p in problems]
 
 
 def split(out, label):
@@ -362,6 +518,14 @@ def split(out, label):
 if __name__ == "__main__":
     # ab OUT LABEL [PREC]: PREC is the treatment precision, bfloat16 (the default) or half.
     mode, out, label = sys.argv[1], sys.argv[2], sys.argv[3]
+    if mode == "untuned":
+        # untuned RUN LABEL FIXTURE PREC: one bin_cells run, no checksums to compare.
+        if len(sys.argv) != 6 or sys.argv[5] not in NARROW_PRECS:
+            sys.exit(f"usage: gh1051_cells.py untuned RUN LABEL FIXTURE {'|'.join(NARROW_PRECS)}")
+        problems = untuned(out, label, sys.argv[4], sys.argv[5])
+        for p in problems:
+            print(log_line(f"INVALID: {p}"))
+        sys.exit(1 if problems else 0)
     if mode == "ab":
         prec = sys.argv[4] if len(sys.argv) > 4 else "bfloat16"
         if prec not in NARROW_PRECS or len(sys.argv) > 5:

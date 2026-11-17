@@ -907,11 +907,14 @@ single-threaded segments that sum to the serial step
   git plumbing, touching no branch, and hands ab.py the two commits; `gh1180_tie_ab.sh` runs one
   bin_cells run per case (two geometries of one build) and keeps only its census and header checks.
   Every driver runs its cells on this machinery (gh-ocannl-1607). Those whose cells are a design of
-  arms are bin_cells runs: `gh1051_bf16_ab.sh` (per size, four arms -- the two bf16_arithmetic
-  arms at bf16 and at the f32 control -- its drift control's source proof run as single cells), its
+  arms are bin_cells runs: `gh1051_bf16_ab.sh` (the bf16_arithmetic arms on HIP or Metal,
+  gh-ocannl-2150; per size, four arms -- the two arms at bf16 and at the f32 control -- its source
+  proofs run as single cells: the f32 control identical across the arms, the bf16 sources different,
+  and which arm `auto` matches; plus an optional training row, bench_gpt's untuned step on a
+  recorded fixture under `--reader record`, source-proven the same way), its
   f16 twin `gh2195_f16_ab.sh` (the fp16_arithmetic arms on CUDA or HIP, validated by the same
-  `gh1051_cells.py` at `half`, plus an optional untuned-default row: bench_gpt's untuned step under
-  `--reader record`) and `gh1253_flip_cells.sh` (per fixture, the two seeding gates over `--reader record`, its census read
+  `gh1051_cells.py` at `half`, plus an optional untuned-default row read by that file's `untuned`
+  mode, which the bf16 driver's training row shares) and `gh1253_flip_cells.sh` (per fixture, the two seeding gates over `--reader record`, its census read
   back from each cell's stderr). Those whose cells are a sequence -- a calibration pipeline whose
   fits feed later cells (`gh1253_cells.sh`), a search then two replays of its cache
   (`gh1557_cells.sh`), a dump then a search (`gh1529_nvrtc_cost.sh`), legs that are whole

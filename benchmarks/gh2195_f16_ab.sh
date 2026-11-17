@@ -47,10 +47,11 @@
 # gradients, f32 masters and loss head, dynamic loss scaling), one bin_cells --reader record run of
 # the same four arms (<arm>-half at BENCH_PRECISION=f16, <arm>-single at f32), metric
 # step_ms.p50. The fixture loads behind the box gate, so the row needs --box (or
-# --skip-box-check). Its validation is the summary below: every cell clean, each cell's result line
-# reporting the storage precision its arm asked for, and each arm's seeding census (the
-# `seeded_default:` line autotune_log prints) the same in every round; whether the two f16 arms'
-# censuses differ is REPORTED -- identical censuses mean the treatment does not reach this
+# --skip-box-check). Its validation is gh1051_cells.py's mode "untuned" (shared with
+# gh1051_bf16_ab.sh's training row): every cell clean, each cell's result line reporting the
+# storage precision its arm asked for, and each arm's seeding census (the `seeded_default:` line
+# autotune_log prints) the same in every round; whether the two f16 arms' censuses differ is
+# REPORTED -- identical censuses mean the treatment does not reach this
 # workload's untuned plan and the row is a second control, not a failure. The f32 arms are its drift
 # control, timed but not source-proven (the proof below covers schedule_bench's kernels).
 #
@@ -207,79 +208,6 @@ python3 "$HERE/bin_cells.py" --exe "$GPT" --backend "$BACKEND" --out "$UNT" ${GA
 rc=$?
 [ "$rc" -eq 125 ] && { echo "untuned: a process outlived its cleanup; stopping"; exit 125; }
 [ "$rc" -eq 0 ] || { echo "untuned: bin_cells exited $rc (see $UNT/report.md)"; FAIL=1; }
-python3 - "$HERE" "$UNT" "$LABEL" "$(basename "$FIXTURE" .safetensors)" <<'EOF' || FAIL=1
-import statistics, sys
-sys.path.insert(0, sys.argv[1])
-import bench_output
-import cells
-from display_safe import display_value, log_line, table_lines
-
-run, label, fixture = sys.argv[2], sys.argv[3], sys.argv[4]
-problems = []
-try:
-    manifest, records = cells.read_run(run)
-except (OSError, ValueError) as e:
-    print(log_line(f"INVALID: untuned: no complete bin_cells run ({display_value(str(e))})"))
-    sys.exit(1)
-planned = sum(len(order) for order in manifest["orders"])
-if len(records) != planned:
-    problems.append(f"{len(records)} of {planned} planned cells ran")
-problems += [display_value(p) for p in cells.run_level_problems(manifest, records)]
-WANT = {"half": "f16", "single": "f32"}
-ms, census = {}, {}  # (arm, prec) -> {round: step p50 ms}; -> {census tuple}
-for r in records:
-    cell = f"cell {r['cell']} ({display_value(r['arm'])})"
-    flag, _, prec = r["arm"].partition("-")
-    if flag not in ("false", "true") or prec not in WANT:
-        problems.append(f"{cell}: not an arm this driver can name")
-        continue
-    if not r["ok"]:
-        problems.append(f"{cell}: {display_value('; '.join(r['problems']))}")
-        continue
-    try:
-        rec = bench_output.result_record(cells.cell_stream(run, r, "stdout"))
-        got = bench_output.field(rec, "storage_precision")
-        step = bench_output.field(rec, "step_ms.p50")
-    except (KeyError, ValueError, TypeError) as e:
-        problems.append(f"{cell}: unreadable result line ({display_value(str(e))})")
-        continue
-    if got != WANT[prec]:
-        problems.append(f"{cell}: ran at storage precision {display_value(str(got))}, not {WANT[prec]}")
-    ms.setdefault((flag, prec), {})[r["round"]] = step
-    _, lines = bench_output.seeded_default(cells.cell_stream(run, r, "stderr"))
-    census.setdefault((flag, prec), set()).add(tuple(lines))
-for key, seen in sorted(census.items()):
-    if len(seen) != 1:
-        problems.append(f"{'-'.join(key)}: the seeding census differs across rounds ({len(seen)} distinct)")
-for flag in ("false", "true"):
-    seen = census.get((flag, "half"), set())
-    for lines in sorted(seen):
-        print(log_line(f"untuned {flag}-half census: "
-                       f"{display_value(' | '.join(lines)) if lines else 'none logged'}"))
-wide, narrow = census.get(("false", "half")), census.get(("true", "half"))
-if wide and narrow and len(wide) == len(narrow) == 1:
-    print("untuned treatment reach: the two f16 arms' seeding censuses "
-          + ("are IDENTICAL -- the treatment does not reach this workload's untuned plan; the f16 "
-             "row is a second control" if wide == narrow else "differ"))
-rows, shown = [], display_value(label)
-for prec in ("half", "single"):
-    w, n = ms.get(("false", prec), {}), ms.get(("true", prec), {})
-    rounds = sorted(set(w) & set(n))
-    if not rounds:
-        rows.append((shown, display_value(fixture), WANT[prec], "missing", "missing", "", ""))
-        continue
-    ratios = [w[k] / n[k] for k in rounds]
-    rows.append((shown, display_value(fixture), WANT[prec],
-                 f"{statistics.median(n.values()):.3f}", f"{statistics.median(w.values()):.3f}",
-                 f"{statistics.median(ratios):.3f} ({min(ratios):.3f}-{max(ratios):.3f})",
-                 f"{sum(x > 1 for x in ratios)} of {len(ratios)}"))
-print()
-print("\n".join(table_lines(
-    ["memory", "untuned default (bench_gpt)", "prec", "narrow (true) step p50 ms",
-     "wide (false) step p50 ms", "paired wide/narrow (range)", "rounds wide slower"], rows)))
-print(f"(paired sign tests and parity losses: {display_value(run)}/report.md)")
-for p in problems:
-    print(log_line(f"INVALID: untuned: {p}"))
-sys.exit(1 if problems else 0)
-EOF
+python3 "$HERE/gh1051_cells.py" untuned "$UNT" "$LABEL" "$(basename "$FIXTURE" .safetensors)" half ||
+  FAIL=1
 exit $FAIL
