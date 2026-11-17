@@ -772,7 +772,7 @@ esac
   *"promotion diffs present"*) nodiff_detail="promotion offered without a diff" ;;
 esac
 [ -n "$nodiff_detail" ] || case $argv_out in
-  *"fingerprint:"*'File "fixture/surjectivity/dune", lines 197-217'*) ;;
+  *"fingerprint:"*'File "fixture/surjection/dune", lines 197-217'*) ;;
   *) nodiff_detail="the stanza's location is not fingerprinted" ;;
 esac
 if [ -z "$nodiff_detail" ]; then
@@ -1154,8 +1154,8 @@ def sexp(x):
     return b'(' + b''.join(sexp(e) if isinstance(e, list) else atom(e) for e in x) + b')'
 out = [sexp(['config', 'init', str(T0), ['build_dir', build]])]
 for pid, start, dur, prog, target in [
-        (11, 1, 21.5, 'fsm_transformer.exe', 'test/training/fsm_transformer.actual'),
-        (12, 2, 6.72, 'env_var_deps.exe', 'test/operations/env_var_deps.actual'),
+        (11, 1, 21.5, 'fixture_trainer.exe', 'test/training/fixture_trainer.actual'),
+        (12, 2, 6.72, 'fixture_scan.exe', 'test/operations/fixture_scan.actual'),
         (13, 3, 1.96, 'small.exe', 'test/operations/small.actual'),
         (14, 4, 3.25, 'ocamlopt.opt', 'arrayjit/lib/x.cmx'),
         (15, 5, 5.43, 'sh', 'test/operations/sh.actual'),
@@ -1175,9 +1175,9 @@ PY
       f && /^  / { if ($1 ~ /^[0-9]+\.[0-9][0-9]$/) print $1, $2, $3; next }
       f { exit }'
   }
-  slow_want='21.50 0 fsm_transformer.exe
+  slow_want='21.50 0 fixture_trainer.exe
 12.50 open hung_probe.exe
-6.72 0 env_var_deps.exe
+6.72 0 fixture_scan.exe
 5.43 0 sh
 3.25 0 ocamlopt.opt'
   slow_detail=
@@ -1717,7 +1717,7 @@ synthetic_trace "$TMP/bf-broken.csexp" "$bf_build" \
   'ocamlopt.opt|0|t/good.exe' 'good.exe|0|t/good.exe.output' 'red.exe|1|@t/runtest-red'
 synthetic_trace "$TMP/bf-red.csexp" "$bf_build" \
   'ocamlopt.opt|0|t/bad.exe' 'red.exe|1|@t/runtest-red' 'bad.exe|3|t/bad.exe.output' \
-  'gen.exe|1|t/generated.ml' 'ocamlopt.opt|open|t/.slow.eobjs/native/dune__exe__Slow.cmx'
+  'gen.exe|1|t/gen_out.ml' 'ocamlopt.opt|open|t/.slow.eobjs/native/dune__exe__Slow.cmx'
 # What an earlier run left: bad's output, which the broken build never rewrote,
 # and good's, which this run's trace says it wrote.
 printf 'earlier\n' >"$bf_build/default/t/bad.exe.output"

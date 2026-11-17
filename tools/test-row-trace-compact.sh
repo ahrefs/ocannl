@@ -6,7 +6,9 @@
 # a copy of the tool with that guard removed.
 #
 # The records are spelled as real traces of test/operations/batch_norm_closure spell them, wrapping
-# and scope edges included. Needs python3; a host without it skips every leg.
+# and scope edges included, but at a synthetic source location (`fixture/row_solver.ml`), so an
+# edit of the real solver does not select this harness (gh-ocannl-2292). Needs python3; a host
+# without it skips every leg.
 # Usage: tools/test-row-trace-compact.sh [--keep] [--only REGEX]
 set -u
 . "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
@@ -20,17 +22,17 @@ SRC=$HERE/row-trace-compact.py
 P='debug '
 # ineq STAGE RES OPND: one call, RES and OPND a row's fields before its `prov`.
 ineq() {
-  printf '  debug solve_row_ineq begin "tensor/row.ml":4164:31: 12.4ms / 12337791ns\n'
+  printf '  debug solve_row_ineq begin "fixture/row_solver.ml":4164:31: 12.4ms / 12337791ns\n'
   printf '   %sstage = %s\n' "$P" "$1"
   printf '   %sres = (%s\n (prov (((sh_id 81) (kind Batch)))))\n' "$P" "$2"
   printf '   %sopnd = (%s\n (prov (((sh_id 80) (kind Batch)))))\n' "$P" "$3"
-  printf '   debug res_dims_l begin "tensor/row.ml":4172:6: 12.4ms / 12352666ns\n'
+  printf '   debug res_dims_l begin "fixture/row_solver.ml":4172:6: 12.4ms / 12352666ns\n'
   printf '    %sres_dims_l = 0\n' "$P"
   printf '   12.4ms / 12361916ns - debug res_dims_l end\n'
   printf '  12.4ms / 12380958ns - debug solve_row_ineq end\n'
 }
 templ() { # V
-  printf '   debug templ_v begin "tensor/row.ml":4411:10: 12.7ms / 12696833ns\n'
+  printf '   debug templ_v begin "fixture/row_solver.ml":4411:10: 12.7ms / 12696833ns\n'
   printf '    %stempl_v = (Row_var %s)\n' "$P" "$1"
   printf '   12.8ms / 12705791ns - debug templ_v end\n'
 }
@@ -48,7 +50,7 @@ out=$TMP/out err=$TMP/err
 
 fixture() {
   echo 'BEGIN DEBUG SESSION debug at elapsed 7.26ms / 7254750ns'
-  echo 'debug solve_inequalities begin "tensor/row.ml":5354:35: 7.3ms / 7298875ns'
+  echo 'debug solve_inequalities begin "fixture/row_solver.ml":5354:35: 7.3ms / 7298875ns'
   echo " ${P}stage = Stage1"
   ineq Stage1 "$V83" "$BC"
   ineq Stage1 "$V83" "$BC"

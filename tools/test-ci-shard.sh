@@ -51,14 +51,14 @@ harness_scratch test-ci-shard
 # (the `@@` form is what keeps it out of the split units), and a training
 # directory whose dune file is the `train` suite's real input.
 repo="$TMP/repo"
-mkdir -p "$repo/tools" "$repo/lib" "$repo/bin" "$repo/test/operations/sub" "$repo/test/training" "$TMP/aliases"
-for d in . lib bin test/operations test/operations/sub; do : >"$repo/$d/dune"; done
+mkdir -p "$repo/tools" "$repo/core" "$repo/apps" "$repo/test/operations/sub" "$repo/test/train_fixture" "$TMP/aliases"
+for d in . core apps test/operations test/operations/sub; do : >"$repo/$d/dune"; done
 # The `train` suite reads dune files, not dune: an aggregate whose members
 # include a rule on two aliases and one whose action quotes `;`, parens and
 # `(alias train)`; a train-<name> rule nobody aggregates (no unit: `@train`
 # does not build it); the same `(alias train-gate)` as a DEPENDENCY, which
 # defines nothing; and a `subdir` stanza in the root holding an aggregate of
-# its own. bin/dune names a module `train`, which is no alias at all.
+# its own. apps/dune names a module `train`, which is no alias at all.
 train_dune='; (alias train) in a comment is prose
 (rule
  (alias train-gate)
@@ -85,10 +85,10 @@ train_dune='; (alias train) in a comment is prose
   (alias train-b)
   (alias train-c)))
 '
-reset_train_dune() { printf '%s' "$train_dune" >"$repo/test/training/dune"; }
+reset_train_dune() { printf '%s' "$train_dune" >"$repo/test/train_fixture/dune"; }
 reset_train_dune
 printf '(subdir sub2\n (rule (alias train-sub) (action (progn)))\n (alias (name train) (deps (alias train-sub))))\n' >"$repo/dune"
-printf '(executable (name train) (modules train))\n' >"$repo/bin/dune"
+printf '(executable (name train) (modules train))\n' >"$repo/apps/dune"
 # Untracked: not part of the tree the shards cover.
 mkdir -p "$repo/scratch" && : >"$repo/scratch/dune"
 
@@ -99,8 +99,8 @@ heavy 10
 ghost 5
 '
 fixture_train_weights='
-test/training/train-heavy 10
-test/training/train-ghost 5
+test/train_fixture/train-heavy 10
+test/train_fixture/train-ghost 5
 '
 # Wall-clock: `a`, light by CPU, is shard 2/2's critical path.
 fixture_wall_weights='
@@ -124,7 +124,7 @@ install_subject "$SRC"
 # The credential deny-list it sources beside itself (gh-ocannl-1280).
 cp "$HERE/credential-env.sh" "$repo/tools/credential-env.sh"
 git -C "$repo" init -q
-git -C "$repo" add -- tools lib bin test dune
+git -C "$repo" add -- tools core apps test dune
 
 # One fixture file per directory, `/` spelled `_` and the root `ROOT`.
 listing_file() { # DIR
@@ -142,11 +142,11 @@ listing() { # DIR ALIAS...
 default_listings() {
   rm -f -- "$TMP/aliases"/*
   listing . all default runtest
-  listing lib all default
-  listing bin all default bin-smoke
+  listing core all default
+  listing apps all default bin-smoke
   listing test/operations all default runtest runtest-a runtest-b runtest-c runtest-heavy bin-smoke scans
   listing test/operations/sub all default runtest runtest-a
-  listing test/training all default train train-gate train-heavy train-b train-c train-orphan
+  listing test/train_fixture all default train train-gate train-heavy train-b train-c train-orphan
   # The split directory's file targets: test executables, their outputs and
   # sources, a helper and a slow-only executable that no unit is named after.
   printf '%s\n' a.exe a.exe.output a.ml b.exe c.exe heavy.exe helper.exe slowonly.exe slowonly.ml \
@@ -201,13 +201,13 @@ units_expected="@@$ops/runtest-a
 @@$ops/runtest-heavy
 @@all
 @@runtest
-@@bin/all
-@@bin/bin-smoke
-@@lib/all
+@@apps/all
+@@apps/bin-smoke
+@@core/all
 @@$ops/bin-smoke
 @@$ops/sub/all
 @@$ops/sub/runtest
-@@test/training/all
+@@test/train_fixture/all
 $ops/helper.exe
 $ops/slowonly.exe"
 
@@ -235,7 +235,7 @@ report $? "for N=1..4 the shards partition the units exactly, every shard nonemp
 # Each absence is claimed over a listing that holds the units, so an empty
 # one cannot pass these vacuously.
 all_targets=$(subject targets 1/1 2>/dev/null)
-for absent in "@@$ops/runtest" "@@$ops/default" "@@$ops/all" "@@default" "@@lib/default" "@@$ops/scans" "@@lib/runtest" "@@$ops/sub/runtest-a" "@@scratch/all" "$ops/a.exe" "$ops/heavy.exe"; do
+for absent in "@@$ops/runtest" "@@$ops/default" "@@$ops/all" "@@default" "@@core/default" "@@$ops/scans" "@@core/runtest" "@@$ops/sub/runtest-a" "@@scratch/all" "$ops/a.exe" "$ops/heavy.exe"; do
   ok=0
   printf '%s\n' "$all_targets" | grep -qxF -- "@@$ops/runtest-heavy" || ok=1
   printf '%s\n' "$all_targets" | grep -qxF -- "$absent" && ok=1
@@ -281,22 +281,22 @@ refused() { # LABEL PATTERN COMMAND...
   harness_rejected 2 "$pattern" "$TMP/refusal.log" "$@"
   report $? "refused: $label" "$(cat "$TMP/refusal.log")"
 }
-rm -f -- "$(listing_file lib)"
+rm -f -- "$(listing_file core)"
 refused "dune reports an Error line" 'dune show aliases refused' subject targets 1/2
-listing lib all
-refused "a directory block without default" 'reported nothing for lib' subject targets 1/2
+listing core all
+refused "a directory block without default" 'reported nothing for core' subject targets 1/2
 default_listings
 listing test/operations all default runtest bin-smoke
 refused "the split directory lists no per-test aliases" 'lists no runtest-<name> aliases' subject targets 1/2
 default_listings
-printf '(alias\n (name default)\n (deps x))\n' >"$repo/lib/dune"
-refused "a dune file defining default itself" 'lib/dune defines the default alias' subject targets 1/2
-printf '(rule\n (aliases runtest default)\n (action (progn)))\n' >"$repo/lib/dune"
-refused "a rule attaching to default" 'lib/dune defines the default alias' subject targets 1/2
-printf '; (alias default) in a comment is prose\n(rule (alias runtest) (action (progn)))\n' >"$repo/lib/dune"
+printf '(alias\n (name default)\n (deps x))\n' >"$repo/core/dune"
+refused "a dune file defining default itself" 'core/dune defines the default alias' subject targets 1/2
+printf '(rule\n (aliases runtest default)\n (action (progn)))\n' >"$repo/core/dune"
+refused "a rule attaching to default" 'core/dune defines the default alias' subject targets 1/2
+printf '; (alias default) in a comment is prose\n(rule (alias runtest) (action (progn)))\n' >"$repo/core/dune"
 subject targets 1/1 >/dev/null 2>"$TMP/comment.err"
 report $? "default named only in a comment is not a definition" "$(cat "$TMP/comment.err")"
-: >"$repo/lib/dune"
+: >"$repo/core/dune"
 printf 'Error: Directory test/operations does not exist.\n' >"$TMP/targets"
 refused "dune show targets reports an Error line" 'dune show targets refused' subject targets 1/2
 printf '%s\n' a.ml a.expected >"$TMP/targets"
@@ -316,11 +316,11 @@ refused "weigh without a trace" 'usage' subject weigh "$TMP/no-such-trace"
 # alias action of the split directory's runtest-<name> -> <name>, its other
 # aliases (bin-smoke) -> @rest; a file <name>.<ext...> there -> <name>;
 # anything elsewhere -> @rest. Expected: compilers and the toolchain excluded
-# (but not cc_march_census.exe); online_softmax.exe credited to each of the
+# (but not cc_fx_census.exe); fx_softmax.exe credited to each of the
 # three tests it runs -- its own (`.exe.output`), the fast-math and the
 # fp-licences twins (`.actual`, the flag on its command line read by nobody);
-# sweep_harness_driver.exe and inline-test-runner.exe to the aliases whose
-# actions they are; the cc_temp_ownership-success variant to itself; a
+# fx_sweep_driver.exe and inline-test-runner.exe to the aliases whose
+# actions they are; the cc_fx_ownership-success variant to itself; a
 # sandboxed run of the split directory counted there; a process with no target
 # by its directory and program; elsewhere -> @rest.
 #
@@ -412,17 +412,17 @@ events = [
     start('ocamlopt.opt'),
     finish('/opt/bin/ocamlopt.opt', b + 'lib', 50, ['_build/default/lib/a.cmx', '_build/default/lib/a.o']),
     finish('/usr/bin/cc', b + 'lib', 40, ['_build/default/lib/a_stubs.o']),
-    finish('cc_march_census.exe', b + 'test/operations', 6, [ops + 'cc_march_census.exe.output']),
-    finish('./online_softmax.exe', b + 'test/operations', 7, [ops + 'online_softmax.exe.output']),
-    finish('./online_softmax.exe', b + 'test/operations', 3, [ops + 'online_softmax_fast_math.actual'],
+    finish('cc_fx_census.exe', b + 'test/operations', 6, [ops + 'cc_fx_census.exe.output']),
+    finish('./fx_softmax.exe', b + 'test/operations', 7, [ops + 'fx_softmax.exe.output']),
+    finish('./fx_softmax.exe', b + 'test/operations', 3, [ops + 'fx_softmax_fast_math.actual'],
            ['--ocannl_backend=cc', '--ocannl_cc_backend_fast_math=true']),
-    finish('./online_softmax.exe', '/x/_build/.sandbox/0123abcd/default/test/operations', 5,
-           [ops + 'online_softmax_fp_licences.actual']),
-    finish('./sweep_harness_driver.exe', b + 'test/operations', 9, [act('runtest-sweep_components')]),
+    finish('./fx_softmax.exe', '/x/_build/.sandbox/0123abcd/default/test/operations', 5,
+           [ops + 'fx_softmax_fp_licences.actual']),
+    finish('./fx_sweep_driver.exe', b + 'test/operations', 9, [act('runtest-sweep_components')]),
     finish('.tut.inline-tests/inline-test-runner.exe', '/x/_build/.sandbox/4567cdef/default/test/operations', 4,
            [act('runtest-operations_tutorials')]),
     finish('.tut.inline-tests/inline-test-runner.exe', b + 'test/operations', 4, [act('runtest-operations_tutorials')]),
-    finish('./cc_temp_ownership.exe', b + 'test/operations', 2, [ops + 'cc_temp_ownership-success.actual']),
+    finish('./cc_fx_ownership.exe', b + 'test/operations', 2, [ops + 'cc_fx_ownership-success.actual']),
     finish('./smoke.exe', b + 'test/operations', 1, [act('bin-smoke')]),
     finish('./helper.exe', b + 'test/operations', 1, ['_build/default/test/config/generated']),
     finish('./untargeted.exe', b + 'test/operations', 1),
@@ -430,7 +430,7 @@ events = [
     finish('./anon_gate.exe', b + 'test/operations', 1,
            ['_build/.actions/default/test/operations/0123456789abcdef0123456789abcdef']),
     finish('./einsum_test.exe', b + 'test/einsum', 4, ['_build/default/test/einsum/einsum_test.exe.output']),
-    finish('placement_store.exe', b + 'test/operations/sub', 0.4, [act('runtest-placement_store', 'test/operations/sub')]),
+    finish('fx_store.exe', b + 'test/operations/sub', 0.4, [act('runtest-fx_store', 'test/operations/sub')]),
     sexp(['action', 'write-file', ['1', '2'], ['file', canary], ['size', '3']]),
 ]
 (root / 'trace').write_bytes(b''.join(events))
@@ -452,15 +452,15 @@ canary_free() { # FILE...: no file carries the canary
 }
 subject weigh "$TMP/trace" >"$TMP/weigh.out" 2>"$TMP/weigh.err"
 weigh_rc=$?
-printf '%s\n' 'sweep_components 9' 'operations_tutorials 8' 'online_softmax 7' '@rest 6' 'cc_march_census 6' \
-  'online_softmax_fp_licences 5' 'online_softmax_fast_math 3' 'cc_temp_ownership-success 2' 'untargeted 1' 'anon_gate 1' \
+printf '%s\n' 'sweep_components 9' 'operations_tutorials 8' 'fx_softmax 7' '@rest 6' 'cc_fx_census 6' \
+  'fx_softmax_fp_licences 5' 'fx_softmax_fast_math 3' 'cc_fx_ownership-success 2' 'untargeted 1' 'anon_gate 1' \
   >"$TMP/weigh.expected"
 diff "$TMP/weigh.expected" "$TMP/weigh.out" >"$TMP/weigh.diff"
 report $? "weigh credits each unit the CPU seconds of the processes its targets name" \
   "exit $weigh_rc; $(cat "$TMP/weigh.diff" "$TMP/weigh.err")"
 subject weigh --wall "$TMP/trace" >"$TMP/weigh-wall.out" 2>"$TMP/weigh-wall.err"
-printf '%s\n' 'sweep_components 27' 'operations_tutorials 24' 'online_softmax 21' '@rest 19' 'cc_march_census 18' \
-  'online_softmax_fp_licences 15' 'online_softmax_fast_math 9' 'cc_temp_ownership-success 6' 'untargeted 3' 'anon_gate 3' \
+printf '%s\n' 'sweep_components 27' 'operations_tutorials 24' 'fx_softmax 21' '@rest 19' 'cc_fx_census 18' \
+  'fx_softmax_fp_licences 15' 'fx_softmax_fast_math 9' 'cc_fx_ownership-success 6' 'untargeted 3' 'anon_gate 3' \
   >"$TMP/weigh-wall.expected"
 diff "$TMP/weigh-wall.expected" "$TMP/weigh-wall.out" >"$TMP/weigh-wall.diff" && [ ! -s "$TMP/weigh-wall.err" ] &&
   canary_free "$TMP/weigh-wall.out"
@@ -536,7 +536,7 @@ else
 fi
 
 # The twin keyed by executable, the scheme gh-ocannl-1503 replaced: the same
-# trace and oracle must reject it (online_softmax.exe's three tests in one
+# trace and oracle must reject it (fx_softmax.exe's three tests in one
 # unit, the driver and the inline-test runner under their own names).
 path=$(mutant weigh-by-executable \
   '/cost\[unit_of\(fields, prog\)\]/ { sub(/unit_of\(fields, prog\)/, "(\"@rest\" if in_context(fields.get(\"dir\") or \"\") != split_dir else prog.removesuffix(\".exe\"))") } { print }')
@@ -548,7 +548,7 @@ else
   bash "$repo/tools/weigh-by-exe.sh" weigh "$TMP/trace" >"$TMP/by-exe.out" 2>"$TMP/by-exe.err"
   rm -f "$repo/tools/weigh-by-exe.sh"
   ! diff -q "$TMP/weigh.expected" "$TMP/by-exe.out" >/dev/null &&
-    grep -qx 'online_softmax 15' "$TMP/by-exe.out"
+    grep -qx 'fx_softmax 15' "$TMP/by-exe.out"
   report $? "negative control: weigh keyed by executable" "see $TMP/by-exe.out $TMP/by-exe.err"
 fi
 
@@ -698,10 +698,10 @@ twin "rest names default" \
 # dune files: the fake dune is never asked (pointed at a missing command
 # below, so a train run that called it would fail).
 train_expected="@@sub2/train-sub
-@@test/training/train-b
-@@test/training/train-c
-@@test/training/train-gate
-@@test/training/train-heavy"
+@@test/train_fixture/train-b
+@@test/train_fixture/train-c
+@@test/train_fixture/train-gate
+@@test/train_fixture/train-heavy"
 train_partition_holds() { # LOG
   local n k all
   : >"$1"
@@ -724,11 +724,11 @@ report $? "train: for N=1..5 the shards partition the aggregates' members exactl
   "see $TMP/train-partition.log"
 train1=$(subject targets 1/2 train 2>"$TMP/train-deal.err")
 train2=$(subject targets 2/2 train 2>/dev/null)
-[ "$train1" = "@@test/training/train-heavy" ]
+[ "$train1" = "@@test/train_fixture/train-heavy" ]
 report $? "train: the heaviest member is dealt first, alone on shard 1/2" "got: $train1"
-[ "$(printf '%s\n' "$train2" | tr '\n' ' ')" = "@@sub2/train-sub @@test/training/train-b @@test/training/train-c @@test/training/train-gate " ]
+[ "$(printf '%s\n' "$train2" | tr '\n' ' ')" = "@@sub2/train-sub @@test/train_fixture/train-b @@test/train_fixture/train-c @@test/train_fixture/train-gate " ]
 report $? "train: the rest go to the lighter shard, equal weights by name" "got: $train2"
-grep -q 'weight for test/training/train-ghost, which is no unit any more' "$TMP/train-deal.err"
+grep -q 'weight for test/train_fixture/train-ghost, which is no unit any more' "$TMP/train-deal.err"
 report $? "train: a weight naming no member warns on stderr" "see $TMP/train-deal.err"
 subject plan 2 train 2>/dev/null | grep -q '^shard 2/2: 4 units, load 4 '
 report $? "train: plan reports each shard's members and load"
@@ -736,7 +736,7 @@ report $? "train: plan reports each shard's members and load"
 report $? "the suite defaults to main"
 
 train_refused() { # LABEL PATTERN DUNE-TEXT [FILE]
-  printf '%s' "$3" >"${4:-$repo/test/training/dune}"
+  printf '%s' "$3" >"${4:-$repo/test/train_fixture/dune}"
   refused "train: $1" "$2" subject targets 1/2 train
   reset_train_dune
 }

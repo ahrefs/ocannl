@@ -4037,12 +4037,22 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     a harness's fixture writes one through a variable. gh-ocannl-1797's two CI reds read this way:
     `tools/test-run.sh` reaches the members of `tools/test-test-run.sh`, `benchmarks/fixture_digest.py`
     `benchmarks/test-check-box.sh`.
-    Fake diagnostics should use synthetic locations: device-init and surjectivity locations in
-    `tools/test-test-run-common.sh` named real operations and einsum files, reaching all six
-    members for additions there (gh-ocannl-2231). The isolated-addition leg in
+    Fake diagnostics should use synthetic locations, and all fixture text fixture-only names: the
+    reader cannot tell a fixture's `File "lib/dune"`, `"$repo/lib/dune"`, `$TMP/bin/dune` PATH stub,
+    trace location or fake `online_softmax.exe` from a read of the real file, so each selected its
+    harness on every edit of that source (gh-ocannl-2231, gh-ocannl-2292). A fixture path must have
+    no part after a slash that is a tracked path, no tracked basename, and no `X.exe` of a tracked
+    `X.ml`: synthetic locations sit under a `fixture/` directory with fixture-only basenames
+    (`fixture/surjection/surjection.ml`, `fixture/row_solver.ml`), stubs go in a `stubs/` directory,
+    fixture repositories use their own directory and executable names, or write a `dune` file from
+    inside its directory (bare `dune` is not indexed). A fixture that must carry a real name (a
+    `.gitignore`, `.gitattributes`, an opam file, a path the tool under test fixes, such as
+    `bin/device_props.exe`) keeps its reach. The isolated-addition leg in
     `tools/test-affected-tests.sh` queries every tracked test-suite stanza, with independent
-    exceptions for intentional source and fixture inputs; cat and printf controls retain
-    the conservative fallback for real reads and indistinguishable text mentions.
+    exceptions for intentional source and fixture inputs, and its source-only reach leg pins that
+    `test/einsum/surjectivity.ml`, `tensor/row.ml`, `lib/dune` and `bin/dune` alone select no
+    harness; cat and printf controls, and one per spelling the fixtures left, retain the
+    conservative fallback for real reads and indistinguishable text mentions.
   - A module of a library this build does not compile (`cuda_backend.ml` on a Mac) stays UNMAPPED,
     exit 3, but an OFF-BUILD line on stderr counts what a build compiling it reaches -- read from
     the dune files' `libraries` (a `(select)` condition included), since dune describes none of

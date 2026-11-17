@@ -19,7 +19,7 @@ harness_args "$@"
 harness_require perl git
 harness_scratch mutation-tests
 fixture=$TMP
-mkdir -p "$fixture/repo/tools" "$fixture/repo/scripts" "$fixture/bin" "$fixture/runs"
+mkdir -p "$fixture/repo/tools" "$fixture/repo/scripts" "$fixture/stubs" "$fixture/runs"
 cp "$root/tools/mutation-run.sh" "$root/tools/mutant.sh" "$root/tools/test-run.sh" "$fixture/repo/tools/"
 # Whatever the shipping test-run.sh SOURCES, derived from the script itself
 # rather than listed here: it dies at startup on a file the fixture lacks, and
@@ -46,7 +46,7 @@ stage_heads() { # DEST-ROOT
   cp "$root/$heads" "$1/$heads"
 }
 stage_heads "$fixture/repo"
-cat > "$fixture/bin/dune" <<'DUNE'
+cat > "$fixture/stubs/dune" <<'DUNE'
 #!/usr/bin/env bash
 set -eu
 # test-run.sh hands the batch a trace file of the run's own, as the second
@@ -261,9 +261,9 @@ case "$PROBE_MODE" in
   sleep) touch "$PROBE_HOME/ready"; exec perl -e 'sleep 60' ;;
 esac
 DUNE
-chmod +x "$fixture/bin/dune"
+chmod +x "$fixture/stubs/dune"
 export TMPDIR="$fixture"
-export PATH="$fixture/bin:$PATH" PROBE_HOME="$fixture" OCANNL_TOOL_TEST_RUNS="$fixture/runs"
+export PATH="$fixture/stubs:$PATH" PROBE_HOME="$fixture" OCANNL_TOOL_TEST_RUNS="$fixture/runs"
 # Hermetic against the box it runs on, as tools/test-test-run.sh is: on a fleet
 # box the runner would take a real run-time slot through the deployed
 # fleet-worker.sh (gh-ocannl-1004), and on a GPU box it would resolve the
@@ -307,7 +307,7 @@ reset_module() { # MODULE-TEXT PATCH-TEXT, each a printf format
 # harness_leg_run_errexit runs this after every abandoned leg (gh-ocannl-1539); leg 22 pins it.
 harness_leg_restore() {
   local saved owner run
-  rm -f "$fixture/bin/cmp" peer.ml .test-run.lock
+  rm -f "$fixture/stubs/cmp" peer.ml .test-run.lock
   [ ! -d module.ml ] || rm -rf module.ml
   cp "$root/tools/mutation-run.sh" "$root/tools/test-run.sh" tools/
   stage_heads .
@@ -1071,11 +1071,11 @@ harness_leg_run_errexit '14: a failed child exec cannot unwind into parent resto
 leg_15() {
 reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 # A failing independent comparison must never print a restoration confirmation.
-cat > "$fixture/bin/cmp" <<'CMP'
+cat > "$fixture/stubs/cmp" <<'CMP'
 #!/usr/bin/env bash
 exit 1
 CMP
-chmod +x "$fixture/bin/cmp"
+chmod +x "$fixture/stubs/cmp"
 export PROBE_MODE=pass
 actual=0
 tools/mutation-run.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1 || actual=$?
@@ -1083,7 +1083,7 @@ tools/mutation-run.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1 ||
 if grep -q '^restored:' "$fixture/result"; then echo 'unexpected restoration confirmation'; exit 1; fi
 backup=$(sed -n 's/^recovery: //p' "$fixture/result")
 [ -f "$backup" ]
-rm "$fixture/bin/cmp"
+rm "$fixture/stubs/cmp"
 cmp "$backup" "$fixture/pristine"
 cmp module.ml "$fixture/pristine"
 printf 'PASS failed comparison retains byte-identical recovery copy and exits 3\n'

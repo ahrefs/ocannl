@@ -32,22 +32,22 @@ subject() { bash "$SRC" "$@"; }
 # and the CI mode's refusals and host line.
 if harness_leg 'warning and alert blocks are left out #canned'; then
   cat >"$TMP/warn.log" <<'LOG'
-File "lib/dune", line 3, characters 1-20:
+File "fixture/dune", line 3, characters 1-20:
 3 |  (flags (:standard))
      ^^^^^^^^^^^^^^^^^^^
 Warning: this field is deprecated.
-File "lib/x.ml", line 2, characters 4-5:
+File "fixture/x.ml", line 2, characters 4-5:
 2 | let y = 1
         ^
 Alert deprecated: Old.f
-File "lib/y.ml", line 4, characters 8-9:
+File "fixture/y.ml", line 4, characters 8-9:
 4 | let z = w
             ^
 Error: Unbound value w
 LOG
   out=$(cd "$TMP" && subject warn.log 2>&1); rc=$?
   want='Failed dune rules (1), in the order dune reported them:
-  lib/y.ml:4  compile error
+  fixture/y.ml:4  compile error
       Error: Unbound value w'
   report "$([ "$rc" = 0 ] && [ "$out" = "$want" ]; echo $?)" 'warning and alert blocks are left out' "exit $rc; $out"
 fi
@@ -454,7 +454,7 @@ test_parity_flag (test_orchestrate.ParityCheckTest.test_parity_flag) ... FAIL
 FAIL: test_parity_flag (test_orchestrate.ParityCheckTest.test_parity_flag)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/home/runner/work/ocannl/benchmarks/test_orchestrate.py", line 84, in test_parity_flag
+  File "/home/runner/work/ocannl/fixture/parity_fixture.py", line 84, in test_parity_flag
     self.assertEqual(flat["parity"], "FAIL")
 AssertionError: 'PASS' != 'FAIL'
 - PASS
@@ -472,7 +472,7 @@ PY
 printf '%s\n' 'accepted position in use: printed or raised' 'accepted position in use: an Error: payload' \
   'canary held: the scan reads FAIL: markers' >"$proj/r/scan.expected"
 printf '%s\n' 'accepted position in use: printed or raised' 'accepted position in use: an Error: payload' \
-  'FAIL: arrayjit/lib/backends.ml:120: a label read the scan cannot place' >"$proj/r/scan.out"
+  'FAIL: fixture/scan_site.ml:120: a label read the scan cannot place' >"$proj/r/scan.out"
 build "$TMP/claims.log" @r/runtest-claims; claims_brc=$?
 build "$TMP/orchestrate.log" @r/runtest-orchestrate; orch_brc=$?
 build "$TMP/scan.log" @r/runtest-scan; scan_brc=$?
@@ -521,7 +521,7 @@ if harness_leg 'a scan'"'"'s FAIL: line is quoted under its golden #dune'; then
   out=$(cd "$proj" && subject "$TMP/scan.log" 2>&1); rc=$?
   want='Failed dune rules (1), in the order dune reported them:
   r/scan.expected:1  output differs from this golden
-      | +FAIL: arrayjit/lib/backends.ml:120: a label read the scan cannot place'
+      | +FAIL: fixture/scan_site.ml:120: a label read the scan cannot place'
   if [ "$scan_brc" = 1 ] && [ "$rc" = 0 ] && [ "$out" = "$want" ] &&
      harness_plain "$TMP/scan.log" | grep -q '^ accepted position in use: an Error: payload$' &&
      harness_plain "$TMP/scan.log" | grep -q '^-canary held: the scan reads FAIL: markers$'; then

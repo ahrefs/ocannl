@@ -44,7 +44,7 @@ PER_TEST_CAP=$TMP/tools/per-test-cap.sh
 DEVICE_PROBE=$TMP/tools/device-probe.sh
 # Isolate Git configuration, hooks, identity and URL rewriting. Every Git
 # mutation is confined to this newly allocated scratch directory.
-mkdir -p "$TMP/bin" "$TMP/home" "$TMP/runs"
+mkdir -p "$TMP/stubs" "$TMP/home" "$TMP/runs"
 export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=$TMP/gitconfig
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
 unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
@@ -70,7 +70,7 @@ UNPUSHED=$("$REAL_GIT" -C "$TMP/seed" commit-tree -p "$SHA" -m unpushed "$SHA^{t
   "$REAL_GIT" -C "$TMP/seed" branch unpushed "$UNPUSHED" &&
   "$REAL_GIT" -C "$TMP/pushed.git" fetch -q "$TMP/seed" unpushed:refs/dangling &&
   "$REAL_GIT" -C "$TMP/pushed.git" update-ref -d refs/dangling || exit 2
-cat >"$TMP/bin/ssh" <<'SH'
+cat >"$TMP/stubs/ssh" <<'SH'
 #!/usr/bin/env bash
 if [ "$1" = -G ]; then
   # Configuration lookup only: what the alias would connect to, no connection.
@@ -95,7 +95,7 @@ fi
 while [ "$#" -gt 1 ]; do shift; done
 exec /bin/sh -c "$1"
 SH
-cat >"$TMP/bin/opam" <<'SH'
+cat >"$TMP/stubs/opam" <<'SH'
 #!/usr/bin/env bash
 if [ "$1" = switch ]; then
   [ "$PWD" = "$FIXTURE_REPO" ] || exit 91
@@ -113,7 +113,7 @@ if [ "${FIXTURE_SWITCH_CREDENTIALS:-}" = 1 ]; then
 fi
 exec "$@"
 SH
-cat >"$TMP/bin/dune" <<'SH'
+cat >"$TMP/stubs/dune" <<'SH'
 #!/usr/bin/env bash
 if [ "$1" = --version ]; then echo "$FIXTURE_DUNE_VERSION"; exit 0; fi
 # This is an independent observation of the environment and actual checkout
@@ -225,7 +225,7 @@ SH
 # The ROCm tool's own answer to "where is HIP", which the tile-MMA check reads
 # its header expectation from; the trees below stand for a complete rocWMMA
 # install and the distro's umbrella-only one (gh-ocannl-1032).
-cat >"$TMP/bin/hipconfig" <<'SH'
+cat >"$TMP/stubs/hipconfig" <<'SH'
 #!/usr/bin/env bash
 [ "$1" = --path ] || exit 98
 printf '%s\n' "$FIXTURE_HIP_ROOT"
@@ -235,15 +235,15 @@ touch "$TMP/hip-complete/include/rocwmma/rocwmma.hpp" "$TMP/hip-complete/include
   "$TMP/hip-partial/include/rocwmma/rocwmma.hpp"
 # The kernel name, which decides whether the far side probes the device (never on macOS): a case
 # that pins FIXTURE_UNAME gets that answer to `uname -s`; every other question is the real uname's.
-cat >"$TMP/bin/uname" <<'SH'
+cat >"$TMP/stubs/uname" <<'SH'
 #!/bin/sh
 if [ "$*" = -s ] && [ -n "${FIXTURE_UNAME:-}" ]; then echo "$FIXTURE_UNAME"; exit 0; fi
 exec /usr/bin/uname "$@"
 SH
-chmod +x "$TMP/bin/ssh" "$TMP/bin/opam" "$TMP/bin/dune" "$TMP/bin/hipconfig" "$TMP/bin/uname"
+chmod +x "$TMP/stubs/ssh" "$TMP/stubs/opam" "$TMP/stubs/dune" "$TMP/stubs/hipconfig" "$TMP/stubs/uname"
 # A private Git wrapper is only for deterministic transport/cleanup failures;
 # every other operation is the real executable, including source assertions.
-cat >"$TMP/bin/git" <<'SH'
+cat >"$TMP/stubs/git" <<'SH'
 #!/usr/bin/env bash
 fetching=0
 args=()
@@ -266,13 +266,13 @@ for arg in "$@"; do
 done
 exec "$REAL_GIT" "${args[@]}"
 SH
-chmod +x "$TMP/bin/git"
+chmod +x "$TMP/stubs/git"
 # The fakes read their controls from a file rather than the environment: the
 # local transport clears the environment exactly as an SSH session starts
 # without the caller's, so only a file reaches a fake on both transports.
 for fake in ssh opam dune git hipconfig uname; do
-  { sed -n 1p "$TMP/bin/$fake"; printf '. %q\n' "$TMP/fixture.env"; sed 1d "$TMP/bin/$fake"; } >"$TMP/fake" &&
-    cat "$TMP/fake" >"$TMP/bin/$fake" || exit 2
+  { sed -n 1p "$TMP/stubs/$fake"; printf '. %q\n' "$TMP/fixture.env"; sed 1d "$TMP/stubs/$fake"; } >"$TMP/fake" &&
+    cat "$TMP/fake" >"$TMP/stubs/$fake" || exit 2
 done
 rm -f "$TMP/fake"
 
@@ -289,18 +289,18 @@ done
 # Stand-ins for the backend readers tools/batch-backends.sh builds: the
 # configuration resolves the pinned backend, and the reachability tool names
 # the backends of FIXTURE_NAMES (`<backend>:<why>;...`), or fails.
-cat >"$TMP/bin/fake-read-config" <<'SH'
+cat >"$TMP/stubs/fake-read-config" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "${OCANNL_BACKEND:-}"
 SH
-cat >"$TMP/bin/fake-slot-kind" <<'SH'
+cat >"$TMP/stubs/fake-slot-kind" <<'SH'
 #!/usr/bin/env bash
 [ "$FIXTURE_NAMES" != fail ] || exit 3
 IFS=';' read -r -a names <<<"$FIXTURE_NAMES"
 for n in "${names[@]}"; do [ -z "$n" ] || printf 'names %s: %s\n' "${n%%:*}" "${n#*:}"; done
 echo end
 SH
-chmod +x "$TMP/bin/fake-read-config" "$TMP/bin/fake-slot-kind" || exit 2
+chmod +x "$TMP/stubs/fake-read-config" "$TMP/stubs/fake-slot-kind" || exit 2
 
 # Placement of the fixture BOX, read by the fake `ssh -G`, and the transport a
 # case expects; the devices BOX shows and its fleet name. A case overrides them
@@ -323,7 +323,7 @@ fixture_device() { # absent|present|small|wide -> the path a probe reads
   esac
 }
 fixture_reader() { # stand-in name -> its path, or nothing: batch-backends.sh builds the real one
-  [ "$READERS" != stand-in ] || printf '%s' "$TMP/bin/$1"
+  [ "$READERS" != stand-in ] || printf '%s' "$TMP/stubs/$1"
 }
 run_case() { # SUBJECT NAME MODE [verifier args]; MV_CAP= omits the --cap 10 every trip gets
   local subject=$1 name=$2 mode=$3
@@ -366,7 +366,7 @@ run_case() { # SUBJECT NAME MODE [verifier args]; MV_CAP= omits the --cap 10 eve
   done >"$TMP/fixture.env"
   # OPAMSWITCH and DUNE_BUILD_DIR stand for the caller's session: an SSH
   # session never sees them, and the local transport must not either.
-  env -i PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$TMP/home" \
+  env -i PATH="$TMP/stubs:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$TMP/home" \
     GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$GIT_CONFIG_GLOBAL" \
     OCANNL_PRINT_DECIMALS_PRECISION=ambient-secret OCANNL_BACKEND=cuda \
     OPAMSWITCH=caller-switch DUNE_BUILD_DIR=caller-build \

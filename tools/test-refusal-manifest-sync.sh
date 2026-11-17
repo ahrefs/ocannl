@@ -57,7 +57,7 @@ echo "testing $SRC"
 # golden's output to out/<golden path>.
 fixture() { # REPO SCENARIO PLAN
   local repo=$1
-  mkdir -p "$repo/tools" "$repo/bin" "$repo/test/support" "$repo/test/operations" "$repo/runs" \
+  mkdir -p "$repo/tools" "$repo/stubs" "$repo/test/support" "$repo/test/operations" "$repo/runs" \
     "$repo/out/test/operations"
   cp "$SRC" "$repo/tools/refusal-manifest-sync.sh"
   cp "$HERE/credential-env.sh" "$repo/tools/credential-env.sh"
@@ -65,7 +65,7 @@ fixture() { # REPO SCENARIO PLAN
   printf '%s\n' "$2" >"$repo/scenario"
   printf '%s' "$3" >"$repo/plan"
   echo 0 >"$repo/round"
-  cat >"$repo/bin/dune" <<'STUB'
+  cat >"$repo/stubs/dune" <<'STUB'
 #!/usr/bin/env bash
 repo=$(cd "$(dirname "$0")/.." && pwd)
 echo "dune $*" >>"$repo/calls"
@@ -110,13 +110,13 @@ cd "$repo" || exit 2
 echo "promote $*" >>calls
 for path; do cp "out/$path" "$path"; done
 STUB
-  chmod +x "$repo/bin/dune" "$repo/tools/test-run.sh" "$repo/tools/promote.sh"
+  chmod +x "$repo/stubs/dune" "$repo/tools/test-run.sh" "$repo/tools/promote.sh"
 }
 
 sync() { # REPO [ARGS...] -- runs the subject, its output in REPO/stdout, status in REPO/rc
   local repo=$1
   shift
-  (cd "$repo" && PATH="$repo/bin:$PATH" ${SUBJECT_BASH:-bash} tools/refusal-manifest-sync.sh "$@" >stdout 2>&1)
+  (cd "$repo" && PATH="$repo/stubs:$PATH" ${SUBJECT_BASH:-bash} tools/refusal-manifest-sync.sh "$@" >stdout 2>&1)
   echo $? >"$repo/rc"
 }
 
