@@ -1215,15 +1215,20 @@ for arg in "$@"; do
   prev2=$prev1 prev1=$arg
 done
 printf '%s\n' "${shown[*]}" >>"$FAKE_FW_CALLS"
+tokens=${FAKE_FW_TOKENS:-2}
 if [ "$1 $2 $3" = "execution slot --probe" ]; then
   [ "${FAKE_FW_MODE:-}" = noprobe ] && { echo "fleet-worker.sh: execution slot [--wait <seconds>] ..." >&2; exit 2; }
   # Inside a live measurement hold the probe's line carries the hold's id.
   if [ "${FAKE_FW_MODE:-}" = measurement ]; then echo "EXECUTION SLOT PROBE fakebox 4 2 measurement M-7"
-  else echo "EXECUTION SLOT PROBE fakebox 4 2"; fi
+  else echo "EXECUTION SLOT PROBE fakebox 4 $tokens"; fi
   exit 0
 fi
 shift 2
-while [ "$1" != -- ]; do shift; done
+cpu=
+while [ "$1" != -- ]; do
+  [ "$1" != --cpu ] || cpu=1
+  shift
+done
 shift
 case ${FAKE_FW_MODE:-} in
   refuse) echo "EXECUTION SLOT REFUSED fakebox: all 2 GPU tokens (slots 1-2 of 4) busy after 0s; a batch that holds no GPU declares --cpu"; exit 1 ;;
@@ -1244,6 +1249,17 @@ case ${FAKE_FW_MODE:-} in
     rc=$?
     kill -KILL -- "-$holder" 2>/dev/null
     exit "$rc" ;;
+esac
+# The nested fixtures hold slot 4 via --cpu. The marker describes the
+# slot's capability, and the fleet judges eligibility from the token count.
+case ${FLEET_SLOT_HELD:-} in
+  'fakebox 4 4 cpu' | 'fakebox 4 4 gpu')
+    if [ -z "$cpu" ] && [ "$tokens" -lt 4 ]; then
+      echo "EXECUTION SLOT REFUSED fakebox: inside slot 4 of 4, which is not a GPU token" >&2
+      exit 1
+    fi
+    echo "EXECUTION SLOT fakebox: inside slot 4 of 4, held by an enclosing batch, for: $*" >&2
+    exec "$@" ;;
 esac
 echo "EXECUTION SLOT fakebox: slot 1 of 4, GPU token 1 of 2 held for: $*" >&2
 exec "$@"

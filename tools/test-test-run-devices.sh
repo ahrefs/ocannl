@@ -92,6 +92,8 @@
 #      GPU; a GPU, empty, unknown or unreadable configuration, `exec`, a
 #      command-line GPU backend, a reachable GPU stanza, or a reachability
 #      answer outside its grammar is --gpu; the cap bounds the wait.
+#  53a. the nested-slot announcement matches reuse for a CPU batch or a
+#       token-equipped slot, and refusal for a GPU batch past the tokens.
 #  54. a refused or unreachable slot is SLOT REFUSED, exit 75, and dune never runs.
 #  55. a red suite under a held slot is still FAIL; `start` prints the caller's argv;
 #      a batch admitted inside a measurement hold is admitted, its red still FAIL.
@@ -691,7 +693,7 @@ for probe in "cpu:cc:sync_cc:--cpu" "unset:unset:cc:--gpu" "multidev:multidev_cc
     { slot_detail="$tag: the slot and its kind were not announced: $argv_err"; break; }
   { grep -q 'if no enclosing slot is reusable' <<<"$argv_err" &&
     grep -q 'reuses an enclosing slot without taking an additional slot or GPU token' <<<"$argv_err" &&
-    grep -q 'a GPU batch inside a CPU-only slot is refused' <<<"$argv_err"; } ||
+    grep -Fq 'a GPU batch is refused if its validated enclosing slot is numbered above 2.' <<<"$argv_err"; } ||
     { slot_detail="$tag: the announcement does not distinguish acquisition from validated reuse: $argv_err"; break; }
   { [ -n "$argv_dir" ] && grep -q -- "as $want" "$argv_dir/log" &&
       grep -q "^test-run: batch: " "$argv_dir/log" &&
@@ -772,6 +774,42 @@ else
 fi
 }
 harness_leg_run '53: the slot kind #slot' leg_53
+
+# A full cc suite can reach a GPU-named stanza. Exercise that decision
+# with the same --cpu enclosing slot on each side of the token boundary.
+leg_53a() {
+local tag tokens marker_kind kind want_rc rule reach
+for tag in cpu all-gpu past-tokens; do
+  reach=$FAKE_READS
+  tokens=2 marker_kind=cpu kind=--cpu want_rc=0
+  rule='a GPU batch is refused if its validated enclosing slot is numbered above 2.'
+  if [ "$tag" != cpu ]; then
+    kind=--gpu
+    reach="$reach\nnames cuda: it reaches test_cuda_pool_offset in test/operations, which names cuda"
+  fi
+  case $tag in
+    all-gpu) tokens=4; marker_kind=gpu; rule='a GPU batch can reuse any validated enclosing slot.' ;;
+    past-tokens) want_rc=75 ;;
+  esac
+  FLEET_SLOT_HELD="fakebox 4 4 $marker_kind" FAKE_FW_TOKENS=$tokens FAKE_REACH="$reach\nend" \
+    slot_probe "slot-nested-$tag" hold cc cc run build @cheap
+  if [ "$argv_rc" != "$want_rc" ] || [ "$slot_calls" != "execution slot --wait 600 $kind -- dune build @cheap" ]; then
+    report 1 "slot: nested $tag" "exit $argv_rc (want $want_rc); slot call: ${slot_calls:-<none>} (want $kind)"
+  elif [ "$want_rc" = 0 ] && { [ "$argv_calls" != "build @cheap" ] ||
+     ! grep -Fq 'EXECUTION SLOT fakebox: inside slot 4 of 4' "$argv_dir/log"; }; then
+    report 1 "slot: nested $tag" "dune calls: ${argv_calls:-<none>}; stdout: $argv_out"
+  elif [ "$want_rc" = 75 ] && { [ -n "$argv_calls" ] ||
+     ! grep -Fq 'EXECUTION SLOT REFUSED fakebox: inside slot 4 of 4, which is not a GPU token' "$argv_dir/log"; }; then
+    report 1 "slot: nested $tag" "dune calls: ${argv_calls:-<none>}; stdout: $argv_out"
+  elif grep -Fq -- "as $kind" <<<"$argv_err" && grep -Fq "$rule" <<<"$argv_err" &&
+       ! grep -Fq 'a GPU batch inside a CPU-only slot is refused' <<<"$argv_err"; then
+    report 0 "slot: nested $tag"
+  else
+    report 1 "slot: nested $tag" "want $kind and '$rule'; stderr: $argv_err"
+  fi
+done
+}
+harness_leg_run '53a: the nested-slot announcement #slot' leg_53a
 
 # Leg 54: a refused or unreachable slot is its own verdict, never a test one:
 # exit 75, dune never invoked, and the fleet's own line quoted in the log.

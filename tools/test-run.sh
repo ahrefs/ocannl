@@ -809,9 +809,9 @@ plan_batch() { # <log> dune argv
 # none of the batch's resolved backends holds a GPU (plan_batch, the same
 # resolution the width reads; tools/batch-backends.sh).
 # No brief has to name the wrapper and no worker can forget it, or forget
-# `--cpu` and hold a GPU token for a cc batch. A worker that still wraps the
-# runner is harmless: the fleet's nested-slot rule runs this batch inside the
-# wrapper's slot.
+# `--cpu` and hold a GPU token for a cc batch. For a worker that still wraps
+# the runner, the fleet's nested-slot rule reuses the wrapper's slot when
+# that slot can hold the batch.
 #
 # The probe -- fleet_slot_probe, the one tools/fmt-check.sh and
 # tools/test-harnesses.sh take their slots through too (gh-ocannl-1576) -- is
@@ -857,7 +857,7 @@ slot_box= slot_slots= slot_tokens=
 slot_kind=        # cpu or gpu, once plan_batch has resolved the batch
 # Reuse/refusal wording follows lukstafi/ludics lib/ludics/fleetworker/slot.py's judge_nested (THE NESTED SLOT); change both together.
 plan_slot_kind() { # after plan_batch
-  local what
+  local what nested
   [ -n "$slot_fw" ] || return 0
   slot_kind=$(batch_kind)
   if [ "$slot_kind" = cpu ]; then
@@ -867,10 +867,17 @@ plan_slot_kind() { # after plan_batch
   else
     what="--gpu (any slot may hold the GPU here): it can hold $(batch_summary)"
   fi
+  # Describe the rule from the probe's counts. The fleet validates the
+  # enclosing slot and decides whether to reuse it.
+  if [ "$slot_tokens" -lt "$slot_slots" ]; then
+    nested="On this box, a GPU batch is refused if its validated enclosing slot is numbered above $slot_tokens."
+  else
+    nested="On this box, a GPU batch can reuse any validated enclosing slot."
+  fi
   slot_announce="requesting one of $slot_box's $slot_slots fleet correctness slots if no enclosing slot is reusable (gh-ocannl-1004),
   as $what. Acquisition timeout: ${slot_wait}s.
-  The fleet validates and reuses an enclosing slot without taking an additional slot or GPU token;
-  a GPU batch inside a CPU-only slot is refused."
+  The fleet validates and reuses an enclosing slot without taking an additional slot or GPU token.
+  $nested"
 }
 
 # Whether `run` resolves this batch's backends at all (plan_batch): only on a
