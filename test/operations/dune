@@ -6218,7 +6218,8 @@
   ll_test
   arrayjit.ir
   arrayjit.utils
-  arrayjit.context))
+  arrayjit.context
+  stdio))
 
 (test
  ; gh-ocannl-1609 (after gh-ocannl-1561): the CPU tensorized flavors binding a hardware dimension are
