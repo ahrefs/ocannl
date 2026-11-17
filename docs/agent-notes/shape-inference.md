@@ -234,7 +234,11 @@ files.
   run `@test/operations/runtest-dropout_mask_varies`,
   `@test/operations/runtest-row_glb_reach_executed` and
   `@test/operations/runtest-shape_program_sweep`, inspect their draw probes (the sweep's stderr
-  counts each known entry), and record the runs and what they establish in the PR.
+  counts each known entry; its `--list-known` flag, gh-ocannl-2256, on a direct run from
+  `_build/default/test/operations` (recipe in the test's header), lists each excused program's
+  node, oracle and solver shapes and cause, and every accepted program's per-node shapes, so a
+  before/after `diff` needs no patched copy), and record the runs and what they establish in the
+  PR.
   `test/operations/dropout_mask_varies.ml` pins both a mask that keeps some entries and drops
   others and raw draws distinct per element; the `row_glb_reach_executed` probes cover branching and repeated consumers, including documented
   repetition cases rather than claiming every draw fills. The full green suite missed a

@@ -46,6 +46,19 @@
    known list still occurs (a stale entry fails until it is removed: the entry's fix removes it).
    Counts go to stderr.
 
+   THE LISTING (gh-ocannl-2256). [--list-known], a command-line flag rather than a config key (no
+   ambient setting turns it on), adds to stderr one [KNOWN] line per program each known entry
+   excuses -- the node, the oracle's and the solver's shapes and the cause, from the [judge] the
+   claims use -- and one [SHAPES] line per accepted program, so two runs diff with [diff]. Build,
+   and only on a successful build (a failed one leaves the previous executable in place) run it from
+   [_build/default/test/operations], which finds [ocannl_config] there: [dune build
+   ./test/operations/shape_program_sweep.exe ./test/operations/ocannl_config && (cd
+   _build/default/test/operations && ./shape_program_sweep.exe --list-known 2>/abs/path/listing
+   >/dev/null)], then [grep '^KNOWN <entry> |' /abs/path/listing]. The listing is written even when
+   a claim fails (the run then exits 1). Line formats are at [known_line] below. Under the flag
+   stdout gains three claims tying the listing to the judgements; without it stdout and every
+   verdict are the golden's.
+
    THE KNOWN LIST ([known] below). An entry excuses only the oracle's shape with axes collapsed to
    1, its draws filling the shape they closed to, at or under its named cause. [reach] additionally
    covers one pointwise consumer through unary results; the residual fixed-index/stretch role also
@@ -541,11 +554,21 @@ let run_shapes (prog : program) : outcome =
 
 (* {2 Judging} *)
 
+(* What a known entry excused at one node: the oracle's shape there, the solver's ([None]: the
+   program was refused), and how -- a collapse, a draw filling [distinct] of [cells], or a refusal
+   holding one of the entry's messages. *)
+type cause = Collapse | Fill of int * int | Refusal of string
+type excuse = { entry : string; node : int; want : rows; got : rows option; cause : cause }
+
 type judgement =
   | Agrees
-  | Known of string  (** a listed known repeat or refusal *)
+  | Known of excuse * excuse list
+      (** a listed known repeat or refusal: the excuse naming the entry, then the program's others
+      *)
   | Disagrees of string
   | No_claim of string
+
+let is_known entry = function Known ((x : excuse), _) -> String.equal x.entry entry | _ -> false
 
 (* The resolve-at-use nodes at or under each node. *)
 let open_under (prog : program) =
@@ -663,13 +686,18 @@ let judge (prog : program) (oracle : oracle) (outcome : outcome) ~(fills : int o
   | Ill_typed why, Accepted _ -> Disagrees ("accepted an ill-typed program: " ^ why)
   | Underspecified _, Refused _ -> Agrees
   | Underspecified (_, why), Accepted _ -> Disagrees ("accepted an underspecified program: " ^ why)
-  | Solved _, Refused msg -> (
+  | Solved want, Refused msg -> (
       match
-        List.find known ~f:(fun e ->
-            List.exists e.refusals ~f:(fun sub -> String.is_substring msg ~substring:sub)
-            && Array.existsi prog ~f:(e.is_x prog))
+        List.find_map known ~f:(fun e ->
+            match
+              ( List.find e.refusals ~f:(fun sub -> String.is_substring msg ~substring:sub),
+                Array.findi prog ~f:(e.is_x prog) )
+            with
+            | Some sub, Some (k, _) ->
+                Some { entry = e.entry; node = k; want = want.(k); got = None; cause = Refusal sub }
+            | _ -> None)
       with
-      | Some e -> Known e.entry
+      | Some x -> Known (x, [])
       | None -> Disagrees ("refused a solvable program: " ^ msg))
   | Solved want, Accepted got -> (
       let nodes = List.init (Array.length prog) ~f:Fn.id in
@@ -712,15 +740,75 @@ let judge (prog : program) (oracle : oracle) (outcome : outcome) ~(fills : int o
                (show_rows got.(k))
                (show_rows want.(k)))
       | None -> (
-          let fill_issues = List.filter_map nodes ~f:(fun k -> Option.bind fills.(k) ~f:(fill k)) in
+          let fill_issues =
+            List.filter_map nodes ~f:(fun k ->
+                Option.bind fills.(k) ~f:(fun d -> Option.map (fill k d) ~f:(fun e -> (k, d, e))))
+          in
           match
-            List.find fill_issues ~f:(fun e -> not (List.mem known_entries e ~equal:String.equal))
+            List.find fill_issues ~f:(fun (_, _, e) ->
+                not (List.mem known_entries e ~equal:String.equal))
           with
-          | Some e -> Disagrees e
+          | Some (_, _, e) -> Disagrees e
           | None -> (
-              match List.filter_map mismatched ~f:explained @ fill_issues with
-              | e :: _ -> Known e
+              let excuse cause k entry =
+                { entry; node = k; want = want.(k); got = Some got.(k); cause }
+              in
+              match
+                List.filter_map mismatched ~f:(fun k ->
+                    Option.map (explained k) ~f:(excuse Collapse k))
+                @ List.map fill_issues ~f:(fun (k, d, e) -> excuse (Fill (d, cells want.(k))) k e)
+              with
+              | x :: rest -> Known (x, rest)
               | [] -> Agrees)))
+
+let show_judgement = function
+  | Agrees -> "agrees"
+  | Known ((x : excuse), _) -> "known: " ^ x.entry
+  | Disagrees _ -> "DISAGREES"
+  | No_claim e -> "no claim: " ^ e
+
+(* {2 The listing ([--list-known])}
+
+   One [KNOWN] line per program a known entry excuses, under the entry its judgement names (as many
+   per entry as the stderr count gives), in the known list's order then the sweep's: [KNOWN <entry>
+   | <case> | %<node> want [<rows>] got [<rows>] | <cause> | also <excuses> | <program>]: [got
+   refused] for a refusal; the cause [collapse], [fill <distinct>/<cells>] or [refusal: <message>];
+   [also] the program's other excuses, each with its entry in parentheses, or [-]. Then one [SHAPES]
+   line per accepted program, in the sweep's order: [SHAPES <case> | <judgement> | %<node> [<rows>][
+   (oracle [<rows>])][ fill <distinct>]; ... | <program>], the oracle's shape only where it differs,
+   the fill only for an executed draw. Rows print as [show_rows] does: [batch|input->output]. *)
+
+let show_cause = function
+  | Collapse -> "collapse"
+  | Fill (d, c) -> Printf.sprintf "fill %d/%d" d c
+  | Refusal sub -> "refusal: " ^ sub
+
+let show_excuse (x : excuse) =
+  Printf.sprintf "%%%d want [%s] got %s" x.node (show_rows x.want)
+    (Option.value_map x.got ~default:"refused" ~f:(fun g -> "[" ^ show_rows g ^ "]"))
+
+let known_line name prog ((x : excuse), also) =
+  Printf.sprintf "KNOWN %s | %s | %s | %s | also %s | %s" x.entry name (show_excuse x)
+    (show_cause x.cause)
+    (if List.is_empty also then "-"
+     else
+       String.concat ~sep:"; "
+         (List.map also ~f:(fun y ->
+              Printf.sprintf "%s %s (%s)" (show_excuse y) (show_cause y.cause) y.entry)))
+    (show_program prog)
+
+let shapes_line name prog oracle got j ~(fills : int option array) =
+  Printf.sprintf "SHAPES %s | %s | %s | %s" name (show_judgement j)
+    (String.concat ~sep:"; "
+       (List.init (Array.length got) ~f:(fun k ->
+            Printf.sprintf "%%%d [%s]%s%s" k
+              (show_rows got.(k))
+              (match oracle with
+              | Solved want when not (same want.(k) got.(k)) ->
+                  " (oracle [" ^ show_rows want.(k) ^ "])"
+              | _ -> "")
+              (Option.value_map fills.(k) ~default:"" ~f:(Printf.sprintf " fill %d")))))
+    (show_program prog)
 
 (* {2 The generator} *)
 
@@ -1018,6 +1106,10 @@ type case = { name : string; prog : program; oracle : oracle; outcome : outcome 
 let num_programs = 2000
 let num_executed = 120
 
+(* The listing above, on stderr, for a direct run of the built executable from
+   [_build/default/test/operations] (which finds [ocannl_config] there). *)
+let list_known = Array.mem (Sys.get_argv ()) "--list-known" ~equal:String.equal
+
 (* Floors on the programs that agree outright (set a little under the counts at landing, which the
    stderr prints): a known entry grown to excuse them would fail here. *)
 let strict_floor_branching = 650
@@ -1062,11 +1154,13 @@ let () =
               | [ f ] -> Hashtbl.set fills ~key:c.name ~data:f
               | _ -> assert false
               | exception e -> Hashtbl.set exec_failed ~key:c.name ~data:(Exn.to_string e)));
+  (* What [judge] saw and the listing prints. *)
+  let fills_of c =
+    Option.value (Hashtbl.find fills c.name) ~default:(Array.map c.prog ~f:(fun _ -> None))
+  in
   let judged =
     List.map cases ~f:(fun c ->
-        let f =
-          Option.value (Hashtbl.find fills c.name) ~default:(Array.map c.prog ~f:(fun _ -> None))
-        in
+        let f = fills_of c in
         let j =
           match Hashtbl.find exec_failed c.name with
           | Some e -> Disagrees ("execution raised " ^ e)
@@ -1111,7 +1205,23 @@ let () =
         (List.length group));
   List.iter known_entries ~f:(fun e ->
       Stdio.eprintf "(not part of the golden) known %s: %d\n%!" e
-        (count (fun (_, j, _) -> Poly.equal j (Known e))));
+        (count (fun (_, j, _) -> is_known e j)));
+  let listing =
+    if not list_known then []
+    else
+      List.concat_map known_entries ~f:(fun e ->
+          List.filter_map judged ~f:(fun (c, j, _) ->
+              match j with
+              | Known (x, also) when String.equal x.entry e ->
+                  Some (known_line c.name c.prog (x, also))
+              | _ -> None))
+      @ List.filter_map judged ~f:(fun (c, j, _) ->
+          match c.outcome with
+          | Accepted got -> Some (shapes_line c.name c.prog c.oracle got j ~fills:(fills_of c))
+          | _ -> None)
+  in
+  List.iter listing ~f:(fun line -> Stdio.Out_channel.output_lines Stdio.stderr [ line ]);
+  Stdio.Out_channel.flush Stdio.stderr;
   (* These thirteen seeded programs were refused by the broad leaf-waits-for-any-bound prototype
      (gh-ocannl-2141). Keep their acceptance independent of the known list. *)
   let fixed_index_regressions =
@@ -1174,12 +1284,7 @@ let () =
       List.iter
         (List.take judged (List.length fixed_programs))
         ~f:(fun (c, j, executed) ->
-          Stdio.printf "%s: %s%s\n" c.name
-            (match j with
-            | Agrees -> "agrees"
-            | Known e -> "known: " ^ e
-            | Disagrees _ -> "DISAGREES"
-            | No_claim e -> "no claim: " ^ e)
+          Stdio.printf "%s: %s%s\n" c.name (show_judgement j)
             (if executed then ", executed" else ""));
       p_all ~min:1 "every fixed program agrees with the oracle or is a listed known case"
         (List.take judged (List.length fixed_programs))
@@ -1224,7 +1329,7 @@ let () =
         ~f:(fun _ -> true));
   Verdict.case "the known lists" (fun () ->
       p_all ~min:(List.length known) "every known entry still occurs" known_entries ~f:(fun e ->
-          List.exists judged ~f:(fun (_, j, _) -> Poly.equal j (Known e))));
+          List.exists judged ~f:(fun (_, j, _) -> is_known e j)));
   Verdict.case "the judge flags corrupted observations" (fun () ->
       (* Take the agreeing executed fixed program with two draws and corrupt what was observed. *)
       let c, _, _ = List.hd_exn judged in
@@ -1253,7 +1358,31 @@ let () =
            judge ill (solve ill) (Accepted [| empty; empty; empty |]) ~fills:[| None; None; None |]
          with
         | Disagrees _ -> true
-        | _ -> false))
+        | _ -> false));
+  (* Only under [--list-known], so stdout is the golden's without it. The first two pin only the
+     line counts: the lines printed above, counted by their own prefix, against the judgements the
+     counts and claims read. The third pins what an excuse says: a solver shape exactly when the
+     cause is not a refusal, a collapse that differs from the oracle's shape, a fill that falls
+     short of the cells. *)
+  if list_known then
+    Verdict.case "the known listing" (fun () ->
+        p_all ~min:(List.length known)
+          "the listing names as many programs per entry as the entry excuses" known_entries
+          ~f:(fun e ->
+            List.count listing ~f:(String.is_prefix ~prefix:("KNOWN " ^ e ^ " | "))
+            = count (fun (_, j, _) -> is_known e j));
+        p "the listing gives the shapes of every accepted program"
+          (List.count listing ~f:(String.is_prefix ~prefix:"SHAPES ")
+          = count (fun (c, _, _) -> match c.outcome with Accepted _ -> true | _ -> false));
+        p_all ~min:(List.length known) "every listed excuse is consistent with its cause"
+          (List.concat_map judged ~f:(fun (_, j, _) ->
+               match j with Known (x, also) -> x :: also | _ -> []))
+          ~f:(fun (x : excuse) ->
+            match (x.cause, x.got) with
+            | Refusal _, None -> true
+            | Collapse, Some g -> not (same x.want g)
+            | Fill (d, c), Some _ -> d <> c
+            | _ -> false))
 
 (* {2 The seed families (wave-20261111-ocannl's comment on gh-ocannl-2181)}
 
