@@ -511,17 +511,28 @@ files.
   memory. Separate per-thread slices and total-size accounting would be needed for multi-thread
   scratch. The CUDA regression checks three live slices and initialization on a second run, plain
   and captured, plus a one-thread array at the cutoff that stays in the depot.
+  On rog-nv-linux's RTX 5070 Ti Laptop GPU, with an exclusive hold and no compute co-tenants at
+  open or close, two real `s11d_ref` submissions at each revision recorded these driver readings.
+  On `028856294`, the PTX depot was 49152 B and free memory fell by 3356 MiB at both submissions,
+  before the automatic reset. On `b7e817928`, the aligned source declarations requested 66304 B
+  of scratch and the PTX depot was zero. The first allocation took 32 MiB of driver backing,
+  the second reused it, and neither submission grew the reservation. Requested scratch counts
+  the source declarations, while the base depot reflects NVRTC's optimized PTX.
+  Run records on rog-nv-linux: `20261117T223304Z-2571991` (base) and
+  `20261117T223402Z-2578262` (scratch). In the same runs, the 25 ms sampled process peaks fell
+  from 3516 to 192 MiB for `schedule_strided_1x1` and from 1468 to 608 MiB for
+  `tile_mma_narrow`. These peaks include memory beyond the individual launch's reservation.
 - Guard for the depot path: `test/operations/cuda_launch_reservation` declines a hopeless two-block
   frame and returns the free memory after a two-block kernel with 48 KiB per thread, plainly and in
-  a graph. It brackets the reset threshold and runs HIP's scratch frame. By hand, under an exclusive hold, `--contended`
-  outwaits a child process holding the memory in device buffers (a frame reservation is now
+  a graph. It brackets the reset threshold and runs HIP's scratch frame.
+  By hand, under an exclusive hold, `--contended` outwaits a child process holding the memory in device buffers (a frame reservation is now
   released at once) for a plain launch, a graph's first instantiation and a cached replay, whose
   refused exec must be dropped. On HIP (tuf, discrete, ROCm) the same hold refuses nothing: ROCr
   backs scratch for the waves actually launched, on demand, so a one-work-item frame whose
   full-occupancy scratch would be 2 GiB launched at once with 380 MB free -- HIP's launch back-off
   is in place but no run has reached it, and `--contended` pins the non-refusal. In a shared batch
-  that child refused its neighbours. `schedule_strided_1x1`'s resnet-block row claims the reset on
-  the old depot cost of the real s11d_ref.
+  that child refused its neighbours. `schedule_strided_1x1` claims the real s11d_ref runs without a
+  local-memory reset on CUDA devices that would have reset the base's depot.
 - Raw-lowering test audit (gh-ocannl-2219): a `lowered_transform` that captures IR for a structural
   assertion need not launch that IR. `online_softmax_block`'s `forward` and `training`,
   `online_softmax`'s `training`, SGD `trajectory` and leaf-gradient legs, and `fused_classifier`
