@@ -776,6 +776,12 @@ files.
   the default or take one alternative — top-N cuts count candidates, and certainty bounds read
   `fc_default`, never the alternatives' shapes; `Autotune.placement_floor_withheld` is the one
   place a candidate's standing gates the floor.
+  The profitability comparison is strict, so a node's SIZE decides where a cap lands: read over
+  exactly its whole domain (a tie), it is materialized whole and resets its consumers' fan-in;
+  given spare cells, it is footprint-scoped and its consumers' chain stays open. A fixture that
+  wants the fan-in guard past a visit-capped producer lifts `virtualize_max_visits` explicitly
+  instead of allocating spare cells (gh-ocannl-2276; `test/operations/virtual_chain_fanin.ml`'s
+  phase-12 landing legs pin both sizes).
   Structural probe for "inlined": `count_get` of the node, never `count_scopes` — the simplifier
   collapses a single-assignment scope into its expression. Pinned row by row, with executed parity
   against the materialized and (where the cap alone stands in the way) the inlined reading, by
