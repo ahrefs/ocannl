@@ -1983,6 +1983,13 @@ files.
   `cuda_facts.blends_value_selects = false`: enabling blending would change both emission and the
   inline fan-in guard's arm-load accounting, which this performance census does not justify.
   A floor-policy pass is not evidence that native PTX stays branchless, nor a timing claim.
+- **A device-wide CUDA blend policy trades gains for a sparse equality regression** (gh-ocannl-2281).
+  On rog's sm_120 (CUDA toolkit 13.5), `bench_cuda_select` measured both renderings of the same
+  scheduled kernels at sm_75 and sm_120 PTX. With six paired rounds and byte-identical controls,
+  blending cut the max-pool backward time by 34% and 22%, respectively, and sped up both masks
+  for `where_zero` and `relu_gate`. Sparse `where_eq` slowed by 3.8% and 4.1%, beyond the
+  control ranges at both targets. CUDA therefore keeps `blends_value_selects = false` at both
+  targets. The issue records the per-cell timings.
 - **Widths that no local hardware can execute still get checked, three ways.** gh-ocannl-621's
   AVX-512, AVX512-FP16 and aarch64 rows were written on a machine with none of them (QEMU's TCG
   implements neither AVX-512 nor AVX512-FP16 — `query-cpu-model-expansion` on `-cpu max` reports

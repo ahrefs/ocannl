@@ -1088,6 +1088,29 @@ finalists must pass an analytical value check before timing is accepted. Do not 
 correctness-slot dry runs as performance evidence; identify the hardware and memory
 architecture alongside measurements.
 
+### CUDA value-select benchmark
+
+`bench_cuda_select` checks and times short-circuiting and local-value blending on fixed schedules
+at two distinct PTX targets. It generates its inputs in memory. Build the executable and verify
+the emitted forms, targets and host parity with a dry run before requesting a measurement window.
+From the checkout, give the cell driver an empty scratch directory in `RUN_DIR`.
+
+```sh
+dune build benchmarks/runners/ocannl/bench_cuda_select.exe
+python3 -B benchmarks/cells.py cell --backend cuda --dir "$RUN_DIR" --timeout 900 \
+  --expect cuda_fast_math=true --expect cuda_kernel_cache_mib=0 \
+  --expect output_debug_files_in_build_directory=false -- \
+  BENCH_RETIME_CALLS=6 _build/default/benchmarks/runners/ocannl/bench_cuda_select.exe \
+  --ocannl_cuda_fast_math=true --ocannl_cuda_kernel_cache_mib=0 \
+  --ocannl_output_debug_files_in_build_directory=false --dry-run
+```
+
+Use a fresh scratch directory for the timed run and omit `--dry-run`. Start the exclusive window
+with the box check below, using `--box-only` and the box's recorded fixture store as for the
+virtual-twin benchmark. The cell driver clears ambient settings, verifies the resolved
+configuration, and captures the paired medians and ranges in `$RUN_DIR/stdout`. Accept results
+from a successful cell whose recorded floor and native targets are distinct.
+
 ## Measurement boxes
 
 **Start every measurement session with `benchmarks/check-box.sh`** (gh-ocannl-1062), from the

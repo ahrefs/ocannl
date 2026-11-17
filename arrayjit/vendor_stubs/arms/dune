@@ -176,6 +176,34 @@
   metal_stub
   metal_backend_stub_check))
 
+; benchmarks/runners/ocannl: bench_cuda_select uses the CUDA backend's compile scope.
+
+(rule
+ (action
+  (copy#
+   ../../../benchmarks/runners/ocannl/bench_cuda_select.real.ml
+   bench_cuda_select.ml)))
+
+(library
+ (name bench_cuda_select_arm)
+ (modules bench_cuda_select)
+ (libraries
+  base
+  bench_args
+  bench_harness
+  bench_out
+  bench_retime
+  ll_test
+  ocannl
+  arrayjit.autotune
+  arrayjit.context
+  arrayjit.ir
+  arrayjit.utils
+  arrayjit.verdict
+  cuda_backend_stub_check)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; test/operations: compile-only WMMA floor witness, also names the NVRTC bindings.
 
 (rule
