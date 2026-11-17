@@ -5373,6 +5373,12 @@ the change reaches (they serialize on the training lock and never fit the 1800 s
 2026-11-13 the per-PR matrix ran that suite; from then until this landed a cross-cutting change
 merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundary; in brief:
 
+- **Plan against the current base.** After fetching, run `tools/merge-build-check.sh --plan
+  --base origin/master` on the branch. It queries the candidate merge of the two committed tips
+  and reports the tests verdict, owed requirements and record admissibility, or a merge conflict.
+  Scratch Dune queries are advisory. The real merge build still owns readiness. A CROSS-CUTTING
+  banner comes first in `affected` diagnostics, with the widest observed contributors, and
+  the merge build carries those contributors into its missing-record refusal.
 - **Training reach.** `prepush` prints each omitted training alias on stderr as
   `test-run: prepush: train: ALIAS`, beside the `slow:` lines, including `--list`
   and before a CROSS-CUTTING refusal (first-tier names are the full list's). The merge build reads

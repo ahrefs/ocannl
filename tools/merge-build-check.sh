@@ -2,7 +2,7 @@
 # Check a merge commit: the command `.github/ship-pr-merge-build` gives ship-pr's merge build,
 # which runs it at the root of the PR head merged with master's tip, before the merge call.
 # Run it by hand the same way, at the root of a checkout whose HEAD is a merge you built.
-# Usage: tools/merge-build-check.sh [--plan] [--all]
+# Usage: tools/merge-build-check.sh [--plan [--base REV]] [--all]
 #
 # HEAD is read as the merge to judge: first parent the base, second parent the PR head (the
 # order `git merge` and ship-pr's `commit-tree -p <base tip> -p <head>` give). Four tiers, run in
@@ -89,29 +89,48 @@
 # script prints of a run is the same for the same failure: tier lines omit elapsed time
 # (gh-ocannl-1950), and the tests tier prints neither its list nor a count (a PR that adds a
 # test lists one alias more than the base alone does); `--plan` shows the command that lists it.
-# --all runs the whole harness tier whatever HEAD is. --plan prints the selection, asking what the
-# harness tier reaches (no slot, no dune), and runs nothing; the tests tier's list needs dune, so
-# --plan names the command that asks for it instead of running it.
+# --all runs the whole harness tier whatever HEAD is. --plan alone prints the tier selection for
+# HEAD without asking Dune or reading records. On a branch, --plan --base REV reads the locally
+# resolved base tip (fetch first to refresh a remote-tracking ref) and committed HEAD. It asks
+# the tests tier on their candidate merge in a scratch checkout outside the repository, with
+# parents in ship-pr's order. The caller's index and working files are ignored and its refs
+# stay untouched. The merged copy of this script handles the `--plan-merge` query, so changes
+# the base brought to the gate apply too. It runs Dune queries and reads the head's owed-run
+# record when there is a need.
+# Only the record check's status says whether it admits the need. A plan makes no build or
+# readiness verdict and writes no record. A conflict or an unreadable plan fails the query.
+# The only extra affected text read is one anchored, printable `affected: CROSS-CUTTING reason:`
+# line from the full-list ask. It is display-only; a missing, duplicate or malformed reason
+# contributes nothing. The trailers, exit statuses and existing list protocol still govern.
 #
 # Toolchain: a non-interactive shell can lack the profile that puts the opam switch on PATH
 # (on mac-studio `zsh -c` resolves opam but not dune). When `dune` does not resolve, this sources
 # tools/opam-env.sh, first adding Homebrew's prefix when `opam` does not resolve either.
 #
-# Exit status: 0 every selected tier passed (or --plan), 1 a tier failed or no dune could be
-# found, 2 a usage error. The first failing tier ends the run.
+# Exit status: 0 every selected tier passed (or the plan answered, even if a record is missing),
+# 1 a tier failed or the plan could not be read, including a merge conflict; 2 a usage error.
 set -u
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
 me=merge-build-check
-plan=0 all=0
+plan=0 all=0 plan_base= plan_merge=0
 while [ $# -gt 0 ]; do
   case $1 in
     --plan) plan=1 ;;
+    --plan-merge) plan_merge=1 ;;
+    --base)
+      if [ -z "${2:-}" ] || [ -n "$plan_base" ]; then
+        echo "$me: --base requires one revision" >&2; exit 2
+      fi
+      plan_base=$2
+      shift ;;
     --all) all=1 ;;
     -h|--help) sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "$me: unknown argument '$1'" >&2; exit 2 ;;
   esac
   shift
 done
+[ -z "$plan_base" ] || { [ "$plan" = 1 ] && [ "$plan_merge" = 0 ]; } ||
+  { echo "$me: --base requires --plan" >&2; exit 2; }
 SHELL_GLOB='*.sh'
 # The harness tier's members run this many at once (tools/test-harnesses.sh --jobs): the width
 # of the `-j 4` build the slot this runs in is sized for, and what the bound was measured at.
@@ -259,7 +278,7 @@ read_parents() {
 # $tests_dir/ask: it names the list and its size, which differ between a merge and its base.
 ask_tests() {
   local rc=0 verdict
-  tests= tests_owed= tests_why= tests_incomplete=0
+  tests= tests_verdict= tests_owed= tests_why= tests_incomplete=0
   if [ -z "$mb" ]; then
     tests=unread tests_why='HEAD has no two sides with a merge base, so what the change reaches cannot be asked'
     return
@@ -267,6 +286,7 @@ ask_tests() {
   "${BASH:-bash}" "$root/tools/test-run.sh" prepush --since "$mb..$head" --list \
     >"$tests_dir/list" 2>"$tests_dir/ask" </dev/null || rc=$?
   verdict=$(sed -n 's/^affected: verdict=//p' "$tests_dir/ask" | tail -n 1)
+  tests_verdict=$verdict
   case $rc/$verdict in
     0/ok) tests=list ;;
     3/incomplete) tests=list tests_incomplete=1 tests_owed='the list is INCOMPLETE (a changed path is UNMAPPED), so what that path reaches' ;;
@@ -392,39 +412,164 @@ owed_needs() {
   [ "$n" = 0 ] || train_why='the change reaches train- aliases, which this build does not run'
 }
 
-read_parents
-select_tiers
-echo "$me: format tier: tools/fmt-check.sh, its scans off (always)"
-echo "$me: compile tier: dune build @check @test/operations/scans (always)"
-if [ -n "$mb" ]; then
-  echo "$me: tests tier: the per-test aliases the head's change reaches, by tools/test-run.sh prepush --since ${mb:0:8}..${head:0:8} --list (always)"
-else
-  echo "$me: tests tier: UNREAD -- HEAD has no two sides with a merge base, so the tier fails"
-fi
-[ -z "$script_line" ] || echo "$me: harness tier: $script_line"
-if [ "$harness" = 1 ]; then
-  echo "$me: harness tier: SELECTED -- $why"
-  if [ "$scoped" = 1 ]; then
-    while IFS= read -r line; do echo "$me:   $line"; done <<EOF
+show_tiers() {
+  echo "$me: format tier: tools/fmt-check.sh, its scans off (always)"
+  echo "$me: compile tier: dune build @check @test/operations/scans (always)"
+  if [ -n "$mb" ]; then
+    echo "$me: tests tier: the per-test aliases the head's change reaches, by tools/test-run.sh prepush --since ${mb:0:8}..${head:0:8} --list (always)"
+  else
+    echo "$me: tests tier: UNREAD -- HEAD has no two sides with a merge base, so the tier fails"
+  fi
+  [ -z "$script_line" ] || echo "$me: harness tier: $script_line"
+  if [ "$harness" = 1 ]; then
+    echo "$me: harness tier: SELECTED -- $why"
+    if [ "$scoped" = 1 ]; then
+      while IFS= read -r line; do echo "$me:   $line"; done <<EOF
 $reach
 EOF
+    fi
+  else
+    echo "$me: harness tier: skipped -- $why"
   fi
-else
-  echo "$me: harness tier: skipped -- $why"
+}
+
+find_dune() {
+  if ! command -v dune >/dev/null 2>&1; then
+    if ! command -v opam >/dev/null 2>&1; then
+      for prefix in /opt/homebrew/bin /usr/local/bin; do
+        if [ -x "$prefix/opam" ]; then PATH=$prefix:$PATH; break; fi
+      done
+    fi
+    echo "$me: dune is not on PATH; sourcing tools/opam-env.sh"
+    # shellcheck source=tools/opam-env.sh
+    . "$root/tools/opam-env.sh" || exit 1
+    command -v dune >/dev/null 2>&1 || { echo "$me: no dune on PATH even after opam env" >&2; exit 1; }
+  fi
+}
+
+read_tests() {
+  ask_tests
+  if [ "$tests" = unread ]; then
+    [ ! -s "$tests_dir/ask" ] || cat "$tests_dir/ask" >&2
+    return 1
+  fi
+  owed_needs
+  if [ "$tests" = unread ]; then
+    [ ! -s "$tests_dir/train-ask" ] || cat "$tests_dir/train-ask" >&2
+    return 1
+  fi
+}
+
+show_cross_reason() {
+  local reason
+  case $tests_verdict in cross-cutting | cross-cutting,incomplete) ;; *) return 0 ;; esac
+  reason=$(sed -n 's/^affected: CROSS-CUTTING reason: //p' "$tests_dir/ask")
+  if [ -n "$reason" ] && LC_ALL=C grep -qx '[[:print:]][[:print:]]*' <<<"$reason" &&
+     [ "$(grep -c '^affected: CROSS-CUTTING reason: ' "$tests_dir/ask")" = 1 ]; then
+    printf '%s: tests tier: CROSS-CUTTING reason: %s\n' "$me" "$reason"
+  fi
+}
+
+check_record() {
+  "${BASH:-bash}" "$root/tools/owed-run.sh" check "$head" "${needs[@]}" >"$tests_dir/owed" 2>&1 </dev/null
+}
+
+die_plan() { printf '%s: plan: %s\n' "$me" "$*" >&2; exit 1; }
+
+branch_plan() (
+  base=$(git -C "$root" rev-parse --verify --quiet --end-of-options "${plan_base}^{commit}") ||
+    die_plan "base revision not found: $plan_base"
+  head=$(git -C "$root" rev-parse --verify HEAD) || die_plan 'cannot resolve HEAD'
+  [ "$base" != "$head" ] || die_plan 'base and HEAD are the same commit'
+  echo "$me: plan: committed head $head against base $base ($plan_base)"
+  git_vars=$(git -C "$root" rev-parse --local-env-vars) || die_plan 'cannot read Git environment names'
+  # The candidate repository must not inherit a caller's alternate index or gitdir.
+  # shellcheck disable=SC2086
+  unset $git_vars
+  unset DUNE_BUILD_DIR DUNE_ROOT
+  scratch_parent=$(cd "${TMPDIR:-/tmp}" && pwd -P) || die_plan 'cannot resolve temporary directory'
+  if git -C "$scratch_parent" rev-parse --git-dir >/dev/null 2>&1; then
+    die_plan 'temporary directory is inside a Git checkout; set TMPDIR outside it'
+  fi
+  scratch=$(mktemp -d "$scratch_parent/merge-build-plan.XXXXXX") || die_plan 'cannot make a scratch directory'
+  trap 'rm -rf "$scratch"' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  git clone --shared --no-checkout --quiet -- "$root" "$scratch/checkout" ||
+    die_plan 'cannot create the candidate repository'
+  cd "$scratch/checkout" || die_plan 'cannot enter the candidate repository'
+  rc=0
+  tree=$(git merge-tree --write-tree "$base" "$head") || rc=$?
+  case $rc in
+    0) ;;
+    1) printf '%s\n' "$tree" >&2; die_plan 'merge conflict' ;;
+    *) die_plan "git merge-tree exited $rc" ;;
+  esac
+  commit=$(git -c user.name=merge-build-plan -c user.email=merge-build-plan@example.invalid \
+    commit-tree "$tree" -p "$base" -p "$head" -m 'Candidate merge for the merge-build plan') ||
+    die_plan 'cannot create the candidate commit'
+  git -c core.hooksPath=/dev/null checkout --quiet --detach "$commit" ||
+    die_plan 'cannot check out the candidate merge'
+  # A local opam switch is visible from the original checkout only.
+  cd "$root" || die_plan 'cannot enter the head checkout'
+  find_dune
+  cd "$scratch/checkout" || die_plan 'cannot enter the candidate repository'
+  set -- --plan-merge
+  [ "$all" = 0 ] || set -- "$@" --all
+  rc=0
+  # Affected retains rejected Dune output in TMPDIR for inspection.
+  TMPDIR="$scratch_parent" "${BASH:-bash}" tools/merge-build-check.sh "$@" </dev/null || rc=$?
+  [ "$rc" != 2 ] || die_plan 'the candidate merge does not support plan queries'
+  exit "$rc"
+)
+
+merged_plan() (
+  cd "$root" || exit 1
+  read_parents
+  select_tiers
+  show_tiers
+  find_dune
+  tests_dir=$(mktemp -d "${TMPDIR:-/tmp}/merge-build-query.XXXXXX") || die_plan 'cannot make a query directory'
+  trap 'rm -rf "$tests_dir"' EXIT
+  if ! read_tests; then die_plan "tests tier unreadable: $tests_why"; fi
+  case $tests_verdict/$tests/$tests_incomplete in
+    cross-cutting/list/0) echo "$me: tests plan: CROSS-CUTTING (first tier selected)" ;;
+    cross-cutting/list/1) echo "$me: tests plan: CROSS-CUTTING (first tier selected, INCOMPLETE)" ;;
+    cross-cutting/owed/*) echo "$me: tests plan: CROSS-CUTTING (no first tier selected)" ;;
+    incomplete/*) echo "$me: tests plan: INCOMPLETE" ;;
+    ok/owed/*) echo "$me: tests plan: narrow, over the $TESTS_MAX-alias merge build limit" ;;
+    ok/list/*) echo "$me: tests plan: narrow" ;;
+  esac
+  show_cross_reason
+  if [ ${#needs[@]} -eq 0 ]; then
+    echo "$me: owed-run needs: none"
+  else
+    rc=0
+    check_record || rc=$?
+    if [ "$rc" = 0 ]; then
+      echo "$me: owed-run needs: ${needs[*]} (record admits)"
+    else
+      echo "$me: owed-run needs: ${needs[*]} (record does not admit; owed-run.sh exit $rc)"
+    fi
+    cat "$tests_dir/owed"
+  fi
+)
+
+if [ -n "$plan_base" ]; then
+  branch_plan
+  exit $?
 fi
+if [ "$plan_merge" = 1 ]; then
+  merged_plan
+  exit $?
+fi
+read_parents
+select_tiers
+show_tiers
 [ "$plan" = 0 ] || exit 0
 
-if ! command -v dune >/dev/null 2>&1; then
-  if ! command -v opam >/dev/null 2>&1; then
-    for prefix in /opt/homebrew/bin /usr/local/bin; do
-      if [ -x "$prefix/opam" ]; then PATH=$prefix:$PATH; break; fi
-    done
-  fi
-  echo "$me: dune is not on PATH; sourcing tools/opam-env.sh"
-  # shellcheck source=tools/opam-env.sh
-  . "$root/tools/opam-env.sh" || exit 1
-  command -v dune >/dev/null 2>&1 || { echo "$me: no dune on PATH even after opam env" >&2; exit 1; }
-fi
+find_dune
 cd "$root" || exit 1
 OCANNL_TOOL_FMT_CHECK_SCANS=0 tools/fmt-check.sh </dev/null || {
   rc=$?
@@ -443,15 +588,7 @@ tests_dir=$(mktemp -d "${TMPDIR:-/tmp}/merge-build-check.XXXXXX") || {
   exit 1
 }
 trap 'rm -rf "$tests_dir"' EXIT
-ask_tests
-if [ "$tests" = unread ]; then
-  [ ! -s "$tests_dir/ask" ] || cat "$tests_dir/ask" >&2
-  echo "$me: tests tier FAILED ($tests_why)" >&2
-  exit 1
-fi
-owed_needs
-if [ "$tests" = unread ]; then
-  [ ! -s "$tests_dir/train-ask" ] || cat "$tests_dir/train-ask" >&2
+if ! read_tests; then
   echo "$me: tests tier FAILED ($tests_why)" >&2
   exit 1
 fi
@@ -459,9 +596,10 @@ if [ ${#needs[@]} -gt 0 ]; then
   [ -z "$tests_owed" ] || echo "$me: tests tier: OWED -- $tests_owed did not run here"
   [ "$train_why" = '' ] || echo "$me: tests tier: OWED -- $train_why"
   rc=0
-  "${BASH:-bash}" "$root/tools/owed-run.sh" check "$head" "${needs[@]}" >"$tests_dir/owed" 2>&1 </dev/null || rc=$?
+  check_record || rc=$?
   while IFS= read -r line; do [ -z "$line" ] || echo "$me:   $line"; done <"$tests_dir/owed"
   if [ "$rc" != 0 ]; then
+    show_cross_reason
     # The merged tree, which ship-pr's build of the base alone (the base's tree) never prints: a
     # missing record is the merge's own failure, never a shared red `--override` would pass.
     echo "$me: tests tier FAILED (no owed-run record for ${head:0:8} admits the merged tree $(git -C "$root" rev-parse 'HEAD^{tree}'): record the run with tools/owed-run.sh record, or waive it with tools/owed-run.sh waive; tools/owed-run.sh exit $rc)" >&2
