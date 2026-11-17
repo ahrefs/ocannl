@@ -227,8 +227,14 @@ files.
   they closed minimal and the draw was one value. Only the `beg_handled` branch writes a
   `Solved_row`; the other branch's bindings reach it recursively, so the rule lives there alone.
   Measured over gh-ocannl-2244: 34 sweep programs agree that did not, and the einsum entry kept
-  only fixed indices (17 to 3, narrowed to them); no parameter's shape moved. Marking `Var` axes only, or adding the twin in `unify_dim`'s `Var` arm against an
-  `Affine`/`Concat`, changed no sweep program: nothing pins a draw through a windowed spec.
+  only fixed indices (17 to 3, narrowed to them); no parameter's shape moved.
+  The executed window probes (gh-ocannl-2271) tile a draw with three stride-two windows of two
+  taps each. A draw read directly by the spec needs the row mark to reach the window's variables.
+  An identity einsum first gives the draw a marked dimension variable, so `unify_dim` has to
+  pass the mark to the variables determining the affine extent. Dropping either transfer makes its
+  probe fail the six-cell fill claim. A padded kernel needs its own sizing use, since only the
+  output axis and stride determine the padded extent. `padded_operand_offset_windows` pins the
+  refusal of a kernel reached only by a pointwise use site after a relabeled draw.
 - Solver deletion experiments: a green suite does not prove a guess or closing arm redundant
   unless executed pins check that draws vary across their use sites. Before making that claim,
   run `@test/operations/runtest-dropout_mask_varies`,

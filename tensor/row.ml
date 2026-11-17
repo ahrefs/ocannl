@@ -570,14 +570,19 @@ type row_var_set = Set.M(Row_var).t [@@deriving sexp_of]
 
 let row_var_set_empty : row_var_set = Set.empty (module Row_var)
 
-let rec vars_of_dim = function
+let rec collect_dim_vars ~extent_only = function
   | Dim _ | Sym _ -> Set.empty (module Dim_var)
   | Var v -> Set.singleton (module Dim_var) v
-  | Affine { over; conv = None; _ } -> vars_of_dim over
-  | Affine { over; conv = Some { kernel; _ }; _ } ->
-      Set.union (vars_of_dim over) (vars_of_dim kernel)
-  | Concat dims -> Set.union_list (module Dim_var) (List.map dims ~f:vars_of_dim)
+  | Affine { over; conv; _ } -> (
+      let over_vars = collect_dim_vars ~extent_only over in
+      match conv with
+      | Some { kernel; use_padding; _ } when (not extent_only) || not use_padding ->
+          Set.union over_vars (collect_dim_vars ~extent_only kernel)
+      | _ -> over_vars)
+  | Concat dims ->
+      Set.union_list (module Dim_var) (List.map dims ~f:(collect_dim_vars ~extent_only))
 
+let vars_of_dim = collect_dim_vars ~extent_only:false
 let vars_of_dims dims = Set.union_list (module Dim_var) (List.map dims ~f:vars_of_dim)
 let dim_vars_of_row (r : t) = Set.union (vars_of_dims r.beg_dims) (vars_of_dims r.dims)
 
@@ -3094,11 +3099,16 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
         @@ Shape_error
              ( "occurs check failed: dimension variable occurs in its own definition",
                [ Dim_mismatch [ Var v; dim2 ] ] );
-      (* Unification merges the axes, so use-site resolvability is shared (gh-ocannl-544). *)
+      (* Unification merges the axes, so use-site resolvability is shared (gh-ocannl-544). A marked
+         axis equated to a window passes the mark to the variables that determine its extent
+         (gh-ocannl-2271). A padded kernel needs its own sizing use because the padded extent
+         depends only on the output axis and stride. *)
       (match dim2 with
       | Var v2 ->
           if is_resolve_at_use_dim v then add_resolve_at_use_dim v2;
           if is_resolve_at_use_dim v2 then add_resolve_at_use_dim v
+      | Affine _ when is_resolve_at_use_dim v ->
+          Set.iter (collect_dim_vars ~extent_only:true dim2) ~f:add_resolve_at_use_dim
       | _ -> ());
       let ineqs = ref [] in
       ineqs_from_reapply_rows_constr := [];

@@ -50,6 +50,14 @@ u *. 2, then a fixed index, batch 4: every draw fills its use site: true
   draw = 5|3,1, 15 distinct values for 15 cells
 (u ++ "ab => a") *. c[5|3]: every draw closes to 5|3,1: true
 (u ++ "ab => a") *. c[5|3]: every draw fills its use site: true
+(u +* "2*o<+k; k => o,k" [1;2]) *. c[|3,2]
+  draw = 6, 6 distinct values for 6 cells
+(u +* "2*o<+k; k => o,k" [1;2]) *. c[|3,2]: every draw closes to 6: true
+(u +* "2*o<+k; k => o,k" [1;2]) *. c[|3,2]: every draw fills its use site: true
+((u ++ "i => i") +* "2*o<+k; k => o,k" [1;2]) *. c[|3,2]
+  draw = 6, 6 distinct values for 6 cells
+((u ++ "i => i") +* "2*o<+k; k => o,k" [1;2]) *. c[|3,2]: every draw closes to 6: true
+((u ++ "i => i") +* "2*o<+k; k => o,k" [1;2]) *. c[|3,2]: every draw fills its use site: true
 relu u *. c[|2,5]
   draw = 2,5, 10 distinct values for 10 cells
 relu u *. c[|2,5]: every draw closes to 2,5: true

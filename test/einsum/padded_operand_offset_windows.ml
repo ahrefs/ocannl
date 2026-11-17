@@ -717,7 +717,15 @@ let run_unsized_kernels () =
       let x = computed [ 1; 8 ] (ramp 8) in
       let w = ndarray [ 1; 4; 3 ] (Array.create ~len:12 1.) in
       let%op r = x ++ "s, 2*o=+k => s, o, k" in
-      [%op r +* "s, o, k; s, o, k => s, o, k" w])
+      [%op r +* "s, o, k; s, o, k => s, o, k" w]);
+  (* The draw's named axis supplies the padded extent, which does not depend on the taps. *)
+  refused_unsized ~at:`Later "padded draw, kernel only broadcast at its use site" (fun () ->
+      let u = NTDSL.uniform () () in
+      let%op v = u ++ "i => i" in
+      let%op r = v ++ "2*o=+k => o,k" [ "o" ] in
+      Shape.set_dim o 3;
+      let c = ndarray [ 3; 2 ] (ramp 6) in
+      [%op r *. c])
 
 let run_refusals () =
   Tensor.unsafe_reinitialize ();

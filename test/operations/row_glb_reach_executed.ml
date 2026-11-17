@@ -179,6 +179,21 @@ let () =
   draws "(u ++ \"ab => a\") *. c[5|3]" ~want:"5|3,1" ~fills:(Some true) (fun () ->
       let u = TDSL.uniform () () in
       let%op y = (u ++ "ab => a") *. c53 () in
+      ([ u ], y, y));
+  (* Keeping both window axes makes the stride-two windows tile the draw, so the pointwise use site
+     requires one distinct draw value per cell. *)
+  draws "(u +* \"2*o<+k; k => o,k\" [1;2]) *. c[|3,2]" ~want:"6" ~fills:(Some true) (fun () ->
+      let u = TDSL.uniform () () in
+      let c = const [ 3; 2 ] in
+      let%op y = (u +* "2*o<+k; k => o,k" [ 1; 2 ]) *. c in
+      ([ u ], y, y));
+  (* The identity gives the draw a named axis before the window binds it to an affine axis. *)
+  draws "((u ++ \"i => i\") +* \"2*o<+k; k => o,k\" [1;2]) *. c[|3,2]" ~want:"6" ~fills:(Some true)
+    (fun () ->
+      let u = TDSL.uniform () () in
+      let c = const [ 3; 2 ] in
+      let%op v = u ++ "i => i" in
+      let%op y = (v +* "2*o<+k; k => o,k" [ 1; 2 ]) *. c in
       ([ u ], y, y))
 
 (* gh-ocannl-2244: a draw whose use site's axes are concrete, behind a result: a unary result, one
