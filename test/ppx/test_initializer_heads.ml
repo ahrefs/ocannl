@@ -39,6 +39,30 @@ end
 let number_float x = [%op { w = !.x }]
 let number_int n = [%op { w = !..n }]
 let number_nested source x = [%op { w = source + !.x }]
+
+let%op number_let_local n () x =
+  let n = [%oc Int.succ n] in
+  {
+    w =
+      !..(let n = 3 in
+          n);
+  }
+  * x
+  + !..n
+
+let%op number_object_local n () x =
+  let n = [%oc Int.succ n] in
+  {
+    w =
+      !..(object (n)
+            method base = 3
+            method value = n#base
+          end
+           #value);
+  }
+  * x
+  + !..n
+
 let named_binary source other = [%op { w = add source other }]
 let named_unary source = [%op { w = relu source }]
 let named_ternary source = [%op { w = fma source 2.0 3.0 }]
@@ -61,6 +85,8 @@ let _ =
     number_float,
     number_int,
     number_nested,
+    number_let_local,
+    number_object_local,
     named_binary,
     named_unary,
     named_ternary,

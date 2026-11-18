@@ -95,11 +95,18 @@ files.
   no-unit toplevel function, and of any function below the toplevel one; and, gh-ocannl-2058,
   every binder of the body: `let` (a `let rec` in its right-hand sides too), `match` and
   `function` cases, `for` loops -- `late_binder`), and `guard_late` replaces an inline
-  declaration's field, initializer or constant value naming one with an error node -- it was
-  OCaml's "Unbound value", or a silent capture of an outer value of that name (a body `let n` shadowing a `~n`
-  bound before `()` read the parameter). Every binder `translate` reaches is below the lift
+  declaration's field, initializer or constant value with an error node when it contains a free
+  reference to one of those names. The reference used to yield OCaml's "Unbound value", or silently
+  capture an outer value of the same name (a body `let n` shadowing a `~n` bound before `()` read
+  the parameter). Every binder `translate` reaches is below the lift
   point: only the toplevel function's `()` is one, and `let%op f = let n = .. in fun () ..` makes
-  that function non-toplevel. The `try` body and handlers, `lazy` body, constructor/variant
+  that function non-toplevel. Inside a guarded expression, a binder exempts only the uses in its
+  lexical scope (gh-ocannl-2355). A non-recursive `let` binds in its body, so
+  `!..(let n = Int.succ n in n)` still reads the late-bound `n` on the right-hand side. An
+  initializer's own `let n = 3 in n` is valid, as is a method using its object's self name.
+  The compiled `test_initializer_heads` pins both. Scope comes from syntactic value binders.
+  An open or include does not establish that an unqualified identifier is local.
+  The `try` body and handlers, `lazy` body, constructor/variant
   arguments and `let*`/`and*` binding expressions and body are traversed too (gh-ocannl-2166).
   Handler patterns and all
   binding-operator patterns are late binders in their bodies; binding-operator right-hand sides
