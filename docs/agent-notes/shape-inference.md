@@ -251,10 +251,16 @@ files.
   At Stage6a quiescence, a packed draw with a fully sized leading flank and an open result
   remainder can settle the remainder first if its connected bare rows are unsized ordinary
   results and no held structural constraint still bears on them. The existing packed-role arm
-  then reads a closed GLB. Counters shared with another total keep their ordinary closing order:
-  two conversions of the same inferred bits can broadcast into 8 and 12 cells, but sizing the
-  counter for either would constrain both. Ready remainders close together at the fixpoint.
-  The executed test checks both operand orders, a two-axis prefix, and the shared counter.
+  then reads a closed GLB. A shared counter can settle here if every total mentioning it is a
+  ready draw with the same block demand (gh-ocannl-2319). Removing a remainder from the ready set
+  can make a peer ineligible, so the solver filters to a fixpoint and closes the survivors together.
+  The executed test sequences the 9- and 12-cell use sites without adding shape constraints and
+  reads both draws, which fill from three shared blocks. The incompatible 8- and 12-cell pair keeps
+  its ordinary closing order and broadcasts one block. Without the agreement check, the first
+  conversion fixes two blocks and the second refuses the resulting 5–8-cell range.
+  A shared demand must also satisfy the counter's own dimension bounds. Unresolved dimension
+  neighbors defer the early close. A staged store pins the one-block lower bound: committing
+  three blocks before it is checked would refuse `1 ⊑ 3`.
   A solved row passes its role on too (gh-ocannl-2247): when `unify_row` commits `v := value` for a
   marked `v`, the variables that determine the extents of `subst_row env value` take the mark.
   A draw read through an einsum spec (`u ++ "ab => ba"`) is solved to the spec's axes, minted for
