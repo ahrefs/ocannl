@@ -2693,6 +2693,23 @@ let cpu_pack_grid_chunk_bytes (site : matmul_site) ~shape ~prec_bytes (p : sketc
   cpu_pack_grid_chunk_tiles site ~shape ~prec_bytes p
   + cpu_pack_fragment_bytes site ~shape ~bm:p.sk_bm ~bn:p.sk_bn ~bk:p.sk_bk
 
+(* On the fused probe's scalar accumulation nest, the relocated tail writes below the same row axis.
+   Weigh its stores for one output cell, including any scalar local scopes. Saturation here leaves
+   the estimate unknown even if a caller later uses a higher floor. *)
+let cpu_mma_epilogue_cell_updates (site : matmul_site) (opt : LL.optimized) =
+  let cap = Int.max_value / 2 in
+  let rec go in_row (llc : LL.t) =
+    match llc with
+    | For_loop { index; body; _ } -> go (in_row || Idx.equal_symbol index site.m_i) body
+    | If { body; _ } -> go in_row body
+    | Seq (a, b) -> Int.min cap (go in_row a + go in_row b)
+    | Set { tn; _ } when in_row && not (Ir.Tnode.equal tn site.m_d) ->
+        Ir.Cost_model.fork_join_updates ~cap llc
+    | _ -> 0
+  in
+  let updates = go false opt.llc in
+  Option.some_if (updates > 0 && updates < cap) updates
+
 (* Upper bound on the renderer's [Cost_model.fork_join_updates] for a CPU tensorized site's Grid
    launch (gh-ocannl-1857), saturated at the resolved floor. This reads the builder's geometry, not
    the whole routine: the plain packed Grid launches once per enclosing column/reduction block.
@@ -2701,17 +2718,21 @@ let cpu_pack_grid_chunk_bytes (site : matmul_site) ~shape ~prec_bytes (p : sketc
    this full-block estimate; charging a fragment's two transfers per reduction block is deliberately
    an upper bound.
 
-   Boundary: fused epilogues add stores not described by this geometry, so their bound is unknown
-   ([cap]) and they remain proposed. A serial shape likewise has no site Grid to refute. The zeroing
-   nest is independent and does not decide the site's Grid promise. *)
-let cpu_mma_grid_updates_bound (site : matmul_site) (p : sketch_params) ~cap =
+   The fused epilogue runs once per output tile after the last reduction block. The renderer charges
+   full padded extents and every lane iteration of its lane-0 guard. A serial shape or unknown
+   epilogue cost yields [cap]. The zeroing nest has its own Grid decision. *)
+let cpu_mma_grid_updates_bound ?epilogue_cell_updates (site : matmul_site) (p : sketch_params) ~cap
+    =
   let cap = Int.max 1 cap in
   let add a b = if a >= cap - b then cap else a + b in
   let mul a b = if a = 0 || b = 0 then 0 else if a > cap / b then cap else a * b in
   let product ns = List.fold ns ~init:1 ~f:mul in
   let blocks n b = if n = 0 then 0 else 1 + ((n - 1) / b) in
   let bm = p.sk_bm in
-  if p.sk_epilogue || bm <= 0 || (p.sk_bk > 0 && not p.sk_grid) then cap
+  let epilogue_cell_updates =
+    if p.sk_epilogue then Option.value epilogue_cell_updates ~default:cap else 0
+  in
+  if epilogue_cell_updates >= cap || bm <= 0 || (p.sk_bk > 0 && not p.sk_grid) then cap
   else
     let packed = p.sk_bk > 0 in
     let bn = if p.sk_bn = 0 then site.m_nj else p.sk_bn in
@@ -2753,16 +2774,14 @@ let cpu_mma_grid_updates_bound (site : matmul_site) (p : sketch_params) ~cap =
       else if packed then 1
       else product (List.map site.m_ko ~f:snd)
     in
-    product
-      [
-        blocks site.m_ni bm;
-        (if grid_outermost then blocks site.m_nj bn else 1);
-        reductions;
-        (* Whole-triple [Tensorize] wraps its statement/transfers in an n-wide Workgroup loop. The
-           IR estimator charges that loop, even on cc. *)
-        (if packed then 1 else site.m_nj);
-        body;
-      ]
+    let row_blocks = blocks site.m_ni bm in
+    let col_blocks = if grid_outermost then blocks site.m_nj bn else 1 in
+    (* Whole-triple [Tensorize] wraps its statement and transfers in an n-wide Workgroup loop. Its
+       fused tail inherits that lane width. *)
+    let lanes = if packed then 1 else site.m_nj in
+    add
+      (product [ row_blocks; col_blocks; lanes; reductions; body ])
+      (product [ row_blocks; col_blocks; lanes; bm; bn; epilogue_cell_updates ])
 
 let cpu_pack_partitions_k (site : matmul_site) ~bk =
   Option.is_some (Sched.pad_edge_breakpoint ~extent:site.m_nk ~block:bk)
@@ -3824,7 +3843,8 @@ let interval_axis ~(axis : [ `Bm | `Bk ]) ~(values : int array)
 let matmul_flavor_tree ?(coalesced : coalesce_layout option)
     ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~is_gpu ~is_cpu
     ~(limits : Ir.Backend_intf.hardware_limits) ~(coverage_witness : string option Lazy.t)
-    ~(cpu_companions : string option Lazy.t) ~(fused : bool) site : family_tree =
+    ~(cpu_companions : string option Lazy.t) ~epilogue_cell_updates ~(fused : bool) site :
+    family_tree =
   (* Builder preconditions statically decidable at tree construction (gh-ocannl-577): rules the
      schedule builders settle identically for every tile completion refute here, with their
      witnesses, instead of failing candidate by candidate at build — the same lift phase 2 gave the
@@ -4434,13 +4454,18 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
         let rm_twin_seeded = Utils.registered_flag ~arg_name:"autotune_register_tile_rm_twin" in
         let leaf (p : sketch_params) =
           let floor = Ir.C_syntax.grid_min_updates () in
-          let updates = cpu_mma_grid_updates_bound site p ~cap:floor in
+          let updates =
+            cpu_mma_grid_updates_bound
+              ?epilogue_cell_updates:(Lazy.force epilogue_cell_updates)
+              site p ~cap:floor
+          in
           if floor > 0 && updates < floor then
             Sspace.Refuted
               (Printf.sprintf
                  "site Grid launch has at most %d scalar updates, below cc_grid_min_updates=%d; %s"
                  updates floor
-                 (if p.sk_bk > 0 then "the Serial packed shape keeps this geometry"
+                 (if p.sk_epilogue then "this fused Grid launch would run serially"
+                  else if p.sk_bk > 0 then "the Serial packed shape keeps this geometry"
                   else "the unsplit whole-triple shape stays serial"))
           else
             let m = if p.sk_bm = 0 then site.m_ni else p.sk_bm in
@@ -4906,7 +4931,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
    established (candidate timing order, dedup keep-first), and the search's threshold tightens over
    the unfused leaves before the twins compete. The fused flavor is a construction-time verdict of
    the root: refuted with the fusion recognizer's own reason when the base code carries no fusable
-   tail ([Sched.fuse_epilogue_witness] — the check runs on the base code, where the plain
+   tail ([Sched.fuse_epilogue_result] — the check runs on the base code, where the plain
    accumulation-nest site applies), so a site that mints no twins says why. Each flavor's pipelines
    are then judged under the flavor's own preconditions — the fused coverage verdict is
    flavor-indexed (gh-ocannl-577) but implied by the unfused one ([matmul_coverage_witness]), so it
@@ -4922,20 +4947,27 @@ let matmul_family_tree ?coalesced ?capabilities ~is_gpu ~is_cpu
       | None -> None
       | Some _ -> matmul_coverage_witness ~opt ~fused:true site)
   in
-  let flavor ~fused ~coverage_witness =
+  let flavor ~fused ~coverage_witness ~epilogue_cell_updates =
     Sspace.Child
       (lazy
         (matmul_flavor_tree ?coalesced ?capabilities ~is_gpu ~is_cpu ~limits ~coverage_witness
            ~cpu_companions:(lazy (cpu_mma_companion_writes ~opt ~fused site))
-           ~fused site))
+           ~epilogue_cell_updates ~fused site))
   in
   decided_choice
     [
-      (Family_decision.Fusion `Unfused, flavor ~fused:false ~coverage_witness:unfused_coverage);
+      ( Family_decision.Fusion `Unfused,
+        flavor ~fused:false ~coverage_witness:unfused_coverage
+          ~epilogue_cell_updates:(Lazy.from_val None) );
       ( Family_decision.Fusion `Fused,
-        match Sched.fuse_epilogue_witness ~target:site.m_d opt with
-        | Some w -> Sspace.Refuted w
-        | None -> flavor ~fused:true ~coverage_witness:fused_coverage );
+        match Sched.fuse_epilogue_result ~target:site.m_d opt with
+        | Error w -> Sspace.Refuted w
+        | Ok fused_opt ->
+            let epilogue_cell_updates =
+              if is_cpu then lazy (cpu_mma_epilogue_cell_updates site fused_opt)
+              else Lazy.from_val None
+            in
+            flavor ~fused:true ~coverage_witness:fused_coverage ~epilogue_cell_updates );
     ]
 
 let matmul_seed_params ?coalesced ?capabilities ~is_gpu ~is_cpu

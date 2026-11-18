@@ -936,7 +936,8 @@ val cpu_pack_grid_chunk_bytes :
 val cpu_conv_panel_chunk_bytes : conv_site -> sketch_params -> int
 (** See {!Sketch_families.cpu_conv_panel_chunk_bytes}. *)
 
-val cpu_mma_grid_updates_bound : matmul_site -> sketch_params -> cap:int -> int
+val cpu_mma_grid_updates_bound :
+  ?epilogue_cell_updates:int -> matmul_site -> sketch_params -> cap:int -> int
 (** See {!Sketch_families.cpu_mma_grid_updates_bound}; exposed for renderer-census tests. *)
 
 val sketch_path_traffic_floor :

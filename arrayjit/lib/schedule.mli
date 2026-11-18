@@ -657,6 +657,11 @@ val split_reduce_hoist : Low_level.optimized -> optop -> Indexing.symbol list
     interchange cannot remove (the cell mentioning the reduction loop itself, an enclosing loop that
     pins no component, an unrecognized accumulation form). *)
 
+val fuse_epilogue_result :
+  target:Tn.t -> Low_level.optimized -> (Low_level.optimized, string) Result.t
+(** Probe {!constructor-Fuse_epilogue} with no change to placement. On success the returned IR
+    includes the relocated store. On refusal the error carries the recognizer's own message. *)
+
 val fuse_epilogue_witness : target:Tn.t -> Low_level.optimized -> string option
 (** Why {!constructor-Fuse_epilogue} on [target] would fail on this code — the recognizer's own
     refusal message, probed hermetically like {!split_reduce_hoist} — or [None] when an eligible

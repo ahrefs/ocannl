@@ -565,6 +565,88 @@ let () =
       p_exists label (Lazy.force whole_floor_judged) ~f:(fun j ->
           (not j.j_proposed) && grid_of j ~f:site_below_floor))
 
+(* gh-ocannl-2285: the fused tail contributes a store per padded output cell and per Workgroup
+   iteration. Re-ask refused seeds at their own renderer count and the admitted boundary seed one
+   update above the floor. The site Grid follows the independent output-zeroing Grid. *)
+let judge_fused_grid ~select ~m ~n ~k =
+  let tag = Printf.sprintf "agr_fused_%dx%dx%d" m n k in
+  let comp name =
+    let prod = rect_matmul ~tag:name ~m ~n ~k in
+    Train.set_materialized prod.Tensor.value;
+    let bias =
+      TDSL.ndarray
+        (Array.init n ~f:(fun j -> Float.of_int (j % 3) -. 1.))
+        ~label:[ name ^ "_bias" ]
+        ~output_dims:[ n ] ()
+    in
+    let%op out = relu (prod + bias) in
+    Train.forward out
+  in
+  let lowering = Ll_test.captured_lowering ~name:tag (comp tag) in
+  let limits = Context.hardware_limits (Context.auto ()) in
+  let seeds () = Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits lowering in
+  let proposed = seeds () in
+  let candidates =
+    List.filter (without_launch_floor seeds) ~f:(fun p ->
+        p.Autotune.sk_mma && p.sk_epilogue && select p)
+  in
+  List.mapi candidates ~f:(fun i p ->
+      let compile phase =
+        let name = Printf.sprintf "%s_%s_%d" tag phase i in
+        let ctx, routine =
+          Context.compile ~name
+            ~lowered_transform:(fun opt ->
+              [
+                Ir.Schedule.apply
+                  (Autotune.sketch_schedule ~accum_prec:Ll_test.backend_accum_prec ~p opt)
+                  opt;
+              ])
+            (Context.auto ()) (comp name) Ir.Indexing.Empty
+        in
+        Context.release ctx;
+        let grid = routine.Context.grid in
+        Stdio.eprintf "agr: %s %s: %s (not part of the golden)\n%!" name
+          (Autotune.sketch_params_label p) (Cs.grid_summary_string grid);
+        match grid.Cs.loops with [ _zero; site ] -> Some site.Cs.site | _ -> None
+      in
+      let site = compile "default" in
+      let control_floor =
+        match site with
+        | Some (Cs.Grid_serial (Grid_below_min_updates { updates; _ })) -> updates
+        | _ -> Cs.grid_min_updates () + 1
+      in
+      let control_proposed, control_site =
+        Scripted_search.with_settings
+          [ ("cc_grid_min_updates", Int.to_string control_floor) ]
+          (fun () -> (List.mem (seeds ()) p ~equal:equal_params, compile "control"))
+      in
+      (List.mem proposed p ~equal:equal_params, site, control_proposed, control_site))
+
+let () =
+  let packed = lazy (judge_fused_grid ~select:(fun p -> p.Autotune.sk_grid) ~m:33 ~n:65 ~k:16) in
+  let whole k =
+    judge_fused_grid ~select:(fun p -> p.Autotune.sk_bk = 0 && p.sk_bm > 0) ~m:32 ~n:16 ~k
+  in
+  let whole_below = lazy (whole 8) and whole_at_floor = lazy (whole 16) in
+  let refused_below = function
+    | false, Some (Cs.Grid_serial (Grid_below_min_updates _)), true, Some (Cs.Grid_pool _) -> true
+    | _ -> false
+  in
+  in_leg ~leg "agr-fused: packed Grid seeds below the launch floor are refused" (fun label ->
+      p_all label ~min:2 (Lazy.force packed) ~f:refused_below);
+  in_leg ~leg "agr-fused: the whole-triple Grid seed below the launch floor is refused"
+    (fun label -> p_all label (Lazy.force whole_below) ~f:refused_below);
+  in_leg ~leg "agr-fused: epilogue stores keep the whole-triple Grid seed at the launch floor"
+    (fun label ->
+      let default_floor = Cs.grid_min_updates () in
+      p_all label (Lazy.force whole_at_floor) ~f:(function
+        | ( true,
+            Some (Cs.Grid_pool _),
+            false,
+            Some (Cs.Grid_serial (Grid_below_min_updates { updates; floor })) ) ->
+            updates = default_floor && floor = default_floor + 1
+        | _ -> false))
+
 (* --- The tuning leg. *)
 
 let n = 64

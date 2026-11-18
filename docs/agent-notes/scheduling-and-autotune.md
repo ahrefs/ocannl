@@ -1510,9 +1510,12 @@ files.
   not exceed the bound (equal on unpadded witnesses). A 72x32x64 padded witness detects a
   dropped fragment term. `schedule_pad` derives the Serial seed's Grid twin explicitly so the
   partition-composition test retains both in-kernel packing shapes even when seeding prunes the
-  Grid launch. Full padded blocks and repeated fragment transfers
-  make the bound conservative; fused epilogues remain unknown and are retained because their
-  additional stores are outside this geometry estimate.
+  Grid launch. Full padded blocks and repeated fragment transfers make the bound conservative.
+  Fused twins also charge the relocated store, including scalar scope updates measured on the
+  fusion probe's output IR (gh-ocannl-2285). That cost applies once per padded output cell and
+  lane iteration, without repeating across reduction blocks. At 33x65x16 the hoisted and plain
+  packed sites count 12480 and 13248 updates, independently of their 3120-update zeroing nests.
+  At 32x16x16 the whole-triple fused site meets the 16384 floor because its tail also has 16 lanes.
 - **A test decides how a `Tile_mma` rendered from the census, never the source** (gh-ocannl-1316).
   The lane-0 fallback's `if (lane == 0)` guard also wraps the C backends' register tiling, so
   `"== 0)"` never told the two apart; "no intrinsic spelling" says nothing about a statement that

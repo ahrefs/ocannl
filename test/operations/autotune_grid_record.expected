@@ -26,6 +26,9 @@ agr-seed: the seeding bound never undercounts a below-floor site's renderer coun
 agr-seed: unpadded below-floor estimates equal the renderer count: true
 agr-seed: no proposed whole-triple Grid seed renders its site serially for the floor: true
 agr-seed: the floor refuses a whole-triple Grid geometry below it: true
+agr-fused: packed Grid seeds below the launch floor are refused: true
+agr-fused: the whole-triple Grid seed below the launch floor is refused: true
+agr-fused: epilogue stores keep the whole-triple Grid seed at the launch floor: true
 agr: the timing policy kept no timed seed out of the ranking: true
 agr: no ranked candidate rendered a Grid loop serially for the cap: true
 agr: a ranked Grid seed's record shows a loop serial for the launch floor: true
