@@ -200,6 +200,8 @@ gg_row_from_i (the gate reads the forward's row at the input position): the gate
 gg_row_from_i (the gate reads the forward's row at the input position): rewritten equals the composed execution bitwise: true
 gg_wide_grad (the upstream gradient is f32, the gate's product f16): the gate is left composed: true
 gg_wide_grad (the upstream gradient is f32, the gate's product f16): rewritten equals the composed execution bitwise: true
+gg_computed_grad (the upstream gradient is computed): the gate is left composed: true
+gg_computed_grad (the upstream gradient is computed): rewritten equals the composed execution bitwise: true
 --- leg 8: constant masks ---
 literal (i <= o): an inclusive prefix: composed has no scan: true
 literal (i <= o): an inclusive prefix: rewritten has the expected scan: true
