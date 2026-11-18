@@ -469,12 +469,16 @@ files.
   moves and agreement rises at every cell; on tuf the outproj argmins leave the plain
   `32x32x16/2x2` leaf (2.3x/3.3x slow, tied with the 4x4 bgrid leaf and first in listing order)
   for `32x32x8/4x4 bgrid`. The copy rate's plateau beside the new term still holds 1e12 (5e11-6.3e12
-  at the CUDA rate). Traps: (a) the `auto` seeding gate keeps neither term -- `seeded_default_gate`
-  resets the fill's lane width to 1 and `seeded_ranker` passes no shared-load rate -- since a 2x2
-  sketch is what it seeds (`model_seeded_anchor`'s CUDA chain) and the terms were fitted on leaf
-  rankings, not sketch against preset; (b) the `kernels` line's `shl=` lists the excess whether
-  or not a rate priced it, so one listing re-scores at any rate, but the lane width moves the fill
-  and needs a listing per width (`FILL_LANE_WIDTH=W`); (c) the unified HIP class and Metal are
+  at the CUDA rate). Trap (a), the `auto` seeding gate (gh-ocannl-2349): all eight combinations of
+  raw or deduplicated direct loads, shared-load pricing off or at the leaf rate, and lane widths
+  1 or 32 give the same scores at the five gh-1479 CUDA sketch/preset pairs. The sketches use
+  4x4 tiles at the calibration reference, both schedules launch whole warps, and direct
+  deduplication saves zero bytes. The separate 2x2 CUDA chain control shows the shared rate
+  raises the sketch score but preserves both seed decisions. See the
+  [paired measurements](https://github.com/ahrefs/ocannl/issues/2349). The gate retains raw direct
+  loads, no shared-load pricing, and thread-only fill. Trap (b): the `kernels` line's `shl=` lists
+  the excess whether or not a rate priced it, so one listing re-scores at any rate, but the lane
+  width moves the fill and needs a listing per width (`FILL_LANE_WIDTH=W`); (c) the unified HIP class and Metal are
   unmeasured, `None`. Residuals: rog's 16-thread blocks measure 0.52 against 0.59 (likely the
   per-multiprocessor block cap, not modeled); the plain, under-filled pairs stay gh-ocannl-1639's.
   The `noshl`/`nolane` arms of `gh1253_cells.sh` are the references.
