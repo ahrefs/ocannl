@@ -2848,7 +2848,19 @@ let phase12 () =
      (count_get o_b a = 0
      && match footprint_scratches o_b with [ s ] -> count_get o_b s = 1 | _ -> false);
    p "the inherited-footprint reduction matches the reference and the materialized reading"
-     (check_exec ~name ~materialized:[ a; c_ ] ~out ~expected (seq producer reader) o_b));
+     (check_exec ~name ~materialized:[ a; c_ ] ~out ~expected (seq producer reader) o_b);
+   (* A host read has to work after the concat's routine-local fallback buffer is gone. *)
+   Tn.set_observable c_;
+   let name = "vcf_sites_footprint_observed" in
+   let observed = optimize ~name llc in
+   let ctx = run ~name observed ~seed:(seed out) in
+   let mat_name = name ^ "_mat" in
+   let mat = optimize ~materialized:[ a; c_ ] ~name:mat_name llc in
+   let got_mat = execute ~name:mat_name mat ~seed:(seed out) ~read:[ c_; out ] in
+   p "the observed reduction and its output read back like the materialized reading"
+     (match Context.observability ctx c_ with
+     | Stored | Recomputable -> same (List.map [ c_; out ] ~f:(Context.get_values ctx)) got_mat
+     | _ -> false));
   LL.virtualize_settings.max_visits <- saved_visits;
   LL.virtualize_settings.footprint_materialization <- saved_footprint;
   (* Across routines: A commits the concat and its two-site reader [c] [Virtual] with the cap off;

@@ -305,6 +305,7 @@ the virtual reduction matches the reference and the materialized reading: true
 an inherited footprint can inline, so its reduction is charged four loads and capped: true
 the capped reduction reads the inherited producer through one footprint scratch: true
 the inherited-footprint reduction matches the reference and the materialized reading: true
+the observed reduction and its output read back like the materialized reading: true
 cross-routine two-site read: routine A commits the concat and its reader virtual: true
 cross-routine two-site read: the stored reader is charged both slices (3), so B's consumer with w (4) is materialized by the fan-in cap: true
 cross-routine two-site read: execution matches the reference: true

@@ -801,10 +801,10 @@ files.
   `fc_default`, never the alternatives' shapes; `Autotune.placement_floor_withheld` is the one
   place a candidate's standing gates the floor.
   The profitability comparison is strict, so a node's SIZE decides where a cap lands: read over
-  exactly its whole domain (a tie), it is materialized whole and resets its consumers' fan-in;
-  given spare cells, it is footprint-scoped and its consumers' chain stays open. A fixture that
-  wants the fan-in guard past a visit-capped producer lifts `virtualize_max_visits` explicitly
-  instead of allocating spare cells (gh-ocannl-2276; `test/operations/virtual_chain_fanin.ml`'s
+  exactly its whole domain (a tie), it is materialized whole. Given spare cells, it is
+  footprint-scoped. See the fan-in boundary for footprints with a cap fallback below. A fixture
+  that needs the consumer to see through a would-be visit-capped producer lifts
+  `virtualize_max_visits` explicitly (gh-ocannl-2276; `test/operations/virtual_chain_fanin.ml`'s
   phase-12 landing legs pin both sizes).
   Structural probe for "inlined": `count_get` of the node, never `count_scopes` — the simplifier
   collapses a single-assignment scope into its expression. Pinned row by row, with executed parity
@@ -1099,8 +1099,10 @@ files.
   (an inherited template selected for footprint here, or an explicit footprint preference)
   can fall back to inlining, so its template's loads still expand. Earlier routines store
   templates in the lineage, and any footprint decision for those templates is made again here.
-  `virtual_chain_fanin` phase 12 pins the scratch and whole-buffer charges and the inherited
-  fallback, with execution against a materialized reference in each case.
+  An observable consumer under the cap still materializes when its virtual reading could retract
+  a dependency to a buffer without observation intent, whose storage could be local or aliased.
+  `virtual_chain_fanin` phase 12 pins the scratch and whole-buffer charges, the inherited
+  fallback, and host readback, with execution against a materialized reference in each case.
 - **The shift-the-uids check reads what a compile ships, not only the decision surface**
   (gh-ocannl-1877): `flip_order_minting` part 1 compares, across builds minted at different uid
   offsets, the emitted source up to minted identifiers (`Generated.normalize_minted`) and every

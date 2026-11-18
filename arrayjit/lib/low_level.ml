@@ -12358,6 +12358,7 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
     let charge_loads tn =
       List.fold (all_charges tn) ~init:(Set.empty (module Tnode)) ~f:all_loads
     in
+    let footprint_has_cap tn = Option.exists (Hashtbl.find footprint_scoped tn) ~f:Option.is_some in
     (* A dependency already materialized contributes itself, and is not entered: expanding it could
        not change its decision (the cap only materializes), and the setter-reads graph of a whole
        step is cyclic through exactly such nodes — a parameter reads its gradient, which reads the
@@ -12372,11 +12373,7 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
        multiplicity bound; the opposite default would let a chain of undecided links through the cap
        on every first compile. A consumer spuriously materialized this way stays an [`Inline] flip
        candidate, the search's channel for undoing it. *)
-    let entered p =
-      not
-        (Tn.Placements.known_non_virtual plc p
-        || Option.exists (Hashtbl.find footprint_scoped p) ~f:Option.is_some)
-    in
+    let entered p = not (Tn.Placements.known_non_virtual plc p || footprint_has_cap p) in
     (* Tarjan over the entered graph, as this pass found it: nothing lands until it is done. The
        components come out dependencies first. *)
     let components =
@@ -12541,11 +12538,22 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
             | Some traced ->
                 traced.inline_fanin <- max 1 fanin;
                 if
-                  fanin > virtualize_settings.max_inline_fanin
-                  && traced.has_assignment && traced.read_by_other && undecided tn
+                  traced.has_assignment && traced.read_by_other && undecided tn
                   && (not (cap_exempt traced))
                   && not (Hashtbl.mem footprint_scoped tn)
-                then land_on_cap traced Inline_fanin_cap))
+                then
+                  if fanin > virtualize_settings.max_inline_fanin then
+                    land_on_cap traced Inline_fanin_cap
+                  else if
+                    Tn.is_observable tn
+                    && List.exists s ~f:(fun loads ->
+                        Set.exists loads ~f:(fun p ->
+                            footprint_has_cap p && not (Tn.is_observable p)))
+                  then
+                    (* A virtual reader would retract the footprint to a buffer lacking host
+                       observation intent. Backend finalization may make it local or alias its
+                       bytes. A materialized reader keeps its own observable buffer. *)
+                    Tn.Placements.update plc tn Never_virtual (Site "159:footprint-observed-reader")))
 
 type recompute_pricer_fn =
   static_indices:Indexing.static_symbol list ->
