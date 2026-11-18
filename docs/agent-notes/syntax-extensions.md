@@ -62,6 +62,14 @@ files.
   `op_initializer_heads` (`source **. 2` from `[2; -4; 8; -16]` is `[4; 16; 64; 256]`; the
   swapped order gives fractions). `%extend_dsls` qualifies before translation, so a raw `**.`
   there still maps through `operators` to `pointpow` in infix order (unexercised).
+- A first-field initializer of `!. e` or `!.. e` (`{ w = !. x }`) is a constant, like `{ w = 5.0 }`:
+  `Ppx_op.constant_param_value` sends literals and both embeddings down `param`'s `?value:` route,
+  a constant fill of inferred shape. `translate`'s own `TDSL.O.( !. )` arm is a `Tensor.t`, never
+  the `Tensor.op_fun` an initializer must be, and no named NTDSL form is one either (`number` is a
+  `Tensor.t` too), so `**.`'s requalification has nothing to rewrite to. A nested `source + !. x`
+  keeps `TDSL.O.( !. )` as an operand. Since a value can name a variable, `make_p` passes it
+  through `guard_late` like `param_init` and the extra fields (`late_number` in
+  `test_param_errors`). Pinned by `test_initializer_heads` and `op_initializer_heads` (cc values).
 - Label sources: only a toplevel `%op` function WITHOUT `()` reads its tensor parameters' labels
   into the result's (the no-unit arm of `translate`); with `()`, no tensor parameter is one.
   Without `()`, an unlabelled parameter is read as `p.Tensor.value.Ir.Tnode.label`, so an unlabelled non-tensor is
@@ -87,8 +95,8 @@ files.
   no-unit toplevel function, and of any function below the toplevel one; and, gh-ocannl-2058,
   every binder of the body: `let` (a `let rec` in its right-hand sides too), `match` and
   `function` cases, `for` loops -- `late_binder`), and `guard_late` replaces an inline
-  declaration's field or initializer naming one with an error node -- it was OCaml's "Unbound
-  value", or a silent capture of an outer value of that name (a body `let n` shadowing a `~n`
+  declaration's field, initializer or constant value naming one with an error node -- it was
+  OCaml's "Unbound value", or a silent capture of an outer value of that name (a body `let n` shadowing a `~n`
   bound before `()` read the parameter). Every binder `translate` reaches is below the lift
   point: only the toplevel function's `()` is one, and `let%op f = let n = .. in fun () ..` makes
   that function non-toplevel. The `try` body and handlers, `lazy` body, constructor/variant

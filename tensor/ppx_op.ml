@@ -94,13 +94,28 @@ let guard_late ~late ~decl (e : expression) =
 let late_binder ~late construct pat =
   List.map (Set.to_list (collect_pat_idents pat)) ~f:(fun n -> (n, Body_binder construct)) @ late
 
+(* The value of an inline declaration whose initializer is a constant: a float or integer literal,
+   or the float or integer a [!.] or [!..] embeds. The declaration is then [param]'s constant fill,
+   whose shape is inferred: [TDSL.O.( !. )] would be a [Tensor.t] of its own shape, not the
+   [Tensor.op_fun] an initializer must be. *)
+let constant_param_value = function
+  | { pexp_desc = Pexp_constant (Pconst_float _); _ } as value -> Some value
+  | { pexp_desc = Pexp_constant (Pconst_integer (_, None)); _ } as int_val ->
+      let loc = int_val.pexp_loc in
+      Some [%expr Float.of_int [%e int_val]]
+  | [%expr !.[%e? value]] -> Some value
+  | [%expr !..[%e? int_val]] ->
+      let loc = int_val.pexp_loc in
+      Some [%expr Float.of_int [%e int_val]]
+  | _ -> None
+
 let make_p ~dsl_name ~opt_label ~late ~loc ?is_primitive ?value ?values ?param_init ~extra_args name
     =
   let guard = guard_late ~late ~decl:name.txt in
   let param_init = Option.map param_init ~f:guard in
   let extra_args = List.map extra_args ~f:(fun (label, value) -> (label, guard value)) in
   let more_label = match opt_label with Some more_label -> more_label | None -> [%expr None] in
-  let value = match value with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
+  let value = match value with Some c -> [%expr Some [%e guard c]] | None -> [%expr None] in
   let values = match values with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
   let param_init =
     match param_init with
@@ -919,34 +934,11 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
   | { pexp_desc = Pexp_record ([], _); _ } ->
       (* Empty record - not a tensor definition *)
       (no_vbs, expr)
-  | {
-   pexp_desc =
-     Pexp_record
-       ( (first_label, ({ pexp_desc = Pexp_constant (Pconst_float _); _ } as value)) :: extra_args,
-         None );
-   _;
-  } -> (
+  | { pexp_desc = Pexp_record ((first_label, first_value) :: extra_args, None); _ }
+    when Option.is_some (constant_param_value first_value) -> (
       match first_label.txt with
       | Lident tensor_name ->
-          let name = { loc = first_label.loc; txt = tensor_name } in
-          let pat, vb = make_vb ~dsl_name ~opt_label ~late ~value ~extra_args ~loc name in
-          ([ vb ], pat2expr pat)
-      | _ ->
-          ( no_vbs,
-            Ast_builder.Default.pexp_extension ~loc
-            @@ Location.error_extensionf ~loc
-                 "ppx_ocannl %%op: record field label must be a simple identifier" ))
-  | {
-   pexp_desc =
-     Pexp_record
-       ( (first_label, ({ pexp_desc = Pexp_constant (Pconst_integer (_, None)); _ } as int_val))
-         :: extra_args,
-         None );
-   _;
-  } -> (
-      match first_label.txt with
-      | Lident tensor_name ->
-          let value = [%expr Float.of_int [%e int_val]] in
+          let value = Option.value_exn (constant_param_value first_value) in
           let name = { loc = first_label.loc; txt = tensor_name } in
           let pat, vb = make_vb ~dsl_name ~opt_label ~late ~value ~extra_args ~loc name in
           ([ vb ], pat2expr pat)

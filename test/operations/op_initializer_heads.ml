@@ -29,6 +29,8 @@ let () =
   let ctx = Train.forward_once (Context.cpu ()) (TDSL.O.add source other) in
   (* A non-literal exponent: the power arm's other route. *)
   let e = 3.0 in
+  (* Embedded constants (from [!.] and [!..]) fill the declaration as a literal would. *)
+  let x = 1.5 and n = 3 in
   let cases =
     [
       ("tensor initializer", [%op { w = source + other }], [| 3.; -2.; 5.; -12. |]);
@@ -51,6 +53,9 @@ let () =
            }]),
         [| 4.; 16.; 64.; 256. |] );
       ("explicit power head", Custom_power.explicit_power source e, [| 2.; 0.; 8.; 0. |]);
+      ("embedded float initializer", [%op { w = !.x; o = [ 4 ] }], [| 1.5; 1.5; 1.5; 1.5 |]);
+      ("embedded integer initializer", [%op { w = !..n; o = [ 4 ] }], [| 3.; 3.; 3.; 3. |]);
+      ("nested embedded float initializer", [%op { w = source + !.x }], [| 3.5; -2.5; 9.5; -14.5 |]);
       ("named binary initializer", [%op { w = add source other }], [| 3.; -2.; 5.; -12. |]);
       ("named unary initializer", [%op { w = relu source }], [| 2.; 0.; 8.; 0. |]);
       ("named ternary initializer", [%op { w = fma source 2.0 3.0 }], [| 7.; -5.; 19.; -29. |]);
