@@ -81,13 +81,24 @@ let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~d
 let is_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
 let is_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)
 
-(* The per-segment claims below count and time the staffed sweep's [F_sketch] candidates. Where the
-   seeded untuned plan has a segmentation of its own (CUDA and HIP, whenever the seeding gate seeds
-   a product: gh-ocannl-2279 widened that on CUDA), the default seeded sweep times [F_swap] singles
-   of the plan in their place (gh-ocannl-1664), so every search here turns it off, as
-   autotune_staffed_fine and autotune_sketch_placements do. Stated at the config-file level, after
-   the configuration was read above. *)
-let () = Hashtbl.set Utils.config_file_args ~key:"autotune_seeded_singles" ~data:"false"
+(* The per-segment searches below count and time the staffed sweep's [F_sketch] candidates. Where
+   the seeded untuned plan has a segmentation of its own (CUDA and HIP, whenever the seeding gate
+   seeds a product: gh-ocannl-2279 widened that on CUDA), the default seeded sweep times [F_swap]
+   singles of the plan in their place (gh-ocannl-1664), so those searches -- and only those: the
+   whole-routine ones keep the default seeded path -- turn it off for their own scope, at the
+   config-file level, as autotune_sketch_placements does through [Scripted_search.search
+   ~settings]. *)
+let without_seeded_singles f =
+  let key = "autotune_seeded_singles" in
+  let saved = Hashtbl.find Utils.config_file_args key in
+  Exn.protect
+    ~finally:(fun () ->
+      match saved with
+      | Some data -> Hashtbl.set Utils.config_file_args ~key ~data
+      | None -> Hashtbl.remove Utils.config_file_args key)
+    ~f:(fun () ->
+      Hashtbl.set Utils.config_file_args ~key ~data:"false";
+      f ())
 
 (* The dune sandbox persists across runs: stale entries written by an older binary (digest
    ingredients and the saved-schedule format evolve) would break miss-then-hit assertions. *)
@@ -558,6 +569,7 @@ let () =
   let fs_report = ref None in
   let fsctx = Context.auto () in
   let fsctx, fsroutine =
+    without_seeded_singles @@ fun () ->
     Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
       ~report:(fun r -> fs_report := Some r)
       fsctx fs_comp Ir.Indexing.Empty
@@ -600,6 +612,7 @@ let () =
     let report = ref None in
     let ctx = Context.auto () in
     let ctx, routine =
+      without_seeded_singles @@ fun () ->
       Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
         ?keep_fraction:multi_site_keep_fraction
         ~report:(fun r -> report := Some r)
