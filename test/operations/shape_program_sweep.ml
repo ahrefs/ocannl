@@ -74,14 +74,18 @@
    #977, #1423, #1572). [(u + 1) *. c[5|3]] and [x[16] *. normal ()] agree in both shapes and
    executed fill; the judge checks every program node's shape, not just its draws.
 
-   Other remaining causes: one observed normal-draw repeat; 4 fixed-index programs, two shapes
-   (gh-ocannl-2270) each a fixed program and a random one: a draw behind a stretch, [(stretch u +
+   Other remaining cause: one observed normal-draw repeat. The fixed-index entry retires with
+   gh-ocannl-2318. It used to cover all einsum specs over draws; since gh-ocannl-2247 passes a
+   solved row's role to its axes, only fixed indices remained, in two shapes (gh-ocannl-2270), each
+   a fixed program and a random one: a draw behind a stretch under a pointwise result, [(stretch u +
    stretch (stretch u)) ++ "...|3 => ...|0"] (#1237), and a reduction of a draw beside a draw, [((u1
    ++ "ab => a") *. v) ++ "...|3 => ...|0"] (#1132, under a batch constant). The fixed index's lower
-   bound sizes the pointwise result but not the draw behind the stretch or the reduction, which
-   closes to 1; with a constant of the size it demands in its place both programs agree (the
-   controls beside them). The fixed-index entry used to cover all einsum specs over draws; since
-   gh-ocannl-2247 passes a solved row's role to its axes, only fixed indices remain.
+   bound sized the pointwise result but not the draw behind the stretch or the reduction, which
+   closed to 1, while a constant of the size it demands in its place agreed (the controls beside
+   them). The stretch closed to the result's axis by role at stage 6a, and its held inequality
+   closed the draw under it empty at stage 6b; the reduction's axis, a leaf axis of its draw,
+   guessed 1 at stage 5. With nothing but a stretch or a reduction between the draw and the index
+   (#42, #723, #31, #1440) the draw's row or axis is the index's own, and both always filled.
 
    Retired entries retain their agreeing fixed programs: gh-ocannl-2244 fixes a draw under a unary
    operation, under both operands of a pointwise operation, under a compose, and a no-axis constant
@@ -577,18 +581,6 @@ type judgement =
   | No_claim of string
 
 let is_known entry = function Known ((x : excuse), _) -> String.equal x.entry entry | _ -> false
-
-(* The resolve-at-use nodes at or under each node. *)
-let open_under (prog : program) =
-  let sets = Array.create ~len:(Array.length prog) (Set.empty (module Int)) in
-  Array.iteri prog ~f:(fun k node ->
-      sets.(k) <-
-        Set.union_list
-          (module Int)
-          ((if resolves_at_use node then Set.singleton (module Int) k else Set.empty (module Int))
-          :: List.map (args node) ~f:(fun x -> sets.(x))));
-  sets
-
 let known_lit = "gh-ocannl-2180: a fixed-index output axis through stretch"
 
 (* The output row's last axes taken over by one size-1 axis: everything else as the oracle says. *)
@@ -642,8 +634,6 @@ let region ?(unary_after_consumer = false) (prog : program) ~is_x ~reach =
     under prog ~is_x:(fun k _ -> ext.(k)))
   else under prog ~is_x:(fun k _ -> base.(k))
 
-let opens prog = open_under prog
-let is_open prog x = not (Set.is_empty (opens prog).(x))
 let axes_count = "Mismatching number of axes"
 let too_many = "Too many axes in an operand"
 
@@ -655,15 +645,6 @@ let known : known list =
       is_x = (fun _ _ node -> Poly.equal node (Draw Normal));
       reach = true;
       refusals = [ too_many; axes_count ];
-    };
-    {
-      entry = "proposed: a fixed index over a draw";
-      (* Was every einsum spec over a draw; since gh-ocannl-2247 a spec's axes take the draw's role,
-         and what is left is the fixed index's lower bound missing a draw behind a stretch or a
-         reduction: the two fixed programs beside their constant controls (gh-ocannl-2270). *)
-      is_x = (fun prog _ -> function Einsum (Fixed_index, x) -> is_open prog x | _ -> false);
-      reach = false;
-      refusals = [];
     };
   ]
 
@@ -1069,10 +1050,15 @@ let fixed_programs : (string * program) list =
         Const { empty with o = [ 5; 2 ] };
         Mul (4, 5);
       |] );
-    (* The fixed-index entry's two shapes (gh-ocannl-2270), each beside its control: the same
-       program with the fixed index replaced by a constant of the size the index demands. The
-       controls agree, so the excused collapse is the fixed index's, not the stretch's or the
-       reduction's. The stretch shape is random #1237; the reduction shape is random #1132. *)
+    (* The retired fixed-index entry's two shapes (gh-ocannl-2270), each beside its control: the
+       same program with the fixed index replaced by a constant of the size the index demands. The
+       stretch shape is random #1237, with its minimal form [(stretch u + u)]; the reduction shape
+       is random #1132. gh-ocannl-2318 lets the index's minimum reach the draw behind the pointwise
+       result, so they agree like their controls. *)
+    ( "(stretch u + u) ++ \"...|3 => ...|0\"",
+      [| Draw Uniform; Stretch 0; Add (1, 0); Einsum (Fixed_index, 2) |] );
+    ( "(stretch u + u) *. c[|4]",
+      [| Draw Uniform; Stretch 0; Add (1, 0); Const { empty with o = [ 4 ] }; Mul (2, 3) |] );
     ( "(stretch u + stretch (stretch u)) ++ \"...|3 => ...|0\"",
       [| Draw Uniform; Stretch 0; Stretch 1; Add (1, 2); Einsum (Fixed_index, 3) |] );
     ( "(stretch u + stretch (stretch u)) *. c[|4]",

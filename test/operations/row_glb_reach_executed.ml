@@ -32,6 +32,13 @@
    unconstrained results guess minimal. The concrete size then travels through the existing
    leaf-before-result stages, so both two-result and three-result chains fill the indexed axis.
 
+   What changed with gh-ocannl-2318: that minimum did not reach a draw behind a pointwise result
+   whose operand is a stretch or a reduction. The stretch closed to the result's open axis by role
+   at stage 6a, and the inequality it held closed the waiting draw under it empty at stage 6b. The
+   reduction's axis, a leaf axis of the reduced draw, guessed 1 at stage 5. A draw now takes such an
+   axis by role, and a leaf axis below it waits for stage 7; [stretch u *. 2] is the minimal stretch
+   case, [(u1 ++ "ab => a") *. v] the reduction case.
+
    With gh-ocannl-2257, the open result remainder in [relu u + (c[3] ++ "a => a...")] settles at
    stage 6a. Previously [relu] closed empty at stage 6b and the draw closed against it, giving one
    value for three cells. *)
@@ -173,6 +180,39 @@ let () =
       let m = times2 u in
       let%op y = m ++ "...|3 => ...|0" in
       ([ u ], m, y));
+  (* gh-ocannl-2318: the fixed index's minimum behind a pointwise result whose operand is a stretch
+     or a reduction. A stretch between the draw and the pointwise result closed to the result's axis
+     by role at stage 6a, and the draw under it closed empty at stage 6b; a reduction's axis under
+     it, a leaf axis of the draw, guessed 1 at stage 5. Both drew one value for 4 cells. *)
+  draws "stretch u *. 2, then a fixed index" ~want:"4" ~fills:(Some true) (fun () ->
+      let u = TDSL.uniform () () in
+      let%op m = stretch u *. !.2. in
+      let%op y = m ++ "...|3 => ...|0" in
+      ([ u ], m, y));
+  draws "(stretch u + u) ++ \"...|3 => ...|0\"" ~want:"4" ~fills:(Some true) (fun () ->
+      let u = TDSL.uniform () () in
+      let%op m = stretch u + u in
+      let%op y = m ++ "...|3 => ...|0" in
+      ([ u ], m, y));
+  draws "(stretch u + stretch (stretch u)) ++ \"...|3 => ...|0\"" ~want:"4" ~fills:(Some true)
+    (fun () ->
+      let u = TDSL.uniform () () in
+      let%op m = stretch u + stretched (stretched u) in
+      let%op y = m ++ "...|3 => ...|0" in
+      ([ u ], m, y));
+  draws "((u1 ++ \"ab => a\") *. v) ++ \"...|3 => ...|0\", the reduced draw" ~want:"4,1"
+    ~fills:(Some true) (fun () ->
+      let u1 = TDSL.uniform1 () () and v = TDSL.uniform () () in
+      let%op m = (u1 ++ "ab => a") *. v in
+      let%op y = m ++ "...|3 => ...|0" in
+      ([ u1 ], m, y));
+  draws "(((u1 ++ \"ab => a\") *. v) *. 2) ++ \"...|3 => ...|0\", the reduced draw" ~want:"4,1"
+    ~fills:(Some true) (fun () ->
+      let u1 = TDSL.uniform1 () () and v = TDSL.uniform () () in
+      let%op r = (u1 ++ "ab => a") *. v in
+      let m = times2 r in
+      let%op y = m ++ "...|3 => ...|0" in
+      ([ u1 ], m, y));
   (* gh-ocannl-2247: a draw read through an einsum spec is solved to the spec's axes; they take the
      draw's role and fill the use site. *)
   draws "(u ++ \"ab => ba\") *. c[|5,3]" ~want:"3,5" ~fills:(Some true) (fun () ->

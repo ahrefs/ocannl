@@ -5422,6 +5422,30 @@ let can_guess_dim_to_one env has_uniq_constr_unless =
           | Some (Bounds_dim { has_uniq_constr_unless = Some _; _ }) -> true
           | _ -> false)
 
+(* gh-ocannl-2318: a non-parameter axis a fixed index bounds below by more than 1 ([At_least_dim])
+   with no GLB yet: the axis gh-ocannl-2229 closes to its minimum at stage 7. *)
+let pending_minimum env v =
+  match find_dim env.dim_env v with
+  | Some (Bounds_dim { is_in_param = false; glb = None; constr = At_least_dim { d_min; _ }; _ }) ->
+      d_min > 1
+  | _ -> false
+
+(* gh-ocannl-2318: whether a result above [v], through the bounds' [res] links and outside
+   parameters, has a {!pending_minimum}. A leaf axis below one waits for it instead of guessing 1
+   before stage 7. *)
+let below_pending_minimum env v =
+  let rec go seen = function
+    | [] -> false
+    | v :: rest when Set.mem seen v -> go seen rest
+    | v :: rest -> (
+        let seen = Set.add seen v in
+        match find_dim env.dim_env v with
+        | Some (Bounds_dim { is_in_param = false; res; _ }) ->
+            List.exists res ~f:(pending_minimum env) || go seen (res @ rest)
+        | _ -> go seen rest)
+  in
+  go dim_var_set_empty [ v ]
+
 let%debug5_sexp rec close_dim_terminal ~deferred_dims ~(stage : stage) ~is_param origin env
     (dim : dim) : constraint_ list =
   match dim with
@@ -5447,6 +5471,8 @@ let%debug5_sexp rec close_dim_terminal ~deferred_dims ~(stage : stage) ~is_param
                    ("You forgot to specify the hidden dimension(s) 1", [ Dim_mismatch [ dim ] ])
             else [ Terminal_dim (is_param, dim, origin) ]
           else if Set.mem deferred_dims v then [ Terminal_dim (is_param, dim, origin) ]
+          else if (not (is_stage7 stage)) && below_pending_minimum env v then
+            [ Terminal_dim (is_param, dim, origin) ]
           else (
             refuse_concat_component_guess env v;
             let guess_d = if Set.mem env.discardable_vars v then 0 else 1 in
@@ -5490,8 +5516,12 @@ let packed_draw_counter = function
 
 let is_packed_draw_constr constr = Option.is_some (packed_draw_counter constr)
 
-let dim_has_glb env v =
-  match find_dim env.dim_env v with Some (Bounds_dim { glb = Some _; _ }) -> true | _ -> false
+(* gh-ocannl-2318: a use site bounds an axis with a GLB of its own, and, with [~minimum], also an
+   axis with a {!pending_minimum}. *)
+let dim_has_use_bound ?(minimum = false) env v =
+  match find_dim env.dim_env v with
+  | Some (Bounds_dim { glb = Some _; _ }) -> true
+  | _ -> minimum && pending_minimum env v
 
 (* gh-ocannl-2180: the axes of [glb] (substituted) that a row closing to it by role takes as its
    own: plain [Var]s that [own] selects (all of them by default). *)
@@ -5504,11 +5534,11 @@ let role_axes ?(own = fun _ -> true) env (glb : row) =
    axis counts as much as a bounded variable: once the use site's axes are solved, the GLB carries
    them as they are, and a draw that waited on them past stage 6a was closed empty by the result
    above it closing at stage 6b ([relu u *. c[|2,5]]). *)
-let glb_has_bounded_axis env (glb : row) =
+let glb_has_bounded_axis ?(minimum = false) env (glb : row) =
   let glb = subst_row env glb in
   List.exists (glb.beg_dims @ glb.dims) ~f:(function
     | Dim _ | Sym _ -> true
-    | Var v -> dim_has_glb env v
+    | Var v -> dim_has_use_bound ~minimum env v
     | Affine _ | Concat _ -> false)
 
 (* gh-ocannl-2180: what a row that resolves at its use sites closes to, given its GLB. The GLB's
@@ -6273,7 +6303,7 @@ let%track5_sexp process_shape_row ~deferred_dims ~(stage : stage) origin env
              && (is_in_param || is_resolve_at_use v)
              && (let glb = subst_row env glb in
                  is_broadcastable glb.bcast || List.is_empty glb.beg_dims)
-             && glb_has_bounded_axis env glb ->
+             && glb_has_bounded_axis ~minimum:(not is_in_param) env glb ->
           (* gh-ocannl-2180: a packed draw's row closes to its GLB only once the GLB's axes are
              known, and an axis still open then is closed by its own rules (gh-ocannl-1961) -- for a
              result's axis, minimal. Taking the axes by role first gives the draw axes of its own,
@@ -6287,8 +6317,16 @@ let%track5_sexp process_shape_row ~deferred_dims ~(stage : stage) origin env
              satisfiable program. Retry after stage 6a too (gh-ocannl-2224): the tail can first
              close at stage 6b while a bounded axis is still a variable. Generic elimination then
              waits for stage 7, where that result axis closes minimal; taking it by role first
-             preserves its bound instead. *)
-          let closing = close_to_glb_by_role ~own:(dim_has_glb env) env origin ~r1 ~glb in
+             preserves its bound instead. A draw (not a parameter) also takes by role an axis a
+             fixed index bounds below by more than 1 (gh-ocannl-2318): a resolve-at-use row between
+             it and that axis ([stretch u *. 2]) closes to it by role at this stage, and the held
+             inequality from it closed the waiting draw empty at stage 6b. The axis gets its size at
+             stage 7 (gh-ocannl-2229), and the draw's own axis follows it. *)
+          let closing =
+            close_to_glb_by_role
+              ~own:(dim_has_use_bound ~minimum:(not is_in_param) env)
+              env origin ~r1 ~glb
+          in
           (keep @ closing @ dim_eqs, env)
       | Some (Bounds_row { glb; constr; _ }) ->
           let ineqs, env =
@@ -6557,6 +6595,10 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
       let fixed = concat_bounded_waiting ineqs env @ fixed in
       if List.is_empty fixed then (ineqs, env)
       else
+        (* gh-ocannl-2318: the closings propagate before the rest of the pass reads the environment:
+           a leaf axis waiting below a minimum ([below_pending_minimum]) then sees the bound as its
+           GLB, not a result link the closing has already consumed. *)
+        let fixed, env = solve_inequalities ~stage:Stage6a fixed env in
         let ineqs, env = solve_inequalities ~stage:Stage6a (fixed @ ineqs) env in
         solve_inequalities ~stage:Stage6b ineqs env
   in
