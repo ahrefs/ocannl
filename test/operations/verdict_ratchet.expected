@@ -725,6 +725,28 @@ accepts a make function that never runs its local function claiming the populati
 refuses a gated wrapper whose caller's gate reads the population it hands in: true
 accepts a gated wrapper taking apart a tuple its caller hands in: true
 accepts a gated wrapper applied twice whose gates each read only the other call's rows: true
+refuses a leg read from a field of a record literal gated on the population: true
+accepts a leg read from a field of a record literal gated on an invariant: true
+refuses a leg a helper destructures from the element of an iterated list gated on its rows: true
+accepts a leg a helper destructures from the element of an iterated list gated on an invariant: true
+refuses the one element of an iterated list whose leg is gated on its own rows: true
+accepts two elements of an iterated list whose legs each gate on the other element's rows: true
+accepts a callback's own leg gated on one part of each element beside a claim on the other: true
+refuses a leg a helper destructures from a record update whose inherited rows its gate reads: true
+refuses a helper's leg gated on the rows its caller writes into the record it destructures: true
+names a leg uncompared whose iterated collection is no literal: true
+refuses a leg another source hands a helper, gated by that caller on the rows it hands in: true
+accepts a leg another source hands a helper, gated by that caller on an invariant: true
+refuses the one offending application among two sources' applications of a helper: true
+accepts a caller's gate on its own rows beside the helper's like-named rows at the same offset: true
+refuses a leg another source applies under an open of the helper's module: true
+names a leg uncompared whose module another source re-exports through an include: true
+names a leg uncompared whose module a caller opens through another module's path: true
+names a leg uncompared in a submodule whose module another source re-exports: true
+names a leg uncompared whose helper another source also hands on as a value: true
+names a leg uncompared whose helper's module a caller that does not parse may spell: true
+the index reads each select arm as the module dune copies it to: true
+the index hands a caller to its own directory's module of the name, and the rest to every one: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
 refuses a leg claim it cannot complete, a planted hand-written skip list, a skip-list reader that raised, and a stale exemption: true
 a claim reader's exception on a source that parses reaches the scanner-defect refusal, not the parse one: true

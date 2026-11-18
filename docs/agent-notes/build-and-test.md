@@ -2915,13 +2915,25 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   and its population is what the claims its make function makes range over, and, on a path where
   none of those runs, everything the make function hands a helper. Both sides follow data thunks (`lazy`,
   `Lazy.force`), the population side for `gated_*` claims too. A leg or make function passed as a
-  parameter of a named function is resolved at that function's applications IN THE SAME SOURCE
-  (gh-ocannl-1893), one comparison per application chosen, so one call's gate never meets
-  another's population; a `gated_*` claim inside a named function is compared per application the
-  same way, and a make function given by name is read through its definition. A local function or
-  `lazy` a make function runs is its run code. What stays uncompared -- named site by site on the
-  ratchet's stderr -- is a leg read from a field or a destructured parameter, a function another
-  source applies, and a function handed on as a value; a leg claim applied in part is refused as
+  parameter of a named function is resolved at that function's applications (gh-ocannl-1893), one
+  comparison per application chosen, so one call's gate never meets another's population; a
+  `gated_*` claim inside a named function is compared per application the same way, and a make
+  function given by name is read through its definition. The applications include OTHER SOURCES'
+  (gh-ocannl-2286): the ratchet indexes which sources spell which module (a source's module is its
+  file name up to the first dot, capitalized, so each `(select)` arm is the module dune copies it
+  to) and hands each census the sources spelling its own; `gate_census` walks each after the source
+  itself, its character positions offset past the earlier sources' so that no binding identity is
+  shared, and reads its `M.f` applications (and those under an `open M`, an alias or an `include`)
+  as call sites. A leg read from a record field, out of a record or tuple parameter pattern, or
+  from the element parameter of an anonymous callback `List`/`Array` `iter`/`map`/... is handed in
+  place is followed to the literal it is taken from, one resolution per element of a literal list,
+  compared on both sides with that element chosen. A local function or `lazy` a make function runs
+  is its run code. What stays uncompared -- named site by site on the ratchet's stderr -- is a
+  function some application of which the reader cannot see (handed on as a value, a caller
+  spelling the module packed, as a functor argument, through a wrapped library's path, or
+  re-exporting it where a third source spells the caller, or not parsing), a field of no literal,
+  an element of a computed collection, and a make function taken out of a value; the header in
+  `test/support/verdict_scan.ml` lists the forms. A leg claim applied in part is refused as
   unread. Most of its mutation runs exit 4, not 1: the ratchet's trailing
   `OK:` row prints only on success (the manifest's gh-ocannl-1289 section says how they were
   read).

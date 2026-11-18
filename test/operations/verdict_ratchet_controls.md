@@ -951,6 +951,36 @@ cases' `Sequence` spelling changed, on baseline `20261116T170703Z-74375`):
 | Which sequence functions consume is the table's | `verdict_scan.ml`: `count` dropped from the consuming group | a sequence consumer the table marks consuming | `20261116T170730Z-96728` |
 | A sequence function that does not consume only builds | `verdict_scan.ml`: every sequence function runs its callback | a sequence transformation that only builds; a lazy sequence a map only builds | `20261116T170801Z-18157` |
 
+## gh-ocannl-2286 mutation runs
+
+The leg reader resolves a function's parameters at the applications other sources make of it, each
+caller handed in by the ratchet's cross-source index and walked under positions of its own; and
+follows a leg read from a record field, out of a destructured parameter, or from the element an
+iteration hands its callback, to the literals it is taken from, one comparison per element. Each
+row also states how many claims were compared, as the gh-ocannl-1893 rows do. Every run used
+tools/mutation-run.sh --batch on `test/support/verdict_scan.ml` with the focused alias, on a green
+baseline (`20261118T022430Z-49505`; the five local-review rows ran on baseline `20261118T021832Z-56833`, the submodule row's mutation again on `20261118T022245Z-89363` after its first spelling did not compile), and restored the source byte for byte.
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| Another source's applications are call sites | `verdict_scan.ml`: no caller walked | Failed: `refuses a leg another source hands a helper, gated by that caller on the rows it hands in`; `accepts a leg another source hands a helper, gated by that caller on an invariant`; `refuses the one offending application among two sources' applications of a helper`; `refuses a leg another source applies under an open of the helper's module`, each then uncompared; and the same-offset acceptance row named below | `20261118T022524Z-74314` |
+| A caller's positions are its own | `verdict_scan.ml`: every caller parsed from position 0 | Failed: `accepts a caller's gate on its own rows beside the helper's like-named rows at the same offset` | `20261118T022616Z-98696` |
+| A caller that may hide an application leaves the function uncompared | `verdict_scan.ml`: no spelling of the module read as hiding one | Failed: `names a leg uncompared whose module another source re-exports through an include`; and the wrapped-open and submodule rows named below | `20261118T022706Z-33697` |
+| A function another source spells other than as an applied callee escapes | `verdict_scan.ml`: a qualified name not recorded as a use | Failed: `names a leg uncompared whose helper another source also hands on as a value` | `20261118T022810Z-59174` |
+| A caller that does not parse leaves the function uncompared | `verdict_scan.ml`: an unparsed caller ignored | Failed: `names a leg uncompared whose helper's module a caller that does not parse may spell` | `20261118T022857Z-85582` |
+| A leg read from a field is the record literal's field | `verdict_scan.ml`: a field not followed | Failed: `refuses a leg read from a field of a record literal gated on the population`; `accepts a leg read from a field of a record literal gated on an invariant` | `20261118T022952Z-14647` |
+| A destructured parameter is a part of each argument | `verdict_scan.ml`: a destructured parameter not registered | Failed: `refuses a leg a helper destructures from the element of an iterated list gated on its rows`; `accepts a leg a helper destructures from the element of an iterated list gated on an invariant`; `refuses the one element of an iterated list whose leg is gated on its own rows`; and the two-element acceptance, record-update and field-write rows named below | `20261118T023101Z-75045` |
+| An iteration's callback parameter is each element of a literal collection | `verdict_scan.ml`: no callback registered | Failed: the four iterated-list rows of the mutation above | `20261118T023145Z-8994` |
+| Each element is compared under its own choice | `verdict_scan.ml`: every element read under any choice | Failed: `accepts two elements of an iterated list whose legs each gate on the other element's rows`; and the callback-own-leg row named below | `20261118T023228Z-50766` |
+| A claim inside an element callback is compared once per element (local review) | `verdict_scan.ml`: no element choice for the callbacks enclosing a claim | Failed: `accepts a callback's own leg gated on one part of each element beside a claim on the other` | `20261118T021854Z-76751` |
+| A field a record update leaves is taken from its base literal (local review) | `verdict_scan.ml`: an inherited field read as the whole base | Failed: `refuses a leg a helper destructures from a record update whose inherited rows its gate reads` | `20261118T021939Z-21110` |
+| A destructured parameter's part keeps the field writes before the claim (local review) | `verdict_scan.ml`: the writes dropped | Failed: `refuses a helper's leg gated on the rows its caller writes into the record it destructures` | `20261118T022026Z-89331` |
+| Only an open of the module itself is one the walk binds (local review) | `verdict_scan.ml`: any path spelling the module counts | Failed: `names a leg uncompared whose module a caller opens through another module's path` | `20261118T022117Z-31965` |
+| A re-export leaves the submodules' functions uncompared too (local review) | `verdict_scan.ml`: only top-level functions marked | Failed: `names a leg uncompared in a submodule whose module another source re-exports` | `20261118T022331Z-10144` |
+| The index reads a select arm as the module dune copies it to (PR review) | `verdict_ratchet.ml`: a module named by the file name up to its last dot | Failed: `the index reads each select arm as the module dune copies it to`; and the directory row below, whose arms then lose their spelled-elsewhere mark (tools/mutation-run.sh --batch on `verdict_ratchet.ml`, baseline `20261118T030030Z-48719`) | `20261118T030046Z-57413` |
+| The index hands a caller to its own directory's module of the name, the rest to every one (PR review) | `verdict_ratchet.ml`: every caller handed to every source of the name | Failed: `the index hands a caller to its own directory's module of the name, and the rest to every one` | `20261118T030123Z-68818` |
+| An iterated collection that is no literal leaves the leg uncompared | none: the boundary row, read by the rows above | `names a leg uncompared whose iterated collection is no literal` stays green under every mutation | the runs above |
+
 ## gh-ocannl-1470 mutation runs
 
 The tolerance reader now also reads every other Verdict claim's arguments (`helper_claim_callees`:
