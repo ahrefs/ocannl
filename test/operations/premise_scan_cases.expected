@@ -22,6 +22,8 @@ without the support source its helpers confer nothing: true
 a support comparison with a branch that skips the check confers nothing: true
 a support reader with a branch that is no checked reader confers nothing: true
 an open of the support module brings its helpers: true
+a module alias of the support module brings its helpers: true
+an include of the support module brings its helpers: true
 a rebound support module name confers nothing: true
 a support source with a top-level include exports nothing: true
 a support wrapper chain within the three-call bound is followed: true

@@ -227,6 +227,18 @@ let () =
     |> String.( ^ ) "open Exact_sums\n" |> read ~support
   in
   p "an open of the support module brings its helpers" (Scan.uncovered opened = 0);
+  let aliased =
+    String.substr_replace_all cross_module ~pattern:"Exact_sums." ~with_:"E."
+    |> String.( ^ ) "module E = Exact_sums\n"
+    |> read ~support
+  in
+  p "a module alias of the support module brings its helpers" (Scan.uncovered aliased = 0);
+  let included_caller =
+    String.substr_replace_all cross_module ~pattern:"Exact_sums." ~with_:""
+    |> String.( ^ ) "include Exact_sums\n"
+    |> read ~support
+  in
+  p "an include of the support module brings its helpers" (Scan.uncovered included_caller = 0);
   p "a rebound support module name confers nothing"
     (Scan.uncovered (read ~support ("module Exact_sums = Other_sums\n" ^ cross_module)) = 1);
   let included = support_of ("include Other\n" ^ support_source) in
