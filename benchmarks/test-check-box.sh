@@ -7,6 +7,8 @@
 # fixture, a fixture name the box has no DIGESTS row for (by name, without the bytes) -- reads GAP on
 # that item with exit 1. Usage errors exit 2, and every box the checked-in DIGESTS.txt declares has
 # a profile (the relationship, not a copy of the box list).
+# Generated-input readiness checks the same device and toolchain on a box with no fixture store.
+# The absent-fixture control covers fixture-loading readiness when recorded bytes are missing.
 # gh-ocannl-1433: a fresh worktree's drivers find the box's shared venv (route named, and its
 # absence still a GAP), and the fleet's names for the boxes are taken -- pinned against wake-lab.sh's
 # endpoint map and FLEET_BOXES where this host can read them; a fleet box that measures nothing
@@ -148,6 +150,44 @@ if harness_leg 'box-only'; then
   else report 1 '--box-only skips the driver path and stays READY' "rc=$rc"; fi
 fi
 
+if harness_leg 'generated inputs'; then
+  generated=$TMP/generated/benchmarks
+  mkdir -p "$generated"
+  cp "$SUBJECT" "$here/bench_venv.py" "$here/fixture_digest.py" "$generated/"
+  grep '^# measurement-boxes:' "$here/fixtures/DIGESTS.txt" >"$TMP/DIGESTS-boxes.txt"
+  generated_check() {
+    local run=$1
+    shift
+    rc=0
+    bash "$generated/check-box.sh" --venv "$venv" --digests "$TMP/DIGESTS-boxes.txt" "$@" \
+      --box rog-nv --generated-inputs >"$TMP/runs/$run" 2>&1 || rc=$?
+  }
+  check generated-reference --box rog-nv --fixture mlp_small
+  fixture_rc=$rc
+  fixture_items=$(grep -c '^check-box: .*: ok -- ' "$TMP/runs/generated-reference")
+  generated_check generated
+  # The fixture item disappears and fixture-records changes from ok to skip.
+  if [ "$fixture_rc" = 0 ] && [ "$rc" = 0 ] &&
+     [ "$(grep -c '^check-box: .*: ok -- ' "$TMP/runs/generated")" = "$((fixture_items - 2))" ] &&
+     grep -q '^check-box: torch-device: ok -- .*round-tripped through cuda' "$TMP/runs/generated" &&
+     grep -q '^check-box: toolchain: ok -- .*nvcc' "$TMP/runs/generated" &&
+     grep -q '^check-box: fixture-records: skip -- ' "$TMP/runs/generated" &&
+     ! grep -q '^check-box: fixture ' "$TMP/runs/generated" &&
+     grep -Fqx "check-box: rog-nv: READY ($((fixture_items - 1)) items)" "$TMP/runs/generated"; then
+    report 0 'generated inputs are READY without a fixture store or digest rows'
+  else
+    report 1 'generated inputs are READY without a fixture store or digest rows' \
+      "generated rc=$rc; fixture reference rc=$fixture_rc"
+    sed 's/^/      | /' "$TMP/runs/generated"
+  fi
+  FAKE_TORCH=unavailable generated_check generated-device
+  gap_leg 'generated inputs still need a working device' generated-device torch-device
+  generated_check generated-fixture --fixture mlp_small
+  usage_leg '--generated-inputs refuses --fixture' generated-fixture 'cannot combine .*--fixture'
+  generated_check generated-store --fixture-dir "$TMP/fixtures"
+  usage_leg '--generated-inputs refuses --fixture-dir' generated-store 'cannot combine .*--fixture-dir'
+fi
+
 if harness_leg 'gap: no venv'; then
   rc=0
   "$SUBJECT" --venv "$TMP/absent" --fixture-dir "$TMP/fixtures" --digests "$TMP/DIGESTS.txt" \
@@ -278,8 +318,9 @@ if harness_leg 'gap: toolchain'; then
   gap_leg 'an nvcc that cannot run is a toolchain GAP' broken-toolchain toolchain
 fi
 if harness_leg 'gap: fixtures'; then
-  check absent --box rog-nv --fixture mlp_small --fixture lenet
-  gap_leg 'an absent fixture is a GAP' absent 'fixture lenet'
+  mkdir -p "$TMP/empty-store"
+  check absent --box rog-nv --fixture mlp_small --fixture-dir "$TMP/empty-store"
+  gap_leg 'an absent fixture is a GAP' absent 'fixture mlp_small'
   cp "$TMP/fixtures/mlp_small.safetensors" "$TMP/mlp_small.orig"
   printf 'x' >>"$TMP/fixtures/mlp_small.safetensors"
   check mismatch --box rog-nv
