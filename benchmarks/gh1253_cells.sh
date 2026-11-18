@@ -85,6 +85,13 @@
 # per-thread ILP credit) -- the reference the shipped arm's chain credit is judged against.
 # FILL_CHAINS=L states the ILP cap to the fitted/shipped arm (and to EXPLAIN_ONLY's shipped arm,
 # which is how a cap is fitted: one EXPLAIN_ONLY run per candidate L against one timed run's rows).
+# gh-ocannl-2262: and `noshl` (model_shared_load_rate none: no register-reuse term) and `nolane`
+# (model_fill_lane_width none: the thread-only launch fill) arms -- each the shipped constants with
+# one term unset, the references the shipped arm's two terms are judged against.
+# SHARED_LOAD_RATE=R and FILL_LANE_WIDTH=W state them to the fitted/shipped arm (and to
+# EXPLAIN_ONLY's shipped arm, as FILL_CHAINS does); its kernel lines' shl= (the filled excess
+# shared loads, listed whether or not a rate prices them) are what gh1600_txn_fit.py
+# --shared-rate re-scores.
 # FIT_FILL=1 with RANK_ONLY=1 runs the issue cell first (MULTIPROCESSORS=P passes --multiprocessors,
 # needed only where the device reports none: a non-AGX Metal GPU) and passes its fitted constants to the listing and pick
 # cells, which otherwise run the shipped ones. PICK_GATE0=1 adds pick cells with the seeding off
@@ -253,6 +260,9 @@ fitted() { if $last_ok; then sed -n "s/^$1=//p" "$2" | tail -1; fi; }
 # gh-ocannl-1639: the ILP cap under fit, stated to the arms that carry the model flags.
 ilp_flag=()
 if [[ -n "${FILL_CHAINS:-}" ]]; then ilp_flag=("--ocannl_model_fill_chains=$FILL_CHAINS"); fi
+# gh-ocannl-2262: the register-reuse rate and the lane group under fit, carried the same way.
+if [[ -n "${SHARED_LOAD_RATE:-}" ]]; then ilp_flag+=("--ocannl_model_shared_load_rate=$SHARED_LOAD_RATE"); fi
+if [[ -n "${FILL_LANE_WIDTH:-}" ]]; then ilp_flag+=("--ocannl_model_fill_lane_width=$FILL_LANE_WIDTH"); fi
 model=(${ilp_flag[@]+"${ilp_flag[@]}"})
 tiers=()
 fitted_arm=fitted
@@ -414,6 +424,20 @@ for site in $sites; do
   cell "rank_${name}_noilp" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
     --ocannl_gpu_default_sketch_min_reduction=32 \
     ${noilp[@]+"${noilp[@]}"} --ocannl_model_fill_chains=none
+  # gh-ocannl-2262: the same constants without the register-reuse term, and with the thread-only
+  # launch fill's lane count (the first statement of a key wins, so a stated one is dropped).
+  noshl=()
+  nolane=()
+  for flag in ${model[@]+"${model[@]}"}; do
+    case "$flag" in --ocannl_model_shared_load_rate=*) ;; *) noshl+=("$flag") ;; esac
+    case "$flag" in --ocannl_model_fill_lane_width=*) ;; *) nolane+=("$flag") ;; esac
+  done
+  cell "rank_${name}_noshl" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
+    --ocannl_gpu_default_sketch_min_reduction=32 \
+    ${noshl[@]+"${noshl[@]}"} --ocannl_model_shared_load_rate=none
+  cell "rank_${name}_nolane" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
+    --ocannl_gpu_default_sketch_min_reduction=32 \
+    ${nolane[@]+"${nolane[@]}"} --ocannl_model_fill_lane_width=none
   picks=()
   if [[ ${RANK_ONLY:-0} == 1 ]]; then
     pick_cells=()
@@ -456,6 +480,7 @@ for site in $sites; do
       "nomma=$out/rank_${name}_nomma.out" "mmaonly=$out/rank_${name}_mmaonly.out" \
       "noocc=$out/rank_${name}_noocc.out" "notxn=$out/rank_${name}_notxn.out" \
       "nostg=$out/rank_${name}_nostg.out" "noilp=$out/rank_${name}_noilp.out" \
+      "noshl=$out/rank_${name}_noshl.out" "nolane=$out/rank_${name}_nolane.out" \
       "${fitted_arm}=$out/rank_${name}_${fitted_arm}.out" ${fit[@]+"${fit[@]}"} \
       ${picks[@]+"${picks[@]}"} |
       tee "$out/rank_${name}_agreement.txt" || failed=$((failed + 1))
