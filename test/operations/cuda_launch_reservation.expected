@@ -9,7 +9,7 @@ graph: the two-segment routine runs as a captured graph: true
 graph: it computes the right values: true
 graph: the free memory after the graph launch is within half the reservation of before it, released once: true
 graph: a hopeless frame in a graph is refused at its instantiation, then as its plain launch, and declined as the driver's out-of-memory refusal, without a retry: true
-serial scratch: CUDA reports stream backing until synchronization: true
+serial scratch: CUDA reports backing for a stream allocation: true
 serial scratch: CUDA reports graph backing across routine release: true
 serial scratch: three private arrays compute the right values on both runs: true
 serial scratch: the emitted one-thread frame uses the device buffer: true
