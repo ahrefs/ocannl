@@ -577,7 +577,7 @@ let () =
 
 (* gh-ocannl-2285: the fused tail contributes a store per padded output cell and per Workgroup
    iteration. Re-ask refused seeds at their own renderer count and the admitted boundary seed one
-   update above the floor. The site Grid follows the independent output-zeroing Grid. *)
+   update above the floor. The contraction and output zeroing have independent Grid decisions. *)
 let judge_fused_grid ~select ~m ~n ~k =
   let tag = Printf.sprintf "agr_fused_%dx%dx%d" m n k in
   let comp name =
@@ -601,25 +601,44 @@ let judge_fused_grid ~select ~m ~n ~k =
         p.Autotune.sk_mma && p.sk_epilogue && select p)
   in
   List.mapi candidates ~f:(fun i p ->
-      let compile phase =
+      let compile phase ~census_order =
         let name = Printf.sprintf "%s_%s_%d" tag phase i in
+        let site_loop = ref None in
         let ctx, routine =
           Context.compile ~name
             ~lowered_transform:(fun opt ->
-              [
+              let scheduled =
                 Ir.Schedule.apply
                   (Autotune.sketch_schedule ~accum_prec:Ll_test.backend_accum_prec ~p opt)
-                  opt;
-              ])
+                  opt
+              in
+              let loops =
+                List.filter_map (Ll_test.loop_sites scheduled.llc) ~f:(fun loop ->
+                    match loop.ls_stmt with
+                    | Ir.Low_level.For_loop { axis = Grid; index; body; _ } ->
+                        let tiles =
+                          Ll_test.count_stmt body ~f:(function Tile_mma _ -> true | _ -> false)
+                        in
+                        Option.some_if (tiles > 0) index
+                    | _ -> None)
+              in
+              (site_loop :=
+                 match loops with [ index ] -> Some (Ir.Indexing.symbol_ident index) | _ -> None);
+              [ scheduled ])
             (Context.auto ()) (comp name) Ir.Indexing.Empty
         in
         Context.release ctx;
         let grid = routine.Context.grid in
         Stdio.eprintf "agr: %s %s: %s (not part of the golden)\n%!" name
           (Autotune.sketch_params_label p) (Cs.grid_summary_string grid);
-        match grid.Cs.loops with [ _zero; site ] -> Some site.Cs.site | _ -> None
+        Option.bind !site_loop ~f:(fun loop ->
+            match
+              List.filter (census_order grid.Cs.loops) ~f:(fun e -> String.equal e.Cs.loop loop)
+            with
+            | [ entry ] -> Some entry.Cs.site
+            | _ -> None)
       in
-      let site = compile "default" in
+      let site = compile "default" ~census_order:Fn.id in
       let control_floor =
         match site with
         | Some (Cs.Grid_serial (Grid_below_min_updates { updates; _ })) -> updates
@@ -628,7 +647,9 @@ let judge_fused_grid ~select ~m ~n ~k =
       let control_proposed, control_site =
         Scripted_search.with_settings
           [ ("cc_grid_min_updates", Int.to_string control_floor) ]
-          (fun () -> (List.mem (seeds ()) p ~equal:equal_params, compile "control"))
+          (* Swapping the contraction and zeroing entries must preserve the site's identity. *)
+          (fun () ->
+            (List.mem (seeds ()) p ~equal:equal_params, compile "control" ~census_order:List.rev))
       in
       (List.mem proposed p ~equal:equal_params, site, control_proposed, control_site))
 
