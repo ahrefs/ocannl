@@ -129,15 +129,18 @@ files.
   zero residual on a single non-discardable `Var` waits once its basis is decided (a conflict
   still refuses, so a GLB merge of `4` and `[u; 4_a]` still demotes to the broadcast top), and
   closure then sizes the component (here, refused by the sum). Discardability is read through
-  substitution: a variable equated with a discardable one keeps the permission. A zero residual also carries no claim, since substitution erases a
-  0-sized component, so a claim with nowhere else to land is refused there, discardable or not.
+  substitution (`may_be_empty`): a variable equated with a discardable one keeps the permission;
+  closure's guesses to 0 still read plain membership. A zero residual also carries no claim,
+  since substitution erases a 0-sized component, so a claim with nowhere else to land is refused
+  there, discardable or not.
   Before, `[u; 2v]=[k; 2 T]` with `k = 2_default` first gave `u = 0_T`, and `u = 0_T` stated first
   was refused (eighteen bounded runs: `... default ; k >= 2_{default,a,h}`, sized to 0, now refused
   in every order; no other store of the test's 26,441 changed). Waiting, not refusing, keeps a 0
   stated outright on one verdict in every order: refusing at once would accept `u = 0_default`
   stated first and refuse it after `k = 2_default`. Out of scope: other zero producers, such as
   the variables-only pairing arm's leftover (`[a; b; c] = [d; e]` gives `c = 0`,
-  `test_ac3_unequal_arity_all_var`) and a stated 0. Pins: `test_zero_component` in
+  `test_ac3_unequal_arity_all_var`), a stated 0, and a hand-built non-variable component (an
+  affine `2v`) left alone with a zero residual. Pins: `test_zero_component` in
   `test/operations/test_concat_dim_solver.ml`.
 - A nonidentity plain or padded stride derives `default` from a claim-free extent
   (gh-ocannl-2245), through `stride_input_basis` in substitution and unification. Copying
