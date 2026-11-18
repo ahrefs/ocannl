@@ -379,12 +379,11 @@ val blend_local_a : string
 
 val canonical_minted_idents : string -> string
 (** [canonical_minted_idents source] is [source] up to what a lowering mints afresh, so that two
-    lowerings of one program (two compiles of the same assignments, under two select policies, say)
-    compare as text (gh-ocannl-2326): every identifier holding a digit -- loop symbols ([i<n>]),
-    local names ([v<n>_<label>]), schedule-minted nodes ([tile__n<n>_acc]), and node names with
-    digits alike -- renamed by first occurrence, a consistent renaming the comparison then
-    discounts, and whitespace dropped, since line breaks follow the identifiers' lengths. Literals
-    and every other character are kept. *)
+    lowerings of one program (two compiles of the same assignments, under two select renderings,
+    say) compare as text (gh-ocannl-2326): the identifiers of the minted shapes -- loop symbols
+    ([i<n>]), locals ([v<n>_<label>]) and schedule-minted nodes ([tile__n<n>_acc]) -- renamed by
+    first occurrence, and whitespace dropped, since line breaks follow the identifiers' lengths.
+    Every other token, numbered or not, is kept. *)
 
 (** What a backend supplies to the C-family renderer: its dialect's spellings, capabilities and
     hooks. *)

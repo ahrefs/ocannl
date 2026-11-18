@@ -1081,7 +1081,8 @@ let select_blend_override = Stdlib.Domain.DLS.new_key (fun () -> None)
     as if its [blends_value_selects] fact were [blend] -- the lowering's fan-in guard
     ([Backends.lower_assignments], through {!effective_facts}) and the renderers that have a blend
     (cc, CUDA, HIP) alike, so a compile from assignments is charged as it renders. Not part of the
-    schedule cache's identity: a timing run under it compiles with the cache bypassed. *)
+    schedule cache's identity, nor of a [Lowering_reuse] cell's: a timing run under it compiles with
+    the cache bypassed, and compiles under different overrides share no reuse cell. *)
 let with_select_blend ~facts ~blend f =
   let saved = Stdlib.Domain.DLS.get select_blend_override in
   Stdlib.Domain.DLS.set select_blend_override (Some (facts, blend));

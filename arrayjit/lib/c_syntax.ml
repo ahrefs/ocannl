@@ -834,6 +834,25 @@ let canonical_minted_idents src =
   let buf = Buffer.create n in
   let ids = Hashtbl.create (module String) in
   let is_ident c = Char.is_alphanum c || Char.equal c '_' in
+  let digits_from w i =
+    i < String.length w && String.for_all (String.drop_prefix w i) ~f:Char.is_digit
+  in
+  (* The shapes a lowering mints afresh: a loop symbol [i<n>], a local [v<n>_<label>], a schedule
+     node's [..__n<n>_..]. *)
+  let minted w =
+    (String.is_prefix w ~prefix:"i" && digits_from w 1)
+    || (String.is_prefix w ~prefix:"v"
+       &&
+       match String.index w '_' with
+       | Some u -> u > 1 && digits_from (String.prefix w u) 1
+       | None -> false)
+    || List.exists (String.substr_index_all w ~may_overlap:false ~pattern:"__n") ~f:(fun k ->
+        (* The digits after [__n], then the word's end or an underscore. *)
+        let rest = String.drop_prefix w (k + 3) in
+        match String.lfindi rest ~f:(fun _ c -> not (Char.is_digit c)) with
+        | None -> not (String.is_empty rest)
+        | Some d -> d > 0 && Char.equal rest.[d] '_')
+  in
   let rec scan_while k ~f = if k < n && f src.[k] then scan_while (k + 1) ~f else k in
   let rec go k =
     if k < n then
@@ -847,7 +866,7 @@ let canonical_minted_idents src =
       else if is_ident c then (
         let j = scan_while k ~f:is_ident in
         let word = String.sub src ~pos:k ~len:(j - k) in
-        if String.exists word ~f:Char.is_digit then
+        if minted word then
           let id = Hashtbl.find_or_add ids word ~default:(fun () -> Hashtbl.length ids) in
           Buffer.add_string buf ("#" ^ Int.to_string id)
         else Buffer.add_string buf word;

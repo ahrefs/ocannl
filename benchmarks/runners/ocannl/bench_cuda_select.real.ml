@@ -194,16 +194,25 @@ let check label (ctx, routine) work { seeds; want } =
 let measure (ctx, routine) =
   Autotune.admitted_timing_ms (Autotune.time_routine ~timing:Autotune.Queued ~repeats:3 ctx routine)
 
-(* Each round times every arm once, forward on even rounds and backward on odd ones, so no arm keeps
-   one position in the session. [ratios] name numerator and denominator arms by name. *)
-let compare_times ~calls ~label ~(arms : (string * (Context.t * Context.routine)) list) ~ratios =
+(* Each round times every arm once, in an order that rotates by one arm per round and runs backward
+   on every other cycle of [n] rounds, so each arm takes each position in turn: for three arms, six
+   rounds are the six orders. [before k] runs ahead of arm [k]'s timing, outside its clock. [ratios]
+   name numerator and denominator arms by name. *)
+let compare_times ?(before = fun _ -> ()) ~calls ~label
+    ~(arms : (string * (Context.t * Context.routine)) list) ~ratios () =
   let n = List.length arms in
   let arms = Array.of_list arms in
   let rows =
     Array.init calls ~f:(fun i ->
         let row = Array.create ~len:n None in
-        let order = List.init n ~f:(fun k -> if i % 2 = 0 then k else n - 1 - k) in
-        List.iter order ~f:(fun k -> row.(k) <- measure (snd arms.(k)));
+        let order =
+          List.init n ~f:(fun k ->
+              let k = if i / n % 2 = 0 then k else n - 1 - k in
+              (k + i) % n)
+        in
+        List.iter order ~f:(fun k ->
+            before k;
+            row.(k) <- measure (snd arms.(k)));
         row)
   in
   (* Treatment and control have to use the same rounds for their spreads to be comparable. *)
@@ -308,17 +317,16 @@ let compile_step ~target ~blend step =
         Cuda_backend.with_select_rendering ~blend (fun () ->
             Autotune.untuned_compile ~name:"sel_step" step.init_ctx step.comp Ir.Indexing.Empty))
   in
-  match
-    List.dedup_and_sort ptx ~compare:(fun (a : Mma.ptx_compile) b ->
-        match Int.compare a.device_cc b.device_cc with
-        | 0 -> Option.compare String.compare a.target b.target
-        | c -> c)
-  with
-  | [ { Mma.device_cc; target = Some arch } ] when not (List.is_empty sources) ->
-      ((ctx, routine), String.concat sources, device_cc, arch)
+  (* The routine that runs is the extent's last compile: an untuned compile may retry after a
+     rejected attempt that already emitted, so only the last source and PTX describe it. *)
+  match (List.last sources, List.last ptx) with
+  | Some source, Some { Mma.device_cc; target = Some arch } ->
+      if List.length sources > 1 then
+        p "sel_step: %d compiles in the extent, the last one checked\n" (List.length sources);
+      ((ctx, routine), source, device_cc, arch)
   | _ ->
       Context.release ctx;
-      failwith "sel_step: expected emitted CUDA source and one PTX target"
+      failwith "sel_step: expected emitted CUDA source and its PTX target"
 
 (* One step from the initial parameters: the loss and every updated parameter, in order. *)
 let step_outputs step (ctx, routine) =
@@ -333,14 +341,19 @@ let step_outputs step (ctx, routine) =
 let count_sub src ~sub = List.length (String.substr_index_all src ~may_overlap:false ~pattern:sub)
 
 let compare_step ~target ~dry ~calls step =
-  let arms =
-    List.map
-      [ ("short", false); ("blend", true); ("control", false) ]
-      ~f:(fun (name, blend) -> (name, compile_step ~target ~blend step))
-  in
+  (* Each arm's context is released however the rest goes, from the moment it links. *)
+  let linked = ref [] in
   Exn.protect
-    ~finally:(fun () -> List.iter arms ~f:(fun (_, (c, _, _, _)) -> Context.release (fst c)))
+    ~finally:(fun () -> List.iter !linked ~f:Context.release)
     ~f:(fun () ->
+      let arms =
+        List.map
+          [ ("short", false); ("blend", true); ("control", false) ]
+          ~f:(fun (name, blend) ->
+            let (((ctx, _), _, _, _) as arm) = compile_step ~target ~blend step in
+            linked := ctx :: !linked;
+            (name, arm))
+      in
       let get name = List.Assoc.find_exn arms ~equal:String.equal name in
       let _, src_a, cc_a, arch_a = get "short" in
       let _, src_b, _, _ = get "blend" in
@@ -401,10 +414,20 @@ let compare_step ~target ~dry ~calls step =
             (Array.length got) bitwise got.(0);
           Verdict.pass_fail_all2 (label ^ "/" ^ name ^ " step parity with short") got want ~f:close;
           if Verdict.any_failed () then failwith (label ^ ": step parity failed"));
+      (* Every timing call runs SGD, so each arm starts its timing from the initial parameters, not
+         from where the arm before it left them. *)
+      let restore k =
+        let _, ((ctx, _), _, _, _) = List.nth_exn arms k in
+        ignore
+          (List.fold step.snapshot ~init:ctx ~f:(fun ctx (tn, values) ->
+               Context.set_values ctx tn values)
+            : Context.t)
+      in
       if not dry then
-        compare_times ~calls ~label
+        compare_times ~before:restore ~calls ~label
           ~arms:(List.map arms ~f:(fun (name, (c, _, _, _)) -> (name, c)))
-          ~ratios:[ ("blend", "short"); ("control", "short") ])
+          ~ratios:[ ("blend", "short"); ("control", "short") ]
+          ())
 
 let () =
   let args = Bench_args.create "bench_cuda_select" in
@@ -433,31 +456,36 @@ let () =
         @ [ pool ~root ~elements ]
       in
       let step = build_step ~root ~batch in
-      List.iter [ Mma.Floor; Mma.Native ] ~f:(fun target ->
-          compare_code ~root ~target ~control:true control
-            (fun ~label control_short control_blend ->
-              let fixture = (snd (List.hd_exn control.fixtures)) () in
-              let control_short = check (label ^ "/short") control_short control fixture in
-              let control_blend = check (label ^ "/blend") control_blend control fixture in
-              List.iter workloads ~f:(fun work ->
-                  compare_code ~root ~target ~control:false work (fun ~label short blend ->
-                      List.iter work.fixtures ~f:(fun (density, fixture) ->
-                          let label = label ^ "/" ^ density in
-                          let fixture = fixture () in
-                          if String.equal density "pool" then
-                            p "%s nonzero_gradient=%d/%d\n" label
-                              (Array.count fixture.want ~f:(fun v -> Float.(v <> 0.)))
-                              (Array.length fixture.want);
-                          let short = check (label ^ "/short") short work fixture in
-                          let blend = check (label ^ "/blend") blend work fixture in
-                          if not dry then
-                            compare_times ~calls ~label
-                              ~arms:
-                                [
-                                  ("short", short);
-                                  ("control_short", control_short);
-                                  ("blend", blend);
-                                  ("control_blend", control_blend);
-                                ]
-                              ~ratios:[ ("blend", "short"); ("control_blend", "control_short") ]))));
-          compare_step ~target ~dry ~calls step))
+      (* Released after the step arms, which each release their own context first. *)
+      Exn.protect
+        ~finally:(fun () -> Context.release step.init_ctx)
+        ~f:(fun () ->
+          List.iter [ Mma.Floor; Mma.Native ] ~f:(fun target ->
+              compare_code ~root ~target ~control:true control
+                (fun ~label control_short control_blend ->
+                  let fixture = (snd (List.hd_exn control.fixtures)) () in
+                  let control_short = check (label ^ "/short") control_short control fixture in
+                  let control_blend = check (label ^ "/blend") control_blend control fixture in
+                  List.iter workloads ~f:(fun work ->
+                      compare_code ~root ~target ~control:false work (fun ~label short blend ->
+                          List.iter work.fixtures ~f:(fun (density, fixture) ->
+                              let label = label ^ "/" ^ density in
+                              let fixture = fixture () in
+                              if String.equal density "pool" then
+                                p "%s nonzero_gradient=%d/%d\n" label
+                                  (Array.count fixture.want ~f:(fun v -> Float.(v <> 0.)))
+                                  (Array.length fixture.want);
+                              let short = check (label ^ "/short") short work fixture in
+                              let blend = check (label ^ "/blend") blend work fixture in
+                              if not dry then
+                                compare_times ~calls ~label
+                                  ~arms:
+                                    [
+                                      ("short", short);
+                                      ("control_short", control_short);
+                                      ("blend", blend);
+                                      ("control_blend", control_blend);
+                                    ]
+                                  ~ratios:[ ("blend", "short"); ("control_blend", "control_short") ]
+                                  ()))));
+              compare_step ~target ~dry ~calls step)))
