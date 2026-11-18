@@ -30,13 +30,10 @@ SLOW_RUN_CAP_DEFAULT=$((4 * 60 * 60))
 
 # The training integrations' batch budget (gh-ocannl-2290), for a test-run
 # batch reaching the `train` aliases but not `@slow`. They serialize on the
-# training lock, so they add up rather than overlap the runtest batch: a full
-# cc `build @runtest @train -j 4` passed on mac-studio and macbook-pro in at
-# most ~1.7ks (2026-11-16/17, 43 runs), but tuf's cc runs took 3696s with no
-# other full suite on the box and 4600s beside three; three more under two
-# co-tenants, and one on minix with none, were cut at the former 3600s default.
-# Two hours is ~1.56x the slowest pass and ~1.95x tuf's unloaded wall. Not a
-# duration prediction; the per-box walls are in staging's PR for gh-ocannl-2290.
+# training lock, so they add up rather than overlap the runtest batch, and on
+# the fleet's slowest box a full cc `build @runtest @train` can run past the
+# one-hour default. Not a duration prediction; the per-box walls behind the
+# number stay in the PR closing gh-ocannl-2290.
 TRAIN_RUN_CAP_DEFAULT=$((2 * 60 * 60))
 
 # Whether dune arguments reach the slow tests, which the default leaves to the
