@@ -7138,7 +7138,7 @@
  (package neural_nets_lib)
  (deps ocannl_config %{lib:arrayjit.context:context.cmi})
  (modules doc_examples_compile_control)
- (libraries base stdio unix test_scan arrayjit.verdict)
+ (libraries base stdio unix test_scan arrayjit.verdict fresh_process)
  (action
   (run %{test} %{ocamlc} %{lib:arrayjit.context:context.cmi})))
 
@@ -15129,7 +15129,7 @@
   %{lib:arrayjit.ir:ir__Tnode.cmi}
   %{lib:base:base.cmi})
  (modules shape_private_compile_control)
- (libraries base stdio unix arrayjit.verdict)
+ (libraries base stdio unix arrayjit.verdict fresh_process)
  (action
   (run
    %{test}
