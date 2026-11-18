@@ -10741,6 +10741,8 @@
   ocannl
   stdio
   unix
+  mtime
+  mtime.clock.os
   arrayjit.verdict
   arrayjit.autotune
   arrayjit.context)

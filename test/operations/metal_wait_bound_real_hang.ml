@@ -31,8 +31,21 @@ module SO = Ir.Schedule_outcome
 module MF = Ir.Metal_failure
 open Verdict.Claims
 
+(* The mode word: [control] anywhere among the arguments, beside any [--ocannl_*] flags. Any other
+   word is refused, so that a mistyped dry run never falls through to the stall. *)
 let control_only =
-  Array.length (Sys.get_argv ()) > 1 && String.equal (Sys.get_argv ()).(1) "control"
+  let words =
+    List.filter
+      (List.tl_exn (Array.to_list (Sys.get_argv ())))
+      ~f:(fun a -> not (String.is_prefix a ~prefix:"--"))
+  in
+  match words with
+  | [] -> false
+  | [ "control" ] -> true
+  | _ ->
+      failwith
+        ("metal_wait_bound_real_hang: the only mode argument is [control], got: "
+       ^ String.concat ~sep:" " words)
 
 (* [x]'s two axes, the outputs and the summed one, and the never-ending search's two outer
    extents. *)
@@ -44,26 +57,33 @@ let backend_name = Context.backend_name ctx0
 let leg = Verdict.leg ~when_:(String.equal backend_name "metal") ~on:backend_name ()
 
 (* The GPU recoveries the IORegistry has counted since boot, summed over its accelerators, as
-   metal_gpu_hang_failure reads them. A kill of a hung kernel is one. *)
+   metal_gpu_hang_failure reads them. A kill of a hung kernel is one. Fails rather than reading 0
+   when [ioreg] fails or names no counter: each leg below is chosen on this reading. *)
 let recovery_count () =
   let ic = Unix.open_process_in "/usr/sbin/ioreg -r -c IOAccelerator -l" in
+  let samples = ref 0 in
   let rec sum acc =
     match Stdio.In_channel.input_line ic with
     | None -> acc
     | Some line -> (
         match String.substr_index line ~pattern:"\"recoveryCount\"=" with
         | None -> sum acc
-        | Some i ->
+        | Some i -> (
             let rest = String.drop_prefix line (i + 16) in
             let len =
               Option.value ~default:(String.length rest)
                 (String.lfindi rest ~f:(fun _ c -> not (Char.is_digit c)))
             in
-            sum (acc + Option.value (Int.of_string_opt (String.prefix rest len)) ~default:0))
+            match Int.of_string_opt (String.prefix rest len) with
+            | Some v ->
+                Int.incr samples;
+                sum (acc + v)
+            | None -> failwith ("unparseable recoveryCount in: " ^ line)))
   in
   let count = sum 0 in
-  ignore (Unix.close_process_in ic : Unix.process_status);
-  count
+  match Unix.close_process_in ic with
+  | Unix.WEXITED 0 when !samples > 0 -> count
+  | _ -> failwith "ioreg gave no GPU recoveryCount: whether the OS killed the kernel is unknown"
 
 (* A hard bound on the whole run that needs no OCaml code to run, as in metal_gpu_hang_failure: a
    separate process sends the default-action SIGTERM. *)
@@ -116,9 +136,9 @@ module Recording_driver = struct
   include Autotune.Context_driver
 
   let await_within ctx ~seconds =
-    let t = Unix.gettimeofday () in
+    let t = Unix.gettimeofday () and c = Mtime_clock.counter () in
     let completed = Autotune.Context_driver.await_within ctx ~seconds in
-    let took = Unix.gettimeofday () -. t in
+    let took = Mtime.Span.to_float_ns (Mtime_clock.count c) /. 1e9 in
     waits := { bound = seconds; completed; took } :: !waits;
     if (not completed) || List.length !waits = 1 then
       Stdio.eprintf "wait at %.1f s bounded %g s: %s after %.1f s (not part of the golden)\n%!"
@@ -146,7 +166,7 @@ let search ~run_routine ~comp ~(output : Tensor.t) =
   search_start := Unix.gettimeofday ();
   let result =
     match
-      Recorded.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
+      Recorded.tune ~search:true ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
         ~report:(fun r -> report := Some r)
         ctx comp Idx.Empty
     with
@@ -201,12 +221,19 @@ type hang = { run : run; killed : bool }
 
 let hang =
   lazy
-    (arm_watchdog ~seconds:300;
-     let comp, output = reduction ~label:"hang" ~outer:outer_hang in
+    (let comp, output = reduction ~label:"hang" ~outer:outer_hang in
      let recoveries = recovery_count () in
      Stdio.eprintf "GPU recoveries before the search: %d (not part of the golden)\n%!" recoveries;
      let run = search ~run_routine:false ~comp ~output in
-     let after = recovery_count () in
+     (* The count can trail a reported failure, as in metal_gpu_hang_failure: poll it briefly. *)
+     let rec settle tries =
+       let after = recovery_count () in
+       if after > recoveries || tries = 0 then after
+       else (
+         Unix.sleepf 0.1;
+         settle (tries - 1))
+     in
+     let after = settle 20 in
      Stdio.eprintf "GPU recoveries after the search: %d (not part of the golden)\n%!" after;
      describe run;
      { run; killed = after > recoveries })
@@ -224,6 +251,8 @@ let killed_leg =
 let claim ?(leg = leg) label read = Verdict.in_leg ~leg label (fun label -> p label (read ()))
 
 let () =
+  (* The whole run's bound, armed before any device work: the control's searches and reads too. *)
+  if String.equal backend_name "metal" then arm_watchdog ~seconds:360;
   (* --- The decline count's reading, over the census the 2026-11-18 window's search reported (the
      baseline's refusal beside the candidate's decline) and over the baseline's refusal alone. *)
   let decline key = { Autotune.key; count = 1; sample_details = [] } in
