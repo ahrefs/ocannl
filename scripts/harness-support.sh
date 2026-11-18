@@ -217,8 +217,26 @@ harness_leg_run() { # NAME FUNCTION
     report 1 "$1: declared not applicable in a subshell of its own, which cannot end the leg" "$(cat "$harness_na_nested")"
   fi
   harness_leg_na_settle
+  harness_scratch_check "$1"
   harness_leg_running= harness_leg_na=
   return 0
+}
+# After a leg body: the harness's scratch directory (harness_scratch) is still
+# there. No leg removes it, so its absence is an event of the leg that just
+# ran, or of a process it started, and FAILs under that leg's name: left to
+# the next leg, a missing path reads as that leg's own first command failing
+# (gh-ocannl-2242, where it read as "sed did not capture"). Recreated empty,
+# so the legs after it are judged on their own.
+harness_scratch_check() { # LEG
+  local dir=${harness_scratch_dir:-}
+  [ -n "$dir" ] && [ ! -d "$dir" ] || return 0
+  if mkdir -m 700 "$dir" 2>/dev/null; then
+    report 1 "$1: the harness's scratch directory was removed while this leg ran" \
+      "$dir is gone; recreated empty for the legs after it"
+  else
+    report 1 "$1: the harness's scratch directory was removed while this leg ran" \
+      "$dir is gone, and could not be recreated; the legs after it may fail for it"
+  fi
 }
 # A leg's outcome when what it tests does not exist on this host
 # (gh-ocannl-1839): `harness_not_applicable REASON; return`, as the first thing
@@ -321,6 +339,7 @@ harness_leg_run_errexit() { # NAME FUNCTION
         report 1 "$1: the shared state it left was not restored; a later leg may fail for it" "$harness_errexit_detail"
     fi
   fi
+  harness_scratch_check "$1"
   harness_leg_running= harness_leg_na=
   return 0
 }
@@ -521,9 +540,20 @@ harness_scratch() { # scratch prefix
     echo "could not create a temporary directory under ${TMPDIR:-/tmp}" >&2
     exit 2
   fi
-  trap harness_cleanup EXIT
+  harness_scratch_dir=$TMP
+  # INT and TERM are trapped BEFORE EXIT, and the order is load-bearing
+  # (gh-ocannl-2242). Setting an EXIT trap makes Bash install its own deferring
+  # handler on each terminating signal not yet trapped, and record THAT handler
+  # as the signal's original disposition: the one a subshell gets back when it
+  # resets the traps it inherited. Trapped first, TERM keeps the default as its
+  # original, so a TERMed subshell dies on delivery. Trapped after, a TERMed
+  # subshell finishes what it was doing first: TERMed in its first
+  # instructions, while it still held this trap, a watchdog ran harness_cleanup
+  # and removed the run's scratch directory; TERMed just before it forked, it
+  # finished the fork, and the child outlived it unsignalled.
   trap 'exit 130' INT
   trap 'exit 143' TERM
+  trap harness_cleanup EXIT
 }
 harness_require() { # executable prerequisites; missing host tools are coverage skips
   local tool missing=0

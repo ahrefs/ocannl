@@ -4,7 +4,8 @@
 # leg filter with its coverage account, the leg clock, function leg bodies that abandon
 # themselves or are abandoned at a failed errexit check, legs that declare
 # themselves not applicable (and the shapes of that declaration it refuses),
-# and reason-specific rejection.
+# a scratch directory removed inside a leg, the default TERM its subshells
+# take, and reason-specific rejection.
 # Usage: scripts/test-harness-support.sh [--keep] [--help]
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -91,6 +92,36 @@ case $MODE in
     harness_leg_run_errexit 'theta leg #even' theta
     for leg in iota kappa lambda mu nu; do harness_leg_run_errexit "$leg leg" "$leg"; done
     if harness_leg_run_errexit 'xi leg' xi; then :; fi ;;
+  vanish)
+    # A leg body whose child removes the scratch directory, then a leg that
+    # writes there, then the first again under errexit, where the removal
+    # also takes the body's status files and abandons it (gh-ocannl-2242).
+    vanish() { report 0 'vanish body'; ( rm -rf "$TMP" ); }
+    after() { if : >"$TMP/after"; then report 0 'after body'; else report 1 'after body'; fi; }
+    harness_leg_run '1: a leg whose child removes the scratch directory' vanish
+    harness_leg_run '2: a leg after it' after
+    harness_leg_run_errexit '3: an errexit leg whose child removes it' vanish ;;
+  subshell-term)
+    # A subshell TERMs itself, then a witness, in one kill builtin (gh-ocannl-2242).
+    # At its default, TERM ends the subshell inside its first kill(2), and the
+    # witness is spared; deferred, Bash finishes the builtin first, and the
+    # witness records the TERM it then gets. The subshell sets no trap of its
+    # own: bash 5.3 re-arms its deferring handler for one that does.
+    sh -c 'trap ": >\"\$1.got\"; exit 0" TERM; : >"$1.ready"; while :; do sleep 0.1; done' _ "$RECORD.witness" &
+    witness=$!
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+      [ -e "$RECORD.witness.ready" ] && break; sleep 0.1
+    done
+    rc=0
+    ( kill -TERM "$(exec sh -c 'echo "$PPID"')" "$witness" ) 2>/dev/null || rc=$?
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      [ -e "$RECORD.witness.got" ] && break; sleep 0.1
+    done
+    kill -KILL "$witness" 2>/dev/null; wait "$witness" 2>/dev/null
+    if [ ! -e "$RECORD.witness.ready" ]; then w=unready
+    elif [ -e "$RECORD.witness.got" ]; then w=signalled
+    else w=spared; fi
+    printf '%s %s\n' "$rc" "$w" >"$RECORD.subshell-rc" ;;
   na)
     # Legs that declare themselves not applicable (gh-ocannl-1839): omicron, a
     # function body, and pi, an errexit one, each as its first decision, no
@@ -677,6 +708,64 @@ colour_probe() { printf '%s\n' "$CLICOLOR_FORCE"; printf 'diagnostic\n' >&2; ret
     [ "$(cat "$TMP/colour.out")" = 1 ] && [ "$(cat "$TMP/colour.err")" = diagnostic ]
 )
 report $? 'forced dune colour preserves command streams, status and caller setting'
+# A scratch directory removed while a leg runs FAILs that leg, by name, and the
+# leg after it gets a directory back (gh-ocannl-2242); without the check (the
+# control) the removing leg passes and the next one fails in its stead.
+SRC=$HERE/harness-support.sh
+for variant in checked unchecked; do
+  support=$SRC
+  if [ "$variant" = unchecked ]; then
+    support=$(mutant no-scratch-check '/^  harness_scratch_check "\$1"$/ { next } { print }') ||
+      { report 1 'the scratch-check control builds' 'awk or bash -n refused the mutant'; continue; }
+    cmp -s "$support" "$SRC" && { report 1 'the scratch-check control builds' 'the mutant removed no call'; continue; }
+  fi
+  rc=0
+  SUPPORT=$support MODE=vanish bash "$TMP/probe.sh" >"$TMP/out" 2>&1 || rc=$?
+  removed="the harness's scratch directory was removed while this leg ran"
+  case $variant in
+    checked)
+      if [ "$rc" = 1 ] && grep -qx "FAIL  1: a leg whose child removes the scratch directory: $removed" "$TMP/out" \
+         && grep -qx "FAIL  3: an errexit leg whose child removes it: $removed" "$TMP/out" \
+         && grep -qx 'PASS  after body' "$TMP/out"; then
+        report 0 'a removed scratch directory fails the leg that removed it, and the next leg has one'
+      else report 1 'a removed scratch directory fails the leg that removed it, and the next leg has one' "exit $rc; $(cat "$TMP/out")"; fi ;;
+    unchecked)
+      if grep -qx 'FAIL  after body' "$TMP/out" && ! grep -q "$removed" "$TMP/out"; then
+        report 0 'control: without the check, the next leg fails for the removal instead'
+      else report 1 'control: without the check, the next leg fails for the removal instead' "exit $rc; $(cat "$TMP/out")"; fi ;;
+  esac
+done
+# A subshell of a harness takes TERM at its default, because harness_scratch
+# traps TERM before EXIT (gh-ocannl-2242): TERMed, it dies on delivery, before
+# its kill builtin reaches the next pid. The control installs the traps in
+# the former order, EXIT first; Bash then defers the subshell's TERM, which is
+# what let bounded's watchdog run the harness's EXIT trap and fork past it.
+for variant in term-first exit-first; do
+  support=$SRC
+  if [ "$variant" = exit-first ]; then
+    support=$(mutant exit-first '/^  trap harness_cleanup EXIT$/ { next }
+      /^  trap .exit 130. INT$/ { print "  trap harness_cleanup EXIT" } { print }') ||
+      { report 1 'the trap-order control builds' 'awk or bash -n refused the mutant'; continue; }
+    [ "$(grep -n 'trap harness_cleanup EXIT' "$support" | cut -d: -f1)" -lt "$(grep -n "trap 'exit 143' TERM" "$support" | cut -d: -f1)" ] ||
+      { report 1 'the trap-order control builds' 'the mutant did not move the EXIT trap first'; continue; }
+  fi
+  rm -f "$RECORD.subshell-rc" "$RECORD.witness.ready" "$RECORD.witness.got"
+  rc=0
+  SUPPORT=$support MODE=subshell-term bash "$TMP/probe.sh" >"$TMP/out" 2>&1 || rc=$?
+  seen=$(cat "$RECORD.subshell-rc" 2>/dev/null)
+  case $variant in
+    term-first)
+      if [ "$rc" = 0 ] && [ "$seen" = '143 spared' ]; then
+        report 0 'a TERMed subshell of a harness dies on delivery, before its next command'
+      else report 1 'a TERMed subshell of a harness dies on delivery, before its next command' \
+        "probe exit $rc; subshell exit and witness: ${seen:-none} (want '143 spared'); $(cat "$TMP/out")"; fi ;;
+    exit-first)
+      if [ "${seen#* }" = signalled ]; then
+        report 0 'control: with EXIT trapped before TERM, the TERMed subshell runs on to its next pid'
+      else report 1 'control: with EXIT trapped before TERM, the TERMed subshell runs on to its next pid' \
+        "subshell exit and witness: ${seen:-none} (want the witness signalled): the oracle saw nothing to catch; $(cat "$TMP/out")"; fi ;;
+  esac
+done
 printf '\033[1mFile "dune"\033[0m\n\033[31mError\033[0m: missing\n' >"$TMP/ansi"
 [ "$(harness_plain "$TMP/ansi")" = 'File "dune"
 Error: missing' ]

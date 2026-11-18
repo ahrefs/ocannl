@@ -35,6 +35,9 @@
 #      than as work. Not applicable where the kernel's killpg already answers
 #      dead for such a group (macOS): the misreading cannot occur there
 #      (gh-ocannl-1930).
+#   1c. `bounded` (g), (h), (i) — a watchdog that acts on TERM (forks, or
+#      removes a directory), or whose sleep a KILL missed, leaves no effect
+#      behind; each with the control that does (gh-ocannl-2242).
 #   2. counting — behind/ahead wording and recovery command, offline fallback,
 #      ref-ambiguity, FETCH_HEAD untouched, no-origin silence.
 #   3. SSH launcher gating — which program git ends up invoking and whether the
@@ -163,7 +166,8 @@ cleanup_fixture() {
   orphans=""
   if command -v sleep_pids >/dev/null 2>&1; then
     for d in "${D_TERM:-}" "${D_IGN_CHILD:-}" "${D_IGN_PARENT:-}" "${D_IGN_ALL:-}" \
-             "${D_DAEMON:-}" "${D_WATCHDOG:-}" "${D_SELFTEST:-}" "${D_PROBE:-}"; do
+             "${D_DAEMON:-}" "${D_WATCHDOG:-}" "${D_SELFTEST:-}" "${D_PROBE:-}" \
+             "${D_FENCE:-}" "${D_LATE:-}"; do
       [ -n "$d" ] || continue
       orphans="$orphans $(sleep_pids "$d")"
     done
@@ -208,13 +212,18 @@ D_DAEMON="95.$$"    # (d) the daemon left behind by an exit-0 command
 D_WATCHDOG="97.$$"  # (e) the bound, i.e. the watchdog's own sleep
 D_SELFTEST="96.$$"  # the prerequisite check's own known-live sleep
 D_PROBE="98.$$"     # the job-control probe's sleep
+D_FENCE="87.$$"     # 1c: the bound, i.e. the acting watchdog's own sleep
+D_LATE="88.$$"      # 1c (g): the sleep the acting watchdog forks on TERM
 sleep_pids() { # sleep_pids DURATION -> pids of live `sleep DURATION`
   local d="$1" f pid a0 a1 a2
   if [ -r /proc/self/cmdline ]; then
     for f in /proc/[0-9]*/cmdline; do
       a0=""; a1=""; a2=""
-      { IFS= read -r -d '' a0; IFS= read -r -d '' a1; IFS= read -r -d '' a2; } \
-        <"$f" 2>/dev/null
+      # Nested, as in pgid_of: a group's own `<"$f"` fails before its
+      # `2>/dev/null` applies, and a process listed here may exit before its
+      # cmdline is read.
+      { { IFS= read -r -d '' a0; IFS= read -r -d '' a1; IFS= read -r -d '' a2; } \
+          <"$f"; } 2>/dev/null
       [ "${a0##*/}" = sleep ] || continue   # argv[0] may carry a directory
       [ "$a1" = "$d" ] || continue
       [ -z "$a2" ] || continue              # exactly one argument
@@ -264,12 +273,28 @@ settled_survivors() { # settled_survivors DURATION -- allow for asynchronous rea
 
 BOUND=3
 
+# A leg's fixture file under the scratch directory is created before anything
+# is extracted into it, and a failure says what happened to the directory: a
+# scratch directory removed mid-run once reached the reader as "sed did not
+# capture group_alive" (gh-ocannl-2242).
+fixture_create() { # PATH -- create PATH empty; on failure print why, return 1
+  local dir=${1%/*}
+  { : >"$1"; } 2>/dev/null && return 0
+  if [ ! -e "$dir" ]; then printf 'cannot create %s: the directory %s is gone' "$1" "$dir"
+  elif [ ! -d "$dir" ]; then printf 'cannot create %s: %s is not a directory' "$1" "$dir"
+  elif [ ! -w "$dir" ]; then printf 'cannot create %s: the directory %s is not writable' "$1" "$dir"
+  else printf 'cannot create %s, though its directory %s is present and writable' "$1" "$dir"; fi
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # Leg 1: bounded
 # ---------------------------------------------------------------------------
 leg_1() {
+local why
 # Extract the predicate from the working-tree shared helper and the bound from
 # the working-tree hook, then source that exact pair.
+why=$(fixture_create "$TMP/bounded.sh") || { harness_abandon "$why"; return; }
 sed -n '/^group_alive() {/,/^}/p' "$GROUP_SRC" >"$TMP/bounded.sh"
 sed -n '/^bounded() {/,/^}/p' "$HOOK_SRC" >>"$TMP/bounded.sh"
 # Checked structurally — opens with the header, closes with the brace, has a
@@ -401,8 +426,9 @@ harness_leg_run '1: bounded, the watchdog' leg_1
 leg_1b() {
 local zlabel="bounded (f): a group holding nothing but a zombie reads as empty"
 local zreap_label="bounded (f): the leg reaps its own zombie, leaving no process-table entry"
-local zkillpg="" zgroup="" zleft=""
+local zkillpg="" zgroup="" zleft="" why
 # The predicate alone, from the working-tree shared helper as leg 1 takes it.
+why=$(fixture_create "$TMP/group-alive.sh") || { harness_abandon "$why"; return; }
 sed -n '/^group_alive() {/,/^}/p' "$GROUP_SRC" >"$TMP/group-alive.sh"
 case "$(head -n1 "$TMP/group-alive.sh")" in
   "group_alive() {"*) ;;
@@ -500,6 +526,169 @@ else
 fi
 }
 harness_leg_run '1b: a group holding nothing but a zombie reads as empty' leg_1b
+
+# ---------------------------------------------------------------------------
+# Leg 1c: bounded (g), (h), (i), a watchdog that a signal does not simply end
+# ---------------------------------------------------------------------------
+# What signalling bounded's watchdog left behind on CI (gh-ocannl-2242), forced
+# rather than raced for. The harness's Bash deferred TERM in subshells (its
+# EXIT trap was set before its TERM trap, until harness_scratch swapped them).
+# A watchdog TERMed just before it forked its `sleep` finished the fork and
+# left the sleep behind: (e)'s `elapsed=0s watchdog-sleeps=1`. One TERMed in
+# its first instructions ran the harness's own EXIT trap, whose harness_cleanup
+# removed the scratch directory, and 1b then found it gone. Neither window can
+# be hit on demand, so here the watchdog gets a TERM trap doing what each did:
+# (g) forks a sleep and exits, (h) removes a directory and exits. (i) is
+# macOS's own way to the first: a child forked as the group's KILL goes out
+# can miss it, which the fixture stands in for by KILLing the watchdog's pid
+# alone, sparing its sleep. bounded leaves no effect of any; the controls, the
+# former bounded (TERM, no second KILL) for (g) and (h) and bounded without
+# its second KILL for (i), leave each, so every oracle is seen to catch its
+# event rather than pass for want of one.
+leg_1c() {
+local why sedf ready victim t0 rc el left fence
+local g_label="bounded (g): a watchdog that forks on TERM leaves nothing behind"
+local h_label="bounded (h): a watchdog that removes a directory on TERM removes nothing"
+local i_label="bounded (i): a member the watchdog's KILL missed is KILLed before the return"
+why=$(fixture_create "$TMP/acting-watchdog.sh") || { harness_abandon "$why"; return; }
+sedf="$TMP/acting-watchdog.sed"
+# Every copy: the watchdog, which opens `( sleep "$secs"; ...`, first stands
+# its TERM trap up and then a ready file, so no signal lands before the trap.
+printf '%s\n' 's/^\( *( \)sleep "\$secs";/\1trap "$WATCHDOG_ON_TERM" TERM; : >"$WATCHDOG_READY"; sleep "$secs";/' >"$sedf.ready"
+# The former bounded's TERM of its watchdog; the pid-only KILL that spares
+# the watchdog's group; and no second KILL.
+printf '%s\n' 's/kill -KILL -- -"\$watchdog" 2>\/dev\/null; wait/kill -TERM -- -"$watchdog" 2>\/dev\/null; wait/' >"$sedf.term"
+printf '%s\n' 's/kill -KILL -- -"\$watchdog" 2>\/dev\/null; wait/kill -KILL "$watchdog" 2>\/dev\/null; wait/' >"$sedf.spare"
+printf '%s\n' '/while group_alive "\$watchdog"/,/^ *done$/d' >"$sedf.once"
+variant() { # NAME SED_FILE...: bounded renamed NAME, with SED_FILEs applied
+  local name=$1 f args=()
+  shift
+  for f in "$@"; do args+=(-f "$f"); done
+  sed -n '/^bounded() {/,/^}/p' "$HOOK_SRC" | sed -e "s/^bounded() {/$name() {/" "${args[@]}"
+}
+{ sed -n '/^group_alive() {/,/^}/p' "$GROUP_SRC"
+  variant acting_bounded "$sedf.ready"
+  variant acting_former "$sedf.ready" "$sedf.term" "$sedf.once"
+  variant acting_spared "$sedf.ready" "$sedf.spare"
+  variant acting_spared_once "$sedf.ready" "$sedf.spare" "$sedf.once"
+} >"$TMP/acting-watchdog.sh"
+# Each edit took where it should, and only there.
+fn_count() { sed -n "/^$1() {/,/^}/p" "$TMP/acting-watchdog.sh" | grep -cF -- "$2"; }
+if ! head -n1 "$TMP/acting-watchdog.sh" | grep -qF 'group_alive() {' \
+   || [ "$(grep -c 'WATCHDOG_READY' "$TMP/acting-watchdog.sh")" != 4 ] \
+   || [ "$(fn_count acting_bounded 'kill -KILL -- -"$watchdog"')" != 2 ] \
+   || [ "$(fn_count acting_former 'kill -TERM -- -"$watchdog"')" != 1 ] \
+   || [ "$(fn_count acting_former 'group_alive "$watchdog"')" != 0 ] \
+   || [ "$(fn_count acting_spared 'kill -KILL "$watchdog"')" != 1 ] \
+   || [ "$(fn_count acting_spared 'group_alive "$watchdog"')" != 1 ] \
+   || [ "$(fn_count acting_spared_once 'group_alive "$watchdog"')" != 0 ]; then
+  harness_abandon "the acting-watchdog fixture did not take on bounded in $HOOK_SRC: its watchdog no longer opens with \`( sleep \"\$secs\";\`, or it no longer KILLs the watchdog's group and then KILLs again \`while group_alive \"\$watchdog\"\`"
+  return
+fi
+# shellcheck disable=SC1090
+. "$TMP/acting-watchdog.sh"
+ready="$TMP/watchdog-ready"
+victim="$TMP/watchdog-victim"
+acting_command() { # the command bounded runs: returns once the watchdog's sleep is up
+  # The ready file says the TERM trap stands; the watchdog's own `sleep` then
+  # has to be seen exec'd, or a pid-only KILL could land before there is a
+  # child to spare. 43: no trap, 44: no sleep, either way nothing was tested.
+  local i=0
+  while [ ! -e "$ready" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+  [ -e "$ready" ] || return 43
+  i=0
+  while [ "$(survivors "$D_FENCE")" = 0 ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+  [ "$(survivors "$D_FENCE")" != 0 ] || return 44
+  return 42
+}
+acting_run() { # FUNCTION ON_TERM: rc, el
+  rm -f "$ready"
+  t0=$SECONDS
+  WATCHDOG_ON_TERM=$2 WATCHDOG_READY=$ready WATCHDOG_VICTIM=$victim \
+    "$1" "$D_FENCE" acting_command >/dev/null 2>&1
+  rc=$?; el=$((SECONDS - t0))
+}
+acting_detail() { # what one run left, for a FAIL's detail
+  case $rc in
+    43) printf 'the watchdog never stood its TERM trap up (no %s), so nothing was tested' "$ready" ;;
+    44) printf 'the watchdog never ran its sleep %s, so nothing was tested' "$D_FENCE" ;;
+    *) printf 'rc=%s elapsed=%ss (want 42, ~0s); %s' "$rc" "$el" "$1" ;;
+  esac
+}
+reap_left() { # kill what a case left, so the next one starts from an empty census
+  local d
+  for d in "$D_LATE" "$D_FENCE"; do
+    # shellcheck disable=SC2046
+    kill -KILL $(sleep_pids "$d") 2>/dev/null
+    [ "$(settled_survivors "$d")" = 0 ] ||
+      report 1 "bounded (g)-(i): a case's leftover sleep $d could not be reaped" "the next case's census would count it"
+  done
+}
+appeared() { # DURATION: the count of live `sleep DURATION`, waiting up to 2s for one
+  local i n
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    n="$(survivors "$1")"
+    [ "$n" = 0 ] || break
+    sleep 0.2
+  done
+  printf '%s\n' "$n"
+}
+late="sleep $D_LATE >/dev/null 2>&1 </dev/null & exit 0"
+# (g): the sleep a TERMed watchdog forks.
+acting_run acting_bounded "$late"
+left="$(settled_survivors "$D_LATE")"; fence="$(settled_survivors "$D_FENCE")"
+if [ "$rc" = 42 ] && [ "$el" -le 3 ] && [ "$left" = 0 ] && [ "$fence" = 0 ]; then
+  report 0 "$g_label"
+else
+  report 1 "$g_label" "$(acting_detail "late sleeps=$left watchdog sleeps=$fence")"
+fi
+reap_left
+acting_run acting_former "$late"
+left="$(appeared "$D_LATE")"   # the trap's child may not have exec'd yet
+if [ "$rc" = 42 ] && [ "$left" = 1 ]; then
+  report 0 "$g_label -- control: the former bounded leaves the late sleep"
+else
+  report 1 "$g_label -- control: the former bounded leaves the late sleep" \
+    "$(acting_detail "late sleeps=$left (want 1): the oracle saw nothing to catch")"
+fi
+reap_left
+# (h): the directory a TERMed watchdog removes, standing in for the scratch.
+mkdir -p "$victim"
+acting_run acting_bounded 'rm -rf "$WATCHDOG_VICTIM"; exit 0'
+if [ "$rc" = 42 ] && [ -d "$victim" ]; then
+  report 0 "$h_label"
+else
+  report 1 "$h_label" "$(acting_detail "$victim $([ -d "$victim" ] && echo present || echo removed)")"
+fi
+mkdir -p "$victim"
+acting_run acting_former 'rm -rf "$WATCHDOG_VICTIM"; exit 0'
+if [ "$rc" = 42 ] && [ ! -d "$victim" ]; then
+  report 0 "$h_label -- control: the former bounded lets it go"
+else
+  report 1 "$h_label -- control: the former bounded lets it go" \
+    "$(acting_detail "$victim still present (want removed): the oracle saw nothing to catch")"
+fi
+reap_left
+# (i): the watchdog's own sleep, spared by the first KILL.
+acting_run acting_spared ':'
+fence="$(settled_survivors "$D_FENCE")"
+if [ "$rc" = 42 ] && [ "$el" -le 3 ] && [ "$fence" = 0 ]; then
+  report 0 "$i_label"
+else
+  report 1 "$i_label" "$(acting_detail "watchdog sleeps=$fence")"
+fi
+reap_left
+acting_run acting_spared_once ':'
+fence="$(settled_survivors "$D_FENCE")"
+if [ "$rc" = 42 ] && [ "$fence" = 1 ]; then
+  report 0 "$i_label -- control: without the second KILL it survives"
+else
+  report 1 "$i_label -- control: without the second KILL it survives" \
+    "$(acting_detail "watchdog sleeps=$fence (want 1): the oracle saw nothing to catch")"
+fi
+reap_left
+}
+harness_leg_run '1c: a watchdog that a signal does not simply end leaves nothing behind' leg_1c
 
 # ---------------------------------------------------------------------------
 # Shared machinery for the hook-invoking legs
