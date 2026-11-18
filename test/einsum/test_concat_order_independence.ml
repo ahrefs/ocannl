@@ -23,8 +23,9 @@
    14 order-dependent before its fix: 12 from composite window kernels and two from gh-ocannl-2095's
    residual basis choice. Those two stores remain named, counted exceptions; every other store
    remains subject to all three claims. gh-ocannl-2268 adds a waiting-side use-site bound to
-   gh-ocannl-2223's shared-claim example, solved in every order. Counts go to stderr. The search
-   runs whole. *)
+   gh-ocannl-2223's shared-claim example, solved in every order. No accepted answer sizes a
+   component to 0, since none of these is discardable (gh-ocannl-2316). Counts go to stderr. The
+   search runs whole. *)
 
 open! Base
 open Ocannl
@@ -427,9 +428,11 @@ let () =
     (List.length bounded_stores) bounded_accepted
     (List.count bounded_stores ~f:snd)
     reach_accepted;
-  (* A component sized 0 by concatenation arithmetic, refused when stated first with a named tag:
-     present on the base, outside this rule's reach (a [default] claim), and a separate
-     follow-up. *)
+  (* A component sized 0. Only a block spec's discardable component may be empty, and these stores
+     have none, so no accepted answer may size one to 0 (gh-ocannl-2316): concatenation arithmetic
+     waits instead of sizing it, and a zero residual carries no claim. On the base, eighteen bounded
+     runs (three stores, [k >= 2_t] for [t] = [default], [a], [h]) sized [u] to 0, and the named
+     ones were refused when stated first. *)
   let zero_component (_, _, sol) =
     List.exists sol ~f:(fun (_, x) -> Option.exists x ~f:(fun (d, _) -> d = 0))
   in
@@ -454,6 +457,7 @@ let () =
         ~f:order_dependent;
       p_none ~min:7000 "accepted answers refused when stated up front" accepted_runs
         ~f:refuses_own_answer;
+      p_none ~min:7000 "accepted runs that size a component to 0" accepted_runs ~f:zero_component;
       p_none ~min:16000 "stores registered in one batch settling otherwise" stores ~f:batch_differs;
       p "over 1,500 stores are accepted, so refusing everything fails" (accepted_stores > 1500);
       List.iter [ "a"; "h"; Row.bcast_if_1 ] ~f:(fun tag ->
@@ -552,13 +556,9 @@ let () =
       let bounded = List.map bounded_stores ~f:fst in
       p_none ~min:1700 "bounded stores whose verdict or solution depends on the order" bounded
         ~f:order_dependent;
-      p "exactly eighteen bounded runs (three stores) size a component to 0"
-        (List.count bounded_runs ~f:zero_component = 18);
-      p_all ~min:18 "each of them under a default claim, outside the rule's reach"
-        (List.filter bounded_runs ~f:zero_component) ~f:(fun (items, _, _) ->
-          String.is_prefix (store_name items) ~prefix:"w(s2,k3 default)(v)=5 default ;");
-      p_none ~min:1000 "bounded accepted answers refused when stated up front, except size 0"
-        (List.filter bounded_runs ~f:(Fn.non zero_component))
+      p_none ~min:1000 "bounded accepted runs that size a component to 0" bounded_runs
+        ~f:zero_component;
+      p_none ~min:1000 "bounded accepted answers refused when stated up front" bounded_runs
         ~f:refuses_own_answer;
       (* What the rule newly solves, derived from its reach: a bound on k at d > 3, tagged default
          or with the shared claim, and no bound on u or one u = d - 2 meets with the shared

@@ -3323,16 +3323,26 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
       in
       (* [n]'s claim must land on an unsolved component when no solved one carries it. A size-1
          [bcast_if_1] residual is the claim-free top: one unknown component cannot carry the claim,
-         and several defer unchanged until one is solved. *)
+         and several defer unchanged until one is solved. A zero residual carries no claim either,
+         whatever its tag: substitution erases a 0-sized component, so the claim would not survive
+         the fully solved axis, and [u = 0_a] stated first would be refused (gh-ocannl-2316). *)
       let lost_claim () =
         Option.is_some (concat_claim n)
         && String.equal solved_basis default_basis
-        && Option.is_none
-             (concat_claim { d = residual; basis = Lazy.force residual_basis; proj_id = None })
+        && (residual = 0
+           || Option.is_none
+                (concat_claim { d = residual; basis = Lazy.force residual_basis; proj_id = None }))
       in
       match rest with
       | [ _ ] when lost_claim () -> conflict ()
       | _ :: _ :: _ when lost_claim () -> ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)
+      | [ Var v ] when residual = 0 && not (Set.mem env.discardable_vars v) ->
+          (* Concatenation arithmetic never sizes a non-discardable component to 0, which is not a
+             size an axis may have (gh-ocannl-2316): only a block spec's discardable component may
+             be empty. The equation waits instead of refusing, so a [0] stated outright, which
+             substitution consumes, meets the same verdict in every order; closure sizes the
+             component otherwise, and the sum then refuses it. *)
+          ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)
       | [] ->
           (* Fully solved: the sum meets [d] under [solved_basis], not [residual_basis]. A residual
              component is a variable, and binding it records the merged tag, so a named size claims

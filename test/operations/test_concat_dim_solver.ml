@@ -380,6 +380,98 @@ let test_tagged_components_any_order () =
         eq (Row.Var k) (dim ~basis:"hsv" 3) ))
     ~want:"refused"
 
+(* gh-ocannl-2316: concatenation arithmetic never sizes a component to 0 unless it is discardable,
+   and a zero residual carries no claim, since substitution erases a 0-sized component. Each system
+   is solved in every registration order, one constraint per Stage 1 pass, then closed by a shape
+   row as a tensor's variables would be. On the base, [k = 2_default] sized [u] to [0_a], which [u =
+   0_a] stated first refuses. *)
+let test_zero_component () =
+  Stdio.printf "Zero components: only a discardable one is sized 0, in every order\n";
+  let close vs : Row.constraint_ =
+    Row.Shape_row
+      ( {
+          beg_dims = [];
+          dims = List.map vs ~f:(fun v -> Row.Var v);
+          bcast = Broadcastable;
+          prov = Row.provenance ~sh_id:2316 ~kind:`Output;
+        },
+        dummy_origin )
+  in
+  let rec permutations = function
+    | [] -> [ [] ]
+    | xs ->
+        List.concat_mapi xs ~f:(fun i x ->
+            let rest = List.filteri xs ~f:(fun j _ -> j <> i) in
+            List.map (permutations rest) ~f:(fun perm -> x :: perm))
+  in
+  let value env v =
+    match Row.get_dim_from_env env v with
+    | Some (Row.Dim { d; basis; _ }) -> Printf.sprintf "%d of %s" d basis
+    | _ -> "unsized"
+  in
+  let verdict ~discardable mk order =
+    let u = Row.get_var () and k = Row.get_var () in
+    let cs = mk u k in
+    let discardable_vars =
+      if discardable then Set.add Row.dim_var_set_empty u else Row.dim_var_set_empty
+    in
+    let stages =
+      List.map order ~f:(fun i -> (Row.Stage1, [ List.nth_exn cs i ]))
+      @ [ (Row.Stage2, []); (Stage3, []); (Stage4, [ close [ u; k ] ]) ]
+      @ List.map [ Row.Stage5; Stage6a; Stage6b; Stage7 ] ~f:(fun s -> (s, []))
+    in
+    match
+      List.fold stages ~init:([], Row.empty_env) ~f:(fun (deferred, env) (stage, cs) ->
+          Row.solve_inequalities ~stage ~discardable_vars (deferred @ cs) env)
+    with
+    | _, env -> Printf.sprintf "u = %s, k = %s" (value env u) (value env k)
+    | exception Row.Shape_error _ -> "refused"
+    | exception e -> "regression: " ^ Exn.to_string e
+  in
+  let in_every_order ?(discardable = false) name ~n mk ~want =
+    let got = List.map (permutations (List.init n ~f:Fn.id)) ~f:(verdict ~discardable mk) in
+    if List.for_all got ~f:(String.equal want) then
+      Stdio.printf "  PASS: %s: %s in all %d orders\n" name want (List.length got)
+    else fail "%s: %s, want %s" name (String.concat ~sep:" | " got) want
+  in
+  let concat u k ~basis =
+    eq (Row.Concat [ Row.Var u; dim 4 ]) (Row.Concat [ Row.Var k; dim ~basis 2 ])
+  in
+  List.iter [ "a"; "h" ] ~f:(fun t ->
+      in_every_order
+        ("[u; 4] = [k; 2 " ^ t ^ "], k = 2: the zero residual is not sized")
+        ~n:2
+        (fun u k -> [ concat u k ~basis:t; eq (Row.Var k) (dim 2) ])
+        ~want:"refused";
+      in_every_order
+        ("[u; 4] = [k; 2 " ^ t ^ "], k = 2, u = 0 " ^ t ^ ": the answer the base gave, stated")
+        ~n:3
+        (fun u k ->
+          [ concat u k ~basis:t; eq (Row.Var k) (dim 2); eq (Row.Var u) (dim ~basis:t 0) ])
+        ~want:"refused";
+      in_every_order
+        ("[u; 4] = [k; 2 " ^ t ^ "], k = 4: a positive residual takes the claim")
+        ~n:2
+        (fun u k -> [ concat u k ~basis:t; eq (Row.Var k) (dim 4) ])
+        ~want:("u = 2 of " ^ t ^ ", k = 4 of default");
+      in_every_order ~discardable:true
+        ("[u; 4] = [k; 2 " ^ t ^ "], k = 2, u discardable: an empty segment cannot carry the claim")
+        ~n:2
+        (fun u k -> [ concat u k ~basis:t; eq (Row.Var k) (dim 2) ])
+        ~want:"refused");
+  in_every_order "[u; 4] = [k; 2], k = 2: no claim, still not sized" ~n:2
+    (fun u k -> [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2) ])
+    ~want:"refused";
+  in_every_order ~discardable:true "[u; 4] = [k; 2], k = 2, u discardable: sized 0" ~n:2
+    (fun u k -> [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2) ])
+    ~want:"u = 0 of default, k = 2 of default";
+  (* A 0 stated outright is the statement's, not the arithmetic's: substitution consumes it, and the
+     equation waits rather than refusing, so it meets one verdict whichever arrives first. *)
+  in_every_order "[u; 4] = [k; 2], k = 2, u = 0 stated: one verdict in every order" ~n:3
+    (fun u k ->
+      [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2); eq (Row.Var u) (dim 0) ])
+    ~want:"u = 0 of default, k = 2 of default"
+
 let () =
   Stdio.printf "=== Concat dim-solver hardening (solver-level) ===\n";
   Tensor.unsafe_reinitialize ();
@@ -392,4 +484,5 @@ let () =
   test_ac3_affine_residual_not_overconstrained ();
   test_concrete_concat ();
   test_tagged_components_any_order ();
+  test_zero_component ();
   Stdio.printf "=== Done ===\n"

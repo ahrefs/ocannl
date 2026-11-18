@@ -30,4 +30,16 @@ Tagged components: one verdict in either order
   PASS: [a; u] = 3 rgb, a = 0 bcast_if_1: an empty segment claims nothing: u = 3 of rgb in either order
   PASS: [u; 2] = [k; 2 rgb], k = 3: a zero residual keeps its claim: u = 3 of rgb in either order
   PASS: [u; 2 rgb] = [k; 2 rgb], k = 3 hsv: claimed components do not cancel: refused in either order
+Zero components: only a discardable one is sized 0, in every order
+  PASS: [u; 4] = [k; 2 a], k = 2: the zero residual is not sized: refused in all 2 orders
+  PASS: [u; 4] = [k; 2 a], k = 2, u = 0 a: the answer the base gave, stated: refused in all 6 orders
+  PASS: [u; 4] = [k; 2 a], k = 4: a positive residual takes the claim: u = 2 of a, k = 4 of default in all 2 orders
+  PASS: [u; 4] = [k; 2 a], k = 2, u discardable: an empty segment cannot carry the claim: refused in all 2 orders
+  PASS: [u; 4] = [k; 2 h], k = 2: the zero residual is not sized: refused in all 2 orders
+  PASS: [u; 4] = [k; 2 h], k = 2, u = 0 h: the answer the base gave, stated: refused in all 6 orders
+  PASS: [u; 4] = [k; 2 h], k = 4: a positive residual takes the claim: u = 2 of h, k = 4 of default in all 2 orders
+  PASS: [u; 4] = [k; 2 h], k = 2, u discardable: an empty segment cannot carry the claim: refused in all 2 orders
+  PASS: [u; 4] = [k; 2], k = 2: no claim, still not sized: refused in all 2 orders
+  PASS: [u; 4] = [k; 2], k = 2, u discardable: sized 0: u = 0 of default, k = 2 of default in all 2 orders
+  PASS: [u; 4] = [k; 2], k = 2, u = 0 stated: one verdict in every order: u = 0 of default, k = 2 of default in all 6 orders
 === Done ===
