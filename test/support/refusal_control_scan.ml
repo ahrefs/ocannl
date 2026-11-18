@@ -2,10 +2,14 @@
 
     A scanner refusal is mechanically visible when its source hands a string literal, directly or as
     a [Printf.sprintf] format, to [Verdict.fail], to the local [fail] alias scanners use, or to one
-    of Verdict's claim forms: a false claim emits its label as the refusal. The dynamic values a
-    helper returns are deliberately outside this reader: there is no diagnostic string constant in
-    that scanner source to relate. The live check names those limits in its report rather than
-    pretending to infer a value through arbitrary OCaml.
+    of Verdict's claim forms: a false claim emits its label as the refusal.
+
+    The catalogue audit also reads plain variable bindings that alias [fail] or [failwith], or whose
+    function body is one application of either callee (including [@@]) with the unchanged name of a
+    parameter, as read by [Config_key_scan.pattern_name], as its first positional argument. A
+    binding with any other name hides such refusals from extraction. Both checks use the syntactic
+    callee name. Attribute payloads, computed messages, and forwarding through other expression
+    shapes are outside the wrapper check.
 
     Formats are reduced to a stable literal fragment. Code-shaped tokens (underscores or qualified
     names) win; otherwise the longest three-word run does. Values substituted by the failing run
@@ -164,6 +168,8 @@ let non_refusing_claims = [ "skipped"; "case" ]
 (** [failwith] is the one refusing callee outside [Verdict.Claims]. *)
 let refusal_callees = "failwith" :: refusing_claims
 
+let is_direct_failure = function "fail" | "failwith" -> true | _ -> false
+
 (** The members [module Claims] binds in [verdict_source] (the text of [test/support/verdict.ml]),
     in order; [None] when it declares no such structure. An item other than a plain [let x = ...] is
     named as unreadable, so it can only ever mismatch: a member it hides is never assumed judged. *)
@@ -235,6 +241,43 @@ let diagnostic_argument expression =
       Some (Option.value_exn (last_name callee), argument)
   | _ -> None
 
+type wrapper = { name : string; binding_line : int }
+
+let unrecognized_wrappers content =
+  let forwards_failure expression =
+    match expression.pexp_desc with
+    | Pexp_function (parameters, _, Pfunction_body body) -> (
+        match diagnostic_argument body with
+        | Some (callee, argument) when is_direct_failure callee -> (
+            match Read.longident_of argument with
+            | Some [ name ] ->
+                List.exists parameters ~f:(fun parameter ->
+                    match parameter.pparam_desc with
+                    | Pparam_val (_, _, pattern) ->
+                        Option.equal String.equal (Read.pattern_name pattern) (Some name)
+                    | _ -> false)
+            | _ -> false)
+        | _ -> false)
+    | _ -> Option.value_map (last_name expression) ~default:false ~f:is_direct_failure
+  in
+  let found = ref [] in
+  let iterator =
+    object
+      inherit Ast_traverse.iter as super
+      method! attribute _ = ()
+
+      method! value_binding binding =
+        (match binding.pvb_pat.ppat_desc with
+        | Ppat_var { txt = name; loc } when not (is_direct_failure name) ->
+            if forwards_failure binding.pvb_expr then
+              found := { name; binding_line = loc.loc_start.pos_lnum } :: !found
+        | _ -> ());
+        super#value_binding binding
+    end
+  in
+  iterator#structure (Read.structure_of content);
+  List.rev !found
+
 let diagnostics content =
   let found = ref [] in
   let iterator =
@@ -254,10 +297,7 @@ let diagnostics content =
                 match fragment_of_format format with
                 | Some fragment ->
                     let identity = Digest.string (normalize format) |> Digest.to_hex in
-                    let kind =
-                      if List.mem [ "fail"; "failwith" ] callee ~equal:String.equal then Fail
-                      else Claim
-                    in
+                    let kind = if is_direct_failure callee then Fail else Claim in
                     found :=
                       {
                         line = expression.pexp_loc.loc_start.pos_lnum;
