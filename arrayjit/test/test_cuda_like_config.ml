@@ -159,6 +159,9 @@ let () =
     (String.equal
        (render (Hip.unop_syntax Ops.bfloat16 Ops.Relu a))
        "__float2bfloat16(fmaxf(0.0f, __bfloat162float(a)))");
+  let prefix, suffix = Hip.convert_precision ~from:Ops.bfloat16 ~to_:Ops.fp8 in
+  p "HIP widens bfloat16 to f32 before the guarded fp8 conversion"
+    (String.equal (prefix ^ "a" ^ suffix) "ocannl_single_to_fp8_uniform(__bfloat162float(a))");
   let bridges unop binop ternop =
     [
       render (unop Ops.fp8 Ops.Exp a);

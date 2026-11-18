@@ -163,6 +163,8 @@ files.
   (`fp8_from_prec_fn`); guarding only the conversions was the first version, and a review caught
   it. The fp8 destination arm also precedes HIP's generic bf16 source cast (gh-ocannl-2297).
   Widening bf16 to f32 is exact, so it can feed the f32 helper without double rounding.
+  The offline `test_cuda_like_config` pins that widening inside the guarded helper call, even
+  when a device's raw cast would produce the same values.
   `test_fp8_codec_parity` checks the same broken exponent window from materialized bf16 inputs of
   both signs, comparing the zero sign as well as the magnitude. The guard was opt-in under
   `prefer_backend_uniformity` first, and that flag no
