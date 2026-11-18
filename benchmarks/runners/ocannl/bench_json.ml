@@ -54,8 +54,10 @@ let string s =
     [?timing] need not agree with.
 
     [state] names what the arm did about searching — the {!Autotune.outcome_name} of its outcome
-    (gh-ocannl-677), one of ["searched"], ["search-died"], ["cache-replay"], ["search-disabled"],
-    ["pre-search-failure"]. [searched] and [cache_hit] are that same fact projected onto the two
+    (gh-ocannl-677), one of ["searched"], ["searched-untimed"] (a search that timed nothing and
+    shipped the untuned default, gh-ocannl-2310), ["search-died"], ["cache-replay"],
+    ["search-disabled"], ["pre-search-failure"], ["abandoned"], ["abandonment-replay"],
+    ["lineage-refused"]. [searched] and [cache_hit] are that same fact projected onto the two
     booleans the wire format carried before, kept for readers that predate the field; they are NOT
     complements, and deriving the state from them is the mistake the outcome type exists to stop.
 

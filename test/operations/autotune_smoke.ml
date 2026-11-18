@@ -515,7 +515,8 @@ let () =
       | _ -> true);
   p_all "a report that neither searched nor replayed timed nothing" named_states ~f:(fun (_, r) ->
       match r.Autotune.outcome with
-      | Autotune.Searched | Autotune.Search_died _ | Autotune.Abandoned _ | Autotune.Cache_replay ->
+      | Autotune.Searched | Autotune.Searched_untimed | Autotune.Search_died _
+      | Autotune.Abandoned _ | Autotune.Cache_replay ->
           true
       | Autotune.Search_disabled | Autotune.Pre_search_failure _ | Autotune.Abandonment_replay _
       | Autotune.Lineage_refused _ ->

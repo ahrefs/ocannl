@@ -927,9 +927,10 @@ let () =
      ocannl_config says, so a pruning fraction below 1 would print "full search" over a search that
      was not; beam width and rounds follow the effective configuration (below) and are printed as
      used. And a completed search is not automatically a measurement: when every
-     candidate declines, the outcome is still [Searched] while [best_ms] is infinite and the
-     returned routine is the untuned default, so a finite time and a non-empty winner are required
-     before the arm is admitted. *)
+     candidate declines, the outcome is [Searched_untimed] (gh-ocannl-2310) and the returned
+     routine is the untuned default; a budget cut before the untuned default was measured ships it
+     too under [Searched], with [best_ms] infinite, so a finite time and a non-empty winner are
+     still required before the arm is admitted. *)
   (* Beam width and rounds are the EFFECTIVE configuration's -- the reference defaults 2/2, or a
      profile's (the [approximate] payload's 4/4) -- read with [Autotune.tune]'s own defaults and
      passed explicitly, so the search a leg runs is the one a caller under the same configuration
@@ -999,7 +1000,7 @@ let () =
             | None ->
                 if Option.is_some lv then fail "%s: the tune cell reported nothing" s.tag;
                 false
-            | Some Autotune.Searched when !contended > 0 ->
+            | Some (Autotune.Searched | Autotune.Searched_untimed) when !contended > 0 ->
                 (* A refused timing window leaves the search's measurement set incomplete: its crown
                    was chosen from a truncated comparison, so it is not the tuner's selection. *)
                 fail
@@ -1012,10 +1013,16 @@ let () =
                   !ms !wall !counts;
                 Hashtbl.set tuned ~key:s.tag ~data:!lbl;
                 true
+            | Some Autotune.Searched_untimed ->
+                fail
+                  "%s: the search timed no candidate -- the routine it returned is the untuned \
+                   default, not a tuned measurement"
+                  s.tag;
+                false
             | Some Autotune.Searched ->
                 fail
-                  "%s: the search timed no candidate (best_ms %g, winner %S) -- the routine it \
-                   returned is the untuned default, not a tuned measurement"
+                  "%s: the search crowned no timed candidate (best_ms %g, winner %S) -- the \
+                   routine it returned is the untuned default, not a tuned measurement"
                   s.tag !ms !lbl;
                 false
             | Some o ->

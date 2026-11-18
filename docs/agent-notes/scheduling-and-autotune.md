@@ -1677,8 +1677,12 @@ files.
   arm gap stayed at 57–95% (gh-ocannl-546, benchmarks/report-gh546-metal.md). Conclusions of the
   form "family X wins/never wins here" need repeats; the arm-level verdict does not.
   `Autotune.report` says what a call did about searching in ONE field, `outcome` (gh-ocannl-677):
-  `Searched` | `Search_died of terminal_failure` | `Cache_replay` | `Search_disabled` |
-  `Pre_search_failure of terminal_failure`. Match it; do not re-derive it. In particular **"this
+  `Searched` | `Searched_untimed` | `Search_died of terminal_failure` | `Cache_replay` |
+  `Search_disabled` | `Pre_search_failure of terminal_failure`, plus the abandonment and
+  lineage-refusal states. Match it; do not re-derive it. A search that completed but timed nothing
+  is `Searched_untimed` (gh-ocannl-2310), not `Searched` over `best_label = ""`: before, two bench
+  consumers (`projection_shape_bench`, `companion_flavor_bench`) re-derived "untimed" from the
+  label and `best_ms`. In particular **"this
   process searched" is not `not cache_hit`** — under `autotune_search=false` (the `reproducible`
   profile) and on every pre-search failure a call reports neither having searched nor having
   replayed, and ships the untuned default. That mis-derivation, made twice in one PR, is what the
@@ -1948,8 +1952,13 @@ files.
   on gfx1151, with driver timeouts and a lost display (gh-ocannl-532). `Autotune.tune` therefore
   does not dispatch an unparallelized candidate on a GPU backend at all: `dispatchable` gates both
   the baseline and every candidate, `baseline_ms` is `infinity` there, and if nothing at all gets
-  timed the search stores no cache entry and returns the untuned default compile rather than the
-  serial incumbent. On CPU backends the serial form runs at full single-core speed and is still
+  timed the search stores no cache entry, reports `Searched_untimed` and returns the untuned
+  default compile rather than the serial incumbent (gh-ocannl-2310). That default can itself be the
+  one-work-item form: a single-output reduction gives the seeds no hardware dimension to bind, and
+  on Metal its untuned compile binds none either (`test/operations/autotune_nothing_timed` pins
+  both). To force the same all-refused census on cc, wrap `Autotune.Context_driver` and raise
+  `Cause_at (Transform, Not_dispatched _)` from every candidate compile's `lowered_transform`
+  after the inner one returns, as that test does. On CPU backends the serial form runs at full single-core speed and is still
   timed. When timing anything else through this seam, price the serial form before dispatching it.
 - **What a search refuses or dedups costs no codegen** (gh-ocannl-1340): `compile_candidate_gated`
   decides both verdicts inside the lowered transform, on the forms it is about to return (the

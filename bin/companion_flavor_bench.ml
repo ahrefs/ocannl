@@ -328,13 +328,14 @@ let () =
       | ctx, routine -> (
           let admitted =
             match !outcome with
-            | Some Autotune.Searched when !contended > 0 ->
+            | Some (Autotune.Searched | Autotune.Searched_untimed) when !contended > 0 ->
                 (* A truncated comparison crowns nothing; like a refused timing, host contention. *)
                 Error
                   (Printf.sprintf "contended: the search refused %d timing window(s)" !contended)
             | Some Autotune.Searched when Float.is_finite !best && not (String.is_empty !lbl) ->
                 Ok ()
-            | Some Autotune.Searched -> Error "the search timed no candidate"
+            | Some Autotune.Searched_untimed -> Error "the search timed no candidate"
+            | Some Autotune.Searched -> Error "the search crowned no timed candidate"
             | Some o -> Error ("the tune did not search: " ^ Autotune.outcome_name o)
             | None -> Error "the tune reported nothing"
           in

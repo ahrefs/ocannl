@@ -62,8 +62,10 @@ def problems(path):
         return out + ["INCOMPLETE SESSION: the result line carries no tune arms"]
     for name in REQUIRED_ARMS:
         found = [a for a in arms if a.get("arm") == name]
-        if len(found) != 1 or found[0].get("state") != "searched":
+        if len(found) != 1 or found[0].get("state") not in ("searched", "searched-untimed"):
             # Absent, ambiguous, or did not search: "searched":true at the top covers a died search.
+            # "searched-untimed" completed a search that timed nothing (gh-ocannl-2310), which the
+            # best_ms check below reports.
             detail = "" if len(found) <= 1 else " (it appears %d times)" % len(found)
             out.append("INCOMPLETE SESSION: arm %s did not complete a search%s" % (name, detail))
         # A search can complete having timed nothing (every candidate declined; the GPU serial

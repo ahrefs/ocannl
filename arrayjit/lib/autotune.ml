@@ -26,7 +26,10 @@ type abandonment = { ab_timed : int; ab_best_ms : float; ab_incumbent_ms : float
    expressible, and a consumer that forgets a state stops compiling instead of answering [false].
    The counters below describe how much work the state got through; they never identify it. *)
 type outcome =
-  | Searched  (** A search ran and completed. *)
+  | Searched  (** A search ran and completed, and timed what it ships or crowned. *)
+  | Searched_untimed
+      (** A search ran and completed but timed nothing (gh-ocannl-2310): the untuned default ships,
+          never measured. *)
   | Search_died of terminal_failure
       (** A search ran and terminated on a fatal failure. The counters hold what it had reached. *)
   | Cache_replay  (** A cached winner replayed; nothing was searched in this process. *)
@@ -624,6 +627,7 @@ let no_search_report ~timing =
 (** The stable one-word name of an outcome state, for logs, JSON records and test goldens. *)
 let outcome_name = function
   | Searched -> "searched"
+  | Searched_untimed -> "searched-untimed"
   | Search_died _ -> "search-died"
   | Cache_replay -> "cache-replay"
   | Search_disabled -> "search-disabled"
@@ -638,8 +642,8 @@ let outcome_name = function
 let terminal_failure (r : report) =
   match r.outcome with
   | Search_died tf | Pre_search_failure tf -> Some tf
-  | Searched | Cache_replay | Abandonment_replay _ | Search_disabled | Abandoned _
-  | Lineage_refused _ ->
+  | Searched | Searched_untimed | Cache_replay | Abandonment_replay _ | Search_disabled
+  | Abandoned _ | Lineage_refused _ ->
       None
 
 (* gh-ocannl-1718 (moved from the test-support [Tune_crown], gh-ocannl-1498): what a call crowned
@@ -12489,7 +12493,12 @@ module Make (D : Driver) = struct
                    logf "untuned-default control compile failed: %s" (Exn.to_string exn));
             let completed_report =
               {
-                outcome = Searched;
+                (* gh-ocannl-2310: the state says whether anything was timed, so a consumer never
+                   re-derives it from [best_label] or the counters -- which is what [outcome] exists
+                   to prevent (gh-ocannl-677). A search whose every candidate was refused (on a GPU
+                   backend, a single-output reduction gives its seeds no hardware dimension to bind)
+                   or whose every window was refused ships the untuned default below, untimed. *)
+                outcome = (if nothing_timed then Searched_untimed else Searched);
                 timing;
                 candidates_timed = !n_timed;
                 timings_contended = !n_timings_contended;
