@@ -1,0 +1,11 @@
+an impure entry is refused by Schedule.apply, naming the entry and the hidden write, before any op runs: true
+schedule_legality refuses it too, naming the entry and the hidden write, with no verdict: true
+strict: the entry refusal is fatal, untyped (Invalid_argument, no cause): true
+permissive: it is contained as Unclassified, never as Illegal_schedule, with no op dispatched: true
+the empty schedule is the identity on the impure entry, dispatching nothing: true
+the statement-level twin reaches its ops and is refused at the Retype, naming the tile's lifetime: true
+a pure entry holding a pure scope body runs every op: true
+the unscheduled cells are distinct and moved off their seeds, so a swapped or dropped store-back would show: true
+and computes the unscheduled program's values: true
+a pure entry with a Grid loop inside a scope body is admitted, and its Retype to Serial repairs it: true
+schedule_entry_scope_purity: done

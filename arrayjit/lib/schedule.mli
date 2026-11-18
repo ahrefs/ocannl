@@ -720,10 +720,15 @@ val apply :
     hardware-annotated loop ({!Low_level.scope_hardware_loop}) nor an effect beyond its own locals
     ({!Low_level.scope_purity_violation}) — e.g. a hardware [Retype] of a loop inside the scope a
     materializing [Unroll] minted, or a [Stage] whose loads land there. Only a violation the op
-    added is refused; an entry program already breaking the grammar (hand-built IR) is left to the
-    compile gates. Likewise when a [Privatize] tile minted earlier in the same application gets a
-    hardware-typed loop inside its per-thread lifetime (see [Privatize] in {!optop}); a tile minted
-    by an earlier [apply] is not seen.
+    added is refused. An entry program already breaking it (only hand-built [?prelowered] IR can) is
+    the program's fault: an impure scope body is refused before any op runs, by a non-empty schedule
+    (gh-ocannl-2314), since the ops' statement-level scanners would misread its hidden writes. That
+    refusal is an untyped [Invalid_argument] naming the schedule's entry, so {!apply_classified}
+    does not pass it through as a declined candidate (a strict search reports it as fatal). A
+    hardware loop the entry already holds inside a scope is left to the ops, which can repair it,
+    and to the compile gates. Likewise when a [Privatize] tile minted earlier in the same
+    application gets a hardware-typed loop inside its per-thread lifetime (see [Privatize] in
+    {!optop}); a tile minted by an earlier [apply] is not seen.
 
     The barrier elision (gh-ocannl-487, widened to every staged anchor by gh-ocannl-567) is a
     synchronization-only rewrite — bitwise identical output, on every backend path. It rests on the
@@ -746,7 +751,8 @@ val apply_classified :
     which a search counts as a declined candidate. Every other exception escaping the transforms or
     the finalization passes -- a bare [Invalid_argument], an array bound, a [List.zip_exn] -- is a
     transform bug and propagates untyped, hence fatal under [strict_failure_classification]
-    (gh-ocannl-1323). *)
+    (gh-ocannl-1323); so does the refusal of an impure entry program, which is the routine's fault
+    rather than the candidate's (see {!apply}, gh-ocannl-2314). *)
 
 val privatized_tile_widens : tile:Tn.t -> Low_level.t -> bool
 (** The re-check of a [Privatize] tile minted at the accumulator residency (gh-ocannl-1151): every
@@ -871,7 +877,9 @@ val schedule_legality : Low_level.optimized -> schedule -> (optop * op_verdict) 
 (** Per-op verdicts, each against the code with the preceding ops applied (on a hermetic copy —
     checking never mutates the argument). Stops after a proven-illegal op or a refused application;
     an op whose application is refused reports [Op_illegal] with the refusal. Any other exception
-    propagates: it is a transform bug, not a verdict (gh-ocannl-1323). *)
+    propagates: it is a transform bug, not a verdict (gh-ocannl-1323). So does {!apply}'s refusal of
+    an impure entry program (gh-ocannl-2314), raised before any op is probed: the routine's fault,
+    charged to no op. *)
 
 val aligned_chains :
   ?max_chain:int ->

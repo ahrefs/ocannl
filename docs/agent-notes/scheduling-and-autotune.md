@@ -1172,8 +1172,17 @@ files.
   `tile_loops`. An unanchored shared stage wraps the statement holding the scope instead of the
   scope-nested tile loop (`rewrite_loop_holder` in `schedule.ml`). `stage_scope_anchor`.
   `Schedule.apply_opt_op` checks the program every op leaves and refuses, typed and naming the op,
-  a violation the op ADDED (a malformed entry is the compile gates' to refuse, not the next op's);
-  the race queries alone called the `Grid` retype and the `Stage` legal. `scope_verdict` asks the
+  a violation the op ADDED (a malformed entry is not the next op's fault);
+  the race queries alone called the `Grid` retype and the `Stage` legal. An IMPURE entry (only a
+  hand-built `?prelowered` routine can bring one) is refused before any op runs, by `apply_typed`
+  and `schedule_legality` on a non-empty schedule (`check_entry_scope_purity`, gh-ocannl-2314):
+  ops such as `privatized_tile_split`'s `writes` and `Fuse_epilogue`'s plain-write sites read
+  writes at statement level, so they misread a hidden one (the base applied `[Privatize; Retype
+  Grid]` over a tile updated inside a scope body). It is untyped, an invariant: a typed
+  `Illegal_schedule` would make a search decline every arm alike; strict classification reports
+  the routine's fault once. Purity only: an entry's hardware loop in a scope stays exempt per op
+  (an op can repair it, a `Retype` to `Serial`), and so does everything on the single-op probes
+  (`scope_verdict`, `probe_opt_op`). `schedule_entry_scope_purity`. `scope_verdict` asks the
   same of the single op, from one unchecked probe shared with the other two scopes, only where a
   scope body holds a loop. The same post-op check re-judges every `Privatize` tile of the
   application: no hardware-typed loop may sit inside its per-thread lifetime (between its
