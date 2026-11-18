@@ -116,8 +116,8 @@ let () =
     | _ -> false
     | exception Invalid_argument msg ->
         Stdio.eprintf "apply: %s (not part of the golden)\n%!" msg;
-        String.is_prefix msg ~prefix:"Schedule.apply: the program entering the schedule"
-        && String.is_substring msg ~substring:"impure scope body"
+        (* The message's full shape is [schedule_entry_scope_purity]'s to pin. *)
+        String.is_substring msg ~substring:"the program entering the schedule"
         && String.is_substring msg
              ~substring:("Set writes the tensor node " ^ Tn.debug_name impure.acc));
   (* The premise: the fusion the base performed changes the program's values. *)

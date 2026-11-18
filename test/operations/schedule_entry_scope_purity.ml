@@ -75,9 +75,11 @@ let counting f =
   let result = Sched.with_transform_fault (fun (_ : Sched.optop) -> Int.incr n) f in
   (result, !n)
 
-let names_entry ~what ~acc msg =
+(* [msg] names the entry point that refused, the entry program, and the hidden write. A contained
+   refusal's detail renders the exception around the message, hence substrings. *)
+let names_entry ?(caller = "Schedule.apply") ~what ~acc msg =
   Stdio.eprintf "%s: %s (not part of the golden)\n%!" what msg;
-  String.is_prefix msg ~prefix:"Schedule.apply: the program entering the schedule"
+  String.is_substring msg ~substring:(caller ^ ": the program entering the schedule")
   && String.is_substring msg ~substring:"impure scope body"
   && String.is_substring msg ~substring:("Set writes the tensor node " ^ Tn.debug_name acc)
 
@@ -118,19 +120,24 @@ let () =
     | verdicts ->
         Stdio.eprintf "legality: %d verdicts (not part of the golden)\n%!" (List.length verdicts);
         false
-    | exception Invalid_argument msg -> names_entry ~what:"legality" ~acc:hidden.acc msg);
+    | exception Invalid_argument msg ->
+        names_entry ~caller:"Schedule.schedule_legality" ~what:"legality" ~acc:hidden.acc msg);
   p "strict: the entry refusal is fatal, untyped (Invalid_argument, no cause)"
     (match classify ~strict:true (fun () -> Sched.apply_classified (gap hidden) hidden.opt) with
     | Error (Outcome.Fatal { exn = Invalid_argument msg; cause = None; _ }) ->
         names_entry ~what:"strict" ~acc:hidden.acc msg
     | Ok _ | Error _ -> false);
-  p "permissive: it is contained as Unclassified, never as Illegal_schedule"
-    (match classify ~strict:false (fun () -> Sched.apply_classified (gap hidden) hidden.opt) with
-    | Error
-        (Outcome.Classified
-           { cause = Outcome.Unclassified { exn_constructor = "Invalid_argument"; _ }; _ }) ->
-        true
-    | Ok _ | Error _ -> false);
+  p "permissive: it is contained as Unclassified, never as Illegal_schedule, with no op dispatched"
+    (match
+       counting (fun () ->
+           classify ~strict:false (fun () -> Sched.apply_classified (gap hidden) hidden.opt))
+     with
+    | ( Error
+          (Outcome.Classified
+             { cause = Outcome.Unclassified { exn_constructor = "Invalid_argument"; detail; _ }; _ }),
+        0 ) ->
+        names_entry ~what:"permissive" ~acc:hidden.acc detail
+    | _ -> false);
   p "the empty schedule is the identity on the impure entry, dispatching nothing"
     (match counting (fun () -> Sched.apply [] hidden.opt) with
     | o, 0 -> phys_equal o hidden.opt

@@ -5565,16 +5565,17 @@ let scope_grammar_message ~op = function
    (permissive, an [Unclassified] decline). The neighbouring gates refuse the same condition the
    same way: [optimize]'s and [C_syntax.compile_proc]'s [validate_scope_bodies]. Pinned by
    [test/operations/schedule_entry_scope_purity]. *)
-let check_entry_scope_purity (llc : Low_level.t) =
+let check_entry_scope_purity ~caller (llc : Low_level.t) =
   Option.iter (Low_level.scope_purity_violation llc) ~f:(fun msg ->
       (* invariant: the pipeline validates scope purity before any schedule (optimize_proc's
          validate_scope_bodies) and every op refuses one it adds; only hand-built ?prelowered IR
          reaches here impure, and that is the caller's error, not a property of the candidate. *)
       invalid_arg
-        ("Schedule.apply: the program entering the schedule holds an impure scope body \
-          (gh-ocannl-584, gh-ocannl-2314), which only hand-built ?prelowered IR can bring here; it \
-          is refused before any op runs, since the ops' statement-level scanners do not look \
-          inside scope bodies: " ^ msg))
+        (caller
+       ^ ": the program entering the schedule holds an impure scope body (gh-ocannl-584, \
+          gh-ocannl-2314), which only hand-built ?prelowered IR can bring here; it is refused \
+          before any op runs, since the ops' statement-level scanners do not look inside scope \
+          bodies: " ^ msg))
 
 (* gh-ocannl-1467: whether a hardware-typed loop lies inside a [Privatize] tile's per-thread
    lifetime — its body writes the tile but does not hold the store-back (the statement reading the
@@ -5807,7 +5808,7 @@ let apply_typed ?(static_indices = []) (sched : schedule) (opt : Low_level.optim
     Low_level.optimized =
   if List.is_empty sched then opt
   else (
-    check_entry_scope_purity opt.Low_level.llc;
+    check_entry_scope_purity ~caller:"Schedule.apply" opt.Low_level.llc;
     let app = start_application opt.Low_level.llc in
     (* gh-ocannl-1739: transforms and the finalization below rewrite operands without keeping their
        precision annotations descriptive ([Privatize]'s widened tile evaluates at [acc_prec]; a
@@ -6694,7 +6695,8 @@ let schedule_legality (opt : Low_level.optimized) (sched : schedule) : (optop * 
      (gh-ocannl-2314; untyped, so it propagates as the routine's fault rather than charging the
      first op with an [Op_illegal]), and every op sees the program the schedule started from as its
      [entry] ([Privatize] judges its tile width there). *)
-  if not (List.is_empty sched) then check_entry_scope_purity opt.Low_level.llc;
+  if not (List.is_empty sched) then
+    check_entry_scope_purity ~caller:"Schedule.schedule_legality" opt.Low_level.llc;
   let app = start_application opt.Low_level.llc in
   let rec go opt acc = function
     | [] -> List.rev acc
