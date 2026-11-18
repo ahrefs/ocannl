@@ -5319,6 +5319,50 @@ let check ~leg rows = in_leg ~leg "all rows pass" (fun label -> p_all label rows
       ],
       [ "rows [applied in caller.ml]" ],
       1 );
+    ( "names a leg uncompared that is the result of a function under a module alias of another \
+       source",
+      {ocaml|open Verdict.Claims
+module L = Legs
+let () =
+  let leg = Verdict.leg ~when_:on_gpu ~on:backend_name () in
+  let rows = probe () in
+  in_leg ~leg:(L.rows_leg leg rows) "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      legs rows_leg,
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "names a leg uncompared whose function a structure of the source may rebind by a later include",
+      {ocaml|open Verdict.Claims
+module Legs = struct
+  let rows_leg leg _ = Verdict.sub_leg leg ~when_:(lazy on_gpu) ~on:"a CPU"
+  include Other
+end
+let () =
+  let leg = Verdict.leg ~when_:on_gpu ~on:backend_name () in
+  let rows = probe () in
+  in_leg ~leg:(Legs.rows_leg leg rows) "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      none,
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "names a leg uncompared whose other-source function writes the reference its gate reads",
+      claim_under "Legs.rows_leg leg rows",
+      legs
+        {ocaml|let rows_leg leg xs =
+  let ready = ref false in
+  ready := not (List.is_empty xs);
+  Verdict.sub_leg leg ~when_:(lazy !ready) ~on:"no rows"|ocaml},
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "refuses a leg another source's function gates on a part of a tuple it destructures",
+      claim_under "Legs.rows_leg leg (rows, ())",
+      legs
+        {ocaml|let rows_leg leg (xs, _) =
+  Verdict.sub_leg leg ~when_:(lazy (not (List.is_empty xs))) ~on:"no rows"|ocaml},
+      [],
+      [ "rows" ],
+      1 );
     ( "names a leg uncompared that is the result of a function of a module no source defines",
       claim_under "Legs.arm_leg leg k16",
       none,

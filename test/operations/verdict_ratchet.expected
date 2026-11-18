@@ -751,6 +751,10 @@ names a leg uncompared whose helper's module a caller that does not parse may sp
 accepts a leg another source's function returns, its sub-leg gated on an invariant: true
 refuses a leg another source's function returns, its sub-leg gated on the rows handed in: true
 refuses a leg a caller builds by another source's function from the rows it hands in: true
+names a leg uncompared that is the result of a function under a module alias of another source: true
+names a leg uncompared whose function a structure of the source may rebind by a later include: true
+names a leg uncompared whose other-source function writes the reference its gate reads: true
+refuses a leg another source's function gates on a part of a tuple it destructures: true
 names a leg uncompared that is the result of a function of a module no source defines: true
 names a leg uncompared whose function a later include in its source may rebind: true
 names a leg uncompared whose function a later include of a structure including another may rebind: true

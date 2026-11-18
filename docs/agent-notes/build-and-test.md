@@ -2712,15 +2712,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `exempt_skip_lists` entries, each with its site count and reason. Both readers work under one
   BOUNDED model of what runs, stated once in `verdict_scan.ml`'s skip-list header (*The model*):
   a function value or `lazy` is deferred unless a collection function calls it back, and a
-  construct outside the model is read conservatively -- no skip list, an uncompared leg -- never
-  refused as a finding; an uncompared leg is refused as a gate nothing read, unless
-  `exempt_uncompared_legs` names it (gh-ocannl-2336, below). Extending the model starts in that header. Since gh-ocannl-1893 item 2 the model reads
-  DEFERRED SKIP VALUES where they run: a skip bound to a name of any spelling, a named skip wrapper
-  at a complete application (`let skip_both () = skipped "a"; skipped "b"` run in a branch is a
-  skip run), a stored partial iteration where its name completes it, a named `lazy` where it is
-  forced (once per branch), and a lazy sequence's callbacks where a consumer runs them; which
-  `Seq`/`Sequence` functions consume is the `consumes` column of `collection_functions`, the one
-  owner both readers ask.
+  construct outside the model is read conservatively: the skip-list reader then sees no skip list,
+  which is never refused, and the gate reader leaves the leg uncompared, which is refused as a gate
+  nothing read unless `exempt_uncompared_legs` names it (gh-ocannl-2336, below). Extending the model
+  starts in that header. Since gh-ocannl-1893 item 2 the model reads DEFERRED SKIP VALUES where they
+  run: a skip bound to a name of any spelling, a named skip wrapper at a complete application
+  (`let skip_both () = skipped "a"; skipped "b"` run in a branch is a skip run), a stored partial
+  iteration where its name completes it, a named `lazy` where it is forced (once per branch), and a
+  lazy sequence's callbacks where a consumer runs them; which `Seq`/`Sequence` functions consume is
+  the `consumes` column of `collection_functions`, the one owner both readers ask.
   The item-1 migration of gh-ocannl-1893 removes the remaining exemptions. The cache-reuse
   claims in `cc_march_census` gate on the configured compiler's expanded compilation plan,
   classified before collecting the counters; an always-evaluated claim checks the plan's
