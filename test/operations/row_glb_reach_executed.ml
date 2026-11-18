@@ -366,14 +366,98 @@ let () =
     [ (bits, [ 1 ]); (u, []); (v, []); (y, [ 8 ]); (z, [ 12 ]) ]
     ~f:(fun (t, want) -> List.equal Int.equal (Array.to_list (Shape.to_dims t.Tensor.shape)) want)
 
+(* Nine and twelve cells both need three blocks. Read the draws themselves: the constants would make
+   even a broadcast scalar look like a draw that filled its use site. *)
+let () =
+  Verdict.case "draws sharing a three-block counter" @@ fun () ->
+  Tensor.unsafe_reinitialize ();
+  let offsets = NTDSL.term ~fetch_op:Range_over_offsets () in
+  let bits =
+    TDSL.threefry4x32 ~spec:"..p..|..q..->..r..; ..b.. => ..b.." (TDSL.embed_self_id ()) offsets ()
+  in
+  let u = TDSL.uint4x32_to_prec_uniform bits () in
+  let v = TDSL.uint4x32_to_prec_uniform bits () in
+  let c9 = const [ 9 ] and c12 = const [ 12 ] in
+  let%op y = relu u + (c9 ++ "a => a...") in
+  let%op z = relu v + (c12 ++ "a => a...") in
+  Train.set_materialized u.Tensor.value;
+  Train.set_materialized v.Tensor.value;
+  (* Sequence the roots without adding a tensor operation that would constrain their shapes. *)
+  let forward y =
+    let y_code = Train.forward y in
+    Ir.Assignments.sequence [ y_code; Train.forward z ]
+  in
+  let ctx = Train.run_once ~f:forward (context ()) y in
+  p_all ~min:3 "the shared bits and both draws take their full shapes"
+    [ (bits, [ 3 ]); (u, [ 9 ]); (v, [ 12 ]) ]
+    ~f:(fun (t, want) -> List.equal Int.equal (Array.to_list (Shape.to_dims t.Tensor.shape)) want);
+  List.iter
+    [ (u, 9); (v, 12) ]
+    ~f:(fun (draw, n) ->
+      let seen = Hash_set.create (module Float) in
+      p_all ~min:n
+        (Printf.sprintf "the %d-cell draw holds a distinct value in every cell" n)
+        (Array.to_list (Context.get_values ctx draw.Tensor.value))
+        ~f:(fun value ->
+          let fresh = Float.is_finite value && not (Hash_set.mem seen value) in
+          Hash_set.add seen value;
+          fresh))
+
+module Row = Ocannl.Row
+
+(* A concrete lower bound can restrict the counter while leaving it unsolved at Stage6a. *)
+let () =
+  Verdict.case "agreeing draws with a bound on their counter" @@ fun () ->
+  Tensor.unsafe_reinitialize ();
+  let prov = Row.provenance ~sh_id:2319 ~kind:`Output in
+  let fresh () = Row.get_row_for_var prov (Row.get_row_var ()) in
+  let counter = Row.get_var () in
+  let origin = [] in
+  let coeff = Utils.safe_lazy "shared counter block" (fun () -> 4) in
+  let fixture n =
+    let draw = fresh () and tail = fresh () and operand = fresh () in
+    (match draw.bcast with Row_var v -> Row.add_resolve_at_use v | Broadcastable -> assert false);
+    let glb = { tail with beg_dims = [ Row.get_default_dim ~d:n () ] } in
+    ( tail,
+      [
+        Row.Shape_row (draw, origin);
+        Row.Row_ineq { res = tail; opnd = operand; origin };
+        Row.Row_ineq { res = glb; opnd = draw; origin };
+        Row.Rows_constr
+          {
+            r = [ draw ];
+            constr =
+              Total_elems
+                {
+                  numerator = Strided_var { coeff; var = counter; denom = 1; round_up = true };
+                  divided_by = [];
+                  keep_axis = false;
+                };
+            origin;
+          };
+      ] )
+  in
+  let t9, c9 = fixture 9 and t12, c12 = fixture 12 in
+  let one = Row.get_default_dim ~d:1 () in
+  let bound =
+    Row.Dim_ineq { res = one; opnd = Var counter; from_ = Sexp.Atom "one block"; origin }
+  in
+  let _, env =
+    List.fold
+      [ Row.Stage1; Stage2; Stage3; Stage4; Stage5; Stage6a ]
+      ~init:(bound :: (c9 @ c12), Row.empty_env)
+      ~f:(fun (cs, env) stage -> Row.solve_inequalities ~stage cs env)
+  in
+  p_all ~min:2 "both remainders stay open when the counter's bound requires one block" [ t9; t12 ]
+    ~f:(fun tail ->
+      match (Row.subst_row env tail).bcast with Row_var _ -> true | Broadcastable -> false)
+
 (* gh-ocannl-2224: the late-tail boundary is staged deliberately: ordinary program constraints
    register before closing. The GLB has a leading axis over a tail held open through Stage6a; supply
    the tail equation at Stage6b. Concrete axes already work through generic elimination, but an
    unmarked variable bounded by 3 waited until stage 7 and closed to 1. The packed role arm must
    retry after stage 6a. No natural program reaching this exact late-tail path was found; the staged
    solver claims pin it and the configured draws are execution smoke checks. *)
-module Row = Ocannl.Row
-
 let late_tail_dims ?(variable_axis = false) () =
   let prov = Row.provenance ~sh_id:2224 ~kind:`Output in
   let fresh () = Row.get_row_for_var prov (Row.get_row_var ()) in

@@ -6932,9 +6932,9 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
      (c ++ "a => a...")]. If the unary result closes first, its empty row becomes the draw's bound.
      Settle the GLB's remainder while that result is still open. The remainder and its operands must
      be ordinary unsized result rows linked by stored bare inequalities. A held structural
-     constraint could still supply axes or require a flank alignment. A draw's counter must belong
-     to that total alone: letting the draw size a shared counter would commit the other draw's size
-     too. *)
+     constraint could still supply axes or require a flank alignment. A shared counter can settle
+     when every total using it is ready to take a GLB that needs the same number of blocks and the
+     counter's dimension bounds admit that size. *)
   let close_packed_glb_remainders others draws env =
     let row_var r =
       match (subst_row env r).bcast with Row_var v -> Some v | Broadcastable -> None
@@ -6948,9 +6948,10 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
                 | Some (Bounds_row { is_in_param = false; glb = Some glb; constr; _ })
                   when is_packed_draw_constr constr -> (
                     match subst_row env glb with
-                    | { beg_dims = _ :: _ as beg_dims; dims = []; bcast = Row_var tail; prov }
-                      when known_dims_product beg_dims ->
-                        Some (tail, prov, origin)
+                    | { beg_dims = _ :: _ as beg_dims; dims = []; bcast = Row_var tail; prov } -> (
+                        match collect_factors beg_dims with
+                        | Some (cells, []) -> Some ((tail, prov, origin), (v, cells, constr))
+                        | _ -> None)
                     | _ -> None)
                 | _ -> None)
             | _ -> None)
@@ -6985,7 +6986,41 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
           | Terminal_row (_, r, _) -> (add_row rows r, totals)
           | _ -> (rows, totals))
       in
-      let exclusive_counter draw counter =
+      let candidate_draws =
+        List.fold candidates
+          ~init:(Map.empty (module Row_var))
+          ~f:(fun draws ((tail, _, _), (draw, cells, constr)) ->
+            Map.set draws ~key:draw ~data:(tail, cells, constr))
+      in
+      let block_demand closings draw counter =
+        match Map.find candidate_draws draw with
+        | Some
+            ( tail,
+              cells,
+              Total_elems
+                {
+                  numerator = Strided_var { coeff; var; denom; round_up = true };
+                  divided_by = [];
+                  _;
+                } )
+          when Map.mem closings tail && equal_dim (subst_dim env (Var var)) (Var counter) ->
+            let coeff_val = Utils.safe_force coeff in
+            if coeff_val > 0 then solve_strided_var ~coeff_val ~denom ~round_up:true cells else None
+        | _ -> None
+      in
+      let counter_accepts_demand counter blocks =
+        match find_dim env.dim_env counter with
+        | None -> true
+        | Some (Bounds_dim { res = []; opnd = []; glb; constr; _ }) -> (
+            let demand = get_default_dim ~d:blocks () in
+            Option.for_all glb ~f:(fun glb -> equal_dim (subst_dim env glb) demand)
+            &&
+            match constr with
+            | Unconstrained_dim -> true
+            | At_least_dim { d_min; _ } -> blocks >= d_min)
+        | Some _ -> false
+      in
+      let counter_can_close closings draw counter =
         match subst_dim env (Var counter) with
         | Var counter when not (Set.mem held_totals counter) ->
             Set.for_all (mentioning env.rows_mentioning_dim counter ~empty:row_var_set_empty)
@@ -6993,18 +7028,21 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
                 equal_row_var v draw
                 ||
                 match find_row env.row_env v with
-                | Some (Bounds_row { constr; _ }) -> not (Set.mem (total_vars constr) counter)
+                | Some (Bounds_row { constr; _ }) when Set.mem (total_vars constr) counter ->
+                    Option.exists (block_demand closings draw counter) ~f:(fun blocks ->
+                        counter_accepts_demand counter blocks
+                        && Option.exists (block_demand closings v counter) ~f:(Int.equal blocks))
                 | _ -> true)
         | _ -> false
       in
-      let counters_are_exclusive tail =
+      let counters_can_close closings tail =
         Set.for_all (mentioning env.rows_mentioning_row tail ~empty:row_var_set_empty)
           ~f:(fun draw ->
             match find_row env.row_env draw with
             | Some (Bounds_row { glb = Some glb; constr; _ })
               when Option.exists (row_var glb) ~f:(equal_row_var tail) ->
                 Option.value_map (packed_draw_counter constr) ~default:true
-                  ~f:(exclusive_counter draw)
+                  ~f:(counter_can_close closings draw)
             | _ -> true)
       in
       let rec unsized_results seen = function
@@ -7019,21 +7057,25 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
             | _ -> false)
         | _ -> false
       in
-      (* All selected remainders close empty and the connected rows have no held relation that could
-         change the choice. Submit them together before re-solving the draws. *)
-      List.fold candidates
-        ~init:(Map.empty (module Row_var))
-        ~f:(fun closings (tail, prov, origin) ->
-          match find_row env.row_env tail with
-          | Some (Bounds_row { res = []; opnd = _ :: _; _ })
-            when (not (Map.mem closings tail))
-                 && unsized_results row_var_set_empty [ tail ]
-                 && counters_are_exclusive tail ->
-              let r1 = row_of_var tail prov in
-              Map.set closings ~key:tail
-                ~data:(Row_eq { r1; r2 = { r1 with bcast = Broadcastable }; origin })
-          | _ -> closings)
-      |> Map.data
+      let closings =
+        List.fold candidates
+          ~init:(Map.empty (module Row_var))
+          ~f:(fun closings ((tail, prov, origin), _) ->
+            match find_row env.row_env tail with
+            | Some (Bounds_row { res = []; opnd = _ :: _; _ })
+              when (not (Map.mem closings tail)) && unsized_results row_var_set_empty [ tail ] ->
+                let r1 = row_of_var tail prov in
+                Map.set closings ~key:tail
+                  ~data:(Row_eq { r1; r2 = { r1 with bcast = Broadcastable }; origin })
+            | _ -> closings)
+      in
+      (* Dropping a remainder can leave a peer without a ready GLB. Submit the surviving remainders
+         together, so all agreeing totals can take their GLBs in the same pass. *)
+      let rec keep_agreeing closings =
+        let next = Map.filter_keys closings ~f:(counters_can_close closings) in
+        if Map.length next = Map.length closings then Map.data next else keep_agreeing next
+      in
+      keep_agreeing closings
   in
   let rec draws_at_quiescence ineqs env =
     let draws, others =
