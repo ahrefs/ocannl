@@ -14227,6 +14227,19 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-2314: a schedule's entry program is checked for scope purity once, before any op runs.
+
+(test
+ ; ocannl-backend: none -- hand-built IR judged by Schedule and run by Ll_test.interpret; nothing
+ ; compiles or runs on a backend.
+ (name schedule_entry_scope_purity)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules schedule_entry_scope_purity)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  ; cc-vector-width: independent -- the tune claim is a fused-to-unfused ratio, which the width moves
  ; symmetrically.

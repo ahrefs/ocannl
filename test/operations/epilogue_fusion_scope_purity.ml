@@ -6,9 +6,9 @@
    the op runs: scope purity (gh-ocannl-584) bans [Set], [Zero_out], [Set_dynamic], [Set_from_vec]
    and [Tile_mma] in a scope body, [Low_level.optimize] checks it on the way in, and every schedule
    op is refused when it leaves an impure body behind. The one input reaching a schedule without the
-   entry gate is a [?prelowered] routine, hand-built IR the scope-grammar gate deliberately leaves
-   to codegen's exit gate; [Fuse_epilogue] checks purity itself, first, rather than misreading its
-   writes.
+   entry gate is a [?prelowered] routine, hand-built IR, which a schedule now refuses at its own
+   entry (gh-ocannl-2314); the op's probe enters no schedule, so [Fuse_epilogue] still checks purity
+   itself, first, rather than misreading its writes.
 
    The program: [acc] reduced over [k] inside an output loop [i], then, in the same [i] iteration
    after the reduction loop, a statement whose scope body overwrites [acc[i]]; the tail [out = acc +
@@ -17,12 +17,13 @@
    semantics (a scope body runs where its scope is read):
 
    The claims. First, the entry gate: [optimize] refuses the program, naming
-   [validate_scope_bodies]. Second, past [optimize] (the [?prelowered] form), [Fuse_epilogue]
-   refuses it, naming scope purity and the [Set] of [acc], both probed and through [Schedule.apply];
-   on the base it fused, the accumulation-nest site putting the tail right after the reduction loop,
-   before the scope body's write. Third, the premise: that relocation, built by hand and
-   interpreted, computes different values from the unfused program. Fourth, the control: the same
-   program with a pure scope body fuses, values equal. *)
+   [validate_scope_bodies]. Second, past [optimize] (the [?prelowered] form), [Fuse_epilogue]'s
+   probe refuses it, naming scope purity and the [Set] of [acc], and [Schedule.apply] refuses it at
+   the schedule's entry, before the op runs (gh-ocannl-2314); on the base it fused, the
+   accumulation-nest site putting the tail right after the reduction loop, before the scope body's
+   write. Third, the premise: that relocation, built by hand and interpreted, computes different
+   values from the unfused program. Fourth, the control: the same program with a pure scope body
+   fuses, values equal. *)
 
 open Base
 open Ocannl.Operation.DSL_modules
@@ -108,10 +109,17 @@ let () =
     (match Sched.fuse_epilogue_witness ~target:impure.acc (record ~name:"ep2266_probe" impure) with
     | Some msg -> names_purity ~what:"probe" ~acc:impure.acc msg
     | None -> false);
-  p "prelowered: Schedule.apply refuses it too, naming scope purity"
+  (* Through a schedule, the program never reaches the op: the schedule's entry refuses it first
+     (gh-ocannl-2314, pinned in [schedule_entry_scope_purity]). *)
+  p "prelowered: Schedule.apply refuses it at the schedule's entry, naming scope purity"
     (match fuse impure (record ~name:"ep2266_apply" impure) with
     | _ -> false
-    | exception Invalid_argument msg -> names_purity ~what:"apply" ~acc:impure.acc msg);
+    | exception Invalid_argument msg ->
+        Stdio.eprintf "apply: %s (not part of the golden)\n%!" msg;
+        String.is_prefix msg ~prefix:"Schedule.apply: the program entering the schedule"
+        && String.is_substring msg ~substring:"impure scope body"
+        && String.is_substring msg
+             ~substring:("Set writes the tensor node " ^ Tn.debug_name impure.acc));
   (* The premise: the fusion the base performed changes the program's values. *)
   let relocated = program "r" ~relocated:true ~impure:true in
   p_exists "premise: the base's relocation computes different values from the unfused program"

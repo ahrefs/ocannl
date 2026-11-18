@@ -4313,17 +4313,22 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
      (3) Between [optimize] and the schedule, [Backends.maybe_sink_zeros] only reorders top-level
      [Zero_out]s.
 
-     (4) Every earlier op of this schedule went through {!apply_opt_op}'s scope-grammar gate, which
-     refuses an op that leaves an impure body its input did not hold (gh-ocannl-1467). That covers
-     the scopes the ops mint themselves (a materializing [Unroll] or [Partition]).
+     (4) A schedule's entry program is checked for purity before its first op
+     ({!check_entry_scope_purity}, gh-ocannl-2314), and every earlier op of this schedule went
+     through {!apply_opt_op}'s scope-grammar gate, which refuses an op that leaves an impure body
+     its input did not hold (gh-ocannl-1467). That covers the scopes the ops mint themselves (a
+     materializing [Unroll] or [Partition]).
 
      (5) [C_syntax.compile_proc] checks it again on exit.
 
      The one input that skips the entry gate is a [?prelowered] routine: hand-built IR, compiled as
-     written. The grammar gate leaves a violation already present on entry to the exit gate, so such
-     a routine reaches this op with its impure body intact. That is why the op refuses an impure
-     body itself, first (above), rather than missing its writes. With that check, [writes_tn] and
-     [affine_relations] agree on every tensor write; [target_writes] also counts an opaque
+     written. A schedule refuses its impure body at the schedule's own entry, before any op runs
+     ({!check_entry_scope_purity}, gh-ocannl-2314), so through {!apply_typed} or
+     {!schedule_legality} it no longer reaches this op. The op's probes do not enter either chain
+     ([fuse_epilogue_witness], {!probe_opt_op}, whose grammar check exempts a violation the program
+     already held), so the op still refuses an impure body itself, first (above), rather than
+     missing its writes; whether that check is redundant is gh-ocannl-2313's. With it, [writes_tn]
+     and [affine_relations] agree on every tensor write; [target_writes] also counts an opaque
      [Staged_compilation] as a possible write. Pinned by
      [test/operations/epilogue_fusion_scope_purity]. --- *)
   let rec writes_tn tn = function
@@ -5511,10 +5516,17 @@ let scope_grammar_violation (llc : Low_level.t) : scope_grammar_violation option
   | Some (loop, axis, scope) -> Some (Hardware_loop_in_scope { loop; axis; scope })
   | None -> Option.map (Low_level.scope_purity_violation llc) ~f:(fun msg -> Impure_scope_body msg)
 
-(* A violation the op ADDED: an entry program that already breaks the grammar (only hand-built IR
-   can: [Low_level.optimize] validates purity on the way in, and lowering emits no hardware loop) is
-   left to the compile gates rather than charged to whichever op runs next. The program before the
-   op is walked only when the one after it violates. *)
+(* A violation the op ADDED. Only hand-built IR can enter a schedule already breaking the grammar
+   ([Low_level.optimize] validates purity on the way in, and lowering emits no hardware loop), and
+   such a violation is the program's, not the op's. Of the two halves, an impure body never gets
+   this far on a chain: {!apply_typed} and {!schedule_legality} refuse it at their entry, before any
+   op runs ({!check_entry_scope_purity}, gh-ocannl-2314), since the ops' statement-level scanners
+   would misread its hidden writes. What the exemption still covers there is a hardware loop the
+   entry already holds inside a scope, which an op can repair (a [Retype] of it to [Serial]) and the
+   compile gates otherwise refuse; and, for the single-op probes ({!scope_verdict},
+   {!probe_opt_op}), either half, as they judge the op on whatever program they are handed and the
+   application that follows refuses an impure entry itself. The program before the op is walked only
+   when the one after it violates. *)
 let scope_grammar_added ~(before : Low_level.t) ~(after : Low_level.t) =
   match scope_grammar_violation after with
   | Some _ when Option.is_some (scope_grammar_violation before) -> None
@@ -5531,6 +5543,38 @@ let scope_grammar_message ~op = function
       ^ " -- a scope body is hoisted out of its position and is in no kernel's hardware-axis table \
          (gh-ocannl-1467)"
   | Impure_scope_body msg -> "Schedule." ^ optop_label op ^ ": leaves an impure scope body: " ^ msg
+
+(* gh-ocannl-2314: a schedule's entry program must have pure scope bodies. Several ops read writes
+   at statement level only and never look inside a scalar ([privatized_tile_split]'s [writes], the
+   plain-write sites of [Fuse_epilogue]); that is complete only under scope purity
+   ({!Low_level.scope_purity_violation}, gh-ocannl-584). The pipeline validates it on the way in
+   ([Low_level.optimize_proc]) and every op is refused when it ADDS an impure body
+   ({!apply_opt_op}); a hand-built [?prelowered] routine skips the first gate, and used to reach
+   every op with its hidden writes intact, refused only by codegen's exit gate after the ops had
+   misread it. So the chain entry points ({!apply_typed}, {!schedule_legality}) check it once, on a
+   non-empty schedule, before the first op: one walk of the entry, the cost of one of the two
+   grammar walks each op already pays on the program it leaves.
+
+   Purity only, not the whole scope grammar: an entry's hardware loop inside a scope is no hidden
+   write, an op can repair it ([Retype] to [Serial]), and [scope_grammar_violation] would report it
+   first, hiding the write this check exists for.
+
+   Untyped, as an invariant, not a {!refuse}: a typed [Illegal_schedule] says the candidate is
+   inapplicable (gh-ocannl-1323), which would make a search decline every arm alike and crown
+   nothing; an impure entry is the routine's fault, which a strict search reports once, as fatal
+   (permissive, an [Unclassified] decline). The neighbouring gates refuse the same condition the
+   same way: [optimize]'s and [C_syntax.compile_proc]'s [validate_scope_bodies]. Pinned by
+   [test/operations/schedule_entry_scope_purity]. *)
+let check_entry_scope_purity (llc : Low_level.t) =
+  Option.iter (Low_level.scope_purity_violation llc) ~f:(fun msg ->
+      (* invariant: the pipeline validates scope purity before any schedule (optimize_proc's
+         validate_scope_bodies) and every op refuses one it adds; only hand-built ?prelowered IR
+         reaches here impure, and that is the caller's error, not a property of the candidate. *)
+      invalid_arg
+        ("Schedule.apply: the program entering the schedule holds an impure scope body \
+          (gh-ocannl-584, gh-ocannl-2314), which only hand-built ?prelowered IR can bring here; it \
+          is refused before any op runs, since the ops' statement-level scanners do not look \
+          inside scope bodies: " ^ msg))
 
 (* gh-ocannl-1467: whether a hardware-typed loop lies inside a [Privatize] tile's per-thread
    lifetime — its body writes the tile but does not hold the store-back (the statement reading the
@@ -5762,7 +5806,8 @@ let confirm_privatized_tiles ~wide_tiles (llc : Low_level.t) =
 let apply_typed ?(static_indices = []) (sched : schedule) (opt : Low_level.optimized) :
     Low_level.optimized =
   if List.is_empty sched then opt
-  else
+  else (
+    check_entry_scope_purity opt.Low_level.llc;
     let app = start_application opt.Low_level.llc in
     (* gh-ocannl-1739: transforms and the finalization below rewrite operands without keeping their
        precision annotations descriptive ([Privatize]'s widened tile evaluates at [acc_prec]; a
@@ -5791,7 +5836,7 @@ let apply_typed ?(static_indices = []) (sched : schedule) (opt : Low_level.optim
     in
     let llc = if describe then Low_level.describe_operand_precisions llc else llc in
     confirm_privatized_tiles ~wide_tiles:!(app.wide_tiles) llc;
-    { opt with llc }
+    { opt with llc })
 
 let apply ?static_indices sched opt =
   match apply_typed ?static_indices sched opt with
@@ -6645,8 +6690,11 @@ let schedule_legality (opt : Low_level.optimized) (sched : schedule) : (optop * 
       optimize_ctx = Low_level.copy_optimize_ctx opt.Low_level.optimize_ctx;
     }
   in
-  (* Applied the way {!apply_typed} applies it: every op sees the program the schedule started from
-     as its [entry] ([Privatize] judges its tile width there). *)
+  (* Applied the way {!apply_typed} applies it: an impure entry is refused before any op is probed
+     (gh-ocannl-2314; untyped, so it propagates as the routine's fault rather than charging the
+     first op with an [Op_illegal]), and every op sees the program the schedule started from as its
+     [entry] ([Privatize] judges its tile width there). *)
+  if not (List.is_empty sched) then check_entry_scope_purity opt.Low_level.llc;
   let app = start_application opt.Low_level.llc in
   let rec go opt acc = function
     | [] -> List.rev acc
