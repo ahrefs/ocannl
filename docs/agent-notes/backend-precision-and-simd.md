@@ -2650,10 +2650,16 @@ files.
   f32 on gfx1102 discrete memory 1.057x [1.046, 1.062] (control [0.997, 1.008]); f32 on gfx1151
   unified memory 1.057x [0.957, 1.086] (control [0.913, 1.090]: processes there fall in a fast or
   a slow mode, so compare within a mode, where the vector is ~5-6% slower); bf16 mixed precision
-  on gfx1151 unified 0.987x [0.939, 1.023], no cost (gh-ocannl-2298). `-fno-approx-func` carries
-  the f32 cost (without it 1.006x on gfx1151) and is also what makes f32 and half division exact:
-  removing it fails `division_special_values`' exact-quotient claims, so it cannot be narrowed
-  away. The accepted cost buys exact normalization quotients, NaN selection and f64 pow within 2
+  on gfx1151 unified 0.987x [0.939, 1.023], no cost (gh-ocannl-2298). Removing `-fno-approx-func`
+  fails three f32 and half quotient claims even with `-fhip-fp32-correctly-rounded-divide-sqrt`
+  passed to HIPRTC. Explicit division passed `division_special_values` and
+  `unary_math_special_values` with the narrow vector. On gfx1151 unified memory it cost 1.056x
+  [1.039, 1.160] over narrow per untuned f32 step. Restoring the production flag at the same
+  rendering cost 0.995x [0.900, 1.091] (identical control [0.908, 1.098]). The same-mode pairs
+  were 1.055x and 1.000x respectively. The same HIP vector serves the default and `approximate`
+  because approximate functions showed no measurable gain with exact division. The arm patch,
+  compiler options and full paired data are in the [gh-ocannl-2327 split](https://github.com/ahrefs/ocannl/issues/2327#issuecomment-6988970613).
+  The accepted cost buys exact normalization quotients, NaN selection and f64 pow within 2
   ulps. The gfx1102 matrix is staging#2090's body; the gfx1151 cells, per-mode table and
   provenance are [gh-ocannl-1909's gh-ocannl-2298 comment](https://github.com/ahrefs/ocannl/issues/1909#issuecomment-6962918268).
   `hip_fast_math=false` (`reproducible`) retains its explicit IEEE vector with contraction off.
