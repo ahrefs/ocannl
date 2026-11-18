@@ -6,6 +6,7 @@ stderr lines, and current 12-column calibration TSVs. A join needs one ranked
 gate, one exact plan label, segment census evidence, and one positive timing
 row in the same arm. Seeded plans join by label. The configured preset joins
 by the tuner's resolved digest, which can also identify a deduplicated row.
+The ranked gate tags must match after removing auto's optional copy_rate.
 Other stderr is ignored. Old TSV schemas and rows from other cells are outside
 the join.
 """
@@ -75,7 +76,7 @@ def read_arm(stem, backend, arm):
                      if label.startswith("F_preset[") else None)
     digest, routine, row_label, ms = joined_row(tsv, backend, label, preset_digest)
     timed_as = f" timed_as={row_label!r}" if row_label != label else ""
-    return config, (f"{arm}: joined=1 label={label!r}{timed_as} routine={routine!r} "
+    return config, gate.split(), (f"{arm}: joined=1 label={label!r}{timed_as} routine={routine!r} "
                     f"digest={digest} measured_ms={ms:.6f}", *census), routine
 
 
@@ -86,14 +87,21 @@ def compare(backend, pair):
             records.append(read_arm(Path(f"{pair}_{arm}"), backend, arm))
         except (KeyError, OSError, ValueError) as exc:
             raise ValueError(f"{arm}: {exc}") from exc
-    (auto_config, auto_lines, auto_routine), (legacy_config, legacy_lines, legacy_routine) = records
+    (auto_config, auto_gate, auto_lines, auto_routine), (
+        legacy_config, legacy_gate, legacy_lines, legacy_routine) = records
     changed = sorted(key for key in auto_config.keys() | legacy_config.keys()
                      if auto_config.get(key) != legacy_config.get(key))
     if changed:
         raise ValueError("resolved configuration differs: " + ", ".join(changed))
     if auto_routine != legacy_routine:
         raise ValueError(f"timing rows name different routines: {auto_routine!r}, {legacy_routine!r}")
+    if [field for field in auto_gate if not field.startswith("copy_rate=")] != legacy_gate:
+        raise ValueError("ranked gate tags must match after removing auto's optional copy_rate")
     print("resolved configuration matches apart from the gate and calibration path")
+    if auto_gate == legacy_gate:
+        print("ranked gates: identical (auto resolved no operand delivery rate)")
+    else:
+        print("ranked gates: operand delivery priced by auto only")
     print(*auto_lines, *legacy_lines, sep="\n")
 
 

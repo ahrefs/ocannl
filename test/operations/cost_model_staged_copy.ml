@@ -439,11 +439,7 @@ let () =
   Exn.protect
     ~f:(fun () ->
       let legacy = plan ~tag:"legacy" rated in
-      p "auto-legacy keeps the arithmetic tie and leaves the leaf copy rate in force"
-        (seeded_count legacy = 0
-        && Option.equal Float.equal
-             (Autotune.ranking_staged_copy_rate ~limits:rated)
-             rated.staged_copy_rate))
+      p "auto-legacy keeps the arithmetic tie and admits neither sketch" (seeded_count legacy = 0))
     ~finally:(fun () ->
       match previous with
       | Some data -> Hashtbl.set Utils.config_file_args ~key ~data

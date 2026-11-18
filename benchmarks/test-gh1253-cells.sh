@@ -52,14 +52,19 @@ with open(os.environ["CALLS"], "a") as calls:
           Path.cwd().name, arm, file=calls)
 label = "F_seeded[2 segs, 1 seeded, 0 sunk, 0 split, plan aaaaaaaa]"
 legacy = "F_seeded[2 segs, 1 seeded, 0 sunk, 0 split, plan bbbbbbbb]"
-mutation = os.environ.get("STUB_MUTATION") if arm == "auto-legacy" else None
+scenario = os.environ.get("STUB_MUTATION")
+mutation = scenario if arm == "auto-legacy" else None
 preset = "F_preset[bs=cfg cfg-thresh]"
 preset_arm = mutation in ("preset", "preset-dedup", "preset-wrong-digest")
-selected = label if arm == "auto" else legacy
+selected = label if arm == "auto" or scenario == "equivalent" else legacy
 if preset_arm:
     selected = preset
 record("model_staged_copy_rate", "none" if mutation == "leaf" else "")
-print("autotune-seeding: gate ranked capacity=42 cache_rate=10", file=sys.stderr)
+capacity = 43 if mutation == "gate-drift" else 42
+gate = f"ranked capacity={capacity} cache_rate=10"
+if (arm == "auto" and scenario != "equivalent") or mutation == "legacy-delivery":
+    gate += " copy_rate=20"
+print("autotune-seeding: gate", gate, file=sys.stderr)
 if mutation != "census":
     verdict = "refused: score tie" if selected == preset else "seeded: geometry"
     print('autotune-seeding: where="seeded_default segment u0"', verdict, file=sys.stderr)
@@ -108,6 +113,7 @@ joins() { # SUBJECT RUN
   local report="$TMP/runs/$2/out/rank_wgrad_1x32x32x32_gate_r1.txt"
   grep -qE "^auto: joined=1 .*plan aaaaaaaa.*measured_ms=1\.250000$" "$report" &&
     grep -qE "^auto-legacy: joined=1 .*plan bbbbbbbb.*measured_ms=2\.500000$" "$report" &&
+    grep -qxF 'ranked gates: operand delivery priced by auto only' "$report" &&
     [[ $(grep -c '^autotune-seeding: where=' "$report") == 2 ]]
 }
 early_exit() { # RUN
@@ -158,13 +164,18 @@ if harness_leg '3: the two censuses join to their own exact timing rows'; then
   check 'the joined row names the candidate that was timed' \
     grep -qE "^auto-legacy: joined=1 label='F_preset.*timed_as='W_preset.*measured_ms=0\.250000$" \
       "$TMP/runs/dedup/out/rank_wgrad_1x32x32x32_gate_r1.txt"
+  drive "$SRC" equivalent STUB_MUTATION=equivalent
+  check 'a backend with no copy rate can join both arms' test "$got" = 0
+  check 'the report identifies equivalent gates when neither has a copy rate' \
+    grep -qxF 'ranked gates: identical (auto resolved no operand delivery rate)' \
+      "$TMP/runs/equivalent/out/rank_wgrad_1x32x32x32_gate_r1.txt"
 fi
 if harness_leg '4: mutated twins are rejected'; then
   no_refusal=$(mutant no-refusal '/^  for knob in EXPLAIN_ONLY / { sub(/ PICK_PROFILES /, " ") } { print }') || exit 2
   expect_rejected 'conflicting pick option slips through' "$no_refusal" refuses '^gh1253_cells: 0 failed'
   fixed_order=$(mutant fixed-order '/if \(\(rep % 2/ { next } { print }') || exit 2
   expect_rejected 'same arm order on every repeat' "$fixed_order" ordered '^--- '
-  for mutation in row census leaf preset-wrong-digest; do
+  for mutation in row census leaf preset-wrong-digest legacy-delivery gate-drift; do
     run="mutant-$mutation"
     drive "$SRC" "$run" "STUB_MUTATION=$mutation"
     case "$mutation" in
@@ -172,6 +183,7 @@ if harness_leg '4: mutated twins are rejected'; then
       census) diagnostic="missing seeded-default segment census" ;;
       leaf) diagnostic="resolved configuration differs: model_staged_copy_rate" ;;
       preset-wrong-digest) diagnostic="at digest 44444444/dddddddd, found 0" ;;
+      legacy-delivery | gate-drift) diagnostic="ranked gate tags must match" ;;
     esac
     check "$mutation mutation fails the pair" test "$got" = 1
     check "$mutation mutation names the failed join" grep -qF "$diagnostic" "$TMP/runs/$run/stdout"

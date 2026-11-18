@@ -71,6 +71,8 @@
 # The join requires clean resolved configuration records that differ only in the gate and
 # TSV destination. Missing evidence fails that pair. Inspect failed output in OUT and retry in an
 # empty directory.
+# Where the backend advises no operand-delivery rate, both modes resolve to the same gate and
+# the pair report marks them as identical.
 # BENCH_PICK=1 (stated to every cell) makes each listing cell also print model_default's actual
 # pick, which the agreement script joins to its measured row against the seeded plan's
 # (gh-ocannl-1477). PICK_PROFILES (with RANK_ONLY=1, say 'performance approximate') adds, per site,

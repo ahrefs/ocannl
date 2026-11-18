@@ -785,7 +785,11 @@ val seeding_census :
   seeding_census
 
 val seeding_census_prefix : string
+
 val seeding_census_lines : where:string -> seeding_census -> string list
+(** Render the family census. On the same prefix, [autotune_log_seeding] also reports [gate] and
+    [plan] when {!seeded_plan} derives a plan or retains the configured preset, and [preset-digest]
+    when {!tune} resolves the configured preset's timing identity (gh-ocannl-2335). *)
 
 (** A GEMM role a GPU tensorized seed pads (gh-ocannl-1736): a row or column pad masks the
     accumulator's fragment transfers, a reduction pad masks nothing ([Tensorize] discharges its
