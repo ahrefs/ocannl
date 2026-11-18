@@ -2836,7 +2836,15 @@ files.
   fired mid-call: the four such seams it replaced (depth decision, probe, retry, window) made the
   harness pair them up by arrival order (`depth_at`, `preflight_at`), the class of bug the trace
   kept patching. A call that raises returns no record; the trace counts those as pre-dispatch
-  validations started less tagged records returned. A cold schedule cache
+  validations started less tagged records returned, and names each through
+  `Autotune.install_timing_call_raised_observer` (gh-ocannl-2246): `time_routine` reports a tagged
+  call that raises once its validation began -- the same condition, so the count is the records --
+  with the `?label` its caller passed and the exception unwrapped from its `Raised_at` tag, then
+  re-raises it with its backtrace, so classification and containment are unchanged. Both observer
+  chains contain each observer as the compile observers do (a raising one is reported on stderr
+  and dropped), so a call whose record was published cannot also reach the raised-call chain. A cut
+  (`Timing_hopeless`) or budget-stopped (`Timing_stopped`) window raises too, and is counted and
+  named with them: an unranked window, not a failure. A cold schedule cache
   is not a cold session: the backend's own compiled-code cache persists across processes, and in
   gh-ocannl-834's CUDA pair the second session's compile-and-bookkeeping time was 64 s against the
   first's 406 s from the PTX ComputeCache alone — the driver gives each CUDA session an empty

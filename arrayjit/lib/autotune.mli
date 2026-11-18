@@ -3605,10 +3605,12 @@ type timing_call = {
 val install_timing_call_observer : (timing_call -> unit) -> unit
 (** Adds an observer of every {!time_routine} / {!calibrate_and_time} call that returns IN THE
     CALLING DOMAIN, for the rest of the domain's life, after the observers already installed there.
-    Trace-only (gh-ocannl-1263): observing changes nothing measured or ranked, and a search running
-    in another domain neither reaches nor disturbs it — the treatment [autotune_log] got for
-    searches in different domains (see {!with_streams}). A newly spawned domain starts with none.
-    How the benchmarks' [BENCH_TIMING_TRACE] is installed. No configuration selects it. *)
+    Trace-only (gh-ocannl-1263): observing changes nothing measured or ranked -- an observer that
+    raises is reported on stderr and dropped (a process-fatal exception excepted), so the call still
+    returns its reading (gh-ocannl-2246) -- and a search running in another domain neither reaches
+    nor disturbs it — the treatment [autotune_log] got for searches in different domains (see
+    {!with_streams}). A newly spawned domain starts with none. How the benchmarks'
+    [BENCH_TIMING_TRACE] is installed. No configuration selects it. *)
 
 type compile_record = {
   compile_routine : string;
@@ -3638,6 +3640,34 @@ val with_timing_call_observer : (timing_call -> unit) -> (unit -> 'a) -> 'a
 (** [with_timing_call_observer f body] runs [body] with [f] added as by
     {!install_timing_call_observer}, restoring the domain's observers on return or exception, so
     scopes nest. *)
+
+type timing_call_raised = {
+  raised_label : string;
+      (** {!time_routine}'s [label]: the candidate's label in a search, [baseline] for its baseline.
+      *)
+  raised_phase : Ir.Schedule_outcome.phase option;
+      (** The phase tag the exception left under ({!Ir.Schedule_outcome.tag}'s): [Launch] for a
+          dispatch, [Sync] for a wait, [Preflight] for the validation; [None] for one raised outside
+          every tag ({!Timing_stopped}, {!Timing_hopeless}, a test seam's). *)
+  raised_exn : exn;
+      (** The exception, unwrapped from {!Ir.Schedule_outcome.Raised_at}: what the search's failure
+          boundary goes on to classify (or, for {!Timing_stopped} and {!Timing_hopeless}, to read as
+          an unranked window). *)
+}
+(** A tagged {!time_routine} call that raised after its pre-dispatch validation began
+    (gh-ocannl-2246): exactly the calls whose validation fired {!on_candidate_preflight} and that
+    returned no {!timing_call} record. *)
+
+val install_timing_call_raised_observer : (timing_call_raised -> unit) -> unit
+(** Adds an observer of every tagged {!time_routine} call that raises IN THE CALLING DOMAIN after
+    its pre-dispatch validation began, for the rest of the domain's life, after the observers
+    already installed there -- {!install_timing_call_observer}'s sibling for the calls that return
+    no record (gh-ocannl-2246). Called where the exception leaves the call, before the search's
+    failure boundary classifies it; trace-only: the observer cannot catch the failure, and an
+    observer that raises is reported on stderr and dropped (a process-fatal exception excepted), so
+    the observers after it still see the call and the call's own exception propagates unchanged,
+    with its backtrace. How the benchmarks' [BENCH_TIMING_TRACE] names each raised call's candidate
+    and exception. No configuration selects it. *)
 
 exception Timing_stopped
 (** Raised by {!time_routine} when its [stop] answers [true] (gh-ocannl-1556). *)
@@ -4336,6 +4366,7 @@ module Make (D : Driver) : sig
       bindings are left at their current values. Exposed for tests and custom timing harnesses. *)
 
   val time_routine :
+    ?label:string ->
     ?on_retry:(unit -> unit) ->
     ?on_call:(timing_call -> unit) ->
     ?tag_failures:bool ->
@@ -4455,7 +4486,11 @@ module Make (D : Driver) : sig
       every timed window (a Metal retry's included) end as soon as {!hopeless_window} cuts them, and
       the call raises {!Timing_hopeless} with every batch it dispatched synchronized and the
       bindings restored. Neither [on_call] nor the domain's observers see a cut call.
-      [hopeless_ratio] (default {!hopeless_ratio}) is the cut's [ratio] (gh-ocannl-1697). *)
+      [hopeless_ratio] (default {!hopeless_ratio}) is the cut's [ratio] (gh-ocannl-1697). [label]
+      (default: the routine's name) names the call to the domain's
+      {!install_timing_call_raised_observer} observers: a search passes its candidate's label, and
+      ["baseline"] for its baseline (gh-ocannl-2246). Those observers see every tagged call that
+      raises after its validation began, a cut or stopped one included. *)
 
   val tune :
     ?name:string ->
