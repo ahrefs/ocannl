@@ -58,8 +58,9 @@
 #                 tables alone, while a `step` step whose cells produced no result line fails.
 #   A measurement step needs `build` and `provenance` earlier in the same invocation.
 #
-# Treatments (every cell: untuned default pipeline, f32, schedule fission on, online softmax off,
-# one process per cell; the flags are the whole treatment and are recorded in the cell's .err):
+# Treatments (every cell: untuned default pipeline, f32 unless mixbf16 wraps it, schedule fission
+# on, online softmax off, one process per cell; the flags and the precision are the whole treatment
+# and are recorded in the cell's .err):
 #   base      BASE's runner, its defaults
 #   fill1     this checkout's runner, --ocannl_gpu_schedule_workgroup_fill=1 (Grid (b, s, h) x
 #             Workgroup d for a (b, s, h, d) output)
@@ -94,6 +95,12 @@
 #   d1<T>     treatment <T> (one of the above but base) with the online-softmax forward and the
 #             fused attention backward on -- treatment D1 of benchmarks/report-gh1002-fused-backward.md
 #             (the others are its treatment A)
+#   mixbf16<T> treatment <T> (any of the above, base included) under BENCH_PRECISION=bf16, the
+#             runner's mixed-precision recipe: on a training fixture f32 master weights with bf16
+#             cast twins, bf16 activations and gradients, the loss head and layer norms f32
+#             (benchmarks/README.md, the precision legs; gh-ocannl-2328's bf16-against-f32 profile,
+#             e.g. TREATMENTS="keep mixbf16keep" REF=keep). It is the only wrapper that changes the
+#             cell's environment rather than its flags; every other cell runs BENCH_PRECISION=f32.
 # Environment knobs (recorded in driver.log): BACKEND (default metal), REPEATS (default 3),
 # FIXTURES (default the three inference and three training fixtures), TREATMENTS (default
 # "base fill1 fill256"), FIXTURE_DIR (default benchmarks/fixtures of this checkout), REF (default
@@ -175,13 +182,14 @@ for step in "$@"; do [ "$step" = step ] && step_stage=1; done
 runner_root() {
   local t=$1
   while :; do
-    case $t in d1*) t=${t#d1} ;; fold*) t=${t#fold} ;; *) break ;; esac
+    case $t in d1*) t=${t#d1} ;; fold*) t=${t#fold} ;; mixbf16*) t=${t#mixbf16} ;; *) break ;; esac
   done
   case $t in base | b[!a]* | bar[1-9]*) echo "$base" ;; *) echo "$root" ;; esac
 }
 
 flags_of() {
   case $1 in
+    mixbf16*) flags_of "${1#mixbf16}" ;;
     base) echo "--ocannl_online_softmax=false" ;;
     fill*) echo "--ocannl_online_softmax=false --ocannl_gpu_schedule_workgroup_fill=${1#fill}" ;;
     keep) echo "--ocannl_online_softmax=false" ;;
@@ -208,6 +216,21 @@ flags_of() {
       echo "--ocannl_online_softmax=true --ocannl_online_softmax_backward=true ${rest#--ocannl_online_softmax=false}" ;;
     *) echo "gh1133: unknown treatment $1" >&2; return 1 ;;
   esac
+}
+
+# [precision_of TREATMENT]: the cell's BENCH_PRECISION -- bf16 when a mixbf16 wrapper encloses the
+# treatment, at any depth among the d1 / fold / b wrappers, f32 otherwise.
+precision_of() {
+  local t=$1
+  while :; do
+    case $t in
+      mixbf16*) echo bf16; return ;;
+      d1*) t=${t#d1} ;; fold*) t=${t#fold} ;;
+      base) break ;; b[!a]* | bar[1-9]*) t=${t#b} ;;
+      *) break ;;
+    esac
+  done
+  echo f32
 }
 
 # [capped CELL CMD...]: run CMD in its own process group under CAP seconds, stdout/stderr to
@@ -241,8 +264,9 @@ capped() {
 # cell's .err states KPROF_HEADER (the tracer and the memory model), and OUT/CELL.cotenants.jsonl
 # records the box's GPU co-tenants just before the cell and just after it (gh-ocannl-1521).
 cell() {
-  local fixture=$1 treatment=$2 tag=$3 exe=${4:-bench_gpt} profile=${5:-} flags r st smi=
+  local fixture=$1 treatment=$2 tag=$3 exe=${4:-bench_gpt} profile=${5:-} flags r st smi= prec
   flags=$(flags_of "$treatment") || { failed=1; return 1; }
+  prec=$(precision_of "$treatment")
   # A traced cell re-times its isolated kernels as synchronized singles (gh-ocannl-1694): the
   # queued default dispatches up to thousands of launches per batch, every one a trace record, and
   # kernel_attribution.py reads the isolated runs as single launches. The cells search nothing
@@ -250,7 +274,7 @@ cell() {
   [ -z "$profile" ] || flags="$flags --ocannl_autotune_timing=isolated"
   r=$(runner_root "$treatment")
   local name="$backend-$fixture-$treatment-$tag" wrap=()
-  echo "backend=$backend fixture=$fixture treatment=$treatment runner=$r flags=[$flags]" >"$out/$name.err"
+  echo "backend=$backend fixture=$fixture treatment=$treatment precision=$prec runner=$r flags=[$flags]" >"$out/$name.err"
   [ -z "$profile" ] || printf '%s\n' "$kprof_header" >>"$out/$name.err"
   # The box's GPU co-tenants before the tracer and sampler start (gh-ocannl-1521).
   [ -z "$profile" ] || cotenants "$name" opened
@@ -269,7 +293,7 @@ cell() {
   fi
   # shellcheck disable=SC2086 # the treatment's flags are separate words by construction
   BENCH_FIXTURE="$fixture_dir/$fixture.safetensors" BENCH_TUNE=0 BENCH_MATERIALIZE=0 \
-    BENCH_DEBUG=0 BENCH_SEG_TIMES="${SEG:-0}" BENCH_KERNEL_TABLE="$kernel_table" \
+    BENCH_PRECISION="$prec" BENCH_DEBUG=0 BENCH_SEG_TIMES="${SEG:-0}" BENCH_KERNEL_TABLE="$kernel_table" \
     capped "$name" ${wrap[@]+"${wrap[@]}"} "$r/_build/default/benchmarks/runners/ocannl/$exe.exe" \
     --ocannl_backend="$backend" --ocannl_default_prec=single \
     --ocannl_schedule_fission=true --ocannl_automatic_gpu_schedule=true \
