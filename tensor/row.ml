@@ -2828,6 +2828,13 @@ type settling = {
   checkpoint : unit -> unit -> unit;
 }
 
+(* A component that may be empty: a discardable variable, or one a discardable variable was equated
+   with, since the permission is the component's (gh-ocannl-2316). Read by concatenation
+   arithmetic's zero residual only; closure's guesses still read plain membership. *)
+let may_be_empty env v =
+  Set.exists env.discardable_vars ~f:(fun w ->
+      match subst_dim env (Var w) with Var w -> equal_dim_var v w | _ -> false)
+
 let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : constraint_ list * _ =
   let dim1 : dim = subst_dim env @@ fst eq and dim2 : dim = subst_dim env @@ snd eq in
   let held = Dim_eq { d1 = dim1; d2 = dim2; origin } in
@@ -3323,16 +3330,32 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
       in
       (* [n]'s claim must land on an unsolved component when no solved one carries it. A size-1
          [bcast_if_1] residual is the claim-free top: one unknown component cannot carry the claim,
-         and several defer unchanged until one is solved. *)
+         and several defer unchanged until one is solved. A zero residual carries no claim either,
+         whatever its tag: substitution erases a 0-sized component, so the claim would not survive
+         the fully solved axis, and [u = 0_a] stated first would be refused (gh-ocannl-2316). *)
       let lost_claim () =
         Option.is_some (concat_claim n)
         && String.equal solved_basis default_basis
-        && Option.is_none
-             (concat_claim { d = residual; basis = Lazy.force residual_basis; proj_id = None })
+        && (residual = 0
+           || Option.is_none
+                (concat_claim { d = residual; basis = Lazy.force residual_basis; proj_id = None }))
       in
       match rest with
       | [ _ ] when lost_claim () -> conflict ()
       | _ :: _ :: _ when lost_claim () -> ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)
+      | [ Var v ] when residual = 0 && not (may_be_empty env v) ->
+          (* Concatenation arithmetic never sizes a non-discardable component to 0, which is not a
+             size an axis may have (gh-ocannl-2316): only a block spec's discardable component may
+             be empty, also under an alias it was equated with ([may_be_empty]). The match is on a
+             variable because an einsum spec's components are labels or integers
+             ([Shape.concat_component_dim]); a hand-built non-variable component (an affine [2v],
+             say) with a zero residual still falls to the arm below and is out of this rule's scope.
+             The basis is decided first, so a conflicting claim still refuses (and a GLB merge still
+             demotes to the broadcast top). Then the equation waits instead of refusing, so a [0]
+             stated outright, which substitution consumes, meets the same verdict in every order;
+             closure sizes the component otherwise, and the sum then refuses it. *)
+          ignore (Lazy.force residual_basis : string);
+          ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)
       | [] ->
           (* Fully solved: the sum meets [d] under [solved_basis], not [residual_basis]. A residual
              component is a variable, and binding it records the merged tag, so a named size claims
@@ -3435,6 +3458,9 @@ let add_concat_component v =
 
 let row_var_id (Row_var.Row_var id) = id
 
+(* Plain membership, as closure's guesses to 0 read it: a component aliased to a discardable one is
+   still refused here, unlike concatenation arithmetic's [may_be_empty] (gh-ocannl-2316 leaves the
+   guesses unchanged). *)
 let refuse_concat_component_guess env v =
   refuse_retired_read ~table:"concat_component_vars" v.Dim_var.id;
   if Set.mem !concat_component_vars v && not (Set.mem env.discardable_vars v) then

@@ -130,6 +130,8 @@ Examples:
 - `a; b => a^b`: neither is discardable (two RHS shapes; complement `{a}` covers first shape but not second since `{a} ∩ {b} = ∅`)
 - `a; b => a^c`: `c` is NOT discardable because complement `{a}` doesn't cover the second RHS shape (axis `b`)
 
+Concatenation arithmetic sizes no other component to 0: an equation whose solved components leave a zero residual for a single non-discardable variable waits for closure to size it (gh-ocannl-2316). A zero residual carries no basis claim either, since an empty segment is erased from the axis.
+
 When guessing dimension variables to minimal values (at Stage 5 and Stage 7), variables in `discardable_vars` are guessed to 0 instead of 1. This allows Block specs to express partial assignments and extractions where some concatenation components may be empty.
 
 ### Preventing Premature Guessing with Total_elems Constraints

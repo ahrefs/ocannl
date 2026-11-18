@@ -436,7 +436,8 @@ val solve_inequalities :
   environment ->
   constraint_ list * environment
 (** [discardable_vars] are safe to guess dimension = 0, they do not participate in projections for
-    the update step the constraints were derived for. *)
+    the update step the constraints were derived for. Concatenation arithmetic sizes no other
+    component to 0 (gh-ocannl-2316). *)
 
 val solve_closing_stages :
   stages:stage list ->
