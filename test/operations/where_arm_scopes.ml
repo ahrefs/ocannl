@@ -19,8 +19,9 @@
    [Low_level.hoist_cross_statement_cse] and [eliminate_common_subexpressions] themselves.
 
    The gh-ocannl-2258 rows are the shapes the renderer cannot protect -- a far read whose only
-   protection is a gate (which guards no definition) or a blendable value select, or a definition
-   also read outside its arm -- refused by [Low_level.validate_guarded_reads] at compile and never
+   protection is a gate (which guards no definition), a blendable value select, or an index guard
+   not evaluable anywhere under a condition reading a local (gh-ocannl-2311), or a definition also
+   read outside its arm -- refused by [Low_level.validate_guarded_reads] at compile and never
    launched, each beside a twin that runs: the same program reading in range, and the protections
    the check credits (an index select inside or around the gate, an [If]). *)
 
@@ -923,6 +924,49 @@ let row_entry_gate () =
   let _, got = optimize_and_execute ~name llc ~seed:[ (x, xs); (out, blank n) ] ~read:[ out ] in
   values name got [ [| xs.(0); 0.; 0.; 0. |] ]
 
+(* gh-ocannl-2311: [r ? (g ? s : 0) : 0], [r] a value test reading a scope local (true at [i = 0]
+   only) and [s] in range at [i = 0] only. Under a condition reading a local, [Scope_order.arms]
+   keeps on [s]'s definition only the guards evaluable anywhere, so with [g] spelled [i / 2 < 0.5]
+   (a division) [s] would render ahead of [g]'s test; the check refuses it, naming the dropped
+   guard. Lowering builds no such guard as a read's only protection: its range guards are affine
+   index comparisons at the read ([value_select_division_guard]). The twin, [g] spelled [i < 1], is
+   kept and runs. *)
+let row_value_test_dropped () =
+  let x = mk "was_value_test_dropped_x" and out = mk ~dims:[| n |] "was_value_test_dropped_out" in
+  let program inner =
+    loop (fun i ->
+        let r = LL.get_scope (local_node ()) in
+        let sr =
+          scope_of r
+            (seq
+               (LL.Set_local (r, c 0.))
+               (LL.Set_local (r, add (LL.Get_local r) (cmp_at single Ops.Cmplt (embed i) (c 1.)))))
+        in
+        let _, s = sum_scope x ~at:(off_at ~pass:0 i) in
+        let truth v = add v (mul (c 0.) (embed i)) in
+        set_at out (iter i)
+          (LL.Ternop
+             ( Ops.Where,
+               (truth sr, single),
+               (LL.Ternop (Ops.Where, (inner i, single), (s, single), (c 0., single)), single),
+               (c 0., single) )))
+  in
+  refused_row ~name:"was_value_test_dropped" ~inputs:[ x ] ~outputs:[ out ]
+    (program (fun i -> cmp_at single Ops.Cmplt (binop Ops.Div (embed i) (c 2.)) (c 0.5)))
+    ~naming:
+      [
+        "a read of was_value_test_dropped_x can be out of range";
+        "under an index guard not evaluable anywhere";
+        "a select whose condition reads a scope local";
+      ];
+  let name = "was_value_test_kept" in
+  let got, source =
+    run_row ~name ~inputs:[ x ] ~outputs:[ out ]
+      (program (fun i -> cmp_at single Ops.Cmplt (embed i) (c 1.)))
+  in
+  values name got [ [| sum2 0; 0.; 0.; 0. |] ];
+  guarded name source x
+
 let () =
   row_condition_keys ();
   row_emission_order ();
@@ -945,6 +989,7 @@ let () =
   row_mixed_cycle ();
   row_value_test_range ();
   row_value_test_nested ();
+  row_value_test_dropped ();
   row_gate_blend ();
   row_gate_direct ();
   row_blend_off ();

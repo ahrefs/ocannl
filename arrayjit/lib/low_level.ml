@@ -8711,10 +8711,17 @@ let unguarded_read_violation ?(inline_single_assignments = false)
   end in
   let fresh = { St.inline = false; def = false; anywhere_only = false; why = [] } in
   let guarded (st : St.t) c =
+    let def = st.def || (not st.anywhere_only) || Scope_order.evaluable_anywhere c in
     {
       st with
       St.inline = true;
-      def = st.def || (not st.anywhere_only) || Scope_order.evaluable_anywhere c;
+      def;
+      why =
+        (if def then st.why
+         else
+           "under an index guard not evaluable anywhere (a division, a modulo or a memory read), \
+            which the renderer drops from a definition under a condition reading a scope local \
+            (gh-ocannl-2311)" :: st.why);
     }
   in
   (* Occurrences of each scope: (protected, innermost enclosing scope, why). *)
