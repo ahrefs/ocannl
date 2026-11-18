@@ -790,6 +790,8 @@ files.
   added a zero-elision pass that mints extra scope ids. On CUDA, longer scope and node names
   together wrapped two accumulation expressions in `gpu_kernel_cache`'s offset build. The
   ordinary emitter's key uses the compact document so renaming starts with the same layout.
+  `kernel_cache_key_wrapping` renders fixed scope ids in the pure C dialect and pins both the
+  extra break in the pretty source and the equality of the two keys.
 - **A fresh-build cache miss can be a free-name collision in the index namespace**
   (gh-ocannl-1932, gh-ocannl-2214). The forced node-offset probe reproduced a miss whose two
   `render_batch.key_text` dumps differed at loop symbol `i386`: it was left verbatim because

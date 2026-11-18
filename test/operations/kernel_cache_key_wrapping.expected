@@ -1,0 +1,2 @@
+wider scope names add a line break to the pretty source: true
+kernels across the pretty wrap boundary have equal cache keys: true

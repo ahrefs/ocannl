@@ -9727,6 +9727,17 @@
     (diff kernel_attribution.expected kernel_attribution.actual)))))
 
 (test
+ ; ocannl-backend: none -- renders pure C in memory without invoking a backend.
+ (name kernel_cache_key_wrapping)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules kernel_cache_key_wrapping)
+ (libraries base arrayjit.ir arrayjit.ll_builders arrayjit.verdict)
+ ; Routine logging would embed the scope names in string literals, which keying preserves.
+ (action
+  (run %{test} "--ocannl_debug_log_from_routines=false")))
+
+(test
  ; ocannl-backend: none -- links arrayjit.ir alone; the kernel code cache is pure host-side state.
  ; gh-ocannl-1314: the cache's keys, retention, eviction and disabling, which the HIP backend's
  ; incremental compile relies on, pinned without the hardware.
