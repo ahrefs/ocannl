@@ -57,7 +57,7 @@ let seeds_here = Option.is_some seeding_here
    from what it resolved to, so a resolution that stops ranking fails the claim below rather than
    closing its gate. *)
 let auto_gate_configured =
-  match Autotune.seed_gate_setting () with `Auto -> true | `Threshold _ -> false
+  match Autotune.seed_gate_setting () with `Auto _ -> true | `Threshold _ -> false
 
 (* What the configured gate resolved to here: [auto]'s ranking ([Autotune.Ranked]), on CUDA. *)
 let ranked_gate_here =
