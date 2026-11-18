@@ -14,9 +14,11 @@
    fires, Metal reports a hang and the search ends on a [gpu_hang] decline instead, a few seconds
    in. Which of the two happened is read off the IORegistry's GPU [recoveryCount], never off the
    backend under test, and each outcome's claims are a leg open only where the count says it
-   happened. The claims that the search ended [Search_died] on one candidate's [Sync] hold either
-   way. The control is the same reduction with outer extents of 2, searched to completion: its
-   value, four times each row's sum, says the patched product space is iterated as built.
+   happened. The claims that the search ended [Search_died] on one candidate's [Sync] are written to
+   hold either way, but the [gpu_hang] leg has not run: no fleet Mac's watchdog has fired since the
+   test was written (2026-11-18), and gh-ocannl-2139 holds it until one does. The control is the
+   same reduction with outer extents of 2, searched to completion: its value, four times each row's
+   sum, says the patched product space is iterated as built.
 
    Gated behind `slow`, Metal only: each run stalls the GPU for the bound's 60 s where the OS does
    not kill, then exits, which frees the GPU at once. With the argument [control] it runs the finite
@@ -55,47 +57,8 @@ let outer_hang = 1_000_000
 let ctx0 = Context.auto ()
 let backend_name = Context.backend_name ctx0
 let leg = Verdict.leg ~when_:(String.equal backend_name "metal") ~on:backend_name ()
-
-(* The GPU recoveries the IORegistry has counted since boot, summed over its accelerators, as
-   metal_gpu_hang_failure reads them. A kill of a hung kernel is one. Fails rather than reading 0
-   when [ioreg] fails or names no counter: each leg below is chosen on this reading. *)
-let recovery_count () =
-  let ic = Unix.open_process_in "/usr/sbin/ioreg -r -c IOAccelerator -l" in
-  let samples = ref 0 in
-  let rec sum acc =
-    match Stdio.In_channel.input_line ic with
-    | None -> acc
-    | Some line -> (
-        match String.substr_index line ~pattern:"\"recoveryCount\"=" with
-        | None -> sum acc
-        | Some i -> (
-            let rest = String.drop_prefix line (i + 16) in
-            let len =
-              Option.value ~default:(String.length rest)
-                (String.lfindi rest ~f:(fun _ c -> not (Char.is_digit c)))
-            in
-            match Int.of_string_opt (String.prefix rest len) with
-            | Some v ->
-                Int.incr samples;
-                sum (acc + v)
-            | None -> failwith ("unparseable recoveryCount in: " ^ line)))
-  in
-  let count = sum 0 in
-  match Unix.close_process_in ic with
-  | Unix.WEXITED 0 when !samples > 0 -> count
-  | _ -> failwith "ioreg gave no GPU recoveryCount: whether the OS killed the kernel is unknown"
-
-(* A hard bound on the whole run that needs no OCaml code to run, as in metal_gpu_hang_failure: a
-   separate process sends the default-action SIGTERM. *)
-let arm_watchdog ~seconds =
-  let null = Unix.openfile "/dev/null" [ O_RDWR ] 0 in
-  let watchdog =
-    Unix.create_process "/bin/sh"
-      [| "sh"; "-c"; Printf.sprintf "sleep %d; kill -TERM %d" seconds (Unix.getpid ()) |]
-      null null null
-  in
-  Unix.close null;
-  Stdlib.at_exit (fun () -> try Unix.kill watchdog Stdlib.Sys.sigkill with _ -> ())
+let recovery_count = Gpu_recovery.recovery_count
+let arm_watchdog = Gpu_recovery.arm_watchdog
 
 (* [x[o, k]] is [o mod 8] plus 0, 0.25, 0.5 or 0.75 by [k], so the rows differ. *)
 let x_value o k = (Float.of_int (k % 4) *. 0.25) +. Float.of_int (o % 8)
@@ -280,12 +243,16 @@ let () =
       p_close label got
         (Array.init m ~f:(fun o -> 4. *. row_sum o))
         ~tol:(fun want -> 1e-4 *. Float.abs want));
-  if control_only then
+  if control_only then (
     claim "the never-ending reduction compiles (not run)" (fun () ->
         let comp, _ = reduction ~label:"compiled" ~outer:outer_hang in
         let ctx, _routine = Context.compile (Context.auto ()) comp Idx.Empty in
         ignore (ctx : Context.t);
-        true)
+        true);
+    claim "the GPU recovery count reads, as the legs below are chosen on" (fun () ->
+        let count = recovery_count () in
+        Stdio.eprintf "GPU recoveries: %d (not part of the golden)\n%!" count;
+        count >= 0))
   else
     let o () = Lazy.force hang in
     let wait_bound_key = SO.Backend_rejected_key ("metal", SO.wait_bound_stage, SO.Expected) in

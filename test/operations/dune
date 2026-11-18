@@ -10602,7 +10602,15 @@
 (executable
  (name metal_gpu_hang_failure)
  (modules metal_gpu_hang_failure)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test arrayjit.context)
+ (libraries
+  base
+  ocannl
+  stdio
+  unix
+  gpu_recovery
+  arrayjit.verdict
+  ll_test
+  arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -10741,6 +10749,7 @@
   ocannl
   stdio
   unix
+  gpu_recovery
   mtime
   mtime.clock.os
   arrayjit.verdict

@@ -18,7 +18,8 @@
    2026-11-18 the raw probe's kernel was also still Scheduled after 120 s, with no recovery
    (gh-ocannl-2139). So the wait is given [kill_bound_s]. Whether a kill happened is read from the
    IORegistry's GPU [recoveryCount], never from the backend under test. The claims about the report
-   are evaluated only where the count rose, and skipped otherwise. The claim that the wait never
+   are evaluated only where the count rose, and skipped otherwise; no fleet Mac has opened that leg
+   since 2026-11-07, and gh-ocannl-2139 holds it until one does. The claim that the wait never
    returned success holds either way. Ending the process ends the kernel at once, so a run that
    gives up leaves the GPU free for the next one.
 
@@ -38,27 +39,9 @@ let leg = Verdict.leg ~when_:(String.equal backend_name "metal") ~on:backend_nam
    ~3 s a kill took where the watchdog fired (gh-ocannl-2082). *)
 let kill_bound_s = 20
 
-(* The GPU recoveries the IORegistry has counted since boot, summed over its accelerators. A kill of
-   a hung kernel is one. *)
-let recovery_count () =
-  let ic = Unix.open_process_in "/usr/sbin/ioreg -r -c IOAccelerator -l" in
-  let rec sum acc =
-    match Stdio.In_channel.input_line ic with
-    | None -> acc
-    | Some line -> (
-        match String.substr_index line ~pattern:"\"recoveryCount\"=" with
-        | None -> sum acc
-        | Some i ->
-            let rest = String.drop_prefix line (i + 16) in
-            let len =
-              Option.value ~default:(String.length rest)
-                (String.lfindi rest ~f:(fun _ c -> not (Char.is_digit c)))
-            in
-            sum (acc + Option.value (Int.of_string_opt (String.prefix rest len)) ~default:0))
-  in
-  let count = sum 0 in
-  ignore (Unix.close_process_in ic : Unix.process_status);
-  count
+(* The OS-side readings, fail-closed: test/support/gpu_recovery.ml. *)
+let recovery_count = Gpu_recovery.recovery_count
+let arm_watchdog = Gpu_recovery.arm_watchdog
 
 (* Runs a [+1] routine, whose output starts blank, and says whether it read back right. *)
 let plain ~first_id ~name ctx =
@@ -104,19 +87,6 @@ let raised f =
   | _ -> None
   | exception Failure message -> Some message
   | exception e -> Some (Exn.to_string e)
-
-(* A hard bound on the whole scenario that needs no OCaml code to run: a wait stuck in a native call
-   defers the SIGALRM handler below for as long as it lasts. A separate process sends the default-
-   action SIGTERM, which ends this one and fails the run; [at_exit] retires it on a normal end. *)
-let arm_watchdog ~seconds =
-  let null = Unix.openfile "/dev/null" [ O_RDWR ] 0 in
-  let watchdog =
-    Unix.create_process "/bin/sh"
-      [| "sh"; "-c"; Printf.sprintf "sleep %d; kill -TERM %d" seconds (Unix.getpid ()) |]
-      null null null
-  in
-  Unix.close null;
-  Stdlib.at_exit (fun () -> try Unix.kill watchdog Stdlib.Sys.sigkill with _ -> ())
 
 let scenario () =
   arm_watchdog ~seconds:(kill_bound_s + 100);
