@@ -233,7 +233,8 @@ files.
   a packed draw now takes by role, at stage 6a, a non-parameter axis with a minimum above 1 and
   no GLB, as it takes a bounded one, but only when its block counter is its own: two conversions
   of the same bits indexed at 7 and 11 then needed 2 and 3 blocks of one counter and were refused
-  (`row_glb_reach_executed` pins acceptance). A reduced draw's leaf axis under the result guessed
+  (`row_glb_reach_executed` pins acceptance; those shared-counter draws still broadcast one block,
+  a known limitation even where both minima need the same block count, as 9 and 12 do). A reduced draw's leaf axis under the result guessed
   1 at stage 5 (`close_dim_terminal`): it now waits until stage 7 while a non-parameter result
   above it, through `res` links, still has such a minimum, unless the walk meets an axis a held
   window or concat equation defers. The stage-7 closings propagate in their own pass first,

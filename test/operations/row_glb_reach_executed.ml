@@ -35,9 +35,10 @@
    What changed with gh-ocannl-2318: that minimum did not reach a draw behind a pointwise result
    whose operand is a stretch or a reduction. The stretch closed to the result's open axis by role
    at stage 6a, and the inequality it held closed the waiting draw under it empty at stage 6b. The
-   reduction's axis, a leaf axis of the reduced draw, guessed 1 at stage 5. A draw now takes such an
-   axis by role, and a leaf axis below it waits for stage 7; [stretch u *. 2] is the minimal stretch
-   case, [(u1 ++ "ab => a") *. v] the reduction case.
+   reduction's axis, a leaf axis of the reduced draw, guessed 1 at stage 5. A draw whose block
+   counter is its own now takes such an axis by role (draws sharing a counter still broadcast one
+   block), and a leaf axis below it waits for stage 7; [stretch u *. 2] is the minimal stretch case,
+   [(u1 ++ "ab => a") *. v] the reduction case.
 
    With gh-ocannl-2257, the open result remainder in [relu u + (c[3] ++ "a => a...")] settles at
    stage 6a. Previously [relu] closed empty at stage 6b and the draw closed against it, giving one
@@ -505,8 +506,10 @@ let () =
 (* gh-ocannl-2318: a shared counter whose use sites' sizes arrive as fixed-index minima behind a
    stretch under a pointwise result instead of as constants, at 8 and 12 cells (two and three
    blocks). A minimum sizes only a draw whose counter is its own: taken by both, the block counts 2
-   and 3 conflicted and the store was refused. The draws keep the ordinary closing order and
-   broadcast one block. *)
+   and 3 conflicted and the store was refused. The claim is the acceptance and the results' minima;
+   the draws keeping the ordinary closing order and broadcasting one block is a known limitation,
+   printed (into the golden) but not claimed, so a later fix that fills them is a re-promotion, not
+   a red. *)
 let () =
   Verdict.case "draws sharing a packed counter, sized by fixed-index minima" @@ fun () ->
   Tensor.unsafe_reinitialize ();
@@ -525,8 +528,8 @@ let () =
   let dims t = Array.to_list (Shape.to_dims t.Tensor.shape) in
   Stdio.printf "shared counter, fixed-index minima: bits %s, u %s, v %s, mu %s, mv %s\n"
     (shape bits) (shape u) (shape v) (shape mu) (shape mv);
-  p_all ~min:4 "accepted: the pointwise results take the minima, the draws broadcast one block"
-    [ (mu, [ 8 ]); (mv, [ 12 ]); (u, []); (v, []) ]
+  p_all ~min:2 "accepted, and the pointwise results take the fixed indices' minima"
+    [ (mu, [ 8 ]); (mv, [ 12 ]) ]
     ~f:(fun (t, want) -> List.equal Int.equal (dims t) want)
 
 (* gh-ocannl-2224: the late-tail boundary is staged deliberately: ordinary program constraints

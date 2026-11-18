@@ -5422,13 +5422,29 @@ let can_guess_dim_to_one env has_uniq_constr_unless =
           | Some (Bounds_dim { has_uniq_constr_unless = Some _; _ }) -> true
           | _ -> false)
 
-(* gh-ocannl-2318: a non-parameter axis a fixed index bounds below by more than 1 ([At_least_dim])
-   with no GLB yet: the axis gh-ocannl-2229 closes to its minimum at stage 7. *)
-let pending_minimum env v =
+(* gh-ocannl-2318: the entry-level half of gh-ocannl-2229's stage-7 selection, shared with it: a
+   non-parameter axis a fixed index bounds below by more than 1 ([At_least_dim]), with no GLB yet,
+   that may be guessed. Its minimum, when stage 7 closes it. The selection's other two conditions
+   need the whole store, so the early uses here ([below_pending_minimum], the packed draw's role
+   arm) do not check them: an axis in a parameter's bound component or held by a window or concat
+   equation keeps its minimal rule at stage 7, and a leaf or draw that waited on it then closes
+   minimal too, only later. *)
+let pending_minimum_size env v =
   match find_dim env.dim_env v with
-  | Some (Bounds_dim { is_in_param = false; glb = None; constr = At_least_dim { d_min; _ }; _ }) ->
-      d_min > 1
-  | _ -> false
+  | Some
+      (Bounds_dim
+         {
+           is_in_param = false;
+           glb = None;
+           constr = At_least_dim { d_min; _ };
+           has_uniq_constr_unless;
+           _;
+         })
+    when d_min > 1 && can_guess_dim_to_one env has_uniq_constr_unless ->
+      Some d_min
+  | _ -> None
+
+let pending_minimum env v = Option.is_some (pending_minimum_size env v)
 
 (* gh-ocannl-2318: whether a result above [v], through the bounds' [res] links and outside
    parameters, has a {!pending_minimum}. A leaf axis below one waits for it instead of guessing 1
@@ -5520,21 +5536,30 @@ let packed_draw_counter = function
 
 let is_packed_draw_constr constr = Option.is_some (packed_draw_counter constr)
 
+(* The dimension variables a [Total_elems] constraint mentions, substituted. *)
+let total_vars env = function
+  | Total_elems _ as constr ->
+      Set.fold (row_constraint_dim_vars constr) ~init:dim_var_set_empty ~f:(fun vars v ->
+          Set.union vars (vars_of_dim (subst_dim env (Var v))))
+  | _ -> dim_var_set_empty
+
+(* The rows other than [draw] whose stored total mentions the (substituted) [counter]: the draws
+   sharing a packed block counter with [draw]. *)
+let counter_sharers env ~draw counter =
+  Set.to_list (mentioning env.rows_mentioning_dim counter ~empty:row_var_set_empty)
+  |> List.filter ~f:(fun w ->
+      (not (equal_row_var w draw))
+      &&
+      match find_row env.row_env w with
+      | Some (Bounds_row { constr; _ }) -> Set.mem (total_vars env constr) counter
+      | _ -> false)
+
 (* gh-ocannl-2318: whether the packed draw [v]'s block counter belongs to its total alone. Two
    conversions of the same bits share a counter, and sizing it for one commits the other's block
    count too (gh-ocannl-2257), so a minimum sizes only a draw whose counter is its own. *)
 let packed_counter_exclusive env v constr =
   match Option.map (packed_draw_counter constr) ~f:(fun c -> subst_dim env (Var c)) with
-  | Some (Var counter) ->
-      Set.for_all (mentioning env.rows_mentioning_dim counter ~empty:row_var_set_empty) ~f:(fun w ->
-          equal_row_var w v
-          ||
-          match find_row env.row_env w with
-          | Some (Bounds_row { constr = Total_elems _ as total; _ }) ->
-              not
-                (Set.exists (row_constraint_dim_vars total) ~f:(fun c ->
-                     Set.mem (vars_of_dim (subst_dim env (Var c))) counter))
-          | _ -> true)
+  | Some (Var counter) -> List.is_empty (counter_sharers env ~draw:v counter)
   | _ -> false
 
 (* gh-ocannl-2318: a use site bounds an axis with a GLB of its own, and, with [~minimum], also an
@@ -6597,20 +6622,9 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
       let fixed =
         entries
         |> List.filter_map ~f:(fun (v, entry) ->
-            match entry with
-            | Bounds_dim
-                {
-                  is_in_param = false;
-                  glb = None;
-                  constr = At_least_dim { d_min; _ };
-                  has_uniq_constr_unless;
-                  origin;
-                  _;
-                }
-              when d_min > 1
-                   && (not (Set.mem parameter_axes v))
-                   && (not (Set.mem waiting v))
-                   && can_guess_dim_to_one env has_uniq_constr_unless ->
+            match (entry, pending_minimum_size env v) with
+            | Bounds_dim { origin; _ }, Some d_min
+              when (not (Set.mem parameter_axes v)) && not (Set.mem waiting v) ->
                 Some (Dim_eq { d1 = Var v; d2 = get_default_dim ~d:d_min (); origin })
             | _ -> None)
       in
@@ -7050,12 +7064,7 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
     in
     if List.is_empty candidates then []
     else
-      let total_vars = function
-        | Total_elems _ as constr ->
-            Set.fold (row_constraint_dim_vars constr) ~init:dim_var_set_empty ~f:(fun vars v ->
-                Set.union vars (vars_of_dim (subst_dim env (Var v))))
-        | _ -> dim_var_set_empty
-      in
+      let total_vars = total_vars env in
       let add_row vars r = Option.fold (row_var r) ~init:vars ~f:Set.add in
       let add_row_with_bound vars r =
         match row_var r with
@@ -7114,16 +7123,10 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
       let counter_can_close closings draw counter =
         match subst_dim env (Var counter) with
         | Var counter when not (Set.mem held_totals counter) ->
-            Set.for_all (mentioning env.rows_mentioning_dim counter ~empty:row_var_set_empty)
-              ~f:(fun v ->
-                equal_row_var v draw
-                ||
-                match find_row env.row_env v with
-                | Some (Bounds_row { constr; _ }) when Set.mem (total_vars constr) counter ->
-                    Option.exists (block_demand closings draw counter) ~f:(fun blocks ->
-                        counter_accepts_demand counter blocks
-                        && Option.exists (block_demand closings v counter) ~f:(Int.equal blocks))
-                | _ -> true)
+            List.for_all (counter_sharers env ~draw counter) ~f:(fun v ->
+                Option.exists (block_demand closings draw counter) ~f:(fun blocks ->
+                    counter_accepts_demand counter blocks
+                    && Option.exists (block_demand closings v counter) ~f:(Int.equal blocks)))
         | _ -> false
       in
       let counters_can_close closings tail =
