@@ -307,6 +307,7 @@ let raw_entries =
     ( "vendor_stub_arms_scan.ml",
       [
         "[scanner-refusal:99b67dac359b15961fd222795ccfdc9b] does not read";
+        "[scanner-refusal:c1457cf67f0481ecff36ea8369db6347] copy_files";
         "[scanner-refusal:7ea0203b4dc3b6f9bb27b060390f8d72] compiles";
         "[scanner-refusal:864cbc7eac4bbb16fefccca605bd57bc] declares";
         "[scanner-refusal:587907379b3593b5bfde494b2785b186] compiles a copy";

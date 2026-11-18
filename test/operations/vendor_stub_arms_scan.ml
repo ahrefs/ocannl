@@ -42,23 +42,27 @@
    library the genuine stanza does not declare -- in its `(libraries …)`, a `(re_export …)`, or a
    `select` condition, which links it wherever the arm is chosen -- is refused unless
    [availability_only] names it with its reason, and an entry there excusing nothing is refused in
-   turn. So is a preprocessor the stand-in runs over the module and the genuine stanza does not.
-   Only that direction is a defect: a genuine stanza declaring MORE is normal, since an executable
-   carries modules its arm's library does not.
+   turn. A stand-in's `(re_export …)` needs the genuine stanza's, since it widens what a dependent
+   sees. A preprocessor the stand-in runs over the module and the genuine stanza does not is refused
+   too. Only that direction is a defect: a genuine stanza declaring MORE is normal, since an
+   executable carries modules its arm's library does not.
 
    WHAT IT DOES NOT READ. Whether the copy keeps the module name the executable gives the arm, an
    `arms/dune` convention: a deviation still compiles the arm's text. Which module of a package a
    copy reaches: `cudajit_stub` is one library for all of `cudajit`, so a genuine stanza naming
    `cudajit.cuda` alone satisfies it even where the copy uses `Nvrtc`. Whether the copy uses what
    its library declares: declarations are compared, never uses, so a stand-in library declared and
-   unused is refused all the same where the genuine stanza lacks it -- drop it. A module that copies
-   no file, and a module of a default-set library that no rule or vendor arm names, is held to
-   nothing; the census lists the libraries compiling no copy. Of preprocessing, only the `pps`
-   libraries: not their flags or arguments, not `preprocessor_deps`, and any other form
-   (`staged_pps`, `action`, `future_syntax`) is refused as unread. A vendor package with no stand-in
-   at all is outside its reach: no arm gated on it can be recognised, and adding the stand-in is
-   what brings it in. A `[…]` set in a copy glob is read as matching nothing, which errs toward a
-   demand. *)
+   unused is refused all the same where the genuine stanza lacks it -- drop it. Which arm of ANOTHER
+   `select` a box chooses: a module is held to every condition of the stanza's other selects, as a
+   stand-in compiling several arms declares their union (an arm's own select counts only through the
+   arm's condition). A module that copies no file is held to nothing, and so is a default-set
+   library's module no rule copies -- beside a `copy_files` glob, whose files dune files do not
+   list, a default-set library is refused; the census lists the libraries compiling no copy. Of
+   preprocessing, only the `pps` libraries: not their flags or arguments, not `preprocessor_deps`,
+   and any other form (`staged_pps`, `action`, `future_syntax`) is refused as unread. A vendor
+   package with no stand-in at all is outside its reach: no arm gated on it can be recognised, and
+   adding the stand-in is what brings it in. A `[…]` set in a copy glob is read as matching nothing,
+   which errs toward a demand. *)
 
 open Base
 open Stdio
@@ -203,17 +207,38 @@ let compiled_by ~all copy module_ =
       | Scan.Default_less excluded ->
           not (List.mem (List.map excluded ~f:String.lowercase) module_ ~equal:String.equal))
 
-(* The libraries a stanza declares: its `(libraries …)` atoms, a `(re_export …)`'s, and every
-   library a `select` condition requires, since the condition is what makes dune link it wherever
-   the arm is chosen. *)
-let declared_libraries s =
+(* The libraries a stanza declares, each with whether it re-exports it: its `(libraries …)` atoms, a
+   `(re_export …)`'s, and the libraries a `select` condition requires, since the condition is what
+   makes dune link them wherever the arm is chosen. For a module copied from [arm], the alternatives
+   of that arm's own `select` count only through the arm's condition: dune links one alternative per
+   select, so a sibling's libraries are absent wherever this arm is chosen. Other selects count with
+   all their conditions: which of their arms a box chooses is not this arm's to say, and a stand-in
+   library compiling several arms declares their union. *)
+let declared_libraries ?arm s =
   let fields = Option.value (Scan.field s.sexp "libraries") ~default:[] in
+  let own_select =
+    match arm with
+    | None -> None
+    | Some arm ->
+        List.find_map (Scan.select_choices s.sexp) ~f:(fun (target, _, a) ->
+            if String.equal (Scan.normalize_path (Scan.in_subdir s.dir a)) arm then Some target
+            else None)
+  in
   List.concat_map fields ~f:(function
-    | Sexp.Atom l -> [ l ]
-    | Sexp.List [ Sexp.Atom "re_export"; Sexp.Atom l ] -> [ l ]
+    | Sexp.Atom l -> [ (l, false) ]
+    | Sexp.List [ Sexp.Atom "re_export"; Sexp.Atom l ] -> [ (l, true) ]
     | _ -> [])
-  @ List.concat_map (Scan.select_choices s.sexp) ~f:(fun (_, condition, _) ->
-      List.filter condition ~f:(fun l -> not (String.is_prefix l ~prefix:"!")))
+  @ List.concat_map (Scan.select_choices s.sexp) ~f:(fun (target, condition, a) ->
+      let counts =
+        match (own_select, arm) with
+        | Some own, Some arm when String.equal own target ->
+            String.equal (Scan.normalize_path (Scan.in_subdir s.dir a)) arm
+        | _ -> true
+      in
+      if not counts then []
+      else
+        List.filter_map condition ~f:(fun l ->
+            if String.is_prefix l ~prefix:"!" then None else Some (l, false)))
 
 let stanza_label s =
   Printf.sprintf "(%s %s) of %s"
@@ -249,6 +274,7 @@ type census = {
       (** each stand-in library with the copied modules it compiles, each with the genuine stanza
           its libraries and preprocessors are held to *)
   uncopied : string list;  (** the stand-in tree's other libraries, compiling no copy *)
+  paired : (string * string) list;  (** each paired copy's source with the copy's own path *)
 }
 
 (* The preprocessors dune runs over module [m] of a stanza: a `(pps …)`'s libraries before any `--`,
@@ -262,7 +288,9 @@ let preprocessors s m =
         Ok
           (List.take_while args ~f:(fun a -> not (Sexp.equal a (Sexp.Atom "--")))
           |> List.filter_map ~f:(function
-            | Sexp.Atom a when not (String.is_prefix a ~prefix:"-") -> Some a
+            | Sexp.Atom a when not (String.is_prefix a ~prefix:"-" || String.is_prefix a ~prefix:"+")
+              ->
+                Some a
             | _ -> None))
     | spec -> Error (Sexp.to_string spec)
   in
@@ -293,7 +321,13 @@ let preprocessors s m =
 
 (* One module a stand-in library compiles from a copy, with the genuine stanza compiling the copy's
    source and the module that source is there: an arm compiles as its `select` target. *)
-type pair = { module_ : string; source : string; genuine : stanza; genuine_module : string }
+type pair = {
+  module_ : string;
+  source : string;
+  genuine : stanza;
+  genuine_module : string;
+  arm : bool;  (** whether [source] is an arm of a `select` of [genuine] *)
+}
 
 (* The library half of the rule: every library of the stand-in tree other than the package
    stand-ins, held module by copied module to the genuine stanza that compiles the copy's source.
@@ -328,10 +362,15 @@ let mirrors ~fail ~exceptions ~all ~packages ~backends ~copies =
             if List.mem stand_in_names name ~equal:String.equal then None
             else Some (Library (canonical name)))
   in
-  let satisfies declared = function
-    | Package p ->
-        List.exists declared ~f:(fun d -> String.equal d p || String.is_prefix d ~prefix:(p ^ "."))
-    | Library l -> List.exists declared ~f:(fun d -> String.equal (canonical d) l)
+  (* A re-export widens what a dependent sees, so a stand-in's re-export needs the genuine
+     stanza's. *)
+  let satisfies ~re_export declared sub =
+    List.exists declared ~f:(fun (d, d_re_export) ->
+        ((not re_export) || d_re_export)
+        &&
+        match sub with
+        | Package p -> String.equal d p || String.is_prefix d ~prefix:(p ^ ".")
+        | Library l -> String.equal (canonical d) l)
   in
   (* The stanza choosing each vendor-or-not arm, by the arm's path, with the module it makes. *)
   let arm_owners =
@@ -342,7 +381,7 @@ let mirrors ~fail ~exceptions ~all ~packages ~backends ~copies =
   in
   let genuine_of source =
     match List.Assoc.find arm_owners source ~equal:String.equal with
-    | Some owner -> [ owner ]
+    | Some (owner, m) -> [ (owner, m, true) ]
     | None -> (
         let m = module_of_file (Stdlib.Filename.basename source) in
         let bearing =
@@ -366,8 +405,8 @@ let mirrors ~fail ~exceptions ~all ~packages ~backends ~copies =
         in
         (* Dune's default set is what no explicit list claims. *)
         match List.filter bearing ~f:owns_by_name with
-        | _ :: _ as named -> List.map named ~f:(fun o -> (o, m))
-        | [] -> List.filter bearing ~f:owns_by_default |> List.map ~f:(fun o -> (o, m)))
+        | _ :: _ as named -> List.map named ~f:(fun o -> (o, m, false))
+        | [] -> List.filter bearing ~f:owns_by_default |> List.map ~f:(fun o -> (o, m, false)))
   in
   let used = Hash_set.create (module String) in
   let exception_key stand_in library = stand_in ^ " " ^ library in
@@ -383,15 +422,27 @@ let mirrors ~fail ~exceptions ~all ~packages ~backends ~copies =
             let modules =
               match Scan.explicit_modules l.sexp with
               | Scan.Named ms -> List.map ms ~f:String.lowercase
+              | Scan.Default_less _
+                when List.exists own ~f:(fun c ->
+                         not
+                           (Option.equal String.equal (Scan.head c.copy_stanza.sexp) (Some "rule")))
+                ->
+                  (* A glob copies files dune files do not list, so which modules the default set
+                     then holds -- and which genuine stanzas they answer to -- is not readable. *)
+                  fail
+                    (Printf.sprintf
+                       "%s compiles dune's default module set while a `copy_files` glob copies \
+                        into %s -- which modules it compiles cannot be read from dune files, so \
+                        their genuine stanzas cannot be found; list them in `(modules …)`"
+                       (site l) l.dir);
+                  []
               | Scan.Default_less excluded ->
                   (* What dune files alone can name of the default set: the modules a rule copies
-                     here, and the arms a glob here copies. *)
+                     here. *)
                   List.concat_map own ~f:(fun c ->
-                      (match Scan.head c.copy_stanza.sexp with
-                        | Some "rule" -> [ c.module_of "" ]
-                        | _ -> [])
-                      @ List.filter_map arm_owners ~f:(fun (arm, _) ->
-                          if c.reads arm then Some (c.module_of arm) else None))
+                      match Scan.head c.copy_stanza.sexp with
+                      | Some "rule" -> [ c.module_of "" ]
+                      | _ -> [])
                   |> List.filter ~f:(fun m ->
                       not (List.mem (List.map excluded ~f:String.lowercase) m ~equal:String.equal))
                   |> List.dedup_and_sort ~compare:String.compare
@@ -402,8 +453,8 @@ let mirrors ~fail ~exceptions ~all ~packages ~backends ~copies =
                   |> List.dedup_and_sort ~compare:String.compare
                   |> List.filter_map ~f:(fun source ->
                       match genuine_of source with
-                      | [ (genuine, genuine_module) ] ->
-                          Some { module_ = m; source; genuine; genuine_module }
+                      | [ (genuine, genuine_module, arm) ] ->
+                          Some { module_ = m; source; genuine; genuine_module; arm }
                       | found ->
                           fail
                             (Printf.sprintf
@@ -415,7 +466,7 @@ let mirrors ~fail ~exceptions ~all ~packages ~backends ~copies =
                                (dir_of source));
                           None))
             in
-            List.iter (declared_libraries l) ~f:(fun library ->
+            List.iter (declared_libraries l) ~f:(fun (library, re_export) ->
                 match substitute library with
                 | None ->
                     fail
@@ -428,7 +479,12 @@ let mirrors ~fail ~exceptions ~all ~packages ~backends ~copies =
                 | Some sub ->
                     let lacking =
                       List.filter pairs ~f:(fun p ->
-                          not (satisfies (declared_libraries p.genuine) sub))
+                          not
+                            (satisfies ~re_export
+                               (declared_libraries
+                                  ?arm:(if p.arm then Some p.source else None)
+                                  p.genuine)
+                               sub))
                     in
                     if not (List.is_empty lacking) then
                       if
@@ -443,7 +499,9 @@ let mirrors ~fail ~exceptions ~all ~packages ~backends ~copies =
                                   the stanza compiling that file, does not declare -- the stand-in \
                                   type-checks where the genuine stanza would not (gh-ocannl-2234); \
                                   declare it there, or drop it from the stand-in"
-                                 (site l) p.source library (substitute_text sub) (site p.genuine))));
+                                 (site l) p.source
+                                 (if re_export then "(re_export " ^ library ^ ")" else library)
+                                 (substitute_text sub) (site p.genuine))));
             List.iter pairs ~f:(fun p ->
                 match (preprocessors l p.module_, preprocessors p.genuine p.genuine_module) with
                 | Error form, _ | _, Error form ->
@@ -467,7 +525,7 @@ let mirrors ~fail ~exceptions ~all ~packages ~backends ~copies =
                                 type-checks where the genuine stanza would not; add it there, or \
                                 drop it from the stand-in"
                                (site l) p.module_ p.source ppx (site p.genuine))));
-            Some (name, pairs)
+            Some (name, l.dir, pairs)
         | _ -> None)
   in
   List.iter exceptions ~f:(fun e ->
@@ -478,12 +536,14 @@ let mirrors ~fail ~exceptions ~all ~packages ~backends ~copies =
               nothing: the library declares no `%s` a genuine stanza it is held to lacks -- delete \
               the exception"
              e.library e.stand_in e.reason e.library));
-  let checked = List.sort checked ~compare:(fun (a, _) (b, _) -> String.compare a b) in
-  ( List.filter_map checked ~f:(fun (name, pairs) ->
+  let checked = List.sort checked ~compare:(fun (a, _, _) (b, _, _) -> String.compare a b) in
+  ( List.filter_map checked ~f:(fun (name, _, pairs) ->
         if List.is_empty pairs then None
         else Some (name, List.map pairs ~f:(fun p -> (p.module_, stanza_label p.genuine)))),
-    List.filter_map checked ~f:(fun (name, pairs) ->
-        if List.is_empty pairs then Some name else None) )
+    List.filter_map checked ~f:(fun (name, _, pairs) ->
+        if List.is_empty pairs then Some name else None),
+    List.concat_map checked ~f:(fun (_, dir, pairs) ->
+        List.map pairs ~f:(fun p -> (p.source, Printf.sprintf "%s/%s.ml" dir p.module_))) )
 
 let analyze ?(exceptions = availability_only) ~fail ~dune_files () =
   if List.is_empty dune_files then (
@@ -495,6 +555,7 @@ let analyze ?(exceptions = availability_only) ~fail ~dune_files () =
       ungated = [];
       mirrors = [];
       uncopied = [];
+      paired = [];
     })
   else
     let all = List.concat_map dune_files ~f:(stanzas_of ~fail) in
@@ -575,7 +636,7 @@ let analyze ?(exceptions = availability_only) ~fail ~dune_files () =
                             into arrayjit/vendor_stubs/arms/ as `%s` and compile it in a library \
                             there, as arms/dune does for its siblings"
                            (site s) arm target (String.concat ~sep:" " required) path target))));
-    let mirrors, uncopied = mirrors ~fail ~exceptions ~all ~packages ~backends ~copies in
+    let mirrors, uncopied, paired = mirrors ~fail ~exceptions ~all ~packages ~backends ~copies in
     {
       packages;
       backend_libraries;
@@ -583,6 +644,7 @@ let analyze ?(exceptions = availability_only) ~fail ~dune_files () =
       ungated = List.dedup_and_sort !ungated ~compare:String.compare;
       mirrors;
       uncopied;
+      paired;
     }
 
 (* Synthetic trees: the repository satisfies the rule, so its own corpus cannot tell a rule from a
@@ -696,7 +758,8 @@ let control () =
     ~mirrors:backend_pair
     (genuine_backend ~preprocess:" (preprocess (pps ppx_here ppx_compare -- -flag))"
        "base cudajit.cuda cudajit.nvrtc unix stdio pprint arrayjit.ir"
-    :: backend_stand_in ~preprocess:" (preprocess (per_module ((pps ppx_here) cuda_backend)))"
+    :: backend_stand_in
+         ~preprocess:" (preprocess (per_module ((pps ppx_here --alert ++foo) cuda_backend)))"
          "base cudajit_stub ir pprint");
   mirrored "a library the genuine stanza names only in a select condition counts as declared"
     ~mirrors:[ arm_pair ]
@@ -705,6 +768,18 @@ let control () =
         ("t/dune", program ~condition:"cudajit.cuda arrayjit.cuda_backend" ());
         arms_copy ~libraries:"base cudajit_stub cuda_backend_stub_check" ();
       ]);
+  refused "a library only a sibling alternative of the arm's own select names is refused"
+    ~format:lacking_format ~fragment:"with `unix`, standing for `unix`, which t/dune:1"
+    (stand_ins
+    @ [
+        ( "t/dune",
+          "(executable (name probe) (libraries base (select probe_impl.ml from (cudajit.cuda -> \
+           probe_impl.cudajit.ml) (unix -> probe_impl.unix.ml) (-> probe_impl.missing.ml))))\n" );
+        arms_copy ~libraries:"base cudajit_stub unix" ();
+      ]);
+  refused "a stand-in re-export the genuine stanza does not make is refused" ~format:lacking_format
+    ~fragment:"with `(re_export cudajit_stub)`, standing for"
+    (stand_ins @ [ ("t/dune", program ()); arms_copy ~libraries:"base (re_export cudajit_stub)" () ]);
   refused "a package stand-in whose package the genuine stanza never names is refused"
     ~format:lacking_format
     ~fragment:"with `cudajit_stub`, standing for a library of package `cudajit`, which t/dune:1"
@@ -764,9 +839,22 @@ let control () =
     "a vendor arm copied and compiled under the stand-ins is accepted, its fallback undemanded"
     ~vendor:copied ~ungated:[]
     (stand_ins @ [ ("t/dune", program ()); arms_copy () ]);
-  accepted "a vendor arm copied by a copy_files glob into a default-module library is accepted"
+  accepted "a vendor arm copied by a copy_files glob is accepted"
     ~vendor:[ ("t/probe_cuda.ml", Some "arrayjit/vendor_stubs/arms/probe_cuda.ml") ]
     ~ungated:[]
+    (stand_ins
+    @ [
+        ("t/dune", program ~arm:"probe_cuda.ml" ());
+        ( "arrayjit/vendor_stubs/arms/dune",
+          "(copy_files# (files ../../../t/probe_cuda.{ml,mli}))\n\
+           (library (name probe_arm) (modules probe_cuda))\n" );
+      ]);
+  refused "a default-module stand-in library beside a copy_files glob is refused"
+    ~format:
+      "%s compiles dune's default module set while a `copy_files` glob copies into %s -- which \
+       modules it compiles cannot be read from dune files, so their genuine stanzas cannot be \
+       found; list them in `(modules …)`"
+    ~fragment:"arrayjit/vendor_stubs/arms/dune:2 compiles dune's default module set"
     (stand_ins
     @ [
         ("t/dune", program ~arm:"probe_cuda.ml" ());
@@ -854,12 +942,10 @@ let () =
     census.vendor ~f:(fun (_, copy) -> Option.is_some copy);
   (* The library half pairs what the arm half found: a vendor arm's copy left unpaired would be held
      to nothing, silently. *)
-  let paired = List.concat_map census.mirrors ~f:(fun (_, pairs) -> List.map pairs ~f:fst) in
   p_all ~min:1 "every vendor-gated arm's stand-in copy is held to the stanza selecting it"
-    census.vendor ~f:(fun (_, copy) ->
+    census.vendor ~f:(fun (arm, copy) ->
       match copy with
-      | Some copy ->
-          List.mem paired (module_of_file (Stdlib.Filename.basename copy)) ~equal:String.equal
+      | Some copy -> List.mem census.paired (arm, copy) ~equal:Poly.equal
       | None -> false);
   printf "\nVendor packages with a stand-in: %s\n" (String.concat ~sep:", " census.packages);
   printf "Vendor-gated arrayjit libraries: %s\n" (String.concat ~sep:", " census.backend_libraries);

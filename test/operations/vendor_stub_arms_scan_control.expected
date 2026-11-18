@@ -1,6 +1,8 @@
 a stand-in declaring a library its genuine stanza lacks is refused, naming both stanzas (the gh-ocannl-2234 shape): true
 a genuine stanza declaring more than its stand-in, by public names and preprocessors, is accepted: true
 a library the genuine stanza names only in a select condition counts as declared: true
+a library only a sibling alternative of the arm's own select names is refused: true
+a stand-in re-export the genuine stanza does not make is refused: true
 a package stand-in whose package the genuine stanza never names is refused: true
 a library an availability-only exception names is excused: true
 an availability-only exception that excuses nothing is refused: true
@@ -9,7 +11,8 @@ a stand-in copy of a file no stanza compiles is refused: true
 a stand-in preprocessor its genuine stanza does not run is refused: true
 a preprocessing form the scan does not read is refused: true
 a vendor arm copied and compiled under the stand-ins is accepted, its fallback undemanded: true
-a vendor arm copied by a copy_files glob into a default-module library is accepted: true
+a vendor arm copied by a copy_files glob is accepted: true
+a default-module stand-in library beside a copy_files glob is refused: true
 an arm gated on no vendor library is not demanded: true
 an arm that only forbids a vendor library is not demanded: true
 a vendor arm nothing copies is refused, naming its dune file: true
@@ -24,6 +27,7 @@ an empty dune-file corpus is refused: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:99b67dac359b15961fd222795ccfdc9b] does not read
+  [scanner-refusal:c1457cf67f0481ecff36ea8369db6347] copy_files
   [scanner-refusal:7ea0203b4dc3b6f9bb27b060390f8d72] compiles
   [scanner-refusal:864cbc7eac4bbb16fefccca605bd57bc] declares
   [scanner-refusal:587907379b3593b5bfde494b2785b186] compiles a copy
