@@ -100,7 +100,7 @@ let classify ~strict f =
 let values c (o : LL.optimized) =
   let memory =
     interp_memory
-      [ (c.acc, [| 0.5; 0.25 |]); (c.x, Array.init 4 ~f:(fun n -> 0.125 *. Float.of_int (n + 1))) ]
+      [ (c.acc, [| 0.5; 0.75 |]); (c.x, Array.init 4 ~f:(fun n -> 0.125 *. Float.of_int (n + 1))) ]
   in
   interpret memory o.LL.llc;
   Array.copy (Hashtbl.find_exn memory c.acc)
@@ -151,8 +151,15 @@ let () =
   let sched = [ pz pure; Sched.Retype { axis = pure.r; ty = LL.Serial } ] in
   let applied, dispatched = counting (fun () -> Sched.apply sched pure.opt) in
   p "a pure entry holding a pure scope body runs every op" (dispatched = List.length sched);
-  p_all2 "and computes the unscheduled program's values" (values pure applied)
-    (values pure pure.opt) ~f:Float.equal;
+  let reference = values pure pure.opt in
+  p
+    "the unscheduled cells are distinct and moved off their seeds, so a swapped or dropped \
+     store-back would show"
+    ((not (Float.equal reference.(0) reference.(1)))
+    && Float.(reference.(0) <> 0.5)
+    && Float.(reference.(1) <> 0.75));
+  p_all2 "and computes the unscheduled program's values" (values pure applied) reference
+    ~f:Float.equal;
   (* The other half of the scope grammar is left to the ops, which can repair it. *)
   let s = node "sink_g" and v = node "v_g" in
   virtualize v;

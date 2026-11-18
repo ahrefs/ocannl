@@ -5,6 +5,7 @@ permissive: it is contained as Unclassified, never as Illegal_schedule: true
 the empty schedule is the identity on the impure entry, dispatching nothing: true
 the statement-level twin reaches its ops and is refused at the Retype, naming the tile's lifetime: true
 a pure entry holding a pure scope body runs every op: true
+the unscheduled cells are distinct and moved off their seeds, so a swapped or dropped store-back would show: true
 and computes the unscheduled program's values: true
 a pure entry with a Grid loop inside a scope body is admitted, and its Retype to Serial repairs it: true
 schedule_entry_scope_purity: done
