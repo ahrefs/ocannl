@@ -2948,6 +2948,11 @@ type seed_gate =
           and uses continuous launch fill. The geometry and the numerics-preserving candidate set
           are {!seeded_params}' either way. *)
 
+val seed_gate_setting : unit -> [ `Auto | `Threshold of int ]
+(** The configured [gpu_default_sketch_min_reduction], unresolved: [`Auto] or a threshold, as
+    {!seeded_default_gate} reads it before resolving [auto] (gh-ocannl-2306). Raises
+    [Utils.Invalid_config_value] naming the key on anything else. *)
+
 val seeded_default_gate : limits:Ir.Backend_intf.hardware_limits -> seed_gate
 (** Config [gpu_default_sketch_min_reduction]: an integer is [Min_reduction]; [auto] is [Ranked]
     under {!ranking_capacity}'s capacity and {!ranking_cache_bandwidth}, and [Min_reduction 32] —

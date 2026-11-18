@@ -998,6 +998,29 @@ files.
   and the whole family competes. The census claim (`test/operations/seeded_default`) pins capacity
   0, no cache tier, against threshold 32 and is CUDA/HIP only; on cc the seeded default is off
   altogether.
+- **A change to what the `auto` gate seeds owes a CUDA run of the singles readers**
+  (gh-ocannl-2306). Where the seeded plan has a segmentation of its own, a search's default
+  seeded sweep times `F_swap` singles of the plan in place of the staffed `F_sketch` ones
+  (gh-ocannl-1664), so a ranking change flips what every-backend tests counting those labels
+  exercise on CUDA alone: staging#2115 (gh-ocannl-2279) made the gate seed both products of a
+  two-matmul chain there, and `autotune_sketch_placements` went red on master, seen only by the
+  CUDA integration loop (fixed test-side in staging#2134). `affected` cannot route it: these tests
+  name `Autotune` but none of the gate's definitions, so a change inside `seeded_ranker` ranks
+  them LINK-ONLY (`model_seeded_anchor`, whose claim's comment names `seeded_ranker`, is
+  REFERENCED), and `--gpu-gated` drops the every-backend ones, whose code holds no GPU gate, by
+  design: what flips is a backend's default, which no reach reading names can see. So a change to
+  `seeded_ranker`, `seeded_default_gate`, `seeded_segment_judgment` or the `Cost_model` terms the
+  gate's score sums (`operand_deliveries` among them) runs, on CUDA, the set this derives
+  (the tests reading single labels, `slow-autotune_fission_sketch` among them):
+  `git grep -lE 'F_sketch|F_swap|Fissioned_chain\.is_' -- 'test/*.ml' ':!test/support' | xargs tools/test-run.sh aliases`,
+  and says so in the PR body; a red there that the change explains is fixed test-side or in the
+  gate, never left for the loop.
+  `model_seeded_anchor`'s CUDA claim pins the exact count under the shipped gate (the chain's
+  seeded plan seeds exactly its two products). With the direct-read pricing reverted
+  (`~price_direct_loads:false` in `seeded_ranker`) the chain seeds neither on rog and the claim
+  fails, beside the anchoring claim, which a single seeded product would still pass. Its CUDA
+  stand-in leg seeds both products under either score, so the count is a CUDA run's to read. A
+  change meant to move that count moves the claim's number in the same commit, with the reason.
 - **A model decision for another target is asked without a compile** (gh-ocannl-1780):
   `Autotune.model_pick` is `model_default`'s choice, decided and not compiled (one `model_selection`
   feeds both; only the compile-level fallback is the compile's), and it and `model_explain` take a

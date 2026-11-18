@@ -419,7 +419,8 @@ files.
   (`Tile_mma`) kernels are excluded, `mma_rate` already prices their staging; (3) the `auto`
   seeding gate prices direct global operand reads at the same rate (gh-ocannl-2279), using
   per-thread source bytes filled in their own launch context. The copy-only score stopped seeding
-  `model_seeded_anchor`'s two-matmul chain on CUDA.
+  `model_seeded_anchor`'s two-matmul chain on CUDA; its CUDA claim pins both seeds now
+  (gh-ocannl-2306).
   The leaf ranker still uses the staged volume from the fit. CUDA ships 1e12 B/s
   (any of 5e11-8e12 does the same at M1); the admitted+coalesced argmin is then the fastest leaf at
   outproj and qkv b256 and an uncoalesced leaf at b8. HIP has none: on tuf (discrete) the term
