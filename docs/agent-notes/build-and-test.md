@@ -4107,6 +4107,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     a harness's fixture writes one through a variable. gh-ocannl-1797's two CI reds read this way:
     `tools/test-run.sh` reaches the members of `tools/test-test-run.sh`, `benchmarks/fixture_digest.py`
     `benchmarks/test-check-box.sh`.
+    A name with several owners (a shared basename) reaches those sharing the most trailing path
+    parts with the run that named it, and every owner on a tie, so a bare basename, or one under
+    an unknown `$V/`, reaches them all; a shell `$here/NAME` whose `here` is the file's
+    `$(cd "$(dirname "$0")" && pwd)`, assigned once, reaches the owner beside the harness
+    (gh-ocannl-2342: `benchmarks/test-gh1133-cells.sh` no longer reaches
+    `test/operations/gh1133_summary.py`). To audit what each harness reaches, and through which
+    token, `affected --harness-census [MEMBER]` prints one tab-separated line per reached path
+    (`MEMBER PATH STEP FILE:LINE TOKEN OWNERS`), sorted: diff it before and after a reader change,
+    and read an OWNERS above 1 as a tie the rule kept.
     Fake diagnostics should use synthetic locations, and all fixture text fixture-only names: the
     reader cannot tell a fixture's `File "lib/dune"`, `"$repo/lib/dune"`, `$TMP/bin/dune` PATH stub,
     trace location or fake `online_softmax.exe` from a read of the real file, so each selected its

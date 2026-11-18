@@ -11,6 +11,8 @@
 #   ... [--why ALIAS|all]... (with any of the forms above)
 #   ... --harnesses (with any of the forms above, without alias selection or
 #   explanation options: the harness commands, below, without asking dune)
+#   tools/test-run.sh affected --harness-census [MEMBER] (alone: what each
+#   harness reaches, and through which token, below)
 #
 # `--referenced-only`, `--gpu-gated`, `--why` and `--harnesses` may stand before a
 # `--` (after `--since BASE`, a revision, or the `--files` paths too).
@@ -264,6 +266,25 @@
 #     `.`), or for an OCaml `X.ml` the basename `X.exe`. Lines whose first
 #     non-blank character is `#` are comments, and name nothing. A changed
 #     path is named whether or not the worktree still has it.
+#   - When a run names several paths that way (a basename with several owners,
+#     gh-ocannl-2342), it names those sharing the most trailing path parts with
+#     it (`X.exe` matching `X.ml`); ties keep every owner, so a bare basename
+#     names them all. The run's first part is no path part, and is left out of
+#     the count, unless the run starts the line or follows a blank, one of
+#     `=(:,<>|;&` or a backquote or `[`, or a quote that itself starts the line
+#     or follows one of those (after `$V`, `${V}`, `)` or a closing quote it is
+#     a fragment). Never a dropped read: a run `D/B` read from any directory C
+#     is the file C/D/B, which ends with all of `D/B`, so it always has the
+#     most. Within a harness's program (not in what `loads` follows), a shell
+#     `$V/R` or `${V}/R`, with V assigned once in its file as
+#     `V=$(cd "$(dirname "$0")[/..]..." && pwd)` (`CDPATH=`, `--`, quotes,
+#     `-P` and a `|| ...` tail allowed; `${BASH_SOURCE[0]}` for `$0`) and in no
+#     other file of that program, and a bare `$(dirname "$0")/R`, name the one
+#     owner at R from the harness's directory (`$0` is the harness in each of
+#     its program's files) or from the file's own (`BASH_SOURCE`), when R
+#     there is one of the owners; otherwise the rule above applies. A Python
+#     `__file__` directory, a reassigned or inherited variable and every other
+#     spelling are not read, so they keep every tied owner.
 #   - A harness reaches every path its program's text names, and the program
 #     of every script among them (a script it runs, with what that loads); what
 #     such a script names in turn is not followed, so a harness that drives a
@@ -286,6 +307,19 @@
 #   A module source no stanza of this build lists (not even one it does not
 #   compile) that a harness reaches is mapped to those legs, not UNMAPPED.
 #   A changed script no harness reaches is named on stderr.
+#
+# The harness census (gh-ocannl-2342): `affected --harness-census [MEMBER]`
+# prints, for every member (or MEMBER alone), what the boundary above reaches,
+# read with the same index and steps, whatever changed: one line per reached
+# path or declaration, tab-separated `MEMBER PATH STEP WHERE TOKEN OWNERS`,
+# sorted bytewise. STEP is `self` (the harness), `loads` or `names` (the step
+# that first reached PATH; WHERE is the `FILE:LINE` of the text and TOKEN the
+# run that named it, OWNERS how many paths that run named) or `declares`
+# (PATH a declared GLOB, TOKEN its `--only 'ERE'` or `-`). `-` fills an empty
+# field. It takes no revision, `--since` or `--files`, and none of
+# `--harnesses`, `--gpu-gated`, `--referenced-only` and `--why`; a MEMBER not
+# in `tools/test-harnesses.sh --list` stops the run. Dune is not asked. Exit 0
+# or 2.
 #
 # The verdict (gh-ocannl-1921): whenever the list is printed (exit 0 or 3), the
 # LAST line of stderr is the trailer `affected: verdict=V`, V one of `ok`,
@@ -326,12 +360,13 @@ tmp=$(cd "$tmp" && pwd -P) || die "cannot resolve $tmp"
 trap 'rm -rf "${tmp:?}"' EXIT
 trap "exit 130" INT TERM
 
-usage="usage: affected [--referenced-only] [--gpu-gated] [--why ALIAS|all]... [--harnesses] --since BASE | REV | REV..REV | REV...REV [-- PATHSPEC...] | affected [--referenced-only] [--gpu-gated] [--why ALIAS|all]... [--harnesses] --files PATH..."
+usage="usage: affected [--referenced-only] [--gpu-gated] [--why ALIAS|all]... [--harnesses] --since BASE | REV | REV..REV | REV...REV [-- PATHSPEC...] | affected [--referenced-only] [--gpu-gated] [--why ALIAS|all]... [--harnesses] --files PATH... | affected --harness-census [MEMBER]"
 # Link-only aliases (see the Perl below) are printed last, and named on stderr;
 # --referenced-only leaves them off stdout.
 referenced_only=0
 gpu_gated=0
 harnesses=0
+census=0 census_member=
 : >"$tmp/why"
 mode=git
 old_rev= new_rev=
@@ -350,6 +385,12 @@ while [ $# -gt 0 ]; do
     --gpu-gated=*) die "--gpu-gated is a flag and takes no value: $1 ($usage)" ;;
     --harnesses) harnesses=1; shift ;;
     --harnesses=*) die "--harnesses is a flag and takes no value: $1 ($usage)" ;;
+    # Its MEMBER is the next word, unless that is an option.
+    --harness-census)
+      census=1; shift
+      case ${1:-} in -* | '') ;; *) census_member=$1; shift ;; esac ;;
+    --harness-census=?*) census=1; census_member=${1#--harness-census=}; shift ;;
+    --harness-census=) die "--harness-census=: name a member, or give none ($usage)" ;;
     # A flag: with a value it is refused by name, never read as a path.
     --referenced-only=*) die "--referenced-only is a flag and takes no value: $1 ($usage)" ;;
     --why)
@@ -362,8 +403,16 @@ while [ $# -gt 0 ]; do
   esac
 done
 set -- ${args[@]+"${args[@]}"}
+# The census reads every member's text, never a change, and prints no alias.
+if [ "$census" = 1 ]; then
+  [ "$harnesses" = 0 ] || die "--harness-census and --harnesses print different lists ($usage)"
+  [ "$gpu_gated" = 0 ] || die "--harness-census prints no alias, so --gpu-gated has none to filter ($usage)"
+  [ "$referenced_only" = 0 ] || die "--harness-census prints no alias, so --referenced-only has nothing to leave off ($usage)"
+  [ ! -s "$tmp/why" ] || die "--harness-census prints no alias, so --why has none to explain ($usage)"
+  [ $# -eq 0 ] || die "--harness-census reads no change, so it takes no revision, --since or --files: $* ($usage)"
+  mode=census
 # Both rank and explain aliases, which --harnesses does not print.
-if [ "$harnesses" = 1 ]; then
+elif [ "$harnesses" = 1 ]; then
   [ "$gpu_gated" = 0 ] || die "--harnesses and --gpu-gated print different lists ($usage)"
   [ "$referenced_only" = 0 ] || die "--harnesses prints no alias, so --referenced-only has nothing to leave off ($usage)"
   [ ! -s "$tmp/why" ] || die "--harnesses prints no alias, so --why has none to explain ($usage)"
@@ -398,7 +447,9 @@ fi
 
 in_git=0
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 && in_git=1
-if [ "$mode" = files ]; then
+if [ "$mode" = census ]; then
+  : >"$tmp/changed"
+elif [ "$mode" = files ]; then
   printf '%s\n' "${paths[@]}" >"$tmp/changed"
 else
   [ "$in_git" = 1 ] || die "not a git checkout; use --files"
@@ -499,18 +550,76 @@ for my $p (@known) {
   $idx{"$1.exe"}{$p} = 1 if $b =~ /\A(.+)\.ml\z/;
 }
 sub is_script { $_[0] =~ /\.(?:sh|py)\z/ }
-sub resolve {   # a run of path characters -> the paths it, or a part after one of its slashes, names
-  my ($t) = @_;
+sub dir_of { $_[0] =~ m{\A(.*)/} ? $1 : "" }
+sub norm {   # a relative path with its `.` and `..` parts folded; undef above the root
+  my @o;
+  for my $s (split m{/}, $_[0]) {
+    next if $s eq "" || $s eq ".";
+    if ($s eq "..") { return undef unless @o; pop @o } else { push @o, $s }
+  }
+  return join "/", @o;
+}
+sub shared {   # how many trailing parts path P shares with the parts S
+  my ($p, @s) = @_;
+  my @q = split m{/}, $p;
+  my $n = 0;
+  while (@s && @q) {
+    my ($x, $y) = (pop @s, pop @q);
+    last unless $x eq $y || ($n == 0 && $x =~ /\A(.+)\.exe\z/ && $y eq "$1.ml");
+    $n++;
+  }
+  return $n;
+}
+# A run of path characters -> the paths it, or a part after one of its
+# slashes, names; of several, those sharing the most trailing parts with it,
+# or the one at its anchor (the header's rule). FRAG: its first part is no
+# path part; AT: the directory its anchor stands for.
+sub resolve {
+  my ($t, $frag, $at) = @_;
   $t =~ s/\.+\z//;
+  my @s = split m{/}, $t, -1;
   my %r;
   while ($t ne "") {
     $r{$_} = 1 for keys %{$idx{$t} // {}};
     $t =~ s{\A[^/]*/}{} or last;
   }
-  return sort keys %r;
+  my @c = sort keys %r;
+  return @c if @c < 2;
+  shift @s if $frag;
+  if (defined $at) {
+    my $p = norm(join "/", $at, @s);
+    return ($p) if defined $p && $r{$p};
+  }
+  my %n = map { $_ => shared($_, @s) } @c;
+  my ($most) = sort { $b <=> $a } values %n;
+  return grep { $n{$_} == $most } @c;
 }
-sub named_in { my %r; $r{$_} = 1 for map { resolve($_) } $_[0] =~ m{[A-Za-z0-9_./-]+}g; return \%r }
-my (%raw, %names, %loads);
+# The runs of path characters in a line, each [RUN, FRAG, ANCHOR]: FRAG when
+# its first part continues text before it (the header's list of what starts
+# one); ANCHOR `0` or `S` after `$(dirname "$0")` or its `BASH_SOURCE` form,
+# or V after `$V` or `${V}`, when a `/` starts what follows.
+my $self_arg = qr{"?(?:\$0|\$\{0\}|\$BASH_SOURCE|\$\{BASH_SOURCE(?:\[0\])?\})"?};
+sub runs {
+  my ($line) = @_;
+  my @r;
+  while ($line =~ m{([A-Za-z0-9_./-]+)}g) {
+    my ($t, $pre) = ($1, substr($line, 0, $-[1]));
+    my ($frag, $anchor) = (1, undef);
+    if ($pre =~ /\$\z/) {
+      $anchor = $1 if $t =~ m{\A([A-Za-z_]\w*)/};
+    } elsif ($pre =~ /\$\(dirname\s+(?:--\s+)?($self_arg)\)\z/) {
+      my $arg = $1;
+      $anchor = $arg =~ /BASH_SOURCE/ ? "S" : "0" if $t =~ m{\A/};
+    } elsif ($pre =~ /\$\{([A-Za-z_]\w*)\}\z/) {
+      $anchor = $1 if $t =~ m{\A/};
+    } elsif ($pre eq "" || $pre =~ /[\s=(:,<>|;&`\[]\z/ || $pre =~ /(?:\A|[\s=(:,<>|;&`\[])["']\z/) {
+      $frag = 0;
+    }
+    push @r, [$t, $frag, $anchor];
+  }
+  return @r;
+}
+my (%raw, %names, %loads, %assigns, %selfdirs);
 sub raw {
   my ($f) = @_;
   return $raw{$f} if exists $raw{$f};
@@ -518,17 +627,73 @@ sub raw {
   if (-f $f && open my $h, "<", $f) { local $/; $s = <$h> // ""; close $h }
   return $raw{$f} = $s;
 }
-sub names_of { my ($f) = @_; return $names{$f} //= named_in(join "\n", grep { !/^\s*#/ } split /\n/, raw($f)) }
-sub loads_of {
+sub assigns {   # FILE -> {V => how many of its lines may assign V}
+  my ($f) = @_;
+  return $assigns{$f} if $assigns{$f};
+  my %n;
+  for my $line (grep { !/^\s*#/ } split /\n/, raw($f)) {
+    my %v;
+    $v{$_} = 1 for $line =~ /(?:\A|[\s;&|(`])(?:(?:local|export|readonly|declare|typeset)(?:\s+-\w+)*\s+)?([A-Za-z_]\w*)\+?=/g;
+    $v{$_} = 1 for $line =~ /\bfor\s+([A-Za-z_]\w*)\s/g;
+    if ($line =~ /\b(?:read|readarray|mapfile|getopts|unset|printf\s+-v)\b/) { $v{$_} = 1 for $line =~ /([A-Za-z_]\w*)/g }
+    $n{$_}++ for keys %v;
+  }
+  return $assigns{$f} = \%n;
+}
+# FILE -> {V => [`0` or `S`, UPS]} for each V its one assignment sets to the
+# self-directory form, UPS `/..` above it.
+my $self_dir = qr{\$\((?:CDPATH=\s*)?cd\s+(?:--\s+)?"\$\(dirname\s+(?:--\s+)?($self_arg)\)((?:/\.\.)*)"(?:\s*2>\s*/dev/null)?\s*&&\s*pwd(?:\s+-P)?\)};
+sub selfdirs {
+  my ($f) = @_;
+  return $selfdirs{$f} if $selfdirs{$f};
+  my %r;
+  if ($f =~ /\.sh\z/) {
+    for my $line (grep { !/^\s*#/ } split /\n/, raw($f)) {
+      next unless $line =~ /\A\s*(?:(?:local|export|readonly)\s+)?([A-Za-z_]\w*)=("?)$self_dir\2\s*(?:\|\|.*)?\z/;
+      my ($v, $arg, $ups) = ($1, $3, length($4) / 3);
+      $r{$v} = [$arg =~ /BASH_SOURCE/ ? "S" : "0", $ups] if assigns($f)->{$v} == 1;
+    }
+  }
+  return $selfdirs{$f} = \%r;
+}
+# FILE in harness H's program PROG -> {PATH => [LINE, RUN, OWNERS]}: the
+# first run naming each path, and how many paths that run named.
+sub names_of {
+  my ($f, $h, $prog) = @_;
+  return $names{"$f\0$h"} if $names{"$f\0$h"};
+  my $sd = selfdirs($f);
+  my %r;
+  my @l = split /\n/, raw($f);
+  for my $i (0 .. $#l) {
+    next if $l[$i] =~ /^\s*#/;
+    for my $run (runs($l[$i])) {
+      my ($t, $frag, $a) = @$run;
+      my $at;
+      if (defined $a && $f =~ /\.sh\z/) {
+        my $form = $a eq "0" || $a eq "S" ? [$a, 0]
+          : $sd->{$a} && !(grep { $_ ne $f && assigns($_)->{$a} } @$prog) ? $sd->{$a} : undef;
+        $at = norm(join "/", dir_of($form->[0] eq "S" ? $f : $h), ("..") x $form->[1]) if $form;
+      }
+      my @p = resolve($t, $frag, $at);
+      $r{$_} //= [$i + 1, $t, scalar @p] for @p;
+    }
+  }
+  return $names{"$f\0$h"} = \%r;
+}
+sub loads_of {   # FILE -> {SCRIPT => [LINE, RUN, OWNERS]}, as names_of, for what it loads
   my ($f) = @_;
   return $loads{$f} if $loads{$f};
-  my @words;
-  for my $line (split /\n/, raw($f)) {
+  my %r;
+  my @l = split /\n/, raw($f);
+  for my $i (0 .. $#l) {
+    my $line = $l[$i];
+    my @words;
     if ($f =~ /\.sh\z/) {
-      if ($line =~ /^\s*#\s*shellcheck\s.*\bsource=(\S+)/) { push @words, $1; next }
-      next if $line =~ /^\s*#/;
-      # A `.` or `source` command: the rest of its line names what it loads.
-      push @words, $1 if $line =~ /(?:^|[;&|({]|\bthen|\belse|\bdo)\s*(?:\.|source)\s+(.*)/;
+      if ($line =~ /^\s*#\s*shellcheck\s.*\bsource=(\S+)/) { push @words, $1 }
+      elsif ($line !~ /^\s*#/) {
+        # A `.` or `source` command: the rest of its line names what it loads.
+        push @words, $1 if $line =~ /(?:^|[;&|({]|\bthen|\belse|\bdo)\s*(?:\.|source)\s+(.*)/;
+      }
     } elsif ($line =~ /^\s*import\s+([\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*)/) {
       push @words, map { (s/\s.*//sr =~ tr{.}{/}r) . ".py" } split /\s*,\s*/, $1;
     } elsif ($line =~ /^\s*from\s+\.*([\w.]*)\s+import\s+\(?\s*(\w+(?:\s+as\s+\w+)?(?:\s*,\s*\w+(?:\s+as\s+\w+)?)*)/) {
@@ -536,27 +701,33 @@ sub loads_of {
       push @words, "$base.py" if $base ne "";
       push @words, map { ($base ne "" ? "$base/" : "") . (s/\s.*//sr) . ".py" } split /\s*,\s*/, $ns;
     }
+    for my $run (map { runs($_) } @words) {
+      my @p = resolve($run->[0], $run->[1]);
+      $r{$_} //= [$i + 1, $run->[0], scalar @p] for grep { is_script($_) } @p;
+    }
   }
-  my %r;
-  $r{$_} = 1 for grep { is_script($_) } map { resolve($_) } map { m{[A-Za-z0-9_./-]+}g } @words;
   return $loads{$f} = \%r;
 }
 # Each harness's reach, with the step that reached each path: its program (it
 # and what it loads), what that names, and the program of each script named.
+# A step is [FROM, `loads` or `names`, LINE, RUN, OWNERS].
 my %reach;
 for my $h (@members) {
   my %par = ($h => undef);
   my @prog = ($h);
   for (my $i = 0; $i < @prog; $i++) {
-    for my $l (sort keys %{loads_of($prog[$i])}) { next if exists $par{$l}; $par{$l} = [$prog[$i], "loads"]; push @prog, $l }
+    my $ld = loads_of($prog[$i]);
+    for my $l (sort keys %$ld) { next if exists $par{$l}; $par{$l} = [$prog[$i], "loads", @{$ld->{$l}}]; push @prog, $l }
   }
   my @named;
   for my $x (@prog) {
-    for my $z (sort keys %{names_of($x)}) { next if exists $par{$z}; $par{$z} = [$x, "names"]; push @named, $z }
+    my $nm = names_of($x, $h, \@prog);
+    for my $z (sort keys %$nm) { next if exists $par{$z}; $par{$z} = [$x, "names", @{$nm->{$z}}]; push @named, $z }
   }
   for (my $i = 0; $i < @named; $i++) {
     next unless is_script($named[$i]);
-    for my $l (sort keys %{loads_of($named[$i])}) { next if exists $par{$l}; $par{$l} = [$named[$i], "loads"]; push @named, $l }
+    my $ld = loads_of($named[$i]);
+    for my $l (sort keys %$ld) { next if exists $par{$l}; $par{$l} = [$named[$i], "loads", @{$ld->{$l}}]; push @named, $l }
   }
   $reach{$h} = \%par;
 }
@@ -593,7 +764,7 @@ for my $h (@members) {
       push @re, qr/\A$re\z/;
       push @err, "affected: warning: $where: $g matches no file here" unless grep { $_ =~ $re[-1] } @known;
     }
-    push @{$decl{$h}}, { re => \@re, ere => $ere, line => $i + 1 };
+    push @{$decl{$h}}, { re => \@re, globs => [split / /, $globs], ere => $ere, line => $i + 1 };
     push @eres, "$ere\t$where" if defined $ere;
   }
 }
@@ -640,8 +811,29 @@ close $er;
 open my $ee, ">", "$tmp/harness-eres" or fail("cannot write $tmp/harness-eres");
 print $ee "$_\n" for @eres;
 close $ee;
+# The census (the header's): every member's reach, or MEMBER's, one line per
+# reached path or declared glob.
+exit 0 unless ($ARGV[1] // "") eq "census";
+my $only = $ARGV[2];
+fail("--harness-census $only: not a member of tools/test-harnesses.sh --list") if defined $only && !grep { $_ eq $only } @members;
+my @census;
+for my $h (grep { !defined $only || $_ eq $only } @members) {
+  for my $p (keys %{$reach{$h}}) {
+    my $s = $reach{$h}{$p};
+    push @census, join "\t", $h, $p, defined $s ? ($s->[1], "$s->[0]:$s->[2]", $s->[3], $s->[4]) : ("self", "-", "-", "-");
+  }
+  for my $d (@{$decl{$h} // []}) {
+    push @census, join "\t", $h, $_, "declares", "$h:$d->{line}", defined $d->{ere} ? "--only '$d->{ere}'" : "-", "-"
+      for @{$d->{globs}};
+  }
+}
+open my $cs, ">", "$tmp/census" or fail("cannot write $tmp/census");
+print $cs "$_\n" for sort @census;
+close $cs;
 HARNESS
-  perl "$tmp/harness.pl" "$tmp" || exit 2
+  census_args=()
+  [ "$census" = 0 ] || census_args=(census ${census_member:+"$census_member"})
+  perl "$tmp/harness.pl" "$tmp" ${census_args[@]+"${census_args[@]}"} || exit 2
   # The selectors as the harnesses will match them: bash's own `=~` (exit 2 an
   # expression it refuses), as scripts/harness-support.sh's harness_args checks.
   while IFS=$'\t' read -r ere where; do
@@ -651,7 +843,15 @@ HARNESS
   done <"$tmp/harness-eres"
 else
   [ "$harnesses" = 0 ] || die "--harnesses: there is no tools/test-harnesses.sh here to list the harnesses"
+  [ "$census" = 0 ] || die "--harness-census: there is no tools/test-harnesses.sh here to list the harnesses"
   echo "affected: no tools/test-harnesses.sh here, so no harness legs are mapped" >"$tmp/harness-err"
+fi
+if [ "$census" = 1 ]; then
+  cat "$tmp/harness-err" >&2
+  cat "$tmp/census"
+  printf 'affected: harness census: %d line(s) over %d member(s)\n' "$(wc -l <"$tmp/census" | tr -d ' ')" \
+    "$(cut -f1 "$tmp/census" | sort -u | wc -l | tr -d ' ')" >&2
+  exit 0
 fi
 if [ "$harnesses" = 1 ]; then
   cat "$tmp/harness-err" >&2
