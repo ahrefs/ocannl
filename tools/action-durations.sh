@@ -31,6 +31,12 @@
 #                      `.sandbox/<hash>/default/...`), the rows otherwise
 #                      the same and in the same order (`repeat --direct`
 #                      refuses a rule dune ran in a sandbox)
+#   --processes-json   all process rows with PID and trace timestamps, plus trace
+#                      completeness, including when there are no process rows.
+#                      Takes no row selection or table options.
+#   --processes-json-to PATH
+#                      also write that JSON to PATH. The timing table keeps its
+#                      own selection, output and exit status.
 #   -h, --help         this header
 #
 # The trace records no alias membership, so a row names its action by what it
@@ -41,7 +47,8 @@
 # while dune runs) prints `open` for its exit, and its seconds are a lower
 # bound: up to the trace's last timestamp. A trace that ends mid-event is read
 # up to there, with a warning. Exit 0 on a table, 1 when the trace is
-# malformed or holds no (matching) process, 2 on a usage error.
+# malformed or holds no (matching) process (empty JSON coverage succeeds),
+# 2 on a usage error.
 #
 # Paths are shown relative to the build context: the build directory is the
 # trace's own `build_dir` (so `--build-dir`/DUNE_BUILD_DIR traces read alike),
@@ -67,11 +74,13 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-rows=20
+rows=
 prog_re=
 group=
 tsv=
 dirs=
+processes_json=
+json_to=
 trace=
 
 die() {
@@ -83,6 +92,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
   -n)
     [ $# -ge 2 ] || die "-n needs a value"
+    case $2 in '' | *[!0-9]*) die "-n wants a count, got: $2" ;; esac
     rows=$2
     shift 2
     ;;
@@ -104,6 +114,15 @@ while [ $# -gt 0 ]; do
     dirs=1
     shift
     ;;
+  --processes-json)
+    processes_json=1
+    shift
+    ;;
+  --processes-json-to)
+    [ $# -ge 2 ] && [ -n "$2" ] || die "--processes-json-to needs a path"
+    json_to=$2
+    shift 2
+    ;;
   -h | --help)
     sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
@@ -116,23 +135,26 @@ while [ $# -gt 0 ]; do
     ;;
   esac
 done
-case "$rows" in '' | *[!0-9]*) die "-n wants a count, got: $rows" ;; esac
 case "$group" in '' | prog | dir) ;; *) die "--group wants prog or dir, got: $group" ;; esac
 [ -z "$tsv" ] || [ -z "$group" ] || die "--tsv prints rows, not a --group summary"
 [ -z "$dirs" ] || [ -n "$tsv" ] || die "--dirs leads --tsv rows; it needs --tsv"
+[ -z "$processes_json" ] || [ -z "$rows$prog_re$group$tsv$json_to" ] ||
+  die "--processes-json takes no row selection or table options"
+rows=${rows:-20}
 trace=${trace:-$root/_build/trace.csexp}
 [ -f "$trace" ] || die "no trace at $trace (build something first, or name one)"
 
 # exec, so the reader is ONE process: tools/test-run.sh bounds it with a KILL
 # that must reach the parse itself where a process group cannot be signalled
 # (Git Bash), not just a shell whose python would outlive it.
-exec python3 - "$trace" "$rows" "$prog_re" "$group" "$tsv" "$dirs" <<'PY'
+exec python3 - "$trace" "$rows" "$prog_re" "$group" "$tsv" "$dirs" "$processes_json" "$json_to" <<'PY'
+import json
 import os
 import re
 import sys
 
-path, rows, prog_re, group, tsv, dirs = (sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4],
-                                         sys.argv[5], sys.argv[6])
+path, rows, prog_re, group, tsv, dirs, processes_json, json_to = (
+    sys.argv[1], int(sys.argv[2]), *sys.argv[3:])
 try:
     prog_pat = re.compile(prog_re) if prog_re else None
 except re.error as e:
@@ -347,26 +369,6 @@ def exit_text(f):
     return e if isinstance(e, str) else ' '.join(x if isinstance(x, str) else '?' for x in e)
 
 
-started, done = {}, []
-for kind, t, f in events:
-    if f is None or not t or kind[0] != b'process':
-        continue
-    key = (f.get('pid'), t[0])
-    if kind[1] == b'start':
-        started[key] = f
-    elif len(t) == 2:
-        started.pop(key, None)
-        done.append((t[1], exit_text(f), f))
-done += [(max(0, last - key[1]), 'open', f) for key, f in started.items()]
-procs = []
-for ns, ex, f in done:
-    prog = os.path.basename(f.get('prog', '')) if isinstance(f.get('prog'), str) else '?'
-    if prog_pat is None or prog_pat.search(prog):
-        procs.append((ns / 1e9, ex, prog, f))
-if not procs:
-    sys.exit('action-durations.sh: no process in %s%s (a cached build starts none)'
-             % (path, ' matches --prog' if prog_pat else ''))
-
 def target_texts(f):
     targets = f.get('target_files')
     out = []
@@ -376,6 +378,55 @@ def target_texts(f):
             out.append(rel if alias is None else '@%s%s' % ('' if rel == '.' else rel + '/', alias))
     return out
 
+
+started, done = {}, []
+for kind, t, f in events:
+    if f is None or not t or kind[0] != b'process':
+        continue
+    key = (f.get('pid'), t[0])
+    if kind[1] == b'start':
+        started[key] = f
+    elif len(t) == 2:
+        started.pop(key, None)
+        done.append((t[0], t[1], exit_text(f), f))
+done += [(key[1], max(0, last - key[1]), 'open', f) for key, f in started.items()]
+if processes_json or json_to:
+    if not events:
+        sys.exit('action-durations.sh: no complete trace event')
+    processes = []
+    for start, duration, ex, f in sorted(done, key=lambda p: p[0]):
+        pid = f.get('pid')
+        directory = f.get('dir')
+        prog = f.get('prog')
+        processes.append({
+            'pid': int(pid) if isinstance(pid, str) and pid.isascii() and pid.isdecimal() else None,
+            'start_ns': start, 'end_ns': start + duration if ex != 'open' else None,
+            'program': os.path.basename(prog) if isinstance(prog, str) else '?',
+            'directory': in_context(directory)[1] if isinstance(directory, str) else '?',
+            'action': action(f)[1],
+            'targets': target_texts(f),
+        })
+    if truncated is not None:
+        trace_status = 'truncated'
+    else:
+        trace_status = 'complete' if events[-1][0] == (b'config', b'exit') else 'incomplete'
+    report = {'trace_status': trace_status, 'processes': processes}
+    if processes_json:
+        print(json.dumps(report))
+        sys.exit(0)
+    try:
+        with open(json_to, 'w', encoding='utf-8') as out:
+            json.dump(report, out)
+    except OSError:
+        print('action-durations.sh: could not write process JSON', file=sys.stderr)
+procs = []
+for _, ns, ex, f in done:
+    prog = os.path.basename(f.get('prog', '')) if isinstance(f.get('prog'), str) else '?'
+    if prog_pat is None or prog_pat.search(prog):
+        procs.append((ns / 1e9, ex, prog, f))
+if not procs:
+    sys.exit('action-durations.sh: no process in %s%s (a cached build starts none)'
+             % (path, ' matches --prog' if prog_pat else ''))
 
 if tsv:
     procs.sort(key=lambda p: (-p[0], p[2], action(p[3])[1]))

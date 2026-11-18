@@ -38,6 +38,9 @@
   (glob_files_rec runners/*.py)
   (glob_files *.sh)
   ../scripts/process-group.sh
+  ../tools/action-durations.sh
+  ../tools/gpu-memory-census-trace.sh
+  ../tools/gpu-memory-census.py
   (glob_files_rec runners/*.sh)
   fixtures/DIGESTS.txt
   ../ocannl_config.reference
