@@ -194,18 +194,24 @@ let copies_of s =
               })
   | _ -> []
 
+(* How a stanza's `(modules …)` field claims the module [m]: by name, through dune's default set, or
+   not at all. Choosing among a directory's stanzas, a [`Named] claim wins: dune's default set is
+   what no explicit list claims. *)
+let stanza_claims s m =
+  match Scan.explicit_modules s.sexp with
+  | Scan.Named modules ->
+      if List.mem (List.map modules ~f:String.lowercase) m ~equal:String.equal then `Named else `No
+  | Scan.Default_less excluded ->
+      if List.mem (List.map excluded ~f:String.lowercase) m ~equal:String.equal then `No
+      else `Default
+
 (* Whether a library of the copy's own directory compiles [module_]. *)
 let compiled_by ~all copy module_ =
   List.exists all ~f:(fun o ->
       String.equal o.dune_file copy.copy_stanza.dune_file
       && String.equal o.dir copy.copy_stanza.dir
       && Option.is_some (library_name o)
-      &&
-      match Scan.explicit_modules o.sexp with
-      | Scan.Named modules ->
-          List.mem (List.map modules ~f:String.lowercase) module_ ~equal:String.equal
-      | Scan.Default_less excluded ->
-          not (List.mem (List.map excluded ~f:String.lowercase) module_ ~equal:String.equal))
+      && not (Poly.equal (stanza_claims o module_) `No))
 
 (* The libraries a stanza declares, each with whether it re-exports it: its `(libraries …)` atoms, a
    `(re_export …)`'s, and the libraries a `select` condition requires, since the condition is what
@@ -392,21 +398,11 @@ let mirrors ~fail ~exceptions ~all ~packages ~backends ~copies =
                    (Option.value (Scan.head o.sexp) ~default:"")
                    ~equal:String.equal)
         in
-        let owns_by_name o =
-          match Scan.explicit_modules o.sexp with
-          | Scan.Named ms -> List.mem (List.map ms ~f:String.lowercase) m ~equal:String.equal
-          | Scan.Default_less _ -> false
-        in
-        let owns_by_default o =
-          match Scan.explicit_modules o.sexp with
-          | Scan.Named _ -> false
-          | Scan.Default_less excluded ->
-              not (List.mem (List.map excluded ~f:String.lowercase) m ~equal:String.equal)
-        in
         (* Dune's default set is what no explicit list claims. *)
-        match List.filter bearing ~f:owns_by_name with
+        let claiming how = List.filter bearing ~f:(fun o -> Poly.equal (stanza_claims o m) how) in
+        match claiming `Named with
         | _ :: _ as named -> List.map named ~f:(fun o -> (o, m, false))
-        | [] -> List.filter bearing ~f:owns_by_default |> List.map ~f:(fun o -> (o, m, false)))
+        | [] -> List.map (claiming `Default) ~f:(fun o -> (o, m, false)))
   in
   let used = Hash_set.create (module String) in
   let exception_key stand_in library = stand_in ^ " " ^ library in
