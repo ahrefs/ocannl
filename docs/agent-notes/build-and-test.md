@@ -1240,8 +1240,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   whether the full run passed), `ALONE SKIP` (a check skipped alone that the full run decided) and
   `ALONE MISS` (the selection did not run exactly the legs meant), and `CHECKOUT CHANGED` for any run
   that leaves a tracked or untracked file behind (a later run could pass on it); with no argument it takes every
-  member of `tools/test-harnesses.sh` whose gates list a leg. CI runs it on the daily schedule and
-  on a dispatch (job `harness-legs-alone`), since it costs a run per leg; run it locally, slot-wrapped,
+  member of `tools/test-harnesses.sh` whose gates list a leg. The scheduled and dispatched
+  `harness-legs-alone` matrix deals candidates round-robin in `tools/test-harnesses.sh --list`
+  order with `--shard K/N` (gh-ocannl-2353). `tools/test-harness-legs-alone.sh` compares the
+  shards with the unsharded fixture, and `ci_matrix.sh` checks the workflow supplies every
+  shard once and leaves siblings running after a failure. Run it locally, slot-wrapped,
   on a harness whose legs you restructured. `HARNESS --list-legs` prints each gate (`LEG  NAME`)
   without running a leg body. Every gate also checks its leg's NAME, in every run: a name selects
   one leg; a leading leg number (`80:`, `2-3:`, `59-63, 66:`) numbers one leg, a further leg beside
@@ -5313,6 +5316,8 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   that branch without `expected_sha`, so the checkout is the branch head and the workflow and the
   tree agree, and delete the branch afterwards. That reaches back to the first `ci.yml` declaring
   `workflow_dispatch` (`c83d67fbb`, 2026-08-12).
+- The `harness-legs-alone` job's `--shard` call requires a checkout containing gh-ocannl-2353.
+  To include that job when testing an older checkout, use the branch-dispatch route above.
 - `./.github/actions/pin-revisions`: 2026-08-29, lukstafi/ocannl-staging#535.
 - `./.github/actions/setup-ocaml-debs`: 2026-10-23, lukstafi/ocannl-staging#1353.
 - `./.github/actions/apt-debs-cache`: 2026-10-23, lukstafi/ocannl-staging#1359.

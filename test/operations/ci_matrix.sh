@@ -11,6 +11,10 @@
 # Step-order trace protection reads direct one-line dune commands only, including
 # commands after the target build in its own step. Calls into scripts/actions
 # (even scripts known to call dune) are outside this check; their bodies are not read.
+# The harness shard check reads one literal JSON-list matrix axis with
+# fail-fast disabled, and checks an unconditional step with a direct env
+# binding and command.
+# Expressions, extra axes, and alternate command forms are outside that grammar.
 # Named legs are independent; shared readers/setup run before each selected leg.
 # The renamed-gate fixture reads only top-level literal `harness_leg_run 'name'
 # run_contract` lines with lowercase, digit and hyphen names, and replaces one
@@ -376,15 +380,19 @@ def workflow_script(step):
     return '\n'.join(line[indent:] for line in lines).rstrip('\n') + '\n'
 
 
+def job_block(text, job):
+    block = re.search(r'^  ' + re.escape(job) + r':\n(.*?)(?=^  [A-Za-z_][A-Za-z0-9_-]*:|\Z)',
+                      text, re.M | re.S)
+    assert block, 'job missing: ' + job
+    return block[1]
+
+
 # Step-order checks (gh-ocannl-1919). Read the same small YAML dialect as
 # workflow_step/script: four- or six-space step lists, inline commands or literal blocks.
 # Inspect direct dune commands, not commands hidden inside scripts/actions; the
 # main check conservatively covers every preceding step in the matrix run job.
 def workflow_steps(text, job):
-    block = re.search(r'^  ' + re.escape(job) + r':\n(.*?)(?=^  [A-Za-z_][A-Za-z0-9_-]*:|\Z)',
-                      text, re.M | re.S)
-    assert block, 'job missing: ' + job
-    section = re.search(r'^    steps:\n(.*)', block[1], re.M | re.S)
+    section = re.search(r'^    steps:\n(.*)', job_block(text, job), re.M | re.S)
     assert section, 'steps key missing: ' + job
     first = re.search(r'^( +)- ', section[1], re.M)
     assert first and len(first[1]) in (4, 6), 'unsupported step indentation: ' + job
@@ -491,6 +499,24 @@ def rejects_order(check, text, label, reason):
         raise AssertionError('accepted mutant: ' + label)
 
 
+def harness_shards(text):
+    job = job_block(text, 'harness-legs-alone')
+    axis = re.search(r'^    strategy:\n      fail-fast: false\n      matrix:\n'
+                     r'        shard: (\[[^\n]*\])\n(?=    \S)', job, re.M)
+    assert axis, 'harness matrix needs one literal shard axis and fail-fast: false'
+    shards = json.loads(axis[1])
+    n = len(shards)
+    assert n > 1 and sorted(shards) == sorted('%d/%d' % (k, n) for k in range(1, n + 1)), \
+        'harness shards must cover 1/N..N/N exactly once: %s' % shards
+    step = workflow_step(job, 'Run every gated leg and group alone')
+    assert step.rstrip() == (
+        '      env:\n'
+        '        HARNESS_SHARD: ${{ matrix.shard }}\n'
+        '      run: tools/harness-legs-alone.sh --shard "$HARNESS_SHARD"'
+    ), 'every harness shard needs an unconditional checker step'
+    return axis[1], shards
+
+
 if leg == 'matrix':
     controls(source)
     # The side-job list is read, not restated: a new job carrying the fallback
@@ -501,7 +527,13 @@ if leg == 'matrix':
     scheduled_guard = re.search(r'^  harness-legs-alone:\n(    if: .*\n)', source, re.M)[1]
     assert scheduled_guard.startswith('    if: ' + SCHEDULED_GUARD), 'scheduled side-job guard moved'
     controls(extra_job('new-scheduled-job', scheduled_guard))
-
+    axis, shards = harness_shards(source)
+    rejects_order(harness_shards, source.replace('shard: ' + axis, 'shard: ' + json.dumps(shards[:-1]), 1),
+                  'a missing harness shard', 'harness shards must cover')
+    checker_step = '    - name: Run every gated leg and group alone\n'
+    skipped_shard = checker_step + "      if: matrix.shard != '%s'\n" % shards[0]
+    rejects_order(harness_shards, source.replace(checker_step, skipped_shard, 1),
+                  'a checker step skipped on one shard', 'needs an unconditional checker step')
 
     print('PASS per PR ci.yml runs the Dune-floor promotion harnesses and the CPU-torch tests, and nothing else')
     print('PASS ci.yml runs per PR, unfiltered, and has no push trigger')
