@@ -894,7 +894,7 @@ let () =
         Float.is_inf best_ms
         &&
         match rb.Autotune.outcome with
-        | Autotune.Searched | Autotune.Cache_replay -> true
+        | Autotune.Searched | Autotune.Searched_untimed | Autotune.Cache_replay -> true
         | _ -> false)
     | _ -> false);
   records_when_clean ~identity:persisted6.identity ~failed:failed6 ~clean:clean6

@@ -34,10 +34,12 @@ let completed (r : Autotune.report) =
 let replayed (r : Autotune.report) =
   match r.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false
 
-(* The state a completed search names, by whether it timed anything (gh-ocannl-2310): one whose
-   every window host contention refused completed having timed nothing. *)
+(* The state a completed search names (gh-ocannl-2310): one whose every window host contention
+   refused completed having timed nothing, which is the only way this test's searches may time
+   nothing -- an uncontended search that timed nothing still expects ["searched"], and fails. *)
 let searched_name (r : Autotune.report) =
-  if r.Autotune.candidates_timed = 0 then "searched-untimed" else "searched"
+  if r.Autotune.timings_contended > 0 && r.Autotune.candidates_timed = 0 then "searched-untimed"
+  else "searched"
 
 let approx_tol _ = 1e-4
 

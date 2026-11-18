@@ -122,7 +122,9 @@ let () =
          %!"
         r.Autotune.timings_contended r.timings_unreadable r.timings_unbatched
         (Autotune.contention_refusals r) r.candidates_contended r.candidates_timed;
-      p "the search completed" (match r.outcome with Autotune.Searched -> true | _ -> false);
+      (* Timed or not: a loaded host may refuse every window the seam does not (gh-ocannl-2310). *)
+      p "the search completed"
+        (match r.outcome with Autotune.Searched | Autotune.Searched_untimed -> true | _ -> false);
       p "default_refused" r.default_refused;
       p "every started retry is retained in the search report"
         (r.timings_retried = List.length !retried);

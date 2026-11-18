@@ -1958,8 +1958,9 @@ files.
   on Metal its untuned compile binds none either (`test/operations/autotune_nothing_timed` pins
   both). To force the same all-refused census on cc, wrap `Autotune.Context_driver` and raise
   `Cause_at (Transform, Not_dispatched _)` from every candidate compile's `lowered_transform`
-  after the inner one returns, as that test does. On CPU backends the serial form runs at full single-core speed and is still
-  timed. When timing anything else through this seam, price the serial form before dispatching it.
+  after the inner one returns, as that test does. On CPU backends the serial form runs at full
+  single-core speed and is still timed. When timing anything else through this seam, price the
+  serial form before dispatching it.
 - **What a search refuses or dedups costs no codegen** (gh-ocannl-1340): `compile_candidate_gated`
   decides both verdicts inside the lowered transform, on the forms it is about to return (the
   digest is already computed there, before codegen forces placements), and unwinds with a typed
