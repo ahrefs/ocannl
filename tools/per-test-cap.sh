@@ -28,6 +28,17 @@ TEST_CAP_DEFAULT=1500
 # summed into a wall-time prediction; the per-box evidence stays in the PR.
 SLOW_RUN_CAP_DEFAULT=$((4 * 60 * 60))
 
+# The training integrations' batch budget (gh-ocannl-2290), for a test-run
+# batch reaching the `train` aliases but not `@slow`. They serialize on the
+# training lock, so they add up rather than overlap the runtest batch: a full
+# cc `build @runtest @train -j 4` passed on mac-studio and macbook-pro in at
+# most ~1.7ks (2026-11-16/17, 43 runs), but tuf's cc runs took 3696s with no
+# other full suite on the box and 4600s beside three; three more under two
+# co-tenants, and one on minix with none, were cut at the former 3600s default.
+# Two hours is ~1.56x the slowest pass and ~1.95x tuf's unloaded wall. Not a
+# duration prediction; the per-box walls are in staging's PR for gh-ocannl-2290.
+TRAIN_RUN_CAP_DEFAULT=$((2 * 60 * 60))
+
 # Whether dune arguments reach the slow tests, which the default leaves to the
 # run's own cap; prints the first argument that does. Arguments after dune's
 # own `--` are the program's, not targets.
@@ -37,6 +48,23 @@ test_cap_reaches_slow() { # dune-argv...; 0 (printing the target) iff one reache
     case $arg in
       --) return 1 ;;
       @slow | @@slow | @*/slow | @@*/slow | @slow-* | @@slow-* | @*/slow-* | @@*/slow-*)
+        printf '%s' "$arg"
+        return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# Whether dune arguments reach the training integrations (`@train`, a
+# directory's `train`, a `train-NAME` member), which tools/test-run.sh gives
+# TRAIN_RUN_CAP_DEFAULT; prints the first argument that does. As for
+# test_cap_reaches_slow, arguments after dune's own `--` are not targets.
+test_cap_reaches_train() { # dune-argv...; 0 (printing the target) iff one reaches @train
+  local arg
+  for arg; do
+    case $arg in
+      --) return 1 ;;
+      @train | @@train | @*/train | @@*/train | @train-* | @@train-* | @*/train-* | @@*/train-*)
         printf '%s' "$arg"
         return 0 ;;
     esac

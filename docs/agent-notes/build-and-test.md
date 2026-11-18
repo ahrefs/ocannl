@@ -5477,7 +5477,10 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   receipt cannot stand in for a launch that failed before recording one. A refusal leaves
   the leg verdict intact. Check readiness with `tools/owed-run.sh check <head sha>
   <need>...` from a checkout with that head. Records accumulate on the head's ref and the
-  reader takes their union.
+  reader takes their union. A run naming a `train` alias gets the two-hour training cap by
+  itself (`plan` prints `run cap: 7200s (the training default`); an explicit `--cap` still
+  wins, and splitting the combined run into a `build @runtest` and a `build @train` record is
+  an equivalent way through (gh-ocannl-2290).
 - **Recovery.** After a local run or if the hook did not publish, use
   `tools/owed-run.sh record <run dir>` from the run's worktree (`writer=record`). If that box
   cannot push, use `record <run dir> --print` there and `tools/owed-run.sh add '<the line>'`
@@ -5824,7 +5827,12 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
 
 - Slow-suite budgets (gh-ocannl-2091): `SLOW_RUN_CAP_DEFAULT` in `tools/per-test-cap.sh`
   owns the four-hour budget shared by test-run batches naming slow aliases and sweep units
-  launched with `--slow`. Test-run otherwise defaults to one hour, sweep to 90 minutes.
+  launched with `--slow`. A test-run batch reaching the training aliases instead (`@train`, a
+  directory's `train`, a `train-NAME` member; `test_cap_reaches_train`, dune's `--` respected)
+  gets `TRAIN_RUN_CAP_DEFAULT`, two hours (gh-ocannl-2290): the members serialize on the
+  training lock, and tuf's full cc `build @runtest @train -j 4` took 3696 s with no other full
+  suite on the box and 4600 s beside three, where mac-studio and macbook-pro took at most 1.7 ks.
+  Test-run otherwise defaults to one hour, sweep to 90 minutes.
   Explicit caps win, including 0; `plan` names the cap's source. Selection precedes the
   supervisor and includes building and resolution. `tools/machine-verify.sh` gives the same
   budget to each command of a `--test`/`--record-golden` alias that `test_cap_reaches_slow`
