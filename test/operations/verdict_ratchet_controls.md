@@ -985,15 +985,18 @@ baseline (`20261118T022430Z-49505`; the five local-review rows ran on baseline `
 
 The leg reader follows a leg that is the result of another source's function (M.f applied, M a
 module the ratchet's index gives a corpus source for, or a structure in scope) into that function's
-body, with the application's arguments bound. Each row also states how
+body, with the application's arguments bound; and the ratchet refuses every leg claim the reader
+leaves uncompared unless `exempt_uncompared_legs` names it, stale-checked. Each row also states how
 many claims were compared, as the gh-ocannl-1893 rows do. Every run used tools/mutation-run.sh
---batch with the focused alias on mac-studio (M4 Max), on a green baseline (`20261118T190247Z-40835`), and restored the source
+--batch with the focused alias on mac-studio (M4 Max), on a green baseline (`verdict_scan.ml`:
+`20261118T190247Z-40835`; `verdict_ratchet.ml`: `20261118T190602Z-60340`), and restored the source
 byte for byte.
 
 | Mechanism | Mutation | Controls | Run |
 |---|---|---|---|
-| Another source's function is its body, the application's arguments bound | `verdict_scan.ml`: no qualified function followed | Failed: `accepts a leg another source's function returns, its sub-leg gated on an invariant`; `refuses a leg another source's function returns, its sub-leg gated on the rows handed in`; `refuses a leg a caller builds by another source's function from the rows it hands in`, each then uncompared, as the corpus's 13 `Ll_test.cuda_arm_leg` sites are | `20261118T190312Z-64215` |
+| Another source's function is its body, the application's arguments bound | `verdict_scan.ml`: no qualified function followed | Failed: `accepts a leg another source's function returns, its sub-leg gated on an invariant`; `refuses a leg another source's function returns, its sub-leg gated on the rows handed in`; `refuses a leg a caller builds by another source's function from the rows it hands in`, each then uncompared, as the corpus's 13 `Ll_test.cuda_arm_leg` sites are, refused | `20261118T190312Z-64215` |
 | A later include in the defining source leaves the function uncompared | `verdict_scan.ml`: no include read as rebinding | Failed: `names a leg uncompared whose function a later include in its source may rebind` | `20261118T190400Z-88099` |
+| An uncompared leg claim outside its exemption, and a stale exemption, are refused | `verdict_ratchet.ml`: the uncompared refusal, then the stale one, fails nothing | Failed: `refuses a leg claim it leaves uncompared outside its exemption, and a stale exemption`, under each | `20261118T190722Z-91178`, `20261118T190828Z-51974` |
 | A module no source is compiled as leaves the leg uncompared | none: the boundary row, read by the rows above | `names a leg uncompared that is the result of a function of a module no source defines` stays green under every mutation | the runs above |
 
 ## gh-ocannl-1470 mutation runs

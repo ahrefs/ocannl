@@ -5582,7 +5582,7 @@ let refuse_skip_list ~fail ~source (site : Scan.skip_list) =
        | Scan.Skip_run n -> Printf.sprintf "applies %d skips in one branch" n)
        site.Scan.first_label)
 
-let stale_skip_list_exemptions ~exemptions ~found =
+let stale_counted_exemptions ~exemptions ~found =
   List.filter_map exemptions ~f:(fun (key, sites, _) ->
       let count = Option.value (Hashtbl.find found key) ~default:0 in
       if count = sites then None
@@ -5597,6 +5597,37 @@ let refuse_stale_skip_lists ~fail stale_skip_lists =
           added under an exempted key needs its own exemption, a removed one drops it from \
           exempt_skip_lists: %s"
          (String.concat ~sep:", " (Set.to_list stale_skip_lists)))
+
+(* gh-ocannl-2336: the leg claims the gate reader leaves UNCOMPARED, pinned. A complete leg claim
+   whose leg or make function lies outside [Verdict_scan.gate_census]'s model is named with the
+   reason the reader derives and compared with nothing, so its gate could read the claim's
+   population unseen: each one is refused, unless exempted here by its source and that derived
+   reason, with the number of sites the key covers and why the site stays outside the reader. The
+   count is held as {!exempt_skip_lists}' is: a site added under an exempted key is refused, as is
+   one removed. *)
+let exempt_uncompared_legs = []
+let uncompared_leg_key ~source (leg : Scan.unread_leg) = source ^ ": " ^ leg.Scan.why
+
+let refuse_uncompared_leg ~fail ~source (leg : Scan.unread_leg) =
+  fail
+    (Printf.sprintf
+       "%s:%d applies the leg claim `%s`, whose leg or make function the gate reader cannot follow \
+        because %s, so its gate is compared with nothing and may read the claim's population \
+        unseen (gh-ocannl-2336). Build the leg where the reader follows it -- a `Verdict.leg` or \
+        `Verdict.sub_leg` bound to a name, or the result of a function of a test source, applied \
+        where every application is seen -- or extend Verdict_scan.gate_census; failing both, \
+        exempt the site in verdict_ratchet.ml's exempt_uncompared_legs by its source and this \
+        reason, with why it stays outside the reader"
+       source leg.Scan.leg_line leg.Scan.leg_form leg.Scan.why)
+
+let refuse_stale_uncompared_legs ~fail stale =
+  if not (Set.is_empty stale) then
+    fail
+      (Printf.sprintf
+         "exempted uncompared leg claims whose sites no longer number what their exemption says -- \
+          a site added under an exempted key needs its own exemption, a removed one drops it from \
+          exempt_uncompared_legs: %s"
+         (String.concat ~sep:", " (Set.to_list stale)))
 
 (* The skip-list reader over one source, its failures told apart as {!read_gates} tells the gate
    reader's. *)
@@ -5808,12 +5839,12 @@ let run_leg_and_skip_list_refusal_control () =
      so the production table being empty cannot leave the comparison untested. *)
   let exemptions = [ ("fixture.ml:claim", 1, "synthetic control") ] in
   let counts n = Hashtbl.of_alist_exn (module String) [ ("fixture.ml:claim", n) ] in
-  let stale = stale_skip_list_exemptions ~exemptions ~found:(counts 2) in
+  let stale = stale_counted_exemptions ~exemptions ~found:(counts 2) in
   let counts_compared =
     Set.equal stale (Set.singleton (module String) "fixture.ml:claim (exempted 1, found 2)")
-    && Set.is_empty (stale_skip_list_exemptions ~exemptions ~found:(counts 1))
+    && Set.is_empty (stale_counted_exemptions ~exemptions ~found:(counts 1))
     && Set.equal
-         (stale_skip_list_exemptions ~exemptions ~found:(Hashtbl.create (module String)))
+         (stale_counted_exemptions ~exemptions ~found:(Hashtbl.create (module String)))
          (Set.singleton (module String) "fixture.ml:claim (exempted 1, found 0)")
   in
   refuse_stale_skip_lists stale ~fail:(fun _ ->
@@ -5830,6 +5861,47 @@ let run_leg_and_skip_list_refusal_control () =
   ( "refuses a leg claim it cannot complete, a planted hand-written skip list, a skip-list reader \
      that raised, and a stale exemption",
     !refused_leg && !refused_list && !refused_raise && !refused_stale && counts_compared )
+
+(* The wiring from an uncompared leg claim outside {!exempt_uncompared_legs}, and from a stale
+   exemption there, to their failures (gh-ocannl-2336), exercised as
+   {!run_leg_and_skip_list_refusal_control} exercises the skip lists'. *)
+let run_uncompared_leg_refusal_control () =
+  let source = "test/operations/verdict_ratchet.ml" in
+  let uncompared_format =
+    "%s:%d applies the leg claim `%s`, whose leg or make function the gate reader cannot follow \
+     because %s, so its gate is compared with nothing and may read the claim's population unseen \
+     (gh-ocannl-2336). Build the leg where the reader follows it -- a `Verdict.leg` or \
+     `Verdict.sub_leg` bound to a name, or the result of a function of a test source, applied \
+     where every application is seen -- or extend Verdict_scan.gate_census; failing both, exempt \
+     the site in verdict_ratchet.ml's exempt_uncompared_legs by its source and this reason, with \
+     why it stays outside the reader"
+  and stale_format =
+    "exempted uncompared leg claims whose sites no longer number what their exemption says -- a \
+     site added under an exempted key needs its own exemption, a removed one drops it from \
+     exempt_uncompared_legs: %s"
+  in
+  let refused_leg = ref false and refused_stale = ref false in
+  let fixture =
+    List.find_map_exn gate_population_controls ~f:(fun (found, source, _) ->
+        if
+          String.equal found
+            "names a leg handed in as a parameter uncompared rather than counting it read"
+        then Some source
+        else None)
+  in
+  List.iter (Scan.gate_census fixture).Scan.uncompared_legs
+    ~f:
+      (refuse_uncompared_leg ~source:"fixture.ml" ~fail:(fun _ ->
+           refused_leg := true;
+           Test_scan.Refusal_control_manifest.observe_failure ~source ~format:uncompared_format));
+  let exemptions = [ ("fixture.ml: why", 1, "synthetic control") ] in
+  refuse_stale_uncompared_legs
+    (stale_counted_exemptions ~exemptions ~found:(Hashtbl.create (module String)))
+    ~fail:(fun _ ->
+      refused_stale := true;
+      Test_scan.Refusal_control_manifest.observe_failure ~source ~format:stale_format);
+  ( "refuses a leg claim it leaves uncompared outside its exemption, and a stale exemption",
+    !refused_leg && !refused_stale )
 
 (* {1 A gate is a skip, not a disjunct of the claim (gh-ocannl-1310)}
 
@@ -6730,6 +6802,13 @@ let () =
       (List.map exempt_skip_lists ~f:(fun (key, sites, _) -> (key, sites)))
   in
   let skip_lists_exempted = Hashtbl.create (module String) in
+  let uncompared_offenders = ref 0 in
+  let uncompared_exemptions =
+    Map.of_alist_exn
+      (module String)
+      (List.map exempt_uncompared_legs ~f:(fun (key, sites, _) -> (key, sites)))
+  in
+  let uncompared_exempted = Hashtbl.create (module String) in
   let tolerance_offenders = ref 0 and parity_sites = ref 0 in
   let floor_offenders = ref 0 and literal_floors = ref 0 in
   let floor_exemptions = Map.of_alist_exn (module String) exempt_floors in
@@ -6749,7 +6828,11 @@ let () =
     @ run_line_break_controls ()
     @ [ run_line_break_refusal_control () ]
     @ run_gate_population_controls () @ run_index_controls ()
-    @ [ run_gate_refusal_control (); run_leg_and_skip_list_refusal_control () ]
+    @ [
+        run_gate_refusal_control ();
+        run_leg_and_skip_list_refusal_control ();
+        run_uncompared_leg_refusal_control ();
+      ]
     @ [ run_claim_reader_refusal_control (); run_matrix_reader_control () ]
     @ run_folded_gate_controls ()
     @ [ run_folded_gate_refusal_control () ]
@@ -6808,7 +6891,12 @@ let () =
       List.iter gates.Scan.uncompared_legs ~f:(fun (leg : Scan.unread_leg) ->
           uncompared_sites :=
             Printf.sprintf "  %s:%d %s: %s" source leg.leg_line leg.leg_form leg.why
-            :: !uncompared_sites);
+            :: !uncompared_sites;
+          let key = uncompared_leg_key ~source leg in
+          if Map.mem uncompared_exemptions key then Hashtbl.incr uncompared_exempted key
+          else (
+            Int.incr uncompared_offenders;
+            refuse_uncompared_leg ~fail ~source leg));
       List.iter gates.Scan.unread_legs ~f:(fun leg ->
           Int.incr gate_offenders;
           refuse_unread_leg ~fail ~source leg);
@@ -6933,6 +7021,12 @@ let () =
   else
     List.iter exempt_skip_lists ~f:(fun (key, sites, why) ->
         printf "  %s (%d site%s) -- %s\n" key sites (if sites = 1 then "" else "s") why);
+  printf "\nUncompared leg claims exempted, with the reason each stays outside the gate reader:\n";
+  if List.is_empty exempt_uncompared_legs then
+    printf "  (none: every complete leg claim is followed to its gates)\n"
+  else
+    List.iter exempt_uncompared_legs ~f:(fun (key, sites, why) ->
+        printf "  %s (%d site%s) -- %s\n" key sites (if sites = 1 then "" else "s") why);
   printf "\nLiteral floors below one exempted, with the reason each keeps its floor:\n";
   List.iter exempt_floors ~f:(fun (key, why) -> printf "  %s -- %s\n" key why);
   printf "\nSynthetic helper-rule controls:\n";
@@ -6963,9 +7057,13 @@ let () =
          (String.concat ~sep:", " (Set.to_list stale)));
   refuse_stale_quantified ~fail stale_quantified;
   let stale_skip_lists =
-    stale_skip_list_exemptions ~exemptions:exempt_skip_lists ~found:skip_lists_exempted
+    stale_counted_exemptions ~exemptions:exempt_skip_lists ~found:skip_lists_exempted
   in
   refuse_stale_skip_lists ~fail stale_skip_lists;
+  let stale_uncompared_legs =
+    stale_counted_exemptions ~exemptions:exempt_uncompared_legs ~found:uncompared_exempted
+  in
+  refuse_stale_uncompared_legs ~fail stale_uncompared_legs;
   let stale_floors =
     List.filter_map exempt_floors ~f:(fun (key, _) ->
         let found = Option.value (Hashtbl.find floors_exempted key) ~default:0 in
@@ -7153,6 +7251,7 @@ let () =
   Verdict.p "and the claim-name resolver resolves every leg constructor Verdict declares"
     resolves_every_leg_constructor;
   Verdict.p "and it compared the gates and populations of leg claims" (!leg_sites > 0);
+  Verdict.p "no leg claim goes uncompared outside exempt_uncompared_legs" (!uncompared_offenders = 0);
   Verdict.p "no claim folds a run-constant gate into its value" (!folded_offenders = 0);
   Verdict.p "no source writes a skip list by hand" (!skip_list_offenders = 0);
   Verdict.p "and the skip-list reader read skips" (!skips_read > 0);
@@ -7177,7 +7276,8 @@ let () =
   Verdict.p "the scan found every literal planted for it" (Set.is_empty missing);
   Verdict.p "every exemption on this check's lists is still earned"
     (Set.is_empty unread && Set.is_empty stale && Set.is_empty stale_quantified
-   && Set.is_empty stale_skip_lists);
+   && Set.is_empty stale_skip_lists
+    && Set.is_empty stale_uncompared_legs);
   (* Over the exemption lists, which is where a shared key would have to be written. *)
   Verdict.p_empty "every exempted claim-shaped literal is one source site, not a shared key"
     ~over:(exempt_sites @ exempt_computed_sites)

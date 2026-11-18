@@ -2713,7 +2713,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   BOUNDED model of what runs, stated once in `verdict_scan.ml`'s skip-list header (*The model*):
   a function value or `lazy` is deferred unless a collection function calls it back, and a
   construct outside the model is read conservatively -- no skip list, an uncompared leg -- never
-  refused. Extending the model starts in that header. Since gh-ocannl-1893 item 2 the model reads
+  refused as a finding; an uncompared leg is refused as a gate nothing read, unless
+  `exempt_uncompared_legs` names it (gh-ocannl-2336, below). Extending the model starts in that header. Since gh-ocannl-1893 item 2 the model reads
   DEFERRED SKIP VALUES where they run: a skip bound to a name of any spelling, a named skip wrapper
   at a complete application (`let skip_both () = skipped "a"; skipped "b"` run in a branch is a
   skip run), a stored partial iteration where its name completes it, a named `lazy` where it is
@@ -2938,7 +2939,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   arguments bound as a local function's is, from the source the index gives as compiled under that
   module -- the speller's own directory's, else every one of the name (gh-ocannl-2336). A local
   function or `lazy` a make function runs is its run code. What stays uncompared -- named site by
-  site on the ratchet's stderr -- is a function some application of which the reader cannot see (handed on as a value, a caller
+  site on the ratchet's stderr, and REFUSED unless `exempt_uncompared_legs` names its source and
+  the reader's reason with a site count and why it stays outside (stale-checked both ways, as
+  `exempt_skip_lists` is), so a regression that moves sites back onto the boundary turns the
+  ratchet red (gh-ocannl-2336) -- is a
+  function some application of which the reader cannot see (handed on as a value, a caller
   spelling the module packed, as a functor argument, through a wrapped library's path, or
   re-exporting it where a third source spells the caller, or not parsing), a field of no literal,
   an element of a computed collection, a function of a module no corpus source is compiled as (or
