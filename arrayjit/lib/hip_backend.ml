@@ -1959,10 +1959,20 @@ end = struct
               counts do not see. The unified class (minix) admits the coalesced layouts through its
               capacity and was not re-measured. Overridable by model_staged_copy_rate. *)
            staged_copy_rate = None;
-           (* gh-ocannl-2262: unfitted; configured (model_shared_load_rate,
-              model_fill_lane_width). *)
-           shared_load_rate = None;
-           fill_lane_width = None;
+           (* gh-ocannl-2262: the register-reuse rate and the fill in wavefronts, fitted together on
+              the discrete RX 7700S (tuf, gh-ocannl-1600's M3 rows at ecb13bb8, re-scored by
+              EXPLAIN_ONLY listings; benchmarks/gh1600_txn_fit.py --shared-rate). Measured, 2x2
+              register tiles run 1.45-1.86x slower than 4x4 at a 32x32 block tile, and 16-thread 4x4
+              blocks 0.89-1.0x as fast as 64-thread 2x2 ones at 16x16; the two terms put them at
+              1.75x and 0.88x. The outproj argmin moves off the plain 32x32x16/2x2 leaf (2.3x/3.3x
+              slower than the fastest) to 32x32x8/4x4 bgrid (1.35x/1.54x), agreement rising at every
+              cell (mean 41% -> 82%) across 6.3e11-5e12 loads/s. Only on the discrete RDNA wave32
+              class measured: the unified class (minix) was not. Overridable by
+              model_shared_load_rate and model_fill_lane_width. *)
+           shared_load_rate =
+             (if (not all_integrated) && Lazy.force all_rdna_wave32 then Some 6.3e11 else None);
+           fill_lane_width =
+             (if (not all_integrated) && Lazy.force all_rdna_wave32 then Some wave else None);
          })
     in
     (* gh-ocannl-572: the kernel source is a function of the lowered code, the device capabilities
