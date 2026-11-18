@@ -1497,10 +1497,12 @@ files.
   loop. A single partial k block has no sibling segment. A direct CPU conv `Row_block` panel
   privatizes both staged tiles and any accumulator fragment. Its tree charges their combined
   footprint against the same cap. `autotune_grid_record` compiles the 40^3 and 72^3 bk=16 matmul
-  controls and compares the conv panel pre-filter's bytes with the renderer on both sides of the
-  cap. The launch floor is weighed by
-  `cpu_mma_grid_updates_bound` (gh-ocannl-1857), a saturating upper bound using the renderer's
-  resolved `C_syntax.grid_min_updates ()` and `Cost_model.tile_mma_macs_per_update`: packing
+  controls and compares the conv panel pre-filter's bytes with the renderer below, at and above
+  the cap. Its 41-row conv with 8 input channels and 32 output channels admits a 32-row panel at
+  6,144 bytes. A strict comparison in the pre-filter fails that panel's admission claim. The
+  launch floor is weighed by `cpu_mma_grid_updates_bound` (gh-ocannl-1857), a saturating upper
+  bound using the renderer's resolved `C_syntax.grid_min_updates ()` and
+  `Cost_model.tile_mma_macs_per_update`: packing
   and fragment-transfer stores count, enclosing serial blocks do not. At 64^3 the plain packed
   Grid site's 5120 updates are below the default floor; a 32x16x16 whole-triple row-block
   launch has 8192 (its Workgroup lane loop counts too). Both are refuted, with the serial forms
@@ -1515,6 +1517,8 @@ files.
   fusion probe's output IR (gh-ocannl-2285). That cost applies once per padded output cell and
   lane iteration, without repeating across reduction blocks. At 33x65x16 the hoisted and plain
   packed sites count 12480 and 13248 updates, independently of their 3120-update zeroing nests.
+  In `judge_fused_grid`, the scheduled Grid enclosing `Tile_mma` supplies the loop identifier
+  for the typed census lookup. The control reverses the two entries so position alone fails.
   At 32x16x16 the whole-triple fused site meets the 16384 floor because its tail also has 16 lanes.
 - **A test decides how a `Tile_mma` rendered from the census, never the source** (gh-ocannl-1316).
   The lane-0 fallback's `if (lane == 0)` guard also wraps the C backends' register tiling, so
