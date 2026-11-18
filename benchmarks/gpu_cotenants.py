@@ -43,6 +43,8 @@ process.
   `<proc>/<pid>/fd/<n>` links under `/dev/dri/`; its `<proc>/<pid>/fdinfo/<n>` gives `drm-driver`,
   `drm-pdev`, and per `drm-pdev` and `drm-client-id` (counted once however many descriptors share
   it) the `drm-engine-<name>: <n> ns` lines, summed into `gpu_time_ns`. The AMD path (minix, tuf).
+  The census's memory mode restricts this walk to owned processes with a `/dev/kfd` descriptor
+  and uses the amdgpu client's resident fields for its selected regions, with their legacy aliases.
 
 Every probe is bounded by PROBE_TIMEOUT, and one that cannot run is a `failed` entry: the record is
 evidence, and its absence must not fail the cell. A snapshot in which no probe ran is UNREAD, never
@@ -118,9 +120,25 @@ def probe_nvidia(binary, *, require_memory=False):
 
 
 ENGINE = re.compile(r"drm-engine-[A-Za-z0-9_-]+:\s*([0-9]+)\s*ns\s*$")
+DRM_SIZE = re.compile(r"([0-9]{1,20})(?:\s+(KiB|MiB))?")
+DRM_SIZE_BYTES = {None: 1, "KiB": 1 << 10, "MiB": 1 << 20}
 
 
-def probe_drm(root):
+def drm_resident_memory(fdinfo, regions):
+    """A complete set of resident counters, in bytes, keyed by the fields used."""
+    fields = {}
+    for region in regions:
+        key = "drm-resident-" + region
+        if key not in fdinfo:
+            key = "drm-memory-" + region  # legacy amdgpu alias for the same counter
+        size = DRM_SIZE.fullmatch(fdinfo.get(key, ""))
+        if size is None:
+            return None
+        fields[key] = int(size[1]) * DRM_SIZE_BYTES[size[2]]
+    return fields
+
+
+def probe_drm(root, *, memory_regions=()):
     """(probe entry, {pid: fields}) from the DRM clients' fdinfo under root."""
     try:
         pids = [e for e in os.listdir(root) if e.isdecimal() and e.isascii()]
@@ -128,53 +146,88 @@ def probe_drm(root):
         return {"probe": "drm-fdinfo", "status": "absent", "detail": "no %s" % root}, {}
     found, unreadable = {}, 0
     for pid in pids:
-        directory = os.path.join(root, pid, "fd")
+        proc = os.path.join(root, pid)
+        directory = os.path.join(proc, "fd")
         try:
+            if memory_regions and os.stat(proc).st_uid != os.geteuid():
+                continue
             descriptors = os.listdir(directory)
         except PermissionError:
             unreadable += 1
             continue
         except OSError:  # ended meanwhile, or a kernel thread
             continue
-        client, drivers, devices, clients = False, set(), set(), {}
+        drm_fds, kfd, incomplete = [], False, False
         for fd in descriptors:
             try:
                 target = os.readlink(os.path.join(directory, fd))
+            except PermissionError:
+                incomplete = True
+                continue
             except OSError:
                 continue
-            if not target.startswith("/dev/dri/"):
-                continue
-            client = True
+            if target == "/dev/kfd":
+                kfd = True
+            elif target.startswith("/dev/dri/"):
+                drm_fds.append(fd)
+        if memory_regions and not kfd:
+            unreadable += incomplete
+            continue
+        if not drm_fds:
+            unreadable += bool(memory_regions)
+            continue
+
+        drivers, devices, clients, memory_clients = set(), set(), {}, {}
+        for fd in drm_fds:
             try:
-                with open(os.path.join(root, pid, "fdinfo", fd), encoding="utf-8",
+                with open(os.path.join(proc, "fdinfo", fd), encoding="utf-8",
                           errors="replace") as f:
                     lines = f.read().splitlines()
             except OSError:
+                incomplete = True
                 continue
-            client_id, device, busy = "fd " + fd, "", 0
-            for line in lines:
-                key, _, value = line.partition(":")
-                if key == "drm-driver" and value.strip():
-                    drivers.add(value.strip())
-                elif key == "drm-client-id" and value.strip():
-                    client_id = value.strip()
-                elif key == "drm-pdev" and value.strip():
-                    device = value.strip()
-                matched = ENGINE.match(line)
-                if matched:
-                    busy += int(matched.group(1))
+            fdinfo = {key: value.strip() for key, _, value in (line.partition(":") for line in lines)}
+            driver = fdinfo.get("drm-driver", "")
+            device = fdinfo.get("drm-pdev", "")
+            client_id = fdinfo.get("drm-client-id", "")
+            if memory_regions:
+                if not driver or (driver == "amdgpu" and not (device and client_id)):
+                    incomplete = True
+                elif driver == "amdgpu":
+                    key = (device, client_id)
+                    # Keep a whole reading from one descriptor, even if a duplicate is incomplete.
+                    if memory_clients.get(key) is None:
+                        memory_clients[key] = drm_resident_memory(fdinfo, memory_regions)
+                continue
+            if driver:
+                drivers.add(driver)
             if device:
                 devices.add(device)
+            busy = sum(int(match[1]) for line in lines if (match := ENGINE.match(line)))
             # A client id is unique only within its device; descriptors sharing it count once.
-            clients[(device, client_id)] = max(busy, clients.get((device, client_id), 0))
-        if not client:
+            key = (device, client_id or "fd " + fd)
+            clients[key] = max(busy, clients.get(key, 0))
+        if memory_regions:
+            if incomplete or not memory_clients or any(fields is None for fields in memory_clients.values()):
+                unreadable += 1
+                continue
+            found[int(pid)] = {
+                "gpu_memory_mib": sum(sum(fields.values()) for fields in memory_clients.values()) / (1 << 20),
+                "memory_fields": sorted({key for fields in memory_clients.values() for key in fields}),
+            }
             continue
         entry = {"driver": ",".join(sorted(drivers)), "pdev": ",".join(sorted(devices))}
         if any(clients.values()):
             entry["gpu_time_ns"] = sum(clients.values())
         found[int(pid)] = entry
     detail = "%d process(es) unreadable" % unreadable if unreadable else ""
-    return {"probe": "drm-fdinfo", "status": "ran", "detail": detail}, found
+    status = "ran"
+    if memory_regions:
+        if unreadable:
+            status = "partial" if found else "unreadable"
+        elif not found:
+            status = "empty"
+    return {"probe": "drm-fdinfo", "status": status, "detail": detail}, found
 
 
 def who(pid):

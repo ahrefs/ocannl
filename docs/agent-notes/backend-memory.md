@@ -586,12 +586,23 @@ files.
   Do not use `dune --force` as evidence of fresh
   test actions: the first audit attempt ran no tests. Disable the shared cache and change an
   action dependency, then confirm executable actions in the trace and process samples.
-- For an opt-in Linux CUDA census (gh-ocannl-2291), run `env OCANNL_BACKEND=cuda python3
+- For an opt-in Linux GPU census (gh-ocannl-2291, gh-ocannl-2341), run `env OCANNL_BACKEND=cuda python3
   tools/gpu-memory-census.py -- --expect-backend cuda build @DIR/runtest-NAME -j 4`. Its
   `gpu-memory-census.json` sits in the foreground run record. The timing reader shares its
   allowlisted process rows before the runner deletes the raw trace. Readable polls inside an
   owned PID's traced lifetime give its sampled process peak and count. Unseen rows stay unknown,
   unread probes say UNREAD, and a cached batch says when no test ran.
+  For HIP, run `env OCANNL_BACKEND=hip python3 tools/gpu-memory-census.py --hip-memory-model
+  unified -- --expect-backend hip build @DIR/runtest-NAME`. Select `discrete` on tuf-amd-linux
+  (gfx1102) for resident VRAM, or `unified` on minix-amd-linux (gfx1151) for resident VRAM plus
+  GTT. Minix's known HIP device allocation raised resident VRAM. The GTT term has fixture
+  coverage. A GPU-touched coherent mapped host buffer left resident GTT flat on the witnessed
+  kernel. The model is a batch label supplied by the caller and
+  defaults to unknown (both regions). The counters come from owned KFD processes' amdgpu
+  `fdinfo`, once per DRM client and device. The probe prefers `drm-resident-*` and falls back per
+  region to the older `drm-memory-*` alias. Requested totals and CPU-only backing are outside
+  the reading. The sidecar lists the fields actually used and leaves a PID unknown when no
+  complete reading fits inside its traced lifetime.
 - Building a test kernel that actually *has* a big scratch frame takes care: write the `Local`
   array in one loop and read it back in REVERSE in another. A forward read in the same order lets
   the compiler forward each store to its load and delete the array, leaving nothing to reject.

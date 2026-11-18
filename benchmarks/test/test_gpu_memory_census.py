@@ -1,4 +1,4 @@
-"""Fake compute-apps polls joined to Dune-produced shapes without a GPU."""
+"""Fake CUDA and HIP polls joined to Dune-produced shapes without a GPU."""
 
 from collections import Counter, defaultdict
 from contextlib import redirect_stderr, redirect_stdout
@@ -68,15 +68,16 @@ class GpuMemoryCensusTest(unittest.TestCase):
         )
         self.binary.chmod(0o700)
         with patch.object(self.census.time, "time_ns", side_effect=[start, end]):
-            self.census.sample(str(self.binary), self.polls, self.samples)
+            self.census.sample(lambda: self.census.probe_nvidia(str(self.binary), require_memory=True),
+                               self.polls, self.samples)
 
-    def record(self):
+    def record(self, **kwargs):
         trace_report = self.run_dir / "processes.json"
         if self.trace_file.exists():
             result = subprocess.check_output(
                 [ROOT / "tools/action-durations.sh", "--processes-json", self.trace_file])
             trace_report.write_bytes(result)
-        self.census.write_sidecar(self.run_dir, trace_report, 0.25, self.polls, self.samples)
+        self.census.write_sidecar(self.run_dir, trace_report, 0.25, self.polls, self.samples, **kwargs)
         text = (self.run_dir / self.census.SIDECAR).read_text(encoding="utf-8")
         self.assertNotIn(CANARY, text)
         return json.loads(text)
@@ -176,6 +177,11 @@ class GpuMemoryCensusTest(unittest.TestCase):
         self.assertEqual(record["tests"], "unknown from incomplete or unread trace")
         self.assertEqual(record["probe_status"], "UNREAD")
 
+    def test_launcher_requires_an_explicit_backend_pin(self):
+        with patch.dict(os.environ, clear=True):
+            with self.assertRaisesRegex(ValueError, "set OCANNL_BACKEND"):
+                self.census.run_batch(SimpleNamespace())
+
     def test_foreground_launcher_uses_the_runner_trace_reader_and_keeps_its_table(self):
         self.trace(process(os.getpid(), "traced.exe", 10, 30))
         fake_runner = self.run_dir / "test-run.sh"
@@ -193,10 +199,13 @@ class GpuMemoryCensusTest(unittest.TestCase):
             encoding="utf-8",
         )
         fake_runner.chmod(0o700)
-        args = SimpleNamespace(period=0.25, nvidia_smi=str(self.binary),
+        args = SimpleNamespace(period=0.25, nvidia_smi=str(self.binary), hip_memory_model="discrete",
                                runner=["build", "@runtest"])
         stdout = SimpleNamespace(buffer=io.BytesIO())
-        with patch.object(self.census, "RUNNER", fake_runner), redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+        with (patch.dict(os.environ, OCANNL_BACKEND="hip"),
+              patch.object(self.census, "RUNNER", fake_runner),
+              patch.object(self.census, "probe_drm", return_value=({"status": "empty"}, {})),
+              redirect_stdout(stdout), redirect_stderr(io.StringIO())):
             self.assertEqual(self.census.run_batch(args), 0)
         ephemeral = Path(trace_argument.read_text(encoding="utf-8"))
         self.assertFalse(ephemeral.exists())
@@ -204,4 +213,93 @@ class GpuMemoryCensusTest(unittest.TestCase):
         self.assertIn("traced.exe", timing_table.read_text(encoding="utf-8"))
         report = json.loads((self.run_dir / self.census.SIDECAR).read_text(encoding="utf-8"))
         self.assertEqual(report["trace_status"], "complete")
+        self.assertEqual(report["probe"], "drm-fdinfo")
+        self.assertEqual(report["memory_model"], "discrete")
         self.assertEqual([row["program"] for row in report["coverage"]], ["traced.exe"])
+
+    def drm_fd(self, pid, fd, target, fields=None):
+        proc = self.run_dir / str(pid)
+        (proc / "fd").mkdir(parents=True, exist_ok=True)
+        (proc / "fd" / str(fd)).symlink_to(target)
+        if fields is not None:
+            (proc / "fdinfo").mkdir(exist_ok=True)
+            (proc / "fdinfo" / str(fd)).write_text(fields, encoding="utf-8")
+
+    def hip_client(self, pid, fd, counters, *, device="0000:01:00.0", client=7):
+        self.drm_fd(pid, fd, "/dev/dri/renderD128",
+                    f"drm-driver:\tamdgpu\ndrm-pdev:\t{device}\ndrm-client-id:\t{client}\n"
+                    + counters + f"\nignored:\t{CANARY}\n")
+
+    def test_discrete_hip_counts_only_resident_vram_once_per_client_and_device(self):
+        pid = os.getpid()
+        self.drm_fd(pid, 3, "/dev/kfd")
+        for fd in (4, 5):
+            self.hip_client(pid, fd, "drm-resident-vram: 512 KiB\ndrm-memory-vram: 512 KiB\n"
+                            "drm-total-vram: 80 MiB\ndrm-resident-gtt: 21 MiB")
+        self.hip_client(pid, 6, "drm-memory-vram: 1048576", device="0000:02:00.0")
+        self.hip_client(pid + 1, 4, "drm-resident-vram: 16 MiB")  # graphics-only client
+        probe, rows = self.census.probe_drm(self.run_dir, memory_regions=("vram",))
+        self.assertEqual(probe["status"], "ran")
+        self.assertEqual(set(rows), {pid})
+        self.assertEqual(rows[pid]["gpu_memory_mib"], 1.5)
+        self.assertEqual(set(rows[pid]["memory_fields"]), {"drm-resident-vram", "drm-memory-vram"})
+
+    def test_unified_hip_accounts_for_gtt_and_leaves_unread_clients_unknown(self):
+        pid = os.getpid()
+        unread, malformed = pid + 1, pid + 2
+        for i in (pid, unread, malformed):
+            self.drm_fd(i, 3, "/dev/kfd")
+        self.hip_client(pid, 4, "drm-resident-vram: 0\ndrm-memory-gtt: 16384 KiB\n"
+                        "drm-resident-cpu: 32 MiB\ndrm-total-gtt: 64 MiB")
+        self.hip_client(unread, 4, "drm-resident-vram: 0\ndrm-resident-gtt: 7 MiB")
+        self.drm_fd(unread, 5, "/dev/dri/renderD128")  # fdinfo missing during the poll
+        self.hip_client(malformed, 4, "drm-resident-vram: 0\ndrm-resident-gtt: N/A\n"
+                        "drm-memory-gtt: 64 MiB")
+
+        self.trace(process(pid, "unified.exe", 10, 30), process(unread, "unread.exe", 10, 30))
+        with patch.object(self.census.time, "time_ns", side_effect=[20, 21]):
+            self.census.sample(
+                lambda: self.census.probe_drm(self.run_dir, memory_regions=("vram", "gtt")),
+                self.polls, self.samples)
+        self.assertEqual(self.polls, {"partial": 1})
+        self.assertEqual(set(self.samples), {pid})
+        # Neither a poll outside this lifetime nor a co-tenant's poll contributes fields.
+        self.samples[pid].append((5, 6, 99, ("drm-memory-vram",)))
+        self.samples[pid + 4].append((20, 21, 99, ("drm-resident-gtt",)))
+        record = self.record(probe="drm-fdinfo", memory_model="unified")
+        self.assertEqual(record["probe"], "drm-fdinfo")
+        self.assertEqual(record["probe_status"], "partial")
+        self.assertEqual(record["probe_fields"], ["drm-memory-gtt", "drm-resident-vram"])
+        sampled, unknown = record["coverage"]
+        self.assertEqual(sampled["memory_model"], "unified")
+        self.assertEqual(sampled["process_peak_mib"], 16)
+        self.assertEqual(unknown["memory_model"], "unified")
+        self.assertEqual(unknown["status"], "unknown")
+        self.assertNotIn("process_peak_mib", unknown)
+
+    def test_hip_process_without_resident_or_legacy_fields_is_unread(self):
+        pid = os.getpid()
+        self.drm_fd(pid, 3, "/dev/kfd")
+        self.hip_client(pid, 4, "drm-total-vram: 64 MiB\ndrm-total-gtt: 0")
+        self.trace(process(pid, "total_only.exe", 10, 30))
+        with patch.object(self.census.time, "time_ns", side_effect=[20, 21]):
+            self.census.sample(
+                lambda: self.census.probe_drm(self.run_dir, memory_regions=("vram", "gtt")),
+                self.polls, self.samples)
+        record = self.record(probe="drm-fdinfo", memory_model="unknown")
+        self.assertEqual(record["probe_status"], "UNREAD")
+        self.assertEqual(record["poll_outcomes"], {"unreadable": 1})
+        self.assertEqual(record["probe_fields"], [])
+        self.assertEqual(record["coverage"][0]["status"], "unknown")
+
+    def test_empty_hip_poll_reads_without_sampling_a_process(self):
+        self.trace(process(os.getpid(), "idle.exe", 10, 30))
+        self.census.sample(
+            lambda: self.census.probe_drm(self.run_dir, memory_regions=("vram",)),
+            self.polls, self.samples)
+        record = self.record(probe="drm-fdinfo", memory_model="discrete")
+        self.assertEqual(record["probe_status"], "read")
+        self.assertEqual(record["read_polls"], 1)
+        self.assertEqual(record["poll_outcomes"], {"empty": 1})
+        self.assertEqual(record["probe_fields"], [])
+        self.assertEqual(record["coverage"][0]["status"], "unknown")
