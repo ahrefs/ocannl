@@ -271,9 +271,9 @@
 #     it (`X.exe` matching `X.ml`); ties keep every owner, so a bare basename
 #     names them all. The run's first part is no path part, and is left out of
 #     the count, unless the run starts the line or follows a blank, one of
-#     `=(:,<>|;&` or a backquote or `[`, or a quote that itself starts the line
-#     or follows one of those (after `$V`, `${V}`, `)` or a closing quote it is
-#     a fragment); a first part that counts also matches a path part it ends
+#     `=(:,<>|;&` or `[`, or a quote or backquote that itself starts the line
+#     or follows one of those (after `$V`, `${V}`, `)` or a closing quote or
+#     backquote it is a fragment); a first part that counts also matches a path part it ends
 #     after a character no run holds (a quoted `"fixture data/x.py"`). Never
 #     a dropped read: a run `D/B` read from any directory C is the file C/D/B,
 #     which ends with all of `D/B`, so it always has the most. Within a
@@ -606,7 +606,7 @@ sub resolve {
 # `BASH_SOURCE` form, or V after `$V` or `${V}`, when that expansion starts a
 # path and a `/` starts what follows it.
 my $self_arg = qr{"?(?:\$0|\$\{0\}|\$BASH_SOURCE|\$\{BASH_SOURCE(?:\[0\])?\})"?};
-sub starts_path { $_[0] eq "" || $_[0] =~ /[\s=(:,<>|;&`\[]\z/ || $_[0] =~ /(?:\A|[\s=(:,<>|;&`\[])["']\z/ }
+sub starts_path { $_[0] eq "" || $_[0] =~ /[\s=(:,<>|;&\[]\z/ || $_[0] =~ /(?:\A|[\s=(:,<>|;&\[])["'`]\z/ }
 sub runs {
   my ($line) = @_;
   my @r;

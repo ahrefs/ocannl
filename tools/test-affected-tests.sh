@@ -1522,6 +1522,10 @@ if harness_leg 'harness shared basenames'; then
   twin_reach 'so does one under a variable the reader cannot place' "${twins[@]}"
   twin_text 'cat "${x}one/twin.py"'
   twin_reach 'a first part continuing an expansion is no path part' "${twins[@]}"
+  twin_text 'cat `pwd`data/twin.py'
+  twin_reach 'nor is one after a closing backquote' "${twins[@]}"
+  twin_text 'x=$(echo `cat data/twin.py`) y=`data/twin.py`'
+  twin_reach 'while one an opening backquote starts is' data/twin.py
   twin_text "$self0" 'python3 "$here/twin.py"'
   twin_reach "a self-directory \$here/ reaches the owner beside the harness" tools/twin.py
   twin_text "$self0" 'python3 "${here}/twin.py"'

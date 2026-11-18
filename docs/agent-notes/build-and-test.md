@@ -4109,8 +4109,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     `benchmarks/test-check-box.sh`.
     A name with several owners (a shared basename) reaches those sharing the most trailing path
     parts with the run that named it, and every owner on a tie, so a bare basename, or one under
-    an unknown `$V/`, reaches them all; a shell `$here/NAME` whose `here` is the file's
-    `$(cd "$(dirname "$0")" && pwd)`, assigned once, reaches the owner beside the harness
+    an unknown `$V/`, reaches them all; a shell `$here/NAME` in a file of the harness's own
+    program (not one it only runs or that `loads` follows) whose `here` is that file's
+    `$(cd "$(dirname "$0")" && pwd)`, written once there and in no other file of the program,
+    reaches the owner beside the harness
     (gh-ocannl-2342: `benchmarks/test-gh1133-cells.sh` no longer reaches
     `test/operations/gh1133_summary.py`). To audit what each harness reaches, and through which
     token, `affected --harness-census [MEMBER]` prints one tab-separated line per reached path
