@@ -30,8 +30,9 @@
    The floor leg re-asks every Serial packed geometry as its Grid twin at 64^3, and the unsplit
    whole-triple geometry with a 16-row Grid block at 32x16x16. The scheduled contraction loop's
    symbol identifies the site independently of the output zeroing. No proposed site may render
-   serially for the floor. Both witnesses are refused at the default floor, and every below-floor
-   geometry is proposed and renders on the pool when the floor is lowered to 4096. The same
+   serially for the floor or lack a matching census entry. Both witnesses are refused at the default
+   floor, and every below-floor geometry is proposed and renders on the pool when the floor is
+   lowered to 4096. The lowered-floor candidates also exercise the proposed-site claims. The same
    parameters connect the two runs; an unrelated pool-rendered geometry cannot satisfy the control.
 
    The tuning leg searches the 64^3 site: no ranked candidate rendered serially for the cap, and the
@@ -243,15 +244,27 @@ let site_of ?(census_order = Fn.id) j =
 let site_below_floor j =
   match site_of j with Some (Cs.Grid_serial (Grid_below_min_updates _)) -> true | _ -> false
 
+let site_has_no_floor_decline j =
+  match site_of j with
+  | None | Some (Cs.Grid_serial (Grid_below_min_updates _)) -> false
+  | Some _ -> true
+
 let floor_sites () = judge_site ~shape:`Grid 64 @ judge_site ~rows:72 ~depth:64 ~shape:`Grid 32
 let floor_judged = lazy (floor_sites ())
-let whole_floor_judged = lazy (judge_site ~rows:32 ~depth:16 ~shape:`Whole 16)
+let whole_floor_site () = judge_site ~rows:32 ~depth:16 ~shape:`Whole 16
+let whole_floor_judged = lazy (whole_floor_site ())
 
 let floor_control =
   lazy
     (Scripted_search.with_settings
        [ ("cc_grid_min_updates", "4096") ]
-       (fun () -> floor_sites () @ judge_site ~rows:32 ~depth:16 ~shape:`Whole 16))
+       (fun () ->
+         let packed = floor_sites () in
+         (packed, whole_floor_site ())))
+
+let floor_control_candidates () =
+  let packed, whole = Lazy.force floor_control in
+  packed @ whole
 
 let same_geometry a b = Poly.equal a.j_dims b.j_dims && equal_params a.j_params b.j_params
 let grid_of j ~f = Option.exists j.j_grid ~f
@@ -260,7 +273,7 @@ let () =
   in_leg ~leg "agr-seed: every judged candidate compiled" (fun label ->
       p_all label
         (Lazy.force judged @ Lazy.force floor_judged @ Lazy.force whole_floor_judged
-       @ Lazy.force floor_control)
+       @ floor_control_candidates ())
         ~f:(fun j -> Option.is_some j.j_grid));
   in_leg ~leg "agr-seed: no proposed hoisted-grid seed renders a Grid loop serially for the cap"
     (fun label ->
@@ -539,18 +552,21 @@ let () =
 let () =
   in_leg ~leg "agr-seed: no proposed packed Grid seed renders its site serially for the floor"
     (fun label ->
-      p_all label (Lazy.force floor_judged) ~f:(fun j ->
-          (not j.j_proposed) || not (site_below_floor j)));
+      let packed, _ = Lazy.force floor_control in
+      p_all label
+        (Lazy.force floor_judged @ packed)
+        ~f:(fun j -> (not j.j_proposed) || site_has_no_floor_decline j));
   in_leg ~leg "agr-seed: the floor refuses a packed Grid geometry whose site renders below it"
     (fun label ->
       p_exists label (Lazy.force floor_judged) ~f:(fun j ->
           (not j.j_proposed) && site_below_floor j));
   in_leg ~leg "agr-seed: lowering the floor keeps each below-floor geometry on the pool"
     (fun label ->
+      let controls = floor_control_candidates () in
       p_all label
         (List.filter (Lazy.force floor_judged @ Lazy.force whole_floor_judged) ~f:site_below_floor)
         ~f:(fun refused ->
-          List.exists (Lazy.force floor_control) ~f:(fun j ->
+          List.exists controls ~f:(fun j ->
               (* The zeroing launch can stay serial while the contraction runs on the pool. *)
               same_geometry j refused && j.j_proposed
               &&
@@ -558,12 +574,13 @@ let () =
               | Some (Cs.Grid_pool _) -> true
               | _ -> false)));
   in_leg ~leg "agr-seed: every floor-only refusal renders its site below the floor" (fun label ->
+      let controls = floor_control_candidates () in
       p_all label
         (List.filter
            (Lazy.force floor_judged @ Lazy.force whole_floor_judged)
            ~f:(fun j ->
              (not j.j_proposed)
-             && List.exists (Lazy.force floor_control) ~f:(fun control ->
+             && List.exists controls ~f:(fun control ->
                  same_geometry j control && control.j_proposed)))
         ~f:site_below_floor);
   in_leg ~leg "agr-seed: the seeding bound never undercounts a below-floor site's renderer count"
@@ -585,8 +602,10 @@ let () =
           | _ -> false));
   in_leg ~leg "agr-seed: no proposed whole-triple Grid seed renders its site serially for the floor"
     (fun label ->
-      p_all label (Lazy.force whole_floor_judged) ~f:(fun j ->
-          (not j.j_proposed) || not (site_below_floor j)));
+      let _, whole = Lazy.force floor_control in
+      p_all label
+        (Lazy.force whole_floor_judged @ whole)
+        ~f:(fun j -> (not j.j_proposed) || site_has_no_floor_decline j));
   in_leg ~leg "agr-seed: the floor refuses a whole-triple Grid geometry below it" (fun label ->
       p_exists label (Lazy.force whole_floor_judged) ~f:(fun j ->
           (not j.j_proposed) && site_below_floor j))
