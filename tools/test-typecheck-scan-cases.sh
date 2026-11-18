@@ -376,7 +376,7 @@ leg12() {
   run --stub "$stub" "$ptable"
   expect_rc "an empty owning module" 2 "[@@@owning_module] takes a module"
   printf '%s\n' 'val use_padding : bool' '[@@@owning_module "lib/nn_blocks.ml"]' \
-    '[@@@owning_module "tensor/tensor.ml"]' >"$stub"
+    '[@@@owning_module "fixture/second_owner.ml"]' >"$stub"
   run --stub "$stub" "$ptable"
   expect_rc "two owning modules" 2 "a second [@@@owning_module]"
   printf '%s\n' 'val use_padding : bool' '[@@@owning_module "no/such_module.ml"]' >"$stub"
@@ -473,17 +473,17 @@ leg13() {
   # real one printed above, and hands every other call to the real one.
   local real
   real=$(command -v dune)
-  mkdir -p "$TMP/hold/bin"
-  cat >"$TMP/hold/bin/dune" <<'DUNE'
+  mkdir -p "$TMP/hold/stubs"
+  cat >"$TMP/hold/stubs/dune" <<'DUNE'
 #!/usr/bin/env bash
 for arg in "$@"; do
   case $arg in @@*check) cat "$HOLD_REFUSAL" >&2; exit 1 ;; esac
 done
 exec "$HOLD_REAL_DUNE" "$@"
 DUNE
-  chmod +x "$TMP/hold/bin/dune"
+  chmod +x "$TMP/hold/stubs/dune"
   rc=0
-  HOLD_REFUSAL=$TMP/hold/refusal HOLD_REAL_DUNE=$real PATH=$TMP/hold/bin:$PATH \
+  HOLD_REFUSAL=$TMP/hold/refusal HOLD_REAL_DUNE=$real PATH=$TMP/hold/stubs:$PATH \
     "$subject" "$ptable" >"$out" 2>"$err" || rc=$?
   expect_rc "the subject, the lock taken before an owning module's context is built," 75
   if grep -qF 'LOCK HELD' "$err" && grep -qF "context does not build" "$err"; then
@@ -493,7 +493,7 @@ DUNE
   # The same build failing for any other reason is still the exit 2 it was.
   printf 'Error: some other failure of the build\n' >"$TMP/hold/refusal"
   rc=0
-  HOLD_REFUSAL=$TMP/hold/refusal HOLD_REAL_DUNE=$real PATH=$TMP/hold/bin:$PATH \
+  HOLD_REFUSAL=$TMP/hold/refusal HOLD_REAL_DUNE=$real PATH=$TMP/hold/stubs:$PATH \
     "$subject" "$ptable" >"$out" 2>"$err" || rc=$?
   expect_rc "the subject, an owning module's context failing to build for another reason," 2 "context does not build"
 }
@@ -501,19 +501,19 @@ harness_leg_run '13: a build lock another dune holds abandons the run once, with
 
 # Force the subject to fail before its engine runs. Exit 2 alone used to pass both leg-5 checks.
 leg14() {
-  local bin="$TMP/build-failure/bin" inner="$TMP/build-failure/inner" real
+  local stubs="$TMP/build-failure/stubs" inner="$TMP/build-failure/inner" real
   real=$(command -v dune)
-  mkdir -p "$bin"
-  cat >"$bin/dune" <<'DUNE'
+  mkdir -p "$stubs"
+  cat >"$stubs/dune" <<'DUNE'
 #!/usr/bin/env bash
 for arg in "$@"; do
   case $arg in tools/scan_case_snippets.exe) echo 'Error: planted engine build failure' >&2; exit 1 ;; esac
 done
 exec "$FAILURE_REAL_DUNE" "$@"
 DUNE
-  chmod +x "$bin/dune"
+  chmod +x "$stubs/dune"
   local inner_rc=0
-  FAILURE_REAL_DUNE=$real PATH=$bin:$PATH \
+  FAILURE_REAL_DUNE=$real PATH=$stubs:$PATH \
     "${BASH:-bash}" "$script_dir/test-typecheck-scan-cases.sh" --only '^5:' >"$inner" 2>&1 || inner_rc=$?
   if [ "$inner_rc" = 1 ] && [ "$(grep -c '^FAIL  ' "$inner")" = 2 ] &&
     ! grep -q '^PASS  ' "$inner" && grep -qF 'the engine did not build' "$inner"; then

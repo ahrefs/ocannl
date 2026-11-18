@@ -1905,9 +1905,9 @@ leg_120() {
   cp "$SRC" "$root/tools/test-run.sh"
   stage_sourced "$root" || { harness_abandon "$stage_error"; return; }
   printf '(lang dune 3.20)\n' >"$root/dune-project"
-  printf 'let () = ()\n' >"$root/al/generated.ml"
+  printf 'let () = ()\n' >"$root/al/gentest.ml"
   cat >"$root/al/dune" <<'DUNE'
-(test (name generated) (enabled_if (<> %{env:OCANNL_BACKEND=cc} metal)))
+(test (name gentest) (enabled_if (<> %{env:OCANNL_BACKEND=cc} metal)))
 (rule (alias explicit) (enabled_if (<> %{env:OCANNL_BACKEND=cc} metal)) (action (progn)))
 (rule (alias active) (action (progn)))
 (rule (alias runtest-active) (action (progn)))
@@ -1926,9 +1926,9 @@ DUNE
   GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$root" init -q
   git -C "$root" add deleted/dune
   rm -f "$root/deleted/dune"
-  for args in '0|@al/runtest-generated @al/explicit @al/active|disabled aliases skipped: 2' \
-              '2|@al/runtest-generated @al/explicit|nothing ran' \
-              '2|@al/runtest-generated @al/typo @al/active|alias refused: @al/typo' \
+  for args in '0|@al/runtest-gentest @al/explicit @al/active|disabled aliases skipped: 2' \
+              '2|@al/runtest-gentest @al/explicit|nothing ran' \
+              '2|@al/runtest-gentest @al/typo @al/active|alias refused: @al/typo' \
               '0|@al/shared|verdict: pass' \
               '2|@al/explicit|disabled aliases skipped: 1' \
               '0|@al/boolean @al/active|disabled aliases skipped: 1' \
@@ -1943,13 +1943,13 @@ DUNE
     if [ "$rc" != "$want" ] || ! grep -qF "$text" "$TMP/disabled.out"; then
       detail="$args: exit $rc, wanted $want / $text: $(cat "$TMP/disabled.out")"; break
     fi
-    if [ "$want" = 0 ] && [ "$args" = '@al/runtest-generated @al/explicit @al/active' ]; then
+    if [ "$want" = 0 ] && [ "$args" = '@al/runtest-gentest @al/explicit @al/active' ]; then
       run=$(sed -n 's|^log: *\(.*\)/log$|\1|p' "$TMP/disabled.out")
       if [ "$(cat "$run/disabled-alias-count")" != 2 ] ||
-         [ "$(cat "$run/disabled-aliases")" != "$(printf '@al/explicit\n@al/runtest-generated')" ] ||
+         [ "$(cat "$run/disabled-aliases")" != "$(printf '@al/explicit\n@al/runtest-gentest')" ] ||
          ! grep -qF 'disabled alias skipped: @al/explicit' "$TMP/disabled.out" ||
-         ! grep -qF 'disabled alias skipped: @al/runtest-generated' "$TMP/disabled.out" ||
-         grep -q 'generated\|explicit' "$run/cmd"; then
+         ! grep -qF 'disabled alias skipped: @al/runtest-gentest' "$TMP/disabled.out" ||
+         grep -q 'gentest\|explicit' "$run/cmd"; then
         detail="skip names/count/record or executed command incorrect: $(cat "$TMP/disabled.out")"; break
       fi
     fi
@@ -1968,14 +1968,14 @@ DUNE
     rc=0
     (cd "$root" && PATH="$(dirname "$real"):$PATH" OCANNL_BACKEND=cc \
       OCANNL_TOOL_TEST_RUNS="$TMP/disabled-cc-runs" "${BASH:-bash}" tools/test-run.sh run build \
-      @al/runtest-generated @al/explicit -j 1) >"$TMP/disabled-cc.out" 2>&1 || rc=$?
+      @al/runtest-gentest @al/explicit -j 1) >"$TMP/disabled-cc.out" 2>&1 || rc=$?
     if [ "$rc" != 0 ] || grep -q 'disabled alias' "$TMP/disabled-cc.out"; then
       detail="cc aliases must run without skips: $(cat "$TMP/disabled-cc.out")"
     fi
   fi
   for probe in '2|repeat 2 build @al/explicit @al/active|disabled alias batch' \
                '2|repeat 2 build @al/explicit @al/typo|dune knows no such alias' \
-               '2|fresh @al/runtest-generated @al/runtest-active|disabled alias batch' \
+               '2|fresh @al/runtest-gentest @al/runtest-active|disabled alias batch' \
                '0|plan build @al/explicit @al/active|disabled aliases skipped: 1'; do
     [ -z "$detail" ] || break
     IFS='|' read -r want args text <<<"$probe"

@@ -102,12 +102,12 @@ def config(build_dir):
 def body(b):
     d = '/default/'
     return (
-        proc(b, 11, 1, 21.5, '/opt/bin/fsm_transformer.exe', d + 'test/training',
-             [d + 'test/training/fsm_transformer.actual'])
-        + proc(b, 12, 2, 6.72, 'env_var_deps.exe', '/.sandbox/53d3fec81e775d978ce99f0295ebd390/default/test/operations',
-               [d + 'test/operations/env_var_deps.actual', d + 'test/operations/env_var_deps.filelist'])
-        + proc(b, 13, 3, 1.96, 'env_var_deps.exe', d + 'test/operations',
-               [d + 'test/operations/env_var_deps_control.actual'])
+        proc(b, 11, 1, 21.5, '/opt/bin/fixture_trainer.exe', d + 'test/training',
+             [d + 'test/training/fixture_trainer.actual'])
+        + proc(b, 12, 2, 6.72, 'fixture_scan.exe', '/.sandbox/53d3fec81e775d978ce99f0295ebd390/default/test/operations',
+               [d + 'test/operations/fixture_scan.actual', d + 'test/operations/fixture_scan.filelist'])
+        + proc(b, 13, 3, 1.96, 'fixture_scan.exe', d + 'test/operations',
+               [d + 'test/operations/fixture_scan_control.actual'])
         + proc(b, 14, 4, 3.25, '/opt/bin/ocamlopt.opt', d + 'arrayjit/lib', [])
         + proc(b, 15, 5, 5.43, '/bin/sh', d + 'test/operations',
                ['/.actions/default/test/operations/runtest-slot_kind_cases-4050ca3943e5638ece3bbcdcaf49ae6e'], '1')
@@ -152,18 +152,18 @@ cat >"$TMP/table.expected" <<'EOF'
 processes=6  open=1
   seconds  exit  prog                         action
     40.00  open  hung_probe.exe               test/operations/hung_probe.exe.output
-    21.50     0  fsm_transformer.exe          test/training/fsm_transformer.actual
-     6.72     0  env_var_deps.exe             test/operations/env_var_deps.actual +1
+    21.50     0  fixture_trainer.exe          test/training/fixture_trainer.actual
+     6.72     0  fixture_scan.exe             test/operations/fixture_scan.actual +1
      5.43     1  sh                           @test/operations/runtest-slot_kind_cases
      3.25     0  ocamlopt.opt                 (in arrayjit/lib)
-     1.96     0  env_var_deps.exe             test/operations/env_var_deps_control.actual
+     1.96     0  fixture_scan.exe             test/operations/fixture_scan_control.actual
 EOF
 cat >"$TMP/prog.expected" <<'EOF'
 processes=6  open=1
     max_s   total_s     n  prog
     40.00     40.00     1  hung_probe.exe
-    21.50     21.50     1  fsm_transformer.exe
-     6.72      8.68     2  env_var_deps.exe
+    21.50     21.50     1  fixture_trainer.exe
+     6.72      8.68     2  fixture_scan.exe
      5.43      5.43     1  sh
      3.25      3.25     1  ocamlopt.opt
 EOF
@@ -178,22 +178,22 @@ cat >"$TMP/filtered.expected" <<'EOF'
 processes=4  open=1
   seconds  exit  prog                         action
     40.00  open  hung_probe.exe               test/operations/hung_probe.exe.output
-    21.50     0  fsm_transformer.exe          test/training/fsm_transformer.actual
+    21.50     0  fixture_trainer.exe          test/training/fixture_trainer.actual
 EOF
 {
   printf '%s\t' 40.00 open hung_probe.exe test/operations/hung_probe.exe.output
   printf '%s\n' test/operations/hung_probe.exe.output
-  printf '%s\t' 21.50 0 fsm_transformer.exe test/training/fsm_transformer.actual
-  printf '%s\n' test/training/fsm_transformer.actual
-  printf '%s\t' 6.72 0 env_var_deps.exe 'test/operations/env_var_deps.actual +1' \
-    test/operations/env_var_deps.actual
-  printf '%s\n' test/operations/env_var_deps.filelist
+  printf '%s\t' 21.50 0 fixture_trainer.exe test/training/fixture_trainer.actual
+  printf '%s\n' test/training/fixture_trainer.actual
+  printf '%s\t' 6.72 0 fixture_scan.exe 'test/operations/fixture_scan.actual +1' \
+    test/operations/fixture_scan.actual
+  printf '%s\n' test/operations/fixture_scan.filelist
   printf '%s\t' 5.43 1 sh @test/operations/runtest-slot_kind_cases
   printf '%s\n' @test/operations/runtest-slot_kind_cases
   printf '%s\t' 3.25 0 ocamlopt.opt
   printf '%s\n' '(in arrayjit/lib)'
-  printf '%s\t' 1.96 0 env_var_deps.exe test/operations/env_var_deps_control.actual
-  printf '%s\n' test/operations/env_var_deps_control.actual
+  printf '%s\t' 1.96 0 fixture_scan.exe test/operations/fixture_scan_control.actual
+  printf '%s\n' test/operations/fixture_scan_control.actual
 } >"$TMP/tsv.expected"
 # --dirs: the same rows, each led by its process's directory under the build directory.
 printf '%s\n' default/test/operations default/test/training \

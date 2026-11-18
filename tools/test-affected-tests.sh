@@ -78,7 +78,10 @@ cat >"$repo/t6/dune" <<'DUNE'
 (rule (alias runtest-dyn) (action (diff dyn.expected dyn.actual)))
 (include extra.inc)
 DUNE
-cat >"$repo/lib/dune" <<'DUNE'
+# Written from inside lib/, so the text names no repository path: a fixture's
+# `lib/dune` spelled whole would select this harness on every edit of the
+# real one (gh-ocannl-2292).
+(cd "$repo/lib" && cat >dune) <<'DUNE'
 (library (name core) (modules core helper lx))
 (ocamllex lx)
 (library (name leaf) (modules leaf))
@@ -633,14 +636,14 @@ if harness_leg 'verdict trailer'; then
     local $/; open my $fh, "<", $ARGV[0] or die "unreadable\n"; my $s = <$fh>;
     $s =~ /^(sub first_tier_wide \{.*?^sub verdict \{.*?^\})/ms or die "no verdict in the script\n";
     eval "$1; 1" or die "verdict does not load: $@";
-    for (["low_level.ml: whole module", 379, 815, 825, 0, "cross-cutting"],
-         ["low_level.ml: one function", 27, 815, 825, 0, "cross-cutting"],
-         ["low_level.ml --referenced-only", 379, 379, 825, 0, "ok"],
-         ["autotune.ml", 307, 636, 825, 0, "cross-cutting"],
-         ["autotune.ml --referenced-only", 307, 307, 825, 0, "ok"],
-         ["metal_backend.ml, nearly all link-only", 27, 815, 825, 0, "cross-cutting"],
-         ["test/support/ll_test.ml, none link-only", 329, 329, 825, 0, "ok"],
-         ["shape.ml, by its first tier", 544, 633, 825, 0, "cross-cutting"],
+    for (["low_level: whole module", 379, 815, 825, 0, "cross-cutting"],
+         ["low_level: one function", 27, 815, 825, 0, "cross-cutting"],
+         ["low_level --referenced-only", 379, 379, 825, 0, "ok"],
+         ["autotune", 307, 636, 825, 0, "cross-cutting"],
+         ["autotune --referenced-only", 307, 307, 825, 0, "ok"],
+         ["metal_backend, nearly all link-only", 27, 815, 825, 0, "cross-cutting"],
+         ["test/support/ll_test, none link-only", 329, 329, 825, 0, "ok"],
+         ["shape, by its first tier", 544, 633, 825, 0, "cross-cutting"],
          ["half the aliases listed", 10, 412, 824, 0, "ok"],
          ["one over half listed", 10, 413, 824, 0, "cross-cutting"],
          ["one over half ranking first", 413, 413, 824, 0, "cross-cutting"],
@@ -1618,7 +1621,6 @@ if harness_leg 'isolated test addition'; then
     # a newly added suite defaults to no harnesses.
     case $suite in
       test/config) printf '%s\n' tools/test-machine-verify.sh tools/test-test-run-devices.sh >"$TMP/want" ;;
-      test/training) printf '%s\n' tools/test-ci-shard.sh >"$TMP/want" ;;
       arrayjit/test) printf '%s\n' tools/test-machine-verify.sh >"$TMP/want" ;;
       *) : >"$TMP/want" ;;
     esac
@@ -1640,6 +1642,58 @@ if harness_leg 'isolated test addition'; then
   done
   hc_restore
   unlink "$hrepo/$operations/dune" && rmdir "$hrepo/$operations" "$hrepo/test" || exit 2
+fi
+
+if harness_leg 'source-only reach'; then
+  # gh-ocannl-2292: a source edit selects no harness that only spells its path
+  # in fixture text. Fake diagnostics, trace locations and executables, table
+  # labels, fixture repositories' dune files and PATH stubs spelled each of
+  # these; they now use fixture-only paths and basenames. Each is spelled here
+  # in two parts (`DIR/STEM EXT`), so this harness's own text names none of
+  # them. Independent expectations, as in the leg above: a path defaults to
+  # no harness, the judgment that none reads it; a harness that reads one
+  # (a declaration included) gets its line in the case below.
+  ld=lib'/dune' bd=bin'/dune' rw=tensor/row'.ml' sj=test/einsum/surjectivity'.ml'
+  for path in "$sj" "$rw" "$ld" "$bd"; do printf '%s\n' "$path"; done >"$TMP/source-only"
+  for src in 'tensor/tensor .ml' 'tensor/shape .ml' 'arrayjit/lib/low_level .ml' 'arrayjit/lib/autotune .ml' \
+    'arrayjit/lib/metal_backend .ml' 'arrayjit/lib/backends .ml' 'arrayjit/lib/online_softmax .ml' \
+    'test/support/ll_test .ml' 'test/support/generated .ml' 'test/training/cifar_conv .ml' \
+    'test/training/fsm_transformer .ml' 'test/operations/online_softmax .ml' 'test/operations/env_var_deps .ml' \
+    'test/operations/cc_march_census .ml' 'test/operations/cc_temp_ownership .ml' \
+    'test/operations/sweep_harness_driver .ml' 'test/operations/placement_store .ml' \
+    'benchmarks/test_orchestrate .py'; do
+    printf '%s\n' "${src% *}${src#* }"
+  done >>"$TMP/source-only"
+  while IFS= read -r path; do
+    raffected --files "$path"
+    case $path in
+      benchmarks/*.py) printf '%s\n' "tools/test-merge-build-check.sh --only '#compile-output'" >"$TMP/want" ;;
+      *) : >"$TMP/want" ;;
+    esac
+    if [ "$rc" = 0 ] && cmp -s "$TMP/want" "$out"; then report 0 "$path alone selects only the harnesses reading it"
+    else report 1 "$path alone selects only the harnesses reading it" "exit $rc; got [$(tr '\n' '|' <"$out")]"; fi
+  done <"$TMP/source-only"
+  # The reader is unchanged: each spelling the fixtures moved away from still
+  # reaches a harness carrying it, a read or a mention the reader cannot tell
+  # from one (the conservative fallback the cat and printf controls above pin).
+  stem=${sj##*/} stem=${stem%.ml}
+  mkdir -p "$hrepo/${ld%/*}" "$hrepo/${bd%/*}" "$hrepo/${rw%/*}" "$hrepo/${sj%/*}" || exit 2
+  for f in "$ld" "$bd" "$rw" "$sj"; do : >"$hrepo/$f" || exit 2; done
+  for form in \
+    "$ld|a quoted diagnostic location|printf 'File \"$ld\", line 3, characters 1-20:\\n'" \
+    "$ld|a fixture repository's file under a variable prefix|cat >\"\$repo/$ld\" <<'DUNE'" \
+    "$rw|a trace location|printf 'debug solve_row_ineq begin \"$rw\":4164:31:\\n'" \
+    "$sj|a bare basename|printf '(diff? $stem.ml $stem.ml.corrected)\\n'" \
+    "$sj|the module's executable|finish('./$stem.exe', b + 'test', 6, [])" \
+    "$bd|a PATH stub|cat >\"\$TMP/$bd\" <<'SH'"; do
+    IFS='|' read -r path what text <<<"$form"
+    printf '%s\n' '#!/usr/bin/env bash' "$text" >"$hrepo/tools/test-c.sh"
+    haffected --harnesses --files "$path"
+    hexpect "$what still reaches its harness ($path)" 0 tools/test-c.sh
+  done
+  hc_restore
+  for f in "$ld" "$bd" "$rw" "$sj"; do unlink "$hrepo/$f" || exit 2; done
+  rmdir "$hrepo/${ld%/*}" "$hrepo/${bd%/*}" "$hrepo/${rw%/*}" "$hrepo/${sj%/*}" "$hrepo/test" || exit 2
 fi
 
 if harness_leg 'harness legs of this repository'; then
@@ -2161,7 +2215,7 @@ if harness_leg 'GPU-gated reach'; then
   mkdir -p "$repo/tools" "$repo/lib" "$repo/tests"
   cp "$HERE/affected-tests.sh" "$repo/tools/"
   printf '(lang dune 3.20)\n' >"$repo/dune-project"
-  printf '(library (name gpu_core) (modules gpu_core))\n' >"$repo/lib/dune"
+  (cd "$repo/lib" && printf '(library (name gpu_core) (modules gpu_core))\n' >dune)
   printf 'let used = 1\nlet other = 2\n' >"$repo/lib/gpu_core.ml"
   cat >"$repo/tests/dune" <<'DUNE'
 (test (name gpu) (modules gpu) (libraries gpu_core))

@@ -1553,7 +1553,7 @@ probe_run probe-plan hip cc "" "" plan build @cheap
 # The default's scope: no CPU batch, no @slow target; an explicit cap is kept
 # on either, and 0 lifts it.
 for probe in "cpu|cc|build @cheap|test cap: none (no default: a CPU batch)" \
-             "slow|hip|build @test/training/slow-cifar_conv|test cap: none (no default: the targets reach the slow tests (@test/training/slow-cifar_conv); a wedged device" \
+             "slow|hip|build @test/training/slow-fixture_conv|test cap: none (no default: the targets reach the slow tests (@test/training/slow-fixture_conv); a wedged device" \
              "slow-asked|hip|--test-cap 9000 build @slow|test cap: 9000s for each process dune starts, asked for" \
              "cpu-lifted|cc|--test-cap 0 build @cheap|test cap: none (--test-cap 0)"; do
   [ -z "$plan_probe_detail" ] || break
@@ -1586,7 +1586,7 @@ leg_106() {
   . "$HERE/per-test-cap.sh"
   for probe in "ordinary|plan build @cheap|3600" \
                "slow|plan build @slow|$SLOW_RUN_CAP_DEFAULT" \
-               "member|plan build @@test/training/slow-cifar_conv|$SLOW_RUN_CAP_DEFAULT" \
+               "member|plan build @@test/training/slow-fixture_conv|$SLOW_RUN_CAP_DEFAULT" \
                "short|plan --cap 9 build @slow|9" \
                "lifted|plan --cap 0 build @slow|0" \
                "separator|plan exec prog -- @slow|3600"; do
@@ -1604,10 +1604,10 @@ leg_106() {
     grep -qF "run cap: ${want}s ($source" <<<"$argv_out" ||
       d="the plan lacks its cap source: $argv_out"
   done
-  printf '%s\n' '@test/training/slow-cifar_conv' >"$TMP/slow-cap-targets"
+  printf '%s\n' '@test/training/slow-fixture_conv' >"$TMP/slow-cap-targets"
   for probe in "run|run build @slow|$SLOW_RUN_CAP_DEFAULT" \
                "file|run --targets-file $TMP/slow-cap-targets build|$SLOW_RUN_CAP_DEFAULT" \
-               "fresh|fresh @test/training/slow-cifar_conv|$SLOW_RUN_CAP_DEFAULT" \
+               "fresh|fresh @test/training/slow-fixture_conv|$SLOW_RUN_CAP_DEFAULT" \
                "repeat|repeat 2 build @slow|$SLOW_RUN_CAP_DEFAULT" \
                "override|run --cap 0 build @slow|0"; do
     [ -z "$d" ] || break
@@ -1619,7 +1619,7 @@ leg_106() {
         continue
       fi
       cp "$HERE/action-durations.sh" "$repeat_root/tools/action-durations.sh"
-      synthetic_trace "$TMP/slow-cap.trace" /fake/build 'cifar_conv.exe|0|test/training/cifar_conv.exe.output'
+      synthetic_trace "$TMP/slow-cap.trace" /fake/build 'fixture_conv.exe|0|test/training/fixture_conv.exe.output'
       # shellcheck disable=SC2086  # fixture argv deliberately split
       REPEAT_TEST_TRACE=$TMP/slow-cap.trace REPEAT_TEST_MKBUILD=1 probe_run "slow-cap-$tag" hip cc "" "" $argv
     else
