@@ -1082,7 +1082,8 @@ while time.monotonic() < deadline:
         if state != 'Z':
             try:
                 os.kill(p, signal.SIGKILL)
-            except ProcessLookupError:
+            except OSError:
+                # A child we cannot signal stays subject to the drain deadline.
                 pass
     time.sleep(0.01)
 else:
