@@ -5587,7 +5587,9 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   guessing: the hard-coded `-wsl` aliases filed every GPU unit as `skip (unreachable)` — a sleeping
   box's row — from the first native boot on (gh-ocannl-1030). Only a selected remote unit is
   resolved, so a local-only run needs no table; the header's `destinations:` line names the boot
-  each GPU lane addressed.
+  each GPU lane addressed. Full Metal, CUDA and HIP units also build `@bin/twin-tile-dry`
+  (gh-ocannl-2307). Its seed geometry and output checks share the unit's device, timeout and
+  verdict with the suite, including the completion pass after a clean serial retry.
 - A unit whose backend field is not a backend is a configuration VARIANT (gh-ocannl-1778), keyed by
   its own name in logs, history, unit state, `--only` and the run record, and mapped back to its
   backend wherever the backend decides (`unit_backend`, `unit_dune_env`, `unit_suite`). Three so

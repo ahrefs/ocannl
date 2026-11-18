@@ -216,7 +216,13 @@ for boot in linux wsl; do
   [ "$(awk -F '\t' '$1 == "minix-amd-'"$boot"'" && $6 == "exec -- dune clean" {n++} END {print n+0}' "$remote_root/commands")" -eq 1 ]
   jobs=$(box_jobs_sweep_jobs minix hip minix-amd-$boot)
   awk -F '\t' -v host="minix-amd-$boot" -v jobs="$jobs" -v sha="$(git -C "$main" rev-parse HEAD)" -v cwd="$remote_root/minix-amd-$boot/ocannl-staging-worktrees/sweep" \
-    '$1 == host {if ($4 != sha || $3 != cwd) exit 1; if ($6 == "exec -- dune build -j " jobs " --force @runtest @train") suite++; if ($6 == "exec -- dune build -j 1 @test/runtest-state-probe") serial++; if ($6 == "exec -- dune build -j 1 @runtest @train") completion++} END {if (suite != 1 || serial != 1 || completion != 1) exit 1}' "$remote_root/commands"
+    '$1 == host {
+      if ($4 != sha || $3 != cwd) exit 1
+      if ($6 == "exec -- dune build -j " jobs " --force @runtest @train @bin/twin-tile-dry") suite++
+      if ($6 == "exec -- dune build -j 1 @test/runtest-state-probe") serial++
+      if ($6 == "exec -- dune build -j 1 @runtest @train @bin/twin-tile-dry") completion++
+    }
+    END {if (suite != 1 || serial != 1 || completion != 1) exit 1}' "$remote_root/commands"
   prefix=/usr/local/cuda/bin:
   [ "$boot" != wsl ] || prefix=$prefix/usr/lib/wsl/lib:
   awk -F '\t' -v prefix="$prefix" '$2 == "hip" {if (index($5, prefix) != 1) exit 1; seen++} END {if (!seen) exit 1}' "$remote_root/commands"
@@ -226,7 +232,7 @@ for boot in linux wsl; do
   grep -q '^exec -- dune clean	' "$remote_root/credentials"
   grep -q '^exec -- dune build @arrayjit/test/runtest-test_hip_compile_options --force	' \
     "$remote_root/credentials"
-  grep -q '^exec -- dune build -j 1 @runtest @train	' "$remote_root/credentials"
+  grep -q '^exec -- dune build -j 1 @runtest @train @bin/twin-tile-dry	' "$remote_root/credentials"
   # Dirty reused worktree is reset, including untracked strays. multidev_cc's environment is not
   # hip's, so it has a worktree of its own beside hip's `sweep` (unit_worktree_name).
   remote_wt=$remote_root/minix-amd-$boot/ocannl-staging-worktrees/sweep-multidev_cc
@@ -555,7 +561,9 @@ absent '^sweep: gpu token: .*serial rerun' "$local_log"
 # Each GPU leg's dune ran with the unit's token held beside the worker's; the RTC context, which
 # runs no GPU test, took none.
 awk -F '\t' -v holds='1 2' '
-  $1 ~ / --force @runtest @train$/ || $1 ~ / -j 1 @test\/runtest-state-probe$/ || $1 ~ / -j 1 @runtest @train$/ {
+  $1 ~ / --force @runtest @train @bin\/twin-tile-dry$/ ||
+  $1 ~ / -j 1 @test\/runtest-state-probe$/ ||
+  $1 ~ / -j 1 @runtest @train @bin\/twin-tile-dry$/ {
     if ($2 != holds) exit 1; legs++ }
   $1 ~ /test_cuda_compile_options/ { if ($2 != "1") exit 1; rtc++ }
   END { if (legs != 3 || rtc != 1) exit 1 }' "$remote_root/token-states"

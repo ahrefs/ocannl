@@ -40,6 +40,8 @@
    the same replay. Each chain depth keeps a guarded sample whose output reaches a source read at
    unequal coordinates. [--plant-transpose] replaces [(j,i)] by [(i,j)] in virtual initializer
    links, leaving the materialized twins and replay correct, so both tiers must detect it.
+   [--check-planted-transpose] checks one guarded descriptor per chain depth on the compiled path.
+   The clean and materialized arms must agree with replay, and the planted arm must disagree.
 
    A program's descriptor is its name. [--only <substring>] prints the raw and optimized code of the
    programs whose descriptor contains it and checks nothing, for a finding printed on stderr;
@@ -393,7 +395,7 @@ let reads_off_diagonal prog =
       !found
   | _ -> false
 
-let build ?(materialized_src = false) prog ~declare =
+let build ?(materialized_src = false) ?(plant_transpose = plant_transpose) prog ~declare =
   let x = mk ~dims:prog.dims "x" and src = mk ~dims:src_dims "src" in
   let init_links = ref [] in
   let inputs, source =
@@ -1071,36 +1073,84 @@ let strict_probe_controls () =
 let nested_anchor_limit = 8
 let ordinary_anchor_limit = 16
 
+let compile_anchor ?plant_transpose ~name ~materialized prog =
+  let declare =
+    if materialized then materialize
+    else match prog.standing with Declared -> virtualize | _ -> ignore
+  in
+  let b = build ~materialized_src:materialized ?plant_transpose prog ~declare in
+  match optimize ~static_indices:b.static_indices ~name:"vio" (List.hd_exn b.routines) with
+  | exception Utils.User_error _ when not materialized -> None
+  | o ->
+      let seed = if materialized || read_before_write o b.x then [ (b.x, entries prog) ] else [] in
+      let seed_outs =
+        List.mapi (Array.to_list b.outs) ~f:(fun j out ->
+            (out, blank (out_len prog.read_accesses.(j))))
+      in
+      let got =
+        execute ~name ~bindings:b.bindings ~launch:b.launch o
+          ~seed:(b.inputs @ seed @ seed_outs)
+          ~read:(Array.to_list b.outs)
+      in
+      Some (o, Array.of_list got)
+
+let anchor_matches ~want got = Array.for_all2_exn got want ~f:(fun a b -> close a b)
+
 let run_anchor i prog =
   let want = replay prog in
-  let seed_outs b =
-    List.mapi (Array.to_list b.outs) ~f:(fun j out -> (out, blank (out_len prog.read_accesses.(j))))
+  let twin = compile_anchor ~name:(Printf.sprintf "vio_m%d" i) ~materialized:true prog in
+  let virtual_arm = compile_anchor ~name:(Printf.sprintf "vio_v%d" i) ~materialized:false prog in
+  let matches (_, got) = anchor_matches ~want got in
+  Option.exists twin ~f:matches && Option.for_all virtual_arm ~f:matches
+
+let check_compiled_transpose () =
+  let dims = [| 3 |] in
+  let access hi =
+    {
+      layout = "axes";
+      pos = [| Coord (Lin ([ (1, 0) ], 0)) |];
+      extents = dims;
+      ranges = [ (0, (0, hi)) ];
+    }
   in
-  let compiled ~name b o ~seed =
-    let values =
-      execute ~name ~bindings:b.bindings ~launch:b.launch o
-        ~seed:(b.inputs @ seed @ seed_outs b)
-        ~read:(Array.to_list b.outs)
-    in
-    Array.of_list values
+  (* The read spans the written prefix and the zeroed suffix, so the source scope needs the guard.
+     The last write in the prefix uses source coordinates (1,0). *)
+  let witnesses =
+    List.filter_map nested_sources ~f:(function
+      | Reduce_chain _ as source ->
+          Some
+            {
+              dims;
+              comps = [| { (stores (access 1)) with complex = true } |];
+              read_accesses = [| access 2 |];
+              steps = [ Zero; Write 0; Read 0 ];
+              standing = Declared;
+              source;
+            }
+      | Input | Reduce_zero | Reduce_init -> None)
   in
-  let optimized ?materialized b =
-    optimize ?materialized ~static_indices:b.static_indices ~name:"vio" (List.hd_exn b.routines)
-  in
-  let matches got = Array.for_all2_exn got want ~f:(fun a b -> close a b) in
-  let twin =
-    let b = build ~materialized_src:true prog ~declare:materialize in
-    compiled ~name:(Printf.sprintf "vio_m%d" i) b (optimized b) ~seed:[ (b.x, entries prog) ]
-  in
-  let refused, virtual_arm =
-    let b = build prog ~declare:(match prog.standing with Declared -> virtualize | _ -> ignore) in
-    match optimized b with
-    | exception Utils.User_error _ -> (true, [||])
-    | o ->
-        let seed = if read_before_write o b.x then [ (b.x, entries prog) ] else [] in
-        (false, compiled ~name:(Printf.sprintf "vio_v%d" i) b o ~seed)
-  in
-  matches twin && (refused || matches virtual_arm)
+  p_all ~min:2 "each transpose witness reads off the source diagonal" witnesses
+    ~f:reads_off_diagonal;
+  List.iteri witnesses ~f:(fun i prog ->
+      Stdio.eprintf "TRANSPOSE witness on %s: %s\n%!"
+        (Context.backend_name (Lazy.force base_ctx))
+        (show_program prog);
+      let want = replay prog in
+      let matches = anchor_matches ~want in
+      let name arm = Printf.sprintf "vio_transpose_%s%d" arm i in
+      let guarded_arm ~arm ~plant_transpose ~check =
+        compile_anchor ~plant_transpose ~name:(name arm) ~materialized:false prog
+        |> Option.exists ~f:(fun (o, got) -> has_guarded_scope [ o ] && check got)
+      in
+      case (source_name prog.source) (fun () ->
+          p "the materialized twin matches replay"
+            (compile_anchor ~name:(name "twin") ~materialized:true prog
+            |> Option.exists ~f:(fun (_, got) -> matches got));
+          p "the clean guarded arm matches replay"
+            (guarded_arm ~arm:"clean" ~plant_transpose:false ~check:matches);
+          p "the planted guarded arm returns finite values that differ from replay"
+            (guarded_arm ~arm:"planted" ~plant_transpose ~check:(fun got ->
+                 Array.for_all got ~f:(Array.for_all ~f:Float.is_finite) && not (matches got)))))
 
 let tier_b () =
   let candidates = sorted_values anchors in
@@ -1164,7 +1214,7 @@ let audit_shards () =
   p "the shard union equals the full widened census"
     (Array.sum (module Int) shard_sizes ~f:Fn.id = !enumerated)
 
-let () =
+let run_oracle () =
   let started = Mtime_clock.counter () in
   let seconds () = Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9 in
   let bound = if Option.is_some shard then 600. else 1200. in
@@ -1231,3 +1281,5 @@ let () =
     case "strict probe" strict_probe_controls;
     case "tier B" tier_b;
     p "the oracle completed within its wall-time bound" Float.(seconds () <= bound))
+
+let () = if has_arg "--check-planted-transpose" then check_compiled_transpose () else run_oracle ()

@@ -11,9 +11,8 @@
 # the ambient key is part of every test action's dependencies, so in the unit's `_build` this run
 # re-executed every test action and left the next day's floor run nothing to reuse.
 #
-# Usage: tools/cuda-native-ptx-rerun.sh [dune build arguments...]   (from any directory; default
-#                                                                    `@runtest @train`, the
-#                                                                    sweep's full-suite unit)
+# Usage: tools/cuda-native-ptx-rerun.sh [dune build arguments...]
+# The default is `@runtest @train`. The sweep passes the CUDA unit's targets explicitly.
 #
 # Dune's own output comes first. The last line on stdout is the verdict, and the exit status says
 # the same:

@@ -567,6 +567,11 @@ files.
   The built oracle's `--plant-transpose` control makes only virtual links read `(i,j)` in place
   of `(j,i)`. It reports 60,308 Tier A findings and fails compiled parity, naming mismatched
   anchors on stderr. The original sample passed compiled parity under the same fault.
+  `@test/operations/slow-virtual_inliner_oracle-plant-transpose` runs the compiled control on cc
+  through `@slow` (gh-ocannl-2307). One descriptor per depth reads a partial write and the
+  zeroed suffix under a guard. Its clean virtual and materialized arms must match replay,
+  and its planted virtual arm must return a finite mismatch. The control compiles six
+  routines. Tier B's normal sample is 48 anchors.
   The original `src=reduce` negative control is the strict probe of before gh-ocannl-2145,
   which ran every discarded arm's scopes (codegen hoisted them then), over the inliner without `guard_hoisted`: the table
   reports 2,869 strict address faults, all in `src=reduce`, across axes/axes, axes/flat,

@@ -104,6 +104,7 @@
   (alias slow-metal_gpu_hang_failure)
   (alias slow-metal_wait_bound_real_hang)
   (alias slow-tune_ship_arm)
+  (alias slow-virtual_inliner_oracle-plant-transpose)
   (alias slow-virtual_inliner_oracle-widen)
   (alias slow-where_scope_generator-widen)))
 
@@ -15202,6 +15203,23 @@
  (modules shape_program_sweep)
  (libraries base ocannl stdio unix arrayjit.verdict arrayjit.context))
 
+; The listing's claims follow the current known cases so fixes need no second golden.
+
+(rule
+ ; ocannl-backend: cc -- the listing reuses the sample executed on Context.cpu.
+ (alias runtest-shape_program_sweep-list-known)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
+ (action
+  (run %{dep:shape_program_sweep.exe} --list-known)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias runtest-shape_program_sweep-list-known)))
+
 ;; gh-ocannl-404: shape schemes -- a function traced once, its scheme instantiated against
 ;; argument and result shapes without running it, compared with direct construction, with one
 ;; negative control per part of the mechanism.
@@ -17962,6 +17980,24 @@
   arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; The compiled transpose control tests the oracle on one guarded witness per depth on cc.
+
+(rule
+ ; ocannl-backend: cc -- a pinned witness exercises the compiled oracle's parity check.
+ (alias slow-virtual_inliner_oracle-plant-transpose)
+ (package neural_nets_lib)
+ (deps
+  (alias slow-env_spelling_gate)
+  ocannl_config)
+ (action
+  (setenv
+   OCANNL_BACKEND
+   cc
+   (run
+    %{dep:virtual_inliner_oracle.exe}
+    --plant-transpose
+    --check-planted-transpose))))
 
 ; The full widened census is partitioned by folded base-four descriptor ordinal (gh-ocannl-2186).
 ; No thinning: the aggregate retains every program. Each shard keeps the replay, both optimizer
