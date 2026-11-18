@@ -5546,7 +5546,8 @@ let seeded_default_gate ~limits =
               matrix_rate = ranking_mma_rate ~limits;
               gather_rate = ranking_device_gather_rate ~limits;
               (* gh-ocannl-2349: both schedules launched whole warps in all five gh-1479 CUDA cells.
-                 Warp fill gave the same scores there, so keep thread-only fill here. *)
+                 Warp fill gave the same scores there. This gate fixes the width at 1 and leaves
+                 [model_fill_lane_width] to the leaf ranker. *)
               fill = fill_model_at ~limits ~lane_width:1;
               sector_rate = ranking_transaction_rate ~limits;
               wg_capacity = ranking_workgroup_capacity ~limits;
@@ -5855,10 +5856,12 @@ let seeded_split ~facts ~min_serial ~static_indices (opt : LL.optimized) =
 (* gh-ocannl-1253, the [auto] gate's test: the seeded sketch's ranking score strictly below the
    preset's, on the segment alone, under the gate's capacity and cache bandwidth. Either failing to
    build, to apply or to score keeps the preset. Only a typed refusal fails: any other exception is
-   a builder or transform bug and propagates (gh-ocannl-1390). *)
-(* gh-ocannl-2349: the five gh-1479 CUDA sketches use the 4x4 calibration tile, with no excess
-   shared loads. Deduplicating direct reads removes no bytes from either schedule there. All arms
-   give the shipped decision. See the sketch/preset measurements on gh-ocannl-2349. *)
+   a builder or transform bug and propagates (gh-ocannl-1390).
+
+   gh-ocannl-2349: the five measured gh-1479 CUDA sketches use the 4x4 calibration tile. Shared
+   pricing and direct deduplication leave these scores unchanged. The gate picked the faster
+   schedule in all five cells. Sketch/preset timings for a 2x2 tile, a sub-warp launch, or a site
+   where deduplication saves bytes are still open. *)
 let seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices ~capacity ~cache_bandwidth
     ~issue_rate ~dram_bandwidth ~mma_rate ~device_gather_rate ~fill_model ~transaction_rate
     ~workgroup_capacity ~staged_copy_rate p pre =
