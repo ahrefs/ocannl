@@ -674,10 +674,12 @@ val cpu_conv_panel_chunk_bytes : conv_site -> sketch_params -> int
 (** The two staged tiles and any accumulator fragment a direct CPU row-panel Grid privatizes.
     Exposed to compare the pre-filter with the renderer's Grid record. *)
 
-val cpu_mma_grid_updates_bound : matmul_site -> sketch_params -> cap:int -> int
-(** Saturating upper bound on the CPU tensorized site's per-Grid-launch update count. Serial shapes
-    and unknown fused epilogues return [cap]. Exposed to compare the seeding predicate with the
-    renderer's [Grid_below_min_updates] payload. *)
+val cpu_mma_grid_updates_bound :
+  ?epilogue_cell_updates:int -> matmul_site -> sketch_params -> cap:int -> int
+(** Saturating upper bound on the CPU tensorized site's per-Grid-launch update count. A fused
+    epilogue adds [epilogue_cell_updates] per output cell and lane iteration. Serial shapes and
+    fused shapes with unknown epilogue cost return [cap]. Exposed to compare the seeding predicate
+    with the renderer's [Grid_below_min_updates] payload. *)
 
 val sketch_path_traffic_floor :
   limits:Ir.Backend_intf.hardware_limits -> Ir.Low_level.optimized -> Family_decision.path -> int

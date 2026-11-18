@@ -4984,11 +4984,12 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
       (Site "486:epilogue-workgroup-shared");
     { opt with workgroup_shared = Set.add opt.workgroup_shared target })
 
-let fuse_epilogue_witness ~target (opt : Low_level.optimized) : string option =
-  try
-    ignore (apply_fuse_epilogue ~target ~shared:false opt : Low_level.optimized);
-    None
-  with Schedule_outcome.Cause_at (_, cause) -> Some (Schedule_outcome.detail_of_cause cause)
+let fuse_epilogue_result ~target opt =
+  try Ok (apply_fuse_epilogue ~target ~shared:false opt)
+  with Schedule_outcome.Cause_at (_, cause) -> Error (Schedule_outcome.detail_of_cause cause)
+
+let fuse_epilogue_witness ~target opt =
+  match fuse_epilogue_result ~target opt with Ok _ -> None | Error why -> Some why
 
 let can_fuse_epilogue ~target opt = Option.is_none (fuse_epilogue_witness ~target opt)
 
