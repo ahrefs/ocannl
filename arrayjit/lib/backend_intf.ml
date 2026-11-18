@@ -508,6 +508,30 @@ type hardware_limits = {
           by [model_default]'s ranking only: the [auto] seeding gate, which weighs a staged sketch
           against an unstaged preset the term was not fitted for, prices neither the term nor the
           tail. Same cache identity as {!field-cache_capacity_bytes}. *)
+  shared_load_rate : float option; [@sexp.option]
+      (** [Untimed]: how many workgroup-memory cells per second a launch's threads load beyond the
+          calibration register tile's reuse -- the rate of the ranking score's register-reuse term
+          (gh-ocannl-2262, {!Ir.Cost_model.shared_loads}): per k-step a thread of an [rm x rn]
+          register tile reads [rm + rn] staged cells for [rm * rn] multiply-adds, and the loads
+          beyond {!Ir.Cost_model.reference_loads_per_op} per scalar operation (the 4x4 tile
+          {!field-issue_rate} was fitted on, whose loads that rate already carries), each context's
+          over its fill, are added to the compute leg. What orders a 2x2 register tile against a 4x4
+          one at one block tile, which every other term ties. A FITTED constant
+          ([benchmarks/gh1600_txn_fit.py --shared-rate]), per device class. Overridable by config
+          [model_shared_load_rate]; [None] where unmeasured, which adds no term. Read by the leaf
+          ranking ([model_default], [model_explain]); the [auto] seeding gate prices no shared
+          loads. Same cache identity as {!field-cache_capacity_bytes}. *)
+  fill_lane_width : int option; [@sexp.option]
+      (** [Untimed]: the lane group a block's threads issue in, as the launch fill counts them
+          (gh-ocannl-2262, {!Ir.Cost_model.context_fill}'s [fm_lane_width]): a block of [T] threads
+          occupies [W * ceil (T / W)] lanes, and saturated, does [T] lanes' work of them -- a
+          16-thread block on 32-lane groups half a full group's. Unsaturated launches, and blocks of
+          a multiple of [W] threads (every calibration kernel's), fill as without it. Not fitted:
+          the hardware's issue width, stated where the score's evidence supports it, from the
+          binding {!field-simdgroup_width} reads. Overridable by config [model_fill_lane_width];
+          [None], which is [W = 1], the thread-only fill. Read wherever the fill model is but the
+          [auto] seeding gate, which keeps the thread-only fill. Same cache identity as
+          {!field-cache_capacity_bytes}. *)
   native_fp16_arithmetic : bool;
       (** Whether 16-bit float arithmetic executes natively at twice f32's lane count
           (gh-ocannl-516: ARMv8.2-FP16, AVX512-FP16). [false] covers both "no [_Float16] on this
@@ -933,6 +957,8 @@ let no_hardware_limits =
     transaction_rate = None;
     workgroup_bytes_per_multiprocessor = None;
     staged_copy_rate = None;
+    shared_load_rate = None;
+    fill_lane_width = None;
     native_fp16_arithmetic = false;
     simdgroup_width = None;
     lane_scalar_recompute_cheap = false;
@@ -1169,6 +1195,8 @@ let limits_key
        transaction_rate = _;
        workgroup_bytes_per_multiprocessor = _;
        staged_copy_rate = _;
+       shared_load_rate = _;
+       fill_lane_width = _;
        native_fp16_arithmetic;
        simdgroup_width;
        lane_scalar_recompute_cheap;
@@ -1213,6 +1241,8 @@ type untimed_limits = {
   workgroup_capacity : int option;
       (** {!field-hardware_limits.workgroup_bytes_per_multiprocessor}. *)
   copy_rate : float option;  (** {!field-hardware_limits.staged_copy_rate}. *)
+  shared_rate : float option;  (** {!field-hardware_limits.shared_load_rate}. *)
+  lane_width : int option;  (** {!field-hardware_limits.fill_lane_width}. *)
 }
 (** The [Untimed] fields' readings, the one accessor their readers go through
     ([test/operations/limits_field_classes] refuses a direct read elsewhere). *)
@@ -1232,6 +1262,8 @@ let untimed_limits (l : hardware_limits) : untimed_limits =
     sector_rate = l.transaction_rate;
     workgroup_capacity = l.workgroup_bytes_per_multiprocessor;
     copy_rate = l.staged_copy_rate;
+    shared_rate = l.shared_load_rate;
+    lane_width = l.fill_lane_width;
   }
 
 (** A base for [{ minimal_mma_capability with ... }] literals, so adding a field to

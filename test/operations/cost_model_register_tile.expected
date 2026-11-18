@@ -1,0 +1,30 @@
+a materialized 2x2 tile reads rm + rn = 4 distinct staged cells a k-step: true
+a materialized 4x4 tile reads rm + rn = 8 distinct staged cells a k-step: true
+a serial loop recounts its body's cells per iteration: true
+unstaged reads are not shared loads: true
+a Tile_mma kernel has no shared loads (its rate prices them): true
+the calibration tile's reference reuse is 1/4 cell per scalar operation: true
+a 4x4 tile has no loads beyond the reference: true
+a 2x2 tile has 2 cells a k-step beyond the reference: true
+the term adds the filled excess over the rate to the compute leg, exactly: true
+no rate leaves both legs bitwise: true
+a rate of 0 leaves both legs bitwise: true
+no excess leaves both legs bitwise: true
+unpriced, the 2x2 and 4x4 tiles at one block tile tie: true
+priced, the 2x2 tile ranks above the 4x4 one by exactly its excess over the rate: true
+a lane multiple fills bitwise as the thread-only fill, saturated or not: true
+unsaturated, a sub-group block fills as the thread-only fill: true
+saturated, a 16-thread block does half the thread-only fill's work: true
+saturated, a 48-thread block does 48 of its 64 lanes' work: true
+under the tail, unsaturated, a sub-group block fills as the thread-only fill: true
+under the tail, saturated, a 16-thread block does half the thread-only fill's work: true
+every default launch-sweep geometry is the calibration tile on lane multiples: true
+every staged leaf's census equals M*N*K*(rm+rn)/(rm*rn) cells: true
+a 2x2 leaf is among them: true
+4x4 leaves load nothing beyond the reference, 2x2 leaves at most M*N*K/2 cells: true
+the shared-load rate raises the 2x2 leaves and leaves the 4x4 leaves bitwise: true
+the lane width raises the saturated sub-warp leaves and leaves the others bitwise, the unsaturated sub-warp ones included: true
+an unsaturated sub-warp leaf is among them: true
+the seeded incumbent ranks bitwise under either field: true
+unpriced, the saturated 32x32 bgrid pair ties; priced, 4x4 ranks below 2x2 as measured: true
+thread-only, the saturated 16x16 bgrid pair ties; in lanes, 2x2 ranks below 4x4 as measured: true

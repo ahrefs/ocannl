@@ -3141,6 +3141,14 @@ let staged_copy_rate_override =
     (parse_rate ~key:"model_staged_copy_rate" ~what:"rate in bytes/s"
        (Utils.get_global_arg ~arg_name:"model_staged_copy_rate" ~default:""))
 
+(* gh-ocannl-2262: the shared-load rate (cells/s beyond the calibration tile's reuse; [none]: no
+   register-reuse term) beats the backend's advisory [shared_load_rate]. Same readers and class as
+   the rates above. *)
+let shared_load_rate_override =
+  lazy
+    (parse_rate ~key:"model_shared_load_rate" ~what:"rate in loads/s"
+       (Utils.get_global_arg ~arg_name:"model_shared_load_rate" ~default:""))
+
 let resolve override advisory =
   match Lazy.force override with `Advisory -> advisory | `Off -> None | `Value v -> Some v
 
@@ -3182,6 +3190,14 @@ let fill_chains_override =
 (* gh-ocannl-1600: the occupancy factor's workgroup capacity per multiprocessor (bytes; [none]: no
    occupancy factor, and no coalesced layouts in [model_default]) beats the backend's advisory
    [workgroup_bytes_per_multiprocessor]. Same readers and class as the rates above. *)
+(* gh-ocannl-2262: the launch fill's lane group -- config [model_fill_lane_width] (a positive
+   integer; [none]: 1, the thread-only fill) -- beats the backend's advisory [fill_lane_width]. Same
+   readers and class as the rates above. *)
+let fill_lane_width_override =
+  lazy
+    (parse_count ~key:"model_fill_lane_width" ~what:"lane count per issue group"
+       (Utils.get_global_arg ~arg_name:"model_fill_lane_width" ~default:""))
+
 let workgroup_capacity_override =
   lazy
     (parse_count ~key:"model_workgroup_bytes_per_multiprocessor"
@@ -3224,6 +3240,16 @@ let ranking_staged_copy_rate ~limits =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   resolve staged_copy_rate_override u.copy_rate
 
+let ranking_shared_load_rate ~limits =
+  let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
+  resolve shared_load_rate_override u.shared_rate
+
+(* gh-ocannl-2262: the launch fill's lane group as resolved, 1 (the thread-only fill) where neither
+   the config nor the backend states one. *)
+let ranking_fill_lane_width ~limits =
+  let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
+  Option.value ~default:1 (resolve fill_lane_width_override u.lane_width)
+
 (* gh-ocannl-1639: the launch fill's ILP cap as resolved, 1 (the thread-only fill) where neither the
    config nor the backend states one -- read on its own, so a calibration whose fill model does not
    resolve yet still fits under the cap the score will read. *)
@@ -3233,7 +3259,8 @@ let ranking_fill_chains ~limits =
 
 (* The launch fill as resolved: continuous ([fm_tail] off). The score switches the tail on where it
    prices a staged-copy rate (segments_legs, gh-ocannl-1821). The ILP cap (gh-ocannl-1639) is 1 --
-   the thread-only fill -- unless [fill_chains] resolves. *)
+   the thread-only fill -- unless [fill_chains] resolves; the lane group (gh-ocannl-2262) likewise,
+   unless [fill_lane_width] resolves. *)
 let ranking_fill_model ~limits : CM.fill_model option =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   match
@@ -3247,6 +3274,7 @@ let ranking_fill_model ~limits : CM.fill_model option =
           fm_fill_threads;
           fm_tail = false;
           fm_chains = ranking_fill_chains ~limits;
+          fm_lane_width = ranking_fill_lane_width ~limits;
         }
   | _ -> None
 
@@ -3271,6 +3299,7 @@ type kernel_legs = {
       (** The same fill-weighted excess at the 64- and 128-byte sector sizes, on request only: a
           diagnostic for whether the counting unit changes the ordering. *)
   kl_staged_bytes : float;
+  kl_shared_loads : float;
       (** gh-ocannl-1821: the operand staging copies' bytes as the compute leg divides them by the
           staged-copy rate ({!Ir.Cost_model.filled_staged_bytes}); 0 where they were not counted (no
           rate). *)
@@ -3289,8 +3318,8 @@ type kernel_legs = {
    [summaries_roofline] is. *)
 let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate
     ?device_gather_rate ?fill_model ?transaction_rate ?workgroup_capacity ?staged_copy_rate
-    ?(count_transactions = false) ?(price_direct_loads = false) ~peak_flops ~peak_memory_bandwidth
-    ~limits (segs : LL.optimized list) : (float * kernel_legs list) option =
+    ?shared_load_rate ?(count_transactions = false) ?(price_direct_loads = false) ~peak_flops
+    ~peak_memory_bandwidth ~limits (segs : LL.optimized list) : (float * kernel_legs list) option =
   (* Each reading only where no explicit value replaces it: a caller's gate isolates the score from
      the configuration it overrides, a malformed override of it included. *)
   let max_resident_threads = (Ir.Backend_intf.untimed_limits limits).resident_threads in
@@ -3310,6 +3339,9 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
   in
   let staged_copy_rate =
     match staged_copy_rate with Some r -> r | None -> ranking_staged_copy_rate ~limits
+  in
+  let shared_load_rate =
+    match shared_load_rate with Some r -> r | None -> ranking_shared_load_rate ~limits
   in
   (* gh-ocannl-1821: the launch tail follows the copy rate the score prices, whichever reading
      supplied the fill model -- the two are one calibration. *)
@@ -3386,23 +3418,47 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
               let transactions = count None in
               (* gh-ocannl-1821: the operand staging copies, where a copy rate prices them: into a
                  workgroup-shared node that is not a fragment. *)
-              let staged_copies, direct_loads =
+              (* gh-ocannl-2262: and the shared loads beyond the calibration tile's reuse, where a
+                 shared-load rate prices them or a report asks for them -- one traversal for all. *)
+              let count_shared = Option.is_some shared_load_rate || count_transactions in
+              let staged_copies, direct_loads, shared_loads =
                 match staged_copy_rate with
-                | None -> ([], [])
-                | Some _ ->
+                | None when not count_shared -> ([], [], [])
+                | _ ->
                     let is_staged tn =
                       Set.mem o.LL.workgroup_shared tn
                       && (not (Set.mem o.LL.simdgroup_fragments tn))
                       && not (Set.mem o.LL.masked_fragments tn)
                     in
-                    let is_global = if price_direct_loads then Some (CM.global_in o) else None in
-                    CM.operand_deliveries ?is_global ~is_staged o.LL.llc
+                    let is_global =
+                      if price_direct_loads && Option.is_some staged_copy_rate then
+                        Some (CM.global_in o)
+                      else None
+                    in
+                    let census =
+                      CM.operand_census ?is_global ~shared:count_shared ~is_staged o.LL.llc
+                    in
+                    let shared_loads =
+                      if List.is_empty census.oc_shared then []
+                      else
+                        let contexts =
+                          match launch with
+                          | Some (_, contexts) -> contexts
+                          | None -> CM.launch_contexts ~is_private:(CM.private_in o) o.LL.llc
+                        in
+                        CM.excess_shared_loads contexts census.oc_shared
+                    in
+                    ( (if Option.is_some staged_copy_rate then census.oc_staged else []),
+                      census.oc_direct,
+                      shared_loads )
               in
               let kl_compute, kl_memory =
                 CM.ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes
                   ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate ~mma_flops ~device_gathers
                   ?device_gather_rate ?launch ~transactions ?transaction_rate ~staged_copies
-                  ~direct_loads ?staged_copy_rate ?occupancy s reuse
+                  ~direct_loads ?staged_copy_rate
+                  ~shared_loads:(if Option.is_some shared_load_rate then shared_loads else [])
+                  ?shared_load_rate ?occupancy s reuse
               in
               let filled ts = CM.filled_transactions ?fill_model:(Option.map launch ~f:fst) ts in
               let kl_mma_work, kl_device_gathers =
@@ -3420,6 +3476,8 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
                    else []);
                 kl_staged_bytes =
                   CM.filled_staged_bytes ?fill_model:(Option.map launch ~f:fst) staged_copies;
+                kl_shared_loads =
+                  CM.filled_shared_loads ?fill_model:(Option.map launch ~f:fst) shared_loads;
                 kl_workgroup_bytes = workgroup_bytes;
                 kl_block_threads = block_threads;
                 kl_occupancy = Option.value occupancy ~default:1.;
@@ -3444,12 +3502,13 @@ let kernel_rank { kl_compute; kl_memory; _ } =
    explicit [capacity] / [cache_bandwidth] (the gate's own, or a test's) overrides the readings. *)
 let segments_ranking ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate
     ?device_gather_rate ?fill_model ?transaction_rate ?workgroup_capacity ?staged_copy_rate
-    ?price_direct_loads ~peak_flops ~peak_memory_bandwidth ~limits (segs : LL.optimized list) :
-    (float * float) option =
+    ?shared_load_rate ?price_direct_loads ~peak_flops ~peak_memory_bandwidth ~limits
+    (segs : LL.optimized list) : (float * float) option =
   Option.map
     (segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate
        ?device_gather_rate ?fill_model ?transaction_rate ?workgroup_capacity ?staged_copy_rate
-       ?price_direct_loads ~peak_flops ~peak_memory_bandwidth ~limits segs) ~f:(fun (bound, legs) ->
+       ?shared_load_rate ?price_direct_loads ~peak_flops ~peak_memory_bandwidth ~limits segs)
+    ~f:(fun (bound, legs) ->
       (List.fold legs ~init:0. ~f:(fun acc l -> acc +. kernel_rank l), bound))
 
 let ranking_ms ?capabilities ~limits segs =
@@ -5444,7 +5503,8 @@ let seed_gate_tag = function
         (rate cache_rate) (rate scalar_rate) (rate dram_rate) (set "matrix_rate" matrix_rate)
         (set "gather_rate" gather_rate)
         (Option.value_map fill ~default:""
-           ~f:(fun { Ir.Cost_model.fm_multiprocessors; fm_fill_threads; fm_tail = _; fm_chains } ->
+           ~f:(fun
+               { Ir.Cost_model.fm_multiprocessors; fm_fill_threads; fm_tail = _; fm_chains; _ } ->
              if fm_chains > 1 then
                Printf.sprintf " fill=%dx%dc%d" fm_multiprocessors fm_fill_threads fm_chains
              else Printf.sprintf " fill=%dx%d" fm_multiprocessors fm_fill_threads))
@@ -5483,7 +5543,11 @@ let seeded_default_gate ~limits =
               dram_rate = ranking_dram_bandwidth ~limits;
               matrix_rate = ranking_mma_rate ~limits;
               gather_rate = ranking_device_gather_rate ~limits;
-              fill = ranking_fill_model ~limits;
+              (* gh-ocannl-2262: the gate keeps the thread-only fill, as it prices no shared loads:
+                 neither was fitted for a staged sketch against an unstaged preset. *)
+              fill =
+                Option.map (ranking_fill_model ~limits) ~f:(fun fm ->
+                    { fm with CM.fm_lane_width = 1 });
               sector_rate = ranking_transaction_rate ~limits;
               wg_capacity = ranking_workgroup_capacity ~limits;
               copy_rate = ranking_staged_copy_rate ~limits;
@@ -5803,8 +5867,8 @@ let seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices ~capacity ~c
         Option.map
           (segments_ranking ~capabilities ~capacity ~cache_bandwidth ~issue_rate ~dram_bandwidth
              ~mma_rate ~device_gather_rate ~fill_model ~transaction_rate ~workgroup_capacity
-             ~staged_copy_rate ~price_direct_loads:true ~peak_flops ~peak_memory_bandwidth ~limits
-             [ post ])
+             ~staged_copy_rate ~shared_load_rate:None ~price_direct_loads:true ~peak_flops
+             ~peak_memory_bandwidth ~limits [ post ])
           ~f:fst
   in
   match
@@ -6280,6 +6344,7 @@ type explain_kernel = {
   ek_block_threads : int;
   ek_occupancy : float;
   ek_staged_bytes : float;
+  ek_shared_loads : float;
 }
 
 type explain = {
@@ -7973,6 +8038,7 @@ module Make (D : Driver) = struct
                        ek_block_threads = l.kl_block_threads;
                        ek_occupancy = l.kl_occupancy;
                        ek_staged_bytes = l.kl_staged_bytes;
+                       ek_shared_loads = l.kl_shared_loads;
                      }));
             ex_operand_loads;
             ex_admitted;

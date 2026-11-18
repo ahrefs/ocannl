@@ -1393,6 +1393,25 @@
 # Unset/empty uses the backend's value. Same cache identity as model_cache_capacity.
 #model_staged_copy_rate=
 
+# gh-ocannl-2262: overrides the backend's advisory shared-load rate of the ranking score, in
+# workgroup-memory cells per second. Per k-step a thread of an rm x rn register tile reads rm + rn
+# staged cells (one cell once per loop iteration: the register file serves repeats) for rm * rn
+# multiply-adds; the loads beyond the 4x4 calibration tile's 1/4 cell per scalar operation (which
+# the fitted issue rate already carries), each context's over its launch fill, add their count over
+# this rate to the compute leg. It orders a 2x2 register tile against a 4x4 one at one block tile.
+# Fit it with `benchmarks/gh1600_txn_fit.py --shared-rate`. `none`: no term. Unset/empty uses the
+# backend's value. Read by model_default's ranking and model_explain, not the auto seeding gate.
+# Same cache identity as model_cache_capacity.
+#model_shared_load_rate=
+
+# gh-ocannl-2262: overrides the backend's advisory lane group of the ranking score's launch fill, in
+# lanes: a block of T threads issues in W * ceil(T / W) lanes, and saturated does T lanes' work of
+# them (a 16-thread block on 32-lane groups half a full group's); unsaturated launches and blocks of
+# a multiple of W threads fill as without it. `none`: 1, the thread-only fill. Unset/empty uses the
+# backend's value. Read wherever the fill model is but the auto seeding gate, which keeps the
+# thread-only fill. Same cache identity as model_cache_capacity.
+#model_fill_lane_width=
+
 # If true, stdout capturing is disabled, so some logs meant for the ppx_minidebug log files
 # (in particular CUDA logs) remain on the stdout.
 #

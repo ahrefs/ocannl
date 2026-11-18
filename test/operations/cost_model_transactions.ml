@@ -306,7 +306,15 @@ let () =
     | Some t, Some c -> Float.equal t (c +. (56. /. rate))
     | _ -> false);
   (* A fill model of 4 multiprocessors saturating at 64 threads: 2 blocks of 32 fill a quarter. *)
-  let fm = { CM.fm_multiprocessors = 4; fm_fill_threads = 64; fm_tail = false; fm_chains = 1 } in
+  let fm =
+    {
+      CM.fm_multiprocessors = 4;
+      fm_fill_threads = 64;
+      fm_tail = false;
+      fm_chains = 1;
+      fm_lane_width = 1;
+    }
+  in
   let launch = (fm, CM.launch_contexts code) in
   p "under a launch model the excess is divided by its context's fill (a quarter)"
     (match (compute ~launch ~transactions ~transaction_rate:rate (), compute ~launch ()) with

@@ -353,6 +353,7 @@ type fill_model = {
   fm_fill_threads : int;
   fm_tail : bool;
   fm_chains : int;
+  fm_lane_width : int;
 }
 [@@deriving sexp_of]
 (** The device's launch shape as the score reads it: [fm_multiprocessors] multiprocessors, each
@@ -361,7 +362,8 @@ type fill_model = {
     quantizes the fill by the launch tail ({!context_fill}); the ranking score sets it exactly where
     a staged-copy rate is priced, the two being one calibration. [fm_chains] (gh-ocannl-1639) is the
     accumulation chains a thread needs to carry to count as a whole thread: the cap [L] of the
-    per-thread ILP credit, 1 for the thread-only fill. *)
+    per-thread ILP credit, 1 for the thread-only fill. [fm_lane_width] (gh-ocannl-2262) is the lane
+    group a block's threads issue in, 1 for the thread-only fill ({!context_fill}). *)
 
 val context_fill : ?chains:int -> fill_model -> blocks:int -> threads:int -> float
 (** [min 1 (B * min T' t / (P * t))]: the fraction of the device's saturated issue a launch of [B]
@@ -372,7 +374,13 @@ val context_fill : ?chains:int -> fill_model -> blocks:int -> threads:int -> flo
 
     [T' = T * c / L] for [chains = c] below [L = fm_chains] (gh-ocannl-1639), else [T]: [t] is
     fitted on threads carrying at least [L] chains, and a thread with fewer counts as the fraction
-    of one it fills. Without [chains], or at [L = 1], the thread-only fill, bitwise. *)
+    of one it fills. Without [chains], or at [L = 1], the thread-only fill, bitwise.
+
+    Under [W = fm_lane_width > 1] (gh-ocannl-2262) a block issues in [L = W * ceil (T / W)] lanes:
+    the formulas above read [L] (scaled by the chain credit as [T] is) where they read [T], and the
+    fill is that times [T / L], the lanes doing work. While a block's lanes stay within [t] and the
+    launch's within [P * t], that is the thread-only fill; a saturated sub-group block does [T / L]
+    of a full group's work. [T] a multiple of [W], or [W = 1]: bitwise the fill above. *)
 
 val fill_contexts : fill_model -> launch_context list -> launch_context list
 (** The contexts as a fill model prices them (gh-ocannl-1639): those of one launch shape whose
@@ -471,6 +479,53 @@ val filled_staged_bytes : ?fill_model:fill_model -> staged_copy_context list -> 
 (** The delivery bytes as the compute leg divides them by the copy rate: each context's over its
     {!context_fill} under a fill model, the plain sum without one. *)
 
+type shared_load_context = { sl_blocks : int; sl_threads : int; sl_loads : float }
+[@@deriving sexp_of]
+(** Shared loads in one parallel context of a kernel (gh-ocannl-2262), as {!staged_copy_context}:
+    [sl_loads] counts cells over all executions in that context. *)
+
+val shared_loads : is_staged:(Tnode.t -> bool) -> Low_level.t -> shared_load_context list
+(** The cells the kernel's threads read from nodes [is_staged] holds, per parallel context, under
+    {!operand_deliveries}' traversal (its operand, scope and guard policies; none in a [Tile_mma]
+    kernel). One cell -- one node at syntactically equal indices -- counts once per straight-line
+    body, one iteration of its innermost enclosing loop (a loop, scan or hoisted scope body starts
+    afresh, a guard does not), at its first read's executions: the register file serves the repeats.
+    A materialized [rm x rn] register tile reads [rm + rn] cells a k-step for its [rm * rn]
+    multiply-adds. An [Unrolled] loop that is not materialized counts each iteration. *)
+
+type operand_census = {
+  oc_staged : staged_copy_context list;
+  oc_direct : staged_copy_context list;
+  oc_shared : shared_load_context list;
+}
+
+val operand_census :
+  ?is_global:(Tnode.t -> bool) ->
+  ?shared:bool ->
+  is_staged:(Tnode.t -> bool) ->
+  Low_level.t ->
+  operand_census
+(** One traversal for {!operand_deliveries}' two lists ([oc_direct] empty without [is_global]) and,
+    with [shared] (default false), {!shared_loads} ([oc_shared], else empty). *)
+
+val calibration_register_tile : int * int
+(** The register tile [(rm, rn)] the launch sweep fits the issue rate and the saturating thread
+    count on ([Calibrate.default_launch_geometries] reads it). *)
+
+val reference_loads_per_op : float
+(** The shared-load cells per scalar operation of {!calibration_register_tile}:
+    [(rm + rn) / (2 * rm * rn)], 1/4 at 4x4 (a multiply-add is two operations). The fitted issue
+    rate already carries loads at that reuse. *)
+
+val excess_shared_loads :
+  launch_context list -> shared_load_context list -> shared_load_context list
+(** Each context's loads beyond {!reference_loads_per_op} times the scalar (non-[Tile_mma])
+    operations of the {!launch_contexts} of its launch shape; a context at or below it is dropped.
+*)
+
+val filled_shared_loads : ?fill_model:fill_model -> shared_load_context list -> float
+(** As {!filled_staged_bytes}, over shared loads. *)
+
 val ranking_seconds_of :
   ?peak_flops:float ->
   ?peak_memory_bandwidth:float ->
@@ -488,6 +543,8 @@ val ranking_seconds_of :
   ?staged_copies:staged_copy_context list ->
   ?direct_loads:staged_copy_context list ->
   ?staged_copy_rate:float ->
+  ?shared_loads:shared_load_context list ->
+  ?shared_load_rate:float ->
   ?occupancy:float ->
   summary ->
   reuse option ->
@@ -504,9 +561,12 @@ val ranking_seconds_of :
     without an excess, the leg is exactly as before. [staged_copies] (default none) are the kernel's
     {!staged_copies}. [direct_loads] (default none) are the direct bytes from {!operand_deliveries}.
     Their {!filled_staged_bytes} are priced at [staged_copy_rate] (bytes/s) and added to the compute
-    leg. Without a positive rate or operand deliveries, the leg is exactly as before. [occupancy]
-    (default none) is the kernel's {!occupancy}: below 1, the compute leg is divided by it; absent
-    or 1, unchanged. [None] when neither peak is given. *)
+    leg. Without a positive rate or operand deliveries, the leg is exactly as before. [shared_loads]
+    (default none) are the kernel's {!excess_shared_loads} (gh-ocannl-2262): their
+    {!filled_shared_loads} are priced at [shared_load_rate] (loads/s) and added to the compute leg;
+    without a positive rate or an excess, the leg is exactly as before. [occupancy] (default none)
+    is the kernel's {!occupancy}: below 1, the compute leg is divided by it; absent or 1, unchanged.
+    [None] when neither peak is given. *)
 
 val ranking_legs_of :
   ?peak_flops:float ->
@@ -525,6 +585,8 @@ val ranking_legs_of :
   ?staged_copies:staged_copy_context list ->
   ?direct_loads:staged_copy_context list ->
   ?staged_copy_rate:float ->
+  ?shared_loads:shared_load_context list ->
+  ?shared_load_rate:float ->
   ?occupancy:float ->
   summary ->
   reuse option ->
@@ -560,6 +622,7 @@ val ranking_seconds :
   ?lane_width:int ->
   ?max_resident_threads:int ->
   ?staged_copy_rate:float ->
+  ?shared_load_rate:float ->
   ?is_staged:(Tnode.t -> bool) ->
   ?is_private:(Tnode.t -> bool) ->
   is_global:(Tnode.t -> bool) ->
@@ -568,8 +631,9 @@ val ranking_seconds :
 (** {!ranking_seconds_of} over {!analyze}, {!launch_contexts} (with [is_private]) when a fill model
     is given, and, when a capacity or a cache bandwidth is given, {!reuse_traffic}; with both a
     transaction rate and a lane width, {!memory_transactions}; with both a staged-copy rate and
-    [is_staged], {!staged_copies}. A ranking score, not a runtime prediction — and, unlike
-    {!roofline_seconds}, not a lower bound either. *)
+    [is_staged], {!staged_copies}; with both a shared-load rate and [is_staged], the
+    {!excess_shared_loads} of {!shared_loads}. A ranking score, not a runtime prediction — and,
+    unlike {!roofline_seconds}, not a lower bound either. *)
 
 (** {2 Tile-MMA operand loads (gh-ocannl-1254)}
 

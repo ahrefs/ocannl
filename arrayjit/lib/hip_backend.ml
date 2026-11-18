@@ -1822,6 +1822,8 @@ end = struct
            (not (Array.is_empty attrs))
            && Array.for_all attrs ~f:(fun (a : H.Device.attributes) -> a.integrated)
          in
+         (* The wavefront the shuffles assume: 32 lanes. *)
+         let wave = 32 in
          {
            Backend_intf.max_threads_per_workgroup =
              min_over (fun (a : H.Device.attributes) -> a.max_threads_per_block);
@@ -1865,7 +1867,7 @@ end = struct
            mma = (if mma_supported () then Some Hip_mma.capability else None);
            simd_vector = Ir.Vector_file.none;
            native_fp16_arithmetic = false;
-           simdgroup_width = Some 32;
+           simdgroup_width = Some wave;
            (* gh-ocannl-1124: measured false on gfx1151; see the field. *)
            lane_scalar_recompute_cheap = false;
            (* gh-ocannl-1168: unmeasured beyond one simdgroup; see the field. *)
@@ -1957,6 +1959,10 @@ end = struct
               counts do not see. The unified class (minix) admits the coalesced layouts through its
               capacity and was not re-measured. Overridable by model_staged_copy_rate. *)
            staged_copy_rate = None;
+           (* gh-ocannl-2262: unfitted; configured (model_shared_load_rate,
+              model_fill_lane_width). *)
+           shared_load_rate = None;
+           fill_lane_width = None;
          })
     in
     (* gh-ocannl-572: the kernel source is a function of the lowered code, the device capabilities

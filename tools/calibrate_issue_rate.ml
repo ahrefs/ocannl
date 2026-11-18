@@ -182,6 +182,7 @@ let () =
                 fm_fill_threads = saturation;
                 fm_tail = false;
                 fm_chains = fill_chains;
+                fm_lane_width = 1;
               }
             points
         with
