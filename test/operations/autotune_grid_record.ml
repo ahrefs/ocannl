@@ -439,17 +439,18 @@ let () =
       let judged = without_launch_floor (fun () -> judge_plain_grid ~bk:16 (40, 12, 40)) in
       p_exists label judged ~f:(fun j -> j.g_proposed && g_grid_of j ~f:pool_privatizing))
 
-(* The 41-row output pads at both tested block sizes. Fission exposes an actual panel Grid. The
-   32-row footprint crosses the cap only with both staging tiles and the masked fragment. *)
-let judge_conv_panel bm =
-  let name = Printf.sprintf "agr_conv_bm%d" bm in
+(* The 41-row output pads at both tested block sizes. Fission exposes an actual panel Grid. At 32
+   rows the staged tiles and masked fragment reach the cap with 8 input channels and exceed it with
+   12. *)
+let judge_conv_panel ~ic bm =
+  let name = Printf.sprintf "agr_conv_ic%d_bm%d" ic bm in
   let x =
-    NTDSL.init ~l:(name ^ "_x") ~prec:Ir.Ops.single ~o:[ 5; 43; 12 ]
+    NTDSL.init ~l:(name ^ "_x") ~prec:Ir.Ops.single ~o:[ 5; 43; ic ]
       ~f:(Ll_test.weighted ~weights:[| 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
       ()
   in
   let w =
-    NTDSL.init ~l:(name ^ "_w") ~prec:Ir.Ops.single ~i:[ 3; 3; 12 ] ~o:[ 32 ]
+    NTDSL.init ~l:(name ^ "_w") ~prec:Ir.Ops.single ~i:[ 3; 3; ic ] ~o:[ 32 ]
       ~f:(Ll_test.weighted ~weights:[| 2; 1; 1; 3 |] ~modulus:5 ~offset:(-2.) ~stride:1.)
       ()
   in
@@ -482,25 +483,34 @@ let judge_conv_panel bm =
   Context.release ctx;
   let grid = routine.Context.grid in
   let proposed, weighed = Option.value_exn !judgment in
-  Stdio.eprintf "agr: conv bm=%d %s: %s (not part of the golden)\n%!" bm
+  Stdio.eprintf "agr: conv ic=%d bm=%d %s: %s (not part of the golden)\n%!" ic bm
     (if proposed then "proposed" else "refused")
     (Cs.grid_summary_string grid);
   (proposed, grid, weighed)
 
 let () =
-  let panel bm = lazy (without_launch_floor (fun () -> judge_conv_panel bm)) in
-  let within = panel 16 and over = panel 32 in
+  let panel ~ic bm = lazy (without_launch_floor (fun () -> judge_conv_panel ~ic bm)) in
+  let within = panel ~ic:12 16 and at_cap = panel ~ic:8 32 and over = panel ~ic:12 32 in
   in_leg ~leg "agr-conv: a padded row panel within the cap is proposed and renders on the pool"
     (fun label ->
       let proposed, grid, _ = Lazy.force within in
       p label (proposed && List.length grid.Cs.loops = 1 && pool_privatizing grid));
+  in_leg ~leg "agr-conv: a padded row panel at the cap is proposed and renders on the pool"
+    (fun label ->
+      let proposed, grid, _ = Lazy.force at_cap in
+      p label
+        (proposed
+        &&
+        match grid.Cs.loops with
+        | [ { Cs.site = Grid_pool { private_bytes }; _ } ] -> private_bytes = forced_cap
+        | _ -> false));
   in_leg ~leg "agr-conv: a padded row panel over the cap is refused" (fun label ->
       let proposed, grid, _ = Lazy.force over in
       p label ((not proposed) && List.length grid.Cs.loops = 1 && over_cap grid));
   in_leg ~leg "agr-conv: the pre-filter weighs what the renderer privatizes, byte for byte"
     (fun label ->
       p_all label
-        [ Lazy.force within; Lazy.force over ]
+        [ Lazy.force within; Lazy.force at_cap; Lazy.force over ]
         ~f:(fun (_, grid, weighed) -> List.equal Int.equal (recorded_private grid) [ weighed ]))
 
 let () =

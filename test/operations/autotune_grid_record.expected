@@ -16,6 +16,7 @@ agr-grid: no 72^3 bk=16 plain-Grid seed is proposed: true
 agr-grid: at 72^3 both k segments share scratch within the cap: true
 agr-grid: a single partial k block is proposed and renders on the pool: true
 agr-conv: a padded row panel within the cap is proposed and renders on the pool: true
+agr-conv: a padded row panel at the cap is proposed and renders on the pool: true
 agr-conv: a padded row panel over the cap is refused: true
 agr-conv: the pre-filter weighs what the renderer privatizes, byte for byte: true
 agr-seed: no proposed packed Grid seed renders its site serially for the floor: true
