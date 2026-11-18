@@ -5165,13 +5165,27 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
              variable's minimal extent instead. Keep the displaced variable's bound too: the
              incoming inequality when it supplied the variable, the old GLB otherwise. Holding
              only the incoming inequality loses the old variable in the latter orientation. *)
-          let dropped_var = ref false in
-          let dropped_glb = ref false in
+          let hold_incoming = ref false in
+          let hold_old_glb = ref false in
           let join_dim d1 d2 =
+            let hold_mixed kind =
+              (* Give equalities a chance to reconcile the bounds before rows close by role. From
+                 Stage6b on, the open-row arm above emits an equation for the middle before this arm
+                 can run. *)
+              if equal_stage stage Stage6a then
+                raise
+                  (Shape_error
+                     ( Printf.sprintf
+                         "Row GLB cannot join a dimension variable with a %s (gh-ocannl-2269)" kind,
+                       [ Dim_mismatch [ d1; d2 ] ] ));
+              hold_incoming := true;
+              d2
+            in
             match (d1, d2) with
             | Var v1, Var v2 when not (equal_dim_var v1 v2) ->
-                dropped_var := true;
+                hold_incoming := true;
                 d2
+            | Var _, Var _ -> d1
             | Dim { d = 1; basis; _ }, _ when String.equal basis bcast_if_1 -> d1
             | _, Dim { d = 1; basis; _ } when String.equal basis bcast_if_1 -> d2
             | Dim { d = n1; _ }, Dim { d = n2; _ } when n1 <> n2 ->
@@ -5260,13 +5274,14 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
                    arms). [Sym] vs. [Affine]/[Concat] falls to the deferring wildcards below. *)
                 get_bcast_dim ~d:1 ~proj_id:64 ()
             | Var _, Dim _ ->
-                dropped_var := true;
+                hold_incoming := true;
                 d2
             | Dim _, Var _ ->
-                dropped_glb := true;
+                hold_old_glb := true;
                 d1
-            | Var _, _ -> d1
-            | _, Var _ -> d2
+            | Var _, Sym _ | Sym _, Var _ -> hold_mixed "symbolic dimension"
+            | Var _, Affine _ | Affine _, Var _ -> hold_mixed "stride or window"
+            | Var _, Concat _ | Concat _, Var _ -> hold_mixed "concatenation"
             | _, Dim _ -> d2
             | _ -> d1
           in
@@ -5317,9 +5332,9 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
                the existing one now, and mixed concrete/variable joins retain the concrete axis). *)
             if same_glb_axes glb glb2 then ineqs else forward_glb_to_operands glb opnd2 @ ineqs
           in
-          let ineqs = if !dropped_var then Row_ineq { res; opnd; origin } :: ineqs else ineqs in
+          let ineqs = if !hold_incoming then Row_ineq { res; opnd; origin } :: ineqs else ineqs in
           let ineqs =
-            if !dropped_glb then
+            if !hold_old_glb then
               Row_ineq { res = glb2; opnd = row_of_var opnd_v opnd.prov; origin } :: ineqs
             else ineqs
           in
