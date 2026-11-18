@@ -117,6 +117,24 @@ class GpuMemoryCensusTest(unittest.TestCase):
         for row in rows.values():
             self.assertNotIn("process_peak_mib", row)
 
+    def test_poll_excludes_an_owned_pid_reused_during_the_query(self):
+        pid = os.getpid()
+        stat_file = Path("/proc") / str(pid) / "stat"
+        boot_ns = 1_000_000_000
+        start_ticks = 2 * os.sysconf("SC_CLK_TCK")
+        real_read_bytes = Path.read_bytes
+
+        def stat_after_poll_started(path):
+            if path == stat_file:
+                return f"{pid} (reused) S ".encode() + b"0 " * 18 + str(start_ticks).encode()
+            return real_read_bytes(path)
+
+        with patch.object(Path, "read_bytes", stat_after_poll_started):
+            with patch.object(self.census.time, "clock_gettime_ns", return_value=boot_ns):
+                self.poll(f"{pid}, {CANARY}, 512")
+        self.assertEqual(self.polls, {"ran": 1})
+        self.assertNotIn(pid, self.samples)
+
     def test_unread_is_neither_empty_nor_zero(self):
         pid = os.getpid()
         self.trace(process(pid, "test.exe", 10, 30))
