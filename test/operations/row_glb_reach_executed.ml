@@ -405,9 +405,9 @@ let () =
 
 module Row = Ocannl.Row
 
-(* A concrete lower bound can restrict the counter while leaving it unsolved at Stage6a. *)
-let () =
-  Verdict.case "agreeing draws with a bound on their counter" @@ fun () ->
+(* A concrete lower bound can restrict the counter while leaving it unsolved at Stage6a. Solving the
+   same store without that bound witnesses that both remainders are eligible. *)
+let shared_remainders_after_stage6a ~one_block_bound =
   Tensor.unsafe_reinitialize ();
   let prov = Row.provenance ~sh_id:2319 ~kind:`Output in
   let fresh () = Row.get_row_for_var prov (Row.get_row_var ()) in
@@ -438,19 +438,29 @@ let () =
       ] )
   in
   let t9, c9 = fixture 9 and t12, c12 = fixture 12 in
-  let one = Row.get_default_dim ~d:1 () in
-  let bound =
-    Row.Dim_ineq { res = one; opnd = Var counter; from_ = Sexp.Atom "one block"; origin }
+  let constraints =
+    if one_block_bound then
+      let one = Row.get_default_dim ~d:1 () in
+      Row.Dim_ineq { res = one; opnd = Var counter; from_ = Sexp.Atom "one block"; origin }
+      :: (c9 @ c12)
+    else c9 @ c12
   in
   let _, env =
-    List.fold
-      [ Row.Stage1; Stage2; Stage3; Stage4; Stage5; Stage6a ]
-      ~init:(bound :: (c9 @ c12), Row.empty_env)
-      ~f:(fun (cs, env) stage -> Row.solve_inequalities ~stage cs env)
+    List.fold [ Row.Stage1; Stage2; Stage3; Stage4; Stage5; Stage6a ]
+      ~init:(constraints, Row.empty_env) ~f:(fun (cs, env) stage ->
+        Row.solve_inequalities ~stage cs env)
   in
-  p_all ~min:2 "both remainders stay open when the counter's bound requires one block" [ t9; t12 ]
-    ~f:(fun tail ->
-      match (Row.subst_row env tail).bcast with Row_var _ -> true | Broadcastable -> false)
+  List.map [ t9; t12 ] ~f:(fun tail -> Row.is_broadcastable (Row.subst_row env tail).bcast)
+
+let () =
+  Verdict.case "agreeing draws with a free counter" (fun () ->
+      p_all ~min:2 "both remainders close when the counter can take three blocks"
+        (shared_remainders_after_stage6a ~one_block_bound:false)
+        ~f:Fn.id);
+  Verdict.case "agreeing draws with a bound on their counter" (fun () ->
+      p_none ~min:2 "both remainders stay open when the counter's bound requires one block"
+        (shared_remainders_after_stage6a ~one_block_bound:true)
+        ~f:Fn.id)
 
 (* gh-ocannl-2224: the late-tail boundary is staged deliberately: ordinary program constraints
    register before closing. The GLB has a leading axis over a tail held open through Stage6a; supply
