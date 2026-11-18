@@ -1,7 +1,7 @@
 a refusal forwarded through refuse is flagged at its binding: true
 a formatted refusal on fail passes the wrapper audit: true
 the same formatted refusal on fail is extracted: true
-the check reads direct aliases and local forwarding bindings with typed parameters: true
+the check reads direct aliases, typed forwarding parameters, and ksprintf wrappers: true
 the marker grammar reads every real diagnostic identity: true
 direct, `failwith`, formatted, `@@`, quantified, `p_all2`, `pf`, and short refusal formats are extracted: true
 comments, quoted code, and a dynamic value contribute no diagnostic string constant: true

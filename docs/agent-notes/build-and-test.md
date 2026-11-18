@@ -691,11 +691,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   The absent-marker, colliding-fragment, one-marker/two-identical-diagnostic,
   one-observation/two-diagnostic, short-literal, `p_all2`, and scanner-population arms prove the
   failure directions. Keep direct refusals on `fail` or `failwith` (gh-ocannl-2337).
-  The catalogue audit flags other names that directly alias either callee or forward a
-  parameter unchanged as its diagnostic argument, including a typed parameter. It reports
-  the binding's name and line.
-  Dynamic strings returned by helpers stay outside literal extraction. The recognized wrapper
-  forms are defined in `test/support/refusal_control_scan.ml`. Exact extraction exemptions,
+  The catalogue audit reports the binding's name and line for an alias or a parameter-forwarding
+  wrapper with another name, including the scanner idiom `Printf.ksprintf Verdict.fail`.
+  Forwarding wrappers around Verdict claims stay outside the wrapper audit. Dynamic strings
+  returned by helpers stay outside literal extraction. The recognized wrapper forms are defined
+  in `test/support/refusal_control_scan.ml`. Exact extraction exemptions,
   when one is deliberate, are stale-checked.
   Four shapes such a scan gets wrong quietly, all found in review, and each is a member of a genre
   rather than a one-off. **Identifiers**: a scan that matches a function through the module it

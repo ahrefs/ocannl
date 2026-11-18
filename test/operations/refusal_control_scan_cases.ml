@@ -66,11 +66,23 @@ let check name =
   refuse name
 let print msg = Stdio.eprintf "%s" msg
 let computed msg = Verdict.fail (String.strip msg)
+let formatted fmt = Printf.ksprintf Verdict.fail fmt
+let applied fmt = Printf.ksprintf Verdict.fail @@ fmt
+let partial = Printf.ksprintf @@ Verdict.fail
+let printf fmt = Printf.ksprintf Stdio.print_endline fmt
+let fail fmt = Printf.ksprintf Verdict.fail fmt
 |ocaml}
   in
-  Verdict.p "the check reads direct aliases and local forwarding bindings with typed parameters"
+  Verdict.p "the check reads direct aliases, typed forwarding parameters, and ksprintf wrappers"
     (match Scan.unrecognized_wrappers aliases with
-    | [ { name = "stop"; binding_line = 1 }; { name = "refuse"; binding_line = 3 } ] -> true
+    | [
+     { name = "stop"; binding_line = 1 };
+     { name = "refuse"; binding_line = 3 };
+     { name = "formatted"; binding_line = 7 };
+     { name = "applied"; binding_line = 8 };
+     { name = "partial"; binding_line = 9 };
+    ] ->
+        true
     | _ -> false)
 
 (* gh-ocannl-1088: the stanza's argument list decides which goldens answer for a source, but
