@@ -813,12 +813,11 @@ files.
   plain read from a node stored at `A`'s precision. `gg_wide_grad` annotates the read at f16 to
   reach the storage check and keeps the f16 product materialized so the composed form rounds its
   f32 input before the reduction. `gg_computed_grad` multiplies an f16 source with an f16 operand
-  annotation and materializes the product to expose the rounding that a scan would skip.
-  The tropical `@^+` gate is a
-  different rule (no `where` filter: an output at `-inf` gates rejected positions) and stays
-  composed. (g) A mask with no writer in the routine is read from its `Host_inits` data only under
-  `Tn.known_host_constant` (an `ndarray` literal): `Operation.init` data is mutable by contract (a
-  host write after compiling changes it), so a lowering-time proof from it would be unsound.
+  annotation and materializes the product to expose the rounding that a scan would skip. The
+  tropical `@^+` gate stays composed because it has no `where` filter. An output at `-inf` gates
+  rejected positions. (g) A mask with no writer in the routine is read from its `Host_inits` data
+  only under `Tn.known_host_constant` (an `ndarray` literal). A host write after compiling can
+  change `Operation.init` data, so a lowering-time proof from it would be unsound.
   (h) The exclusive step's guard matters only to hand-built IR: user-level lowering never relies on
   the mask alone to keep a payload in range (gh-ocannl-2312). Shape inference sizes every read over
   its whole iteration domain without looking at the mask's values: an unwindowed `1*i+1` is refused,
