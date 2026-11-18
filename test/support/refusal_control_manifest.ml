@@ -314,10 +314,13 @@ let raw_entries =
     ( "vendor_stub_arms_scan.ml",
       [
         "[scanner-refusal:99b67dac359b15961fd222795ccfdc9b] does not read";
+        "[scanner-refusal:f214595f668b0bc6bb8db435ac7f68e5] compiles dune's default";
+        "[scanner-refusal:8938a0652306caff157652cb8984f7c6] agreement alias runtest";
         "[scanner-refusal:c1457cf67f0481ecff36ea8369db6347] copy_files";
         "[scanner-refusal:7ea0203b4dc3b6f9bb27b060390f8d72] compiles";
         "[scanner-refusal:864cbc7eac4bbb16fefccca605bd57bc] declares";
         "[scanner-refusal:587907379b3593b5bfde494b2785b186] compiles a copy";
+        "[scanner-refusal:83773abfec2c1bc90440945fa222600d] compiles a copy";
         "[scanner-refusal:26f527c022e2a36b727d2635a64c83e2] compiles a copy";
         "[scanner-refusal:3f49f1a86b0b50ae1cc45ae30b8d6bcd] preprocesses";
         "[scanner-refusal:b1fb94e1e4593366f815fcc28f356790] the availability-only exception";
@@ -326,6 +329,9 @@ let raw_entries =
         "[scanner-refusal:b079d32e59c7b93562738e4061682b90] arrayjit/vendor_stubs/";
         "[scanner-refusal:ec6cead6a475041460ddead2715a32a1] copies it into";
         "[scanner-refusal:b420bc79cbc7a037b600c9d47c9b2525] arrayjit/vendor_stubs/";
+        "[scanner-refusal:047374463fd606fe95cf257ebf928364] arrayjit/vendor_stubs/";
+        "[scanner-refusal:518629fae55a4ef4b29ab72b3a71d8ce] each module's agreement";
+        "[scanner-refusal:f4e3a8ac36957f5a6f54cd735b3c2092] package stand-in declared";
         "[scanner-refusal:90b26d38400dc5a37ed715269ba3cfbe] every vendor-gated select";
         "[scanner-refusal:4cc754a0d44bcdcb048630ccd8e65a5b] vendor-gated arm's stand-in";
       ] );

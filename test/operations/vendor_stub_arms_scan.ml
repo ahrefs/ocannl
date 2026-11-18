@@ -21,7 +21,10 @@
    `(library (name <backend>_stub_check))` anywhere under `arrayjit/vendor_stubs/`, together with
    the public name the corpus gives the library `<backend>`. Either set coming up empty is refused,
    since it would make every arm look ungated. The fallback `(-> …)` is never demanded: it is what
-   compiles off the box already.
+   compiles off the box already. Beyond dune files it reads the OCaml source of each copied module
+   whose stand-in library declares a package stand-in (and the interface copied for that module),
+   for the modules that source names. Every file comes from the rule's clean sandbox of the
+   checked-in source tree, so no build target -- a generated `.ml` -- is read or built.
 
    THE RULE. Each vendor-gated arm needs a COPY under `arrayjit/vendor_stubs/` whose source resolves
    to the arm's own file -- a rule action `(copy# <src> <dst>)` (or `copy`), or a `copy_files#` (or
@@ -47,11 +50,32 @@
    too. Only that direction is a defect: a genuine stanza declaring MORE is normal, since an
    executable carries modules its arm's library does not.
 
+   THE RULE, SUB-LIBRARIES (gh-ocannl-2288 follow-up). A package is several libraries, and under
+   `(implicit_transitive_deps false)` one of them does not make another's modules visible: a copy
+   naming `Nvrtc` compiles against `cudajit_stub` while its genuine stanza needs `cudajit.nvrtc`
+   itself, `cudajit.cuda` alone failing on the box. So each module of a package stand-in is mapped
+   to the library it stands for, derived from the stand-in's own agreement check rather than written
+   down: the one library the `%{lib-available:…}` atoms of the `(enabled_if …)` of its
+   `runtest-<module>` rules name, among the stanzas of the stand-in's directory (`Cuda` ->
+   `cudajit.cuda`, `Nvrtc` -> `cudajit.nvrtc`, `Metal` -> `metal`, `Runtime` -> `metal.runtime`).
+   Gates naming no library (an alias delegating its gate elsewhere), several, or one outside the
+   package are refused, and so is a package stand-in compiling dune's default module set, whose
+   modules dune files do not name. A module with no rule on its agreement alias (`Hip_ffi`,
+   hand-written and checked through `hip.mli`) stands for any library of its package, as the whole
+   stand-in does; the census lists the map. A copy whose source or copied interface names a mapped
+   module of a package stand-in its library declares is refused unless the genuine stanza declares
+   that module's library (re-exporting it where the stand-in re-exports the stand-in), and a source
+   the scan cannot read or parse is refused, since what it names is then unknown.
+   [availability_only] excuses this as it excuses the package-wide demand.
+
    WHAT IT DOES NOT READ. Whether the copy keeps the module name the executable gives the arm, an
-   `arms/dune` convention: a deviation still compiles the arm's text. Which module of a package a
-   copy reaches: `cudajit_stub` is one library for all of `cudajit`, so a genuine stanza naming
-   `cudajit.cuda` alone satisfies it even where the copy uses `Nvrtc`. Whether the copy uses what
-   its library declares: declarations are compared, never uses, so a stand-in library declared and
+   `arms/dune` convention: a deviation still compiles the arm's text. How a source names a module is
+   read off its parse tree, not resolved: the head of every qualified path (`Nvrtc.x`, `Nvrtc.T.t`),
+   and a bare module path where a module goes (`open Nvrtc`, `include`, `module M = Nvrtc`, `(module
+   Nvrtc)`, a functor argument, `module M := Nvrtc`, `with module M = Nvrtc`); a bare constructor
+   `Cuda` names no module, and a local module shadowing a stand-in module's name is taken for it,
+   which errs toward a demand. Beyond the one-library-per-module map, whether the copy uses what its
+   library declares: declarations are compared, never uses, so a stand-in library declared and
    unused is refused all the same where the genuine stanza lacks it -- drop it. Which arm of ANOTHER
    `select` a box chooses: a module is held to every condition of the stanza's other selects, as a
    stand-in compiling several arms declares their union (an arm's own select counts only through the
@@ -68,10 +92,11 @@ open Base
 open Stdio
 open Verdict.Claims
 
-(* Every file this scan reads arrives as a `@<path>` response file, because the list is longer than
-   a Windows command line may be; see [Test_scan.Scan_argv]. *)
-let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
+(* Every file this scan reads is a source file of the clean sandbox its rule runs in, enumerated by
+   [Test_scan.Source_inventory]: no build target, generated `.ml` included, is an input. *)
+let argv = Stdlib.Sys.argv
 
+module Inventory = Test_scan.Source_inventory
 module Scan = Test_scan.Dune_stanza_scan
 
 let stubs_root = "arrayjit/vendor_stubs"
@@ -134,6 +159,8 @@ type copy = {
   module_of : string -> string;  (** the module the copy of that path compiles as *)
   source_of : string -> string option;
       (** the repository file a module of that name is copied from, if this copy makes it *)
+  interface_of : string -> string option;
+      (** the repository file the interface of a module of that name is copied from, likewise *)
 }
 
 let module_of_file file = String.lowercase (Stdlib.Filename.remove_extension file)
@@ -156,6 +183,10 @@ let copies_of s =
                 source_of =
                   (fun m ->
                     if String.equal m made && String.is_suffix dst ~suffix:".ml" then Some source
+                    else None);
+                interface_of =
+                  (fun m ->
+                    if String.equal m made && String.is_suffix dst ~suffix:".mli" then Some source
                     else None);
               };
             ]
@@ -190,6 +221,10 @@ let copies_of s =
                 source_of =
                   (fun m ->
                     let path = Scan.in_subdir from_dir (m ^ ".ml") in
+                    if reads path then Some path else None);
+                interface_of =
+                  (fun m ->
+                    let path = Scan.in_subdir from_dir (m ^ ".mli") in
                     if reads path then Some path else None);
               })
   | _ -> []
@@ -268,11 +303,128 @@ type exception_ = { stand_in : string; library : string; reason : string }
 
 let availability_only : exception_ list = []
 
+(* The modules an OCaml source names, lowercased as their file names are, read off its parse tree:
+   the head of every qualified path, and a bare module path where a module goes. Unresolved: a local
+   module of a stand-in module's name is taken for it. Raises where the source does not parse. *)
+let module_heads ~file ~interface text =
+  let heads = Hash_set.create (module String) in
+  let add name = Hash_set.add heads (String.lowercase name) in
+  let rec head = function
+    | Ppxlib.Longident.Lident name -> name
+    | Ldot (path, _) | Lapply (path, _) -> head path
+  in
+  let reader =
+    object
+      inherit Ppxlib.Ast_traverse.iter as super
+
+      method! longident l =
+        (match l with
+        | Ldot (path, _) -> add (head path)
+        | Lapply (functor_, argument) ->
+            add (head functor_);
+            add (head argument)
+        | Lident _ -> ());
+        super#longident l
+
+      method! module_expr (m : Ppxlib.module_expr) =
+        (match m.pmod_desc with Pmod_ident { txt = Lident name; _ } -> add name | _ -> ());
+        super#module_expr m
+
+      method! module_type (m : Ppxlib.module_type) =
+        (match m.pmty_desc with Pmty_alias { txt = Lident name; _ } -> add name | _ -> ());
+        super#module_type m
+
+      method! open_description (o : Ppxlib.open_description) =
+        (match o.popen_expr.txt with Lident name -> add name | _ -> ());
+        super#open_description o
+
+      method! module_substitution (m : Ppxlib.module_substitution) =
+        (match m.pms_manifest.txt with Lident name -> add name | _ -> ());
+        super#module_substitution m
+
+      method! with_constraint (c : Ppxlib.with_constraint) =
+        (match c with
+        | Pwith_module (_, { txt = Lident name; _ }) | Pwith_modsubst (_, { txt = Lident name; _ })
+          ->
+            add name
+        | _ -> ());
+        super#with_constraint c
+    end
+  in
+  let lexbuf = Lexing.from_string text in
+  Lexing.set_filename lexbuf file;
+  if interface then reader#signature (Ppxlib.Parse.interface lexbuf)
+  else reader#structure (Ppxlib.Parse.implementation lexbuf);
+  Hash_set.to_list heads |> List.sort ~compare:String.compare
+
+(* Each module of each package stand-in with the library it stands for: the one library the
+   `%{lib-available:…}` gates of its `runtest-<module>` agreement rules name, in the stand-in's own
+   dune file, or [None] where no rule sits on that alias. *)
+let package_modules ~fail ~all packages =
+  List.filter_map packages ~f:(fun package ->
+      let dir = Printf.sprintf "%s/%s" stubs_root package in
+      let stand_in = package ^ package_suffix in
+      let own = List.filter all ~f:(fun s -> String.equal s.dir dir) in
+      match
+        List.find own ~f:(fun s -> Option.equal String.equal (library_name s) (Some stand_in))
+      with
+      | None -> None
+      | Some library -> (
+          match Scan.explicit_modules library.sexp with
+          | Scan.Default_less _ ->
+              fail
+                (Printf.sprintf
+                   "%s compiles dune's default module set -- the modules of the `%s` stand-in, and \
+                    the library of package `%s` each stands for, cannot be read from dune files; \
+                    list them in `(modules …)`"
+                   (site library) stand_in package);
+              Some (package, [])
+          | Scan.Named modules ->
+              let modules = List.map modules ~f:String.lowercase in
+              Some
+                ( package,
+                  List.map modules ~f:(fun m ->
+                      let agreement =
+                        List.filter own ~f:(fun s ->
+                            List.mem (Scan.aliases_of s.sexp) ("runtest-" ^ m) ~equal:String.equal)
+                      in
+                      let gated =
+                        List.concat_map agreement ~f:(fun s ->
+                            List.concat_map
+                              (Option.value (Scan.field s.sexp "enabled_if") ~default:[])
+                              ~f:Scan.atoms)
+                        |> List.filter_map ~f:(fun a ->
+                            Option.bind
+                              (String.chop_prefix a ~prefix:"%{lib-available:")
+                              ~f:(String.chop_suffix ~suffix:"}"))
+                        |> List.dedup_and_sort ~compare:String.compare
+                      in
+                      match gated with
+                      | [] when List.is_empty agreement -> (m, None)
+                      | [ l ]
+                        when String.equal l package || String.is_prefix l ~prefix:(package ^ ".") ->
+                          (m, Some l)
+                      | _ ->
+                          fail
+                            (Printf.sprintf
+                               "%s: the agreement alias `runtest-%s` of the `%s` stand-in is gated \
+                                on %s -- module `%s` must be gated on exactly one library of \
+                                package `%s`, the one it stands for"
+                               (site library) m stand_in
+                               (if List.is_empty gated then "no library"
+                                else
+                                  String.concat ~sep:", "
+                                    (List.map gated ~f:(Printf.sprintf "`%s`")))
+                               (String.capitalize m) package);
+                          (m, None)) )))
+
 (* What the census says of a whole tree. [vendor] pairs each vendor-gated arm's file with the copy
    compiling it, [None] where a refusal named it; [ungated] lists the non-fallback arms gated on no
    vendor library. *)
 type census = {
   packages : string list;
+  package_modules : (string * (string * string option) list) list;
+      (** each package's stand-in modules, with the library each stands for *)
   backend_libraries : string list;
   vendor : (string * string option) list;
   ungated : string list;
@@ -338,7 +490,7 @@ type pair = {
 (* The library half of the rule: every library of the stand-in tree other than the package
    stand-ins, held module by copied module to the genuine stanza that compiles the copy's source.
    Returns the libraries with their pairs, and the libraries compiling no copy. *)
-let mirrors ~fail ~exceptions ~all ~packages ~backends ~copies =
+let mirrors ~fail ~exceptions ~all ~packages ~package_modules ~uses ~backends ~copies =
   (* One refusal per distinct message: several modules of one library share a genuine stanza. *)
   let refused = Hash_set.create (module String) in
   let fail message = if Hash_set.strict_add refused message |> Result.is_ok then fail message in
@@ -473,21 +625,43 @@ let mirrors ~fail ~exceptions ~all ~packages ~backends ~copies =
                           library it reaches instead"
                          (site l) library)
                 | Some sub ->
-                    let lacking =
-                      List.filter pairs ~f:(fun p ->
-                          not
-                            (satisfies ~re_export
-                               (declared_libraries
-                                  ?arm:(if p.arm then Some p.source else None)
-                                  p.genuine)
-                               sub))
+                    let genuine_declares p =
+                      satisfies ~re_export
+                        (declared_libraries ?arm:(if p.arm then Some p.source else None) p.genuine)
                     in
-                    if not (List.is_empty lacking) then
+                    let lacking = List.filter pairs ~f:(fun p -> not (genuine_declares p sub)) in
+                    (* Each mapped module of the package stand-in a copy names, held to its own
+                       library: one library of a package does not make another's modules visible. *)
+                    let lacking_modules =
+                      match sub with
+                      | Library _ -> []
+                      | Package package ->
+                          let mapped =
+                            List.Assoc.find package_modules package ~equal:String.equal
+                            |> Option.value ~default:[]
+                            |> List.filter_map ~f:(fun (m, l) -> Option.map l ~f:(fun l -> (m, l)))
+                          in
+                          List.concat_map pairs ~f:(fun p ->
+                              let named =
+                                uses p.source ~interface:false
+                                @ List.concat_map
+                                    (List.filter_map own ~f:(fun c -> c.interface_of p.module_)
+                                    |> List.dedup_and_sort ~compare:String.compare)
+                                    ~f:(fun interface -> uses interface ~interface:true)
+                              in
+                              List.filter_map mapped ~f:(fun (m, sub_library) ->
+                                  if
+                                    List.mem named m ~equal:String.equal
+                                    && not (genuine_declares p (Library sub_library))
+                                  then Some (p, m, sub_library)
+                                  else None))
+                    in
+                    if not (List.is_empty lacking && List.is_empty lacking_modules) then
                       if
                         List.exists exceptions ~f:(fun e ->
                             String.equal e.stand_in name && String.equal e.library library)
                       then Hash_set.add used (exception_key name library)
-                      else
+                      else (
                         List.iter lacking ~f:(fun p ->
                             fail
                               (Printf.sprintf
@@ -497,7 +671,19 @@ let mirrors ~fail ~exceptions ~all ~packages ~backends ~copies =
                                   declare it there, or drop it from the stand-in"
                                  (site l) p.source
                                  (if re_export then "(re_export " ^ library ^ ")" else library)
-                                 (substitute_text sub) (site p.genuine))));
+                                 (substitute_text sub) (site p.genuine)));
+                        List.iter lacking_modules ~f:(fun (p, m, sub_library) ->
+                            fail
+                              (Printf.sprintf
+                                 "%s compiles a copy of %s naming `%s`, a module of `%s` standing \
+                                  for `%s`, which %s, the stanza compiling that file, does not \
+                                  declare -- under `implicit_transitive_deps false` no other \
+                                  library of the package makes it visible, so the stand-in \
+                                  type-checks where the genuine stanza would not; declare `%s` \
+                                  there%s"
+                                 (site l) p.source (String.capitalize m) library sub_library
+                                 (site p.genuine) sub_library
+                                 (if re_export then " as a re-export" else "")))));
             List.iter pairs ~f:(fun p ->
                 match (preprocessors l p.module_, preprocessors p.genuine p.genuine_module) with
                 | Error form, _ | _, Error form ->
@@ -541,11 +727,12 @@ let mirrors ~fail ~exceptions ~all ~packages ~backends ~copies =
     List.concat_map checked ~f:(fun (_, dir, pairs) ->
         List.map pairs ~f:(fun p -> (p.source, Printf.sprintf "%s/%s.ml" dir p.module_))) )
 
-let analyze ?(exceptions = availability_only) ~fail ~dune_files () =
+let analyze ?(exceptions = availability_only) ?(sources = fun _ -> None) ~fail ~dune_files () =
   if List.is_empty dune_files then (
     fail "no dune files among the arguments -- the rule's dune-file glob matches nothing";
     {
       packages = [];
+      package_modules = [];
       backend_libraries = [];
       vendor = [];
       ungated = [];
@@ -632,9 +819,33 @@ let analyze ?(exceptions = availability_only) ~fail ~dune_files () =
                             into arrayjit/vendor_stubs/arms/ as `%s` and compile it in a library \
                             there, as arms/dune does for its siblings"
                            (site s) arm target (String.concat ~sep:" " required) path target))));
-    let mirrors, uncopied, paired = mirrors ~fail ~exceptions ~all ~packages ~backends ~copies in
+    let package_modules = package_modules ~fail ~all packages in
+    (* Each source read once; one that cannot be read names nothing, and is refused. *)
+    let read = Hashtbl.create (module String) in
+    let uses path ~interface =
+      Hashtbl.find_or_add read path ~default:(fun () ->
+          let unreadable reason =
+            fail
+              (Printf.sprintf
+                 "%s is copied under arrayjit/vendor_stubs/ beside a package stand-in, and this \
+                  scan cannot read it (%s) -- which of the stand-in's modules it names is unknown, \
+                  so its genuine stanza cannot be held to their libraries; keep it a checked-in \
+                  source file, in syntax the OCaml parser reads"
+                 path reason);
+            []
+          in
+          match sources path with
+          | None -> unreadable "not among the scan's inputs"
+          | Some text -> (
+              try module_heads ~file:path ~interface text
+              with exn -> unreadable (Stdlib.Printexc.to_string exn)))
+    in
+    let mirrors, uncopied, paired =
+      mirrors ~fail ~exceptions ~all ~packages ~package_modules ~uses ~backends ~copies
+    in
     {
       packages;
+      package_modules;
       backend_libraries;
       vendor = List.dedup_and_sort !vendor ~compare:Poly.compare;
       ungated = List.dedup_and_sort !ungated ~compare:String.compare;
@@ -647,9 +858,17 @@ let analyze ?(exceptions = availability_only) ~fail ~dune_files () =
    tautology. Each case builds the smallest tree holding one violation, or the nearest legitimate
    one, and claims on what [analyze] says of it. *)
 
+(* The `cudajit` stand-in on line 1 of its dune file, its modules' agreement aliases after it. *)
+let cudajit_stub =
+  ( "arrayjit/vendor_stubs/cudajit/dune",
+    "(library (name cudajit_stub) (modules cuda nvrtc))\n\
+     (rule (alias runtest-cuda) (enabled_if %{lib-available:cudajit.cuda}) (action (progn)))\n\
+     (rule (alias runtest-nvrtc) (enabled_if (not %{lib-available:cudajit.nvrtc})) (action (progn)))\n"
+  )
+
 let stand_ins =
   [
-    ("arrayjit/vendor_stubs/cudajit/dune", "(library (name cudajit_stub))\n");
+    cudajit_stub;
     ("arrayjit/vendor_stubs/cudajit/typecheck/dune", "(library (name cuda_backend_stub_check))\n");
     ( "arrayjit/lib/dune",
       "(library (name cuda_backend) (public_name arrayjit.cuda_backend) (optional))\n" );
@@ -683,7 +902,7 @@ let genuine_backend ?(preprocess = "") libraries =
 
 let backend_stand_in ?(preprocess = "") libraries =
   [
-    ("arrayjit/vendor_stubs/cudajit/dune", "(library (name cudajit_stub))\n");
+    cudajit_stub;
     ( "arrayjit/vendor_stubs/cudajit/typecheck/dune",
       Printf.sprintf
         "(copy_files# (files ../../../lib/cuda_backend.{ml,mli}))\n\
@@ -693,13 +912,16 @@ let backend_stand_in ?(preprocess = "") libraries =
 
 let control () =
   let source = "test/operations/vendor_stub_arms_scan.ml" in
-  let run_tree ?exceptions dune_files =
+  (* Every source reads as empty, naming no module, unless a case gives its own. *)
+  let run_tree ?exceptions ?(sources = fun _ -> Some "") dune_files =
     let messages = ref [] in
-    let census = analyze ?exceptions ~fail:(fun m -> messages := m :: !messages) ~dune_files () in
+    let census =
+      analyze ?exceptions ~sources ~fail:(fun m -> messages := m :: !messages) ~dune_files ()
+    in
     (List.rev !messages, census)
   in
-  let refused ?exceptions label ~format ~fragment dune_files =
-    let messages, _ = run_tree ?exceptions dune_files in
+  let refused ?exceptions ?sources label ~format ~fragment dune_files =
+    let messages, _ = run_tree ?exceptions ?sources dune_files in
     let routed =
       match messages with [ m ] -> String.is_substring m ~substring:fragment | _ -> false
     in
@@ -717,8 +939,8 @@ let control () =
   in
   (* The library half's answer: no refusal, and every stand-in library paired as expected -- so a
      reader that pairs nothing cannot pass. *)
-  let mirrored ?exceptions label ~mirrors dune_files =
-    let messages, census = run_tree ?exceptions dune_files in
+  let mirrored ?exceptions ?sources label ~mirrors dune_files =
+    let messages, census = run_tree ?exceptions ?sources dune_files in
     List.iter messages ~f:(fun m -> eprintf "  %s said: %s\n" label (Verdict.one_line m));
     if not (Poly.equal census.mirrors mirrors) then
       List.iter census.mirrors ~f:(fun (library, pairs) ->
@@ -892,6 +1114,179 @@ let control () =
        -- the copy type-checks nothing; name `%s` in the `(modules …)` of a library there"
     ~fragment:"copies it into `probe_impl.ml` of arrayjit/vendor_stubs/arms"
     (stand_ins @ [ ("t/dune", program ()); arms_copy ~modules:"other" () ]);
+  (* The sub-library half: which module of the package stand-in a copy names. *)
+  let backend_source ?(ml = "") ?(mli = "") () = function
+    | "arrayjit/lib/cuda_backend.ml" -> Some ml
+    | "arrayjit/lib/cuda_backend.mli" -> Some mli
+    | _ -> None
+  in
+  let module_lacking_format =
+    "%s compiles a copy of %s naming `%s`, a module of `%s` standing for `%s`, which %s, the \
+     stanza compiling that file, does not declare -- under `implicit_transitive_deps false` no \
+     other library of the package makes it visible, so the stand-in type-checks where the genuine \
+     stanza would not; declare `%s` there%s"
+  in
+  let nvrtc_lacking =
+    "arrayjit/vendor_stubs/cudajit/typecheck/dune:2 compiles a copy of \
+     arrayjit/lib/cuda_backend.ml naming `Nvrtc`, a module of `cudajit_stub` standing for \
+     `cudajit.nvrtc`, which arrayjit/lib/dune:2"
+  in
+  refused
+    "a copy naming `Nvrtc` whose genuine stanza declares only `cudajit.cuda` is refused (the \
+     sub-library shape)"
+    ~format:module_lacking_format ~fragment:nvrtc_lacking
+    ~sources:
+      (backend_source
+         ~ml:"let ptx = Nvrtc.compile_to_ptx\nlet context = Cuda.Context.get_current ()\n"
+         ())
+    (genuine_backend "base cudajit.cuda" :: backend_stand_in "base cudajit_stub");
+  refused "a module a copy opens is named by it" ~format:module_lacking_format
+    ~fragment:nvrtc_lacking
+    ~sources:(backend_source ~ml:"open Nvrtc\nlet ptx = compile_to_ptx\n" ())
+    (genuine_backend "base cudajit.cuda" :: backend_stand_in "base cudajit_stub");
+  refused "a module only the copied interface names is held to its library"
+    ~format:module_lacking_format ~fragment:nvrtc_lacking
+    ~sources:(backend_source ~mli:"val ptx : Nvrtc.compile_to_ptx_result\n" ())
+    (genuine_backend "base cudajit.cuda" :: backend_stand_in "base cudajit_stub");
+  refused "a module a copied interface substitutes is named by it" ~format:module_lacking_format
+    ~fragment:nvrtc_lacking
+    ~sources:(backend_source ~mli:"module R := Nvrtc\nval ptx : R.compile_to_ptx_result\n" ())
+    (genuine_backend "base cudajit.cuda" :: backend_stand_in "base cudajit_stub");
+  refused "a module a `with module` constraint names is named by it" ~format:module_lacking_format
+    ~fragment:nvrtc_lacking
+    ~sources:(backend_source ~ml:"module type T = Sig.S with module N = Nvrtc\n" ())
+    (genuine_backend "base cudajit.cuda" :: backend_stand_in "base cudajit_stub");
+  refused "the interface a rule copies into the module's own `.mli` is the one read"
+    ~format:module_lacking_format
+    ~fragment:"naming `Nvrtc`, a module of `cudajit_stub` standing for `cudajit.nvrtc`"
+    ~sources:(function
+      | "arrayjit/lib/cuda_backend.ml" -> Some ""
+      | "shared/backend_sig.mli" -> Some "val ptx : Nvrtc.compile_to_ptx_result\n"
+      | _ -> None)
+    [
+      genuine_backend "base cudajit.cuda";
+      cudajit_stub;
+      ( "arrayjit/vendor_stubs/cudajit/typecheck/dune",
+        "(copy_files# (files ../../../lib/cuda_backend.ml))\n\
+         (rule (action (copy# ../../../../shared/backend_sig.mli cuda_backend.mli)))\n\
+         (library (name cuda_backend_stub_check) (modules cuda_backend) (libraries base \
+         cudajit_stub))\n" );
+    ];
+  mirrored "a copy naming `Cuda` and `Nvrtc` is accepted where both libraries are declared"
+    ~mirrors:backend_pair
+    ~sources:
+      (backend_source ~ml:"let ptx = Nvrtc.compile_to_ptx\nlet context = Cuda.Context.get_current\n"
+         ())
+    (genuine_backend "base cudajit.cuda cudajit.nvrtc" :: backend_stand_in "base cudajit_stub");
+  mirrored
+    "a constructor, a comment, a string and a nested path spelling `Nvrtc` name no module of the \
+     stand-in"
+    ~mirrors:backend_pair
+    ~sources:
+      (backend_source
+         ~ml:
+           "type t = Nvrtc | Other\n\
+            (* Nvrtc.compile_to_ptx *)\n\
+            let s = \"Nvrtc.compile_to_ptx\"\n\
+            let k = Cuda.Context.get_current\n\
+            let w = Wrapper.Nvrtc.x\n"
+         ())
+    (genuine_backend "base cudajit.cuda" :: backend_stand_in "base cudajit_stub");
+  mirrored "a module the availability-only exception for its package stand-in names is excused"
+    ~mirrors:backend_pair
+    ~exceptions:
+      [ { stand_in = "cuda_backend_stub_check"; library = "cudajit_stub"; reason = "control" } ]
+    ~sources:(backend_source ~ml:"let ptx = Nvrtc.compile_to_ptx\n" ())
+    (genuine_backend "base cudajit.cuda" :: backend_stand_in "base cudajit_stub");
+  (let messages, census =
+     run_tree
+       (( "arrayjit/vendor_stubs/cudajit/dune",
+          String.substr_replace_first (snd cudajit_stub) ~pattern:"(modules cuda nvrtc)"
+            ~with_:"(modules cuda nvrtc extra)" )
+       :: List.tl_exn stand_ins)
+   in
+   p
+     "the module map reads each module's agreement gate, negated or not, and no alias stands for \
+      any library"
+     (Poly.equal
+        (messages, census.package_modules)
+        ( [],
+          [
+            ( "cudajit",
+              [ ("cuda", Some "cudajit.cuda"); ("extra", None); ("nvrtc", Some "cudajit.nvrtc") ] );
+          ] )));
+  refused "a copied source the scan was not given is refused"
+    ~format:
+      "%s is copied under arrayjit/vendor_stubs/ beside a package stand-in, and this scan cannot \
+       read it (%s) -- which of the stand-in's modules it names is unknown, so its genuine stanza \
+       cannot be held to their libraries; keep it a checked-in source file, in syntax the OCaml \
+       parser reads"
+    ~fragment:
+      "arrayjit/lib/cuda_backend.ml is copied under arrayjit/vendor_stubs/ beside a package \
+       stand-in, and this scan cannot read it (not among the scan's inputs)"
+    ~sources:(function "arrayjit/lib/cuda_backend.mli" -> Some "" | _ -> None)
+    (genuine_backend "base cudajit.cuda" :: backend_stand_in "base cudajit_stub");
+  refused "a copied source that does not parse is refused"
+    ~format:
+      "%s is copied under arrayjit/vendor_stubs/ beside a package stand-in, and this scan cannot \
+       read it (%s) -- which of the stand-in's modules it names is unknown, so its genuine stanza \
+       cannot be held to their libraries; keep it a checked-in source file, in syntax the OCaml \
+       parser reads"
+    ~fragment:
+      "arrayjit/lib/cuda_backend.ml is copied under arrayjit/vendor_stubs/ beside a package \
+       stand-in, and this scan cannot read it ("
+    ~sources:(backend_source ~ml:"let ptx = (\n" ())
+    (genuine_backend "base cudajit.cuda" :: backend_stand_in "base cudajit_stub");
+  refused "a package stand-in compiling dune's default module set is refused"
+    ~format:
+      "%s compiles dune's default module set -- the modules of the `%s` stand-in, and the library \
+       of package `%s` each stands for, cannot be read from dune files; list them in `(modules …)`"
+    ~fragment:
+      "arrayjit/vendor_stubs/cudajit/dune:1 compiles dune's default module set -- the modules of \
+       the `cudajit_stub` stand-in"
+    (("arrayjit/vendor_stubs/cudajit/dune", "(library (name cudajit_stub))\n")
+    :: List.tl_exn stand_ins);
+  let agreement_format =
+    "%s: the agreement alias `runtest-%s` of the `%s` stand-in is gated on %s -- module `%s` must \
+     be gated on exactly one library of package `%s`, the one it stands for"
+  in
+  refused "an agreement alias gated on two libraries is refused" ~format:agreement_format
+    ~fragment:
+      "the agreement alias `runtest-cuda` of the `cudajit_stub` stand-in is gated on \
+       `cudajit.cuda`, `cudajit.nvrtc`"
+    (( "arrayjit/vendor_stubs/cudajit/dune",
+       "(library (name cudajit_stub) (modules cuda))\n\
+        (rule (alias runtest-cuda) (enabled_if (and %{lib-available:cudajit.cuda} \
+        %{lib-available:cudajit.nvrtc})) (action (progn)))\n" )
+    :: List.tl_exn stand_ins);
+  refused "an agreement alias gated on another package's library is refused"
+    ~format:agreement_format
+    ~fragment:
+      "the agreement alias `runtest-cuda` of the `cudajit_stub` stand-in is gated on `hipjit.hip`"
+    (( "arrayjit/vendor_stubs/cudajit/dune",
+       "(library (name cudajit_stub) (modules cuda))\n\
+        (rule (alias runtest-cuda) (enabled_if %{lib-available:hipjit.hip}) (action (progn)))\n" )
+    :: List.tl_exn stand_ins);
+  refused "an agreement alias whose rules gate on no library is refused" ~format:agreement_format
+    ~fragment:
+      "the agreement alias `runtest-cuda` of the `cudajit_stub` stand-in is gated on no library"
+    (( "arrayjit/vendor_stubs/cudajit/dune",
+       "(library (name cudajit_stub) (modules cuda))\n\
+        (rule (alias runtest-cuda) (deps (alias runtest-cuda-gated)) (action (progn)))\n\
+        (rule (alias runtest-cuda-gated) (enabled_if %{lib-available:cudajit.cuda}) (action \
+        (progn)))\n" )
+    :: List.tl_exn stand_ins);
+  (let messages, census =
+     run_tree
+       (( "arrayjit/vendor_stubs/dune",
+          "(subdir cudajit (library (name cudajit_stub) (modules cuda)) (rule (alias runtest-cuda) \
+           (enabled_if %{lib-available:cudajit.cuda}) (action (progn))))\n" )
+       :: List.tl_exn stand_ins)
+   in
+   p "a package stand-in declared in a `(subdir …)` of a parent dune file maps its modules too"
+     (Poly.equal
+        (messages, census.package_modules)
+        ([], [ ("cudajit", [ ("cuda", Some "cudajit.cuda") ]) ])));
   refused "a tree with no package stand-in is refused"
     ~format:
       "no library under arrayjit/vendor_stubs/<package>/dune is named `<package>_stub` -- the \
@@ -920,17 +1315,25 @@ let () =
     control ();
     Stdlib.exit 0);
   if Array.length argv < 2 then (
-    eprintf "Usage: %s <workspace_root> <dune files...>|--control\n" argv.(0);
+    eprintf "Usage: %s <workspace_root> <generated files...>|--control\n" argv.(0);
     Stdlib.exit 1);
-  let base = Scan.base_dir argv.(1) in
-  let dune_files =
-    Array.to_list (Array.subo argv ~pos:2)
-    |> List.filter ~f:(fun path -> String.equal (Stdlib.Filename.basename path) "dune")
-    |> List.map ~f:(fun path -> (Scan.repo_relative base path, path))
-    |> List.dedup_and_sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
-    |> List.map ~f:(fun (path, on_disk) -> (path, In_channel.read_all on_disk))
+  let inventory =
+    Inventory.of_dune_sandbox ~workspace_root:argv.(1)
+      ~generated:(Array.to_list (Array.subo argv ~pos:2))
   in
-  let census = analyze ~fail ~dune_files () in
+  let dune_files =
+    Inventory.select inventory ~f:(fun path -> String.equal (Stdlib.Filename.basename path) "dune")
+    |> List.map ~f:(fun (file : Inventory.file) -> (file.path, In_channel.read_all file.on_disk))
+  in
+  (* The OCaml sources, read only when a copy needs one. *)
+  let on_disk =
+    Inventory.select inventory ~f:(fun path ->
+        String.is_suffix path ~suffix:".ml" || String.is_suffix path ~suffix:".mli")
+    |> List.map ~f:(fun (file : Inventory.file) -> (file.path, file.on_disk))
+    |> Map.of_alist_reduce (module String) ~f:(fun first _ -> first)
+  in
+  let sources path = Option.map (Map.find on_disk path) ~f:In_channel.read_all in
+  let census = analyze ~sources ~fail ~dune_files () in
   (* The tally moves with every new vendor arm, so it stays off the golden; the floor is what says
      the reader is not blind. *)
   eprintf "Vendor-gated select arms: %d (not part of the golden).\n" (List.length census.vendor);
@@ -944,6 +1347,14 @@ let () =
       | Some copy -> List.mem census.paired (arm, copy) ~equal:Poly.equal
       | None -> false);
   printf "\nVendor packages with a stand-in: %s\n" (String.concat ~sep:", " census.packages);
+  printf
+    "Package stand-in modules, each with the library its agreement alias is gated on (any: no \
+     alias, held to any library of the package):\n";
+  List.iter census.package_modules ~f:(fun (package, modules) ->
+      printf "  %s%s: %s\n" package package_suffix
+        (String.concat ~sep:", "
+           (List.map modules ~f:(fun (m, l) ->
+                Printf.sprintf "%s -> %s" (String.capitalize m) (Option.value l ~default:"any")))));
   printf "Vendor-gated arrayjit libraries: %s\n" (String.concat ~sep:", " census.backend_libraries);
   printf "\nVendor-gated select arms, each with the stand-in copy that compiles it:\n";
   List.iter census.vendor ~f:(fun (arm, copy) ->

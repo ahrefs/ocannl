@@ -17640,34 +17640,35 @@
 ; gh-ocannl-1688 follow-up: every vendor-gated `select` arm of every dune file is copied under
 ; `arrayjit/vendor_stubs/` and compiled there by a library, so that `@check` type-checks it off the
 ; vendor's box; an arm left uncopied is type-checked nowhere, silently. Which libraries are vendor
-; ones is derived from the stand-in tree itself (the scan's header says how). `--control` holds the
-; rule to synthetic trees.
+; ones is derived from the stand-in tree itself (the scan's header says how). The OCaml sources are
+; inputs too: a copy naming a module of a package stand-in (`Nvrtc` of `cudajit_stub`) is held to
+; that module's own library (`cudajit.nvrtc`). `--control` holds the rule to synthetic trees.
 
 (executable
  (name vendor_stub_arms_scan)
  (modules vendor_stub_arms_scan)
- (libraries base stdio test_scan arrayjit.verdict))
+ (libraries base stdio ppxlib test_scan arrayjit.verdict))
 
 (rule
- ; ocannl-backend: none -- links no backend: it reads dune files as text.
- ; Two targets: the file list goes over as a `@<path>` response file, see `test/support/scan_argv.ml`.
- (targets vendor_stub_arms_scan.actual vendor_stub_arms_scan.filelist)
+ ; ocannl-backend: none -- links no backend: it reads dune files and OCaml sources as text.
+ (target vendor_stub_arms_scan.actual)
  (package neural_nets_lib)
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
-  (glob_files_rec ../../dune))
+  ; The source tree dune declares, enumerated inside a clean sandbox (no build target, so no
+  ; generated `.ml`, is an input); the action's own occupants are passed below as exclusions.
+  (sandbox always)
+  (source_tree ../..))
  (action
-  (progn
-   (with-stdout-to
-    vendor_stub_arms_scan.filelist
-    (echo "%{deps}"))
-   (with-stdout-to
-    vendor_stub_arms_scan.actual
-    (run
-     %{dep:vendor_stub_arms_scan.exe}
-     %{workspace_root}
-     @vendor_stub_arms_scan.filelist)))))
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:vendor_stub_arms_scan.exe}
+    %{workspace_root}
+    %{target}
+    %{dep:vendor_stub_arms_scan.exe}
+    %{dep:ocannl_config}))))
 
 (rule
  (alias runtest-vendor_stub_arms_scan)

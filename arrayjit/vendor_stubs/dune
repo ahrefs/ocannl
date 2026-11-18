@@ -29,7 +29,8 @@
 ;   daily sweep runs it there as part of `runtest` -- and every macOS build for metal), and a
 ;   SKIPPED line elsewhere. For a verbatim copy the check is a diff, which is the generator as well:
 ;   after a package upgrade on its box, the alias fails with the drift, and `dune promote` there
-;   rewrites the copy from the installed interface.
+;   rewrites the copy from the installed interface. The library its `%{lib-available:…}` gate names
+;   is the one `test/operations/vendor_stub_arms_scan` holds a copy naming that module to.
 ;
 ; `arms/` then compiles the other vendor-gated `select` arms -- of the `arrayjit/test`,
 ; `test/operations` and `tools` executables -- as libraries against those stubs and `typecheck/`

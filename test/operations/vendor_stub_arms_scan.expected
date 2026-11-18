@@ -2,6 +2,10 @@ every vendor-gated select arm the census finds is compiled by a stand-in copy: t
 every vendor-gated arm's stand-in copy is held to the stanza selecting it: true
 
 Vendor packages with a stand-in: cudajit, hipjit, metal
+Package stand-in modules, each with the library its agreement alias is gated on (any: no alias, held to any library of the package):
+  cudajit_stub: Cuda -> cudajit.cuda, Nvrtc -> cudajit.nvrtc
+  hipjit_stub: Hip -> hipjit.hip, Hip_ffi -> any, Hiprtc -> hipjit.hiprtc
+  metal_stub: Metal -> metal, Runtime -> metal.runtime
 Vendor-gated arrayjit libraries: arrayjit.cuda_backend, arrayjit.hip_backend, arrayjit.metal_backend, arrayjit.metal_math_api_runtime, cuda_backend, hip_backend, metal_backend, metal_math_api_runtime
 
 Vendor-gated select arms, each with the stand-in copy that compiles it:
