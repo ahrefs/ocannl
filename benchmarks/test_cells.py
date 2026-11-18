@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -713,18 +714,46 @@ class Gh1253FlipDriverTest(DriverTreeTest):
         self.assertIn('fx gate=auto pass=1 FAILED: "exited 1"', (self.out / "summary.txt").read_text())
 
 
+# A stub cell's round, read off its bin_cells directory (`cells/<NNN>-<arm>/`, four arms a round;
+# an identity run's directory has no number and reads as round 0), and the per-round factors:
+# DRIFT moves both arms of a round alike (x1, x4, x1, x4), SKEW is the wide arm's own per-round
+# cost (1.1, 1.3, 1.1, 1.3). Paired by round, wide/narrow reads 1.200 (1.100-1.300); the arms'
+# medians divided read 1.260; and per-round minima over all variants, which take round 1's smem,
+# read 1.100 (1.000-1.300) -- so a test can tell the three apart.
+STUB_ROUND = """
+import re
+_m = re.match(r"(\\d+)-", os.path.basename(os.getcwd()))
+rnd = int(_m.group(1)) // 4 if _m else 0
+drift, skew = (1.0, 4.0)[rnd % 2], (1.1, 1.3)[rnd % 2]
+"""
+
 # bin/schedule_bench as gh1051_bf16_ab.sh reads it: five timing lines whose checksums are the f32
 # control's exact answer, near it for the wide and the narrow serial legs, and a gross but shared
-# value for the narrow tensorized pair; with debug files on, one generated .hip under the cell's
-# build_files/<prefix>/ that the bf16 policy does not reach at f32.
+# value for the narrow tensorized pair; with debug files on, one generated source (EXT) under the
+# cell's build_files/<prefix>/ that the bf16 policy does not reach at f32 and does reach at bf16
+# (unless SAME_BF16 says the stub ignores the arm there: the treatment-unreached negative control;
+# NO_NARROW_SOURCE has the narrow bf16 run write none, which must not read as a difference).
+# The bf16 timings vary by ROUND and variant so that the three readings of a wide/narrow ratio
+# disagree (see STUB_ROUND): the narrow arm's fastest is mma_pd1, the wide arm's regtile, except
+# that in round 1 the wide smem beats regtile once.
 SCHEDULE_BODY = """
 import json, os
+""" + STUB_ROUND + """
+def ms(v):
+    if prec == "single":
+        return 1.0
+    if narrow:
+        return {"mma_pd1": 0.5, "mma_pd2": 0.7}.get(v, 2.0) * drift
+    return {"regtile": 0.5 * skew, "mma_pd1": 3.0, "mma_pd2": 3.0,
+            "smem": 0.5 if rnd == 1 else 2.0}.get(v, 2.0) * drift
 opt = {a.split("=", 1)[0][len("--ocannl_"):]: a.split("=", 1)[1] for a in argv if "=" in a}
 narrow, prec = opt["bf16_arithmetic"] == "true", opt["default_prec"]
 if opt.get("output_debug_files_in_build_directory") == "true":
     d = os.path.join("build_files", opt["build_files_prefix"])
     os.makedirs(d)
-    open(os.path.join(d, "mm.hip"), "w").write("kernel " + prec + "\\n")
+    reach = "" if prec == "single" or SAME_BF16 else " acc=" + ("bf16" if narrow else "f32")
+    if not (NO_NARROW_SOURCE and narrow and prec == "bfloat16"):
+        open(os.path.join(d, "mm.EXT"), "w").write("kernel " + prec + reach + "\\n")
 for v in ("parallel", "smem", "regtile", "mma_pd1", "mma_pd2"):
     mma = v.startswith("mma")
     if prec == "single":
@@ -734,35 +763,79 @@ for v in ("parallel", "smem", "regtile", "mma_pd1", "mma_pd2"):
     else:
         chk = "102/204" if narrow else "101/202"
     census = "MMA_CENSUS" if mma and prec == "bfloat16" else "no tile MMA"
-    print(f"{v:<10} 1.000 ms  2.00 GFLOP/s  (spot [65] 1.0, chk {chk}, agrees (0 of 4))  [{census}] [grid: no Grid loop]")
-    print("bench-result: " + json.dumps({"variant": v, "seconds": 0.001, "check": "unchecked",
+    print(f"{v:<10} {ms(v):.3f} ms  2.00 GFLOP/s  (spot [65] 1.0, chk {chk}, agrees (0 of 4))  [{census}] [grid: no Grid loop]")
+    print("bench-result: " + json.dumps({"variant": v, "seconds": ms(v) / 1000, "check": "unchecked",
                                           "check_note": "rounding expected"}))
+"""
+
+# bench_gpt as the training row reads it: a result line at the storage precision BENCH_PRECISION
+# asked for, the wide bf16 step slower than the narrow one by STUB_ROUND's skew; with debug files on, one generated
+# source that only the bf16 arms' accumulator moves.
+TRAIN_BODY = """
+import json, os
+""" + STUB_ROUND + """
+opt = {a.split("=", 1)[0][len("--ocannl_"):]: a.split("=", 1)[1] for a in argv if "=" in a}
+narrow, prec = opt["bf16_arithmetic"] == "true", os.environ["BENCH_PRECISION"]
+assert os.environ["BENCH_DOMINANT_KERNEL"] == "0" and os.environ["BENCH_TUNE"] == "0"
+if opt.get("output_debug_files_in_build_directory") == "true":
+    d = os.path.join("build_files", opt["build_files_prefix"])
+    os.makedirs(d)
+    reach = " acc=" + ("bf16" if narrow else "f32") if prec == "bf16" else ""
+    open(os.path.join(d, "step.EXT"), "w").write("kernel " + prec + reach + "\\n")
+step = (5.0 if prec == "f32" else 4.0 if narrow else 4.0 * skew) * drift
+print(json.dumps({"framework": "ocannl", "storage_precision": prec,
+                  "step_ms": {"p10": step, "p50": step, "p90": step}, "losses": [1.0, 0.5]}))
 """
 
 
 @POSIX_ONLY
 class Gh1051AbDriverTest(StubRunTest):
-    def measure(self, census="Mma_intrinsics 2"):
+    def measure(self, backend="hip", census="Mma_intrinsics 2", same_bf16=False, fixture=False,
+                no_narrow_source=False, mode="train"):
+        ext = {"hip": "hip", "metal": "metal"}[backend]
         root = self.dir / "root"
         write_stub(root / "_build/default/bin/schedule_bench.exe",
-                   SCHEDULE_BODY.replace("MMA_CENSUS", census))
+                   SCHEDULE_BODY.replace("MMA_CENSUS", census).replace("EXT", ext)
+                   .replace("SAME_BF16", repr(same_bf16))
+                   .replace("NO_NARROW_SOURCE", repr(no_narrow_source)))
+        write_stub(root / "_build/default/benchmarks/runners/ocannl/bench_gpt.exe",
+                   TRAIN_BODY.replace("EXT", ext))
         dune = self.fakebin / "dune"
         dune.write_text("#!/bin/sh\nexit 0\n")
         dune.chmod(0o755)
         (self.dir / "tmp").mkdir()
-        proc = self.run_tool([box_gate.BASH, str(HERE / "gh1051_bf16_ab.sh"), str(root), "stub",
-                              "4", "64"], {"TMPDIR": str(self.dir / "tmp"),
-                                           "OCANNL_BF16_ARITHMETIC": "auto"})
-        raw = Path(re.search(r"raw=(\S+)", proc.stdout).group(1))
-        return proc, raw
+        lead = []
+        if fixture:
+            fx = self.dir / "fx.safetensors"
+            header = json.dumps({"__metadata__": {"mode": mode}}).encode()
+            fx.write_bytes(struct.pack("<Q", len(header)) + header)
+            lead = ["--skip-box-check", "--training-fixture", str(fx)]
+        proc = self.run_tool([box_gate.BASH, str(HERE / "gh1051_bf16_ab.sh"), *lead, str(root),
+                              backend, "stub", "4", "64"],
+                             {"TMPDIR": str(self.dir / "tmp"), "OCANNL_BF16_ARITHMETIC": "auto"})
+        m = re.search(r"raw=(\S+)", proc.stdout)
+        return proc, (Path(m.group(1)) if m else None)
 
     def test_four_interleaved_arms_validated_and_tabled(self):
         proc, raw = self.measure()
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         # One space exactly: the driver strips the padding macOS's wc -l puts before its count.
         self.assertRegex(proc.stdout,
-                         r"drift control: 1 generated f32 kernels byte-identical across arms")
-        self.assertIn("| stub | 64 | mma_pd1 |", proc.stdout)
+                         r"drift control \(schedule_bench\): 1 generated f32 kernels "
+                         r"byte-identical across arms")
+        self.assertIn("treatment reach (schedule_bench): 1 of 1 generated bf16 sources differ",
+                      proc.stdout)
+        # The stub writes no `auto` arm of its own, so auto's bf16 source matches the wide one.
+        self.assertIn("auto (schedule_bench, bf16): byte-identical to the wide arm (false)",
+                      proc.stdout)
+        # The table's ratios are paired per round: regtile's wide/narrow is 0.275 and 0.325 in
+        # alternate rounds (the arms' medians divided would read 0.315), its f32 control 1.000.
+        self.assertRegex(proc.stdout, r"\| stub \| 64 \| regtile \| [^\n]*\| 0\.300 \(0\.275-0\.325\) "
+                                      r"\| 1\.000 \(1\.000-1\.000\) \|")
+        # The fastest-variant line pairs the two schedules it names, which differ by arm; per-round
+        # minima would take round 1's wide smem and read 1.100 (1.000-1.300).
+        self.assertRegex(proc.stdout, r"n=64 treatment: fastest variant[^\n]* narrow mma_pd1, wide "
+                                      r"regtile;[^\n]* wide/narrow 1\.200 \(1\.100-1\.300\)")
         records = self.records(raw / "n64")
         self.assertEqual(len(records), 16)
         self.assertEqual({r["arm"] for r in records},
@@ -770,11 +843,59 @@ class Gh1051AbDriverTest(StubRunTest):
         # The ambient `auto` reached no cell: each ran the arm its label names.
         self.assertTrue(all(r["config"]["bf16_arithmetic"]["value"] == r["arm"].split("-")[0]
                             for r in records))
+        self.assertTrue(all(r["config"]["backend"]["value"] == "hip" for r in records))
+
+    def test_metal_proves_its_metal_sources(self):
+        proc, raw = self.measure(backend="metal")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("drift control (schedule_bench): 1 generated f32 kernels", proc.stdout)
+        self.assertTrue(list((raw / "identity_gemm_single_false").glob("*.metal")))
+        self.assertIn("os: macOS", proc.stdout)
+        self.assertTrue(all(r["config"]["backend"]["value"] == "metal"
+                            for r in self.records(raw / "n64")))
+
+    def test_a_treatment_that_does_not_reach_codegen_stops_the_driver(self):
+        # The negative control of the reach proof: bf16 sources identical across the arms.
+        proc, raw = self.measure(backend="metal", same_bf16=True)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("TREATMENT UNREACHED (schedule_bench)", proc.stdout)
+        self.assertFalse((raw / "n64").exists())
+
+    def test_a_missing_narrow_source_is_no_evidence_of_reach(self):
+        # One side of the comparison empty: diff -r differs, but that proves nothing.
+        proc, raw = self.measure(backend="metal", no_narrow_source=True)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("TREATMENT UNREACHED (schedule_bench): the bf16 generated .metal across "
+                      "arms: error (1 and 0 files)", proc.stdout)
+        self.assertFalse((raw / "n64").exists())
+
+    def test_an_inference_fixture_is_refused_for_the_training_row(self):
+        proc, raw = self.measure(backend="metal", fixture=True, mode="infer")
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("must be a training one (metadata mode=train), got mode='infer'", proc.stdout)
+        self.assertIsNone(raw)
 
     def test_a_tensorized_cell_that_fell_back_invalidates_the_run(self):
         proc, _ = self.measure(census="scalar fallback")
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("mma_pd1 did not tensorize [scalar fallback]", proc.stdout)
+
+    def test_the_training_row_is_proven_paired_and_tabled(self):
+        proc, raw = self.measure(backend="metal", fixture=True)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("drift control (bench_gpt): 1 generated f32 kernels", proc.stdout)
+        self.assertIn("treatment reach (bench_gpt): 1 of 1 generated bf16 sources differ",
+                      proc.stdout)
+        # STUB_ROUND's skew paired by round (the medians, 10.0 and 12.6, would divide to 1.260);
+        # the f32 control 1.000 under the same drift.
+        self.assertIn("| stub | fx | bf16 | 10.000 | 12.600 | 1.200 (1.100-1.300) | 4 of 4 |",
+                      proc.stdout)
+        self.assertIn("| stub | fx | f32 | 12.500 | 12.500 | 1.000 (1.000-1.000) | 0 of 4 |",
+                      proc.stdout)
+        self.assertIn("untuned seeding: no seeding census logged in either arm", proc.stdout)
+        records = self.records(raw / "untuned")
+        self.assertEqual(len(records), 16)
+        self.assertEqual({r["env"]["BENCH_DOMINANT_KERNEL"] for r in records}, {"0"})
 
 
 if __name__ == "__main__":
