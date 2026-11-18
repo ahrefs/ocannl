@@ -109,7 +109,9 @@ def parse_kernel(spec):
     return {"c": num("c"), "m": num("m"), "txn32": num("txn"), "txn64": num("txn64"),
             "txn128": num("txn128"), "unc": int(fields["unc"]), "wg": int(fields["wg"]),
             "thr": int(fields["thr"]), "occ": float(fields.get("occ", "1")),
-            "stg": float(fields.get("stg", "0")), "shl": float(fields.get("shl", "0"))}
+            "stg": float(fields.get("stg", "0")),
+            # gh-ocannl-2262: None on a listing from before the term, which --shared-rate refuses.
+            "shl": float(fields["shl"]) if "shl" in fields else None}
 
 
 def occupancy(wg, thr, cap, tpm):
@@ -153,7 +155,7 @@ def rescore(kernels, rate, sector, occ=None, staged=None, shared=None):
             # gh-ocannl-2262: (rate, listed rate), a rate of 0 meaning none.
             r, listed = shared
             inv = lambda x: 0.0 if not x else 1.0 / x
-            c = c + k["shl"] * (inv(r) - inv(listed)) * 1e3
+            c = c + (k["shl"] or 0.0) * (inv(r) - inv(listed)) * 1e3
         if c is not None:
             o = k["occ"] if occ is None else occupancy(k["wg"], k["thr"], *occ)
             c = c / o
@@ -220,7 +222,7 @@ def evaluate(cands, rate, sector, band, occ=None, staged=None, shared=None):
     return 100.0 * right / max(1, decided), decided, sets, ranks
 
 
-def print_pairs(cells, sector, shared):
+def print_pairs(cells, sector, scoring):
     """gh-ocannl-2262: the register-tile pairs at one block tile, flavour and site."""
     import re
     lab = re.compile(r"gpu (\d+)x(\d+)x(\d+)/(\d)x(\d)((?: [a-z-]+)*)\]")
@@ -242,9 +244,11 @@ def print_pairs(cells, sector, shared):
                     line = (f"pair {name} {key[0]}x{key[1]} {key[2] or 'plain'}: {a!r} / {b!r}"
                             f" threads={thr(ca)}/{thr(cb)}"
                             f" measured={ca['median'] / cb['median']:.3f} listed={listed:.3f}")
-                    if shared is not None:
-                        ra = rescore(ca["kernels"], None, sector, shared=shared)
-                        rb = rescore(cb["kernels"], None, sector, shared=shared)
+                    if any(v is not None for v in scoring.values()):
+                        ra = rescore(ca["kernels"], scoring["rate"], sector, scoring["occ"],
+                                     scoring["staged"], scoring["shared"])
+                        rb = rescore(cb["kernels"], scoring["rate"], sector, scoring["occ"],
+                                     scoring["staged"], scoring["shared"])
                         line += f" rescored={ra / rb:.3f}"
                     print(line)
 
@@ -285,6 +289,12 @@ def main():
             return 2
         if len(cands) < 2:
             print(f"gh1600_txn_fit: {name}: fewer than two candidates join", file=sys.stderr)
+            return 2
+        if args.shared_rate is not None and any(
+                k["shl"] is None for c in cands.values() for k in c["kernels"]):
+            # A listing without shl= would re-score to itself at every rate and pass vacuously.
+            print(f"gh1600_txn_fit: {name}: --shared-rate needs kernel lines carrying shl="
+                  " (a listing from before gh-ocannl-2262 has none)", file=sys.stderr)
             return 2
         spread = spread_of(cands)
         unc = sum(c["uncovered"] for c in cands.values())
@@ -332,9 +342,14 @@ def main():
         return rows
 
     if args.pairs:
-        one = (float(args.shared_rate), args.listed_shared_rate) if (
-            args.shared_rate not in (None, "sweep")) else None
-        print_pairs(cells, args.sector, one)
+        # The same re-scoring the fit evaluates: every option stated as one value.
+        one = lambda v: v is not None and v != "sweep"
+        print_pairs(cells, args.sector, dict(
+            rate=args.rate or None, occ=occ,
+            staged=((float(args.staged_rate), args.listed_staged_rate)
+                    if one(args.staged_rate) else None),
+            shared=((float(args.shared_rate), args.listed_shared_rate)
+                    if one(args.shared_rate) else None)))
 
     if args.shared_rate is not None:
         listed = args.listed_shared_rate

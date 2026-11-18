@@ -138,8 +138,8 @@ let reached_unread_exemptions =
        ranking that does is untimed (gh-ocannl-2262)" );
     ( "model_fill_lane_width",
       "reached from the seeded plan's auto gate only through the launch fill it resolves, whose \
-       lane width the gate resets to 1: the plan tune seeds does not read it, and the leaf \
-       ranking that does is untimed (gh-ocannl-2262)" );
+       lane width the gate resets to 1: the plan tune seeds does not read it, and the leaf ranking \
+       that does is untimed (gh-ocannl-2262)" );
   ]
 
 let class_name : Utils.config_key_class -> string = function

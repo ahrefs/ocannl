@@ -3261,7 +3261,7 @@ let ranking_fill_chains ~limits =
    prices a staged-copy rate (segments_legs, gh-ocannl-1821). The ILP cap (gh-ocannl-1639) is 1 --
    the thread-only fill -- unless [fill_chains] resolves; the lane group (gh-ocannl-2262) likewise,
    unless [fill_lane_width] resolves. *)
-let ranking_fill_model ~limits : CM.fill_model option =
+let fill_model_at ~limits ~lane_width : CM.fill_model option =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   match
     ( resolve multiprocessors_override u.core_count,
@@ -3274,9 +3274,11 @@ let ranking_fill_model ~limits : CM.fill_model option =
           fm_fill_threads;
           fm_tail = false;
           fm_chains = ranking_fill_chains ~limits;
-          fm_lane_width = ranking_fill_lane_width ~limits;
+          fm_lane_width = lane_width;
         }
   | _ -> None
+
+let ranking_fill_model ~limits = fill_model_at ~limits ~lane_width:(ranking_fill_lane_width ~limits)
 
 type kernel_legs = {
   kl_compute : float option;
@@ -5544,10 +5546,9 @@ let seeded_default_gate ~limits =
               matrix_rate = ranking_mma_rate ~limits;
               gather_rate = ranking_device_gather_rate ~limits;
               (* gh-ocannl-2262: the gate keeps the thread-only fill, as it prices no shared loads:
-                 neither was fitted for a staged sketch against an unstaged preset. *)
-              fill =
-                Option.map (ranking_fill_model ~limits) ~f:(fun fm ->
-                    { fm with CM.fm_lane_width = 1 });
+                 neither was fitted for a staged sketch against an unstaged preset. It never
+                 resolves the lane-width override, so the leaf-only key cannot reach it. *)
+              fill = fill_model_at ~limits ~lane_width:1;
               sector_rate = ranking_transaction_rate ~limits;
               wg_capacity = ranking_workgroup_capacity ~limits;
               copy_rate = ranking_staged_copy_rate ~limits;
