@@ -3,6 +3,7 @@ Directories whose sources this scan reads:
   arrayjit/lib/gen_builtins
   arrayjit/test
   arrayjit/vendor_stubs/cudajit/typecheck
+  arrayjit/vendor_stubs/hipjit
   arrayjit/vendor_stubs/hipjit/typecheck
   arrayjit/vendor_stubs/metal
   arrayjit/vendor_stubs/metal/typecheck

@@ -8,9 +8,10 @@
  (libraries ctypes integers sexplib0))
 
 ; One rule per copied interface, each on the alias named after it, and both aggregated onto
-; `runtest` below. Where `hipjit` is absent there is nothing to compare against, and building an
-; empty alias is an error while silence would read as a pass, so the alias says SKIPPED instead.
-; `diff` compares within the build directory, so a rule copies each installed interface in first.
+; `runtest` at the end, beside `runtest-hip_ffi`'s signature check. Where `hipjit` is absent there
+; is nothing to compare against, and building an empty alias is an error while silence would read
+; as a pass, so the alias says SKIPPED instead. `diff` compares within the build directory, so a
+; rule copies each installed interface in first.
 
 (rule
  (enabled_if %{lib-available:hipjit.hip})
@@ -50,8 +51,47 @@
   (echo
    "hipjit stub agreement (hiprtc.mli): SKIPPED -- hipjit is not installed here; it runs on a HIP box.\n")))
 
+; `hip_ffi.mli` is hand-written: `hipjit.hip_ffi` is ctypes-generated and installs no interface to
+; copy. Its agreement is a signature check, as for metal's `runtime.mli`: `hip_ffi_agreement.ml`
+; wraps the stub's text as a module type and constrains the installed `Hip_ffi` by it, so the
+; compiler fails wherever the stub promises a type the real library does not provide, or a variant
+; whose constructors differ. The library is `(optional)`, compiled wherever `hipjit.hip_ffi` is
+; installed (on every build there, `@check` included), and `runtest-hip_ffi` depends on its
+; compiled interface. The generator runs everywhere -- an optional library still needs its module
+; to exist -- but nothing compiles its output where `hipjit.hip_ffi` is absent.
+
+(rule
+ (with-stdout-to
+  hip_ffi_agreement.ml
+  (progn
+   (echo
+    "(* Generated from hip_ffi.mli by arrayjit/vendor_stubs/hipjit/dune. *)\n\nmodule type Stub = sig\n")
+   (cat hip_ffi.mli)
+   (echo "\nend\n\nmodule _ : Stub = Hip_ffi\n"))))
+
+(library
+ (name hipjit_hip_ffi_stub_agreement)
+ (optional)
+ (modules hip_ffi_agreement)
+ (libraries hipjit.hip_ffi))
+
+(rule
+ (alias runtest-hip_ffi)
+ (enabled_if %{lib-available:hipjit.hip_ffi})
+ (deps %{cmi:hip_ffi_agreement})
+ (action (progn)))
+
+(rule
+ (alias runtest-hip_ffi)
+ (enabled_if
+  (not %{lib-available:hipjit.hip_ffi}))
+ (action
+  (echo
+   "hipjit stub agreement (hip_ffi.mli): SKIPPED -- hipjit is not installed here; it runs on a HIP box.\n")))
+
 (alias
  (name runtest)
  (deps
   (alias runtest-hip)
+  (alias runtest-hip_ffi)
   (alias runtest-hiprtc)))
