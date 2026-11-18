@@ -28,11 +28,11 @@
    is proposed and renders on the pool.
 
    The floor leg re-asks every Serial packed geometry as its Grid twin at 64^3, and the unsplit
-   whole-triple geometry with a 16-row Grid block at 32x16x16. The final census entry belongs to the
-   site (the earlier one zeroes the output). No proposed site may render serially for the floor.
-   Both witnesses are refused at the default floor, and every below-floor geometry is proposed and
-   renders on the pool when the floor is lowered to 4096. The same parameters connect the two runs;
-   an unrelated pool-rendered geometry cannot satisfy the control.
+   whole-triple geometry with a 16-row Grid block at 32x16x16. The scheduled contraction loop's
+   symbol identifies the site independently of the output zeroing. No proposed site may render
+   serially for the floor. Both witnesses are refused at the default floor, and every below-floor
+   geometry is proposed and renders on the pool when the floor is lowered to 4096. The same
+   parameters connect the two runs; an unrelated pool-rendered geometry cannot satisfy the control.
 
    The tuning leg searches the 64^3 site: no ranked candidate rendered serially for the cap, and the
    report still lists the Grid seeds the launch floor ([cc_grid_min_updates]) kept serial -- each
@@ -127,6 +127,23 @@ let pool_privatizing (g : Cs.grid_summary) =
       | Cs.Grid_pool { private_bytes } -> 0 < private_bytes && private_bytes <= forced_cap
       | _ -> false)
 
+let matmul_grid_loop llc =
+  let loops =
+    List.filter_map (Ll_test.loop_sites llc) ~f:(fun loop ->
+        match loop.ls_stmt with
+        | Ir.Low_level.For_loop { axis = Grid; index; body; _ } ->
+            let tiles = Ll_test.count_stmt body ~f:(function Tile_mma _ -> true | _ -> false) in
+            Option.some_if (tiles > 0) index
+        | _ -> None)
+  in
+  match loops with [ index ] -> Some (Ir.Indexing.symbol_ident index) | _ -> None
+
+let grid_site loop entries =
+  Option.bind loop ~f:(fun loop ->
+      match List.filter entries ~f:(fun e -> String.equal e.Cs.loop loop) with
+      | [ entry ] -> Some entry.Cs.site
+      | _ -> None)
+
 (* --- The seeding leg: the pre-filter against the renderer. *)
 
 type judged = {
@@ -136,6 +153,7 @@ type judged = {
   j_padded : bool;
   j_proposed : bool;
   j_grid : Cs.grid_summary option;
+  j_site_loop : string option;
 }
 
 let equal_params a b =
@@ -175,15 +193,20 @@ let judge_site ?rows ?depth ?(shape = `Hoisted) n =
       let proposed = List.mem seeds sp ~equal:equal_params in
       let name = Printf.sprintf "%s_c%d" tag i in
       let c, _, _ = matmul ?rows ?depth ~tag:name n in
+      let site_loop = ref None in
       let grid =
         match
           Context.compile ~name
             ~lowered_transform:(fun opt ->
-              [
+              let scheduled =
                 Ir.Schedule.apply
                   (Autotune.sketch_schedule ~accum_prec:Ll_test.backend_accum_prec ~p:sp opt)
-                  opt;
-              ])
+                  opt
+              in
+              (match shape with
+              | `Grid | `Whole -> site_loop := matmul_grid_loop scheduled.llc
+              | `Hoisted -> ());
+              [ scheduled ])
             (Context.auto ()) (Train.forward c) Ir.Indexing.Empty
         with
         | ctx, routine ->
@@ -209,16 +232,16 @@ let judge_site ?rows ?depth ?(shape = `Hoisted) n =
             (divides sp.sk_bm site.m_ni && divides sp.sk_bn site.m_nj && divides sp.sk_bk site.m_nk);
         j_proposed = proposed;
         j_grid = grid;
+        j_site_loop = !site_loop;
       })
 
 let judged = lazy (List.concat_map [ 96; 128 ] ~f:(fun n -> judge_site n))
 
-(* The final census entry is the site launch; the preceding entry zeroes the output. Only the site
-   loop must justify the Grid shape: a serial zero nest is harmless. *)
-let site_below_floor g =
-  match List.last g.Cs.loops with
-  | Some { Cs.site = Grid_serial (Grid_below_min_updates _); _ } -> true
-  | _ -> false
+let site_of ?(census_order = Fn.id) j =
+  Option.bind j.j_grid ~f:(fun g -> grid_site j.j_site_loop (census_order g.Cs.loops))
+
+let site_below_floor j =
+  match site_of j with Some (Cs.Grid_serial (Grid_below_min_updates _)) -> true | _ -> false
 
 let floor_sites () = judge_site ~shape:`Grid 64 @ judge_site ~rows:72 ~depth:64 ~shape:`Grid 32
 let floor_judged = lazy (floor_sites ())
@@ -517,24 +540,23 @@ let () =
   in_leg ~leg "agr-seed: no proposed packed Grid seed renders its site serially for the floor"
     (fun label ->
       p_all label (Lazy.force floor_judged) ~f:(fun j ->
-          (not j.j_proposed) || not (grid_of j ~f:site_below_floor)));
+          (not j.j_proposed) || not (site_below_floor j)));
   in_leg ~leg "agr-seed: the floor refuses a packed Grid geometry whose site renders below it"
     (fun label ->
       p_exists label (Lazy.force floor_judged) ~f:(fun j ->
-          (not j.j_proposed) && grid_of j ~f:site_below_floor));
+          (not j.j_proposed) && site_below_floor j));
   in_leg ~leg "agr-seed: lowering the floor keeps each below-floor geometry on the pool"
     (fun label ->
       p_all label
-        (List.filter
-           (Lazy.force floor_judged @ Lazy.force whole_floor_judged)
-           ~f:(grid_of ~f:site_below_floor))
+        (List.filter (Lazy.force floor_judged @ Lazy.force whole_floor_judged) ~f:site_below_floor)
         ~f:(fun refused ->
           List.exists (Lazy.force floor_control) ~f:(fun j ->
+              (* The zeroing launch can stay serial while the contraction runs on the pool. *)
               same_geometry j refused && j.j_proposed
-              && grid_of j ~f:(fun g ->
-                  match List.last g.Cs.loops with
-                  | Some { Cs.site = Grid_pool _; _ } -> true
-                  | _ -> false))));
+              &&
+              match site_of ~census_order:List.rev j with
+              | Some (Cs.Grid_pool _) -> true
+              | _ -> false)));
   in_leg ~leg "agr-seed: every floor-only refusal renders its site below the floor" (fun label ->
       p_all label
         (List.filter
@@ -543,37 +565,31 @@ let () =
              (not j.j_proposed)
              && List.exists (Lazy.force floor_control) ~f:(fun control ->
                  same_geometry j control && control.j_proposed)))
-        ~f:(grid_of ~f:site_below_floor));
+        ~f:site_below_floor);
   in_leg ~leg "agr-seed: the seeding bound never undercounts a below-floor site's renderer count"
     (fun label ->
       p_all label
-        (List.filter
-           (Lazy.force floor_judged @ Lazy.force whole_floor_judged)
-           ~f:(grid_of ~f:site_below_floor))
+        (List.filter (Lazy.force floor_judged @ Lazy.force whole_floor_judged) ~f:site_below_floor)
         ~f:(fun j ->
-          grid_of j ~f:(fun g ->
-              match List.last g.Cs.loops with
-              | Some { Cs.site = Grid_serial (Grid_below_min_updates { updates; _ }); _ } ->
-                  updates <= j.j_bound
-              | _ -> false)));
+          match site_of j with
+          | Some (Cs.Grid_serial (Grid_below_min_updates { updates; _ })) -> updates <= j.j_bound
+          | _ -> false));
   in_leg ~leg "agr-seed: unpadded below-floor estimates equal the renderer count" (fun label ->
       p_all label
         (List.filter
            (Lazy.force floor_judged @ Lazy.force whole_floor_judged)
-           ~f:(fun j -> (not j.j_padded) && grid_of j ~f:site_below_floor))
+           ~f:(fun j -> (not j.j_padded) && site_below_floor j))
         ~f:(fun j ->
-          grid_of j ~f:(fun g ->
-              match List.last g.Cs.loops with
-              | Some { Cs.site = Grid_serial (Grid_below_min_updates { updates; _ }); _ } ->
-                  updates = j.j_bound
-              | _ -> false)));
+          match site_of j with
+          | Some (Cs.Grid_serial (Grid_below_min_updates { updates; _ })) -> updates = j.j_bound
+          | _ -> false));
   in_leg ~leg "agr-seed: no proposed whole-triple Grid seed renders its site serially for the floor"
     (fun label ->
       p_all label (Lazy.force whole_floor_judged) ~f:(fun j ->
-          (not j.j_proposed) || not (grid_of j ~f:site_below_floor)));
+          (not j.j_proposed) || not (site_below_floor j)));
   in_leg ~leg "agr-seed: the floor refuses a whole-triple Grid geometry below it" (fun label ->
       p_exists label (Lazy.force whole_floor_judged) ~f:(fun j ->
-          (not j.j_proposed) && grid_of j ~f:site_below_floor))
+          (not j.j_proposed) && site_below_floor j))
 
 (* gh-ocannl-2285: the fused tail contributes a store per padded output cell and per Workgroup
    iteration. Re-ask refused seeds at their own renderer count and the admitted boundary seed one
@@ -612,18 +628,7 @@ let judge_fused_grid ~select ~m ~n ~k =
                   (Autotune.sketch_schedule ~accum_prec:Ll_test.backend_accum_prec ~p opt)
                   opt
               in
-              let loops =
-                List.filter_map (Ll_test.loop_sites scheduled.llc) ~f:(fun loop ->
-                    match loop.ls_stmt with
-                    | Ir.Low_level.For_loop { axis = Grid; index; body; _ } ->
-                        let tiles =
-                          Ll_test.count_stmt body ~f:(function Tile_mma _ -> true | _ -> false)
-                        in
-                        Option.some_if (tiles > 0) index
-                    | _ -> None)
-              in
-              (site_loop :=
-                 match loops with [ index ] -> Some (Ir.Indexing.symbol_ident index) | _ -> None);
+              site_loop := matmul_grid_loop scheduled.llc;
               [ scheduled ])
             (Context.auto ()) (comp name) Ir.Indexing.Empty
         in
@@ -631,12 +636,7 @@ let judge_fused_grid ~select ~m ~n ~k =
         let grid = routine.Context.grid in
         Stdio.eprintf "agr: %s %s: %s (not part of the golden)\n%!" name
           (Autotune.sketch_params_label p) (Cs.grid_summary_string grid);
-        Option.bind !site_loop ~f:(fun loop ->
-            match
-              List.filter (census_order grid.Cs.loops) ~f:(fun e -> String.equal e.Cs.loop loop)
-            with
-            | [ entry ] -> Some entry.Cs.site
-            | _ -> None)
+        grid_site !site_loop (census_order grid.Cs.loops)
       in
       let site = compile "default" ~census_order:Fn.id in
       let control_floor =
