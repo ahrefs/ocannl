@@ -15,7 +15,7 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
-# Groups: #lifecycle (65, 97, 40-47, 74, 122, 123, 124), #source (59-63, 66, 104), #hermetic (70).
+# Groups: #lifecycle (65, 97, 40-47, 74, 122, 123, 124, 124a), #source (59-63, 66, 104), #hermetic (70).
 #
 # Legs:
 #  40-47. run/start lifecycle: completion, signals (a group TERM landing inside
@@ -37,6 +37,9 @@
 #      Signals reach the isolated query, and unreaped zombie queries recover.
 # 124. readiness-controlled keeper probes collide with launch and recovery;
 #      both settle successfully, and recovery reports the reaping it performed.
+# 124a. the same collisions under a Linux ancestor that retains orphaned
+#      zombies. The ancestor must adopt zombies, and each keeper's start
+#      token must disappear before the ancestor can clean up.
 #  74. fork TERM is deferred until the parent owns its child pid and the child
 #      resets its handlers; no-mask and inherited-handler controls prove both.
 #  65. a `stop`, or a signal to the launcher alone, while the backends
@@ -1198,7 +1201,7 @@ harness_leg_run '123: exited query retained fd 9 recovery authenticates every ho
 # A fixture-only parent waits for the keeper, so even a non-reaping PID 1 cannot
 # leave its token behind as a zombie. The production fork/lifetime is unchanged.
 leg_124() {
-  local mode launcher result keeper
+  local mode launcher result keeper keeper_token= attempt
   cp "$life_root/tools/test-run.sh" "$TMP/124-before"
   cp "$life_bin/dune" "$TMP/124-dune-before"
   if ! perl -0777 -e '
@@ -1308,6 +1311,10 @@ EOF
        ! await_fixture_ready "$life_prefix.probe-contended"; then
       report 1 "keeper probe: $mode really contends with the held probe"
     else report 0 "keeper probe: $mode really contends with the held probe"; fi
+    if [ "${LIFECYCLE_REQUIRE_KEEPER_REAP:-0}" = 1 ]; then
+      keeper_token=$(ps_token "$keeper")
+      [ -n "$keeper_token" ] || report 1 "keeper probe: $mode keeper has a readable start token before release"
+    fi
     touch "$life_prefix.probe-release"
     harness_wait_child "$launcher" life_dead "keeper probe: $mode returns" 300
     result=$harness_child_rc
@@ -1324,12 +1331,54 @@ EOF
       harness_kill_recorded "$life_prefix.probe-holder" "$life_prefix.probe-holder-token"
     fi
     life_await_dead "$keeper" || report 1 "keeper probe: $mode keeper retires"
+    # A dead keeper can retain its identity. Check it while the ancestor is
+    # still waiting for this harness, so cleanup cannot supply the reaping.
+    if [ -n "$keeper_token" ]; then
+      for ((attempt=0; attempt<100; attempt++)); do
+        [ "$(ps_token "$keeper")" = "$keeper_token" ] || break
+        sleep .05
+      done
+      if [ "$attempt" = 100 ]; then
+        report 1 "keeper probe: $mode keeper is reaped before ancestor cleanup" \
+          "keeper $keeper still has its original start token"
+      fi
+    fi
   done
   cp "$TMP/124-before" "$life_root/tools/test-run.sh"
   cp "$TMP/124-dune-before" "$life_bin/dune"
   unlink "$life_root/tools/affected-tests.sh"
 }
 harness_leg_run '124: a held keeper unlock probe cannot refuse a launch or recovery #lifecycle' leg_124
+
+keeper_subreaper_label='keeper probe: all collisions settle and the keepers are reaped under a non-reaping ancestor'
+leg_124a() {
+  local python why stub=$TMP/124a.py held=$TMP/124a.held log=$TMP/124a.log
+  if [ "$(subreaper_kernel_probe uname)" = absent ]; then
+    harness_not_applicable "this kernel is $(uname -s), not Linux: no child subreaper to retain orphaned zombies"
+    return
+  fi
+  subreaper_write "$stub" || { harness_abandon "cannot write $stub"; return; }
+  python=$(command -v python3 || :)
+  why=$(subreaper_skip_reason "$python" "$stub")
+  if [ -n "$why" ]; then skip "$keeper_subreaper_label" "$why"; return; fi
+
+  # Keep the ancestor alive across the query's exit and the subsequent
+  # collision. Wrapping individual runner commands would reap between them.
+  if ! (
+    unset OCANNL_TOOL_HARNESS_EXPECTED_SKIPS OCANNL_TOOL_HARNESS_LEG_TIMES
+    OCANNL_TOOL_HARNESS_STRICT=1 LIFECYCLE_REQUIRE_KEEPER_REAP=1 SUBREAPER_RECORD=$held \
+      "$python" "$stub" "$BASH" "$SELF" --subject "$SRC" --only '^124:'
+  ) >"$log" 2>&1; then
+    report 1 "$keeper_subreaper_label" "$(sed '2,$s/^/      /' "$log")"
+    return
+  fi
+  if grep -q ' Z ' "$held"; then
+    report 0 "$keeper_subreaper_label"
+  else
+    report 1 "$keeper_subreaper_label" 'the ancestor adopted no zombie'
+  fi
+}
+harness_leg_run '124a: keeper retirement under a non-reaping Linux ancestor #lifecycle' leg_124a
 
 # ---------------------------------------------------------------------------
 # Legs 59-63 and 66: the source a run tested, recorded at launch (gh-ocannl-992)
