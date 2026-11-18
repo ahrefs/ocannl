@@ -1522,6 +1522,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   (`left only zombies ... inert, not reaped`), `run` keeps its verdict, and the stand-in must have
   held a zombie and nothing live; taking out the iteration shell's reaping trap, or that branch,
   makes the set refused (exit 2) under the same stand-in.
+  Digest leg 85d pins the stand-in's cleanup with a live adopted parent and a live descendant still
+  below it. The first census records only the parent. A one-shot kill followed by blocking
+  `waitpid(-1, 0)` waited for the leaf's 10-second fallback exit. Cleanup keeps the pre-cleanup
+  census and reaps without blocking, rescanning for newly adopted live children until `ECHILD`.
+  Leg 85e replaces the kill with a permission error. It requires the five-second cleanup error
+  (exit 98) before the leaf's fallback, with an outer stand-in to reap the control's children.
 - Lifecycle leg 124a (gh-ocannl-2261) runs the whole keeper collision leg under the same
   subreaper so adopted zombies survive from query exit through recovery. Its adoption census
   must contain a zombie and no live process. Each keeper's start token must disappear before
