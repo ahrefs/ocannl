@@ -9,9 +9,8 @@ module E = Test_scan.Doc_examples_scan
 let compile ~compiler ~interface code =
   let source = Stdlib.Filename.temp_file "doc_examples_control" ".ml" in
   let output = source ^ ".cmo" in
-  let log = source ^ ".log" in
   (* CI may request colors; plain diagnostics must still name the rejected API contiguously. *)
-  let environment =
+  let env =
     Unix.environment ()
     |> Array.filter ~f:(fun value -> not (String.is_prefix value ~prefix:"OCAML_COLOR="))
     |> fun inherited -> Array.append inherited [| "OCAML_COLOR=always" |]
@@ -20,30 +19,14 @@ let compile ~compiler ~interface code =
     ~f:(fun () ->
       let markdown = "```ocaml doc-check=control\n" ^ code ^ "\n```\n" in
       Out_channel.write_all source ~data:(E.render (E.parse ~path:"control.md" markdown));
-      let fd = Unix.openfile log [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o600 in
-      let pid =
-        Exn.protect
-          ~f:(fun () ->
-            Unix.create_process_env compiler
-              [|
-                compiler;
-                "-color";
-                "never";
-                "-I";
-                Stdlib.Filename.dirname interface;
-                "-c";
-                "-o";
-                output;
-                source;
-              |]
-              environment Unix.stdin fd fd)
-          ~finally:(fun () -> Unix.close fd)
+      let ((status, _, _) as child) =
+        Fresh_process.run ~exe:compiler ~env
+          [ "-color"; "never"; "-I"; Stdlib.Filename.dirname interface; "-c"; "-o"; output; source ]
       in
-      let _, status = Unix.waitpid [] pid in
-      (status, In_channel.read_all log))
+      (status, Fresh_process.output child))
     ~finally:(fun () ->
       List.iter
-        [ source; output; source ^ ".cmi"; log ]
+        [ source; output; source ^ ".cmi" ]
         ~f:(fun path -> if Stdlib.Sys.file_exists path then Stdlib.Sys.remove path))
 
 (* The words of a compiler diagnostic line, its punctuation dropped. The error kind and the

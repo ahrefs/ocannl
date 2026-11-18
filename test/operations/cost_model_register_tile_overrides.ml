@@ -3,17 +3,15 @@
    acceptance window's [noshl] / [nolane] arms are exactly these overrides: dropped, they would
    score as the shipped arm and the window could not tell the terms from their absence.
 
-   One process per resolution (the overrides are module-level lazies, read once): the configuration
-   states a value for the rate and [none] for the lane group, before anything forces either, over
-   limits whose advisories are both set. *)
+   One process per resolution (the overrides are module-level lazies, read once): the dune rule
+   states a value for the rate and [none] for the lane group as command-line flags, which outrank an
+   ambient environment variable and every config file, over limits whose advisories are both set. *)
 
 open Base
 open Verdict.Claims
 module BI = Ir.Backend_intf
 
 let () =
-  Hashtbl.set Utils.config_file_args ~key:"model_shared_load_rate" ~data:"7e12";
-  Hashtbl.set Utils.config_file_args ~key:"model_fill_lane_width" ~data:"none";
   let advised =
     {
       BI.no_hardware_limits with

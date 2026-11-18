@@ -20,27 +20,19 @@ open Verdict.Claims
 let compile ~compiler ~include_dirs code =
   let source = Stdlib.Filename.temp_file "shape_private_control" ".ml" in
   let output = Stdlib.Filename.chop_suffix source ".ml" ^ ".cmo" in
-  let log = source ^ ".log" in
   Exn.protect
     ~f:(fun () ->
       Out_channel.write_all source ~data:code;
-      let fd = Unix.openfile log [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o600 in
-      let pid =
-        Exn.protect
-          ~f:(fun () ->
-            Unix.create_process compiler
-              (Array.of_list
-                 ([ compiler; "-color"; "never"; "-w"; "-a" ]
-                 @ List.concat_map include_dirs ~f:(fun dir -> [ "-I"; dir ])
-                 @ [ "-c"; "-o"; output; source ]))
-              Unix.stdin fd fd)
-          ~finally:(fun () -> Unix.close fd)
+      let ((status, _, _) as child) =
+        Fresh_process.run ~exe:compiler
+          ([ "-color"; "never"; "-w"; "-a" ]
+          @ List.concat_map include_dirs ~f:(fun dir -> [ "-I"; dir ])
+          @ [ "-c"; "-o"; output; source ])
       in
-      let _, status = Unix.waitpid [] pid in
-      (status, In_channel.read_all log))
+      (status, Fresh_process.output child))
     ~finally:(fun () ->
       List.iter
-        [ source; output; Stdlib.Filename.chop_suffix source ".ml" ^ ".cmi"; log ]
+        [ source; output; Stdlib.Filename.chop_suffix source ".ml" ^ ".cmi" ]
         ~f:(fun path -> if Stdlib.Sys.file_exists path then Stdlib.Sys.remove path))
 
 (* The words of the log's text, punctuation and quoting dropped: how a release delimits a name is
