@@ -6910,7 +6910,13 @@ box.
   separate temporary stream files, absolute executable resolution, status-plus-causal-text matching
   and exception cleanup. `report` prefixes every echoed child line, so its `STOPPED EARLY`, `FAIL:`
   and `FAILED:` markers cannot be read as the parent's Verdict report by `tools/mutation-run.sh`.
-  Deadline, custom-environment and concurrent-process harnesses keep their own contracts.
+  `?env` replaces the inherited environment, and `?stderr` sends the child's stderr to the null
+  device or to a caller-owned descriptor instead of capturing it (gh-ocannl-2264). A test that
+  launches its own Dune build from inside a Dune action passes
+  `~env:(Fresh_process.nested_dune_environment ())`, the one place that strips `INSIDE_DUNE` and
+  `DUNE_ACTION_TRACE_DIR`: handed them, the nested Dune resolves paths as the parent action and
+  copies its trace into the parent's action-trace directory, which `explicit_library_deps` pins.
+  Deadline and concurrent-process harnesses keep their own contracts.
 
 - `Stderr_capture` (gh-ocannl-1296) owns a test's capture of its OWN stderr (`capture`, `lines`:
   fd 2 dup'ed onto a temporary file, the redirection ppx_expect performs) and the reading of the

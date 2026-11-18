@@ -18,6 +18,10 @@ let raw_entries =
   [
     ( "explicit_library_deps.ml",
       [
+        "[scanner-refusal:5d96a6af77f2e3cc3e176d98155165fa] action's variables resolves";
+        "[scanner-refusal:a5d692f42ee189e1a52b3863f56276ba] action's variables copies";
+        "[scanner-refusal:65eb18ba581fbe9366bfc0028974c962] nested-Dune environment resolves";
+        "[scanner-refusal:19ebc49024b1c4e3db05242a22f8b0d5] nested-Dune environment leaves";
         "[scanner-refusal:79b83d87bc35a637a45c0dd6dc7479cf] explicit_library_deps";
         "[scanner-refusal:e2937f725c3dd416fbbbb047979dc15a] library declaration compiles";
         "[scanner-refusal:8261260fa2908a6e512581ef47939697] undeclared use compiles";
