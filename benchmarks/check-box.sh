@@ -3,6 +3,7 @@
 #
 #   benchmarks/check-box.sh --box BOX [--fixture NAME]... [--fixture-dir DIR] [--venv DIR]
 #                           [--digests FILE] [--box-only]
+#   benchmarks/check-box.sh --box BOX --generated-inputs [--venv DIR] [--digests FILE] [--box-only]
 #   benchmarks/check-box.sh --fleet-names    # the fleet's box names, `<name> <box>` lines, and
 #                                            # `<name> -` for a fleet box that measures nothing
 #   benchmarks/check-box.sh --canonical-box NAME  # NAME's measurement box if NAME is a fleet
@@ -27,6 +28,9 @@
 #     that measures nothing (macbook-pro) is refused by name, as no measurement box.
 #   - NAME: the stem of a spec in benchmarks/workloads/*.json (`gpt2_mini_train`, not the file
 #     name). Without --fixture, every fixture DIGESTS records under BOX's origin is required.
+#   - --generated-inputs: for drivers that create every input in memory. Uses the declared box
+#     roster in DIGESTS and skips checking workload specs, fixture coverage and fixture bytes.
+#     It refuses --fixture and --fixture-dir. The environment and device checks still apply.
 #   - DIR, FILE: paths; --venv defaults to ~/.venvs/ocannl-bench, the box's shared venv,
 #     --fixture-dir to this checkout's benchmarks/fixtures (what orchestrate.py reads), --digests
 #     to this checkout's fixtures/DIGESTS.txt -- so a box's stale main checkout never judges
@@ -102,7 +106,7 @@ for name in $fleet_names; do
   [ "$(fleet_row "$name")" = - ] || measuring_names="${measuring_names:+$measuring_names }$name"
 done
 
-box= venv=$HOME/.venvs/ocannl-bench fixture_dir=$here/fixtures digests= box_only=0
+box= venv=$HOME/.venvs/ocannl-bench fixture_dir= digests= box_only=0 generated_inputs=0
 fixtures=()
 while [ $# -gt 0 ]; do
   case $1 in
@@ -118,6 +122,7 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --box-only) box_only=1; shift ;;
+    --generated-inputs) generated_inputs=1; shift ;;
     --fleet-names)
       [ $# -eq 1 ] || die "--fleet-names takes nothing else"
       for name in $fleet_names; do printf '%s %s\n' "$name" "$(fleet_row "$name")"; done
@@ -135,13 +140,20 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$box" ] || die "--box BOX is required: the measurement box this checks (see --help)"
+if [ "$generated_inputs" = 1 ]; then
+  [ ${#fixtures[@]} = 0 ] || die "cannot combine --generated-inputs with --fixture"
+  [ -z "$fixture_dir" ] || die "cannot combine --generated-inputs with --fixture-dir"
+fi
 # This checkout's DIGESTS by default, even when --fixture-dir names another tree's store.
 [ -n "$digests" ] || digests=$here/fixtures/DIGESTS.txt
 case $digests in /*) ;; *) digests=$PWD/$digests ;; esac # read again after a cd below
 command -v python3 >/dev/null 2>&1 || die "no python3 on PATH (fixture_digest.py needs it)"
 command -v perl >/dev/null 2>&1 || die "no perl on PATH (the device smoke is bounded through it)"
 [ -r "$digests" ] || die "cannot read $digests"
-[ -d "$fixture_dir" ] || die "no fixture directory $fixture_dir"
+if [ "$generated_inputs" = 0 ]; then
+  fixture_dir=${fixture_dir:-$here/fixtures}
+  [ -d "$fixture_dir" ] || die "no fixture directory $fixture_dir"
+fi
 
 declared=$(python3 "$here/fixture_digest.py" --list-declared-measurement-boxes --digests "$digests") ||
   die "cannot read the declared measurement boxes of $digests"
@@ -159,59 +171,62 @@ profile=$(box_profile "$box") ||
   die "'$box' is declared but has no box_profile entry in $0: add its device and toolchain there"
 device=${profile% *} toolchain=${profile#* }
 
-workloads=()
-for spec in "$here"/workloads/*.json; do
-  [ -f "$spec" ] || continue
-  spec=${spec##*/}
-  workloads+=("${spec%.json}")
-done
-[ ${#workloads[@]} -gt 0 ] || die "no workload specs under $here/workloads"
-# Without --fixture: every fixture DIGESTS records bytes for under this box's origin -- the ones
-# the box has measured on -- read through fixture_digest.py, the one parser of that file.
-fixtures_given=${#fixtures[@]}
-if [ "$fixtures_given" = 0 ]; then
-  recorded=$(cd "$here" && python3 -c '
+prepare_fixtures() {
+  workloads=()
+  for spec in "$here"/workloads/*.json; do
+    [ -f "$spec" ] || continue
+    spec=${spec##*/}
+    workloads+=("${spec%.json}")
+  done
+  [ ${#workloads[@]} -gt 0 ] || die "no workload specs under $here/workloads"
+  # Without --fixture: every fixture DIGESTS records bytes for under this box's origin -- the ones
+  # the box has measured on -- read through fixture_digest.py, the one parser of that file.
+  fixtures_given=${#fixtures[@]}
+  if [ "$fixtures_given" = 0 ]; then
+    recorded=$(cd "$here" && python3 -c '
 import sys, fixture_digest
 for name, rows in sorted(fixture_digest.read_digests(sys.argv[1]).items()):
     if any(e.origin == sys.argv[2] for e in rows):
         print(name[: -len(".safetensors")] if name.endswith(".safetensors") else name)' \
-    "$digests" "$box") || die "cannot read the entries of $digests"
-  while IFS= read -r name; do [ -z "$name" ] || fixtures+=("$name"); done <<<"$recorded"
-  [ ${#fixtures[@]} -gt 0 ] || die "$digests records no fixture for $box: name the ones to check with --fixture"
-else
-  for name in "${fixtures[@]}"; do
-    found=0
-    for w in "${workloads[@]}"; do [ "$w" = "$name" ] && found=1; done
-    [ "$found" = 1 ] || die "--fixture '$name' names no spec in $here/workloads (give the stem: gpt2_mini_train)"
-  done
-fi
+      "$digests" "$box") || die "cannot read the entries of $digests"
+    while IFS= read -r name; do [ -z "$name" ] || fixtures+=("$name"); done <<<"$recorded"
+    [ ${#fixtures[@]} -gt 0 ] || die "$digests records no fixture for $box: name the ones to check with --fixture"
+  else
+    for name in "${fixtures[@]}"; do
+      found=0
+      for w in "${workloads[@]}"; do [ "$w" = "$name" ] && found=1; done
+      [ "$found" = 1 ] || die "--fixture '$name' names no spec in $here/workloads (give the stem: gpt2_mini_train)"
+    done
+  fi
 
-# The by-name completeness check (gh-ocannl-1356's --check-names): which of the names covered have
-# no row of this box's in DIGESTS, whatever bytes are on disk. Covered: the required fixtures and,
-# without --fixture, every workload's fixture the store holds -- the required ones are this box's
-# recorded names then, so the store is what can hold a copy nobody recorded as this box's. Run
-# here, before any item prints, so a check that judged nothing exits 2 with nothing judged.
-named=("${fixtures[@]}")
-if [ "$fixtures_given" = 0 ]; then
-  for w in "${workloads[@]}"; do
-    [ -e "$fixture_dir/$w.safetensors" ] || continue
-    dup=0
-    for n in "${named[@]}"; do [ "$n" = "$w" ] && dup=1; done
-    [ "$dup" = 1 ] || named+=("$w")
-  done
-fi
-names_rc=0
-names_out=$(python3 "$here/fixture_digest.py" --check-names --expect-recorded "$box" \
-  --digests "$digests" --workloads-dir "$here/workloads" "${named[@]}" 2>&1) || names_rc=$?
-# `<file>: <rows>` per name, then `    not recorded for <boxes> (--expect-recorded)` under each
-# name this box has no row for; the exit status and the lines must agree, or nothing was read.
-unrecorded=$(printf '%s\n' "$names_out" | awk '
+  # The by-name completeness check (gh-ocannl-1356's --check-names): which of the names covered have
+  # no row of this box's in DIGESTS, whatever bytes are on disk. Covered: the required fixtures and,
+  # without --fixture, every workload's fixture the store holds -- the required ones are this box's
+  # recorded names then, so the store is what can hold a copy nobody recorded as this box's. Run
+  # here, before any item prints, so a check that judged nothing exits 2 with nothing judged.
+  named=("${fixtures[@]}")
+  if [ "$fixtures_given" = 0 ]; then
+    for w in "${workloads[@]}"; do
+      [ -e "$fixture_dir/$w.safetensors" ] || continue
+      dup=0
+      for n in "${named[@]}"; do [ "$n" = "$w" ] && dup=1; done
+      [ "$dup" = 1 ] || named+=("$w")
+    done
+  fi
+  names_rc=0
+  names_out=$(python3 "$here/fixture_digest.py" --check-names --expect-recorded "$box" \
+    --digests "$digests" --workloads-dir "$here/workloads" "${named[@]}" 2>&1) || names_rc=$?
+  # `<file>: <rows>` per name, then `    not recorded for <boxes> (--expect-recorded)` under each
+  # name this box has no row for; the exit status and the lines must agree, or nothing was read.
+  unrecorded=$(printf '%s\n' "$names_out" | awk '
   /^[^ ].*: / { name = substr($0, 1, index($0, ": ") - 1); sub(/\.safetensors$/, "", name) }
   /^    not recorded for .* \(--expect-recorded\)$/ { print name }')
-case $names_rc:${unrecorded:+some} in
-  0: | 1:some) ;;
-  *) die "fixture_digest.py --check-names --expect-recorded $box judged nothing (exit $names_rc): $(printf '%s\n' "$names_out" | tail -n 1)" ;;
-esac
+  case $names_rc:${unrecorded:+some} in
+    0: | 1:some) ;;
+    *) die "fixture_digest.py --check-names --expect-recorded $box judged nothing (exit $names_rc): $(printf '%s\n' "$names_out" | tail -n 1)" ;;
+  esac
+}
+[ "$generated_inputs" = 1 ] || prepare_fixtures
 
 items=0 gaps=0
 item() { # item status detail [repair]
@@ -356,32 +371,39 @@ case $toolchain in
     ;;
 esac
 
-if [ -z "$unrecorded" ]; then
-  item fixture-records ok "$digests has a row of $box's for each of the ${#named[@]} fixture names checked (by name)"
-else
-  item fixture-records GAP "$digests has no row of $box's for: $(printf '%s' "$unrecorded" | tr '\n' ' ')" \
-    "record a copy of recorded bytes as $box's (python3 benchmarks/fixture_digest.py --record-matching --origin $box --digests $digests <its file>; it refuses bytes no row records) and land the row, or take the file out of $fixture_dir -- never regenerate to pass"
-fi
-
-for name in "${fixtures[@]}"; do
-  path=$fixture_dir/$name.safetensors
-  if [ ! -e "$path" ]; then
-    item "fixture $name" GAP "absent from $fixture_dir" \
-      "copy the box's recorded bytes in and check them (benchmarks/README.md, 'Rebuilding a fixture that vanished'); install-linux.sh --bench-venv copies the anchor's into ~/ocannl-staging -- never regenerate to pass"
-  elif out=$(python3 "$here/fixture_digest.py" --check --digests "$digests" "$path" 2>&1); then
-    # Some box's recorded bytes, so measurable; whether they are THIS box's is the reports'
-    # origin field, said here too because a box whose own row no longer describes its bytes
-    # (rog-nv's lenet after the 2026-10-12 copy) is a record to fix, not a measurement to refuse.
-    whose=
-    python3 "$here/fixture_digest.py" --check --expect-origin "$box" --digests "$digests" "$path" \
-      >/dev/null 2>&1 || whose=" (not $box's recorded bytes)"
-    item "fixture $name" ok "$(printf '%s\n' "$out" | head -n 1 | sed 's/^[^ ]* //')$whose"
+check_fixtures() {
+  if [ -z "$unrecorded" ]; then
+    item fixture-records ok "$digests has a row of $box's for each of the ${#named[@]} fixture names checked (by name)"
   else
-    item "fixture $name" GAP "its bytes match no row of $digests:" \
-      "see benchmarks/README.md on digest mismatches -- regeneration is a cross-box event, not a repair"
-    printf '%s\n' "$out" | indent
+    item fixture-records GAP "$digests has no row of $box's for: $(printf '%s' "$unrecorded" | tr '\n' ' ')" \
+      "record a copy of recorded bytes as $box's (python3 benchmarks/fixture_digest.py --record-matching --origin $box --digests $digests <its file>; it refuses bytes no row records) and land the row, or take the file out of $fixture_dir -- never regenerate to pass"
   fi
-done
+
+  for name in "${fixtures[@]}"; do
+    path=$fixture_dir/$name.safetensors
+    if [ ! -e "$path" ]; then
+      item "fixture $name" GAP "absent from $fixture_dir" \
+        "copy the box's recorded bytes in and check them (benchmarks/README.md, 'Rebuilding a fixture that vanished'); install-linux.sh --bench-venv copies the anchor's into ~/ocannl-staging -- never regenerate to pass"
+    elif out=$(python3 "$here/fixture_digest.py" --check --digests "$digests" "$path" 2>&1); then
+      # Some box's recorded bytes, so measurable; whether they are THIS box's is the reports'
+      # origin field, said here too because a box whose own row no longer describes its bytes
+      # (rog-nv's lenet after the 2026-10-12 copy) is a record to fix, not a measurement to refuse.
+      whose=
+      python3 "$here/fixture_digest.py" --check --expect-origin "$box" --digests "$digests" "$path" \
+        >/dev/null 2>&1 || whose=" (not $box's recorded bytes)"
+      item "fixture $name" ok "$(printf '%s\n' "$out" | head -n 1 | sed 's/^[^ ]* //')$whose"
+    else
+      item "fixture $name" GAP "its bytes match no row of $digests:" \
+        "see benchmarks/README.md on digest mismatches -- regeneration is a cross-box event, not a repair"
+      printf '%s\n' "$out" | indent
+    fi
+  done
+}
+if [ "$generated_inputs" = 1 ]; then
+  item fixture-records skip "--generated-inputs: this driver creates its inputs in memory"
+else
+  check_fixtures
+fi
 
 if [ "$gaps" = 0 ]; then
   echo "check-box: $box: READY ($items items)"

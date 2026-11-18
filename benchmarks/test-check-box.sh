@@ -7,6 +7,8 @@
 # fixture, a fixture name the box has no DIGESTS row for (by name, without the bytes) -- reads GAP on
 # that item with exit 1. Usage errors exit 2, and every box the checked-in DIGESTS.txt declares has
 # a profile (the relationship, not a copy of the box list).
+# Generated-input readiness checks the same device and toolchain on a box with no fixture store.
+# Fixture-loading readiness still requires the recorded bytes.
 # gh-ocannl-1433: a fresh worktree's drivers find the box's shared venv (route named, and its
 # absence still a GAP), and the fleet's names for the boxes are taken -- pinned against wake-lab.sh's
 # endpoint map and FLEET_BOXES where this host can read them; a fleet box that measures nothing
@@ -146,6 +148,42 @@ if harness_leg 'box-only'; then
   if [ "$rc" = 0 ] && grep -q '^check-box: driver-path: skip -- ' "$TMP/runs/box-only"; then
     report 0 '--box-only skips the driver path and stays READY'
   else report 1 '--box-only skips the driver path and stays READY' "rc=$rc"; fi
+fi
+
+if harness_leg 'generated inputs'; then
+  generated=$TMP/generated/benchmarks
+  mkdir -p "$generated"
+  cp "$SUBJECT" "$here/bench_venv.py" "$here/fixture_digest.py" "$generated/"
+  grep '^# measurement-boxes:' "$here/fixtures/DIGESTS.txt" >"$TMP/DIGESTS-boxes.txt"
+  generated_check() {
+    local run=$1
+    shift
+    rc=0
+    bash "$generated/check-box.sh" --venv "$venv" --digests "$TMP/DIGESTS-boxes.txt" "$@" \
+      --box rog-nv --generated-inputs >"$TMP/runs/$run" 2>&1 || rc=$?
+  }
+  generated_check generated
+  if [ "$rc" = 0 ] &&
+     grep -q '^check-box: torch-device: ok -- .*round-tripped through cuda' "$TMP/runs/generated" &&
+     grep -q '^check-box: toolchain: ok -- .*nvcc' "$TMP/runs/generated" &&
+     grep -q '^check-box: fixture-records: skip -- ' "$TMP/runs/generated" &&
+     ! grep -q '^check-box: fixture ' "$TMP/runs/generated" &&
+     grep -qx 'check-box: rog-nv: READY (8 items)' "$TMP/runs/generated"; then
+    report 0 'generated inputs are READY without a fixture store or digest rows'
+  else
+    report 1 'generated inputs are READY without a fixture store or digest rows' "rc=$rc"
+    sed 's/^/      | /' "$TMP/runs/generated"
+  fi
+  FAKE_TORCH=unavailable generated_check generated-device
+  gap_leg 'generated inputs still need a working device' generated-device torch-device
+  generated_check generated-fixture --fixture mlp_small
+  usage_leg '--generated-inputs refuses --fixture' generated-fixture 'cannot combine .*--fixture'
+  generated_check generated-store --fixture-dir "$TMP/fixtures"
+  usage_leg '--generated-inputs refuses --fixture-dir' generated-store 'cannot combine .*--fixture-dir'
+
+  mkdir -p "$TMP/empty-store"
+  check fixture-loading --box rog-nv --fixture mlp_small --fixture-dir "$TMP/empty-store"
+  gap_leg 'fixture-loading drivers still need the recorded bytes' fixture-loading 'fixture mlp_small'
 fi
 
 if harness_leg 'gap: no venv'; then

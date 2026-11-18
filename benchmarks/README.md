@@ -1117,11 +1117,16 @@ python3 -B benchmarks/cells.py cell --backend cuda --dir "$RUN_DIR" --timeout 90
   --ocannl_output_debug_files_in_build_directory=false --dry-run
 ```
 
-Use a fresh scratch directory for the timed run and omit `--dry-run`. Start the exclusive window
-with the box check below, using `--box-only` and the box's recorded fixture store as for the
-virtual-twin benchmark. The cell driver clears ambient settings, verifies the resolved
-configuration, and captures the paired medians and ranges in `$RUN_DIR/stdout`. Accept results
-from a successful cell whose recorded floor and native targets are distinct.
+Start the exclusive window with the generated-input readiness check and proceed only on exit 0.
+
+```sh
+benchmarks/check-box.sh --box rog-nv --generated-inputs --box-only
+```
+
+Use a fresh scratch directory for the timed run and omit `--dry-run`. The cell driver clears
+ambient settings, verifies the resolved configuration, and captures the paired medians and ranges
+in `$RUN_DIR/stdout`. Accept results from a successful cell whose recorded floor and native targets
+are distinct.
 
 ## Measurement boxes
 
@@ -1156,6 +1161,12 @@ fixture name the box has no row for -- a named one, or, without `--fixture`, a w
 the store holds (a copy that landed and was never recorded) -- and its repair is
 `fixture_digest.py --record-matching --origin <box>`, which records a copy of bytes already on
 record and refuses anything else.
+
+For drivers that generate every input in memory, pass `--generated-inputs`. The check still
+requires a declared box and runs its environment checks, including the device round trip and the
+toolchain check. It uses `DIGESTS.txt` for the box roster, skips fixture verification, and
+refuses combinations with `--fixture` or `--fixture-dir`. Use the readiness check's GAP lines
+to resolve any environment failures before measuring.
 
 It checks and never provisions. Each GAP line is followed by its repair: on a Linux box
 lukstafi/ludics-lite's `scripts/install-linux.sh --bench-venv [nvidia|amd]` (the venv, its
