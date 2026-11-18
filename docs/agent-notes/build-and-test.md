@@ -4580,11 +4580,16 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   substitution table it derives from the stand-in tree (`<package>_stub` for any library of the
   package, `<backend>_stub_check` for the backend under either name; gh-ocannl-2288), refusing
   anything the stand-in declares and the genuine stanza does not; a genuine stanza declaring more is
-  normal. Two consequences for whoever edits the tree. Keep ONE stand-in library per genuine
-  stanza: a library compiling modules of two is held to both, which is why each `typecheck/`
-  compiles its `context` arm in a `<backend>_backend_impl_arm` of its own, and Metal's
-  `metal_math_api_runtime` in a `_stub_check` of its own. And declare only what the genuine stanza
-  declares: a package reached through a backend needs no stand-in of its own (under
+  normal. Each MODULE of a package stand-in is held to its own library as well, since under
+  `implicit_transitive_deps false` `cudajit.cuda` does not make `Nvrtc` visible: the scan reads the
+  copied sources' parse trees for the stand-in modules they name, and maps each module to the one
+  library its `runtest-<module>` agreement rules gate on (`%{lib-available:…}`), so a new stub
+  module gets its library from its agreement rule (a module with none, like `Hip_ffi`, stands for
+  the whole package; the census golden lists the map). Two consequences for whoever edits the tree.
+  Keep ONE stand-in library per genuine stanza: a library compiling modules of two is held to both,
+  which is why each `typecheck/` compiles its `context` arm in a `<backend>_backend_impl_arm` of its
+  own, and Metal's `metal_math_api_runtime` in a `_stub_check` of its own. And declare only what the
+  genuine stanza declares: a package reached through a backend needs no stand-in of its own (under
   `implicit_transitive_deps false` its types resolve through the backend's hidden include), so a
   library listing one is refused even where nothing uses it. A library the stand-in needs only
   because it is a stand-in goes in the scan's `availability_only` list with its reason (empty
