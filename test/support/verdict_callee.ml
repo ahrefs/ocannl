@@ -376,6 +376,16 @@ let of_structure ast : t =
       : structure);
   { values = table; legs; modules }
 
+(** Adds [t]'s resolutions to [into]'s, for a reader walking a second source beside the first
+    (gh-ocannl-2286): keyed by character positions, which the reader keeps apart across the two. *)
+let absorb ~(into : t) (t : t) =
+  let copy source target =
+    Hashtbl.iteri source ~f:(fun ~key ~data -> Hashtbl.set target ~key ~data)
+  in
+  copy t.values into.values;
+  copy t.legs into.legs;
+  copy t.modules into.modules
+
 (* A callee under type constraints or coercions is the path it wraps. *)
 let rec peel expr =
   match expr.pexp_desc with

@@ -4765,10 +4765,14 @@ let () =
       [ "unread in_leg" ] );
   ]
 
-let gate_control_findings source =
-  let census = Scan.gate_census source in
+let gate_control_findings ?callers source =
+  let census = Scan.gate_census ?callers source in
   List.map census.Scan.readings ~f:(fun (reading : Scan.gate_reading) ->
-      String.concat ~sep:", " reading.reads ^ if reading.ambiguous then " [ambiguous]" else "")
+      String.concat ~sep:", " reading.reads
+      ^ (if reading.ambiguous then " [ambiguous]" else "")
+      ^
+      if List.is_empty reading.applied_in then ""
+      else " [applied in " ^ String.concat ~sep:", " reading.applied_in ^ "]")
   @ List.map census.Scan.unread ~f:(fun (form, _) -> "unread " ^ form)
   @ List.map census.Scan.unlisted ~f:(fun (call : Scan.unlisted_call) -> "unlisted " ^ call.callee)
   @ List.map census.Scan.unread_legs ~f:(fun (leg : Scan.unread_leg) -> "unread " ^ leg.leg_form)
@@ -5041,7 +5045,247 @@ let () =
       1 );
   ]
 
+(* gh-ocannl-2286: a leg read from a record field, out of a destructured parameter, or from the
+   element an iteration hands its callback is followed to the literals it is taken from -- the
+   record literal's field, each element of a literal list -- one comparison per element, so one
+   element's gate never meets another element's population. Each row states the claims compared, as
+   the call-site rows do. *)
+let leg_part_controls =
+  let iterated =
+    {ocaml|open Verdict.Claims
+type case = { rows : bool list; leg : Verdict.leg }
+let run { rows; leg } = in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)
+|ocaml}
+  in
+  [
+    ( "refuses a leg read from a field of a record literal gated on the population",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let case = { rows; leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name () } in
+  in_leg ~leg:case.leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      [ "rows" ],
+      1 );
+    ( "accepts a leg read from a field of a record literal gated on an invariant",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let case = { rows; leg = Verdict.leg ~when_:on_gpu ~on:backend_name () } in
+  in_leg ~leg:case.leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      [],
+      1 );
+    ( "refuses a leg a helper destructures from the element of an iterated list gated on its rows",
+      iterated
+      ^ {ocaml|let () =
+  let rows = probe () in
+  let cases = [ { rows; leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name () } ] in
+  List.iter cases ~f:(fun case -> run case)|ocaml},
+      [ "rows" ],
+      1 );
+    ( "accepts a leg a helper destructures from the element of an iterated list gated on an \
+       invariant",
+      iterated
+      ^ {ocaml|let () =
+  let cases = [ { rows = probe (); leg = Verdict.leg ~when_:on_gpu ~on:backend_name () } ] in
+  List.iter cases ~f:(fun case -> run case)|ocaml},
+      [],
+      1 );
+    ( "refuses the one element of an iterated list whose leg is gated on its own rows",
+      iterated
+      ^ {ocaml|let () =
+  let rows = probe () and others = probe () in
+  let cases =
+    [
+      { rows = others; leg = Verdict.leg ~when_:on_gpu ~on:backend_name () };
+      { rows; leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name () };
+    ]
+  in
+  List.iteri cases ~f:(fun _ case -> run case)|ocaml},
+      [ "rows" ],
+      1 );
+    ( "accepts two elements of an iterated list whose legs each gate on the other element's rows",
+      iterated
+      ^ {ocaml|let () =
+  let rows = probe () and others = probe () in
+  let cases =
+    [
+      { rows; leg = Verdict.leg ~when_:(not (List.is_empty others)) ~on:backend_name () };
+      { rows = others; leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name () };
+    ]
+  in
+  List.iter cases ~f:(fun case -> run case)|ocaml},
+      [],
+      1 );
+    ( "accepts a callback's own leg gated on one part of each element beside a claim on the other",
+      {ocaml|open Verdict.Claims
+let () =
+  let a = probe () and b = probe () in
+  List.iter [ (a, b); (b, a) ] ~f:(fun (guard, rows) ->
+      in_leg
+        ~leg:(Verdict.leg ~when_:(not (List.is_empty guard)) ~on:backend_name ())
+        "all rows pass"
+        (fun label -> p_all label rows ~f:Fn.id))|ocaml},
+      [],
+      1 );
+    ( "refuses a leg a helper destructures from a record update whose inherited rows its gate reads",
+      iterated
+      ^ {ocaml|let () =
+  let rows = probe () in
+  let defaults = { rows; leg = Verdict.leg ~when_:on_gpu ~on:backend_name () } in
+  run { defaults with leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name () }|ocaml},
+      [ "rows" ],
+      1 );
+    ( "refuses a helper's leg gated on the rows its caller writes into the record it destructures",
+      {ocaml|open Verdict.Claims
+type case = { mutable rows : bool list; tag : string }
+let run ~leg { rows; _ } = in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)
+let () =
+  let rows = probe () in
+  let case = { rows = []; tag = "probe" } in
+  case.rows <- rows;
+  run ~leg:(Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name ()) case|ocaml},
+      [ "rows" ],
+      1 );
+    ( "names a leg uncompared whose iterated collection is no literal",
+      iterated ^ {ocaml|let () = List.iter (cases ()) ~f:(fun case -> run case)|ocaml},
+      [ "uncompared in_leg" ],
+      0 );
+  ]
+
+(* gh-ocannl-2286: a function another source applies as [M.f] is resolved at those applications too,
+   each caller walked beside the source under its own positions, so its bindings are its own. Each
+   row is a source compiled as [Checks] and the callers handed to the reader with it. *)
+let leg_cross_source_controls =
+  let checks =
+    {ocaml|open Verdict.Claims
+let check ~leg rows = in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)
+|ocaml}
+  in
+  let caller ?(spelled_elsewhere = false) text =
+    { Scan.source = "caller.ml"; text; spelled_elsewhere }
+  in
+  [
+    ( "refuses a leg another source hands a helper, gated by that caller on the rows it hands in",
+      checks,
+      [
+        caller
+          {ocaml|let () =
+  let rows = probe () in
+  Checks.check ~leg:(Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name ()) rows|ocaml};
+      ],
+      [ "rows [applied in caller.ml]" ],
+      1 );
+    ( "accepts a leg another source hands a helper, gated by that caller on an invariant",
+      checks,
+      [
+        caller
+          {ocaml|let () = Checks.check ~leg:(Verdict.leg ~when_:on_gpu ~on:backend_name ()) (probe ())|ocaml};
+      ],
+      [],
+      1 );
+    ( "refuses the one offending application among two sources' applications of a helper",
+      checks,
+      [
+        caller
+          {ocaml|let () = Checks.check ~leg:(Verdict.leg ~when_:on_gpu ~on:backend_name ()) (probe ())|ocaml};
+        caller
+          {ocaml|let () =
+  let rows = probe () in
+  Checks.check ~leg:(Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name ()) rows|ocaml};
+      ],
+      [ "rows [applied in caller.ml]" ],
+      1 );
+    ( "accepts a caller's gate on its own rows beside the helper's like-named rows at the same \
+       offset",
+      {ocaml|let rows = probe ()
+let check ~leg = Verdict.in_leg ~leg "all rows pass" (fun label -> Verdict.p_all label rows ~f:Fn.id)|ocaml},
+      [
+        caller
+          {ocaml|let rows = probe ()
+let () = Checks.check ~leg:(Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name ())|ocaml};
+      ],
+      [],
+      1 );
+    ( "refuses a leg another source applies under an open of the helper's module",
+      checks,
+      [
+        caller
+          {ocaml|open Checks
+let () =
+  let rows = probe () in
+  check ~leg:(Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name ()) rows|ocaml};
+      ],
+      [ "rows [ambiguous] [applied in caller.ml]" ],
+      1 );
+    ( "names a leg uncompared whose module another source re-exports through an include",
+      checks,
+      [
+        caller ~spelled_elsewhere:true
+          {ocaml|include Checks
+let () = check ~leg:(Verdict.leg ~when_:on_gpu ~on:backend_name ()) (probe ())|ocaml};
+      ],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "names a leg uncompared whose module a caller opens through another module's path",
+      checks,
+      [
+        caller
+          {ocaml|open Lib.Checks
+let () = Checks.check ~leg:(Verdict.leg ~when_:on_gpu ~on:backend_name ()) (probe ())|ocaml};
+      ],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "names a leg uncompared in a submodule whose module another source re-exports",
+      {ocaml|open Verdict.Claims
+module Sub = struct
+  let check ~leg rows = in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)
+end|ocaml},
+      [
+        caller ~spelled_elsewhere:true
+          {ocaml|include Checks
+let () = Checks.Sub.check ~leg:(Verdict.leg ~when_:on_gpu ~on:backend_name ()) (probe ())|ocaml};
+      ],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "names a leg uncompared whose helper another source also hands on as a value",
+      checks,
+      [
+        caller
+          {ocaml|let () =
+  let rows = probe () in
+  Checks.check ~leg:(Verdict.leg ~when_:on_gpu ~on:backend_name ()) rows;
+  let again = Checks.check in
+  again ~leg:(Verdict.leg ~when_:(not (List.is_empty rows)) ~on:backend_name ()) rows|ocaml};
+      ],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "names a leg uncompared whose helper's module a caller that does not parse may spell",
+      checks,
+      [
+        caller
+          {ocaml|let () = Checks.check ~leg:(Verdict.leg ~when_:on_gpu ~on:backend_name ()) (probe ())|ocaml};
+        caller {ocaml|let () = Checks.check ~leg:(|ocaml};
+      ],
+      [ "uncompared in_leg" ],
+      0 );
+  ]
+
 let run_gate_population_controls () =
+  let compared_row ~family ?callers (label, source, expected, compared) =
+    let found =
+      gate_control_findings ?callers source
+      @
+      let census = Scan.gate_census ?callers source in
+      [ Printf.sprintf "%d compared" (census.Scan.leg_sites + census.Scan.gated_sites) ]
+    in
+    let expected = expected @ [ Printf.sprintf "%d compared" compared ] in
+    let ok = List.equal String.equal found expected in
+    if not ok then
+      eprintf "%s control %S expected [%s], found [%s]\n" family label
+        (String.concat ~sep:"; " expected)
+        (String.concat ~sep:"; " found);
+    (label, ok)
+  in
   List.map gate_population_controls ~f:(fun (label, source, expected) ->
       let found = gate_control_findings source in
       let ok = List.equal String.equal found expected in
@@ -5064,6 +5308,11 @@ let run_gate_population_controls () =
           (String.concat ~sep:"; " expected)
           (String.concat ~sep:"; " found);
       (label, ok))
+  @ List.map leg_part_controls ~f:(compared_row ~family:"leg part")
+  @ List.map leg_cross_source_controls ~f:(fun (label, source, sources, expected, compared) ->
+      compared_row ~family:"leg cross-source"
+        ~callers:{ Scan.module_name = "Checks"; sources }
+        (label, source, expected, compared))
 
 let refuse_gate_reading ~fail ~source (reading : Scan.gate_reading) =
   fail
@@ -5074,7 +5323,17 @@ let refuse_gate_reading ~fail ~source (reading : Scan.gate_reading) =
         the population does not decide: the backend, an advertised capability, the configuration%s"
        source reading.line reading.form reading.gate
        (String.concat ~sep:"`, `" reading.reads)
-       (ambiguity_remedy ~ambiguous:reading.ambiguous ~callee:(Some reading.form)))
+       (ambiguity_remedy ~ambiguous:reading.ambiguous ~callee:(Some reading.form)
+       ^
+       (* A comparison made under another source's application (gh-ocannl-2286): the gate, or the
+          population, is that source's. *)
+       if List.is_empty reading.applied_in then ""
+       else
+         Printf.sprintf
+           ". The comparison was made under the application%s in %s, which supplies the gate or \
+            the population"
+           (if List.length reading.applied_in = 1 then "" else "s")
+           (String.concat ~sep:", " reading.applied_in)))
 
 (* The gate reader over one source, its failures told apart (gh-ocannl-1289 review): a source that
    does not parse is reported by the catch-all the other readers share, and an exception from a
@@ -5091,6 +5350,118 @@ let read_gates ~fail ~source ~census content =
             not of the source, and the source's gated claims went uncompared"
            exn source);
       Scan.empty_gate_census
+
+(* The module a source is compiled as, as other sources spell it (gh-ocannl-2286): its file name up
+   to the first dot, capitalized. A [(select)] arm, [x.real.ml] or [x.missing.ml], is copied by dune
+   to [x.ml] and compiled as [X], so each arm is read as [X]: an application of [X.f] is a call site
+   of [f] in every arm that defines it, and each arm is a caller in its own right. *)
+let module_of_source source =
+  let base = Stdlib.Filename.basename source in
+  String.capitalize (Option.value_map (String.lsplit2 base ~on:'.') ~default:base ~f:fst)
+
+(* The cross-source index (gh-ocannl-2286): for each source, the other sources that spell its
+   module, as {!Scan.gate_census} takes them, the applications they make of its functions being call
+   sites of them. A caller in a directory that holds a source compiled as the same module applies
+   that one; a caller in any other directory is attributed to every source of that name -- an
+   application more is a comparison more, the loud direction. A source the index cannot read spells
+   what nobody can tell, so it is handed to every census the directory rule admits, which walks it
+   itself or, where it does not parse, names the functions it may apply uncompared; the readers that
+   refuse it report it by name. *)
+let cross_source_callers ~read sources =
+  let content = Hashtbl.create (module String) in
+  let content_of source = Hashtbl.find_or_add content source ~default:(fun () -> read source) in
+  let directory = Stdlib.Filename.dirname in
+  let defined = Hash_set.Poly.create () in
+  List.iter sources ~f:(fun source ->
+      Hash_set.add defined (directory source, module_of_source source));
+  let spelled_by = Hashtbl.create (module String) and unindexed = ref [] in
+  List.iter sources ~f:(fun source ->
+      match Test_scan.Scan_attempt.run (fun () -> Scan.module_mentions (content_of source)) with
+      | Scanned modules ->
+          List.iter modules ~f:(fun name -> Hashtbl.add_multi spelled_by ~key:name ~data:source)
+      | Unparsed _ | Raised _ ->
+          (* Not indexed, so handed to every census the directory rule admits, which walks it
+             itself: a source that parses there is read as any caller is, and one that does not
+             names what it may apply uncompared. *)
+          unindexed := source :: !unindexed);
+  fun source ->
+    let module_name = module_of_source source in
+    let callers =
+      List.rev (Hashtbl.find_multi spelled_by module_name) @ List.rev !unindexed
+      |> List.dedup_and_sort ~compare:String.compare
+      |> List.filter ~f:(fun caller ->
+          (not (String.equal (module_of_source caller) module_name))
+          && (String.equal (directory caller) (directory source)
+             || not (Hash_set.mem defined (directory caller, module_name))))
+    in
+    let spelled_elsewhere caller =
+      let own = module_of_source caller in
+      List.exists (Hashtbl.find_multi spelled_by own) ~f:(fun other ->
+          not (String.equal (module_of_source other) own))
+    in
+    {
+      Scan.module_name;
+      sources =
+        List.map callers ~f:(fun caller ->
+            {
+              Scan.source = caller;
+              text = content_of caller;
+              spelled_elsewhere = spelled_elsewhere caller;
+            });
+    }
+
+(* The index itself (gh-ocannl-2286, review): the callers {!cross_source_callers} hands each source
+   of a small tree -- a [(select)] module's two arms in [a/], a module [Lib] in both [a/] and [b/],
+   a caller of each in [b/] and in [c/], which defines no [Lib], and a source that does not parse --
+   each row one rule of its header, read off the listing it gives. *)
+let index_tree =
+  [
+    ("a/x.real.ml", "let g () = Lib.f ()");
+    ("a/x.missing.ml", "let g () = Lib.f ()");
+    ("a/lib.ml", "let f () = ()");
+    ("b/lib.ml", "let f () = ()");
+    ("b/user.ml", "let () = Lib.f (); X.g ()");
+    ("c/other.ml", "let () = Lib.f ()");
+    ("a/broken.ml", "let () = (");
+  ]
+
+let index_controls =
+  let callers_of =
+    cross_source_callers (List.map index_tree ~f:fst) ~read:(fun source ->
+        List.Assoc.find_exn index_tree source ~equal:String.equal)
+  in
+  let listing source =
+    let { Scan.module_name; sources } = callers_of source in
+    module_name
+    :: List.map sources ~f:(fun { Scan.source; spelled_elsewhere; _ } ->
+        source ^ if spelled_elsewhere then " *" else "")
+  in
+  [
+    ( "the index reads each select arm as the module dune copies it to",
+      listing "a/x.real.ml",
+      [ "X"; "a/broken.ml"; "b/user.ml" ] );
+    ( "the index hands a caller to its own directory's module of the name, and the rest to every one",
+      listing "a/lib.ml" @ listing "b/lib.ml",
+      [
+        "Lib";
+        "a/broken.ml";
+        "a/x.missing.ml *";
+        "a/x.real.ml *";
+        "c/other.ml";
+        "Lib";
+        "b/user.ml";
+        "c/other.ml";
+      ] );
+  ]
+
+let run_index_controls () =
+  List.map index_controls ~f:(fun (label, found, expected) ->
+      let ok = List.equal String.equal found expected in
+      if not ok then
+        eprintf "index control %S expected [%s], found [%s]\n" label
+          (String.concat ~sep:"; " expected)
+          (String.concat ~sep:"; " found);
+      (label, ok))
 
 (* {1 A skip list written by hand (gh-ocannl-1794)}
 
@@ -6286,7 +6657,7 @@ let () =
     @ [ run_dialect_refusal_control () ]
     @ run_line_break_controls ()
     @ [ run_line_break_refusal_control () ]
-    @ run_gate_population_controls ()
+    @ run_gate_population_controls () @ run_index_controls ()
     @ [ run_gate_refusal_control (); run_leg_and_skip_list_refusal_control () ]
     @ [ run_claim_reader_refusal_control (); run_matrix_reader_control () ]
     @ run_folded_gate_controls ()
@@ -6303,6 +6674,10 @@ let () =
     control_results @ run_manifest_controls ~manifest ~controls:(control_results @ matrix_results)
   in
   let per_directory = Hashtbl.create (module String) in
+  let callers_of =
+    cross_source_callers sources ~read:(fun source ->
+        In_channel.read_all (Map.find_exn on_disk source))
+  in
   printf
     "Test sources that print a claim they decided themselves, outside `Verdict`: a format whose\n\
      last argument-consuming conversion is a bare `%%b` at the end, behind a label ending in `:`,\n\
@@ -6322,7 +6697,9 @@ let () =
       List.iter line_breaks.Scan.broken ~f:(fun site ->
           Int.incr line_break_offenders;
           refuse_line_break ~fail ~source site);
-      let gates = read_gates ~fail ~source ~census:Scan.gate_census content in
+      let gates =
+        read_gates ~fail ~source ~census:(Scan.gate_census ~callers:(callers_of source)) content
+      in
       gated_sites := !gated_sites + gates.Scan.gated_sites;
       List.iter gates.Scan.readings ~f:(fun reading ->
           Int.incr gate_offenders;
@@ -6535,7 +6912,8 @@ let () =
   eprintf "Gated quantified claims whose gate and population were compared: %d.\n" !gated_sites;
   eprintf
     "Leg claims whose gates and population were compared: %d; whose leg or make function the \
-     reader could not follow (a field, a function another source applies, a value handed on): %d.\n"
+     reader could not follow (a field of no literal, a function some application of which it \
+     cannot see, a value handed on): %d.\n"
     !leg_sites !uncompared_legs;
   (* Each one named (gh-ocannl-1893): the boundary the reader stops at, site by site. *)
   List.iter (List.rev !uncompared_sites) ~f:(eprintf "%s\n");

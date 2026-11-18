@@ -1278,16 +1278,17 @@ let tolerance_census content =
 
     A parameter of a named function of the source -- a [let], top-level or local, recursive or not,
     whose right-hand side is a function; a labelled, optional or positional parameter whose pattern
-    is a name -- is RESOLVED AT THE APPLICATIONS of that function in this source: the argument each
-    application supplies for it, by label or by position among the positional ones, in the scope the
-    application is written in, or, where an application omits an optional one, its default. A [~leg]
-    reaching such a parameter is followed into each application's argument, through any number of
-    calls (a parameter reached again on its own path, a function passing its leg back to itself,
-    adds no gate). Each choice of the applications on the way is one RESOLUTION ({!leg_resolution}),
-    and the claim is compared once per resolution, under that choice: there a parameter of a chosen
-    function, on either side, is the chosen application's argument alone, so one call's gate never
-    meets another call's population. Every claim inside a named function -- a leg claim, under each
-    of its resolutions, and a [gated_*] claim -- is also compared once per CALL CHAIN reaching that
+    is a name, or a record or tuple pattern (below) -- is RESOLVED AT THE APPLICATIONS of that
+    function in this source and in its callers (below): the argument each application supplies for
+    it, by label or by position among the positional ones, in the scope the application is written
+    in, or, where an application omits an optional one, its default. A [~leg] reaching such a
+    parameter is followed into each application's argument, through any number of calls (a parameter
+    reached again on its own path, a function passing its leg back to itself, adds no gate). Each
+    choice of the applications on the way is one RESOLUTION ({!leg_resolution}), and the claim is
+    compared once per resolution, under that choice: there a parameter of a chosen function, on
+    either side, is the chosen application's argument alone, so one call's gate never meets another
+    call's population. Every claim inside a named function -- a leg claim, under each of its
+    resolutions, and a [gated_*] claim -- is also compared once per CALL CHAIN reaching that
     function ({!call_chains}: an application of it, then one of the function that application is
     written in, and so on up to code no function encloses, at most 256 chains), so a leg a helper
     builds from its own [~when_] parameter, and
@@ -1299,14 +1300,55 @@ let tolerance_census content =
     helper applied in its place keeps the helper rule above. A local function's application on a
     [~leg]'s way binds its parameters to that application's arguments.
 
+    {3 Applications in other sources (gh-ocannl-2286)}
+
+    The applications are this source's and those of the other sources handed in as [?callers]: the
+    ratchet's cross-source index gives each source the sources that spell its module, [M] (the file
+    name up to its first dot, capitalized, so each arm of a [(select)] is the module dune copies it
+    to). Each caller is walked after this source, as a structure of its own under the one module
+    binding [M] -- this source's top-level structure -- with its character positions placed past
+    every earlier source's ({!structure_at}), so no binding identity or position-keyed table is
+    shared and a caller's [rows] is never this source's. What the walk records there -- call sites,
+    parameters, writes, its own helpers and their call chains -- is read as this source's is; the
+    claims it makes are its own reader's and are not compared here. An application there is
+    [M.f args], [f args] under an [open M] ([M.( ... )], [let open M in]), or one through an alias
+    [module X = M] or an [include M] the walk follows; [M.f] is resolved the same way in this source
+    for a structure [M] of its own, and spelled other than as an applied callee it escapes as a name
+    does. A caller's applications are read only where this source has a claim to compare. Outside
+    this: a caller spelling [M] packed, as a functor's argument or under a constraint, or inside
+    another module's path ([Lib.M.f], [open Lib.M], a wrapped library's spelling); one re-exporting
+    [M] through a structure-level alias or [include] where a third source spells the caller's
+    module; and one that does not parse -- each leaves every function of [M], its submodules'
+    included, UNCOMPARED, naming the caller ({!module_spelled_otherwise}). A source outside the
+    corpus the ratchet globs is not read.
+
+    {3 A leg taken out of a value (gh-ocannl-2286)}
+
+    A leg read from a record field ([case.leg]), or bound by a record or tuple pattern of a named
+    function's parameter ([let run { rows; leg } = ...]), is the part of the value reached that the
+    field or pattern names: the reader carries the projections along the leg's way -- through names,
+    [let]s, branches and parameters as above -- and takes them at the record or tuple literal it
+    reaches, or at a [{ base with ... }]'s base where the field is not given. The parameter of an
+    anonymous callback an {!element_iterations} function is handed in place
+    ([List.iter cases ~f:(fun case -> run case)]) is each element of the collection where that is a
+    list or array literal (through names no write reaches, [let] bodies and sequences): one
+    resolution per element, each compared with that element chosen, on both sides, as an application
+    is -- so one element's gate never meets another element's population; a claim written inside
+    such a callback, or in a function an application inside one reaches, is compared once per
+    element of each such callback too. A destructured parameter is likewise, on the gate and
+    population sides, the part of each argument its pattern takes apart ({!parts}), with what the
+    source writes into that field before the claim; a field a [{ base with ... }] leaves is taken
+    from the base where that is a literal too.
+
     Where this stops, the leg is UNCOMPARED, with the reason: the function's name is spelled other
-    than as the callee of an application (handed on as a value, piped, qualified through a module
-    path), so not every application is seen; no application of this source supplies the parameter
-    (another source's applications are not read: the reader reads one source); an application omits
-    it, or passes an optional one as [?leg:]; the parameter is destructured (a record or tuple
-    pattern) or belongs to an anonymous function; or the leg is read from a field. Calls are
-    resolved within the source only, so a library module's function that other sources also apply is
-    compared at its own source's applications alone.
+    than as the callee of an application (handed on as a value, piped), so not every application is
+    seen; no application of this source or of a caller supplies the parameter; a caller spells the
+    module in a way that may hide one (above); an application omits it, or passes an optional one as
+    [?leg:]; the parameter belongs to an anonymous function no {!element_iterations} function is
+    handed, or the collection it iterates is no literal; a pattern binds the leg other than through
+    record fields and tuple components (a constructor's payload, an or-pattern); a field is taken of
+    a value that is no record literal, or of a binding the source writes into; or a make function is
+    taken out of a value that way, which the reader does not follow.
 
     A leg claim applied in part -- without its [~leg], its label and its make function in place, an
     [in_legf] with exactly as many arguments as its literal format takes before the make function
@@ -1324,17 +1366,18 @@ let tolerance_census content =
 
     The population is not followed through a call to any other function (a file-local
     [gpu_seeds pre] stops at the call), through a record field, through a parameter of an anonymous
-    function or of a function whose applications are in another source (a named function's parameter
-    is its applications' arguments, above), or through an unqualified name under an open of a
-    collection module ([List.(permute raw)]) that {!collection_functions} does not list: such a name
-    is read as whatever else binds it, and is not reported as unlisted, since without the module's
-    signature it cannot be told from a function of the source (a listed name there is the module's,
+    function no {!element_iterations} function is handed over a literal collection, or of a function
+    no application read supplies (a named function's parameter is its applications' arguments,
+    above), or through an unqualified name under an open of a collection module
+    ([List.(permute raw)]) that {!collection_functions} does not list: such a name is read as
+    whatever else binds it, and is not reported as unlisted, since without the module's signature it
+    cannot be told from a function of the source (a listed name there is the module's,
     {!resolve_callee}); a destructured [let] binds names that are followed no further, and a value
     reached through a module path ([M.rows]) is an identity on neither side. A gate threaded into a
-    wrapper as its own parameter is read at the wrapper's applications in this source, as above; a
-    wrapper only another source applies is read at its definition, where the gate is a parameter and
-    reads nothing. A [gated] boolean that quantifies nothing has no population: its comparisons and
-    other calls are operands this reader does not read, so
+    wrapper as its own parameter is read at the wrapper's applications, in this source and its
+    callers, as above; a wrapper no application read applies is read at its definition, where the
+    gate is a parameter and reads nothing. A [gated] boolean that quantifies nothing has no
+    population: its comparisons and other calls are operands this reader does not read, so
     [gated ~when_:(xs <> []) label (sum xs = want)] passes, and so does a gate folded into a value
     ([p "…" ((not on_cpu) || ok)]), which {!folded_gate_census} reads instead. Each of these is a
     place a population gate can hide from this reader; none is a place it reports one that is not
@@ -1381,6 +1424,9 @@ type gate_reading = {
   line : int;
   gate : string;  (** The [~when_] expression, printed. *)
   reads : string list;  (** The population bindings the gate reads, by name, sorted. *)
+  applied_in : string list;
+      (** The other sources whose applications the offending comparisons were made under, where the
+          gate or the population is theirs (gh-ocannl-2286), sorted. *)
 }
 
 type unlisted_call = {
@@ -1552,11 +1598,25 @@ type parameter_slot =
   | Optional_slot of string * (expression * (gate_denotation, gate_module) Lexical_scope.env) option
       (** With its default, in the scope it is evaluated in, where it has one. *)
   | Positional_slot of int  (** Among the function's positional parameters. *)
+  | Element_slot of expression * (gate_denotation, gate_module) Lexical_scope.env
+      (** The element parameter of an anonymous callback an {!element_iterations} function is handed
+          in place: each element of the collection, in the scope the application is written in
+          (gh-ocannl-2286). *)
+
+(** One step taking a value apart: a record's field, or a tuple's component (its index and the
+    tuple's arity). *)
+type projection = Field of string | Component of int * int
 
 type parameter_of = {
-  owner : int;  (** The function's binding identity. *)
+  owner : int;
+      (** The function's binding identity; for an {!Element_slot}, an identity of its own, which a
+          {!leg_resolution} chooses an element under. *)
   owner_name : string;
   slot : parameter_slot;
+  part : (pattern * string) option;
+      (** Where the parameter's pattern is not a name: the whole pattern, which takes apart what an
+          application supplies, and the name this parameter is of the ones it binds
+          (gh-ocannl-2286). *)
 }
 
 type leg_resolution = {
@@ -1570,6 +1630,44 @@ type leg_resolution = {
     function, and the gates found under that choice. *)
 
 let gated_forms = [ "gated_all"; "gated_alli"; "gated_exists" ]
+
+(** The collection-module functions that hand the callback they are given each element of ONE
+    collection in turn, with the index, among the callback's positional parameters, of the one that
+    is the element (gh-ocannl-2286): [List.iter legs ~f:(fun leg -> ...)] binds [leg] to each
+    element of [legs], and so does [List.iteri legs ~f:(fun i leg -> ...)]. A closed list, of the
+    {!element_families} alone, read where the callback is an anonymous function written in place. *)
+let element_iterations =
+  [
+    ("iter", 0);
+    ("map", 0);
+    ("concat_map", 0);
+    ("filter_map", 0);
+    ("iteri", 1);
+    ("mapi", 1);
+    ("concat_mapi", 1);
+    ("filter_mapi", 1);
+  ]
+
+let element_families = [ "List"; "Array" ]
+
+(** The projections that take [name] out of a value [pattern] matches, outermost first: through
+    record fields, tuple components, aliases and type constraints. [None] where the pattern binds
+    [name] some other way -- a constructor's payload, an or-pattern, a lazy one -- or not at all. *)
+let rec projection_to name pattern =
+  match pattern.ppat_desc with
+  | Ppat_var { txt; _ } when String.equal txt name -> Some []
+  | Ppat_alias (_, { txt; _ }) when String.equal txt name -> Some []
+  | Ppat_alias (inner, _) | Ppat_constraint (inner, _) -> projection_to name inner
+  | Ppat_tuple components ->
+      let arity = List.length components in
+      List.find_mapi components ~f:(fun index component ->
+          Option.map (projection_to name component) ~f:(fun rest ->
+              Component (index, arity) :: rest))
+  | Ppat_record (fields, _) ->
+      List.find_map fields ~f:(fun (field, inner) ->
+          Option.map (projection_to name inner) ~f:(fun rest ->
+              Field (Ppxlib.Longident.last_exn field.txt) :: rest))
+  | _ -> None
 
 (** [Verdict.gated ~when_ ~on label b]: its population is what the quantifiers its boolean reduces
     to range over ({!quantifiers}). *)
@@ -2082,7 +2180,125 @@ let precedes ~once ~unordered write claim =
   in
   compare_levels (chain 0 write) (chain 0 claim)
 
-let gate_census content =
+type caller = {
+  source : string;
+  text : string;
+  spelled_elsewhere : bool;
+      (** Some other source spells this one's module, so a module this one re-exports -- an alias or
+          an [include] in its structure -- is reachable from there. *)
+}
+(** A source that may apply another's functions, for {!gate_census} (gh-ocannl-2286). *)
+
+type callers = { module_name : string; sources : caller list }
+(** The sources that may apply this one's functions: the module [M] this source is compiled as, and
+    each other source that spells [M]. *)
+
+(* [text] parsed as {!Read.structure_of} does, its character positions starting at [offset]: a
+   second source walked beside the first shares none of its positions, so none of the identities and
+   tables keyed by them. Lines stay the source's own. *)
+let structure_at ~offset text =
+  let lexbuf = Lexing.from_string text in
+  lexbuf.lex_abs_pos <- offset;
+  lexbuf.lex_curr_p <- { lexbuf.lex_curr_p with pos_cnum = offset; pos_bol = offset };
+  Read.inline_instantiation (Ppxlib.Parse.implementation lexbuf)
+
+(* How [structure] spells the module [module_name] in a way that may hide an application of its
+   functions from {!gate_census}, where it does. The walk resolves [M.f] and [M.Sub.f], a name an
+   [open M] (or [M.( ... )], [let open M in]) brings into scope, and a module alias of [M] ([module
+   X = M], [let module X = M in]) or an [include M], so none of those is a way. A top-level or
+   nested alias or [include] re-exports [M]'s functions, though, under the caller's own module,
+   which a third source may spell ([Caller.X.f]) where no index entry for [M] sees it: where
+   [spelled_elsewhere], that is a way. So is [M] packed, a functor's argument or under a constraint,
+   and [M] inside another module's path ([Lib.M.f]): the walk follows none of them. *)
+let module_spelled_otherwise ~module_name ~spelled_elsewhere structure =
+  let found = ref None in
+  let note how = if Option.is_none !found then found := Some how in
+  (* Every component, a functor application's included: [F (M).x] spells [M] too. *)
+  let rec components = function
+    | Ppxlib.Longident.Lident name -> [ name ]
+    | Ldot (prefix, name) -> components prefix @ [ name ]
+    | Lapply (functor_, argument) -> components functor_ @ components argument
+  in
+  let spells path = List.mem (components path) module_name ~equal:String.equal in
+  (* The one path the walk binds: [M] itself. [open Lib.M] is no such path. *)
+  let direct module_expr =
+    match module_expr.pmod_desc with
+    | Pmod_ident { txt = Ppxlib.Longident.Lident name; _ } -> String.equal name module_name
+    | _ -> false
+  in
+  let reexported what =
+    if spelled_elsewhere then
+      note
+        (Printf.sprintf
+           "%s, which re-exports its functions under that source's module, which a third source \
+            spells"
+           what)
+  in
+  let scan =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! open_declaration declaration =
+        if not (direct declaration.popen_expr) then super#open_declaration declaration
+
+      method! structure_item item =
+        match item.pstr_desc with
+        | Pstr_module { pmb_expr; pmb_name; _ } when direct pmb_expr ->
+            reexported (Printf.sprintf "as the alias `%s`" (Option.value pmb_name.txt ~default:"_"))
+        | Pstr_include { pincl_mod; _ } when direct pincl_mod -> reexported "in an `include`"
+        | _ -> super#structure_item item
+
+      method! module_expr module_expr =
+        (match module_expr.pmod_desc with
+        | Pmod_ident { txt; _ } when spells txt ->
+            note
+              "as a module the reader does not follow (packed, a functor's argument, constrained, \
+               or opened, aliased or included through another module's path)"
+        | _ -> ());
+        super#module_expr module_expr
+
+      method! expression expr =
+        match expr.pexp_desc with
+        | Pexp_letmodule (_, module_expr, body) when direct module_expr -> super#expression body
+        | Pexp_ident { txt; _ }
+          when spells txt && not (String.equal (Lexical_scope.head txt) module_name) ->
+            note
+              (Printf.sprintf "inside another module's path (`%s`)"
+                 (String.concat ~sep:"." (components txt)))
+        | _ -> super#expression expr
+    end
+  in
+  scan#structure structure;
+  !found
+
+(** Every module name [content] spells in a path -- a value's, a module's, a type's, a constructor's
+    or a field's, a functor application's components included -- for the ratchet's cross-source
+    index of who may apply whose functions (gh-ocannl-2286). Raises where [content] does not parse.
+*)
+let module_mentions content =
+  let found = Hash_set.create (module String) in
+  let scan =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! longident path =
+        let rec add = function
+          | Ppxlib.Longident.Lident name -> Hash_set.add found name
+          | Ldot (prefix, name) ->
+              add prefix;
+              Hash_set.add found name
+          | Lapply (functor_, argument) ->
+              add functor_;
+              add argument
+        in
+        add path;
+        super#longident path
+    end
+  in
+  scan#structure (Read.structure_of content);
+  List.sort (Hash_set.to_list found) ~compare:String.compare
+
+let gate_census ?callers content =
   let ast = Read.structure_of content in
   let owners = Verdict_callee.of_structure ast in
   let readings = ref [] and gated_sites = ref 0 in
@@ -2116,6 +2332,27 @@ let gate_census content =
      right-hand side is a function -- by the function's position: its binding's identity and name
      (gh-ocannl-1893). *)
   let named_functions = Hashtbl.create (module Int) in
+  (* The anonymous callbacks an {!element_iterations} function is handed in place, by the callback's
+     position: the index of its element parameter among its positional ones, the iteration as
+     written, and the collection with the scope it is written in (gh-ocannl-2286). *)
+  let element_callbacks = Hashtbl.create (module Int) in
+  (* Each element callback's owner identity, with its collection and the scope that is written in;
+     and the element callbacks enclosing each application of a name, by where the name is spelled
+     (gh-ocannl-2286, local review). *)
+  let element_owners = Hashtbl.create (module Int) in
+  (* Where each caller's positions lie ({!structure_at}), with its name: the callers a choice of
+     applications reaches (gh-ocannl-2286, review). *)
+  let caller_spans = ref [] in
+  let callers_in calls =
+    List.filter_map calls ~f:(fun (_, at) ->
+        List.find_map !caller_spans ~f:(fun (start, stop, source) ->
+            if start <= at && at < stop then Some source else None))
+  in
+  let site_elements = Hashtbl.create (module Int) in
+  (* The functions of this source whose applications another source may hide, by the function's
+     binding identity, with why: that source spells the module other than as [M.f]
+     (gh-ocannl-2286). *)
+  let foreign_escapes = Hashtbl.create (module Int) in
   (* Every application of a name the source binds, by the binding's identity: where the name is
      spelled, the arguments, and the scope they are written in. *)
   let call_sites = Hashtbl.create (module Int) in
@@ -2249,12 +2486,34 @@ let gate_census content =
             option =
         None
 
+      (* The element parameter of the callback being bound, where an {!element_iterations} function
+         is handed it in place: the parameter pattern's position, the identity a resolution chooses
+         an element under, the iteration as written, and the collection with its scope
+         (gh-ocannl-2286). *)
+      val mutable element_binding
+          : (int * int * string * expression * (gate_denotation, gate_module) Lexical_scope.env)
+            option =
+        None
+
+      (* While another source's structure is walked for its applications of this one's functions
+         (gh-ocannl-2286): what it records is read, and the claims it makes are its own reader's. *)
+      val mutable foreign = false
+
+      (* The parameters {!alternatives} is expanding, and those {!parameter_arguments} is finding
+         the values of, against one that reaches itself. *)
+      val expanding : int Hash_set.t = Hash_set.create (module Int)
+      val arguing : int Hash_set.t = Hash_set.create (module Int)
+
       (* The applications a comparison is made under ({!leg_resolution}): a parameter of one of
          these functions is the argument of that application alone. *)
       val mutable context : (int * int) list = []
 
       (* The named functions enclosing the node being walked, innermost first. *)
       val mutable enclosing_functions : int list = []
+
+      (* The element callbacks enclosing the node being walked, by their {!Element_slot} owner,
+         innermost first (gh-ocannl-2286, local review). *)
+      val mutable enclosing_elements : int list = []
 
       (* The definitions being replayed, against a function that calls itself. *)
       val replayed : int Hash_set.t = Hash_set.create (module Int)
@@ -2282,6 +2541,12 @@ let gate_census content =
 
       (* Whether the walk records what it meets: not inside {!identifiers}, nor in a replay. *)
       method recording = quiet = 0 && replaying = 0
+
+      (* [walk ()] with the claims it meets left to their own source's reader ({!foreign}). *)
+      method walk_foreign : 'a. (unit -> 'a) -> 'a =
+        fun walk ->
+          foreign <- true;
+          Exn.protect ~f:walk ~finally:(fun () -> foreign <- false)
 
       method point_of expr =
         {
@@ -2329,6 +2594,25 @@ let gate_census content =
       method function_scope : 'a. expression -> (unit -> 'a) -> 'a =
         fun expr walk ->
           let saved_binding = binding_function and saved_enclosing = enclosing_functions in
+          let saved_element = element_binding and saved_elements = enclosing_elements in
+          element_binding <-
+            (match (expr.pexp_desc, Hashtbl.find element_callbacks (position expr)) with
+            | Pexp_function (params, _, _), Some (index, iteration, collection, collection_env) ->
+                List.filter_map params ~f:(fun param ->
+                    match param.pparam_desc with
+                    | Pparam_val (Ppxlib.Asttypes.Nolabel, _, pattern) -> Some pattern
+                    | _ -> None)
+                |> Fn.flip List.nth index
+                |> Option.map ~f:(fun pattern ->
+                    let owner = self#local.identity in
+                    Hashtbl.set element_owners ~key:owner ~data:(collection, collection_env);
+                    enclosing_elements <- owner :: enclosing_elements;
+                    ( pattern.ppat_loc.loc_start.pos_cnum,
+                      owner,
+                      iteration,
+                      collection,
+                      collection_env ))
+            | _ -> None);
           (match (expr.pexp_desc, Hashtbl.find named_functions (position expr)) with
           | Pexp_function (params, _, _), Some (owner, name) ->
               let slots = Hashtbl.create (module Int) in
@@ -2352,31 +2636,57 @@ let gate_census content =
           | _ -> binding_function <- None);
           Exn.protect ~f:walk ~finally:(fun () ->
               binding_function <- saved_binding;
+              element_binding <- saved_element;
+              enclosing_elements <- saved_elements;
               enclosing_functions <- saved_enclosing)
 
       method! bind_parameter env label pattern =
-        let inner = super#bind_parameter env label pattern in
-        (match binding_function with
-        | Some (owner, owner_name, slots) when self#recording -> (
-            match
-              (Hashtbl.find slots pattern.ppat_loc.loc_start.pos_cnum, Read.pattern_name pattern)
-            with
-            | Some slot, Some name -> (
+        let at = pattern.ppat_loc.loc_start.pos_cnum in
+        (* Where the parameter is registered ({!parameters}): a named function's, with its slot, or
+           the element parameter of a callback an {!element_iterations} function is handed. *)
+        let registered =
+          if not self#recording then None
+          else
+            match (binding_function, element_binding) with
+            | Some (owner, owner_name, slots), _ when Hashtbl.mem slots at ->
                 let slot =
-                  match slot with
+                  match Hashtbl.find_exn slots at with
                   | `Positional index -> Positional_slot index
                   | `Labelled label -> Labelled_slot label
                   | `Optional (label, default) ->
                       (* The default is evaluated where the parameter is bound. *)
                       Optional_slot (label, Option.map default ~f:(fun d -> (d, env)))
                 in
-                match Lexical_scope.lookup inner name with
-                | Some { identity; _ } ->
-                    Hashtbl.set parameters ~key:identity ~data:{ owner; owner_name; slot }
-                | None -> ())
-            | _ -> ())
-        | _ -> ());
-        inner
+                Some (owner, owner_name, slot)
+            | _, Some (element_at, owner, owner_name, collection, collection_env)
+              when element_at = at ->
+                Some (owner, owner_name, Element_slot (collection, collection_env))
+            | _ -> None
+        in
+        match (registered, Read.pattern_name pattern) with
+        | None, _ -> super#bind_parameter env label pattern
+        | Some (owner, owner_name, slot), Some name ->
+            let inner = super#bind_parameter env label pattern in
+            (match Lexical_scope.lookup inner name with
+            | Some { identity; _ } ->
+                Hashtbl.set parameters ~key:identity ~data:{ owner; owner_name; slot; part = None }
+            | None -> ());
+            inner
+        | Some (owner, owner_name, slot), None ->
+            (* A destructured parameter (gh-ocannl-2286): each name a part of what the application
+               supplies, taken apart by the whole pattern ({!parts}), so each has a binding of its
+               own. *)
+            let names = Lexical_scope.pattern_vars [ pattern ] in
+            let inner =
+              self#forget
+                (List.fold names ~init:env ~f:(fun scope name ->
+                     let denotation = self#local in
+                     Hashtbl.set parameters ~key:denotation.identity
+                       ~data:{ owner; owner_name; slot; part = Some (pattern, name) };
+                     Lexical_scope.bind_values scope [ name ] denotation))
+                (Lexical_scope.pattern_unpacks [ pattern ])
+            in
+            inner
 
       method note_unlisted callee =
         let spelled =
@@ -2399,6 +2709,17 @@ let gate_census content =
       method local =
         next_local <- next_local - 1;
         { identity = next_local; definition = None }
+
+      (* The binding [prefix.name] denotes, where [prefix] is a structure of this source -- or,
+         while another source is walked, this source itself ({!foreign}) -- and [name] one of its
+         values with a binding of the source (gh-ocannl-2286). *)
+      method structure_value env prefix name =
+        match self#module_path env prefix with
+        | Some (Local_structure { values; _ }) -> (
+            match List.Assoc.find values name ~equal:String.equal with
+            | Some { identity; _ } when identity > 0 -> Some identity
+            | _ -> None)
+        | _ -> None
 
       (* What a module path denotes to the population side: a collection module, a standard library,
          a structure of this source, or another module. Whether a claim is [Verdict]'s is
@@ -2624,6 +2945,13 @@ let gate_census content =
             | Some { identity; _ } when identity > 0 ->
                 Hashtbl.add_multi references ~key:identity ~data:ident.loc.loc_start.pos_cnum
             | _ -> ())
+        | 0, Ppxlib.Longident.Ldot (prefix, name) -> (
+            (* [M.f] spelled anywhere, [M] a structure of this source or this source itself
+               (gh-ocannl-2286): a use of [f], which {!escapes} reads as {!call_sites} do. *)
+            match self#structure_value env prefix name with
+            | Some identity ->
+                Hashtbl.add_multi references ~key:identity ~data:ident.loc.loc_start.pos_cnum
+            | None -> ())
         | _ -> ());
         match (collecting, ident.txt) with
         | Some found, Ppxlib.Longident.Lident name ->
@@ -2753,8 +3081,12 @@ let gate_census content =
                     | None -> (
                         match base with
                         | Some base ->
-                            List.map (Lexical_scope.pattern_vars [ inner ]) ~f:(fun name ->
-                                (name, (base, env), extra @ written))
+                            (* The field the update leaves is the base's: taken apart where the base
+                               is a literal too (gh-ocannl-2286, local review), a part of the whole
+                               base otherwise. *)
+                            self#parts ~extra:(extra @ written)
+                              { pattern with ppat_desc = Ppat_record ([ (field, inner) ], Open) }
+                              (base, env)
                         | None -> all inner))
             | _ -> all pattern)
         | _ -> all pattern
@@ -3263,6 +3595,9 @@ let gate_census content =
             with
             | Some e -> `Given e
             | None -> `Missing)
+        | Element_slot _ ->
+            (* No application supplies an element: {!parameter_arguments} reads the collection. *)
+            `Missing
 
       (* Whether the source spells the named function [owner] anywhere but as the callee of an
          application: handed on as a value, piped, so that not every application is seen. *)
@@ -3301,6 +3636,35 @@ let gate_census content =
         | None -> [ [] ]
         | Some owner -> ( try go [ owner ] owner with Stdlib.Exit -> [ [] ])
 
+      (* The choices of elements a comparison under [calls] is made under too (gh-ocannl-2286, local
+         review): one per element of each element callback enclosing the claim ([here]) or a chosen
+         application, where [calls] chooses none of its elements yet -- so a gate and a population
+         both read off one callback's parameter meet one element at a time. Past 256 choices, the
+         comparison is made under [calls] alone, every element at once: the loud direction. *)
+      method element_contexts ~here calls =
+        let owners =
+          here
+          @ List.concat_map calls ~f:(fun (_, at) ->
+              Option.value (Hashtbl.find site_elements at) ~default:[])
+          |> List.dedup_and_sort ~compare:Int.compare
+          |> List.filter ~f:(fun owner -> not (List.Assoc.mem calls owner ~equal:Int.equal))
+        in
+        try
+          List.fold owners ~init:[ calls ] ~f:(fun choices owner ->
+              match Hashtbl.find element_owners owner with
+              | None -> choices
+              | Some (collection, collection_env) -> (
+                  match self#elements collection_env collection with
+                  | Error _ | Ok [] -> choices
+                  | Ok elements ->
+                      let extended =
+                        List.concat_map choices ~f:(fun calls ->
+                            List.map elements ~f:(fun (element, _) ->
+                                (owner, position element) :: calls))
+                      in
+                      if List.length extended > 256 then raise Stdlib.Exit else extended))
+        with Stdlib.Exit -> [ calls ]
+
       (* The applications a parameter of [owner] takes its arguments from: under {!context}, the one
          chosen there; otherwise every one. *)
       method sites owner =
@@ -3314,12 +3678,117 @@ let gate_census content =
       method parameter_arguments identity =
         match Hashtbl.find parameters identity with
         | None -> []
-        | Some { owner; slot; _ } ->
-            List.concat_map (self#sites owner) ~f:(fun (_, arguments, site_env) ->
-                match self#argument_for slot arguments with
-                | `Given e | `Option e -> [ (e, site_env) ]
-                | `Default default -> [ default ]
-                | `Missing -> [])
+        | Some _ when Hash_set.mem arguing identity ->
+            (* Reached again while its own values are being found, through a pattern taking apart
+               what reaches back to it: nothing more. *)
+            []
+        | Some parameter ->
+            Hash_set.add arguing identity;
+            Exn.protect
+              ~f:(fun () -> self#parameter_values parameter)
+              ~finally:(fun () -> Hash_set.remove arguing identity)
+
+      (* What {!parameter_arguments} finds, once per parameter on the path. *)
+      method parameter_values { owner; slot; part; _ } =
+        let wholes =
+          match slot with
+          | Element_slot (collection, collection_env) -> (
+              (* An element of a literal collection: under {!context}, the one chosen there;
+                 otherwise every one (gh-ocannl-2286). *)
+              match self#elements collection_env collection with
+              | Error _ -> []
+              | Ok elements -> (
+                  match List.Assoc.find context owner ~equal:Int.equal with
+                  | Some chosen ->
+                      List.filter elements ~f:(fun (element, _) -> position element = chosen)
+                  | None -> elements))
+          | _ ->
+              List.concat_map (self#sites owner) ~f:(fun (_, arguments, site_env) ->
+                  match self#argument_for slot arguments with
+                  | `Given e | `Option e -> [ (e, site_env) ]
+                  | `Default default -> [ default ]
+                  | `Missing -> [])
+        in
+        match part with
+        | None -> wholes
+        | Some (pattern, name) ->
+            (* A destructured parameter is the part of each value its pattern takes apart that is
+               this name's ({!parts}); where the value is no literal, the whole value. A value that
+               is itself a parameter -- an element no choice has picked, say -- is each of its own
+               values, so a part is taken of every one: the loud direction. *)
+            List.concat_map wholes ~f:(fun whole ->
+                List.concat_map (self#alternatives whole) ~f:(fun whole ->
+                    List.concat_map (self#parts pattern whole) ~f:(fun (part_name, part, written) ->
+                        (* With what is written into that field before the claim, as a name's writes
+                           are its values too (gh-ocannl-2286, local review). *)
+                        if String.equal part_name name then
+                          part
+                          :: List.filter_map written ~f:(fun (value, value_env, point) ->
+                              if self#before point then Some (value, value_env) else None)
+                        else [])))
+
+      (* The values [expr] may be, where it names a parameter ({!parameters}): what each application
+         or element it is read under supplies, recursively; otherwise [expr] itself. A parameter
+         already being expanded on this path is itself, so a function handing its own parameter back
+         to itself ends. *)
+      method alternatives ((expr, env) as whole) =
+        match (strip_constraints expr).pexp_desc with
+        | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+            match Lexical_scope.lookup env name with
+            | Some { identity; definition = None }
+              when Hashtbl.mem parameters identity && not (Hash_set.mem expanding identity) ->
+                Hash_set.add expanding identity;
+                Exn.protect
+                  ~f:(fun () ->
+                    match self#parameter_arguments identity with
+                    | [] -> [ whole ]
+                    | values -> List.concat_map values ~f:self#alternatives)
+                  ~finally:(fun () -> Hash_set.remove expanding identity)
+            | _ -> [ whole ])
+        | _ -> [ whole ]
+
+      (* The elements of the collection [expr] denotes, each with its scope, where it is a list or
+         array literal: through names (not written into), type constraints, the bodies of [let]s and
+         sequences (gh-ocannl-2286). [Error] says what it is instead. *)
+      method elements env expr =
+        let rec list_elements env expr =
+          match (strip_constraints expr).pexp_desc with
+          | Pexp_construct ({ txt = Ppxlib.Longident.Lident "[]"; _ }, None) -> Some []
+          | Pexp_construct
+              ( { txt = Ppxlib.Longident.Lident "::"; _ },
+                Some { pexp_desc = Pexp_tuple [ hd; tl ]; _ } ) ->
+              Option.map (list_elements env tl) ~f:(fun rest -> (hd, env) :: rest)
+          | _ -> None
+        in
+        let rec go seen env expr =
+          let expr = strip_constraints expr in
+          match expr.pexp_desc with
+          | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+              match Lexical_scope.lookup env name with
+              | Some { identity; definition = Some (rhs, rhs_env) }
+                when (not (Set.mem seen identity))
+                     && (not (Hashtbl.mem writes identity))
+                     && not (Hashtbl.mem unlisted_writes identity) ->
+                  go (Set.add seen identity) rhs_env rhs
+              | _ ->
+                  Error
+                    (Printf.sprintf
+                       "`%s` is bound to no list or array literal the reader follows (a parameter, \
+                        a pattern, a binding the source writes into)"
+                       name))
+          | Pexp_sequence (_, inner) -> go seen env inner
+          | Pexp_let (rec_flag, bindings, body) ->
+              go seen (self#bind_group env bindings (self#denotations env rec_flag bindings)) body
+          | Pexp_array elements -> Ok (List.map elements ~f:(fun element -> (element, env)))
+          | _ -> (
+              match list_elements env expr with
+              | Some elements -> Ok elements
+              | None ->
+                  Error
+                    (Printf.sprintf "`%s` is no list or array literal"
+                       (Ppxlib.Pprintast.string_of_expression expr)))
+        in
+        go (Set.empty (module Int)) env expr
 
       (* A [~leg]'s gates, as the alternatives it may be resolved by ({!leg_resolution}): one per
          choice of the applications a parameter on the way takes its argument from. *)
@@ -3345,34 +3814,70 @@ let gate_census content =
                              if compatible x.calls y.calls then Some (merge x y) else None)))))
         in
         let gated gates = List.map ~f:(fun r -> { r with leg_gates = gates @ r.leg_gates }) in
-        (* [seen]: the bindings on this path, so that two branches may share an ancestor leg. *)
-        let rec go seen env expr =
+        (* [seen]: the bindings on this path, so that two branches may share an ancestor leg.
+           [path]: the projections still to take of the value reached, outermost first -- the leg is
+           that part of it (gh-ocannl-2286): [case.leg], or a name a destructured parameter
+           binds. *)
+        let rec go seen path env expr =
           let expr = strip_constraints expr in
-          match expr.pexp_desc with
-          | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+          let not_taken_apart () =
+            Error
+              (Printf.sprintf
+                 "its leg is %s of `%s`, which is no record or tuple literal the reader takes apart"
+                 (match path with
+                 | Field field :: _ -> Printf.sprintf "the field `%s`" field
+                 | Component (index, arity) :: _ ->
+                     Printf.sprintf "component %d of %d" (index + 1) arity
+                 | [] -> "a part")
+                 (Ppxlib.Pprintast.string_of_expression expr))
+          in
+          match (expr.pexp_desc, path) with
+          | Pexp_field (record, field), _ ->
+              go seen (Field (Ppxlib.Longident.last_exn field.txt) :: path) env record
+          | Pexp_record (given, base), Field field :: rest -> (
+              match
+                List.find given ~f:(fun (name, _) ->
+                    String.equal (Ppxlib.Longident.last_exn name.txt) field)
+              with
+              | Some (_, component) -> go seen rest env component
+              | None -> (
+                  match base with Some base -> go seen path env base | None -> not_taken_apart ()))
+          | Pexp_tuple components, Component (index, arity) :: rest
+            when List.length components = arity ->
+              go seen rest env (List.nth_exn components index)
+          | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ }, _ -> (
               match Lexical_scope.lookup env name with
+              | Some { identity; _ }
+                when (not (List.is_empty path))
+                     && (Hashtbl.mem field_writes identity || Hashtbl.mem writes identity) ->
+                  Error
+                    (Printf.sprintf
+                       "its leg is a part of `%s`, which the source writes into after it is made"
+                       name)
               | Some { identity; definition = Some (rhs, rhs_env) } when not (Set.mem seen identity)
                 ->
-                  go (Set.add seen identity) rhs_env rhs
+                  go (Set.add seen identity) path rhs_env rhs
               | Some { identity; definition = None } when Hashtbl.mem parameters identity ->
                   if Set.mem seen identity then
                     (* A parameter passed back to its own function: the cycle adds no gate. *)
                     Ok (single [] false)
-                  else self#through_parameter (go (Set.add seen identity)) name identity
+                  else self#through_parameter (go (Set.add seen identity)) path name identity
               | _ ->
                   Error
                     (Printf.sprintf
                        "its leg reaches `%s`, a name bound to no definition the reader follows (a \
                         parameter of an anonymous function, a pattern, a recursive binding)"
                        name))
-          | Pexp_sequence (_, inner) -> go seen env inner
-          | Pexp_let (rec_flag, bindings, body) ->
-              go seen (self#bind_group env bindings (self#denotations env rec_flag bindings)) body
-          | Pexp_ifthenelse (condition, yes, no) ->
-              both (go seen env yes)
-                (Option.value_map no ~default:(Ok (single [] false)) ~f:(go seen env))
+          | Pexp_sequence (_, inner), _ -> go seen path env inner
+          | Pexp_let (rec_flag, bindings, body), _ ->
+              go seen path
+                (self#bind_group env bindings (self#denotations env rec_flag bindings))
+                body
+          | Pexp_ifthenelse (condition, yes, no), _ ->
+              both (go seen path env yes)
+                (Option.value_map no ~default:(Ok (single [] false)) ~f:(go seen path env))
               |> Result.map ~f:(gated [ (condition, env) ])
-          | Pexp_match (scrutinee, cases) ->
+          | Pexp_match (scrutinee, cases), _ ->
               List.fold cases
                 ~init:(Ok (single [ (scrutinee, env) ] false))
                 ~f:(fun acc case ->
@@ -3382,9 +3887,10 @@ let gate_census content =
                     Option.value_map case.pc_guard ~default:[] ~f:(fun guard ->
                         [ (guard, case_env) ])
                   in
-                  both (Result.map acc ~f:(gated guard)) (go seen case_env case.pc_rhs))
-          | Pexp_apply (callee, arguments) -> (
+                  both (Result.map acc ~f:(gated guard)) (go seen path case_env case.pc_rhs))
+          | Pexp_apply (callee, arguments), _ -> (
               match Verdict_callee.resolve_leg owners callee with
+              | Some _ when not (List.is_empty path) -> not_taken_apart ()
               | Some { member; ownership = (Verdicts | Ambiguous) as ownership; _ } -> (
                   let ambiguous = Poly.equal ownership Verdict_callee.Ambiguous in
                   let gate =
@@ -3403,7 +3909,7 @@ let gate_census content =
                         (Printf.sprintf "its leg is a `%s` application without its `~when_`" member)
                   | Some gate, "leg", _ -> Ok (single [ gate ] ambiguous)
                   | Some gate, _, Some outer ->
-                      Result.map (go seen env outer) ~f:(fun resolutions ->
+                      Result.map (go seen [] env outer) ~f:(fun resolutions ->
                           List.map resolutions ~f:(fun r ->
                               {
                                 r with
@@ -3433,7 +3939,7 @@ let gate_census content =
                           }
                         when not (Set.mem seen identity) ->
                           let seen = Set.add seen identity in
-                          go seen (self#bind_applied ~definition_env env params arguments) body
+                          go seen path (self#bind_applied ~definition_env env params arguments) body
                       | _ ->
                           Error
                             (Printf.sprintf
@@ -3444,61 +3950,107 @@ let gate_census content =
                       Error
                         (Printf.sprintf "its leg is the result of `%s`, another module's function"
                            (Ppxlib.Pprintast.string_of_expression callee))))
+          | (Pexp_record _ | Pexp_tuple _), _ :: _ -> not_taken_apart ()
           | _ ->
               Error
                 (Printf.sprintf "its leg is `%s`, an expression the reader does not follow"
                    (Ppxlib.Pprintast.string_of_expression expr))
         in
-        match go (Set.empty (module Int)) env expr with
+        match go (Set.empty (module Int)) [] env expr with
         | Ok [] ->
             Error "no choice of the applications its leg passes through agrees on all of them"
         | result -> result
 
-      (* A parameter on a leg's way, resolved at the applications of its function in this source
-         (gh-ocannl-1893): one alternative per application, each with that application chosen. *)
-      method through_parameter go name identity =
-        let { owner; owner_name; slot } = Hashtbl.find_exn parameters identity in
-        if self#escapes owner then
-          Error
-            (Printf.sprintf
-               "its leg reaches `%s`, a parameter of `%s`, whose name the source also uses other \
-                than as the function it applies, so not every application is seen"
-               name owner_name)
-        else
-          match Hashtbl.find_multi call_sites owner with
-          | [] ->
-              Error
-                (Printf.sprintf
-                   "its leg reaches `%s`, a parameter of `%s`, which no application in this source \
-                    supplies (another source's applications are not read)"
-                   name owner_name)
-          | sites ->
-              List.fold (List.rev sites) ~init:(Ok []) ~f:(fun acc (at, arguments, site_env) ->
-                  Result.bind acc ~f:(fun acc ->
-                      let chosen resolutions =
-                        List.filter_map resolutions ~f:(fun r ->
-                            match List.Assoc.find r.calls owner ~equal:Int.equal with
-                            | Some other when other <> at -> None
-                            | Some _ -> Some r
-                            | None -> Some { r with calls = (owner, at) :: r.calls })
-                      in
-                      match self#argument_for slot arguments with
-                      | `Given e -> Result.map (go site_env e) ~f:(fun rs -> acc @ chosen rs)
-                      | `Default (d, d_env) ->
-                          Result.map (go d_env d) ~f:(fun rs -> acc @ chosen rs)
-                      | `Option _ ->
-                          Error
-                            (Printf.sprintf
-                               "its leg reaches `%s`, a parameter of `%s`, which an application \
-                                passes as an option (`?%s:`)"
-                               name owner_name name)
-                      | `Missing ->
-                          Error
-                            (Printf.sprintf
-                               "its leg reaches `%s`, a parameter of `%s`, which an application of \
-                                it does not supply"
-                               name owner_name)))
-              |> fun resolutions -> Result.bind resolutions ~f:bounded_resolutions
+      (* A parameter on a leg's way, resolved at the applications of its function in this source and
+         in the sources handed to the reader (gh-ocannl-1893, gh-ocannl-2286), or, for an
+         {!Element_slot}, at each element of the collection: one alternative per application or
+         element, each with it chosen. A destructured parameter is the part of each value its
+         pattern takes apart that is [name]'s: [path] grows by the projections to it. *)
+      method through_parameter go path name identity =
+        let { owner; owner_name; slot; part } = Hashtbl.find_exn parameters identity in
+        let path =
+          match part with
+          | None -> Ok path
+          | Some (pattern, _) -> (
+              match projection_to name pattern with
+              | Some projections -> Ok (projections @ path)
+              | None ->
+                  Error
+                    (Printf.sprintf
+                       "its leg reaches `%s`, bound by a pattern of `%s` the reader does not take \
+                        apart (a record or tuple pattern is taken apart)"
+                       name owner_name))
+        in
+        let chosen at resolutions =
+          List.filter_map resolutions ~f:(fun r ->
+              match List.Assoc.find r.calls owner ~equal:Int.equal with
+              | Some other when other <> at -> None
+              | Some _ -> Some r
+              | None -> Some { r with calls = (owner, at) :: r.calls })
+        in
+        let alternatives values =
+          List.fold values ~init:(Ok []) ~f:(fun acc (at, value) ->
+              Result.bind acc ~f:(fun acc ->
+                  match value with
+                  | `Value (e, e_env) ->
+                      Result.bind path ~f:(fun path ->
+                          Result.map (go path e_env e) ~f:(fun rs -> acc @ chosen at rs))
+                  | `Unseen why -> Error why))
+          |> fun resolutions -> Result.bind resolutions ~f:bounded_resolutions
+        in
+        match slot with
+        | Element_slot (collection, collection_env) -> (
+            match self#elements collection_env collection with
+            | Error why ->
+                Error
+                  (Printf.sprintf
+                     "its leg reaches `%s`, an element of the collection `%s` hands its callback: \
+                      %s"
+                     name owner_name why)
+            | Ok elements ->
+                alternatives
+                  (List.map elements ~f:(fun (element, element_env) ->
+                       (position element, `Value (element, element_env)))))
+        | Labelled_slot _ | Optional_slot _ | Positional_slot _ -> (
+            match Hashtbl.find foreign_escapes owner with
+            | Some why ->
+                Error
+                  (Printf.sprintf "its leg reaches `%s`, a parameter of `%s`, %s" name owner_name
+                     why)
+            | None -> (
+                if self#escapes owner then
+                  Error
+                    (Printf.sprintf
+                       "its leg reaches `%s`, a parameter of `%s`, whose name the source also uses \
+                        other than as the function it applies, so not every application is seen"
+                       name owner_name)
+                else
+                  match Hashtbl.find_multi call_sites owner with
+                  | [] ->
+                      Error
+                        (Printf.sprintf
+                           "its leg reaches `%s`, a parameter of `%s`, which no application in \
+                            this source or in a source spelling its module supplies"
+                           name owner_name)
+                  | sites ->
+                      alternatives
+                        (List.rev_map sites ~f:(fun (at, arguments, site_env) ->
+                             ( at,
+                               match self#argument_for slot arguments with
+                               | `Given e -> `Value (e, site_env)
+                               | `Default (d, d_env) -> `Value (d, d_env)
+                               | `Option _ ->
+                                   `Unseen
+                                     (Printf.sprintf
+                                        "its leg reaches `%s`, a parameter of `%s`, which an \
+                                         application passes as an option (`?%s:`)"
+                                        name owner_name name)
+                               | `Missing ->
+                                   `Unseen
+                                     (Printf.sprintf
+                                        "its leg reaches `%s`, a parameter of `%s`, which an \
+                                         application of it does not supply"
+                                        name owner_name) )))))
 
       method helper env callee =
         let callee, callee_env = self#resolve_callee env callee in
@@ -3594,36 +4146,45 @@ let gate_census content =
                   go (Set.add seen identity) rhs_env rhs
               | Some { identity; definition = None }
                 when Hashtbl.mem parameters identity && not (Set.mem seen identity) -> (
-                  let { owner; owner_name; slot } = Hashtbl.find_exn parameters identity in
+                  let { owner; owner_name; slot; part } = Hashtbl.find_exn parameters identity in
                   let unseen why =
                     Error
                       (Printf.sprintf "its make function is `%s`, a parameter of `%s`, %s" name
                          owner_name why)
                   in
-                  if self#escapes owner then
-                    unseen
-                      "whose name the source also uses other than as the function it applies, so \
-                       not every application is seen"
-                  else
-                    match self#sites owner with
-                    | [] ->
+                  match (slot, part, Hashtbl.find foreign_escapes owner) with
+                  | Element_slot _, _, _ | _, Some _, _ ->
+                      (* A make function taken from a collection's element or out of a destructured
+                         parameter: outside the model (gh-ocannl-2286), named uncompared. *)
+                      unseen
+                        "which is an element of a collection or a part of a destructured \
+                         parameter, which the reader does not follow to a make function"
+                  | _, _, Some why -> unseen why
+                  | _ -> (
+                      if self#escapes owner then
                         unseen
-                          "which no application in this source supplies (another source's \
-                           applications are not read)"
-                    | sites ->
-                        List.fold sites ~init:(Ok []) ~f:(fun acc (_, arguments, site_env) ->
-                            Result.bind acc ~f:(fun acc ->
-                                match self#argument_for slot arguments with
-                                | `Given e ->
-                                    Result.map
-                                      (go (Set.add seen identity) site_env e)
-                                      ~f:(List.append acc)
-                                | `Default (d, d_env) ->
-                                    Result.map
-                                      (go (Set.add seen identity) d_env d)
-                                      ~f:(List.append acc)
-                                | `Option _ | `Missing ->
-                                    unseen "which an application of it does not supply")))
+                          "whose name the source also uses other than as the function it applies, \
+                           so not every application is seen"
+                      else
+                        match self#sites owner with
+                        | [] ->
+                            unseen
+                              "which no application in this source or in a source spelling its \
+                               module supplies"
+                        | sites ->
+                            List.fold sites ~init:(Ok []) ~f:(fun acc (_, arguments, site_env) ->
+                                Result.bind acc ~f:(fun acc ->
+                                    match self#argument_for slot arguments with
+                                    | `Given e ->
+                                        Result.map
+                                          (go (Set.add seen identity) site_env e)
+                                          ~f:(List.append acc)
+                                    | `Default (d, d_env) ->
+                                        Result.map
+                                          (go (Set.add seen identity) d_env d)
+                                          ~f:(List.append acc)
+                                    | `Option _ | `Missing ->
+                                        unseen "which an application of it does not supply"))))
               | _ ->
                   Error
                     (Printf.sprintf
@@ -3768,6 +4329,7 @@ let gate_census content =
             in
             let point = self#point_of expr in
             let enclosing = List.hd enclosing_functions in
+            let elements_here = enclosing_elements in
             (* The collectors [make] fills under the current {!context}: what each function it names
                claims, and what each helper it names is handed. *)
             let collectors () =
@@ -3862,6 +4424,10 @@ let gate_census content =
                           with
                           | [] -> [ resolution ]
                           | chosen -> chosen)
+                      (* And under each choice of the elements its enclosing callbacks iterate. *)
+                      |> List.concat_map ~f:(fun resolution ->
+                          List.map (self#element_contexts ~here:elements_here resolution.calls)
+                            ~f:(fun calls -> { resolution with calls }))
                     in
                     let compared =
                       List.map resolutions ~f:(fun resolution ->
@@ -3909,6 +4475,9 @@ let gate_census content =
                                 |> String.concat ~sep:" && ";
                               reads =
                                 List.concat_map offending ~f:snd
+                                |> List.dedup_and_sort ~compare:String.compare;
+                              applied_in =
+                                List.concat_map offending ~f:(fun (r, _) -> callers_in r.calls)
                                 |> List.dedup_and_sort ~compare:String.compare;
                             }
                             :: !readings))
@@ -4074,9 +4643,23 @@ let gate_census content =
                    | Some { identity; _ } when identity > 0 ->
                        Hashtbl.add_multi call_sites ~key:identity
                          ~data:(loc.loc_start.pos_cnum, arguments, env);
+                       Hashtbl.set site_elements ~key:loc.loc_start.pos_cnum
+                         ~data:enclosing_elements;
                        Hashtbl.set call_callers ~key:loc.loc_start.pos_cnum
                          ~data:(List.hd enclosing_functions)
                    | _ -> ())
+               | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); loc } -> (
+                   (* [M.f args], [M] a structure of this source or, in another source's walk, this
+                      source itself (gh-ocannl-2286): an application of [f]'s binding. *)
+                   match self#structure_value env prefix name with
+                   | Some identity ->
+                       Hashtbl.add_multi call_sites ~key:identity
+                         ~data:(loc.loc_start.pos_cnum, arguments, env);
+                       Hashtbl.set site_elements ~key:loc.loc_start.pos_cnum
+                         ~data:enclosing_elements;
+                       Hashtbl.set call_callers ~key:loc.loc_start.pos_cnum
+                         ~data:(List.hd enclosing_functions)
+                   | None -> ())
                | _ -> ());
                (* A pipeline is read as the application it spells, so that [rows |> List.iter ~f] is
                   complete; only a complete application calls its callback. *)
@@ -4104,6 +4687,51 @@ let gate_census content =
                            | Pexp_function _ when calls_back ~stdlib name label index ->
                                Hash_set.add synchronous (position (strip_constraints argument))
                            | _ -> ())
+                   | _ -> ())
+               | _ -> ());
+               (* A callback an {!element_iterations} function is handed in place: its element
+                  parameter is each element of the collection (gh-ocannl-2286). The callback is the
+                  [~f] argument with the collection the one positional argument, or, with no [~f],
+                  the first of exactly two positional ones, the collection the second. *)
+               (match self#resolve_callee env applied with
+               | ( { pexp_desc = Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ }; _ },
+                   callee_env ) -> (
+                   match
+                     ( self#module_path callee_env prefix,
+                       List.Assoc.find element_iterations name ~equal:String.equal )
+                   with
+                   | Some (Collection_module { family; _ }), Some index
+                     when List.mem element_families family ~equal:String.equal -> (
+                       let positional =
+                         List.filter_map applied_arguments ~f:(function
+                           | Ppxlib.Asttypes.Nolabel, argument -> Some argument
+                           | _ -> None)
+                       in
+                       let labelled_f =
+                         List.find_map applied_arguments ~f:(function
+                           | Ppxlib.Asttypes.Labelled "f", argument -> Some argument
+                           | _ -> None)
+                       in
+                       let others_labelled =
+                         List.exists applied_arguments ~f:(function
+                           | Ppxlib.Asttypes.Nolabel, _ | Ppxlib.Asttypes.Labelled "f", _ -> false
+                           | _ -> true)
+                       in
+                       match (labelled_f, positional) with
+                       | (Some callback, [ collection ] | None, [ callback; collection ])
+                         when not others_labelled -> (
+                           match (strip_constraints callback).pexp_desc with
+                           | Pexp_function _ ->
+                               Hashtbl.set element_callbacks
+                                 ~key:(position (strip_constraints callback))
+                                 ~data:
+                                   ( index,
+                                     String.concat ~sep:"."
+                                       (Read.flatten_longident prefix @ [ name ]),
+                                     collection,
+                                     env )
+                           | _ -> ())
+                       | _ -> ())
                    | _ -> ())
                | _ -> ());
                (* The application a pipeline absorbs ([Queue.enqueue queue] in [sample |>
@@ -4153,6 +4781,7 @@ let gate_census content =
                self#collect_leg_population env expr callee arguments;
                self#run_deferred env callee arguments;
                match leg_member callee with
+               | Some _ when foreign -> ()
                | Some (member, spelled, ambiguous) when self#recording ->
                    Hash_set.add leg_heads (position (strip_constraints callee));
                    self#leg_claim env expr ~member ~spelled ~ambiguous arguments
@@ -4181,7 +4810,9 @@ let gate_census content =
                            | _ -> ())
                        | _ -> ())
                | None -> ())
-           | Pexp_ident _ when self#recording && not (Hash_set.mem leg_heads (position expr)) -> (
+           | Pexp_ident _
+             when self#recording && (not foreign) && not (Hash_set.mem leg_heads (position expr))
+             -> (
                match leg_member expr with
                | Some (_, spelled, _) ->
                    unread_legs :=
@@ -4193,7 +4824,7 @@ let gate_census content =
                      :: !unread_legs
                | None -> ())
            | _ -> ());
-        (if self#recording && not (Hash_set.mem consumed (position expr)) then
+        (if self#recording && (not foreign) && not (Hash_set.mem consumed (position expr)) then
            match expr.pexp_desc with
            | Pexp_ident _ -> (
                (* A claim named as a value rather than applied -- handed to [List.iter], say -- is
@@ -4229,6 +4860,7 @@ let gate_census content =
                        Int.incr gated_sites;
                        let point = self#point_of expr in
                        let enclosing = List.hd enclosing_functions in
+                       let elements_here = enclosing_elements in
                        pending :=
                          (fun () ->
                            unlisted_sink := [];
@@ -4236,9 +4868,12 @@ let gate_census content =
                            (* Inside a named function its applications supply, compared once per
                               application, so that one call's gate never meets another call's
                               population (gh-ocannl-1893). *)
-                           let contexts = self#call_chains enclosing in
-                           let shared =
-                             List.concat_map contexts ~f:(fun calls ->
+                           let contexts =
+                             List.concat_map (self#call_chains enclosing)
+                               ~f:(self#element_contexts ~here:elements_here)
+                           in
+                           let per_context =
+                             List.map contexts ~f:(fun calls ->
                                  context <- calls;
                                  Exn.protect
                                    ~finally:(fun () -> context <- [])
@@ -4249,8 +4884,17 @@ let gate_census content =
                                          self#quantified population_env population
                                        else self#population population_env population
                                      in
-                                     Hash_set.filter built ~f:(Hash_set.mem reads)
-                                     |> Hash_set.to_list |> List.map ~f:fst))
+                                     ( calls,
+                                       Hash_set.filter built ~f:(Hash_set.mem reads)
+                                       |> Hash_set.to_list |> List.map ~f:fst )))
+                           in
+                           let shared =
+                             List.concat_map per_context ~f:snd
+                             |> List.dedup_and_sort ~compare:String.compare
+                           in
+                           let applied_in =
+                             List.concat_map per_context ~f:(fun (calls, shared) ->
+                                 if List.is_empty shared then [] else callers_in calls)
                              |> List.dedup_and_sort ~compare:String.compare
                            in
                            List.dedup_and_sort !unlisted_sink ~compare:Poly.compare
@@ -4266,6 +4910,7 @@ let gate_census content =
                                  line;
                                  gate = Ppxlib.Pprintast.string_of_expression gate;
                                  reads = shared;
+                                 applied_in;
                                }
                                :: !readings)
                          :: !pending
@@ -4302,9 +4947,69 @@ let gate_census content =
         | _ -> walk ()
     end
   in
-  ignore
-    (walker#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } ast
-      : structure);
+  let top = { Lexical_scope.frames = []; modules = Map.empty (module String) } in
+  ignore (walker#structure top ast : structure);
+  (* The applications other sources make of this one's functions (gh-ocannl-2286): each caller is
+     walked as code of its own, its positions past every earlier source's so that no position or
+     binding identity is shared, under one module binding -- [M], this source's structure -- and
+     what it records is read: its [M.f] applications are call sites of [f]. Only where this source
+     has a claim to compare: otherwise none of it could be read. *)
+  (match callers with
+  | Some { module_name; sources } when not (List.is_empty !pending) -> (
+      match
+        walker#module_of top
+          (Ppxlib.Ast_builder.Default.pmod_structure ~loc:Ppxlib.Location.none ast)
+      with
+      | Some (Local_structure { values; modules } as structure) ->
+          (* Every function of [M], its submodules' included, so [M.Sub.f] too. *)
+          let escape why =
+            let rec mark values modules =
+              List.iter values ~f:(fun (_, { identity; _ }) ->
+                  if identity > 0 && not (Hashtbl.mem foreign_escapes identity) then
+                    Hashtbl.set foreign_escapes ~key:identity ~data:why);
+              List.iter modules ~f:(function
+                | _, Local_structure { values; modules } -> mark values modules
+                | _ -> ())
+            in
+            mark values modules
+          in
+          let offset = ref (String.length content + 1) in
+          List.iter sources ~f:(fun { source; text; spelled_elsewhere } ->
+              let at = !offset in
+              offset := at + String.length text + 1;
+              caller_spans := (at, at + String.length text + 1, source) :: !caller_spans;
+              match Scan_attempt.run (fun () -> structure_at ~offset:at text) with
+              | Scanned caller ->
+                  Verdict_callee.absorb ~into:owners (Verdict_callee.of_structure caller);
+                  binder#structure caller;
+                  (match module_spelled_otherwise ~module_name ~spelled_elsewhere caller with
+                  | Some how ->
+                      escape
+                        (Printf.sprintf
+                           "whose module `%s` another source, `%s`, spells %s, so not every \
+                            application is seen"
+                           module_name source how)
+                  | None -> ());
+                  walker#walk_foreign (fun () ->
+                      ignore
+                        (walker#structure
+                           {
+                             top with
+                             Lexical_scope.modules =
+                               Map.singleton (module String) module_name structure;
+                           }
+                           caller
+                          : structure))
+              | Unparsed report ->
+                  escape
+                    (Printf.sprintf
+                       "whose module `%s` another source, `%s`, spells, and that source does not \
+                        parse (%s), so not every application is seen"
+                       module_name source report)
+              | Raised exn ->
+                  failwith (Printf.sprintf "%s (while parsing the caller %s)" exn source))
+      | _ -> ())
+  | _ -> ());
   List.iter (List.rev !pending) ~f:(fun compare -> compare ());
   (* A bound partial application no resolved use completed -- reached only through a module path,
      say, or from another source -- is one this reader never compared. *)
