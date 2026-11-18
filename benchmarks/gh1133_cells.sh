@@ -270,8 +270,13 @@ cell() {
   # A traced cell re-times its isolated kernels as synchronized singles (gh-ocannl-1694): the
   # queued default dispatches up to thousands of launches per batch, every one a trace record, and
   # kernel_attribution.py reads the isolated runs as single launches. The cells search nothing
-  # (--ocannl_autotune_search=false), so the setting reaches only the per-kernel table.
-  [ -z "$profile" ] || flags="$flags --ocannl_autotune_timing=isolated"
+  # (--ocannl_autotune_search=false), so the setting reaches only the per-kernel table. It also
+  # turns the backends' kernel code cache off (gh-ocannl-2328): with it on, segments whose code is
+  # identical up to renaming -- a model's repeated layers -- dispatch one compiled function under
+  # the first one's `<routine>__seg<j>` name, so the trace names 136 of a gpt2_mini_train step's
+  # 286 segments and kernel_attribution.py cannot map them. The cache changes what is compiled, not
+  # what runs: a kernel's code is the same text either way.
+  [ -z "$profile" ] || flags="$flags --ocannl_autotune_timing=isolated --ocannl_hip_kernel_cache_mib=0 --ocannl_cuda_kernel_cache_mib=0"
   r=$(runner_root "$treatment")
   local name="$backend-$fixture-$treatment-$tag" wrap=()
   echo "backend=$backend fixture=$fixture treatment=$treatment precision=$prec runner=$r flags=[$flags]" >"$out/$name.err"

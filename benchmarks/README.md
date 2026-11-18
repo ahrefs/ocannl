@@ -757,9 +757,15 @@ single-threaded segments that sum to the serial step
   kernel table's `io:` field, staging tiles and scratch left out; `~` an upper bound, `?` code the model cannot see) and the in-step
   bandwidth they imply. Repeats of one build trace identical kernel names and are compared in the
   repeatability table; cells whose kernel lists differ (another treatment or revision, where every
-  segment index after a change shifts) get a **kernel join** against the `base` list, keyed by the
-  nodes each kernel writes with schedule-minted staging nodes (`tile__n<id>_...`) set aside, which
-  lists what moved, appeared or went. Every cell also records the box's GPU co-tenants just before
+  segment index after a change shifts) get a **kernel join** against the `base` list: the two
+  lists are paired in step order by the nodes each kernel writes, schedule-minted staging nodes
+  (`tile__n<id>_...`) set aside and anonymous ids (`n<id>`) masked, then by position between paired
+  kernels, which lists what moved, appeared or went. A pair whose nodes agree exactly is joined; one
+  paired by step order alone is marked `~` -- a build that creates tensors first, such as
+  `BENCH_PRECISION`'s cast twins (the driver's `mixbf16<T>` treatment, gh-ocannl-2328), renumbers
+  every anonymous node after them. A kprof cell runs with the HIP and CUDA kernel code caches off:
+  they dispatch identical segments (a model's repeated layers) under one segment's name, which the
+  trace cannot map. Every cell also records the box's GPU co-tenants just before
   it starts and just after it ends (gh-ocannl-1521): `benchmarks/gpu_cotenants.py` lists
   nvidia-smi's compute apps and the DRM clients' fdinfo (the AMD boxes' path), in the fleet's
   co-tenant vocabulary, into `CELL.cotenants.jsonl`, and the attribution prints a `GPU co-tenants`
