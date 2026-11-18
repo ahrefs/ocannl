@@ -81,6 +81,14 @@ let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~d
 let is_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
 let is_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)
 
+(* The per-segment claims below count and time the staffed sweep's [F_sketch] candidates. Where the
+   seeded untuned plan has a segmentation of its own (CUDA and HIP, whenever the seeding gate seeds
+   a product: gh-ocannl-2279 widened that on CUDA), the default seeded sweep times [F_swap] singles
+   of the plan in their place (gh-ocannl-1664), so every search here turns it off, as
+   autotune_staffed_fine and autotune_sketch_placements do. Stated at the config-file level, after
+   the configuration was read above. *)
+let () = Hashtbl.set Utils.config_file_args ~key:"autotune_seeded_singles" ~data:"false"
+
 (* The dune sandbox persists across runs: stale entries written by an older binary (digest
    ingredients and the saved-schedule format evolve) would break miss-then-hit assertions. *)
 let clean_cache dir =
