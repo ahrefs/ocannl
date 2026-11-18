@@ -363,7 +363,8 @@ let percentile sorted p =
     search working as designed, and the summary tallies those apart; any other exception (a
     classified launch or synchronization failure the search survives) is [failed], and a summary
     with any says INCOMPLETE with their count, since that call's cost is in no total. An unranked
-    window's few batches are in no total either, which its tally says.
+    window's batches are in no total either, so its tally states their wall, from each validation's
+    start to its raise, for a reading of the session's split to add to the timing side.
 
     The [decision] line carries the policy's own metadata (gh-ocannl-1199): the search phase, the
     exit that chose the depth, the fitted fixed and marginal costs and the fit's verdict, what the
@@ -482,8 +483,10 @@ let install_timing_trace () =
     (* gh-ocannl-2330: of those raised calls, the unranked windows -- cut as hopeless or stopped by
        the budget -- told apart by the exception the raised-call observer is handed, never by its
        printed text. The search reads them as unranked, not as failures, so the summary tallies them
-       apart and INCOMPLETE counts the rest. *)
-    let unranked = ref 0 in
+       apart and INCOMPLETE counts the rest. Their wall -- from the validation's start to the raise,
+       the warmup, calibration and batches they dispatched -- is summed apart too, since no total
+       holds it: a reading of the session's split adds it to the timing side. *)
+    let unranked = ref 0 and unranked_s = ref 0. and preflight_at = ref 0. in
     let raised () = !preflights - !tagged in
     let failed () = raised () - !unranked in
     let calib_s = ref 0. and timed_s = ref 0. in
@@ -517,6 +520,7 @@ let install_timing_trace () =
     let prev_preflight = Autotune.Seam.get Autotune.on_candidate_preflight in
     ( Autotune.Seam.set Autotune.on_candidate_preflight @@ fun name ->
       Int.incr preflights;
+      preflight_at := now ();
       prev_preflight name );
     let raised_lines = ref 0 in
     Autotune.install_timing_call_raised_observer (fun (r : Autotune.timing_call_raised) ->
@@ -525,6 +529,7 @@ let install_timing_trace () =
           match r.raised_exn with
           | Autotune.Timing_hopeless _ | Autotune.Timing_stopped ->
               Int.incr unranked;
+              unranked_s := !unranked_s +. (now () -. !preflight_at);
               "unranked"
           | _ -> "failed"
         in
@@ -596,9 +601,9 @@ let install_timing_trace () =
           (if !unranked = 0 then ""
            else
              Printf.sprintf
-               "; %d unranked timing windows (cut as hopeless or stopped by the budget), in none \
-                of these totals"
-               !unranked)
+               "; %d unranked timing windows (cut as hopeless or stopped by the budget), %.2f s, \
+                in none of these totals"
+               !unranked !unranked_s)
           (if failed () = 0 then ""
            else
              Printf.sprintf

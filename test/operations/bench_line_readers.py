@@ -223,7 +223,7 @@ complete = ("timing-trace: summary: 1.0s wall, 2 candidate attempts, 1 timing ca
 failed_tail = ("; INCOMPLETE: 1 tagged timing calls raised after validation, "
                "and their cost is in none of these totals")
 unranked_tail = ("; 2 unranked timing windows (cut as hopeless or stopped by the budget), "
-                 "in none of these totals")
+                 "0.50 s, in none of these totals")
 incomplete = complete + failed_tail
 # gh-ocannl-2330: unranked windows alone leave a summary complete; beside a failure, it is not.
 unranked = complete + unranked_tail
@@ -236,13 +236,13 @@ with tempfile.TemporaryDirectory() as scratch:
         results.append(cli("trace-has", fixture, "incomplete")[0])
     claim("trace-has distinguishes complete and incomplete fixed summaries",
           results == [3, 0, 3, 0], f"exits {results}, expected [3, 0, 3, 0]; {both}")
-read = [{k: s[k] for k in ("incomplete", "raised", "unranked")}
+read = [{k: s[k] for k in ("incomplete", "raised", "unranked", "unranked_s")}
         for s in map(bench_output.trace_summary, (complete, incomplete, unranked, both))]
 claim("trace_summary reads the fixed summaries' failed and unranked tallies apart",
-      read == [{"incomplete": False, "raised": 0, "unranked": 0},
-               {"incomplete": True, "raised": 1, "unranked": 0},
-               {"incomplete": False, "raised": 0, "unranked": 2},
-               {"incomplete": True, "raised": 1, "unranked": 2}], repr(read))
+      read == [{"incomplete": False, "raised": 0, "unranked": 0, "unranked_s": 0.},
+               {"incomplete": True, "raised": 1, "unranked": 0, "unranked_s": 0.},
+               {"incomplete": False, "raised": 0, "unranked": 2, "unranked_s": 0.5},
+               {"incomplete": True, "raised": 1, "unranked": 2, "unranked_s": 0.5}], repr(read))
 # gh-ocannl-2246: a raised timing call's record. The live search's own raises stay diagnostic
 # (gh-ocannl-1992): whether any call raises is the host's, so what is pinned is that the summary's
 # count -- validations started less records returned -- is the number of raised records, numbered

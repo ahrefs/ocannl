@@ -160,15 +160,18 @@ _TRACE_SUMMARY = re.compile(
     r"^timing-trace: summary: (?P<wall>[0-9.]+)s wall, (?P<attempts>\d+) candidate attempts, "
     r"(?P<calls>\d+) timing calls, (?P<launches>\d+) launches, ")
 _TRACE_INCOMPLETE = re.compile(r"; INCOMPLETE: (?P<raised>\d+) tagged timing calls raised ")
-_TRACE_UNRANKED = re.compile(r"; (?P<unranked>\d+) unranked timing windows ")
+_TRACE_UNRANKED = re.compile(
+    r"; (?P<unranked>\d+) unranked timing windows \([^)]*\), (?P<unranked_s>[0-9.]+) s, ")
 
 
 def trace_summary(text):
     """The LAST `timing-trace: summary` record of a cell's stderr, or None: a dict of `wall` (s),
     `attempts`, `calls` (timing calls), `launches`, `incomplete` (the summary names tagged timing
     calls that FAILED after their validation, whose cost is in none of its totals), `raised` (how
-    many; 0 when complete) and `unranked` (the timing windows cut as hopeless or stopped by the
-    budget, gh-ocannl-2330: the search working, not a failure; 0 when the summary names none).
+    many; 0 when complete), `unranked` (the timing windows cut as hopeless or stopped by the
+    budget, gh-ocannl-2330: the search working, not a failure; 0 when the summary names none) and
+    `unranked_s` (their wall, from each one's validation to its raise, which no other total
+    holds: a session's timing side is `calib` plus `timed` plus this; 0. when none).
     A capture from before gh-ocannl-2330 names no unranked tally and counts those windows in its
     INCOMPLETE `raised`, so it reads as it was printed. ValueError for a summary line that does
     not read as one."""
@@ -189,7 +192,8 @@ def trace_summary(text):
         found = {"wall": float(m["wall"]), "attempts": int(m["attempts"]),
                  "calls": int(m["calls"]), "launches": int(m["launches"]),
                  "incomplete": incomplete, "raised": int(raised["raised"]) if raised else 0,
-                 "unranked": int(unranked["unranked"]) if unranked else 0}
+                 "unranked": int(unranked["unranked"]) if unranked else 0,
+                 "unranked_s": float(unranked["unranked_s"]) if unranked else 0.}
     return found
 
 

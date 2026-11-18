@@ -2589,12 +2589,19 @@
        BENCH_TIMING_TRACE
        1
        ; gh-ocannl-2330: one window cut as hopeless on a scripted clock; as above, no ambient
-       ; budget may stop the search before it.
-       (run
-        %{dep:bench_line_samples.exe}
-        trace-cut
-        --ocannl_backend=cc
-        --ocannl_autotune_budget_seconds=0))))
+       ; budget may stop the search before it. The cut needs a whole-routine seed past the
+       ; floors, which the seed menu decides, so this run pins the vector file (gh-ocannl-1368).
+       (setenv
+        OCANNL_CC_VECTOR_BYTES
+        32
+        (setenv
+         OCANNL_CC_VECTOR_REGISTERS
+         16
+         (run
+          %{dep:bench_line_samples.exe}
+          trace-cut
+          --ocannl_backend=cc
+          --ocannl_autotune_budget_seconds=0))))))
     (with-stdout-to
      bench_line_readers.actual
      (run python3 %{dep:bench_line_readers.py} ../..))
@@ -2613,7 +2620,8 @@
 
 (executable
  ; cc-vector-width: independent -- its trace's claims relate the trace's lines to one another
- ; (attempts and calls to the summary's totals), never to what the search seeds or keeps.
+ ; (attempts and calls to the summary's totals), never to what the search seeds or keeps; the
+ ; trace-cut run, which needs a whole-routine seed to cut, pins the vector file on its own.
  (name bench_line_samples)
  (modules bench_line_samples)
  (libraries

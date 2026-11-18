@@ -410,9 +410,10 @@ single-threaded segments that sum to the serial step
   phase tag it left under and its exception (gh-ocannl-2246). The kind is read off the exception
   (gh-ocannl-2330): a window cut as hopeless or stopped by the budget (`Timing_hopeless`,
   `Timing_stopped`) is `unranked` -- the search working, not a failure -- and the summary tallies
-  those as `N unranked timing windows`, still complete; any other exception is `failed`, and the
+  those as `N unranked timing windows`, with their wall (no other total holds it: the session's
+  timing side is calib plus timed plus that), still complete; any other exception is `failed`, and the
   summary then says INCOMPLETE with their count. `bench_output.trace_raised` reads those lines, and
-  `trace_summary` the two tallies (`raised`, `unranked`); a capture from before gh-ocannl-2330 names
+  `trace_summary` the two tallies (`raised`, `unranked`, with `unranked_s`); a capture from before gh-ocannl-2330 names
   no kind and counts its unranked windows in INCOMPLETE. A `timing-trace: search done` line marks where the measured
   compile (`compile_s`) ended, so a cell cut off later is not read as a search still running. The
   decision line (gh-ocannl-1199) carries the search phase (`playoff` for the composite playoff),

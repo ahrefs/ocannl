@@ -246,7 +246,8 @@ require_complete_session() {
   fi
   # A timing call that failed is in none of the trace's totals, so its cost split is not the session's.
   # A window cut as hopeless or stopped by the budget is the search working, tallied apart as
-  # unranked, and leaves the summary complete (gh-ocannl-2330).
+  # unranked with its wall -- stated on the summary trace-digest shows, for the split's timing
+  # side -- and leaves the summary complete (gh-ocannl-2330).
   if trace_has "$1" incomplete; then
     echo "== step $1: INCOMPLETE SESSION: the trace summary is missing failed timing calls"
     status=1
