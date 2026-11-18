@@ -352,6 +352,12 @@ let schedule_asks_grid (saved : SC.saved_schedule) =
 
 let grid_rendered_serially (g : Ir.C_syntax.grid_summary) = g.pool && g.serial > 0
 
+let grid_timing_note (grid : Ir.C_syntax.grid_summary) =
+  if log_enabled () && grid.pool && not (List.is_empty grid.loops) then
+    let note = if grid_rendered_serially grid then "NOTE grid-serial, " else "" in
+    " " ^ note ^ Ir.C_syntax.grid_summary_string grid
+  else ""
+
 type report = {
   outcome : outcome;
   candidates_timed : int;
@@ -10645,8 +10651,9 @@ module Make (D : Driver) = struct
                             ~incumbent_ms:(snd !best_so_far);
                           Seam.get on_candidate_timed (D.routine_name c.routine)
                             ~timed_so_far:!n_timed;
-                          logf "%s: %.4f ms (digest %s)" (spec_label spec) ms
-                            (dshort c.digest_after);
+                          let grid = D.routine_grid c.routine in
+                          logf "%s: %.4f ms (digest %s)%s" (spec_label spec) ms
+                            (dshort c.digest_after) (grid_timing_note grid);
                           Seam.get on_candidate_callback `Calibration ~candidate_ms:ms
                             ~incumbent_ms:(snd !best_so_far);
                           emit_calibration ~backend ~device ~limits
@@ -10672,26 +10679,14 @@ module Make (D : Driver) = struct
                               "%s: NOTE not-requested, tensorized candidate emitted no Tile_mma \
                                statement"
                               (spec_label spec);
-                          (* The Grid census next to the timing (gh-ocannl-1702), for the reason the
-                             mma census is: a schedule that asks for a Grid loop the renderer kept
-                             serial timed a serial loop under a parallel label. Logged for every
-                             candidate that has a pool-backed Grid loop at all, flagged when the
-                             schedule asked and the renderer declined, and recorded in the
-                             report. *)
-                          let grid = D.routine_grid c.routine in
+                          (* The report retains ranked schedules whose explicit Grid request fell
+                             back to serial, including the renderer's reason (gh-ocannl-1702). *)
                           if
                             grid_rendered_serially grid && schedule_asks_grid (flat_schedule c.form)
-                          then (
+                          then
                             grid_serial_timed :=
                               { grid_label = spec_label spec; grid_ms = ms; grid_record = grid }
                               :: !grid_serial_timed;
-                            logf "%s: NOTE grid-serial, the schedule asks for a Grid loop; %s"
-                              (spec_label spec)
-                              (Ir.C_syntax.grid_summary_string grid))
-                          else if
-                            grid.Ir.C_syntax.pool && not (List.is_empty grid.Ir.C_syntax.loops)
-                          then
-                            logf "%s: %s" (spec_label spec) (Ir.C_syntax.grid_summary_string grid);
                           Some (c, ms)
                       | Error (Outcome.Classified classified) -> (
                           record_decline declines classified;
@@ -11161,8 +11156,9 @@ module Make (D : Driver) = struct
                             | Some ms ->
                                 Int.incr admitted;
                                 readings.(i) <- ms :: readings.(i);
-                                logf "%s: %s: %.4f ms (digest %s)" what label ms
-                                  (dshort c.digest_after);
+                                logf "%s: %s: %.4f ms (digest %s)%s" what label ms
+                                  (dshort c.digest_after)
+                                  (grid_timing_note (D.routine_grid c.routine));
                                 release_candidate c
                             | None ->
                                 logf "%s: %s: NOT TIMED, %s (digest %s)" what label

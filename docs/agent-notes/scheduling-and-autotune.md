@@ -1475,8 +1475,9 @@ files.
   schedule's Grid placement. `Autotune.report.best_grid` is the crowned candidate's
   `Context.routine.grid`, and `grid_serial_timed` lists every ranked candidate whose schedule asks
   for a `Grid` loop (`Autotune.schedule_asks_grid`, read off the saved schedule) while its census
-  records a serial one (`Autotune.grid_rendered_serially`); each also gets a `NOTE grid-serial`
-  line in `autotune_log`. Downstream, `Train.tune_placements`' arm line appends the crown's census
+  records a serial one (`Autotune.grid_rendered_serially`). The candidate and finals timing lines
+  in `autotune_log` append the compiled routine's pool census, with `NOTE grid-serial` for a
+  serial Grid loop. Downstream, `Train.tune_placements`' arm line appends the crown's census
   when it asked on a pool, the bench result line carries a per-arm `grid` object and the shipped
   routines' `tune.grid`, and `orchestrate.py` prints a `GRID NOTICE` (not a gate). Keyed on the schedule because the label under-promises: the whole-triple
   `W_sketch[mma-cpu 16x0x0]` carries no ` grid` token yet Grid-splits its row loop (at 64^3 that
@@ -1490,9 +1491,14 @@ files.
   statement-site tile IS weighed (since gh-ocannl-1706, through `cpu_pack_acc_masked`; comments
   saying otherwise were stale until gh-ocannl-1856): the shape's per-chunk sum is one spelling,
   `cpu_pack_grid_chunk_bytes`, which the same test pins equal to the renderer's recorded private
-  bytes on padded plain-`grid` sites. Those sites pad only rows and columns: with a k pad too
-  (40^3 and 72^3 at bk=16) the renderer keeps the row-block loop serial for another reason, the
-  A~ tile "accessed outside the loop body" (its privatization rule), before any cap is read. The launch floor is weighed by
+  bytes on padded plain-`grid` sites. When k has both full and partial blocks, the plain `grid`
+  shape is refuted before the cap (gh-ocannl-2275). The k partition copies the row-block Grid body
+  after staging, so the full and edge segments write the same A~ tile outside each other's Grid
+  loop. A single partial k block has no sibling segment. A direct CPU conv `Row_block` panel
+  privatizes both staged tiles and any accumulator fragment. Its tree charges their combined
+  footprint against the same cap. `autotune_grid_record` compiles the 40^3 and 72^3 bk=16 matmul
+  controls and compares the conv panel pre-filter's bytes with the renderer on both sides of the
+  cap. The launch floor is weighed by
   `cpu_mma_grid_updates_bound` (gh-ocannl-1857), a saturating upper bound using the renderer's
   resolved `C_syntax.grid_min_updates ()` and `Cost_model.tile_mma_macs_per_update`: packing
   and fragment-transfer stores count, enclosing serial blocks do not. At 64^3 the plain packed
