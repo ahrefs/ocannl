@@ -99,7 +99,22 @@ files.
   so the two agree on what the collapse inlines. Protection is structural (a wrong-polarity guard
   passes), and unknown coordinates, `Get_dynamic` and merge buffers get no verdict.
   `where_arm_scopes` pins the refused shapes (never launched) beside running twins, at both
-  gates. `hoist_cross_statement_cse` lifts a shared
+  gates. The dropped guard (gh-ocannl-2311) is a backstop rule, not a live hazard. Under a
+  condition reading a local, `Scope_order.arms` and `gate` keep on a definition only the guards
+  evaluable anywhere, so a Div-, Mod- or memory-bearing index guard stops protecting its arm's
+  definitions. Lowering never makes such a guard a read's only protection: every range guard it
+  builds is an affine `Embed_index` comparison placed at the read it protects (`Assignments`'
+  `clamp_conds`, the gh-490 extent `If`, PADTO masks, staging tiles, scan payloads), so it is
+  evaluable anywhere and kept, and none decomposes a merged index (`Indexing.Sub_axis`). A
+  strided transposed convolution is an affine scatter, not a mod-strided gather. The gh-343
+  gather's `in_range` reads the index tensor, but it protects only its inline `Get_dynamic`; the
+  scalar CSE wraps only `Local_scope`s, so no definition sits under it. A user condition can reach
+  the shape (`%op` has no modulo, but `/.` divides, and `%cd`'s `%` is `Ops.Mod`), yet it protects
+  no read that leaves its node: user reads are in range by shape inference, and lowering's escaping
+  reads carry their own clamp (`value_select_division_guard`). The construct that would need the
+  renderer fix: a lowering-built guard containing a division, modulo or memory read whose arm
+  holds a definition reading off its node with no affine guard of its own. Both gates refuse it by
+  name (`where_arm_scopes`' `was_value_test_dropped`). `hoist_cross_statement_cse` lifts a shared
   group only when some member sits outside every `Where` arm, since its lifted body runs
   unconditionally. `Access_fold` keeps `gated` through a `Where` arm's scope bodies (its `arm`
   flag; a gate's still clears it), which the prologue's gated-node decline and the cost floor read.

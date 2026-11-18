@@ -1,0 +1,8 @@
+the inlined program has the shape: a local-reading select over a division guard over a definition reading x: true
+the divisionless control does not (the shape predicate's control): true
+the divisionless control has the same shape over a guard evaluable anywhere: true
+the divisionless control's values equal the materialized reference's: true
+the inlined program reads x below its node (the window's [-1] offset): true
+every read of x at a window offset sits in an arm of an index guard evaluable anywhere, its own clamp: true
+the inlined values equal the materialized reference's: true
+the values equal the closed form's: true

@@ -17681,6 +17681,27 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-2311: a value select over a division index guard over an inlined window, reached from
+; user-level lowering: every read the window takes off its node keeps its own clamp.
+
+(test
+ (name value_select_division_guard)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules value_select_division_guard)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.utils
+  arrayjit.verdict
+  ll_test
+  arrayjit.context)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name vec_signed_zero)
  (package neural_nets_lib)
