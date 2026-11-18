@@ -9513,12 +9513,12 @@ let crosses_segments segs_with_replicas tn =
   List.count (seg_footprints segs_with_replicas) ~f:(fun (r, w) -> Set.mem r tn || Set.mem w tn)
   >= 2
 
-(* Promote [Local]-placed scratch whose accesses (including replicas') span segments: kernel-local
-   arrays do not survive a launch boundary. Runs before per-segment schedules are computed, so the
-   annotator sees the promoted (materialized) status consistently — the converse order would let a
-   segment annotate without covering the node's writes. Returns the undo list: coalescing may later
-   remove a crossing, and a promotion without a surviving crossing must be restored (it would
-   otherwise leak an observable placement change out of an all-serial routine). *)
+(* Settle written nodes whose accesses (including replicas') span segments: kernel-local arrays do
+   not survive a launch boundary. A [Never_virtual] node can look materialized to the size heuristic
+   while remaining eligible for [Fuse_epilogue]'s shared placement (gh-ocannl-2347). Resolve the
+   crossing before per-segment schedules are computed so geometry and fusion both see the persistent
+   allocation. Returns the undo list: coalescing can remove a crossing, in which case keeping the
+   promotion would leak an observable placement change. *)
 let promote_crossing plc (segs_with_replicas : (segment * funit list) list) :
     (Tn.t * (Tn.memory_mode * Tn.provenance) option) list =
   let footprints = seg_footprints segs_with_replicas in
@@ -9527,10 +9527,7 @@ let promote_crossing plc (segs_with_replicas : (segment * funit list) list) :
   in
   let touched = List.map footprints ~f:(fun (r, w) -> Set.union r w) in
   Set.fold written ~init:[] ~f:(fun undo tn ->
-      if
-        (not (Tn.Placements.is_materialized_peek plc tn))
-        && List.count touched ~f:(fun t -> Set.mem t tn) >= 2
-      then (
+      if (not (settled_on_device plc tn)) && List.count touched ~f:(fun t -> Set.mem t tn) >= 2 then (
         let prior = Tn.Placements.raw_entry plc tn in
         Tn.Placements.promote_local_to_device plc tn (Site "177:fission-multi-segment");
         (tn, prior) :: undo)

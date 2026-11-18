@@ -276,6 +276,15 @@ files.
   untuned default keeps the separate zero kernel because an untiled accumulation with its zero
   register-forwarded measured 7% slower on HIP gfx1151 (unified memory), although its emitted
   source differs only in that forwarding.
+- A reduction whose zero stays in a separate segment needs a settled device allocation
+  (gh-ocannl-2347). An above-threshold `Never_virtual` product reads materialized to the size
+  heuristic but still admits `Fuse_epilogue`'s shared placement. The saved 16×32×32 CUDA TF32
+  candidate then zeroed thread-local storage in one kernel and loaded uninitialized shared
+  storage into its WMMA accumulator in the next. The pinned depth-two replay failed on rog;
+  the same transforms with the product explicitly on-device matched the unscheduled reference.
+  `promote_crossing` now settles the device placement before per-segment schedules run, including
+  during replay. A product initialized and used within one kernel can still stay shared.
+  `tf32_fissioned_epilogue` pins both the crossing's placement and the executed values.
 - A whole-routine sketch expands its own site's whole-node zero with the site's geometry
   (`zero_geometry` for matmuls; `conv_zero_geometry` for the GPU conv leg, gh-ocannl-503), which is
   the nest and geometry the fold above gives the per-cell zero. So where one fission segment holds

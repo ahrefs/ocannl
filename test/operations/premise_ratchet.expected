@@ -37,6 +37,7 @@ test/operations/schedule_mma_matmul.ml: 5 uncovered, 0 covered
 test/operations/schedule_pad.ml: 1 uncovered, 0 covered
 test/operations/set_values_pool_coalescing.ml: 1 uncovered, 0 covered
 test/operations/split_reduce_pair.ml: 2 uncovered, 0 covered
+test/operations/tf32_fissioned_epilogue.ml: 0 uncovered, 1 covered
 test/operations/tile_mma_narrow.ml: 2 uncovered, 0 covered
 test/operations/tune_arm_a_replay.ml: 1 uncovered, 0 covered
 test/operations/workgroup_memory_accounting.ml: 1 uncovered, 0 covered
