@@ -786,6 +786,10 @@ files.
   **unified**, gpt2 b8, 300 s budget, base vs head): a bare candidate's median compile 1.87 to 0.68 s
   (12 to 1 of 261 kernels), a staffed one's 4.10 to 0.69 s (68 to 1), the winner's 6.7 to 1.9 s (112
   to 6-8 of 269).
+- Cache identity also needs width-independent layout. The pre-transform link-floor snapshot
+  added a zero-elision pass that mints extra scope ids. On CUDA, longer scope and node names
+  together wrapped two accumulation expressions in `gpu_kernel_cache`'s offset build. The
+  ordinary emitter's key uses the compact document so renaming starts with the same layout.
 - **A fresh-build cache miss can be a free-name collision in the index namespace**
   (gh-ocannl-1932, gh-ocannl-2214). The forced node-offset probe reproduced a miss whose two
   `render_batch.key_text` dumps differed at loop symbol `i386`: it was left verbatim because

@@ -1292,12 +1292,12 @@ module Compile_driver
             routine's name when the report points at one of those kernels' declarations. *)
     key_text : int -> string;
         (** Kernel [i]'s standalone source as a kernel code cache keys it (gh-ocannl-1525): its
-            prelude verbatim, its definition through {!Kernel_code_cache.canonical_kernel} -- the
-            names it owns (symbols, scope locals, its nodes' identifiers, the emitter's
-            {!minted_derivations} of them) renamed by first occurrence and its segment index
-            dropped, so that an unchanged kernel keys alike whatever names the rest of the batch
-            made it take. The backend adds the compiler options and looks the code up by the stored
-            symbol. *)
+            prelude verbatim, its definition without width-dependent wrapping and through
+            {!Kernel_code_cache.canonical_kernel} -- the names it owns (symbols, scope locals, its
+            nodes' identifiers, the emitter's {!minted_derivations} of them) renamed by first
+            occurrence and its segment index dropped, so that an unchanged kernel keys alike
+            whatever names the rest of the batch made it take. The backend adds the compiler options
+            and looks the code up by the stored symbol. *)
   }
   (** A batch rendered but not compiled: per-kernel entries, and source assemblers over kernel
       indices. *)
