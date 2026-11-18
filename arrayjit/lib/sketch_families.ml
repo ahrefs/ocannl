@@ -2693,16 +2693,16 @@ let cpu_pack_grid_chunk_bytes (site : matmul_site) ~shape ~prec_bytes (p : sketc
   cpu_pack_grid_chunk_tiles site ~shape ~prec_bytes p
   + cpu_pack_fragment_bytes site ~shape ~bm:p.sk_bm ~bn:p.sk_bn ~bk:p.sk_bk
 
-(* On the fused probe's scalar accumulation nest, the relocated tail writes another node below the
-   same row axis. Weigh one evaluation of that store, including any scalar local scopes. Saturation
-   here leaves the estimate unknown even if a caller later uses a higher floor. *)
+(* On the fused probe's scalar accumulation nest, the relocated tail writes below the same row axis.
+   Weigh its stores for one output cell, including any scalar local scopes. Saturation here leaves
+   the estimate unknown even if a caller later uses a higher floor. *)
 let cpu_mma_epilogue_cell_updates (site : matmul_site) (opt : LL.optimized) =
   let cap = Int.max_value / 2 in
   let rec go in_row (llc : LL.t) =
     match llc with
     | For_loop { index; body; _ } -> go (in_row || Idx.equal_symbol index site.m_i) body
     | If { body; _ } -> go in_row body
-    | Seq (a, b) -> Int.max (go in_row a) (go in_row b)
+    | Seq (a, b) -> Int.min cap (go in_row a + go in_row b)
     | Set { tn; _ } when in_row && not (Ir.Tnode.equal tn site.m_d) ->
         Ir.Cost_model.fork_join_updates ~cap llc
     | _ -> 0

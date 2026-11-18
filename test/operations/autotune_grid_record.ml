@@ -633,7 +633,7 @@ let () =
     | _ -> false
   in
   in_leg ~leg "agr-fused: packed Grid seeds below the launch floor are refused" (fun label ->
-      p_all label (Lazy.force packed) ~f:refused_below);
+      p_all label ~min:2 (Lazy.force packed) ~f:refused_below);
   in_leg ~leg "agr-fused: the whole-triple Grid seed below the launch floor is refused"
     (fun label -> p_all label (Lazy.force whole_below) ~f:refused_below);
   in_leg ~leg "agr-fused: epilogue stores keep the whole-triple Grid seed at the launch floor"
