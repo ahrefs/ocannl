@@ -16210,13 +16210,12 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; ocannl-backend: cc -- prints unforced tensors and checks the power helpers through Context.cpu.
  (name test_extend_dsls)
  (package neural_nets_lib)
- (deps
-  ocannl_config
-  (env_var OCANNL_BACKEND))
+ (deps ocannl_config)
  (modules test_extend_dsls)
- (libraries base ocannl stdio)
+ (libraries base ocannl stdio arrayjit.verdict arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

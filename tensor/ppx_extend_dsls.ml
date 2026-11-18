@@ -7,7 +7,8 @@ let transform_dsl_binding ~loc ~dsl_name binding =
   let transform_expr expr =
     let vbs, result =
       Ppx_op.translate ~dsl_name ~bind_vbs_under_open:false
-      @@ add_module_qualifier_to_applied_function ~module_name:dsl_name expr
+      @@ add_module_qualifier_to_applied_function ~module_name:dsl_name ~before_translation:true
+           expr
     in
     if List.is_empty vbs then result
     else

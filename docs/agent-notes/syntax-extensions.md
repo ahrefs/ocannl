@@ -60,8 +60,14 @@ files.
   ghost location tells it from a `TDSL.O.( **. )` the user wrote, which keeps its qualifier.
   Pinned by `test_initializer_heads` and
   `op_initializer_heads` (`source **. 2` from `[2; -4; 8; -16]` is `[4; 16; 64; 256]`; the
-  swapped order gives fractions). `%extend_dsls` qualifies before translation, so a raw `**.`
-  there still maps through `operators` to `pointpow` in infix order (unexercised).
+  swapped order gives fractions). `%extend_dsls` qualifies before translation, so there the
+  qualifier meets the bare `**.` head (gh-ocannl-2320) and gives it the same swap, wrapping the
+  exponent, an integer literal converted, in `[%oc]` (`~before_translation`) so the `translate`
+  run afterwards neither makes a tensor of it nor rewrites an operator inside it (`!counter`
+  would become `(!) ?label:None counter`).
+  Pinned by `test_extend_dsls` (values, both DSLs) and the `test_extend_dsls_power` expansion; a
+  TDSL helper is shape-schemed and runs its body under a trace too, so an effectful base's
+  ordering is checked on the NTDSL one.
 - A first-field initializer of `!. e` or `!.. e` (`{ w = !. x }`) is a constant, like `{ w = 5.0 }`:
   `Ppx_op.constant_param_value` sends literals and both embeddings down `param`'s `?value:` route,
   a constant fill of inferred shape. `translate`'s own `TDSL.O.( !. )` arm is a `Tensor.t`, never

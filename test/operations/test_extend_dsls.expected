@@ -1,5 +1,13 @@
-HERE: test/operations/test_extend_dsls.ml:23:21
+HERE: test/operations/test_extend_dsls.ml:43:21
 [28]: relu shape 0:$92  <no-context>
 grad_relu <no-context>
-HERE: test/operations/test_extend_dsls.ml:31:21
+HERE: test/operations/test_extend_dsls.ml:51:21
 [52]: relu shape 0:$185  <no-context>
+the effectful base ran once, after its exponent: true
+TDSL integer power computes the squares: true
+NTDSL integer power computes the squares: true
+TDSL float power computes the squares: true
+NTDSL float power computes the squares: true
+TDSL escaped power computes the squares: true
+NTDSL escaped power computes the squares: true
+NTDSL effectful-base power computes the squares: true
