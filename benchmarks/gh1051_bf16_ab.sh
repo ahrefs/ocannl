@@ -58,8 +58,9 @@
 # schedule differences because each policy chooses its own crown. Only the one JSON result
 # record from each search, proof and timing cell is read for tuned provenance. Candidate logs
 # are evidence for investigation, outside the check. A failed cold search, mismatched source
-# proof, or missing verified replay invalidates the run. Each cold search can take up to 30
-# minutes. Restart with a fresh invocation after a failure so every crown comes from this run.
+# proof, or missing verified replay invalidates the run. Allow up to an hour per cold cell:
+# bench_gpt searches both placements, and each placement can take tens of minutes. Restart
+# with a fresh invocation after a failure so every crown comes from this run.
 #
 # DRIFT CONTROL (the A/B protocol in docs/agent-notes/training-and-performance.md): next to every
 # treatment cell runs a CONTROL cell, the same bench at f32 under the same arm's bf16_arithmetic
@@ -263,7 +264,7 @@ if [ -n "$FIXTURE" ]; then
     # Both placement arms of each policy search cold. The replay pins search off so a missing
     # cache entry cannot silently run a new search in a timed process.
     for arm in false true; do
-      python3 "$HERE/cells.py" cell --backend "$BACKEND" --dir "$OUT/search_$arm" --timeout 1800 \
+      python3 "$HERE/cells.py" cell --backend "$BACKEND" --dir "$OUT/search_$arm" --timeout 3600 \
         --expect bf16_arithmetic="$arm" --expect autotune_search=true -- \
         "${TRAIN_ENV[@]}" BENCH_TUNE=1 BENCH_PRECISION=bf16 "$GPT" "${TRAIN_ARGS[@]}" \
         --ocannl_bf16_arithmetic="$arm" --ocannl_autotune_search=true \
