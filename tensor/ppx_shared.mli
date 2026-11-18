@@ -152,8 +152,14 @@ val power_head : loc:location -> expression
     exponent. *)
 
 val add_module_qualifier_to_applied_function :
-  ?module_name:string -> ?is_primitive:(string -> bool) -> expression -> expression
+  ?module_name:string ->
+  ?is_primitive:(string -> bool) ->
+  ?before_translation:bool ->
+  expression ->
+  expression
 (** Qualifies tail applications' functions by [module_name] (default [NTDSL]), [*] as [matmul].
     Removes absent optional labels on mapped operators and heads recognized by [is_primitive]
     (default: none), preserving the full initializer signature after [%op] translation. A
-    {!power_head} application becomes the module's [pointpow], exponent first. *)
+    {!power_head} application, or a bare [**.] one, becomes the module's [pointpow], exponent first.
+    [before_translation] (default [false]: [%extend_dsls] sets it) wraps that exponent in [%oc], so
+    that the [translate] run afterwards keeps it a float. *)

@@ -63,7 +63,8 @@
   (alias runtest-test_nested_op-ppx)
   (alias runtest-test_classification_constraints-ppx)
   (alias runtest-test_neg_initializer-ppx)
-  (alias runtest-test_initializer_heads-ppx)))
+  (alias runtest-test_initializer_heads-ppx)
+  (alias runtest-test_extend_dsls_power-ppx)))
 
 (executable
  (name pp)
@@ -364,6 +365,23 @@
  (package neural_nets_lib)
  (action
   (diff test_neg_initializer_expected.ml test_neg_initializer_actual.ml)))
+
+(rule
+ ; ocannl-backend: none -- only prints a ppx AST.
+ (targets test_extend_dsls_power_actual.ml)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  (:pp pp.exe)
+  (:input test_extend_dsls_power.ml))
+ (action
+  (run ./%{pp} --impl %{input} -o %{targets})))
+
+(rule
+ (alias runtest-test_extend_dsls_power-ppx)
+ (package neural_nets_lib)
+ (action
+  (diff test_extend_dsls_power_expected.ml test_extend_dsls_power_actual.ml)))
 
 (rule
  ; ocannl-backend: none -- only prints a ppx AST.

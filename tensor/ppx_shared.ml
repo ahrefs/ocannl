@@ -1030,7 +1030,7 @@ let power_head ~loc =
   Ast_builder.Default.pexp_ident ~loc { txt = power_head_lid; loc }
 
 let add_module_qualifier_to_applied_function ?(module_name = "NTDSL")
-    ?(is_primitive = fun _ -> false) expr =
+    ?(is_primitive = fun _ -> false) ?(before_translation = false) expr =
   let qualify_if_needed fn =
     match fn.pexp_desc with
     | Pexp_ident { txt = Lident name; loc } ->
@@ -1046,30 +1046,63 @@ let add_module_qualifier_to_applied_function ?(module_name = "NTDSL")
   let rec process_expr expr =
     let loc = expr.pexp_loc in
     match expr.pexp_desc with
-    | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; pexp_loc = { loc_ghost = true; _ }; _ }, args)
-      when Poly.equal txt power_head_lid
+    | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; pexp_loc = head_loc; _ }, args)
+      when ((Poly.equal txt power_head_lid && head_loc.loc_ghost) || Poly.equal txt (Lident "**."))
            && List.count args ~f:(function Nolabel, _ -> true | _ -> false) = 2 -> (
-        (* A translated power (gh-ocannl-2274). The named [pointpow] takes the exponent first, the
-           opposite of the infix order, and it is the module's own: without gradients in [NTDSL]. As
-           for the operators below, the absent label stays unapplied for [param] to supply. *)
+        (* A power: translated (gh-ocannl-2274), or the bare infix [**.] an [%extend_dsls] body
+           wrote, which reaches this helper before translation (gh-ocannl-2320). The named
+           [pointpow] takes the exponent first, the opposite of the infix order, and it is the
+           module's own: without gradients in [NTDSL]. As for the operators below, the absent label
+           stays unapplied for [param] to supply. *)
         let labelled, operands =
           List.partition_tf args ~f:(function Nolabel, _ -> false | _ -> true)
         in
         let labelled =
           List.filter labelled ~f:(function Optional "label", [%expr None] -> false | _ -> true)
         in
+        (* The exponent is a float, as [translate]'s power arms keep it: an integer literal is
+           converted, and before translation it is wrapped in [%oc], so that [translate] does not
+           make a tensor of it (nor of the binding below that names it). After translation an
+           integer literal can only come from a user's [%oc] code, where the conversion is still
+           what [**.] means in [%op]. An exponent the user escaped already keeps its one [%oc]:
+           [translate] strips a single layer. *)
+        let exponent_value exponent =
+          match exponent with
+          | { pexp_desc = Pexp_extension ({ txt = "oc"; _ }, _); _ } -> exponent
+          | _ ->
+              let exponent =
+                match exponent.pexp_desc with
+                | Pexp_constant (Pconst_integer (_, None)) ->
+                    let loc = exponent.pexp_loc in
+                    [%expr Float.of_int [%e exponent]]
+                | _ -> exponent
+              in
+              if before_translation then
+                let loc = exponent.pexp_loc in
+                [%expr [%oc [%e exponent]]]
+              else exponent
+        in
+        (* Before translation a numeric base is not yet the [number] call [translate] makes of it,
+           which allocates a tensor: only a variable stays free of effects. *)
+        let base_has_no_effect base =
+          if before_translation then match base.pexp_desc with Pexp_ident _ -> true | _ -> false
+          else has_no_effect base
+        in
         let pointpow exponent base =
           Ast_builder.Default.pexp_apply ~loc
             (Ast_builder.Default.pexp_ident ~loc
                { txt = Ldot (Lident module_name, "pointpow"); loc })
-            (labelled @ [ (Nolabel, exponent); (Nolabel, base) ])
+            (labelled @ [ (Nolabel, exponent_value exponent); (Nolabel, base) ])
         in
         (* The infix application evaluates the exponent first, as OCaml runs arguments right to
            left. Swapped, an effectful base would run first: bind the exponent before it. *)
         match operands with
-        | [ (_, base); (_, exponent) ] when has_no_effect base -> pointpow exponent base
+        | [ (_, base); (_, exponent) ] when base_has_no_effect base -> pointpow exponent base
         | [ (_, base); (_, exponent) ] ->
-            in_source_order ~loc ~prefix:"__exponent" [ exponent; base ] ~f:(function
+            (* An effectful exponent is let-bound, so its right-hand side is the converted, wrapped
+               value; the name standing for it needs no conversion. *)
+            let bound = if has_no_effect exponent then exponent else exponent_value exponent in
+            in_source_order ~loc ~prefix:"__exponent" [ bound; base ] ~f:(function
               | [ exponent; base ] -> pointpow exponent base
               | _ -> expr)
         | _ -> expr)
