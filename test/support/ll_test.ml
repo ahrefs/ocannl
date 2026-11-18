@@ -531,6 +531,18 @@ let optimize ?materialized ?static_indices ?blends_value_selects ~name llc =
     Its [.ll] dumps (see {!optimize_in}) are therefore [raw]'s. The program that executes is
     [scoped]: the backend's source for the routine, under the same gate, is what shows it.
 
+    Since [scoped] replaces the schedule AFTER {!Ir.Low_level.optimize}, the entry gate of
+    [Low_level.optimize_proc] ([validate_scope_bodies], [validate_guarded_reads] and the other
+    [validate_*] checks) never sees it: only [raw] passes that gate, and [scoped] meets only the
+    checks downstream of it (schedule ops, codegen's exit gates). A validator author must not count
+    a row routed through this seam, such as most of [test/operations/where_arm_scopes.ml]'s, as
+    entry-gate coverage: an entry-gate claim needs a program that goes through [optimize] itself.
+
+    The same bypass is how a test hands a schedule op or the backend a program the entry gate would
+    refuse, such as a [Local_scope] whose body writes a tensor:
+    [test/operations/epilogue_fusion_scope_purity.ml] routes its impure-body program through this
+    seam to pin [Fuse_epilogue]'s own purity check.
+
     Optimizing [scoped] itself is what used to collapse it into an identity copy of the accumulator
     — green for the wrong reason, which is how two [accum_width.ml] legs passed while executing
     [acc[0] = acc[0]]. This seam is what gh-ocannl-693's codegen accumulator peel will replace as
