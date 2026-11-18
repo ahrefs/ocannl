@@ -1731,6 +1731,29 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   Each child acknowledges startup before the relay publishes readiness;
   the 2.5 s response bound starts there, not at spawn. A signal relayed this way needs no
   deadline sized for load; a leg timing out on one is a lost relay first.
+- **A harness traps TERM before EXIT, or its subshells defer TERM** (gh-ocannl-2242). Setting an
+  EXIT trap makes Bash (3.2 and 5.x alike) install its deferring handler on each terminating
+  signal not yet trapped and record THAT handler as the signal's original disposition, the one a
+  subshell gets back when it resets inherited traps. A subshell then handles TERM at its next
+  signal check instead of dying: TERMed in its first instructions (bash 5.2+ re-sends a signal it
+  caught before the reset, to the "original" handler) it runs the parent's EXIT trap, and TERMed
+  between its last check and a fork it finishes the fork, the child execs with the signal spent
+  and outlives it. On CI that was bounded's watchdog, TERMed right after its fork in
+  `scripts/test-setup-ocaml-env.sh` (e): once harness_cleanup ran inside it and removed the
+  scratch directory, failing 1b as "sed did not capture"; once its `sleep` survived (`elapsed=0s
+  watchdog-sleeps=1`). `harness_scratch` traps INT and TERM before EXIT (a trap set after it for
+  another terminating signal inherits the defect); bounded KILLs its watchdog and re-KILLs the group
+  until it reads empty, since macOS also lets a child forked as a group KILL goes out escape it,
+  still in the group. `harness_leg_run` FAILs the leg during which the scratch directory vanished,
+  by name. Pins: `scripts/test-harness-support.sh` (a subshell's `kill -TERM SELF WITNESS` spares
+  the witness, against an EXIT-first control that signals it; the subshell sets no trap of its
+  own, since bash 5.3 re-arms the deferring handler for one that does; a removal FAILs its own
+  leg, against a no-check control) and leg 1c of `scripts/test-setup-ocaml-env.sh` (a watchdog
+  that forks or deletes on TERM, or whose sleep a KILL spared, leaves nothing, against the
+  former bounded). The windows themselves are not schedulable: bounded (e) back to back under
+  the real traps, four wide on two busy CPUs of tuf (bash 5.3), removed the scratch 2 times and
+  orphaned the sleep 17 times in 3063 calls before the fix, 0 and 0 in 1632 after; 24 loaded runs
+  of legs 1 and 1b each side hit neither.
 - **A short bound that kills a stand-in cannot also be the time it gets to start** (gh-ocannl-1366).
   The device-probe hang legs (`tools/test-test-run.sh` 76 and 83) ran their never-answering
   stand-in under a 1 s bound and then read the call and pid it records first thing; on a loaded

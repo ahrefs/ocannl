@@ -228,8 +228,19 @@ bounded() {
   # it to clear would help. The shared `group_alive` predicate therefore reads
   # process STATES, from /proc where there is one and from `ps` otherwise, and
   # only a member that is not a zombie counts as work.
+  # The watchdog, once not needed, is KILLed rather than TERMed: it holds
+  # nothing to clean up, and a TERM can lose to it. Where the caller's Bash
+  # defers TERM in subshells (one whose EXIT trap was set before its TERM
+  # trap, as the test harness's was), a watchdog TERMed in its first
+  # instructions ran the caller's EXIT trap, and one TERMed just before forking
+  # its `sleep` finished the fork and left the sleep behind; with TERM trapped,
+  # a watchdog TERMed between the two loses the signal and sits out the bound
+  # (gh-ocannl-2242). SIGKILL is neither caught nor deferred, and Linux lets
+  # no fork in progress escape it. macOS can: a child the watchdog was forking
+  # as the KILL went out can miss it, still a member of the group, so the group
+  # is KILLed again until it reads empty.
   local secs="$1"; shift
-  local pid watchdog rc
+  local pid watchdog rc tries=0
   set -m
   "$@" </dev/null & pid=$!
   # The killer gets no inherited fds: a lingering `sleep` holding the hook's
@@ -243,7 +254,10 @@ bounded() {
   if group_alive "$pid"; then
     wait "$watchdog" 2>/dev/null
   else
-    kill -TERM -- -"$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
+    kill -KILL -- -"$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
+    while group_alive "$watchdog" && [ "$tries" -lt 5 ]; do
+      kill -KILL -- -"$watchdog" 2>/dev/null; tries=$((tries + 1))
+    done
   fi
   return $rc
 }
