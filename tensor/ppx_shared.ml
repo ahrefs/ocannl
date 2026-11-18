@@ -1047,13 +1047,16 @@ let add_module_qualifier_to_applied_function ?(module_name = "NTDSL")
     let loc = expr.pexp_loc in
     match expr.pexp_desc with
     | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; pexp_loc = head_loc; _ }, args)
-      when ((Poly.equal txt power_head_lid && head_loc.loc_ghost) || Poly.equal txt (Lident "**."))
+      when ((Poly.equal txt power_head_lid && head_loc.loc_ghost)
+           || (before_translation && Poly.equal txt (Lident "**.")))
            && List.count args ~f:(function Nolabel, _ -> true | _ -> false) = 2 -> (
         (* A power: translated (gh-ocannl-2274), or the bare infix [**.] an [%extend_dsls] body
-           wrote, which reaches this helper before translation (gh-ocannl-2320). The named
-           [pointpow] takes the exponent first, the opposite of the infix order, and it is the
-           module's own: without gradients in [NTDSL]. As for the operators below, the absent label
-           stays unapplied for [param] to supply. *)
+           wrote, which reaches this helper before translation (gh-ocannl-2320). After translation
+           there is no bare one: [translate] makes every [**.] the ghost head, and the [%oc] arm
+           below keeps an escaped one the user's own OCaml. The named [pointpow] takes the exponent
+           first, the opposite of the infix order, and it is the module's own: without gradients in
+           [NTDSL]. As for the operators below, the absent label stays unapplied for [param] to
+           supply. *)
         let labelled, operands =
           List.partition_tf args ~f:(function Nolabel, _ -> false | _ -> true)
         in
@@ -1062,10 +1065,8 @@ let add_module_qualifier_to_applied_function ?(module_name = "NTDSL")
         in
         (* The exponent is a float, as [translate]'s power arms keep it: an integer literal is
            converted, and before translation it is wrapped in [%oc], so that [translate] does not
-           make a tensor of it (nor of the binding below that names it). After translation an
-           integer literal can only come from a user's [%oc] code, where the conversion is still
-           what [**.] means in [%op]. An exponent the user escaped already keeps its one [%oc]:
-           [translate] strips a single layer. *)
+           make a tensor of it (nor of the binding below that names it). An exponent the user
+           escaped already keeps its one [%oc]: [translate] strips a single layer. *)
         let exponent_value exponent =
           match exponent with
           | { pexp_desc = Pexp_extension ({ txt = "oc"; _ }, _); _ } -> exponent
@@ -1100,7 +1101,8 @@ let add_module_qualifier_to_applied_function ?(module_name = "NTDSL")
         | [ (_, base); (_, exponent) ] when base_has_no_effect base -> pointpow exponent base
         | [ (_, base); (_, exponent) ] ->
             (* An effectful exponent is let-bound, so its right-hand side is the converted, wrapped
-               value; the name standing for it needs no conversion. *)
+               value. The name standing for it is no integer literal, so it is not converted again;
+               before translation it gets an [%oc] wrap of its own, which [translate] strips. *)
             let bound = if has_no_effect exponent then exponent else exponent_value exponent in
             in_source_order ~loc ~prefix:"__exponent" [ bound; base ] ~f:(function
               | [ exponent; base ] -> pointpow exponent base

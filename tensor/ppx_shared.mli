@@ -160,6 +160,6 @@ val add_module_qualifier_to_applied_function :
 (** Qualifies tail applications' functions by [module_name] (default [NTDSL]), [*] as [matmul].
     Removes absent optional labels on mapped operators and heads recognized by [is_primitive]
     (default: none), preserving the full initializer signature after [%op] translation. A
-    {!power_head} application, or a bare [**.] one, becomes the module's [pointpow], exponent first.
-    [before_translation] (default [false]: [%extend_dsls] sets it) wraps that exponent in [%oc], so
-    that the [translate] run afterwards keeps it a float. *)
+    {!power_head} application becomes the module's [pointpow], exponent first. [before_translation]
+    (default [false]: [%extend_dsls] sets it) does the same for a bare [**.] one, and wraps the
+    exponent in [%oc], so that the [translate] run afterwards keeps it a float. *)
