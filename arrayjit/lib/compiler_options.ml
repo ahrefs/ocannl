@@ -46,11 +46,13 @@ let hip_target_options ~target_archs =
    accept its cost (~5.7% per untuned f32 gpt2_mini_train step on both gfx1102 and gfx1151, none
    measurable on bf16 mixed precision; gh-ocannl-2298) for exact normalization quotients,
    NaN-preserving selection and f64 pow's 2-ulp bound. [-fno-approx-func] carries that cost and is
-   also what makes f32 and half division exact, so it cannot be dropped alone. The measurements live
-   in docs/agent-notes/backend-precision-and-simd.md, "HIP's math policies restore exact division
-   and honor NaN". [hip_fast_math=false], selected by reproducible, still pins contraction OFF. [on]
-   is not [off]: the compiler_contraction_off capability, and t1835's exact schedule gate, stay
-   closed for the default. Explicit fma intrinsics remain explicit under either policy. *)
+   also what makes f32 and half division exact. With [-fapprox-func] in effect, adding
+   [-fhip-fp32-correctly-rounded-divide-sqrt] still leaves both precisions using estimates
+   (gh-ocannl-2327). The measurements live in docs/agent-notes/backend-precision-and-simd.md, "HIP's
+   math policies restore exact division and honor NaN". [hip_fast_math=false], selected by
+   reproducible, still pins contraction OFF. The compiler_contraction_off capability and t1835's
+   exact schedule gate stay closed for the default. Explicit fma intrinsics remain explicit under
+   either policy. *)
 let hip_math_options ~fast_math =
   if fast_math then
     clang_fast_math_options ~reassociate:false

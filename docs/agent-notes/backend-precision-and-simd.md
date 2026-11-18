@@ -2653,7 +2653,9 @@ files.
   on gfx1151 unified 0.987x [0.939, 1.023], no cost (gh-ocannl-2298). `-fno-approx-func` carries
   the f32 cost (without it 1.006x on gfx1151) and is also what makes f32 and half division exact:
   removing it fails `division_special_values`' exact-quotient claims, so it cannot be narrowed
-  away. The accepted cost buys exact normalization quotients, NaN selection and f64 pow within 2
+  away by itself. On gfx1151 unified memory, adding `-fhip-fp32-correctly-rounded-divide-sqrt` to
+  the narrow vector still failed the same three f32 and half quotient claims (gh-ocannl-2327).
+  The accepted cost buys exact normalization quotients, NaN selection and f64 pow within 2
   ulps. The gfx1102 matrix is staging#2090's body; the gfx1151 cells, per-mode table and
   provenance are [gh-ocannl-1909's gh-ocannl-2298 comment](https://github.com/ahrefs/ocannl/issues/1909#issuecomment-6962918268).
   `hip_fast_math=false` (`reproducible`) retains its explicit IEEE vector with contraction off.
