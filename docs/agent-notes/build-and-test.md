@@ -5917,6 +5917,30 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   Slow GPU batches deliberately keep no default per-test cap: a wedged device may therefore
   hold the box for the whole run cap. Set `--test-cap N` for a tighter bound; `plan` names this
   trade-off. Sweep keeps the per-test watcher on its regular leg even with `--slow`.
+- **A Metal `slow-mnist_conv` or `slow-cifar_conv` in a shared-event wait is usually running
+  slowly, not hung; judge by its progress lines (gh-ocannl-2302).** At `9023239da` a training
+  step takes 1.32 s for `mnist_conv` and 2.05 s for `cifar_conv` on Metal, the same on mac-studio
+  (M4 Max) and macbook-pro (M4 Pro), against 12 ms for `mnist_conv` on cc. At 4000 and 2000
+  steps that is about 90 and 70 minutes of training on an idle box; both passed on macbook-pro
+  Metal in one `--no-buffer` batch, `mnist_conv` in 5272 s and `cifar_conv` in 4101 s. Equal
+  rates on two GPUs of different width mean serial kernels. In `mnist_conv`'s step the default
+  schedule gives `bias_conv1.grad`'s reduction one GPU thread, and per cell that thread replays
+  the virtual `relu.grad` as a masked scan over every 14x14 max-pool output position, about 46M
+  serial iterations a step (`cifar_conv`'s 32x32 input was not dumped). Materializing every node
+  (`Train.every_non_literal_materialized`) cut `mnist_conv` to 40 ms a step with the same losses.
+  A `sample` of such a process sits in `IOSurfaceSharedEvent waitUntilSignaledValue:timeoutMS:`
+  with `ioreg -r -d 1 -c IOAccelerator` reading Device Utilization near 100 %, but a kernel that
+  never ends looks the same (backend-dialects-and-idents.md, gh-ocannl-2082), and utilization is
+  device-wide. The evidence that a run advances is its stderr `Epoch N` lines, one per ten epochs,
+  which dune holds back unless the batch passes `--no-buffer`: at these rates one every 9
+  minutes for `mnist_conv` and 14 for `cifar_conv` once training starts, a few minutes after
+  launch. A run that misses two of them is worth sampling as a hang. The 2026-11-17 readings that
+  looked like stalls were all cut short by caps below the run's length: a 100 s `--test-cap`, a
+  manual stop at 523 s, and 18- and 60-minute run caps. So run these aliases with `--no-buffer`
+  under the slow default with no `--test-cap`, one Metal training batch at a time.
+  `Metal_backend.sync` has no deadline, by design: no single wait here outlasts one step, and an
+  elapsed-time bound cannot tell a long kernel from a hung one (gh-ocannl-2082), so a stall report
+  there could only be a diagnostic, never a refusal.
 - **On a WSL boot, the hip unit runs its tests under `dune -j 2`, and a red minix/hip whose
   failures are all `HIP_ERROR_INVALID_DEVICE` at `hip_init`, `HIP_ERROR_NO_BINARY_FOR_GPU` at
   module load, or failed stream creation is the WSL2 dxg bridge overflowing, not the backend.**
