@@ -6519,7 +6519,12 @@ module type Driver = sig
   val lowered_transform_input : Ir.Low_level.optimized -> Ir.Low_level.optimized
 
   val probe_link_floor :
-    ?name:string -> ?prelowered:bool -> ctx -> Ir.Low_level.optimized -> Ir.Backend_intf.link_floor
+    ?name:string ->
+    ?prelowered:bool ->
+    ?domain:Ir.Backend_intf.link_floor_domain ->
+    ctx ->
+    Ir.Low_level.optimized ->
+    Ir.Backend_intf.link_floor
 
   val run : ?timing:bool -> ctx -> routine -> ctx
   val sync : ctx -> unit
@@ -9172,13 +9177,13 @@ module Make (D : Driver) = struct
          allocate has answered for the whole search: every candidate, a cache replay and the untuned
          fallback. Refused here, typed, rather than by declining every candidate in turn at link (a
          b256 [gpt2_mini_train] arm on a 12 GiB card spent 12 minutes doing that before its fallback
-         compile died of the same cause), and before the cache is consulted, whose replay would be
-         refused alike. A [Pre_search_failure] is no search and no replay, which is how
-         {!Train.tune_placements}' other arm still ships and how a benchmark harness tells this from
-         a search. What "must allocate" means is the floor ({!Context.probe_link_floor},
-         gh-ocannl-1554, [probe_floor] below): not the base link's delta, which bounds no candidate
-         from below under the liveness planner or on-chip fusion; and not the first search candidate
-         to reach link (gh-ocannl-1493), which can be larger than the base. *)
+         compile died of the same cause), before attempting any cache replay. A [Pre_search_failure]
+         is no search and no replay, which is how {!Train.tune_placements}' other arm still ships
+         and how a benchmark harness tells this from a search. What "must allocate" means is the
+         floor ({!Context.probe_link_floor}, gh-ocannl-1554, [probe_floor] below): not the base
+         link's delta, which bounds no candidate from below under the liveness planner or on-chip
+         fusion; and not the first search candidate to reach link (gh-ocannl-1493), which can be
+         larger than the base. *)
       let is_device_memory = function
         | { Outcome.cause = Outcome.Resource_exceeded { resource = Outcome.Device_memory; _ }; _ }
           ->
@@ -9243,21 +9248,40 @@ module Make (D : Driver) = struct
          placement keeps its target off the device), nor on the CPU under aliasing (a [Split_reduce]
          candidate refines the base's statement-grained spans). Asked in the same place for every
          path: after the lineage check (a refused timing lineage says nothing of the caller's
-         routine) and before the cache, whose replay would be refused alike. A floor the device
-         admits answers nothing about any candidate, which is that candidate's own decline at link.
+         routine) and before attempting a replay, which the bound must also admit. A floor the
+         device admits answers nothing about any candidate, which is that candidate's own decline at
+         link.
 
          [~account]: where the baseline has no account in the census yet (it was refused before
          codegen, gh-ocannl-1340), a refused floor is its one account -- declined at [Backend_link]
          for device memory, as a refused base link's was before gh-ocannl-1340, and not beside its
          [Not_dispatched] refusal, which the search records only once it runs. Where the baseline's
          own link (or relink) was declined, that decline is its account already. *)
+      let replay_entry =
+        lazy
+          (if use_cache && Option.is_none lineage_refusal then SC.lookup ~dir:cache_dir ~key
+           else None)
+      in
+      let has_shared =
+        List.exists ~f:(function SC.Fuse_epilogue { shared = true; _ } -> true | _ -> false)
+      in
       let probe_floor ~account =
         progress_stage "footprint_probe";
         let probe = "baseline footprint floor probe" in
         match
           Outcome.protect ~classify_backend:(D.failure_classifier search_ctx)
             ~provenance:Outcome.Candidate ~phase:Outcome.Backend_link ~candidate:probe (fun () ->
-              D.probe_link_floor ?name search_ctx base_opt)
+              let explicit_shared =
+                Option.exists (Lazy.force replay_entry) ~f:(fun e ->
+                    entry_replayable ~digest:base_digest e
+                    && (has_shared e.SC.saved
+                       || Option.exists e.SC.segments
+                            ~f:(List.exists ~f:(fun seg -> has_shared seg.SC.seg_saved))))
+              in
+              let domain =
+                if explicit_shared then Ir.Backend_intf.Every_schedule else Seeded_search
+              in
+              D.probe_link_floor ?name ~domain search_ctx base_opt)
         with
         | Ok (f : Ir.Backend_intf.link_floor) ->
             logf
@@ -9289,7 +9313,7 @@ module Make (D : Driver) = struct
         else if !base_undispatched then probe_floor ~account:true;
       let cached =
         if use_cache && Option.is_none lineage_refusal then
-          match SC.lookup ~dir:cache_dir ~key with
+          match Lazy.force replay_entry with
           | Some entry when entry_replayable ~digest:base_digest entry -> (
               let spec =
                 match entry.SC.segments with

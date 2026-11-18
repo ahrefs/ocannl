@@ -1416,6 +1416,7 @@
   arrayjit.verdict
   ll_test
   tune_counts
+  arrayjit.utils
   arrayjit.context
   arrayjit.autotune
   unix)

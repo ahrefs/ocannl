@@ -1,87 +1,98 @@
-[aliasing off] forward, fresh context, unscheduled: the estimate allocates nothing and reaches no allocation seam: true
-[aliasing off] forward, fresh context, unscheduled: the probe plans what the estimate plans: true
-[aliasing off] forward, fresh context, unscheduled: the probe allocates exactly the planned pools, and frees them all: true
-[aliasing off] forward, fresh context, unscheduled: a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
+fixed stores: the floor charges both operands of the add and permits the later buffer to overlap: true
+the compile rejects an unaccounted off-device transform before allocation, even with a replacement buffer: true
+a compiled byte deficit on replay fails before allocation: true
 [aliasing off] forward, fresh context, unscheduled: the floor allocates nothing, reaches no allocation seam, and leaves the lowering's placements and store as they were: true
 [aliasing off] forward, fresh context, unscheduled: the floor asks for at least one pool: true
 [aliasing off] forward, fresh context, unscheduled: the floor's probe allocates exactly its pools, and frees them all: true
 [aliasing off] forward, fresh context, unscheduled (floor): a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
+[aliasing off] forward, fresh context, unscheduled: the estimate allocates nothing and reaches no allocation seam: true
+[aliasing off] forward, fresh context, unscheduled: the probe plans what the estimate plans: true
+[aliasing off] forward, fresh context, unscheduled: the probe allocates exactly the planned pools, and frees them all: true
+[aliasing off] forward, fresh context, unscheduled: a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
 [aliasing off] forward, fresh context, unscheduled: the estimate is the link's allocation: true
+[aliasing off] forward, fresh context, unscheduled: the search floor is at most the link's allocation: true
 [aliasing off] forward, fresh context, unscheduled: the floor is at most the link's allocation: true
 [aliasing off] forward, fresh context, unscheduled: the delta holds working bytes: true
-[aliasing off] forward, fresh context, default schedules: the estimate allocates nothing and reaches no allocation seam: true
-[aliasing off] forward, fresh context, default schedules: the probe plans what the estimate plans: true
-[aliasing off] forward, fresh context, default schedules: the probe allocates exactly the planned pools, and frees them all: true
-[aliasing off] forward, fresh context, default schedules: a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
 [aliasing off] forward, fresh context, default schedules: the floor allocates nothing, reaches no allocation seam, and leaves the lowering's placements and store as they were: true
 [aliasing off] forward, fresh context, default schedules: the floor asks for at least one pool: true
 [aliasing off] forward, fresh context, default schedules: the floor's probe allocates exactly its pools, and frees them all: true
 [aliasing off] forward, fresh context, default schedules (floor): a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
+[aliasing off] forward, fresh context, default schedules: the estimate allocates nothing and reaches no allocation seam: true
+[aliasing off] forward, fresh context, default schedules: the probe plans what the estimate plans: true
+[aliasing off] forward, fresh context, default schedules: the probe allocates exactly the planned pools, and frees them all: true
+[aliasing off] forward, fresh context, default schedules: a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
 [aliasing off] forward, fresh context, default schedules: the estimate is the link's allocation: true
+[aliasing off] forward, fresh context, default schedules: the search floor is at most the link's allocation: true
 [aliasing off] forward, fresh context, default schedules: the floor is at most the link's allocation: true
 [aliasing off] forward, fresh context, default schedules: the delta holds working bytes: true
-[aliasing off] training step, parameters held, unscheduled: the estimate allocates nothing and reaches no allocation seam: true
-[aliasing off] training step, parameters held, unscheduled: the probe plans what the estimate plans: true
-[aliasing off] training step, parameters held, unscheduled: the probe allocates exactly the planned pools, and frees them all: true
-[aliasing off] training step, parameters held, unscheduled: a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
 [aliasing off] training step, parameters held, unscheduled: the floor allocates nothing, reaches no allocation seam, and leaves the lowering's placements and store as they were: true
 [aliasing off] training step, parameters held, unscheduled: the floor asks for at least one pool: true
 [aliasing off] training step, parameters held, unscheduled: the floor's probe allocates exactly its pools, and frees them all: true
 [aliasing off] training step, parameters held, unscheduled (floor): a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
+[aliasing off] training step, parameters held, unscheduled: the estimate allocates nothing and reaches no allocation seam: true
+[aliasing off] training step, parameters held, unscheduled: the probe plans what the estimate plans: true
+[aliasing off] training step, parameters held, unscheduled: the probe allocates exactly the planned pools, and frees them all: true
+[aliasing off] training step, parameters held, unscheduled: a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
 [aliasing off] training step, parameters held, unscheduled: the estimate is the link's allocation: true
+[aliasing off] training step, parameters held, unscheduled: the search floor is at most the link's allocation: true
 [aliasing off] training step, parameters held, unscheduled: the floor is at most the link's allocation: true
-[aliasing off] training step, parameters held, default schedules: the estimate allocates nothing and reaches no allocation seam: true
-[aliasing off] training step, parameters held, default schedules: the probe plans what the estimate plans: true
-[aliasing off] training step, parameters held, default schedules: the probe allocates exactly the planned pools, and frees them all: true
-[aliasing off] training step, parameters held, default schedules: a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
 [aliasing off] training step, parameters held, default schedules: the floor allocates nothing, reaches no allocation seam, and leaves the lowering's placements and store as they were: true
 [aliasing off] training step, parameters held, default schedules: the floor asks for at least one pool: true
 [aliasing off] training step, parameters held, default schedules: the floor's probe allocates exactly its pools, and frees them all: true
 [aliasing off] training step, parameters held, default schedules (floor): a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
+[aliasing off] training step, parameters held, default schedules: the estimate allocates nothing and reaches no allocation seam: true
+[aliasing off] training step, parameters held, default schedules: the probe plans what the estimate plans: true
+[aliasing off] training step, parameters held, default schedules: the probe allocates exactly the planned pools, and frees them all: true
+[aliasing off] training step, parameters held, default schedules: a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
 [aliasing off] training step, parameters held, default schedules: the estimate is the link's allocation: true
+[aliasing off] training step, parameters held, default schedules: the search floor is at most the link's allocation: true
 [aliasing off] training step, parameters held, default schedules: the floor is at most the link's allocation: true
 [aliasing off] training step: the plan says it is liveness-planned exactly under buffer_aliasing: true
-[aliasing on] forward, fresh context, unscheduled: the estimate allocates nothing and reaches no allocation seam: true
-[aliasing on] forward, fresh context, unscheduled: the probe plans what the estimate plans: true
-[aliasing on] forward, fresh context, unscheduled: the probe allocates exactly the planned pools, and frees them all: true
-[aliasing on] forward, fresh context, unscheduled: a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
 [aliasing on] forward, fresh context, unscheduled: the floor allocates nothing, reaches no allocation seam, and leaves the lowering's placements and store as they were: true
 [aliasing on] forward, fresh context, unscheduled: the floor asks for at least one pool: true
 [aliasing on] forward, fresh context, unscheduled: the floor's probe allocates exactly its pools, and frees them all: true
 [aliasing on] forward, fresh context, unscheduled (floor): a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
+[aliasing on] forward, fresh context, unscheduled: the estimate allocates nothing and reaches no allocation seam: true
+[aliasing on] forward, fresh context, unscheduled: the probe plans what the estimate plans: true
+[aliasing on] forward, fresh context, unscheduled: the probe allocates exactly the planned pools, and frees them all: true
+[aliasing on] forward, fresh context, unscheduled: a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
 [aliasing on] forward, fresh context, unscheduled: the estimate is the link's allocation: true
+[aliasing on] forward, fresh context, unscheduled: the search floor is at most the link's allocation: true
 [aliasing on] forward, fresh context, unscheduled: the floor is at most the link's allocation: true
 [aliasing on] forward, fresh context, unscheduled: the delta holds working bytes: true
-[aliasing on] forward, fresh context, default schedules: the estimate allocates nothing and reaches no allocation seam: true
-[aliasing on] forward, fresh context, default schedules: the probe plans what the estimate plans: true
-[aliasing on] forward, fresh context, default schedules: the probe allocates exactly the planned pools, and frees them all: true
-[aliasing on] forward, fresh context, default schedules: a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
 [aliasing on] forward, fresh context, default schedules: the floor allocates nothing, reaches no allocation seam, and leaves the lowering's placements and store as they were: true
 [aliasing on] forward, fresh context, default schedules: the floor asks for at least one pool: true
 [aliasing on] forward, fresh context, default schedules: the floor's probe allocates exactly its pools, and frees them all: true
 [aliasing on] forward, fresh context, default schedules (floor): a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
+[aliasing on] forward, fresh context, default schedules: the estimate allocates nothing and reaches no allocation seam: true
+[aliasing on] forward, fresh context, default schedules: the probe plans what the estimate plans: true
+[aliasing on] forward, fresh context, default schedules: the probe allocates exactly the planned pools, and frees them all: true
+[aliasing on] forward, fresh context, default schedules: a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
 [aliasing on] forward, fresh context, default schedules: the estimate is the link's allocation: true
+[aliasing on] forward, fresh context, default schedules: the search floor is at most the link's allocation: true
 [aliasing on] forward, fresh context, default schedules: the floor is at most the link's allocation: true
 [aliasing on] forward, fresh context, default schedules: the delta holds working bytes: true
-[aliasing on] training step, parameters held, unscheduled: the estimate allocates nothing and reaches no allocation seam: true
-[aliasing on] training step, parameters held, unscheduled: the probe plans what the estimate plans: true
-[aliasing on] training step, parameters held, unscheduled: the probe allocates exactly the planned pools, and frees them all: true
-[aliasing on] training step, parameters held, unscheduled: a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
 [aliasing on] training step, parameters held, unscheduled: the floor allocates nothing, reaches no allocation seam, and leaves the lowering's placements and store as they were: true
 [aliasing on] training step, parameters held, unscheduled: the floor asks for at least one pool: true
 [aliasing on] training step, parameters held, unscheduled: the floor's probe allocates exactly its pools, and frees them all: true
 [aliasing on] training step, parameters held, unscheduled (floor): a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
+[aliasing on] training step, parameters held, unscheduled: the estimate allocates nothing and reaches no allocation seam: true
+[aliasing on] training step, parameters held, unscheduled: the probe plans what the estimate plans: true
+[aliasing on] training step, parameters held, unscheduled: the probe allocates exactly the planned pools, and frees them all: true
+[aliasing on] training step, parameters held, unscheduled: a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
 [aliasing on] training step, parameters held, unscheduled: the estimate is the link's allocation: true
+[aliasing on] training step, parameters held, unscheduled: the search floor is at most the link's allocation: true
 [aliasing on] training step, parameters held, unscheduled: the floor is at most the link's allocation: true
-[aliasing on] training step, parameters held, default schedules: the estimate allocates nothing and reaches no allocation seam: true
-[aliasing on] training step, parameters held, default schedules: the probe plans what the estimate plans: true
-[aliasing on] training step, parameters held, default schedules: the probe allocates exactly the planned pools, and frees them all: true
-[aliasing on] training step, parameters held, default schedules: a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
 [aliasing on] training step, parameters held, default schedules: the floor allocates nothing, reaches no allocation seam, and leaves the lowering's placements and store as they were: true
 [aliasing on] training step, parameters held, default schedules: the floor asks for at least one pool: true
 [aliasing on] training step, parameters held, default schedules: the floor's probe allocates exactly its pools, and frees them all: true
 [aliasing on] training step, parameters held, default schedules (floor): a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
+[aliasing on] training step, parameters held, default schedules: the estimate allocates nothing and reaches no allocation seam: true
+[aliasing on] training step, parameters held, default schedules: the probe plans what the estimate plans: true
+[aliasing on] training step, parameters held, default schedules: the probe allocates exactly the planned pools, and frees them all: true
+[aliasing on] training step, parameters held, default schedules: a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
 [aliasing on] training step, parameters held, default schedules: the estimate is the link's allocation: true
+[aliasing on] training step, parameters held, default schedules: the search floor is at most the link's allocation: true
 [aliasing on] training step, parameters held, default schedules: the floor is at most the link's allocation: true
 [aliasing on] training step: on a GPU backend under buffer_aliasing the default schedules allocate less than the unscheduled delta: true
 [aliasing on] training step: the plan says it is liveness-planned exactly under buffer_aliasing: true
@@ -90,6 +101,9 @@ fusion: the floor allocates nothing, reaches no allocation seam, and leaves the 
 fusion: the floor asks for at least one pool: true
 fusion: the floor's probe allocates exactly its pools, and frees them all: true
 fusion (floor): a device refusing any of the probe's pools refuses the probe, typed, and leaves nothing live: true
+an f32 target needs an advertised input tile in the generated search: true
+a rounded half read keeps mixed-input f32 fusion possible: true
+the search floor exempts the f32 fusion target exactly where its tile is advertised: true
 fusion: the fused candidate computes the right values: true
 fusion: the floor is at most the fused candidate's allocation: true
 fusion: the floor leaves the fusion target out on a GPU backend, and nothing on a CPU one: true

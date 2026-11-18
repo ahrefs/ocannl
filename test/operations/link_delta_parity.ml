@@ -156,8 +156,11 @@ let form_name = function Unscheduled -> "unscheduled" | Default -> "default sche
    transform also runs the trial allocation and its refused twin, and the claims about them are made
    there. *)
 let compile_and_estimate ?(probe = false) ~what ~form ctx comp =
-  let estimate = ref None and floor = ref None in
+  let estimate = ref None and floor = ref None and search_floor = ref None in
   let lowered_transform (o : Ir.Low_level.optimized) =
+    let seeded = Context.link_floor ~domain:Seeded_search ctx o in
+    search_floor := Some seeded;
+    if probe then floor := Some (floor_of ~what ctx o);
     let segments =
       match form with
       | Unscheduled -> [ o ]
@@ -171,6 +174,7 @@ let compile_and_estimate ?(probe = false) ~what ~form ctx comp =
     p
       (what ^ ": the estimate allocates nothing and reaches no allocation seam")
       (hits = 0 && Context.equal_link_delta (delta_between before after) (delta_between after after));
+    Stdio.eprintf "%s (not part of the golden): seeded floor %s\n%!" what (show_floor seeded);
     estimate := Some d;
     if probe then (
       let before = AC.snapshot () in
@@ -185,12 +189,17 @@ let compile_and_estimate ?(probe = false) ~what ~form ctx comp =
            = d.ld_pools
         && after.pools_freed - before.pools_freed = d.ld_pools
         && Context.equal_link_delta (delta_between before after) (delta_between after after));
-      refusals_unwind ~what ~pools:d.ld_pools (fun () -> Context.probe_link_delta ctx o segments);
-      floor := Some (floor_of ~what ctx o));
+      refusals_unwind ~what ~pools:d.ld_pools (fun () -> Context.probe_link_delta ctx o segments));
     segments
   in
   let before = AC.snapshot () in
-  let ctx', routine = Context.compile ~lowered_transform ctx comp IDX.empty in
+  let ctx', routine =
+    match
+      Context.compile_outcome ~provenance:SO.Candidate ~lowered_transform ctx comp IDX.empty
+    with
+    | Ok result -> result
+    | Error failure -> SO.raise_failure failure
+  in
   let measured = delta_between before (AC.snapshot ()) in
   let estimate = Option.value_exn !estimate in
   Stdio.eprintf "%s (not part of the golden): estimated %s, linked %s\n%!" what (show estimate)
@@ -198,6 +207,9 @@ let compile_and_estimate ?(probe = false) ~what ~form ctx comp =
   p
     (what ^ ": the estimate is the link's allocation")
     (Context.equal_link_delta { estimate with ld_liveness_planned = false } measured);
+  p
+    (what ^ ": the search floor is at most the link's allocation")
+    (below (Option.value_exn !search_floor) measured);
   Option.iter !floor ~f:(fun f ->
       Stdio.eprintf "%s (not part of the golden): floor %s\n%!" what (show_floor f);
       p (what ^ ": the floor is at most the link's allocation") (below f measured));
@@ -356,14 +368,39 @@ let fusion () =
   Context.release ctx;
   let prod, out = make () in
   let ctx = Context.auto () in
-  let floor = ref None and unscheduled = ref None in
+  let floor = ref None and seeded = ref None and unscheduled = ref None in
   let lowered_transform o =
     unscheduled := Some (Context.link_delta ctx o [ o ]);
     floor := Some (floor_of ~what:"fusion" ctx o);
+    seeded := Some (Context.link_floor ~domain:Seeded_search ctx o);
+    let can_seed limits = Sched.seedable_shared_target ~limits o prod.Tensor.value in
+    p "an f32 target needs an advertised input tile in the generated search"
+      (can_seed Ll_test.f32_mma_limits && not (can_seed Ll_test.f16_mma_limits));
+    let rounded =
+      {
+        o with
+        llc =
+          Ll_test.set prod.Tensor.value
+            [| Ll_test.fixed 0; Ll_test.fixed 0 |]
+            (LL.Unop
+               ( Round_prec,
+                 (LL.Get (prod.Tensor.value, [| Ll_test.fixed 0; Ll_test.fixed 0 |]), Ir.Ops.half)
+               ));
+      }
+    in
+    p "a rounded half read keeps mixed-input f32 fusion possible"
+      (Sched.seedable_shared_target ~limits:Ll_test.f16_mma_limits rounded prod.Tensor.value);
     [ fused prod o ]
   in
   let before = AC.snapshot () in
-  let ctx', routine = Context.compile ~lowered_transform ctx (Train.forward out) IDX.empty in
+  let ctx', routine =
+    match
+      Context.compile_outcome ~provenance:SO.Cache_replay ~lowered_transform ctx (Train.forward out)
+        IDX.empty
+    with
+    | Ok result -> result
+    | Error failure -> SO.raise_failure failure
+  in
   let measured = delta_between before (AC.snapshot ()) in
   (* The fused schedule expands [prod]'s zero; fresh buffers are zero and would hide a dropped or
      short expansion (gh-ocannl-1625), so on a CPU backend, where [prod] stays on the device, [prod]
@@ -382,6 +419,22 @@ let fusion () =
     "fusion (not part of the golden): unscheduled %s, fused linked %s, floor %s, the target %d B\n\
      %!"
     (show unscheduled) (show measured) (show_floor f) prod_bytes;
+  let advertised =
+    on_gpu
+    && Ll_test.advertised ~backend_name ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single
+         ~d_prec:Ir.Ops.single
+  in
+  let sf = Option.value_exn !seeded in
+  (* Under routine logging the matmul oracle withholds even a native tile, while the floor
+     conservatively allows the convolution seeder to use one. *)
+  Verdict.gated
+    ~when_:(not (Utils.debug_log_from_routines ()))
+    ~on:backend_name
+    "the search floor exempts the f32 fusion target exactly where its tile is advertised"
+    (sf.lf_off_device_bytes = if advertised then prod_bytes else 0);
+  Stdio.eprintf
+    "f32 fusion (%s): advertised=%b, search floor=%d working bytes (not part of the golden)\n%!"
+    backend_name advertised sf.lf_working_bytes;
   p_close "fusion: the fused candidate computes the right values" got want ~tol:(fun _ -> 1e-3);
   p "fusion: the floor is at most the fused candidate's allocation" (below f measured);
   p "fusion: the floor leaves the fusion target out on a GPU backend, and nothing on a CPU one"
@@ -390,8 +443,98 @@ let fusion () =
     "fusion: on a GPU backend the shared-fused candidate allocates less than the unscheduled delta"
     (measured.ld_working_bytes < unscheduled.ld_working_bytes)
 
+(* Three equally sized eligible buffers: a and b must coexist in the add, while later can reuse
+   either. The observable output owns its own bytes. *)
+let straight_line () =
+  let module LL = Ir.Low_level in
+  let module Tn = Ir.Tnode in
+  Unix.putenv "OCANNL_BUFFER_ALIASING" "true";
+  let n = 8 in
+  let node = Ll_test.node_factory ~first_id:16150 ~dims:[| n |] () in
+  let a = node "lf_a" and b = node "lf_b" and later = node "lf_later" and out = node "lf_out" in
+  Ll_test.materialize out;
+  let cell = [| Ll_test.fixed 0 |] in
+  let write tn = Ll_test.set tn cell and read tn = Ll_test.get tn cell in
+  let code =
+    LL.unflat_lines
+      [
+        write a (Ll_test.c 3.);
+        write b (Ll_test.c 5.);
+        write out (Ll_test.add (read a) (read b));
+        write later (Ll_test.c 7.);
+        Ll_test.set out [| Ll_test.fixed 1 |] (read later);
+      ]
+  in
+  let opt = Ll_test.optimize ~name:"lf_clique" ~materialized:[ a; b; later ] code in
+  let ctx = Context.auto () in
+  let floor = Context.link_floor ~prelowered:true ctx opt in
+  let linked, r = Ll_test.link ~ctx ~name:"lf_clique_link" opt in
+  let values = Context.get_values (Context.run linked r) out in
+  Context.release linked;
+  let bytes = n * Ir.Ops.prec_in_bytes Ir.Ops.single in
+  p
+    "fixed stores: the floor charges both operands of the add and permits the later buffer to \
+     overlap"
+    (floor.lf_working_bytes = 3 * bytes
+    && floor.lf_overlap_bytes = bytes
+    && Float.equal values.(0) 8.
+    && Float.equal values.(1) 7.);
+  Unix.putenv "OCANNL_BUFFER_ALIASING" "false";
+  let mutant compensate =
+    let name = if compensate then "lf_missing_compensated" else "lf_missing" in
+    let lowered_transform (base : LL.optimized) =
+      let post =
+        if compensate then Ll_test.substitute_optimized ~from:a ~to_:(node "lf_replacement") base
+        else base
+      in
+      Tn.Placements.unsafe_restore post.optimize_ctx.placements a
+        (Some (Local, Site "1615:test-mutant"));
+      [ post ]
+    in
+    let result, hits =
+      count_hits (fun () ->
+          Context.compile_outcome ~name ~lowered_transform ~prelowered:(Ll_test.hermetic_copy opt)
+            ~provenance:SO.Candidate ctx Asgns.empty_comp IDX.empty)
+    in
+    match result with
+    | Error (SO.Fatal { exn = SO.Link_floor_violation msg; _ }) ->
+        hits = 0 && String.is_substring msg ~substring:(Tn.debug_name a)
+    | Ok (c, _) ->
+        Context.release c;
+        false
+    | Error _ -> false
+  in
+  p_all
+    "the compile rejects an unaccounted off-device transform before allocation, even with a \
+     replacement buffer"
+    [ false; true ] ~f:mutant;
+  (* Preserve every node, but invalidate the byte premise: the base captured dedicated storage,
+     while the mutated planner reuses bytes between successive kernels. *)
+  let enable_aliasing (base : LL.optimized) =
+    Unix.putenv "OCANNL_BUFFER_ALIASING" "true";
+    List.map (LL.flat_lines [ base.llc ]) ~f:(fun llc -> { base with llc })
+  in
+  let result, hits =
+    Exn.protect
+      ~finally:(fun () -> Unix.putenv "OCANNL_BUFFER_ALIASING" "false")
+      ~f:(fun () ->
+        count_hits (fun () ->
+            Context.compile_outcome ~name:"lf_link_deficit" ~lowered_transform:enable_aliasing
+              ~prelowered:(Ll_test.hermetic_copy opt) ~provenance:SO.Cache_replay ctx
+              Asgns.empty_comp IDX.empty))
+  in
+  p "a compiled byte deficit on replay fails before allocation"
+    (match result with
+    | Error (SO.Fatal { phase = Backend_link; exn = SO.Link_floor_violation msg; _ }) ->
+        hits = 0 && String.is_substring msg ~substring:"exceeds compiled delta"
+    | Ok (c, _) ->
+        Context.release c;
+        false
+    | Error _ -> false)
+
 let () =
   Stdio.eprintf "backend: %s (not part of the golden)\n%!" (Context.backend_name (Context.auto ()));
+  straight_line ();
   let off = scenario ~aliasing:false in
   let on = scenario ~aliasing:true in
   (* The arena leg is reached: the default schedules' training step shares bytes under the liveness

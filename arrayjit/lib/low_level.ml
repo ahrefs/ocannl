@@ -6560,7 +6560,7 @@ let narrowing_read ~scope_prec (llsc : scalar_t) =
   in
   Ops.is_narrow_float scope_prec && read llsc
 
-let rounded_read_prec (llc : t) (tn : Tn.t) =
+let fold_read_roundings llc ~init ~f =
   let open Access_fold in
   let policy =
     {
@@ -6574,10 +6574,14 @@ let rounded_read_prec (llc : t) (tn : Tn.t) =
   in
   let scalar _ acc (sc : scalar_t) =
     match sc with
-    | Unop (Ops.Round_prec, (Get (read, _), t)) when Tn.equal read tn -> Prune (Some t)
+    | Unop (Ops.Round_prec, (Get (read, _), t)) -> Prune (f acc read t)
     | _ -> Continue acc
   in
-  fold ~policy ~hooks:{ (hooks ()) with scalar } ~init:None llc
+  fold ~policy ~hooks:{ (hooks ()) with scalar } ~init llc
+
+let rounded_read_prec llc tn =
+  fold_read_roundings llc ~init:None ~f:(fun acc read prec ->
+      if Tn.equal read tn then Some prec else acc)
 
 (* gh-ocannl-1884: whether collapsing a [Local_scope] of integer precision [scope_prec], over [v],
    into a slot evaluating at [eval] leaves its value alone. A collapse drops two things: the
@@ -12246,6 +12250,14 @@ let%diagn2_sexp analyze_proc (static_indices : Indexing.static_symbol list) (llc
              (not write.Affine.a_guarded) || write_guards_dominate ~write ~read)
            static_indices (Lazy.force live_accs));
   }
+
+let operand_read_precisions (opt : optimized) =
+  let add ps p = if List.mem ps p ~equal:Ops.equal_prec then ps else p :: ps in
+  let storage =
+    Hashtbl.fold opt.traced_store ~init:[] ~f:(fun ~key ~data:_ ps ->
+        add ps (Lazy.force key.Tn.storage_prec))
+  in
+  fold_read_roundings opt.llc ~init:storage ~f:(fun ps _ p -> add ps p)
 
 (* A candidate-private view of the analysis' traced store: record-level copies, so one candidate's
    [decide_placements] writes ([read_only], [read_before_write] under its own placements) do not

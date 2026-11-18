@@ -9864,6 +9864,22 @@ let fission_default ?promote_locals ?keep_mapping ~preset ~zero_sched ~static_in
 let automatic_gpu_schedule = lazy (Utils.registered_flag ~arg_name:"automatic_gpu_schedule")
 let automatic_cpu_schedule = lazy (Utils.registered_flag ~arg_name:"automatic_cpu_schedule")
 
+(* A tile lookup is common to both seeders. Matmul's additional logging veto does not apply to the
+   convolution family. Include every operand pair to cover sites exposed by segmentation and narrow
+   rounded reads into an f32 accumulator. *)
+let seedable_shared_target ~limits lowered =
+  let operands = lazy (Low_level.operand_read_precisions lowered) in
+  let by_precision = Hashtbl.Poly.create () in
+  fun tn ->
+    let d_prec = Lazy.force tn.Tn.storage_prec in
+    Hashtbl.find_or_add by_precision d_prec ~default:(fun () ->
+        Option.exists limits.Backend_intf.mma ~f:(fun mma ->
+            let ps = Lazy.force operands in
+            List.exists ps ~f:(fun a_prec ->
+                List.exists ps ~f:(fun b_prec ->
+                    Option.is_some
+                      (Backend_intf.mma_tile_for_precisions mma ~a_prec ~b_prec ~d_prec)))))
+
 (* gh-ocannl-1554: whether some schedule can keep the existing node [tn] off the device -- the
    premise the device-memory floor ([Backends.link_floor]) leaves such a node out on. The only
    schedule op that turns an existing node's placement [Local] is the shared epilogue placement of
@@ -9875,7 +9891,7 @@ let automatic_cpu_schedule = lazy (Utils.registered_flag ~arg_name:"automatic_cp
    [check_hardware_limits_classified] holds to [max_workgroup_memory_bytes] for every kernel a
    compile emits: a larger node cannot leave the device in any kernel the hardware gate admits. An
    unknown limit bounds nothing. *)
-let may_keep_off_device ~(facts : Backend_intf.backend_facts)
+let may_keep_off_device ?(shared_target = fun _ -> true) ~(facts : Backend_intf.backend_facts)
     ~(limits : Backend_intf.hardware_limits) plc tn (node : Low_level.traced_array) =
   facts.Backend_intf.workgroup_shared_placement
   && (not (settled_on_device plc tn))
@@ -9883,6 +9899,7 @@ let may_keep_off_device ~(facts : Backend_intf.backend_facts)
   && Option.for_all limits.Backend_intf.max_workgroup_memory_bytes ~f:(fun limit ->
       (* The peek is the forced size's value without forcing it; see [thread_private_bytes]. *)
       Tn.size_in_bytes_peek tn <= limit)
+  && shared_target tn
 
 (* gh-ocannl-1331: the default pipeline's [Search_shaping] keys that only one kind of backend reads
    -- the GPU presets, lane geometry and fission mapping, and the CPU preset's threshold -- each

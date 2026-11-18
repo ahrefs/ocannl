@@ -108,7 +108,7 @@ files.
   the refused bytes and the driver's free bytes), because HIP has no `classify_failure` and its
   out-of-memory error was therefore unclassified, i.e. fatal under strict classification, and
   CUDA's was a `Backend_rejected` stage string nothing could reason about. A search-wide
-  refusal (`Pre_search_failure` at `Backend_link`, before the cache is consulted) asks one question:
+  refusal (`Pre_search_failure` at `Backend_link`, before any cache replay) asks one question:
   does the device admit the FLOOR every schedule of the base lowering must allocate,
   `Context.probe_link_floor` (gh-ocannl-1554)? Asked where the GPU baseline is refused before
   codegen (gh-ocannl-1340), and where the base link or a stale entry's baseline relink is refused
@@ -122,13 +122,21 @@ files.
   nodes the base code touches, less `Schedule.may_keep_off_device` (an unsettled fusion target
   within `max_workgroup_memory_bytes`, which the hardware gate holds every kernel's shared bytes to,
   GPU only) and `Schedule.may_replace_by_packed_tile` (a hoisted `Stage` source); under the planner,
-  the nodes failing `Backends.alias_eligible` plus the largest eligible node per precision class.
+  the nodes failing `Backends.alias_eligible` plus a certified clique per precision class. In a
+  loop-free program of fixed-index copies, adds and literal stores to non-scalar buffers, the
+  operands and destination of a store coexist through every fission. Elsewhere the largest eligible
+  node of each class is the bound: unanchored packing can move a source read to a segment's entry.
+  `Seeded_search` charges shared targets where no tile exists for any pair of storage or rounded
+  operand precisions at the destination precision. The public default also bounds explicit shared
+  fusion with a scalar fallback; a replayable entry with a shared epilogue gets that bound.
   The size window is narrow in practice: a `Never_virtual` node within `stack_threshold_in_bytes`
   is `Local` in the base anyway. Its probe asks each group's bytes in one request cut at the pool
   cap, decisive under a page-granular allocator that admits by the total of page-rounded requests,
   not against a contiguous-block limit. A floor the device admits says nothing about any
-  candidate. A transform that newly takes storage off a node must extend the floor and
-  `link_delta_parity`.
+  candidate. A complete candidate carries its pre-transform obligations: a missing charged node at
+  compile or a short working or constant group in the link plan is a fatal
+  `Schedule_outcome.Link_floor_violation`. A transform that takes storage off a node must extend
+  the floor and `link_delta_parity`.
   `Context.link_delta` is the allocation-free half (the plan's bytes), and
   `test/operations/link_delta_parity` pins it to the census delta of a real compile. Size a
   capacity meant to refuse the search on the FLOOR, which is the unscheduled delta only where

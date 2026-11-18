@@ -899,6 +899,7 @@ test/operations/integer_scope_collapse.ml [through Ll_test.execute; run by @test
 test/operations/lane_bounds_check.ml [through Ll_test.execute; run by @test/operations/runtest-lane_bounds_check]
 test/operations/launch_predicate_parity.ml [through Ll_test.execute; through Ll_test.execute_with_census; run by @test/operations/runtest-launch_predicate_parity, @test/operations/runtest-launch_predicate_parity-tf32]
 test/operations/lineage_template_supersession.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-lineage_template_supersession]
+test/operations/link_delta_parity.ml [prelowered compile; through Ll_test.link; run by @test/operations/runtest-link_delta_parity]
 test/operations/local_binder_gate.ml [through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-local_binder_gate]
 test/operations/local_scope_sibling_reads.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-local_scope_sibling_reads]
 test/operations/matmul_interchange.ml [through Ll_test.execute_with_census; run by @test/operations/runtest-matmul_interchange, @test/operations/runtest-matmul_interchange-tf32]
@@ -1047,6 +1048,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-launch_predicate_parity
 @test/operations/runtest-launch_predicate_parity-tf32
 @test/operations/runtest-lineage_template_supersession
+@test/operations/runtest-link_delta_parity
 @test/operations/runtest-local_binder_gate
 @test/operations/runtest-local_scope_sibling_reads
 @test/operations/runtest-matmul_interchange

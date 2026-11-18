@@ -113,7 +113,13 @@ let make_pair n =
 let run_forward ?(transform = fun opt -> opt) ?(prefill = []) comp =
   let ctx = Context.auto () in
   let ctx, routine =
-    Context.compile ~lowered_transform:(fun o -> [ transform o ]) ctx comp Ir.Indexing.Empty
+    match
+      Context.compile_outcome ~provenance:Ir.Schedule_outcome.Candidate
+        ~lowered_transform:(fun o -> [ transform o ])
+        ctx comp Ir.Indexing.Empty
+    with
+    | Ok result -> result
+    | Error failure -> Ir.Schedule_outcome.raise_failure failure
   in
   let ctx = List.fold prefill ~init:ctx ~f:(fun ctx (tn, vs) -> Context.set_values ctx tn vs) in
   Context.run ctx routine

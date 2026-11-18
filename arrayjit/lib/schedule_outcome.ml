@@ -92,6 +92,7 @@ type 'a outcome = ('a, failure) Result.t
 
 exception Cause_at of phase * cause
 exception Raised_at of phase * exn * Stdlib.Printexc.raw_backtrace
+exception Link_floor_violation of string
 
 exception
   Device_memory_exhausted of {
@@ -144,7 +145,10 @@ let strict_failure_classification =
 
 let is_oom_or_interrupt = function Out_of_memory | Stdlib.Sys.Break -> true | _ -> false
 let is_assert_or_stack = function Assert_failure _ | Stack_overflow -> true | _ -> false
-let is_process_fatal exn = is_oom_or_interrupt exn || is_assert_or_stack exn
+
+let is_process_fatal exn =
+  is_oom_or_interrupt exn || is_assert_or_stack exn
+  || match exn with Link_floor_violation _ -> true | _ -> false
 
 let must_propagate exn =
   is_process_fatal exn || match exn with Utils.Invalid_config_value _ -> true | _ -> false
@@ -179,7 +183,7 @@ let classify_raw ~strict ~classify_backend ~provenance ~phase ~candidate exn bac
      candidate first read it and in whatever phase: contained as a decline -- the permissive
      compile-side branch below would -- the search runs on, crowning candidates that never read the
      key, as though the setting had been honored. *)
-  | Utils.Invalid_config_value _ -> fatal ()
+  | Utils.Invalid_config_value _ | Link_floor_violation _ -> fatal ()
   (* gh-ocannl-1326: typed at the allocator, so no backend classifier is consulted (HIP has none),
      and an allocation the device refused precedes any dispatch whatever the phase. *)
   | Device_memory_exhausted { requested; free; _ } ->

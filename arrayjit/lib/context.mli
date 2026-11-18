@@ -938,7 +938,13 @@ type link_floor = Ir.Backend_intf.link_floor = {
 }
 [@@deriving sexp_of, equal]
 
-val link_floor : ?name:string -> ?prelowered:bool -> t -> Ir.Low_level.optimized -> link_floor
+val link_floor :
+  ?name:string ->
+  ?prelowered:bool ->
+  ?domain:Ir.Backend_intf.link_floor_domain ->
+  t ->
+  Ir.Low_level.optimized ->
+  link_floor
 (** gh-ocannl-1554: a floor under {!link_delta} for EVERY schedule of [lowered] (the lowering as a
     [lowered_transform] receives it) compiled from [ctx]: the bytes any candidate, cache replay or
     untuned compile of it must allocate on the device, where {!link_delta} of the unscheduled form
@@ -947,9 +953,11 @@ val link_floor : ?name:string -> ?prelowered:bool -> t -> Ir.Low_level.optimized
     Raw node bytes over the nodes of the delta the lowering's code touches, leaving out what some
     schedule can keep off the device ({!field-lf_off_device_bytes}) or replace by a packed tile
     ({!field-lf_replaceable_bytes}), and under the liveness planner counting the nodes no kernel
-    sequence can overlap plus the largest overlap-eligible node of each precision class
-    ({!field-lf_overlap_bytes} is what that leaves out). Link-free and hermetic, like {!link_delta}.
-*)
+    sequence can overlap plus a certified clique of overlap-eligible nodes of each precision class
+    ({!field-lf_overlap_bytes} is what that leaves out). The default [Every_schedule] includes
+    explicit shared placements. [Seeded_search] additionally charges targets for which no GPU tile
+    can be seeded at the routine’s operand precisions. Use this only for generated schedules.
+    Link-free and hermetic, like {!link_delta}. *)
 
 val lowered_transform_input : Ir.Low_level.optimized -> Ir.Low_level.optimized
 (** The form of a {!lowered_for_decisions} lowering that a compile hands its [lowered_transform]:
@@ -958,7 +966,13 @@ val lowered_transform_input : Ir.Low_level.optimized -> Ir.Low_level.optimized
     a hermetic lowering applies it first, to see what the compile's transform would
     ([Autotune.model_pick], gh-ocannl-1780; the placement pre-search's leaves, gh-ocannl-1878). *)
 
-val probe_link_floor : ?name:string -> ?prelowered:bool -> t -> Ir.Low_level.optimized -> link_floor
+val probe_link_floor :
+  ?name:string ->
+  ?prelowered:bool ->
+  ?domain:Ir.Backend_intf.link_floor_domain ->
+  t ->
+  Ir.Low_level.optimized ->
+  link_floor
 (** gh-ocannl-1554: {!link_floor}, then a trial allocation of its pools -- each group's bytes in one
     request, cut only at the per-pool cap -- through the seam the link allocates through (census,
     [Resource_fault_injection.Delta_pool_allocated] per pool), all freed again before returning, on

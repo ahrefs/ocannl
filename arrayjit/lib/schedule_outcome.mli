@@ -172,6 +172,10 @@ val fatal_of_classified : ?candidate:string -> classified_cause -> fatal
 exception Cause_at of phase * cause
 exception Raised_at of phase * exn * Stdlib.Printexc.raw_backtrace
 
+exception Link_floor_violation of string
+(** A complete candidate contradicts its base lowering's allocation floor. Fatal for every
+    provenance. *)
+
 exception
   Device_memory_exhausted of {
     backend : string;
@@ -210,8 +214,8 @@ type provenance = Candidate | Cache_replay | Advisory | User_schedule
 [@@deriving sexp_of, compare, equal]
 
 val is_process_fatal : exn -> bool
-(** Interrupt, host OOM, assertion or stack overflow: failures best-effort reporting must preserve.
-*)
+(** Interrupt, host OOM, assertion, stack overflow or link-floor invariant: failures best-effort
+    reporting must preserve. *)
 
 val must_propagate : exn -> bool
 (** {!is_process_fatal}, plus an invalid registered setting. Cleanup and placement-arm containment
