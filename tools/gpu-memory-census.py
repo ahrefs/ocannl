@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
 """Run a foreground test-run.sh batch and write gpu-memory-census.json in its record.
 
-Linux/NVIDIA only. Run from the worktree with a backend pin, for example:
+Linux only. Run from the worktree with a backend pin, for example:
     env OCANNL_BACKEND=cuda python3 tools/gpu-memory-census.py -- \
         --expect-backend cuda build @test/operations/runtest-online_softmax -j 4
+    env OCANNL_BACKEND=hip python3 tools/gpu-memory-census.py --hip-memory-model unified -- \
+        --expect-backend hip build @test/operations/runtest-online_softmax
+
+HIP reads resident VRAM on discrete GPUs and resident VRAM plus GTT on
+unified GPUs. Supply the memory model of the batch's GPU. If omitted, the
+model is unknown and the probe reads both regions.
 
 Input boundary: the foreground runner's digest header locates its own run.
-Only action-durations.sh's allowlisted trace fields, the shared compute-apps
-probe's status and numeric PID/memory rows, and Linux /proc ownership and
-start ticks enter the census. No command arguments, process environments,
-probe diagnostics or unmatched GPU processes enter the sidecar. The runner's
-bounded trace reader exports only process JSON to the launcher. The runner
-owns and deletes its Dune-produced raw trace.
+Only action-durations.sh's allowlisted trace fields, probe status, numeric
+PID/memory rows and memory field names, and Linux /proc ownership and start
+ticks enter the census. CUDA reads compute-apps used_memory. HIP reads
+/dev/kfd and /dev/dri/ fd links and amdgpu fdinfo's drm-driver, drm-pdev,
+drm-client-id, and drm-resident-vram/gtt or their drm-memory-vram/gtt aliases.
+Requested totals, CPU memory, device-wide counters, command arguments,
+process environments and probe diagnostics are outside the boundary. The
+runner's bounded trace reader exports only process JSON to the launcher.
+The runner owns and deletes its Dune-produced raw trace.
 
 Coverage includes every direct process in the trace. The test summary counts
 direct .exe processes in test or arrayjit/test with a named test alias,
@@ -22,6 +31,7 @@ requires a complete traced lifetime.
 
 import argparse
 from collections import Counter, defaultdict
+from functools import partial
 import json
 import math
 import os
@@ -34,7 +44,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "benchmarks"))
-from gpu_cotenants import probe_nvidia  # noqa: E402
+from gpu_cotenants import probe_drm, probe_nvidia  # noqa: E402
 
 RUNNER = ROOT / "tools/test-run.sh"
 TRACE_READER = ROOT / "tools/gpu-memory-census-trace.sh"
@@ -54,20 +64,20 @@ def owned_before(pid, boot_start_ns):
     return (start_ticks + 1) * 1_000_000_000 <= boot_start_ns * os.sysconf("SC_CLK_TCK")
 
 
-def sample(binary, polls, samples):
+def sample(probe_memory, polls, samples):
     boot_start = time.clock_gettime_ns(time.CLOCK_BOOTTIME)
     start = time.time_ns()
-    probe, found = probe_nvidia(binary, require_memory=True)
+    probe, found = probe_memory()
     end = time.time_ns()
     polls[probe["status"]] += 1
     if end < start:
         return
     for pid, fields in found.items():
         if owned_before(pid, boot_start):
-            samples[pid].append((start, end, fields["gpu_memory_mib"]))
+            samples[pid].append((start, end, fields["gpu_memory_mib"], fields.get("memory_fields", ())))
 
 
-def coverage(trace_report, samples):
+def coverage(trace_report, samples, memory_model):
     try:
         data = json.loads(trace_report.read_bytes())
     except (OSError, ValueError):
@@ -76,8 +86,10 @@ def coverage(trace_report, samples):
     for row in data["processes"]:
         start, end = row.pop("start_ns"), row.pop("end_ns")
         # A query that straddles a lifetime boundary cannot identify the PID.
-        readings = [mib for before, after, mib in samples.get(row["pid"], ())
+        readings = [mib for before, after, mib, _ in samples.get(row["pid"], ())
                     if end is not None and start <= before <= after <= end]
+        if memory_model is not None:
+            row["memory_model"] = memory_model
         if readings:
             row.update(status="sampled", process_peak_mib=max(readings), sample_count=len(readings))
         else:
@@ -104,8 +116,8 @@ def is_test_process(row):
     return False
 
 
-def write_sidecar(run_dir, trace_report, period, polls, samples):
-    trace_status, processes = coverage(trace_report, samples)
+def write_sidecar(run_dir, trace_report, period, polls, samples, *, probe="nvidia-smi", memory_model=None):
+    trace_status, processes = coverage(trace_report, samples, memory_model)
     has_tests = any(map(is_test_process, processes))
     if has_tests:
         tests = "direct test processes traced"
@@ -113,12 +125,13 @@ def write_sidecar(run_dir, trace_report, period, polls, samples):
         tests = "no recognized direct test executable ran"
     else:
         tests = "unknown from incomplete or unread trace"
-    read = polls.get("ran", 0)
-    unread = sum(polls.values()) - read
+    partial_polls = polls.get("partial", 0)
+    read = polls.get("ran", 0) + partial_polls
+    unread = sum(polls.values()) - read - polls.get("empty", 0)
     record = {
         "sampling_period_seconds": period,
-        "probe": "nvidia-smi",
-        "probe_status": ("partial" if unread else "read") if read else "UNREAD",
+        "probe": probe,
+        "probe_status": ("partial" if unread or partial_polls else "read") if read else "UNREAD",
         "read_polls": read,
         "unread_polls": unread,
         "poll_outcomes": polls,
@@ -127,6 +140,10 @@ def write_sidecar(run_dir, trace_report, period, polls, samples):
         "memory": "peak across observed polls for each process (MiB)",
         "coverage": processes,
     }
+    if memory_model is not None:
+        record["memory_model"] = memory_model
+        record["probe_fields"] = sorted({field for readings in samples.values()
+                                         for _, _, _, fields in readings for field in fields})
     with tempfile.TemporaryDirectory(dir=run_dir) as staging:
         finished = Path(staging) / SIDECAR
         finished.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
@@ -135,6 +152,16 @@ def write_sidecar(run_dir, trace_report, period, polls, samples):
 
 def run_batch(args):
     polls, samples = Counter(), defaultdict(list)
+    backend = os.environ.get("OCANNL_BACKEND") or "cuda"
+    if backend == "hip":
+        probe, memory_model = "drm-fdinfo", args.hip_memory_model or "unknown"
+        regions = ("vram",) if memory_model == "discrete" else ("vram", "gtt")
+        probe_memory = partial(probe_drm, "/proc", memory_regions=regions)
+    elif backend == "cuda":
+        probe, memory_model = "nvidia-smi", None
+        probe_memory = partial(probe_nvidia, args.nvidia_smi, require_memory=True)
+    else:
+        raise ValueError("set OCANNL_BACKEND to cuda or hip for the census")
     sep = args.runner.index("--") if "--" in args.runner else len(args.runner)
     if any(arg.startswith("--tr") for arg in args.runner[:sep]):
         raise ValueError("the census uses test-run.sh's default trace")
@@ -147,7 +174,7 @@ def run_batch(args):
                               stdout=digest) as runner:
             while runner.poll() is None:
                 next_poll = time.monotonic() + args.period
-                sample(args.nvidia_smi, polls, samples)
+                sample(probe_memory, polls, samples)
                 try:
                     runner.wait(timeout=max(0, next_poll - time.monotonic()))
                 except subprocess.TimeoutExpired:
@@ -167,7 +194,8 @@ def run_batch(args):
             print("gpu-memory-census: runner did not identify a run directory", file=sys.stderr)
             return rc or 1
         try:
-            write_sidecar(run_dir, trace_report, args.period, polls, samples)
+            write_sidecar(run_dir, trace_report, args.period, polls, samples,
+                          probe=probe, memory_model=memory_model)
         except (OSError, ValueError) as error:
             print(f"gpu-memory-census: sidecar failed: {type(error).__name__}", file=sys.stderr)
             return rc or 1
@@ -179,6 +207,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--period", type=float, default=1.0, help="requested poll interval in seconds")
     parser.add_argument("--nvidia-smi", default="nvidia-smi", metavar="BIN")
+    parser.add_argument("--hip-memory-model", choices=("discrete", "unified"),
+                        help="HIP GPU memory model (default: unknown)")
     parser.add_argument("runner", nargs=argparse.REMAINDER, help="-- followed by test-run.sh run arguments")
     args = parser.parse_args()
     if not math.isfinite(args.period) or args.period <= 0:
