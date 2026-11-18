@@ -1015,6 +1015,73 @@ repeat_abandon() { # wait prefix of the background set in $repeat_pid
 }
 }
 
+# A Linux stand-in for PID 1 retaining orphaned zombies, shared by digest 85
+# and lifecycle 124a. A failed or empty uname cannot establish absence.
+subreaper_kernel_probe() { # UNAME
+  local kernel
+  kernel=$("$1" -s 2>/dev/null) || return 0
+  [ -z "$kernel" ] || [ "$kernel" = Linux ] || echo absent
+}
+# Empty output means the stand-in is available; arguments make both missing capabilities testable.
+subreaper_skip_reason() { # PYTHON PROBE
+  if [ -z "$1" ]; then
+    echo "no python3 on PATH (the child subreaper probe needs it)"
+  else
+    local rc=0
+    "$1" "$2" >/dev/null 2>&1 || rc=$?
+    case "$rc" in
+      0) ;;
+      97) echo "python3 is available, but prctl PR_SET_CHILD_SUBREAPER refused the child subreaper" ;;
+      *) echo "python3 is available, but the child subreaper probe exited $rc" ;;
+    esac
+  fi
+}
+subreaper_write() { # FILE
+cat >"$1" <<'SUBREAPER'
+import ctypes, os, signal, sys
+# The nearest subreaper ancestor inherits every orphan below it; this one waits
+# for its own child only, as a container's PID 1 that reaps nothing would.
+if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+    sys.exit(97)
+if len(sys.argv) == 1:
+    sys.exit(0)  # the capability probe
+pid = os.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+_, st = os.waitpid(pid, 0)
+held = []
+for d in os.listdir('/proc'):
+    if not d.isdigit():
+        continue
+    try:
+        with open('/proc/%s/stat' % d) as f:
+            fields = f.read().rsplit(')', 1)[1].split()
+    except OSError:
+        continue
+    if int(fields[1]) == os.getpid():
+        held.append((int(d), fields[0], fields[2]))
+with open(os.environ['SUBREAPER_RECORD'], 'a') as f:
+    for p, state, pgid in held:
+        f.write('%d %s %s\n' % (p, state, pgid))
+for p, state, _ in held:
+    if state != 'Z':
+        try:
+            os.kill(p, signal.SIGKILL)
+        except OSError:
+            pass
+# Recorded, it reaps everything it adopted: under a PID 1 that reaps nothing
+# (where this leg matters most) its zombies would otherwise outlive the harness.
+while True:
+    try:
+        os.waitpid(-1, 0)
+    except ChildProcessError:
+        break
+    except InterruptedError:
+        continue
+sys.exit(os.WEXITSTATUS(st) if os.WIFEXITED(st) else 128 + os.WTERMSIG(st))
+SUBREAPER
+}
+
 shared_argv_probe() {
 # ---------------------------------------------------------------------------
 # Legs 26-28: this script's own options are refused on the wrong side of dune

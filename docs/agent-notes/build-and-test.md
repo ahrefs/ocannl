@@ -1522,6 +1522,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   (`left only zombies ... inert, not reaped`), `run` keeps its verdict, and the stand-in must have
   held a zombie and nothing live; taking out the iteration shell's reaping trap, or that branch,
   makes the set refused (exit 2) under the same stand-in.
+- Lifecycle leg 124a (gh-ocannl-2261) runs the whole keeper collision leg under the same
+  subreaper so adopted zombies survive from query exit through recovery. Its adoption census
+  must contain a zombie and no live process. Each keeper's start token must disappear before
+  the nested leg returns, since the ancestor's cleanup could reap it later. The in-harness
+  control skips the launch keeper's `waitpid` and requires that keeper's token to remain.
+  The staging#2059 and staging#2067 merge builds hit `query recovery refused: keeper left query group`.
+  Reproduce that refusal (runner exit 2) by extracting `tools/test-run.sh` at `de7b537a8` and passing it
+  as `--subject` to the current lifecycle harness with `--only '^124:'`.
 - `last` is the worktree's newest PUBLISHED run, and a launch publishes only once the script runs
   it (after the worktree lock, before the fleet slot it takes itself). A launch queued behind a
   wrapper that waits first — `fleet-worker.sh execution slot --wait-window -- tools/test-run.sh

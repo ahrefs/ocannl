@@ -2035,72 +2035,11 @@ harness_leg_run '83: repeat has both bounds #repeat' leg_83
 # a uname that is missing or says nothing leaves the leg to run, or to skip
 # (leg 85b is the probe's control). On Linux a missing python3 or a refused
 # prctl is still a skip: coverage that host lost.
-subreaper_kernel_probe() { # UNAME
-  local kernel
-  kernel=$("$1" -s 2>/dev/null) || return 0
-  [ -z "$kernel" ] || [ "$kernel" = Linux ] || echo absent
-}
-# Empty output means the stand-in is available; arguments make both missing capabilities testable.
-subreaper_skip_reason() { # PYTHON PROBE
-  if [ -z "$1" ]; then
-    echo "no python3 on PATH (the child subreaper probe needs it)"
-  else
-    local rc=0
-    "$1" "$2" >/dev/null 2>&1 || rc=$?
-    case "$rc" in
-      0) ;;
-      97) echo "python3 is available, but prctl PR_SET_CHILD_SUBREAPER refused the child subreaper" ;;
-      *) echo "python3 is available, but the child subreaper probe exited $rc" ;;
-    esac
-  fi
-}
 reap_label="zombie-only groups under a parent that reaps no orphans: repeat keeps TIMEOUT and a GPU set passes, run keeps its verdict, nothing refused"
 reap_nc_trap_label="negative control: without the iteration shell's reaping trap, a capped repeat under that parent is refused"
 reap_nc_resolve_label="negative control: without the resolution's inert-zombie branch, a GPU set under that parent is refused"
 reap_stub=$TMP/subreaper.py
-cat >"$reap_stub" <<'SUBREAPER'
-import ctypes, os, signal, sys
-# The nearest subreaper ancestor inherits every orphan below it; this one waits
-# for its own child only, as a container's PID 1 that reaps nothing would.
-if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
-    sys.exit(97)
-if len(sys.argv) == 1:
-    sys.exit(0)  # the capability probe
-pid = os.fork()
-if pid == 0:
-    os.execvp(sys.argv[1], sys.argv[1:])
-_, st = os.waitpid(pid, 0)
-held = []
-for d in os.listdir('/proc'):
-    if not d.isdigit():
-        continue
-    try:
-        with open('/proc/%s/stat' % d) as f:
-            fields = f.read().rsplit(')', 1)[1].split()
-    except OSError:
-        continue
-    if int(fields[1]) == os.getpid():
-        held.append((int(d), fields[0], fields[2]))
-with open(os.environ['SUBREAPER_RECORD'], 'a') as f:
-    for p, state, pgid in held:
-        f.write('%d %s %s\n' % (p, state, pgid))
-for p, state, _ in held:
-    if state != 'Z':
-        try:
-            os.kill(p, signal.SIGKILL)
-        except OSError:
-            pass
-# Recorded, it reaps everything it adopted: under a PID 1 that reaps nothing
-# (where this leg matters most) its zombies would otherwise outlive the harness.
-while True:
-    try:
-        os.waitpid(-1, 0)
-    except ChildProcessError:
-        break
-    except InterruptedError:
-        continue
-sys.exit(os.WEXITSTATUS(st) if os.WIFEXITED(st) else 128 + os.WTERMSIG(st))
-SUBREAPER
+subreaper_write "$reap_stub"
 reap_held= reap_got=
 reap_case() { # tag want-exit -- argv_probe/slot_probe call...: under the stand-in; 0 iff kept and nothing leaked
   local tag=$1 want=$2
