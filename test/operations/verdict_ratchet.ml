@@ -4765,8 +4765,8 @@ let () =
       [ "unread in_leg" ] );
   ]
 
-let gate_control_findings ?callers source =
-  let census = Scan.gate_census ?callers source in
+let gate_control_findings ?callers ?definitions source =
+  let census = Scan.gate_census ?callers ?definitions source in
   List.map census.Scan.readings ~f:(fun (reading : Scan.gate_reading) ->
       String.concat ~sep:", " reading.reads
       ^ (if reading.ambiguous then " [ambiguous]" else "")
@@ -5270,12 +5270,75 @@ let () = Checks.Sub.check ~leg:(Verdict.leg ~when_:on_gpu ~on:backend_name ()) (
       0 );
   ]
 
+(* gh-ocannl-2336: a leg that is the result of another source's function is that function's body,
+   read with the application's arguments bound, as a local function's is. Each row is a source, the
+   definitions handed to the reader with it -- sources compiled as [Legs] -- and the callers of its
+   module [Checks]. *)
+let leg_definition_controls =
+  let legs text = [ ("legs.ml", text) ] in
+  let arm_leg =
+    {ocaml|let arm_leg leg arm =
+  Verdict.sub_leg leg ~when_:(lazy (meets_floor arm)) ~on:"a device below the arm's floor"|ocaml}
+  and rows_leg =
+    {ocaml|let rows_leg leg xs = Verdict.sub_leg leg ~when_:(lazy (not (List.is_empty xs))) ~on:"no rows"|ocaml}
+  and claim_under leg_expression =
+    Printf.sprintf
+      {ocaml|open Verdict.Claims
+let () =
+  let leg = Verdict.leg ~when_:on_gpu ~on:backend_name () in
+  let rows = probe () in
+  in_leg ~leg:(%s) "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml}
+      leg_expression
+  in
+  [
+    ( "accepts a leg another source's function returns, its sub-leg gated on an invariant",
+      claim_under "Legs.arm_leg leg k16",
+      legs arm_leg,
+      [],
+      [],
+      1 );
+    ( "refuses a leg another source's function returns, its sub-leg gated on the rows handed in",
+      claim_under "Legs.rows_leg leg rows",
+      legs rows_leg,
+      [],
+      [ "rows" ],
+      1 );
+    ( "refuses a leg a caller builds by another source's function from the rows it hands in",
+      {ocaml|open Verdict.Claims
+let check ~leg rows = in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      legs rows_leg,
+      [
+        {
+          Scan.source = "caller.ml";
+          text =
+            {ocaml|let () =
+  let rows = probe () in
+  Checks.check ~leg:(Legs.rows_leg (Verdict.leg ~when_:on_gpu ~on:backend_name ()) rows) rows|ocaml};
+          spelled_elsewhere = false;
+        };
+      ],
+      [ "rows [applied in caller.ml]" ],
+      1 );
+    ( "names a leg uncompared that is the result of a function of a module no source defines",
+      claim_under "Legs.arm_leg leg k16",
+      [],
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "names a leg uncompared whose function a later include in its source may rebind",
+      claim_under "Legs.arm_leg leg k16",
+      legs (arm_leg ^ "\ninclude Other"),
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+  ]
+
 let run_gate_population_controls () =
-  let compared_row ~family ?callers (label, source, expected, compared) =
+  let compared_row ~family ?callers ?definitions (label, source, expected, compared) =
     let found =
-      gate_control_findings ?callers source
+      gate_control_findings ?callers ?definitions source
       @
-      let census = Scan.gate_census ?callers source in
+      let census = Scan.gate_census ?callers ?definitions source in
       [ Printf.sprintf "%d compared" (census.Scan.leg_sites + census.Scan.gated_sites) ]
     in
     let expected = expected @ [ Printf.sprintf "%d compared" compared ] in
@@ -5313,6 +5376,12 @@ let run_gate_population_controls () =
       compared_row ~family:"leg cross-source"
         ~callers:{ Scan.module_name = "Checks"; sources }
         (label, source, expected, compared))
+  @ List.map leg_definition_controls
+      ~f:(fun (label, source, defining, sources, expected, compared) ->
+        compared_row ~family:"leg cross-source"
+          ~callers:{ Scan.module_name = "Checks"; sources }
+          ~definitions:(function "Legs" -> defining | _ -> [])
+          (label, source, expected, compared))
 
 let refuse_gate_reading ~fail ~source (reading : Scan.gate_reading) =
   fail
@@ -5409,6 +5478,28 @@ let cross_source_callers ~read sources =
               spelled_elsewhere = spelled_elsewhere caller;
             });
     }
+
+(* The other direction (gh-ocannl-2336): for a source and a module name it may spell, the other
+   sources compiled as that module, whose functions {!Scan.gate_census} reads where a leg is the
+   result of one. The directory rule is the callers' turned round: a source compiled as the module
+   in the speller's own directory is the one it means; where there is none, every source of that
+   name is a definition the reader follows, each an alternative -- a definition more is a comparison
+   more. *)
+let cross_source_definitions ~read sources =
+  let by_module = Hashtbl.create (module String) in
+  List.iter sources ~f:(fun source ->
+      Hashtbl.add_multi by_module ~key:(module_of_source source) ~data:source);
+  fun source module_name ->
+    let defining =
+      List.filter (Hashtbl.find_multi by_module module_name) ~f:(fun other ->
+          not (String.equal other source))
+      |> List.sort ~compare:String.compare
+    in
+    let here =
+      List.filter defining ~f:(fun other ->
+          String.equal (Stdlib.Filename.dirname other) (Stdlib.Filename.dirname source))
+    in
+    List.map (if List.is_empty here then defining else here) ~f:(fun other -> (other, read other))
 
 (* The index itself (gh-ocannl-2286, review): the callers {!cross_source_callers} hands each source
    of a small tree -- a [(select)] module's two arms in [a/], a module [Lib] in both [a/] and [b/],
@@ -6674,10 +6765,9 @@ let () =
     control_results @ run_manifest_controls ~manifest ~controls:(control_results @ matrix_results)
   in
   let per_directory = Hashtbl.create (module String) in
-  let callers_of =
-    cross_source_callers sources ~read:(fun source ->
-        In_channel.read_all (Map.find_exn on_disk source))
-  in
+  let read source = In_channel.read_all (Map.find_exn on_disk source) in
+  let callers_of = cross_source_callers sources ~read in
+  let definitions_of = cross_source_definitions sources ~read in
   printf
     "Test sources that print a claim they decided themselves, outside `Verdict`: a format whose\n\
      last argument-consuming conversion is a bare `%%b` at the end, behind a label ending in `:`,\n\
@@ -6698,7 +6788,10 @@ let () =
           Int.incr line_break_offenders;
           refuse_line_break ~fail ~source site);
       let gates =
-        read_gates ~fail ~source ~census:(Scan.gate_census ~callers:(callers_of source)) content
+        read_gates ~fail ~source
+          ~census:
+            (Scan.gate_census ~callers:(callers_of source) ~definitions:(definitions_of source))
+          content
       in
       gated_sites := !gated_sites + gates.Scan.gated_sites;
       List.iter gates.Scan.readings ~f:(fun reading ->

@@ -2933,12 +2933,17 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   as call sites. A leg read from a record field, out of a record or tuple parameter pattern, or
   from the element parameter of an anonymous callback `List`/`Array` `iter`/`map`/... is handed in
   place is followed to the literal it is taken from, one resolution per element of a literal list,
-  compared on both sides with that element chosen. A local function or `lazy` a make function runs
-  is its run code. What stays uncompared -- named site by site on the ratchet's stderr -- is a
-  function some application of which the reader cannot see (handed on as a value, a caller
+  compared on both sides with that element chosen. A leg that is the RESULT of another source's
+  function (`Ll_test.cuda_arm_leg leg arm`) is that function's body, read with the application's
+  arguments bound as a local function's is, from the source the index gives as compiled under that
+  module -- the speller's own directory's, else every one of the name (gh-ocannl-2336). A local
+  function or `lazy` a make function runs is its run code. What stays uncompared -- named site by
+  site on the ratchet's stderr -- is a function some application of which the reader cannot see (handed on as a value, a caller
   spelling the module packed, as a functor argument, through a wrapped library's path, or
   re-exporting it where a third source spells the caller, or not parsing), a field of no literal,
-  an element of a computed collection, and a make function taken out of a value; the header in
+  an element of a computed collection, a function of a module no corpus source is compiled as (or
+  one its source may rebind by a later `include`), and a make function taken out of a value; the
+  header in
   `test/support/verdict_scan.ml` lists the forms. A leg claim applied in part is refused as
   unread. Most of its mutation runs exit 4, not 1: the ratchet's trailing
   `OK:` row prints only on success (the manifest's gh-ocannl-1289 section says how they were

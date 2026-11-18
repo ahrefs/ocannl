@@ -1322,6 +1322,26 @@ let tolerance_census content =
     included, UNCOMPARED, naming the caller ({!module_spelled_otherwise}). A source outside the
     corpus the ratchet globs is not read.
 
+    {3 A leg another source's function returns (gh-ocannl-2336)}
+
+    A [~leg] that is the result of [M.f args] -- [M] a structure of the source, or, in a caller's
+    walk, this source itself, or a module name nothing in scope binds -- is [f]'s body read as a
+    local function's is: each parameter bound to the argument this application supplies, in the
+    scope the application is written in, through the same bounds on choices, with the function's own
+    result passing back through it uncompared. Where [M] is no structure in scope, its definitions
+    are the other sources the ratchet's index gives as compiled under [M] ([?definitions]: one in
+    the speller's own directory where there is one, else every source of the name, each an
+    alternative compared in its own right). Each is parsed once, past every source walked before it,
+    so it shares no positions, and its [Verdict] resolutions join this source's; it is not walked,
+    so a parameter of one of its functions that this application does not bind is not resolved at
+    its other applications. A module path inside [M] ([M.Sub.f]), an [f] that is no [fun] its body
+    follows, a later top-level [include] in that source of anything but a [struct ... end] (which
+    may rebind [f]), a source that does not parse, and a module name no source is compiled as each
+    leave the leg UNCOMPARED, with the reason; so does [L.f] under a module alias of another source
+    ([module L = Ll_test]), which binds no structure in scope. A module name an [open] of a module
+    this reader cannot read rebinds is read as the corpus's source of that name, as a caller's [M.f]
+    is.
+
     {3 A leg taken out of a value (gh-ocannl-2286)}
 
     A leg read from a record field ([case.leg]), or bound by a record or tuple pattern of a named
@@ -2298,7 +2318,7 @@ let module_mentions content =
   scan#structure (Read.structure_of content);
   List.sort (Hash_set.to_list found) ~compare:String.compare
 
-let gate_census ?callers content =
+let gate_census ?callers ?(definitions = fun _ -> []) content =
   let ast = Read.structure_of content in
   let owners = Verdict_callee.of_structure ast in
   let readings = ref [] and gated_sites = ref 0 in
@@ -2349,6 +2369,12 @@ let gate_census ?callers content =
             if start <= at && at < stop then Some source else None))
   in
   let site_elements = Hashtbl.create (module Int) in
+  (* Where the next source walked or parsed beside this one starts: past every earlier one, so that
+     none shares another's positions ({!structure_at}). *)
+  let next_offset = ref (String.length content + 1) in
+  (* Each source compiled as a module a leg is built by a function of (gh-ocannl-2336), parsed once:
+     the structure it is, or why the reader does not follow its functions. *)
+  let defining_structures = Hashtbl.create (module String) in
   (* The functions of this source whose applications another source may hide, by the function's
      binding identity, with why: that source spells the module other than as [M.f]
      (gh-ocannl-2286). *)
@@ -3946,6 +3972,25 @@ let gate_census ?callers content =
                                "its leg is the result of `%s`, which is not a local function the \
                                 reader follows"
                                name))
+                  | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ } ->
+                      (* A function of a structure, or of another source (gh-ocannl-2336): read as a
+                         local function is, at this application, once per definition. *)
+                      Result.bind (self#defined_function env prefix name) ~f:(fun definitions ->
+                          List.fold definitions ~init:(Ok []) ~f:(fun acc definition ->
+                              Result.bind acc ~f:(fun alternatives ->
+                                  let identity, params, body, definition_env = definition in
+                                  if Set.mem seen identity then
+                                    Error
+                                      (Printf.sprintf
+                                         "its leg is the result of `%s`, whose own result passes \
+                                          back through it"
+                                         (Ppxlib.Longident.name (Ldot (prefix, name))))
+                                  else
+                                    Result.bind
+                                      (go (Set.add seen identity) path
+                                         (self#bind_applied ~definition_env env params arguments)
+                                         body)
+                                      ~f:(fun more -> bounded_resolutions (alternatives @ more)))))
                   | _ ->
                       Error
                         (Printf.sprintf "its leg is the result of `%s`, another module's function"
@@ -3960,6 +4005,102 @@ let gate_census ?callers content =
         | Ok [] ->
             Error "no choice of the applications its leg passes through agrees on all of them"
         | result -> result
+
+      (* The function [prefix.name] a leg is the result of (gh-ocannl-2336): a value of a structure
+         [prefix] denotes -- one of this source's, or, while a caller is walked, this source itself
+         -- or, where [prefix] is a module name nothing in scope binds, of each source
+         {!definitions} gives as compiled under it. Each definition comes with its parameters, its
+         body and the scope its body runs in; [Error] says why the reader does not follow one. *)
+      method defined_function env prefix name =
+        let spelled = Ppxlib.Longident.name (Ldot (prefix, name)) in
+        let defined values ~where =
+          match List.Assoc.find values name ~equal:String.equal with
+          | Some
+              {
+                identity;
+                definition =
+                  Some
+                    ( { pexp_desc = Pexp_function (params, _, Pfunction_body body); _ },
+                      definition_env );
+              }
+            when identity > 0 ->
+              Ok (identity, params, body, definition_env)
+          | _ ->
+              Error
+                (Printf.sprintf
+                   "its leg is the result of `%s`, which %s defines as no function the reader \
+                    follows"
+                   spelled where)
+        in
+        match (prefix, self#module_path env prefix) with
+        | _, Some (Local_structure { values; _ }) ->
+            Result.map (defined values ~where:"its structure") ~f:List.return
+        | Lident head, Some Other_module when not (Map.mem env.Lexical_scope.modules head) -> (
+            match definitions head with
+            | [] ->
+                Error
+                  (Printf.sprintf
+                     "its leg is the result of `%s`, another module's function, and no source \
+                      handed to the reader is compiled as `%s`"
+                     spelled head)
+            | sources ->
+                Result.all
+                  (List.map sources ~f:(fun (source, text) ->
+                       Result.bind (self#defining_structure ~head source text)
+                         ~f:(fun (values, includes) ->
+                           Result.bind
+                             (defined values ~where:(Printf.sprintf "`%s`" source))
+                             ~f:(fun ((identity, _, _, _) as definition) ->
+                               (* A later [include] of a module this reader does not read may rebind
+                                  the name. *)
+                               if List.exists includes ~f:(fun at -> at > identity) then
+                                 Error
+                                   (Printf.sprintf
+                                      "its leg is the result of `%s`, which a later `include` in \
+                                       `%s` of a module the reader does not read may rebind"
+                                      spelled source)
+                               else Ok definition)))))
+        | _ ->
+            Error
+              (Printf.sprintf "its leg is the result of `%s`, another module's function" spelled)
+
+      (* The values of [source], compiled as the module [head], parsed once past every source walked
+         or parsed before it, with the positions of its top-level [include]s of a module other than
+         a [struct ... end]: their exports are unknown to this reader. Its [Verdict] resolutions
+         join this source's, keyed by positions no other source shares. *)
+      method defining_structure ~head source text =
+        Hashtbl.find_or_add defining_structures source ~default:(fun () ->
+            let at = !next_offset in
+            next_offset := at + String.length text + 1;
+            match Scan_attempt.run (fun () -> structure_at ~offset:at text) with
+            | Scanned structure ->
+                Verdict_callee.absorb ~into:owners (Verdict_callee.of_structure structure);
+                let includes =
+                  List.filter_map structure ~f:(fun item ->
+                      match item.pstr_desc with
+                      | Pstr_include { pincl_mod = { pmod_desc = Pmod_structure _; _ }; _ } -> None
+                      | Pstr_include _ -> Some item.pstr_loc.loc_start.pos_cnum
+                      | _ -> None)
+                in
+                let values =
+                  match
+                    self#module_of
+                      { Lexical_scope.frames = []; modules = Map.empty (module String) }
+                      (Ppxlib.Ast_builder.Default.pmod_structure ~loc:Ppxlib.Location.none structure)
+                  with
+                  | Some (Local_structure { values; _ }) -> values
+                  | _ -> []
+                in
+                Ok (values, includes)
+            | Unparsed report ->
+                Error
+                  (Printf.sprintf
+                     "its leg is the result of a function of `%s`, and `%s`, which is compiled as \
+                      `%s`, does not parse (%s)"
+                     head source head report)
+            | Raised exn ->
+                failwith
+                  (Printf.sprintf "%s (while parsing %s, which defines a leg's function)" exn source))
 
       (* A parameter on a leg's way, resolved at the applications of its function in this source and
          in the sources handed to the reader (gh-ocannl-1893, gh-ocannl-2286), or, for an
@@ -4973,10 +5114,9 @@ let gate_census ?callers content =
             in
             mark values modules
           in
-          let offset = ref (String.length content + 1) in
           List.iter sources ~f:(fun { source; text; spelled_elsewhere } ->
-              let at = !offset in
-              offset := at + String.length text + 1;
+              let at = !next_offset in
+              next_offset := at + String.length text + 1;
               caller_spans := (at, at + String.length text + 1, source) :: !caller_spans;
               match Scan_attempt.run (fun () -> structure_at ~offset:at text) with
               | Scanned caller ->

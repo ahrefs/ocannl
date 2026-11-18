@@ -745,6 +745,11 @@ names a leg uncompared whose module a caller opens through another module's path
 names a leg uncompared in a submodule whose module another source re-exports: true
 names a leg uncompared whose helper another source also hands on as a value: true
 names a leg uncompared whose helper's module a caller that does not parse may spell: true
+accepts a leg another source's function returns, its sub-leg gated on an invariant: true
+refuses a leg another source's function returns, its sub-leg gated on the rows handed in: true
+refuses a leg a caller builds by another source's function from the rows it hands in: true
+names a leg uncompared that is the result of a function of a module no source defines: true
+names a leg uncompared whose function a later include in its source may rebind: true
 the index reads each select arm as the module dune copies it to: true
 the index hands a caller to its own directory's module of the name, and the rest to every one: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
