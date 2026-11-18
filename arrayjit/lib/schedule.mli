@@ -544,6 +544,9 @@ val partition : axis:Indexing.symbol -> breakpoints:int list -> optop * Indexing
     [Indexing.get_symbol]) and returns them in segment order, so subsequent ops in a
     programmatically built schedule can address individual segments. *)
 
+val pad_edge_breakpoint : extent:int -> block:int -> int option
+(** The first partial block's index when the axis has both full blocks and a partial one. *)
+
 val pad_edge_partition : block_loop:Indexing.symbol -> extent:int -> block:int -> optop list
 (** The {!constructor-Partition} a {!constructor-Pad} of an axis of [extent] to a multiple of
     [block] prescribes, once that axis is {!constructor-Split} by [block] into [block_loop] and an

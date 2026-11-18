@@ -670,6 +670,10 @@ val cpu_pack_grid_chunk_bytes :
     [cc_grid_private_bytes_cap], and what the renderer's Grid record reports (gh-ocannl-1793,
     gh-ocannl-1856); [0] for a shape without a Grid loop. Exposed for tests. *)
 
+val cpu_conv_panel_chunk_bytes : conv_site -> sketch_params -> int
+(** The two staged tiles and any accumulator fragment a direct CPU row-panel Grid privatizes.
+    Exposed to compare the pre-filter with the renderer's Grid record. *)
+
 val cpu_mma_grid_updates_bound : matmul_site -> sketch_params -> cap:int -> int
 (** Saturating upper bound on the CPU tensorized site's per-Grid-launch update count. Serial shapes
     and unknown fused epilogues return [cap]. Exposed to compare the seeding predicate with the

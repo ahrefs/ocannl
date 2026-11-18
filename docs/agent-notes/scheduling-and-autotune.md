@@ -1497,7 +1497,8 @@ files.
   loop. A single partial k block has no sibling segment. A direct CPU conv `Row_block` panel
   privatizes both staged tiles and any accumulator fragment. Its tree charges their combined
   footprint against the same cap. `autotune_grid_record` compiles the 40^3 and 72^3 bk=16 matmul
-  controls and both sides of the cap for padded conv panels. The launch floor is weighed by
+  controls and compares the conv panel pre-filter's bytes with the renderer on both sides of the
+  cap. The launch floor is weighed by
   `cpu_mma_grid_updates_bound` (gh-ocannl-1857), a saturating upper bound using the renderer's
   resolved `C_syntax.grid_min_updates ()` and `Cost_model.tile_mma_macs_per_update`: packing
   and fragment-transfer stores count, enclosing serial blocks do not. At 64^3 the plain packed

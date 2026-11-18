@@ -933,6 +933,9 @@ val cpu_pack_grid_chunk_bytes :
     [cc_grid_private_bytes_cap], and what the renderer's Grid record reports (gh-ocannl-1793,
     gh-ocannl-1856); [0] for a shape without a Grid loop. Exposed for tests. *)
 
+val cpu_conv_panel_chunk_bytes : conv_site -> sketch_params -> int
+(** See {!Sketch_families.cpu_conv_panel_chunk_bytes}. *)
+
 val cpu_mma_grid_updates_bound : matmul_site -> sketch_params -> cap:int -> int
 (** See {!Sketch_families.cpu_mma_grid_updates_bound}; exposed for renderer-census tests. *)
 
@@ -2097,10 +2100,12 @@ type report = {
       (** Every candidate this search ranked whose schedule asks for a [Grid] loop while its routine
           rendered one serially ({!grid_serial_candidate}), in timing order (gh-ocannl-1702). The
           serial loop computes the same values, so a decline is invisible in the readings; this is
-          the per-candidate record. The [autotune_log] timing line shows [NOTE grid-serial] and
-          {!Ir.C_syntax.grid_summary_string} from the same census. A counter-like field: it
-          describes this call, so a cache replay carries [[]]. Candidates whose window was refused,
-          or that the budget or a hopeless reading cut, are not ranked and are not listed. *)
+          the per-candidate record. The [autotune_log] timing line shows
+          {!Ir.C_syntax.grid_summary_string} from the same census and flags a serial Grid loop with
+          [NOTE grid-serial], including loops introduced by presets or companions. A counter-like
+          field: it describes this call, so a cache replay carries [[]]. Candidates whose window was
+          refused, or that the budget or a hopeless reading cut, are not ranked and are not listed.
+      *)
   best_schedule : Ir.Schedule_cache.saved_schedule;
       (** The winner's schedule; for a fissioned winner, the concatenation of the per-segment
           schedules (informational). Empty when nothing was timed. *)

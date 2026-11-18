@@ -99,10 +99,14 @@ let partition ~axis ~breakpoints =
   in
   (Partition { axis; breakpoints; segment_indices }, segment_indices)
 
-let pad_edge_partition ~block_loop ~extent ~block =
+let pad_edge_breakpoint ~extent ~block =
   let full = if block > 0 then extent / block else 0 in
-  if full = 0 || extent % block = 0 then []
-  else [ fst (partition ~axis:block_loop ~breakpoints:[ full ]) ]
+  if full = 0 || extent % block = 0 then None else Some full
+
+let pad_edge_partition ~block_loop ~extent ~block =
+  match pad_edge_breakpoint ~extent ~block with
+  | None -> []
+  | Some breakpoint -> [ fst (partition ~axis:block_loop ~breakpoints:[ breakpoint ]) ]
 
 let tensorize ?tile ~i ~j ~k ~simd_width () =
   let lane = Indexing.get_symbol () in

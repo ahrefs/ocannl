@@ -2764,7 +2764,7 @@ let cpu_mma_grid_updates_bound (site : matmul_site) (p : sketch_params) ~cap =
       ]
 
 let cpu_pack_partitions_k (site : matmul_site) ~bk =
-  bk <= site.m_nk && pads_extent ~extent:site.m_nk bk
+  Option.is_some (Sched.pad_edge_breakpoint ~extent:site.m_nk ~block:bk)
 
 (* gh-ocannl-1612: why [Sched.Fuse_epilogue] refuses the fused twin of EVERY completion of a CPU
    packed geometry, or [None] where it may admit one. Only the shapes that sink the row-block loop
@@ -2959,9 +2959,8 @@ let cpu_mma_pack_sketch_schedule (site : matmul_site)
      are unchanged. It applies in every packing shape, after [Tensorize] (so the [Tile_mma] is
      copied into both segments), and only with the k pad: an unpadded k divides or is refuted. *)
   let k_split =
-    if both_staged && cpu_pack_partitions_k site ~bk then
-      Sched.pad_edge_partition ~block_loop:k_o ~extent:site.m_nk ~block:bk
-    else []
+    if List.is_empty k_pad then []
+    else Sched.pad_edge_partition ~block_loop:k_o ~extent:site.m_nk ~block:bk
   in
   let tz, _lane = Sched.tensorize ?tile ~i:i_i ~j:j_col ~k:k_i ~simd_width:1 () in
   let kb = k_blocks site [ k_o ] in
@@ -4992,6 +4991,13 @@ let conv_staged_tiles_bytes (site : conv_site) ~pack_prec ~m ~k ~n =
 let conv_fragment_bytes (site : conv_site) ~m ~n =
   m * n * Ir.Ops.prec_in_bytes (Lazy.force site.c_d.Ir.Tnode.storage_prec)
 
+let cpu_conv_panel_chunk_bytes (site : conv_site) (p : sketch_params) =
+  let m = p.sk_bm and n = site.c_noc in
+  let tiles = conv_staged_tiles_bytes site ~pack_prec:p.sk_pack_prec ~m ~k:site.c_nred ~n in
+  if conv_fragment_certain site ~masked:(cpu_conv_acc_masked site ~bm:m) then
+    tiles + conv_fragment_bytes site ~m ~n
+  else tiles
+
 (* The conv family's verdicts on one site, decided once and shared by both fusion flavors: every
    gate below is flavor-independent, so each flavor's subtree reads the same judgments (forced on
    first use) and only its leaves' [sk_epilogue] differs. *)
@@ -5196,24 +5202,16 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
               (* Both staged tiles are written under the panel Grid: A depends on the panel index
                  and B on the window loops inside it. The accumulator fragment, when present, also
                  lives there. The aligned-merged shape has a different Grid body. *)
-              let n = site.c_noc in
-              let tiles =
-                conv_staged_tiles_bytes site ~pack_prec:base.sk_pack_prec ~m:bm ~k:site.c_nred ~n
-              in
-              let fragment =
-                if conv_fragment_certain site ~masked:(cpu_conv_acc_masked site ~bm) then
-                  conv_fragment_bytes site ~m:bm ~n
-                else 0
-              in
+              let panel = { base with sk_bm = bm } in
+              let bytes = cpu_conv_panel_chunk_bytes site panel in
               let cap = Lazy.force Ir.C_syntax.per_chunk_private_bytes_cap in
-              let bytes = tiles + fragment in
               if bytes > cap then
                 Sspace.Refuted
                   (Printf.sprintf
                      "the row panel's privatized tiles take %d bytes per chunk, over \
                       cc_grid_private_bytes_cap = %d"
                      bytes cap)
-              else direct { base with sk_bm = bm }
+              else direct panel
             else if Lazy.force aligned then leaf { base with sk_bm = bm }
             else Sspace.Refuted no_alignment
           in

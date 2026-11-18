@@ -418,11 +418,8 @@ let without_launch_floor f = Scripted_search.with_settings [ ("cc_grid_min_updat
 let () =
   List.iter [ 40; 72 ] ~f:(fun n ->
       let judged = lazy (without_launch_floor (fun () -> judge_plain_grid ~bk:16 (n, n, n))) in
-      let claim = Printf.sprintf "agr-grid: every proposed %d^3 bk=16 seed renders on the pool" n in
-      in_leg ~leg claim (fun label ->
-          p_all label (Lazy.force judged) ~f:(fun j ->
-              g_grid_of j ~f:(fun g ->
-                  (not j.g_proposed) || (pool_privatizing g && g.Cs.serial = 0))));
+      let claim = Printf.sprintf "agr-grid: no %d^3 bk=16 plain-Grid seed is proposed" n in
+      in_leg ~leg claim (fun label -> p_none label (Lazy.force judged) ~f:(fun j -> j.g_proposed));
       let witness =
         Printf.sprintf "agr-grid: at %d^3 both k segments share scratch within the cap" n
       in
@@ -458,7 +455,7 @@ let judge_conv_panel bm =
   in
   let%op y = x +* "|oh<+kh, ow<+kw, ic; |kh, kw, ic -> oc => |oh, ow, oc" w in
   let comp = Train.forward y in
-  let proposed = ref false in
+  let judgment = ref None in
   let schedule _ (seg : Ir.Low_level.optimized) =
     Option.map (Autotune.detect_conv seg.llc) ~f:(fun site ->
         let limits = Context.hardware_limits (Context.auto ()) in
@@ -471,7 +468,10 @@ let judge_conv_panel bm =
         let panel = { serial with sk_bm = bm } in
         if site.c_zeroed || not (Autotune.conv_acc_masked site panel) then
           failwith "expected a pad-masked conv panel in a fission segment";
-        proposed := List.mem seeds panel ~equal:equal_params;
+        judgment :=
+          Some
+            ( List.mem seeds panel ~equal:equal_params,
+              Autotune.cpu_conv_panel_chunk_bytes site panel );
         Autotune.sketch_schedule ~accum_prec:Ll_test.backend_accum_prec ~p:panel seg)
   in
   let ctx, routine =
@@ -481,19 +481,27 @@ let judge_conv_panel bm =
   in
   Context.release ctx;
   let grid = routine.Context.grid in
+  let proposed, weighed = Option.value_exn !judgment in
   Stdio.eprintf "agr: conv bm=%d %s: %s (not part of the golden)\n%!" bm
-    (if !proposed then "proposed" else "refused")
+    (if proposed then "proposed" else "refused")
     (Cs.grid_summary_string grid);
-  (!proposed, grid)
+  (proposed, grid, weighed)
 
 let () =
+  let panel bm = lazy (without_launch_floor (fun () -> judge_conv_panel bm)) in
+  let within = panel 16 and over = panel 32 in
   in_leg ~leg "agr-conv: a padded row panel within the cap is proposed and renders on the pool"
     (fun label ->
-      let proposed, grid = without_launch_floor (fun () -> judge_conv_panel 16) in
+      let proposed, grid, _ = Lazy.force within in
       p label (proposed && List.length grid.Cs.loops = 1 && pool_privatizing grid));
   in_leg ~leg "agr-conv: a padded row panel over the cap is refused" (fun label ->
-      let proposed, grid = without_launch_floor (fun () -> judge_conv_panel 32) in
-      p label ((not proposed) && List.length grid.Cs.loops = 1 && over_cap grid))
+      let proposed, grid, _ = Lazy.force over in
+      p label ((not proposed) && List.length grid.Cs.loops = 1 && over_cap grid));
+  in_leg ~leg "agr-conv: the pre-filter weighs what the renderer privatizes, byte for byte"
+    (fun label ->
+      p_all label
+        [ Lazy.force within; Lazy.force over ]
+        ~f:(fun (_, grid, weighed) -> List.equal Int.equal (recorded_private grid) [ weighed ]))
 
 let () =
   in_leg ~leg "agr-seed: no proposed packed Grid seed renders its site serially for the floor"
