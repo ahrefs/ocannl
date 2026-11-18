@@ -16820,6 +16820,27 @@
   (pps ppx_here ppx_ocannl))
  (modes exe))
 
+; gh-ocannl-2347: replay the saved CUDA TF32 winner for the two-segment matmul and ReLU.
+
+(test
+ (name tf32_fissioned_epilogue)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules tf32_fissioned_epilogue)
+ (libraries
+  base
+  ocannl
+  stdio
+  ll_test
+  arrayjit.verdict
+  arrayjit.utils
+  arrayjit.context
+  unix)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1602: the seed-parity reference's tf32 rounding (Bench_seed_parity.tf32_round), executed
 ; bitwise against cvt.rna's bit model on every backend, and against the hardware's own conversion
 ; through a one-hot matmul's seeds where the backend's arm reads f32 as tf32. The -tf32 rule runs

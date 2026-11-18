@@ -1,0 +1,10 @@
+the two scheduled kernels share the device accumulator: true
+the fixture products have exact partial sums at f32: true
+the unscheduled product matches the host reduction: true
+the unscheduled reference has positive cells: true
+the depth-one TF32 replay renders the requested MMA path: true
+the depth-one TF32 replay matches the unscheduled result: true
+the full-f32 replay renders the requested MMA path: true
+the full-f32 replay matches the unscheduled result: true
+the depth-two TF32 replay renders the requested MMA path: true
+the depth-two TF32 replay matches the unscheduled result: true
