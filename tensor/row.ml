@@ -5432,8 +5432,11 @@ let pending_minimum env v =
 
 (* gh-ocannl-2318: whether a result above [v], through the bounds' [res] links and outside
    parameters, has a {!pending_minimum}. A leaf axis below one waits for it instead of guessing 1
-   before stage 7. *)
-let below_pending_minimum env v =
+   before stage 7. Not when the walk meets an axis a held window or concatenation equation defers
+   ([deferred_dims]): the leaf then keeps its broadcast guess, which that equation may need, as
+   gh-ocannl-2229's own closing respects those dependencies. *)
+let below_pending_minimum ~deferred_dims env v =
+  let exception Held in
   let rec go seen = function
     | [] -> false
     | v :: rest when Set.mem seen v -> go seen rest
@@ -5441,10 +5444,11 @@ let below_pending_minimum env v =
         let seen = Set.add seen v in
         match find_dim env.dim_env v with
         | Some (Bounds_dim { is_in_param = false; res; _ }) ->
+            if List.exists res ~f:(Set.mem deferred_dims) then raise Held;
             List.exists res ~f:(pending_minimum env) || go seen (res @ rest)
         | _ -> go seen rest)
   in
-  go dim_var_set_empty [ v ]
+  try go dim_var_set_empty [ v ] with Held -> false
 
 let%debug5_sexp rec close_dim_terminal ~deferred_dims ~(stage : stage) ~is_param origin env
     (dim : dim) : constraint_ list =
@@ -5471,7 +5475,7 @@ let%debug5_sexp rec close_dim_terminal ~deferred_dims ~(stage : stage) ~is_param
                    ("You forgot to specify the hidden dimension(s) 1", [ Dim_mismatch [ dim ] ])
             else [ Terminal_dim (is_param, dim, origin) ]
           else if Set.mem deferred_dims v then [ Terminal_dim (is_param, dim, origin) ]
-          else if (not (is_stage7 stage)) && below_pending_minimum env v then
+          else if (not (is_stage7 stage)) && below_pending_minimum ~deferred_dims env v then
             [ Terminal_dim (is_param, dim, origin) ]
           else (
             refuse_concat_component_guess env v;
@@ -5515,6 +5519,23 @@ let packed_draw_counter = function
   | _ -> None
 
 let is_packed_draw_constr constr = Option.is_some (packed_draw_counter constr)
+
+(* gh-ocannl-2318: whether the packed draw [v]'s block counter belongs to its total alone. Two
+   conversions of the same bits share a counter, and sizing it for one commits the other's block
+   count too (gh-ocannl-2257), so a minimum sizes only a draw whose counter is its own. *)
+let packed_counter_exclusive env v constr =
+  match Option.map (packed_draw_counter constr) ~f:(fun c -> subst_dim env (Var c)) with
+  | Some (Var counter) ->
+      Set.for_all (mentioning env.rows_mentioning_dim counter ~empty:row_var_set_empty) ~f:(fun w ->
+          equal_row_var w v
+          ||
+          match find_row env.row_env w with
+          | Some (Bounds_row { constr = Total_elems _ as total; _ }) ->
+              not
+                (Set.exists (row_constraint_dim_vars total) ~f:(fun c ->
+                     Set.mem (vars_of_dim (subst_dim env (Var c))) counter))
+          | _ -> true)
+  | _ -> false
 
 (* gh-ocannl-2318: a use site bounds an axis with a GLB of its own, and, with [~minimum], also an
    axis with a {!pending_minimum}. *)
@@ -6303,7 +6324,9 @@ let%track5_sexp process_shape_row ~deferred_dims ~(stage : stage) origin env
              && (is_in_param || is_resolve_at_use v)
              && (let glb = subst_row env glb in
                  is_broadcastable glb.bcast || List.is_empty glb.beg_dims)
-             && glb_has_bounded_axis ~minimum:(not is_in_param) env glb ->
+             && glb_has_bounded_axis
+                  ~minimum:((not is_in_param) && packed_counter_exclusive env v constr)
+                  env glb ->
           (* gh-ocannl-2180: a packed draw's row closes to its GLB only once the GLB's axes are
              known, and an axis still open then is closed by its own rules (gh-ocannl-1961) -- for a
              result's axis, minimal. Taking the axes by role first gives the draw axes of its own,
@@ -6318,14 +6341,14 @@ let%track5_sexp process_shape_row ~deferred_dims ~(stage : stage) origin env
              close at stage 6b while a bounded axis is still a variable. Generic elimination then
              waits for stage 7, where that result axis closes minimal; taking it by role first
              preserves its bound instead. A draw (not a parameter) also takes by role an axis a
-             fixed index bounds below by more than 1 (gh-ocannl-2318): a resolve-at-use row between
-             it and that axis ([stretch u *. 2]) closes to it by role at this stage, and the held
-             inequality from it closed the waiting draw empty at stage 6b. The axis gets its size at
-             stage 7 (gh-ocannl-2229), and the draw's own axis follows it. *)
+             fixed index bounds below by more than 1, when its block counter is its own
+             (gh-ocannl-2318): a resolve-at-use row between it and that axis ([stretch u *. 2])
+             closes to it by role at this stage, and the held inequality from it closed the waiting
+             draw empty at stage 6b. The axis gets its size at stage 7 (gh-ocannl-2229), and the
+             draw's own axis follows it. *)
+          let minimum = (not is_in_param) && packed_counter_exclusive env v constr in
           let closing =
-            close_to_glb_by_role
-              ~own:(dim_has_use_bound ~minimum:(not is_in_param) env)
-              env origin ~r1 ~glb
+            close_to_glb_by_role ~own:(dim_has_use_bound ~minimum env) env origin ~r1 ~glb
           in
           (keep @ closing @ dim_eqs, env)
       | Some (Bounds_row { glb; constr; _ }) ->

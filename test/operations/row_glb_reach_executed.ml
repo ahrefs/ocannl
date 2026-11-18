@@ -502,6 +502,33 @@ let () =
         (shared_remainders_after_stage6a ~one_block_bound:true)
         ~f:Fn.id)
 
+(* gh-ocannl-2318: a shared counter whose use sites' sizes arrive as fixed-index minima behind a
+   stretch under a pointwise result instead of as constants, at 8 and 12 cells (two and three
+   blocks). A minimum sizes only a draw whose counter is its own: taken by both, the block counts 2
+   and 3 conflicted and the store was refused. The draws keep the ordinary closing order and
+   broadcast one block. *)
+let () =
+  Verdict.case "draws sharing a packed counter, sized by fixed-index minima" @@ fun () ->
+  Tensor.unsafe_reinitialize ();
+  let offsets = NTDSL.term ~fetch_op:Range_over_offsets () in
+  let bits =
+    TDSL.threefry4x32 ~spec:"..p..|..q..->..r..; ..b.. => ..b.." (TDSL.embed_self_id ()) offsets ()
+  in
+  let u = TDSL.uint4x32_to_prec_uniform bits () in
+  let v = TDSL.uint4x32_to_prec_uniform bits () in
+  let%op mu = stretch u *. !.2. in
+  let%op mv = stretch v *. !.2. in
+  let%op y = mu ++ "...|7 => ...|0" in
+  let%op z = mv ++ "...|11 => ...|0" in
+  let%op root = y + z in
+  let (_ : Context.t) = Train.forward_once (context ()) root in
+  let dims t = Array.to_list (Shape.to_dims t.Tensor.shape) in
+  Stdio.printf "shared counter, fixed-index minima: bits %s, u %s, v %s, mu %s, mv %s\n"
+    (shape bits) (shape u) (shape v) (shape mu) (shape mv);
+  p_all ~min:4 "accepted: the pointwise results take the minima, the draws broadcast one block"
+    [ (mu, [ 8 ]); (mv, [ 12 ]); (u, []); (v, []) ]
+    ~f:(fun (t, want) -> List.equal Int.equal (dims t) want)
+
 (* gh-ocannl-2224: the late-tail boundary is staged deliberately: ordinary program constraints
    register before closing. The GLB has a leading axis over a tail held open through Stage6a; supply
    the tail equation at Stage6b. Concrete axes already work through generic elimination, but an

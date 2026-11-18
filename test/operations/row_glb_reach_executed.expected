@@ -206,6 +206,8 @@ the 9-cell draw holds a distinct value in every cell: true
 the 12-cell draw holds a distinct value in every cell: true
 both remainders close when the counter can take three blocks: true
 both remainders stay open when the counter's bound requires one block: true
+shared counter, fixed-index minima: bits 1, u , v , mu 8, mv 12
+accepted: the pointwise results take the minima, the draws broadcast one block: true
 late-tail fixture: the packed draw is open after Stage6a: true
 late-tail fixture: the closed GLB is retained at Stage6b: true
 late-tail fixture: three cells use one counter block: true
