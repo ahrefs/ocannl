@@ -1865,6 +1865,9 @@ type footprint = {
 (** gh-ocannl-498: the backend-agnostic byte footprint implied by an {!optimized} routine's
     placement vector. The allocator-side scorer lives in [Backends.score_footprint]. *)
 
+val operand_read_precisions : optimized -> Ops.prec list
+(** Storage and rounded read precisions that a contraction in a segment of this lowering can use. *)
+
 val first_access_positions : t -> (Tnode.t, int) Base.Hashtbl.t
 (** gh-ocannl-1777: each node's first buffer access in the code, in [iter_buffer_accesses]' walk
     order (a statement's write before its reads), numbered from 0 -- a key the program fixes, where

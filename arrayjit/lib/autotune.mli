@@ -4103,7 +4103,12 @@ module type Driver = sig
   val lowered_transform_input : Ir.Low_level.optimized -> Ir.Low_level.optimized
 
   val probe_link_floor :
-    ?name:string -> ?prelowered:bool -> ctx -> Ir.Low_level.optimized -> Ir.Backend_intf.link_floor
+    ?name:string ->
+    ?prelowered:bool ->
+    ?domain:Ir.Backend_intf.link_floor_domain ->
+    ctx ->
+    Ir.Low_level.optimized ->
+    Ir.Backend_intf.link_floor
 
   val run : ?timing:bool -> ctx -> routine -> ctx
   val sync : ctx -> unit

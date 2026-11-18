@@ -74,41 +74,8 @@ type sketch_params = {
 }
 [@@deriving sexp]
 
-(* Resolve the tensor-core input format from storage precision before seeding a typed matmul/conv
-   site. Single-precision storage has two possible compute formats: prefer tf32 when the numerics
-   policy enables it and the backend advertises that pair, then fall back to genuine f32 (Metal).
-   Backends remain the emission source of truth; this only prevents the autotuner from rejecting a
-   supported divergent tile up front, or timing a format the capability does not advertise. *)
-let mma_input_formats_of_prec (prec : Ir.Ops.prec) : Ir.Backend_intf.mma_input_format list =
-  match prec with
-  | Ir.Ops.Half_prec _ -> [ Ir.Backend_intf.Mma_f16 ]
-  | Ir.Ops.Bfloat16_prec _ -> [ Ir.Backend_intf.Mma_bf16 ]
-  | Ir.Ops.Fp8_prec _ -> [ Ir.Backend_intf.Mma_fp8_e5m2 ]
-  | Ir.Ops.Single_prec _ ->
-      if (Ir.Numerics.get ()).Ir.Numerics.tf32_matmuls then
-        [ Ir.Backend_intf.Mma_tf32; Ir.Backend_intf.Mma_f32 ]
-      else [ Ir.Backend_intf.Mma_f32 ]
-  | _ -> []
-
-(* The accumulator format of a destination's storage precision (gh-ocannl-545). Unlike the
-   multiplicands, this admits no policy choice: the accumulator is read back from and written to the
-   node, so its format is its storage layout. In particular f32 storage accumulates as [Mma_f32]
-   even under the tf32 policy — tf32 truncates the multiplicands, never the accumulator. *)
-let mma_acc_format_of_prec (prec : Ir.Ops.prec) : Ir.Backend_intf.mma_input_format option =
-  match prec with
-  | Ir.Ops.Half_prec _ -> Some Ir.Backend_intf.Mma_f16
-  | Ir.Ops.Bfloat16_prec _ -> Some Ir.Backend_intf.Mma_bf16
-  | Ir.Ops.Single_prec _ -> Some Ir.Backend_intf.Mma_f32
-  | _ -> None
-
-(* The site's resolved format triples, in [mma_input_formats_of_prec]'s preference order. *)
-let mma_format_triples ~a_prec ~b_prec ~d_prec =
-  match mma_acc_format_of_prec d_prec with
-  | None -> []
-  | Some d_format ->
-      List.concat_map (mma_input_formats_of_prec a_prec) ~f:(fun a_format ->
-          List.map (mma_input_formats_of_prec b_prec) ~f:(fun b_format ->
-              (a_format, b_format, d_format)))
+let mma_format_triples = Ir.Backend_intf.mma_format_triples
+let mma_tile_for_precisions = Ir.Backend_intf.mma_tile_for_precisions
 
 (* gh-ocannl-680/836: under [Numerics.Fp16_wide] an f16-storage destination may tensorize only in an
    emission scope where the backend's uniform-f16 arm accumulates f32. CUDA sm_80+ supports the
@@ -147,11 +114,6 @@ let wide_acc_withholding (mma : Ir.Backend_intf.mma_capability) ~scope ~d_prec =
   | _ -> None
 
 let wide_acc_withholds mma ~scope ~d_prec = Option.is_some (wide_acc_withholding mma ~scope ~d_prec)
-
-let mma_tile_for_precisions (mma : Ir.Backend_intf.mma_capability) ~a_prec ~b_prec ~d_prec =
-  List.find_map (mma_format_triples ~a_prec ~b_prec ~d_prec) ~f:(fun key ->
-      List.Assoc.find mma.Ir.Backend_intf.mma_format_tiles key
-        ~equal:Ir.Backend_intf.equal_mma_format_triple)
 
 let mma_tile_for_precisions_in_scope (mma : Ir.Backend_intf.mma_capability) ~scope ~a_prec ~b_prec
     ~d_prec =

@@ -1331,9 +1331,18 @@ let compile_outcome ?name ?lowered_transform ?prelowered ?reuse ~provenance ?can
         Ir.C_syntax.with_census (fun () ->
             Ir.Schedule_outcome.protect ~classify_backend:Backend.classify_failure ~provenance
               ~phase:Ir.Schedule_outcome.Transform ?candidate (fun () ->
+                (* A user transform can intentionally extract just one kernel for timing. Its
+                   subprogram does not owe the whole routine's storage. *)
+                let floor_domain =
+                  match provenance with
+                  | Ir.Schedule_outcome.Candidate -> Some BI.Seeded_search
+                  | Cache_replay | Advisory -> Some BI.Every_schedule
+                  | User_schedule ->
+                      Option.some_if (Option.is_none lowered_transform) BI.Every_schedule
+                in
                 let code =
-                  Backend.compile ?name ?lowered_transform ?prelowered ?reuse bctx.BI.optimize_ctx
-                    bindings comp
+                  Backend.compile ?name ?lowered_transform ?prelowered ?reuse ?floor_domain
+                    bctx.BI.optimize_ctx bindings comp
                 in
                 Utils.count_backend_compile ();
                 (code, Ir.Schedule_outcome.tag Ir.Schedule_outcome.Backend_link (link code))))
@@ -3174,20 +3183,20 @@ type link_floor = Ir.Backend_intf.link_floor = {
 }
 [@@deriving sexp_of, equal]
 
-let link_floor_impl ~fn ~probe ?name ?prelowered ctx lowered =
+let link_floor_impl ~fn ~probe ?name ?prelowered ?domain ctx lowered =
   check_live ~fn ctx;
   Backends.query ctx.wrapped
     {
       q =
         (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
-          Backend.link_floor c ?name ?prelowered ~probe lowered);
+          Backend.link_floor c ?name ?prelowered ?domain ~probe lowered);
     }
 
-let link_floor ?name ?prelowered ctx lowered =
-  link_floor_impl ~fn:"link_floor" ~probe:false ?name ?prelowered ctx lowered
+let link_floor ?name ?prelowered ?domain ctx lowered =
+  link_floor_impl ~fn:"link_floor" ~probe:false ?name ?prelowered ?domain ctx lowered
 
-let probe_link_floor ?name ?prelowered ctx lowered =
-  link_floor_impl ~fn:"probe_link_floor" ~probe:true ?name ?prelowered ctx lowered
+let probe_link_floor ?name ?prelowered ?domain ctx lowered =
+  link_floor_impl ~fn:"probe_link_floor" ~probe:true ?name ?prelowered ?domain ctx lowered
 
 let global_debug_info ctx =
   Backends.query ctx.wrapped

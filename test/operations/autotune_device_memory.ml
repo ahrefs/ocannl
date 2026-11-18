@@ -222,8 +222,9 @@ let floor_scenarios ~backend_name ~on_gpu ~baseline_links ~check_values comp =
   Unix.putenv "OCANNL_BUFFER_ALIASING" "false";
   (* 6c: no aliasing; a reduction target past the default stack threshold (so the unscheduled
      compile settles it on the device) and within every GPU backend's workgroup memory (so a shared
-     epilogue placement may hold it) -- [link_delta_parity]'s fusion fixture. Room for the floor,
-     not the unscheduled delta: the search is not refused before its candidates. *)
+     epilogue placement may hold it) -- [link_delta_parity]'s fusion fixture. Room for the explicit
+     shared twin, below the unscheduled delta: only an advertised f32 tile gives the generated
+     search the same exemption. *)
   let m = 192 and k = 32 and nn = 32 in
   let fa =
     NTDSL.init ~l:"fl_fa" ~prec:Ir.Ops.single ~o:[ m ] ~i:[ k ]
@@ -259,22 +260,22 @@ let floor_scenarios ~backend_name ~on_gpu ~baseline_links ~check_values comp =
   Stdio.eprintf "fusion window search (not part of the golden): outcome %s, %d attempt(s)\n%!"
     (Option.value_map !report ~default:"-" ~f:(fun r -> Autotune.outcome_name r.Autotune.outcome))
     (List.length attempts);
-  Verdict.gated ~when_:on_gpu ~on:backend_name
-    "no aliasing, room for the floor but not the unscheduled delta of a shared-fusable step: the \
-     search is not refused before its candidates"
-    (Option.exists !report ~f:(fun r ->
-         match r.Autotune.outcome with Autotune.Pre_search_failure _ -> false | _ -> true)
-    && List.exists attempts ~f:(fun l -> not (String.equal l "baseline")));
-  (* Where the backend tensorizes the f32 site, the search seeds the shared-fused twin (the sketch
-     families' [epilogue_shared]: a GPU tile-MMA site), the one candidate that fits this room: the
-     search then ships, and what it ships computes the right values. Elsewhere every candidate holds
-     the target on the device and is declined, which the claim above already allows. *)
+  let advertised =
+    on_gpu
+    && Ll_test.advertised ~backend_name ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single
+         ~d_prec:Ir.Ops.single
+  in
   Verdict.gated
-    ~when_:
-      (on_gpu
-      && Ll_test.advertised ~backend_name ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single
-           ~d_prec:Ir.Ops.single)
+    ~when_:(on_gpu && not (Utils.debug_log_from_routines ()))
     ~on:backend_name
+    "room for the explicit shared fusion: the search reaches candidates exactly when it can seed \
+     the f32 twin"
+    (Option.exists !report ~f:(fun r ->
+         if advertised then
+           (not (refused_for_memory r))
+           && List.exists attempts ~f:(fun a -> not (String.equal a "baseline"))
+         else refused_for_memory r && List.equal String.equal attempts [ "baseline" ]));
+  Verdict.gated ~when_:advertised ~on:backend_name
     "where the backend tensorizes it, the shared-fusable step searched in room for its floor ships \
      a routine computing the right values"
     (match result with
@@ -287,6 +288,51 @@ let floor_scenarios ~backend_name ~on_gpu ~baseline_links ~check_values comp =
           (Context.get_values (Context.run ctx routine) fused.Tensor.value)
           want
     | Error _ -> false);
+  (* Give an explicit shared schedule its weaker all-schedule floor, then make the saved transform
+     fail. The fresh search has no such schedule left to fit. *)
+  let withheld =
+    Verdict.leg
+      ~when_:(on_gpu && (not advertised) && not (Utils.debug_log_from_routines ()))
+      ~on:backend_name ()
+  in
+  Verdict.in_leg ~leg:withheld "a rejected shared replay restores the generated-search memory floor"
+    (fun label ->
+      let module SC = Ir.Schedule_cache in
+      let module Plant = Test_utils.Cache_plant in
+      let ctx = Context.auto () in
+      let canon =
+        SC.canonicalize (Context.lowered_for_decisions ctx fused_comp Ir.Indexing.Empty)
+      in
+      let backend = Context.backend_name ctx
+      and facts = Context.backend_facts ctx
+      and limits = Context.hardware_limits ctx
+      and capabilities = Context.codegen_capabilities ctx
+      and timing_identity = Context.timing_identity ctx in
+      let identity =
+        Option.is_some (Plant.key ~backend ~facts ~limits ~capabilities ~timing_identity canon)
+      in
+      let writes =
+        Plant.plant
+          ~saved:[ SC.Fuse_epilogue { target = -1; shared = true } ]
+          ~cache_dir:cache_dir_6c ~backend ~facts ~limits ~capabilities ~timing_identity canon
+      in
+      let capacity = live_working () + ((f.lf_working_bytes + exact.ld_working_bytes) / 2) in
+      let report = ref None in
+      let (_, _), reads =
+        SC.recording_cache_io (fun () ->
+            with_capacity ~capacity (fun () ->
+                tune_with ~ctx ~cache_dir:cache_dir_6c
+                  ~report:(fun r -> report := Some r)
+                  fused_comp))
+      in
+      Plant.unless_unkeyed_or_refused ~identity (writes @ reads) label
+        (Option.exists !report ~f:(fun r ->
+             refused_for_memory r
+             &&
+             match r.Autotune.cache_replay_refusal with
+             | Some { SO.cause = SO.Illegal_schedule ill; _ } ->
+                 String.equal ill.check "Schedule_cache.tn_of_ref"
+             | _ -> false)));
   (* 6d: where the baseline links, a refusal of that link alone -- the device admits the floor --
      declines the baseline and nothing more: the search runs on its candidates. *)
   let report = ref None in

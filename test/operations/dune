@@ -1410,12 +1410,14 @@
   (env_var OCANNL_BACKEND))
  (modules autotune_device_memory)
  (libraries
+  test_utils
   base
   ocannl
   stdio
   arrayjit.verdict
   ll_test
   tune_counts
+  arrayjit.utils
   arrayjit.context
   arrayjit.autotune
   unix)

@@ -1094,7 +1094,12 @@ val code_footprint : Low_level.t -> Set.M(Tn).t * bool
 (** All tensor nodes the code references (scope ids' backing nodes included) — the set a fission
     segment's traced store is filtered to — and whether it reads the merge buffer. *)
 
+val seedable_shared_target :
+  limits:Backend_intf.hardware_limits -> Low_level.optimized -> Tn.t -> bool
+(** Whether the GPU families could seed a shared twin at this destination precision. *)
+
 val may_keep_off_device :
+  ?shared_target:(Tn.t -> bool) ->
   facts:Backend_intf.backend_facts ->
   limits:Backend_intf.hardware_limits ->
   Tn.Placements.t ->

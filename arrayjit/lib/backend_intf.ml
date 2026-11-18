@@ -612,6 +612,35 @@ type hardware_limits = {
 let equal_mma_format_triple (a1, b1, d1) (a2, b2, d2) =
   equal_mma_input_format a1 a2 && equal_mma_input_format b1 b2 && equal_mma_input_format d1 d2
 
+(* Prefer tf32 multiplicands when the policy permits them and the backend advertises that tile. The
+   accumulator always has the destination's storage format. *)
+let mma_format_triples ~a_prec ~b_prec ~d_prec =
+  let input_formats (prec : Ops.prec) =
+    match prec with
+    | Ops.Half_prec _ -> [ Mma_f16 ]
+    | Ops.Bfloat16_prec _ -> [ Mma_bf16 ]
+    | Ops.Fp8_prec _ -> [ Mma_fp8_e5m2 ]
+    | Ops.Single_prec _ ->
+        if (Numerics.get ()).Numerics.tf32_matmuls then [ Mma_tf32; Mma_f32 ] else [ Mma_f32 ]
+    | _ -> []
+  in
+  let accumulator =
+    match (d_prec : Ops.prec) with
+    | Ops.Half_prec _ -> Some Mma_f16
+    | Ops.Bfloat16_prec _ -> Some Mma_bf16
+    | Ops.Single_prec _ -> Some Mma_f32
+    | _ -> None
+  in
+  match accumulator with
+  | None -> []
+  | Some d_format ->
+      List.concat_map (input_formats a_prec) ~f:(fun a_format ->
+          List.map (input_formats b_prec) ~f:(fun b_format -> (a_format, b_format, d_format)))
+
+let mma_tile_for_precisions (mma : mma_capability) ~a_prec ~b_prec ~d_prec =
+  List.find_map (mma_format_triples ~a_prec ~b_prec ~d_prec) ~f:(fun key ->
+      List.Assoc.find mma.mma_format_tiles key ~equal:equal_mma_format_triple)
+
 (** Whether the backend's tensor-core unit advertises an intrinsic tile for this [(a, b, d)] format
     triple -- [false] when it advertises the triple's operands only against another accumulator, and
     [false] when the backend has no such unit at all ([mma = None]).
@@ -1938,6 +1967,12 @@ type link_delta = {
     the routine's whole footprint: nodes the context already holds and constants the device already
     caches are not in it. *)
 
+type link_floor_domain =
+  | Every_schedule  (** Includes explicit shared fusion using a scalar tile fallback. *)
+  | Seeded_search
+      (** Shared fusion is available only at a precision the GPU seeder can tensorize. *)
+[@@deriving sexp_of]
+
 type link_floor = {
   lf_working_bytes : int;  (** The floor's working bytes. *)
   lf_constant_bytes : int;  (** The floor's new-constant bytes. *)
@@ -1949,16 +1984,15 @@ type link_floor = {
       (** New-constant bytes left out because a hoisted [Stage] can replace the node by a packed
           tile ([Schedule.may_replace_by_packed_tile]). *)
   lf_overlap_bytes : int;
-      (** Under [buffer_aliasing]: bytes of overlap-eligible nodes past the largest of each
-          precision class, which some kernel sequence may overlap. *)
+      (** Under [buffer_aliasing]: overlap-eligible bytes beyond the heaviest certified clique of
+          each storage precision class (at least its largest member). *)
 }
 [@@deriving sexp_of]
 (** gh-ocannl-1554: a floor under the device allocation of every schedule of a lowering a compile
     can ship on a context — what the device must admit for any of them to link. The bytes are raw
     node sizes (no layout padding), over the nodes of the lowering's delta its code touches, less
     what some schedule can keep off the device or replace, and under the liveness planner counting
-    only nodes no kernel sequence can overlap plus the largest overlap-eligible one per precision
-    class (these conflict pairwise in every plan). *)
+    dedicated nodes plus a certified clique of eligible nodes per storage precision class. *)
 
 module type Backend = sig
   type code [@@deriving sexp_of]
@@ -1971,6 +2005,7 @@ module type Backend = sig
     ?lowered_transform:(Low_level.optimized -> Low_level.optimized list) ->
     ?prelowered:Low_level.optimized ->
     ?reuse:Lowering_reuse.t ->
+    ?floor_domain:link_floor_domain ->
     Indexing.unit_bindings ->
     Assignments.comp ->
     code
@@ -2042,7 +2077,13 @@ module type Backend = sig
       [?prelowered], whose zeros are compiled as written (no covering-zero elision). *)
 
   val link_floor :
-    context -> ?name:string -> ?prelowered:bool -> probe:bool -> Low_level.optimized -> link_floor
+    context ->
+    ?name:string ->
+    ?prelowered:bool ->
+    ?domain:link_floor_domain ->
+    probe:bool ->
+    Low_level.optimized ->
+    link_floor
   (** gh-ocannl-1554: [link_floor context ~probe lowered] is {!type-link_floor} for the lowering a
       [lowered_transform] receives, planned without codegen or link and without effect on [lowered]
       or [context]. With [~probe:true] the floor's pools — each group's bytes in one request, cut

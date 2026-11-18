@@ -1101,12 +1101,111 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
 
   type fissioned = { batch : Device.code_batch; count : int } [@@deriving sexp_of]
 
+  type floor_nodes = {
+    dedicated : Tn.t list;
+    eligible : Tn.t list;
+    cliques : Tn.t list list;
+    off : Tn.t list;
+    kept : Tn.t list;
+    replaceable : Tn.t list;
+  }
+  [@@deriving sexp_of]
+
+  (* These stores have no loop to stage, privatize or split, no zero to expand and no scalar
+     destination for a loop-free epilogue. Fission can separate stores but cannot separate a store's
+     operands. A general nest has no such guarantee. *)
+  let fixed_store_cliques llc =
+    let fixed idcs = Array.for_all idcs ~f:(function Indexing.Fixed_idx _ -> true | _ -> false) in
+    let store = function
+      | Low_level.Noop | Comment _ -> Some []
+      | Set { tn; idcs; llsc; _ } when Array.length idcs > 0 && fixed idcs -> (
+          let input = function
+            | Low_level.Get (src, idx) when (not (Tn.equal src tn)) && fixed idx -> Some src
+            | _ -> None
+          in
+          match llsc with
+          | Constant _ | Constant_bits _ -> Some []
+          | Get _ -> Option.map (input llsc) ~f:(fun src -> [ tn; src ])
+          | Binop (Add, (a, _), (b, _)) ->
+              Option.map2 (input a) (input b) ~f:(fun a b ->
+                  List.dedup_and_sort [ tn; a; b ] ~compare:Tn.compare)
+          | _ -> None)
+      | _ -> None
+    in
+    Option.value (Option.all (List.map (Low_level.flat_lines [ llc ]) ~f:store)) ~default:[]
+
+  let floor_nodes ~domain ~prelowered (lowered : Low_level.optimized) =
+    let lowered =
+      {
+        lowered with
+        Low_level.traced_store = Low_level.copy_traced_store lowered.Low_level.traced_store;
+        optimize_ctx = Low_level.copy_optimize_ctx lowered.Low_level.optimize_ctx;
+      }
+    in
+    (* As in [compile] and [link_delta]: a [?prelowered] routine's zeros are compiled as written. *)
+    let lowered =
+      if prelowered then lowered
+      else
+        match maybe_elide_zeros ~facts:Device.backend_facts [ lowered ] with
+        | [ single ] -> single
+        | _ -> lowered
+    in
+    let plc = lowered.Low_level.optimize_ctx.placements in
+    let limits = Device.hardware_limits () in
+    let shared_target =
+      match domain with
+      | Every_schedule -> fun _ -> true
+      | Seeded_search -> Schedule.seedable_shared_target ~limits lowered
+    in
+    let off_device =
+      Hashtbl.fold lowered.Low_level.traced_store
+        ~init:(Set.empty (module Tn))
+        ~f:(fun ~key ~data acc ->
+          if
+            Schedule.may_keep_off_device ~facts:Device.backend_facts ~limits ~shared_target plc key
+              data
+          then Set.add acc key
+          else acc)
+    in
+    let touched, _ = Schedule.code_footprint lowered.Low_level.llc in
+    let working, constants = partition_layout_groups ~lowered () in
+    let touched_nodes items =
+      List.filter_map items ~f:(fun (tn, _) -> Option.some_if (Set.mem touched tn) tn)
+    in
+    let off, pinned = List.partition_tf (touched_nodes working) ~f:(Set.mem off_device) in
+    let eligible, dedicated =
+      if buffer_aliasing () then List.partition_tf pinned ~f:(alias_eligible ~lowered)
+      else ([], pinned)
+    in
+    let replaceable, kept =
+      List.partition_tf (touched_nodes constants) ~f:(Schedule.may_replace_by_packed_tile plc)
+    in
+    let cliques = if List.is_empty eligible then [] else fixed_store_cliques lowered.llc in
+    { dedicated; eligible; cliques; off; kept; replaceable }
+
+  let check_floor_nodes ~name floor lowered =
+    let working, constants = partition_layout_groups ~lowered () in
+    let check group actual required =
+      let present = Set.of_list (module Tn) (List.map actual ~f:fst) in
+      List.iter required ~f:(fun tn ->
+          if not (Set.mem present tn) then
+            raise
+              (Schedule_outcome.Link_floor_violation
+                 (Printf.sprintf
+                    "%s: link floor counted %s node %s before scheduling; the compiled layout \
+                     omits it"
+                    name group (Tn.debug_name tn))))
+    in
+    check "working" working (floor.dedicated @ floor.eligible);
+    check "constant" constants floor.kept
+
   type nonrec code = {
     from_prior_context : Set.M(Tnode).t;
     name : string;
     lowered : Low_level.optimized;
         (** The whole-routine lowered code, used for allocation and I/O analysis. When the routine
             is fissioned this is the pre-fission form; the per-segment kernels live in [proc]. *)
+    floor : floor_nodes option;
     proc : (code, fissioned) Either.t;
         (** [First]: a single kernel, as before fission. [Second]: the segment kernels of one
             routine, compiled as a batch and launched back-to-back on the routine's stream. *)
@@ -1122,8 +1221,8 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
 
   let empty_optimize_ctx = Low_level.empty_optimize_ctx
 
-  let%debug3_sexp compile optim_ctx ?name ?lowered_transform ?prelowered ?reuse bindings
-      (comp : Assignments.comp) : code =
+  let%debug3_sexp compile optim_ctx ?name ?lowered_transform ?prelowered ?reuse ?floor_domain
+      bindings (comp : Assignments.comp) : code =
     let (name : string), (lowered : Low_level.optimized) =
       match prelowered with
       | None ->
@@ -1156,6 +1255,10 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
     let lowered = maybe_sink_zeros lowered in
     let limits = Device.hardware_limits () in
     let capabilities = Device.codegen_capabilities () in
+    let floor =
+      Option.map floor_domain ~f:(fun domain ->
+          floor_nodes ~domain ~prelowered:(Option.is_some prelowered) lowered)
+    in
     let lowereds =
       Compile_cost.time_transform @@ fun () ->
       Schedule_outcome.tag Schedule_outcome.Transform (fun () ->
@@ -1227,6 +1330,7 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
           fold_segment_stores ~into:lowered.Low_level.traced_store segments;
           (Either.Second { batch; count = List.length segments }, lowered)
     in
+    Option.iter floor ~f:(fun f -> check_floor_nodes ~name f lowered);
     (* Placements of all context nodes are settled by codegen (the [compile] just above), so this
        query resolves against the code's own lineage fork. The raw assignments over-approximate what
        the RESIDUAL schedule needs — a deferral-only routine reads nothing at run time, so linking
@@ -1271,6 +1375,7 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
     in
     {
       from_prior_context;
+      floor;
       name;
       lowered;
       proc;
@@ -1446,6 +1551,71 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
   let allocate_group_pools tx device (gl : group_layout) : int array =
     allocate_pools tx device ~constant:gl.gl_constant gl.gl_pools
 
+  let floor_layout (context : context) floor =
+    let missing tn = not (Map.mem context.ctx_buffers tn) in
+    let fresh tn =
+      missing tn && Option.is_none (find_constant context.device ~root:context.constant_root tn)
+    in
+    let dedicated = List.filter floor.dedicated ~f:missing
+    and eligible = List.filter floor.eligible ~f:missing in
+    let eligible_set = Set.of_list (module Tn) eligible in
+    let class_weights nodes =
+      Map.of_alist_fold
+        (module String)
+        (List.map nodes ~f:(fun tn -> (alias_class tn, size_in_bytes_of tn)))
+        ~init:0 ~f:( + )
+    in
+    let largest =
+      Map.of_alist_fold
+        (module String)
+        (List.map eligible ~f:(fun tn -> (alias_class tn, size_in_bytes_of tn)))
+        ~init:0 ~f:Int.max
+    in
+    let bounds =
+      List.fold floor.cliques ~init:largest ~f:(fun bounds clique ->
+          Map.fold
+            (class_weights (List.filter clique ~f:(Set.mem eligible_set)))
+            ~init:bounds
+            ~f:(fun ~key ~data bounds ->
+              Map.update bounds key ~f:(fun old -> max data (Option.value old ~default:0))))
+    in
+    let shared_bytes = Map.sum (module Int) bounds ~f:Fn.id in
+    let sum = List.sum (module Int) ~f:size_in_bytes_of in
+    let kept = List.filter floor.kept ~f:fresh in
+    let working_bytes = sum dedicated + shared_bytes and constant_bytes = sum kept in
+    (* One request per group, cut only at the per-pool cap: with the cap a page multiple, the
+       requests' page-rounded total is the floor's rounded up, never above the rounded total of a
+       candidate's pools, which hold at least the floor's bytes. *)
+    let cap = pool_cap () in
+    let alignment items =
+      List.fold items ~init:1 ~f:(fun a key ->
+          max a (Ops.prec_in_bytes (Lazy.force key.Tn.storage_prec)))
+    in
+    let pools ~items bytes =
+      let rec cut rest acc =
+        if rest <= 0 then List.rev acc
+        else
+          let piece = min rest cap in
+          cut (rest - piece) ((piece, alignment items) :: acc)
+      in
+      cut bytes []
+    in
+    let groups =
+      [
+        (false, pools ~items:(dedicated @ eligible) working_bytes);
+        (true, pools ~items:kept constant_bytes);
+      ]
+    in
+    ( {
+        lf_working_bytes = working_bytes;
+        lf_constant_bytes = constant_bytes;
+        lf_pools = List.sum (module Int) groups ~f:(fun (_, p) -> List.length p);
+        lf_off_device_bytes = sum (List.filter floor.off ~f:missing);
+        lf_replaceable_bytes = sum (List.filter floor.replaceable ~f:fresh);
+        lf_overlap_bytes = sum eligible - shared_bytes;
+      },
+      groups )
+
   (* gh-ocannl-344 Phase B/C: allocate a context's delta ([plan_delta]). Working pools belong to the
      context (freed at its [finalize]); constant pools are deduped per-device via
      [constant_buffer_cache] and outlive the context, until the last release unit binding them is
@@ -1453,11 +1623,25 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
      deterministic across runs: the plan is in program order and ids are minted per pool before any
      placement. The per-pool 4 GB cap (uint32 offsets unless large_models) is enforced by
      {!Backend_utils.plan_pool_segments}. *)
-  let%track3_sexp allocate_delta (context : context) ~name
+  let%track3_sexp allocate_delta (context : context) ~name ~floor
       ~(alias_spans : (Tn.t, int * int) Base.Hashtbl.t option) (lowered : Low_level.optimized) :
       ctx_buffers =
     let device = context.device in
     let plan = plan_delta context ~alias_spans lowered in
+    Option.iter floor ~f:(fun floor ->
+        let f, _ = floor_layout context floor in
+        let bytes =
+          Option.value_map ~default:0 ~f:(fun gl -> List.sum (module Int) gl.gl_pools ~f:fst)
+        in
+        let working = bytes plan.dp_working
+        and constants = bytes plan.dp_new_constants + bytes plan.dp_new_root_constants in
+        if working < f.lf_working_bytes || constants < f.lf_constant_bytes then
+          raise
+            (Schedule_outcome.Link_floor_violation
+               (Printf.sprintf
+                  "%s: link floor %d working + %d constant bytes exceeds compiled delta %d working \
+                   + %d constant bytes"
+                  name f.lf_working_bytes f.lf_constant_bytes working constants)));
     let ctx_buffers = ref context.ctx_buffers in
     (* The ranges to zero, gathered so the backend fills them in one call (gh-ocannl-1675): Metal
        waited a GPU round trip per call. Filled before the next host upload, so a range is zero
@@ -1667,99 +1851,12 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
         (List.map groups ~f:(fun gl -> (gl.gl_constant, gl.gl_pools)));
     summary
 
-  (* gh-ocannl-1554: the floor under every schedule of [lowered] -- see [link_floor] in
-     [Backend_intf]. Settledness is read before the partition forces the open placements (on the
-     copies, as in [link_delta]); a node the base code does not touch is not counted, since a
-     single-kernel candidate's store is filtered to its code footprint. *)
-  let link_floor (context : context) ?(name = "link_floor") ?(prelowered = false) ~probe
-      (lowered : Low_level.optimized) : link_floor =
-    let lowered =
-      {
-        lowered with
-        Low_level.traced_store = Hashtbl.copy lowered.Low_level.traced_store;
-        optimize_ctx = Low_level.copy_optimize_ctx lowered.Low_level.optimize_ctx;
-      }
-    in
-    (* As in [compile] and [link_delta]: a [?prelowered] routine's zeros are compiled as written. *)
-    let lowered =
-      if prelowered then lowered
-      else
-        match maybe_elide_zeros ~facts:Device.backend_facts [ lowered ] with
-        | [ single ] -> single
-        | _ -> lowered
-    in
-    let plc = lowered.Low_level.optimize_ctx.placements in
-    let limits = Device.hardware_limits () in
-    let off_device =
-      Hashtbl.fold lowered.Low_level.traced_store
-        ~init:(Set.empty (module Tn))
-        ~f:(fun ~key ~data acc ->
-          if Schedule.may_keep_off_device ~facts:Device.backend_facts ~limits plc key data then
-            Set.add acc key
-          else acc)
-    in
-    let touched, _ = Schedule.code_footprint lowered.Low_level.llc in
-    let working, constants =
-      partition_layout_groups ~lowered ~skip:(Map.mem context.ctx_buffers) ()
-    in
-    let size (key, _) = size_in_bytes_of key in
-    let sum = List.sum (module Int) ~f:size in
-    let working = List.filter working ~f:(fun (key, _) -> Set.mem touched key) in
-    let off, pinned = List.partition_tf working ~f:(fun (key, _) -> Set.mem off_device key) in
-    let working_bytes, overlap_bytes =
-      if not (buffer_aliasing ()) then (sum pinned, 0)
-      else
-        let eligible, dedicated =
-          List.partition_tf pinned ~f:(fun (key, _) -> alias_eligible ~lowered key)
-        in
-        let largest =
-          Map.of_alist_fold
-            (module String)
-            (List.map eligible ~f:(fun ((key, _) as item) -> (alias_class key, size item)))
-            ~init:0 ~f:Int.max
-          |> Map.data
-          |> List.sum (module Int) ~f:Fn.id
-        in
-        (sum dedicated + largest, sum eligible - largest)
-    in
-    let fresh =
-      List.filter constants ~f:(fun (key, _) ->
-          Set.mem touched key
-          && Option.is_none (find_constant context.device ~root:context.constant_root key))
-    in
-    let replaceable, kept =
-      List.partition_tf fresh ~f:(fun (key, _) -> Schedule.may_replace_by_packed_tile plc key)
-    in
-    let constant_bytes = sum kept in
-    (* One request per group, cut only at the per-pool cap: with the cap a page multiple, the
-       requests' page-rounded total is the floor's rounded up, never above the rounded total of a
-       candidate's pools, which hold at least the floor's bytes. *)
-    let cap = pool_cap () in
-    let alignment items =
-      List.fold items ~init:1 ~f:(fun a (key, _) ->
-          max a (Ops.prec_in_bytes (Lazy.force key.Tn.storage_prec)))
-    in
-    let pools ~items bytes =
-      let rec cut rest acc =
-        if rest <= 0 then List.rev acc
-        else
-          let piece = min rest cap in
-          cut (rest - piece) ((piece, alignment items) :: acc)
-      in
-      cut bytes []
-    in
-    let groups =
-      [ (false, pools ~items:pinned working_bytes); (true, pools ~items:kept constant_bytes) ]
-    in
+  let link_floor (context : context) ?(name = "link_floor") ?(prelowered = false)
+      ?(domain = Every_schedule) ~probe lowered =
+    let floor = floor_nodes ~domain ~prelowered lowered in
+    let summary, groups = floor_layout context floor in
     if probe then trial_allocate context ~fn:"Backends.link_floor" ~name groups;
-    {
-      lf_working_bytes = working_bytes;
-      lf_constant_bytes = constant_bytes;
-      lf_pools = List.sum (module Int) groups ~f:(fun (_, p) -> List.length p);
-      lf_off_device_bytes = sum off;
-      lf_replaceable_bytes = sum replaceable;
-      lf_overlap_bytes = overlap_bytes;
-    }
+    summary
 
   (* gh-ocannl-550: [allocate_delta] runs BEFORE the backend link, and the pool table roots whatever
      it allocated — so a link that raises (HIP's scratch-budget validator, a driver refusal, an
@@ -1824,7 +1921,8 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
     let (inputs, outputs), merge_buffer_input = Low_level.input_and_output_nodes code.lowered in
     let ctx_buffers =
       Compile_cost.time_link_delta (fun () ->
-          allocate_delta context ~name:code.name ~alias_spans:code.alias_spans code.lowered)
+          allocate_delta context ~floor:code.floor ~name:code.name ~alias_spans:code.alias_spans
+            code.lowered)
     in
     with_delta context ctx_buffers ~f:(fun () ->
         (* gh-ocannl-489: a routine reading a node whose buffer an earlier routine of this lineage
