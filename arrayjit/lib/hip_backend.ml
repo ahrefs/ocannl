@@ -1471,6 +1471,7 @@ end = struct
                  extents (gh-490), strict [0, range) for indices -- and index width. *)
               Indexing.validate_bound_value ~width64:Utils.settings.large_models s !i;
               S.Int !i
+          | _name, Kparam_serial_scratch _ -> invalid_arg "Hip_backend.link: CUDA scratch parameter"
           | _name, (Kparam_pool_slab _ | Kparam_pool_slots _) ->
               Backend_intf.unexpected_pooled_kparam ~backend:"Hip_backend")
       in

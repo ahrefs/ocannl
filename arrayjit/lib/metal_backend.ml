@@ -2397,6 +2397,7 @@ using namespace metal;|}
                 failwith
                   [%string
                     "Kparam_ptr %{Tn.debug_name tn} not found in ctx_buffers for %{func_name}"]
+            | Kparam_serial_scratch _ -> invalid_arg "Metal_backend.link: CUDA scratch parameter"
             | Kparam_pool_slab i ->
                 (* Bind pool param [i] to the slab assigned index [i]; the unused tail (i >= number
                    of distinct pools) duplicates pool 0 so the shader's local pool array is fully

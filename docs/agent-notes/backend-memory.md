@@ -491,7 +491,7 @@ files.
   to its current, grown value frees nothing: only lowering it releases memory.
 - **So the reset is gated, and never runs mid-capture** (gh-ocannl-1872). `bound_local_memory`
   (`cuda_backend.ml`) resets after a successful submission only when depot x resident threads
-  passes a sixteenth of total memory: the serial-reference class, where a host wait and a few
+  passes a sixteenth of total memory: the large-depot class, where a host wait and a few
   milliseconds buy gigabytes for every neighbour, while ordinary launches stay asynchronous. It runs
   outside the back-off's handler, so its failure is never retried as a refused launch. During a
   stream capture the kernel tasks only record their depot into a per-domain collector, and the
@@ -499,18 +499,43 @@ files.
   gated. Counted as `local_memory_resets`; the share itself is reported as
   `local_memory_reset_share`, which tests size their frames from. HIP has no counterpart: its scratch is budgeted per
   work-item at link (below), and `hipLimitStackSize` does not govern it.
-- Guard for both: `test/operations/cuda_launch_reservation` declines a hopeless frame, plainly and
-  in a graph; returns an s11d_ref-sized frame's free memory, plainly and in a graph; resets nothing
-  for a small frame or one a quarter under the threshold, and resets for one a quarter over it;
-  runs HIP's scratch frame. By hand, under an exclusive hold, `--contended`
-  outwaits a child process holding the memory in device buffers (a frame reservation is now
+- **A one-thread CUDA kernel can put its private arrays in device scratch** (gh-ocannl-2263).
+  The final grid and block dimensions must each be all ones. When the ordinary private arrays'
+  aligned frame exceeds 16 KiB, codegen moves the entire frame into one scratch argument, including
+  arrays smaller than the budget. It preserves their logical placement and clears each slice whose
+  original declaration would have initialized it. The owning stream orders allocation before the
+  launch and free after it. Capturing those operations creates graph allocation and free nodes, so
+  cached replay preserves the lifetime and independently linked uses can share the kernel code.
+  Plain scratch allocation has its own memory back-off before kernel submission. Capture records
+  the allocation with no retry inside capture. The compiler enables this ABI on a device set with
+  stream-ordered memory pools. The reset and
+  back-off still use the emitted PTX depot for multi-thread kernels and for other remaining local
+  memory. Separate per-thread slices and total-size accounting would be needed for multi-thread
+  scratch. The CUDA regression checks three live slices on repeat execution, with stale
+  initialization distinguished by the captured replay. A one-thread array at the cutoff stays
+  in the depot, and three smaller arrays just above the combined cutoff use scratch.
+  On rog-nv-linux's RTX 5070 Ti Laptop GPU, with an exclusive hold and no compute co-tenants at
+  open or close, two real `s11d_ref` submissions at each revision recorded these driver readings.
+  On `028856294`, the PTX depot was 49152 B and free memory fell by 3356 MiB at both submissions,
+  before the automatic reset. On `b7e817928`, the aligned source declarations requested 66304 B
+  of scratch and the PTX depot was zero. The first allocation took 32 MiB of driver backing,
+  the second reused it, and neither submission grew the reservation. Requested scratch counts
+  the source declarations, while the base depot reflects NVRTC's optimized PTX.
+  Run records on rog-nv-linux: `20261117T223304Z-2571991` (base) and
+  `20261117T223402Z-2578262` (scratch). In the same runs, the 25 ms sampled process peaks fell
+  from 3516 to 192 MiB for `schedule_strided_1x1` and from 1468 to 608 MiB for
+  `tile_mma_narrow`. These peaks include memory beyond the individual launch's reservation.
+- Guard for the depot path: `test/operations/cuda_launch_reservation` declines a hopeless two-block
+  frame and returns the free memory after a two-block kernel with 48 KiB per thread, plainly and in
+  a graph. It brackets the reset threshold and runs HIP's scratch frame.
+  By hand, under an exclusive hold, `--contended` outwaits a child process holding the memory in device buffers (a frame reservation is now
   released at once) for a plain launch, a graph's first instantiation and a cached replay, whose
   refused exec must be dropped. On HIP (tuf, discrete, ROCm) the same hold refuses nothing: ROCr
   backs scratch for the waves actually launched, on demand, so a one-work-item frame whose
   full-occupancy scratch would be 2 GiB launched at once with 380 MB free -- HIP's launch back-off
   is in place but no run has reached it, and `--contended` pins the non-refusal. In a shared batch
-  that child refused its neighbours. `schedule_strided_1x1`'s resnet-block row claims the reset on
-  the real s11d_ref.
+  that child refused its neighbours. `schedule_strided_1x1` claims the real s11d_ref runs without a
+  local-memory reset on CUDA devices that would have reset the base's depot.
 - Raw-lowering test audit (gh-ocannl-2219): a `lowered_transform` that captures IR for a structural
   assertion need not launch that IR. `online_softmax_block`'s `forward` and `training`,
   `online_softmax`'s `training`, SGD `trajectory` and leaf-gradient legs, and `fused_classifier`

@@ -544,6 +544,22 @@ end = struct
   }
   [@@deriving sexp_of]
 
+  let serial_private_array_stack_bytes = 16 * 1024
+
+  (* CUDA programs are shared across the attached devices. Emit the scratch ABI only when each of
+     them can run the stream-ordered allocation used by both plain and graph launches. *)
+  let stream_ordered_scratch_supported =
+    lazy
+      (Utils.with_device_init_deadline ~backend_name:name (fun () ->
+           let count = num_devices () in
+           count > 0
+           && List.for_all (List.init count ~f:Fn.id) ~f:(fun ordinal ->
+               let props = Cu.Device.get_attributes (Cu.Device.get ~ordinal) in
+               props.memory_pools_supported)))
+
+  let serial_scratch_budget () =
+    Option.some_if (Lazy.force stream_ordered_scratch_supported) serial_private_array_stack_bytes
+
   module Cuda_syntax_config (Input : sig
     val procs : Low_level.t array
   end) =
@@ -562,6 +578,8 @@ end = struct
           let extra_blacklist = []
         end)
         (Input)
+
+    let serial_device_scratch_budget = serial_scratch_budget
 
     (* gh-ocannl-487 phase 2: [cp.async] staging for software-pipelined tiles (the
        [ocannl_cp_async*] builtins; their name doubles as the [Cuda_mma.gpu_arch_options] floor
@@ -1398,29 +1416,37 @@ end = struct
                 | Some (n, _) -> Option.value ~default:0 (Int.of_string_opt n)
                 | None -> 0))
 
-  (* The submission retry: [launch] is a synchronous driver submission (a kernel launch, a graph
-     launch) that a [CUDA_ERROR_OUT_OF_MEMORY] refuses before anything runs, so retrying it cannot
-     run work twice. [depot] is the per-thread local memory the submission's kernels declare (their
-     largest, for a graph), forced only on a refusal. Nothing after a successful submission runs
-     here: {!bound_local_memory} is the caller's, outside this handler. *)
-  let launch_with_memory_backoff ?(verb = "launching") ~(device : device) ~name
-      ~(depot : int Lazy.t) launch =
+  type memory_reservation = Depot of int Lazy.t | Scratch of int
+
+  (* Retry one driver call that can refuse memory before submitting work. A plain scratch allocation
+     precedes the kernel and has its own retry. For a launch or graph instantiation, the PTX depot
+     is a lower bound and is forced on refusal. Cleanup and the stack reset stay outside every retry
+     because they can surface a failure after successful submission. *)
+  let launch_with_memory_backoff ?(verb = "launching") ~(device : device) ~name ~reservation call =
     let rec attempt pauses =
-      try launch ()
+      try call ()
       with exn when is_out_of_memory exn ->
         let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-        let resident = device.dev.resident_threads in
-        let depot = Lazy.force depot in
-        let reservation = depot * resident in
+        let bytes, detail =
+          match reservation with
+          | Depot depot ->
+              let resident = device.dev.resident_threads in
+              let depot = Lazy.force depot in
+              let bytes = depot * resident in
+              ( bytes,
+                Printf.sprintf
+                  "its local memory reservation is %d B per thread x %d resident threads = %d B"
+                  depot resident bytes )
+          | Scratch bytes -> (bytes, Printf.sprintf "its serial scratch request is %d B" bytes)
+        in
         let free, total = try Cu.Device.get_free_and_total_mem () with _ -> (-1, -1) in
-        let hopeless = total >= 0 && reservation > total in
+        let hopeless = total >= 0 && bytes > total in
         let give_up = hopeless || List.is_empty pauses in
         Stdio.eprintf
-          "cuda: %s %s was refused device memory (CUDA_ERROR_OUT_OF_MEMORY): its local memory \
-           reservation is %d B per thread x %d resident threads = %d B, with %d of %d B free; %s \
-           (gh-ocannl-1773)\n\
+          "cuda: %s %s was refused device memory (CUDA_ERROR_OUT_OF_MEMORY): %s, with %d of %d B \
+           free; %s (gh-ocannl-1773)\n\
            %!"
-          verb name depot resident reservation free total
+          verb name detail free total
           (if hopeless then "more than the device holds, so not retried"
            else if give_up then "giving up after the back-off"
            else Printf.sprintf "retrying in %gs" (List.hd_exn pauses));
@@ -1485,6 +1511,17 @@ end = struct
     let ctx_bases = Map.map ctx_buffers ~f:(Slab.resolve_pool device) in
     (* Parsed once, at the first launch: the gate of [bound_local_memory] reads it on every one. *)
     let depot = lazy (ptx_local_depot_bytes (Lazy.force ptx) ~symbol) in
+    let scratch, params =
+      List.partition_map kparams ~f:(function
+        | _, Kparam_serial_scratch bytes -> First bytes
+        | param -> Second param)
+    in
+    let scratch =
+      match scratch with
+      | [] -> None
+      | [ bytes ] -> Some bytes
+      | _ -> invalid_arg "Cuda_backend.link: multiple serial scratch parameters"
+    in
     let%diagn3_sexp work () : unit =
       let log_id = Utils.get_global_run_id () in
       let log_id_prefix = Int.to_string log_id ^ ": " in
@@ -1499,7 +1536,8 @@ end = struct
       let args : S.kernel_param list =
         (* TODO: should we prohibit or warn about local-only tensors that are in
            prior_context.ctx_buffers? *)
-        List.map kparams ~f:(function
+        List.map params ~f:(function
+          | _name, Kparam_serial_scratch _ -> assert false
           | _name, Kparam_ptr tn ->
               let loc = Option.value_exn ~here:[%here] @@ Map.find ctx_buffers tn in
               let base = Map.find_exn ctx_bases tn in
@@ -1524,21 +1562,53 @@ end = struct
       (* Launch dimensions derived from hardware-annotated loops (axis-types proposal §4);
          all-Serial kernels launch 1x1x1, as before. Static [__shared__] declarations do not use the
          dynamic pool, so [shared_mem_bytes] stays 0. *)
-      let submit () =
+      let submit args () =
         S.launch_kernel func ~grid_dim_x:launch.Low_level.grid.(0)
           ~grid_dim_y:launch.Low_level.grid.(1) ~grid_dim_z:launch.Low_level.grid.(2)
           ~block_dim_x:launch.Low_level.block.(0) ~block_dim_y:launch.Low_level.block.(1)
           ~block_dim_z:launch.Low_level.block.(2) ~shared_mem_bytes:0 device.runner args
       in
       let launch_kernel () =
-        match Stdlib.Domain.DLS.get capture_depot with
-        | Some largest ->
-            (* Recorded into a graph, not run: see [capture_depot]. *)
-            submit ();
-            largest := max !largest (Lazy.force depot)
-        | None ->
-            launch_with_memory_backoff ~device ~name ~depot submit;
-            bound_local_memory ~device ~depot:(Lazy.force depot)
+        let capture = Stdlib.Domain.DLS.get capture_depot in
+        let launch args =
+          match capture with
+          | Some _ -> submit args ()
+          | None ->
+              launch_with_memory_backoff ~device ~name ~reservation:(Depot depot) (submit args)
+        in
+        (match scratch with
+        | None -> launch args
+        | Some size_in_bytes -> (
+            (* An allocation and free in the same stream delimit this invocation. During capture
+               they become graph nodes, so neither a cached graph nor shared PTX owns writable
+               scratch outside an invocation. The free stays outside the launch retry. *)
+            let allocate () = S.mem_alloc device.runner ~size_in_bytes in
+            let ptr =
+              match capture with
+              | Some _ -> allocate ()
+              | None ->
+                  launch_with_memory_backoff ~verb:"allocating scratch for" ~device ~name
+                    ~reservation:(Scratch size_in_bytes) allocate
+            in
+            let free () =
+              S.mem_free device.runner ptr;
+              Resource_fault_injection.hit Cuda_scratch_freed
+            in
+            (* CUDA submits on the caller's domain. The hooks count successful driver calls,
+               including construction of graph nodes, before an injected failure can escape. *)
+            match
+              Resource_fault_injection.hit Cuda_scratch_allocated;
+              launch (args @ [ S.Tensor ptr ])
+            with
+            | () -> free ()
+            | exception exn ->
+                let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+                (* A submission can invalidate a capture. Its abort path discards those nodes. *)
+                (try free () with _ -> ());
+                Stdlib.Printexc.raise_with_backtrace exn backtrace));
+        match capture with
+        | Some largest -> largest := max !largest (Lazy.force depot)
+        | None -> bound_local_memory ~device ~depot:(Lazy.force depot)
       in
       if Utils.debug_log_from_routines () then
         (* The routine's log lines are device-side [printf]: under [debug_log_to_stream_files] the
@@ -1776,7 +1846,7 @@ end = struct
         Exn.protect
           ~f:(fun () ->
             launch_with_memory_backoff ~verb:"instantiating" ~device ~name:("the graph of " ^ name)
-              ~depot:(lazy !graph_depot)
+              ~reservation:(Depot (lazy !graph_depot))
               (fun () -> Cu.Graph.instantiate graph))
           ~finally:(fun () -> Cu.Graph.destroy graph)
       in
@@ -1848,6 +1918,8 @@ end = struct
         (* The gate's denominator: a reservation past [total memory / this] is reset. Reported so
            tests size their frames from it rather than restating it. *)
         ("local_memory_reset_share", [%sexp_of: int] local_memory_reset_share);
+        ( "serial_device_scratch_budget",
+          [%sexp_of: int] (Option.value (serial_scratch_budget ()) ~default:0) );
         ("graph_launch_memory_drops", [%sexp_of: int] @@ Atomic.get graph_launch_memory_drops);
       ]
 
