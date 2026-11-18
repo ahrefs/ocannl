@@ -1699,6 +1699,25 @@
     (diff autotune_mma_companion.expected autotune_mma_companion-tf32.actual)))))
 
 (test
+ (name autotune_nothing_timed)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules autotune_nothing_timed)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  scripted_search
+  arrayjit.autotune
+  arrayjit.context)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name autotune_privatize)
  (package neural_nets_lib)
  (deps

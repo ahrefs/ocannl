@@ -31,7 +31,7 @@ open Verdict.Claims
    means — and the two ways an arm can die, mid-search and before the search exists, are told apart
    by the state rather than by a [partial] flag both of them set. *)
 let completed (r : Autotune.report) =
-  match r.Autotune.outcome with Autotune.Searched -> true | _ -> false
+  match r.Autotune.outcome with Autotune.Searched | Autotune.Searched_untimed -> true | _ -> false
 
 let replayed (r : Autotune.report) =
   match r.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false

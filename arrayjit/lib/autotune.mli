@@ -1186,10 +1186,11 @@ type abandonment = {
 
 (** What the call did about searching (gh-ocannl-677). The states are mutually exclusive and each
     carries exactly its own data, so a consumer matches instead of re-deriving: "it searched" is
-    [Searched | Search_died _] and nothing else — in particular it is {e not} [not cache_hit], the
-    reading that costs a benchmark harness every tuned cell under the reproducible profile, where a
-    call reports having neither searched nor replayed. Spelled as four independent booleans until
-    gh-ocannl-677, where two consumers mis-derived the state in one PR.
+    [Searched | Searched_untimed | Search_died _ | Abandoned _] and nothing else — in particular it
+    is {e not} [not cache_hit], the reading that costs a benchmark harness every tuned cell under
+    the reproducible profile, where a call reports having neither searched nor replayed. Spelled as
+    four independent booleans until gh-ocannl-677, where two consumers mis-derived the state in one
+    PR.
 
     Note the arithmetic: five constructors for what reads as four outcomes, because "nothing
     searched" is two — a deliberate no-search that ships the untuned default and returns, and a
@@ -1199,7 +1200,18 @@ type abandonment = {
 type outcome =
   | Searched
       (** A search ran and completed: candidates were proposed and compiled or timed, leaving the
-          process loaded with their modules and buffers. *)
+          process loaded with their modules and buffers, and at least one timing was admitted. *)
+  | Searched_untimed
+      (** A search ran and completed, but timed nothing (gh-ocannl-2310): every candidate, the
+          serial baseline included, was refused or declined, or every timing window was refused.
+          Nothing is crowned ([best_label] is [""], [best_ms] [infinity], [candidates_timed] 0),
+          nothing is cached, and the caller gets the untuned default compile, as under
+          {!Search_disabled} — never the refused serial incumbent. That routine was never measured,
+          so no consumer may rank it as a winner; on a GPU backend it can be the very form the
+          search refused to dispatch: a single-output reduction gives the seeds no hardware
+          dimension to bind (every refusal a [Not_dispatched_key] in [declines]), and the untuned
+          compile of it runs in one work-item. Running it is a wait no bound covers, as running any
+          routine {!tune} returns is. *)
   | Search_died of terminal_failure
       (** A search ran and terminated on the carried fatal failure. The counters hold the work it
           had reached, and [best_ms] is a mid-search measurement of the {e search} context: no
@@ -1977,9 +1989,9 @@ type report = {
           refused, and on a cache hit (not stored). *)
   best_ms : float;
       (** The winner's measured time, or [infinity] when nothing was timed at all — every candidate
-          failed and the baseline was not dispatched (or was declined). In that case no cache entry
-          is stored and the returned routine is the untuned default compile, not the serial
-          baseline.
+          failed and the baseline was not dispatched (or was declined). In that case the outcome is
+          {!Searched_untimed}, no cache entry is stored and the returned routine is the untuned
+          default compile, not the serial baseline.
 
           It is a reading of {!timing_mode}, and which one is not recorded anywhere in the report or
           the cache entry, so a number carried across processes is only comparable to another taken
@@ -2287,9 +2299,9 @@ val progress_stopwatch : unit -> unit -> float
 (** Starts a clock; the returned function reads the seconds since. *)
 
 val outcome_name : outcome -> string
-(** The stable one-word name of an outcome state — ["searched"], ["search-died"], ["cache-replay"],
-    ["search-disabled"], ["pre-search-failure"], ["abandoned"] — for logs, JSON records and test
-    goldens. *)
+(** The stable one-word name of an outcome state — ["searched"], ["searched-untimed"],
+    ["search-died"], ["cache-replay"], ["search-disabled"], ["pre-search-failure"], ["abandoned"],
+    ["abandonment-replay"], ["lineage-refused"] — for logs, JSON records and test goldens. *)
 
 val terminal_failure : report -> terminal_failure option
 (** The fatal failure that ended the call, from whichever of the two failing states carried it;

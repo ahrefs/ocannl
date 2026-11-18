@@ -62,15 +62,18 @@ def problems(path):
         return out + ["INCOMPLETE SESSION: the result line carries no tune arms"]
     for name in REQUIRED_ARMS:
         found = [a for a in arms if a.get("arm") == name]
-        if len(found) != 1 or found[0].get("state") != "searched":
+        state = found[0].get("state") if len(found) == 1 else None
+        if state not in ("searched", "searched-untimed"):
             # Absent, ambiguous, or did not search: "searched":true at the top covers a died search.
             detail = "" if len(found) <= 1 else " (it appears %d times)" % len(found)
             out.append("INCOMPLETE SESSION: arm %s did not complete a search%s" % (name, detail))
         # A search can complete having timed nothing (every candidate declined; the GPU serial
-        # baseline is never dispatched): such an arm holds no evidence about timing cost.
+        # baseline is never dispatched): such an arm holds no evidence about timing cost. Its state
+        # says so (gh-ocannl-2310), whatever its best_ms carries.
         best = found[0].get("best_ms") if len(found) == 1 else None
         # strict_json refuses a non-finite number, so isfinite only guards what a refactor lets in.
-        if not isinstance(best, (int, float)) or isinstance(best, bool) or not math.isfinite(best):
+        if (state == "searched-untimed" or not isinstance(best, (int, float))
+                or isinstance(best, bool) or not math.isfinite(best)):
             out.append("INCOMPLETE SESSION: arm %s timed no candidate" % name)
     # The remaining checks span every arm on the line, not only the required two.
     for arm in arms:

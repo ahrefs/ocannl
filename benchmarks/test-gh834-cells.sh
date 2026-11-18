@@ -106,6 +106,9 @@ print(json.dumps(r, separators=(",", ":")))')
 leg 'field order within an arm does not matter' accepts reordered "$reordered"
 leg 'an arm that timed nothing is incomplete' \
   rejects untimed "$(line "$A" "$(arm B best_ms=null)")" 'INCOMPLETE SESSION: arm B timed no candidate'
+leg 'an arm whose state says it timed nothing is untimed, whatever its best_ms (gh-ocannl-2310)' \
+  rejects searched-untimed "$(line "$A" "$(arm B state='"searched-untimed"')")" \
+  'INCOMPLETE SESSION: arm B timed no candidate'
 leg 'a non-JSON NaN timing is not a timing' \
   rejects nan "$(line "$A" "$(arm B best_ms=NaN)")" 'INCOMPLETE SESSION: the result line is not JSON'
 overflow=$(line "$A" "$(arm B best_ms=7.5)")

@@ -850,6 +850,7 @@ arrayjit/test/test_vectorized_codegen.ml [staged callback; run by @arrayjit/test
 test/operations/accum_max_one_extent.ml [through Ll_test.execute; run by @test/operations/runtest-accum_max_one_extent]
 test/operations/accum_width.ml [staged callback; through Ll_test.execute; run by @test/operations/runtest-accum_width]
 test/operations/affine_extraction.ml [staged callback; run by @test/operations/runtest-affine_extraction]
+test/operations/autotune_nothing_timed.ml [prelowered compile; run by @test/operations/runtest-autotune_nothing_timed]
 test/operations/autotune_timing_modes.ml [through Ll_test.link; run by @test/operations/runtest-autotune_timing_modes]
 test/operations/back_to_back_runs.ml [prelowered compile; run by @test/operations/runtest-back_to_back_runs]
 test/operations/bench_line_samples.ml [through Bench_harness.dominant_kernel; run by @test/operations/runtest-bench_line_readers]
@@ -977,6 +978,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-accum_max_one_extent
 @test/operations/runtest-accum_width
 @test/operations/runtest-affine_extraction
+@test/operations/runtest-autotune_nothing_timed
 @test/operations/runtest-autotune_timing_modes
 @test/operations/runtest-back_to_back_runs
 @test/operations/runtest-bench_line_readers
