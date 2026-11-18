@@ -31,16 +31,17 @@
    (a shared-directory [.cmi] with no archive definition), the candidates are archives whose
    [Interfaces imported:] sections name it. There must be one dependency-minimal importer, and no
    archive-bearing library in its [requires] closure may share a directory containing the [.cmi].
-   Such a dependency could define the interface without importing it. Ambiguous or absent ownership
-   refuses the referencing stanza before it can report any unused library. Imports outside the
-   library's include directories contribute nothing. Imported entries have two tab-separated fields
-   (digest and unit); malformed entries refuse. This preserves type-only units such as [Parsetree]
-   without crediting its users. Archive-less findlib packages own no units. Ownership uses directory
-   contents, byte archive metadata and Dune's resolved dependency graph. No module inventory is
-   inferred from [META] or [dune-package]. A failed query, unreadable archive or output without
-   definitions refuses without directory fallback. Shared local libraries refuse: findlib cannot
-   resolve their archives and [@check] does not build them. Non-compiler-reaching declarations stay
-   outside this check's scope.
+   Such a dependency could define the interface without importing it. If the importer sees the
+   [.cmi] through the shared directory without a [requires] path to its definer, the scan can credit
+   the importer and report the definer unused. Ambiguous or absent ownership refuses the referencing
+   stanza before it can report any unused library. Imports outside the library's include directories
+   contribute nothing. Imported entries have two tab-separated fields (digest and unit); malformed
+   entries refuse. This preserves type-only units such as [Parsetree] without crediting its users.
+   Archive-less findlib packages own no units. Ownership uses directory contents, byte archive
+   metadata and Dune's resolved dependency graph. No module inventory is inferred from [META] or
+   [dune-package]. A failed query, unreadable archive or output without definitions refuses without
+   directory fallback. Shared local libraries refuse: findlib cannot resolve their archives and
+   [@check] does not build them. Non-compiler-reaching declarations stay outside this check's scope.
 
    USE: the typed tree of every [.cmt]/[.cmti] in the stanza's byte object directory
    ([Cmt_references]): post-preprocessing, so generated modules, a [select]-chosen source and a
@@ -772,11 +773,17 @@ let controls ~dune ~objinfo ~tool_stderr =
    let refused = refuses (fun () -> verdict := judge ~read_references w stanza) in
    p "a consumer-only interface import refuses the stanza that declares its possible owner"
      (refused && match !verdict with Refused -> true | _ -> false);
-   let w = fixture ~owner_requires:[] ~owner_definitions:[ "Owner"; unit ] in
-   let known_owner = ref None in
-   let refused = refuses (fun () -> known_owner := w.owners unit) in
+   let owner_is w expected =
+     let known_owner = ref None in
+     let refused = refuses (fun () -> known_owner := w.owners unit) in
+     (not refused) && Option.equal (List.equal String.equal) !known_owner (Some [ expected ])
+   in
+   let defined = fixture ~owner_requires:[] ~owner_definitions:[ "Owner"; unit ] in
    p "a shared dependency's archive definition takes precedence over interface imports"
-     ((not refused) && Option.equal (List.equal String.equal) !known_owner (Some [ "owner" ])));
+     (owner_is defined "owner");
+   let archive_less = fixture ~owner_requires:[ compiler_root ] ~owner_definitions:[] in
+   p "a co-located archive-less dependency leaves the sole importer as owner"
+     (owner_is archive_less "consumer"));
   let judged text () = ignore (judge w (stanza_of text) : verdict) in
   p_all
     "the csexp reader refuses an unclosed list, a bare length, a short atom, a stray byte and a \

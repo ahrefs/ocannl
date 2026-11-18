@@ -2621,7 +2621,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   units. For a shared-directory interface-only `.cmi`, the scan requires one dependency-minimal
   archive importing the interface. If that importer depends on an archive-bearing library
   sharing a directory containing the `.cmi`, the dependency could define the unit without
-  importing it (gh-ocannl-2289). Unresolved ownership refuses the referencing stanza before any
+  importing it (gh-ocannl-2289). A shared-directory import without a `requires` path to the
+  defining library can still credit the importer and produce a false unused finding for the
+  definer. Unresolved ownership refuses the referencing stanza before any
   unused finding. This preserves `Parsetree` under common without crediting toplevel for its
   imports. Definitions always take precedence over imported interfaces, including definitions from
   an importer's co-located dependency outside the reporting scope.
