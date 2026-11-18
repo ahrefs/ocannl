@@ -39,7 +39,8 @@
 #      both settle successfully, and recovery reports the reaping it performed.
 # 124a. the same collisions under a Linux ancestor that retains orphaned
 #      zombies. The ancestor must adopt zombies, and each keeper's start
-#      token must disappear before the ancestor can clean up.
+#      token must disappear before the ancestor can clean up. Skipping the
+#      fixture parent's wait for the launch keeper must retain that token.
 #  74. fork TERM is deferred until the parent owns its child pid and the child
 #      resets its handlers; no-mask and inherited-handler controls prove both.
 #  65. a `stop`, or a signal to the launcher alone, while the backends
@@ -1222,7 +1223,9 @@ leg_124() {
         my $pipe = fileno($write);
         POSIX::close($_) for grep { $_ != $pipe } 0 .. 255;
         print $write "$keeper\n" or die $!; close $write;
-        waitpid($keeper, 0); exit 0;
+        waitpid($keeper, 0)
+          unless $ENV{LIFECYCLE_SKIP_LAUNCH_KEEPER_REAP} && !$ENV{PROBE_HOLDER};
+        exit 0;
       }
       close $write;
     }~;
@@ -1351,8 +1354,16 @@ EOF
 harness_leg_run '124: a held keeper unlock probe cannot refuse a launch or recovery #lifecycle' leg_124
 
 keeper_subreaper_label='keeper probe: all collisions settle and the keepers are reaped under a non-reaping ancestor'
+keeper_subreaper_run() ( # PYTHON STUB ADOPTION_RECORD SKIP_LAUNCH_REAP
+  unset OCANNL_TOOL_HARNESS_EXPECTED_SKIPS OCANNL_TOOL_HARNESS_LEG_TIMES
+  OCANNL_TOOL_HARNESS_STRICT=1 LIFECYCLE_REQUIRE_KEEPER_REAP=1 SUBREAPER_RECORD=$3 \
+    LIFECYCLE_SKIP_LAUNCH_KEEPER_REAP=$4 \
+    "$1" "$2" "$BASH" "$SELF" --subject "$SRC" --only '^124:'
+)
 leg_124a() {
   local python why stub=$TMP/124a.py held=$TMP/124a.held log=$TMP/124a.log
+  local control_label='negative control: unreaped launch keeper retains its identity under the ancestor'
+  local control_rc=0
   if [ "$(subreaper_kernel_probe uname)" = absent ]; then
     harness_not_applicable "this kernel is $(uname -s), not Linux: no child subreaper to retain orphaned zombies"
     return
@@ -1360,22 +1371,31 @@ leg_124a() {
   subreaper_write "$stub" || { harness_abandon "cannot write $stub"; return; }
   python=$(command -v python3 || :)
   why=$(subreaper_skip_reason "$python" "$stub")
-  if [ -n "$why" ]; then skip "$keeper_subreaper_label" "$why"; return; fi
+  if [ -n "$why" ]; then
+    skip "$keeper_subreaper_label" "$why"
+    skip "$control_label" "$why"
+    return
+  fi
 
   # Keep the ancestor alive across the query's exit and the subsequent
   # collision. Wrapping individual runner commands would reap between them.
-  if ! (
-    unset OCANNL_TOOL_HARNESS_EXPECTED_SKIPS OCANNL_TOOL_HARNESS_LEG_TIMES
-    OCANNL_TOOL_HARNESS_STRICT=1 LIFECYCLE_REQUIRE_KEEPER_REAP=1 SUBREAPER_RECORD=$held \
-      "$python" "$stub" "$BASH" "$SELF" --subject "$SRC" --only '^124:'
-  ) >"$log" 2>&1; then
+  if ! keeper_subreaper_run "$python" "$stub" "$held" 0 >"$log" 2>&1; then
     report 1 "$keeper_subreaper_label" "$(sed '2,$s/^/      /' "$log")"
-    return
-  fi
-  if grep -q ' Z ' "$held"; then
-    report 0 "$keeper_subreaper_label"
-  else
+  elif ! grep -q ' Z ' "$held"; then
     report 1 "$keeper_subreaper_label" 'the ancestor adopted no zombie'
+  elif grep -q ' [^Z] ' "$held"; then
+    report 1 "$keeper_subreaper_label" "the ancestor adopted a live process (pid state pgid): $(grep ' [^Z] ' "$held")"
+  else
+    report 0 "$keeper_subreaper_label"
+  fi
+
+  keeper_subreaper_run "$python" "$stub" "$TMP/124a-control.held" 1 >"$log" 2>&1 || control_rc=$?
+  if [ "$control_rc" = 1 ] &&
+     [ "$(grep '^FAIL  ' "$log")" = 'FAIL  keeper probe: launch keeper is reaped before ancestor cleanup' ] &&
+     grep -q 'still has its original start token' "$log"; then
+    report 0 "$control_label"
+  else
+    report 1 "$control_label" "exit $control_rc"$'\n'"$(sed 's/^/      /' "$log")"
   fi
 }
 harness_leg_run '124a: keeper retirement under a non-reaping Linux ancestor #lifecycle' leg_124a
