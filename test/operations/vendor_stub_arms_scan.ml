@@ -91,11 +91,6 @@
 open Base
 open Stdio
 open Verdict.Claims
-
-(* Every file this scan reads is a source file of the clean sandbox its rule runs in, enumerated by
-   [Test_scan.Source_inventory]: no build target, generated `.ml` included, is an input. *)
-let argv = Stdlib.Sys.argv
-
 module Inventory = Test_scan.Source_inventory
 module Scan = Test_scan.Dune_stanza_scan
 
@@ -1311,12 +1306,15 @@ let control () =
   Test_scan.Refusal_control_manifest.print "vendor_stub_arms_scan.ml"
 
 let () =
+  let argv = Stdlib.Sys.argv in
   if Array.length argv = 2 && String.equal argv.(1) "--control" then (
     control ();
     Stdlib.exit 0);
   if Array.length argv < 2 then (
     eprintf "Usage: %s <workspace_root> <generated files...>|--control\n" argv.(0);
     Stdlib.exit 1);
+  (* Every file this scan reads is a source file of the clean sandbox its rule runs in: no build
+     target, generated `.ml` included, is an input. *)
   let inventory =
     Inventory.of_dune_sandbox ~workspace_root:argv.(1)
       ~generated:(Array.to_list (Array.subo argv ~pos:2))
@@ -1330,7 +1328,7 @@ let () =
     Inventory.select inventory ~f:(fun path ->
         String.is_suffix path ~suffix:".ml" || String.is_suffix path ~suffix:".mli")
     |> List.map ~f:(fun (file : Inventory.file) -> (file.path, file.on_disk))
-    |> Map.of_alist_reduce (module String) ~f:(fun first _ -> first)
+    |> Map.of_alist_exn (module String)
   in
   let sources path = Option.map (Map.find on_disk path) ~f:In_channel.read_all in
   let census = analyze ~sources ~fail ~dune_files () in
