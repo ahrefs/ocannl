@@ -1099,8 +1099,10 @@ files.
   (an inherited template selected for footprint here, or an explicit footprint preference)
   can fall back to inlining, so its template's loads still expand. Earlier routines store
   templates in the lineage, and any footprint decision for those templates is made again here.
-  An observable consumer under the cap still materializes when its virtual reading could retract
-  a dependency to a buffer without observation intent, whose storage could be local or aliased.
+  With the fan-in cap enabled, an undecided observable consumer eligible for that cap materializes
+  when its charge is within the cap but its virtual reading could retract a dependency to a buffer
+  whose storage can be local or aliased. Cap-disabled and cap-exempt readings leave this case to
+  the ordinary virtualization path.
   `virtual_chain_fanin` phase 12 pins the scratch and whole-buffer charges, the inherited
   fallback, and host readback, with execution against a materialized reference in each case.
 - **The shift-the-uids check reads what a compile ships, not only the decision surface**
