@@ -293,9 +293,19 @@ a reduction over a concat's two slices: charged both slices joined with w (4), m
 a reduction over a concat's two slices: execution matches the reference and the materialized reading: true
 the visit cap on a 8-cell concat read over 8: materialized whole, with the visit cap's provenance: true
 the visit cap on a 8-cell concat read over 8: no node of the routine is footprint scratch: true
+the visit cap on a 8-cell concat read over 8: the reduction charges two loads (concat and w): true
 the visit cap on a 8-cell concat read over 8: execution matches the reference and the materialized reading: true
 the visit cap on a 12-cell concat read over 8: footprint-scoped: virtual, read only through one scratch shaped like the read box: true
+the visit cap on a 12-cell concat read over 8: the reduction charges two loads (concat and w): true
 the visit cap on a 12-cell concat read over 8: execution matches the reference and the materialized reading: true
+a visit-capped footprint concat and w cost two loads, so the reduction stays virtual: true
+the virtual reduction reads the concat's visit-cap buffer: true
+the virtual reduction leaves no footprint scratch: true
+the virtual reduction matches the reference and the materialized reading: true
+an inherited footprint can inline, so its reduction is charged four loads and capped: true
+the capped reduction reads the inherited producer through one footprint scratch: true
+the inherited-footprint reduction matches the reference and the materialized reading: true
+the observed reduction and its output read back like the materialized reading: true
 cross-routine two-site read: routine A commits the concat and its reader virtual: true
 cross-routine two-site read: the stored reader is charged both slices (3), so B's consumer with w (4) is materialized by the fan-in cap: true
 cross-routine two-site read: execution matches the reference: true

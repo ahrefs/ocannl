@@ -801,10 +801,10 @@ files.
   `fc_default`, never the alternatives' shapes; `Autotune.placement_floor_withheld` is the one
   place a candidate's standing gates the floor.
   The profitability comparison is strict, so a node's SIZE decides where a cap lands: read over
-  exactly its whole domain (a tie), it is materialized whole and resets its consumers' fan-in;
-  given spare cells, it is footprint-scoped and its consumers' chain stays open. A fixture that
-  wants the fan-in guard past a visit-capped producer lifts `virtualize_max_visits` explicitly
-  instead of allocating spare cells (gh-ocannl-2276; `test/operations/virtual_chain_fanin.ml`'s
+  exactly its whole domain (a tie), it is materialized whole. Given spare cells, it is
+  footprint-scoped. See the fan-in boundary for footprints with a cap fallback below. A fixture
+  that needs the consumer to see through a would-be visit-capped producer lifts
+  `virtualize_max_visits` explicitly (gh-ocannl-2276; `test/operations/virtual_chain_fanin.ml`'s
   phase-12 landing legs pin both sizes).
   Structural probe for "inlined": `count_get` of the node, never `count_scopes` — the simplifier
   collapses a single-assignment scope into its expression. Pinned row by row, with executed parity
@@ -1091,6 +1091,20 @@ files.
   other live site was `C_syntax.parallel_grid_safe`, which privatized a pool chunk's locals in the
   order of a uid-keyed table: the chunk's declarations and which of two equal-sized tiles kept the
   stack followed the uids (now first-access order; `heap_local_arrays`' two-tile leg).
+- **A footprint with a cap to retract to ends fan-in expansion** (gh-ocannl-2325). Both Tarjan
+  and the bottom-up fold consult this specialization's `footprint_scoped` table, the one
+  `virtual_llc` uses. With a cap in the entry, the producer counts as one load, whether a
+  materialized reader loads scratch or a virtual reader forces retraction to the cap's whole
+  buffer. The producer still has its own charge computed as a root. An entry without a cap
+  (an inherited template selected for footprint here, or an explicit footprint preference)
+  can fall back to inlining, so its template's loads still expand. Earlier routines store
+  templates in the lineage, and any footprint decision for those templates is made again here.
+  With the fan-in cap enabled, an undecided observable consumer eligible for that cap materializes
+  when its charge is within the cap but its virtual reading could retract a dependency to a buffer
+  whose storage can be local or aliased. Cap-disabled and cap-exempt readings leave this case to
+  the ordinary virtualization path.
+  `virtual_chain_fanin` phase 12 pins the scratch and whole-buffer charges, the inherited
+  fallback, and host readback, with execution against a materialized reference in each case.
 - **The shift-the-uids check reads what a compile ships, not only the decision surface**
   (gh-ocannl-1877): `flip_order_minting` part 1 compares, across builds minted at different uid
   offsets, the emitted source up to minted identifiers (`Generated.normalize_minted`) and every
