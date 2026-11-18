@@ -49,4 +49,40 @@ module Context : sig
   val run : unit -> unit -> unit
   val get_values : unit -> unit -> float array
   val release : unit -> unit
+  val auto : unit -> unit
+end
+
+(* gh-ocannl-2334: the support module the cross-module snippets call, a same-typed stand-in for a
+   rebound name, and the [Train] once-runs. *)
+module Exact_sums : sig
+  val with_zero : float array -> int array -> float
+  val check_sums : string -> float list list -> float array -> unit
+  val check2 : string -> float list list -> float array -> unit
+  val check3 : string -> float list list -> float array -> unit
+  val self_check : unit -> unit
+end
+
+module Other_sums : module type of Exact_sums
+
+module Tensor : sig
+  type diff = { grad : unit }
+  type t = { value : unit; diff : diff option }
+end
+
+module Option : sig
+  val value_exn : 'a option -> 'a
+end
+
+val build : unit -> Tensor.t
+
+module Train : sig
+  val forward_once : unit -> Tensor.t -> unit
+  val update_once : ?output_cd_file:bool -> unit -> Tensor.t -> unit
+  val set_materialized : unit -> unit
+end
+
+module Other_train : module type of Train
+
+module Ocannl : sig
+  module Train : module type of Train
 end
