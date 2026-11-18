@@ -534,6 +534,18 @@ files.
   `20261117T223402Z-2578262` (scratch). In the same runs, the 25 ms sampled process peaks fell
   from 3516 to 192 MiB for `schedule_strided_1x1` and from 1468 to 608 MiB for
   `tile_mma_narrow`. These peaks include memory beyond the individual launch's reservation.
+- **Plain CUDA scratch and graph allocation nodes use separate allocators** (gh-ocannl-2323).
+  Plain scratch uses the stream device's current pool, which OCANNL leaves at the device default.
+  Graph backing can remain reserved after the last exec is destroyed. CUDA's
+  `get_global_debug_info` reports current backing in bytes as `stream_pool_reserved_bytes` and
+  `graph_pool_reserved_bytes`, each summed across visible devices or `unavailable` if a read
+  fails. These driver snapshots preserve the requested-slab meaning of `get_used_memory`.
+  On rog-nv-linux, two overlapping 66,304 B requests used 132,608 B and shared 32 MiB of the
+  default stream pool's backing. Its 0 B release threshold let synchronization return that
+  backing in the probe. Graph backing stayed at 32 MiB across cache eviction and after release
+  dropped the live exec count to zero. The raw readings and exclusive run record are on
+  gh-ocannl-2323. The two opt-in modes of `test/operations/cuda_launch_reservation` reproduce the
+  workloads with the driver's current and high-water attributes alongside free memory.
 - Guard for the depot path: `test/operations/cuda_launch_reservation` declines a hopeless two-block
   frame and returns the free memory after a two-block kernel with 48 KiB per thread, plainly and in
   a graph. It brackets the reset threshold and runs HIP's scratch frame.

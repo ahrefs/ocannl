@@ -1905,6 +1905,67 @@ end = struct
             },
           fun () -> destroy_graphs graphs )
 
+  (* cudajit exposes the async allocation calls but does not bind their accounting APIs. Resolve
+     these read-only queries lazily and leave the diagnostics available on drivers that lack them.
+     Graph allocation nodes have a separate allocator from the stream pool. *)
+  module Async_memory_debug = struct
+    open Ctypes
+
+    let library =
+      lazy
+        (let filename = if Stdlib.Sys.win32 then "nvcuda.dll" else "libcuda.so.1" in
+         try Some (Dl.dlopen ~filename ~flags:[ Dl.RTLD_NOW ]) with Dl.DL_error _ -> None)
+
+    let bind name signature =
+      lazy
+        (Option.bind (Lazy.force library) ~f:(fun from ->
+             try Some (Foreign.foreign ~from name signature) with Dl.DL_error _ -> None))
+
+    let get_device = bind "cuDeviceGet" (ptr int @-> int @-> returning int)
+    let get_pool = bind "cuDeviceGetMemPool" (ptr (ptr void) @-> int @-> returning int)
+
+    let pool_attribute =
+      bind "cuMemPoolGetAttribute" (ptr void @-> int @-> ptr uint64_t @-> returning int)
+
+    let graph_attribute =
+      bind "cuDeviceGetGraphMemAttribute" (int @-> int @-> ptr uint64_t @-> returning int)
+
+    let read typ init call =
+      let result = allocate typ init in
+      if call result = 0 then Some !@result else None
+
+    let ( let* ) result f = Option.bind result ~f
+
+    let stream_reserved device =
+      let* get_pool = Lazy.force get_pool in
+      let* attribute = Lazy.force pool_attribute in
+      let* pool = read (ptr void) null (fun out -> get_pool out device) in
+      (* CU_MEMPOOL_ATTR_RESERVED_MEM_CURRENT *)
+      read uint64_t Unsigned.UInt64.zero (attribute pool 5)
+
+    let graph_reserved device =
+      let* attribute = Lazy.force graph_attribute in
+      (* CU_GRAPH_MEM_ATTR_RESERVED_MEM_CURRENT *)
+      read uint64_t Unsigned.UInt64.zero (attribute device 2)
+
+    let total query =
+      let* get_device = Lazy.force get_device in
+      let* readings =
+        List.init (num_devices ()) ~f:(fun ordinal ->
+            let* device = read int 0 (fun out -> get_device out ordinal) in
+            query device)
+        |> Option.all
+      in
+      Some (List.fold readings ~init:Unsigned.UInt64.zero ~f:Unsigned.UInt64.add)
+
+    let field name query =
+      ( name,
+        Sexp.Atom
+          (match total query with
+          | Some bytes -> Unsigned.UInt64.to_string bytes
+          | None -> "unavailable") )
+  end
+
   let get_global_debug_info () =
     Sexp.message "cuda_global_debug"
       [
@@ -1921,6 +1982,8 @@ end = struct
         ( "serial_device_scratch_budget",
           [%sexp_of: int] (Option.value (serial_scratch_budget ()) ~default:0) );
         ("graph_launch_memory_drops", [%sexp_of: int] @@ Atomic.get graph_launch_memory_drops);
+        Async_memory_debug.field "stream_pool_reserved_bytes" Async_memory_debug.stream_reserved;
+        Async_memory_debug.field "graph_pool_reserved_bytes" Async_memory_debug.graph_reserved;
       ]
 
   let static_properties () =

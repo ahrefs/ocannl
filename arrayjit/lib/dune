@@ -137,6 +137,8 @@
   base
   cudajit.cuda
   cudajit.nvrtc
+  ctypes
+  ctypes.foreign
   unix
   utils
   ir

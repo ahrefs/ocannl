@@ -203,6 +203,29 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; test/operations: the CUDA allocator probe used by cuda_launch_reservation.
+
+(copy_files#
+ (files ../../../test/operations/cuda_pool_probe.mli))
+
+(rule
+ (action
+  (copy# ../../../test/operations/cuda_pool_probe.real.ml cuda_pool_probe.ml)))
+
+(library
+ (name cuda_pool_probe_arm)
+ (modules cuda_pool_probe)
+ (libraries
+  base
+  stdio
+  arrayjit.verdict
+  cudajit_stub
+  ctypes
+  ctypes.foreign
+  integers)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; test/operations: the WMMA and m16n8k8 floor witness, also names the NVRTC and driver bindings.
 
 (rule

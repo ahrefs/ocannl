@@ -43,6 +43,13 @@
    [./cuda_launch_reservation.exe --contended] in [_build/default/test/operations], under an
    exclusive hold of the box; a false claim exits 1.
 
+   The CUDA allocator probes run from the same build directory with [OCANNL_BACKEND=cuda], in fresh
+   processes under an exclusive hold. [--pool-backing-streams] measures two nonblocking driver
+   streams on one device and checks actual kernel overlap. [--pool-backing] samples completed graphs
+   as changing bindings fills the cache and evicts an exec, then as routine release removes the
+   remaining execs. Both report driver attributes with free-memory deltas. Those deltas require an
+   idle device. Neither mode requests a driver trim.
+
    The executed kernels discriminate: the frame is filled forward with [1 + x] and read back in
    REVERSE ([out[y] = n - y]), which also keeps the device compiler from forwarding each store to
    its load and deleting the array; the graph's second segment adds one. The counters are read from
@@ -101,7 +108,7 @@ let frame_program ~first_id ~name ?(graph = false) ?(multi = false) n =
 
 (* s11d_ref has three simultaneously live arrays. Different values keep overlapping slices visible,
    and [c_frame] reads its declaration's zero on each invocation. *)
-let serial_frame_program ~first_id ~name ~graph n =
+let serial_frame_program ?index ~first_id ~name ~graph n =
   let mk = node_factory ~first_id ~dims:[| n |] () in
   let a = mk "serial_a" and b = mk "serial_b" and c_frame = mk "serial_c" in
   List.iter [ a; b; c_frame ] ~f:(fun tn ->
@@ -127,29 +134,35 @@ let serial_frame_program ~first_id ~name ~graph n =
     let next = mk "serial_next" in
     materialize next;
     let z = sym () in
-    let consume = loop_n z n (set next [| iter z |] (add (get out [| iter z |]) (c 1.))) in
-    (optimize ~materialized:[ out; next ] ~name (seq frame consume), next)
+    let offset =
+      match index with None -> c 1. | Some (s : Idx.static_symbol) -> tick s.static_symbol
+    in
+    let consume = loop_n z n (set next [| iter z |] (add (get out [| iter z |]) offset)) in
+    ( optimize ~materialized:[ out; next ] ~static_indices:(Option.to_list index) ~name
+        (seq frame consume),
+      next )
 
 (* The graph routine's two segments: the frame's fill and drain, then the consumer. A recorded
    segmentation is applied as given, never coalesced, so the cut is the test's. *)
-let two_segments (o : Ir.Low_level.optimized) =
+let two_segments ~static_indices (o : Ir.Low_level.optimized) =
   let frame_statements = List.length (Ir.Low_level.flat_lines [ o.llc ]) - 1 in
   let _, tuples =
     Ir.Schedule.fission_segmented
       ~replay:([ (`Solo, frame_statements); (`Solo, 1) ], fun _ _ -> None)
       ~preset:(fun _ -> [])
       ~zero_sched:(fun _ -> [])
-      ~static_indices:[] o
+      ~static_indices o
   in
   List.map tuples ~f:(fun (_, _, _, post) -> post)
 
-let link_program ?ctx ~name ~graph (o, out) =
+let link_program ?ctx ?(bindings = Idx.Empty) ~name ~graph (o, out) =
   let linked =
-    if not graph then link ?ctx ~name o
+    if not graph then link ?ctx ~bindings ~name o
     else
       let ctx = match ctx with Some ctx -> ctx | None -> Lazy.force base_ctx in
-      Context.compile ~name ~prelowered:o ~lowered_transform:two_segments ctx
-        Ir.Assignments.empty_comp Idx.Empty
+      let static_indices = Idx.bound_symbols bindings in
+      Context.compile ~name ~prelowered:o ~lowered_transform:(two_segments ~static_indices) ctx
+        Ir.Assignments.empty_comp bindings
   in
   (linked, out)
 
@@ -197,6 +210,83 @@ let () =
 
 let counter = debug_counter
 let count ctx field = Option.value ~default:0 (counter ctx field)
+let serial_cells = s11d_floats / 3
+
+let serial_expected ?(binding = 0) ~graph n =
+  Array.init n ~f:(fun y -> Float.of_int ((7 * (n - y)) + if graph then binding + 1 else 0))
+
+let stream_pool_reserved ctx = counter ctx "stream_pool_reserved_bytes"
+let graph_pool_reserved ctx = counter ctx "graph_pool_reserved_bytes"
+let show_bytes = Option.value_map ~default:"unavailable" ~f:Int.to_string
+
+(* Finishing work or destroying its owner may return any amount of the backing to the driver. The
+   allocator has no new request to grow for during those operations. *)
+let within_backing label ~previous current =
+  let radius = Float.of_int previous /. 2. in
+  Verdict.within label [| Float.of_int current |] [| radius |] ~tol:(fun _ -> radius)
+
+let graph_pool_probe ctx =
+  let name = "clr_graph_pool_probe" in
+  let max_bindings = 1024 in
+  let index, bindings = Idx.get_static_symbol ~static_range:max_bindings Idx.Empty in
+  let (compiled, routine), out =
+    link_program ~ctx ~bindings ~name ~graph:true
+      (serial_frame_program ~index ~first_id:1774500 ~name ~graph:true serial_cells)
+  in
+  let baseline = count ctx "live_graph_execs" in
+  let raw_baseline = Cuda_pool_probe.read () in
+  let sample phase raw =
+    Cuda_pool_probe.report ~baseline:raw_baseline phase raw;
+    let stream = stream_pool_reserved ctx and graph = graph_pool_reserved ctx in
+    pf "pool backing is readable %s" phase (Option.is_some stream && Option.is_some graph);
+    Stdio.eprintf
+      "%s: debug stream reserved=%s B, graph reserved=%s B, live execs=%d (not part of the golden)\n\
+       %!"
+      phase (show_bytes stream) (show_bytes graph) (count ctx "live_graph_execs")
+  in
+  let launch i current =
+    Idx.find_exn routine.Context.bindings index := i;
+    let captures = ref 0 in
+    let callback = function FI.Cuda_scratch_allocated -> Int.incr captures | _ -> () in
+    let ran = FI.with_callback callback ~f:(fun () -> Context.run current routine) in
+    Context.sync ran;
+    (ran, !captures = 1)
+  in
+  sample "after link" raw_baseline;
+  let first, captured = launch 0 compiled in
+  let first_cached = captured && count ctx "live_graph_execs" = baseline + 1 in
+  p "the first scratch graph was cached" first_cached;
+  sample "first graph completed" (Cuda_pool_probe.read ());
+  let rec evict i current cached =
+    if i >= max_bindings then None
+    else
+      let prior = Cuda_pool_probe.read () in
+      let ran, captured = launch i current in
+      let now = count ctx "live_graph_execs" in
+      if captured && now = cached then Some (i, ran, prior)
+      else if captured && now = cached + 1 then evict (i + 1) ran now
+      else None
+  in
+  let replacement, after_destroy =
+    Cuda_pool_probe.after_first_exec_destroy (fun () ->
+        if first_cached then evict 1 first (baseline + 1) else None)
+  in
+  p "capturing a new scratch graph evicts a cached exec" (Option.is_some replacement);
+  p "the driver destroyed the evicted exec" (Option.is_some after_destroy);
+  Option.iter replacement ~f:(fun (i, ran, prior) ->
+      Cuda_pool_probe.report ~baseline:raw_baseline "before the replacement graph" prior;
+      Option.iter after_destroy
+        ~f:
+          (Cuda_pool_probe.report ~baseline:raw_baseline
+             "after eviction, before launching the replacement");
+      p "the replacement graph computes the result for its binding"
+        (Array.equal Float.equal (Context.get_values ran out)
+           (serial_expected ~binding:i ~graph:true serial_cells));
+      sample "replacement graph completed after eviction" (Cuda_pool_probe.read ()));
+  Context.release compiled;
+  p "routine release returns the live graph exec count to baseline"
+    (count ctx "live_graph_execs" = baseline);
+  sample "after routine release" (Cuda_pool_probe.read ())
 
 (* What [f] changed the named counters by. *)
 let deltas ctx fields f =
@@ -210,6 +300,14 @@ let () =
     Utils.settings.output_debug_files_in_build_directory <- true;
     Generated.init ~backend_name);
   Stdio.eprintf "backend: %s (not part of the golden)\n%!" (Context.backend_name ctx);
+  (match Sys.get_argv () with
+  | [| _; "--pool-backing" |] ->
+      if on_cuda then graph_pool_probe ctx else fail "--pool-backing requires CUDA";
+      Stdlib.exit 0
+  | [| _; "--pool-backing-streams" |] ->
+      if on_cuda then Cuda_pool_probe.streams () else fail "--pool-backing-streams requires CUDA";
+      Stdlib.exit 0
+  | _ -> ());
   let cuda = Verdict.leg ~when_:on_cuda ~on:backend_name () in
   let hip = Verdict.leg ~when_:on_hip ~on:backend_name () in
   let gpu = Verdict.leg ~when_:(on_cuda || on_hip) ~on:backend_name () in
@@ -413,10 +511,71 @@ let () =
       Verdict.sub_leg cuda ~when_:supported ~on:backend_name
     in
     let serial_graph = Verdict.sub_leg serial_scratch ~when_:capturing ~on:backend_name in
-    let serial_cells = s11d_floats / 3 in
-    let serial_expected ~graph n =
-      Array.init n ~f:(fun y -> Float.of_int ((7 * (n - y)) + if graph then 1 else 0))
-    in
+    (* These are the process's first allocations in each allocator. The requested bytes must grow
+       its reservation here, before later serial fixtures can reuse backing. *)
+    in_leg ~leg:serial_scratch "serial scratch: CUDA reports backing for a stream allocation"
+      (fun label ->
+        let name = "clr_stream_backing" in
+        let (compiled, routine), _ =
+          link_program ~ctx ~name ~graph:false
+            (serial_frame_program ~first_id:1774520 ~name ~graph:false serial_cells)
+        in
+        let before = stream_pool_reserved ctx in
+        let allocated = ref None in
+        let callback = function
+          | FI.Cuda_scratch_allocated -> allocated := stream_pool_reserved ctx
+          | _ -> ()
+        in
+        let ran = FI.with_callback callback ~f:(fun () -> Context.run compiled routine) in
+        Context.sync ran;
+        let synced = stream_pool_reserved ctx in
+        Context.release ran;
+        Stdio.eprintf
+          "stream backing in bytes before/allocated/synchronized = %s, %s, %s (not part of the \
+           golden)\n\
+           %!"
+          (show_bytes before) (show_bytes !allocated) (show_bytes synced);
+        p label
+          (match (before, !allocated, synced) with
+          | Some before, Some allocated, Some synced ->
+              allocated - before >= s11d_floats * 4
+              && within_backing label ~previous:allocated synced
+          | _ -> false));
+    in_leg ~leg:serial_graph "serial scratch: CUDA reports graph backing across routine release"
+      (fun label ->
+        let name = "clr_graph_backing" in
+        let (compiled, routine), _ =
+          link_program ~ctx ~name ~graph:true
+            (serial_frame_program ~first_id:1774510 ~name ~graph:true serial_cells)
+        in
+        let before = graph_pool_reserved ctx in
+        let stream_before = stream_pool_reserved ctx in
+        let live_before = count ctx "live_graph_execs" in
+        let ran = Context.run compiled routine in
+        Context.sync ran;
+        let cached = graph_pool_reserved ctx in
+        let cached_live = count ctx "live_graph_execs" in
+        Context.release ran;
+        let released = graph_pool_reserved ctx in
+        let stream_after = stream_pool_reserved ctx in
+        let released_live = count ctx "live_graph_execs" in
+        let readings =
+          List.map [ before; cached; released; stream_before; stream_after ] ~f:show_bytes
+        in
+        Stdio.eprintf
+          "pool backing in bytes: graph before/cached/released, stream before/after = %s (not part \
+           of the golden)\n\
+           %!"
+          (String.concat ~sep:", " readings);
+        p label
+          (match (before, cached, released, stream_before, stream_after) with
+          | Some before, Some cached, Some released, Some stream_before, Some stream_after ->
+              cached - before >= s11d_floats * 4
+              && cached_live = live_before + 1
+              && released_live = live_before
+              && within_backing label ~previous:cached released
+              && within_backing label ~previous:stream_before stream_after
+          | _ -> false));
     let serial_measurement ~graph ~first_id ~name =
       lazy
         (let n = serial_cells in

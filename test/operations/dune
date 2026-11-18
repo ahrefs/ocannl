@@ -6427,12 +6427,23 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (modules cuda_launch_reservation)
+ (modules cuda_launch_reservation cuda_pool_probe)
  (libraries
   base
   ocannl
   stdio
   unix
+  (select
+   cuda_pool_probe.ml
+   from
+   (cudajit.cuda
+    cudajit.nvrtc
+    ctypes
+    ctypes.foreign
+    integers
+    ->
+    cuda_pool_probe.real.ml)
+   (-> cuda_pool_probe.missing.ml))
   arrayjit.verdict
   ll_test
   test_utils
