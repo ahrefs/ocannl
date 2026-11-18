@@ -28,7 +28,7 @@
   base
   cudajit_stub
   ctypes
-  ctypes-foreign
+  ctypes.foreign
   unix
   utils
   ir

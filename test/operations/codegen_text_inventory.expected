@@ -1159,6 +1159,7 @@ test/operations/cc_half_excess_precision.ml [calls cc's compiler; run by @test/o
 test/operations/cc_load_refusal_classes.ml [calls cc's compiler; run by @test/operations/runtest-cc_load_refusal_classes]
 test/operations/cc_march_census.ml [calls cc's compiler; run by @test/operations/runtest-cc_march_census-emission, @test/operations/runtest-cc_march_census-emission-outlined, @test/operations/runtest-cc_march_census-w16_native_foreign, @test/operations/runtest-cc_march_census-w16_native_host, @test/operations/runtest-cc_march_census-w16_wide_foreign, @test/operations/runtest-cc_march_census-w16_wide_host, @test/operations/runtest-cc_march_census-w32_native_foreign, @test/operations/runtest-cc_march_census-w32_native_host, @test/operations/runtest-cc_march_census-w32_wide_foreign, @test/operations/runtest-cc_march_census-w32_wide_host, @test/operations/runtest-cc_march_census-w64_native_foreign, @test/operations/runtest-cc_march_census-w64_native_host, @test/operations/runtest-cc_march_census-w64_wide_foreign, @test/operations/runtest-cc_march_census-w64_wide_host]
 test/operations/cuda_like_builtins_emulation.ml [calls cc's compiler; run by @test/operations/runtest-cuda_like_builtins_emulation]
+test/operations/cuda_pool_probe.real.ml [calls cuda's compiler; run by @test/operations/runtest-cuda_launch_reservation]
 test/operations/cuda_wmma_floor.real.ml [calls cuda's compiler; run by @test/operations/runtest-cuda_wmma_floor]
 test/operations/metal_builtins_emulation.ml [calls cc's compiler; run by @test/operations/runtest-metal_builtins_emulation]
 test/operations/runtime_power_fast_math_emulation.ml [calls cc's compiler; run by @test/operations/runtest-runtime_power_fast_math_emulation]
@@ -1194,6 +1195,7 @@ cc:
   @test/operations/runtest-schedule_pad-contract_off
 cuda:
   @arrayjit/test/runtest-test_cuda_classify_failure
+  @test/operations/runtest-cuda_launch_reservation
   @test/operations/runtest-cuda_wmma_floor
 hip:
   @arrayjit/test/runtest-test_hip_compile_failure_options

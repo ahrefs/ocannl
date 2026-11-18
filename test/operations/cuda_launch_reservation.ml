@@ -43,10 +43,12 @@
    [./cuda_launch_reservation.exe --contended] in [_build/default/test/operations], under an
    exclusive hold of the box; a false claim exits 1.
 
-   [--pool-backing] is the CUDA graph memory probe. Under an exclusive hold, run it from the same
-   build directory. Every sampled graph has completed. The probe checks that changing the binding
-   fills the cache and then evicts a live exec, and that routine release removes the remaining
-   execs. Its free-memory readings assume an idle device. It never requests a driver trim.
+   The CUDA allocator probes run from the same build directory with [OCANNL_BACKEND=cuda], in fresh
+   processes under an exclusive hold. [--pool-backing-streams] measures two nonblocking driver
+   streams on one device and checks actual kernel overlap. [--pool-backing] samples completed graphs
+   as changing bindings fills the cache and evicts an exec, then as routine release removes the
+   remaining execs. Both report driver attributes with free-memory deltas. Those deltas require an
+   idle device. Neither mode requests a driver trim.
 
    The executed kernels discriminate: the frame is filled forward with [1 + x] and read back in
    REVERSE ([out[y] = n - y]), which also keeps the device compiler from forwarding each store to
@@ -232,15 +234,15 @@ let graph_pool_probe ctx =
       (serial_frame_program ~index ~first_id:1774500 ~name ~graph:true serial_cells)
   in
   let baseline = count ctx "live_graph_execs" in
-  let sample phase =
-    let free, _ = Option.value_exn (Context.get_free_and_total_memory ctx) in
+  let raw_baseline = Cuda_pool_probe.read () in
+  let sample phase raw =
+    Cuda_pool_probe.report ~baseline:raw_baseline phase raw;
     let stream = stream_pool_reserved ctx and graph = graph_pool_reserved ctx in
     pf "pool backing is readable %s" phase (Option.is_some stream && Option.is_some graph);
     Stdio.eprintf
-      "%s: free=%d B, stream reserved=%s B, graph reserved=%s B, live execs=%d (not part of the \
-       golden)\n\
+      "%s: debug stream reserved=%s B, graph reserved=%s B, live execs=%d (not part of the golden)\n\
        %!"
-      phase free (show_bytes stream) (show_bytes graph) (count ctx "live_graph_execs")
+      phase (show_bytes stream) (show_bytes graph) (count ctx "live_graph_execs")
   in
   let launch i current =
     Idx.find_exn routine.Context.bindings index := i;
@@ -250,31 +252,41 @@ let graph_pool_probe ctx =
     Context.sync ran;
     (ran, !captures = 1)
   in
-  sample "after link";
+  sample "after link" raw_baseline;
   let first, captured = launch 0 compiled in
   let first_cached = captured && count ctx "live_graph_execs" = baseline + 1 in
   p "the first scratch graph was cached" first_cached;
-  sample "first graph completed";
+  sample "first graph completed" (Cuda_pool_probe.read ());
   let rec evict i current cached =
     if i >= max_bindings then None
     else
+      let prior = Cuda_pool_probe.read () in
       let ran, captured = launch i current in
       let now = count ctx "live_graph_execs" in
-      if captured && now = cached then Some (i, ran)
+      if captured && now = cached then Some (i, ran, prior)
       else if captured && now = cached + 1 then evict (i + 1) ran now
       else None
   in
-  let replacement = if first_cached then evict 1 first (baseline + 1) else None in
+  let replacement, after_destroy =
+    Cuda_pool_probe.after_first_exec_destroy (fun () ->
+        if first_cached then evict 1 first (baseline + 1) else None)
+  in
   p "capturing a new scratch graph evicts a cached exec" (Option.is_some replacement);
-  Option.iter replacement ~f:(fun (i, ran) ->
+  p "the driver destroyed the evicted exec" (Option.is_some after_destroy);
+  Option.iter replacement ~f:(fun (i, ran, prior) ->
+      Cuda_pool_probe.report ~baseline:raw_baseline "before the replacement graph" prior;
+      Option.iter after_destroy
+        ~f:
+          (Cuda_pool_probe.report ~baseline:raw_baseline
+             "after eviction, before launching the replacement");
       p "the replacement graph computes the result for its binding"
         (Array.equal Float.equal (Context.get_values ran out)
            (serial_expected ~binding:i ~graph:true serial_cells));
-      sample "replacement graph completed after eviction");
+      sample "replacement graph completed after eviction" (Cuda_pool_probe.read ()));
   Context.release compiled;
   p "routine release returns the live graph exec count to baseline"
     (count ctx "live_graph_execs" = baseline);
-  sample "after routine release"
+  sample "after routine release" (Cuda_pool_probe.read ())
 
 (* What [f] changed the named counters by. *)
 let deltas ctx fields f =
@@ -291,6 +303,9 @@ let () =
   (match Sys.get_argv () with
   | [| _; "--pool-backing" |] ->
       if on_cuda then graph_pool_probe ctx else fail "--pool-backing requires CUDA";
+      Stdlib.exit 0
+  | [| _; "--pool-backing-streams" |] ->
+      if on_cuda then Cuda_pool_probe.streams () else fail "--pool-backing-streams requires CUDA";
       Stdlib.exit 0
   | _ -> ());
   let cuda = Verdict.leg ~when_:on_cuda ~on:backend_name () in
@@ -496,6 +511,8 @@ let () =
       Verdict.sub_leg cuda ~when_:supported ~on:backend_name
     in
     let serial_graph = Verdict.sub_leg serial_scratch ~when_:capturing ~on:backend_name in
+    (* These are the process's first allocations in each allocator. The requested bytes must grow
+       its reservation here, before later serial fixtures can reuse backing. *)
     in_leg ~leg:serial_scratch "serial scratch: CUDA reports backing for a stream allocation"
       (fun label ->
         let name = "clr_stream_backing" in
