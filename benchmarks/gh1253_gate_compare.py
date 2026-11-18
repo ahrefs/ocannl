@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Join one gh1253_cells.sh gate pair to its calibration rows.
+
+Reads only the pair's successful cells.py cell.json records, autotune-seeding:
+stderr lines, and current 12-column calibration TSVs. A join needs one ranked
+gate, one exact plan label, segment census evidence, and one positive timing
+row for that label in the same arm. Other stderr is ignored. Old TSV schemas,
+inferred plan labels and timing rows from other cells are outside the join.
+"""
+
+import math
+import sys
+from pathlib import Path
+
+import config_records
+import strict_json
+
+
+GATE_KEY = "gpu_default_sketch_min_reduction"
+TSV_KEY = "autotune_calibration_file"
+CENSUS_PREFIX = "autotune-seeding: "
+
+
+def one_field(census, prefix):
+    fields = [line[len(prefix):] for line in census if line.startswith(prefix)]
+    if len(fields) != 1 or not fields[0]:
+        raise ValueError(f"expected exactly one {prefix.strip()} line in the seeding census")
+    return fields[0]
+
+
+def joined_row(path, backend, label):
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split("\t")
+        if len(fields) != 12 or fields[0] != backend:
+            raise ValueError(f"{path}: expected a current calibration row for {backend}")
+        if fields[3] == label:
+            rows.append(fields)
+    if len(rows) != 1:
+        raise ValueError(f"{path}: expected one timing row for {label!r}, found {len(rows)}")
+    _, digest, routine, _, time, *_ = rows[0]
+    ms = float(time)
+    if not digest or not routine or not math.isfinite(ms) or ms <= 0:
+        raise ValueError(f"{path}: incomplete timing row for {label!r}")
+    return digest, routine, ms
+
+
+def read_arm(stem, backend, arm):
+    tsv = Path(f"{stem}.tsv")
+    record = strict_json.loads((stem / "cell.json").read_text(encoding="utf-8"))
+    if not record["ok"]:
+        raise ValueError("cell did not pass its configuration check")
+    config = record["config"]
+    expects = {GATE_KEY: arm, TSV_KEY: str(tsv), "autotune_log_seeding": "true"}
+    problems = config_records.expect_problems(config, expects)
+    if problems:
+        raise ValueError("; ".join(problems))
+    config = {key: entry for key, entry in config.items() if key not in (GATE_KEY, TSV_KEY)}
+    census = [line for line in Path(f"{stem}.err").read_text(encoding="utf-8", errors="replace")
+              .split("\n") if line.startswith(CENSUS_PREFIX)]
+    gate = one_field(census, CENSUS_PREFIX + "gate ")
+    if not gate.startswith("ranked "):
+        raise ValueError(f"expected a ranked gate, got {gate!r}")
+    if not any(line.startswith(CENSUS_PREFIX + 'where="seeded_default segment u') for line in census):
+        raise ValueError("missing seeded-default segment census")
+    label = one_field(census, CENSUS_PREFIX + "plan ")
+    if not label.startswith(("F_preset[", "F_seeded[")):
+        raise ValueError(f"unrecognized seeded plan label {label!r}")
+    digest, routine, ms = joined_row(tsv, backend, label)
+    return config, (f"{arm}: joined=1 label={label!r} routine={routine!r} "
+                    f"digest={digest} measured_ms={ms:.6f}", *census), routine
+
+
+def compare(backend, pair):
+    records = []
+    for arm in ("auto", "auto-legacy"):
+        try:
+            records.append(read_arm(Path(f"{pair}_{arm}"), backend, arm))
+        except (KeyError, OSError, ValueError) as exc:
+            raise ValueError(f"{arm}: {exc}") from exc
+    (auto_config, auto_lines, auto_routine), (legacy_config, legacy_lines, legacy_routine) = records
+    changed = sorted(key for key in auto_config.keys() | legacy_config.keys()
+                     if auto_config.get(key) != legacy_config.get(key))
+    if changed:
+        raise ValueError("resolved configuration differs: " + ", ".join(changed))
+    if auto_routine != legacy_routine:
+        raise ValueError(f"timing rows name different routines: {auto_routine!r}, {legacy_routine!r}")
+    print("resolved configuration matches apart from the gate and calibration path")
+    print(*auto_lines, *legacy_lines, sep="\n")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        sys.exit("usage: gh1253_gate_compare.py BACKEND PAIR_PATH_STEM")
+    try:
+        compare(*sys.argv[1:])
+    except ValueError as exc:
+        print(f"gh1253_gate_compare: {exc}", file=sys.stderr)
+        sys.exit(1)

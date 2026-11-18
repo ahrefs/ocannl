@@ -428,6 +428,16 @@ files.
   listing order decides); the register-tile and sub-warp gaps at one block tile are gh-ocannl-2262's
   terms (below). Re-fit with `gh1600_txn_fit.py --staged-rate sweep --listed-staged-rate L` on listings
   carrying `stg=`, judged against the cell's `nostg` arm (`gh1253_cells.sh`).
+- **Compare ranked seeding on one build (gh-ocannl-2335).** `COMPARE_AUTO_GATE=1` in
+  `gh1253_cells.sh` runs `auto` and `auto-legacy` at each site. Both select the ranked gate on
+  CUDA and HIP. The legacy gate omits the operand-delivery rate and its launch tail, as before
+  gh-ocannl-2279. Both leaf rankers keep the shipped rates. The gate selector is the existing
+  search-shaping `gpu_default_sketch_min_reduction` key. A pair's join checks both cells' resolved
+  configuration, ignoring only that selector and the separate TSV paths. The seeding-census
+  plan label identifies the timing row within each arm, including the plan digest where it seeded.
+  At `wgrad:1,16,32,32` on rog CUDA, `auto` joined its seeded plan while `auto-legacy` joined the
+  configured fission preset. The tuner's serial `baseline` has no timing row on CUDA. The stock
+  threshold-32 arms and `nostg` answer different questions about leaf ranking.
 - **The launch fill can credit per-thread ILP, but no backend advises a cap (gh-ocannl-1639).**
   `Cost_model.launch_contexts ~is_private` counts each scalar context's independent accumulation
   chains per thread: the distinct private accumulator cells one step of a reduction

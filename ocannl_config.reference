@@ -374,6 +374,9 @@
 # of that segment -- where the cross-block re-reads the sketch removes cost more, at DRAM bandwidth
 # past the cache capacity or at cache bandwidth within it, than the staging it adds. On a device
 # publishing neither a capacity nor a cache bandwidth (Metal, the CPU backends) `auto` means 32.
+# `auto-legacy` uses the pre-gh-ocannl-2279 ranked gate, with the operand-delivery charge and its
+# launch tail off in the gate only. The leaf ranker still uses model_staged_copy_rate. Both
+# automatic modes share the same threshold fallback (gh-ocannl-2335).
 # An integer seeds every matmul segment whose reduction extent (the product of its contraction
 # loops) is at least that many; 0 disables the seeding. 32 admits attention's head-dimension
 # contractions; of the thresholds tried on gpt2_mini_train (32, 64, 128, 256), it gave the fastest

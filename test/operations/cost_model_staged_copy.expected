@@ -28,5 +28,6 @@ the auto gate (Ranked) is what derives the chain's plan here: true
 the no-rate gate seeds both products of the chain: true
 pricing both delivery paths keeps the two CUDA-shaped seeds: true
 the actual gate's delivery charge separates the tied arithmetic: true
+auto-legacy keeps the arithmetic tie and leaves the leaf copy rate in force: true
 every staged leaf's census equals M*N*K*(BM+BN)/(BM*BN) cells of 4 bytes: true
 a coalesced leaf is among them: true

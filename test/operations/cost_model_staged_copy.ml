@@ -432,7 +432,22 @@ let () =
   Stdio.eprintf "cost_model_staged_copy: tie fixture seeds %d with delivery, %d without\n"
     (seeded_count priced) (seeded_count unpriced);
   p "the actual gate's delivery charge separates the tied arithmetic"
-    (seeded_count unpriced = 0 && seeded_count priced = 2)
+    (seeded_count unpriced = 0 && seeded_count priced = 2);
+  let key = "gpu_default_sketch_min_reduction" in
+  let previous = Hashtbl.find Utils.config_file_args key in
+  Hashtbl.set Utils.config_file_args ~key ~data:"auto-legacy";
+  Exn.protect
+    ~f:(fun () ->
+      let legacy = plan ~tag:"legacy" rated in
+      p "auto-legacy keeps the arithmetic tie and leaves the leaf copy rate in force"
+        (seeded_count legacy = 0
+        && Option.equal Float.equal
+             (Autotune.ranking_staged_copy_rate ~limits:rated)
+             rated.staged_copy_rate))
+    ~finally:(fun () ->
+      match previous with
+      | Some data -> Hashtbl.set Utils.config_file_args ~key ~data
+      | None -> Hashtbl.remove Utils.config_file_args key)
 
 let () =
   let ctx = Context.cpu () in

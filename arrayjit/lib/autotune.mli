@@ -2937,8 +2937,10 @@ val seeded_default_gate : limits:Ir.Backend_intf.hardware_limits -> seed_gate
     under {!ranking_capacity}'s capacity and {!ranking_cache_bandwidth}, and [Min_reduction 32] —
     the threshold's measured default — where nothing calibrates either tier: no advisory (Metal) and
     no [model_cache_capacity] / [model_cache_bandwidth] override. An explicit [none] override is a
-    calibration and keeps [Ranked], even with both tiers off. Raises [Utils.Invalid_config_value]
-    naming the key on anything else (gh-ocannl-1332). *)
+    calibration and keeps [Ranked], even with both tiers off. [auto-legacy] uses the same rule with
+    no operand-delivery charge or launch tail in the gate score, leaving leaf pricing intact
+    (gh-ocannl-2335). Raises [Utils.Invalid_config_value] naming the key on anything else
+    (gh-ocannl-1332). *)
 
 val model_seeding :
   facts:Ir.Backend_intf.backend_facts ->

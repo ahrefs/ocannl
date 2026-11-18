@@ -59,6 +59,17 @@
 # defaults, no model_* flag), beside `ceilings`. With it, SITES may name bench_rank_site's
 # gpt2_mini projection sites (qkv:b,s,h,e,k and outproj:b,s,j,h,e), whose explain lines list the
 # coalesced branch's leaves the tuner times beside the family.
+# COMPARE_AUTO_GATE=1 compares the shipped auto gate with auto-legacy (the pre-gh-ocannl-2279
+# score) on CUDA or HIP, at each site of SITES. Both arms use one bench_rank_site binary and
+# the shipped leaf settings. This mode takes OUT, CAP, SITES and TIME_REPEATS (default 1).
+# SITES is a space-separated list of distinct wgrad, fp8mm, qkv or outproj sites with positive
+# decimal dimensions. It checks all sites and conflicting mode, calibration, pick and fit options
+# before building.
+# Each pair runs in alternating order across repeats, with one fresh TSV per arm per repeat.
+# OUT/rank_<site>_gate_r<N>.txt joins each arm's seeding census to its own exact timed plan.
+# The join requires clean resolved configuration records that differ only in the gate and
+# TSV destination. Missing evidence fails that pair. Inspect failed output in OUT and retry in an
+# empty directory.
 # BENCH_PICK=1 (stated to every cell) makes each listing cell also print model_default's actual
 # pick, which the agreement script joins to its measured row against the seeded plan's
 # (gh-ocannl-1477). PICK_PROFILES (with RANK_ONLY=1, say 'performance approximate') adds, per site,
@@ -134,6 +145,42 @@ site_name() {
   local kind=${1%%:*} dims=${1#*:}
   echo "${kind}_${dims//,/x}"
 }
+gate_usage() {
+  echo "$0: COMPARE_AUTO_GATE: $*" >&2
+  exit 2
+}
+compare_gate=${COMPARE_AUTO_GATE:-0}
+case "$compare_gate" in 0 | 1) ;; *) gate_usage "expected 0 or 1";; esac
+if [[ $compare_gate == 1 ]]; then
+  case "$backend" in cuda | hip) ;; *) gate_usage "BACKEND must be cuda or hip";; esac
+  for knob in RANK_ONLY CAPACITY_ONLY FIT_FILL PICK_GATE0 BENCH_PICK NO_COALESCED; do
+    [[ ${!knob:-0} == 0 ]] || gate_usage "$knob conflicts with this mode"
+  done
+  for knob in EXPLAIN_ONLY PICK_PROFILES TXN_RATE MULTIPROCESSORS FILL_CHAINS SHARED_LOAD_RATE FILL_LANE_WIDTH; do
+    [[ -z ${!knob:-} ]] || gate_usage "$knob conflicts with this mode"
+  done
+  gate_repeats=${TIME_REPEATS:-1}
+  integer='^[1-9][0-9]*$'
+  positive_decimal='^[0-9]+([.][0-9]+)?$'
+  [[ $gate_repeats =~ $integer ]] || gate_usage "TIME_REPEATS must be a positive integer"
+  [[ $cap =~ $positive_decimal && $cap == *[1-9]* ]] || gate_usage "CAP must be positive seconds"
+  [[ $sites != *$'\n'* ]] || gate_usage "SITES must fit on one line"
+  read -r -a gate_sites <<< "$sites"
+  seen=' '
+  for site in ${gate_sites[@]+"${gate_sites[@]}"}; do
+    case "${site%%:*}" in
+      wgrad) arity=3 ;;
+      fp8mm) arity=2 ;;
+      qkv | outproj) arity=4 ;;
+      *) gate_usage "unknown site '$site'" ;;
+    esac
+    shape="^[^:]+:[1-9][0-9]*(,[1-9][0-9]*){$arity}$"
+    [[ $site =~ $shape ]] || gate_usage "invalid dimensions for '$site'"
+    [[ $seen != *" $site "* ]] || gate_usage "duplicate site '$site'"
+    seen+="$site "
+  done
+  [[ $seen != ' ' ]] || gate_usage "SITES must name at least one site"
+fi
 rows_dir=""
 if [[ -n "${EXPLAIN_ONLY:-}" ]]; then
   for knob in FIT_FILL PICK_GATE0; do
@@ -210,7 +257,9 @@ cd "$root"
 echo "gh1253_cells: revision $(git rev-parse HEAD) backend $backend host $(hostname) at $(date -u +%FT%TZ)"
 git status --porcelain --untracked-files=no | sed 's/^/  dirty: /'
 
-if [[ -n "$rows_dir" ]]; then
+if [[ $compare_gate == 1 ]]; then
+  dune build -j 4 benchmarks/runners/ocannl/bench_rank_site.exe
+elif [[ -n "$rows_dir" ]]; then
   echo "   EXPLAIN_ONLY: the shipped and ceilings listings joined to the rows in $rows_dir"
   if [[ -s "$rows_dir/driver.log" ]]; then sed -n '1s/^/   rows from: /p' "$rows_dir/driver.log"; fi
   dune build benchmarks/runners/ocannl/bench_rank_site.exe
@@ -251,6 +300,31 @@ cell() {
   fi
   cat "$out/$name.out"
 }
+
+if [[ $compare_gate == 1 ]]; then
+  for site in "${gate_sites[@]}"; do
+    name=$(site_name "$site")
+    for rep in $(seq 1 "$gate_repeats"); do
+      pair="rank_${name}_gate_r$rep"
+      arms=(auto auto-legacy)
+      if ((rep % 2 == 0)); then arms=(auto-legacy auto); fi
+      pair_ok=true
+      for gate in "${arms[@]}"; do
+        arm="${pair}_$gate"
+        cell "$arm" env BENCH_TUNE=1 BENCH_SITE="${site%%:*}" BENCH_SITE_DIMS="${site#*:}" "$rank_site" \
+          "--ocannl_gpu_default_sketch_min_reduction=$gate" --ocannl_autotune_log_seeding=true \
+          --ocannl_autotune_keep_fraction=1 "--ocannl_autotune_calibration_file=$out/$arm.tsv"
+        if ! $last_ok; then pair_ok=false; fi
+      done
+      if $pair_ok; then
+        python3 "$root/benchmarks/gh1253_gate_compare.py" "$backend" "$out/$pair" |
+          tee "$out/$pair.txt" || failed=$((failed + 1))
+      fi
+    done
+  done
+  echo "gh1253_cells: $failed failed gate cell(s) or join(s)"
+  exit $((failed > 0 ? 1 : 0))
+fi
 
 # A fitted constant read back from a cell's config-pasteable line -- only from a cell that
 # succeeded: a fit its own tool rejected (a non-monotone split exits 1 after printing it) must not

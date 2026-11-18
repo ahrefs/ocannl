@@ -5515,18 +5515,21 @@ let seed_gate_tag = function
       ^ Option.value_map wg_capacity ~default:"" ~f:(Printf.sprintf " wg_capacity=%d")
       ^ set "copy_rate" copy_rate
 
-(* The configured gate, unresolved: [`Auto] or a threshold. *)
+(* Both automatic variants use the ranked gate. The legacy score predates the operand-delivery
+   charge, which includes the staged-copy term and its launch tail. *)
 let seed_gate_setting () =
   Utils.registered_keyword ~arg_name:"gpu_default_sketch_min_reduction"
-    ~expected:"auto or a non-negative integer (0 disables the seeded default)" ~parse:(function
-    | "auto" -> Some `Auto
+    ~expected:"auto, auto-legacy or a non-negative integer (0 disables the seeded default)"
+    ~parse:(function
+    | "auto" -> Some (`Auto `Delivery)
+    | "auto-legacy" -> Some (`Auto `Legacy)
     | raw -> (
         match Int.of_string_opt raw with Some n when n >= 0 -> Some (`Threshold n) | _ -> None))
 
 let seeded_default_gate ~limits =
   match seed_gate_setting () with
   | `Threshold n -> Min_reduction n
-  | `Auto -> (
+  | `Auto pricing -> (
       (* The fallback is for a device nothing has calibrated -- no advisory and no override. An
          explicit [none] override is a calibration too (no DRAM tier, or uncharged re-reads): its
          ranking stands, even when both tiers resolve to [None]. *)
@@ -5551,7 +5554,10 @@ let seeded_default_gate ~limits =
               fill = fill_model_at ~limits ~lane_width:1;
               sector_rate = ranking_transaction_rate ~limits;
               wg_capacity = ranking_workgroup_capacity ~limits;
-              copy_rate = ranking_staged_copy_rate ~limits;
+              copy_rate =
+                (match pricing with
+                | `Delivery -> ranking_staged_copy_rate ~limits
+                | `Legacy -> None);
             })
 
 (* The seeded geometries in preference order: the largest block tile first, for its operand reuse,
@@ -6139,12 +6145,25 @@ let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narr
          was. *)
       let opt, split = seeded_split ~facts ~min_serial ~static_indices (scratch_of opt) in
       let ranked_below = seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices in
+      let report_plan label =
+        if log_seeding_enabled () then
+          print_seeding_lines
+            [
+              Printf.sprintf "%s gate %s" seeding_census_prefix (seed_gate_tag gate);
+              Printf.sprintf "%s plan %s" seeding_census_prefix (label ());
+            ]
+      in
       match
         seeded_plan_on ?memo ~capabilities ~limits ~accum_prec ~admit_narrow ~static_indices ~gate
           ~ranked_below ~sink_enabled ~split opt
       with
-      | { sp_split = []; sp_segments = None; _ } -> None
+      | { sp_split = []; sp_segments = None; _ } ->
+          (* [seeded_settings] requires automatic scheduling and fission here. The tuner's serial
+             baseline is a different program, and GPUs never dispatch it. *)
+          report_plan (fun () -> Option.value_exn (default_seed_label ~facts));
+          None
       | plan ->
+          report_plan (fun () -> seeded_plan_label plan);
           (* Every reading the per-segment decisions rest on (gh-ocannl-1442, gh-ocannl-1479): the
              staffed start re-decides on the search's own segments, which the plan digest does not
              cover. *)
