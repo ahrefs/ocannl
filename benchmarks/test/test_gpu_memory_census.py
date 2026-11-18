@@ -177,6 +177,11 @@ class GpuMemoryCensusTest(unittest.TestCase):
         self.assertEqual(record["tests"], "unknown from incomplete or unread trace")
         self.assertEqual(record["probe_status"], "UNREAD")
 
+    def test_launcher_requires_an_explicit_backend_pin(self):
+        with patch.dict(os.environ, clear=True):
+            with self.assertRaisesRegex(ValueError, "set OCANNL_BACKEND"):
+                self.census.run_batch(SimpleNamespace())
+
     def test_foreground_launcher_uses_the_runner_trace_reader_and_keeps_its_table(self):
         self.trace(process(os.getpid(), "traced.exe", 10, 30))
         fake_runner = self.run_dir / "test-run.sh"
@@ -258,6 +263,9 @@ class GpuMemoryCensusTest(unittest.TestCase):
                 self.polls, self.samples)
         self.assertEqual(self.polls, {"partial": 1})
         self.assertEqual(set(self.samples), {pid})
+        # Neither a poll outside this lifetime nor a co-tenant's poll contributes fields.
+        self.samples[pid].append((5, 6, 99, ("drm-memory-vram",)))
+        self.samples[pid + 4].append((20, 21, 99, ("drm-resident-gtt",)))
         record = self.record(probe="drm-fdinfo", memory_model="unified")
         self.assertEqual(record["probe"], "drm-fdinfo")
         self.assertEqual(record["probe_status"], "partial")
@@ -281,5 +289,17 @@ class GpuMemoryCensusTest(unittest.TestCase):
         record = self.record(probe="drm-fdinfo", memory_model="unknown")
         self.assertEqual(record["probe_status"], "UNREAD")
         self.assertEqual(record["poll_outcomes"], {"unreadable": 1})
+        self.assertEqual(record["probe_fields"], [])
+        self.assertEqual(record["coverage"][0]["status"], "unknown")
+
+    def test_empty_hip_poll_reads_without_sampling_a_process(self):
+        self.trace(process(os.getpid(), "idle.exe", 10, 30))
+        self.census.sample(
+            lambda: self.census.probe_drm(self.run_dir, memory_regions=("vram",)),
+            self.polls, self.samples)
+        record = self.record(probe="drm-fdinfo", memory_model="discrete")
+        self.assertEqual(record["probe_status"], "read")
+        self.assertEqual(record["read_polls"], 1)
+        self.assertEqual(record["poll_outcomes"], {"empty": 1})
         self.assertEqual(record["probe_fields"], [])
         self.assertEqual(record["coverage"][0]["status"], "unknown")

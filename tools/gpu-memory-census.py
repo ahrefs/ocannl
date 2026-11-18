@@ -81,21 +81,23 @@ def coverage(trace_report, samples, memory_model):
     try:
         data = json.loads(trace_report.read_bytes())
     except (OSError, ValueError):
-        return "UNREAD", []
-    processes = []
+        return "UNREAD", [], []
+    processes, probe_fields = [], set()
     for row in data["processes"]:
         start, end = row.pop("start_ns"), row.pop("end_ns")
         # A query that straddles a lifetime boundary cannot identify the PID.
-        readings = [mib for before, after, mib, _ in samples.get(row["pid"], ())
+        readings = [(mib, fields) for before, after, mib, fields in samples.get(row["pid"], ())
                     if end is not None and start <= before <= after <= end]
         if memory_model is not None:
             row["memory_model"] = memory_model
         if readings:
-            row.update(status="sampled", process_peak_mib=max(readings), sample_count=len(readings))
+            row.update(status="sampled", process_peak_mib=max(mib for mib, _ in readings),
+                       sample_count=len(readings))
+            probe_fields.update(field for _, fields in readings for field in fields)
         else:
             row.update(status="unknown")
         processes.append(row)
-    return data["trace_status"], processes
+    return data["trace_status"], processes, sorted(probe_fields)
 
 
 def is_test_process(row):
@@ -117,7 +119,7 @@ def is_test_process(row):
 
 
 def write_sidecar(run_dir, trace_report, period, polls, samples, *, probe="nvidia-smi", memory_model=None):
-    trace_status, processes = coverage(trace_report, samples, memory_model)
+    trace_status, processes, probe_fields = coverage(trace_report, samples, memory_model)
     has_tests = any(map(is_test_process, processes))
     if has_tests:
         tests = "direct test processes traced"
@@ -126,8 +128,8 @@ def write_sidecar(run_dir, trace_report, period, polls, samples, *, probe="nvidi
     else:
         tests = "unknown from incomplete or unread trace"
     partial_polls = polls.get("partial", 0)
-    read = polls.get("ran", 0) + partial_polls
-    unread = sum(polls.values()) - read - polls.get("empty", 0)
+    read = polls.get("ran", 0) + partial_polls + polls.get("empty", 0)
+    unread = sum(polls.values()) - read
     record = {
         "sampling_period_seconds": period,
         "probe": probe,
@@ -142,8 +144,7 @@ def write_sidecar(run_dir, trace_report, period, polls, samples, *, probe="nvidi
     }
     if memory_model is not None:
         record["memory_model"] = memory_model
-        record["probe_fields"] = sorted({field for readings in samples.values()
-                                         for _, _, _, fields in readings for field in fields})
+        record["probe_fields"] = probe_fields
     with tempfile.TemporaryDirectory(dir=run_dir) as staging:
         finished = Path(staging) / SIDECAR
         finished.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
@@ -152,7 +153,7 @@ def write_sidecar(run_dir, trace_report, period, polls, samples, *, probe="nvidi
 
 def run_batch(args):
     polls, samples = Counter(), defaultdict(list)
-    backend = os.environ.get("OCANNL_BACKEND") or "cuda"
+    backend = os.environ.get("OCANNL_BACKEND")
     if backend == "hip":
         probe, memory_model = "drm-fdinfo", args.hip_memory_model or "unknown"
         regions = ("vram",) if memory_model == "discrete" else ("vram", "gtt")
