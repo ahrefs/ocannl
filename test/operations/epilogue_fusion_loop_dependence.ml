@@ -80,13 +80,13 @@ let refused_naming ~what ~loop = function
       && String.is_substring msg ~substring:("enclosing loop " ^ Idx.symbol_ident loop)
   | None -> false
 
+let tail_cell ~acc ~out ~bias row col =
+  let idcs = [| row; col |] in
+  set out idcs (add (get acc idcs) (get bias [| col |]))
+
 let tail2 ~acc ~out ~bias ~d0 ~d1 =
   let t0 = sym () and t1 = sym () in
-  loop_n t0 d0
-    (loop_n t1 d1
-       (set out
-          [| iter t0; iter t1 |]
-          (add (get acc [| iter t0; iter t1 |]) (get bias [| iter t1 |]))))
+  loop_n t0 d0 (loop_n t1 d1 (tail_cell ~acc ~out ~bias (iter t0) (iter t1)))
 
 (* A value varying with the iteration and the cell, clear of every store-back value. *)
 let w_value a b = add (c 100.) (add (mul (c 10.) (embed a)) (embed b))
@@ -168,7 +168,7 @@ let nested tag ~earlier =
 
 (* A guarded write to [acc[s, b - s - offset]] against the full-cover site [acc[b, 0]]. The guard
    keeps the write in bounds. The indices themselves prove [b_L = s + offset] and [s = b_R]. *)
-let launch_chain tag ~offset =
+let launch_chain ?(relocated = false) tag ~offset =
   let dims = [| 2; 1 |] in
   let acc = node ~dims ("acc" ^ tag) and out = node ~dims ("out" ^ tag) in
   let frag = node ~dims:[| 1 |] ("fragment" ^ tag) and bias = node ~dims:[| 1 |] ("bias" ^ tag) in
@@ -183,7 +183,11 @@ let launch_chain tag ~offset =
         lane_loop ~lane (set acc [| iter b; fixed 0 |] (get frag [| fixed 0 |]));
       ]
   in
-  let llc = seq (loop_n b 2 body) (tail2 ~acc ~out ~bias ~d0:2 ~d1:1) in
+  let llc =
+    if relocated then
+      loop_n b 2 (seq body (lane_loop ~lane (tail_cell ~acc ~out ~bias (iter b) (fixed 0))))
+    else seq (loop_n b 2 body) (tail2 ~acc ~out ~bias ~d0:2 ~d1:1)
+  in
   ({ llc; acc; out; frag; inputs = [ (bias, [| 0.25 |]) ] }, b, launch)
 
 (* --- The whole-K site: per [b] (two trips), a 2x2x2 [Tile_mma] block into acc[b, 0..1, 0..1],
@@ -300,6 +304,14 @@ let () =
   p "launch chain: an offset between iterations is refused"
     (refused_naming ~what:"launch chain offset" ~loop:b
        (refusal ~static_indices:[ s ] ~name:"ep2277_launch_offset" case));
+  (* At launch index zero, iteration one rewrites the cell the relocated tail read in iteration
+     zero. *)
+  let relocated, _, relocated_s = launch_chain ~relocated:true "10r" ~offset:1 in
+  p_exists "launch chain: relocating the offset case changes the output (premise)"
+    (List.zip_exn
+       (Array.to_list (interpreted ~launch:[ (s, 0) ] case case.llc))
+       (Array.to_list (interpreted ~launch:[ (relocated_s, 0) ] relocated relocated.llc)))
+    ~f:(fun (a, b) -> not (Float.equal a b));
   let case, _, s = launch_chain "11" ~offset:0 in
   let static_indices = [ s ] in
   let refusal = refusal ~static_indices ~name:"ep2277_launch_chain" case in

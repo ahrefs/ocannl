@@ -13,6 +13,7 @@ whole-K: a separated earlier write fuses: true
 whole-K: fused values equal the unfused program: true
 whole node: a Zero_out of the accumulator inside the loop is refused: true
 launch chain: an offset between iterations is refused: true
+launch chain: relocating the offset case changes the output (premise): true
 launch chain: the shared symbol proves the write stays in its iteration: true
 launch chain: fused values equal the unfused program at each launch index: true
 epilogue_fusion_loop_dependence: done
