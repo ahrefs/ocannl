@@ -817,12 +817,12 @@ files.
   composed. (g) A mask with no writer in the routine is read from its `Host_inits` data only under
   `Tn.known_host_constant` (an `ndarray` literal): `Operation.init` data is mutable by contract (a
   host write after compiling changes it), so a lowering-time proof from it would be unsound.
-  (h) The exclusive step's guard matters only to hand-built IR: user-level lowering never leaves a
-  payload in range by the mask alone (gh-ocannl-2312). Shape inference sizes every read over its
-  whole iteration domain, values unseen: an unwindowed `1*i+1` is refused, a padded window's read
-  is in its buffer or under `clamp_conds`' index guard (shape-inference.md), which never blends,
-  and `^` slices and valid windows shrink the range. So a stored mask cc blends licenses no read
-  (probed on cc; Metal's short-circuiting `?:` gave value parity only).
+  (h) The exclusive step's guard matters only to hand-built IR: user-level lowering never relies on
+  the mask alone to keep a payload in range (gh-ocannl-2312). Shape inference sizes every read over
+  its whole iteration domain without looking at the mask's values: an unwindowed `1*i+1` is refused,
+  a padded window's read is in its buffer or under `clamp_conds`' index guard (shape-inference.md),
+  which never blends, and `^` slices and valid windows shrink the range. So a stored mask cc blends
+  licenses no read (probed on cc; Metal's short-circuiting `?:` gave value parity only).
 
 - The local-binder exit gate checks lexical visibility for `Declare_local` and scan-carried
   locals (gh-ocannl-2050), with whole scope-id identity. A binder serves an access when three
