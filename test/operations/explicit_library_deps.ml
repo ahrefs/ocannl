@@ -36,7 +36,7 @@ let fixture_root tag =
   let root = Stdlib.Filename.temp_file ("explicit-deps-" ^ tag) "" in
   Unix.unlink root;
   Unix.mkdir root 0o700;
-  Unix.realpath root
+  root
 
 (* A nested Dune is an independent build, not one of the parent's actions. Stdout and stderr come
    back as one log, stdout first; Dune writes its diagnostics to stderr. *)
@@ -75,12 +75,30 @@ let compile ~dune ~project ~tag ~bridge ~libraries ~generated =
        (if generated then "(preprocess (pps ppxlib.metaquot))" else ""));
   nested_check ~dune ~env:(Fresh_process.nested_dune_environment ()) root
 
+(* Dune copies its own trace into [DUNE_ACTION_TRACE_DIR] from 3.22 on (ocaml/dune#13302); the
+   project's floor is older. A version this cannot read leaves the leg open, to be judged. *)
+let copies_action_trace ~dune =
+  let status, version, _ =
+    Fresh_process.run ~exe:dune ~env:(Fresh_process.nested_dune_environment ()) [ "--version" ]
+  in
+  let number part = Option.try_with (fun () -> Int.of_string part) in
+  match (status, String.split (String.strip version) ~on:'.') with
+  | Unix.WEXITED 0, major :: minor :: _ -> (
+      match (number major, number minor) with
+      | Some major, Some minor -> major > 3 || (major = 3 && minor >= 22)
+      | _ -> true)
+  | _ -> true
+
 (* The control for [Fresh_process.nested_dune_environment]: one failing build per environment, run
    from the fixture's parent directory, each with a planted action-trace directory of its own.
    Handed Dune's action variables, the nested Dune names its root relative to the parent's directory
    ([INSIDE_DUNE]) and copies its trace into the parent's action-trace directory
    ([DUNE_ACTION_TRACE_DIR]); built in the nested environment, it does neither. *)
 let environment_control ~dune ~project =
+  let trace_leg =
+    Verdict.leg ~aggregation:`Environment ~when_:(copies_action_trace ~dune)
+      ~on:"a Dune older than 3.22, which copies no action trace" ()
+  in
   let root = fixture_root "environment" in
   Out_channel.write_all (root ^ "/dune-project") ~data:project;
   Out_channel.write_all (root ^ "/dune") ~data:"(library (name broken))\n";
@@ -108,13 +126,15 @@ let environment_control ~dune ~project =
   let ran, relative, trace_dir = build "as-action" false in
   p "a nested Dune handed the action's variables resolves paths as the parent's action"
     (ran && relative);
-  p_exists "a nested Dune handed the action's variables copies its trace into the parent's"
-    (traces trace_dir) ~f:(String.is_prefix ~prefix:"dune");
+  in_leg ~leg:trace_leg
+    "a nested Dune handed the action's variables copies its trace into the parent's" (fun label ->
+      p_exists label (traces trace_dir) ~f:(String.is_prefix ~prefix:"dune"));
   let ran, relative, trace_dir = build "nested" true in
   p "a nested Dune in the nested-Dune environment resolves paths as an independent build"
     (ran && not relative);
-  p_empty "a nested Dune in the nested-Dune environment leaves the parent's action trace alone"
-    ~over:[ trace_dir ] (traces trace_dir)
+  in_leg ~leg:trace_leg
+    "a nested Dune in the nested-Dune environment leaves the parent's action trace alone"
+    (fun label -> p_empty label ~over:[ trace_dir ] (traces trace_dir))
 
 let () =
   let dune, (project, default_project) =
