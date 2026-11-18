@@ -1329,18 +1329,20 @@ let tolerance_census content =
     local function's is: each parameter bound to the argument this application supplies, in the
     scope the application is written in, through the same bounds on choices, with the function's own
     result passing back through it uncompared. Where [M] is no structure in scope, its definitions
-    are the other sources the ratchet's index gives as compiled under [M] ([?definitions]: one in
-    the speller's own directory where there is one, else every source of the name, each an
-    alternative compared in its own right). Each is parsed once, past every source walked before it,
-    so it shares no positions, and its [Verdict] resolutions join this source's; it is not walked,
-    so a parameter of one of its functions that this application does not bind is not resolved at
-    its other applications. A module path inside [M] ([M.Sub.f]), an [f] that is no [fun] its body
-    follows, a later top-level [include] in that source of anything but a [struct ... end] (which
-    may rebind [f]), a source that does not parse, and a module name no source is compiled as each
-    leave the leg UNCOMPARED, with the reason; so does [L.f] under a module alias of another source
-    ([module L = Ll_test]), which binds no structure in scope. A module name an [open] of a module
-    this reader cannot read rebinds is read as the corpus's source of that name, as a caller's [M.f]
-    is.
+    are the other sources the ratchet's index gives as compiled under [M] ([?definitions], asked
+    with the source [M] is spelled in -- [None] for this one, else a caller or another definition:
+    the source of that name in the speller's own directory where there is one, else every source of
+    the name, each an alternative compared in its own right). Each is read once: a caller as it was
+    walked, any other source parsed past every source walked before it, so it shares no positions,
+    and walked as a caller is, so what it writes into its bindings and its own applications are read
+    as a caller's are; its [Verdict] resolutions join this source's. A module path inside [M]
+    ([M.Sub.f]), an [f] that is no [fun] its body follows, a later structure-level [include] in that
+    source whose exports the reader does not know -- of anything but a [struct ... end], or of one
+    holding such an [include] -- (which may rebind [f]), a source that does not parse, and a module
+    name no source is compiled as each leave the leg UNCOMPARED, with the reason; so does [L.f]
+    under a module alias of another source ([module L = Ll_test]), which binds no structure in
+    scope. A module name an [open] of a module this reader cannot read rebinds is read as the
+    corpus's source of that name, as a caller's [M.f] is.
 
     {3 A leg taken out of a value (gh-ocannl-2286)}
 
@@ -2318,7 +2320,7 @@ let module_mentions content =
   scan#structure (Read.structure_of content);
   List.sort (Hash_set.to_list found) ~compare:String.compare
 
-let gate_census ?callers ?(definitions = fun _ -> []) content =
+let gate_census ?callers ?(definitions = fun _ _ -> []) content =
   let ast = Read.structure_of content in
   let owners = Verdict_callee.of_structure ast in
   let readings = ref [] and gated_sites = ref 0 in
@@ -2375,6 +2377,10 @@ let gate_census ?callers ?(definitions = fun _ -> []) content =
   (* Each source compiled as a module a leg is built by a function of (gh-ocannl-2336), parsed once:
      the structure it is, or why the reader does not follow its functions. *)
   let defining_structures = Hashtbl.create (module String) in
+  (* The callers walked, by source: a caller that also defines a module a leg is built by a function
+     of is read as it was walked, not walked again. *)
+  let walked_callers = Hashtbl.create (module String) in
+  let empty_scope = lazy { Lexical_scope.frames = []; modules = Map.empty (module String) } in
   (* The functions of this source whose applications another source may hide, by the function's
      binding identity, with why: that source spells the module other than as [M.f]
      (gh-ocannl-2286). *)
@@ -3584,7 +3590,28 @@ let gate_census ?callers ?(definitions = fun _ -> []) content =
                     { (self#local) with definition = Some (value, value_env) }
                 in
                 match (Read.pattern_name pattern, self#argument_for slot arguments) with
-                | Some name, (`Given e | `Option e) -> bound e env name
+                | Some name, `Given e -> bound e env name
+                | Some name, `Option e -> (
+                    (* [?l:e] for a parameter with a default is [e]'s payload or the default
+                       (gh-ocannl-2336, local review): a literal [None] or [Some x] says which;
+                       otherwise both are, read together as a pair no leg is taken from. *)
+                    match (slot, (strip_constraints e).pexp_desc) with
+                    | ( Optional_slot (_, Some (d, d_env)),
+                        Pexp_construct ({ txt = Lident "None"; _ }, None) ) ->
+                        bound d d_env name
+                    | ( Optional_slot (_, Some _),
+                        Pexp_construct ({ txt = Lident "Some"; _ }, Some payload) ) ->
+                        bound payload env name
+                    | Optional_slot (_, Some (d, d_env)), _ ->
+                        let default = "(default)" in
+                        let loc = e.pexp_loc in
+                        bound
+                          (Ppxlib.Ast_builder.Default.pexp_tuple ~loc
+                             [ e; Ppxlib.Ast_builder.Default.evar ~loc default ])
+                          (Lexical_scope.bind_values env [ default ]
+                             { (self#local) with definition = Some (d, d_env) })
+                          name
+                    | _ -> bound e env name)
                 | Some name, `Default (d, d_env) -> bound d d_env name
                 | _ -> self#bind_patterns scope [ pattern ])
             | Pparam_newtype _ -> scope)
@@ -3975,7 +4002,9 @@ let gate_census ?callers ?(definitions = fun _ -> []) content =
                   | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ } ->
                       (* A function of a structure, or of another source (gh-ocannl-2336): read as a
                          local function is, at this application, once per definition. *)
-                      Result.bind (self#defined_function env prefix name) ~f:(fun definitions ->
+                      Result.bind
+                        (self#defined_function env ~at:(position callee) prefix name)
+                        ~f:(fun definitions ->
                           List.fold definitions ~init:(Ok []) ~f:(fun acc definition ->
                               Result.bind acc ~f:(fun alternatives ->
                                   let identity, params, body, definition_env = definition in
@@ -4011,7 +4040,7 @@ let gate_census ?callers ?(definitions = fun _ -> []) content =
          -- or, where [prefix] is a module name nothing in scope binds, of each source
          {!definitions} gives as compiled under it. Each definition comes with its parameters, its
          body and the scope its body runs in; [Error] says why the reader does not follow one. *)
-      method defined_function env prefix name =
+      method defined_function env ~at prefix name =
         let spelled = Ppxlib.Longident.name (Ldot (prefix, name)) in
         let defined values ~where =
           match List.Assoc.find values name ~equal:String.equal with
@@ -4036,7 +4065,12 @@ let gate_census ?callers ?(definitions = fun _ -> []) content =
         | _, Some (Local_structure { values; _ }) ->
             Result.map (defined values ~where:"its structure") ~f:List.return
         | Lident head, Some Other_module when not (Map.mem env.Lexical_scope.modules head) -> (
-            match definitions head with
+            (* Read from the source the name is spelled in: this one, a caller or a definition. *)
+            let spelled_in =
+              List.find_map !caller_spans ~f:(fun (start, stop, source) ->
+                  if start <= at && at < stop then Some source else None)
+            in
+            match definitions spelled_in head with
             | [] ->
                 Error
                   (Printf.sprintf
@@ -4064,28 +4098,49 @@ let gate_census ?callers ?(definitions = fun _ -> []) content =
             Error
               (Printf.sprintf "its leg is the result of `%s`, another module's function" spelled)
 
-      (* The values of [source], compiled as the module [head], parsed once past every source walked
-         or parsed before it, with the positions of its top-level [include]s of a module other than
-         a [struct ... end]: their exports are unknown to this reader. Its [Verdict] resolutions
-         join this source's, keyed by positions no other source shares. *)
+      (* The values of [source], compiled as the module [head], with the positions of its
+         structure-level [include]s whose exports this reader does not know: of a module other than
+         a [struct ... end], or of a [struct ... end] holding one. A source walked as a caller is
+         read as it was walked; any other is parsed once past every source walked or parsed before
+         it, and walked as a caller is (gh-ocannl-2336, local review): what it writes into its own
+         bindings, and its own applications, are then read as a caller's are. Its [Verdict]
+         resolutions join this source's, keyed by positions no other source shares. *)
       method defining_structure ~head source text =
         Hashtbl.find_or_add defining_structures source ~default:(fun () ->
-            let at = !next_offset in
-            next_offset := at + String.length text + 1;
-            match Scan_attempt.run (fun () -> structure_at ~offset:at text) with
+            let parsed =
+              match Hashtbl.find walked_callers source with
+              | Some structure -> Scan_attempt.Scanned structure
+              | None -> (
+                  let at = !next_offset in
+                  next_offset := at + String.length text + 1;
+                  match Scan_attempt.run (fun () -> structure_at ~offset:at text) with
+                  | Scanned structure ->
+                      caller_spans := (at, at + String.length text + 1, source) :: !caller_spans;
+                      Verdict_callee.absorb ~into:owners (Verdict_callee.of_structure structure);
+                      binder#structure structure;
+                      self#walk_foreign (fun () ->
+                          ignore (self#structure (Lazy.force empty_scope) structure : structure));
+                      Scanned structure
+                  | other -> other)
+            in
+            match parsed with
             | Scanned structure ->
-                Verdict_callee.absorb ~into:owners (Verdict_callee.of_structure structure);
+                let rec opaque module_expr =
+                  match module_expr.pmod_desc with
+                  | Pmod_structure items -> List.exists items ~f:opaque_item
+                  | _ -> true
+                and opaque_item item =
+                  match item.pstr_desc with
+                  | Pstr_include { pincl_mod; _ } -> opaque pincl_mod
+                  | _ -> false
+                in
                 let includes =
                   List.filter_map structure ~f:(fun item ->
-                      match item.pstr_desc with
-                      | Pstr_include { pincl_mod = { pmod_desc = Pmod_structure _; _ }; _ } -> None
-                      | Pstr_include _ -> Some item.pstr_loc.loc_start.pos_cnum
-                      | _ -> None)
+                      if opaque_item item then Some item.pstr_loc.loc_start.pos_cnum else None)
                 in
                 let values =
                   match
-                    self#module_of
-                      { Lexical_scope.frames = []; modules = Map.empty (module String) }
+                    self#module_of (Lazy.force empty_scope)
                       (Ppxlib.Ast_builder.Default.pmod_structure ~loc:Ppxlib.Location.none structure)
                   with
                   | Some (Local_structure { values; _ }) -> values
@@ -5120,6 +5175,7 @@ let gate_census ?callers ?(definitions = fun _ -> []) content =
               caller_spans := (at, at + String.length text + 1, source) :: !caller_spans;
               match Scan_attempt.run (fun () -> structure_at ~offset:at text) with
               | Scanned caller ->
+                  Hashtbl.set walked_callers ~key:source ~data:caller;
                   Verdict_callee.absorb ~into:owners (Verdict_callee.of_structure caller);
                   binder#structure caller;
                   (match module_spelled_otherwise ~module_name ~spelled_elsewhere caller with

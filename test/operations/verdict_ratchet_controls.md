@@ -989,14 +989,19 @@ body, with the application's arguments bound; and the ratchet refuses every leg 
 leaves uncompared unless `exempt_uncompared_legs` names it, stale-checked. Each row also states how
 many claims were compared, as the gh-ocannl-1893 rows do. Every run used tools/mutation-run.sh
 --batch with the focused alias on mac-studio (M4 Max), on a green baseline (`verdict_scan.ml`:
-`20261118T190247Z-40835`; `verdict_ratchet.ml`: `20261118T190602Z-60340`), and restored the source
+`20261118T204706Z-10946`; `verdict_ratchet.ml`: `20261118T205244Z-97507`), and restored the source
 byte for byte.
 
 | Mechanism | Mutation | Controls | Run |
 |---|---|---|---|
-| Another source's function is its body, the application's arguments bound | `verdict_scan.ml`: no qualified function followed | Failed: `accepts a leg another source's function returns, its sub-leg gated on an invariant`; `refuses a leg another source's function returns, its sub-leg gated on the rows handed in`; `refuses a leg a caller builds by another source's function from the rows it hands in`, each then uncompared, as the corpus's 13 `Ll_test.cuda_arm_leg` sites are, refused | `20261118T190312Z-64215` |
-| A later include in the defining source leaves the function uncompared | `verdict_scan.ml`: no include read as rebinding | Failed: `names a leg uncompared whose function a later include in its source may rebind` | `20261118T190400Z-88099` |
-| An uncompared leg claim outside its exemption, and a stale exemption, are refused | `verdict_ratchet.ml`: the uncompared refusal, then the stale one, fails nothing | Failed: `refuses a leg claim it leaves uncompared outside its exemption, and a stale exemption`, under each | `20261118T190722Z-91178`, `20261118T190828Z-51974` |
+| Another source's function is its body, the application's arguments bound | `verdict_scan.ml`: no qualified function followed | Failed: `accepts a leg another source's function returns, its sub-leg gated on an invariant`; `refuses a leg another source's function returns, its sub-leg gated on the rows handed in`; `refuses a leg a caller builds by another source's function from the rows it hands in`, each then uncompared, as the corpus's 13 `Ll_test.cuda_arm_leg` sites are, refused; and the default and speller-directory rows named below | `20261118T204726Z-31185` |
+| A later include in the defining source leaves the function uncompared | `verdict_scan.ml`: no include read as rebinding | Failed: `names a leg uncompared whose function a later include in its source may rebind`; and the nested-include row named below | `20261118T204814Z-72095` |
+| An include of a structure that holds an include the reader cannot read is one too (local review) | `verdict_scan.ml`: a structure's own includes not read | Failed: `names a leg uncompared whose function a later include of a structure including another may rebind` | `20261118T204909Z-18980` |
+| A defining source is walked as a caller is, so its writes are read (local review) | `verdict_scan.ml`: no defining source walked | Failed: `names a leg uncompared that another source's function takes from a record it writes into` | `20261118T204955Z-61658` |
+| A definition is the one in its speller's own directory (local review) | `verdict_scan.ml`: every definition asked for this source's directory | Failed: `refuses a leg built by the definition in its speller's own directory, not the claim's` | `20261118T205040Z-11304` |
+| The definition index prefers the speller's directory (local review) | `verdict_ratchet.ml`: the index asked for the claim's source's directory | Failed: `the definition index reads a module from its speller's own directory, else every source of the name` | `20261118T205522Z-27425` |
+| `?l:None` for a parameter with a default binds the default (local review) | `verdict_scan.ml`: `?l:e` bound to `e` whatever the default | Failed: `refuses a leg another source's function gates on the default its caller's None leaves` | `20261118T205126Z-38332` |
+| An uncompared leg claim outside its exemption, and a stale exemption, are refused; one under its exemption is counted | `verdict_ratchet.ml`: the uncompared refusal, then the stale one, fails nothing; then the exemption is not consulted | Failed: `refuses a leg claim it leaves uncompared outside its exemption, counts one under it, and refuses a stale exemption`, under each | `20261118T205359Z-53571`, `20261118T205440Z-88801`, `20261118T205606Z-71688` |
 | A module no source is compiled as leaves the leg uncompared | none: the boundary row, read by the rows above | `names a leg uncompared that is the result of a function of a module no source defines` stays green under every mutation | the runs above |
 
 ## gh-ocannl-1470 mutation runs
