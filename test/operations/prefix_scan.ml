@@ -742,8 +742,8 @@ let () =
 let gate_base = ref 185800
 
 let build_gate ?(rws = 2) ?(op = Ir.Ops.Max) ?(fwd_mask = le) ?(t_mask = le)
-    ?(chain_prec = Ir.Ops.single) ?(v_prec = Ir.Ops.single) ?a_prec ?c_prec ?g_prec ?g_read_prec
-    ?(second_a_writer = false) ?(compare_copy = false) ?(row_from_i = false)
+    ?(chain_prec = Ir.Ops.single) ?(v_prec = Ir.Ops.single) ?a_prec ?c_prec ?g_prec ?g_operand_prec
+    ?(g_operand = Fn.id) ?(second_a_writer = false) ?(compare_copy = false) ?(row_from_i = false)
     ?(materialize_product = false) ?y_fill () =
   let base = !gate_base in
   gate_base := base + 20;
@@ -752,7 +752,7 @@ let build_gate ?(rws = 2) ?(op = Ir.Ops.Max) ?(fwd_mask = le) ?(t_mask = le)
   let a_prec = Option.value a_prec ~default:chain_prec in
   let c_prec = Option.value c_prec ~default:chain_prec in
   let g_prec = Option.value g_prec ~default:chain_prec in
-  let g_read_prec = Option.value g_read_prec ~default:g_prec in
+  let g_operand_prec = Option.value g_operand_prec ~default:g_prec in
   let mk = B.node_factory ~first_id:base ~dims:[| 1 |] () in
   (* [chain_prec]: the forward's intermediates, the gate's and the target's precision. *)
   let mkc = B.node_factory ~prec:chain_prec ~first_id:(base + 11) ~dims:[| 1 |] () in
@@ -802,7 +802,7 @@ let build_gate ?(rws = 2) ?(op = Ir.Ops.Max) ?(fwd_mask = le) ?(t_mask = le)
              (LL.Ternop
                 ( Ir.Ops.Where,
                   (B.get cn [| w; o; i |], c_prec),
-                  (B.get g [| w; o |], g_read_prec),
+                  (g_operand (B.get g [| w; o |]), g_operand_prec),
                   (B.c 0., Ir.Ops.single) ))))
   in
   let llc =
@@ -856,13 +856,14 @@ let gate_seed ?(gradient_offset = 1.) ~rws () =
   let t = Array.init (rws * n) ~f:(Ll_test.cycle_flat ~dims ~modulus:9 ~offset:(-4.) ~stride:1.) in
   (v, g, t)
 
-let run_gate ~name ?(rws = 2) ?gradient_offset ?(prepare_rewritten = Fn.id) llc (v, g, t) =
+let run_gate ~name ?ctx ?(rws = 2) ?gradient_offset ?(prepare_rewritten = Fn.id) llc (v, g, t) =
   let vs, gs, ts = gate_seed ?gradient_offset ~rws () in
   let rewritten = Prefix_scan.rewrite llc in
   let seed = [ (v, vs); (g, gs); (t, ts) ] in
-  let _, composed = B.optimize_and_execute ~name:(name ^ "_comp") llc ~seed ~read:[ t ] in
+  let _, composed = B.optimize_and_execute ?ctx ~name:(name ^ "_comp") llc ~seed ~read:[ t ] in
   let o, scanned =
-    B.optimize_and_execute ~name:(name ^ "_scan") (prepare_rewritten rewritten) ~seed ~read:[ t ]
+    B.optimize_and_execute ?ctx ~name:(name ^ "_scan") (prepare_rewritten rewritten) ~seed
+      ~read:[ t ]
   in
   (rewritten, o, List.hd_exn composed, List.hd_exn scanned)
 
@@ -906,9 +907,9 @@ let () =
     ~t_mask:(fun ~row:_ a b -> B.binop_own Ir.Ops.Cmple b a)
     ~sel:(fun i o -> i >= o)
     ();
-  let left_composed ?(rws = rws) ?gradient_offset ?prepare_rewritten label (llc, v, g, t) =
+  let left_composed ?ctx ?(rws = rws) ?gradient_offset ?prepare_rewritten label (llc, v, g, t) =
     let rewritten, _, composed, scanned =
-      run_gate ~name:label ~rws ?gradient_offset ?prepare_rewritten llc (v, g, t)
+      run_gate ~name:label ?ctx ~rws ?gradient_offset ?prepare_rewritten llc (v, g, t)
     in
     report (label ^ ", composed") composed;
     report (label ^ ", rewritten") scanned;
@@ -944,7 +945,15 @@ let () =
   left_composed ~gradient_offset:2049. ~prepare_rewritten:LL.describe_operand_precisions
     "gg_wide_grad (the upstream gradient is f32, the gate's product f16)"
     (build_gate ~rws ~chain_prec:Ir.Ops.half ~v_prec:Ir.Ops.half ~g_prec:Ir.Ops.single
-       ~g_read_prec:Ir.Ops.half ~materialize_product:true ())
+       ~g_operand_prec:Ir.Ops.half ~materialize_product:true ());
+  (* cc computes the multiply in f32 even with an f16 input. At row 0, index 3, rounding each
+     contribution through the f16 product gives 5152 after the final store, while summing the
+     unrounded products gives 5148. *)
+  left_composed ~ctx:(Context.cpu ()) ~gradient_offset:2056.
+    "gg_computed_grad (the upstream gradient is computed)"
+    (build_gate ~rws ~chain_prec:Ir.Ops.half ~v_prec:Ir.Ops.half
+       ~g_operand:(fun g -> B.mul_own g (B.c 1.25))
+       ~materialize_product:true ())
 
 (* {1 Leg 8: constant masks (gh-ocannl-1858)}
 
