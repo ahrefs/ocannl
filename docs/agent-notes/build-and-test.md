@@ -4530,12 +4530,23 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   `env_var_deps` reads the backend copies but not `arms/`, whose sources it already reads at their
   own `select`. An arm compiled as a library module is checked slightly more permissively than in
   its executable (an unused top-level value is an error only under the executable's empty
-  interface). Stand-in compilation uses the stand-in stanza's library list, so it cannot
-  validate the real optional stanza's declarations. With `implicit_transitive_deps` disabled,
-  compare their common libraries after vendor-package substitutions: gh-ocannl-2234's local
-  review caught `pprint` missing from the real CUDA stanza and `stdio` plus `pprint` missing
-  from the real HIP stanza although both stand-ins compiled. `vendor_stub_arms_scan` deliberately
-  leaves linkage parity outside its boundary. A stub is a check of signatures only: it proves
+  interface). Stand-in compilation uses the stand-in stanza's library list, so on its own it cannot
+  validate the real optional stanza's declarations (gh-ocannl-2234: the real CUDA stanza lacked
+  `pprint`, and HIP's `stdio` and `pprint`, while both stand-ins compiled). `vendor_stub_arms_scan`
+  therefore holds every stand-in library's `(libraries …)` and `pps` to the GENUINE stanza of each
+  module it copies -- the `select` owning an arm, else the stanza compiling the file -- through a
+  substitution table it derives from the stand-in tree (`<package>_stub` for any library of the
+  package, `<backend>_stub_check` for the backend under either name; gh-ocannl-2288), refusing
+  anything the stand-in declares and the genuine stanza does not; a genuine stanza declaring more is
+  normal. Two consequences for whoever edits the tree. Keep ONE stand-in library per genuine
+  stanza: a library compiling modules of two is held to both, which is why each `typecheck/`
+  compiles its `context` arm in a `<backend>_backend_impl_arm` of its own, and Metal's
+  `metal_math_api_runtime` in a `_stub_check` of its own. And declare only what the genuine stanza
+  declares: a package reached through a backend needs no stand-in of its own (under
+  `implicit_transitive_deps false` its types resolve through the backend's hidden include), so a
+  library listing one is refused even where nothing uses it. A library the stand-in needs only
+  because it is a stand-in goes in the scan's `availability_only` list with its reason (empty
+  today; an entry excusing nothing is refused). A stub is a check of signatures only: it proves
   nothing about the vendor library's behavior, so a change to a backend's runtime behavior still
   needs its box. A NEW vendor-gated
   `select` arm that no library under `arrayjit/vendor_stubs/` copies and compiles is refused by
