@@ -35,6 +35,9 @@ let raw_entries =
         "[scanner-refusal:38b0123ae5353ab2b03e006a018d2bc6] shared local library";
         "[scanner-refusal:8321fb2ab306d6d7f47b17136d308f5d] unique dependency-minimal archive";
         "[scanner-refusal:9444a57b2ad4731e29ce408670e73e59] cyclic interface-only owners";
+        "[scanner-refusal:afa29a41b9bcf5f2edb420167b2557b1] consumer-only interface import";
+        "[scanner-refusal:e465b31053262fa064a9c23ff3892b2c] dependency's archive definition";
+        "[scanner-refusal:52ed7f2b3e43e26453e5f6c31ebb5965] co-located archive-less dependency";
         "[scanner-refusal:ffa4bc91bdd9e0c6519d47ab6e078f3c] csexp reader refuses";
         "[scanner-refusal:b2e2da4cfdb3763209d5bb0bf037f3eb] description that is";
         "[scanner-refusal:cb9d50292bf8e1411a78fe56d95365d7] description entry of";

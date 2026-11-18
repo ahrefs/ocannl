@@ -2618,13 +2618,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `.cmi` units. A compiler-reaching library
   sharing a directory is owned by its byte archives instead (gh-ocannl-2248): dune-resolved
   `ocamlfind` supplies the archive paths and dune-resolved `ocamlobjinfo` supplies their defined
-  units. A shared-directory interface-only `.cmi` has no archive definition: its candidates are
-  archives importing its interface, with consumers removed through the dependency graph. Exactly
-  one dependency-minimal candidate must remain; ambiguous or absent candidates refuse when the
-  unit is referenced. This preserves `Parsetree` under common without crediting toplevel for its
-  imports. Definitions always take precedence over imported interfaces. This interface-only
-  heuristic can produce a false unused-dependency finding when only a consumer imports a unit
-  belonging to another library.
+  units. For a shared-directory interface-only `.cmi`, the scan requires one dependency-minimal
+  archive importing the interface. If that importer depends on an archive-bearing library
+  sharing a directory containing the `.cmi`, the dependency could define the unit without
+  importing it (gh-ocannl-2289). A shared-directory import without a `requires` path to the
+  defining library can still credit the importer and produce a false unused finding for the
+  definer. Unresolved ownership refuses the referencing stanza before any
+  unused finding. This preserves `Parsetree` under common without crediting toplevel for its
+  imports. Definitions always take precedence over imported interfaces, including definitions from
+  an importer's co-located dependency outside the reporting scope.
   An archive-less package owns no units; a failed query or
   unreadable archive refuses without falling back to directory ownership. Shared local libraries
   refuse because findlib cannot resolve their archives and `@check` does not build them.
