@@ -37,5 +37,6 @@ aliasing on, room for a smaller candidate but not the unscheduled delta: the sea
 the chain searched in room for its default compile computes the right values: true
 room for the explicit shared fusion: the search reaches candidates exactly when it can seed the f32 twin: true
 where the backend tensorizes it, the shared-fusable step searched in room for its floor ships a routine computing the right values: true
+a rejected shared replay restores the generated-search memory floor: true
 a refused base link alone, with room for the floor, declines the baseline and the search runs: true
 the step searched past its refused base link computes the right values: true

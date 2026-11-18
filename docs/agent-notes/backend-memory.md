@@ -128,7 +128,8 @@ files.
   node of each class is the bound: unanchored packing can move a source read to a segment's entry.
   `Seeded_search` charges shared targets where no tile exists for any pair of storage or rounded
   operand precisions at the destination precision. The public default also bounds explicit shared
-  fusion with a scalar fallback; a replayable entry with a shared epilogue gets that bound.
+  fusion with a scalar fallback. A replayable entry with a shared epilogue gets that bound.
+  If replay fails, the generated search checks its own floor before trying candidates.
   The size window is narrow in practice: a `Never_virtual` node within `stack_threshold_in_bytes`
   is `Local` in the base anyway. Its probe asks each group's bytes in one request cut at the pool
   cap, decisive under a page-granular allocator that admits by the total of page-rounded requests,

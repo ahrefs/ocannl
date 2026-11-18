@@ -288,6 +288,51 @@ let floor_scenarios ~backend_name ~on_gpu ~baseline_links ~check_values comp =
           (Context.get_values (Context.run ctx routine) fused.Tensor.value)
           want
     | Error _ -> false);
+  (* Give an explicit shared schedule its weaker all-schedule floor, then make the saved transform
+     fail. The fresh search has no such schedule left to fit. *)
+  let withheld =
+    Verdict.leg
+      ~when_:(on_gpu && (not advertised) && not (Utils.debug_log_from_routines ()))
+      ~on:backend_name ()
+  in
+  Verdict.in_leg ~leg:withheld "a rejected shared replay restores the generated-search memory floor"
+    (fun label ->
+      let module SC = Ir.Schedule_cache in
+      let module Plant = Test_utils.Cache_plant in
+      let ctx = Context.auto () in
+      let canon =
+        SC.canonicalize (Context.lowered_for_decisions ctx fused_comp Ir.Indexing.Empty)
+      in
+      let backend = Context.backend_name ctx
+      and facts = Context.backend_facts ctx
+      and limits = Context.hardware_limits ctx
+      and capabilities = Context.codegen_capabilities ctx
+      and timing_identity = Context.timing_identity ctx in
+      let identity =
+        Option.is_some (Plant.key ~backend ~facts ~limits ~capabilities ~timing_identity canon)
+      in
+      let writes =
+        Plant.plant
+          ~saved:[ SC.Fuse_epilogue { target = -1; shared = true } ]
+          ~cache_dir:cache_dir_6c ~backend ~facts ~limits ~capabilities ~timing_identity canon
+      in
+      let capacity = live_working () + ((f.lf_working_bytes + exact.ld_working_bytes) / 2) in
+      let report = ref None in
+      let (_, _), reads =
+        SC.recording_cache_io (fun () ->
+            with_capacity ~capacity (fun () ->
+                tune_with ~ctx ~cache_dir:cache_dir_6c
+                  ~report:(fun r -> report := Some r)
+                  fused_comp))
+      in
+      Plant.unless_unkeyed_or_refused ~identity (writes @ reads) label
+        (Option.exists !report ~f:(fun r ->
+             refused_for_memory r
+             &&
+             match r.Autotune.cache_replay_refusal with
+             | Some { SO.cause = SO.Illegal_schedule ill; _ } ->
+                 String.equal ill.check "Schedule_cache.tn_of_ref"
+             | _ -> false)));
   (* 6d: where the baseline links, a refusal of that link alone -- the device admits the floor --
      declines the baseline and nothing more: the search runs on its candidates. *)
   let report = ref None in

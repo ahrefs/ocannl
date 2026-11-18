@@ -9265,22 +9265,20 @@ module Make (D : Driver) = struct
       let has_shared =
         List.exists ~f:(function SC.Fuse_epilogue { shared = true; _ } -> true | _ -> false)
       in
-      let probe_floor ~account =
+      let shared_replay =
+        lazy
+          (Option.exists (Lazy.force replay_entry) ~f:(fun e ->
+               entry_replayable ~digest:base_digest e
+               && (has_shared e.SC.saved
+                  || Option.exists e.SC.segments
+                       ~f:(List.exists ~f:(fun seg -> has_shared seg.SC.seg_saved)))))
+      in
+      let probe_floor ~account domain =
         progress_stage "footprint_probe";
         let probe = "baseline footprint floor probe" in
         match
           Outcome.protect ~classify_backend:(D.failure_classifier search_ctx)
             ~provenance:Outcome.Candidate ~phase:Outcome.Backend_link ~candidate:probe (fun () ->
-              let explicit_shared =
-                Option.exists (Lazy.force replay_entry) ~f:(fun e ->
-                    entry_replayable ~digest:base_digest e
-                    && (has_shared e.SC.saved
-                       || Option.exists e.SC.segments
-                            ~f:(List.exists ~f:(fun seg -> has_shared seg.SC.seg_saved))))
-              in
-              let domain =
-                if explicit_shared then Ir.Backend_intf.Every_schedule else Seeded_search
-              in
               D.probe_link_floor ?name ~domain search_ctx base_opt)
         with
         | Ok (f : Ir.Backend_intf.link_floor) ->
@@ -9308,9 +9306,13 @@ module Make (D : Driver) = struct
          CPU baseline, deferred (gh-ocannl-1666), is not probed here: its own link in the search
          ([baseline_compile]) is the first memory evidence, as the base link was, and a refusal
          there asks the floor; a cache replay's link answers for a hit. *)
+      let probe_for_baseline domain =
+        if Option.exists baseline_decline ~f:is_device_memory then probe_floor ~account:false domain
+        else if !base_undispatched then probe_floor ~account:true domain
+      in
       if Option.is_none lineage_refusal then
-        if Option.exists baseline_decline ~f:is_device_memory then probe_floor ~account:false
-        else if !base_undispatched then probe_floor ~account:true;
+        probe_for_baseline
+          (if Lazy.force shared_replay then Ir.Backend_intf.Every_schedule else Seeded_search);
       let cached =
         if use_cache && Option.is_none lineage_refusal then
           match Lazy.force replay_entry with
@@ -9648,6 +9650,10 @@ module Make (D : Driver) = struct
           let reached = census () in
           finish reached (fun () -> compile_untuned_default ~base:reached ())
       | None, None, None ->
+          (* A rejected explicit schedule cannot justify admitting its smaller footprint for the
+             generated candidates about to run. *)
+          if Option.is_some !cache_replay_refusal && Lazy.force shared_replay then
+            probe_for_baseline Ir.Backend_intf.Seeded_search;
           let seen = Hash_set.create (module String) in
           Hash_set.add seen base_digest;
           (* Every gh-ocannl-532 refusal enters the same decline census (gh-ocannl-543). Without it
@@ -9692,7 +9698,8 @@ module Make (D : Driver) = struct
                   baseline_declined_so_far := true;
                   (* The same footprint question as the base compile's (gh-ocannl-1554): a link the
                      device refused bounds no candidate from below, the floor does. *)
-                  if is_device_memory classified then probe_floor ~account:false;
+                  if is_device_memory classified then
+                    probe_floor ~account:false Ir.Backend_intf.Seeded_search;
                   Some classified
               | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:(census ()) failure)
             else baseline_decline

@@ -1410,6 +1410,7 @@
   (env_var OCANNL_BACKEND))
  (modules autotune_device_memory)
  (libraries
+  test_utils
   base
   ocannl
   stdio
