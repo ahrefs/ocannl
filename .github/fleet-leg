@@ -1,4 +1,4 @@
-# How a runner command pins its backend, read by the fleet's `fleet-worker.sh execution leg`
+# Backend pins and the owed-run report, read by the fleet's `fleet-worker.sh execution leg`
 # (lukstafi/ludics-lite#766 and #773; grammar in ludics-lite's issue-wave/references/executions.md,
 # *A leg on another box*). The leg reads this file on the box AT THE COMMIT under test, before the
 # worktree moves. A leg that may hold the GPU -- any leg not declaring `--cpu`, a measurement's
@@ -15,8 +15,10 @@
 # declares `--cpu` or names cc (`env OCANNL_BACKEND=cc`). Only argv words count: a pin inside a
 # `sh -c` string, or an environment the caller exported, does not.
 #
-# The grammar is a fail-closed allowlist: `# comment` lines, blank lines, `pin-flag <option>` and
-# `pin-env <NAME>`. Any other line refuses EVERY leg, `--cpu` ones included.
+# The reader uses a closed grammar. This file uses `pin-flag <option>`, `pin-env <NAME>` and one
+# `run-report <worktree path>`. The report publishes eligible owed-run records
+# from the execution box. Its status leaves the leg verdict unchanged.
 
 pin-flag --expect-backend
 pin-env OCANNL_BACKEND
+run-report tools/owed-run-report.sh

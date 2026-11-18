@@ -17,7 +17,9 @@
 # quoted or malformed record each refuses a cross-cutting, over-bound, incomplete or train-
 # reaching change before anything is built; a full record, a union of records and a waiver
 # admit; the base alone never prints the merge's refusal line; and `record` certifies only a
-# finished, clean, cc run of an allowlisted command, `prune` only merged heads.
+# finished, clean, cc run of an allowlisted command, `prune` only merged heads. The reader
+# prints admitted writers, including legacy, and rejects malformed writers. The fleet report
+# fixture supplies runner argv and last-run metadata to the real hook, with a local record ref.
 # Structured train-name rows require a count matching distinct names and an alias the
 # tree has; legacy count-only output still asks affected and must agree exactly.
 # The branch plan uses the chosen base's merged tree and the real record check,
@@ -28,6 +30,7 @@
 # timing line; tracebacks and FAILED must survive. It does not scan Dune or Python source text.
 # affected-reads: benchmarks/dune benchmarks/*.py benchmarks/test/*.py benchmarks/runners/*.py benchmarks/runners/*/*.py benchmarks/ocannl_config --only '#compile-output'
 # affected-reads: tools/owed-run.sh
+# affected-reads: .github/fleet-leg tools/owed-run-report.sh --only '#owed-report'
 # Usage: tools/test-merge-build-check.sh [--keep] [--only REGEX]
 set -u
 . "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
@@ -429,7 +432,7 @@ if harness_leg 'a list that is not the whole pre-push list says what is OWED; on
   if [ "$rc" = 0 ] && [ "$(cat "$TMP/record")" = "$COMPILE
 build --root . -j 4 @a/runtest-first" ] && [ "$(tiers | sed -n 2,3p)" = "$ask
 $first_ask" ] && has 'tests tier: OWED -- the change is CROSS-CUTTING, so every per-test alias past its first tier did not run here' &&
-     has "owed-run: admitted run of 'build @runtest @train -j 4' for ${APART_HEAD:0:8} (fixture:/runs/1)"; then
+     has "owed-run: admitted run of 'build @runtest @train -j 4' for ${APART_HEAD:0:8} (fixture:/runs/1, writer=relay)"; then
     report 0 'a cross-cutting change builds its first tier and says the rest is owed'
   else report 1 'a cross-cutting change builds its first tier and says the rest is owed' "exit $rc; $(cat "$TMP/record"); $(tiers); $(cat "$TMP/out")"; fi
   FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/tier-list FAKE_TIER_RC=2 FAKE_TIER_VERDICT=cross-cutting R=$APART run "$TMP/dunebin"
@@ -575,8 +578,12 @@ if harness_leg 'what is OWED is read from the head'"'"'s record, and every other
     "$(run_line "$APART_HEAD" 'runtest test/operations')|which is no full or train- run|a directory-scoped run" \
     "$(run_line "$APART_HEAD" 'build @runtest --force')|which is no full or train- run|an option" \
     "$(run_line "$APART_HEAD" "build '@runtest'")|which is no full or train- run|a quoted token" \
-    "owed-run: v2 run head=$APART_HEAD exit=0|holds a line no v1 record reads|an unknown schema" \
-    "owed-run: v1 run head=$APART_HEAD exit=0 cmd=runtest|holds a line no v1 record reads|a malformed line"; do
+    "owed-run: v3 run head=$APART_HEAD exit=0|holds a line no v1 or v2 record reads|an unknown schema" \
+    "owed-run: v1 run head=$APART_HEAD exit=0 cmd=runtest|holds a line no v1 or v2 record reads|a malformed line" \
+    "owed-run: v2 run head=$APART_HEAD exit=0 clean=yes backend=cc source=fixture:/runs/1 cmd=runtest|holds a line no v1 or v2 record reads|a v2 line with no writer" \
+    "owed-run: v2 run head=$APART_HEAD writer=leg: exit=0 clean=yes backend=cc source=fixture:/runs/1 cmd=runtest|holds a line no v1 or v2 record reads|an empty leg hostname" \
+    "owed-run: v2 run head=$APART_HEAD writer=leg:a/b exit=0 clean=yes backend=cc source=fixture:/runs/1 cmd=runtest|holds a line no v1 or v2 record reads|a leg hostname with a slash" \
+    "owed-run: v2 run head=$APART_HEAD writer=waive exit=0 clean=yes backend=cc source=fixture:/runs/1 cmd=runtest|holds a line no v1 or v2 record reads|a waiver writer on a run"; do
     line=${probe%%|*} rest=${probe#*|}
     plant "$bad" "$APART_HEAD" "$APART_HEAD^{tree}" "$APART_HEAD" "owed-run record
 
@@ -591,14 +598,14 @@ $line"
 $good"
   OCANNL_TOOL_OWED_RUN_URL=$bad FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
   if [ "$rc" = 0 ] && [ "$(cat "$TMP/record")" = "$COMPILE
-build --root . -j 4 @a/runtest-first" ] && has "owed-run: admitted run of 'runtest -j 4' for ${APART_HEAD:0:8} (fixture:/runs/1)"; then
-    report 0 'a full-suite record admits a cross-cutting change, whose first tier still builds'
-  else report 1 'a full-suite record admits a cross-cutting change, whose first tier still builds' "exit $rc; $(cat "$TMP/record"); $(cat "$TMP/out")"; fi
+build --root . -j 4 @a/runtest-first" ] && has "owed-run: admitted run of 'runtest -j 4' for ${APART_HEAD:0:8} (fixture:/runs/1, writer=legacy)"; then
+    report 0 'a v1 full-suite record still admits and prints writer=legacy'
+  else report 1 'a v1 full-suite record still admits and prints writer=legacy' "exit $rc; $(cat "$TMP/record"); $(cat "$TMP/out")"; fi
   waivers=$TMP/owed-waiver.git
   git init -q --bare "$waivers"
   owed "$waivers" waive --head "$APART_HEAD" --reason 'run 20261116T0000Z on rog, the maintainer'
   OCANNL_TOOL_OWED_RUN_URL=$waivers FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
-  if [ "$orc" = 0 ] && [ "$rc" = 0 ] && has "owed-run: admitted waiver for ${APART_HEAD:0:8} by fixture: run 20261116T0000Z on rog, the maintainer"; then
+  if [ "$orc" = 0 ] && [ "$rc" = 0 ] && has "owed-run: admitted waiver for ${APART_HEAD:0:8} by fixture (writer=waive): run 20261116T0000Z on rog, the maintainer"; then
     report 0 'a waiver for the head admits it and is printed into the log'
   else report 1 'a waiver for the head admits it and is printed into the log' "waive exit $orc: $(cat "$TMP/owed-out"); exit $rc; $(cat "$TMP/out")"; fi
   # The bound's share and an incomplete list are owed the same way.
@@ -726,23 +733,23 @@ $(run_line "$APART_HEAD" 'build @test/training/train-a -j 1')"
   else report 1 'a merge whose tree is the base'"'"'s logs as the base alone does (it changes nothing)' "exits $merge_rc/$rc; $(diff "$TMP/owed-same-out" "$TMP/out")"; fi
 fi
 
+rundir() { # NAME EXIT DIRTY BACKEND CMD [HEAD]: a synthetic tools/test-run.sh run record
+  local d=$TMP/runs/$1
+  mkdir -p "$d"
+  printf '%s\n' "${6:-$APART_HEAD}" >"$d/head"
+  [ "$2" = none ] || printf '%s\n' "$2" >"$d/exit"
+  printf '%s' "$3" >"$d/dirty"
+  [ "$4" = none ] || printf '%s\n' "$4" >"$d/expect-backend"
+  printf '%s \n' "$5" >"$d/cmd"
+  printf '%s' "$d"
+}
 # tools/owed-run.sh's own verbs: what `record` certifies from a run directory, and `prune`.
 if harness_leg 'record certifies only a finished, clean, cc run of an allowlisted command; prune #owed-run'; then
   R=$APART
-  rundir() { # NAME EXIT DIRTY BACKEND CMD: a synthetic tools/test-run.sh run record
-    local d=$TMP/runs/$1
-    mkdir -p "$d"
-    printf '%s\n' "$APART_HEAD" >"$d/head"
-    [ "$2" = none ] || printf '%s\n' "$2" >"$d/exit"
-    printf '%s' "$3" >"$d/dirty"
-    [ "$4" = none ] || printf '%s\n' "$4" >"$d/expect-backend"
-    printf '%s \n' "$5" >"$d/cmd"
-    printf '%s' "$d"
-  }
   owed "$OWED_EMPTY" record "$(rundir good 0 '' cc 'runtest -j 4')" --print
   line=$(cat "$TMP/owed-out")
   case $line in
-    "owed-run: v1 run head=$APART_HEAD exit=0 clean=yes backend=cc source="*":$TMP/runs/good cmd=runtest -j 4")
+    "owed-run: v2 run head=$APART_HEAD writer=record exit=0 clean=yes backend=cc source="*":$TMP/runs/good cmd=runtest -j 4")
       report 0 'record prints the line of a finished, clean, cc full-suite run' ;;
     *) report 1 'record prints the line of a finished, clean, cc full-suite run' "exit $orc: $line" ;;
   esac
@@ -750,13 +757,14 @@ if harness_leg 'record certifies only a finished, clean, cc run of an allowliste
   git init -q --bare "$rt"
   owed "$rt" add "$line" && add_rc=$orc
   owed "$rt" check "$APART_HEAD" runtest
-  if [ "$add_rc" = 0 ] && [ "$orc" = 0 ] && grep -qF "owed-run: admitted run of 'runtest -j 4'" "$TMP/owed-out"; then
-    report 0 'a printed line, added, is what check admits'
-  else report 1 'a printed line, added, is what check admits' "add $add_rc, check $orc: $(cat "$TMP/owed-out")"; fi
+  if [ "$add_rc" = 0 ] && [ "$orc" = 0 ] && grep -qF "writer=relay)" "$TMP/owed-out"; then
+    report 0 'add relabels a printed line and check prints writer=relay'
+  else report 1 'add relabels a printed line and check prints writer=relay' "add $add_rc, check $orc: $(cat "$TMP/owed-out")"; fi
   # tools/test-run.sh records the argv it ran, its injected width and --no-buffer included.
   owed "$rt" record "$(rundir injected 0 '' cc 'build --no-buffer @test/training/train-a -j 1 -j 4')"
   owed "$rt" check "$APART_HEAD" runtest @test/training/train-a
-  if [ "$orc" = 0 ] && [ "$(grep -c 'owed-run: admitted run' "$TMP/owed-out")" = 2 ]; then
+  if [ "$orc" = 0 ] && [ "$(grep -c 'owed-run: admitted run' "$TMP/owed-out")" = 2 ] &&
+     grep -qF 'writer=record)' "$TMP/owed-out"; then
     report 0 'a single train- alias run as test-run.sh records it (--no-buffer, an injected -j) is recorded and admitted'
   else report 1 'a single train- alias run as test-run.sh records it (--no-buffer, an injected -j) is recorded and admitted' "exit $orc: $(cat "$TMP/owed-out")"; fi
   bad=
@@ -786,6 +794,92 @@ EOF
   if [ "$orc" = 0 ] && [ "$left" = "refs/owed-runs/$open_head" ] && grep -qF 'pruned 1 record(s) of merged heads' "$TMP/owed-out"; then
     report 0 'prune deletes the merged head'"'"'s record and keeps the open one'"'"'s'
   else report 1 'prune deletes the merged head'"'"'s record and keeps the open one'"'"'s' "exit $orc: $(cat "$TMP/owed-out"); left: $left"; fi
+fi
+
+if harness_leg 'the fleet report publishes only eligible, clean owed runs #owed-report'; then
+  fixture owed-report
+  hook=$(sed -n 's/^run-report //p' "$HERE/../.github/fleet-leg")
+  cp "$HERE/../$hook" "$R/tools/" || exit 1
+  cat >"$R/tools/test-run.sh" <<'FAKE'
+#!/bin/sh
+[ "$*" = 'paths run last' ] || exit 2
+printf '%s\n' "$FAKE_LAST_RUN"
+FAKE
+  git -C "$R" add tools && git -C "$R" commit -qm hook
+  hook_head=$(git -C "$R" rev-parse HEAD)
+  hook_url=$TMP/owed-report.git
+  git init -q --bare "$hook_url"
+  leg_report() { # fresh|stale|shared LAST_RUN ARGV...
+    local state=$1 last_run=$2
+    shift 2
+    hrc=0
+    (
+      cd "$R" || exit 2
+      export PATH=$TMP/gitbin:$SYS_PATH OCANNL_TOOL_OWED_RUN_URL=$hook_url FAKE_LAST_RUN=$last_run
+      # The outer shell stays alive, like the fleet leg. Its runner's launcher row persists
+      # after the child returns. The report starts in its own bounded-slot process group.
+      new_group='defined(setsid()) or die "setsid: $!"; exec @ARGV or die "exec: $!"'
+      perl -MPOSIX=setsid -e "$new_group" "$BASH" -c '
+        new_group=$1 state=$2
+        shift 2
+        if [ "$state" != stale ]; then
+          if [ -r /proc/$$/stat ]; then
+            read -r stat <"/proc/$$/stat"
+            fields=${stat##*) }
+            # /proc field 22 is starttime, the twentieth word after comm.
+            token=$(set -- $fields; printf "%s" "${20}")
+          else
+            token=$(LC_ALL=C TZ=UTC ps -o lstart= -p "$$" | xargs)
+          fi
+          printf "%s %s 0123456789abcdef0123456789abcdef\n" "$$" "$token" >"$FAKE_LAST_RUN/launchers"
+        fi
+        if [ "$state" = shared ]; then
+          # Keep the intermediate group leader alive with the report as a member.
+          perl -MPOSIX=setsid -e "$new_group" "$BASH" -c "\"\$@\"; exit \$?" shared-report "$@"
+        else
+          perl -MPOSIX=setsid -e "$new_group" "$@"
+        fi
+        exit $?
+      ' fleet-report-fixture "$new_group" "$state" "./$hook" "$@"
+    ) >"$TMP/hook-out" 2>&1 || hrc=$?
+  }
+  hook_skip() { # LABEL EXPECTED: a refused report leaves the remote ref absent
+    if [ "$hrc" = 0 ] && grep -qF "$2" "$TMP/hook-out" &&
+       [ -z "$(git -C "$R" ls-remote "$hook_url" "refs/owed-runs/$hook_head")" ]; then
+      report 0 "$1"
+    else report 1 "$1" "exit $hrc; $(cat "$TMP/hook-out")"; fi
+  }
+  alias=@test/training/train-a
+  last_run=$(rundir leg-good 0 '' cc "build --no-buffer $alias -j 1 -j 4" "$hook_head")
+  leg_report fresh "$last_run" env OCANNL_BACKEND=cuda tools/test-run.sh run --expect-backend cuda build "$alias"
+  hook_skip 'an otherwise eligible GPU argv skips the report' 'recorded nothing (not an owed-run argv)'
+  leg_report stale "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias"
+  hook_skip 'an earlier valid receipt cannot stand for a launch with no receipt' 'was not launched by the current fleet leg'
+  leg_report shared "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias"
+  hook_skip 'a report sharing the leg group cannot reuse an outer receipt' 'was not launched by the current fleet leg'
+  leg_report fresh "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias" @a/runtest-first
+  hook_skip 'a mixed first-tier list skips the report' 'recorded nothing (not an owed-run argv)'
+  leg_report fresh "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build @test/training/train-b
+  hook_skip 'a receipt for different targets cannot stand for this leg' "does not cover the fleet leg's requested targets"
+  dirty_run=$(rundir leg-dirty 0 ' M x.ml' cc "build $alias" "$hook_head")
+  leg_report fresh "$dirty_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias"
+  hook_skip 'a dirty control receipt is refused with report exit zero' 'ran a dirty checkout'
+  last x.ml
+  leg_report fresh "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias"
+  hook_skip 'a dirty control cannot republish an earlier clean receipt' 'the fleet worktree is dirty'
+  git -C "$R" checkout -- x.ml
+  git -C "$R" push -q "$hook_url" "$hook_head:refs/heads/master" || exit 1
+  leg_report fresh "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias"
+  hook_skip 'a head already on the record repository master leaves no record ref' "recorded nothing (head is on master at $hook_url)"
+  git -C "$R" push -q -f "$hook_url" "$hook_head^:refs/heads/master" || exit 1
+  git -C "$R" update-ref refs/remotes/origin/master "$hook_head"
+  leg_report fresh "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias" -j 1
+  owed "$hook_url" check "$hook_head" "$alias"
+  leg_host=$(hostname -s 2>/dev/null || hostname)
+  if [ "$hrc" = 0 ] && [ "$orc" = 0 ] && grep -qF "writer=leg:$leg_host)" "$TMP/owed-out"; then
+    report 0 'a training leg publishes against the record repository and check prints its writer'
+  else report 1 'a training leg publishes against the record repository and check prints its writer' \
+    "report exit $hrc: $(cat "$TMP/hook-out"); check exit $orc: $(cat "$TMP/owed-out")"; fi
 fi
 
 # Use the same tree twice, but force each tier across a different whole-second duration.

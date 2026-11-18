@@ -663,6 +663,7 @@ tools/merge-build-check.sh parses: true
 tools/mutant.sh parses: true
 tools/mutation-run.sh parses: true
 tools/opam-env.sh parses: true
+tools/owed-run-report.sh parses: true
 tools/owed-run.sh parses: true
 tools/per-test-cap.sh parses: true
 tools/ppx-output-diff.sh parses: true

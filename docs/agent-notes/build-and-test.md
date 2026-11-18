@@ -5454,8 +5454,9 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   configured record-read caps.
 - **Where.** The ref `refs/owed-runs/<head sha>` on the PR repository (`OWED_RUN_URL` in the
   script; `OCANNL_TOOL_OWED_RUN_URL` overrides it for the harness and a fork). Its commit has the
-  head as its only parent and the head's tree, and its message holds one `owed-run: v1 ...` line
-  per record. It does not move the PR's head, so it re-triggers no CI run, review round or
+  head as its only parent and the head's tree, and its message holds one `owed-run: v2 ...` line
+  per new record. Existing v1 records are admitted as `writer=legacy` until pruned.
+  The ref leaves the PR's head in place, so it re-triggers no CI run, review round or
   checkpoint. ship-pr's scratch repository has no remote, so the merge build fetches the ref from
   that URL itself, bounded (60 s), and refuses when it cannot read it. A merge owing nothing
   reads no record.
@@ -5463,17 +5464,25 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   of `runtest`, `build @runtest [@train]`, `build @train` or `build @test/training/train-NAME...`
   (each with an optional `-j N`), on the PR's head itself. Keyed by the head, not the merged
   tree: a base that moved since leaves it standing (gh-ocannl-861), and any push after the run
-  stales it. So the owed run is the LAST run before the merge. Not certified: the ambient
-  environment beyond the backend, the box, an edit made and undone mid-run, and whether a line
-  was written by `record` or by hand (whoever can push can write one: attestation, as the
-  PR-body citation was).
+  stales it. So the owed run is the LAST run before the merge. `check` prints the writer of
+  every admitted record. The field identifies the publication path. Anyone with push access
+  can claim any writer. The script header states the limits of what the record certifies.
 - **Recipe.** On the box that ran it, from the run's own worktree:
-  `env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc runtest -j 4`, then
-  `tools/owed-run.sh record last` (or `record <run dir>`). Where that box cannot push, or its
-  worktree is a far-side one, `tools/owed-run.sh record <run dir> --print` there and
-  `tools/owed-run.sh add '<the line>'` from a checkout that can. A `train-` record is the same
-  with `build @test/training/train-<name>... -j 1` (or `build @train`); records accumulate on the
-  head's ref and the reader takes their union.
+  `env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc runtest -j 4`. A training run
+  uses `build @test/training/train-<name>... -j 1` or `build @train`. The fleet leg's
+  `run-report` hook publishes with `writer=leg:<hostname>` for these direct forms. It skips
+  heads already on the record repository's master. The hook receives argv alone. It validates
+  the worktree's last run against the head, coverage and recorded launcher ancestry. The
+  runner and report are nested process groups under the same fleet leg, so an earlier run's
+  receipt cannot stand in for a launch that failed before recording one. A refusal leaves
+  the leg verdict intact. Check readiness with `tools/owed-run.sh check <head sha>
+  <need>...` from a checkout with that head. Records accumulate on the head's ref and the
+  reader takes their union.
+- **Recovery.** After a local run or if the hook did not publish, use
+  `tools/owed-run.sh record <run dir>` from the run's worktree (`writer=record`). If that box
+  cannot push, use `record <run dir> --print` there and `tools/owed-run.sh add '<the line>'`
+  from a checkout that can (`writer=relay`). Use the directory of the actual successful run
+  and check readiness again from the PR checkout.
 - **The way through.** A head no record can certify (a run whose record cannot be reached, a
   release hotfix) takes `tools/owed-run.sh waive --head <sha> --reason '<the run it cites, or the
   decision and who made it>'`: it admits exactly that head and is printed into the merge log.

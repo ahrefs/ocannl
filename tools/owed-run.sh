@@ -15,8 +15,11 @@
 # names a commit whose ONLY parent is the head and whose tree is the head's tree, so it neither
 # moves the PR's head (no CI run, review round or checkpoint is re-triggered) nor carries code;
 # its message holds the records, one line each:
-#   owed-run: v1 run head=<sha> exit=0 clean=yes backend=cc source=<host>:<run dir> cmd=<dune argv>
-#   owed-run: v1 waiver head=<sha> by=<who> reason=<text>
+#   owed-run: v2 run head=<sha> writer=<writer> exit=0 clean=yes backend=cc source=<host>:<run dir> cmd=<dune argv>
+#   owed-run: v2 waiver head=<sha> writer=<writer> by=<who> reason=<text>
+# Run writers are record, relay, or leg:<hostname> (ASCII letters, digits, dot, hyphen and
+# underscore); waiver writers are waive or relay. Existing v1 lines omit the writer and are
+# admitted as writer=legacy. `add` rewrites either version as v2 with writer=relay.
 # Whoever can push to that repository can write one (the decision recorded on gh-ocannl-2218:
 # attestation, as the PR-body citation it replaces was, now machine-checked); any box with network
 # can read one, anonymously. Each write keeps the head's earlier records and adds its own.
@@ -31,7 +34,7 @@
 # used), as a fail-closed allowlist. NEED is `runtest` (the full suite), `train` (every `train-`
 # alias: `@train`) or one alias `@test/training/train-NAME`. The ref must exist on OWED_RUN_URL
 # and be fetched within FETCH_CAP seconds; its commit must have HEAD as its only parent and
-# HEAD's tree; every `owed-run:` line in its message must parse as v1 and name HEAD; and together
+# HEAD's tree; every `owed-run:` line in its message must parse as v1 or v2 and name HEAD; and together
 # the run records must cover every NEED, or one waiver must stand:
 #   FULL   cmd `runtest [-j N]`, or `build @runtest [@train] [-j N]`: covers `runtest`;
 #          (in every form, `-j N` and `--no-buffer` may stand anywhere after the subcommand, as
@@ -45,10 +48,9 @@
 # is never read for this one); a malformed or unknown line, a record of another head; a run that
 # is not exit 0, clean and cc, or whose cmd is any other form (a target list, a directory, a
 # `runtest-` alias, an option: a filtered or first-tier run); a NEED no record covers.
-# Not certified: the ambient environment of the run beyond what `--expect-backend cc` held (an
-# OCANNL_* override), the box it ran on (`source` is information), whether a line was typed by
-# hand rather than by `record` (anyone who can push can publish one), and an edit made and undone
-# while the run ran (tools/test-run.sh records the checkout at launch).
+# Writer and source are informational. The writer identifies the publication path. Anyone with
+# push access can still craft a line claiming any writer. The record certifies the checkout at
+# launch and the backend held. Other ambient settings and edits undone mid-run fall outside it.
 #
 # The waiver is the way through for a head no record can certify (a run on a box the record
 # cannot reach, a release hotfix): `waive --head SHA --reason '<the run it cites, or the decision
@@ -70,7 +72,7 @@ OWED_RUN_URL=${OCANNL_TOOL_OWED_RUN_URL:-https://github.com/lukstafi/ocannl-stag
 # (OCANNL_TOOL_OWED_RUN_FETCH_CAP overrides it, for the harness's hanging-transport row).
 FETCH_CAP=${OCANNL_TOOL_OWED_RUN_FETCH_CAP:-60}
 case $FETCH_CAP in '' | *[!0-9]* | 0) echo "$me: OCANNL_TOOL_OWED_RUN_FETCH_CAP must be a positive integer" >&2; exit 2 ;; esac
-SCHEMA=v1
+SCHEMA=v2
 
 die() { echo "$me: $*" >&2; exit 2; }
 refuse() { echo "$me: REFUSED -- $* (records on $OWED_RUN_URL)"; exit 1; }
@@ -140,16 +142,30 @@ cmd_cover() {
   cover=${cover# }
 }
 
-# parse_line LINE: sets kind, head, and for a run exit_, clean, backend, source, cmd; for a waiver
-# by, reason. Fails on anything else.
+# parse_line LINE: sets kind, head, writer, and for a run exit_, clean, backend, source, cmd;
+# for a waiver by, reason. Fails on anything else.
 parse_line() {
-  local rest
-  kind= head= exit_= clean= backend= source= cmd= by= reason=
-  case $1 in "owed-run: $SCHEMA run head="* | "owed-run: $SCHEMA waiver head="*) ;; *) return 1 ;; esac
-  rest=${1#"owed-run: $SCHEMA "}
+  local rest schema
+  kind= head= writer=legacy exit_= clean= backend= source= cmd= by= reason=
+  case $1 in *$'\n'*) return 1 ;; esac
+  case $1 in
+    'owed-run: v1 run head='* | 'owed-run: v1 waiver head='*) schema=v1 ;;
+    "owed-run: $SCHEMA run head="* | "owed-run: $SCHEMA waiver head="*) schema=$SCHEMA ;;
+    *) return 1 ;;
+  esac
+  rest=${1#"owed-run: $schema "}
   kind=${rest%% *} rest=${rest#* }
   head=${rest%% *} head=${head#head=} rest=${rest#* }
   is_sha "$head" || return 1
+  if [ "$schema" = "$SCHEMA" ]; then
+    case $rest in writer=*' '*) ;; *) return 1 ;; esac
+    writer=${rest%% *} writer=${writer#writer=} rest=${rest#* }
+    case $kind/$writer in
+      run/record | run/relay | waiver/waive | waiver/relay) ;;
+      run/leg:*) valid_host "${writer#leg:}" || return 1 ;;
+      *) return 1 ;;
+    esac
+  fi
   case $kind in
     run)
       case $rest in exit=*' clean='*' backend='*' source='*' cmd='*) ;; *) return 1 ;; esac
@@ -166,6 +182,20 @@ parse_line() {
       [ -n "$by" ] ;;
     *) return 1 ;;
   esac
+}
+
+valid_host() {
+  local LC_ALL=C
+  case $1 in '' | *[!A-Za-z0-9._-]*) return 1 ;; esac
+}
+
+run_line() {
+  printf 'owed-run: %s run head=%s writer=%s exit=0 clean=yes backend=cc source=%s cmd=%s' \
+    "$SCHEMA" "$1" "$2" "$3" "$4"
+}
+
+waiver_line() {
+  printf 'owed-run: %s waiver head=%s writer=%s by=%s reason=%s' "$SCHEMA" "$1" "$2" "$3" "$4"
 }
 
 # publish HEAD LINE: adds LINE to refs/owed-runs/HEAD on OWED_RUN_URL, keeping the head's earlier
@@ -188,6 +218,95 @@ publish() {
   echo "$me: published $ref on $OWED_RUN_URL: $line"
 }
 
+read_pid_field() {
+  local id
+  id=$(ps -o "$1=" -p "$2") || return 1
+  id=${id//[[:space:]]/}
+  case $id in '' | 0 | *[!0-9]*) return 1 ;; esac
+  printf '%s\n' "$id"
+}
+
+# Both the fleet runner and report get a bounded nested slot. The report is exec'd as the
+# leader of its own process group.
+# The parent of this group's leader belongs to the enclosing leg's group. Its live leader's
+# PID and start token must appear in test-run.sh's stored launchers. The argv digest is outside
+# this check.
+fleet_receipt() {
+  local run=$1 inner parent scope token row
+  inner=$(read_pid_field pgid "$$") && [ "$inner" = "$$" ] && parent=$(read_pid_field ppid "$inner") &&
+    scope=$(read_pid_field pgid "$parent") || return 1
+  [ "$scope" != "$inner" ] || return 1
+  if [ -r /proc/self/stat ]; then
+    token=$(awk '{ sub(/^.*\) /, ""); print $20 }' "/proc/$scope/stat") || return 1
+  else
+    token=$(LC_ALL=C TZ=UTC ps -o lstart= -p "$scope" | awk '{$1=$1; print}') || return 1
+  fi
+  [ -n "$token" ] && [ -r "$run/launchers" ] || return 1
+  while IFS= read -r row; do
+    case $row in "$scope $token "*) return 0 ;; esac
+  done <"$run/launchers"
+  return 1
+}
+
+on_record_master() {
+  local h=$1 master rc
+  remote_ref refs/heads/master || die "record: could not read master on $OWED_RUN_URL"
+  master=$remote_sha
+  [ -n "$master" ] || return 1
+  if ! git -C "$root" cat-file -e "$master^{commit}" 2>/dev/null; then
+    fetch_objects refs/heads/master && git -C "$root" cat-file -e "$master^{commit}" 2>/dev/null ||
+      die "record: could not fetch master on $OWED_RUN_URL"
+  fi
+  git -C "$root" merge-base --is-ancestor "$h" "$master"
+  rc=$?
+  [ "$rc" -le 1 ] || die "record: could not compare $h with master on $OWED_RUN_URL"
+  return "$rc"
+}
+
+record_run() {
+  local run=$1 print=$2 requested_cover=${3-} h c host line checkout writer=record
+  case $run in
+    '' | last) run=$(cd "$root" && "${BASH:-bash}" tools/test-run.sh paths run last) || die "record: no last run of this worktree" ;;
+  esac
+  [ -d "$run" ] || die "record: no run directory $run"
+  [ -f "$run/exit" ] || die "record: $run has no exit status: it has not finished"
+  [ "$(cat "$run/exit")" = 0 ] || die "record: $run exited $(cat "$run/exit"), not 0"
+  [ -f "$run/dirty" ] || die "record: $run recorded no checkout state"
+  [ ! -s "$run/dirty" ] || die "record: $run ran a dirty checkout"
+  h=$(sed -n 1p "$run/head" 2>/dev/null)
+  is_sha "$h" || die "record: $run recorded no head commit"
+  [ "$(cat "$run/expect-backend" 2>/dev/null)" = cc ] ||
+    die "record: $run was not run with --expect-backend cc (its expect-backend: '$(cat "$run/expect-backend" 2>/dev/null)')"
+  c=$(sed -n 1p "$run/cmd" 2>/dev/null) c=${c% }
+  cmd_cover "$c" || die "record: $run ran '$c', none of the forms a record covers (tools/owed-run.sh's header)"
+  host=$(hostname -s 2>/dev/null || hostname)
+  if [ -n "$requested_cover" ]; then
+    [ "$cover" = "$requested_cover" ] || die "record: $run does not cover the fleet leg's requested targets"
+    [ "$h" = "$(git -C "$root" rev-parse HEAD)" ] || die "record: $run is for a different head"
+    checkout=$(git -C "$root" status --porcelain --untracked-files=all --ignore-submodules=none) ||
+      die "record: could not read the fleet worktree's checkout state"
+    [ -z "$checkout" ] || die "record: the fleet worktree is dirty"
+    fleet_receipt "$run" || die "record: $run was not launched by the current fleet leg"
+    # Integration runs at merged heads owe no record and can leave a ref that no PR will prune.
+    if on_record_master "$h"; then
+      printf '%s\n' "$me: recorded nothing (head is on master at $OWED_RUN_URL)"
+      return 0
+    fi
+    valid_host "$host" || die "record: cannot use '$host' as a leg writer hostname"
+    writer=leg:$host
+  fi
+  line=$(run_line "$h" "$writer" "$host:$run" "$c")
+  if [ "$print" = 1 ]; then printf '%s\n' "$line"; else publish "$h" "$line"; fi
+}
+
+leg_command() {
+  if [ "${1-}" = env ] && [ "${2-}" = OCANNL_BACKEND=cc ]; then shift 2; fi
+  case ${1-} in tools/test-run.sh | ./tools/test-run.sh) shift ;; *) return 1 ;; esac
+  [ "${1-}" = run ] && [ "${2-}" = --expect-backend ] && [ "${3-}" = cc ] || return 1
+  shift 3
+  cmd_cover "$(printf '%q ' "$@")"
+}
+
 verb=${1-}
 [ $# -gt 0 ] && shift
 case $verb in
@@ -201,29 +320,23 @@ case $verb in
         *) [ -z "$run" ] || die "record: one RUN at most"; run=$a ;;
       esac
     done
-    case $run in
-      '' | last) run=$(cd "$root" && "${BASH:-bash}" tools/test-run.sh paths run last) || die "record: no last run of this worktree" ;;
-    esac
-    [ -d "$run" ] || die "record: no run directory $run"
-    [ -f "$run/exit" ] || die "record: $run has no exit status: it has not finished"
-    [ "$(cat "$run/exit")" = 0 ] || die "record: $run exited $(cat "$run/exit"), not 0"
-    [ -f "$run/dirty" ] || die "record: $run recorded no checkout state"
-    [ ! -s "$run/dirty" ] || die "record: $run ran a dirty checkout"
-    h=$(sed -n 1p "$run/head" 2>/dev/null)
-    is_sha "$h" || die "record: $run recorded no head commit"
-    [ "$(cat "$run/expect-backend" 2>/dev/null)" = cc ] ||
-      die "record: $run was not run with --expect-backend cc (its expect-backend: '$(cat "$run/expect-backend" 2>/dev/null)')"
-    c=$(sed -n 1p "$run/cmd" 2>/dev/null) c=${c% }
-    cmd_cover "$c" || die "record: $run ran '$c', none of the forms a record covers (tools/owed-run.sh's header)"
-    line="owed-run: $SCHEMA run head=$h exit=0 clean=yes backend=cc source=$(hostname -s 2>/dev/null || hostname):$run cmd=$c"
-    if [ "$print" = 1 ]; then printf '%s\n' "$line"; else publish "$h" "$line"; fi ;;
+    record_run "$run" "$print" ;;
+  leg-report)
+    if ! leg_command "$@"; then
+      printf '%s\n' "$me: recorded nothing (not an owed-run argv)"
+    elif ! ( export GIT_TERMINAL_PROMPT=0; record_run last 0 "$cover" ) </dev/null 2>&1; then
+      printf '%s\n' "$me: recorded nothing (record refused)"
+    fi ;;
   add)
     [ $# = 1 ] || die "add: one LINE"
     parse_line "$1" || die "add: not an owed-run line: $1"
     if [ "$kind" = run ]; then
       [ "$exit_/$clean/$backend" = 0/yes/cc ] && cmd_cover "$cmd" || die "add: a record no check admits: $1"
+      line=$(run_line "$head" relay "$source" "$cmd")
+    else
+      line=$(waiver_line "$head" relay "$by" "$reason")
     fi
-    publish "$head" "$1" ;;
+    publish "$head" "$line" ;;
   waive)
     h= why=
     while [ $# -gt 0 ]; do
@@ -238,7 +351,7 @@ case $verb in
     case $why in '' | *$'\n'*) die "waive: --reason takes one non-empty line" ;; esac
     who=$(git -C "$root" var GIT_AUTHOR_IDENT 2>/dev/null) || who=
     who=${who%% <*} who=${who:-$(id -un)} who=${who// /_}
-    publish "$h" "owed-run: $SCHEMA waiver head=$h by=$who reason=$why" ;;
+    publish "$h" "$(waiver_line "$h" waive "$who" "$why")" ;;
   check)
     [ $# -ge 2 ] || die "check: HEAD and at least one NEED"
     h=$1
@@ -260,10 +373,10 @@ case $verb in
     while IFS= read -r l; do
       case $l in owed-run:*) ;; *) continue ;; esac
       nlines=$((nlines + 1))
-      parse_line "$l" || refuse "$ref holds a line no $SCHEMA record reads: $l"
+      parse_line "$l" || refuse "$ref holds a line no v1 or $SCHEMA record reads: $l"
       [ "$head" = "$h" ] || refuse "$ref holds a record of another head (${head:0:8}): foreign"
       if [ "$kind" = waiver ]; then
-        waived="owed-run: admitted waiver for ${h:0:8} by $by: $reason"
+        waived="owed-run: admitted waiver for ${h:0:8} by $by (writer=$writer): $reason"
         continue
       fi
       [ "$exit_" = 0 ] || refuse "$ref holds a run that exited $exit_"
@@ -271,7 +384,7 @@ case $verb in
       [ "$backend" = cc ] || refuse "$ref holds a run on backend $backend, not cc"
       cmd_cover "$cmd" || refuse "$ref holds a run of '$cmd', which is no full or train- run (a filtered or first-tier run)"
       got="$got$cover "
-      admitted+="owed-run: admitted run of '$cmd' for ${h:0:8} ($source)"$'\n'
+      admitted+="owed-run: admitted run of '$cmd' for ${h:0:8} ($source, writer=$writer)"$'\n'
     done <<EOF
 $(git -C "$root" log -1 --format=%B "$remote_sha")
 EOF
