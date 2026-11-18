@@ -8,7 +8,8 @@
    [Numerics.all_of_bf16_mode]); the oracle states each mode's wide condition itself, through an
    exhaustive match, rather than calling the resolution under test, so a new mode is a compile error
    here rather than a silent [false] (gh-ocannl-2260). The claim's minimum row count is the product
-   of the grid's own lists. *)
+   of the grid's axes: derived from the enumerations where an axis has one (the modes, the scopes
+   and their subsets, the booleans), a literal for the hand-written format list. *)
 open Base
 open Verdict.Claims
 module BI = Ir.Backend_intf
@@ -22,10 +23,19 @@ let policy : N.t =
     bf16_arithmetic = N.Bf16_auto;
   }
 
-let scopes = [ BI.Mma_per_statement; BI.Mma_fragment_scope ]
-let scope_sets = [ []; [ BI.Mma_per_statement ]; [ BI.Mma_fragment_scope ]; scopes ]
-let bools = [ false; true ]
+let scopes = BI.all_of_mma_emission_scope
+
+(* Every subset of [scopes]: each wide-accumulator scope list a capability can advertise. *)
+let scope_sets =
+  List.fold_right scopes ~init:[ [] ] ~f:(fun scope sets ->
+      sets @ List.map sets ~f:(fun set -> scope :: set))
+
+let bools = Bool.all
+
+(* Hand-written: [mma_input_format] derives no [enumerate]. So the claim's floor below keeps its
+   triple count as a literal, which a format dropped from this list falls short of. *)
 let formats = [ BI.Mma_f32; BI.Mma_f16; BI.Mma_bf16; BI.Mma_fp8_e5m2; BI.Mma_tf32 ]
+let format_triple_count = 5 * 5 * 5
 
 let triples =
   List.concat_map formats ~f:(fun a ->
@@ -115,7 +125,7 @@ let () =
   let grid_size =
     List.length scope_sets * List.length scope_sets * List.length N.all_of_fp16_mode
     * List.length bools * List.length bools * List.length N.all_of_bf16_mode * List.length bools
-    * List.length scopes * List.length triples
+    * List.length scopes * format_triple_count
   in
   p_all ~min:grid_size
     "format scope judgment respects both policy gates, both scope lists and the full triple" rows
