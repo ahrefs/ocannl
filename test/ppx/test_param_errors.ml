@@ -11,6 +11,7 @@ open Nn_blocks.DSL_modules
 let%op late_field hid_dim x = ({ w } * x) + { b; o = [ hid_dim ] }
 let%op late_field_labelled ~hid_dim x = ({ w } * x) + { b; o = [ hid_dim ] }
 let%op late_init ~scale x = { w = uniform_at scale } * x
+let%op late_number ~scale x = { w = !.scale } * x
 let%op field_after_unit () ~hid_dim x = ({ w } * x) + { b; o = [ hid_dim ] }
 
 let%op field_in_nested () x =

@@ -80,6 +80,24 @@ module Custom_power =
              ?param_init:(Some (TDSL.O.( **. ) source e)) "w") () in
         w
   end
+let number_float x =
+  let open! TDSL.O in
+    let w =
+      (TDSL.param ?more_label:None ?value:(Some x) ?values:None
+         ?param_init:None "w") () in
+    w
+let number_int n =
+  let open! TDSL.O in
+    let w =
+      (TDSL.param ?more_label:None ?value:(Some (Float.of_int n))
+         ?values:None ?param_init:None "w") () in
+    w
+let number_nested source x =
+  let open! TDSL.O in
+    let w =
+      (TDSL.param ?more_label:None ?value:None ?values:None
+         ?param_init:(Some (NTDSL.add source (TDSL.O.(!.) x))) "w") () in
+    w
 let named_binary source other =
   let open! TDSL.O in
     let w =
@@ -120,5 +138,6 @@ let ternary_both x =
 let _ =
   (binary_tensor, binary_literal, binary_sub, binary_mul, binary_div,
     power_int, power_float, power_expr, power_effectful,
-    Custom_power.explicit_power, named_binary, named_unary, named_ternary,
-    binary_head, binary_both, ternary_head, ternary_both)
+    Custom_power.explicit_power, number_float, number_int, number_nested,
+    named_binary, named_unary, named_ternary, binary_head, binary_both,
+    ternary_head, ternary_both)

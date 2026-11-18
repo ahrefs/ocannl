@@ -35,6 +35,10 @@ module Custom_power = struct
   let explicit_power source e = [%op { w = TDSL.O.( **. ) source e }]
 end
 
+(* The constant-embedding heads take a float or an integer, not a tensor. *)
+let number_float x = [%op { w = !.x }]
+let number_int n = [%op { w = !..n }]
+let number_nested source x = [%op { w = source + !.x }]
 let named_binary source other = [%op { w = add source other }]
 let named_unary source = [%op { w = relu source }]
 let named_ternary source = [%op { w = fma source 2.0 3.0 }]
@@ -54,6 +58,9 @@ let _ =
     power_expr,
     power_effectful,
     Custom_power.explicit_power,
+    number_float,
+    number_int,
+    number_nested,
     named_binary,
     named_unary,
     named_ternary,

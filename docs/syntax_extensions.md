@@ -860,7 +860,7 @@ In the `%op` syntax, inline declarations use record syntax with additional field
 
 - **Basic declaration with default initialization**: `{ tensor_name }` uses OCaml's punning syntax and defaults to uniform random initialization
 - **Declaration with value initialization**: `{ tensor_name = value }` where value can be:
-  - A scalar: `{ x = 5.0 }` or `{ y = 42 }`
+  - A scalar: `{ x = 5.0 }` or `{ y = 42 }`, or one computed in OCaml, embedded with `!.` (a float) or `!..` (an integer): `{ x = !. scale }`, `{ y = !.. n }`
   - A list/array: `{ weights = [1.0; 2.0; 3.0] }`
   - An initialization function: `{ z = uniform () }`
 - **Declaration with dimensions**: Additional fields specify tensor dimensions:

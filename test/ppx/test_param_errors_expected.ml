@@ -58,6 +58,20 @@ let late_init =
                     (List.concat
                        [["late_init"]; (x.Tensor.value).Ir.Tnode.label]))
         w x
+let late_number =
+  let open! TDSL.O in
+    let w =
+      (TDSL.param ?more_label:None
+         ?value:(Some
+                   ([%ocaml.error
+                      "ppx_ocannl %op: the inline declaration { w } is created once, when the function is defined, where the parameter scale is not bound. Give the function a unit parameter with scale before it -- fun ~scale () ... -- so that the declaration is created at each () application"]))
+         ?values:None ?param_init:None "w") () in
+    fun ~scale x ->
+      ( *
+        ) ?label:(Some
+                    (List.concat
+                       [["late_number"]; (x.Tensor.value).Ir.Tnode.label]))
+        w x
 let field_after_unit =
   let open! TDSL.O in
     fun () ->
