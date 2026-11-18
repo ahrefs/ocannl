@@ -42,12 +42,17 @@ a compile record's kernel counts read in order: true
 trace-has answers what the trace holds: true
 trace-digest counts the attempts: true
 trace-has distinguishes complete and incomplete fixed summaries: true
-the summary's raised-call count is the trace's raised records: true
+trace_summary reads the fixed summaries' failed and unranked tallies apart: true
+the summary's failed and unranked tallies are the trace's raised records of each kind: true
 the injected run raised one candidate's timing call, not the baseline's: true
 the injected run printed raised records, each read as one (an unreadable one raises): true
 exactly one raised record is the injected failure, naming its candidate and exception: true
-the injected run's summary reads INCOMPLETE, counting exactly its raised records: true
+the injected run's summary reads INCOMPLETE, counting exactly its failed records: true
 trace-has reads the injected run as incomplete, and its search as done: true
+the cut run cut exactly one candidate's window, not the baseline's: true
+its one raised record is that window, unranked, naming Timing_hopeless: true
+the cut run's summary reads complete, with one unranked window: true
+trace-has reads the cut run as complete, and its search as done: true
 == the rank-site lines (bench_rank_site)
 several candidates are explained, each with its kernels line: true
 one pick, of an explained candidate, at the rank its explain line states: true

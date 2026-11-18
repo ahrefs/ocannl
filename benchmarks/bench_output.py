@@ -152,7 +152,7 @@ def compile_traces(text):
 # The trace's session records (gh-ocannl-834): `timing-trace: summary: ...` (printed at exit, with
 # the running totals), `timing-trace: attempt ...` (one per candidate the tuner attempts),
 # `timing-trace: raised ...` (one per tagged timing call that raised after its validation, naming
-# its candidate and exception, gh-ocannl-2246) and `timing-trace: search done: ...` (the end of the
+# its kind, candidate and exception, gh-ocannl-2246, gh-ocannl-2330) and `timing-trace: search done: ...` (the end of the
 # measured compile). Bench_harness.install_timing_trace and trace_search_done print them.
 
 TRACE_PREFIX = "timing-trace: "
@@ -160,13 +160,18 @@ _TRACE_SUMMARY = re.compile(
     r"^timing-trace: summary: (?P<wall>[0-9.]+)s wall, (?P<attempts>\d+) candidate attempts, "
     r"(?P<calls>\d+) timing calls, (?P<launches>\d+) launches, ")
 _TRACE_INCOMPLETE = re.compile(r"; INCOMPLETE: (?P<raised>\d+) tagged timing calls raised ")
+_TRACE_UNRANKED = re.compile(r"; (?P<unranked>\d+) unranked timing windows ")
 
 
 def trace_summary(text):
     """The LAST `timing-trace: summary` record of a cell's stderr, or None: a dict of `wall` (s),
     `attempts`, `calls` (timing calls), `launches`, `incomplete` (the summary names tagged timing
-    calls that raised, whose cost is in none of its totals) and `raised` (how many; 0 when
-    complete). ValueError for a summary line that does not read as one."""
+    calls that FAILED after their validation, whose cost is in none of its totals), `raised` (how
+    many; 0 when complete) and `unranked` (the timing windows cut as hopeless or stopped by the
+    budget, gh-ocannl-2330: the search working, not a failure; 0 when the summary names none).
+    A capture from before gh-ocannl-2330 names no unranked tally and counts those windows in its
+    INCOMPLETE `raised`, so it reads as it was printed. ValueError for a summary line that does
+    not read as one."""
     found = None
     for line in text.splitlines():
         if not line.startswith(TRACE_PREFIX + "summary: "):
@@ -178,9 +183,13 @@ def trace_summary(text):
         raised = _TRACE_INCOMPLETE.search(line)
         if incomplete and not raised:
             raise ValueError(f"trace summary with an unreadable INCOMPLETE count: {line}")
+        unranked = _TRACE_UNRANKED.search(line)
+        if " unranked timing windows " in line and not unranked:
+            raise ValueError(f"trace summary with an unreadable unranked tally: {line}")
         found = {"wall": float(m["wall"]), "attempts": int(m["attempts"]),
                  "calls": int(m["calls"]), "launches": int(m["launches"]),
-                 "incomplete": incomplete, "raised": int(raised["raised"]) if raised else 0}
+                 "incomplete": incomplete, "raised": int(raised["raised"]) if raised else 0,
+                 "unranked": int(unranked["unranked"]) if unranked else 0}
     return found
 
 
@@ -188,23 +197,27 @@ TRACE_EVENTS = {"attempt": TRACE_PREFIX + "attempt ", "search done": TRACE_PREFI
                 "call": TRACE_PREFIX + "call ", "compile": TRACE_PREFIX + "compile ",
                 "raised": TRACE_PREFIX + "raised "}
 _TRACE_RAISED = re.compile(
-    r'^timing-trace: raised (?P<n>\d+) at (?P<at>[0-9.]+)s: "(?P<label>(?:[^"\\]|\\.)*)" '
+    r'^timing-trace: raised (?P<n>\d+) at (?P<at>[0-9.]+)s: (?:(?P<kind>unranked|failed) )?'
+    r'"(?P<label>(?:[^"\\]|\\.)*)" '
     r'in phase (?P<phase>\S+): "(?P<exn>(?:[^"\\]|\\.)*)"$')
 
 
 def trace_raised(text):
     """The `timing-trace: raised` records of a cell's stderr, in order: dicts of `n` (the record's
-    ordinal, the running count of raised records), `at` (s), `label` (the candidate's; `baseline`
-    for the baseline), `phase` (the phase tag the exception left under, None for `-`) and
-    `exception` (as OCaml's Printexc printed it). The two literals are decoded by `ocaml_string`.
-    A `Timing_stopped` or `Timing_hopeless` exception is an unranked window, not a failure.
-    ValueError for a raised line that does not read as one."""
+    ordinal, the running count of raised records), `at` (s), `kind` (`unranked` for a window cut
+    as hopeless or stopped by the budget -- `Timing_hopeless`, `Timing_stopped`, the search working
+    -- `failed` for any other exception, which the summary's INCOMPLETE counts; None on a capture
+    from before gh-ocannl-2330, whose lines name no kind), `label` (the candidate's; `baseline` for
+    the baseline), `phase` (the phase tag the exception left under, None for `-`) and `exception`
+    (as OCaml's Printexc printed it). The two literals are decoded by `ocaml_string`. ValueError
+    for a raised line that does not read as one."""
     rows = []
     for line in trace_events(text, "raised"):
         m = _TRACE_RAISED.match(line)
         if not m:
             raise ValueError(f"unusable trace raised record: {line}")
-        rows.append({"n": int(m["n"]), "at": float(m["at"]), "label": ocaml_string(m["label"]),
+        rows.append({"n": int(m["n"]), "at": float(m["at"]), "kind": m["kind"],
+                     "label": ocaml_string(m["label"]),
                      "phase": None if m["phase"] == "-" else m["phase"],
                      "exception": ocaml_string(m["exn"])})
     return rows
@@ -539,7 +552,8 @@ def _launches_of(text, routine):
 
 def _cmd_trace_has(text, what):
     """Exit status 0 when the trace has `what`: `summary`, `timing-calls` (a summary recording at
-    least one timing call), `incomplete` (a summary naming raised timing calls), `attempt` or
+    least one timing call), `incomplete` (a summary naming failed timing calls; unranked windows
+    alone leave it complete, gh-ocannl-2330), `attempt` or
     `search-done`; 3 when it has not."""
     summary = trace_summary(text)
     verdicts = {"summary": lambda: summary is not None,

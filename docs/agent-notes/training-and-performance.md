@@ -1100,10 +1100,14 @@ files.
   means the predicate HOLDS, so an all-zero exit-status dict includes an incomplete summary,
   not an empty trace. The live summary goes to stderr `(not part of the golden)` and trace-claim
   failure details, preserving its `INCOMPLETE:` count, beside each raised call's `timing-trace:
-  raised` record (gh-ocannl-2246): its candidate's label, phase tag and exception. What is pinned
-  is that the summary's count equals the records, plus a second capture (`bench_line_samples
+  raised` record (gh-ocannl-2246): its kind, candidate's label, phase tag and exception. What is
+  pinned is that the summary's two tallies (INCOMPLETE's failed count, and the unranked windows,
+  gh-ocannl-2330) equal the records of each kind, plus a second capture (`bench_line_samples
   trace-raise`) that raises one candidate's call from `Autotune.on_batch_wall` and finds that
-  candidate and exception in exactly one record. `benchmarks/test/test_bench_line_scan.py` refuses a bench-line pattern in
+  candidate and exception in exactly one `failed` record, and a third (`trace-cut`) that cuts one
+  window as hopeless on a scripted clock and reads complete with one `unranked` record. A live
+  search's whole-routine seed over four times the beam head is cut the same way, so before
+  gh-ocannl-2330 a loaded host's live trace could read INCOMPLETE with no failure at all. `benchmarks/test/test_bench_line_scan.py` refuses a bench-line pattern in
   any other script. A stub bench in `test_cells.py` prints the real format, trailing census
   included. A bench that refuses its measurement for host
   contention exits 3, and the drivers keep that apart from a failure (a 1 outranks a 3).

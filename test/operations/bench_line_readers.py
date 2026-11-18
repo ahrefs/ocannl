@@ -13,7 +13,9 @@ The complete/incomplete predicate additionally reads two fixed summary texts: th
 completion is diagnostic only, since timing calls can raise under load. This test checks captured
 formats and reader behavior; it does not assert that a live timing search has no raised calls.
 A second traced search raises one candidate's timing call on purpose (bench_line_samples'
-`trace-raise`), so the raised call's record is read off a line its producer printed (gh-ocannl-2246).
+`trace-raise`), so the raised call's record is read off a line its producer printed (gh-ocannl-2246),
+and a third cuts one window as hopeless on a scripted clock (`trace-cut`), which the summary tallies
+as unranked and still reads complete (gh-ocannl-2330).
 benchmarks/test/test_bench_line_scan.py keeps the readers in bench_output.
 
 Usage: bench_line_readers.py ROOT, ROOT holding benchmarks/ and the captured
@@ -218,26 +220,48 @@ claim("trace-digest counts the attempts", code == 0
 complete = ("timing-trace: summary: 1.0s wall, 2 candidate attempts, 1 timing calls, 3 launches, "
             "calib 0.10 s (0 calls untagged), timed 0.20 s; depth histogram (calls x depth): 1x1; "
             "0 calls reused 0 calibration batches as their window")
-incomplete = complete + ("; INCOMPLETE: 1 tagged timing calls raised after validation, "
-                         "and their cost is in none of these totals")
+failed_tail = ("; INCOMPLETE: 1 tagged timing calls raised after validation, "
+               "and their cost is in none of these totals")
+unranked_tail = ("; 2 unranked timing windows (cut as hopeless or stopped by the budget), "
+                 "in none of these totals")
+incomplete = complete + failed_tail
+# gh-ocannl-2330: unranked windows alone leave a summary complete; beside a failure, it is not.
+unranked = complete + unranked_tail
+both = complete + unranked_tail + failed_tail
 with tempfile.TemporaryDirectory() as scratch:
     fixture = Path(scratch) / "trace.log"
     results = []
-    for text in (complete, incomplete):
+    for text in (complete, incomplete, unranked, both):
         fixture.write_text(text + "\n")
         results.append(cli("trace-has", fixture, "incomplete")[0])
     claim("trace-has distinguishes complete and incomplete fixed summaries",
-          results == [3, 0], f"exits {results}, expected [3, 0]; {incomplete}")
+          results == [3, 0, 3, 0], f"exits {results}, expected [3, 0, 3, 0]; {both}")
+read = [{k: s[k] for k in ("incomplete", "raised", "unranked")}
+        for s in map(bench_output.trace_summary, (complete, incomplete, unranked, both))]
+claim("trace_summary reads the fixed summaries' failed and unranked tallies apart",
+      read == [{"incomplete": False, "raised": 0, "unranked": 0},
+               {"incomplete": True, "raised": 1, "unranked": 0},
+               {"incomplete": False, "raised": 0, "unranked": 2},
+               {"incomplete": True, "raised": 1, "unranked": 2}], repr(read))
 # gh-ocannl-2246: a raised timing call's record. The live search's own raises stay diagnostic
 # (gh-ocannl-1992): whether any call raises is the host's, so what is pinned is that the summary's
 # count -- validations started less records returned -- is the number of raised records, numbered
 # in order. The injected run then raises exactly one call on purpose, and its record names that
 # candidate and that exception.
+# gh-ocannl-2330: each record names its kind, and the summary's two tallies are the records of each.
+def tallies_agree(summary, raised):
+    failed = [r for r in raised if r["kind"] == "failed"]
+    unranked = [r for r in raised if r["kind"] == "unranked"]
+    return (len(failed) + len(unranked) == len(raised)
+            and summary["raised"] == len(failed) and summary["incomplete"] == bool(failed)
+            and summary["unranked"] == len(unranked)
+            and [r["n"] for r in raised] == list(range(1, len(raised) + 1)))
+
+
 raised = bench_output.trace_raised(err)
 print(f"live trace raised records (not part of the golden): {len(raised)}", file=sys.stderr)
-claim("the summary's raised-call count is the trace's raised records",
-      summary["raised"] == len(raised) and summary["incomplete"] == bool(raised)
-      and [r["n"] for r in raised] == list(range(1, len(raised) + 1)), trace_detail)
+claim("the summary's failed and unranked tallies are the trace's raised records of each kind",
+      tallies_agree(summary, raised), trace_detail)
 err = captured("trace_raise", "log")
 injected = [re.fullmatch(r'injected: "((?:[^"\\]|\\.)*)" "((?:[^"\\]|\\.)*)"', line)
             for line in captured("trace_raise", "out").splitlines()]
@@ -253,16 +277,40 @@ claim("the injected run printed raised records, each read as one (an unreadable 
       len(raised) == len(bench_output.trace_events(err, "raised")) > 0, trace_detail)
 claim("exactly one raised record is the injected failure, naming its candidate and exception",
       [(r["label"], r["exception"]) for r in raised].count(injected[0]) == 1
-      and [r for r in raised if (r["label"], r["exception"]) == injected[0]][0]["phase"] is None,
+      and [(r["kind"], r["phase"]) for r in raised
+           if (r["label"], r["exception"]) == injected[0]] == [("failed", None)],
       f"{injected}; {trace_detail}")
-claim("the injected run's summary reads INCOMPLETE, counting exactly its raised records",
-      summary is not None and summary["incomplete"] and summary["raised"] == len(raised)
-      and [r["n"] for r in raised] == list(range(1, len(raised) + 1)), trace_detail)
+claim("the injected run's summary reads INCOMPLETE, counting exactly its failed records",
+      summary is not None and summary["incomplete"] and summary["raised"] >= 1
+      and tallies_agree(summary, raised), trace_detail)
 path = root / "test/operations/bench_lines_trace_raise.log"
 claim("trace-has reads the injected run as incomplete, and its search as done",
       cli("trace-has", path, "incomplete")[0] == 0 == cli("trace-has", path, "search-done")[0],
       trace_detail)
 print(f"injected run raised records (not part of the golden): {len(raised)}", file=sys.stderr)
+# gh-ocannl-2330: a window cut as hopeless is unranked, not a failure. The scripted clock cuts
+# exactly one, and the run prints that candidate's label off the exception its observer was handed.
+err = captured("trace_cut", "log")
+cut = [re.fullmatch(r'cut: "((?:[^"\\]|\\.)*)"', line)
+       for line in captured("trace_cut", "out").splitlines()]
+cut = [bench_output.ocaml_string(m[1]) for m in cut if m]
+summary = bench_output.trace_summary(err)
+raised = bench_output.trace_raised(err)
+trace_detail = " | ".join(line for line in err.splitlines()
+                          if line.startswith(("timing-trace: summary: ", "timing-trace: raised ")))
+print(f"cut run raised records (not part of the golden): {len(raised)}", file=sys.stderr)
+claim("the cut run cut exactly one candidate's window, not the baseline's",
+      len(cut) == 1 and cut[0] != "baseline", repr(cut))
+claim("its one raised record is that window, unranked, naming Timing_hopeless",
+      [(r["kind"], r["label"], r["phase"]) for r in raised] == [("unranked", cut[0], None)]
+      and "Timing_hopeless" in raised[0]["exception"], f"{cut}; {trace_detail}")
+claim("the cut run's summary reads complete, with one unranked window",
+      summary is not None and not summary["incomplete"] and summary["raised"] == 0
+      and summary["unranked"] == 1 and tallies_agree(summary, raised), trace_detail)
+path = root / "test/operations/bench_lines_trace_cut.log"
+claim("trace-has reads the cut run as complete, and its search as done",
+      cli("trace-has", path, "incomplete")[0] == 3 and cli("trace-has", path, "search-done")[0] == 0,
+      trace_detail)
 exercised.add("timing_trace")
 
 # ---------------------------------------------------------------------------------------------

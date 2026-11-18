@@ -2916,8 +2916,9 @@ files.
   re-raises it with its backtrace, so classification and containment are unchanged. Both observer
   chains contain each observer as the compile observers do (a raising one is reported on stderr
   and dropped), so a call whose record was published cannot also reach the raised-call chain. A cut
-  (`Timing_hopeless`) or budget-stopped (`Timing_stopped`) window raises too, and is counted and
-  named with them: an unranked window, not a failure. A cold schedule cache
+  (`Timing_hopeless`) or budget-stopped (`Timing_stopped`) window raises too, and is named with
+  them as `unranked`, told apart by the exception the observer is handed (gh-ocannl-2330): the
+  summary tallies those apart and still reads complete, and INCOMPLETE counts the `failed` rest. A cold schedule cache
   is not a cold session: the backend's own compiled-code cache persists across processes, and in
   gh-ocannl-834's CUDA pair the second session's compile-and-bookkeeping time was 64 s against the
   first's 406 s from the PTX ComputeCache alone — the driver gives each CUDA session an empty
