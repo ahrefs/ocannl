@@ -791,7 +791,10 @@ single-threaded segments that sum to the serial step
   the `autotune-seeding:` lines of every lowering a search seeds, the whole routine and each keyed
   coarse and fine fission segment, from `Autotune.search_seeding`, the enumeration `tune` runs —
   and exits without starting a search (it used to take `BENCH_TUNE=1 autotune_budget_seconds=1
-  autotune_log_seeding=true` on `bench_conv`). `BENCH_PARITY=1` executes each conv seed
+  autotune_log_seeding=true` on `bench_conv`). With `autotune_log_seeding` enabled, plan derivation
+  also prints `autotune-seeding: gate` and `autotune-seeding: plan`. A timed search prints
+  `autotune-seeding: preset-digest` when it resolves the configured preset's schedule
+  (gh-ocannl-2335). `BENCH_PARITY=1` executes each conv seed
   (`BENCH_PARITY_SEEDS=all`: every seed) of each keyed segment, compiled as the search's
   per-segment candidate, for one step against the default pipeline's step from the same state, and
   prints a verdict per seed: the worst normalized difference over every materialized node both

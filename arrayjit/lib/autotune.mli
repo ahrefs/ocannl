@@ -785,7 +785,11 @@ val seeding_census :
   seeding_census
 
 val seeding_census_prefix : string
+
 val seeding_census_lines : where:string -> seeding_census -> string list
+(** Render the family census. On the same prefix, [autotune_log_seeding] also reports [gate] and
+    [plan] when {!seeded_plan} derives a plan or retains the configured preset, and [preset-digest]
+    when {!tune} resolves the configured preset's timing identity (gh-ocannl-2335). *)
 
 (** A GEMM role a GPU tensorized seed pads (gh-ocannl-1736): a row or column pad masks the
     accumulator's fragment transfers, a reduction pad masks nothing ([Tensorize] discharges its
@@ -2949,8 +2953,10 @@ val seeded_default_gate : limits:Ir.Backend_intf.hardware_limits -> seed_gate
     under {!ranking_capacity}'s capacity and {!ranking_cache_bandwidth}, and [Min_reduction 32] —
     the threshold's measured default — where nothing calibrates either tier: no advisory (Metal) and
     no [model_cache_capacity] / [model_cache_bandwidth] override. An explicit [none] override is a
-    calibration and keeps [Ranked], even with both tiers off. Raises [Utils.Invalid_config_value]
-    naming the key on anything else (gh-ocannl-1332). *)
+    calibration and keeps [Ranked], even with both tiers off. [auto-legacy] uses the same rule with
+    no operand-delivery charge or launch tail in the gate score, leaving leaf pricing intact
+    (gh-ocannl-2335). Raises [Utils.Invalid_config_value] naming the key on anything else
+    (gh-ocannl-1332). *)
 
 val model_seeding :
   facts:Ir.Backend_intf.backend_facts ->
