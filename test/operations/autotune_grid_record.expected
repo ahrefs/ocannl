@@ -10,6 +10,13 @@ agr-grid: no proposed plain-Grid seed renders a Grid loop serially for the cap: 
 agr-grid: every refused geometry the renderer would privatize is over the cap: true
 agr-grid: a padded geometry whose A~ tile fits is refused for its mask-forced fragment: true
 agr-grid: a padded geometry inside the cap is proposed and privatizes on the pool: true
+agr-grid: every proposed 40^3 bk=16 seed renders on the pool: true
+agr-grid: at 40^3 both k segments share scratch within the cap: true
+agr-grid: every proposed 72^3 bk=16 seed renders on the pool: true
+agr-grid: at 72^3 both k segments share scratch within the cap: true
+agr-grid: a single partial k block is proposed and renders on the pool: true
+agr-conv: a padded row panel within the cap is proposed and renders on the pool: true
+agr-conv: a padded row panel over the cap is refused: true
 agr-seed: no proposed packed Grid seed renders its site serially for the floor: true
 agr-seed: the floor refuses a packed Grid geometry whose site renders below it: true
 agr-seed: lowering the floor keeps each below-floor geometry on the pool: true

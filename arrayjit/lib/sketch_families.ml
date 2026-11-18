@@ -2763,6 +2763,9 @@ let cpu_mma_grid_updates_bound (site : matmul_site) (p : sketch_params) ~cap =
         body;
       ]
 
+let cpu_pack_partitions_k (site : matmul_site) ~bk =
+  bk <= site.m_nk && pads_extent ~extent:site.m_nk bk
+
 (* gh-ocannl-1612: why [Sched.Fuse_epilogue] refuses the fused twin of EVERY completion of a CPU
    packed geometry, or [None] where it may admit one. Only the shapes that sink the row-block loop
    under the reduction-block loops are concerned ([cpu_pack_grid_outermost] false: Serial, Hoisted
@@ -2793,10 +2796,7 @@ let cpu_pack_fused_partial_witness (site : matmul_site)
     || cpu_pack_grid_outermost ~sk_grid ~sk_hoist ~sk_pack_rest
   then None
   else
-    let partitioned =
-      not
-        (List.is_empty (Sched.pad_edge_partition ~block_loop:site.m_k ~extent:site.m_nk ~block:bk))
-    in
+    let partitioned = cpu_pack_partitions_k site ~bk in
     let why =
       if not partitioned then
         if reduction_blocks_repeat site ~bk then
@@ -2959,8 +2959,9 @@ let cpu_mma_pack_sketch_schedule (site : matmul_site)
      are unchanged. It applies in every packing shape, after [Tensorize] (so the [Tile_mma] is
      copied into both segments), and only with the k pad: an unpadded k divides or is refuted. *)
   let k_split =
-    if List.is_empty k_pad then []
-    else Sched.pad_edge_partition ~block_loop:k_o ~extent:site.m_nk ~block:bk
+    if both_staged && cpu_pack_partitions_k site ~bk then
+      Sched.pad_edge_partition ~block_loop:k_o ~extent:site.m_nk ~block:bk
+    else []
   in
   let tz, _lane = Sched.tensorize ?tile ~i:i_i ~j:j_col ~k:k_i ~simd_width:1 () in
   let kb = k_blocks site [ k_o ] in
@@ -4843,6 +4844,13 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                                    statement-site fragment inside the row-block body, which is
                                    weighed with it ([cpu_pack_grid_chunk_bytes]). *)
                                 if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
+                                else if cpu_pack_partitions_k site ~bk:p.sk_bk then
+                                  (* Partition duplicates the row-block loop after staging, with
+                                     both segments writing the same packed A~ node. Each loop needs
+                                     its own copy to privatize the tile. *)
+                                  Sspace.Refuted
+                                    ("the full and edge reduction segments share a packed A~ tile"
+                                   ^ " accessed outside each row-block Grid loop")
                                 else
                                   fused_partial ~shape:`Grid p @@ fun () ->
                                   match
@@ -4975,6 +4983,14 @@ let cpu_conv_pack_prec ~(limits : Ir.Backend_intf.hardware_limits) (site : conv_
    widens it. Price the same cells the builder mints. *)
 let staged_tile_elt_bytes ~pack_prec read_prec =
   Ir.Ops.prec_in_bytes (Option.value pack_prec ~default:read_prec)
+
+let conv_staged_tiles_bytes (site : conv_site) ~pack_prec ~m ~k ~n =
+  let wa = staged_tile_elt_bytes ~pack_prec (conv_operand_prec site site.c_a)
+  and wb = staged_tile_elt_bytes ~pack_prec (conv_operand_prec site site.c_b) in
+  (m * k * wa) + (k * n * wb)
+
+let conv_fragment_bytes (site : conv_site) ~m ~n =
+  m * n * Ir.Ops.prec_in_bytes (Lazy.force site.c_d.Ir.Tnode.storage_prec)
 
 (* The conv family's verdicts on one site, decided once and shared by both fusion flavors: every
    gate below is flavor-independent, so each flavor's subtree reads the same judgments (forced on
@@ -5176,7 +5192,28 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
               Sspace.Refuted
                 (Printf.sprintf "a %d-row panel gives fewer than two panels of the %d rows" bm
                    site.c_nrow)
-            else if n_real <= 2 then direct { base with sk_bm = bm }
+            else if n_real <= 2 then
+              (* Both staged tiles are written under the panel Grid: A depends on the panel index
+                 and B on the window loops inside it. The accumulator fragment, when present, also
+                 lives there. The aligned-merged shape has a different Grid body. *)
+              let n = site.c_noc in
+              let tiles =
+                conv_staged_tiles_bytes site ~pack_prec:base.sk_pack_prec ~m:bm ~k:site.c_nred ~n
+              in
+              let fragment =
+                if conv_fragment_certain site ~masked:(cpu_conv_acc_masked site ~bm) then
+                  conv_fragment_bytes site ~m:bm ~n
+                else 0
+              in
+              let cap = Lazy.force Ir.C_syntax.per_chunk_private_bytes_cap in
+              let bytes = tiles + fragment in
+              if bytes > cap then
+                Sspace.Refuted
+                  (Printf.sprintf
+                     "the row panel's privatized tiles take %d bytes per chunk, over \
+                      cc_grid_private_bytes_cap = %d"
+                     bytes cap)
+              else direct { base with sk_bm = bm }
             else if Lazy.force aligned then leaf { base with sk_bm = bm }
             else Sspace.Refuted no_alignment
           in
@@ -5873,16 +5910,11 @@ let conv_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (site : 
      store-back reads every slot, so [analyze] charges it at least one whole fragment written and
      one read, counted guards-taken. A masked loop site of the staged GPU pipeline also stages it
      through a padded scratch tile ([pad_scratch], gh-ocannl-1736): a second such node. *)
-  let wd = Ir.Ops.prec_in_bytes (Lazy.force site.c_d.Ir.Tnode.storage_prec) in
   let accumulator ~gpu ~masked ~m ~n =
-    let tile certain = if certain then 2 * m * n * wd else 0 in
+    let tile certain = if certain then 2 * conv_fragment_bytes site ~m ~n else 0 in
     tile (conv_fragment_certain site ~masked) + tile (conv_pad_scratch_certain site ~gpu ~masked)
   in
-  let tiles ~pack_prec ~m ~k ~n =
-    let wa = staged_tile_elt_bytes ~pack_prec (conv_operand_prec site site.c_a)
-    and wb = staged_tile_elt_bytes ~pack_prec (conv_operand_prec site site.c_b) in
-    2 * ((m * k * wa) + (k * n * wb))
-  in
+  let tiles ~pack_prec ~m ~k ~n = 2 * conv_staged_tiles_bytes site ~pack_prec ~m ~k ~n in
   let cpu =
     lazy
       (let pack_prec = cpu_conv_pack_prec ~limits site in

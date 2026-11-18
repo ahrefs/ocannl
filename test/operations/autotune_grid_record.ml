@@ -4,10 +4,9 @@
 
    Every compiled routine records, for each outermost [Grid] loop, whether it rendered on the CPU
    pool or which rule kept it serial ([Context.routine.grid], gh-ocannl-1668). The serial loop
-   computes the same values, so a Grid-seeded candidate the renderer kept serial is timed and ranked
-   under a Grid label -- the failure [best_tensorization] closed for tensorization. The report
-   carries the crowned candidate's record ([best_grid]) and every ranked Grid-asking candidate that
-   rendered a Grid loop serially ([grid_serial_timed]), and the [autotune_log] flags each one.
+   computes the same values, so the timing line includes the compiled routine's Grid record. The
+   report carries the crowned candidate's record ([best_grid]) and every ranked Grid-asking
+   candidate that rendered a Grid loop serially ([grid_serial_timed]).
 
    The cap is forced to [forced_cap] before anything resolves it (it is read once per process, so it
    is stated before the first compile, and the resolved value is pinned below). The packed matmul
@@ -19,12 +18,12 @@
    timed with its row-block loop serial.
 
    The seeding leg judges the pre-filter against the renderer, on two sites and one cap: every
-   proposed grid-outermost hoisted seed of a 64^3 and a 128^3 matmul, and every [Hoisted] seed
+   proposed grid-outermost hoisted seed of a 96^3 and a 128^3 matmul, and every [Hoisted] seed
    re-asked as its hoisted-grid twin (the pre-filter's judgment of that geometry under the Grid
    shape), is compiled and its record read. A proposed seed must render no Grid loop serially for
    the cap, and a refused one the renderer would privatize must be over it: the pre-filter refuses
    what the renderer refuses, and no more. Both sides occur: the 128^3 site's fragments are over the
-   cap (red before gh-ocannl-1793, which proposed them), and the 64^3 site's [16 x 64] f32 fragment
+   cap (red before gh-ocannl-1793, which proposed them), and the 96^3 site's [16 x 96] f32 fragment
    is exactly [forced_cap], which the renderer admits (its decline is strictly over the cap), so it
    is proposed and renders on the pool.
 
@@ -66,7 +65,7 @@ open Ocannl.Operation.DSL_modules
 module Cs = Ir.C_syntax
 open Verdict.Claims
 
-let forced_cap = 4096
+let forced_cap = 6144
 
 (* Before anything resolves the cap: [Cs.per_chunk_private_bytes_cap] is a process-lifetime lazy. *)
 let () =
@@ -212,7 +211,7 @@ let judge_site ?rows ?depth ?(shape = `Hoisted) n =
         j_grid = grid;
       })
 
-let judged = lazy (List.concat_map [ 64; 128 ] ~f:(fun n -> judge_site n))
+let judged = lazy (List.concat_map [ 96; 128 ] ~f:(fun n -> judge_site n))
 
 (* The final census entry is the site launch; the preceding entry zeroes the output. Only the site
    loop must justify the Grid shape: a serial zero nest is harmless. *)
@@ -307,7 +306,7 @@ let recorded_private (g : Cs.grid_summary) =
       | Cs.Grid_serial (Grid_private_over_cap { private_bytes; _ }) -> Some private_bytes
       | _ -> None)
 
-let judge_plain_grid (m, k, n) =
+let judge_plain_grid ?bk (m, k, n) =
   let tag = Printf.sprintf "agr_g%dx%dx%d" m k n in
   let c = rect_matmul ~tag ~m ~k ~n in
   let lowering = Ll_test.captured_lowering ~name:(tag ^ "_probe") (Train.forward c) in
@@ -315,7 +314,8 @@ let judge_plain_grid (m, k, n) =
   let limits = Context.hardware_limits (Context.auto ()) in
   let _family, seeds = Autotune.family_seeding ~is_gpu:false ~is_cpu:true ~limits lowering in
   let serial_packed (sp : Autotune.sketch_params) =
-    sp.sk_mma && sp.sk_bk > 0 && (not sp.sk_hoist) && (not sp.sk_grid) && not sp.sk_pack_rest
+    sp.sk_mma && sp.sk_bk > 0 && (not sp.sk_hoist) && (not sp.sk_grid) && (not sp.sk_pack_rest)
+    && Option.value_map bk ~default:true ~f:(Int.equal sp.sk_bk)
   in
   let candidates =
     List.filter_map seeds ~f:(fun sp ->
@@ -369,11 +369,14 @@ let judge_plain_grid (m, k, n) =
       })
 
 let grid_judged =
-  (* No menu row block divides 40, 72 or 200 rows; every reduction block divides 64. At 40x64x64 the
-     [16 x 64] f32 fragment alone is the cap, so with the [16 x 16] A~ tile the geometry is over it;
-     at 200x64x32 the [16 x 32] fragment and the A~ tile fit, and the row-block launch is past
-     [cc_grid_min_updates] (at 72 rows it is not, so the loop stays serial for the floor). *)
-  lazy (List.concat_map [ (40, 64, 64); (72, 64, 32); (200, 64, 32) ] ~f:judge_plain_grid)
+  (* No menu row block divides 40, 72 or 200 rows. At 40x64x96 the [16 x 96] f32 fragment alone is
+     the cap, so with the [16 x 16] A~ tile the geometry is over it; at 200x64x32 the [16 x 32]
+     fragment and the A~ tile fit, and the row-block launch is past [cc_grid_min_updates] (at 72
+     rows it is not, so the loop stays serial for the floor). *)
+  lazy
+    (List.concat_map
+       [ (40, 64, 96); (72, 64, 32); (200, 64, 32) ]
+       ~f:(fun dims -> judge_plain_grid dims))
 
 let g_grid_of j ~f = Option.exists j.g_grid ~f
 
@@ -407,6 +410,90 @@ let () =
     (fun label ->
       p_exists label (Lazy.force grid_judged) ~f:(fun j ->
           j.g_masked && j.g_proposed && g_grid_of j ~f:pool_privatizing))
+
+let without_launch_floor f = Scripted_search.with_settings [ ("cc_grid_min_updates", "0") ] f
+
+(* Pool eligibility at 40^3 and 72^3 (gh-ocannl-2275), with the launch floor out of the way. A k
+   partition duplicates the row-block loop but leaves its A~ tile shared across segments. *)
+let () =
+  List.iter [ 40; 72 ] ~f:(fun n ->
+      let judged = lazy (without_launch_floor (fun () -> judge_plain_grid ~bk:16 (n, n, n))) in
+      let claim = Printf.sprintf "agr-grid: every proposed %d^3 bk=16 seed renders on the pool" n in
+      in_leg ~leg claim (fun label ->
+          p_all label (Lazy.force judged) ~f:(fun j ->
+              g_grid_of j ~f:(fun g ->
+                  (not j.g_proposed) || (pool_privatizing g && g.Cs.serial = 0))));
+      let witness =
+        Printf.sprintf "agr-grid: at %d^3 both k segments share scratch within the cap" n
+      in
+      in_leg ~leg witness (fun label ->
+          p_exists label (Lazy.force judged) ~f:(fun j ->
+              j.g_weighed <= forced_cap
+              && g_grid_of j ~f:(fun g ->
+                  match
+                    List.filter_map g.Cs.loops ~f:(fun e ->
+                        match e.Cs.site with
+                        | Cs.Grid_serial (Grid_local_accessed_outside tile) -> Some tile
+                        | _ -> None)
+                  with
+                  | [ full; edge ] -> String.equal full edge
+                  | _ -> false))));
+  in_leg ~leg "agr-grid: a single partial k block is proposed and renders on the pool" (fun label ->
+      let judged = without_launch_floor (fun () -> judge_plain_grid ~bk:16 (40, 12, 40)) in
+      p_exists label judged ~f:(fun j -> j.g_proposed && g_grid_of j ~f:pool_privatizing))
+
+(* The 41-row output pads at both tested block sizes. Fission exposes an actual panel Grid. The
+   32-row footprint crosses the cap only with both staging tiles and the masked fragment. *)
+let judge_conv_panel bm =
+  let name = Printf.sprintf "agr_conv_bm%d" bm in
+  let x =
+    NTDSL.init ~l:(name ^ "_x") ~prec:Ir.Ops.single ~o:[ 5; 43; 12 ]
+      ~f:(Ll_test.weighted ~weights:[| 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
+      ()
+  in
+  let w =
+    NTDSL.init ~l:(name ^ "_w") ~prec:Ir.Ops.single ~i:[ 3; 3; 12 ] ~o:[ 32 ]
+      ~f:(Ll_test.weighted ~weights:[| 2; 1; 1; 3 |] ~modulus:5 ~offset:(-2.) ~stride:1.)
+      ()
+  in
+  let%op y = x +* "|oh<+kh, ow<+kw, ic; |kh, kw, ic -> oc => |oh, ow, oc" w in
+  let comp = Train.forward y in
+  let proposed = ref false in
+  let schedule _ (seg : Ir.Low_level.optimized) =
+    Option.map (Autotune.detect_conv seg.llc) ~f:(fun site ->
+        let limits = Context.hardware_limits (Context.auto ()) in
+        let _, seeds = Autotune.family_seeding ~is_gpu:false ~is_cpu:true ~limits seg in
+        let serial =
+          List.find_exn seeds ~f:(fun sp ->
+              sp.Autotune.sk_conv && sp.sk_bm = 0 && (not sp.sk_grid) && (not sp.sk_epilogue)
+              && Option.is_none sp.sk_tile)
+        in
+        let panel = { serial with sk_bm = bm } in
+        if site.c_zeroed || not (Autotune.conv_acc_masked site panel) then
+          failwith "expected a pad-masked conv panel in a fission segment";
+        proposed := List.mem seeds panel ~equal:equal_params;
+        Autotune.sketch_schedule ~accum_prec:Ll_test.backend_accum_prec ~p:panel seg)
+  in
+  let ctx, routine =
+    Context.compile ~name
+      ~lowered_transform:(Ll_test.tuner_transform ~schedule)
+      (Context.auto ()) comp Ir.Indexing.Empty
+  in
+  Context.release ctx;
+  let grid = routine.Context.grid in
+  Stdio.eprintf "agr: conv bm=%d %s: %s (not part of the golden)\n%!" bm
+    (if !proposed then "proposed" else "refused")
+    (Cs.grid_summary_string grid);
+  (!proposed, grid)
+
+let () =
+  in_leg ~leg "agr-conv: a padded row panel within the cap is proposed and renders on the pool"
+    (fun label ->
+      let proposed, grid = without_launch_floor (fun () -> judge_conv_panel 16) in
+      p label (proposed && List.length grid.Cs.loops = 1 && pool_privatizing grid));
+  in_leg ~leg "agr-conv: a padded row panel over the cap is refused" (fun label ->
+      let proposed, grid = without_launch_floor (fun () -> judge_conv_panel 32) in
+      p label ((not proposed) && List.length grid.Cs.loops = 1 && over_cap grid))
 
 let () =
   in_leg ~leg "agr-seed: no proposed packed Grid seed renders its site serially for the floor"
