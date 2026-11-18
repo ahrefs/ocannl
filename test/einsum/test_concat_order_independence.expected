@@ -12,6 +12,28 @@ shared claim with a zero residual settles to u = 1, k = 3_bcast_if_1: true
 a later plain k keeps both concatenations' shared claim a: true
 a later plain k keeps both concatenations' shared claim h: true
 a later plain k keeps both concatenations' shared claim bcast_if_1: true
+a waiting-side k >= 5_default settles to u = 3_a, k = 5_default in every order: true
+and so does registering that store in one batch, a: true
+u = 3_a, k = 5_default is accepted when stated up front in every order: true
+a waiting-side k >= 2_default, below the sum's minimum, is refused in every order, a: true
+k >= 3_a with u >= 2_default settles to u = 1_bcast_if_1, k = 3_a in every order: true
+a waiting-side k >= 5_default settles to u = 3_h, k = 5_default in every order: true
+and so does registering that store in one batch, h: true
+u = 3_h, k = 5_default is accepted when stated up front in every order: true
+a waiting-side k >= 2_default, below the sum's minimum, is refused in every order, h: true
+k >= 3_h with u >= 2_default settles to u = 1_bcast_if_1, k = 3_h in every order: true
+a waiting-side k >= 5_default settles to u = 3_bcast_if_1, k = 5_default in every order: true
+and so does registering that store in one batch, bcast_if_1: true
+u = 3_bcast_if_1, k = 5_default is accepted when stated up front in every order: true
+a waiting-side k >= 2_default, below the sum's minimum, is refused in every order, bcast_if_1: true
+k >= 3_bcast_if_1 with u >= 2_default settles to u = 1_bcast_if_1, k = 3_bcast_if_1 in every order: true
+bounded stores whose verdict or solution depends on the order: true
+exactly eighteen bounded runs (three stores) size a component to 0: true
+each of them under a default claim, outside the rule's reach: true
+bounded accepted answers refused when stated up front, except size 0: true
+a bounded waiting side above the sum's minimum settles to its bound in every order: true
+bounded stores registered in one batch settling otherwise: true
+over 700 bounded stores are in the rule's reach, over 30 of them accepted: true
 a stride of the broadcast top settles in every order: true
 a filler stride cannot also supply a size-2 broadcast-atom claim: true
 all twelve composite-kernel stores obey the stride basis rule in every order: true

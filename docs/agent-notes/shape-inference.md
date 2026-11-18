@@ -104,9 +104,27 @@ files.
   dropping its other copy falsely refuses a later `k = 3_default`. The order-independence test
   pins both that later constraint and the open examples (`u = 1`, `k = 3_a`, and `h`). This returns
   the two rule-consistent deferrals from staging#2006's 297 newly refused stores plus one of its
-  96 inert-atom cases (`bcast_if_1` above size 1); equal solved sums still wait. This does not
-  propagate bounds through sums: adding `k >= 5_default` to the example still refuses in every
-  order, as it already did on the base (the test prints this diagnostic probe to stderr).
+  96 inert-atom cases (`bcast_if_1` above size 1); equal solved sums still wait. A use-site GLB
+  on the waiting side is the one bound carried across the sum (gh-ocannl-2268,
+  `concat_bounded_waiting`): the waiting variable is the closing one plus the sum difference, so
+  it exceeds 1, cannot be the top its bound admits, and closes to that GLB at stage 7 before the
+  closing side guesses. Adding `k >= 5_default` to the example then settles to `u = 3_a,
+  k = 5_default` in every order and batched, the answer accepted when stated first (refused in
+  all six orders on the base). The literal transfer, closing `u` at the bound shifted by the
+  difference, stays refused: the equation then sizes `k`, which takes the shared claim against
+  its own `default` GLB. It fires only above the difference plus 1, where the minimal guess of
+  `u` must miss the bound: at `k >= 3_a` the old order gives `u = 1_(bcast_if_1)`, which a bound
+  `u >= 2_default` needs (forcing `k` would give `u = 1_a`). A GLB not above the difference
+  (`k >= 2_default`) stays refused: closing `k` there would have the equation size `u` to 0,
+  which concatenation arithmetic accepts for a non-discardable component although `u = 0` stated
+  first is refused.
+  The test's bounded sub-search (gh-ocannl-2223's store with at most one bound on `k` and one on
+  `u`, sizes 2-6, every tag: 1,764 stores) measures the reach: 177 accepted on the base, 213
+  after, the 36 new all refused before, no accepted store changed. A bound on the closing side
+  stays refused unless it carries the shared claim: the equation sizes `u` with the claim, so
+  `k >= 5_default ; u >= 3_default` meets `u = 3_a` against `3_default` and is refused, as on
+  the base, though `u = 3_default, k = 5_default` is a ground answer. Several free components and
+  equal sums still wait without bounds.
 - A nonidentity plain or padded stride derives `default` from a claim-free extent
   (gh-ocannl-2245), through `stride_input_basis` in substitution and unification. Copying
   `1_(bcast_if_1)`'s tag onto size 2 created a concatenation claim from a filler: 20 of

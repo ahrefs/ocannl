@@ -6369,10 +6369,11 @@ let draw_counter_leaves ineqs env =
 (* gh-ocannl-2223: one free component on each side of a concatenation with the same solved claim is
    a closing dependency, not a basis-preserving subtraction. Keep both claims on the original
    equation. The side with the smaller solved sum waits while the other free component closes; the
-   equation then determines its size and basis. Boundary: exactly one plain variable per side, equal
-   non-default solved claims, unequal solved sums. This adds no propagation of bounds through sums:
-   the store with a waiting-side [k >= 5_default] still refuses, as on the base. The driver's
-   final-fixpoint cycle breaker remains available. *)
+   equation then determines its size and basis. Returns the waiting variable, the closing one and
+   the solved-sum difference. Boundary: exactly one plain variable per side, equal non-default
+   solved claims, unequal solved sums. A waiting-side use-site bound is the one bound carried across
+   the sum: see [concat_bounded_waiting]. The driver's final-fixpoint cycle breaker remains
+   available. *)
 let concat_closing_dependent d1 d2 =
   match (d1, d2) with
   | Concat xs, Concat ys -> (
@@ -6383,7 +6384,9 @@ let concat_closing_dependent d1 d2 =
         when String.equal bx by && not (String.equal bx default_basis) ->
           let sum_x = List.sum (module Int) sx ~f:(fun s -> s.d)
           and sum_y = List.sum (module Int) sy ~f:(fun s -> s.d) in
-          if sum_x > sum_y then Some vy else if sum_y > sum_x then Some vx else None
+          if sum_x > sum_y then Some (vy, vx, sum_x - sum_y)
+          else if sum_y > sum_x then Some (vx, vy, sum_y - sum_x)
+          else None
       | _ -> None)
   | _ -> None
 
@@ -6404,10 +6407,42 @@ let closing_dim_dependencies ineqs env =
         let d1 = subst_dim env d1 and d2 = subst_dim env d2 in
         let waiting, kernels = waiting_on_window (waiting_on_window waiting d1 d2) d2 d1 in
         let waiting =
-          match concat_closing_dependent d1 d2 with Some v -> Set.add waiting v | None -> waiting
+          match concat_closing_dependent d1 d2 with
+          | Some (v, _, _) -> Set.add waiting v
+          | None -> waiting
         in
         (waiting, kernels)
     | _ -> waiting)
+
+(* gh-ocannl-2268: the waiting side of a [concat_closing_dependent] pair with a solved use-site GLB
+   closes to that GLB at the final stage, before the closing side guesses. The sum forces it: the
+   waiting variable is the closing one plus the solved-sum difference, the closing one is at least
+   1, so the waiting one exceeds 1 and cannot be the broadcast top its bound otherwise admits. Its
+   GLB is then its only value, which is the answer the fully solved check accepts: stated up front,
+   it is accepted with the closing side taking the shared claim, as the equation then sizes it.
+   Closing the other side first, at the bound shifted by the difference, would size the waiting
+   variable through the equation, where it takes the shared claim and meets its own GLB's tag.
+
+   It fires only where the existing order must fail on size: a GLB above the difference plus 1,
+   which the closing side's minimal guess cannot reach. At exactly the difference plus 1 that guess
+   already reaches the GLB's size and keeps the closing side claim-free ([1_(bcast_if_1)]), which a
+   bound of its own may need; below it the closing side would go under 1 and the store stays refused
+   as before. Boundary: only [concat_closing_dependent]'s shape (one free variable per side, equal
+   non-default claims, unequal sums), only a GLB that is a solved size, and only a non-discardable
+   closing variable (one that may close to 0 does not force the other above 1). This is no general
+   propagation of bounds through sums: several free components, or equal sums, still wait without
+   one. *)
+let concat_bounded_waiting ineqs env =
+  List.filter_map ineqs ~f:(function
+    | Dim_eq { d1; d2; origin } -> (
+        match concat_closing_dependent (subst_dim env d1) (subst_dim env d2) with
+        | Some (waiting, closing, diff) when not (Set.mem env.discardable_vars closing) -> (
+            match find_dim env.dim_env waiting with
+            | Some (Bounds_dim { glb = Some (Dim { d; _ } as glb); _ }) when d > diff + 1 ->
+                Some (Dim_eq { d1 = Var waiting; d2 = glb; origin })
+            | _ -> None)
+        | _ -> None)
+    | _ -> None)
 
 let%debug4_sexp rec solve_inequalities ~(stage : stage)
     ?(discardable_vars : dim_var_set = dim_var_set_empty) (ineqs : constraint_ list) env :
@@ -6477,6 +6512,8 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
                 Some (Dim_eq { d1 = Var v; d2 = get_default_dim ~d:d_min (); origin })
             | _ -> None)
       in
+      (* gh-ocannl-2268: in the same pass, a bounded waiting concatenation side takes its GLB. *)
+      let fixed = concat_bounded_waiting ineqs env @ fixed in
       if List.is_empty fixed then (ineqs, env)
       else
         let ineqs, env = solve_inequalities ~stage:Stage6a (fixed @ ineqs) env in
