@@ -5861,7 +5861,14 @@ let seeded_split ~facts ~min_serial ~static_indices (opt : LL.optimized) =
    gh-ocannl-2349: the five measured gh-1479 CUDA sketches use the 4x4 calibration tile. Shared
    pricing and direct deduplication leave these scores unchanged. The gate picked the faster
    schedule in all five cells. Sketch/preset timings for a 2x2 tile, a sub-warp launch, or a site
-   where deduplication saves bytes are still open. *)
+   where deduplication saves bytes are still open.
+
+   gh-ocannl-2306: what this test seeds on CUDA decides which singles a search times there (the
+   seeded plan's [F_swap] singles, or the staffed [F_sketch] ones), and [affected] only ranks the
+   tests reading those labels as link-only. A change to what it seeds -- here, in
+   [seeded_default_gate], or in the [Cost_model] terms the score sums -- owes a CUDA run of the set
+   docs/agent-notes/scheduling-and-autotune.md derives ("A change to what the [auto] gate seeds"),
+   [model_seeded_anchor] included: its CUDA claim pins this gate's exact count on its chain. *)
 let seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices ~capacity ~cache_bandwidth
     ~issue_rate ~dram_bandwidth ~mma_rate ~device_gather_rate ~fill_model ~transaction_rate
     ~workgroup_capacity ~staged_copy_rate p pre =
