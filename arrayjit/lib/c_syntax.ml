@@ -9919,6 +9919,13 @@ module C_syntax (B : C_syntax_config) = struct
     (* gh-ocannl-1887: past the gates, which judge what the caller built, and ahead of the render
        context, so that every analysis below reads the tree that renders. *)
     let llc = collapse_exact_scopes llc in
+    (* gh-ocannl-2258: the exit gate of the guarded-read invariant ([optimize_proc] holds the entry
+       one), which [speculable_select]'s blends and [gate_entries]' hoisting rely on: it sees the
+       inliner's guarded replays, CSE's shared definitions and what a schedule transform builds. On
+       the tree that renders, after the collapse (a single-assignment scope renders inline, where a
+       gate's test short-circuits it) and ahead of the launch-extent guards (which only add
+       [If]s). *)
+    Low_level.validate_guarded_reads ~site:"C_syntax.compile_proc" ~static_indices:idx_params llc;
     (* gh-ocannl-2213: again, on the tree that renders, in the order it renders: an explicit
        declaration must precede its accesses across this backend's hoisted definitions too, and a
        conditional definition's declarations stay inside its [if]. After the collapse, whose scopes

@@ -958,7 +958,7 @@ test/operations/virtual_rejection_boundary.ml [through Ll_test.execute; through 
 test/operations/virtual_shared_loop.ml [through Ll_test.execute; run by @test/operations/runtest-virtual_shared_loop]
 test/operations/virtual_uncaptured_loop.ml [through Ll_test.execute; run by @test/operations/runtest-virtual_uncaptured_loop]
 test/operations/wait_bound_declines.ml [prelowered compile; run by @test/operations/runtest-wait_bound_declines]
-test/operations/where_arm_scopes.ml [through Ll_test.execute; run by @test/operations/runtest-where_arm_scopes]
+test/operations/where_arm_scopes.ml [through Ll_test.execute; through Ll_test.link; through Ll_test.optimize_and_execute; run by @test/operations/runtest-where_arm_scopes]
 test/operations/where_scope_generator.ml [through Ll_test.execute; run by @test/operations/runtest-where_scope_generator, @test/operations/slow-where_scope_generator-widen]
 test/operations/winograd_conv.ml [through Ll_test.optimize_and_execute; run by @test/operations/runtest-winograd_conv]
 test/operations/zero_elision.ml [through Ll_test.link; run by @test/operations/runtest-zero_elision]

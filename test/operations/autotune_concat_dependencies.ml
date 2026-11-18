@@ -10,7 +10,8 @@ module LL = Ir.Low_level
 let () =
   let open Ll_test in
   let node = node_factory ~first_id:118700 ~dims:[| 8; 8 |] () in
-  let d = node "concat_d" and a = node "concat_a" and b = node "concat_b" in
+  let d = node "concat_d" and a = node ~dims:[| 8; 128 |] "concat_a" in
+  let b = node ~dims:[| 128; 8 |] "concat_b" in
   let i = sym () and j = sym () and k = sym () in
   let di = [| iter i; iter j |] in
   let nest ~di ~ai =

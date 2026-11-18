@@ -16,7 +16,13 @@
    [if] or [else] block of its statement. A row whose definition must run unconditionally -- a read
    of its local outside the arm, the same scope in both arms, an unconditional reader -- reads in
    range, and its claim is the opposite one. The cross-statement hoist rows run
-   [Low_level.hoist_cross_statement_cse] and [eliminate_common_subexpressions] themselves. *)
+   [Low_level.hoist_cross_statement_cse] and [eliminate_common_subexpressions] themselves.
+
+   The gh-ocannl-2258 rows are the shapes the renderer cannot protect -- a far read whose only
+   protection is a gate (which guards no definition) or a blendable value select, or a definition
+   also read outside its arm -- refused by [Low_level.validate_guarded_reads] at compile and never
+   launched, each beside a twin that runs: the same program reading in range, and the protections
+   the check credits (an index select inside or around the gate, an [If]). *)
 
 open Base
 open Ll_test
@@ -737,6 +743,186 @@ let row_condition_keys () =
         Stdio.eprintf "%s: %s\n%!" name message;
         p (name ^ ": scope-order check accepts spelled-alike conditions") false)
 
+(* === gh-ocannl-2258: a read no index guard protects where it renders is refused === *)
+
+(* Claims the IR check and the compile gate refuse [llc], naming each of [naming]; never launched,
+   so a missing refusal fails a claim rather than faulting. The text goes to stderr: it spells scope
+   ids, minted from a process-wide counter. *)
+let refused_row ~name ~inputs ~outputs ~naming llc =
+  List.iter (inputs @ outputs) ~f:materialize;
+  p
+    (name ^ ": the IR check names the unprotected read")
+    (Option.exists (LL.unguarded_read_violation llc) ~f:(fun msg ->
+         String.is_substring msg ~substring:"(gh-ocannl-2258)"));
+  let msg =
+    match link ~name (optimize_scoped ~name ~raw:(raw ~inputs ~outputs) llc) with
+    | _ -> "compiled"
+    | exception Invalid_argument msg -> msg
+  in
+  Stdio.eprintf "%s (not part of the golden): %s\n%!" name msg;
+  p
+    (name ^ ": the compile gate refuses it")
+    (String.is_prefix msg ~prefix:"C_syntax.compile_proc: a read of ");
+  p_all ~min:1 (name ^ ": the refusal names the read and what fails to protect it") naming
+    ~f:(fun substring -> String.is_substring msg ~substring)
+
+(* A data condition, [m[i] < 1], which mentions no index: blendable at [single]. *)
+let data_cond m i = cmp_at single Ops.Cmplt (get m [| iter i |]) (c 1.)
+let data_select m i a b = LL.Ternop (Ops.Where, (data_cond m i, single), (a, single), (b, single))
+let gate_idx i e = binop Ops.Relu_gate (binop Ops.Sub (c 1.) (embed i)) e
+
+(* The issue's program, [relu_gate(1 - i, (m < 1 ? 3 : s))] with [s] in range at [i = 0] only, the
+   one iteration the gate admits: the blended select holds [s]'s definition at no condition, so it
+   renders ahead of the statement, outside the gate's test (a SIGBUS on cc). Its twin, [s] in range
+   everywhere, runs. *)
+let row_gate_blend () =
+  let name = "was_gate_blend" in
+  let x = mk "was_gate_blend_x" and m = mk "was_gate_blend_m" in
+  let out = mk ~dims:[| n |] "was_gate_blend_out" in
+  let program at =
+    loop (fun i ->
+        let _, s = sum_scope x ~at:(at i) in
+        set_at out (iter i) (gate_idx i (data_select m i (c 3.) s)))
+  in
+  refused_row ~name ~inputs:[ x; m ] ~outputs:[ out ]
+    (program (off_at ~pass:0))
+    ~naming:
+      [
+        "a read of was_gate_blend_x can be out of range";
+        "a backend may evaluate both arms (a blend)";
+        "Relu_gate";
+        "a gate guards no definition";
+      ];
+  let name = "was_gate_blend_in_range" in
+  let got, _ = run_row ~name ~inputs:[ x; m ] ~outputs:[ out ] (program in_range) in
+  (* [m] holds [xs], never below 1: the select takes the scope. *)
+  values name got [ [| sum2 0; 0.; 0.; 0. |] ]
+
+(* [relu_gate(1 - i, s)]: the gate is the scope's only protection. *)
+let row_gate_direct () =
+  let name = "was_gate_direct" in
+  let x = mk "was_gate_direct_x" and out = mk ~dims:[| n |] "was_gate_direct_out" in
+  refused_row ~name ~inputs:[ x ] ~outputs:[ out ]
+    (loop (fun i ->
+         let _, s = sum_scope x ~at:(off_at ~pass:0 i) in
+         set_at out (iter i) (gate_idx i s)))
+    ~naming:[ "a read of was_gate_direct_x"; "Relu_gate"; "a gate guards no definition" ]
+
+(* [(m < 1 ? 3 : s)] with no gate at all: a blend runs both arms. *)
+let row_blend_off () =
+  let name = "was_blend_off" in
+  let x = mk "was_blend_off_x" and m = mk "was_blend_off_m" in
+  let out = mk ~dims:[| n |] "was_blend_off_out" in
+  refused_row ~name ~inputs:[ x; m ] ~outputs:[ out ]
+    (loop (fun i ->
+         let _, s = sum_scope x ~at:(off_at ~pass:0 i) in
+         set_at out (iter i) (data_select m i (c 3.) s)))
+    ~naming:[ "a read of was_blend_off_x"; "a backend may evaluate both arms (a blend)" ]
+
+(* [(i < 1 ? s : 0) + s'], [s'] a read of [s]'s local outside the arm, as the CSE leaves a second
+   alpha-equal copy: the definition runs wherever its use does, unprotected. *)
+let row_unprotected_use () =
+  let name = "was_unprotected_use" in
+  let x = mk "was_unprotected_use_x" and out = mk ~dims:[| n |] "was_unprotected_use_out" in
+  refused_row ~name ~inputs:[ x ] ~outputs:[ out ]
+    (loop (fun i ->
+         let id, s = sum_scope x ~at:(off_at ~pass:0 i) in
+         set_at out (iter i) (add (where_ (lt (embed i) (ic 1)) s (c 0.)) (LL.Get_local id))))
+    ~naming:[ "a read of was_unprotected_use_x"; "in the body of local scope" ]
+
+(* The protections the check credits, each run: [relu_gate(m, (i < 1 ? s : 3))], [(i < 1 ?
+   relu_gate(m, s) : 3)], and [if (i < 1) out = s]. *)
+let row_protected () =
+  let x = mk "was_protected_x" and m = mk "was_protected_m" in
+  let gate_m i e = binop Ops.Relu_gate (get m [| iter i |]) e in
+  List.iter
+    [
+      ( "was_protected_in_gate",
+        fun out i s -> set_at out (iter i) (gate_m i (where_ (lt (embed i) (ic 1)) s (c 3.))) );
+      ( "was_protected_around_gate",
+        fun out i s -> set_at out (iter i) (where_ (lt (embed i) (ic 1)) (gate_m i s) (c 3.)) );
+      ("was_protected_if", fun out i s -> if_idx (lt (embed i) (ic 1)) (set_at out (iter i) s));
+    ]
+    ~f:(fun (name, store) ->
+      let out = mk ~dims:[| n |] (name ^ "_out") in
+      let llc =
+        loop (fun i ->
+            let _, s = sum_scope x ~at:(off_at ~pass:0 i) in
+            store out i s)
+      in
+      p (name ^ ": the IR check accepts it") (Option.is_none (LL.unguarded_read_violation llc));
+      let got, _ = run_row ~name ~inputs:[ x; m ] ~outputs:[ out ] llc in
+      (* [m] holds [xs], positive: the gate passes. *)
+      let rest = if String.is_suffix name ~suffix:"_if" then sentinel else 3. in
+      values name got [ [| sum2 0; rest; rest; rest |] ])
+
+(* [(i < 1 ? s : 0) + r], [r]'s body reading [s]'s local only under [if (i < 1)]: the renderer runs
+   a definition wherever a body reading it runs, whatever guards sit inside that body, so [s] runs
+   unconditionally. *)
+let row_body_reader_guard () =
+  let name = "was_body_reader_guard" in
+  let x = mk "was_body_reader_guard_x" and out = mk ~dims:[| n |] "was_body_reader_guard_out" in
+  refused_row ~name ~inputs:[ x ] ~outputs:[ out ]
+    (loop (fun i ->
+         let sid, s = sum_scope x ~at:(off_at ~pass:0 i) in
+         let r = LL.get_scope (local_node ()) in
+         let reader =
+           scope_of r
+             (seq
+                (LL.Set_local (r, c 0.))
+                (if_idx (lt (embed i) (ic 1)) (LL.Set_local (r, LL.Get_local sid))))
+         in
+         set_at out (iter i) (add (where_ (lt (embed i) (ic 1)) s (c 0.)) reader)))
+    ~naming:[ "a read of was_body_reader_guard_x"; "is read" ]
+
+(* [relu_gate(1 - i, s)], [s] a single assignment reading [x] in range at [i = 0] only: the collapse
+   renders it inline, where the gate's test short-circuits it, so the check on the rendered tree
+   accepts it (with routine logging off), and it runs. *)
+let row_gate_collapsed () =
+  let name = "was_gate_collapsed" in
+  let x = mk "was_gate_collapsed_x" and out = mk ~dims:[| n |] "was_gate_collapsed_out" in
+  let llc =
+    loop (fun i ->
+        let id = LL.get_scope (local_node ()) in
+        let s = scope_of id (LL.Set_local (id, get x [| aff [ (far, i) ] 0 |])) in
+        set_at out (iter i) (gate_idx i s))
+  in
+  let got, _ = run_row ~name ~inputs:[ x ] ~outputs:[ out ] llc in
+  values name got [ [| xs.(0); 0.; 0.; 0. |] ]
+
+(* The entry gate ([Low_level.optimize_proc]), on hand-built trees that go through [optimize]
+   themselves, where the rows above swap theirs in after it: [relu_gate(1 - i, s)] with a two-step
+   [s] is refused there too, and the single-assignment [s] of [row_gate_collapsed], which the
+   collapse renders inline behind the gate's test, is accepted there as at compile, and runs. *)
+let row_entry_gate () =
+  let name = "was_entry_direct" in
+  let x = mk "was_entry_direct_x" and out = mk ~dims:[| n |] "was_entry_direct_out" in
+  List.iter [ x; out ] ~f:materialize;
+  let llc =
+    loop (fun i ->
+        let _, s = sum_scope x ~at:(off_at ~pass:0 i) in
+        set_at out (iter i) (gate_idx i s))
+  in
+  let msg = match optimize ~name llc with _ -> "optimized" | exception Invalid_argument m -> m in
+  Stdio.eprintf "%s (not part of the golden): %s\n%!" name msg;
+  p
+    (name ^ ": the entry gate refuses it, naming the read")
+    (String.is_prefix msg ~prefix:"Low_level.optimize_proc: a read of was_entry_direct_x ");
+  let name = "was_entry_collapsed" in
+  let x = mk "was_entry_collapsed_x" and out = mk ~dims:[| n |] "was_entry_collapsed_out" in
+  List.iter [ x; out ] ~f:materialize;
+  let llc =
+    loop (fun i ->
+        let id = LL.get_scope (local_node ()) in
+        let s = scope_of id (LL.Set_local (id, get x [| aff [ (far, i) ] 0 |])) in
+        set_at out (iter i) (gate_idx i s))
+  in
+  p
+    (name ^ ": the entry view credits the single assignment as inline")
+    (Option.is_none (LL.unguarded_read_violation ~inline_single_assignments:true llc));
+  let _, got = optimize_and_execute ~name llc ~seed:[ (x, xs); (out, blank n) ] ~read:[ out ] in
+  values name got [ [| xs.(0); 0.; 0.; 0. |] ]
+
 let () =
   row_condition_keys ();
   row_emission_order ();
@@ -758,4 +944,12 @@ let () =
   row_guard_cycle ();
   row_mixed_cycle ();
   row_value_test_range ();
-  row_value_test_nested ()
+  row_value_test_nested ();
+  row_gate_blend ();
+  row_gate_direct ();
+  row_blend_off ();
+  row_unprotected_use ();
+  row_protected ();
+  row_body_reader_guard ();
+  row_gate_collapsed ();
+  row_entry_gate ()

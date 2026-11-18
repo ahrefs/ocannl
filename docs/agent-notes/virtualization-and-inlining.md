@@ -86,7 +86,20 @@ files.
   those dropped index guards (Codex review, rounds 2-6). Under a blend (cc and HIP at a
   float precision, `speculable_select`, whose conditions never mention an index) both arms run by
   contract, so nothing is guarded and no branch is added; a gate's operand keeps its hoisted
-  definitions too (a value test, never a range guard). `hoist_cross_statement_cse` lifts a shared
+  definitions too (a value test, never a range guard). Both licences rest on lowering's invariant
+  that a read able to leave its node sits under an index guard of its own, which
+  `Low_level.validate_guarded_reads` checks at both pipeline ends (gh-ocannl-2258): a `Get` whose
+  index the loop ranges PROVABLY place outside the node's buffer (indices are buffer coordinates,
+  margins included) must sit under an `If` or a `Where` arm testing an index (reading no scope
+  local), or, inline only, under any select or gate whose condition mentions an index (it never
+  blends; a gate only with routine logging off). A gate guards no definition and a value condition
+  guards nothing; a definition is as protected as its least protected occurrence (CSE's
+  `Get_local` uses included, a read inside a body counting wherever that body runs). The exit gate
+  reads the collapsed tree; the entry gate judges a single assignment no local reads as its value,
+  so the two agree on what the collapse inlines. Protection is structural (a wrong-polarity guard
+  passes), and unknown coordinates, `Get_dynamic` and merge buffers get no verdict.
+  `where_arm_scopes` pins the refused shapes (never launched) beside running twins, at both
+  gates. `hoist_cross_statement_cse` lifts a shared
   group only when some member sits outside every `Where` arm, since its lifted body runs
   unconditionally. `Access_fold` keeps `gated` through a `Where` arm's scope bodies (its `arm`
   flag; a gate's still clears it), which the prologue's gated-node decline and the cost floor read.
@@ -142,9 +155,16 @@ files.
   compiler's undeclared identifier. It follows the rendering on both sides (a projection's
   discarded operand neither reads nor binds). For a `Declare_local` or scan state it also refuses
   a binder the access cannot see or that renders after it (gh-ocannl-2050, gh-ocannl-2100; the
-  ancestry rule is in lowering-and-analysis.md); a `Local_scope` binder is held to existence only,
-  since `pp_local_defs` decides its order; `local_binder_gate` pins the refusals beside
-  the same routines bound and executed.
+  ancestry rule is in lowering-and-analysis.md). A `Local_scope` binder is held to CONTAINMENT
+  only (gh-ocannl-2258), on the collapsed tree's `Emitted` run (a single-assignment scope collapses
+  into an expression and stops enclosing anything, so the operand-order run keeps existence only):
+  the scope bodies enclosing it must enclose the access, since the renderer
+  declares a definition inside the C block of each body holding it, wherever `pp_local_defs`
+  orders it. That is not gh-ocannl-584's reverted ordering rule, which had to re-derive the
+  emission order: no placement the renderer chooses moves a definition out of its body, only IR
+  passes do (CSE never makes such a read: it forgets a body's definitions on exit; the hoist
+  rebinds through `Declare_local`). Order and blocks within one body stay unchecked.
+  `local_binder_gate` pins the refusals beside the same routines bound and executed.
   `Low_level.validate_scope_bodies` enforces it at BOTH ends of the pipeline: `optimize_proc` on the
   way in (ahead of the analysis cache, so a digest hit cannot skip it — and before the hoist can
   launder a body write into a top-level statement that no later gate would recognize) and

@@ -52,8 +52,11 @@
    body, of a local defined inside it: [Low_level.eliminate_common_subexpressions] restores its
    table after each [Local_scope] body ("inner definitions must not leak to sibling subtrees"), so
    the pipeline never produces one, and the renderer declares such a local inside the body's block
-   (cc: "undeclared identifier"). A pass that produced either shape would need the renderer to
-   change with it.
+   (cc: "undeclared identifier"). Both are now refused by name at compile (gh-ocannl-2258):
+   [Low_level.validate_guarded_reads] refuses a read the loop ranges place outside its node where no
+   index guard protects it (a gate guards no definition, a value condition may blend), and
+   [Low_level.validate_local_binders] a local read outside the scope bodies enclosing its
+   definition; [where_arm_scopes] and [local_binder_gate] pin the refusals.
 
    Programs are compiled in batches, one row of [out] each; a batch the compile refuses is retried
    one program at a time, and a program the compile refuses is a finding. A finding prints [FINDING

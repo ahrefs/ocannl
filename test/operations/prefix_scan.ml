@@ -336,7 +336,9 @@ let build ?(nr = n) ?(nq = n) ?(rws = 2) ?(range_prec = Ir.Ops.single) ?(order =
   let ri = mkr "ri" in
   let rq = mkr ~dims:[| nq |] "rq" in
   let m = mk ~dims:(if mask_reads_row then [| rws; nr; nq |] else [| nr; nq |]) "m" in
-  let v = mk ~dims:[| rws; Int.max nr nq |] "v" in
+  (* Room for a shifted payload's reads: the composed form's mask is a value, which guards no range
+     (gh-ocannl-2258), so its reads stay in the buffer as lowering would size it. *)
+  let v = mk ~dims:[| rws; Int.max nr nq + payload_shift |] "v" in
   let y = B.node_factory ~prec:y_prec ~first_id:(base + 15) ~dims:[| rws; nq |] () "y" in
   List.iter [ v; y ] ~f:B.materialize;
   let k = B.sym () and k' = B.sym () in
@@ -408,15 +410,16 @@ let hand_built ~name ~op_fn ~fill ?(inclusive = true) ?(direction = `Prefix) ?nr
   let rws = Option.value rws ~default:2 and len = Option.value nr ~default:n in
   let llc, v, y = build ?nr ?nq:nr ~rws ?order ~payload_shift ~mask ~op ~fill ~operand () in
   let rewritten = Prefix_scan.rewrite llc in
-  let seed = [ (v, payload ~rws ~len); (y, B.blank (rws * len)) ] in
+  let width = len + payload_shift in
+  let seed = [ (v, payload ~rws ~len:width); (y, B.blank (rws * len)) ] in
   let _, composed = B.optimize_and_execute ~name:(name ^ "_comp") llc ~seed ~read:[ y ] in
   let o, scanned = B.optimize_and_execute ~name:(name ^ "_scan") rewritten ~seed ~read:[ y ] in
   let composed = List.hd_exn composed and scanned = List.hd_exn scanned in
-  let pay = payload ~rws ~len in
+  let pay = payload ~rws ~len:width in
   let want =
     Array.concat
       (List.init rws ~f:(fun row ->
-           let xs = Array.sub pay ~pos:(row * len) ~len in
+           let xs = Array.sub pay ~pos:(row * width) ~len:width in
            let xs =
              Array.init len ~f:(fun r ->
                  if r + payload_shift < len then xs.(r + payload_shift) else 0.)
