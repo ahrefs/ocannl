@@ -2239,7 +2239,10 @@ uniform random initialization</li>
 <li><strong>Declaration with value initialization</strong>:
 <code>{ tensor_name = value }</code> where value can be:
 <ul>
-<li>A scalar: <code>{ x = 5.0 }</code> or <code>{ y = 42 }</code></li>
+<li>A scalar: <code>{ x = 5.0 }</code> or <code>{ y = 42 }</code>, or
+one computed in OCaml, embedded with <code>!.</code> (a float) or
+<code>!..</code> (an integer): <code>{ x = !. scale }</code>,
+<code>{ y = !.. n }</code></li>
 <li>A list/array: <code>{ weights = [1.0; 2.0; 3.0] }</code></li>
 <li>An initialization function: <code>{ z = uniform () }</code></li>
 </ul></li>
