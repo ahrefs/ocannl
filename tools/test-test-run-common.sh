@@ -1038,9 +1038,23 @@ subreaper_skip_reason() { # PYTHON PROBE
 }
 subreaper_write() { # FILE
 cat >"$1" <<'SUBREAPER'
-import ctypes, os, signal, sys
-# The nearest subreaper ancestor inherits every orphan below it; this one waits
-# for its own child only, as a container's PID 1 that reaps nothing would.
+import ctypes, os, signal, sys, time
+
+def adopted_children():
+    # /proc/<pid>/stat is the census. Read state, PPID and PGID after the
+    # parenthesized comm, which may itself contain spaces and parentheses.
+    for d in os.listdir('/proc'):
+        if not d.isdigit():
+            continue
+        try:
+            with open('/proc/%s/stat' % d, 'rb') as f:
+                fields = f.read().rsplit(b')', 1)[1].split()
+        except OSError:
+            continue
+        if int(fields[1]) == os.getpid():
+            yield int(d), fields[0].decode('ascii'), int(fields[2])
+
+# While the subject runs, retain its orphans as a non-reaping PID 1 would.
 if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
     sys.exit(97)
 if len(sys.argv) == 1:
@@ -1049,35 +1063,31 @@ pid = os.fork()
 if pid == 0:
     os.execvp(sys.argv[1], sys.argv[1:])
 _, st = os.waitpid(pid, 0)
-held = []
-for d in os.listdir('/proc'):
-    if not d.isdigit():
-        continue
-    try:
-        with open('/proc/%s/stat' % d) as f:
-            fields = f.read().rsplit(')', 1)[1].split()
-    except OSError:
-        continue
-    if int(fields[1]) == os.getpid():
-        held.append((int(d), fields[0], fields[2]))
 with open(os.environ['SUBREAPER_RECORD'], 'a') as f:
-    for p, state, pgid in held:
+    for p, state, pgid in adopted_children():
         f.write('%d %s %s\n' % (p, state, pgid))
-for p, state, _ in held:
-    if state != 'Z':
-        try:
-            os.kill(p, signal.SIGKILL)
-        except OSError:
-            pass
-# Recorded, it reaps everything it adopted: under a PID 1 that reaps nothing
-# (where this leg matters most) its zombies would otherwise outlive the harness.
-while True:
+
+# Killing an adopted parent can hand us more live children. Only waitpid
+# reporting ECHILD establishes that cleanup is done; the census can miss a
+# concurrent adoption. Give cleanup its own bound after recording the leak.
+deadline = time.monotonic() + 5
+while time.monotonic() < deadline:
     try:
-        os.waitpid(-1, 0)
+        reaped, _ = os.waitpid(-1, os.WNOHANG)
     except ChildProcessError:
         break
-    except InterruptedError:
+    if reaped:
         continue
+    for p, state, _ in adopted_children():
+        if state != 'Z':
+            try:
+                os.kill(p, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    time.sleep(0.01)
+else:
+    print('subreaper: timed out draining adopted children', file=sys.stderr)
+    sys.exit(98)
 sys.exit(os.WEXITSTATUS(st) if os.WIFEXITED(st) else 128 + os.WTERMSIG(st))
 SUBREAPER
 }

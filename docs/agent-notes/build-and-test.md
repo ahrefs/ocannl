@@ -1522,6 +1522,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   (`left only zombies ... inert, not reaped`), `run` keeps its verdict, and the stand-in must have
   held a zombie and nothing live; taking out the iteration shell's reaping trap, or that branch,
   makes the set refused (exit 2) under the same stand-in.
+  Digest leg 85d pins the stand-in's cleanup with a live adopted parent and a
+  live descendant still below it. The first census records only the parent.
+  A one-shot kill followed by blocking `waitpid(-1, 0)` waited for the leaf's
+  10-second fallback exit. Cleanup now reaps without blocking, rescans for
+  newly adopted live children, and waits for `ECHILD` before returning the
+  subject's verdict. The census stays a pre-cleanup snapshot. A drain that
+  cannot finish within five seconds reports a cleanup error (exit 98).
 - Lifecycle leg 124a (gh-ocannl-2261) runs the whole keeper collision leg under the same
   subreaper so adopted zombies survive from query exit through recovery. Its adoption census
   must contain a zombie and no live process. Each keeper's start token must disappear before

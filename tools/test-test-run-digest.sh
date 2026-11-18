@@ -15,7 +15,7 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
-# Groups: #repeat (9-25, 38, 83, 85, 84), #digest (35, 36, 87, 68, 69, 71, 72, 73, 80, 92), #fresh (81), #hermetic (70).
+# Groups: #repeat (9-25, 38, 83, 85-85d, 84), #digest (35, 36, 87, 68, 69, 71, 72, 73, 80, 92), #fresh (81), #hermetic (70).
 #
 # Legs:
 #   9. `repeat` forces and preserves three identical dune runs while holding the
@@ -72,7 +72,8 @@
 #      environment it compares leaves out none of the runner's own variables.
 #  85 sits after leg 83 (not applicable off Linux, gh-ocannl-1930: the
 #      stand-in is a Linux facility, and so is the PID 1 it stands in for;
-#      85b checks the kernel probe, 85c checks missing-capability diagnostics): under a stand-in
+#      85b checks the kernel probe, 85c checks missing-capability diagnostics,
+#      and 85d checks cleanup after a new adoption): under a stand-in
 #      for a PID 1 that reaps no orphans -- a child subreaper that waits for its own child only --
 #      the zombie-only groups `repeat` and `run` leave are read as gone, not
 #      refused: a capped set keeps TIMEOUT, a GPU set passes through the
@@ -2170,6 +2171,76 @@ leg_85c() {
     "missing=$missing; refused=$refused; failed=$failed; available=$available"
 }
 harness_leg_run '85c: subreaper skip diagnostics name the missing capability #repeat' leg_85c
+
+# The subject exits only after its grandchild has forked a live child. The
+# first census can see only the parent of that leaf; killing the parent makes
+# the leaf eligible for cleanup. Both can exit on their own if cleanup fails.
+leg_85d() {
+  local label='subreaper drains a live descendant adopted during cleanup'
+  local python why prefix=$TMP/85d rc=0 parent parent_token leaf leaf_token
+  if [ "$(subreaper_kernel_probe uname)" = absent ]; then
+    harness_not_applicable "this kernel is $(uname -s), not Linux: no child subreaper"
+    return
+  fi
+  python=$(command -v python3 || :)
+  why=$(subreaper_skip_reason "$python" "$reap_stub")
+  if [ -n "$why" ]; then
+    skip "$label" "$why"
+    return
+  fi
+  cat >"$prefix.py" <<'TREE' || { harness_abandon "cannot write $prefix.py"; return; }
+import os, subprocess, sys, time
+
+prefix, bash, token_reader = sys.argv[1:]
+
+def identity(pid):
+    token = subprocess.check_output(
+        [bash, '-c', '. "$1" && ps_token "$2"', '85d-token', token_reader, str(pid)]
+    ).decode('ascii').strip()
+    if not token:
+        raise RuntimeError('no start token for PID %d' % pid)
+    return pid, token
+
+read, write = os.pipe()
+if os.fork() == 0:
+    os.close(read)
+    leaf = os.fork()
+    if leaf == 0:
+        with open(prefix + '.pids', 'w') as f:
+            print(*identity(os.getppid()), *identity(os.getpid()), file=f)
+        os.write(write, b'1')
+        os.close(write)
+        # Give the stand-in time to drain; leave evidence and exit if it stalls.
+        time.sleep(10)
+        with open(prefix + '.expired', 'w'):
+            pass
+        os._exit(0)
+    os.close(write)
+    os.waitpid(leaf, 0)
+    os._exit(0)
+os.close(write)
+sys.exit(23 if os.read(read, 1) == b'1' else 1)
+TREE
+  : >"$prefix.held"
+  # Independently cap the stand-in so a broken drain cannot stop the harness.
+  SUBREAPER_RECORD=$prefix.held "$python" -c '
+import subprocess, sys
+sys.exit(subprocess.run([sys.executable] + sys.argv[1:], timeout=15).returncode)
+' "$reap_stub" "$python" "$prefix.py" "$prefix" "$BASH" "$TMP/ps_token.sh" >"$prefix.log" 2>&1 || rc=$?
+  if ! read -r parent parent_token leaf leaf_token <"$prefix.pids" ||
+     [ -z "$parent_token" ] || [ -z "$leaf_token" ]; then
+    report 1 "$label" "the tree did not report both identities (exit $rc): $(cat "$prefix.log")"
+  elif [ "$rc" = 23 ] && [ ! -e "$prefix.expired" ] &&
+       grep -Eq "^$parent [^Z] [0-9]+$" "$prefix.held" &&
+       ! grep -q "^$leaf " "$prefix.held" &&
+       [ "$(ps_token "$parent")" != "$parent_token" ] &&
+       [ "$(ps_token "$leaf")" != "$leaf_token" ]; then
+    report 0 "$label"
+  else
+    report 1 "$label" "exit $rc, parent $parent, leaf $leaf, held: $(cat "$prefix.held"); leaf expiry: $([ -e "$prefix.expired" ] && echo yes || echo no); $(cat "$prefix.log")"
+  fi
+}
+harness_leg_run '85d: subreaper drains new adoptees after killing their parent #repeat' leg_85d
 
 # ---------------------------------------------------------------------------
 # Leg 84: repeat --direct builds once and replays the rules (gh-ocannl-1377)
