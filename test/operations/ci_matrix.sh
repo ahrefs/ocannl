@@ -12,6 +12,9 @@
 # commands after the target build in its own step. Calls into scripts/actions
 # (even scripts known to call dune) are outside this check; their bodies are not read.
 # Named legs are independent; shared readers/setup run before each selected leg.
+# The renamed-gate fixture reads only top-level literal `harness_leg_run 'name'
+# run_contract` lines with lowercase, digit and hyphen names, and replaces one
+# such gate and (in its control only) the literal Python refusal in a private copy.
 # ocannl-harness: standalone
 # Usage: test/operations/ci_matrix.sh [--only REGEX|--list-legs|--keep|--help]
 set -eu
@@ -1432,6 +1435,43 @@ elif leg == 'disk-watchdog':
             ok = False
         assert not ok, 'accepted mutant: ' + label
         print('PASS rejected mutant: disk watchdog with', label)
+elif leg == 'unknown-contract':
+    original = (root / 'test/operations/ci_matrix.sh').read_text()
+    gates = list(re.finditer(r"^harness_leg_run '([a-z][a-z0-9-]*)' run_contract$", original, re.M))
+    gate = next((gate for gate in gates if gate[1] != leg), None)
+    assert gate is not None, 'no contract gate in the supported literal form'
+    name = gate[1] + '-missing-contract'
+    assert all(other[1] != name for other in gates), 'renamed contract gate already exists: ' + name
+    renamed = original[:gate.start(1)] + name + original[gate.end(1):]
+
+    private = Path(sys.argv[2]) / 'renamed-gate'
+    copy = private / 'test/operations/ci_matrix.sh'
+    copy.parent.mkdir(parents=True)
+    for dependency in ('.github', 'scripts', 'tools'):
+        (private / dependency).symlink_to(root / dependency, target_is_directory=True)
+
+    diagnostic = 'AssertionError: unknown CI contract leg: ' + name
+
+    def observe(body):
+        copy.write_text(body)
+        result = subprocess.run([sys.argv[5], str(copy), '--only', f'^{name}$'],
+                                env=dict(os.environ, PYTHON_COLORS='0'),
+                                capture_output=True, text=True, timeout=15)
+        ran = [line for line in result.stdout.splitlines() if line.startswith('  RAN   ')]
+        assert ran == ['  RAN   ' + name], (result.returncode, result.stdout, result.stderr)
+        refused = result.returncode == 1 and diagnostic in result.stderr.splitlines()
+        return refused, result
+
+    refused, result = observe(renamed)
+    assert refused, (result.returncode, result.stdout, result.stderr)
+    print(f'PASS renamed gate: exit {result.returncode}, {diagnostic}')
+
+    guard = "    raise AssertionError('unknown CI contract leg: ' + leg)"
+    assert renamed.splitlines().count(guard) == 1, 'unknown-contract guard missing or duplicated'
+    refused, result = observe(renamed.replace(guard + '\n', '    pass\n', 1))
+    assert not refused and result.returncode == 0 and diagnostic not in result.stderr.splitlines(), (
+        result.returncode, result.stdout, result.stderr)
+    print(f'PASS rejected guard removal for {name}: exit {result.returncode}, diagnostic absent')
 else:
     raise AssertionError('unknown CI contract leg: ' + leg)
 PY
@@ -1439,7 +1479,7 @@ PY
 run_contract() {
   local rc=0
   python3 "$TMP/contracts.py" "$root/.github/workflows/ci.yml" "$TMP" \
-    "$("$root/tools/ci-shard.sh" aliases)" "${harness_leg_current}" || rc=$?
+    "$("$root/tools/ci-shard.sh" aliases)" "${harness_leg_current}" "$BASH" || rc=$?
   report "$rc" "${harness_leg_current} controls"
 }
 
@@ -1453,4 +1493,5 @@ harness_leg_run 'depexts' run_contract
 harness_leg_run 'weigh' run_contract
 harness_leg_run 'dispatch-guard' run_contract
 harness_leg_run 'disk-watchdog' run_contract
+harness_leg_run 'unknown-contract' run_contract
 finish
