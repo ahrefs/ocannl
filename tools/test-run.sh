@@ -89,9 +89,19 @@
 #
 # `prepush --since BASE` (gh-ocannl-1829) is the pre-push run as one command:
 # `affected --since BASE`'s default list (link-only aliases included) without
-# its `slow-` and `train-` members, run exactly
-# as `run [OPTIONS] --targets-file LIST [build DUNE OPTIONS...]` would run it
-# (the same verdict, digest and exit status). `--start` uses `start` instead;
+# its `slow-` and `train-` members, handed to one Dune build via
+# `run [OPTIONS] --targets-file LIST [build DUNE OPTIONS...]` (one verdict,
+# digest and exit status). For selected scans, prepush enables Dune's
+# dependency paths. Attached prepush, wait and
+# running status report the first matching failure and its log as soon as
+# Dune reports it. The notice is advisory and follows Dune's error timing,
+# including an explicit `--error-reporting=deterministic`.
+# The membership reader accepts one top-level scans alias in
+# test/operations/dune with literal relative per-test alias dependencies.
+# The log reader accepts only Dune's column-one `-> required by alias` lines
+# naming an exact selected member. Other membership shapes, other diagnostics
+# and explicit build roots leave the ordinary verdict as the only report.
+# `--start` uses `start` instead;
 # follow a successful launch with `wait last` or `wait DIR`. An empty kept
 # list exits 2: nothing started, so there is no run to wait for. It cannot be
 # combined with `--list`. No per-PR CI job runs either family: the nightly
@@ -2966,6 +2976,7 @@ new_run() {
     { perl -e "$proc_table_perl" chain 2>/dev/null || :; } >"$run_dir/launchers" &&
     record_checkout &&
     { [ -z "${pp_scope:-}" ] || printf '%s\n' "$pp_scope" >"$run_dir/prepush-scope"; } &&
+    { [ -z "${pp_scans:-}" ] || printf '%s\n' "$pp_scans" >"$run_dir/prepush-scans"; } &&
     if explicit_diff_command "$@"; then
       echo 'on the command line' >"$run_dir/diff-command"
     elif [ -n "${DUNE_DIFF_COMMAND:-}" ]; then
@@ -3950,6 +3961,43 @@ slot_refusal() { # <run dir>; 0 iff the slot was refused and dune never ran
 # test/operations/device_init_deadline checks this spelling against.
 device_init_deadline_tag='OCANNL device_init_deadline:'
 
+scan_alert_dir= scan_alert_offset=
+# Read only the newly written complete lines after the launch prelude. A
+# partial write is read again next time, so a poll cannot eat its diagnostic.
+prepush_scan_alert() { # run dir; at most one notice per queried run
+  local dir=$1 update
+  [ -s "$dir/prepush-scans" ] && [ -s "$dir/prelude" ] || return 0
+  if [ "$scan_alert_dir" != "$dir" ]; then
+    scan_alert_offset=$(cat "$dir/prelude") || return 0
+    scan_alert_dir=$dir
+  fi
+  [ "$scan_alert_offset" != reported ] || return 0
+  update=$(perl -e '
+    my ($dir, $offset) = @ARGV;
+    open my $members, "<", "$dir/prepush-scans" or exit 1;
+    my %member = map { chomp; $_ => 1 } <$members>;
+    open my $log, "<", "$dir/log" or exit 1;
+    binmode $log;
+    seek($log, $offset, 0) or exit 1;
+    while (my $line = <$log>) {
+      last unless $line =~ /\n\z/;
+      $offset = tell $log;
+      $line =~ s/\e\[[0-9;]*m//g;
+      if ($line =~ /\A-> required by alias ([A-Za-z0-9_.+\/-]+) in(?: [^\r\n]+)?\r?\n\z/ &&
+          $member{$1}) {
+        print "\@$1";
+        exit 0;
+      }
+    }
+    print $offset;
+  ' "$dir" "$scan_alert_offset") || return 0
+  case $update in
+    @*) printf 'test-run: prepush: scan failed: %s (log: %s/log)\n' "$update" "$dir" >&2
+        scan_alert_offset=reported ;;
+    *) scan_alert_offset=$update ;;
+  esac
+}
+
 digest_rc=
 digest() {
   local dir=$1 rc verdict fp complaint= refusal_src prelude_bytes
@@ -4395,6 +4443,7 @@ shift
 # what this build cannot place), nor without a verdict (exit 2), so no green
 # verdict stands for a list that was not the pre-push one without saying
 # FIRST TIER ONLY.
+pp_scans=
 if [ "$sub" = prepush ]; then
   pp_usage='prepush --since BASE|OLD..NEW [--referenced-only] [--list | [--start] [--cap N] [--test-cap N] [--expect-backend B]... [build [DUNE OPTIONS...]]]'
   pp_base= pp_print=0 pp_mode=run pp_run_opts=() pp_tier=0
@@ -4573,6 +4622,36 @@ if [ "$sub" = prepush ]; then
     exit 0
   fi
   printf '%s\n' "${pp_keep[@]}" >"$pp_dir/list" || die "cannot write the list in $pp_dir"
+  # The aggregate owns membership. Resolve its relative alias deps in the
+  # same directory as Dune does, then intersect with affected's kept operands.
+  if [ -r test/operations/dune ] && ! explicit_build_root "$@"; then
+    pp_scans=$(perl -e "$dune_reader_perl"'
+      my %selected = map { (s/^\@\@?//r, 1) } @ARGV;
+      my $forms = eval { read_dune("test/operations/dune") } or exit 0;
+      my @scans = grep {
+        ref $_ && @$_ && $_->[0] eq "alias" &&
+        grep { ref $_ && @$_ == 2 && $_->[0] eq "name" && $_->[1] eq "scans" } @$_
+      } @$forms;
+      exit 0 unless @scans == 1 && @{ $scans[0] } == 3;
+      my @deps = grep { ref $_ && $_->[0] eq "deps" } @{ $scans[0] };
+      exit 0 unless @deps == 1;
+      my (undef, @aliases) = @{ $deps[0] };
+      my @members;
+      for my $dep (@aliases) {
+        exit 0 unless ref $dep && @$dep == 2 && $dep->[0] eq "alias" &&
+          !ref $dep->[1] && $dep->[1] =~ m{\A(?:[A-Za-z0-9_.+-]+/)*runtest-[A-Za-z0-9_.+-]+\z};
+        my @path = ("test", "operations");
+        for my $part (split m{/}, $dep->[1]) {
+          next if $part eq ".";
+          if ($part eq "..") { exit 0 unless @path; pop @path; }
+          else { push @path, $part; }
+        }
+        my $member = join "/", @path;
+        push @members, $member if $selected{$member};
+      }
+      print "$_\n" for @members;
+    ' "${pp_keep[@]}") || pp_scans=
+  fi
   sub=$pp_mode
   set -- ${pp_run_opts[@]+"${pp_run_opts[@]}"} --targets-file "$pp_dir/list" "$@"
 fi
@@ -5685,7 +5764,17 @@ case $sub in
       } >"$run_dir/plan" || { echo "test-run: cannot write the plan in $run_dir"; exit 126; }
       exit 0
     fi
-    if [ -n "$alias_disabled" ] || [ -n "$width_cap" ] || [ "$mode" = fresh ] || [ -n "$stderr_stream" ]; then
+    scan_paths=
+    if [ -s "$run_dir/prepush-scans" ]; then
+      scan_paths=1
+      for arg do
+        [ "$arg" != -- ] || break
+        if [ "$arg" = --debug-dependency-path ]; then scan_paths=; break; fi
+      done
+      if [ -n "$scan_paths" ]; then shift; set -- build --debug-dependency-path "$@"; fi
+    fi
+    if [ -n "$alias_disabled" ] || [ -n "$width_cap" ] || [ "$mode" = fresh ] ||
+       [ -n "$stderr_stream" ] || [ -n "$scan_paths" ]; then
       { { printf '%q ' "$@"; echo; } >"$run_dir/cmd.tmp" &&
         mv -f "$run_dir/cmd.tmp" "$run_dir/cmd"; } ||
         { echo "test-run: cannot record the capped command in $run_dir"; exit 126; }
@@ -6073,7 +6162,7 @@ case $sub in
       # supervisor is reaped its pid can be recycled and probing the number
       # alone would spin this loop on an unrelated process; settled, since a group
       # signal landing mid-probe kills the probe too (sup_alive_settled).
-      while sup_alive_settled "$run_dir"; do wait_tick "$sup"; done
+      while sup_alive_settled "$run_dir"; do wait_tick "$sup"; prepush_scan_alert "$run_dir"; done
       sup=
       trap - INT TERM HUP
       [ "$sub" != plan ] || plan_finish "$@"
@@ -6149,6 +6238,7 @@ case $sub in
       digest "$run_dir"
       exit 0
     elif proc_alive "$run_dir/pid" "$run_dir/ptoken"; then
+      prepush_scan_alert "$run_dir"
       echo "running: dune $(cat "$run_dir/cmd")  (log: $run_dir/log)"
       exit 3
     elif legacy_owner_alive "$run_dir"; then
@@ -6268,7 +6358,12 @@ case $sub in
         exit 1
       fi
       [ "$remaining" -le 0 ] && { echo "wait timed out after ${budget}s: $run_dir"; exit 124; }
+      prepush_scan_alert "$run_dir"
       step=$(( remaining < 5 ? remaining : 5 ))
+      if [ -s "$run_dir/prepush-scans" ] &&
+         { [ "$scan_alert_dir" != "$run_dir" ] || [ "$scan_alert_offset" != reported ]; }; then
+        step=1
+      fi
       sleep "$step"
       waited=$(( waited + step ))
     done
