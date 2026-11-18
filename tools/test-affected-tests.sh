@@ -19,6 +19,8 @@
 #
 # The isolated-addition leg queries tracked test-suite stanza paths without
 # opening them; synthetic readers pin conservative handling of printed paths.
+# The link_deps control matches one literal loop prefix through its reach
+# assignment. The diagnostic call and the rest of the loop body may vary.
 set -u
 # The expected lists are sorted with `sort` and compared with the helper's
 # bytewise order: one collation, whatever the caller's locale (gh-ocannl-1431).
@@ -1189,19 +1191,28 @@ fi
 # Negative controls: each mutant drops one source of reach, and the leg that
 # pins it must see the list change. Without them a leg could pass on a
 # fixture too small to exercise the path it names.
-control() { # LABEL FROM TO ARGS... -- WANT...
+run_affected_mutant() { # LABEL FROM TO ARGS...: require one edit, leave the query status in rc
   local label=$1 from=$2 to=$3 mutant=$repo/tools/affected-mutant.sh
+  shift 3
+  if ! FROM=$from TO=$to perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
+      "$repo/tools/affected-tests.sh" >"$mutant"; then
+    report 1 "negative control: $label" "the mutation anchor does not occur exactly once"
+    return 1
+  fi
+  rc=0
+  (cd "$TMP" && bash "$mutant" "$@") >"$out" 2>"$err" || rc=$?
+  rm -- "$mutant" || {
+    report 1 "negative control: $label" "could not remove the scratch mutant"
+    return 1
+  }
+}
+control() { # LABEL FROM TO ARGS... -- WANT...
+  local label=$1 from=$2 to=$3
   shift 3
   local args=()
   while [ "$1" != -- ]; do args+=("$1"); shift; done
   shift
-  if ! FROM=$from TO=$to perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
-      "$repo/tools/affected-tests.sh" >"$mutant"; then
-    report 1 "negative control: $label" "the mutation anchor does not occur exactly once"
-    return
-  fi
-  rc=0
-  (cd "$TMP" && bash "$mutant" "${args[@]}") >"$out" 2>"$err" || rc=$?
+  run_affected_mutant "$label" "$from" "$to" "${args[@]}" || return
   printf '%s\n' "$@" | sort >"$TMP/want"
   sort "$out" >"$TMP/got"
   if [ "$rc" = 0 ] && cmp -s "$TMP/want" "$TMP/got"; then
@@ -1209,7 +1220,6 @@ control() { # LABEL FROM TO ARGS... -- WANT...
   else
     report 0 "negative control: $label"
   fi
-  rm -f "$mutant"
 }
 if harness_leg 'negative controls'; then
   # shellcheck disable=SC2086
@@ -1926,8 +1936,6 @@ if harness_leg 'probe dune edits'; then
   probe_leg 'an ownerless preprocessing rule keeps the whole directory' "$p3_all $p3_scan"
   probe_edit 's/\(echo a\)\)\)/(echo b)))/' &&
     probe_leg 'an action-only edit lists the alias whose action it is' "@p3/runtest-act3 $p3_scan"
-  probe_edit 's/\(echo m\)/(echo n)/' &&
-    probe_leg 'an edit to a rule'"'"'s action lists what reads its target, through link_deps too' "@p3/runtest-reads3 @p3/runtest-lk $p3_scan"
   probe_edit 's/\(test \(name pa\) \(modules pa\)\)/(test (name pa) (modules pa) (flags (:standard -w -a)))/' &&
     probe_leg 'a flags edit lists the stanza'"'"'s own alias' "@p3/runtest-pa $p3_scan"
   probe_edit 's/"\\\| echo a\n/"\\| echo \\\\a\n/' &&
@@ -2148,11 +2156,6 @@ if harness_leg 'probe controls'; then
       'my @delta = grep {' 'my @delta = (); 0 && grep {' \
       HEAD -- @p3/runtest-act3 $p3_scan
   probe_restore
-  probe_edit 's/\(echo m\)/(echo n)/' &&
-    control 'a stanza'"'"'s link rule is what reaches a link_deps consumer' \
-      'for (@{$stanza_rule{$t}}) { $hit{$_} = $whole_hit{$_} = 1; hit_reason($_, $delta_paths{$p}, $why) }' '' \
-      HEAD -- @p3/runtest-reads3 @p3/runtest-lk $p3_scan
-  probe_restore
   probe_edit 's/\(test \(name pa\) \(modules pa\)\)/(test (name pa) (modules pa) (flags (:standard -w -a)))/' &&
     control 'a changed stanza named as dune lists it is what reaches a flags edit' \
       'if (@ix) { $whole{$_} = 1 for @ix; next }' 'if (@ix) { next }' \
@@ -2205,6 +2208,24 @@ if harness_leg 'probe controls'; then
     report 1 'negative control: comparing the probe'"'"'s aliases with the worktree'"'"'s is what keeps a probe dune does not load from stopping the run' 'the mutation anchor does not occur exactly once'
   fi
   rm -f "$repo/tools/affected-mutant.sh"
+  probe_restore
+fi
+
+if harness_leg 'link_deps reach control'; then
+  link_label='without its link rule reach assignment, the link_deps consumer disappears'
+  link_loop='for (@{$stanza_rule{$t}}) {'
+  link_assignment='$hit{$_} = $whole_hit{$_} = 1;'
+  # The query should see only the rule edit. An untracked mutant adds blind aliases.
+  if ! mkdir -p "$repo/.git/info" ||
+     ! printf '%s\n' '/tools/affected-mutant.sh' >>"$repo/.git/info/exclude"; then
+    report 1 "negative control: $link_label" "could not exclude the scratch mutant from the change"
+  elif probe_edit 's/\(echo m\)/(echo n)/'; then
+    affected HEAD
+    expect 'a rule action edit lists its direct and link_deps consumers' 0 @p3/runtest-reads3 @p3/runtest-lk "$p3_scan"
+    if run_affected_mutant "$link_label" "$link_loop $link_assignment" "$link_loop" HEAD; then
+      expect "negative control: $link_label" 0 @p3/runtest-reads3 "$p3_scan"
+    fi
+  fi
   probe_restore
 fi
 
