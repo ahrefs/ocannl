@@ -434,7 +434,8 @@ files.
   gh-ocannl-2279. Both leaf rankers keep the shipped rates. The gate selector is the existing
   search-shaping `gpu_default_sketch_min_reduction` key. A pair's join checks both cells' resolved
   configuration, ignoring only that selector and the separate TSV paths. The seeding-census
-  plan label identifies the timing row within each arm, including the plan digest where it seeded.
+  plan label identifies a seeded plan's timing row within its arm. A preset joins through the
+  tuner's resolved schedule digest because deduplication can leave it timed under another label.
   At `wgrad:1,16,32,32` on rog CUDA, `auto` joined its seeded plan while `auto-legacy` joined the
   configured fission preset. The tuner's serial `baseline` has no timing row on CUDA. The stock
   threshold-32 arms and `nostg` answer different questions about leaf ranking.

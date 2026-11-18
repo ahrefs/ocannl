@@ -10557,8 +10557,17 @@ module Make (D : Driver) = struct
                    the digest, not the seed (gh-ocannl-552). Which seed, if any, is
                    [default_seed_label]'s to say. *)
                 let attribute digest_after =
-                  if Option.exists default_candidate_label ~f:(String.equal (spec_label spec)) then
-                    default_seed_digest := Some digest_after;
+                  if Option.exists default_candidate_label ~f:(String.equal (spec_label spec)) then (
+                    if
+                      log_seeding_enabled ()
+                      && not (Option.exists !default_seed_digest ~f:(String.equal digest_after))
+                    then
+                      print_seeding_lines
+                        [
+                          Printf.sprintf "%s preset-digest %s" seeding_census_prefix
+                            (dshort digest_after);
+                        ];
+                    default_seed_digest := Some digest_after);
                   match spec with
                   | Fiss (F_seeded _) -> seeded_seed_digest := Some digest_after
                   | _ -> ()

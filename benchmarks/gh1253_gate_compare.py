@@ -4,8 +4,10 @@
 Reads only the pair's successful cells.py cell.json records, autotune-seeding:
 stderr lines, and current 12-column calibration TSVs. A join needs one ranked
 gate, one exact plan label, segment census evidence, and one positive timing
-row for that label in the same arm. Other stderr is ignored. Old TSV schemas,
-inferred plan labels and timing rows from other cells are outside the join.
+row in the same arm. Seeded plans join by label. The configured preset joins
+by the tuner's resolved digest, which can also identify a deduplicated row.
+Other stderr is ignored. Old TSV schemas and rows from other cells are outside
+the join.
 """
 
 import math
@@ -28,7 +30,7 @@ def one_field(census, prefix):
     return fields[0]
 
 
-def joined_row(path, backend, label):
+def joined_row(path, backend, label, preset_digest):
     rows = []
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line or line.startswith("#"):
@@ -36,15 +38,16 @@ def joined_row(path, backend, label):
         fields = line.split("\t")
         if len(fields) != 12 or fields[0] != backend:
             raise ValueError(f"{path}: expected a current calibration row for {backend}")
-        if fields[3] == label:
+        if (fields[1] == preset_digest if preset_digest is not None else fields[3] == label):
             rows.append(fields)
     if len(rows) != 1:
-        raise ValueError(f"{path}: expected one timing row for {label!r}, found {len(rows)}")
-    _, digest, routine, _, time, *_ = rows[0]
+        key = f"{label!r} at digest {preset_digest}" if preset_digest is not None else repr(label)
+        raise ValueError(f"{path}: expected one timing row for {key}, found {len(rows)}")
+    _, digest, routine, row_label, time, *_ = rows[0]
     ms = float(time)
     if not digest or not routine or not math.isfinite(ms) or ms <= 0:
         raise ValueError(f"{path}: incomplete timing row for {label!r}")
-    return digest, routine, ms
+    return digest, routine, row_label, ms
 
 
 def read_arm(stem, backend, arm):
@@ -68,8 +71,11 @@ def read_arm(stem, backend, arm):
     label = one_field(census, CENSUS_PREFIX + "plan ")
     if not label.startswith(("F_preset[", "F_seeded[")):
         raise ValueError(f"unrecognized seeded plan label {label!r}")
-    digest, routine, ms = joined_row(tsv, backend, label)
-    return config, (f"{arm}: joined=1 label={label!r} routine={routine!r} "
+    preset_digest = (one_field(census, CENSUS_PREFIX + "preset-digest ")
+                     if label.startswith("F_preset[") else None)
+    digest, routine, row_label, ms = joined_row(tsv, backend, label, preset_digest)
+    timed_as = f" timed_as={row_label!r}" if row_label != label else ""
+    return config, (f"{arm}: joined=1 label={label!r}{timed_as} routine={routine!r} "
                     f"digest={digest} measured_ms={ms:.6f}", *census), routine
 
 

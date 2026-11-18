@@ -54,20 +54,29 @@ label = "F_seeded[2 segs, 1 seeded, 0 sunk, 0 split, plan aaaaaaaa]"
 legacy = "F_seeded[2 segs, 1 seeded, 0 sunk, 0 split, plan bbbbbbbb]"
 mutation = os.environ.get("STUB_MUTATION") if arm == "auto-legacy" else None
 preset = "F_preset[bs=cfg cfg-thresh]"
-selected = label if arm == "auto" else preset if mutation == "preset" else legacy
+preset_arm = mutation in ("preset", "preset-dedup", "preset-wrong-digest")
+selected = label if arm == "auto" else legacy
+if preset_arm:
+    selected = preset
 record("model_staged_copy_rate", "none" if mutation == "leaf" else "")
 print("autotune-seeding: gate ranked capacity=42 cache_rate=10", file=sys.stderr)
 if mutation != "census":
     verdict = "refused: score tie" if selected == preset else "seeded: geometry"
     print('autotune-seeding: where="seeded_default segment u0"', verdict, file=sys.stderr)
 print("autotune-seeding: plan", selected, file=sys.stderr)
+preset_digest = "33333333/cccccccc"
+if preset_arm:
+    attribution = "44444444/dddddddd" if mutation == "preset-wrong-digest" else preset_digest
+    print("autotune-seeding: preset-digest", attribution, file=sys.stderr)
 with open(opts["autotune_calibration_file"], "w") as rows:
-    control_rows = ((label, "1.25"), (legacy, "8.00")) if arm == "auto" else (
-        (label, "9.00"), (legacy, "2.50"))
-    for name, ms in (*control_rows, (preset, "0.25")):
+    auto_ms, legacy_ms = ("1.25", "8.00") if arm == "auto" else ("9.00", "2.50")
+    preset_row = "W_preset[bs=256]" if mutation in ("preset-dedup", "preset-wrong-digest") else preset
+    for name, digest, ms in ((label, "11111111/aaaaaaaa", auto_ms),
+                             (legacy, "22222222/bbbbbbbb", legacy_ms),
+                             (preset_row, preset_digest, "0.25")):
         if mutation == "row" and name == selected:
             continue
-        print(opts["backend"], "1000", "rs_stub", name, ms, "", 1, 4, 8, "false", "false",
+        print(opts["backend"], digest, "rs_stub", name, ms, "", 1, 4, 8, "false", "false",
               "false", sep="\t", file=rows)
 PY
 chmod +x "$TMP/shims/dune" "$exe"
@@ -144,19 +153,25 @@ if harness_leg '3: the two censuses join to their own exact timing rows'; then
   check 'the preset census joins the configured preset even when seeded rows are present' \
     grep -qE "^auto-legacy: joined=1 label='F_preset.*measured_ms=0\.250000$" \
       "$TMP/runs/preset/out/rank_wgrad_1x32x32x32_gate_r1.txt"
+  drive "$SRC" dedup STUB_MUTATION=preset-dedup
+  check 'a preset joins its deduplicated schedule by digest' test "$got" = 0
+  check 'the joined row names the candidate that was timed' \
+    grep -qE "^auto-legacy: joined=1 label='F_preset.*timed_as='W_preset.*measured_ms=0\.250000$" \
+      "$TMP/runs/dedup/out/rank_wgrad_1x32x32x32_gate_r1.txt"
 fi
 if harness_leg '4: mutated twins are rejected'; then
   no_refusal=$(mutant no-refusal '/^  for knob in EXPLAIN_ONLY / { sub(/ PICK_PROFILES /, " ") } { print }') || exit 2
   expect_rejected 'conflicting pick option slips through' "$no_refusal" refuses '^gh1253_cells: 0 failed'
   fixed_order=$(mutant fixed-order '/if \(\(rep % 2/ { next } { print }') || exit 2
   expect_rejected 'same arm order on every repeat' "$fixed_order" ordered '^--- '
-  for mutation in row census leaf; do
+  for mutation in row census leaf preset-wrong-digest; do
     run="mutant-$mutation"
     drive "$SRC" "$run" "STUB_MUTATION=$mutation"
     case "$mutation" in
       row) diagnostic="expected one timing row" ;;
       census) diagnostic="missing seeded-default segment census" ;;
       leaf) diagnostic="resolved configuration differs: model_staged_copy_rate" ;;
+      preset-wrong-digest) diagnostic="at digest 44444444/dddddddd, found 0" ;;
     esac
     check "$mutation mutation fails the pair" test "$got" = 1
     check "$mutation mutation names the failed join" grep -qF "$diagnostic" "$TMP/runs/$run/stdout"

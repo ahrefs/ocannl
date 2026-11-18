@@ -67,6 +67,7 @@
 # before building.
 # Each pair runs in alternating order across repeats, with one fresh TSV per arm per repeat.
 # OUT/rank_<site>_gate_r<N>.txt joins each arm's seeding census to its own exact timed plan.
+# A deduplicated preset joins by schedule digest and reports the candidate label that was timed.
 # The join requires clean resolved configuration records that differ only in the gate and
 # TSV destination. Missing evidence fails that pair. Inspect failed output in OUT and retry in an
 # empty directory.
