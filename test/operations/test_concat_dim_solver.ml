@@ -429,10 +429,15 @@ let test_zero_component () =
     | exception e -> "regression: " ^ Exn.to_string e
   in
   let in_every_order ?(discardable = false) name ~n mk ~want =
-    let got = List.map (permutations (List.init n ~f:Fn.id)) ~f:(verdict ~discardable mk) in
-    if List.for_all got ~f:(String.equal want) then
-      Stdio.printf "  PASS: %s: %s in all %d orders\n" name want (List.length got)
-    else fail "%s: %s, want %s" name (String.concat ~sep:" | " got) want
+    let orders = permutations (List.init n ~f:Fn.id) in
+    Verdict.Claims.p_all ~min:(List.length orders)
+      (Printf.sprintf "  %s: %s in every order" name want) orders ~f:(fun order ->
+        let got = verdict ~discardable mk order in
+        if not (String.equal got want) then
+          Stdio.eprintf "  %s, order %s: %s (not part of the golden)\n" name
+            (String.concat ~sep:"," (List.map order ~f:Int.to_string))
+            got;
+        String.equal got want)
   in
   let concat u k ~basis =
     eq (Row.Concat [ Row.Var u; dim 4 ]) (Row.Concat [ Row.Var k; dim ~basis 2 ])
@@ -465,6 +470,31 @@ let test_zero_component () =
   in_every_order ~discardable:true "[u; 4] = [k; 2], k = 2, u discardable: sized 0" ~n:2
     (fun u k -> [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2) ])
     ~want:"u = 0 of default, k = 2 of default";
+  (* The permission to be empty is the component's: an alias it was equated with may be sized 0 by
+     the sum too, whichever of the two the substitution presents. *)
+  in_every_order ~discardable:true "[u; 4] = [k; 2], k = 2, u = w, u discardable: sized 0" ~n:3
+    (fun u k ->
+      let w = Row.get_var () in
+      [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2); eq (Row.Var u) (Row.Var w) ])
+    ~want:"u = 0 of default, k = 2 of default";
+  (* A zero residual decides its basis before it waits: two bounds [4] and [[u; 4_a]] on one operand
+     conflict, so the GLB merge demotes to the broadcast top, as on the base, and [u = 1_a] stays
+     consistent with them in either order. *)
+  List.iter [ true; false ] ~f:(fun concat_first ->
+      let x = Row.get_var () and u = Row.get_var () in
+      let bounds = [ ineq (dim 4) x; ineq (Row.Concat [ Row.Var u; dim ~basis:"a" 4 ]) x ] in
+      let bounds = if concat_first then List.rev bounds else bounds in
+      Verdict.Claims.p
+        (Printf.sprintf "  bounds 4 and [u; 4 a] on one operand (%s first), then u = 1 a: accepted"
+           (if concat_first then "the concatenation" else "4"))
+        (match
+           List.fold
+             (List.map bounds ~f:(fun b -> [ b ]) @ [ [ eq (Row.Var u) (dim ~basis:"a" 1) ] ])
+             ~init:([], Row.empty_env)
+             ~f:(fun (deferred, env) cs -> Row.solve_inequalities ~stage:Stage4 (deferred @ cs) env)
+         with
+        | _ -> true
+        | exception Row.Shape_error _ -> false));
   (* A 0 stated outright is the statement's, not the arithmetic's: substitution consumes it, and the
      equation waits rather than refusing, so it meets one verdict whichever arrives first. *)
   in_every_order "[u; 4] = [k; 2], k = 2, u = 0 stated: one verdict in every order" ~n:3

@@ -3336,12 +3336,19 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
       match rest with
       | [ _ ] when lost_claim () -> conflict ()
       | _ :: _ :: _ when lost_claim () -> ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)
-      | [ Var v ] when residual = 0 && not (Set.mem env.discardable_vars v) ->
+      | [ Var v ]
+        when residual = 0
+             && not
+                  (Set.exists env.discardable_vars ~f:(fun w ->
+                       match subst_dim env (Var w) with Var w -> equal_dim_var v w | _ -> false)) ->
           (* Concatenation arithmetic never sizes a non-discardable component to 0, which is not a
              size an axis may have (gh-ocannl-2316): only a block spec's discardable component may
-             be empty. The equation waits instead of refusing, so a [0] stated outright, which
-             substitution consumes, meets the same verdict in every order; closure sizes the
-             component otherwise, and the sum then refuses it. *)
+             be empty, also under an alias it was equated with, since the permission is the
+             component's. The basis is decided first, so a conflicting claim still refuses (and a
+             GLB merge still demotes to the broadcast top). Then the equation waits instead of
+             refusing, so a [0] stated outright, which substitution consumes, meets the same verdict
+             in every order; closure sizes the component otherwise, and the sum then refuses it. *)
+          ignore (Lazy.force residual_basis : string);
           ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)
       | [] ->
           (* Fully solved: the sum meets [d] under [solved_basis], not [residual_basis]. A residual

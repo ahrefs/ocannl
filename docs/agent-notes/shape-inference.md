@@ -126,8 +126,10 @@ files.
   equal sums still wait without bounds.
 - Concatenation arithmetic never sizes a non-discardable component to 0, the size only a block
   spec's discardable component may take (gh-ocannl-2316). In `unify_dim`'s `Concat`/`Dim` arm a
-  zero residual on a single non-discardable `Var` waits, and closure then sizes the component
-  (here, refused by the sum); a zero residual also carries no claim, since substitution erases a
+  zero residual on a single non-discardable `Var` waits once its basis is decided (a conflict
+  still refuses, so a GLB merge of `4` and `[u; 4_a]` still demotes to the broadcast top), and
+  closure then sizes the component (here, refused by the sum). Discardability is read through
+  substitution: a variable equated with a discardable one keeps the permission. A zero residual also carries no claim, since substitution erases a
   0-sized component, so a claim with nowhere else to land is refused there, discardable or not.
   Before, `[u; 2v]=[k; 2 T]` with `k = 2_default` first gave `u = 0_T`, and `u = 0_T` stated first
   was refused (eighteen bounded runs: `... default ; k >= 2_{default,a,h}`, sized to 0, now refused
