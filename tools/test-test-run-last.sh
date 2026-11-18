@@ -15,6 +15,12 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
+# Readiness (99): fixture markers, the waiter's own queued sighting, run
+# records, and owned process lifetime govern release and teardown. Poll limits
+# fail the fixture if an event never arrives. Explicit wait budgets check the
+# runner's timeout responses while the fixture holds the corresponding state.
+# Shape-reading boundary (102): the one prepush --list rule in proc_table_perl
+# is the mutation seam. The nested run must fail at exactly the shared claim.
 # Shape-reading boundary (99b): only ps pid/ppid/exact command fields;
 # no shell text, fleet source, or environments. This pins guardian/child
 # topology while a fixture holds publication, not guardian signal handling.
@@ -135,7 +141,9 @@ cat >"$q_bin/dune" <<'EOF'
 #!/usr/bin/env bash
 case " $* " in
   *" @red "*) echo 'built red'; exit 1 ;;
-  *" @hold "*) while [ ! -e "$Q_HOLD" ]; do sleep .1; done ;;
+  *" @hold "*)
+    : >"$Q_HOLD.ready"
+    while [ ! -e "$Q_HOLD" ]; do sleep .1; done ;;
 esac
 echo 'built ok'
 EOF
@@ -156,9 +164,11 @@ q_last() { q "$1" paths run last 2>/dev/null; }
 # exits with its status -- or, for `refuse`, exits 75 having run nothing, as a
 # refused slot does. Like the real one it first double-forks a guardian that
 # lives as long as it does, and here a second longer: an orphan of parent 1
-# carrying its very argv, alone once the wrapper is gone. And one that
-# runs CMD first and then lives on, in a subshell, until RELEASE: the shape of
-# a wrapper winding down after its batch (the subshell is its fork).
+# carrying its very argv, alone once the wrapper is gone. Record its PID so
+# the next fixture can wait for that argv to disappear. The shape control's
+# exec-without-guardian mode retains the command child and omits the guardian.
+# The other stand-in runs CMD first and then lives on, in a subshell, until
+# RELEASE: the shape of a wrapper winding down after its batch.
 # An unknown directory intentionally belongs to every possible worktree, but
 # its fixture still has a known state root. Put that identity in EXEC ARGV:
 # exporting it alone would make this wrapper a launch in every parallel fixture.
@@ -173,21 +183,28 @@ cat >"$q_slot" <<'EOF'
 release=$1 how=$2
 shift 3
 main=$$
-: >"$release.ready"
-( (while kill -0 "$main" 2>/dev/null; do sleep .1; done; sleep 1) </dev/null >/dev/null 2>&1 & )
+if [ "$how" != exec-without-guardian ]; then
+  (
+    (while kill -0 "$main" 2>/dev/null; do sleep .1; done; sleep 1) </dev/null >/dev/null 2>&1 &
+    printf '%s\n' "$!" >"$release.guardian"
+  )
+fi
+printf '%s\n' "$main" >"$release.ready"
 while ! rm "$release" 2>/dev/null; do sleep .1; done
-[ "$how" = exec ] || exit 75
-"$@"
+case $how in
+  exec | exec-without-guardian) "$@" ;;
+  *) exit 75 ;;
+esac
 EOF
 cat >"$q_linger_sh" <<'EOF'
 #!/usr/bin/env bash
 release=$1
 shift 2
 "$@" >/dev/null 2>&1
-(while [ ! -e "$release" ]; do sleep .1; done)
+(: >"$release.ready"; while [ ! -e "$release" ]; do sleep .1; done)
 EOF
 chmod +x "$q_slot" "$q_linger_sh"
-q_wrap() { # root release exec|refuse argv...
+q_wrap() { # root release mode argv...
   local root=$1 release=$2 how=$3
   shift 3
   (cd "$root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH exec bash "$q_slot" "$release" "$how" -- "$@") \
@@ -239,7 +256,24 @@ q_until() { # seconds command...: 0 once the command succeeds
   return 1
 }
 q_finished() { local d; d=$(q_last "$1") && [ -f "$d/exit" ] && [ "$d" != "${2:-}" ]; }
+q_ready() { # release wrapper-pid: the marker belongs to this launch
+  local pid
+  { read -r pid <"$1.ready"; } 2>/dev/null && [ "$pid" = "$2" ]
+}
+q_exited() { # pid: a zombie has no launch argv and cannot record a verdict
+  case $1 in '' | *[!0-9]* | 0) return 1 ;; esac
+  ! kill -0 "$1" 2>/dev/null || [ "$(pstate "$1")" = Z ]
+}
+q_refuse() { # release: end the only outstanding wrapper and drain its guardian
+  local guardian rc=0
+  touch "$1" || return 1
+  wait "$q_wrap_pid" 2>/dev/null || rc=$?
+  q_wraps=()
+  { read -r guardian <"$1.guardian"; } 2>/dev/null &&
+    [ "$rc" = 75 ] && q_until 30 q_exited "$guardian"
+}
 
+q_pp_label="a queued prepush or prefixed launch is in flight; a queued prepush --list is not"
 leg_99() {
 q_label="wait last and status last follow a launch queued before it publishes"
 q_unpub_label="a launch seen in flight that ends unpublished is refused, not answered with the run before it"
@@ -255,6 +289,9 @@ q_red_wrap=$q_wrap_pid
 # The stale answer is green, by name: what `wait last` used to return.
 q_capture "$q_root" wait "$q_green" --timeout 5
 [ "$q_rc" = 0 ] || q_detail="wait on the green run by name: exit $q_rc (want 0): $q_out"
+if [ -z "$q_detail" ] && ! q_until 30 q_ready "$TMP/queued.release1" "$q_red_wrap"; then
+  q_detail="the red wrapper never reached its release gate"
+fi
 if [ -z "$q_detail" ]; then
   q_capture "$q_root" status last
   { [ "$q_rc" = 3 ] && grep -qF "queued: a launch in this worktree has not published its run yet: $q_red_wrap " <<<"$q_out" &&
@@ -270,18 +307,26 @@ fi
 # One wait spans the queue, the publication and the run: started while the
 # launch is queued, it ends with the queued run's red verdict.
 if [ -z "$q_detail" ]; then
+  # Clear the foreground queries' mark so only this waiter can recreate it.
+  mv "$q_green/queued-after" "$TMP/queued.status-sighting" ||
+    q_detail="the foreground queries did not mark the queued launch"
+fi
+if [ -z "$q_detail" ]; then
   q "$q_root" wait last --timeout 60 >"$TMP/queued-follow.out" 2>&1 &
   q_follow=$!
-  sleep 1
+  q_until 30 test -e "$q_green/queued-after" ||
+    q_detail="the waiter never marked the queued launch before release"
   touch "$TMP/queued.release1"
   wait "$q_follow"
   q_rc=$?
   q_follow=
   q_out=$(cat "$TMP/queued-follow.out")
   q_red=$(q_last "$q_root")
-  { [ "$q_rc" = 1 ] && [ -n "$q_red" ] && [ "$q_red" != "$q_green" ] && grep -qF "$q_red" <<<"$q_out" &&
-    grep -qF '@red' "$q_red/cmd"; } ||
-    q_detail="wait last across the release: exit $q_rc (want 1, the queued run's); last: ${q_red:-none}: $q_out"
+  if [ -z "$q_detail" ]; then
+    { [ "$q_rc" = 1 ] && [ -n "$q_red" ] && [ "$q_red" != "$q_green" ] && grep -qF "$q_red" <<<"$q_out" &&
+      grep -qF '@red' "$q_red/cmd"; } ||
+      q_detail="wait last across the release: exit $q_rc (want 1, the queued run's); last: ${q_red:-none}: $q_out"
+  fi
 fi
 q_release_all
 if [ -z "$q_detail" ]; then report 0 "$q_label"; else report 1 "$q_label" "$q_detail"; fi
@@ -294,11 +339,13 @@ q_green=$(q_last "$q_root")
 [ "$q_rc" = 0 ] || q_detail="the second green run: exit $q_rc: $q_out"
 if [ -z "$q_detail" ]; then
   q_wrap "$q_root" "$TMP/queued.release2" refuse tools/test-run.sh run build @red
-  q_refused=$q_wrap_pid
-  q_capture "$q_root" wait last --timeout 1
-  [ "$q_rc" = 124 ] || q_detail="wait last while the refused launch is queued: exit $q_rc (want 124): $q_out"
-  touch "$TMP/queued.release2"
-  wait "$q_refused"
+  if q_until 30 q_ready "$TMP/queued.release2" "$q_wrap_pid"; then
+    q_capture "$q_root" wait last --timeout 1
+    [ "$q_rc" = 124 ] || q_detail="wait last while the refused launch is queued: exit $q_rc (want 124): $q_out"
+  else
+    q_detail="the refused wrapper never reached its release gate"
+  fi
+  q_refuse "$TMP/queued.release2" || q_detail="${q_detail:-the refused wrapper or its guardian did not drain}"
 fi
 if [ -z "$q_detail" ]; then
   q_capture "$q_root" wait last --timeout 5
@@ -328,17 +375,20 @@ fi
 if [ -z "$q_detail" ]; then
   Q_HOLD=$TMP/queued.hold q_capture "$q_root" start build @hold
   q_held=$(q_last "$q_root")
-  { [ "$q_rc" = 0 ] && [ -n "$q_held" ] && [ ! -f "$q_held/exit" ]; } ||
-    q_detail="the held run: exit $q_rc; last ${q_held:-none}: $q_out"
+  { [ "$q_rc" = 0 ] && [ -n "$q_held" ] && q_until 30 test -e "$TMP/queued.hold.ready" &&
+    [ ! -f "$q_held/exit" ]; } ||
+    q_detail="the held build did not reach its gate: exit $q_rc; last ${q_held:-none}: $q_out"
 fi
 if [ -z "$q_detail" ]; then
   q_wrap "$q_root" "$TMP/queued.release5" refuse tools/test-run.sh run build @red
-  q_refused=$q_wrap_pid
-  q_capture "$q_root" wait last --timeout 1
-  { [ "$q_rc" = 124 ] && grep -qxF "wait timed out after 1s: $q_held" <<<"$q_out"; } ||
-    q_detail="wait last on the live run, a launch queued behind it: exit $q_rc (want 124 on $q_held): $q_out"
-  touch "$TMP/queued.release5"
-  wait "$q_refused"
+  if q_until 30 q_ready "$TMP/queued.release5" "$q_wrap_pid"; then
+    q_capture "$q_root" wait last --timeout 1
+    { [ "$q_rc" = 124 ] && grep -qxF "wait timed out after 1s: $q_held" <<<"$q_out"; } ||
+      q_detail="wait last on the live run, a launch queued behind it: exit $q_rc (want 124 on $q_held): $q_out"
+  else
+    q_detail="the wrapper behind the held build never reached its release gate"
+  fi
+  q_refuse "$TMP/queued.release5" || q_detail="${q_detail:-the refused wrapper or its guardian did not drain}"
   touch "$TMP/queued.hold"
   q_until 30 q_finished "$q_root" "" ||
     q_detail="${q_detail:-the held run never finished: $q_held}"
@@ -360,8 +410,8 @@ q_before=$(q_last "$q_root")
 (cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH \
   exec bash "$q_linger_sh" "$TMP/queued.release3" -- tools/test-run.sh run build @ok) &
 q_wraps+=("$!:$TMP/queued.release3")
-if ! q_until 30 q_finished "$q_root" "$q_before"; then
-  q_detail="the lingering shell's run never finished: last: $(q_last "$q_root")"
+if ! q_until 30 test -e "$TMP/queued.release3.ready" || ! q_finished "$q_root" "$q_before"; then
+  q_detail="the lingering shell never reached its post-run gate: last: $(q_last "$q_root")"
 else
   q_linger=$(q_last "$q_root")
   q_capture "$q_root" wait last --timeout 2
@@ -414,6 +464,7 @@ if [ -n "\${OCANNL_TOOL_TESTRUN_BG:-}" ] && [ -n "\${Q_SUP_DELAY:-}" ]; then
 fi
 # The launcher's preflight, before anything is recorded (Q_PREFLIGHT_HOLD).
 if [ -n "\${Q_PREFLIGHT_HOLD:-}" ] && [ "\$*" = '-e use Fcntl ":flock"; exit 0' ]; then
+  : >"\$Q_PREFLIGHT_HOLD.ready"
   while [ ! -e "\$Q_PREFLIGHT_HOLD" ]; do sleep .1; done
 fi
 exec "$(command -v perl)" "\$@"
@@ -447,23 +498,36 @@ q_dead_label="a launch queued behind a run that died without a verdict is follow
 q_detail=
 Q_HOLD=$TMP/queued.hold2 q_capture "$q_root" start build @hold
 q_dead=$(q_last "$q_root")
-q_grouped() { [ -s "$q_dead/pgid" ] && [ -s "$q_dead/pid" ]; }
-if [ "$q_rc" != 0 ] || ! q_until 30 q_grouped; then
-  q_detail="the run to kill: exit $q_rc; last ${q_dead:-none}: $q_out"
+q_idle() { q "$q_root" idle >/dev/null 2>&1; }
+if [ "$q_rc" != 0 ] || [ -z "$q_dead" ] || ! q_until 30 test -e "$TMP/queued.hold2.ready" ||
+   [ ! -s "$q_dead/pgid" ] || [ ! -s "$q_dead/pid" ]; then
+  q_detail="the run to kill did not reach its build gate: exit $q_rc; last ${q_dead:-none}: $q_out"
 else
-  kill -KILL -- "-$(cat "$q_dead/pgid")" 2>/dev/null
-  kill -KILL "$(cat "$q_dead/pid")" 2>/dev/null
-  q_idle() { q "$q_root" idle >/dev/null 2>&1; }
-  q_until 30 q_idle || q_detail="the killed run's lock never cleared"
+  # A live supervisor can reap its killed child and record 137. Keep the
+  # group blocked until the supervisor is gone, then kill the group.
+  q_dead_pid=$(cat "$q_dead/pid")
+  if ! proc_identity_matches "$q_dead/pid" "$q_dead/ptoken" ||
+     ! kill -KILL "$q_dead_pid" 2>/dev/null || ! q_until 30 q_exited "$q_dead_pid"; then
+    q_detail="the run's supervisor did not die"
+  elif ! proc_identity_matches "$q_dead/pgid" "$q_dead/gtoken" ||
+       ! kill -KILL -- "-$(cat "$q_dead/pgid")" 2>/dev/null; then
+    q_detail="the held build's group could not be killed"
+  fi
 fi
+touch "$TMP/queued.hold2"
+q_until 30 q_idle || q_detail="${q_detail:-the lock of the killed run never cleared}"
 if [ -z "$q_detail" ]; then
   [ ! -f "$q_dead/exit" ] || q_detail="the killed run recorded a verdict: $(cat "$q_dead/exit")"
 fi
 if [ -z "$q_detail" ]; then
   q_wrap "$q_root" "$TMP/queued.release7" exec tools/test-run.sh run build @red
-  q_capture "$q_root" status last
-  { [ "$q_rc" = 3 ] && grep -qF 'queued:' <<<"$q_out"; } ||
-    q_detail="status last, the dead run then a queued launch: exit $q_rc (want 3, queued): $q_out"
+  if q_until 30 q_ready "$TMP/queued.release7" "$q_wrap_pid"; then
+    q_capture "$q_root" status last
+    { [ "$q_rc" = 3 ] && grep -qF 'queued:' <<<"$q_out"; } ||
+      q_detail="status last, the dead run then a queued launch: exit $q_rc (want 3, queued): $q_out"
+  else
+    q_detail="the wrapper behind the dead run never reached its release gate"
+  fi
 fi
 if [ -z "$q_detail" ]; then
   q_capture "$q_root" wait last --timeout 3
@@ -488,11 +552,9 @@ if [ -z "$q_detail" ]; then
   (cd "$q_root/tools" && Q_PATH_PREFIX=$q_perlbin Q_PREFLIGHT_HOLD=$TMP/queued.preflight \
     OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_perlbin:$q_bin:$PATH exec bash ./test-run.sh run build @red) >/dev/null 2>&1 &
   q_wraps+=("$!:$TMP/queued.preflight")
-  q_relaunch() { ps -axww -o args= 2>/dev/null | grep -qF 'bash ./test-run.sh run build @red'; }
-  if ! q_until 30 q_relaunch; then
-    q_detail="the launcher from tools/ never showed in ps"
+  if ! q_until 30 test -e "$TMP/queued.preflight.ready"; then
+    q_detail="the launcher from tools/ never reached its preflight in the repo root"
   else
-    sleep .5
     q_capture "$q_root" status last
     { [ "$q_rc" = 3 ] && grep -qF 'queued:' <<<"$q_out" && [ "$(q_last "$q_root")" = "$q_before" ]; } ||
       q_detail="status last, a launcher from tools/ held at its preflight: exit $q_rc (want 3, queued): $q_out"
@@ -511,9 +573,9 @@ q_before=$(q_last "$q_root")
 (cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH exec bash -c '
   tools/test-run.sh run build @ok >/dev/null 2>&1
   exec bash "$2" "$1" exec -- tools/test-run.sh run build @red' q-exec "$TMP/queued.release9" "$q_slot") >/dev/null 2>&1 &
-q_wraps+=("$!:$TMP/queued.release9")
-q_execed() { ps -axww -o args= 2>/dev/null | grep -qF "q-slot.sh $TMP/queued.release9"; }
-if ! q_until 30 q_finished "$q_root" "$q_before" || ! q_until 30 q_execed; then
+q_execed=$!
+q_wraps+=("$q_execed:$TMP/queued.release9")
+if ! q_until 30 q_ready "$TMP/queued.release9" "$q_execed" || ! q_finished "$q_root" "$q_before"; then
   q_detail="the exec'ing shell's first run never finished, or it never exec'd: last: $(q_last "$q_root")"
 else
   q_capture "$q_root" wait last --timeout 1
@@ -529,39 +591,53 @@ q_release_all
 if [ -z "$q_detail" ]; then
   (cd "$TMP" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH \
     exec bash "$q_slot" "$TMP/queued.release10" exec -- "$q_spaced/tools/test-run.sh" run build @red) >/dev/null 2>&1 &
-  q_wraps+=("$!:$TMP/queued.release10")
-  sleep .5
-  q_capture "$q_spaced" status last
-  { [ "$q_rc" = 3 ] && grep -qF 'queued:' <<<"$q_out"; } ||
-    q_detail="status last in a spaced worktree, its launch queued elsewhere: exit $q_rc (want 3): $q_out"
+  q_spaced_wrap=$!
+  q_wraps+=("$q_spaced_wrap:$TMP/queued.release10")
+  if q_until 30 q_ready "$TMP/queued.release10" "$q_spaced_wrap"; then
+    q_capture "$q_spaced" status last
+    { [ "$q_rc" = 3 ] && grep -qF 'queued:' <<<"$q_out"; } ||
+      q_detail="status last in a spaced worktree, its launch queued elsewhere: exit $q_rc (want 3): $q_out"
+  else
+    q_detail="the spaced-worktree wrapper never reached its release gate"
+  fi
 fi
 q_release_all
 if [ -z "$q_detail" ]; then report 0 "$q_exec_label"; else report 1 "$q_exec_label" "$q_detail"; fi
 
-# `prepush --list` runs nothing: queued behind a wrapper it is no launch, and
-# a prepush that launches is one. The wrappers are never released, only
-# killed, and a run published after them clears the sighting they leave.
-q_pp_label="a queued prepush or prefixed launch is in flight; a queued prepush --list is not"
-q_detail=
+# Each command gets its own release gate. Once observed, refuse the launch
+# and drain its guardian before the next case can see that prior argv.
+q_detail= q_pp_index=0
 # Each: the status wanted, then the command queued behind the wrapper; the
 # prefixed ones peel their options and those options' operands.
 for q_pp_case in "3|tools/test-run.sh prepush --since base build" "0|tools/test-run.sh prepush --since base --list" \
   "3|timeout -k 5 60 tools/test-run.sh run build @red" "3|env -u X A=1 tools/test-run.sh run build @red" \
   "3|nice -n 5 bash tools/test-run.sh run build @red"; do
   IFS='|' read -r q_pp_want q_pp_arg <<<"$q_pp_case"
+  # A fresh green run clears the prior sighting and distinguishes idle from queued.
+  q_capture "$q_root" run build @ok
+  if [ "$q_rc" != 0 ]; then
+    q_detail="the green run before $q_pp_arg: exit $q_rc: $q_out"
+    break
+  fi
+  q_pp_index=$((q_pp_index + 1))
+  q_pp_release=$TMP/queued.prepush.$q_pp_index
   # shellcheck disable=SC2086 # the queued command's words, split on purpose
-  (cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH \
-    exec bash "$q_slot" "$TMP/queued.never" exec -- $q_pp_arg) >/dev/null 2>&1 &
-  q_pp=$!
-  sleep .5
-  q_capture "$q_root" status last
-  kill -KILL "$q_pp" 2>/dev/null
-  wait "$q_pp" 2>/dev/null
-  sleep 1.5 # its guardian, alone for a second once its wrapper is gone
-  [ "$q_rc" = "$q_pp_want" ] ||
-    { q_detail="status last beside a queued $q_pp_arg: exit $q_rc (want $q_pp_want): $q_out"; break; }
-  q "$q_root" run build @ok >/dev/null 2>&1
+  q_wrap "$q_root" "$q_pp_release" refuse $q_pp_arg
+  if q_until 30 q_ready "$q_pp_release" "$q_wrap_pid"; then
+    q_capture "$q_root" status last
+    q_pp_answer='verdict: pass'
+    if [ "$q_pp_want" = 3 ]; then
+      q_pp_answer="queued: a launch in this worktree has not published its run yet: $q_wrap_pid "
+    fi
+    { [ "$q_rc" = "$q_pp_want" ] && grep -qF "$q_pp_answer" <<<"$q_out"; } ||
+      q_detail="status last beside a queued $q_pp_arg: exit $q_rc (want $q_pp_want): $q_out"
+  else
+    q_detail="the wrapper for $q_pp_arg never reached its release gate"
+  fi
+  q_refuse "$q_pp_release" || q_detail="${q_detail:-the wrapper or guardian for $q_pp_arg did not drain}"
+  [ -z "$q_detail" ] || break
 done
+q_release_all
 if [ -z "$q_detail" ]; then report 0 "$q_pp_label"; else report 1 "$q_pp_label" "$q_detail"; fi
 
 # A wrapper detached from its caller is an orphan of parent 1 just as its
@@ -575,10 +651,9 @@ q_detail=
 q_orphan=$(cat "$TMP/queued.orphan")
 q_wraps+=("$q_orphan:$TMP/queued.release11")
 q_orphaned() { [ "$(ps -o ppid= -p "$q_orphan" 2>/dev/null | tr -d ' ')" = 1 ]; }
-if ! q_until 10 q_orphaned; then
-  q_detail="the detached wrapper is no orphan of parent 1: ppid $(ps -o ppid= -p "$q_orphan" 2>/dev/null)"
+if ! q_until 10 q_orphaned || ! q_until 30 q_ready "$TMP/queued.release11" "$q_orphan"; then
+  q_detail="the detached wrapper never reached its release gate as an orphan of parent 1"
 else
-  sleep .5
   q_capture "$q_root" status last
   { [ "$q_rc" = 3 ] && grep -qF 'queued:' <<<"$q_out"; } ||
     q_detail="status last, a detached wrapper queued: exit $q_rc (want 3): $q_out"
@@ -592,12 +667,16 @@ q_release_all
 if [ -z "$q_detail" ]; then
   q "$q_root" run build @ok >/dev/null 2>&1
   (cd "$q_root" && exec bash -c ': -- tools/test-run.sh run build @red
+    : >"$1.ready"
     while [ ! -e "$1" ]; do sleep .1; done' q-text "$TMP/queued.release12") >/dev/null 2>&1 &
   q_wraps+=("$!:$TMP/queued.release12")
-  sleep .5
-  q_capture "$q_root" status last
-  { [ "$q_rc" = 0 ] && grep -qF 'verdict: pass' <<<"$q_out"; } ||
-    q_detail="status last beside a -- in script text: exit $q_rc (want 0): $q_out"
+  if q_until 30 test -e "$TMP/queued.release12.ready"; then
+    q_capture "$q_root" status last
+    { [ "$q_rc" = 0 ] && grep -qF 'verdict: pass' <<<"$q_out"; } ||
+      q_detail="status last beside a -- in script text: exit $q_rc (want 0): $q_out"
+  else
+    q_detail="the script-text fixture never reached its release gate"
+  fi
   q_release_all
   if [ -z "$q_detail" ]; then
     q_capture "$q_root" wait last --timeout 5
@@ -618,18 +697,17 @@ if [ -z "$q_detail" ]; then
   q_before=$(q_last "$q_root")
   touch "$TMP/queued.release13"
   q_detached
-  # Gone, or a zombie a PID 1 that reaps nothing keeps (a container's).
-  q_gone() { case $(ps -o state= -p "$q_orphan" 2>/dev/null | tr -d ' ') in '' | Z*) return 0 ;; esac; return 1; }
-  if ! q_until 30 q_gone || ! q_finished "$q_root" "$q_before"; then
+  if ! q_until 30 q_exited "$q_orphan" || ! q_finished "$q_root" "$q_before"; then
     q_detail="the first detached wrapper never finished its run: last: $(q_last "$q_root")"
   else
-    # Start times read at a second's resolution at best (/proc's btime is
-    # whole seconds): the relaunch comes well clear of the verdict.
-    sleep 2.5
-    if ! q_detached orphaned; then
-      q_detail="the second detached wrapper is no orphan of parent 1: ppid $(ps -o ppid= -p "$q_orphan" 2>/dev/null)"
+    # The reader compares whole-second start times with the verdict's mtime.
+    # /proc adds two rounded-down times, so its estimate can be a second early.
+    q_first=$(q_last "$q_root")
+    if ! q_until 30 perl -e 'my @st = stat $ARGV[0]; exit !(@st && time > $st[9] + 1)' "$q_first/exit"; then
+      q_detail="the first detached run's verdict was not old enough to distinguish the next launch"
+    elif ! q_detached orphaned || ! q_until 30 q_ready "$TMP/queued.release13" "$q_orphan"; then
+      q_detail="the second detached wrapper never reached its release gate as an orphan of parent 1"
     else
-      sleep .5
       q_capture "$q_root" status last
       { [ "$q_rc" = 3 ] && grep -qF 'queued:' <<<"$q_out"; } ||
         q_detail="status last, an identical detached wrapper queued after the first run's verdict: exit $q_rc (want 3): $q_out"
@@ -637,7 +715,7 @@ if [ -z "$q_detail" ]; then
   fi
   # Released, it runs: no child of this shell, so it is waited out by pid.
   q_release_all
-  q_until 30 q_gone || q_detail="${q_detail:-the second detached wrapper never ended}"
+  q_until 30 q_exited "$q_orphan" || q_detail="${q_detail:-the second detached wrapper never ended}"
   q "$q_root" wait last --timeout 30 >/dev/null 2>&1
 fi
 if [ -z "$q_detail" ]; then report 0 "$q_orphan_label"; else report 1 "$q_orphan_label" "$q_detail"; fi
@@ -652,6 +730,7 @@ cat >"$q_fw" <<'FAKE'
 if [ "$1 $2 $3" = "execution slot --probe" ]; then echo "EXECUTION SLOT PROBE fakebox 4 4"; exit 0; fi
 while [ "$1" != -- ]; do shift; done
 shift
+: >"$Q_SLOT_RELEASE.ready"
 while [ ! -e "$Q_SLOT_RELEASE" ]; do sleep .1; done
 exec "$@"
 FAKE
@@ -659,8 +738,9 @@ chmod +x "$q_fw"
 q_before=$(q_last "$q_root")
 OCANNL_TOOL_FLEET_WORKER=$q_fw Q_SLOT_RELEASE=$TMP/queued.slot q_capture "$q_root" start build @red
 q_slotted=$(q_last "$q_root")
-{ [ "$q_rc" = 0 ] && [ -n "$q_slotted" ] && [ "$q_slotted" != "$q_before" ] && [ ! -f "$q_slotted/exit" ]; } ||
-  q_detail="start under a held slot: exit $q_rc; last: ${q_slotted:-none} (before: $q_before): $q_out"
+{ [ "$q_rc" = 0 ] && [ -n "$q_slotted" ] && [ "$q_slotted" != "$q_before" ] &&
+  q_until 30 test -e "$TMP/queued.slot.ready" && [ ! -f "$q_slotted/exit" ]; } ||
+  q_detail="start did not reach the held slot: exit $q_rc; last: ${q_slotted:-none} (before: $q_before): $q_out"
 if [ -z "$q_detail" ]; then
   q_capture "$q_root" wait last --timeout 1
   { [ "$q_rc" = 124 ] && grep -qxF "wait timed out after 1s: $q_slotted" <<<"$q_out"; } ||
@@ -749,8 +829,7 @@ leg_99b() {
   fi
   read -r real_pid <"$TMP/real.pid"
   q_until 5 q_child_shape "$real_pid" || real_detail='real wrapper lacks guardian/child topology'
-  # Same observation against the stand-in, and a deliberately guardian-free
-  # twin. The control removes only the fork line, leaving command-as-child.
+  # Both modes retain the command child. Only the stand-in has a guardian.
   cat >"$TMP/shape-child.sh" <<'EOF'
 #!/usr/bin/env bash
 echo $$ >"$1"
@@ -763,11 +842,8 @@ EOF
     read -r shape_pid <"$TMP/shape.pid"
     q_until 5 q_child_shape "$shape_pid" || real_detail='stand-in lacks real guardian/child topology'
   else real_detail='stand-in child never started'; fi
-  sed '/^( (while kill -0 /d' "$q_slot" >"$TMP/no-guardian.sh"
-  (cd "$q_root" && exec bash "$TMP/no-guardian.sh" "$TMP/control.slot" exec -- \
-    bash "$TMP/shape-child.sh" "$TMP/control.pid" "$TMP/control.release") &
-  local control=$!
-  q_wraps+=("$control:$TMP/control.slot")
+  q_wrap "$q_root" "$TMP/control.slot" exec-without-guardian \
+    bash "$TMP/shape-child.sh" "$TMP/control.pid" "$TMP/control.release"
   touch "$TMP/control.slot"
   q_until 5 test -s "$TMP/control.pid"
   if [ -s "$TMP/control.pid" ]; then
@@ -1250,8 +1326,6 @@ harness_leg_run '100: every last lookup stays in its own worktree #queries' leg_
 # outranks. The refusals are the same harness stopped before any leg.
 subj_label="--subject tests the named copy: without the prepush --list rule, leg 99 fails in that one check alone"
 subj_refuse_label="a subject that is no file, or no value, is refused before any leg, by the option and by the variable"
-# The check that rule answers, by the label leg 99 reports it under.
-subj_check=$(sed -n 's/^q_pp_label="\(.*\)"$/\1/p' "$SELF")
 subj_run() { # [NAME=VALUE...] -- [harness argv...]: sets subj_rc, subj_out
   local envs=()
   while [ "$1" != -- ]; do envs+=("$1"); shift; done
@@ -1267,7 +1341,6 @@ subj_run() { # [NAME=VALUE...] -- [harness argv...]: sets subj_rc, subj_out
   subj_out=$(cat "$TMP/subj/out")
 }
 leg_102() {
-[ -n "$subj_check" ] || { harness_abandon "no q_pp_label is assigned in $SELF"; return; }
 local mutant=$TMP/subj/mutant.sh absent=$TMP/subj/no-such-script.sh digest fails detail=
 mkdir -p "$TMP/subj"
 awk 'index($0, "next if $w[$i + 1] eq \"prepush\" && grep") { n++; next }
@@ -1277,7 +1350,7 @@ digest=$(cksum <"$mutant")
 subj_run "OCANNL_TOOL_HARNESS_SUBJECT=$absent" -- --subject "$mutant" --only '^99:'
 fails=$(grep '^FAIL  ' <<<"$subj_out")
 if [ "$subj_rc" != 1 ]; then detail="exit $subj_rc (want 1)"
-elif [ "$fails" != "FAIL  $subj_check" ]; then detail="the checks failed are not that one alone"
+elif [ "$fails" != "FAIL  $q_pp_label" ]; then detail="the checks failed are not that one alone"
 elif ! grep -q '^PASS  ' <<<"$subj_out"; then detail="no check passed"
 elif ! grep -qxF "  digest $digest" <<<"$subj_out"; then detail="the header does not carry the mutant's digest $digest"
 elif ! grep -qF "ran 1 leg(s):" <<<"$subj_out"; then detail="the run did not account for its one leg"
