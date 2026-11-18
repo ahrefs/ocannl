@@ -264,13 +264,20 @@ q_exited() { # pid: a zombie has no launch argv and cannot record a verdict
   case $1 in '' | *[!0-9]* | 0) return 1 ;; esac
   ! kill -0 "$1" 2>/dev/null || [ "$(pstate "$1")" = Z ]
 }
+q_drain_guardian() { # release
+  local guardian
+  { read -r guardian <"$1.guardian"; } 2>/dev/null && q_until 30 q_exited "$guardian"
+}
 q_refuse() { # release: end the only outstanding wrapper and drain its guardian
-  local guardian rc=0
-  touch "$1" || return 1
+  local rc=0 released=
+  if touch "$1" && q_until 30 q_exited "$q_wrap_pid"; then
+    released=1
+  else
+    kill -KILL "$q_wrap_pid" 2>/dev/null || :
+  fi
   wait "$q_wrap_pid" 2>/dev/null || rc=$?
   q_wraps=()
-  { read -r guardian <"$1.guardian"; } 2>/dev/null &&
-    [ "$rc" = 75 ] && q_until 30 q_exited "$guardian"
+  q_drain_guardian "$1" && [ "$released" = 1 ] && [ "$rc" = 75 ]
 }
 
 q_pp_label="a queued prepush or prefixed launch is in flight; a queued prepush --list is not"
@@ -699,6 +706,8 @@ if [ -z "$q_detail" ]; then
   q_detached
   if ! q_until 30 q_exited "$q_orphan" || ! q_finished "$q_root" "$q_before"; then
     q_detail="the first detached wrapper never finished its run: last: $(q_last "$q_root")"
+  elif ! q_drain_guardian "$TMP/queued.release13"; then
+    q_detail="the first detached wrapper's guardian still carried its argv"
   else
     # The reader compares whole-second start times with the verdict's mtime.
     # /proc adds two rounded-down times, so its estimate can be a second early.
