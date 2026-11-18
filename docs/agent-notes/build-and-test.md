@@ -1738,7 +1738,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   signal check instead of dying: TERMed in its first instructions (bash 5.2+ re-sends a signal it
   caught before the reset, to the "original" handler) it runs the parent's EXIT trap, and TERMed
   between its last check and a fork it finishes the fork, the child execs with the signal spent
-  and outlives it. On CI that was bounded's watchdog, TERMed right after its fork in
+  and outlives it. (A third window, read from the source and never observed: with TERM trapped,
+  one TERMed after it clears bash 5.2+'s re-send flag and before it resets loses the signal.) On CI that was bounded's watchdog, TERMed right after its fork in
   `scripts/test-setup-ocaml-env.sh` (e): once harness_cleanup ran inside it and removed the
   scratch directory, failing 1b as "sed did not capture"; once its `sleep` survived (`elapsed=0s
   watchdog-sleeps=1`). `harness_scratch` traps INT and TERM before EXIT (a trap set after it for

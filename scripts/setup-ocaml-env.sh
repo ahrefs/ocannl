@@ -233,8 +233,9 @@ bounded() {
   # defers TERM in subshells (one whose EXIT trap was set before its TERM
   # trap, as the test harness's was), a watchdog TERMed in its first
   # instructions ran the caller's EXIT trap, and one TERMed just before forking
-  # its `sleep` finished the fork and left the sleep behind; with TERM trapped,
-  # a watchdog TERMed between the two loses the signal and sits out the bound
+  # its `sleep` finished the fork and left the sleep behind (both seen on CI);
+  # with TERM trapped, a watchdog TERMed between the two would, by bash's
+  # source, lose the signal and sit out the bound -- never observed
   # (gh-ocannl-2242). SIGKILL is neither caught nor deferred, and Linux lets
   # no fork in progress escape it. macOS can: a child the watchdog was forking
   # as the KILL went out can miss it, still a member of the group, so the group

@@ -608,6 +608,22 @@ acting_run() { # FUNCTION ON_TERM: rc, el
     "$1" "$D_FENCE" acting_command >/dev/null 2>&1
   rc=$?; el=$((SECONDS - t0))
 }
+acting_detail() { # what one run left, for a FAIL's detail
+  case $rc in
+    43) printf 'the watchdog never stood its TERM trap up (no %s), so nothing was tested' "$ready" ;;
+    44) printf 'the watchdog never ran its sleep %s, so nothing was tested' "$D_FENCE" ;;
+    *) printf 'rc=%s elapsed=%ss (want 42, ~0s); %s' "$rc" "$el" "$1" ;;
+  esac
+}
+reap_left() { # kill what a case left, so the next one starts from an empty census
+  local d
+  for d in "$D_LATE" "$D_FENCE"; do
+    # shellcheck disable=SC2046
+    kill -KILL $(sleep_pids "$d") 2>/dev/null
+    [ "$(settled_survivors "$d")" = 0 ] ||
+      report 1 "bounded (g)-(i): a case's leftover sleep $d could not be reaped" "the next case's census would count it"
+  done
+}
 appeared() { # DURATION: the count of live `sleep DURATION`, waiting up to 2s for one
   local i n
   for i in 1 2 3 4 5 6 7 8 9 10; do
