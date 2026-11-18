@@ -13,7 +13,18 @@ let rec wait pid =
   | _, status -> status
   | exception Unix.Unix_error (Unix.EINTR, _, _) -> wait pid
 
-let run ?exe ?cwd ?temp_dir args =
+(* Dune sets these in every action's environment: [INSIDE_DUNE] changes how a Dune reading it finds
+   its root, configuration and output paths, and a Dune exiting with [DUNE_ACTION_TRACE_DIR] set
+   copies its own trace into that directory, which the parent collects as the action's trace. *)
+let dune_action_variables = [ "INSIDE_DUNE"; "DUNE_ACTION_TRACE_DIR" ]
+
+let nested_dune_environment ?(env = Unix.environment ()) () =
+  Array.filter env ~f:(fun binding ->
+      not
+        (List.exists dune_action_variables ~f:(fun var ->
+             String.is_prefix binding ~prefix:(var ^ "="))))
+
+let run ?exe ?cwd ?temp_dir ?env ?(stderr = `Capture) args =
   let exe = absolute (Option.value exe ~default:(executable ())) in
   let paths = ref [] and descriptors = ref [] in
   Exn.protect
@@ -33,8 +44,24 @@ let run ?exe ?cwd ?temp_dir args =
         (path, fd)
       in
       let out_path, out = capture ".out" in
-      let err_path, err = capture ".err" in
-      let spawn () = Unix.create_process exe (Array.of_list (exe :: args)) Unix.stdin out err in
+      let err_path, err =
+        match stderr with
+        | `Capture ->
+            let path, fd = capture ".err" in
+            (Some path, fd)
+        | `Discard ->
+            let fd = Unix.openfile Stdlib.Filename.null [ Unix.O_WRONLY ] 0 in
+            descriptors := fd :: !descriptors;
+            Unix.set_close_on_exec fd;
+            (None, fd)
+        | `Into fd -> (None, fd)
+      in
+      let argv = Array.of_list (exe :: args) in
+      let spawn () =
+        match env with
+        | None -> Unix.create_process exe argv Unix.stdin out err
+        | Some env -> Unix.create_process_env exe argv env Unix.stdin out err
+      in
       let pid =
         match cwd with
         | None -> spawn ()
@@ -49,7 +76,9 @@ let run ?exe ?cwd ?temp_dir args =
       List.iter !descriptors ~f:Unix.close;
       descriptors := [];
       let status = wait pid in
-      (status, Stdio.In_channel.read_all out_path, Stdio.In_channel.read_all err_path))
+      ( status,
+        Stdio.In_channel.read_all out_path,
+        Option.value_map err_path ~default:"" ~f:Stdio.In_channel.read_all ))
 
 let output (_, stdout, stderr) = stdout ^ stderr
 

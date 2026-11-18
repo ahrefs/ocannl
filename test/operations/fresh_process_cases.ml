@@ -12,7 +12,7 @@ let test () =
           Unix.unlink (Stdlib.Filename.concat root name));
       Unix.rmdir root)
     ~f:(fun () ->
-      let run args = Fresh_process.run ~temp_dir:root args in
+      let run ?env ?stderr args = Fresh_process.run ~temp_dir:root ?env ?stderr args in
       let clean label = p_empty label ~over:[ root ] (Array.to_list (Stdlib.Sys.readdir root)) in
       let refused = run [ "--refuse" ] in
       p "a refusal requires its exit status and causal diagnostic"
@@ -34,6 +34,31 @@ let test () =
         && String.equal stdout large
         && String.equal stderr ("stderr:" ^ large));
       clean "capture files are removed after normal and faulted child statuses";
+      Unix.putenv "FRESH_PROCESS_INHERITED" "inherited";
+      p "without an environment the child inherits the parent's"
+        (Poly.equal (run [ "--env" ]) (Unix.WEXITED 0, "probe= inherited=inherited", ""));
+      p "a given environment replaces the inherited one"
+        (Poly.equal
+           (run ~env:[| "FRESH_PROCESS_PROBE=planted" |] [ "--env" ])
+           (Unix.WEXITED 0, "probe=planted inherited=", ""));
+      let discarded, leaked =
+        Stderr_capture.capture ~temp_dir:root ~echo:false (fun () ->
+            run ~stderr:`Discard [ "--split" ])
+      in
+      p "a discarded stderr keeps the child's status and stdout and reaches no stream"
+        (Poly.equal discarded (Unix.WEXITED 1, "the planted ", "") && String.is_empty leaked);
+      let sink = Stdlib.Filename.concat root "sink" in
+      let fd = Unix.openfile sink [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o600 in
+      let into = run ~stderr:(`Into fd) [ "--split" ] in
+      (* Still the caller's: a write after the child's succeeds. *)
+      let still_open = Unix.write_substring fd "!" 0 1 = 1 in
+      Unix.close fd;
+      let sunk = Stdio.In_channel.read_all sink in
+      Unix.unlink sink;
+      p "stderr into the caller's descriptor reaches it and leaves it open"
+        (Poly.equal into (Unix.WEXITED 1, "the planted ", "")
+        && still_open && String.equal sunk "refusal!");
+      clean "discarded and redirected stderr leave no capture files";
       let before = Stdlib.Sys.getcwd () in
       (* Relative executable resolution happens before the child's working directory changes. *)
       let status, stdout, _ =
@@ -99,6 +124,10 @@ let () =
       Stdio.printf "%s" large;
       Stdio.eprintf "stderr:%s" large
   | [ _; "--cwd" ] -> Stdio.printf "%s" (Stdlib.Sys.getcwd ())
+  | [ _; "--env" ] ->
+      let get name = Option.value (Stdlib.Sys.getenv_opt name) ~default:"" in
+      Stdio.printf "probe=%s inherited=%s" (get "FRESH_PROCESS_PROBE")
+        (get "FRESH_PROCESS_INHERITED")
   | [ _; "--report" ] ->
       Fresh_process.report ~label:"faulted capture"
         (Unix.WEXITED 2, "FAIL: child claim\nFAILED: child summary\n", "STOPPED EARLY: child\n")

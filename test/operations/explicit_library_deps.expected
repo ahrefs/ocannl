@@ -3,8 +3,16 @@ without the project setting, the same undeclared use compiles: true
 an undeclared transitive library is refused for its unbound module: true
 a declared library's re-export compiles: true
 Dune's injected ppx runtime dependency compiles without a declaration: true
+a nested Dune handed the action's variables resolves paths as the parent's action: true
+a nested Dune handed the action's variables copies its trace into the parent's: true
+a nested Dune in the nested-Dune environment resolves paths as an independent build: true
+a nested Dune in the nested-Dune environment leaves the parent's action trace alone: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:5d96a6af77f2e3cc3e176d98155165fa] action's variables resolves
+  [scanner-refusal:a5d692f42ee189e1a52b3863f56276ba] action's variables copies
+  [scanner-refusal:65eb18ba581fbe9366bfc0028974c962] nested-Dune environment resolves
+  [scanner-refusal:19ebc49024b1c4e3db05242a22f8b0d5] nested-Dune environment leaves
   [scanner-refusal:e2937f725c3dd416fbbbb047979dc15a] library declaration compiles
   [scanner-refusal:8261260fa2908a6e512581ef47939697] undeclared use compiles
   [scanner-refusal:bd4e1515861d31f929904e3deb2b0b7b] undeclared transitive library

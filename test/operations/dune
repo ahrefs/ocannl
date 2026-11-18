@@ -7585,7 +7585,7 @@
 (executable
  (name explicit_library_deps)
  (modules explicit_library_deps)
- (libraries base stdio unix test_scan arrayjit.verdict))
+ (libraries base fresh_process stdio unix test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- isolated compile-only fixtures; no device is opened.
@@ -8459,7 +8459,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules fresh_process_cases)
- (libraries base stdio unix fresh_process arrayjit.verdict))
+ (libraries base stdio unix fresh_process stderr_capture arrayjit.verdict))
 
 (test
  (name frozen_master_pack)
@@ -17481,6 +17481,7 @@
  (modules unused_compiler_deps)
  (libraries
   base
+  fresh_process
   stderr_capture
   stdio
   unix

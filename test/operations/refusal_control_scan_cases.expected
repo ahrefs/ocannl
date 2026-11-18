@@ -753,6 +753,10 @@ test_config_consistency.ml: [scanner-refusal:e72f69460ef84de5e85f6c2bbe7bef5b] d
 test_config_consistency.ml: [scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count (claim) is catalogued beside config_scan_lexing.expected, test_config_consistency.expected: true
 test_config_consistency.ml: [scanner-refusal:2314f0c5d2762ecb0069dfb64d5c8a54] known_config_keys (claim) is catalogued beside config_scan_lexing.expected, test_config_consistency.expected: true
 explicit_library_deps.ml has exactly the explicitly assigned refusal controls: true
+explicit_library_deps.ml: [scanner-refusal:5d96a6af77f2e3cc3e176d98155165fa] action's variables resolves (claim) is catalogued beside explicit_library_deps.expected: true
+explicit_library_deps.ml: [scanner-refusal:a5d692f42ee189e1a52b3863f56276ba] action's variables copies (claim) is catalogued beside explicit_library_deps.expected: true
+explicit_library_deps.ml: [scanner-refusal:65eb18ba581fbe9366bfc0028974c962] nested-Dune environment resolves (claim) is catalogued beside explicit_library_deps.expected: true
+explicit_library_deps.ml: [scanner-refusal:19ebc49024b1c4e3db05242a22f8b0d5] nested-Dune environment leaves (claim) is catalogued beside explicit_library_deps.expected: true
 explicit_library_deps.ml: [scanner-refusal:79b83d87bc35a637a45c0dd6dc7479cf] explicit_library_deps (direct failure) is catalogued beside explicit_library_deps.expected: true
 explicit_library_deps.ml: [scanner-refusal:e2937f725c3dd416fbbbb047979dc15a] library declaration compiles (claim) is catalogued beside explicit_library_deps.expected: true
 explicit_library_deps.ml: [scanner-refusal:8261260fa2908a6e512581ef47939697] undeclared use compiles (claim) is catalogued beside explicit_library_deps.expected: true

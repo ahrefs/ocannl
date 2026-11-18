@@ -6,6 +6,11 @@ a causal diagnostic cannot be assembled across output streams: true
 complete diagnostic fragments may come from either captured stream: true
 large streams stay separate and do not fill an unread pipe: true
 capture files are removed after normal and faulted child statuses: true
+without an environment the child inherits the parent's: true
+a given environment replaces the inherited one: true
+a discarded stderr keeps the child's status and stdout and reaches no stream: true
+stderr into the caller's descriptor reaches it and leaves it open: true
+discarded and redirected stderr leave no capture files: true
 a relative executable still runs from another directory: true
 the parent directory is restored after a successful spawn: true
 spawn failure restores the parent directory: true

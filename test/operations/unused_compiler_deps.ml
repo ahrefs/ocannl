@@ -180,24 +180,15 @@ type library = {
 let temp_root = lazy (Stdlib.Filename.temp_dir "unused-compiler-deps-" "")
 let temp name = Stdlib.Filename.concat (Lazy.force temp_root) name
 
-(* [dune describe workspace] of the project rooted at [root], in a build directory of its own. *)
+(* [dune describe workspace] of the project rooted at [root], in a build directory of its own. The
+   nested dune must not believe it is an action of the running one; its stderr is discarded. *)
 let run_describe ~dune ~root ~tag =
   let build_dir = temp ("ucd-" ^ tag ^ "-build") in
-  let out = temp ("ucd-" ^ tag ^ ".csexp") in
-  (* The nested dune must not believe it is an action of the running one. *)
-  let env =
-    Unix.environment ()
-    |> Array.filter ~f:(fun kv ->
-        not
-          (List.exists [ "INSIDE_DUNE="; "DUNE_ACTION_TRACE_DIR=" ] ~f:(fun prefix ->
-               String.is_prefix kv ~prefix)))
-  in
-  let fd = Unix.openfile out [ O_WRONLY; O_CREAT; O_TRUNC ] 0o644 in
-  let devnull = Unix.openfile Stdlib.Filename.null [ O_WRONLY ] 0 in
-  let pid =
-    Unix.create_process_env dune
-      [|
-        dune;
+  let status, out, _ =
+    Fresh_process.run ~exe:dune
+      ~env:(Fresh_process.nested_dune_environment ())
+      ~temp_dir:(Lazy.force temp_root) ~stderr:`Discard
+      [
         "describe";
         "workspace";
         "--lang";
@@ -208,14 +199,10 @@ let run_describe ~dune ~root ~tag =
         root;
         "--build-dir";
         build_dir;
-      |]
-      env Unix.stdin fd devnull
+      ]
   in
-  Unix.close fd;
-  Unix.close devnull;
-  let _, status = Unix.waitpid [] pid in
   match status with
-  | WEXITED 0 -> Ok (In_channel.read_all out, build_dir)
+  | WEXITED 0 -> Ok (out, build_dir)
   | _ -> Error (Printf.sprintf "dune describe workspace of %s did not exit 0" tag)
 
 (* The workspace description lists external libraries only where a library or executable it
@@ -304,19 +291,15 @@ let cmi_units dir =
         |> List.filter_map ~f:(fun f ->
             Option.map (String.chop_suffix f ~suffix:".cmi") ~f:String.capitalize))
 
-(* These tools are action arguments resolved by dune, not shell commands found on PATH. *)
+(* These tools are action arguments resolved by dune, not shell commands found on PATH. Their stderr
+   goes to the caller's [stderr], so archive diagnostics stay visible. *)
 let capture ~stderr tool args =
-  let out = temp "ucd-tool-output" in
-  try
-    let fd = Unix.openfile out [ O_WRONLY; O_CREAT; O_TRUNC ] 0o644 in
-    let pid =
-      Exn.protect
-        ~finally:(fun () -> Unix.close fd)
-        ~f:(fun () -> Unix.create_process tool (Array.of_list (tool :: args)) Unix.stdin fd stderr)
-    in
-    let _, status = Unix.waitpid [] pid in
-    match status with WEXITED 0 -> Ok (In_channel.read_all out) | _ -> Error "tool did not exit 0"
-  with Unix.Unix_error (e, _, _) -> Error (Unix.error_message e)
+  match
+    Fresh_process.run ~exe:tool ~temp_dir:(Lazy.force temp_root) ~stderr:(`Into stderr) args
+  with
+  | WEXITED 0, out, _ -> Ok out
+  | _ -> Error "tool did not exit 0"
+  | exception Unix.Unix_error (e, _, _) -> Error (Unix.error_message e)
 
 type archive_info = { definitions : string list; interfaces : string list }
 
