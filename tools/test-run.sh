@@ -3983,7 +3983,7 @@ prepush_scan_alert() { # run dir; at most one notice per queried run
       last unless $line =~ /\n\z/;
       $offset = tell $log;
       $line =~ s/\e\[[0-9;]*m//g;
-      if ($line =~ /\A-> required by alias ([A-Za-z0-9_.+\/-]+) in(?: [^\r\n]+)?\r?\n\z/ &&
+      if ($line =~ /\A-> required by alias ([A-Za-z0-9_.+\/-]+)(?: in(?: [^\r\n]+)?)?\r?\n\z/ &&
           $member{$1}) {
         print "\@$1";
         exit 0;
@@ -4623,10 +4623,15 @@ if [ "$sub" = prepush ]; then
   fi
   printf '%s\n' "${pp_keep[@]}" >"$pp_dir/list" || die "cannot write the list in $pp_dir"
   # The aggregate owns membership. Resolve its relative alias deps in the
-  # same directory as Dune does, then intersect with affected's kept operands.
+  # same directory as Dune does, then intersect with affected's kept operands
+  # and exact alias words before Dune's own `--`.
   if [ -r test/operations/dune ] && ! explicit_build_root "$@"; then
     pp_scans=$(perl -e "$dune_reader_perl"'
-      my %selected = map { (s/^\@\@?//r, 1) } @ARGV;
+      my %selected;
+      for my $arg (@ARGV) {
+        last if $arg eq "--";
+        $selected{$1} = 1 if $arg =~ /\A\@\@?([A-Za-z0-9_.+\/-]+)\z/;
+      }
       my $forms = eval { read_dune("test/operations/dune") } or exit 0;
       my @scans = grep {
         ref $_ && @$_ && $_->[0] eq "alias" &&
@@ -4650,7 +4655,7 @@ if [ "$sub" = prepush ]; then
         push @members, $member if $selected{$member};
       }
       print "$_\n" for @members;
-    ' "${pp_keep[@]}") || pp_scans=
+    ' -- "${pp_keep[@]}" "$@") || pp_scans=
   fi
   sub=$pp_mode
   set -- ${pp_run_opts[@]+"${pp_run_opts[@]}"} --targets-file "$pp_dir/list" "$@"
@@ -5769,7 +5774,8 @@ case $sub in
       scan_paths=1
       for arg do
         [ "$arg" != -- ] || break
-        if [ "$arg" = --debug-dependency-path ]; then scan_paths=; break; fi
+        # Cmdliner accepts a unique prefix of this flag.
+        if [[ $arg == --* && --debug-dependency-path == "$arg"* ]]; then scan_paths=; break; fi
       done
       if [ -n "$scan_paths" ]; then shift; set -- build --debug-dependency-path "$@"; fi
     fi

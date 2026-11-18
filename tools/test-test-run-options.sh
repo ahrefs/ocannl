@@ -2884,7 +2884,8 @@ cp "$SRC" "$repeat_root/tools/test-run.sh"
 # it sees the notice. The fake Dune exits red for the benchmark scan alone.
 pp_scan_check() {
   local tag=$1 rc out err
-  if [ "${2:-}" = --start ]; then
+  shift
+  if [ "${1:-}" = --start ]; then
     argv_mode=prepush_scan_red REPEAT_TEST_SCAN_ALERT=$TMP/$tag.wait.err pp_probe "$tag" 0 --since base --start
     if [ "$argv_rc" != 0 ]; then pp_scan_detail="launch: exit $argv_rc: $argv_err"; return; fi
     rc=0
@@ -2892,7 +2893,7 @@ pp_scan_check() {
       >"$TMP/$tag.wait.out" 2>"$TMP/$tag.wait.err" || rc=$?
     out=$(cat "$TMP/$tag.wait.out") err=$(cat "$TMP/$tag.wait.err")
   else
-    argv_mode=prepush_scan_red REPEAT_TEST_SCAN_ALERT=$TMP/$tag.err pp_probe "$tag" 0 --since base
+    argv_mode=prepush_scan_red REPEAT_TEST_SCAN_ALERT=$TMP/$tag.err pp_probe "$tag" 0 --since base "$@"
     rc=$argv_rc out=$argv_out err=$argv_err
   fi
   if [ "$rc" != 1 ] || [ "$(cat "$argv_dir/exit" 2>/dev/null)" != 1 ] ||
@@ -2925,6 +2926,20 @@ pp_scan_probes() {
   if [ "$argv_rc" = 0 ] && [ -z "$argv_calls" ] && [ "$argv_out" = "$(cat "$pp_out")" ]; then
     report 0 "$label"
   else report 1 "$label" "exit $argv_rc; list: $argv_out; calls: $argv_calls"; fi
+  printf '%s\n' '@test/operations/runtest-fixture-scan' >"$pp_out"
+  label='prepush reports an explicitly added scan with the caller’s abbreviated dependency-path flag'
+  pp_scan_check pp-scan-extra build --debug-dependency-pat @benchmarks/runtest-fixture-scan
+  if [ -z "$pp_scan_detail" ]; then report 0 "$label"; else report 1 "$label" "$pp_scan_detail"; fi
+  printf '%s\n' '@benchmarks/runtest-fixture-scan' >>"$pp_out"
+  # Select the actual filter, while the fake dune and opam stub keep this
+  # probe independent of the installed Windows toolchain.
+  cp "$HERE/dune-quiet.sh" "$repeat_root/tools/"
+  printf ':\n' >"$repeat_root/tools/opam-env.sh"
+  label='prepush reports a scan through the linker-warning filter while Dune is still running'
+  OSTYPE=msys pp_scan_check pp-scan-filter
+  if [ -z "$pp_scan_detail" ] && ! grep -Fq 'Warning: corrupt .drectve' "$argv_dir/log"; then
+    report 0 "$label"
+  else report 1 "$label" "${pp_scan_detail:-the linker warning reached the run log}"; fi
   label='prepush without the early notice loses the scan timing oracle'
   sed 's/; prepush_scan_alert "$run_dir"; done/; done/' "$SRC" >"$repeat_root/tools/test-run.sh"
   if cmp -s "$SRC" "$repeat_root/tools/test-run.sh"; then

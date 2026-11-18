@@ -26,9 +26,10 @@ eval "$(credential_env_scrub_text)" || {
 }
 
 status=0
+# Prepush reads scan diagnostics while Dune still holds the run open.
 {
   dune "$@" 2>&1 1>&3 3>&- \
-    | grep -vE 'Warning: (corrupt \.drectve at end of def file|\.drectve .* unrecognized)' >&2
+    | grep --line-buffered -vE 'Warning: (corrupt \.drectve at end of def file|\.drectve .* unrecognized)' >&2
   status=${PIPESTATUS[0]}
 } 3>&1
 exit "$status"
