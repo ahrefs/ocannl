@@ -12,6 +12,8 @@ trace's events against its summary's totals, a pick against the explain line of 
 The complete/incomplete predicate additionally reads two fixed summary texts: the live search's
 completion is diagnostic only, since timing calls can raise under load. This test checks captured
 formats and reader behavior; it does not assert that a live timing search has no raised calls.
+A second traced search raises one candidate's timing call on purpose (bench_line_samples'
+`trace-raise`), so the raised call's record is read off a line its producer printed (gh-ocannl-2246).
 benchmarks/test/test_bench_line_scan.py keeps the readers in bench_output.
 
 Usage: bench_line_readers.py ROOT, ROOT holding benchmarks/ and the captured
@@ -187,10 +189,11 @@ print("== the timing trace (Bench_harness.install_timing_trace)")
 err = captured("trace", "log")
 path = root / "test/operations/bench_lines_trace.log"
 summary = bench_output.trace_summary(err)
-# Keep the producer's full summary in failures, including INCOMPLETE and its raised-call count.
-# The current trace does not identify the raised calls or their exceptions.
+# Keep the producer's full summary in failures, including INCOMPLETE and its raised-call count,
+# and every raised call's record, naming its candidate and exception (gh-ocannl-2246).
 trace_detail = " | ".join(line for line in err.splitlines()
-                          if line.startswith("timing-trace: summary: ")) or "no trace summary"
+                          if line.startswith(("timing-trace: summary: ", "timing-trace: raised ")))
+trace_detail = trace_detail or "no trace summary"
 print(f"live trace (not part of the golden): {trace_detail}", file=sys.stderr)
 attempts = bench_output.trace_events(err, "attempt")
 calls = bench_output.trace_events(err, "call")
@@ -225,6 +228,41 @@ with tempfile.TemporaryDirectory() as scratch:
         results.append(cli("trace-has", fixture, "incomplete")[0])
     claim("trace-has distinguishes complete and incomplete fixed summaries",
           results == [3, 0], f"exits {results}, expected [3, 0]; {incomplete}")
+# gh-ocannl-2246: a raised timing call's record. The live search's own raises stay diagnostic
+# (gh-ocannl-1992): whether any call raises is the host's, so what is pinned is that the summary's
+# count -- validations started less records returned -- is the number of raised records, numbered
+# in order. The injected run then raises exactly one call on purpose, and its record names that
+# candidate and that exception.
+raised = bench_output.trace_raised(err)
+print(f"live trace raised records (not part of the golden): {len(raised)}", file=sys.stderr)
+claim("the summary's raised-call count is the trace's raised records",
+      summary["raised"] == len(raised) and summary["incomplete"] == bool(raised)
+      and [r["n"] for r in raised] == list(range(1, len(raised) + 1)), trace_detail)
+err = captured("trace_raise", "log")
+injected = [re.fullmatch(r'injected: "((?:[^"\\]|\\.)*)" "((?:[^"\\]|\\.)*)"', line)
+            for line in captured("trace_raise", "out").splitlines()]
+injected = [(bench_output.ocaml_string(m[1]), bench_output.ocaml_string(m[2]))
+            for m in injected if m]
+summary = bench_output.trace_summary(err)
+raised = bench_output.trace_raised(err)
+trace_detail = " | ".join(line for line in err.splitlines()
+                          if line.startswith(("timing-trace: summary: ", "timing-trace: raised ")))
+claim("the injected run raised one candidate's timing call, not the baseline's",
+      len(injected) == 1 and injected[0][0] != "baseline", repr(injected))
+claim("the injected run printed raised records, each read as one (an unreadable one raises)",
+      len(raised) == len(bench_output.trace_events(err, "raised")) > 0, trace_detail)
+claim("exactly one raised record is the injected failure, naming its candidate and exception",
+      [(r["label"], r["exception"]) for r in raised].count(injected[0]) == 1
+      and [r for r in raised if (r["label"], r["exception"]) == injected[0]][0]["phase"] is None,
+      f"{injected}; {trace_detail}")
+claim("the injected run's summary reads INCOMPLETE, counting exactly its raised records",
+      summary is not None and summary["incomplete"] and summary["raised"] == len(raised)
+      and [r["n"] for r in raised] == list(range(1, len(raised) + 1)), trace_detail)
+path = root / "test/operations/bench_lines_trace_raise.log"
+claim("trace-has reads the injected run as incomplete, and its search as done",
+      cli("trace-has", path, "incomplete")[0] == 0 == cli("trace-has", path, "search-done")[0],
+      trace_detail)
+print(f"injected run raised records (not part of the golden): {len(raised)}", file=sys.stderr)
 exercised.add("timing_trace")
 
 # ---------------------------------------------------------------------------------------------

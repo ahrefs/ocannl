@@ -150,21 +150,23 @@ def compile_traces(text):
 
 # ---------------------------------------------------------------------------------------------
 # The trace's session records (gh-ocannl-834): `timing-trace: summary: ...` (printed at exit, with
-# the running totals), `timing-trace: attempt ...` (one per candidate the tuner attempts) and
-# `timing-trace: search done: ...` (the end of the measured compile). Bench_harness.install_timing_trace
-# and trace_search_done print them.
+# the running totals), `timing-trace: attempt ...` (one per candidate the tuner attempts),
+# `timing-trace: raised ...` (one per tagged timing call that raised after its validation, naming
+# its candidate and exception, gh-ocannl-2246) and `timing-trace: search done: ...` (the end of the
+# measured compile). Bench_harness.install_timing_trace and trace_search_done print them.
 
 TRACE_PREFIX = "timing-trace: "
 _TRACE_SUMMARY = re.compile(
     r"^timing-trace: summary: (?P<wall>[0-9.]+)s wall, (?P<attempts>\d+) candidate attempts, "
     r"(?P<calls>\d+) timing calls, (?P<launches>\d+) launches, ")
+_TRACE_INCOMPLETE = re.compile(r"; INCOMPLETE: (?P<raised>\d+) tagged timing calls raised ")
 
 
 def trace_summary(text):
     """The LAST `timing-trace: summary` record of a cell's stderr, or None: a dict of `wall` (s),
-    `attempts`, `calls` (timing calls), `launches` and `incomplete` (the summary names tagged timing
-    calls that raised, whose cost is in none of its totals). ValueError for a summary line that
-    does not read as one."""
+    `attempts`, `calls` (timing calls), `launches`, `incomplete` (the summary names tagged timing
+    calls that raised, whose cost is in none of its totals) and `raised` (how many; 0 when
+    complete). ValueError for a summary line that does not read as one."""
     found = None
     for line in text.splitlines():
         if not line.startswith(TRACE_PREFIX + "summary: "):
@@ -172,14 +174,40 @@ def trace_summary(text):
         m = _TRACE_SUMMARY.match(line)
         if not m:
             raise ValueError(f"unusable trace summary: {line}")
+        incomplete = "; INCOMPLETE: " in line
+        raised = _TRACE_INCOMPLETE.search(line)
+        if incomplete and not raised:
+            raise ValueError(f"trace summary with an unreadable INCOMPLETE count: {line}")
         found = {"wall": float(m["wall"]), "attempts": int(m["attempts"]),
                  "calls": int(m["calls"]), "launches": int(m["launches"]),
-                 "incomplete": "; INCOMPLETE: " in line}
+                 "incomplete": incomplete, "raised": int(raised["raised"]) if raised else 0}
     return found
 
 
 TRACE_EVENTS = {"attempt": TRACE_PREFIX + "attempt ", "search done": TRACE_PREFIX + "search done: ",
-                "call": TRACE_PREFIX + "call ", "compile": TRACE_PREFIX + "compile "}
+                "call": TRACE_PREFIX + "call ", "compile": TRACE_PREFIX + "compile ",
+                "raised": TRACE_PREFIX + "raised "}
+_TRACE_RAISED = re.compile(
+    r'^timing-trace: raised (?P<n>\d+) at (?P<at>[0-9.]+)s: "(?P<label>(?:[^"\\]|\\.)*)" '
+    r'in phase (?P<phase>\S+): "(?P<exn>(?:[^"\\]|\\.)*)"$')
+
+
+def trace_raised(text):
+    """The `timing-trace: raised` records of a cell's stderr, in order: dicts of `n` (the record's
+    ordinal, the running count of raised records), `at` (s), `label` (the candidate's; `baseline`
+    for the baseline), `phase` (the phase tag the exception left under, None for `-`) and
+    `exception` (as OCaml's Printexc printed it). The two literals are decoded by `ocaml_string`.
+    A `Timing_stopped` or `Timing_hopeless` exception is an unranked window, not a failure.
+    ValueError for a raised line that does not read as one."""
+    rows = []
+    for line in trace_events(text, "raised"):
+        m = _TRACE_RAISED.match(line)
+        if not m:
+            raise ValueError(f"unusable trace raised record: {line}")
+        rows.append({"n": int(m["n"]), "at": float(m["at"]), "label": ocaml_string(m["label"]),
+                     "phase": None if m["phase"] == "-" else m["phase"],
+                     "exception": ocaml_string(m["exn"])})
+    return rows
 
 
 def trace_events(text, event):
@@ -483,7 +511,8 @@ FORMATS = {
                             "producers": {"benchmarks/runners/ocannl/bench_harness.ml":
                                           '"bench: per-kernel table (%s; each kernel alone)'},
                             "pinned": True},
-    "timing_trace": {"readers": ("compile_traces", "trace_summary", "trace_events"),
+    "timing_trace": {"readers": ("compile_traces", "trace_summary", "trace_events",
+                                 "trace_raised"),
                      "anchor": r"timing-trace:",
                      "producers": {"benchmarks/runners/ocannl/bench_harness.ml": '"timing-trace: '},
                      "pinned": True},

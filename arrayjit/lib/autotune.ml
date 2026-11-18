@@ -1691,11 +1691,20 @@ type timing_call = {
 let timing_call_observer : (timing_call -> unit) Stdlib.Domain.DLS.key =
   Stdlib.Domain.DLS.new_key (fun () _ -> ())
 
+(* gh-ocannl-2246: each observer is contained on its own, as [install_compile_observer]'s are: one
+   that raises is reported and dropped for this record, the observers after it still see it, and the
+   call it observes returns its reading -- so a call whose record was published never also reaches
+   the raised-call observers below. *)
 let chain_timing_call_observer f =
   let enclosing = Stdlib.Domain.DLS.get timing_call_observer in
+  let contained call =
+    try f call
+    with exn when not (process_fatal_exn exn) ->
+      Stdio.eprintf "autotune: a timing-call observer raised (ignored): %s\n%!" (Exn.to_string exn)
+  in
   Stdlib.Domain.DLS.set timing_call_observer (fun call ->
       enclosing call;
-      f call);
+      contained call);
   enclosing
 
 let install_timing_call_observer f = ignore (chain_timing_call_observer f : timing_call -> unit)
@@ -1703,6 +1712,44 @@ let install_timing_call_observer f = ignore (chain_timing_call_observer f : timi
 let with_timing_call_observer f body =
   let enclosing = chain_timing_call_observer f in
   Exn.protect ~f:body ~finally:(fun () -> Stdlib.Domain.DLS.set timing_call_observer enclosing)
+
+(* gh-ocannl-2246: the sibling of [timing_call_observer] for the tagged calls that return no record
+   because they raised after their pre-dispatch validation began. See the interface. *)
+type timing_call_raised = {
+  raised_label : string;
+  raised_phase : Outcome.phase option;
+  raised_exn : exn;
+}
+
+let timing_call_raised_observer : (timing_call_raised -> unit) Stdlib.Domain.DLS.key =
+  Stdlib.Domain.DLS.new_key (fun () _ -> ())
+
+(* Contained per observer like the timing-call observers: one that raises is reported and dropped,
+   the observers after it still see the call, and the call's own exception is the one that
+   propagates. *)
+let install_timing_call_raised_observer f =
+  let enclosing = Stdlib.Domain.DLS.get timing_call_raised_observer in
+  let contained raised =
+    try f raised
+    with exn when not (process_fatal_exn exn) ->
+      Stdio.eprintf "autotune: a raised-timing-call observer raised (ignored): %s\n%!"
+        (Exn.to_string exn)
+  in
+  Stdlib.Domain.DLS.set timing_call_raised_observer (fun raised ->
+      enclosing raised;
+      contained raised)
+
+(* Reports [exn] as it leaves a tagged call, unwrapping the phase tag [Outcome.tag] put on it; the
+   caller re-raises it, with its backtrace, to the boundary that classifies it. *)
+let report_timing_call_raised ~label exn =
+  let raised_phase, raised_exn =
+    match exn with
+    | Outcome.Raised_at (phase, inner, _) -> (Some phase, inner)
+    | Outcome.Cause_at (phase, _) -> (Some phase, exn)
+    | _ -> (None, exn)
+  in
+  Stdlib.Domain.DLS.get timing_call_raised_observer
+    { raised_label = label; raised_phase; raised_exn }
 
 (* gh-ocannl-1314: what one compile of a [tune] call cost, by phase. See the interface. *)
 type compile_record = {
@@ -6523,9 +6570,10 @@ module Make (D : Driver) = struct
 
   (* [routine.bindings] exposes the routine's live binding refs — restore them after timing (Codex
      P2 on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)
-  let time_routine ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ()) ?(tag_failures = false)
-      ?phase ?(stop = fun () -> false) ?hopeless_against ?(hopeless_ratio = hopeless_ratio)
-      ?window_bound_ms ?prior_depth ?incumbent_ms ~timing ~repeats cctx routine =
+  let time_routine ?label ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ())
+      ?(tag_failures = false) ?phase ?(stop = fun () -> false) ?hopeless_against
+      ?(hopeless_ratio = hopeless_ratio) ?window_bound_ms ?prior_depth ?incumbent_ms ~timing
+      ~repeats cctx routine =
     let check_stop () = if stop () then raise Timing_stopped in
     (* The call's [setup_ms] runs from here: the pre-dispatch validation, the warmup and the
        calibration. *)
@@ -6574,9 +6622,25 @@ module Make (D : Driver) = struct
       own_ms := Some (Option.value_map !own_ms ~default:per_launch ~f:(Float.max per_launch));
       wall
     in
+    (* gh-ocannl-2246: set as a tagged call enters its pre-dispatch validation -- where
+       [on_candidate_preflight] fires -- so from here on a raise reaches the domain's
+       {!install_timing_call_raised_observer} observers: exactly the tagged calls that began their
+       validation and return no {!timing_call} record. *)
+    let preflighted = ref false in
+    let observe_raise body =
+      match body () with
+      | result -> result
+      | exception exn when !preflighted ->
+          let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+          report_timing_call_raised
+            ~label:(Option.value label ~default:(D.routine_name routine))
+            exn;
+          Stdlib.Printexc.raise_with_backtrace exn backtrace
+    in
     Exn.protect
       ~finally:(fun () -> List.iter saved_bindings ~f:(fun (r, v) -> r := v))
       ~f:(fun () ->
+        observe_raise @@ fun () ->
         set_test_bindings routine;
         (* The runs' pre-dispatch validation, in its own phase so an unattributed failure of it is
          contained rather than condemning the lineage (gh-ocannl-564). Here and once: what it checks
@@ -6589,6 +6653,7 @@ module Make (D : Driver) = struct
          see the comments at those two sites (gh-ocannl-569). *)
         if tag_failures then
           Outcome.tag Outcome.Preflight (fun () ->
+              preflighted := true;
               Seam.get on_candidate_preflight (D.routine_name routine);
               D.check_launch_bindings routine);
         (* Warmup run: absorbs lazy initialization and fills caches like a steady-state
@@ -9681,7 +9746,7 @@ module Make (D : Driver) = struct
                   Outcome.tag Outcome.Preflight before_timing_window;
                   progress_stage "baseline_timing";
                   (* gh-ocannl-1666: the one window that is bounded ({!window_bounded}). *)
-                  time_routine ~on_retry ~on_call ~tag_failures:true
+                  time_routine ~label:"baseline" ~on_retry ~on_call ~tag_failures:true
                     ~window_bound_ms:baseline_window_ms ~timing ~repeats b.cctx b.routine
                 with
                 | timing_result -> (
@@ -10316,7 +10381,7 @@ module Make (D : Driver) = struct
                          gh-ocannl-1527: [`Hopeless] a window cut as out of the running -- neither a
                          failure of the candidate, so caught inside the boundary. *)
                       match
-                        time_routine ~on_retry ~on_call:on_window_call ~tag_failures:true
+                        time_routine ~label ~on_retry ~on_call:on_window_call ~tag_failures:true
                           ~phase:!progress_phase ~stop ?hopeless_against ?hopeless_ratio
                           ?prior_depth ~incumbent_ms:(snd !best_so_far) ~timing ~repeats c.cctx
                           c.routine

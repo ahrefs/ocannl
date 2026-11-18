@@ -353,7 +353,15 @@ let percentile sorted p =
     backend reused compiled kernels. A tagged call that raises after its pre-dispatch validation (a
     classified launch or synchronization failure the search survives) returns no record: the trace
     counts it as raised -- validations started less tagged records returned -- and a summary with
-    any says INCOMPLETE, since that call's cost is in no total.
+    any says INCOMPLETE, since that call's cost is in no total. Each such call prints a [raised]
+    line as it raises ({!Autotune.install_timing_call_raised_observer}, gh-ocannl-2246): the
+    candidate's label ([baseline] for the baseline), the phase tag it left under ([-] for none) and
+    its exception as [Printexc] prints it, both quoted as OCaml strings; its ordinal is the running
+    count of such lines. The observer fires for exactly the calls the count counts -- a validation
+    started, no record returned -- so the summary's count is the number of [raised] lines. A
+    budget-stopped or hopeless window ({!Autotune.Timing_stopped}, {!Autotune.Timing_hopeless})
+    raises too, and is counted and named the same way: an unranked window, not a failure, which the
+    line tells apart.
 
     The [decision] line carries the policy's own metadata (gh-ocannl-1199): the search phase, the
     exit that chose the depth, the fitted fixed and marginal costs and the fit's verdict, what the
@@ -502,6 +510,15 @@ let install_timing_trace () =
     ( Autotune.Seam.set Autotune.on_candidate_preflight @@ fun name ->
       Int.incr preflights;
       prev_preflight name );
+    let raised_lines = ref 0 in
+    Autotune.install_timing_call_raised_observer (fun (r : Autotune.timing_call_raised) ->
+        Int.incr raised_lines;
+        pr "timing-trace: raised %d at %.1fs: %S in phase %s: %S\n" !raised_lines
+          (now () -. t0)
+          r.raised_label
+          (Option.value_map r.raised_phase ~default:"-" ~f:(fun p ->
+               Sexp.to_string (Ir.Schedule_outcome.sexp_of_phase p)))
+          (Stdlib.Printexc.to_string r.raised_exn));
     Autotune.install_timing_call_observer (fun (c : Autotune.timing_call) ->
         List.iter c.calibration_probes ~f:(fun (probe : Autotune.calibration_probe) ->
             let role =
