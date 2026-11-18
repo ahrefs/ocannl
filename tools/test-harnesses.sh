@@ -23,16 +23,23 @@
 # --list remains interpreter-independent and runs no members.
 # Every selected harness runs after ordinary failures; any failure exits 1.
 # HUP/INT/TERM stop immediately and preserve the interruption status.
+# A member fails if its stderr has a complete English Bash missing
+# command diagnostic in either form. Numbered lines read
+# `SOURCE: line N: COMMAND: command not found`. Unnumbered lines read
+# `SOURCE: COMMAND: command not found`, where SOURCE may be a name passed
+# to Bash 3.2's `-c` and neither field contains a colon. Verbatim fixture
+# text on stderr is in scope. Prose, localized diagnostics and diagnostics the
+# member retains in its own fixture are outside this check. There is no
+# expected-error list.
 #
 # --jobs N runs up to N members at once (gh-ocannl-2002), started in the
 # manifest's order: a member is a program of its own with its own scratch
 # directory, and much of what the slow ones spend is fixtures waiting, not
 # computing -- the six members of tools/test-run.sh's harness, about 760 s one
 # after another on a MacBook Pro, take 165 s beside one another on two cores'
-# worth of CPU. Each member's output is kept and printed whole, in the
-# manifest's order, once it and every member before it has ended, between the
-# same HARNESS lines, so the log reads as a run of one at a time does and
-# every count and check below reads what it read. A member that ends
+# worth of CPU. Each member's stdout and stderr are kept separately and
+# printed in that order between its HARNESS lines once it and every member
+# before it in the manifest has ended. A member that ends
 # interrupted (129, 130, 143) ends the run with that status as soon as it is
 # seen to have ended -- no member starts after it, the members beside it are
 # sent a TERM, and what ran is printed -- and so does a signal to this
@@ -248,7 +255,8 @@ members() {
 unset OCANNL_TOOL_HARNESS_EXPECTED_SKIPS OCANNL_TOOL_HARNESS_SKIP_RECORD OCANNL_TOOL_HARNESS_NO_DUNE \
   OCANNL_TOOL_HARNESS_DUNE_SKIP_RECORD
 scratch=()
-trap 'status=$?; rm -rf ${scratch[@]+"${scratch[@]}"}; [ -z "$slot_record" ] || echo "$status" >"$slot_record"' EXIT
+serial_relay=
+trap 'status=$?; [ -z "$serial_relay" ] || kill -TERM "$serial_relay" 2>/dev/null; rm -rf ${scratch[@]+"${scratch[@]}"}; [ -z "$slot_record" ] || echo "$status" >"$slot_record"' EXIT
 # Refuse a list (exit 2, before any member runs) holding any line but the
 # three forms the header names, or an entry naming a harness this run does not
 # select, or one listed twice.
@@ -409,9 +417,6 @@ if [ "$ci_shell" = 1 ]; then
   scratch+=("$record.dune")
 fi
 if [ "$ci_real_dune" = 1 ]; then
-  outputs=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-real-dune.XXXXXX") ||
-    { echo "test-harnesses.sh: cannot create the --ci-real-dune output directory" >&2; exit 2; }
-  scratch+=("$outputs")
   export OCANNL_TOOL_HARNESS_STRICT=1
 fi
 failures=0 total=0
@@ -454,15 +459,50 @@ interpreter_dir=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-bash.XXXXXX") || exi
 scratch+=("$interpreter_dir")
 ln -s "$member_bash" "$interpreter_dir/bash" || exit 2
 export PATH="$interpreter_dir:$PATH"
-member_ended() { # INDEX RC: its closing line and what its status means for the run
-  printf 'HARNESS %s exit: %s\n' "${run_scripts[$1]}" "$2"
-  case $2 in
-    129|130|143)
-      stop_members
-      printf 'harnesses: interrupted (exit %s)\n' "$2" >&2
-      exit "$2" ;;
+outputs=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-output.XXXXXX") ||
+  { echo "test-harnesses.sh: cannot create the member output directory" >&2; exit 2; }
+scratch+=("$outputs")
+command_not_found='^(.+: line [0-9]+: .+|[^:]+: [^:]+): command not found$'
+capture_status() { # SCRIPT COMMAND_RC TEE_RC
+  if [ "$3" != 0 ]; then
+    printf 'harnesses: %s: could not capture member output (tee exit %s)\n' "$1" "$3" >&2
+    [ "$2" != 0 ] || return 1
+  fi
+  return "$2"
+}
+serial_member() { # SCRIPT STDERR [ARGS...]
+  local script=$1 error=$2 rc=0 relay_rc=0
+  shift 2
+  tee "$error" <"$outputs/stderr.fifo" >&2 &
+  serial_relay=$!
+  OCANNL_TOOL_HARNESS_NAME=$script "$member_bash" "$root/$script" "$@" 2>"$outputs/stderr.fifo" || rc=$?
+  case $rc in
+    # A descendant may outlive the interrupted member with stderr still open.
+    129|130|143) kill -TERM "$serial_relay" 2>/dev/null ;;
   esac
-  [ "$2" = 0 ] || failures=$((failures + 1))
+  wait "$serial_relay" 2>/dev/null || relay_rc=$?
+  serial_relay=
+  case $rc in 129|130|143) return "$rc" ;; esac
+  capture_status "$script" "$rc" "$relay_rc"
+}
+member_ended() { # INDEX RC OUTPUT: ordinary failures count once per member
+  local script=${run_scripts[$1]} rc=$2 diagnostic scan_rc=0
+  case $rc in
+    129|130|143)
+      printf 'HARNESS %s exit: %s\n' "$script" "$rc"
+      stop_members
+      printf 'harnesses: interrupted (exit %s)\n' "$rc" >&2
+      exit "$rc" ;;
+  esac
+  diagnostic=$(LC_ALL=C grep -a -m 1 -E -- "$command_not_found" "$3") || scan_rc=$?
+  case $scan_rc in
+    0) printf 'harnesses: %s: missing command: %s\n' "$script" "$diagnostic" >&2 ;;
+    1) ;;
+    *) printf 'harnesses: %s: could not check member output (grep exit %s)\n' "$script" "$scan_rc" >&2 ;;
+  esac
+  [ "$scan_rc" = 1 ] || [ "$rc" != 0 ] || rc=1
+  printf 'HARNESS %s exit: %s\n' "$script" "$rc"
+  [ "$rc" = 0 ] || failures=$((failures + 1))
 }
 pids=() ended=()
 stop_members() { # TERM every member still running beside the others, and wait for each
@@ -480,28 +520,27 @@ member_argv() { # INDEX: sets args
   [ -z "${run_selectors[$1]}" ] || args=(--only "${run_selectors[$1]}")
 }
 if [ "$jobs" = 1 ]; then
+  mkfifo "$outputs/stderr.fifo" ||
+    { echo 'test-harnesses.sh: cannot create the live stderr pipe' >&2; exit 2; }
   for ((i = 0; i < total; i++)); do
     script=${run_scripts[i]}
     member_argv "$i"
     printf '\nHARNESS %s (%s; bash %s %s)\n' "${run_commands[i]}" "${run_tiers[i]}" "$member_version" "$member_bash"
+    output=$outputs/${script//\//_}.out
     rc=0
     if [ "$ci_real_dune" = 1 ]; then
-      # Kept for the PASS check below, and shown as it runs.
-      OCANNL_TOOL_HARNESS_NAME=$script "$member_bash" "$root/$script" ${args[@]+"${args[@]}"} | tee "$outputs/${script//\//_}.out"
-      rc=${PIPESTATUS[0]}
+      serial_member "$script" "$output.err" ${args[@]+"${args[@]}"} | tee "$output"
+      capture_status "$script" "${PIPESTATUS[@]}" || rc=$?
     else
-      OCANNL_TOOL_HARNESS_NAME=$script "$member_bash" "$root/$script" ${args[@]+"${args[@]}"} || rc=$?
+      serial_member "$script" "$output.err" ${args[@]+"${args[@]}"} || rc=$?
     fi
-    member_ended "$i" "$rc"
+    member_ended "$i" "$rc" "$output.err"
   done
 else
   # Up to $jobs members at once (see the header), each this shell's own
   # child, so its status is this shell's to wait for. No `wait -n`: this runs
   # under the Bash 3.2 a Mac ships, so a member's end is seen by polling its
-  # pid, which the shell has reaped by then. $pool/N.out is member N's output.
-  pool=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-jobs.XXXXXX") ||
-    { echo "test-harnesses.sh: cannot create the --jobs output directory" >&2; exit 2; }
-  scratch+=("$pool")
+  # pid, which the shell has reaped by then.
   trap 'stop_members; exit 129' HUP
   trap 'stop_members; exit 130' INT
   trap 'stop_members; exit 143' TERM
@@ -519,17 +558,19 @@ else
     [ -z "$interrupted" ] || break
     while [ "$started" -lt "$total" ] && [ "$running" -lt "$jobs" ]; do
       script=${run_scripts[started]}
+      output=$outputs/${script//\//_}.out
       member_argv "$started"
       OCANNL_TOOL_HARNESS_NAME=$script "$member_bash" "$root/$script" ${args[@]+"${args[@]}"} \
-        >"$pool/$started.out" 2>&1 </dev/null &
+        >"$output" 2>"$output.err" </dev/null &
       pids[started]=$!
       started=$((started + 1)) running=$((running + 1)) progressed=1
     done
     while [ "$printed" -lt "$started" ] && [ -n "${ended[printed]-}" ]; do
+      script=${run_scripts[printed]}
+      output=$outputs/${script//\//_}.out
       printf '\nHARNESS %s (%s; bash %s %s)\n' "${run_commands[printed]}" "${run_tiers[printed]}" "$member_version" "$member_bash"
-      cat "$pool/$printed.out"
-      [ "$ci_real_dune" = 0 ] || cp "$pool/$printed.out" "$outputs/${run_scripts[printed]//\//_}.out"
-      member_ended "$printed" "${ended[printed]}"
+      cat "$output" "$output.err"
+      member_ended "$printed" "${ended[printed]}" "$output.err"
       printed=$((printed + 1)) progressed=1
     done
     [ "$progressed" = 1 ] || sleep 0.2
@@ -540,9 +581,11 @@ else
     # printed, in order, before the run ends with the interrupting status.
     stop_members
     for ((i = printed; i < started; i++)); do
+      script=${run_scripts[i]}
+      output=$outputs/${script//\//_}.out
       printf '\nHARNESS %s (%s; bash %s %s)\n' "${run_commands[i]}" "${run_tiers[i]}" "$member_version" "$member_bash"
-      cat "$pool/$i.out"
-      printf 'HARNESS %s exit: %s\n' "${run_scripts[i]}" "${ended[i]}"
+      cat "$output" "$output.err"
+      printf 'HARNESS %s exit: %s\n' "$script" "${ended[i]}"
     done
     printf 'harnesses: interrupted (exit %s)\n' "$interrupted" >&2
     exit "$interrupted"
