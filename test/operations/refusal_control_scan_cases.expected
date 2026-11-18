@@ -1,3 +1,7 @@
+a refusal forwarded through refuse is flagged at its binding: true
+a formatted refusal on fail passes the wrapper audit: true
+the same formatted refusal on fail is extracted: true
+the check reads direct aliases, typed forwarding parameters, and ksprintf wrappers: true
 the marker grammar reads every real diagnostic identity: true
 direct, `failwith`, formatted, `@@`, quantified, `p_all2`, `pf`, and short refusal formats are extracted: true
 comments, quoted code, and a dynamic value contribute no diagnostic string constant: true
@@ -51,6 +55,7 @@ a source catalogued twice is a mismatch, not a match: true
 a manifest row repeated is a mismatch even where the argument list repeats it too: true
 the same sources in another order match: true
 the stanza's scanner sources are exactly Refusal_control_manifest.sources, each once: true
+catalogued scanners keep direct refusals on recognized bindings: true
 
 Scanner refusal formats and the permanent control suite assigned to their source:
 doc_examples_extract.ml has exactly the explicitly assigned refusal controls: true

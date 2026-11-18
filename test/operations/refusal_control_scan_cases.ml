@@ -9,6 +9,82 @@ module Heads = Test_scan.Refusal_section_heads
 
 let minus = Manifest.minus
 
+let audit_wrappers sources =
+  let wrappers =
+    List.concat_map sources ~f:(fun (source, content) ->
+        List.map (Scan.unrecognized_wrappers content) ~f:(fun wrapper -> (source, wrapper)))
+  in
+  List.iter wrappers ~f:(fun (source, { Scan.name; binding_line }) ->
+      eprintf "%s:%d: refusal wrapper `%s` hides diagnostics; call fail or failwith directly\n"
+        source binding_line name);
+  Verdict.p_empty "catalogued scanners keep direct refusals on recognized bindings" ~over:sources
+    wrappers
+
+let wrapper_source =
+  {ocaml|let fail = Verdict.fail
+let refuse msg = fail msg
+let check name = refuse (Printf.sprintf "missing key %s" name)
+|ocaml}
+
+let direct_source =
+  {ocaml|let fail = Verdict.fail
+let check name = fail (Printf.sprintf "missing key %s" name)
+|ocaml}
+
+let () =
+  match Array.to_list Stdlib.Sys.argv with
+  | [ _; "--wrapper-audit-control"; control ] ->
+      let source =
+        match control with
+        | "wrapped" -> wrapper_source
+        | "direct" -> direct_source
+        | _ -> invalid_arg control
+      in
+      audit_wrappers [ ("fixture.ml", source) ];
+      Verdict.exit_negative_control ()
+  | _ -> ()
+
+let () =
+  let check_child control ~exit ~contains =
+    let child = Fresh_process.run [ "--wrapper-audit-control"; control ] in
+    let ok = Fresh_process.matches ~stream:`Stderr ~exit ~contains child in
+    if not ok then Fresh_process.report ~label:control child;
+    ok
+  in
+  Verdict.p "a refusal forwarded through refuse is flagged at its binding"
+    (check_child "wrapped" ~exit:1 ~contains:[ "fixture.ml:2: refusal wrapper `refuse`" ]);
+  Verdict.p "a formatted refusal on fail passes the wrapper audit"
+    (check_child "direct" ~exit:0 ~contains:[]);
+  Verdict.p "the same formatted refusal on fail is extracted"
+    (match Scan.diagnostics direct_source with
+    | [ { kind = Scan.Fail; format = "missing key %s"; _ } ] -> true
+    | _ -> false);
+  let aliases =
+    {ocaml|let stop = Verdict.fail
+let check name =
+  let refuse = fun (msg : string) -> failwith @@ msg in
+  refuse name
+let print msg = Stdio.eprintf "%s" msg
+let computed msg = Verdict.fail (String.strip msg)
+let formatted fmt = Printf.ksprintf Verdict.fail fmt
+let applied fmt = Printf.ksprintf Verdict.fail @@ fmt
+let partial = Printf.ksprintf @@ Verdict.fail
+let printf fmt = Printf.ksprintf Stdio.print_endline fmt
+let fail fmt = Printf.ksprintf Verdict.fail fmt
+|ocaml}
+  in
+  Verdict.p "the check reads direct aliases, typed forwarding parameters, and ksprintf wrappers"
+    (match Scan.unrecognized_wrappers aliases with
+    | [
+     { name = "stop"; binding_line = 1 };
+     { name = "refuse"; binding_line = 3 };
+     { name = "formatted"; binding_line = 7 };
+     { name = "applied"; binding_line = 8 };
+     { name = "partial"; binding_line = 9 };
+    ] ->
+        true
+    | _ -> false)
+
 (* gh-ocannl-1088: the stanza's argument list decides which goldens answer for a source, but
    [Manifest.sources] owns which sources there are. The catalogue is compared as a sorted multiset
    against the manifest's distinct sources, so a source the argument list lacks, one it adds, and
@@ -393,13 +469,17 @@ let dynamic reason = Verdict.fail reason
     "the stanza's scanner sources are exactly Refusal_control_manifest.sources, each once"
     ~over:Manifest.sources
     (uncatalogued @ extra @ repeated);
+  let sources =
+    List.map pairs ~f:(fun (source, control) -> (source, control, In_channel.read_all source))
+  in
+  audit_wrappers (List.map sources ~f:(fun (source, _, content) -> (source, content)));
   printf "\nScanner refusal formats and the permanent control suite assigned to their source:\n";
   let catalogued = Hashtbl.create (module String) in
-  pairs
-  |> List.iter ~f:(fun (source, control) ->
+  sources
+  |> List.iter ~f:(fun (source, control, content) ->
       let controls = String.split control ~on:',' in
       let control_text = controls |> List.map ~f:In_channel.read_all |> String.concat ~sep:"\n" in
-      let diagnostics = Scan.diagnostics (In_channel.read_all source) in
+      let diagnostics = Scan.diagnostics content in
       let extracted = List.map diagnostics ~f:Scan.marker in
       let source_key = "test/operations/" ^ source in
       let coverage = Scan.coverage ~control_text diagnostics in
