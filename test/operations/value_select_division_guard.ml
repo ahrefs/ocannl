@@ -18,12 +18,13 @@
    index comparisons that is evaluable anywhere: lowering builds a range guard at the read it
    protects ([Assignments.clamp_conds]), so the dropped guard was never the read's protection.
 
-   Pinned: (1) the optimized IR has the shape; the materialized reference, run through the same
-   predicate, does not (the predicate's control). (2) Every read of [x] at a window offset sits
-   under an arm of an anywhere index guard. (3) The values equal the materialized reference's and
-   the closed form's. The structural claim (2) does not check a clamp's bounds; the values do: [x]
-   peaks at each end tap the selected windows reach ([x.(0)] at [i = 0], [x.(7)] at [i = 7]), so a
-   clamp excluding a valid edge tap changes a selected cell, and one admitting an off-node tap reads
+   Pinned: (1) the optimized IR has the shape; a divisionless twin, [g = (r < 1.5) + (5.7 < r)] (the
+   same iterations), does not, and has it over a guard evaluable anywhere instead: the predicate
+   tells the two guards apart (its control). (2) Every read of [x] at a window offset sits under an
+   arm of an anywhere index guard. (3) The values equal the materialized reference's and the closed
+   form's. The structural claim (2) does not check a clamp's bounds; the values do: [x] peaks at
+   each end tap the selected windows reach ([x.(0)] at [i = 0], [x.(7)] at [i = 7]), so a clamp
+   excluding a valid edge tap changes a selected cell, and one admitting an off-node tap reads
    outside the buffer. *)
 
 open Base
@@ -58,7 +59,10 @@ let expected =
       in
       if Float.(tot - threshold <> 0.) then if selected i then pool else xv.(i) else 0.25)
 
-(* The statement-level scalars of [code], scope bodies not entered. *)
+(* The statement-level scalars of [code], scope bodies not entered. [unclamped] needs them, and an
+   arm-versus-condition context: [Ll_test.walk] cannot give that, since its [on_exit] fires for
+   statements only and a scalar's subtree has no exit hook. Both matches are exhaustive, so a new
+   [Low_level] constructor fails to compile here rather than going unvisited. *)
 let rec stmt_scalars (code : LL.t) : LL.scalar_t list =
   match code with
   | LL.Seq (a, b) -> stmt_scalars a @ stmt_scalars b
@@ -108,14 +112,15 @@ let arms_of = function
   | _ -> None
 
 (* The issue's shape, rooted at [outer]: a select whose condition reads a local, over an index guard
-   not evaluable anywhere, over a definition reading [x]. *)
-let shape_root x outer =
+   not evaluable anywhere, over a definition reading [x]; with [~anywhere:true], the same shape over
+   a guard evaluable anywhere (the control's). *)
+let shape_root ~anywhere x outer =
   match arms_of outer with
   | Some (c_out, inside) when reads_local c_out ->
       List.exists inside ~f:(fun inner ->
           match arms_of inner with
-          | Some (c_in, held) when index_guard c_in && not (LL.Scope_order.evaluable_anywhere c_in)
-            ->
+          | Some (c_in, held)
+            when index_guard c_in && Bool.equal anywhere (LL.Scope_order.evaluable_anywhere c_in) ->
               List.exists held ~f:(function
                 | LL.Local_scope _ as def -> reads_node x def
                 | _ -> false)
@@ -135,17 +140,28 @@ let rec unclamped x ~clamped (s : LL.scalar_t) =
   | LL.Binop (_, (a, _), (b, _)) -> unclamped x ~clamped a || unclamped x ~clamped b
   | LL.Ternop (_, (a, _), (b, _), (c, _)) ->
       unclamped x ~clamped a || unclamped x ~clamped b || unclamped x ~clamped c
-  | _ -> false
+  | LL.Constant _ | LL.Constant_bits _ | LL.Embed_index _ | LL.Get_local _ | LL.Get_merge_buffer _
+    ->
+      false
 
-(* One run: [materialize_all] keeps every intermediate in memory (the reference). *)
-let run ~materialize_all =
+(* One run: [materialize_all] keeps every intermediate in memory (the value reference);
+   [divisionless] spells the inner guard without the division, selecting the same iterations (the
+   shape predicate's control). *)
+let run ?(divisionless = false) ~materialize_all () =
   Tensor.unsafe_reinitialize ();
   let x = TDSL.ndarray xv ~label:[ "vsm_x" ] ~output_dims:[ n ] () in
   let s = TDSL.ndarray sv ~label:[ "vsm_s" ] ~output_dims:[ n; 2 ] () in
   let%op pool = x @^+ "o=+w; w => o" [ "w" ] (stretch 0.0) in
   Shape.set_dim w 3;
   let%op r = TDSL.range_of_shape ~output_dims:[ n ] () in
-  let%op par = (r /. 3.0 < 0.5) + (1.9 < r /. 3.0) in
+  let par =
+    if divisionless then
+      let%op par = (r < 1.5) + (5.7 < r) in
+      par
+    else
+      let%op par = (r /. 3.0 < 0.5) + (1.9 < r /. 3.0) in
+      par
+  in
   let%op tot = s ++ "ok => o" in
   let%op out = where (tot - 6.0) (where par pool x) (0.25 + 0.0) in
   let ctx = Context.auto () in
@@ -160,7 +176,11 @@ let run ~materialize_all =
         [ o ])
       ctx
       (let comp = Train.forward out in
-       let name = if materialize_all then "vsd_materialized" else "vsd_inlined" in
+       let name =
+         if materialize_all then "vsd_materialized"
+         else if divisionless then "vsd_divisionless"
+         else "vsd_inlined"
+       in
        { comp with asgns = Ir.Assignments.Block_comment (name, comp.asgns) })
       Ir.Indexing.Empty
   in
@@ -170,14 +190,19 @@ let run ~materialize_all =
 let () =
   Stdio.eprintf "value_select_division_guard: backend %s (not part of the golden)\n%!"
     (Utils.get_global_arg ~arg_name:"backend" ~default:"");
-  let x, llc, got = run ~materialize_all:false in
-  let x_ref, llc_ref, want = run ~materialize_all:true in
+  let x, llc, got = run ~materialize_all:false () in
+  let x_c, llc_c, got_c = run ~divisionless:true ~materialize_all:false () in
+  let _, _, want = run ~materialize_all:true () in
   p_exists
     "the inlined program has the shape: a local-reading select over a division guard over a \
      definition reading x"
-    (all_scalars llc) ~f:(shape_root x);
-  p_none "the materialized reference does not (the shape predicate's control)" (all_scalars llc_ref)
-    ~f:(shape_root x_ref);
+    (all_scalars llc) ~f:(shape_root ~anywhere:false x);
+  p_none "the divisionless control does not (the shape predicate's control)" (all_scalars llc_c)
+    ~f:(shape_root ~anywhere:false x_c);
+  p_exists "the divisionless control has the same shape over a guard evaluable anywhere"
+    (all_scalars llc_c) ~f:(shape_root ~anywhere:true x_c);
+  p_all2 "the divisionless control's values equal the materialized reference's" got_c want
+    ~f:Float.equal;
   p_exists "the inlined program reads x below its node (the window's [-1] offset)" (all_scalars llc)
     ~f:(function
     | LL.Get (tn, [| Ir.Indexing.Affine { offset; _ } |]) -> Tn.equal tn x && offset < 0

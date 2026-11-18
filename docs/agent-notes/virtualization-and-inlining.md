@@ -105,16 +105,16 @@ files.
   definitions. Lowering never makes such a guard a read's only protection: every range guard it
   builds is an affine `Embed_index` comparison placed at the read it protects (`Assignments`'
   `clamp_conds`, the gh-490 extent `If`, PADTO masks, staging tiles, scan payloads), so it is
-  evaluable anywhere and kept. `%op` has no modulo, and a merged index is never decomposed
-  (`Indexing.Sub_axis`). A strided transposed convolution is an affine scatter, not a
-  mod-strided gather. The gh-343 gather's `in_range` reads the index tensor, but it protects only
-  its inline `Get_dynamic`; the scalar CSE wraps only `Local_scope`s, so no definition sits under
-  it. A user condition such as `r /. 3 < 1` reaches the shape, but the definition under it
-  carries its own clamp (`value_select_division_guard`). The construct that would need the
+  evaluable anywhere and kept, and none decomposes a merged index (`Indexing.Sub_axis`). A
+  strided transposed convolution is an affine scatter, not a mod-strided gather. The gh-343
+  gather's `in_range` reads the index tensor, but it protects only its inline `Get_dynamic`; the
+  scalar CSE wraps only `Local_scope`s, so no definition sits under it. A user condition can reach
+  the shape (`%op` has no modulo, but `/.` divides, and `%cd`'s `%` is `Ops.Mod`), yet it protects
+  no read that leaves its node: user reads are in range by shape inference, and lowering's escaping
+  reads carry their own clamp (`value_select_division_guard`). The construct that would need the
   renderer fix: a lowering-built guard containing a division, modulo or memory read whose arm
-  holds a definition reading off its node with no affine guard of its own. The exit gate refuses
-  it by name (`where_arm_scopes`' `was_value_test_dropped`). `hoist_cross_statement_cse` lifts a
-  shared
+  holds a definition reading off its node with no affine guard of its own. Both gates refuse it by
+  name (`where_arm_scopes`' `was_value_test_dropped`). `hoist_cross_statement_cse` lifts a shared
   group only when some member sits outside every `Where` arm, since its lifted body runs
   unconditionally. `Access_fold` keeps `gated` through a `Where` arm's scope bodies (its `arm`
   flag; a gate's still clears it), which the prologue's gated-node decline and the cost floor read.
