@@ -593,6 +593,22 @@ files.
   the uniform operators only, `Uint4x32_to_prec_uniform_lane` naming the lane.
 - Scalar arithmetic typing and its scope-collapse requirements are owned by
   [virtualization-and-inlining.md](virtualization-and-inlining.md), the gh-ocannl-1958 entry.
+- **Do not recommend `BENCH_PRECISION=bf16` mixed precision on HIP gfx11 yet** (gh-ocannl-2328).
+  The untuned `gpt2_mini_train` step costs about 2x f32's on minix (gfx1151, unified memory:
+  1.93x untraced; 2.0-2.1x in an exclusive kprof window, 14.9 against 30.2-30.9 ms) and 2.4-2.5x
+  on tuf (gfx1102, discrete; shared box). In a kprof join (`gh1133_cells.sh`, `TREATMENTS="keep mixbf16keep"`) the
+  extra time is device time, and it comes from two causes:
+  - The backward GEMMs: +14.3 of +15.0 ms in-step on minix, +21.8 of +24.7 on tuf. They are 66
+    kernels with f32's own grids and blocks, each 4.3-4.7x slower. The weight- and input-gradient
+    nests are lowered reduction-outer (`for b, s, i, j: g[i,j] += ...`), so the serial rendering
+    localizes nothing. `Schedule.Privatize` keeps the register tile at storage precision to match
+    it, so 61 kernels accumulate in `__hip_bfloat16 t_tile__n<id>_acc_grad_*[16]`, every step a
+    bridged bf16 op that rounds. That goes against `bf16_arithmetic=auto`'s f32 accumulators on HIP.
+    Forward GEMMs, whose reduction loops are innermost, get f32 tiles and run 23% faster than f32.
+  - The token embedding: the cast twin `__float2bfloat16(wte[...])` sits between the one-hot and
+    the table, so the gather and scatter are not recognized. The forward gather becomes a dense
+    1024-term dot (1.07 against 0.017 ms), and the backward scatter fused with the SGD step takes
+    2.04 against 0.30 ms.
 ## Accumulator localization and legality
 - **A reduction accumulator's WIDTH is policy and its RESIDENCY is unconditional; its narrowing
   POINTS are schedule** (gh-ocannl-639, gh-ocannl-693). The plain serial fallback of an
