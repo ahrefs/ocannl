@@ -8,6 +8,9 @@ float power initializer computes its expected values: true
 non-literal power initializer computes its expected values: true
 effectful-base power initializer computes its expected values: true
 explicit power head computes its expected values: true
+embedded float initializer computes its expected values: true
+embedded integer initializer computes its expected values: true
+nested embedded float initializer computes its expected values: true
 named binary initializer computes its expected values: true
 named unary initializer computes its expected values: true
 named ternary initializer computes its expected values: true
