@@ -57,16 +57,16 @@
    to the library it stands for, derived from the stand-in's own agreement check rather than written
    down: the one library the `%{lib-available:…}` atoms of the `(enabled_if …)` of its
    `runtest-<module>` rules name, among the stanzas of the stand-in's directory (`Cuda` ->
-   `cudajit.cuda`, `Nvrtc` -> `cudajit.nvrtc`, `Metal` -> `metal`, `Runtime` -> `metal.runtime`).
-   Gates naming no library (an alias delegating its gate elsewhere), several, or one outside the
-   package are refused, and so is a package stand-in compiling dune's default module set, whose
-   modules dune files do not name. A module with no rule on its agreement alias (`Hip_ffi`,
-   hand-written and checked through `hip.mli`) stands for any library of its package, as the whole
-   stand-in does; the census lists the map. A copy whose source or copied interface names a mapped
-   module of a package stand-in its library declares is refused unless the genuine stanza declares
-   that module's library (re-exporting it where the stand-in re-exports the stand-in), and a source
-   the scan cannot read or parse is refused, since what it names is then unknown.
-   [availability_only] excuses this as it excuses the package-wide demand.
+   `cudajit.cuda`, `Nvrtc` -> `cudajit.nvrtc`, `Hip_ffi` -> `hipjit.hip_ffi`, `Metal` -> `metal`,
+   `Runtime` -> `metal.runtime`). Gates naming no library (an alias delegating its gate elsewhere),
+   several, or one outside the package are refused, and so is a package stand-in compiling dune's
+   default module set, whose modules dune files do not name. A module with no rule on its agreement
+   alias stands for any library of its package, as the whole stand-in does; the census lists the
+   map. A copy whose source or copied interface names a mapped module of a package stand-in its
+   library declares is refused unless the genuine stanza declares that module's library
+   (re-exporting it where the stand-in re-exports the stand-in), and a source the scan cannot read
+   or parse is refused, since what it names is then unknown. [availability_only] excuses this as it
+   excuses the package-wide demand.
 
    WHAT IT DOES NOT READ. Whether the copy keeps the module name the executable gives the arm, an
    `arms/dune` convention: a deviation still compiles the arm's text. How a source names a module is

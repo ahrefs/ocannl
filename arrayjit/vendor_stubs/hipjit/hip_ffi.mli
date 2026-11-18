@@ -1,7 +1,9 @@
-(** The one piece of [hipjit]'s ctypes-generated [Hip_ffi] that its [hip.mli] names: the type
-    [Hip.Module.function_attribute] re-exports with a manifest. This is the stub's only hand-written
-    interface, and it is not free to drift: the compiler checks [hip.mli]'s re-export against it,
-    and [hip.mli] is the verbatim copy the agreement rule diffs against the installed one. *)
+(** The one piece of [hipjit.hip_ffi], [hipjit]'s ctypes-generated [Hip_ffi], that its [hip.mli]
+    names: the type [Hip.Module.function_attribute] re-exports with a manifest. [hipjit.hip_ffi]
+    installs no interface file to copy, so this is the stub's only hand-written interface. It is not
+    free to drift: wherever [hipjit.hip_ffi] is installed, [hip_ffi_agreement.ml] (generated in this
+    directory from this file) checks that the installed [Hip_ffi] satisfies this signature, on
+    [runtest-hip_ffi] and on every build. *)
 
 module Bindings_types : sig
   type hip_function_attribute =
