@@ -1966,9 +1966,11 @@ end = struct
               blocks 0.89-1.0x as fast as 64-thread 2x2 ones at 16x16; the two terms put them at
               1.75x and 0.88x. The outproj argmin moves off the plain 32x32x16/2x2 leaf (2.3x/3.3x
               slower than the fastest) to 32x32x8/4x4 bgrid (1.35x/1.54x), agreement rising at every
-              cell (mean 41% -> 82%) across 6.3e11-5e12 loads/s. Only on the discrete RDNA wave32
-              class measured: the unified class (minix) was not. Overridable by
-              model_shared_load_rate and model_fill_lane_width. *)
+              cell (mean 41% -> 82%) across 5e11-5e12 loads/s. Within that plateau the rate is where
+              the saturated pairs' ratios fit best (mean |log error| 0.10 at 6.3e11, the minimum;
+              0.32 at its log-midpoint 1.6e12). Only on the discrete RDNA wave32 class measured: the
+              unified class (minix) was not. Overridable by model_shared_load_rate and
+              model_fill_lane_width. *)
            shared_load_rate =
              (if (not all_integrated) && Lazy.force all_rdna_wave32 then Some 6.3e11 else None);
            fill_lane_width =

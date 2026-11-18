@@ -463,7 +463,9 @@ files.
   group's work; an unsaturated launch fills as before. Fitted from EXPLAIN_ONLY listings over the
   gh-1821 window rows (rog) and gh-1600's M3 rows (tuf, ecb13bb8) with `gh1600_txn_fit.py
   --shared-rate sweep --pairs`: CUDA 2.5e12 loads/s, HIP discrete wave32 6.3e11 (lane width 32 on
-  both), the pairs then 1.24/0.59 (rog) and 1.75/0.88 (tuf). On rog no argmin of the five cells
+  both), the pairs then 1.24/0.59 (rog) and 1.75/0.88 (tuf). The agreement is flat over a wide
+  plateau (rog 1.3e12-3.2e12, tuf 5e11-5e12), so the rate inside it is where the saturated pairs'
+  ratios fit best -- an edge of the plateau is fine when it is that minimum. On rog no argmin of the five cells
   moves and agreement rises at every cell; on tuf the outproj argmins leave the plain
   `32x32x16/2x2` leaf (2.3x/3.3x slow, tied with the 4x4 bgrid leaf and first in listing order)
   for `32x32x8/4x4 bgrid`. The copy rate's plateau beside the new term still holds 1e12 (5e11-6.3e12

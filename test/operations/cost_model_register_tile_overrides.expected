@@ -1,0 +1,3 @@
+a stated rate beats the backend's advisory shared-load rate: true
+none beats the backend's advisory lane group: the thread-only fill: true
+the fill model the score reads carries the overridden lane group: true

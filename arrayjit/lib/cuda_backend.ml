@@ -2159,8 +2159,10 @@ end = struct
               one block tile the 2x2 and 4x4 register tiles tied; measured, the 2x2/4x4 ratio is
               1.16-1.28 at 32x32 (256 against 64 threads) and 0.50-0.53 at 16x16 (64 against 16):
               the two terms put it at 1.24 and 0.59. No argmin of the five cells moves, agreement
-              rises at every cell (mean 81% -> 96%), and the agreement plateau spans 1.3e12-2.5e12
-              loads/s, about half the shared memory's 5.5e12 cells/s; staged_copy_rate's plateau
+              rises at every cell (mean 81% -> 96%) across 1.3e12-3.2e12 loads/s, about half the
+              shared memory's 5.5e12 cells/s. Within that plateau the rate is where the saturated
+              pairs' ratios fit best (mean |log error| 0.08 at 2.5e12, 0.12 at its log-midpoint
+              2e12; the minimum, 0.06 at 4e12, is past the plateau). staged_copy_rate's plateau
               beside it (5e11-6.3e12 B/s) keeps 1e12. Overridable by model_shared_load_rate and
               model_fill_lane_width. *)
            shared_load_rate = Some 2.5e12;

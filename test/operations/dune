@@ -6099,6 +6099,22 @@
  (preprocess
   (pps ppx_ocannl)))
 
+; gh-ocannl-2262: the register-reuse keys beat the backend's advisories (a value and none), the
+; resolution the acceptance window's noshl/nolane arms rely on.
+
+(test
+ ; ocannl-backend: none -- links no backend: it reads the ranking's configuration over a hand-built limits record.
+ (name cost_model_register_tile_overrides)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules cost_model_register_tile_overrides)
+ (libraries
+  base
+  arrayjit.ir
+  arrayjit.utils
+  arrayjit.verdict
+  arrayjit.autotune))
+
 ; gh-ocannl-1253: the ranking score's per-block read charge, on hand-built IR scheduled under a
 ; GPU-shaped limits record; the envelope, capacity and residency are passed explicitly.
 
