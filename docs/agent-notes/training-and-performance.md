@@ -417,9 +417,10 @@ files.
   `context_fill` (`fm_tail`: `(B/P) * u(n) / n`, `n = ceil(B/P)`) -- and the tail alone, without
   the copy term, picks 16-thread tiles 3-4x slow: they are one calibration; (2) tensorized
   (`Tile_mma`) kernels are excluded, `mma_rate` already prices their staging; (3) the `auto`
-  seeding gate prices neither: it weighs a staged sketch against an UNSTAGED preset whose operand
-  loads the compute leg charges nothing for, and with the term it stopped seeding
-  `model_seeded_anchor`'s two-matmul chain on CUDA, a ranking nothing measured. CUDA ships 1e12 B/s
+  seeding gate prices direct global operand reads at the same rate (gh-ocannl-2279), using
+  per-thread source bytes filled in their own launch context. The copy-only score stopped seeding
+  `model_seeded_anchor`'s two-matmul chain on CUDA.
+  The leaf ranker still uses the staged volume from the fit. CUDA ships 1e12 B/s
   (any of 5e11-8e12 does the same at M1); the admitted+coalesced argmin is then the fastest leaf at
   outproj and qkv b256 and an uncoalesced leaf at b8. HIP has none: on tuf (discrete) the term
   favors the uncoalesced `64x64x8/4x4 bgrid` measured 4.5x slow there and its deep tiles need the

@@ -144,6 +144,7 @@ let () =
         fill = None;
         sector_rate = None;
         wg_capacity = None;
+        copy_rate = None;
       }
   in
   let decisions plan =
@@ -230,6 +231,7 @@ let () =
            fill = None;
            sector_rate = None;
            wg_capacity = None;
+           copy_rate = None;
          })
   in
   let _, r_auto_cached =
@@ -245,6 +247,7 @@ let () =
            fill = None;
            sector_rate = None;
            wg_capacity = None;
+           copy_rate = None;
          })
   in
   List.iter (census r_auto) ~f:(fun (at, label) ->

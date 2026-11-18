@@ -1388,9 +1388,9 @@
 # model_transaction_rate it admits the coalesced layouts to model_default (as the occupancy
 # capacity does). CUDA advises 1e12 (fitted on an RTX 5070 Ti, gh-ocannl-1600's M1 cells); HIP and
 # Metal none. `none`: no staged-copy term, a continuous launch fill, and no coalesced layouts
-# admitted through it. Read by model_default's ranking only, not the auto seeding gate (which weighs a
-# staged sketch against an unstaged preset, outside what the rate was fitted on). Unset/empty uses
-# the backend's value. Same cache identity as model_cache_capacity.
+# admitted through it. The auto seeding gate also prices direct global scalar operand reads at
+# this rate on both schedules so it can compare an unstaged preset with a staged sketch.
+# Unset/empty uses the backend's value. Same cache identity as model_cache_capacity.
 #model_staged_copy_rate=
 
 # If true, stdout capturing is disabled, so some logs meant for the ppx_minidebug log files

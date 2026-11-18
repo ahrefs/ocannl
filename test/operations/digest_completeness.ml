@@ -129,9 +129,9 @@ let reached_unread_exemptions =
        the identity as its digest, and the staffed start's gate tag carries the capacity \
        (gh-ocannl-1600)" );
     ( "model_staged_copy_rate",
-      "reached through the ranking score the seeded plan's auto gate calls, which tune seeds \
-       first, but the gate states no copy rate (gh-ocannl-1821: it prices no staged-copy term), \
-       and the plan it resolves to joins the identity as its digest" );
+      "read by the seeded plan's auto gate, which tune seeds first; the plan it resolves to joins \
+       the identity as its digest, and the staffed start's gate tag carries the rate \
+       (gh-ocannl-2279)" );
   ]
 
 let class_name : Utils.config_key_class -> string = function

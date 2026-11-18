@@ -1269,7 +1269,8 @@ let launch_fill fm contexts =
 type staged_copy_context = { sc_blocks : int; sc_threads : int; sc_bytes : float }
 [@@deriving sexp_of]
 
-let staged_copies ~is_staged (code : Low_level.t) : staged_copy_context list =
+let operand_deliveries ?is_global ~is_staged (code : Low_level.t) =
+  let module Access = Low_level.Access_fold in
   let rec has_tile_mma (c : Low_level.t) =
     match c with
     | Low_level.Tile_mma _ -> true
@@ -1277,25 +1278,49 @@ let staged_copies ~is_staged (code : Low_level.t) : staged_copy_context list =
     | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> has_tile_mma body
     | _ -> false
   in
-  if has_tile_mma code then []
+  if has_tile_mma code then ([], [])
   else
-    let tbl = Hashtbl.Poly.create () and order = ref [] in
-    let add (ctx : par_ctx) bytes =
-      let key = (ctx.pc_blocks, ctx.pc_threads) in
-      match Hashtbl.find tbl key with
-      | Some r -> r := !r +. bytes
-      | None ->
-          Hashtbl.set tbl ~key ~data:(ref bytes);
-          order := key :: !order
+    let tally () =
+      let tbl = Hashtbl.Poly.create () and order = ref [] in
+      let add (ctx : par_ctx) bytes =
+        let key = (ctx.pc_blocks, ctx.pc_threads) in
+        match Hashtbl.find tbl key with
+        | Some r -> r := !r +. bytes
+        | None ->
+            Hashtbl.set tbl ~key ~data:(ref bytes);
+            order := key :: !order
+      in
+      let contexts () =
+        List.rev_map !order ~f:(fun ((b, t) as key) ->
+            { sc_blocks = b; sc_threads = t; sc_bytes = !(Hashtbl.find_exn tbl key) })
+      in
+      (add, contexts)
     in
-    let rec plain_read (sc : Low_level.scalar_t) =
+    let add_staged, staged = tally () in
+    let direct = Option.map is_global ~f:(fun is_global -> (is_global, tally ())) in
+    let loop_ranges = lazy (Low_level.loop_ranges code) in
+    let scalar_policy : Access.policy =
+      {
+        discarded_operands = Skip;
+        gated_operands = Visit;
+        dead_loops = Skip;
+        local_scopes = Skip;
+        guards = Ignore;
+        scan_implicit = Skip;
+      }
+    in
+    (* The copy pays for its source read once. A fringe condition is evaluated separately. *)
+    let rec staging_guards (sc : Low_level.scalar_t) =
       match sc with
-      | Low_level.Get (src, _) -> not (is_staged src)
-      | Unop ((Ops.Identity | Ops.Round_prec), (a, _)) -> plain_read a
-      | Ternop (Ops.Where, _, (a, _), (Constant _, _))
-      | Ternop (Ops.Where, _, (Constant _, _), (a, _)) ->
-          plain_read a
-      | _ -> false
+      | Low_level.Get (src, _) when not (is_staged src) -> Some []
+      | Unop ((Ops.Identity | Ops.Round_prec), (a, _)) -> staging_guards a
+      | Ternop (Ops.Where, (cond, _), (a, _), (Constant _, _))
+      | Ternop (Ops.Where, (cond, _), (Constant _, _), (a, _)) ->
+          Option.map (staging_guards a) ~f:(List.cons cond)
+      | _ -> None
+    in
+    let bytes scale tn =
+      Float.of_int scale *. Float.of_int (Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec))
     in
     (* The iterations an [i < c] guard admits, as (index, admitted), where [i] is an enclosing
        loop's index from 0 -- at most what the enclosing guards already admit of it ([env] maps each
@@ -1316,24 +1341,42 @@ let staged_copies ~is_staged (code : Low_level.t) : staged_copy_context list =
           | r -> r)
       | _ -> None
     in
-    let rec go ~ctx ~scale ~env (c : Low_level.t) =
+    let rec go ~ctx ~scale ~env ~localized (c : Low_level.t) =
       match c with
       | Low_level.Seq (a, b) ->
-          go ~ctx ~scale ~env a;
-          go ~ctx ~scale ~env b
+          go ~ctx ~scale ~env ~localized a;
+          go ~ctx ~scale ~env ~localized b
       | For_loop { index; from_; to_; body; axis } ->
           let extent = max 0 (to_ - from_ + 1) in
+          let hardware = Low_level.hardware_kind_of_axis axis in
           let ctx =
-            match Low_level.hardware_kind_of_axis axis with
+            match hardware with
             | Some `Grid -> { ctx with pc_blocks = ctx.pc_blocks * extent }
             | Some `Workgroup -> { ctx with pc_threads = ctx.pc_threads * extent }
             | None -> ctx
           in
           let env = if from_ = 0 then (index, extent) :: env else env in
-          go ~ctx ~scale:(scale * extent) ~env body
-      | Scan_loop { from_; to_; body; _ } ->
-          go ~ctx ~scale:(scale * max 0 (to_ - from_ + 1)) ~env body
+          let localized =
+            match (direct, localized, hardware) with
+            | Some _, None, None -> (
+                (* Ask the renderer's serial peel rule before suppressing repeated reads of its
+                   register-held accumulator. Hardware levels keep their scheduled reads. *)
+                match
+                  Low_level.decide_accum_width
+                    ~extra_level:(fun _ _ -> false)
+                    ~loop_ranges:(Lazy.force loop_ranges) ~index ~from_ ~to_ body
+                with
+                | Accum_base { tn; idcs; pinned = None; base = `Update _; _ } ->
+                    Some (Chain_cell (tn, idcs))
+                | _ -> None)
+            | _ -> localized
+          in
+          go ~ctx ~scale:(scale * extent) ~env ~localized body
+      | Scan_loop { from_; to_; body; carried; _ } ->
+          List.iter carried ~f:(fun c -> reads ~ctx ~scale ~env [ c.Low_level.init ]);
+          go ~ctx ~scale:(scale * max 0 (to_ - from_ + 1)) ~env ~localized body
       | If { cond = cond, _; body } -> (
+          reads ~ctx ~scale ~env [ cond ];
           (* [scale] carries each guarded index's count as [env] has it -- its extent, or what an
              enclosing guard admits of it -- so replacing that count with the new one is exact, and
              nested guards on one index compose as their minimum. *)
@@ -1345,16 +1388,44 @@ let staged_copies ~is_staged (code : Low_level.t) : staged_copy_context list =
                     ( (if current > 0 then scale / current * n else scale),
                       List.Assoc.add env s n ~equal:Idx.equal_symbol ))
               in
-              go ~ctx ~scale ~env body
-          | None -> go ~ctx ~scale ~env body)
-      | Set { tn; llsc; _ } when is_staged tn && plain_read llsc ->
-          add ctx
-            (Float.of_int scale *. Float.of_int (Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec)))
+              go ~ctx ~scale ~env ~localized body
+          | None -> go ~ctx ~scale ~env ~localized body)
+      | Set { tn; llsc; _ } -> (
+          match if is_staged tn then staging_guards llsc else None with
+          | Some guards ->
+              add_staged ctx (bytes scale tn);
+              reads ~ctx ~scale ~env guards
+          | None -> reads ~ctx ~scale ~env ?self:localized [ llsc ])
+      | Set_local (_, llsc) | Set_from_vec { arg = llsc, _; _ } -> reads ~ctx ~scale ~env [ llsc ]
+      | Set_dynamic { dyn_value = index, _; llsc; _ } -> reads ~ctx ~scale ~env [ index; llsc ]
       | _ -> ()
+    and reads ~ctx ~scale ~env ?self roots =
+      Option.iter direct ~f:(fun (is_global, (add_direct, _)) ->
+          let add tn = if scale > 0 && is_global tn then add_direct ctx (bytes scale tn) in
+          (* The renderer emits a scope ID once per statement or scan initializer. The census counts
+             both arms with their guards taken, so their order is immaterial. *)
+          let emitted = lazy (Hash_set.create (module Low_level.Scope_id)) in
+          let scalar _ () (sc : Low_level.scalar_t) =
+            (match sc with
+            | Get (tn, idcs)
+              when not (Option.exists self ~f:(equal_chain_target (Chain_cell (tn, idcs)))) ->
+                add tn
+            | Get_dynamic { tn; _ } | Get_merge_buffer (tn, _) -> add tn
+            | Local_scope { id; body; _ } ->
+                let emitted = Lazy.force emitted in
+                if not (Hash_set.mem emitted id) then (
+                  Hash_set.add emitted id;
+                  go ~ctx ~scale ~env ~localized:None body)
+            | _ -> ());
+            Access.Continue ()
+          in
+          let hooks = { (Access.hooks ()) with scalar } in
+          List.iter roots ~f:(fun sc -> Access.fold_scalar ~policy:scalar_policy ~hooks ~init:() sc))
     in
-    go ~ctx:top_ctx ~scale:1 ~env:[] code;
-    List.rev_map !order ~f:(fun ((b, t) as key) ->
-        { sc_blocks = b; sc_threads = t; sc_bytes = !(Hashtbl.find_exn tbl key) })
+    go ~ctx:top_ctx ~scale:1 ~env:[] ~localized:None code;
+    (staged (), Option.value_map direct ~default:[] ~f:(fun (_, (_, contexts)) -> contexts ()))
+
+let staged_copies ~is_staged code = fst (operand_deliveries ~is_staged code)
 
 (* The staged bytes as the compute leg divides them by the copy rate: each context's over its own
    fill under a fill model, as counted without one. *)
@@ -1712,8 +1783,8 @@ let ranking_mma_terms ?(mma_flops = 0) ?(device_gathers = 0) ?launch (s : summar
 
 let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?issue_rate ?dram_bandwidth ?mma_rate ?(mma_flops = 0) ?(device_gathers = 0) ?device_gather_rate
-    ?launch ?(transactions = []) ?transaction_rate ?(staged_copies = []) ?staged_copy_rate
-    ?occupancy (s : summary) (r : reuse option) : float option * float option =
+    ?launch ?(transactions = []) ?transaction_rate ?(staged_copies = []) ?(direct_loads = [])
+    ?staged_copy_rate ?occupancy (s : summary) (r : reuse option) : float option * float option =
   let total = Float.of_int (total_bytes s) in
   let memory =
     Option.map peak_memory_bandwidth ~f:(fun ceiling ->
@@ -1766,14 +1837,13 @@ let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
               if Float.(excess > 0.) then leg +. (excess /. rate) else leg
           | _ -> leg
         in
-        (* gh-ocannl-1821: the staged operand copies' bytes, each context's over its own fill, at
-           the fitted copy rate -- likewise an addition, and nothing without a rate or a copy. *)
-        let with_staged_copies leg =
+        (* gh-ocannl-1821/2279: operand delivery, each context's bytes over its own fill. The auto
+           gate compares both delivery paths at the same rate. *)
+        let with_operand_deliveries leg =
           match staged_copy_rate with
           | Some rate when Float.(rate > 0.) ->
-              let bytes =
-                filled_staged_bytes ?fill_model:(Option.map launch ~f:fst) staged_copies
-              in
+              let filled = filled_staged_bytes ?fill_model:(Option.map launch ~f:fst) in
+              let bytes = filled staged_copies +. filled direct_loads in
               if Float.(bytes > 0.) then leg +. (bytes /. rate) else leg
           | _ -> leg
         in
@@ -1782,7 +1852,7 @@ let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
         let with_occupancy leg =
           match occupancy with Some o when Float.(o > 0. && o < 1.) -> leg /. o | _ -> leg
         in
-        with_occupancy @@ with_staged_copies @@ with_transactions
+        with_occupancy @@ with_operand_deliveries @@ with_transactions
         @@
         match launch with
         | Some (fm, contexts) ->
@@ -1817,12 +1887,12 @@ let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
 
 let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch
-    ?transactions ?transaction_rate ?staged_copies ?staged_copy_rate ?occupancy (s : summary)
-    (r : reuse option) : float option =
+    ?transactions ?transaction_rate ?staged_copies ?direct_loads ?staged_copy_rate ?occupancy
+    (s : summary) (r : reuse option) : float option =
   let compute, memory =
     ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
       ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch
-      ?transactions ?transaction_rate ?staged_copies ?staged_copy_rate ?occupancy s r
+      ?transactions ?transaction_rate ?staged_copies ?direct_loads ?staged_copy_rate ?occupancy s r
   in
   match List.filter_opt [ compute; memory ] with
   | [] -> None

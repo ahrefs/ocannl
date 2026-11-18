@@ -497,7 +497,8 @@ type hardware_limits = {
           (64-, 32- and 16-wide) against each other, which the flat compute leg tied and the k-block
           depth does not explain. Where it resolves, the launch fill also takes the launch tail
           ({!Ir.Cost_model.context_fill}'s [fm_tail]): the two were fitted together, on top of
-          {!field-issue_rate} -- refit one, refit both. It is also the second half of
+          {!field-issue_rate} -- refit one, refit both. The [auto] seeding gate also prices direct
+          global scalar operand reads at this rate (gh-ocannl-2279). It is the second half of
           [model_default]'s gate on the coalesced layouts, beside {!field-transaction_rate}, as an
           alternative to {!field-workgroup_bytes_per_multiprocessor}. A FITTED constant
           ([benchmarks/gh1600_txn_fit.py --staged-rate], [benchmarks/gh1821_geometry_fit.py] on

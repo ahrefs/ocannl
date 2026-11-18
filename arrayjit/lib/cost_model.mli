@@ -440,9 +440,9 @@ val filled_transactions : ?fill_model:fill_model -> transaction_context list -> 
 
 type staged_copy_context = { sc_blocks : int; sc_threads : int; sc_bytes : float }
 [@@deriving sexp_of]
-(** gh-ocannl-1821: the operand staging copies of one parallel context of a kernel -- the copies
-    whose enclosing [Grid] extents multiply to [sc_blocks] and [Workgroup] extents to [sc_threads]
-    -- and the bytes they write into workgroup memory over all their executions. *)
+(** Operand deliveries in one parallel context of a kernel. The enclosing [Grid] extents multiply to
+    [sc_blocks] and [Workgroup] extents to [sc_threads]. [sc_bytes] counts bytes over all executions
+    in that context. *)
 
 val staged_copies : is_staged:(Tnode.t -> bool) -> Low_level.t -> staged_copy_context list
 (** The kernel's operand staging copies, per parallel context in first-copy order (contexts with
@@ -455,8 +455,20 @@ val staged_copies : is_staged:(Tnode.t -> bool) -> Low_level.t -> staged_copy_co
     blocktile of an [M x N x K] contraction: [M * N * K * (BM + BN) / (BM * BN)] cells times the
     element width. *)
 
+val operand_deliveries :
+  ?is_global:(Tnode.t -> bool) ->
+  is_staged:(Tnode.t -> bool) ->
+  Low_level.t ->
+  staged_copy_context list * staged_copy_context list
+(** Staged copies as above, and, with [is_global], the scheduled scalar operands read directly from
+    global storage (gh-ocannl-2279). Each read uses the source storage width, including repeats of
+    the same cell. A staged copy accounts for its own source. When {!Low_level.decide_accum_width}
+    localizes a raw serial reduction, the census excludes its accumulator reads, including any
+    initial load introduced by code generation. Scope definitions count once per statement or scan
+    initializer. Unknown conditions are taken. Both lists are empty in a [Tile_mma] kernel. *)
+
 val filled_staged_bytes : ?fill_model:fill_model -> staged_copy_context list -> float
-(** The staged bytes as the compute leg divides them by the copy rate: each context's over its
+(** The delivery bytes as the compute leg divides them by the copy rate: each context's over its
     {!context_fill} under a fill model, the plain sum without one. *)
 
 val ranking_seconds_of :
@@ -474,6 +486,7 @@ val ranking_seconds_of :
   ?transactions:transaction_context list ->
   ?transaction_rate:float ->
   ?staged_copies:staged_copy_context list ->
+  ?direct_loads:staged_copy_context list ->
   ?staged_copy_rate:float ->
   ?occupancy:float ->
   summary ->
@@ -489,10 +502,11 @@ val ranking_seconds_of :
     (default none) are the kernel's {!memory_transactions}, their {!filled_transactions} priced at
     [transaction_rate] (sectors/s) and added to the compute leg (gh-ocannl-1600): without a rate, or
     without an excess, the leg is exactly as before. [staged_copies] (default none) are the kernel's
-    {!staged_copies}, their {!filled_staged_bytes} priced at [staged_copy_rate] (bytes/s) and added
-    to the compute leg likewise (gh-ocannl-1821): without a positive rate or without a copy, the leg
-    is exactly as before. [occupancy] (default none) is the kernel's {!occupancy}: below 1, the
-    compute leg is divided by it; absent or 1, unchanged. [None] when neither peak is given. *)
+    {!staged_copies}. [direct_loads] (default none) are the direct bytes from {!operand_deliveries}.
+    Their {!filled_staged_bytes} are priced at [staged_copy_rate] (bytes/s) and added to the compute
+    leg. Without a positive rate or operand deliveries, the leg is exactly as before. [occupancy]
+    (default none) is the kernel's {!occupancy}: below 1, the compute leg is divided by it; absent
+    or 1, unchanged. [None] when neither peak is given. *)
 
 val ranking_legs_of :
   ?peak_flops:float ->
@@ -509,6 +523,7 @@ val ranking_legs_of :
   ?transactions:transaction_context list ->
   ?transaction_rate:float ->
   ?staged_copies:staged_copy_context list ->
+  ?direct_loads:staged_copy_context list ->
   ?staged_copy_rate:float ->
   ?occupancy:float ->
   summary ->
