@@ -466,7 +466,10 @@ files.
   3 s in on 2026-11-07. A day later, on both mac-studio and macbook-pro, the same test sat in
   `sync` until its 300 s alarm. On macbook-pro (M4 Pro, 27.2) a raw-Metal probe found such a kernel
   still `Scheduled` after 120 s, with 1 thread or 65536. The IORegistry `recoveryCount` stayed 0,
-  so nothing was killed and no status was lost. Another process's trivial kernels completed beside
+  so nothing was killed and no status was lost. On 2026-11-18 mac-studio (macOS 27.2.1, 26B131)
+  read the same in an exclusive window: the probe's one-thread kernel still `Scheduled` after 120 s,
+  `recoveryCount` 0 throughout, and the next process's trivial kernel completed at once
+  (gh-ocannl-2139). Another process's trivial kernels completed beside
   it in under 0.1 s, and a second queue in the same process did not. Legitimate 10 s and 30 s
   kernels completed. Exiting the process freed the GPU at once. So an elapsed-time bound cannot
   classify a hang (gh-ocannl-2089), and the test gives the OS a bounded 20 s to kill its kernel.

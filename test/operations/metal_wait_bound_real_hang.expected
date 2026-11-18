@@ -1,0 +1,12 @@
+the candidate's decline is read past the baseline's refusal before dispatch: true
+the baseline's refusal alone is no candidate decline: true
+the finite search timed a candidate through a completed bounded wait: true
+the finite search's routine computed four times every row's sum: true
+the search over the never-ending reduction raised: true
+the search ended Search_died at a candidate's Sync: true
+the one decline is the candidate's wait_bound, counted once: true
+exactly one bounded wait expired, the search's last: true
+the expired wait was bounded at the 60 s floor: true
+the expired wait lasted its bound, and under 30 s more: true
+the search raised the decline's rendering, naming the host-side bound: true
+the one decline is the candidate's gpu_hang, counted once: true
