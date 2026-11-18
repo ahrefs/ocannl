@@ -57,10 +57,7 @@ let seeds_here = Option.is_some seeding_here
    from what it resolved to, so a resolution that stops ranking fails the claim below rather than
    closing its gate. *)
 let auto_gate_configured =
-  Utils.registered_keyword ~arg_name:"gpu_default_sketch_min_reduction"
-    ~expected:"auto or a non-negative integer (0 disables the seeded default)" ~parse:(function
-    | "auto" -> Some true
-    | raw -> ( match Int.of_string_opt raw with Some n when n >= 0 -> Some false | _ -> None))
+  match Autotune.seed_gate_setting () with `Auto -> true | `Threshold _ -> false
 
 (* What the configured gate resolved to here: [auto]'s ranking ([Autotune.Ranked]), on CUDA. *)
 let ranked_gate_here =
@@ -276,7 +273,10 @@ let () =
   gated_exists
     ~aggregation:(if cuda then `Environment else `Backend)
     ~when_:(cuda && seeds_here && auto_gate_configured)
-    ~on:(if cuda then backend_name ^ ", the seeding gate not configured auto" else backend_name)
+    ~on:
+      (if not cuda then backend_name
+       else if not auto_gate_configured then backend_name ^ ", the seeding gate not configured auto"
+       else backend_name ^ ", no seeded default under this configuration")
     "on CUDA under the auto gate the chain's seeded plan seeds exactly its two products"
     (List.filter outcomes ~f:(fun o -> not o.o_site.single))
     ~f:(fun o -> ranked_gate_here && List.length o.o_seeded.Autotune.sd_seeded = 2);

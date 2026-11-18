@@ -5863,7 +5863,7 @@ let seeded_split ~facts ~min_serial ~static_indices (opt : LL.optimized) =
    schedule in all five cells. Sketch/preset timings for a 2x2 tile, a sub-warp launch, or a site
    where deduplication saves bytes are still open.
 
-   gh-ocannl-2306: what this test seeds on CUDA decides which singles a search times there (the
+   gh-ocannl-2306: what this gate seeds on CUDA decides which singles a search times there (the
    seeded plan's [F_swap] singles, or the staffed [F_sketch] ones), and [affected] only ranks the
    tests reading those labels as link-only. A change to what it seeds -- here, in
    [seeded_default_gate], or in the [Cost_model] terms the score sums -- owes a CUDA run of the set
