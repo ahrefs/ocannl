@@ -45,6 +45,9 @@
 # sent a TERM, and what ran is printed -- and so does a signal to this
 # script. N is a positive integer; 1, the default, runs one member at a time
 # with its output live, as before the option.
+# In serial, ordinary completion waits for EOF on the captured stderr.
+# A descendant that inherits the descriptor keeps the member open until
+# it closes it. An interrupted member instead stops its stderr relay.
 #
 # --expected-skips FILE runs every member strict (OCANNL_TOOL_HARNESS_STRICT=1)
 # except for the skips FILE lists, so a skip that newly appears on the
@@ -462,6 +465,9 @@ export PATH="$interpreter_dir:$PATH"
 outputs=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-output.XXXXXX") ||
   { echo "test-harnesses.sh: cannot create the member output directory" >&2; exit 2; }
 scratch+=("$outputs")
+member_output() { # SCRIPT: sets output
+  output=$outputs/${1//\//_}.out
+}
 command_not_found='^(.+: line [0-9]+: .+|[^:]+: [^:]+): command not found$'
 capture_status() { # SCRIPT COMMAND_RC TEE_RC
   if [ "$3" != 0 ]; then
@@ -526,7 +532,7 @@ if [ "$jobs" = 1 ]; then
     script=${run_scripts[i]}
     member_argv "$i"
     printf '\nHARNESS %s (%s; bash %s %s)\n' "${run_commands[i]}" "${run_tiers[i]}" "$member_version" "$member_bash"
-    output=$outputs/${script//\//_}.out
+    member_output "$script"
     rc=0
     if [ "$ci_real_dune" = 1 ]; then
       serial_member "$script" "$output.err" ${args[@]+"${args[@]}"} | tee "$output"
@@ -558,7 +564,7 @@ else
     [ -z "$interrupted" ] || break
     while [ "$started" -lt "$total" ] && [ "$running" -lt "$jobs" ]; do
       script=${run_scripts[started]}
-      output=$outputs/${script//\//_}.out
+      member_output "$script"
       member_argv "$started"
       OCANNL_TOOL_HARNESS_NAME=$script "$member_bash" "$root/$script" ${args[@]+"${args[@]}"} \
         >"$output" 2>"$output.err" </dev/null &
@@ -567,7 +573,7 @@ else
     done
     while [ "$printed" -lt "$started" ] && [ -n "${ended[printed]-}" ]; do
       script=${run_scripts[printed]}
-      output=$outputs/${script//\//_}.out
+      member_output "$script"
       printf '\nHARNESS %s (%s; bash %s %s)\n' "${run_commands[printed]}" "${run_tiers[printed]}" "$member_version" "$member_bash"
       cat "$output" "$output.err"
       member_ended "$printed" "${ended[printed]}" "$output.err"
@@ -582,7 +588,7 @@ else
     stop_members
     for ((i = printed; i < started; i++)); do
       script=${run_scripts[i]}
-      output=$outputs/${script//\//_}.out
+      member_output "$script"
       printf '\nHARNESS %s (%s; bash %s %s)\n' "${run_commands[i]}" "${run_tiers[i]}" "$member_version" "$member_bash"
       cat "$output" "$output.err"
       printf 'HARNESS %s exit: %s\n' "$script" "${ended[i]}"
@@ -628,7 +634,8 @@ if [ "$ci_real_dune" = 1 ]; then
   while IFS= read -r line || [ -n "$line" ]; do
     case $line in ''|'#'*) continue ;; esac
     script=${line%%$'\t'*}
-    grep -qxF -- "PASS  ${line#*$'\t'}" "$outputs/${script//\//_}.out" 2>/dev/null && continue
+    member_output "$script"
+    grep -qxF -- "PASS  ${line#*$'\t'}" "$output" 2>/dev/null && continue
     printf 'harnesses: a real-dune check did not PASS (unreached by its selector, skipped or red): %s: %s\n' \
       "$script" "${line#*$'\t'}"
     unreached=$((unreached + 1))
