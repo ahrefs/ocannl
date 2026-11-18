@@ -3,6 +3,7 @@
 
 Usage: gh1600_txn_fit.py CELL [CELL ...] [--band B] [--sector 32|64|128] [--rate R] [--show]
                          [--occupancy CAP,TPM] [--staged-rate R|sweep --listed-staged-rate L]
+                         [--shared-rate R|sweep [--listed-shared-rate L]] [--pairs]
 
   CELL      NAME=TSV,EXPLAIN: one site's timing rows (config autotune_calibration_file, every
             candidate timed by gh1253_cells.sh's `time` cell) and a bench_rank_site.exe stdout
@@ -33,6 +34,19 @@ Usage: gh1600_txn_fit.py CELL [CELL ...] [--band B] [--sector 32|64|128] [--rate
             same calibration. The listing passes the rebuild check below as is: its
             c= already carries the term. Kernel lines without stg= (pre-1821 listings) carry none;
             benchmarks/gh1821_geometry_fit.py fits those from the leaves' block tiles instead.
+  --shared-rate  gh-ocannl-2262: re-score the register-reuse term at this rate (cells/s), or
+            `sweep` a log grid, on a listing scored at --listed-shared-rate L (default none): each
+            kernel's shl= (its shared loads beyond the calibration tile's reuse, over their fill,
+            listed whether or not a rate priced them) moves its compute leg by shl * (1/R - 1/L),
+            before its occupancy. With --staged-rate too, the two sweep jointly (a grid of pairs):
+            the check that the copy rate fitted before this term still holds beside it. The base
+            each agreement is judged against is the listing re-scored without the term (or, with
+            --staged-rate, the nostg reference as there). The lane group is not re-scored: it moves
+            the fill, so a listing per lane width (gh1253_cells.sh FILL_LANE_WIDTH=W) is swept on
+            its own.
+  --pairs   gh-ocannl-2262: list the saturated register-tile pairs -- two leaves of one block tile,
+            flavour and site, 2x2 against 4x4 -- with their measured median ratio and the score's
+            ratio as listed and (with --shared-rate R) re-scored.
 
 What it re-scores: per candidate, the sum over its kernels of max(c + txn / rate, m) -- the
 runtime score with the term priced (cost_model.ml's ranking_legs_of adds the filled excess over the
@@ -95,7 +109,9 @@ def parse_kernel(spec):
     return {"c": num("c"), "m": num("m"), "txn32": num("txn"), "txn64": num("txn64"),
             "txn128": num("txn128"), "unc": int(fields["unc"]), "wg": int(fields["wg"]),
             "thr": int(fields["thr"]), "occ": float(fields.get("occ", "1")),
-            "stg": float(fields.get("stg", "0"))}
+            "stg": float(fields.get("stg", "0")),
+            # gh-ocannl-2262: None on a listing from before the term, which --shared-rate refuses.
+            "shl": float(fields["shl"]) if "shl" in fields else None}
 
 
 def occupancy(wg, thr, cap, tpm):
@@ -121,7 +137,7 @@ def listing(path):
     return {l: (r, pos, adm, kernels.get(l)) for l, (r, pos, adm) in ranks.items()}
 
 
-def rescore(kernels, rate, sector, occ=None, staged=None):
+def rescore(kernels, rate, sector, occ=None, staged=None, shared=None):
     total = 0.0
     for k in kernels:
         c = k["c"]
@@ -135,6 +151,11 @@ def rescore(kernels, rate, sector, occ=None, staged=None):
             # gh-ocannl-1821: (rate, listed rate) -- the staged bytes' move between the two.
             r, listed = staged
             c = c + k["stg"] * (1.0 / r - 1.0 / listed) * 1e3
+        if c is not None and shared is not None:
+            # gh-ocannl-2262: (rate, listed rate), a rate of 0 meaning none.
+            r, listed = shared
+            inv = lambda x: 0.0 if not x else 1.0 / x
+            c = c + (k["shl"] or 0.0) * (inv(r) - inv(listed)) * 1e3
         if c is not None:
             o = k["occ"] if occ is None else occupancy(k["wg"], k["thr"], *occ)
             c = c / o
@@ -177,8 +198,8 @@ def spread_of(cands):
     return q[8] / q[0]
 
 
-def evaluate(cands, rate, sector, band, occ=None, staged=None):
-    ranks = {l: rescore(c["kernels"], rate, sector, occ, staged) for l, c in cands.items()}
+def evaluate(cands, rate, sector, band, occ=None, staged=None, shared=None):
+    ranks = {l: rescore(c["kernels"], rate, sector, occ, staged, shared) for l, c in cands.items()}
     labels = sorted(cands)
     decided = right = 0
     for i, a in enumerate(labels):
@@ -201,6 +222,37 @@ def evaluate(cands, rate, sector, band, occ=None, staged=None):
     return 100.0 * right / max(1, decided), decided, sets, ranks
 
 
+def print_pairs(cells, sector, scoring):
+    """gh-ocannl-2262: the register-tile pairs at one block tile, flavour and site."""
+    import re
+    lab = re.compile(r"gpu (\d+)x(\d+)x(\d+)/(\d)x(\d)((?: [a-z-]+)*)\]")
+    for name, cands, _, _ in cells:
+        by = {}
+        for label, c in cands.items():
+            mm = lab.search(label)
+            if not mm:
+                continue
+            bm, bn, _, tm, tn, flavour = mm.groups()
+            by.setdefault((int(bm), int(bn), flavour.strip()), {}).setdefault(
+                (int(tm), int(tn)), []).append(label)
+        for key, g in sorted(by.items()):
+            for a in g.get((2, 2), []):
+                for b in g.get((4, 4), []):
+                    ca, cb = cands[a], cands[b]
+                    thr = lambda c: ",".join(str(k["thr"]) for k in c["kernels"])
+                    listed = rescore(ca["kernels"], None, sector) / rescore(cb["kernels"], None, sector)
+                    line = (f"pair {name} {key[0]}x{key[1]} {key[2] or 'plain'}: {a!r} / {b!r}"
+                            f" threads={thr(ca)}/{thr(cb)}"
+                            f" measured={ca['median'] / cb['median']:.3f} listed={listed:.3f}")
+                    if any(v is not None for v in scoring.values()):
+                        ra = rescore(ca["kernels"], scoring["rate"], sector, scoring["occ"],
+                                     scoring["staged"], scoring["shared"])
+                        rb = rescore(cb["kernels"], scoring["rate"], sector, scoring["occ"],
+                                     scoring["staged"], scoring["shared"])
+                        line += f" rescored={ra / rb:.3f}"
+                    print(line)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cells", nargs="+")
@@ -212,6 +264,9 @@ def main():
     ap.add_argument("--no-coalesced", dest="no_coalesced", action="store_true")
     ap.add_argument("--staged-rate", dest="staged_rate")
     ap.add_argument("--listed-staged-rate", dest="listed_staged_rate", type=float)
+    ap.add_argument("--shared-rate", dest="shared_rate")
+    ap.add_argument("--listed-shared-rate", dest="listed_shared_rate", type=float, default=0.0)
+    ap.add_argument("--pairs", action="store_true")
     args = ap.parse_args()
     if args.staged_rate is not None and not args.listed_staged_rate:
         print("gh1600_txn_fit: --staged-rate needs --listed-staged-rate (the rate the listing was"
@@ -235,9 +290,19 @@ def main():
         if len(cands) < 2:
             print(f"gh1600_txn_fit: {name}: fewer than two candidates join", file=sys.stderr)
             return 2
+        if args.shared_rate is not None and any(
+                k["shl"] is None for c in cands.values() for k in c["kernels"]):
+            # A listing without shl= would re-score to itself at every rate and pass vacuously.
+            print(f"gh1600_txn_fit: {name}: --shared-rate needs kernel lines carrying shl="
+                  " (a listing from before gh-ocannl-2262 has none)", file=sys.stderr)
+            return 2
         spread = spread_of(cands)
         unc = sum(c["uncovered"] for c in cands.values())
         base = evaluate(cands, None, args.sector, args.band)  # the listing as it was scored
+        if args.shared_rate is not None and args.staged_rate is None:
+            # gh-ocannl-2262: judged against the listing without the register-reuse term.
+            base = evaluate(cands, None, args.sector, args.band,
+                            shared=(0.0, args.listed_shared_rate))
         if args.staged_rate is not None:
             # gh-ocannl-1821: the comparison is against the cell's fill-only reference, its `nostg`
             # listing, scored as listed -- the staged term cannot be subtracted back out of this
@@ -260,10 +325,11 @@ def main():
               + "".join(f" off_{s}={p!r}@{sl:.3f}" for s, (p, sl, _) in base[2].items()))
         cells.append((name, cands, spread, base))
 
-    def judge(rate, staged=None):
+    def judge(rate, staged=None, shared=None):
         rows = []
         for name, cands, spread, base in cells:
-            agree, _, sets, ranks = evaluate(cands, rate, args.sector, args.band, occ, staged)
+            agree, _, sets, ranks = evaluate(cands, rate, args.sector, args.band, occ, staged,
+                                             shared)
             pick, slow, best = sets.get("admitted+coalesced", (None, 1.0, None))
             _, adm_slow, _ = sets.get("admitted", (None, 1.0, None))
             _, base_adm_slow, _ = base[2].get("admitted", (None, 1.0, None))
@@ -275,6 +341,45 @@ def main():
             rows.append((name, agree, pick, slow, best, ok, sets, ranks, cands))
         return rows
 
+    if args.pairs:
+        # The same re-scoring the fit evaluates: every option stated as one value.
+        one = lambda v: v is not None and v != "sweep"
+        print_pairs(cells, args.sector, dict(
+            rate=args.rate or None, occ=occ,
+            staged=((float(args.staged_rate), args.listed_staged_rate)
+                    if one(args.staged_rate) else None),
+            shared=((float(args.shared_rate), args.listed_shared_rate)
+                    if one(args.shared_rate) else None)))
+
+    if args.shared_rate is not None:
+        listed = args.listed_shared_rate
+        rates = ([10 ** (e / 10) for e in range(110, 151)] if args.shared_rate == "sweep"
+                 else [float(args.shared_rate)])
+        if args.staged_rate is None:
+            stageds = [None]
+        else:
+            stageds = ([10 ** (e / 10) for e in range(110, 131)] if args.staged_rate == "sweep"
+                       else [float(args.staged_rate)])
+        scored = []
+        for st in stageds:
+            for r in rates:
+                rows = judge(args.rate or None,
+                             None if st is None else (st, args.listed_staged_rate), (r, listed))
+                passing = sum(row[5] for row in rows)
+                worst = max(row[3] for row in rows)
+                least = min(row[1] for row in rows)
+                scored.append(((-passing, worst, -least), r, st))
+                print(f"shared_rate={r:.3e}"
+                      + ("" if st is None else f" staged_rate={st:.3e}")
+                      + f" passing={passing}/{len(rows)} worst_slowdown={worst:.3f}"
+                      f" least_agreement={least:.1f}%"
+                      + "".join(f" {row[0]}={row[1]:.1f}%@{row[3]:.3f}:{row[2]!r}" for row in rows))
+        (key, r, st) = min(scored)
+        print(f"fit: model_shared_load_rate={r:.6e}"
+              + ("" if st is None else f" model_staged_copy_rate={st:.6e}")
+              + f" passing={-key[0]}/{len(cells)} worst_slowdown={key[1]:.3f}"
+              f" least_agreement={-key[2]:.1f}%")
+        return 0 if len(rates) * len(stageds) > 1 or key[0] == -len(cells) else 1
     if args.staged_rate is not None:
         listed = args.listed_staged_rate
         grid = ([10 ** (e / 10) for e in range(100, 141)] if args.staged_rate == "sweep"

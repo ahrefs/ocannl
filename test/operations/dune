@@ -6079,6 +6079,42 @@
  (modules cost_model_fork_join_updates)
  (libraries base arrayjit.ir arrayjit.verdict arrayjit.ll_builders))
 
+; gh-ocannl-2262: the register-reuse term (shared loads beyond the calibration tile's) and the
+; launch fill in lane groups, on hand-built IR and the gpt2_mini out projection's blocktile leaves.
+
+(test
+ ; ocannl-backend: cc -- Context.cpu lowers the site; the census and the scores are hermetic and nothing compiles.
+ (name cost_model_register_tile)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules cost_model_register_tile)
+ (libraries
+  base
+  stdio
+  ocannl
+  arrayjit.verdict
+  ll_test
+  arrayjit.autotune
+  arrayjit.context)
+ (preprocess
+  (pps ppx_ocannl)))
+
+; gh-ocannl-2262: the register-reuse keys beat the backend's advisories (a value and none), the
+; resolution the acceptance window's noshl/nolane arms rely on.
+
+(test
+ ; ocannl-backend: none -- links no backend: it reads the ranking's configuration over a hand-built limits record.
+ (name cost_model_register_tile_overrides)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules cost_model_register_tile_overrides)
+ (libraries
+  base
+  arrayjit.ir
+  arrayjit.utils
+  arrayjit.verdict
+  arrayjit.autotune))
+
 ; gh-ocannl-1253: the ranking score's per-block read charge, on hand-built IR scheduled under a
 ; GPU-shaped limits record; the envelope, capacity and residency are passed explicitly.
 

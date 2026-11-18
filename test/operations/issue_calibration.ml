@@ -181,6 +181,7 @@ let () =
               fm_fill_threads = t;
               fm_tail = false;
               fm_chains = 1;
+              fm_lane_width = 1;
             }
           ksweep
       with

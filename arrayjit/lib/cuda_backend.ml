@@ -2012,6 +2012,8 @@ end = struct
                Cu.Device.get_attributes (Cu.Device.get ~ordinal))
          in
          let min_over f = Array.map attrs ~f |> Array.min_elt ~compare:Int.compare in
+         (* The warp: the shuffles' width and the issue group the launch fill counts lanes in. *)
+         let warp = 32 in
          {
            Backend_intf.max_threads_per_workgroup =
              min_over (fun (a : Cu.Device.attributes) -> a.max_threads_per_block);
@@ -2048,7 +2050,7 @@ end = struct
            mma = Cuda_mma.capability ~cc:(min_compute_capability ());
            simd_vector = Ir.Vector_file.none;
            native_fp16_arithmetic = false;
-           simdgroup_width = Some 32;
+           simdgroup_width = Some warp;
            (* gh-ocannl-1124: measured true on the RTX of rog-nv; see the field. *)
            lane_scalar_recompute_cheap = true;
            (* gh-ocannl-1168, gh-ocannl-1256: measured on the RTX of rog-nv -- heads of 64 and 128
@@ -2151,6 +2153,20 @@ end = struct
               model_default's ranking, not the auto seeding gate. Overridable by
               model_staged_copy_rate. *)
            staged_copy_rate = Some 1.0e12;
+           (* gh-ocannl-2262: the register-reuse rate and the fill in warps, fitted together on the
+              gh-ocannl-1479 cells' timings on rog-nv's RTX 5070 Ti (gh-ocannl-1821's window rows,
+              re-scored by EXPLAIN_ONLY listings; benchmarks/gh1600_txn_fit.py --shared-rate). At
+              one block tile the 2x2 and 4x4 register tiles tied; measured, the 2x2/4x4 ratio is
+              1.16-1.28 at 32x32 (256 against 64 threads) and 0.50-0.53 at 16x16 (64 against 16):
+              the two terms put it at 1.24 and 0.59. No argmin of the five cells moves, agreement
+              rises at every cell (mean 81% -> 96%) across 1.3e12-3.2e12 loads/s, about half the
+              shared memory's 5.5e12 cells/s. Within that plateau the rate is where the saturated
+              pairs' ratios fit best (mean |log error| 0.08 at 2.5e12, 0.12 at its log-midpoint
+              2e12; the minimum, 0.06 at 4e12, is past the plateau). staged_copy_rate's plateau
+              beside it (5e11-6.3e12 B/s) keeps 1e12. Overridable by model_shared_load_rate and
+              model_fill_lane_width. *)
+           shared_load_rate = Some 2.5e12;
+           fill_lane_width = Some warp;
          })
     in
     (* gh-ocannl-572: the kernel source is a function of the lowered code, the device capabilities

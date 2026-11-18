@@ -2389,6 +2389,18 @@ val ranking_staged_copy_rate : limits:Ir.Backend_intf.hardware_limits -> float o
     continuous launch fill, and no coalesced leaves admitted through it in {!model_default}) over
     the backend's advisory [staged_copy_rate]. An [Untimed] reading, like {!ranking_capacity}. *)
 
+val ranking_shared_load_rate : limits:Ir.Backend_intf.hardware_limits -> float option
+(** The ranking score's shared-load rate, in cells/s (gh-ocannl-2262,
+    {!Ir.Cost_model.excess_shared_loads}): config [model_shared_load_rate] ([none]: no
+    register-reuse term) over the backend's advisory [shared_load_rate]. Read by the leaf ranking,
+    not the [auto] seeding gate. An [Untimed] reading, like {!ranking_capacity}. *)
+
+val ranking_fill_lane_width : limits:Ir.Backend_intf.hardware_limits -> int
+(** The launch fill's lane group (gh-ocannl-2262, {!Ir.Cost_model.fill_model}'s [fm_lane_width]):
+    config [model_fill_lane_width] ([none]: 1) over the backend's advisory [fill_lane_width], 1 --
+    the thread-only fill -- where neither states one. {!ranking_fill_model} carries it; the [auto]
+    seeding gate resets it to 1. An [Untimed] reading, like {!ranking_capacity}. *)
+
 val ranking_fill_chains : limits:Ir.Backend_intf.hardware_limits -> int
 (** The launch fill's per-thread ILP cap (gh-ocannl-1639, {!Ir.Cost_model.fill_model}'s
     [fm_chains]): config [model_fill_chains] ([none]: 1) over the backend's advisory [fill_chains],
@@ -2401,7 +2413,8 @@ val ranking_fill_model : limits:Ir.Backend_intf.hardware_limits -> Ir.Cost_model
     [model_multiprocessors] and [model_fill_threads] (each [none]: no launch fill) over the
     backend's advisory [multiprocessors] / [fill_threads]; [None] unless both resolve. Continuous
     ([fm_tail] off): the score switches the launch tail on exactly where it prices a staged-copy
-    rate (gh-ocannl-1821). An [Untimed] reading, like {!ranking_capacity}. *)
+    rate (gh-ocannl-1821). Its lane group is {!ranking_fill_lane_width}. An [Untimed] reading, like
+    {!ranking_capacity}. *)
 
 val ranking_dram_bandwidth : limits:Ir.Backend_intf.hardware_limits -> float option
 (** The ranking score's achieved DRAM rate, in bytes/s (gh-ocannl-1442): config
@@ -3121,6 +3134,12 @@ type explain_kernel = {
           no rate prices them. The leg adds them over the rate before the occupancy divides it, so a
           listing scored at rate [L] re-scores at [R] by adding [stg * (1/R - 1/L) / occ] to [c]
           (the launch tail stays on at both). *)
+  ek_shared_loads : float;
+      (** gh-ocannl-2262: its shared loads beyond the calibration tile's reuse
+          ({!Ir.Cost_model.excess_shared_loads}) as the compute leg divides them by the shared-load
+          rate ({!Ir.Cost_model.filled_shared_loads}), counted whether or not a rate prices them. A
+          listing scored at rate [L] (none: [1/L = 0]) re-scores at [R] by adding
+          [shl * (1/R - 1/L) / occ] to [c]. *)
 }
 (** One kernel of an explained candidate: what [benchmarks/gh1442_agreement.py --fit-txn] re-scores
     offline, the candidate's score being the sum over its kernels of the larger leg. *)

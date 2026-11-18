@@ -1159,6 +1159,7 @@ type fill_model = {
   fm_fill_threads : int;
   fm_tail : bool;
   fm_chains : int;
+  fm_lane_width : int;
 }
 [@@deriving sexp_of]
 
@@ -1173,24 +1174,39 @@ type fill_model = {
    fm_chains] counts [T * c / L] threads in place of [T]: the fitted [t] saturates with threads that
    each carry at least [L] chains (the calibration's register-tiled threads carry 16), so a thread
    with fewer hides less of the latency on its own. [c] unknown ([None]) or at least [L], or [L =
-   1], is the thread-only fill, bitwise. *)
+   1], is the thread-only fill, bitwise.
+
+   gh-ocannl-2262: under [W = fm_lane_width > 1] a block of [T] threads issues in [L = W * ceil (T /
+   W)] lanes, of which [T] do work. Its issue is counted in lanes -- [L'] under the chain credit, as
+   [T'] above -- and the work done is [T / L] of it: [min 1 (B * min L' t / (P * t)) * T / L] in the
+   continuous form, the tail's [busiest] likewise. Unsaturated ([B * L' <= P * t]) that is [B * T' /
+   (P * t)], today's fill exactly: a latency-bound launch issues as fast as its live threads.
+   Saturated, a 16-thread block on 32-lane groups does half a full group's work per issue slot
+   (16-thread 4x4 blocks ran 1.9x slower than 64-thread 2x2 ones at one block tile on rog). [T] a
+   multiple of [W], or [W = 1]: bitwise today's. *)
 let context_fill ?chains (fm : fill_model) ~blocks ~threads =
   let p = max 1 fm.fm_multiprocessors and t = max 1 fm.fm_fill_threads in
   let b = max 1 blocks and threads = max 1 threads in
-  let threads =
+  let w = max 1 fm.fm_lane_width in
+  let lanes = if w = 1 then threads else w * ((threads + w - 1) / w) in
+  let issuing =
     match chains with
     | Some c when c >= 1 && c < fm.fm_chains ->
-        Float.of_int threads *. Float.of_int c /. Float.of_int fm.fm_chains
-    | _ -> Float.of_int threads
+        Float.of_int lanes *. Float.of_int c /. Float.of_int fm.fm_chains
+    | _ -> Float.of_int lanes
   in
-  let threads = Float.min threads (Float.of_int t) in
-  if fm.fm_tail && b > p then
-    let n = (b + p - 1) / p in
-    let busiest = Float.min 1. (Float.of_int n *. threads /. Float.of_int t) in
-    Float.of_int b /. Float.of_int p *. busiest /. Float.of_int n
-  else
-    let effective = Float.of_int b *. threads in
-    Float.min 1. (effective /. (Float.of_int p *. Float.of_int t))
+  let issuing = Float.min issuing (Float.of_int t) in
+  let fill =
+    if fm.fm_tail && b > p then
+      let n = (b + p - 1) / p in
+      let busiest = Float.min 1. (Float.of_int n *. issuing /. Float.of_int t) in
+      Float.of_int b /. Float.of_int p *. busiest /. Float.of_int n
+    else
+      let effective = Float.of_int b *. issuing in
+      Float.min 1. (effective /. (Float.of_int p *. Float.of_int t))
+  in
+  (* The fraction of the lanes doing work: none to apply at [W = 1] or a lane multiple. *)
+  if lanes = threads then fill else fill *. Float.of_int threads /. Float.of_int lanes
 
 (* The contexts as [fm] prices them: those of one launch shape whose chains it credits alike --
    uncredited ([None], or at least the cap) or the same count below it -- merged, in first-reported
@@ -1264,12 +1280,29 @@ let launch_fill fm contexts =
    enclosing loop's index from 0 counts the iterations it admits: that is the shape of a partitioned
    copy whose tile is narrower than the workgroup axis it spreads over (gh-ocannl-1661's restrict
    fallback -- [if (ty < 8)] on 16 rows of threads for a k-block of 8), and taken, it doubled a
-   64-wide tile's volume to the 32-wide one's. Any other guard is taken. *)
+   64-wide tile's volume to the 32-wide one's. Any other guard is taken.
+
+   gh-ocannl-2262, shared loads: the same traversal counts the cells a thread reads from staged
+   nodes. One cell -- one node at syntactically equal indices -- counts once per straight-line body,
+   one iteration of its innermost enclosing loop: the register file serves its repeats, which is
+   what a materialized register tile's [rm * rn] unrolled updates do with their [rm + rn] operand
+   cells per k-step (raw reads would count two a multiply-add at every tile). A loop body, a scan
+   body and a hoisted scope's body start afresh; a guard does not (its statements run in the same
+   iteration). Each distinct cell counts at its first read's executions. *)
 
 type staged_copy_context = { sc_blocks : int; sc_threads : int; sc_bytes : float }
 [@@deriving sexp_of]
 
-let operand_deliveries ?is_global ~is_staged (code : Low_level.t) =
+type shared_load_context = { sl_blocks : int; sl_threads : int; sl_loads : float }
+[@@deriving sexp_of]
+
+type operand_census = {
+  oc_staged : staged_copy_context list;
+  oc_direct : staged_copy_context list;
+  oc_shared : shared_load_context list;
+}
+
+let operand_census ?is_global ?(shared = false) ~is_staged (code : Low_level.t) =
   let module Access = Low_level.Access_fold in
   let rec has_tile_mma (c : Low_level.t) =
     match c with
@@ -1278,7 +1311,7 @@ let operand_deliveries ?is_global ~is_staged (code : Low_level.t) =
     | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> has_tile_mma body
     | _ -> false
   in
-  if has_tile_mma code then ([], [])
+  if has_tile_mma code then { oc_staged = []; oc_direct = []; oc_shared = [] }
   else
     let tally () =
       let tbl = Hashtbl.Poly.create () and order = ref [] in
@@ -1298,6 +1331,8 @@ let operand_deliveries ?is_global ~is_staged (code : Low_level.t) =
     in
     let add_staged, staged = tally () in
     let direct = Option.map is_global ~f:(fun is_global -> (is_global, tally ())) in
+    let shared_tally = if shared then Some (tally ()) else None in
+    let fresh () = Hash_set.Poly.create () in
     let loop_ranges = lazy (Low_level.loop_ranges code) in
     let scalar_policy : Access.policy =
       {
@@ -1341,11 +1376,11 @@ let operand_deliveries ?is_global ~is_staged (code : Low_level.t) =
           | r -> r)
       | _ -> None
     in
-    let rec go ~ctx ~scale ~env ~localized (c : Low_level.t) =
+    let rec go ~ctx ~scale ~env ~localized ~seen (c : Low_level.t) =
       match c with
       | Low_level.Seq (a, b) ->
-          go ~ctx ~scale ~env ~localized a;
-          go ~ctx ~scale ~env ~localized b
+          go ~ctx ~scale ~env ~localized ~seen a;
+          go ~ctx ~scale ~env ~localized ~seen b
       | For_loop { index; from_; to_; body; axis } ->
           let extent = max 0 (to_ - from_ + 1) in
           let hardware = Low_level.hardware_kind_of_axis axis in
@@ -1371,12 +1406,12 @@ let operand_deliveries ?is_global ~is_staged (code : Low_level.t) =
                 | _ -> None)
             | _ -> localized
           in
-          go ~ctx ~scale:(scale * extent) ~env ~localized body
+          go ~ctx ~scale:(scale * extent) ~env ~localized ~seen:(fresh ()) body
       | Scan_loop { from_; to_; body; carried; _ } ->
-          List.iter carried ~f:(fun c -> reads ~ctx ~scale ~env [ c.Low_level.init ]);
-          go ~ctx ~scale:(scale * max 0 (to_ - from_ + 1)) ~env ~localized body
+          List.iter carried ~f:(fun c -> reads ~ctx ~scale ~env ~seen [ c.Low_level.init ]);
+          go ~ctx ~scale:(scale * max 0 (to_ - from_ + 1)) ~env ~localized ~seen:(fresh ()) body
       | If { cond = cond, _; body } -> (
-          reads ~ctx ~scale ~env [ cond ];
+          reads ~ctx ~scale ~env ~seen [ cond ];
           (* [scale] carries each guarded index's count as [env] has it -- its extent, or what an
              enclosing guard admits of it -- so replacing that count with the new one is exact, and
              nested guards on one index compose as their minimum. *)
@@ -1388,43 +1423,72 @@ let operand_deliveries ?is_global ~is_staged (code : Low_level.t) =
                     ( (if current > 0 then scale / current * n else scale),
                       List.Assoc.add env s n ~equal:Idx.equal_symbol ))
               in
-              go ~ctx ~scale ~env ~localized body
-          | None -> go ~ctx ~scale ~env ~localized body)
+              go ~ctx ~scale ~env ~localized ~seen body
+          | None -> go ~ctx ~scale ~env ~localized ~seen body)
       | Set { tn; llsc; _ } -> (
           match if is_staged tn then staging_guards llsc else None with
           | Some guards ->
               add_staged ctx (bytes scale tn);
-              reads ~ctx ~scale ~env guards
-          | None -> reads ~ctx ~scale ~env ?self:localized [ llsc ])
-      | Set_local (_, llsc) | Set_from_vec { arg = llsc, _; _ } -> reads ~ctx ~scale ~env [ llsc ]
-      | Set_dynamic { dyn_value = index, _; llsc; _ } -> reads ~ctx ~scale ~env [ index; llsc ]
+              reads ~ctx ~scale ~env ~seen guards
+          | None -> reads ~ctx ~scale ~env ~seen ?self:localized [ llsc ])
+      | Set_local (_, llsc) | Set_from_vec { arg = llsc, _; _ } ->
+          reads ~ctx ~scale ~env ~seen [ llsc ]
+      | Set_dynamic { dyn_value = index, _; llsc; _ } ->
+          reads ~ctx ~scale ~env ~seen [ index; llsc ]
       | _ -> ()
-    and reads ~ctx ~scale ~env ?self roots =
-      Option.iter direct ~f:(fun (is_global, (add_direct, _)) ->
-          let add tn = if scale > 0 && is_global tn then add_direct ctx (bytes scale tn) in
-          (* The renderer emits a scope ID once per statement or scan initializer. The census counts
-             both arms with their guards taken, so their order is immaterial. *)
-          let emitted = lazy (Hash_set.create (module Low_level.Scope_id)) in
-          let scalar _ () (sc : Low_level.scalar_t) =
-            (match sc with
-            | Get (tn, idcs)
-              when not (Option.exists self ~f:(equal_chain_target (Chain_cell (tn, idcs)))) ->
-                add tn
-            | Get_dynamic { tn; _ } | Get_merge_buffer (tn, _) -> add tn
-            | Local_scope { id; body; _ } ->
-                let emitted = Lazy.force emitted in
-                if not (Hash_set.mem emitted id) then (
-                  Hash_set.add emitted id;
-                  go ~ctx ~scale ~env ~localized:None body)
-            | _ -> ());
-            Access.Continue ()
-          in
-          let hooks = { (Access.hooks ()) with scalar } in
-          List.iter roots ~f:(fun sc -> Access.fold_scalar ~policy:scalar_policy ~hooks ~init:() sc))
+    and reads ~ctx ~scale ~env ~seen ?self roots =
+      if Option.is_some direct || Option.is_some shared_tally then
+        let add_direct =
+          match direct with
+          | Some (is_global, (add_direct, _)) ->
+              fun tn -> if scale > 0 && is_global tn then add_direct ctx (bytes scale tn)
+          | None -> fun _ -> ()
+        in
+        let add_shared =
+          match shared_tally with
+          | Some (add_shared, _) ->
+              fun tn idcs ->
+                if scale > 0 && is_staged tn && not (Hash_set.mem seen (tn.Tn.id, idcs)) then (
+                  Hash_set.add seen (tn.Tn.id, idcs);
+                  add_shared ctx (Float.of_int scale))
+          | None -> fun _ _ -> ()
+        in
+        (* The renderer emits a scope ID once per statement or scan initializer. The census counts
+           both arms with their guards taken, so their order is immaterial. *)
+        let emitted = lazy (Hash_set.create (module Low_level.Scope_id)) in
+        let scalar _ () (sc : Low_level.scalar_t) =
+          (match sc with
+          | Get (tn, idcs) ->
+              add_shared tn idcs;
+              if not (Option.exists self ~f:(equal_chain_target (Chain_cell (tn, idcs)))) then
+                add_direct tn
+          | Get_dynamic { tn; _ } | Get_merge_buffer (tn, _) -> add_direct tn
+          | Local_scope { id; body; _ } ->
+              let emitted = Lazy.force emitted in
+              if not (Hash_set.mem emitted id) then (
+                Hash_set.add emitted id;
+                go ~ctx ~scale ~env ~localized:None ~seen:(fresh ()) body)
+          | _ -> ());
+          Access.Continue ()
+        in
+        let hooks = { (Access.hooks ()) with scalar } in
+        List.iter roots ~f:(fun sc -> Access.fold_scalar ~policy:scalar_policy ~hooks ~init:() sc)
     in
-    go ~ctx:top_ctx ~scale:1 ~env:[] ~localized:None code;
-    (staged (), Option.value_map direct ~default:[] ~f:(fun (_, (_, contexts)) -> contexts ()))
+    go ~ctx:top_ctx ~scale:1 ~env:[] ~localized:None ~seen:(fresh ()) code;
+    {
+      oc_staged = staged ();
+      oc_direct = Option.value_map direct ~default:[] ~f:(fun (_, (_, contexts)) -> contexts ());
+      oc_shared =
+        Option.value_map shared_tally ~default:[] ~f:(fun (_, contexts) ->
+            List.map (contexts ()) ~f:(fun c ->
+                { sl_blocks = c.sc_blocks; sl_threads = c.sc_threads; sl_loads = c.sc_bytes }));
+    }
 
+let operand_deliveries ?is_global ~is_staged code =
+  let c = operand_census ?is_global ~is_staged code in
+  (c.oc_staged, c.oc_direct)
+
+let shared_loads ~is_staged code = (operand_census ~shared:true ~is_staged code).oc_shared
 let staged_copies ~is_staged code = fst (operand_deliveries ~is_staged code)
 
 (* The staged bytes as the compute leg divides them by the copy rate: each context's over its own
@@ -1437,6 +1501,43 @@ let filled_staged_bytes ?fill_model (copies : staged_copy_context list) =
       match fill_model with
       | None -> c.sc_bytes
       | Some fm -> c.sc_bytes /. context_fill fm ~blocks:c.sc_blocks ~threads:c.sc_threads)
+
+(* gh-ocannl-2262: the register tile the launch sweep fits [issue_rate] and [fill_threads] on
+   ([Calibrate.default_launch_geometries] takes it from here), and its shared-load cells per scalar
+   operation: [rm + rn] cells a k-step for [rm * rn] multiply-adds of two operations each, 1/4 at
+   4x4. The fitted issue rate already carries the shared loads of that reuse, so the score prices
+   only the loads beyond it. *)
+let calibration_register_tile = (4, 4)
+
+let reference_loads_per_op =
+  let rm, rn = calibration_register_tile in
+  Float.of_int (rm + rn) /. Float.of_int (2 * rm * rn)
+
+(* Each context's shared loads beyond the reference reuse of its own scalar operations: the scalar
+   (non-[Tile_mma]) operations of the launch contexts of its launch shape, whatever their chains.
+   Contexts at or below the reference are dropped: the term only raises a leg. *)
+let excess_shared_loads (contexts : launch_context list) (loads : shared_load_context list) =
+  List.filter_map loads ~f:(fun l ->
+      let ops =
+        List.sum
+          (module Int)
+          contexts
+          ~f:(fun c ->
+            if c.lc_blocks = l.sl_blocks && c.lc_threads = l.sl_threads && not c.lc_tile_mma then
+              c.lc_ops
+            else 0)
+      in
+      let excess = l.sl_loads -. (reference_loads_per_op *. Float.of_int ops) in
+      if Float.(excess > 0.) then Some { l with sl_loads = excess } else None)
+
+let filled_shared_loads ?fill_model (loads : shared_load_context list) =
+  List.sum
+    (module Float)
+    loads
+    ~f:(fun l ->
+      match fill_model with
+      | None -> l.sl_loads
+      | Some fm -> l.sl_loads /. context_fill fm ~blocks:l.sl_blocks ~threads:l.sl_threads)
 
 (* {2 Memory transactions — gh-ocannl-1600}
 
@@ -1784,7 +1885,8 @@ let ranking_mma_terms ?(mma_flops = 0) ?(device_gathers = 0) ?launch (s : summar
 let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?issue_rate ?dram_bandwidth ?mma_rate ?(mma_flops = 0) ?(device_gathers = 0) ?device_gather_rate
     ?launch ?(transactions = []) ?transaction_rate ?(staged_copies = []) ?(direct_loads = [])
-    ?staged_copy_rate ?occupancy (s : summary) (r : reuse option) : float option * float option =
+    ?staged_copy_rate ?(shared_loads = []) ?shared_load_rate ?occupancy (s : summary)
+    (r : reuse option) : float option * float option =
   let total = Float.of_int (total_bytes s) in
   let memory =
     Option.map peak_memory_bandwidth ~f:(fun ceiling ->
@@ -1847,12 +1949,22 @@ let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
               if Float.(bytes > 0.) then leg +. (bytes /. rate) else leg
           | _ -> leg
         in
+        (* gh-ocannl-2262: the shared loads beyond the calibration tile's reuse
+           ({!excess_shared_loads}), each context's over its own fill, at the fitted shared-load
+           rate -- nothing without a rate or without an excess. *)
+        let with_shared_loads leg =
+          match shared_load_rate with
+          | Some rate when Float.(rate > 0.) ->
+              let loads = filled_shared_loads ?fill_model:(Option.map launch ~f:fst) shared_loads in
+              if Float.(loads > 0.) then leg +. (loads /. rate) else leg
+          | _ -> leg
+        in
         (* gh-ocannl-1600: the whole leg over the kernel's occupancy, where one is given below 1:
            its resident threads hide that much less latency. *)
         let with_occupancy leg =
           match occupancy with Some o when Float.(o > 0. && o < 1.) -> leg /. o | _ -> leg
         in
-        with_occupancy @@ with_operand_deliveries @@ with_transactions
+        with_occupancy @@ with_shared_loads @@ with_operand_deliveries @@ with_transactions
         @@
         match launch with
         | Some (fm, contexts) ->
@@ -1887,12 +1999,13 @@ let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
 
 let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch
-    ?transactions ?transaction_rate ?staged_copies ?direct_loads ?staged_copy_rate ?occupancy
-    (s : summary) (r : reuse option) : float option =
+    ?transactions ?transaction_rate ?staged_copies ?direct_loads ?staged_copy_rate ?shared_loads
+    ?shared_load_rate ?occupancy (s : summary) (r : reuse option) : float option =
   let compute, memory =
     ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
       ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch
-      ?transactions ?transaction_rate ?staged_copies ?direct_loads ?staged_copy_rate ?occupancy s r
+      ?transactions ?transaction_rate ?staged_copies ?direct_loads ?staged_copy_rate ?shared_loads
+      ?shared_load_rate ?occupancy s r
   in
   match List.filter_opt [ compute; memory ] with
   | [] -> None
@@ -1900,15 +2013,22 @@ let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes 
 
 let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?fill_model
-    ?transaction_rate ?lane_width ?max_resident_threads ?staged_copy_rate ?is_staged ?is_private
-    ~is_global (code : Low_level.t) : float option =
+    ?transaction_rate ?lane_width ?max_resident_threads ?staged_copy_rate ?shared_load_rate
+    ?is_staged ?is_private ~is_global (code : Low_level.t) : float option =
   let s = analyze code in
   let staged_copies =
     match (staged_copy_rate, is_staged) with
     | Some _, Some is_staged -> staged_copies ~is_staged code
     | _ -> []
   in
-  let launch = Option.map fill_model ~f:(fun fm -> (fm, launch_contexts ?is_private code)) in
+  let contexts = lazy (launch_contexts ?is_private code) in
+  let launch = Option.map fill_model ~f:(fun fm -> (fm, Lazy.force contexts)) in
+  let shared_loads =
+    match (shared_load_rate, is_staged) with
+    | Some _, Some is_staged ->
+        excess_shared_loads (Lazy.force contexts) (shared_loads ~is_staged code)
+    | _ -> []
+  in
   let transactions =
     match (transaction_rate, lane_width) with
     | Some _, Some lane_width -> memory_transactions ~lane_width ~is_global code
@@ -1921,7 +2041,8 @@ let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
   in
   ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch
-    ~transactions ?transaction_rate ~staged_copies ?staged_copy_rate s r
+    ~transactions ?transaction_rate ~staged_copies ?staged_copy_rate ~shared_loads ?shared_load_rate
+    s r
 
 (* {2 Tile-MMA operand loads — gh-ocannl-1254}
 

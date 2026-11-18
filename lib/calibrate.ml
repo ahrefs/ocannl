@@ -389,7 +389,12 @@ type launch_point = {
   lp_ms : float;
 }
 
-let default_launch_geometries = [ (32, 32, 8, 4, 4); (64, 64, 8, 4, 4) ]
+(* The register tile is the cost model's calibration tile (gh-ocannl-2262): the shared-load term
+   prices loads beyond that tile's reuse, which the fitted issue rate carries. *)
+let default_launch_geometries =
+  let tm, tn = Ir.Cost_model.calibration_register_tile in
+  [ (32, 32, 8, tm, tn); (64, 64, 8, tm, tn) ]
+
 let default_launch_sizes = [ 32; 64; 128; 256; 512; 1024 ]
 
 let launch_sweep ?(geometries = default_launch_geometries) ?(sizes = default_launch_sizes)
@@ -488,6 +493,7 @@ let form_fill ?(fill_chains = 1) ?chains form ~multiprocessors ~fill_threads ~bl
           fm_fill_threads = fill_threads;
           fm_tail = false;
           fm_chains = fill_chains;
+          fm_lane_width = 1;
         }
         ~blocks ~threads
   | Uncapped ->
@@ -507,6 +513,7 @@ let effective_ops ?(form = Capped) ?(fill_chains = 1) ~multiprocessors ~fill_thr
         fm_fill_threads = fill_threads;
         fm_tail = false;
         fm_chains = fill_chains;
+        fm_lane_width = 1;
       }
       contexts
   in

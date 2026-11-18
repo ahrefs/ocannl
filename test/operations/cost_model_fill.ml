@@ -45,7 +45,15 @@ let fresh_tn =
   fun label dims -> make ~dims label
 
 let it = Ll_test.iter
-let fm = { CM.fm_multiprocessors = 4; fm_fill_threads = 64; fm_tail = false; fm_chains = 1 }
+
+let fm =
+  {
+    CM.fm_multiprocessors = 4;
+    fm_fill_threads = 64;
+    fm_tail = false;
+    fm_chains = 1;
+    fm_lane_width = 1;
+  }
 
 (* [d[...] += x[...] * y[...]]: two operations per cell. *)
 let mac d didx x xidx y yidx =
@@ -453,7 +461,15 @@ let () =
   (* The tail: 48 blocks over 32 multiprocessors of t = 64, blocks of 64 threads: 16 of them run
      two. Thread-only the busiest is full and the launch fills 48/32/2 = 3/4; one chain under a cap
      of 4 counts 16 threads a block, the busiest runs at 32/64, and the launch fills 3/8. *)
-  let tail = { CM.fm_multiprocessors = 32; fm_fill_threads = 64; fm_tail = true; fm_chains = 4 } in
+  let tail =
+    {
+      CM.fm_multiprocessors = 32;
+      fm_fill_threads = 64;
+      fm_tail = true;
+      fm_chains = 4;
+      fm_lane_width = 1;
+    }
+  in
   p "under the tail, 48 blocks of 64 one-chain threads fill 3/8, of four-chain ones 3/4"
     (Float.equal (CM.context_fill ~chains:1 tail ~blocks:48 ~threads:64) 0.375
     && Float.equal (CM.context_fill ~chains:4 tail ~blocks:48 ~threads:64) 0.75
@@ -477,7 +493,13 @@ let () =
      threads with 2 and 3 operations a thread summed each over its own (rounded) fill differ from
      their sum over it in the last ulp -- the score merges them back first. *)
   let rog_like ~tail =
-    { CM.fm_multiprocessors = 46; fm_fill_threads = 256; fm_tail = tail; fm_chains = 1 }
+    {
+      CM.fm_multiprocessors = 46;
+      fm_fill_threads = 256;
+      fm_tail = tail;
+      fm_chains = 1;
+      fm_lane_width = 1;
+    }
   in
   let acc7, one7 = rt ~tag:"cf_m7" ~chains:1 ~nb:7 ~nw:16 ~nk:1 () in
   let e = fresh_tn "cf_mix_e" [| 7; 16 |] and xe = fresh_tn "cf_mix_x" [| 7; 16 |] in

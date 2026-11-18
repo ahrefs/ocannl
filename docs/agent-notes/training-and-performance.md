@@ -425,9 +425,8 @@ files.
   outproj and qkv b256 and an uncoalesced leaf at b8. HIP has none: on tuf (discrete) the term
   favors the uncoalesced `64x64x8/4x4 bgrid` measured 4.5x slow there and its deep tiles need the
   occupancy factor. Not modeled: BK order within one block tile (exact score ties, the walk's
-  listing order decides), per-thread register-tile reuse (2x2 vs 4x4 at equal block tile, 1.2x on
-  rog, 1.8x on tuf) and sub-warp blocks (16 threads: 2x on rog) -- saturated effects, which
-  gh-ocannl-1639's fill credit (below) cannot reach. Re-fit with `gh1600_txn_fit.py --staged-rate sweep --listed-staged-rate L` on listings
+  listing order decides); the register-tile and sub-warp gaps at one block tile are gh-ocannl-2262's
+  terms (below). Re-fit with `gh1600_txn_fit.py --staged-rate sweep --listed-staged-rate L` on listings
   carrying `stg=`, judged against the cell's `nostg` arm (`gh1253_cells.sh`).
 - **The launch fill can credit per-thread ILP, but no backend advises a cap (gh-ocannl-1639).**
   `Cost_model.launch_contexts ~is_private` counts each scalar context's independent accumulation
@@ -448,6 +447,37 @@ files.
   2x2/4x4 ratios (mean |log| error 0.54 -> 0.31 at L = 12). So `fill_chains` is `None` on CUDA,
   HIP and Metal; a cap needs a site where an under-filled one-accumulator candidate competes near
   the argmin (a small-batch site against the untuned preset). The `noilp` arm is its reference.
+- **Register reuse and sub-warp blocks are one mechanism seen at two thread counts
+  (gh-ocannl-2262).** At one block tile, 2x2 and 4x4 register tiles tie in every older term (same
+  copies, same work, both saturated), while their measured ratio 2x2/4x4 is 1.16-1.28 at 32x32
+  (256 against 64 threads) and 0.50-0.53 at 16x16 (64 against 16) on rog, 1.45-1.86 and 0.74-1.0
+  on tuf (discrete). Two terms account for both, and neither alone does (the reuse term alone
+  orders rog's 16x16 pair backwards): (1) `Cost_model.shared_loads` counts the distinct staged
+  cells a thread reads per straight-line body -- a materialized register tile's `rm + rn` a
+  k-step; raw reads count two a multiply-add at every tile, so the dedupe is the term -- and the
+  compute leg prices only the loads beyond the calibration tile's reuse (`reference_loads_per_op`,
+  1/4 cell per scalar op at `calibration_register_tile` 4x4, which
+  `Calibrate.default_launch_geometries` reads): `issue_rate` already carries 4x4's loads, so 4x4
+  pays nothing and the calibration stays bitwise; (2) `context_fill`'s `fm_lane_width` counts a
+  block's issue in lane groups: saturated, a 16-thread block on 32-lane groups does half a full
+  group's work; an unsaturated launch fills as before. Fitted from EXPLAIN_ONLY listings over the
+  gh-1821 window rows (rog) and gh-1600's M3 rows (tuf, ecb13bb8) with `gh1600_txn_fit.py
+  --shared-rate sweep --pairs`: CUDA 2.5e12 loads/s, HIP discrete wave32 6.3e11 (lane width 32 on
+  both), the pairs then 1.24/0.59 (rog) and 1.75/0.88 (tuf). The agreement is flat over a wide
+  plateau (rog 1.3e12-3.2e12, tuf 5e11-5e12), so the rate inside it is where the saturated pairs'
+  ratios fit best -- an edge of the plateau is fine when it is that minimum. On rog no argmin of the five cells
+  moves and agreement rises at every cell; on tuf the outproj argmins leave the plain
+  `32x32x16/2x2` leaf (2.3x/3.3x slow, tied with the 4x4 bgrid leaf and first in listing order)
+  for `32x32x8/4x4 bgrid`. The copy rate's plateau beside the new term still holds 1e12 (5e11-6.3e12
+  at the CUDA rate). Traps: (a) the `auto` seeding gate keeps neither term -- `seeded_default_gate`
+  resets the fill's lane width to 1 and `seeded_ranker` passes no shared-load rate -- since a 2x2
+  sketch is what it seeds (`model_seeded_anchor`'s CUDA chain) and the terms were fitted on leaf
+  rankings, not sketch against preset; (b) the `kernels` line's `shl=` lists the excess whether
+  or not a rate priced it, so one listing re-scores at any rate, but the lane width moves the fill
+  and needs a listing per width (`FILL_LANE_WIDTH=W`); (c) the unified HIP class and Metal are
+  unmeasured, `None`. Residuals: rog's 16-thread blocks measure 0.52 against 0.59 (likely the
+  per-multiprocessor block cap, not modeled); the plain, under-filled pairs stay gh-ocannl-1639's.
+  The `noshl`/`nolane` arms of `gh1253_cells.sh` are the references.
 - **Compare a plan and its rivals in ONE kernel decomposition** (gh-ocannl-1477). The ranking score
   sums `max(compute, memory)` per kernel, so a memory-bound kernel run on its own (the seeded plan's
   zero-fill, the default segmentation having no zero fold) is charged in full, while the same writes

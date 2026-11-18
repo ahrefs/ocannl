@@ -71,6 +71,8 @@ let () =
             transaction_rate = None;
             workgroup_bytes_per_multiprocessor = None;
             staged_copy_rate = None;
+            shared_load_rate = None;
+            fill_lane_width = None;
           }));
   p "a concrete context's identity is stable"
     (Option.equal BI.equal_timing_identity identity (Context.timing_identity ctx));
