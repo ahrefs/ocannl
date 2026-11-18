@@ -15,9 +15,9 @@
 ;   type-checks and archives, and nothing can link it. Two files are hand-written, each because the
 ;   package installs no interface for it to copy: `hipjit/hip_ffi.mli`, the single type `hip.mli`
 ;   re-exports from hipjit's ctypes-generated `Hip_ffi` (`hipjit.hip_ffi`), which `runtest-hip_ffi`
-;   checks the installed `Hip_ffi` against (`hipjit/dune` says how); and `metal/runtime.mli`, the part of `metal.runtime`'s inferred `Runtime` that
-;   `metal.mli` and `metal_math_api_runtime.ml` use, which `runtest-runtime` checks the installed
-;   `Runtime` against (`metal/dune` says how).
+;   checks the installed `Hip_ffi` against (`hipjit/dune` says how); and `metal/runtime.mli`, the
+;   part of `metal.runtime`'s inferred `Runtime` that `metal.mli` and `metal_math_api_runtime.ml`
+;   use, which `runtest-runtime` checks the installed `Runtime` against (`metal/dune` says how).
 ; - `typecheck/`, libraries compiling `copy_files#` copies of the backend source and of the vendor
 ;   arm of `arrayjit.context`'s `select` (`<backend>_backend_impl.<package>.ml`) against the stub,
 ;   one library per genuine stanza, with that stanza's preprocessing and libraries. Their errors

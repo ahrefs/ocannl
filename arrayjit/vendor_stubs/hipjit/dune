@@ -8,9 +8,10 @@
  (libraries ctypes integers sexplib0))
 
 ; One rule per copied interface, each on the alias named after it, and both aggregated onto
-; `runtest` at the end, beside `runtest-hip_ffi`'s signature check. Where `hipjit` is absent there is nothing to compare against, and building an
-; empty alias is an error while silence would read as a pass, so the alias says SKIPPED instead.
-; `diff` compares within the build directory, so a rule copies each installed interface in first.
+; `runtest` at the end, beside `runtest-hip_ffi`'s signature check. Where `hipjit` is absent there
+; is nothing to compare against, and building an empty alias is an error while silence would read
+; as a pass, so the alias says SKIPPED instead. `diff` compares within the build directory, so a
+; rule copies each installed interface in first.
 
 (rule
  (enabled_if %{lib-available:hipjit.hip})
