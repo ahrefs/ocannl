@@ -14,11 +14,13 @@
    (gh-ocannl-2082). On mac-studio (M4 Max, macOS 27.2) the watchdog killed it about 3 s in on
    2026-11-07, with "Caused GPU Hang Error". On macbook-pro (M4 Pro, macOS 27.2) on 2026-11-10 it
    was still Scheduled after 120 s, with no GPU recovery and other processes' kernels running beside
-   it. A legitimate 30 s kernel completes there too. So the wait is given [kill_bound_s]. Whether a
-   kill happened is read from the IORegistry's GPU [recoveryCount], never from the backend under
-   test. The claims about the report are evaluated only where the count rose, and skipped otherwise.
-   The claim that the wait never returned success holds either way. Ending the process ends the
-   kernel at once, so a run that gives up leaves the GPU free for the next one.
+   it; a legitimate 30 s kernel completes there too. On mac-studio (macOS 27.2.1, 26B131) on
+   2026-11-18 the raw probe's kernel was also still Scheduled after 120 s, with no recovery
+   (gh-ocannl-2139). So the wait is given [kill_bound_s]. Whether a kill happened is read from the
+   IORegistry's GPU [recoveryCount], never from the backend under test. The claims about the report
+   are evaluated only where the count rose, and skipped otherwise. The claim that the wait never
+   returned success holds either way. Ending the process ends the kernel at once, so a run that
+   gives up leaves the GPU free for the next one.
 
    Gated behind `slow`: each run costs up to [kill_bound_s] of GPU stall, and a GPU recovery where
    the OS kills. Evaluated on Metal only; the watchdog and the status reads this pins are that

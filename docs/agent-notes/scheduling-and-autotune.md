@@ -1778,6 +1778,12 @@ files.
   means a driver wrapper injecting at the timing wait overrides `await_within`, not `sync`); the
   real expiry and mark run on a finite kernel against a zero bound
   (`test/operations/wait_bound_device_wedged`, multidev_cc and Metal).
+  A real, unreported hang meets the bound in `slow-metal_wait_bound_real_hang` (gh-ocannl-2139): a
+  search over a 10^18-addition reduction, through a driver that only records its waits. On
+  mac-studio (macOS 27.2.1, whose watchdog does not fire) on 2026-11-18 the first candidate's warmup
+  expired at 60.0 s, the search ended `Search_died` with one `wait_bound` decline, and the next
+  process's GPU work completed. On a GPU backend every report also carries the baseline's
+  `Not_dispatched_key` refusal, so a census claim about the one candidate decline filters it out.
   The mark lives in `Backends.With_device_wedge_guard`, below the transfer layer (gh-ocannl-2192):
   device waits, bounded waits and event sync consult one atomic map. Events name their recording
   device, so a marked device does not condemn another device's events. Queued cross-device waits

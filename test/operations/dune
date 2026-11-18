@@ -102,6 +102,7 @@
   (alias slow-hip_scratch_budget)
   (alias slow-hip_scratch_tune_survives)
   (alias slow-metal_gpu_hang_failure)
+  (alias slow-metal_wait_bound_real_hang)
   (alias slow-tune_ship_arm)
   (alias slow-virtual_inliner_oracle-widen)
   (alias slow-where_scope_generator-widen)))
@@ -10726,6 +10727,44 @@
   arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-2134, gh-ocannl-2139: the tuner's host-side wait bound ends a search whose candidate
+; really never ends and that no driver reports, about 60 s in; or, where the macOS watchdog kills
+; the kernel first, a gpu_hang decline ends it. Gated behind `slow`: a run stalls the GPU for the
+; bound's 60 s where the OS does not kill.
+
+(executable
+ (name metal_wait_bound_real_hang)
+ (modules metal_wait_bound_real_hang)
+ (libraries
+  base
+  ocannl
+  stdio
+  unix
+  arrayjit.verdict
+  arrayjit.autotune
+  arrayjit.context)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ (alias slow-metal_wait_bound_real_hang)
+ (package neural_nets_lib)
+ (locks /ocannl_training_test)
+ (deps
+  (alias slow-env_spelling_gate)
+  metal_wait_bound_real_hang.expected
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     metal_wait_bound_real_hang.actual
+     (run %{dep:metal_wait_bound_real_hang.exe}))
+    (diff
+     metal_wait_bound_real_hang.expected
+     metal_wait_bound_real_hang.actual)))))
 
 (executable
  (name micrograd_demo_logging)
