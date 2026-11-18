@@ -1,4 +1,8 @@
+every partial sum of every padded-window cell is exact in f32: true
+every partial sum of every full transposed-convolution cell is exact in f32: true
+the padded window's host sums are its executed values: true
 the operand-side padded window with the reversed kernel is the padded transposed convolution: true
+the full transposed convolution's host sums are its executed values: true
 the result-side unpadded window's extent is n + K - 1: true
 the result-side unpadded window is the full transposed convolution: true
 a result-side stride-only axis builds and runs: true

@@ -1,4 +1,8 @@
 x's gradient is padded along the convolved axis only, committing 0: true
+every partial sum of every cell of x's gradient is exact in f32: true
+every partial sum of every smoothed cell is exact in f32: true
+x's gradient's host sums are its executed values: true
+the smoothing's host sums are its executed values: true
 a padding position of x's gradient receives a nonzero contribution: true
 x's gradient holds the transposed convolution of w: true
 x's gradient's physical buffer is its margins plus its extent: true

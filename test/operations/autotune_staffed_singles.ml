@@ -778,22 +778,45 @@ let () =
 (* --- split: the split-reduce sites keep a running composite too --- *)
 
 (* Two skinny matvec accumulations, each a split-reduce site (the multi-site workload of
-   [autotune_split_reduce], over dyadic values whose sums are exact in any order, so the split's
-   reassociation moves no bit): the sites are swept in their cost order, each single's prelude
-   staffed with the other site's block count. The script is additive over the sites a split
-   candidate splits, every other candidate far slower. *)
+   [autotune_split_reduce]): the sites are swept in their cost order, each single's prelude staffed
+   with the other site's block count. The script is additive over the sites a split candidate
+   splits, every other candidate far slower. The inputs are dyadic, and the leg derives from their
+   readers that both matvecs' sums are exact in any order, so the split's reassociation moves no
+   bit. *)
 let () =
   let out = 8 and red1 = 128 and red2 = 256 in
+  let matrix_r red =
+    Ll_test.operand ~b:[] ~o:[ out ] ~i:[ red ]
+      (Ll_test.cycle ~dims:[| out; red |] ~modulus:5 ~offset:0. ~stride:0.25)
+  in
+  let vector_r red =
+    Ll_test.operand ~b:[] ~o:[ red ] ~i:[]
+      (Ll_test.cycle ~dims:[| red |] ~modulus:3 ~offset:(-0.5) ~stride:0.5)
+  in
+  let m1_r = matrix_r red1 and v1_r = vector_r red1 in
+  let m2_r = matrix_r red2 and v2_r = vector_r red2 in
+  (* The bitwise premise: [z]'s cell [o] sums both matvecs' products, [m1.(o, k) * v1.(k)] then
+     [m2.(o, k) * v2.(k)], and every partial sum of the two reductions and of their sum is a sum of
+     a subset of that one population -- each exact in f32, in any order, derived here. The sums run
+     on cc at f32, which no tensor unit renders, so mixed signs need no sign condition. *)
+  let products =
+    Ll_test.reduction_cells ~out:[| out |]
+      ~over:[| red1 + red2 |]
+      (fun o r ->
+        if r.(0) < red1 then m1_r [| o.(0); r.(0) |] *. v1_r [| r.(0) |]
+        else m2_r [| o.(0); r.(0) - red1 |] *. v2_r [| r.(0) - red1 |])
+  in
+  p_all "split: every partial sum of every cell of z is exact in f32" products
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   let matrix label red =
+    let r = matrix_r red in
     TDSL.ndarray
-      (Array.init (out * red)
-         ~f:(Ll_test.cycle_flat ~dims:[| out; red |] ~modulus:5 ~offset:0. ~stride:0.25))
+      (Array.init (out * red) ~f:(fun i -> r (Ll_test.unflat ~dims:[| out; red |] i)))
       ~label:[ label ] ~input_dims:[ red ] ~output_dims:[ out ] ()
   in
   let vector label red =
-    TDSL.ndarray
-      (Array.init red ~f:(Ll_test.cycle_flat ~dims:[| red |] ~modulus:3 ~offset:(-0.5) ~stride:0.5))
-      ~label:[ label ] ~output_dims:[ red ] ()
+    let r = vector_r red in
+    TDSL.ndarray (Array.init red ~f:(fun i -> r [| i |])) ~label:[ label ] ~output_dims:[ red ] ()
   in
   let m1 = matrix "ss_m1" red1 and v1 = vector "ss_v1" red1 in
   let m2 = matrix "ss_m2" red2 and v2 = vector "ss_v2" red2 in
@@ -806,7 +829,18 @@ let () =
   let comp =
     { comp with Ir.Assignments.asgns = Ir.Assignments.Block_comment ("ss_pair", comp.asgns) }
   in
-  let reference = Scripted_search.untuned z comp in
+  (* [Scripted_search.untuned], spelled out: the premise's executed reference is read from the run
+     in this item. *)
+  let reference =
+    let ctx, routine = Context.compile (Context.cpu ()) comp Ir.Indexing.Empty in
+    let ctx = Context.run ctx routine in
+    let values = Context.get_values ctx z.Tensor.value in
+    Context.release ctx;
+    values
+  in
+  p_all2 "split: the untuned output is the premise's host sums" reference
+    (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id)))
+    ~f:Float.equal;
   let is_split label = String.is_prefix label ~prefix:"F_split[" in
   let split_parts label =
     let body =

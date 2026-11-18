@@ -28,10 +28,24 @@ open Verdict.Claims
 let rows = 8
 let cols = 16
 
-(* Halves of small integers: every row sum is exact in any order. *)
-let av =
-  Array.init (rows * cols)
-    ~f:(Ll_test.cycle_flat ~dims:[| rows; cols |] ~modulus:11 ~offset:(-2.5) ~stride:0.5)
+(* The row-sum input: halves of small integers, both signs, read through the reader its values and
+   its premise share. *)
+let av_r =
+  Ll_test.operand ~b:[] ~o:[ rows; cols ] ~i:[]
+    (Ll_test.cycle ~dims:[| rows; cols |] ~modulus:11 ~offset:(-2.5) ~stride:0.5)
+
+let av = Array.init (rows * cols) ~f:(fun i -> av_r (Ll_test.unflat ~dims:[| rows; cols |] i))
+
+(* The bitwise premise, from [av]'s reader: every row sum is exact in any order, at f32 -- each
+   search's routine is compared with these host sums ([search]), and with [expected], bitwise. The
+   sum runs on cc at f32, which no tensor unit renders, so mixed signs need no sign condition. *)
+let row_products =
+  let products =
+    Ll_test.reduction_cells ~out:[| rows |] ~over:[| cols |] (fun o r -> av_r [| o.(0); r.(0) |])
+  in
+  p_all "every partial sum of every row is exact in f32" products
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
+  products
 
 let expected =
   Array.init rows ~f:(fun r ->
@@ -60,6 +74,12 @@ let search ~tag () =
           (Context.cpu ()) comp Ir.Indexing.Empty)
   in
   let ctx = Context.run ctx routine in
+  let values = Context.get_values ctx s.Tensor.value in
+  p_all2
+    (tag ^ ": the routine's values are the premise's host sums")
+    values
+    (Array.of_list (List.map row_products ~f:(List.sum (module Float) ~f:Fn.id)))
+    ~f:Float.equal;
   let report = Option.value_exn ~here:[%here] !report in
   Stdio.eprintf
     "%s (not part of the golden): %s, timed %d, failed %d, baseline_refused %b, privatize drops [%s]\n\
@@ -73,11 +93,7 @@ let search ~tag () =
             Printf.sprintf "%s x%d"
               (Sexp.to_string (Outcome.sexp_of_rejection_key d.Autotune.key))
               d.Autotune.count)));
-  {
-    report;
-    dones = Progress.events lines "search_done";
-    values = Context.get_values ctx s.Tensor.value;
-  }
+  { report; dones = Progress.events lines "search_done"; values }
 
 let drop_total (r : Autotune.report) =
   List.sum (module Int) r.Autotune.privatize_drops ~f:(fun d -> d.Autotune.count)

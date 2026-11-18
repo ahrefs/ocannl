@@ -30,9 +30,9 @@
    - A fission segment's site, the form the real step searches: its [Zero_out] lands in a segment of
    its own, and the unzeroed site coalesces by its own [Coalesce] alone.
 
-   Inputs vary with every index, and each leg comparing executed values derives from its own inputs
-   that every association of its sums is exact in f32 (an [Ll_test.exact_partials] claim over its
-   cells), so bitwise equality is required whatever order a tiling accumulates in. *)
+   Inputs vary with every index, and each leg comparing executed values derives its own bitwise
+   premise from its inputs (an [Ll_test.exact_partials] claim over its cells, beside the leg), so
+   bitwise equality is required whatever order a tiling accumulates in. *)
 
 (* cc-fp-contract: exact-operands -- every executed leg derives Ll_test.exact_partials over its
    cycles *)
@@ -1267,8 +1267,9 @@ let () =
    head.
 
    Inputs are small integers (the weight in {-3, -2, -1}, the activation in {1, 2, 3}), so every
-   product has one sign; each executed leg derives that its sums are exact in f16, tf32 and f32 in
-   any order, so the candidates must match the serial reference bitwise at either precision. *)
+   product has one sign; [tensorized_leg] derives its bitwise premise at f16, tf32 and f32 from
+   these init functions, so the candidates must match the serial reference bitwise at either
+   precision. *)
 
 let int_out_proj_w ~jj ~hh ~ee =
   Ll_test.operand ~b:[] ~o:[ jj ] ~i:[ hh; ee ]
@@ -1457,7 +1458,8 @@ let () = tensorized_leg ~tag:"ckt_f16" ~prec:Ir.Ops.half
    bitwise; the tensorized twins, gated on the device's capability, must also render tensorized.
 
    Inputs are small integers: the weight in {-1, 0, 1}, so the pre-activations take both signs and
-   the relu discriminates, and every sum exact in any order at any precision used here. *)
+   the relu discriminates. Each leg derives from the init functions that every sum is exact in any
+   order at f32, the bias included, and compares those host sums with a serial run. *)
 
 let fused_leg ~tag ~bb ~ss ~jj ~hh ~ee =
   let saved = Ir.Numerics.get () in
@@ -1465,26 +1467,63 @@ let fused_leg ~tag ~bb ~ss ~jj ~hh ~ee =
   Exn.protect
     ~finally:(fun () -> Ir.Numerics.set_policy saved)
     ~f:(fun () ->
-      let w =
-        NTDSL.init ~l:(tag ^ "_w") ~prec:Ir.Ops.single ~o:[ jj ] ~i:[ hh; ee ]
-          ~f:(Ll_test.cycle ~dims:[| jj; hh; ee |] ~modulus:3 ~offset:(-1.) ~stride:1.)
-          ()
+      let w_f =
+        Ll_test.operand ~b:[] ~o:[ jj ] ~i:[ hh; ee ]
+          (Ll_test.cycle ~dims:[| jj; hh; ee |] ~modulus:3 ~offset:(-1.) ~stride:1.)
       in
-      let att =
-        NTDSL.init ~l:(tag ^ "_att") ~prec:Ir.Ops.single ~b:[ bb; ss ] ~o:[ hh; ee ]
-          ~f:(Ll_test.cycle ~dims:[| bb; ss; hh; ee |] ~modulus:3 ~offset:1. ~stride:1.)
-          ()
+      let att_f =
+        Ll_test.operand ~b:[ bb; ss ] ~o:[ hh; ee ] ~i:[]
+          (Ll_test.cycle ~dims:[| bb; ss; hh; ee |] ~modulus:3 ~offset:1. ~stride:1.)
       in
-      let bias =
-        NTDSL.init ~l:(tag ^ "_bias") ~prec:Ir.Ops.single ~o:[ jj ]
-          ~f:(Ll_test.cycle ~dims:[| jj |] ~modulus:5 ~offset:(-2.) ~stride:1.)
-          ()
+      let bias_f =
+        Ll_test.operand ~b:[] ~o:[ jj ] ~i:[]
+          (Ll_test.cycle ~dims:[| jj |] ~modulus:5 ~offset:(-2.) ~stride:1.)
       in
+      let operands tag =
+        ( NTDSL.init ~l:(tag ^ "_w") ~prec:Ir.Ops.single ~o:[ jj ] ~i:[ hh; ee ] ~f:w_f (),
+          NTDSL.init ~l:(tag ^ "_att") ~prec:Ir.Ops.single ~b:[ bb; ss ] ~o:[ hh; ee ] ~f:att_f (),
+          NTDSL.init ~l:(tag ^ "_bias") ~prec:Ir.Ops.single ~o:[ jj ] ~f:bias_f () )
+      in
+      (* The bitwise premise, from the init functions: a pre-activation cell sums its [hh * ee]
+         products and then its bias, so its terms are those products and the bias, and every partial
+         sum of every association of them -- a fused epilogue's included -- is exact in f32. At f32
+         no gfx11 WMMA runs the site (HIP tensorizes half and bf16 alone), so the mixed signs need
+         no sign condition. *)
+      let products =
+        Ll_test.reduction_cells ~out:[| bb; ss; jj |]
+          ~over:[| (hh * ee) + 1 |]
+          (fun o r ->
+            if r.(0) < hh * ee then
+              w_f [| o.(2); r.(0) / ee; r.(0) % ee |]
+              *. att_f [| o.(0); o.(1); r.(0) / ee; r.(0) % ee |]
+            else bias_f [| o.(2) |])
+      in
+      p_all
+        (tag ^ ": every partial sum of every pre-activation cell is exact in f32")
+        products
+        ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
+      let pre_reference () =
+        let w, att, bias = operands (tag ^ "_pre") in
+        let%op pre = (w * att) + bias in
+        pre
+      in
+      let pre = pre_reference () in
+      check_products tag products (run_with (named (tag ^ "_pre") (Train.forward pre)) pre Fn.id);
+      let w, att, bias = operands tag in
       let%op prod = w * att in
       let%op out = relu (prod + bias) in
       Train.set_materialized prod.Tensor.value;
       let fwd = named (tag ^ "_ep") (Train.forward out) in
       let want = run_with fwd out Fn.id in
+      (* The reference the candidates are held to, a graph materializing [prod], tied to the same
+         host sums. *)
+      p_all2
+        (tag ^ ": the reference is the relu of the premise's host sums")
+        want
+        (Array.of_list
+           (List.map products ~f:(fun terms ->
+                Float.max 0. (List.sum (module Float) terms ~f:Fn.id))))
+        ~f:Float.equal;
       p
         (tag ^ ": the relu discriminates: the reference has positive and zero cells")
         (Array.exists want ~f:(fun v -> Float.(v > 0.))

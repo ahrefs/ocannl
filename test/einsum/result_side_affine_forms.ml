@@ -2,8 +2,8 @@
    slot carries an affine axis (after [=>]) writes through that index: a stride-only axis [2*i]
    scatters with gaps, a stride and offset [2*i+1] interleaves, and an unpadded window [i<+k] is a
    transposed convolution. Each accepted form below runs and is compared against an oracle computed
-   here in plain OCaml, extent included; the values are small integers, so every sum is exact in
-   single precision on any backend and in any order.
+   here in plain OCaml, extent included; the values are small integers, and each form that sums
+   derives its bitwise premise from its operands ([exact_sum], and the gradients' own).
 
    The forms: stride-only and stride-and-offset axes (unary, binary, and the [interleave] operation,
    which writes them from [%cd ~logic]); unpadded windows at stride 1, strided, dilated, and both; a
@@ -109,6 +109,57 @@ let executes label ~dims ~want build =
           pf "%s: executes" label false
       | got -> matches label ~dims ~want got)
 
+(* [vals] as an operand reader with one zero cell appended: the index [Array.length vals] stands for
+   a term no tap reaches. *)
+let with_zero vals =
+  let len = Array.length vals in
+  Ll_test.operand ~b:[] ~o:[ len + 1 ] ~i:[] (fun ix -> if ix.(0) < len then vals.(ix.(0)) else 0.)
+
+(* The pair [r = (i, k)] of a transposed convolution [res[stride * i + dilation * k] += a[i] * w[k]]
+   reaches the cell at [pos]: the operand index [i] where it does, else [len], the appended zero. *)
+let tap ?(stride = 1) ?(dilation = 1) ~len pos r =
+  if (stride * r.(0)) + (dilation * r.(1)) = pos then r.(0) else len
+
+(* The compile and run [Train.forward_once] and [Train.update_once] perform for a program with no
+   parameters, returning the run's context: a premise's executed reference is read from it. *)
+let run comp =
+  let ctx, routine = Train.to_routine (Context.auto ()) Ir.Indexing.Empty comp in
+  Context.run ctx routine
+
+let sig_bits = Ir.Ops.significand_bits Ir.Ops.single
+
+let check_sums label products got =
+  p_all2
+    (label ^ ": the premise's host sums are the executed values")
+    got
+    (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id)))
+    ~f:Float.equal
+
+(* A form that sums, with its bitwise premise derived from its operands: each result cell [o] sums
+   [x.(x_at o r) * w.(w_at o r)] over every index [r] of [over], an index past an operand's data
+   reading its appended zero (a term no tap reaches the cell with). The products are small positive
+   integers, so every partial sum of every cell is exact in single precision, in any order, which
+   the [p_all] below checks rather than this sentence asserts; and the executed values are these
+   host sums as well as the oracle [want]. *)
+let exact_sum label ~dims ~want ~over ~x ~x_at ~w ~w_at build =
+  case label (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let x_r = with_zero x and w_r = with_zero w in
+      let products =
+        Ll_test.reduction_cells ~out:dims ~over (fun o r ->
+            x_r [| x_at o r |] *. w_r [| w_at o r |])
+      in
+      p_all
+        (label ^ ": every partial sum of every cell is exact in f32")
+        products
+        ~f:(Ll_test.exact_partials ~sig_bits);
+      let t = build () in
+      Train.set_materialized t.Tensor.value;
+      let ctx = run (Train.forward t) in
+      let got = Context.get_values ctx t.Tensor.value in
+      matches label ~dims ~want (Ir.Tnode.dims_without_padding t.Tensor.value, got);
+      check_sums label products got)
+
 let run_forms () =
   executes "unary stride-only 2*i"
     ~dims:[| 1; 2 * n |]
@@ -142,28 +193,40 @@ let run_forms () =
       let a = ndarray [ n ] a_vals in
       let b = ndarray [ n ] b_vals in
       [%op interleave a b]);
-  executes "binary window i<+k"
+  exact_sum "binary window i<+k" ~over:[| n; kk |] ~x:a_vals
+    ~x_at:(fun o r -> tap ~len:n o.(1) r)
+    ~w:kernel_vals
+    ~w_at:(fun _ r -> r.(1))
     ~dims:[| 1; n + kk - 1 |]
     ~want:(transposed a_vals kernel_vals)
     (fun () ->
       let a = operand () in
       let w = kernel () in
       [%op a +* "s, i; k => s, i<+k" w]);
-  executes "binary strided window 2*i<+k"
+  exact_sum "binary strided window 2*i<+k" ~over:[| n; kk |] ~x:a_vals
+    ~x_at:(fun o r -> tap ~stride:2 ~len:n o.(1) r)
+    ~w:kernel_vals
+    ~w_at:(fun _ r -> r.(1))
     ~dims:[| 1; (2 * (n - 1)) + kk |]
     ~want:(transposed ~stride:2 a_vals kernel_vals)
     (fun () ->
       let a = operand () in
       let w = kernel () in
       [%op a +* "s, i; k => s, 2*i<+k" w]);
-  executes "binary dilated window i<+2*k"
+  exact_sum "binary dilated window i<+2*k" ~over:[| n; kk |] ~x:a_vals
+    ~x_at:(fun o r -> tap ~dilation:2 ~len:n o.(1) r)
+    ~w:kernel_vals
+    ~w_at:(fun _ r -> r.(1))
     ~dims:[| 1; n + (2 * (kk - 1)) |]
     ~want:(transposed ~dilation:2 a_vals kernel_vals)
     (fun () ->
       let a = operand () in
       let w = kernel () in
       [%op a +* "s, i; k => s, i<+2*k" w]);
-  executes "binary strided dilated window 2*i<+3*k"
+  exact_sum "binary strided dilated window 2*i<+3*k" ~over:[| n; kk |] ~x:a_vals
+    ~x_at:(fun o r -> tap ~stride:2 ~dilation:3 ~len:n o.(1) r)
+    ~w:kernel_vals
+    ~w_at:(fun _ r -> r.(1))
     ~dims:[| 1; (2 * (n - 1)) + (3 * (kk - 1)) + 1 |]
     ~want:(transposed ~stride:2 ~dilation:3 a_vals kernel_vals)
     (fun () ->
@@ -179,14 +242,23 @@ let run_forms () =
      [full[o + padding]]. The cases: stride 2, dilation 2, kernel 3, padding 2 (extent 7 of the full
      11); and the decoder's 2x upsampling, stride 2, kernel 3, padding 1, output_padding 1 (extent
      2n). *)
-  executes "padded transposed conv recipe: 2*i<+2*k, then a one-hot crop, padding 2"
+  exact_sum "padded transposed conv recipe: 2*i<+2*k, then a one-hot crop, padding 2"
+    ~over:[| n; kk |] ~x:a_vals
+    ~x_at:(fun o r -> tap ~stride:2 ~dilation:2 ~len:n (o.(1) + 2) r)
+    ~w:kernel_vals
+    ~w_at:(fun _ r -> r.(1))
     ~dims:[| 1; ((n - 1) * 2) - 4 + 4 + 1 |]
     ~want:(conv_transpose ~stride:2 ~dilation:2 ~padding:2 ~output_padding:0 a_vals kernel_vals)
     (fun () ->
       let a = operand () in
       let w = kernel () in
       [%op a +* "s, i; k => s, 2*i<+2*k" w +* "s, o<+c; c => s, o" [ 0.; 0.; 1.; 0.; 0. ]]);
-  executes "padded transposed conv recipe: 2*i<+k, then a one-hot crop, padding 1, output_padding 1"
+  exact_sum
+    "padded transposed conv recipe: 2*i<+k, then a one-hot crop, padding 1, output_padding 1"
+    ~over:[| n; kk |] ~x:a_vals
+    ~x_at:(fun o r -> tap ~stride:2 ~len:n (o.(1) + 1) r)
+    ~w:kernel_vals
+    ~w_at:(fun _ r -> r.(1))
     ~dims:[| 1; 2 * n |]
     ~want:(conv_transpose ~stride:2 ~dilation:1 ~padding:1 ~output_padding:1 a_vals kernel_vals)
     (fun () ->
@@ -196,7 +268,11 @@ let run_forms () =
   (* [output_padding > padding] grows the end instead: crop only the start, then append
      [output_padding - padding] zero cells by concatenation. Stride 3, kernel 3, padding 1,
      output_padding 2: the full 12 lose 1 cell at the start and gain 1 at the end. *)
-  executes "padded transposed conv recipe: 3*i<+k, crop the start, append a zero, output_padding 2"
+  exact_sum "padded transposed conv recipe: 3*i<+k, crop the start, append a zero, output_padding 2"
+    ~over:[| n; kk |] ~x:a_vals
+    ~x_at:(fun o r -> tap ~stride:3 ~len:n (o.(1) + 1) r)
+    ~w:kernel_vals
+    ~w_at:(fun _ r -> r.(1))
     ~dims:[| 1; ((n - 1) * 3) - 2 + 2 + 2 + 1 |]
     ~want:(conv_transpose ~stride:3 ~dilation:1 ~padding:1 ~output_padding:2 a_vals kernel_vals)
     (fun () ->
@@ -210,15 +286,23 @@ let run_forms () =
      one-hot crops above stay as an independent control. Integer components where the sizes are
      literals, captured and set components where they are values, and the [output_padding > padding]
      end grown by a replacement form instead of a concatenation. *)
-  executes "padded transposed conv recipe: 2*i<+2*k, then a slice, padding 2"
+  exact_sum "padded transposed conv recipe: 2*i<+2*k, then a slice, padding 2" ~over:[| n; kk |]
+    ~x:a_vals
+    ~x_at:(fun o r -> tap ~stride:2 ~dilation:2 ~len:n (o.(1) + 2) r)
+    ~w:kernel_vals
+    ~w_at:(fun _ r -> r.(1))
     ~dims:[| 1; ((n - 1) * 2) - 4 + 4 + 1 |]
     ~want:(conv_transpose ~stride:2 ~dilation:2 ~padding:2 ~output_padding:0 a_vals kernel_vals)
     (fun () ->
       let a = operand () in
       let w = kernel () in
       [%op a +* "s, i; k => s, 2*i<+2*k" w ++ "s, 2^o^2 => s, o"]);
-  executes
+  exact_sum
     "padded transposed conv recipe: 2*i<+k, then a captured slice, padding 1, output_padding 1"
+    ~over:[| n; kk |] ~x:a_vals
+    ~x_at:(fun o r -> tap ~stride:2 ~len:n (o.(1) + 1) r)
+    ~w:kernel_vals
+    ~w_at:(fun _ r -> r.(1))
     ~dims:[| 1; 2 * n |]
     ~want:(conv_transpose ~stride:2 ~dilation:1 ~padding:1 ~output_padding:1 a_vals kernel_vals)
     (fun () ->
@@ -230,7 +314,11 @@ let run_forms () =
       Shape.set_dim p padding;
       Shape.set_dim q (padding - output_padding);
       cropped);
-  executes "padded transposed conv recipe: 3*i<+k, slice the start, pad the end, output_padding 2"
+  exact_sum "padded transposed conv recipe: 3*i<+k, slice the start, pad the end, output_padding 2"
+    ~over:[| n; kk |] ~x:a_vals
+    ~x_at:(fun o r -> tap ~stride:3 ~len:n (o.(1) + 1) r)
+    ~w:kernel_vals
+    ~w_at:(fun _ r -> r.(1))
     ~dims:[| 1; ((n - 1) * 3) - 2 + 2 + 2 + 1 |]
     ~want:(conv_transpose ~stride:3 ~dilation:1 ~padding:1 ~output_padding:2 a_vals kernel_vals)
     (fun () ->
@@ -248,7 +336,10 @@ let run_forms () =
     (fun () ->
       let a = ndarray [ 2; n ] ij_vals in
       [%op a ++ "i, j => i<+3*j"]);
-  executes "unary window, kernel captured and set"
+  exact_sum "unary window, kernel captured and set" ~over:[| n; kk |] ~x:a_vals
+    ~x_at:(fun o r -> tap ~len:n o.(1) r)
+    ~w:(Array.create ~len:kk 1.)
+    ~w_at:(fun _ r -> r.(1))
     ~dims:[| 1; n + kk - 1 |]
     ~want:(transposed a_vals (Array.create ~len:kk 1.))
     (fun () ->
@@ -259,13 +350,21 @@ let run_forms () =
   executes "unary window, kernel unbound (closes to 1)" ~dims:[| 1; n |] ~want:a_vals (fun () ->
       let a = operand () in
       [%op a ++ "s, i => s, i<+k"]);
-  executes "ternary window i<+k"
+  exact_sum "ternary window i<+k" ~over:[| n; kk |] ~x:a_vals
+    ~x_at:(fun o r -> tap ~len:n o.(1) r)
+    ~w:(Array.map2_exn kernel_vals kernel2_vals ~f:( *. ))
+    ~w_at:(fun _ r -> r.(1))
     ~dims:[| 1; n + kk - 1 |]
     ~want:(transposed a_vals (Array.map2_exn kernel_vals kernel2_vals ~f:( *. )))
     (fun () ->
       Operation.einsum3 "s, i; k; k => s, i<+k" ~grad_spec:pg (operand ()) (kernel ())
         (ndarray [ kk ] kernel2_vals) ());
-  executes "binary two windows i<+k, j<+l"
+  exact_sum "binary two windows i<+k, j<+l" ~over:[| n; 2; kk; kk |]
+    ~x:(Array.init (n * 2) ~f:(fun x -> Float.of_int ((10 * (x / 2)) + (x % 2) + 1)))
+    ~x_at:(fun o r ->
+      if r.(0) + r.(2) = o.(0) && r.(1) + r.(3) = o.(1) then (r.(0) * 2) + r.(1) else n * 2)
+    ~w:(Array.init (kk * kk) ~f:(fun x -> kernel_vals.(x / kk) *. kernel2_vals.(x % kk)))
+    ~w_at:(fun _ r -> (r.(2) * kk) + r.(3))
     ~dims:[| n + kk - 1; 2 + kk - 1 |]
     ~want:
       (let cols = 2 + kk - 1 in
@@ -289,21 +388,30 @@ let run_forms () =
           (Array.init (kk * kk) ~f:(fun x -> kernel_vals.(x / kk) *. kernel2_vals.(x % kk)))
       in
       [%op a +* "i, j; k, l => i<+k, j<+l" w]);
-  executes "batch-axis window b<+k"
+  exact_sum "batch-axis window b<+k" ~over:[| n; kk |] ~x:a_vals
+    ~x_at:(fun o r -> tap ~len:n o.(0) r)
+    ~w:kernel_vals
+    ~w_at:(fun _ r -> r.(1))
     ~dims:[| n + kk - 1; 1 |]
     ~want:(transposed a_vals kernel_vals)
     (fun () ->
       let a = ndarray ~batch_dims:[ n ] [ 1 ] a_vals in
       let w = kernel () in
       [%op a +* "b|s; k => b<+k|s" w]);
-  executes "input-axis window i<+k"
+  exact_sum "input-axis window i<+k" ~over:[| n; kk |] ~x:a_vals
+    ~x_at:(fun o r -> tap ~len:n o.(1) r)
+    ~w:kernel_vals
+    ~w_at:(fun _ r -> r.(1))
     ~dims:[| 1; n + kk - 1 |]
     ~want:(transposed a_vals kernel_vals)
     (fun () ->
       let a = ndarray ~input_dims:[ n ] [ 1 ] a_vals in
       let w = kernel () in
       [%op a +* "i->s; k => i<+k->s" w]);
-  executes "legacy + with use_padding = false"
+  exact_sum "legacy + with use_padding = false" ~over:[| n; kk |] ~x:a_vals
+    ~x_at:(fun o r -> tap ~len:n o.(1) r)
+    ~w:kernel_vals
+    ~w_at:(fun _ r -> r.(1))
     ~dims:[| 1; n + kk - 1 |]
     ~want:(transposed a_vals kernel_vals)
     (fun () ->
@@ -314,23 +422,29 @@ let run_forms () =
   case "%cd ~logic window 2*i<+k" (fun () ->
       Tensor.unsafe_reinitialize ();
       let label = "%cd ~logic window 2*i<+k" in
-      match
-        let a = operand () in
-        let w = kernel () in
-        let%cd asn = { sm } =:+ a * w ~logic:"s, i; k => s, 2*i<+k" in
-        Train.set_materialized sm.Tensor.value;
-        let ctx = Context.auto () in
-        let ctx, routine = Context.compile ~name:"cd_window" ctx asn Ir.Indexing.Empty in
-        read (Context.run ctx routine) sm
-      with
-      | exception e ->
-          Stdio.eprintf "%s: raised %s\n%!" label (exn_message e);
-          pf "%s: executes" label false
-      | got ->
-          matches label
-            ~dims:[| 1; (2 * (n - 1)) + kk |]
-            ~want:(transposed ~stride:2 a_vals kernel_vals)
-            got)
+      let dims = [| 1; (2 * (n - 1)) + kk |] in
+      (* The premise as [exact_sum] derives it, for the assignment's own compile. *)
+      let a_r = with_zero a_vals and w_r = with_zero kernel_vals in
+      let products =
+        Ll_test.reduction_cells ~out:dims ~over:[| n; kk |] (fun o r ->
+            a_r [| tap ~stride:2 ~len:n o.(1) r |] *. w_r [| r.(1) |])
+      in
+      p_all
+        (label ^ ": every partial sum of every cell is exact in f32")
+        products
+        ~f:(Ll_test.exact_partials ~sig_bits);
+      let a = operand () in
+      let w = kernel () in
+      let%cd asn = { sm } =:+ a * w ~logic:"s, i; k => s, 2*i<+k" in
+      Train.set_materialized sm.Tensor.value;
+      let ctx = Context.auto () in
+      let ctx, routine = Context.compile ~name:"cd_window" ctx asn Ir.Indexing.Empty in
+      let ctx = Context.run ctx routine in
+      let got = Context.get_values ctx sm.Tensor.value in
+      matches label ~dims
+        ~want:(transposed ~stride:2 a_vals kernel_vals)
+        (Ir.Tnode.dims_without_padding sm.Tensor.value, got);
+      check_sums label products got)
 
 (* {2 Gradients}
 
@@ -355,7 +469,29 @@ let run_gradients () =
       let%op loss = (r *. c) ++ "s, o => 0" in
       Train.set_materialized (grad_of a);
       Train.set_materialized (grad_of w);
-      let ctx = Train.update_once ~output_cd_file:false (Context.auto ()) loss in
+      (* The bitwise premise, from the operands' own data: [da]'s cells sum [c.(2i + 3k) * w.(k)]
+         over the kernel, [dw]'s [c.(2i + 3k) * a.(i)] over the operand; every product is a small
+         positive integer, so every partial sum of every cell is exact in f32, in any order. *)
+      let c_r = with_zero c_vals and a_r = with_zero a_vals and w_r = with_zero kernel_vals in
+      let da_products =
+        Ll_test.reduction_cells ~out:[| 1; n |] ~over:[| kk |] (fun o r ->
+            c_r [| (2 * o.(1)) + (3 * r.(0)) |] *. w_r [| r.(0) |])
+      in
+      let dw_products =
+        Ll_test.reduction_cells ~out:[| kk |] ~over:[| n |] (fun o r ->
+            c_r [| (2 * r.(0)) + (3 * o.(0)) |] *. a_r [| r.(0) |])
+      in
+      p_all "d/da of the strided dilated window: every partial sum of every cell is exact in f32"
+        da_products
+        ~f:(Ll_test.exact_partials ~sig_bits);
+      p_all "d/dw of the strided dilated window: every partial sum of every cell is exact in f32"
+        dw_products
+        ~f:(Ll_test.exact_partials ~sig_bits);
+      let ctx = run (Train.grad_update loss) in
+      check_sums "d/da of the strided dilated window" da_products
+        (Context.get_values ctx (grad_of a));
+      check_sums "d/dw of the strided dilated window" dw_products
+        (Context.get_values ctx (grad_of w));
       let sum l f = List.sum (module Float) l ~f in
       pf_all2 "d/da of the strided dilated window"
         (Context.get_values ctx (grad_of a))

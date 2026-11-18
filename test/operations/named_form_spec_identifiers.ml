@@ -5,8 +5,8 @@
 
    Each named form is checked against the operator form over the same inputs and against the values
    computed by hand. The inputs are distinct integers and the kernel taps 1 and 10, so a wrong
-   stride, dilation or window lands on other cells. The sums are integer-valued, exact in any
-   order. *)
+   stride, dilation or window lands on other cells. Each item that sums derives its bitwise premise
+   from [xs] and [taps], beside its claims. *)
 
 open Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -23,6 +23,24 @@ let values t =
   Context.get_values ctx t.Tensor.value
 
 let exact = Float.equal
+
+(* [values]' compile and run, for a program with no parameters, returning the run's values: the
+   executed reference a premise's host sums are compared with. *)
+let run_values t =
+  Ocannl.Train.set_materialized t.Tensor.value;
+  let ctx, routine =
+    Ocannl.Train.to_routine (Context.cpu ()) Ir.Indexing.Empty (Ocannl.Train.forward t)
+  in
+  Context.get_values (Context.run ctx routine) t.Tensor.value
+
+let x_r = Ll_test.operand ~b:[] ~o:[ n ] ~i:[] (fun ix -> xs.(ix.(0)))
+let w_r = Ll_test.operand ~b:[] ~o:[ 2 ] ~i:[] (fun ix -> taps.(ix.(0)))
+let sig_bits = Ir.Ops.significand_bits Ir.Ops.single
+
+let check_sums label products got =
+  p_all2 label got
+    (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id)))
+    ~f:Float.equal
 
 (* A stride: [out.(o) = x.(stride * o)]. *)
 let%op named_strided ~stride x = einsum1 "stride*o => o" x
@@ -68,7 +86,16 @@ let () =
     Array.init out ~f:(fun o ->
         (taps.(0) *. xs.(stride * o)) +. (taps.(1) *. xs.((stride * o) + dil)))
   in
-  let named = values (named_dilated ~stride ~dil x w) in
+  (* The bitwise premise: each cell sums [taps.(k) * xs.(s*o + d*k)], positive integers far below
+     2^24, so every partial sum of every cell is exact in f32, in any order. *)
+  let products =
+    Ll_test.reduction_cells ~out:[| out |] ~over:[| 2 |] (fun o r ->
+        w_r [| r.(0) |] *. x_r [| (stride * o.(0)) + (dil * r.(0)) |])
+  in
+  p_all "dilated window: every partial sum of every cell is exact in f32" products
+    ~f:(Ll_test.exact_partials ~sig_bits);
+  let named = run_values (named_dilated ~stride ~dil x w) in
+  check_sums "dilated window: the premise's host sums are the executed values" products named;
   p_all2 "einsum with stride and dilation identifiers computes the dilated window" named want
     ~f:exact;
   p_all2 "einsum agrees with +* on stride and dilation identifiers" named
@@ -83,7 +110,16 @@ let () =
         (taps.(0) *. taps.(0) *. xs.(stride * o))
         +. (taps.(1) *. taps.(1) *. xs.((stride * o) + dil)))
   in
-  let named = values (named_tern ~stride ~dil x w) in
+  (* The bitwise premise: each cell sums [taps.(k) * taps.(k) * xs.(s*o + d*k)], positive integers
+     far below 2^24, so every partial sum of every cell is exact in f32, in any order. *)
+  let products =
+    Ll_test.reduction_cells ~out:[| out |] ~over:[| 2 |] (fun o r ->
+        w_r [| r.(0) |] *. w_r [| r.(0) |] *. x_r [| (stride * o.(0)) + (dil * r.(0)) |])
+  in
+  p_all "einsum3 window: every partial sum of every cell is exact in f32" products
+    ~f:(Ll_test.exact_partials ~sig_bits);
+  let named = run_values (named_tern ~stride ~dil x w) in
+  check_sums "einsum3 window: the premise's host sums are the executed values" products named;
   p_all2 "einsum3 with stride and dilation identifiers computes the dilated window" named want
     ~f:exact;
   p_all2 "einsum3 agrees with +* over the squared kernel" named
@@ -96,7 +132,18 @@ let () =
 let () =
   let use_padding = false in
   let want = Array.init (n - 1) ~f:(fun o -> (taps.(0) *. xs.(o)) +. (taps.(1) *. xs.(o + 1))) in
-  let named = values (named_window ~use_padding x w) in
+  (* The bitwise premise: each cell sums [taps.(k) * xs.(o + k)], positive integers far below 2^24,
+     so every partial sum of every cell is exact in f32, in any order. *)
+  let products =
+    Ll_test.reduction_cells
+      ~out:[| n - 1 |]
+      ~over:[| 2 |]
+      (fun o r -> w_r [| r.(0) |] *. x_r [| o.(0) + r.(0) |])
+  in
+  p_all "plain + window: every partial sum of every cell is exact in f32" products
+    ~f:(Ll_test.exact_partials ~sig_bits);
+  let named = run_values (named_window ~use_padding x w) in
+  check_sums "plain + window: the premise's host sums are the executed values" products named;
   p_all2 "einsum with a plain + window reads use_padding = false" named want ~f:exact;
   p_all2 "einsum agrees with +* on a plain + window" named
     (values (op_window ~use_padding x w))
