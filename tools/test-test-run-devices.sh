@@ -1589,7 +1589,13 @@ leg_106() {
                "member|plan build @@test/training/slow-fixture_conv|$SLOW_RUN_CAP_DEFAULT" \
                "short|plan --cap 9 build @slow|9" \
                "lifted|plan --cap 0 build @slow|0" \
-               "separator|plan exec prog -- @slow|3600"; do
+               "separator|plan exec prog -- @slow|3600" \
+               "train|plan build @train|$TRAIN_RUN_CAP_DEFAULT" \
+               "combined|plan build @runtest @train|$TRAIN_RUN_CAP_DEFAULT" \
+               "train-member|plan build @test/training/train-mlp_names|$TRAIN_RUN_CAP_DEFAULT" \
+               "train-slow|plan build @train @slow|$SLOW_RUN_CAP_DEFAULT" \
+               "train-short|plan --cap 9 build @runtest @train|9" \
+               "train-separator|plan exec prog -- @train|3600"; do
     IFS='|' read -r tag argv want <<<"$probe"
     # shellcheck disable=SC2086  # fixture argv deliberately split
     probe_run "slow-cap-$tag" hip cc "" "" $argv
@@ -1597,8 +1603,9 @@ leg_106() {
       d="$tag: exit $argv_rc; plan: $argv_out"
     [ -z "$d" ] || break
     case $tag in
-      slow | member) source="the slow default" ;;
-      short | lifted) source="asked for" ;;
+      slow | member | train-slow) source="the slow default" ;;
+      train | combined | train-member) source="the training default" ;;
+      short | lifted | train-short) source="asked for" ;;
       *) source="the default" ;;
     esac
     grep -qF "run cap: ${want}s ($source" <<<"$argv_out" ||
@@ -1609,7 +1616,9 @@ leg_106() {
                "file|run --targets-file $TMP/slow-cap-targets build|$SLOW_RUN_CAP_DEFAULT" \
                "fresh|fresh @test/training/slow-fixture_conv|$SLOW_RUN_CAP_DEFAULT" \
                "repeat|repeat 2 build @slow|$SLOW_RUN_CAP_DEFAULT" \
-               "override|run --cap 0 build @slow|0"; do
+               "override|run --cap 0 build @slow|0" \
+               "train-run|run build @runtest @train|$TRAIN_RUN_CAP_DEFAULT" \
+               "train-override|run --cap 0 build @runtest @train|0"; do
     [ -z "$d" ] || break
     IFS='|' read -r tag argv want <<<"$probe"
     # shellcheck disable=SC2086  # fixture argv deliberately split
@@ -1636,12 +1645,12 @@ leg_106() {
       d="the environment cap was not kept: exit $argv_rc; cap: $(cat "$argv_dir/cap" 2>/dev/null)"
   fi
   if [ -z "$d" ]; then
-    report 0 "slow targets get four hours before launch; plan states the cap source; explicit caps win"
+    report 0 "slow targets get four hours and training targets two before launch; plan states the cap source; explicit caps win"
   else
-    report 1 "slow targets get four hours before launch; plan states the cap source; explicit caps win" "$d"
+    report 1 "slow targets get four hours and training targets two before launch; plan states the cap source; explicit caps win" "$d"
   fi
 }
-harness_leg_run '106: slow run caps and their sources #device' leg_106
+harness_leg_run '106: slow and training run caps and their sources #device' leg_106
 shared_through renamed_dune
 
 # ---------------------------------------------------------------------------

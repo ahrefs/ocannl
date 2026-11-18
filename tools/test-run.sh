@@ -399,7 +399,8 @@
 # background mode and let the harness notify on exit -- that already removes
 # every reason to write a waiter. `start`/`wait` exist only for a run that must
 # outlive the launching session. The cap defaults to $OCANNL_TOOL_TEST_CAP,
-# or 14400s for targets reaching @slow and 3600s otherwise;
+# or 14400s for targets reaching @slow, 7200s for targets reaching the
+# training aliases (@train, train-NAME), and 3600s otherwise;
 # `--cap 0` disables it (then supply your own bound). `--expect-backend B`
 # (repeatable) refuses a batch that does not hold backend B, before dune starts
 # (BACKEND REFUSED, exit 2): pass the GPU backend a GPU-box leg is for, since a
@@ -480,6 +481,9 @@ select_run_cap() { # dune argv; cap_default is nonempty for an explicit cap
     if test_cap_reaches_slow "$@" >/dev/null; then
       cap=$SLOW_RUN_CAP_DEFAULT
       cap_why="the slow default; see docs/agent-notes/build-and-test.md#gpu-boxes-job-caps-and-runtime-refusals"
+    elif test_cap_reaches_train "$@" >/dev/null; then
+      cap=$TRAIN_RUN_CAP_DEFAULT
+      cap_why="the training default; see docs/agent-notes/build-and-test.md#gpu-boxes-job-caps-and-runtime-refusals"
     fi
   fi
 }

@@ -43,7 +43,8 @@ AGENTS.md's dependency-pin guidance.
   exercising the change and name them in the PR body beside that leg. Run applicable `slow-`
   aliases named from the full list: no per-PR job runs `@slow`. The `train-` aliases the change
   reaches are held to the same record (`build @test/training/train-<name>... -j 1`, or
-  `build @train`, under `--expect-backend cc`). After your merge, `tools/owed-run.sh prune <the
+  `build @train`, under `--expect-backend cc`); a batch naming them takes the two-hour training
+  run cap by default, with no `--cap` needed. After your merge, `tools/owed-run.sh prune <the
   merged head sha>` deletes its record ref (build-and-test.md#the-owed-run-record).
   Follow the notes for `train-` members and shell harnesses; a long batch needs the common
   brief's execution request.
