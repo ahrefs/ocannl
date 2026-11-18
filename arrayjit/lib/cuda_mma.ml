@@ -5,7 +5,9 @@ open Base
    functions of it, so neither the dispatch order nor a floor is written out a second time
    (gh-ocannl-1232). The fields are documented in the interface. *)
 type m16n8k16_kind = M16n8k16_bf16 | M16n8k16_f16 [@@deriving equal, sexp_of, enumerate]
-type inline_ptx = Fp8_m16n8k32 | M16n8k16 of m16n8k16_kind [@@deriving equal, sexp_of, enumerate]
+
+type inline_ptx = Fp8_m16n8k32 | M16n8k16 of m16n8k16_kind | M16n8k8_f16
+[@@deriving equal, sexp_of, enumerate]
 
 type wmma_kind = Wmma_f16_f32 | Wmma_f16_f16 | Wmma_f16_wide | Wmma_bf16 | Wmma_tf32
 [@@deriving equal, sexp_of, enumerate]
@@ -30,40 +32,86 @@ let fp16_narrow_floored = false
 let fp16_accum_wide () =
   Numerics.fp16_accum_wide ~auto_wide:fp16_auto_wide ~narrow_floored:fp16_narrow_floored ()
 
-(* The one table from storage precisions, the numerics policy and the emission scope to an arm.
+(* Instruction floors: all wmma f16 forms use Volta's sm_70+ fragments, including wide-f16's f32
+   accumulator with element-wise conversions at the d boundary (gh-ocannl-2251). Those conversions
+   add no tensor-instruction requirement. [mma.sync] m16n8k8 over f16 is Turing's (sm_75+, PTX ISA
+   "Warp-level matrix multiply-accumulate instructions": the .m16n8k8 shape's target note,
+   gh-ocannl-2284). Wmma bf16/tf32 and m16n8k16 [mma.sync] require sm_80+ (Ampere); m16n8k32 over
+   e5m2 requires sm_89+ (Ada). The ONLY place CUDA's mma cutoffs are written: [resolve_arm],
+   [capability], [mma_arm] and [gpu_arch_options] read them from here. *)
+let arm_floor = function
+  | Inline_ptx Fp8_m16n8k32 -> 89
+  | Inline_ptx (M16n8k16 (M16n8k16_bf16 | M16n8k16_f16)) -> 80
+  | Inline_ptx M16n8k8_f16 -> 75
+  | Wmma (Wmma_f16_f32 | Wmma_f16_f16 | Wmma_f16_wide) -> 70
+  | Wmma (Wmma_bf16 | Wmma_tf32) -> 80
+
+(* gh-ocannl-2284: the test seam {!with_resolution_ceiling} installs. [None] outside every extent,
+   which is every production path: no configuration key, and no library module, enters one. *)
+let resolution_ceiling : int option Stdlib.Atomic.t = Stdlib.Atomic.make None
+
+let with_resolution_ceiling ~cc f =
+  let saved = Stdlib.Atomic.get resolution_ceiling in
+  let ceiling = Option.value_map saved ~default:cc ~f:(Int.min cc) in
+  Stdlib.Atomic.set resolution_ceiling (Some ceiling);
+  Exn.protect ~f ~finally:(fun () -> Stdlib.Atomic.set resolution_ceiling saved)
+
+(* The arm of uniform f16 under the wide resolution, per emission scope, on a device of compute
+   capability [cc]: the one triple whose arm depends on the scope, and the one whose per-statement
+   arm depends on the device. [resolve_arm] and [capability]'s [mma_f16_wide_acc_scopes] both read
+   it, so the descriptor lists a scope exactly where the resolver's arm for it renders.
+
+   - A per-statement statement renders through the m16n8k16 body bf16 shares (the PTX fragment
+   layouts are shared by .f16 and .bf16) where the device meets that arm's floor, and below it
+   through Turing's m16n8k8 (gh-ocannl-2284): the same f32 accumulator registers and converted f16
+   [d] boundary, half the k depth per instruction. Which one is a function of the m16n8k16 floor,
+   not a second cutoff: m16n8k8 runs on every later architecture too, but takes two instructions
+   where m16n8k16 takes one, so it is the arm only where the deeper one cannot render. - The
+   persistent-fragment scope renders wmma's f16 x f16 -> f32 fragments behind a converted f16 [d]
+   boundary (gh-ocannl-925) on every tensor-core device — and so do the update-only statements
+   nested in it, whose arm is the scope's: the hooks resolve a [`Fragment] destination at
+   [Mma_fragment_scope]. That converted boundary is element-wise across a whole fragment array,
+   which no self-contained statement has, so the per-statement scope never resolves to it. *)
+let f16_wide_arm ~cc = function
+  | Backend_intf.Mma_per_statement ->
+      let deep = Inline_ptx (M16n8k16 M16n8k16_f16) in
+      if cc >= arm_floor deep then deep else Inline_ptx M16n8k8_f16
+  | Backend_intf.Mma_fragment_scope -> Wmma Wmma_f16_wide
+
+(* The one table from storage precisions, the numerics policy, the emission scope and the device's
+   compute capability to an arm.
 
    - fp8 x fp8 -> f32 has no wmma form: inline-PTX m16n8k32 over e5m2 in both scopes. - Uniform bf16
    likewise (gh-ocannl-545): [nvcuda::wmma] declares no bf16 accumulator fragment, but [mma.sync]
    accumulates bf16 operands in per-lane f32 registers whose layout is architecturally defined, so
    the [d] boundary converts — per statement, or once at each end of the register scope
    (gh-ocannl-1063). - Uniform f16 under the wide resolution ([Numerics.Fp16_wide], gh-ocannl-680,
-   and since gh-ocannl-2195 [Fp16_auto]: {!fp16_accum_wide}) is the one triple whose arm depends on
-   the scope. A per-statement statement renders through the same m16n8k16 body as bf16 (the PTX
-   fragment layouts are shared by .f16 and .bf16). The persistent-fragment scope renders wmma's f16
-   x f16 -> f32 fragments behind a converted f16 [d] boundary (gh-ocannl-925) — and so do the
-   update-only statements nested in it, whose arm is the scope's: the hooks resolve a [`Fragment]
-   destination at [Mma_fragment_scope]. That converted boundary is element-wise across a whole
-   fragment array, which no self-contained statement has, so the per-statement scope never resolves
-   to it. Before gh-ocannl-1232 this was a fall-through: the per-statement hook tried the inline-PTX
-   arm first and reached wmma only when that declined. - The f16-accumulate wmma triple is gated off
-   under that policy: the fragment accumulator width follows [accum_prec]. Matching widths do not
-   imply matching narrowing points (gh-ocannl-2151; the f16 census in
-   [test/operations/mma_bf16_seed_parity]). - Uniform f32 computes in tf32 (m16n16k8) only when the
-   policy opts in (gh-ocannl-478); with the policy off there is no arm and the scalar fallback keeps
-   full f32 numerics.
+   and since gh-ocannl-2195 [Fp16_auto]: {!fp16_accum_wide}) is {!f16_wide_arm}'s: the one triple
+   whose arm depends on the scope, and per statement on [cc]. Before gh-ocannl-1232 this was a
+   fall-through: the per-statement hook tried the inline-PTX arm first and reached wmma only when
+   that declined. - The f16-accumulate wmma triple is gated off under that policy: the fragment
+   accumulator width follows [accum_prec]. Matching widths do not imply matching narrowing points
+   (gh-ocannl-2151; the f16 census in [test/operations/mma_bf16_seed_parity]). - Uniform f32
+   computes in tf32 (m16n16k8) only when the policy opts in (gh-ocannl-478); with the policy off
+   there is no arm and the scalar fallback keeps full f32 numerics.
+
+   [cc] picks among arms; it never decides whether there is one, so a triple has an arm at every
+   capability or at none, and below the chosen arm's floor the hooks decline it to the scalar
+   fallback. Inside a {!with_resolution_ceiling} extent [cc] is capped at the ceiling.
 
    The cases are disjoint except for the guarded uniform-f16 one, which must precede its unguarded
    twin (swapping them is a fatal unused-case warning), so a reordering cannot silently change an
    arm. *)
-let resolve_arm ~a_prec ~b_prec ~d_prec ~scope =
+let resolve_arm ~cc ~a_prec ~b_prec ~d_prec ~scope =
   match (a_prec, b_prec, d_prec) with
   | Ops.Fp8_prec _, Ops.Fp8_prec _, Ops.Single_prec _ -> Some (Inline_ptx Fp8_m16n8k32)
   | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ ->
       Some (Inline_ptx (M16n8k16 M16n8k16_bf16))
-  | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ when fp16_accum_wide () -> (
-      match scope with
-      | Backend_intf.Mma_per_statement -> Some (Inline_ptx (M16n8k16 M16n8k16_f16))
-      | Backend_intf.Mma_fragment_scope -> Some (Wmma Wmma_f16_wide))
+  | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ when fp16_accum_wide () ->
+      let cc =
+        Option.value_map (Stdlib.Atomic.get resolution_ceiling) ~default:cc ~f:(Int.min cc)
+      in
+      Some (f16_wide_arm ~cc scope)
   | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ -> Some (Wmma Wmma_f16_f16)
   | Ops.Half_prec _, Ops.Half_prec _, Ops.Single_prec _ -> Some (Wmma Wmma_f16_f32)
   | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Single_prec _ -> Some (Wmma Wmma_bf16)
@@ -72,21 +120,11 @@ let resolve_arm ~a_prec ~b_prec ~d_prec ~scope =
       Some (Wmma Wmma_tf32)
   | _ -> None
 
-(* Instruction floors: all wmma f16 forms use Volta's sm_70+ fragments, including wide-f16's f32
-   accumulator with element-wise conversions at the d boundary (gh-ocannl-2251). Those conversions
-   add no tensor-instruction requirement. Wmma bf16/tf32 and m16n8k16 [mma.sync] require sm_80+
-   (Ampere); m16n8k32 over e5m2 requires sm_89+ (Ada). The ONLY place CUDA's mma cutoffs are
-   written: [capability], [mma_arm] and [gpu_arch_options] read them from here. *)
-let arm_floor = function
-  | Inline_ptx Fp8_m16n8k32 -> 89
-  | Inline_ptx (M16n8k16 (M16n8k16_bf16 | M16n8k16_f16)) -> 80
-  | Wmma (Wmma_f16_f32 | Wmma_f16_f16 | Wmma_f16_wide) -> 70
-  | Wmma (Wmma_bf16 | Wmma_tf32) -> 80
-
 let arm_marker = function
   | Inline_ptx Fp8_m16n8k32 -> "mma-fp8"
   | Inline_ptx (M16n8k16 M16n8k16_bf16) -> "mma-bf16"
   | Inline_ptx (M16n8k16 M16n8k16_f16) -> "mma-f16"
+  | Inline_ptx M16n8k8_f16 -> "mma-f16-k8"
   | Wmma (Wmma_f16_f32 | Wmma_f16_f16) -> "wmma"
   | Wmma Wmma_f16_wide -> "wmma-f16-wide"
   | Wmma Wmma_bf16 -> "wmma-bf16"
@@ -95,6 +133,7 @@ let arm_marker = function
 let arm_tile = function
   | Inline_ptx Fp8_m16n8k32 -> (16, 8, 32)
   | Inline_ptx (M16n8k16 _) -> (16, 8, 16)
+  | Inline_ptx M16n8k8_f16 -> (16, 8, 8)
   | Wmma Wmma_tf32 -> (16, 16, 8)
   | Wmma (Wmma_f16_f32 | Wmma_f16_f16 | Wmma_f16_wide | Wmma_bf16) -> (16, 16, 16)
 
@@ -130,8 +169,8 @@ let wmma_info kind =
   | Wmma_tf32 -> mk ~cvt_tf32:true "nvcuda::wmma::precision::tf32" Ops.single 4 4
 
 let arm_accumulator = function
-  (* Both inline-PTX instructions accumulate [.f32] in per-lane registers whatever the storage. *)
-  | Inline_ptx (Fp8_m16n8k32 | M16n8k16 _) -> Ops.single
+  (* Every inline-PTX instruction accumulates [.f32] in per-lane registers whatever the storage. *)
+  | Inline_ptx (Fp8_m16n8k32 | M16n8k16 _ | M16n8k8_f16) -> Ops.single
   | Wmma kind -> (wmma_info kind).wc_acc_prec
 
 (* The operand conditions of every wmma rendering, written once for the two hooks that used to
@@ -264,21 +303,32 @@ let m16n8k16_spelling = function
 
 (* fp8's destination is f32 storage, moved directly; the m16n8k16 destinations are their 16-bit
    operands' type, converted at the boundary. *)
-let inline_ptx_d_storage = function
+let inline_ptx_d_storage inline =
+  let converted kind =
+    let s = m16n8k16_spelling kind in
+    (s.ms_elt_typ, Some (s.ms_widen, s.ms_narrow))
+  in
+  match inline with
   | Fp8_m16n8k32 -> ("float", None)
-  | M16n8k16 kind ->
-      let s = m16n8k16_spelling kind in
-      (s.ms_elt_typ, Some (s.ms_widen, s.ms_narrow))
+  | M16n8k16 kind -> converted kind
+  | M16n8k8_f16 -> converted M16n8k16_f16
 
 (* fp8's 4-byte registers are contiguous only in A's row-major and B's transposed orientations
-   (gh-ocannl-481 item 3, D2); the 16-bit arms' registers hold element PAIRS, contiguous under one
-   of [ldmatrix]'s two forms in either orientation; wmma's opaque fragments cannot be fed from
-   [ldmatrix] at all. *)
+   (gh-ocannl-481 item 3, D2); the m16n8k16 arms' registers hold element PAIRS, contiguous under one
+   of [ldmatrix]'s two forms in either orientation; m16n8k8 gathers per lane only
+   ({!arm_reads_swizzled}); wmma's opaque fragments cannot be fed from [ldmatrix] at all. *)
 let arm_ldmatrix_operands arm ~ta ~tb ~a ~b =
   match arm with
   | Inline_ptx Fp8_m16n8k32 -> (a && not ta, b && tb)
   | Inline_ptx (M16n8k16 _) -> (a, b)
-  | Wmma _ -> (false, false)
+  | Inline_ptx M16n8k8_f16 | Wmma _ -> (false, false)
+
+(* Whether an inline-PTX arm reads a swizzled staged operand at all: fp8 through [ldmatrix] or
+   swizzle-aware byte gathers, m16n8k16 through [ldmatrix] in either orientation. m16n8k8
+   (gh-ocannl-2284) has neither, and needs neither: no seed stages uniform-f16 operands swizzled
+   ([capability]'s [mma_staged_layouts] lists no f16 key), so it gathers plain operands per lane and
+   {!inline_ptx_accepts} declines a swizzled one. *)
+let arm_reads_swizzled = function Fp8_m16n8k32 | M16n8k16 _ -> true | M16n8k8_f16 -> false
 
 (* An operand [ldmatrix] can both reach and de-conflict: the swizzled 16-byte-unit layout in shared
    memory. Everything else keeps per-lane gathers. *)
@@ -288,8 +338,8 @@ let ldmatrix_eligible : Backend_intf.mma_operand_place -> bool = function
 
 (* The emission scope's arm: the census reads it off the statement's destination, the cost model off
    the schedule's simdgroup fragments. *)
-let operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a ~b =
-  match resolve_arm ~a_prec ~b_prec ~d_prec ~scope with
+let operand_loads ~cc ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a ~b =
+  match resolve_arm ~cc ~a_prec ~b_prec ~d_prec ~scope with
   | None -> (false, false)
   | Some arm -> arm_ldmatrix_operands arm ~ta ~tb ~a:(ldmatrix_eligible a) ~b:(ldmatrix_eligible b)
 
@@ -300,8 +350,8 @@ let operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a ~b =
    [test/operations/mma_format_arm_tables] counts against it (gh-ocannl-1456, gh-ocannl-1511). *)
 let arm_reloads_operands = function Inline_ptx _ -> true | Wmma _ -> false
 
-let operand_fragments ~a_prec ~b_prec ~d_prec ~scope =
-  Option.map (resolve_arm ~a_prec ~b_prec ~d_prec ~scope) ~f:(fun arm ->
+let operand_fragments ~cc ~a_prec ~b_prec ~d_prec ~scope =
+  Option.map (resolve_arm ~cc ~a_prec ~b_prec ~d_prec ~scope) ~f:(fun arm ->
       {
         Backend_intf.mf_tile = arm_tile arm;
         mf_reloads = arm_reloads_operands arm;
@@ -311,9 +361,10 @@ let operand_fragments ~a_prec ~b_prec ~d_prec ~scope =
       })
 
 (* Shared by statement and scope for the inline-PTX arms: the intrinsic divides the block, the
-   device meets the arm's floor, and every operand is plain or shared-swizzled. The 16-bit arms read
-   swizzled operands with [ldmatrix]; fp8 uses it in its contiguous orientations and swizzle-aware
-   byte gathers otherwise. Destination conditions remain with the callers. *)
+   device meets the arm's floor, and every operand is plain or shared-swizzled, the latter only for
+   an arm that reads it ({!arm_reads_swizzled}). The m16n8k16 arms read swizzled operands with
+   [ldmatrix]; fp8 uses it in its contiguous orientations and swizzle-aware byte gathers otherwise.
+   Destination conditions remain with the callers. *)
 let inline_ptx_accepts inline ~cc ~m ~n ~k ~a:((a_space, a_layout) as a)
     ~b:((b_space, b_layout) as b) =
   let arm = Inline_ptx inline in
@@ -321,8 +372,9 @@ let inline_ptx_accepts inline ~cc ~m ~n ~k ~a:((a_space, a_layout) as a)
   let plain = function `Plain -> true | `Swizzled_b128 -> false in
   (* Generic-address loads cover both device and shared memory. *)
   let loadable = function `Device | `Shared -> true | `Thread -> false in
-  (plain a_layout || ldmatrix_eligible a)
-  && (plain b_layout || ldmatrix_eligible b)
+  let swizzled_ok place = ldmatrix_eligible place && arm_reads_swizzled inline in
+  (plain a_layout || swizzled_ok a)
+  && (plain b_layout || swizzled_ok b)
   && m % tm = 0
   && n % tn = 0
   && k % tk = 0
@@ -470,14 +522,26 @@ let inline_ptx_statement_lines inline ~a_prec ~b_prec ~resident ~ta ~tb ~lda ~ld
     @ either ~fragment:[] ~statement:(mma16_d_statement_lines ~dir:`Store ~elt_typ ~d_cvt ~ldd)
     @ [ "  }"; "}"; barrier ]
   in
-  let mma_asm instr =
+  (* One [mma.sync] over the four f32 accumulators and the [a_regs] / [b_regs] operand registers,
+     numbered in that order after the accumulators. *)
+  let mma_asm ~a_regs ~b_regs instr =
+    let group ~first count =
+      "{"
+      ^ String.concat ~sep:"," (List.init count ~f:(fun i -> Printf.sprintf "%%%d" (first + i)))
+      ^ "}"
+    in
+    let na = List.length a_regs and nb = List.length b_regs in
     [
       Printf.sprintf "      asm(\"%s \"" instr;
-      "          \"{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\"";
+      Printf.sprintf "          \"%s, %s, %s, %s;\"" (group ~first:0 4) (group ~first:4 na)
+        (group ~first:(4 + na) nb)
+        (group ~first:0 4);
       Printf.sprintf "          : \"+f\"(%s), \"+f\"(%s), \"+f\"(%s), \"+f\"(%s)" (acc 0) (acc 1)
         (acc 2) (acc 3);
-      "          : \"r\"(__mma_a0), \"r\"(__mma_a1), \"r\"(__mma_a2), \"r\"(__mma_a3), \
-       \"r\"(__mma_b0), \"r\"(__mma_b1));";
+      "          : "
+      ^ String.concat ~sep:", "
+          (List.map (a_regs @ b_regs) ~f:(fun reg -> Printf.sprintf "\"r\"(%s)" reg))
+      ^ ");";
     ]
   in
   let title ~suffix =
@@ -487,6 +551,121 @@ let inline_ptx_statement_lines inline ~a_prec ~b_prec ~resident ~ta ~tb ~lda ~ld
   in
   let a_regs = [ "__mma_a0"; "__mma_a1"; "__mma_a2"; "__mma_a3" ] in
   let b_regs = [ "__mma_b0"; "__mma_b1" ] in
+  (* The 16-bit arms' one body, over the element [kind] and the instruction's [k] [depth]. *)
+  let sixteen_bit ~kind ~depth =
+    (* Raw [mma.sync] with the architecturally-defined per-lane fragment layouts of m16n8k16 (PTX
+       ISA "Matrix Fragments for mma.m16n8k16", shared by .f16 and .bf16 — which is what lets
+       {!m16n8k16_spelling} parameterize this one body over both element types). Thread [lane], with
+       groupID g = lane>>2 and threadID-in-group t = lane&3, holds: A (16x16) regs a0..a3 = the
+       element pairs at rows {g, g+8} x column pairs {2t, 2t+8}; B (16x8, column-major fragment)
+       regs b0,b1 = row pairs {2t, 2t+8} down column g; accumulator D (16x8 f32) regs d0..d3 = rows
+       {g, g+8} x columns {2t, 2t+1}. The lower-indexed element of each pair sits in the low half of
+       its .b32 register.
+
+       m16n8k8 over f16 (gh-ocannl-2284; PTX ISA "Matrix Fragments for mma.m16n8k8", .f16) is the
+       first [k] half of that layout: A (16x8) regs a0,a1 = the pairs at rows {g, g+8} x column pair
+       2t; B (8x8) reg b0 = row pair 2t down column g; the same D. So the body is one over [depth /
+       8] halves of 8 [k] each, half [h] holding A regs a(2h), a(2h+1) at column pair [2t + 8h] and
+       B reg b(h) at row pair [2t + 8h], and [depth] the instruction's [k].
+
+       Unlike the fp8 arm, transposed operand storage ([ta]/[tb]) is supported by [ldmatrix] too:
+       every gather goes through [a_at]/[b_at], which index the STORED matrix at (col, row) under
+       the flag while keeping the operand's own leading dimension — the fragment content is
+       unchanged, only its addresses are. Element-wise 16-bit loads impose no alignment or stride
+       constraint and read generic addresses, so both __shared__ tiles and device pointers are
+       covered.
+
+       The accumulator is read from and written back to the 16-bit [d] once per statement, with the
+       whole [k] extent accumulated in f32 registers in between. For bf16 that is strictly better
+       rounding than the scalar fallback this replaces, which rounds to bf16 per term; for f16 it is
+       the [Numerics.Fp16_wide] residency [accum_prec] gives every serial rendering (gh-ocannl-680).
+
+       Against a [resident] register fragment (gh-ocannl-1063) the call is update-only: the f32
+       registers are [frag[__mi][__ni][0..3]], loaded and stored once by the enclosing fragment
+       scope, so no [d] crosses a 16-bit boundary per outer [k] block. The leading barrier goes too
+       — no sibling zeroing of [d] is read here, and the staged tiles' visibility is the staging's
+       own barrier, as for the wmma update form — while the trailing one stays: it releases the
+       staged tiles for the next serial iteration's cooperative loads. *)
+    let { ms_as_ushort = as_ushort; ms_infix = instr_elt; _ } = m16n8k16_spelling kind in
+    let halves = List.range 0 (depth / 8) in
+    let a_regs =
+      List.concat_map halves ~f:(fun h ->
+          [ Printf.sprintf "__mma_a%d" (2 * h); Printf.sprintf "__mma_a%d" ((2 * h) + 1) ])
+    in
+    let b_regs = List.map halves ~f:(Printf.sprintf "__mma_b%d") in
+    (* Address of logical element (row, col) in an operand stored under its own leading dimension,
+       transposed or not. *)
+    let elem_at ~ld ~transposed ~row ~col =
+      if transposed then Printf.sprintf "(%s) * %d + (%s)" col ld row
+      else Printf.sprintf "(%s) * %d + (%s)" row ld col
+    in
+    let a_at ~row ~col = elem_at ~ld:lda ~transposed:ta ~row ~col in
+    let b_at ~row ~col = elem_at ~ld:ldb ~transposed:tb ~row ~col in
+    let pack2 name base i0 i1 =
+      Printf.sprintf "unsigned %s = (unsigned)%s(%s[%s]) | ((unsigned)%s(%s[%s]) << 16);" name
+        as_ushort base i0 as_ushort base i1
+    in
+    let a_row lo = if lo then "__mi * 16 + __mma_g" else "__mi * 16 + __mma_g + 8" in
+    let a_col c = Printf.sprintf "__ki * %d + 2 * __mma_t + %d" depth c in
+    let b_row r = Printf.sprintf "__ki * %d + 2 * __mma_t + %d" depth r in
+    let b_col = "__ni * 8 + __mma_g" in
+    let a_reg name ~lo ~c =
+      "      "
+      ^ pack2 name "__mma_ap"
+          (a_at ~row:(a_row lo) ~col:(a_col c))
+          (a_at ~row:(a_row lo) ~col:(a_col (c + 1)))
+    in
+    let b_reg name ~r =
+      "      "
+      ^ pack2 name "__mma_bp"
+          (b_at ~row:(b_row r) ~col:b_col)
+          (b_at ~row:(b_row (r + 1)) ~col:b_col)
+    in
+    (* The [ldmatrix] entry points. Naming the matrix [q = lane >> 3] and the row within it [r =
+       lane & 7], the four A matrices are (m rows {0-7, 8-15}) x (k columns {0-7, 8-15}) in register
+       order a0..a3, and the two B matrices are (k rows {0-7, 8-15}) x (n columns 0-7) in order b0,
+       b1. Each is read as 8 rows of 8 contiguous 16-bit elements from the operand's OWN storage, so
+       the transposed orientations swap which index walks the rows and add [.trans] exactly when the
+       fragment's minor direction is the stored major one. The m16n8k16 arms' alone:
+       [arm_ldmatrix_operands] selects no [ldmatrix] for m16n8k8. *)
+    let a_ldm_lines () =
+      ldmatrix_lines ~indent:"      " ~regs:a_regs ~trans:ta
+        ~addr:
+          (if ta then
+             swz_saddr ~ptr:"__mma_ap" ~ld:lda ~prec:a_prec
+               ~row:"__ki * 16 + (__mma_lid & 7) + 8 * (__mma_lid >> 4)"
+               ~col:"__mi * 16 + 8 * ((__mma_lid >> 3) & 1)"
+           else
+             swz_saddr ~ptr:"__mma_ap" ~ld:lda ~prec:a_prec
+               ~row:"__mi * 16 + (__mma_lid & 7) + 8 * ((__mma_lid >> 3) & 1)"
+               ~col:"__ki * 16 + 8 * (__mma_lid >> 4)")
+    in
+    let b_ldm_lines () =
+      ldmatrix_lines ~indent:"      " ~regs:b_regs ~trans:(not tb)
+        ~addr:
+          (if tb then
+             swz_saddr ~ptr:"__mma_bp" ~ld:ldb ~prec:b_prec ~row:"__ni * 8 + (__mma_lid & 7)"
+               ~col:"__ki * 16 + 8 * ((__mma_lid >> 3) & 1)"
+           else
+             swz_saddr ~ptr:"__mma_bp" ~ld:ldb ~prec:b_prec ~row:"__ki * 16 + (__mma_lid & 15)"
+               ~col:"__ni * 8")
+    in
+    ( title ~suffix:"",
+      frame ~kt:(k / depth)
+        ~k_body:
+          ((if a_ldm then a_ldm_lines ()
+            else
+              List.concat_map halves ~f:(fun h ->
+                  [
+                    a_reg (Printf.sprintf "__mma_a%d" (2 * h)) ~lo:true ~c:(8 * h);
+                    a_reg (Printf.sprintf "__mma_a%d" ((2 * h) + 1)) ~lo:false ~c:(8 * h);
+                  ]))
+          @ (if b_ldm then b_ldm_lines ()
+             else List.map halves ~f:(fun h -> b_reg (Printf.sprintf "__mma_b%d" h) ~r:(8 * h)))
+          @ mma_asm ~a_regs ~b_regs
+              (Printf.sprintf "mma.sync.aligned.m16n8k%d.row.col.f32.%s.%s.f32" depth instr_elt
+                 instr_elt)) )
+  in
   match inline with
   | Fp8_m16n8k32 ->
       (* Raw [mma.sync] with the architecture-defined per-lane fragment layouts of m16n8k32 (PTX ISA
@@ -576,111 +755,12 @@ let inline_ptx_statement_lines inline ~a_prec ~b_prec ~resident ~ta ~tb ~lda ~ld
                   a_reg "__mma_a3" ~lo:false ~c:16;
                 ])
             @ (if b_ldm then b_ldm_lines else [ b_reg "__mma_b0" ~r:0; b_reg "__mma_b1" ~r:16 ])
-            @ mma_asm "mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e5m2.f32") )
-  | M16n8k16 kind ->
-      (* Raw [mma.sync] with the architecturally-defined per-lane fragment layouts of m16n8k16 (PTX
-         ISA "Matrix Fragments for mma.m16n8k16", shared by .f16 and .bf16 — which is what lets
-         {!m16n8k16_spelling} parameterize this one body over both element types). Thread [lane],
-         with groupID g = lane>>2 and threadID-in-group t = lane&3, holds: A (16x16) regs a0..a3 =
-         the element pairs at rows {g, g+8} x column pairs {2t, 2t+8}; B (16x8, column-major
-         fragment) regs b0,b1 = row pairs {2t, 2t+8} down column g; accumulator D (16x8 f32) regs
-         d0..d3 = rows {g, g+8} x columns {2t, 2t+1}. The lower-indexed element of each pair sits in
-         the low half of its .b32 register.
+            @ mma_asm ~a_regs ~b_regs "mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e5m2.f32") )
+  | M16n8k16 kind -> sixteen_bit ~kind ~depth:16
+  | M16n8k8_f16 -> sixteen_bit ~kind:M16n8k16_f16 ~depth:8
 
-         Unlike the fp8 arm, transposed operand storage ([ta]/[tb]) is supported by [ldmatrix] too:
-         every gather goes through [a_at]/[b_at], which index the STORED matrix at (col, row) under
-         the flag while keeping the operand's own leading dimension — the fragment content is
-         unchanged, only its addresses are. Element-wise 16-bit loads impose no alignment or stride
-         constraint and read generic addresses, so both __shared__ tiles and device pointers are
-         covered.
-
-         The accumulator is read from and written back to the 16-bit [d] once per statement, with
-         the whole [k] extent accumulated in f32 registers in between. For bf16 that is strictly
-         better rounding than the scalar fallback this replaces, which rounds to bf16 per term; for
-         f16 it is the [Numerics.Fp16_wide] residency [accum_prec] gives every serial rendering
-         (gh-ocannl-680).
-
-         Against a [resident] register fragment (gh-ocannl-1063) the call is update-only: the f32
-         registers are [frag[__mi][__ni][0..3]], loaded and stored once by the enclosing fragment
-         scope, so no [d] crosses a 16-bit boundary per outer [k] block. The leading barrier goes
-         too — no sibling zeroing of [d] is read here, and the staged tiles' visibility is the
-         staging's own barrier, as for the wmma update form — while the trailing one stays: it
-         releases the staged tiles for the next serial iteration's cooperative loads. *)
-      let { ms_as_ushort = as_ushort; ms_infix = instr_elt; _ } = m16n8k16_spelling kind in
-      (* Address of logical element (row, col) in an operand stored under its own leading dimension,
-         transposed or not. *)
-      let elem_at ~ld ~transposed ~row ~col =
-        if transposed then Printf.sprintf "(%s) * %d + (%s)" col ld row
-        else Printf.sprintf "(%s) * %d + (%s)" row ld col
-      in
-      let a_at ~row ~col = elem_at ~ld:lda ~transposed:ta ~row ~col in
-      let b_at ~row ~col = elem_at ~ld:ldb ~transposed:tb ~row ~col in
-      let pack2 name base i0 i1 =
-        Printf.sprintf "unsigned %s = (unsigned)%s(%s[%s]) | ((unsigned)%s(%s[%s]) << 16);" name
-          as_ushort base i0 as_ushort base i1
-      in
-      let a_row lo = if lo then "__mi * 16 + __mma_g" else "__mi * 16 + __mma_g + 8" in
-      let a_col c = Printf.sprintf "__ki * 16 + 2 * __mma_t + %d" c in
-      let b_row r = Printf.sprintf "__ki * 16 + 2 * __mma_t + %d" r in
-      let b_col = "__ni * 8 + __mma_g" in
-      let a_reg name ~lo ~c =
-        "      "
-        ^ pack2 name "__mma_ap"
-            (a_at ~row:(a_row lo) ~col:(a_col c))
-            (a_at ~row:(a_row lo) ~col:(a_col (c + 1)))
-      in
-      let b_reg name ~r =
-        "      "
-        ^ pack2 name "__mma_bp"
-            (b_at ~row:(b_row r) ~col:b_col)
-            (b_at ~row:(b_row (r + 1)) ~col:b_col)
-      in
-      (* The [ldmatrix] entry points. Naming the matrix [q = lane >> 3] and the row within it [r =
-         lane & 7], the four A matrices are (m rows {0-7, 8-15}) x (k columns {0-7, 8-15}) in
-         register order a0..a3, and the two B matrices are (k rows {0-7, 8-15}) x (n columns 0-7) in
-         order b0, b1. Each is read as 8 rows of 8 contiguous 16-bit elements from the operand's OWN
-         storage, so the transposed orientations swap which index walks the rows and add [.trans]
-         exactly when the fragment's minor direction is the stored major one. *)
-      let a_ldm_lines =
-        ldmatrix_lines ~indent:"      " ~regs:a_regs ~trans:ta
-          ~addr:
-            (if ta then
-               swz_saddr ~ptr:"__mma_ap" ~ld:lda ~prec:a_prec
-                 ~row:"__ki * 16 + (__mma_lid & 7) + 8 * (__mma_lid >> 4)"
-                 ~col:"__mi * 16 + 8 * ((__mma_lid >> 3) & 1)"
-             else
-               swz_saddr ~ptr:"__mma_ap" ~ld:lda ~prec:a_prec
-                 ~row:"__mi * 16 + (__mma_lid & 7) + 8 * ((__mma_lid >> 3) & 1)"
-                 ~col:"__ki * 16 + 8 * (__mma_lid >> 4)")
-      in
-      let b_ldm_lines =
-        ldmatrix_lines ~indent:"      " ~regs:b_regs ~trans:(not tb)
-          ~addr:
-            (if tb then
-               swz_saddr ~ptr:"__mma_bp" ~ld:ldb ~prec:b_prec ~row:"__ni * 8 + (__mma_lid & 7)"
-                 ~col:"__ki * 16 + 8 * ((__mma_lid >> 3) & 1)"
-             else
-               swz_saddr ~ptr:"__mma_bp" ~ld:ldb ~prec:b_prec ~row:"__ki * 16 + (__mma_lid & 15)"
-                 ~col:"__ni * 8")
-      in
-      ( title ~suffix:"",
-        frame ~kt:(k / 16)
-          ~k_body:
-            ((if a_ldm then a_ldm_lines
-              else
-                [
-                  a_reg "__mma_a0" ~lo:true ~c:0;
-                  a_reg "__mma_a1" ~lo:false ~c:0;
-                  a_reg "__mma_a2" ~lo:true ~c:8;
-                  a_reg "__mma_a3" ~lo:false ~c:8;
-                ])
-            @ (if b_ldm then b_ldm_lines else [ b_reg "__mma_b0" ~r:0; b_reg "__mma_b1" ~r:8 ])
-            @ mma_asm
-                (Printf.sprintf "mma.sync.aligned.m16n8k16.row.col.f32.%s.%s.f32" instr_elt
-                   instr_elt)) )
-
-let mma_arm ~a_prec ~b_prec ~d_prec ~scope =
-  Option.map (resolve_arm ~a_prec ~b_prec ~d_prec ~scope) ~f:(fun arm ->
+let mma_arm ~cc ~a_prec ~b_prec ~d_prec ~scope =
+  Option.map (resolve_arm ~cc ~a_prec ~b_prec ~d_prec ~scope) ~f:(fun arm ->
       {
         Backend_intf.arm_name = arm_marker arm;
         arm_accumulator = arm_accumulator arm;
@@ -742,21 +822,20 @@ let capability ~cc =
                 (Backend_intf.Mma_tf32, Backend_intf.Mma_tf32, Backend_intf.Mma_f32);
             ];
         (* gh-ocannl-680: under [Numerics.Fp16_wide] the uniform-f16 key above renders per statement
-           through the f32-accumulate inline-PTX m16n8k16 arm, sharing the bf16 form's body. The
-           advertised (16, 16, 16) tile stays valid for it — its divisibility constraints (m%16,
-           n%8, k%16) are implied — merely conservative about n. The fragment scope renders through
-           wmma instead: f16 x f16 -> f32 accumulator fragments resident across the outer k,
-           converting the f16 [d] once at each end through [wmma_d_boundary_lines] (gh-ocannl-925;
-           before it, the list held only [Mma_per_statement] and staged seeds were withheld,
-           gh-ocannl-836). Each scope is listed where ITS arm renders, withholding uniform-f16
-           candidates under the wide policy below that floor instead of timing scalar fallbacks
-           under a tensorized label (gh-ocannl-545). *)
+           through the f32-accumulate inline-PTX m16n8k16 arm, sharing the bf16 form's body, and
+           below that arm's floor through Turing's m16n8k8 (gh-ocannl-2284; {!f16_wide_arm}). The
+           advertised (16, 16, 16) tile stays valid for both — their divisibility constraints (m%16,
+           n%8, and k%16 or k%8) are implied — merely conservative about n, and for m16n8k8 about k.
+           The fragment scope renders through wmma instead: f16 x f16 -> f32 accumulator fragments
+           resident across the outer k, converting the f16 [d] once at each end through
+           [wmma_d_boundary_lines] (gh-ocannl-925; before it, the list held only [Mma_per_statement]
+           and staged seeds were withheld, gh-ocannl-836). Each scope is listed where ITS arm at
+           this [cc] renders, withholding uniform-f16 candidates under the wide policy below that
+           floor instead of timing scalar fallbacks under a tensorized label (gh-ocannl-545). *)
         mma_f16_wide_acc_scopes =
           scopes
-            [
-              (Backend_intf.Mma_per_statement, Inline_ptx (M16n8k16 M16n8k16_f16));
-              (Backend_intf.Mma_fragment_scope, Wmma Wmma_f16_wide);
-            ];
+            (List.map Backend_intf.all_of_mma_emission_scope ~f:(fun scope ->
+                 (scope, f16_wide_arm ~cc scope)));
         mma_f16_auto_wide = fp16_auto_wide;
         mma_f16_narrow_floored = fp16_narrow_floored;
         (* gh-ocannl-838: the uniform-bf16 key is the same inline-PTX arm, f32 in hardware whatever

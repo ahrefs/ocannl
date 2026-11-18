@@ -72,9 +72,7 @@ let family_of_fields ~backend fields =
   in
   match backend with
   | "cuda" ->
-      let number key = Option.bind (atom key) ~f:Int.of_string_opt in
-      Option.both (number "compute_capability_major") (number "compute_capability_minor")
-      |> Option.map ~f:(fun (major, minor) -> Printf.sprintf "sm_%d%d" major minor)
+      Option.map (Ll_test.cuda_compute_capability_of_fields fields) ~f:(Printf.sprintf "sm_%d")
   | "hip" ->
       Option.map (atom "gcn_arch_name") ~f:(fun arch -> List.hd_exn (String.split arch ~on:':'))
   | "metal" -> atom "device_name"
@@ -125,9 +123,9 @@ let f16_mma_capable =
    (gfx1151: 30 of 1024 cells differ in every seed on these signed, f32-exact inputs, where the
    one-sign census fixtures below agree bitwise). *)
 (* Whether the default policy's uniform-f16 tile is available per statement, by the descriptor's own
-   judgment: CUDA sm_70-sm_75 advertise the triple but no wide scope, so under the wide-resolving
-   auto (gh-ocannl-2195) their uniform-f16 seeds are withheld and the default legs have nothing to
-   compare. *)
+   judgment: CUDA sm_70-sm_74 advertise the triple but no per-statement wide scope, so under the
+   wide-resolving auto (gh-ocannl-2195) their per-statement uniform-f16 seeds are withheld and the
+   default legs have nothing to compare (sm_75-79 have one since gh-ocannl-2284). *)
 let f16_auto_capable =
   lazy
     (on_gpu

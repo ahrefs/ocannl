@@ -54,11 +54,19 @@ let scopes = [ BI.Mma_per_statement; BI.Mma_fragment_scope ]
 (* Each backend's tables, rendered so that two modes' tabulations compare as strings. *)
 let prec_opt = function None -> "-" | Some p -> Ops.prec_string p
 
+(* CUDA's table at every arm floor, the capabilities where its per-statement arm can change
+   (gh-ocannl-2284). *)
+let cuda_ccs =
+  List.dedup_and_sort ~compare:Int.compare
+    (List.map Ir.Cuda_mma.all_of_arm ~f:Ir.Cuda_mma.arm_floor)
+
 let cuda_table () =
-  List.concat_map triples ~f:(fun (a_prec, b_prec, d_prec) ->
-      List.map scopes ~f:(fun scope ->
-          Option.value_map ~default:"-" (Ir.Cuda_mma.resolve_arm ~a_prec ~b_prec ~d_prec ~scope)
-            ~f:(fun arm -> Sexp.to_string (Ir.Cuda_mma.sexp_of_arm arm))))
+  List.concat_map cuda_ccs ~f:(fun cc ->
+      List.concat_map triples ~f:(fun (a_prec, b_prec, d_prec) ->
+          List.map scopes ~f:(fun scope ->
+              Option.value_map ~default:"-"
+                (Ir.Cuda_mma.resolve_arm ~cc ~a_prec ~b_prec ~d_prec ~scope) ~f:(fun arm ->
+                  Sexp.to_string (Ir.Cuda_mma.sexp_of_arm arm)))))
 
 let metal_table () =
   List.map triples ~f:(fun (a_prec, b_prec, d_prec) ->
@@ -110,7 +118,8 @@ let seeding_rows () =
     | None -> None
   in
   let cuda_arm_narrow ~scope =
-    Option.map (Ir.Cuda_mma.mma_arm ~a_prec:Ops.half ~b_prec:Ops.half ~d_prec:Ops.half ~scope)
+    Option.map
+      (Ir.Cuda_mma.mma_arm ~cc:120 ~a_prec:Ops.half ~b_prec:Ops.half ~d_prec:Ops.half ~scope)
       ~f:(fun arm -> Ops.equal_prec arm.BI.arm_accumulator Ops.half)
   in
   let cases =

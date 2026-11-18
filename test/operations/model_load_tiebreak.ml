@@ -671,8 +671,8 @@ let gather_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codege
 let stand_in_capabilities =
   {
     BI.no_codegen_capabilities with
-    mma_operand_loads = Ir.Cuda_mma.operand_loads;
-    mma_operand_fragments = Ir.Cuda_mma.operand_fragments;
+    mma_operand_loads = Ir.Cuda_mma.operand_loads ~cc:120;
+    mma_operand_fragments = Ir.Cuda_mma.operand_fragments ~cc:120;
     (* CUDA's acceptance is its hook's, which needs the backend; the stand-in accepts every
        statement, and the backend-record leg reads the real hook. *)
     mma_accepts =

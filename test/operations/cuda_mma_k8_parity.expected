@@ -1,0 +1,11 @@
+every operand is a quarter in 1/4 .. 7/4, exact in f16: true
+every partial sum of these operands is exact in f16, with one-sign products: true
+pairing the wrong k half changes some cell of the product: true
+the serial rendering equals the premise's host sums bitwise: true
+the serial rendering renders no tile: true
+at the device's own resolution the tile renders the m16n8k16 arm, tensorized: true
+the m16n8k16 tile equals the serial rendering bitwise: true
+at sm_75's resolution the tile renders the m16n8k8 arm, tensorized, and no m16n8k16: true
+the m16n8k8 kernel's PTX targets the arm's floor, sm_75: true
+the m16n8k8 tile equals the serial rendering bitwise: true
+the m16n8k8 tile equals the m16n8k16 tile bitwise: true

@@ -6,5 +6,5 @@ let () =
     if Array.exists (fun x -> x = "--forced") Sys.argv then `Outside_sweep else `Environment
   in
   let leg = Verdict.leg ~aggregation ~when_:false ~on:"NVRTC bindings unavailable" () in
-  Cuda_wmma_floor_claims.run ~leg ~compute_70_leg:leg (fun _ ->
-      failwith "cuda_wmma_floor: a closed missing-NVRTC leg evaluated its probe")
+  Cuda_wmma_floor_claims.run ~leg ~compute_70_leg:leg ~k8_leg:leg ~jit_70_leg:leg ~k16_leg:leg
+    (fun _ -> failwith "cuda_wmma_floor: a closed missing-NVRTC leg evaluated its probe")

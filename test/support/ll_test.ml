@@ -432,6 +432,44 @@ let reduction_cells ~out ~over term =
   let reduced = indices over in
   List.map (indices out) ~f:(fun o -> List.map reduced ~f:(term o))
 
+(** {1 CUDA device capability} *)
+
+(** [cuda_compute_capability_of_fields fields] is a CUDA device's compute capability,
+    [major * 10 + minor], from its [Ir.Backend_intf.parse_static_properties] fields; [None] where
+    either field is missing or not a number. Pure, so a test's own claims can feed it synthetic
+    fields. *)
+let cuda_compute_capability_of_fields fields =
+  let number key =
+    Option.bind (List.Assoc.find fields key ~equal:String.equal) ~f:(function
+      | Sexp.Atom value -> Int.of_string_opt value
+      | Sexp.List _ -> None)
+  in
+  Option.map2 (number "compute_capability_major") (number "compute_capability_minor")
+    ~f:(fun major minor -> (major * 10) + minor)
+
+(** The attached devices' compute capabilities in ordinal order, each read by
+    {!cuda_compute_capability_of_fields} from [Context.static_properties (Context.auto ())] (ordinal
+    0 is the device [Context.auto] runs on); empty where none reads, as off CUDA. *)
+let cuda_compute_capabilities () =
+  match Ir.Backend_intf.parse_static_properties (Context.static_properties (Context.auto ())) with
+  | Some { devices; _ } -> List.filter_map devices ~f:cuda_compute_capability_of_fields
+  | None -> []
+
+(** The minimum of {!cuda_compute_capabilities}: the capability CUDA's mma hooks render at. *)
+let cuda_min_compute_capability () =
+  List.min_elt (cuda_compute_capabilities ()) ~compare:Int.compare
+
+(** [cuda_arm_leg leg arm] is [leg]'s sub-leg open only where {!cuda_min_compute_capability} meets
+    [arm]'s floor ([Ir.Cuda_mma.arm_floor]): below it the hooks decline the arm, so its claims skip
+    as an [`Environment] skip naming the arm. *)
+let cuda_arm_leg leg arm =
+  Verdict.sub_leg ~aggregation:`Environment leg
+    ~when_:
+      (lazy
+        (Option.value_map (cuda_min_compute_capability ()) ~default:false ~f:(fun cc ->
+             cc >= Ir.Cuda_mma.arm_floor arm)))
+    ~on:(Printf.sprintf "a CUDA device below %s's floor" (Ir.Cuda_mma.arm_marker arm))
+
 (** {1 Optimization} *)
 
 (** [optimize_in ctx ~name llc] runs the backends' own pipeline ([analyze_proc] ->

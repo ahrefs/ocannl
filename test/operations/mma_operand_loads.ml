@@ -157,9 +157,14 @@ let leg ~tag ~a ~b ~d_prec ?(bm = 16) ?(bk = 16) ?(ta = false) ?(tb = false) ~sw
        && Bool.equal ldm_census (fst promised || snd promised)));
   (* What CUDA's capability answers for the same places: CUDA's [mma_operand_loads] is
      [Cuda_mma.operand_loads] itself, a pure rule, so the structural leg below asks it on every
-     host. *)
+     host, at a capability meeting every arm's floor: no leg's storage triple is one whose arm the
+     capability picks (gh-ocannl-2284's uniform f16 per statement). *)
   let cuda =
-    Ir.Cuda_mma.operand_loads ~a_prec ~b_prec ~d_prec ~scope:BI.Mma_per_statement ~ta ~tb
+    let cc =
+      List.fold Ir.Cuda_mma.all_of_arm ~init:0 ~f:(fun top arm ->
+          Int.max top (Ir.Cuda_mma.arm_floor arm))
+    in
+    Ir.Cuda_mma.operand_loads ~cc ~a_prec ~b_prec ~d_prec ~scope:BI.Mma_per_statement ~ta ~tb
       ~a:(`Shared, layout swz_a)
       ~b:(`Shared, layout swz_b)
   in

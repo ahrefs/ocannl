@@ -1,4 +1,5 @@
 sm_70 wide-f16 scopes: (Mma_fragment_scope)
+sm_75 wide-f16 scopes: (Mma_per_statement Mma_fragment_scope)
 sm_80 wide-f16 scopes: (Mma_per_statement Mma_fragment_scope)
 sm_89 wide-f16 scopes: (Mma_per_statement Mma_fragment_scope)
 every resolver floor is a cutoff of the descriptor: true

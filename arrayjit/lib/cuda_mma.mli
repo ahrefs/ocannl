@@ -24,14 +24,20 @@ type m16n8k16_kind =
           gh-ocannl-2195 [Fp16_auto]), per statement (gh-ocannl-680). *)
 [@@deriving equal, sexp_of, enumerate]
 
-(** The inline-PTX arms. Both accumulate in the architected m16n8 f32 per-lane register layout,
-    which is what lets their persistent-fragment scope hold registers across an outer reduction
+(** The inline-PTX arms. All accumulate in the architected m16n8 f32 per-lane register layout, which
+    is what lets their persistent-fragment scope hold registers across an outer reduction
     (gh-ocannl-1063). *)
 type inline_ptx =
   | Fp8_m16n8k32  (** [mma.sync.aligned.m16n8k32] over e5m2 x e5m2 -> f32. *)
   | M16n8k16 of m16n8k16_kind
       (** [mma.sync.aligned.m16n8k16] with 16-bit operands; one body over both element types, the
           PTX fragment layouts being shared by .f16 and .bf16. *)
+  | M16n8k8_f16
+      (** [mma.sync.aligned.m16n8k8] over f16 x f16 -> f32 (gh-ocannl-2284): Turing's (sm_75)
+          per-statement arm for uniform f16 under the wide resolution, where the device is below
+          m16n8k16's floor. Its fragments are m16n8k16's first [k] half, so it renders through the
+          same body at half the depth, with the same converted f16 [d] boundary; it gathers plain
+          operands only, declining swizzled ones. *)
 [@@deriving equal, sexp_of, enumerate]
 
 (** The [nvcuda::wmma] C++-API arms (tensorize-mma T3). *)
@@ -67,19 +73,35 @@ val fp16_accum_wide : unit -> bool
     behind [accum_prec] and the arm table. *)
 
 val resolve_arm :
+  cc:int ->
   a_prec:Ops.prec ->
   b_prec:Ops.prec ->
   d_prec:Ops.prec ->
   scope:Backend_intf.mma_emission_scope ->
   arm option
-(** The arm the hooks render a storage triple with in an emission scope, under the current numerics
-    policy; [None]: no tensor-core form, the scalar fallback renders. Only the precision- and
-    policy-level choice: the hooks still decline on extents, strides, address spaces, layouts and
-    {!arm_floor}, and a decline is final -- no hook falls through to another arm. An update-only
-    statement against a fragment array is resolved at [Mma_fragment_scope], the scope that declared
-    the array. The one scope-dependent triple is uniform f16 under [Numerics.Fp16_wide]: inline-PTX
-    m16n8k16 per statement, [Wmma_f16_wide] in a fragment scope; a per-statement arm never has a
-    converted destination. *)
+(** The arm the hooks render a storage triple with in an emission scope on a device of compute
+    capability [cc], under the current numerics policy; [None]: no tensor-core form, the scalar
+    fallback renders. Only the precision- and policy-level choice: the hooks still decline on
+    extents, strides, address spaces, layouts and {!arm_floor}, and a decline is final -- no hook
+    falls through to another arm. An update-only statement against a fragment array is resolved at
+    [Mma_fragment_scope], the scope that declared the array. The one scope-dependent triple is
+    uniform f16 under [Numerics.Fp16_wide] (and the wide-resolving [Fp16_auto]): inline-PTX m16n8k16
+    per statement where [cc] meets its floor, [M16n8k8_f16] below it (gh-ocannl-2284), and
+    [Wmma_f16_wide] in a fragment scope; a per-statement arm never has a converted destination. [cc]
+    only picks among arms, as a function of their floors: a triple has an arm at every capability or
+    at none. Inside a {!with_resolution_ceiling} extent [cc] is capped at the ceiling. *)
+
+val with_resolution_ceiling : cc:int -> (unit -> 'a) -> 'a
+(** [with_resolution_ceiling ~cc f] runs [f] with {!resolve_arm} resolving as a device of compute
+    capability at most [cc] would (the innermost of nested extents being the lowest), and restores
+    the previous resolution afterwards. A test seam (gh-ocannl-2284): it renders the arm an older
+    device gets on the attached newer one -- [test/operations/cuda_mma_k8_parity] runs the m16n8k8
+    arm on sm_120 against m16n8k16 and the scalar fallback. It moves only the resolution: the hooks'
+    acceptance floors, the descriptor ({!capability}) and the nvrtc target keep the attached
+    device's capability, so whatever arm it selects is still declined on a device below that arm's
+    own floor. It cannot reach production dispatch: no configuration key enters an extent and no
+    library module calls it, and outside every extent the resolution is the device's own.
+    Process-wide, not domain-local. *)
 
 val arm_floor : arm -> int
 (** The arm's arch floor, the minimum compute capability whose PTX contains its instructions: the
@@ -90,19 +112,19 @@ val arm_marker : arm -> string
     published as [Backend_intf.mma_arm.arm_name]; {!gpu_arch_options} reads it back. *)
 
 val arm_tile : arm -> int * int * int
-(** The intrinsic tile [(m, n, k)]: 16x8x32 for fp8, 16x8x16 for m16n8k16, 16x16x8 for tf32 and
-    16x16x16 for the other wmma arms. *)
+(** The intrinsic tile [(m, n, k)]: 16x8x32 for fp8, 16x8x16 for m16n8k16, 16x8x8 for m16n8k8,
+    16x16x8 for tf32 and 16x16x16 for the other wmma arms. *)
 
 val arm_accumulator : arm -> Ops.prec
-(** The precision the arm's accumulator resides at: f32 for both inline-PTX instructions whatever
+(** The precision the arm's accumulator resides at: f32 for every inline-PTX instruction whatever
     the storage, the fragment's for wmma. *)
 
 val arm_ldmatrix_operands : arm -> ta:bool -> tb:bool -> a:bool -> b:bool -> bool * bool
 (** Which operands the arm loads with the warp-cooperative [ldmatrix], given whether each is
     eligible at all (shared memory in the swizzled 16-byte-unit layout) and stored transposed. fp8
-    registers are contiguous only in A's row-major and B's transposed orientations; the 16-bit arms
-    use [ldmatrix] in both; wmma never. Shared by emission and its census, and the per-arm place an
-    operand-load description for the cost model hangs (gh-ocannl-1254). *)
+    registers are contiguous only in A's row-major and B's transposed orientations; the m16n8k16
+    arms use [ldmatrix] in both; m16n8k8 and wmma never. Shared by emission and its census, and the
+    per-arm place an operand-load description for the cost model hangs (gh-ocannl-1254). *)
 
 val ldmatrix_eligible : Backend_intf.mma_operand_place -> bool
 (** Whether an operand can be loaded with [ldmatrix] at all (gh-ocannl-481 item 3): the swizzled
@@ -110,6 +132,7 @@ val ldmatrix_eligible : Backend_intf.mma_operand_place -> bool
     [ldmatrix] can both reach and de-conflict. The emission's eligibility test. *)
 
 val operand_loads :
+  cc:int ->
   a_prec:Ops.prec ->
   b_prec:Ops.prec ->
   d_prec:Ops.prec ->
@@ -132,15 +155,16 @@ val arm_reloads_operands : arm -> bool
     loops, wmma loads each fragment once per reduction step and reuses it. *)
 
 val operand_fragments :
+  cc:int ->
   a_prec:Ops.prec ->
   b_prec:Ops.prec ->
   d_prec:Ops.prec ->
   scope:Backend_intf.mma_emission_scope ->
   Backend_intf.mma_fragments option
 (** The scope's arm ({!resolve_arm}) as its emission loads operands: {!arm_tile} — the arm's own
-    tile, not the descriptor's (uniform f16 under [Fp16_wide] emits m16n8k16 per statement under an
-    advertised 16x16x16) — and {!arm_reloads_operands}; [None] with no arm. The backend's
-    [C_syntax_config.mma_operand_fragments], published as
+    tile, not the descriptor's (uniform f16 under [Fp16_wide] emits m16n8k16, or below its floor
+    m16n8k8, per statement under an advertised 16x16x16) — and {!arm_reloads_operands}; [None] with
+    no arm. The backend's [C_syntax_config.mma_operand_fragments], published as
     {!Backend_intf.codegen_capabilities.mma_operand_fragments} for the cost model's operand-load
     count (gh-ocannl-1254). *)
 
@@ -230,10 +254,10 @@ val inline_ptx_accepts :
   b:Backend_intf.mma_operand_place ->
   bool
 (** Whether an inline-PTX arm renders a statement's operands on a device of compute capability [cc]:
-    {!arm_tile} dividing the extents, every operand plain or {!ldmatrix_eligible}, in device or
-    shared memory, and [cc] at the arm's {!arm_floor}. The one operand predicate both of
-    [Cuda_backend]'s inline-PTX sites decide by (gh-ocannl-1511); the destination's conditions stay
-    with them. *)
+    {!arm_tile} dividing the extents, every operand plain or {!ldmatrix_eligible} (the latter not
+    for [M16n8k8_f16], which reads no swizzled operand), in device or shared memory, and [cc] at the
+    arm's {!arm_floor}. The one operand predicate both of [Cuda_backend]'s inline-PTX sites decide
+    by (gh-ocannl-1511); the destination's conditions stay with them. *)
 
 val inline_ptx_statement_lines :
   inline_ptx ->
@@ -272,13 +296,14 @@ val inline_ptx_d_boundary_lines :
 (** {1 Capability} *)
 
 val mma_arm :
+  cc:int ->
   a_prec:Ops.prec ->
   b_prec:Ops.prec ->
   d_prec:Ops.prec ->
   scope:Backend_intf.mma_emission_scope ->
   Backend_intf.mma_arm option
 (** {!resolve_arm} projected to its marker, accumulator and floor (gh-ocannl-1153): the backend's
-    [C_syntax.C_syntax_config.mma_arm]. *)
+    [C_syntax.C_syntax_config.mma_arm], at the attached devices' minimum compute capability. *)
 
 val async_copy_floor : int
 (** The [cp.async] staging arm's arch floor (gh-ocannl-487 phase 2): the backend renders it, and
