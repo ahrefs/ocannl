@@ -377,14 +377,6 @@ type result_probe_dialect =
 val blend_local_a : string
 (** The local a [Blend_over_locals] blend binds its first arm to; tests find blends by it. *)
 
-val canonical_minted_idents : string -> string
-(** [canonical_minted_idents source] is [source] up to what a lowering mints afresh, so that two
-    lowerings of one program (two compiles of the same assignments, under two select renderings,
-    say) compare as text (gh-ocannl-2326): the identifiers of the minted shapes -- loop symbols
-    ([i<n>]), locals ([v<n>_<label>]) and schedule-minted nodes ([tile__n<n>_acc]) -- renamed by
-    first occurrence, and whitespace dropped, since line breaks follow the identifiers' lengths.
-    Every other token, numbered or not, is kept. *)
-
 (** What a backend supplies to the C-family renderer: its dialect's spellings, capabilities and
     hooks. *)
 module type C_syntax_config = sig

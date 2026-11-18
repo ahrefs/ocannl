@@ -8,10 +8,10 @@
    The source check reads only this compile's returned CUDA source. It detects the renderer's first
    arm local by its declared name and compares the segments' control source byte for byte. The step
    lowers as well as renders under each choice, so its placements may differ; its check compares the
-   control's source with the short arm's up to what each lowering mints afresh
-   ([Ir.C_syntax.canonical_minted_idents]). Branch instructions and select coverage within a kernel
-   are outside that check. The dry run checks emitted forms, actual PTX targets, and host parity in
-   every cell, and the step's values across the arms, before enabling timings. *)
+   control's source with the short arm's up to what each lowering mints afresh ([canonical] below).
+   Branch instructions and select coverage within a kernel are outside that check. The dry run
+   checks emitted forms, actual PTX targets, and host parity in every cell, and the step's values
+   across the arms, before enabling timings. *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -157,6 +157,27 @@ let pool ~root ~elements =
   { name = "pool_backward"; segment; output; fixtures = [ ("pool", fixture) ] }
 
 let has_local src = String.is_substring src ~substring:(Ir.C_syntax.blend_local_a ^ " =")
+
+(* Two lowerings of one program, as text that compares equal where only what each lowering mints
+   afresh differs: [Ir.Kernel_code_cache.canonical_kernel] renames loop symbols and scope locals by
+   first occurrence, the schedule's minted nodes ([..__n<n>_..]) join its renamed [bound] names, and
+   whitespace goes, since line breaks follow the identifiers' lengths. *)
+let canonical src =
+  let is_ident c = Char.is_alphanum c || Char.equal c '_' in
+  let schedule_node w =
+    List.exists (String.substr_index_all w ~may_overlap:false ~pattern:"__n") ~f:(fun k ->
+        let rest = String.drop_prefix w (k + 3) in
+        match String.lfindi rest ~f:(fun _ c -> not (Char.is_digit c)) with
+        | None -> not (String.is_empty rest)
+        | Some d -> d > 0 && Char.equal rest.[d] '_')
+  in
+  let bound =
+    String.map src ~f:(fun c -> if is_ident c then c else ' ')
+    |> String.split ~on:' ' |> List.filter ~f:schedule_node
+    |> List.dedup_and_sort ~compare:String.compare
+  in
+  Ir.Kernel_code_cache.canonical_kernel ~bound src
+  |> String.filter ~f:(fun c -> not (Char.is_whitespace c))
 
 let compile ~root ~target ~blend work =
   let ((ctx, routine), sources), ptx =
@@ -362,9 +383,7 @@ let compare_step ~target ~dry ~calls step =
       let is_native = Mma.equal_ptx_target target Mma.Native in
       let label = Printf.sprintf "%s/train_step" arch_a in
       (* Each lowering mints its loop symbols, local names and schedule nodes afresh. *)
-      let same x y =
-        String.equal (Ir.C_syntax.canonical_minted_idents x) (Ir.C_syntax.canonical_minted_idents y)
-      in
+      let same x y = String.equal (canonical x) (canonical y) in
       let control_matches = same src_a src_c in
       if not control_matches then (
         let la = String.split_lines src_a and lc = String.split_lines src_c in

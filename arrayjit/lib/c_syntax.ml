@@ -828,56 +828,6 @@ type result_probe_dialect = C_probes | Cxx_probes of string
    and no arm can mention them. *)
 let blend_local_a = "ocannl_sel_a__"
 
-(* See the interface. *)
-let canonical_minted_idents src =
-  let n = String.length src in
-  let buf = Buffer.create n in
-  let ids = Hashtbl.create (module String) in
-  let is_ident c = Char.is_alphanum c || Char.equal c '_' in
-  let digits_from w i =
-    i < String.length w && String.for_all (String.drop_prefix w i) ~f:Char.is_digit
-  in
-  (* The shapes a lowering mints afresh: a loop symbol [i<n>], a local [v<n>_<label>], a schedule
-     node's [..__n<n>_..]. *)
-  let minted w =
-    (String.is_prefix w ~prefix:"i" && digits_from w 1)
-    || (String.is_prefix w ~prefix:"v"
-       &&
-       match String.index w '_' with
-       | Some u -> u > 1 && digits_from (String.prefix w u) 1
-       | None -> false)
-    || List.exists (String.substr_index_all w ~may_overlap:false ~pattern:"__n") ~f:(fun k ->
-        (* The digits after [__n], then the word's end or an underscore. *)
-        let rest = String.drop_prefix w (k + 3) in
-        match String.lfindi rest ~f:(fun _ c -> not (Char.is_digit c)) with
-        | None -> not (String.is_empty rest)
-        | Some d -> d > 0 && Char.equal rest.[d] '_')
-  in
-  let rec scan_while k ~f = if k < n && f src.[k] then scan_while (k + 1) ~f else k in
-  let rec go k =
-    if k < n then
-      let c = src.[k] in
-      if Char.is_whitespace c then go (k + 1)
-      else if Char.is_digit c then (
-        (* A literal, kept whole: its digits are no identifier's. *)
-        let j = scan_while k ~f:(fun c -> is_ident c || Char.equal c '.') in
-        Buffer.add_substring buf src ~pos:k ~len:(j - k);
-        go j)
-      else if is_ident c then (
-        let j = scan_while k ~f:is_ident in
-        let word = String.sub src ~pos:k ~len:(j - k) in
-        if minted word then
-          let id = Hashtbl.find_or_add ids word ~default:(fun () -> Hashtbl.length ids) in
-          Buffer.add_string buf ("#" ^ Int.to_string id)
-        else Buffer.add_string buf word;
-        go j)
-      else (
-        Buffer.add_char buf c;
-        go (k + 1))
-  in
-  go 0;
-  Buffer.contents buf
-
 (** The two [Blend_over_locals] renderings, shared by [C_syntax.pp_scalar_op] and
     {!operand_conditionality_violations} so the checked text is the emitted one: an
     immediately-invoked lambda capturing by reference ([[&]() { ... }()]) that binds the arms to

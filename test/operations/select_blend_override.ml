@@ -15,8 +15,8 @@
    pool, backward: blended and short-circuiting, the same gradient, bitwise, with the blend emitted
    only where stated.
 
-   Emission claims run where the renderer has a blend (cc, CUDA, HIP); Metal renders none, so they
-   skip there, while the placement and value claims run on every backend. *)
+   Emission claims run in a leg open where the renderer has a blend (cc, CUDA, HIP); Metal renders
+   none, so they skip there, while the placement and value claims run on every backend. *)
 
 (* cc-fp-contract: exact-operands -- sums of small integers, and a pool gradient selecting dyadic
    weights *)
@@ -32,12 +32,18 @@ module Generated = Test_utils.Generated
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
-(* The dialects whose renderer has a blend to emit ([select_blend_syntax]). *)
-let renders_blends =
-  BI.renders_on_host_pool (Context.backend_facts_of_name backend_name)
-  || List.mem [ "cuda"; "hip" ] backend_name ~equal:String.equal
+(* Open where the renderer has a blend to emit: a dialect whose [select_blend_syntax] answers one
+   ([Cc_backend]'s config for cc and multidev_cc, [Cuda_like_config.Make] for CUDA and HIP; Metal
+   keeps [C_syntax.Pure_C_config]'s [None]). No backend fact states it -- [blends_value_selects]
+   says whether the dialect blends by default, which the override replaces -- so the set is those
+   modules', named once here. *)
+let emission_leg =
+  Verdict.leg
+    ~when_:
+      (BI.renders_on_host_pool (Context.backend_facts_of_name backend_name)
+      || List.mem [ "cuda"; "hip" ] backend_name ~equal:String.equal)
+    ~on:backend_name ()
 
-let skipped = Verdict.skipped ~backend:backend_name
 let blend_marker = Ir.C_syntax.blend_local_a ^ " ="
 let () = Generated.init ~backend_name
 let arm_name blend = if blend then "blend" else "short"
@@ -63,11 +69,12 @@ let emission_claim what ~name ~blended =
     Printf.sprintf "%s: the routine %s the blend" what
       (if blended then "emits" else "does not emit")
   in
-  if renders_blends then
-    p claim
-      (Bool.equal blended
-         (String.is_substring (Generated.main_logic (Generated.read name)) ~substring:blend_marker))
-  else skipped claim
+  Verdict.in_leg ~leg:emission_leg claim (fun claim ->
+      p claim
+        (Bool.equal blended
+           (String.is_substring
+              (Generated.main_logic (Generated.read name))
+              ~substring:blend_marker)))
 
 (* === The fan-in guard and the renderer read the stated fact === *)
 
