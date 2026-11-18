@@ -10392,9 +10392,9 @@ struct
   }
 
   type rendered_body = {
-    documents : PPrint.document list;
     texts : string list;
     part_names : string list;
+    compact_definition : string option;
   }
 
   (* gh-ocannl-1780: the binding-race refusal of one routine, asked of the render [compile] would
@@ -10436,7 +10436,18 @@ struct
             Syntax.compile_proc_units ~avoid:(Array.to_list names) ~name idx_params lowered
           in
           let texts = List.map documents ~f:Syntax.render_doc in
-          ((kparams, name, launch), { documents; texts; part_names }))
+          (* Longer generated names can wrap the same expression differently. Compact the emitter's
+             documents for keying, retaining hard lines such as directive boundaries. Staged
+             callbacks own their layout. Metal retains [key_text] after linking, so only the
+             rendered strings should escape this step. *)
+          let compact_definition =
+            if Low_level.has_staged_compilation lowered.Low_level.llc then None
+            else
+              let buf = Buffer.create (List.sum (module Int) texts ~f:String.length) in
+              PPrint.ToBuffer.compact buf (PPrint.separate PPrint.hardline documents);
+              Some (Buffer.contents buf)
+          in
+          ((kparams, name, launch), { texts; part_names; compact_definition }))
     in
     (* Each document starts at column 0 after a hard line, so rendering them apart and joining them
        with newlines gives the text of rendering them together. *)
@@ -10497,12 +10508,12 @@ struct
       let def = snd rendered.(i) and full = assemble [ i ] in
       let llc = lowereds.(i).Low_level.llc in
       let body = snd units.(i) in
-      let staged = Low_level.has_staged_compilation llc in
       (* The identifiers this rendering gave the kernel's nodes ([get_ident] visits exactly the
          nodes [touched_tns_in_order] lists). A [Staged_compilation] callback emits text this module
          does not see, so such a kernel renames none of them. *)
       let bound =
-        if staged then [] else List.map (Low_level.touched_tns_in_order llc) ~f:Syntax.get_ident
+        Option.value_map body.compact_definition ~default:[] ~f:(fun _ ->
+            List.map (Low_level.touched_tns_in_order llc) ~f:Syntax.get_ident)
       in
       (* An outlined kernel's parts are names it declares, renamed like its nodes' (gh-ocannl-1603):
          they are spelled after the kernel's name, segment index included. *)
@@ -10515,16 +10526,7 @@ struct
          vocabulary, kept verbatim; only the kernel's own definition is renamed. *)
       match String.chop_suffix full ~suffix:def with
       | Some prelude ->
-          let key_def =
-            if staged then def
-            else
-              (* Longer generated names can wrap the same expression differently before
-                 canonicalization. Compact the emitter's document, which retains its hard lines
-                 (including directive boundaries). Staged callbacks own their layout. *)
-              let buf = Buffer.create (String.length def) in
-              PPrint.ToBuffer.compact buf (PPrint.separate PPrint.hardline body.documents);
-              Buffer.contents buf
-          in
+          let key_def = Option.value body.compact_definition ~default:def in
           prelude ^ canonical ~bound key_def
       | None -> canonical ~bound:[] full
     in
