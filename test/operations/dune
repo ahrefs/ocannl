@@ -6110,12 +6110,28 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules cost_model_register_tile_overrides)
- (libraries
-  base
-  arrayjit.ir
-  arrayjit.utils
-  arrayjit.verdict
-  arrayjit.autotune))
+ (libraries base arrayjit.ir arrayjit.verdict arrayjit.autotune)
+ (action
+  (run
+   %{test}
+   --ocannl_model_shared_load_rate=7e12
+   --ocannl_model_fill_lane_width=none)))
+
+; gh-ocannl-2262: the same two keys with the directions swapped (none for the rate, a value for the
+; lane group) -- the resolution the acceptance window's noshl arm takes.
+
+(test
+ ; ocannl-backend: none -- links no backend: it reads the ranking's configuration over a hand-built limits record.
+ (name cost_model_register_tile_overrides_swapped)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules cost_model_register_tile_overrides_swapped)
+ (libraries base arrayjit.ir arrayjit.verdict arrayjit.autotune)
+ (action
+  (run
+   %{test}
+   --ocannl_model_shared_load_rate=none
+   --ocannl_model_fill_lane_width=16)))
 
 ; gh-ocannl-1253: the ranking score's per-block read charge, on hand-built IR scheduled under a
 ; GPU-shaped limits record; the envelope, capacity and residency are passed explicitly.
