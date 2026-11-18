@@ -11,10 +11,11 @@
 # REPORTED from the generated sources (the identity proof below), so a reading of "wide" as "the
 # default" is checked rather than assumed.
 #
-# Usage: gh1051_bf16_ab.sh [--box BOX | --skip-box-check] [--training-fixture PATH]
+# Usage: gh1051_bf16_ab.sh [--box BOX | --skip-box-check] [--repeats N]
+#                          [--training-fixture PATH [--tuned-training]]
 #                          <repo-root> <backend hip|metal> <memory-label> [rounds] [sizes...]
 #   e.g. gh1051_bf16_ab.sh ~/ocannl hip "unified (gfx1151)" 8 1024 2048
-#        gh1051_bf16_ab.sh --box mac-studio \
+#        gh1051_bf16_ab.sh --box mac-studio --repeats 50 --tuned-training \
 #          --training-fixture ~/ocannl-staging/benchmarks/fixtures/gpt2_mini_train.safetensors \
 #          ~/ocannl metal "unified (M4 Max)" 12 1024 2048
 #
@@ -28,6 +29,7 @@
 # library must carry the stream (gh-ocannl-1566): measure an older revision with the driver of its
 # own time.
 #
+# --repeats is the positive number of schedule_bench repetitions per GEMM cell (default 10).
 # Each treatment cell is bin/schedule_bench at m = n = k = <size> with bf16 operands and output. All
 # five variants are the treatment, not only the tensorized mma_pd1/mma_pd2: the policy also moves
 # the serial legs' (parallel, smem, regtile) accumulator (the backend's accum_prec). No schedule
@@ -46,6 +48,18 @@
 # f32 ones must be byte-identical across the arms (the row's drift control) and the bf16 ones must
 # differ (the treatment reaches the step). Its validation is gh1051_cells.py's mode "untuned",
 # shared with gh2195_f16_ab.sh.
+#
+# TUNED TRAINING ROW (--tuned-training, gh-ocannl-2321). Replaces the optional untuned row's bf16
+# cells with bench_gpt's seed-only search (BENCH_TUNE=1) followed by fresh-process replays. Each
+# bf16 policy searches once in an initially empty cache of its own, then only replays that cache.
+# The two f32 cells keep the same untuned step under both explicit flags, so their paired ratio
+# measures session drift without search noise. The source proof compares the shipped replay's
+# generated sources at bf16 and the untuned sources at f32. The bf16 comparison can include
+# schedule differences because each policy chooses its own crown. Only the one JSON result
+# record from each search, proof and timing cell is read for tuned provenance. Candidate logs
+# are evidence for investigation, outside the check. A failed cold search, mismatched source
+# proof, or missing verified replay invalidates the run. Each cold search can take up to 30
+# minutes. Restart with a fresh invocation after a failure so every crown comes from this run.
 #
 # DRIFT CONTROL (the A/B protocol in docs/agent-notes/training-and-performance.md): next to every
 # treatment cell runs a CONTROL cell, the same bench at f32 under the same arm's bf16_arithmetic
@@ -69,13 +83,32 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/box-gate.sh"
 box_gate_args "$@"
 shift "$box_gate_shift"
-USAGE="usage: $0 [--box BOX | --skip-box-check] [--training-fixture PATH] <repo-root> <backend hip|metal> <memory-label> [rounds] [sizes...]"
+USAGE="usage: $0 [--box BOX | --skip-box-check] [--repeats N] [--training-fixture PATH [--tuned-training]] <repo-root> <backend hip|metal> <memory-label> [rounds] [sizes...]"
+REPEATS=10
 FIXTURE=
-if [ "${1-}" = --training-fixture ]; then
-  [ $# -ge 2 ] && [ -n "$2" ] || { echo "$USAGE"; exit 2; }
-  [ -f "$2" ] || { echo "no such fixture: $2"; exit 2; }
-  FIXTURE=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")
-  case $FIXTURE in *.safetensors) ;; *) echo "the training fixture must be a .safetensors file, got $2"; exit 2 ;; esac
+TUNED=0
+while [ $# -gt 0 ]; do
+  case $1 in
+    --repeats)
+      [ $# -ge 2 ] || { echo "$USAGE"; exit 2; }
+      REPEATS=$2
+      if [[ "$REPEATS" = *[!0-9]* || "$REPEATS" != *[1-9]* ]]; then
+        echo "repeats must be a positive integer, got '$REPEATS'"
+        exit 2
+      fi
+      shift 2 ;;
+    --training-fixture)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "$USAGE"; exit 2; }
+      FIXTURE=$2
+      shift 2 ;;
+    --tuned-training) TUNED=1; shift ;;
+    *) break ;;
+  esac
+done
+if [ -n "$FIXTURE" ]; then
+  [ -f "$FIXTURE" ] || { echo "no such fixture: $FIXTURE"; exit 2; }
+  FIXTURE=$(cd "$(dirname "$FIXTURE")" && pwd)/$(basename "$FIXTURE")
+  case $FIXTURE in *.safetensors) ;; *) echo "the training fixture must be a .safetensors file, got $FIXTURE"; exit 2 ;; esac
   # bench_gpt picks its step from the fixture's metadata: an inference fixture (mode=infer) would
   # time a forward-only step in the training row.
   mode=$(python3 -c 'import struct, sys
@@ -84,8 +117,10 @@ import strict_json
 f = open(sys.argv[2], "rb"); n = struct.unpack("<Q", f.read(8))[0]
 print(strict_json.loads(f.read(n).decode()).get("__metadata__", {}).get("mode", ""))' \
     "$HERE" "$FIXTURE" 2>/dev/null)
-  [ "$mode" = train ] || { echo "the training fixture must be a training one (metadata mode=train), got mode='$mode': $2"; exit 2; }
-  shift 2
+  [ "$mode" = train ] || { echo "the training fixture must be a training one (metadata mode=train), got mode='$mode': $FIXTURE"; exit 2; }
+elif [ "$TUNED" = 1 ]; then
+  echo "--tuned-training requires --training-fixture"
+  exit 2
 fi
 [ $# -ge 3 ] || { echo "$USAGE"; exit 2; }
 ROOT=$(cd "$1" && pwd) || { echo "no such repo root: $1"; exit 2; }
@@ -122,7 +157,7 @@ if [ -n "$FIXTURE" ]; then
 fi
 GPT="$ROOT/_build/default/benchmarks/runners/ocannl/bench_gpt.exe"
 OUT=$(mktemp -d "${TMPDIR:-/tmp}/gh1051_ab.XXXXXX")
-echo "gh1051 bf16 A/B: backend=$BACKEND label=$LABEL rounds=$ROUNDS sizes=${SIZES[*]} sha=$(git -C "$ROOT" rev-parse HEAD)"
+echo "gh1051 bf16 A/B: backend=$BACKEND label=$LABEL rounds=$ROUNDS repeats=$REPEATS sizes=${SIZES[*]} sha=$(git -C "$ROOT" rev-parse HEAD)"
 echo "host=$(hostname) raw=$OUT training-fixture=${FIXTURE:-none}"
 git -C "$ROOT" status --porcelain --untracked-files=no | sed 's/^/  dirty: /'
 if [ "$BACKEND" = hip ]; then
@@ -190,19 +225,23 @@ prove() {
     exit 1
   fi
   n_diff=$(diff -rq "${d}_bfloat16_false" "${d}_bfloat16_true" | wc -l | tr -d ' ')
-  echo "treatment reach ($what): $n_diff of $n_bf generated bf16 sources differ across arms"
+  if [ "$TUNED" = 1 ] && [ "$tag" = train ]; then
+    echo "treatment reach ($what): $n_diff differing bf16 source paths across $n_bf wide and $(n_sources "${d}_bfloat16_true") narrow sources"
+  else
+    echo "treatment reach ($what): $n_diff of $n_bf generated bf16 sources differ across arms"
+  fi
 }
 
 # The GEMM cells' proof, plus which arm `auto` is at this revision (reported, not required).
 for prec in single bfloat16; do
   for arm in false true; do
     identity_run gemm "$prec" "$arm" "$prec" \
-      "$BENCH" "${SIZES[0]}" 10 "${SIZES[0]}" "${SIZES[0]}" 0 --ocannl_default_prec="$prec"
+      "$BENCH" "${SIZES[0]}" "$REPEATS" "${SIZES[0]}" "${SIZES[0]}" 0 --ocannl_default_prec="$prec"
   done
 done
 prove gemm schedule_bench
 identity_run gemm bfloat16 auto bfloat16 \
-  "$BENCH" "${SIZES[0]}" 10 "${SIZES[0]}" "${SIZES[0]}" 0 --ocannl_default_prec=bfloat16
+  "$BENCH" "${SIZES[0]}" "$REPEATS" "${SIZES[0]}" "${SIZES[0]}" 0 --ocannl_default_prec=bfloat16
 AUTO="$OUT/identity_gemm_bfloat16_auto"
 if [ "$(compare_sources "$AUTO" "$OUT/identity_gemm_bfloat16_false")" = same ]; then
   echo "auto (schedule_bench, bf16): byte-identical to the wide arm (false) -- auto resolves wide here"
@@ -215,17 +254,42 @@ fi
 # The training row's proof, before any timing.
 TRAIN_ENV=()
 if [ -n "$FIXTURE" ]; then
-  TRAIN_ENV=("BENCH_FIXTURE=$FIXTURE" BENCH_TUNE=0 BENCH_MATERIALIZE=0 BENCH_DEBUG=0 BENCH_DOMINANT_KERNEL=0)
-  TRAIN_ARGS=(--ocannl_autotune_search=false --ocannl_model_default_schedule=false
+  TRAIN_ENV=("BENCH_FIXTURE=$FIXTURE" BENCH_MATERIALIZE=0 BENCH_DEBUG=0 BENCH_DOMINANT_KERNEL=0)
+  TRAIN_ARGS=(--ocannl_model_default_schedule=false
     --ocannl_gpu_default_seed_narrow_storage=false --ocannl_autotune_log=true)
+  TRAIN_MODE=untuned
+  if [ "$TUNED" = 1 ]; then
+    TRAIN_MODE=tuned
+    # Both placement arms of each policy search cold. The replay pins search off so a missing
+    # cache entry cannot silently run a new search in a timed process.
+    for arm in false true; do
+      python3 "$HERE/cells.py" cell --backend "$BACKEND" --dir "$OUT/search_$arm" --timeout 1800 \
+        --expect bf16_arithmetic="$arm" --expect autotune_search=true -- \
+        "${TRAIN_ENV[@]}" BENCH_TUNE=1 BENCH_PRECISION=bf16 "$GPT" "${TRAIN_ARGS[@]}" \
+        --ocannl_bf16_arithmetic="$arm" --ocannl_autotune_search=true \
+        --ocannl_autotune_cache_dir="$OUT/cache-$arm" || exit $?
+    done
+  fi
   for prec in single bfloat16; do
     bench_prec=f32
     [ "$prec" = bfloat16 ] && bench_prec=bf16
     for arm in false true; do
-      identity_run train "$prec" "$arm" "" "${TRAIN_ENV[@]}" "BENCH_PRECISION=$bench_prec" "$GPT" "${TRAIN_ARGS[@]}"
+      tune=0
+      replay=()
+      if [ "$TUNED" = 1 ] && [ "$prec" = bfloat16 ]; then
+        tune=1
+        replay=(--ocannl_autotune_cache_dir="$OUT/cache-$arm")
+      fi
+      identity_run train "$prec" "$arm" "" "${TRAIN_ENV[@]}" BENCH_TUNE="$tune" \
+        "BENCH_PRECISION=$bench_prec" "$GPT" "${TRAIN_ARGS[@]}" --ocannl_autotune_search=false \
+        ${replay[@]+"${replay[@]}"}
     done
   done
   prove train bench_gpt
+  [ "$FAIL" -eq 0 ] || exit "$FAIL"
+  if [ "$TUNED" = 1 ]; then
+    python3 "$HERE/gh1051_cells.py" tuned-proof "$OUT" "$LABEL" || exit $?
+  fi
 fi
 
 for size in "${SIZES[@]}"; do
@@ -236,7 +300,7 @@ for size in "${SIZES[@]}"; do
     done
   done
   python3 "$HERE/bin_cells.py" --exe "$BENCH" --backend "$BACKEND" --out "$OUT/n$size" \
-    --rounds "$ROUNDS" "${arms[@]}" -- "$size" 10 "$size" "$size" 0 >/dev/null
+    --rounds "$ROUNDS" "${arms[@]}" -- "$size" "$REPEATS" "$size" "$size" 0 >/dev/null
   rc=$?
   [ "$rc" -eq 125 ] && { echo "n=$size: a process outlived its cleanup; stopping"; exit 125; }
   [ "$rc" -eq 0 ] || { echo "n=$size: bin_cells exited $rc (see $OUT/n$size/report.md)"; FAIL=1; }
@@ -245,19 +309,28 @@ python3 "$HERE/gh1051_cells.py" ab "$OUT" "$LABEL" || FAIL=1
 [ -n "$FIXTURE" ] || exit $FAIL
 
 # The training row: one bin_cells run (not under n*/, which gh1051_cells.py reads as sizes).
-UNT="$OUT/untuned"
+TRAIN="$OUT/$TRAIN_MODE"
 envs=()
 for e in "${TRAIN_ENV[@]}"; do envs+=(--env "$e"); done
-python3 "$HERE/bin_cells.py" --exe "$GPT" --backend "$BACKEND" --out "$UNT" ${GATE[@]+"${GATE[@]}"} \
+tune=0
+cache_false= cache_true=
+if [ "$TUNED" = 1 ]; then
+  tune=1
+  # bin_cells shell-splits each arm's arguments, including paths from the operator's TMPDIR.
+  quoted_out=$(python3 -c 'import shlex, sys; print(shlex.quote(sys.argv[1]))' "$OUT") || exit 1
+  cache_false=" --ocannl_autotune_cache_dir=${quoted_out}/cache-false"
+  cache_true=" --ocannl_autotune_cache_dir=${quoted_out}/cache-true"
+fi
+python3 "$HERE/bin_cells.py" --exe "$GPT" --backend "$BACKEND" --out "$TRAIN" ${GATE[@]+"${GATE[@]}"} \
   --reader record --rounds "$ROUNDS" --cell-timeout 1800 "${envs[@]}" \
-  --arm "false-bfloat16=BENCH_PRECISION=bf16 --ocannl_bf16_arithmetic=false" \
-  --arm "true-bfloat16=BENCH_PRECISION=bf16 --ocannl_bf16_arithmetic=true" \
-  --arm "false-single=BENCH_PRECISION=f32 --ocannl_bf16_arithmetic=false" \
-  --arm "true-single=BENCH_PRECISION=f32 --ocannl_bf16_arithmetic=true" \
-  -- "${TRAIN_ARGS[@]}" >/dev/null
+  --arm "false-bfloat16=BENCH_TUNE=$tune BENCH_PRECISION=bf16 --ocannl_bf16_arithmetic=false$cache_false" \
+  --arm "true-bfloat16=BENCH_TUNE=$tune BENCH_PRECISION=bf16 --ocannl_bf16_arithmetic=true$cache_true" \
+  --arm "false-single=BENCH_TUNE=0 BENCH_PRECISION=f32 --ocannl_bf16_arithmetic=false" \
+  --arm "true-single=BENCH_TUNE=0 BENCH_PRECISION=f32 --ocannl_bf16_arithmetic=true" \
+  -- "${TRAIN_ARGS[@]}" --ocannl_autotune_search=false >/dev/null
 rc=$?
 [ "$rc" -eq 125 ] && { echo "training: a process outlived its cleanup; stopping"; exit 125; }
-[ "$rc" -eq 0 ] || { echo "training: bin_cells exited $rc (see $UNT/report.md)"; FAIL=1; }
-python3 "$HERE/gh1051_cells.py" untuned "$UNT" "$LABEL" "$(basename "$FIXTURE" .safetensors)" bfloat16 ||
+[ "$rc" -eq 0 ] || { echo "training: bin_cells exited $rc (see $TRAIN/report.md)"; FAIL=1; }
+python3 "$HERE/gh1051_cells.py" "$TRAIN_MODE" "$TRAIN" "$LABEL" "$(basename "$FIXTURE" .safetensors)" bfloat16 ||
   FAIL=1
 exit $FAIL

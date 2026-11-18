@@ -768,22 +768,53 @@ for v in ("parallel", "smem", "regtile", "mma_pd1", "mma_pd2"):
                                           "check_note": "rounding expected"}))
 """
 
-# bench_gpt as the training row reads it: a result line at the storage precision BENCH_PRECISION
-# asked for, the wide bf16 step slower than the narrow one by STUB_ROUND's skew; with debug files on, one generated
-# source that only the bf16 arms' accumulator moves.
+# bench_gpt as the training row reads it: the wide bf16 step slower by STUB_ROUND's skew, one
+# generated source that only bf16's accumulator moves, and a policy-specific placement store
+# whose cache cannot be read cold or replayed under the other policy.
 TRAIN_BODY = """
 import json, os
+from pathlib import Path
 """ + STUB_ROUND + """
 opt = {a.split("=", 1)[0][len("--ocannl_"):]: a.split("=", 1)[1] for a in argv if "=" in a}
 narrow, prec = opt["bf16_arithmetic"] == "true", os.environ["BENCH_PRECISION"]
-assert os.environ["BENCH_DOMINANT_KERNEL"] == "0" and os.environ["BENCH_TUNE"] == "0"
+assert os.environ["BENCH_DOMINANT_KERNEL"] == "0"
+tuned = os.environ["BENCH_TUNE"] == "1"
+searched = tuned and opt["autotune_search"] == "true"
+mma = dict(tensorization="not-requested", statements=0, scalar_fallbacks=0)
+tune = {}
+if tuned:
+    assert prec == "bf16"
+    cache = Path(opt["autotune_cache_dir"])
+    entry = cache / "crown"
+    policy = opt["bf16_arithmetic"]
+    if searched:
+        cache.mkdir()
+        entry.write_text(policy)
+    else:
+        assert entry.read_text() == policy
+    winner = "B" if narrow else "A"
+    if narrow:
+        mma = dict(tensorization="tensorized", statements=2, scalar_fallbacks=0)
+    arms = [dict(arm=a, state="searched" if searched else "cache-replay",
+                 best_label=f"sketch-{a}" if searched else "F_saved[1 segs]", best_ms=1.0,
+                 terminal_failure=None, budget_cut=False, timings_contended=0)
+            for a in ("A", "B") if searched or a == winner]
+    tune = dict(tune=dict(arms=arms, shipped=winner, shipped_digest="step-" + winner,
+                          ship_substituted=False, placement_replay=not searched,
+                          searches=2 if searched else 0, replays=0 if searched else 1,
+                          no_searches=0))
+    if BAD_REPLAY and not searched and opt.get("output_debug_files_in_build_directory") != "true":
+        tune["tune"].update(searches=1, replays=0, placement_replay=False)
+else:
+    assert "autotune_cache_dir" not in opt and opt["autotune_search"] == "false"
 if opt.get("output_debug_files_in_build_directory") == "true":
     d = os.path.join("build_files", opt["build_files_prefix"])
     os.makedirs(d)
     reach = " acc=" + ("bf16" if narrow else "f32") if prec == "bf16" else ""
     open(os.path.join(d, "step.EXT"), "w").write("kernel " + prec + reach + "\\n")
 step = (5.0 if prec == "f32" else 4.0 if narrow else 4.0 * skew) * drift
-print(json.dumps({"framework": "ocannl", "storage_precision": prec,
+print(json.dumps({"framework": "ocannl", "storage_precision": prec, "searched": searched,
+                  "variant": "tuned" if tuned else "default", "shipped_mma": mma, **tune,
                   "step_ms": {"p10": step, "p50": step, "p90": step}, "losses": [1.0, 0.5]}))
 """
 
@@ -791,7 +822,7 @@ print(json.dumps({"framework": "ocannl", "storage_precision": prec,
 @POSIX_ONLY
 class Gh1051AbDriverTest(StubRunTest):
     def measure(self, backend="hip", census="Mma_intrinsics 2", same_bf16=False, fixture=False,
-                no_narrow_source=False, mode="train"):
+                no_narrow_source=False, mode="train", tuned=False, repeats=None, bad_replay=False):
         ext = {"hip": "hip", "metal": "metal"}[backend]
         root = self.dir / "root"
         write_stub(root / "_build/default/bin/schedule_bench.exe",
@@ -799,21 +830,26 @@ class Gh1051AbDriverTest(StubRunTest):
                    .replace("SAME_BF16", repr(same_bf16))
                    .replace("NO_NARROW_SOURCE", repr(no_narrow_source)))
         write_stub(root / "_build/default/benchmarks/runners/ocannl/bench_gpt.exe",
-                   TRAIN_BODY.replace("EXT", ext))
+                   TRAIN_BODY.replace("EXT", ext).replace("BAD_REPLAY", repr(bad_replay)))
         dune = self.fakebin / "dune"
         dune.write_text("#!/bin/sh\nexit 0\n")
         dune.chmod(0o755)
-        (self.dir / "tmp").mkdir()
+        tmp = self.dir / "tmp with space"
+        tmp.mkdir()
         lead = []
         if fixture:
             fx = self.dir / "fx.safetensors"
             header = json.dumps({"__metadata__": {"mode": mode}}).encode()
             fx.write_bytes(struct.pack("<Q", len(header)) + header)
             lead = ["--skip-box-check", "--training-fixture", str(fx)]
+        if tuned:
+            lead.append("--tuned-training")
+        if repeats is not None:
+            lead.extend(["--repeats", repeats])
         proc = self.run_tool([box_gate.BASH, str(HERE / "gh1051_bf16_ab.sh"), *lead, str(root),
                               backend, "stub", "4", "64"],
-                             {"TMPDIR": str(self.dir / "tmp"), "OCANNL_BF16_ARITHMETIC": "auto"})
-        m = re.search(r"raw=(\S+)", proc.stdout)
+                             {"TMPDIR": str(tmp), "OCANNL_BF16_ARITHMETIC": "auto"})
+        m = re.search(r"raw=(.+) training-fixture=", proc.stdout)
         return proc, (Path(m.group(1)) if m else None)
 
     def test_four_interleaved_arms_validated_and_tabled(self):
@@ -838,6 +874,7 @@ class Gh1051AbDriverTest(StubRunTest):
                                       r"regtile;[^\n]* wide/narrow 1\.200 \(1\.100-1\.300\)")
         records = self.records(raw / "n64")
         self.assertEqual(len(records), 16)
+        self.assertEqual({r["argv"][-6] for r in records}, {"10"})
         self.assertEqual({r["arm"] for r in records},
                          {"false-bfloat16", "true-bfloat16", "false-single", "true-single"})
         # The ambient `auto` reached no cell: each ran the arm its label names.
@@ -896,6 +933,33 @@ class Gh1051AbDriverTest(StubRunTest):
         records = self.records(raw / "untuned")
         self.assertEqual(len(records), 16)
         self.assertEqual({r["env"]["BENCH_DOMINANT_KERNEL"] for r in records}, {"0"})
+
+    def test_tuned_bf16_arms_replay_their_crowns_beside_an_untuned_f32_control(self):
+        proc, raw = self.measure(backend="metal", fixture=True, tuned=True, repeats="50")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual({r["argv"][-6] for r in self.records(raw / "n64")}, {"50"})
+        proof = list(raw.glob("identity_run_gemm_*/cell.json"))
+        self.assertEqual(len(proof), 5)
+        self.assertEqual({json.loads(p.read_text())["argv"][-8] for p in proof}, {"50"})
+        self.assertIn("stub tuned wide bf16: placement A shipped sketch-A", proc.stdout)
+        self.assertIn("stub tuned narrow bf16: placement B shipped sketch-B", proc.stdout)
+        self.assertIn("shipped MMA tensorized, 2 statements", proc.stdout)
+        self.assertIn("| stub | fx | bf16 | 10.000 | 12.600 | 1.200 (1.100-1.300) | 4 of 4 |",
+                      proc.stdout)
+        self.assertIn("| stub | fx | f32 | 12.500 | 12.500 | 1.000 (1.000-1.000) | 0 of 4 |",
+                      proc.stdout)
+        self.assertEqual({r["env"]["BENCH_TUNE"] for r in self.records(raw / "tuned")
+                          if r["arm"].endswith("-single")}, {"0"})
+
+    def test_timed_cells_that_do_not_replay_invalidate_the_tuned_row(self):
+        proc, _ = self.measure(backend="metal", fixture=True, tuned=True, bad_replay=True)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("expected one clean placement replay", proc.stdout)
+
+    def test_zero_repeats_is_refused_before_running_cells(self):
+        proc, raw = self.measure(repeats="000")
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIsNone(raw)
 
 
 if __name__ == "__main__":

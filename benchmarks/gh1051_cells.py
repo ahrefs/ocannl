@@ -1,6 +1,6 @@
 """Shared cell parsing, validation and tables for the gh-ocannl-1051 drivers.
 
-Used by gh1051_bf16_ab.sh (modes "ab" and "untuned", on HIP and, since gh-ocannl-2150, Metal),
+Used by gh1051_bf16_ab.sh (modes "ab", "untuned", "tuned", and "tuned-proof", on HIP and Metal),
 gh2195_f16_ab.sh (the same two modes at `half`) and gh1051_boundary_split.sh (mode "split"), so
 that they cannot drift apart on what a valid cell is. The ab driver's cells are bin_cells.py runs, one
 per size (`load_runs`: a cell counts only when its run found it clean -- exit 0, its resolved
@@ -104,12 +104,19 @@ whether the row reaches a tensor-unit arm at all. Identical censuses mean the ar
 choices, not that the treatment misses the row's codegen: an accumulator width can change inside a
 seeded choice. Reach is the generated sources' question, which the bf16 driver's source proof
 answers (gh2195_f16_ab.sh runs none for this row).
+
+TUNED: the same four-arm design with the bf16 cells replaying independent cold crowns and both
+f32 drift controls untuned. The closed provenance check reads the bench_gpt JSON result records
+for the cold searches, the source-proof replays and the timed cells. It requires placement
+replay of a measured crown and reports MMA from the shipped artifact. Candidate diagnostics
+and generated kernel text stay with the driver.
 """
 import glob
 import os
 import re
 import statistics
 import sys
+from pathlib import Path
 
 import bench_output
 import cells as cell_runner
@@ -394,16 +401,75 @@ def ab(out, label, prec="bfloat16"):
 STORAGE_LABEL = {"bfloat16": "bf16", "half": "f16", "single": "f32"}
 
 
-def untuned(run, label, fixture, prec):
-    """Mode "untuned": the untuned-default training row, one bin_cells `--reader record` run of
-    bench_gpt (see UNTUNED above) at treatment precision `prec`; prints its table and returns the
-    problems."""
+def training_crown(rec, *, replay):
+    """The shipped placement, problem digest, actual MMA census and reported schedule label.
+
+    Check the seed-only bench_gpt result schema. The cached form's label can differ from the
+    search label, so only replay cells are compared on the label.
+    """
+    if rec["variant"] != "tuned" or rec["storage_precision"] != "bf16":
+        raise ValueError("expected a tuned bf16 training result")
+    tune = rec["tune"]
+    arms = tune["arms"]
+    placement = tune["shipped"]
+    expected = (0, 1, 0) if replay else (2, 0, 0)
+    counts = tuple(tune[k] for k in ("searches", "replays", "no_searches"))
+    searches_expected = not replay
+    state = "cache-replay" if replay else "searched"
+    names = {placement} if replay else {"A", "B"}
+    if (counts != expected or rec["searched"] is not searches_expected
+            or tune["placement_replay"] is not replay or tune["ship_substituted"] is not False
+            or placement not in ("A", "B")
+            or len(arms) != len(names) or {a["arm"] for a in arms} != names
+            or any(a["state"] != state or a["terminal_failure"] is not None
+                   or a["budget_cut"] or a["timings_contended"] for a in arms)):
+        raise ValueError(f"expected {'one clean placement replay' if replay else 'two clean cold searches'}"
+                         f", observed counts (search, replay, skipped) {counts}")
+    winner = next(a for a in arms if a["arm"] == placement)
+    census = rec["shipped_mma"]
+    mma = (census["tensorization"], census["statements"], census["scalar_fallbacks"])
+    digest, schedule = tune["shipped_digest"], winner["best_label"]
+    if not digest or not schedule or not mma[0] or winner["best_ms"] is None:
+        raise ValueError("missing shipped crown or MMA census")
+    return placement, digest, mma, schedule
+
+
+def tuned_references(out, label=None):
+    """Validate the cold searches and their source-proof replays before timing."""
+    references = {}
+    for flag, policy in (("false", "wide"), ("true", "narrow")):
+        cold = out / f"search_{flag}" / "stdout"
+        proof = out / f"identity_run_train_bfloat16_{flag}" / "stdout"
+        try:
+            searched = training_crown(bench_output.only_result_record(cold.read_text()),
+                                      replay=False)
+            replayed = training_crown(bench_output.only_result_record(proof.read_text()),
+                                      replay=True)
+            if searched[:3] != replayed[:3]:
+                raise ValueError("source-proof replay did not ship the cold search's placement and census")
+        except (OSError, KeyError, TypeError, ValueError) as e:
+            raise ValueError(f"{policy} bf16 search/proof: {e}") from e
+        references[flag] = replayed
+        if label is not None:
+            placement, _, (tensorization, statements, fallbacks), schedule = searched
+            print(log_line(
+                f"{display_value(label)} tuned {policy} bf16: placement {placement} shipped "
+                f"{display_value(schedule)} (replay {display_value(replayed[3])}); "
+                f"shipped MMA {display_value(tensorization)}, {statements} statements, "
+                f"{fallbacks} scalar fallbacks"))
+    return references
+
+
+def training(run, label, fixture, prec, *, tuned=False):
+    """Print the paired training table for one bin_cells record run and return its problems."""
     want = {prec: STORAGE_LABEL[prec], "single": "f32"}
     problems = []
+    mode = "tuned" if tuned else "untuned"
     try:
         manifest, records = cell_runner.read_run(run)
+        reference = tuned_references(Path(run).parent) if tuned else {}
     except (OSError, ValueError) as e:
-        return [f"untuned: no complete bin_cells run ({display_value(str(e))})"]
+        return [f"{mode}: invalid training run ({display_value(str(e))})"]
     planned = sum(len(order) for order in manifest["orders"])
     if len(records) != planned:
         problems.append(f"{len(records)} of {planned} planned cells ran")
@@ -420,10 +486,17 @@ def untuned(run, label, fixture, prec):
             problems.append(f"{cell}: {display_value('; '.join(r['problems']))}")
             continue
         try:
-            rec = bench_output.result_record(cell_runner.cell_stream(run, r, "stdout"))
+            stdout = cell_runner.cell_stream(run, r, "stdout")
+            rec = (bench_output.only_result_record(stdout) if tuned
+                   else bench_output.result_record(stdout))
             got = bench_output.field(rec, "storage_precision")
             step = bench_output.field(rec, "step_ms.p50")
-        except (KeyError, ValueError, TypeError) as e:
+            if tuned and p == prec and training_crown(rec, replay=True) != reference[flag]:
+                raise ValueError("timed replay differs from the source-proof replay")
+            if tuned and p == "single" and (rec["variant"] != "default" or rec["searched"]
+                                            or rec.get("tune") is not None):
+                raise ValueError("expected the untuned f32 drift control")
+        except (OSError, KeyError, ValueError, TypeError) as e:
             problems.append(f"{cell}: unreadable result line ({display_value(str(e))})")
             continue
         if got != want[p]:
@@ -435,8 +508,9 @@ def untuned(run, label, fixture, prec):
                 str(bench_output.field(rec, "shipped_mma.tensorization")))
         except (KeyError, ValueError, TypeError):
             shipped.setdefault((flag, p), set()).add("not reported")
-        _, lines = bench_output.seeded_default(cell_runner.cell_stream(run, r, "stderr"))
-        census.setdefault((flag, p), set()).add(tuple(lines))
+        if not tuned:
+            _, lines = bench_output.seeded_default(cell_runner.cell_stream(run, r, "stderr"))
+            census.setdefault((flag, p), set()).add(tuple(lines))
     for key, seen in sorted(census.items()):
         if len(seen) != 1:
             problems.append(f"{'-'.join(key)}: the seeding census differs across rounds "
@@ -446,7 +520,7 @@ def untuned(run, label, fixture, prec):
             print(log_line(f"untuned {flag}-{prec} census: "
                            f"{display_value(' | '.join(lines)) if lines else 'none logged'}"))
     for key, seen in sorted(shipped.items()):
-        print(log_line(f"untuned {'-'.join(key)} shipped tensorization: "
+        print(log_line(f"{mode} {'-'.join(key)} shipped tensorization: "
                        f"{display_value(', '.join(sorted(seen)))}"))
     wide, narrow = census.get(("false", prec)), census.get(("true", prec))
     if wide and narrow and len(wide) == len(narrow) == 1:
@@ -472,10 +546,11 @@ def untuned(run, label, fixture, prec):
                      paired(w, n), f"{slower} of {len(common)}"))
     print()
     print("\n".join(table_lines(
-        ["memory", "untuned default (bench_gpt)", "prec", "narrow (true) step p50 ms",
+        ["memory", "tuned bf16 / untuned f32 (bench_gpt)" if tuned else "untuned default (bench_gpt)",
+         "prec", "narrow (true) step p50 ms",
          "wide (false) step p50 ms", "paired wide/narrow (range)", "rounds wide slower"], rows)))
     print(f"(paired sign tests and parity losses: {display_value(run)}/report.md)")
-    return [f"untuned: {p}" for p in problems]
+    return [f"{mode}: {p}" for p in problems]
 
 
 def split(out, label):
@@ -516,11 +591,18 @@ def split(out, label):
 if __name__ == "__main__":
     # ab OUT LABEL [PREC]: PREC is the treatment precision, bfloat16 (the default) or half.
     mode, out, label = sys.argv[1], sys.argv[2], sys.argv[3]
-    if mode == "untuned":
-        # untuned RUN LABEL FIXTURE PREC: one bin_cells run, no checksums to compare.
-        if len(sys.argv) != 6 or sys.argv[5] not in NARROW_PRECS:
-            sys.exit(f"usage: gh1051_cells.py untuned RUN LABEL FIXTURE {'|'.join(NARROW_PRECS)}")
-        problems = untuned(out, label, sys.argv[4], sys.argv[5])
+    if mode == "tuned-proof":
+        try:
+            tuned_references(Path(out), label)
+        except ValueError as e:
+            sys.exit(log_line(f"INVALID: {display_value(str(e))}"))
+        sys.exit(0)
+    if mode in ("untuned", "tuned"):
+        # One bin_cells run of bench_gpt's step metric.
+        precisions = ("bfloat16",) if mode == "tuned" else NARROW_PRECS
+        if len(sys.argv) != 6 or sys.argv[5] not in precisions:
+            sys.exit(f"usage: gh1051_cells.py {mode} RUN LABEL FIXTURE {'|'.join(precisions)}")
+        problems = training(out, label, sys.argv[4], sys.argv[5], tuned=mode == "tuned")
         for p in problems:
             print(log_line(f"INVALID: {p}"))
         sys.exit(1 if problems else 0)
