@@ -32,6 +32,7 @@ open Base
 open Ocannl
 open Operation.DSL_modules
 open Verdict.Claims
+open Exact_sums
 
 let n = 4
 let a_vals = Array.init n ~f:(fun i -> Float.of_int (i + 1))
@@ -90,10 +91,6 @@ let strided ~stride ~offset a =
 
 let exn_message = function Row.Shape_error (msg, _) -> msg | e -> Stdlib.Printexc.to_string e
 
-let matches label ~dims ~want (got_dims, got) =
-  p (label ^ ": extent") (Array.equal Int.equal got_dims dims);
-  pf_all2 "%s: values" label got want ~f:Float.equal
-
 let read ctx t =
   (Ir.Tnode.dims_without_padding t.Tensor.value, Context.get_values ctx t.Tensor.value)
 
@@ -109,56 +106,11 @@ let executes label ~dims ~want build =
           pf "%s: executes" label false
       | got -> matches label ~dims ~want got)
 
-(* [vals] as an operand reader with one zero cell appended: the index [Array.length vals] stands for
-   a term no tap reaches. *)
-let with_zero vals =
-  let len = Array.length vals in
-  Ll_test.operand ~b:[] ~o:[ len + 1 ] ~i:[] (fun ix -> if ix.(0) < len then vals.(ix.(0)) else 0.)
-
 (* The pair [r = (i, k)] of a transposed convolution [res[stride * i + dilation * k] += a[i] * w[k]]
-   reaches the cell at [pos]: the operand index [i] where it does, else [len], the appended zero. *)
+   reaches the cell at [pos]: the operand index [i] where it does, else [len], the zero cell
+   [Exact_sums.with_zero] appends. *)
 let tap ?(stride = 1) ?(dilation = 1) ~len pos r =
   if (stride * r.(0)) + (dilation * r.(1)) = pos then r.(0) else len
-
-(* The compile and run [Train.forward_once] and [Train.update_once] perform for a program with no
-   parameters, returning the run's context: a premise's executed reference is read from it. *)
-let run comp =
-  let ctx, routine = Train.to_routine (Context.auto ()) Ir.Indexing.Empty comp in
-  Context.run ctx routine
-
-let sig_bits = Ir.Ops.significand_bits Ir.Ops.single
-
-let check_sums label products got =
-  p_all2
-    (label ^ ": the premise's host sums are the executed values")
-    got
-    (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id)))
-    ~f:Float.equal
-
-(* A form that sums, with its bitwise premise derived from its operands: each result cell [o] sums
-   [x.(x_at o r) * w.(w_at o r)] over every index [r] of [over], an index past an operand's data
-   reading its appended zero (a term no tap reaches the cell with). The products are small positive
-   integers, so every partial sum of every cell is exact in single precision, in any order, which
-   the [p_all] below checks rather than this sentence asserts; and the executed values are these
-   host sums as well as the oracle [want]. *)
-let exact_sum label ~dims ~want ~over ~x ~x_at ~w ~w_at build =
-  case label (fun () ->
-      Tensor.unsafe_reinitialize ();
-      let x_r = with_zero x and w_r = with_zero w in
-      let products =
-        Ll_test.reduction_cells ~out:dims ~over (fun o r ->
-            x_r [| x_at o r |] *. w_r [| w_at o r |])
-      in
-      p_all
-        (label ^ ": every partial sum of every cell is exact in f32")
-        products
-        ~f:(Ll_test.exact_partials ~sig_bits);
-      let t = build () in
-      Train.set_materialized t.Tensor.value;
-      let ctx = run (Train.forward t) in
-      let got = Context.get_values ctx t.Tensor.value in
-      matches label ~dims ~want (Ir.Tnode.dims_without_padding t.Tensor.value, got);
-      check_sums label products got)
 
 let run_forms () =
   executes "unary stride-only 2*i"
@@ -444,7 +396,7 @@ let run_forms () =
       matches label ~dims
         ~want:(transposed ~stride:2 a_vals kernel_vals)
         (Ir.Tnode.dims_without_padding sm.Tensor.value, got);
-      check_sums label products got)
+      check_sums (premise_label label) products got)
 
 (* {2 Gradients}
 
@@ -487,10 +439,14 @@ let run_gradients () =
       p_all "d/dw of the strided dilated window: every partial sum of every cell is exact in f32"
         dw_products
         ~f:(Ll_test.exact_partials ~sig_bits);
-      let ctx = run (Train.grad_update loss) in
-      check_sums "d/da of the strided dilated window" da_products
+      let ctx = Train.update_once (Context.auto ()) loss in
+      check_sums
+        (premise_label "d/da of the strided dilated window")
+        da_products
         (Context.get_values ctx (grad_of a));
-      check_sums "d/dw of the strided dilated window" dw_products
+      check_sums
+        (premise_label "d/dw of the strided dilated window")
+        dw_products
         (Context.get_values ctx (grad_of w));
       let sum l f = List.sum (module Float) l ~f in
       pf_all2 "d/da of the strided dilated window"

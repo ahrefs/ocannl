@@ -3160,7 +3160,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `_build/default/<test dir>/build_files/<exe>/` (`ll_test_dump` pins it). `optimize_scoped` optimizes
   `raw`, so those two files are `raw`'s; the backend's source for the routine shows the scoped program.
 - `premise_ratchet` (gh-ocannl-2194) holds per-file exact counts of `Ll_test.exact_partials`
-  applications outside `Premise_scan`'s closed checked-products/reference protocol. Local reader/comparison wrappers,
+  applications outside `Premise_scan`'s closed checked-products/reference protocol. Local and
+  support-module (`support_sources`, gh-ocannl-2334) reader/comparison wrappers,
   reduction cells and executed-reference wrappers cover the coalescing and masked fragment sites.
   Unknown forms stay debt; a row is not a diagnosis of a wrong premise. Convert when next touched and
   lower its row in the same commit; stale rows and new uncovered sites both fail.
@@ -3295,19 +3296,21 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   sentence's subject. Host arithmetic premises in `hardware_warp_shuffle`, `tile_mma_narrow` and
   `schedule_ldmatrix_matmul` run outside backend gates, so cc checks them even when it cannot
   execute the corresponding GPU rendering.
-- Deriving a premise for a `%op` test in `premise_ratchet`'s protocol (gh-ocannl-2272): the
-  reference must be `Context.get_values` of a `Context.run` result in the same file, so a test
-  reading values after `Train.forward_once` or `Train.update_once` compiles through
-  `Train.to_routine` and runs with `Context.run` instead, in a local wrapper if it likes. That is
-  the same budgeted compile for a program with no parameters, with one difference: `to_routine`
-  also materializes the outputs `Asgns.guess_materialized` names, where `run_once` materializes
-  only its tensor -- so a test reading a value virtualization could touch materializes it
-  explicitly first. A padded window's or a transposed convolution's
-  cell is a `reduction_cells` cell over every tap or pair, its operand read through an
-  `Ll_test.operand` with one zero cell appended, the coordinate function sending a margin tap or a
-  pair that misses the cell there; a file of many forms keeps that in one local helper that builds
-  the products, runs the form and compares, since a wrapper may not return products. Spell the
-  comparator `Float.equal`: an alias such as `let exact = Float.equal` grants nothing.
+- Deriving a premise for a `%op` test in `premise_ratchet`'s protocol (gh-ocannl-2272,
+  gh-ocannl-2334): the executed reference is `Context.get_values` of a `Context.run` result, or of
+  a `Train.forward_once`/`update_once` result read at that call's own tensor's `.value` or at a
+  node a `Train.set_materialized node;` statement before the call named alike -- a gradient, say.
+  Any other read of a `_once` context grants nothing: `run_once` materializes only its tensor, where
+  `to_routine` also materializes the outputs `Asgns.guess_materialized` names, so another node may
+  be Virtual and a read of it recomputed by a throwaway routine (gh-ocannl-777) rather than read from
+  the run. A padded window's or a transposed convolution's cell is a `reduction_cells` cell over
+  every tap or pair, its operand read through `Exact_sums.with_zero` (`test/support/exact_sums.ml`,
+  one zero cell appended), the coordinate function sending a margin tap or a pair that misses the
+  cell there; `Exact_sums.check_sums` compares, and `Exact_sums.exact_sum` builds the products,
+  runs a form and compares, since a wrapper may not return products. `Premise_scan` reads that
+  source across files (its closed `support_sources`): a shared helper belongs there, not in a copy
+  per test. Spell the comparator `Float.equal`: an alias such as `let exact = Float.equal` grants
+  nothing.
 - Host-side exactness premises share an index reader with initialization: wrap the value function
   in `Ll_test.operand ~b ~o ~i`, which checks rank and bounds against `b @ o @ i` before
   evaluating it (gh-ocannl-2176). This catches out-of-bounds permutations, not in-bounds ones:

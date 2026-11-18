@@ -42,25 +42,9 @@ let conv_input_grad w =
 
 let grad_of t = (Option.value_exn ~here:[%here] t.Tensor.diff).Tensor.grad
 
-(* [vals] as an operand reader with one zero cell appended: the index [Array.length vals] stands for
-   a tap that reads the margin, or a term no tap reaches. *)
-let with_zero vals =
-  let len = Array.length vals in
-  Ll_test.operand ~b:[] ~o:[ len + 1 ] ~i:[] (fun ix -> if ix.(0) < len then vals.(ix.(0)) else 0.)
-
-(* [i] where it is a cell of an [n]-cell operand, else the appended zero cell. *)
+(* [i] where it is a cell of an [n]-cell operand, else the zero cell [Exact_sums.with_zero]
+   appends. *)
 let inside i = if i >= 0 && i < n then i else n
-
-(* The compile and run [Train.forward_once] and [Train.update_once] perform for a program with no
-   parameters, returning the run's context: the premise's executed reference is read from it. *)
-let run ctx comp =
-  let ctx, routine = Train.to_routine ctx Ir.Indexing.Empty comp in
-  Context.run ctx routine
-
-let check_sums label products got =
-  p_all2 label got
-    (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id)))
-    ~f:Float.equal
 
 let () =
   (* The bitwise premise, from the operands' own data: the convolution's cells sum [x.(o + k - left)
@@ -68,7 +52,9 @@ let () =
      [(o, k)] reading the cell. Every product is a small positive integer, so every partial sum of
      every cell is exact in single precision, in any order; each case below compares these host sums
      with the values it executed. *)
-  let x_r = with_zero x_vals and w_r = with_zero w_vals and k_r = with_zero kernel_vals in
+  let x_r = Exact_sums.with_zero x_vals
+  and w_r = Exact_sums.with_zero w_vals
+  and k_r = Exact_sums.with_zero kernel_vals in
   let forward =
     Ll_test.reduction_cells ~out:[| 1; n |] ~over:[| 3 |] (fun o r ->
         x_r [| inside (o.(1) + r.(0) - left) |] *. k_r [| r.(0) |])
@@ -77,7 +63,7 @@ let () =
     Ll_test.reduction_cells ~out:[| 1; n |] ~over:[| n; 3 |] (fun o r ->
         w_r [| (if r.(0) + r.(1) - left = o.(1) then r.(0) else n) |] *. k_r [| r.(1) |])
   in
-  let sig_bits = Ir.Ops.significand_bits Ir.Ops.single in
+  let sig_bits = Exact_sums.sig_bits in
   p_all "every partial sum of every convolution cell is exact in f32" forward
     ~f:(Ll_test.exact_partials ~sig_bits);
   p_all "every partial sum of every input-gradient cell is exact in f32" gradient
@@ -89,8 +75,8 @@ let () =
       let%op y = x +* "s, o=+k; k => s, o" kernel in
       Train.set_materialized x.Tensor.value;
       Train.set_materialized y.Tensor.value;
-      let ctx = run (Context.auto ()) (Train.forward y) in
-      check_sums "the convolution's host sums are its executed values" forward
+      let ctx = Train.forward_once (Context.auto ()) y in
+      Exact_sums.check_sums "the convolution's host sums are its executed values" forward
         (Context.get_values ctx y.Tensor.value);
       p "the leaf took margins from its consumer"
         (match Ir.Tnode.get_padding x.Tensor.value with
@@ -112,8 +98,8 @@ let () =
       let%op loss = (y *. w) ++ "...|... => |->0" in
       let gx = grad_of x in
       Train.set_materialized gx;
-      let ctx = run (Context.auto ()) (Train.grad_update loss) in
-      check_sums "the input gradient's host sums are its executed values" gradient
+      let ctx = Train.update_once (Context.auto ()) loss in
+      Exact_sums.check_sums "the input gradient's host sums are its executed values" gradient
         (Context.get_values ctx gx);
       pf_all2 "the leaf's gradient is the transposed convolution of w" (Context.get_values ctx gx)
         (conv_input_grad w_vals) ~f:Float.equal;

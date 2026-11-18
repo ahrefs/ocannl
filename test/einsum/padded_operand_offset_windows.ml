@@ -29,6 +29,7 @@ open Base
 open Ocannl
 open Operation.DSL_modules
 open Verdict.Claims
+open Exact_sums
 
 let pg = Tensor.Prohibit_grad
 
@@ -72,10 +73,6 @@ let exn_message = function Row.Shape_error (msg, _) -> msg | e -> Stdlib.Printex
 let read ctx t =
   (Ir.Tnode.dims_without_padding t.Tensor.value, Context.get_values ctx t.Tensor.value)
 
-let matches label ~dims ~want (got_dims, got) =
-  p (label ^ ": extent") (Array.equal Int.equal got_dims dims);
-  pf_all2 "%s: values" label got want ~f:Float.equal
-
 (* The operand is computed, so its layout is not committed at creation and the padded window can
    grant it margins (padding_lifecycle). *)
 let computed ?(spec = "s, c => s, c") dims values =
@@ -98,14 +95,8 @@ let executes label ~dims ~want build =
    A max-family window adds one tap to one cell and takes a maximum, so its cells hold no partial
    sum; every form that sums derives its premise from its operands. *)
 
-(* [vals] as an operand reader with one zero cell appended: the index [Array.length vals] stands for
-   a tap that reads a margin, or a term no tap reaches. *)
-let with_zero vals =
-  let len = Array.length vals in
-  Ll_test.operand ~b:[] ~o:[ len + 1 ] ~i:[] (fun ix -> if ix.(0) < len then vals.(ix.(0)) else 0.)
-
-(* The operand position result [o]'s tap [k] reads, or [n] -- the appended zero -- for a tap that
-   reads the padding. *)
+(* The operand position result [o]'s tap [k] reads, or [n] -- the zero cell [Exact_sums.with_zero]
+   appends -- for a tap that reads the padding. *)
 let tap_index win ~n ~kk o k =
   match List.nth_exn (taps win ~n ~kk o) k with c, _, true -> c | _ -> n
 
@@ -115,46 +106,6 @@ let argmax win ~n x w o =
   |> List.max_elt ~compare:(fun (c1, k1, _) (c2, k2, _) ->
       Float.compare (x.(c1) +. w.(k1)) (x.(c2) +. w.(k2)))
   |> Option.map ~f:(fun (c, k, _) -> (c, k))
-
-(* The compile and run [Train.forward_once] and [Train.update_once] perform for a program with no
-   parameters, returning the run's context: a premise's executed reference is read from it. *)
-let run comp =
-  let ctx, routine = Train.to_routine (Context.auto ()) Ir.Indexing.Empty comp in
-  Context.run ctx routine
-
-let sig_bits = Ir.Ops.significand_bits Ir.Ops.single
-
-let check_sums label products got =
-  p_all2
-    (label ^ ": the premise's host sums are the executed values")
-    got
-    (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id)))
-    ~f:Float.equal
-
-(* A form that sums, with its bitwise premise derived from its operands: each result cell [o] sums
-   [x.(x_at o r) * w.(w_at o r)] over every index [r] of [over], an index past an operand's data
-   reading its appended zero (a padding tap). The products are small positive integers, so every
-   partial sum of every cell is exact in single precision, in any order, which the [p_all] below
-   checks rather than this sentence asserts; and the executed values are these host sums as well as
-   the oracle [want]. *)
-let exact_sum label ~dims ~want ~over ~x ~x_at ~w ~w_at build =
-  case label (fun () ->
-      Tensor.unsafe_reinitialize ();
-      let x_r = with_zero x and w_r = with_zero w in
-      let products =
-        Ll_test.reduction_cells ~out:dims ~over (fun o r ->
-            x_r [| x_at o r |] *. w_r [| w_at o r |])
-      in
-      p_all
-        (label ^ ": every partial sum of every cell is exact in f32")
-        products
-        ~f:(Ll_test.exact_partials ~sig_bits);
-      let t = build () in
-      Train.set_materialized t.Tensor.value;
-      let ctx = run (Train.forward t) in
-      let got = Context.get_values ctx t.Tensor.value in
-      matches label ~dims ~want (Ir.Tnode.dims_without_padding t.Tensor.value, got);
-      check_sums label products got)
 
 (* A 1-D padded window over [x] by the kernel [w]: [exact_sum]'s cells over the kernel's taps. *)
 let window_sum label win ~x ~w build =
@@ -308,7 +259,7 @@ let run_forms () =
       matches label ~dims:[| 1; 4 |]
         ~want:(padded_window win (ramp 8) k3)
         (Ir.Tnode.dims_without_padding sm.Tensor.value, got);
-      check_sums label products got)
+      check_sums (premise_label label) products got)
 
 (* {2 Gradients}
 
@@ -401,12 +352,15 @@ let gradient ?(reduce = `Sum) ?want label win ~n ~w spec =
         (label ^ ": every partial sum of every d/dw cell is exact in f32")
         dw_products
         ~f:(Ll_test.exact_partials ~sig_bits);
-      let ctx = run (Train.grad_update loss) in
+      let ctx = Train.update_once (Context.auto ()) loss in
       let dx, dw =
         match want with Some want -> want | None -> oracle_grads ~reduce win (ramp n) w
       in
-      check_sums (label ^ ": d/dx") dx_products (Context.get_values ctx (grad_of x));
-      check_sums (label ^ ": d/dw") dw_products (Context.get_values ctx (grad_of wt));
+      check_sums (premise_label (label ^ ": d/dx")) dx_products (Context.get_values ctx (grad_of x));
+      check_sums
+        (premise_label (label ^ ": d/dw"))
+        dw_products
+        (Context.get_values ctx (grad_of wt));
       pf_all2 "%s: d/dx" label (Context.get_values ctx (grad_of x)) dx ~f:Float.equal;
       pf_all2 "%s: d/dw" label (Context.get_values ctx (grad_of wt)) dw ~f:Float.equal)
 
@@ -606,9 +560,9 @@ let unary_gradient ?(reduce = `Sum) label win ~n ~kk build =
         (label ^ ": every partial sum of every d/dx cell is exact in f32")
         dx_products
         ~f:(Ll_test.exact_partials ~sig_bits);
-      let ctx = run (Train.grad_update loss) in
+      let ctx = Train.update_once (Context.auto ()) loss in
       let dx, _ = oracle_grads ~reduce win (ramp n) w in
-      check_sums (label ^ ": d/dx") dx_products (Context.get_values ctx (grad_of x));
+      check_sums (premise_label (label ^ ": d/dx")) dx_products (Context.get_values ctx (grad_of x));
       pf_all2 "%s: d/dx" label (Context.get_values ctx (grad_of x)) dx ~f:Float.equal)
 
 let run_unary_gradients () =

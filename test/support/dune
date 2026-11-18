@@ -235,6 +235,21 @@
   arrayjit.ir
   arrayjit.autotune))
 
+; The bitwise-premise helpers of the padded-window tests, once (gh-ocannl-2334): [Premise_scan]
+; reads this source across files, its closed [support_sources].
+
+(library
+ (name exact_sums)
+ (package neural_nets_lib)
+ (modules exact_sums)
+ (libraries
+  base
+  ocannl
+  ll_test
+  arrayjit.verdict
+  arrayjit.context
+  arrayjit.ir))
+
 ; Reading scope definitions back out of a kernel's text: the [Access_fold] [Emitted] walk's text
 ; order and the dependency order of what renders (gh-ocannl-2213, gh-ocannl-2250).
 
