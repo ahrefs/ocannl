@@ -532,7 +532,7 @@ unit_suite() { # unit-backend
   case $1 in
     cc-outlined | cc-gc-backprop) printf '@runtest' ;;
     cc-oracle-widen) printf '@test/operations/slow-virtual_inliner_oracle-widen' ;;
-    metal | cuda | hip) printf '@runtest @train @bin/twin-tile-dry' ;;
+    metal | cuda | hip) printf '@runtest @train%s' "$twin_tile_target" ;;
     *) printf '@runtest @train' ;;
   esac
 }
@@ -932,6 +932,15 @@ git -C "$MAIN" -c maintenance.auto=false fetch -q origin master || die "cannot f
 full_sha=$(git -C "$MAIN" rev-parse "$REF" 2>/dev/null) ||
   die "cannot resolve $REF in $MAIN"
 run_sha=$(git -C "$MAIN" rev-parse --short "$full_sha")
+
+# Availability comes from one literal, formatted alias field in the pinned bin/dune.
+# Historical refs without that field can still build their full GPU suite.
+twin_tile_target=
+if git -C "$MAIN" grep -Eq -e '^ \(alias twin-tile-dry\)$' "$full_sha" -- bin/dune; then
+  twin_tile_target=' @bin/twin-tile-dry'
+else
+  [ "$?" -eq 1 ] || die "cannot read bin/dune at $run_sha"
+fi
 
 # Read the environment matrix from the exact commit every unit is about to run.
 # The Python CLI is the checked-in DIGESTS parser, so the sweep does not grow a

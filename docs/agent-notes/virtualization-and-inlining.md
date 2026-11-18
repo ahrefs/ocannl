@@ -570,8 +570,9 @@ files.
   `@test/operations/slow-virtual_inliner_oracle-plant-transpose` runs the compiled control on cc
   through `@slow` (gh-ocannl-2307). One descriptor per depth reads a partial write and the
   zeroed suffix under a guard. Its clean virtual and materialized arms must match replay,
-  and its planted virtual arm must return a finite mismatch. The control compiles six
-  routines. Tier B's normal sample is 48 anchors.
+  and its planted arm must match the replay with identity indexing at each initializer
+  link. The two replays differ only at the witness's off-diagonal cell. The control compiles
+  six routines. Tier B's normal sample is 48 anchors.
   The original `src=reduce` negative control is the strict probe of before gh-ocannl-2145,
   which ran every discarded arm's scopes (codegen hoisted them then), over the inliner without `guard_hoisted`: the table
   reports 2,869 strict address faults, all in `src=reduce`, across axes/axes, axes/flat,

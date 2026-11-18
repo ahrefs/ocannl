@@ -340,6 +340,10 @@ git -C "$main" add fixture benchmarks/fixtures/DIGESTS.txt test/dune \
   test/pre_diff_expected.ml test/inline_expect.ml
 git -C "$main" commit -qm fixture
 fixture_sha=$(git -C "$main" rev-parse HEAD)
+mkdir -p "$main/bin"
+printf '(rule\n (alias twin-tile-dry)\n (action (echo "fixture")))\n' >"$main/bin/dune"
+git -C "$main" add bin/dune
+git -C "$main" commit -qm 'declare the twin-tile dry run'
 git -C "$main" remote add origin "$origin"
 git -C "$main" push -q -u origin master
 
@@ -1820,6 +1824,13 @@ absent -Fx "metal options: $truncated_metal_options" "${metal_log%.log}.fingerpr
 altered_metal_options=${rendered_metal_options/=/=altered-}
 [ "$altered_metal_options" != "$rendered_metal_options" ]
 absent -Fx "metal options: $altered_metal_options" "${metal_log%.log}.fingerprint"
+
+# A historical GPU suite has only the targets declared at its pinned revision.
+historical_metal_env=$tmp/opam.env-calls-historical-metal
+SWEEP_TEST_ENV_CALLS=$historical_metal_env run_sweep_backend metal --ref "$fixture_sha" \
+  >"$tmp/historical_metal.out" 2>&1
+grep -q 'm4-max/metal: incremental-pass' "$tmp/historical_metal.out"
+[ "$(cat "$historical_metal_env")" = "$(printf 'metal|||\texec -- dune build @runtest @train')" ]
 
 # And a GREEN unit must NOT pay for it -- the same backend, so the only thing
 # that differs is the outcome. The log path is derived from the sweep's timestamp

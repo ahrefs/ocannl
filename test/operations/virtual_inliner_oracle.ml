@@ -41,7 +41,8 @@
    unequal coordinates. [--plant-transpose] replaces [(j,i)] by [(i,j)] in virtual initializer
    links, leaving the materialized twins and replay correct, so both tiers must detect it.
    [--check-planted-transpose] checks one guarded descriptor per chain depth on the compiled path.
-   The clean and materialized arms must agree with replay, and the planted arm must disagree.
+   The clean and materialized arms must agree with replay. The planted arm must match the
+   transpose-free replay, which differs at the off-diagonal witness cell.
 
    A program's descriptor is its name. [--only <substring>] prints the raw and optimized code of the
    programs whose descriptor contains it and checks nothing, for a finding printed on stderr;
@@ -300,18 +301,21 @@ let src_input_cells = Array.init 32 ~f:(fun i -> Float.of_int (1 + (3 * i)))
 (* Descriptor arithmetic, independent of IR construction and optimization. Each link transposes its
    predecessor and adds a distinct, nonzero tag. On [4; 4], depth 1 has strides (18,21), depth 2
    (34,19): every cell is distinct, and all arithmetic stays exact in f32. *)
-let rec initializer_cell depth i j =
+let rec initializer_cell ~transpose_links depth i j =
   if depth = 0 then src_init_cells.((4 * i) + j)
-  else initializer_cell (depth - 1) j i +. Float.of_int ((211 * depth) + (13 * i) + j)
+  else
+    let prev_i, prev_j = if transpose_links then (j, i) else (i, j) in
+    initializer_cell ~transpose_links (depth - 1) prev_i prev_j
+    +. Float.of_int ((211 * depth) + (13 * i) + j)
 
-let source_cells prog =
+let source_cells ~transpose_links prog =
   if not (Poly.equal prog.source Input) then
     Array.init 16 ~f:(fun i ->
         let initial =
           match prog.source with
           | Input | Reduce_zero -> 0.
           | Reduce_init -> src_init_cells.(i)
-          | Reduce_chain depth -> initializer_cell depth (i / 4) (i % 4)
+          | Reduce_chain depth -> initializer_cell ~transpose_links depth (i / 4) (i % 4)
         in
         let sum = ref initial in
         for k = 0 to 1 do
@@ -346,8 +350,8 @@ let write_value ~src_values ~comp_i env ~k ~used c =
   +. (1000. *. Float.of_int k)
 
 (* The reference: the program's meaning, by its descriptor. *)
-let replay prog =
-  let cells = entries prog and src_values = source_cells prog in
+let replay ?(transpose_links = true) prog =
+  let cells = entries prog and src_values = source_cells ~transpose_links prog in
   let outs = Array.map prog.read_accesses ~f:(fun a -> blank (out_len a)) in
   let apply_write comp_i c =
     let used = slots_of c.write.pos in
@@ -1079,7 +1083,7 @@ let compile_anchor ?plant_transpose ~name ~materialized prog =
     else match prog.standing with Declared -> virtualize | _ -> ignore
   in
   let b = build ~materialized_src:materialized ?plant_transpose prog ~declare in
-  match optimize ~static_indices:b.static_indices ~name:"vio" (List.hd_exn b.routines) with
+  match optimize ~static_indices:b.static_indices ~name (List.hd_exn b.routines) with
   | exception Utils.User_error _ when not materialized -> None
   | o ->
       let seed = if materialized || read_before_write o b.x then [ (b.x, entries prog) ] else [] in
@@ -1137,6 +1141,7 @@ let check_compiled_transpose () =
         (show_program prog);
       let want = replay prog in
       let matches = anchor_matches ~want in
+      let planted_want = replay ~transpose_links:false prog in
       let name arm = Printf.sprintf "vio_transpose_%s%d" arm i in
       let guarded_arm ~arm ~plant_transpose ~check =
         compile_anchor ~plant_transpose ~name:(name arm) ~materialized:false prog
@@ -1148,9 +1153,16 @@ let check_compiled_transpose () =
             |> Option.exists ~f:(fun (_, got) -> matches got));
           p "the clean guarded arm matches replay"
             (guarded_arm ~arm:"clean" ~plant_transpose:false ~check:matches);
-          p "the planted guarded arm returns finite values that differ from replay"
+          let clean = want.(0) and planted = planted_want.(0) in
+          p "the replay changes only the off-diagonal witness cell when the transpose is removed"
+            (Float.equal clean.(0) planted.(0)
+            && (not (Float.equal clean.(1) planted.(1)))
+            && Float.equal clean.(2) planted.(2));
+          p
+            "the planted guarded arm matches the transpose-free replay and differs from the clean \
+             one"
             (guarded_arm ~arm:"planted" ~plant_transpose ~check:(fun got ->
-                 Array.for_all got ~f:(Array.for_all ~f:Float.is_finite) && not (matches got)))))
+                 anchor_matches ~want:planted_want got && not (matches got)))))
 
 let tier_b () =
   let candidates = sorted_values anchors in
