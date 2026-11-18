@@ -72,9 +72,7 @@ let family_of_fields ~backend fields =
   in
   match backend with
   | "cuda" ->
-      let number key = Option.bind (atom key) ~f:Int.of_string_opt in
-      Option.both (number "compute_capability_major") (number "compute_capability_minor")
-      |> Option.map ~f:(fun (major, minor) -> Printf.sprintf "sm_%d%d" major minor)
+      Option.map (Ll_test.cuda_compute_capability_of_fields fields) ~f:(Printf.sprintf "sm_%d")
   | "hip" ->
       Option.map (atom "gcn_arch_name") ~f:(fun arch -> List.hd_exn (String.split arch ~on:':'))
   | "metal" -> atom "device_name"

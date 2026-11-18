@@ -233,34 +233,8 @@ let () =
         Verdict.leg ~aggregation:`Environment ~when_:accepts_70
           ~on:"NVRTC without compute_70 support" ()
       in
-      (* The attached devices' minimum compute capability, from the backend's static properties. *)
-      let device_cc =
-        lazy
-          (match
-             Ir.Backend_intf.parse_static_properties (Context.static_properties (Context.auto ()))
-           with
-          | Some { devices; _ } ->
-              List.filter_map devices ~f:(fun fields ->
-                  let number key =
-                    match List.Assoc.find fields key ~equal:String.equal with
-                    | Some (Sexp.Atom v) -> Int.of_string_opt v
-                    | _ -> None
-                  in
-                  Option.map2 (number "compute_capability_major")
-                    (number "compute_capability_minor") ~f:(fun major minor -> (major * 10) + minor))
-              |> List.min_elt ~compare:Int.compare
-          | None -> None)
-      in
-      let arm_leg arm =
-        Verdict.sub_leg ~aggregation:`Environment leg
-          ~when_:
-            (lazy
-              (Option.value_map (Lazy.force device_cc) ~default:false ~f:(fun cc ->
-                   cc >= M.arm_floor arm)))
-          ~on:(Printf.sprintf "a CUDA device below %s's floor" (M.arm_marker arm))
-      in
-      let k8_leg = arm_leg k8_arm
-      and k16_leg = arm_leg (M.Inline_ptx (M.M16n8k16 M.M16n8k16_f16)) in
+      let k8_leg = Ll_test.cuda_arm_leg leg k8_arm
+      and k16_leg = Ll_test.cuda_arm_leg leg (M.Inline_ptx (M.M16n8k16 M.M16n8k16_f16)) in
       let jit_70_leg =
         Verdict.sub_leg ~aggregation:`Environment k8_leg
           ~when_:(lazy (loads (retarget (compile k8_floor plain_control) ~sm:70)))

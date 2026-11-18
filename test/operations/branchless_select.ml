@@ -215,20 +215,7 @@ let compiled_branch_free ~patterns name =
 let cuda_arch =
   lazy
     (if not (String.equal backend_name "cuda") then None
-     else
-       match
-         Ir.Backend_intf.parse_static_properties (Context.static_properties (Context.auto ()))
-       with
-       | Some { devices = first :: _; _ } -> (
-           let field key =
-             Option.bind (List.Assoc.find first key ~equal:String.equal) ~f:(function
-               | Sexp.Atom a -> Int.of_string_opt a
-               | Sexp.List _ -> None)
-           in
-           match (field "compute_capability_major", field "compute_capability_minor") with
-           | Some major, Some minor -> Some (Printf.sprintf "sm_%d%d" major minor)
-           | _ -> None)
-       | _ -> None)
+     else Option.map (List.hd (Ll_test.cuda_compute_capabilities ())) ~f:(Printf.sprintf "sm_%d"))
 
 (* The GPU counterpart of [compiled_branch_free] (gh-ocannl-1695): the code object the run itself
    compiled for [name] -- [<name>.ptx] on CUDA, [<name>.hsaco] on HIP, or each [<name>.part<k>] a
