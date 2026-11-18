@@ -580,7 +580,9 @@ if harness_leg 'what is OWED is read from the head'"'"'s record, and every other
     "$(run_line "$APART_HEAD" "build '@runtest'")|which is no full or train- run|a quoted token" \
     "owed-run: v3 run head=$APART_HEAD exit=0|holds a line no v1 or v2 record reads|an unknown schema" \
     "owed-run: v1 run head=$APART_HEAD exit=0 cmd=runtest|holds a line no v1 or v2 record reads|a malformed line" \
+    "owed-run: v2 run head=$APART_HEAD exit=0 clean=yes backend=cc source=fixture:/runs/1 cmd=runtest|holds a line no v1 or v2 record reads|a v2 line with no writer" \
     "owed-run: v2 run head=$APART_HEAD writer=leg: exit=0 clean=yes backend=cc source=fixture:/runs/1 cmd=runtest|holds a line no v1 or v2 record reads|an empty leg hostname" \
+    "owed-run: v2 run head=$APART_HEAD writer=leg:a/b exit=0 clean=yes backend=cc source=fixture:/runs/1 cmd=runtest|holds a line no v1 or v2 record reads|a leg hostname with a slash" \
     "owed-run: v2 run head=$APART_HEAD writer=waive exit=0 clean=yes backend=cc source=fixture:/runs/1 cmd=runtest|holds a line no v1 or v2 record reads|a waiver writer on a run"; do
     line=${probe%%|*} rest=${probe#*|}
     plant "$bad" "$APART_HEAD" "$APART_HEAD^{tree}" "$APART_HEAD" "owed-run record
@@ -807,7 +809,7 @@ FAKE
   hook_head=$(git -C "$R" rev-parse HEAD)
   hook_url=$TMP/owed-report.git
   git init -q --bare "$hook_url"
-  leg_report() { # fresh|stale LAST_RUN ARGV...
+  leg_report() { # fresh|stale|shared LAST_RUN ARGV...
     local state=$1 last_run=$2
     shift 2
     hrc=0
@@ -820,7 +822,7 @@ FAKE
       perl -MPOSIX=setsid -e "$new_group" "$BASH" -c '
         new_group=$1 state=$2
         shift 2
-        if [ "$state" = fresh ]; then
+        if [ "$state" != stale ]; then
           if [ -r /proc/$$/stat ]; then
             read -r stat <"/proc/$$/stat"
             fields=${stat##*) }
@@ -831,7 +833,12 @@ FAKE
           fi
           printf "%s %s 0123456789abcdef0123456789abcdef\n" "$$" "$token" >"$FAKE_LAST_RUN/launchers"
         fi
-        perl -MPOSIX=setsid -e "$new_group" "$@"
+        if [ "$state" = shared ]; then
+          # Keep the intermediate group leader alive with the report as a member.
+          perl -MPOSIX=setsid -e "$new_group" "$BASH" -c "\"\$@\"; exit \$?" shared-report "$@"
+        else
+          perl -MPOSIX=setsid -e "$new_group" "$@"
+        fi
         exit $?
       ' fleet-report-fixture "$new_group" "$state" "./$hook" "$@"
     ) >"$TMP/hook-out" 2>&1 || hrc=$?
@@ -848,6 +855,8 @@ FAKE
   hook_skip 'an otherwise eligible GPU argv skips the report' 'recorded nothing (not an owed-run argv)'
   leg_report stale "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias"
   hook_skip 'an earlier valid receipt cannot stand for a launch with no receipt' 'was not launched by the current fleet leg'
+  leg_report shared "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias"
+  hook_skip 'a report sharing the leg group cannot reuse an outer receipt' 'was not launched by the current fleet leg'
   leg_report fresh "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias" @a/runtest-first
   hook_skip 'a mixed first-tier list skips the report' 'recorded nothing (not an owed-run argv)'
   leg_report fresh "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build @test/training/train-b

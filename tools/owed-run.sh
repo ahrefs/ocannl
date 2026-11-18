@@ -226,13 +226,14 @@ read_pid_field() {
   printf '%s\n' "$id"
 }
 
-# Both the fleet runner and report get a bounded nested slot, each with its own process group.
+# Both the fleet runner and report get a bounded nested slot. The report is exec'd as the
+# leader of its own process group.
 # The parent of this group's leader belongs to the enclosing leg's group. Its live leader's
 # PID and start token must appear in test-run.sh's stored launchers. The argv digest is outside
 # this check.
 fleet_receipt() {
   local run=$1 inner parent scope token row
-  inner=$(read_pid_field pgid "$$") && parent=$(read_pid_field ppid "$inner") &&
+  inner=$(read_pid_field pgid "$$") && [ "$inner" = "$$" ] && parent=$(read_pid_field ppid "$inner") &&
     scope=$(read_pid_field pgid "$parent") || return 1
   [ "$scope" != "$inner" ] || return 1
   if [ -r /proc/self/stat ]; then
