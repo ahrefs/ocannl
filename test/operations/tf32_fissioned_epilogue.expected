@@ -1,4 +1,5 @@
 the two scheduled kernels share the device accumulator: true
+the fixture operands fit TF32's significand: true
 the fixture products have exact partial sums at f32: true
 the unscheduled product matches the host reduction: true
 the unscheduled reference has positive cells: true

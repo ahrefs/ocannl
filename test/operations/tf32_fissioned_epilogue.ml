@@ -17,7 +17,6 @@ let simd_width = 32
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let prec = Ir.Ops.single
 
-(* These integer operands are within TF32's 11-bit significand. *)
 let a_values =
   Ll_test.operand ~b:[] ~o:[ m ] ~i:[ k ]
     (Ll_test.weighted ~weights:[| 3; 1 |] ~modulus:7 ~offset:(-3.) ~stride:1.)
@@ -132,6 +131,14 @@ let () =
       ~when_:(cuda && Ll_test.advertised ~backend_name ~a_prec:prec ~b_prec:prec ~d_prec:prec)
       ()
   in
+  let cells dims read =
+    List.init (Array.fold dims ~init:1 ~f:( * )) ~f:(fun i -> read (Ll_test.unflat ~dims i))
+  in
+  p_all "the fixture operands fit TF32's significand"
+    (cells [| m; k |] a_values @ cells [| k; n |] b_values)
+    ~f:(fun x ->
+      let mantissa, _ = Float.frexp x in
+      Float.is_integer (Float.ldexp mantissa 11));
   let products = Ll_test.matmul_products ~m ~n ~k a_values b_values in
   p_all "the fixture products have exact partial sums at f32" products
     ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits prec));
