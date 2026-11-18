@@ -22,7 +22,8 @@
    Which arm rendered is read from the routine's census (tensorized) and its generated text: the
    arm's marker and instruction, the one text pin here, stating which dialect instruction ran. The
    serial reference runs on every backend; every tile claim is a CUDA leg, and elsewhere no tile
-   compiles. *)
+   compiles. Each arm's claims also skip on a device below that arm's floor: on sm_75-79 the
+   device's own resolution is m16n8k8 itself, so the m16n8k16 control has nothing to run. *)
 
 (* cc-fp-contract: exact-operands -- the premise claims below bound every reduction of these
    quarter-valued operands within f16, so contraction moves no value *)
@@ -40,6 +41,35 @@ open Verdict.Claims
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_cuda = String.is_substring backend_name ~substring:"cuda"
 let leg = Verdict.leg ~when_:on_cuda ~on:backend_name ()
+
+(* The attached devices' minimum compute capability, the one the CUDA hooks render at, from the
+   backend's own static properties; [None] where none reads. *)
+let device_cc =
+  lazy
+    (match
+       Ir.Backend_intf.parse_static_properties (Context.static_properties (Context.auto ()))
+     with
+    | Some { devices; _ } ->
+        List.filter_map devices ~f:(fun fields ->
+            let number key =
+              match List.Assoc.find fields key ~equal:String.equal with
+              | Some (Sexp.Atom v) -> Int.of_string_opt v
+              | _ -> None
+            in
+            Option.map2 (number "compute_capability_major") (number "compute_capability_minor")
+              ~f:(fun major minor -> (major * 10) + minor))
+        |> List.min_elt ~compare:Int.compare
+    | None -> None)
+
+(* A CUDA device that meets [arm]'s floor: below it the hooks decline the arm, so its claims skip on
+   the device's capability. *)
+let arm_leg arm =
+  Verdict.sub_leg ~aggregation:`Environment leg
+    ~when_:
+      (lazy
+        (Option.value_map (Lazy.force device_cc) ~default:false ~f:(fun cc -> cc >= M.arm_floor arm)))
+    ~on:(Printf.sprintf "a CUDA device below %s's floor" (M.arm_marker arm))
+
 let n = 32
 let k = 32
 let bm = 16
@@ -143,54 +173,63 @@ let () =
     ~f:Float.equal;
   p "the serial rendering renders no tile"
     (Ll_test.none_emitted ~what:"the serial rendering" serial_census);
-  let tiles =
+  let k16_arm = M.Inline_ptx (M.M16n8k16 M.M16n8k16_f16) and k8_arm = M.Inline_ptx M.M16n8k8_f16 in
+  (* Each tile runs only where its leg is open: on sm_75-79 the device's own resolution is m16n8k8,
+     so the m16n8k16 control and the cross-arm claim skip there. *)
+  let k16_leg = arm_leg k16_arm and k8_leg = arm_leg k8_arm in
+  let report tag (got, _, targets) =
+    Stdio.eprintf
+      "cuda_mma_k8_parity: %s: %d of %d cells differ from the serial rendering; PTX targets %s \
+       (not part of the golden)\n\
+       %!"
+      tag (count_mismatches got serial) (n * n) (String.concat ~sep:"," targets)
+  in
+  let k16_run =
     lazy
-      (let k16 = run ~tile:true ~name:"k8p_m16n8k16" in
-       let k8 =
-         M.with_resolution_ceiling ~cc:(M.arm_floor (M.Inline_ptx M.M16n8k8_f16)) (fun () ->
+      (let r = run ~tile:true ~name:"k8p_m16n8k16" in
+       report "m16n8k16" r;
+       r)
+  in
+  let k8_run =
+    lazy
+      (let r =
+         M.with_resolution_ceiling ~cc:(M.arm_floor k8_arm) (fun () ->
              run ~tile:true ~name:"k8p_m16n8k8")
        in
-       let values (v, _, _) = v and targets (_, _, t) = String.concat ~sep:"," t in
-       Stdio.eprintf
-         "cuda_mma_k8_parity: mismatches of %d cells against the serial rendering -- m16n8k16 %d, \
-          m16n8k8 %d; PTX targets m16n8k16 %s, m16n8k8 %s (not part of the golden)\n\
-          %!"
-         (n * n)
-         (count_mismatches (values k16) serial)
-         (count_mismatches (values k8) serial)
-         (targets k16) (targets k8);
-       (k16, k8))
+       report "m16n8k8" r;
+       r)
   in
-  let k16 () = fst (Lazy.force tiles) and k8 () = snd (Lazy.force tiles) in
+  let k16 () = Lazy.force k16_run and k8 () = Lazy.force k8_run in
   let logic name = G.main_logic (G.read name) in
   let marked arm logic = has logic ("(" ^ M.arm_marker arm ^ ")") in
-  in_leg ~leg "at the device's own resolution the tile renders the m16n8k16 arm, tensorized"
+  in_leg ~leg:k16_leg "at the device's own resolution the tile renders the m16n8k16 arm, tensorized"
     (fun label ->
       let _, census, _ = k16 () in
       let logic = logic "k8p_m16n8k16" in
       p label
         (Ll_test.all_tensorized ~what:label census
-        && marked (M.Inline_ptx (M.M16n8k16 M.M16n8k16_f16)) logic
+        && marked k16_arm logic
         && has logic "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32"));
-  in_leg ~leg "the m16n8k16 tile equals the serial rendering bitwise" (fun label ->
+  in_leg ~leg:k16_leg "the m16n8k16 tile equals the serial rendering bitwise" (fun label ->
       let got, _, _ = k16 () in
       p_all2 label got serial ~f:Float.equal);
-  in_leg ~leg "at sm_75's resolution the tile renders the m16n8k8 arm, tensorized, and no m16n8k16"
+  in_leg ~leg:k8_leg
+    "at sm_75's resolution the tile renders the m16n8k8 arm, tensorized, and no m16n8k16"
     (fun label ->
       let _, census, _ = k8 () in
       let logic = logic "k8p_m16n8k8" in
       p label
         (Ll_test.all_tensorized ~what:label census
-        && marked (M.Inline_ptx M.M16n8k8_f16) logic
+        && marked k8_arm logic
         && has logic "mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32"
         && (not (has logic "m16n8k16"))
         && has logic "__half2float" && has logic "__float2half"));
-  in_leg ~leg "the m16n8k8 kernel's PTX targets the arm's floor, sm_75" (fun label ->
+  in_leg ~leg:k8_leg "the m16n8k8 kernel's PTX targets the arm's floor, sm_75" (fun label ->
       let _, _, targets = k8 () in
       p_all ~min:1 label targets ~f:(String.equal "sm_75"));
-  in_leg ~leg "the m16n8k8 tile equals the serial rendering bitwise" (fun label ->
+  in_leg ~leg:k8_leg "the m16n8k8 tile equals the serial rendering bitwise" (fun label ->
       let got, _, _ = k8 () in
       p_all2 label got serial ~f:Float.equal);
-  in_leg ~leg "the m16n8k8 tile equals the m16n8k16 tile bitwise" (fun label ->
+  in_leg ~leg:k16_leg "the m16n8k8 tile equals the m16n8k16 tile bitwise" (fun label ->
       let got8, _, _ = k8 () and got16, _, _ = k16 () in
       p_all2 label got8 got16 ~f:Float.equal)
