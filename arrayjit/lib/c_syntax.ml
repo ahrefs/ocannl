@@ -10383,12 +10383,18 @@ struct
             routine's name when the report points at one of those kernels' declarations. *)
     key_text : int -> string;
         (** Kernel [i]'s standalone source as a kernel code cache keys it (gh-ocannl-1525): its
-            prelude verbatim, its definition through {!Kernel_code_cache.canonical_kernel} -- the
-            names it owns (symbols, scope locals, its nodes' identifiers, the emitter's
-            {!minted_derivations} of them) renamed by first occurrence and its segment index
-            dropped, so that an unchanged kernel keys alike whatever names the rest of the batch
-            made it take. The backend adds the compiler options and looks the code up by the stored
-            symbol. *)
+            prelude verbatim, its definition without width-dependent wrapping and through
+            {!Kernel_code_cache.canonical_kernel} -- the names it owns (symbols, scope locals, its
+            nodes' identifiers, the emitter's {!minted_derivations} of them) renamed by first
+            occurrence and its segment index dropped, so that an unchanged kernel keys alike
+            whatever names the rest of the batch made it take. The backend adds the compiler options
+            and looks the code up by the stored symbol. *)
+  }
+
+  type rendered_body = {
+    texts : string list;
+    part_names : string list;
+    compact_definition : string option;
   }
 
   (* gh-ocannl-1780: the binding-race refusal of one routine, asked of the render [compile] would
@@ -10426,15 +10432,27 @@ struct
     let idx_params = Indexing.bound_symbols bindings in
     let units =
       Array.map2_exn names lowereds ~f:(fun name lowered ->
-          let kparams, units, parts, launch =
+          let kparams, documents, part_names, launch =
             Syntax.compile_proc_units ~avoid:(Array.to_list names) ~name idx_params lowered
           in
-          ((kparams, name, launch), (List.map units ~f:Syntax.render_doc, parts)))
+          let texts = List.map documents ~f:Syntax.render_doc in
+          (* Longer generated names can wrap the same expression differently. Compact the emitter's
+             documents for keying, retaining hard lines such as directive boundaries. Staged
+             callbacks own their layout. Metal retains [key_text] after linking, so only the
+             rendered strings should escape this step. *)
+          let compact_definition =
+            if Low_level.has_staged_compilation lowered.Low_level.llc then None
+            else
+              let buf = Buffer.create (List.sum (module Int) texts ~f:String.length) in
+              PPrint.ToBuffer.compact buf (PPrint.separate PPrint.hardline documents);
+              Some (Buffer.contents buf)
+          in
+          ((kparams, name, launch), { texts; part_names; compact_definition }))
     in
     (* Each document starts at column 0 after a hard line, so rendering them apart and joining them
        with newlines gives the text of rendering them together. *)
     let rendered =
-      Array.map units ~f:(fun (entry, (texts, _)) -> (entry, String.concat ~sep:"\n" texts))
+      Array.map units ~f:(fun (entry, body) -> (entry, String.concat ~sep:"\n" body.texts))
     in
     let source_of ~routine_names texts =
       Syntax.prepend_builtins_to_text ~conditional_includes ~routine_names ~includes ~builtins
@@ -10447,7 +10465,7 @@ struct
     in
     let assemble_units idxs ~max_units ~min_unit_bytes =
       let pieces =
-        List.concat_map idxs ~f:(fun i -> List.map (fst (snd units.(i))) ~f:(fun text -> (i, text)))
+        List.concat_map idxs ~f:(fun i -> List.map (snd units.(i)).texts ~f:(fun text -> (i, text)))
       in
       let total = List.sum (module Int) pieces ~f:(fun (_, text) -> String.length text) in
       let n =
@@ -10489,16 +10507,17 @@ struct
     let key_text i =
       let def = snd rendered.(i) and full = assemble [ i ] in
       let llc = lowereds.(i).Low_level.llc in
+      let body = snd units.(i) in
       (* The identifiers this rendering gave the kernel's nodes ([get_ident] visits exactly the
          nodes [touched_tns_in_order] lists). A [Staged_compilation] callback emits text this module
          does not see, so such a kernel renames none of them. *)
       let bound =
-        if Low_level.has_staged_compilation llc then []
-        else List.map (Low_level.touched_tns_in_order llc) ~f:Syntax.get_ident
+        Option.value_map body.compact_definition ~default:[] ~f:(fun _ ->
+            List.map (Low_level.touched_tns_in_order llc) ~f:Syntax.get_ident)
       in
       (* An outlined kernel's parts are names it declares, renamed like its nodes' (gh-ocannl-1603):
          they are spelled after the kernel's name, segment index included. *)
-      let bound = bound @ snd (snd units.(i)) in
+      let bound = bound @ body.part_names in
       let canonical ~bound =
         Kernel_code_cache.canonical_kernel ~kernel_name:names.(i) ~bound
           ~derivations:minted_derivations ~free:Syntax.routine_ident_blacklist
@@ -10506,7 +10525,9 @@ struct
       (* The prelude -- includes, the builtins this kernel uses, conditional includes -- is fixed
          vocabulary, kept verbatim; only the kernel's own definition is renamed. *)
       match String.chop_suffix full ~suffix:def with
-      | Some prelude -> prelude ^ canonical ~bound def
+      | Some prelude ->
+          let key_def = Option.value body.compact_definition ~default:def in
+          prelude ^ canonical ~bound key_def
       | None -> canonical ~bound:[] full
     in
     { entries = Array.map rendered ~f:fst; assemble; assemble_units; attribute; key_text }
