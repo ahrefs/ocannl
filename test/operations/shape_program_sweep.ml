@@ -564,6 +564,10 @@ let run_shapes (prog : program) : outcome =
 type cause = Collapse | Fill of int * int | Refusal of string
 type excuse = { entry : string; node : int; want : rows; got : rows option; cause : cause }
 
+(* The solver's shape an excuse records, as the golden's fixed lines and the listing print it. *)
+let show_got (x : excuse) =
+  Option.value_map x.got ~default:"refused" ~f:(fun g -> "[" ^ show_rows g ^ "]")
+
 type judgement =
   | Agrees
   | Known of excuse * excuse list
@@ -765,8 +769,9 @@ let judge (prog : program) (oracle : oracle) (outcome : outcome) ~(fills : int o
               | x :: rest -> Known (x, rest)
               | [] -> Agrees)))
 
-(* For a fixed program's golden line: the nodes a known entry excuses, each with the shape the
-   solver gave it, so the line pins where the collapse is and not only the entry's name. *)
+(* For a fixed program's golden line: the nodes the program's excuses cover, each with the shape the
+   solver gave it, and in parentheses the entry of an excuse that is not the line's own, so the line
+   pins these nodes under this entry and not only the entry's name. *)
 let show_excused_nodes = function
   | Known (x, rest) ->
       let excuses = x :: rest in
@@ -776,9 +781,15 @@ let show_excused_nodes = function
       " at "
       ^ String.concat ~sep:", "
           (List.map nodes ~f:(fun k ->
-               let e = List.find_exn excuses ~f:(fun (e : excuse) -> e.node = k) in
-               Printf.sprintf "%%%d %s" k
-                 (Option.value_map e.got ~default:"refused" ~f:(fun g -> "[" ^ show_rows g ^ "]"))))
+               let at = List.filter excuses ~f:(fun (e : excuse) -> e.node = k) in
+               let others =
+                 List.dedup_and_sort ~compare:String.compare
+                   (List.filter_map at ~f:(fun (e : excuse) ->
+                        Option.some_if (not (String.equal e.entry x.entry)) e.entry))
+               in
+               Printf.sprintf "%%%d %s%s" k
+                 (show_got (List.hd_exn at))
+                 (if List.is_empty others then "" else " (" ^ String.concat ~sep:"; " others ^ ")")))
   | _ -> ""
 
 let show_judgement = function
@@ -804,8 +815,7 @@ let show_cause = function
   | Refusal sub -> "refusal: " ^ sub
 
 let show_excuse (x : excuse) =
-  Printf.sprintf "%%%d want [%s] got %s" x.node (show_rows x.want)
-    (Option.value_map x.got ~default:"refused" ~f:(fun g -> "[" ^ show_rows g ^ "]"))
+  Printf.sprintf "%%%d want [%s] got %s" x.node (show_rows x.want) (show_got x)
 
 let known_line name prog ((x : excuse), also) =
   Printf.sprintf "KNOWN %s | %s | %s | %s | also %s | %s" x.entry name (show_excuse x)
