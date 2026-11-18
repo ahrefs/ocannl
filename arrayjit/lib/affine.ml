@@ -401,49 +401,50 @@ let infeasible (rg : ranges) (terms, rhs) =
       in
       match bounds with Some (lo, hi) -> rhs < lo || rhs > hi | None -> false)
 
-(* Forced equalities: an equation [Σ_k c_k·(x_k − y_k) = 0] with [x_k] all-[Left_v], [y_k]
-   all-[Right_v], matched pairwise by coefficient, forces [x_k = y_k] for every k when the linear
-   form [Σ c_k·z_k] is injective on the (per-pair combined) bounding box — the mixed-radix criterion
-   of {!Indexing.affine_injective}: sorted by ascending [abs c], every term satisfies [abs c_k >= 1
-   + Σ_{i<k} abs c_i·(w_i − 1)]. Equal values of an injective form imply equal arguments, and the
-   forcing holds in every solution of the conjunction it is part of. *)
-let forced_pairs (rg : ranges) (terms, rhs) : (Idx.symbol * Idx.symbol) list =
-  if rhs <> 0 then []
-  else
-    let ls, rest =
-      List.partition_tf terms ~f:(fun (_, v) -> match v with Left_v _ -> true | _ -> false)
-    in
-    let rs, shared =
-      List.partition_tf rest ~f:(fun (_, v) -> match v with Right_v _ -> true | _ -> false)
-    in
-    if (not (List.is_empty shared)) || List.length ls <> List.length rs || List.is_empty ls then []
-    else
-      let cmp (c1, _) (c2, _) = Int.compare c1 c2 in
-      let ls = List.sort ls ~compare:cmp in
-      let rs = List.sort rs ~compare:(fun (c1, _) (c2, _) -> Int.compare (-c1) (-c2)) in
-      let paired =
-        List.zip_exn ls rs
-        |> List.map ~f:(fun ((cl, vl), (cr, vr)) ->
-            let sym = function Left_v s | Right_v s | Shared s -> s in
-            if cl <> -cr then None
-            else
-              match (var_range rg vl, var_range rg vr) with
-              | Some (llo, lhi), Some (rlo, rhi) ->
-                  let w = max lhi rhi - min llo rlo + 1 in
-                  Some (abs cl, w, (sym vl, sym vr))
-              | _ -> None)
+(* A unit difference [x - y = 0] forces [x = y] without bounds, including for shared launch symbols.
+   For a mixed-radix equation [Σ_k c_k·(x_k − y_k) = 0] with [x_k] all-[Left_v], [y_k]
+   all-[Right_v], match pairwise by coefficient. The form [Σ c_k·z_k] must be injective on the
+   per-pair combined box: the criterion of {!Indexing.affine_injective} is that each [abs c_k], in
+   ascending order, exceeds [Σ_{i<k} abs c_i·(w_i − 1)]. Each edge holds for every solution of its
+   equation, so edges from different axes can be composed. *)
+let forced_equalities (rg : ranges) = function
+  | [ (1, x); (-1, y) ], 0 | [ (-1, y); (1, x) ], 0 -> [ (x, y) ]
+  | terms, 0 -> (
+      let ls, rest =
+        List.partition_tf terms ~f:(fun (_, v) -> match v with Left_v _ -> true | _ -> false)
       in
-      match Option.all paired with
-      | None -> []
-      | Some triples ->
-          let sorted =
-            List.sort triples ~compare:(fun (c1, _, _) (c2, _, _) -> Int.compare c1 c2)
-          in
-          let rec radix acc = function
-            | [] -> true
-            | (c, w, _) :: tl -> c >= 1 + acc && radix (acc + (c * (w - 1))) tl
-          in
-          if radix 0 sorted then List.map triples ~f:(fun (_, _, p) -> p) else []
+      let rs, shared =
+        List.partition_tf rest ~f:(fun (_, v) -> match v with Right_v _ -> true | _ -> false)
+      in
+      if (not (List.is_empty shared)) || List.length ls <> List.length rs || List.is_empty ls then
+        []
+      else
+        let cmp (c1, _) (c2, _) = Int.compare c1 c2 in
+        let ls = List.sort ls ~compare:cmp in
+        let rs = List.sort rs ~compare:(fun (c1, _) (c2, _) -> Int.compare (-c1) (-c2)) in
+        let paired =
+          List.zip_exn ls rs
+          |> List.map ~f:(fun ((cl, vl), (cr, vr)) ->
+              if cl <> -cr then None
+              else
+                match (var_range rg vl, var_range rg vr) with
+                | Some (llo, lhi), Some (rlo, rhi) ->
+                    let w = max lhi rhi - min llo rlo + 1 in
+                    Some (abs cl, w, (vl, vr))
+                | _ -> None)
+        in
+        match Option.all paired with
+        | None -> []
+        | Some triples ->
+            let sorted =
+              List.sort triples ~compare:(fun (c1, _, _) (c2, _, _) -> Int.compare c1 c2)
+            in
+            let rec radix acc = function
+              | [] -> true
+              | (c, w, _) :: tl -> c >= 1 + acc && radix (acc + (c * (w - 1))) tl
+            in
+            if radix 0 sorted then List.map triples ~f:(fun (_, _, p) -> p) else [])
+  | _, _ -> []
 
 let axis_index_to_string (idx : Idx.axis_index) =
   Sexp.to_string_hum ([%sexp_of: Idx.axis_index] idx)
@@ -488,34 +489,43 @@ let pair_conflict ~left_range ~right_range ~dup_left ~dup_right
       let eqs = Array.to_list (Array.map2_exn l r ~f:(equation_of rg)) in
       if List.exists eqs ~f:(fun eq -> Option.value_map eq ~default:false ~f:(infeasible rg)) then
         Disjoint
+      else if List.is_empty pairs then
+        Cross_thread (describe "no parallel symbols to confine the conflict")
       else
-        let forced =
-          List.concat_map eqs ~f:(fun eq -> Option.value_map eq ~default:[] ~f:(forced_pairs rg))
+        let equal_var a b = compare_var a b = 0 in
+        let classes =
+          List.fold eqs
+            ~init:(Map.empty (module Var))
+            ~f:(fun classes -> function
+              | None -> classes
+              | Some eq ->
+                  List.fold (forced_equalities rg eq) ~init:classes ~f:(fun classes (a, b) ->
+                      Utils.union_add ~equal:equal_var classes a b))
         in
+        let root key = fst (Utils.union_find ~equal:equal_var classes ~key ~rank:0) in
         let pair_forced (p, p') =
+          let l = tag_left rg p and r = tag_right rg p' in
           (* A width-1 parallel symbol has a single thread coordinate, so equality across threads
              holds by definition — necessary because {!terms_of} substitutes width-1 symbols away
              before the equation-level forcing can see them. *)
-          (match (var_range rg (tag_left rg p), var_range rg (tag_right rg p')) with
+          (match (var_range rg l, var_range rg r) with
             | Some (lo, hi), Some (lo', hi') -> lo = hi && lo' = hi' && lo = lo'
             | _ -> false)
-          || List.exists forced ~f:(fun (a, b) -> Idx.equal_symbol a p && Idx.equal_symbol b p')
+          || equal_var (root l) (root r)
         in
-        if (not (List.is_empty pairs)) && List.for_all pairs ~f:pair_forced then Same_thread
-        else
-          match List.find pairs ~f:(Fn.non pair_forced) with
-          | Some (p, p') when Idx.equal_symbol p p' ->
-              Cross_thread
-                (describe
-                   (Printf.sprintf "parallel symbol %s is not forced equal across threads"
-                      (Idx.symbol_ident p)))
-          | Some (p, p') ->
-              Cross_thread
-                (describe
-                   (Printf.sprintf
-                      "paired parallel symbols %s ~ %s are not forced equal across threads"
-                      (Idx.symbol_ident p) (Idx.symbol_ident p')))
-          | None -> Cross_thread (describe "no parallel symbols to confine the conflict"))
+        match List.find pairs ~f:(Fn.non pair_forced) with
+        | Some (p, p') when Idx.equal_symbol p p' ->
+            Cross_thread
+              (describe
+                 (Printf.sprintf "parallel symbol %s is not forced equal across threads"
+                    (Idx.symbol_ident p)))
+        | Some (p, p') ->
+            Cross_thread
+              (describe
+                 (Printf.sprintf
+                    "paired parallel symbols %s ~ %s are not forced equal across threads"
+                    (Idx.symbol_ident p) (Idx.symbol_ident p')))
+        | None -> Same_thread)
   | _ -> Cross_thread (describe "the two views do not span the same axes")
 
 (** {2 The separation query}

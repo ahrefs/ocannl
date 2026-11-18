@@ -13,6 +13,7 @@ width-1 parallel symbol            query Same_thread  oracle same-thread
 rank mismatch declines             query Cross_thread oracle same-thread 
 flattened [Sub_axis; p]            query Same_thread  oracle opaque      
 shared static symbol               query Same_thread  oracle same-thread 
+an offset breaks a shared-symbol thread equality: true
 cross-nest aligned                 query Same_thread  oracle same-thread 
 cross-nest chain-position swap     query Cross_thread oracle cross-thread
 

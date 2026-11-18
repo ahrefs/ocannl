@@ -4,9 +4,8 @@
    accumulator that runs after that read leaves the tail holding a value the final accumulator no
    longer has. Textually later writes are refused by the written-again check. This test is about the
    other kind: a write textually BEFORE the site, inside an enclosing loop of more than one trip,
-   which runs again in the next iteration -- after the previous iteration's store-back. Before this
-   issue nothing checked it (a loop starting at 0 was descended under any enclosing loop), so every
-   refusal claimed below fused on the base.
+   which runs again in the next iteration -- after the previous iteration's store-back. Before
+   gh-ocannl-1844 nothing checked it when descending loops that start at zero.
 
    The programs are hand-built (no lowering emits an accumulator rewritten across iterations) in the
    two shapes [fuse_at_fragment] recognizes: the fragment store-back [Tensorize]'s contraction
@@ -22,10 +21,11 @@
    write (indexed by the loop as the store-back is) fuses, values equal; - equal coefficients are
    not enough: an offset carrying the write into the previous iteration's cells is refused, and its
    relocation miscomputes; - nested loops: a write separated by the outer loop but not the inner one
-   is refused naming the inner loop; a transposed write (iterations (0,1) and (1,0) meet) is
-   refused; a write separated by both fuses, values equal; - the whole-K site, the check's second
-   entry point: the overlap refused, a separated write fused with values equal; - a whole-node
-   [Zero_out] inside the loop is refused. *)
+   is refused naming the inner loop; a transposed write (iterations (0,1) and (1,0) meet) is refused
+   naming the outer loop; a write separated by both fuses, values equal; - a launch symbol can
+   connect the write and site iterations, but an offset breaks that equality; - the whole-K site,
+   the check's second entry point: the overlap refused, a separated write fused with values equal; -
+   a whole-node [Zero_out] inside the loop is refused. *)
 
 open Base
 open Ocannl.Operation.DSL_modules
@@ -54,20 +54,23 @@ let rec unmma (llc : LL.t) : LL.t =
 (* The record [Fuse_epilogue] reads: the program itself (the record built from its [Tile_mma]-free
    twin), with [frag] registered as the fragment the contraction would have minted ([is_fragment] is
    membership, gh-ocannl-1721). *)
-let optimized ~name (c : case) : LL.optimized =
+let optimized ?(static_indices = []) ~name (c : case) : LL.optimized =
   List.iter (c.acc :: c.out :: c.frag :: List.map c.inputs ~f:fst) ~f:materialize;
-  let o = optimize ~name (unmma c.llc) in
+  let o = optimize ~static_indices ~name (unmma c.llc) in
   { o with LL.llc = c.llc; simdgroup_fragments = Set.singleton (module Tn) c.frag }
 
-let refusal ~name c = Sched.fuse_epilogue_witness ~target:c.acc (optimized ~name c)
+let refusal ?static_indices ~name c =
+  Sched.fuse_epilogue_witness ~target:c.acc (optimized ?static_indices ~name c)
 
-let fused ~name c =
-  (Sched.apply [ Sched.Fuse_epilogue { target = c.acc; shared = false } ] (optimized ~name c))
+let fused ?static_indices ~name c =
+  (Sched.apply
+     [ Sched.Fuse_epilogue { target = c.acc; shared = false } ]
+     (optimized ?static_indices ~name c))
     .LL.llc
 
-let interpreted c llc =
+let interpreted ?launch c llc =
   let memory = interp_memory c.inputs in
-  interpret memory (unmma llc);
+  interpret ?launch memory (unmma llc);
   Array.copy (Hashtbl.find_exn memory c.out)
 
 let refused_naming ~what ~loop = function
@@ -77,13 +80,13 @@ let refused_naming ~what ~loop = function
       && String.is_substring msg ~substring:("enclosing loop " ^ Idx.symbol_ident loop)
   | None -> false
 
+let tail_cell ~acc ~out ~bias row col =
+  let idcs = [| row; col |] in
+  set out idcs (add (get acc idcs) (get bias [| col |]))
+
 let tail2 ~acc ~out ~bias ~d0 ~d1 =
   let t0 = sym () and t1 = sym () in
-  loop_n t0 d0
-    (loop_n t1 d1
-       (set out
-          [| iter t0; iter t1 |]
-          (add (get acc [| iter t0; iter t1 |]) (get bias [| iter t1 |]))))
+  loop_n t0 d0 (loop_n t1 d1 (tail_cell ~acc ~out ~bias (iter t0) (iter t1)))
 
 (* A value varying with the iteration and the cell, clear of every store-back value. *)
 let w_value a b = add (c 100.) (add (mul (c 10.) (embed a)) (embed b))
@@ -162,6 +165,30 @@ let nested tag ~earlier =
   in
   let llc = seq (loop_n b1 2 (loop_n b2 2 body)) (tail2 ~acc ~out ~bias ~d0:2 ~d1:2) in
   ({ llc; acc; out; frag; inputs = [ (x, ramp 4 ~scale:1.); (bias, ramp 2 ~scale:0.25) ] }, b1, b2)
+
+(* A guarded write to [acc[s, b - s - offset]] against the full-cover site [acc[b, 0]]. The guard
+   keeps the write in bounds. The indices themselves prove [b_L = s + offset] and [s = b_R]. *)
+let launch_chain ?(relocated = false) tag ~offset =
+  let dims = [| 2; 1 |] in
+  let acc = node ~dims ("acc" ^ tag) and out = node ~dims ("out" ^ tag) in
+  let frag = node ~dims:[| 1 |] ("fragment" ^ tag) and bias = node ~dims:[| 1 |] ("bias" ^ tag) in
+  let b = sym () and s = sym () and lane = sym () in
+  let launch = Idx.make_static_symbol ~static_range:2 s in
+  let minor = aff [ (1, b); (-1, s) ] (-offset) in
+  let body =
+    seq_all
+      [
+        if_ (eq (embed_idx minor) (ic 0)) (set acc [| iter s; minor |] (w_value b s));
+        set frag [| fixed 0 |] (tick b);
+        lane_loop ~lane (set acc [| iter b; fixed 0 |] (get frag [| fixed 0 |]));
+      ]
+  in
+  let llc =
+    if relocated then
+      loop_n b 2 (seq body (lane_loop ~lane (tail_cell ~acc ~out ~bias (iter b) (fixed 0))))
+    else seq (loop_n b 2 body) (tail2 ~acc ~out ~bias ~d0:2 ~d1:1)
+  in
+  ({ llc; acc; out; frag; inputs = [ (bias, [| 0.25 |]) ] }, b, launch)
 
 (* --- The whole-K site: per [b] (two trips), a 2x2x2 [Tile_mma] block into acc[b, 0..1, 0..1],
    after an earlier write [earlier ~acc ~b ~i ~j] inside a nest over [i, j] (the block accumulates
@@ -242,13 +269,12 @@ let () =
   in
   p "nested: a write separated by the outer loop only is refused, naming the inner loop"
     (refused_naming ~what:"nested inner" ~loop:b2 (refusal ~name:"ep1844_inner" case));
-  let case, b1, b2 =
+  let case, b1, _ =
     nested "5" ~earlier:(fun ~acc ~b1 ~b2 -> set acc [| iter b2; iter b1 |] (w_value b1 b2))
   in
   let msg = refusal ~name:"ep1844_transposed" case in
-  p "nested: a transposed write is refused"
-    (refused_naming ~what:"nested transposed" ~loop:b1 msg
-    || refused_naming ~what:"nested transposed" ~loop:b2 msg);
+  p "nested: a transposed write is refused, naming the outer loop"
+    (refused_naming ~what:"nested transposed" ~loop:b1 msg);
   let case, _, _ =
     nested "6" ~earlier:(fun ~acc ~b1 ~b2 -> set acc [| iter b1; iter b2 |] (w_value b1 b2))
   in
@@ -274,4 +300,31 @@ let () =
   let case, b = one_loop "9" ~earlier:(fun ~acc ~b:_ ~j:_ -> zero acc) in
   p "whole node: a Zero_out of the accumulator inside the loop is refused"
     (refused_naming ~what:"whole node" ~loop:b (refusal ~name:"ep1844_zero" case));
+  let case, b, s = launch_chain "10" ~offset:1 in
+  p "launch chain: an offset between iterations is refused"
+    (refused_naming ~what:"launch chain offset" ~loop:b
+       (refusal ~static_indices:[ s ] ~name:"ep2277_launch_offset" case));
+  (* At launch index zero, iteration one rewrites the cell the relocated tail read in iteration
+     zero. *)
+  let relocated, _, relocated_s = launch_chain ~relocated:true "10r" ~offset:1 in
+  p_exists "launch chain: relocating the offset case changes the output (premise)"
+    (List.zip_exn
+       (Array.to_list (interpreted ~launch:[ (s, 0) ] case case.llc))
+       (Array.to_list (interpreted ~launch:[ (relocated_s, 0) ] relocated relocated.llc)))
+    ~f:(fun (a, b) -> not (Float.equal a b));
+  let case, _, s = launch_chain "11" ~offset:0 in
+  let static_indices = [ s ] in
+  let refusal = refusal ~static_indices ~name:"ep2277_launch_chain" case in
+  Option.iter refusal ~f:(fun reason ->
+      Stdio.eprintf "launch chain: %s (not part of the golden)\n%!" reason);
+  let admitted = Option.is_none refusal in
+  p "launch chain: the shared symbol proves the write stays in its iteration" admitted;
+  (if admitted then
+     let relocated = fused ~static_indices ~name:"ep2277_launch_fused" case in
+     p_all "launch chain: fused values equal the unfused program at each launch index" [ 0; 1 ]
+       ~f:(fun value ->
+         let launch = [ (s, value) ] in
+         Array.equal Float.equal
+           (interpreted ~launch case relocated)
+           (interpreted ~launch case case.llc)));
   Stdio.printf "epilogue_fusion_loop_dependence: done\n"
