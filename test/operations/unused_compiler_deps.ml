@@ -26,18 +26,21 @@
    OWNERSHIP: a library with its own include directory owns its [.cmi] units. For compiler-reaching
    libraries sharing an include directory, dune-resolved [ocamlfind query -predicates byte] supplies
    their own absolute archive paths and dune-resolved [ocamlobjinfo] supplies [Unit name:]
-   definitions. An imported interface never credits a unit defined in another archive. For an
-   interface-only unit (a shared-directory [.cmi] with no archive definition), the candidates are
-   archives whose [Interfaces imported:] sections name it. A candidate depending on another
-   candidate cannot own it: exactly one remaining candidate must exist. Ambiguous or absent
-   candidates refuse when that unit is referenced; imports outside the library's include directories
-   contribute nothing. Imported entries have two tab-separated fields (digest and unit); malformed
-   entries refuse. This preserves type-only units such as [Parsetree] without crediting its users.
-   The interface-only heuristic can misattribute a unit if its defining library never imports it but
-   a consumer does, producing a false unused-dependency finding. Archive-less findlib packages own
-   no units. A failed query, unreadable archive or output without definitions refuses without
-   directory fallback. Shared local libraries refuse: findlib cannot resolve their archives and
-   [@check] does not build them. Non-compiler-reaching declarations stay outside this check's scope.
+   definitions. Archive definitions take precedence over imports, including definitions from an
+   importer's co-located dependencies outside the scan's reporting scope. For an interface-only unit
+   (a shared-directory [.cmi] with no archive definition), the candidates are archives whose
+   [Interfaces imported:] sections name it. There must be one dependency-minimal importer, and no
+   archive-bearing library in its [requires] closure may share a directory containing the [.cmi].
+   Such a dependency could define the interface without importing it. Ambiguous or absent ownership
+   refuses the referencing stanza before it can report any unused library. Imports outside the
+   library's include directories contribute nothing. Imported entries have two tab-separated fields
+   (digest and unit); malformed entries refuse. This preserves type-only units such as [Parsetree]
+   without crediting its users. Archive-less findlib packages own no units. Ownership uses directory
+   contents, byte archive metadata and Dune's resolved dependency graph. No module inventory is
+   inferred from [META] or [dune-package]. A failed query, unreadable archive or output without
+   definitions refuses without directory fallback. Shared local libraries refuse: findlib cannot
+   resolve their archives and [@check] does not build them. Non-compiler-reaching declarations stay
+   outside this check's scope.
 
    USE: the typed tree of every [.cmt]/[.cmti] in the stanza's byte object directory
    ([Cmt_references]): post-preprocessing, so generated modules, a [select]-chosen source and a
@@ -372,10 +375,9 @@ let shared_units ?(stderr = Unix.stderr) ~findlib ~objinfo l =
               interfaces = info.interfaces @ acc.interfaces;
             })
 
-(* Interface imports also occur in consumers. Only a unique dependency-minimal archive can own an
-   interface-only unit. No such archive, or incomparable candidates, is a refusal, not shared
-   credit. *)
-let interface_owner ~depends_on ~name unit candidates =
+(* Even the least-dependent importer may be a consumer of a co-located interface whose defining
+   archive never imports it. *)
+let interface_owner ~depends_on ~possible_definers ~name unit candidates =
   let candidates = List.dedup_and_sort candidates ~compare:String.compare in
   let minimal =
     List.filter candidates ~f:(fun uid ->
@@ -383,12 +385,16 @@ let interface_owner ~depends_on ~name unit candidates =
           (List.exists candidates ~f:(fun other ->
                (not (String.equal uid other)) && depends_on uid other)))
   in
+  let ambiguous candidates =
+    refuse "interface-only unit %s: no unique archive owner among [%s]" unit
+      (String.concat ~sep:", "
+         (List.dedup_and_sort (List.map candidates ~f:name) ~compare:String.compare));
+    None
+  in
   match minimal with
-  | [ uid ] -> Some uid
-  | _ ->
-      refuse "interface-only unit %s: no unique archive owner among [%s]" unit
-        (String.concat ~sep:", " (List.map candidates ~f:name));
-      None
+  | [ uid ] -> (
+      match possible_definers uid with [] -> Some uid | deps -> ambiguous (candidates @ deps))
+  | _ -> ambiguous candidates
 
 let depends_on by_uid uid target =
   let rec walk seen = function
@@ -423,6 +429,75 @@ let reach_path by_uid uid =
           bfs seen (rest @ List.map next ~f:(fun r -> (r, name r :: path)))
   in
   bfs (Set.singleton (module String) uid) [ (uid, [ name uid ]) ]
+
+let library_owners ~cmi_units ~archive_of by_uid =
+  let directories = Hashtbl.create (module String) in
+  Hashtbl.iter by_uid ~f:(fun l ->
+      List.iter l.include_dirs ~f:(fun d -> Hashtbl.add_multi directories ~key:d ~data:l.uid));
+  let directory_units = Hashtbl.create (module String) in
+  let cmis_in dir =
+    Hashtbl.find_or_add directory_units dir ~default:(fun () ->
+        Option.value (cmi_units dir) ~default:[] |> Set.of_list (module String))
+  in
+  let archives = Hashtbl.create (module String) in
+  let archive uid =
+    Hashtbl.find_or_add archives uid ~default:(fun () -> archive_of (Hashtbl.find_exn by_uid uid))
+  in
+  let owners = Hashtbl.create (module String) in
+  let interface_candidates = Hashtbl.create (module String) in
+  let shared_cmis = ref (Set.empty (module String)) in
+  Hashtbl.iter by_uid ~f:(fun l ->
+      if Option.is_some (reach_path by_uid l.uid) then
+        let shared =
+          List.exists l.include_dirs ~f:(fun d ->
+              List.exists (Hashtbl.find_multi directories d) ~f:(fun uid ->
+                  not (String.equal uid l.uid)))
+        in
+        let cmis = List.map l.include_dirs ~f:cmis_in |> Set.union_list (module String) in
+        let definitions =
+          if shared then (
+            shared_cmis := Set.union !shared_cmis cmis;
+            let info = archive l.uid in
+            List.iter info.interfaces ~f:(fun u ->
+                if Set.mem cmis u then Hashtbl.add_multi interface_candidates ~key:u ~data:l.uid);
+            info.definitions)
+          else Set.to_list cmis
+        in
+        List.iter definitions ~f:(fun u -> Hashtbl.add_multi owners ~key:u ~data:l.uid));
+  let co_located_dependencies unit uid =
+    let l = Hashtbl.find_exn by_uid uid in
+    List.concat_map l.include_dirs ~f:(fun dir ->
+        if Set.mem (cmis_in dir) unit then Hashtbl.find_multi directories dir else [])
+    |> List.filter ~f:(fun peer ->
+        (not (String.equal uid peer))
+        && depends_on by_uid uid peer
+        && not (List.is_empty (archive peer).definitions))
+  in
+  let interface_cache = Hashtbl.create (module String) in
+  fun unit ->
+    match Hashtbl.find_multi owners unit with
+    | [] when Set.mem !shared_cmis unit ->
+        Hashtbl.find_or_add interface_cache unit ~default:(fun () ->
+            let candidates = Hashtbl.find_multi interface_candidates unit in
+            let dependencies =
+              List.map candidates ~f:(fun uid -> (uid, co_located_dependencies unit uid))
+            in
+            (* A peer outside the reporting scope can still establish ownership. *)
+            let definitions =
+              List.concat_map dependencies ~f:snd
+              |> List.filter ~f:(fun uid ->
+                  List.mem (archive uid).definitions unit ~equal:String.equal)
+              |> List.dedup_and_sort ~compare:String.compare
+            in
+            match definitions with
+            | [] ->
+                interface_owner ~depends_on:(depends_on by_uid)
+                  ~possible_definers:(List.Assoc.find_exn dependencies ~equal:String.equal)
+                  ~name:(fun uid -> (Hashtbl.find_exn by_uid uid).lib_name)
+                  unit candidates
+                |> Option.map ~f:List.return
+            | definitions -> Some definitions)
+    | owners -> Some owners
 
 (* {1 Stanzas} *)
 
@@ -554,14 +629,14 @@ type world = {
   resolve : string -> library option;
   available : string -> bool;
   reach_of : string -> string list option;
-  owners : string -> string list;
+  owners : string -> string list option;
   rewriters : Set.M(String).t;
 }
 
-type verdict = Inactive | Unread | Checked of finding list
+type verdict = Inactive | Refused | Checked of finding list
 
 (* One stanza's verdict. Refusals are recorded through [refuse]. *)
-let judge w s =
+let judge ?(read_references = referenced_units) w s =
   let objdir = object_dir ~workspace_root:w.workspace_root s in
   let reaching =
     declarations ~available:w.available s
@@ -576,24 +651,26 @@ let judge w s =
               None
           | Some l -> Option.map (w.reach_of l.uid) ~f:(fun path -> (name, l.uid, path))))
   in
-  match referenced_units objdir with
+  match read_references objdir with
   | None ->
       if conditional s then Inactive
       else (
         refuse "%s/dune (%s): no object directory %s" s.dir s.name objdir;
-        Unread)
+        Refused)
   | Some (Error e) ->
       refuse "%s/dune (%s): %s" s.dir s.name e;
-      Unread
-  | Some (Ok units) ->
-      let referenced_owners =
-        if List.is_empty reaching then Set.empty (module String)
-        else Set.to_list units |> List.concat_map ~f:w.owners |> Set.of_list (module String)
-      in
-      Checked
-        (List.filter_map reaching ~f:(fun (name, uid, path) ->
-             let used = Set.mem referenced_owners uid in
-             if used then None else Some { stanza = s; library = name; path }))
+      Refused
+  | Some (Ok units) -> (
+      if List.is_empty reaching then Checked []
+      else
+        match List.map (Set.to_list units) ~f:w.owners |> Option.all with
+        | None -> Refused
+        | Some owners ->
+            let referenced_owners = Set.of_list (module String) (List.concat owners) in
+            Checked
+              (List.filter_map reaching ~f:(fun (name, uid, path) ->
+                   if Set.mem referenced_owners uid then None
+                   else Some { stanza = s; library = name; path })))
 
 (* {1 Controls} -- each refusal path, run against synthetic input. *)
 
@@ -641,14 +718,16 @@ let controls ~dune ~objinfo ~tool_stderr =
     (Option.equal String.equal
        (interface_owner
           ~depends_on:(fun a b -> String.equal a "consumer" && String.equal b "owner")
-          ~name:Fn.id "Types_only" [ "consumer"; "owner" ])
+          ~possible_definers:(Fn.const []) ~name:Fn.id "Types_only" [ "consumer"; "owner" ])
        (Some "owner"));
   p_all "missing, incomparable and cyclic interface-only owners are refused"
     [ ([], false); ([ "a"; "b" ], false); ([ "a"; "b" ], true) ]
     ~f:(fun (candidates, cyclic) ->
       refuses (fun () ->
           ignore
-            (interface_owner ~depends_on:(fun _ _ -> cyclic) ~name:Fn.id "Types_only" candidates
+            (interface_owner
+               ~depends_on:(fun _ _ -> cyclic)
+               ~possible_definers:(Fn.const []) ~name:Fn.id "Types_only" candidates
               : string option)));
   let w =
     {
@@ -656,10 +735,48 @@ let controls ~dune ~objinfo ~tool_stderr =
       resolve = (fun _ -> None);
       available = (fun _ -> false);
       reach_of = (fun _ -> None);
-      owners = (fun _ -> []);
+      owners = (fun _ -> Some []);
       rewriters = Set.empty (module String);
     }
   in
+  (let library name requires dir =
+     { lib_name = name; uid = name; local = false; requires; include_dirs = [ dir ] }
+   in
+   let unit = "Shared_types" in
+   let fixture ~owner_requires ~owner_definitions =
+     let owner = library "owner" owner_requires "/shared" in
+     let bridge = library "bridge" [ owner.uid ] "/bridge" in
+     let consumer = library "consumer" [ bridge.uid; compiler_root ] "/shared" in
+     let by_uid =
+       List.map [ owner; bridge; consumer ] ~f:(fun l -> (l.uid, l))
+       |> Hashtbl.of_alist_exn (module String)
+     in
+     let cmi_units dir =
+       if String.equal dir "/shared" then Some ("Consumer" :: unit :: owner_definitions) else None
+     in
+     let archive_of l =
+       if String.equal l.uid owner.uid then { definitions = owner_definitions; interfaces = [] }
+       else { definitions = [ "Consumer" ]; interfaces = [ unit ] }
+     in
+     {
+       w with
+       resolve = Hashtbl.find by_uid;
+       reach_of = reach_path by_uid;
+       owners = library_owners ~cmi_units ~archive_of by_uid;
+     }
+   in
+   let w = fixture ~owner_requires:[ compiler_root ] ~owner_definitions:[ "Owner" ] in
+   let read_references _ = Some (Ok (Set.singleton (module String) unit)) in
+   let stanza = stanza_of "(library (name direct_use) (libraries owner))" in
+   let verdict = ref Inactive in
+   let refused = refuses (fun () -> verdict := judge ~read_references w stanza) in
+   p "a consumer-only interface import refuses the stanza that declares its possible owner"
+     (refused && match !verdict with Refused -> true | _ -> false);
+   let w = fixture ~owner_requires:[] ~owner_definitions:[ "Owner"; unit ] in
+   let known_owner = ref None in
+   let refused = refuses (fun () -> known_owner := w.owners unit) in
+   p "a shared dependency's archive definition takes precedence over interface imports"
+     ((not refused) && Option.equal (List.equal String.equal) !known_owner (Some [ "owner" ])));
   let judged text () = ignore (judge w (stanza_of text) : verdict) in
   p_all
     "the csexp reader refuses an unclosed list, a bare length, a short atom, a stray byte and a \
@@ -847,45 +964,7 @@ let () =
     | Some l -> Some l
     | None -> Option.bind (Map.find public_of name) ~f:(Hashtbl.find by_name)
   in
-  let directories = Hashtbl.create (module String) in
-  Hashtbl.iter by_uid ~f:(fun l ->
-      List.iter l.include_dirs ~f:(fun d -> Hashtbl.add_multi directories ~key:d ~data:l.uid));
-  let owners = Hashtbl.create (module String) in
-  let interface_candidates = Hashtbl.create (module String) in
-  let shared_cmis = ref (Set.empty (module String)) in
-  Hashtbl.iter by_uid ~f:(fun l ->
-      if Option.is_some (reach_path by_uid l.uid) then
-        let shared =
-          List.exists l.include_dirs ~f:(fun d ->
-              List.exists (Hashtbl.find_multi directories d) ~f:(fun uid ->
-                  not (String.equal uid l.uid)))
-        in
-        let cmis =
-          List.concat_map l.include_dirs ~f:(fun d -> Option.value (cmi_units d) ~default:[])
-          |> Set.of_list (module String)
-        in
-        let definitions =
-          if shared then (
-            shared_cmis := Set.union !shared_cmis cmis;
-            let info = shared_units ~findlib ~objinfo l in
-            List.iter info.interfaces ~f:(fun u ->
-                if Set.mem cmis u then Hashtbl.add_multi interface_candidates ~key:u ~data:l.uid);
-            info.definitions)
-          else Set.to_list cmis
-        in
-        List.iter definitions ~f:(fun u -> Hashtbl.add_multi owners ~key:u ~data:l.uid));
-  let interface_cache = Hashtbl.create (module String) in
-  let owners_of unit =
-    match Hashtbl.find_multi owners unit with
-    | [] when Set.mem !shared_cmis unit ->
-        Hashtbl.find_or_add interface_cache unit ~default:(fun () ->
-            interface_owner ~depends_on:(depends_on by_uid)
-              ~name:(fun uid -> (Hashtbl.find_exn by_uid uid).lib_name)
-              unit
-              (Hashtbl.find_multi interface_candidates unit))
-        |> Option.to_list
-    | owners -> owners
-  in
+  let owners = library_owners ~cmi_units ~archive_of:(shared_units ~findlib ~objinfo) by_uid in
   let reach = Hashtbl.create (module String) in
   let w =
     {
@@ -898,7 +977,7 @@ let () =
           | Some l -> (not l.local) || List.exists l.include_dirs ~f:Stdlib.Sys.file_exists);
       reach_of =
         (fun uid -> Hashtbl.find_or_add reach uid ~default:(fun () -> reach_path by_uid uid));
-      owners = owners_of;
+      owners;
       (* A rewriter in [libraries] is linked for its registration with the driver -- nothing names
          it, by design -- so a declared local one is exempt by form. *)
       rewriters =
