@@ -3,6 +3,7 @@
 # and report each one that fails or skips alone (gh-ocannl-1367).
 #
 #   tools/harness-legs-alone.sh                     # every gated harness
+#   tools/harness-legs-alone.sh --shard K/N         # one manifest shard
 #   tools/harness-legs-alone.sh tools/test-promote.sh ...
 #   tools/harness-legs-alone.sh --logs DIR ...      # keep every run's output
 #
@@ -32,24 +33,36 @@
 # whether the full run passed: "passes in the full run" names an
 # order-dependent leg; a red full run is reported first and on its own.
 #
-# With no HARNESS, every member of tools/test-harnesses.sh whose gates list a
-# leg on this host. Each member runs in the caller's environment (strict
-# skips included), except that no list of expected skips reaches it: that
-# list belongs to the aggregate. CI runs this on its daily schedule.
+# With no HARNESS, discover candidates from the paths in tools/test-harnesses.sh
+# --list. The pre-filter looks for literal harness_leg or harness_leg_run
+# tokens on source lines. Shell syntax and indirect calls are outside its
+# scope. A candidate's --list-legs verdict decides whether it has legs here.
+# --shard K/N deals those candidates round-robin in manifest order, before
+# asking any candidate to list its legs. Each member runs in the caller's
+# environment (strict skips included), with the expected-skip list reserved
+# for the aggregate. CI runs this on its daily schedule and by dispatch.
 #
 # Exit: 0 every run passed; 1 a finding, a red full run or a failed listing;
-# 2 a usage error, or a HARNESS named that lists no leg. HUP, INT and TERM
-# stop the check and keep their status (129, 130, 143).
+# 2 a usage error, failed manifest discovery, or a named HARNESS that lists no
+# leg. HUP, INT and TERM stop the check and keep their status (129, 130, 143).
 set -u
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P) || exit 2
 # shellcheck source=../scripts/process-group.sh
 . "$root/scripts/process-group.sh"
-logs= harnesses=()
+logs= harnesses=() shard= shard_index=1 shard_count=1
 while [ $# -gt 0 ]; do
   case $1 in
     --logs)
       [ $# -ge 2 ] && [ -n "$2" ] || { echo "harness-legs-alone.sh: --logs needs a directory" >&2; exit 2; }
       logs=$2
+      shift ;;
+    --shard)
+      if [ $# -lt 2 ] || ! [[ $2 =~ ^([1-9][0-9]*)/([1-9][0-9]*)$ ]] ||
+         ! [ "${BASH_REMATCH[1]}" -le "${BASH_REMATCH[2]}" ] 2>/dev/null; then
+        echo "harness-legs-alone.sh: --shard needs K/N with 1 <= K <= N" >&2
+        exit 2
+      fi
+      shard=$2 shard_index=${BASH_REMATCH[1]} shard_count=${BASH_REMATCH[2]}
       shift ;;
     -h|--help) sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "harness-legs-alone.sh: unknown argument '$1'" >&2; exit 2 ;;
@@ -58,15 +71,31 @@ while [ $# -gt 0 ]; do
   shift
 done
 named=${#harnesses[@]}
+if [ -n "$shard" ] && [ "$named" -gt 0 ]; then
+  echo "harness-legs-alone.sh: --shard deals the manifest and takes no named harnesses" >&2
+  exit 2
+fi
 if [ "$named" -eq 0 ]; then
+  members=$("$root/tools/test-harnesses.sh" --list) || {
+    echo "harness-legs-alone.sh: cannot list the harness manifest" >&2
+    exit 2
+  }
+  position=0
   while IFS= read -r script; do
     # A pre-filter only: a gate call outside a comment, its arguments on the
     # same line or a continued one. The listing below is the authority, and a
     # candidate that lists no leg is printed as not checked.
-    grep -qE '^[^#]*(^|[^A-Za-z0-9_])harness_leg(_run)?([[:space:]]|\\|$)' "$root/$script" 2>/dev/null &&
-      harnesses+=("$script")
-  done < <("$root/tools/test-harnesses.sh" --list)
-  [ ${#harnesses[@]} -gt 0 ] || { echo "harness-legs-alone.sh: no member of tools/test-harnesses.sh gates a leg" >&2; exit 2; }
+    if grep -qE '^[^#]*(^|[^A-Za-z0-9_])harness_leg(_run)?([[:space:]]|\\|$)' "$root/$script" 2>/dev/null; then
+      if [ "$((position % shard_count + 1))" -eq "$shard_index" ]; then
+        harnesses+=("$script")
+      fi
+      position=$((position + 1))
+    fi
+  done <<<"$members"
+  if [ ${#harnesses[@]} -eq 0 ]; then
+    echo "harness-legs-alone.sh: no member of tools/test-harnesses.sh gates a leg${shard:+ in shard $shard}" >&2
+    exit 2
+  fi
 fi
 if [ -n "$logs" ]; then
   mkdir -p "$logs" && logs=$(CDPATH= cd -- "$logs" && pwd -P) ||

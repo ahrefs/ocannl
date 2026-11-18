@@ -1434,9 +1434,10 @@ jobs:
   # alone (gh-ocannl-1367). A leg that needs what an EARLIER leg's body made
   # passes in every full run, so the job above never sees it; it fails only
   # when someone iterates on that leg with --only. tools/harness-legs-alone.sh
-  # reruns each gated harness once per leg and per group (about 20 minutes on a
-  # fast Mac), so it rides the daily schedule, and a deliberate dispatch, rather
-  # than every PR. Dune is installed so that the harnesses reading Dune's own
+  # reruns each gated harness once per leg and per group, so it rides the daily
+  # schedule and deliberate dispatches. The shards deal candidates round-robin
+  # in tools/test-harnesses.sh --list order (gh-ocannl-2353).
+  # Dune is installed so that the harnesses reading Dune's own
   # output (promotion, affected tests) are checked alone too; no strict mode,
   # since the check compares each leg's skips with its harness's full run.
   # A guard opening with the schedule marks a scheduled side job, which
@@ -1444,7 +1445,11 @@ jobs:
   # narrowed to the schedule and dispatches.
   harness-legs-alone:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'
-    name: Shell harness legs, each alone
+    name: Shell harness legs, each alone (${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/4", "2/4", "3/4", "4/4"]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -1466,7 +1471,9 @@ jobs:
         test -n "$ppxlib_below"
         opam install dune "ppxlib<$ppxlib_below"
     - name: Run every gated leg and group alone
-      run: tools/harness-legs-alone.sh
+      env:
+        HARNESS_SHARD: ${{ matrix.shard }}
+      run: tools/harness-legs-alone.sh --shard "$HARNESS_SHARD"
 
   # The benchmark tests WITH torch. The main legs run benchmarks/test_orchestrate.py
   # through dune on a runner without torch, so its legs that drive the real torch
