@@ -177,6 +177,13 @@ let () =
   let from_profile = match source with Utils.From_profile (_, name) -> Some name | _ -> None in
   p "live: fp16_arithmetic comes from the profile the run expects (none: from no profile)"
     (Option.equal String.equal from_profile expected_profile);
-  let explicit_narrow = N.equal_fp16_mode live N.Fp16_narrow && Option.is_none from_profile in
+  (* Each mode's answer by an exhaustive match, so a new mode is a compile error here
+     (gh-ocannl-2260). *)
+  let hip_narrow_mode =
+    match live with
+    | N.Fp16_narrow -> true
+    | N.Fp16_auto | N.Fp16_wide | N.Fp16_prefer_narrow -> false
+  in
+  let explicit_narrow = hip_narrow_mode && Option.is_none from_profile in
   p "live: HIP's uniform-f16 arm is narrow only under an explicit fp16_arithmetic=true"
     (explicit_narrow || hip_wide ())

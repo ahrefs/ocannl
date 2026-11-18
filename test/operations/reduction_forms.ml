@@ -246,11 +246,20 @@ type residency =
 let same_prec a b = String.equal (Ops.prec_string a) (Ops.prec_string b)
 let of_resolved prec resolved = if same_prec resolved prec then At_storage else Wider
 
+(* Each mode's answer below is an exhaustive match over the mode type, never an equality test
+   against one constructor standing for the rest (gh-ocannl-2260): a new fp16 or bf16 mode is then a
+   compile error at every predicate, where an [equal_*_mode] test would silently send it down the
+   [false] branch, as gh-ocannl-2233's new mode nearly was. *)
 let independent_residency prec =
   let policy = Numerics.get () in
   let narrow = policy.Numerics.narrow_compute_f32 in
   let fp16 = policy.Numerics.fp16_arithmetic in
-  let explicit_wide_f16 = Numerics.equal_fp16_mode fp16 Numerics.Fp16_wide in
+  let bf16 = policy.Numerics.bf16_arithmetic in
+  let explicit_wide_f16 =
+    match fp16 with
+    | Numerics.Fp16_wide -> true
+    | Numerics.Fp16_auto | Numerics.Fp16_narrow | Numerics.Fp16_prefer_narrow -> false
+  in
   (* gh-ocannl-2233: the profiles' [Fp16_prefer_narrow] is [Fp16_narrow] on every backend but HIP,
      which floors it to its auto: stated here per backend, not read off [fp16_narrow_floored]. *)
   let narrow_f16 =
@@ -261,8 +270,23 @@ let independent_residency prec =
   (* gh-ocannl-2195: CUDA's and HIP's auto resolves f16 wide too; only [Fp16_narrow] keeps storage
      there (and on CUDA [Fp16_prefer_narrow]). *)
   let not_narrow_f16 = not narrow_f16 in
-  let hip_not_narrow_f16 = not (Numerics.equal_fp16_mode fp16 Numerics.Fp16_narrow) in
-  let wide_bf16 = Numerics.bf16_accum_wide () in
+  let hip_not_narrow_f16 =
+    match fp16 with
+    | Numerics.Fp16_narrow -> false
+    | Numerics.Fp16_auto | Numerics.Fp16_wide | Numerics.Fp16_prefer_narrow -> true
+  in
+  (* Stated here rather than read off [Numerics.bf16_accum_wide], the predicate the CPU backends'
+     own resolution consults. *)
+  let wide_bf16 =
+    match bf16 with
+    | Numerics.Bf16_wide -> true
+    | Numerics.Bf16_auto | Numerics.Bf16_narrow -> false
+  in
+  let not_narrow_bf16 =
+    match bf16 with
+    | Numerics.Bf16_narrow -> false
+    | Numerics.Bf16_auto | Numerics.Bf16_wide -> true
+  in
   match Lazy.force selected_backend with
   | "cc" | "multidev_cc" -> (
       match prec with
@@ -275,9 +299,7 @@ let independent_residency prec =
       match prec with
       | Ops.Half_prec _ when explicit_wide_f16 -> Wider
       (* gh-ocannl-2029: Metal's auto resolves bf16 wide too; only [Bf16_narrow] keeps storage. *)
-      | Ops.Bfloat16_prec _
-        when not (Numerics.equal_bf16_mode policy.Numerics.bf16_arithmetic Numerics.Bf16_narrow) ->
-          Wider
+      | Ops.Bfloat16_prec _ when not_narrow_bf16 -> Wider
       | Ops.Fp8_prec _ -> Wider
       | _ -> At_storage)
   | "cuda" -> (
@@ -290,9 +312,7 @@ let independent_residency prec =
       match prec with
       | Ops.Half_prec _ when hip_not_narrow_f16 -> Wider
       (* gh-ocannl-1051: HIP's auto resolves bf16 wide too; only [Bf16_narrow] keeps storage. *)
-      | Ops.Bfloat16_prec _
-        when not (Numerics.equal_bf16_mode policy.Numerics.bf16_arithmetic Numerics.Bf16_narrow) ->
-          Wider
+      | Ops.Bfloat16_prec _ when not_narrow_bf16 -> Wider
       | Ops.Fp8_prec _ when narrow -> Wider
       | _ -> At_storage)
   | other -> failwith ("no independent accumulator policy recorded for backend " ^ other)

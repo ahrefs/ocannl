@@ -136,7 +136,7 @@ let () =
   let saved = Numerics.get () in
   let policies =
     List.concat_map Numerics.all_of_fp16_mode ~f:(fun fp16_arithmetic ->
-        List.concat_map [ Numerics.Bf16_auto; Bf16_narrow; Bf16_wide ] ~f:(fun bf16_arithmetic ->
+        List.concat_map Numerics.all_of_bf16_mode ~f:(fun bf16_arithmetic ->
             List.concat_map [ true; false ] ~f:(fun narrow_compute_f32 ->
                 List.map [ false; true ] ~f:(fun tf32_matmuls ->
                     { Numerics.fp16_arithmetic; bf16_arithmetic; narrow_compute_f32; tf32_matmuls }))))
