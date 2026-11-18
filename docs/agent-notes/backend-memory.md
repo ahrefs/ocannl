@@ -595,8 +595,9 @@ files.
   For HIP, run `env OCANNL_BACKEND=hip python3 tools/gpu-memory-census.py --hip-memory-model
   unified -- --expect-backend hip build @DIR/runtest-NAME`. Select `discrete` on tuf-amd-linux
   (gfx1102) for resident VRAM, or `unified` on minix-amd-linux (gfx1151) for resident VRAM plus
-  GTT. Minix's HIP device allocation reports under VRAM, and counting GTT also covers
-  GPU-accessible system-memory backing. The model is a batch label supplied by the caller and
+  GTT. Minix's known HIP device allocation raised resident VRAM. The GTT term has fixture
+  coverage. A GPU-touched coherent mapped host buffer left resident GTT flat on the witnessed
+  kernel. The model is a batch label supplied by the caller and
   defaults to unknown (both regions). The counters come from owned KFD processes' amdgpu
   `fdinfo`, once per DRM client and device. The probe prefers `drm-resident-*` and falls back per
   region to the older `drm-memory-*` alias. Requested totals and CPU-only backing are outside
