@@ -1,7 +1,8 @@
 every vendor-gated select arm the census finds is compiled by a stand-in copy: true
+every vendor-gated arm's stand-in copy is held to the stanza selecting it: true
 
 Vendor packages with a stand-in: cudajit, hipjit, metal
-Vendor backend libraries: arrayjit.cuda_backend, arrayjit.hip_backend, arrayjit.metal_backend, arrayjit.metal_math_api_runtime, cuda_backend, hip_backend, metal_backend, metal_math_api_runtime
+Vendor-gated arrayjit libraries: arrayjit.cuda_backend, arrayjit.hip_backend, arrayjit.metal_backend, arrayjit.metal_math_api_runtime, cuda_backend, hip_backend, metal_backend, metal_math_api_runtime
 
 Vendor-gated select arms, each with the stand-in copy that compiles it:
   arrayjit/lib/cuda_backend_impl.cudajit.ml -> arrayjit/vendor_stubs/cudajit/typecheck/cuda_backend_impl.ml
@@ -29,8 +30,61 @@ Select arms gated on no vendor library (no copy demanded):
   test/operations/unused_compiler_deps_fixtures/ucd_sel_unused.with_scan.ml
   test/operations/unused_compiler_deps_fixtures/ucd_sel_used.with_scan.ml
 
-OK: every vendor-gated select arm is type-checked off its box, against the stand-ins.
+Stand-in libraries, each copied module with the genuine stanza it is held to:
+  bench_cuda_select_arm
+    bench_cuda_select <- (executable bench_cuda_select) of benchmarks/runners/ocannl/dune
+  cuda_backend_impl_arm
+    cuda_backend_impl <- (library context) of arrayjit/lib/dune
+  cuda_backend_stub_check
+    cuda_backend <- (library cuda_backend) of arrayjit/lib/dune
+  cuda_wmma_floor_arm
+    cuda_wmma_floor <- (test cuda_wmma_floor) of test/operations/dune
+  fp8_soak_arms
+    fp8_soak <- (executable fp8_soak) of tools/dune
+    fp8_soak_cuda <- (executable fp8_soak) of tools/dune
+    fp8_soak_hip <- (executable fp8_soak) of tools/dune
+  hip_backend_impl_arm
+    hip_backend_impl <- (library context) of arrayjit/lib/dune
+  hip_backend_stub_check
+    hip_backend <- (library hip_backend) of arrayjit/lib/dune
+  metal_backend_impl_arm
+    metal_backend_impl <- (library context) of arrayjit/lib/dune
+  metal_backend_stub_check
+    metal_backend <- (library metal_backend) of arrayjit/lib/dune
+  metal_gpu_core_count_arm
+    metal_gpu_core_count <- (test metal_gpu_core_count) of test/operations/dune
+  metal_math_api_runtime_stub_check
+    metal_math_api_runtime <- (library metal_math_api_runtime) of arrayjit/lib/dune
+  test_cuda_classify_failure_arm
+    test_cuda_classify_failure <- (test test_cuda_classify_failure) of arrayjit/test/dune
+  test_cuda_pool_offset_arm
+    test_cuda_pool_offset <- (test test_cuda_pool_offset) of test/operations/dune
+  test_hip_compile_failure_options_arm
+    hip_compile_failure_options_claims <- (test test_hip_compile_failure_options) of arrayjit/test/dune
+    test_hip_compile_failure_options <- (test test_hip_compile_failure_options) of arrayjit/test/dune
+  test_hip_driver_init_deadline_arm
+    test_hip_driver_init_deadline <- (test test_hip_driver_init_deadline) of arrayjit/test/dune
+  test_metal_alloc_arm
+    test_metal_alloc <- (test test_metal_alloc) of arrayjit/test/dune
+  test_metal_guarded_gather_codegen_arm
+    test_metal_guarded_gather_codegen <- (test test_metal_guarded_gather_codegen) of test/operations/dune
+  test_metal_pool_bindings_arm
+    test_metal_pool_bindings <- (test test_metal_pool_bindings) of test/operations/dune
+  test_metal_pool_slot_width_arm
+    test_metal_pool_slot_width <- (test test_metal_pool_slot_width) of test/operations/dune
+  test_metal_storage_mode_arm
+    test_metal_storage_mode <- (test test_metal_storage_mode) of arrayjit/test/dune
+  vendor_idents_arms
+    vendor_idents <- (executable vendor_idents) of tools/dune
+    vendor_idents_arm_cuda <- (executable vendor_idents) of tools/dune
+    vendor_idents_arm_hip <- (executable vendor_idents) of tools/dune
+    vendor_idents_arm_metal <- (executable vendor_idents) of tools/dune
+
+Stand-in libraries compiling no copy (held to nothing): metal_runtime_stub_agreement
+
+OK: every vendor-gated select arm is type-checked off its box, against stand-ins declaring nothing their genuine stanzas lack.
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:90b26d38400dc5a37ed715269ba3cfbe] every vendor-gated select
+  [scanner-refusal:4cc754a0d44bcdcb048630ccd8e65a5b] vendor-gated arm's stand-in
 End of synthetic controls.

@@ -307,12 +307,19 @@ let raw_entries =
     ( "vendor_stub_arms_scan.ml",
       [
         "[scanner-refusal:99b67dac359b15961fd222795ccfdc9b] does not read";
+        "[scanner-refusal:7ea0203b4dc3b6f9bb27b060390f8d72] compiles";
+        "[scanner-refusal:864cbc7eac4bbb16fefccca605bd57bc] declares";
+        "[scanner-refusal:587907379b3593b5bfde494b2785b186] compiles a copy";
+        "[scanner-refusal:26f527c022e2a36b727d2635a64c83e2] compiles a copy";
+        "[scanner-refusal:3f49f1a86b0b50ae1cc45ae30b8d6bcd] preprocesses";
+        "[scanner-refusal:b1fb94e1e4593366f815fcc28f356790] the availability-only exception";
         "[scanner-refusal:e62fde2478073ff697b31a8548df54f1] dune-file glob matches";
         "[scanner-refusal:513451a79c3ecc3b1fb18f6fee5ee404] arrayjit/vendor_stubs/<package>/dune";
         "[scanner-refusal:b079d32e59c7b93562738e4061682b90] arrayjit/vendor_stubs/";
         "[scanner-refusal:ec6cead6a475041460ddead2715a32a1] copies it into";
         "[scanner-refusal:b420bc79cbc7a037b600c9d47c9b2525] arrayjit/vendor_stubs/";
         "[scanner-refusal:90b26d38400dc5a37ed715269ba3cfbe] every vendor-gated select";
+        "[scanner-refusal:4cc754a0d44bcdcb048630ccd8e65a5b] vendor-gated arm's stand-in";
       ] );
     ( "gc_witness_scan.ml",
       [
