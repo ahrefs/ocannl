@@ -249,7 +249,7 @@ trace_detail = " | ".join(line for line in err.splitlines()
                           if line.startswith(("timing-trace: summary: ", "timing-trace: raised ")))
 claim("the injected run raised one candidate's timing call, not the baseline's",
       len(injected) == 1 and injected[0][0] != "baseline", repr(injected))
-claim("every raised line of the injected run reads as a raised record",
+claim("the injected run printed raised records, each read as one (an unreadable one raises)",
       len(raised) == len(bench_output.trace_events(err, "raised")) > 0, trace_detail)
 claim("exactly one raised record is the injected failure, naming its candidate and exception",
       [(r["label"], r["exception"]) for r in raised].count(injected[0]) == 1

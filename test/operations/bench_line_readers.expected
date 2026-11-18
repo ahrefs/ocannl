@@ -44,7 +44,7 @@ trace-digest counts the attempts: true
 trace-has distinguishes complete and incomplete fixed summaries: true
 the summary's raised-call count is the trace's raised records: true
 the injected run raised one candidate's timing call, not the baseline's: true
-every raised line of the injected run reads as a raised record: true
+the injected run printed raised records, each read as one (an unreadable one raises): true
 exactly one raised record is the injected failure, naming its candidate and exception: true
 the injected run's summary reads INCOMPLETE, counting exactly its raised records: true
 trace-has reads the injected run as incomplete, and its search as done: true
