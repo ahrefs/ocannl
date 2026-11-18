@@ -469,13 +469,18 @@ files.
   moves and agreement rises at every cell; on tuf the outproj argmins leave the plain
   `32x32x16/2x2` leaf (2.3x/3.3x slow, tied with the 4x4 bgrid leaf and first in listing order)
   for `32x32x8/4x4 bgrid`. The copy rate's plateau beside the new term still holds 1e12 (5e11-6.3e12
-  at the CUDA rate). Traps: (a) the `auto` seeding gate keeps neither term -- `seeded_default_gate`
-  resets the fill's lane width to 1 and `seeded_ranker` passes no shared-load rate -- since a 2x2
-  sketch is what it seeds (`model_seeded_anchor`'s CUDA chain) and the terms were fitted on leaf
-  rankings, not sketch against preset; (b) the `kernels` line's `shl=` lists the excess whether
-  or not a rate priced it, so one listing re-scores at any rate, but the lane width moves the fill
-  and needs a listing per width (`FILL_LANE_WIDTH=W`); (c) the unified HIP class and Metal are
-  unmeasured, `None`. Residuals: rog's 16-thread blocks measure 0.52 against 0.59 (likely the
+  at the CUDA rate). Traps: (a) at the five timed gh-1479 CUDA sketch/preset pairs, all eight
+  combinations of direct deduplication, shared-load pricing at the leaf rate, and lane widths 1
+  and 32 gave the same scores. The sketches use the 4x4 calibration tile, both schedules launch
+  whole warps, and deduplication saves zero bytes. Seeding won each measured pair, so the gate
+  keeps raw direct pricing, shared pricing off, and thread-only fill. Timings at 2x2 sites,
+  sub-warp launches, and sites with repeated direct reads remain open. The separate 2x2 chain
+  control charged excess shared loads and kept both seeds in the score comparison.
+  [Paired CUDA measurements](https://github.com/ahrefs/ocannl/issues/2349#issuecomment-6989388436);
+  (b) the `kernels` line's `shl=` lists the excess whether or not a rate priced it, so one listing
+  re-scores at any rate, but the lane width moves the fill and needs a listing per width
+  (`FILL_LANE_WIDTH=W`); (c) the unified HIP class and Metal are unmeasured, `None`.
+  Residuals: rog's 16-thread blocks measure 0.52 against 0.59 (likely the
   per-multiprocessor block cap, not modeled); the plain, under-filled pairs stay gh-ocannl-1639's.
   The `noshl`/`nolane` arms of `gh1253_cells.sh` are the references.
 - **Compare a plan and its rivals in ONE kernel decomposition** (gh-ocannl-1477). The ranking score
