@@ -8,8 +8,8 @@
    [Numerics.all_of_bf16_mode]); the oracle states each mode's wide condition itself, through an
    exhaustive match, rather than calling the resolution under test, so a new mode is a compile error
    here rather than a silent [false] (gh-ocannl-2260). The claim's minimum row count is the product
-   of the grid's axes: derived from the enumerations where an axis has one (the modes, the scopes
-   and their subsets, the booleans), a literal for the hand-written format list. *)
+   of the grid's axes. Adding a format to [mma_input_format] expands both the triple population and
+   the claim's floor. *)
 open Base
 open Verdict.Claims
 module BI = Ir.Backend_intf
@@ -31,11 +31,11 @@ let scope_sets =
       sets @ List.map sets ~f:(fun set -> scope :: set))
 
 let bools = Bool.all
+let formats = BI.all_of_mma_input_format
 
-(* Hand-written: [mma_input_format] derives no [enumerate]. So the claim's floor below keeps its
-   triple count as a literal, which a format dropped from this list falls short of. *)
-let formats = [ BI.Mma_f32; BI.Mma_f16; BI.Mma_bf16; BI.Mma_fp8_e5m2; BI.Mma_tf32 ]
-let format_triple_count = 5 * 5 * 5
+let format_triple_count =
+  let count = List.length formats in
+  count * count * count
 
 let triples =
   List.concat_map formats ~f:(fun a ->

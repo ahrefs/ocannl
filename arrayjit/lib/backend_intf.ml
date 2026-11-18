@@ -133,7 +133,7 @@ type mma_input_format =
       (** OCANNL's single fp8 today ([Ops.Fp8_prec], e5m2). An e4m3 constructor slots in here when
           the precision exists (gh-ocannl-481 item 2); descriptor entries are keyed per operand
           pair, so mixed e5m2×e4m3 combinations need no interface change. *)
-[@@deriving sexp_of, equal]
+[@@deriving sexp_of, equal, enumerate]
 
 (** A physical layout the backend's tensor-core loads can consume for a cooperatively staged operand
     tile, beyond the plain row-major one (gh-ocannl-481 item 3, D3). *)
