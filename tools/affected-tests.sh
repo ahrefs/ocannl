@@ -273,13 +273,15 @@
 #     the count, unless the run starts the line or follows a blank, one of
 #     `=(:,<>|;&` or a backquote or `[`, or a quote that itself starts the line
 #     or follows one of those (after `$V`, `${V}`, `)` or a closing quote it is
-#     a fragment). Never a dropped read: a run `D/B` read from any directory C
-#     is the file C/D/B, which ends with all of `D/B`, so it always has the
-#     most. Within a harness's program (not in what `loads` follows), a shell
-#     `$V/R` or `${V}/R`, with V assigned once in its file as
+#     a fragment); a first part that counts also matches a path part it ends
+#     after a character no run holds (a quoted `"fixture data/x.py"`). Never
+#     a dropped read: a run `D/B` read from any directory C is the file C/D/B,
+#     which ends with all of `D/B`, so it always has the most. Within a
+#     harness's program (not in what `loads` follows), a shell `$V/R` or
+#     `${V}/R` where a path starts (as above), with V written once in its file as
 #     `V=$(cd "$(dirname "$0")[/..]..." && pwd)` (`CDPATH=`, `--`, quotes,
 #     `-P` and a `|| ...` tail allowed; `${BASH_SOURCE[0]}` for `$0`) and in no
-#     other file of that program, and a bare `$(dirname "$0")/R`, name the one
+#     other file of that program, and a `$(dirname "$0")/R` there, name the one
 #     owner at R from the harness's directory (`$0` is the harness in each of
 #     its program's files) or from the file's own (`BASH_SOURCE`), when R
 #     there is one of the owners; otherwise the rule above applies. A Python
@@ -559,13 +561,17 @@ sub norm {   # a relative path with its `.` and `..` parts folded; undef above t
   }
   return join "/", @o;
 }
-sub shared {   # how many trailing parts path P shares with the parts S
-  my ($p, @s) = @_;
+# How many trailing parts path P shares with the parts S. Unless FRAG, the
+# first part may end a part of P after a character no run holds: the line
+# may have split a quoted name there (`"fixture data/x.py"`).
+sub shared {
+  my ($p, $frag, @s) = @_;
   my @q = split m{/}, $p;
   my $n = 0;
   while (@s && @q) {
     my ($x, $y) = (pop @s, pop @q);
-    last unless $x eq $y || ($n == 0 && $x =~ /\A(.+)\.exe\z/ && $y eq "$1.ml");
+    last unless $x eq $y || ($n == 0 && $x =~ /\A(.+)\.exe\z/ && $y eq "$1.ml")
+      || (!$frag && !@s && $x ne "" && $y =~ m{[^A-Za-z0-9_./-]\Q$x\E\z});
     $n++;
   }
   return $n;
@@ -590,15 +596,17 @@ sub resolve {
     my $p = norm(join "/", $at, @s);
     return ($p) if defined $p && $r{$p};
   }
-  my %n = map { $_ => shared($_, @s) } @c;
+  my %n = map { $_ => shared($_, $frag, @s) } @c;
   my ($most) = sort { $b <=> $a } values %n;
   return grep { $n{$_} == $most } @c;
 }
 # The runs of path characters in a line, each [RUN, FRAG, ANCHOR]: FRAG when
 # its first part continues text before it (the header's list of what starts
-# one); ANCHOR `0` or `S` after `$(dirname "$0")` or its `BASH_SOURCE` form,
-# or V after `$V` or `${V}`, when a `/` starts what follows.
+# one); ANCHOR `$0` or `$BASH_SOURCE` after `$(dirname "$0")` or its
+# `BASH_SOURCE` form, or V after `$V` or `${V}`, when that expansion starts a
+# path and a `/` starts what follows it.
 my $self_arg = qr{"?(?:\$0|\$\{0\}|\$BASH_SOURCE|\$\{BASH_SOURCE(?:\[0\])?\})"?};
+sub starts_path { $_[0] eq "" || $_[0] =~ /[\s=(:,<>|;&`\[]\z/ || $_[0] =~ /(?:\A|[\s=(:,<>|;&`\[])["']\z/ }
 sub runs {
   my ($line) = @_;
   my @r;
@@ -606,13 +614,14 @@ sub runs {
     my ($t, $pre) = ($1, substr($line, 0, $-[1]));
     my ($frag, $anchor) = (1, undef);
     if ($pre =~ /\$\z/) {
-      $anchor = $1 if $t =~ m{\A([A-Za-z_]\w*)/};
+      $anchor = $1 if $t =~ m{\A([A-Za-z_]\w*)/} && starts_path(substr($pre, 0, -1));
     } elsif ($pre =~ /\$\(dirname\s+(?:--\s+)?($self_arg)\)\z/) {
-      my $arg = $1;
-      $anchor = $arg =~ /BASH_SOURCE/ ? "S" : "0" if $t =~ m{\A/};
+      my ($arg, $at) = ($1, $-[0]);
+      $anchor = $arg =~ /BASH_SOURCE/ ? '$BASH_SOURCE' : '$0' if $t =~ m{\A/} && starts_path(substr($pre, 0, $at));
     } elsif ($pre =~ /\$\{([A-Za-z_]\w*)\}\z/) {
-      $anchor = $1 if $t =~ m{\A/};
-    } elsif ($pre eq "" || $pre =~ /[\s=(:,<>|;&`\[]\z/ || $pre =~ /(?:\A|[\s=(:,<>|;&`\[])["']\z/) {
+      my ($v, $at) = ($1, $-[0]);
+      $anchor = $v if $t =~ m{\A/} && starts_path(substr($pre, 0, $at));
+    } elsif (starts_path($pre)) {
       $frag = 0;
     }
     push @r, [$t, $frag, $anchor];
@@ -627,16 +636,14 @@ sub raw {
   if (-f $f && open my $h, "<", $f) { local $/; $s = <$h> // ""; close $h }
   return $raw{$f} = $s;
 }
-sub assigns {   # FILE -> {V => how many of its lines may assign V}
+sub assigns {   # FILE -> {V => how many writes of V it may hold}
   my ($f) = @_;
   return $assigns{$f} if $assigns{$f};
   my %n;
   for my $line (grep { !/^\s*#/ } split /\n/, raw($f)) {
-    my %v;
-    $v{$_} = 1 for $line =~ /(?:\A|[\s;&|(`])(?:(?:local|export|readonly|declare|typeset)(?:\s+-\w+)*\s+)?([A-Za-z_]\w*)\+?=/g;
-    $v{$_} = 1 for $line =~ /\bfor\s+([A-Za-z_]\w*)\s/g;
-    if ($line =~ /\b(?:read|readarray|mapfile|getopts|unset|printf\s+-v)\b/) { $v{$_} = 1 for $line =~ /([A-Za-z_]\w*)/g }
-    $n{$_}++ for keys %v;
+    $n{$_}++ for $line =~ /(?:\A|[\s;&|(`])(?:(?:local|export|readonly|declare|typeset)(?:\s+-\w+)*\s+)?([A-Za-z_]\w*)\+?=/g;
+    $n{$_}++ for $line =~ /\bfor\s+([A-Za-z_]\w*)\s/g;
+    if ($line =~ /\b(?:read|readarray|mapfile|getopts|unset|printf\s+-v)\b/) { my %v = map { $_ => 1 } $line =~ /([A-Za-z_]\w*)/g; $n{$_}++ for keys %v }
   }
   return $assigns{$f} = \%n;
 }
@@ -670,7 +677,7 @@ sub names_of {
       my ($t, $frag, $a) = @$run;
       my $at;
       if (defined $a && $f =~ /\.sh\z/) {
-        my $form = $a eq "0" || $a eq "S" ? [$a, 0]
+        my $form = $a eq '$0' ? ["0", 0] : $a eq '$BASH_SOURCE' ? ["S", 0]
           : $sd->{$a} && !(grep { $_ ne $f && assigns($_)->{$a} } @$prog) ? $sd->{$a} : undef;
         $at = norm(join "/", dir_of($form->[0] eq "S" ? $f : $h), ("..") x $form->[1]) if $form;
       }

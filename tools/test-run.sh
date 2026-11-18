@@ -66,6 +66,9 @@
 #                                                      # commands instead, without dune
 #                                                      # or the worktree lock
 #                                                      # (tools/affected-tests.sh)
+#   tools/test-run.sh affected --harness-census [MEMBER] # what each harness reaches, and
+#                                                      # through which token; no dune,
+#                                                      # no lock either
 #   tools/test-run.sh aliases PATH...                 # a test's per-test aliases, by family;
 #                                                      # runs none
 #   tools/test-run.sh prepush --since BASE|OLD..NEW [--referenced-only] [--start] [--cap N] [--test-cap N] [--expect-backend B]...
@@ -4670,13 +4673,13 @@ case $sub in
     exit 0
     ;;
   affected)
-    # `--harnesses` (gh-ocannl-1900) reads the shell harnesses' own text and
-    # asks dune nothing, so it neither contends for `_build` nor needs a dune:
-    # no query lock, no dune selected. Read as the helper reads it, anywhere
-    # before a `--`.
+    # `--harnesses` (gh-ocannl-1900) and `--harness-census` (gh-ocannl-2342)
+    # read the shell harnesses' own text and ask dune nothing, so they neither
+    # contend for `_build` nor need a dune: no query lock, no dune selected.
+    # Read as the helper reads them, anywhere before a `--`.
     aff_dune=1
     for aff_arg in "$@"; do
-      case $aff_arg in --) break ;; --harnesses) aff_dune=0 ;; esac
+      case $aff_arg in --) break ;; --harnesses | --harness-census | --harness-census=*) aff_dune=0 ;; esac
     done
     if [ "$aff_dune" = 1 ]; then
       hold_query_lock "$@"

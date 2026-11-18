@@ -1493,11 +1493,12 @@ hcontrol() { # LABEL FROM TO ARGS... -- WANT...: the mutant must not print the s
 twins=(tools/twin.py data/twin.py a/one/twin.py)
 twin_text() { printf '%s\n' '#!/usr/bin/env bash' "$@" >"$hrepo/tools/test-c.sh"; }
 twin_reach() { # LABEL TWIN...: of the twins, exactly these reach harness c
-  local label=$1 t want miss=
+  local label=$1 t r want miss=
   shift
   for t in "${twins[@]}"; do
     haffected --harnesses --files "$t"
-    case " $* " in *" $t "*) want=tools/test-c.sh ;; *) want= ;; esac
+    want=
+    for r in "$@"; do [ "$r" != "$t" ] || want=tools/test-c.sh; done
     [ "$rc" = 0 ] && [ "$(cat "$out")" = "$want" ] || miss="$miss $t: exit $rc [$(tr '\n' '|' <"$out")];"
   done
   if [ -z "$miss" ]; then report 0 "$label"; else report 1 "$label" "want only [$*]:$miss"; fi
@@ -1523,10 +1524,20 @@ if harness_leg 'harness shared basenames'; then
   twin_reach 'a first part continuing an expansion is no path part' "${twins[@]}"
   twin_text "$self0" 'python3 "$here/twin.py"'
   twin_reach "a self-directory \$here/ reaches the owner beside the harness" tools/twin.py
+  twin_text "$self0" 'python3 "${here}/twin.py"'
+  twin_reach 'so does ${here}/' tools/twin.py
   twin_text 'cat "$(dirname "$0")/twin.py"'
   twin_reach 'so does $(dirname "$0")/' tools/twin.py
   twin_text "$self0" 'here=$TMP' 'cat "$here/twin.py"'
   twin_reach 'a self-directory variable assigned twice places nothing' "${twins[@]}"
+  twin_text "$self0; here=data" 'cat "$here/twin.py"'
+  twin_reach 'nor one assigned again on its own line' "${twins[@]}"
+  for form in '$S' '${S}'; do
+    twin_text 'S=data' "cat \"$form/twin.py\""
+    twin_reach "a variable named like the reader's own anchors places nothing: $form" "${twins[@]}"
+  done
+  twin_text "$self0" 'cat "data/$here/twin.py" "data/$(dirname "$0")/twin.py"'
+  twin_reach 'nor does an anchor inside a path' "${twins[@]}"
   printf '%s\n' 'here=$TMP' >"$hrepo/tools/clib.sh"
   twin_text "$self0" '. tools/clib.sh' 'cat "$here/twin.py"'
   twin_reach 'nor one another file of the program assigns' "${twins[@]}"
@@ -1536,6 +1547,13 @@ if harness_leg 'harness shared basenames'; then
   twin_reach "in a loaded file, BASH_SOURCE's directory is that file's" data/twin.py
   printf '%s\n' 'd=$(cd "$(dirname "$0")" && pwd)' 'cat "$d/twin.py"' >"$hrepo/data/twinlib.sh"
   twin_reach "and \$0's the harness's" tools/twin.py
+  # A split quoted name: the part a blank ends may end an owner's part.
+  mkdir -p "$hrepo/fixture data" && : >"$hrepo/fixture data/twin.py" || exit 2
+  twins+=('fixture data/twin.py')
+  twin_text 'cat "fixture data/twin.py"'
+  twin_reach 'a run a quoted blank splits keeps the owner it splits' data/twin.py 'fixture data/twin.py'
+  unset 'twins[3]'
+  unlink "$hrepo/fixture data/twin.py" && rmdir "$hrepo/fixture data" || exit 2
   twin_teardown
 fi
 
@@ -1577,11 +1595,20 @@ if harness_leg 'harness census'; then
     "$(printf 'tools/test-c.sh\ttools/test-c.sh\tself\t-\t-\t-')" \
     "$(printf 'tools/test-c.sh\ttools/twin.py\tnames\ttools/test-c.sh:3\ttwin.py\t3')"
   twin_teardown
-  for opts in '--harnesses' '--gpu-gated' '--referenced-only' '--why all' '--files data/x.txt' '--since HEAD' 'tools/test-a.sh HEAD' \
-    '-- tools/test-a.sh' '--harness-census=' 'tools/test-gone.sh'; do
+  nochange='--harness-census reads no change, so it takes no revision, --since or --files:'
+  for form in "--harnesses|--harness-census and --harnesses print different lists" \
+    "--gpu-gated|--harness-census prints no alias, so --gpu-gated has none to filter" \
+    "--referenced-only|--harness-census prints no alias, so --referenced-only has nothing to leave off" \
+    "--why all|--harness-census prints no alias, so --why has none to explain" \
+    "--files data/x.txt|$nochange --files data/x.txt" "--since HEAD|$nochange --since HEAD" \
+    "tools/test-a.sh HEAD|$nochange HEAD" "-- tools/test-a.sh|$nochange -- tools/test-a.sh" \
+    "--harness-census=|--harness-census=: name a member, or give none" \
+    "tools/test-gone.sh|--harness-census tools/test-gone.sh: not a member of tools/test-harnesses.sh --list"; do
+    IFS='|' read -r opts why <<<"$form"
     # shellcheck disable=SC2086
     haffected --harness-census $opts
     hexpect "--harness-census refuses $opts" 2
+    herr "saying why: $opts" "$why"
   done
   haffected --files data/x.txt --harness-census
   hexpect '--harness-census refuses a change named before it' 2
@@ -1681,6 +1708,11 @@ STUB
   if [ "$rc" = 0 ] && [ "$(cat "$out")" = "tools/test-h.sh --only '^1:'" ]; then
     report 0 'tools/test-run.sh affected --harnesses needs no dune'
   else report 1 'tools/test-run.sh affected --harnesses needs no dune' "exit $rc; [$(tr '\n' '|' <"$out")]; $(tr '\n' '|' <"$err")"; fi
+  h_self=$(printf 'tools/test-h.sh\ttools/test-h.sh\tself\t-\t-\t-')
+  rc=0
+  (cd "$TMP" && PATH=$nodune_path "$repo/tools/test-run.sh" affected --harness-census) >"$out" 2>"$err" || rc=$?
+  if [ "$rc" = 0 ] && grep -qxF -- "$h_self" "$out"; then report 0 'nor does --harness-census'
+  else report 1 'nor does --harness-census' "exit $rc; [$(tr '\n' '|' <"$out")]; $(tr '\n' '|' <"$err")"; fi
   rc=0
   (cd "$TMP" && PATH=$nodune_path "$repo/tools/test-run.sh" affected --files stubs/s.mli) >"$out" 2>"$err" || rc=$?
   if [ "$rc" = 2 ] && grep -q 'dune not found' "$err"; then report 0 'while the alias query without one is refused'
@@ -1696,8 +1728,9 @@ STUB
   holder=$!
   state=
   read -r state <"$TMP/hlock/ready" || state=
-  rc=0 rc2=0
+  rc=0 rc2=0 rc3=0
   if [ "$state" = held ]; then
+    (cd "$TMP" && "$repo/tools/test-run.sh" affected --harness-census=tools/test-h.sh) >"$TMP/hlock/census" 2>&1 || rc3=$?
     (cd "$TMP" && "$repo/tools/test-run.sh" affected --harnesses --files stubs/s.mli) >"$out" 2>"$err" || rc=$?
     (cd "$TMP" && "$repo/tools/test-run.sh" affected --files stubs/s.mli) >/dev/null 2>"$TMP/hlock/err" || rc2=$?
     echo >"$TMP/hlock/release"
@@ -1705,6 +1738,8 @@ STUB
     rc=holder-$state
   fi
   wait "$holder"
+  if [ "$rc3" = 0 ] && grep -qxF -- "$h_self" "$TMP/hlock/census"; then report 0 '--harness-census=MEMBER runs while a run holds the worktree too'
+  else report 1 '--harness-census=MEMBER runs while a run holds the worktree too' "exit $rc3; $(tr '\n' '|' <"$TMP/hlock/census")"; fi
   rm -rf "${TMP:?}/hlock"
   if [ "$rc" = 0 ] && [ "$(cat "$out")" = "tools/test-h.sh --only '^1:'" ] && [ "$rc2" = 2 ]; then
     report 0 'tools/test-run.sh affected --harnesses runs while a run holds the worktree, the alias query refusing'
