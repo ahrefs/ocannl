@@ -557,6 +557,9 @@ end = struct
                let props = Cu.Device.get_attributes (Cu.Device.get ~ordinal) in
                props.memory_pools_supported)))
 
+  let serial_scratch_budget () =
+    Option.some_if (Lazy.force stream_ordered_scratch_supported) serial_private_array_stack_bytes
+
   module Cuda_syntax_config (Input : sig
     val procs : Low_level.t array
   end) =
@@ -576,8 +579,7 @@ end = struct
         end)
         (Input)
 
-    let serial_device_scratch_budget () =
-      Option.some_if (Lazy.force stream_ordered_scratch_supported) serial_private_array_stack_bytes
+    let serial_device_scratch_budget = serial_scratch_budget
 
     (* gh-ocannl-487 phase 2: [cp.async] staging for software-pipelined tiles (the
        [ocannl_cp_async*] builtins; their name doubles as the [Cuda_mma.gpu_arch_options] floor
@@ -1910,9 +1912,7 @@ end = struct
            tests size their frames from it rather than restating it. *)
         ("local_memory_reset_share", [%sexp_of: int] local_memory_reset_share);
         ( "serial_device_scratch_budget",
-          [%sexp_of: int]
-            (if Lazy.force stream_ordered_scratch_supported then serial_private_array_stack_bytes
-             else 0) );
+          [%sexp_of: int] (Option.value (serial_scratch_budget ()) ~default:0) );
         ("graph_launch_memory_drops", [%sexp_of: int] @@ Atomic.get graph_launch_memory_drops);
       ]
 

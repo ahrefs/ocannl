@@ -15,6 +15,7 @@ serial scratch: free memory stays clear of a depot-sized reservation without a r
 serial scratch: graph capture and cached replay compute the right values: true
 serial scratch: graph capture and replay stay clear of a depot-sized reservation: true
 serial scratch: the cutoff still permits a one-thread local depot: true
+serial scratch: three smaller arrays just over the combined cutoff use the buffer and compute correctly: true
 serial scratch: plain failure after allocation frees exactly once and a retry runs: true
 serial scratch: plain failure at cleanup frees exactly once and a retry runs: true
 serial scratch: capture failure after allocation frees exactly once and a retry runs: true

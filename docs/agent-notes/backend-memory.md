@@ -511,8 +511,9 @@ files.
   stream-ordered memory pools. The reset and
   back-off still use the emitted PTX depot for multi-thread kernels and for other remaining local
   memory. Separate per-thread slices and total-size accounting would be needed for multi-thread
-  scratch. The CUDA regression checks three live slices and initialization on a second run, plain
-  and captured, plus a one-thread array at the cutoff that stays in the depot.
+  scratch. The CUDA regression checks three live slices on repeat execution, with stale
+  initialization distinguished by the captured replay. A one-thread array at the cutoff stays
+  in the depot, and three smaller arrays just above the combined cutoff use scratch.
   On rog-nv-linux's RTX 5070 Ti Laptop GPU, with an exclusive hold and no compute co-tenants at
   open or close, two real `s11d_ref` submissions at each revision recorded these driver readings.
   On `028856294`, the PTX depot was 49152 B and free memory fell by 3356 MiB at both submissions,

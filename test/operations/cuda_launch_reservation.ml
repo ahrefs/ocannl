@@ -414,9 +414,8 @@ let () =
     in
     let serial_graph = Verdict.sub_leg serial_scratch ~when_:capturing ~on:backend_name in
     let serial_cells = s11d_floats / 3 in
-    let serial_expected ~graph =
-      Array.init serial_cells ~f:(fun y ->
-          Float.of_int ((7 * (serial_cells - y)) + if graph then 1 else 0))
+    let serial_expected ~graph n =
+      Array.init n ~f:(fun y -> Float.of_int ((7 * (n - y)) + if graph then 1 else 0))
     in
     let serial_measurement ~graph ~first_id ~name =
       lazy
@@ -437,7 +436,7 @@ let () =
          let ran = Context.set_values ran out (Array.create ~len:n 0.) in
          let (_, replayed), second = run (ran, snd linked) in
          let free2, _ = free_and_total () in
-         let want = serial_expected ~graph in
+         let want = serial_expected ~graph n in
          Stdio.eprintf
            "%s: %d B frame, %d B base depot estimate. Free before %d B, after %d B, after replay \
             %d B (not part of the golden)\n\
@@ -483,11 +482,13 @@ let () =
     in_leg ~leg:serial_graph
       "serial scratch: graph capture and replay stay clear of a depot-sized reservation"
       (fun label -> scratch_headroom label (Lazy.force graph_serial));
+    let stack_budget =
+      lazy
+        (Option.value ~default:(s11d_floats / 3 * 4) (counter ctx "serial_device_scratch_budget"))
+    in
     in_leg ~leg:serial_scratch "serial scratch: the cutoff still permits a one-thread local depot"
       (fun label ->
-        let budget =
-          Option.value ~default:(s11d_floats / 3 * 4) (counter ctx "serial_device_scratch_budget")
-        in
+        let budget = Lazy.force stack_budget in
         let n = budget / 4 in
         let name = "clr_stack_boundary" in
         let values = run_frame ~ctx ~first_id:1774200 ~name n in
@@ -495,6 +496,24 @@ let () =
           (Array.equal Float.equal values (expected n)
           && String.is_substring (Generated.read ~ext:".ptx" name) ~substring:"__local_depot"
           && not (String.is_substring (Generated.read name) ~substring:"ocannl_serial_scratch")));
+
+    in_leg ~leg:serial_scratch
+      "serial scratch: three smaller arrays just over the combined cutoff use the buffer and \
+       compute correctly" (fun label ->
+        (* Together three float arrays of this length exceed the budget by at most one alignment per
+           padded slice and one extra element per array. Each alone fits in the depot. *)
+        let n = (Lazy.force stack_budget / 12) + 1 in
+        let name = "clr_scratch_boundary" in
+        let linked, out =
+          link_program ~ctx ~name ~graph:false
+            (serial_frame_program ~first_id:1774500 ~name ~graph:false n)
+        in
+        let ran = run_linked linked ~seed:[] in
+        p label
+          (Array.equal Float.equal (Context.get_values ran out) (serial_expected ~graph:false n)
+          && String.is_substring (Generated.read name) ~substring:"ocannl_serial_scratch"
+          && not (String.is_substring (Generated.read ~ext:".ptx" name) ~substring:"__local_depot")
+          ));
 
     (* Each scratch lifetime is counted around the real driver calls. A graph failure must also
        leave the stream ready to capture again, with no executable published by the failed run. *)
@@ -535,7 +554,7 @@ let () =
                        [ FI.Cuda_scratch_allocated; FI.Cuda_scratch_freed ]
                   && List.equal Int.equal cached [ 0 ]
                   && List.equal Int.equal rebuilt [ (if graph then 1 else 0) ]
-                  && Array.equal Float.equal value (serial_expected ~graph)))));
+                  && Array.equal Float.equal value (serial_expected ~graph serial_cells)))));
 
     (* --- 4. HIP: the scratch frame runs; the back-off is in place and untouched. --- *)
     let hip_floats =
