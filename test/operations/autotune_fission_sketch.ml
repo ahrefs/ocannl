@@ -40,7 +40,7 @@ let replayed (r : Autotune.report) =
   match r.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false
 
 let completed (r : Autotune.report) =
-  match r.Autotune.outcome with Autotune.Searched -> true | _ -> false
+  match r.Autotune.outcome with Autotune.Searched | Autotune.Searched_untimed -> true | _ -> false
 
 (* Zeros compare equal to zeros. A fragment mapping that reads outside the staged block, a kernel
    that never ran, or a reference whose own setup silently collapsed all yield all-zeros, and a

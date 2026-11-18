@@ -29,10 +29,15 @@ let accum_prec = Ll_test.backend_accum_prec
    particular [not (replayed r)] is NOT "a search ran" — that mis-derivation is what the variant
    exists to stop, and the states section below pins the distinction. *)
 let completed (r : Autotune.report) =
-  match r.Autotune.outcome with Autotune.Searched -> true | _ -> false
+  match r.Autotune.outcome with Autotune.Searched | Autotune.Searched_untimed -> true | _ -> false
 
 let replayed (r : Autotune.report) =
   match r.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false
+
+(* The state a completed search names, by whether it timed anything (gh-ocannl-2310): one whose
+   every window host contention refused completed having timed nothing. *)
+let searched_name (r : Autotune.report) =
+  if r.Autotune.candidates_timed = 0 then "searched-untimed" else "searched"
 
 let approx_tol _ = 1e-4
 
@@ -503,8 +508,8 @@ let () =
     (List.equal String.equal
        (List.map named_states ~f:(fun (_, r) -> Autotune.outcome_name r.Autotune.outcome))
        [
-         "searched";
-         (if first_cacheable then "cache-replay" else "searched");
+         searched_name r1;
+         (if first_cacheable then "cache-replay" else searched_name r2);
          "search-disabled";
          (if cache_committed then "cache-replay" else "search-disabled");
        ]);
