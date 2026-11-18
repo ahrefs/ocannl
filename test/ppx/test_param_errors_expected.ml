@@ -607,3 +607,37 @@ let field_letop =
       fun x ->
         Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
           (fun () -> __ocannl_body x)
+let number_let_rhs =
+  let open! TDSL.O in
+    fun n () ->
+      let w =
+        (TDSL.param ?more_label:None
+           ?value:(Some
+                     ([%ocaml.error
+                        "ppx_ocannl %op: the inline declaration { w } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
+           ?values:None ?param_init:None "w") () in
+      let __ocannl_body x =
+        let n = Int.succ n in ( * ) ?label:(Some ["number_let_rhs"]) w x in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"number_let_rhs" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let init_let_rhs =
+  let open! TDSL.O in
+    fun n () ->
+      let w =
+        (TDSL.param ?more_label:None ?value:None ?values:None
+           ?param_init:(Some
+                          ([%ocaml.error
+                             "ppx_ocannl %op: the inline declaration { w } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
+           "w") () in
+      let __ocannl_body x =
+        let n = Int.succ n in ( * ) ?label:(Some ["init_let_rhs"]) w x in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"init_let_rhs" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)

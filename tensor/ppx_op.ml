@@ -50,21 +50,104 @@ let params_idents params =
    innermost first. *)
 let guard_late ~late ~decl (e : expression) =
   let found = ref None in
+  let bind_pattern bound pat = Set.union bound (collect_pat_idents pat) in
   let visitor =
-    object
+    object (self)
       inherit Ast_traverse.iter as super
+      val bound = Set.empty (module String)
 
-      method! expression e' =
-        (match e'.pexp_desc with
-        | Pexp_ident { txt = Lident n; loc } when Option.is_none !found -> (
-            match List.Assoc.find late ~equal:String.equal n with
-            | Some kind when not (rebinds n e) -> found := Some (n, kind, loc)
-            | _ -> ())
-        | _ -> ());
-        super#expression e'
+      method private visit_bindings bound rec_flag bindings =
+        let body_bound =
+          List.fold bindings ~init:bound ~f:(fun bound vb -> bind_pattern bound vb.pvb_pat)
+        in
+        let rhs_bound = match rec_flag with Recursive -> body_bound | Nonrecursive -> bound in
+        let rhs_scope = {<bound = rhs_bound>} in
+        List.iter bindings ~f:rhs_scope#value_binding;
+        body_bound
+
+      method! expression_desc desc =
+        if Option.is_none !found then
+          match desc with
+          | Pexp_ident { txt = Lident n; loc } when not (Set.mem bound n) ->
+              found :=
+                Option.map (List.Assoc.find late ~equal:String.equal n) ~f:(fun kind ->
+                    (n, kind, loc))
+          | Pexp_let (rec_flag, bindings, body) ->
+              let bound = self#visit_bindings bound rec_flag bindings in
+              {<bound>}#expression body
+          | Pexp_function (params, constraint_, body) ->
+              let bound =
+                List.fold params ~init:bound ~f:(fun bound param ->
+                    {<bound>}#function_param param;
+                    match param.pparam_desc with
+                    | Pparam_val (_, _, pat) -> bind_pattern bound pat
+                    | Pparam_newtype _ -> bound)
+              in
+              let body_scope = {<bound>} in
+              Option.iter constraint_ ~f:body_scope#type_constraint;
+              body_scope#function_body body
+          | Pexp_for (pat, lo, hi, _, body) ->
+              self#pattern pat;
+              self#expression lo;
+              self#expression hi;
+              {<bound = bind_pattern bound pat>}#expression body
+          | _ ->
+              (* An open can import names that are unknown to the PPX. Only syntactic value binders
+                 establish a scope here. A local module name binds in its own namespace. *)
+              super#expression_desc desc
+
+      method! case { pc_lhs; pc_guard; pc_rhs } =
+        self#pattern pc_lhs;
+        let scope = {<bound = bind_pattern bound pc_lhs>} in
+        Option.iter pc_guard ~f:scope#expression;
+        scope#expression pc_rhs
+
+      method! letop { let_; ands; body } =
+        let bindings = let_ :: ands in
+        List.iter bindings ~f:self#binding_op;
+        let bound =
+          List.fold bindings ~init:bound ~f:(fun bound binding ->
+              bind_pattern bound binding.pbop_pat)
+        in
+        {<bound>}#expression body
+
+      method! class_expr_desc =
+        function
+        | Pcl_fun (_, default, pat, body) ->
+            Option.iter default ~f:self#expression;
+            self#pattern pat;
+            {<bound = bind_pattern bound pat>}#class_expr body
+        | Pcl_let (rec_flag, bindings, body) ->
+            let bound = self#visit_bindings bound rec_flag bindings in
+            {<bound>}#class_expr body
+        | desc -> super#class_expr_desc desc
+
+      method! class_structure { pcstr_self; pcstr_fields } =
+        self#pattern pcstr_self;
+        (* Only methods and initializer clauses can refer to self. *)
+        let self_scope = {<bound = bind_pattern bound pcstr_self>} in
+        List.iter pcstr_fields ~f:(fun field ->
+            match field.pcf_desc with
+            | Pcf_method _ | Pcf_initializer _ -> self_scope#class_field field
+            | _ -> self#class_field field)
+
+      method! module_expr_desc =
+        function
+        | Pmod_structure items ->
+            ignore
+              (List.fold items ~init:bound ~f:(fun bound item ->
+                   match item.pstr_desc with
+                   | Pstr_value (rec_flag, bindings) -> self#visit_bindings bound rec_flag bindings
+                   | Pstr_primitive decl ->
+                       {<bound>}#structure_item item;
+                       Set.add bound decl.pval_name.txt
+                   | _ ->
+                       {<bound>}#structure_item item;
+                       bound))
+        | desc -> super#module_expr_desc desc
     end
   in
-  visitor#expression e;
+  if not (List.is_empty late) then visitor#expression e;
   match !found with
   | None -> e
   | Some (n, No_unit, loc) ->

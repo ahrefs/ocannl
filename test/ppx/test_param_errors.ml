@@ -3,7 +3,7 @@ open Ocannl
 open Nn_blocks.DSL_modules
 
 (* gh-ocannl-1987: parameters %op cannot honour where they are written, refused with the fix named.
-   This file is only expanded: each case is an error node in the golden.
+   This file is only expanded, so the golden can pin both error nodes and accepted expansions.
 
    An inline declaration is created where the enclosing [()] is applied -- without one, when the
    function is defined -- so a field naming a parameter bound later than that was OCaml's "Unbound
@@ -132,3 +132,23 @@ let%op field_try_case () x = try x with Failure n -> x + { caught; label = [ n ]
 let%op field_letop () x =
   let* n = [%oc 3] and* m = [%oc 4] in
   x + { first; o = [ n ] } + { second; o = [ m ] }
+
+(* The initializer's non-recursive binder does not cover the reference in its right-hand side. *)
+let%op number_let_rhs n () x =
+  let n = [%oc Int.succ n] in
+  {
+    w =
+      !..(let n = Int.succ n in
+          n);
+  }
+  * x
+
+let%op init_let_rhs n () x =
+  let n = [%oc Int.succ n] in
+  {
+    w =
+      uniform_at
+        (let n = Int.succ n in
+         n);
+  }
+  * x
