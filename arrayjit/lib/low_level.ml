@@ -12362,13 +12362,21 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
        not change its decision (the cap only materializes), and the setter-reads graph of a whole
        step is cyclic through exactly such nodes — a parameter reads its gradient, which reads the
        activations that read the parameter (gh-ocannl-1777). The node's own set is still computed,
-       as a root below. An undecided dependency expands as though it will be virtual, though
-       inlining legality is only settled later ([check_and_store_virtual], inside the virtualizer
-       this pass feeds) — an over-approximation erring toward materialization, the safe direction
-       shared with the multiplicity bound; the opposite default would let a chain of undecided links
-       through the cap on every first compile. A consumer spuriously materialized this way stays an
-       [`Inline] flip candidate, the search's channel for undoing it. *)
-    let entered p = not (Tn.Placements.known_non_virtual plc p) in
+       as a root below. A cap-backed footprint (gh-ocannl-2325) is the same boundary: a reader loads
+       its scratch or, if a stored template cannot refer to that scratch, the cap's whole buffer.
+       Use the producer as the load identity for either. A footprint with no cap to retract to
+       (inherited or explicitly preferred) can still inline, so keep expanding it. An otherwise
+       undecided dependency expands as though it will be virtual, though inlining legality is only
+       settled later ([check_and_store_virtual], inside the virtualizer this pass feeds) — an
+       over-approximation erring toward materialization, the safe direction shared with the
+       multiplicity bound; the opposite default would let a chain of undecided links through the cap
+       on every first compile. A consumer spuriously materialized this way stays an [`Inline] flip
+       candidate, the search's channel for undoing it. *)
+    let entered p =
+      not
+        (Tn.Placements.known_non_virtual plc p
+        || Option.exists (Hashtbl.find footprint_scoped p) ~f:Option.is_some)
+    in
     (* Tarjan over the entered graph, as this pass found it: nothing lands until it is done. The
        components come out dependencies first. *)
     let components =

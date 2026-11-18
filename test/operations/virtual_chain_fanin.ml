@@ -2540,8 +2540,10 @@ let phase11 () =
    cap: its leg lifts that cap to reach the fan-in guard, and two landing legs pin what the cap does
    at its default -- a concat sized exactly to the read materialized whole ([Visit_cap]), the same
    concat with spare cells footprint-scoped onto scratch (gh-ocannl-616). Every concat is sized to
-   the cells it writes, except in that second landing leg. Every leg executes against a reference
-   and a materialized reading, with every producer varying in its cell. *)
+   the cells it writes, except in the footprint legs. With the fan-in cap on, the spare-cell concat
+   costs its reader one load even if the reader stays virtual and the footprint retracts to a whole
+   buffer. Every leg executes against a reference and a materialized reading, with every producer
+   varying in its cell. *)
 
 (* The routine's footprint scratch nodes (gh-ocannl-616): a cap landing on footprint-scoped scratch
    leaves its producer virtual with no read surviving, exactly as inlining does, so a claim that a
@@ -2731,10 +2733,11 @@ let phase12 () =
                [| iter j |]
                (add (get c_ [| iter j |]) (add (get a [| iter k |]) (get w [| iter j |]))))))
   in
-  let reduced =
-    let total = List.sum (module Float) (List.init cells ~f:Fn.id) ~f:(slice_ref concat_parts) in
+  let reduction_ref ~src =
+    let total = List.sum (module Float) (List.init cells ~f:Fn.id) ~f:src in
     Array.init dim ~f:(fun j -> total +. (Float.of_int cells *. v w j))
   in
+  let reduced = reduction_ref ~src:(slice_ref concat_parts) in
   let saved_visits = LL.virtualize_settings.max_visits in
   (LL.virtualize_settings.max_inline_fanin <- 3;
    LL.virtualize_settings.max_visits <- dim;
@@ -2763,14 +2766,13 @@ let phase12 () =
      many cells as [a] has, so the footprint form is no cheaper and [a] is materialized whole, with
      the visit cap's provenance. Allocated [3*dim] and written over [2*dim], the box holds fewer
      cells than [a]: [a] is footprint-scoped, every read served from one scratch node (the
-     [footprint] namespace) of the box's [2*dim] cells. [c] is materialized, so [a]'s is the only
-     decision either leg pins. The legs state the visit cap and the footprint form they pin, so an
-     ambient override of either cannot turn them into a different test. *)
+     [footprint] namespace) of the box's [2*dim] cells. [c] is explicitly materialized to observe
+     the scratch reading and its charge. *)
   let saved_footprint = LL.virtualize_settings.footprint_materialization in
   List.iter
     [ cells; 3 * dim ]
     ~f:(fun size ->
-      LL.virtualize_settings.max_inline_fanin <- -1;
+      LL.virtualize_settings.max_inline_fanin <- 3;
       LL.virtualize_settings.max_visits <- 1;
       LL.virtualize_settings.footprint_materialization <- true;
       let label = Printf.sprintf "land%d" size in
@@ -2801,9 +2803,52 @@ let phase12 () =
               && count_set o s = 1
               && count_get o s = 1
           | _ -> false);
+      p (prefix ^ "the reduction charges two loads (concat and w)") (fanin o c_ = 2);
       p
         (prefix ^ "execution matches the reference and the materialized reading")
         (check_exec ~name ~materialized:[ a ] ~out:c_ ~expected:reduced llc o));
+  (* The visit-cap landing still costs one load if [c] is inlined: a stored reader cannot refer to
+     routine-private scratch, so [a] retracts to the visit cap's whole buffer. *)
+  (LL.virtualize_settings.max_inline_fanin <- 3;
+   let a = lmk ~dims:[| 3 * dim |] "ma_footprint"
+   and c_ = cmk "mc_footprint"
+   and out = cmk "mo_footprint" in
+   materialize out;
+   let concat =
+     List.mapi concat_parts ~f:(fun part ks -> slice_setter a part ks) |> List.reduce_exn ~f:seq
+   in
+   let reader = seq (reducer c_ a) (copy out c_) in
+   let llc = seq concat reader in
+   let name = "vcf_sites_footprint" in
+   let o = optimize ~name llc in
+   p "a visit-capped footprint concat and w cost two loads, so the reduction stays virtual"
+     (fanin o c_ = 2 && known_virtual o c_);
+   p "the virtual reduction reads the concat's visit-cap buffer"
+     (count_get o a = 1 && Option.equal Tn.equal_provenance (rejection_code o a) (Some Tn.Visit_cap));
+   no_footprint_scratch "the virtual reduction leaves no footprint scratch" o;
+   p "the virtual reduction matches the reference and the materialized reading"
+     (check_exec ~name ~materialized:[ a; c_ ] ~out ~expected:reduced llc o);
+   (* An inherited footprint has no whole buffer to fall back to, so routine B must budget the loads
+      of the inline reading. Use one contiguous setter: an inherited concat's separate guards cannot
+      prove coverage at the iterated read. *)
+   let i = sym () in
+   let producer =
+     loop_n i cells
+       (let at = [| iter i |] in
+        set a at (add (add (get x at) (get y at)) (get z at)))
+   in
+   let expected = reduction_ref ~src:(fun i -> v x i +. v y i +. v z i) in
+   let ctx = LL.empty_optimize_ctx () in
+   let o_a = optimize_in ctx ~name:"vcf_sites_footprint_a" producer in
+   let name = "vcf_sites_footprint_b" in
+   let o_b = optimize_in ctx ~name reader in
+   p "an inherited footprint can inline, so its reduction is charged four loads and capped"
+     (known_virtual o_a a && fanin o_b c_ = 4 && is_fanin_cap o_b c_);
+   p "the capped reduction reads the inherited producer through one footprint scratch"
+     (count_get o_b a = 0
+     && match footprint_scratches o_b with [ s ] -> count_get o_b s = 1 | _ -> false);
+   p "the inherited-footprint reduction matches the reference and the materialized reading"
+     (check_exec ~name ~materialized:[ a; c_ ] ~out ~expected (seq producer reader) o_b));
   LL.virtualize_settings.max_visits <- saved_visits;
   LL.virtualize_settings.footprint_materialization <- saved_footprint;
   (* Across routines: A commits the concat and its two-site reader [c] [Virtual] with the cap off;

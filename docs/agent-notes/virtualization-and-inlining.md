@@ -1091,6 +1091,16 @@ files.
   other live site was `C_syntax.parallel_grid_safe`, which privatized a pool chunk's locals in the
   order of a uid-keyed table: the chunk's declarations and which of two equal-sized tiles kept the
   stack followed the uids (now first-access order; `heap_local_arrays`' two-tile leg).
+- **A footprint with a cap to retract to ends fan-in expansion** (gh-ocannl-2325). Both Tarjan
+  and the bottom-up fold consult this specialization's `footprint_scoped` table, the one
+  `virtual_llc` uses. With a cap in the entry, the producer counts as one load, whether a
+  materialized reader loads scratch or a virtual reader forces retraction to the cap's whole
+  buffer. The producer still has its own charge computed as a root. An entry without a cap
+  (an inherited template selected for footprint here, or an explicit footprint preference)
+  can fall back to inlining, so its template's loads still expand. Earlier routines store
+  templates in the lineage, and any footprint decision for those templates is made again here.
+  `virtual_chain_fanin` phase 12 pins the scratch and whole-buffer charges and the inherited
+  fallback, with execution against a materialized reference in each case.
 - **The shift-the-uids check reads what a compile ships, not only the decision surface**
   (gh-ocannl-1877): `flip_order_minting` part 1 compares, across builds minted at different uid
   offsets, the emitted source up to minted identifiers (`Generated.normalize_minted`) and every
