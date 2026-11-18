@@ -927,13 +927,12 @@ let row_entry_gate () =
 (* gh-ocannl-2311: [r ? (g ? s : 0) : 0], [r] a value test reading a scope local (true at [i = 0]
    only) and [s] in range at [i = 0] only. Under a condition reading a local, [Scope_order.arms]
    keeps on [s]'s definition only the guards evaluable anywhere, so with [g] spelled [i / 2 < 0.5]
-   (a division) [s] would render ahead of [g]'s test; the check refuses it, naming the dropped
+   (a division) [s] would render ahead of [g]'s test; both gates refuse it, naming the dropped
    guard. Lowering builds no such guard as a read's only protection: its range guards are affine
    index comparisons at the read ([value_select_division_guard]). The twin, [g] spelled [i < 1], is
    kept and runs. *)
 let row_value_test_dropped () =
-  let x = mk "was_value_test_dropped_x" and out = mk ~dims:[| n |] "was_value_test_dropped_out" in
-  let program inner =
+  let program ~x ~out inner =
     loop (fun i ->
         let r = LL.get_scope (local_node ()) in
         let sr =
@@ -951,18 +950,35 @@ let row_value_test_dropped () =
                (LL.Ternop (Ops.Where, (inner i, single), (s, single), (c 0., single)), single),
                (c 0., single) )))
   in
+  let division i = cmp_at single Ops.Cmplt (binop Ops.Div (embed i) (c 2.)) (c 0.5) in
+  let x = mk "was_value_test_dropped_x" and out = mk ~dims:[| n |] "was_value_test_dropped_out" in
   refused_row ~name:"was_value_test_dropped" ~inputs:[ x ] ~outputs:[ out ]
-    (program (fun i -> cmp_at single Ops.Cmplt (binop Ops.Div (embed i) (c 2.)) (c 0.5)))
+    (program ~x ~out division)
     ~naming:
       [
         "a read of was_value_test_dropped_x can be out of range";
         "under an index guard not evaluable anywhere";
         "a select whose condition reads a scope local";
       ];
+  (* The entry gate, through [optimize] itself: [refused_row]'s [optimize_scoped] optimizes the raw
+     twin and holds only the compile gate to the tree. *)
+  let name = "was_value_test_dropped_entry" in
+  let xe = mk (name ^ "_x") and oute = mk ~dims:[| n |] (name ^ "_out") in
+  List.iter [ xe; oute ] ~f:materialize;
+  let msg =
+    match optimize ~name (program ~x:xe ~out:oute division) with
+    | _ -> "optimized"
+    | exception Invalid_argument m -> m
+  in
+  Stdio.eprintf "%s (not part of the golden): %s\n%!" name msg;
+  p
+    (name ^ ": the entry gate refuses it, naming the read and the dropped guard")
+    (String.is_prefix msg ~prefix:("Low_level.optimize_proc: a read of " ^ name ^ "_x ")
+    && String.is_substring msg ~substring:"under an index guard not evaluable anywhere");
   let name = "was_value_test_kept" in
   let got, source =
     run_row ~name ~inputs:[ x ] ~outputs:[ out ]
-      (program (fun i -> cmp_at single Ops.Cmplt (embed i) (c 1.)))
+      (program ~x ~out (fun i -> cmp_at single Ops.Cmplt (embed i) (c 1.)))
   in
   values name got [ [| sum2 0; 0.; 0.; 0. |] ];
   guarded name source x

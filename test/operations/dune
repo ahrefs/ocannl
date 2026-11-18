@@ -7316,7 +7316,6 @@
   stdio
   arrayjit.utils
   arrayjit.verdict
-  ll_test
   arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))

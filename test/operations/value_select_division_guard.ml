@@ -4,24 +4,27 @@
    Under a select whose condition reads a scope local, [Scope_order.arms] keeps on an inner
    definition only the guards evaluable anywhere ([Scope_order.evaluable_anywhere]: no division,
    modulo, memory or local read), so a definition under a Div-, Mod- or memory-bearing index guard
-   renders ahead of that guard's test wherever the outer select short-circuits (Metal, CUDA, HIP; cc
-   at an integer precision; on cc at a float precision this program's outer select blends, and the
-   inner guard is kept). The question was whether lowering can make such a guard the ONLY protection
-   of a read that leaves its node.
+   renders ahead of that guard's test wherever the outer select short-circuits (on Metal, CUDA and
+   HIP always; a backend that blends it keeps the inner guard instead). The question was whether
+   lowering can make such a guard the ONLY protection of a read that leaves its node.
 
-   The program: [out = where (tot - 6) (where (r / 3 < 1) pool x) 0.25], [tot] a row sum of [s]
-   (inlined: a [Local_scope] in the outer condition), [r] the iteration index ([range_of_shape],
-   inlined as an [Embed_index]), and [pool] a padded max window over [x] (inlined: a [Local_scope]
-   in the inner select's then-arm), whose window reads [x] off both ends. Lowering reaches the shape
-   -- an outer condition reading a local, an inner index guard that is not evaluable anywhere (the
-   division), and a definition under it reading [x] off its node -- but every read of [x] carries
-   its own clamp, a [Where] on affine index comparisons that is evaluable anywhere: lowering builds
-   a range guard at the read it protects ([Assignments.clamp_conds]), so the dropped guard was never
-   the read's protection.
+   The program: [out = where (tot - 6) (where g pool x) 0.25], [g = (r / 3 < 0.5) + (1.9 < r / 3)]
+   (true at [i] in [{0, 1, 6, 7}]), [tot] a row sum of [s] (inlined: a [Local_scope] in the outer
+   condition), [r] the iteration index ([range_of_shape], inlined as an [Embed_index]), and [pool] a
+   padded max window over [x] (inlined: a [Local_scope] in the inner select's then-arm), whose
+   window reads [x] off both ends. Lowering reaches the shape -- an outer condition reading a local,
+   an inner index guard that is not evaluable anywhere (the division), and a definition under it
+   reading [x] off its node -- but every read of [x] carries its own clamp, a [Where] on affine
+   index comparisons that is evaluable anywhere: lowering builds a range guard at the read it
+   protects ([Assignments.clamp_conds]), so the dropped guard was never the read's protection.
 
    Pinned: (1) the optimized IR has the shape; the materialized reference, run through the same
-   predicate, does not (the predicate's control). (2) Every read of [x] sits under an arm of an
-   anywhere index guard. (3) The values equal the materialized reference's and the closed form's. *)
+   predicate, does not (the predicate's control). (2) Every read of [x] at a window offset sits
+   under an arm of an anywhere index guard. (3) The values equal the materialized reference's and
+   the closed form's. The structural claim (2) does not check a clamp's bounds; the values do: [x]
+   peaks at each end tap the selected windows reach ([x.(0)] at [i = 0], [x.(7)] at [i = 7]), so a
+   clamp excluding a valid edge tap changes a selected cell, and one admitting an off-node tap reads
+   outside the buffer. *)
 
 open Base
 open Ocannl
@@ -31,15 +34,19 @@ module Tn = Ir.Tnode
 open Verdict.Claims
 
 let n = 8
-let xv = Array.init n ~f:(fun i -> Float.of_int ((3 * i) + 1))
+let xv = [| 30.; 20.; 40.; 7.; 13.; 50.; 21.; 29. |]
 
 let sv =
   Array.init (n * 2) ~f:(Ll_test.cycle_flat ~dims:[| n; 2 |] ~modulus:7 ~offset:0. ~stride:1.)
 
 let threshold = 6.
 
-(* The closed form: [tot] is [1 5 9 6 3 7 11 1], so only [i = 3] takes the outer else-arm, and [i <
-   3] takes the window max of [x] at [i - 1 .. i + 1], clipped at the left end. *)
+let selected i =
+  let g = Float.of_int i /. 3. in
+  Float.(g < 0.5 || 1.9 < g)
+
+(* The closed form: [tot] is [1 5 9 6 3 7 11 1], so only [i = 3] takes the outer else-arm, and a
+   selected [i] takes the window max of [x] at [i - 1 .. i + 1], clipped at both ends. *)
 let expected =
   Array.init n ~f:(fun i ->
       let tot = sv.(2 * i) +. sv.((2 * i) + 1) in
@@ -49,7 +56,7 @@ let expected =
           ~f:(fun j -> if j >= 0 && j < n then Some xv.(j) else None)
         |> List.reduce_exn ~f:Float.max
       in
-      if Float.(tot - threshold <> 0.) then if i / 3 < 1 then pool else xv.(i) else 0.25)
+      if Float.(tot - threshold <> 0.) then if selected i then pool else xv.(i) else 0.25)
 
 (* The statement-level scalars of [code], scope bodies not entered. *)
 let rec stmt_scalars (code : LL.t) : LL.scalar_t list =
@@ -138,7 +145,7 @@ let run ~materialize_all =
   let%op pool = x @^+ "o=+w; w => o" [ "w" ] (stretch 0.0) in
   Shape.set_dim w 3;
   let%op r = TDSL.range_of_shape ~output_dims:[ n ] () in
-  let%op par = r /. 3.0 < 1.0 in
+  let%op par = (r /. 3.0 < 0.5) + (1.9 < r /. 3.0) in
   let%op tot = s ++ "ok => o" in
   let%op out = where (tot - 6.0) (where par pool x) (0.25 + 0.0) in
   let ctx = Context.auto () in
@@ -151,7 +158,11 @@ let run ~materialize_all =
       ~lowered_transform:(fun o ->
         observed := Some o.LL.llc;
         [ o ])
-      ctx (Train.forward out) Ir.Indexing.Empty
+      ctx
+      (let comp = Train.forward out in
+       let name = if materialize_all then "vsd_materialized" else "vsd_inlined" in
+       { comp with asgns = Ir.Assignments.Block_comment (name, comp.asgns) })
+      Ir.Indexing.Empty
   in
   let ctx = Context.run ctx routine in
   (x.Tensor.value, Option.value_exn ~here:[%here] !observed, Context.get_values ctx out.Tensor.value)

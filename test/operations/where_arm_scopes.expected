@@ -91,6 +91,7 @@ was_value_test_nested: no test ahead of the statement reads x where only the val
 was_value_test_dropped: the IR check names the unprotected read: true
 was_value_test_dropped: the compile gate refuses it: true
 was_value_test_dropped: the refusal names the read and what fails to protect it: true
+was_value_test_dropped_entry: the entry gate refuses it, naming the read and the dropped guard: true
 was_value_test_kept: Access_fold's Emitted mode walks the 2 scope bodies in the kernel's text order: true
 was_value_test_kept: the values are the closed form's: true
 was_value_test_kept: every read of was_value_test_dropped_x sits under its condition: true
