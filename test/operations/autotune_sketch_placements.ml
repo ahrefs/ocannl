@@ -173,10 +173,15 @@ let () =
     (Option.is_none (twins (segments ~target:cpu ~materialized:[ 2; 3 ])))
 
 (* One search, every window scripted alike; the per-segment singles of the coarse segmentation it
-   timed, as (label, schedule digest components). *)
+   timed, as (label, schedule digest components). The singles claimed here are the staffed sweep's
+   [F_sketch] candidates: where the seeded untuned plan has a segmentation of its own (CUDA, since
+   gh-ocannl-2279's gate seeds this chain's products), the default seeded sweep times [F_swap]
+   singles of the plan in their place (gh-ocannl-1664), so the search turns it off, as
+   autotune_staffed_fine does. *)
 let singles comp =
   let (o : Scripted_search.observed) =
     Scripted_search.search ~ctx:(Context.auto ()) ~beam_width:1 ~log:false ~progress:false
+      ~settings:[ ("autotune_seeded_singles", "false") ]
       ~tag:"singles"
       ~measure:(fun _ -> 1.)
       comp
