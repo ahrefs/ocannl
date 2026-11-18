@@ -137,6 +137,7 @@ test/operations/seeded_default.ml -- same-shape: cc seeds no untuned default, so
 test/operations/seeded_narrow_storage.ml -- same-shape: on cc both seeded and model defaults compile the plain default pipeline
 test/operations/seeded_refine_blocks.ml -- same-shape: cc seeds no untuned default, so both sides are the plain compile
 test/operations/seeded_split_reduce.ml -- same-shape: on cc seeded_default splits nothing, so both kernels are the default plan
+test/operations/select_blend_override.ml -- exact-operands: sums of small integers, and a pool gradient selecting dyadic weights
 test/operations/simplify_if_narrowing.ml -- no-contraction: the executed cases are guarded copies and selects
 test/operations/simplify_rng_operands.ml -- no-contraction: threefry bit draws and their uniform conversions, no product feeding an add
 test/operations/split_reduce_block_hoist.ml -- exact-operands: the only product multiplies by the unit loss gradient, so fusing it rounds nothing

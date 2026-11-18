@@ -529,6 +529,7 @@ test/operations/scope_collapse_rounding.ml [run by @test/operations/runtest-scop
     "Vectorized reduction rendering"
     "_mid"
     "ocannl_vec"
+test/operations/select_blend_override.ml [run by @test/operations/runtest-select_blend_override; also pins text this scan cannot name: computed fragment]
 test/operations/source_tokens_joined.ml [renders generated text in memory; run by @test/operations/runtest-source_tokens_joined]
 test/operations/test_bounds_folded_gather.ml [run by @test/operations/runtest-test_bounds_folded_gather]
     "!= 0 ?"
@@ -764,6 +765,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-schedule_swizzle_matmul
 @test/operations/runtest-scheme_codegen
 @test/operations/runtest-scope_collapse_rounding
+@test/operations/runtest-select_blend_override
 @test/operations/runtest-source_tokens_joined
 @test/operations/runtest-test_bounds_folded_gather
 @test/operations/runtest-test_ident_blacklist

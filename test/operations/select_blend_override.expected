@@ -1,0 +1,12 @@
+inside the extent, the backend's facts state the blend asked for, either way: true
+after the extent, the backend's own facts again: true
+the equality select stated short: the producer is kept virtual by the fan-in cap: true
+the equality select stated short: the loss matches the reference (exact: small integers): true
+the equality select stated short: the routine does not emit the blend: true
+the equality select stated blend: the producer is materialized by the fan-in cap: true
+the equality select stated blend: the loss matches the reference (exact: small integers): true
+the equality select stated blend: the routine emits the blend: true
+pool backward stated short: the routine does not emit the blend: true
+pool backward stated blend: the routine emits the blend: true
+pool backward: the blended gradient equals the short-circuiting one, bitwise: true
+pool backward: the gradient is discriminating (zero and nonzero cells): true

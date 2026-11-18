@@ -5,13 +5,17 @@ module Lazy = Utils.Lazy
 module Cu = Cuda
 open Backend_intf
 
-let select_rendering = Stdlib.Domain.DLS.new_key (fun () -> None)
+let captured_sources = Stdlib.Domain.DLS.new_key (fun () -> None)
 
 let with_select_rendering ~blend f =
-  let saved = Stdlib.Domain.DLS.get select_rendering in
+  let saved = Stdlib.Domain.DLS.get captured_sources in
   let sources = ref [] in
-  Stdlib.Domain.DLS.set select_rendering (Some (blend, sources));
-  let result = Exn.protect ~f ~finally:(fun () -> Stdlib.Domain.DLS.set select_rendering saved) in
+  Stdlib.Domain.DLS.set captured_sources (Some sources);
+  let result =
+    Exn.protect
+      ~f:(fun () -> Backend_intf.with_select_blend ~facts:Backend_intf.cuda_facts ~blend f)
+      ~finally:(fun () -> Stdlib.Domain.DLS.set captured_sources saved)
+  in
   (result, List.rev !sources)
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
@@ -568,11 +572,6 @@ end = struct
       Cuda_like_config.Make
         (struct
           include Cuda_like_config.Cuda
-
-          let backend_facts =
-            match Stdlib.Domain.DLS.get select_rendering with
-            | None -> backend_facts
-            | Some (blend, _) -> { backend_facts with blends_value_selects = blend }
 
           let builtins = Builtins_cuda.builtins
           let extra_blacklist = []
@@ -1228,7 +1227,7 @@ end = struct
        compiled: the debug view of what codegen emitted (and what tests read) does not depend on
        what the cache held. The renaming is the key's alone; nvrtc compiles the emitted text. *)
     let full_source = with_conditional_includes (r.assemble all) in
-    Option.iter (Stdlib.Domain.DLS.get select_rendering) ~f:(fun (_, sources) ->
+    Option.iter (Stdlib.Domain.DLS.get captured_sources) ~f:(fun sources ->
         sources := full_source :: !sources);
     write_source_artifact ~name full_source;
     (* Not under device debugging: PTX debug info names the source file it was compiled from, which

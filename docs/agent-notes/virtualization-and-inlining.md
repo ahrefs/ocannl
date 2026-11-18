@@ -1008,6 +1008,14 @@ files.
   Pins: `virtual_chain_fanin`
   phases 1c, 1d (the arm chosen after expansion) and 2b/2c (two-sided on the running backend),
   `access_fold`, `backend_facts`, and `op_table_compile` against the emitted kernels.
+- **To time a whole program under the other select rendering, override the fact, not the
+  renderer** (gh-ocannl-2326). `Backend_intf.with_select_blend ~facts ~blend` states
+  `blends_value_selects` for one backend's record on the calling domain, and both readers take it
+  through `effective_facts`: `Backends.lower_assignments` (so the guard charges the union exactly
+  where the renderer blends) and the cc/CUDA/HIP renderers. `Cuda_backend.with_select_rendering`
+  wraps it for `bench_cuda_select`. A `~prelowered` segment keeps the placements it was lowered
+  with, so over one segment the arms differ in rendering only. Not in the schedule cache's
+  identity: time under it with the cache bypassed. Pin: `select_blend_override`.
 - **A node passes downstream its ALTERNATIVES, and a consumer is charged the maximum over them
   joined with its own loads** (gh-ocannl-2047, gh-ocannl-2098, gh-ocannl-2128). An alternative is a
   load set one read of one cell can run: one per write-overlap group of setters (a read replays

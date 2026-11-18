@@ -828,6 +828,37 @@ type result_probe_dialect = C_probes | Cxx_probes of string
    and no arm can mention them. *)
 let blend_local_a = "ocannl_sel_a__"
 
+(* See the interface. *)
+let canonical_minted_idents src =
+  let n = String.length src in
+  let buf = Buffer.create n in
+  let ids = Hashtbl.create (module String) in
+  let is_ident c = Char.is_alphanum c || Char.equal c '_' in
+  let rec scan_while k ~f = if k < n && f src.[k] then scan_while (k + 1) ~f else k in
+  let rec go k =
+    if k < n then
+      let c = src.[k] in
+      if Char.is_whitespace c then go (k + 1)
+      else if Char.is_digit c then (
+        (* A literal, kept whole: its digits are no identifier's. *)
+        let j = scan_while k ~f:(fun c -> is_ident c || Char.equal c '.') in
+        Buffer.add_substring buf src ~pos:k ~len:(j - k);
+        go j)
+      else if is_ident c then (
+        let j = scan_while k ~f:is_ident in
+        let word = String.sub src ~pos:k ~len:(j - k) in
+        if String.exists word ~f:Char.is_digit then
+          let id = Hashtbl.find_or_add ids word ~default:(fun () -> Hashtbl.length ids) in
+          Buffer.add_string buf ("#" ^ Int.to_string id)
+        else Buffer.add_string buf word;
+        go j)
+      else (
+        Buffer.add_char buf c;
+        go (k + 1))
+  in
+  go 0;
+  Buffer.contents buf
+
 (** The two [Blend_over_locals] renderings, shared by [C_syntax.pp_scalar_op] and
     {!operand_conditionality_violations} so the checked text is the emitted one: an
     immediately-invoked lambda capturing by reference ([[&]() { ... }()]) that binds the arms to

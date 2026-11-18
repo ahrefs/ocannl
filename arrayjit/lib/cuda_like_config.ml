@@ -935,7 +935,8 @@ struct
      the gate's test are the [?:]'s, [__half] / [float] mixtures included. Not at fp8, whose
      operators bridge through [float] and no test exercises a blend of. *)
   let select_blend_syntax prec =
-    if not Dialect.backend_facts.Backend_intf.blends_value_selects then None
+    if not (Backend_intf.effective_facts Dialect.backend_facts).Backend_intf.blends_value_selects
+    then None
     else
       match prec with
       | Ops.Half_prec _ | Ops.Bfloat16_prec _ | Ops.Single_prec _ | Ops.Double_prec _ ->

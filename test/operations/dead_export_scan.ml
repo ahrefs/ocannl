@@ -53,6 +53,9 @@ module Dune = Test_scan.Dune_stanza_scan
 let exempt_zero_reference_exports =
   [
     "Backend_impl.next_global_device_id";
+    (* gh-ocannl-2326: the domain-local state behind [with_select_blend] and [effective_facts];
+       Backend_intf has no .mli to hide it in. *)
+    "Backend_intf.select_blend_override";
     "Lexer.multichar_token";
     "Lexer.single_char_token";
     "Ndarray.adjust_idx_for_padding";
