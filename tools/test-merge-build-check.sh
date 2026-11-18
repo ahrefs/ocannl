@@ -19,7 +19,8 @@
 # admit; the base alone never prints the merge's refusal line; and `record` certifies only a
 # finished, clean, cc run of an allowlisted command, `prune` only merged heads. The reader
 # prints admitted writers, including legacy, and rejects malformed writers. The fleet report
-# fixture supplies runner argv and last-run metadata to the real hook, with a local record ref.
+# fixture supplies runner argv and last-run metadata to the real hook. The real merge gate reads
+# the published ref from a local bare repository and prints its writer for one stubbed train alias.
 # Structured train-name rows require a count matching distinct names and an alias the
 # tree has; legacy count-only output still asks affected and must agree exactly.
 # The branch plan uses the chosen base's merged tree and the real record check,
@@ -117,6 +118,10 @@ exit "${FAKE_FMT_RC:-0}"
 FAKE
   cat >"$R/tools/test-run.sh" <<'FAKE'
 #!/bin/sh
+if [ "$*" = 'paths run last' ]; then
+  printf '%s\n' "$FAKE_LAST_RUN"
+  exit
+fi
 printf '%s\n' "$*" >>"$FAKE_RECORD.tiers"
 if [ -n "${FAKE_PLAN_BASE:-}" ]; then
   [ "$(git rev-parse 'HEAD^1')" = "$FAKE_PLAN_BASE" ] &&
@@ -796,19 +801,19 @@ EOF
   else report 1 'prune deletes the merged head'"'"'s record and keeps the open one'"'"'s' "exit $orc: $(cat "$TMP/owed-out"); left: $left"; fi
 fi
 
-if harness_leg 'the fleet report publishes only eligible, clean owed runs #owed-report'; then
-  fixture owed-report
+owed_report_leg() {
+  if ! fixture owed-report || ! git -C "$R" checkout -q side; then
+    harness_abandon 'could not create the fleet report checkout'
+    return
+  fi
   hook=$(sed -n 's/^run-report //p' "$HERE/../.github/fleet-leg")
-  cp "$HERE/../$hook" "$R/tools/" || exit 1
-  cat >"$R/tools/test-run.sh" <<'FAKE'
-#!/bin/sh
-[ "$*" = 'paths run last' ] || exit 2
-printf '%s\n' "$FAKE_LAST_RUN"
-FAKE
-  git -C "$R" add tools && git -C "$R" commit -qm hook
+  if ! cp "$HERE/../$hook" "$R/tools/" || ! commit_on side; then
+    harness_abandon 'could not commit the fleet report hook on the fixture head'
+    return
+  fi
   hook_head=$(git -C "$R" rev-parse HEAD)
   hook_url=$TMP/owed-report.git
-  git init -q --bare "$hook_url"
+  git init -q --bare "$hook_url" || { harness_abandon 'could not create the record repository'; return; }
   leg_report() { # fresh|stale|shared LAST_RUN ARGV...
     local state=$1 last_run=$2
     shift 2
@@ -850,7 +855,8 @@ FAKE
     else report 1 "$1" "exit $hrc; $(cat "$TMP/hook-out")"; fi
   }
   alias=@test/training/train-a
-  last_run=$(rundir leg-good 0 '' cc "build --no-buffer $alias -j 1 -j 4" "$hook_head")
+  leg_cmd="build --no-buffer $alias -j 1 -j 4"
+  last_run=$(rundir leg-good 0 '' cc "$leg_cmd" "$hook_head")
   leg_report fresh "$last_run" env OCANNL_BACKEND=cuda tools/test-run.sh run --expect-backend cuda build "$alias"
   hook_skip 'an otherwise eligible GPU argv skips the report' 'recorded nothing (not an owed-run argv)'
   leg_report stale "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias"
@@ -868,19 +874,28 @@ FAKE
   leg_report fresh "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias"
   hook_skip 'a dirty control cannot republish an earlier clean receipt' 'the fleet worktree is dirty'
   git -C "$R" checkout -- x.ml
-  git -C "$R" push -q "$hook_url" "$hook_head:refs/heads/master" || exit 1
+  git -C "$R" push -q "$hook_url" "$hook_head:refs/heads/master" ||
+    { harness_abandon 'could not publish the already-merged control head'; return; }
   leg_report fresh "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias"
   hook_skip 'a head already on the record repository master leaves no record ref' "recorded nothing (head is on master at $hook_url)"
-  git -C "$R" push -q -f "$hook_url" "$hook_head^:refs/heads/master" || exit 1
-  git -C "$R" update-ref refs/remotes/origin/master "$hook_head"
+  if ! git -C "$R" push -q -f "$hook_url" "$hook_head^:refs/heads/master" ||
+     ! git -C "$R" update-ref refs/remotes/origin/master "$hook_head"; then
+    harness_abandon 'could not put the control head ahead of the record repository master'
+    return
+  fi
   leg_report fresh "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias" -j 1
-  owed "$hook_url" check "$hook_head" "$alias"
+  merge_side || { harness_abandon 'could not merge the published head into the fixture base'; return; }
+  printf '%s\n' "$alias" >"$TMP/hook-train-name"
+  OCANNL_TOOL_OWED_RUN_URL=$hook_url FAKE_TRAIN_N=1 FAKE_TRAIN_NAMES=$TMP/hook-train-name run "$TMP/dunebin"
   leg_host=$(hostname -s 2>/dev/null || hostname)
-  if [ "$hrc" = 0 ] && [ "$orc" = 0 ] && grep -qF "writer=leg:$leg_host)" "$TMP/owed-out"; then
-    report 0 'a training leg publishes against the record repository and check prints its writer'
-  else report 1 'a training leg publishes against the record repository and check prints its writer' \
-    "report exit $hrc: $(cat "$TMP/hook-out"); check exit $orc: $(cat "$TMP/owed-out")"; fi
-fi
+  admission="merge-build-check:   owed-run: admitted run of '$leg_cmd' for ${hook_head:0:8}"
+  if [ "$hrc" = 0 ] && [ "$rc" = 0 ] &&
+     grep -qxF "$admission ($leg_host:$last_run, writer=leg:$leg_host)" "$TMP/out"; then
+    report 0 'the merge gate admits the published training record with its fleet writer'
+  else report 1 'the merge gate admits the published training record with its fleet writer' \
+    "report exit $hrc: $(cat "$TMP/hook-out"); merge gate exit $rc: $(cat "$TMP/out")"; fi
+}
+harness_leg_run 'the fleet report publishes only eligible, clean owed runs #owed-report' owed_report_leg
 
 # Use the same tree twice, but force each tier across a different whole-second duration.
 # Compare complete logs without normalizing digits, including the shared shell-red scenario.
