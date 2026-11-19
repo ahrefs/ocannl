@@ -65,7 +65,7 @@ def problems(path):
         found = [a for a in arms if a.get("arm") == name]
         state = found[0].get("state") if len(found) == 1 else None
         if state == "searched-budget-fallback":
-            out.append("INCOMPLETE SESSION: arm %s shipped the untimed default after a budget cut" % name)
+            out.append("INCOMPLETE SESSION: arm %s fell back to the unmeasured default after a budget cut" % name)
             continue
         if state not in ("searched", "searched-untimed"):
             # Absent, ambiguous, or did not search: "searched":true at the top covers a died search.

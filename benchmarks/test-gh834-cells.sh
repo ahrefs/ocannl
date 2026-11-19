@@ -111,7 +111,7 @@ leg 'an arm whose state says it timed nothing is untimed, whatever its best_ms (
   'INCOMPLETE SESSION: arm B timed no candidate'
 leg 'a budget fallback is incomplete even if the record carries a timing' \
   rejects searched-budget-fallback "$(line "$A" "$(arm B state='"searched-budget-fallback"')")" \
-  'INCOMPLETE SESSION: arm B shipped the untimed default after a budget cut'
+  'INCOMPLETE SESSION: arm B fell back to the unmeasured default after a budget cut'
 leg 'a non-JSON NaN timing is not a timing' \
   rejects nan "$(line "$A" "$(arm B best_ms=NaN)")" 'INCOMPLETE SESSION: the result line is not JSON'
 overflow=$(line "$A" "$(arm B best_ms=7.5)")

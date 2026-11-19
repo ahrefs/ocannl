@@ -21,10 +21,10 @@
 
    After the seeds, the [tuned] variant is the tuner's own crown (gh-ocannl-1843): a full
    [Autotune.tune] search with the disk cache disabled, its winner's label printed as a [crown]
-   line, then checked and timed like every seed. A search that refused a timing window for
-   contention, timed nothing or did not search is reported as a failed variant, not a crown. The
-   harness uses only APIs older than gh-ocannl-1843, so one source builds at a base and at a head
-   and [bin_cells.py --arm-exe] pairs their variants by label.
+   line, then checked and timed like every seed. Admission requires a timed crown and an uncontended
+   search. [bin_cells.py --arm-exe] pairs the variants of two prebuilt executables by label. For a
+   same-source comparison across gh-ocannl-2365, build the base's benchmark source against both
+   revisions. The newer source requires [Searched_budget_fallback].
 
    Usage: companion_flavor_bench diag [N K] [repeats] | companion_flavor_bench tail [M N K]
    [repeats] | companion_flavor_bench conv [B] [repeats] (repeats default 16). Measure through
