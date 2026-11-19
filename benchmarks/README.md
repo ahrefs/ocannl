@@ -1673,11 +1673,12 @@ both `cifar_resnet` and `cifar_resnet_b1` absent from the store (gh-ocannl-1825)
     per kernel, about 545 s of its 600 s `BENCH_DOMINANT_KERNEL_BUDGET_S`, hence the kernel default
     of four. Four calls a kernel still cost 371-381 s of a 377-386 s cell, so since gh-ocannl-1763
     the dominant-kernel instrument screens every kernel with ONE call and re-times only the
-    candidates its screen leaves (the column's passage above), closing with a `bench: dominant
-    kernel: screened ..` stderr line that states both stages' wall time (on that Metal step: 94-100 s,
-    against 364-366 s for the full table; on cc about half the table's; on HIP, where one queued
-    call costs over a second, about 450 s of the 600 s budget -- the agent note has the numbers);
-    with the table on, every
+    candidates its screen leaves (the column's passage above); since gh-ocannl-1818 that one call
+    is `isolated`, and only the 24 slowest get one more under the configured objective, since a
+    queued call costs over a second on CUDA/HIP. Its closing `bench: dominant kernel: screened ..`
+    stderr line states the three stages' wall times (minix HIP, 286 kernels: about 106 s, against
+    465-480 s for the one-queued-call screen; Metal, 195 kernels: about 18 s -- the agent note has
+    the numbers); with the table on, every
     kernel is still re-timed, so a table costs what it did. With the table on, its
     closing `bench: per-kernel table:` line states the instrument's wall time. A kprof cell pins
     `--ocannl_autotune_timing=isolated`, whose synchronized singles keep its trace to a few hundred

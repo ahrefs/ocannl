@@ -286,9 +286,16 @@ let screen_keep ?(ratio = screen_ratio) ?(at_most = screen_at_most) ?(refused = 
 (** The most kernels the first stage keeps (not counting those with no reading), the slowest
     isolated readings first: three times {!screen_at_most}, so that the queued-slowest kernel stays
     in while fewer than that many others read above it isolated -- sixteen more than the final cap
-    allows. Each costs one reading under the configured objective in the second stage -- about 1.3 s
-    on HIP, so ~30 s at the cap. *)
+    allows. Each costs one reading under the configured objective in the second stage: on minix
+    (HIP, unified memory, gpt2_mini_train) the 24 queued calls took 25.8-25.9 s, about 1.1 s a call.
+*)
 let screen_wide_at_most = 3 * screen_at_most
+
+(** [rank_among r readings]: [r]'s rank among [readings], 1 for the slowest, ties sharing the better
+    rank -- [1 +] the readings above it. The instrument's closing line states the dominant kernel's
+    rank among the re-screened kernels' isolated readings by it: how close the first stage came to
+    leaving it out. *)
+let rank_among r readings = 1 + List.count readings ~f:(fun x -> Float.(x > r))
 
 (** [screen_keep_wide entries]: the first stage's cut, {!screen_keep} at {!screen_wide_at_most} and
     no ratio, over [entries] paired with their {!screen_timing} reading. Like {!screen_keep} without

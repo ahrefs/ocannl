@@ -1889,7 +1889,7 @@ let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing (
                 match List.Assoc.find rescreened d ~equal:Int.equal with
                 | Some (Some r, _) ->
                     Printf.sprintf "; k%d's isolated reading ranked %d of %d" d
-                      (1 + List.count isolated ~f:(fun x -> Float.(x > r)))
+                      (Bench_retime.rank_among r isolated)
                       (List.length isolated)
                 | Some (None, _) -> Printf.sprintf "; k%d had no isolated reading" d
                 | None -> "")

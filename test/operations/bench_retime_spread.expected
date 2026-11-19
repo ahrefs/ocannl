@@ -33,7 +33,8 @@ screen: nothing to screen keeps nothing, drops nothing: true
 screen: applied after each reading, it keeps what one application to all of them keeps: true
 two-stage screen: the first stage kept 25 of 34
 two-stage screen: the scenario crowds the dominant kernel out of a single isolated stage: true
-two-stage screen: the first stage keeps the dominant kernel, ranked thirteenth isolated: true
+two-stage screen: the first stage keeps the dominant kernel: true
+two-stage screen: the dominant kernel ranks thirteenth among the kept isolated readings: true
 two-stage screen: the first stage keeps screen_wide_at_most readings and the unread kernel: true
 two-stage screen: what the first stage drops are the fastest isolated readings: true
 two-stage screen: the first stage applies no ratio: a reading past 2x of the slowest is kept while the cap has room: true

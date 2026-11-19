@@ -179,8 +179,10 @@ let () =
   p_none "two-stage screen: the scenario crowds the dominant kernel out of a single isolated stage"
     (fst (R.screen_keep (List.map kernels ~f:(fun k -> (k, isolated k)))))
     ~f:(fun k -> String.equal (name k) "dom");
-  p_exists "two-stage screen: the first stage keeps the dominant kernel, ranked thirteenth isolated"
-    wide ~f:(fun k -> String.equal (name k) "dom");
+  p_exists "two-stage screen: the first stage keeps the dominant kernel" wide ~f:(fun k ->
+      String.equal (name k) "dom");
+  p "two-stage screen: the dominant kernel ranks thirteenth among the kept isolated readings"
+    (R.rank_among 0.34375 (List.filter_map wide ~f:isolated) = 13);
   p "two-stage screen: the first stage keeps screen_wide_at_most readings and the unread kernel"
     (List.length wide = R.screen_wide_at_most + 1);
   p_all "two-stage screen: what the first stage drops are the fastest isolated readings"
