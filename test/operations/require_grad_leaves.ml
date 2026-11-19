@@ -54,8 +54,8 @@ let close name got want = Verdict.p_close name got want ~tol:(fun _ -> 1e-6)
 (* A data-backed leaf ([init_data]): its value is set once, not by forward code, so an optimizer can
    step it -- a [term_init] leaf below the constant-fill threshold is re-established by every
    forward run instead. *)
-let data_leaf ~l ?(grad_spec = Tensor.Require_grad) values =
-  Operation.init ~l ~prec:Ir.Ops.single
+let data_leaf ~l ?mutable_ ?(grad_spec = Tensor.Require_grad) values =
+  Operation.init ?mutable_ ~l ~prec:Ir.Ops.single
     ~o:[ Array.length values ]
     ~f:(function [| i |] -> values.(i) | _ -> assert false)
     ~grad_spec ()
@@ -69,7 +69,7 @@ let input_optimization () =
   printf "=== 1. Input optimization ===\n";
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
-  let x = data_leaf ~l:"xin" [| 1.; 2. |] in
+  let x = data_leaf ~l:"xin" ~mutable_:true [| 1.; 2. |] in
   (* Per cell: w * x^2, so dl/dx = 2 w x and dl/dw = x^2. *)
   let%op l = { w = [ 2.; 3. ] } *. x *. x in
   let w = Set.min_elt_exn l.Tensor.params in
@@ -113,7 +113,7 @@ let accumulation () =
   let ctx = Context.auto () in
   let x = data_leaf ~l:"xacc" [| 1.; 2. |] in
   let z = data_leaf ~l:"zdet" [| 7.; 7. |] in
-  let d = data_leaf ~l:"data" ~grad_spec:Tensor.Prohibit_grad [| 1.; 1. |] in
+  let d = data_leaf ~l:"data" ~mutable_:true ~grad_spec:Tensor.Prohibit_grad [| 1.; 1. |] in
   Train.set_materialized d.Tensor.value;
   (* h = x d is an intermediate the loss is nonlinear in: dl/dh = 2 w h must be re-zeroed every
      micro-step. dl/dx = 2 w x d^2, dl/dw = h^2; [z] is detached. *)
@@ -260,7 +260,7 @@ let fetch_defined_leaf () =
      stepped value, and the other row stays. *)
   let batch_n, bindings = IDX.get_static_symbol ~static_range:2 IDX.empty in
   let parent =
-    Operation.init ~l:"pdata" ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 2 ]
+    Operation.init ~mutable_:true ~l:"pdata" ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 2 ]
       ~f:(function [| i; j |] -> Float.of_int ((2 * i) + j + 1) | _ -> assert false)
       ~grad_spec:Tensor.Require_grad ()
   in
@@ -288,7 +288,7 @@ let fetch_defined_leaf () =
      can. *)
   let batch_n, bindings = IDX.get_static_symbol ~static_range:2 IDX.empty in
   let images =
-    Operation.init ~l:"imgs" ~prec:Ir.Ops.single ~b:[ 2; 1 ] ~o:[ 3; 3; 1 ]
+    Operation.init ~mutable_:true ~l:"imgs" ~prec:Ir.Ops.single ~b:[ 2; 1 ] ~o:[ 3; 3; 1 ]
       ~f:(fun _ -> 1.)
       ~grad_spec:Tensor.Require_grad ()
   in
@@ -318,7 +318,7 @@ let fetch_defined_leaf () =
   close "the literal-initialized weight: step 1 moves w by lr * x^2" first [| 1.875; 2.5 |];
   close "the literal-initialized weight: step 2 moves w again" second [| 1.75; 2. |];
   (* The data-backed twin. *)
-  let xd = data_leaf ~l:"xdata" [| 1.; 2. |] in
+  let xd = data_leaf ~l:"xdata" ~mutable_:true [| 1.; 2. |] in
   let%op ld = { wdata = [ 2.; 3. ] } *. xd *. xd in
   let learning_rate = fresh_learning_rate () in
   match Train.sgd_update ~learning_rate ~params:(Set.singleton (module Tensor) xd) ld with

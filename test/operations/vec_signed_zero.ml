@@ -162,7 +162,7 @@ let () =
        let mb = TDSL.ndarray bv ~label:[ "nz_b" ] ~input_dims:[ mj ] ~output_dims:[ mk ] () in
        (* Data-backed, not a literal: a routine writing a literal is refused (gh-ocannl-2104). *)
        let accumulator tag =
-         NTDSL.init ~l:tag ~prec:!Tensor.default_value_prec ~i:[ mj ] ~o:[ mi ]
+         NTDSL.init ~mutable_:true ~l:tag ~prec:!Tensor.default_value_prec ~i:[ mj ] ~o:[ mi ]
            ~f:(fun idcs -> dv.((idcs.(0) * mj) + idcs.(1)))
            ()
        in

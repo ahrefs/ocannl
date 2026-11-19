@@ -66,7 +66,7 @@ let fixture name =
   let x = TDSL.ndarray values ~label:[ name ^ "_x" ] ~output_dims:[ 4 ] () in
   (* A fresh upload needs a mutable target; literals refuse host writes (gh-ocannl-2021). *)
   let w =
-    Operation.init ~l:(name ^ "_w") ~prec:Ir.Ops.single ~o:[ 4 ]
+    Operation.init ~mutable_:true ~l:(name ^ "_w") ~prec:Ir.Ops.single ~o:[ 4 ]
       ~f:(fun i -> values.(i.(0)))
       ~grad_spec:Tensor.Prohibit_grad ()
   in

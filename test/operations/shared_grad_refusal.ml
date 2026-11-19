@@ -34,7 +34,7 @@ let objectives ?(data_backed = false) prefix =
     if data_backed then
       (* An image the optimizer steps must be data-backed: [term_init]'s values are a fetch the
          forward re-establishes every run, which [Train.sgd_update] refuses (gh-ocannl-1776). *)
-      Operation.init ~l:(prefix ^ "_x") ~prec:Ir.Ops.single ~o:[ 3 ]
+      Operation.init ~mutable_:true ~l:(prefix ^ "_x") ~prec:Ir.Ops.single ~o:[ 3 ]
         ~f:(function [| i |] -> Float.of_int (i + 1) | _ -> assert false)
         ~grad_spec:Require_grad ()
     else

@@ -25,10 +25,10 @@ files.
   resets, every terminal gradient the backprop writes (`trained_leaves` in `lib/train.ml`, terminals
   recognized by owning no `(grad, Bprop)` fragment), and a differentiable term's value and gradient
   carry observation intent like a parameter's. Optimizing an input therefore takes `?params` on the
-  step and needs a DATA-BACKED leaf (`Operation.init`): a `term_init` below
+  step and needs a writable data-backed leaf (`Operation.init ~mutable_:true`): a `term_init` below
   `limit_constant_fill_size` is a fetch op its forward code re-establishes every run, undoing the
   step. `sgd_update` refuses a stepped node the loss's forward re-establishes, naming
-  `Operation.init` (gh-ocannl-1776); `Context.compile` refuses what never reaches it, `sgd_one` and
+  that constructor (gh-ocannl-1776); `Context.compile` refuses what never reaches it, `sgd_one` and
   hand-written `%cd` steps: any routine of a lineage writing such a node, in either compile order
   (gh-ocannl-1876, `check_no_fetch_overwrite`). One rule, `Assignments.forward_fetched`: a `Fetch`
   into a node whose `(node, Fwd)` fragment the comp owns, which tells it from a parameter's

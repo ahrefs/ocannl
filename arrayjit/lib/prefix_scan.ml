@@ -152,12 +152,13 @@ let representable dom =
 
 let max_depth = 8
 
-(* A read of a host constant (an [ndarray] literal, gh-ocannl-1858) at subscripts affine in [r] and
-   [q]: the cells it reads over the whole [(r, q)] square, each subscript in range, must be a
-   function of [d = r - q] alone -- bit for bit, so a [-0.] and a [0.] differ. O(extent^2) once, the
-   size of the data itself; a square past [max_host_square] cells declines. The data's precision and
-   the node's join the precisions the values must be exact in. A node without that declaration
-   ([Operation.init]: mutable host data by contract) is never read here. *)
+(* A read of a host constant (an [ndarray] literal or an immutable [init] tensor) at subscripts
+   affine in [r] and [q]: the cells it reads over the whole [(r, q)] square, each subscript in
+   range, must be a function of [d = r - q] alone -- bit for bit, so a [-0.] and a [0.] differ.
+   O(extent^2) once, the size of the data itself; a square past [max_host_square] cells declines.
+   The data's precision and the node's join the precisions the values must be exact in. [init
+   ~mutable_:true] allows host writes, so its registered data cannot prove the values an executing
+   routine reads. *)
 let max_host_square = 1 lsl 24
 
 let host_constant_read dom (tn : Tn.t) (idcs : Idx.axis_index array) : value option =

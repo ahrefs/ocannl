@@ -359,7 +359,9 @@ let () =
         && Set.mem bwd.owned (LC.grad_of t, Asgns.Bprop));
       let x = leaf "lf_md_x" in
       let%op y = x *. 2. in
-      let acc = NTDSL.init ~l:"lf_md_acc" ~prec:Ir.Ops.single ~o:[ 3 ] ~f:(fun _ -> 0.) () in
+      let acc =
+        NTDSL.init ~mutable_:true ~l:"lf_md_acc" ~prec:Ir.Ops.single ~o:[ 3 ] ~f:(fun _ -> 0.) ()
+      in
       let embedding : Asgns.comp = [%cd acc =+ y] in
       p "a %cd embedding carries the operand's forward fragment"
         (Set.mem embedding.owned (y.value, Asgns.Fwd));

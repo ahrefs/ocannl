@@ -1544,7 +1544,8 @@ let remap_reads ?(writes = false) ?(rounded = false) ~source ~from_idcs ~tile ~t
    constancy do not share cached schedules — a hoisted winner must not replay against a
    non-hoistable site, and a non-hoisted winner must not mask the hoisted candidates of a constant
    site; Codex P2 on PR #123). *)
-let hoistable_constant tn = Tn.known_host_constant tn && Host_inits.mem tn
+let has_unpadded_host_init tn = Host_inits.mem tn && Option.is_none (Tn.get_padding tn)
+let hoistable_constant tn = Tn.known_host_constant tn && has_unpadded_host_init tn
 
 (* gh-ocannl-2079: host packing must perform the very conversion the read performs, before any
    widening into the panel. Admit only NaN-free f32 -> half: NaN payload conversion, f64 -> half and
@@ -1565,7 +1566,7 @@ let hoist_known_constant plc tn = Tn.known_host_constant tn || Tn.Placements.kno
    to its code footprint ([segment_optimized]) holds the packed tile and not [tn]. The tile is sized
    by the staged accesses, not by [tn], so nothing below [tn]'s own size is known about it. Exactly
    [apply_stage]'s hoisted-source preconditions on the node itself. *)
-let may_replace_by_packed_tile plc tn = Host_inits.mem tn && hoist_known_constant plc tn
+let may_replace_by_packed_tile plc tn = hoist_known_constant plc tn && has_unpadded_host_init tn
 
 (* Host-side packing for hoisted Stage (gh-ocannl-470): materialize the packed layout of a constant
    operand from its host-init data. Forced at link/upload time — through the packed node's own

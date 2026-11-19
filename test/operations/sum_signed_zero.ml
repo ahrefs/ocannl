@@ -123,7 +123,7 @@ let () =
   let ma, mb = operands "ssz_m1" in
   (* Data-backed, not a literal: a routine writing a literal is refused (gh-ocannl-2104). *)
   let d =
-    NTDSL.init ~l:"ssz_d" ~prec:!Tensor.default_value_prec ~i:[ n_ext ] ~o:[ m_ext ]
+    NTDSL.init ~mutable_:true ~l:"ssz_d" ~prec:!Tensor.default_value_prec ~i:[ n_ext ] ~o:[ m_ext ]
       ~f:(fun _ -> -0.)
       ()
   in

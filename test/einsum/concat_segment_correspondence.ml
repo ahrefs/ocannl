@@ -54,7 +54,7 @@ let cd_partial label make =
   computes label
     (fun () ->
       let tgt =
-        NTDSL.init ~l:"cd_sentinel" ~prec:Ir.Ops.single ~o:[ 6 ]
+        NTDSL.init ~mutable_:true ~l:"cd_sentinel" ~prec:Ir.Ops.single ~o:[ 6 ]
           ~f:(fun i -> Float.of_int (-100 + i.(0)))
           ()
       in

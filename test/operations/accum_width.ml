@@ -340,7 +340,9 @@ let () =
        let run_f16_sum ~name ?schedule () =
          let xw = NTDSL.init ~l:(name ^ "_x") ~prec:Ir.Ops.half ~o:[ rows; cols ] ~f:fv () in
          let outw =
-           NTDSL.init ~l:(name ^ "_out") ~prec:Ir.Ops.half ~o:[ rows ] ~f:(fun _ -> 0.0) ()
+           NTDSL.init ~mutable_:true ~l:(name ^ "_out") ~prec:Ir.Ops.half ~o:[ rows ]
+             ~f:(fun _ -> 0.0)
+             ()
          in
          Train.set_materialized outw.Tensor.value;
          let comp = named name [%cd outw =+ id xw ~logic:"is => i"] in
@@ -698,7 +700,11 @@ let default_bf16_block () =
      whole-node init nest fails [validate_parallel] under a hardware annotation. *)
   let run_sum2 ~name ?schedule () =
     let xw = NTDSL.init ~l:(name ^ "_x") ~prec:Ir.Ops.bfloat16 ~o:[ ni; nr; ns ] ~f:fx () in
-    let outw = NTDSL.init ~l:(name ^ "_out") ~prec:Ir.Ops.bfloat16 ~o:[ ni ] ~f:(fun _ -> 0.0) () in
+    let outw =
+      NTDSL.init ~mutable_:true ~l:(name ^ "_out") ~prec:Ir.Ops.bfloat16 ~o:[ ni ]
+        ~f:(fun _ -> 0.0)
+        ()
+    in
     Train.set_materialized outw.Tensor.value;
     let comp = named name [%cd outw =+ id xw ~logic:"irs => i"] in
     let transform opt =
@@ -730,7 +736,9 @@ let default_bf16_block () =
   in_leg ~leg
     "adjacent accumulations into one cell keep their per-assignment narrowing (256 +1 +1 stays 256 \
      at bf16)" (fun label ->
-      let s_acc = NTDSL.init ~l:"aw_s" ~prec:Ir.Ops.bfloat16 ~o:[ 1 ] ~f:(fun _ -> 256.0) () in
+      let s_acc =
+        NTDSL.init ~mutable_:true ~l:"aw_s" ~prec:Ir.Ops.bfloat16 ~o:[ 1 ] ~f:(fun _ -> 256.0) ()
+      in
       let ax1 = NTDSL.init ~l:"aw_ax1" ~prec:Ir.Ops.bfloat16 ~o:[ 1 ] ~f:(fun _ -> 1.0) () in
       let ax2 = NTDSL.init ~l:"aw_ax2" ~prec:Ir.Ops.bfloat16 ~o:[ 1 ] ~f:(fun _ -> 1.0) () in
       Train.set_materialized s_acc.Tensor.value;
@@ -1057,7 +1065,11 @@ let default_bf16_block () =
   let run_sum ~cols ~name ?schedule () =
     let fv = Ll_test.drift ~dims:[| ni; cols |] in
     let xw = NTDSL.init ~l:(name ^ "_x") ~prec:Ir.Ops.bfloat16 ~o:[ ni; cols ] ~f:fv () in
-    let outw = NTDSL.init ~l:(name ^ "_out") ~prec:Ir.Ops.bfloat16 ~o:[ ni ] ~f:(fun _ -> 0.0) () in
+    let outw =
+      NTDSL.init ~mutable_:true ~l:(name ^ "_out") ~prec:Ir.Ops.bfloat16 ~o:[ ni ]
+        ~f:(fun _ -> 0.0)
+        ()
+    in
     Train.set_materialized outw.Tensor.value;
     let comp = named name [%cd outw =+ id xw ~logic:"is => i"] in
     let transform opt =

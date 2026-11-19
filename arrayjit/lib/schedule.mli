@@ -680,9 +680,9 @@ val hoisted_read_rounding : source:Tn.t -> round_prec:Ops.prec -> (float -> floa
 
 val hoistable_constant : Tn.t -> bool
 (** Whether the node is eligible as a [hoisted] {!constructor-Stage} source: declared value-constant
-    ([Tnode.known_host_constant]) with registered host-init data to pack from. Shared by the
-    autotune sketch and by [Schedule_cache.canonicalize], which renders it per tensor node so that
-    same-shape programs differing in operand constancy do not share cached schedules. *)
+    ([Tnode.known_host_constant]), unpadded, and with registered host-init data to pack from. Shared
+    by the autotune sketch and by [Schedule_cache.canonicalize], which renders it per tensor node so
+    that same-shape programs differing in hoisting eligibility do not share cached schedules. *)
 
 val hoist_known_constant : Tn.Placements.t -> Tn.t -> bool
 (** The constancy half of a [hoisted] {!constructor-Stage}'s source preconditions:
@@ -693,7 +693,7 @@ val may_replace_by_packed_tile : Tn.Placements.t -> Tn.t -> bool
     {!constructor-Stage} reads a host-packed tile instead and emits no load nest, so a candidate
     whose store is filtered to its code footprint holds the tile, sized by the staged accesses, and
     not the node. Exactly the hoisted-source preconditions {!apply} checks on the node itself
-    (registered host-init data and {!hoist_known_constant}). *)
+    (unpadded, registered host-init data, and {!hoist_known_constant}). *)
 
 val settled_on_device : Tn.Placements.t -> Tn.t -> bool
 (** Whether the node's placement is settled [On_device] in this lineage: the one placement the

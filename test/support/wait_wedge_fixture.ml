@@ -166,7 +166,7 @@ let transfer ~cleanup ~device_copy =
   let (B.Unwrapped (impl, ctx)) = B.unwrap raw in
   let module Backend = (val impl.bi_module) in
   let tensor =
-    Operation.init ~l:"wedge_upload" ~prec:Ir.Ops.single ~o:[ 4 ]
+    Operation.init ~mutable_:true ~l:"wedge_upload" ~prec:Ir.Ops.single ~o:[ 4 ]
       ~f:(fun i -> Float.of_int (i.(0) + 1))
       ~grad_spec:Tensor.Prohibit_grad ()
   in
@@ -271,7 +271,7 @@ let cross_device () =
   let src_root = Backend.make_context (Backend.get_device ~ordinal:0) in
   let dst_root = Backend.make_context (Backend.get_device ~ordinal:1) in
   let tensor =
-    Operation.init ~l:"wedge_cross_device" ~prec:Ir.Ops.single ~o:[ 4 ]
+    Operation.init ~mutable_:true ~l:"wedge_cross_device" ~prec:Ir.Ops.single ~o:[ 4 ]
       ~f:(fun i -> Float.of_int (i.(0) + 1))
       ~grad_spec:Tensor.Prohibit_grad ()
   in

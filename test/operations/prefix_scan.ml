@@ -16,8 +16,9 @@
    composed form and the tie rule written out on the host, over repeated, separated, equal,
    monotone, strict-prefix and suffix inputs; the tropical gate left composed; 7. hand-built gates
    over rows: cummin, a strict and a suffix gate, and the near misses, executed; 8. masks in host
-   constants: [ndarray] literals in four orientations proven from their data, a near-triangle left
-   alone, and an [NTDSL.init] mask left alone, whose data a host write changes after compiling. *)
+   constants: [ndarray] literals in four orientations and a default [NTDSL.init] triangle proven
+   from their data, a near-triangle left alone, and an opted-out [NTDSL.init] mask whose data a host
+   write changes after compiling. *)
 
 open Base
 open Stdio
@@ -957,12 +958,16 @@ let () =
 
 (* {1 Leg 8: constant masks (gh-ocannl-1858)}
 
-   A mask held in a host constant -- an [ndarray] literal, whose values are declared forever equal
-   to its registered data -- is proven a triangle from that data. A mask built with [NTDSL.init] is
-   mutable host data by contract, so it is left alone. *)
+   A host constant's registered data can prove that the mask is a triangle. An opted-out [init] mask
+   stays composed so the routine can read changes made after compilation. *)
 
 let mask_values sel = Array.init (n * n) ~f:(fun c -> if sel (c / n) (c % n) then 1. else 0.)
 let literal values = NTDSL.ndarray values ~label:[ "tri_lit" ] ~output_dims:[ n; n ] ()
+
+let init_triangle ?mutable_ () =
+  NTDSL.init ?mutable_ ~l:"tri_init" ~prec:Ir.Ops.single ~o:[ n; n ]
+    ~f:(function [| i; o |] -> if i <= o then 1. else 0. | _ -> assert false)
+    ()
 
 let matvec values xs =
   Array.init n ~f:(fun o ->
@@ -984,6 +989,10 @@ let () =
     ~exact:(suffix ( +. ) 0. ints) (fun i o -> i >= o);
   lit "literal (i > o): an exclusive suffix" ~scans_want:one_backward
     ~exact:(suffix ~inclusive:false ( +. ) 0. ints) (fun i o -> i > o);
+  check_variant "init (i <= o): an inclusive prefix" ~scans_want:one_forward ~exact:(cumsum ints)
+    (fun () ->
+      let x = input "x" ints and tri = init_triangle () in
+      [%op x +* "i; i o => o" tri]);
   (* One interior cell off the triangle. *)
   let near = mask_values (fun i o -> i <= o) in
   near.((3 * n) + 10) <- 0.;
@@ -998,16 +1007,10 @@ let () =
     composed.values ~f:Float.equal;
   p_all2 "the near-triangle literal: rewritten equals the host product" scanned.values
     (matvec near ints) ~f:Float.equal;
-  (* [NTDSL.init]: the same triangle as mutable data. A host write after compiling changes what the
-     routine computes, so no proof from the data at lowering would hold. *)
   Tensor.unsafe_reinitialize ();
   Prefix_scan.set_enabled (Some true);
   let x = input "x" ints in
-  let tri =
-    NTDSL.init ~l:"tri_init" ~prec:Ir.Ops.single ~o:[ n; n ]
-      ~f:(function [| i; o |] -> if i <= o then 1. else 0. | _ -> assert false)
-      ()
-  in
+  let tri = init_triangle ~mutable_:true () in
   let%op y = x +* "i; i o => o" tri in
   Train.set_materialized y.Tensor.value;
   let captured = ref None in

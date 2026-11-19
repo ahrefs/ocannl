@@ -112,3 +112,26 @@ let () =
         (Context.get_values ctx y.Tensor.value)
         (Array.map changed ~f:(fun v -> 2. *. v))
         ~f:Float.equal)
+
+let () =
+  let param_init ?label:_ ?top_down_prec:_ ?batch_dims:_ ?batch_axes:_ ?input_dims:_ ?output_dims:_
+      ?input_axes:_ ?output_axes:_ ?deduced:_ () =
+    NTDSL.init ~l:"init_seed" ~prec:Ir.Ops.single ~o:[ 4 ] ~f:(fun i -> Float.of_int (i.(0) + 1)) ()
+  in
+  let x = TDSL.param ~param_init "init_parameter" ~output_dims:[ 4 ] () in
+  p "init-initialized parameter cannot be hoisted"
+    (not (Ir.Schedule.hoistable_constant x.Tensor.value));
+  let%op y = x *. 2 in
+  let ctx, routine =
+    Context.compile ~name:"init_parameter" (Context.auto ()) (Train.forward y) Ir.Indexing.Empty
+  in
+  let host =
+    Ir.Ndarray.init_array ~debug:"parameter replacement" Ir.Ops.single ~dims:[| 4 |] ~padding:None
+      ~f:(fun i -> Float.of_int (11 + i.(0)))
+  in
+  let ctx = Context.from_host ctx x.Tensor.value host in
+  let ctx = Context.run ctx routine in
+  p_all2 "init-initialized parameter reads the host write"
+    (Context.get_values ctx y.Tensor.value)
+    [| 22.; 24.; 26.; 28. |] ~f:Float.equal;
+  Context.release ctx

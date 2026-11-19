@@ -190,7 +190,9 @@ let gated_scaled_update ?setup_for_parallel ?accum_loss (scaler : Loss_scaler.t)
   in
   let flag, check = Train.grad_checksum loss in
   let gate = Loss_scaler.host_scalar ~l:"update_gate" 1. in
-  let wflag = NTDSL.init ~l:"window_checksum" ~prec:Ops.single ~o:[ 1 ] ~f:(fun _ -> 0.) () in
+  let wflag =
+    NTDSL.init ~mutable_:true ~l:"window_checksum" ~prec:Ops.single ~o:[ 1 ] ~f:(fun _ -> 0.) ()
+  in
   Train.set_materialized wflag.Tensor.value;
   Tn.set_observable wflag.Tensor.value;
   let gate_comp =

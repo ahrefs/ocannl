@@ -393,8 +393,8 @@ type t = {
           or margin-touching operations expecting a different neutral — are rejected at
           shape-inference time. *)
   precision_from_data : (bool[@sexp_drop_if fun _ -> true]);
-      (** Storage precision was fixed by an initialization array at construction. Diagnostic
-          provenance only; independent of whether the layout was also fixed. *)
+      (** Storage precision was fixed by an initialization array at construction. An ndarray-backed
+          node has no defining fetch and may still infer its layout. *)
   layout_at_creation : (bool[@sexp_drop_if fun _ -> true]);
       (** The node keeps an array it was given ({!create_from_padded}: [wrap], [wrap_padded],
           [wrap_param], a loaded checkpoint), so {!field-padding} committed at creation rather than
@@ -450,8 +450,8 @@ type t = {
           root, or per device for a host literal). Set at graph construction and never cleared. *)
   mutable host_constant : bool;
       (** Declared value-constancy: the node's values are fixed at construction and always equal its
-          registered host-init data (an ndarray-backed literal). Set by [Tensor.ndarray] (and
-          eligible loaders); parameterization clears it when the value becomes mutable. This carries
+          registered host-init data. Set by [Tensor.ndarray], [Operation.init] by default, and
+          eligible loaders. Parameterization clears it when the value becomes mutable. This carries
           the constancy that [Effectively_constant] intent cannot: ndarray-backed nodes are minted
           [On_device] (provenance [Site "49:ndarray-backed"]), so the memory-mode lattice has no
           room left for the constant marking. Consumed by [Schedule.Stage]'s hoisted packing
@@ -526,6 +526,10 @@ let dims_without_padding tn =
       Array.map2_exn dims padding ~f:(fun dim { left; right } -> dim - left - right)
 
 let get_padding tn = Lazy.force tn.padding
+
+(** An ndarray supplied this node's initial values and storage precision, so its forward has no
+    defining fetch. *)
+let ndarray_backed tn = tn.precision_from_data
 
 (* The "n" prefix of numeric idents, qualified by the namespace when non-default: [n42] vs
    [snap1__n42]. Namespace validation guarantees the result is a legal C-family identifier. *)
@@ -829,7 +833,7 @@ let snapshot_open
        dims = _;
        padding = _;
        precision_from_data = _;
-       (* Immutable diagnostic provenance. *)
+       (* Immutable construction provenance. *)
        layout_at_creation = _;
        size_in_bytes = _;
        id = _;

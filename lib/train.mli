@@ -81,12 +81,13 @@ val trainable_params : Tensor.t -> (Tensor.t, Tensor.comparator_witness) Base.Se
     [loss.params]. Empty when [loss] is not differentiable.
 
     It is the optimizer's {e default}: the weights it steps. A differentiable leaf that is not a
-    parameter ([Operation.init ~grad_spec:Require_grad] -- an optimized input, an adversarial
-    perturbation) is left out by design: it is stepped apart from the weights, and its gradient must
-    not rescale ({!clip_by_global_norm}) or gate ({!grad_checksum}) the weight step. Select it
-    through each helper's [?params]. Gradient {e life cycle} -- what {!grad_update}[ ~accum_steps]
-    accumulates and {!zero_params_grads} resets -- is not keyed on this set but on every leaf
-    gradient the backprop writes, parameters and [Require_grad] leaves alike (gh-ocannl-1743). *)
+    parameter ([Operation.init ~mutable_:true ~grad_spec:Require_grad] -- an optimized input, an
+    adversarial perturbation) is left out by design: it is stepped apart from the weights, and its
+    gradient must not rescale ({!clip_by_global_norm}) or gate ({!grad_checksum}) the weight step.
+    Select it through each helper's [?params]. Gradient {e life cycle} -- what
+    {!grad_update}[ ~accum_steps] accumulates and {!zero_params_grads} resets -- is not keyed on
+    this set but on every leaf gradient the backprop writes, parameters and [Require_grad] leaves
+    alike (gh-ocannl-1743). *)
 
 val grad_update :
   ?setup_for_parallel:bool ->
@@ -205,8 +206,8 @@ val sgd_update :
     parameter frozen behind {!Operation.stop_gradient} takes no step — in particular no weight decay
     (gh-ocannl-673). A [~grad_spec:Require_grad] leaf (input optimization) takes a step only when
     passed in [?params]; raises when the default set is empty, as for a loss with no parameters.
-    Such a leaf must be data-backed ([Operation.init ~grad_spec:Require_grad]): a stepped tensor
-    whose value [loss]'s forward code re-establishes with a fetch on every run -- a
+    Such a leaf must be writable data ([Operation.init ~mutable_:true ~grad_spec:Require_grad]): a
+    stepped tensor whose value [loss]'s forward code re-establishes with a fetch on every run -- a
     [Tensor.term_init] or literal with at most [limit_constant_fill_size] values -- raises
     [Session_error] naming it, since the next forward pass would undo each step (gh-ocannl-1776).
     {!sgd_one} sees no loss, so stepping such a tensor directly is refused later, by

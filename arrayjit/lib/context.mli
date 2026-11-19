@@ -273,19 +273,20 @@ val compile :
     fetches its value again and silently undoes any other write. The write can be in that routine or
     another one of the lineage, compiled before or after it; [Train.sgd_one] and hand-written [%cd]
     steps are what this catches. The remedy the refusal names: build the node data-backed, with
-    [Operation.init], or make it a parameter. A forward fetch is a {!Ir.Assignments.Fetch} into a
-    node whose forward fragment ({!Ir.Assignments.field-owned}) the comp carries, so a parameter's
-    initializer (which owns no fragment) and a gradient's zeroing do not count. A slice takes after
-    its parent: a write through a view of data reaches the parent and stays, while over a
-    fetch-defined parent it is undone like any other. Siblings never collide. A host write, once the
-    forward is compiled, is refused by the same rule at {!from_host}.
+    [Operation.init ~mutable_:true], or make it a parameter. A forward fetch is a
+    {!Ir.Assignments.Fetch} into a node whose forward fragment ({!Ir.Assignments.field-owned}) the
+    comp carries, so a parameter's initializer (which owns no fragment) and a gradient's zeroing do
+    not count. A slice takes after its parent: a write through a view of data reaches the parent and
+    stays, while over a fetch-defined parent it is undone like any other. Siblings never collide. A
+    host write, once the forward is compiled, is refused by the same rule at {!from_host}.
 
     And refuses a [comp] writing a literal with constant host values ([Tnode.known_host_constant]: a
-    [Tensor.ndarray] literal or a number), directly or through a slice view of it, at any size and
-    in any lineage (gh-ocannl-2104): hoisted packing and link-time initialization read the literal's
-    registered values, so a routine reading it would silently ignore the write. The literal's own
-    forward fetch is not such a write. The host-side twin is {!from_host}'s gh-ocannl-2021 refusal.
-*)
+    [Tensor.ndarray] literal, default [Operation.init] tensor, or a number), directly or through a
+    slice view of it, at any size and in any lineage (gh-ocannl-2104): hoisted packing and link-time
+    initialization read the literal's registered values, so a routine reading it would silently
+    ignore the write. The literal's own forward fetch is not such a write. An ndarray-backed literal
+    has its initial values as data, so a fetch into it is refused too. The host-side twin is
+    {!from_host}'s gh-ocannl-2021 refusal. *)
 
 type retained
 (** Compiled code that a successful {!compile_outcome} handed to its [retain] callback: the
@@ -797,14 +798,15 @@ val from_host : t -> Ir.Tnode.t -> Ir.Ndarray.t -> t
     fetches the node again, silently undoing the write, as in {!compile}'s refusal. That covers a
     literal at most [limit_constant_fill_size] values long even where lowering moved its fetch to
     link time: its values are declared constant, so an inlined or hoisted read never sees a write.
-    Marked ndarray literals are also refused before compilation and above that limit
-    (gh-ocannl-2021): hoisted packing reads their registered values, independent of a fetch. The
-    remedy is the same: a node the host writes is built data-backed, with [Operation.init] or
-    [Train.host_scalar], with [TDSL.wrap] or [TDSL.rebatch] for ndarray data, or is a parameter. For
-    other fetch-defined nodes, only a write after the forward is compiled is refused: one from a
-    context that does not descend from the forward's routine is a sibling's, or a seed, which a
-    routine reading the node runs on until the forward first runs. {!copy} is not refused: it moves
-    a node's value between contexts, not a value of the host's. *)
+    Marked ndarray literals and default [Operation.init] tensors are also refused before compilation
+    and above that limit (gh-ocannl-2021): hoisted packing reads their registered values,
+    independent of a fetch. The remedy is the same: a node the host writes is built data-backed,
+    with [Operation.init ~mutable_:true] or [Train.host_scalar], with [TDSL.wrap] or [TDSL.rebatch]
+    for ndarray data, or is a parameter. For other fetch-defined nodes, only a write after the
+    forward is compiled is refused: one from a context that does not descend from the forward's
+    routine is a sibling's, or a seed, which a routine reading the node runs on until the forward
+    first runs. {!copy} is not refused: it moves a node's value between contexts, not a value of the
+    host's. *)
 
 val get_values : t -> Ir.Tnode.t -> float array
 (** Retrieves all (unpadded) values of the node via an on-demand device-to-host transfer. The host

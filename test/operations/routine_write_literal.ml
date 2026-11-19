@@ -70,7 +70,7 @@ let () =
   List.iter [ 2; 32 ] ~f:(fun n ->
       (* The data-backed twin: mutable, so the write lands and the consumer reads it. *)
       let d =
-        NTDSL.init ~l:"twin" ~prec:Ir.Ops.single ~o:[ n ]
+        NTDSL.init ~mutable_:true ~l:"twin" ~prec:Ir.Ops.single ~o:[ n ]
           ~f:(fun idcs -> Float.of_int (idcs.(0) + 1))
           ()
       in

@@ -633,8 +633,9 @@ let forward_fetched frontier comp =
     ~view_aliases:Asgns.slice_alias_eligible comp
 
 (* The nodes [comp] writes other than by a [Fetch]: [Rev_sides]' buffers, any other [Accum_op]'s and
-   [Set_vec_unop]'s [lhs]. *)
-let overwritten (comp : Asgns.comp) =
+   [Set_vec_unop]'s [lhs]. The literal guard also counts fetches into ndarray-backed nodes. Their
+   forward fragment can be owned by the same comp even though it carries no defining fetch. *)
+let overwritten ?(include_ndarray_fetches = false) (comp : Asgns.comp) =
   let add acc = function Asgns.Node tn -> Set.add acc tn | Asgns.Merge_buffer _ -> acc in
   Asgns.fold_leaves comp.asgns
     ~init:(Set.empty (module Tn))
@@ -643,6 +644,8 @@ let overwritten (comp : Asgns.comp) =
           Array.fold lhses ~init:acc ~f:(fun acc buf ->
               Option.value_map buf ~default:acc ~f:(add acc))
       | Asgns.Accum_op { lhs; _ } | Asgns.Set_vec_unop { lhs; _ } -> Set.add acc lhs
+      | Asgns.Fetch { array; _ } when include_ndarray_fetches && Tn.ndarray_backed array ->
+          Set.add acc array
       | Asgns.Fetch _ | Asgns.Noop | Asgns.Seq _ | Asgns.Block_comment _ -> acc)
 
 (* gh-ocannl-2027: the buffer a write to [tn] reaches -- a confirmed slice alias's parent's. *)
@@ -928,7 +931,7 @@ let check_persists_kept ?name (comp : Asgns.comp) =
              each run undoes the step: %s. A computed node -- its forward code in this computation \
              recomputes it -- does not hold a step; materializing it changes nothing. Step what it \
              is computed from instead, or optimize a data-backed input (Operation.init \
-             ~grad_spec:Require_grad) or a parameter."
+             ~mutable_:true ~grad_spec:Require_grad) or a parameter."
             (match name with None -> "" | Some n -> " (" ^ n ^ ")")
             (String.concat ~sep:", "
                (List.map (Set.to_list undone) ~f:(fun tn ->
@@ -983,18 +986,18 @@ let check_no_fetch_overwrite ?name ctx (comp : Asgns.comp) =
              range, an embedded symbol, a slice of one or a slice lowering to a copy -- is code, \
              not data: each run of the routine carrying its forward code fetches its value again, \
              silently undoing the write (an optimizer step on it never accumulates). Build a node \
-             that is to be updated data-backed, with Operation.init (~grad_spec:Require_grad for \
-             an optimized input), or make it a parameter, whose initializer runs once \
-             (Train.init_params); write a sliced node through its parent. A sibling, compiled from \
-             a context that does not descend from the other routine, is an alternative and is not \
-             refused."
+             that is to be updated data-backed, with Operation.init ~mutable_:true \
+             (~grad_spec:Require_grad for an optimized input), or make it a parameter, whose \
+             initializer runs once (Train.init_params); write a sliced node through its parent. A \
+             sibling, compiled from a context that does not descend from the other routine, is an \
+             alternative and is not refused."
             (match name with None -> "" | Some n -> " (" ^ n ^ ")")
             (String.concat ~sep:"; " conflicts))
 
 (* The literal a write to [tn] would land in: [tn] itself or, through its [\@|] slice views, the
    parent it is a view of, when that node's values are declared forever equal to its registered
-   host-init data ([Tn.known_host_constant]: a [TDSL.ndarray] marked [host_constant], or a
-   [TDSL.number] with its [Effectively_constant] intent). The one predicate behind the routine
+   host-init data ([Tn.known_host_constant]: a host-constant [TDSL.ndarray] or [Operation.init], or
+   a [TDSL.number] with its [Effectively_constant] intent). The one predicate behind the routine
    refusal {!check_no_literal_write} and the host refusal {!check_host_write_lasts}. *)
 let rec literal_of tn =
   if Tn.known_host_constant tn then Some tn
@@ -1007,12 +1010,13 @@ let rec literal_of tn =
    small literal self-initializes from them at link time
    ([Low_level.hosted_constant_inits_to_link_time]). So a write other than the literal's own fetch
    -- an [Accum_op], [Set_vec_unop] or [Rev_sides] target, directly or through a slice view of it --
-   is refused, at any size, in any lineage, before lowering. A small literal whose forward the same
-   computation carries was already refused as fetch-defined (gh-ocannl-1876); this check runs first,
+   is refused, at any size, in any lineage, before lowering. An ndarray-backed literal already has
+   its data, so a [Fetch] into it is also a write. A small literal whose forward the same
+   computation carries was already refused as fetch-defined (gh-ocannl-1876). This check runs first
    so a literal is named as one at every size. *)
 let check_no_literal_write ?name (comp : Asgns.comp) =
   let conflicts =
-    Set.to_list (overwritten comp)
+    Set.to_list (overwritten ~include_ndarray_fetches:true comp)
     |> List.filter_map ~f:(fun tn ->
         Option.map (literal_of tn) ~f:(fun lit ->
             Printf.sprintf "%s%s" (Tn.debug_name tn)
@@ -1026,9 +1030,9 @@ let check_no_literal_write ?name (comp : Asgns.comp) =
              (gh-ocannl-2104): %s. A literal's values are declared fixed at construction: a \
              hoisted schedule reads its registered values, so a routine reading it would silently \
              ignore the write, regardless of limit_constant_fill_size. Build a node that is to be \
-             updated as mutable data, with Operation.init (~grad_spec:Require_grad for an \
-             optimized input) or Train.host_scalar, use TDSL.wrap or TDSL.rebatch for ndarray \
-             data, or make it a parameter (TDSL.param ~param_init:(TDSL.ndarray ...))."
+             updated as mutable data, with Operation.init ~mutable_:true (~grad_spec:Require_grad \
+             for an optimized input) or Train.host_scalar, use TDSL.wrap or TDSL.rebatch for \
+             ndarray data, or make it a parameter (TDSL.param ~param_init:(TDSL.ndarray ...))."
             (match name with None -> "" | Some n -> " (" ^ n ^ ")")
             (String.concat ~sep:"; " conflicts))
 
@@ -1663,10 +1667,11 @@ let check_persisted_writes ctx routine roles =
              them, nodes whose buffers hold a value written to last (gh-ocannl-2027): %s. Running \
              it would silently undo that write -- an optimizer step on a computed node never \
              accumulates, a seed meant to last is lost. Step what the node is computed from \
-             instead, or optimize a data-backed input (Operation.init ~grad_spec:Require_grad) or \
-             a parameter; a forward that is to run once must run before the steps or the seed. To \
-             discard the value deliberately, replace it first with a non-persisting write: \
-             Context.set_values (without ~persist:true), Context.from_host or Context.copy."
+             instead, or optimize a data-backed input (Operation.init ~mutable_:true \
+             ~grad_spec:Require_grad) or a parameter; a forward that is to run once must run \
+             before the steps or the seed. To discard the value deliberately, replace it first \
+             with a non-persisting write: Context.set_values (without ~persist:true), \
+             Context.from_host or Context.copy."
             routine.name routine.routine_id
             (String.concat ~sep:"; "
                (List.map undone ~f:(fun (pb, mark) ->
@@ -2773,9 +2778,9 @@ let check_host_write_lasts ~fn ctx (tn : Tn.t) =
                node again, or reads a literal's own values, inlined or hoisted (gh-ocannl-1959). A \
                fetch-defined node -- a Tensor.term_init or literal with at most \
                limit_constant_fill_size values, a range, an embedded symbol -- is code, not data. \
-               Build a node the host writes data-backed, with Operation.init or Train.host_scalar, \
-               or make it a parameter. A seed for a routine that reads the node before the forward \
-               runs goes in before the forward's routine is compiled."
+               Build a node the host writes data-backed, with Operation.init ~mutable_:true or \
+               Train.host_scalar, or make it a parameter. A seed for a routine that reads the node \
+               before the forward runs goes in before the forward's routine is compiled."
               fn (Tn.debug_name tn) name id)
   | _ -> (
       match literal_of tn with
@@ -2787,9 +2792,9 @@ let check_host_write_lasts ~fn ctx (tn : Tn.t) =
                   "Context.%s: node %s is %s with constant host values (gh-ocannl-2021). A hoisted \
                    schedule reads its registered values, and a routine inlines or fetches them, so \
                    a host write would be silently ignored, regardless of limit_constant_fill_size \
-                   or whether a routine is compiled. Build mutable data with Operation.init or \
-                   Train.host_scalar, use TDSL.wrap or TDSL.rebatch for ndarray data, or make it a \
-                   parameter."
+                   or whether a routine is compiled. Build mutable data with Operation.init \
+                   ~mutable_:true or Train.host_scalar, use TDSL.wrap or TDSL.rebatch for ndarray \
+                   data, or make it a parameter."
                   fn (Tn.debug_name tn)
                   (if Tn.equal lit tn then "a literal"
                    else "an @| slice view of " ^ Tn.debug_name lit ^ ", a literal")))
@@ -2858,7 +2863,8 @@ let check_copy_lasts ~src ~dst (tn : Tn.t) =
                    routine last wrote. A fetch-defined node -- a Tensor.term_init or literal with \
                    at most limit_constant_fill_size values, a range, an embedded symbol -- is \
                    code, not data: build a node whose values move between contexts data-backed, \
-                   with Operation.init or Train.host_scalar, or make it a parameter."
+                   with Operation.init ~mutable_:true or Train.host_scalar, or make it a \
+                   parameter."
                   (Tn.debug_name tn) name id reason))
 
 (** Uploads the host buffer [nd] into [tn]'s device buffer, allocating it if needed, and returns a

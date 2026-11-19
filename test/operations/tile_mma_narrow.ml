@@ -230,11 +230,9 @@ let () =
     got_i want_i ~f:Float.equal;
 
   (* === half storage, hoisted f32 B~ panel (host-side converting pack) + in-kernel f32 A~ === *)
-  (* Half leaves are minted at their precision ([ndarray] settles a leaf as [Specified] single);
-     the B operand is additionally declared constant so the hoisted pack applies to it. *)
+  (* [init] builds the leaves at half storage and supplies constant data for the B pack. *)
   let mah = NTDSL.init ~l:"mah" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ n ] ~f:ha () in
   let mbh = NTDSL.init ~l:"mbh" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ n ] ~f:hb () in
-  Tn.set_host_constant mbh.Tensor.value;
   let%op hc0 = mah * mbh in
   Tn.update_prec hc0.Tensor.value Ir.Ops.half;
   let want_h = nonzero "nrw_half_serial" (run ~name:"nrw_half_serial" hc0) in

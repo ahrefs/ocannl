@@ -119,8 +119,10 @@ files.
   refuses a comp whose non-`Fetch` writes (`Context.overwritten`) reach a host-constant node,
   directly or through a slice view, at any size and in any lineage (`check_no_literal_write`, run
   before gh-ocannl-1876's fetch rule so a small literal is named as a literal too). It is the
-  routine-side twin of gh-ocannl-2021's host-write refusal; a preloaded accumulator is built
-  data-backed (`Operation.init`). Test: `test/operations/routine_write_literal`.
+  routine-side twin of gh-ocannl-2021's host-write refusal. An explicit `Fetch` into an
+  ndarray-backed literal is also a write because its defining values arrive as data. A preloaded
+  accumulator is built data-backed (`Operation.init ~mutable_:true`). Tests:
+  `test/operations/routine_write_literal` and `test/operations/literal_write_kinds`.
 - Both digests over lowered code — the analysis cache's key (`Low_level.analysis_digest`) and the
   schedule cache's canonical identity (`Schedule_cache.canonicalize`) — share ONE walk,
   `Low_level.Canonical_render.emit` (gh-ocannl-563). Render a newly added `Low_level.t` /
@@ -815,9 +817,12 @@ files.
   f32 input before the reduction. `gg_computed_grad` multiplies an f16 source with an f16 operand
   annotation and materializes the product to expose the rounding that a scan would skip. The
   tropical `@^+` gate stays composed because it has no `where` filter. An output at `-inf` gates
-  rejected positions. (g) A mask with no writer in the routine is read from its `Host_inits` data
-  only under `Tn.known_host_constant` (an `ndarray` literal). A host write after compiling can
-  change `Operation.init` data, so a lowering-time proof from it would be unsound.
+  rejected positions. (g) An unpadded mask with no writer in the routine is read from its
+  `Host_inits` data only under `Tn.known_host_constant`. Both `ndarray` literals and default
+  `Operation.init` values qualify (gh-ocannl-2283). An opt-out (`~mutable_:true`) allows later
+  writes, so the registered data cannot prove the mask. A padded init still carries the constant
+  declaration and builds its host buffer with the inferred margins. Prefix scan, link-time init
+  elision, and hoisted packing require an unpadded source.
   (h) The exclusive step's guard matters only to hand-built IR: user-level lowering never relies on
   the mask alone to keep a payload in range (gh-ocannl-2312). Shape inference sizes every read over
   its whole iteration domain without looking at the mask's values: an unwindowed `1*i+1` is refused,
