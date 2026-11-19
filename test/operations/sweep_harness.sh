@@ -340,6 +340,10 @@ git -C "$main" add fixture benchmarks/fixtures/DIGESTS.txt test/dune \
   test/pre_diff_expected.ml test/inline_expect.ml
 git -C "$main" commit -qm fixture
 fixture_sha=$(git -C "$main" rev-parse HEAD)
+mkdir -p "$main/bin"
+printf '(rule\n (alias twin-tile-dry)\n (action (echo "fixture")))\n' >"$main/bin/dune"
+git -C "$main" add bin/dune
+git -C "$main" commit -qm 'declare the twin-tile dry run'
 git -C "$main" remote add origin "$origin"
 git -C "$main" push -q -u origin master
 
@@ -404,14 +408,13 @@ suite_text() {
   esac
 }
 # A serial rerun (gh-ocannl-945) -- the sweep's `-j 1` call for ONE stanza, its
-# alias the last argument -- answers on its own: red exactly when that alias is
-# listed in SWEEP_TEST_OPAM_SERIAL_RED, with SWEEP_TEST_OPAM_OUT_SERIAL as its
+# alias the last argument -- answers on its own. SWEEP_TEST_OPAM_SERIAL_RED names a red
+# stanza by alias or the full pass by `completion`. SWEEP_TEST_OPAM_OUT_SERIAL is its
 # failure text, so a fixture can hold one stanza red while another clears. A
 # clean one prints SWEEP_TEST_OPAM_OUT_RETRY: what the retry announced. Either
 # way the rerun runs the suite's action again, which records what the retry
 # announced -- by default what the first attempt did, a deterministic test. The
-# completion pass (`@runtest @train`) re-runs nothing that completed, so it
-# records nothing.
+# completion pass fixture exercises the suite verdict and writes no new action records.
 # A hung test (gh-ocannl-1211): the dune call starts one action, as dune does -- a child leading its
 # own process group, which dune kills on TERM -- that sleeps the given seconds and records its pid
 # in SWEEP_TEST_OPAM_HANG_PID. The parent is perl renamed `dune`: the per-test cap's watcher finds
@@ -434,12 +437,12 @@ case " $* " in
     case " $* " in *" @runtest @train "*) completion=1 ;; esac
     # A serial-rerun stanza listed in SWEEP_TEST_OPAM_HANG_SERIAL, or the completion pass where it
     # lists `completion`, hangs for SWEEP_TEST_OPAM_HANG_SERIAL_SECS (gh-ocannl-1252).
-    if [ -n "$completion" ]; then hang_key=completion; else hang_key=$last; fi
+    if [ -n "$completion" ]; then serial_key=completion; else serial_key=$last; fi
     case " ${SWEEP_TEST_OPAM_HANG_SERIAL:-} " in
-      *" $hang_key "*) hang_test "${SWEEP_TEST_OPAM_HANG_SERIAL_SECS:-60}" ;;
+      *" $serial_key "*) hang_test "${SWEEP_TEST_OPAM_HANG_SERIAL_SECS:-60}" ;;
     esac
     case " ${SWEEP_TEST_OPAM_SERIAL_RED:-} " in
-      *" $last "*)
+      *" $serial_key "*)
         [ -n "${SWEEP_TEST_OPAM_OUT_SERIAL:-}" ] && printf '%s\n' "$SWEEP_TEST_OPAM_OUT_SERIAL"
         [ -n "$completion" ] || replay "${SWEEP_TEST_OPAM_OUT_SERIAL:-}"
         exit 1
@@ -1822,11 +1825,20 @@ altered_metal_options=${rendered_metal_options/=/=altered-}
 [ "$altered_metal_options" != "$rendered_metal_options" ]
 absent -Fx "metal options: $altered_metal_options" "${metal_log%.log}.fingerprint"
 
+# A historical GPU suite has only the targets declared at its pinned revision.
+historical_metal_env=$tmp/opam.env-calls-historical-metal
+SWEEP_TEST_ENV_CALLS=$historical_metal_env run_sweep_backend metal --ref "$fixture_sha" \
+  >"$tmp/historical_metal.out" 2>&1
+grep -q 'm4-max/metal: incremental-pass' "$tmp/historical_metal.out"
+[ "$(cat "$historical_metal_env")" = "$(printf 'metal|||\texec -- dune build @runtest @train')" ]
+
 # And a GREEN unit must NOT pay for it -- the same backend, so the only thing
 # that differs is the outcome. The log path is derived from the sweep's timestamp
 # and may well be the one above, rewritten: that is fine and is itself part of the
 # check, since the assertions on the failing run have already read it.
-run_sweep_backend metal >"$tmp/metal_pass.out" 2>&1
+metal_env=$tmp/opam.env-calls-metal
+SWEEP_TEST_ENV_CALLS=$metal_env run_sweep_backend metal >"$tmp/metal_pass.out" 2>&1
+[ "$(cat "$metal_env")" = "$(printf 'metal|||\texec -- dune build @runtest @train @bin/twin-tile-dry')" ]
 grep -q 'm4-max/metal: incremental-pass' "$tmp/metal_pass.out"
 metal_pass_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
 [ -f "$metal_pass_log" ]
@@ -2385,9 +2397,9 @@ grep -q 'm4-max/cc: pass ' <<<"$rerun_cleared"
 grep -q 'm4-max/metal: serial rerun: all clean$' <<<"$rerun_cleared"
 # A clean rerun of the red stanzas does not reach the actions a red
 # prerequisite held back, so the unit then completes its whole suite
-# incrementally (no --force: only what never completed runs) before counting.
+# incrementally before counting. The completion command retains the GPU geometry alias.
 grep -q 'm4-max/metal: serial rerun: suite completed$' <<<"$rerun_cleared"
-[ "$(grep -cx 'exec -- dune build -j 1 @runtest @train' "$calls")" -eq 1 ]
+[ "$(grep -cx 'exec -- dune build -j 1 @runtest @train @bin/twin-tile-dry' "$calls")" -eq 1 ]
 rerun_cleared_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$rerun_cleared" | tail -1)
 [ -f "$rerun_cleared_report" ]
 grep -q '^red units counted after a clean serial rerun: m4-max/metal$' \
@@ -2506,7 +2518,7 @@ absent 'suite completion' <<<"$rerun_red"
 
 # A clean rerun whose completion pass is red stays excluded: an action the red
 # had held back failed, so the suite is not known to have completed.
-completion_red=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_SERIAL_RED='@train' \
+completion_red=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_SERIAL_RED=completion \
   SWEEP_TEST_OPAM_OUT_METAL=$two_inline_failure$'\n'$metal_unit_log \
   run_sweep_args --force --only metal)
 grep -q 'm4-max/metal: serial rerun: all clean$' <<<"$completion_red"

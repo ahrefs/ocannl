@@ -532,6 +532,7 @@ unit_suite() { # unit-backend
   case $1 in
     cc-outlined | cc-gc-backprop) printf '@runtest' ;;
     cc-oracle-widen) printf '@test/operations/slow-virtual_inliner_oracle-widen' ;;
+    metal | cuda | hip) printf '@runtest @train%s' "$twin_tile_target" ;;
     *) printf '@runtest @train' ;;
   esac
 }
@@ -931,6 +932,15 @@ git -C "$MAIN" -c maintenance.auto=false fetch -q origin master || die "cannot f
 full_sha=$(git -C "$MAIN" rev-parse "$REF" 2>/dev/null) ||
   die "cannot resolve $REF in $MAIN"
 run_sha=$(git -C "$MAIN" rev-parse --short "$full_sha")
+
+# Availability comes from one literal, formatted alias field in the pinned bin/dune.
+# Historical refs without that field can still build their full GPU suite.
+twin_tile_target=
+if git -C "$MAIN" grep -Eq -e '^ \(alias twin-tile-dry\)$' "$full_sha" -- bin/dune; then
+  twin_tile_target=' @bin/twin-tile-dry'
+else
+  [ "$?" -eq 1 ] || die "cannot read bin/dune at $run_sha"
+fi
 
 # Read the environment matrix from the exact commit every unit is about to run.
 # The Python CLI is the checked-in DIGESTS parser, so the sweep does not grow a
@@ -2033,10 +2043,10 @@ serial_rerun_cmd() { # backend wt host alias...
 }
 
 # The completion pass that follows a clean serial rerun on a forced full-suite
-# unit: the unit's own aliases again, at `-j 1` and WITHOUT --force, so Dune
-# runs exactly the actions that never completed -- the dependents a red
-# prerequisite held back, which rerunning the red stanzas alone does not reach
-# -- and replays nothing that already passed. Its exit 0 is the proof that
+# unit: the unit's own aliases again, at `-j 1` and WITHOUT --force. Dune
+# reaches the dependents a red prerequisite held back and reuses cached
+# passes. Always-run actions such as the GPU geometry check run again.
+# Its exit 0 is the proof that
 # every action of the suite completed, its verdict records written, which is
 # what lets rerun_cleared stage the unit as skip evidence. A GPU unit's pass runs
 # under the per-test cap (test_cap_start_cmd), unless it reaches `@slow`.
