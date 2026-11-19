@@ -1676,9 +1676,9 @@ both `cifar_resnet` and `cifar_resnet_b1` absent from the store (gh-ocannl-1825)
     candidates its screen leaves (the column's passage above); since gh-ocannl-1818 that one call
     is `isolated`, and only the 24 slowest get one more under the configured objective, since a
     queued call costs over a second on CUDA/HIP. Its closing `bench: dominant kernel: screened ..`
-    stderr line states the three stages' wall times (minix HIP, 286 kernels: about 106 s, against
-    465-480 s for the one-queued-call screen; Metal, 195 kernels: about 18 s -- the agent note has
-    the numbers); with the table on, every
+    stderr line states the three stages' wall times (286-kernel steps: minix HIP about 106 s
+    against 465-480 s for the one-queued-call screen, rog CUDA about 44 s against 354-357 s; Metal,
+    195 kernels: about 20 s -- the agent note has the numbers); with the table on, every
     kernel is still re-timed, so a table costs what it did. With the table on, its
     closing `bench: per-kernel table:` line states the instrument's wall time. A kprof cell pins
     `--ocannl_autotune_timing=isolated`, whose synchronized singles keep its trace to a few hundred

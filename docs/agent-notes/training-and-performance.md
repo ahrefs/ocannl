@@ -598,20 +598,24 @@ files.
     (k248 `wte.grad` vs k198 at `53c2ba0b`), and two kernels of 8 and 7 us queued can read 48 and
     97 us isolated. Hence a wide cap with no ratio in stage one, and the final cap ranked by
     configured-objective readings: the cell's answer stays the queued one. The closing line's
-    `isolated reading ranked R of 24` is the margin -- 1 of 24 on minix HIP, 1-2 on Metal.
+    `isolated reading ranked R of 24` is the margin -- 1 of 24 on every measured backend.
   - A screen reading the admission gate refuses is ranked by its minimum (it only over-states).
     The old rule kept every refused reading as a candidate, outside the cap; isolated Metal
     windows are mostly refused (121-127 of 195 even on a quiet box), and a loaded mac-studio made
     the base re-time 37-46 candidates. Refused second-stage readings do not set the cut while an
     admitted one exists: an `unbatched` CUDA/HIP refusal is a depth-1, round-trip-inclusive time.
   - Measured base `00dc0c42` vs head `b944d18d` (`gpt2_mini_train`, `BENCH_TUNE=0`, two
-    processes per arm): minix HIP (unified, 286 kernels) instrument 465-480 s -> 106 s (isolated
-    screen 45.5-45.7 s, re-screen 25.8-25.9 s, re-timing 34.1-34.2 s), cells 484-499 s -> 111 s,
-    all four naming k207 (0.337 ms; 1.15x over k127, resolved). mac-studio, a shared correctness
-    slot, at `8e014a6a` (stage one still ratio-cut): Metal (195 kernels) 112-197 s -> 17.5-17.9
-    s, all naming k81 (1.16x over k91); cc (133 kernels) 159-199 s -> 120-140 s, all naming k89
-    `wte.grad`, whose re-timing of one ~400 ms kernel dominates. `segments_ms` sums these
-    screening estimates in two objectives.
+    processes per arm, exclusive windows): minix HIP (unified, 286 kernels) instrument 465-480 s
+    -> 106 s (isolated screen 45.5-45.7 s, re-screen 25.8-25.9 s, re-timing 34.1-34.2 s), cells
+    484-499 s -> 111 s, all four naming k207 (0.337 ms; 1.15x over k127, resolved); rog CUDA
+    (RTX 5070 Ti, 286 kernels) 354-357 s -> 43.5-43.7 s (12.1-12.2 + 27.1-27.5 + 4.1-4.2 s),
+    cells 358-361 s -> 47 s, all four naming k264 `wte.grad wpe.grad` (0.311-0.314 ms, the only
+    candidate). On rog the isolated screen is ~0.04 s a kernel and a queued call ~1.1 s.
+    mac-studio (a shared correctness slot, head only at the final screen): Metal (195 kernels)
+    112-197 s at base -> 18.8-22.9 s, all naming k81; cc (133 kernels) 159-199 s -> 96-123 s,
+    all naming k89 `wte.grad`, whose re-timing of one ~400 ms kernel dominates. The isolated
+    rank was 1 of 24 everywhere at the final screen. `segments_ms` sums these screening
+    estimates in two objectives.
   - `BENCH_KERNEL_TABLE=1` still re-times every kernel on its own (kprof needs them), and the
     two timing modes measure different quantities: never compare a kprof table's dominant kernel
     with a cell's.
