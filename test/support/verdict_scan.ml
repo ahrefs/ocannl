@@ -2389,6 +2389,9 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
   (* The fresh bindings a structure exports in place of the ones it exported before an [include]
      whose exports this reader does not know, which may rebind them (gh-ocannl-2336, review). *)
   let rebindable = Hash_set.create (module Int) in
+  (* Where the sources read as definitions lie: their applications are no call sites, so a write
+     there is not timed against a claim (gh-ocannl-2336, review). *)
+  let definition_spans = ref [] in
   (* The callers walked, by source: a caller that also defines a module a leg is built by a function
      of is read as it was walked, not walked again. *)
   let walked_callers = Hashtbl.create (module String) in
@@ -2909,13 +2912,26 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
                         module_exports := modules;
                         values
                       in
+                      let opaque_include =
+                        match denotes with
+                        | Some (Local_structure { opaque = included_opaque; _ }) -> included_opaque
+                        | _ -> true
+                      in
+                      let exports = if opaque_include then unknown exports else exports in
+                      (* What follows the include in this structure sees the same fresh bindings: a
+                         later definition's use of an earlier name may be the include's (review). *)
+                      let env =
+                        if opaque_include then
+                          Lexical_scope.push_frame env
+                            (Map.of_alist_reduce (module String) exports ~f:(fun _ later -> later))
+                        else env
+                      in
                       ( self#opened ~top:false ~include_:true env denotes,
                         match denotes with
-                        | Some (Local_structure { values; modules; opaque = included_opaque }) ->
-                            let exports = if included_opaque then unknown exports else exports in
+                        | Some (Local_structure { values; modules; _ }) ->
                             module_exports := !module_exports @ modules;
                             exports @ values
-                        | _ -> unknown exports ))
+                        | _ -> exports ))
                   | _ -> (env, exports))
             in
             let latest pairs =
@@ -4075,7 +4091,13 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
                                   let written_gate r =
                                     List.find_map r.leg_gates ~f:(fun (gate, gate_env) ->
                                         let at = position gate in
-                                        if start <= at && at < stop then
+                                        (* In the body, or anywhere in a source read as a
+                                           definition: its helpers' gates too (review). *)
+                                        if
+                                          (start <= at && at < stop)
+                                          || List.exists !definition_spans ~f:(fun (from, until) ->
+                                              from <= at && at < until)
+                                        then
                                           Hash_set.find (self#gate_reads gate_env gate)
                                             ~f:(fun (_, read) ->
                                               read <> 0
@@ -4208,13 +4230,18 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
         Hashtbl.find_or_add defining_structures source ~default:(fun () ->
             let parsed =
               match Hashtbl.find walked_callers source with
-              | Some (structure, scope) -> Scan_attempt.Scanned (structure, scope)
+              | Some (structure, scope) ->
+                  List.iter !caller_spans ~f:(fun (from, until, caller) ->
+                      if String.equal caller source then
+                        definition_spans := (from, until) :: !definition_spans);
+                  Scan_attempt.Scanned (structure, scope)
               | None -> (
                   let at = !next_offset in
                   next_offset := at + String.length text + 1;
                   match Scan_attempt.run (fun () -> structure_at ~offset:at text) with
                   | Scanned structure ->
                       caller_spans := (at, at + String.length text + 1, source) :: !caller_spans;
+                      definition_spans := (at, at + String.length text + 1) :: !definition_spans;
                       Verdict_callee.absorb ~into:owners (Verdict_callee.of_structure structure);
                       binder#structure structure;
                       self#walk_foreign (fun () ->

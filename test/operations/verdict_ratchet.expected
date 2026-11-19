@@ -761,6 +761,8 @@ accepts a leg a caller builds through a third source's function that applies the
 names a leg uncompared that another source's function builds from an optional it is handed by name: true
 refuses a leg another source's function destructures from the default its caller's None leaves: true
 accepts a leg built by a structure's function that another structure includes before an unreadable include: true
+names a leg uncompared whose other-source helper's gate reads a reference another helper writes: true
+names a leg uncompared whose other-source function applies a name a later include may rebind: true
 names a leg uncompared that is the result of a function of a module no source defines: true
 names a leg uncompared whose function a later include in its source may rebind: true
 names a leg uncompared whose function a later include of a structure including another may rebind: true

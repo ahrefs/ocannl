@@ -5448,6 +5448,28 @@ let () =
       [],
       [],
       1 );
+    ( "names a leg uncompared whose other-source helper's gate reads a reference another helper \
+       writes",
+      claim_under "Legs.rows_leg leg rows",
+      legs
+        {ocaml|let ready = ref false
+let prepare xs = ready := not (List.is_empty xs)
+let make leg = Verdict.sub_leg leg ~when_:(lazy !ready) ~on:"no rows"
+let rows_leg leg xs =
+  prepare xs;
+  make leg|ocaml},
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "names a leg uncompared whose other-source function applies a name a later include may rebind",
+      claim_under "Legs.rows_leg leg rows",
+      legs
+        {ocaml|let wrap leg _ = Verdict.sub_leg leg ~when_:(lazy on_gpu) ~on:"a CPU"
+include Other
+let rows_leg leg xs = wrap leg xs|ocaml},
+      [],
+      [ "uncompared in_leg" ],
+      0 );
     ( "names a leg uncompared that is the result of a function of a module no source defines",
       claim_under "Legs.arm_leg leg k16",
       none,
