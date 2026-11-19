@@ -350,9 +350,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   reaches, each asked alone so one reached path cannot hide another, all run the whole
   tier -- unless the tests tier covers that script (gh-ocannl-2304): an alias of the list the
   tests tier runs in this build names it as a dependency, as `affected` says on an exact
-  `affected: SCRIPT: named as a dependency by the rule of ALIAS` line of the same ask (the
-  alias's own `rule` or `alias` stanza names the path in its `(deps)` or as a `%{dep:}`, and
-  `dune rules` reads it; `tools/affected-tests.sh`'s "Literal dependencies"). A glob or a
+  `affected: SCRIPT: named as a dependency by the rule of ALIAS` line of the same ask (one
+  `rule` stanza of the alias names the path in its `(deps)` or as a `%{dep:}`, and `dune rules`
+  of that rule's probe twin reads it; `tools/affected-tests.sh`'s "Literal dependencies"). A glob or a
   `source_tree` never names one: `dune rules` prints a source tree's files as File
   dependencies too, so the repository scans reading `(source_tree ../..)` would otherwise cover
   every script. So `test/operations/sweep_leg_scripts.sh` alone runs no harness, its

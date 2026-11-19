@@ -2255,44 +2255,49 @@ DUNE
   rm -f "$mutant"
   git_q reset -q --hard HEAD~1 && rm -rf "${repo:?}/p8" || exit 2
 fi
-# Literal dependencies (gh-ocannl-2304): a changed script an alias's stanza names by its path, in
-# its deps or as a %{dep:}, and dune reads; never one a glob or a source tree reads with the rest,
-# which `dune rules` prints as File dependencies too.
+# Literal dependencies (gh-ocannl-2304): a changed script one rule of an alias names by its path,
+# in its deps or as a %{dep:}, and dune reads for that rule; never one a glob or a source tree
+# reads with the rest, which `dune rules` prints as File dependencies too, one an (alias) stanza
+# names, or one a rule dune does not build names while another reads it with a whole tree.
 if harness_leg 'literal dependencies'; then
   probe_restore
   mkdir -p "$repo/p9/tree" || exit 2
   cat >"$repo/p9/dune" <<'DUNE'
 (rule
  (alias runtest-named)
- (deps lit.sh (:drv drv.sh) (file filed.sh) (source_tree tree) (glob_files glob*.sh))
+ (deps lit.sh (:drv drv.sh) (:grp (file grp.sh)) (file filed.sh) (source_tree tree) (glob_files glob*.sh))
  (action (run %{dep:act.sh})))
 (rule (alias runtest-tree) (deps (source_tree tree)) (action (progn)))
 (rule (alias runtest-globbed) (deps (glob_files glob*.sh)) (action (progn)))
+(rule (alias runtest-split) (enabled_if false) (deps tree/t.sh) (action (progn)))
+(rule (alias runtest-split) (deps (source_tree tree)) (action (progn)))
+(alias (name runtest-plain) (deps plain.sh))
 DUNE
-  for f in lit drv filed act tree/t globa; do printf '#!/bin/sh\n' >"$repo/p9/$f.sh"; done
+  for f in lit drv grp filed act tree/t globa plain; do printf '#!/bin/sh\n' >"$repo/p9/$f.sh"; done
   git_q add -A p9 && git_q commit -qm literal-fixture || exit 2
-  affected --files p9/lit.sh p9/drv.sh p9/filed.sh p9/act.sh p9/tree/t.sh p9/globa.sh
-  for f in act drv filed lit; do
+  affected --files p9/lit.sh p9/drv.sh p9/grp.sh p9/filed.sh p9/act.sh p9/tree/t.sh p9/globa.sh p9/plain.sh
+  for f in act drv filed grp lit; do
     printf 'affected: p9/%s.sh: named as a dependency by the rule of @p9/runtest-named\n' "$f"
   done >"$TMP/want-named"
   grep '^affected: p9/.*: named as a dependency by the rule of ' "$err" | LC_ALL=C sort >"$TMP/got-named"
+  # Each of the reached aliases is listed, so what keeps a line away is the rule, not the reach.
   if [ "$rc" = 0 ] && grep -qx '@p9/runtest-tree' "$out" && grep -qx '@p9/runtest-globbed' "$out" &&
+     grep -qx '@p9/runtest-split' "$out" && grep -qx '@p9/runtest-plain' "$out" &&
      cmp -s "$TMP/want-named" "$TMP/got-named"; then
-    report 0 'a deps atom, a named dep, a (file) and a %{dep:} name a script; a glob and a source tree do not'
-  else report 1 'a deps atom, a named dep, a (file) and a %{dep:} name a script; a glob and a source tree do not' \
+    report 0 'a deps atom, a named group, a (file) and a %{dep:} name a script; a glob, a source tree, an (alias) stanza and a disabled rule do not'
+  else report 1 'a deps atom, a named group, a (file) and a %{dep:} name a script; a glob, a source tree, an (alias) stanza and a disabled rule do not' \
     "exit $rc; got: $(cat "$TMP/got-named"); stdout: $(cat "$out")"; fi
   # Dune's reading alone names the source tree's script too: the stanza is what tells them apart.
   mutant=$repo/tools/affected-mutant.sh
-  if FROM='return 0 unless $a->{described} && grep { $reads{$_} && $reads{$_}{$p} } @{$a->{own}};' \
-     TO='return 0 unless $a->{described} && grep { $reads{$_} && $reads{$_}{$p} } @{$a->{own}}; return 1;' \
+  if FROM='grep { $names_of{$_} && $names_of{$_}{$p} && $reads{$_}' TO='grep { $reads{$_}' \
       perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
       "$repo/tools/affected-tests.sh" >"$mutant"; then
     rc=0
     (cd "$TMP" && bash "$mutant" --files p9/tree/t.sh) >"$out" 2>"$err" || rc=$?
     if [ "$rc" = 0 ] && grep -qx 'affected: p9/tree/t.sh: named as a dependency by the rule of @p9/runtest-tree' "$err"; then
-      report 0 'negative control: without the stanza, dune reads a source tree'"'"'s script as named'
-    else report 1 'negative control: without the stanza, dune reads a source tree'"'"'s script as named' "exit $rc; $(cat "$err")"; fi
-  else report 1 'negative control: without the stanza, dune reads a source tree'"'"'s script as named' 'the mutation anchor did not occur once'; fi
+      report 0 'negative control: without the converter'"'"'s names, dune reads a source tree'"'"'s script as named'
+    else report 1 'negative control: without the converter'"'"'s names, dune reads a source tree'"'"'s script as named' "exit $rc; $(cat "$err")"; fi
+  else report 1 'negative control: without the converter'"'"'s names, dune reads a source tree'"'"'s script as named' 'the mutation anchor did not occur once'; fi
   rm -f "$mutant"
   git_q reset -q --hard HEAD~1 && rm -rf "${repo:?}/p9" || exit 2
 fi

@@ -74,8 +74,8 @@
 #            when an alias of the list the tests tier runs here names it as a dependency, as an
 #            exact `affected: SCRIPT: named as a dependency by the rule of ALIAS` line of the
 #            ask that printed that list says (tools/affected-tests.sh's "Literal
-#            dependencies": dune reads it as a File and the alias's own stanza names its
-#            path). Every such script covered, the tier narrows to what the paths reach,
+#            dependencies": one rule of the alias names its path, and dune reads it as a
+#            File of that rule). Every such script covered, the tier narrows to what the paths reach,
 #            nothing when that is no member; any one not covered runs the whole tier. Until 2026-11-13 this was a shell tier that ran only
 #            when BOTH sides changed a script, the `--shell` group alone: remote CI read a PR's
 #            own change then, and this build only the clash of two.
