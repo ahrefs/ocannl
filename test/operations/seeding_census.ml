@@ -33,23 +33,10 @@ let scratch (o : LL.optimized) =
     LL.optimize_ctx = LL.copy_optimize_ctx o.LL.optimize_ctx;
   }
 
-(* An f32 8x8x8 tile, the only one advertised. *)
-let mma_limits ?(formats = [ Ir.Backend_intf.(Mma_f32, Mma_f32, Mma_f32) ]) () =
-  {
-    Ir.Backend_intf.no_hardware_limits with
-    mma =
-      Some
-        {
-          Ir.Backend_intf.minimal_mma_capability with
-          mma_tile = (8, 8, 8);
-          mma_format_tiles = List.map formats ~f:(fun f -> (f, (8, 8, 8)));
-        };
-  }
-
-let gpu_limits = mma_limits ()
+let gpu_limits = Ll_test.f32_mma_limits
 
 (* A device whose only tile takes f16 operands: an f32 site has no tile. *)
-let f16_only_limits = mma_limits ~formats:[ Ir.Backend_intf.(Mma_f16, Mma_f16, Mma_f32) ] ()
+let f16_only_limits = Ll_test.mma_8x8x8_limits [ Ir.Backend_intf.(Mma_f16, Mma_f16, Mma_f32) ]
 
 let cpu_limits =
   {

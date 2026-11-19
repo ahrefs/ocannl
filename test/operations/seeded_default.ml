@@ -286,11 +286,6 @@ let () =
     "on CUDA/HIP the model starts from the seeded plan: its pick is the seeded plan or beats it, \
      never the plain default pipeline"
     (not (String.equal r.Autotune.mc_label "default"));
-  Verdict.gated ~when_:seeds_here ~on:backend_name
-    "on CUDA/HIP the model's pick is no tensor-core or conv form"
-    (not
-       (String.is_substring r.Autotune.mc_label ~substring:"mma-"
-       || String.is_substring r.Autotune.mc_label ~substring:"conv-"));
   Verdict.gated_all ~when_:seeds_here ~on:backend_name
     "on CUDA/HIP the model's weight gradient is bitwise the default pipeline's"
     (List.zip_exn (Array.to_list w_model) (Array.to_list w_default))
@@ -339,14 +334,6 @@ let () =
       Stdio.eprintf "structural: model_pick for cuda: %s (not part of the golden)\n"
         r.Autotune.mc_label;
       p label (not (String.equal r.Autotune.mc_label "default")));
-  Verdict.in_leg ~leg
-    "structural: for the cuda stand-in the model's pick is no tensor-core or conv form"
-    (fun label ->
-      let r = Lazy.force pick in
-      p label
-        (not
-           (String.is_substring r.Autotune.mc_label ~substring:"mma-"
-           || String.is_substring r.Autotune.mc_label ~substring:"conv-")));
   p "structural control: without rated ceilings the cuda stand-in's pick is the default pipeline"
     (String.equal
        (Autotune.model_pick ~name:"sd_pick_unrated"
@@ -354,3 +341,107 @@ let () =
           (Context.auto ()) comp Ir.Indexing.Empty)
          .Autotune.mc_label
        "default")
+
+(* The gradient fixture above tests order preservation but does not make a tensor-core leaf
+   competitive. This aligned f16 contraction offers an f32-accumulating tile on both CUDA and
+   HIP. *)
+let () =
+  let half = Ir.Ops.half and single = Ir.Ops.single in
+  let n = 256 and k = 512 in
+  let init label ~i ~o stride =
+    NTDSL.init ~l:label ~prec:half ~i:[ i ] ~o:[ o ]
+      ~f:
+        (Ll_test.weighted ~weights:[| stride; 31 |] ~modulus:1009 ~offset:(-504.5)
+           ~stride:(1. /. 1009.))
+      ()
+  in
+  let a = init "sd_mma_a" ~i:k ~o:n 17 and b = init "sd_mma_b" ~i:n ~o:k 43 in
+  let%op out = a * b in
+  Ir.Tnode.update_prec out.Tensor.value single;
+  let comp = Train.forward out in
+  let ctx = Context.auto () in
+  let bindings = Ir.Indexing.Empty in
+  let is_mma r = String.is_substring r.Autotune.mc_label ~substring:"mma-" in
+  let ranked_scalar_pick r =
+    Option.is_some r.Autotune.mc_rank_ms
+    && not (is_mma r || String.is_substring r.Autotune.mc_label ~substring:"conv-")
+  in
+  let unrestricted pick =
+    Utils.with_stated_config
+      [
+        ("gpu_default_sketch_min_reduction", "0");
+        ("gpu_default_split_reduce_min_serial", "0");
+        ("gpu_default_reduction_sink", "false");
+      ]
+      pick
+  in
+  let restricted pick =
+    Utils.with_stated_config [ ("gpu_default_sketch_min_reduction", "1") ] pick
+  in
+  (* Leave the memory leg below the compute leg so the two compute rates decide the pick. *)
+  let limits =
+    {
+      Ll_test.f16_mma_limits with
+      peak_flops = Some 1e14;
+      peak_memory_bandwidth = Some 1e15;
+      issue_rate = Some 1e12;
+      mma_rate = Some 1e14;
+    }
+  in
+  let target = Ll_test.cuda_model_target ~limits () in
+  (* The CUDA syntax stand-in has no MMA hook. Give the model a matrix unit that accepts the
+     scheduled tile so the advertised matrix rate is used; the device leg reads its own hook. *)
+  let capabilities =
+    {
+      target.mt_capabilities with
+      mma_accepts =
+        (fun ~d_prec:_
+          ~a_prec:_
+          ~b_prec:_
+          ~ta:_
+          ~tb:_
+          ~m:_
+          ~n:_
+          ~k:_
+          ~fragment_target:_
+          ~d:_
+          ~a:_
+          ~b:_
+        -> true);
+    }
+  in
+  let target = { target with mt_capabilities = capabilities } in
+  let pick () = Autotune.model_pick ~name:"sd_mma_pick" ~target ctx comp bindings in
+  let control = unrestricted pick and seeded = restricted pick in
+  Stdio.eprintf "structural matmul: unrestricted %s, seeded %s (not part of the golden)\n"
+    control.Autotune.mc_label seeded.Autotune.mc_label;
+  p "structural: without seeding, the model picks a tensor-core leaf" (is_mma control);
+  p "structural: with seeding, the ranked pick is no tensor-core or conv form"
+    (ranked_scalar_pick seeded);
+  let available, aggregation =
+    if not seeds_here then (false, `Backend)
+    else
+      match
+        Ll_test.tensorized_capability ~is_gpu:true ~is_cpu:false
+          ~limits:(Context.hardware_limits ctx) ~a_prec:half ~b_prec:half ~d_prec:single
+      with
+      | `Advertised -> (true, `Backend)
+      | `Withheld aggregation -> (false, aggregation)
+  in
+  let gpu_leg = Verdict.leg ~when_:available ~aggregation ~on:backend_name () in
+  Verdict.in_leg ~leg:gpu_leg "on CUDA/HIP without seeding, the model picks a tensor-core leaf"
+    (fun label ->
+      let r = unrestricted (fun () -> Autotune.model_pick ctx comp bindings) in
+      Stdio.eprintf "device matmul: unrestricted %s (not part of the golden)\n" r.Autotune.mc_label;
+      p label (is_mma r));
+  Verdict.in_leg ~leg:gpu_leg
+    "on CUDA/HIP with seeding, the ranked pick is no tensor-core or conv form" (fun label ->
+      let report = ref None in
+      let compiled, _ =
+        restricted (fun () ->
+            Autotune.model_default ~report:(fun r -> report := Some r) ctx comp bindings)
+      in
+      Context.release compiled;
+      let r = Option.value_exn ~here:[%here] !report in
+      Stdio.eprintf "device matmul: seeded %s (not part of the golden)\n" r.Autotune.mc_label;
+      p label (ranked_scalar_pick r))

@@ -8873,12 +8873,12 @@ module C_syntax (B : C_syntax_config) = struct
             nonempty_stmts guarded
         | _ -> stmts
       in
-      let fail msg =
-        invalid_arg
-          ("C_syntax.pp_ll: Workgroup_reduce loop " ^ symbol_ident i
-         ^ " is a recognized accumulation, but the warp-shuffle rendering requires " ^ msg
-         ^ " (a plain hardware binding would race the accumulator update)")
+      let failure_detail msg =
+        "C_syntax.pp_ll: Workgroup_reduce loop " ^ symbol_ident i
+        ^ " is a recognized accumulation, but the warp-shuffle rendering requires " ^ msg
+        ^ " (a plain hardware binding would race the accumulator update)"
       in
+      let fail msg = invalid_arg (failure_detail msg) in
       let decision = (decide_accum_width ctx loop) ~body:(Low_level.unflat_lines stmts) () in
       match statement_accumulation decision with
       | None -> (
@@ -8889,10 +8889,19 @@ module C_syntax (B : C_syntax_config) = struct
                  the lanes. The shuffle cannot render it, and binding the index would have every
                  lane read-modify-write the one cell; before gh-ocannl-754 this fell through to that
                  binding silently. *)
-              fail
-                "a single accumulation statement as its body: the accumulation found under this \
-                 level (a nest of inner levels, or a schedule-minted scope) is one the shuffle \
-                 cannot render, and it is unguarded, so every lane would update the same cell"
+              raise
+                (Schedule_outcome.Cause_at
+                   ( Backend_codegen,
+                     Illegal_schedule
+                       {
+                         check = "warp_shuffle_nested_accumulation";
+                         detail =
+                           failure_detail
+                             "a single accumulation statement as its body: the accumulation found \
+                              under this level (a nest of inner levels, or a schedule-minted \
+                              scope) is one the shuffle cannot render, and it is unguarded, so \
+                              every lane would update the same cell";
+                       } ))
           | Accum_base _ | Accum_not_a_nest _ ->
               (* Not an accumulation the shuffle owns. The hardware binding is the correct rendering
                  of an explicitly staged tree (per-lane cells, lane-pinned final store) and of a

@@ -1035,6 +1035,10 @@ files.
   `Make` instance, and a GPU-scheduled pick would be compiled by the context's backend.
   `Ll_test.cuda_model_target` is CUDA without a device (rated ceilings: `Ll_test.rated_limits`);
   `model_seeded_anchor` and `seeded_default` judge the seeded model's premises for it on cc.
+  For the restriction itself, `seeded_default` uses a separate f16 contraction with a matrix rate
+  above the scalar issue rate. With the seeding settings off the same target must pick an MMA
+  leaf, so the seeded claim can fail. The device leg uses the same contraction at the device's
+  own limits and gates on the advertised tile (gh-ocannl-1879).
 - **A decision-only reader ranks what the compile hands its transform** (gh-ocannl-1878): a compile
   sinks zeros under `buffer_aliasing` before scheduling, which moves fission boundaries and so
   kernels, so running `select` on a bare `Context.lowered_for_decisions` prices a fission that never
@@ -1416,6 +1420,13 @@ files.
   backend binding descriptor in the oracle's signature. Without a device the full answer is
   `C_syntax.Compile_driver.binding_race`, the render of one routine in a given dialect
   (gh-ocannl-1780).
+- `warp_shuffle_nested_accumulation` (`C_syntax.try_warp_reduce`): render-only, because this
+  dialect binds a `Workgroup_reduce` lane to a hardware register and cannot shuffle the
+  recognized unguarded accumulation below this level as a single statement (gh-ocannl-754).
+  Without a shuffle, the bound lanes would update the same cell. On a serial dialect the
+  same nest can localize its accumulator and execute. `hardware_warp_shuffle` checks the
+  typed refusal and the single- and two-phase shuffle source through a CUDA render on any host
+  (gh-ocannl-1879).
 - `Low_level.validate_parallel` (`Low_level.validate_parallel_classified`, the first check in
   `C_syntax.compile_proc`): render-only, because it is a fact about the finished schedule, not
   about one op. Its coverage rule (a materialized write sits under bound loops of every active

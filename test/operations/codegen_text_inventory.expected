@@ -239,7 +239,7 @@ test/operations/hardware_axes_parity.ml [run by @test/operations/runtest-hardwar
     "if ("
     "lid.x"
     "threadIdx.x"
-test/operations/hardware_warp_shuffle.ml [run by @test/operations/runtest-hardware_warp_shuffle; also pins text this scan cannot name: untraced callback, opaque aggregate component, mutation or unseen buffer write]
+test/operations/hardware_warp_shuffle.ml [run by @test/operations/runtest-hardware_warp_shuffle; also pins text this scan cannot name: untraced callback, opaque aggregate component, mutation or unseen buffer write, rebound parameter]
     "__nv_bfloat16 wred_partials_"
     "__nv_bfloat16 wred_v_"
     "float wred_partials_"

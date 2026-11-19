@@ -1,13 +1,16 @@
 a singleton shuffle phase needs no stages: true
 shuffle stages refuse nonpositive and non-power-of-two widths: true
 serial sum correct: true
+host CUDA render emits both phases of the four-warp shuffle: true
 warp-shuffle sum parity: true
 two-phase shuffle rendering (GPU) or serial fallback (CPU): true
+host CUDA render emits the single-warp shuffle without shared partials: true
 warp-shuffle fma dot parity: true
 single-warp shuffle rendering (GPU) or serial fallback (CPU): true
 warp-shuffle max parity: true
 non-warp-multiple extent rejected (GPU) or runs serially (CPU): true
 guarded smaller-extent accumulation rejected (GPU) or runs serially (CPU): true
+host CUDA render refuses the unguarded nested accumulation: true
 an unguarded accumulation nest under the Workgroup_reduce level (a Serial level inside it) is refused loudly where a lane index is bound (GPU) or localized whole as a serial nest (CPU): true
 wshfl_grid_guard: the guarded-off row's terms are nonzero, so a dropped guard shows in it: true
 wshfl_grid_guard: the shared notion lists the tree as inserting a barrier, under uniform control: true

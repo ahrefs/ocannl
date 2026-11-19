@@ -35,6 +35,7 @@ module Tn = Ir.Tnode
 module LL = Ir.Low_level
 module Asgns = Ir.Assignments
 module Numerics = Ir.Numerics
+module Outcome = Ir.Schedule_outcome
 module L = Ll_test
 
 let () = Utils.settings.output_debug_files_in_build_directory <- true
@@ -123,23 +124,46 @@ module Generated = Test_utils.Generated
 
 let () = Generated.init ~backend_name
 
+let renders_shuffle ~warps source =
+  let logic = Generated.main_logic source in
+  has_shuffle_stages logic ~warps
+  && Bool.equal (warps > 1) (String.is_substring logic ~substring:"wred_partials_")
+
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
+
+(* Render the same transformed body as the device leg, in CUDA's dialect on every host. *)
+let cuda_render ~name ~transform comp =
+  let lower =
+    Context.lowered_for_decisions
+      ~facts:(Context.backend_facts_of_name "cuda")
+      (Context.auto ()) comp Ir.Indexing.Empty
+  in
+  let batch =
+    L.Cuda_like_driver.render_batch ~names:[| name |] Ir.Indexing.Empty
+      [| transform lower |]
+      ~includes:"" ~builtins:[] ()
+  in
+  batch.assemble [ 0 ]
 
 let dropped_zeros = ref []
 
 (* Replace the lowered serial reduction with a single [Workgroup_reduce] accumulation loop over a
    fresh index; the renderer owns the communication. The transform drops the lowered [Zero_out] of
-   the accumulator, so un-mark [zero_initialized_by_code], which no longer holds, and record the
-   node: the run gives the accumulation the same all-zeros starting point as the serial lowering. *)
-let reduce_transform ~n ~body_of (s : Tn.t) (opt : LL.optimized) : LL.optimized =
+   the accumulator, so un-mark [zero_initialized_by_code], which no longer holds. *)
+let reduce_lowering ~n ~body_of (s : Tn.t) (opt : LL.optimized) : LL.optimized =
   (LL.get_node opt.traced_store s).LL.zero_initialized_by_code <- false;
-  dropped_zeros := s :: !dropped_zeros;
   let i = L.sym () in
   { opt with llc = L.loop_n ~axis:LL.Workgroup_reduce i n (body_of i) }
 
-let run ~name ~transform t =
-  let comp = named name (Train.forward t) in
+let record_zero s transform opt =
+  let opt = transform opt in
+  dropped_zeros := s :: !dropped_zeros;
+  opt
+
+let reduce_transform ~n ~body_of s = record_zero s (reduce_lowering ~n ~body_of s)
+
+let run_comp ~transform comp t =
   let ctx = Context.auto () in
   let ctx, routine =
     Context.compile ~lowered_transform:(fun o -> [ transform o ]) ctx comp Ir.Indexing.Empty
@@ -147,6 +171,7 @@ let run ~name ~transform t =
   let ctx = Context.run (Ll_test.state_dropped_zeros dropped_zeros ctx routine) routine in
   (Context.get_values ctx t.Tensor.value).(0)
 
+let run ~name ~transform t = run_comp ~transform (named name (Train.forward t)) t
 let it = L.iter
 let f0 = L.fixed 0
 
@@ -160,19 +185,20 @@ let () =
   let got_serial = run ~name:"wshfl_sum_serial" ~transform:(fun opt -> opt) s0 in
   p_close "serial sum correct" [| got_serial |] [| expected_sum |] ~tol;
   let%op s1 = v ++ "i=>0" in
-  let got =
-    run ~name:"sum_wshfl"
-      ~transform:
-        (reduce_transform ~n s1.Tensor.value ~body_of:(fun i ->
-             L.set_at s1.Tensor.value f0
-               (L.add (L.get s1.Tensor.value [| f0 |]) (L.get v.Tensor.value [| it i |]))))
-      s1
+  let sum_comp = named "sum_wshfl" (Train.forward s1) in
+  let sum_transform =
+    reduce_lowering ~n s1.Tensor.value ~body_of:(fun i ->
+        L.set_at s1.Tensor.value f0
+          (L.add (L.get s1.Tensor.value [| f0 |]) (L.get v.Tensor.value [| it i |])))
   in
+  p "host CUDA render emits both phases of the four-warp shuffle"
+    (renders_shuffle ~warps:4 (cuda_render ~name:"sum_wshfl" ~transform:sum_transform sum_comp));
+  let got = run_comp ~transform:(record_zero s1.Tensor.value sum_transform) sum_comp s1 in
   p_close "warp-shuffle sum parity" [| got |] [| expected_sum |] ~tol;
   (let src = Generated.read "sum_wshfl" in
    let has sub = String.is_substring src ~substring:sub in
    let ok =
-     if on_gpu then has_shuffle_stages src ~warps:4 && has "wred_partials_"
+     if on_gpu then renders_shuffle src ~warps:4
      else (not (has "ocannl_shfl_xor")) && not (has "wred_partials_")
    in
    p "two-phase shuffle rendering (GPU) or serial fallback (CPU)" ok);
@@ -185,25 +211,23 @@ let () =
   let va = TDSL.ndarray av ~label:[ "va" ] ~output_dims:[ m ] () in
   let vb = TDSL.ndarray bv ~label:[ "vb" ] ~output_dims:[ m ] () in
   let%op d1 = va +* "i;i=>0" vb in
-  let got_dot =
-    run ~name:"dot_wshfl"
-      ~transform:
-        (reduce_transform ~n:m d1.Tensor.value ~body_of:(fun i ->
-             L.set_at d1.Tensor.value f0
-               (Ternop
-                  ( Ir.Ops.FMA,
-                    (L.get va.Tensor.value [| it i |], single),
-                    (L.get vb.Tensor.value [| it i |], single),
-                    (L.get d1.Tensor.value [| f0 |], single) ))))
-      d1
+  let dot_comp = named "dot_wshfl" (Train.forward d1) in
+  let dot_transform =
+    reduce_lowering ~n:m d1.Tensor.value ~body_of:(fun i ->
+        L.set_at d1.Tensor.value f0
+          (Ternop
+             ( Ir.Ops.FMA,
+               (L.get va.Tensor.value [| it i |], single),
+               (L.get vb.Tensor.value [| it i |], single),
+               (L.get d1.Tensor.value [| f0 |], single) )))
   in
+  p "host CUDA render emits the single-warp shuffle without shared partials"
+    (renders_shuffle ~warps:1 (cuda_render ~name:"dot_wshfl" ~transform:dot_transform dot_comp));
+  let got_dot = run_comp ~transform:(record_zero d1.Tensor.value dot_transform) dot_comp d1 in
   p_close "warp-shuffle fma dot parity" [| got_dot |] [| expected_dot |] ~tol;
   (let src = Generated.read "dot_wshfl" in
    let has sub = String.is_substring src ~substring:sub in
-   let ok =
-     if on_gpu then has_shuffle_stages src ~warps:1 && not (has "wred_partials_")
-     else not (has "ocannl_shfl_xor")
-   in
+   let ok = if on_gpu then renders_shuffle src ~warps:1 else not (has "ocannl_shfl_xor") in
    p "single-warp shuffle rendering (GPU) or serial fallback (CPU)" ok);
 
   (* --- 2-warp max-reduce: a non-Add combine. The max is positive, so the allocation-zeroed
@@ -309,27 +333,44 @@ let () =
   let expected = Array.fold mv ~init:0. ~f:( +. ) in
   let mx = TDSL.ndarray mv ~label:[ "mx" ] ~output_dims:[ n; inner ] () in
   let%op ms = mx ++ "ij=>0" in
+  let comp = named "nested_wshfl" (Train.forward ms) in
   let transform =
-    reduce_transform ~n ms.Tensor.value ~body_of:(fun i ->
+    reduce_lowering ~n ms.Tensor.value ~body_of:(fun i ->
         let k = L.sym () in
         L.loop ~upto:(inner - 1) ~axis:LL.Serial k
           (L.set_at ms.Tensor.value f0
              (L.add (L.get ms.Tensor.value [| f0 |]) (L.get mx.Tensor.value [| it i; it k |]))))
   in
+  let is_nested_accumulation phase cause =
+    match (phase, cause) with
+    | ( Outcome.Backend_codegen,
+        Outcome.Illegal_schedule { check = "warp_shuffle_nested_accumulation"; _ } ) ->
+        true
+    | _ -> false
+  in
+  p "host CUDA render refuses the unguarded nested accumulation"
+    (match cuda_render ~name:"nested_wshfl" ~transform comp with
+    | _ -> false
+    | exception Outcome.Cause_at (phase, cause) -> is_nested_accumulation phase cause);
   let claim =
     "an unguarded accumulation nest under the Workgroup_reduce level (a Serial level inside it) is \
      refused loudly where a lane index is bound (GPU) or localized whole as a serial nest (CPU)"
   in
-  if on_gpu then
+  if on_gpu then (
     match
-      try
-        ignore (run ~name:"nested_wshfl" ~transform ms : float);
-        None
-      with Invalid_argument msg -> Some msg
+      Context.compile_outcome ~provenance:Outcome.User_schedule
+        ~lowered_transform:(fun opt -> [ transform opt ])
+        (Context.auto ()) comp Ir.Indexing.Empty
     with
-    | Some msg -> p claim (String.is_substring msg ~substring:"single accumulation statement")
-    | None -> p claim false
-  else p_close claim [| run ~name:"nested_wshfl" ~transform ms |] [| expected |] ~tol
+    | Error (Outcome.Classified { phase; cause; _ }) -> p claim (is_nested_accumulation phase cause)
+    | Error failure -> Outcome.raise_failure failure
+    | Ok (ctx, _) ->
+        Context.release ctx;
+        p claim false)
+  else
+    p_close claim
+      [| run_comp ~transform:(record_zero ms.Tensor.value transform) comp ms |]
+      [| expected |] ~tol
 
 (* --- gh-ocannl-1238: a multi-warp reduction's barriers under enclosing control. Past one warp the
    shuffle stages per-warp partials between two barriers -- barriers the IR does not contain, which
