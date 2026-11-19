@@ -240,13 +240,28 @@ files.
   separate gaps. A stretch between the draw and the result closes to the result's open axis by
   role at stage 6a, and the inequality it holds closed the still-waiting draw empty at stage 6b:
   a packed draw now takes by role, at stage 6a, a non-parameter axis with a minimum above 1 and
-  no GLB, as it takes a bounded one, but only when its block counter is its own: two conversions
-  of the same bits indexed at 7 and 11 then needed 2 and 3 blocks of one counter and were refused
-  (`row_glb_reach_executed` pins acceptance; those shared-counter draws still broadcast one block,
-  a known limitation even where both minima need the same block count, as 9 and 12 do). A reduced draw's leaf axis under the result guessed
+  no GLB, as it takes a bounded one, but only when its block counter is its own, or when every
+  draw sharing it needs the same number of blocks with its GLB at its least sizes (gh-ocannl-2370,
+  `packed_counter_minimum_sizes`, each draw's demand with its own coefficient): two conversions
+  of the same bits indexed at 8 and 11 (9 and 12 cells, three blocks each) both fill. Indexed at
+  7 and 11 they need 2 and 3 blocks, and taking both was refused. No counter holds both at their
+  minima (`k` round-up blocks of 4 hold `4k-3` to `4k` cells), and serving 8 from three blocks
+  would grow the result past the minimum its fixed index sets, so that pair keeps the ordinary
+  order and broadcasts one block, printed in `row_glb_reach_executed`, not claimed. A minimum
+  counts only where stage 7 closes the axis at it first (not one a held window or concat equation
+  defers, nor one in a parameter's bound component), and on a shared counter a total still pending
+  in the pass blocks the rule, as it blocks gh-ocannl-2319's (an own counter keeps gh-ocannl-2318's
+  rule unchanged); both rules read blocks through `round_up_blocks` and pending totals through
+  `pending_total_vars`. No store was found where those three
+  change an outcome (staged attempts are refused on the base too). The same test pins both
+  agreeing rules at two lane widths (9 single and 6 double cells, three blocks each, by constants
+  and by minima; an f64 leg): forcing one coefficient on either rule fails its case. A reduced draw's leaf axis under the result guessed
   1 at stage 5 (`close_dim_terminal`): it now waits until stage 7 while a non-parameter result
   above it, through `res` links, still has such a minimum, unless the walk meets an axis a held
-  window or concat equation defers. The stage-7 closings propagate in their own pass first,
+  window or concat equation defers: stage 7 does not close that axis to its minimum first, so the
+  leaf keeps its stage-5 guess. No program reaching that guard was found; a staged store in
+  `test_row_glb_reach` pins it (removing it, the leaf waits and still closes 1, only later).
+  The stage-7 closings propagate in their own pass first,
   since solving the result consumes the `res` link the leaf reads. With only a stretch or a
   reduction between, the index's axis is the draw's own and never needed either.
   The unbatched `term_init` and `reshape` programs from gh-ocannl-2225 also fill on

@@ -204,9 +204,21 @@ both uses can broadcast a one-block draw when their block counts would differ: t
 the shared bits and both draws take their full shapes: true
 the 9-cell draw holds a distinct value in every cell: true
 the 12-cell draw holds a distinct value in every cell: true
+three blocks at two lane widths, sized by constants: the draws keep their lane widths: true
+three blocks at two lane widths, sized by constants: the shared bits and both draws take their full shapes: true
+three blocks at two lane widths, sized by constants: the 9-cell draw holds a distinct value in every cell: true
+three blocks at two lane widths, sized by constants: the 6-cell draw holds a distinct value in every cell: true
+three blocks at two lane widths, sized by fixed-index minima: the draws keep their lane widths: true
+three blocks at two lane widths, sized by fixed-index minima: the shared bits and both draws take their full shapes: true
+three blocks at two lane widths, sized by fixed-index minima: the 9-cell draw holds a distinct value in every cell: true
+three blocks at two lane widths, sized by fixed-index minima: the 6-cell draw holds a distinct value in every cell: true
 both remainders close when the counter can take three blocks: true
 both remainders stay open when the counter's bound requires one block: true
-shared counter, fixed-index minima: bits 1, u , v , mu 8, mv 12
+shared counter, fixed-index minima 9 and 12: bits 3, u 9, v 12, mu 9, mv 12
+the shared bits, both draws and both results take the minima's shapes: true
+sized by fixed-index minima, the 9-cell draw holds a distinct value in every cell: true
+sized by fixed-index minima, the 12-cell draw holds a distinct value in every cell: true
+shared counter, fixed-index minima 8 and 12: bits 1, u , v , mu 8, mv 12
 accepted, and the pointwise results take the fixed indices' minima: true
 late-tail fixture: the packed draw is open after Stage6a: true
 late-tail fixture: the closed GLB is retained at Stage6b: true
