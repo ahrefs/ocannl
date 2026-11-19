@@ -1273,7 +1273,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   that leaves a tracked or untracked file behind (a later run could pass on it); with no argument it takes every
   member of `tools/test-harnesses.sh` whose gates list a leg. The scheduled and dispatched
   `harness-legs-alone` matrix deals candidates round-robin in `tools/test-harnesses.sh --list`
-  order with `--shard K/N` (gh-ocannl-2353). `tools/test-harness-legs-alone.sh` compares the
+  order with `--shard K/N` (gh-ocannl-2353). `--list [--shard K/N]` prints that same candidate
+  selection without launching a member. `tools/test-harness-legs-alone.sh` compares the
   shards with the unsharded fixture, and `ci_matrix.sh` checks the workflow supplies every
   shard once and leaves siblings running after a failure. Run it locally, slot-wrapped,
   on a harness whose legs you restructured. `HARNESS --list-legs` prints each gate (`LEG  NAME`)

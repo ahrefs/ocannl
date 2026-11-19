@@ -4,6 +4,7 @@
 #
 #   tools/harness-legs-alone.sh                     # every gated harness
 #   tools/harness-legs-alone.sh --shard K/N         # one manifest shard
+#   tools/harness-legs-alone.sh --list [--shard K/N] # selected candidate paths only
 #   tools/harness-legs-alone.sh tools/test-promote.sh ...
 #   tools/harness-legs-alone.sh --logs DIR ...      # keep every run's output
 #
@@ -38,20 +39,24 @@
 # tokens on source lines. Shell syntax and indirect calls are outside its
 # scope. A candidate's --list-legs verdict decides whether it has legs here.
 # --shard K/N deals those candidates round-robin in manifest order, before
-# asking any candidate to list its legs. Each member runs in the caller's
+# asking any candidate to list its legs. --list prints the selected paths one
+# per line and exits before invoking any candidate. Both options require
+# manifest discovery and refuse named harnesses. Each member runs in the caller's
 # environment (strict skips included), with the expected-skip list reserved
 # for the aggregate. CI runs this on its daily schedule and by dispatch.
 #
-# Exit: 0 every run passed; 1 a finding, a red full run or a failed listing;
+# Exit: 0 every run passed or --list printed the selection;
+# 1 a finding, a red full run or a failed listing;
 # 2 a usage error, failed manifest discovery, or a named HARNESS that lists no
 # leg. HUP, INT and TERM stop the check and keep their status (129, 130, 143).
 set -u
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P) || exit 2
 # shellcheck source=../scripts/process-group.sh
 . "$root/scripts/process-group.sh"
-logs= harnesses=() shard= shard_index=1 shard_count=1
+logs= harnesses=() shard= shard_index=1 shard_count=1 list=0
 while [ $# -gt 0 ]; do
   case $1 in
+    --list) list=1 ;;
     --logs)
       [ $# -ge 2 ] && [ -n "$2" ] || { echo "harness-legs-alone.sh: --logs needs a directory" >&2; exit 2; }
       logs=$2
@@ -75,6 +80,10 @@ if [ -n "$shard" ] && [ "$named" -gt 0 ]; then
   echo "harness-legs-alone.sh: --shard deals the manifest and takes no named harnesses" >&2
   exit 2
 fi
+if [ "$list" = 1 ] && [ "$named" -gt 0 ]; then
+  echo "harness-legs-alone.sh: --list selects from the manifest and takes no named harnesses" >&2
+  exit 2
+fi
 if [ "$named" -eq 0 ]; then
   members=$("$root/tools/test-harnesses.sh" --list) || {
     echo "harness-legs-alone.sh: cannot list the harness manifest" >&2
@@ -96,6 +105,10 @@ if [ "$named" -eq 0 ]; then
     echo "harness-legs-alone.sh: no member of tools/test-harnesses.sh gates a leg${shard:+ in shard $shard}" >&2
     exit 2
   fi
+fi
+if [ "$list" = 1 ]; then
+  printf '%s\n' "${harnesses[@]}"
+  exit $?
 fi
 if [ -n "$logs" ]; then
   mkdir -p "$logs" && logs=$(CDPATH= cd -- "$logs" && pwd -P) ||
