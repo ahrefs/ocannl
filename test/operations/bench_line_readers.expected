@@ -1,6 +1,5 @@
 == the registry
 every format's readers are bench_output's: true
-seeded_default: not pinned here -- Autotune.seeded_apply logs it on CUDA and HIP only (seeded_default_backend); no CPU run prints it
 == the GEBP timing line (bin/schedule_bench, bin/narrow_gebp_bench)
 schedule: the timing lines name the variants the bench-result records do: true
 schedule: each line's ms is its record's time: true
@@ -66,4 +65,12 @@ gh1442_agreement reads the pick's own timing and its paired ratio: true
 gh1600_txn_fit lists each candidate with its kernels: true
 rank-site-field prints the pick's seeded_label, as gh1253_cells.sh asks: true
 an OCaml literal decodes as OCaml writes it: true
-every pinned format was read off a producer's line here: true
+== the seeded-default census (Autotune.seeded_apply; CUDA and HIP only)
+the seeded run states its leg claim: true
+the run printed seeded_default derivations exactly where its leg ran: true
+each plan derivation states its time in seconds: true
+each census line counts no more segments seeded than it has: true
+each census line lists as many seeded segments as it counts: true
+the census lines read are the capture's own, whole and in order: true
+no more census lines than plan derivations: true
+every pinned format was read off a producer's line here, or its run skipped: true
