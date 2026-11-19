@@ -43,12 +43,14 @@ let trajectory spatial momentum =
   in
   let name = if spatial then "2d" else "1d" in
   let first = values observations 0. in
-  let x = NTDSL.init ~l:"input" ~prec:Ir.Ops.single ~b ~o ~f:(fun _ -> 0.) () in
+  let x = NTDSL.init ~mutable_:true ~l:"input" ~prec:Ir.Ops.single ~b ~o ~f:(fun _ -> 0.) () in
   Train.set_materialized x.Tensor.value;
   let layer = make ~label:[ name ] ~epsilon ?momentum () in
   let eval_o = if spatial then [ 1; 1; channels ] else [ channels ] in
   let eval_x =
-    NTDSL.init ~l:"eval_input" ~prec:Ir.Ops.single ~b:[ 1 ] ~o:eval_o ~f:(fun _ -> 0.) ()
+    NTDSL.init ~mutable_:true ~l:"eval_input" ~prec:Ir.Ops.single ~b:[ 1 ] ~o:eval_o
+      ~f:(fun _ -> 0.)
+      ()
   in
   Train.set_materialized eval_x.Tensor.value;
   (* Fresh inference must resolve without a training graph. This layer later trains on a larger

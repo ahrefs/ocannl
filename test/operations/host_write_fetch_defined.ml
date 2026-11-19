@@ -39,7 +39,7 @@ let fetched ?(values = [| 1.; 2. |]) ?(materialize = true) name =
   x
 
 let data_backed name =
-  Operation.init ~l:name ~prec:Ir.Ops.single ~o:[ 2 ]
+  Operation.init ~mutable_:true ~l:name ~prec:Ir.Ops.single ~o:[ 2 ]
     ~f:(function [| i |] -> Float.of_int (i + 1) | _ -> assert false)
     ~grad_spec:Tensor.Prohibit_grad ()
 

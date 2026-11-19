@@ -54,7 +54,7 @@ let forward t =
   { fwd with asgns = Asgns.Block_comment (label ^ " fwd", fwd.asgns) }
 
 let loss_accumulator ?(label = "loss_accum") () =
-  let t = NTDSL.init ~l:label ~prec:Ir.Ops.single ~o:[ 1 ] ~f:(fun _ -> 0.) () in
+  let t = NTDSL.init ~mutable_:true ~l:label ~prec:Ir.Ops.single ~o:[ 1 ] ~f:(fun _ -> 0.) () in
   set_materialized t.Tensor.value;
   t
 
@@ -120,8 +120,8 @@ let stepped_params_for ~fn_name ?params loss =
     ~what:
       "the loss trains no parameters -- no [loss.params] member's gradient is written by the \
        backprop code (a parameter behind [stop_gradient] is not trained). A non-parameter \
-       differentiable leaf ([Operation.init ~grad_spec:Require_grad], an optimized input) is not \
-       selected by default: pass it in [?params]"
+       differentiable leaf ([Operation.init ~mutable_:true ~grad_spec:Require_grad], an optimized \
+       input) is not selected by default: pass it in [?params]"
     loss
 
 (** Replaces the zeroing of the given gradient nodes with [Noop] inside a [zero_grads] computation
@@ -257,7 +257,9 @@ let zero_params_grads ?params loss =
 
 let grad_checksum ?params loss =
   let params = stepped_params_for ~fn_name:"Train.grad_checksum" ?params loss in
-  let flag = NTDSL.init ~l:"grad_checksum" ~prec:Ir.Ops.single ~o:[ 1 ] ~f:(fun _ -> 0.) () in
+  let flag =
+    NTDSL.init ~mutable_:true ~l:"grad_checksum" ~prec:Ir.Ops.single ~o:[ 1 ] ~f:(fun _ -> 0.) ()
+  in
   set_materialized flag.Tensor.value;
   Tn.set_observable flag.Tensor.value;
   (* Settle shape inference for the parameters first: the total-reduce einsum below unifies each
@@ -352,7 +354,7 @@ let refuse_reestablished ~fn_name loss stepped =
                   (a [Tensor.term_init] or literal with at most [limit_constant_fill_size] values \
                   is a fetch, not data, and a slice of one follows it), which would silently undo \
                   each step. Build an optimized input data-backed, with [Operation.init \
-                  ~grad_spec:Require_grad], or make it a parameter",
+                  ~mutable_:true ~grad_spec:Require_grad], or make it a parameter",
                Some p ))
 
 let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov ?grad_unscale ?grad_scale
@@ -451,7 +453,7 @@ let scheduled_learning_rate ?(label = "learning_rate") schedule =
 
 let grad_l2_norm ?grad_unscale ?(label = "grad_norm") ?params loss =
   let params = stepped_params_for ~fn_name:"Train.grad_l2_norm" ?params loss in
-  let norm = NTDSL.init ~l:label ~prec:Ir.Ops.single ~o:[ 1 ] ~f:(fun _ -> 0.) () in
+  let norm = NTDSL.init ~mutable_:true ~l:label ~prec:Ir.Ops.single ~o:[ 1 ] ~f:(fun _ -> 0.) () in
   set_materialized norm.Tensor.value;
   Tn.set_observable norm.Tensor.value;
   (* Settle shape inference for the parameters first — same reason as in {!grad_checksum}: a

@@ -256,7 +256,9 @@ let cd_replace ~label ~name ~dst ~offset ~src make =
       Tensor.unsafe_reinitialize ();
       let sentinel i = Float.of_int (-100 - i) and value i = Float.of_int (11 + (3 * i)) in
       let tgt =
-        NTDSL.init ~l:"cd_tgt" ~prec:Ir.Ops.single ~o:[ dst ] ~f:(fun i -> sentinel i.(0)) ()
+        NTDSL.init ~mutable_:true ~l:"cd_tgt" ~prec:Ir.Ops.single ~o:[ dst ]
+          ~f:(fun i -> sentinel i.(0))
+          ()
       in
       let srct =
         NTDSL.init ~l:"cd_src" ~prec:Ir.Ops.single ~o:[ src ] ~f:(fun i -> value i.(0)) ()

@@ -2,6 +2,7 @@ every partial sum of every convolution cell is exact in f32: true
 every partial sum of every input-gradient cell is exact in f32: true
 the convolution's host sums are its executed values: true
 the leaf took margins from its consumer: true
+the padded init leaf is host-constant: true
 the convolution is the zero-padded correlation of the leaf's data: true
 the leaf reads back as its data, margins not included: true
 the input gradient's host sums are its executed values: true

@@ -37,12 +37,12 @@
       the whole range of [r - q]. Every intermediate integer must be exactly representable in every
       precision the mask was computed or stored at (an f16 range of more than 2048 cells declines);
     - a node the routine never writes is followed only when it is a host constant
-      ({!Tnode.known_host_constant}, unpadded, with {!Host_inits} data: an [ndarray] literal, whose
-      values are declared forever equal to that data, gh-ocannl-1858): its cells over the whole
-      [(r, q)] square -- O(extent^2) once, past [2^24] cells declined -- must be a function of
-      [r - q] alone, bit for bit, held to the same exactness standard, the data's and the node's
-      precisions included. A mask built with [Operation.init] is mutable host data by contract (a
-      host write after compiling changes it), so its data proves nothing and it is left alone;
+      ({!Tnode.known_host_constant}, unpadded, with {!Host_inits} data, such as an [ndarray] literal
+      or a default [Operation.init] tensor): its cells over the whole [(r, q)] square -- O(extent^2)
+      once, past [2^24] cells declined -- must be a function of [r - q] alone, bit for bit, held to
+      the same exactness standard, the data's and the node's precisions included.
+      [Operation.init ~mutable_:true] permits writes after compilation, so its registered data
+      cannot prove the values an executing routine reads;
     - [v] does not depend on [q] and does not read [y]. When [rhs] is a single read of a node at
       [y]'s precision, that node's elementwise definition stands in for it (the masked operand of a
       max is stored before it is reduced), provided nothing the definition reads is written between

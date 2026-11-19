@@ -96,12 +96,12 @@ let b_val c = (Float.of_int (c * 7 % 5) /. 5.0) -. 0.4
     loss is mean-reduced over the batch. *)
 let build_model ~freeze_w ~batch ~x_row =
   let x =
-    NTDSL.init ~l:"x" ~prec:Ir.Ops.single ~b:[ batch ] ~o:[ din ]
+    NTDSL.init ~mutable_:true ~l:"x" ~prec:Ir.Ops.single ~b:[ batch ] ~o:[ din ]
       ~f:(function [| b; d |] -> x_val (x_row b) d | _ -> assert false)
       ()
   in
   let targets =
-    NTDSL.init ~l:"targets" ~prec:Ir.Ops.single ~b:[ batch ] ~o:[ classes ]
+    NTDSL.init ~mutable_:true ~l:"targets" ~prec:Ir.Ops.single ~b:[ batch ] ~o:[ classes ]
       ~f:(function [| b; c |] -> target_val (x_row b) c | _ -> assert false)
       ()
   in
@@ -371,7 +371,7 @@ let frozen_backbone_accumulation () =
 let paramless_guard () =
   Tensor.unsafe_reinitialize ();
   let w =
-    Operation.init ~l:"w_unregistered" ~prec:Ir.Ops.single ~o:[ din ]
+    Operation.init ~mutable_:true ~l:"w_unregistered" ~prec:Ir.Ops.single ~o:[ din ]
       ~f:(function [| d |] -> w_val 0 d | _ -> assert false)
       ~grad_spec:Tensor.Require_grad ()
   in

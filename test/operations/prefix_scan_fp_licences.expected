@@ -223,6 +223,11 @@ literal (i > o): an exclusive suffix: rewritten has the expected scan: true
 literal (i > o): an exclusive suffix: rewritten writes no n x n node: true
 literal (i > o): an exclusive suffix: rewritten equals the composed result bitwise: true
 literal (i > o): an exclusive suffix: rewritten equals the host oracle: true
+init (i <= o): an inclusive prefix: composed has no scan: true
+init (i <= o): an inclusive prefix: rewritten has the expected scan: true
+init (i <= o): an inclusive prefix: rewritten writes no n x n node: true
+init (i <= o): an inclusive prefix: rewritten equals the composed result bitwise: true
+init (i <= o): an inclusive prefix: rewritten equals the host oracle: true
 a literal one cell off the triangle is left alone: true
 the near-triangle literal: rewritten equals the composed bitwise: true
 the near-triangle literal: rewritten equals the host product: true

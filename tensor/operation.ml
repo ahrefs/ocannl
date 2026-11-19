@@ -1005,12 +1005,22 @@ let rebatch ~l ndarray =
 (** Creates a tensor by initializing values using a function from indices to values. The dimensions
     are split into axis kinds as specified, there is no shape inference. Recall that input axes are
     rightmost. The padding is inferred, as for a {!range_of_shape} leaf: nothing else holds the
-    array, so a padded consumer gets its margins, the values copied into a padded buffer. *)
-let init ~l ~prec ?(b = []) ?(i = []) ?(o = []) ~f =
+    array, so a padded consumer gets its margins, the values copied into a padded buffer.
+
+    The initialized value, including any inferred padding, is constant by default. Pass
+    [~mutable_:true] if a host write or routine will update the value. Differentiation can still
+    accumulate into the separate gradient, and {!Make_DSL.param} makes its initializer writable. *)
+let init ?(mutable_ = false) ~l ~prec ?(b = []) ?(i = []) ?(o = []) ~f =
   let all_dims = Array.of_list (b @ o @ i) in
   let ndarray = Ir.Ndarray.init_array ~debug:l prec ~dims:all_dims ~padding:None ~f in
-  Tensor.term ~init_data:(Asgns.Reshape ndarray) ~batch_dims:b ~label:[ l ] ~input_dims:i
-    ~output_dims:o
+  fun ?fetch_op ?grad_spec ?top_down_prec ?batch_axes ?input_axes ?output_axes ?deduced () ->
+    let t =
+      Tensor.term ~init_data:(Asgns.Reshape ndarray) ?fetch_op ?grad_spec ~label:[ l ]
+        ?top_down_prec ~batch_dims:b ?batch_axes ~input_dims:i ~output_dims:o ?input_axes
+        ?output_axes ?deduced ()
+    in
+    if Stdlib.not mutable_ then Tn.set_host_constant t.Tensor.value;
+    t
 
 module Make_DSL (Grad_spec : sig
   val grad_spec : Tensor.grad_spec

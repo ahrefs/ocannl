@@ -53,12 +53,12 @@ let () =
       ~f:(Ll_test.cycle_flat ~dims:[| classes; d_hid |] ~modulus:5 ~offset:0. ~stride:0.04)
   in
   let w1 =
-    Operation.init ~l:"w1" ~prec:Ir.Ops.single ~b:[] ~i:[ d_in ] ~o:[ d_hid ]
+    Operation.init ~mutable_:true ~l:"w1" ~prec:Ir.Ops.single ~b:[] ~i:[ d_in ] ~o:[ d_hid ]
       ~f:(fun idcs -> w1v.((idcs.(0) * d_in) + idcs.(1)))
       ~grad_spec:Tensor.Require_grad ()
   in
   let w2 =
-    Operation.init ~l:"w2" ~prec:Ir.Ops.single ~b:[] ~i:[ d_hid ] ~o:[ classes ]
+    Operation.init ~mutable_:true ~l:"w2" ~prec:Ir.Ops.single ~b:[] ~i:[ d_hid ] ~o:[ classes ]
       ~f:(fun idcs -> w2v.((idcs.(0) * d_hid) + idcs.(1)))
       ~grad_spec:Tensor.Require_grad ()
   in

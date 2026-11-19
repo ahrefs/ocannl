@@ -358,7 +358,7 @@ let () =
     with_key "cpu_schedule_channel_vectors" key (fun () ->
         let x = image ~tag:("tr" ^ key) ~b:[ 2 ] ~h:6 ~w:6 ~ic:4 () in
         let param tag ic oc =
-          Operation.init ~l:(tag ^ key) ~prec:Ir.Ops.single ~i:[ 3; 3; ic ] ~o:[ oc ]
+          Operation.init ~mutable_:true ~l:(tag ^ key) ~prec:Ir.Ops.single ~i:[ 3; 3; ic ] ~o:[ oc ]
             ~f:(reals ~weights:[| 4; 9; 5; 3 |])
             ~grad_spec:Tensor.Require_grad ()
         in

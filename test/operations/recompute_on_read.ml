@@ -50,7 +50,7 @@ let build ~materialize =
   (* Data-backed: the host writes it after the forward is compiled, which a literal this small, a
      fetch, refuses (gh-ocannl-1959). *)
   let x =
-    Operation.init ~l:"ror_x" ~prec:Ir.Ops.single ~o:[ rows; cols ]
+    Operation.init ~mutable_:true ~l:"ror_x" ~prec:Ir.Ops.single ~o:[ rows; cols ]
       ~f:(function [| i; j |] -> x_values.((i * cols) + j) | _ -> assert false)
       ~grad_spec:Tensor.Prohibit_grad ()
   in

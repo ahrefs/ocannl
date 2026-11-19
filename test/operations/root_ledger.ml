@@ -105,7 +105,7 @@ let () =
   let child, routine = compile root comp in
   ignore (Context.run child routine);
   let y =
-    Operation.init ~l:"ledger_fork" ~prec:Ir.Ops.single ~o:[ 3 ]
+    Operation.init ~mutable_:true ~l:"ledger_fork" ~prec:Ir.Ops.single ~o:[ 3 ]
       ~f:(fun _ -> 0.)
       ~grad_spec:Tensor.Prohibit_grad ()
   in

@@ -450,8 +450,8 @@ type t = {
           root, or per device for a host literal). Set at graph construction and never cleared. *)
   mutable host_constant : bool;
       (** Declared value-constancy: the node's values are fixed at construction and always equal its
-          registered host-init data (an ndarray-backed literal). Set by [Tensor.ndarray] (and
-          eligible loaders); parameterization clears it when the value becomes mutable. This carries
+          registered host-init data. Set by [Tensor.ndarray], [Operation.init] by default, and
+          eligible loaders. Parameterization clears it when the value becomes mutable. This carries
           the constancy that [Effectively_constant] intent cannot: ndarray-backed nodes are minted
           [On_device] (provenance [Site "49:ndarray-backed"]), so the memory-mode lattice has no
           room left for the constant marking. Consumed by [Schedule.Stage]'s hoisted packing

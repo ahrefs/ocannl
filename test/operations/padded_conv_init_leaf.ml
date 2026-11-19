@@ -82,6 +82,7 @@ let () =
         (match Ir.Tnode.get_padding x.Tensor.value with
         | Some (pads, value) -> pads.(1).Ir.Ops.left = left && Float.equal value 0.
         | None -> false);
+      p "the padded init leaf is host-constant" (Ir.Tnode.known_host_constant x.Tensor.value);
       pf_all2 "the convolution is the zero-padded correlation of the leaf's data"
         (Context.get_values ctx y.Tensor.value)
         (conv x_vals) ~f:Float.equal;

@@ -127,3 +127,56 @@ let () =
   p "a number's copy from an unrun source: the refusal names gh-ocannl-2022"
     (LC.has msg "gh-ocannl-2022");
   LC.exact "the number reads as its fetch left it" (values dst num) [| 3. |]
+
+let () =
+  let n = 4 in
+  let initial = count n ~from:1 in
+  let uploaded = count n ~from:11 in
+  let init ?mutable_ l =
+    NTDSL.init ?mutable_ ~l ~prec:Ir.Ops.single ~o:[ n ] ~f:(fun i -> initial.(i.(0))) ()
+  in
+  let host =
+    Ir.Ndarray.init_array ~debug:"init replacement" Ir.Ops.single ~dims:[| n |] ~padding:None
+      ~f:(fun i -> uploaded.(i.(0)))
+  in
+  let writer x ctx =
+    Context.compile
+      ~name:("write_" ^ Ir.Tnode.label_name x.Tensor.value)
+      ctx
+      [%cd x =: x + !.100.]
+      IDX.empty
+  in
+  let x = init "default_init" in
+  let ctx = Context.auto () in
+  let host_msg =
+    LC.refusal "upload to a default init" (fun () -> Context.from_host ctx x.Tensor.value host)
+  in
+  let comp_msg = LC.refusal "comp writes a default init" (fun () -> writer x ctx) in
+  let names_write name msg ~fn ~issue =
+    List.iter [ fn; "default_init"; issue; "Operation.init ~mutable_:true" ] ~f:(fun text ->
+        p (name ^ ": the refusal names " ^ text) (LC.has msg text))
+  in
+  names_write "upload to a default init" host_msg ~fn:"Context.from_host" ~issue:"gh-ocannl-2021";
+  names_write "comp writes a default init" comp_msg ~fn:"Context.compile" ~issue:"gh-ocannl-2104";
+  let y = double x in
+  let ctx = Train.forward_once ctx y in
+  LC.exact "refused writes leave the default init values intact" (values ctx y)
+    (Array.map initial ~f:(( *. ) 2.));
+  Context.release ctx;
+  let x = init ~mutable_:true "mutable_init" in
+  let ctx = Context.auto () in
+  let compiled = LC.accepted "a comp can write an opted-out init" (fun () -> writer x ctx) in
+  let ctx = Option.value_map compiled ~default:ctx ~f:fst in
+  let uploaded_ctx =
+    LC.accepted "an opted-out init accepts an upload" (fun () ->
+        Context.from_host ctx x.Tensor.value host)
+  in
+  Option.iter uploaded_ctx ~f:(fun ctx ->
+      LC.exact "the opted-out init holds the uploaded values" (values ctx x) uploaded;
+      match compiled with
+      | None -> Context.release ctx
+      | Some (_, routine) ->
+          let ctx = Context.run ctx routine in
+          LC.exact "the comp reads and updates the opted-out init" (values ctx x)
+            (Array.map uploaded ~f:(( +. ) 100.));
+          Context.release ctx)

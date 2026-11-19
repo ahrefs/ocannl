@@ -109,10 +109,6 @@ let operands ~prec s =
       ~f:(fun idcs -> Bench_gebp.b_value idcs.(0) idcs.(1))
       ()
   in
-  (* The hoisted-B~ legs pack mb at link time, which needs a known-constant source. [init] does not
-     mark one ([Tensor.ndarray], [schedule_bench]'s operand constructor, does), and mb is written
-     only by its initialization, so it is declared constant the way [Tensor.ndarray] declares it. *)
-  Ir.Tnode.set_host_constant mb.Tensor.value;
   (ma, mb)
 
 (* One compile and run of [ma * mb] under [schedule] (none: the unscheduled kernel), returning the

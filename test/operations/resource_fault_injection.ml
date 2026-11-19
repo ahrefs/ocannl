@@ -63,7 +63,7 @@ let () =
   let comp = Train.forward y in
   (* Upload fixtures are mutable data, not the forward's literal (gh-ocannl-2021). *)
   let upload_target name =
-    Operation.init ~l:name ~prec:Ir.Ops.single ~o:[ 4 ]
+    Operation.init ~mutable_:true ~l:name ~prec:Ir.Ops.single ~o:[ 4 ]
       ~f:(fun i -> values.(i.(0)))
       ~grad_spec:Tensor.Prohibit_grad ()
   in

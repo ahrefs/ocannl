@@ -80,3 +80,16 @@ a number in a fresh context: the refusal names Operation.init: true
 32: the copied literal reads its registered values: true
 a number's copy from an unrun source: the refusal names gh-ocannl-2022: true
 the number reads as its fetch left it: true
+upload to a default init: the refusal names Context.from_host: true
+upload to a default init: the refusal names default_init: true
+upload to a default init: the refusal names gh-ocannl-2021: true
+upload to a default init: the refusal names Operation.init ~mutable_:true: true
+comp writes a default init: the refusal names Context.compile: true
+comp writes a default init: the refusal names default_init: true
+comp writes a default init: the refusal names gh-ocannl-2104: true
+comp writes a default init: the refusal names Operation.init ~mutable_:true: true
+refused writes leave the default init values intact: true
+a comp can write an opted-out init: true
+an opted-out init accepts an upload: true
+the opted-out init holds the uploaded values: true
+the comp reads and updates the opted-out init: true

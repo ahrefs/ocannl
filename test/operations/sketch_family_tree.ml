@@ -669,7 +669,7 @@ let () =
      the hoisted, hoisted-grid AND mixed grid-outermost ([sk_pack_rest]) packing shapes all
      enumerate. *)
   let av =
-    NTDSL.init ~l:"av" ~prec:Ir.Ops.single ~o:[ nn; nn ]
+    NTDSL.init ~mutable_:true ~l:"av" ~prec:Ir.Ops.single ~o:[ nn; nn ]
       ~f:(Ll_test.cycle ~dims:[| nn; nn |] ~modulus:13 ~offset:(-6.) ~stride:0.25)
       ()
   in

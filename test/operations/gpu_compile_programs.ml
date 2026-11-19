@@ -43,11 +43,11 @@ let step () =
       ()
   in
   let w1 =
-    Operation.init ~l:"gcp_w1" ~prec:Ir.Ops.single ~b:[] ~i:[ d_in ] ~o:[ d_hid ] ~f:w1_init
-      ~grad_spec:Tensor.Require_grad ()
+    Operation.init ~mutable_:true ~l:"gcp_w1" ~prec:Ir.Ops.single ~b:[] ~i:[ d_in ] ~o:[ d_hid ]
+      ~f:w1_init ~grad_spec:Tensor.Require_grad ()
   in
   let w2 =
-    Operation.init ~l:"gcp_w2" ~prec:Ir.Ops.single ~b:[] ~i:[ d_hid ] ~o:[ classes ]
+    Operation.init ~mutable_:true ~l:"gcp_w2" ~prec:Ir.Ops.single ~b:[] ~i:[ d_hid ] ~o:[ classes ]
       ~f:(Ll_test.weighted ~weights:[| 7; 1 |] ~modulus:13 ~offset:(-6.) ~stride:0.02)
       ~grad_spec:Tensor.Require_grad ()
   in

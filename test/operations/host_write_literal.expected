@@ -28,3 +28,5 @@
 32: ndarray-initialized parameter cannot be hoisted: true
 32: parameter accepts a single-cell host write: true
 32: ndarray-initialized parameter reads the host writes: true
+init-initialized parameter cannot be hoisted: true
+init-initialized parameter reads the host write: true
