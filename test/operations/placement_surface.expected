@@ -36,12 +36,14 @@ committing mc on top does not lower it either: true
 the two commitments strictly raise the floor: true
 [aliasing false] the GPU sketch segment for w2.grad starts without its covering zero: true
 [aliasing false] preparation moves the covering zero into the w2.grad matmul segment under the gate: true
+[aliasing false] the weight-gradient matmul is outside both prior sets: true
 [aliasing false] the surface's enablement is the same on the bare and prepared lowerings: true
 [aliasing false] the forward fixture's matmul participates in enablement: true
 [aliasing false] the forward matmul participates in disablement: true
 [aliasing false] the surface's disablement is the same on the bare and prepared lowerings: true
 [aliasing true] the GPU sketch segment for w2.grad starts without its covering zero: true
 [aliasing true] preparation moves the covering zero into the w2.grad matmul segment under the gate: true
+[aliasing true] the weight-gradient matmul is outside both prior sets: true
 [aliasing true] the surface's enablement is the same on the bare and prepared lowerings: true
 [aliasing true] the forward fixture's matmul participates in enablement: true
 [aliasing true] the forward matmul participates in disablement: true

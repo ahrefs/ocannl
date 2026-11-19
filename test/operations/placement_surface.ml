@@ -310,6 +310,9 @@ let () =
                "preparation moves the covering zero into the w2.grad matmul segment under the gate")
             (Option.equal Bool.equal (matmul_has_cover prepared_allmat) (Some aliasing));
           p
+            (tag "the weight-gradient matmul is outside both prior sets")
+            (not (Set.mem prepared_en w2_grad || Set.mem prepared_dis w2_grad));
+          p
             (tag "the surface's enablement is the same on the bare and prepared lowerings")
             (Set.equal en prepared_en && Set.equal surface.ps_enablement prepared_en);
           p
