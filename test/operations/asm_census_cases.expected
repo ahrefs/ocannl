@@ -9,6 +9,9 @@ AMDGPU: a blended select has no conditional branch ([s_branch] is unconditional)
 a listing whose line tables name another source has no markers and no instructions there: true
 AMDGPU: a Windows path's drive letter and a trailing column leave the line read: true
 AMDGPU: a Windows path's drive letter and a trailing column leave the line read: true
+AIR: the branch around a gate's load is counted, the bounds guard's is not, nor an inlined header's: true
+AIR: a [select] is no branch, and nor is an unconditional [br label]: true
+AIR: locations whose subprogram names another source attribute nothing to this one: true
 an empty listing has no markers and no instructions: true
 a PTX file's target is what ptxas assembles for: true
 compiler plans ignore probe paths and GCC's derived dump names: true

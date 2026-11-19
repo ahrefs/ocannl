@@ -27,10 +27,13 @@
    lines, and those lines carry instructions, the realistic leg's included (gh-ocannl-1660); on CUDA
    and HIP (gh-ocannl-1695; HIP blends, CUDA's ptxas predicates the short-circuiting spelling
    itself), the same claim of the code object the run compiled (SASS through [ptxas] and [nvdisasm],
-   AMDGPU through [llvm-objdump]), Metal's skipped by name. - The realistic composition: a ReLU
-   feeding a 2x2 max pool, backward through the default placements (the selects inlined into their
-   consumers) — the gradient emits the blend and equals, bitwise, both an OCaml reference and the
-   same program with inlining off. *)
+   AMDGPU through [llvm-objdump]); on Metal (gh-ocannl-1828), the AIR the Metal Toolchain compiles
+   the run's [.metal] artifact to under the run's own compile options, which keeps the
+   short-circuit's branch on every leg: pinned as counted, on the toolchain version counted, the
+   zero-branch claim skipping there. - The realistic composition: a ReLU feeding a 2x2 max pool,
+   backward through the default placements (the selects inlined into their consumers) — the gradient
+   emits the blend and equals, bitwise, both an OCaml reference and the same program with inlining
+   off. *)
 
 (* cc-fp-contract: exact-operands -- selects, adds and a pool gradient multiplying dyadic weights by
    one *)
@@ -54,11 +57,40 @@ let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~d
 let on_cc = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)
 let skipped = Verdict.skipped ~backend:backend_name
 
-(* The GPU assembly dialects this census can read (gh-ocannl-1695). Metal has no public disassembler
-   here, so its assembly claims skip. CUDA's target boundary is in [census_claim]; select-emission
-   policy belongs to [Cuda_like_config.Cuda]. *)
+(* The GPU code dialects this census can read (gh-ocannl-1695): the code object a CUDA or HIP run
+   compiled, and on Metal (gh-ocannl-1828) the AIR the Metal Toolchain compiles the run's [.metal]
+   artifact to -- a re-compile, as [Asm.disassemble_gpu] states, skipped where the toolchain is
+   missing. CUDA's target boundary is in [census_claim]; select-emission policy belongs to
+   [Cuda_like_config.Cuda]. *)
 let gpu_dialect =
-  match backend_name with "cuda" -> Some Asm.Sass | "hip" -> Some Asm.Amdgpu | _ -> None
+  match backend_name with
+  | "cuda" -> Some Asm.Sass
+  | "hip" -> Some Asm.Amdgpu
+  | "metal" -> Some Asm.Air
+  | _ -> None
+
+(* The backend whose census reads AIR, a re-compile of the run's source (gh-ocannl-1828). *)
+let on_air = String.equal backend_name "metal"
+
+(* The compile options the Metal run applied, rebuilt from what decides them: the math API the
+   runtime accepts, as [Metal_backend.host_capabilities] reports it under [metal_math_api] (read
+   back by that function's spelling of each [Compiler_options.metal_math_api]), and routine logging.
+   [None] where the report names no API spelled here, which the census reads as an unreadable
+   artifact, a failure, never a guess. *)
+let metal_options =
+  lazy
+    (let reported =
+       List.Assoc.find (Context.host_capabilities ()) ~equal:String.equal "metal_math_api"
+     in
+     let spelled =
+       [
+         ("modern_split", Ir.Compiler_options.Modern_split); ("legacy", Ir.Compiler_options.Legacy);
+       ]
+     in
+     Option.map
+       (Option.bind reported ~f:(List.Assoc.find spelled ~equal:String.equal))
+       ~f:(fun math_api ->
+         Ir.Compiler_options.metal ~routine_logging:(Utils.debug_log_from_routines ()) ~math_api))
 
 let blends = on_cc || String.equal backend_name "hip"
 
@@ -217,16 +249,27 @@ let cuda_arch =
     (if not (String.equal backend_name "cuda") then None
      else Option.map (List.hd (Ll_test.cuda_compute_capabilities ())) ~f:(Printf.sprintf "sm_%d"))
 
+(* What a GPU census read of one artifact: whether it could be read at all -- the tool ran, its line
+   tables name the artifact's source, the anchor is nonempty and its lines carry instructions -- and
+   how many conditional branches it attributed to the anchored lines. *)
+type gpu_reading = { readable : bool; branches : int }
+
+let branch_free r = r.readable && r.branches = 0
+
 (* The GPU counterpart of [compiled_branch_free] (gh-ocannl-1695): the code object the run itself
    compiled for [name] -- [<name>.ptx] on CUDA, [<name>.hsaco] on HIP, or each [<name>.part<k>] a
-   split compile wrote -- disassembled with its line tables ([Asm.disassemble_gpu]), and no
-   conditional branch attributed to a line [select_lines] reads in the source that artifact was
-   compiled from. One verdict per artifact: each holds only when its line tables name its source and
-   the anchored lines carry instructions, and no artifact at all is an empty list, which the claim's
-   [p_all] fails; a missing tool fails too, never skips: on this backend the census is the claim. *)
-let gpu_branch_free dialect ~patterns name =
+   split compile wrote -- disassembled with its line tables ([Asm.disassemble_gpu]; on Metal, the
+   run's [<name>.metal] re-compiled to AIR under the run's options, gh-ocannl-1828), and the
+   conditional branches attributed to a line [select_lines] reads in the source that artifact was
+   compiled from. One reading per artifact, a branching one printing its sites; no artifact at all
+   is an empty list, which a claim's [p_all] fails, and a missing tool is an unreadable reading: on
+   CUDA and HIP the census is the claim, so neither skips. *)
+let gpu_census dialect ~patterns name =
   let artifact_ext, source_ext =
-    match dialect with Asm.Sass -> (".ptx", ".cu") | Asm.Amdgpu -> (".hsaco", ".hip")
+    match dialect with
+    | Asm.Sass -> (".ptx", ".cu")
+    | Asm.Amdgpu -> (".hsaco", ".hip")
+    | Asm.Air -> (".metal", ".metal")
   in
   (* The whole program's artifact, or each part a split compile wrote ([<name>.part<k>], from 0). *)
   let exists stem = Stdlib.Sys.file_exists (Generated.path ~ext:artifact_ext stem) in
@@ -241,15 +284,17 @@ let gpu_branch_free dialect ~patterns name =
       fmt
   in
   if List.is_empty stems then say "no %s artifact" artifact_ext;
-  (* Every artifact censused, a red one printing its sites, before the verdict. *)
   List.map stems ~f:(fun stem ->
       let artifact = Generated.path ~ext:artifact_ext stem in
       let source_basename = stem ^ source_ext in
       let source = Generated.read ~ext:source_ext stem in
-      match Asm.disassemble_gpu ?cuda_arch:(Lazy.force cuda_arch) dialect ~artifact with
+      match
+        Asm.disassemble_gpu ?cuda_arch:(Lazy.force cuda_arch)
+          ?metal_options:(Lazy.force metal_options) dialect ~artifact
+      with
       | Error why ->
           say "%s: the census cannot read it: %s" stem why;
-          false
+          { readable = false; branches = 0 }
       | Ok (dump, toolchain) ->
           let parsed = Asm.parse_gpu dialect ~dump ~source_basename in
           let anchor = select_lines ~patterns source in
@@ -264,14 +309,72 @@ let gpu_branch_free dialect ~patterns name =
              marker(s) for %s, by %s"
             stem (List.length sites) instructions (Set.length anchor) parsed.g_markers
             (Asm.gpu_dialect_name dialect) source_basename toolchain;
-          Asm.explain_branch_claim ~source ~prefix:("branchless_select: " ^ stem)
-            ~holds:
-              (List.is_empty sites && instructions > 0 && parsed.g_markers > 0
-              && not (Set.is_empty anchor))
-            sites)
+          let reading =
+            {
+              readable = instructions > 0 && parsed.g_markers > 0 && not (Set.is_empty anchor);
+              branches = List.length sites;
+            }
+          in
+          (* Every branch with the instruction before it, so the run names what branched. *)
+          ignore
+            (Asm.explain_branch_claim ~source ~prefix:("branchless_select: " ^ stem)
+               ~holds:(branch_free reading) sites
+              : bool);
+          reading)
+
+(* The Metal Toolchain an AIR census compiles with, its version line (or why there is none) on
+   stderr once: the reading's provenance, and the version an exact count is pinned to. *)
+let metal_toolchain =
+  lazy
+    (let t = Asm.metal_toolchain () in
+     (match (on_air, t) with
+     | true, Ok version ->
+         Stdio.eprintf "branchless_select: AIR census toolchain: %s (not part of the golden)\n"
+           version
+     | true, Error why ->
+         Stdio.eprintf "branchless_select: no AIR census: %s (not part of the golden)\n" why
+     | false, _ -> ());
+     t)
+
+(* Metal's finding (gh-ocannl-1828): Metal keeps the short-circuiting [?:] for every [Where]
+   (backend-dialects-and-idents.md: MSL [select] evaluates both arms, which a range guard's
+   deliberately out-of-range read must not), and the toolchain's front end keeps that short-circuit
+   around the arm's device load as a [br i1] on the select's line: one on each of the four
+   hand-built legs, and one on the realistic pool kernel's [?:] lines (whose anchor, as on CUDA,
+   also holds the window loops' index guards). So the zero-branch claim, version-independent, skips
+   on Metal citing [air_divergence], and the census is pinned instead as it reads: exactly
+   [air_branches] per leg, on the Metal Toolchain versions it was counted on, an environment skip on
+   any other (the maintainer's rule on gh-ocannl-1828: exact counts name the version they pin). A
+   fix that makes Metal's value selects branch-free reddens the pin, which is the cue to drop it and
+   let the zero-branch claim run. What AIR shows is the front end's IR, not the GPU's machine code
+   ([Asm.disassemble_gpu]). *)
+let air_divergence = "gh-ocannl-1828"
+let air_branches = 1
+let air_pinned_toolchains = [ "32023.922" ]
+let air_census_runs () = on_air && Result.is_ok (Lazy.force metal_toolchain)
+let air_leg = Verdict.leg ~when_:on_air ~on:backend_name ()
+
+let air_toolchain_leg =
+  Verdict.sub_leg ~aggregation:`Environment air_leg
+    ~when_:(lazy (air_census_runs ()))
+    ~on:"a host without the Metal Toolchain (xcrun -sdk macosx metal)"
+
+let air_pinned_leg =
+  Verdict.sub_leg ~aggregation:`Environment air_toolchain_leg
+    ~when_:
+      (lazy
+        (match Lazy.force metal_toolchain with
+        | Ok line ->
+            Option.value_map
+              (Asm.metal_toolchain_version line)
+              ~default:false
+              ~f:(List.mem air_pinned_toolchains ~equal:String.equal)
+        | Error _ -> false))
+    ~on:"a Metal Toolchain the AIR counts were not pinned on"
 
 (* Read emitted select source lines in the backend compiler's assembly. CUDA's claim covers the
-   floor PTX target policy only, including the pool kernel (gh-ocannl-1822). *)
+   floor PTX target policy only, including the pool kernel (gh-ocannl-1822). On Metal, the AIR
+   census's pin follows the zero-branch claim's row. *)
 let census_claim ~patterns ~gpu_patterns claim name =
   let claim = claim ^ " (CUDA: floor PTX target only)" in
   let native_cuda =
@@ -283,18 +386,32 @@ let census_claim ~patterns ~gpu_patterns claim name =
       "branchless_select: %s: native PTX is outside the floor-target claim (gh-ocannl-1822: seen \
        with ptxas 13.4 at sm_120); value claims remain active\n"
       name;
+  let air_readings = lazy (gpu_census Asm.Air ~patterns:gpu_patterns name) in
+  (* Metal's census runs wherever the toolchain does, its counts on stderr, pinned or not. *)
+  if air_census_runs () then ignore (Lazy.force air_readings : gpu_reading list);
   Verdict.gate ~aggregation:`Environment ~when_:(not native_cuda) ~on:"CUDA native PTX target" claim
     (fun () ->
       if on_cc then p claim (compiled_branch_free ~patterns name)
       else
         match gpu_dialect with
-        | Some dialect -> p_all claim (gpu_branch_free dialect ~patterns:gpu_patterns name) ~f:Fn.id
+        | Some Asm.Air ->
+            Verdict.skipped claim
+              ~backend:
+                (Printf.sprintf "metal (its AIR keeps the select's short-circuit, %s)"
+                   air_divergence)
+        | Some dialect ->
+            p_all claim (gpu_census dialect ~patterns:gpu_patterns name) ~f:branch_free
         | None ->
             Stdio.eprintf
               "branchless_select: %s: no census on %s: no tool here reads its compiler's output \
                (not part of the golden)\n"
               name backend_name;
-            skipped claim)
+            skipped claim);
+  in_legf ~leg:air_pinned_leg
+    "%s: Metal's AIR keeps the select's short-circuit, %d conditional branch(es) on its lines \
+     (pinned on Metal Toolchain %s; %s)"
+    name air_branches (String.concat ~sep:", " air_pinned_toolchains) air_divergence (fun label ->
+      p_all label (Lazy.force air_readings) ~f:(fun r -> r.readable && r.branches = air_branches))
 
 (* === The value legs. === *)
 

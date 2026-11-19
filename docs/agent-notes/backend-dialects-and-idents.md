@@ -59,7 +59,10 @@ files.
 - Metal `Where` must stay a short-circuiting ternary: MSL `select` is a function call that
   evaluates BOTH branches, so any range guard's deliberately out-of-range read (clamped windows,
   inlined-concat component guards) would still be evaluated. Codegen pins:
-  `test_where_precision.metal.expected`, `test_metal_guarded_gather_codegen`.
+  `test_where_precision.metal.expected`, `test_metal_guarded_gather_codegen`. The cost, measured
+  by `branchless_select`'s AIR census (gh-ocannl-1828; Metal Toolchain 32023.922): a VALUE select
+  whose arm loads from device memory keeps its short-circuit as a `br i1` on the select's line in
+  AIR, one per census leg -- whether Apple's GPU compiler then predicates it is not visible there.
 - HIP blends a value select (`Low_level.speculable_select`) over `auto` locals in an
   immediately-invoked lambda, `[&]() { auto ocannl_sel_a__ = A; ...; return <the dialect's own
   ?:>; }()` (`Cuda_like_config`'s `blends_value_selects`, `C_syntax.Over_locals`, gh-ocannl-1695):
