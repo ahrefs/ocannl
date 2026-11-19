@@ -6,5 +6,5 @@ scratch/tune: the search completed: true
 scratch/tune: the search timed at least one candidate: true
 scratch/tune: the tuned routine computes the right value: true
 scratch/tune: the second run replays exactly after contention-free timing: true
-scratch/tune: a cache replay declines nothing, a re-search declines again: true
+scratch/tune: the populating search declined the candidate, its replay declines nothing: true
 scratch/tune: the cache-hit replay computes the right value: true

@@ -105,9 +105,11 @@ let scratch_segment ~src ~col_sums (forms : LL.optimized list) : LL.optimized =
 let binds_hardware (opt : LL.optimized) = not (List.is_empty (LL.hardware_axes opt.LL.llc))
 
 (* Armed before each search that should meet the over-budget candidate; [injected] records the label
-   of the candidate that got the scratch kernel. *)
+   of the candidate that got the scratch kernel, and [injected_rejection] the typed phase and cause
+   its compile came back with -- the census keeps the key and the detail but not the phase. *)
 let inject : (Tn.t * Tn.t) option ref = ref None
 let injected : string option ref = ref None
+let injected_rejection : (SO.phase * SO.cause) option ref = ref None
 
 module Injecting_driver = struct
   include Autotune.Context_driver
@@ -129,8 +131,27 @@ module Injecting_driver = struct
               else forms)
       | transform, _, _, _, _ -> transform
     in
-    Autotune.Context_driver.compile_outcome ?name ?lowered_transform ?prelowered ?reuse ~provenance
-      ?candidate ?retain ctx comp bindings
+    let was_injected = Option.is_some !injected in
+    let outcome =
+      Autotune.Context_driver.compile_outcome ?name ?lowered_transform ?prelowered ?reuse
+        ~provenance ?candidate ?retain ctx comp bindings
+    in
+    (if (not was_injected) && Option.is_some !injected then
+       match outcome with
+       | Error (SO.Classified { phase; cause; _ }) -> injected_rejection := Some (phase, cause)
+       | Error (SO.Fatal _) -> ()
+       | Ok _ ->
+           (* The leg is open only where the device's limits guarantee the decline, so a link that
+              succeeds is the validator regressing -- and returning the routine would have the
+              search launch an over-budget kernel, which on WSL aborts the HSA queue rather than
+              failing (gh-ocannl-533). Stop the search here, before any timing. *)
+           failwith
+             (Printf.sprintf
+                "scratch/tune: the over-budget candidate %s LINKED: the HIP scratch validator \
+                 accepted a %d-byte frame the device's limits put over budget"
+                (Option.value !injected ~default:"?")
+                scratch_bytes));
+    outcome
 end
 
 module Injecting = Autotune.Make (Injecting_driver)
@@ -160,7 +181,12 @@ let () =
   let on_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts ctx) in
   let resident = (Context.hardware_limits ctx).Ir.Backend_intf.max_resident_threads in
   let validation = Utils.get_global_flag ~default:true ~arg_name:"hip_scratch_validation" in
-  let budget = Option.map resident ~f:(fun resident -> scratch_budget ~resident) in
+  (* [None] where the device reports no usable residency, as the validator itself treats it. *)
+  let budget =
+    Option.bind resident ~f:(fun resident ->
+        if resident <= 0 then None
+        else Option.some_if (scratch_budget ~resident > 0) (scratch_budget ~resident))
+  in
   if on_hip then
     Stdio.eprintf
       "scratch/tune: %d resident work-items, scratch budget %s B, injected array %d B, validation \
@@ -197,6 +223,7 @@ let () =
   let comp = Train.forward total in
   let arm () =
     injected := None;
+    injected_rejection := None;
     inject := if over_budget then Some (src.Tensor.value, col_sums.Tensor.value) else None
   in
   let report = ref None in
@@ -210,7 +237,7 @@ let () =
       ctx comp Idx.Empty
   in
   let r = Option.value_exn ~here:[%here] !report in
-  let declined_label = !injected in
+  let declined_label = !injected and declined_rejection = !injected_rejection in
   print_census "search" r;
 
   (* 1. Why the baseline is not the fixture: on a GPU backend it binds no hardware dimension and is
@@ -223,14 +250,22 @@ let () =
             SO.equal_rejection_key d.Autotune.key (SO.Not_dispatched_key "baseline")
             && d.Autotune.count = 1)));
 
-  (* 2. The over-budget candidate was declined rather than fatal: one census entry under the scratch
-     key, carrying the link validator's diagnosis (gh-ocannl-533) rather than the pre-codegen frame
-     gate's, and it is not what the search returned. *)
+  (* 2. The over-budget candidate was declined rather than fatal: its compile came back classified
+     at [Backend_link] as [Resource_exceeded Thread_scratch] for at least the array's bytes, and the
+     census holds it once under the scratch key, carrying the link validator's diagnosis
+     (gh-ocannl-533) rather than the pre-codegen frame gate's; and it is not what the search
+     returned. *)
   in_leg ~leg:scratch_leg
     "scratch/tune: the over-budget candidate is declined at link, censused under Thread_scratch"
     (fun label ->
       p label
-        (Option.is_some declined_label
+        ((match declined_rejection with
+           | Some
+               ( SO.Backend_link,
+                 SO.Resource_exceeded
+                   { resource = SO.Thread_scratch; requested; limit = _; detail = _ } ) ->
+               requested >= scratch_bytes
+           | Some _ | None -> false)
         && scratch_count r = 1
         && List.exists r.Autotune.declines ~f:(fun d ->
             SO.equal_rejection_key d.Autotune.key (SO.Resource_exceeded_key SO.Thread_scratch)
@@ -283,9 +318,14 @@ let () =
   in
   cache_claim "scratch/tune: the second run replays exactly after contention-free timing"
     (Bool.equal (replayed hit) (populate.Autotune.timings_contended = 0));
+  (* The populating search met the over-budget candidate too, so what it stored was chosen past a
+     decline; the store writes the crowned, timed winner's form ([best_c.form] in [Autotune]), which
+     a declined candidate can never be. *)
   in_leg ~leg:scratch_leg
-    "scratch/tune: a cache replay declines nothing, a re-search declines again" (fun label ->
-      cache_claim label (Bool.equal (replayed hit) (scratch_count hit = 0)));
+    "scratch/tune: the populating search declined the candidate, its replay declines nothing"
+    (fun label ->
+      cache_claim label
+        (scratch_count populate = 1 && Bool.equal (replayed hit) (scratch_count hit = 0)));
   p "scratch/tune: the cache-hit replay computes the right value"
     (Array.length hit_got = 1
     && Float.(abs (hit_got.(0) - expected_total) < abs expected_total *. 1e-5))
