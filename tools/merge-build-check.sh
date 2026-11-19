@@ -67,18 +67,18 @@
 #            job's harness batch and the `Shell harnesses` jobs read. The change is the paths
 #            the HEAD side changed since the merge base, both names of a rename, a path the
 #            base side renamed counting by its other name too, scripts or not. What runs is
-#            `tools/test-harnesses.sh --affected --files PATH...`, the mapping
-#            `tools/test-run.sh affected --harnesses` owns, read from the merged tree. A change
-#            reaching no member runs none. A changed script no member reaches leaves the tier
-#            PENDING until the tests tier's list is read (gh-ocannl-2304): it counts as covered
-#            when an alias of the list the tests tier runs here names it as a dependency, as an
-#            exact `affected: SCRIPT: named as a dependency by the rule of ALIAS` line of the
-#            ask that printed that list says (tools/affected-tests.sh's "Literal
-#            dependencies": one rule of the alias names its path, and dune reads it as a
-#            File of that rule). Every such script covered, the tier narrows to what the paths reach,
-#            nothing when that is no member; any one not covered runs the whole tier. Until 2026-11-13 this was a shell tier that ran only
-#            when BOTH sides changed a script, the `--shell` group alone: remote CI read a PR's
-#            own change then, and this build only the clash of two.
+#            `tools/test-harnesses.sh --affected --files PATH...`, the mapping `tools/test-run.sh
+#            affected --harnesses` owns, read from the merged tree. A change reaching no member runs
+#            none. A changed script no member reaches leaves the tier PENDING until the tests tier's
+#            list is read (gh-ocannl-2304): it counts as covered when an alias of the list the tests
+#            tier runs here names it as a dependency, as an exact `affected: SCRIPT: named as a
+#            dependency by the rule of ALIAS` line of the ask that printed that list says
+#            (tools/affected-tests.sh's "Literal dependencies": one rule of the alias names its
+#            path, and dune reads it as a File of that rule). Every such script covered, the tier
+#            narrows to what the paths reach, nothing when that is no member; any one not covered
+#            runs the whole tier. Until 2026-11-13 this was a shell tier that ran only when BOTH
+#            sides changed a script, the `--shell` group alone: remote CI read a PR's own change
+#            then, and this build only the clash of two.
 # The harness tier's scope is a fail-closed allowlist: it narrows only when HEAD is a two-parent
 # merge, its merge base and both sides' changes were read, git listed every changed path
 # unquoted, each changed path matching `*.sh` (SHELL_GLOB), asked alone, reaches a member or is
@@ -100,15 +100,15 @@
 # script prints of a run is the same for the same failure: tier lines omit elapsed time
 # (gh-ocannl-1950), and the tests tier prints neither its list nor a count (a PR that adds a
 # test lists one alias more than the base alone does); `--plan` shows the command that lists it.
-# The coverage is read the same way: from the tree's own ask, and the alias it names is printed
-# (a dune file the PR changed can name a script the base's does not, a difference that refuses).
-# --all runs the whole harness tier whatever HEAD is. --plan alone prints the tier selection for
-# HEAD without asking Dune or reading records, a PENDING tier as such. On a branch, --plan --base REV reads the locally
-# resolved base tip (fetch first to refresh a remote-tracking ref) and committed HEAD. It asks
-# the tests tier on their candidate merge in a scratch checkout outside the repository, with
-# parents in ship-pr's order. The caller's index and working files are ignored and its refs
-# stay untouched. The merged copy of this script handles the `--plan-merge` query, so changes
-# the base brought to the gate apply too. It runs Dune queries and reads the head's owed-run
+# The coverage is read the same way: from the tree's own ask, and the alias it names is printed (a
+# dune file the PR changed can name a script the base's does not, a difference that refuses). --all
+# runs the whole harness tier whatever HEAD is. --plan alone prints the tier selection for HEAD
+# without asking Dune or reading records, a PENDING tier as such. On a branch, --plan --base REV
+# reads the locally resolved base tip (fetch first to refresh a remote-tracking ref) and committed
+# HEAD. It asks the tests tier on their candidate merge in a scratch checkout outside the
+# repository, with parents in ship-pr's order. The caller's index and working files are ignored and
+# its refs stay untouched. The merged copy of this script handles the `--plan-merge` query, so
+# changes the base brought to the gate apply too. It runs Dune queries and reads the head's owed-run
 # record when there is a need.
 # Only the record check's status says whether it admits the need. A plan makes no build or
 # readiness verdict and writes no record. A conflict or an unreadable plan fails the query.
@@ -232,8 +232,7 @@ cover_tier() {
     why="whole -- no harness reaches ${unreached[0]}, and the tests tier runs no list here to cover it"
     return
   fi
-  f=$tests_dir/ask
-  [ ! -f "$tests_dir/ask-first" ] || f=$tests_dir/ask-first
+  f=$(list_ask)
   for s in "${unreached[@]}"; do
     found=
     while IFS= read -r a; do
@@ -330,6 +329,14 @@ read_parents() {
   mb=$(git -C "$root" merge-base "$base" "$head") || mb=
 }
 
+# list_ask prints the ask whose stderr goes with $tests_dir/list: the first-tier ask when a
+# cross-cutting change asked one (it repeats the default ask's stderr, then its own), else the
+# default ask. The train- names (owed_needs) and the coverage lines (cover_tier) are read from it,
+# so both describe the list this build runs.
+list_ask() {
+  if [ -f "$tests_dir/ask-first" ]; then echo "$tests_dir/ask-first"; else echo "$tests_dir/ask"; fi
+}
+
 # ask_tests asks the pre-push list of the head's change and sets `tests`: `list` (run
 # $tests_dir/list, with `tests_owed` saying what it leaves out, if anything), `owed` (nothing to
 # run here), or `unread`, with `tests_why`; `tests_incomplete` 1 when a list read was INCOMPLETE. The change is the two revisions' (MERGE_BASE..HEAD_SIDE),
@@ -407,8 +414,7 @@ owed_needs() {
   # and aliases Dune lists in this tree. Other diagnostics are not parsed as names.
   # With no names, retain the legacy affected ask as count-only protocol compatibility.
   # Normal merged and base-alone trees each ship their own pair of tools together.
-  f=$tests_dir/ask
-  [ ! -f "$tests_dir/ask-first" ] || f=$tests_dir/ask-first
+  f=$(list_ask)
   counted=$(sed -n -E 's/.*left off: ([0-9]+) train-.*/\1/p' "$f" | tail -n 1)
   sed -n 's/^test-run: prepush: train: //p' "$f" >"$tests_dir/train-names"
   if [ -s "$tests_dir/train-names" ]; then

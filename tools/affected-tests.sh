@@ -325,7 +325,8 @@
 # rule with targets, a `(test)` stanza, a blind alias, an alias it needs, a
 # rule dune does not build, one rule's naming with another's reading.
 # `tools/merge-build-check.sh` counts such an alias as the script's coverage
-# when its tests tier runs it.
+# when its tests tier runs it. Naming is all this reads: a rule that lists a
+# script only so a text scan can read it names it as much as one running it.
 #
 # The harness census (gh-ocannl-2342): `affected --harness-census [MEMBER]`
 # prints, for every member (or MEMBER alone), what the boundary above reaches,
