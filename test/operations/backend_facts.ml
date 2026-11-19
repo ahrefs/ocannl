@@ -84,7 +84,15 @@ let () =
   moves "host_load_attributable alone moves the dispersion policy"
     ~vary:(fun f ->
       ({ f with BI.host_load_attributable = true }, { f with BI.host_load_attributable = false }))
-    ~decide:Autotune.dispersion_policy_for_backend
+    ~decide:Autotune.dispersion_policy_for_backend;
+  (* gh-ocannl-1990: read at every backend's compile, with the key asked for. *)
+  moves
+    "renders_lane_bounds_check alone moves whether a compile under the key owes the cc-only notice"
+    ~vary:(fun f ->
+      ( { f with BI.renders_lane_bounds_check = true },
+        { f with BI.renders_lane_bounds_check = false } ))
+    ~decide:(fun facts ->
+      Context.Backends.unchecked_lane_bounds_notice ~facts ~requested:true ~backend:"probe")
 
 (* gh-ocannl-1775: the inline fan-in guard charges a value select as the backend renders it, read at
    the lowering seam every compile and the autotune decision surface go through

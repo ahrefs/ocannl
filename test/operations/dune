@@ -10105,6 +10105,28 @@
   arrayjit.ir
   arrayjit.utils))
 
+; gh-ocannl-1990: under debug_check_lane_bounds, a backend whose dialect renders no check (CUDA,
+; HIP, Metal) says once per process on stderr that the key is cc-only. The once-only property is a
+; process's, so each leg runs in a child of this executable; the compile leg runs on the backend
+; the environment picks, which a Metal run makes the GPU witness.
+
+(test
+ (name lane_bounds_notice)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules lane_bounds_notice)
+ (libraries
+  base
+  ocannl
+  stdio
+  unix
+  fresh_process
+  arrayjit.verdict
+  arrayjit.ir
+  arrayjit.context))
+
 (test
  ; ocannl-backend: none -- builds Ir.Low_level by hand and judges the launch gate against MOCKED
  ; hardware_limits records; nothing is compiled and no device is touched.

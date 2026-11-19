@@ -1038,6 +1038,31 @@ struct
     schedule_task s (Task.Task { context_lifetime = (src, dst); description; work })
 end
 
+(* gh-ocannl-1990: [debug_check_lane_bounds] asks for a run-time check only a dialect stating
+   [renders_lane_bounds_check] renders, so on the others the key would check nothing and say nothing
+   -- a silence that reads as a clean bill. Every backend's compile asks here, once per process: the
+   notice changes no kernel, so it is in no cache key, and the key is not read at all on a backend
+   that renders the check. *)
+let unchecked_lane_bounds_notice ~(facts : backend_facts) ~requested ~backend =
+  Option.some_if
+    (requested && not facts.renders_lane_bounds_check)
+    (Printf.sprintf
+       "ocannl: debug_check_lane_bounds is cc-only: the %s backend renders no lane-bounds check, \
+        so its kernels' packed-uniform lane indices run unchecked; rerun on cc \
+        (--ocannl_backend=cc) under the key to check them (gh-ocannl-1990)"
+       backend)
+
+let unchecked_lane_bounds_noticed = Stdlib.Atomic.make false
+
+let warn_unchecked_lane_bounds ~(facts : backend_facts) ~backend =
+  if (not facts.renders_lane_bounds_check) && not (Stdlib.Atomic.get unchecked_lane_bounds_noticed)
+  then
+    let requested = Utils.get_global_flag ~default:false ~arg_name:"debug_check_lane_bounds" in
+    match unchecked_lane_bounds_notice ~facts ~requested ~backend with
+    | Some line when not (Stdlib.Atomic.exchange unchecked_lane_bounds_noticed true) ->
+        Stdlib.Printf.eprintf "%s\n%!" line
+    | _ -> ()
+
 (* gh-ocannl-2192: below every shared wait, including transfer and delta cleanup. Events carry their
    recording device id, so waiting on one consults the very same mark as device waits. *)
 module With_device_wedge_guard (Device : Lowered_backend) = struct
@@ -1227,6 +1252,7 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
 
   let%debug3_sexp compile optim_ctx ?name ?lowered_transform ?prelowered ?reuse ?floor_domain
       bindings (comp : Assignments.comp) : code =
+    warn_unchecked_lane_bounds ~facts:(device_facts ()) ~backend:Device.name;
     let (name : string), (lowered : Low_level.optimized) =
       match prelowered with
       | None ->

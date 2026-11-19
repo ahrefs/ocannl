@@ -122,6 +122,18 @@ val lower_assignments :
     resolves device-dependent rewrites, and the inline fan-in guard's charge of a value select
     ([blends_value_selects], gh-ocannl-1775), from the same facts as compilation. *)
 
+val unchecked_lane_bounds_notice :
+  facts:Ir.Backend_intf.backend_facts -> requested:bool -> backend:string -> string option
+(** The stderr line a compile on [backend] owes when [debug_check_lane_bounds] is [requested] there
+    and its dialect renders no such check ([renders_lane_bounds_check] false: the GPU backends), and
+    [None] otherwise (gh-ocannl-1990). The pure half of {!warn_unchecked_lane_bounds}. *)
+
+val warn_unchecked_lane_bounds : facts:Ir.Backend_intf.backend_facts -> backend:string -> unit
+(** What every backend's [compile] calls first: prints {!unchecked_lane_bounds_notice}'s line to
+    stderr the first time it is owed in the process, and nothing after (gh-ocannl-1990). The key is
+    read only where [facts] render no check, and only until the line is printed. Exposed so a test
+    can drive the once-only guard with another backend's facts on any box. *)
+
 (** {2 The implemented backends}
 
     Each backend is instantiated once per process, so its context type is nameable and two
