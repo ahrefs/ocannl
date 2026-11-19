@@ -1355,9 +1355,11 @@ both `cifar_resnet` and `cifar_resnet_b1` absent from the store (gh-ocannl-1825)
   column), `Bench_harness.dominant_kernel` compiles every kernel the step **shipped** — the
   routine's own `Context.routine.segments`, so a tuned cell's searched winner is what gets timed,
   not the default pipeline a re-lowering would produce — as a routine of its own through the
-  `?prelowered` seam, screens each with one timing call, re-times the candidates -- those within
-  2x of the slowest reading, at most eight, plus any whose reading was refused -- together as the
-  median of their timing calls (*Per-kernel tables* under Methodology notes; gh-ocannl-1763),
+  `?prelowered` seam, screens each with one `isolated` timing call (no batch-depth calibration;
+  gh-ocannl-1818) and re-screens those within 2x of the slowest, at most 24, with one call each
+  under the configured `autotune_timing`, re-times the candidates -- those within 2x of the
+  slowest re-screened reading, at most eight, plus any whose reading was refused -- together as
+  the median of their timing calls (*Per-kernel tables* under Methodology notes; gh-ocannl-1763),
   and takes the slowest by median; the result line carries that kernel's range beside it
   (`seg_ms_lo`, `seg_ms_hi`; `null` below four admitted readings). The
   cell reads `41.3% f32 memory · k3/12 0.412 ms w1.grad`: the attainment, its ceiling, the roofline

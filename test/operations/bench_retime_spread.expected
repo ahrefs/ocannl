@@ -31,3 +31,14 @@ screen: a tie at the cap goes to the earlier entry; refused readings are outside
 screen: with every reading refused, everything is kept: true
 screen: nothing to screen keeps nothing, drops nothing: true
 screen: applied after each reading, it keeps what one application to all of them keeps: true
+two-stage screen: the first stage kept 14 of 24
+two-stage screen: the scenario crowds the dominant kernel out of a single isolated stage: true
+two-stage screen: the first stage keeps the dominant kernel, ranked thirteenth isolated: true
+two-stage screen: the first stage drops what is past 2x of the slowest isolated reading: true
+two-stage screen: the first stage keeps a refused isolated reading: true
+two-stage screen: re-timing [dom f0 f1 f2 f3 f4 f5 f6], dropped 6
+two-stage screen: the second stage reads the first stage's kept set once each, in order: true
+two-stage screen: the re-timing's candidates are capped by the second-stage readings: true
+two-stage screen: a second-stage reading past 2x of the slowest one is dropped: true
+two-stage screen: what the second stage drops keeps its second-stage reading: true
+two-stage screen: a refused second-stage reading is kept for the re-timing: true

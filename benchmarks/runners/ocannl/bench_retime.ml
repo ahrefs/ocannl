@@ -170,7 +170,7 @@ let retime ?calls (routines : (Context.t * Context.routine) list) =
         Array.iter order ~f:(fun a -> readings.(a).(batch) <- read_once ~timing routines.(a)));
   (timing, Array.to_list readings)
 
-(** {1 Screening many routines for the slowest (gh-ocannl-1763)}
+(** {1 Screening many routines for the slowest (gh-ocannl-1763, gh-ocannl-1818)}
 
     Re-timing every one of a step's kernels with a spread costs [calls] timing calls each, about
     half a second a call whatever the kernel's size: on a 178-kernel [gpt2_mini_train] step on
@@ -180,12 +180,32 @@ let retime ?calls (routines : (Context.t * Context.routine) list) =
     of the slowest one -- at most {!screen_at_most} of them -- are re-timed, together, in one
     {!retime} session, where the slowest is decided by median with its range as before.
 
-    A reading is a minimum over a calibrated window, so noise only raises it above the kernel's
-    floor. The truly slowest kernel is therefore left out only when some other kernel's single
-    reading came out more than twice the slowest's own -- a window inflated past 2x that the
-    admission gate still passed -- and then the inflated kernel is re-timed and the wrong one can be
-    named. A kernel whose screen reading was refused is not ruled out: it is always a candidate,
-    outside the cap, since nothing is known of it. *)
+    The screen runs in two stages (gh-ocannl-1818). One reading under the configured objective --
+    [queued] by default -- still cost 1.1-1.5 s on CUDA/HIP, where it calibrates a batch depth of up
+    to 2048 launches with probes and confirmations, so a 270-kernel HIP step spent ~410 s of its 600
+    s budget on the screen alone. The first stage reads every kernel once under {!screen_timing},
+    [isolated] -- one launch and one host synchronization a sample, no calibration -- and keeps
+    those within {!screen_ratio} of the slowest isolated reading, at most {!screen_wide_at_most} of
+    them, plus any refused ({!screen_keep_wide}). The second reads only those, once each, under the
+    configured objective, and keeps the re-timing's candidates from THOSE readings ({!rescreen}). An
+    isolated reading carries a launch-and-sync round trip the queued objective amortizes (~40-90 us
+    on gfx1151, varying by kernel), so it does not order kernels whose times are within that round
+    trip of one another, and on a step whose dominant kernel is a few times the round trip the
+    floor-bound kernels crowd the slowest isolated readings. The wide cap is what absorbs that: a
+    kernel outranks the queued-slowest one in the first stage only by an isolated reading above it,
+    and the final cap of {!screen_at_most} is ranked by queued readings, which the round trip does
+    not inflate.
+
+    A reading is a minimum over a window, so noise only raises it above the kernel's floor. The
+    truly slowest kernel is therefore left out only when some other kernel's single reading came out
+    more than twice the slowest's own -- a window inflated past 2x that the admission gate still
+    passed -- or, in the first stage, when {!screen_wide_at_most} other kernels' isolated readings
+    came out above its own; and then a wrong one can be named. A kernel whose screen reading was
+    refused is not ruled out: it is always kept, outside the cap, since nothing is known of it. *)
+
+(** The first stage's objective: [isolated], whatever [autotune_timing] says, because it needs no
+    calibration. *)
+let screen_timing = Autotune.Isolated
 
 (** A kernel is a candidate when its screen reading is at least the slowest one over this. *)
 let screen_ratio = 2.
@@ -224,3 +244,24 @@ let screen_keep ?(ratio = screen_ratio) ?(at_most = screen_at_most) entries =
   in
   let strip = List.map ~f:(fun (_, x, _) -> x) in
   (strip kept, strip dropped)
+
+(** The most kernels the first stage keeps (not counting refused ones), the slowest isolated
+    readings first: three times {!screen_at_most}, so that the queued-slowest kernel stays in while
+    fewer than that many others read above it isolated -- sixteen more than the final cap allows.
+    Each costs one reading under the configured objective in the second stage -- about 1.3 s on HIP,
+    so ~30 s at the cap. *)
+let screen_wide_at_most = 3 * screen_at_most
+
+(** [screen_keep_wide entries]: the first stage's cut, {!screen_keep} at {!screen_ratio} and
+    {!screen_wide_at_most}, over [entries] paired with their {!screen_timing} reading. Like
+    {!screen_keep}, it may be applied after each reading. *)
+let screen_keep_wide entries = screen_keep ~at_most:screen_wide_at_most entries
+
+(** [rescreen ~read entries]: the second stage. Reads each of [entries] -- the first stage's kept
+    set -- once with [read] (the configured objective's {!read_once}), in [entries]' order, and
+    returns [(kept, dropped)] of [(entry, reading)] by {!screen_keep} at its defaults over those
+    readings: what the re-timing gets, and what keeps its second-stage reading. *)
+let rescreen ~read entries =
+  let read = List.map entries ~f:(fun e -> (e, read e)) in
+  let kept, dropped = screen_keep (List.map read ~f:(fun ((_, r) as er) -> (er, r))) in
+  (kept, dropped)
