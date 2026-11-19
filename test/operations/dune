@@ -16239,6 +16239,8 @@
   ../../benchmarks/fixture_digest.py
   ../../bin/dune
   ../../tools/aggregate-skips.sh
+  ; the bypass-rate reader sweep.sh resolves beside itself (gh-ocannl-996)
+  ../../tools/aggregate-bypasses.sh
   ../../tools/sweep.sh
   ../../tools/lab-map.sh
   ../../tools/fleet-registry.sh

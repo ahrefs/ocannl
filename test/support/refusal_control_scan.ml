@@ -150,6 +150,7 @@ let refusing_claims =
     "p_pairwise_distinct";
     "claim";
     "claimf";
+    "p_unless";
     "pass_fail";
     "pass_fail_all2";
     "pass_fail_close";

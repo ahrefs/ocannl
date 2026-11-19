@@ -1364,6 +1364,118 @@ hostile=$(OCANNL_BACKEND=multidev_cc \
 # the same channel rather than staying silent about the report it wrote.
 grep -q '^  result: NOT AGGREGATED$' <<<"$forced"
 
+# Hatched claims' bypass rates (gh-ocannl-996). A claim that executed and took
+# its run-time hatch prints the row a check prints; its BYPASS and CHECKED
+# records, written by the real Verdict through the replaying fixture, are what
+# the sweep turns into a rate per unit. The two units here reach the same two
+# claims: one is bypassed on both -- the run checked it nowhere, an UNVERIFIED
+# finding -- the other checked on cc and bypassed on metal. A record kind the
+# skip aggregator does not judge must not move the skip coverage either, which
+# the unchanged POTENTIAL finding of the run above pins.
+hatch_bypass=$'BYPASSED (queued window contended): always-bypassed claim\nOCANNL_TOOL_VERDICT_BYPASS\tqueued window contended\tfixture.exe\talways-bypassed claim'
+hatch_checked=$'OCANNL_TOOL_VERDICT_CHECKED\tqueued window contended\tfixture.exe\tsometimes-checked claim'
+hatch_bypassed_too=$'BYPASSED (queued window dispersed): sometimes-checked claim\nOCANNL_TOOL_VERDICT_BYPASS\tqueued window dispersed\tfixture.exe\tsometimes-checked claim'
+bypass_rates=$(SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log$'\n'$hatch_bypass$'\n'$hatch_checked \
+  SWEEP_TEST_OPAM_OUT_METAL=$metal_unit_log$'\n'$hatch_bypass$'\n'$hatch_bypassed_too \
+  run_sweep_args --force --only cc --only metal)
+bypass_report=$(sed -n 's/^bypass rates: .* -- //p' <<<"$bypass_rates" | tail -1)
+[ -f "$bypass_report" ]
+grep -q '^bypass rates for [0-9a-f]* (forced execution)$' "$bypass_report"
+grep -qxF 'm4-max/cc: 1 of 2 hatched claim reach(es) bypassed (50%), 1 checked' "$bypass_report"
+grep -qxF '  bypassed 1 of 1 (100%): fixture.exe: always-bypassed claim [queued window contended]' \
+  "$bypass_report"
+absent 'bypassed [0-9]* of [0-9]* ([0-9]*%): fixture.exe: sometimes-checked claim \[queued window contended\]' \
+  "$bypass_report"
+grep -qxF 'm4-max/metal: 2 of 2 hatched claim reach(es) bypassed (100%), 0 checked' "$bypass_report"
+grep -qxF '  bypassed 1 of 1 (100%): fixture.exe: sometimes-checked claim [queued window dispersed]' \
+  "$bypass_report"
+grep -qxF 'result: UNVERIFIED -- 1 hatched claim(s) bypassed on every unit that reached them' \
+  "$bypass_report"
+grep -qxF 'UNVERIFIED: bypassed on every unit that reached it: fixture.exe: always-bypassed claim (m4-max/cc 1 of 1, m4-max/metal 1 of 1)' \
+  "$bypass_report"
+absent 'UNVERIFIED: .*sometimes-checked claim' "$bypass_report"
+# The verdict, every unit's rate and each finding reach the sweep's own summary,
+# indented under the pointer line the path is extracted from.
+grep -qxF "bypass rates: UNVERIFIED -- 1 hatched claim(s) bypassed on every unit that reached them -- $bypass_report" \
+  <<<"$bypass_rates"
+grep -qxF '  m4-max/metal: 2 of 2 hatched claim reach(es) bypassed (100%), 0 checked' <<<"$bypass_rates"
+grep -qxF '  UNVERIFIED: bypassed on every unit that reached it: fixture.exe: always-bypassed claim (m4-max/cc 1 of 1, m4-max/metal 1 of 1)' \
+  <<<"$bypass_rates"
+[ "$(grep -E '^  (result|FAIL|POTENTIAL): ' <<<"$bypass_rates")" = "$coverage_findings" ]
+
+# An incremental unit is a rate over the actions it ran, so it is reported
+# where the skip intersection refuses it; a run checking every hatched claim it
+# reached reads CLEAR, and is told apart from the all-bypassed metal unit above
+# by its own line, not by an absence.
+bypass_incremental=$(SWEEP_TEST_OPAM_OUT_CC=$hatch_checked run_sweep_args --only cc)
+grep -q '^skip coverage: not aggregated (requires --force with no --target)$' <<<"$bypass_incremental"
+grep -q '^bypass rates: CLEAR -- every hatched claim reached was checked on some unit -- ' \
+  <<<"$bypass_incremental"
+grep -qxF '  m4-max/cc: 0 of 1 hatched claim reach(es) bypassed (0%), 1 checked' <<<"$bypass_incremental"
+grep -q '^bypass rates for [0-9a-f]* (incremental execution)$' \
+  "$(sed -n 's/^bypass rates: .* -- //p' <<<"$bypass_incremental" | tail -1)"
+# A unit that ran its actions but reached no hatched claim has a row of its own in
+# the summary, told apart from a unit with no records at all: an incremental unit
+# whose every action was cached wrote none, which is its ordinary state and is
+# silent, never reported as lost evidence.
+bypass_none=$(SWEEP_TEST_OPAM_OUT_CC=$common run_sweep_args --only cc)
+grep -q '^bypass rates: CLEAR -- no hatched claim was reached -- ' <<<"$bypass_none"
+grep -qxF '  m4-max/cc: no hatched claim reached' <<<"$bypass_none"
+bypass_cached=$(SWEEP_TEST_OPAM_NO_RECORDS=1 SWEEP_TEST_OPAM_OUT_CC=$hatch_checked run_sweep_args --only cc)
+grep -q "^bypass rates: not aggregated (no unit's verdict records were staged)$" <<<"$bypass_cached"
+absent 'evidence unavailable' <<<"$bypass_cached"
+# A scoped run stages no unit's records, and says so rather than staying silent.
+grep -q '^bypass rates: not aggregated (requires no --target)$' <<<"$(run_sweep_args --target bypass-probe)"
+
+# The aggregator's own contract, over records the real Verdict wrote. A unit
+# with no hatched claim reached says so; a malformed hatched record, a record
+# before any action header and an input with no header at all are refused
+# (exit 2) rather than read as nothing bypassed, and so is a header truncated
+# before its executable and directory; a newer record kind passes.
+bypasses=$(dirname "$sweep")/aggregate-bypasses.sh
+hatched_records() { # out text
+  local dir
+  dir=$(mktemp -d "$tmp/hatched.XXXXXX")
+  printf '%s\n' "$2" | OCANNL_TOOL_VERDICT_RECORDS=$dir "$verdict_probe" replay >/dev/null 2>&1
+  cat "$dir"/*.tsv >"$1"
+}
+hatched_records "$tmp/hatched-bypass.records" "$hatch_bypass"
+hatched_records "$tmp/hatched-none.records" "$common"
+grep -q "^OCANNL_TOOL_VERDICT_BYPASS$(printf '\t')queued window contended$(printf '\t')verdict_skip_probe.exe$(printf '\t')always-bypassed claim$" \
+  "$tmp/hatched-bypass.records"
+absent 'OCANNL_TOOL_VERDICT_EVALUATED' "$tmp/hatched-bypass.records"
+direct_rates=$("$bypasses" --run a/cc "$tmp/hatched-bypass.records" --run b/cc "$tmp/hatched-none.records")
+grep -qxF 'b/cc: no hatched claim reached' <<<"$direct_rates"
+grep -qxF 'UNVERIFIED: bypassed on every unit that reached it: verdict_skip_probe.exe: always-bypassed claim (a/cc 1 of 1)' \
+  <<<"$direct_rates"
+grep -qxF 'result: CLEAR -- no hatched claim was reached' \
+  <<<"$("$bypasses" --run b/cc "$tmp/hatched-none.records")"
+printf 'OCANNL_TOOL_VERDICT_FUTURE\tsomething\n' >>"$tmp/hatched-none.records"
+"$bypasses" --run b/cc "$tmp/hatched-none.records" >/dev/null
+cp "$tmp/hatched-bypass.records" "$tmp/hatched-short.records"
+printf 'OCANNL_TOOL_VERDICT_BYPASS\tqueued window contended\tverdict_skip_probe.exe\n' \
+  >>"$tmp/hatched-short.records"
+grep -v '^OCANNL_TOOL_VERDICT_ACTION' "$tmp/hatched-bypass.records" >"$tmp/hatched-legacy.records"
+{
+  printf 'OCANNL_TOOL_VERDICT_ACTION\t\n'
+  cat "$tmp/hatched-legacy.records"
+} >"$tmp/hatched-truncated.records"
+for refused in hatched-short hatched-legacy hatched-truncated; do
+  set +e
+  refused_err=$("$bypasses" --run a/cc "$tmp/$refused.records" 2>&1 >/dev/null)
+  refused_rc=$?
+  set -e
+  [ "$refused_rc" -eq 2 ]
+  grep -q '^aggregate-bypasses: cannot read compatible verdict records for a/cc from ' <<<"$refused_err"
+done
+set +e
+"$bypasses" --run a/cc "$tmp/hatched-bypass.records" --run a/cc "$tmp/hatched-bypass.records" \
+  >/dev/null 2>"$tmp/bypass-dup.err"
+bypass_dup_rc=$?
+set -e
+[ "$bypass_dup_rc" -eq 2 ]
+grep -q "^aggregate-bypasses: duplicate unit 'a/cc'$" "$tmp/bypass-dup.err"
+
 # The pure aggregator's complete-matrix control is the escalation seam the real
 # sweep reaches only when both remote GPU boxes and all local units pass. All
 # five logs sharing both claims is exit 1 with backend and environment FAIL

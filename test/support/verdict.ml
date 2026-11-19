@@ -519,11 +519,13 @@ let p_pairwise_distinct name xs ~equal ~to_string =
    truncating a noisy action's output could drop records outright.
 
    The file opens with an [OCANNL_TOOL_VERDICT_ACTION] header naming the action, which is also what
-   says the action ran at all; a record kind the sweep's aggregator does not judge -- the bypass
-   record gh-ocannl-996 proposes, say -- is one more [<KIND>] in the same stream, not another file.
-   Two actions identical in directory, executable and arguments but run under different environments
-   would share a file, the later one's records standing -- which matters only if the two skip
-   different claims, so arguments, not a `setenv` alone, are what should tell such twins apart.
+   says the action ran at all; a record kind the skip aggregator does not judge -- the [BYPASS] and
+   [CHECKED] records of a hatched claim and the [MEASURE] record of an instrument (gh-ocannl-996),
+   which [tools/aggregate-bypasses.sh] reads instead -- is one more [<KIND>] in the same stream, not
+   another file. Two actions identical in directory, executable and arguments but run under
+   different environments would share a file, the later one's records standing -- which matters only
+   if the two skip different claims, so arguments, not a `setenv` alone, are what should tell such
+   twins apart.
 
    Only the action's own process writes. Having read the variable, Verdict EMPTIES it in its own
    environment, so no descendant -- however it is spawned, whatever helper builds its environment
@@ -681,6 +683,78 @@ let skipped ?aggregation ~backend name =
   announcing_skip := true;
   Exn.protect ~f:(fun () -> p name true) ~finally:(fun () -> announcing_skip := false)
 
+(* The one place a hatched claim chooses between its check and its bypass, so every hatched form
+   records and renders the same way: [evaluate] makes the claim where no hatch is taken. *)
+let hatched ~unless label evaluate =
+  let names hatches = String.concat ~sep:", " (List.map hatches ~f:(fun (name, _) -> name)) in
+  let fields hatches =
+    [ Stdlib.String.escaped (names hatches); record_executable (); Stdlib.String.escaped label ]
+  in
+  match List.filter unless ~f:snd with
+  | _ when List.is_empty unless ->
+      fail
+        (Printf.sprintf
+           "hatched claim %S declares no hatch: a claim with nothing to bypass is a plain `p`"
+           (one_line label))
+  | [] ->
+      write_record (record_line "CHECKED" (fields unless));
+      evaluate ()
+  | taken ->
+      Stdio.eprintf "BYPASSED (%s): %s\n%!" (one_line (names taken)) (one_line label);
+      emit_record "BYPASS" (fields taken);
+      announcing_skip := true;
+      Exn.protect ~f:(fun () -> p label true) ~finally:(fun () -> announcing_skip := false)
+
+(** {1 Hatched claims: a third state between a pass and a skip (gh-ocannl-996)}
+
+    Some claims executed and still cannot be judged on this run: a timing envelope over a window the
+    instrument itself declared contended, a recording that clean evidence never allowed. Their
+    escape -- the HATCH -- is correct, since a stalled window cannot be held to a bound. Written as
+    a disjunct of the claim's value, [p "…" (reading.contended || within_envelope)], it is also
+    silent: the claim prints [true] and records an evaluation whether or not it was checked, so a
+    unit where it is bypassed in seven runs out of eight reads exactly like one where it is verified
+    every time. gh-ocannl-994's defect hid that way for weeks.
+
+    [p_unless ~unless:[ (hatch, taken); … ] label b] takes the hatch as its own argument. Where no
+    hatch is [taken] it is {!p} over [b] (or, with [?detail], {!gated}'s rendering of a failure),
+    and it writes [OCANNL_TOOL_VERDICT_CHECKED<TAB>hatches<TAB>executable<TAB>claim] to the action's
+    record file, naming every hatch it declares. Where one is taken, [b] is not judged: it prints
+    the same [label: true] row a check prints, so the golden is the same either way, and reports
+    [BYPASSED (<hatches taken>): <label>] on stderr with the machine record
+    [OCANNL_TOOL_VERDICT_BYPASS<TAB>hatches<TAB>executable<TAB>claim] beside it, which the record
+    file receives too. No [EVALUATED] record is written for a bypass. A claim's two records are the
+    numerator and denominator of its BYPASS RATE, which the sweep reports per unit
+    ([tools/aggregate-bypasses.sh]); a run whose every hatched claim was bypassed carries BYPASS
+    records and no CHECKED one, where a fully checked run carries the reverse.
+
+    A hatch is a RUN-TIME condition the instrument reports about this very run (the window was
+    contended, the evidence was unclean); a capability of the backend or host is a gate, reported
+    through {!gated}, whose closed side is a skip. Every occurrence is recorded -- unlike
+    [EVALUATED], once per label -- because a claim reached several times in one action is several
+    chances to be checked. [unless] must name at least one hatch: an empty list is a failed check,
+    since it is a plain {!p} that would record a denominator for a claim with nothing to bypass. *)
+let p_unless ?detail ~unless label b =
+  hatched ~unless label (fun () ->
+      match detail with Some detail when not b -> short_fail label (detail ()) | _ -> p label b)
+
+(* [evaluate], hatched where [unless] is given. *)
+let maybe_hatched ?unless label evaluate =
+  match unless with None -> evaluate () | Some unless -> hatched ~unless label evaluate
+
+(** [measure name fields] records what an instrument measured on this run, as
+    [OCANNL_TOOL_VERDICT_MEASURE<TAB>executable<TAB>name<TAB>key=value…], on stderr and in the
+    action's record file: the numbers a bound's health depends on (a timing window's depth, minimum,
+    median, mean, its contention flag), kept where the sweep collects records, so that the next
+    threshold question is a query over the fleet's nights rather than a campaign that drives the
+    executable and parses its human stderr (gh-ocannl-996). It claims nothing and prints nothing on
+    stdout. Keys and values are escaped onto one line; a key should carry no [=], since the first
+    one in a field is where a reader splits it. *)
+let measure name fields =
+  emit_record "MEASURE"
+    (record_executable () :: Stdlib.String.escaped name
+    :: List.map fields ~f:(fun (key, value) ->
+        Stdlib.String.escaped key ^ "=" ^ Stdlib.String.escaped value))
+
 (* The one place a gate chooses between evaluating a claim and announcing its skip, so every gated
    form below skips the same way and nothing is evaluated on the closed side. *)
 let gate ?aggregation ~when_ ~on label evaluate =
@@ -713,16 +787,21 @@ let gate ?aggregation ~when_ ~on label evaluate =
     computable off-gate — which is also what lets [verdict_ratchet]'s quantifier reader treat this
     exactly as {!p}. A claim that cannot even compute its boolean without the gate goes through a
     leg ({!in_leg}), which evaluates it on one side and skips it on the other in the same dialect. A
-    quantified claim goes through {!gated_all} and its siblings. *)
-let gated ?aggregation ?detail ~when_ ~on label b =
+    quantified claim goes through {!gated_all} and its siblings.
+
+    [?unless] makes the claim a hatched one ({!p_unless}) where the gate is open: the gate is judged
+    first, so a closed gate is a skip whatever the hatches say, and only a claim this run would
+    evaluate can be bypassed. *)
+let gated ?aggregation ?detail ?unless ~when_ ~on label b =
   gate ?aggregation ~when_ ~on label (fun () ->
-      match detail with
-      | Some detail when not b -> short_fail label (detail ())
-      | Some _ | None -> p label b)
+      maybe_hatched ?unless label (fun () ->
+          match detail with
+          | Some detail when not b -> short_fail label (detail ())
+          | Some _ | None -> p label b))
 
 (** [gated_all ~when_ ~on label xs ~f] is {!gated} for a quantified claim: {!p_all} where the gate
     is open, {!skipped} [~on] where it is closed. [gated_alli] and [gated_exists] do the same for
-    {!p_alli} and {!p_exists}, and [?min] and [?aggregation] mean what they mean there.
+    {!p_alli} and {!p_exists}, and [?min], [?aggregation] and [?unless] mean what they mean there.
 
     {!gated} cannot carry these: [gated label (List.for_all xs ~f)] is the unguarded quantifier
     [verdict_ratchet] refuses in {!p} too, since a gate does not fill the population. Without this
@@ -737,14 +816,17 @@ let gated ?aggregation ?detail ~when_ ~on label b =
     computed from that same population ([~min:(List.length xs)]) is zero exactly where the gate is
     closed. A leg whose population cannot be computed off-gate at all (a device readback) goes
     through a leg, as {!gated} says of its boolean. *)
-let gated_all ?aggregation ?min ~when_ ~on label xs ~f =
-  gate ?aggregation ~when_ ~on label (fun () -> p_all ?min label xs ~f)
+let gated_all ?aggregation ?min ?unless ~when_ ~on label xs ~f =
+  gate ?aggregation ~when_ ~on label (fun () ->
+      maybe_hatched ?unless label (fun () -> p_all ?min label xs ~f))
 
-let gated_alli ?aggregation ?min ~when_ ~on label xs ~f =
-  gate ?aggregation ~when_ ~on label (fun () -> p_alli ?min label xs ~f)
+let gated_alli ?aggregation ?min ?unless ~when_ ~on label xs ~f =
+  gate ?aggregation ~when_ ~on label (fun () ->
+      maybe_hatched ?unless label (fun () -> p_alli ?min label xs ~f))
 
-let gated_exists ?aggregation ?min ~when_ ~on label xs ~f =
-  gate ?aggregation ~when_ ~on label (fun () -> p_exists ?min label xs ~f)
+let gated_exists ?aggregation ?min ?unless ~when_ ~on label xs ~f =
+  gate ?aggregation ~when_ ~on label (fun () ->
+      maybe_hatched ?unless label (fun () -> p_exists ?min label xs ~f))
 
 (** [pass_fail label b] prints [label: PASS] or [label: FAIL], and fails the run in the latter case,
     echoing that row behind [FAIL: ] on stderr. [?detail] is evaluated only on failure and appended
@@ -967,6 +1049,7 @@ module Claims = struct
   let p_exists = p_exists
   let p_pairwise_distinct = p_pairwise_distinct
   let skipped = skipped
+  let p_unless = p_unless
   let gated = gated
   let gated_all = gated_all
   let gated_alli = gated_alli

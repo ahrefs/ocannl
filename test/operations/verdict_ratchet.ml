@@ -6488,7 +6488,7 @@ let refuse_folded_gate ~fail ~source (fold : Scan.folded_gate) =
 let read_folded_gates ~fail ~source ~census content =
   match Test_scan.Scan_attempt.run (fun () -> census content) with
   | Test_scan.Scan_attempt.Scanned folds -> folds
-  | Unparsed _ -> { Scan.folded = []; folded_claim_sites = 0 }
+  | Unparsed _ -> { Scan.folded = []; folded_hatches = []; folded_claim_sites = 0 }
   | Raised exn ->
       fail
         (Printf.sprintf
@@ -6496,7 +6496,7 @@ let read_folded_gates ~fail ~source ~census content =
             Verdict_scan.folded_gate_census, not of the source, and the source's claim values went \
             unread"
            exn source);
-      { Scan.folded = []; folded_claim_sites = 0 }
+      { Scan.folded = []; folded_hatches = []; folded_claim_sites = 0 }
 
 (* The wiring from a finding to the failure, exercised on a refusing control. *)
 let run_folded_gate_refusal_control () =
@@ -6533,6 +6533,98 @@ let run_folded_gate_refusal_control () =
       : Scan.folded_census);
   ( "refuses a planted folded gate, and names a folded-gate reader that raised",
     !refused_fold && !refused_raise )
+
+(* {1 A run-time hatch is the claim's argument, not a disjunct of its value (gh-ocannl-996)}
+
+   [p "…" (reading.contended || within_envelope)] passes wherever the timing instrument reported
+   contention: the row a check prints, and an evaluation recorded, so a claim bypassed seven runs in
+   eight reads as verified -- how gh-ocannl-994's defect hid. The reader is the folded-gate one's
+   split ([Verdict_scan.folded_gate_census], its [folded_hatches]); its header states the closed
+   hatch vocabulary and what it does not read. The controls are the folds it must report, each by
+   the hatch disjunct printed, and the near misses it must accept: a claim about contention itself,
+   a negated hatch, a hatch below a conjunction and a hatch already taken as the argument. *)
+let folded_hatch_controls =
+  [
+    ( "refuses a contention hatch folded into a claim's value",
+      {ocaml|open Verdict.Claims
+let check r = p "the reading is within its envelope or reports contention" (r.contended || within r)|ocaml},
+      [ "r.contended" ] );
+    ( "refuses a hatch folded into a quantified claim's predicate, and a dispersed one",
+      {ocaml|open Verdict.Claims
+let () = p_all "every reading is per launch" readings ~f:(fun r -> r.dispersed || per_launch r)|ocaml},
+      [ "r.dispersed" ] );
+    ( "refuses a hatch folded into a hatched claim's own value",
+      {ocaml|open Verdict.Claims
+let check r =
+  p_unless ~unless:[ ("contended", r.contended) ] "the reading is per launch" (r.unbatched || per_launch r)|ocaml},
+      [ "r.unbatched" ] );
+    ( "refuses a hatch a bare name carries",
+      {ocaml|open Verdict.Claims
+let check ~contended ok = p "the reading is within its envelope or reports contention" (contended || ok)|ocaml},
+      [ "contended" ] );
+    ( "accepts a claim about contention itself",
+      {ocaml|open Verdict.Claims
+let check stalled = p "a stalled window reports contention" stalled.contended|ocaml},
+      [] );
+    ( "accepts a negated hatch, which checks the claim exactly where it is contended",
+      {ocaml|open Verdict.Claims
+let check r = p "a clean reading is not contended or is fast" ((not r.contended) || fast r)|ocaml},
+      [] );
+    ( "accepts a hatch taken as the claim's argument",
+      {ocaml|open Verdict.Claims
+let check r = p_unless ~unless:[ ("contended", r.contended) ] "the reading is per launch" (per_launch r)|ocaml},
+      [] );
+  ]
+
+let folded_hatch_findings source =
+  List.map (Scan.folded_gate_census source).Scan.folded_hatches
+    ~f:(fun (fold : Scan.folded_hatch) ->
+      fold.hatch ^ if fold.hatch_ambiguous then " [ambiguous]" else "")
+
+let run_folded_hatch_controls () =
+  List.map folded_hatch_controls ~f:(fun (label, source, expected) ->
+      let found = folded_hatch_findings source in
+      let ok = List.equal String.equal found expected in
+      if not ok then
+        eprintf "folded-hatch control %S expected [%s], found [%s]\n" label
+          (String.concat ~sep:"; " expected)
+          (String.concat ~sep:"; " found);
+      (label, ok))
+
+let refuse_folded_hatch ~fail ~source (fold : Scan.folded_hatch) =
+  fail
+    (Printf.sprintf
+       "%s:%d folds the run-time hatch `%s` into the value of `%s`: wherever it is taken the claim \
+        prints `true` and records an evaluation, byte-identical to a run that checked it, so a \
+        claim bypassed on most runs reads as verified (gh-ocannl-996). Take the hatch as the \
+        claim's argument -- `Verdict.p_unless ~unless:[ (\"<hatch>\", %s) ]`, or `~unless` on a \
+        `gated` form -- so a bypass is recorded%s"
+       source fold.hatch_line fold.hatch fold.hatch_form fold.hatch
+       (ambiguity_remedy ~ambiguous:fold.hatch_ambiguous ~callee:(Some fold.hatch_form)))
+
+(* The wiring from a finding to the failure, exercised on a refusing control. *)
+let run_folded_hatch_refusal_control () =
+  let source = "test/operations/verdict_ratchet.ml" in
+  let fold_format =
+    "%s:%d folds the run-time hatch `%s` into the value of `%s`: wherever it is taken the claim \
+     prints `true` and records an evaluation, byte-identical to a run that checked it, so a claim \
+     bypassed on most runs reads as verified (gh-ocannl-996). Take the hatch as the claim's \
+     argument -- `Verdict.p_unless ~unless:[ (\"<hatch>\", %s) ]`, or `~unless` on a `gated` form \
+     -- so a bypass is recorded%s"
+  in
+  let fixture =
+    List.find_map_exn folded_hatch_controls ~f:(fun (label, source, _) ->
+        if String.equal label "refuses a contention hatch folded into a claim's value" then
+          Some source
+        else None)
+  in
+  let refused = ref false in
+  List.iter (Scan.folded_gate_census fixture).Scan.folded_hatches
+    ~f:
+      (refuse_folded_hatch ~source:"fixture.ml" ~fail:(fun _ ->
+           refused := true;
+           Test_scan.Refusal_control_manifest.observe_failure ~source ~format:fold_format));
+  ("refuses a planted folded hatch", !refused)
 
 (* {1 A float tolerance belongs to p_close, not to a parity predicate (gh-ocannl-1224)}
 
@@ -7152,6 +7244,7 @@ let () =
   and uncompared_legs = ref 0
   and uncompared_sites = ref [] in
   let folded_offenders = ref 0 and folded_claim_sites = ref 0 in
+  let folded_hatch_offenders = ref 0 in
   let skip_list_offenders = ref 0 and skips_read = ref 0 in
   let skip_list_exemptions =
     Map.of_alist_exn
@@ -7198,6 +7291,8 @@ let () =
     @ [ run_claim_reader_refusal_control (); run_matrix_reader_control () ]
     @ run_folded_gate_controls ()
     @ [ run_folded_gate_refusal_control () ]
+    @ run_folded_hatch_controls ()
+    @ [ run_folded_hatch_refusal_control () ]
     @ run_tolerance_controls ()
     @ [
         run_tolerance_refusal_control ();
@@ -7282,6 +7377,9 @@ let () =
       List.iter folds.Scan.folded ~f:(fun fold ->
           Int.incr folded_offenders;
           refuse_folded_gate ~fail ~source fold);
+      List.iter folds.Scan.folded_hatches ~f:(fun fold ->
+          Int.incr folded_hatch_offenders;
+          refuse_folded_hatch ~fail ~source fold);
       let tolerances = read_tolerances ~fail ~source ~census:Scan.tolerance_census content in
       parity_sites := !parity_sites + tolerances.Scan.parity_sites;
       List.iter tolerances.Scan.hand_rolled ~f:(fun site ->
@@ -7627,6 +7725,7 @@ let () =
   Verdict.p "and it compared the gates and populations of leg claims" (!leg_sites > 0);
   Verdict.p "no leg claim goes uncompared outside exempt_uncompared_legs" (!uncompared_offenders = 0);
   Verdict.p "no claim folds a run-constant gate into its value" (!folded_offenders = 0);
+  Verdict.p "no claim folds a run-time hatch into its value" (!folded_hatch_offenders = 0);
   Verdict.p "no source writes a skip list by hand" (!skip_list_offenders = 0);
   Verdict.p "and the skip-list reader read skips" (!skips_read > 0);
 
