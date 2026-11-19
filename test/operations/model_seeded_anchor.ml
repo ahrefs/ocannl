@@ -59,7 +59,8 @@ let seeds_here = Option.is_some seeding_here
 let auto_gate_configured =
   match Autotune.seed_gate_setting () with `Auto _ -> true | `Threshold _ -> false
 
-(* What the configured gate resolved to here: [auto]'s ranking ([Autotune.Ranked]), on CUDA. *)
+(* What the configured gate resolved to here: [auto]'s ranking ([Autotune.Ranked]), on CUDA or
+   HIP. *)
 let ranked_gate_here =
   match seeding_here with Some (Autotune.Ranked _, _, _, _) -> true | _ -> false
 
@@ -262,24 +263,41 @@ let () =
     ~f:(fun o ->
       List.exists o.o_explained.Autotune.x_segments ~f:(fun xs ->
           List.length (anchors xs.Autotune.xs_candidates) = 1));
-  (* gh-ocannl-2306: what the shipped [auto] gate seeds on CUDA, exactly. Since gh-ocannl-2279 its
-     ranking prices the direct global operand reads beside the staged copies ([seeded_ranker]'s
-     [~price_direct_loads:true]), and the chain's seeded plan seeds both of its products; with that
-     pricing reverted it seeds neither (rog). The claim above passes on one anchored segment; this
-     one holds the count, which decides the default the CUDA searches of the F_sketch/F_swap readers
-     run (staging#2134). The CUDA stand-in below seeds both products under either score, so only a
-     CUDA run reads it. HIP's count is not claimed: no HIP run has read it. *)
-  let cuda = String.equal backend_name "cuda" in
-  gated_exists
-    ~aggregation:(if cuda then `Environment else `Backend)
-    ~when_:(cuda && seeds_here && auto_gate_configured)
-    ~on:
-      (if not cuda then backend_name
-       else if not auto_gate_configured then backend_name ^ ", the seeding gate not configured auto"
-       else backend_name ^ ", no seeded default under this configuration")
-    "on CUDA under the auto gate the chain's seeded plan seeds exactly its two products"
-    (List.filter outcomes ~f:(fun o -> not o.o_site.single))
-    ~f:(fun o -> ranked_gate_here && List.length o.o_seeded.Autotune.sd_seeded = 2);
+  (* gh-ocannl-2306: what the shipped [auto] gate seeds on CUDA and HIP, exactly. On CUDA, since
+     gh-ocannl-2279 its ranking prices the direct global operand reads beside the staged copies
+     ([seeded_ranker]'s [~price_direct_loads:true]), and the chain's seeded plan seeds both of its
+     products; with that pricing reverted it seeds neither (rog). HIP publishes no staged-copy rate
+     (hip_backend.ml's [staged_copy_rate = None]), which that pricing needs, so the revert moves
+     nothing there: HIP's gate seeds both products under its own calibration, read stable on
+     discrete (tuf) and unified (minix) memory alike. HIP's control is [seeded_ranker] declining
+     every sketch, which fails this claim alone on both boxes (the readings: gh-ocannl-2306's
+     comments, staging#2196). The claim above passes on one anchored segment; this one holds the
+     count, which decides the default the GPU searches of the F_sketch/F_swap readers run
+     (staging#2134). The CUDA stand-in below seeds both products under either score, so only a
+     device run reads it; the stderr line names the gate resolved here. *)
+  let counted = List.mem [ "cuda"; "hip" ] backend_name ~equal:String.equal in
+  Stdio.eprintf "seeding gate here: %s (not part of the golden)\n"
+    (match seeding_here with
+    | None -> "none"
+    | Some (Autotune.Ranked _, _, _, _) -> "ranked"
+    | Some (Autotune.Min_reduction t, _, _, _) -> Printf.sprintf "threshold %d" t);
+  let count_leg =
+    Verdict.leg
+      ~aggregation:(if counted then `Environment else `Backend)
+      ~when_:(counted && seeds_here && auto_gate_configured)
+      ~on:
+        (if not counted then backend_name
+         else if not auto_gate_configured then
+           backend_name ^ ", the seeding gate not configured auto"
+         else backend_name ^ ", no seeded default under this configuration")
+      ()
+  in
+  in_leg ~leg:count_leg
+    "on CUDA/HIP under the auto gate the chain's seeded plan seeds exactly its two products"
+    (fun label ->
+      p_exists label
+        (List.filter outcomes ~f:(fun o -> not o.o_site.single))
+        ~f:(fun o -> ranked_gate_here && List.length o.o_seeded.Autotune.sd_seeded = 2));
   gated_all ~when_:seeds_here ~on:backend_name
     "on CUDA/HIP model_default's pick is no fallback to the default pipeline" outcomes ~f:(fun o ->
       not (String.equal o.o_pick.Autotune.mc_label "default"));

@@ -223,7 +223,8 @@ class AbDriverTest(StubRunTest):
 
 
 # narrow_gebp_bench's lines that gh1180_tie_ab.sh judges: the header naming the requested geometry,
-# the packed rows' census, and the bench-result lines it pairs. CENSUS and EXIT vary per test. The
+# the packed rows' census, and the bench-result lines it pairs, beside the naive reference's, which
+# the bench reports too and the driver must leave unpaired. CENSUS and EXIT vary per test. The
 # timing lines are in the bench's own format, the mma census followed by gh-ocannl-1668's grid
 # census (test/operations/bench_line_readers holds the reader to the lines the bench prints): a
 # reader taking the last bracket for the mma census reads the grid census and fails every cell.
@@ -238,6 +239,8 @@ print(f"packmma         1.000 ms      5.00 GFLOP/s  (spot check [65] 0.50, chk -
       f"[{{census}}] [grid: no Grid loop]")
 print(f"packmma_par     1.000 ms      9.00 GFLOP/s  (spot check [65] 0.50, chk -1.5/2.25, = packmma)  "
       f"[{{census}}] [grid: 1 of 2 on the pool; i45 serial: below cc_grid_min_updates = 16384]")
+print("bench-result: " + json.dumps({{"variant": "naive", "seconds": 0.05, "check": "passed",
+                                      "check_note": ""}}))
 print("bench-result: " + json.dumps({{"variant": "packmma", "seconds": secs, "check": "passed",
                                       "check_note": ""}}))
 print("bench-result: " + json.dumps({{"variant": "packmma_par", "seconds": secs / 2,
@@ -250,15 +253,15 @@ class Gh1180DriverTest(StubRunTest):
     """gh1180_tie_ab.sh on bin_cells: the census and header checks over each case's cells."""
 
     def measure(self, census="Mma_register_tiled", exit_code=0, refuse_n="none",
-                cases=("f16:64:8:16:3:4:6",)):
+                cases=("f16:64:8:16:3:4:6",), rounds=2):
         root = self.dir / "root"
         write_stub(root / "_build/default/bin/narrow_gebp_bench.exe",
                    GEBP_BODY.replace("CENSUS", census).replace("REFUSE_N", refuse_n)
                    .replace("EXIT", str(exit_code)).replace("{{", "{").replace("}}", "}"))
         out = self.dir / "out"
         proc = self.run_tool(
-            [box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "measure", str(root), str(out), "2",
-             *cases], {"OCANNL_FP16_ARITHMETIC": "true", "OMP_NUM_THREADS": "1"})
+            [box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "measure", str(root), str(out),
+             str(rounds), *cases], {"OCANNL_FP16_ARITHMETIC": "true", "OMP_NUM_THREADS": "1"})
         return proc, out
 
     def test_a_clean_run_pairs_the_two_geometries(self):
@@ -268,6 +271,9 @@ class Gh1180DriverTest(StubRunTest):
         self.assertIn("| f16 n=64 bm=8 bk=16 | serial | rn4 | rn6 | 2 | 1.500 | 1.500-1.500 | 0 of 2 |",
                       summary)
         self.assertNotIn("INVALID", summary)
+        # Unimodal arms read pooled, as before the mode reading: no row marked, no Modes section.
+        self.assertNotIn("pooled over modes", summary)
+        self.assertNotIn("## Modes", summary)
         run = out / "f16-64-8-16-3-rn4-rn6"
         records = self.records(run)
         self.assertEqual([r["arm"] for r in records], ["rn4", "rn6", "rn6", "rn4"])
@@ -289,6 +295,42 @@ class Gh1180DriverTest(StubRunTest):
         proc = self.run_tool([box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "summary", str(out)])
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("ocannl_late_setting resolved differently", proc.stdout)
+
+    def test_a_two_mode_arm_is_read_in_modes(self):
+        # gh-ocannl-2308's reading on the driver's own table: a clean twelve-round run whose saved
+        # times are rewritten into test_modes' fixture -- rn4 evenly spaced, rn6 identical but 0.9x
+        # in three rounds (a second mode) -- for the serial variant, the parallel one identical.
+        # Every printed number is exact by construction (at most four significant digits).
+        import cells
+        proc, out = self.measure(rounds=12)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        jsonl = out / "f16-64-8-16-3-rn4-rn6/cells.jsonl"
+        records = self.records(jsonl.parent)
+        self.assertEqual(len(records), 24)
+        for r in records:
+            base = (10.0 + 0.01 * r["round"]) * 1e-3
+            serial = 0.9 * base if r["arm"] == "rn6" and r["round"] in (1, 5, 9) else base
+            r["results"] = [[v, {"packmma": serial, "packmma_par": base / 2}.get(v, s), c, n]
+                            for v, s, c, n in r["results"]]
+        jsonl.write_text("".join(json.dumps(r) + "\n" for r in records))
+        proc = self.run_tool([box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "summary", str(out)])
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        summary = (out / "summary.md").read_text()
+        case = "| f16 n=64 bm=8 bk=16 |"
+        # The pooled row stays, marked: it mixes the modes (0.900-1.000 for an identical arm).
+        self.assertIn(f"{case} serial (pooled over modes) | rn4 | rn6 | 12 | 1.000 | 0.900-1.000 |"
+                      " 3 of 3 |", summary)
+        self.assertIn(f"{case} parallel | rn4 | rn6 | 12 | 1.000 | 1.000-1.000 | 0 of 0 |", summary)
+        self.assertIn("## Modes", summary)
+        self.assertIn(cells.MODE_RULE, summary)
+        self.assertIn(f"{case} rn4 | rn6 | serial | rn6 | 12 | 3 | 9.045 | 9.009-9.081 | 9 | 10.06 | 10-10.11 |"
+                      " 0.919 | 1.101 | BIMODAL |", summary)
+        self.assertIn(f"{case} rn4 | rn6 | serial | rn4 | 12 | - | - | - | - | - | - |", summary)
+        # Within modes: the fast rounds are the 0.9x, the slow ones the identical cell.
+        self.assertIn(f"{case} rn4 | rn6 | serial | rn6 | fast/- | 3 | 0.900 | 0.900-0.900 | 3 of 3 |", summary)
+        self.assertIn(f"{case} rn4 | rn6 | serial | rn6 | slow/- | 9 | 1.000 | 1.000-1.000 | 0 of 0 |", summary)
+        self.assertNotIn("| parallel |", summary.split("## Modes")[1])
+        self.assertNotIn("naive", summary)
 
     def test_a_scalar_fallback_census_invalidates_the_run(self):
         proc, out = self.measure(census="scalar fallback RN")
