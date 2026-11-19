@@ -136,7 +136,25 @@ let fixture ?(materialize = true) ?(fp16_wide = false) tag build =
       let outcomes = if is_gpu then List.map seeds ~f:run else [] in
       Stdio.eprintf "%s: %d seeds, %d compiled (not part of the golden)\n%!" tag (List.length seeds)
         (List.count outcomes ~f:(function _, Compiled _ -> true | _ -> false));
-      p (tag ^ ": the search seeds at least one candidate here") (not (List.is_empty seeds));
+      (* The conv family seeds its GPU leg only through a tensorized pipeline, so a conv site has no
+         seed where the backend withholds a tile for its f32 operands (CUDA outside tf32, HIP). The
+         gate is that capability, the seeder's own judgment, never the seed list under test. *)
+      let capability =
+        match fst (Autotune.family_seeding ~capabilities ~is_gpu ~is_cpu ~limits opt) with
+        | Autotune.Seeding_conv _ ->
+            Ll_test.tensorized_capability ~is_gpu ~is_cpu ~limits ~a_prec:Ir.Ops.single
+              ~b_prec:Ir.Ops.single
+              ~d_prec:(Lazy.force z.Tensor.value.Ir.Tnode.storage_prec)
+        | Autotune.Seeding_matmul _ | Autotune.Seeding_none -> `Advertised
+      in
+      let when_, aggregation =
+        match capability with
+        | `Advertised -> (true, None)
+        | `Withheld aggregation -> (false, Some aggregation)
+      in
+      gated ?aggregation ~when_ ~on:backend_name
+        (tag ^ ": the search seeds at least one candidate here")
+        (not (List.is_empty seeds));
       all_outcomes := !all_outcomes @ outcomes;
       all_kernels :=
         !all_kernels @ List.concat_map outcomes ~f:(function _, Compiled ks -> ks | _ -> []))
