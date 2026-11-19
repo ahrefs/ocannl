@@ -1020,14 +1020,13 @@ let operators =
       ("<>", "ne");
     ]
 
-(* [Ppx_op.translate]'s power arms apply this head in [**.]'s infix order, base then exponent,
-   keeping a literal exponent a float rather than a tensor. Its ghost location tells it from a
-   [TDSL.O.( **. )] the user wrote, which keeps its explicit qualifier. *)
-let power_head_lid = Ldot (Ldot (Lident "TDSL", "O"), "**.")
-
-let power_head ~loc =
+(* [Ppx_op.translate] applies this head in [**.]'s infix order, base then exponent, keeping a
+   literal exponent a float rather than a tensor. Its ghost location tells it from a qualified [**.]
+   the user wrote, which keeps its explicit qualifier. *)
+let power_head ~loc ~dsl_name =
   let loc = { loc with loc_ghost = true } in
-  Ast_builder.Default.pexp_ident ~loc { txt = power_head_lid; loc }
+  let txt = Ldot (Ldot (Lident dsl_name, "O"), "**.") in
+  Ast_builder.Default.pexp_ident ~loc { txt; loc }
 
 let add_module_qualifier_to_applied_function ?(module_name = "NTDSL")
     ?(is_primitive = fun _ -> false) ?(before_translation = false) expr =
@@ -1047,7 +1046,8 @@ let add_module_qualifier_to_applied_function ?(module_name = "NTDSL")
     let loc = expr.pexp_loc in
     match expr.pexp_desc with
     | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; pexp_loc = head_loc; _ }, args)
-      when ((Poly.equal txt power_head_lid && head_loc.loc_ghost)
+      when ((head_loc.loc_ghost
+            && match txt with Ldot (Ldot (Lident _, "O"), "**.") -> true | _ -> false)
            || (before_translation && Poly.equal txt (Lident "**.")))
            && List.count args ~f:(function Nolabel, _ -> true | _ -> false) = 2 -> (
         (* A power: translated (gh-ocannl-2274), or the bare infix [**.] an [%extend_dsls] body
@@ -1063,25 +1063,23 @@ let add_module_qualifier_to_applied_function ?(module_name = "NTDSL")
         let labelled =
           List.filter labelled ~f:(function Optional "label", [%expr None] -> false | _ -> true)
         in
-        (* The exponent is a float, as [translate]'s power arms keep it: an integer literal is
-           converted, and before translation it is wrapped in [%oc], so that [translate] does not
-           make a tensor of it (nor of the binding below that names it). An exponent the user
-           escaped already keeps its one [%oc]: [translate] strips a single layer. *)
+        (* Before translation, moving the exponent out of the infix form takes it away from the arm
+           that converts bare integers. Convert here and wrap the OCaml value in [%oc] for generic
+           translation. A user escape already supplies that layer. After translation a bare integer
+           was already converted, so an integer here came from an escape. *)
         let exponent_value exponent =
-          match exponent with
-          | { pexp_desc = Pexp_extension ({ txt = "oc"; _ }, _); _ } -> exponent
-          | _ ->
-              let exponent =
-                match exponent.pexp_desc with
-                | Pexp_constant (Pconst_integer (_, None)) ->
-                    let loc = exponent.pexp_loc in
-                    [%expr Float.of_int [%e exponent]]
-                | _ -> exponent
-              in
-              if before_translation then
+          if not before_translation then exponent
+          else
+            match exponent.pexp_desc with
+            | Pexp_extension ({ txt = "oc"; _ }, _) -> exponent
+            | desc ->
                 let loc = exponent.pexp_loc in
+                let exponent =
+                  match desc with
+                  | Pexp_constant (Pconst_integer (_, None)) -> [%expr Float.of_int [%e exponent]]
+                  | _ -> exponent
+                in
                 [%expr [%oc [%e exponent]]]
-              else exponent
         in
         (* Before translation a numeric base is not yet the [number] call [translate] makes of it,
            which allocates a tensor: only a variable stays free of effects. *)

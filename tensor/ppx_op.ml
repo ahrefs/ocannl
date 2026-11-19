@@ -1113,14 +1113,17 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
          already tensors. *)
       (no_vbs, [%expr TDSL.O.( !. ) [%e expr1]])
   | [%expr !..[%e? expr1]] -> (no_vbs, [%expr TDSL.O.( !.. ) [%e expr1]])
-  | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
-      let vbs, e1 = loop expr1 in
+  | [%expr [%e? base] **. [%e? exponent]] ->
+      let vbs, base = loop base in
+      let exponent =
+        match exponent.pexp_desc with
+        | Pexp_constant (Pconst_integer _) -> [%expr Float.of_int [%e exponent]]
+        | Pexp_extension ({ txt = "oc"; _ }, _) -> snd (loop exponent)
+        | _ -> exponent
+      in
       ( vbs,
-        [%expr [%e power_head ~loc] ?label:[%e opt_expr ~loc label] [%e e1] (Float.of_int [%e i])]
-      )
-  | [%expr [%e? expr1] **. [%e? expr2]] ->
-      let vbs, e1 = loop expr1 in
-      (vbs, [%expr [%e power_head ~loc] ?label:[%e opt_expr ~loc label] [%e e1] [%e expr2]])
+        [%expr
+          [%e power_head ~loc ~dsl_name] ?label:[%e opt_expr ~loc label] [%e base] [%e exponent]] )
   (* 2+ tuple (a, b): numeric first leaf -> ndarray constant; otherwise block tensor stacking along
      a new input axis. Recognized at the top level, or in block-tensor element position (so that a
      tuple nested inside a list/array/tuple introduces an input axis, e.g. [(a, b); (c, d)]). Tuples

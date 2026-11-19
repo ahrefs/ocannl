@@ -685,6 +685,14 @@ let _late_exponent =
                   (List.concat
                      [["_late_exponent"]; (x.Tensor.value).Ir.Tnode.label]))
         x n
+let _escaped_exponent =
+  let open! TDSL.O in
+    fun ~n x ->
+      TDSL.O.( **. )
+        ?label:(Some
+                  (List.concat
+                     [["_escaped_exponent"]; (x.Tensor.value).Ir.Tnode.label]))
+        x (Float.of_int (!n))
 let _opt_label =
   let open! TDSL.O in
     fun ?label ~hid_dim () ->

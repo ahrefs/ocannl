@@ -49,6 +49,22 @@ module DSL_modules =
             fun x ->
               Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
                 (fun () -> __ocannl_body x)
+        and nested_power =
+          let open! TDSL.O in
+            let __ocannl_body x =
+              let square =
+                TDSL.O.( **. ) ?label:(Some ["square"]) x (Float.of_int 2) in
+              Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+                (fun () ->
+                   TDSL.relu (TDSL.O.( **. ) ?label:None square (!exponent))) in
+            let __ocannl_scheme =
+              Tensor.Scheme.For_ppx.deferred
+                ~name:"%op function at ./test_extend_dsls_power.ml:17"
+                ~arity:1
+                (function | x::[] -> __ocannl_body x | _ -> assert false) in
+            fun x ->
+              Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+                (fun () -> __ocannl_body x)
         and power_of_two =
           let open! TDSL.O in
             fun () ->
@@ -62,6 +78,7 @@ module DSL_modules =
             let squared ?label x = squared x ?label ()
             and counted_power ?label x = counted_power x ?label ()
             and escaped_power ?label x = escaped_power x ?label ()
+            and nested_power ?label x = nested_power x ?label ()
             and power_of_two ?label () = power_of_two () ?label ()
           end
       end
@@ -85,6 +102,15 @@ module DSL_modules =
             fun x ->
               Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
                 (fun () -> NTDSL.pointpow (!exponent) x)
+        and nested_power =
+          let open! NTDSL.O in
+            fun x ->
+              let square =
+                NTDSL.O.( **. ) ?label:(Some ["square"]) x (Float.of_int 2) in
+              Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+                (fun () ->
+                   NTDSL.relu
+                     (NTDSL.O.( **. ) ?label:None square (!exponent)))
         and power_of_two =
           let open! NTDSL.O in
             fun () ->
@@ -98,7 +124,14 @@ module DSL_modules =
             let squared ?label x = squared x ?label ()
             and counted_power ?label x = counted_power x ?label ()
             and escaped_power ?label x = escaped_power x ?label ()
+            and nested_power ?label x = nested_power x ?label ()
             and power_of_two ?label () = power_of_two () ?label ()
           end
       end
   end
+let escaped_integer_initializer source =
+  let open! TDSL.O in
+    let w =
+      (TDSL.param ?more_label:None ?value:None ?values:None
+         ?param_init:(Some (NTDSL.pointpow 2 source)) "w") () in
+    w

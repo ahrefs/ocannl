@@ -1002,7 +1002,7 @@ let rec pointpow ?(label : string list = []) ~grad_spec p t1 : Tensor.t =
   Tensor.binop ~label:("**." :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn ~grad_spec t1 p_t
 ```
 
-On the `Tensor` level, this is implemented as a binary tensor operation, but it is exposed as a unary tensor operation! To avoid the complexities of propagating gradient into the exponent, `Operation.pointpow` is implemented as a function of only one tensor, the exponent is a number. We hard-code the pointwise-power-of operator `NTDSL.O.( **. )`, resp. `TDSL.O.( **. )`, in the `%cd` and `%op` syntaxes, to pass the numeric value to `pointpow` (the second argument of `**.`) without converting it to a tensor first.
+On the `Tensor` level, this is implemented as a binary tensor operation, but it is exposed as a unary tensor operation! To avoid the complexities of propagating gradient into the exponent, `Operation.pointpow` is implemented as a function of only one tensor, the exponent is a number. Pointwise power in `%op` uses the active DSL. In `%extend_dsls`, the NTDSL variant therefore produces powers without gradients. An exponent is an OCaml float expression, and a bare integer literal is converted to a float. A whole-exponent escape such as `x **. [%oc Float.of_int !n]` also supplies an OCaml float.
 
 ### Intricacies of the syntax extension %cd
 
