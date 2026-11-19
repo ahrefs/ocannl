@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import cells
@@ -135,6 +136,11 @@ class ModeReportTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 2)
         self.assertIn("predate the source/layer/origin schema", proc.stderr)
 
+    def test_records_without_a_field_the_verdict_reads_are_refused(self):
+        proc = report(fixture_times(), edit=lambda t: t.replace('"config": {}, ', ''))
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("its cell records lack config", proc.stderr)
+
     def test_a_single_arm_run_is_read_for_modes(self):
         proc = report({"twomode": fixture_times()["twomode"]})
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -186,18 +192,35 @@ class ModeRuleTest(unittest.TestCase):
         self.assertEqual(rows["fast/fast"]["median"], 1.0)
         self.assertEqual(rows["slow/slow"]["median"], 1.0)
 
-    def test_ordinary_spread_does_not_fire(self):
-        # Seeded unimodal draws of twelve rounds per arm, the shapes timing noise takes: none is
-        # bimodal (MODE_RULE's claim), while two well separated modes are found.
+    def flags(self, name, arms=300):
+        """How many of `arms` x 3 seeded unimodal twelve-round arms of shape `name` read BIMODAL."""
         rng = random.Random(2308)
-        draws = {"normal": lambda: rng.gauss(10.0, 0.2),
-                 "lognormal": lambda: 10.0 * math.exp(rng.gauss(0.0, 0.3))}
-        for name, draw in draws.items():
-            flagged = 0
-            for _ in range(300):
-                times = {a: {r: draw() for r in range(ROUNDS)} for a in ("base", "a", "b")}
-                flagged += sum(m["bimodal"] for m in self.reading(times).values())
-            self.assertEqual(flagged, 0, name)
+        draw = {"normal": lambda: rng.gauss(10.0, 0.2),
+                "lognormal": lambda: 10.0 * math.exp(rng.gauss(0.0, 0.3)),
+                "exponential": lambda: 10.0 + rng.expovariate(5.0)}[name]
+        flagged = 0
+        for _ in range(arms):
+            times = {a: {r: draw() for r in range(ROUNDS)} for a in ("base", "a", "b")}
+            flagged += sum(m["bimodal"] for m in self.reading(times).values())
+        return flagged
+
+    def test_ordinary_spread_does_not_fire(self):
+        # The shapes timing noise takes, 900 arms each: normal and lognormal spread never reads
+        # bimodal, an exponential tail (where a widest gap is likeliest to open) under 1%.
+        self.assertEqual(self.flags("normal"), 0)
+        self.assertEqual(self.flags("lognormal"), 0)
+        self.assertLess(self.flags("exponential"), 9)
+        # The negative control: with the separation factor and the cell floor at 1 -- "the gap is
+        # wider than the two ranges" alone -- the same draws do fire, so the counts above pin the
+        # rule's strength rather than a sampling accident.
+        with unittest.mock.patch.object(cells, "MODE_SEPARATION", 1), \
+                unittest.mock.patch.object(cells, "MODE_MIN_CELLS", 1):
+            self.assertGreater(self.flags("normal"), 9)
+            self.assertGreater(self.flags("lognormal"), 9)
+            self.assertGreater(self.flags("exponential"), 90)
+
+    def test_two_separated_modes_are_found(self):
+        rng = random.Random(2308)
         found = 0
         for _ in range(100):
             times = {a: {r: rng.gauss(10.0, 0.05) + (1.0 if rng.random() < 0.6 else 0.0)

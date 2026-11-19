@@ -511,6 +511,8 @@ def stated_files(common_env, arms):
 
 
 REPORT_CONFIG_KEYS = {"value", "source", "layer", "profile", "origin"}
+REPORT_RECORD_KEYS = {"cell", "round", "position", "arm", "status", "results", "config", "problems",
+                      "refused", "ok"}
 
 
 def report_main(argv):
@@ -527,7 +529,13 @@ def report_main(argv):
         manifest, records = cells.read_run(args.run_dir)
     except (OSError, ValueError) as e:
         parser.exit(2, f"{DRIVER} report: {args.run_dir}: {e}\n")
-    # A run saved before the configuration-record schema (gh-ocannl-1566) names no layer/origin.
+    # A record of an older runner lacks fields the verdict reads, and one saved before the
+    # configuration-record schema (gh-ocannl-1566) names no layer/origin: a usage error, never a
+    # traceback or a verdict over guessed fields.
+    lacking = sorted({k for r in records for k in REPORT_RECORD_KEYS - set(r)})
+    if lacking:
+        parser.exit(2, f"{DRIVER} report: {args.run_dir}: its cell records lack "
+                       f"{', '.join(lacking)}; this report cannot read them\n")
     if any(not REPORT_CONFIG_KEYS <= set(entry)
            for r in records for entry in (r["config"] or {}).values()):
         parser.exit(2, f"{DRIVER} report: {args.run_dir}: its configuration records predate the "
