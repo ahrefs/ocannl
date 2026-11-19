@@ -5713,8 +5713,8 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   a historical ref predating the alias.
 - A unit whose backend field is not a backend is a configuration VARIANT (gh-ocannl-1778), keyed by
   its own name in logs, history, unit state, `--only` and the run record, and mapped back to its
-  backend wherever the backend decides (`unit_backend`, `unit_dune_env`, `unit_suite`). Three so
-  far, all after cc and metal in the local lane. `cc-outlined` runs `@runtest` on cc with
+  backend wherever the backend decides (`unit_backend`, `unit_dune_env`, `unit_suite`). All of
+  them sit after cc and metal in the local lane. `cc-outlined` runs `@runtest` on cc with
   `OCANNL_CC_KERNEL_PART_WEIGHT=1 OCANNL_CC_COMPILE_UNIT_MIN_BYTES=0`: every kernel large enough
   outlined, so a kernel-text reader added after the per-test `-outlined` reruns is still checked
   against outlined text. A VALUE golden that moves there is a finding (outlining runs the same
@@ -5723,6 +5723,16 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   `cc-gc-backprop` (gh-ocannl-2062) runs all of `@runtest` on cc with
   `OCANNL_DEBUG_GC_BACKPROP_ROOTS=true`, exposing accidental dependence on a dropped consumer
   remaining uncollected at the backprop hand-back gate.
+  The ten policy units (gh-ocannl-1104), `<cc|metal>-policy-<fp16|bf16>-<mode>`, build
+  `@policy-invariance` alone with ONE non-default mode exported (`OCANNL_FP16_ARITHMETIC` false,
+  true or prefer_narrow; `OCANNL_BF16_ARITHMETIC` false or true) and the other variable pinned at
+  `auto`, so a mode the caller exported cannot make a unit test two, a red names its mode, and its
+  bisect line carries it. A `--target` run, or a ref predating the alias, leaves the units out (an
+  explicit `--only` naming one is refused, exit 2); the members and the rule that pins their legs are in
+  backend-precision-and-simd.md#numerics-policies-and-cache-identity. They share one worktree,
+  `sweep-policy`, whatever their backend: each re-executes its small cone daily (the mode is the
+  only thing differing between them), where a tree per mode would cost ten `_build`s for a cached
+  rerun on the days master stands still. No CUDA or HIP policy units yet.
   `cc-oracle-widen` (gh-ocannl-1964) builds one alias on cc,
   `@test/operations/slow-virtual_inliner_oracle-widen`: the inliner oracle's full cross of every
   write with every read on every shape (about 9.3 million programs with the nested-source family), which
@@ -5732,8 +5742,8 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   change reaching the inliner, and on Sunday the cc unit's `@slow` builds it first (the variant then
   finds it built: same worktree, same environment). A variant takes no `@train` or `@slow` and is
   left out of the skip aggregation, which covers backends. The sweep harness pins each variant's
-  one dune call (`sweep_harness.sh`, the `gh-ocannl-1778`, `gh-ocannl-2062` and `gh-ocannl-1964`
-  cases) and the run record's backend map.
+  one dune call (`sweep_harness.sh`, the `gh-ocannl-1778`, `gh-ocannl-2062`, `gh-ocannl-1964` and
+  `gh-ocannl-1104` cases) and the run record's backend map.
   Each machine's units form a lane — sequential within the box, which shares its lock and device
   (and a worktree among units of one environment), concurrent with the other boxes' lanes (gh-ocannl-976) — so wall-clock is the longest lane
   (the local one, metal's suite), and the remote units start while the routine's freshly woken WSL

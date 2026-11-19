@@ -344,9 +344,13 @@ git -C "$main" commit -qm fixture
 fixture_sha=$(git -C "$main" rev-parse HEAD)
 mkdir -p "$main/bin"
 cp "$(dirname "$0")/../../bin/dune" "$main/bin/dune"
+# And the live test/operations/dune, whose `@policy-invariance` stanza admits the policy units
+# (gh-ocannl-1104); the fixture commit before this one predates it, as a historical ref would.
+mkdir -p "$main/test/operations"
+cp "$(dirname "$0")/dune" "$main/test/operations/dune"
 # The sweep reads committed bytes, including on Windows with CRLF checkouts.
-git -C "$main" -c core.autocrlf=input add bin/dune
-git -C "$main" commit -qm 'declare the twin-tile dry run'
+git -C "$main" -c core.autocrlf=input add bin/dune test/operations/dune
+git -C "$main" commit -qm 'declare the twin-tile dry run and the policy alias'
 git -C "$main" remote add origin "$origin"
 git -C "$main" push -q -u origin master
 
@@ -370,6 +374,11 @@ printf '%s\n' "$*" >>"$SWEEP_TEST_CALLS"
 if [ -n "${SWEEP_TEST_ENV_CALLS:-}" ]; then
   printf '%s|%s|%s|%s\t%s\n' "${OCANNL_BACKEND-}" "${OCANNL_CC_KERNEL_PART_WEIGHT-}" \
     "${OCANNL_CC_COMPILE_UNIT_MIN_BYTES-}" "${OCANNL_DEBUG_GC_BACKPROP_ROOTS-}" "$*" >>"$SWEEP_TEST_ENV_CALLS"
+fi
+# The numerics mode a call ran under (gh-ocannl-1104; the policy units' case reads it).
+if [ -n "${SWEEP_TEST_POLICY_CALLS:-}" ]; then
+  printf '%s|%s|%s\t%s\n' "${OCANNL_BACKEND-}" "${OCANNL_FP16_ARITHMETIC-}" \
+    "${OCANNL_BF16_ARITHMETIC-}" "$*" >>"$SWEEP_TEST_POLICY_CALLS"
 fi
 # Which worktree a call ran in (unit_worktree_name; the per-environment worktree case reads it).
 if [ -n "${SWEEP_TEST_CWD_CALLS:-}" ]; then
@@ -955,9 +964,12 @@ run_sweep_args() {
   # the destination cases below assert exactly that.
   # The outlining and GC-stress keys are unset for the same reason as OCANNL_BACKEND: the sweep's own
   # cc-outlined unit runs this harness with them exported (gh-ocannl-1778), and the plain cc unit's
-  # case below asserts its calls carry neither.
+  # case below asserts its calls carry neither. The numerics modes likewise (gh-ocannl-1104): an
+  # exported mode is a supported way to run anything, and the policy units' case asserts the plain
+  # unit's calls carry none.
   local environment=(-u OCANNL_BACKEND -u OCANNL_TOOL_SWEEP_CAP -u OCANNL_TOOL_SWEEP_CONTEXT_CAP \
     -u OCANNL_CC_KERNEL_PART_WEIGHT -u OCANNL_CC_COMPILE_UNIT_MIN_BYTES -u OCANNL_DEBUG_GC_BACKPROP_ROOTS \
+    -u OCANNL_FP16_ARITHMETIC -u OCANNL_BF16_ARITHMETIC \
     -u OCANNL_TOOL_SWEEP_LOCAL_BOX -u OCANNL_TOOL_VERDICT_RECORDS \
     "OCANNL_TOOL_SWEEP_LAB_LOCK_WAIT=${SWEEP_TEST_LAB_LOCK_WAIT:-300}" \
     "OCANNL_TOOL_FLEET_WORKER=${SWEEP_TEST_FLEET_WORKER-$fake_bin/fleet-worker.sh}" \
@@ -1114,13 +1126,52 @@ grep -q 'm4-max/cc-gc-backprop: incremental-pass ' <<<"$gc_run"
 [ "$(cat "$gc_env")" = "$(printf 'cc|||true\texec -- dune build @runtest')" ]
 [ "$(awk -F '\t' '$3 == "cc-gc-backprop" { n++ } END { print n }' "$state/history.tsv")" = 1 ]
 
+# gh-ocannl-1104: a policy unit is the `@policy-invariance` alias alone on its backend, under one
+# non-default mode of one variable with the other left unset -- no @runtest, no @train, and no @slow
+# even under --slow -- recorded under its own name, once. The plain cc unit is the negative control:
+# no mode reaches its calls, so a mapping that leaked a mode into every unit fails here. The Metal
+# unit maps back to the metal backend (its suite line runs with OCANNL_BACKEND=metal) and to the
+# Metal row's memory model.
+policy_env=$tmp/opam.policy-calls-fp16
+policy_plain=$tmp/opam.policy-calls-plain
+policy_run=$(SWEEP_TEST_POLICY_CALLS=$policy_env run_sweep_backend cc-policy-fp16-prefer_narrow --slow)
+SWEEP_TEST_POLICY_CALLS=$policy_plain run_sweep >/dev/null
+grep -q 'm4-max/cc-policy-fp16-prefer_narrow: incremental-pass ' <<<"$policy_run"
+[ "$(cat "$policy_env")" = "$(printf 'cc|prefer_narrow|auto\texec -- dune build @policy-invariance')" ]
+[ "$(cat "$policy_plain")" = "$(printf 'cc||\texec -- dune build @runtest @train')" ]
+[ "$(awk -F '\t' '$3 == "cc-policy-fp16-prefer_narrow" { n++ } END { print n }' "$state/history.tsv")" = 1 ]
+metal_policy_env=$tmp/opam.policy-calls-metal
+metal_policy_run=$(SWEEP_TEST_POLICY_CALLS=$metal_policy_env run_sweep_backend metal-policy-bf16-true --slow)
+grep -q 'm4-max/metal-policy-bf16-true: incremental-pass ' <<<"$metal_policy_run"
+[ "$(awk -F '\t' '$2 ~ / @policy-invariance$/ { print $1 }' "$metal_policy_env")" = 'metal|auto|true' ]
+absent -e @runtest -e @train -e @slow "$metal_policy_env"
+[ "$(awk -F '\t' '$3 == "metal-policy-bf16-true" { n++ } END { print n }' "$state/history.tsv")" = 1 ]
+
+# ...and where a run cannot hold the units -- a --target run, whose suite would be the directory
+# under a mode, or a ref from before the alias -- an explicit --only naming one is refused, exit 2,
+# with the reason, rather than run as something else.
+set +e
+policy_target_error=$(run_sweep_backend cc-policy-fp16-true --target state-probe 2>&1)
+policy_target_rc=$?
+policy_ref_error=$(run_sweep_backend cc-policy-fp16-true --ref "$fixture_sha" 2>&1)
+policy_ref_rc=$?
+set -e
+[ "$policy_target_rc" -eq 2 ]
+grep -qF 'sweep: --only cc-policy-fp16-true: a --target run builds no @policy-invariance' \
+  <<<"$policy_target_error"
+[ "$policy_ref_rc" -eq 2 ]
+grep -qF 'has no @policy-invariance alias' <<<"$policy_ref_error" ||
+  { printf 'policy ref refusal said:\n%s\n' "$policy_ref_error" >&2; false; }
+
 # One worktree per unit environment on a box (unit_worktree_name): a `_build` keeps only the last
 # environment's test results, so two environments sharing one re-executed each other's suite on
 # every incremental run. The box's first unit keeps `sweep`; cc-oracle-widen, cc's environment
-# exactly, shares it (its alias is one cc's Sunday @slow builds); each other variant gets its own.
+# exactly, shares it (its alias is one cc's Sunday @slow builds); each other variant gets its own,
+# except the policy units, which all share `sweep-policy` whatever their backend and mode.
 wt_root=$tmp/home/ocannl-staging-worktrees
 for wt_case in cc:sweep cc-oracle-widen:sweep cc-outlined:sweep-cc-outlined \
-  cc-gc-backprop:sweep-cc-gc-backprop; do
+  cc-gc-backprop:sweep-cc-gc-backprop cc-policy-fp16-true:sweep-policy \
+  metal-policy-bf16-false:sweep-policy; do
   wt_calls=$tmp/opam.cwd-calls-${wt_case%%:*}
   wt_run=$(SWEEP_TEST_CWD_CALLS=$wt_calls run_sweep_backend "${wt_case%%:*}")
   grep -q "m4-max/${wt_case%%:*}: incremental-pass " <<<"$wt_run"
@@ -3148,7 +3199,11 @@ lanes_record=$(sed -n 's/^run:  *//p' <<<"$lanes")
     minix/hip:skip:0 minix/multidev_cc:skip:0 rog-nv/cuda:skip:0 tuf/hip:gate:0 | sort)" ]
 [ "$(awk -F '\t' '$1 == "backend" { print $2 ":" $3 }' "$lanes_record")" = \
   "$(printf '%s\n' cc:m4-max metal:m4-max cuda:rog-nv hip:minix multidev_cc:minix hip:tuf \
-  cc-outlined:m4-max cc-gc-backprop:m4-max cc-oracle-widen:m4-max)" ]
+  cc-outlined:m4-max cc-gc-backprop:m4-max cc-policy-fp16-false:m4-max cc-policy-fp16-true:m4-max \
+  cc-policy-fp16-prefer_narrow:m4-max cc-policy-bf16-false:m4-max cc-policy-bf16-true:m4-max \
+  metal-policy-fp16-false:m4-max metal-policy-fp16-true:m4-max \
+  metal-policy-fp16-prefer_narrow:m4-max metal-policy-bf16-false:m4-max \
+  metal-policy-bf16-true:m4-max cc-oracle-widen:m4-max)" ]
 # ...and the memory model each unit exercised: hip twice, once on each side of the unified/discrete
 # line, which is what the second hip unit is for.
 [ "$(awk -F '\t' '$1 == "unit" { print $2 "/" $3 ":" $11 }' "$lanes_record" | sort)" = \

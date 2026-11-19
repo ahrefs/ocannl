@@ -51,6 +51,8 @@
 #   tools/sweep.sh --only cc-outlined  # the cc suite with outlining forced (unit_backend)
 #   tools/sweep.sh --only cc-gc-backprop  # the cc suite with backprop-root GC stress
 #   tools/sweep.sh --only cc-oracle-widen  # virtual_inliner_oracle --widen on cc (unit_suite)
+#   tools/sweep.sh --only cc-policy-fp16-true  # the @policy-invariance members under one
+#                                      # non-default fp16/bf16 mode (unit_dune_env)
 #   tools/sweep.sh --target test/einsum  # narrower dune target, for smoke-testing
 #   tools/sweep.sh --ref origin/master   # what to test (default: origin/master)
 #   OCANNL_TOOL_SWEEP_LOCAL_BOX=m4-max tools/sweep.sh  # required stable local box ID
@@ -485,13 +487,23 @@ UNITS=(
   "tuf:hip:@tuf"
   "$LOCAL_BOX:cc-outlined:"
   "$LOCAL_BOX:cc-gc-backprop:"
+  "$LOCAL_BOX:cc-policy-fp16-false:"
+  "$LOCAL_BOX:cc-policy-fp16-true:"
+  "$LOCAL_BOX:cc-policy-fp16-prefer_narrow:"
+  "$LOCAL_BOX:cc-policy-bf16-false:"
+  "$LOCAL_BOX:cc-policy-bf16-true:"
+  "$LOCAL_BOX:metal-policy-fp16-false:"
+  "$LOCAL_BOX:metal-policy-fp16-true:"
+  "$LOCAL_BOX:metal-policy-fp16-prefer_narrow:"
+  "$LOCAL_BOX:metal-policy-bf16-false:"
+  "$LOCAL_BOX:metal-policy-bf16-true:"
   "$LOCAL_BOX:cc-oracle-widen:"
 )
 
 # A unit whose backend field is not a backend is a backend run under extra configuration, or of a
 # single alias, keyed by its own name everywhere a unit is (logs, history, unit state, --only, the
 # run record) and mapped back to its backend wherever the backend itself decides something
-# (OCANNL_BACKEND, the CPU/GPU gates). Three so far, all after cc and metal in the local lane, and
+# (OCANNL_BACKEND, the CPU/GPU gates). All of them sit after cc and metal in the local lane, and
 # none takes @train or @slow (unit_suite, unit_takes_slow).
 #
 # cc-outlined (gh-ocannl-1778): the cc suite with every kernel large enough forced outlined -- each
@@ -513,9 +525,21 @@ UNITS=(
 # budget. It is the only run crossing every pair on those shapes, and the oracle's first run found a
 # real silent wrong value, so it runs daily rather than on Sunday's --slow alone. Last in the table:
 # the local lane is the sweep's wall-clock, and this unit is single-threaded.
+#
+# <backend>-policy-<fp16|bf16>-<mode> (gh-ocannl-1104): the `@policy-invariance` alias -- every test
+# whose sources name the numerics policy, less the members whose stanza opts out with a reason
+# (test/operations/env_var_deps derives the set and holds the alias to it) -- on cc and Metal under
+# each NON-DEFAULT value of OCANNL_FP16_ARITHMETIC (false, true, prefer_narrow) and of
+# OCANNL_BF16_ARITHMETIC (false, true), one variable per unit with the other at its default. Those
+# tests pin the policy for some legs and read the ambient one in others, and nothing else runs them
+# under a mode the caller exported: a leg that claims the default's behaviour without pinning it, or
+# a pin that leaks, reads green in every other run. One mode per unit so a red names its mode, and
+# its bisect line carries it (unit_dune_env). No CUDA or HIP policy units yet: those lanes are
+# remote boxes woken for the run, and ten more units there wait on the local matrix running clean.
 unit_backend() { # unit-backend
   case $1 in
-    cc-outlined | cc-gc-backprop | cc-oracle-widen) printf cc ;;
+    cc-outlined | cc-gc-backprop | cc-oracle-widen | cc-policy-*) printf cc ;;
+    metal-policy-*) printf metal ;;
     *) printf '%s' "$1" ;;
   esac
 }
@@ -524,6 +548,10 @@ unit_dune_env() { # unit-backend
   case $1 in
     cc-outlined) printf 'OCANNL_CC_KERNEL_PART_WEIGHT=1 OCANNL_CC_COMPILE_UNIT_MIN_BYTES=0 ' ;;
     cc-gc-backprop) printf 'OCANNL_DEBUG_GC_BACKPROP_ROOTS=true ' ;;
+    # The other variable pinned at its default, so a mode the caller exported cannot make the unit
+    # test two non-default modes under one mode's name.
+    *-policy-fp16-*) printf 'OCANNL_FP16_ARITHMETIC=%s OCANNL_BF16_ARITHMETIC=auto ' "${1##*-policy-fp16-}" ;;
+    *-policy-bf16-*) printf 'OCANNL_FP16_ARITHMETIC=auto OCANNL_BF16_ARITHMETIC=%s ' "${1##*-policy-bf16-}" ;;
   esac
   printf 'OCANNL_BACKEND=%s' "$(unit_backend "$1")"
 }
@@ -532,6 +560,7 @@ unit_suite() { # unit-backend
   case $1 in
     cc-outlined | cc-gc-backprop) printf '@runtest' ;;
     cc-oracle-widen) printf '@test/operations/slow-virtual_inliner_oracle-widen' ;;
+    *-policy-*) printf '@policy-invariance' ;;
     metal | cuda | hip) printf '@runtest @train%s' "$twin_tile_target" ;;
     *) printf '@runtest @train' ;;
   esac
@@ -557,7 +586,18 @@ unit_is_variant() { [ "$(unit_backend "$1")" != "$1" ]; }
 # directories all key on the worktree path, so each tree carries its own; the run-wide local lock
 # ($LOCAL_WT.lock) still covers every local tree. The cost is one `_build` per environment
 # (about 16-24 GB each, 2026-11-13; the shared dune cache serves their compilation).
+#
+# The policy units are the exception: they share ONE tree, `sweep-policy`. Each builds the member
+# alias alone, and it is the mode -- the one thing that differs between them -- that every member's
+# result depends on, so a tree per mode would buy only a cached rerun of a day master did not move,
+# at ten `_build`s' disk for one small cone.
 unit_worktree_name() { # machine unit
+  case $2 in
+    *-policy-*)
+      printf 'sweep-policy'
+      return 0
+      ;;
+  esac
   local entry box name first= env
   env=$(unit_dune_env "$2")
   for entry in "${UNITS[@]}"; do
@@ -586,7 +626,7 @@ unit_worktree_name() { # machine unit
 # architectures are what each box reported on 2026-09-23 (KFD `gfx_target_version` 110501 and
 # 110002, nvidia-smi `compute_cap` 12.0). `-` for a CPU unit, which has no device memory.
 unit_memory() { # machine backend
-  case $1:$2 in
+  case $1:$(unit_backend "$2") in
     tuf:hip) printf 'discrete/gfx1102' ;;
     minix:hip) printf 'unified/gfx1151' ;;
     rog-nv:cuda) printf 'discrete/sm_120' ;;
@@ -696,6 +736,10 @@ if [ ${#ONLY[@]} -gt 0 ]; then
 fi
 
 wanted() {
+  # The policy units, where the run cannot hold them (policy_skip_reason, set once the ref is known).
+  if [ -n "${policy_skip_reason:-}" ]; then
+    case $1 in *-policy-*) return 1 ;; esac
+  fi
   [ ${#ONLY[@]} -eq 0 ] && return 0
   local b
   for b in "${ONLY[@]}"; do [ "$b" = "$1" ] && return 0; done
@@ -942,6 +986,28 @@ else
   [ "$?" -eq 1 ] || die "cannot read bin/dune at $run_sha"
 fi
 
+# The policy units build one alias of test/operations under one mode. A --target run replaces every
+# unit's suite with that directory, which under a mode would run the members that opt out of the
+# matrix; and a ref from before the alias has none to build. Either way the units are left out, said
+# once here, and an explicit --only naming one is refused rather than run as something else.
+policy_skip_reason=
+if [ -n "$TARGET" ]; then
+  policy_skip_reason="a --target run builds no @policy-invariance"
+elif ! git -C "$MAIN" cat-file -e "${full_sha}:test/operations/dune" 2>/dev/null; then
+  policy_skip_reason="$run_sha has no @policy-invariance alias (no test/operations/dune)"
+elif ! git -C "$MAIN" grep -Eq -e '^ \(name policy-invariance\)$' "$full_sha" -- test/operations/dune; then
+  [ "$?" -eq 1 ] || die "cannot read test/operations/dune at $run_sha"
+  policy_skip_reason="$run_sha has no @policy-invariance alias"
+fi
+if [ -n "$policy_skip_reason" ]; then
+  if [ ${#ONLY[@]} -gt 0 ]; then
+    for b in "${ONLY[@]}"; do
+      case $b in *-policy-*) die "--only $b: $policy_skip_reason" ;; esac
+    done
+  fi
+  echo "sweep: policy units left out: $policy_skip_reason"
+fi
+
 # Read the environment matrix from the exact commit every unit is about to run.
 # The Python CLI is the checked-in DIGESTS parser, so the sweep does not grow a
 # second implementation of the header grammar. A pre-gh-ocannl-850 ref has no
@@ -1051,7 +1117,7 @@ device_probe_cmd() { # backend wt host
       "$(switch_dune_cmd)" "$rd" "$prog"
   fi
   printf 'sh -c %s device-probe sweep %s %s "%s" "%s" %s; [ $? -ne 69 ] || exit 69; ' \
-    "$(sq "$device_probe_sh")" "$(sq "$probe_perl")" "$PROBE_CAP" "$rd" "$prog" "$backend"
+    "$(sq "$device_probe_sh")" "$(sq "$probe_perl")" "$PROBE_CAP" "$rd" "$prog" "$(unit_backend "$backend")"
   if [ -z "$PROBE" ]; then
     printf 'else echo "not probed: %s did not build (%s/device-probe-build.log)" >>"%s/device-probe"; fi; ' \
       "$prog" "$rd" "$rd"
