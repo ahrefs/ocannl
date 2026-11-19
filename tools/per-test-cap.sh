@@ -7,14 +7,13 @@
 # held the unit to its full 5400 s cap with no test named. Sourced, never
 # executed.
 
-# The per-test cap's default (gh-ocannl-1211; test_cap_watch enforces it), for
-# a GPU batch whose targets do not reach the `slow` aliases -- in
-# tools/test-run.sh (plan_test_cap) and in each GPU unit of tools/sweep.sh,
-# whose `@slow` leg it leaves to the unit's cap. 1500s
-# clears every runtest/train action in the fleet's dune traces (the longest,
-# 1021s, under correctness-slot load), but `slow-cifar_conv` took 1573s on tuf
-# HIP (2026-11-08), even before its dataset download -- so `@slow`
-# and CPU batches keep only the run's cap unless asked. Re-derive it from a
+# The per-test cap's default (gh-ocannl-1211; test_cap_watch enforces it).
+# 1500s cleared the original fleet traces used to choose it (longest action:
+# 1021s under correctness-slot load). On tuf, slow-cifar_conv took 1573s on
+# HIP before its dataset download, and train-transformer_names exceeded
+# 1500s on cc. tools/test-run.sh's plan_test_cap leaves both alias families
+# to the run's cap by default (gh-ocannl-1875). The sweep's GPU units leave
+# their slow legs to the unit's cap. Re-derive the number from a
 # box's traces with tools/action-durations.sh, or from the `slowest` record
 # every test-run.sh run directory keeps (see its explicit_trace_file).
 TEST_CAP_DEFAULT=1500
@@ -65,8 +64,8 @@ TRAIN_RUN_CAP_DEFAULT=$((2 * 60 * 60))
 # Not read: `--default-target` and dune's `@@default` with no target, and a
 # subcommand behind a global option (all read as reaching neither). Other
 # options' operands are not skipped, so one spelled like a `slow`/`train` alias
-# would be taken for it: a false hit, a wider run cap and, for `slow`, no
-# per-test cap on a GPU batch.
+# would be taken for it: a false hit, a wider run cap and no default per-test
+# cap on a tools/test-run.sh GPU batch.
 test_cap_alias_is() { # slow|train TARGET: 0 iff TARGET is an alias of that kind
   local name
   case $2 in
