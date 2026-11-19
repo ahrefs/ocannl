@@ -59,6 +59,34 @@ open Base
 open Ppxlib
 module Read = Config_key_scan
 
+(** The source census used by the Verdict readers. It reads the value bindings inside the top-level
+    [module Claims = struct ... end] in [test/support/verdict.ml] after
+    {!Config_key_scan.structure_of} normalizes its structure. Only variable patterns supply names.
+    Other items or patterns (including [include] inside [Claims]) produce an unreadable entry so
+    coverage checks fail. An absent or differently declared module returns [None]. *)
+let claims_members verdict_source =
+  List.find_map (Read.structure_of verdict_source) ~f:(fun item ->
+      match item.pstr_desc with
+      | Pstr_module
+          {
+            pmb_name = { txt = Some "Claims"; _ };
+            pmb_expr = { pmod_desc = Pmod_structure items; _ };
+            _;
+          } ->
+          Some
+            (List.concat_map items ~f:(fun item ->
+                 let unreadable () =
+                   [ Printf.sprintf "<unreadable item, line %d>" item.pstr_loc.loc_start.pos_lnum ]
+                 in
+                 match item.pstr_desc with
+                 | Pstr_value (_, bindings) ->
+                     List.concat_map bindings ~f:(fun binding ->
+                         match binding.pvb_pat.ppat_desc with
+                         | Ppat_var { txt; _ } -> [ txt ]
+                         | _ -> unreadable ())
+                 | _ -> unreadable ()))
+      | _ -> None)
+
 (** The [Verdict.Claims] members, the names whose identifiers this resolver decides. Held equal to
     the module in [test/support/verdict.ml] by [verdict_ratchet]. *)
 let members =

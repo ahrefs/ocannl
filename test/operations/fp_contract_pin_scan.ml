@@ -171,7 +171,7 @@ let claim_slots = ref (Map.empty (module String))
 
 let load_claim_slots content =
   let exports =
-    Test_scan.Refusal_control_scan.claims_members content
+    Test_scan.Verdict_callee.claims_members content
     |> Option.value_exn ~message:"Verdict.Claims exports could not be read"
   in
   List.fold exports

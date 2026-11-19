@@ -874,6 +874,7 @@ verdict_ratchet.ml: [scanner-refusal:7005fe842a74ccccd962cdda19ae98be] line-brea
 verdict_ratchet.ml: [scanner-refusal:b56027d13651cbbf21ae177b43426575] parity claim hand-rolls (claim) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:d36bcdb919d2b79b23dc1e15969fde60] tolerance reader read (claim) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:2d867210446f1449a6beebc663d207c6] Verdict.Claims (claim) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
+verdict_ratchet.ml: [scanner-refusal:b03ecbfa5a4a006730722bb2e47ba011] Verdict.Claims (claim) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:20d88fc03901bcbdfbc113ed14029a7a] Verdict.Claims (claim) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:43f45dea7e13ae71ff6e05054baafcca] quantified claim passes (claim) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:e7253c1a7a914e2fb31ae0576e3b56eb] the literal floors (claim) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true

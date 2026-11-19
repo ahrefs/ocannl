@@ -456,6 +456,23 @@ The baseline run `20260925T141810Z-58665` exited 0.
 | `p` is not the PASS/FAIL dialect | `verdict_scan.ml`: `"p"` added to `pass_fail_callees` | Failed: `accepts a gated claim reported through p on its evaluated side`, and the corpus claim that no label reaches both dialects, since every correctly converted gated leg then reads as a pairing | `20260925T141922Z-77799` |
 | A pairing needs one label on both sides | `verdict_scan.ml`: the key comparison dropped from `same_label` | Failed: `accepts pass_fail and skipped on different labels`, `does not pair labels computed by different expressions, the blind spot gated closes` | `20260925T141933Z-80834` |
 
+## gh-ocannl-1291 claim coverage controls
+
+These runs used `tools/mutation-run.sh` with `OCANNL_BACKEND=cc` on macbook-pro against
+`@test/operations/runtest-verdict_ratchet`. Each mutant exited 1 and the runner restored the
+affected file byte-for-byte. The unmutated baselines exited 0. The same new export on the base
+(`20261119T153116Z-42849`) failed the resolver, label, leg, and folded-gate coverage checks.
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| A new export needs a quantifier classification | `verdict.ml`: add “let p_1291_new = p” inside `Claims` | Failed: “and the quantifier reader classifies each Verdict.Claims member exactly once” and the four existing coverage checks above | `20261119T153741Z-53592` |
+| A classification needs a live export | `verdict.ml`: remove the `pf_all2` binding from `Claims` | Failed: “and the quantifier reader classifies each Verdict.Claims member exactly once” and the resolver, label, floor, leg, and folded-gate checks | `20261119T153825Z-71810` |
+| The Boolean claim table covers exported forms | `verdict_provenance.ml`: remove `claimf` from `claim_kinds` | Failed: “and the quantifier reader classifies each Verdict.Claims member exactly once” | `20261119T153955Z-4141` |
+| Each export has one classification | `verdict_provenance.ml`: duplicate `p_pairwise_distinct` in `claims_without_boolean_argument` | Failed: “and the quantifier reader classifies each Verdict.Claims member exactly once” | `20261119T154034Z-18345` |
+| The derived PASS/FAIL family includes paired claims | `verdict_scan.ml`: replace the `pass_fail_` prefix match with an exact match for `pass_fail_close` | Failed: “refuses an opened pass_fail_all2 paired with a bound skip wrapper” | `20261119T154215Z-67018` |
+| The live partition check refuses changes to the source census | `verdict_ratchet.ml`: accept every partition | Failed: `refuses an unclassified quantifier form added to Verdict.Claims`, `refuses a quantifier classification for an export removed from Verdict.Claims` | `20261119T155311Z-24849` |
+| The derived PASS/FAIL family includes numeric comparison claims | `verdict_scan.ml`: exclude `pass_fail_close` from the derived family | Failed: `refuses pass_fail_close paired with a skip under the same label` | `20261119T155434Z-62734` |
+
 ## gh-ocannl-1289 mutation runs
 
 The gate-population reader (`Verdict_scan.gate_census`) refuses a `gated_all`, `gated_alli` or

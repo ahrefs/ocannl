@@ -546,9 +546,10 @@ let dynamic reason = Verdict.fail reason
 let () =
   let verdict_source = In_channel.read_all "../support/verdict.ml" in
   let mismatch source =
-    Option.map (Scan.claims_members source) ~f:(fun members -> Scan.claims_mismatch ~members)
+    Option.map (Test_scan.Verdict_callee.claims_members source) ~f:(fun members ->
+        Scan.claims_mismatch ~members)
   in
-  let members = Option.value_exn (Scan.claims_members verdict_source) in
+  let members = Option.value_exn (Test_scan.Verdict_callee.claims_members verdict_source) in
   let live = Scan.claims_mismatch ~members in
   List.iter live.unjudged ~f:(fun name ->
       eprintf

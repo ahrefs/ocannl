@@ -291,15 +291,16 @@ let scan content =
     [Verdict.gated] removes the trap by picking the dialect itself; this reader keeps the mixed
     spelling from regrowing.
 
-    What it pairs is a LABEL that reaches both a [pass_fail]/[pass_fail_all2] call and a [skipped]
-    call in one source. The label is the first positional argument, keyed three ways: a string
-    literal by its value; a name by the literal it is bound to, in its lexical scope through
-    [Lexical_scope] (the [let claim = "…"] shared by the two branches is the shape both sightings
-    had), otherwise by the name itself; anything else by its printed expression, so a label computed
-    the same way on both sides is still one label. A literal pairs across the whole source; a name
-    or an expression pairs only within one top-level item, since equal names in two functions need
-    not be one label. Named and computed keys retain their bindings' identities. The callees are
-    matched by their last path component, which is how an opened [Verdict.Claims] and the per-test
+    What it pairs is a LABEL that reaches both a PASS/FAIL claim and a [skipped] call in one source.
+    The dialect includes the [Verdict.Claims] names [pass_fail] and [pass_fail_*]. The label is the
+    first positional argument, keyed three ways: a string literal by its value; a name by the
+    literal it is bound to, in its lexical scope through [Lexical_scope] (the [let claim = "…"]
+    shared by the two branches is the shape both sightings had), otherwise by the name itself;
+    anything else by its printed expression, so a label computed the same way on both sides is still
+    one label. A literal pairs across the whole source; a name or an expression pairs only within
+    one top-level item, since equal names in two functions need not be one label. Named and computed
+    keys retain their bindings' identities. The callees are matched by their last path component,
+    which is how an opened [Verdict.Claims] and the per-test
     [let skipped = Verdict.skipped ~backend:backend_name] both read.
 
     Fail-loud boundary: unknown or shadowed labels stay named/computed rather than borrowing a
@@ -326,12 +327,15 @@ type dialect_pairing = { pass_fail : dialect_site; skipped : dialect_site }
 type dialect_census = {
   pairings : dialect_pairing list;
   skipped_sites : int;  (** Every [skipped] call whose label was read. *)
-  pass_fail_sites : int;  (** Every [pass_fail]/[pass_fail_all2] call whose label was read. *)
+  pass_fail_sites : int;  (** Every PASS/FAIL claim whose label was read. *)
 }
 (** The site counts are what a blind walk cannot produce, as {!scan}'s literal counts are for the
     claim-shape scan: they let the consuming test tell "no pairing" from "nothing read". *)
 
-let pass_fail_callees = [ "pass_fail"; "pass_fail_all2"; "pass_fail_close" ]
+let pass_fail_callees =
+  List.filter Verdict_callee.members ~f:(fun member ->
+      String.equal member "pass_fail" || String.is_prefix member ~prefix:"pass_fail_")
+
 let skipped_callees = [ "skipped" ]
 
 (** Whose a claim callee is, as {!Verdict_callee} resolves it: [Verdict]'s, [Ambiguous] -- reaching
