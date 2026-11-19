@@ -104,7 +104,11 @@ unit_rows() {
         bypassed[key]++
         if (!((key, $2) in took)) {
           took[key, $2] = 1
-          hatches[key] = (key in hatches) ? hatches[key] "; " $2 : $2
+          # Tested before the assignment, never inside it: mawk (the awk of Debian and Ubuntu) creates
+          # the target element of an assignment before it evaluates the right-hand side, so an `in`
+          # test there is always true.
+          if (key in hatches) hatches[key] = hatches[key] "; " $2
+          else hatches[key] = $2
         }
       } else checked[key]++
       next
@@ -163,7 +167,10 @@ awk '
     if (!(key in seen)) { seen[key] = 1; order[++n] = key }
     bypassed[key] += $4
     checked[key] += $5
-    units[key] = (key in units) ? units[key] ", " $1 " " $4 " of " ($4 + $5) : $1 " " $4 " of " ($4 + $5)
+    reach = $1 " " $4 " of " ($4 + $5)
+    # As for the hatches above: the `in` test stays out of the assignment, for mawk.
+    if (key in units) units[key] = units[key] ", " reach
+    else units[key] = reach
   }
   END {
     for (i = 1; i <= n; i++) {
