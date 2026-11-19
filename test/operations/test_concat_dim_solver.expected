@@ -5,10 +5,17 @@ AC1: GLB merge of two incompatible Concat bounds (stage 4) demotes to bcast-top
   PASS: operand demoted to broadcast-top (size 1), not committed to a bound
 AC1: GLB merge below stage 4 postpones (defers, operand left unsolved)
   PASS: inequality deferred and operand left unsolved for a later stage
-AC3: variables-only Concat=Concat at unequal arity (3 vs 2) links oldest vars
-  PASS: c=0, a=d (d read 7 after a:=7), b=e (e read 9 after b:=9)
-AC3: one side all-Var, other carries a solved Dim — pairing arm still fires
-  PASS: leftover bound b = 4 (solved Dim crossed into all-Var side)
+Unequal arity: variables-only [a; b; c] = [d; e] waits, in either orientation
+  PASS: [a; b; c] = [d; e]: one pending equation, c unsized, a := 7 leaves d unsized
+  PASS: [a; b; c] = [d; e]: a, b, c, d = 2, 3, 4, 1 then sizes e = 8, nothing pending
+  PASS: [a; b; c] = [d; e]: e = 7 against the same sizes is refused
+  PASS: [d; e] = [a; b; c]: one pending equation, c unsized, a := 7 leaves d unsized
+  PASS: [d; e] = [a; b; c]: a, b, c, d = 2, 3, 4, 1 then sizes e = 8, nothing pending
+  PASS: [d; e] = [a; b; c]: e = 7 against the same sizes is refused
+  PASS: closed as concatenation components: refused: the size of the concatenation component $31 is not determined, and closure does not guess one: it is a segment of the axis, not a broadcast. Size it: capture the component (the spec's trailing label list) and Shape.set_dim it, write its size as an integer component (e.g. 2^o => o), or pass the operation's result dims explicitly
+A solved side: [a; b] = [4; e] waits; a = 2, e = 3 then size b = 5
+  PASS: one pending equation, b unsized
+  PASS: b = 5 from the sum, nothing pending
 Nested Concat: Concat[Concat[a;b];c] = Concat[d;e;f] flattens, links a=d,b=e,c=f
   PASS: nested concat flattened; d=2 e=3 f=4 (a=d, b=e, c=f)
 AC3: all-Var side vs Affine-bearing side — pairing must NOT over-constrain
@@ -27,24 +34,44 @@ Tagged components: one verdict in either order
   PASS: [a; u] = 4 rgb, a = 1 rgb: u = 3 of rgb in either order
   PASS: [a; u] = 4, a = 3 bcast_if_1: an atom above size 1: refused in either order
   PASS: [a; u] = 4, a = 1 bcast_if_1: the claim-free top: u = 3 of default in either order
-  PASS: [a; u] = 3 rgb, a = 0 bcast_if_1: an empty segment claims nothing: u = 3 of rgb in either order
+  PASS: [a; u] = 3 rgb, a = 0 bcast_if_1, a discardable: an empty segment claims nothing: u = 3 of rgb in either order
   PASS: [u; 2] = [k; 2 rgb], k = 3: a zero residual keeps its claim: u = 3 of rgb in either order
   PASS: [u; 2 rgb] = [k; 2 rgb], k = 3 hsv: claimed components do not cancel: refused in either order
 Zero components: only a discardable one is sized 0, in every order
-  [u; 4] = [k; 2 a], k = 2: the zero residual is not sized: refused in every order: true
-  [u; 4] = [k; 2 a], k = 2, u = 0 a: the answer the base gave, stated: refused in every order: true
-  [u; 4] = [k; 2 a], k = 4: a positive residual takes the claim: u = 2 of a, k = 4 of default in every order: true
-  [u; 4] = [k; 2 a], k = 2, u discardable: an empty segment cannot carry the claim: refused in every order: true
-  [u; 4] = [k; 2 h], k = 2: the zero residual is not sized: refused in every order: true
-  [u; 4] = [k; 2 h], k = 2, u = 0 h: the answer the base gave, stated: refused in every order: true
-  [u; 4] = [k; 2 h], k = 4: a positive residual takes the claim: u = 2 of h, k = 4 of default in every order: true
-  [u; 4] = [k; 2 h], k = 2, u discardable: an empty segment cannot carry the claim: refused in every order: true
-  [u; 4] = [k; 2], k = 2: no claim, still not sized: refused in every order: true
-  [u; 4] = [k; 2], k = 2, u discardable: sized 0: u = 0 of default, k = 2 of default in every order: true
-  [u; 4] = [k; 2], k = 2, u = w, u discardable: sized 0: u = 0 of default, k = 2 of default in every order: true
+  [u; 4] = [k; 2 a], k = 2: the zero residual is not sized: refused in every order, and batched: true
+  [u; 4] = [k; 2 a], k = 2, u = 0 a: the answer the base gave, stated: refused in every order, and batched: true
+  [u; 4] = [k; 2 a], k = 4: a positive residual takes the claim: u = 2 of a, k = 4 of default in every order, and batched: true
+  [u; 4] = [k; 2 a], k = 2, u discardable: an empty segment cannot carry the claim: refused in every order, and batched: true
+  [u; 4] = [k; 2 h], k = 2: the zero residual is not sized: refused in every order, and batched: true
+  [u; 4] = [k; 2 h], k = 2, u = 0 h: the answer the base gave, stated: refused in every order, and batched: true
+  [u; 4] = [k; 2 h], k = 4: a positive residual takes the claim: u = 2 of h, k = 4 of default in every order, and batched: true
+  [u; 4] = [k; 2 h], k = 2, u discardable: an empty segment cannot carry the claim: refused in every order, and batched: true
+  [u; 4] = [k; 2], k = 2: no claim, still not sized: refused in every order, and batched: true
+  [u; 4] = [k; 2], k = 2, u discardable: sized 0: u = 0 of default, k = 2 of default in every order, and batched: true
+  [u; 4] = [k; 2], k = 2, u = w, u discardable: sized 0: u = 0 of default, k = 2 of default in every order, and batched: true
   bounds 4 and [u; 4 a] on one operand (the concatenation first), then u = 1 a: accepted: true
   bounds 4 and [u; 4 a] on one operand (4 first), then u = 1 a: accepted: true
-  [u; 4] = [k; 2], k = 2, u = 0 stated: one verdict in every order: u = 0 of default, k = 2 of default in every order: true
+  [u; 4] = [k; 2], k = 2, u = 0 stated: refused: refused in every order, and batched: true
+  u = 0 stated, nothing else: refused: refused in every order, and batched: true
+  0 = u stated, nothing else: refused: refused in every order, and batched: true
+  u = 0 stated, u discardable: sized 0: u = 0 of default, k = 1 of bcast_if_1 in every order, and batched: true
+  w = 0, u = w, w discardable: u inherits 0: u = 0 of default, k = 1 of bcast_if_1 in every order, and batched: true
+  u = 0, u = w, w discardable: the alias licenses u: u = 0 of default, k = 1 of bcast_if_1 in every order, and batched: true
+  w = 0, [u] = [w] as rows, w discardable: u inherits 0: u = 0 of default, k = 1 of bcast_if_1 in every order, and batched: true
+  [u; 4] = [k; 2], k = 2, u sized 0 by a setter: refused: refused in every order, and batched: true
+  u sized 0 by a setter, nothing else: refused: refused in every order, and batched: true
+  u sized 0 by a setter, u discardable: sized 0: u = 0 of default, k = 1 of bcast_if_1 in every order, and batched: true
+  u = [] stated, the empty concatenation: refused: refused in every order, and batched: true
+  w = 0, u = 0, w discardable: u is refused: refused in every order, and batched: true
+  u a concatenation component, u = 0 stated: a zero-width segment: u = 0 of default, k = 1 of bcast_if_1 in every order, and batched: true
+  [u; 4] = [k; 2], k = 2, u = 0 stated, u a component: sized 0: u = 0 of default, k = 2 of default in every order, and batched: true
+  [u; 4] = [k; 2], k = 2, u a component: the zero residual is not sized: refused in every order, and batched: true
+  [k; u; 2] = [k; 2], u a component: refused, not sized 0: refused in every order, and batched: true
+  [k; u; 2] = [k; 2], u discardable: sized 0: u = 0 of default, k = 1 of bcast_if_1 in every order, and batched: true
+Closure guesses an alias of a discardable component to 0
+  u = w, u discardable: both 0 in either orientation, nothing pending: true
+  u = w, u discardable, w a concatenation component: both 0 in either orientation, nothing pending: true
+  a bounded closing component aliased to a discardable one: u = 3 of a, k = 5 of default in either orientation: true
   matching plain concat bounds settle to both GLBs in either orientation: true
   a plain concat bound at the minimum leaves a positive residual in either orientation: true
   held size equations still supply the components at the minimum: true

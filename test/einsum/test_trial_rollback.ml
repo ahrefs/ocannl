@@ -62,9 +62,15 @@ let value env v =
 
 let show = function Ok (_, env) -> fun v -> value env v | Error msg -> fun _ -> "refused: " ^ msg
 
-(* merge_by_equality, refused: [a; c; 5] against the bound [b; 3]. The pairing arm equates a = b,
-   sharing a's mark, before the residual [c; 5] exceeds [3]. *)
-let merge_refused ~mark =
+(* merge_by_equality: [a; c; 5] against the bound [b; 3]. The variables-only pairing arm once
+   equated a = b, sharing a's mark, before the residual [c; 5] exceeded [3], and the merge was
+   refused, demoting the operand to the broadcast top. That refusal was the pairing's: [b = a + c +
+   2] satisfies the sum, and since gh-ocannl-2368 the equation waits instead, so the merge commits
+   and no mark is shared. With [b] then sized 7 by its bound, [a + c = 5] is left to closure, which
+   cannot split it: the store is refused, alike with and without the mark. No other trial here
+   shares a mark through the pairing arm and is then refused: pairing now fires only where it
+   discharges the equation whole. *)
+let merge_reconciled ~mark =
   let v = Row.get_var () and b = Row.get_var () and a = Row.get_var () and c = Row.get_var () in
   if mark then Row.add_resolve_at_use_dim a;
   let r =
@@ -114,13 +120,16 @@ let marked_directly () =
     b
 
 let () =
-  Verdict.case "a refused or postponed equality merge of two bounds leaves no mark" (fun () ->
+  Verdict.case "a reconciled or postponed equality merge of two bounds leaves no mark" (fun () ->
       p "control: a variable marked itself closes to its bound of 7"
         (String.equal (marked_directly ()) "7 of default");
-      let v, b, b_marked = merge_refused ~mark:true and v', b', _ = merge_refused ~mark:false in
-      p "refused at stage 4: [a; c; 5] against [b; 3] demotes the operand" (String.equal v v');
-      p "and b, merged with the marked a inside the refused attempt, stays unmarked" (not b_marked);
-      p "so it closes as with nothing marked" (String.equal b b' && String.equal b "1 of bcast_if_1");
+      let v, b, b_marked = merge_reconciled ~mark:true
+      and v', b', _ = merge_reconciled ~mark:false in
+      p "at stage 4: [a; c; 5] against [b; 3] settles alike with and without the mark"
+        (String.equal v v');
+      p "and b, never merged with the marked a, stays unmarked" (not b_marked);
+      p "so it closes as with nothing marked: refused, since closure cannot split a + c = 5"
+        (String.equal b b' && String.is_prefix b ~prefix:"refused");
       let v, b, b_marked = merge_postponed ~mark:true and v', b', _ = merge_postponed ~mark:false in
       p "postponed below stage 4: [a; c] against [b; d], a solved before the merge applies"
         (String.equal v v');

@@ -13,11 +13,11 @@ tensor/row.ml: subst_whole_env (ref) -- exempt: a test switch, set only around a
 tensor/row.ml: subst_visit_count (ref) -- exempt: a work counter of solution substitution, not inference state
 tensor/row.ml: row_visit_emission_count (ref) -- exempt: a work counter of solution substitution, not inference state
 tensor/row.ml: subst_cross_check_forced (ref) -- exempt: a test switch, set only around a test's own run
+tensor/row.ml: concat_component_vars (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/row.ml: safe_to_guess (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/row.ml: parameter_outputs (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/row.ml: used_in_spec_or_compose (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/row.ml: used_in_pointwise (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
-tensor/row.ml: concat_component_vars (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/row.ml: resolve_at_use (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/row.ml: global_rank_edges (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/row.ml: global_rank_potentials (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
