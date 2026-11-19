@@ -2386,8 +2386,8 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
   (* Each source compiled as a module a leg is built by a function of (gh-ocannl-2336), parsed once:
      the structure it is, or why the reader does not follow its functions. *)
   let defining_structures = Hashtbl.create (module String) in
-  (* The bindings a structure exports before an [include] whose exports this reader does not know,
-     which may rebind them (gh-ocannl-2336, review). *)
+  (* The fresh bindings a structure exports in place of the ones it exported before an [include]
+     whose exports this reader does not know, which may rebind them (gh-ocannl-2336, review). *)
   let rebindable = Hash_set.create (module Int) in
   (* The callers walked, by source: a caller that also defines a module a leg is built by a function
      of is read as it was walked, not walked again. *)
@@ -2888,29 +2888,34 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
                         exports )
                   | Pstr_include { pincl_mod; _ } -> (
                       let denotes = self#module_of env pincl_mod in
-                      (* An include whose exports are not all known may rebind any name exported so
-                         far (gh-ocannl-2336, review). *)
-                      let unknown () =
+                      (* An include whose exports are not all known may rebind any name this
+                         structure exported so far, its submodules' included: each becomes a binding
+                         of its own the reader knows nothing of (gh-ocannl-2336, review), in this
+                         structure's exports alone -- the structure it came from keeps its own. *)
+                      let unknown exports =
                         opaque := true;
-                        (* Its submodules' exports too, which the include may replace. *)
-                        let rec mark values modules =
-                          List.iter values ~f:(fun (_, { identity; _ }) ->
-                              Hash_set.add rebindable identity);
-                          List.iter modules ~f:(function
-                            | _, Local_structure { values; modules; _ } -> mark values modules
-                            | _ -> ())
+                        let rec forget values modules =
+                          ( List.map values ~f:(fun (name, _) ->
+                                let unknown = self#local in
+                                Hash_set.add rebindable unknown.identity;
+                                (name, unknown)),
+                            List.map modules ~f:(function
+                              | name, Local_structure { values; modules; _ } ->
+                                  let values, modules = forget values modules in
+                                  (name, Local_structure { values; modules; opaque = true })
+                              | other -> other) )
                         in
-                        mark exports !module_exports
+                        let values, modules = forget exports !module_exports in
+                        module_exports := modules;
+                        values
                       in
                       ( self#opened ~top:false ~include_:true env denotes,
                         match denotes with
                         | Some (Local_structure { values; modules; opaque = included_opaque }) ->
-                            if included_opaque then unknown ();
+                            let exports = if included_opaque then unknown exports else exports in
                             module_exports := !module_exports @ modules;
                             exports @ values
-                        | _ ->
-                            unknown ();
-                            exports ))
+                        | _ -> unknown exports ))
                   | _ -> (env, exports))
             in
             let latest pairs =
@@ -3620,20 +3625,20 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
                   Lexical_scope.bind_values scope [ name ]
                     { (self#local) with definition = Some (value, value_env) }
                 in
-                match (Read.pattern_name pattern, self#argument_for slot arguments) with
-                | Some name, `Given e -> bound e env name
-                | Some name, `Option e -> (
-                    (* [?l:e] for a parameter with a default is [e]'s payload or the default
-                       (gh-ocannl-2336, local review): a literal [None] or [Some x] says which. Any
-                       other [e] a leg's way refuses beforehand ({!unresolved_option}). *)
-                    match (slot, (strip_constraints e).pexp_desc) with
-                    | ( Optional_slot (_, Some (d, d_env)),
-                        Pexp_construct ({ txt = Lident "None"; _ }, None) ) ->
-                        bound d d_env name
-                    | ( Optional_slot (_, Some _),
-                        Pexp_construct ({ txt = Lident "Some"; _ }, Some payload) ) ->
-                        bound payload env name
-                    | _ -> bound e env name)
+                (* [?l:e] for a parameter with a default is [e]'s payload or the default
+                   (gh-ocannl-2336, local review): a literal [None] or [Some x] says which. Any
+                   other [e] a leg's way refuses beforehand ({!unresolved_option}). *)
+                let supplied =
+                  match (self#argument_for slot arguments, slot) with
+                  | `Option e, Optional_slot (_, Some d) -> (
+                      match (strip_constraints e).pexp_desc with
+                      | Pexp_construct ({ txt = Lident "None"; _ }, None) -> `Default d
+                      | Pexp_construct ({ txt = Lident "Some"; _ }, Some payload) -> `Given payload
+                      | _ -> `Given e)
+                  | argument, _ -> argument
+                in
+                match (Read.pattern_name pattern, supplied) with
+                | Some name, (`Given e | `Option e) -> bound e env name
                 | Some name, `Default (d, d_env) -> bound d d_env name
                 (* A destructured parameter is the parts of what is supplied (gh-ocannl-2336,
                    review). *)
@@ -4140,7 +4145,7 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
         let spelled = Ppxlib.Longident.name (Ldot (prefix, name)) in
         let defined values ~where =
           match List.Assoc.find values name ~equal:String.equal with
-          | Some { identity; _ } when identity > 0 && Hash_set.mem rebindable identity ->
+          | Some { identity; _ } when Hash_set.mem rebindable identity ->
               Error
                 (Printf.sprintf
                    "its leg is the result of `%s`, which a later `include` in %s of a module the \

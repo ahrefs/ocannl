@@ -5421,6 +5421,33 @@ let rows_leg leg rows ?(pair = (rows, ())) () = from_pair leg pair|ocaml},
       [],
       [ "uncompared in_leg" ],
       0 );
+    ( "refuses a leg another source's function destructures from the default its caller's None \
+       leaves",
+      claim_under "Legs.rows_leg leg rows ?pair:None ()",
+      legs
+        {ocaml|let rows_leg leg rows ?pair:((xs, _) = (rows, ())) () =
+  Verdict.sub_leg leg ~when_:(lazy (not (List.is_empty xs))) ~on:"no rows"|ocaml},
+      [],
+      [ "rows" ],
+      1 );
+    ( "accepts a leg built by a structure's function that another structure includes before an \
+       unreadable include",
+      {ocaml|open Verdict.Claims
+module Safe = struct
+  let arm_leg leg = Verdict.sub_leg leg ~when_:(lazy on_gpu) ~on:"a CPU"
+end
+module Copy = struct
+  include Safe
+  include Other
+end
+let () =
+  let leg = Verdict.leg ~when_:on_gpu ~on:backend_name () in
+  let rows = probe () in
+  in_leg ~leg:(Safe.arm_leg leg) "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      none,
+      [],
+      [],
+      1 );
     ( "names a leg uncompared that is the result of a function of a module no source defines",
       claim_under "Legs.arm_leg leg k16",
       none,

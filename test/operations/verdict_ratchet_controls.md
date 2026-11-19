@@ -989,7 +989,7 @@ body, with the application's arguments bound; and the ratchet refuses every leg 
 leaves uncompared unless `exempt_uncompared_legs` names it, stale-checked. Each row also states how
 many claims were compared, as the gh-ocannl-1893 rows do. Every run used tools/mutation-run.sh
 --batch with the focused alias on mac-studio (M4 Max), on a green baseline (`verdict_scan.ml`:
-`20261118T213400Z-37206`; `verdict_ratchet.ml`: `20261118T205244Z-97507`; the Codex round 2 rows ran on `20261119T000358Z-46285`), and restored the source
+`20261118T213400Z-37206`; `verdict_ratchet.ml`: `20261118T205244Z-97507`; the Codex round 2 rows ran on `20261119T000358Z-46285`, round 3's on `20261119T003257Z-76899`), and restored the source
 byte for byte.
 
 | Mechanism | Mutation | Controls | Run |
@@ -1008,6 +1008,8 @@ byte for byte.
 | A gate the body builds on a binding written elsewhere is not followed (Codex round 2) | `verdict_scan.ml`: no gate read for a written binding | Failed: `names a leg uncompared whose other-source gate reads a reference a helper there writes` | `20261119T000732Z-53391` |
 | A defining caller's values keep the scope it was walked in (Codex round 2) | `verdict_scan.ml`: a defining caller's values rebuilt in an empty scope | Failed: `accepts a leg a caller builds through a third source's function that applies the claim's own` | `20261119T000820Z-80316` |
 | An optional handed by name to a defaulted parameter leaves the leg uncompared (Codex round 2) | `verdict_scan.ml`: the unresolved optional not refused on another source's function | Failed: `names a leg uncompared that another source's function builds from an optional it is handed by name` | `20261119T000928Z-13303` |
+| A destructured optional parameter resolves a literal `None` to its default first (Codex round 3) | `verdict_scan.ml`: the option itself destructured | Failed: `refuses a leg another source's function destructures from the default its caller's None leaves` | `20261119T003318Z-556` |
+| An opaque include forgets only the including structure's exports (Codex round 3) | `verdict_scan.ml`: the original bindings marked rebindable | Failed: `accepts a leg built by a structure's function that another structure includes before an unreadable include` | `20261119T003421Z-37502` |
 | A module no source is compiled as leaves the leg uncompared | none: the boundary row, read by the rows above | `names a leg uncompared that is the result of a function of a module no source defines` stays green under every mutation | the runs above |
 | A module alias of another source binds no structure, so the leg stays uncompared (review checkpoint) | none: the boundary row, its callee gating on the rows so that following the alias would refuse it rather than leave it uncompared | `names a leg uncompared that is the result of a function under a module alias of another source` stays green under every mutation | the runs above |
 
