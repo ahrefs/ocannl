@@ -736,6 +736,17 @@ let prefill tn =
     [Context.written_first], the set the [debug_fill_fresh_outputs] key fills too. *)
 let written_before_read (routine : Context.routine) = routine.Context.written_first
 
+(** A transform that removed a lowered [Zero_out] supplies the accumulator's initial zero
+    explicitly. The pending list can also hold nodes from a compile that never ran, so seed only
+    buffers of this routine that would otherwise start from the fresh-output fill. *)
+let state_dropped_zeros dropped_zeros ctx routine =
+  let nodes = !dropped_zeros in
+  dropped_zeros := [];
+  List.fold nodes ~init:ctx ~f:(fun ctx tn ->
+      if Set.mem (written_before_read routine) tn && Context.mem ctx tn then
+        Context.set_values ctx tn (Array.create ~len:(Tn.num_elems tn) 0.)
+      else ctx)
+
 (** [run_linked (ctx, routine) ~seed] drives the executed leg of an ALREADY-LINKED pair: uploads
     [seed], runs, and returns the context the values can be read from. It is the half of {!run} that
     survives keeping the routine — a test asserting on the [inputs]/[outputs] the link actually

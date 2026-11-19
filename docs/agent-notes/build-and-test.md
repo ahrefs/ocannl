@@ -3338,7 +3338,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   no writer covers and should seed it (`Ll_test.blank`) or stop reading it. Rerun with
   `OCANNL_DEBUG_FILL_FRESH_OUTPUTS=false` to see it was the fill. A test whose `lowered_transform`
   replaces the lowered code owes the zero it dropped, as a seed between compile and run
-  (`hardware_warp_shuffle`'s `state_dropped_zeros`): the replacement leaves the node written first,
+  (`Ll_test.state_dropped_zeros`): the replacement leaves the node written first,
   so the run starts it from the fill. A zero dropped AFTER the analysis
   is what it catches: `written_first` is decided before scheduling, so a schedule or codegen drop
   leaves the node there, and so does a dropped init of a write that does not read its target (a

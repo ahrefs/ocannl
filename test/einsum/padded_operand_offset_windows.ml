@@ -676,9 +676,9 @@ let run_pytorch_oracle () =
   gradient ~reduce:`Max "gradient of max 2*o=+k, window 2"
     { stride = 2; offset = 0; dilation = 1 }
     ~n:8 ~w:[| 0.; 1. |] "s, 2*o=+k; k => s, o";
-  (* The right margin keeps [(span + 1) / 2], one cell past what an offset-free even window reads:
-     no value can see that, taps past the margins being guarded, so the committed margins are
-     checked as they stand. *)
+  (* The right margin [(span + 1) / 2] is exact for offset-free even spans: K=2 reads through [o+1]
+     and needs 1 cell, and K=4 reads through [o+2] and needs 2. The extra cell beyond the last tap
+     belongs to odd spans. *)
   let margins label ~kk spec ~want_left ~want_right =
     case label (fun () ->
         Tensor.unsafe_reinitialize ();

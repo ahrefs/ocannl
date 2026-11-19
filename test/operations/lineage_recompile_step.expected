@@ -21,3 +21,9 @@ max reduction: compiles again in the lineage that ran it: true
 max reduction: still virtual after the recompile: true
 max reduction: the recompile computes the maxima: true
 max reduction: the recompile agrees with a materialized lineage: true
+product reduction: virtual after its first compile: true
+product reduction: the first compile computes the products: true
+product reduction: compiles again in the lineage that ran it: true
+product reduction: still virtual after the recompile: true
+product reduction: the recompile computes the products: true
+product reduction: the recompile agrees with a materialized lineage: true

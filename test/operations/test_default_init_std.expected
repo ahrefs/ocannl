@@ -1,3 +1,6 @@
+the temporary initializer is installed: true
+the initializer override propagates the exception: true
+the next case sees the prior initializer: true
 default uniform1 [-0.25,0.25): std: expected 0.1443 (tol 0.0300): PASS
 default uniform1 [-0.25,0.25): mean: expected 0.0000 (tol 0.0400): PASS
 default uniform1 unique values: 5000 of 5000
