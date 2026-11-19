@@ -2104,7 +2104,7 @@ class DominantKernelTest(unittest.TestCase):
 
         self.assertEqual(
             orchestrate.dominant_kernel_cell({"dominant_kernel": k}),
-            "25.0% f32 memory \u00b7 k3/12 4.000 ms w1.grad 'b1'",
+            "25.0% f32 memory \u00b7 k3/12 4.000 ms (queued) w1.grad 'b1'",
         )
 
     def test_an_inexact_cell_keeps_the_kernels_identity_but_prints_no_number(self):
@@ -2112,7 +2112,7 @@ class DominantKernelTest(unittest.TestCase):
 
         self.assertEqual(
             orchestrate.dominant_kernel_cell({"dominant_kernel": k}),
-            "approx \u00b7 k3/12 4.000 ms w1.grad 'b1'",
+            "approx \u00b7 k3/12 4.000 ms (queued) w1.grad 'b1'",
         )
 
     def test_untimed_kernels_are_counted_in_the_cell(self):
@@ -2131,7 +2131,7 @@ class DominantKernelTest(unittest.TestCase):
         )
 
         self.assertIn(" kernel %peak |", text)
-        self.assertIn("| 25.0% f32 memory \u00b7 k3/12 4.000 ms w1.grad 'b1' |", text)
+        self.assertIn("| 25.0% f32 memory \u00b7 k3/12 4.000 ms (queued) w1.grad 'b1' |", text)
         pytorch_row = next(l for l in text.splitlines() if l.startswith("| pytorch"))
         self.assertIn("| \u2014 |", pytorch_row)
 
@@ -2166,6 +2166,88 @@ class DominantKernelTest(unittest.TestCase):
 
         self.assertIn("none in this section", text)
         self.assertIn("| no ceiling \u00b7 k3/12", text)
+
+    # gh-ocannl-1860: a dominant kernel's time names the autotune_timing mode it was measured under,
+    # and one column holds one mode.
+
+    def test_the_cell_names_the_mode_the_time_was_measured_under(self):
+        k = self.emitted()["exact, isolated"]
+
+        self.assertEqual(k["timing"], "isolated")
+        self.assertEqual(
+            orchestrate.dominant_kernel_cell({"dominant_kernel": k}),
+            "25.0% f32 memory \u00b7 k3/12 4.000 ms (isolated) w1.grad 'b1'",
+        )
+
+    def mixed_rows(self):
+        emitted = self.emitted()
+        return [
+            self.row("ocannl", "metal", emitted["exact"], p50=1.0),
+            self.row("ocannl", "cc", emitted["exact, isolated"], p50=2.0),
+        ]
+
+    def test_rows_measured_under_different_modes_are_refused_in_one_column(self):
+        out = Path(tempfile.mkdtemp())
+        rows = self.mixed_rows()
+        orchestrate.parity_check(rows)
+
+        with self.assertRaises(ValueError) as e:
+            orchestrate.report(rows, out)
+        message = str(e.exception)
+        self.assertIn("`isolated`: ocannl/cc/", message)
+        self.assertIn("`queued`: ocannl/metal/", message)
+        # Refused before anything is written, as the report's other refusals are.
+        self.assertFalse((out / "report.md").exists())
+        self.assertFalse((out / "results.jsonl").exists())
+
+    def test_a_ceiling_is_not_shared_across_modes(self):
+        with self.assertRaises(ValueError) as e:
+            orchestrate.dominant_kernel_ceilings(self.mixed_rows())
+        self.assertIn("different autotune_timing modes", str(e.exception))
+
+    def test_rows_measured_under_one_mode_share_the_column_and_the_header_names_it(self):
+        emitted = self.emitted()
+        rows = [
+            self.row("ocannl", "metal", emitted["exact"], p50=1.0),
+            self.row("ocannl", "cc", emitted["exact f16-native"], p50=2.0),
+            # A row with no kernel time takes no part in the agreement.
+            self.row("ocannl", "cuda", emitted["no-kernel"], p50=3.0),
+        ]
+
+        self.assertEqual(orchestrate.dominant_kernel_timing(rows), "queued")
+        text = self.rendered(rows)
+        self.assertIn("| 25.0% f32 memory \u00b7 k3/12 4.000 ms (queued) w1.grad 'b1' |", text)
+        self.assertIn("`queued` for every row of this section", text)
+
+    def test_a_kernel_without_a_time_states_no_mode(self):
+        self.assertIsNone(
+            bench_output.dominant_kernel_timing({"dominant_kernel": self.emitted()["no-kernel"]})
+        )
+        self.assertIsNone(bench_output.dominant_kernel_timing({"dominant_kernel": None}))
+
+    def test_a_line_from_before_the_field_reads_as_not_recorded_and_never_matches_a_mode(self):
+        old = {k: v for k, v in self.emitted()["exact"].items() if k != "timing"}
+
+        self.assertEqual(
+            orchestrate.dominant_kernel_cell({"dominant_kernel": old}),
+            "25.0% f32 memory \u00b7 k3/12 4.000 ms (not recorded) w1.grad 'b1'",
+        )
+        # A report of such rows alone still renders, as every older report's rows do...
+        self.assertIn("(not recorded)", self.rendered([self.row("ocannl", "metal", old)]))
+        # ...but beside a recorded mode either mode could be behind it.
+        with self.assertRaises(ValueError) as e:
+            orchestrate.dominant_kernel_ceilings(
+                [self.row("ocannl", "metal", old), self.row("ocannl", "cc", self.emitted()["exact"])]
+            )
+        self.assertIn("`not recorded`", str(e.exception))
+
+    def test_a_timed_kernel_with_an_unusable_mode_is_refused(self):
+        for bad in (None, "", 3):
+            with self.subTest(timing=bad):
+                with self.assertRaises(ValueError):
+                    bench_output.dominant_kernel_timing(
+                        {"dominant_kernel": dict(self.emitted()["exact"], timing=bad)}
+                    )
 
     def test_the_result_line_carries_the_object_through_the_report_unchanged(self):
         # results.jsonl is what a later re-render reads: the object must survive serialization.

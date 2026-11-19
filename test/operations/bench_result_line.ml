@@ -176,7 +176,7 @@ let ceiling ?(gpu = true) ?(tensorization = "not-requested") ?(narrow_native = f
 
 let kernel ?(flops = 1_000_000_000) ?(bytes = 1_000_000_000) ?(flops_exact = true)
     ?(bytes_exact = true) ?(opaque = false) ?(tensorization = "not-requested") ?(seg_ms = 4.)
-    ?(seg_ms_lo = 0.875 *. seg_ms) ?(seg_ms_hi = 1.25 *. seg_ms) () =
+    ?(seg_ms_lo = 0.875 *. seg_ms) ?(seg_ms_hi = 1.25 *. seg_ms) ?(timing = "queued") () =
   {
     Bench_json.segment = 3;
     segments = 12;
@@ -186,6 +186,7 @@ let kernel ?(flops = 1_000_000_000) ?(bytes = 1_000_000_000) ?(flops_exact = tru
     seg_ms;
     seg_ms_lo;
     seg_ms_hi;
+    timing;
     segments_ms = 20.;
     tensorization;
     flops;
@@ -203,6 +204,11 @@ let dominant_kernels =
       Bench_json.dominant_kernel_object
         ~ceiling:(ceiling ~gpu:false ~narrow_native:true ())
         (Some (kernel ~flops:40_000_000_000 ~seg_ms:8. ())) );
+    ( "exact, isolated",
+      (* gh-ocannl-1860: the same kernel re-timed under [isolated]; a report refuses to put it in
+         one column beside the [queued] one (benchmarks/test_orchestrate.py reads both). *)
+      Bench_json.dominant_kernel_object ~ceiling:(ceiling ()) (Some (kernel ~timing:"isolated" ()))
+    );
     ( "exact, range unstated",
       (* gh-ocannl-1694: fewer admitted timing calls than [Bench_retime.min_readings] state a median
          and no range; the attainment reads the median either way. *)
@@ -523,6 +529,14 @@ let () =
     (Yojson.Safe.equal (member "seg_ms" (dk "exact")) (`Int 4)
     && Yojson.Safe.equal (member "seg_ms_lo" (dk "exact")) (`Float 3.5)
     && Yojson.Safe.equal (member "seg_ms_hi" (dk "exact")) (`Int 5));
+  p "the dominant kernel's time names the timing mode it was measured under (gh-ocannl-1860)"
+    (Yojson.Safe.equal (member "timing" (dk "exact")) (`String "queued")
+    && Yojson.Safe.equal (member "timing" (dk "exact, isolated")) (`String "isolated"));
+  p "the no-kernel object carries the timing field too, as null"
+    (match dk "no-kernel" with
+    | `Assoc fields ->
+        Yojson.Safe.equal (List.Assoc.find_exn fields "timing" ~equal:String.equal) `Null
+    | _ -> false);
   p "an unstated range is null, not a number, and the attainment still reads the median"
     (Yojson.Safe.equal (member "seg_ms_lo" (dk "exact, range unstated")) `Null
     && Yojson.Safe.equal (member "seg_ms_hi" (dk "exact, range unstated")) `Null

@@ -27,6 +27,7 @@ the table's legend states the autotune_timing the run pinned: true
 kernel_attribution reads the legend's timing off the cell's .err: true
 a legend stating queued timing reads as queued: true
 an .err with the legend removed states no timing: true
+the dominant-kernel record names the timing mode the table's legend states: true
 == the launch-geometry trace (schedule_log_launches)
 the harness run traced its launches: true
 each launch reads a 3-D grid and block: true

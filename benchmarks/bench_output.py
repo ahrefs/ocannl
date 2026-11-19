@@ -9,7 +9,8 @@ and a change to the emitter has one place to land. The formats:
   the Python runners' `bench_common.emit`): one JSON object on stdout, the last line that opens one
   -- `result_lines`, `result_record`, `only_result_record`. Its fields are the benchmarks README's
   result schema (`step_ms.p50`, `compile_s`, `searched`, `tune.*`, `losses`, ...); `field` walks a
-  dotted path into it.
+  dotted path into it. The timing mode its dominant kernel's time was measured under
+  (`dominant_kernel.timing`, gh-ocannl-1860) -- `dominant_kernel_timing`.
 - Checkpoints on stderr (`Bench_json.checkpoint_prefix`, gh-ocannl-1209): the parity losses a cell
   saw before a later stage, all that is left when it is killed there -- `last_checkpoint`.
 - Compile timing records on stderr under `BENCH_TIMING_TRACE=1` (`timing-trace: compile ...`) --
@@ -105,6 +106,32 @@ def only_result_record(text):
     if len(lines) != 1:
         raise ValueError(f"expected one result line, found {len(lines)}")
     return strict_json.loads(lines[0])
+
+
+# A result row whose dominant kernel has a time but whose line predates gh-ocannl-1860 carries no
+# `timing` field. Not a mode name (it has a space), so it never equals a recorded one.
+TIMING_NOT_RECORDED = "not recorded"
+
+
+def dominant_kernel_timing(result):
+    """The `autotune_timing` mode the dominant kernel's time (`seg_ms`, and its range) on a result
+    record was measured under (`Bench_json.kernel`'s `timing`, gh-ocannl-1860): the emitter's
+    spelling (`queued`, `isolated`), or TIMING_NOT_RECORDED for a line from before the field, or
+    None when the row has no such time -- no `dominant_kernel` object, or one that timed no kernel
+    (`segment` null). ValueError for a timed kernel whose `timing` is not a non-empty string,
+    which no emitter writes.
+
+    This JSON field has no place in `FORMATS`, a registry of TEXT lines and their anchors; this
+    function is its one reader all the same, and every consumer of the mode calls it."""
+    k = result.get("dominant_kernel")
+    if not isinstance(k, dict) or k.get("segment") is None:
+        return None
+    if "timing" not in k:
+        return TIMING_NOT_RECORDED
+    timing = k["timing"]
+    if not isinstance(timing, str) or not timing:
+        raise ValueError(f"a timed dominant kernel states no usable timing mode: {timing!r}")
+    return timing
 
 
 def last_checkpoint(text):

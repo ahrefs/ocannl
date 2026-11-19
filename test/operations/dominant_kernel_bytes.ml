@@ -79,8 +79,8 @@ let plans =
   List.filter_map (Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits base) ~f:applied
 
 let record (o : LL.optimized) =
-  H.dominant_kernel_record ~segment:0 ~segments:1 ~declined:0 ~seg_ms:1. ~segments_ms:1.
-    ~tensorization:"none" o
+  H.dominant_kernel_record ~segment:0 ~segments:1 ~declined:0 ~seg_ms:1. ~timing:Autotune.Queued
+    ~segments_ms:1. ~tensorization:"none" o
 
 (* The nodes the ranking score keeps off the DRAM leg, and their whole-kernel bytes. *)
 let scratch (o : LL.optimized) =

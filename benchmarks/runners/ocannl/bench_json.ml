@@ -354,6 +354,15 @@ type kernel = {
   seg_ms_lo : float;
       (** The least of those readings; NaN ([null]) below [Bench_retime.min_readings] of them. *)
   seg_ms_hi : float;  (** The greatest, likewise. *)
+  timing : string;
+      (** The [autotune_timing] mode [seg_ms], [seg_ms_lo] and [seg_ms_hi] were measured under
+          ([Autotune.timing_string]: ["queued"] or ["isolated"]), as the timing calls that produced
+          them report it -- the mode the re-timing ([Bench_retime.retime]) returned -- never the
+          configuration read again when the line is written (gh-ocannl-1860). A [queued] and an
+          [isolated] time are different quantities: an isolated reading carries a launch-and-sync
+          round trip the queued one amortizes, enough on HIP to name a different dominant kernel
+          (k248 isolated against k198 queued on minix), so a report compares only rows whose mode
+          agrees. It is not [segments_ms]'s mode: that sum mixes objectives, as its own doc says. *)
   segments_ms : float;
       (** The kernels' times, summed over those that were timed: a re-timed candidate's median, a
           screened kernel's one reading (gh-ocannl-1763) -- under the configured [autotune_timing]
@@ -429,13 +438,13 @@ let dominant_kernel_object ?note ~ceiling (kernel : kernel option) =
   let kernel_fields =
     match kernel with
     | None ->
-        {|"segment":null,"segments":null,"declined":null,"writes":null,"seg_ms":null,"seg_ms_lo":null,"seg_ms_hi":null,"segments_ms":null,"tensorization":null,"flops":null,"bytes":null,"flops_exact":null,"bytes_exact":null,"opaque":null|}
+        {|"segment":null,"segments":null,"declined":null,"writes":null,"seg_ms":null,"seg_ms_lo":null,"seg_ms_hi":null,"timing":null,"segments_ms":null,"tensorization":null,"flops":null,"bytes":null,"flops_exact":null,"bytes_exact":null,"opaque":null|}
     | Some k ->
         Printf.sprintf
-          {|"segment":%d,"segments":%d,"declined":%d,"writes":%s,"seg_ms":%s,"seg_ms_lo":%s,"seg_ms_hi":%s,"segments_ms":%s,"tensorization":%s,"flops":%d,"bytes":%d,"flops_exact":%b,"bytes_exact":%b,"opaque":%b|}
+          {|"segment":%d,"segments":%d,"declined":%d,"writes":%s,"seg_ms":%s,"seg_ms_lo":%s,"seg_ms_hi":%s,"timing":%s,"segments_ms":%s,"tensorization":%s,"flops":%d,"bytes":%d,"flops_exact":%b,"bytes_exact":%b,"opaque":%b|}
           k.segment k.segments k.declined (str k.writes) (num k.seg_ms) (num k.seg_ms_lo)
-          (num k.seg_ms_hi) (num k.segments_ms) (str k.tensorization) k.flops k.bytes k.flops_exact
-          k.bytes_exact k.opaque
+          (num k.seg_ms_hi) (str k.timing) (num k.segments_ms) (str k.tensorization) k.flops k.bytes
+          k.flops_exact k.bytes_exact k.opaque
   in
   Printf.sprintf {|{%s,"verdict":"%s",%s,"bound":%s,"pct_of_peak":%s,"note":%s}|} kernel_fields
     verdict ceiling_fields (opt str bound)

@@ -1409,9 +1409,14 @@ both `cifar_resnet` and `cifar_resnet_b1` absent from the store (gh-ocannl-1825)
   re-screened reading, at most eight, plus any with no reading -- together as
   the median of their timing calls (*Per-kernel tables* under Methodology notes; gh-ocannl-1763),
   and takes the slowest by median; the result line carries that kernel's range beside it
-  (`seg_ms_lo`, `seg_ms_hi`; `null` below four admitted readings). The
-  cell reads `41.3% f32 memory · k3/12 0.412 ms w1.grad`: the attainment, its ceiling, the roofline
-  leg that binds, then the kernel's launch position, its own median time and the nodes it writes. Four
+  (`seg_ms_lo`, `seg_ms_hi`; `null` below four admitted readings), and `timing`, the
+  `autotune_timing` mode those times were measured under as the re-timing reports it (gh-ocannl-1860;
+  `null` with no kernel). The
+  cell reads `41.3% f32 memory · k3/12 0.412 ms (queued) w1.grad`: the attainment, its ceiling, the
+  roofline leg that binds, then the kernel's launch position, its own median time, its mode and the
+  nodes it writes. `orchestrate.py` refuses to put rows whose modes differ in one column (an
+  isolated time carries a round trip a queued one amortizes, and can name a different kernel), and
+  a line from before the field reads `not recorded`, which matches no recorded mode. Four
   decisions, each stated in the section header where the numbers are read:
   - *Which kernel.* By **measured** time, not by the cost model's own roofline bound — the column
     exists partly to check the model's counts, and choosing by its prediction would be circular.
@@ -1711,7 +1716,8 @@ both `cifar_resnet` and `cifar_resnet_b1` absent from the store (gh-ocannl-1825)
     contention, an unbatched CUDA/HIP calibration) prints `UNTIMED (..)` where a refused compile
     prints `DECLINED (..)`. The diagnostics' totals sum medians.
   - *The result line.* `dominant_kernel`'s `seg_ms` is the dominant kernel's median, chosen by
-    median, with `seg_ms_lo`/`seg_ms_hi` beside it; `segments_ms` sums the medians.
+    median, with `seg_ms_lo`/`seg_ms_hi` and their `timing` mode beside it (gh-ocannl-1860);
+    `segments_ms` sums the medians.
   - *The readers.* `gh1002_cells.KERNEL` (and through it `kernel_attribution.py`) and
     `gh1161_sites.py` parse both the new row and the old one, an old row carrying no range;
     an `UNTIMED` row leaves a table incomplete exactly as a `DECLINED` one does.
