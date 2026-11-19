@@ -4030,6 +4030,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   is skipped, since `external-lib-deps` gives public names while such a stanza may use a local one
   (on Linux, `metal_backend` requiring `metal_math_api_runtime`).
   `tools/test-affected-tests.sh` pins it on a fixture project, a negative control per reach path.
+  Every fixture repository there git-ignores the scratch mutant (`tools/affected-mutant.sh`)
+  from its first commit: visible, it is a change of its own, and a revision-relative control
+  read its blind aliases as the reach change it claimed (gh-ocannl-2356, three controls that
+  passed a no-op mutant). A control over a revision-relative query uses `reach_control`, which
+  runs both readers on the one edit and requires each exact list, the two different; when a
+  second route also reaches the alias, the fixture edit is chosen so that only the cut rule
+  does (a `(locks)` edit, a removed target attached to no alias).
   - Reach is link-level: a module reaches its whole library, and every stanza requiring it.
     So a change in `arrayjit/lib`, `tensor/` or a widely linked `test/support` library reaches
     much of the per-test alias set, including `arrayjit/test` and the `test/training` members:
