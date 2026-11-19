@@ -7,6 +7,8 @@
 # fixture, a fixture name the box has no DIGESTS row for (by name, without the bytes) -- reads GAP on
 # that item with exit 1. Usage errors exit 2, and every box the checked-in DIGESTS.txt declares has
 # a profile (the relationship, not a copy of the box list).
+# gh-ocannl-2004: the default kernel's initrd and the dpkg states, against a stand-in Linux every
+# leg sees (uname, /boot, dpkg), so the item reads alike on any host; skip off Linux and in WSL.
 # Generated-input readiness checks the same device and toolchain on a box with no fixture store.
 # The absent-fixture control covers fixture-loading readiness when recorded bytes are missing.
 # gh-ocannl-1433: a fresh worktree's drivers find the box's shared venv (route named, and its
@@ -85,14 +87,14 @@ printf '#!/bin/sh\necho /fake/MacOSX.sdk\n' >"$TMP/bin/xcrun"
 # box with a clean /boot and dpkg database, whatever this host is, so the item reads ok on macOS
 # and on a CI runner alike; its own legs change FAKE_UNAME, FAKE_DPKG and the boot directory.
 real_uname=$(command -v uname) || exit 2
-printf '#!/bin/sh\n[ "$1" = -s ] && [ $# = 1 ] && { echo "${FAKE_UNAME:-Linux}"; exit 0; }\nexec %s "$@"\n' \
+printf '#!/bin/sh\n[ $# = 1 ] && case $1 in\n  -s) echo "${FAKE_UNAME:-Linux}"; exit 0 ;;\n  -r) echo "${FAKE_UNAME_R:-7.0.0-43-generic}"; exit 0 ;;\nesac\nexec %s "$@"\n' \
   "$real_uname" >"$TMP/bin/uname"
 printf '#!/bin/sh\n[ "$1" = -l ] || exit 2\ncat "$FAKE_DPKG"\n' >"$TMP/bin/dpkg"
 chmod +x "$TMP/bin/"*
 # [fake_boot DIR VERSION [initrd|no-initrd|dangling]]: Ubuntu's /boot layout for VERSION.
 fake_boot() {
   mkdir -p "$1"
-  [ "${3:-initrd}" = dangling ] || : >"$1/vmlinuz-$2"
+  [ "${3:-initrd}" = dangling ] || echo kernel >"$1/vmlinuz-$2"
   ln -sfn "vmlinuz-$2" "$1/vmlinuz"
   ln -sfn "initrd.img-$2" "$1/initrd.img"
   [ "${3:-initrd}" != initrd ] || echo initramfs >"$1/initrd.img-$2"
@@ -131,7 +133,7 @@ done
 export FAKE_FREEZE=$TMP/freeze FAKE_INCLUDEPY=$TMP/include BENCH_VENV_PY=$venv/bin/python
 export PATH="$TMP/bin:$PATH" OCANNL_TOOL_CHECK_BOX_DEVICE_CAP=5
 export OCANNL_TOOL_CHECK_BOX_BOOT_DIR=$TMP/boot FAKE_DPKG=$TMP/dpkg-clean
-unset FAKE_UNAME
+unset FAKE_UNAME FAKE_UNAME_R
 unset FAKE_TORCH
 
 # [check RUN ARG...]: the subject on the scratch box; output in runs/RUN, status in $rc.
@@ -365,7 +367,7 @@ if harness_leg 'default kernel'; then
   gap_leg 'a default kernel whose initrd.img link dangles is a default-kernel GAP' kernel-no-initrd default-kernel
   if grep -Fq "the default kernel 7.0.0-42-generic has no $TMP/boot-no-initrd/initrd.img-7.0.0-42-generic" \
        "$TMP/runs/kernel-no-initrd" &&
-     grep -q '^  repair: needs root on the box: .*sudo dpkg --configure -a' "$TMP/runs/kernel-no-initrd"; then
+     grep -q '^  repair: needs root on the box.*sudo dpkg --configure -a' "$TMP/runs/kernel-no-initrd"; then
     report 0 'its line names the kernel and the missing initrd, and its repair needs root'
   else report 1 'its line names the kernel and the missing initrd, and its repair needs root'; fi
 
@@ -379,9 +381,26 @@ if harness_leg 'default kernel'; then
     report 0 'its line names the package and its state'
   else report 1 'its line names the package and its state'; fi
 
+  { cat "$TMP/dpkg-clean"
+    echo 'iH  nvidia-dkms-open              620.70.06-1    amd64        NVIDIA DKMS package'
+  } >"$TMP/dpkg-half-installed"
+  FAKE_DPKG=$TMP/dpkg-half-installed check kernel-iH --box rog-nv
+  gap_leg 'a half-installed (iH) package is a default-kernel GAP' kernel-iH default-kernel
+  if grep -q 'nvidia-dkms-open (iH)' "$TMP/runs/kernel-iH" &&
+     grep -q '^  repair: .*half-installed (?H) package is reinstalled' "$TMP/runs/kernel-iH"; then
+    report 0 'its repair reinstalls a half-installed package rather than only configuring it'
+  else report 1 'its repair reinstalls a half-installed package rather than only configuring it'; fi
+
   fake_boot "$TMP/boot-dangling" 7.0.0-44-generic dangling
   OCANNL_TOOL_CHECK_BOX_BOOT_DIR=$TMP/boot-dangling check kernel-dangling --box rog-nv
   gap_leg 'a vmlinuz link to no kernel image is a default-kernel GAP' kernel-dangling default-kernel
+  # The link names an image outside /boot that is gone, while /boot holds one of that name and
+  # its initrd: the check follows the link, not the name.
+  fake_boot "$TMP/boot-elsewhere" 7.0.0-43-generic
+  ln -sfn "$TMP/elsewhere/vmlinuz-7.0.0-43-generic" "$TMP/boot-elsewhere/vmlinuz"
+  OCANNL_TOOL_CHECK_BOX_BOOT_DIR=$TMP/boot-elsewhere check kernel-elsewhere --box rog-nv
+  gap_leg 'a link to an absent image elsewhere is a GAP, whatever /boot holds under its name' \
+    kernel-elsewhere default-kernel
   OCANNL_TOOL_CHECK_BOX_BOOT_DIR=$TMP/absent-boot check kernel-no-link --box rog-nv
   gap_leg 'no vmlinuz link names no default kernel: a GAP, not a pass' kernel-no-link default-kernel
 
@@ -393,6 +412,18 @@ if harness_leg 'default kernel'; then
   else
     report 1 'on another OS the item reads skip and the box stays READY' "rc=$rc"
     sed 's/^/      | /' "$TMP/runs/kernel-darwin"
+  fi
+  # A WSL guest boots the kernel the Windows host picks: its /boot judges nothing (the sweep's
+  # -wsl lanes).
+  FAKE_UNAME_R=6.18.33.2-microsoft-standard-WSL2 OCANNL_TOOL_CHECK_BOX_BOOT_DIR=$TMP/absent-boot \
+    check kernel-wsl --box rog-nv
+  if [ "$rc" = 0 ] &&
+     grep -qx 'check-box: default-kernel: skip -- a WSL guest (kernel 6.18.33.2-microsoft-standard-WSL2): the Windows host picks its kernel, not /boot' \
+       "$TMP/runs/kernel-wsl"; then
+    report 0 'in a WSL guest the item reads skip and the box stays READY'
+  else
+    report 1 'in a WSL guest the item reads skip and the box stays READY' "rc=$rc"
+    sed 's/^/      | /' "$TMP/runs/kernel-wsl"
   fi
 fi
 if harness_leg 'gap: fixtures'; then

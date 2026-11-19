@@ -738,7 +738,10 @@ files.
   alone (a key the generator added since, such as `loss_scale`), not in the numpy stream. What
   is known per fixture, and how to tell metadata from tensors, is owned by `benchmarks/README.md`
   (the per-box entries bullet under Layout, and the vanished-fixture recipe). Before quoting one
-  box's number against another's, check that the two report sections name the same digest.
+  box's number against another's, compare canonical content, not the printed strings: a report's
+  `raw-v1` digest that a migration verified maps to its row's `content-v1` digest in
+  `DIGESTS.txt`'s history (gh-ocannl-2004's commit for the four recovered fixtures), and where
+  the original files are gone (`gpt2_mini`'s two) the comparison stays unresolved.
 - **A measurement session starts with `benchmarks/check-box.sh --box <id> --fixture <name>...`**
   from the checkout it measures in, and measures only on exit 0 (gh-ocannl-1062). Five waves found
   the gap only once a session had begun: a native boot with no venv, fresh worktrees with no

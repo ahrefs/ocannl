@@ -2938,6 +2938,7 @@ class FixtureDigestTest(unittest.TestCase):
         recovered = {f"{n}.safetensors" for n in ("cifar_conv", "cifar_stride", "mlp_small", "mlp_wide")}
         recovered_boxes = {"minix", "rog-nv"}
         self.assertFalse(recovered & copied, "a recovered fixture is no m4-max copy")
+        self.assertLessEqual(recovered, set(entries), "every recovered fixture keeps its rows")
 
         for name, recorded in entries.items():
             self.assertTrue(recorded, name)

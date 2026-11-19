@@ -1202,7 +1202,8 @@ packages, `pip freeze` against the `~/.venvs/ocannl-bench.requirements.txt` prov
 one tensor round-tripped through the device (minix's rocm7.1 torch passed `is_available()` and
 segfaulted on that copy), `Python.h` for torch.compile, the interpreter this checkout's drivers
 resolve through `bench_venv.py`, the toolchain, the kernel the box boots next (`default-kernel`,
-Linux only, `skip` elsewhere: the kernel `/boot/vmlinuz` names has its `initrd.img-<version>`,
+native Linux only, `skip` elsewhere and in a WSL guest: the kernel image `/boot/vmlinuz` links to
+has its `initrd.img-<version>`,
 and `dpkg -l` lists no package a maintainer script left half-configured or half-installed --
 rog's failed nvidia DKMS build on 2026-11-03 left its new default kernel without an initrd, and
 the box panicked at its next reboot with nothing reporting it beforehand), the box's rows by
