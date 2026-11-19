@@ -1,11 +1,10 @@
-scratch/tune: the over-budget baseline is declined, not fatal: true
-scratch/tune: the declined baseline carries no measurement: true
+scratch/tune: the GPU baseline is refused before codegen, not declined: true
+scratch/tune: the over-budget candidate is declined at link, censused under Thread_scratch: true
+scratch/tune: the declined candidate is not the winner: true
 scratch/tune: the decline census sums to candidates_failed: true
-scratch/tune: the declined baseline is not also counted as a gh-532 refusal: true
 scratch/tune: the search completed: true
 scratch/tune: the search timed at least one candidate: true
 scratch/tune: the tuned routine computes the right value: true
 scratch/tune: the second run replays exactly after contention-free timing: true
-scratch/tune: a cache hit still reports the declined baseline: true
-scratch/tune: the cache-hit census accounts for that decline, and only it: true
+scratch/tune: a cache replay declines nothing, a re-search declines again: true
 scratch/tune: the cache-hit replay computes the right value: true

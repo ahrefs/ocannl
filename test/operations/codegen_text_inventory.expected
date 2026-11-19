@@ -894,6 +894,7 @@ test/operations/hardware_warp_shuffle.ml [prelowered compile; through Ll_test.ex
 test/operations/heap_local_arrays.ml [through Ll_test.execute; run by @test/operations/runtest-heap_local_arrays, @test/operations/runtest-heap_local_arrays-outlined]
 test/operations/hip_half_load.ml [through Ll_test.link; run by @test/operations/runtest-hip_half_load]
 test/operations/hip_half_masked_gradient.ml [through Ll_test.link; run by @test/operations/runtest-hip_half_masked_gradient]
+test/operations/hip_scratch_tune_survives.ml [prelowered compile; run by @test/operations/slow-hip_scratch_tune_survives]
 test/operations/integer_bf16_narrowing.ml [through Ll_test.execute; run by @test/operations/runtest-integer_bf16_narrowing]
 test/operations/integer_host_relayout.ml [through Ll_test.link; run by @test/operations/runtest-integer_host_relayout]
 test/operations/integer_power_domain.ml [through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-integer_power_domain]
@@ -1129,6 +1130,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-zero_out_local_decl-extension
 @test/operations/runtest-zero_out_local_decl-unoptimized
 @test/operations/runtest-zero_run_reorder
+@test/operations/slow-hip_scratch_tune_survives
 @test/operations/slow-metal_gpu_hang_failure
 @test/operations/slow-virtual_inliner_oracle-plant-transpose
 @test/operations/slow-virtual_inliner_oracle-widen-0
