@@ -1218,6 +1218,12 @@ files.
   optimize, inside a pure scope that contains no staged read. The added tensor write is refused
   by the post-op gate. Disabling that gate lets the stage apply with the write still in the scope.
   With a distinct scope-loop symbol the stage writes the tile outside the scope and leaves it pure.
+  That gate is a backstop for user-written chains, not a live hazard (gh-ocannl-2366): every
+  shipped chain (the sketch families, the CPU channel-vector preset, autotune's seeds and appended
+  moves) puts its `Stage`s ahead of every op that copies a loop body (materializing
+  `Unroll`/`Partition`, `Tensorize`, `Fuse_epilogue`), so a shipped `Stage`'s anchor has the one
+  binder the precheck reads; the argument sits beside the precheck in `apply_stage`. Within one
+  chain `Fuse_epilogue`'s own purity check is redundant too; only its probe needs it.
   An IMPURE entry (only a hand-built `?prelowered` routine can bring one) is refused before any op
   runs, by `apply_typed` and `schedule_legality` on a non-empty schedule
   (`check_entry_scope_purity`, gh-ocannl-2314):
