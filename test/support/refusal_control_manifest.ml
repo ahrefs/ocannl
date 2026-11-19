@@ -123,6 +123,7 @@ let raw_entries =
     ("operand_key_ratchet.ml", []);
     ( "tensorized_census_ratchet.ml",
       [
+        "[scanner-refusal:4656151bdc35a3727a1bea78aa31e974] census-judging test declares";
         "[scanner-refusal:e553a74d077e12582953b27756595d9e] executed tensorized parity";
         "[scanner-refusal:acf79e9d5f580995dafd055521de641f] Context.run";
       ] );

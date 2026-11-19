@@ -17391,11 +17391,14 @@
 
 (test
  ; gh-ocannl-1308: the forced Tile_mma decline itself, in both regimes through the in-process
- ; override, so it reads the same whatever OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE says.
+ ; override, so it reads the same whatever OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE says. It judges
+ ; the census, so it declares the variable like every census-judging stanza
+ ; (`tensorized_census_ratchet` holds them to it); under the leg it reruns and holds.
  (name tile_mma_forced_decline)
  (package neural_nets_lib)
  (deps
   ocannl_config
+  (env_var OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE)
   (env_var OCANNL_BACKEND))
  (modules tile_mma_forced_decline)
  (libraries

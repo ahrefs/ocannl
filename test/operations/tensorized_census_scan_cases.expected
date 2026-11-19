@@ -30,4 +30,7 @@ shipping scanner refuses the parity-only tensorized claim: true
 shipping scanner accepts the claim under a named exemption: true
 shipping scanner accepts the claim once its item judges the census: true
 shipping scanner refuses the exemption the judgment left stale: true
+shipping scanner refuses a census-judging test that does not declare the hook: true
+shipping scanner refuses a variant rule of a census-judging test that does not declare it: true
+shipping scanner accepts census-judging stanzas that all declare the hook: true
 shipping scanner refuses a tree where it read no executed tensorized parity claim: true

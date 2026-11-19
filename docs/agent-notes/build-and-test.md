@@ -3237,17 +3237,23 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   one asserting a decline or no `Tile_mma` (`all_declined`, `none_emitted`, a `Scalar_fallback`
   comparison), and one in a leg the backend closes. A value claim whose reference IS one rendering's
   numerics fails, and is no parity regression: `schedule_mma_matmul`'s once-narrowed staged
-  wide-policy and bf16 references on Metal, which the declined scope's per-block narrowing misses. A
-  new census-judging stanza declares the variable, or the leg reads its cached result as a survivor.
-  Only the declaring stanzas form the leg: an undeclared alias touching `Tile_mma`
-  (`tile_mma_declines`, which needs the register tiling) may be served from the off regime's cache,
-  so its result under the hook, red or green, is evidence of nothing. The hook declines at the
-  fragment scope before either backend hook is asked, the path cc and an unsupported format take;
-  forcing only the statement inside a scope Metal's hook rendered emits scalar code over an
-  undeclared fragment (`use of undeclared identifier 't_fragment_c'`), which
+  wide-policy and bf16 references on Metal, which the declined scope's per-block narrowing misses.
+  Every stanza running a census-judging file declares the variable, variant rules included, or the
+  leg would read its cached result as a survivor; `tensorized_census_ratchet` derives that set and
+  refuses an undeclared stanza. Only the declaring stanzas form the leg: an undeclared alias
+  touching `Tile_mma` (`tile_mma_declines`, which needs the register tiling) may be served from the
+  off regime's cache, so its result under the hook, red or green, is evidence of nothing. The hook
+  declines at the fragment scope before either backend hook is asked, the path cc and an unsupported
+  format take; forcing only the statement inside a scope Metal's hook rendered emits scalar code
+  over an undeclared fragment (`use of undeclared identifier 't_fragment_c'`), which
   `tile_mma_forced_decline` pins (its forced staged leg compiles) and the schedule cache keys
-  (`forced-tile-mma-decline` in `codegen_tag`, ON regime only). `tools/mutant.sh` against
-  `Utils.force_tile_mma_decline_from_env`'s off arm is the source-patch form of the same leg.
+  (`forced-tile-mma-decline` in `codegen_tag`, ON regime only). Per alias the evidenced form is the
+  source patch, `tools/mutant.sh arrayjit/lib/utils.ml 's/\| None \| Some \("" \| "0"\) -> Ok
+  false/| None | Some ("" | "0") -> Ok true/' @test/operations/runtest-<name>`
+  (`schedule_batched_mma`: caught on cc and Metal): it refuses a red baseline and counts a run only
+  once it reached its last row, so a crash the hook causes is not read as a caught census claim. The
+  environment form is the cheaper sweep over every declaring stanza, and its reds still need sorting
+  by hand.
 
 ## Hand-built IR tests
 

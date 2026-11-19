@@ -229,8 +229,12 @@ let () =
   let root = Stdlib.Filename.temp_dir "tensorized census control " "" in
   let write path data = Out_channel.write_all (Stdlib.Filename.concat root path) ~data in
   Unix.mkdir (Stdlib.Filename.concat root "test") 0o700;
-  let run ?(exempt = false) () =
-    Fresh_process.run ~exe [ (if exempt then "--fixture-exempt" else "--fixture"); root ]
+  let run ?(exempt = false) ?(hook = false) () =
+    Fresh_process.run ~exe
+      [
+        (if exempt then "--fixture-exempt" else if hook then "--fixture-hook" else "--fixture");
+        root;
+      ]
   in
   let check label ~exit ~message child =
     let ok = Fresh_process.matches ~exit ~contains:[ message ] child in
@@ -249,6 +253,30 @@ let () =
     ~message:"judges the census: true" (run ());
   check "shipping scanner refuses the exemption the judgment left stale" ~exit:1
     ~message:"absorbs no unjudged claim (stale)" (run ~exempt:true ());
+  (* gh-ocannl-1308: every stanza running a census-judging file declares the forced-decline
+     variable, the file's (test) and a variant rule running its executable alike. *)
+  let declared = "(deps (env_var OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE))" in
+  let variant deps =
+    "(rule (target new-v.actual) " ^ deps
+    ^ " (action (with-stdout-to %{target} (run %{dep:new.exe} --v))))\n"
+  in
+  write "test/dune"
+    ("(test (name judged) " ^ declared ^ ")\n(test (name new) (deps ocannl_config))\n");
+  check "shipping scanner refuses a census-judging test that does not declare the hook" ~exit:1
+    ~message:"test/dune:2 runs new, which judges the census, and does not declare"
+    (run ~hook:true ());
+  write "test/dune"
+    ("(test (name judged) " ^ declared ^ ")\n(test (name new) " ^ declared ^ ")\n"
+   ^ variant "(deps ocannl_config)");
+  check "shipping scanner refuses a variant rule of a census-judging test that does not declare it"
+    ~exit:1 ~message:"test/dune:3 runs new, which judges the census, and does not declare"
+    (run ~hook:true ());
+  write "test/dune"
+    ("(test (name judged) " ^ declared ^ ")\n(test (name new) " ^ declared ^ ")\n"
+   ^ variant declared);
+  check "shipping scanner accepts census-judging stanzas that all declare the hook" ~exit:0
+    ~message:"declares the forced-decline variable: true" (run ~hook:true ());
+  Unix.unlink (Stdlib.Filename.concat root "test/dune");
   Unix.unlink (Stdlib.Filename.concat root "test/new.ml");
   Unix.unlink (Stdlib.Filename.concat root "test/judged.ml");
   check "shipping scanner refuses a tree where it read no executed tensorized parity claim" ~exit:1

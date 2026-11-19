@@ -128,31 +128,34 @@ let () =
   let want, _ = with_forced false (fun () -> run ~name:"fd_serial" ()) in
   p "the serial twin computes a nonzero product" (Array.exists want ~f:(fun x -> Float.(x <> 0.)));
   let legs ~what ~schedule =
-    let got_on, mma_on =
+    let got_unforced, mma_unforced =
       with_forced false (fun () -> run ~name:(what ^ "_unforced") ~schedule ())
     in
-    let got_off, mma_off = with_forced true (fun () -> run ~name:(what ^ "_forced") ~schedule ()) in
+    let got_forced, mma_forced =
+      with_forced true (fun () -> run ~name:(what ^ "_forced") ~schedule ())
+    in
     Stdio.eprintf "%s (not part of the golden): unforced %s, %d fragment scopes; forced %s, %d\n%!"
       what
-      (Ir.C_syntax.mma_summary_string mma_on)
-      mma_on.Ir.C_syntax.fragment_scopes
-      (Ir.C_syntax.mma_summary_string mma_off)
-      mma_off.Ir.C_syntax.fragment_scopes;
-    (got_on, mma_on, got_off, mma_off)
+      (Ir.C_syntax.mma_summary_string mma_unforced)
+      mma_unforced.Ir.C_syntax.fragment_scopes
+      (Ir.C_syntax.mma_summary_string mma_forced)
+      mma_forced.Ir.C_syntax.fragment_scopes;
+    (got_unforced, mma_unforced, got_forced, mma_forced)
   in
-  let plain_on, plain_mma_on, plain_off, plain_mma_off =
+  let plain_unforced, plain_mma_unforced, plain_forced, plain_mma_forced =
     legs ~what:"fd_plain" ~schedule:plain_schedule
   in
   let single = Ir.Ops.single in
   p "unforced, the plain tensorized schedule renders tensorized where uniform f32 is advertised"
     (Ll_test.census_agrees_with_capability ~backend_name ~what:"fd_plain unforced" ~a_prec:single
-       ~b_prec:single ~d_prec:single (Ll_test.renderings plain_mma_on));
+       ~b_prec:single ~d_prec:single
+       (Ll_test.renderings plain_mma_unforced));
   p "forced, every Tile_mma of the plain schedule renders the scalar fallback"
-    (Ll_test.all_declined ~what:"fd_plain forced" (Ll_test.renderings plain_mma_off));
-  p_all2 "unforced, the plain tensorized matmul matches the serial twin bitwise" plain_on want
+    (Ll_test.all_declined ~what:"fd_plain forced" (Ll_test.renderings plain_mma_forced));
+  p_all2 "unforced, the plain tensorized matmul matches the serial twin bitwise" plain_unforced want
     ~f:Float.equal;
-  p_all2 "forced, the plain tensorized matmul's fallback matches the serial twin bitwise" plain_off
-    want ~f:Float.equal;
+  p_all2 "forced, the plain tensorized matmul's fallback matches the serial twin bitwise"
+    plain_forced want ~f:Float.equal;
   let gpu = Verdict.leg ~when_:on_gpu ~on:backend_name () in
   (* The descriptor's judgment that this GPU holds a uniform-f32 accumulator in a persistent
      fragment: Metal's genuine f32 tile, or CUDA's tf32 one where the policy enables it. *)
@@ -167,13 +170,13 @@ let () =
                 ~policy:(Ir.Numerics.get ()) ~scope:BI.Mma_fragment_scope ~a:f ~b:f ~d:BI.Mma_f32)))
   in
   let staged = staged_schedule ~src_a:ma.Tensor.value ~src_b:mb.Tensor.value in
-  let staged_on =
+  let staged_unforced =
     lazy (with_forced false (fun () -> run ~name:"fd_staged_unforced" ~schedule:staged ()))
   in
   (* The forced compile is the one the hook can break: a decline taken only per statement, inside
      the scope the fragment hook rendered, is a kernel Metal does not compile. Its exception is a
      false claim here rather than the end of the run. *)
-  let staged_off =
+  let staged_forced =
     lazy
       (match with_forced true (fun () -> run ~name:"fd_staged_forced" ~schedule:staged ()) with
       | result -> Some result
@@ -188,31 +191,31 @@ let () =
   in
   in_leg ~leg:fragment_scope
     "unforced, the staged schedule renders tensorized in a persistent-fragment scope" (fun label ->
-      let _, mma = Lazy.force staged_on in
+      let _, mma = Lazy.force staged_unforced in
       census "fd_staged unforced" mma;
       p label
         (Ll_test.all_tensorized ~what:"fd_staged unforced" (Ll_test.renderings mma)
         && mma.Ir.C_syntax.fragment_scopes > 0));
   in_leg ~leg:gpu "forced, the staged schedule compiles and runs" (fun label ->
-      p label (Option.is_some (Lazy.force staged_off)));
+      p label (Option.is_some (Lazy.force staged_forced)));
   in_leg ~leg:gpu
     "forced, the staged schedule declines at the fragment scope: every Tile_mma falls back, no \
      scope renders" (fun label ->
       p label
-        (match Lazy.force staged_off with
+        (match Lazy.force staged_forced with
         | None -> false
         | Some (_, mma) ->
             census "fd_staged forced" mma;
             Ll_test.all_declined ~what:"fd_staged forced" (Ll_test.renderings mma)
             && mma.Ir.C_syntax.fragment_scopes = 0));
   in_leg ~leg:gpu "both staged tensorized matmuls match the serial twin bitwise" (fun label ->
-      let got_on, _ = Lazy.force staged_on in
+      let got_unforced, _ = Lazy.force staged_unforced in
       p label
-        (Array.equal Float.equal got_on want
+        (Array.equal Float.equal got_unforced want
         &&
-        match Lazy.force staged_off with
+        match Lazy.force staged_forced with
         | None -> false
-        | Some (got_off, _) -> Array.equal Float.equal got_off want));
+        | Some (got_forced, _) -> Array.equal Float.equal got_forced want));
   (* The schedule cache's codegen identity: the forced regime has its own, so neither regime's
      crowns replay into the other. *)
   let ctx = Context.auto () in

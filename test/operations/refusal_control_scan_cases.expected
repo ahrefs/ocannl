@@ -645,6 +645,7 @@ fp_contract_pin_scan.ml: [scanner-refusal:cd11cea99124c2fa6c076ec8734ee25f] list
 fp_contract_pin_scan.ml: [scanner-refusal:9bedd04370c001da7559696548d4a37b] cc_backend_fp_contract=off (claim) is catalogued beside fp_contract_pin_scan.expected: true
 operand_key_ratchet.ml has exactly the explicitly assigned refusal controls: true
 tensorized_census_ratchet.ml has exactly the explicitly assigned refusal controls: true
+tensorized_census_ratchet.ml: [scanner-refusal:4656151bdc35a3727a1bea78aa31e974] census-judging test declares (claim) is catalogued beside tensorized_census_ratchet.expected, tensorized_census_scan_cases.expected: true
 tensorized_census_ratchet.ml: [scanner-refusal:e553a74d077e12582953b27756595d9e] executed tensorized parity (claim) is catalogued beside tensorized_census_ratchet.expected, tensorized_census_scan_cases.expected: true
 tensorized_census_ratchet.ml: [scanner-refusal:acf79e9d5f580995dafd055521de641f] Context.run (claim) is catalogued beside tensorized_census_ratchet.expected, tensorized_census_scan_cases.expected: true
 provenance_tag_inventory.ml has exactly the explicitly assigned refusal controls: true
