@@ -323,11 +323,6 @@ let exempt_quantified_helpers =
     ( "test/operations/autotune_smoke.ml:search off without a cache times nothing",
       "with the search off no candidate exists to populate a schedule; the empty best schedule is \
        one of four zero counters the claim conjoins" );
-    ( "test/operations/hip_scratch_tune_survives.ml:scratch/tune: the declined baseline is not \
-       also counted as a gh-532 refusal",
-      "conditioned on the baseline having been declined, and on a device that backs the frame the \
-       decline census is legitimately empty (announced vacuous on stderr); where the baseline is \
-       declined the claim just above witnesses the census" );
     ( "test/operations/seeded_default.ml:off CUDA/HIP the seeded default seeds nothing",
       "the seeded default is CUDA/HIP-only by design, so off those backends an empty seed list is \
        the claim; it is gated to them, and on CUDA/HIP the claim beside it requires a non-empty \

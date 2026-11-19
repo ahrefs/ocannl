@@ -9649,7 +9649,6 @@
 ; `hip_scratch_budget` — HIP-meaningful, and it runs a (small) autotune search.
 
 (executable
- ; cc-vector-width: independent -- no matmul site for the width to reshape, and its sums are exact.
  (name hip_scratch_tune_survives)
  (modules hip_scratch_tune_survives)
  (libraries
@@ -9658,6 +9657,8 @@
   stdio
   arrayjit.verdict
   test_utils
+  arrayjit.utils
+  arrayjit.ll_builders
   arrayjit.autotune
   arrayjit.context)
  (preprocess

@@ -2030,7 +2030,8 @@ files.
   relinked the base's digest. The callers keep a post-codegen check, on the routine's SHIPPED
   segments (`shipped_dispatchable`, `routine.segments`), since zero-only segments are elided
   after the transform. Consequence: on GPU `baseline_declined` is always false (the gh-533 scratch
-  decline is unreachable there, `hip_scratch_tune_survives` is vacuous), and a refused replay
+  decline is unreachable through the baseline; `hip_scratch_tune_survives` builds an over-budget
+  dispatchable candidate instead, gh-ocannl-1494), and a refused replay
   reports `cache_replay_refusal = Not_dispatched "cache_replay"`. To assert "no compile was
   paid for and thrown away", charge each `on_candidate_attempt` the `Link_after_delta` hits and
   `on_candidate_preflight` runs that follow it, under `tune_deferred` so the shipping compile falls

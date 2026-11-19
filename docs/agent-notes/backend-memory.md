@@ -444,7 +444,14 @@ files.
   `gpt2_mini hip/tuned` completes while every whole-routine preset declines. In the census it
   carries its own cause and NOT gh-ocannl-543's `Not_dispatched_key "baseline"` — a declined
   baseline is never dispatched either, but recording both would double-count it under a reason that
-  is not the one. One refusal, one entry. Guard:
+  is not the one. One refusal, one entry. Since gh-ocannl-1340 a GPU baseline is refused before
+  codegen and never meets the validator, and nothing the search proposes on its own lands in the
+  window between the two limits (4 GiB / resident work-items < declared Local bytes <= the frame
+  gate's 261112 B; 104832-261112 B on gfx1151): fission promotes statement-crossing `Local`s to
+  device memory and the whole-routine presets dedup to the refused baseline. So the guard
+  (gh-ocannl-1494) wraps `Autotune.Context_driver` and prepends a 250000 B scratch kernel to the
+  first candidate whose kernels bind a hardware dimension, and its decline claims run in a leg
+  opened by the device's reported `max_resident_threads`, not by the outcome. Guard:
   `test/operations/hip_scratch_tune_survives.ml` (`slow` alias).
 - The compiler's frame limit is the other half, and it is gated BEFORE codegen (gh-ocannl-1313):
   LLVM AMDGPU refuses a stack frame over 262136 B, and hiprtc says so untyped, only after compiling

@@ -79,7 +79,6 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
   test/operations/dune, executable flip_abandonment (Autotune.tune, Train.tune_placements): independent, by its marker
   test/operations/dune, executable flip_bound_pruning (Train.tune_placements): independent, by its marker
   test/operations/dune, executable flip_twins (Train.tune_placements): independent, by its marker
-  test/operations/dune, executable hip_scratch_tune_survives (Autotune.tune): independent, by its marker
   test/operations/dune, executable tune_ship_arm (Train.tune_placements): independent, by its marker
   test/operations/dune, test autotune_baseline_window (Autotune.tune): independent, by its marker
   test/operations/dune, test autotune_beam_finals (Scripted_search.search): pinned: autotune_beam_finals.ml calls `Fissioned_chain.small_menu` at initialization, before any search
