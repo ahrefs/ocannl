@@ -119,7 +119,7 @@
 ; A scan whose per-test alias this list omits is one `@scans` skips silently. `env_var_deps` checks
 ; that: it derives the family from rules that either glob the repository recursively or declare its
 ; source tree -- which is what makes a scan repo-wide -- rather than from a second copy of this list.
-; Two members are listed by hand. `schedule_refusal_scan` reads two named
+; Three members are listed by hand. `schedule_refusal_scan` reads two named
 ; library sources (schedule.ml, sketch_families.ml), not a glob, a source tree or a root document,
 ; and it is a `(test)`. It is listed by hand because an edit to those sources trips it exactly as a
 ; config key trips `test_config_consistency`, and a push whose last step ran `@scans` without it went
@@ -127,6 +127,7 @@
 ; `benchmarks/runtest-capped_fixture_scan` has globs that stay inside benchmarks/, so
 ; `env_var_deps` cannot derive it. Fixtures are copied from neighbours, so its guards should run
 ; on every push through `tools/fmt-check.sh`, even though their corpus is local.
+; `prepush_scan_membership` reads only this dune file to check the production scans reader.
 
 (alias
  (name scans)
@@ -197,6 +198,7 @@
   (alias runtest-optional_arg_inventory_control)
   (alias runtest-premise_ratchet)
   (alias runtest-premise_scan_cases)
+  (alias runtest-prepush_scan_membership)
   (alias runtest-provenance_tag_inventory)
   (alias runtest-provenance_tag_scan_cases)
   (alias runtest-refusal_control_scan_cases)
@@ -421,6 +423,7 @@
   (alias runtest-prefix_scan_fp_licences)
   (alias runtest-premise_ratchet)
   (alias runtest-premise_scan_cases)
+  (alias runtest-prepush_scan_membership)
   (alias runtest-profile_fp16_floor-approximate)
   (alias runtest-profile_fp16_floor-performance)
   (alias runtest-provenance_tag_inventory)
@@ -7558,24 +7561,10 @@
     (run %{dep:env_var_deps.exe} %{workspace_root} @env_var_deps.filelist)))))
 
 (rule
- ; ocannl-backend: none -- the live prepush membership check reads Dune text.
  (alias runtest-env_var_deps)
  (package neural_nets_lib)
- (deps
-  ocannl_config
-  dune
-  ../../tools/credential-env.sh
-  ../../tools/dune-golden-families.sh
-  ../../tools/test-run.sh
-  (env_var ProgramFiles)
-  (env_var ProgramW6432)
-  (env_var "ProgramFiles(x86)")
-  (env_var LOCALAPPDATA))
  (action
-  (progn
-   ; Reuse the sweep driver's Git Bash selection on Windows.
-   (run %{dep:sweep_harness_driver.exe} %{dep:prepush_scan_membership.sh})
-   (diff env_var_deps.expected env_var_deps.actual))))
+  (diff env_var_deps.expected env_var_deps.actual)))
 
 ; The negative controls for the rules above. The repository satisfies every one of them, so a
 ; control written from today's corpus would encode the absence of the violating shape rather than
@@ -12780,6 +12769,25 @@
  (modules premise_scan_cases)
  (libraries base test_scan arrayjit.verdict)
  (deps ocannl_config))
+
+(rule
+ ; ocannl-backend: none -- the live prepush membership check reads Dune text.
+ (alias runtest-prepush_scan_membership)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  dune
+  ../../tools/credential-env.sh
+  ../../tools/dune-golden-families.sh
+  ../../tools/test-run.sh
+  (env_var ProgramFiles)
+  (env_var ProgramW6432)
+  (env_var "ProgramFiles(x86)")
+  (env_var LOCALAPPDATA))
+ (action
+  ; Reuse the sweep driver's Git Bash selection on Windows.
+  (run %{dep:sweep_harness_driver.exe} %{dep:prepush_scan_membership.sh})))
 
 (rule
  (alias runtest-primitive_ops)

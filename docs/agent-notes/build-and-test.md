@@ -63,7 +63,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   is anchored to the directory that generates them. And where the premise is "this value happens to
   equal that constant", read the constant from where it is defined rather than restating the
   coincidence: an unchecked default is the one name no call site spells.
-- **The `scans` family is derived, with two hand-listed members.** `env_var_deps` recognises a
+- **The `scans` family is derived, with targeted exceptions.** `env_var_deps` recognises a
   repo-wide scan by its corpus: a `(rule)` whose deps glob the repository recursively, take its
   source tree, or name a root document. `schedule_refusal_scan` is a `(test)` whose corpus is two
   named library sources (`schedule.ml`, `sketch_families.ml`), so no derivation puts it in the
@@ -71,7 +71,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   added to `schedule.ml` passed `tools/fmt-check.sh`'s scans and went red in CI
   (lukstafi/ocannl-staging#1766). A scan reading named library sources is in the same position:
   list it by hand, or widen the derivation to cover that corpus shape.
-  The other member, `benchmarks/runtest-capped_fixture_scan`, has globs that stay inside
+  `benchmarks/runtest-capped_fixture_scan` has globs that stay inside
   `benchmarks/`, so `env_var_deps` cannot derive it. It is listed so every push through
   `tools/fmt-check.sh` checks fixture guards: fixtures are copied from neighbours, and a local
   corpus is no reason to let their startup races return.
@@ -81,6 +81,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   rule twice in an isolated project and plants a failing case to retain traceback, FAILED summary
   and nonzero status. It exercises output rather than recognizing source forms; the fake-dune
   tier fixtures cannot see diagnostics from the real compile tier.
+  `prepush_scan_membership` is listed explicitly because its Dune corpus is the single live
+  stanza that defines the family.
 - **What reaches the scans is wider than what looks like infrastructure.** Two members of
   `@test/operations/scans` census sources across the tree, tests included, so a test-only edit can
   turn them red with no config key, stanza or new file in the diff. `codegen_text_inventory`
@@ -4242,7 +4244,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     for its default list (link-only aliases included), leaves off the `slow-` and `train-` members
     and runs the rest in one Dune build with one digest, verdict and exit status.
     It derives the selected scans from `test/operations/dune`'s `scans` stanza and enables Dune's
-    dependency paths for those batches (gh-ocannl-2329). The `runtest-env_var_deps` action
+    dependency paths for those batches (gh-ocannl-2329). The `runtest-prepush_scan_membership` action
     uses the runner's `_prepush-scan-members` probe to pin `runtest-slot_kind_live` in the live stanza.
     The attached run, `wait` and a running
     `status` name the first selected scan Dune reports as failed and point to the run log.

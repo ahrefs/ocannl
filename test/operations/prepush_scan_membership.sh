@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Exercise the production prepush reader on test/operations/dune with one
-# exact selected alias. The env_var_deps action still runs if that alias
+# exact selected alias. The dedicated probe still runs if that alias
 # leaves scans. The probe starts no build and reads no run logs.
 set -eu
 
