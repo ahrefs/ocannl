@@ -2849,18 +2849,44 @@ let phase12 () =
      && match footprint_scratches o_b with [ s ] -> count_get o_b s = 1 | _ -> false);
    p "the inherited-footprint reduction matches the reference and the materialized reading"
      (check_exec ~name ~materialized:[ a; c_ ] ~out ~expected (seq producer reader) o_b);
-   (* A host read has to work after the concat's routine-local fallback buffer is gone. *)
+   (* A host read has to work after the concat's routine-local fallback buffer is gone, in every
+      configuration that could leave the reader virtual (gh-ocannl-2364): at the default fan-in cap,
+      with the cap disabled, and under an explicit [Inline] preference on the reader. The guard is a
+      readback verdict, not a cap, so it lands the reader [159:footprint-observed-reader] in each (a
+      site, which offers placement search no flip, where a cap provenance would); without it the
+      reader stays virtual over the visit cap's [Local] buffer and the read is refused as
+      [Unobservable_local]. *)
    Tn.set_observable c_;
-   let name = "vcf_sites_footprint_observed" in
-   let observed = optimize ~name llc in
-   let ctx = run ~name observed ~seed:(seed out) in
-   let mat_name = name ^ "_mat" in
+   let mat_name = "vcf_sites_footprint_observed_mat" in
    let mat = optimize ~materialized:[ a; c_ ] ~name:mat_name llc in
    let got_mat = execute ~name:mat_name mat ~seed:(seed out) ~read:[ c_; out ] in
-   p "the observed reduction and its output read back like the materialized reading"
-     (match Context.observability ctx c_ with
-     | Stored | Recomputable -> same (List.map [ c_; out ] ~f:(Context.get_values ctx)) got_mat
-     | _ -> false));
+   let observed_reader = Some (Tn.Site "159:footprint-observed-reader") in
+   let observed_leg ~label ~what opt_ctx =
+     let name = "vcf_sites_footprint_observed" ^ label in
+     let o = optimize_in opt_ctx ~name llc in
+     let ctx = run ~name o ~seed:(seed out) in
+     p
+       (what ^ ": the observed reduction is materialized as a footprint-observed reader")
+       (known_non_virtual o c_
+       && Option.equal Tn.equal_provenance (rejection_code o c_) observed_reader);
+     p
+       (what ^ ": the observed reduction and its output read back like the materialized reading")
+       (match Context.observability ctx c_ with
+       | Stored | Recomputable -> same (List.map [ c_; out ] ~f:(Context.get_values ctx)) got_mat
+       | _ -> false)
+   in
+   observed_leg ~label:"" ~what:"at the default fan-in cap" (LL.empty_optimize_ctx ());
+   (* Over the cap (its charge, [a] and [w], is 2), the verdict still takes precedence: a cap
+      landing would offer an [`Inline] flip the verdict then refuses. *)
+   LL.virtualize_settings.max_inline_fanin <- 1;
+   observed_leg ~label:"_over_cap" ~what:"over the fan-in cap" (LL.empty_optimize_ctx ());
+   LL.virtualize_settings.max_inline_fanin <- -1;
+   observed_leg ~label:"_cap_off" ~what:"with the fan-in cap disabled" (LL.empty_optimize_ctx ());
+   LL.virtualize_settings.max_inline_fanin <- 3;
+   let inline_ctx = LL.empty_optimize_ctx () in
+   Hash_set.add inline_ctx.LL.inline_preferences c_;
+   observed_leg ~label:"_inline" ~what:"under an explicit Inline preference on the reader"
+     inline_ctx);
   LL.virtualize_settings.max_visits <- saved_visits;
   LL.virtualize_settings.footprint_materialization <- saved_footprint;
   (* Across routines: A commits the concat and its two-site reader [c] [Virtual] with the cap off;
