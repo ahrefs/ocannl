@@ -4242,7 +4242,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     for its default list (link-only aliases included), leaves off the `slow-` and `train-` members
     and runs the rest in one Dune build with one digest, verdict and exit status.
     It derives the selected scans from `test/operations/dune`'s `scans` stanza and enables Dune's
-    dependency paths for those batches (gh-ocannl-2329). The attached run, `wait` and a running
+    dependency paths for those batches (gh-ocannl-2329). The `runtest-env_var_deps` action
+    uses the runner's `_prepush-scan-members` probe to pin `runtest-slot_kind_live` in the live stanza.
+    The attached run, `wait` and a running
     `status` name the first selected scan Dune reports as failed and point to the run log.
     The notice leaves the run's verdict pending until the whole build finishes.
     `--start` uses `start` instead (same cap selection and fleet slot); follow a successful

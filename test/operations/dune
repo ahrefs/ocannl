@@ -7558,10 +7558,24 @@
     (run %{dep:env_var_deps.exe} %{workspace_root} @env_var_deps.filelist)))))
 
 (rule
+ ; ocannl-backend: none -- the live prepush membership check reads Dune text.
  (alias runtest-env_var_deps)
  (package neural_nets_lib)
+ (deps
+  ocannl_config
+  dune
+  ../../tools/credential-env.sh
+  ../../tools/dune-golden-families.sh
+  ../../tools/test-run.sh
+  (env_var ProgramFiles)
+  (env_var ProgramW6432)
+  (env_var "ProgramFiles(x86)")
+  (env_var LOCALAPPDATA))
  (action
-  (diff env_var_deps.expected env_var_deps.actual)))
+  (progn
+   ; Reuse the sweep driver's Git Bash selection on Windows.
+   (run %{dep:sweep_harness_driver.exe} %{dep:prepush_scan_membership.sh})
+   (diff env_var_deps.expected env_var_deps.actual))))
 
 ; The negative controls for the rules above. The repository satisfies every one of them, so a
 ; control written from today's corpus would encode the absence of the violating shape rather than
