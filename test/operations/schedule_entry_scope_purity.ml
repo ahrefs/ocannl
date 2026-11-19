@@ -7,25 +7,27 @@
    the per-op check exempts a violation already present before the op, so such a routine used to
    reach every op of its schedule with the hidden write intact, to be refused only at codegen's exit
    gate after the ops had misread it. [Schedule.apply_typed] and [Schedule.schedule_legality] now
-   refuse an impure entry, naming it, before the first op runs. The single-op oracle and the menu
-   can still offer an in-place unroll on that entry (gh-ocannl-2367).
+   refuse an impure entry, naming it, before the first op runs.
 
-   The gap: [r { i { sink[r, i] = scope { acc[i] += x[r, i]; local := 1 } } }], scheduled [Privatize
-   acc over r; Retype i Grid]. [Privatize]'s scan descends the scope body and remaps the write to
-   its tile; the per-thread-lifetime check of the later [Retype] reads tile writes at statement
-   level only, so it does not see that the [Grid] loop splits the tile's accumulation across
-   threads. Its statement-level twin is refused at the [Retype]. The base applied the impure chain.
+   The gap: [r { i { sink[r, i] = scope { acc[i] += x[r, i]; loop once { local := 1 } } } }],
+   scheduled [Privatize acc over r; Retype i Grid]. [Privatize]'s scan descends the scope body and
+   remaps the write to its tile; the per-thread-lifetime check of the later [Retype] reads tile
+   writes at statement level only, so it does not see that the [Grid] loop splits the tile's
+   accumulation across threads. Its statement-level twin is refused at the [Retype]. The base
+   applied the impure chain.
 
    The claims. The impure entry is refused by [Schedule.apply], naming the entry and the [Set] of
    [acc], with no op dispatched (the [with_transform_fault] seam counts dispatches), and by
    [Schedule.schedule_legality], which returns no verdict and dispatches no op either. The refusal
-   is untyped -- the routine's fault, not a candidate's: under [Schedule_outcome.protect] it is
-   fatal when strict and an [Unclassified] decline when permissive, never an [Illegal_schedule]. The
-   controls: the statement-level twin reaches its ops and is refused at the [Retype], naming the
-   tile's lifetime; a pure entry holding a pure scope body runs every op and computes the
-   unscheduled values; the empty schedule is the identity, even on the impure entry; and a pure
-   entry holding a [Grid] loop inside a scope body (the other half of the scope grammar, which an op
-   can repair) is admitted, its [Retype] to [Serial] applied. *)
+   also holds for the in-place unroll that [op_legality] admits and the menu offers on that same
+   entry (gh-ocannl-2367). The [Coalesce] probe names the accumulator's unpaired index with either
+   placement of the write. The entry refusal is untyped -- the routine's fault, not a candidate's:
+   under [Schedule_outcome.protect] it is fatal when strict and an [Unclassified] decline when
+   permissive, never an [Illegal_schedule]. The controls: the statement-level twin reaches its ops
+   and is refused at the [Retype], naming the tile's lifetime; a pure entry holding a pure scope
+   body runs every op and computes the unscheduled values; the empty schedule is the identity, even
+   on the impure entry; and a pure entry holding a [Grid] loop inside a scope body (the other half
+   of the scope grammar, which an op can repair) is admitted, its [Retype] to [Serial] applied. *)
 
 open Base
 open Ocannl.Operation.DSL_modules
