@@ -5355,32 +5355,34 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
 - Windows CI runs independently on the daily schedule, together with an ubuntu job
   on the OCaml floor the opam files claim (`>= 5.3.0`, against 5.5 everywhere else).
   PR, push and ordinary `workflow_dispatch` runs use the Linux/macOS matrix.
-  When a change needs Windows signal, AGENTS.md's *Windows verification placement* says where it
-  comes from: rog rebooted into Windows by the agent itself first, then a box the user boots, this
-  dispatch last. The order is latency: `rog-nv-win` and `minix-amd-win` normally boot Ubuntu, and
-  one rebooted into Windows answers in minutes where hosted Windows CI takes one to three hours;
-  the unattended reboot also spends none of the user's attention (gh-ocannl-1042). A wave
-  coordinator batches the reboots and the boot requests and picks the box with less queued work.
-  The unattended reboot is `wake-lab.sh boot-windows --as=<request_id> rog` (ludics-lite#353):
-  a one-boot UEFI `BootNext` into Windows Boot Manager — BootOrder stays Ubuntu-first and GRUB is
-  never written — then a wait of up to 15 minutes until native Git Bash answers. Its live witness
-  on rog (2026-09-24) reached Git Bash about 50 s after the reboot, with nobody at the keyboard
-  and no BitLocker prompt. `<request_id>` names your own active `measurement` reservation on the
-  box (`fleet-worker.sh execution reserve`, `.request.kind == "measurement"`,
-  `execution_host: rog-nv-linux`): the script refuses without one, refuses while any OTHER
-  reservation names the box, while its lab lane or hold lock is held, or while a logind sleep-block
-  inhibitor shows a run in progress, since a reboot kills everything on the box — including the
-  desktop session's open apps. Verdicts: exit 0, Git Bash answers — run the check as below;
-  exit 1, refused, or the box is back in a known OS (the firmware ignored `BootNext`, or Windows
-  restarted) — fall through to asking the user; exit 3, `NEEDS A PERSON`, nothing answers or the
-  old OS never went down within the deadline — tell the user at once (only someone at the box can
-  tell a Windows update from a BitLocker prompt or a hang; the script never retries) and fall
-  through to the next step. Afterwards ALWAYS run `wake-lab.sh boot-linux --as=<request_id> rog`
-  (a no-op when the box is already in Ubuntu; from Windows it is a plain `shutdown /r` into
-  BootOrder's first entry), then conclude the reservation: rog's steady state is native Ubuntu,
-  which the daily sweep's CUDA leg and every Linux worker there expect. Only rog qualifies today,
-  and not for want of setup on minix: minix has the `/etc/sudoers.d/50-fleet-boot` grant (the two
-  `efibootmgr` forms and `systemctl reboot`, as on rog; text in ludics-lite's README), but on
+  AGENTS.md's *Windows verification placement* gives the order. Native Windows answers in
+  minutes where hosted Windows CI takes one to three hours (gh-ocannl-1042).
+- **Native Windows witness readiness and recovery.** For a wave witness, use Ludics'
+  [worker request template](https://github.com/lukstafi/ludics/blob/main/issue-wave/templates/shared/requests.md#requests-anything-beyond-your-standing-reservations)
+  and [coordinator recipe](https://github.com/lukstafi/ludics/blob/main/issue-wave/references/executions.md#coordinator-recipe-for-a-workers-windows-witness).
+  Outside a wave, use Ludics'
+  [bounded native Windows verification recipe](https://github.com/lukstafi/ludics/blob/main/issue-wave/references/executions.md#bounded-native-windows-verification)
+  for the reservation, reboot, and return to Linux. Once Linux is confirmed,
+  [conclude the standalone reservation](https://github.com/lukstafi/ludics/blob/main/issue-wave/references/executions.md#reserve-launch-observe-conclude).
+  Before reserving rog for the witness, the coordinator concludes the CUDA integration loop
+  there. `execution run` refuses a box holding another record. Use Ludics' verdicts to determine
+  when the user-boot fallback is safe. Report `NEEDS A PERSON` to the user at once.
+- **The OCANNL witness script.** Start in the detached checkout at the pushed SHA.
+  `execution windows-witness` stages it for a wave witness. For manual witnesses, stage it on
+  the booted box using the rog ssh recipe below with the selected host's paths. Prepare any
+  fixtures the selected aliases require, use the Git Bash PATH and `tools/opam-env.sh` setup
+  below, and run the aliases through `tools/test-run.sh`. Windows evidence requires native
+  Git Bash, including on boxes that also offer WSL. Save the runner's status before collecting its run record
+  (`tools/test-run.sh paths run last`) with the host, SHA and command, then exit with the saved status.
+  On rog the automated staging uses `core.autocrlf=true`, so it checks out sources such as
+  `verdict.ml` with CRLF. For a wave check that needs CI's LF checkout, export the Git config
+  override from the ssh recipe below, then run
+  `git worktree add --detach "${WITNESS_CHECKOUT}-lf" "$WITNESS_REVISION"`.
+  Enter that new worktree before preparing fixtures or running checks.
+- `wake-lab.sh boot-windows` reached native Git Bash on rog in about 50 s on 2026-09-24, with
+  nobody at the keyboard and no BitLocker prompt. Rog normally runs Ubuntu for the daily CUDA
+  sweep and Linux workers. Only rog qualifies for the unattended witness. Minix has the same
+  `/etc/sudoers.d/50-fleet-boot` grant, but on
   2026-10-14 `boot-windows` there came back in Ubuntu with exit 1 ("came back in Ubuntu") because
   its firmware ignores `BootNext`, and its Windows, booted by hand, stopped at the BitLocker
   recovery-key prompt, so even a firmware that honoured the one-boot entry would leave the reboot
@@ -5389,13 +5391,8 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   longer exists: with hipjit installed every test executable, cc-only ones included, then fails
   to start with `0xc00004bc` (`hiprtc0701.dll` not found) unless the leg script prepends
   `C:/Program Files/AMD/ROCm/*/bin` to PATH (ahrefs/ocannl#1349; staging#1120 did).
-  The fallback waits until the request is withdrawn -- the user told, through the same channel, that CI is taking the check, so a late
-  reboot is not wasted -- because a dispatched run's checks gate the head, and cancelling one when
-  the box turns up leaves a no-verdict the merge refuses. On a booted
-  Windows host, use native Git Bash in an isolated checkout of the intended commit, source
-  `tools/opam-env.sh`, and run the relevant aliases through `tools/test-run.sh`, keeping host,
-  SHA, command and exit sentinel as evidence (driving rog over ssh: the leg recipe below); WSL
-  does not establish native Windows coverage.
+- Telling the user that CI is taking the check withdraws the boot request. If a box becomes
+  available after dispatch, let the run finish. Cancelling it leaves a no-verdict that blocks the merge.
   The fallback dispatches `ci.yml` on the chosen branch with
   `windows_only: true` and the full `expected_sha`; this opt-in runs only Windows main/training,
   without duplicating Linux/macOS, formatting or floor jobs (the floor job has its own
