@@ -639,6 +639,9 @@ val macos_platform_uuid : String.t -> string option
 val macos_timing_environment : (string * String.t option) Option.t lazy_t
 (** On macOS, the host's hashed platform UUID and, if available, the OS build version. *)
 
+val capability_file : string -> string option
+(** The first line of a host capability file, trimmed. Absent when unreadable or blank. *)
+
 val included_headers : String.t -> String.t List.t
 (** The headers a C or C++ text includes by [#include <...>], in order. *)
 

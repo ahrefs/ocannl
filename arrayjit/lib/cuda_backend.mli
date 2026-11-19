@@ -27,5 +27,5 @@ val host_capabilities : unit -> (string * string) list
 (** What this backend probes on the host without opening a device (gh-ocannl-1038): the toolkit
     include tree {!cuda_include_options} found ([cuda_include], in [Utils.capability_dir]'s form:
     where it resolves, which is what moves when [/usr/local/cuda] is repointed at a new toolkit, and
-    whether the headers nvrtc compiles against are there, with a fingerprint of them).
-    {!Context.host_capabilities} collects it. *)
+    whether the headers nvrtc compiles against are there, with a fingerprint of them), and the
+    driver version if procfs exposes it. {!Context.host_capabilities} collects it. *)

@@ -3784,6 +3784,15 @@ let macos_timing_environment =
            Option.map (macos_platform_uuid registry) ~f:(fun host ->
                (host, query "/usr/bin/sw_vers" [| "sw_vers"; "-buildVersion" |]))))
 
+(* The first line of procfs/sysfs version files identifies the driver or module. *)
+let capability_file path =
+  match Stdio.In_channel.with_file path ~f:(fun file -> Stdio.In_channel.input_line file) with
+  | Some line ->
+      let version = String.strip line in
+      Option.some_if (not (String.is_empty version)) version
+  | None -> None
+  | exception Stdlib.Sys_error _ -> None
+
 (** gh-ocannl-1038: the headers a C or C++ text includes by [#include <...>], in order -- the files
     {!capability_dir} fingerprints, read off the prelude a backend compiles with. *)
 let included_headers text =

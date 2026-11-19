@@ -1,0 +1,8 @@
+CUDA prelude names its toolkit headers: true
+CUDA conditional includes name their toolkit headers: true
+HIP prelude names its toolkit headers: true
+HIP conditional includes name their toolkit headers: true
+changing only header mtime moves the fingerprint: true
+changing only header size moves the fingerprint: true
+removing the header identifies the missing file: true
+repointing an include directory symlink moves its resolved path: true

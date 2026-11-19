@@ -13,6 +13,19 @@ let cuda_fast_math () = Utils.get_global_flag ~default:true ~arg_name:"cuda_fast
 let hip_fast_math () = Utils.get_global_flag ~default:true ~arg_name:"hip_fast_math"
 
 module Cuda = struct
+  let header_prelude =
+    {|#include <cuda_fp16.h>
+#include <cuda_bf16.h>
+#include <cuda_fp8.h>
+
+/* Define math constants that would normally come from <math.h> */
+#ifndef INFINITY
+#define INFINITY __int_as_float(0x7f800000)
+#endif
+#ifndef NAN
+#define NAN __int_as_float(0x7fffffff)
+#endif|}
+
   let name = "CUDA"
   let backend_facts = Backend_intf.cuda_facts
   let error_prefix = "Cuda_backend"
@@ -56,6 +69,10 @@ module Cuda = struct
   let div_f64 = None
   let fp8_from_float_syntax = ("(__nv_fp8_e5m2)(", ")")
   let conditional_includes = [ ("nvcuda::wmma", "#include <mma.h>") ]
+  let prelude_headers () = Utils.included_headers header_prelude
+
+  let conditional_headers () =
+    List.concat_map conditional_includes ~f:(fun (_, directive) -> Utils.included_headers directive)
 
   (* gh-ocannl-707, gh-ocannl-1338: the names nvrtc fails to compile as a kernel name after the
      prelude, measured by [tools/vendor_idents.exe]. *)
@@ -111,6 +128,25 @@ module Cuda = struct
 end
 
 module Hip = struct
+  (* hiprtc ships the HIP headers and needs no declaration for device-side printf. *)
+  let header_prelude =
+    {|#include <hip/hip_fp16.h>
+#include <hip/hip_bf16.h>
+/* hip_fp8.h ships with ROCm >= 6.2 (hiprtc is clang, so __has_include is available); guarding
+   keeps non-fp8 kernels compiling on older SDKs, where fp8 kernels still fail with unknown type
+   __hip_fp8_e5m2. */
+#if __has_include(<hip/hip_fp8.h>)
+#include <hip/hip_fp8.h>
+#endif
+
+/* Define math constants that would normally come from <math.h> */
+#ifndef INFINITY
+#define INFINITY __builtin_huge_valf()
+#endif
+#ifndef NAN
+#define NAN __builtin_nanf("")
+#endif|}
+
   let name = "HIP"
   let backend_facts = Backend_intf.hip_facts
   let error_prefix = "Hip_backend"
@@ -177,6 +213,10 @@ module Hip = struct
 
   let fp8_from_float_syntax = (fp8_from_prec_fn Ops.single ^ "((float)(", "))")
   let conditional_includes = [ ("rocwmma::", "#include <rocwmma/rocwmma.hpp>") ]
+  let prelude_headers () = Utils.included_headers header_prelude
+
+  let conditional_headers () =
+    List.concat_map conditional_includes ~f:(fun (_, directive) -> Utils.included_headers directive)
 
   (* gh-ocannl-707, gh-ocannl-1338: the names hiprtc fails to compile as a kernel name after the
      prelude, measured by [tools/vendor_idents.exe]. *)
