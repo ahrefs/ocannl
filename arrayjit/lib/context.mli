@@ -30,9 +30,9 @@ val host_capabilities : unit -> (string * string) list
 (** What this host offers the backends, as their own probes found it, without opening any device
     (gh-ocannl-1038): {!Cc_backend.host_capabilities} (CPU, ISA, vector width, fp16 support, the
     parallel-Grid runtime, the compiler and its flags), then the host-side probes of each GPU
-    backend whose library is linked -- the CUDA toolkit include tree, the HIP SDK and rocWMMA header
-    trees and the hiprtc version, the Metal math API the runtime accepts. Key/value pairs, in a
-    fixed order.
+    backend whose library is linked. On CUDA and HIP this includes toolkit headers, the hiprtc
+    version on HIP, and the running driver or module identity where procfs or sysfs exposes it.
+    Metal reports the math API the runtime accepts. Key/value pairs, in a fixed order.
 
     [tools/host_caps.exe] prints it as the host line of every CI build job, and test/config/dune
     records it beside the ambient environment in [ocannl_ambient], which every test's configuration

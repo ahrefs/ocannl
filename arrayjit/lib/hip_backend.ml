@@ -205,43 +205,20 @@ let rocwmma_include_dir =
          && Stdlib.Sys.file_exists (p ^ "/rocwmma/internal/types.hpp"))
      |> Option.map ~f:(String.map ~f:(fun c -> if Char.(c = '\\') then '/' else c)))
 
-(* hiprtc ships built-in HIP headers, and device-side printf needs no declaration on ROCm. Top level
-   rather than in [Impl] so [host_capabilities] fingerprints exactly the headers it names. *)
-let hip_includes =
-  {|#include <hip/hip_fp16.h>
-#include <hip/hip_bf16.h>
-/* hip_fp8.h ships with ROCm >= 6.2 (hiprtc is clang, so __has_include is available); guarding
-   keeps non-fp8 kernels compiling on older SDKs, where fp8 kernels still fail with unknown type
-   __hip_fp8_e5m2. */
-#if __has_include(<hip/hip_fp8.h>)
-#include <hip/hip_fp8.h>
-#endif
-
-/* Define math constants that would normally come from <math.h> */
-#ifndef INFINITY
-#define INFINITY __builtin_huge_valf()
-#endif
-#ifndef NAN
-#define NAN __builtin_nanf("")
-#endif|}
-
-(* gh-ocannl-1038: what this backend probes on the host without opening a device -- the SDK include
-   tree hiprtc compiles against, the rocWMMA header tree [Impl.mma_supported] requires, and the
-   hiprtc library's version -- in the form {!Context.host_capabilities} records, so a tree appearing
-   at an already-searched path reruns the tests whose verdicts read it. *)
+(* The header trees, compiler version and loaded module identity can move independently. All are
+   available before backend initialization. *)
 let host_capabilities () =
   [
     (* The headers fingerprinted are the ones kernels include, read off the text that includes them,
        so a header added to the prelude is tracked without a second list to keep in step. *)
     ( "hip_include",
       Utils.capability_dir
-        ~requires:(Utils.included_headers hip_includes)
+        ~requires:(Cuda_like_config.Hip.prelude_headers ())
         (Lazy.force hip_sdk_include_dir) );
     ( "rocwmma_include",
       Utils.capability_dir
         ~requires:
-          (List.concat_map Cuda_like_config.Hip.conditional_includes ~f:(fun (_, directive) ->
-               Utils.included_headers directive)
+          (Cuda_like_config.Hip.conditional_headers ()
           (* The completeness half of [rocwmma_include_dir]'s own probe. *)
           @ [ "rocwmma/internal/types.hpp" ])
         (Lazy.force rocwmma_include_dir) );
@@ -251,6 +228,13 @@ let host_capabilities () =
         Printf.sprintf "%d.%d" major minor
       with _ -> "unavailable" );
   ]
+  (* A patched module can keep its release version while its source checksum changes. *)
+  @ List.filter_map
+      [
+        ("amdgpu_module_version", "/sys/module/amdgpu/version");
+        ("amdgpu_module_srcversion", "/sys/module/amdgpu/srcversion");
+      ]
+      ~f:(fun (key, path) -> Option.map (Utils.capability_file path) ~f:(fun value -> (key, value)))
 
 (* [initialized_devices] never forgets its entries. *)
 let initialized_devices = Hash_set.create (module Int)
@@ -1094,7 +1078,8 @@ end = struct
     in
     let prelude =
       String.concat ~sep:"\n" (List.map Cuda_like_config.Hip.conditional_includes ~f:snd)
-      ^ "\nusing ocannl_probe_rocwmma_t = rocwmma::float16_t;\n" ^ hip_includes
+      ^ "\nusing ocannl_probe_rocwmma_t = rocwmma::float16_t;\n"
+      ^ Cuda_like_config.Hip.header_prelude
     in
     let compile source =
       match hip_to_code ~name:"vendor_idents_probe" source with
@@ -1158,7 +1143,7 @@ end = struct
   let compile_kernels ~batch ~names bindings lowereds =
     Compile_cost.record_reuse_capable ();
     let r =
-      Compile.render_batch ~names bindings lowereds ~includes:hip_includes
+      Compile.render_batch ~names bindings lowereds ~includes:Cuda_like_config.Hip.header_prelude
         ~builtins:Builtins_hip.builtins
         ~conditional_includes:Cuda_like_config.Hip.conditional_includes ()
     in

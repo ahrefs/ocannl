@@ -9682,6 +9682,14 @@
      hip_scratch_tune_survives.expected
      hip_scratch_tune_survives.actual)))))
 
+(test
+ (name host_capability_fingerprint)
+ (package arrayjit)
+ ; ocannl-backend: none -- reads the shared preludes and fingerprints temporary headers.
+ (deps ocannl_config)
+ (modules host_capability_fingerprint)
+ (libraries base stdio unix arrayjit.ir arrayjit.utils arrayjit.verdict))
+
 ; gh-ocannl-1959: a host write to a node a forward fetch of the lineage re-establishes is refused.
 
 (test
