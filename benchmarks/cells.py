@@ -302,8 +302,9 @@ MODE_RULE = (
     "and a slow group. The arm SPLITS when that gap is wider than the two groups' ranges together; "
     f"it is BIMODAL when, besides, each group holds at least {MODE_MIN_CELLS} cells, the gap is "
     f"more than {MODE_SEPARATION}x the two ranges together, and the step between the groups "
-    "(slowest fast cell to fastest slow cell) exceeds the paired difference it could mask: the "
-    "arm's median ratio against the reference (for the reference, the smallest of the arms'). "
+    "(fastest slow cell / slowest fast cell, minus 1) exceeds the paired difference it could "
+    "mask: |median ratio - 1| of the arm against the reference (for the reference, the smallest "
+    "such difference among the arms paired with it; none when no arm is). "
     "Ordinary spread does not fire it: noise fills the gaps it opens, so its widest gap is a small "
     "part of the range, and one stray cell is an outlier, not a mode. Once a variant has a bimodal "
     "arm, every arm that splits is read in its two modes, a single cell then counting as one (the "
@@ -330,17 +331,18 @@ def mode_reading(by_arm, ref):
     MODE_RULE calls the arm bimodal, and -- once any arm is -- {round: "fast" | "slow"} for every arm
     that splits (None otherwise)."""
     def effect(arm):
+        """|median ratio - 1| against the reference, or None when the arm pairs with nothing."""
         if arm != ref:
             m = paired(by_arm[ref], by_arm[arm])["median"]
-            return 0.0 if m is None else abs(m - 1)
-        others = [effect(a) for a in by_arm if a != ref]
-        return min(others) if others else 0.0
+            return None if m is None else abs(m - 1)
+        others = [e for e in map(effect, (a for a in by_arm if a != ref)) if e is not None]
+        return min(others) if others else None
     out = {}
     for arm, times in by_arm.items():
         s = mode_split(times.values())
         bimodal = (s is not None and s["splits"] and len(s["fast"]) >= MODE_MIN_CELLS
                    and len(s["slow"]) >= MODE_MIN_CELLS and s["gap"] > MODE_SEPARATION * s["widths"]
-                   and s["step"] - 1 > effect(arm))
+                   and s["step"] - 1 > (effect(arm) or 0.0))
         out[arm] = {"split": s, "bimodal": bimodal, "labels": None}
     if any(m["bimodal"] for m in out.values()):
         for arm, m in out.items():
@@ -351,8 +353,14 @@ def mode_reading(by_arm, ref):
     return out
 
 
+# The within-mode columns. No sign-test p: the pairs are chosen by their own times (a mode is a
+# range of the arm's values), so the exact binomial p of an unselected pairing does not hold --
+# with one side read in modes, an A/A run's fast/- rows would read "significant".
+MODE_PAIRED_HEADER = ("pairs", "median ratio", "range", "faster in")
+
+
 def paired_by_mode(base, mine, base_labels, mine_labels):
-    """`paired` within modes: [(modes, stats)], `modes` written "ARM/REFERENCE" ("-" for a side read
+    """`paired` within modes (descriptive: see MODE_PAIRED_HEADER): [(modes, stats)], `modes` written "ARM/REFERENCE" ("-" for a side read
     in one mode). With both sides in modes: fast/fast, slow/slow, and the rounds whose two cells
     fell in different modes ("mixed"); with one side only, that side's two modes. [] when neither
     side is in modes."""

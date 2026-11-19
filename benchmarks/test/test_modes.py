@@ -39,7 +39,7 @@ def fixture_times():
     return {"base": base, "twomode": two_mode, "steady": steady}
 
 
-def write_run(run_dir, times):
+def write_run(run_dir, times, keep=None):
     arms = list(times)
     manifest = {
         "bench": "synthetic", "backend": "cc", "rounds": ROUNDS, "commit": "n/a (fixture)",
@@ -59,13 +59,18 @@ def write_run(run_dir, times):
                 "env": {}, "status": 0, "wall_s": 1.0,
                 "results": [["step", times[arm][r] * 1e-3, "passed", ""]], "config": {},
                 "problems": [], "refused": False, "ok": True}))
-    (run_dir / "cells.jsonl").write_text("\n".join(lines) + "\n")
+    (run_dir / "cells.jsonl").write_text("\n".join(lines[:keep]) + "\n")
 
 
-def report(times):
+def report(times, keep=None, edit=None):
+    """`bin_cells.py report` over the fixture run of `times` (its first `keep` cells; `edit`
+    rewrites the saved records' text first)."""
     with tempfile.TemporaryDirectory() as tmp:
         run_dir = Path(tmp)
-        write_run(run_dir, times)
+        write_run(run_dir, times, keep)
+        if edit:
+            path = run_dir / "cells.jsonl"
+            path.write_text(edit(path.read_text()))
         proc = subprocess.run([sys.executable, str(HERE / "bin_cells.py"), "report", str(run_dir)],
                               text=True, capture_output=True, timeout=120)
     return proc
@@ -104,9 +109,9 @@ class ModeReportTest(unittest.TestCase):
         self.assertEqual(table_row(text, "step", "steady", "12")[-1], "one mode")
         # Within modes: every fast round is the 0.9x, every slow round the identical cell.
         self.assertEqual(table_row(text, "step", "twomode", "fast/-")[3:],
-                         ["3", "0.900", "0.900-0.900", "3 of 3", "0.25"])
+                         ["3", "0.900", "0.900-0.900", "3 of 3"])
         self.assertEqual(table_row(text, "step", "twomode", "slow/-")[3:],
-                         ["9", "1.000", "1.000-1.000", "0 of 0", "1"])
+                         ["9", "1.000", "1.000-1.000", "0 of 0"])
         self.assertIsNone(table_row(text, "step", "steady", "fast/-"))
 
     def test_a_run_without_modes_says_so(self):
@@ -116,6 +121,26 @@ class ModeReportTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("No arm is bimodal.", section(proc.stdout, "Modes"))
         self.assertNotIn("BIMODAL |", proc.stdout)
+
+    def test_an_interrupted_run_is_not_clean(self):
+        proc = report(fixture_times(), keep=-1)
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("the saved run is incomplete: 1 of 36 planned cells have no record",
+                      proc.stdout)
+        self.assertNotIn("every cell clean", proc.stdout)
+
+    def test_records_before_the_configuration_schema_are_refused(self):
+        legacy = '"config": {"backend": {"value": "cc", "source": "commandline", "detail": "-"}}'
+        proc = report(fixture_times(), edit=lambda t: t.replace('"config": {}', legacy))
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("predate the source/layer/origin schema", proc.stderr)
+
+    def test_a_single_arm_run_is_read_for_modes(self):
+        proc = report({"twomode": fixture_times()["twomode"]})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        text = section(proc.stdout, "Modes")
+        self.assertEqual(table_row(text, "step", "twomode", "12")[-1], "BIMODAL")
+        self.assertNotIn("within modes", text)
 
     def test_a_missing_run_is_a_usage_error(self):
         proc = subprocess.run([sys.executable, str(HERE / "bin_cells.py"), "report",
@@ -179,6 +204,16 @@ class ModeRuleTest(unittest.TestCase):
                          for r in range(ROUNDS)} for a in ("base", "a")}
             found += self.reading(times)["a"]["bimodal"]
         self.assertGreater(found, 80)
+
+    def test_an_arm_without_the_variant_sets_no_threshold(self):
+        # The reference's threshold is the smallest MEASURED difference: an arm that never timed
+        # this variant pairs with nothing and must not lower it to zero. The reference's 1.1x step
+        # is below the 2x arm's difference, so it is not bimodal with or without the empty arm.
+        ref = {r: (10.0 if r % 3 else 11.0) + 0.001 * r for r in range(ROUNDS)}
+        far = {r: 2 * t for r, t in ref.items()}
+        for times in ({"base": ref, "far": far}, {"base": ref, "far": far, "none": {}}):
+            self.assertFalse(self.reading(times)["base"]["bimodal"], sorted(times))
+        self.assertTrue(self.reading({"base": ref})["base"]["bimodal"])
 
     def test_the_split_takes_the_lowest_of_tied_gaps(self):
         s = cells.mode_split([1.0, 2.0, 3.0])

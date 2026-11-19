@@ -228,7 +228,8 @@ def mode_cells(group):
 
 def mode_lines(arms, variants, by):
     """The Modes section (gh-ocannl-2308): `cells.MODE_RULE`, then for each variant with a bimodal
-    arm every arm's two groups, and the paired ratios within modes against the reference."""
+    arm every arm's two groups, and (with two arms or more) the paired ratios within modes against
+    the reference, descriptively (`cells.MODE_PAIRED_HEADER`)."""
     ref = arms[0]
     lines = ["", "## Modes", "", cells.MODE_RULE, ""]
     split_rows, paired_rows = [], []
@@ -251,7 +252,7 @@ def mode_lines(arms, variants, by):
             for modes, stats in cells.paired_by_mode(times[ref], times[a], reading[ref]["labels"],
                                                      reading[a]["labels"]):
                 paired_rows.append((display_value(v), display_value(a), modes,
-                                    *cells.paired_cells(stats)))
+                                    *cells.paired_cells(stats)[:4]))
     if not split_rows:
         return lines + ["No arm is bimodal."]
     lines += table_lines(("variant", "arm", "cells", "fast n", "fast median", "fast range",
@@ -259,9 +260,10 @@ def mode_lines(arms, variants, by):
                          split_rows, "llrrrrrrrrrl")
     if paired_rows:
         lines += ["", f"Paired against {display_value(ref)} within modes (modes = arm/reference; a "
-                  "pair is one round's two cells):", ""]
-        lines += table_lines(("variant", "arm", "modes", *cells.PAIRED_HEADER), paired_rows,
-                             "lllrrrrr")
+                  "pair is one round's two cells; descriptive -- the pairs are selected by their "
+                  "own times, so no sign-test p):", ""]
+        lines += table_lines(("variant", "arm", "modes", *cells.MODE_PAIRED_HEADER), paired_rows,
+                             "lllrrrr")
     return lines
 
 
@@ -337,6 +339,7 @@ def render_report(manifest, records, problems, title="bin/ bench cells", extra=(
                  *cells.paired_cells(cells.paired(by.get((v, ref), {}), by.get((v, a), {}))))
                 for v in variants for a in arms[1:]]
         lines += table_lines(("variant", "arm", *cells.PAIRED_HEADER), rows, "llrrrrr")
+    if variants:
         lines += mode_lines(arms, variants, by)
 
     lines += list(extra)
@@ -507,6 +510,9 @@ def stated_files(common_env, arms):
     return dict(sorted(files.items()))
 
 
+REPORT_CONFIG_KEYS = {"value", "source", "layer", "profile", "origin"}
+
+
 def report_main(argv):
     """`bin_cells.py report RUN_DIR`: the report of a finished run re-rendered from its saved
     `manifest.json` and `cells.jsonl` (the run's verdict re-judged as `run_problems` judges it), on
@@ -521,6 +527,11 @@ def report_main(argv):
         manifest, records = cells.read_run(args.run_dir)
     except (OSError, ValueError) as e:
         parser.exit(2, f"{DRIVER} report: {args.run_dir}: {e}\n")
+    # A run saved before the configuration-record schema (gh-ocannl-1566) names no layer/origin.
+    if any(not REPORT_CONFIG_KEYS <= set(entry)
+           for r in records for entry in (r["config"] or {}).values()):
+        parser.exit(2, f"{DRIVER} report: {args.run_dir}: its configuration records predate the "
+                       "source/layer/origin schema (gh-ocannl-1566); this report cannot read them\n")
     extra = ()
     if manifest.get("reader") == "record":
         extra = (parity_lines(args.run_dir, manifest, records)
@@ -528,6 +539,14 @@ def report_main(argv):
                  ["", "## Parity losses", "",
                   "Not re-read: this run directory keeps no cell streams (`cells/`)."])
     problems = cells.run_problems(manifest, records)
+    # An interrupted run keeps its manifest and the cells that finished: a missing cell is a fault,
+    # never a clean verdict over the cells that happen to be there.
+    planned = {(r, manifest["arms"][i]["label"]) for r, order in enumerate(manifest["orders"])
+               for i in order}
+    missing = planned - {(r["round"], r["arm"]) for r in records}
+    if missing:
+        problems.append(f"the saved run is incomplete: {len(missing)} of {len(planned)} planned "
+                        "cells have no record")
     sys.stdout.write(render_report(manifest, records, problems, extra=extra))
     return cells.exit_status(records, problems)
 
