@@ -23,7 +23,8 @@ interleaved) are its two front ends:
   line.
 - The cell loop (`run_cells`), which takes the driver's READER of a cell's output -- what turns its
   streams into timed results (`bench_output.py` holds every format an OCANNL bench prints).
-- The paired statistics (`paired_row`, `sign_test_p`).
+- The paired statistics (`paired`, `paired_cells`, `sign_test_p`), and the modes an arm's cells
+  fall into (`MODE_RULE`: `mode_split`, `mode_reading`, `paired_by_mode`, gh-ocannl-2308).
 - One cell from a shell driver (`run_one`, the `cell` command below): the same environment, pins,
   supervision and configuration check for a driver whose cells are not a design of arms -- a
   calibration pipeline whose fits feed later cells, a search followed by replays of its cache, a
@@ -288,6 +289,97 @@ def paired_cells(stats):
 
 
 PAIRED_HEADER = ("pairs", "median ratio", "range", "faster in", "sign-test p")
+
+
+# Modes (gh-ocannl-2308). A device or process state can put an arm's cells into two modes (on
+# gfx1151 every arm's processes fell ~1.3 ms apart, widening an identical control to [0.913, 1.090]
+# around a clean 5-6% effect within each mode, lukstafi/ocannl-staging#2103). The pooled ratios
+# above then mix modes; these functions find the modes and pair the rounds within them.
+MODE_SEPARATION = 2
+MODE_MIN_CELLS = 2
+MODE_RULE = (
+    "Mode rule: an arm's times, sorted, split at their widest gap between neighbours into a fast "
+    "and a slow group. The arm SPLITS when that gap is wider than the two groups' ranges together; "
+    f"it is BIMODAL when, besides, each group holds at least {MODE_MIN_CELLS} cells, the gap is "
+    f"more than {MODE_SEPARATION}x the two ranges together, and the step between the groups "
+    "(fastest slow cell / slowest fast cell, minus 1) exceeds the paired difference it could "
+    "mask: |median ratio - 1| of the arm against the reference (for the reference, the smallest "
+    "such difference among the arms paired with it; none when no arm is). "
+    "Ordinary spread does not fire it: noise fills the gaps it opens, so its widest gap is a small "
+    "part of the range, and one stray cell is an outlier, not a mode. Once a variant has a bimodal "
+    "arm, every arm that splits is read in its two modes, a single cell then counting as one (the "
+    "run has shown that the mode recurs).")
+
+
+def mode_split(times):
+    """The widest-gap split of one arm's times (any iterable of seconds): {"fast", "slow" (sorted
+    lists), "gap", "widths" (the two groups' ranges summed), "step" (slow[0] / fast[-1]),
+    "splits"}, or None for fewer than three times. Ties go to the lowest gap."""
+    xs = sorted(times)
+    if len(xs) < 3:
+        return None
+    gap, cut = max((xs[k + 1] - xs[k], -k) for k in range(len(xs) - 1))
+    fast, slow = xs[:1 - cut], xs[1 - cut:]
+    widths = (fast[-1] - fast[0]) + (slow[-1] - slow[0])
+    return {"fast": fast, "slow": slow, "gap": gap, "widths": widths, "step": slow[0] / fast[-1],
+            "splits": gap > widths}
+
+
+def mode_reading(by_arm, ref):
+    """The modes of one variant. `by_arm` maps each arm, the reference `ref` among them, to its
+    {round: seconds}. Returns {arm: {"split", "bimodal", "labels"}}: `mode_split`'s result, whether
+    MODE_RULE calls the arm bimodal, and -- once any arm is -- {round: "fast" | "slow"} for every arm
+    that splits (None otherwise)."""
+    def effect(arm):
+        """|median ratio - 1| against the reference, or None when the arm pairs with nothing."""
+        if arm != ref:
+            m = paired(by_arm[ref], by_arm[arm])["median"]
+            return None if m is None else abs(m - 1)
+        others = [e for e in map(effect, (a for a in by_arm if a != ref)) if e is not None]
+        return min(others) if others else None
+    out = {}
+    for arm, times in by_arm.items():
+        s = mode_split(times.values())
+        bimodal = (s is not None and s["splits"] and len(s["fast"]) >= MODE_MIN_CELLS
+                   and len(s["slow"]) >= MODE_MIN_CELLS and s["gap"] > MODE_SEPARATION * s["widths"]
+                   and s["step"] - 1 > (effect(arm) or 0.0))
+        out[arm] = {"split": s, "bimodal": bimodal, "labels": None}
+    if any(m["bimodal"] for m in out.values()):
+        for arm, m in out.items():
+            s = m["split"]
+            if s is not None and s["splits"]:
+                m["labels"] = {r: "fast" if t <= s["fast"][-1] else "slow"
+                               for r, t in by_arm[arm].items()}
+    return out
+
+
+# The within-mode columns. No sign-test p: the pairs are chosen by their own times (a mode is a
+# range of the arm's values), so the exact binomial p of an unselected pairing does not hold --
+# with one side read in modes, an A/A run's fast/- rows would read "significant".
+MODE_PAIRED_HEADER = ("pairs", "median ratio", "range", "faster in")
+
+
+def paired_by_mode(base, mine, base_labels, mine_labels):
+    """`paired` within modes (descriptive: see MODE_PAIRED_HEADER): [(modes, stats)], `modes` written "ARM/REFERENCE" ("-" for a side read
+    in one mode). With both sides in modes: fast/fast, slow/slow, and the rounds whose two cells
+    fell in different modes ("mixed"); with one side only, that side's two modes. [] when neither
+    side is in modes."""
+    def subset(rounds):
+        rounds = set(rounds)
+        return ({r: t for r, t in base.items() if r in rounds},
+                {r: t for r, t in mine.items() if r in rounds})
+    common = sorted(set(base) & set(mine))
+    if base_labels is None and mine_labels is None:
+        return []
+    if base_labels is None:
+        groups = [(f"{m}/-", [r for r in common if mine_labels[r] == m]) for m in ("fast", "slow")]
+    elif mine_labels is None:
+        groups = [(f"-/{m}", [r for r in common if base_labels[r] == m]) for m in ("fast", "slow")]
+    else:
+        groups = [(f"{m}/{m}", [r for r in common if mine_labels[r] == base_labels[r] == m])
+                  for m in ("fast", "slow")]
+        groups.append(("mixed", [r for r in common if mine_labels[r] != base_labels[r]]))
+    return [(modes, paired(*subset(rounds))) for modes, rounds in groups]
 
 
 # ---------------------------------------------------------------------------------------------
