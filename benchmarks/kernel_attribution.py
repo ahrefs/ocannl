@@ -580,7 +580,7 @@ def trusted_key(by_key):
     the two share is a coincidence, not evidence -- only a key without anonymous nodes is trusted
     then. Without renumbering every key is."""
     renumbered = any(stable_key(x["writes"]) != stable_key(y["writes"]) for x, y in by_key)
-    return lambda key: not renumbered or not any(ANONYMOUS_ID.match(w) for w in key.split())
+    return lambda key: not renumbered or not any(ANONYMOUS_ID.search(w) for w in key.split())
 
 
 def render_join(cells):

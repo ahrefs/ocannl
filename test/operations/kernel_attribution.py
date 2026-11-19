@@ -470,9 +470,11 @@ with tempfile.TemporaryDirectory() as scratch:
     # The same renumbering, and what a key shared by chance proves: H's ids run 10 higher, but its
     # `n5_x` happens to equal F's. H also runs F's two named gradient kernels in the other order.
     out = Path(scratch)
-    f_writes = {0: "n10", 1: "layer_norm_l0", 2: "n5_x", 3: "q.grad", 4: "k.grad"}
-    h_writes = {0: "n20", 1: "layer_norm_l0", 2: "n5_x", 3: "k.grad", 4: "q.grad"}
-    times = {i: [0.5] * 4 for i in range(5)}
+    f_writes = {0: "n10", 1: "layer_norm_l0", 2: "n5_x", 3: "q.grad", 4: "k.grad",
+                5: "tile__n7_acc"}
+    h_writes = {0: "n20", 1: "layer_norm_l0", 2: "n5_x", 3: "k.grad", 4: "q.grad",
+                5: "tile__n7_acc"}
+    times = {i: [0.5] * 4 for i in range(6)}
     def build_cell(stem, writes, treatment, precision):
         write_cell(out, stem, in_step=times, isolated={i: v[:1] * 20 for i, v in times.items()},
                    writes=writes.__getitem__, routines=[("step", sorted(writes))])
@@ -483,15 +485,17 @@ with tempfile.TemporaryDirectory() as scratch:
     f = build_cell("hip-gpt2_mini_train-keep-kprof1", f_writes, "keep", "f32")
     h = build_cell("hip-gpt2_mini_train-mixbf16keep-kprof1", h_writes, "mixbf16keep", "bf16")
     by_key, by_position, left_f, left_h = ka.pair_kernels(f, h)
-    check(sorted((x["i"], y["i"]) for x, y in by_key) == [(0, 0), (1, 1), (2, 2), (3, 4), (4, 3)]
+    check(sorted((x["i"], y["i"]) for x, y in by_key)
+          == [(0, 0), (1, 1), (2, 2), (3, 4), (4, 3), (5, 5)]
           and not by_position and not left_f and not left_h, str((by_key, left_f, left_h)))
     print("two named kernels the builds ran in the other order still join by their nodes: true")
     trusted = ka.trusted_key(by_key)
-    check(trusted("layer_norm_l0") and not trusted("n5_x"), "trust")
+    # A kernel writing only minted staging keys on it, and its id is as anonymous as `n5_x`'s.
+    check(trusted("layer_norm_l0") and not trusted("n5_x") and not trusted("tile__n7_acc"), "trust")
     code, text = report_text(out)
     joined = text.split("### Kernel join: hip gpt2_mini_train, mixbf16keep against keep")[1]
-    check(code == 0 and "- 3 kernels joined by the nodes they write (of 5 and 5), 0 and 0 left over"
-          in joined and "- 2 more paired in step order without a trusted key" in joined, joined)
+    check(code == 0 and "- 3 kernels joined by the nodes they write (of 6 and 6), 0 and 0 left over"
+          in joined and "- 3 more paired in step order without a trusted key" in joined, joined)
     print("in a renumbered build an anonymous id the two share is no join: true")
     # The forward-only fixture converts weights at load: the same kernel list at both precisions.
     g = build_cell("hip-gpt2_mini-keep-kprof1", f_writes, "keep", "f32")
