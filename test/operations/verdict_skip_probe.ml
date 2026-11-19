@@ -1,11 +1,12 @@
 (* The Verdict-only process behind sweep_harness.sh: the real skip emission, record files included.
 
    [replay [ACTION]] is the fake opam's stand-in for a test action (gh-ocannl-1114): it re-announces
-   through [Verdict.skipped] every skip record of the fixture text on stdin, so the per-action
-   record file is written by Verdict itself rather than restated by the harness. Its arguments are
-   the action's identity -- a rerun replays under the same ones and so rewrites the same file -- and
-   the claims come on stdin precisely so that a retry announcing different skips is still the same
-   action.
+   through [Verdict.skipped] every skip record of the fixture text on stdin, and through
+   [Verdict.p_unless] every hatched claim's BYPASS or CHECKED record (gh-ocannl-996), so the
+   per-action record file is written by Verdict itself rather than restated by the harness. Its
+   arguments are the action's identity -- a rerun replays under the same ones and so rewrites the
+   same file -- and the claims come on stdin precisely so that a retry announcing different skips is
+   still the same action.
 
    [BACKEND relaunch] skips a claim, then relaunches this executable with the SAME arguments in the
    same directory -- the record identity of its own action, the `cc_march_census` shape -- marked as
@@ -26,10 +27,25 @@ let relaunch backend =
 let replay () =
   let prefix = "OCANNL_TOOL_VERDICT_SKIP\t" in
   let plen = String.length prefix in
+  let hatched kind =
+    let prefix = "OCANNL_TOOL_VERDICT_" ^ kind ^ "\t" in
+    fun line ->
+      let n = String.length prefix in
+      if String.length line > n && String.sub line 0 n = prefix then
+        match String.split_on_char '\t' (String.sub line n (String.length line - n)) with
+        | [ hatch; _exe; claim ] -> Some (hatch, claim)
+        | _ -> failwith ("malformed hatched-claim record in fixture: " ^ line)
+      else None
+  in
+  let bypass = hatched "BYPASS" and checked = hatched "CHECKED" in
   let rec loop () =
     match In_channel.input_line stdin with
     | None -> ()
     | Some line ->
+        (match (bypass line, checked line) with
+        | Some (hatch, claim), _ -> Verdict.p_unless ~unless:[ (hatch, true) ] claim true
+        | None, Some (hatch, claim) -> Verdict.p_unless ~unless:[ (hatch, false) ] claim true
+        | None, None -> ());
         (if String.length line > plen && String.sub line 0 plen = prefix then
            match String.split_on_char '\t' (String.sub line plen (String.length line - plen)) with
            | [ scope; _exe; claim ] ->

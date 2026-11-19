@@ -99,6 +99,7 @@ SWEEP_TOOLS=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=../scripts/process-group.sh
 . "$SWEEP_TOOLS/../scripts/process-group.sh"
 AGGREGATE_SKIPS=$SWEEP_TOOLS/aggregate-skips.sh
+AGGREGATE_BYPASSES=$SWEEP_TOOLS/aggregate-bypasses.sh
 # The per-box width cap, shared with tools/test-run.sh so the two cannot drift.
 [ -r "$SWEEP_TOOLS/box-jobs.sh" ] || {
   echo "sweep: cannot read $SWEEP_TOOLS/box-jobs.sh" >&2
@@ -638,6 +639,12 @@ SKIP_RUN_BACKENDS=()
 SKIP_RUN_BOXES=()
 SKIP_RUN_RECORDS=()
 SKIP_RERUN_CLEARED=()
+# The same staged records, every unit's -- variants and incremental units
+# included -- for the bypass rates (gh-ocannl-996): a hatched claim's BYPASS and
+# CHECKED records are counts of what ran, so they need no completeness and no
+# vocabulary, only a unit's own records.
+BYPASS_RUN_UNITS=()
+BYPASS_RUN_RECORDS=()
 
 contains() {
   local wanted=$1 item
@@ -2263,20 +2270,29 @@ collect_verdict_records() { # host wt dest log path_prefix
 # read, or hold no action at all -- a swept commit whose Verdict predates them
 # -- is not evidence, and says so: its absence of skip records would otherwise
 # read as every claim executed.
-stage_skip_evidence() { # machine backend host wt log path_prefix [cleared]
+#
+# An incremental pass is staged for the bypass rates only (`bypass-only`, gh-ocannl-996): the
+# actions it ran wrote records, the cached ones none, which a rate over this run's reaches
+# tolerates and a skip intersection does not.
+stage_skip_evidence() { # machine backend host wt log path_prefix [cleared|bypass-only]
   local machine=$1 backend=$2 host=$3 wt=$4 log=$5 path_prefix=$6 cleared=${7:-}
-  local records=${5%.log}.verdict-records
+  local records=${5%.log}.verdict-records staged=skip-run
+  # An incremental unit whose every action was cached ran none and wrote no records: no evidence,
+  # and nothing to say about it, since that is its ordinary state.
   if ! collect_verdict_records "$host" "$wt" "$records" "$log" "$path_prefix"; then
-    say "  $machine/$backend: skip evidence unavailable -- its per-action verdict records could not be read"
+    [ "$cleared" = bypass-only ] ||
+      say "  $machine/$backend: skip evidence unavailable -- its per-action verdict records could not be read"
     return 0
   fi
   if ! grep -q "^OCANNL_TOOL_VERDICT_ACTION$(printf '\t')" "$records"; then
-    say "  $machine/$backend: skip evidence unavailable -- no per-action verdict records (a swept commit predating gh-ocannl-1114?)"
+    [ "$cleared" = bypass-only ] ||
+      say "  $machine/$backend: skip evidence unavailable -- no per-action verdict records (a swept commit predating gh-ocannl-1114?)"
     return 0
   fi
-  printf '%s\n' "$records" >"$LANE_DIR/skip-run.$machine.$backend" ||
+  [ "$cleared" != bypass-only ] || staged=bypass-run
+  printf '%s\n' "$records" >"$LANE_DIR/$staged.$machine.$backend" ||
     die "cannot stage skip evidence for $machine/$backend"
-  if [ -n "$cleared" ]; then
+  if [ "$cleared" = cleared ]; then
     : >"$LANE_DIR/skip-cleared.$machine.$backend" ||
       die "cannot stage skip evidence for $machine/$backend"
   fi
@@ -2660,6 +2676,8 @@ run_unit() { # machine backend host
       stage_skip_evidence "$machine" "$backend" "$host" "$wt" "$log" "${path_prefix:-}"
     elif [ "$outcome" = fail ] && rerun_cleared "$log"; then
       stage_skip_evidence "$machine" "$backend" "$host" "$wt" "$log" "${path_prefix:-}" cleared
+    elif [ "$outcome" = incremental-pass ]; then
+      stage_skip_evidence "$machine" "$backend" "$host" "$wt" "$log" "${path_prefix:-}" bypass-only
     fi
   fi
   case $outcome in
@@ -3213,8 +3231,16 @@ die_post_run() {
 for unit in "${UNITS[@]}"; do
   IFS=: read -r machine backend host <<<"$unit"
   evidence=$LANE_DIR/skip-run.$machine.$backend
+  bypass_evidence=$LANE_DIR/bypass-run.$machine.$backend
+  [ -f "$evidence" ] || [ -f "$bypass_evidence" ] || continue
+  BYPASS_RUN_UNITS+=("$machine/$backend")
+  if [ -f "$evidence" ]; then
+    BYPASS_RUN_RECORDS+=("$(cat "$evidence")")
+  else
+    BYPASS_RUN_RECORDS+=("$(cat "$bypass_evidence")")
+    continue
+  fi
   ! unit_is_variant "$backend" || continue
-  [ -f "$evidence" ] || continue
   SKIP_RUN_BACKENDS+=("$backend")
   SKIP_RUN_BOXES+=("$machine")
   SKIP_RUN_RECORDS+=("$(cat "$evidence")")
@@ -3270,6 +3296,42 @@ if [ "$FORCE" = 1 ] && [ -z "$TARGET" ]; then
   grep -E '^(result|environment result|FAIL|POTENTIAL): ' "$report" | sed 's/^/  /'
 else
   echo "skip coverage: not aggregated (requires --force with no --target)"
+fi
+
+# The bypass rate of every hatched claim, per unit (gh-ocannl-996): a claim
+# that executed and took its run-time hatch (a contended timing window, unclean
+# recording evidence) prints the passing row a check prints, so without this a
+# claim verified one night in eight reads as covered. Every unit whose records
+# were staged counts, forced or incremental: the rate is over the reaches this
+# run made. The report's per-unit lines and UNVERIFIED findings (a claim
+# bypassed on every unit that reached it) are quoted here, indented, for the
+# routine that reads sweep output; a finding is a signal, never a failed sweep.
+if [ -n "$TARGET" ]; then
+  echo "bypass rates: not aggregated (requires no --target)"
+elif [ ${#BYPASS_RUN_UNITS[@]} -eq 0 ]; then
+  echo "bypass rates: not aggregated (no unit's verdict records were staged)"
+else
+  [ -x "$AGGREGATE_BYPASSES" ] ||
+    die_post_run "bypass aggregator is not executable: $AGGREGATE_BYPASSES"
+  bypass_args=()
+  for ((i = 0; i < ${#BYPASS_RUN_UNITS[@]}; i++)); do
+    bypass_args+=(--run "${BYPASS_RUN_UNITS[$i]}" "${BYPASS_RUN_RECORDS[$i]}")
+  done
+  bypass_report=$LOGS/$stamp-bypass-rates.txt
+  bypass_stage=$bypass_report.stage.$$
+  {
+    echo "bypass rates for $run_sha ($execution execution)"
+    "$AGGREGATE_BYPASSES" "${bypass_args[@]}"
+  } >"$bypass_stage"
+  bypass_rc=$?
+  if [ "$bypass_rc" -ne 0 ]; then
+    rm -f "$bypass_stage"
+    die_post_run "bypass aggregation failed (exit $bypass_rc)"
+  fi
+  mv "$bypass_stage" "$bypass_report" || die_post_run "cannot publish $bypass_report"
+  bypass_result=$(grep '^result:' "$bypass_report" | head -1)
+  echo "bypass rates: ${bypass_result#result: } -- $bypass_report"
+  grep -E '^([^ ].*: [0-9]+ of [0-9]+ hatched claim|UNVERIFIED: )' "$bypass_report" | sed 's/^/  /'
 fi
 echo "history: $HISTORY"
 echo "logs:    $LOGS/$stamp-*"

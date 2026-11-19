@@ -688,6 +688,10 @@ for name, target, old, new, oracle in controls:
     for helper in [sweep.name] + helpers:
         shutil.copy2(sweep.parent / helper, dest / 'tools' / helper)
     shutil.copy2(aggregate, dest / 'tools' / aggregate.name)
+    # And every other tool the sweep resolves beside itself (the bypass-rate reader, gh-ocannl-996).
+    for resolved in re.findall(r'^[A-Z_]+=\$SWEEP_TOOLS/([^\s"]+)$', sweep.read_text(), re.M):
+        if resolved != aggregate.name:
+            shutil.copy2(sweep.parent / resolved, dest / 'tools' / resolved)
     shutil.copy2(sweep.parent.parent / 'benchmarks/fixture_digest.py', dest / 'benchmarks/fixture_digest.py')
     shutil.copy2(harness.parent.parent.parent / 'bin/dune', dest / 'bin/dune')
     for file in [harness, harness.parent / 'sweep_remote_fixture.sh']:

@@ -6626,8 +6626,10 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   fixture, and `cc_march_census`'s emit children relaunch its executable from the directory of
   the action that spawned them). A process that is not Verdict-linked must unset it before running a
   Verdict-linked fixture (`sweep_harness.sh`, beside its `OCANNL_BACKEND` neutralization). A record kind the
-  aggregator does not judge (`OCANNL_TOOL_VERDICT_<KIND>`, the room left for gh-ocannl-996's bypass
-  record) passes through it. Beside its skips, each action's file names every claim it evaluated
+  aggregator does not judge (`OCANNL_TOOL_VERDICT_<KIND>`: a hatched claim's `BYPASS` and `CHECKED`
+  records and an instrument's `MEASURE`, gh-ocannl-996, which `tools/aggregate-bypasses.sh` reads
+  instead, or a newer Verdict's) passes through it, so a bypassed claim -- which executed -- never
+  reads as a skip here. Beside its skips, each action's file names every claim it evaluated
   and held (`OCANNL_TOOL_VERDICT_EVALUATED`, file-only, never echoed on stderr), and a skip an
   `EVALUATED` record of the same unit names does not count for that unit: one executable under
   two stanzas — a default run skipping its tf32 leg on CUDA, its `-tf32` rule evaluating it — is
@@ -6690,6 +6692,19 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   while the ordinary sweep's default configuration cannot execute it (gh-ocannl-885).
 
 ### Sweep units and verdicts
+
+- **Bypass rates** (gh-ocannl-996): after the skip coverage, the sweep hands every unit whose
+  records it staged -- forced passes, cleared reds, and incremental passes too, whose cached
+  actions simply wrote nothing -- to `tools/aggregate-bypasses.sh`, which writes
+  `logs/<stamp>-bypass-rates.txt`: per unit, `<bypassed> of <reaches> hatched claim reach(es)
+  bypassed (<n>%)` and each claim bypassed at least once with the hatches it took, then `UNVERIFIED:`
+  for a claim bypassed on EVERY unit that reached it -- this run checked it nowhere. The sweep's
+  stdout quotes the `bypass rates:` result with the report path, each unit's line and each finding,
+  indented. A finding never fails the sweep (a valid hatch on a loaded night is no regression): the
+  routine reads a claim UNVERIFIED night after night, or a unit at 100%, as the coverage gap it is.
+  The rate is over THIS run's reaches; a rate over nights is a query over the retained reports and
+  `*.verdict-records` copies. Records from a commit predating the records, or with a malformed
+  hatched record, refuse the aggregation (exit 2, `post-run-failed`), as the skip aggregator does.
 
 - Floor/native-PTX runtime-refusal signatures have one owner, `tools/environment-refusals.sh`
   (gh-ocannl-2219). It reads only its allowlisted uncaught exceptions/statuses and named runtime
