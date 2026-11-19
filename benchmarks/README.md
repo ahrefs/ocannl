@@ -895,7 +895,11 @@ single-threaded segments that sum to the serial step
   each arm with the first one round by round (median ratio, range, rounds faster, exact sign-test
   p) off the benches' `bench-result:` lines. Each such line states the variant's output check
   (`passed`/`failed`/`unchecked`, `Bench_out.check`): a failed check fails the cell, an unchecked
-  variant is listed as such. Device and loader runtime controls (`CUDA_*`, `HSA_*`, `MTL_*`,
+  variant is listed as such. An arm whose cells fall into two modes (a device or process state)
+  is named BIMODAL under the report's Modes section, which states the rule and pairs the rounds
+  within each mode beside the pooled table (gh-ocannl-2308); `bin_cells.py report DIR` re-renders
+  a finished run's report from its `manifest.json` and `cells.jsonl`, so a run saved before a
+  report change is read under the current one. Device and loader runtime controls (`CUDA_*`, `HSA_*`, `MTL_*`,
   `DYLD_*`, ...) and the toolchain variables pass through and are recorded with their values (every
   other variable by name only), the kernel compiler a cc cell runs is fingerprinted per arm, and
   the build is pinned to the checkout with `dune build --root --build-dir`. Example, the gh-ocannl-755 geometry A/B:

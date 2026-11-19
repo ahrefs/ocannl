@@ -59,6 +59,12 @@ report.md is what was printed: true
 | probe | fast | 4 | 0.500 | 0.500-0.500 | 4 of 4 | 0.125 |
 | probe_half | fast | 4 | 0.500 | 0.500-0.500 | 4 of 4 | 0.125 |
 
+## Modes
+
+Mode rule: an arm's times, sorted, split at their widest gap between neighbours into a fast and a slow group. The arm SPLITS when that gap is wider than the two groups' ranges together; it is BIMODAL when, besides, each group holds at least 2 cells, the gap is more than 2x the two ranges together, and the step between the groups (slowest fast cell to fastest slow cell) exceeds the paired difference it could mask: the arm's median ratio against the reference (for the reference, the smallest of the arms'). Ordinary spread does not fire it: noise fills the gaps it opens, so its widest gap is a small part of the range, and one stray cell is an outlier, not a mode. Once a variant has a bimodal arm, every arm that splits is read in its two modes, a single cell then counting as one (the run has shown that the mode recurs).
+
+No arm is bimodal.
+
 What the arms differ by, as resolved:
 
 | setting | slow | fast |

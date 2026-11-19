@@ -71,6 +71,12 @@ revisions.
   rounds can resolve a 5% effect that overlapping intervals of single runs read as parity
   (gh-ocannl-755's twelve pairs).
 
+When a variant has an arm whose cells fall into two modes (a device or process state), its pooled
+ratios mix them: the report's Modes section states `cells.MODE_RULE`, names the bimodal arms, and
+pairs the rounds within each mode (gh-ocannl-2308). `bin_cells.py report DIR` re-renders a finished
+run's report from DIR's `manifest.json` and `cells.jsonl`, so an older run is read under the
+current report without hand work.
+
 DIR must not exist yet or be empty, and must lie outside the checkout. It receives `manifest.json`
 (what ran: commit, host, bench, arms, design, the variables cleared), `cells.jsonl` (one record per
 cell: argv, stated environment, exit, wall time, results, resolved configuration), `report.md` (also
@@ -213,6 +219,52 @@ def ms(seconds):
     return f"{seconds * 1e3:.4g}"
 
 
+def mode_cells(group):
+    """One mode's table cells: its count, median and range (ms)."""
+    if not group:
+        return ("-", "-", "-")
+    return (str(len(group)), ms(statistics.median(group)), f"{ms(group[0])}-{ms(group[-1])}")
+
+
+def mode_lines(arms, variants, by):
+    """The Modes section (gh-ocannl-2308): `cells.MODE_RULE`, then for each variant with a bimodal
+    arm every arm's two groups, and the paired ratios within modes against the reference."""
+    ref = arms[0]
+    lines = ["", "## Modes", "", cells.MODE_RULE, ""]
+    split_rows, paired_rows = [], []
+    for v in variants:
+        times = {a: by.get((v, a), {}) for a in arms}
+        reading = cells.mode_reading(times, ref)
+        if not any(m["bimodal"] for m in reading.values()):
+            continue
+        for a in arms:
+            m = reading[a]
+            s = m["split"]
+            in_modes = m["labels"] is not None
+            split_rows.append((
+                display_value(v), display_value(a), str(len(times[a])),
+                *(mode_cells(s["fast"]) if in_modes else ("-",) * 3),
+                *(mode_cells(s["slow"]) if in_modes else ("-",) * 3),
+                ms(s["gap"]) if s else "-", f"{s['step']:.3f}" if s else "-",
+                "BIMODAL" if m["bimodal"] else "in modes" if in_modes else "one mode"))
+        for a in arms[1:]:
+            for modes, stats in cells.paired_by_mode(times[ref], times[a], reading[ref]["labels"],
+                                                     reading[a]["labels"]):
+                paired_rows.append((display_value(v), display_value(a), modes,
+                                    *cells.paired_cells(stats)))
+    if not split_rows:
+        return lines + ["No arm is bimodal."]
+    lines += table_lines(("variant", "arm", "cells", "fast n", "fast median", "fast range",
+                          "slow n", "slow median", "slow range", "gap", "step", "reading"),
+                         split_rows, "llrrrrrrrrrl")
+    if paired_rows:
+        lines += ["", f"Paired against {display_value(ref)} within modes (modes = arm/reference; a "
+                  "pair is one round's two cells):", ""]
+        lines += table_lines(("variant", "arm", "modes", *cells.PAIRED_HEADER), paired_rows,
+                             "lllrrrrr")
+    return lines
+
+
 def render_report(manifest, records, problems, title="bin/ bench cells", extra=()):
     arms = [a["label"] for a in manifest["arms"]]
     rounds = manifest["rounds"]
@@ -285,6 +337,7 @@ def render_report(manifest, records, problems, title="bin/ bench cells", extra=(
                  *cells.paired_cells(cells.paired(by.get((v, ref), {}), by.get((v, a), {}))))
                 for v in variants for a in arms[1:]]
         lines += table_lines(("variant", "arm", *cells.PAIRED_HEADER), rows, "llrrrrr")
+        lines += mode_lines(arms, variants, by)
 
     lines += list(extra)
     lines += ["", "## Resolved configuration", ""]
@@ -454,8 +507,35 @@ def stated_files(common_env, arms):
     return dict(sorted(files.items()))
 
 
+def report_main(argv):
+    """`bin_cells.py report RUN_DIR`: the report of a finished run re-rendered from its saved
+    `manifest.json` and `cells.jsonl` (the run's verdict re-judged as `run_problems` judges it), on
+    stdout; nothing is run or written. A record-reader run's parity losses are re-read only where
+    the directory still keeps its cells' streams (`cells/`)."""
+    parser = argparse.ArgumentParser(
+        prog="bin_cells.py report",
+        description="Re-render a finished run's report from its manifest.json and cells.jsonl.")
+    parser.add_argument("run_dir", type=Path, metavar="RUN_DIR")
+    args = parser.parse_args(argv)
+    try:
+        manifest, records = cells.read_run(args.run_dir)
+    except (OSError, ValueError) as e:
+        parser.exit(2, f"{DRIVER} report: {args.run_dir}: {e}\n")
+    extra = ()
+    if manifest.get("reader") == "record":
+        extra = (parity_lines(args.run_dir, manifest, records)
+                 if (args.run_dir / "cells").is_dir() else
+                 ["", "## Parity losses", "",
+                  "Not re-read: this run directory keeps no cell streams (`cells/`)."])
+    problems = cells.run_problems(manifest, records)
+    sys.stdout.write(render_report(manifest, records, problems, extra=extra))
+    return cells.exit_status(records, problems)
+
+
 def main(argv=None, arm_commits=None, *, validate_cell=None):
     argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["report"]:
+        return report_main(argv[1:])
     split = argv.index("--") if "--" in argv else len(argv)
     parser = build_parser()
     args = parser.parse_args(argv[:split])

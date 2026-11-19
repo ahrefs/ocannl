@@ -15,8 +15,9 @@
  ; The Python modules are globbed rather than named: the test grows imports faster than anyone
  ; remembers to pin them. Today it imports orchestrate, strict_json, bench_output, display_safe,
  ; gh675_cells, gh998_cells, gh1002_cells, gen_fixtures, bench_venv, cell_group, fixture_digest,
- ; runners.bench_common, test.test_cell_group, test.test_bench_line_scan and test_cells, runs
- ; gh1003_summary.py, gh612_parity.py, gh728_protocol.py and ab.py by path, and its venv-interpreter
+ ; runners.bench_common, test.test_cell_group, test.test_bench_line_scan, test.test_modes and
+ ; test_cells, runs gh1003_summary.py, gh612_parity.py, gh728_protocol.py and ab.py by path, and
+ ; its venv-interpreter
  ; scan, like its bench-line reader scan, reads every
  ; `*.py` here and under runners/ at any depth -- hence the recursive glob, the same population as
  ; the scan's `runners/**/*.py`. The shell scripts are listed for the same reason: the test drives

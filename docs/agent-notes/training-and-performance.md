@@ -1080,7 +1080,14 @@ files.
   the output rounding dominates). Its arms are whole processes in `Bench_design`'s order, paired round by round.
 - That machinery is one module now, `benchmarks/cells.py` (gh-ocannl-1565), with two front ends:
   `bin_cells.py` (named arms over one build, `--arm-exe` for two builds, `--reader record` for a
-  runner such as bench_gpt) and `ab.py` (two revisions, each built once in its own worktree). A new
+  runner such as bench_gpt) and `ab.py` (two revisions, each built once in its own worktree).
+  Before reading a wide identical control as noise, read the report's Modes section
+  (gh-ocannl-2308): an arm whose times split at a gap more than twice its two groups' ranges, with
+  a step larger than its own paired difference, is BIMODAL, and the rounds are re-paired within
+  each mode. On gfx1151 every arm's processes fell ~1.3 ms apart, so the pooled control read
+  [0.913, 1.090] around an effect that was 1.051x/1.060x within the modes (the cells of
+  lukstafi/ocannl-staging#2103, re-rendered by `bin_cells.py report DIR`). The rule allows one cell
+  per mode only once another arm has shown the mode recurs; a lone stray cell is an outlier. A new
   driver imports them rather than re-deriving env scrubbing, supervision, the visiting order or the
   sign test, and reads bench output only through `benchmarks/bench_output.py` (gh-ocannl-1443): five
   private result-line readers had drifted apart (first vs last `{` line, a substring filter, a
