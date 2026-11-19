@@ -170,7 +170,11 @@
  (libraries
   base
   stdio
+  unix
   arrayjit.ir
+  arrayjit.builtins_cuda
+  arrayjit.builtins_hip
+  arrayjit.builtins_metal
   cuda_backend_stub_check
   hip_backend_stub_check
   metal_backend_stub_check))

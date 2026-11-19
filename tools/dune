@@ -84,8 +84,8 @@
 ; the backend's `vendor_routine_idents` table against what fails; for CUDA and HIP it also prints
 ; the generated table module (`arrayjit/lib/vendor_idents_<backend>.ml`) the run regenerates. One
 ; arm per vendor, selected as fp8_soak's are, so the arms are compiled only where their library is
-; installed. Not a rule on any alias: it needs the toolchain and takes minutes (about ten for HIP,
-; whose rocWMMA prelude dominates each compile). Run it on a box with the toolkit as
+; installed. Not a rule on any alias: it needs the toolchain and takes minutes. HIP sends only
+; candidates that pass the ordinary prelude to the rocWMMA compiler pass. Run it as
 ; `tools/test-run.sh run exec tools/vendor_idents.exe -- <cuda|hip|metal>`.
 
 (executable
@@ -98,7 +98,11 @@
  (libraries
   base
   stdio
+  unix
   arrayjit.ir
+  arrayjit.builtins_cuda
+  arrayjit.builtins_hip
+  arrayjit.builtins_metal
   (select
    vendor_idents_arm_cuda.ml
    from

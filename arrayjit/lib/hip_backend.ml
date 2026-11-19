@@ -205,6 +205,12 @@ let rocwmma_include_dir =
          && Stdlib.Sys.file_exists (p ^ "/rocwmma/internal/types.hpp"))
      |> Option.map ~f:(String.map ~f:(fun c -> if Char.(c = '\\') then '/' else c)))
 
+let rocwmma_include_options () =
+  Option.to_list (Option.map (Lazy.force rocwmma_include_dir) ~f:(fun d -> "-I" ^ d))
+
+let hip_probe_include_options () =
+  List.stable_dedup (hip_include_options () @ rocwmma_include_options ()) ~compare:String.compare
+
 (* The header trees, compiler version and loaded module identity can move independently. All are
    available before backend initialization. *)
 let host_capabilities () =
@@ -244,7 +250,7 @@ module Impl : sig
   include Ir.Backend_impl.Lowered_backend
 
   val hip_to_code : name:string -> string -> Hiprtc.compile_to_code_result
-  val routine_name_probe : unit -> Ir.C_syntax.routine_name_probe
+  val routine_name_probe : with_rocwmma:bool -> unit -> Ir.C_syntax.routine_name_probe
 end = struct
   include Backend_impl.Device (Device_stream) (Slab)
 
@@ -406,10 +412,7 @@ end = struct
     let hip_include_opt = hip_include_options () in
     (* rocWMMA include dir, only for tensor-core kernels ([rocwmma_include_dir] finds the dir
        holding [rocwmma/rocwmma.hpp]). *)
-    let rocwmma_include_opt =
-      if not uses_rocwmma then []
-      else match Lazy.force rocwmma_include_dir with Some d -> [ "-I" ^ d ] | None -> []
-    in
+    let rocwmma_include_opt = if uses_rocwmma then rocwmma_include_options () else [] in
     (* gh-ocannl-735: hiprtc otherwise reassociates ordinary scalar bf16/f16 recurrences differently
        across loop, repeated-statement and scope-local spellings. [Compiler_options.hiprtc] keeps
        the narrow override -- and the infinity sentinels the masked-softmax path emits as values --
@@ -1067,19 +1070,20 @@ end = struct
     end) in
     C_syntax.codegen_capabilities (module Config)
 
-  (* gh-ocannl-1338: the kernel-name harvest's view of this backend ([tools/vendor_idents.ml]). The
-     conditional includes come first; the alias makes the source mention [rocwmma::], which is what
-     gives the rocWMMA tree's include path to [hiprtc_options], and declares nothing a probed name
-     could collide with but itself. *)
-  let routine_name_probe () =
+  (* Non-tensorized kernels use [Cuda_like_config.Hip.header_prelude] alone. For the tensorized leg,
+     the alias makes [hiprtc_options] choose the rocWMMA include path and language mode
+     (gh-ocannl-1338). *)
+  let routine_name_probe ~with_rocwmma () =
     let module Syntax = C_syntax.C_syntax (Hip_syntax_config (struct
       let procs = [||]
     end))
     in
     let prelude =
-      String.concat ~sep:"\n" (List.map Cuda_like_config.Hip.conditional_includes ~f:snd)
-      ^ "\nusing ocannl_probe_rocwmma_t = rocwmma::float16_t;\n"
-      ^ Cuda_like_config.Hip.header_prelude
+      if with_rocwmma then
+        String.concat ~sep:"\n" (List.map Cuda_like_config.Hip.conditional_includes ~f:snd)
+        ^ "\nusing ocannl_probe_rocwmma_t = rocwmma::float16_t;\n"
+        ^ Cuda_like_config.Hip.header_prelude
+      else Cuda_like_config.Hip.header_prelude
     in
     let compile source =
       match hip_to_code ~name:"vendor_idents_probe" source with

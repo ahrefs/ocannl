@@ -15,7 +15,8 @@
 
    cc (libm) is the reference: the stated ulps hold with subnormals kept. So does HIP, whose
    [-ffast-math] keeps ROCm's precise library functions and AMDGPU's f32 denormals, measured on
-   gfx1102 (discrete memory), with one departure, fixed: ROCm's f32 [sinf]/[cosf] returned 0.974869
+   gfx1102 (discrete memory). The fixed rendering passes under the default and reproducible profiles
+   on gfx1151 (unified memory). In the original failure, ROCm's f32 [sinf]/[cosf] returned 0.974869
    and 0.222781 for +-inf (bfloat16, widened into them, likewise), hiding an overflow upstream, so
    f32 and bfloat16 [sin]/[cos] render through [Builtins_hip]'s NaN-preserving [ocannl_sinf]/
    [ocannl_cosf]; the special-value claim fails without them. Two more departures, fixed the same

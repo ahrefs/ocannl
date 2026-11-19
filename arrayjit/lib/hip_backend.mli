@@ -6,10 +6,9 @@ module Impl : sig
       Exposed for hardware-backed compiler regression probes; callers normally enter through
       {!compile}. *)
 
-  val routine_name_probe : unit -> Ir.C_syntax.routine_name_probe
-  (** What [tools/vendor_idents.exe] harvests this backend's routine-name table through
-      (gh-ocannl-1338): the kernel prelude (rocWMMA's include among it), {!hip_to_code}, and the
-      routine-name mangling. *)
+  val routine_name_probe : with_rocwmma:bool -> unit -> Ir.C_syntax.routine_name_probe
+  (** The kernel prelude and compiler used by the routine-name harvest (gh-ocannl-1338). The
+      ordinary HIP prelude is always present. [with_rocwmma] selects the tensorized context. *)
 end
 
 val hip_include_options : unit -> string list
@@ -20,6 +19,10 @@ val hip_include_options : unit -> string list
     with it rather than reimplementing a subset — tools/fp8_soak.ml's HIP arm is one, and the CUDA
     half of that program learned in review what a divergent guess costs (a soak that probes "ready"
     and then fails to compile wherever the SDK is not where the guess looked). *)
+
+val hip_probe_include_options : unit -> string list
+(** The HIP and rocWMMA include options used for the routine-name probe's full prelude. The harvest
+    uses the same search order to resolve the installed SDK sources. *)
 
 val fp8_guard_source : unit -> string
 (** The device-side source text of the two guarded narrowing helpers HIP emits in place of a bare

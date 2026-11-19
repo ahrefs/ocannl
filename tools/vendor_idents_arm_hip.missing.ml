@@ -4,6 +4,6 @@
 
 let built = false
 let unavailable () = failwith "vendor_idents: the HIP arm is not built on this box"
-let probe () : Ir.C_syntax.routine_name_probe = unavailable ()
+let probes () : (string * Ir.C_syntax.routine_name_probe) list = unavailable ()
 let include_dirs () : string list = unavailable ()
 let capabilities () : (string * string) list = unavailable ()
