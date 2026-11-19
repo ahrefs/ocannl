@@ -426,8 +426,9 @@
 # `--test-cap N` bounds each
 # process dune starts (each test, in a test batch) and ENDS the run when one
 # outlives it, as the run's own cap would; N (or $OCANNL_TOOL_PER_TEST_CAP)
-# applies to any batch, 0 lifts it, and by default only a GPU batch not
-# reaching `@slow` gets 1500s (see plan_test_cap, test_cap_watch). A GPU batch
+# applies to any batch and 0 lifts it. By default, 1500s applies to a GPU batch
+# whose targets reach neither slow nor training aliases (see plan_test_cap,
+# test_cap_watch). A GPU batch
 # also first asks each of its GPU backends for a fresh device query, and
 # refuses to start dune when one does not answer (DEVICE UNHEALTHY, exit 69;
 # see tools/device-probe.sh). `repeat` takes both bounds too (see above).
@@ -1025,8 +1026,8 @@ plan_device_probe() { # after plan_batch
 # batch. The default, TEST_CAP_DEFAULT (tools/per-test-cap.sh, shared with the
 # sweep's units, says why it is the number it is), applies only where the
 # failure it exists for can happen and no legitimate test is known to come near
-# it: a batch `run` resolves to hold a GPU backend, whose targets do not reach
-# the `slow` aliases.
+# it: a batch `run` resolves to hold a GPU backend, whose targets reach neither
+# the slow nor the training aliases (gh-ocannl-1875).
 test_cap_why=
 plan_test_cap() { # <requested, empty for the default> dune-argv
   local requested=$1 arg
@@ -1047,6 +1048,10 @@ plan_test_cap() { # <requested, empty for the default> dune-argv
   fi
   if arg=$(test_cap_reaches_slow "$@"); then
     test_cap_why="no default: the targets reach the slow tests ($arg); a wedged device can hold this run until its run cap; use --test-cap N for a tighter bound"
+    return 0
+  fi
+  if arg=$(test_cap_reaches_train "$@"); then
+    test_cap_why="no default: the targets reach the training tests ($arg); a wedged device can hold this run until its run cap; use --test-cap N for a tighter bound"
     return 0
   fi
   test_cap=$TEST_CAP_DEFAULT test_cap_why="the default for a GPU batch"

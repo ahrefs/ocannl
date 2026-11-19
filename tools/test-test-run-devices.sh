@@ -1594,10 +1594,13 @@ probe_run probe-plan hip cc "" "" plan build @cheap
   grep -qF "device probe: hip, bounded at ${probe_answer_cap}s" <<<"$argv_out" &&
   grep -qF "test cap: 1500s for each process dune starts, the default for a GPU batch" <<<"$argv_out"; } ||
   plan_probe_detail="gpu: exit $argv_rc; probes: ${probe_calls:-<none>}; plan: $argv_out"
-# The default's scope: no CPU batch, no @slow target; an explicit cap is kept
-# on either, and 0 lifts it.
+# Training and slow targets rely on the batch cap by default, even when
+# combined with regular GPU tests. An explicit per-test cap still applies.
 for probe in "cpu|cc|build @cheap|test cap: none (no default: a CPU batch)" \
              "slow|hip|build @test/training/slow-fixture_conv|test cap: none (no default: the targets reach the slow tests (@test/training/slow-fixture_conv); a wedged device" \
+             "train-combined|hip|build @runtest @train|test cap: none (no default: the targets reach the training tests (@train)" \
+             "train-member|hip|build @test/training/train-mlp_names|test cap: none (no default: the targets reach the training tests (@test/training/train-mlp_names)" \
+             "train-asked|hip|--test-cap 1800 build @train|test cap: 1800s for each process dune starts, asked for" \
              "slow-asked|hip|--test-cap 9000 build @slow|test cap: 9000s for each process dune starts, asked for" \
              "cpu-lifted|cc|--test-cap 0 build @cheap|test cap: none (--test-cap 0)"; do
   [ -z "$plan_probe_detail" ] || break

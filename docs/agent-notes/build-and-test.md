@@ -6032,10 +6032,14 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   of headroom at four hours. Parallel action times need not add to wall time. The separate
   `slow-metal_gpu_hang_failure` probe gives the OS 20 s to kill its kernel; that cost fits the
   budget but is not evidence of completed training. The per-box timing evidence is in staging#1819.
-  Slow GPU batches deliberately keep no default per-test cap: a wedged device may therefore
-  hold the box for the whole run cap. Set `--test-cap N` for a tighter bound, never below the
-  run's own length (the gh-ocannl-2302 bullet below); `plan` names this trade-off. Sweep keeps the per-test
-  watcher on its regular leg even with `--slow`.
+  Test-run GPU batches reaching slow or training aliases rely on the run cap by default. On tuf,
+  a combined cc `build @runtest @train` reaches Metal and CUDA stanzas through `@runtest`, so it
+  resolves as a GPU batch even with cc pinned. Its former 1500 s per-test cap cut off
+  `train-transformer_names` after its final epoch (gh-ocannl-1875). A standalone cc `@train`
+  resolves as a CPU batch. A wedged device may hold a batch for the whole run cap. Set
+  `--test-cap N` for a tighter bound and use `plan` to see the selected caps. Sweep keeps the
+  watcher on the regular leg of GPU units even with `--slow`. It classifies by the unit's backend,
+  so its cc unit is exempt and its tuf HIP unit keeps the watcher.
 - **A Metal `slow-mnist_conv` or `slow-cifar_conv` in a shared-event wait is usually running
   slowly, not hung; judge by its progress lines (gh-ocannl-2302).** With the library at
   `9023239da` (a step bench beside it), a Metal training step took 1.32 s for `mnist_conv` on
@@ -6475,15 +6479,14 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   `test-cap` record and the remedy (`--test-cap 0`, or a larger one); only on a GPU batch does it
   also point at the kernel journal. Ending the whole run is deliberate: killing only the hung test
   would let dune start the next one onto the same wedged device. An explicit `--test-cap N` (or
-  `OCANNL_TOOL_PER_TEST_CAP`) applies to any batch; the DEFAULT, 1500 s, applies only to a batch
-  `run` resolves to hold a GPU backend whose targets do not reach the `slow` aliases. 1500 s sits
-  above every runtest/train action in the four boxes' dune traces (the longest 1021 s
+  `OCANNL_TOOL_PER_TEST_CAP`) applies to any batch. The test-run default is 1500 s for GPU batches
+  whose targets reach neither slow nor training aliases (see the run budgets above). 1500 s sat
+  above every runtest/train action in the original four boxes' dune traces (the longest 1021 s
   `fsm_transformer` on minix, 810 s `autotune_smoke` on mac-studio, 757 s `circles_conv` on tuf,
   all under correctness-slot load, where load stretched tests 5-15x), but no trace holds an `@slow`
   member when that bound was chosen: `slow-cifar_conv` is box/backend dependent (2026-11-08
   sweep traces: minix HIP 155 s, rog CUDA 578 s, tuf HIP 1573 s, downloads excluded), so it
-  can pass 1500 s legitimately, and CPU batches are not the failure class. So `@slow` and CPU
-  batches keep only the run's cap unless asked; `plan` says which applies and why. The default and
+  can pass 1500 s legitimately. The default and
   the watcher live in `tools/per-test-cap.sh`, which `tools/sweep.sh` sources as well: a sweep unit
   on a non-CPU backend runs the same watcher beside its `@runtest @train` leg (not its `@slow`
   leg), and beside each stanza of its serial rerun and its completion pass (unless they reach
@@ -6525,7 +6528,8 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   stays the only step between `clamp_slot_wait` and the slot, so a busy slot still reports SLOT
   REFUSED before the cap can report TIMEOUT. There is no real-exe probe on macOS: a freshly
   linked `device_props` can sit in dlopen for minutes under XProtect (runs over ssh or launchd
-  are not exempt), which would read as a hung device; metal batches keep the per-test cap. A query that does not answer within
+  are not exempt), which would read as a hung device. The probe exemption leaves cap selection to
+  the usual batch rules. A query that does not answer within
   `OCANNL_TOOL_DEVICE_PROBE_CAP` (60 s; a healthy one takes 0.2-0.3 s) refuses the batch as
   `DEVICE UNHEALTHY` (exit 69) without starting dune. A query that fails fast (cuda or metal
   asked on an AMD box, as every unread batch asks) is recorded in `device-probe` and passed over:
