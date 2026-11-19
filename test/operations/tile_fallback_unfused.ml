@@ -201,6 +201,14 @@ let gpu_schedule ~out (opt : LL.optimized) : Sched.schedule =
   let tz, _lane = Sched.tensorize ~i:i_i ~j ~k ~simd_width () in
   [ ez; sp_zi; rz; sp_i; tz ]
 
+(* What the GPU leg's claims read, each its own field. *)
+type gpu_results = {
+  contraction_off : bool;  (** The backend's compile pins contraction off. *)
+  serial : float array;  (** The untuned serial loop's values. *)
+  tensorization : Ir.C_syntax.tensorization;  (** The tensorized routine's mma census. *)
+  got : float array;  (** The tensorized routine's values. *)
+}
+
 let gpu_results =
   lazy
     (let contraction_off =
@@ -237,7 +245,7 @@ let gpu_results =
         (not part of the golden)\n\
         %!"
        backend_name (max_diff gpu serial) (max_diff gpu got);
-     (contraction_off, serial, routine.Context.mma.Ir.C_syntax.tensorization, got))
+     { contraction_off; serial; tensorization = routine.Context.mma.Ir.C_syntax.tensorization; got })
 
 let () =
   p "the host emulation separates one rounding per k step from two"
@@ -255,19 +263,14 @@ let () =
     (fun label ->
       p_all ~min:2 label (snd (Lazy.force results)) ~f:(fun (_, got) -> bitwise got cpu.unfused));
   in_leg ~leg:gpu_leg "the CUDA/HIP kernel compile pins contraction off under precise math"
-    (fun label ->
-      let off, _, _, _ = Lazy.force gpu_results in
-      p label off);
+    (fun label -> p label (Lazy.force gpu_results).contraction_off);
   in_leg ~leg:gpu_leg "the CUDA/HIP serial loop computes the two-rounding f32 chain bitwise"
-    (fun label ->
-      let _, serial, _, _ = Lazy.force gpu_results in
-      p label (bitwise serial gpu.unfused));
+    (fun label -> p label (bitwise (Lazy.force gpu_results).serial gpu.unfused));
   in_leg ~leg:gpu_leg
     "the CUDA/HIP tensorized f32 matmul renders its Tile_mma through the scalar fallback"
     (fun label ->
-      let _, _, t, _ = Lazy.force gpu_results in
-      p label (Ir.C_syntax.equal_tensorization t Ir.C_syntax.Scalar_fallback));
+      p label
+        (Ir.C_syntax.equal_tensorization (Lazy.force gpu_results).tensorization
+           Ir.C_syntax.Scalar_fallback));
   in_leg ~leg:gpu_leg "the CUDA/HIP fallback computes the two-rounding f32 chain bitwise"
-    (fun label ->
-      let _, _, _, got = Lazy.force gpu_results in
-      p label (bitwise got gpu.unfused))
+    (fun label -> p label (bitwise (Lazy.force gpu_results).got gpu.unfused))
