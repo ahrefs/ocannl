@@ -1498,7 +1498,10 @@ files.
   which wraps every lane extract's lane operand in `OCANNL_CHECKED_LANE` and aborts past the block
   of the RENDERED precision, naming the lane, the lane count and the precision on stderr -- or break
   on the kernel under gdb and read its argument buffers. The check is cc's only (a GPU kernel has no
-  abort), costs nothing off (the kernel text is unchanged) and is in cc's codegen tag when on;
+  abort; the backend fact `renders_lane_bounds_check`), and a GPU compile under the key says so once
+  per process on stderr instead (`Backends.warn_unchecked_lane_bounds`, gh-ocannl-1990, pinned by
+  `lane_bounds_notice`) -- read that line before taking a quiet GPU run as checked. It costs nothing
+  off (the kernel text is unchanged) and is in cc's codegen tag when on, in no GPU tag;
   `lane_bounds_check` pins the abort on a hand-built kernel, and
   `runtest-test_uniform_virtual_lane-lane_checked` reruns the rows under it. Of those rows only an
   INTEGER draw into a float reader (`uint16 draw into single`) still rests on `rng_collapsible`

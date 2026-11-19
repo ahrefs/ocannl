@@ -1,0 +1,13 @@
+key on: the notice is owed exactly on the backends whose cache key the key does not move: true
+key off: no backend owes the notice: true
+the notice names the key, that it is cc-only, and the backend asked about: true
+direct, key on: the child exits normally: true
+direct, key on: six asks print the notice exactly once: true
+direct, key on: the one notice names the first backend asked about: true
+direct, key off: the child exits normally: true
+direct, key off: no notice: true
+compile, key on: the child exits normally and names its backend: true
+compile, key on, a dialect rendering no check: three compiles print the notice exactly once: true
+compile, key on, a dialect rendering the check: no notice: true
+compile, key off: the child exits normally: true
+compile, key off: no notice on any backend: true

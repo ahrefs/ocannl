@@ -1069,6 +1069,12 @@ type backend_facts = {
           The renderers derive their blend from this fact, and the inline fan-in guard reads it
           before codegen (gh-ocannl-1775): on a blending backend a speculable [Where] is charged the
           union of its arms' loads, elsewhere its wider arm. *)
+  renders_lane_bounds_check : bool;
+      (** The dialect renders [debug_check_lane_bounds]'s run-time bound check of a packed-uniform
+          lane extract's lane operand (gh-ocannl-1867): cc's [OCANNL_CHECKED_LANE], which aborts
+          past the block. A GPU kernel has no abort to raise, so the GPU dialects render none, and a
+          compile on them under the key says so, once per process, on stderr
+          ([Backends.warn_unchecked_lane_bounds], gh-ocannl-1990). *)
 }
 [@@deriving equal]
 
@@ -1130,6 +1136,7 @@ let cc_facts =
     node_ident_prefix = "";
     source_extension = ".c";
     blends_value_selects = true;
+    renders_lane_bounds_check = true;
   }
 
 let cuda_facts =
@@ -1143,6 +1150,7 @@ let cuda_facts =
     node_ident_prefix = "t_";
     source_extension = ".cu";
     blends_value_selects = false;
+    renders_lane_bounds_check = false;
   }
 
 let hip_facts =
@@ -1156,6 +1164,7 @@ let hip_facts =
     node_ident_prefix = "t_";
     source_extension = ".hip";
     blends_value_selects = true;
+    renders_lane_bounds_check = false;
   }
 
 let metal_facts =
@@ -1169,6 +1178,7 @@ let metal_facts =
     node_ident_prefix = "t_";
     source_extension = ".metal";
     blends_value_selects = false;
+    renders_lane_bounds_check = false;
   }
 
 (** {2 Cache identity of the device description (gh-ocannl-1253)}
