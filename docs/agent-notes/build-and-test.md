@@ -5371,11 +5371,14 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   `execution windows-witness` stages it for a wave witness. For manual witnesses, stage it on
   the booted box using the rog ssh recipe below with the selected host's paths. Prepare any
   fixtures the selected aliases require, use the Git Bash PATH and `tools/opam-env.sh` setup
-  below, and run the aliases through `tools/test-run.sh` in native Git Bash. Save the runner's
-  status before collecting its run record (`tools/test-run.sh paths run last`) with the host,
-  SHA and command, then exit with the saved status. The automated staging uses the Windows
-  host's Git configuration. For checks that require CI's LF checkout, verify the line endings
-  before running the aliases and use the ssh recipe's checkout with `core.autocrlf=false` if needed.
+  below, and run the aliases through `tools/test-run.sh`. Windows evidence requires native
+  Git Bash, including on boxes that also offer WSL. Save the runner's status before collecting its run record
+  (`tools/test-run.sh paths run last`) with the host, SHA and command, then exit with the saved status.
+  On rog the automated staging uses `core.autocrlf=true`, so it checks out sources such as
+  `verdict.ml` with CRLF. For a wave check that needs CI's LF checkout, export the Git config
+  override from the ssh recipe below, then run
+  `git worktree add --detach "${WITNESS_CHECKOUT}-lf" "$WITNESS_REVISION"`.
+  Enter that new worktree before preparing fixtures or running checks.
 - `wake-lab.sh boot-windows` reached native Git Bash on rog in about 50 s on 2026-09-24, with
   nobody at the keyboard and no BitLocker prompt. Rog normally runs Ubuntu for the daily CUDA
   sweep and Linux workers. Only rog qualifies for the unattended witness. Minix has the same
@@ -5388,8 +5391,8 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   longer exists: with hipjit installed every test executable, cc-only ones included, then fails
   to start with `0xc00004bc` (`hiprtc0701.dll` not found) unless the leg script prepends
   `C:/Program Files/AMD/ROCm/*/bin` to PATH (ahrefs/ocannl#1349; staging#1120 did).
-- Withdraw the user boot request before dispatch so a late reboot is not wasted. Cancelling a
-  dispatch when the box turns up leaves a no-verdict the merge refuses.
+- Telling the user that CI is taking the check withdraws the boot request. If a box becomes
+  available after dispatch, let the run finish. Cancelling it leaves a no-verdict that blocks the merge.
   The fallback dispatches `ci.yml` on the chosen branch with
   `windows_only: true` and the full `expected_sha`; this opt-in runs only Windows main/training,
   without duplicating Linux/macOS, formatting or floor jobs (the floor job has its own
