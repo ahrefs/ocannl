@@ -75,6 +75,7 @@ Subcommands:
                    repeatability of cells that shipped the same kernel list (an A/A when the arms
                    are one binary); exit 1 when a cell is refused
 """
+from collections import Counter
 import csv
 import difflib
 import os
@@ -556,8 +557,30 @@ def pair_kernels(a, b):
             by_position += list(zip(ga, gb))
     paired_a |= {r["i"] for r, _ in by_position}
     paired_b |= {r["i"] for _, r in by_position}
+    # A kernel the two builds ran in another order: step order pairs only one of a swapped pair,
+    # so what is left over joins by its exact key where that key is trusted and once on each side.
+    trusted = trusted_key(by_key)
+    left_a = [r for r in a if r["i"] not in paired_a]
+    left_b = [r for r in b if r["i"] not in paired_b]
+    count_a = Counter(stable_key(r["writes"]) for r in left_a)
+    count_b = Counter(stable_key(r["writes"]) for r in left_b)
+    by_b = {stable_key(r["writes"]): r for r in left_b}
+    reordered = [(r, by_b[k]) for r in left_a for k in [stable_key(r["writes"])]
+                 if trusted(k) and count_a[k] == 1 and count_b.get(k) == 1]
+    by_key += reordered
+    paired_a |= {r["i"] for r, _ in reordered}
+    paired_b |= {r["i"] for _, r in reordered}
     return (by_key, by_position, [r for r in a if r["i"] not in paired_a],
             [r for r in b if r["i"] not in paired_b])
+
+
+def trusted_key(by_key):
+    """Whether two kernels sharing a stable_key are the same kernel, given the masked pairs: when
+    any masked pair's anonymous ids differ, the builds renumbered their anonymous nodes, and an `n<id>`
+    the two share is a coincidence, not evidence -- only a key without anonymous nodes is trusted
+    then. Without renumbering every key is."""
+    renumbered = any(stable_key(x["writes"]) != stable_key(y["writes"]) for x, y in by_key)
+    return lambda key: not renumbered or not any(ANONYMOUS_ID.match(w) for w in key.split())
 
 
 def render_join(cells):
@@ -566,8 +589,8 @@ def render_join(cells):
     reference list's (the one holding the `base` treatment, else the first): a pair is joined when
     its stable_keys agree and marked `~` when it was paired in step order alone."""
     groups = {}
-    for (backend, fixture, stem), rows in cells:
-        signature = tuple((r["writes"], r["geometry"]) for r in rows)
+    for (backend, fixture, stem, precision), rows in cells:
+        signature = (precision, tuple((r["writes"], r["geometry"]) for r in rows))
         groups.setdefault((backend, fixture), {}).setdefault(signature, []).append((stem, rows))
     for (backend, fixture), lists in sorted(groups.items()):
         if len(lists) < 2:
@@ -581,10 +604,12 @@ def render_join(cells):
         ref = ordered[0]
         for other in ordered[1:]:
             by_key, by_position, only_a, only_b = pair_kernels(medians(ref), medians(other))
-            pairs = [(a, b) for a, b in by_key + by_position
-                     if stable_key(a["writes"]) == stable_key(b["writes"])]
-            inferred = [(a, b) for a, b in by_key + by_position
-                        if stable_key(a["writes"]) != stable_key(b["writes"])]
+            trusted = trusted_key(by_key)
+            def joined(a, b):
+                return stable_key(a["writes"]) == stable_key(b["writes"]) and trusted(
+                    stable_key(a["writes"]))
+            pairs = [(a, b) for a, b in by_key + by_position if joined(a, b)]
+            inferred = [(a, b) for a, b in by_key + by_position if not joined(a, b)]
             ta, tb = ", ".join(treatments(ref)), ", ".join(treatments(other))
             print("\n### Kernel join: %s %s, %s against %s\n" % (backend, fixture, tb, ta))
             print("- %d kernels joined by the nodes they write (of %d and %d), %d and %d left over;"
@@ -592,10 +617,11 @@ def render_join(cells):
                   % (len(pairs), len(ref[0][1]), len(other[0][1]), len(only_a), len(only_b),
                      sum(a["med"] for a, _ in pairs), ta, sum(b["med"] for _, b in pairs), tb))
             if inferred:
-                n_key = sum(1 for a, b in by_key if stable_key(a["writes"]) != stable_key(b["writes"]))
-                print("- %d more paired in step order though their nodes differ (rows marked `~`): %d"
-                      " whose nodes differ only in anonymous ids (`n<id>`, renumbered when a build"
-                      " creates other tensors first), %d by position between paired kernels;"
+                n_key = sum(1 for a, b in by_key if not joined(a, b))
+                print("- %d more paired in step order without a trusted key (rows marked `~`): %d"
+                      " whose nodes agree up to anonymous ids (`n<id>`, renumbered when a build"
+                      " creates other tensors first, so an id the two share proves nothing), %d by"
+                      " position between paired kernels;"
                       " paired in-step medians sum to %.2f ms (%s) and %.2f ms (%s)"
                       % (len(inferred), n_key, len(inferred) - n_key,
                          sum(a["med"] for a, _ in inferred), ta,
@@ -631,8 +657,8 @@ def render_repeatability(cells):
     """Cells of one fixture that shipped the same kernels (writes and geometry, in order): how far
     apart each kernel's in-step median and isolated minimum land between them."""
     groups = {}
-    for (backend, fixture, stem), rows in cells:
-        signature = tuple((r["writes"], r["geometry"]) for r in rows)
+    for (backend, fixture, stem, precision), rows in cells:
+        signature = (precision, tuple((r["writes"], r["geometry"]) for r in rows))
         groups.setdefault((backend, fixture, signature), []).append((stem, rows))
     for (backend, fixture, _), members in sorted(groups.items(), key=lambda kv: kv[0][:2]):
         if len(members) < 2:
@@ -670,6 +696,18 @@ def render_repeatability(cells):
                   % ((REPEAT_TOLERANCE - 1) * 100))
 
 
+CELL_PRECISION = re.compile(r"^backend=\S+ fixture=\S+ treatment=\S+ precision=(\w+) ")
+
+
+def cell_precision(out, stem):
+    """The BENCH_PRECISION a cell's .err header records (gh1133_cells.sh since gh-ocannl-2328), None
+    for a cell from before it: two precisions are never repeats of one another, even where they ship
+    the same kernels (the forward-only fixture converts weights at load and mints no cast twins)."""
+    with open(Path(out) / (stem + ".err")) as f:
+        m = CELL_PRECISION.match(f.readline())
+    return m.group(1) if m else None
+
+
 def report(out):
     refused, cells = False, []
     for name in sorted(os.listdir(out)):
@@ -683,7 +721,7 @@ def report(out):
             refused = True
             continue
         render_cell(out, name, rec, rows)
-        cells.append(((m.group(1), m.group(2), name[:-4]), rows))
+        cells.append(((m.group(1), m.group(2), name[:-4], cell_precision(out, name[:-4])), rows))
     render_repeatability(cells)
     render_join(cells)
     return 1 if refused or not cells else 0
