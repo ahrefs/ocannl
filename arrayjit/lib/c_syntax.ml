@@ -2868,6 +2868,8 @@ type routine_name_probe = {
   prelude : string;
       (** The source every kernel follows: the unconditional includes, with every conditional
           include ahead of them, so a name any kernel's headers declare is measured. *)
+  type_spellings : string list;
+      (** The dialect's scalar and vector type spellings at its rendered storage widths. *)
   kernel_definition : string -> string;
       (** A minimal kernel DEFINITION of the given name, one line, as the backend declares one. *)
   compile : string -> (unit, string) Result.t;
@@ -3621,11 +3623,29 @@ module C_syntax (B : C_syntax_config) = struct
     let rec avoid s = if Hash_set.mem routine_ident_table s then avoid (s ^ "__") else s in
     avoid sanitized
 
+  let packed_lanes prec = B.vector_file.bytes / Ops.prec_in_bytes prec
+
   (* gh-ocannl-1338: this dialect's half of a {!routine_name_probe}; the backend supplies its
      prelude and compiler. *)
   let routine_name_probe ~prelude ~compile =
+    let type_spellings =
+      List.concat_map all_precs ~f:(fun prec ->
+          if (not B.supports_f64) && Ops.equal_prec prec Ops.double then []
+          else
+            let widths =
+              [ Ops.vec_unop_lanes prec; packed_lanes prec ]
+              |> List.dedup_and_sort ~compare:Int.compare
+            in
+            B.typ_of_prec prec
+            :: List.filter_map widths ~f:(fun length ->
+                if length < 2 then None
+                else
+                  try Some (B.vec_typ_of_prec ~length prec)
+                  with Invalid_argument _ | Utils.User_error _ -> None))
+    in
     {
       prelude;
+      type_spellings;
       kernel_definition = probe_kernel_definition;
       compile;
       kernel_ident;
@@ -5003,8 +5023,6 @@ module C_syntax (B : C_syntax_config) = struct
      float precision that is the storage precision of every store target, as [lane_expr] requires of
      every load. A storage/compute seam (Metal's fp8, stored as a byte and computed in f32) declines
      here rather than reinterpreting a byte buffer as a [float4_t]. *)
-  let packed_lanes prec = B.vector_file.bytes / Ops.prec_in_bytes prec
-
   let packed_prec_ok ~store_precs prec =
     (match prec with
       | Ops.Half_prec _ | Ops.Bfloat16_prec _ | Ops.Single_prec _ | Ops.Double_prec _ -> true

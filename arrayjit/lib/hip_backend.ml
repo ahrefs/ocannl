@@ -1070,8 +1070,9 @@ end = struct
     end) in
     C_syntax.codegen_capabilities (module Config)
 
-  (* Non-tensorized kernels use [Cuda_like_config.Hip.header_prelude] alone. For the tensorized leg, the alias makes
-     [hiprtc_options] choose the rocWMMA include path and language mode (gh-ocannl-1338). *)
+  (* Non-tensorized kernels use [Cuda_like_config.Hip.header_prelude] alone. For the tensorized leg,
+     the alias makes [hiprtc_options] choose the rocWMMA include path and language mode
+     (gh-ocannl-1338). *)
   let routine_name_probe ~with_rocwmma () =
     let module Syntax = C_syntax.C_syntax (Hip_syntax_config (struct
       let procs = [||]

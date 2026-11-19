@@ -383,8 +383,11 @@ files.
   (gh-ocannl-1705), so an SDK upgrade is said the day it lands. Reading the headers had been wrong in both
   directions (gh-ocannl-1338): nvrtc accepts bare kernel definitions named `float4`, `uint4` and
   `char4` because a C++ function can hide a struct tag. The probe emits unqualified type aliases
-  on the candidate's own line (gh-ocannl-1713), catching `float4` and `uint4` as types hidden by
-  those definitions. nvrtc also accepts `CUDART_INF_FP16` (undefined under nvrtc) and rejects
+  on the candidate's own line (gh-ocannl-1713), catching types hidden by those definitions.
+  The alias candidates come from the GPU builtin sources and the selected dialect's rendered
+  type spellings, intersected with the union of its header tokens and table entries. Each prelude's
+  compiler admits the names usable as type aliases. Metal's native vector payloads supply the
+  spelling of `float4` to this CUDA check. nvrtc also accepts `CUDART_INF_FP16` (undefined under nvrtc) and rejects
   `rsqrtf`, `norm` and some 900 runtime-API
   macros and enumerators (`CUDARTAPI`, `CUDA_C_16BF`); hiprtc rejects `float4`, `char4`, `FLT_MAX`,
   `HIPRT_INF_FP16` but accepts `rsqrtf`. Metal's runtime compiler carries its headers inside the

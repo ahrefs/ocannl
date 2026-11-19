@@ -180,6 +180,8 @@ let metal_exemplars =
    harvest includes such a use after the kernel definition (gh-ocannl-1713). *)
 let cuda_exemplars =
   [
+    ("float2", "float2__");
+    ("int4", "int4__");
     ("float4", "float4__");
     ("uint4", "uint4__");
     ("half2", "half2__");

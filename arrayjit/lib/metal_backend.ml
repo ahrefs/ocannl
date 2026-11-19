@@ -1103,7 +1103,7 @@ module Impl = struct
       | Ops.Uint16_prec _ -> "ushort"
       | Ops.Int32_prec _ -> "int"
       | Ops.Uint32_prec _ -> "uint"
-      | Ops.Uint4x32_prec _ -> Cuda_like_config.Vendor_vector_types.u32x4
+      | Ops.Uint4x32_prec _ -> "uint4" (* Metal's uint4 type - 128-bit *)
       | Ops.Half_prec _ -> "half"
       | Ops.Bfloat16_prec _ -> "bfloat" (* Metal supports bfloat16 natively *)
       (* MSL has no fp8 type: an e5m2 node is stored as a byte, and [Builtins_metal]'s software
@@ -1120,7 +1120,7 @@ module Impl = struct
 
     let vec_typ_of_prec ~length prec =
       match (prec, length) with
-      | Ops.Single_prec _, 4 -> Cuda_like_config.Vendor_vector_types.f32x4 ^ "_t"
+      | Ops.Single_prec _, 4 -> "float4_t"
       | Ops.Double_prec _, 2 ->
           raise @@ Utils.User_error "Metal backend does not support double precision"
       | Ops.Int32_prec _, 4 -> "int32x4_t"

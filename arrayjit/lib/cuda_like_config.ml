@@ -12,14 +12,6 @@ let cuda_fast_math () = Utils.get_global_flag ~default:true ~arg_name:"cuda_fast
     CUDA's, it changes no rendering: [Builtins_hip]'s wrappers are IEEE under either state. *)
 let hip_fast_math () = Utils.get_global_flag ~default:true ~arg_name:"hip_fast_math"
 
-(* CUDA, HIP and Metal share these unqualified vector spellings. The first two also name the
-   renderer's f32 pack (with a suffix on the wrapper) and Metal's native counter vector. *)
-module Vendor_vector_types = struct
-  let f32x4 = "float4"
-  let u32x4 = "uint4"
-  let probe_types = [ f32x4; u32x4; "half2" ]
-end
-
 module Cuda = struct
   let header_prelude =
     {|#include <cuda_fp16.h>
@@ -444,7 +436,7 @@ struct
 
   let vec_typ_of_prec ~length prec =
     match (prec, length) with
-    | Ops.Single_prec _, 4 -> Vendor_vector_types.f32x4 ^ "_t"
+    | Ops.Single_prec _, 4 -> "float4_t"
     | Ops.Double_prec _, 2 -> "double2_t"
     | Ops.Int32_prec _, 4 -> "int32x4_t"
     | Ops.Int64_prec _, 2 -> "int64x2_t"

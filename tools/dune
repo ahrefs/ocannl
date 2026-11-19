@@ -100,6 +100,9 @@
   stdio
   unix
   arrayjit.ir
+  arrayjit.builtins_cuda
+  arrayjit.builtins_hip
+  arrayjit.builtins_metal
   (select
    vendor_idents_arm_cuda.ml
    from

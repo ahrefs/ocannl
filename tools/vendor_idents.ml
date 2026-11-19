@@ -1,6 +1,11 @@
 (* Harvest the file-scope names a GPU routine must avoid (gh-ocannl-1338). The backend's runtime
    compiler checks a kernel definition and subsequent unqualified vendor type uses after the
-   prelude. The uses catch C++ struct names a kernel definition can legally hide.
+   prelude. The uses catch C++ struct names a kernel definition can legally hide. The type
+   candidates come from GPU builtin definitions and the selected dialect's scalar and vector type
+   spellings, restricted to identifiers in the SDK headers or the routine-name table beyond the
+   routine-name floor. Each prelude's compiler checks them as unqualified type aliases. This uses
+   the GPU builtin tables together because some vendor types, such as CUDA's [float4], are spelled
+   by another GPU dialect's emitter.
 
    Usage: vendor_idents.exe <cuda|hip|metal|cc> [--include-dir DIR]... [--batch N] [--names A,B,...]
 
@@ -322,17 +327,30 @@ let () =
   in
   Stdio.printf "candidates: %d (of %d header tokens and %d table entries)\n%!"
     (List.length candidates) (Hash_set.length tokens) (List.length table);
-  (* A kernel can hide a C++ struct name without conflicting with its declaration. Keep the
-     unqualified type uses on the candidate's line so diagnostics still identify that candidate. *)
-  let type_uses =
-    List.mapi Ir.Cuda_like_config.Vendor_vector_types.probe_types ~f:(fun i typ ->
-        Printf.sprintf " using __ocannl_probe_type_%d = %s;" i typ)
-    |> String.concat
+  let builtin_source (_, source, _) = source in
+  let emitted =
+    List.map
+      (Builtins_cuda.builtins @ Builtins_hip.builtins @ Builtins_metal.builtins)
+      ~f:builtin_source
+    @ probe.type_spellings
+    |> List.concat_map ~f:(fun text -> identifiers (blank_comments_and_literals text))
+    |> Hash_set.of_list (module String)
   in
+  let type_candidates = List.filter candidates ~f:(Hash_set.mem emitted) in
+  let type_use typ = Printf.sprintf " using __ocannl_probe_type_%s = %s;" typ typ in
   let compiles = ref 0 in
   let measurements =
     List.map probes ~f:(fun (label, (probe : Ir.C_syntax.routine_name_probe)) ->
         let first_line = line_count probe.prelude + 1 in
+        let types =
+          List.filter type_candidates ~f:(fun typ ->
+              Result.is_ok (probe.compile (probe.prelude ^ "\n" ^ type_use typ ^ "\n")))
+        in
+        Stdio.printf "%s: %d emitted type candidates checked, %d admitted%s\n%!" label
+          (List.length type_candidates) (List.length types)
+          (if List.is_empty types then "" else " (" ^ String.concat ~sep:", " types ^ ")");
+        (* Keep each kernel's type uses on its diagnostic line. *)
+        let type_uses = String.concat (List.map types ~f:type_use) in
         let source names =
           probe.prelude ^ "\n"
           ^ String.concat ~sep:"\n"

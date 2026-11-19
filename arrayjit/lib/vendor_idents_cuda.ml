@@ -973,11 +973,13 @@ let names =
     "fdimf";
     "fdivide";
     "fdividef";
+    "float2";
     "float4";
     "frexpf";
     "half";
     "half2";
     "ilogbf";
+    "int4";
     "j0";
     "j0f";
     "j1";

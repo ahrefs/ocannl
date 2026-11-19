@@ -1012,6 +1012,8 @@ type routine_name_probe = {
   prelude : string;
       (** The source every kernel follows: the unconditional includes, with every conditional
           include ahead of them, so a name any kernel's headers declare is measured. *)
+  type_spellings : string list;
+      (** The dialect's scalar and vector type spellings at its rendered storage widths. *)
   kernel_definition : string -> string;
       (** A minimal kernel DEFINITION of the given name, one line, as the backend declares one. *)
   compile : string -> (unit, string) Result.t;
