@@ -51,9 +51,9 @@ let single = Ir.Ops.single
 let host_limits = Context.hardware_limits (Context.auto ())
 
 let standin_limits =
-  Ll_test.f16_mma_limits_for_scopes
+  Ll_test.mma_8x8x8_limits
     ~f16_wide_acc_scopes:[ BI.Mma_per_statement; BI.Mma_fragment_scope ]
-    ()
+    Ll_test.f16_mma_formats
 
 (* The seeder's own judgment that this GPU seeds a tensorized site of these precisions. *)
 let gpu_advertises ~d_prec =

@@ -1821,16 +1821,16 @@ let mma_8x8x8_limits ?f16_wide_acc_scopes formats =
 (** An f32 x f32 -> f32 tile for seeding tensorized GPU sketches on any host (gh-ocannl-1626). *)
 let f32_mma_limits = mma_8x8x8_limits [ Ir.Backend_intf.(Mma_f32, Mma_f32, Mma_f32) ]
 
-(** The two f16 x f16 formats, with optional support for wide-accumulator rendering scopes. *)
-let f16_mma_limits_for_scopes ?f16_wide_acc_scopes () =
+(** The f16 x f16 formats shared by the stand-ins with and without wide-accumulator scopes. *)
+let f16_mma_formats =
   let open Ir.Backend_intf in
-  mma_8x8x8_limits ?f16_wide_acc_scopes [ (Mma_f16, Mma_f16, Mma_f16); (Mma_f16, Mma_f16, Mma_f32) ]
+  [ (Mma_f16, Mma_f16, Mma_f16); (Mma_f16, Mma_f16, Mma_f32) ]
 
 (** {!f32_mma_limits}' f16 twin: f16 x f16 tiles accumulating at f16 and at f32, 8x8x8, no wide-
     accumulator scope. The stand-in an f16 leg seeds its tensorized GPU sketches under on every host
     (gh-ocannl-1780): {!f32_mma_limits} advertises no f16 format, so under it an f16 site's
     tensorized capability is withheld and no tensorized seed is proposed. *)
-let f16_mma_limits = f16_mma_limits_for_scopes ()
+let f16_mma_limits = mma_8x8x8_limits f16_mma_formats
 
 (** The CUDA dialect without a device: {!Ir.Cuda_like_config}'s CUDA syntax, with no builtins and no
     extra identifier blacklist. It binds [blockIdx]/[threadIdx] registers and shuffles 32-lane

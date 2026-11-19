@@ -64,6 +64,8 @@ let mma_standin =
   in
   { target with mt_capabilities = capabilities }
 
+type mma_ranking = { unrestricted_mma : bool; seeded_scalar : bool; seeding_active : bool }
+
 (* This aligned f16 contraction offers an f32-accumulating tile on CUDA and HIP. The gradient
    fixture is smaller and serves the bitwise parity checks. *)
 let mma_picks ~device =
@@ -97,23 +99,35 @@ let mma_picks ~device =
       ]
       pick
   in
-  let seeded =
+  let seeded, seeding_active =
     with_mma_seeding (fun () ->
-        if device then (
-          let report = ref None in
-          let compiled, _ =
-            Autotune.model_default ~report:(fun r -> report := Some r) ctx comp bindings
-          in
-          Context.release compiled;
-          Option.value_exn ~here:[%here] !report)
-        else pick ())
+        let facts, limits =
+          if device then (Context.backend_facts ctx, Context.hardware_limits ctx)
+          else (mma_standin.Autotune.mt_facts, mma_standin.Autotune.mt_limits)
+        in
+        let seeding_active = Option.is_some (Autotune.model_seeding ~facts ~limits) in
+        let report =
+          if device then (
+            let report = ref None in
+            let compiled, _ =
+              Autotune.model_default ~report:(fun r -> report := Some r) ctx comp bindings
+            in
+            Context.release compiled;
+            Option.value_exn ~here:[%here] !report)
+          else pick ()
+        in
+        (report, seeding_active))
   in
   Stdio.eprintf "%s matmul: unrestricted %s, seeded %s (not part of the golden)\n"
     (if device then "device" else "structural")
     control.Autotune.mc_label seeded.Autotune.mc_label;
-  ( is_mma control,
-    Option.is_some seeded.Autotune.mc_rank_ms
-    && not (is_mma seeded || String.is_substring seeded.Autotune.mc_label ~substring:"conv-") )
+  {
+    unrestricted_mma = is_mma control;
+    seeded_scalar =
+      Option.is_some seeded.Autotune.mc_rank_ms
+      && not (is_mma seeded || String.is_substring seeded.Autotune.mc_label ~substring:"conv-");
+    seeding_active;
+  }
 
 let host_mma_child = "--host-mma-ranking"
 let device_mma_child = "--device-mma-ranking"
@@ -122,8 +136,8 @@ let () =
   let requested flag = Array.exists Stdlib.Sys.argv ~f:(String.equal flag) in
   let device = requested device_mma_child in
   if device || requested host_mma_child then (
-    let unrestricted_mma, restricted_scalar = mma_picks ~device in
-    Stdio.printf "%b\n%b\n" unrestricted_mma restricted_scalar;
+    let { unrestricted_mma; seeded_scalar; seeding_active } = mma_picks ~device in
+    Stdio.printf "%b\n%b\n%b\n" unrestricted_mma seeded_scalar seeding_active;
     Stdlib.exit 0)
 
 let nb = 4
@@ -433,12 +447,9 @@ let () =
 
 (* Run the ranking fixture in a fresh process so its price parameters reach the model's
    process-lifetime readers without changing the gradient checks. The device supplies its real tile
-   and hook, with the same rates as the stand-in. The child's stdout protocol is exactly two boolean
-   lines, in unrestricted then restricted order. *)
+   and hook, with the same rates as the stand-in. The child's stdout protocol is exactly three
+   boolean lines: the unrestricted pick, the restricted pick and whether seeding was active. *)
 let () =
-  let enabled ~facts ~limits =
-    with_mma_seeding (fun () -> Option.is_some (Autotune.model_seeding ~facts ~limits))
-  in
   let choices mode =
     let ((status, stdout, stderr) as child) =
       Fresh_process.run
@@ -447,6 +458,7 @@ let () =
           "--ocannl_backend=" ^ backend_name;
           "--ocannl_automatic_gpu_schedule=true";
           "--ocannl_schedule_fission=true";
+          "--ocannl_debug_log_from_routines=false";
           "--ocannl_model_peak_flops=1e14";
           "--ocannl_model_peak_memory_bandwidth=1e15";
           "--ocannl_model_issue_rate=1e12";
@@ -463,24 +475,21 @@ let () =
         ]
     in
     match (status, String.split_lines stdout) with
-    | Unix.WEXITED 0, [ unrestricted; restricted ] ->
+    | Unix.WEXITED 0, [ unrestricted; restricted; active ] ->
         Stdio.eprintf "%s%!" stderr;
-        (Stdlib.bool_of_string unrestricted, Stdlib.bool_of_string restricted)
+        {
+          unrestricted_mma = Stdlib.bool_of_string unrestricted;
+          seeded_scalar = Stdlib.bool_of_string restricted;
+          seeding_active = Stdlib.bool_of_string active;
+        }
     | _ ->
         Fresh_process.report ~label:mode child;
         failwith "seeded model ranking child failed"
   in
-  let host_leg =
-    Verdict.leg ~aggregation:`Environment ~on:"seeding disabled for the CUDA stand-in"
-      ~when_:(enabled ~facts:mma_standin.Autotune.mt_facts ~limits:mma_standin.Autotune.mt_limits)
-      ()
-  in
-  let host = lazy (choices host_mma_child) in
-  Verdict.in_leg ~leg:host_leg "structural: without seeding, the model picks a tensor-core leaf"
-    (fun label -> p label (fst (Lazy.force host)));
-  Verdict.in_leg ~leg:host_leg
-    "structural: with seeding, the ranked pick is no tensor-core or conv form" (fun label ->
-      p label (snd (Lazy.force host)));
+  let host = choices host_mma_child in
+  p "structural: without seeding, the model picks a tensor-core leaf" host.unrestricted_mma;
+  p "structural: with seeding, the ranked pick is no tensor-core or conv form" host.seeded_scalar;
+  p "structural: seeding is active under the fixture's seeded settings" host.seeding_active;
   let available, aggregation =
     if not seeds_here then (false, `Backend)
     else
@@ -490,14 +499,15 @@ let () =
         Ll_test.tensorized_capability ~is_gpu:true ~is_cpu:false ~limits ~a_prec:Ir.Ops.half
           ~b_prec:Ir.Ops.half ~d_prec:Ir.Ops.single
       with
-      | `Advertised ->
-          (enabled ~facts:(Context.backend_facts_of_name backend_name) ~limits, `Environment)
+      | `Advertised -> (true, `Backend)
       | `Withheld aggregation -> (false, aggregation)
   in
   let gpu_leg = Verdict.leg ~when_:available ~aggregation ~on:backend_name () in
   let gpu = lazy (choices device_mma_child) in
   Verdict.in_leg ~leg:gpu_leg "on CUDA/HIP without seeding, the model picks a tensor-core leaf"
-    (fun label -> p label (fst (Lazy.force gpu)));
+    (fun label -> p label (Lazy.force gpu).unrestricted_mma);
   Verdict.in_leg ~leg:gpu_leg
     "on CUDA/HIP with seeding, the ranked pick is no tensor-core or conv form" (fun label ->
-      p label (snd (Lazy.force gpu)))
+      p label (Lazy.force gpu).seeded_scalar);
+  Verdict.in_leg ~leg:gpu_leg "on CUDA/HIP seeding is active under the fixture's seeded settings"
+    (fun label -> p label (Lazy.force gpu).seeding_active)

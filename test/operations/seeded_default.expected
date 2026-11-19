@@ -28,5 +28,7 @@ structural: for the cuda stand-in the model starts from the seeded plan: its pic
 structural control: without rated ceilings the cuda stand-in's pick is the default pipeline: true
 structural: without seeding, the model picks a tensor-core leaf: true
 structural: with seeding, the ranked pick is no tensor-core or conv form: true
+structural: seeding is active under the fixture's seeded settings: true
 on CUDA/HIP without seeding, the model picks a tensor-core leaf: true
 on CUDA/HIP with seeding, the ranked pick is no tensor-core or conv form: true
+on CUDA/HIP seeding is active under the fixture's seeded settings: true
