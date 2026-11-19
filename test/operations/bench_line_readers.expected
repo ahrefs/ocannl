@@ -70,5 +70,6 @@ the seeded run states its leg claim: true
 each plan derivation states its time in seconds: true
 each census line counts no more segments seeded than it has: true
 each census line lists as many seeded segments as it counts: true
+the census lines read are the capture's own, whole and in order: true
 no more census lines than plan derivations: true
 every pinned format was read off a producer's line here, or its run skipped: true

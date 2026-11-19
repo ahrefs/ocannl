@@ -23,12 +23,14 @@
    exception the raised-call observer is handed. - [trace-stop]: the same search under a budget
    whose virtual clock ([Autotune.budget_elapsed]) passes it during the first non-floor candidate's
    timing, so exactly that window is stopped ([Autotune.Timing_stopped]); the run prints its label
-   as [stopped: %S]. - [seeded]: the recipes' untuned compile ([Autotune.untuned_compile]) of a
-   64x64 matmul on the run's own backend, under [autotune_log] (from the rule): where the backend
-   seeds its untuned default ([Autotune.seeded_default_backend]: CUDA and HIP) the compile goes
-   through [Autotune.seeded_apply], which prints the [seeded_default:] lines on stderr; its one leg
-   claim checks the seeded routine's product against the host's. Elsewhere the leg is skipped, and
-   [bench_line_readers.py] reads its [SKIPPED] line as the format's not being produced there. *)
+   as [stopped: %S]. - [seeded]: the recipes' untuned compile ([Autotune.seeded_default], what
+   [Autotune.untuned_compile] is with the model pick off) of a 64x64 matmul on the run's own
+   backend, under [autotune_log] (from the rule): where the backend seeds its untuned default
+   ([Autotune.seeded_default_backend]: CUDA and HIP) the compile goes through
+   [Autotune.seeded_apply], which prints the [seeded_default:] lines on stderr; its one leg claim
+   checks that the compile shipped a seeded segment without falling back, and that the routine's
+   product is the host's, bitwise. Elsewhere the leg is skipped, and [bench_line_readers.py] reads
+   its [SKIPPED] line as the format's not being produced there. *)
 
 open Base
 open Ocannl
@@ -177,14 +179,28 @@ let seeded () =
       ~when_:(Autotune.seeded_default_backend (Context.backend_facts ctx))
       ~on:(Context.backend_name ctx) ()
   in
-  Verdict.in_leg ~leg "seeded: the seeded untuned matmul computes the host's product" (fun label ->
+  Verdict.in_leg ~leg
+    "seeded: the untuned matmul ran seeded, with no fallback, and computes the host's product"
+    (fun label ->
       let n = 64 in
-      let a = NTDSL.range_of_shape ~label:[ "bls_sa" ] ~output_dims:[ n; n ] () in
-      let b = NTDSL.range_of_shape ~label:[ "bls_sb" ] ~output_dims:[ n; n ] () in
+      (* Small integers, so every product and sum is exact in f32 (and tf32): the comparison is
+         bitwise, and no two adjacent rows or columns of the product coincide. *)
+      let cyc ~l ~modulus ~offset =
+        NTDSL.init ~l ~prec:Ir.Ops.single ~o:[ n; n ]
+          ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus ~offset ~stride:1.)
+          ()
+      in
+      let a = cyc ~l:"bls_sa" ~modulus:5 ~offset:(-2.) in
+      let b = cyc ~l:"bls_sb" ~modulus:7 ~offset:(-3.) in
       let%op c = a +* "ik; kj => ij" b in
       List.iter [ a; b; c ] ~f:(fun t -> Train.set_materialized t.Tensor.value);
+      (* [Autotune.untuned_compile] is [seeded_default] under [model_default_schedule=false], which
+         the rule states; its report says what the compile shipped. *)
+      let choice = ref None in
       let ctx, routine =
-        Autotune.untuned_compile ~name:"bls_seeded" ctx (Train.forward c) Ir.Indexing.Empty
+        Autotune.seeded_default ~name:"bls_seeded"
+          ~report:(fun c -> choice := Some c)
+          ctx (Train.forward c) Ir.Indexing.Empty
       in
       Train.run ctx routine;
       let av = Context.get_values ctx a.Tensor.value
@@ -197,9 +213,14 @@ let seeded () =
               (List.range 0 n)
               ~f:(fun k -> av.((ij / n * n) + k) *. bv.((k * n) + (ij % n))))
       in
-      (* The sums reach about 2^30, past f32's exact integers, so the bound is relative, and loose
-         enough for a tf32 contraction (2^-10): a wrong cell is off by far more. *)
-      Verdict.p_close label cv want ~tol:(fun want -> 2e-3 *. Float.max 1. (Float.abs want)))
+      let shipped_seeded =
+        match !choice with
+        | Some { Autotune.sd_seeded = _ :: _; sd_fell_back = false; _ } -> true
+        | Some _ | None ->
+            Stdio.eprintf "seeded: the compile shipped no seeded segment, or fell back\n%!";
+            false
+      in
+      Verdict.Claims.p label (shipped_seeded && Verdict.within label cv want ~tol:(fun _ -> 0.)))
 
 let () =
   (* The mode comes first; the [--ocannl_*] settings after it are the configuration's. *)

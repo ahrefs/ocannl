@@ -363,7 +363,8 @@ print("== the seeded-default census (Autotune.seeded_apply; CUDA and HIP only)")
 # does not seed, the run's own SKIPPED line says so, and these claims skip with it, in the same
 # dialect (the row a pass prints, the announcement on stderr). A seeding run that printed no line
 # fails here, as does a run that neither skipped nor seeded.
-SEEDED_LEG = "seeded: the seeded untuned matmul computes the host's product"
+SEEDED_LEG = ("seeded: the untuned matmul ran seeded, with no fallback, and computes the host's "
+              "product")
 out, err = captured("seeded", "out"), captured("seeded", "log")
 skip = re.search(r"^SKIPPED on (\S+) \(vacuous\): " + re.escape(SEEDED_LEG) + "$", err, re.M)
 claim("the seeded run states its leg claim", SEEDED_LEG + ": true" in out.splitlines(), repr(out))
@@ -383,6 +384,14 @@ seeded_claims = [
         "each census line lists as many seeded segments as it counts", census,
         lambda line: (m := CENSUS.fullmatch(line)) is not None
         and len(re.findall(r"(?:^|, )u\d+ ", m[5])) == int(m[1]))),
+    # The reader's lines are the producer's own, whole and in order: the sketch labels after each
+    # `u<N>` are what gh1051_cells compares across rounds.
+    ("the census lines read are the capture's own, whole and in order", lambda: claim(
+        "the census lines read are the capture's own, whole and in order",
+        census and census == [line.removeprefix("autotune: ") for line in err.splitlines()
+                              if line.startswith("autotune: seeded_default: ")
+                              and " segments seeded " in line],
+        repr(census))),
     ("no more census lines than plan derivations", lambda: claim(
         "no more census lines than plan derivations", len(census) <= len(derived),
         f"{len(census)} census, {len(derived)} derivations")),

@@ -2668,14 +2668,16 @@
   bench_retime
   arrayjit.context
   arrayjit.autotune
-  arrayjit.verdict)
+  arrayjit.verdict
+  ll_test)
  (preprocess
   (pps ppx_ocannl)))
 
 ; gh-ocannl-1910: the untuned compile on the ambient backend, logging the seeded-default census,
 ; which only CUDA and HIP print; the model pick would replace the seeded plan, so it is stated off,
 ; and the seeding gate is the fixed threshold 32 rather than the ranked one, which on HIP kept the
-; 64x64 matmul's default and so printed no census line.
+; 64x64 matmul's default and so printed no census line. The automatic GPU schedule and fission,
+; without which nothing seeds, are stated on, and routine logging off.
 ; Its own rule, so bench_line_readers' above keeps naming cc.
 
 (rule
@@ -2695,7 +2697,10 @@
       seeded
       --ocannl_autotune_log=true
       --ocannl_model_default_schedule=false
-      --ocannl_gpu_default_sketch_min_reduction=32))))))
+      --ocannl_gpu_default_sketch_min_reduction=32
+      --ocannl_automatic_gpu_schedule=true
+      --ocannl_schedule_fission=true
+      --ocannl_debug_log_from_routines=false))))))
 
 ; Tensor-core kernels must name their accumulator destination in the shipped table, even when
 ; their zeroing kernel is separate. This compiles two tiny matmuls; it runs no timing window.
