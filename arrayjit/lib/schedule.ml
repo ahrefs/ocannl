@@ -2055,7 +2055,30 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
        which the caller can ask for; this op never grows the tile on its own (the tile is sized by
        [tile_loops], and shared-memory budgets and the cost model read it off the op). Refused here,
        named for the decline census and before any tile is minted, on every staged read's path
-       (copies of a materializing mint share their binders). *)
+       (copies of a materializing mint share their binders).
+
+       The splice below rewrites EVERY binder of the anchor, so a binder no staged read sits under
+       escapes this check: inside a scope body it would get loads the body cannot hold. The post-op
+       scope-grammar gate refuses that ({!apply_opt_op}; [schedule_op_scope_purity],
+       gh-ocannl-2313), and no shipped chain reaches it (gh-ocannl-2366). Entry binders are unique
+       ([Low_level.validate_loop_binders]); an op repeats one only by copying a loop body -- a
+       materializing [Unroll], a [Partition], [Tensorize]'s contraction, [Fuse_epilogue]'s rebuilt
+       nests -- or, for a pipelined [Stage], its own fresh load-nest loops, outside every scope. The
+       copies one op makes share the scope placement, and each keeps its copy of the staged read
+       until something folds them (the chain's trailing simplify, or [Fuse_epilogue]'s own, which
+       runs mid-chain), so the uncovered binder needs a difference the copies acquire later -- that
+       fold dropping the read from one copy, a materializing op minting its accumulator scope in one
+       copy and declining in another, or tile loops naming one [Partition] segment's symbol so only
+       that copy's reads are staged; the argument therefore rests on operation order. Every shipped
+       chain puts its [Stage]s ahead of all the copying ops: the sketch families ([Sketch_families])
+       emit Swap, Split, Pad, Retype, Expand_zero and Coalesce, then the Stages, then Privatize,
+       Tensorize, the materializing Unrolls of tile loops and the k-block Partition; the CPU
+       channel-vector preset follows the Grid retypes with Swap, Stage, Privatize and a Vectorized
+       retype; autotune builds no [Stage], and appends its moves after a seed's ops (its
+       split-reduce prelude ahead of the seeds is Swap, Coalesce and statement-level
+       [Split_reduce]). So at a shipped [Stage] the anchor has one binder, the one on the staged
+       reads' path, and the gate is a backstop for user-written chains. A selective splice (only the
+       binders on staged reads' paths) waits for a chain that needs it. *)
     Option.iter lstar_depth ~f:(fun ld ->
         let anchor = stack0.(ld).index in
         List.iter staged ~f:(fun (_, stack, scope, _) ->
@@ -4327,9 +4350,15 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
      {!schedule_legality} it no longer reaches this op. The op's probes do not enter either chain
      ([fuse_epilogue_witness], {!probe_opt_op}, whose grammar check exempts a violation the program
      already held), so the op still refuses an impure body itself, first (above), rather than
-     missing its writes; whether that check is redundant is gh-ocannl-2313's. With it, [writes_tn]
-     and [affine_relations] agree on every tensor write; [target_writes] also counts an opaque
-     [Staged_compilation] as a possible write. Pinned by
+     missing its writes. That check is redundant only inside a chain whose entry breaks neither half
+     of the scope grammar -- every chain over a lowered routine: there gates (1)-(4) hand the op a
+     pure program, and an earlier op that would add a write to a scope body is refused at the op
+     ([schedule_op_scope_purity], gh-ocannl-2313). A hand-built entry already holding a hardware
+     loop in a scope switches that per-op refusal off ({!scope_grammar_added} exempts any violation
+     the input held), so an earlier op's added write would reach this op. A probe handed a
+     [?prelowered] routine sees no gate but this one ([epilogue_fusion_scope_purity]'s probe claim
+     pins it), so it stays. With it, [writes_tn] and [affine_relations] agree on every tensor write;
+     [target_writes] also counts an opaque [Staged_compilation] as a possible write. Pinned by
      [test/operations/epilogue_fusion_scope_purity]. --- *)
   let rec writes_tn tn = function
     | Set { tn = t; _ } | Zero_out t | Set_dynamic { tn = t; _ } | Set_from_vec { tn = t; _ } ->
