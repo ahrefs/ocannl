@@ -17218,7 +17218,8 @@
   arrayjit.utils))
 
 ; gh-ocannl-1457: a tensorized matmul's Tile_mma scalar fallback under a contraction-off compile is
-; the serial loop's two-rounding f32 chain, bitwise, on non-dyadic operands (cc; skipped elsewhere).
+; the serial loop's two-rounding f32 chain, bitwise, on non-dyadic operands: packed seeds on cc, and
+; a hand-applied Tensorize under precise math on CUDA and HIP (gh-ocannl-1834); skipped elsewhere.
 
 (test
  (name tile_fallback_unfused)
