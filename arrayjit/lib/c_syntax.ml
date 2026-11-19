@@ -6349,8 +6349,15 @@ module C_syntax (B : C_syntax_config) = struct
                 ~f:(fun () -> render reduction)
                 ~finally:(fun () -> ctx.active_mma_accumulator := old)
             in
+            (* gh-ocannl-1308: a forced decline is taken HERE, at the scope, before either backend
+               hook is asked -- the path a backend with no fragment hook and no intrinsic for the
+               call takes (cc, an unsupported format): the region renders through the local array
+               below, and each [Tile_mma] in it then declines per statement. Forcing only the
+               statement would leave it rendering scalar code over the hook's intrinsic fragment,
+               which has no local array to address. *)
+            let forced = Utils.tile_mma_decline_forced () in
             let fragment_doc =
-              if Utils.debug_log_from_routines () then None
+              if Utils.debug_log_from_routines () || forced then None
               else
                 Option.bind B.mma_fragment_syntax ~f:(fun emit ->
                     emit ~d_prec ~a_prec ~b_prec ~m ~n ~k ~fragment:fragment_name ~target:target_op
@@ -6360,7 +6367,7 @@ module C_syntax (B : C_syntax_config) = struct
             let rendered =
               match fragment_doc with
               | Some _ as doc -> doc
-              | None when Utils.debug_log_from_routines () -> None
+              | None when Utils.debug_log_from_routines () || forced -> None
               | None ->
                   Option.bind B.mma_syntax ~f:(fun emit ->
                       (* When the fragment hook declined this call (HIP until its
@@ -7604,6 +7611,15 @@ module C_syntax (B : C_syntax_config) = struct
               fallback_doc ()
         in
         match B.mma_syntax with
+        | _ when Utils.tile_mma_decline_forced () ->
+            (* gh-ocannl-1308: the test-only forced decline skips the register tiling and the
+               intrinsics alike. Inside a fragment scope [render_mma_fragment_scope] has already
+               declined the scope, so the fragment here is the local array. *)
+            (declinef ctx)
+              "Tile_mma decline forced (OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE): renders the \
+               lane-0 scalar fallback: %s"
+              (describe ());
+            fallback_doc ()
         | None -> fallback_or_tiled ()
         | Some _ when Utils.debug_log_from_routines () ->
             (declinef ctx)

@@ -54,6 +54,7 @@ Ambient variables a module reads by name at run time, and the stanza that declar
   OCANNL_TOOL_TEST_TIMING_IDENTITY test/operations/dune, test schedule_cache_device (test/operations/schedule_cache_device.ml)
 
 Run-time reads exempted from declaration, each for the reason `exempt_reads` gives:
+  arrayjit/lib/utils.ml:OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE
   test/support/verdict.ml:OCANNL_TOOL_VERDICT_RECORDS
 
 Programs starting a search with a run that can select cc, each pinning the cc vector file

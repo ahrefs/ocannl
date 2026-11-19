@@ -704,12 +704,15 @@ let codegen_tag ~(facts : Backend_intf.backend_facts) ~(limits : Backend_intf.ha
        different numbers than the default regime's; AGENTS.md's numerics-gate rule keys it. As with
        the zero elision, the ON regime is the one hashed, and only where the seeded plan runs (CUDA
        and HIP), so every key that predates the gate, and every other backend's, is unchanged. *)
-    @
-    if
-      facts.Backend_intf.seeds_untuned_default
-      && Utils.get_global_flag ~default:false ~arg_name:"gpu_default_seed_narrow_storage"
-    then [ "seed-narrow-storage" ]
-    else []
+    @ (if
+         facts.Backend_intf.seeds_untuned_default
+         && Utils.get_global_flag ~default:false ~arg_name:"gpu_default_seed_narrow_storage"
+       then [ "seed-narrow-storage" ]
+       else [])
+    (* gh-ocannl-1308: the test-only forced Tile_mma decline renders every tensorized candidate as
+       its scalar fallback, so a winner crowned under it is not the normal regime's, nor the
+       reverse. The ON regime is the one hashed, so no key changes while the hook is off. *)
+    @ if Utils.tile_mma_decline_forced () then [ "forced-tile-mma-decline" ] else []
   in
   String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string (String.concat ~sep:"\000" parts))) 8
 

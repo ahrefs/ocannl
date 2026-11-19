@@ -464,6 +464,36 @@ val with_runtime_debug : unit -> bool
 val debug_log_from_routines : unit -> bool
 (** Whether kernels log their execution: [debug_log_from_routines] on and [log_level > 1]. *)
 
+(** {2 The forced [Tile_mma] decline (gh-ocannl-1308)}
+
+    A test-only hook: with [OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE=1] every [Tile_mma] the C
+    renderers meet declines to the lane-0 scalar fallback, so a routine that would have tensorized
+    carries a [Scalar_fallback] census ([C_syntax.mma_summary]) while computing the same values.
+    That is the negative control of every census claim (a claim that a tensorized routine DID
+    tensorize), made a reproducible leg instead of a hand patch: under the hook a census claim must
+    fail and the parity claims beside it must hold.
+
+    It is not a configuration key, because no user should ever set it: it is in the reserved
+    [OCANNL_TOOL_...] namespace, and the stanzas that run under it declare
+    [(env_var OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE)] so that setting it reruns them
+    ([test/operations/env_var_deps] holds this read to its exemption). The decline is taken at the
+    fragment scope as well as per statement ([C_syntax]'s [render_mma_fragment_scope]): forcing only
+    the statement inside a scope the backend hook already rendered would emit scalar code over an
+    intrinsic fragment that has no local array, which does not compile on Metal. The schedule cache
+    keys the hook ([Schedule_cache.codegen_tag]), so a forced routine is never served from, nor
+    stored as, an entry of the normal regime.
+
+    Read from the environment once, at startup; {!force_tile_mma_decline} overrides it in-process,
+    for a test that compares both regimes in one run. *)
+
+val force_tile_mma_decline : bool option ref
+(** [Some b] overrides [OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE]; [None] (the default) defers to it.
+    Set it before compiling, from the domain that compiles. *)
+
+val tile_mma_decline_forced : unit -> bool
+(** Whether every [Tile_mma] declines: {!force_tile_mma_decline}, else the variable. A value of the
+    variable other than [1], [0] or empty raises [Invalid_argument] here, at its first use. *)
+
 external detach_c_stderr : unit -> bool = "ocannl_detach_c_stderr"
 (** Points C [stderr] at its own dup of the real stderr; the stub behind {!c_stderr_detached},
     unused in-tree, so a caller that took over fd 2 can redo the detachment. *)

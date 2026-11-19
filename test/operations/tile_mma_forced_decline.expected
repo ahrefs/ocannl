@@ -1,0 +1,10 @@
+the serial twin computes a nonzero product: true
+unforced, the plain tensorized schedule renders tensorized: true
+forced, every Tile_mma of the plain schedule renders the scalar fallback: true
+unforced, the plain tensorized matmul matches the serial twin bitwise: true
+forced, the plain tensorized matmul's fallback matches the serial twin bitwise: true
+unforced, the staged schedule renders tensorized in a persistent-fragment scope: true
+forced, the staged schedule compiles and runs: true
+forced, the staged schedule declines at the fragment scope: every Tile_mma falls back, no scope renders: true
+both staged tensorized matmuls match the serial twin bitwise: true
+the forced decline moves the schedule cache's codegen identity: true

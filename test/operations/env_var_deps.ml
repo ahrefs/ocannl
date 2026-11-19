@@ -113,19 +113,28 @@ module Refusal_manifest = Test_scan.Refusal_control_manifest
 let recorded_diagnostic = "which the ambient record already carries"
 
 (* Run-time reads of a reserved tooling variable that deliberately decide nothing a stanza could
-   track, keyed by "<source>:<name>". A declaration buys a rerun when the value changes; a variable
-   naming only WHERE a copy of a run's output goes changes no result, and the reader here is a
-   library, whose stanza has no deps to declare it in -- declaring it on every stanza that links the
-   library would claim a sensitivity none of them has. Each read an entry exempts is listed in the
-   golden, and an entry whose read disappears is refused, like a stale declaration exemption: every
-   synthetic control tree carries a stand-in reader for each entry (`control_context`), so the
-   refusal never fires on a tree that holds no library source (gh-ocannl-1233). *)
+   track -- or, for the one entry saying so, a library read whose consumers declare it -- keyed by
+   "<source>:<name>". A declaration buys a rerun when the value changes; a variable naming only
+   WHERE a copy of a run's output goes changes no result, and the reader here is a library, whose
+   stanza has no deps to declare it in -- declaring it on every stanza that links the library would
+   claim a sensitivity none of them has. Each read an entry exempts is listed in the golden, and an
+   entry whose read disappears is refused, like a stale declaration exemption: every synthetic
+   control tree carries a stand-in reader for each entry (`control_context`), so the refusal never
+   fires on a tree that holds no library source (gh-ocannl-1233). *)
 let exempt_reads =
   [
     ( "test/support/verdict.ml:OCANNL_TOOL_VERDICT_RECORDS",
       "names the directory Verdict copies each action's machine records into (gh-ocannl-1114); the \
        verdict and the stdout a golden diffs are the same with it set or not, and only a forced \
        sweep, which reruns every action anyway, reads the copies" );
+    (* The one entry that DOES decide a result: a hook the library reads on behalf of whichever test
+       runs under it, so the declaration belongs to those stanzas rather than to the library's,
+       which has no deps to put it in. *)
+    ( "arrayjit/lib/utils.ml:OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE",
+      "the test-only forced Tile_mma decline (gh-ocannl-1308), read by the library for every \
+       program linking it; the census-judging test stanzas that run under it as a negative-control \
+       leg declare it themselves, and a stanza that does not is a leg reading a cached result, \
+       which reads as a surviving census claim -- the loud direction" );
   ]
 
 (* Directories with runtest actions that carry no ambient gate, and why. Same shape as the
@@ -4540,11 +4549,17 @@ let family_control () =
     else name
   in
   let root = Stdlib.Filename.temp_dir "evd_family" "" in
+  (* Files of one path are merged, not overwritten: a stand-in reader `control_context` adds for an
+     `exempt_reads` entry under `arrayjit/lib` (gh-ocannl-1308) brings its own library stanza to the
+     same dune file as the instrumentation owner here. *)
   let context =
     ( "arrayjit/lib/dune",
       "(library (name fixture_ir) (public_name fixture.ir) (modules alloc_census \
        resource_fault_injection))\n" )
     :: control_context ()
+    |> Map.of_alist_multi (module String)
+    |> Map.to_alist
+    |> List.map ~f:(fun (file, contents) -> (file, String.concat contents))
   in
   List.iter context ~f:(fun (file, content) ->
       write_file (Stdlib.Filename.concat root file) content);
