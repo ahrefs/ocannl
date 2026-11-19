@@ -1653,8 +1653,9 @@ let rng_binop_syntax ~backend ~call prec op =
   | _ -> invalid_arg "C_syntax.rng_binop_syntax: not a random number generation operator"
 
 (** All maximal identifier-like substrings of [s] -- a run of alphanumerics and underscores starting
-    at a letter or underscore. This decomposes a composite rendering like ["(fabsf(floorf("] into
-    [["fabsf"; "floorf"]] rather than the concatenation ["fabsffloorf"].
+    at a letter or underscore. The [Satur01_gate] prefix
+    ["__extension__ ({ __auto_type ocannl_sat01_x__ = ("] yields
+    [["__extension__"; "__auto_type"; "ocannl_sat01_x__"]].
 
     A run whose first character is preceded by a digit or a [.] is the tail of a numeric literal
     ([f] in ["0.0f"], [h] in ["1.0h"]), not a name, and is skipped -- otherwise every single-letter
