@@ -12,7 +12,8 @@
 
     Which backends answer: Metal ([staticThreadgroupMemoryLength] of the compute pipeline state it
     creates at link), CUDA ([CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES], when the driver library exports
-    the entry points) and HIP ([HIP_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES]). The C backends declare no
+    the entry points and runtime debugging is off: a debug link's JIT options are not reproduced by
+    the second load) and HIP ([HIP_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES]). The C backends declare no
     workgroup memory and record nothing, so an empty census is "no answer", never "zero bytes". A
     relink of retained code ([Context.relink_outcome]) outside the bracket records nothing. *)
 

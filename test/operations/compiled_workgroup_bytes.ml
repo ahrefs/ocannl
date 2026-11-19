@@ -52,19 +52,22 @@ let leg = Verdict.leg ~when_:is_gpu ~on:backend_name ()
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
-(* One compiled kernel beside its segment's charge. *)
-type kernel = { name : string; compiled : int; charged : int }
+(* One compiled kernel beside its segment's charge, and the share of that charge that is the
+   backend's per-kernel tile-MMA scratch. *)
+type kernel = { name : string; compiled : int; charged : int; mma_scratch : int }
 
 type outcome =
   | Compiled of kernel list
   | Unpaired of string  (** The census and the shipped segments disagree in count. *)
-  | Refused of string  (** A typed refusal: the gate's, the backend's. *)
+  | Refused of string
+      (** A classified refusal ([Context.compile_outcome]'s [Error (Classified _)]): the gate's, the
+          backend's. *)
   | Crashed of string
 
 let all_kernels : kernel list ref = ref []
 let all_outcomes : (string * outcome) list ref = ref []
 
-let fixture ?(materialize = true) ?(fp16_wide = false) tag build =
+let fixture ?(materialize = true) ?(fp16_wide = false) ?scratch_triple tag build =
   let saved = Ir.Numerics.get () in
   if fp16_wide then Ir.Numerics.set_policy { saved with fp16_arithmetic = Ir.Numerics.Fp16_wide };
   Exn.protect
@@ -78,14 +81,18 @@ let fixture ?(materialize = true) ?(fp16_wide = false) tag build =
       let limits = Context.hardware_limits ctx in
       let capabilities = Context.codegen_capabilities ctx in
       let capture = ref None in
-      let _ctx, _routine =
+      let base_ctx, _routine =
         Context.compile
           ~lowered_transform:(fun opt ->
             capture := Some opt;
             [ opt ])
           ctx fwd Ir.Indexing.Empty
       in
+      Context.release base_ctx;
       let opt = Option.value_exn ~here:[%here] !capture in
+      let no_scratch =
+        { capabilities with Ir.Backend_intf.mma_kernel_workgroup_bytes = (fun ~triples:_ -> 0) }
+      in
       let seeding =
         Autotune.search_seeding ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices:[] opt
       in
@@ -96,26 +103,36 @@ let fixture ?(materialize = true) ?(fp16_wide = false) tag build =
         let outcome =
           match
             Ir.Compiled_kernels.with_census (fun () ->
-                Context.compile
+                Context.compile_outcome ~provenance:Ir.Schedule_outcome.Candidate ~candidate:label
                   ~lowered_transform:(fun o ->
-                    [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o ])
+                    [ Sched.apply_classified (Autotune.sketch_schedule ~accum_prec ~p:q o) o ])
                   (Context.auto ()) fwd Ir.Indexing.Empty)
           with
-          | (_ctx, routine), records ->
+          | Ok (cctx, routine), records ->
               let segments = routine.Context.segments in
-              if List.length records <> List.length segments then
-                Unpaired
-                  (Printf.sprintf "%d compiled figures for %d segments" (List.length records)
-                     (List.length segments))
-              else
-                Compiled
-                  (List.map2_exn records segments ~f:(fun r seg ->
-                       {
-                         name = r.Ir.Compiled_kernels.kernel;
-                         compiled = r.static_workgroup_bytes;
-                         charged = Sched.workgroup_memory_bytes ~capabilities seg;
-                       }))
-          | exception Invalid_argument msg -> Refused msg
+              let outcome =
+                if List.length records <> List.length segments then
+                  Unpaired
+                    (Printf.sprintf "%d compiled figures for %d segments" (List.length records)
+                       (List.length segments))
+                else
+                  Compiled
+                    (List.map2_exn records segments ~f:(fun r seg ->
+                         let charged = Sched.workgroup_memory_bytes ~capabilities seg in
+                         {
+                           name = r.Ir.Compiled_kernels.kernel;
+                           compiled = r.static_workgroup_bytes;
+                           charged;
+                           mma_scratch =
+                             charged - Sched.workgroup_memory_bytes ~capabilities:no_scratch seg;
+                         }))
+              in
+              (* Each candidate's working pools go back before the next links. *)
+              Context.release cctx;
+              outcome
+          | Error (Ir.Schedule_outcome.Classified c), _ ->
+              Refused (Ir.Schedule_outcome.detail_of_cause c.cause)
+          | Error (Ir.Schedule_outcome.Fatal f), _ -> Crashed (Exn.to_string f.exn)
           | exception exn -> Crashed (Exn.to_string exn)
         in
         (match outcome with
@@ -155,9 +172,25 @@ let fixture ?(materialize = true) ?(fp16_wide = false) tag build =
       gated ?aggregation ~when_ ~on:backend_name
         (tag ^ ": the search seeds at least one candidate here")
         (not (List.is_empty seeds));
+      let kernels = List.concat_map outcomes ~f:(function _, Compiled ks -> ks | _ -> []) in
+      (* The per-kernel tile-MMA term has a compiled witness where this fixture's triple is
+         tensorized and the backend charges it a positive scratch: both read off the capabilities
+         under the fixture's policy, never off which candidates compiled. *)
+      Option.iter scratch_triple ~f:(fun ((d_prec, a_prec, b_prec) as triple) ->
+          let scratch =
+            capabilities.Ir.Backend_intf.mma_kernel_workgroup_bytes ~triples:[ triple ]
+          in
+          let when_, aggregation =
+            match Ll_test.tensorized_capability ~is_gpu ~is_cpu ~limits ~a_prec ~b_prec ~d_prec with
+            | `Advertised -> (is_gpu && scratch > 0, None)
+            | `Withheld aggregation -> (false, Some aggregation)
+          in
+          gated_exists ?aggregation ~when_ ~on:backend_name
+            (tag
+           ^ ": a compiled kernel charged the per-kernel tile-MMA scratch allocates exactly its \
+              charge") kernels ~f:(fun k -> k.mma_scratch > 0 && k.compiled = k.charged));
       all_outcomes := !all_outcomes @ outcomes;
-      all_kernels :=
-        !all_kernels @ List.concat_map outcomes ~f:(function _, Compiled ks -> ks | _ -> []))
+      all_kernels := !all_kernels @ kernels)
 
 (* A GEMM [z = x . w] with an elementwise tail [z + pos]; [prec] the operands', [out_prec] the
    product's. *)
@@ -236,7 +269,9 @@ let () =
   (* An f16 product under the wide fp16 policy, an f32 accumulator over half storage: on Metal its
      fragment boundary converts, and the kernel declares the coordinate table that is the per-kernel
      tile-MMA term (gh-ocannl-1205). *)
-  fixture ~fp16_wide:true "half_out"
+  fixture ~fp16_wide:true
+    ~scratch_triple:Ir.Ops.(half, half, half)
+    "half_out"
     (gemm ~prec:Ir.Ops.half ~out_prec:Ir.Ops.half ~m:32 ~k:32 ~n:32 "cwb_half_out");
   fixture "contraction" (out_proj ~bb:2 ~ss:32 ~jj:64 ~hh:4 ~ee:16 "cwb_contraction");
   fixture "conv" (conv ~hw:10 ~ic:4 ~oc:8 "cwb_conv")

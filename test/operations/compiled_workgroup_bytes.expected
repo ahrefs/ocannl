@@ -3,6 +3,7 @@ dense_local: the search seeds at least one candidate here: true
 padded: the search seeds at least one candidate here: true
 half: the search seeds at least one candidate here: true
 half_out: the search seeds at least one candidate here: true
+half_out: a compiled kernel charged the per-kernel tile-MMA scratch allocates exactly its charge: true
 contraction: the search seeds at least one candidate here: true
 conv: the search seeds at least one candidate here: true
 every seeded candidate compiles, or is refused typed: true

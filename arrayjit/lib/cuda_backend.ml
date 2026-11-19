@@ -1520,7 +1520,9 @@ end = struct
      kernel's PTX a second time, through the driver entry points directly, in the current context
      (the link's), asks, and unloads. A second JIT per kernel: only an armed census pays it. A
      cudajit function-attribute binding would supersede this module. [None] when the driver lacks an
-     entry point or a call fails, so the census records nothing rather than a wrong figure. *)
+     entry point or a call fails, so the census records nothing rather than a wrong figure; and
+     [None] under runtime debugging, where the linked module was JIT-compiled with debug and
+     line-info options ([run_options]) this options-free reload would not reproduce. *)
   module Function_attributes = struct
     open Ctypes
 
@@ -1541,6 +1543,7 @@ end = struct
 
     let static_shared_bytes ~ptx ~symbol =
       let ( let* ) o f = Option.bind o ~f in
+      let* () = Option.some_if (List.is_empty (run_options ())) () in
       let* load = Lazy.force module_load_data in
       let* get_function = Lazy.force module_get_function in
       let* get_attribute = Lazy.force func_get_attribute in
