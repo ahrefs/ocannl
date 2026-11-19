@@ -1839,7 +1839,13 @@ files.
   `(a * b) + c` returns `2^-24` (fused) bare and under `#pragma METAL fp math_mode(safe)`, and
   `0` (the serial two roundings, cc's value under `off`) under each of `#pragma METAL fp
   contract(off)`, `#pragma clang fp contract(off)` and `#pragma STDC FP_CONTRACT OFF`, at file
-  scope or at the top of the kernel body, with no diagnostic. Split over two statements (`p = a *
+  scope or at the top of the kernel body, with no diagnostic. The MSL specification (4.1, section
+  1.6.3, "Math Intrinsics Compiler Options") documents `#pragma METAL fp contract([off | on |
+  fast])` and `#pragma STDC FP_CONTRACT OFF`. It ties them to no language version, but documents
+  them beside the options of the Xcode 16 / macOS 15 SDKs. The backend's macOS 14 `Legacy` path
+  is unmeasured, so a join there should use `STDC FP_CONTRACT OFF`, the C standard's spelling, or
+  check that path first. `tools/metal_contract_probe.swift` reruns the probe in one command, and
+  its exit status is the verdict. Split over two statements (`p = a *
   b; p + c`) it is `0` bare under Safe and legacy -- Safe contracts within an expression, like
   `-ffp-contract=on` -- but `2^-24` under Relaxed and Fast, which each pragma brings to `0` too.
   An explicit `fma(a, b, c)` stays fused under the pragma. The AIR agrees (`xcrun -sdk macosx
