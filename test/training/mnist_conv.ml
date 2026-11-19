@@ -27,6 +27,7 @@ let lenet = Demo_models.lenet
 let cross_entropy_loss = Nn_blocks.cross_entropy_loss
 
 let () =
+  let launched = Unix.gettimeofday () in
   let seed = 42 in
   Utils.settings.fixed_state_for_init <- Some seed;
   Tensor.unsafe_reinitialize ();
@@ -129,21 +130,28 @@ let () =
   (* --- Training Loop --- *)
   let open Operation.At in
   let logged_losses = ref [] in
+  (* gh-ocannl-2378: a stderr progress line as training starts and after every epoch, with the
+     seconds since launch, so a slow Metal run reads as advancing within its first minutes -- a step
+     there takes over a second (the gh-ocannl-2302 bullet of docs/agent-notes/build-and-test.md).
+     The stdout claim below still compares every tenth epoch, so the golden does not move. *)
+  Stdio.eprintf "Training started %.0f s after launch: %d epochs of %d steps\n%!"
+    (Unix.gettimeofday () -. launched)
+    epochs n_batches;
   for epoch = 1 to epochs do
     let epoch_loss = ref 0. in
     Train.sequential_loop sgd_routine.Context.bindings ~f:(fun () ->
         Train.run ctx sgd_routine;
         epoch_loss := !epoch_loss +. (ctx, batch_loss).@[0];
         Int.incr step_ref);
-    if epoch % 10 = 0 then (
-      let avg = !epoch_loss /. Float.of_int n_batches in
-      logged_losses := (epoch, avg) :: !logged_losses;
-      (* Exact trajectory digits go to stderr, like the test metrics below: they depend on FP
-         reduction order (platform, backend, SIMD width, worker count), and NO fixed print precision
-         is portable -- at 1 decimal the cifar epoch-30 value sat on a rounding tie (~1.05) and
-         printed 1.0 on cc but 1.1 on cuda, so the golden could not be backend-uniform. The portable
-         stdout record is the claim below: the loss fell across the logged epochs. *)
-      Stdio.eprintf "Epoch %d: avg loss = %.2f\n%!" epoch avg)
+    let avg = !epoch_loss /. Float.of_int n_batches in
+    if epoch % 10 = 0 then logged_losses := (epoch, avg) :: !logged_losses;
+    (* Exact trajectory digits go to stderr, like the test metrics below: they depend on FP
+       reduction order (platform, backend, SIMD width, worker count), and NO fixed print precision
+       is portable -- at 1 decimal the cifar epoch-30 value sat on a rounding tie (~1.05) and
+       printed 1.0 on cc but 1.1 on cuda, so the golden could not be backend-uniform. The portable
+       stdout record is the claim below: the loss fell across the logged epochs. *)
+    Stdio.eprintf "Epoch %d/%d: avg loss = %.2f (%.0f s after launch)\n%!" epoch epochs avg
+      (Unix.gettimeofday () -. launched)
   done;
   (match List.rev !logged_losses with
   | [] -> ()
