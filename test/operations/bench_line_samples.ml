@@ -15,7 +15,15 @@
    and past its validation) -- the candidate's classified decline, which the search survives (an
    expired wait would abandon the device, gh-ocannl-2133). The run prints the injected candidate's
    label and exception on stdout, [%S]-quoted as the trace quotes them, for the reader to find in
-   the trace's [raised] line. *)
+   the trace's [raised] line. - [trace-cut]: the same search on a scripted clock
+   ([Autotune.on_batch_wall], as [autotune_hopeless_window] drives it, gh-ocannl-2330): the baseline
+   and the floors read 12 ms, and every other attempt 100 ms -- over four times the floor -- until
+   the first window is cut as hopeless, every attempt after it the floor again, so exactly one
+   window is cut. The run prints the cut candidate's label on stdout, [%S]-quoted, read off the
+   exception the raised-call observer is handed. - [trace-stop]: the same search under a budget
+   whose virtual clock ([Autotune.budget_elapsed]) passes it during the first non-floor candidate's
+   timing, so exactly that window is stopped ([Autotune.Timing_stopped]); the run prints its label
+   as [stopped: %S]. *)
 
 open Base
 open Ocannl
@@ -88,9 +96,63 @@ let inject_one_raise () =
         raise exn
       end)
 
-let trace ~inject =
+(* Installed after the trace, like [inject_one_raise]. Which attempts are floors is
+   [autotune_hopeless_window]'s rule: the baseline, the backend's default seed and the seeded
+   singles, whose readings the others are ranked against. *)
+let is_floor label =
+  String.equal label "baseline"
+  || Option.exists
+       (Autotune.default_seed_label ~facts:Ir.Backend_intf.cc_facts)
+       ~f:(String.equal label)
+  || String.is_prefix label ~prefix:"F_seeded"
+
+let cut_one_window () =
+  let floor_ms = 12. and hopeless_ms = 100. in
+  let current = ref "" and cut = ref false in
+  let prev_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
+  Autotune.Seam.set Autotune.on_candidate_attempt (fun label ->
+      prev_attempt label;
+      current := label);
+  Autotune.install_timing_call_raised_observer (fun (r : Autotune.timing_call_raised) ->
+      match r.raised_exn with
+      | Autotune.Timing_hopeless _ ->
+          cut := true;
+          Stdio.printf "cut: %S\n%!" r.raised_label
+      | _ -> ());
+  let prev_wall = Autotune.Seam.get Autotune.on_batch_wall in
+  Autotune.Seam.set Autotune.on_batch_wall (fun ~depth ~ordinal wall ->
+      ignore (prev_wall ~depth ~ordinal wall : float);
+      let ms = if !cut || is_floor !current then floor_ms else hopeless_ms in
+      ms *. Float.of_int depth)
+
+(* Installed after the trace, like [cut_one_window]. The budget reads a virtual clock
+   ([Autotune.budget_elapsed]): zero, until the first batch of a non-floor candidate's timing, and
+   then far past the budget, so the check before its next batch stops the window; zero again once
+   the window has stopped, which leaves the budget spent. *)
+let stop_one_window () =
+  let current = ref "" and armed = ref false and stopped = ref false in
+  let prev_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
+  Autotune.Seam.set Autotune.on_candidate_attempt (fun label ->
+      prev_attempt label;
+      current := label);
+  Autotune.install_timing_call_raised_observer (fun (r : Autotune.timing_call_raised) ->
+      match r.raised_exn with
+      | Autotune.Timing_stopped ->
+          armed := false;
+          stopped := true;
+          Stdio.printf "stopped: %S\n%!" r.raised_label
+      | _ -> ());
+  let prev_wall = Autotune.Seam.get Autotune.on_batch_wall in
+  Autotune.Seam.set Autotune.on_batch_wall (fun ~depth ~ordinal wall ->
+      if not (!stopped || is_floor !current) then armed := true;
+      prev_wall ~depth ~ordinal wall);
+  Autotune.Seam.set Autotune.budget_elapsed (fun _real -> if !armed then 1e9 else 0.)
+
+let trace ?(cut = false) ?(stop = false) ~inject () =
   H.install_timing_trace ();
   if inject then inject_one_raise ();
+  if cut then cut_one_window ();
+  if stop then stop_one_window ();
   let a = NTDSL.range_of_shape ~label:[ "bls_a" ] ~output_dims:[ 16; 16 ] () in
   let b = NTDSL.range_of_shape ~label:[ "bls_b" ] ~output_dims:[ 16; 16 ] () in
   let%op c = a +* "ik; kj => ij" b in
@@ -107,8 +169,11 @@ let () =
   (* The mode comes first; the [--ocannl_*] settings after it are the configuration's. *)
   match Array.to_list (Sys.get_argv ()) with
   | _ :: "harness" :: _ -> harness ()
-  | _ :: "trace" :: _ -> trace ~inject:false
-  | _ :: "trace-raise" :: _ -> trace ~inject:true
+  | _ :: "trace" :: _ -> trace ~inject:false ()
+  | _ :: "trace-raise" :: _ -> trace ~inject:true ()
+  | _ :: "trace-cut" :: _ -> trace ~cut:true ~inject:false ()
+  | _ :: "trace-stop" :: _ -> trace ~stop:true ~inject:false ()
   | _ ->
       failwith
-        "usage: bench_line_samples.exe harness|trace|trace-raise [--ocannl_<key>=<value> ...]"
+        "usage: bench_line_samples.exe harness|trace|trace-raise|trace-cut|trace-stop \
+         [--ocannl_<key>=<value> ...]"

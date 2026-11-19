@@ -350,18 +350,21 @@ let percentile sorted p =
     as it returns ({!Autotune.install_compile_observer}, gh-ocannl-1314): its stage, label and
     verdict, its wall and its phases (lowering, transform, codegen, the vendor compiler, link) and
     how many of its kernels the vendor compiler was given, which is fewer than it rendered where the
-    backend reused compiled kernels. A tagged call that raises after its pre-dispatch validation (a
-    classified launch or synchronization failure the search survives) returns no record: the trace
-    counts it as raised -- validations started less tagged records returned -- and a summary with
-    any says INCOMPLETE, since that call's cost is in no total. Each such call prints a [raised]
-    line as it raises ({!Autotune.install_timing_call_raised_observer}, gh-ocannl-2246): the
-    candidate's label ([baseline] for the baseline), the phase tag it left under ([-] for none) and
-    its exception as [Printexc] prints it, both quoted as OCaml strings; its ordinal is the running
+    backend reused compiled kernels. A tagged call that raises after its pre-dispatch validation
+    returns no record: the trace counts it as raised -- validations started less tagged records
+    returned -- and prints a [raised] line as it raises
+    ({!Autotune.install_timing_call_raised_observer}, gh-ocannl-2246): its kind, the candidate's
+    label ([baseline] for the baseline), the phase tag it left under ([-] for none) and its
+    exception as [Printexc] prints it, both quoted as OCaml strings; its ordinal is the running
     count of such lines. The observer fires for exactly the calls the count counts -- a validation
-    started, no record returned -- so the summary's count is the number of [raised] lines. A
-    budget-stopped or hopeless window ({!Autotune.Timing_stopped}, {!Autotune.Timing_hopeless})
-    raises too, and is counted and named the same way: an unranked window, not a failure, which the
-    line tells apart.
+    started, no record returned -- so the summary's counts add up to the number of [raised] lines.
+    The kind is read off the exception the observer is handed (gh-ocannl-2330): a budget-stopped or
+    hopeless window ({!Autotune.Timing_stopped}, {!Autotune.Timing_hopeless}) is [unranked], the
+    search working as designed, and the summary tallies those apart; any other exception (a
+    classified launch or synchronization failure the search survives) is [failed], and a summary
+    with any says INCOMPLETE with their count, since that call's cost is in no total. An unranked
+    window's batches are in no total either, so its tally states their wall, from each validation's
+    start to its raise, for a reading of the session's split to add to the timing side.
 
     The [decision] line carries the policy's own metadata (gh-ocannl-1199): the search phase, the
     exit that chose the depth, the fitted fixed and marginal costs and the fit's verdict, what the
@@ -477,7 +480,15 @@ let install_timing_trace () =
        this domain's observer, and the preflight seam is per domain too ({!Autotune.Seam}) -- so a
        search in another domain moves neither. *)
     let preflights = ref 0 and tagged = ref 0 in
+    (* gh-ocannl-2330: of those raised calls, the unranked windows -- cut as hopeless or stopped by
+       the budget -- told apart by the exception the raised-call observer is handed, never by its
+       printed text. The search reads them as unranked, not as failures, so the summary tallies them
+       apart and INCOMPLETE counts the rest. Their wall -- from the validation's start to the raise,
+       the warmup, calibration and batches they dispatched -- is summed apart too, since no total
+       holds it: a reading of the session's split adds it to the timing side. *)
+    let unranked = ref 0 and unranked_s = ref 0. and preflight_at = ref Float.nan in
     let raised () = !preflights - !tagged in
+    let failed () = raised () - !unranked in
     let calib_s = ref 0. and timed_s = ref 0. in
     let depths = Hashtbl.create (module Int) in
     let pr fmt = Stdlib.Printf.kfprintf Stdlib.flush Stdlib.stderr fmt in
@@ -509,13 +520,22 @@ let install_timing_trace () =
     let prev_preflight = Autotune.Seam.get Autotune.on_candidate_preflight in
     ( Autotune.Seam.set Autotune.on_candidate_preflight @@ fun name ->
       Int.incr preflights;
+      preflight_at := now ();
       prev_preflight name );
     let raised_lines = ref 0 in
     Autotune.install_timing_call_raised_observer (fun (r : Autotune.timing_call_raised) ->
         Int.incr raised_lines;
-        pr "timing-trace: raised %d at %.1fs: %S in phase %s: %S\n" !raised_lines
+        let kind =
+          match r.raised_exn with
+          | Autotune.Timing_hopeless _ | Autotune.Timing_stopped ->
+              Int.incr unranked;
+              unranked_s := !unranked_s +. (now () -. !preflight_at);
+              "unranked"
+          | _ -> "failed"
+        in
+        pr "timing-trace: raised %d at %.1fs: %s %S in phase %s: %S\n" !raised_lines
           (now () -. t0)
-          r.raised_label
+          kind r.raised_label
           (Option.value_map r.raised_phase ~default:"-" ~f:(fun p ->
                Sexp.to_string (Ir.Schedule_outcome.sexp_of_phase p)))
           (Stdlib.Printexc.to_string r.raised_exn));
@@ -553,8 +573,8 @@ let install_timing_trace () =
         pr
           "timing-trace: call %d at %.1fs: depth %d, %d batches (%d reused)%s, %d launches, calib \
            %.1f ms%s, timed %.1f ms (median batch %.3f ms, spread %.2fx) | totals: %d calls, %d \
-           launches, calib %.2f s (%d calls untagged), timed %.2f s, %d calls raised, %d calls \
-           reused %d batches\n"
+           launches, calib %.2f s (%d calls untagged), timed %.2f s, %d calls failed, %d windows \
+           unranked, %d calls reused %d batches\n"
           !calls
           (now () -. t0)
           depth c.window.samples c.window.reused
@@ -563,7 +583,7 @@ let install_timing_trace () =
           n c.setup_ms
           (if c.tagged then "" else " (untagged call)")
           c.timed_ms c.window.median_wall_ms c.window.spread !calls !launches !calib_s !untagged
-          !timed_s (raised ()) !reusing_calls !reused_batches;
+          !timed_s (failed ()) !unranked !reusing_calls !reused_batches;
         pr "%s\n" (decision_line ~call:!calls c.decision));
     Stdlib.at_exit (fun () ->
         let hist =
@@ -575,15 +595,21 @@ let install_timing_trace () =
         pr
           "timing-trace: summary: %.1fs wall, %d candidate attempts, %d timing calls, %d launches, \
            calib %.2f s (%d calls untagged), timed %.2f s; depth histogram (calls x depth): %s; %d \
-           calls reused %d calibration batches as their window%s\n"
+           calls reused %d calibration batches as their window%s%s\n"
           (now () -. t0)
           !attempts !calls !launches !calib_s !untagged !timed_s hist !reusing_calls !reused_batches
-          (if raised () = 0 then ""
+          (if !unranked = 0 then ""
+           else
+             Printf.sprintf
+               "; %d unranked timing windows (cut as hopeless or stopped by the budget), %.6f s, \
+                in none of these totals"
+               !unranked !unranked_s)
+          (if failed () = 0 then ""
            else
              Printf.sprintf
                "; INCOMPLETE: %d tagged timing calls raised after validation, and their cost is in \
                 none of these totals"
-               (raised ())))
+               (failed ())))
   end
 
 (** {1 Placement A/B arms in the emitted result (gh-ocannl-546)}

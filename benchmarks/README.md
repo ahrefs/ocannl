@@ -405,11 +405,16 @@ single-threaded segments that sum to the serial step
   backend never dispatches it (gh-ocannl-532) -- so the trace's attempt count runs one per search
   ahead of `autotune_progress`'s `attempts`, which leaves the baseline out. An untagged call (the
   untuned control `autotune_log=true` times) is marked as such and counted apart. A tagged call
-  that raised after its pre-dispatch validation returns no record; the trace counts it as raised,
-  prints a `timing-trace: raised` line naming its candidate (`baseline` for the baseline), the
-  phase tag it left under and its exception (gh-ocannl-2246; a `Timing_hopeless` or
-  `Timing_stopped` one is an unranked window, not a failure), and the summary then says
-  INCOMPLETE. `bench_output.trace_raised` reads those lines. A `timing-trace: search done` line marks where the measured
+  that raised after its pre-dispatch validation returns no record; the trace prints a
+  `timing-trace: raised` line naming its kind, its candidate (`baseline` for the baseline), the
+  phase tag it left under and its exception (gh-ocannl-2246). The kind is read off the exception
+  (gh-ocannl-2330): a window cut as hopeless or stopped by the budget (`Timing_hopeless`,
+  `Timing_stopped`) is `unranked` -- the search working, not a failure -- and the summary tallies
+  those as `N unranked timing windows`, with their wall (no other total holds it: the session's
+  timing side is calib plus timed plus that), still complete; any other exception is `failed`, and the
+  summary then says INCOMPLETE with their count. `bench_output.trace_raised` reads those lines, and
+  `trace_summary` the two tallies (`raised`, `unranked`, with `unranked_s`); a capture from before gh-ocannl-2330 names
+  no kind and counts its unranked windows in INCOMPLETE. A `timing-trace: search done` line marks where the measured
   compile (`compile_s`) ended, so a cell cut off later is not read as a search still running. The
   decision line (gh-ocannl-1199) carries the search phase (`playoff` for the composite playoff),
   the calibration exit that chose the depth (`measured_batch`, `affine_projection`,
