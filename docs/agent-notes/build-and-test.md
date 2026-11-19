@@ -5444,16 +5444,18 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   `git worktree add --detach "${WITNESS_CHECKOUT}-lf" "$WITNESS_REVISION"`.
   Enter that new worktree before preparing fixtures or running checks.
 - `wake-lab.sh boot-windows` reached native Git Bash on rog in about 50 s on 2026-09-24, with
-  nobody at the keyboard and no BitLocker prompt. Rog normally runs Ubuntu for the daily CUDA
-  sweep and Linux workers. Only rog qualifies for the unattended witness. Minix has the same
-  `/etc/sudoers.d/50-fleet-boot` grant, but on
-  2026-10-14 `boot-windows` there came back in Ubuntu with exit 1 ("came back in Ubuntu") because
-  its firmware ignores `BootNext`, and its Windows, booted by hand, stopped at the BitLocker
-  recovery-key prompt, so even a firmware that honoured the one-boot entry would leave the reboot
-  waiting on a person. tuf has no wired NIC, so the script refuses it. So a minix Windows leg is a
-  user-booted one, and on that boot `minix-amd-win`'s PATH names a `hip_path_link` folder that no
-  longer exists: with hipjit installed every test executable, cc-only ones included, then fails
-  to start with `0xc00004bc` (`hiprtc0701.dll` not found) unless the leg script prepends
+  nobody at the keyboard and no BitLocker prompt, and made another unattended round trip on
+  2026-11-06 (ahrefs/ocannl#2004). Rog normally runs Ubuntu for the daily CUDA sweep and Linux
+  workers. Minix, with the same `/etc/sudoers.d/50-fleet-boot` grant, qualifies too, on thinner
+  evidence: its firmware does honour `BootNext`. On 2026-11-06 the first `boot-windows` reached
+  Windows in 317 s only because the maintainer typed the BitLocker recovery key, and one repeat
+  reached it in 36 s with nobody at the keyboard, `boot-linux` bringing it back both times. That
+  is one unattended boot, so after any firmware, GRUB or kernel change on either box expect the
+  first Windows boot to stop at the recovery-key prompt -- rog showed it on 2026-11-06 when GRUB
+  was reached by hand -- and report `NEEDS A PERSON` rather than retrying. tuf has no wired NIC,
+  so the script refuses it. On a minix Windows boot `minix-amd-win`'s PATH names a
+  `hip_path_link` folder that no longer exists: with hipjit installed every test executable,
+  cc-only ones included, then fails to start with `0xc00004bc` (`hiprtc0701.dll` not found) unless the leg script prepends
   `C:/Program Files/AMD/ROCm/*/bin` to PATH (ahrefs/ocannl#1349; staging#1120 did).
 - Telling the user that CI is taking the check withdraws the boot request. If a box becomes
   available after dispatch, let the run finish. Cancelling it leaves a no-verdict that blocks the merge.
