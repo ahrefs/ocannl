@@ -3,6 +3,10 @@ schedule_legality refuses it too, naming the entry and the hidden write, with no
 strict: the entry refusal is fatal, untyped (Invalid_argument, no cause): true
 permissive: it is contained as Unclassified, never as Illegal_schedule, with no op dispatched: true
 the empty schedule is the identity on the impure entry, dispatching nothing: true
+op_legality admits an in-place unroll on the impure entry: true
+the autotuner menu offers that unroll: true
+applying the offered unroll refuses the hidden write before dispatch: true
+the coalesce probe names the accumulator's unpaired index on both placements of the write: true
 the statement-level twin reaches its ops and is refused at the Retype, naming the tile's lifetime: true
 a pure entry holding a pure scope body runs every op: true
 and schedule_legality dispatches every op of it too: true

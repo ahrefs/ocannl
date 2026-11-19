@@ -7,9 +7,10 @@
    the per-op check exempts a violation already present before the op, so such a routine used to
    reach every op of its schedule with the hidden write intact, to be refused only at codegen's exit
    gate after the ops had misread it. [Schedule.apply_typed] and [Schedule.schedule_legality] now
-   refuse an impure entry, naming it, before the first op runs.
+   refuse an impure entry, naming it, before the first op runs. The single-op oracle and the menu
+   can still offer an in-place unroll on that entry (gh-ocannl-2367).
 
-   The gap: [r { i { sink[i] = scope { acc[i] += x[r, i]; local := 1 } } }], scheduled [Privatize
+   The gap: [r { i { sink[r, i] = scope { acc[i] += x[r, i]; local := 1 } } }], scheduled [Privatize
    acc over r; Retype i Grid]. [Privatize]'s scan descends the scope body and remaps the write to
    its tile; the per-thread-lifetime check of the later [Retype] reads tile writes at statement
    level only, so it does not see that the [Grid] loop splits the tile's accumulation across
@@ -47,18 +48,20 @@ type case = {
    pure scope body. *)
 let program tag ~hidden =
   let acc = node ("acc" ^ tag) and x = node ~dims:[| 2; 2 |] ("x" ^ tag) in
-  let sink = node ("sink" ^ tag) and v = node ("v" ^ tag) in
+  let sink = node ~dims:[| 2; 2 |] ("sink" ^ tag) and v = node ("v" ^ tag) in
   virtualize v;
   List.iter [ acc; x; sink ] ~f:materialize;
   let r = sym () and i = sym () in
   let id = LL.get_scope v in
   let update = set acc [| iter i |] (add (get acc [| iter i |]) (get x [| iter r; iter i |])) in
-  let local = LL.Set_local (id, c 1.) in
+  (* A loop in the scope makes [op_legality] judge the scope grammar of the probed result. *)
+  let local = loop_n (sym ()) 1 (LL.Set_local (id, c 1.)) in
+  let write_sink = set sink [| iter r; iter i |] in
   let body ~scoped =
     match (hidden, scoped) with
-    | true, true -> set sink [| iter i |] (scope_of id (seq update local))
-    | false, true -> seq update (set sink [| iter i |] (scope_of id local))
-    | _, false -> seq update (set sink [| iter i |] (c 1.))
+    | true, true -> write_sink (scope_of id (seq update local))
+    | false, true -> seq update (write_sink (scope_of id local))
+    | _, false -> seq update (write_sink (c 1.))
   in
   let build ~scoped = loop_n r 2 (loop_n i 2 (body ~scoped)) in
   let opt =
@@ -152,8 +155,30 @@ let () =
     (match counting (fun () -> Sched.apply [] hidden.opt) with
     | o, 0 -> phys_equal o hidden.opt
     | _ -> false);
-  (* The statement-level twin: the op reads the write and refuses. *)
+  let unroll = Sched.Unroll { axis = hidden.i; materialize = false } in
+  p "op_legality admits an in-place unroll on the impure entry"
+    (Sched.equal_op_verdict (Sched.op_legality hidden.opt unroll) Sched.Op_legal);
+  let module SC = Ir.Schedule_cache in
+  let registry = SC.base_registry (SC.canonicalize ~with_placements:false hidden.opt) in
+  let saved, _ = SC.to_saved registry [ unroll ] in
+  let menu =
+    Autotune.menu ~is_cpu:true ~is_gpu:false ~limits:Ir.Backend_intf.no_hardware_limits ~registry
+      hidden.opt
+  in
+  p_exists "the autotuner menu offers that unroll" menu
+    ~f:(SC.equal_saved_optop (List.hd_exn saved));
+  p "applying the offered unroll refuses the hidden write before dispatch"
+    (entry_refusal ~what:"menu unroll" ~acc:hidden.acc (fun () -> Sched.apply [ unroll ] hidden.opt));
   let twin = program "t" ~hidden:false in
+  (* Only [acc] lacks the outer index. Coalesce diagnoses its access at either placement. *)
+  p_all "the coalesce probe names the accumulator's unpaired index on both placements of the write"
+    [ hidden; twin ] ~f:(fun c ->
+      match Sched.op_legality c.opt (fst (Sched.coalesce ~outer:c.r ~inner:c.i)) with
+      | Sched.Op_illegal why ->
+          String.is_substring why ~substring:(Tn.debug_name c.acc ^ "[")
+          && String.is_substring why ~substring:"as two adjacent plain iterators"
+      | _ -> false);
+  (* The statement-level twin: the op reads the write and refuses. *)
   p
     "the statement-level twin reaches its ops and is refused at the Retype, naming the tile's \
      lifetime"
