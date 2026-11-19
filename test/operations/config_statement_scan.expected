@@ -1,0 +1,9 @@
+Exempted sources, each with its reason:
+  test/operations/config_statement_precedence.ml (2 uses) -- the negative control: it shows a raw write to the table outranked by an exported variable, the hazard the setter exists for
+every test source outside the exemptions only reads Utils.config_file_args, and states its configuration with Utils.state_config: true
+the test sources read include arrayjit/test/: true
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:248447ba15a28a39a4a4e77731d5d900] Utils.config_file_args
+  [scanner-refusal:699e50f145d962a2a8fedc6970a58502] read include arrayjit/test/
+End of synthetic controls.

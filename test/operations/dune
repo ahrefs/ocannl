@@ -149,6 +149,8 @@
   (alias runtest-codegen_text_inventory_control)
   (alias runtest-command_line_length_scan)
   (alias runtest-config_dep_completeness)
+  (alias runtest-config_statement_scan)
+  (alias runtest-config_statement_scan_control)
   (alias runtest-config_usage_scan)
   (alias runtest-config_usage_scan_control)
   (alias runtest-config_usage_scan_refusal_control)
@@ -342,6 +344,8 @@
   (alias runtest-command_line_length_scan)
   (alias runtest-config_class_fingerprint)
   (alias runtest-config_dep_completeness)
+  (alias runtest-config_statement_scan)
+  (alias runtest-config_statement_scan_control)
   (alias runtest-config_usage_scan)
   (alias runtest-config_usage_scan_control)
   (alias runtest-config_usage_scan_refusal_control)
@@ -5522,6 +5526,64 @@
    %{test}
    --ocannl_profile=reproducible
    --ocannl_cpu_schedule_min_work=5)))
+
+; gh-ocannl-2354: a test states a key with Utils.state_config, never by writing
+; Utils.config_file_args, which an ambient OCANNL_<KEY> outranks. Every .ml under test/ and
+; arrayjit/test/ is parsed, and a use of the table other than a read is refused; the reader's closed
+; list of forms, its exemptions and what it does not read are in the scan's header. `--control`
+; holds the rule to synthetic sources.
+
+(executable
+ (name config_statement_scan)
+ (modules config_statement_scan)
+ (libraries base stdio ppxlib test_scan arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- parses test sources without running a backend.
+ (target config_statement_scan.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (sandbox always)
+  (source_tree ../../test)
+  (source_tree ../../arrayjit/test))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:config_statement_scan.exe}
+    %{workspace_root}
+    %{dep:config_statement_scan.exe}
+    %{target}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-config_statement_scan)
+ (package neural_nets_lib)
+ (action
+  (diff config_statement_scan.expected config_statement_scan.actual)))
+
+(rule
+ ; ocannl-backend: none -- runs the scan over synthetic sources held in its own source.
+ (target config_statement_scan_control.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  config_statement_scan.ml)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:config_statement_scan.exe} --control))))
+
+(rule
+ (alias runtest-config_statement_scan_control)
+ (package neural_nets_lib)
+ (action
+  (diff
+   config_statement_scan_control.expected
+   config_statement_scan_control.actual)))
 
 (test
  ; ocannl-backend: none -- registry-independent config syntax, no backend linked.
@@ -13217,6 +13279,9 @@
   gc_witness_scan.ml
   gc_witness_scan.expected
   gc_witness_scan_control.expected
+  config_statement_scan.ml
+  config_statement_scan.expected
+  config_statement_scan_control.expected
   census_total_ratchet.ml
   census_total_ratchet.expected
   codegen_text_inventory.ml
@@ -13327,6 +13392,8 @@
    vendor_stub_arms_scan.expected,vendor_stub_arms_scan_control.expected
    gc_witness_scan.ml
    gc_witness_scan.expected,gc_witness_scan_control.expected
+   config_statement_scan.ml
+   config_statement_scan.expected,config_statement_scan_control.expected
    census_total_ratchet.ml
    census_total_ratchet.expected
    codegen_text_inventory.ml

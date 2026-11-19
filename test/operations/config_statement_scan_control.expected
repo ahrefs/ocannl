@@ -1,0 +1,27 @@
+the exempted negative control's raw write is inventoried, not refused: true
+reads of the table, full and partial, are accepted: true
+a Base.Hashtbl reader is accepted beside a Hashtbl module the file binds: true
+a statement through the setter is accepted: true
+a raw write in a comment and in string literals is not refused: true
+a source outside the two test trees is outside the corpus: true
+a raw Hashtbl.set on the table is refused, naming its file and line: true
+a raw Hashtbl.remove on the table is refused: true
+a raw write under arrayjit/test/ is refused: true
+the table bound to a name is refused at the binding: true
+a write through a module alias is refused: true
+a write to the bare table under a local open is refused: true
+a reader of a Hashtbl the file binds itself is refused: true
+a reader of a Hashtbl a functor parameter binds is refused: true
+a Base.Hashtbl reader in a file binding its own Base is refused: true
+an exemption whose file no longer writes the table reaches the stale-exemption refusal: true
+an invalid OCaml source reaches the parse refusal: true
+a reader exception on a source that parses reaches the scanner-defect refusal, not the parse one: true
+a run without corpus sources reaches the empty-corpus refusal: true
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:3cab7f51049e66aa35ffa2da5522c89b] does not parse
+  [scanner-refusal:d565a2d53006c63e583116dbd6d5b497] config-statement reader raised
+  [scanner-refusal:48f87b9b70b27697be53109fd030b719] test/ or arrayjit/test/
+  [scanner-refusal:d66c7a38db4797e3caf675c52e78a494] Utils.with_stated_config
+  [scanner-refusal:fdd6da24ea54afb2db61f480ecd14f1a] the exemption of
+End of synthetic controls.

@@ -241,6 +241,8 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-command_line_length_scan
   test/operations/dune                     @runtest-config_class_fingerprint
   test/operations/dune                     @runtest-config_dep_completeness
+  test/operations/dune                     @runtest-config_statement_scan
+  test/operations/dune                     @runtest-config_statement_scan_control
   test/operations/dune                     @runtest-config_usage_scan
   test/operations/dune                     @runtest-config_usage_scan_control
   test/operations/dune                     @runtest-config_usage_scan_refusal_control

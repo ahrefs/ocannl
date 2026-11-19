@@ -229,6 +229,14 @@ gc_witness_scan.ml: [scanner-refusal:ca35f91c4bd8f24f92904bf594065571] test/supp
 gc_witness_scan.ml: [scanner-refusal:9f04461988176709dae4ee0369affcf2] test/support/gc_witness.ml (direct failure) is catalogued beside gc_witness_scan.expected, gc_witness_scan_control.expected: true
 gc_witness_scan.ml: [scanner-refusal:36666810510239397bacb5a2cf2ba433] test/support/gc_witness.ml (claim) is catalogued beside gc_witness_scan.expected, gc_witness_scan_control.expected: true
 gc_witness_scan.ml: [scanner-refusal:e5296137466c1af2ac14a5d6fa9717fb] still forces collections (claim) is catalogued beside gc_witness_scan.expected, gc_witness_scan_control.expected: true
+config_statement_scan.ml has exactly the explicitly assigned refusal controls: true
+config_statement_scan.ml: [scanner-refusal:3cab7f51049e66aa35ffa2da5522c89b] does not parse (direct failure) is catalogued beside config_statement_scan.expected, config_statement_scan_control.expected: true
+config_statement_scan.ml: [scanner-refusal:d565a2d53006c63e583116dbd6d5b497] config-statement reader raised (direct failure) is catalogued beside config_statement_scan.expected, config_statement_scan_control.expected: true
+config_statement_scan.ml: [scanner-refusal:48f87b9b70b27697be53109fd030b719] test/ or arrayjit/test/ (direct failure) is catalogued beside config_statement_scan.expected, config_statement_scan_control.expected: true
+config_statement_scan.ml: [scanner-refusal:d66c7a38db4797e3caf675c52e78a494] Utils.with_stated_config (direct failure) is catalogued beside config_statement_scan.expected, config_statement_scan_control.expected: true
+config_statement_scan.ml: [scanner-refusal:fdd6da24ea54afb2db61f480ecd14f1a] the exemption of (direct failure) is catalogued beside config_statement_scan.expected, config_statement_scan_control.expected: true
+config_statement_scan.ml: [scanner-refusal:248447ba15a28a39a4a4e77731d5d900] Utils.config_file_args (claim) is catalogued beside config_statement_scan.expected, config_statement_scan_control.expected: true
+config_statement_scan.ml: [scanner-refusal:699e50f145d962a2a8fedc6970a58502] read include arrayjit/test/ (claim) is catalogued beside config_statement_scan.expected, config_statement_scan_control.expected: true
 census_total_ratchet.ml has exactly the explicitly assigned refusal controls: true
 census_total_ratchet.ml: [scanner-refusal:6d5b4fe654d3592b327d32a16ca1fa2a] checked-in file this (claim) is catalogued beside census_total_ratchet.expected: true
 census_total_ratchet.ml: [scanner-refusal:571968c7f074e29e60dddf8d93d23f34] number the allow-list (claim) is catalogued beside census_total_ratchet.expected: true
@@ -583,7 +591,7 @@ env_var_deps.ml: [scanner-refusal:22825750e1b48f737f60249e27047e28] empty string
 env_var_deps.ml: [scanner-refusal:d3f1d0e95f110142f78dbbfade3eec72] through another module's (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:90ead9391fc487dfbe2cd91e0b0f7288] helper's module does (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:8bda63bc4c91bc8f3c9f625a9c7f7f44] program pinning the (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
-env_var_deps.ml: [scanner-refusal:cccad474843811a2756fc4f505d927f0] an initializer's statement (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:77352d3abfb3f47f0dcc785a2e428b15] an initializer's statement (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:d65197a8a018021b4c7aa22fcf90c773] namesake module rebinds (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:593b4e2508d631a9f42d0d6fe061b2e6] program pinning itself (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:e1e7c11bf8ecfecb20b9031955b16937] helper called after (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
@@ -594,11 +602,11 @@ env_var_deps.ml: [scanner-refusal:25394c54f621666e9eb6b4419cee87fd] closure the 
 env_var_deps.ml: [scanner-refusal:3d6b57503b5fac620375759535912df9] spells again before (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:585ea2db9ead892ec918b32c984e2d49] is_cpu (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:c5e986988e4412345d94af936dabc9d7] helper's module which (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
-env_var_deps.ml: [scanner-refusal:b21f26c1c5b5c5f237aa3238bc586c52] run's invocations undoes (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:2555a3d542f36ae8f5d74c20d99d9cde] run's invocations undo (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:63f4eab503a1525a9de1686cfaca3b41] support value stating (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:4cf5336639f62b774e8c76bc09d17120] re-running a test)`'s (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:146f0968d410f75502805f05d1a387b3] the program's marker (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
-env_var_deps.ml: [scanner-refusal:691a80247cf1c72faf9d7410cf67b33a] undoes the initializer's (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:a625fef5b0ce99db1e03c615491fa578] undo the initializer's (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:416d761ba145a451f16c4913c93ec004] re-running the program (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:194c3da6b4172812b49f3a686fb02e5e] handed an executable (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:28d540b06acc9c02ad1d408123cc27ae] text-valued pform which (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true

@@ -335,6 +335,16 @@ let raw_entries =
         "[scanner-refusal:90b26d38400dc5a37ed715269ba3cfbe] every vendor-gated select";
         "[scanner-refusal:4cc754a0d44bcdcb048630ccd8e65a5b] vendor-gated arm's stand-in";
       ] );
+    ( "config_statement_scan.ml",
+      [
+        "[scanner-refusal:3cab7f51049e66aa35ffa2da5522c89b] does not parse";
+        "[scanner-refusal:d565a2d53006c63e583116dbd6d5b497] config-statement reader raised";
+        "[scanner-refusal:48f87b9b70b27697be53109fd030b719] test/ or arrayjit/test/";
+        "[scanner-refusal:d66c7a38db4797e3caf675c52e78a494] Utils.with_stated_config";
+        "[scanner-refusal:fdd6da24ea54afb2db61f480ecd14f1a] the exemption of";
+        "[scanner-refusal:248447ba15a28a39a4a4e77731d5d900] Utils.config_file_args";
+        "[scanner-refusal:699e50f145d962a2a8fedc6970a58502] read include arrayjit/test/";
+      ] );
     ( "gc_witness_scan.ml",
       [
         "[scanner-refusal:bb492e73ce6ee9658023c7166722ae26] does not parse";
@@ -733,7 +743,7 @@ let raw_entries =
         "[scanner-refusal:d3f1d0e95f110142f78dbbfade3eec72] through another module's";
         "[scanner-refusal:90ead9391fc487dfbe2cd91e0b0f7288] helper's module does";
         "[scanner-refusal:8bda63bc4c91bc8f3c9f625a9c7f7f44] program pinning the";
-        "[scanner-refusal:cccad474843811a2756fc4f505d927f0] an initializer's statement";
+        "[scanner-refusal:77352d3abfb3f47f0dcc785a2e428b15] an initializer's statement";
         "[scanner-refusal:d65197a8a018021b4c7aa22fcf90c773] namesake module rebinds";
         "[scanner-refusal:593b4e2508d631a9f42d0d6fe061b2e6] program pinning itself";
         "[scanner-refusal:e1e7c11bf8ecfecb20b9031955b16937] helper called after";
@@ -744,11 +754,11 @@ let raw_entries =
         "[scanner-refusal:3d6b57503b5fac620375759535912df9] spells again before";
         "[scanner-refusal:585ea2db9ead892ec918b32c984e2d49] is_cpu";
         "[scanner-refusal:c5e986988e4412345d94af936dabc9d7] helper's module which";
-        "[scanner-refusal:b21f26c1c5b5c5f237aa3238bc586c52] run's invocations undoes";
+        "[scanner-refusal:2555a3d542f36ae8f5d74c20d99d9cde] run's invocations undo";
         "[scanner-refusal:63f4eab503a1525a9de1686cfaca3b41] support value stating";
         "[scanner-refusal:4cf5336639f62b774e8c76bc09d17120] re-running a test)`'s";
         "[scanner-refusal:146f0968d410f75502805f05d1a387b3] the program's marker";
-        "[scanner-refusal:691a80247cf1c72faf9d7410cf67b33a] undoes the initializer's";
+        "[scanner-refusal:a625fef5b0ce99db1e03c615491fa578] undo the initializer's";
         "[scanner-refusal:416d761ba145a451f16c4913c93ec004] re-running the program";
         "[scanner-refusal:194c3da6b4172812b49f3a686fb02e5e] handed an executable";
         "[scanner-refusal:28d540b06acc9c02ad1d408123cc27ae] text-valued pform which";
