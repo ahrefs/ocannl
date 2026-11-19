@@ -20,21 +20,11 @@ open Verdict.Claims
 let n = 8
 let expansion_key = "autotune_round_expansion"
 
-(* [settings] at the config-file level for the scope of [f] alone, and whether they took effect: the
-   commandline and the environment outrank the file, and a claim drawn from a statement that did not
-   take effect would claim nothing. *)
+(* [settings] stated in process for the scope of [f] alone (above the environment, gh-ocannl-2354),
+   and whether they took effect: a claim drawn from a statement that did not take effect would claim
+   nothing. *)
 let with_settings settings f =
-  let saved =
-    List.map settings ~f:(fun (key, _) -> (key, Hashtbl.find Utils.config_file_args key))
-  in
-  Exn.protect
-    ~finally:(fun () ->
-      List.iter saved ~f:(fun (key, old) ->
-          match old with
-          | Some data -> Hashtbl.set Utils.config_file_args ~key ~data
-          | None -> Hashtbl.remove Utils.config_file_args key))
-    ~f:(fun () ->
-      List.iter settings ~f:(fun (key, data) -> Hashtbl.set Utils.config_file_args ~key ~data);
+  Utils.with_stated_config settings (fun () ->
       let took_effect =
         List.for_all settings ~f:(fun (key, data) ->
             Option.equal String.equal (Option.map (Utils.profile_key_source key) ~f:fst) (Some data))

@@ -361,10 +361,10 @@ let () =
      CPU preset would parallelize these gradients' output loop (gh-ocannl-1458), and
      [Cost_model.reuse_traffic] reads each iteration of a [Grid] loop as a resident block that
      re-requests its cells, which moves the default's own working set past the capacity. *)
-  Hashtbl.set Utils.config_file_args ~key:"cpu_schedule_min_work" ~data:"1000000000000";
+  Utils.state_config ~key:"cpu_schedule_min_work" ~data:"1000000000000";
   let large, large_explained = leg ~tag:"rk_large" (16, 32, 64, 128) in
   let small, small_explained = leg ~tag:"rk_small" (4, 32, 64, 128) in
-  Hashtbl.remove Utils.config_file_args "cpu_schedule_min_work";
+  Utils.unstate_config "cpu_schedule_min_work";
   p "past capacity the weight gradient's pick is a sketch, not the default"
     (not (String.equal large.Autotune.mc_label "default"));
   p "below capacity the weight gradient's pick stays the default"
@@ -463,7 +463,7 @@ let () =
     let%op bh = bg + bt in
     (named "below_threshold_chain" (Train.forward bh), bh)
   in
-  Hashtbl.set Utils.config_file_args ~key:"cpu_schedule_min_work" ~data:"1000000000000";
+  Utils.state_config ~key:"cpu_schedule_min_work" ~data:"1000000000000";
   let below_choice = ref None in
   let below_ctx = Context.auto () in
   (* The premise: the configured segmentation is the single kernel, the search's cuts the chain. *)
@@ -570,7 +570,7 @@ let () =
                 [| r |] [| i |] ~tol:approx_tol
           | None -> false)
       | None -> false);
-  Hashtbl.remove Utils.config_file_args "cpu_schedule_min_work";
+  Utils.unstate_config "cpu_schedule_min_work";
   let below_ctx = Context.run below_ctx below_routine in
   let below_got = Context.get_values below_ctx bh.Tensor.value in
   p_all2 "the below-threshold pick computes the host's values exactly" below_got bh_expected
@@ -623,7 +623,7 @@ let () =
     Train.set_materialized qg.Tensor.value;
     (named "configured_price_chain" (Train.forward qg), qg)
   in
-  Hashtbl.set Utils.config_file_args ~key:"cpu_schedule_min_work" ~data:"1000000000000";
+  Utils.state_config ~key:"cpu_schedule_min_work" ~data:"1000000000000";
   let priced_choice = ref None in
   let priced_ctx = Context.auto () in
   let priced_explained = Autotune.model_explain priced_ctx priced_comp Ir.Indexing.Empty in
@@ -632,7 +632,7 @@ let () =
       ~report:(fun r -> priced_choice := Some r)
       priced_ctx priced_comp Ir.Indexing.Empty
   in
-  Hashtbl.remove Utils.config_file_args "cpu_schedule_min_work";
+  Utils.unstate_config "cpu_schedule_min_work";
   let priced = Option.value_exn ~here:[%here] !priced_choice in
   (* A segment's two presets and its leaves' ranks. *)
   let presets (xs : Autotune.segment_explain) =

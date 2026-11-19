@@ -563,10 +563,9 @@ let () =
   in
   let warm_chain_with_stated keys =
     let shape_before = identity () in
-    List.iter keys ~f:(fun (key, data) -> Hashtbl.set Utils.config_file_args ~key ~data);
+    List.iter keys ~f:(fun (key, data) -> Utils.state_config ~key ~data);
     Exn.protect
-      ~finally:(fun () ->
-        List.iter keys ~f:(fun (key, _) -> Hashtbl.remove Utils.config_file_args key))
+      ~finally:(fun () -> List.iter keys ~f:(fun (key, _) -> Utils.unstate_config key))
       ~f:(fun () ->
         let stated =
           List.for_all keys ~f:(fun (key, data) ->

@@ -33,21 +33,12 @@ let class_keys cls =
 
 let search_keys = class_keys Utils.Search_shaping
 
-(* Config values resolve per lookup, so a config-file entry poked in is what later reads see --
-   unless the commandline or the environment states the key, which take precedence; [with_stated]
-   reports whether the statement took effect, so no claim is drawn from one that did not. This
-   directory's [ocannl_config] states some keys itself, so the previous entry is restored, not
-   dropped. *)
+(* Config values resolve per lookup, so an in-process statement is what later reads see: it outranks
+   the environment and every profile, and a contradicting commandline argument is refused
+   (gh-ocannl-2354). [with_stated] still reports whether the statement took effect, so no claim is
+   drawn from one that did not. *)
 let with_stated stated f =
-  let saved = List.map stated ~f:(fun (key, _) -> (key, Hashtbl.find Utils.config_file_args key)) in
-  List.iter stated ~f:(fun (key, data) -> Hashtbl.set Utils.config_file_args ~key ~data);
-  Exn.protect
-    ~finally:(fun () ->
-      List.iter saved ~f:(fun (key, previous) ->
-          match previous with
-          | Some data -> Hashtbl.set Utils.config_file_args ~key ~data
-          | None -> Hashtbl.remove Utils.config_file_args key))
-    ~f:(fun () ->
+  Utils.with_stated_config stated (fun () ->
       let took_effect =
         List.for_all stated ~f:(fun (key, data) ->
             Option.equal String.equal (Option.map (Utils.profile_key_source key) ~f:fst) (Some data))

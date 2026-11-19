@@ -85,20 +85,9 @@ let is_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name
    the seeded untuned plan has a segmentation of its own (CUDA and HIP, whenever the seeding gate
    seeds a product: gh-ocannl-2279 widened that on CUDA), the default seeded sweep times [F_swap]
    singles of the plan in their place (gh-ocannl-1664), so those searches -- and only those: the
-   whole-routine ones keep the default seeded path -- turn it off for their own scope, at the
-   config-file level, as autotune_sketch_placements does through [Scripted_search.search
-   ~settings]. *)
-let without_seeded_singles f =
-  let key = "autotune_seeded_singles" in
-  let saved = Hashtbl.find Utils.config_file_args key in
-  Exn.protect
-    ~finally:(fun () ->
-      match saved with
-      | Some data -> Hashtbl.set Utils.config_file_args ~key ~data
-      | None -> Hashtbl.remove Utils.config_file_args key)
-    ~f:(fun () ->
-      Hashtbl.set Utils.config_file_args ~key ~data:"false";
-      f ())
+   whole-routine ones keep the default seeded path -- turn it off for their own scope, stated in
+   process, as autotune_sketch_placements does through [Scripted_search.search ~settings]. *)
+let without_seeded_singles f = Utils.with_stated_config [ ("autotune_seeded_singles", "false") ] f
 
 (* The dune sandbox persists across runs: stale entries written by an older binary (digest
    ingredients and the saved-schedule format evolve) would break miss-then-hit assertions. *)

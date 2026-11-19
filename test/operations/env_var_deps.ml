@@ -1063,12 +1063,16 @@ let width_marker_sentinel = "cc-vector-width:"
 let width_marker_declaration = "independent"
 let width_cc_backends = [ "cc"; "multidev_cc" ]
 
-(* What makes a literal a statement rather than a mention: a write into the configuration-file table
-   a program states a key into, or into the environment a child process inherits
-   ([Sources.stating_reach]; a read of either states nothing, Codex P2 round 1). *)
-let width_pin_tables = [ "config_file_args" ]
+(* What makes a literal a statement rather than a mention: an in-process statement
+   ([Utils.state_config]: how a test states a key, gh-ocannl-2354), or a write into the environment
+   a child process inherits ([Sources.stating_reach]; a read of either states nothing, Codex P2
+   round 1). A write into the configuration-file table is no pin: the environment and a `setenv`
+   around the run outrank it (and config_statement_scan refuses it in the test trees). A scoped
+   [Utils.with_stated_config] is no pin either: it restores the key when its body returns, before
+   the caller's search. *)
+let width_pin_tables = []
 let width_pin_table_writes = [ "set"; "add"; "add_exn"; "replace" ]
-let width_pin_env_writes = [ "putenv" ]
+let width_pin_writers = [ "putenv"; "state_config" ]
 
 (* What a search's seeding reads of the cc vector FILE, each key with the values that pin it: the
    width, and the register count the register tile is capped to -- at a pinned 32 bytes AVX2 has 16
@@ -1095,8 +1099,8 @@ let vector_file_literals key = [ key; Utils.env_var_name key ]
 
 let vector_file_stating_reach ~key content =
   Sources.stating_reach ~literals:(vector_file_literals key) ~tables:width_pin_tables
-    ~table_writes:width_pin_table_writes ~env_writes:width_pin_env_writes
-    ~pins:(vector_file_pins key) content
+    ~table_writes:width_pin_table_writes ~writers:width_pin_writers ~pins:(vector_file_pins key)
+    content
 
 (* The identities a run can name one program of a stanza under (gh-ocannl-1901), workspace-relative:
    its executable's path, as {!Scan.program_runners} resolves it within the dune file in [dir], and
@@ -2960,9 +2964,12 @@ let main () =
                             | _ -> None)
                       in
                       (* How a subject pins the whole file on every cc run, or [None]. Per key and
-                         run, by precedence: a command-line setting leaves it unpinned, then a
-                         `setenv` around the run decides -- a `-1` there undoes the initializer's
-                         pin (round 2) -- and only without either, the initializer. *)
+                         run, by precedence: a command-line setting leaves it unpinned (the
+                         initializer's statement then refuses to start, a failure of its own), then
+                         the initializer's pin, which a blessed helper states in process above any
+                         environment variable (gh-ocannl-2354: a `setenv` of `-1` no longer undoes
+                         it, as it did in round 2), and only without one, a `setenv` around the
+                         run. *)
                       let pinned_by modules cc_runs =
                         let init = init_pin modules in
                         let answers =
@@ -2973,11 +2980,12 @@ let main () =
                                      pinning value leaves this run unpinned, even one wrapping only
                                      some of its invocations: the pin set it is read from intersects
                                      them (Codex P2, round 7). *)
-                                  if on_command_line r ~key || not (sets_a_value r ~key) then None
-                                  else if Set.mem pins var then
+                                  if on_command_line r ~key then None
+                                  else if Option.is_some init then init
+                                  else if sets_a_value r ~key && Set.mem pins var then
                                     Some
                                       (Printf.sprintf "every run that can select cc pins `%s`" var)
-                                  else init))
+                                  else None))
                         in
                         Option.map (Option.all answers) ~f:(fun hows ->
                             String.concat ~sep:"; "
@@ -5592,7 +5600,7 @@ let search_helper_stub ?(envelope_keys = [ (width_key, "32"); (registers_key, "1
     () =
   Printf.sprintf
     "let state settings =\n\
-    \  List.iter settings ~f:(fun (key, data) -> Hashtbl.set Utils.config_file_args ~key ~data)\n\
+    \  List.iter settings ~f:(fun (key, data) -> Utils.state_config ~key ~data)\n\
      let small_menu_envelope () = state [ %s ]\n\
      let small_menu () = small_menu_envelope ()\n\
      let report () = Printf.printf \"%s=%%d\\n\" 16\n\
@@ -5683,9 +5691,7 @@ let search_control () =
   let wrapped = "open Ocannl\nlet () = Train.tune_placements ()\n" in
   let pin = "let () = Fissioned_chain.small_menu ()\n" in
   let helper = pin ^ tune in
-  let state key value =
-    Printf.sprintf "let () = Hashtbl.set Utils.config_file_args ~key:%S ~data:%S\n" key value
-  in
+  let state key value = Printf.sprintf "let () = Utils.state_config ~key:%S ~data:%S\n" key value in
   let direct = state width_key "16" ^ state registers_key "32" ^ tune in
   (* The width set to [value], the register count to a pin. *)
   let setenv value =
@@ -5764,7 +5770,7 @@ let search_control () =
           (run
              ~action:(Printf.sprintf "\n (action (setenv %s 32 (run %%{test})))" var)
              ~probe:named ()) );
-      ("override", refused (run ~action:(setenv "-1") ~probe:helper ()));
+      ("override", passed (run ~action:(setenv "-1") ~probe:helper ()));
       ( "scoped",
         refused
           (run
@@ -5799,8 +5805,7 @@ let search_control () =
           (run
              ~probe:
                (pin
-               ^ Printf.sprintf "let () = Hashtbl.set Utils.config_file_args ~key:%S ~data:\"-1\"\n"
-                   width_key
+               ^ Printf.sprintf "let () = Utils.state_config ~key:%S ~data:\"-1\"\n" width_key
                ^ tune)
              ()) );
       (* Round 6: a bare call under an `open` is not credited, since a value binding could shadow
@@ -5810,9 +5815,10 @@ let search_control () =
           (run
              ~probe:("open Fissioned_chain\nlet small_menu () = ()\nlet () = small_menu ()\n" ^ tune)
              ()) );
-      (* Round 7: a non-pinning `setenv` around one invocation of several unpins the run. *)
+      (* Round 7: a non-pinning `setenv` around one invocation of several unpinned the run; since
+         gh-ocannl-2354 the helper's in-process statement outranks it. *)
       ( "setenv_partial",
-        refused
+        passed
           (run
              ~action:
                (Printf.sprintf "\n (action (progn (run %%{test}) (setenv %s -1 (run %%{test}))))"
@@ -5836,7 +5842,7 @@ let search_control () =
       ("rerun_marked", passed (rerun ~marker named));
       ("rerun_pinned", passed (rerun ~rules:(rerun_rule ~wrap:pinning ()) named));
       ( "rerun_override",
-        refused (rerun ~rules:(rerun_rule ~wrap:(Printf.sprintf "(setenv %s -1 %s)" var) ()) helper)
+        passed (rerun ~rules:(rerun_rule ~wrap:(Printf.sprintf "(setenv %s -1 %s)" var) ()) helper)
       );
       ("rerun_foreign", refused ~why:"select cc (u/dune:" (rerun ~rules:"" ~extra:foreign named));
       ( "rerun_shell",
@@ -5926,7 +5932,9 @@ let search_control () =
     (ok "vendor" && ok "shadowed");
   Verdict.p "while one through an alias of the helper's module does" (ok "aliased");
   Verdict.p "a program pinning the width but not the register count is reported" (ok "registers");
-  Verdict.p "a `setenv` of `-1` around a run undoes an initializer's statement of the width"
+  Verdict.p
+    "a `setenv` of `-1` around a run does not undo an initializer's statement of the width, which \
+     is stated above the environment"
     (ok "override");
   Verdict.p
     "a helper spelling that a later namesake module rebinds is not credited at the rebinding"
@@ -5948,7 +5956,7 @@ let search_control () =
   Verdict.p
     "a bare call under an `open` of the helper's module, which a value can shadow, pins nothing"
     (ok "opened");
-  Verdict.p "a `setenv` of `-1` around one of a run's invocations undoes the helper's pin"
+  Verdict.p "nor does one around one of a run's invocations undo the helper's pin"
     (ok "setenv_partial");
   attribute
     "a blessed helper that stops stating a key, and a support value stating every key unblessed, \
@@ -5968,7 +5976,7 @@ let search_control () =
     (ok "rerun_unanswered");
   Verdict.p "while the program's marker, or a `setenv` pin around the rule's run, answers for it"
     (ok "rerun_marked" && ok "rerun_pinned");
-  Verdict.p "and a `setenv` of `-1` around the rule's run undoes the initializer's pin"
+  Verdict.p "and a `setenv` of `-1` around the rule's run does not undo the initializer's pin"
     (ok "rerun_override");
   attribute "a rule in another dune file re-running the program on cc is a run of it too"
     (runs [ "rerun_foreign" ]);

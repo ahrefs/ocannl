@@ -50,8 +50,8 @@ let outlined =
    rule admits past it: [cc_grid_private_bytes_cap] (a lazy the first compile forces, stated here
    before any) raised over the 12 MiB tile; and every launch admitted whatever its work estimate. *)
 let () =
-  Hashtbl.set Utils.config_file_args ~key:"cc_grid_private_bytes_cap" ~data:"67108864";
-  Hashtbl.set Utils.config_file_args ~key:"cc_grid_min_updates" ~data:"0"
+  Utils.state_config ~key:"cc_grid_private_bytes_cap" ~data:"67108864";
+  Utils.state_config ~key:"cc_grid_min_updates" ~data:"0"
 
 let ctx = Context.cpu ()
 let mk = node_factory ~first_id:16690 ~dims:[| 1 |] ()

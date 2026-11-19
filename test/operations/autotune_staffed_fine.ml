@@ -151,13 +151,13 @@ let () =
       let crowned =
         Exn.protect
           ~finally:(fun () ->
-            Hashtbl.remove Utils.config_file_args staffed_key;
-            Hashtbl.remove Utils.config_file_args seeded_singles_key;
-            Hashtbl.remove Utils.config_file_args gate_key)
+            Utils.unstate_config staffed_key;
+            Utils.unstate_config seeded_singles_key;
+            Utils.unstate_config gate_key)
           ~f:(fun () ->
-            Hashtbl.set Utils.config_file_args ~key:staffed_key ~data:"true";
-            Hashtbl.set Utils.config_file_args ~key:seeded_singles_key ~data:"false";
-            Hashtbl.set Utils.config_file_args ~key:gate_key ~data:(Int.to_string k);
+            Utils.state_config ~key:staffed_key ~data:"true";
+            Utils.state_config ~key:seeded_singles_key ~data:"false";
+            Utils.state_config ~key:gate_key ~data:(Int.to_string k);
             Autotune.Seam.with_value Autotune.on_candidate_measured (fun ~label ~digest:_ _ms ->
                 measured := label :: !measured;
                 routine_ms label)

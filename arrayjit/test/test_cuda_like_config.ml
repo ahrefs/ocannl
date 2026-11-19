@@ -40,18 +40,17 @@ let () =
     (String.equal (render (Cuda.binop_syntax Ops.bfloat16 Ops.Add a b)) "__hadd(a, b)");
   p "HIP bfloat16 addition keeps its native operator"
     (String.equal (render (Hip.binop_syntax Ops.bfloat16 Ops.Add a b)) "(a + b)");
-  (* gh-ocannl-1710: the intrinsic under CUDA's fast math only. The key is stated per value (an
-     ambient statement of it outranks the file level, so the expectation follows the reader). *)
+  (* gh-ocannl-1710: the intrinsic under CUDA's fast math only. The key is stated per value in
+     process, above any ambient statement of it (gh-ocannl-2354); the expectation follows the
+     reader. *)
   p_all "CUDA approximate tanh is its intrinsic under fast math, and the library's without it"
     [ "true"; "false" ] ~f:(fun value ->
-      let previous = Hashtbl.find Utils.config_file_args "cuda_fast_math" in
-      Hashtbl.set Utils.config_file_args ~key:"cuda_fast_math" ~data:value;
-      let got = render (Cuda.unop_syntax Ops.single Ops.Tanh_approx a) in
-      let want = if Ir.Cuda_like_config.cuda_fast_math () then "__tanhf(a)" else "tanhf(a)" in
-      (match previous with
-      | None -> Hashtbl.remove Utils.config_file_args "cuda_fast_math"
-      | Some data -> Hashtbl.set Utils.config_file_args ~key:"cuda_fast_math" ~data);
-      String.equal got want);
+      Utils.with_stated_config
+        [ ("cuda_fast_math", value) ]
+        (fun () ->
+          let got = render (Cuda.unop_syntax Ops.single Ops.Tanh_approx a) in
+          let want = if Ir.Cuda_like_config.cuda_fast_math () then "__tanhf(a)" else "tanhf(a)" in
+          String.equal got want));
   p "HIP approximate tanh keeps its library function"
     (String.equal (render (Hip.unop_syntax Ops.single Ops.Tanh_approx a)) "tanhf(a)");
   (* gh-ocannl-1779: CUDA's half functions are hardware approximations under either switch set, so
@@ -71,15 +70,7 @@ let () =
       (Ops.Tanh_approx, "htanh_approx(a)", "__float2half(tanhf(__half2float(a)))");
     ]
   in
-  let with_key key value f =
-    let previous = Hashtbl.find Utils.config_file_args key in
-    Hashtbl.set Utils.config_file_args ~key ~data:value;
-    let result = f () in
-    (match previous with
-    | None -> Hashtbl.remove Utils.config_file_args key
-    | Some data -> Hashtbl.set Utils.config_file_args ~key ~data);
-    result
-  in
+  let with_key key value f = Utils.with_stated_config [ (key, value) ] f in
   let policies = [ "true"; "false" ] in
   p_all ~min:20
     "CUDA half unary functions are its intrinsics under fast math, and the precise f32 function of \

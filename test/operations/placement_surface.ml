@@ -90,7 +90,7 @@ let () =
   let gpu_lane_keys =
     [ ("gpu_fission_keep_mapping", "sideways"); ("gpu_serial_lanes", "sideways") ]
   in
-  List.iter gpu_lane_keys ~f:(fun (key, data) -> Hashtbl.set Utils.config_file_args ~key ~data);
+  List.iter gpu_lane_keys ~f:(fun (key, data) -> Utils.state_config ~key ~data);
   let stated =
     List.map gpu_lane_keys ~f:(fun (key, data) ->
         ( key,
@@ -99,8 +99,7 @@ let () =
   in
   let surface_under_unparsable =
     Exn.protect
-      ~finally:(fun () ->
-        List.iter gpu_lane_keys ~f:(fun (key, _) -> Hashtbl.remove Utils.config_file_args key))
+      ~finally:(fun () -> List.iter gpu_lane_keys ~f:(fun (key, _) -> Utils.unstate_config key))
       ~f:(fun () ->
         match Autotune.placement_surface ~ordering:`Enablement ctx comp Ir.Indexing.Empty with
         | surface -> Ok surface

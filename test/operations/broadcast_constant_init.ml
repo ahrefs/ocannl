@@ -211,8 +211,8 @@ let allocation_witness_multi_value () =
     Array.init (h * w) ~f:(Ll_test.cycle_flat ~dims:[| h; w; 1 |] ~modulus:97 ~offset:0. ~stride:1.)
   in
   let key = "limit_constant_fill_size" in
-  let limit = Hashtbl.find Utils.config_file_args key in
-  Hashtbl.set Utils.config_file_args ~key ~data:(Int.to_string (h * w));
+  let limit = Utils.stated_config key in
+  Utils.state_config ~key ~data:(Int.to_string (h * w));
   let x = NTDSL.ndarray values ~output_dims:[ h; w; 1 ] () in
   p "multi-value literal within the limit initializes through its values"
     (fetches x.value x.forward.asgns);
@@ -233,9 +233,7 @@ let allocation_witness_multi_value () =
               i >= pads.(axis).left && i < (Ir.Ndarray.dims nd).(axis) - pads.(axis).right)
         in
         ok && (inside || Float.equal v neutral)));
-  (match limit with
-  | Some data -> Hashtbl.set Utils.config_file_args ~key ~data
-  | None -> Hashtbl.remove Utils.config_file_args key);
+  (match limit with Some data -> Utils.state_config ~key ~data | None -> Utils.unstate_config key);
   Context.release ctx
 
 let parameter_reinit limit =
@@ -326,7 +324,7 @@ let independent_parameters limit =
 
 let () =
   List.iter [ 1; 0 ] ~f:(fun limit ->
-      Hashtbl.set Utils.config_file_args ~key:"limit_constant_fill_size" ~data:(Int.to_string limit);
+      Utils.state_config ~key:"limit_constant_fill_size" ~data:(Int.to_string limit);
       p "configured limit is effective"
         (String.equal
            (Utils.get_global_arg ~default:"16" ~arg_name:"limit_constant_fill_size")
