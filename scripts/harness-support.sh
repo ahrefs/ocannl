@@ -550,7 +550,10 @@ harness_scratch() { # scratch prefix
   # subshell finishes what it was doing first: TERMed in its first
   # instructions, while it still held this trap, a watchdog ran harness_cleanup
   # and removed the run's scratch directory; TERMed just before it forked, it
-  # finished the fork, and the child outlived it unsignalled.
+  # finished the fork, and the child outlived it unsignalled. The same holds
+  # for every terminating signal (HUP, PIPE, ALRM, USR1, USR2, ...): a harness
+  # trapping one of them traps it BEFORE calling harness_scratch, never after
+  # (gh-ocannl-2332); shell_scripts_parse's trap-order check refuses the order.
   trap 'exit 130' INT
   trap 'exit 143' TERM
   trap harness_cleanup EXIT

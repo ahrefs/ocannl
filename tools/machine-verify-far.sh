@@ -119,9 +119,9 @@ finish() {
   exit "$main_rc"
 }
 
-trap 'finish $?' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
+trap 'finish $?' EXIT
 
 # This is the exact supervisor source the local side passed in; keeping one
 # copy prevents the outer whole-trip and inner command caps from drifting apart.

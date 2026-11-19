@@ -162,8 +162,8 @@ out=$(cd "$out" && pwd -P) || exit 2
 base=$(cd "$base" && pwd -P) || exit 2
 exec 3>&1
 exec >>"$out/driver.log" 2>&1 || exit 2
-trap 'cat "$out/driver.log" >&3' EXIT
 trap 'echo "gh1133: interrupted"; exit 130' INT TERM
+trap 'cat "$out/driver.log" >&3' EXIT
 # The runners read the nearest ocannl_config; benchmarks/ has the suite's own.
 cd "$root/benchmarks" || exit 2
 echo "gh1133: $(date -u +%FT%TZ) root=$root base=$base out=$out cap=$cap backend=$backend repeats=$repeats"

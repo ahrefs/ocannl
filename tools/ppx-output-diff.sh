@@ -105,9 +105,9 @@ cleanup() {
   remove_tree
   rm -rf "${tmp:?}"
 }
-trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+trap cleanup EXIT
 
 in_scope() { # DIR: whether a directory holding a dune file is in the requested scope
   local s

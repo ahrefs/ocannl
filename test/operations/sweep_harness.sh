@@ -486,8 +486,8 @@ if [ -n "${SWEEP_TEST_WAIT_PREFIX:-}" ]; then
     printf 'overlapping local unit: %s\n' "$*" >>"$SWEEP_TEST_WAIT_PREFIX.overlap"
     exit 98
   fi
-  trap 'rmdir "$SWEEP_TEST_WAIT_PREFIX.busy"' EXIT
   trap 'exit 143' TERM
+  trap 'rmdir "$SWEEP_TEST_WAIT_PREFIX.busy"' EXIT
 fi
 [ -n "${SWEEP_TEST_OPAM_OUT:-}" ] && printf '%s\n' "$SWEEP_TEST_OPAM_OUT"
 case ${OCANNL_BACKEND:-} in

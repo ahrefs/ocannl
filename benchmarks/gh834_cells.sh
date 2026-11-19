@@ -95,6 +95,14 @@ exec 3>&1
 exec >>"$out/driver.log" 2>&1 || exit 2
 # A session's CUDA driver cache (below) is scratch: whatever path ends the run -- an interrupt, a
 # survivor of the cap, a usage error mid-list -- leaves none of it in OUT.
+# The signals a step relays are pinned at their default before the EXIT trap
+# (gh-ocannl-2332): `trap ''` records the default as each one's original, and
+# the reset leaves it untrapped, so a step's trap reaches no subshell deferred
+# while an untrapped signal still runs the EXIT trap at once. A step ends its
+# relay with exit traps, not a reset, which would restore that default and
+# skip the EXIT trap.
+trap '' HUP INT TERM
+trap - HUP INT TERM
 trap 'rm -rf "$out"/nvcache-*; cat "$out/driver.log" >&3' EXIT
 # The runners read the nearest ocannl_config; benchmarks/ has the suite's own.
 cd "$root/benchmarks" || exit 2
@@ -202,7 +210,9 @@ step() {
   trap 'interrupted=1; kill -TERM "$sup" 2>/dev/null' INT TERM HUP
   wait_child "$sup"
   rc=$?
-  trap - INT TERM HUP
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   [ -n "$interrupted" ] && { echo "== step $name: interrupted (exit $rc); stopping"; exit 130; }
   [ "$rc" -eq 125 ] && { echo "== step $name: a process survived the cap; stopping"; exit 125; }
   t1=$(date +%s)

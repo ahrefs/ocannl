@@ -377,8 +377,8 @@ command -v perl >/dev/null 2>&1 || die "perl not found"
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/affected.XXXXXX") || die "cannot create a temporary directory"
 tmp=$(cd "$tmp" && pwd -P) || die "cannot resolve $tmp"
-trap 'rm -rf "${tmp:?}"' EXIT
 trap "exit 130" INT TERM
+trap 'rm -rf "${tmp:?}"' EXIT
 
 usage="usage: affected [--referenced-only] [--gpu-gated] [--why ALIAS|all]... [--harnesses] --since BASE | REV | REV..REV | REV...REV [-- PATHSPEC...] | affected [--referenced-only] [--gpu-gated] [--why ALIAS|all]... [--harnesses] --files PATH... | affected --harness-census [MEMBER]"
 # Link-only aliases (see the Perl below) are printed last, and named on stderr;

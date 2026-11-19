@@ -4463,6 +4463,8 @@ shift
 # verdict stands for a list that was not the pre-push one without saying
 # FIRST TIER ONLY.
 pp_scans=
+# Set where the run's relay signals are pinned before an EXIT trap (relay_end).
+relay_pinned=
 if [ "$sub" = prepush ]; then
   pp_usage='prepush --since BASE|OLD..NEW [--referenced-only] [--list | [--start] [--cap N] [--test-cap N] [--expect-backend B]... [build [DUNE OPTIONS...]]]'
   pp_base= pp_print=0 pp_mode=run pp_run_opts=() pp_tier=0
@@ -4526,6 +4528,15 @@ if [ "$sub" = prepush ]; then
     fi
     rm -rf "$pp_dir"
   }
+  # The signals run and repeat relay are pinned at their default before this
+  # EXIT trap (gh-ocannl-2332): `trap ''` records the default as each one's
+  # original disposition, and the reset leaves it untrapped. Trapped first
+  # after the EXIT trap, their original would be Bash's deferring handler, and
+  # every subshell of the run would take the signal late -- one TERMed in its
+  # first instructions running pp_close, and removing pp_dir, inside itself.
+  trap '' INT TERM HUP
+  trap - INT TERM HUP
+  relay_pinned=1
   trap pp_close EXIT
   pp_query() {
     pp_rc=0
@@ -6081,6 +6092,19 @@ case $sub in
         [ "$seen" != "$sigs_seen" ] || return 1
       done
     }
+    # The relay ends with relay_end, not a bare reset: where its signals were
+    # pinned before an EXIT trap (relay_pinned, prepush's), the reset would
+    # restore that default, and a signal after it would end this shell without
+    # the EXIT trap (gh-ocannl-2332).
+    relay_end() {
+      if [ -n "${relay_pinned:-}" ]; then
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        trap 'exit 129' HUP
+      else
+        trap - INT TERM HUP
+      fi
+    }
     trap 'fwd_sig INT' INT
     trap 'fwd_sig TERM' TERM
     trap 'fwd_sig HUP' HUP
@@ -6166,7 +6190,7 @@ case $sub in
       # one, says why (nothing ran); otherwise only its log can.
       wait_child "$sup" 2>/dev/null
       sup=
-      trap - INT TERM HUP
+      relay_end
       [ "$sub" != plan ] || plan_finish "$@"
       if [ -f "$run_dir/exit" ]; then
         digest "$run_dir"
@@ -6195,7 +6219,7 @@ case $sub in
       # signal landing mid-probe kills the probe too (sup_alive_settled).
       while sup_alive_settled "$run_dir"; do wait_tick "$sup"; prepush_scan_alert "$run_dir"; done
       sup=
-      trap - INT TERM HUP
+      relay_end
       [ "$sub" != plan ] || plan_finish "$@"
       if [ -f "$run_dir/exit" ]; then
         digest "$run_dir"
@@ -6204,7 +6228,7 @@ case $sub in
       echo "run died without recording a verdict (supervisor killed?): $run_dir"
       exit 1
     fi
-    trap - INT TERM HUP
+    relay_end
     if [ ! -f "$run_dir/resolved" ]; then
       # Over before dune started.
       if [ -f "$run_dir/exit" ]; then

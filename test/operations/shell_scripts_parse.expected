@@ -576,6 +576,75 @@ duplicate harness expect_rejected() is refused: true
 duplicate harness expect_rejected() is refused: true
 duplicate harness expect_rejected() is refused: true
 a comment mentioning support cannot satisfy sourcing: true
+trap-order fixture EXIT then TERM is classified as specified: true
+trap-order fixture TERM then EXIT is classified as specified: true
+trap-order fixture EXIT then HUP USR1 PIPE ALRM is classified as specified: true
+trap-order fixture EXIT then QUIT, which bash does not defer is classified as specified: true
+trap-order fixture one command, EXIT first is classified as specified: true
+trap-order fixture one command, TERM first is classified as specified: true
+trap-order fixture numbered and prefixed is classified as specified: true
+trap-order fixture ignored after EXIT is classified as specified: true
+trap-order fixture ignored after EXIT, then trapped is classified as specified: true
+trap-order fixture ignored before EXIT, then trapped is classified as specified: true
+trap-order fixture pinned by an ignore and a reset before EXIT is classified as specified: true
+trap-order fixture reset after EXIT, then trapped is classified as specified: true
+trap-order fixture trapped, reset, re-trapped after EXIT is classified as specified: true
+trap-order fixture after harness_scratch, a new signal is classified as specified: true
+trap-order fixture after harness_scratch, TERM again is classified as specified: true
+trap-order fixture in a subshell setting its own EXIT trap first is classified as specified: true
+trap-order fixture in a subshell after the parent's EXIT trap is classified as specified: true
+trap-order fixture in a subshell after the parent's EXIT trap and TERM trap is classified as specified: true
+trap-order fixture in a background job after EXIT is classified as specified: true
+trap-order fixture in a pipeline after EXIT is classified as specified: true
+trap-order fixture in an uncalled function body after EXIT is classified as specified: true
+trap-order fixture in a function body setting its own EXIT trap first is classified as specified: true
+trap-order fixture in a function called only in a subshell after EXIT is classified as specified: true
+trap-order fixture after a redefined function's later body sets the EXIT trap is classified as specified: true
+trap-order fixture in a background && list after its EXIT trap is classified as specified: true
+trap-order fixture in a case arm a ;;& reaches past another is classified as specified: true
+trap-order fixture in a function called after EXIT is classified as specified: true
+trap-order fixture in a function called before EXIT is classified as specified: true
+trap-order fixture after a function that sets the EXIT trap is classified as specified: true
+trap-order fixture in case arms apart is classified as specified: true
+trap-order fixture after a case arm's EXIT trap is classified as specified: true
+trap-order fixture after a branch that pins TERM before its EXIT trap is classified as specified: true
+trap-order fixture in if branches apart is classified as specified: true
+trap-order fixture in a later iteration, after an EXIT trap later in the body is classified as specified: true
+trap-order fixture in every iteration, before the body's EXIT trap is classified as specified: true
+trap-order fixture in a subshell function body after EXIT is classified as specified: true
+trap-order fixture in a branch after EXIT is classified as specified: true
+trap-order fixture behind a redirection and -- is classified as specified: true
+trap-order fixture in a comment is classified as specified: true
+trap-order fixture in a heredoc body is classified as specified: true
+trap-order fixture in a command substitution is classified as specified: true
+trap-order fixture listed traps is classified as specified: true
+a TERM trap after an EXIT trap reaches the trap-order refusal: true
+a trap on an expanded signal reaches the unread-signal refusal: true
+a trap in a script whose structure is lost reaches the unread-structure refusal: true
+a script whose structure is lost but that holds no trap is not refused here: true
+trap-order execution control EXIT then TERM: bash defers the signal in a subshell, and flagged there: true
+trap-order execution control TERM then EXIT: a subshell dies on delivery, and flagged nowhere: true
+trap-order execution control EXIT alone: a subshell dies on delivery, and flagged nowhere: true
+trap-order execution control EXIT then HUP: bash defers the signal in a subshell, and flagged there: true
+trap-order execution control HUP then EXIT: a subshell dies on delivery, and flagged nowhere: true
+trap-order execution control EXIT then USR1: bash defers the signal in a subshell, and flagged there: true
+trap-order execution control one command, EXIT first: bash defers the signal in a subshell, and flagged there: true
+trap-order execution control one command, TERM first: a subshell dies on delivery, and flagged nowhere: true
+trap-order execution control numbered: bash defers the signal in a subshell, and flagged there: true
+trap-order execution control ignored after EXIT, then trapped: bash defers the signal in a subshell, and flagged there: true
+trap-order execution control ignored before EXIT, then trapped: a subshell dies on delivery, and flagged nowhere: true
+trap-order execution control pinned by an ignore and a reset before EXIT: a subshell dies on delivery, and flagged nowhere: true
+trap-order execution control trapped, reset, re-trapped after EXIT: a subshell dies on delivery, and flagged nowhere: true
+trap-order execution control in a subshell setting its own EXIT trap first: bash defers the signal in a subshell, and flagged there: true
+trap-order execution control in a subshell after the parent's EXIT trap: bash 3.2 lets the subshell die on delivery, bash 5.3 defers the signal, and flagged there: true
+trap-order execution control in a subshell after the parent's TERM and EXIT traps: a subshell dies on delivery, and flagged nowhere: true
+trap-order execution control in a function body after EXIT: bash defers the signal in a subshell, and flagged there: true
+trap-order execution control in a branch after EXIT: bash defers the signal in a subshell, and flagged there: true
+trap-order execution control in a function called after EXIT: bash defers the signal in a subshell, and flagged there: true
+trap-order execution control in a later iteration, after an EXIT trap later in the body: bash defers the signal in a subshell, and flagged there: true
+trap-order execution control in every iteration, before the body's EXIT trap: a subshell dies on delivery, and flagged nowhere: true
+trap-order execution control in a comment: a subshell dies on delivery, and flagged nowhere: true
+trap-order execution control in a heredoc body: a subshell dies on delivery, and flagged nowhere: true
 .github/actions/pin-revisions/resolve.sh parses: true
 benchmarks/box-gate.sh parses: true
 benchmarks/check-box.sh parses: true
@@ -741,6 +810,7 @@ tools/test-windows-opam-cache.sh parses: true
 tools/typecheck-scan-cases.sh parses: true
 tools/vendor-idents-check.sh parses: true
 tools/windows-opam-cache.sh parses: true
+the trap-order check read no fewer trap commands than its floor, well below the repository's count: true
 the scan reached at least the 12 shell scripts this repository is known to have: true
 the scan reached the session hook and the suite runner: true
 
@@ -763,6 +833,12 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:2d086d94d5a797eb9901008d71d5c241] errexit-and-list fixture
   [scanner-refusal:3f096017191c7a4d9f63d7a94dcfb6ff] reaches the one-predicate-per-statement
   [scanner-refusal:36dfd5919c0215c23122a0ec198d2739] errexit execution control
+  [scanner-refusal:c4194f68155e0665e0176c65824cb4fa] trap-order fixture
+  [scanner-refusal:624b5e03b7974c6da8261c5b00b3f94f] reaches the trap-order
+  [scanner-refusal:7dddd02c97cea5d19abe99b74fa55dee] reaches the unread-signal
+  [scanner-refusal:bd11a3abd96cb5a9802b6d3d4246e404] reaches the unread-structure
+  [scanner-refusal:d6f4a25fb971a1f7f1c33b8fa3a42a54] script whose structure
+  [scanner-refusal:4b1c2d6d0d37de04d679a9d0323a5467] trap-order execution control
   [scanner-refusal:730f080d2e13414d67084e34416888e9] takes its lifecycle
   [scanner-refusal:711cc6b5aa70f8e1ec411351c89c6ccc] lifecycle or redefines
   [scanner-refusal:348d853f9ff7699418e79b2c7469d193] the command running
@@ -775,6 +851,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:8743bc48ff2a3da0c15e40f654ad6ff7] shebang
   [scanner-refusal:3184b30e46c2d310e18bbae7c1c8ae9e] shared harness contract
   [scanner-refusal:15ee2c44c18fee32abb92315075e99ab] parses
+  [scanner-refusal:f574a9b9751d21a02afcc893a83b2dbe] below the repository's
   [scanner-refusal:8d61869dcd0de680f0aead692a642ebe] the scan reached
   [scanner-refusal:8fe3f688c6c4ef4b004016098ba03f34] reached the session
 End of synthetic controls.

@@ -212,7 +212,6 @@ finish() {
   echo "ci-compiler-test: exit: $main_rc"
   exit "$main_rc"
 }
-trap 'finish $?' EXIT
 
 forward_signal() {
   signal_rc=$1
@@ -226,6 +225,7 @@ forward_signal() {
 }
 trap 'forward_signal 130' INT
 trap 'forward_signal 143' TERM HUP
+trap 'finish $?' EXIT
 
 # Every potentially long child is attached and reaped. This makes the signal
 # traps above an ownership boundary: scratch cannot disappear while a fetch,

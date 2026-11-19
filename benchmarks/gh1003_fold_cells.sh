@@ -127,8 +127,8 @@ mkdir -p "$out" || exit 2
 out=$(cd "$out" && pwd -P) || exit 2
 exec 3>&1
 exec >>"$out/driver.log" 2>&1 || exit 2
-trap 'cat "$out/driver.log" >&3' EXIT
 trap 'echo "gh1003: interrupted"; exit 130' INT TERM
+trap 'cat "$out/driver.log" >&3' EXIT
 # The runners read the nearest ocannl_config; benchmarks/ has the suite's own.
 cd "$root/benchmarks" || exit 2
 gpt=$root/_build/default/benchmarks/runners/ocannl/bench_gpt.exe

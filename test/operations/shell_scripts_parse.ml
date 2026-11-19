@@ -99,6 +99,9 @@ let repo_relative = Test_scan.Dune_stanza_scan.repo_relative
    stops reaching a directory has to fail rather than shrink the golden. *)
 let script_floor = 12
 
+(** Well below the repository's count of [trap] commands (gh-ocannl-2332). *)
+let trap_floor = 40
+
 (* Named because their breakage is not discovered by a test run: the first is the SessionStart hook,
    the second is what runs the suite. If the scan can no longer see these two it is not seeing the
    repository, whatever else it found. *)
@@ -2311,10 +2314,9 @@ module Shell_context = struct
 
   let defined_functions branch = List.map (definitions branch) ~f:fst
 
-  (** The command name a simple command runs, past what can stand in front of it: [!], [time] ([-p],
-      [--]), assignments and redirections. [command] and [builtin] are names of their own: neither
-      runs a function. *)
-  let command_name text =
+  (** The words of a simple command from its command name on, as written (not decoded), past what
+      can stand in front of it: [!], [time] ([-p], [--]), assignments and redirections. *)
+  let command_argv text =
     (* Only an assignment as written: a quoted [ 'X=1' ] is the command it names, not a prefix. *)
     let syntactic_assignment word =
       match String.lsplit2 word ~on:'=' with
@@ -2343,7 +2345,11 @@ module Shell_context = struct
           | None -> word :: rest)
       | [] -> []
     in
-    Option.map (List.hd (drop (L.shell_words text))) ~f:L.literal_shell_word
+    drop (L.shell_words text)
+
+  (** The command name a simple command runs, past what can stand in front of it ({!command_argv}).
+      [command] and [builtin] are names of their own: neither runs a function. *)
+  let command_name text = Option.map (List.hd (command_argv text)) ~f:L.literal_shell_word
 
   (** Every simple command in [branch], anywhere, with the statement it is operand [index] of. *)
   let rec simple_commands (branch : branch) =
@@ -2601,6 +2607,9 @@ module Shell_context = struct
     (judgements, not (List.is_empty sites), leaking)
 
   type t = {
+    top : branch;  (** The compound structure, as read. *)
+    structure_refusals : (int * string) list;
+        (** The structure's refusals in every script, whether or not it may turn errexit on. *)
     judgements : judgement list;
     lexical : (int * string) list;  (** {!Shell_lexer.numbered_spliced_lines}' refusals. *)
     refusals : (int * string) list;
@@ -2618,14 +2627,14 @@ module Shell_context = struct
           lexical := (line, reason) :: !lexical)
     in
     let refuse line reason = refusals := (line, reason) :: !refusals in
-    let judgements, enables_errexit, leaking = judge (structure ~refuse lines) in
-    let refusals =
-      if enables_errexit then
-        List.dedup_and_sort !refusals ~compare:(fun (line, reason) (line', reason') ->
-            match Int.compare line line' with 0 -> String.compare reason reason' | order -> order)
-      else []
+    let top = structure ~refuse lines in
+    let judgements, enables_errexit, leaking = judge top in
+    let structure_refusals =
+      List.dedup_and_sort !refusals ~compare:(fun (line, reason) (line', reason') ->
+          match Int.compare line line' with 0 -> String.compare reason reason' | order -> order)
     in
-    { judgements; lexical = List.rev !lexical; refusals; leaking }
+    let refusals = if enables_errexit then structure_refusals else [] in
+    { top; structure_refusals; judgements; lexical = List.rev !lexical; refusals; leaking }
 
   (** The note that makes the whole-file reading visible in the golden (gh-ocannl-1266): a file read
       this way loses every [set +e] in it silently otherwise. *)
@@ -3878,6 +3887,703 @@ module Errexit_execution_controls = struct
                   holds))
 end
 
+(** A terminating signal trapped after an EXIT trap in the same shell (gh-ocannl-2332).
+
+    Setting an EXIT trap makes Bash (3.2 and 5.x alike) install its own deferring handler on every
+    terminating signal not yet trapped, and the first [trap] a script then sets on such a signal
+    records THAT handler as the signal's original disposition: the one a subshell gets back when it
+    resets the traps it inherited. So a subshell of that shell does not die when the signal is
+    delivered; it handles it at its next signal check, after finishing the builtin or the fork it
+    was in (the gh-ocannl-2242 bullet of build-and-test.md, under "The harness, shells and
+    processes", says what that cost). Trapped before the EXIT trap, the signal keeps its default as
+    the original, and a subshell dies on delivery. {!Trap_order.controls} measures the rules below
+    against the host's bash.
+
+    {1 What it reads}
+
+    The simple commands of {!Shell_context}'s compound structure, per shell:
+    - [trap ACTION SIGNAL...] (after an optional [--]), its words decoded as literals. Each signal
+      is a name, with or without [SIG], in any case, or one of the numbers 0, 1, 2, 3, 6, 9, 13, 14
+      and 15, which POSIX fixes; [0] is [EXIT]. The signals are read in the command's own order, so
+      [trap f EXIT TERM] traps [TERM] after [EXIT]. An empty ACTION ([trap '' TERM]) ignores the
+      signal, which a subshell inherits as ignored whatever the order, so it is never a finding;
+      but, like any other trap, it records the signal's original disposition. [trap - SIGNAL...], a
+      lone [trap SIGNAL] and a numeric first word reset, which records nothing here; [trap],
+      [trap -p] and [trap -l] read nothing.
+    - [harness_scratch], the shared harness support's (scripts/harness-support.sh), where the file
+      does not define it, as the traps it sets: [INT] and [TERM], then [EXIT].
+    - The terminating signals are bash's own list (sig.c's [terminating_signals]): [HUP], [INT],
+      [ILL], [TRAP], [ABRT] ([IOT]), [EMT], [FPE], [BUS], [SEGV], [SYS], [PIPE], [ALRM], [TERM],
+      [XCPU], [XFSZ], [VTALRM], [PROF], [LOST], [USR1], [USR2]. Any other signal name bash knows is
+      read and needs no order.
+    - The shell a command runs in: brace groups, [if], loops, [case] arms and [{ }] function bodies
+      are the shell they sit in; a [( )] subshell, a [( )] function body, a pipeline element and a
+      background job (its whole [&&]/[||] list) are a shell of their own, which starts with the
+      original dispositions of the shell around it (a fork copies them) and its EXIT trap too: bash
+      5.3 records its deferring handler as the original of a subshell's first trap after the
+      parent's EXIT trap, where bash 3.2 records the default (loud there).
+    - The order, as the paths through the file, each with a state of its own (past 32 distinct
+      states at one point they merge, an EXIT trap on any counting and a signal recorded on one only
+      unrecorded): an [if]'s bodies and a [case]'s arms are alternatives (and so is none of them,
+      without [else] or with no arm taken), every arm after one ending in [;&] or [;;&] may carry
+      that arm's exit, an operand after [&&] or [||] may not run, and a loop body is read twice, so
+      that a trap early in it meets an EXIT trap set late in it. A function body is read where it is
+      defined, from a fresh shell, for its own order, and again at each call of the function the
+      file shows, in the caller's shell; a name defined more than once may run any of its bodies
+      there.
+
+    A finding is a [trap] with a non-empty ACTION on a terminating signal whose original
+    disposition, recorded by that command or an earlier one in the same shell, is the deferring
+    handler: a trap that came after an EXIT trap there. The finding stands whether or not the shell
+    forks a subshell that receives the signal, which a text scan cannot see; trapping the signal
+    before the EXIT trap costs nothing.
+
+    {1 What it refuses}
+
+    Loudly, as unread: a signal word that is not a literal signal name or one of those numbers
+    ([$sig], [7]); and a script holding a [trap] whose compound structure {!Shell_context} could not
+    read, since its shells would be a guess.
+
+    {1 What it deliberately does not read}
+
+    Silent: a function defined in another file sets no trap at its call, [harness_scratch] aside;
+    nothing reaches across files, so a trap set in a sourced file or in a caller counts in neither;
+    commands inside substitutions, [bash -c '...'] strings and heredoc bodies are text, so a script
+    a harness generates is not read (gh-ocannl-2332's PR audits those by hand); a call through
+    [eval], [command], [trap] or another command's argument is not followed. Loud: a condition is
+    read as run, and an [exit] does not end the path it is on; and a reset records nothing, so a
+    [trap] after it stands on whatever was recorded before (bash 3.2 records the original at a
+    reset, bash 5 does not). *)
+module Trap_order = struct
+  module L = Shell_lexer
+  module C = Shell_context
+
+  let terminating =
+    String.split ~on:' '
+      "HUP INT ILL TRAP ABRT IOT EMT FPE BUS SEGV SYS PIPE ALRM TERM XCPU XFSZ VTALRM PROF LOST \
+       USR1 USR2"
+
+  (** The rest of bash's trap names, which need no order. *)
+  let others =
+    String.split ~on:' '
+      "QUIT KILL STOP CHLD CLD CONT TSTP TTIN TTOU URG WINCH IO POLL INFO PWR STKFLT DEBUG ERR \
+       RETURN"
+
+  let numbers =
+    [
+      ("0", "EXIT");
+      ("1", "HUP");
+      ("2", "INT");
+      ("3", "QUIT");
+      ("6", "ABRT");
+      ("9", "KILL");
+      ("13", "PIPE");
+      ("14", "ALRM");
+      ("15", "TERM");
+    ]
+
+  (** A signal word as bash's [trap] reads it, or [None] for one this check cannot read. *)
+  let signal word =
+    match List.Assoc.find numbers word ~equal:String.equal with
+    | Some name -> Some name
+    | None ->
+        let upper = String.uppercase word in
+        let name = Option.value (String.chop_prefix upper ~prefix:"SIG") ~default:upper in
+        Option.some_if (List.mem ("EXIT" :: (terminating @ others)) name ~equal:String.equal) name
+
+  type original = Default | Deferring
+
+  type shell = { exit_at : (int * string) option; originals : original Map.M(String).t }
+  (** A shell's trap state: where it first set an EXIT trap, and the original disposition each
+      terminating signal has recorded. *)
+
+  let fresh = { exit_at = None; originals = Map.empty (module String) }
+
+  (** A fork copies the originals, and for the order the parent's EXIT trap stands in the subshell
+      too (bash 5.3; the module header). *)
+  let subshell shell = shell
+
+  (** Either of two states: an EXIT trap set if either set one; a signal recorded only where both
+      recorded it, as the deferring handler if either recorded that. A signal one of them left
+      unrecorded is recorded afresh by the next [trap] on it. *)
+  let join a b =
+    {
+      exit_at = Option.first_some a.exit_at b.exit_at;
+      originals =
+        Map.merge a.originals b.originals ~f:(fun ~key:_ -> function
+          | `Both (Default, Default) -> Some Default
+          | `Both _ -> Some Deferring
+          | `Left _ | `Right _ -> None);
+    }
+
+  type finding =
+    | Deferred of { line : int; signal : string; exit_line : int; exit_by : string }
+    | Unread_signal of { line : int; word : string }
+    | Unread_structure of { line : int; reason : string }
+
+  let line_of = function
+    | Deferred { line; _ } | Unread_signal { line; _ } | Unread_structure { line; _ } -> line
+
+  (** The repository's [trap] commands read, by distinct line, for the floor. *)
+  let trap_sites = ref 0
+
+  type reading = {
+    findings : finding list ref;
+    trap_lines : int Hash_set.t;
+    definitions : (string * C.compound) list;  (** Every definition, a redefined name's each. *)
+    inlining : string list;  (** The functions whose call is being read, innermost first. *)
+  }
+
+  (* Redirections after the command name are no arguments. *)
+  let rec unredirected = function
+    | word :: rest -> (
+        match L.redirection_prefix word with
+        | Some true -> unredirected rest
+        | Some false -> unredirected (List.drop rest 1)
+        | None -> word :: unredirected rest)
+    | [] -> []
+
+  (** The states a shell may be in at a point of the file, one per distinct path. Past [max_paths]
+      they collapse into their {!join}, which can only add findings. *)
+  let max_paths = 32
+
+  let paths states =
+    let states =
+      List.dedup_and_sort states ~compare:(fun a b ->
+          Poly.compare (a.exit_at, Map.to_alist a.originals) (b.exit_at, Map.to_alist b.originals))
+    in
+    if List.length states > max_paths then [ List.reduce_exn states ~f:join ] else states
+
+  let rec branch r states (b : C.branch) =
+    List.fold b.statements ~init:states ~f:(fun states (statement : C.statement) ->
+        (* A background job is one shell for its whole list; within it, as anywhere, a pipeline
+           element is a shell of its own. *)
+        let job_entry = if statement.async then List.map states ~f:subshell else states in
+        let piped index =
+          (index > 0 && C.is_pipe (List.nth_exn statement.connectors (index - 1)))
+          || index < List.length statement.connectors
+             && C.is_pipe (List.nth_exn statement.connectors index)
+        in
+        let job_exit =
+          List.foldi statement.operands ~init:job_entry
+            ~f:(fun index states (operand : C.operand) ->
+              let apart = piped index in
+              let entry = if apart then List.map states ~f:subshell else states in
+              let exits =
+                match operand.compound with
+                | None -> command r entry ~line:statement.line operand.text
+                | Some compound -> compound_ r entry compound
+              in
+              (* After [&&] or [||] an operand may not run. *)
+              let conditional =
+                index > 0
+                &&
+                match List.nth_exn statement.connectors (index - 1) with
+                | C.And | C.Or -> true
+                | C.Pipe -> false
+              in
+              if apart then states else if conditional then paths (states @ exits) else exits)
+        in
+        if statement.async then states else job_exit)
+
+  and sequence r states branches = List.fold branches ~init:states ~f:(branch r)
+
+  and compound_ r states (c : C.compound) =
+    match c.kind with
+    | C.Group `Brace -> sequence r states c.branches
+    | C.Group `Paren ->
+        ignore (sequence r (List.map states ~f:subshell) c.branches : shell list);
+        states
+    | C.Function _ ->
+        (* A definition runs nothing: its body is read here, from a fresh shell, for its own order,
+           and at each call in the caller's shell. *)
+        ignore (sequence r [ fresh ] c.branches : shell list);
+        states
+    | C.If ->
+        (* Each condition runs after the ones before it, each body after its condition; with no
+           [else], the states after the last condition are ways out too. *)
+        let rec go states exits = function
+          | (cond : C.branch) :: body :: rest when cond.condition ->
+              let states = branch r states cond in
+              go states (branch r states body @ exits) rest
+          | [ last ] when not last.C.condition -> branch r states last @ exits
+          | [] -> states @ exits
+          | b :: rest -> go (branch r states b) exits rest
+        in
+        paths (go states [] c.branches)
+    | C.Loop ->
+        (* Read twice, the second time after the first, so a trap early in the body meets an EXIT
+           trap set late in it; the loop may also run zero times. *)
+        let once = sequence r states c.branches in
+        let twice = sequence r once c.branches in
+        paths (states @ once @ twice)
+    | C.Case ->
+        (* An arm ending in [;&] or [;;&] (its successor's [fallthrough]) may reach any later arm:
+           [;;&] skips the arms whose patterns fail on its way to the next match. *)
+        let arms = Array.of_list c.branches in
+        let ends_falling index = index + 1 < Array.length arms && arms.(index + 1).C.fallthrough in
+        let _, exits =
+          Array.foldi arms ~init:([], []) ~f:(fun index (carried, exits) arm ->
+              let exit = branch r (paths (states @ carried)) arm in
+              ((if ends_falling index then carried @ exit else carried), exit @ exits))
+        in
+        paths (states @ exits)
+
+  and command r states ~line text = paths (List.concat_map states ~f:(command_one r ~line text))
+
+  (** What simple command [text] does to [shell]: the states it may leave. *)
+  and command_one r ~line text shell =
+    let shell = ref [ shell ] in
+    let one () = List.hd_exn !shell in
+    let record ?(action = true) name =
+      let s = one () in
+      if String.equal name "EXIT" then (
+        if Option.is_none s.exit_at then
+          shell := [ { s with exit_at = Some (line, "the EXIT trap") } ])
+      else if List.mem terminating name ~equal:String.equal then (
+        let s =
+          if Map.mem s.originals name then s
+          else
+            {
+              s with
+              originals =
+                Map.set s.originals ~key:name
+                  ~data:(if Option.is_some s.exit_at then Deferring else Default);
+            }
+        in
+        shell := [ s ];
+        match (action, Map.find s.originals name, s.exit_at) with
+        | true, Some Deferring, Some (exit_line, exit_by) ->
+            r.findings := Deferred { line; signal = name; exit_line; exit_by } :: !(r.findings)
+        | _ -> ())
+    in
+    (match List.map (unredirected (C.command_argv text)) ~f:L.literal_shell_word with
+    | name :: _
+      when List.Assoc.mem r.definitions name ~equal:String.equal
+           && not (List.mem r.inlining name ~equal:String.equal) ->
+        (* A redefined name may run any of its bodies: each is a path. *)
+        let r' = { r with inlining = name :: r.inlining } in
+        let entry = !shell in
+        shell :=
+          List.concat_map r.definitions ~f:(fun (defined, (body : C.compound)) ->
+              if not (String.equal defined name) then []
+              else
+                match body.kind with
+                | C.Function `Paren ->
+                    ignore (sequence r' (List.map entry ~f:subshell) body.branches : shell list);
+                    entry
+                | _ -> sequence r' entry body.branches)
+    | "harness_scratch" :: _ ->
+        List.iter [ "INT"; "TERM" ] ~f:(fun name -> record name);
+        let s = one () in
+        if Option.is_none s.exit_at then
+          shell := [ { s with exit_at = Some (line, "the EXIT trap `harness_scratch` sets") } ]
+    | "trap" :: args -> (
+        Hash_set.add r.trap_lines line;
+        let args = match args with "--" :: rest -> rest | args -> args in
+        let signals words =
+          List.filter_map words ~f:(fun word ->
+              match signal word with
+              | Some name -> Some name
+              | None ->
+                  r.findings := Unread_signal { line; word } :: !(r.findings);
+                  None)
+        in
+        match args with
+        | [] | ("-p" | "-l" | "-lp" | "-pl") :: _ -> ()
+        | "-" :: words -> ignore (signals words : string list)
+        | [ word ] -> ignore (signals [ word ] : string list)
+        | first :: words when (not (String.is_empty first)) && String.for_all first ~f:Char.is_digit
+          ->
+            ignore (signals (first :: words) : string list)
+        | action :: words ->
+            List.iter (signals words) ~f:(fun name ->
+                record ~action:(not (String.is_empty action)) name))
+    | _ -> ());
+    !shell
+
+  let findings (context : C.t) =
+    let r =
+      {
+        findings = ref [];
+        trap_lines = Hash_set.create (module Int);
+        definitions = C.definitions context.top;
+        inlining = [];
+      }
+    in
+    ignore (branch r [ fresh ] context.top : shell list);
+    trap_sites := !trap_sites + Hash_set.length r.trap_lines;
+    let unread =
+      if Hash_set.is_empty r.trap_lines then []
+      else
+        List.map context.structure_refusals ~f:(fun (line, reason) ->
+            Unread_structure { line; reason })
+    in
+    (* One finding per line and signal, whichever path's EXIT trap it names. *)
+    let key = function
+      | Deferred { line; signal; _ } -> (line, 0, signal)
+      | Unread_signal { line; word } -> (line, 1, word)
+      | Unread_structure { line; reason } -> (line, 2, reason)
+    in
+    List.stable_sort
+      (unread @ List.rev !(r.findings))
+      ~compare:(fun a b -> Poly.compare (key a) (key b))
+    |> List.remove_consecutive_duplicates ~equal:(fun a b -> Poly.equal (key a) (key b))
+
+  let message ~rel = function
+    | Deferred { line; signal; exit_line; exit_by } ->
+        Printf.sprintf
+          "%s:%d: `trap` on %s after %s at line %d: a subshell of this shell defers %s instead of \
+           dying on delivery; trap it before the EXIT trap (gh-ocannl-2332)"
+          rel line signal exit_by exit_line signal
+    | Unread_signal { line; word } ->
+        Printf.sprintf
+          "%s:%d: `trap` names `%s`, which the trap-order check cannot read as a signal; spell it \
+           as a literal signal name"
+          rel line word
+    | Unread_structure { line; reason } ->
+        Printf.sprintf
+          "%s:%d: the trap order of this script is unread: its shells could not be told apart (%s)"
+          rel line reason
+
+  let report ~fail ~rel context = List.iter (findings context) ~f:(fun f -> fail (message ~rel f))
+
+  (** Synthetic texts and the lines the check must flag, each with its nearest unflagged neighbour.
+  *)
+  let cases =
+    [
+      ("EXIT then TERM", "trap : EXIT\ntrap 'exit 143' TERM\n", [ 2 ]);
+      ("TERM then EXIT", "trap 'exit 143' TERM\ntrap : EXIT\n", []);
+      ( "EXIT then HUP USR1 PIPE ALRM",
+        "trap : EXIT\ntrap 'exit 1' HUP USR1 PIPE ALRM\n",
+        [ 2; 2; 2; 2 ] );
+      ("EXIT then QUIT, which bash does not defer", "trap : EXIT\ntrap 'exit 1' QUIT\n", []);
+      ("one command, EXIT first", "trap 'exit 1' EXIT TERM\n", [ 1 ]);
+      ("one command, TERM first", "trap 'exit 1' TERM EXIT\n", []);
+      ("numbered and prefixed", "trap : 0\ntrap 'exit 1' 15 SIGHUP sigusr1\n", [ 2; 2; 2 ]);
+      ("ignored after EXIT", "trap : EXIT\ntrap '' TERM\n", []);
+      ("ignored after EXIT, then trapped", "trap : EXIT\ntrap '' TERM\ntrap 'exit 1' TERM\n", [ 3 ]);
+      ("ignored before EXIT, then trapped", "trap '' TERM\ntrap : EXIT\ntrap 'exit 1' TERM\n", []);
+      ( "pinned by an ignore and a reset before EXIT",
+        "trap '' TERM\ntrap - TERM\ntrap : EXIT\ntrap 'exit 1' TERM\n",
+        [] );
+      ("reset after EXIT, then trapped", "trap : EXIT\ntrap - TERM\ntrap 'exit 1' TERM\n", [ 3 ]);
+      ( "trapped, reset, re-trapped after EXIT",
+        "trap 'exit 1' TERM\ntrap : EXIT\ntrap - TERM\ntrap 'exit 2' TERM\n",
+        [] );
+      ("after harness_scratch, a new signal", "harness_scratch t\ntrap 'exit 129' HUP\n", [ 2 ]);
+      ("after harness_scratch, TERM again", "harness_scratch t\ntrap 'exit 1' TERM INT\n", []);
+      ( "in a subshell setting its own EXIT trap first",
+        "( trap : EXIT; trap 'exit 1' TERM )\n",
+        [ 1 ] );
+      ("in a subshell after the parent's EXIT trap", "trap : EXIT\n( trap 'exit 1' TERM )\n", [ 2 ]);
+      ( "in a subshell after the parent's EXIT trap and TERM trap",
+        "trap 'exit 1' TERM\ntrap : EXIT\n( trap : EXIT; trap 'exit 2' TERM )\n",
+        [] );
+      ("in a background job after EXIT", "trap : EXIT\n{ trap 'exit 1' TERM; } &\n", [ 2 ]);
+      ("in a pipeline after EXIT", "trap : EXIT\ntrap 'exit 1' TERM | cat\n", [ 2 ]);
+      ( "in an uncalled function body after EXIT",
+        "trap : EXIT\nf() {\n  trap 'exit 1' TERM\n}\n",
+        [] );
+      ( "in a function body setting its own EXIT trap first",
+        "f() {\n  trap : EXIT\n  trap 'exit 1' TERM\n}\n",
+        [ 3 ] );
+      ( "in a function called only in a subshell after EXIT",
+        "trap : EXIT\nf() {\n  trap 'exit 1' TERM\n}\n( f )\n",
+        [ 3 ] );
+      ( "after a redefined function's later body sets the EXIT trap",
+        "setup() { :; }\nsetup() {\n  trap : EXIT\n}\nsetup\ntrap 'exit 1' TERM\n",
+        [ 6 ] );
+      ( "in a background && list after its EXIT trap",
+        "trap : EXIT && trap 'exit 1' TERM &\nwait\n",
+        [ 1 ] );
+      ( "in a case arm a ;;& reaches past another",
+        "case a in\n  a) trap : EXIT ;;&\n  b) : ;;\n  a) trap 'exit 1' TERM ;;\nesac\n",
+        [ 4 ] );
+      ("in a function called after EXIT", "f() {\n  trap 'exit 1' TERM\n}\ntrap : EXIT\nf\n", [ 2 ]);
+      ("in a function called before EXIT", "f() {\n  trap 'exit 1' TERM\n}\nf\ntrap : EXIT\n", []);
+      ( "after a function that sets the EXIT trap",
+        "setup() {\n  trap : EXIT\n}\nsetup\ntrap 'exit 1' TERM\n",
+        [ 5 ] );
+      ( "in case arms apart",
+        "case $1 in\n  a) trap : EXIT ;;\n  b) trap 'exit 1' TERM ;;\nesac\n",
+        [] );
+      ( "after a case arm's EXIT trap",
+        "case $1 in\n  a) trap : EXIT ;;\nesac\ntrap 'exit 1' TERM\n",
+        [ 4 ] );
+      ( "after a branch that pins TERM before its EXIT trap",
+        "if [ -n \"$1\" ]; then\n\
+        \  trap '' TERM\n\
+        \  trap - TERM\n\
+        \  trap : EXIT\n\
+         fi\n\
+         trap 'exit 1' TERM\n",
+        [] );
+      ( "in if branches apart",
+        "if [ -n \"$1\" ]; then\n  trap : EXIT\nelse\n  trap 'exit 1' TERM\nfi\n",
+        [] );
+      ( "in a later iteration, after an EXIT trap later in the body",
+        "for i in 1 2; do\n  [ \"$i\" = 2 ] && trap 'exit 1' TERM\n  trap : EXIT\ndone\n",
+        [ 2 ] );
+      ( "in every iteration, before the body's EXIT trap",
+        "for i in 1 2; do\n  trap 'exit 1' TERM\n  trap : EXIT\ndone\n",
+        [] );
+      ("in a subshell function body after EXIT", "trap : EXIT\nf() (\n  trap 'exit 1' TERM\n)\n", []);
+      ("in a branch after EXIT", "if true; then trap : EXIT; fi\ntrap 'exit 1' TERM\n", [ 2 ]);
+      ("behind a redirection and --", "trap : EXIT\ntrap -- 'exit 1' TERM 2>/dev/null\n", [ 2 ]);
+      ("in a comment", "trap : EXIT\n# trap 'exit 1' TERM\n", []);
+      ("in a heredoc body", "trap : EXIT\ncat <<'X'\ntrap 'exit 1' TERM\nX\n", []);
+      ("in a command substitution", "trap : EXIT\nx=$(trap 'exit 1' TERM; jobs)\n", []);
+      ("listed traps", "trap : EXIT\ntrap -p TERM\ntrap\n", []);
+    ]
+
+  (** The probe a row's [@@] stands for: a subshell of the shell there sends [SIGNAL] to itself and
+      then to a witness, in one [kill] builtin. At the signal's default the subshell dies inside its
+      first [kill(2)] and the witness is spared; deferred, bash finishes the builtin first and the
+      witness records the signal. The subshell sets no trap of its own (bash 5.3 re-arms its
+      deferring handler for one that does). *)
+  let probe signal =
+    Printf.sprintf
+      "w=$(mktemp -d \"${TMPDIR:-/tmp}/ocannl_trap_order.XXXXXX\") || exit 9\n\
+       perl -e '$SIG{%s} = sub { open my $f, \">\", $ARGV[0]; close $f; exit 0 }; open my $r, \
+       \">\", $ARGV[1]; close $r; select(undef, undef, undef, 0.05) while 1' \"$w/got\" \
+       \"$w/ready\" &\n\
+       p=$!\n\
+       i=0\n\
+       while [ ! -e \"$w/ready\" ] && [ \"$i\" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done\n\
+       ( kill -%s \"$(exec sh -c 'echo \"$PPID\"')\" \"$p\" ) 2>/dev/null\n\
+       i=0\n\
+       while [ ! -e \"$w/got\" ] && [ \"$i\" -lt 20 ]; do sleep 0.05; i=$((i + 1)); done\n\
+       kill -KILL \"$p\" 2>/dev/null\n\
+       wait \"$p\" 2>/dev/null\n\
+       if [ ! -e \"$w/ready\" ]; then echo unready; elif [ -e \"$w/got\" ]; then echo deferred; \
+       else echo default; fi\n\
+       rm -rf \"$w\"\n"
+      signal signal
+
+  (** Rows run under the host's bash: the text, with [@@] where the probe goes, the signal it sends,
+      and whether bash must defer it there. The check must flag the row exactly where bash defers.
+  *)
+  let rows =
+    [
+      ("EXIT then TERM", "trap : EXIT\ntrap 'exit 143' TERM\n@@", "TERM", [ 2 ]);
+      ("TERM then EXIT", "trap 'exit 143' TERM\ntrap : EXIT\n@@", "TERM", []);
+      ("EXIT alone", "trap : EXIT\n@@", "TERM", []);
+      ("EXIT then HUP", "trap : EXIT\ntrap 'exit 129' HUP\n@@", "HUP", [ 2 ]);
+      ("HUP then EXIT", "trap 'exit 129' HUP\ntrap : EXIT\n@@", "HUP", []);
+      ("EXIT then USR1", "trap : EXIT\ntrap 'exit 1' USR1\n@@", "USR1", [ 2 ]);
+      ("one command, EXIT first", "trap 'exit 1' EXIT TERM\n@@", "TERM", [ 1 ]);
+      ("one command, TERM first", "trap 'exit 1' TERM EXIT\n@@", "TERM", []);
+      ("numbered", "trap : 0\ntrap 'exit 1' 15\n@@", "TERM", [ 2 ]);
+      ( "ignored after EXIT, then trapped",
+        "trap : EXIT\ntrap '' TERM\ntrap 'exit 1' TERM\n@@",
+        "TERM",
+        [ 3 ] );
+      ( "ignored before EXIT, then trapped",
+        "trap '' TERM\ntrap : EXIT\ntrap 'exit 1' TERM\n@@",
+        "TERM",
+        [] );
+      ( "pinned by an ignore and a reset before EXIT",
+        "trap '' TERM\ntrap - TERM\ntrap : EXIT\ntrap 'exit 1' TERM\n@@",
+        "TERM",
+        [] );
+      ( "trapped, reset, re-trapped after EXIT",
+        "trap 'exit 1' TERM\ntrap : EXIT\ntrap - TERM\ntrap 'exit 2' TERM\n@@",
+        "TERM",
+        [] );
+      ( "in a subshell setting its own EXIT trap first",
+        "(\n  trap : EXIT\n  trap 'exit 1' TERM\n@@)\n",
+        "TERM",
+        [ 3 ] );
+      ( "in a subshell after the parent's EXIT trap",
+        "trap : EXIT\n(\n  trap 'exit 1' TERM\n@@)\n",
+        "TERM",
+        [ 3 ] );
+      ( "in a subshell after the parent's TERM and EXIT traps",
+        "trap 'exit 1' TERM\ntrap : EXIT\n(\n  trap : EXIT\n  trap 'exit 2' TERM\n@@)\n",
+        "TERM",
+        [] );
+      ( "in a function body after EXIT",
+        "trap : EXIT\nf() {\n  trap 'exit 1' TERM\n}\nf\n@@",
+        "TERM",
+        [ 3 ] );
+      ( "in a branch after EXIT",
+        "if true; then trap : EXIT; fi\ntrap 'exit 1' TERM\n@@",
+        "TERM",
+        [ 2 ] );
+      ( "in a function called after EXIT",
+        "f() {\n  trap 'exit 1' TERM\n}\ntrap : EXIT\nf\n@@",
+        "TERM",
+        [ 2 ] );
+      ( "in a later iteration, after an EXIT trap later in the body",
+        "for i in 1 2; do\n  [ \"$i\" = 2 ] && trap 'exit 1' TERM\n  trap : EXIT\ndone\n@@",
+        "TERM",
+        [ 2 ] );
+      ( "in every iteration, before the body's EXIT trap",
+        "for i in 1 2; do\n  trap 'exit 1' TERM\n  trap : EXIT\ndone\n@@",
+        "TERM",
+        [] );
+      ("in a comment", "trap : EXIT\n# trap 'exit 1' TERM\n@@", "TERM", []);
+      ( "in a heredoc body",
+        "trap : EXIT\ncat >/dev/null <<'X'\ntrap 'exit 1' TERM\nX\n@@",
+        "TERM",
+        [] );
+    ]
+
+  (** Rows whose bash half differs between versions, with what each does: the check flags them, and
+      either reading of bash holds. *)
+  let version_dependent =
+    [
+      ( "in a subshell after the parent's EXIT trap",
+        "bash 3.2 lets the subshell die on delivery, bash 5.3 defers the signal" );
+    ]
+
+  (** Runs [texts] under [bash] at once, each with stdin and stderr on /dev/null, and returns each
+      one's standard output. *)
+  let run_all bash texts =
+    let devnull = "/dev/null" in
+    let started =
+      List.map texts ~f:(fun text ->
+          let script = Stdlib.Filename.temp_file "ocannl_trap_order" ".sh" in
+          let output = Stdlib.Filename.temp_file "ocannl_trap_order" ".out" in
+          Out_channel.write_all script ~data:text;
+          let out = Unix.openfile output [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
+          let inp = Unix.openfile devnull [ Unix.O_RDONLY ] 0o400 in
+          let err = Unix.openfile devnull [ Unix.O_WRONLY ] 0o200 in
+          let pid =
+            Exn.protect
+              ~finally:(fun () -> List.iter [ out; inp; err ] ~f:Unix.close)
+              ~f:(fun () ->
+                Unix.create_process_env bash [| bash; script |] (force isolated_environment) inp out
+                  err)
+          in
+          (pid, script, output))
+    in
+    List.map started ~f:(fun (pid, script, output) ->
+        ignore (Unix.waitpid [] pid : int * Unix.process_status);
+        let said = String.strip (In_channel.read_all output) in
+        List.iter [ script; output ] ~f:(fun path -> try Stdlib.Sys.remove path with _ -> ());
+        said)
+
+  let controls () =
+    List.iter cases ~f:(fun (name, text, expected) ->
+        let actual = List.map (findings (C.read text)) ~f:line_of in
+        if not (List.equal Int.equal actual expected) then
+          eprintf "trap-order case %s: expected lines %s, found %s\n" name
+            (String.concat ~sep:"," (List.map expected ~f:Int.to_string))
+            (String.concat ~sep:"," (List.map actual ~f:Int.to_string));
+        Verdict.pf "trap-order fixture %s is classified as specified" name
+          (List.equal Int.equal actual expected));
+    (* Each refusal, reached from a fixture and observed under its own format. *)
+    let refuses text ~expected ~format =
+      let messages = ref [] in
+      report ~fail:(fun message -> messages := message :: !messages) ~rel:"fixture.sh" (C.read text);
+      let refused = List.mem !messages expected ~equal:String.equal in
+      if refused then
+        Test_scan.Refusal_control_manifest.observe_failure
+          ~source:"test/operations/shell_scripts_parse.ml" ~format;
+      refused
+    in
+    Verdict.p "a TERM trap after an EXIT trap reaches the trap-order refusal"
+      (refuses "trap : EXIT\ntrap 'exit 143' TERM\n"
+         ~expected:
+           "fixture.sh:2: `trap` on TERM after the EXIT trap at line 1: a subshell of this shell \
+            defers TERM instead of dying on delivery; trap it before the EXIT trap \
+            (gh-ocannl-2332)"
+         ~format:
+           "%s:%d: `trap` on %s after %s at line %d: a subshell of this shell defers %s instead of \
+            dying on delivery; trap it before the EXIT trap (gh-ocannl-2332)");
+    Verdict.p "a trap on an expanded signal reaches the unread-signal refusal"
+      (refuses "trap 'exit 1' \"$sig\"\n"
+         ~expected:
+           "fixture.sh:1: `trap` names `$sig`, which the trap-order check cannot read as a signal; \
+            spell it as a literal signal name"
+         ~format:
+           "%s:%d: `trap` names `%s`, which the trap-order check cannot read as a signal; spell it \
+            as a literal signal name");
+    Verdict.p "a trap in a script whose structure is lost reaches the unread-structure refusal"
+      (refuses "trap 'exit 1' TERM\n}\n"
+         ~expected:
+           "fixture.sh:2: the trap order of this script is unread: its shells could not be told \
+            apart (`}` does not close or continue the innermost open construct (the top level))"
+         ~format:
+           "%s:%d: the trap order of this script is unread: its shells could not be told apart (%s)");
+    Verdict.p_empty "a script whose structure is lost but that holds no trap is not refused here"
+      ~over:[ "echo x\n}\n" ]
+      (findings (C.read "echo x\n}\n"));
+    (* The rows, against the host's bash: resolved, and refused when absent, as a script's checker
+       is. MSYS emulates fork and signals, so Windows reads only the fixtures above. *)
+    let rel = "trap-order execution controls" in
+    let measurable = not Stdlib.Sys.win32 in
+    let bash =
+      if measurable then resolve ~rel (Shebang.Via_env { env_path = ""; command = "bash" })
+      else Error ""
+    in
+    let observed =
+      match bash with
+      | Ok bash ->
+          (* A caller under nohup or a detached slot hands its ignored HUP down, and a signal
+             ignored at entry cannot be trapped: the rows run with their signals at the default. *)
+          let row_signals = [ Stdlib.Sys.sighup; Stdlib.Sys.sigterm; Stdlib.Sys.sigusr1 ] in
+          let previous =
+            List.map row_signals ~f:(fun signal ->
+                (signal, Stdlib.Sys.signal signal Stdlib.Sys.Signal_default))
+          in
+          let said =
+            Exn.protect
+              ~finally:(fun () ->
+                List.iter previous ~f:(fun (signal, behavior) ->
+                    Stdlib.Sys.set_signal signal behavior))
+              ~f:(fun () ->
+                run_all bash
+                  (List.map rows ~f:(fun (_, template, signal, _) ->
+                       String.substr_replace_all template ~pattern:"@@" ~with_:(probe signal))))
+          in
+          List.map said ~f:Option.some
+      | Error reason ->
+          if measurable then Verdict.fail (Printf.sprintf "%s: %s" rel reason);
+          List.map rows ~f:(fun _ -> None)
+    in
+    List.iter2_exn rows observed ~f:(fun (name, template, _, lines) said ->
+        let text = String.substr_replace_all template ~pattern:"@@" ~with_:":\n" in
+        let flagged =
+          List.filter_map
+            (findings (C.read text))
+            ~f:(function
+              | Deferred { line; _ } -> Some line | Unread_signal _ | Unread_structure _ -> None)
+        in
+        let deferred = not (List.is_empty lines) in
+        let either = List.Assoc.find version_dependent name ~equal:String.equal in
+        let expected =
+          match either with
+          | Some _ -> "deferred or default"
+          | None -> if deferred then "deferred" else "default"
+        in
+        let bash_holds said =
+          match either with
+          | Some _ -> List.mem [ "deferred"; "default" ] said ~equal:String.equal
+          | None -> String.equal said expected
+        in
+        let holds =
+          List.equal Int.equal flagged lines && Option.value_map said ~default:false ~f:bash_holds
+        in
+        if measurable && not holds then
+          eprintf "trap-order execution control %s: flagged lines %s, bash said %s (want %s)\n" name
+            (String.concat ~sep:"," (List.map flagged ~f:Int.to_string))
+            (Option.value said ~default:"nothing")
+            expected;
+        Verdict.gated ~aggregation:`Environment ~when_:measurable
+          ~on:"Windows, whose bash emulates fork and signals"
+          (Printf.sprintf "trap-order execution control %s: %s, and flagged %s" name
+             (match either with
+             | Some versions -> versions
+             | None ->
+                 if deferred then "bash defers the signal in a subshell"
+                 else "a subshell dies on delivery")
+             (if deferred then "there" else "nowhere"))
+          holds)
+end
+
 module Harness_contract = struct
   (* test-run.sh and test-harnesses.sh are production entrypoints, not fixture harnesses, and
      test-test-run.sh is the command that runs the members of test-run.sh's harness, with no leg of
@@ -4013,6 +4719,9 @@ let () =
   Errexit_and_list.controls ();
   Errexit_execution_controls.controls ();
   Harness_contract.controls ();
+  Trap_order.controls ();
+  (* The floor below counts the repository's trap commands, not the fixtures'. *)
+  Trap_order.trap_sites := 0;
   let base = base_dir argv.(1) in
   (* Reported repository-relative, opened as dune handed them over: the working directory is deep in
      the build tree and the paths arrive relative to it. *)
@@ -4047,6 +4756,7 @@ let () =
       Shell_context.report ~fail:Verdict.fail ~rel context;
       Errexit_negation.report ~fail:Verdict.fail ~rel context;
       Errexit_and_list.report ~fail:Verdict.fail ~rel context;
+      Trap_order.report ~fail:Verdict.fail ~rel context;
       match Shebang.parse first_line with
       | Error reason -> Verdict.fail (Printf.sprintf "%s: %s" rel reason)
       | Ok parsed ->
@@ -4084,6 +4794,11 @@ let () =
             List.iter complaints ~f:(fun complaint -> eprintf "  %s: %s\n" rel complaint);
             Verdict.p_empty (Printf.sprintf "%s parses" rel) ~over:usable complaints);
   eprintf "shell scripts scanned: %d\n" (List.length scripts);
+  eprintf "trap commands read: %d (not part of the golden)\n" !Trap_order.trap_sites;
+  Verdict.p
+    "the trap-order check read no fewer trap commands than its floor, well below the repository's \
+     count"
+    (!Trap_order.trap_sites >= trap_floor);
   Verdict.pf "the scan reached at least the %d shell scripts this repository is known to have"
     script_floor
     (List.length scripts >= script_floor);
