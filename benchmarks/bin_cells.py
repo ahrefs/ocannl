@@ -69,7 +69,9 @@ revisions.
   non-reference arm the PAIRED ratio against the first arm, round by round -- the median ratio, its
   range, in how many rounds the arm was faster, and the exact two-sided sign-test p. Twelve paired
   rounds can resolve a 5% effect that overlapping intervals of single runs read as parity
-  (gh-ocannl-755's twelve pairs).
+  (gh-ocannl-755's twelve pairs). Repeat `--pair A:B` to also report A / B for named arms,
+  in either a new run or `bin_cells.py report DIR`. Named pairs use the same successful cell
+  records and join by variant and round.
 
 When a variant has an arm whose cells fall into two modes (a device or process state), its pooled
 ratios mix them: the report's Modes section states `cells.MODE_RULE`, names the bimodal arms, and
@@ -284,7 +286,7 @@ def mode_lines(arms, variants, by):
     return lines
 
 
-def render_report(manifest, records, problems, title="bin/ bench cells", extra=()):
+def render_report(manifest, records, problems, title="bin/ bench cells", extra=(), *, pairs=()):
     arms = [a["label"] for a in manifest["arms"]]
     rounds = manifest["rounds"]
     lines = [f"# {title}: {display_value(manifest['bench'])} on {manifest['backend']}", ""]
@@ -349,13 +351,19 @@ def render_report(manifest, records, problems, title="bin/ bench cells", extra=(
     else:
         lines.append("No cell reported a result.")
     if len(arms) > 1 and variants:
-        ref = arms[0]
-        lines += ["", f"## Paired against {display_value(ref)} (ratio = arm / reference, per round)",
-                  ""]
-        rows = [(display_value(v), display_value(a),
-                 *cells.paired_cells(cells.paired(by.get((v, ref), {}), by.get((v, a), {}))))
-                for v in variants for a in arms[1:]]
-        lines += table_lines(("variant", "arm", *cells.PAIRED_HEADER), rows, "llrrrrr")
+        comparisons = {arms[0]: arms[1:]}
+        for arm, ref in pairs:
+            compared = comparisons.setdefault(ref, [])
+            if arm not in compared:
+                compared.append(arm)
+        for ref, compared in comparisons.items():
+            lines += ["",
+                      f"## Paired against {display_value(ref)} (ratio = arm / reference, per round)",
+                      ""]
+            rows = [(display_value(v), display_value(a),
+                     *cells.paired_cells(cells.paired(by.get((v, ref), {}), by.get((v, a), {}))))
+                    for v in variants for a in compared]
+            lines += table_lines(("variant", "arm", *cells.PAIRED_HEADER), rows, "llrrrrr")
     if variants:
         lines += mode_lines(arms, variants, by)
 
@@ -432,12 +440,31 @@ def parse_assignment(text):
     return env
 
 
+def add_pair_argument(parser):
+    parser.add_argument("--pair", action="append", default=[], metavar="A:B",
+                        help="also report A / B for two named arms (repeatable)")
+
+
+def resolve_pairs(specs, arms, parser):
+    labels = {a["label"] for a in arms}
+    pairs = []
+    for spec in specs:
+        arm, _, ref = spec.partition(":")
+        if not LABEL_RE.fullmatch(arm) or not LABEL_RE.fullmatch(ref) or arm == ref:
+            parser.error(f"--pair {spec!r}: expected A:B with two distinct arm labels")
+        for label in (arm, ref):
+            if label not in labels:
+                parser.error(f"--pair {spec!r}: unknown arm {label!r}")
+        pairs.append((arm, ref))
+    return pairs
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="bin_cells.py", description=__doc__.split("\n\n", 1)[0],
         usage="%(prog)s [--bench NAME | --exe PATH] --backend B --out DIR [--rounds R] "
               "[--arm LABEL=ARGS]... [--arm-exe LABEL=PATH]... [--env NAME=VALUE]... "
-              "[--cell-timeout S] [-- BENCH-ARGS...]")
+              "[--pair A:B]... [--cell-timeout S] [-- BENCH-ARGS...]")
     which = parser.add_mutually_exclusive_group()
     which.add_argument("--bench", help="a bin/ executable's dune name, built as bin/<NAME>.exe")
     which.add_argument("--exe", type=Path, help="run this prebuilt executable instead")
@@ -452,6 +479,7 @@ def build_parser():
     parser.add_argument("--arm-exe", action="append", type=parse_arm_exe, default=[],
                         help="LABEL=PATH: the arm LABEL runs this prebuilt executable (an arm "
                              "named only here takes no arguments of its own)")
+    add_pair_argument(parser)
     parser.add_argument("--env", action="append", type=parse_assignment, default=[],
                         help="NAME=VALUE stated in every cell's environment (BENCH_*, OMP_*, ...; "
                              "never OCANNL_*)")
@@ -541,11 +569,13 @@ def report_main(argv):
         prog="bin_cells.py report",
         description="Re-render a finished run's report from its manifest.json and cells.jsonl.")
     parser.add_argument("run_dir", type=Path, metavar="RUN_DIR")
+    add_pair_argument(parser)
     args = parser.parse_args(argv)
     try:
         manifest, records = cells.read_run(args.run_dir)
     except (OSError, ValueError) as e:
         parser.exit(2, f"{DRIVER} report: {args.run_dir}: {e}\n")
+    pairs = resolve_pairs(args.pair, manifest["arms"], parser)
     # A record of an older runner lacks fields the verdict reads, and one saved before the
     # configuration-record schema (gh-ocannl-1566) names no layer/origin: a usage error, never a
     # traceback or a verdict over guessed fields.
@@ -572,7 +602,7 @@ def report_main(argv):
     if missing:
         problems.append(f"the saved run is incomplete: {len(missing)} of {len(planned)} planned "
                         "cells have no record")
-    sys.stdout.write(render_report(manifest, records, problems, extra=extra))
+    sys.stdout.write(render_report(manifest, records, problems, extra=extra, pairs=pairs))
     return cells.exit_status(records, problems)
 
 
@@ -585,6 +615,7 @@ def main(argv=None, arm_commits=None, *, validate_cell=None):
     args = parser.parse_args(argv[:split])
     common = argv[split + 1:]
     arms = resolve_arms(args, parser)
+    pairs = resolve_pairs(args.pair, arms, parser)
     common_env = {k: v for e in args.env for k, v in e.items()}
     if args.metric and args.reader != "record":
         parser.exit(2, f"{DRIVER}: --metric reads a runner's result line: pass --reader record\n")
@@ -662,7 +693,7 @@ def main(argv=None, arm_commits=None, *, validate_cell=None):
     problems = cells.run_problems(manifest, records)
     report = render_report(manifest, records, problems,
                            extra=parity_lines(out, manifest, records)
-                           if args.reader == "record" else ())
+                           if args.reader == "record" else (), pairs=pairs)
     (out / "report.md").write_text(report)
     sys.stdout.write(report)
     return cells.exit_status(records, problems)

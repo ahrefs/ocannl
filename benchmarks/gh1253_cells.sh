@@ -112,12 +112,15 @@
 # (gpu_default_sketch_min_reduction=0), with and without the fill (gate0, gate0nofill):
 # model_default against the plain default, no anchor. A pick
 # whose configuration seeds a plan the timing cell did not time (a profile's auto gate deciding
-# otherwise) gets a timing cell of its own under that profile, appended to the same TSV.
+# otherwise) gets a timing cell of its own under that profile, appended to the same TSV. Before
+# that append the stock rows are saved as rank_<site>.tsv.stock for the incumbent join.
 # EXPLAIN_ONLY=<run dir> re-scores a past run's timed sites at this checkout's revision, timing
 # no candidate (a correctness batch, not a measurement): per site of SITES only the `shipped` and
 # `ceilings` listing cells run (the RANK_ONLY constants, BENCH_TUNE=0 pinned), and
 # gh1442_agreement.py joins them to <run dir>/rank_<site>.tsv -- that run's rows, read and never
-# written. BENCH_PICK=1 adds each arm's pick line, whose pick_ms/untuned_ms are the cell's own
+# written. Preset attribution comes from the stock _time.err and _time_rN.err censuses when
+# retained, using the .tsv.stock snapshot when the run appended profile rows.
+# BENCH_PICK=1 adds each arm's pick line, whose pick_ms/untuned_ms are the cell's own
 # in-process timing (advisory: a rerun moves them, nothing else). Running it at two revisions
 # against one run dir is the before/after agreement check of a ranking-score change, on the same
 # measured rows.
@@ -421,8 +424,8 @@ else
 fi
 
 # Ranking agreement (gh-ocannl-1442). The ceilings arm drops the DRAM rate from the tiers too.
-# Every arm pins the seeding gate at threshold 32, so the seeded incumbent -- model_explain's
-# `seeded`, the tuner's F_seeded row -- is one plan whatever rates an arm scores under.
+# The stock listings pin the seeding gate at threshold 32. The timing census identifies the
+# stock incumbent, including the configured preset when seeding makes no changes.
 ceilings=()
 for flag in ${tiers[@]+"${tiers[@]}"}; do
   case "$flag" in --ocannl_model_dram_bandwidth=*) ;; *) ceilings+=("$flag") ;; esac
@@ -441,19 +444,31 @@ for site in $sites; do
       --ocannl_gpu_default_sketch_min_reduction=32 "${ceilings[@]}"
     fit=()
     if [[ $kind == fp8mm ]]; then fit=(--fit-mma "$out/rank_${name}_${fitted_arm}.out"); fi
-    python3 "$root/benchmarks/gh1442_agreement.py" "$rows_dir/rank_${name}.tsv" \
+    timing_census=()
+    for log in "$rows_dir/rank_${name}_time.err" "$rows_dir/rank_${name}_time_r"[0-9]*.err; do
+      if [[ -f "$log" ]]; then timing_census+=(--census "$log"); fi
+    done
+    rows="$rows_dir/rank_${name}.tsv"
+    stock_rows="$rows"
+    if [[ -f "$rows.stock" ]]; then stock_rows="$rows.stock"; fi
+    python3 "$root/benchmarks/gh1442_agreement.py" "$rows" \
       "ceilings=$out/rank_${name}_ceilings.out" "${fitted_arm}=$out/rank_${name}_${fitted_arm}.out" \
-      ${fit[@]+"${fit[@]}"} | tee "$out/rank_${name}_agreement.txt" || failed=$((failed + 1))
+      --stock-tsv "$stock_rows" ${timing_census[@]+"${timing_census[@]}"} ${fit[@]+"${fit[@]}"} |
+      tee "$out/rank_${name}_agreement.txt" || failed=$((failed + 1))
     continue
   fi
   timed=true
+  rows="$out/rank_${name}.tsv"
+  stock_rows="$rows"
+  timing_census=()
   for rep in $(seq 1 "${TIME_REPEATS:-1}"); do
     suffix=""
     if [[ $rep -gt 1 ]]; then suffix="_r$rep"; fi
     cell "rank_${name}_time$suffix" env BENCH_TUNE=1 BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
       --ocannl_gpu_default_sketch_min_reduction=32 \
-      --ocannl_autotune_keep_fraction=1 \
-      "--ocannl_autotune_calibration_file=$out/rank_${name}.tsv" ${model[@]+"${model[@]}"}
+      --ocannl_autotune_keep_fraction=1 --ocannl_autotune_log_seeding=true \
+      "--ocannl_autotune_calibration_file=$rows" ${model[@]+"${model[@]}"}
+    timing_census+=(--census "$out/rank_${name}_time$suffix.err")
     if ! $last_ok; then timed=false; fi
   done
   cell "rank_${name}_${fitted_arm}" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
@@ -539,10 +554,14 @@ for site in $sites; do
         # decoded, an escaped quote in it kept; a line it refuses (named on stderr) leaves it empty.
         seeded=$(python3 "$root/benchmarks/bench_output.py" rank-site-field "$pout" pick seeded_label) || seeded=
         if $timed && [[ -n "$seeded" && "$seeded" != none ]] &&
-          ! grep -qF "$seeded" "$out/rank_${name}.tsv"; then
+          ! grep -qF "$seeded" "$rows"; then
+          if [[ $stock_rows == "$rows" ]]; then
+            stock_rows="$rows.stock"
+            if [[ -f "$rows" ]]; then cp "$rows" "$stock_rows"; else : > "$stock_rows"; fi
+          fi
           cell "rank_${name}_time_${pname}" env BENCH_TUNE=1 BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" \
             "$rank_site" "$pflag" --ocannl_autotune_keep_fraction=1 \
-            "--ocannl_autotune_calibration_file=$out/rank_${name}.tsv" ${pflags[@]+"${pflags[@]}"}
+            "--ocannl_autotune_calibration_file=$rows" ${pflags[@]+"${pflags[@]}"}
         fi
       fi
     done
@@ -552,13 +571,15 @@ for site in $sites; do
     # leaves (the fp8 matmul).
     fit=()
     if [[ $kind == fp8mm ]]; then fit=(--fit-mma "$out/rank_${name}_${fitted_arm}.out"); fi
-    python3 "$root/benchmarks/gh1442_agreement.py" "$out/rank_${name}.tsv" \
+    python3 "$root/benchmarks/gh1442_agreement.py" "$rows" \
       "ceilings=$out/rank_${name}_ceilings.out" "nofill=$out/rank_${name}_nofill.out" \
       "nomma=$out/rank_${name}_nomma.out" "mmaonly=$out/rank_${name}_mmaonly.out" \
       "noocc=$out/rank_${name}_noocc.out" "notxn=$out/rank_${name}_notxn.out" \
       "nostg=$out/rank_${name}_nostg.out" "noilp=$out/rank_${name}_noilp.out" \
       "noshl=$out/rank_${name}_noshl.out" "nolane=$out/rank_${name}_nolane.out" \
-      "${fitted_arm}=$out/rank_${name}_${fitted_arm}.out" ${fit[@]+"${fit[@]}"} \
+      "${fitted_arm}=$out/rank_${name}_${fitted_arm}.out" --stock-tsv "$stock_rows" \
+      ${timing_census[@]+"${timing_census[@]}"} \
+      ${fit[@]+"${fit[@]}"} \
       ${picks[@]+"${picks[@]}"} |
       tee "$out/rank_${name}_agreement.txt" || failed=$((failed + 1))
     if [[ -n "${TXN_RATE:-}" ]]; then

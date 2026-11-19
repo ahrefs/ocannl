@@ -22,13 +22,29 @@ import strict_json
 GATE_KEY = "gpu_default_sketch_min_reduction"
 TSV_KEY = "autotune_calibration_file"
 CENSUS_PREFIX = "autotune-seeding: "
+CALIBRATION_COLUMNS = 12
 
 
-def one_field(census, prefix):
+def one_field(census, prefix, *, optional=False, allow_repeated=False):
     fields = [line[len(prefix):] for line in census if line.startswith(prefix)]
+    if allow_repeated:
+        fields = list(dict.fromkeys(fields))
+        if len(fields) > 1:
+            raise ValueError(f"conflicting {prefix.strip()} values in the seeding census")
+    if optional and not fields:
+        return None
     if len(fields) != 1 or not fields[0]:
         raise ValueError(f"expected exactly one {prefix.strip()} line in the seeding census")
     return fields[0]
+
+
+def preset_digest(census, *, optional=False):
+    return one_field(census, CENSUS_PREFIX + "preset-digest ", optional=optional)
+
+
+def seeding_plan(census, *, optional=False, allow_repeated=False):
+    return one_field(census, CENSUS_PREFIX + "plan ", optional=optional,
+                     allow_repeated=allow_repeated)
 
 
 def joined_row(path, backend, label, preset_digest):
@@ -37,7 +53,7 @@ def joined_row(path, backend, label, preset_digest):
         if not line or line.startswith("#"):
             continue
         fields = line.split("\t")
-        if len(fields) != 12 or fields[0] != backend:
+        if len(fields) != CALIBRATION_COLUMNS or fields[0] != backend:
             raise ValueError(f"{path}: expected a current calibration row for {backend}")
         if (fields[1] == preset_digest if preset_digest is not None else fields[3] == label):
             rows.append(fields)
@@ -69,12 +85,11 @@ def read_arm(stem, backend, arm):
         raise ValueError(f"expected a ranked gate, got {gate!r}")
     if not any(line.startswith(CENSUS_PREFIX + 'where="seeded_default segment u') for line in census):
         raise ValueError("missing seeded-default segment census")
-    label = one_field(census, CENSUS_PREFIX + "plan ")
+    label = seeding_plan(census)
     if not label.startswith(("F_preset[", "F_seeded[")):
         raise ValueError(f"unrecognized seeded plan label {label!r}")
-    preset_digest = (one_field(census, CENSUS_PREFIX + "preset-digest ")
-                     if label.startswith("F_preset[") else None)
-    digest, routine, row_label, ms = joined_row(tsv, backend, label, preset_digest)
+    attribution = preset_digest(census) if label.startswith("F_preset[") else None
+    digest, routine, row_label, ms = joined_row(tsv, backend, label, attribution)
     timed_as = f" timed_as={row_label!r}" if row_label != label else ""
     return config, gate.split(), (f"{arm}: joined=1 label={label!r}{timed_as} routine={routine!r} "
                     f"digest={digest} measured_ms={ms:.6f}", *census), routine

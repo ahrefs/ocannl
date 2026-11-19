@@ -2,7 +2,7 @@
 """gh-ocannl-1442: how well a ranking score orders what the autotuner measured at one site.
 
 Usage: gh1442_agreement.py TSV NAME=EXPLAIN [NAME=EXPLAIN ...] [--pick NAME=OUT ...] [--band B]
-                           [--fit-mma EXPLAIN]
+                           [--fit-mma EXPLAIN] [--census TIMING_STDERR ...] [--stock-tsv TSV]
 
   TSV      the calibration rows the site's tuning cell appended (config autotune_calibration_file:
            backend, digest, routine, label, measured ms, ...), one per timed candidate.
@@ -15,10 +15,18 @@ Usage: gh1442_agreement.py TSV NAME=EXPLAIN [NAME=EXPLAIN ...] [--pick NAME=OUT 
   --fit-mma  a bench_rank_site.exe stdout whose explain lines carry `mma_work=` and `gathers=`
            (gh-ocannl-1495): fits the ranking score's tile-MMA and device-gather rates from the
            tensorized leaves joined to the rows (see below).
+  --census the stderr of a stock timing cell (repeatable). Reads only `autotune-seeding: plan`
+           and `autotune-seeding: preset-digest` records. Plan records can recur during pick and
+           tune. The recorded values must agree within a log and across the stock cells.
+  --stock-tsv the stock timing cells' calibration rows if TSV also holds rows from profile cells.
+           A digest join needs a positive measurement in a current 12-column stock row.
 
 The explain lines and the rows join by label: model_explain labels its sketch leaves as the tuner
-does; its incumbent `default` is the tuner's `baseline` row and `seeded` its `F_seeded[...]` row.
-A candidate measured more than once keeps its fastest time.
+does. The stock `seeded` uses the census's plan, which can be a configured preset when seeding
+makes no changes. The `default` and that preset join using the tuner's preset digest, including
+schedules timed under another label (`timed_as` in the report). A needed preset with a missing
+timing is reported as `preset_unmatched`. A serial `default` uses `baseline`. With no census,
+`seeded` uses a single `F_seeded[...]` label if available. Repeated readings keep the fastest.
 
 Per score: the joined candidates; the DECIDED pairs (measured apart by more than the band); how
 many of them the score orders as measured (a score tie orders none); and the score's argmin, with
@@ -42,7 +50,7 @@ What model_default actually picks is read off the compile instead (gh-ocannl-147
 the label joined to its measured row as above, its time, the seeded plan's, and their ratio
 (`pick_over_seeded`). A `seeded` pick joins only the F_seeded row whose label is the line's
 `seeded_label`, the plan its own configuration seeds (content digest included), or, where that plan
-seeds nothing (`none`), the `baseline` row; and a `seeded` pick that names its plan passes as that
+seeds nothing (`none`), the default's row; and a `seeded` pick that names its plan passes as that
 very plan (ratio 1 by construction) whether or not the timing cell timed it -- an approximate
 profile's plan is not the timing cell's. A leaf pick needs its own row and its configuration's
 seeded plan's row both timed. An explicit --pick output without a pick line fails too. A pick that does not join a measured row is reported
@@ -65,8 +73,29 @@ missing (not an error: the agreement analysis goes on).
 import argparse
 import math
 import sys
+from typing import NamedTuple
 
 import bench_output
+from gh1253_gate_compare import CALIBRATION_COLUMNS, preset_digest, seeding_plan
+
+
+class Timing(NamedTuple):
+    label: str
+    ms: float
+
+
+class StockTiming(NamedTuple):
+    plan: str | None
+    digest: str | None
+    times: dict[str, float]
+    preset: Timing | None
+
+    def uses_preset(self, label):
+        preset_plan = self.plan is not None and self.plan.startswith("F_preset[")
+        if label == "seeded":
+            return preset_plan
+        return label == "default" and (preset_plan or self.digest is not None)
+
 
 # The rank-site lines are read by bench_output's one reader of them (gh-ocannl-1767): fields by
 # name, labels decoded as the OCaml literals they are.
@@ -106,7 +135,7 @@ def pick_timing(path):
     return None
 
 
-def report_pick(name, path, times, required):
+def report_pick(name, path, times, stock, required):
     """Prints the pick line; False when there is a pick that does not join a measured row, or when
     a [required] output (an explicit --pick) carries no pick line at all."""
     label, seeded_label = pick_of(path)
@@ -116,6 +145,8 @@ def report_pick(name, path, times, required):
     # times one segment of the routine.
     whole = [ms for lbl, ms in times.items()
              if lbl.startswith(("W_sketch[", "F_seeded[")) or lbl == "baseline"]
+    if stock.preset is not None:
+        whole.append(stock.preset.ms)
     best = min(whole) if whole else min(times.values())
     own = pick_timing(path)
     if own is None:
@@ -129,30 +160,29 @@ def report_pick(name, path, times, required):
                     f" pick_over_untuned={ratio} [{lo}, {hi}] resolved={resolved}")
 
     def over_best(row):
-        return (f" pick_over_best={times[row] / best:.3f}" if row is not None else "") + own_text
+        return (f" pick_over_best={row.ms / best:.3f}" if row is not None else "") + own_text
 
     if label is None:
         print(f"{name}: pick none (no `rank-site: pick` line)")
         return not required
-    # The seeded plan of the pick's own configuration: the very plan its seeding derives (a profile's
-    # auto gate can seed a different plan than the timing cell's pinned threshold), the `baseline`
-    # row where that plan seeds, splits and sinks nothing (`none`); the timed F_seeded row only for
-    # an older pick line that does not name it.
+    # Explicit pick cells can run under different configurations, so their named seeded plans
+    # can use the extra rows and their own timing supplies the comparison to their untuned plan.
+    lookup_stock = None if required else stock
     if seeded_label is None:
-        seeded = row_label("seeded", times)
+        seeded = measured_row("seeded", times, lookup_stock)
     elif seeded_label == "none":
-        seeded = row_label("default", times)
+        seeded = measured_row("default", times, lookup_stock)
     else:
-        seeded = seeded_label if seeded_label in times else None
+        seeded = Timing(seeded_label, times[seeded_label]) if seeded_label in times else None
     if label == "seeded" and seeded_label is not None:
         # The pick IS the configuration's seeded plan: no slower by construction, timed or not (an
         # approximate profile's plan differs from the timing cell's, its digest with it).
-        timed = (f" row={seeded!r} measured_ms={times[seeded]:.6f}" if seeded is not None
+        timed = (f" row={seeded.label!r} measured_ms={seeded.ms:.6f}" if seeded is not None
                  else " (that plan untimed here)")
         print(f"{name}: pick label='seeded' seeded_label={seeded_label!r}{timed}"
               f" pick_over_seeded=1.000 (the same plan){over_best(seeded)}")
         return True
-    row = seeded if label == "seeded" else row_label(label, times)
+    row = seeded if label == "seeded" else measured_row(label, times, lookup_stock)
     if row is None:
         if own is not None:
             # Not a row of the timing cell's, but timed by the pick cell beside its untuned plan.
@@ -164,19 +194,43 @@ def report_pick(name, path, times, required):
     if seeded is None and seeded_label is not None:
         # The pick is timed, but not the plan it is to be compared with -- unless the pick cell
         # timed both itself.
-        print(f"{name}: pick label={label!r} row={row!r} measured_ms={times[row]:.6f}"
+        print(f"{name}: pick label={label!r} row={row.label!r} measured_ms={row.ms:.6f}"
               f" seeded_unmatched seeded_label={seeded_label!r}{over_best(row)}")
         return own is not None
-    line = f"{name}: pick label={label!r} row={row!r} measured_ms={times[row]:.6f}"
+    line = f"{name}: pick label={label!r} row={row.label!r} measured_ms={row.ms:.6f}"
     if seeded is not None:
-        line += (f" seeded_ms={times[seeded]:.6f}"
-                 f" pick_over_seeded={times[row] / times[seeded]:.3f}")
+        line += (f" seeded_ms={seeded.ms:.6f}"
+                 f" pick_over_seeded={row.ms / seeded.ms:.3f}")
     print(line + over_best(row))
     return True
 
 
-def measured(path):
+def stock_attribution(paths):
+    plans = set()
+    digests = set()
+    for path in paths:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            census = f.read().split("\n")
+        try:
+            plan = seeding_plan(census, optional=True, allow_repeated=True)
+            digest = preset_digest(census, optional=True)
+        except ValueError as e:
+            raise ValueError(f"{path}: {e}") from e
+        if plan is not None:
+            if not plan.startswith(("F_preset[", "F_seeded[")):
+                raise ValueError(f"{path}: unrecognized stock plan {plan!r}")
+            plans.add(plan)
+        if digest is not None:
+            digests.add(digest)
+    for field, values in (("plan", plans), ("preset digest", digests)):
+        if len(values) > 1:
+            raise ValueError(f"stock timing censuses disagree on the {field}: {sorted(values)}")
+    return next(iter(plans), None), next(iter(digests), None)
+
+
+def measured(path, attribution):
     times = {}
+    preset = None
     with open(path) as f:
         for line in f:
             cols = line.rstrip("\n").split("\t")
@@ -188,7 +242,13 @@ def measured(path):
                 continue
             label = cols[3]
             times[label] = min(ms, times.get(label, float("inf")))
-    return times
+            # A label can cover several digests. Keep the attributed reading independently
+            # so a faster namesake cannot stand in for it.
+            if attribution is not None and len(cols) == CALIBRATION_COLUMNS \
+                    and cols[1] == attribution and math.isfinite(ms) and ms > 0:
+                if preset is None or ms < preset.ms:
+                    preset = Timing(label, ms)
+    return times, preset
 
 
 def scores(path):
@@ -200,7 +260,7 @@ def scores(path):
     return out
 
 
-def fit_mma(path, times):
+def fit_mma(path, times, stock):
     """gh-ocannl-1495: prints the fitted tile-MMA and device-gather rates; False when nothing fits."""
     leaves = []
     for f in _rank_site(path, "explain"):
@@ -208,10 +268,10 @@ def fit_mma(path, times):
         if "n/a" in (work, gathers):
             continue
         label = f["label"]
-        row = row_label(label, times)
+        row = measured_row(label, times, stock)
         work, gathers = float(work), float(gathers)
         if row is not None and work > 0:
-            leaves.append((label, times[row] / 1e3, work, gathers))
+            leaves.append((label, row.ms / 1e3, work, gathers))
     staged = [(l, t, w) for l, t, w, g in leaves if g == 0]
     if not staged:
         print("mma-fit: none (no timed tensorized leaf without device gathers)")
@@ -234,13 +294,20 @@ def fit_mma(path, times):
     return True
 
 
-def row_label(label, times):
+def measured_row(label, times, stock):
+    if stock is not None and stock.uses_preset(label):
+        return stock.preset
     if label == "default":
-        return "baseline" if "baseline" in times else None
-    if label == "seeded":
-        seeded = [t for t in times if t.startswith("F_seeded[")]
-        return seeded[0] if len(seeded) == 1 else None
-    return label if label in times else None
+        label = "baseline"
+    elif label == "seeded":
+        if stock is not None and stock.plan is not None:
+            label, times = stock.plan, stock.times
+        else:
+            seeded = [t for t in times if t.startswith("F_seeded[")]
+            if len(seeded) != 1:
+                return None
+            label = seeded[0]
+    return Timing(label, times[label]) if label in times else None
 
 
 def decided_pairs(joined, band):
@@ -259,23 +326,37 @@ def main():
     ap.add_argument("--pick", action="append", default=[])
     ap.add_argument("--band", type=float, default=0.10)
     ap.add_argument("--fit-mma", dest="fit_mma")
+    ap.add_argument("--census", action="append", default=[], metavar="TIMING_STDERR",
+                    help="stock timing cell's stderr for preset attribution (repeatable)")
+    ap.add_argument("--stock-tsv", help="calibration rows from the stock timing cells")
     args = ap.parse_args()
-    times = measured(args.tsv)
+    try:
+        plan, digest = stock_attribution(args.census)
+        if args.stock_tsv and args.stock_tsv != args.tsv:
+            times, _ = measured(args.tsv, None)
+            stock_times, preset = measured(args.stock_tsv, digest)
+        else:
+            times, preset = measured(args.tsv, digest)
+            stock_times = times
+        stock = StockTiming(plan, digest, stock_times, preset)
+    except (OSError, ValueError) as e:
+        print(f"gh1442_agreement: {e}", file=sys.stderr)
+        return 2
     if not times:
         print(f"gh1442_agreement: no calibration rows in {args.tsv}", file=sys.stderr)
         return 2
     if args.fit_mma is not None:
         # A site with no timed tensorized leaf (a backend with no fp8 arm) has nothing to fit: the
         # `mma-fit: none` line says so, and the agreement analysis goes on.
-        fit_mma(args.fit_mma, times)
+        fit_mma(args.fit_mma, times, stock)
     results = []
-    picks_ok = True
+    report_ok = True
     for spec in args.pick:
         if "=" not in spec:
             print(f"gh1442_agreement: expected NAME=OUT after --pick, got {spec}", file=sys.stderr)
             return 2
         name, path = spec.split("=", 1)
-        picks_ok = report_pick(name, path, times, required=True) and picks_ok
+        report_ok = report_pick(name, path, times, stock, required=True) and report_ok
     for spec in args.explain:
         if "=" not in spec:
             print(f"gh1442_agreement: expected NAME=EXPLAIN, got {spec}", file=sys.stderr)
@@ -285,12 +366,15 @@ def main():
         order = {}
         admitted = set()
         for label, (rank, pos, adm) in scores(path).items():
-            row = row_label(label, times)
+            row = measured_row(label, times, stock)
             if row is not None:
-                joined[label] = (times[row], rank)
+                joined[label] = (row.ms, rank)
                 order[label] = pos
                 if adm:
                     admitted.add(label)
+            elif stock.uses_preset(label):
+                print(f"{name}: preset_unmatched label={label!r} digest={stock.digest or 'unavailable'}")
+                report_ok = False
         if len(joined) < 2:
             print(f"gh1442_agreement: {name}: fewer than two candidates join the rows",
                   file=sys.stderr)
@@ -306,8 +390,9 @@ def main():
               f" argmin_slowdown={joined[pick][0] / joined[best][0]:.3f}")
         for label in sorted(joined, key=lambda l: joined[l][0]):
             t, r = joined[label]
+            timed_as = f" timed_as={stock.preset.label!r}" if stock.uses_preset(label) else ""
             print(f"  {name}: {label!r} measured_ms={t:.6f} rank_ms={r:.6f}"
-                  f" admitted={str(label in admitted).lower()}")
+                  f" admitted={str(label in admitted).lower()}{timed_as}")
         for set_name, members in (
             ("admitted", [l for l in admitted if "coal-" not in l]),
             ("admitted+coalesced", list(admitted)),
@@ -322,7 +407,7 @@ def main():
                   f" fastest={set_best!r} fastest_ms={joined[set_best][0]:.6f}"
                   f" rank_ms_of_fastest={joined[set_best][1]:.6f}"
                   f" argmin_slowdown={joined[set_pick][0] / joined[set_best][0]:.3f}")
-        picks_ok = report_pick(name, path, times, required=False) and picks_ok
+        report_ok = report_pick(name, path, times, stock, required=False) and report_ok
         results.append((name, set(pairs), right))
     if len(results) > 1:
         first, first_pairs, first_right = results[0]
@@ -334,7 +419,7 @@ def main():
                   f" regressions={len(regressions)} improvements={len(improvements)}")
             for faster, slower in regressions:
                 print(f"  regression: {faster!r} measured faster than {slower!r}")
-    return 0 if picks_ok else 1
+    return 0 if report_ok else 1
 
 
 if __name__ == "__main__":

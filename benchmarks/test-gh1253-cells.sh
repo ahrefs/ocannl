@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ocannl-harness: standalone
 # Exercise gh1253_cells.sh's gate-pair preflight, cell order and census/row join.
+# The stock ranking report and its replay also join the incumbent by attribution.
 # The scratch driver uses the real cells.py and a synthetic runner. A dune
 # command recorder and the runner replace compilation, hardware and fixtures.
 # Usage: benchmarks/test-gh1253-cells.sh [--keep|--only REGEX|--help]
@@ -16,7 +17,8 @@ tree="$TMP/tree"
 exe="$tree/_build/default/benchmarks/runners/ocannl/bench_rank_site.exe"
 mkdir -p "$tree/benchmarks" "$(dirname "$exe")" "$TMP/shims" "$TMP/runs"
 cp "$here/cells.py" "$here/cell_group.py" "$here/config_records.py" "$here/display_safe.py" \
-  "$here/strict_json.py" "$here/gh1253_gate_compare.py" "$tree/benchmarks/" || exit 2
+  "$here/strict_json.py" "$here/bench_output.py" "$here/gh1253_gate_compare.py" \
+  "$here/gh1442_agreement.py" "$tree/benchmarks/" || exit 2
 git -C "$tree" init -q &&
   git -C "$tree" -c user.name=Fixture -c user.email=fixture@example.invalid \
     -c commit.gpgsign=false commit -q --allow-empty -m "Initialize scratch tree" || exit 2
@@ -44,7 +46,59 @@ for arg in sys.argv[1:]:
     key, value = arg.removeprefix("--ocannl_").split("=", 1)
     opts[key] = value
     record(key, value, arg)
-arm = opts["gpu_default_sketch_min_reduction"]
+arm = opts.get("gpu_default_sketch_min_reduction", "32")
+scenario = os.environ.get("STUB_MUTATION")
+preset_digest = "33333333/cccccccc"
+preset_timed_as = "W_preset[bs=256]"
+preset = "F_preset[bs=cfg cfg-thresh]"
+if arm == "32":
+    stock_seed = "F_seeded[stock]"
+    profile_seed = "F_seeded[profile]"
+    serial = scenario in (None, "stock-serial-ambiguous")
+    preset_untimed = scenario in ("stock-preset-unused", "stock-preset-needed")
+    incumbent = "seeded" if scenario in ("stock-seeded-preset", "stock-preset-unused") else "default"
+    if os.environ.get("BENCH_TUNE") != "1":
+        print(f'rank-site: explain label="{incumbent}" rank_ms=0.5 admitted=true')
+        if serial:
+            print('rank-site: explain label="seeded" rank_ms=0.75 admitted=true')
+        print('rank-site: explain label="W_sketch[control]" rank_ms=1.25 admitted=true')
+        if preset_untimed:
+            print('rank-site: explain label="W_sketch[second]" rank_ms=1.50 admitted=true')
+        if os.environ.get("BENCH_PICK") == "1":
+            seeded_label = profile_seed if "profile" in opts else "none"
+            print(f'rank-site: pick label="seeded" seeded_label="{seeded_label}"')
+        sys.exit()
+    if "profile" in opts:
+        rows = [(preset_timed_as, preset_digest, "0.05"), (profile_seed, "55555555/eeeeeeee", "0.125")]
+    elif scenario in ("stock-preset", "stock-seeded-preset", "stock-preset-conflict") or preset_untimed:
+        if opts.get("autotune_log_seeding") == "true":
+            plan = stock_seed if scenario == "stock-preset-unused" else preset
+            print("autotune-seeding: plan", plan, file=sys.stderr)
+            if os.environ.get("BENCH_PICK") == "1":
+                pick_plan = stock_seed if scenario == "stock-preset-conflict" else plan
+                print("autotune-seeding: plan", pick_plan, file=sys.stderr)
+            print("autotune-seeding: preset-digest", preset_digest, file=sys.stderr)
+        if preset_untimed:
+            rows = [(stock_seed, "66666666/ffffffff", "0.50"),
+                    ("W_sketch[second]", "77777777/aaaaaaaa", "1.50")]
+        else:
+            ms = "0.25" if Path.cwd().name.endswith("_r2") else "0.50"
+            rows = [(preset_timed_as, preset_digest, ms),
+                    (preset_timed_as, "44444444/dddddddd", "0.10")]
+    else:
+        if opts.get("autotune_log_seeding") == "true":
+            print("autotune-seeding: plan", stock_seed, file=sys.stderr)
+        rows = [("baseline", "22222222/bbbbbbbb", "0.50"),
+                (stock_seed, "66666666/ffffffff", "0.75")]
+        if scenario == "stock-serial-ambiguous":
+            rows.append((profile_seed, "55555555/eeeeeeee", "0.25"))
+    rows.append(("W_sketch[control]", "11111111/aaaaaaaa", "1.25"))
+    with open(opts["autotune_calibration_file"], "a") as tsv:
+        for name, digest, ms in rows:
+            print(opts["backend"], digest, "rs_stub", name, ms, "", 1, 4, 8, "false", "false",
+                  "false", sep="\t", file=tsv)
+    sys.exit()
+
 assert opts["autotune_keep_fraction"] == "1"
 assert os.environ["BENCH_TUNE"] == "1"
 with open(os.environ["CALLS"], "a") as calls:
@@ -52,9 +106,7 @@ with open(os.environ["CALLS"], "a") as calls:
           Path.cwd().name, arm, file=calls)
 label = "F_seeded[2 segs, 1 seeded, 0 sunk, 0 split, plan aaaaaaaa]"
 legacy = "F_seeded[2 segs, 1 seeded, 0 sunk, 0 split, plan bbbbbbbb]"
-scenario = os.environ.get("STUB_MUTATION")
 mutation = scenario if arm == "auto-legacy" else None
-preset = "F_preset[bs=cfg cfg-thresh]"
 preset_arm = mutation in ("preset", "preset-dedup", "preset-wrong-digest")
 selected = label if arm == "auto" or scenario == "equivalent" else legacy
 if preset_arm:
@@ -69,13 +121,12 @@ if mutation != "census":
     verdict = "refused: score tie" if selected == preset else "seeded: geometry"
     print('autotune-seeding: where="seeded_default segment u0"', verdict, file=sys.stderr)
 print("autotune-seeding: plan", selected, file=sys.stderr)
-preset_digest = "33333333/cccccccc"
 if preset_arm:
     attribution = "44444444/dddddddd" if mutation == "preset-wrong-digest" else preset_digest
     print("autotune-seeding: preset-digest", attribution, file=sys.stderr)
 with open(opts["autotune_calibration_file"], "w") as rows:
     auto_ms, legacy_ms = ("1.25", "8.00") if arm == "auto" else ("9.00", "2.50")
-    preset_row = "W_preset[bs=256]" if mutation in ("preset-dedup", "preset-wrong-digest") else preset
+    preset_row = preset_timed_as if mutation in ("preset-dedup", "preset-wrong-digest") else preset
     for name, digest, ms in ((label, "11111111/aaaaaaaa", auto_ms),
                              (legacy, "22222222/bbbbbbbb", legacy_ms),
                              (preset_row, preset_digest, "0.25")):
@@ -188,5 +239,84 @@ if harness_leg '4: mutated twins are rejected'; then
     check "$mutation mutation fails the pair" test "$got" = 1
     check "$mutation mutation names the failed join" grep -qF "$diagnostic" "$TMP/runs/$run/stdout"
   done
+fi
+if harness_leg '5: stock agreement uses preset attribution and retains the serial lookup'; then
+  site=rank_wgrad_1x32x32x32
+  stock_sites='SITES=wgrad:1,32,32,32'
+  preset_row="  shipped: 'default' measured_ms=0.250000 rank_ms=0.500000 admitted=true timed_as='W_preset[bs=256]'"
+  drive "$SRC" stock COMPARE_AUTO_GATE=0 RANK_ONLY=1 "$stock_sites" \
+    STUB_MUTATION=stock-preset BENCH_PICK=1
+  check 'the stock run accepts agreeing plan records from pick and tune' test "$got" = 0
+  stock_out="$TMP/runs/stock/out"
+  check 'the stock timing log contains the repeated plan' test "$(
+    grep -c '^autotune-seeding: plan ' "$stock_out/${site}_time.err")" = 2
+  check 'stock default uses the fastest row of the attributed digest' \
+    grep -qxF "$preset_row" "$stock_out/${site}_agreement.txt"
+  drive "$SRC" replay COMPARE_AUTO_GATE=0 "$stock_sites" TIME_REPEATS=1 EXPLAIN_ONLY="$stock_out"
+  check 'the preset join also works with archived timing rows and censuses' test "$got" = 0
+  check 'the replay attributes the same measured row' \
+    grep -qxF "$preset_row" "$TMP/runs/replay/out/${site}_agreement.txt"
+  drive "$SRC" conflict COMPARE_AUTO_GATE=0 RANK_ONLY=1 "$stock_sites" \
+    STUB_MUTATION=stock-preset-conflict BENCH_PICK=1
+  check 'conflicting plans within a stock timing log fail agreement' test "$got" = 1
+  check 'the agreement reader diagnoses the conflicting plan values' \
+    grep -qF 'conflicting autotune-seeding: plan values' "$TMP/runs/conflict/stdout"
+  # The serial report below is the base reader's output for the single-seeded-row fixture.
+  # A second seeded row defeats the old uniqueness heuristic.
+  serial_arms=(ceilings nofill nomma mmaonly noocc notxn nostg noilp noshl nolane shipped)
+  {
+    for arm in "${serial_arms[@]}"; do
+      cat <<SERIAL
+$arm: joined=3 decided_pairs=3 ordered_right=3 (100.0%) argmin='default' measured_ms=0.500000 fastest='default' fastest_ms=0.500000 argmin_slowdown=1.000
+  $arm: 'default' measured_ms=0.500000 rank_ms=0.500000 admitted=true
+  $arm: 'seeded' measured_ms=0.750000 rank_ms=0.750000 admitted=true
+  $arm: 'W_sketch[control]' measured_ms=1.250000 rank_ms=1.250000 admitted=true
+$arm: pick_set=admitted members=3 argmin='default' measured_ms=0.500000 rank_ms=0.500000 fastest='default' fastest_ms=0.500000 rank_ms_of_fastest=0.500000 argmin_slowdown=1.000
+$arm: pick_set=admitted+coalesced members=3 argmin='default' measured_ms=0.500000 rank_ms=0.500000 fastest='default' fastest_ms=0.500000 rank_ms_of_fastest=0.500000 argmin_slowdown=1.000
+SERIAL
+      printf '%s: pick none (no `rank-site: pick` line)\n' "$arm"
+    done
+    for arm in "${serial_arms[@]:1}"; do
+      printf '%s against ceilings: common_decided=3 regressions=0 improvements=0\n' "$arm"
+    done
+  } > "$TMP/serial-agreement.expected"
+  drive "$SRC" serial COMPARE_AUTO_GATE=0 RANK_ONLY=1 "$stock_sites"
+  check 'an unconfigured stock run succeeds' test "$got" = 0
+  check 'the complete unconfigured agreement matches the base' \
+    diff -u "$TMP/serial-agreement.expected" "$TMP/runs/serial/out/${site}_agreement.txt"
+  drive "$SRC" serial-ambiguous COMPARE_AUTO_GATE=0 RANK_ONLY=1 "$stock_sites" \
+    STUB_MUTATION=stock-serial-ambiguous
+  check 'the logged seeded plan disambiguates a second seeded label' test "$got" = 0
+  check 'the extra seeded row leaves the agreement tied to the census plan' \
+    diff -u "$TMP/serial-agreement.expected" "$TMP/runs/serial-ambiguous/out/${site}_agreement.txt"
+
+  drive "$SRC" profile COMPARE_AUTO_GATE=0 RANK_ONLY=1 "$stock_sites" \
+    STUB_MUTATION=stock-seeded-preset PICK_PROFILES=reproducible
+  check 'the stock preset and explicit profile pick both join' test "$got" = 0
+  profile_out="$TMP/runs/profile/out"
+  seeded_row="${preset_row/default/seeded}"
+  check 'the seeded incumbent uses the stock preset despite the faster profile row' \
+    grep -qxF "$seeded_row" "$profile_out/${site}_agreement.txt"
+  check 'the extra timing cell supplied its explicit profile pick row' \
+    grep -qF "reproducible: pick label='seeded' seeded_label='F_seeded[profile]' row='F_seeded[profile]' measured_ms=0.125000" \
+      "$profile_out/${site}_agreement.txt"
+  drive "$SRC" profile-replay COMPARE_AUTO_GATE=0 "$stock_sites" TIME_REPEATS=1 \
+    EXPLAIN_ONLY="$profile_out" STUB_MUTATION=stock-seeded-preset
+  check 'the archived stock preset and profile rows can be replayed' test "$got" = 0
+  check 'the replay keeps the stock timing for the seeded incumbent' \
+    grep -qxF "$seeded_row" "$TMP/runs/profile-replay/out/${site}_agreement.txt"
+
+  drive "$SRC" unused COMPARE_AUTO_GATE=0 RANK_ONLY=1 "$stock_sites" STUB_MUTATION=stock-preset-unused
+  check 'an untimed preset leaves a seeded agreement report usable' test "$got" = 0
+  check 'the separately timed seeded plan still joins' \
+    grep -qxF "  shipped: 'seeded' measured_ms=0.500000 rank_ms=0.500000 admitted=true" \
+      "$TMP/runs/unused/out/${site}_agreement.txt"
+  drive "$SRC" needed COMPARE_AUTO_GATE=0 RANK_ONLY=1 "$stock_sites" STUB_MUTATION=stock-preset-needed
+  check 'an untimed preset fails an agreement that needs it' test "$got" = 1
+  check 'the missing preset names its digest' grep -qxF \
+    "shipped: preset_unmatched label='default' digest=33333333/cccccccc" \
+    "$TMP/runs/needed/out/${site}_agreement.txt"
+  check 'the timed leaves still produce a score comparison' \
+    grep -qF 'shipped: joined=2 ' "$TMP/runs/needed/out/${site}_agreement.txt"
 fi
 finish
