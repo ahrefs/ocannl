@@ -644,7 +644,7 @@ let overwritten ?(include_ndarray_fetches = false) (comp : Asgns.comp) =
           Array.fold lhses ~init:acc ~f:(fun acc buf ->
               Option.value_map buf ~default:acc ~f:(add acc))
       | Asgns.Accum_op { lhs; _ } | Asgns.Set_vec_unop { lhs; _ } -> Set.add acc lhs
-      | Asgns.Fetch { array; _ } when include_ndarray_fetches && array.Tn.precision_from_data ->
+      | Asgns.Fetch { array; _ } when include_ndarray_fetches && Tn.ndarray_backed array ->
           Set.add acc array
       | Asgns.Fetch _ | Asgns.Noop | Asgns.Seq _ | Asgns.Block_comment _ -> acc)
 

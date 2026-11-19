@@ -1022,3 +1022,30 @@ surviving lattice leaves 3; box-level refutations 11, e.g.:
 == coarse canonical mma_tile 16^3, format tile 8^3 ==
 lattice leaves 64, all 8-step multiples of both axes: true
   open-corner lattice increment (format 8s, not canonical 16s) -> 2560 bytes
+== awkward 20^3 cpu with mutable operands: 2 seeds ==
+tree leaves = flat enumeration: true
+-- refuted --
+  fusion=unfused > pipeline=blocktile > packing=in-kernel > geometry=b16: b=16 does not divide m=20
+  fusion=unfused > pipeline=blocktile > packing=in-kernel > geometry=b8: b=8 does not divide m=20
+  fusion=unfused > pipeline=blocktile > packing=hoisted: hoisted packing needs a host-init-backed constant operand; neither operand is one
+  fusion=unfused > pipeline=tensorized > tensorized-form=whole-triple > row-block=bm64: bm=64 does not divide m=20
+  fusion=unfused > pipeline=tensorized > tensorized-form=whole-triple > row-block=bm16: bm=16 does not divide m=20
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted: no host-init-backed constant operand to pack at link time
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted-grid: no host-init-backed constant operand to pack at link time
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted-grid-pack-rest: no host-init-backed constant operand to pack at link time
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid-pack-rest > geometry=bm64 bn0 bk64: bm=64 gives 1 row block(s); a Grid split needs at least 2
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid-pack-rest > geometry=bm64 bn0 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid-pack-rest > geometry=bm128 bn128 bk128: bm=128 gives 1 row block(s); a Grid split needs at least 2
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid-pack-rest > geometry=bm64 bn128 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid-pack-rest > geometry=bm16 bn0 bk16: site Grid launch has at most 6144 scalar updates, below cc_grid_min_updates=16384; the Serial packed shape keeps this geometry
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm64 bn0 bk64: bm=64 gives 1 row block(s); a Grid split needs at least 2
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm64 bn0 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm128 bn128 bk128: bm=128 gives 1 row block(s); a Grid split needs at least 2
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm64 bn128 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm16 bn0 bk16: the full and edge reduction segments share a packed A~ tile accessed outside each row-block Grid loop
+  fusion=fused: Schedule.Fuse_epilogue: no statement follows the reduction over awk
+-- excluded --
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=serial > geometry=bm64 bn0 bk64: pad waste: padding m=20 to 64, k=20 to 64 does 10.24x the site's work, 4.00x the 2.56x of this menu's least-padded geometry, at or above the 2x search-economy threshold (config autotune_pad_waste_max)
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=serial > geometry=bm64 bn0 bk256: pad waste: padding m=20 to 64, k=20 to 256 does 40.96x the site's work, 16.00x the 2.56x of this menu's least-padded geometry, at or above the 2x search-economy threshold (config autotune_pad_waste_max)
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=serial > geometry=bm128 bn128 bk128: pad waste: padding m=20 to 128, n=20 to 128, k=20 to 128 does 262.14x the site's work, 102.40x the 2.56x of this menu's least-padded geometry, at or above the 2x search-economy threshold (config autotune_pad_waste_max)
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=serial > geometry=bm64 bn128 bk256: pad waste: padding m=20 to 64, n=20 to 128, k=20 to 256 does 262.14x the site's work, 102.40x the 2.56x of this menu's least-padded geometry, at or above the 2x search-economy threshold (config autotune_pad_waste_max)

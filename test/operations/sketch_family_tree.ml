@@ -658,6 +658,22 @@ let pad_waste_pins name ~is_gpu ~is_cpu ~limits ~m ~n ~k ~pads opt =
           (name ^ ": a site every geometry divides excludes nothing on pad waste")
           ~over:leaves lifted
 
+let awkward ?mutable_ ~name () =
+  let wa =
+    NTDSL.init ?mutable_ ~l:"wa" ~prec:Ir.Ops.single ~o:[ 20; 20 ]
+      ~f:(Ll_test.cycle ~dims:[| 20; 20 |] ~modulus:7 ~offset:0. ~stride:0.5)
+      ()
+  in
+  (* Modulus 5 divides the row stride, so the row-major key would make [wb]'s rows identical. Radix
+     7 also keeps the square operand distinct from its transpose (ahrefs/ocannl#1024). *)
+  let wb =
+    NTDSL.init ?mutable_ ~l:"wb" ~prec:Ir.Ops.single ~o:[ 20; 20 ]
+      ~f:(Ll_test.cycle ~radix:7 ~dims:[| 20; 20 |] ~modulus:5 ~offset:(-2.) ~stride:1.)
+      ()
+  in
+  let%op awk = wa +* "ik;kj=>ij" wb in
+  with_lowering ~name awk
+
 let () =
   let nn = 64 in
   (* Operand cells come from [Ll_test.cycle] throughout this file: that a cell varies with every
@@ -703,22 +719,7 @@ let () =
      times the padded work of its menu's least-padded geometry -- 64x64 blocks padding the 20x20
      output, 12.3x the site's work with the k pad, 4x the 32x32 blocks' -- is excluded with both
      ratios as witness, not seeded to lose a timing. *)
-  let wa =
-    NTDSL.init ~l:"wa" ~prec:Ir.Ops.single ~o:[ 20; 20 ]
-      ~f:(Ll_test.cycle ~dims:[| 20; 20 |] ~modulus:7 ~offset:0. ~stride:0.5)
-      ()
-  in
-  (* This site is where the guard bites: [wb]'s cells are the five integers in [-2, 2], and modulus
-     5 divides the 20-wide row stride, so the row-major key would make every row identical. The
-     radix lifts that without touching the value set (ahrefs/ocannl#1024): 7 is coprime to 5 and off
-     1 (mod 5), so the square operand is not its own transpose either. *)
-  let wb =
-    NTDSL.init ~l:"wb" ~prec:Ir.Ops.single ~o:[ 20; 20 ]
-      ~f:(Ll_test.cycle ~radix:7 ~dims:[| 20; 20 |] ~modulus:5 ~offset:(-2.) ~stride:1.)
-      ()
-  in
-  let%op awk = wa +* "ik;kj=>ij" wb in
-  let opt_awk = with_lowering ~name:"sft_awk" awk in
+  let opt_awk = awkward ~name:"sft_awk" () in
   awkward_section "awkward 20^3 gpu" ~is_gpu:true ~is_cpu:false ~limits:gpu_full_limits opt_awk;
   awkward_section "awkward 20^3 cpu" ~is_gpu:false ~is_cpu:true ~limits:cpu_limits opt_awk;
   pad_waste_pins "awkward 20^3 gpu" ~is_gpu:true ~is_cpu:false ~limits:gpu_full_limits ~m:20 ~n:20
@@ -1691,3 +1692,9 @@ let () =
                  (FD.level (FD.Pipeline `Tensorized), FD.Pipeline `Tensorized);
                  (FD.level (FD.Geometry FD.Lattice), FD.Geometry FD.Lattice);
                ]))
+
+let () =
+  (* With both operands mutable, every link-time packing shape must still be refuted. *)
+  awkward_section "awkward 20^3 cpu with mutable operands" ~is_gpu:false ~is_cpu:true
+    ~limits:cpu_limits
+    (awkward ~mutable_:true ~name:"sft_awk_mutable" ())

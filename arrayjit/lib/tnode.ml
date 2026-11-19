@@ -527,6 +527,10 @@ let dims_without_padding tn =
 
 let get_padding tn = Lazy.force tn.padding
 
+(** An ndarray supplied this node's initial values and storage precision, so its forward has no
+    defining fetch. *)
+let ndarray_backed tn = tn.precision_from_data
+
 (* The "n" prefix of numeric idents, qualified by the namespace when non-default: [n42] vs
    [snap1__n42]. Namespace validation guarantees the result is a legal C-family identifier. *)
 let ident_prefix namespace =
