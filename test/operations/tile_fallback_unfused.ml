@@ -12,9 +12,10 @@
    The register tile itself is held to the same equality by [schedule_pad]'s
    [runtest-schedule_pad-contract_off] rule; this test pins the fallback, which is what the
    reproducible profile renders ([cc_vector_bytes=0] makes the register tile decline). Both pins are
-   set in-process before the first compile. Values go through the bits, and the kernel is held to a
-   host emulation of the serial f32 chain, so the claim says which arithmetic ran, not only that two
-   kernels agree; the data are shown to separate one rounding from two by the same emulation fused.
+   stated in-process before the first compile. Values go through the bits, and the kernel is held to
+   a host emulation of the serial f32 chain, so the claim says which arithmetic ran, not only that
+   two kernels agree; the data are shown to separate one rounding from two by the same emulation
+   fused.
 
    Two legs. The cc leg holds packed seeds (found through the CPU seeder) on 33x40x37 data. The GPU
    leg (gh-ocannl-1834), open on CUDA and HIP, holds a hand-applied [Tensorize] on 48x32x37 data
@@ -36,13 +37,18 @@ module Asgns = Ir.Assignments
 module Tn = Ir.Tnode
 open Verdict.Claims
 
+(* The pins, set as the first thing the executable does. [cc_backend_fp_contract=off] is the
+   environment pin [fp_contract_pin_scan] reads. The rest are stated in process, ranked above every
+   source a run is given (a contradicting commandline argument is refused here, naming the key):
+   [fp_contract=false] keeps lowering from writing the serial loop's [acc + a * b] as an explicit
+   FMA, which no compile pin would undo; [tf32_matmuls=false] keeps CUDA's wmma off the f32
+   statement on tf32 hardware. *)
 let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
-let () = Unix.putenv "OCANNL_CC_VECTOR_BYTES" "0"
-let () = Unix.putenv "OCANNL_CUDA_FAST_MATH" "false"
-let () = Unix.putenv "OCANNL_HIP_FAST_MATH" "false"
-
-(* With tf32 matmuls on, CUDA's wmma would take the f32 statement on tf32 hardware. *)
-let () = Unix.putenv "OCANNL_TF32_MATMULS" "false"
+let () = Utils.state_config ~key:"fp_contract" ~data:"false"
+let () = Utils.state_config ~key:"cc_vector_bytes" ~data:"0"
+let () = Utils.state_config ~key:"cuda_fast_math" ~data:"false"
+let () = Utils.state_config ~key:"hip_fast_math" ~data:"false"
+let () = Utils.state_config ~key:"tf32_matmuls" ~data:"false"
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_cc = List.mem [ "cc"; "multidev_cc" ] backend_name ~equal:String.equal
 let on_cuda_or_hip = List.mem [ "cuda"; "hip" ] backend_name ~equal:String.equal
@@ -108,10 +114,14 @@ let bitwise a b = Array.equal (fun x y -> Int64.equal (bits x) (bits y)) a b
 
 let mk pb name =
   let ma =
-    TDSL.ndarray pb.a_vals ~label:[ name ^ "a" ] ~input_dims:[ pb.k ] ~output_dims:[ pb.m ] ()
+    TDSL.ndarray ~prec:Ir.Ops.single pb.a_vals
+      ~label:[ name ^ "a" ]
+      ~input_dims:[ pb.k ] ~output_dims:[ pb.m ] ()
   in
   let mb =
-    TDSL.ndarray pb.b_vals ~label:[ name ^ "b" ] ~input_dims:[ pb.n ] ~output_dims:[ pb.k ] ()
+    TDSL.ndarray ~prec:Ir.Ops.single pb.b_vals
+      ~label:[ name ^ "b" ]
+      ~input_dims:[ pb.n ] ~output_dims:[ pb.k ] ()
   in
   let%op nc = ma * mb in
   nc
