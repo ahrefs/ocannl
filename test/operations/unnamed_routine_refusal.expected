@@ -5,3 +5,17 @@ the long comp's code is longer than the cut: true
 a long comp's code is cut to its head, saying how much was left out: true
 the compile's ~name names the bare forward: true
 Train.forward names the refused tensor's own forward: true
+Train.to_routine refuses a nameless comp with a User_error: true
+Train.to_routine first line: Train.to_routine: the routine has no name: its code carries no Block_comment naming it. Pass [Train.forward t] rather than the bare [t.forward] (it wraps the code in a comment naming the routine), or name the code with a %cd block comment [~~("name"; code)].
+Train.to_routine's refusal names its caller and Train.forward, and not ~name: true
+to_routine ~output_cd_file:true: the comp's own code follows the first line, whole: true
+Train.to_routine refuses a nameless comp with a User_error: true
+Train.to_routine first line: Train.to_routine: the routine has no name: its code carries no Block_comment naming it. Pass [Train.forward t] rather than the bare [t.forward] (it wraps the code in a comment naming the routine), or name the code with a %cd block comment [~~("name"; code)].
+Train.to_routine's refusal names its caller and Train.forward, and not ~name: true
+to_routine refuses alike with and without ~output_cd_file: true
+Train.run_once refuses a nameless comp with a User_error: true
+Train.run_once first line: Train.run_once: the routine has no name: its code carries no Block_comment naming it. Pass [Train.forward t] rather than the bare [t.forward] (it wraps the code in a comment naming the routine), or name the code with a %cd block comment [~~("name"; code)].
+Train.run_once's refusal names its caller and Train.forward, and not ~name: true
+run_once ~output_cd_file:true: the comp's own code follows the first line, whole: true
+Train.forward compiles through Train.to_routine: true
+a %cd block comment names the bare forward through Train.to_routine: true

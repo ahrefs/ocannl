@@ -1958,7 +1958,7 @@ let to_string c =
   PPrint.ToBuffer.pretty 0.7 100 b doc;
   Buffer.contents b
 
-let get_name_exn asgns =
+let derived_name asgns =
   let punct_or_sp = Str.regexp "[-@*/:.;, ]" in
   let punct_and_sp = Str.regexp {|[-@*/:.;,]\( |$\)|} in
   let rec loop = function
@@ -1973,24 +1973,29 @@ let get_name_exn asgns =
     | _ -> ""
   in
   let result = loop asgns in
-  if String.is_empty result then
-    (* The fix first, so the refusal's first line is the whole story; the code follows it, cut to
-       its head -- a routine's code can run to thousands of lines, and it only identifies which comp
-       was nameless. No fallback name is derived: it would rename the build files. *)
-    let max_code_lines = 20 in
-    let code_lines = String.split_lines (to_string asgns) in
-    let code =
-      match List.split_n code_lines max_code_lines with
-      | head, [] -> String.concat ~sep:"\n" head
-      | head, rest ->
-          String.concat ~sep:"\n" head ^ Printf.sprintf "\n... (%d more lines)" (List.length rest)
-    in
-    invalid_arg
-      ("Assignments.get_name_exn: the routine has no name: its code carries no Block_comment \
-        naming it. Compile [Train.forward t] rather than the bare [t.forward] (it wraps the code \
-        in a comment naming the routine), or pass [~name] to the compile.\n\
-        The code:\n" ^ code)
-  else result
+  Option.some_if (not (String.is_empty result)) result
+
+(* A routine's code can run to thousands of lines, and a refusal's excerpt only identifies which
+   comp was nameless, so it is cut to its head. *)
+let nameless_code_excerpt asgns =
+  let max_code_lines = 20 in
+  let code_lines = String.split_lines (to_string asgns) in
+  match List.split_n code_lines max_code_lines with
+  | head, [] -> String.concat ~sep:"\n" head
+  | head, rest ->
+      String.concat ~sep:"\n" head ^ Printf.sprintf "\n... (%d more lines)" (List.length rest)
+
+let get_name_exn asgns =
+  match derived_name asgns with
+  | Some name -> name
+  | None ->
+      (* The fix first, so the refusal's first line is the whole story; the code follows it. No
+         fallback name is derived: it would rename the build files. *)
+      invalid_arg
+        ("Assignments.get_name_exn: the routine has no name: its code carries no Block_comment \
+          naming it. Compile [Train.forward t] rather than the bare [t.forward] (it wraps the code \
+          in a comment naming the routine), or pass [~name] to the compile.\n\
+          The code:\n" ^ nameless_code_excerpt asgns)
 
 let%track6_sexp lower ?(rewrite_target = Rewrites.conservative_target) ?blends_value_selects
     optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name static_indices (proc : t) :

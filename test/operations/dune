@@ -17818,7 +17818,13 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules unnamed_routine_refusal)
- (libraries base ocannl stdio arrayjit.verdict arrayjit.context)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  arrayjit.utils
+  arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
