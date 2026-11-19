@@ -51,9 +51,9 @@ files.
   `op_neg_initializer` anchors the original values to nonzero literals before checking their
   negation: forcing both parameter readbacks to zero must fail that anchor, even though the
   relative negation still passes.
-- A power in an inline initializer (`{ w = source **. 2 }`, gh-ocannl-2274) is the one operator
-  `translate` emits already qualified, as `Ppx_shared.power_head` (`TDSL.O.( **. )`, base then
-  exponent, so a literal exponent stays a float). The qualifier recognizes that head and emits
+- A power in an inline initializer (`{ w = source **. 2 }`, gh-ocannl-2274) uses the head
+  `translate` emits already qualified, as `Ppx_shared.power_head` (the active DSL's `O.( **. )`,
+  base then exponent, so a literal exponent stays a float). The qualifier recognizes that head and emits
   `NTDSL.pointpow exponent base`: the named form takes the exponent FIRST, so requalifying the
   head alone would compute `exponent ** source`. The swap binds the exponent ahead of an
   effectful base (`in_source_order`), keeping the infix right-to-left evaluation, and the head's
@@ -67,7 +67,14 @@ files.
   would become `(!) ?label:None counter`).
   Pinned by `test_extend_dsls` (values, both DSLs) and the `test_extend_dsls_power` expansion; a
   TDSL helper is shape-schemed and runs its body under a trace too, so an effectful base's
-  ordering is checked on the NTDSL one.
+  ordering is checked on the NTDSL one. A non-tail power in `%extend_dsls` uses the active DSL's
+  infix head (gh-ocannl-2363), so NTDSL keeps the power gradient-free even on a differentiable
+  input. The infix arm accepts a whole-exponent `[%oc ...]` by the ordinary single-layer escape
+  rule. The initializer rewrite keeps the translated exponent intact, including an escaped integer
+  that must reach OCaml's float type check.
+  On the base, `test_extend_dsls` observed a gradient in the NTDSL helper (run
+  `20261119T152810Z-84687`), and the compiler rejected the escape in `test_ppx_op` (run
+  `20261119T152835Z-94436`).
 - A first-field initializer of `!. e` or `!.. e` (`{ w = !. x }`) is a constant, like `{ w = 5.0 }`:
   `Ppx_op.constant_param_value` sends literals and both embeddings down `param`'s `?value:` route,
   a constant fill of inferred shape. `translate`'s own `TDSL.O.( !. )` arm is a `Tensor.t`, never

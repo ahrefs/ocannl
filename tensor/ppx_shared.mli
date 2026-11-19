@@ -147,9 +147,8 @@ val ndarray_op :
   ?axis_labels:expression -> ?label:expression -> ndarray_fn:expression -> expression -> expression
 (** Applies [ndarray_fn] to an ndarray literal's values, then batch/input/output axes and [()]. *)
 
-val power_head : loc:location -> expression
-(** The head [Ppx_op.translate]'s power arms apply, [TDSL.O.( **. )], in the infix order: base, then
-    exponent. *)
+val power_head : loc:location -> dsl_name:string -> expression
+(** The active DSL's [O.( **. )] head, applied in base-then-exponent order. *)
 
 val add_module_qualifier_to_applied_function :
   ?module_name:string ->

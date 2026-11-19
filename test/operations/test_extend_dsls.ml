@@ -24,6 +24,11 @@ let squared x = x **. 2
 let float_squared x = x **. 2.0
 let escaped_squared x = x **. [%oc !exponent]
 
+(* Return the intermediate unchanged so its own gradient state is observable. *)
+let non_tail_square x =
+  let square = x **. 2 in
+  fun ?label:_ () -> square
+
 (* The infix application runs the exponent before the base: the power is the counter's value before
    the base bumps it. *)
 let counted_power x =
@@ -53,6 +58,11 @@ let () =
 let () =
   let open Verdict.Claims in
   let source = Tensor.term_init [| 2.; -4.; 8.; -16. |] ~grad_spec:Prohibit_grad () in
+  let with_grad = Tensor.term_init [| 2.; -4.; 8.; -16. |] ~grad_spec:Require_grad () in
+  p "TDSL non-tail power carries a gradient"
+    (Option.is_some (DSL_modules.TDSL.O.non_tail_square with_grad).Tensor.diff);
+  p "NTDSL non-tail power has no gradient"
+    (Option.is_none (DSL_modules.NTDSL.O.non_tail_square with_grad).Tensor.diff);
   (* The counted power starts from 2, which its exponent reads before its base bumps it to 3. Only
      the NTDSL helper shows it: the TDSL one is shape-schemed, and its first application also runs
      the body under a trace: an effectful body is outside gh-ocannl-1751's determinism premise. Its
@@ -61,6 +71,7 @@ let () =
   counter := 2;
   let ntdsl_counted = DSL_modules.NTDSL.O.counted_power source in
   p "the effectful base ran once, after its exponent" (!counter = 3);
+  let plain_escaped = [%op source **. [%oc !exponent]] in
   let squares = [| 4.; 16.; 64.; 256. |] in
   let cases =
     [
@@ -70,6 +81,7 @@ let () =
       ("NTDSL float power", DSL_modules.NTDSL.O.float_squared source);
       ("TDSL escaped power", DSL_modules.TDSL.O.escaped_squared source);
       ("NTDSL escaped power", DSL_modules.NTDSL.O.escaped_squared source);
+      ("Plain %op escaped power", plain_escaped);
       ("NTDSL effectful-base power", ntdsl_counted);
     ]
   in

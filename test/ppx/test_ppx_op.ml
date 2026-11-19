@@ -157,6 +157,7 @@ let%op _late_label_default_tensor ?(label = !.1.0) x = x + label
 let%op _late_stride ~stride x = x +* "stride*o<+k; k => o" { ls_kernel }
 let%op _unit_stride stride () x = x +* "stride*o<+k; k => o" { us_kernel }
 let%op _late_exponent ~n x = x **. n
+let%op _escaped_exponent ~n x = x **. [%oc Float.of_int !n]
 
 (* gh-ocannl-1885: [?label] before [()] enriches the inline declarations' labels as [~label] does;
    un-defaulted it is the option itself, defaulted the list. *)
