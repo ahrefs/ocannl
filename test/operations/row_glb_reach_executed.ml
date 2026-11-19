@@ -32,6 +32,14 @@
    unconstrained results guess minimal. The concrete size then travels through the existing
    leaf-before-result stages, so both two-result and three-result chains fill the indexed axis.
 
+   What changed with gh-ocannl-2318: that minimum did not reach a draw behind a pointwise result
+   whose operand is a stretch or a reduction. The stretch closed to the result's open axis by role
+   at stage 6a, and the inequality it held closed the waiting draw under it empty at stage 6b. The
+   reduction's axis, a leaf axis of the reduced draw, guessed 1 at stage 5. A draw whose block
+   counter is its own now takes such an axis by role (draws sharing a counter still broadcast one
+   block), and a leaf axis below it waits for stage 7; [stretch u *. 2] is the minimal stretch case,
+   [(u1 ++ "ab => a") *. v] the reduction case.
+
    With gh-ocannl-2257, the open result remainder in [relu u + (c[3] ++ "a => a...")] settles at
    stage 6a. Previously [relu] closed empty at stage 6b and the draw closed against it, giving one
    value for three cells. *)
@@ -173,6 +181,39 @@ let () =
       let m = times2 u in
       let%op y = m ++ "...|3 => ...|0" in
       ([ u ], m, y));
+  (* gh-ocannl-2318: the fixed index's minimum behind a pointwise result whose operand is a stretch
+     or a reduction. A stretch between the draw and the pointwise result closed to the result's axis
+     by role at stage 6a, and the draw under it closed empty at stage 6b; a reduction's axis under
+     it, a leaf axis of the draw, guessed 1 at stage 5. Both drew one value for 4 cells. *)
+  draws "stretch u *. 2, then a fixed index" ~want:"4" ~fills:(Some true) (fun () ->
+      let u = TDSL.uniform () () in
+      let%op m = stretch u *. !.2. in
+      let%op y = m ++ "...|3 => ...|0" in
+      ([ u ], m, y));
+  draws "(stretch u + u) ++ \"...|3 => ...|0\"" ~want:"4" ~fills:(Some true) (fun () ->
+      let u = TDSL.uniform () () in
+      let%op m = stretch u + u in
+      let%op y = m ++ "...|3 => ...|0" in
+      ([ u ], m, y));
+  draws "(stretch u + stretch (stretch u)) ++ \"...|3 => ...|0\"" ~want:"4" ~fills:(Some true)
+    (fun () ->
+      let u = TDSL.uniform () () in
+      let%op m = stretch u + stretched (stretched u) in
+      let%op y = m ++ "...|3 => ...|0" in
+      ([ u ], m, y));
+  draws "((u1 ++ \"ab => a\") *. v) ++ \"...|3 => ...|0\", the reduced draw" ~want:"4,1"
+    ~fills:(Some true) (fun () ->
+      let u1 = TDSL.uniform1 () () and v = TDSL.uniform () () in
+      let%op m = (u1 ++ "ab => a") *. v in
+      let%op y = m ++ "...|3 => ...|0" in
+      ([ u1 ], m, y));
+  draws "(((u1 ++ \"ab => a\") *. v) *. 2) ++ \"...|3 => ...|0\", the reduced draw" ~want:"4,1"
+    ~fills:(Some true) (fun () ->
+      let u1 = TDSL.uniform1 () () and v = TDSL.uniform () () in
+      let%op r = (u1 ++ "ab => a") *. v in
+      let m = times2 r in
+      let%op y = m ++ "...|3 => ...|0" in
+      ([ u1 ], m, y));
   (* gh-ocannl-2247: a draw read through an einsum spec is solved to the spec's axes; they take the
      draw's role and fill the use site. *)
   draws "(u ++ \"ab => ba\") *. c[|5,3]" ~want:"3,5" ~fills:(Some true) (fun () ->
@@ -461,6 +502,35 @@ let () =
       p_none ~min:2 "both remainders stay open when the counter's bound requires one block"
         (shared_remainders_after_stage6a ~one_block_bound:true)
         ~f:Fn.id)
+
+(* gh-ocannl-2318: a shared counter whose use sites' sizes arrive as fixed-index minima behind a
+   stretch under a pointwise result instead of as constants, at 8 and 12 cells (two and three
+   blocks). A minimum sizes only a draw whose counter is its own: taken by both, the block counts 2
+   and 3 conflicted and the store was refused. The claim is the acceptance and the results' minima;
+   the draws keeping the ordinary closing order and broadcasting one block is a known limitation,
+   printed (into the golden) but not claimed, so a later fix that fills them is a re-promotion, not
+   a red. *)
+let () =
+  Verdict.case "draws sharing a packed counter, sized by fixed-index minima" @@ fun () ->
+  Tensor.unsafe_reinitialize ();
+  let offsets = NTDSL.term ~fetch_op:Range_over_offsets () in
+  let bits =
+    TDSL.threefry4x32 ~spec:"..p..|..q..->..r..; ..b.. => ..b.." (TDSL.embed_self_id ()) offsets ()
+  in
+  let u = TDSL.uint4x32_to_prec_uniform bits () in
+  let v = TDSL.uint4x32_to_prec_uniform bits () in
+  let%op mu = stretch u *. !.2. in
+  let%op mv = stretch v *. !.2. in
+  let%op y = mu ++ "...|7 => ...|0" in
+  let%op z = mv ++ "...|11 => ...|0" in
+  let%op root = y + z in
+  let (_ : Context.t) = Train.forward_once (context ()) root in
+  let dims t = Array.to_list (Shape.to_dims t.Tensor.shape) in
+  Stdio.printf "shared counter, fixed-index minima: bits %s, u %s, v %s, mu %s, mv %s\n"
+    (shape bits) (shape u) (shape v) (shape mu) (shape mv);
+  p_all ~min:2 "accepted, and the pointwise results take the fixed indices' minima"
+    [ (mu, [ 8 ]); (mv, [ 12 ]) ]
+    ~f:(fun (t, want) -> List.equal Int.equal (dims t) want)
 
 (* gh-ocannl-2224: the late-tail boundary is staged deliberately: ordinary program constraints
    register before closing. The GLB has a leading axis over a tail held open through Stage6a; supply

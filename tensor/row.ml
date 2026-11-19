@@ -5422,6 +5422,50 @@ let can_guess_dim_to_one env has_uniq_constr_unless =
           | Some (Bounds_dim { has_uniq_constr_unless = Some _; _ }) -> true
           | _ -> false)
 
+(* gh-ocannl-2318: the entry-level half of gh-ocannl-2229's stage-7 selection, shared with it: a
+   non-parameter axis a fixed index bounds below by more than 1 ([At_least_dim]), with no GLB yet,
+   that may be guessed. Its minimum, when stage 7 closes it. The selection's other two conditions
+   need the whole store, so the early uses here ([below_pending_minimum], the packed draw's role
+   arm) do not check them: an axis in a parameter's bound component or held by a window or concat
+   equation keeps its minimal rule at stage 7, and a leaf or draw that waited on it then closes
+   minimal too, only later. *)
+let pending_minimum_size env v =
+  match find_dim env.dim_env v with
+  | Some
+      (Bounds_dim
+         {
+           is_in_param = false;
+           glb = None;
+           constr = At_least_dim { d_min; _ };
+           has_uniq_constr_unless;
+           _;
+         })
+    when d_min > 1 && can_guess_dim_to_one env has_uniq_constr_unless ->
+      Some d_min
+  | _ -> None
+
+let pending_minimum env v = Option.is_some (pending_minimum_size env v)
+
+(* gh-ocannl-2318: whether a result above [v], through the bounds' [res] links and outside
+   parameters, has a {!pending_minimum}. A leaf axis below one waits for it instead of guessing 1
+   before stage 7. Not when the walk meets an axis a held window or concatenation equation defers
+   ([deferred_dims]): the leaf then keeps its broadcast guess, which that equation may need, as
+   gh-ocannl-2229's own closing respects those dependencies. *)
+let below_pending_minimum ~deferred_dims env v =
+  let exception Held in
+  let rec go seen = function
+    | [] -> false
+    | v :: rest when Set.mem seen v -> go seen rest
+    | v :: rest -> (
+        let seen = Set.add seen v in
+        match find_dim env.dim_env v with
+        | Some (Bounds_dim { is_in_param = false; res; _ }) ->
+            if List.exists res ~f:(Set.mem deferred_dims) then raise Held;
+            List.exists res ~f:(pending_minimum env) || go seen (res @ rest)
+        | _ -> go seen rest)
+  in
+  try go dim_var_set_empty [ v ] with Held -> false
+
 let%debug5_sexp rec close_dim_terminal ~deferred_dims ~(stage : stage) ~is_param origin env
     (dim : dim) : constraint_ list =
   match dim with
@@ -5447,6 +5491,8 @@ let%debug5_sexp rec close_dim_terminal ~deferred_dims ~(stage : stage) ~is_param
                    ("You forgot to specify the hidden dimension(s) 1", [ Dim_mismatch [ dim ] ])
             else [ Terminal_dim (is_param, dim, origin) ]
           else if Set.mem deferred_dims v then [ Terminal_dim (is_param, dim, origin) ]
+          else if (not (is_stage7 stage)) && below_pending_minimum ~deferred_dims env v then
+            [ Terminal_dim (is_param, dim, origin) ]
           else (
             refuse_concat_component_guess env v;
             let guess_d = if Set.mem env.discardable_vars v then 0 else 1 in
@@ -5490,8 +5536,38 @@ let packed_draw_counter = function
 
 let is_packed_draw_constr constr = Option.is_some (packed_draw_counter constr)
 
-let dim_has_glb env v =
-  match find_dim env.dim_env v with Some (Bounds_dim { glb = Some _; _ }) -> true | _ -> false
+(* The dimension variables a [Total_elems] constraint mentions, substituted. *)
+let total_vars env = function
+  | Total_elems _ as constr ->
+      Set.fold (row_constraint_dim_vars constr) ~init:dim_var_set_empty ~f:(fun vars v ->
+          Set.union vars (vars_of_dim (subst_dim env (Var v))))
+  | _ -> dim_var_set_empty
+
+(* The rows other than [draw] whose stored total mentions the (substituted) [counter]: the draws
+   sharing a packed block counter with [draw]. *)
+let counter_sharers env ~draw counter =
+  Set.to_list (mentioning env.rows_mentioning_dim counter ~empty:row_var_set_empty)
+  |> List.filter ~f:(fun w ->
+      (not (equal_row_var w draw))
+      &&
+      match find_row env.row_env w with
+      | Some (Bounds_row { constr; _ }) -> Set.mem (total_vars env constr) counter
+      | _ -> false)
+
+(* gh-ocannl-2318: whether the packed draw [v]'s block counter belongs to its total alone. Two
+   conversions of the same bits share a counter, and sizing it for one commits the other's block
+   count too (gh-ocannl-2257), so a minimum sizes only a draw whose counter is its own. *)
+let packed_counter_exclusive env v constr =
+  match Option.map (packed_draw_counter constr) ~f:(fun c -> subst_dim env (Var c)) with
+  | Some (Var counter) -> List.is_empty (counter_sharers env ~draw:v counter)
+  | _ -> false
+
+(* gh-ocannl-2318: a use site bounds an axis with a GLB of its own, and, with [~minimum], also an
+   axis with a {!pending_minimum}. *)
+let dim_has_use_bound ?(minimum = false) env v =
+  match find_dim env.dim_env v with
+  | Some (Bounds_dim { glb = Some _; _ }) -> true
+  | _ -> minimum && pending_minimum env v
 
 (* gh-ocannl-2180: the axes of [glb] (substituted) that a row closing to it by role takes as its
    own: plain [Var]s that [own] selects (all of them by default). *)
@@ -5504,11 +5580,11 @@ let role_axes ?(own = fun _ -> true) env (glb : row) =
    axis counts as much as a bounded variable: once the use site's axes are solved, the GLB carries
    them as they are, and a draw that waited on them past stage 6a was closed empty by the result
    above it closing at stage 6b ([relu u *. c[|2,5]]). *)
-let glb_has_bounded_axis env (glb : row) =
+let glb_has_bounded_axis ?(minimum = false) env (glb : row) =
   let glb = subst_row env glb in
   List.exists (glb.beg_dims @ glb.dims) ~f:(function
     | Dim _ | Sym _ -> true
-    | Var v -> dim_has_glb env v
+    | Var v -> dim_has_use_bound ~minimum env v
     | Affine _ | Concat _ -> false)
 
 (* gh-ocannl-2180: what a row that resolves at its use sites closes to, given its GLB. The GLB's
@@ -6273,7 +6349,9 @@ let%track5_sexp process_shape_row ~deferred_dims ~(stage : stage) origin env
              && (is_in_param || is_resolve_at_use v)
              && (let glb = subst_row env glb in
                  is_broadcastable glb.bcast || List.is_empty glb.beg_dims)
-             && glb_has_bounded_axis env glb ->
+             && glb_has_bounded_axis
+                  ~minimum:((not is_in_param) && packed_counter_exclusive env v constr)
+                  env glb ->
           (* gh-ocannl-2180: a packed draw's row closes to its GLB only once the GLB's axes are
              known, and an axis still open then is closed by its own rules (gh-ocannl-1961) -- for a
              result's axis, minimal. Taking the axes by role first gives the draw axes of its own,
@@ -6287,8 +6365,16 @@ let%track5_sexp process_shape_row ~deferred_dims ~(stage : stage) origin env
              satisfiable program. Retry after stage 6a too (gh-ocannl-2224): the tail can first
              close at stage 6b while a bounded axis is still a variable. Generic elimination then
              waits for stage 7, where that result axis closes minimal; taking it by role first
-             preserves its bound instead. *)
-          let closing = close_to_glb_by_role ~own:(dim_has_glb env) env origin ~r1 ~glb in
+             preserves its bound instead. A draw (not a parameter) also takes by role an axis a
+             fixed index bounds below by more than 1, when its block counter is its own
+             (gh-ocannl-2318): a resolve-at-use row between it and that axis ([stretch u *. 2])
+             closes to it by role at this stage, and the held inequality from it closed the waiting
+             draw empty at stage 6b. The axis gets its size at stage 7 (gh-ocannl-2229), and the
+             draw's own axis follows it. *)
+          let minimum = (not is_in_param) && packed_counter_exclusive env v constr in
+          let closing =
+            close_to_glb_by_role ~own:(dim_has_use_bound ~minimum env) env origin ~r1 ~glb
+          in
           (keep @ closing @ dim_eqs, env)
       | Some (Bounds_row { glb; constr; _ }) ->
           let ineqs, env =
@@ -6536,20 +6622,9 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
       let fixed =
         entries
         |> List.filter_map ~f:(fun (v, entry) ->
-            match entry with
-            | Bounds_dim
-                {
-                  is_in_param = false;
-                  glb = None;
-                  constr = At_least_dim { d_min; _ };
-                  has_uniq_constr_unless;
-                  origin;
-                  _;
-                }
-              when d_min > 1
-                   && (not (Set.mem parameter_axes v))
-                   && (not (Set.mem waiting v))
-                   && can_guess_dim_to_one env has_uniq_constr_unless ->
+            match (entry, pending_minimum_size env v) with
+            | Bounds_dim { origin; _ }, Some d_min
+              when (not (Set.mem parameter_axes v)) && not (Set.mem waiting v) ->
                 Some (Dim_eq { d1 = Var v; d2 = get_default_dim ~d:d_min (); origin })
             | _ -> None)
       in
@@ -6557,6 +6632,10 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
       let fixed = concat_bounded_waiting ineqs env @ fixed in
       if List.is_empty fixed then (ineqs, env)
       else
+        (* gh-ocannl-2318: the closings propagate before the rest of the pass reads the environment:
+           a leaf axis waiting below a minimum ([below_pending_minimum]) then sees the bound as its
+           GLB, not a result link the closing has already consumed. *)
+        let fixed, env = solve_inequalities ~stage:Stage6a fixed env in
         let ineqs, env = solve_inequalities ~stage:Stage6a (fixed @ ineqs) env in
         solve_inequalities ~stage:Stage6b ineqs env
   in
@@ -6985,12 +7064,7 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
     in
     if List.is_empty candidates then []
     else
-      let total_vars = function
-        | Total_elems _ as constr ->
-            Set.fold (row_constraint_dim_vars constr) ~init:dim_var_set_empty ~f:(fun vars v ->
-                Set.union vars (vars_of_dim (subst_dim env (Var v))))
-        | _ -> dim_var_set_empty
-      in
+      let total_vars = total_vars env in
       let add_row vars r = Option.fold (row_var r) ~init:vars ~f:Set.add in
       let add_row_with_bound vars r =
         match row_var r with
@@ -7049,16 +7123,10 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
       let counter_can_close closings draw counter =
         match subst_dim env (Var counter) with
         | Var counter when not (Set.mem held_totals counter) ->
-            Set.for_all (mentioning env.rows_mentioning_dim counter ~empty:row_var_set_empty)
-              ~f:(fun v ->
-                equal_row_var v draw
-                ||
-                match find_row env.row_env v with
-                | Some (Bounds_row { constr; _ }) when Set.mem (total_vars constr) counter ->
-                    Option.exists (block_demand closings draw counter) ~f:(fun blocks ->
-                        counter_accepts_demand counter blocks
-                        && Option.exists (block_demand closings v counter) ~f:(Int.equal blocks))
-                | _ -> true)
+            List.for_all (counter_sharers env ~draw counter) ~f:(fun v ->
+                Option.exists (block_demand closings draw counter) ~f:(fun blocks ->
+                    counter_accepts_demand counter blocks
+                    && Option.exists (block_demand closings v counter) ~f:(Int.equal blocks)))
         | _ -> false
       in
       let counters_can_close closings tail =

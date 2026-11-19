@@ -42,6 +42,26 @@ u *. 2, then a fixed index, batch 4
   draw = 4|4, 16 distinct values for 16 cells
 u *. 2, then a fixed index, batch 4: every draw closes to 4|4: true
 u *. 2, then a fixed index, batch 4: every draw fills its use site: true
+stretch u *. 2, then a fixed index
+  draw = 4, 4 distinct values for 4 cells
+stretch u *. 2, then a fixed index: every draw closes to 4: true
+stretch u *. 2, then a fixed index: every draw fills its use site: true
+(stretch u + u) ++ "...|3 => ...|0"
+  draw = 4, 4 distinct values for 4 cells
+(stretch u + u) ++ "...|3 => ...|0": every draw closes to 4: true
+(stretch u + u) ++ "...|3 => ...|0": every draw fills its use site: true
+(stretch u + stretch (stretch u)) ++ "...|3 => ...|0"
+  draw = 4, 4 distinct values for 4 cells
+(stretch u + stretch (stretch u)) ++ "...|3 => ...|0": every draw closes to 4: true
+(stretch u + stretch (stretch u)) ++ "...|3 => ...|0": every draw fills its use site: true
+((u1 ++ "ab => a") *. v) ++ "...|3 => ...|0", the reduced draw
+  draw = 4,1, 4 distinct values for 4 cells
+((u1 ++ "ab => a") *. v) ++ "...|3 => ...|0", the reduced draw: every draw closes to 4,1: true
+((u1 ++ "ab => a") *. v) ++ "...|3 => ...|0", the reduced draw: every draw fills its use site: true
+(((u1 ++ "ab => a") *. v) *. 2) ++ "...|3 => ...|0", the reduced draw
+  draw = 4,1, 4 distinct values for 4 cells
+(((u1 ++ "ab => a") *. v) *. 2) ++ "...|3 => ...|0", the reduced draw: every draw closes to 4,1: true
+(((u1 ++ "ab => a") *. v) *. 2) ++ "...|3 => ...|0", the reduced draw: every draw fills its use site: true
 (u ++ "ab => ba") *. c[|5,3]
   draw = 3,5, 15 distinct values for 15 cells
 (u ++ "ab => ba") *. c[|5,3]: every draw closes to 3,5: true
@@ -186,6 +206,8 @@ the 9-cell draw holds a distinct value in every cell: true
 the 12-cell draw holds a distinct value in every cell: true
 both remainders close when the counter can take three blocks: true
 both remainders stay open when the counter's bound requires one block: true
+shared counter, fixed-index minima: bits 1, u , v , mu 8, mv 12
+accepted, and the pointwise results take the fixed indices' minima: true
 late-tail fixture: the packed draw is open after Stage6a: true
 late-tail fixture: the closed GLB is retained at Stage6b: true
 late-tail fixture: three cells use one counter block: true

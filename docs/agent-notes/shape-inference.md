@@ -226,9 +226,20 @@ files.
   Its residual literal entry now covers only five stretches adopting a fixed-index output axis;
   the reduction half retires with gh-ocannl-2247, as does the nested-branching entry when the fixes
   are combined. `x[16] *. normal ()` agrees in both internal shapes and executed fill.
-  The proposed fixed-index entry holds two shapes, a draw behind a stretch or behind a reduction
-  under a pointwise result the index's lower bound sizes; each sits beside a control with a
-  constant in the index's place, which agrees, so the cause is the bound (gh-ocannl-2270).
+  The minimum reaches a draw behind a stretch or a reduction under a pointwise result too
+  (gh-ocannl-2318, retiring the sweep's last fixed-index entry, gh-ocannl-2270), through two
+  separate gaps. A stretch between the draw and the result closes to the result's open axis by
+  role at stage 6a, and the inequality it holds closed the still-waiting draw empty at stage 6b:
+  a packed draw now takes by role, at stage 6a, a non-parameter axis with a minimum above 1 and
+  no GLB, as it takes a bounded one, but only when its block counter is its own: two conversions
+  of the same bits indexed at 7 and 11 then needed 2 and 3 blocks of one counter and were refused
+  (`row_glb_reach_executed` pins acceptance; those shared-counter draws still broadcast one block,
+  a known limitation even where both minima need the same block count, as 9 and 12 do). A reduced draw's leaf axis under the result guessed
+  1 at stage 5 (`close_dim_terminal`): it now waits until stage 7 while a non-parameter result
+  above it, through `res` links, still has such a minimum, unless the walk meets an axis a held
+  window or concat equation defers. The stage-7 closings propagate in their own pass first,
+  since solving the result consumes the `res` link the leaf reads. With only a stretch or a
+  reduction between, the index's axis is the draw's own and never needed either.
   The unbatched `term_init` and `reshape` programs from gh-ocannl-2225 also fill on
   `44404a7fb`: scaled log, Box-Muller-shaped arithmetic, two draws added, and nested log,
   with the leaf created before or after the whole draw expression. The executed reach test
