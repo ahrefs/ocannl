@@ -1010,10 +1010,11 @@ verdict_records_env() { # wt
 # is most likely faulted (gh-ocannl-1252). The first test past the cap sends the leg's supervisor
 # (the `sh -c` running this text is its child) the SIGALRM its own cap sends, so the leg ends as
 # `timeout` (142) with the hung test named in the log. GPU units only, as test-run.sh's default
-# applies, and not for a leg whose targets reach the slow aliases, which keeps only the unit's cap.
+# applies, and not for a leg whose targets reach the slow aliases, which keeps only the unit's cap:
+# the leg's dune argv, its subcommand first, is what test_cap_reaches_slow reads (gh-ocannl-2340).
 # The watcher closes fd 9, the worktree lock, so it can never hold the lock past the leg. Prints
 # nothing and fails where the leg gets no watcher.
-test_cap_start_cmd() { # backend wt dune-target...
+test_cap_start_cmd() { # backend wt dune-argv (subcommand first)...
   local backend=$1 wt=$2 watched
   shift 2
   ! box_jobs_cpu_backend "$(unit_backend "$backend")" && [ "$TEST_CAP" -gt 0 ] || return 1
@@ -1140,14 +1141,17 @@ test_cmd() { # backend wt [jobs [host]]
   # before any test touches the device (device_probe_cmd): a wedged device ends the unit here, as
   # DEVICE UNHEALTHY, rather than at the first test's per-test cap.
   device_probe_cmd "$backend" "$wt" "$host" || :
-  # The per-test cap beside the suite's dune (test_cap_start_cmd); the `@slow` leg below, and a
-  # --target that reaches the slow aliases, keep only the unit's cap.
+  # The per-test cap beside the suite's dune (test_cap_start_cmd); the `@slow` leg below keeps only
+  # the unit's cap. A --target leg is `runtest DIR`, which reaches no slow alias, so a GPU unit's
+  # --target leg is always watched.
   local watched=
-  if watched=$(test_cap_start_cmd "$backend" "$wt" "$TARGET"); then
-    printf '%s' "$watched"
+  if [ -z "$TARGET" ]; then
+    # shellcheck disable=SC2046  # the suite's aliases are word-split on purpose
+    watched=$(test_cap_start_cmd "$backend" "$wt" build $(unit_suite "$backend")) || watched=
   else
-    watched=
+    watched=$(test_cap_start_cmd "$backend" "$wt" runtest "$TARGET") || watched=
   fi
+  printf '%s' "$watched"
   if [ -z "$TARGET" ]; then
     # The host-capability record goes first, so the copy below (gh-ocannl-1038) can only find one
     # this invocation produced: a build that fails before reaching its producer leaves none.
@@ -2033,7 +2037,7 @@ serial_rerun_cmd() { # backend wt host alias...
   device_probe_cmd "$backend" "$wt" "$host" || :
   for a in "$@"; do
     printf 'echo "=== serial rerun %s ==="; ' "$a"
-    watched=$(test_cap_start_cmd "$backend" "$wt" "$a") && printf '%s' "$watched"
+    watched=$(test_cap_start_cmd "$backend" "$wt" build "$a") && printf '%s' "$watched"
     printf '%s %s build -j 1 %s; ' "$(unit_dune_env "$backend")" "$(switch_dune_cmd)" "$a"
     printf 'rc=$?; '
     [ -z "$watched" ] || test_cap_stop_cmd
@@ -2058,7 +2062,7 @@ suite_completion_cmd() { # backend wt
   printf 'echo "=== suite completion ==="; '
   # shellcheck disable=SC2086  # the slow alias is word-split on purpose
   # shellcheck disable=SC2046  # the suite's aliases are word-split on purpose
-  watched=$(test_cap_start_cmd "$1" "$2" $(unit_suite "$1") $slow_alias) && printf '%s' "$watched"
+  watched=$(test_cap_start_cmd "$1" "$2" build $(unit_suite "$1") $slow_alias) && printf '%s' "$watched"
   printf '%s %s build -j 1 %s%s; ' "$(unit_dune_env "$1")" "$(switch_dune_cmd)" "$(unit_suite "$1")" \
     "$slow_alias"
   printf 'rc=$?; '
@@ -2770,7 +2774,7 @@ diagnostic_legs() { # machine backend host wt path_prefix outcome repo
     case $command in
       *'{suite}'*)
         # shellcheck disable=SC2086  # the targets are word-split on purpose
-        watched=$(test_cap_start_cmd "$backend" "$wt" $suite) || watched=
+        watched=$(test_cap_start_cmd "$backend" "$wt" build $suite) || watched=
         ;;
     esac
     command=${command//\{fixtures\}/\"$repo/benchmarks/fixtures\"}

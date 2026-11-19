@@ -5970,7 +5970,9 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
 - Slow-suite budgets (gh-ocannl-2091): `SLOW_RUN_CAP_DEFAULT` in `tools/per-test-cap.sh`
   owns the four-hour budget shared by test-run batches naming slow aliases and sweep units
   launched with `--slow`. A test-run batch reaching the training aliases instead (`@train`, a
-  directory's `train`, a `train-NAME` member; `test_cap_reaches_train`, dune's `--` respected)
+  directory's `train`, a `train-NAME` member; `test_cap_reaches_train`, which reads dune's
+  build targets: `@` targets on either side of `build --`, `--alias`/`--alias-rec` operands,
+  nothing of `exec`, `runtest DIR` or `test`; every caller hands it dune's argv, subcommand first)
   gets `TRAIN_RUN_CAP_DEFAULT`, two hours (gh-ocannl-2290): the members serialize on the
   training lock, and tuf's full cc `build @runtest @train -j 4` took 3696 s with no other full
   suite on the box and 4600 s beside three, where mac-studio and macbook-pro took at most 1.7 ks.

@@ -36,38 +36,105 @@ SLOW_RUN_CAP_DEFAULT=$((4 * 60 * 60))
 # number stay in the PR closing gh-ocannl-2290.
 TRAIN_RUN_CAP_DEFAULT=$((2 * 60 * 60))
 
-# Whether dune arguments reach the slow tests, which the default leaves to the
-# run's own cap; prints the first argument that does. Arguments after dune's
-# own `--` are the program's, not targets.
-test_cap_reaches_slow() { # dune-argv...; 0 (printing the target) iff one reaches @slow
-  local arg
-  for arg; do
+# Whether a dune command line reaches the slow tests (test_cap_reaches_slow,
+# which the per-test default leaves to the run's own cap) or the training
+# integrations (test_cap_reaches_train, which tools/test-run.sh gives
+# TRAIN_RUN_CAP_DEFAULT): an alias named `slow`/`train` or `slow-NAME`/
+# `train-NAME`, in any directory. Each caller passes the argv dune itself is
+# given, its subcommand first (gh-ocannl-2340): tools/test-run.sh its batch's,
+# tools/sweep.sh (test_cap_start_cmd) the `build` or `runtest` line of its leg,
+# tools/machine-verify-far.sh (operation_cap, with_test_cap) the `build ALIAS`
+# of a --test/--record-golden operation (its driver takes `@` aliases only).
+# Prints the target that reaches, an `--alias`/`--alias-rec` operand spelled
+# as the `@@`/`@` target dune takes it for.
+#
+# What is read, as dune 3.24's cmdliner parses it -- an allowlist: a form not
+# listed reads as reaching neither, a miss that shows itself as the smaller cap:
+# - only `dune build` (and the prefixes `b` ... `buil` cmdliner takes for it)
+#   builds aliases. Every other subcommand reaches neither: `exec`'s words are
+#   the program's (`exec /bin/echo @train` builds no alias); `runtest DIR` and
+#   `test` build the `runtest` alias of a directory or a named test, never a
+#   `slow` or `train` one; anything else builds no test alias.
+# - its `@`/`@@` targets, before dune's `--` and after it, where every word is
+#   still a target (`build -- @runtest @train`); after `--` an option spelling
+#   is a file target, not an option.
+# - `--alias NAME` / `--alias=NAME` (= `@@NAME`) and `--alias-rec NAME` /
+#   `--alias-rec=NAME` (= `@NAME`), also in the prefixes cmdliner accepts for
+#   the latter (`--alias-`, `--alias-r`, `--alias-re`).
+# - an alias path's trailing `/` is dropped, as dune drops it.
+# Not read: `--default-target` and dune's `@@default` with no target, and a
+# subcommand behind a global option (all read as reaching neither). Other
+# options' operands are not skipped, so one spelled like a `slow`/`train` alias
+# would be taken for it: a false hit, a wider run cap and, for `slow`, no
+# per-test cap on a GPU batch.
+test_cap_alias_is() { # slow|train TARGET: 0 iff TARGET is an alias of that kind
+  local name
+  case $2 in
+    @@*) name=${2#@@} ;;
+    @*) name=${2#@} ;;
+    *) return 1 ;;
+  esac
+  while :; do
+    case $name in */) name=${name%/} ;; *) break ;; esac
+  done
+  name=${name##*/}
+  case $name in "$1" | "$1"-*) return 0 ;; esac
+  return 1
+}
+test_cap_opt_is() { # WORD OPTION MIN: 0 iff WORD is OPTION or a prefix of it of at least MIN chars
+  [ "${#1}" -ge "$3" ] || return 1
+  case $2 in "$1"*) return 0 ;; esac
+  return 1
+}
+test_cap_reaches() { # slow|train dune-argv...; 0 (printing the target) iff one reaches that kind
+  local kind=$1 arg opt pre target
+  shift
+  [ $# -gt 0 ] || return 1
+  case $1 in
+    b | bu | bui | buil | build) shift ;;
+    *) return 1 ;;
+  esac
+  while [ $# -gt 0 ]; do
+    arg=$1
+    shift
     case $arg in
-      --) return 1 ;;
-      @slow | @@slow | @*/slow | @@*/slow | @slow-* | @@slow-* | @*/slow-* | @@*/slow-*)
-        printf '%s' "$arg"
-        return 0 ;;
+      --)
+        for target; do
+          if test_cap_alias_is "$kind" "$target"; then
+            printf '%s' "$target"
+            return 0
+          fi
+        done
+        return 1 ;;
+      @*) target=$arg ;;
+      --?*)
+        opt=${arg%%=*}
+        if [ "$opt" = --alias ]; then
+          pre=@@
+        elif test_cap_opt_is "$opt" --alias-rec 8; then
+          pre=@
+        else
+          continue
+        fi
+        if [ "$opt" != "$arg" ]; then
+          target=$pre${arg#*=}
+        elif [ $# -gt 0 ]; then
+          target=$pre$1
+          shift
+        else
+          return 1
+        fi ;;
+      *) continue ;;
     esac
+    if test_cap_alias_is "$kind" "$target"; then
+      printf '%s' "$target"
+      return 0
+    fi
   done
   return 1
 }
-
-# Whether dune arguments reach the training integrations (`@train`, a
-# directory's `train`, a `train-NAME` member), which tools/test-run.sh gives
-# TRAIN_RUN_CAP_DEFAULT; prints the first argument that does. As for
-# test_cap_reaches_slow, arguments after dune's own `--` are not targets.
-test_cap_reaches_train() { # dune-argv...; 0 (printing the target) iff one reaches @train
-  local arg
-  for arg; do
-    case $arg in
-      --) return 1 ;;
-      @train | @@train | @*/train | @@*/train | @train-* | @@train-* | @*/train-* | @@*/train-*)
-        printf '%s' "$arg"
-        return 0 ;;
-    esac
-  done
-  return 1
-}
+test_cap_reaches_slow() { test_cap_reaches slow "$@"; } # dune-argv...
+test_cap_reaches_train() { test_cap_reaches train "$@"; } # dune-argv...
 
 # The per-test cap (gh-ocannl-1211): the run's cap, applied to each process
 # dune starts. A GPU fault on tuf (gfxhub/CPC page fault, then the test's

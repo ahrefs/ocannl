@@ -129,13 +129,14 @@ capped() { perl -e "$capped_perl" -- "$cap" "$@"; }
 
 # The per-command cap of each operation (gh-ocannl-2106): an explicit --cap bounds every command;
 # by default a --test or --record-golden alias reaching the slow tests -- test_cap_reaches_slow, the
-# classification tools/test-run.sh selects its own slow budget by -- gets SLOW_RUN_CAP_DEFAULT for
+# classification tools/test-run.sh selects its own slow budget by, over the `build VALUE` dune_build
+# runs (gh-ocannl-2340) -- gets SLOW_RUN_CAP_DEFAULT for
 # each command it runs (its build, a golden's re-run and promotion reads), while @check, the width
 # resolution, the device probe and a --run probe (free text, never classified) keep the ordinary one.
 ordinary_cap=$cap
 operation_cap() { # kind value: sets cap for the operation's commands
   cap=$ordinary_cap
-  if [ -z "$cap_explicit" ] && [ "$1" != run ] && test_cap_reaches_slow "$2" >/dev/null; then
+  if [ -z "$cap_explicit" ] && [ "$1" != run ] && test_cap_reaches_slow build "$2" >/dev/null; then
     cap=$SLOW_RUN_CAP_DEFAULT
     echo "machine-verify: per-command cap: ${cap}s for $2 (the slow default, SLOW_RUN_CAP_DEFAULT of tools/per-test-cap.sh)"
   fi
@@ -285,7 +286,7 @@ opam_exec() {
 with_test_cap() { # kind value command...
   if [ -n "$test_cap_arg" ]; then
     leg_cap=$test_cap_arg
-  elif [ -n "$gpu_backends" ] && [ "$1" != run ] && ! test_cap_reaches_slow "$2" >/dev/null; then
+  elif [ -n "$gpu_backends" ] && [ "$1" != run ] && ! test_cap_reaches_slow build "$2" >/dev/null; then
     leg_cap=$TEST_CAP_DEFAULT
   else
     leg_cap=0
