@@ -5915,13 +5915,15 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   `slow-metal_gpu_hang_failure` probe gives the OS 20 s to kill its kernel; that cost fits the
   budget but is not evidence of completed training. The per-box timing evidence is in staging#1819.
   Slow GPU batches deliberately keep no default per-test cap: a wedged device may therefore
-  hold the box for the whole run cap. Set `--test-cap N` for a tighter bound; `plan` names this
-  trade-off. Sweep keeps the per-test watcher on its regular leg even with `--slow`.
+  hold the box for the whole run cap. Set `--test-cap N` for a tighter bound, never below the
+  run's own length (the gh-ocannl-2302 bullet below); `plan` names this trade-off. Sweep keeps the per-test
+  watcher on its regular leg even with `--slow`.
 - **A Metal `slow-mnist_conv` or `slow-cifar_conv` in a shared-event wait is usually running
-  slowly, not hung; judge by its progress lines (gh-ocannl-2302).** At `9023239da` a training
-  step takes 1.32 s for `mnist_conv` and 2.05 s for `cifar_conv` on Metal, the same on mac-studio
-  (M4 Max) and macbook-pro (M4 Pro), against 12 ms for `mnist_conv` on cc. At 4000 and 2000
-  steps that is about 90 and 70 minutes of training on an idle box; both passed on macbook-pro
+  slowly, not hung; judge by its progress lines (gh-ocannl-2302).** With the library at
+  `9023239da` (a step bench beside it), a Metal training step took 1.32 s for `mnist_conv` on
+  both mac-studio (M4 Max) and macbook-pro (M4 Pro), and 2.06 s and 2.05 s for `cifar_conv` on
+  the same two boxes, against 12 ms for `mnist_conv` on cc (mac-studio). At 4000 and 2000 steps
+  that is about 90 and 70 minutes of training on an idle box; both passed on macbook-pro
   Metal in one `--no-buffer` batch, `mnist_conv` in 5272 s and `cifar_conv` in 4101 s. Equal
   rates on two GPUs of different width mean serial kernels. In `mnist_conv`'s step the default
   schedule gives `bias_conv1.grad`'s reduction one GPU thread, and per cell that thread replays
