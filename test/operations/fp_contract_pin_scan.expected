@@ -150,6 +150,7 @@ test/operations/tf32_reference_rounding.ml -- exact-operands: weights of one and
 test/operations/tile_bf16_row_groups.ml -- exact-operands: an explicit fma by one and minus zero for every bf16/fp16 code, exact for every input
 test/operations/tile_fallback_unfused.ml -- pinned off
 test/operations/tile_mma_declines.ml -- exact-operands: quarters times small integers, every sum exact in f32
+test/operations/tile_mma_forced_decline.ml -- exact-operands: quarters times small integers, every sum exact in f32
 test/operations/tile_mma_geometry.ml -- exact-operands: quarter, integer and half-step cycles, exact at f32, bf16 and half
 test/operations/tile_mma_narrow.ml -- exact-operands: dyadic operands keep every product and sum exact, the native f16 accumulators included
 test/operations/tune_footprint_default.ml -- exact-operands: small integer operands make every sum of products exact in f32

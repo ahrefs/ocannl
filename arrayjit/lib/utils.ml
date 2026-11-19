@@ -3008,6 +3008,28 @@ let with_runtime_debug () = settings.output_debug_files_in_build_directory && se
 let debug_log_from_routines () = settings.debug_log_from_routines && settings.log_level > 1
 let never_capture_stdout () = get_global_flag ~default:false ~arg_name:"never_capture_stdout"
 
+(* gh-ocannl-1308: the test-only forced [Tile_mma] decline; documented in the interface. *)
+let force_tile_mma_decline_from_env =
+  match Stdlib.Sys.getenv_opt "OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE" with
+  | None | Some ("" | "0") -> Ok false
+  | Some "1" -> Ok true
+  | Some other -> Error other
+
+let force_tile_mma_decline : bool option ref = ref None
+
+let tile_mma_decline_forced () =
+  match !force_tile_mma_decline with
+  | Some forced -> forced
+  | None -> (
+      match force_tile_mma_decline_from_env with
+      | Ok forced -> forced
+      | Error value ->
+          invalid_arg
+            (Printf.sprintf
+               "OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE=%S: expected 1 (force every Tile_mma to \
+                decline), 0 or empty (off)"
+               value))
+
 external detach_c_stderr : unit -> bool = "ocannl_detach_c_stderr"
 (** Move the C runtime's [stderr] onto its own descriptor, duplicated from the process's real
     stderr, so that foreign C libraries' diagnostics follow the real stderr rather than whatever

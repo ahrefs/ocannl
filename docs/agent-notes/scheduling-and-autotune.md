@@ -1609,7 +1609,9 @@ files.
   tile for the leg's storage precisions, declined elsewhere — its stanza then declares
   `OCANNL_TF32_MATMULS` and `OCANNL_CC_VECTOR_BYTES` beside the backend). Keep a text pin only
   for what the text is about (a dialect's instruction, a register-tile geometry, a fence's
-  position, a swizzle's XOR), and say so at the site.
+  position, a swizzle's XOR), and say so at the site. Such a census claim's negative control is the
+  forced-decline leg (`OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE`, build-and-test.md#verdict-claims,
+  gh-ocannl-1308).
 ## Register-tile search and ranking
 - **The register-tile geometry is a schedule decision, not a renderer constant** (gh-ocannl-619).
   `Schedule.Tensorize` carries `tile : Register_tile.t option` (`{rm; rn; lanes}`) into
