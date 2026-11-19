@@ -1,7 +1,9 @@
 (* What the two real-stall Metal tests read off the OS rather than off the backend under test
    (gh-ocannl-2082, gh-ocannl-2139): whether macOS killed a hung kernel, and a bound on a run that
    no OCaml code in the process can enforce. Shared by metal_gpu_hang_failure and
-   metal_wait_bound_real_hang, which each choose a leg on [recovery_count]. *)
+   metal_wait_bound_real_hang, which each choose a leg on [recovery_count], and by the hand-run
+   probe test/metal_probe/metal_hang_probe.ml, so the probe and the tests cannot disagree on what a
+   recovery is. *)
 
 open Base
 

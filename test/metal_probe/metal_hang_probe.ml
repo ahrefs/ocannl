@@ -110,7 +110,16 @@ let status cb = Me.CommandBuffer.(Status.sexp_of_t (get_status cb)) |> Sexplib0.
 let final cb = Me.CommandBuffer.(match get_status cb with Completed | Error -> true | _ -> false)
 let error cb = Option.value (Me.CommandBuffer.get_error cb) ~default:"-"
 
+(* Refuses a thread count the one-dimensional grid below cannot dispatch exactly, before any command
+   buffer or encoder exists. *)
+let exact_threads threads =
+  if threads < 1 || (threads > 256 && threads mod 256 <> 0) then
+    invalid_arg
+      (Printf.sprintf "%d threads: give 1 to 256, or a multiple of 256, so the grid is exact"
+         threads)
+
 let launch ?(bytes = []) queue ~name ~threads x =
+  exact_threads threads;
   let cb = Me.CommandBuffer.on_queue queue in
   let enc = Me.ComputeCommandEncoder.on_buffer cb in
   Me.ComputeCommandEncoder.set_compute_pipeline_state enc (pso name);
@@ -120,10 +129,6 @@ let launch ?(bytes = []) queue ~name ~threads x =
       let p = Ctypes.(allocate uint32_t (Unsigned.UInt32.of_int v) |> to_voidp) in
       Me.ComputeCommandEncoder.set_bytes enc ~bytes:p ~length:4 ~index:(i + 1))
     bytes;
-  if threads < 1 || (threads > 256 && threads mod 256 <> 0) then
-    invalid_arg
-      (Printf.sprintf "%d threads: give 1 to 256, or a multiple of 256, so the grid is exact"
-         threads);
   let per = min threads 256 in
   Me.ComputeCommandEncoder.dispatch_threadgroups enc
     ~threadgroups_per_grid:{ width = (threads + per - 1) / per; height = 1; depth = 1 }
@@ -141,6 +146,7 @@ let wait_bounded ~max_s cb =
   done
 
 let stall threads max_s =
+  exact_threads threads;
   let queue = Me.CommandQueue.on_device device and side = Me.CommandQueue.on_device device in
   let x = buffer (4 * threads) and y = buffer 32 in
   let event = Me.SharedEvent.on_device device in
