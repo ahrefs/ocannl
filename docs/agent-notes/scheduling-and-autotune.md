@@ -2676,10 +2676,10 @@ files.
   (`k_menu_gate`: only pads). Mind the memory floor: 16x16x256 f32 is exactly Metal's 32 KiB and is
   admitted (executed bitwise there); 32x32x256 is 64 KiB and refuted on every current GPU; 64x64
   needs 32 KiB at depth 64 (CUDA admits 64 and 32, HIP 128 too). So a test executing seeds must
-  enumerate them under the device's limits, not no-limits. Every seed's floor is held to the gate, and the gate to the
-  compiled kernel, by the two relations in [backend-memory.md](backend-memory.md) (gh-ocannl-1530). The row role is `s` (the batch is a
-  batch loop), so pad waste excludes the 64-row block wherever `s` is below 64 — a fixture pinning it
-  needs 64 rows of `s`, not of `b*s`. Because this layout flattens only the OPERANDS, it also admits
+  enumerate them under the device's limits, not no-limits. Every seed's floor is held to the gate,
+  and the gate to the compiled kernel, by the two relations in [backend-memory.md](backend-memory.md)
+  (gh-ocannl-1530). The row role is `s` (the batch is a batch loop), so pad waste excludes the
+  64-row block wherever `s` is below 64 — a fixture pinning it needs 64 rows of `s`, not of `b*s`. Because this layout flattens only the OPERANDS, it also admits
   (gh-ocannl-1459) the STAGED tensorized leaves and the `Fuse_epilogue` twins of both pipelines:
   staging rewrites the operand reads into dense cooperative tiles before `Tensorize` looks, and the
   accumulator and store-back site are the site's own. Its mma menu is a staged K menu (16 or 32 rows,
