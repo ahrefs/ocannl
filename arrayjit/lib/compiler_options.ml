@@ -209,6 +209,11 @@ let metal ~routine_logging ~math_api =
     | Legacy -> [ Fast_math_enabled false ])
   @ if routine_logging then [ Enable_logging ] else []
 
+(* gh-ocannl-1828: the sequence a Metal run compiles under, from what decides it -- the runtime's
+   math API and the routine-logging setting. The backend's every compile and the AIR census that
+   re-compiles a run's artifact both take it from here, so the inputs have one owner too. *)
+let metal_of_run ~math_api = metal ~routine_logging:(Utils.debug_log_from_routines ()) ~math_api
+
 let render_metal options =
   String.concat " "
     (List.map

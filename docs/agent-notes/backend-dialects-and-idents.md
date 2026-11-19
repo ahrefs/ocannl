@@ -62,7 +62,9 @@ files.
   `test_where_precision.metal.expected`, `test_metal_guarded_gather_codegen`. The cost, measured
   by `branchless_select`'s AIR census (gh-ocannl-1828; Metal Toolchain 32023.922): a VALUE select
   whose arm loads from device memory keeps its short-circuit as a `br i1` on the select's line in
-  AIR, one per census leg -- whether Apple's GPU compiler then predicates it is not visible there.
+  AIR, one per hand-built census leg (the realistic pool kernel's selects none; its branch is on
+  the window guards' line) -- whether Apple's GPU compiler then predicates it is not visible
+  there. Blending value selects on Metal, or showing AGX predicates them, is gh-ocannl-2400.
 - HIP blends a value select (`Low_level.speculable_select`) over `auto` locals in an
   immediately-invoked lambda, `[&]() { auto ocannl_sel_a__ = A; ...; return <the dialect's own
   ?:>; }()` (`Cuda_like_config`'s `blends_value_selects`, `C_syntax.Over_locals`, gh-ocannl-1695):

@@ -1890,10 +1890,7 @@ module Impl = struct
 
   (* The compile options a link compiles under, computed once per link: what the kernel code cache
      keys on is what [compile_metal_source] applies. *)
-  let metal_option_state () =
-    Compiler_options.metal
-      ~routine_logging:(Utils.debug_log_from_routines ())
-      ~math_api:(Lazy.force runtime_math_api)
+  let metal_option_state () = Compiler_options.metal_of_run ~math_api:(Lazy.force runtime_math_api)
 
   (* Writes [source] as the [<name>.metal] build artifact when debug files are on: the extension is
      the backend's stated [source_extension] fact, which test-side readers are held equal to. *)

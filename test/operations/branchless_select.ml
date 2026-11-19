@@ -74,21 +74,22 @@ let on_air = String.equal backend_name "metal"
 
 (* The Metal backend's own host probes ([Metal_backend.host_capabilities]), which the host record
    every test depends on carries, so installing or updating the toolchain reruns this test. *)
-let metal_host_capability key =
-  List.Assoc.find (Context.host_capabilities ()) ~equal:String.equal key
+let metal_host_capabilities = lazy (Context.host_capabilities ())
 
-(* The compile options the Metal run applied, rebuilt from what decides them: the math API the
-   runtime accepts, as the backend reports it, and routine logging. [None] where the report names no
-   API this build knows, which the census reads as an unreadable artifact, a failure, never a
-   guess. *)
+let metal_host_capability key =
+  List.Assoc.find (Lazy.force metal_host_capabilities) ~equal:String.equal key
+
+(* The compile options the Metal run applied: the math API the runtime accepts, as the backend
+   reports it, through the builder the backend's own compiles call ([Compiler_options.metal_of_run],
+   which owns the other input, routine logging). [None] where the report names no API this build
+   knows, which the census reads as an unreadable artifact, a failure, never a guess. *)
 let metal_options =
   lazy
     (Option.map
        (Option.bind
           (metal_host_capability "metal_math_api")
           ~f:Ir.Compiler_options.metal_math_api_of_name)
-       ~f:(fun math_api ->
-         Ir.Compiler_options.metal ~routine_logging:(Utils.debug_log_from_routines ()) ~math_api))
+       ~f:(fun math_api -> Ir.Compiler_options.metal_of_run ~math_api))
 
 let blends = on_cc || String.equal backend_name "hip"
 
@@ -356,7 +357,7 @@ let gpu_census dialect ~patterns name =
    counts name the version they pin). A fix that makes Metal's value selects branch-free reddens the
    pin, which is the cue to drop it and let the zero-branch claim run. What AIR shows is the front
    end's IR, not the GPU's machine code ([Asm.disassemble_gpu]). *)
-let air_divergence = "gh-ocannl-1828"
+let air_divergence = "gh-ocannl-2400"
 let air_branches = 1
 let air_pinned_toolchains = [ "32023.922" ]
 let air_census_runs () = on_air && Result.is_ok (Lazy.force metal_toolchain)
@@ -383,7 +384,7 @@ let air_pinned_leg =
 (* Read emitted select source lines in the backend compiler's assembly. CUDA's claim covers the
    floor PTX target policy only, including the pool kernel (gh-ocannl-1822). On Metal, the AIR
    census's pin follows the zero-branch claim's row. *)
-let census_claim ~patterns ~gpu_patterns ~air_claim claim name =
+let census_claim ~patterns ~gpu_patterns ~air_claim ~air_skip claim name =
   let claim = claim ^ " (CUDA: floor PTX target only)" in
   let native_cuda =
     String.equal backend_name "cuda"
@@ -403,10 +404,7 @@ let census_claim ~patterns ~gpu_patterns ~air_claim claim name =
       else
         match gpu_dialect with
         | Some Asm.Air ->
-            Verdict.skipped claim
-              ~backend:
-                (Printf.sprintf "metal (its AIR keeps the select's short-circuit, %s)"
-                   air_divergence)
+            Verdict.skipped claim ~backend:(Printf.sprintf "metal (%s, %s)" air_skip air_divergence)
         | Some dialect ->
             p_all claim (gpu_census dialect ~patterns:gpu_patterns name) ~f:branch_free
         | None ->
@@ -618,7 +616,7 @@ let () =
              "%s: Metal's AIR keeps the select's short-circuit, %d conditional branch(es) on its \
               line"
              name)
-        claim name)
+        ~air_skip:"its AIR keeps the select's short-circuit" claim name)
 
 (* === The guards that must keep short-circuiting. === *)
 
@@ -860,4 +858,5 @@ let () =
       (Printf.sprintf
          "pool backward: Metal's AIR has %d conditional branch(es) on the inlined kernel's [?:] \
           lines, its window guards' and its selects' together")
+    ~air_skip:"its AIR has a branch on the inlined kernel's [?:] lines, the window guards'"
     claim "bs_pool_inlined"

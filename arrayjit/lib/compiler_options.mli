@@ -101,6 +101,12 @@ type metal_option =
 
 val equal_metal_option : metal_option -> metal_option -> bool
 val metal : routine_logging:bool -> math_api:metal_math_api -> metal_option list
+
+val metal_of_run : math_api:metal_math_api -> metal_option list
+(** {!metal} under the current [debug_log_from_routines] setting: the sequence a Metal run compiles
+    under, which [Metal_backend] applies and a test re-compiling a run's [.metal] artifact
+    (gh-ocannl-1828) re-applies. *)
+
 val render_metal : metal_option list -> string
 
 val metal_regime_tag : metal_math_api -> string option
