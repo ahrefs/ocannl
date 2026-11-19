@@ -745,6 +745,30 @@ files.
   privatizing around a materialized scope; since gh-ocannl-1151 the inner-output nest, a `Stage`
   applied by an earlier `apply` against the same ops in one, the RNG pin and the re-check) and
   `autotune_privatize`'s saved-form claims.
+- **A narrow-storage gradient is sunk before anything decides its width** (gh-ocannl-2362).
+  Backprop lowers a gradient over its forward op's product space, so a weight or bias gradient runs
+  its batch reduction OUTSIDE its cell's loops and an input gradient its contraction loop between
+  two of them: the serial rendering localizes nothing, rounds every step, and the shared decision
+  above correctly keeps every `Privatize` tile at storage to match -- 61 bf16 tiles in
+  `gpt2_mini_train`'s backward on HIP, 4.5x slower per backward GEMM. The fix is at the source, not
+  the tile: `Low_level.sink_narrow_reduction_loops` (in `post_virtualization_pipeline`, after the
+  one-hot rewrites, whose scatter match wants the vocabulary loop innermost as lowered) moves a
+  narrow-float target's cell loops above its reduction loops, each group in its relative order --
+  the order `Sketch_families.reduction_sink` reaches, which leaves narrow sites alone for exactly
+  this reason. Each cell keeps its contributions' order, so the program is unchanged; the reduction
+  becomes an innermost run the serial rendering localizes at `accum_prec`, the entry `Privatize` is
+  judged on widens, and values move only where the backend widens (towards the exact sum). Gated on
+  the node's storage precision, not the backend's `accum_prec` (where nothing widens a localized
+  accumulator is the RMW exactly, so no backend fact is needed, and the optimizer stays
+  backend-independent), and not applied to f32: there it is bitwise neutral but trades the untuned
+  CPU and Metal backward's streaming rank-1 updates for strided dot products, a perf question of its
+  own. The allowlist is fail-closed (perfect serial chain, plain cell iterators, the target read only
+  at its own cell, pure index guards that move with the loop they mention); a convolution's input
+  gradient (cell moved by an affine reduction index) and the dynamic scatter are left alone and keep
+  per-step narrowing, which `bf16_arithmetic`'s reference entry states. Pinned by
+  `lowered_nest_order`'s narrow legs and `narrow_grad_residency` (a bf16 dense layer's three
+  gradients onto nonzero incoming values equal an f32 twin's exact sums narrowed once on the default,
+  the privatized preset and the seeded CUDA/HIP default, whose shipped `acc` tiles are f32).
 - **What forces one of the two RMW forms**, i.e. the declines a property test must be able to
   provoke: `debug_log_from_routines` (the per-step `Set` trace names the source assignment and the
   node's cell each step; a localized scope's steps would log a codegen-minted local instead —

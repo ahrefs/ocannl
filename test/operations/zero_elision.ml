@@ -278,7 +278,10 @@ let () =
    zeros). [Ll_test.drift] inputs are bf16-exact while their 16-term partial sums are not, so where
    the backend widens bf16 accumulators (the CPU backends, CUDA, HIP) a per-step narrowing changes
    the result; on Metal, which keeps bf16 residency by design, the two agree either way. Both
-   routines start from a sentinel in [out], so the elided one cannot lean on a zero left behind. *)
+   routines start from a sentinel in [out], so the elided one cannot lean on a zero left behind. The
+   optimizer would sink this plain-cell narrow nest to [i -> r -> s] (gh-ocannl-2362,
+   [LL.sink_narrow_reduction_loops]), so the program is compiled as built
+   ([Ll_test.optimize_scoped]): the order a nest the sink declines still has. *)
 let () =
   printf "--- narrow format: the inner reduction stays localized ---\n";
   let node = Ll_test.node_factory ~prec:Ir.Ops.bfloat16 ~first_id:12570 ~dims:[| 1 |] () in
@@ -303,7 +306,7 @@ let () =
     Array.init (r_n * i_n * s_n) ~f:(fun k -> Ll_test.drift ~dims (Ll_test.unflat ~dims k))
   in
   let run ~name ~elide_it =
-    let o = Ll_test.optimize ~materialized:[ src; out ] ~name program in
+    let o = Ll_test.optimize_scoped ~materialized:[ src; out ] ~name ~raw:program program in
     let o =
       if not elide_it then o
       else

@@ -11636,6 +11636,53 @@
  (action
   (diff narrow_gebp_bench_padded.expected narrow_gebp_bench_padded.actual)))
 
+; gh-ocannl-2362: host-side census of a bf16 decoder block's backward (a positional table, attention,
+; layer norms, FFN): every narrow plain-cell gradient nest is sunk in the optimized routine, the
+; positional table's by name, and every acc tile the privatized preset mints over a bf16 gradient
+; under a widening accumulator is f32. Structural only, so the golden is backend-uniform.
+
+(test
+ (name narrow_grad_census)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules narrow_grad_census)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  arrayjit.context
+  arrayjit.autotune)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-2362: a dense layer's bf16 weight, input and bias gradients, accumulated onto nonzero
+; incoming values, equal an f32-gradient twin's exact sums narrowed once, on the default pipeline,
+; the privatized preset and (where the untuned CUDA/HIP default seeds) the seeded default, whose
+; accumulator tiles over them are f32. The values are dyadic, so the golden is backend-uniform.
+
+(test
+ (name narrow_grad_residency)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules narrow_grad_residency)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  arrayjit.utils
+  arrayjit.context
+  arrayjit.autotune)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1965: what placement may change at a narrow precision, per the backend's own compute
 ; and accumulator precisions, under each narrow-compute policy; the contract is in
 ; docs/precision_inference.md.
@@ -15178,11 +15225,12 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-; gh-ocannl-1405, gh-ocannl-2195: the untuned CUDA/HIP default seeds narrow-storage sites (bf16,
-; f16 and fp8 gradients whose accumulator the backend widens to f32) in every profile, and sinks them
-; only under gpu_default_seed_narrow_storage: off, the weight gradient is seeded and both gradients
-; are bitwise the default pipeline's, per precision; on, the bias gradient is sunk and closer to an
-; f64 reference; the approximate profile turns the gate on and reproducible pins it off. The seeding
+; gh-ocannl-1405, gh-ocannl-2195, gh-ocannl-2362: the untuned CUDA/HIP default seeds narrow-storage
+; sites (bf16, f16 and fp8 gradients whose accumulator the backend widens to f32) in every profile;
+; the optimizer has sunk their batch reductions, so the default narrows each cell once (within one
+; rounding of an f64 reference), the seeded weight gradient and both gradients under
+; gpu_default_seed_narrow_storage are bitwise the default pipeline's, per precision, and the gate
+; changes no decision; the approximate profile turns it on and reproducible pins it off. The seeding
 ; threshold and both arithmetics (the default's with explicit FMAs, and reproducible's with no
 ; contraction) are pinned in the source, the gate is passed explicitly before the source states the
 ; key itself, so the golden is backend-uniform.

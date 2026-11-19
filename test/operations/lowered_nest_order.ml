@@ -189,3 +189,90 @@ let () =
      is a forward-lowering property only)"
     (let source, _ = wgrad in
      (not (List.is_empty source)) && List.for_all source ~f:(fun nest -> not (outputs_first nest)))
+
+(* gh-ocannl-2362: at NARROW gradient storage the optimizer sinks that order
+   ([Low_level.sink_narrow_reduction_loops]): the raw lowering keeps the forward product space, the
+   optimized routine opens every output loop first, so code generation can hold the reduction's
+   accumulator at [accum_prec] and narrow once. Both gradients of a dense layer: the weight
+   gradient's batch reduction is outermost raw, and the input gradient's contraction loop sits
+   BETWEEN its two output loops ([x.grad[b,i] += w[o,i] * y.grad[b,o]] runs [b, o, i]). An f32
+   gradient keeps the lowered order in the optimized routine too, and so does a narrow gradient
+   whose cell a reduction loop's affine index also moves (a convolution's input gradient), which no
+   order localizes. *)
+let grad_nests ~name ~prec ~input_grad =
+  let x =
+    Operation.init ~l:(name ^ "_x") ~prec:Ir.Ops.single ~b:[ 3 ] ~o:[ 5 ]
+      ~f:(fun idcs -> Float.of_int (1 + idcs.(0)))
+      ~grad_spec:(if input_grad then Tensor.Require_grad else Tensor.Prohibit_grad)
+      ()
+  in
+  let w =
+    Operation.init ~l:(name ^ "_w") ~prec:Ir.Ops.single ~i:[ 5 ] ~o:[ 4 ]
+      ~f:(fun idcs -> Float.of_int (1 + idcs.(0)))
+      ~grad_spec:Tensor.Require_grad ()
+  in
+  let%op y = w * x in
+  let%op loss = y ++ "... => 0" in
+  let grad (t : Tensor.t) =
+    Option.value_exn (Option.map t.Tensor.diff ~f:(fun d -> d.Tensor.grad))
+  in
+  let grads = if input_grad then [ grad w; grad x ] else [ grad w ] in
+  List.iter grads ~f:(fun g ->
+      Ir.Tnode.update_prec g prec;
+      Train.set_materialized g);
+  let opt = lowered ~name (Train.grad_update loss) in
+  let nests_of llc =
+    List.filter_map (accumulating_nests_with_node llc) ~f:(fun (tn, nest) ->
+        Option.some_if (List.mem grads tn ~equal:Ir.Tnode.equal && has_both nest) (tn, nest))
+  in
+  (nests_of opt.source, nests_of opt.llc)
+
+let () =
+  let report_grads name (source, llc) = report name (List.map source ~f:snd, List.map llc ~f:snd) in
+  let bf16 = grad_nests ~name:"lno_bf16" ~prec:Ir.Ops.bfloat16 ~input_grad:true in
+  report_grads "bf16 gradients" bf16;
+  let source, llc = bf16 in
+  let nodes nests = List.dedup_and_sort ~compare:Ir.Tnode.compare (List.map nests ~f:fst) in
+  p "the bf16 legs find a contraction nest of each gradient, raw and optimized"
+    (List.length (nodes source) = 2 && List.length (nodes llc) = 2);
+  p_all "a bf16 dense layer's weight and input gradients both lower reduction-outer raw" source
+    ~f:(fun (_, nest) -> not (outputs_first nest));
+  p_all "the optimized routine opens every output loop of both bf16 gradients before its reductions"
+    llc ~f:(fun (_, nest) -> outputs_first nest);
+  let f32 = grad_nests ~name:"lno_f32" ~prec:Ir.Ops.single ~input_grad:false in
+  report_grads "f32 weight gradient" f32;
+  p_all "an f32 weight gradient keeps its batch reduction outermost in the optimized routine"
+    (snd f32) ~f:(fun (_, nest) -> not (outputs_first nest));
+  (* A 1-D window over two output channels: [x.grad[o+k] += y.grad[o,d] * w[k,d]] -- the cell moves
+     with the window loop, and the channel loop reduces. *)
+  let conv =
+    let x =
+      Operation.init ~l:"lno_cv_x" ~prec:Ir.Ops.single ~o:[ 8 ]
+        ~f:(fun idcs -> Float.of_int (1 + idcs.(0)))
+        ~grad_spec:Tensor.Require_grad ()
+    in
+    let w =
+      Operation.init ~l:"lno_cv_w" ~prec:Ir.Ops.single ~o:[ 3; 2 ]
+        ~f:(fun idcs -> Float.of_int (1 + idcs.(0)))
+        ~grad_spec:Tensor.Prohibit_grad ()
+    in
+    let use_padding = false in
+    let%op y = x +* "o+k; k, d => o, d" w in
+    let%op loss = y ++ "... => 0" in
+    let g = Option.value_exn (Option.map x.Tensor.diff ~f:(fun d -> d.Tensor.grad)) in
+    Ir.Tnode.update_prec g Ir.Ops.bfloat16;
+    Train.set_materialized g;
+    let opt = lowered ~name:"lno_conv" (Train.grad_update loss) in
+    let nests_of llc =
+      List.filter_map (accumulating_nests_with_node llc) ~f:(fun (tn, nest) ->
+          Option.some_if (Ir.Tnode.equal tn g) nest)
+    in
+    (nests_of opt.source, nests_of opt.llc)
+  in
+  report "bf16 window input gradient" conv;
+  p "a bf16 window input gradient, its cell moved by a reduction loop, keeps the lowered order"
+    (let source, llc = conv in
+     List.exists llc ~f:has_both
+     && List.equal
+          (List.equal (fun (s, r) (s', r') -> Idx.equal_symbol s s' && Poly.equal r r'))
+          source llc)

@@ -1,35 +1,35 @@
-(* gh-ocannl-1405, gh-ocannl-2195: the untuned CUDA/HIP default seeds the sites whose accumulator
-   precision is wider than their storage precision in every profile, and sinks them only under the
-   numerics gate [gpu_default_seed_narrow_storage] ([Autotune.seeded_default]'s [seed_narrow]).
+(* gh-ocannl-1405, gh-ocannl-2195, gh-ocannl-2362: the untuned CUDA/HIP default seeds the sites
+   whose accumulator precision is wider than their storage precision in every profile, and the
+   numerics gate [gpu_default_seed_narrow_storage] ([Autotune.seeded_default]'s [seed_narrow]) that
+   once admitted their reduction sink has nothing left to admit on lowered code.
 
    Such a site is a bf16 gradient on CUDA and HIP (where [accum_prec] widens bf16 to f32), an f16
    one on CUDA and HIP under the default [fp16_arithmetic] (auto resolves wide there since
    gh-ocannl-2195), and fp8 on both. Backprop lowers a weight or bias gradient with the batch rows
-   outermost, so the default reads the narrow cell, adds one contribution at f32 and rounds back to
-   storage once per row. The seeding and the sink treat those sites differently: - a seeded
-   contraction (the weight gradient) keeps its result bitwise: the sketch's [Privatize] mints its
-   tile wide only where the default's serial rendering widens too (one accumulator-width decision,
-   gh-ocannl-1151), so the tile stays at storage precision and narrows once per row, as the default
-   does -- so it is seeded with the gate off, in every profile; - a sunk reduction (the bias
-   gradient) does not: below its write loops the accumulator is one code generation widens, so the
-   whole reduction runs at f32 and rounds once -- the summation order is the default's, only the
-   number of roundings changes, towards the exact sum -- so only the gate admits it.
+   outermost; since gh-ocannl-2362 the optimizer sinks a narrow-storage accumulation's batch loops
+   below its cell's loops ([Low_level.sink_narrow_reduction_loops]), so the default holds the whole
+   reduction at the accumulator precision and rounds to storage ONCE -- the residency the policy
+   promises, where it used to round once per batch row. A seeded contraction (the weight gradient)
+   keeps that result bitwise: the sketch's [Privatize] mints its tile wide exactly where the
+   default's serial rendering widens (one accumulator-width decision, gh-ocannl-1151), now wide. The
+   bias gradient reaches the seeded default already sunk, so the gate changes no decision and no
+   value.
 
    Four parts. 1. Payloads: the [approximate] profile turns the gate on, and [reproducible] pins it
    off, at its default (part 4 executes the unset default). 2. Structure, on every backend: the
    seeding rule takes a narrow matmul output whatever the accumulator, and the plan derived for CUDA
-   under a widening [accum_prec] (bf16, f16, fp8) seeds the weight gradient with the gate off, while
-   only the gate adds the sink. 3. Executed, per precision (bf16, f16, fp8): one dense layer with
+   under a widening [accum_prec] (bf16, f16, fp8) seeds the weight gradient, the gate on or off, and
+   sinks nothing more with it on. 3. Executed, per precision (bf16, f16, fp8): one dense layer with
    narrow weight and bias gradients, the inputs NOT dyadic, compiled on the default pipeline and
    through the seeded default, under the default arithmetic (fast math on, explicit FMAs) and under
    the [reproducible] profile's (no contraction anywhere). Where the seeded default runs and
    [accum_prec] widens the precision (the backend's own resolution), the weight gradient is seeded
-   with the gate off and stays bitwise the default's, and some default cell is further than one
-   rounding from the f64 reference, so a seeded schedule narrowing elsewhere than the default would
-   show. For bf16 the gate on also sinks the bias gradient, which then is closer to an f64 host
-   reference than the default's, and within one bf16 rounding of it in every cell, which the
-   default's is not. Where nothing widens, the gate changes nothing. 4. Configuration: the key
-   reaches the seeded default and [model_default] when no override is passed. *)
+   and stays bitwise the default's; wherever [accum_prec] widens, every default weight-gradient cell
+   is within one rounding of the f64 reference. For bf16, a host per-step accumulation is further
+   than one rounding in some cell (the claim's power), the gate on leaves both gradients bitwise the
+   default's, and every default bias-gradient cell is within one rounding of the reference. 4.
+   Configuration: the key reaches the seeded default and [model_default] when no override is
+   passed. *)
 
 (* cc-fp-contract: same-shape -- on cc both seeded and model defaults compile the plain default
    pipeline *)
@@ -187,6 +187,26 @@ let bgrad_ref =
       done;
       !acc)
 
+(* The weight gradient's reference the default's narrowing is judged against: it reads the
+   materialized [n9.grad] (the product's gradient, [dy] stored at the gradients' precision [prec]),
+   where the bias gradient reads [dy] itself through the inlined [y.grad]. *)
+let at_prec prec vs =
+  Ir.Ndarray.retrieve_flat_values
+    (Ir.Ndarray.init_array ~debug:"sns_at_prec" prec
+       ~dims:[| Array.length vs |]
+       ~padding:None
+       ~f:(fun idx -> vs.(idx.(0))))
+
+let wgrad_at prec =
+  let dy = at_prec prec dy_values in
+  Array.init (no * ni) ~f:(fun c ->
+      let o = c / ni and i = c % ni in
+      let acc = ref 0. in
+      for r = 0 to rows - 1 do
+        acc := !acc +. (dy.((r * no) + o) *. f32 x_values.((r * ni) + i))
+      done;
+      !acc)
+
 let bitwise a b = Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b)
 let error got want = Array.fold2_exn got want ~init:0. ~f:(fun acc g r -> acc +. Float.abs (g -. r))
 
@@ -262,8 +282,11 @@ let () =
         (count "sketch" off >= 1);
       pf "structural, %s: the gate leaves the seeded sketches as they are" l.tag
         (List.equal String.equal (sketches off) (sketches on));
-      pf "structural, %s: the gate adds the sink of the bias gradient" l.tag
-        (count "sunk" off < count "sunk" on);
+      pf
+        "structural, %s: the gate sinks nothing more, the optimizer having sunk the bias gradient \
+         (gh-ocannl-2362)"
+        l.tag
+        (count "sunk" off = count "sunk" on);
       pf "structural, %s: with the key unset the plan decides as with the gate off" l.tag
         (List.equal String.equal (decisions widen) off);
       pf
@@ -276,10 +299,18 @@ let () =
 
 (* The seeding's parity, per precision, the gate off (its default): where [accum_prec] widens the
    precision the weight gradient is seeded, and both gradients are bitwise the default pipeline's
-   everywhere. The power of the weight gradient's claim: some default cell is further than one
-   rounding from the f64 reference, so the default rounds more than once per cell, and a seeded
-   schedule rounding at other points (a tile held wide across the whole reduction, say) would differ
-   there. *)
+   everywhere. Where it widens, the default rounds each weight-gradient cell once (gh-ocannl-2362):
+   within one rounding of the f64 reference, which a per-step narrowing is not (the host controls
+   below, per precision), so a seeded schedule narrowing at more points (a storage-width tile) would
+   differ. *)
+
+(* Whether this backend's own resolution widens [prec]: then the default narrows once. *)
+let accum_widens prec =
+  not
+    (Ir.Ops.equal_prec
+       ((Context.codegen_capabilities (Context.auto ())).Ir.Backend_intf.accum_prec prec)
+       prec)
+
 let parity ~arith =
   set_arithmetic arith;
   (* The reproducible run's labels are the ones the golden has always carried. *)
@@ -312,13 +343,15 @@ let parity ~arith =
       p_all2
         (tag l ^ ": with the gate off the bias gradient is bitwise the default pipeline's")
         b_off b_default ~f:bitwise;
-      Verdict.gated_exists ~when_:widens ~on:backend_name
-        (Printf.sprintf
-           "where accum_prec widens %s, some default weight-gradient cell is further than one %s \
-            rounding from the f64 reference (the parity's power)"
-           (tag l) l.tag)
-        (List.zip_exn (Array.to_list w_default) (Array.to_list wgrad_ref))
-        ~f:(fun (g, r) -> Float.(abs (g -. r) > one_rounding prec r));
+      (let label =
+         Printf.sprintf
+           "where accum_prec widens %s, every default weight-gradient cell is within one %s \
+            rounding of the f64 reference (narrowed once)"
+           (tag l) l.tag
+       in
+       Verdict.gated_all ~when_:(accum_widens prec) ~on:backend_name label
+         [ (w_default, wgrad_at prec) ]
+         ~f:(fun (got, want) -> Verdict.within label got want ~tol:(one_rounding prec)));
       Stdio.eprintf "%s abs error vs f64: weight %g, bias %g (not part of the golden)\n%!" (tag l)
         (error w_default wgrad_ref) (error b_default bgrad_ref);
       (prec, (l, default, r_off)))
@@ -328,8 +361,33 @@ let (_ : (Ir.Ops.prec * (layer * (float array * float array) * Autotune.seeded_c
 
 let defaults = parity ~arith:`Reproducible
 
-(* The gate, on bf16: it adds the sink of the bias gradient, which changes it towards the exact sum,
-   and leaves the seeded weight gradient as it was. *)
+(* Cells narrowed to [prec] after every batch row, as the default did before gh-ocannl-2362: f32
+   additions of [term r cell], each sum rounded through the library's own codec ([at_prec]). *)
+let per_step prec ~cells ~term =
+  let acc = ref (Array.create ~len:cells 0.) in
+  for r = 0 to rows - 1 do
+    acc := at_prec prec (Array.mapi !acc ~f:(fun c a -> f32 (a +. f32 (term r c))))
+  done;
+  !acc
+
+(* The power of the within-one-rounding claims, on the host, per precision: narrowed after every
+   row, some weight-gradient cell lands further than one rounding from the reference. *)
+let () =
+  List.iter precs ~f:(fun prec ->
+      let dy = at_prec prec dy_values in
+      let steps =
+        per_step prec ~cells:(no * ni) ~term:(fun r c ->
+            dy.((r * no) + (c / ni)) *. f32 x_values.((r * ni) + (c % ni)))
+      in
+      p_exists
+        (Printf.sprintf
+           "host: narrowed after every row, some %s weight-gradient cell is further than one \
+            rounding from the reference (the claim's power)"
+           (name prec))
+        (List.zip_exn (Array.to_list steps) (Array.to_list (wgrad_at prec)))
+        ~f:(fun (g, r) -> Float.(abs (g -. r) > one_rounding prec r)))
+
+(* The gate, on bf16: the bias gradient arrives sunk, so the gate changes nothing. *)
 let () =
   let l, (w_default, b_default), r_off =
     List.Assoc.find_exn defaults bf16 ~equal:Ir.Ops.equal_prec
@@ -339,58 +397,39 @@ let () =
   List.iter (census r_on) ~f:(fun line ->
       Stdio.eprintf "admitted: %s (not part of the golden)\n" line);
   Verdict.gated ~when_:narrow_here ~on:backend_name
-    "where accum_prec widens bf16, with the gate off the seeded default sinks fewer segments than \
-     with it on, and seeds the same"
-    (List.length r_off.sd_sunk < List.length r_on.sd_sunk
-    && List.equal String.equal
-         (List.map r_off.sd_seeded ~f:(fun (_, p) -> Autotune.sketch_params_label p))
-         (List.map r_on.sd_seeded ~f:(fun (_, p) -> Autotune.sketch_params_label p)));
-  Verdict.gated ~when_:narrow_here ~on:backend_name
-    "where accum_prec widens bf16, with the gate on the bias gradient is sunk"
-    (not (List.is_empty r_on.sd_sunk));
+    "where accum_prec widens bf16, the gate changes neither what the seeded default sinks nor what \
+     it seeds"
+    (List.equal String.equal (census r_off) (census r_on));
   Verdict.gated ~when_:narrow_here ~on:backend_name
     "where accum_prec widens bf16, the admitted routine compiles without falling back"
     (not r_on.sd_fell_back);
-  Stdio.eprintf
-    "abs error vs f64: weight default %g admitted %g; bias default %g admitted %g (not part of the \
-     golden)\n\
-     %!"
-    (error w_default wgrad_ref) (error w_on wgrad_ref) (error b_default bgrad_ref)
-    (error b_on bgrad_ref);
+  Stdio.eprintf "abs error vs f64: weight default %g; bias default %g (not part of the golden)\n%!"
+    (error w_default wgrad_ref) (error b_default bgrad_ref);
   p_all2 "with the gate on the seeded weight gradient is bitwise the default pipeline's" w_on
     w_default ~f:bitwise;
-  Verdict.gated_exists ~when_:narrow_here ~on:backend_name
-    "where accum_prec widens bf16, the gate changes the bias gradient in some cell"
-    (List.zip_exn (Array.to_list b_on) (Array.to_list b_default))
-    ~f:(fun (a, b) -> not (bitwise a b));
-  Verdict.gated ~when_:narrow_here ~on:backend_name
-    "where accum_prec widens bf16, the admitted bias gradient is closer to the f64 reference"
-    Float.(error b_on bgrad_ref < error b_default bgrad_ref);
-  Verdict.gated_all ~when_:narrow_here ~on:backend_name
-    "where accum_prec widens bf16, every admitted bias-gradient cell is one bf16 rounding of the \
-     reference"
-    [ (b_on, bgrad_ref) ]
-    ~f:(fun (got, want) ->
-      Verdict.within
-        "where accum_prec widens bf16, every admitted bias-gradient cell is one bf16 rounding of \
-         the reference"
-        got want ~tol:(one_rounding bf16));
-  Verdict.gated_exists ~when_:narrow_here ~on:backend_name
-    "where accum_prec widens bf16, some default bias-gradient cell is not (the control)"
-    (List.zip_exn (Array.to_list b_default) (Array.to_list bgrad_ref))
+  p_all2 "with the gate on the bias gradient is bitwise the default pipeline's" b_on b_default
+    ~f:bitwise;
+  (let label =
+     "where accum_prec widens bf16, every default bias-gradient cell is within one bf16 rounding \
+      of the reference (narrowed once)"
+   in
+   Verdict.gated_all ~when_:(accum_widens bf16) ~on:backend_name label
+     [ (b_default, bgrad_ref) ]
+     ~f:(fun (got, want) -> Verdict.within label got want ~tol:(one_rounding bf16)));
+  (* The bias claim's power, on the host. *)
+  let b_steps = per_step bf16 ~cells:no ~term:(fun r o -> dy_values.((r * no) + o)) in
+  p_exists
+    "host: narrowed after every row, some bf16 bias-gradient cell is further than one rounding \
+     from the reference (the claims' power)"
+    (List.zip_exn (Array.to_list b_steps) (Array.to_list bgrad_ref))
     ~f:(fun (g, r) -> Float.(abs (g -. r) > one_rounding bf16 r));
-  Verdict.gated_all ~when_:(not narrow_here) ~on:backend_name
-    "where nothing widens, the gate leaves the bias gradient bitwise the default's"
-    (List.zip_exn (Array.to_list b_on) (Array.to_list b_default))
-    ~f:(fun (a, b) -> bitwise a b);
   (* {2 4. The configuration key} Unset (the test config does not state it), the seeded default
      decides as with the gate off; stated true, as with it on. *)
   let _, r_unset = seeded l in
   Verdict.gated ~when_:narrow_here ~on:backend_name
     "where accum_prec widens bf16, with the key unset the seeded default decides as with the gate \
-     off, short of what the gate takes"
-    (List.equal String.equal (census r_unset) (census r_off)
-    && List.length (census r_unset) < List.length (census r_on));
+     off"
+    (List.equal String.equal (census r_unset) (census r_off));
   Unix.putenv ("OCANNL_" ^ String.uppercase key) "true";
   let _, r_keyed = seeded l in
   Verdict.gated ~when_:narrow_here ~on:backend_name
@@ -398,7 +437,7 @@ let () =
     ((not (List.is_empty (census r_on))) && List.equal String.equal (census r_keyed) (census r_on));
   (* Under the configured [auto] gate, for the record: the ranking prices a launch at its fill
      (gh-ocannl-1479), which on a device it leaves idle can decline the contraction's sketch, and
-     the admitted reduction sink then takes the weight gradient as it takes the bias gradient. *)
+     the weight gradient then ships as the default lowers it, already sunk (gh-ocannl-2362). *)
   let auto_report = ref None in
   ignore
     (run l (fun ctx comp bindings ->

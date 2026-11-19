@@ -1,0 +1,5 @@
+as lowered, some narrow plain-cell gradient nest runs a reduction loop outside its cell: true
+the optimized routine opens every narrow plain-cell gradient nest's cell loops first: true
+as lowered, the positional table's bf16 gradient runs its batch loop outside its cell: true
+the optimized routine opens the positional table's bf16 gradient's cell loops first: true
+every acc tile the privatized preset mints over a bf16 gradient is f32: true

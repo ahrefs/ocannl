@@ -3,17 +3,17 @@ the reproducible profile pins the gate off, its default: true
 the seeding rule seeds a bf16 matmul output, whatever its accumulator precision: true
 structural, bfloat16: under a widening accumulator the plan derived for cuda seeds the weight gradient with the gate off: true
 structural, bfloat16: the gate leaves the seeded sketches as they are: true
-structural, bfloat16: the gate adds the sink of the bias gradient: true
+structural, bfloat16: the gate sinks nothing more, the optimizer having sunk the bias gradient (gh-ocannl-2362): true
 structural, bfloat16: with the key unset the plan decides as with the gate off: true
 structural control, bfloat16: under an accumulator that does not widen, the gate changes nothing: true
 structural, half: under a widening accumulator the plan derived for cuda seeds the weight gradient with the gate off: true
 structural, half: the gate leaves the seeded sketches as they are: true
-structural, half: the gate adds the sink of the bias gradient: true
+structural, half: the gate sinks nothing more, the optimizer having sunk the bias gradient (gh-ocannl-2362): true
 structural, half: with the key unset the plan decides as with the gate off: true
 structural control, half: under an accumulator that does not widen, the gate changes nothing: true
 structural, fp8: under a widening accumulator the plan derived for cuda seeds the weight gradient with the gate off: true
 structural, fp8: the gate leaves the seeded sketches as they are: true
-structural, fp8: the gate adds the sink of the bias gradient: true
+structural, fp8: the gate sinks nothing more, the optimizer having sunk the bias gradient (gh-ocannl-2362): true
 structural, fp8: with the key unset the plan decides as with the gate off: true
 structural control, fp8: under an accumulator that does not widen, the gate changes nothing: true
 bfloat16 (default arithmetic): the weight gradient is not trivially zero: true
@@ -21,46 +21,46 @@ where accum_prec widens bfloat16 (default arithmetic), with the gate off the wei
 where accum_prec widens bfloat16 (default arithmetic), the seeded routine compiles without falling back: true
 bfloat16 (default arithmetic): with the gate off the weight gradient is bitwise the default pipeline's: true
 bfloat16 (default arithmetic): with the gate off the bias gradient is bitwise the default pipeline's: true
-where accum_prec widens bfloat16 (default arithmetic), some default weight-gradient cell is further than one bfloat16 rounding from the f64 reference (the parity's power): true
+where accum_prec widens bfloat16 (default arithmetic), every default weight-gradient cell is within one bfloat16 rounding of the f64 reference (narrowed once): true
 half (default arithmetic): the weight gradient is not trivially zero: true
 where accum_prec widens half (default arithmetic), with the gate off the weight gradient is seeded: true
 where accum_prec widens half (default arithmetic), the seeded routine compiles without falling back: true
 half (default arithmetic): with the gate off the weight gradient is bitwise the default pipeline's: true
 half (default arithmetic): with the gate off the bias gradient is bitwise the default pipeline's: true
-where accum_prec widens half (default arithmetic), some default weight-gradient cell is further than one half rounding from the f64 reference (the parity's power): true
+where accum_prec widens half (default arithmetic), every default weight-gradient cell is within one half rounding of the f64 reference (narrowed once): true
 fp8 (default arithmetic): the weight gradient is not trivially zero: true
 where accum_prec widens fp8 (default arithmetic), with the gate off the weight gradient is seeded: true
 where accum_prec widens fp8 (default arithmetic), the seeded routine compiles without falling back: true
 fp8 (default arithmetic): with the gate off the weight gradient is bitwise the default pipeline's: true
 fp8 (default arithmetic): with the gate off the bias gradient is bitwise the default pipeline's: true
-where accum_prec widens fp8 (default arithmetic), some default weight-gradient cell is further than one fp8 rounding from the f64 reference (the parity's power): true
+where accum_prec widens fp8 (default arithmetic), every default weight-gradient cell is within one fp8 rounding of the f64 reference (narrowed once): true
 bfloat16: the weight gradient is not trivially zero: true
 where accum_prec widens bfloat16, with the gate off the weight gradient is seeded: true
 where accum_prec widens bfloat16, the seeded routine compiles without falling back: true
 bfloat16: with the gate off the weight gradient is bitwise the default pipeline's: true
 bfloat16: with the gate off the bias gradient is bitwise the default pipeline's: true
-where accum_prec widens bfloat16, some default weight-gradient cell is further than one bfloat16 rounding from the f64 reference (the parity's power): true
+where accum_prec widens bfloat16, every default weight-gradient cell is within one bfloat16 rounding of the f64 reference (narrowed once): true
 half: the weight gradient is not trivially zero: true
 where accum_prec widens half, with the gate off the weight gradient is seeded: true
 where accum_prec widens half, the seeded routine compiles without falling back: true
 half: with the gate off the weight gradient is bitwise the default pipeline's: true
 half: with the gate off the bias gradient is bitwise the default pipeline's: true
-where accum_prec widens half, some default weight-gradient cell is further than one half rounding from the f64 reference (the parity's power): true
+where accum_prec widens half, every default weight-gradient cell is within one half rounding of the f64 reference (narrowed once): true
 fp8: the weight gradient is not trivially zero: true
 where accum_prec widens fp8, with the gate off the weight gradient is seeded: true
 where accum_prec widens fp8, the seeded routine compiles without falling back: true
 fp8: with the gate off the weight gradient is bitwise the default pipeline's: true
 fp8: with the gate off the bias gradient is bitwise the default pipeline's: true
-where accum_prec widens fp8, some default weight-gradient cell is further than one fp8 rounding from the f64 reference (the parity's power): true
-where accum_prec widens bf16, with the gate off the seeded default sinks fewer segments than with it on, and seeds the same: true
-where accum_prec widens bf16, with the gate on the bias gradient is sunk: true
+where accum_prec widens fp8, every default weight-gradient cell is within one fp8 rounding of the f64 reference (narrowed once): true
+host: narrowed after every row, some bfloat16 weight-gradient cell is further than one rounding from the reference (the claim's power): true
+host: narrowed after every row, some half weight-gradient cell is further than one rounding from the reference (the claim's power): true
+host: narrowed after every row, some fp8 weight-gradient cell is further than one rounding from the reference (the claim's power): true
+where accum_prec widens bf16, the gate changes neither what the seeded default sinks nor what it seeds: true
 where accum_prec widens bf16, the admitted routine compiles without falling back: true
 with the gate on the seeded weight gradient is bitwise the default pipeline's: true
-where accum_prec widens bf16, the gate changes the bias gradient in some cell: true
-where accum_prec widens bf16, the admitted bias gradient is closer to the f64 reference: true
-where accum_prec widens bf16, every admitted bias-gradient cell is one bf16 rounding of the reference: true
-where accum_prec widens bf16, some default bias-gradient cell is not (the control): true
-where nothing widens, the gate leaves the bias gradient bitwise the default's: true
-where accum_prec widens bf16, with the key unset the seeded default decides as with the gate off, short of what the gate takes: true
+with the gate on the bias gradient is bitwise the default pipeline's: true
+where accum_prec widens bf16, every default bias-gradient cell is within one bf16 rounding of the reference (narrowed once): true
+host: narrowed after every row, some bf16 bias-gradient cell is further than one rounding from the reference (the claims' power): true
+where accum_prec widens bf16, with the key unset the seeded default decides as with the gate off: true
 where accum_prec widens bf16, the key stated true decides what the gate decides: true
 with the key true the model's weight gradient is bitwise the default pipeline's: true

@@ -430,7 +430,9 @@
 # stays in a register for the whole reduction. Each interchange is checked legal first. Results are
 # unchanged: only accumulations whose output cell is one tuple of write-loop values are sunk, so
 # every cell keeps its summation order, and one whose accumulator would be wider than its storage is
-# left alone. Ignored where gpu_default_sketch_min_reduction is: on a budgeted compile, on Metal
+# left alone (such a site of lowered code arrives already sunk, on every backend, by the
+# optimizer's narrow-target sink, gh-ocannl-2362: see bf16_arithmetic). Ignored where
+# gpu_default_sketch_min_reduction is: on a budgeted compile, on Metal
 # and the CPU backends. Independent of the threshold: with the
 # seeding disabled (0) the sink still applies, to every segment.
 #gpu_default_reduction_sink=true
@@ -447,7 +449,13 @@
 # those sites whatever this says (gh-ocannl-2195): a seeded contraction keeps its result, because the
 # sketch's private tile is wide exactly where the default's serial rendering is (one
 # accumulator-width decision, gh-ocannl-1151), so it narrows at the default's points. The name
-# predates that split. Ignored where gpu_default_sketch_min_reduction is.
+# predates that split. Since gh-ocannl-2362 the optimizer sinks a narrow-storage accumulation of
+# lowered code itself, on every backend and unconditionally (the default then narrows once, the
+# residency bf16_arithmetic and fp16_arithmetic promise), so a bias or weight gradient reaches this
+# gate already sunk and it changes nothing there. No site of lowered code is known to be left to
+# it (a nest the optimizer's allowlist declines but the sink would take needs a data-dependent
+# guard, which lowering does not emit), so the key is a candidate for retirement. Ignored where
+# gpu_default_sketch_min_reduction is.
 #gpu_default_seed_narrow_storage=false
 
 # If true, backend compilation logs one stderr line per compiled kernel/segment with its launch
@@ -2058,7 +2066,8 @@
 #   keeps storage-width f16 accumulators (its half tile and serial loop are both per-step,
 #   bitwise equal). The resolution is per backend: pin "true" or "false" where it must not move.
 # - "false": f16 reduction accumulators reside in f32 on every backend, narrowing once per nest
-#   -- the strict cross-backend-uniform semantics. HIP (gh-ocannl-789) and Metal (gh-ocannl-837)
+#   -- the strict cross-backend-uniform semantics (backprop's gradients included, with the
+#   exceptions bf16_arithmetic's entry lists, gh-ocannl-2362). HIP (gh-ocannl-789) and Metal (gh-ocannl-837)
 #   keep their uniform-f16 mma legs tensorized through an f32 accumulator fragment converted at
 #   the destination boundary; CUDA sm_80+ through an f32-accumulate inline-PTX arm per statement
 #   and wmma f32 fragments with a converted boundary in the persistent-fragment scope
@@ -2107,6 +2116,17 @@
 #   per 8-deep k block, the serial loop per step, so a tensorized schedule changes values. The
 #   `approximate` profile names it, which is how that regime kept the narrow side when HIP's and
 #   Metal's "auto" went wide.
+# Wherever bf16 (or, per fp16_arithmetic, f16; and fp8) resolves wide, the residency covers
+# backprop's gradients too (gh-ocannl-2362). A gradient is lowered over its forward op's product
+# space, so a weight or bias gradient runs its batch reduction OUTSIDE the loops of the cell it
+# writes, and an input gradient its contraction loop between two of them; for a narrow-storage
+# target the optimizer moves the cell's loops above the reductions (each cell keeps its
+# contributions' order), so the whole reduction accumulates wide and narrows once, in the plain
+# rendering and in every privatized or tensorized schedule alike. Where nothing widens the move
+# changes no value. Not reached, so narrowing at every step whatever the policy: an accumulation
+# whose cell a reduction loop's affine or concatenated index also moves (a convolution's input
+# gradient), a scattered embedding row (the one-hot backward's dynamic scatter), and one that
+# reads its target at another cell.
 # Programmatic override: `Ir.Numerics.set_policy`.
 #bf16_arithmetic=auto
 
