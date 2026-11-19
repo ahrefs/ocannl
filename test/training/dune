@@ -670,12 +670,12 @@
 ; saved state matters.
 
 (test
- ; ocannl-backend: cc -- every context is an explicit `Context.cpu ()`: the bit-for-bit claim is
- ; made on cc.
  (name resume_checkpoint)
  (package neural_nets_lib)
  (locks /ocannl_training_test)
- (deps ocannl_config)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (modules resume_checkpoint)
  (libraries
   base
@@ -686,6 +686,7 @@
   fresh_process
   stderr_capture
   arrayjit.ir
+  arrayjit.autotune
   arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))

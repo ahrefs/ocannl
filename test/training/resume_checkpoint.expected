@@ -1,3 +1,4 @@
+the GPU training step spans multiple kernel segments: true
 the training state carries a momentum buffer for every parameter beyond the parameters: true
 the interrupted run stops mid-epoch: true
 the interrupted run's losses are the uninterrupted run's first ones: true

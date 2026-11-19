@@ -127,9 +127,11 @@ files.
   device copies are read-only inputs, so `carried_state` never holds them and `restore_state`
   rewrites them) and `Train.Outlier_detector`'s pair; each refuses a state saved under other
   schedule parameters or window size. Executed oracle: `test/training/resume_checkpoint.ml`
-  (fresh-process resume, bit for bit on cc, with momentum-, RNG-, scaler- and detector-dropping
-  controls; the f16 leg needs a growth interval short enough for the scale to overflow after
-  the stop step, or a re-created scaler's power-of-two scale changes no bits).
+  (fresh-process resume, bit for bit within each backend, with momentum-, RNG-, scaler- and
+  detector-dropping controls). The f32 GPU step uses the tuner's deterministic fission preset
+  because the untuned preset coalesces this small graph into one kernel (gh-ocannl-1741). The f16 leg needs
+  a growth interval short enough for the scale to overflow after the stop step, or a re-created
+  scaler's power-of-two scale changes no bits.
 - `Train.to_routine` returns `Context.t * Context.routine` (gh-ocannl-772), like `Context.compile`
   and `Train.run_once`. `routine.Context.context` is the same value, so both spellings work; prefer
   chaining the returned context.
@@ -1027,6 +1029,12 @@ files.
   Metal kernel timings) was larger than the effect under test. After `Train.tune_placements` the
   debug source left on disk is arm B's — the returned already-compiled arm — so grep the artifact you
   actually mean.
+- For gh-ocannl-1741, one-operand max pooling removed the zero add before each LeNet pool tap.
+  Six exclusive CUDA training-step pairs on rog-nv-linux gave a median queued ratio of
+  0.99712 [0.99564, 0.99785] and identical parity losses. The unchanged launch control varied
+  by 10–19% between arms. The layers keep their binary form to preserve the sign of zero.
+  On cc a window of negative zeros returns positive zero after the per-tap addition and
+  negative zero in the one-operand form.
 - Picking the best of many candidates timed in DIFFERENT rounds is a winner's-curse selection: each
   reading carries its round's offset (drift, or contention that only ever slows a round down), so
   the round-best is often the luckiest round, not the fastest candidate. Re-timing the round-best
