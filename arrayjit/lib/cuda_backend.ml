@@ -1500,9 +1500,76 @@ end = struct
       Cu.Context.set_limit Cu.Context.STACK_SIZE device.dev.stack_size_baseline;
       Atomic.incr local_memory_resets)
 
+  (* Driver entry points cudajit does not bind, resolved lazily from the driver library: a query
+     whose entry point is missing answers [None], never an error. *)
+  module Driver_entry = struct
+    let library =
+      lazy
+        (let filename = if Stdlib.Sys.win32 then "nvcuda.dll" else "libcuda.so.1" in
+         try Some (Dl.dlopen ~filename ~flags:[ Dl.RTLD_NOW ]) with Dl.DL_error _ -> None)
+
+    let bind name signature =
+      lazy
+        (Option.bind (Lazy.force library) ~f:(fun from ->
+             try Some (Foreign.foreign ~from name signature) with Dl.DL_error _ -> None))
+  end
+
+  (* gh-ocannl-1530: the compiled kernel's static [__shared__] bytes
+     ([CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES]), for an armed [Compiled_kernels] census. cudajit's
+     [Cu.Module.func] is opaque and [Cu.Module] binds no [cuFuncGetAttribute], so this loads the
+     kernel's PTX a second time, through the driver entry points directly, in the current context
+     (the link's), asks, and unloads. A second JIT per kernel: only an armed census pays it. A
+     cudajit function-attribute binding would supersede this module. [None] when the driver lacks an
+     entry point or a call fails, so the census records nothing rather than a wrong figure; and
+     [None] under runtime debugging, where the linked module was JIT-compiled with debug and
+     line-info options ([run_options]) this options-free reload would not reproduce. *)
+  module Function_attributes = struct
+    open Ctypes
+
+    let module_load_data =
+      Driver_entry.bind "cuModuleLoadData" (ptr (ptr void) @-> string @-> returning int)
+
+    let module_get_function =
+      Driver_entry.bind "cuModuleGetFunction"
+        (ptr (ptr void) @-> ptr void @-> string @-> returning int)
+
+    let func_get_attribute =
+      Driver_entry.bind "cuFuncGetAttribute" (ptr int @-> int @-> ptr void @-> returning int)
+
+    let module_unload = Driver_entry.bind "cuModuleUnload" (ptr void @-> returning int)
+
+    (* CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES *)
+    let shared_size_bytes = 1
+
+    let static_shared_bytes ~ptx ~symbol =
+      let ( let* ) o f = Option.bind o ~f in
+      let* () = Option.some_if (List.is_empty (run_options ())) () in
+      let* load = Lazy.force module_load_data in
+      let* get_function = Lazy.force module_get_function in
+      let* get_attribute = Lazy.force func_get_attribute in
+      let* unload = Lazy.force module_unload in
+      let module_out = allocate (ptr void) null in
+      if load module_out ptx <> 0 then None
+      else
+        let cu_module = !@module_out in
+        Exn.protect
+          ~finally:(fun () -> ignore (unload cu_module : int))
+          ~f:(fun () ->
+            let func_out = allocate (ptr void) null in
+            if get_function func_out cu_module symbol <> 0 then None
+            else
+              let bytes = allocate int 0 in
+              if get_attribute bytes shared_size_bytes !@func_out <> 0 then None else Some !@bytes)
+  end
+
   let link_proc ~prior_context ~name ~symbol ~ptx ~(kparams : (string * kparam_source) list)
       ~(launch : Low_level.launch_dims) ~ctx_buffers lowered_bindings run_module =
     let func = Cu.Module.get_function run_module ~name:symbol in
+    if Compiled_kernels.armed () then
+      Option.iter
+        (Function_attributes.static_shared_bytes ~ptx:(Lazy.force ptx) ~symbol)
+        ~f:(fun static_workgroup_bytes ->
+          Compiled_kernels.record ~kernel:symbol ~static_workgroup_bytes);
     let device = prior_context.device in
     let stream_name = get_name device in
     (* Pre-resolve slab bases to keep the owning [Deviceptr.t]'s alive for the lifetime of the task
@@ -1910,16 +1977,7 @@ end = struct
   module Async_memory_debug = struct
     open Ctypes
 
-    let library =
-      lazy
-        (let filename = if Stdlib.Sys.win32 then "nvcuda.dll" else "libcuda.so.1" in
-         try Some (Dl.dlopen ~filename ~flags:[ Dl.RTLD_NOW ]) with Dl.DL_error _ -> None)
-
-    let bind name signature =
-      lazy
-        (Option.bind (Lazy.force library) ~f:(fun from ->
-             try Some (Foreign.foreign ~from name signature) with Dl.DL_error _ -> None))
-
+    let bind = Driver_entry.bind
     let get_device = bind "cuDeviceGet" (ptr int @-> int @-> returning int)
     let get_pool = bind "cuDeviceGetMemPool" (ptr (ptr void) @-> int @-> returning int)
 
@@ -2308,12 +2366,14 @@ end = struct
      [CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES], [CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES] — and cudajit binds
      none of them: {!Cu.Module.get_function} returns an opaque handle and [Cu.Module] exposes no
      attribute query, so there is no API-supported launchability condition to reject against here.
-     Extending the bindings is the work, and note what it does and does not buy on CUDA: a better
-     message and a [Resource_exceeded] cause with populated [requested]/[limit], not more
-     containment, because the condition it would predict is already contained above. (Per the
-     proposal's rule, a cause that cannot populate those fields is reported as [Backend_rejected]
-     rather than as a [Resource_exceeded] with invented numbers — which is why every case below is
-     [Backend_rejected].) *)
+     ([Function_attributes] above reaches [cuFuncGetAttribute] through the driver library directly,
+     by loading the PTX a second time: affordable for a test's armed [Compiled_kernels] census,
+     gh-ocannl-1530, not for every link.) Extending the bindings is the work, and note what it does
+     and does not buy on CUDA: a better message and a [Resource_exceeded] cause with populated
+     [requested]/[limit], not more containment, because the condition it would predict is already
+     contained above. (Per the proposal's rule, a cause that cannot populate those fields is
+     reported as [Backend_rejected] rather than as a [Resource_exceeded] with invented numbers —
+     which is why every case below is [Backend_rejected].) *)
 
   let status_name sexp_of status =
     match sexp_of status with Sexp.Atom name -> name | sexp -> Sexp.to_string sexp

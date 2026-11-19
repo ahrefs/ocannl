@@ -23,3 +23,20 @@ masked: every GPU conv seed is kept at a limit of exactly its gate estimate: tru
 masked: every GPU conv seed is refused one byte below its gate estimate: true
 masked: every flavor stages a register fragment through one f32 scratch tile, the only accumulator tile in workgroup memory: true
 masked: the gate's estimate charges exactly the scratch tile beyond the operand tiles: true
+matmul: every GPU seed is kept at a limit of exactly its gate estimate: true
+matmul: every GPU seed with a positive estimate is refused one byte below it: true
+matmul: a staged scalar seed, a staged tensorized one and an unstaged tensorized one: true
+matmul: a depth-2 twin, a swizzled twin and a fused twin: true
+matmul, tile-MMA scratch: every GPU seed is kept at a limit of exactly its gate estimate: true
+matmul, tile-MMA scratch: every GPU seed with a positive estimate is refused one byte below it: true
+matmul, routine-local product: every GPU seed is kept at a limit of exactly its gate estimate: true
+matmul, routine-local product: every GPU seed with a positive estimate is refused one byte below it: true
+matmul, routine-local product: a fused tensorized twin places the product in shared memory: true
+matmul, padded: every GPU seed is kept at a limit of exactly its gate estimate: true
+matmul, padded: every GPU seed with a positive estimate is refused one byte below it: true
+contraction: every GPU seed is kept at a limit of exactly its gate estimate: true
+contraction: every GPU seed with a positive estimate is refused one byte below it: true
+contraction: a contraction-coalesced staged tensorized seed: true
+conv, routine-local product: every GPU seed is kept at a limit of exactly its gate estimate: true
+conv, routine-local product: every GPU seed with a positive estimate is refused one byte below it: true
+conv, routine-local product: a fused twin places the product in shared memory: true

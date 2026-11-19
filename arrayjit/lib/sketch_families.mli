@@ -381,7 +381,10 @@ val matmul_sketch_tree :
   (Family_decision.t, sketch_params) Ir.Schedule_space.tree option
 (** The lazy matmul family, including unfused and epilogue-fused flavors; [None] when no site is
     recognized. Refutations carry statically decidable builder failures. The workgroup-memory
-    refutations charge the staged tiles as the gate does ([Schedule.kernel_workgroup_bytes]):
+    refutations charge what the gate charges a seed's built kernel
+    ([Schedule.kernel_workgroup_bytes] over the staged tiles, the masked accumulator tile, and in
+    the fused tensorized flavor the fusion target [Fuse_epilogue] places in workgroup memory; the
+    tile-MMA scratch on staged and unstaged tensorized geometries alike, gh-ocannl-1530):
     [capabilities] (the compiling context's [codegen_capabilities], through the autotuner's driver)
     supplies the backend's allocation rounding and tile-MMA scratch; the default,
     {!Ir.Backend_intf.no_codegen_capabilities}, charges the exact tile sizes alone — a weaker floor,

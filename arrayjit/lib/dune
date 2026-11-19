@@ -89,6 +89,7 @@
   resource_fault_injection
   alloc_census
   compile_cost
+  compiled_kernels
   kernel_code_cache
   kernel_outline
   ndarray

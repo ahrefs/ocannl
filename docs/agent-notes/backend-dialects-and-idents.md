@@ -538,6 +538,7 @@ configuration.
 | decision outcome | `autotune_fission_sketch.ml` | Whether tensorized candidates reached candidate compilation; read `Autotune.report.mma_candidates`, or its `fiss_mma_candidates` subcounter for the per-segment family, not a backend-specific seed-count floor. |
 | decision outcome | `schedule_batched_mma.ml` | Whether each sampled candidate rendered a tensor-core intrinsic; read `Context.routine.mma`. |
 | decision outcome | `schedule_contraction_nest.ml` | Whether each sampled tensorized contraction rendered an intrinsic; read `Context.routine.mma`. Its shared-memory token stays a dialect check below. |
+| decision outcome | `compiled_workgroup_bytes.ml` | What the device compiler allocated for each kernel; read `Ir.Compiled_kernels.with_census` around the compile. It is an opt-in bracket rather than a routine field because CUDA's reading loads the module a second time (gh-ocannl-1530). |
 | dialect identity | `hardware_axes_parity.ml` | The test pins MSL `gid`/`lid`, CUDA/HIP `blockIdx`/`threadIdx`, and C serial-loop spellings. |
 | dialect identity | `hardware_workgroup_reduce.ml` | The test pins MSL `threadgroup`/`threadgroup_barrier` versus CUDA/HIP `__shared__`/`__syncthreads`. |
 | dialect identity | `schedule_batch_grid.ml` | The test pins the emitted folded batch-axis register, MSL `gid.z` versus CUDA/HIP `blockIdx.z`. |

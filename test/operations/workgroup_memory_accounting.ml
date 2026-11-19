@@ -343,3 +343,175 @@ let () =
           in
           est - without = bytes
       | _ -> false)
+
+(* === 3. Every family's seeds (gh-ocannl-1530). ===
+
+   The two-boundary check above, over the matmul family's seeds and the coalesced branch's beside
+   the conv family's: each GPU seed, built on a scratch copy and read by the gate's own estimate, is
+   kept at a limit of exactly that estimate (no over-charge drops it) and, where the estimate is
+   positive, refused one byte below it (no under-charge proposes a kernel the gate refuses). Seeds
+   are judged on synthetic GPU limits advertising an f32 tile with pipelining depth 2 and a swizzled
+   staged layout, so the staged, tensorized, depth, swizzle and [Fuse_epilogue] twins all seed on
+   every host, and under two stand-in capabilities: Metal-like rounding with no tile-MMA scratch,
+   and the same with a positive per-kernel scratch for any tile-MMA kernel, so the scratch term is
+   charged where the gate charges it. [compiled_workgroup_bytes] holds the estimate to what the
+   device compiler allocates. *)
+
+let synthetic_limits cap =
+  let f32 = Ir.Backend_intf.Mma_f32 in
+  {
+    Ir.Backend_intf.no_hardware_limits with
+    max_workgroup_memory_bytes = cap;
+    mma =
+      Some
+        {
+          Ir.Backend_intf.minimal_mma_capability with
+          mma_tile = (8, 8, 8);
+          mma_format_tiles = [ ((f32, f32, f32), (8, 8, 8)) ];
+          mma_staged_layouts = [ ((f32, f32, f32), Ir.Backend_intf.Mma_swizzled_b128) ];
+          mma_pipeline_depths = [ 2 ];
+        };
+  }
+
+(* The stand-in with a per-kernel tile-MMA scratch: 256 bytes for any kernel holding a scope. *)
+let scratch_standin =
+  {
+    standin with
+    Ir.Backend_intf.mma_kernel_workgroup_bytes =
+      (fun ~triples -> if List.is_empty triples then 0 else 256);
+  }
+
+type judged_seed = { seed : Autotune.sketch_params; estimate : int; built : LL.optimized }
+
+let family_leg ~what ~capabilities opt =
+  let accum_prec = (Context.codegen_capabilities (Context.auto ())).accum_prec in
+  let seeding = Hashtbl.Poly.create () in
+  let seeds cap =
+    Hashtbl.find_or_add seeding cap ~default:(fun () ->
+        let limits = synthetic_limits cap in
+        List.filter
+          (Autotune.sketch_seed_params ~capabilities ~is_gpu:true ~is_cpu:false ~limits
+             (scratch opt)
+          @ Autotune.coalesced_seed_params ~capabilities ~is_gpu:true ~is_cpu:false ~limits
+              (scratch opt))
+          ~f:(fun p -> p.Autotune.sk_gpu))
+  in
+  let judged =
+    List.map (seeds None) ~f:(fun seed ->
+        let o = scratch opt in
+        let built = Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:seed o) o in
+        { seed; estimate = Sched.workgroup_memory_bytes ~capabilities built; built })
+  in
+  let kept cap p = List.mem (seeds (Some cap)) p ~equal:Poly.equal in
+  List.iter judged ~f:(fun j ->
+      let at = kept j.estimate j.seed and below = j.estimate > 0 && kept (j.estimate - 1) j.seed in
+      if (not at) || below then
+        Stdio.eprintf
+          "workgroup_memory_accounting: %s: seed %s, estimate %d: %s (not part of the golden)\n%!"
+          what
+          (Autotune.sketch_params_label j.seed)
+          j.estimate
+          (if not at then "REFUSED at its estimate" else "KEPT one byte below its estimate"));
+  Stdio.eprintf "workgroup_memory_accounting: %s: %d GPU seeds (not part of the golden)\n%!" what
+    (List.length judged);
+  p_all ~min:1 (what ^ ": every GPU seed is kept at a limit of exactly its gate estimate") judged
+    ~f:(fun j -> kept j.estimate j.seed);
+  p_all ~min:1
+    (what ^ ": every GPU seed with a positive estimate is refused one byte below it")
+    (List.filter judged ~f:(fun j -> j.estimate > 0))
+    ~f:(fun j -> not (kept (j.estimate - 1) j.seed));
+  judged
+
+(* A GEMM [z = x . w] with an elementwise tail [z + pos]; [materialize] keeps [z] on device, else
+   the fused tail is its only consumer. *)
+let gemm_lowering name ~materialize ~m ~k ~n =
+  let x =
+    NTDSL.init ~l:(name ^ "_x") ~prec:Ir.Ops.single ~o:[ m; k ]
+      ~f:(Ll_test.weighted ~weights:[| 1; 2 |] ~modulus:7 ~offset:0. ~stride:1.)
+      ()
+  in
+  let w =
+    NTDSL.init ~l:(name ^ "_w") ~prec:Ir.Ops.single ~o:[ k; n ]
+      ~f:(Ll_test.weighted ~weights:[| 2; 1 |] ~modulus:5 ~offset:(-2.) ~stride:1.)
+      ()
+  in
+  let pos =
+    NTDSL.init ~l:(name ^ "_pos") ~prec:Ir.Ops.single ~o:[ n ]
+      ~f:(fun idcs -> Float.of_int (idcs.(0) % 5) -. 2.)
+      ()
+  in
+  let%op z = x +* "ik;kj=>ij" w in
+  let%op y = z + pos in
+  if materialize then Train.set_materialized z.Tensor.value;
+  (lowering name y, z.Tensor.value)
+
+(* The attention out projection [d[b,s,j] += w[j,h,e] * x[b,s,h,e]]: the coalesced branch's site. *)
+let out_proj_lowering name =
+  let w =
+    NTDSL.init ~l:(name ^ "_w") ~prec:Ir.Ops.single ~o:[ 64 ] ~i:[ 4; 16 ]
+      ~f:(Ll_test.weighted ~weights:[| 1; 2; 3 |] ~modulus:7 ~offset:(-3.) ~stride:1.)
+      ()
+  in
+  let att =
+    NTDSL.init ~l:(name ^ "_att") ~prec:Ir.Ops.single ~b:[ 2; 32 ] ~o:[ 4; 16 ]
+      ~f:(Ll_test.weighted ~weights:[| 1; 2; 3; 1 |] ~modulus:5 ~offset:1. ~stride:1.)
+      ()
+  in
+  let%op z = w * att in
+  lowering name z
+
+(* An f32 conv with a per-channel bias tail, the product left to the tail alone. *)
+let conv_tail_lowering name =
+  let x =
+    NTDSL.init ~l:(name ^ "_x") ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 10; 10; 8 ]
+      ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
+      ()
+  in
+  let kern =
+    NTDSL.init ~l:(name ^ "_k") ~prec:Ir.Ops.single ~i:[ 3; 3; 8 ] ~o:[ 8 ]
+      ~f:(Ll_test.weighted ~weights:[| 2; 1; 1; 3 |] ~modulus:5 ~offset:(-2.) ~stride:1.)
+      ()
+  in
+  let bias =
+    NTDSL.init ~l:(name ^ "_b") ~prec:Ir.Ops.single ~o:[ 8 ]
+      ~f:(fun idcs -> Float.of_int (idcs.(0) % 3) -. 1.)
+      ()
+  in
+  let%op z =
+    x +* "...| oh<+kh, ow<+kw, ..ic..; |kh, kw, ..ic.. -> ..oc.. => ...| oh, ow, ..oc.." kern
+  in
+  let%op y = z + bias in
+  (lowering name y, z.Tensor.value)
+
+let () =
+  let is_mma j = j.seed.Autotune.sk_mma in
+  let dense, _ = gemm_lowering "wmem_mm_d" ~materialize:true ~m:32 ~k:64 ~n:64 in
+  let d = family_leg ~what:"matmul" ~capabilities:standin dense in
+  p "matmul: a staged scalar seed, a staged tensorized one and an unstaged tensorized one"
+    (List.exists d ~f:(fun j -> (not (is_mma j)) && j.seed.sk_bk > 0)
+    && List.exists d ~f:(fun j -> is_mma j && j.seed.sk_bk > 0)
+    && List.exists d ~f:(fun j -> is_mma j && j.seed.sk_bk = 0));
+  p "matmul: a depth-2 twin, a swizzled twin and a fused twin"
+    (List.exists d ~f:(fun j -> j.seed.sk_depth > 1)
+    && List.exists d ~f:(fun j -> Option.is_some j.seed.sk_swizzle)
+    && List.exists d ~f:(fun j -> j.seed.sk_epilogue));
+  let _ : judged_seed list =
+    family_leg ~what:"matmul, tile-MMA scratch" ~capabilities:scratch_standin dense
+  in
+  (* The product left to the fused tail alone: a tensorized fused twin places it in workgroup-shared
+     memory, whole ([Schedule.apply_fuse_epilogue]'s shared placement). *)
+  let local, z = gemm_lowering "wmem_mm_l" ~materialize:false ~m:32 ~k:32 ~n:32 in
+  let l = family_leg ~what:"matmul, routine-local product" ~capabilities:standin local in
+  p_exists
+    "matmul, routine-local product: a fused tensorized twin places the product in shared memory" l
+    ~f:(fun j -> is_mma j && j.seed.sk_epilogue && Set.mem j.built.LL.workgroup_shared z);
+  let padded, _ = gemm_lowering "wmem_mm_p" ~materialize:true ~m:20 ~k:70 ~n:50 in
+  let _ : judged_seed list = family_leg ~what:"matmul, padded" ~capabilities:standin padded in
+  let c = family_leg ~what:"contraction" ~capabilities:standin (out_proj_lowering "wmem_cp") in
+  p_exists "contraction: a contraction-coalesced staged tensorized seed" c ~f:(fun j ->
+      is_mma j && j.seed.sk_bk > 0
+      && Poly.equal j.seed.Autotune.sk_coalesce (Some Autotune.Coalesce_contraction));
+  let conv, z = conv_tail_lowering "wmem_cv_l" in
+  let cv = family_leg ~what:"conv, routine-local product" ~capabilities:standin conv in
+  p_exists "conv, routine-local product: a fused twin places the product in shared memory" cv
+    ~f:(fun j -> j.seed.Autotune.sk_epilogue && Set.mem j.built.LL.workgroup_shared z)

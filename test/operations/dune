@@ -5339,6 +5339,28 @@
  (preprocess
   (pps ppx_here)))
 
+; gh-ocannl-1530: every seeded candidate's compiled kernels' static workgroup allocation, as the
+; driver reports it, against the schedule layer's charge for it.
+
+(test
+ (name compiled_workgroup_bytes)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules compiled_workgroup_bytes)
+ (libraries
+  base
+  stdio
+  ocannl
+  arrayjit.verdict
+  ll_test
+  arrayjit.utils
+  arrayjit.context
+  arrayjit.autotune)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name concat_loop_symbols)
  (package neural_nets_lib)

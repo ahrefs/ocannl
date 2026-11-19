@@ -1437,6 +1437,11 @@ end = struct
     let func = H.Module.get_function run_module ~name:symbol in
     let device = prior_context.device in
     validate_scratch_budget ~device ~name func;
+    (* gh-ocannl-1530: the compiled kernel's static shared bytes, for an armed census. *)
+    if Compiled_kernels.armed () then
+      Compiled_kernels.record ~kernel:symbol
+        ~static_workgroup_bytes:
+          (H.Module.get_function_attribute func H.Module.HIP_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES);
     let stream_name = get_name device in
     (* Pre-resolve slab bases to keep the owning [Deviceptr.t]'s alive for the lifetime of the task
        closure; region views ([Tensor_at]) are non-owning and must not outlive the slab base. *)
