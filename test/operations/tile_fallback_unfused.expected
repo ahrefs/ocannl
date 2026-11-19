@@ -1,4 +1,9 @@
 the host emulation separates one rounding per k step from two: true
+the GPU leg's data separate one rounding per k step from two: true
 the serial loop computes the two-rounding f32 chain bitwise: true
 every packed seed renders its Tile_mma through the scalar fallback: true
 every packed seed's fallback computes the two-rounding f32 chain bitwise: true
+the CUDA/HIP kernel compile pins contraction off under precise math: true
+the CUDA/HIP serial loop computes the two-rounding f32 chain bitwise: true
+the CUDA/HIP tensorized f32 matmul renders its Tile_mma through the scalar fallback: true
+the CUDA/HIP fallback computes the two-rounding f32 chain bitwise: true
