@@ -2162,9 +2162,14 @@ files.
   so `gpu_*` stated on cc keys nothing -- `flip_abandonment` states every key the predicate calls
   unread on cc OFF its default and requires the warm chain to replay its abandonment record. It
   states valid values, not garbage, and so pins the identity, not an absence of reads. The absence
-  of reads at the placement level above the search is `placement_surface`'s claim: its mma sites
-  are segmented as the backend's own seeders segment (`Sched.fission_keep_mapping ~is_gpu`), so cc
-  no longer reads `gpu_fission_keep_mapping` or `gpu_serial_lanes` there (gh-ocannl-1430).
+  of reads at the placement level above the search is `placement_surface`'s claim: the prior
+  selects the same fission mapping policy as the backend's seeders
+  (`Sched.fission_keep_mapping ~is_gpu`), so cc reads neither `gpu_fission_keep_mapping` nor
+  `gpu_serial_lanes` there (gh-ocannl-1430).
+  The prior's empty presets coalesce the unannotated segments back into the whole lowering.
+  The `placement_surface` test pins bare/prepared prior equality under both settings of
+  `buffer_aliasing`. The GPU sketch segmentation moves a covering zero into its weight gradient's
+  matmul segment, and the prior's enablement and disablement sets agree (gh-ocannl-1985).
 - **A structural twin of a lost flip is skipped without a budget slot** (gh-ocannl-1274). The
   identity is `placement_surface`'s `ps_twin_identity`: every top-level statement of the raw
   program (`optimized.source`, where an inlined node is still present) that sets or reads the

@@ -36,24 +36,19 @@ open Verdict.Claims
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
-let f32 = Ir.Backend_intf.Mma_f32
+let gpu_limits = Ll_test.f32_mma_limits
 
-let gpu_limits =
-  {
-    Ir.Backend_intf.no_hardware_limits with
-    mma =
-      Some
-        {
-          Ir.Backend_intf.minimal_mma_capability with
-          mma_tile = (8, 8, 8);
-          mma_format_tiles = [ ((f32, f32, f32), (8, 8, 8)) ];
-        };
-  }
+let materializing_flips candidates =
+  List.filter_map candidates ~f:(fun fc ->
+      Option.some_if
+        (List.exists fc.LL.fc_alternatives ~f:(fun fa ->
+             LL.equal_reading fa.LL.fa_flip `Materialize))
+        fc.LL.fc_tn)
 
 let n = 8
 let m = 256
 
-let () =
+let enablement_fixture =
   let mav =
     Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:7 ~offset:0. ~stride:0.5)
   in
@@ -114,13 +109,7 @@ let () =
         false);
   let base = Context.lowered_for_decisions ctx comp Ir.Indexing.Empty in
   let candidates = base.LL.flip_candidates in
-  let to_materialize =
-    List.filter_map candidates ~f:(fun fc ->
-        Option.some_if
-          (List.exists fc.LL.fc_alternatives ~f:(fun fa ->
-               LL.equal_reading fa.LL.fa_flip `Materialize))
-          fc.LL.fc_tn)
-  in
+  let to_materialize = materializing_flips candidates in
   let allmat =
     Context.lowered_for_decisions ~materialized:to_materialize ctx comp Ir.Indexing.Empty
   in
@@ -238,4 +227,95 @@ let () =
   p "committing mbs does not lower the floor" (ge f1 f0);
   p "committing mc on top does not lower it either" (ge f2 f1);
   p "the two commitments strictly raise the floor"
-    (match (f2, f0) with Some f2, Some f0 -> Float.(f2 > f0) | _ -> false)
+    (match (f2, f0) with Some f2, Some f0 -> Float.(f2 > f0) | _ -> false);
+  (comp, mc.Tensor.value)
+
+(* A covering zero for [w2.grad] starts in the shared gradient initialization block
+   (gh-ocannl-1985). Sinking lets the GPU sketch segmentation fold that zero into the
+   weight-gradient matmul. The enablement prior passes empty presets to fission, which coalesces its
+   unannotated segments. The independent forward computation provides an all-materialized-only site
+   so both sets have a member to preserve when the weight gradient's zero sinks. *)
+let () =
+  let forward, enabled_matmul = enablement_fixture in
+  let n = 32 in
+  let x =
+    NTDSL.init ~l:"xs" ~prec:Ir.Ops.single ~b:[ n ] ~o:[ n ]
+      ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:9 ~offset:0. ~stride:0.125)
+      ()
+  in
+  let%op w1 = { w1; o = [ n ] } in
+  let%op matmul = w1 * x in
+  let%op h = relu matmul in
+  let%op w2 = { w2; o = [ n ] } in
+  let%op y = exp (w2 * h) in
+  let%op err = (y *. y) + relu y in
+  let%op loss = err ++ "...|... => |->0" in
+  let w2_grad = (Option.value_exn w2.Tensor.diff).grad in
+  let bindings = Ir.Indexing.Empty in
+  let comp = named "ps_training" (Asgns.sequence [ forward; Train.grad_update loss ]) in
+  let ctx = Train.init_params (Context.auto ()) bindings loss in
+  let target = Ll_test.cuda_model_target ~limits:gpu_limits () in
+  let lowered ?materialized () =
+    Context.lowered_for_decisions ?materialized ~facts:target.mt_facts ~limits:target.mt_limits ctx
+      comp bindings
+  in
+  let mma_target = Ll_test.synthetic_gpu ~limits:gpu_limits () in
+  let matmul_has_cover lowering =
+    let _, segments = Ll_test.tuner_segments ~target:mma_target lowering in
+    List.find_map segments ~f:(function
+      | `Normal, segment, _, _ -> (
+          match Autotune.detect_matmul_canonical segment with
+          | Some (site, _, _) when Tn.equal site.m_d w2_grad ->
+              Some
+                (List.exists (LL.flat_lines [ segment.LL.llc ]) ~f:(fun stmt ->
+                     Option.exists (LL.zero_initializer_target stmt) ~f:(Tn.equal w2_grad)))
+          | _ -> None)
+      | (`Solo | `Zeros), _, _, _ -> None)
+  in
+  Exn.protect
+    ~finally:(fun () ->
+      Utils.unstate_config "buffer_aliasing";
+      Utils.unstate_config "gpu_schedule_min_parallel")
+    ~f:(fun () ->
+      Utils.state_config ~key:"gpu_schedule_min_parallel" ~data:"1";
+      List.iter [ false; true ] ~f:(fun aliasing ->
+          Utils.state_config ~key:"buffer_aliasing" ~data:(Bool.to_string aliasing);
+          let tag s = Printf.sprintf "[aliasing %b] %s" aliasing s in
+          let base = lowered () in
+          let allmat = lowered ~materialized:(materializing_flips base.LL.flip_candidates) () in
+          let prepared_base = Context.lowered_transform_input base in
+          let prepared_allmat = Context.lowered_transform_input allmat in
+          let measure label ~base ~allmat =
+            let en, dis =
+              Autotune.placement_enablement ~is_gpu:true ~limits:gpu_limits ~static_indices:[] ~base
+                ~allmat
+            in
+            Stdio.eprintf "%s enablement={%s} disablement={%s}\n%!" (tag label)
+              (String.concat ~sep:", " (List.map (Set.to_list en) ~f:Tn.debug_name))
+              (String.concat ~sep:", " (List.map (Set.to_list dis) ~f:Tn.debug_name));
+            (en, dis)
+          in
+          let en, dis = measure "bare" ~base ~allmat in
+          let prepared_en, prepared_dis =
+            measure "prepared" ~base:prepared_base ~allmat:prepared_allmat
+          in
+          let surface =
+            Autotune.placement_surface ~ordering:`Profitable ~target ctx comp bindings
+          in
+          p
+            (tag "the GPU sketch segment for w2.grad starts without its covering zero")
+            (Option.equal Bool.equal (matmul_has_cover allmat) (Some false));
+          p
+            (tag
+               "preparation moves the covering zero into the w2.grad matmul segment under the gate")
+            (Option.equal Bool.equal (matmul_has_cover prepared_allmat) (Some aliasing));
+          p
+            (tag "the surface's enablement is the same on the bare and prepared lowerings")
+            (Set.equal en prepared_en && Set.equal surface.ps_enablement prepared_en);
+          p
+            (tag "the forward fixture's matmul participates in enablement")
+            (Set.mem en enabled_matmul);
+          p (tag "the forward matmul participates in disablement") (Set.mem dis matmul.Tensor.value);
+          p
+            (tag "the surface's disablement is the same on the bare and prepared lowerings")
+            (Set.equal dis prepared_dis && Set.equal surface.ps_disablement prepared_dis)))
