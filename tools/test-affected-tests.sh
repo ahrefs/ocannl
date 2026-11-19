@@ -212,7 +212,15 @@ printf 'let () = ()\n' >"$repo/lib/plain_core.ml"
 printf '(rule (alias runtest-inc) (action (progn)))\n' >"$repo/t6/extra.inc"
 printf 'let () = () (* Core.H *)\n' >"$repo/t2/gen.ml"
 git_q() { git -C "$repo" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
-git_q init -q && git_q add -A && git_q commit -qm fixture || exit 2
+# Every negative control writes its mutant reader into the fixture as
+# tools/affected-mutant.sh (gh-ocannl-2356). Visible, it is an untracked change
+# of its own, so a HEAD-relative query adds the aliases it reaches and a control
+# reads that for the reach change it claims. Each fixture repository ignores it
+# from its first commit; a leg that leans on the exclusion asserts it.
+mutant_ignored() { # DIR
+  mkdir -p "$1/.git/info" && printf '%s\n' '/tools/affected-mutant.sh' >>"$1/.git/info/exclude"
+}
+git_q init -q && mutant_ignored "$repo" && git_q add -A && git_q commit -qm fixture || exit 2
 
 out=$TMP/out err=$TMP/err
 affected() { # ARGS... -> $out, $err, $rc
@@ -1199,6 +1207,11 @@ run_affected_mutant() { # LABEL FROM TO ARGS...: require one edit, leave the que
     report 1 "negative control: $label" "the mutation anchor does not occur exactly once"
     return 1
   fi
+  if ! git_q check-ignore -q tools/affected-mutant.sh; then
+    rm -f -- "$mutant"
+    report 1 "negative control: $label" "the fixture does not ignore the scratch mutant"
+    return 1
+  fi
   rc=0
   (cd "$TMP" && bash "$mutant" "$@") >"$out" 2>"$err" || rc=$?
   rm -- "$mutant" || {
@@ -1212,6 +1225,9 @@ control() { # LABEL FROM TO ARGS... -- WANT...
   local args=()
   while [ "$1" != -- ]; do args+=("$1"); shift; done
   shift
+  # WANT is the shipping list: one stale here would pass a no-op mutant (gh-ocannl-2356).
+  affected "${args[@]}"
+  expect "negative control: $label (the shipping list)" 0 "$@"
   run_affected_mutant "$label" "$from" "$to" "${args[@]}" || return
   printf '%s\n' "$@" | sort >"$TMP/want"
   sort "$out" >"$TMP/got"
@@ -1220,6 +1236,28 @@ control() { # LABEL FROM TO ARGS... -- WANT...
   else
     report 0 "negative control: $label"
   fi
+}
+# The stronger form, for a control over a revision-relative query: the shipping
+# reader and the mutant both read the one fixture edit, and each must print its
+# exact list, the two different. "Not the shipping list" alone passes a mutant
+# that fails to run, or one whose list moved for a reason other than the rule
+# it cuts (gh-ocannl-2356: three such controls passed a no-op mutant).
+reach_control() { # LABEL FROM TO ARGS... -- SHIPPING... -- MUTANT...
+  local label=$1 from=$2 to=$3
+  shift 3
+  local args=() ship=()
+  while [ "$1" != -- ]; do args+=("$1"); shift; done
+  shift
+  while [ "$1" != -- ]; do ship+=("$1"); shift; done
+  shift
+  if [ "$(printf '%s\n' ${ship[@]+"${ship[@]}"} | sort)" = "$(printf '%s\n' "$@" | sort)" ]; then
+    report 1 "negative control: $label" "the shipping and mutant lists it names are the same: it names no reach change"
+    return
+  fi
+  affected "${args[@]}"
+  expect "negative control: $label (the shipping list)" 0 ${ship[@]+"${ship[@]}"}
+  run_affected_mutant "$label" "$from" "$to" "${args[@]}" || return
+  expect "negative control: $label" 0 "$@"
 }
 if harness_leg 'negative controls'; then
   # shellcheck disable=SC2086
@@ -1232,26 +1270,26 @@ if harness_leg 'negative controls'; then
     --files lib/helper.ml -- $reached_by_core
   control 'an undescribed tests module reaches its directory'"'"'s tests stanzas' \
     '@ix = @named ? @named : @tests;' '@ix = @named;' \
-    --files t1/shared.ml -- @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb
+    --files t1/shared.ml -- @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-t_mid @t1/runtest-t_mid-blind @t1/runtest-ta @t1/runtest-tb
   control 'external-lib-deps'"'"' edges are what carry a ppx rewriter to a described library' \
     'push @edges, [$i, field($v, "internal_deps")];' 'push @edges, [$i, field($v, "internal_deps")] if $kind eq "tests";' \
     --files lib/myppx.ml -- @t1/runtest-m_one @t2/runtest-scan
   control 'a generated module file is what carries an .mll to its stanza' \
     'push @{$generated{$rel}}, $i unless -e $rel;' '' \
-    --files lib/lx.mll -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
+    --files lib/lx.mll -- @t1/runtest-t_core @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
   # shellcheck disable=SC2086
   control 'an opaque action is what lists the aliases for a changed config' \
     'my $blind = $unknown_touched || $opaque_listed;' 'my $blind = $unknown_touched;' \
-    --files t3/plain.cfg -- @t3/runtest-t_plain $opaque_all
+    --files t3/plain.cfg -- $opaque_all
   control 'a stub archive is what carries a C stub to its library' \
     '$obj_libs{$o}{$_} = 1 for @libs' '1' \
     --files lib/stubbed_c.c -- @t3/runtest-t_stub
   control 'following generated inputs is what reaches a copied file' \
     '$v{$rel} = 1 if !-e $rel' '$v{$rel} = 1 if 0 && !-e $rel' \
-    --files cfg/base.cfg -- @t3/runtest-cfgread @t3/runtest-t_plain $opaque_all
+    --files cfg/base.cfg -- @t3/runtest-cfgread $opaque_all
   control 'reading the files a changed dune file makes is what reaches a consumer elsewhere' \
     '$n_made++ unless $read_by{$p}{$a->{name}}++;' '' \
-    --files t1/dune -- @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb @t3/runtest-uses
+    --files t1/dune -- @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-t_mid @t1/runtest-t_mid-blind @t1/runtest-ta @t1/runtest-tb @t3/runtest-uses
   # shellcheck disable=SC2086
   control 'a generator run by a stub object'"'"'s inputs is what reaches the executable linking it' \
     'for my $w (obj_owners($o)) { push @{$st[$w]{to}}, keys %{$runs{$o}}; push @{$st[$w]{gen_to}}, keys %{$runs{$o}} }' '' \
@@ -1269,6 +1307,10 @@ if harness_leg 'negative controls'; then
   control 'the guess tier'"'"'s rank is what lists an alias needing one listed blind' \
     'my %rank = (main => 3, guess => 2, link => 1);' 'my %rank = (main => 3, link => 1);' \
     --files docs/other.md -- $opaque_all
+  # Both rankings read the fixture's re-export of Helper from Core, which the
+  # git-forms leg's trunk commit replaces: without it, gen-v1 is link-only for
+  # either reader and the re-export control proves nothing (gh-ocannl-2356).
+  printf 'module H = Helper\n' >"$repo/lib/core.ml"
   # shellcheck disable=SC2086
   control 'the ranking is what leaves a link-only alias off --referenced-only' \
     'return 0 unless $rank_links;' 'return 0;' \
@@ -1276,6 +1318,7 @@ if harness_leg 'negative controls'; then
   control 'a re-export is what ranks a test naming only the re-exported name' \
     '$as{$_}{$as_name}{$x} = 1 for grep { $_ ne $as_name } @names;' '1;' \
     --referenced-only --files lib/helper.ml -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
+  git_q checkout -q -- lib/core.ml || exit 2
   # shellcheck disable=SC2086
   control 'a rule-made target beside a golden is what makes a golden pair' \
     'grep { !/\.expected$/ && !-e in_dir($d, $_) } @mine, @near' '1' \
@@ -1344,7 +1387,7 @@ printf '%s\n' '#!/usr/bin/env bash' '# Harness c.' "$mark data/*.tbl --only '^(1
   "$mark data/all.cfg" 'cat data/three.tbl' '. tools/clib.sh' >"$hrepo/tools/test-c.sh" || exit 2
 for f in tools/lib.sh tools/dyn.sh tools/late.sh tools/other.sh tools/clib.sh tools/helper.py tools/pkg/mod.py \
   tools/sib.py tools/gen.ml data/one.tbl data/two.tbl data/three.tbl data/all.cfg data/x.txt a/one/b.py x.py dir/x.txt; do : >"$hrepo/$f"; done
-git -C "$hrepo" -c user.name=t -c user.email=t@t -c commit.gpgsign=false init -q &&
+git -C "$hrepo" -c user.name=t -c user.email=t@t -c commit.gpgsign=false init -q && mutant_ignored "$hrepo" &&
   git -C "$hrepo" add -A && git -C "$hrepo" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -qm fixture ||
   exit 2
 cp "$hrepo/tools/test-c.sh" "$TMP/test-c.sh.orig" || exit 2
@@ -2088,11 +2131,12 @@ if harness_leg 'probe dune edits'; then
   printf '(test (name pc) (modules pc) (preprocess (action (cat %%{input-file}))))\n' >>"$repo/p3/dune"
   printf 'let unused = ()\n' >"$repo/p3/pc.ml"
   printf 'val unused : unit\n' >"$repo/p3/pc.mli"
-  affected HEAD
-  expect 'a new preprocessed test reaches only its alias and the dune reader' 0 @p3/runtest-pc "$p3_scan"
-  control 'literal test module ownership is what scopes new preprocessing rules' \
+  # Its shipping list (a new preprocessed test reaches only its alias and the
+  # dune reader) is the first check of the control.
+  # shellcheck disable=SC2086
+  reach_control 'literal test module ownership is what scopes new preprocessing rules' \
     'my $mods = dfield($x->[0], "modules") // $r->{names};' 'my $mods = [];' \
-    HEAD -- @p3/runtest-pc "$p3_scan"
+    HEAD -- @p3/runtest-pc "$p3_scan" -- $p3_all @p3/runtest-pc $p3_scan
   probe_restore
   probe_edit 's/\(modules pa\)/(modules pa extra) (preprocess (action (cat %{input-file})))/' && {
     printf 'let unused = ()\n' >"$repo/p3/extra.ml"
@@ -2298,67 +2342,106 @@ SHIM
   else report 1 'a probe whose rules dune will not print reads the change again without it' "exit $rc; $(cat "$err")"; fi
 fi
 if harness_leg 'probe controls'; then
+  # Without twins every alias action is read blind, so what lists runtest-chdir
+  # for chd.txt is no longer dune's answer: runtest-tchdir, whose action reads
+  # only tch.txt, is listed beside it. (The rest of that list is every alias
+  # action of the fixture, too wide to name here.) The probe itself must
+  # still have answered: its fallback reads every alias action blind too.
+  twin_label='negative control: a twin is what makes an alias action dune'"'"'s answer'
+  affected --files p1/chd.txt
   # shellcheck disable=SC2086
-  control 'a twin is what makes an alias action dune'"'"'s answer' \
-    'my @act = grep { named($_, "action") } @fl;' 'my @act;' \
-    --files p1/chd.txt -- @p1/runtest-chdir $probe_blind
+  expect "$twin_label (the shipping list)" 0 @p1/runtest-chdir $probe_blind
+  if run_affected_mutant "${twin_label#negative control: }" 'my @act = grep { named($_, "action") } @fl;' 'my @act;' \
+      --files p1/chd.txt; then
+    if [ "$rc" = 0 ] && grep -qx @p1/runtest-chdir "$out" && grep -qx @p1/runtest-tchdir "$out" &&
+       ! grep -qE '^affected: (the probe failed|dune could not print a rule in the probe)' "$err"; then report 0 "$twin_label"
+    else report 1 "$twin_label" "exit $rc; got [$(tr '\n' ' ' <"$out")]; stderr: $(tr '\n' '|' <"$err")"; fi
+  fi
+  # Both (:include) rules of the fixture stop being blind, and inc.txt, which
+  # dune does not print among their dependencies, then reaches neither.
   # shellcheck disable=SC2086
-  control 'an (:include) is what leaves its alias blind' \
+  reach_control 'an (:include) is what leaves its alias blind' \
     'if ($canon =~ /(?:^|[\s(])(:include|dynamic-run)[\s)]/) {' 'if (0) {' \
-    --files p1/inc.txt -- $probe_blind
+    --files p1/inc.txt -- $probe_blind -- @p2/runtest-p2blind
+  # The rule needing the helper loses it; the (alias) stanza needing it has no
+  # target of its own and stays listed for its directory.
   # shellcheck disable=SC2086
-  control 'a helper alias'"'"'s own entry is what lists the per-test alias needing it' \
+  reach_control 'a helper alias'"'"'s own entry is what lists the per-test alias needing it' \
     'push @al, $h;' '' \
-    --files p1/hl.txt -- @p1/runtest-viahelper @p1/runtest-viastanza $probe_blind
+    --files p1/hl.txt -- @p1/runtest-viahelper @p1/runtest-viastanza $probe_blind -- @p1/runtest-viastanza $probe_blind
+  # An (alias) stanza depending on a file outside its directory: only the query
+  # finds that dependency (one inside it is listed for its directory anyway).
+  printf '(alias (name runtest-viacfg) (deps %%{workspace_root}/cfg/st.txt))\n' >>"$repo/p1/dune"
+  : >"$repo/cfg/st.txt"
+  git_q add -A p1 cfg && git_q commit -qm viacfg || exit 2
   # shellcheck disable=SC2086
-  control 'asking dune for an (alias) stanza'"'"'s dependencies is what lists it' \
+  reach_control 'asking dune for an (alias) stanza'"'"'s dependencies is what lists it' \
     'source_query($_) for @al;' '' \
-    --files p1/hl.txt -- @p1/runtest-viahelper @p1/runtest-viastanza $probe_blind
+    --files cfg/st.txt -- @p1/runtest-viacfg $probe_blind -- $probe_blind
+  git_q reset -q --hard HEAD~1 || exit 2
+  # The controls below query HEAD, so each one's edit is the whole change the
+  # two readers see (the fixture ignores the scratch mutant), and each names
+  # both lists.
   printf '(test (name pc) (modules pc))\n' >>"$repo/p3/dune"
   printf 'let () = ()\n' >"$repo/p3/pc.ml"
-  control 'comparing the dune file across revisions is what scopes a new test stanza (the base reach)' \
+  # shellcheck disable=SC2086
+  reach_control 'comparing the dune file across revisions is what scopes a new test stanza (the base reach)' \
     'else scoped+=("$f"); fi' 'fi' \
-    HEAD -- @p3/runtest-pc $p3_scan
+    HEAD -- @p3/runtest-pc $p3_scan -- $p3_all @p3/runtest-pc $p3_scan
   probe_restore
   probe_edit 's/\(echo a\)\)\)/(echo b)))/' &&
-    control 'comparing rules across the probes is what finds an action-only edit' \
+    reach_control 'comparing rules across the probes is what finds an action-only edit' \
       'my @delta = grep {' 'my @delta = (); 0 && grep {' \
-      HEAD -- @p3/runtest-act3 $p3_scan
+      HEAD -- @p3/runtest-act3 "$p3_scan" -- "$p3_scan"
   probe_restore
-  probe_edit 's/\(test \(name pa\) \(modules pa\)\)/(test (name pa) (modules pa) (flags (:standard -w -a)))/' &&
-    control 'a changed stanza named as dune lists it is what reaches a flags edit' \
+  # A field only the test's own alias action reads: no rule of a target moves,
+  # in either compiler mode, so the stanza named in the changed form is the only
+  # route to its alias. A `(flags)` edit, as the 'probe dune edits' leg makes,
+  # changes pa.exe's link rule and reaches it a second way.
+  probe_edit 's/\(test \(name pa\) \(modules pa\)\)/(test (name pa) (modules pa) (locks p3-lock))/' &&
+    reach_control 'a changed stanza named as dune lists it is what reaches an edit no compared rule shows' \
       'if (@ix) { $whole{$_} = 1 for @ix; next }' 'if (@ix) { next }' \
-      HEAD -- @p3/runtest-pa $p3_scan
+      HEAD -- @p3/runtest-pa "$p3_scan" -- "$p3_scan"
   probe_restore
   probe_edit 's/\z/(env (_ (env-vars (P3 x))))\n/' &&
-    control 'a changed form outside the allowlist is what keeps the whole directory' \
+    # shellcheck disable=SC2086
+    reach_control 'a changed form outside the allowlist is what keeps the whole directory' \
       'push @why, $h eq "alias" ? "a changed (alias) with an action" : "a changed ($h) stanza";' '' \
-      HEAD -- $p3_all $p3_scan
+      HEAD -- $p3_all $p3_scan -- $p3_scan
   probe_restore
   probe_edit 's/\(deps h4\.txt\)/(deps h4b.txt)/' &&
-    control 'a changed helper (alias) stanza is what lists the aliases needing it' \
+    # The rule needing the helper is reached through the helper's own entry; the
+    # (alias) stanza needing it also by mentioning it, which this cut keeps.
+    reach_control 'a changed helper (alias) stanza'"'"'s own entry is what lists the rule needing it' \
       '$direct_here{in_dir($d, $x)} = "its (alias) stanza changed";' '' \
-      HEAD -- @p3/runtest-needh4 @p3/runtest-viah4 $p3_scan
+      HEAD -- @p3/runtest-needh4 @p3/runtest-viah4 "$p3_scan" -- @p3/runtest-viah4 "$p3_scan"
   probe_restore
   probe_edit 's/\(echo h\)/(echo g)/' &&
-    control 'a changed twin of a helper alias is what lists the alias needing it' \
+    reach_control 'a changed twin of a helper alias is what lists the alias needing it' \
       '$direct_here{in_dir($td, $_)} = "a rule of it changed" for @{$twin_of{$t} // []};' '' \
-      HEAD -- @p3/runtest-needh3 $p3_scan
+      HEAD -- @p3/runtest-needh3 "$p3_scan" -- "$p3_scan"
   probe_restore
   probe_edit 's/\(rule \(alias runtest-two\) \(targets two2\.txt\)/(rule (alias runtest-dirt3) (targets two2.txt)/' &&
-    control 'the aliases a changed form attaches to are what list a moved target rule'"'"'s aliases' \
+    reach_control 'the aliases a changed form attaches to are what list a moved target rule'"'"'s aliases' \
       '$direct_here{$x} //= "the stanzas attached to it changed"' 'my $unused = 1' \
-      HEAD -- @p3/runtest-dirt3 @p3/runtest-two $p3_scan
+      HEAD -- @p3/runtest-dirt3 @p3/runtest-two "$p3_scan" -- "$p3_scan"
   probe_restore
-  probe_edit 's/\(rule \(alias runtest-two\) \(targets two2\.txt\)[^\n]*\n//' &&
-    control 'the old side'"'"'s owners are what list the alias of a removed target' \
+  # A removed target rule attached to no alias, owned only by its name: removing
+  # runtest-two's own two2.txt rule, as the 'probe dune edits' leg does, also
+  # changes what its alias attaches, which lists the alias a second way.
+  printf '(rule (target pa.log) (action (with-stdout-to %%{target} (echo l))))\n' >>"$repo/p3/dune"
+  git_q commit -qam pa-log || exit 2
+  probe_edit 's/\(rule \(target pa\.log\)[^\n]*\n//' &&
+    reach_control 'the old side'"'"'s owners are what list the alias of a removed target' \
       '$direct_here{in_dir($td, $a->{alias})} = "a target it may have owned is gone";' '' \
-      HEAD -- @p3/runtest-two $p3_scan
+      HEAD -- @p3/runtest-pa "$p3_scan" -- "$p3_scan"
+  git_q reset -q --hard HEAD~1 || exit 2
   probe_restore
   perl -0pi -e 's/\(action \(progn\)\)\)/(action (echo i)))/' "$repo/p5/dune"
-  control 'the converter'"'"'s verdict is what keeps a changed undescribed rule'"'"'s directory whole' \
+  # Its blind alias stays listed; the rest of the directory is what the verdict adds.
+  reach_control 'the converter'"'"'s verdict is what keeps a changed undescribed rule'"'"'s directory whole' \
     'unless ($r->{vouched}) { push @why, "a changed ($h) the probe does not describe"; next }' '' \
-    HEAD -- @p5/runtest-inc5 @p5/runtest-p5ok
+    HEAD -- @p5/runtest-inc5 @p5/runtest-p5ok -- @p5/runtest-inc5
   probe_restore
   probe_p6 '(include gen/x.inc)
 (rule (alias runtest-p6) (action (progn)))' '(rule (alias runtest-inc6) (action (progn)))' || exit 2
@@ -2384,10 +2467,9 @@ if harness_leg 'link_deps reach control'; then
   link_label='without its link rule reach assignment, the link_deps consumer disappears'
   link_loop='for (@{$stanza_rule{$t}}) {'
   link_assignment='$hit{$_} = $whole_hit{$_} = 1;'
-  # The query should see only the rule edit. An untracked mutant adds blind aliases.
-  if ! mkdir -p "$repo/.git/info" ||
-     ! printf '%s\n' '/tools/affected-mutant.sh' >>"$repo/.git/info/exclude"; then
-    report 1 "negative control: $link_label" "could not exclude the scratch mutant from the change"
+  # The query should see only the rule edit: the fixture ignores the mutant.
+  if ! git_q check-ignore -q tools/affected-mutant.sh; then
+    report 1 "negative control: $link_label" "the fixture does not ignore the scratch mutant"
   elif probe_edit 's/\(echo m\)/(echo n)/'; then
     affected HEAD
     expect 'a rule action edit lists its direct and link_deps consumers' 0 @p3/runtest-reads3 @p3/runtest-lk "$p3_scan"
@@ -2443,7 +2525,7 @@ ML
   cp "$repo/tests/marked.ml" "$repo/tests/runner.ml"
   printf '(* on_gpu; binds_hardware_grid; leg in_leg skipped "cuda" *)\nlet text = "on_gpu binds_hardware_grid leg in_leg skipped cuda"\nlet () = ignore Gpu_core.used\n' >"$repo/tests/plain.ml"
   printf 'let on_gpu = false\nlet () = if on_gpu then ignore Gpu_core.other\n' >"$repo/tests/unrelated.ml"
-  git_q init -q && git_q add -A && git_q commit -qm fixture || exit 2
+  git_q init -q && mutant_ignored "$repo" && git_q add -A && git_q commit -qm fixture || exit 2
   printf 'let used = 3\nlet other = 2\n' >"$repo/lib/gpu_core.ml"
   gpu_evidence() {
     sed -n 's/^affected: gpu-gated: \([^:]*\):.*/\1/p' "$err" | sort >"$TMP/evidence"
