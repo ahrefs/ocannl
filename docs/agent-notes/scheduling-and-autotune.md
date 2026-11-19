@@ -1015,12 +1015,16 @@ files.
   `git grep -lE 'F_sketch|F_swap|Fissioned_chain\.is_' -- 'test/*.ml' ':!test/support' | xargs tools/test-run.sh aliases`,
   and says so in the PR body; a red there that the change explains is fixed test-side or in the
   gate, never left for the loop.
-  `model_seeded_anchor`'s CUDA claim pins the exact count under the shipped gate (the chain's
-  seeded plan seeds exactly its two products). With the direct-read pricing reverted
-  (`~price_direct_loads:false` in `seeded_ranker`) the chain seeds neither on rog and the claim
-  fails, beside the anchoring claim, which a single seeded product would still pass. Its CUDA
-  stand-in leg seeds both products under either score, so the count is a CUDA run's to read. A
-  change meant to move that count moves the claim's number in the same commit, with the reason.
+  `model_seeded_anchor`'s CUDA/HIP claim pins the exact count under the shipped gate (the chain's
+  seeded plan seeds exactly its two products), so such a change owes a HIP run of it too, on both
+  memory models. With the direct-read pricing reverted (`~price_direct_loads:false` in
+  `seeded_ranker`) the chain seeds neither on rog and the claim fails, beside the anchoring claim,
+  which a single seeded product would still pass. On HIP that revert is inert -- the pricing needs
+  a staged-copy rate, which HIP does not publish -- and the count is two on tuf (discrete) and minix
+  (unified) alike, under HIP's own calibration (gh-ocannl-2306's records). Its CUDA stand-in leg
+  seeds both products under either score, so the count is a device run's to read; the test's
+  `seeding gate here:` stderr line names the gate it resolved. A change meant to move that count
+  moves the claim's number in the same commit, with the reason.
 - **A model decision for another target is asked without a compile** (gh-ocannl-1780):
   `Autotune.model_pick` is `model_default`'s choice, decided and not compiled (one `model_selection`
   feeds both; only the compile-level fallback is the compile's), and it and `model_explain` take a
