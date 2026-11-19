@@ -1223,7 +1223,9 @@ files.
   moves) puts its `Stage`s ahead of every op that copies a loop body (materializing
   `Unroll`/`Partition`, `Tensorize`, `Fuse_epilogue`), so a shipped `Stage`'s anchor has the one
   binder the precheck reads; the argument sits beside the precheck in `apply_stage`. Within one
-  chain `Fuse_epilogue`'s own purity check is redundant too; only its probe needs it.
+  chain over a lowered routine `Fuse_epilogue`'s own purity check is redundant too; its probe,
+  and a hand-built entry with a hardware loop in a scope (which switches the per-op refusal off),
+  still need it.
   An IMPURE entry (only a hand-built `?prelowered` routine can bring one) is refused before any op
   runs, by `apply_typed` and `schedule_legality` on a non-empty schedule
   (`check_entry_scope_purity`, gh-ocannl-2314):
