@@ -1116,6 +1116,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   forms in `tools/test-harnesses.sh`'s header, since Bash 3.2 has no
   `command_not_found_handle`. The self-test keeps the leg's passing verdict and
   checks that both widths fail the member anyway, with a no-check control.
+  In the command-substitution case the successful outer `printf` masks the
+  missing function's exit status, as the original harness did.
 - On a fleet box a harness run is a test batch like any other, and like `tools/test-run.sh` and
   `tools/fmt-check.sh` it takes one of the box's correctness slots itself, as `--cpu`
   (gh-ocannl-1576): after its arguments and skip lists pass, it runs itself again under `fleet-worker.sh execution
