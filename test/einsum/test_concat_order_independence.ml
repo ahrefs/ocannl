@@ -25,8 +25,16 @@
    remains subject to all three claims. gh-ocannl-2268 adds a waiting-side use-site bound to
    gh-ocannl-2223's shared-claim example, solved in every order. No accepted answer sizes a
    component to 0, since none of these is discardable (gh-ocannl-2316), and a 0 stated for one is
-   refused in every order and batched (gh-ocannl-2368). Counts go to stderr. The search runs
-   whole. *)
+   refused in every order and batched (gh-ocannl-2368). Counts go to stderr. The search runs whole.
+
+   BOUNDED OUTCOMES (gh-ocannl-2369). Build [./test/einsum/test_concat_order_independence.exe] and
+   [./test/einsum/ocannl_config]. After a successful build, run
+   [./test_concat_order_independence.exe --dump-bounded-outcomes=/abs/path/out.tsv] from
+   [_build/default/test/einsum]. A failed build can leave a previous executable there. Each
+   tab-separated row gives a store, its order (zero-based constraint indices or [batch]), and the
+   outcome, including each accepted variable's size and basis or [unsized]. The file covers the
+   bounded sub-search only and is written before the verdicts, so a regression run can still be
+   compared. Without the flag no file is opened. The flag leaves stdout and the verdicts alone. *)
 
 open! Base
 open Ocannl
@@ -218,12 +226,35 @@ let solve ?(batched = false) ?(pins = []) items order =
 let store_name items = String.concat ~sep:" ; " (List.map items ~f:(fun i -> i.name))
 let orders items = permutations (List.init (List.length items) ~f:Fn.id)
 let outcomes items = List.map (orders items) ~f:(solve items)
-
-type store = { items : item list; outs : outcome list }
-
 let batch items = solve ~batched:true items (List.init (List.length items) ~f:Fn.id)
 
-let order_dependent { items; outs } =
+type store = { items : item list; outs : outcome list; batched : outcome Lazy.t }
+
+let store items = { items; outs = outcomes items; batched = lazy (batch items) }
+
+let bounded_outcomes_path () =
+  let flag = "--dump-bounded-outcomes" in
+  match
+    Array.filter_map (Sys.get_argv ()) ~f:(fun arg ->
+        if String.equal arg flag then failwith (flag ^ " requires =PATH");
+        String.chop_prefix arg ~prefix:(flag ^ "="))
+  with
+  | [||] -> None
+  | [| path |] when not (String.is_empty path) -> Some path
+  | _ -> failwith (flag ^ " requires one nonempty output path")
+
+let dump_bounded_outcomes path stores =
+  Stdio.Out_channel.with_file path ~f:(fun out ->
+      List.iter stores ~f:(fun ({ items; outs; batched }, _) ->
+          let name = store_name items in
+          let write run outcome =
+            Stdio.Out_channel.fprintf out "%s\t%s\t%s\n" name run (outcome_to_string outcome)
+          in
+          List.iter2_exn (orders items) outs ~f:(fun order outcome ->
+              write (String.concat ~sep:"," (List.map order ~f:Int.to_string)) outcome);
+          write "batch" (Lazy.force batched)))
+
+let order_dependent { items; outs; _ } =
   let dependent = not (List.for_all outs ~f:(equal_outcome (List.hd_exn outs))) in
   if dependent then
     Stdio.eprintf "order-dependent: %s => %s (not part of the golden)\n" (store_name items)
@@ -239,8 +270,8 @@ let refuses_own_answer (items, order, sol) =
         (solution_to_string sol);
       true
 
-let batch_differs { items; outs } =
-  let batched = batch items in
+let batch_differs { items; outs; batched } =
+  let batched = Lazy.force batched in
   let differs = not (equal_outcome batched (List.hd_exn outs)) in
   if differs then
     Stdio.eprintf "batched differs: %s => %s against %s (not part of the golden)\n"
@@ -331,6 +362,7 @@ let stride_pair_controls () =
           | _ -> false))
 
 let () =
+  let dump_path = bounded_outcomes_path () in
   (* As in [test_trial_rollback]: a third constraint is an open window, a shared kernel, a pair or a
      concatenation. *)
   let held =
@@ -341,9 +373,7 @@ let () =
           || String.is_prefix i.name ~prefix:"w(s1,k1"
           || String.is_prefix i.name ~prefix:"w(s2"))
   in
-  let stores =
-    List.map (choose 2 pool @ choose 3 held) ~f:(fun items -> { items; outs = outcomes items })
-  in
+  let stores = List.map (choose 2 pool @ choose 3 held) ~f:store in
   let original =
     List.filter stores ~f:(fun { items; _ } ->
         List.for_all items ~f:(fun i -> not (String.is_prefix i.name ~prefix:"stride(")))
@@ -353,7 +383,7 @@ let () =
     (List.count original ~f:(fun { outs; _ } ->
          List.exists outs ~f:(function Accepted _ -> true | Refused -> false)));
   let accepted_runs =
-    List.concat_map stores ~f:(fun { items; outs } ->
+    List.concat_map stores ~f:(fun { items; outs; _ } ->
         List.filter_map
           (List.zip_exn (orders items) outs)
           ~f:(fun (order, out) ->
@@ -416,8 +446,9 @@ let () =
                       List.exists [ 4; 5; 6 ] ~f:(fun d ->
                           String.is_prefix b.name ~prefix:(Printf.sprintf "k >= %d " d)))
                 in
-                ({ items; outs = outcomes items }, in_reach))))
+                (store items, in_reach))))
   in
+  Option.iter dump_path ~f:(fun path -> dump_bounded_outcomes path bounded_stores);
   let bounded_accepted =
     List.count bounded_stores ~f:(fun ({ outs; _ }, _) ->
         List.exists outs ~f:(function Accepted _ -> true | Refused -> false))
@@ -440,7 +471,7 @@ let () =
     List.exists sol ~f:(fun (_, x) -> Option.exists x ~f:(fun (d, _) -> d = 0))
   in
   let bounded_runs =
-    List.concat_map bounded_stores ~f:(fun ({ items; outs }, _) ->
+    List.concat_map bounded_stores ~f:(fun ({ items; outs; _ }, _) ->
         List.filter_map
           (List.zip_exn (orders items) outs)
           ~f:(fun (order, out) ->
@@ -587,6 +618,34 @@ let () =
       check_plain_bounds "k >= 3_default with no u bound gives u = 1_a and k = 3_default" ~n:6 ~k:3
         ~u:1 ~u_basis:"a" [];
       let bounded = List.map bounded_stores ~f:fst in
+      (* These two bounds fix both components. The size-one residual can satisfy its bound only as
+         the broadcast top, without claiming the prefix's basis. *)
+      let check_shared_bounds ~k_size ~k_basis ~u_bound ~u_size ~u_basis =
+        let name =
+          Printf.sprintf "%s ; k >= %d %s ; u >= %d default" (store_name shared) k_size k_basis
+            u_bound
+        in
+        let { items; outs; batched } =
+          List.find_exn bounded ~f:(fun { items; _ } -> String.equal name (store_name items))
+        in
+        let pins =
+          [ ("v", Some (2, "a")); ("u", Some (u_size, u_basis)); ("k", Some (k_size, k_basis)) ]
+        in
+        let ground = function
+          | Accepted sol -> equal_outcome (Accepted sol) (Accepted pins)
+          | Refused -> false
+        in
+        claim
+          (name ^ " settles to its exact witness in all 24 orders")
+          (List.count outs ~f:ground = 24);
+        claim (name ^ " settles to its exact witness in one batch") (ground (Lazy.force batched));
+        claim
+          (name ^ " accepts its stated witness in all 24 orders")
+          (List.count (orders items) ~f:(fun order -> ground (solve ~pins items order)) = 24)
+      in
+      check_shared_bounds ~k_size:5 ~k_basis:"a" ~u_bound:3 ~u_size:3 ~u_basis:Row.default_basis;
+      check_shared_bounds ~k_size:3 ~k_basis:Row.default_basis ~u_bound:2 ~u_size:1
+        ~u_basis:Row.bcast_if_1;
       p_none ~min:1700 "bounded stores whose verdict or solution depends on the order" bounded
         ~f:order_dependent;
       p_none ~min:1000 "bounded accepted runs that size a component to 0" bounded_runs

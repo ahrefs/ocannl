@@ -131,10 +131,15 @@ files.
   are accepted when stated first. The bounded sweep adds 12 stores (222 accepted), nine matching
   plain pairs and three plain bounds at the minimum. All 210 previously accepted stores retain
   their exact answers. For that shared `a` store, `k >= 5_default ; u >= 3_h` forces a
-  conflicting `h` claim. Two refused shapes with ground answers are deferred: `k >= 5_a ;
-  u >= 3_default` admits `k = 5_a, u = 3_default`, and `k >= 3_default ; u >= 2_default`
-  admits `k = 3_default, u = 1_(bcast_if_1)`. Several free components and equal sums still
-  wait without bounds.
+  conflicting `h` claim. The joint close also accepts a waiting GLB carrying the shared claim
+  when the closing GLB is plain and matches the residual above 1 (gh-ocannl-2369):
+  `k >= 5_a ; u >= 3_default` gives both GLBs. At the minimum, a plain waiting GLB and a
+  plain closing GLB above 1 give the waiting GLB and a broadcast top:
+  `k >= 3_default ; u >= 2_default` gives `k = 3_default, u = 1_(bcast_if_1)`. Both choices
+  require independent components and a closing component that cannot be empty through an alias.
+  The bounded sweep's `--dump-bounded-outcomes=PATH` comparison against the gh-ocannl-2368
+  merge found 24 new accepted stores (246 of 1,764), with all 222 previous answers unchanged
+  in every order and batched. Several free components and equal sums still wait without bounds.
 - No path sizes a non-discardable concatenation component to 0, the size only a block spec's
   discardable component may take (gh-ocannl-2316, gh-ocannl-2368). The permission is read through
   substitution everywhere (`may_be_empty`): a variable equated with a discardable one may be empty

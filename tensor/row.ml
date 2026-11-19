@@ -6652,10 +6652,11 @@ let draw_counter_leaves ineqs env =
 (* gh-ocannl-2223: one free component on each side of a concatenation with the same solved claim is
    a closing dependency, not a basis-preserving subtraction. Keep both claims on the original
    equation. The side with the smaller solved sum waits while the other free component closes; the
-   equation then determines its size and basis. Returns the waiting variable, the closing one and
-   the solved-sum difference. Boundary: exactly one plain variable per side, equal non-default
-   solved claims, unequal solved sums. Bounds can change which side closes first at stage 7: see
-   [concat_bounded_waiting]. The driver's final-fixpoint cycle breaker remains available. *)
+   equation then determines its size and basis. Returns the waiting variable, the closing one, the
+   solved-sum difference and the shared claim. Boundary: exactly one plain variable per side, equal
+   non-default solved claims, unequal solved sums. Bounds can change which side closes first at
+   stage 7: see [concat_bounded_waiting]. The driver's final-fixpoint cycle breaker remains
+   available. *)
 let concat_closing_dependent d1 d2 =
   match (d1, d2) with
   | Concat xs, Concat ys -> (
@@ -6666,8 +6667,8 @@ let concat_closing_dependent d1 d2 =
         when String.equal bx by && not (String.equal bx default_basis) ->
           let sum_x = List.sum (module Int) sx ~f:(fun s -> s.d)
           and sum_y = List.sum (module Int) sy ~f:(fun s -> s.d) in
-          if sum_x > sum_y then Some (vy, vx, sum_x - sum_y)
-          else if sum_y > sum_x then Some (vx, vy, sum_y - sum_x)
+          if sum_x > sum_y then Some (vy, vx, sum_x - sum_y, bx)
+          else if sum_y > sum_x then Some (vx, vy, sum_y - sum_x, bx)
           else None
       | _ -> None)
   | _ -> None
@@ -6690,7 +6691,7 @@ let closing_dim_dependencies ineqs env =
         let waiting, kernels = waiting_on_window (waiting_on_window waiting d1 d2) d2 d1 in
         let waiting =
           match concat_closing_dependent d1 d2 with
-          | Some (v, _, _) -> Set.add waiting v
+          | Some (v, _, _, _) -> Set.add waiting v
           | None -> waiting
         in
         (waiting, kernels)
@@ -6705,17 +6706,19 @@ let closing_dim_dependencies ineqs env =
    the bound shifted by the difference, would size the waiting variable through the equation, where
    it takes the shared claim and meets its own GLB's tag.
 
-   Above the minimum, matching [default] GLBs on both components must be installed together
-   (gh-ocannl-2317). Neither component can broadcast at that residual size and the solved components
+   Above the minimum, take a [default] closing GLB at the exact residual together with the waiting
+   GLB if the latter is [default] or already carries the shared claim (gh-ocannl-2317,
+   gh-ocannl-2369). Neither component can broadcast at that residual size and the solved components
    already carry the claim. Closing just the waiting component would let the residual equation give
    the other component a tag its bound refuses.
 
    At the minimum, a [default] waiting bound also closes first when the closing component has no
-   bound of its own. The positive residual takes the shared claim. A guess on the closing side would
-   preserve [1_(bcast_if_1)], which its own bound may need when the waiting GLB already carries the
-   claim. Below the minimum the residual would go under 1.
+   bound of its own. The positive residual takes the shared claim. If its own bound is [default]
+   above 1, the only size-one component it admits is [1_(bcast_if_1)]. Install that top with the
+   waiting GLB (gh-ocannl-2369). A waiting GLB already carrying the claim can reach the top in the
+   ordinary closing order. Below the minimum the residual would go under 1.
 
-   Both new choices require independent dimension entries. A competing held relation can supply a
+   These choices require independent dimension entries. A competing held relation can supply a
    component's tag after a fixed-index minimum closes. The existing closing pass handles those
    components. The new choices also require a closing component that cannot be discarded, including
    through an alias ([may_be_empty]). The usual close applies to one that may be empty too
@@ -6797,26 +6800,30 @@ let concat_bounded_waiting ~parameter_axes ineqs env =
     | Dim_eq { d1; d2; origin } -> (
         let d1 = subst_dim env d1 and d2 = subst_dim env d2 in
         match concat_closing_dependent d1 d2 with
-        | Some (waiting, closing, diff) -> (
+        | Some (waiting, closing, diff, claim) -> (
             match find_dim env.dim_env waiting with
             | Some (Bounds_dim { glb = Some (Dim { d; basis; _ } as glb); _ }) when d > diff ->
                 let residual = d - diff in
                 let wait_eq = Dim_eq { d1 = Var waiting; d2 = glb; origin } in
                 let usual = if residual > 1 then [ wait_eq ] else [] in
-                if
-                  String.equal basis default_basis
-                  && Option.is_some (ordinary_glb waiting)
-                  && not (may_be_empty env closing)
-                then
+                if Option.is_some (ordinary_glb waiting) && not (may_be_empty env closing) then
+                  let waiting_plain = String.equal basis default_basis in
                   let independent () =
                     not (competing_equation d1 d2 closing || competing_equation d1 d2 waiting)
                   in
-                  match ordinary_glb closing with
-                  | Some None when residual = 1 && independent () -> [ wait_eq ]
-                  | Some (Some (Dim { d; basis; _ } as close_glb))
-                    when residual > 1 && d = residual && String.equal basis default_basis
+                  let close_both d2 = [ wait_eq; Dim_eq { d1 = Var closing; d2; origin } ] in
+                  match (residual, ordinary_glb closing) with
+                  | 1, Some None when waiting_plain && independent () -> [ wait_eq ]
+                  | 1, Some (Some (Dim { d; basis; _ }))
+                    when waiting_plain && d > 1 && String.equal basis default_basis
                          && independent () ->
-                      [ wait_eq; Dim_eq { d1 = Var closing; d2 = close_glb; origin } ]
+                      close_both (get_bcast_dim ~d:1 ())
+                  | _, Some (Some (Dim { d; basis = closing_basis; _ } as close_glb))
+                    when residual > 1 && d = residual
+                         && String.equal closing_basis default_basis
+                         && (waiting_plain || String.equal basis claim)
+                         && independent () ->
+                      close_both close_glb
                   | _ -> usual
                 else usual
             | _ -> [])
