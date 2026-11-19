@@ -2348,7 +2348,11 @@ using namespace metal;|}
        (a sum over the staged tnodes) only approximates. A backstop, not the primary check: a kernel
        whose allocation is over the device limit never gets here, because pipeline creation
        ([pipeline_of]) already refused it (gh-ocannl-1226). What remains is a pipeline the driver
-       accepted yet reports as over the limit the schedule layer used. *)
+       accepted yet reports as over the limit the schedule layer used. The same figure goes to an
+       armed [Compiled_kernels] census, which relates it to that accounting (gh-ocannl-1530). *)
+    if Compiled_kernels.armed () then
+      Compiled_kernels.record ~kernel:func_name
+        ~static_workgroup_bytes:(Me.ComputePipelineState.get_static_threadgroup_memory_length pso);
     Option.iter (hardware_limits ()).Backend_intf.max_workgroup_memory_bytes ~f:(fun max_bytes ->
         let static_bytes = Me.ComputePipelineState.get_static_threadgroup_memory_length pso in
         if static_bytes > max_bytes then
