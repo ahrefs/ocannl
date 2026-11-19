@@ -134,6 +134,28 @@ let number_object_local =
       fun x ->
         Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
           (fun () -> __ocannl_body x)
+let number_object_field =
+  let open! TDSL.O in
+    fun n () ->
+      let w =
+        (TDSL.param ?more_label:None
+           ?value:(Some
+                     (Float.of_int
+                        (object
+                           val n = 3
+                           method value = n
+                           initializer ignore n
+                         end)#value)) ?values:None ?param_init:None "w") () in
+      let __ocannl_body x =
+        let n = Int.succ n in
+        (+) ?label:(Some ["number_object_field"]) (( * ) ?label:None w x)
+          (TDSL.O.(!..) n) in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"number_object_field" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
 let named_binary source other =
   let open! TDSL.O in
     let w =
@@ -175,5 +197,6 @@ let _ =
   (binary_tensor, binary_literal, binary_sub, binary_mul, binary_div,
     power_int, power_float, power_expr, power_effectful,
     Custom_power.explicit_power, number_float, number_int, number_nested,
-    number_let_local, number_object_local, named_binary, named_unary,
-    named_ternary, binary_head, binary_both, ternary_head, ternary_both)
+    number_let_local, number_object_local, number_object_field, named_binary,
+    named_unary, named_ternary, binary_head, binary_both, ternary_head,
+    ternary_both)

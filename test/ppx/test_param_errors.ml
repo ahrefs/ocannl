@@ -152,3 +152,81 @@ let%op init_let_rhs n () x =
          n);
   }
   * x
+
+(* The object field binds the method's read. The addition still reads the body's [n]. *)
+let%op number_beside_object () x =
+  let n = [%oc 3] in
+  {
+    w =
+      !..(object
+            val n = 2
+            method value = n
+          end
+            #value + n);
+  }
+  * x
+  + !..n
+
+let%op number_in_val_rhs () x =
+  let n = [%oc 3] in
+  {
+    w =
+      !..(object
+            val n = 2
+            val m = n
+            method value = n + m
+          end
+           #value);
+  }
+  * x
+  + !..n
+
+(* A method declared before a field can read the enclosing name. *)
+let%op number_before_val n () x =
+  let n = [%oc Int.succ n] in
+  {
+    w =
+      !..(object
+            method value = n
+            val n = 2
+          end
+           #value);
+  }
+  * x
+  + !..n
+
+class initializer_parent =
+  object
+    val n = 2
+  end
+
+let%op number_in_inherited_method () x =
+  let n = [%oc 3] in
+  {
+    w =
+      !..(object
+            inherit initializer_parent
+            method value = n
+          end
+           #value);
+  }
+  * x
+  + !..n
+
+(* An optional default can read preceding parameters. Its own pattern binds in the body. *)
+let%op number_default_earlier_param () x =
+  let n = [%oc 3] in
+  ({ w = !..((fun n ?(scale = n) () -> scale) 2 ()) } * x) + !..n
+
+let%op number_default_own_param () x =
+  let n = [%oc 3] in
+  ({ w = !..((fun ?(n = n) () -> n) ()) } * x) + !..n
+
+(* The case pattern binds in its guard as well as its result. *)
+let%op number_guard_case_param () x =
+  let n = [%oc 3] in
+  ({ w = !..(match Some 2 with Some n when n > 0 -> n | _ -> 1) } * x) + !..n
+
+let%op number_guard_free_param () x =
+  let n = [%oc 3] in
+  ({ w = !..(match Some 2 with Some m when n > 0 -> m | _ -> 1) } * x) + !..n
