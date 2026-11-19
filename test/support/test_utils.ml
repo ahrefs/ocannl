@@ -24,6 +24,10 @@ module Cache_plant = Cache_plant
 (** Planting schedule-cache entries by hand from a few named arguments, and the waiver for claims
     resting on cache I/O the filesystem refused. *)
 
+module Descriptors = Descriptors
+(** This process's open-descriptor count, and the bound a run of compiles holds it to, with its
+    leaking negative control (gh-ocannl-1784, gh-ocannl-1882). *)
+
 (** [concise_float ~prec v] formats [v] with [prec] decimals, normalizing exponent digits portably.
     Re-export of [Ir.Ndarray.concise_float]. *)
 let concise_float = Ir.Ndarray.concise_float

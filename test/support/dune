@@ -75,7 +75,7 @@
 (library
  (name test_utils)
  (package neural_nets_lib)
- (modules test_utils generated asm_census cache_plant)
+ (modules test_utils generated asm_census cache_plant descriptors)
  (libraries
   base
   stdio

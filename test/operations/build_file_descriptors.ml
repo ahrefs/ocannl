@@ -4,7 +4,8 @@
    descriptors per routine, which a long test such as [schedule_mma_matmul] ran out of under a
    256-descriptor limit (an ssh shell on macOS). The claim counts this process's open descriptors
    across N compiles of one routine shape; the negative control leaks one descriptor per step
-   through the same counter, so a counter that cannot see growth cannot pass the claim. *)
+   through the same counter and bound ([Test_utils.Descriptors], shared with [schedule_mma_matmul]'s
+   whole-run claim), so a counter that cannot see growth cannot pass the claim. *)
 
 open Base
 open Ocannl
@@ -18,9 +19,7 @@ open Verdict.Claims
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let compiles = 8
 
-(* [/dev/fd] lists the calling process's descriptors on macOS and Linux; the listing's own
-   descriptor is counted in every reading alike. *)
-let open_descriptors () = Array.length (Stdlib.Sys.readdir "/dev/fd")
+module Descriptors = Test_utils.Descriptors
 
 (* One routine shape, a fresh routine (and so fresh artifact files) per call; answers its name. *)
 let compile_one ctx i =
@@ -37,12 +36,11 @@ let () =
     Verdict.leg ~aggregation:`Environment ~when_:(not Stdlib.Sys.win32) ~on:"windows (no /dev/fd)"
       ()
   in
-  let open_descriptors () = if Stdlib.Sys.win32 then 0 else open_descriptors () in
   Test_utils.Generated.init ~backend_name;
   (* Warm-up: backend start-up, the artifact directory's lock and the first compile's lazily opened
      driver state stay open for the process's lifetime, and are not per-compile growth. *)
   let ctx, (_ : string) = compile_one (Context.auto ()) 0 in
-  let before = open_descriptors () in
+  let before = Descriptors.count () in
   let names = ref [] in
   let (_ : Context.t) =
     List.fold
@@ -53,21 +51,18 @@ let () =
         names := name :: !names;
         ctx)
   in
-  let growth = open_descriptors () - before in
+  let growth = Descriptors.count () - before in
   Stdio.eprintf "%d compiles grew open descriptors by %d (not part of the golden)\n%!" compiles
     growth;
   in_legf ~leg "%d compiles with debug artifacts on grow open descriptors by fewer than %d" compiles
-    compiles (fun label -> p label (growth < compiles));
+    (Descriptors.bound ~compiles) (fun label -> p label (Descriptors.within_bound ~compiles growth));
   (* The fix must not stop the artifacts being written: each one holds its routine's code. *)
   p_all "every compile's optimized .ll artifact names its routine" !names ~f:(fun name ->
       String.is_substring (Test_utils.Generated.read ~ext:".ll" name) ~substring:name);
   p_all "every compile's .cd artifact is written" !names ~f:(fun name ->
       not (String.is_empty (Test_utils.Generated.read ~ext:".cd" name)));
-  (* Negative control: the counter sees a writer that keeps one channel per step open. *)
-  in_legf ~leg "negative control: %d leaking writes grow open descriptors by at least %d" compiles
+  (* Negative control: one channel kept open per compile, a count written here rather than read off
+     the bound, so the counter must see it and the bound must reject it. *)
+  in_legf ~leg "negative control: %d leaking writes break the bound of %d compiles" compiles
     compiles (fun label ->
-      let before = open_descriptors () in
-      let leaked = List.init compiles ~f:(fun (_ : int) -> Stdio.Out_channel.create "/dev/null") in
-      let leak_growth = open_descriptors () - before in
-      List.iter leaked ~f:Stdio.Out_channel.close;
-      p label (leak_growth >= compiles))
+      p label (not (Descriptors.within_bound ~compiles (Descriptors.leak_growth compiles))))
