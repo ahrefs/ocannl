@@ -1830,10 +1830,29 @@ files.
   (`Compiler_options.clang_contraction_off` over the fast-math and contraction flags in compile
   order: `-ffp-contract=off` after `-ffast-math` still pins), CUDA's
   `Compiler_options.nvrtc_contraction_off` (`--fmad=false`, `cuda_fast_math=false`), HIP's
-  `clang_contraction_off` over `hip_math_options` (`hip_fast_math=false`), and Metal's `false`:
-  `MTLCompileOptions` has no contraction switch, and Safe mode does contract -- measured on the M4
-  Max (macOS 27), `(a * b) + c` with `a = b = 1 + 2^-12`, `c = -(1 + 2^-11)` came back `2^-24` on
-  Metal and `0` on cc under `off`. Only an explicit pin counts, never a toolchain default. Cache
+  `clang_contraction_off` over `hip_math_options` (`hip_fast_math=false`), and Metal's `false`,
+  though MSL source CAN pin it (gh-ocannl-1836): no gate emits the pin yet. `MTLCompileOptions`
+  has no contraction property; a pragma in the source does it. Measured on mac-studio (M4 Max,
+  macOS 27.2.1, Metal front end 32023.922) through `newLibraryWithSource` at MSL 3.1 and 3.2,
+  under the backend's Safe-plus-fast-functions, the legacy `fastMathEnabled=false`, Relaxed and
+  Fast, with `a = b = 1 + 2^-12`, `c = -(1 + 2^-11)` read from a buffer: the one statement
+  `(a * b) + c` returns `2^-24` (fused) bare and under `#pragma METAL fp math_mode(safe)`, and
+  `0` (the serial two roundings, cc's value under `off`) under each of `#pragma METAL fp
+  contract(off)`, `#pragma clang fp contract(off)` and `#pragma STDC FP_CONTRACT OFF`, at file
+  scope or at the top of the kernel body, with no diagnostic. Split over two statements (`p = a *
+  b; p + c`) it is `0` bare under Safe and legacy -- Safe contracts within an expression, like
+  `-ffp-contract=on` -- but `2^-24` under Relaxed and Fast, which each pragma brings to `0` too.
+  An explicit `fma(a, b, c)` stays fused under the pragma. The AIR agrees (`xcrun -sdk macosx
+  metal -S -emit-llvm -fmetal-math-mode=safe`): the bare expression lowers to `llvm.fmuladd.f32`,
+  each pragma to a plain `fmul` then `fadd`, and under Fast or Relaxed the pragma drops the
+  `contract` fast-math flag. The command line's `-ffp-contract=off` gives the same AIR but is no
+  switch for a backend compiling source at run time. Joining `compiler_contraction_off` needs a
+  reproducible-side gate (it changes every Metal kernel's arithmetic, and costs: under the
+  backend's options the pin measured 1.02x on a naive 1024^3 f32 matmul, 0.774 ms bare against
+  0.792 ms pinned, and 1.69x on an ALU-bound eight-chain `x * m + c` loop, 1.550 against
+  2.612 ms, GPU-clock medians of 21 interleaved repeats on mac-studio), the pragma in the kernel
+  header, the `mma-fallback-unfused` tag component and a Metal leg in `tile_fallback_unfused`.
+  Only an explicit pin counts, never a toolchain default. Cache
   identity: cc's tag carries the flags, CUDA's `/nvrtc-math:` and HIP's `/hiprtc-math:` the precise
   switches, and each adds `mma-fallback-unfused` under the pin, so a crown timed with the fused
   tile does not replay; Metal's tag carries `Compiler_options.metal_regime_tag` -- nothing on the
