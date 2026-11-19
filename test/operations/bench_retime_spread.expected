@@ -46,7 +46,5 @@ two-stage screen: what the second stage drops keeps its second-stage reading: tr
 two-stage screen: a refused second-stage reading does not set the cut while one is admitted: true
 two-stage screen: with every second-stage reading refused, the refused ones set the cut: true
 two-stage screen: a second-stage call with no reading is kept for the re-timing: true
-screen reading: an admitted window reads its minimum: true
-screen reading: a window refused as contended still reads its minimum: true
-screen reading: a window refused as unbatched still reads its minimum: true
+screen reading: a resolved minimum reads as itself: true
 screen reading: a clock that resolved nothing gives no reading: true

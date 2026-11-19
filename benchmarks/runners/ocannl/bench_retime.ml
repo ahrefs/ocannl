@@ -152,18 +152,19 @@ let configured_timing () =
     inputs that are not its own outputs, as an exactness oracle must anyway. *)
 let configured_repeats () = Utils.registered_int ~arg_name:"autotune_repeats"
 
-(** [screen_reading result]: what a screen ranks one timing call by: its minimum whenever the clock
-    resolved one, admitted or refused -- see the screen's section below -- and [None] for a
-    non-positive or non-finite minimum. *)
-let screen_reading (result : Autotune.timing_result) =
-  if Float.is_finite result.ms && Float.is_positive result.ms then Some result.ms else None
+(** [screen_reading ms]: what a screen ranks one timing call by, given the call's minimum: the
+    minimum whenever the clock resolved one, and [None] for a non-positive or non-finite one. It
+    reads no admission verdict: a screen ranks a refused window by its minimum too -- see the
+    screen's section below. *)
+let screen_reading ms = if Float.is_finite ms && Float.is_positive ms then Some ms else None
 
 (** [read_screen ~timing (ctx, routine)]: one screen reading under [timing] and the configured
-    [autotune_repeats]: [(screen_reading, refused)], [refused] when the admission gate refused the
-    window, which the instrument counts. *)
+    [autotune_repeats]: [(screen_reading ms, refused)], [refused] when
+    {!Autotune.admitted_timing_ms} refused the window -- which {!rescreen}'s cut and the
+    instrument's count read, and the reading does not. *)
 let read_screen ~timing ((ctx, routine) : Context.t * Context.routine) =
   let result = Autotune.time_routine ~timing ~repeats:(configured_repeats ()) ctx routine in
-  (screen_reading result, Option.is_none (Autotune.admitted_timing_ms result))
+  (screen_reading result.Autotune.ms, Option.is_none (Autotune.admitted_timing_ms result))
 
 (** [read_once (ctx, routine)]: one reading -- one {!Autotune.time_routine} call under
     {!configured_timing} and the configured [autotune_repeats], admitted through

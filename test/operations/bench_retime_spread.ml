@@ -224,21 +224,14 @@ let () =
           [ ("a", Some 1.); ("b", Some 4.) ])
        [ "a"; "b" ])
 
-(* gh-ocannl-1818: a screen ranks a timing call by its minimum whether or not the admission gate
-   admitted the window -- a refused window's minimum only over-states the kernel -- and keeps a
-   kernel unconditionally only when the clock resolved nothing. *)
+(* gh-ocannl-1818: a screen ranks a timing call by its minimum -- whether or not the admission gate
+   admitted the window, since [screen_reading] reads no verdict -- and keeps a kernel
+   unconditionally only when the clock resolved nothing. *)
 let () =
-  let result ?(contended = false) ?(unbatched = false) ms =
-    { Autotune.ms; contended; unbatched; dispersed = contended; spread = 1.; samples = 16 }
-  in
-  p "screen reading: an admitted window reads its minimum"
-    (Option.equal Float.equal (R.screen_reading (result 0.25)) (Some 0.25));
-  p "screen reading: a window refused as contended still reads its minimum"
-    (Option.equal Float.equal (R.screen_reading (result ~contended:true 0.25)) (Some 0.25)
-    && Option.is_none (Autotune.admitted_timing_ms (result ~contended:true 0.25)));
-  p "screen reading: a window refused as unbatched still reads its minimum"
-    (Option.equal Float.equal (R.screen_reading (result ~unbatched:true 0.5)) (Some 0.5));
+  p "screen reading: a resolved minimum reads as itself"
+    (Option.equal Float.equal (R.screen_reading 0.25) (Some 0.25));
   p "screen reading: a clock that resolved nothing gives no reading"
-    (Option.is_none (R.screen_reading (result 0.))
-    && Option.is_none (R.screen_reading (result Float.nan))
-    && Option.is_none (R.screen_reading (result Float.infinity)))
+    (Option.is_none (R.screen_reading 0.)
+    && Option.is_none (R.screen_reading (-0.5))
+    && Option.is_none (R.screen_reading Float.nan)
+    && Option.is_none (R.screen_reading Float.infinity))
