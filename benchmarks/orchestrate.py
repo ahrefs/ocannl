@@ -57,7 +57,9 @@ def ocannl_tree(env):
     profile payloads its own flags accept), its HEAD in the report header and in every failure
     record's `source_revision`. The harness, the fixtures and DIGESTS.txt, the venv and the cells'
     working directory stay this checkout's. A value that is not an OCANNL checkout is refused at
-    import rather than resolved to runners that do not exist.
+    import rather than resolved to runners that do not exist, and so is one that is not the root
+    of its own git worktree: a source copy inside another checkout would have that checkout's HEAD
+    stamped on rows it did not produce.
     """
     value = env.get("BENCH_OCANNL_TREE")
     if not value:
@@ -69,6 +71,23 @@ def ocannl_tree(env):
         raise SystemExit(
             f"BENCH_OCANNL_TREE={display_value(value)} is not an OCANNL checkout (no "
             "ocannl_config.reference or benchmarks/runners/ocannl under it)"
+        )
+    try:
+        toplevel = subprocess.run(
+            ["git", "-C", str(tree), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SystemExit(
+            f"BENCH_OCANNL_TREE={display_value(value)}: git could not name its worktree "
+            f"({display_value(str(exc))})"
+        )
+    root = toplevel.stdout.strip()
+    if toplevel.returncode != 0 or not root or Path(root).resolve() != tree:
+        raise SystemExit(
+            f"BENCH_OCANNL_TREE={display_value(value)} is not the root of a git worktree (git "
+            f"names {display_value(root or toplevel.stderr.strip() or 'none')}), so its HEAD "
+            "would not be the revision that runs"
         )
     return tree
 

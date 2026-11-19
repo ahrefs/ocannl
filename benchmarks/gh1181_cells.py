@@ -248,7 +248,7 @@ def measure(a):
     # refused run leaves nothing to clear before the next attempt.
     box_gate.require("gh1181_cells.py", a, HERE / "fixtures", a.workloads,
                      run=lambda cmd: o.run_supporting(cmd).returncode)
-    out.mkdir(parents=True, exist_ok=False)
+    # The trees are pinned before --out is made too, so a wrong commit leaves nothing to clear.
     master = o.ROOT
     trees = {"master": master}
     shas = {"master": git_sha(master)}
@@ -266,6 +266,7 @@ def measure(a):
             shas["aug"] = git_sha(trees["aug"])
             if not shas["aug"].startswith(a.anchor_commit):
                 raise SystemExit(f"--aug is at {shas['aug']}, not the anchor commit {a.anchor_commit}")
+    out.mkdir(parents=True, exist_ok=False)
 
     # A row is stamped with its tree's HEAD, so that HEAD must be what runs: a tree with tracked
     # modifications is refused, and the runner of every tree an arm uses is built from it here,
@@ -380,6 +381,10 @@ def measure(a):
                 cache.mkdir(parents=True, exist_ok=False)
                 if framework == "ocannl":
                     root = trees[tree]
+                    # The master arm runs where this harness lives, so the `ocannl_config` it reads
+                    # is the driver's whichever tree BENCH_OCANNL_TREE names; the anchor arm keeps
+                    # its own checkout's, as it always has.
+                    cell_dir = HERE if tree == "master" else root / "benchmarks"
                     env = o.cell_env(base, fx, variant, "f32")
                     reuse = a.search_once and repeat > 0
                     tuned_cache = (out / "caches" / workload / "r0" / arm) if a.search_once else cache
@@ -394,7 +399,7 @@ def measure(a):
                         # The search this replay's cache came from, already gated in repeat 0.
                         search = searched_once.get((workload, arm))
                     else:
-                        search = run(workload, arm, repeat, "search", cmd, env, root / "benchmarks",
+                        search = run(workload, arm, repeat, "search", cmd, env, cell_dir,
                                      regime)
                         if search is not None:
                             rows.append(search)
@@ -412,7 +417,7 @@ def measure(a):
                     # is the arm's timing row (and fails the provenance gate if it searched).
                     for attempt in range(COMPLETION_PASSES + 1):
                         stage = "replay" if attempt == 0 else f"replay{attempt + 1}"
-                        replay = run(workload, arm, repeat, stage, cmd, env, root / "benchmarks",
+                        replay = run(workload, arm, repeat, stage, cmd, env, cell_dir,
                                      regime)
                         if (replay is None or o.search_provenance(replay) != "SEARCHED"
                                 or attempt == COMPLETION_PASSES):

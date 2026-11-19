@@ -18,6 +18,10 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
+# The suite is about this checkout: a measured-tree override exported in the launching shell would
+# rebind orchestrate's ROOT at import (OcannlTreeTest sets it only in the probes it starts).
+os.environ.pop("BENCH_OCANNL_TREE", None)
+
 import bench_output
 import bench_venv
 import box_gate
@@ -7812,10 +7816,18 @@ class OcannlTreeTest(unittest.TestCase):
     """
 
     @staticmethod
-    def checkout(parent):
-        tree = Path(parent) / "tree"
+    def git(cwd, *args):
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+        subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True)
+
+    @classmethod
+    def checkout(cls, parent, name="tree", init=True):
+        """An OCANNL-shaped directory, the root of a git repository of its own when `init`."""
+        tree = Path(parent) / name
         (tree / "benchmarks" / "runners" / "ocannl").mkdir(parents=True)
         (tree / "ocannl_config.reference").write_text("#log_level=1\n")
+        if init:
+            cls.git(tree, "init", "-q")
         return tree.resolve()
 
     def test_unset_or_empty_is_the_orchestrators_own_checkout(self):
@@ -7840,6 +7852,21 @@ class OcannlTreeTest(unittest.TestCase):
                     with self.assertRaises(SystemExit) as raised:
                         orchestrate.ocannl_tree({"BENCH_OCANNL_TREE": value})
                     self.assertIn("is not an OCANNL checkout", str(raised.exception))
+
+    def test_a_source_copy_that_is_not_its_own_git_root_is_refused(self):
+        # Inside another repository git would name the enclosing worktree, whose HEAD is not the
+        # revision that runs; outside any repository there is no HEAD at all.
+        with tempfile.TemporaryDirectory() as tmp:
+            outer = Path(tmp) / "outer"
+            outer.mkdir()
+            self.git(outer, "init", "-q")
+            nested = self.checkout(outer, "copy", init=False)
+            loose = self.checkout(tmp, "loose", init=False)
+            for tree in (nested, loose):
+                with self.subTest(tree=tree):
+                    with self.assertRaises(SystemExit) as raised:
+                        orchestrate.ocannl_tree({"BENCH_OCANNL_TREE": str(tree)})
+                    self.assertIn("is not the root of a git worktree", str(raised.exception))
 
     def test_the_module_reads_the_variable_at_import(self):
         # Observed in a fresh interpreter: the runners, the configuration reference and the tree
@@ -7876,6 +7903,12 @@ class OcannlTreeTest(unittest.TestCase):
         measure = source[source.index("\ndef measure(a):") :]
         self.assertIn("master = o.ROOT", measure)
         self.assertNotIn("HERE.parent\n    trees", measure)
+        # The master arm's cells run in this harness's directory (its `ocannl_config`), and a
+        # wrong pin is refused before --out exists, so a retry needs nothing cleared.
+        self.assertIn('cell_dir = HERE if tree == "master" else root / "benchmarks"', measure)
+        self.assertNotIn('env, root / "benchmarks"', measure)
+        self.assertLess(measure.index("not --master-commit"), measure.index("out.mkdir("))
+        self.assertLess(measure.index("not the anchor commit"), measure.index("out.mkdir("))
         base = ["--backend", "cuda", "--box", "rog-nv", "--out", "x", "--no-anchor", "why"]
         self.assertEqual(gh1181_cells.parse_args(base + ["--master-commit", "c3e5975aa"])
                          .master_commit, "c3e5975aa")
