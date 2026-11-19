@@ -58,8 +58,9 @@
  (modules bounded_run)
  (libraries base stdio unix arrayjit.verdict))
 
-; The OS-side readings of the real-stall Metal tests: the IORegistry GPU recovery count, read
-; fail-closed, and an out-of-process watchdog (gh-ocannl-2139). No backend dependency.
+; The OS-side readings of the real-stall Metal tests and of the hand-run probe in test/metal_probe:
+; the IORegistry GPU recovery count, read fail-closed, and an out-of-process watchdog
+; (gh-ocannl-2139). No backend dependency.
 
 (library
  (name gpu_recovery)
