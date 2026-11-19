@@ -7804,6 +7804,87 @@ class ResultsDirTest(unittest.TestCase):
         self.assertIn("report(results, RESULTS_DIR,", main)
 
 
+class OcannlTreeTest(unittest.TestCase):
+    """`BENCH_OCANNL_TREE`: the checkout whose runners a sweep measures (gh-ocannl-2008).
+
+    A release tag is measured by today's harness: the tag's runners, configuration reference and
+    HEAD; this checkout's gates, fixtures and venv.
+    """
+
+    @staticmethod
+    def checkout(parent):
+        tree = Path(parent) / "tree"
+        (tree / "benchmarks" / "runners" / "ocannl").mkdir(parents=True)
+        (tree / "ocannl_config.reference").write_text("#log_level=1\n")
+        return tree.resolve()
+
+    def test_unset_or_empty_is_the_orchestrators_own_checkout(self):
+        for env in ({}, {"BENCH_OCANNL_TREE": ""}):
+            with self.subTest(env=env):
+                self.assertEqual(orchestrate.ocannl_tree(env), HERE.parent)
+
+    def test_a_named_checkout_is_resolved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = self.checkout(tmp)
+            self.assertEqual(orchestrate.ocannl_tree({"BENCH_OCANNL_TREE": str(tree)}), tree)
+
+    def test_a_directory_that_is_no_checkout_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bare = Path(tmp) / "bare"
+            bare.mkdir()
+            half = Path(tmp) / "half"
+            half.mkdir()
+            (half / "ocannl_config.reference").write_text("")
+            for value in (str(bare), str(half), str(Path(tmp) / "absent")):
+                with self.subTest(value=value):
+                    with self.assertRaises(SystemExit) as raised:
+                        orchestrate.ocannl_tree({"BENCH_OCANNL_TREE": value})
+                    self.assertIn("is not an OCANNL checkout", str(raised.exception))
+
+    def test_the_module_reads_the_variable_at_import(self):
+        # Observed in a fresh interpreter: the runners, the configuration reference and the tree
+        # main builds in and stamps are all the named checkout's.
+        probe = ("import orchestrate as o; print(o.ROOT); print(o.CONFIG_REFERENCE); "
+                 "print(o.ocannl_exe('gpt'))")
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = self.checkout(tmp)
+            for value, want in ((str(tree), tree), (None, HERE.parent)):
+                env = {k: v for k, v in os.environ.items() if k != "BENCH_OCANNL_TREE"}
+                if value is not None:
+                    env["BENCH_OCANNL_TREE"] = value
+                with self.subTest(value=value):
+                    out = subprocess.run(
+                        [sys.executable, "-c", probe],
+                        cwd=HERE, env=env, capture_output=True, text=True, check=True,
+                    ).stdout.splitlines()
+                    self.assertEqual([Path(line) for line in out], [
+                        want, want / "ocannl_config.reference",
+                        want / "_build/default/benchmarks/runners/ocannl/bench_gpt.exe"])
+
+    def test_main_builds_stamps_and_reports_from_the_measured_tree(self):
+        source = Path(orchestrate.__file__).read_text()
+        main = source[source.index("\ndef main():") :]
+        self.assertIn('run_supporting(["dune", "build", "--root", ".", *targets], cwd=ROOT, '
+                      "check=True)", main)
+        self.assertIn("source = source_identity(ROOT)", main)
+        self.assertIn("harness commit: ", source)
+
+    def test_gh1181_takes_its_master_tree_from_the_same_variable(self):
+        import gh1181_cells
+
+        source = Path(gh1181_cells.__file__).read_text()
+        measure = source[source.index("\ndef measure(a):") :]
+        self.assertIn("master = o.ROOT", measure)
+        self.assertNotIn("HERE.parent\n    trees", measure)
+        base = ["--backend", "cuda", "--box", "rog-nv", "--out", "x", "--no-anchor", "why"]
+        self.assertEqual(gh1181_cells.parse_args(base + ["--master-commit", "c3e5975aa"])
+                         .master_commit, "c3e5975aa")
+        for bad in ("c3e5", "C3E5975AA", "c3e5975ag"):
+            with self.subTest(bad=bad):
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    gh1181_cells.parse_args(base + ["--master-commit", bad])
+
+
 class SkipCellTest(unittest.TestCase):
     """`--skip-cell`: an operator leaving one OCANNL cell out of a sweep (gh-ocannl-719).
 

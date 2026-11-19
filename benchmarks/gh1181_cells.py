@@ -5,7 +5,8 @@ One invocation measures one box's GPU column across three frameworks, with an an
 August `7014dc44` by default, `--anchor-commit` for another) re-measured beside today's master in
 the same window:
 
-- OCANNL tuned at the checkout this file lives in (`master`), under the exact regime and under
+- OCANNL tuned at the checkout this file lives in (`master`; `BENCH_OCANNL_TREE` names another, so
+  today's harness measures a release tag built in a second worktree, gh-ocannl-2008), under the exact regime and under
   `--ocannl_profile=approximate`, and OCANNL tuned exact at the anchor commit (`--aug`, a second
   checkout whose `bench_gpt.exe` is run unchanged: history is selected by executable path, never
   patched). The arm keeps its name, `ocannl-aug-exact`, whichever commit anchors it. Tuned cells keep orchestrate's two-pass protocol: a search process, then a fresh
@@ -74,6 +75,9 @@ def parse_args(argv=None):
                     help="checkout of the anchor commit with its bench_gpt.exe built")
     ap.add_argument("--anchor-commit", default=AUGUST, metavar="SHA",
                     help="the commit --aug must be at (a prefix of it; default the August 7014dc44)")
+    ap.add_argument("--master-commit", metavar="SHA",
+                    help="the commit the master tree (BENCH_OCANNL_TREE, else this checkout) must "
+                    "be at (a prefix of it); unchecked when omitted")
     ap.add_argument("--no-anchor", metavar="REASON",
                     help="run without the anchor arm, recording why (it did not build, say)")
     ap.add_argument("--out", type=Path, required=True)
@@ -98,6 +102,9 @@ def parse_args(argv=None):
             ap.error("--backend and --box are required to measure")
         if len(a.anchor_commit) < 8 or any(c not in "0123456789abcdef" for c in a.anchor_commit):
             ap.error("--anchor-commit takes a lowercase hex commit prefix of at least 8 digits")
+        if a.master_commit is not None and (
+                len(a.master_commit) < 8 or any(c not in "0123456789abcdef" for c in a.master_commit)):
+            ap.error("--master-commit takes a lowercase hex commit prefix of at least 8 digits")
         if "ocannl-aug-exact" in a.arms and not (a.aug or a.no_anchor):
             ap.error("the anchor arm needs --aug, or --no-anchor with the reason")
     return a
@@ -180,7 +187,11 @@ def environment(a, fixtures):
         "venv_python": str(o.VENV_PY),
         "versions": versions,
         "driver_sha256": raw_sha256(driver),
-        "master_tree": str(HERE.parent),
+        "master_tree": str(o.ROOT),
+        # The harness that gated the rows: this file's checkout, which differs from the master
+        # tree when BENCH_OCANNL_TREE names another. Its revision and whether tracked files differ
+        # from it are `driver_sha` and `driver_tracked_changes` below.
+        "driver_tree": str(HERE.parent),
         "aug_tree": str(a.aug) if a.aug else None,
         "anchor_commit": a.anchor_commit,
         "no_anchor": a.no_anchor,
@@ -238,9 +249,12 @@ def measure(a):
     box_gate.require("gh1181_cells.py", a, HERE / "fixtures", a.workloads,
                      run=lambda cmd: o.run_supporting(cmd).returncode)
     out.mkdir(parents=True, exist_ok=False)
-    master = HERE.parent
+    master = o.ROOT
     trees = {"master": master}
     shas = {"master": git_sha(master)}
+    if a.master_commit and not shas["master"].startswith(a.master_commit):
+        raise SystemExit(f"the master tree {master} is at {shas['master']}, not --master-commit "
+                         f"{a.master_commit}")
     arms = list(a.arms)
     if "ocannl-aug-exact" in arms:
         if a.no_anchor:
@@ -286,6 +300,9 @@ def measure(a):
 
     env_record = environment(a, fixtures)
     env_record["shas"] = shas
+    env_record["driver_sha"] = git_sha(HERE.parent)
+    env_record["driver_tracked_changes"] = bool(supporting_output(
+        ["git", "-C", str(HERE.parent), "status", "--porcelain", "--untracked-files=no"]).strip())
     env_record["executables"] = executables
     env_record["arms_run"] = arms
     (out / "env.json").write_text(json.dumps(env_record, indent=2) + "\n")
