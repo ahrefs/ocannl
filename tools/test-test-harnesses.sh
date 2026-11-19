@@ -12,6 +12,7 @@
 # --harnesses` on a fixture change reaching two members).
 # --jobs runs members beside one another and prints each one's output whole,
 # in the manifest's order (gh-ocannl-2002).
+# Bash missing-command diagnostics fail the member at either width.
 # The modern-PATH witness is gated separately; aggregate controls remain ungated.
 # Usage: tools/test-test-harnesses.sh [--keep|--help]
 set -u
@@ -174,13 +175,14 @@ export FAIL_MEMBER
 FAIL_MEMBER=$(head -n 1 "$TMP/all")
 # A fail-fast twin must lose the continuation property, proving the oracle
 # above sees the defect instead of merely observing a failing command.
-python3 - "$subject" "$TMP/fail-fast.sh" <<'PY_CONTROL'
+head -n 1 "$TMP/all" >"$TMP/first"
+python3 - "$subject" "$TMP/fail-fast.sh" <<'PY_CONTROL' || exit 2
 from pathlib import Path
 import sys
 text = Path(sys.argv[1]).read_text()
-anchor = '"$member_bash" "$root/$script" ${args[@]+"${args[@]}"} || rc=$?'
-assert anchor in text
-Path(sys.argv[2]).write_text(text.replace(anchor, '"$root/$script" || exit 1'))
+anchor = '[ "$rc" = 0 ] || failures=$((failures + 1))'
+assert text.count(anchor) == 1
+Path(sys.argv[2]).write_text(text.replace(anchor, '[ "$rc" = 0 ] || exit 1'))
 PY_CONTROL
 # Keep the twin at the same tools/ depth so root resolution stays identical.
 cp "$TMP/fail-fast.sh" "$fixture/tools/fail-fast.sh"
@@ -188,13 +190,12 @@ chmod +x "$fixture/tools/fail-fast.sh"
 : >"$RECORD"
 twin_rc=0
 "$fixture/tools/fail-fast.sh" >"$TMP/twin-out" 2>&1 || twin_rc=$?
-if [ "$twin_rc" = 1 ] && ! cmp -s "$TMP/all" "$RECORD"; then
+if [ "$twin_rc" = 1 ] && cmp -s "$TMP/first" "$RECORD"; then
   report 0 'the fail-fast twin loses the all-members oracle'
 else report 1 'the fail-fast twin loses the all-members oracle'; fi
 # Actual signals on the member preserve cancellation and suppress later work.
 export FAIL_SIGNAL FAIL_MEMBER
 FAIL_MEMBER=$(head -n 1 "$TMP/all")
-head -n 1 "$TMP/all" >"$TMP/first"
 python3 - "$subject" "$fixture/tools/continue.sh" <<'PY_INTERRUPT'
 from pathlib import Path
 import sys
@@ -880,6 +881,99 @@ for control in member bash shebang; do
   done
 done
 cp "$TMP/member-before-bash-control" "$fixture/$control_member"
+
+cat >"$fixture/$control_member" <<'MISSING_COMMAND'
+#!/usr/bin/env bash
+export LC_ALL=C
+. "$ABORT_SUPPORT"
+harness_args "$@"
+harness_scratch dispatcher-missing-command
+exercise() {
+  case $MISSING_FORM in
+    script) ocannl_fixture_undefined_function ;;
+    bash-c)
+      printf '%s' 'checking with partial stdout... '
+      bash -c 'ocannl_fixture_undefined_function; true'
+      printf '\n' ;;
+    named-bash-c) bash -c 'ocannl_fixture_undefined_function; true' 'named fixture' ;;
+    prose)
+      printf '%s\n' 'the expected fixture text says command not found' >&2
+      printf '%s\n' 'assertion: command not found' 'fixture.sh: line 2: sample: command not found (example)' >&2
+      printf '%s\n' 'example: command: command not found' ;;
+    interrupted)
+      sleep 15 >/dev/null &
+      printf '%s\n' "$!" >"$LINGER_PID"
+      kill -TERM "$$" ;;
+  esac
+  report 0 'the fixture leg finished'
+}
+harness_leg_run '1: missing command' exercise
+finish
+MISSING_COMMAND
+export MISSING_MEMBER="$control_member" MISSING_FORM
+mv "$fixture/tools/test-run.sh" "$TMP/test-run.before-missing" || exit 2
+cat >"$fixture/tools/test-run.sh" <<'AFFECTED'
+printf '%s\n' "$MISSING_MEMBER"
+AFFECTED
+missing_cases() { # SUBJECT EXPECTED-BASH BRANCH
+  local subject=$1 version=$2 branch=$3 width form want
+  for width in 1 4; do
+    for form in script bash-c named-bash-c prose; do
+      MISSING_FORM=$form
+      run --affected --since HEAD --jobs "$width"
+      want=0
+      if [ "$branch" != no-check ] && [ "$form" != prose ]; then want=1; fi
+      if [ "$got" = "$want" ] &&
+         grep -qF "(shell; bash $version " "$TMP/out" &&
+         grep -qxF 'PASS  the fixture leg finished' "$TMP/out" &&
+         grep -qxF "HARNESS $control_member exit: $want" "$TMP/out" &&
+         grep -qxF "harnesses: 1 run, $want failed" "$TMP/out" &&
+         { [ "$form" = prose ] ||
+           grep -q '^.*: ocannl_fixture_undefined_function: command not found$' "$TMP/out"; } &&
+         { [ "$want" = 0 ] ||
+           grep -q "^harnesses: $control_member: missing command: .*: ocannl_fixture_undefined_function: command not found$" "$TMP/out"; }; then
+        report 0 "missing command ($branch Bash $version, --jobs $width, $form): member exits $want"
+      else
+        report 1 "missing command ($branch Bash $version, --jobs $width, $form): member exits $want" \
+          "exit $got; $(tr '\n' '|' <"$TMP/out")"
+      fi
+    done
+  done
+}
+missing_cases "$subject" "$expected_member_version" default
+no_check=$fixture/tools/no-command-check.sh
+sed '/^command_not_found=/s/=.*/="^ocannl_no_check_control$"/' "$subject" >"$no_check" || exit 2
+chmod +x "$no_check"
+missing_cases "$no_check" "$expected_member_version" no-check
+
+# The serial dispatcher must return while a descendant still owns stderr.
+# The sleep bounds the failure case, and a live PID is the success witness.
+export LINGER_PID=$TMP/linger.pid
+MISSING_FORM=interrupted
+run --affected --since HEAD --jobs 1
+if [ "$got" = 143 ] && [ -s "$LINGER_PID" ] &&
+   kill -0 "$(cat "$LINGER_PID")" 2>/dev/null &&
+   grep -qxF 'harnesses: interrupted (exit 143)' "$TMP/out"; then
+  report 0 'a serial interruption returns while a descendant still holds stderr'
+else
+  report 1 'a serial interruption returns while a descendant still holds stderr' "exit $got; $(tr '\n' '|' <"$TMP/out")"
+fi
+if [ -s "$LINGER_PID" ]; then kill -TERM "$(cat "$LINGER_PID")" 2>/dev/null || :; fi
+unset LINGER_PID
+
+modern_version=$("$subject_bash" -c 'printf "%s.%s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"')
+if [ "$system_bash_version" = 3.2 ] && [ "$modern_version" != 3.2 ]; then
+  # The production Mac pin takes precedence over PATH. Exercise the same
+  # dispatcher with that one decision bypassed to cover its other branch.
+  modern_subject=$fixture/tools/modern-command-check.sh
+  sed 's|^if /bin/bash -c |if false \&\& /bin/bash -c |' "$subject" >"$modern_subject" || exit 2
+  chmod +x "$modern_subject"
+  missing_cases "$modern_subject" "$modern_version" modern
+fi
+mv "$TMP/test-run.before-missing" "$fixture/tools/test-run.sh" || exit 2
+cp "$TMP/member-before-bash-control" "$fixture/$control_member"
+unset MISSING_MEMBER MISSING_FORM
+
 # The same planted expansion passes under a modern Bash when one is on PATH.
 modern_empty_array() {
   local version control_rc=0

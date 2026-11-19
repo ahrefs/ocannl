@@ -1098,6 +1098,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   Bash coverage. The planted nested nounset empty array passed the base dispatcher
   at widths 1 and 4 and failed the pinned leg at both widths; the same subject
   exited 1 under `/bin/bash` 3.2 and 0 under Homebrew 5.3.
+- A shell member can reach `finish` after a leg tries to run a missing command
+  (gh-ocannl-2331). The dispatcher checks the member's output using the diagnostic
+  forms in `tools/test-harnesses.sh`'s header, since Bash 3.2 has no
+  `command_not_found_handle`. The self-test keeps the leg's passing verdict and
+  checks that both widths fail the member anyway, with a no-check control.
 - On a fleet box a harness run is a test batch like any other, and like `tools/test-run.sh` and
   `tools/fmt-check.sh` it takes one of the box's correctness slots itself, as `--cpu`
   (gh-ocannl-1576): after its arguments and skip lists pass, it runs itself again under `fleet-worker.sh execution
