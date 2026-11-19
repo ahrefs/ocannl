@@ -22,5 +22,6 @@ the cold routine computes the reference: true
 the second routine computes the reference: true
 runtime replay requires a concrete device identity: true
 unavailable identity leaves the runtime store absent: true
+unavailable identity bypasses runtime cache I/O: true
 the identity is stable across allocation, execution and replay: true
 a complete cold search replays on the same concrete device: true

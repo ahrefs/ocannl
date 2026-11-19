@@ -841,6 +841,12 @@ restored the source byte-for-byte. Each run's baseline exited 0 (`20261020T07425
 | Only Verdict's parity claims are read | `verdict_scan.ml`: every callee of a parity name read as Verdict's | Failed: `does not read a p_all2 the source binds itself` | `20261020T074609Z-91663` |
 | A tolerance reader that raises on a source that parses refuses as a reader defect | `verdict_ratchet.ml`: the raised arm of `read_tolerances` reports nothing | Failed: refuses a planted hand-rolled tolerance, and names a tolerance reader that raised | `20261020T074933Z-67188` |
 
+## gh-ocannl-1449 mutation run
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| Literal stdout trailer rows go through the shared printer | `verdict_scan.ml`: no literal recognized as a trailer, then qualified stdout forms left unread in a separate run | Failed: `refuses planted hand-rolled success trailers in literal stdout rows` | `20261119T154313Z-83525`, `20261119T161922Z-72006` |
+
 ## gh-ocannl-1794 mutation runs
 
 The gate reader (`Verdict_scan.gate_census`) now reads leg claims too: an `in_leg`/`in_legf`

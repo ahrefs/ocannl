@@ -890,6 +890,7 @@ let raw_entries =
         "[scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised";
         "[scanner-refusal:0599e4e661e8f3457de44f5cb1b23a1a] compares float readbacks";
         "[scanner-refusal:e10fe49d52c241506e850ae9e6766dc9] tolerance reader raised";
+        "[scanner-refusal:1045125e8f0a2a1ed0a5933a3c7ab89e] hand-rolled success trailer";
         "[scanner-refusal:085cfc1230ac1435b3930c2de950d243] passes `~min";
         "[scanner-refusal:fccffb542fab0ec734024940e42605cc] exempt_floors";
         "[scanner-refusal:4dde956f3421b7ae6e9cff871b40d8b4] floor reader raised";
@@ -906,6 +907,8 @@ let raw_entries =
         "[scanner-refusal:7005fe842a74ccccd962cdda19ae98be] line-break reader read";
         "[scanner-refusal:b56027d13651cbbf21ae177b43426575] parity claim hand-rolls";
         "[scanner-refusal:d36bcdb919d2b79b23dc1e15969fde60] tolerance reader read";
+        "[scanner-refusal:084b5e19d97705d191e28ba889a52530] test source hand-rolls";
+        "[scanner-refusal:fd2fc8de1719682e3cecae854e708253] trailer reader read";
         "[scanner-refusal:2d867210446f1449a6beebc663d207c6] Verdict.Claims";
         "[scanner-refusal:b03ecbfa5a4a006730722bb2e47ba011] Verdict.Claims";
         "[scanner-refusal:20d88fc03901bcbdfbc113ed14029a7a] Verdict.Claims";
@@ -1227,6 +1230,8 @@ let raw_direct_evidence =
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:f30ace350fdf01fcc307ea64e391a7bf",
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
+    ( "verdict_ratchet.ml:1045125e8f0a2a1ed0a5933a3c7ab89e",
+      "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true" );
   ]
 
 (** Direct failures no control executes, each with the reason none does: a refusal the scanner can

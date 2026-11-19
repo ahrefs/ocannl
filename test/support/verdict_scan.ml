@@ -58,7 +58,21 @@
     evaded by any wrapper, including the [let p name b = Stdio.printf "%s: %b\n" name b] helpers
     several tests defined before {!Verdict} existed. Those helpers are the exact population this
     ratchet exists to keep from regrowing, so a claim-shaped format string in a test source is
-    either an assertion or, by exemption, a documented exception. *)
+    either an assertion or, by exemption, a documented exception.
+
+    {1 Success trailers (gh-ocannl-1449)}
+
+    The trailer reader reserves a literal line starting with [OK: ] for {!Verdict.success_trailer}.
+    It checks decoded string literals passed as the format or text argument of a direct stdout call
+    spelled [printf] (bare, [Stdio.printf], or qualified by [Printf] or [Format] with optional
+    [Stdlib]), or [print_string] and [print_endline] (bare or qualified by [Stdlib] or [Stdio]). It
+    also reads [fprintf] (bare, [Stdio.Out_channel.fprintf], or qualified by [Printf] with optional
+    [Stdlib]) and [output_string] (bare, [Stdlib.output_string], or qualified by [Out_channel],
+    [Stdlib.Out_channel] or [Stdio.Out_channel]) with a direct [stdout] channel path. The channel
+    may be bare or qualified by [Stdlib], [Stdio], or those same [Out_channel] paths. A line starts
+    at the literal's beginning or after a decoded newline. The spelling controls the check even if
+    shadowed. Channel and printer aliases, computed strings, format-generated line breaks, and
+    non-OCaml output are outside the model. *)
 
 open Base
 open Ppxlib.Parsetree
@@ -221,13 +235,43 @@ type site = {
 
 type scan = {
   sites : site list;  (** The claim-shaped literals, in source order. *)
+  hand_rolled_trailers : (int * string) list;  (** Literal stdout trailers by line and printer. *)
+  stdout_literals : int;  (** Literal text or formats read for a trailer. *)
   literals : int;  (** Every string literal in expression position. *)
   applied_literals : int;  (** How many of those are an argument of a named function. *)
 }
-(** [literals] and [applied_literals] are not verdicts; they are what a blind walk cannot produce. A
-    walk whose expression hook stopped firing reports zero of both over a corpus where thousands are
-    expected, so the consuming test can say that its empty offender list came from a scan that read
-    something — rather than leaving "no offenders" and "no reading" the same result. *)
+(** The counts let the ratchet require that each reader saw input in the real corpus even when it
+    found no offenders. *)
+
+let stdout_text path (arguments : (Ppxlib.Asttypes.arg_label * expression) list) =
+  match (path, arguments) with
+  | ( ( [ "printf" ]
+      | [ ("Printf" | "Stdio" | "Format"); "printf" ]
+      | [ "Stdlib"; ("Printf" | "Format"); "printf" ]
+      | [ ("print_string" | "print_endline") ]
+      | [ ("Stdlib" | "Stdio"); ("print_string" | "print_endline") ] ),
+      (Nolabel, text) :: _ ) ->
+      Some text
+  | ( ( [ "fprintf" ]
+      | [ "Printf"; "fprintf" ]
+      | [ "Stdlib"; "Printf"; "fprintf" ]
+      | [ "Stdio"; "Out_channel"; "fprintf" ]
+      | [ "output_string" ]
+      | [ ("Stdlib" | "Out_channel"); "output_string" ]
+      | [ ("Stdlib" | "Stdio"); "Out_channel"; "output_string" ] ),
+      (Nolabel, channel) :: (Nolabel, text) :: _ ) -> (
+      match Read.longident_of channel with
+      | Some
+          ( [ "stdout" ]
+          | [ ("Stdlib" | "Stdio" | "Out_channel"); "stdout" ]
+          | [ ("Stdlib" | "Stdio"); "Out_channel"; "stdout" ] ) ->
+          Some text
+      | _ -> None)
+  | _ -> None
+
+let is_trailer_literal text =
+  List.exists (String.split ~on:'\n' text)
+    ~f:(String.is_prefix ~prefix:Verdict.success_trailer_prefix)
 
 (** [scan content] reads one source. Raises if [content] does not parse: a reader that cannot read
     its input must say so rather than report an empty census. *)
@@ -236,7 +280,8 @@ let scan content =
   (* The function each literal is an argument of, noted as the application is entered — an iterator
      visits a node before its children, so the argument's own visit below finds it. *)
   let printers = Hashtbl.create (module Int) in
-  let sites = ref [] and literals = ref 0 in
+  let sites = ref [] and literals = ref 0 and hand_rolled_trailers = ref [] in
+  let stdout_literals = ref 0 in
   let iterator =
     object
       inherit Ast_traverse.iter as super
@@ -250,6 +295,12 @@ let scan content =
             match Read.longident_of callee with
             | Some path ->
                 let name = String.concat ~sep:"." path in
+                Option.iter (stdout_text path arguments) ~f:(fun text ->
+                    Option.iter (Read.string_literal text) ~f:(fun value ->
+                        Int.incr stdout_literals;
+                        if is_trailer_literal value then
+                          hand_rolled_trailers :=
+                            (text.pexp_loc.loc_start.pos_lnum, name) :: !hand_rolled_trailers));
                 List.iter arguments ~f:(fun (_, argument) ->
                     if Option.is_some (Read.string_literal argument) then
                       Hashtbl.set printers ~key:argument.pexp_loc.loc_start.pos_cnum ~data:name)
@@ -279,7 +330,13 @@ let scan content =
     end
   in
   iterator#structure ast;
-  { sites = List.rev !sites; literals = !literals; applied_literals = Hashtbl.length printers }
+  {
+    sites = List.rev !sites;
+    hand_rolled_trailers = List.rev !hand_rolled_trailers;
+    stdout_literals = !stdout_literals;
+    literals = !literals;
+    applied_literals = Hashtbl.length printers;
+  }
 
 (** {1 A gated claim reported in two dialects (gh-ocannl-997)}
 

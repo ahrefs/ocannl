@@ -75,6 +75,10 @@
    claim's value into the disjuncts that alone pass it and refuses a run-constant one -- a value the
    configuration fixes -- beside one the test computed; [Verdict.gated] is the remedy.
 
+   gh-ocannl-1449 reserves literal stdout [OK: ] rows for [Verdict.success_trailer] so that
+   mutation-run can account for the rows omitted by a complete failing run. The closed set of source
+   forms is in [Verdict_scan]'s Success trailers section.
+
    Every synthetic control below earned its place by a mutation run -- the scanner mechanism it pins
    disabled, this alias re-run, exactly that control failing. The manifest of those runs, one row
    per mechanism with the control labels and the retained `tools/test-run.sh` run ids, is
@@ -5933,7 +5937,13 @@ let all_readers content =
 
 let read_claims ?(readers = all_readers) ~fail ~source content =
   let nothing () =
-    ( { Scan.sites = []; literals = 0; applied_literals = 0 },
+    ( {
+        Scan.sites = [];
+        hand_rolled_trailers = [];
+        stdout_literals = 0;
+        literals = 0;
+        applied_literals = 0;
+      },
       [],
       { Scan.pairings = []; skipped_sites = 0; pass_fail_sites = 0 },
       { Scan.broken = []; label_sites = 0 } )
@@ -6770,6 +6780,54 @@ let run_tolerance_refusal_control () =
   ( "refuses a planted hand-rolled tolerance, and names a tolerance reader that raised",
     !refused_site && !refused_raise )
 
+let refuse_hand_rolled_trailer ~fail ~source (line, printer) =
+  fail
+    (Printf.sprintf
+       "%s:%d prints a hand-rolled success trailer through `%s`. Use `Verdict.success_trailer` so \
+        a failed run omits those rows (gh-ocannl-1449)"
+       source line printer)
+
+let run_success_trailer_control () =
+  let fixture =
+    {ocaml|let () = Stdio.printf "summary\nOK: %s\n" "formatted"
+let () = print_endline "OK: complete"
+let () = Printf.fprintf Stdlib.stdout "OK: %d\n" 1
+let () = Stdlib.Printf.printf "OK: qualified\n"
+let () = Printf.fprintf Stdio.stdout "OK: stdio channel\n"
+let () = Stdio.Out_channel.output_string Stdio.Out_channel.stdout "OK: output string\n"
+let () = Stdio.eprintf "OK: stderr"
+let () = Stdio.printf "description of OK: markers"
+let () = Verdict.success_trailer ["shared trailer"]
+let marker = "OK: data"
+|ocaml}
+  in
+  let messages = ref [] in
+  List.iter (Scan.scan fixture).Scan.hand_rolled_trailers
+    ~f:
+      (refuse_hand_rolled_trailer ~source:"fixture.ml" ~fail:(fun msg ->
+           messages := msg :: !messages));
+  let expected =
+    List.map
+      [
+        (1, "Stdio.printf");
+        (2, "print_endline");
+        (3, "Printf.fprintf");
+        (4, "Stdlib.Printf.printf");
+        (5, "Printf.fprintf");
+        (6, "Stdio.Out_channel.output_string");
+      ]
+      ~f:(fun (line, printer) ->
+        Printf.sprintf "fixture.ml:%d prints a hand-rolled success trailer through `%s`." line
+          printer)
+  in
+  let passed =
+    List.equal (fun msg prefix -> String.is_prefix msg ~prefix) (List.rev !messages) expected
+  in
+  if not passed then
+    eprintf "success trailer control diagnostics: %s\n"
+      (String.concat ~sep:"\n" (List.rev !messages));
+  ("refuses planted hand-rolled success trailers in literal stdout rows", passed)
+
 (* {1 A literal floor below one, refused where it is written (post-1-task-4 of staging#1578)}
 
    [Verdict.check_floor] refuses a [?min] below one where the claim is EVALUATED, so a claim on a
@@ -7109,6 +7167,7 @@ let () =
   in
   let uncompared_exempted = Hashtbl.create (module String) in
   let tolerance_offenders = ref 0 and parity_sites = ref 0 in
+  let trailer_offenders = ref 0 and trailer_literals = ref 0 in
   let floor_offenders = ref 0 and literal_floors = ref 0 in
   let floor_exemptions = Map.of_alist_exn (module String) exempt_floors in
   let floors_exempted = Hashtbl.create (module String) in
@@ -7140,7 +7199,11 @@ let () =
     @ run_folded_gate_controls ()
     @ [ run_folded_gate_refusal_control () ]
     @ run_tolerance_controls ()
-    @ [ run_tolerance_refusal_control (); run_floor_refusal_control () ]
+    @ [
+        run_tolerance_refusal_control ();
+        run_success_trailer_control ();
+        run_floor_refusal_control ();
+      ]
     @ run_agreement_controls () @ run_ambiguous_remedy_controls ()
   in
   let matrix_rows = run_syntax_matrix () in
@@ -7169,6 +7232,10 @@ let () =
          put there -- and the one thing worse than a parse failure here is one that leaves nobody
          knowing which of three hundred files it was about. *)
       let scanned, helper_claims, dialects, line_breaks = read_claims ~fail ~source content in
+      trailer_literals := !trailer_literals + scanned.Scan.stdout_literals;
+      List.iter scanned.Scan.hand_rolled_trailers ~f:(fun site ->
+          Int.incr trailer_offenders;
+          refuse_hand_rolled_trailer ~fail ~source site);
       label_sites := !label_sites + line_breaks.Scan.label_sites;
       List.iter line_breaks.Scan.broken ~f:(fun site ->
           Int.incr line_break_offenders;
@@ -7430,6 +7497,8 @@ let () =
     (!tolerance_offenders = 0);
   Verdict.p "and the tolerance reader read the predicates of Verdict parity claims"
     (!parity_sites > 0);
+  Verdict.p "no test source hand-rolls a success trailer" (!trailer_offenders = 0);
+  Verdict.p "and the trailer reader read literal stdout rows" (!trailer_literals > 0);
   (* The claim forms whose labels it reads, held equal to every [Verdict.Claims] member but [fail],
      whose argument is a multi-line message: a new claim form it did not read would be a label it
      never checks. *)

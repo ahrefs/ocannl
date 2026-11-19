@@ -137,6 +137,7 @@ verdict_ratchet refuses a run handed no source, exiting 1: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:f3e306858423827e6575d13a17d57af6] check cannot vouch
+  [scanner-refusal:1045125e8f0a2a1ed0a5933a3c7ab89e] hand-rolled success trailer
   [scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's
   [scanner-refusal:53b71ea33a69d24c941985f4eb35406b] prints the claim
   [scanner-refusal:7d1962ff34bbe1ed7b89a535dc0cfd7e] exempted literals that

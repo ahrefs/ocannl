@@ -156,13 +156,17 @@ let () = eprintf "fused: %b\n" true|ocaml},
 
 (* gh-ocannl-1207: verdict_ratchet's own refusals, executed rather than vouched for by the cases
    below, which exercise the reader it rests on in process. The ratchet runs as a child over a
-   corpus built to trip them -- a source printing a claim it decided itself, and one that does not
-   parse -- in which every exemption, every exempted fixture source and every planted canary is
+   corpus built to trip them -- a source printing a claim it decided itself and a success trailer,
+   and one that does not parse -- in which every exemption, exempted fixture source and canary is
    missing too, and once over no source at all. What each child refused is what
    `raw_direct_evidence` attributes to the two claims. *)
 let refusal_corpus =
   [
-    ("test/self_decided.ml", "let () = Stdio.printf \"decided: %b\\n\" true\n");
+    ( "test/self_decided.ml",
+      {ocaml|let () = Stdio.printf "decided: %b\n" true
+let () = print_endline "OK: planted trailer"
+|ocaml}
+    );
     ("test/unparsable.ml", "let =\n");
   ]
 

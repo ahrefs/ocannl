@@ -51,6 +51,7 @@ Per-module tracing gates, and the library whose preprocessor_deps declares each:
 Ambient variables a module reads by name at run time, and the stanza that declares each:
   OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR test/operations/dune, executable cc_march_census (test/operations/cc_march_census.ml)
   OCANNL_TOOL_TEST_RESTRICT_MASK test/operations/dune, test test_cpu_topology (test/operations/test_cpu_topology.ml)
+  OCANNL_TOOL_TEST_TIMING_IDENTITY test/operations/dune, test schedule_cache_device (test/operations/schedule_cache_device.ml)
 
 Run-time reads exempted from declaration, each for the reason `exempt_reads` gives:
   test/support/verdict.ml:OCANNL_TOOL_VERDICT_RECORDS
@@ -341,6 +342,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-routine_log_rng_init
   test/operations/dune                     @runtest-routine_log_stream_files
   test/operations/dune                     @runtest-schedule_bench_padded
+  test/operations/dune                     @runtest-schedule_cache_device-no_identity
   test/operations/dune                     @runtest-schedule_conv_gemm-tf32
   test/operations/dune                     @runtest-schedule_pad-contract_off
   test/operations/dune                     @runtest-scheme_error_rendering-full_sexp
