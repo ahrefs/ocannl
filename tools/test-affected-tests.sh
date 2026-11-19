@@ -1219,7 +1219,9 @@ run_affected_mutant() { # LABEL FROM TO ARGS...: require one edit, leave the que
     return 1
   }
 }
-control() { # LABEL FROM TO ARGS... -- WANT...
+control() { # [--stops REASON] LABEL FROM TO ARGS... -- WANT...: --stops, a cut whose mutant must refuse (exit 2, REASON)
+  local stops=
+  if [ "$1" = --stops ]; then stops=$2; shift 2; fi
   local label=$1 from=$2 to=$3
   shift 3
   local args=()
@@ -1231,7 +1233,15 @@ control() { # LABEL FROM TO ARGS... -- WANT...
   run_affected_mutant "$label" "$from" "$to" "${args[@]}" || return
   printf '%s\n' "$@" | sort >"$TMP/want"
   sort "$out" >"$TMP/got"
-  if [ "$rc" = 0 ] && cmp -s "$TMP/want" "$TMP/got"; then
+  # A mutant that stops before its verdict trailer (a cut that breaks the
+  # reader) is no evidence of the reach it names.
+  trailer
+  if [ -n "$stops" ]; then
+    if [ "$rc" = 2 ] && grep -qF -- "$stops" "$err"; then report 0 "negative control: $label"
+    else report 1 "negative control: $label" "want the mutant to refuse (exit 2) naming: $stops; exit $rc; stderr: $(tail -n 3 "$err" | tr '\n' '|')"; fi
+  elif [ "$verdict" = '<none>' ]; then
+    report 1 "negative control: $label" "the mutant did not run to its end: exit $rc, no verdict trailer; stderr: $(tail -n 3 "$err" | tr '\n' '|')"
+  elif [ "$rc" = 0 ] && cmp -s "$TMP/want" "$TMP/got"; then
     report 1 "negative control: $label" "the mutant printed the shipping list"
   else
     report 0 "negative control: $label"
@@ -1324,7 +1334,8 @@ if harness_leg 'negative controls'; then
     'grep { !/\.expected$/ && !-e in_dir($d, $_) } @mine, @near' '1' \
     --files cfg/extra.py -- $opaque_all
   # shellcheck disable=SC2086
-  control 'skipping an off-build stanza'"'"'s unresolved edge is what lets the run finish' \
+  control --stops 'library fx.offb (opt) uses project library offa, which dune does not describe' \
+    'skipping an off-build stanza'"'"'s unresolved edge is what lets the run finish' \
     'elsif ($st[$i]{undescribed}) {' 'elsif (0) {' \
     --files lib/helper.ml -- $reached_by_core
   # The git-forms leg left the trunk checked out, one core edit past the fork
@@ -2136,7 +2147,7 @@ if harness_leg 'probe dune edits'; then
   # shellcheck disable=SC2086
   reach_control 'literal test module ownership is what scopes new preprocessing rules' \
     'my $mods = dfield($x->[0], "modules") // $r->{names};' 'my $mods = [];' \
-    HEAD -- @p3/runtest-pc "$p3_scan" -- $p3_all @p3/runtest-pc $p3_scan
+    HEAD -- @p3/runtest-pc $p3_scan -- $p3_all @p3/runtest-pc $p3_scan
   probe_restore
   probe_edit 's/\(modules pa\)/(modules pa extra) (preprocess (action (cat %{input-file})))/' && {
     printf 'let unused = ()\n' >"$repo/p3/extra.ml"
@@ -2390,18 +2401,20 @@ if harness_leg 'probe controls'; then
     HEAD -- @p3/runtest-pc $p3_scan -- $p3_all @p3/runtest-pc $p3_scan
   probe_restore
   probe_edit 's/\(echo a\)\)\)/(echo b)))/' &&
+    # shellcheck disable=SC2086
     reach_control 'comparing rules across the probes is what finds an action-only edit' \
       'my @delta = grep {' 'my @delta = (); 0 && grep {' \
-      HEAD -- @p3/runtest-act3 "$p3_scan" -- "$p3_scan"
+      HEAD -- @p3/runtest-act3 $p3_scan -- $p3_scan
   probe_restore
   # A field only the test's own alias action reads: no rule of a target moves,
   # in either compiler mode, so the stanza named in the changed form is the only
   # route to its alias. A `(flags)` edit, as the 'probe dune edits' leg makes,
   # changes pa.exe's link rule and reaches it a second way.
   probe_edit 's/\(test \(name pa\) \(modules pa\)\)/(test (name pa) (modules pa) (locks p3-lock))/' &&
+    # shellcheck disable=SC2086
     reach_control 'a changed stanza named as dune lists it is what reaches an edit no compared rule shows' \
       'if (@ix) { $whole{$_} = 1 for @ix; next }' 'if (@ix) { next }' \
-      HEAD -- @p3/runtest-pa "$p3_scan" -- "$p3_scan"
+      HEAD -- @p3/runtest-pa $p3_scan -- $p3_scan
   probe_restore
   probe_edit 's/\z/(env (_ (env-vars (P3 x))))\n/' &&
     # shellcheck disable=SC2086
@@ -2412,19 +2425,22 @@ if harness_leg 'probe controls'; then
   probe_edit 's/\(deps h4\.txt\)/(deps h4b.txt)/' &&
     # The rule needing the helper is reached through the helper's own entry; the
     # (alias) stanza needing it also by mentioning it, which this cut keeps.
+    # shellcheck disable=SC2086
     reach_control 'a changed helper (alias) stanza'"'"'s own entry is what lists the rule needing it' \
       '$direct_here{in_dir($d, $x)} = "its (alias) stanza changed";' '' \
-      HEAD -- @p3/runtest-needh4 @p3/runtest-viah4 "$p3_scan" -- @p3/runtest-viah4 "$p3_scan"
+      HEAD -- @p3/runtest-needh4 @p3/runtest-viah4 $p3_scan -- @p3/runtest-viah4 $p3_scan
   probe_restore
   probe_edit 's/\(echo h\)/(echo g)/' &&
+    # shellcheck disable=SC2086
     reach_control 'a changed twin of a helper alias is what lists the alias needing it' \
       '$direct_here{in_dir($td, $_)} = "a rule of it changed" for @{$twin_of{$t} // []};' '' \
-      HEAD -- @p3/runtest-needh3 "$p3_scan" -- "$p3_scan"
+      HEAD -- @p3/runtest-needh3 $p3_scan -- $p3_scan
   probe_restore
   probe_edit 's/\(rule \(alias runtest-two\) \(targets two2\.txt\)/(rule (alias runtest-dirt3) (targets two2.txt)/' &&
+    # shellcheck disable=SC2086
     reach_control 'the aliases a changed form attaches to are what list a moved target rule'"'"'s aliases' \
       '$direct_here{$x} //= "the stanzas attached to it changed"' 'my $unused = 1' \
-      HEAD -- @p3/runtest-dirt3 @p3/runtest-two "$p3_scan" -- "$p3_scan"
+      HEAD -- @p3/runtest-dirt3 @p3/runtest-two $p3_scan -- $p3_scan
   probe_restore
   # A removed target rule attached to no alias, owned only by its name: removing
   # runtest-two's own two2.txt rule, as the 'probe dune edits' leg does, also
@@ -2432,13 +2448,15 @@ if harness_leg 'probe controls'; then
   printf '(rule (target pa.log) (action (with-stdout-to %%{target} (echo l))))\n' >>"$repo/p3/dune"
   git_q commit -qam pa-log || exit 2
   probe_edit 's/\(rule \(target pa\.log\)[^\n]*\n//' &&
+    # shellcheck disable=SC2086
     reach_control 'the old side'"'"'s owners are what list the alias of a removed target' \
       '$direct_here{in_dir($td, $a->{alias})} = "a target it may have owned is gone";' '' \
-      HEAD -- @p3/runtest-pa "$p3_scan" -- "$p3_scan"
+      HEAD -- @p3/runtest-pa $p3_scan -- $p3_scan
   git_q reset -q --hard HEAD~1 || exit 2
   probe_restore
   perl -0pi -e 's/\(action \(progn\)\)\)/(action (echo i)))/' "$repo/p5/dune"
   # Its blind alias stays listed; the rest of the directory is what the verdict adds.
+  # shellcheck disable=SC2086
   reach_control 'the converter'"'"'s verdict is what keeps a changed undescribed rule'"'"'s directory whole' \
     'unless ($r->{vouched}) { push @why, "a changed ($h) the probe does not describe"; next }' '' \
     HEAD -- @p5/runtest-inc5 @p5/runtest-p5ok -- @p5/runtest-inc5
