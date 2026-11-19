@@ -989,7 +989,7 @@ body, with the application's arguments bound; and the ratchet refuses every leg 
 leaves uncompared unless `exempt_uncompared_legs` names it, stale-checked. Each row also states how
 many claims were compared, as the gh-ocannl-1893 rows do. Every run used tools/mutation-run.sh
 --batch with the focused alias on mac-studio (M4 Max), on a green baseline (`verdict_scan.ml`:
-`20261118T213400Z-37206`; `verdict_ratchet.ml`: `20261118T205244Z-97507`; the Codex round 2 rows ran on `20261119T000358Z-46285`, round 3's on `20261119T003257Z-76899`, round 4's on `20261119T014428Z-20228`), and restored the source
+`20261118T213400Z-37206`; `verdict_ratchet.ml`: `20261118T205244Z-97507`; the Codex round 2 rows ran on `20261119T000358Z-46285`, round 3's on `20261119T003257Z-76899`, round 4's on `20261119T014428Z-20228`, round 5's on `20261119T015917Z-34637`), and restored the source
 byte for byte.
 
 | Mechanism | Mutation | Controls | Run |
@@ -1012,6 +1012,8 @@ byte for byte.
 | An opaque include forgets only the including structure's exports (Codex round 3) | `verdict_scan.ml`: the original bindings marked rebindable | Failed: `accepts a leg built by a structure's function that another structure includes before an unreadable include` | `20261119T003421Z-37502` |
 | A gate anywhere in a source read as a definition is checked for writes, its helpers' included (Codex round 4) | `verdict_scan.ml`: only gates inside the followed body checked | Failed: `names a leg uncompared whose other-source helper's gate reads a reference another helper writes` | `20261119T014453Z-43507` |
 | What follows an opaque include sees the earlier names as unknown (Codex round 4) | `verdict_scan.ml`: the post-include scope keeps the earlier bindings | Failed: `names a leg uncompared whose other-source function applies a name a later include may rebind` | `20261119T014538Z-7949` |
+| What follows an opaque include sees the earlier submodules as forgotten too (Codex round 5) | `verdict_scan.ml`: the post-include scope keeps the earlier modules | Failed: `names a leg uncompared whose other-source function applies a submodule a later include may replace` | `20261119T015943Z-57721` |
+| A body applying a function that writes, through any number of calls, is not followed (Codex round 5) | `verdict_scan.ml`: no writing function read as applied | Failed: `names a leg uncompared whose other-source function hands its gate's reference to a writing helper` | `20261119T020039Z-91316` |
 | A module no source is compiled as leaves the leg uncompared | none: the boundary row, read by the rows above | `names a leg uncompared that is the result of a function of a module no source defines` stays green under every mutation | the runs above |
 | A module alias of another source binds no structure, so the leg stays uncompared (review checkpoint) | none: the boundary row, its callee gating on the rows so that following the alias would refuse it rather than leave it uncompared | `names a leg uncompared that is the result of a function under a module alias of another source` stays green under every mutation | the runs above |
 

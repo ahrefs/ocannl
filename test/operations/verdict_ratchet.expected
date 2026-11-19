@@ -763,6 +763,8 @@ refuses a leg another source's function destructures from the default its caller
 accepts a leg built by a structure's function that another structure includes before an unreadable include: true
 names a leg uncompared whose other-source helper's gate reads a reference another helper writes: true
 names a leg uncompared whose other-source function applies a name a later include may rebind: true
+names a leg uncompared whose other-source function applies a submodule a later include may replace: true
+names a leg uncompared whose other-source function hands its gate's reference to a writing helper: true
 names a leg uncompared that is the result of a function of a module no source defines: true
 names a leg uncompared whose function a later include in its source may rebind: true
 names a leg uncompared whose function a later include of a structure including another may rebind: true

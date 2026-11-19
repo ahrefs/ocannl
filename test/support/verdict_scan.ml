@@ -2392,6 +2392,9 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
   (* Where the sources read as definitions lie: their applications are no call sites, so a write
      there is not timed against a claim (gh-ocannl-2336, review). *)
   let definition_spans = ref [] in
+  (* The named functions of those sources that write into a binding, or apply one that does
+     (gh-ocannl-2336, review). *)
+  let mutating_functions = Hash_set.create (module Int) in
   (* The callers walked, by source: a caller that also defines a module a leg is built by a function
      of is read as it was walked, not walked again. *)
   let walked_callers = Hashtbl.create (module String) in
@@ -2922,8 +2925,21 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
                          later definition's use of an earlier name may be the include's (review). *)
                       let env =
                         if opaque_include then
-                          Lexical_scope.push_frame env
-                            (Map.of_alist_reduce (module String) exports ~f:(fun _ later -> later))
+                          let env =
+                            Lexical_scope.push_frame env
+                              (Map.of_alist_reduce
+                                 (module String)
+                                 exports
+                                 ~f:(fun _ later -> later))
+                          in
+                          (* And its submodules as they now are, forgotten (review). *)
+                          {
+                            env with
+                            Lexical_scope.modules =
+                              List.fold !module_exports ~init:env.Lexical_scope.modules
+                                ~f:(fun modules (name, denotes) ->
+                                  Map.set modules ~key:name ~data:denotes);
+                          }
                         else env
                       in
                       ( self#opened ~top:false ~include_:true env denotes,
@@ -4106,7 +4122,20 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
                                                 || Hashtbl.mem unlisted_writes read))
                                         else None)
                                   in
-                                  if Option.is_some (self#unresolved_option params arguments) then
+                                  let mutates =
+                                    Hash_set.exists mutating_functions ~f:(fun mutating ->
+                                        List.exists (Hashtbl.find_multi references mutating)
+                                          ~f:(fun at -> start <= at && at < stop))
+                                  in
+                                  if mutates then
+                                    Error
+                                      (Printf.sprintf
+                                         "its leg is the result of `%s`, whose body applies a \
+                                          function that writes into a binding, an effect the \
+                                          reader does not time against the claim"
+                                         spelled)
+                                  else if Option.is_some (self#unresolved_option params arguments)
+                                  then
                                     Error
                                       (Printf.sprintf
                                          "its leg is the result of `%s`, handed an optional \
@@ -4261,6 +4290,43 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
                   | Some (Local_structure { values; _ }) -> values
                   | _ -> []
                 in
+                (* Its named functions that write, or apply one that does, through any number of
+                   calls: an application of one is an effect -- into a reference handed to it, say
+                   -- no call site of this reader times against a claim (review). *)
+                let functions = ref [] in
+                let finder =
+                  object
+                    inherit Ast_traverse.iter as super
+
+                    method! value_binding binding =
+                      (match (strip_constraints binding.pvb_expr).pexp_desc with
+                      | Pexp_function _ ->
+                          functions :=
+                            (binding.pvb_loc.loc_start.pos_cnum + 1, span_of binding.pvb_expr)
+                            :: !functions
+                      | _ -> ());
+                      super#value_binding binding
+                  end
+                in
+                finder#structure structure;
+                let applies (start, stop) =
+                  Hash_set.exists mutating_functions ~f:(fun mutating ->
+                      List.exists (Hashtbl.find_multi references mutating) ~f:(fun at ->
+                          start <= at && at < stop))
+                in
+                List.iter !functions ~f:(fun (identity, span) ->
+                    if self#writes_within span then Hash_set.add mutating_functions identity);
+                let rec close () =
+                  let grown =
+                    List.filter !functions ~f:(fun (identity, span) ->
+                        (not (Hash_set.mem mutating_functions identity)) && applies span)
+                  in
+                  if not (List.is_empty grown) then (
+                    List.iter grown ~f:(fun (identity, _) ->
+                        Hash_set.add mutating_functions identity);
+                    close ())
+                in
+                close ();
                 Ok values
             | Unparsed report ->
                 Error
