@@ -162,8 +162,9 @@
 ; The standalone (OCANNL-free) Metal compiler probes: the two accumulation-miscompile
 ; reproducers, the math-mode reassociation/infinity measurement (gh-ocannl-848), the half math
 ; overloads against their widened forms under both math policies (gh-ocannl-1288), the f32
-; sin/cos/tanh special values, accuracy and guard costs (gh-ocannl-1435), and the
-; long-command-buffer queue discriminator (gh-ocannl-828).
+; sin/cos/tanh special values, accuracy and guard costs (gh-ocannl-1435), the bf16 simdgroup-tile
+; accumulator stagings, timed and checked against exact accumulation models (gh-ocannl-2322), and
+; the long-command-buffer queue discriminator (gh-ocannl-828).
 
 (executables
  (names
@@ -171,13 +172,15 @@
   bench_metal_bug_local
   metal_reassoc_probe
   metal_half_math_probe
-  metal_f32_math_probe)
+  metal_f32_math_probe
+  metal_bf16_tile_probe)
  (modules
   bench_metal_bug
   bench_metal_bug_local
   metal_reassoc_probe
   metal_half_math_probe
-  metal_f32_math_probe)
+  metal_f32_math_probe
+  metal_bf16_tile_probe)
  (libraries
   metal
   ctypes
