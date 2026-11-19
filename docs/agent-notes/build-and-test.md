@@ -1277,8 +1277,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `harness-legs-alone` matrix deals candidates round-robin in `tools/test-harnesses.sh --list`
   order with `--shard K/N` (gh-ocannl-2353). `--list [--shard K/N]` prints that same candidate
   selection without launching a member. `tools/test-harness-legs-alone.sh` compares the
-  shards with the unsharded fixture, and `ci_matrix.sh` checks the workflow supplies every
-  shard once and leaves siblings running after a failure. Run it locally, slot-wrapped,
+  shards with the unsharded fixture and checks that closed stdout makes the listing exit 1.
+  The checker's `/bin/sh` launcher executes Bash from PATH so the caller's closed descriptor
+  reaches `printf` (gh-ocannl-2401). On Linux, uutils `env` reopened fd 1 on `/dev/null` before launching Bash,
+  so the unchanged closed-stdout check saw exit 0 on the base. `ci_matrix.sh` checks the workflow
+  supplies every shard once and leaves siblings running after a failure. Run it locally, slot-wrapped,
   on a harness whose legs you restructured. `HARNESS --list-legs` prints each gate (`LEG  NAME`)
   without running a leg body. Every gate also checks its leg's NAME, in every run: a name selects
   one leg; a leading leg number (`80:`, `2-3:`, `59-63, 66:`) numbers one leg, a further leg beside

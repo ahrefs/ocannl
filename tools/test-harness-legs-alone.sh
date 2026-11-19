@@ -19,7 +19,7 @@ harness_args "$@"
 harness_scratch test-harness-legs-alone
 fixture="$TMP/repository with spaces"
 mkdir -p "$fixture/tools" "$fixture/scripts" "$fixture/fixtures"
-cp "$here/harness-legs-alone.sh" "$fixture/tools/" &&
+cp "$here/harness-legs-alone.sh" "$here/harness-legs-alone-impl.sh" "$fixture/tools/" &&
   cp "$here/../scripts/harness-support.sh" "$here/../scripts/process-group.sh" "$fixture/scripts/" || exit 2
 cat >"$fixture/tools/test-harnesses.sh" <<'STUB'
 #!/usr/bin/env bash
@@ -114,6 +114,7 @@ chmod +x "$fixture/tools/"*.sh "$fixture/fixtures/"*.sh
 git -C "$fixture" init -q && git -C "$fixture" add -A &&
   git -C "$fixture" -c user.name=t -c user.email=t@t commit -q -m fixture || exit 2
 subject="$fixture/tools/harness-legs-alone.sh"
+subject_impl="$fixture/tools/harness-legs-alone-impl.sh"
 unset OCANNL_TOOL_HARNESS_STRICT OCANNL_TOOL_HARNESS_SKIP_LEGS LEAK SKIPLEAK SHAREDSKIP RED DUP NEVER BROKEN HOLD \
   LITTER REWRITE EMPTYDIR SELFTERM DISCOVERY
 run() { # [subject arguments] -- from an unrelated directory
@@ -300,9 +301,9 @@ STUB
 
   # Negative control: a checker that hands leg names to --only unescaped.
   mutant="$fixture/tools/harness-legs-alone-unescaped.sh"
-  awk '/^ere_escape\(\) \{$/ { print; print "  printf %s \"$1\"; return"; next } { print }' "$subject" >"$mutant"
+  awk '/^ere_escape\(\) \{$/ { print; print "  printf %s \"$1\"; return"; next } { print }' "$subject_impl" >"$mutant"
   chmod +x "$mutant"
-  if cmp -s "$subject" "$mutant"; then
+  if cmp -s "$subject_impl" "$mutant"; then
     report 1 'negative control: unescaped leg names' 'the escape could not be cut out of the checker'
   else
     SUBJECT=$mutant run fixtures/gated.sh

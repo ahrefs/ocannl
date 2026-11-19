@@ -724,6 +724,7 @@ tools/fleet-worker-candidates.sh parses: true
 tools/fmt-check.sh parses: true
 tools/gpu-memory-census-trace.sh parses: true
 tools/gpu-tokens.sh parses: true
+tools/harness-legs-alone-impl.sh parses: true
 tools/harness-legs-alone.sh parses: true
 tools/hip-wmma-probe.sh parses: true
 tools/isolated-apt.sh parses: true
