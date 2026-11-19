@@ -29,6 +29,7 @@ module Tn = Ir.Tnode
 module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
+module BI = Ir.Backend_intf
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
@@ -142,8 +143,10 @@ let () =
   let plain_on, plain_mma_on, plain_off, plain_mma_off =
     legs ~what:"fd_plain" ~schedule:plain_schedule
   in
-  p "unforced, the plain tensorized schedule renders tensorized"
-    (Ll_test.all_tensorized ~what:"fd_plain unforced" (Ll_test.renderings plain_mma_on));
+  let single = Ir.Ops.single in
+  p "unforced, the plain tensorized schedule renders tensorized where uniform f32 is advertised"
+    (Ll_test.census_agrees_with_capability ~backend_name ~what:"fd_plain unforced" ~a_prec:single
+       ~b_prec:single ~d_prec:single (Ll_test.renderings plain_mma_on));
   p "forced, every Tile_mma of the plain schedule renders the scalar fallback"
     (Ll_test.all_declined ~what:"fd_plain forced" (Ll_test.renderings plain_mma_off));
   p_all2 "unforced, the plain tensorized matmul matches the serial twin bitwise" plain_on want
@@ -151,6 +154,18 @@ let () =
   p_all2 "forced, the plain tensorized matmul's fallback matches the serial twin bitwise" plain_off
     want ~f:Float.equal;
   let gpu = Verdict.leg ~when_:on_gpu ~on:backend_name () in
+  (* The descriptor's judgment that this GPU holds a uniform-f32 accumulator in a persistent
+     fragment: Metal's genuine f32 tile, or CUDA's tf32 one where the policy enables it. *)
+  let fragment_scope =
+    Verdict.sub_leg gpu ~on:backend_name
+      ~when_:
+        (lazy
+          (Ll_test.advertised ~backend_name ~a_prec:single ~b_prec:single ~d_prec:single
+          && List.exists [ BI.Mma_f32; BI.Mma_tf32 ] ~f:(fun f ->
+              BI.advertises_mma_format_in_scope
+                (Context.hardware_limits (Context.auto ()))
+                ~policy:(Ir.Numerics.get ()) ~scope:BI.Mma_fragment_scope ~a:f ~b:f ~d:BI.Mma_f32)))
+  in
   let staged = staged_schedule ~src_a:ma.Tensor.value ~src_b:mb.Tensor.value in
   let staged_on =
     lazy (with_forced false (fun () -> run ~name:"fd_staged_unforced" ~schedule:staged ()))
@@ -171,8 +186,8 @@ let () =
       (Ir.C_syntax.mma_summary_string mma)
       mma.Ir.C_syntax.fragment_scopes
   in
-  in_leg ~leg:gpu "unforced, the staged schedule renders tensorized in a persistent-fragment scope"
-    (fun label ->
+  in_leg ~leg:fragment_scope
+    "unforced, the staged schedule renders tensorized in a persistent-fragment scope" (fun label ->
       let _, mma = Lazy.force staged_on in
       census "fd_staged unforced" mma;
       p label

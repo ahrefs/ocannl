@@ -1,5 +1,5 @@
 the serial twin computes a nonzero product: true
-unforced, the plain tensorized schedule renders tensorized: true
+unforced, the plain tensorized schedule renders tensorized where uniform f32 is advertised: true
 forced, every Tile_mma of the plain schedule renders the scalar fallback: true
 unforced, the plain tensorized matmul matches the serial twin bitwise: true
 forced, the plain tensorized matmul's fallback matches the serial twin bitwise: true

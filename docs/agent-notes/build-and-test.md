@@ -3230,15 +3230,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE=1` makes every `Tile_mma` decline to the lane-0 scalar
   fallback (`Utils.tile_mma_decline_forced`; in-process, `Utils.force_tile_mma_decline`). Run the
   stanzas declaring `(env_var OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE)` -- the census-judging tests
-  `tensorized_census_ratchet` reads, variants included -- as
-  `env OCANNL_BACKEND=<b> OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE=1 tools/test-run.sh run --expect-backend
-  <b> build @test/operations/runtest-<name>...`. Expected: red, with every `FAIL:` a census or
-  rendering claim and every parity claim true. Three kinds of census claim hold under the hook and
-  are not survivors: one asserting a decline or no `Tile_mma` (`all_declined`, `none_emitted`, a
-  `Scalar_fallback` comparison), one in a leg the backend closes, and a value claim whose reference
-  IS one rendering's numerics (`schedule_mma_matmul`'s once-narrowed staged wide-policy and bf16
-  references on Metal, which the fallback's per-step narrowing misses). A new census-judging stanza
-  declares the variable, or the leg reads its cached result as a survivor. The hook declines at the
+  `tensorized_census_ratchet` reads, variants included -- as `env OCANNL_BACKEND=<b>
+  OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE=1 tools/test-run.sh run --expect-backend <b> build
+  @test/operations/runtest-<name>...`. Expected: red, with every `FAIL:` a census or rendering claim
+  and every parity claim true. Two kinds of census claim hold under the hook and are not survivors:
+  one asserting a decline or no `Tile_mma` (`all_declined`, `none_emitted`, a `Scalar_fallback`
+  comparison), and one in a leg the backend closes. A value claim whose reference IS one rendering's
+  numerics fails, and is no parity regression: `schedule_mma_matmul`'s once-narrowed staged
+  wide-policy and bf16 references on Metal, which the declined scope's per-block narrowing misses. A
+  new census-judging stanza declares the variable, or the leg reads its cached result as a survivor.
+  Only the declaring stanzas form the leg: an undeclared alias touching `Tile_mma`
+  (`tile_mma_declines`, which needs the register tiling) may be served from the off regime's cache,
+  so its result under the hook, red or green, is evidence of nothing. The hook declines at the
   fragment scope before either backend hook is asked, the path cc and an unsupported format take;
   forcing only the statement inside a scope Metal's hook rendered emits scalar code over an
   undeclared fragment (`use of undeclared identifier 't_fragment_c'`), which
