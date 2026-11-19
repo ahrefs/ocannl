@@ -683,12 +683,13 @@ if not helpers:
     raise RuntimeError('no sweep helpers discovered')
 for name, target, old, new, oracle in controls:
     dest = scratch / name
-    for directory in ['test/operations', 'scripts', 'tools', 'benchmarks']:
+    for directory in ['test/operations', 'scripts', 'tools', 'benchmarks', 'bin']:
         (dest / directory).mkdir(parents=True)
     for helper in [sweep.name] + helpers:
         shutil.copy2(sweep.parent / helper, dest / 'tools' / helper)
     shutil.copy2(aggregate, dest / 'tools' / aggregate.name)
     shutil.copy2(sweep.parent.parent / 'benchmarks/fixture_digest.py', dest / 'benchmarks/fixture_digest.py')
+    shutil.copy2(harness.parent.parent.parent / 'bin/dune', dest / 'bin/dune')
     for file in [harness, harness.parent / 'sweep_remote_fixture.sh']:
         shutil.copy2(file, dest / 'test/operations' / file.name)
     for support in ['harness-support.sh', 'process-group.sh']:

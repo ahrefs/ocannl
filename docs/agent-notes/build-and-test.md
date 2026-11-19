@@ -5668,7 +5668,9 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   each GPU lane addressed. Full Metal, CUDA and HIP units build `@bin/twin-tile-dry`
   when the pinned commit has its literal alias field in `bin/dune` (gh-ocannl-2307). Its seed
   geometry and output checks share the unit's device, timeout and verdict with the suite,
-  including the completion pass after a clean serial retry.
+  including the completion pass after a clean serial retry. `sweep_harness.sh` commits the live
+  `bin/dune` in its fixture and checks the target handed to fake opam. The parent commit covers
+  a historical ref predating the alias.
 - A unit whose backend field is not a backend is a configuration VARIANT (gh-ocannl-1778), keyed by
   its own name in logs, history, unit state, `--only` and the run record, and mapped back to its
   backend wherever the backend decides (`unit_backend`, `unit_dune_env`, `unit_suite`). Three so

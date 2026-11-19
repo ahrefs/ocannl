@@ -16021,6 +16021,7 @@
   (alias runtest-env_spelling_gate)
   ocannl_config
   ../../benchmarks/fixture_digest.py
+  ../../bin/dune
   ../../tools/aggregate-skips.sh
   ../../tools/sweep.sh
   ../../tools/lab-map.sh

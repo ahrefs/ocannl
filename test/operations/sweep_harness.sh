@@ -14,6 +14,8 @@
 # exercised. The guest-identity deadline exhausting all retries is not driven
 # here (it costs 90s); the underlying bounded supervisor has separate controls.
 # Hardware/kernel and actual SSH failures remain fixture inputs.
+# The twin-tile case feeds the live bin/dune to the sweep's literal alias
+# admission check. Fake opam records the requested targets without running Dune.
 
 # -E (errtrace) so the ERR trap below also fires inside helper functions,
 # command substitutions and subshells: without it a failing predicate inside a
@@ -341,8 +343,9 @@ git -C "$main" add fixture benchmarks/fixtures/DIGESTS.txt test/dune \
 git -C "$main" commit -qm fixture
 fixture_sha=$(git -C "$main" rev-parse HEAD)
 mkdir -p "$main/bin"
-printf '(rule\n (alias twin-tile-dry)\n (action (echo "fixture")))\n' >"$main/bin/dune"
-git -C "$main" add bin/dune
+cp "$(dirname "$0")/../../bin/dune" "$main/bin/dune"
+# The sweep reads committed bytes, including on Windows with CRLF checkouts.
+git -C "$main" -c core.autocrlf=input add bin/dune
 git -C "$main" commit -qm 'declare the twin-tile dry run'
 git -C "$main" remote add origin "$origin"
 git -C "$main" push -q -u origin master
