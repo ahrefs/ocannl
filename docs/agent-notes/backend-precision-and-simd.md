@@ -2807,6 +2807,9 @@ files.
   functions (gh-ocannl-1909), while `hip_fast_math=false` drops the umbrella (gh-ocannl-1779). The
   helper is correct under either policy. Pinned by
   `division_special_values`, whose exact HIP f32 claims fail under the old compiler vector.
+  Measured on gfx1102 discrete memory at the default and under `reproducible`, and on Metal (M4
+  Max), where the f32 and half special-operand claims hold and the f64, subnormal and estimate
+  claims skip (gh-ocannl-1910).
 - **gfx1102 compiles without `real-true16`, and HIPRTC never gets `-amdgpu-waitcnt-*`**
   (`Compiler_options.hip_target_options`, gh-ocannl-1182/1222). In true16 mode, 16-bit values live
   in VGPR halves, and a pending D16 high-half load raced a low-half update of the same register,
