@@ -13,6 +13,9 @@ module Impl : sig
 end
 
 val host_capabilities : unit -> (string * string) list
-(** The host-side capability this backend probes without opening a device (gh-ocannl-1038): the
-    Metal math API the running runtime's compile options accept, the same query every compile makes.
-    {!Context.host_capabilities} collects it. *)
+(** The host-side capabilities this backend probes without opening a device (gh-ocannl-1038): the
+    Metal math API the running runtime's compile options accept ([metal_math_api], the same query
+    every compile makes, named by [Compiler_options.metal_math_api_name]), and the Metal Toolchain's
+    [xcrun -sdk macosx metal --version] line or [absent] ([metal_toolchain], gh-ocannl-1828: the
+    compiler a test's AIR census re-compiles a run's artifact with, which the backend itself never
+    runs). {!Context.host_capabilities} collects them. *)

@@ -7228,7 +7228,14 @@ box.
   backend's `Context.static_properties`, never `nvidia-smi`, which ignores `CUDA_VISIBLE_DEVICES`;
   NVRTC's PTX may target an older one, which the driver JITs for the device. A split compile
   writes `<routine>.part<k>.*`, whose line tables name the part's own source. Dialect fixtures are
-  in `asm_census_cases`'s `gpu_probes`.
+  in `asm_census_cases`'s `gpu_probes`. Metal is the stated exception (gh-ocannl-1828): its run
+  compiles in process (`newLibraryWithSource:`) and keeps no code object, so its census
+  re-compiles the run's `<routine>.metal` through the Metal Toolchain (`xcrun -sdk macosx metal -S
+  -emit-llvm -gline-tables-only`) under `Asm_census.metal_cli_flags` of the run's own
+  `Compiler_options.metal` sequence (never a hand list), and reads AIR, the front end's IR: not
+  the GPU's machine code, and not necessarily the runtime compiler's front-end version. The
+  toolchain is a separate Xcode component: a host without it is an `Environment` skip naming it,
+  and an exact AIR count names the toolchain version it pins (`metal --version`, on stderr).
 
 - `flip_bound_pruning` needs a finite arm-A incumbent before its deliberately tiny envelope can
   fathom materialize flips (gh-ocannl-962). An all-refused arm leaves infinity, so a finite roofline

@@ -174,6 +174,15 @@ let metal_math_api ~selector_available =
     Modern_split
   else Legacy
 
+(* gh-ocannl-1828: how [Metal_backend.host_capabilities] names the regime, and how a test that
+   re-compiles a run's artifact reads it back to rebuild the run's {!metal} sequence. *)
+let metal_math_api_name = function Modern_split -> "modern_split" | Legacy -> "legacy"
+
+let metal_math_api_of_name = function
+  | "modern_split" -> Some Modern_split
+  | "legacy" -> Some Legacy
+  | _ -> None
+
 type metal_option =
   | Language_version_3_1
   | Language_version_3_2
@@ -199,6 +208,11 @@ let metal ~routine_logging ~math_api =
     | Modern_split -> [ Math_mode_safe; Math_functions_fast ]
     | Legacy -> [ Fast_math_enabled false ])
   @ if routine_logging then [ Enable_logging ] else []
+
+(* gh-ocannl-1828: the sequence a Metal run compiles under, from what decides it -- the runtime's
+   math API and the routine-logging setting. The backend's every compile and the AIR census that
+   re-compiles a run's artifact both take it from here, so the inputs have one owner too. *)
+let metal_of_run ~math_api = metal ~routine_logging:(Utils.debug_log_from_routines ()) ~math_api
 
 let render_metal options =
   String.concat " "

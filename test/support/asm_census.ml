@@ -1153,17 +1153,30 @@ let to_line
       [//## File "<file>", line <n>] marker.
     - {b HIP}: the run's [<routine>.hsaco], through [llvm-objdump -d -l], each instruction under a
       [; <path>:<n>] marker.
+    - {b Metal} (gh-ocannl-1828): the run compiles in process ([newLibraryWithSource:], the OS's
+      runtime compiler) and keeps no code object, so this one IS a re-compile, and says so: the
+      run's [<routine>.metal] artifact -- byte for byte the source the run handed the runtime --
+      through the Metal Toolchain's front end,
+      [xcrun -sdk macosx metal -S -emit-llvm -gline-tables-only], under the flags {!metal_cli_flags}
+      derives from the run's own [Compiler_options.metal] sequence (language version, math mode,
+      function family, logging), at the driver's default optimization level (as [MTLCompileOptions]'
+      default). What it reads is AIR, the front end's LLVM IR, each instruction's [!dbg] location
+      naming its source line: not the GPU's machine code, which Apple's backend compiler produces
+      from AIR unseen, and not necessarily the runtime compiler's own front end, whose version the
+      toolchain's need not match. A [br i1] there is the front end keeping a short-circuit; whether
+      the GPU backend then predicates it is outside the reading.
 
     A CONDITIONAL branch is a [BRA] / [BRX] / [JMP] / [JMX] whose guard predicate is not the
     always-true [PT] (a predicated load or arithmetic instruction is not one: that is what an
     if-converted select looks like), and any AMDGPU [s_cbranch_*] -- the exec-mask skip around a
-    divergent region included, which is how AMDGPU spells a branch around a load. Loop control is
-    NOT exempted: no GPU dump has yet shown it attributed to a select's line, and a form no fixture
-    pins would be filtered unexplained. *)
+    divergent region included, which is how AMDGPU spells a branch around a load -- and any AIR
+    [br i1], [switch], [indirectbr] or [callbr] (an AIR [select] is the branch-free form). Loop
+    control is NOT exempted: no GPU dump has yet shown it attributed to a select's line, and a form
+    no fixture pins would be filtered unexplained. *)
 
-type gpu_dialect = Sass | Amdgpu
+type gpu_dialect = Sass | Amdgpu | Air
 
-let gpu_dialect_name = function Sass -> "SASS" | Amdgpu -> "AMDGPU"
+let gpu_dialect_name = function Sass -> "SASS" | Amdgpu -> "AMDGPU" | Air -> "AIR"
 
 (* A GPU instruction listing as [parsed]-like data: per listing line, the source line it is
    attributed to (when the marker names [source_basename]) and the instruction. *)
@@ -1262,31 +1275,147 @@ let amdgpu_classify body =
   let mnemonic = List.hd (String.split body ~on:' ') |> Option.value ~default:"" in
   (mnemonic, String.is_prefix mnemonic ~prefix:"s_cbranch_")
 
-(** [parse_gpu dialect ~dump ~source_basename] reads a disassembly listing ([nvdisasm -g -c] or
-    [llvm-objdump -d -l] output): every instruction with the source line of [source_basename] the
-    last marker above it names ([None] under a marker naming another file, a vendor header's inlined
-    helper say), and how many markers named [source_basename] at all -- zero means the code object
-    carries no line tables for it, which a caller reports as a failure. *)
-let parse_gpu dialect ~dump ~source_basename =
+(* A disassembly listing: markers between instructions, each instruction attributed to the line of
+   the last marker above it when that marker names [source_basename]. *)
+let parse_listing ~marker ~insn ~classify ~dump ~source_basename =
   let current = ref None and markers = ref 0 and out = ref [] in
   List.iteri (String.split_lines dump) ~f:(fun k line ->
-      let marker = match dialect with Sass -> sass_marker line | Amdgpu -> amdgpu_marker line in
-      match marker with
+      match marker line with
       | Some (file, l) ->
           if String.equal file source_basename then (
             Int.incr markers;
             current := Some l)
           else current := None
       | None -> (
-          let insn = match dialect with Sass -> sass_insn line | Amdgpu -> amdgpu_insn line in
-          match insn with
+          match insn line with
           | None -> ()
           | Some body ->
-              let g_mnemonic, g_cond =
-                match dialect with Sass -> sass_classify body | Amdgpu -> amdgpu_classify body
-              in
+              let g_mnemonic, g_cond = classify body in
               out := (k + 1, { g_source = !current; g_text = body; g_mnemonic; g_cond }) :: !out));
   { g_lines = List.rev !out; g_markers = !markers }
+
+(* AIR is textual LLVM IR, whose positions are not markers between instructions but metadata at the
+   module's end: an instruction ends [, !dbg !<n>], [!<n> = !DILocation(line: <l>, column: <c>,
+   scope: !<s>[, inlinedAt: !<m>])], the scope (a [DISubprogram], [DILexicalBlock] or
+   [DILexicalBlockFile]) names [file: !<f>], and [!<f> = !DIFile(filename: "<path>", ...)]. An
+   inlined helper's instruction is attributed by its own innermost location, as the SASS and AMDGPU
+   markers are: a [metal_stdlib] header's line is not the source's. *)
+
+(* The [<n>] of the first [<key><n>] in [s]. *)
+let int_after s ~key =
+  Option.bind (String.substr_index s ~pattern:key) ~f:(fun i ->
+      let rest = String.drop_prefix s (i + String.length key) in
+      Int.of_string_opt
+        (String.prefix rest
+           (Option.value
+              (String.lfindi rest ~f:(fun _ c -> not (Char.is_digit c)))
+              ~default:(String.length rest))))
+
+(* [!<n> = [distinct ]!DI<kind>(<fields>)] -> [(n, kind ^ "(" ^ fields)]. *)
+let air_metadata_node line =
+  match String.chop_prefix line ~prefix:"!" with
+  | None -> None
+  | Some rest -> (
+      match String.lsplit2 rest ~on:'=' with
+      | None -> None
+      | Some (n, body) -> (
+          let body = String.strip body in
+          let body = String.chop_prefix_if_exists body ~prefix:"distinct " in
+          match (Int.of_string_opt (String.strip n), String.chop_prefix body ~prefix:"!DI") with
+          | Some n, Some node -> Some (n, node)
+          | _ -> None))
+
+(* An instruction of a function body (two-space indented, inside [define ... {] .. [}]) -> its text,
+   its mnemonic (the opcode after any [%x = ]) and whether it branches conditionally. *)
+let air_classify body =
+  let op =
+    match String.lsplit2 body ~on:'=' with
+    | Some (lhs, rhs) when String.is_prefix (String.strip lhs) ~prefix:"%" -> String.strip rhs
+    | _ -> body
+  in
+  let mnemonic = List.hd (String.split op ~on:' ') |> Option.value ~default:"" in
+  let cond =
+    match mnemonic with
+    | "br" -> String.is_prefix op ~prefix:"br i1 "
+    | "switch" | "indirectbr" | "callbr" -> true
+    | _ -> false
+  in
+  (mnemonic, cond)
+
+let parse_air ~dump ~source_basename =
+  let lines = String.split_lines dump in
+  let files = Hashtbl.create (module Int)
+  and scopes = Hashtbl.create (module Int)
+  and locations = Hashtbl.create (module Int) in
+  List.iter lines ~f:(fun line ->
+      match air_metadata_node line with
+      | None -> ()
+      | Some (n, node) -> (
+          if String.is_prefix node ~prefix:"File(" then
+            match String.substr_index node ~pattern:"filename: \"" with
+            | Some i -> (
+                let rest = String.drop_prefix node (i + String.length "filename: \"") in
+                match String.lsplit2 rest ~on:'"' with
+                | Some (path, _) -> Hashtbl.set files ~key:n ~data:(basename_of path)
+                | None -> ())
+            | None -> ()
+          else if String.is_prefix node ~prefix:"Location(" then
+            match (int_after node ~key:"(line: ", int_after node ~key:"scope: !") with
+            | Some l, Some scope -> Hashtbl.set locations ~key:n ~data:(l, scope)
+            | _ -> ()
+          else
+            match int_after node ~key:"file: !" with
+            | Some f -> Hashtbl.set scopes ~key:n ~data:f
+            | None -> ()));
+  let source_line_of dbg =
+    Option.bind (Hashtbl.find locations dbg) ~f:(fun (l, scope) ->
+        Option.bind (Hashtbl.find scopes scope) ~f:(fun f ->
+            match Hashtbl.find files f with
+            | Some file when l > 0 && String.equal file source_basename -> Some l
+            | _ -> None))
+  in
+  let in_body = ref false and markers = ref 0 and out = ref [] in
+  (* A [switch] prints over several lines -- [switch i32 %x, label %d [], one case per line, then
+     [], !dbg !<n>] -- so an instruction whose line ends in [[] is held open, its cases skipped, and
+     attributed by the line that closes it. *)
+  let open_insn = ref None in
+  let emit k body =
+    let g_source = Option.bind (int_after body ~key:"!dbg !") ~f:source_line_of in
+    if Option.is_some g_source then Int.incr markers;
+    let g_mnemonic, g_cond = air_classify body in
+    out := (k + 1, { g_source; g_text = body; g_mnemonic; g_cond }) :: !out
+  in
+  List.iteri lines ~f:(fun k line ->
+      if String.is_prefix line ~prefix:"define " then in_body := true
+      else if String.equal (String.rstrip line) "}" then in_body := false
+      else if !in_body && String.is_prefix line ~prefix:"  " then
+        let body = String.strip line in
+        match !open_insn with
+        | Some (k0, opening) ->
+            if String.is_prefix body ~prefix:"]" then (
+              open_insn := None;
+              emit k0 (opening ^ " " ^ body))
+        | None ->
+            if (not (String.is_empty body)) && not (String.is_prefix body ~prefix:";") then
+              if String.is_suffix body ~suffix:"[" then open_insn := Some (k, body) else emit k body);
+  { g_lines = List.rev !out; g_markers = !markers }
+
+(** [parse_gpu dialect ~dump ~source_basename] reads a disassembly listing ([nvdisasm -g -c] or
+    [llvm-objdump -d -l] output) or an AIR module ([xcrun metal -S -emit-llvm]): every instruction
+    with the source line of [source_basename] the last marker above it names (on AIR, its own [!dbg]
+    location; [None] under a marker naming another file, a vendor header's inlined helper say), and
+    how many markers named [source_basename] at all (on AIR, how many instructions' locations do) --
+    zero means the code object carries no line tables for it, which a caller reports as a failure.
+*)
+let parse_gpu dialect ~dump ~source_basename =
+  match dialect with
+  | Air -> parse_air ~dump ~source_basename
+  | Sass ->
+      parse_listing ~marker:sass_marker ~insn:sass_insn ~classify:sass_classify ~dump
+        ~source_basename
+  | Amdgpu ->
+      parse_listing ~marker:amdgpu_marker ~insn:amdgpu_insn ~classify:amdgpu_classify ~dump
+        ~source_basename
 
 (** [gpu_branch_sites p ~anchor] is [(sites, instructions)] as {!conditional_branch_sites} answers
     it: every conditional branch attributed to a line of [anchor], with the instruction before it in
@@ -1351,16 +1480,61 @@ let ptx_target ptx =
       | ".target" :: t :: _ -> Some (List.hd_exn (String.split t ~on:','))
       | _ -> None)
 
+(** [metal_cli_flags options] is the [xcrun metal] command line's spelling of a
+    [Compiler_options.metal] sequence, option for option and in order: the compile options a Metal
+    run applies to [MTLCompileOptions], which an AIR census re-compiling its artifact must apply too
+    (gh-ocannl-1828). Total over the option type, so a new option is a compile error here, not a
+    flag the census silently drops. *)
+let metal_cli_flags options =
+  List.map options ~f:(function
+    | Ir.Compiler_options.Language_version_3_1 -> "-std=metal3.1"
+    | Language_version_3_2 -> "-std=metal3.2"
+    | Fast_math_enabled true -> "-ffast-math"
+    | Fast_math_enabled false -> "-fno-fast-math"
+    | Math_mode_safe -> "-fmetal-math-mode=safe"
+    | Math_functions_fast -> "-fmetal-math-fp32-functions=fast"
+    | Enable_logging -> "-fmetal-enable-logging")
+
+let metal_compiler = "xcrun -sdk macosx metal"
+
+(** [metal_toolchain_version line] is the version number a Metal Toolchain's [--version] line names
+    ([Apple metal version 32023.922 (metalfe-32023.922.4)] -> [32023.922]; the backend reports the
+    line as its [metal_toolchain] host capability): what a census pinning exact AIR counts pins. *)
+let metal_toolchain_version line =
+  match String.chop_prefix line ~prefix:"Apple metal version " with
+  | Some rest -> List.hd (String.split rest ~on:' ')
+  | None -> None
+
 (** [disassemble_gpu dialect ?cuda_arch ~artifact] is the listing of the code object at [artifact]
     (a [.ptx] for [Sass], a [.hsaco] for [Amdgpu]), with the tool chain that produced it, or why
     there is none. [?cuda_arch] is the EXECUTING device's architecture as [ptxas -arch] spells it
     ([sm_120]), which the caller reads from the backend's own device query: the PTX may target an
     older architecture than the device (NVRTC's default, when no kernel marker raises it), and the
     driver's JIT assembles it for the device, so the census does too; absent, the PTX's own
-    [.target]. *)
-let disassemble_gpu ?cuda_arch dialect ~artifact =
+    [.target]. For [Air], [artifact] is the run's [.metal] source, re-compiled under
+    [?metal_options], the run's own [Compiler_options.metal] sequence, by the toolchain whose
+    version line [?metal_toolchain] is (the Metal backend's [metal_toolchain] host capability), both
+    of which it requires. *)
+let disassemble_gpu ?cuda_arch ?metal_options ?metal_toolchain dialect ~artifact =
   let q = Stdlib.Filename.quote in
   match dialect with
+  | Air -> (
+      match (metal_options, metal_toolchain) with
+      | None, _ -> Error "an AIR census needs the run's Metal compile options"
+      | _, None -> Error ("no Metal Toolchain (" ^ metal_compiler ^ ")")
+      | Some options, Some version ->
+          let flags =
+            String.concat ~sep:" "
+              (metal_cli_flags options @ [ "-gline-tables-only"; "-S"; "-emit-llvm" ])
+          in
+          let ll = Stdlib.Filename.temp_file "ocannl_gpu_census_" ".ll" in
+          let rc, out =
+            run_capture (Printf.sprintf "%s %s -o %s %s" metal_compiler flags (q ll) (q artifact))
+          in
+          let dump = try Stdio.In_channel.read_all ll with _ -> "" in
+          (try Stdlib.Sys.remove ll with _ -> ());
+          if rc <> 0 then Error ("xcrun metal failed: " ^ out)
+          else Ok (dump, Printf.sprintf "%s %s (%s)" metal_compiler flags version))
   | Sass -> (
       let bins = cuda_bin_dirs () in
       let tool n =

@@ -842,9 +842,109 @@ let gpu_probes () =
   in
   Verdict.p "AMDGPU: a Windows path's drive letter and a trailing column leave the line read"
     (Poly.equal (census Census.Amdgpu ~basename:"k.hip" amdgpu_windows) (1, 3, 3));
+  (* AIR (gh-ocannl-1828), shaped as [xcrun metal -S -emit-llvm -gline-tables-only] writes it: a
+     position is an instruction's [!dbg] reference into metadata at the module's end, the
+     subprogram's file a path relative to its directory. The bounds guard's [br i1] is on line 4;
+     the select's on line 5, around the arm's load; an inlined [metal_stdlib] helper's branch
+     carries the header's location, not the source's; [br label] is unconditional. *)
+  let air_metadata =
+    [
+      "!3 = !DIFile(filename: \"/tmp/k.metal\", directory: \"/tmp\")";
+      "!7 = !DIFile(filename: \"checkout/_build/k.metal\", directory: \"/Users/x\")";
+      "!8 = !DIFile(filename: \"/toolchain/usr/metal/include/metal/metal_math\", directory: \
+       \"/tmp\")";
+      "!10 = distinct !DISubprogram(name: \"k\", scope: !7, file: !7, line: 1, type: !11, \
+       scopeLine: 3, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition | DISPFlagOptimized, \
+       unit: !2)";
+      "!12 = distinct !DISubprogram(name: \"isnan\", scope: !8, file: !8, line: 120, type: !11, \
+       unit: !2)";
+      "!20 = !DILocation(line: 4, column: 7, scope: !10)";
+      "!21 = !DILocation(line: 5, column: 34, scope: !10)";
+      "!22 = !DILocation(line: 5, column: 33, scope: !10)";
+      "!23 = !DILocation(line: 5, column: 60, scope: !10)";
+      "!24 = !DILocation(line: 6, column: 1, scope: !10)";
+      "!25 = !DILocation(line: 121, column: 10, scope: !12, inlinedAt: !22)";
+    ]
+  in
+  let air_module body = String.concat ~sep:"\n" ((body @ [ "" ]) @ air_metadata) in
+  let air_branching =
+    air_module
+      [
+        "; ModuleID = '/tmp/k.metal'";
+        "define void @k(float addrspace(1)* noundef \"air-buffer-no-alias\" %0, i32 %1) \
+         local_unnamed_addr #0 !dbg !10 {";
+        "  %3 = icmp ult i32 %1, 6, !dbg !20";
+        "  br i1 %3, label %4, label %11, !dbg !20";
+        "";
+        "4:                                                ; preds = %2";
+        "  %5 = load float, float addrspace(1)* %0, align 4, !dbg !21, !tbaa !30";
+        "  %6 = tail call i1 @air.convert.u.i1.f.f32(float %5) #4, !dbg !22";
+        "  %7 = fcmp uno float %5, 0.000000e+00, !dbg !25";
+        "  br i1 %7, label %11, label %8, !dbg !25";
+        "";
+        "8:                                                ; preds = %4";
+        "  br i1 %6, label %9, label %11, !dbg !22";
+        "";
+        "9:                                                ; preds = %8";
+        "  %10 = load float, float addrspace(1)* %0, align 4, !dbg !23, !tbaa !30";
+        "  br label %11, !dbg !22";
+        "";
+        "11:                                               ; preds = %2, %4, %8, %9";
+        "  %12 = phi float [ %10, %9 ], [ 0.000000e+00, %8 ], [ 0.000000e+00, %4 ]";
+        "  ret void, !dbg !24";
+        "}";
+        "";
+        "declare i1 @air.convert.u.i1.f.f32(float) local_unnamed_addr #1";
+      ]
+  in
+  let air_blended =
+    air_module
+      [
+        "define void @k(float addrspace(1)* noundef %0, i32 %1) local_unnamed_addr #0 !dbg !10 {";
+        "  %3 = load float, float addrspace(1)* %0, align 4, !dbg !21, !tbaa !30";
+        "  %4 = fcmp ogt float %3, 0.000000e+00, !dbg !22";
+        "  %5 = select i1 %4, float %3, float 0.000000e+00, !dbg !22";
+        "  store float %5, float addrspace(1)* %0, align 4, !dbg !23, !tbaa !30";
+        "  br label %6, !dbg !22";
+        "";
+        "6:                                                ; preds = %2";
+        "  ret void, !dbg !24";
+        "}";
+      ]
+  in
+  Verdict.p
+    "AIR: the branch around a gate's load is counted, the bounds guard's is not, nor an inlined \
+     header's"
+    (Poly.equal (census Census.Air ~basename:"k.metal" air_branching) (1, 5, 8));
+  Verdict.p "AIR: a [select] is no branch, and nor is an unconditional [br label]"
+    (Poly.equal (census Census.Air ~basename:"k.metal" air_blended) (0, 5, 6));
+  (* LLVM prints a [switch] over several lines, its [!dbg] after the closing bracket. *)
+  let air_switch =
+    air_module
+      [
+        "define void @k(i32 %0) local_unnamed_addr #0 !dbg !10 {";
+        "  switch i32 %0, label %3 [";
+        "    i32 0, label %2";
+        "    i32 1, label %2";
+        "  ], !dbg !22";
+        "";
+        "2:                                                ; preds = %1, %1";
+        "  br label %3, !dbg !22";
+        "";
+        "3:                                                ; preds = %1, %2";
+        "  ret void, !dbg !24";
+        "}";
+      ]
+  in
+  Verdict.p
+    "AIR: a [switch] printed over several lines is one branch, at its closing line's location"
+    (Poly.equal (census Census.Air ~basename:"k.metal" air_switch) (1, 2, 3));
+  Verdict.p "AIR: locations whose subprogram names another source attribute nothing to this one"
+    (Poly.equal (census Census.Air ~basename:"other.metal" air_branching) (0, 0, 0));
   Verdict.p "an empty listing has no markers and no instructions"
     (Poly.equal (census Census.Sass ~basename:"k.cu" "") (0, 0, 0)
-    && Poly.equal (census Census.Amdgpu ~basename:"k.hip" "") (0, 0, 0));
+    && Poly.equal (census Census.Amdgpu ~basename:"k.hip" "") (0, 0, 0)
+    && Poly.equal (census Census.Air ~basename:"k.metal" "") (0, 0, 0));
   Verdict.p "a PTX file's target is what ptxas assembles for"
     (Poly.equal
        (Census.ptx_target "//\n.version 9.0\n.target sm_120\n.address_size 64\n")

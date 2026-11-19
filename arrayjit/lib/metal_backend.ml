@@ -1890,10 +1890,7 @@ module Impl = struct
 
   (* The compile options a link compiles under, computed once per link: what the kernel code cache
      keys on is what [compile_metal_source] applies. *)
-  let metal_option_state () =
-    Compiler_options.metal
-      ~routine_logging:(Utils.debug_log_from_routines ())
-      ~math_api:(Lazy.force runtime_math_api)
+  let metal_option_state () = Compiler_options.metal_of_run ~math_api:(Lazy.force runtime_math_api)
 
   (* Writes [source] as the [<name>.metal] build artifact when debug files are on: the extension is
      the backend's stated [source_extension] fact, which test-side readers are held equal to. *)
@@ -2534,14 +2531,30 @@ using namespace metal;|}
         fun () -> () )
 end
 
-(* gh-ocannl-1038: the one capability this backend probes on the host rather than on a device --
-   which math API the running Objective-C runtime's compile options accept, the query [Impl]'s
-   [runtime_math_api] makes before every compile. It moves with an OS update, and it decides the
-   option sequence every Metal compile uses. *)
+(* gh-ocannl-1828: the Metal Toolchain's compiler, [xcrun -sdk macosx metal], as its [--version]
+   line ([Apple metal version 32023.922 (metalfe-32023.922.4)]), or [absent]. The backend never runs
+   it -- it compiles through [newLibraryWithSource:] -- but a test re-compiling a run's [.metal]
+   artifact to AIR does ([branchless_select]'s census), and it is a separate Xcode component:
+   whether it is installed, and which version, moves without any file dune sees. *)
+let metal_toolchain () =
+  let log = Stdlib.Filename.temp_file "ocannl_metal_toolchain_" ".log" in
+  let rc =
+    Stdlib.Sys.command
+      ("xcrun -sdk macosx metal --version > " ^ Stdlib.Filename.quote log ^ " 2>&1 < /dev/null")
+  in
+  let first = try List.hd (Stdio.In_channel.read_lines log) with Sys_error _ -> None in
+  (try Stdlib.Sys.remove log with Sys_error _ -> ());
+  match first with
+  | Some line when rc = 0 && String.is_prefix line ~prefix:"Apple metal version " ->
+      String.strip line
+  | _ -> "absent"
+
+(* gh-ocannl-1038: what this backend probes on the host rather than on a device -- which math API
+   the running Objective-C runtime's compile options accept, the query [Impl]'s [runtime_math_api]
+   makes before every compile, which moves with an OS update and decides the option sequence every
+   Metal compile uses; and the Metal Toolchain a test's AIR census compiles with. *)
 let host_capabilities () =
   [
-    ( "metal_math_api",
-      match Metal_math_api_runtime.get () with
-      | Compiler_options.Modern_split -> "modern_split"
-      | Compiler_options.Legacy -> "legacy" );
+    ("metal_math_api", Compiler_options.metal_math_api_name (Metal_math_api_runtime.get ()));
+    ("metal_toolchain", metal_toolchain ());
   ]
