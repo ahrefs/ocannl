@@ -3049,7 +3049,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   bypass rate (*Sweep units and verdicts*). The distinction from a gate: a hatch is what the
   instrument reports about THIS run, a gate a capability of the backend or host; `placement_store`'s
   claims resting on a recording skip on an unkeyed, refused or failed run and bypass on unclean
-  evidence. The folded-gate reader refuses the folded spelling: a disjunct at the claim's passing
+  evidence. Turning a former skip reason into a hatch moves its claim OUT of the skip intersection,
+  whose all-declared-boxes `FAIL` fails a forced sweep, INTO the bypass report, whose `UNVERIFIED`
+  never does: `placement_store`'s unclean-evidence rows moved on purpose (load is no capability of
+  the box, so a night contended everywhere is no hole in the matrix), and a conversion that wants to
+  keep the failing alert keeps the reason a gate. The folded-gate reader refuses the folded spelling: a disjunct at the claim's passing
   polarity that is a field or bare name in `Verdict_scan.hatch_fields` (`contended`, `dispersed`,
   `unbatched`), beside one the test computed; a hatch below a conjunction, through a helper or a
   `match`, a negated one, and a claim about contention alone are not read. The instrument's numbers

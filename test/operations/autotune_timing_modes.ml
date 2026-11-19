@@ -1651,13 +1651,12 @@ let () =
     before between after resampled (que.ms /. floor_ms);
   let finite r = Float.is_finite r.ms && Float.is_positive r.ms in
   p_unless ~unless:(refused "isolated" iso)
-    "isolated timing returned a positive finite per-launch time or reported contention" (finite iso);
-  p_unless ~unless:(refused "queued" que)
-    "queued timing returned a positive finite per-launch time or reported contention" (finite que);
+    "isolated timing returns a positive finite per-launch time" (finite iso);
+  p_unless ~unless:(refused "queued" que) "queued timing returns a positive finite per-launch time"
+    (finite que);
   (* One launch per timed run, at least [repeats] runs and at most the 64-run top-up cap, plus the
      warmup. Two-sided: the upper bound would also admit a loop that stopped at the warmup. *)
-  p_unless ~unless:(refused "isolated" iso)
-    "isolated timing either reports contention or dispatches one launch per timed run"
+  p_unless ~unless:(refused "isolated" iso) "isolated timing dispatches one launch per timed run"
     (iso.samples >= 16 && iso.samples <= 64 && iso.dispatches = 1 + iso.samples);
   p "isolated timing reports batch depth 1" (iso.depth = 1);
   (* The seam's report is not taken on faith: past the warmup (1) and the calibration dispatches,
@@ -1667,7 +1666,7 @@ let () =
      depth-1 settle reused from the calibration (gh-ocannl-1074) are already in its count, and only
      a depth-1 settle may reuse any. *)
   p_unless ~unless:(refused "queued" que)
-    "queued timing either refuses contention or dispatches whole batches at the reported depth"
+    "queued timing dispatches whole batches at the reported depth"
     (que.depth >= 1 && que.calibration_dispatches >= 16 && que.samples >= 16 && que.samples <= 64
     && (que.reused = 0 || que.depth = 1)
     && que.dispatches
@@ -1685,8 +1684,7 @@ let () =
     ~detail:(fun () ->
       Printf.sprintf "queued %d dispatches at depth %d vs isolated %d" que.dispatches que.depth
         iso.dispatches)
-    "queued timing either reports contention or dispatches more launches than isolated"
-    (que.dispatches > iso.dispatches);
+    "queued timing dispatches more launches than isolated" (que.dispatches > iso.dispatches);
   (* Per launch, not per batch. The two sides refuse mirror errors: a reading that forgot to divide
      by the depth is about [depth] times the cost of a launch in that call, and a reading divided by
      the depth TWICE is that cost's [1/depth]. Both errors are claims about the same quantity the
@@ -1745,9 +1743,8 @@ let () =
      #735). The error such an upper side would refuse, a window summed or averaged instead of
      minimized, is refused on the injected clock above, where it needs no device and no second
      window. *)
-  p_unless ~unless:(refused "isolated" iso)
-    "isolated reading is a per-launch time or reports contention" (iso_within floor_ms)
-    ~detail:(fun () ->
+  p_unless ~unless:(refused "isolated" iso) "isolated reading is a per-launch time"
+    (iso_within floor_ms) ~detail:(fun () ->
       Printf.sprintf "%.6f ms vs round trip %.6f ms (median batch %.6f ms)" iso.ms floor_ms
         (median_per_launch iso));
   (* The depth from which either side of the queued envelope discriminates, derived rather than
@@ -1782,7 +1779,7 @@ let () =
       Printf.sprintf "%.6f ms vs twice the median per launch %.6f ms at depth %d" que.ms
         (2. *. median_per_launch que)
         que.depth)
-    "queued reading is a per-launch time rather than a per-batch one, or reports contention"
+    "queued reading is a per-launch time rather than a per-batch one"
     Float.(que.ms <= 2. * median_per_launch que);
   (* The low side, as the larger of two terms that refuse on different grounds. [2 / depth] is
      structural: the reading is a minimum over the batches this median is a middle of, so it cannot
@@ -1839,8 +1836,7 @@ let () =
     ~unless:(refused "queued" que @ [ dispersed "queued" que ])
     ~detail:(fun () ->
       Printf.sprintf "%.6f ms vs low bound %.6f ms at depth %d" que.ms queued_low_bound que.depth)
-    "queued reading is not that per-launch time divided by the batch depth as well, or reports \
-     contention"
+    "queued reading is not that per-launch time divided by the batch depth as well"
     Float.(que.ms >= queued_low_bound);
   (* Amortizing a round trip can only remove time, so a queued reading above the isolated one is the
      instrument reporting the wrong quantity, not a slow machine. The factor absorbs the noise a
@@ -1870,7 +1866,7 @@ let () =
           dispersed "first queued" que;
           dispersed "second queued" que2;
         ])
-    "queued timing does not read above isolated timing or reports contention"
+    "queued timing does not read above isolated timing"
     Float.(que_min <= iso_min * 2.)
     ~detail:(fun () ->
       Printf.sprintf "queued %.6f ms (%.6f, %.6f) vs isolated %.6f ms (%.6f, %.6f)" que_min que.ms
@@ -1879,8 +1875,7 @@ let () =
      queued routine can run all 64 batches. The pure injected-clock claims above pin the budget;
      this executed leg pins only the absolute timed-batch dispatch cap, after the separately
      accounted calibration work. *)
-  p_unless ~unless:(refused "queued" que)
-    "queued timing either reports contention or stays within the 64-batch dispatch cap"
+  p_unless ~unless:(refused "queued" que) "queued timing stays within the 64-batch dispatch cap"
     (que.dispatches <= 1 + que.calibration_dispatches + que.retry_dispatches + (64 * que.depth))
 
 (* {1 The objective is part of the cache identity} *)
