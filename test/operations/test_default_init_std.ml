@@ -50,23 +50,52 @@ let weight_values ~ctx t =
   in
   Context.get_values ctx w.Tensor.value
 
+let with_default_param_init init f =
+  let prior = !TDSL.default_param_init in
+  TDSL.default_param_init := init;
+  Exn.protect ~f ~finally:(fun () -> TDSL.default_param_init := prior)
+
+exception Init_probe
+
+let () =
+  let process_default = !TDSL.default_param_init in
+  let prior = NTDSL.kaiming ~scale_sq:2.0 TDSL.O.normal1 in
+  Exn.protect
+    ~finally:(fun () -> TDSL.default_param_init := process_default)
+    ~f:(fun () ->
+      TDSL.default_param_init := prior;
+      Verdict.case "temporary initializer raises" (fun () ->
+          let init = Operation.default_uniform1_param_init in
+          let raised =
+            match
+              with_default_param_init init (fun () ->
+                  Verdict.Claims.p "the temporary initializer is installed"
+                    (phys_equal !TDSL.default_param_init init);
+                  raise Init_probe)
+            with
+            | () -> false
+            | exception Init_probe -> true
+          in
+          Verdict.Claims.p "the initializer override propagates the exception" raised);
+      Verdict.case "initializer after exception" (fun () ->
+          Verdict.Claims.p "the next case sees the prior initializer"
+            (phys_equal !TDSL.default_param_init prior)))
+
 (* A weight created through Nn_blocks.mlp_layer with no init expression: the { w } param goes
    through default_param_init, and its shape [100 -> 50] (fan-in 100, fan-out 50) is only inferred
    later, through the matmul with the input. *)
 let default_init_weight_values init =
   Tensor.unsafe_reinitialize ();
-  TDSL.default_param_init := init;
-  let layer = Nn_blocks.mlp_layer ~label:[ "probe" ] ~hid_dim:50 () in
-  let x = TDSL.range_of_shape ~label:[ "x" ] ~batch_dims:[ 4 ] ~output_dims:[ 100 ] () in
-  let y = layer x in
-  let ctx = Train.forward_once (Context.auto ()) y in
-  let values = weight_values ~ctx y in
-  TDSL.default_param_init := Operation.default_uniform1_param_init;
-  values
+  with_default_param_init init (fun () ->
+      let layer = Nn_blocks.mlp_layer ~label:[ "probe" ] ~hid_dim:50 () in
+      let x = TDSL.range_of_shape ~label:[ "x" ] ~batch_dims:[ 4 ] ~output_dims:[ 100 ] () in
+      let y = layer x in
+      let ctx = Train.forward_once (Context.auto ()) y in
+      weight_values ~ctx y)
 
 let () =
   Verdict.case "default uniform1" (fun () ->
-      (* The standard default: centered uniform over [-0.25, 0.25), std 0.5/sqrt(12) ~ 0.1443. *)
+      (* The unpacked initializer is centered uniform over [-0.25, 0.25), with std ~ 0.1443. *)
       let values = default_init_weight_values Operation.default_uniform1_param_init in
       check ~name:"default uniform1 [-0.25,0.25): std"
         ~expected:(0.5 /. Float.sqrt 12.)
@@ -135,19 +164,19 @@ let () =
    axis. [uniform1] is the control: its equality specs never had the defect. *)
 let bigram_weight_values init =
   Tensor.unsafe_reinitialize ();
-  TDSL.default_param_init := init;
-  let%op mk_probs () input =
-    let counts = exp (({ w } + 1) * input) in
-    counts /. (counts ++ "... => 0")
-  in
-  let probs = mk_probs () in
-  let input = TDSL.range_of_shape ~label:[ "input" ] ~batch_dims:[ 4 ] ~output_dims:[ 28 ] () in
-  let target = TDSL.range_of_shape ~label:[ "target" ] ~batch_dims:[ 4 ] ~output_dims:[ 28 ] () in
-  let%op y = probs input *. target in
-  let ctx = Train.forward_once (Context.auto ()) y in
-  let values = weight_values ~ctx y in
-  TDSL.default_param_init := Operation.default_uniform1_param_init;
-  values
+  with_default_param_init init (fun () ->
+      let%op mk_probs () input =
+        let counts = exp (({ w } + 1) * input) in
+        counts /. (counts ++ "... => 0")
+      in
+      let probs = mk_probs () in
+      let input = TDSL.range_of_shape ~label:[ "input" ] ~batch_dims:[ 4 ] ~output_dims:[ 28 ] () in
+      let target =
+        TDSL.range_of_shape ~label:[ "target" ] ~batch_dims:[ 4 ] ~output_dims:[ 28 ] ()
+      in
+      let%op y = probs input *. target in
+      let ctx = Train.forward_once (Context.auto ()) y in
+      weight_values ~ctx y)
 
 let all_distinct ~name values =
   let n = Array.length values in

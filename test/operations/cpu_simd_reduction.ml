@@ -22,6 +22,7 @@ open Ocannl
 open Ocannl.Operation.DSL_modules
 module Tn = Ir.Tnode
 module LL = Ir.Low_level
+module L = Ll_test
 module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 module Idx = Ir.Indexing
@@ -55,16 +56,7 @@ let rec innermost_loop (llc : LL.t) : Idx.symbol option =
   | LL.If { body; _ } -> innermost_loop body
   | _ -> None
 
-(* The nodes a transform took the lowered [Zero_out] of. Nothing in the routine zeroes them now, and
-   the accumulation reads them first, so the run states the zero they start from: allocation's would
-   be an accident, and is not one under [debug_fill_fresh_outputs] (gh-ocannl-1873). *)
 let dropped_zeros = ref []
-
-let state_dropped_zeros ctx =
-  let nodes = !dropped_zeros in
-  dropped_zeros := [];
-  List.fold nodes ~init:ctx ~f:(fun ctx tn ->
-      Context.set_values ctx tn (Array.create ~len:(Tn.num_elems tn) 0.))
 
 (* Replace the lowered serial reduction with a single [Vectorized] accumulation loop over a fresh
    index; the renderer owns the chains. The transform drops the lowered [Zero_out] of the
@@ -73,11 +65,8 @@ let state_dropped_zeros ctx =
 let reduce_transform ~n ~body_of (s : Tn.t) (opt : LL.optimized) : LL.optimized =
   (LL.get_node opt.traced_store s).LL.zero_initialized_by_code <- false;
   dropped_zeros := s :: !dropped_zeros;
-  let i = Idx.get_symbol () in
-  {
-    opt with
-    llc = LL.For_loop { index = i; from_ = 0; to_ = n - 1; body = body_of i; axis = Vectorized };
-  }
+  let i = L.sym () in
+  { opt with llc = L.loop_n ~axis:LL.Vectorized i n (body_of i) }
 
 let run ~name ~transform t =
   let comp = named name (Train.forward t) in
@@ -85,11 +74,11 @@ let run ~name ~transform t =
   let ctx, routine =
     Context.compile ~lowered_transform:(fun o -> [ transform o ]) ctx comp Ir.Indexing.Empty
   in
-  let ctx = Context.run (state_dropped_zeros ctx) routine in
+  let ctx = Context.run (L.state_dropped_zeros dropped_zeros ctx routine) routine in
   (Context.get_values ctx t.Tensor.value).(0)
 
-let it i = Idx.Iterator i
-let f0 = Idx.Fixed_idx 0
+let it = L.iter
+let f0 = L.fixed 0
 
 let check_generated ~expect_chains name =
   let src = Generated.read name in
@@ -131,18 +120,12 @@ let () =
     run ~name:"red_dot_simd"
       ~transform:
         (reduce_transform ~n:m d1.Tensor.value ~body_of:(fun i ->
-             LL.Set
-               {
-                 tn = d1.Tensor.value;
-                 idcs = [| f0 |];
-                 llsc =
-                   Ternop
-                     ( Ir.Ops.FMA,
-                       (Get (va.Tensor.value, [| it i |]), single),
-                       (Get (vb.Tensor.value, [| it i |]), single),
-                       (Get (d1.Tensor.value, [| f0 |]), single) );
-                 debug = "";
-               }))
+             L.set_at d1.Tensor.value f0
+               (Ternop
+                  ( Ir.Ops.FMA,
+                    (L.get va.Tensor.value [| it i |], single),
+                    (L.get vb.Tensor.value [| it i |], single),
+                    (L.get d1.Tensor.value [| f0 |], single) ))))
       d1
   in
   p_close "vectorized fma dot parity" [| got_dot |] [| expected_dot |] ~tol;
@@ -160,17 +143,11 @@ let () =
     run ~name:"red_max_simd"
       ~transform:
         (reduce_transform ~n:q x1.Tensor.value ~body_of:(fun i ->
-             LL.Set
-               {
-                 tn = x1.Tensor.value;
-                 idcs = [| f0 |];
-                 llsc =
-                   Binop
-                     ( Ir.Ops.Max,
-                       (Get (x1.Tensor.value, [| f0 |]), single),
-                       (Get (w.Tensor.value, [| it i |]), single) );
-                 debug = "";
-               }))
+             L.set_at x1.Tensor.value f0
+               (Binop
+                  ( Ir.Ops.Max,
+                    (L.get x1.Tensor.value [| f0 |], single),
+                    (L.get w.Tensor.value [| it i |], single) ))))
       x1
   in
   p_close "vectorized max parity" [| got_max |] [| expected_max |] ~tol;
@@ -202,17 +179,11 @@ let () =
     run ~name
       ~transform:
         (reduce_transform ~n:q2 acc.Tensor.value ~body_of:(fun i ->
-             LL.Set
-               {
-                 tn = acc.Tensor.value;
-                 idcs = [| f0 |];
-                 llsc =
-                   Binop
-                     ( op,
-                       (Get (acc.Tensor.value, [| f0 |]), single),
-                       (Get (sn.Tensor.value, [| it i |]), single) );
-                 debug = "";
-               }))
+             L.set_at acc.Tensor.value f0
+               (Binop
+                  ( op,
+                    (L.get acc.Tensor.value [| f0 |], single),
+                    (L.get sn.Tensor.value [| it i |], single) ))))
       acc
   in
   p "max keeps the extremum past a NaN operand, as fmax does"
@@ -236,18 +207,11 @@ let () =
     run ~name:"red_strided_simd"
       ~transform:
         (reduce_transform ~n:r y1.Tensor.value ~body_of:(fun i ->
-             LL.Set
-               {
-                 tn = y1.Tensor.value;
-                 idcs = [| f0 |];
-                 llsc =
-                   Binop
-                     ( Ir.Ops.Add,
-                       (Get (y1.Tensor.value, [| f0 |]), single),
-                       (Get (u.Tensor.value, [| Idx.affine ~symbols:[ (2, i) ] ~offset:0 |]), single)
-                     );
-                 debug = "";
-               }))
+             L.set_at y1.Tensor.value f0
+               (Binop
+                  ( Ir.Ops.Add,
+                    (L.get y1.Tensor.value [| f0 |], single),
+                    (L.get u.Tensor.value [| L.aff [ (2, i) ] 0 |], single) ))))
       y1
   in
   p_close "strided accumulation parity (serial fallback)" [| got_strided |] [| expected_strided |]
