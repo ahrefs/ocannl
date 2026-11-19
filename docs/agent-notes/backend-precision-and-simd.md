@@ -1677,7 +1677,8 @@ files.
   under a narrow mode declines the f32 register tile), `schedule_mma_scope_scratch`'s seeding
   prediction (no uniform-f16 seed under `false`), and `schedule_contraction_nest`'s bf16 structural
   leg (no uniform-bf16 seed under bf16 `false`). A test whose claims follow the default by design
-  -- `reduction_forms`, whose form table asserts the default as its first claim -- carries
+  -- `reduction_forms`, whose form table asserts the default as a claim, and `cc_march_census`, a
+  golden of emitted text whose bf16 rows follow an exported bf16 mode -- carries
   `; ocannl-policy-invariance: exempt -- <reason>` inside its stanza and leaves the alias; the
   opt-out is whole-stanza, so prefer pinning the legs that need the default. A member under an
   `(enabled_if …)` (`cuda_wmma_floor`) is listed in a second `policy-invariance` alias stanza

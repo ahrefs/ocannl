@@ -1127,7 +1127,7 @@ grep -q 'm4-max/cc-gc-backprop: incremental-pass ' <<<"$gc_run"
 [ "$(awk -F '\t' '$3 == "cc-gc-backprop" { n++ } END { print n }' "$state/history.tsv")" = 1 ]
 
 # gh-ocannl-1104: a policy unit is the `@policy-invariance` alias alone on its backend, under one
-# non-default mode of one variable with the other left unset -- no @runtest, no @train, and no @slow
+# non-default mode of one variable with the other pinned at `auto` -- no @runtest, no @train, and no @slow
 # even under --slow -- recorded under its own name, once. The plain cc unit is the negative control:
 # no mode reaches its calls, so a mapping that leaked a mode into every unit fails here. The Metal
 # unit maps back to the metal backend (its suite line runs with OCANNL_BACKEND=metal) and to the

@@ -504,6 +504,7 @@ member the family's `(alias (name <family>) (deps ...))` stanza omits fails this
 
 Policy-invariance opt-outs (gh-ocannl-1104): members of @policy-invariance whose stanza leaves them out of
 the numerics-mode matrix, each with its reason.
+  test/operations/dune, the executable cc_march_census -- a golden of emitted kernel TEXT, rendered by children that
   test/operations/dune, the test reduction_forms -- its form table is stated for the default numerics policy
 
 every stanza that runs an executable either declares the backend variable or says in place why it does not: true

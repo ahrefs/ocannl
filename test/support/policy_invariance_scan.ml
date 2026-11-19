@@ -4,13 +4,14 @@ open Base
     under every non-default fp16/bf16 mode, derived from what the tests' own sources name.
 
     A member is a TEST -- a [(test)] or [(tests)] program, an inline-test library, or an
-    [(executable)] some rule runs on a [runtest-] alias ({!runs_as_test}) -- one of whose own
-    modules names the numerics policy: the module [Ir.Numerics] itself, or a value of
-    [test/support/test_utils.ml] whose definition does -- its [with_policy] wrappers, derived by
-    {!wrappers} rather than listed. Those are the programs that set the process-wide policy for some
-    of their legs and read the ambient one in others, which is what makes a default-labelled claim
-    in them test another policy whenever the caller exported a mode ([OCANNL_FP16_ARITHMETIC],
-    [OCANNL_BF16_ARITHMETIC]), with no run but the sweep's ever exporting one.
+    [(executable)] some rule runs on a [runtest-] alias, directly or by writing a target a
+    golden-diff rule on one checks ({!runs_as_test}) -- one of whose own modules names the numerics
+    policy: the module [Ir.Numerics] itself, or a value of [test/support/test_utils.ml] whose
+    definition does -- its [with_policy] wrappers, derived by {!wrappers} rather than listed. Those
+    are the programs that set the process-wide policy for some of their legs and read the ambient
+    one in others, which is what makes a default-labelled claim in them test another policy whenever
+    the caller exported a mode ([OCANNL_FP16_ARITHMETIC], [OCANNL_BF16_ARITHMETIC]), with no run but
+    the sweep's ever exporting one.
 
     What it reads, and deliberately does not:
     - a member's own modules, and every arm of a [(select …)] that produces one, under the scanner's
@@ -20,10 +21,7 @@ open Base
       inside its own computation -- [Ll_test.tensorized_capability]'s tf32 lift, which runs no code
       of its caller's under it -- makes no member of its callers;
     - no program that is not run as a test: a benchmark under [bin/] naming the policy measures
-      under whatever mode it is given, which is its caller's choice rather than a claim. Nor an
-      [(executable)] whose only runs write a target a separate rule diffs: the family's units are
-      the ones [env_var_deps]' aggregate machinery credits with an alias, and [cc_march_census], the
-      one such program today, forces every child's fp16 mode itself;
+      under whatever mode it is given, which is its caller's choice rather than a claim;
     - of the family stanza, its direct [(alias …)] entries, each with the stanza's [(enabled_if …)];
       what a listed member's own dependencies pull in is that member's to answer for;
     - nothing about the precisions a test computes at. A test computing in half without naming the
@@ -79,8 +77,9 @@ let runnable stanza =
   | _ -> false
 
 (** Whether a unit built by [stanza] and reached by [aliases] runs as a test: a [(test)]/[(tests)]
-    program or inline-test library runs on its own alias; an [(executable)] counts when some rule
-    runs it on a [runtest-] alias. *)
+    program or inline-test library runs on its own alias; an [(executable)] counts when [aliases] --
+    the aliases of the rules running it, and of the golden diffs judging what those rules write --
+    hold a [runtest-] one. *)
 let runs_as_test stanza ~aliases =
   match Dune.head stanza with
   | Some ("test" | "tests" | "library") -> runnable stanza

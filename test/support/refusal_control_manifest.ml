@@ -703,6 +703,8 @@ let raw_entries =
         "[scanner-refusal:59a004df0ff72eab5f2475d0ac0a92a3] opt-out declaring anything";
         "[scanner-refusal:971bc72210caf9086923f04657b45008] unconditional family stanza";
         "[scanner-refusal:f153e264ba5496c0a9f14ea067f21c96] conditional member listed";
+        "[scanner-refusal:e73d0c1ae2e2a075dd7e0de834f08ab9] executable naming the";
+        "[scanner-refusal:e9bf35fc126f302b1c2b4eb4e3f8224d] executable listed through";
         "[scanner-refusal:b8514eb10109dce5b36ef105c1bc36a6] module passes unaggregated";
         "[scanner-refusal:9dc8db9d29efd1b85da8aff105b1aae8] tested module with";
         "[scanner-refusal:775f43c0a7dca22c07a091f603457c7a] another is reported";

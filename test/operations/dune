@@ -284,9 +284,8 @@
 ; (`Test_scan.Policy_invariance_scan`), which holds this list to it in BOTH directions: a member left
 ; out fails, and so does an entry that names no policy. A member whose claims follow the default by
 ; design carries an `exempt` opt-out with its reason inside its own stanza (the grammar is in
-; `Policy_invariance_scan`'s header) and is left out here: `reduction_forms`. An executable run only
-; through a target and a golden diff is not reached (`cc_march_census`, which forces every child's
-; fp16 mode itself).
+; `Policy_invariance_scan`'s header) and is left out here: `reduction_forms` and `cc_march_census`.
+; An executable run through a target and a golden diff counts through the diff's alias.
 
 (alias
  (name policy-invariance)
@@ -3900,6 +3899,11 @@
  ; generated-lock: none -- each piece empties a kernel root of its own, and each emit child
  ; chdirs into its own directory under it before Generated.init; one lock would serialize the
  ; pieces again, which is what splitting them undid (gh-ocannl-1502).
+ ; ocannl-policy-invariance: exempt -- a golden of emitted kernel TEXT, rendered by children that
+ ; run under the fp16 mode each piece names (child_env forces OCANNL_FP16_ARITHMETIC per piece).
+ ; OCANNL_BF16_ARITHMETIC is not forced, so an exported bf16 mode changes the text of its bf16
+ ; rows (rt/n99/bf16/...), which a text golden records by design: a value claim, not an emission
+ ; census, is what a mode must leave unmoved (gh-ocannl-1104).
  (name cc_march_census)
  (modules cc_march_census)
  (libraries
@@ -13396,10 +13400,13 @@
  ;     made alongside this; the key stays declared because node creation still consults it wherever
  ;     the ppx mints an intermediate this test does not name.
  ; ocannl-policy-invariance: exempt -- its form table is stated for the default numerics policy
- ; and asserts that premise as a claim, so every non-default mode fails it by design. Under a
- ; narrow fp16 mode its reassociating f16 members' value claims fail as well (gh-ocannl-1104):
- ; their bitwise reference assumes an accumulator wider than storage, where every association
- ; agrees, and a storage-width f16 accumulator makes the vectorized order a different number.
+ ; and asserts that premise as a claim ("the numerics policy is the default the member table's
+ ; forms are stated for"), so every non-default mode fails it by design. Under fp16 true and
+ ; prefer_narrow on cc (native fp16) four more claims fail (gh-ocannl-1104): the value claims of
+ ; `retype-vectorized`, `split-then-vectorize-inner` and `rng-vectorized` at f16, and the form
+ ; claim of `rng-vectorized` at f16. Their bitwise reference assumes an accumulator wider than
+ ; storage, where every association agrees; a storage-width f16 accumulator makes the vectorized
+ ; order round to a different number.
  (name reduction_forms)
  (package neural_nets_lib)
  (deps

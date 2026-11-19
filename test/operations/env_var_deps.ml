@@ -676,21 +676,22 @@ let executable_identities stanza ~subdir ~name =
    placement the `ocannl_config` dep and the backend marker take. A command this comparison declines
    leaves the unit unaggregated, which is reported: the direction that asks the author to say what
    they meant rather than passing on a coincidence of names. *)
-let runner_aliases file_stanzas ~identities:(file, public) =
+let runs_identity ~identities:(file, public) (runner_subdir, stanza) =
+  List.exists (Scan.executables_run stanza) ~f:(fun (cwd, command) ->
+      match command with
+      | (Scan.Runs _ | Scan.Runs_dependency _) as command ->
+          Option.exists (Scan.command_file_path ~cwd command) ~f:(fun path ->
+              String.equal (normalize_path (Scan.in_subdir runner_subdir path)) file)
+      (* And a public name only where the command RESOLVED one. `(run ./pkg.probe)` and `(run
+         %{bin:pkg.probe})` carry the same string and name different things -- a file here, an
+         installed program -- so reading the first as a public-name runner would credit an unrelated
+         rule with this executable (Codex P2, round 8). *)
+      | Scan.Runs_public name -> List.mem public name ~equal:String.equal
+      | _ -> false)
+
+let runner_aliases file_stanzas ~identities =
   List.concat_map file_stanzas ~f:(fun (runner_subdir, stanza) ->
-      if
-        List.exists (Scan.executables_run stanza) ~f:(fun (cwd, command) ->
-            match command with
-            | (Scan.Runs _ | Scan.Runs_dependency _) as command ->
-                Option.exists (Scan.command_file_path ~cwd command) ~f:(fun path ->
-                    String.equal (normalize_path (Scan.in_subdir runner_subdir path)) file)
-            (* And a public name only where the command RESOLVED one. `(run ./pkg.probe)` and `(run
-               %{bin:pkg.probe})` carry the same string and name different things -- a file here, an
-               installed program -- so reading the first as a public-name runner would credit an
-               unrelated rule with this executable (Codex P2, round 8). *)
-            | Scan.Runs_public name -> List.mem public name ~equal:String.equal
-            | _ -> false)
-      then
+      if runs_identity ~identities (runner_subdir, stanza) then
         (* A `(test)` with a custom action can be the runner, and its focused entry point is the
            `runtest-<name>` dune generates -- `aliases_of` reports the directory-wide `runtest` for
            it, which is filtered out as a suite alias and would leave the executable reachable by
@@ -919,6 +920,30 @@ let is_golden_diff stanza =
       Option.value_map (Scan.field stanza "action") ~default:false ~f:(fun args ->
           List.exists args ~f:is_diff_action)
   | _ -> false
+
+(* gh-ocannl-1104: the aliases of the golden-diff rules that judge what an executable WRITES -- the
+   `(rule (target x.actual) … (run %{dep:x.exe}))` plus `(rule (alias runtest-x) (action (diff
+   x.expected x.actual)))` shape, where the rule running the program has no alias of its own and the
+   one that fails is the diff. Same directory only: a target is named relative to its rule. The
+   policy family credits an executable with these, so a program run as a test that way is a member
+   rather than a program the derivation cannot see. *)
+let diff_judge_aliases file_stanzas ~identities =
+  List.concat_map file_stanzas ~f:(fun (runner_subdir, runner) ->
+      if not (runs_identity ~identities (runner_subdir, runner)) then []
+      else
+        List.concat_map (targets_of runner) ~f:(fun target ->
+            List.concat_map file_stanzas ~f:(fun (subdir, judge) ->
+                if
+                  String.equal subdir runner_subdir && is_golden_diff judge
+                  && Option.value_map (Scan.field judge "action") ~default:false ~f:(fun args ->
+                      List.exists args ~f:(diffs_file ~named:(named_deps judge) target))
+                then
+                  List.filter_map (aliases_of judge) ~f:(fun alias ->
+                      Option.some_if
+                        (not (List.mem suites alias ~equal:String.equal))
+                        (subdir, alias))
+                else [])))
+  |> List.dedup_and_sort ~compare:Poly.compare
 
 (* The names dune generates a `runtest-<name>` alias for by itself (>= 3.20): every `(test)`/
    `(tests)` stanza name, and every inline-test library's name. A hand-written alias must not reuse
@@ -2454,8 +2479,20 @@ let main () =
               (String.equal subdir u.unit_subdir && Sexp.equal stanza u.unit_stanza)
               opt_out)
       in
+      (* An executable's units also count the golden diffs judging what it writes
+         ([diff_judge_aliases]): for this family that is how such a program is run as a test, and
+         the alias that reaches it. *)
       let policy_units () =
-        List.filter units ~f:(fun u ->
+        List.map units ~f:(fun u ->
+            match (Scan.head u.unit_stanza, u.unit_name) with
+            | Some ("executable" | "executables"), Some name ->
+                let judges =
+                  diff_judge_aliases file_stanzas
+                    ~identities:(executable_identities u.unit_stanza ~subdir:u.unit_subdir ~name)
+                in
+                { u with unit_aliases = u.unit_aliases @ judges }
+            | _ -> u)
+        |> List.filter ~f:(fun u ->
             Policy.runs_as_test u.unit_stanza ~aliases:(List.map u.unit_aliases ~f:snd)
             && List.exists !policy_named ~f:(fun (subdir, stanza, name) ->
                 String.equal subdir u.unit_subdir && Sexp.equal stanza u.unit_stanza
@@ -5248,6 +5285,7 @@ let policy_family_control () =
       ("t/direct.ml", "module N = Ir.Numerics\nlet () = N.set_policy (N.get ())\n");
       ("t/wrapped.ml", "let () = Test_utils.with_policy Fn.id (fun () -> ())\n");
       ("t/mention.ml", "(* Ir.Numerics *)\nlet note = \"Ir.Numerics.get\"\nlet () = ignore note\n");
+      ("t/judged.ml", "let () = ignore (Ir.Numerics.get ())\n");
       ( Policy.support_source,
         "let with_policy adjust f =\n\
         \  let saved = Ir.Numerics.get () in\n\
@@ -5264,8 +5302,34 @@ let policy_family_control () =
   let condition = "(enabled_if (= %{system} linux))" in
   (* [conditional] members carry [condition]; with [~separate], the family lists them in a second
      stanza behind the same condition rather than in the main one. *)
+  (* [~judged]: the tree also holds an `(executable)` naming the policy whose only run writes a
+     target a golden-diff rule on `runtest-judged` checks -- the shape the derivation has to credit
+     through the diff rather than through an alias of the running rule. *)
+  let judged_stanzas =
+    "\n\
+     (executable\n\
+    \ (name judged)\n\
+    \ (modules judged)\n\
+    \ (libraries base))\n\n\
+     (rule\n\
+    \ ; ocannl-backend: none -- a synthetic control fixture, judged on its sources alone.\n\
+    \ (target judged.actual)\n\
+    \ (deps ocannl_config)\n\
+    \ (action\n\
+    \  (with-stdout-to\n\
+    \   %{target}\n\
+    \   (run %{dep:judged.exe}))))\n\n\
+     (rule\n\
+    \ (alias runtest-judged)\n\
+    \ (deps (alias runtest-gate))\n\
+    \ (action\n\
+    \  (diff judged.expected judged.actual)))\n\n\
+     (alias\n\
+    \ (name runtest)\n\
+    \ (deps (alias runtest-judged)))\n"
+  in
   let run ?(exempt = []) ?(declaration = Policy.declaration) ?(conditional = []) ?(separate = false)
-      listed =
+      ?(judged = false) listed =
     let is_conditional name = List.mem conditional name ~equal:String.equal in
     let member name =
       Printf.sprintf
@@ -5286,9 +5350,10 @@ let policy_family_control () =
     let behind, main = List.partition_tf listed ~f:(fun name -> separate && is_conditional name) in
     write_file
       (Stdlib.Filename.concat root "t/dune")
-      (Printf.sprintf "%s\n%s\n(alias\n (name %s)\n (deps\n  (alias runtest-gate)\n%s))\n%s"
+      (Printf.sprintf "%s\n%s%s\n(alias\n (name %s)\n (deps\n  (alias runtest-gate)\n%s))\n%s"
          (family_gate ~elsewhere:false)
          (String.concat ~sep:"\n" (List.map [ "direct"; "wrapped"; "mention" ] ~f:member))
+         (if judged then judged_stanzas else "")
          Policy.family_alias (entries main)
          (if List.is_empty behind then ""
           else
@@ -5309,11 +5374,14 @@ let policy_family_control () =
   let mislabelled = run ~exempt:[ "direct" ] ~declaration:"every-mode" [ "wrapped" ] in
   let unconditioned = run ~conditional:[ "direct" ] [ "direct"; "wrapped" ] in
   let conditioned = run ~conditional:[ "direct" ] ~separate:true [ "direct"; "wrapped" ] in
+  let judged_omitted = run ~judged:true [ "direct"; "wrapped" ] in
+  let judged_listed = run ~judged:true [ "direct"; "wrapped"; "judged" ] in
   printf
     "\n\
      The policy-invariance family (gh-ocannl-1104), put to a tree of three tests -- one naming\n\
      Ir.Numerics through a module alias, one reaching it through a Test_utils wrapper, one spelling\n\
-     it only in a comment and a string -- under ten listings, opt-outs and conditions.\n";
+     it only in a comment and a string -- under ten listings, opt-outs and conditions -- and to an\n\
+     executable naming it whose only run writes a target a golden diff checks.\n";
   List.iter
     [
       ("complete", complete);
@@ -5326,6 +5394,8 @@ let policy_family_control () =
       ("mislabelled opt-out", mislabelled);
       ("conditional member, main stanza", unconditioned);
       ("conditional member, own stanza", conditioned);
+      ("diff-judged executable omitted", judged_omitted);
+      ("diff-judged executable listed", judged_listed);
     ]
     ~f:(fun (label, (status, text)) ->
       eprintf "the policy control's %s run %s. Its captured output:\n%s\n" label
@@ -5353,6 +5423,14 @@ let policy_family_control () =
     (exited 1 unconditioned && says "is not enabled under the member's own" unconditioned);
   Verdict.p "a conditional member listed behind its own condition is accepted"
     (exited 0 conditioned);
+  Verdict.p
+    "an executable naming the policy, run only through a target a golden diff checks, that the \
+     family omits is refused"
+    (exited 1 judged_omitted
+    && says "executable judged" judged_omitted
+    && says unreached judged_omitted);
+  Verdict.p "the same executable listed through its golden diff's alias is accepted"
+    (exited 0 judged_listed);
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* gh-ocannl-1037's control, a tree of its own for the reason the others give: the repository's

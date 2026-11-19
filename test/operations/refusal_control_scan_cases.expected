@@ -551,6 +551,8 @@ env_var_deps.ml: [scanner-refusal:88592385a9799d9f98c3be9d93123e2c] member is re
 env_var_deps.ml: [scanner-refusal:59a004df0ff72eab5f2475d0ac0a92a3] opt-out declaring anything (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:971bc72210caf9086923f04657b45008] unconditional family stanza (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:f153e264ba5496c0a9f14ea067f21c96] conditional member listed (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:e73d0c1ae2e2a075dd7e0de834f08ab9] executable naming the (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:e9bf35fc126f302b1c2b4eb4e3f8224d] executable listed through (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:b8514eb10109dce5b36ef105c1bc36a6] module passes unaggregated (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:9dc8db9d29efd1b85da8aff105b1aae8] tested module with (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:775f43c0a7dca22c07a091f603457c7a] another is reported (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
