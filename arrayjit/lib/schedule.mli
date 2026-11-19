@@ -763,10 +763,10 @@ val privatized_tile_widens : tile:Tn.t -> Low_level.t -> bool
 
 val with_transform_fault : (optop -> unit) -> (unit -> 'a) -> 'a
 (** Test seam (gh-ocannl-1323): [with_transform_fault fault body] runs [body] with [fault] called on
-    each op just before {!apply} / {!apply_classified} applies it, so a test can make a transform
-    raise what a transform bug raises — a genuine bug has no stable trigger. The calling domain's
-    previous fault is restored on return or exception; the default is a no-op and no configuration
-    selects it. *)
+    each op just before {!apply} / {!apply_classified} / {!schedule_legality} applies it (counting
+    its calls counts the ops dispatched), so a test can make a transform raise what a transform bug
+    raises — a genuine bug has no stable trigger. The calling domain's previous fault is restored on
+    return or exception; the default is a no-op and no configuration selects it. *)
 
 type op_verdict = Op_legal | Op_illegal of string | Op_unknown of string
 [@@deriving sexp_of, equal]
