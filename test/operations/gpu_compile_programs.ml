@@ -2,13 +2,12 @@
    once (CUDA's [cuda_compile_programs]) computes exactly what the one joint program computes.
 
    The routine is a small MLP's training step -- forward, backprop, SGD -- which the GPU backends'
-   default pipeline fissions into several kernels. It is compiled twice in this process from fresh
-   contexts, under two routine names so that the second compile misses every kernel too: once with
-   the split forced off ([Kernel_code_cache.with_split], at most one program) and once with it
-   forced on (up to four programs of at least one kernel each). The step runs once after each, and
-   the loss and both updated weights must agree bit for bit: the same kernels' code, only grouped
-   into other programs. The inputs are not dyadic, so a kernel compiled differently in its smaller
-   program would show.
+   default pipeline fissions into several kernels. It is compiled twice from fresh contexts with
+   cold kernel caches and distinct names for the debug artifacts. One compile forces the split off
+   ([Kernel_code_cache.with_split], at most one program) and the other forces it on (up to four
+   programs of at least one kernel each). The step runs once after each, and the loss and both
+   updated weights must agree bit for bit: the same kernels' code, only grouped into other programs.
+   The inputs are not dyadic, so a kernel compiled differently in its smaller program would show.
 
    The split claims are gated on [Kernel_code_cache.split_capable_compiles] (a backend that can
    split recorded the compile), never on a backend name; that record stays with the kernel cache
@@ -71,8 +70,11 @@ let compile_and_run ~name split =
   let capable = K.split_capable_compiles () and programs = K.programs_compiled_concurrently () in
   let ctx = Context.auto () in
   let (ctx, routine), cost =
-    K.with_split split (fun () ->
-        CC.with_census (fun () -> Context.compile ~name ctx comp Ir.Indexing.Empty))
+    (* The split workers only run NVRTC. [resolve] joins them and publishes their results on the
+       calling domain before the cold scope restores the caches. *)
+    K.with_cold_caches (fun () ->
+        K.with_split split (fun () ->
+            CC.with_census (fun () -> Context.compile ~name ctx comp Ir.Indexing.Empty)))
   in
   let ctx = Context.run ctx routine in
   ( Context.backend_name ctx,

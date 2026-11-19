@@ -14,4 +14,5 @@ a serial cache entry is rejected on GPU backends and honoured on CPU ones: true
 the rejection is reported as a pre-codegen Not_dispatched refusal on GPU, and absent on CPU: true
 rejecting it re-searches rather than returning the serial routine: true
 a pre-gh-552 entry reports no default measurement; a re-search measures one or is refused: true
+the re-search winner matches or beats its untuned default, or the default timing was refused: true
 the routine from the poisoned-cache path computes correct values: true
