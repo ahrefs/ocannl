@@ -96,8 +96,10 @@ def step_matrix(out, treatments, ref_treatment, ref_all):
         m = statistics.median(p50s)
         spread = p90_p10_spread(reps)
         queued = statistics.median(r.get("queued_step_ms") or 0.0 for _, r in reps)
-        # A d1 treatment is compared with the d1 form of the reference (the same attention form).
-        rt = ref_all or (("d1" + ref_treatment) if treatment.startswith("d1") else ref_treatment)
+        # A d1 treatment is compared with the d1 form of the reference (the same attention form),
+        # also under the precision wrapper: mixbf16d1<T> is d1<T>'s attention at bf16.
+        attention = treatment[len("mixbf16"):] if treatment.startswith("mixbf16") else treatment
+        rt = ref_all or (("d1" + ref_treatment) if attention.startswith("d1") else ref_treatment)
         ref = median_p50(cells, (backend, fixture, rt))
         if ref is None:
             # The comparison the summary advertises did not happen: an incomplete matrix.

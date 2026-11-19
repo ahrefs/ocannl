@@ -71,6 +71,19 @@ with tempfile.TemporaryDirectory() as scratch:
     check("| keep |" not in text, text)
     print("a treatment's cells are summarized by its name, and only the given treatments': true")
 
+    # The precision wrapper keeps the attention form: mixbf16d1<T> divides by d1<REF>, as d1<T> does.
+    slow = dict(step, step_ms={k: 2 * v for k, v in step["step_ms"].items()})
+    (out / "hip-gpt2_mini_train-mixbf16d1serialoff-r1.out").write_text(json.dumps(slow) + "\n")
+    (out / "hip-gpt2_mini_train-serialoff-r1.out").write_text(
+        json.dumps(dict(step, step_ms={k: 4 * v for k, v in step["step_ms"].items()})) + "\n")
+    text = io.StringIO()
+    with contextlib.redirect_stdout(text):
+        code = report.summary(str(out), "serialoff d1serialoff mixbf16d1serialoff", "serialoff")
+    text = text.getvalue()
+    check(code == 0 and any(l.startswith("| hip | gpt2_mini_train | mixbf16d1serialoff |")
+                            and "| 2.000x |" in l for l in text.splitlines()), text)
+    print("a mixbf16 wrapper over a d1 treatment is compared with the d1 reference: true")
+
 # A prep or dry run (no step stage) owes no step-time matrix; a step stage's empty matrix fails.
 with tempfile.TemporaryDirectory() as scratch:
     out = Path(scratch)
