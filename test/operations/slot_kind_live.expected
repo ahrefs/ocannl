@@ -14,6 +14,7 @@ the live tree is a dune-file inventory, not an empty glob: true
 the live tree breaks no check that keeps the configuration-free answers true: true
 @test/operations/scans holds no backend: true
 @metal-codegen holds Metal and nothing else: true
+@check holds no backend: true
 a plain build of a bin/ executable holds no backend: true
 a plain build in bisect's spelling holds no backend: true
 @lifecycle, off the list, counts the configuration: true

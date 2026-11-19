@@ -6078,8 +6078,8 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   Second, the configuration, which counts for every batch but two shapes
   (gh-ocannl-1227, the maintainer's decision replacing gh-ocannl-1095's proof that a batch read
   none, which needed an exact model of every dune construct and grew one per review round): every
-  target on `Slot_kind.config_free_aliases` (`@test/operations/scans`, `@metal-codegen`), which
-  then holds only what its stanzas name, or a plain compilation product (`build bin/x.exe`,
+  target on `Slot_kind.config_free_aliases` (`@test/operations/scans`, `@metal-codegen`, root
+  `@check`), which then holds only what its stanzas name, or a plain compilation product (`build bin/x.exe`,
   `build ./test/operations/x.exe` as `bisect` spells it, a library's `.cma`/`.cmxa`), which
   compiles and runs nothing -- no backend, `--cpu`, dune's own width. Either fails closed: a
   closure that reaches a configuration reader all the same (a tree the scan below has not judged
@@ -6128,15 +6128,20 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   configuration naming cc. On a box where cuda or hip meets a width hazard (the local view above,
   so the fleet's Linux GPU boxes and never a Mac), `run`/`start`/`fresh` print `WARNING: this box
   has a GPU backend (<b>), but this batch holds only cc: ...` in the announcements, the run's log
-  and the digest, and `plan` prints it too; a batch holding no backend at all (the scans) is not
-  warned about. `--expect-backend B` (repeatable, before the dune arguments) states what the batch
-  must hold: one that does not hold every B, or whose backends are unread (`exec`), is refused
-  before the slot, the probe and dune -- verdict `BACKEND REFUSED`, exit 2, the digest naming what
-  it held -- and a held expectation, cc included, silences the warning. The option makes `run`
-  resolve the batch on any box, a Mac included. A GPU leg passes the backend it is for:
-  `OCANNL_BACKEND=cuda tools/test-run.sh run --expect-backend cuda build @...`. Leg 88 of
-  `tools/test-test-run.sh` pins both, and its warning stays clear of the words leg 49's
-  width-silence controls grep for (`cap`, `sdma`, `nvidia`, `dxg`).
+  and the digest, and `plan` prints it too. `--expect-backend B` (repeatable, before the dune
+  arguments) makes `run` resolve the batch on any box. A batch with unread backends (`exec`) or
+  a nonempty set missing any expected backend is refused before the slot, the probe and dune
+  with verdict `BACKEND REFUSED`, exit 2, and the reason in the digest. A satisfied expectation,
+  cc included, silences the warning. A resolved backend-free batch (scans, `@check`) with no
+  skipped aliases runs and keeps dune's verdict. If pinned, it prints a one-line note that the pin
+  is vacuous in the announcements, the log, the digest and `plan` (gh-ocannl-2309). If the runner
+  skipped disabled aliases and the remainder holds no backend, the pin still refuses because a
+  skipped alias may have been the backend witness. In a measure-then-compile wrapper,
+  put the assertion on the execution command, for example
+  `env OCANNL_BACKEND=cuda tools/test-run.sh run --expect-backend cuda build @...`,
+  then run `tools/test-run.sh run build @check` for the compile-only step. Leg 88 of
+  `tools/test-test-run-devices.sh` pins these outcomes. Its warning stays clear of the
+  words leg 49's width-silence controls grep for (`cap`, `sdma`, `nvidia`, `dxg`).
 - **A tree carrying a backend marker `env_var_deps` refuses is `MARKER REFUSED`, not every
   backend** (the chip from gh-ocannl-1652). A `; ocannl-backend: cuda` with no reason used to make
   `Slot_kind` raise, which `ocannl_slot_kind` answered as `unknown:`, so the runner took the batch
