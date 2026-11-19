@@ -67,20 +67,31 @@
 #            job's harness batch and the `Shell harnesses` jobs read. The change is the paths
 #            the HEAD side changed since the merge base, both names of a rename, a path the
 #            base side renamed counting by its other name too, scripts or not. What runs is
-#            `tools/test-harnesses.sh --affected --files PATH...`, the mapping
-#            `tools/test-run.sh affected --harnesses` owns, read from the merged tree. A change
-#            reaching no member runs none. Until 2026-11-13 this was a shell tier that ran only
-#            when BOTH sides changed a script, the `--shell` group alone: remote CI read a PR's
-#            own change then, and this build only the clash of two.
+#            `tools/test-harnesses.sh --affected --files PATH...`, the mapping `tools/test-run.sh
+#            affected --harnesses` owns, read from the merged tree. A change reaching no member runs
+#            none. A changed script no member reaches leaves the tier PENDING until the tests tier's
+#            list is read (gh-ocannl-2304): it counts as covered when an alias of the list the tests
+#            tier runs here names it as a dependency, as an exact `affected: SCRIPT: named as a
+#            dependency by the rule of ALIAS` line of the ask that printed that list says
+#            (tools/affected-tests.sh's "Literal dependencies": one rule of the alias names its
+#            path, and dune reads it as a File of that rule). Every such script covered, the tier
+#            narrows to what the paths reach, nothing when that is no member; any one not covered
+#            runs the whole tier. Until 2026-11-13 this was a shell tier that ran only when BOTH
+#            sides changed a script, the `--shell` group alone: remote CI read a PR's own change
+#            then, and this build only the clash of two.
 # The harness tier's scope is a fail-closed allowlist: it narrows only when HEAD is a two-parent
 # merge, its merge base and both sides' changes were read, git listed every changed path
-# unquoted, each changed path matching `*.sh` (SHELL_GLOB), asked alone, reaches a member, and the
-# ask for all the paths answers. Anything else -- a one-parent HEAD, a failed git read, a path git
-# had to quote, an ask that fails (test-harnesses.sh refuses a line of `affected --harnesses` it
-# does not recognize, a path reading as an option, a failed `affected`), a script no member
-# reaches, or a scoped run refused before any member started (exit 2) -- runs the whole tier,
-# every group, never less. A script is asked alone because a reach the other paths make up for
-# would hide one nothing maps.
+# unquoted, each changed path matching `*.sh` (SHELL_GLOB), asked alone, reaches a member or is
+# covered (above: named as a dependency by an alias in the list the tests tier runs here, read
+# whole-line from that ask), and the ask for all the paths answers. Anything else -- a one-parent
+# HEAD, a failed git read, a path git had to quote, an ask that fails (test-harnesses.sh refuses a
+# line of `affected --harnesses` it does not recognize, a path reading as an option, a failed
+# `affected`), a script no member reaches and no alias run here names (one an alias outside the
+# list names, a list OWED rather than run, a glob or source-tree read), or a scoped run refused
+# before any member started (exit 2) -- runs the whole tier, every group, never less. A script is
+# asked alone because a reach the other paths make up for would hide one nothing maps. Coverage
+# is no claim that the alias drives every path through the script: it is the dune file's own
+# statement that the alias's rule depends on it, and the tests tier ran that alias green.
 # The shared-red comparison (ship-pr's build of the base alone) stays like with like: that build
 # carries the merge's two parents on the base's tree, so it reads the same two sides here, asks
 # about the same change and narrows to the same paths, the reach read from the base's text. A
@@ -89,13 +100,15 @@
 # script prints of a run is the same for the same failure: tier lines omit elapsed time
 # (gh-ocannl-1950), and the tests tier prints neither its list nor a count (a PR that adds a
 # test lists one alias more than the base alone does); `--plan` shows the command that lists it.
-# --all runs the whole harness tier whatever HEAD is. --plan alone prints the tier selection for
-# HEAD without asking Dune or reading records. On a branch, --plan --base REV reads the locally
-# resolved base tip (fetch first to refresh a remote-tracking ref) and committed HEAD. It asks
-# the tests tier on their candidate merge in a scratch checkout outside the repository, with
-# parents in ship-pr's order. The caller's index and working files are ignored and its refs
-# stay untouched. The merged copy of this script handles the `--plan-merge` query, so changes
-# the base brought to the gate apply too. It runs Dune queries and reads the head's owed-run
+# The coverage is read the same way: from the tree's own ask, and the alias it names is printed (a
+# dune file the PR changed can name a script the base's does not, a difference that refuses). --all
+# runs the whole harness tier whatever HEAD is. --plan alone prints the tier selection for HEAD
+# without asking Dune or reading records, a PENDING tier as such. On a branch, --plan --base REV
+# reads the locally resolved base tip (fetch first to refresh a remote-tracking ref) and committed
+# HEAD. It asks the tests tier on their candidate merge in a scratch checkout outside the
+# repository, with parents in ship-pr's order. The caller's index and working files are ignored and
+# its refs stay untouched. The merged copy of this script handles the `--plan-merge` query, so
+# changes the base brought to the gate apply too. It runs Dune queries and reads the head's owed-run
 # record when there is a need.
 # Only the record check's status says whether it admits the need. A plan makes no build or
 # readiness verdict and writes no record. A conflict or an unreadable plan fails the query.
@@ -174,6 +187,8 @@ ask_reach() {
 # when they reach no member), or says in `scope_why` why the whole tier runs. `scripts` is every
 # asked path matching SHELL_GLOB: a reach the others make up for would hide one nothing maps, so
 # each is asked alone.
+# A script no member reaches leaves the tier PENDING (`pending` 1, the scripts in `unreached`)
+# rather than whole: cover_tier settles it once the tests tier's list is read.
 scope_tier() {
   local s rc
   for s in ${scripts[@]+"${scripts[@]}"}; do
@@ -182,21 +197,63 @@ scope_tier() {
       scope_why="what $s reaches could not be asked (test-harnesses.sh exit $rc)"
       return
     }
-    [ -n "$reach" ] || { scope_why="no harness reaches $s"; return; }
+    [ -n "$reach" ] || unreached+=("$s")
   done
   ask_reach "${asked[@]}" || {
     rc=$?
     scope_why="what the paths the head side changed reach could not be asked (test-harnesses.sh exit $rc)"
     return
   }
+  if [ ${#unreached[@]} -gt 0 ]; then pending=1; else scoped=1; fi
+}
+
+# narrowed [SUFFIX] sets `harness` and `why` for a tier narrowed to `reach`.
+narrowed() {
+  if [ -z "$reach" ]; then
+    harness=0 why="the $n_paths path(s) the head side changed reach no harness${1:-}"
+  else
+    why="scoped to what the $n_paths path(s) the head side changed reach${1:-}:"
+  fi
+}
+
+# cover_tier settles a PENDING tier from the tests tier's answer (read_tests): a script no member
+# reaches is covered by an alias of the list this build runs ($tests_dir/list, the tests tier
+# being `list`) whose rule names that script as a dependency, as one exact line
+# `affected: SCRIPT: named as a dependency by the rule of ALIAS` of the ask that printed the list
+# says (tools/affected-tests.sh, "Literal dependencies"). Every unreached script covered, the tier
+# narrows to what the paths reach; one not covered, or no list run here, leaves it whole.
+# `covered` holds SCRIPT<TAB>ALIAS lines for show_cover.
+cover_tier() {
+  local s a f found
+  covered=
+  [ "$pending" = 1 ] || return 0
+  pending=0
+  if [ "$tests" != list ]; then
+    why="whole -- no harness reaches ${unreached[0]}, and the tests tier runs no list here to cover it"
+    return
+  fi
+  f=$(list_ask)
+  for s in "${unreached[@]}"; do
+    found=
+    while IFS= read -r a; do
+      [ -n "$a" ] || continue
+      if grep -qxF -- "affected: $s: named as a dependency by the rule of $a" "$f"; then found=$a; break; fi
+    done <"$tests_dir/list"
+    if [ -z "$found" ]; then
+      why="whole -- no harness reaches $s, and no alias the tests tier runs names it as a dependency"
+      return
+    fi
+    covered+=$s$'\t'$found$'\n'
+  done
   scoped=1
+  narrowed ' beyond the aliases the tests tier runs'
 }
 
 # select_tiers sets `harness` (1 = run the harness tier), `why`, `script_line` (whether the head
 # side changed a script, which tools/merge-build-replay.py's shell-tier set replays) and, for a
 # tier it could narrow, `scoped`, `reach` and `asked` (or `scope_why`).
 select_tiers() {
-  harness=1 scoped=0 scope_why= reach= asked=() scripts=() script_line=
+  harness=1 scoped=0 pending=0 scope_why= reach= asked=() scripts=() unreached=() script_line= n_paths=0
   local head_names base_pairs p old new other n=0 rc=0 hit=
   if [ -z "$base" ]; then
     [ "$all" = 0 ] || { why='--all'; return; }
@@ -251,11 +308,12 @@ EOF
     harness=0 why='the head side changed no path'
     return
   fi
+  n_paths=$n
   scope_tier
-  if [ "$scoped" = 1 ] && [ -z "$reach" ]; then
-    harness=0 why="the $n path(s) the head side changed reach no harness"
-  elif [ "$scoped" = 1 ]; then
-    why="scoped to what the $n path(s) the head side changed reach:"
+  if [ "$scoped" = 1 ]; then
+    narrowed
+  elif [ "$pending" = 1 ]; then
+    why="no harness reaches ${unreached[*]}: whole unless an alias the tests tier runs names each as a dependency, read with that tier's list (--plan --base REV asks it)"
   else
     why="whole -- $scope_why"
   fi
@@ -269,6 +327,14 @@ read_parents() {
     head=$(git -C "$root" rev-parse --verify --quiet 'HEAD^2^{commit}') || { base= head=; return; }
   echo "$me: HEAD merges ${head:0:8} into ${base:0:8}"
   mb=$(git -C "$root" merge-base "$base" "$head") || mb=
+}
+
+# list_ask prints the ask whose stderr goes with $tests_dir/list: the first-tier ask when a
+# cross-cutting change asked one (it repeats the default ask's stderr, then its own), else the
+# default ask. The train- names (owed_needs) and the coverage lines (cover_tier) are read from it,
+# so both describe the list this build runs.
+list_ask() {
+  if [ -f "$tests_dir/ask-first" ]; then echo "$tests_dir/ask-first"; else echo "$tests_dir/ask"; fi
 }
 
 # ask_tests asks the pre-push list of the head's change and sets `tests`: `list` (run
@@ -348,8 +414,7 @@ owed_needs() {
   # and aliases Dune lists in this tree. Other diagnostics are not parsed as names.
   # With no names, retain the legacy affected ask as count-only protocol compatibility.
   # Normal merged and base-alone trees each ship their own pair of tools together.
-  f=$tests_dir/ask
-  [ ! -f "$tests_dir/ask-first" ] || f=$tests_dir/ask-first
+  f=$(list_ask)
   counted=$(sed -n -E 's/.*left off: ([0-9]+) train-.*/\1/p' "$f" | tail -n 1)
   sed -n 's/^test-run: prepush: train: //p' "$f" >"$tests_dir/train-names"
   if [ -s "$tests_dir/train-names" ]; then
@@ -421,7 +486,13 @@ show_tiers() {
     echo "$me: tests tier: UNREAD -- HEAD has no two sides with a merge base, so the tier fails"
   fi
   [ -z "$script_line" ] || echo "$me: harness tier: $script_line"
-  if [ "$harness" = 1 ]; then
+  show_harness
+}
+
+show_harness() {
+  if [ "$pending" = 1 ]; then
+    echo "$me: harness tier: PENDING -- $why"
+  elif [ "$harness" = 1 ]; then
     echo "$me: harness tier: SELECTED -- $why"
     if [ "$scoped" = 1 ]; then
       while IFS= read -r line; do echo "$me:   $line"; done <<EOF
@@ -431,6 +502,19 @@ EOF
   else
     echo "$me: harness tier: skipped -- $why"
   fi
+}
+
+# show_cover WAS_PENDING prints what cover_tier settled of a PENDING tier: each covered script
+# with the alias naming it, then the selection.
+show_cover() {
+  local s a
+  [ "$1" = 1 ] || return 0
+  while IFS=$'\t' read -r s a; do
+    [ -z "$s" ] || echo "$me: harness tier: $s is named as a dependency by $a, which the tests tier runs"
+  done <<EOF
+$covered
+EOF
+  show_harness
 }
 
 find_dune() {
@@ -533,6 +617,9 @@ merged_plan() (
   tests_dir=$(mktemp -d "${TMPDIR:-/tmp}/merge-build-query.XXXXXX") || die_plan 'cannot make a query directory'
   trap 'rm -rf "$tests_dir"' EXIT
   if ! read_tests; then die_plan "tests tier unreadable: $tests_why"; fi
+  was_pending=$pending
+  cover_tier
+  show_cover "$was_pending"
   case $tests_verdict/$tests/$tests_incomplete in
     cross-cutting/list/0) echo "$me: tests plan: CROSS-CUTTING (first tier selected)" ;;
     cross-cutting/list/1) echo "$me: tests plan: CROSS-CUTTING (first tier selected, INCOMPLETE)" ;;
@@ -618,6 +705,9 @@ elif [ "$tests" = list ]; then
   echo "$me: tests tier: the change reaches no per-test alias"
 fi
 echo "$me: tests tier passed"
+was_pending=$pending
+cover_tier
+show_cover "$was_pending"
 if [ "$harness" = 1 ]; then
   rc=0
   if [ "$scoped" = 1 ]; then
