@@ -177,15 +177,22 @@ q_unknown_chdir() { # state root -> q_unknown argv (the unread operand stays lit
   # word even when its path holds whitespace (/proc preserves those words).
   q_unknown=(env -S '-C ${QUEUED_REPO}' "OCANNL_TOOL_TEST_RUNS=$1" tools/test-run.sh run build @red)
 }
+q_exited() { # pid: a zombie has no launch argv and cannot record a verdict
+  case $1 in '' | *[!0-9]* | 0) return 1 ;; esac
+  ! kill -0 "$1" 2>/dev/null || [ "$(pstate "$1")" = Z ]
+}
 q_slot=$TMP/q-slot.sh q_linger_sh=$TMP/q-linger.sh
-cat >"$q_slot" <<'EOF'
-#!/usr/bin/env bash
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  declare -f pstate q_exited
+  cat <<'EOF'
 release=$1 how=$2
 shift 3
 main=$$
 if [ "$how" != exec-without-guardian ]; then
   (
-    (while kill -0 "$main" 2>/dev/null; do sleep .1; done; sleep 1) </dev/null >/dev/null 2>&1 &
+    # PID 1 may leave the detached wrapper as a zombie.
+    (until q_exited "$main"; do sleep .1; done; sleep 1) </dev/null >/dev/null 2>&1 &
     printf '%s\n' "$!" >"$release.guardian"
   )
 fi
@@ -196,6 +203,7 @@ case $how in
   *) exit 75 ;;
 esac
 EOF
+} >"$q_slot"
 cat >"$q_linger_sh" <<'EOF'
 #!/usr/bin/env bash
 release=$1
@@ -260,16 +268,13 @@ q_ready() { # release wrapper-pid: the marker belongs to this launch
   local pid
   { read -r pid <"$1.ready"; } 2>/dev/null && [ "$pid" = "$2" ]
 }
-q_exited() { # pid: a zombie has no launch argv and cannot record a verdict
-  case $1 in '' | *[!0-9]* | 0) return 1 ;; esac
-  ! kill -0 "$1" 2>/dev/null || [ "$(pstate "$1")" = Z ]
-}
 q_drain_guardian() { # release
   local guardian
   { read -r guardian <"$1.guardian"; } 2>/dev/null && q_until 30 q_exited "$guardian"
 }
 q_refuse() { # release: end the only outstanding wrapper and drain its guardian
   local rc=0 released=
+  [ "${q_wraps[0]-}" = "$q_wrap_pid:$1" ] && [ "${#q_wraps[@]}" = 1 ] || return 1
   if touch "$1" && q_until 30 q_exited "$q_wrap_pid"; then
     released=1
   else
@@ -315,6 +320,7 @@ fi
 # launch is queued, it ends with the queued run's red verdict.
 if [ -z "$q_detail" ]; then
   # Clear the foreground queries' mark so only this waiter can recreate it.
+  # note_queued in tools/test-run.sh owns the marker.
   mv "$q_green/queued-after" "$TMP/queued.status-sighting" ||
     q_detail="the foreground queries did not mark the queued launch"
 fi
