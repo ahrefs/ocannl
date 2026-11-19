@@ -486,7 +486,7 @@ let install_timing_trace () =
        apart and INCOMPLETE counts the rest. Their wall -- from the validation's start to the raise,
        the warmup, calibration and batches they dispatched -- is summed apart too, since no total
        holds it: a reading of the session's split adds it to the timing side. *)
-    let unranked = ref 0 and unranked_s = ref 0. and preflight_at = ref 0. in
+    let unranked = ref 0 and unranked_s = ref 0. and preflight_at = ref Float.nan in
     let raised () = !preflights - !tagged in
     let failed () = raised () - !unranked in
     let calib_s = ref 0. and timed_s = ref 0. in
@@ -601,7 +601,7 @@ let install_timing_trace () =
           (if !unranked = 0 then ""
            else
              Printf.sprintf
-               "; %d unranked timing windows (cut as hopeless or stopped by the budget), %.2f s, \
+               "; %d unranked timing windows (cut as hopeless or stopped by the budget), %.6f s, \
                 in none of these totals"
                !unranked !unranked_s)
           (if failed () = 0 then ""

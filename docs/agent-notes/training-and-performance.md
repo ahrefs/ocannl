@@ -1104,8 +1104,10 @@ files.
   pinned is that the summary's two tallies (INCOMPLETE's failed count, and the unranked windows,
   gh-ocannl-2330) equal the records of each kind, plus a second capture (`bench_line_samples
   trace-raise`) that raises one candidate's call from `Autotune.on_batch_wall` and finds that
-  candidate and exception in exactly one `failed` record, and a third (`trace-cut`) that cuts one
-  window as hopeless on a scripted clock and reads complete with one `unranked` record. A live
+  candidate and exception in exactly one `failed` record, and two (`trace-cut`, `trace-stop`) that
+  each make one window unranked -- cut as hopeless on a scripted clock, stopped by the budget on a
+  virtual `Autotune.budget_elapsed` clock -- and read complete with one `unranked` record and its
+  wall. A live
   search's whole-routine seed over four times the beam head is cut the same way, so before
   gh-ocannl-2330 a loaded host's live trace could read INCOMPLETE with no failure at all. `benchmarks/test/test_bench_line_scan.py` refuses a bench-line pattern in
   any other script. A stub bench in `test_cells.py` prints the real format, trailing census

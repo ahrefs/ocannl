@@ -51,8 +51,12 @@ the injected run's summary reads INCOMPLETE, counting exactly its failed records
 trace-has reads the injected run as incomplete, and its search as done: true
 the cut run cut exactly one candidate's window, not the baseline's: true
 its one raised record is that window, unranked, naming Timing_hopeless: true
-the cut run's summary reads complete, with one unranked window: true
+the cut run's summary reads complete, with one unranked window and its wall: true
 trace-has reads the cut run as complete, and its search as done: true
+the stopped run stopped exactly one candidate's window, not the baseline's: true
+its one raised record is that window, unranked, naming Timing_stopped: true
+the stopped run's summary reads complete, with one unranked window and its wall: true
+trace-has reads the stopped run as complete, and its search as done: true
 == the rank-site lines (bench_rank_site)
 several candidates are explained, each with its kernels line: true
 one pick, of an explained candidate, at the rank its explain line states: true

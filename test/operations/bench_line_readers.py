@@ -14,8 +14,9 @@ completion is diagnostic only, since timing calls can raise under load. This tes
 formats and reader behavior; it does not assert that a live timing search has no raised calls.
 A second traced search raises one candidate's timing call on purpose (bench_line_samples'
 `trace-raise`), so the raised call's record is read off a line its producer printed (gh-ocannl-2246),
-and a third cuts one window as hopeless on a scripted clock (`trace-cut`), which the summary tallies
-as unranked and still reads complete (gh-ocannl-2330).
+and two more each make one unranked window -- `trace-cut` cuts one as hopeless on a scripted clock,
+`trace-stop` stops one on a virtual budget clock -- which the summary tallies apart and still reads
+complete (gh-ocannl-2330).
 benchmarks/test/test_bench_line_scan.py keeps the readers in bench_output.
 
 Usage: bench_line_readers.py ROOT, ROOT holding benchmarks/ and the captured
@@ -288,29 +289,37 @@ claim("trace-has reads the injected run as incomplete, and its search as done",
       cli("trace-has", path, "incomplete")[0] == 0 == cli("trace-has", path, "search-done")[0],
       trace_detail)
 print(f"injected run raised records (not part of the golden): {len(raised)}", file=sys.stderr)
-# gh-ocannl-2330: a window cut as hopeless is unranked, not a failure. The scripted clock cuts
-# exactly one, and the run prints that candidate's label off the exception its observer was handed.
-err = captured("trace_cut", "log")
-cut = [re.fullmatch(r'cut: "((?:[^"\\]|\\.)*)"', line)
-       for line in captured("trace_cut", "out").splitlines()]
-cut = [bench_output.ocaml_string(m[1]) for m in cut if m]
-summary = bench_output.trace_summary(err)
-raised = bench_output.trace_raised(err)
-trace_detail = " | ".join(line for line in err.splitlines()
-                          if line.startswith(("timing-trace: summary: ", "timing-trace: raised ")))
-print(f"cut run raised records (not part of the golden): {len(raised)}", file=sys.stderr)
-claim("the cut run cut exactly one candidate's window, not the baseline's",
-      len(cut) == 1 and cut[0] != "baseline", repr(cut))
-claim("its one raised record is that window, unranked, naming Timing_hopeless",
-      [(r["kind"], r["label"], r["phase"]) for r in raised] == [("unranked", cut[0], None)]
-      and "Timing_hopeless" in raised[0]["exception"], f"{cut}; {trace_detail}")
-claim("the cut run's summary reads complete, with one unranked window",
-      summary is not None and not summary["incomplete"] and summary["raised"] == 0
-      and summary["unranked"] == 1 and tallies_agree(summary, raised), trace_detail)
-path = root / "test/operations/bench_lines_trace_cut.log"
-claim("trace-has reads the cut run as complete, and its search as done",
-      cli("trace-has", path, "incomplete")[0] == 3 and cli("trace-has", path, "search-done")[0] == 0,
-      trace_detail)
+# gh-ocannl-2330: a window cut as hopeless, or stopped by the budget, is unranked, not a failure.
+# Each run makes exactly one -- `trace-cut` on a scripted clock, `trace-stop` on a virtual budget
+# clock -- and prints that candidate's label off the exception its observer was handed.
+for run, verb, exn in (("trace_cut", "cut", "Timing_hopeless"),
+                       ("trace_stop", "stopped", "Timing_stopped")):
+    err = captured(run, "log")
+    lines = [re.fullmatch(verb + r': "((?:[^"\\]|\\.)*)"', line)
+             for line in captured(run, "out").splitlines()]
+    labels = [bench_output.ocaml_string(m[1]) for m in lines if m]
+    summary = bench_output.trace_summary(err)
+    raised = bench_output.trace_raised(err)
+    trace_detail = " | ".join(line for line in err.splitlines()
+                              if line.startswith(("timing-trace: summary: ",
+                                                  "timing-trace: raised ")))
+    print(f"{run} raised records (not part of the golden): {len(raised)}; {trace_detail}",
+          file=sys.stderr)
+    claim(f"the {verb} run {verb} exactly one candidate's window, not the baseline's",
+          len(labels) == 1 and labels[0] != "baseline", repr(labels))
+    claim(f"its one raised record is that window, unranked, naming {exn}",
+          [(r["kind"], r["label"], r["phase"]) for r in raised] == [("unranked", labels[0], None)]
+          and exn in raised[0]["exception"], f"{labels}; {trace_detail}")
+    # The window's wall is measured, so it is bounded on both sides, never printed here: past
+    # zero (its validation was timed) and within the trace's own wall.
+    claim(f"the {verb} run's summary reads complete, with one unranked window and its wall",
+          summary is not None and not summary["incomplete"] and summary["raised"] == 0
+          and summary["unranked"] == 1 and 0 < summary["unranked_s"] <= summary["wall"] + 0.05
+          and tallies_agree(summary, raised), trace_detail)
+    path = root / f"test/operations/bench_lines_{run}.log"
+    claim(f"trace-has reads the {verb} run as complete, and its search as done",
+          cli("trace-has", path, "incomplete")[0] == 3
+          and cli("trace-has", path, "search-done")[0] == 0, trace_detail)
 exercised.add("timing_trace")
 
 # ---------------------------------------------------------------------------------------------
