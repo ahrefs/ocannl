@@ -357,5 +357,47 @@ claim("an OCaml literal decodes as OCaml writes it",
       bench_output.ocaml_string(r'caf\195\169 \"q\" a\\b\n') == 'café "q" a\\b\n')
 exercised.add("rank_site")
 
-claim("every pinned format was read off a producer's line here", exercised == pinned,
-      f"pinned {sorted(pinned)}, exercised {sorted(exercised)}")
+# ---------------------------------------------------------------------------------------------
+print("== the seeded-default census (Autotune.seeded_apply; CUDA and HIP only)")
+# The one run on the ambient backend. Its leg claim is printed on either side; where the backend
+# does not seed, the run's own SKIPPED line says so, and these claims skip with it, in the same
+# dialect (the row a pass prints, the announcement on stderr). A seeding run that printed no line
+# fails here, as does a run that neither skipped nor seeded.
+SEEDED_LEG = "seeded: the seeded untuned matmul computes the host's product"
+out, err = captured("seeded", "out"), captured("seeded", "log")
+skip = re.search(r"^SKIPPED on (\S+) \(vacuous\): " + re.escape(SEEDED_LEG) + "$", err, re.M)
+claim("the seeded run states its leg claim", SEEDED_LEG + ": true" in out.splitlines(), repr(out))
+derived, census = bench_output.seeded_default(err)
+CENSUS = re.compile(r"seeded_default: (\d+) of (\d+) segments seeded \((\d+) default segments "
+                    r"refined\), (\d+) with reductions sunk: (.*)")
+seeded_claims = [
+    ("each plan derivation states its time in seconds", lambda: p_all(
+        "each plan derivation states its time in seconds", derived,
+        lambda t: t.endswith(" s") and math.isfinite(float(t[:-2])) and float(t[:-2]) >= 0)),
+    ("each census line counts no more segments seeded than it has", lambda: p_all(
+        "each census line counts no more segments seeded than it has", census,
+        lambda line: (m := CENSUS.fullmatch(line)) is not None
+        and 0 <= int(m[1]) <= int(m[2]) and int(m[2]) >= 1)),
+    # The count and the list it heads are the same census stated twice.
+    ("each census line lists as many seeded segments as it counts", lambda: p_all(
+        "each census line lists as many seeded segments as it counts", census,
+        lambda line: (m := CENSUS.fullmatch(line)) is not None
+        and len(re.findall(r"(?:^|, )u\d+ ", m[5])) == int(m[1]))),
+    ("no more census lines than plan derivations", lambda: claim(
+        "no more census lines than plan derivations", len(census) <= len(derived),
+        f"{len(census)} census, {len(derived)} derivations")),
+]
+skipped_formats = set()
+if skip:
+    for text, _ in seeded_claims:
+        print(f"SKIPPED on {skip[1]} (vacuous): {text}", file=sys.stderr)
+        print(f"{text}: true")
+    skipped_formats.add("seeded_default")
+else:
+    for _, evaluate in seeded_claims:
+        evaluate()
+    exercised.add("seeded_default")
+
+claim("every pinned format was read off a producer's line here, or its run skipped",
+      exercised | skipped_formats == pinned and not exercised & skipped_formats,
+      f"pinned {sorted(pinned)}, exercised {sorted(exercised)}, skipped {sorted(skipped_formats)}")

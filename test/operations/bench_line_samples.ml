@@ -23,7 +23,12 @@
    exception the raised-call observer is handed. - [trace-stop]: the same search under a budget
    whose virtual clock ([Autotune.budget_elapsed]) passes it during the first non-floor candidate's
    timing, so exactly that window is stopped ([Autotune.Timing_stopped]); the run prints its label
-   as [stopped: %S]. *)
+   as [stopped: %S]. - [seeded]: the recipes' untuned compile ([Autotune.untuned_compile]) of a
+   64x64 matmul on the run's own backend, under [autotune_log] (from the rule): where the backend
+   seeds its untuned default ([Autotune.seeded_default_backend]: CUDA and HIP) the compile goes
+   through [Autotune.seeded_apply], which prints the [seeded_default:] lines on stderr; its one leg
+   claim checks the seeded routine's product against the host's. Elsewhere the leg is skipped, and
+   [bench_line_readers.py] reads its [SKIPPED] line as the format's not being produced there. *)
 
 open Base
 open Ocannl
@@ -165,6 +170,37 @@ let trace ?(cut = false) ?(stop = false) ~inject () =
   in
   H.trace_search_done ~compile_s:(Unix.gettimeofday () -. t0)
 
+let seeded () =
+  let ctx = Context.auto () in
+  let leg =
+    Verdict.leg
+      ~when_:(Autotune.seeded_default_backend (Context.backend_facts ctx))
+      ~on:(Context.backend_name ctx) ()
+  in
+  Verdict.in_leg ~leg "seeded: the seeded untuned matmul computes the host's product" (fun label ->
+      let n = 64 in
+      let a = NTDSL.range_of_shape ~label:[ "bls_sa" ] ~output_dims:[ n; n ] () in
+      let b = NTDSL.range_of_shape ~label:[ "bls_sb" ] ~output_dims:[ n; n ] () in
+      let%op c = a +* "ik; kj => ij" b in
+      List.iter [ a; b; c ] ~f:(fun t -> Train.set_materialized t.Tensor.value);
+      let ctx, routine =
+        Autotune.untuned_compile ~name:"bls_seeded" ctx (Train.forward c) Ir.Indexing.Empty
+      in
+      Train.run ctx routine;
+      let av = Context.get_values ctx a.Tensor.value
+      and bv = Context.get_values ctx b.Tensor.value
+      and cv = Context.get_values ctx c.Tensor.value in
+      let want =
+        Array.init (n * n) ~f:(fun ij ->
+            List.sum
+              (module Float)
+              (List.range 0 n)
+              ~f:(fun k -> av.((ij / n * n) + k) *. bv.((k * n) + (ij % n))))
+      in
+      (* The sums reach about 2^30, past f32's exact integers, so the bound is relative, and loose
+         enough for a tf32 contraction (2^-10): a wrong cell is off by far more. *)
+      Verdict.p_close label cv want ~tol:(fun want -> 2e-3 *. Float.max 1. (Float.abs want)))
+
 let () =
   (* The mode comes first; the [--ocannl_*] settings after it are the configuration's. *)
   match Array.to_list (Sys.get_argv ()) with
@@ -173,7 +209,8 @@ let () =
   | _ :: "trace-raise" :: _ -> trace ~inject:true ()
   | _ :: "trace-cut" :: _ -> trace ~cut:true ~inject:false ()
   | _ :: "trace-stop" :: _ -> trace ~stop:true ~inject:false ()
+  | _ :: "seeded" :: _ -> seeded ()
   | _ ->
       failwith
-        "usage: bench_line_samples.exe harness|trace|trace-raise|trace-cut|trace-stop \
+        "usage: bench_line_samples.exe harness|trace|trace-raise|trace-cut|trace-stop|seeded \
          [--ocannl_<key>=<value> ...]"

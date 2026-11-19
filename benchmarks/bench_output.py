@@ -511,7 +511,9 @@ def seeded_default(text):
 # twice: every entry's producer must still print its `producer_token`, and every other file under
 # benchmarks/ and tools/ whose reading code names an `anchor` is refused -- that line's reader
 # belongs here. `pinned` is how the test runs the readers over a line a producer printed; an entry
-# whose producer has no cheap run on a CPU says why it has none instead.
+# whose producer has no cheap run on a CPU says why it has none instead. `seeded_default` is pinned by
+# the one run there on the ambient backend: its lines print on CUDA and HIP only, and elsewhere the
+# run's skipped leg is what the test reads (gh-ocannl-1910).
 
 FORMATS = {
     "gebp_timing": {"readers": ("timing_lines", "timing_line"), "anchor": r"GFLOP/s",
@@ -541,8 +543,7 @@ FORMATS = {
                         "pinned": True},
     "seeded_default": {"readers": ("seeded_default",), "anchor": r"seeded_default:",
                        "producers": {"arrayjit/lib/autotune.ml": '"seeded_default: '},
-                       "pinned": "Autotune.seeded_apply logs it on CUDA and HIP only "
-                                 "(seeded_default_backend); no CPU run prints it"},
+                       "pinned": True},
 }
 
 
