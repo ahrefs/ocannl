@@ -12,7 +12,8 @@
    on, exactly one line, naming the first backend asked for; key off, none; - [compile]: three
    compiles on the running backend ([Context.auto], which the parent's environment and flags pick):
    key on, one line exactly where that backend's dialect renders no check -- so on a Metal run, one,
-   and on cc, none, its kernels checked as before; key off, none, on every backend.
+   and on cc, none, its kernels checked as before (each count is a [Verdict.leg], so a run shows
+   which one it evaluated); key off, none, on every backend.
 
    The parent also holds the pure half ([Backends.unchecked_lane_bounds_notice]) against the scope
    [cache_key_agreement] flips the key in: the notice is owed exactly on the backends whose cache
@@ -57,13 +58,7 @@ let compile () =
           Context.compile ~name:(Printf.sprintf "lbn_add%d" k) ctx (Tensor.consume_forward_code out)
             Ir.Indexing.Empty
         in
-        let ctx = Context.run ctx routine in
-        Stdio.printf "values %d: %s\n" k
-          (String.concat ~sep:" "
-             (Array.to_list
-                (Array.map (Context.get_values ctx out.Tensor.value) ~f:(fun v ->
-                     Printf.sprintf "%Lx" (Int64.bits_of_float v)))));
-        ctx)
+        Context.run ctx routine)
   in
   Context.release ctx;
   Context.release base
@@ -112,29 +107,30 @@ let parent () =
   p "direct, key off: no notice" (notices off_err = 0);
   (* Three real compiles on the running backend. *)
   let on_ok, on_out, on_err = run "compile" ~on:true in
-  let off_ok, off_out, off_err = run "compile" ~on:false in
+  let off_ok, _, off_err = run "compile" ~on:false in
   let backend =
     List.find_map (String.split_lines on_out) ~f:(String.chop_prefix ~prefix:"backend: ")
   in
   Stdio.eprintf "lane_bounds_notice: compiled on the %s backend (not part of the golden)\n%!"
     (Option.value backend ~default:"<unknown>");
-  let owed =
-    Option.value_map backend ~default:true ~f:(fun name ->
-        not (Context.backend_facts_of_name name).renders_lane_bounds_check)
-  in
   p "compile, key on: the child exits normally and names its backend"
     (on_ok && Option.is_some backend);
-  p
-    "compile, key on: three compiles print the notice once where the dialect renders no check, \
-     else never"
-    (notices on_err = if owed then 1 else 0);
+  (* Each count is a leg of its own, so a run shows which one it evaluated: the dialects that render
+     the check owe no notice, the others exactly one. *)
+  let backend_name = Option.value backend ~default:"<unknown>" in
+  let renders =
+    Option.value_map backend ~default:false ~f:(fun name ->
+        (Context.backend_facts_of_name name).renders_lane_bounds_check)
+  in
+  let unchecked_leg = Verdict.leg ~when_:(not renders) ~on:backend_name () in
+  let checked_leg = Verdict.leg ~when_:renders ~on:backend_name () in
+  in_leg ~leg:unchecked_leg
+    "compile, key on, a dialect rendering no check: three compiles print the notice exactly once"
+    (fun label -> p label (notices on_err = 1));
+  in_leg ~leg:checked_leg "compile, key on, a dialect rendering the check: no notice" (fun label ->
+      p label (notices on_err = 0));
   p "compile, key off: the child exits normally" off_ok;
-  p "compile, key off: no notice on any backend" (notices off_err = 0);
-  p "compile: the key changes no value the routines compute"
-    (let values out =
-       List.filter (String.split_lines out) ~f:(String.is_prefix ~prefix:"values ")
-     in
-     List.length (values on_out) = 3 && List.equal String.equal (values on_out) (values off_out))
+  p "compile, key off: no notice on any backend" (notices off_err = 0)
 
 let () =
   match

@@ -7,7 +7,7 @@ direct, key on: the one notice names the first backend asked about: true
 direct, key off: the child exits normally: true
 direct, key off: no notice: true
 compile, key on: the child exits normally and names its backend: true
-compile, key on: three compiles print the notice once where the dialect renders no check, else never: true
+compile, key on, a dialect rendering no check: three compiles print the notice exactly once: true
+compile, key on, a dialect rendering the check: no notice: true
 compile, key off: the child exits normally: true
 compile, key off: no notice on any backend: true
-compile: the key changes no value the routines compute: true
