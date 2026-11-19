@@ -1448,6 +1448,12 @@ direct_rates=$("$bypasses" --run a/cc "$tmp/hatched-bypass.records" --run b/cc "
 grep -qxF 'b/cc: no hatched claim reached' <<<"$direct_rates"
 grep -qxF 'UNVERIFIED: bypassed on every unit that reached it: verdict_skip_probe.exe: always-bypassed claim (a/cc 1 of 1)' \
   <<<"$direct_rates"
+# One claim taking two hatches in one unit joins them in the order taken: the
+# second entry of the join, which mawk once rendered with a leading separator
+# on the first (the in-test inside the assignment), on every box's awk.
+hatched_records "$tmp/hatched-two.records" "$hatch_bypass"$'\n'$'OCANNL_TOOL_VERDICT_BYPASS\tqueued window dispersed\tfixture.exe\talways-bypassed claim'
+grep -qxF '  bypassed 2 of 2 (100%): verdict_skip_probe.exe: always-bypassed claim [queued window contended; queued window dispersed]' \
+  <<<"$("$bypasses" --run a/cc "$tmp/hatched-two.records")"
 grep -qxF 'result: CLEAR -- no hatched claim was reached' \
   <<<"$("$bypasses" --run b/cc "$tmp/hatched-none.records")"
 printf 'OCANNL_TOOL_VERDICT_FUTURE\tsomething\n' >>"$tmp/hatched-none.records"
