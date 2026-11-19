@@ -72,7 +72,10 @@
 #      inside the slot from DUNE_BUILD_DIR's tree.
 # 106. slow aliases receive a four-hour run cap before launch, including files,
 #      fresh and repeat; plan states the cap source, explicit caps win,
-#      and an operand after dune's separator does not raise the default.
+#      and the classifier reads dune's build targets (gh-ocannl-2340): an alias
+#      after `build --` and an `--alias`/`--alias-rec` operand raise the
+#      default, an `exec` argument, `runtest DIR` and `test` do not; and
+#      tools/sweep.sh's test_cap_start_cmd reads the same argv at every call.
 #  77. `plan` reports the probe and the per-test cap as `run` would apply them
 #      (GPU batches only, not @slow, not where run resolves nothing), and asks
 #      no device.
@@ -1623,7 +1626,7 @@ harness_leg_run '77: plan reports the probe and the per-test cap #device' leg_77
 # plan text would miss a run still cut at the old bound. Fixture actions return
 # immediately; their recorded cap proves the budget without waiting four hours.
 leg_106() {
-  local OCANNL_TOOL_TEST_CAP= d= probe tag argv want source
+  local OCANNL_TOOL_TEST_CAP= d= probe tag argv want source sweep_calls sweep_argv_calls fn
   . "$HERE/per-test-cap.sh"
   for probe in "ordinary|plan build @cheap|3600" \
                "slow|plan build @slow|$SLOW_RUN_CAP_DEFAULT" \
@@ -1636,7 +1639,15 @@ leg_106() {
                "train-member|plan build @test/training/train-mlp_names|$TRAIN_RUN_CAP_DEFAULT" \
                "train-slow|plan build @train @slow|$SLOW_RUN_CAP_DEFAULT" \
                "train-short|plan --cap 9 build @runtest @train|9" \
-               "train-separator|plan exec prog -- @train|3600"; do
+               "train-separator|plan exec prog -- @train|3600" \
+               "train-dashdash|plan build -- @runtest @train|$TRAIN_RUN_CAP_DEFAULT" \
+               "train-alias-rec|plan build @runtest --alias-rec train|$TRAIN_RUN_CAP_DEFAULT" \
+               "train-exec|plan exec /bin/echo @train|3600" \
+               "slow-dashdash|plan build -j 2 -- @slow|$SLOW_RUN_CAP_DEFAULT" \
+               "slow-alias|plan build --alias=test/training/slow-fixture_conv|$SLOW_RUN_CAP_DEFAULT" \
+               "slow-slash|plan build @test/training/slow-fixture_conv/|$SLOW_RUN_CAP_DEFAULT" \
+               "runtest-dir|plan runtest test/training|3600" \
+               "test-sub|plan test|3600"; do
     IFS='|' read -r tag argv want <<<"$probe"
     # shellcheck disable=SC2086  # fixture argv deliberately split
     probe_run "slow-cap-$tag" hip cc "" "" $argv
@@ -1644,8 +1655,8 @@ leg_106() {
       d="$tag: exit $argv_rc; plan: $argv_out"
     [ -z "$d" ] || break
     case $tag in
-      slow | member | train-slow) source="the slow default" ;;
-      train | combined | train-member) source="the training default" ;;
+      slow | member | train-slow | slow-dashdash | slow-alias | slow-slash) source="the slow default" ;;
+      train | combined | train-member | train-dashdash | train-alias-rec) source="the training default" ;;
       short | lifted | train-short) source="asked for" ;;
       *) source="the default" ;;
     esac
@@ -1684,6 +1695,61 @@ leg_106() {
     OCANNL_TOOL_TEST_CAP=17 probe_run slow-cap-env hip cc "" "" run build @slow
     { [ "$argv_rc" = 0 ] && [ "$(cat "$argv_dir/cap" 2>/dev/null)" = 17 ]; } ||
       d="the environment cap was not kept: exit $argv_rc; cap: $(cat "$argv_dir/cap" 2>/dev/null)"
+  fi
+  # tools/sweep.sh's caller (gh-ocannl-2340): test_cap_start_cmd, extracted from the shipping
+  # sweep with its helpers stubbed, hands the classifier the leg's dune argv, and every call site
+  # passes one, its subcommand first -- a bare target list would read as no `build` at all. The
+  # completion pass, extracted too, gets its watcher exactly when the dune line it emits does not
+  # name `@slow`: the classifier's argv and the emitted command stay one.
+  if [ -z "$d" ]; then
+    : >"$TMP/sweep-test-cap.sh"
+    for fn in test_cap_start_cmd suite_completion_cmd; do
+      sed -n "/^$fn() {/,/^}/p" "$SWEEP_SRC" >"$TMP/sweep-fn.sh"
+      case $(head -n 1 "$TMP/sweep-fn.sh") in
+        "$fn() {"*) cat "$TMP/sweep-fn.sh" >>"$TMP/sweep-test-cap.sh" ;;
+        *) d="sweep: cannot extract $fn from $SWEEP_SRC" ;;
+      esac
+    done
+  fi
+  if [ -z "$d" ]; then
+    (
+      TEST_CAP=1500
+      box_jobs_cpu_backend() { [ "$1" = cc ]; }
+      unit_backend() { printf '%s' "$1"; }
+      test_cap_dir() { printf '%s.test-cap' "$1"; }
+      sq() { printf "'%s'" "$1"; }
+      # shellcheck disable=SC1091  # extracted above
+      . "$TMP/sweep-test-cap.sh"
+      for probe in "watch|build @runtest @train" "watch|runtest test/training" \
+                   "watch|build -j 1 @test/operations/runtest-x" \
+                   "none|build -- @runtest @slow" "none|build @runtest --alias-rec slow" \
+                   "none|build --alias=test/training/slow-fixture_conv"; do
+        IFS='|' read -r want argv <<<"$probe"
+        # shellcheck disable=SC2086  # fixture argv deliberately split
+        if test_cap_start_cmd hip "$TMP/sweep-wt" $argv >/dev/null; then got=watch; else got=none; fi
+        [ "$got" = "$want" ] || { echo "sweep: test_cap_start_cmd hip wt $argv: $got, not $want"; exit 1; }
+      done
+      unit_takes_slow() { [ "$SLOW" = 1 ]; }
+      unit_suite() { printf '@runtest @train'; }
+      verdict_records_env() { :; }
+      unit_dune_env() { printf 'ENV'; }
+      switch_dune_cmd() { printf 'dune'; }
+      test_cap_stop_cmd() { printf 'STOP; '; }
+      for probe in "0|watch|ENV dune build -j 1 @runtest @train;" \
+                   "1|none|ENV dune build -j 1 @runtest @train @slow;"; do
+        IFS='|' read -r SLOW want line <<<"$probe"
+        out=$(suite_completion_cmd hip "$TMP/sweep-wt")
+        case $out in *"perl -e "*) got=watch ;; *) got=none ;; esac
+        case $out in *"$line"*) ;; *) echo "sweep: completion pass (SLOW=$SLOW) lacks '$line': $out"; exit 1 ;; esac
+        [ "$got" = "$want" ] || { echo "sweep: completion pass (SLOW=$SLOW): $got, not $want"; exit 1; }
+      done
+    ) >"$TMP/sweep-test-cap.out" 2>&1 || d=$(cat "$TMP/sweep-test-cap.out")
+  fi
+  if [ -z "$d" ]; then
+    sweep_calls=$(grep -c 'test_cap_start_cmd "[^"]*" "[^"]*" ' "$SWEEP_SRC")
+    sweep_argv_calls=$(grep -cE 'test_cap_start_cmd "[^"]*" "[^"]*" (build|runtest) ' "$SWEEP_SRC")
+    [ "$sweep_calls" -gt 0 ] && [ "$sweep_calls" = "$sweep_argv_calls" ] ||
+      d="sweep: $sweep_argv_calls of $sweep_calls test_cap_start_cmd call sites pass a dune subcommand first"
   fi
   if [ -z "$d" ]; then
     report 0 "slow targets get four hours and training targets two before launch; plan states the cap source; explicit caps win"
