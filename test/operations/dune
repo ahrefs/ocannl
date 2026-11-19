@@ -11628,6 +11628,29 @@
  (action
   (diff narrow_gebp_bench_padded.expected narrow_gebp_bench_padded.actual)))
 
+; gh-ocannl-2362: host-side census of a bf16 decoder block's backward (a positional table, attention,
+; layer norms, FFN): every narrow plain-cell gradient nest is sunk in the optimized routine, the
+; positional table's by name, and every acc tile the privatized preset mints over a bf16 gradient
+; under a widening accumulator is f32. Structural only, so the golden is backend-uniform.
+
+(test
+ (name narrow_grad_census)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules narrow_grad_census)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  arrayjit.context
+  arrayjit.autotune)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-2362: a dense layer's bf16 weight, input and bias gradients, accumulated onto nonzero
 ; incoming values, equal an f32-gradient twin's exact sums narrowed once, on the default pipeline,
 ; the privatized preset and (where the untuned CUDA/HIP default seeds) the seeded default, whose

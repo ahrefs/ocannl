@@ -113,17 +113,23 @@ let terms name =
 (* The sums onto the incoming values, in double. *)
 let exact name = Array.map (terms name) ~f:(List.fold ~init:0. ~f:( +. ))
 
-(* f32 -> bf16, round to nearest even, on an f32-exact double. *)
-let to_bf16 v =
-  let u = Int32.to_int_trunc (Int32.bits_of_float v) land 0xFFFF_FFFF in
-  let lsb = (u lsr 16) land 1 in
-  Int32.float_of_bits (Int32.of_int_trunc ((u + 0x7FFF + lsb) land 0xFFFF_0000))
+(* Values rounded to [prec] through the library's own codec. *)
+let at_prec prec vs =
+  Ir.Ndarray.retrieve_flat_values
+    (Ir.Ndarray.init_array ~debug:"ngr_at_prec" prec
+       ~dims:[| Array.length vs |]
+       ~padding:None
+       ~f:(fun idx -> vs.(idx.(0))))
 
-(* The per-step narrowing a read-modify-write nest does, in its lowered order. *)
+(* The per-step narrowing a read-modify-write nest does, in its lowered order: every cell's sum
+   rounded to bf16 after each step (each cell has the same number of terms). *)
 let per_step name =
-  Array.map (terms name) ~f:(function
-    | g :: contributions -> List.fold contributions ~init:g ~f:(fun acc v -> to_bf16 (acc +. v))
-    | [] -> assert false)
+  let ts = Array.map (terms name) ~f:Array.of_list in
+  let acc = ref (Array.map ts ~f:(fun t -> t.(0))) in
+  for k = 1 to Array.length ts.(0) - 1 do
+    acc := at_prec bf16 (Array.mapi !acc ~f:(fun c a -> a +. ts.(c).(k)))
+  done;
+  !acc
 
 let bitwise a b = Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b)
 
@@ -156,11 +162,11 @@ let () =
         (exact name) ~f:bitwise;
       pf_all2
         "%s gradient: the bf16 result is the materialized f32 sum narrowed once, cell for cell" name
-        n (Array.map t ~f:to_bf16) ~f:bitwise;
+        n (at_prec bf16 t) ~f:bitwise;
       p_exists
         (Printf.sprintf "%s gradient: narrowing at every step would differ in some cell (host)" name)
-        (List.zip_exn (Array.to_list (per_step name)) (Array.to_list (exact name)))
-        ~f:(fun (step, ex) -> not (bitwise step (to_bf16 ex))));
+        (List.zip_exn (Array.to_list (per_step name)) (Array.to_list (at_prec bf16 (exact name))))
+        ~f:(fun (step, once) -> not (bitwise step once)));
   (* The privatized preset: every [Privatize] it appends judged on the program it was handed. *)
   let privatized = ref 0 in
   let l = layer ~tag:"priv" bf16 in

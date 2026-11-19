@@ -452,9 +452,9 @@
 # predates that split. Since gh-ocannl-2362 the optimizer sinks a narrow-storage accumulation of
 # lowered code itself, on every backend and unconditionally (the default then narrows once, the
 # residency bf16_arithmetic and fp16_arithmetic promise), so a bias or weight gradient reaches this
-# gate already sunk and it changes nothing there; what is left to it is a site the optimizer's
-# narrower allowlist declines -- a data-dependent guard in the nest, or a read of the target at
-# another cell -- while the sink's legality check admits it. Ignored where
+# gate already sunk and it changes nothing there. No site of lowered code is known to be left to
+# it (a nest the optimizer's allowlist declines but the sink would take needs a data-dependent
+# guard, which lowering does not emit), so the key is a candidate for retirement. Ignored where
 # gpu_default_sketch_min_reduction is.
 #gpu_default_seed_narrow_storage=false
 

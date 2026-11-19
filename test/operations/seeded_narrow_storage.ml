@@ -300,8 +300,8 @@ let () =
 (* The seeding's parity, per precision, the gate off (its default): where [accum_prec] widens the
    precision the weight gradient is seeded, and both gradients are bitwise the default pipeline's
    everywhere. Where it widens, the default rounds each weight-gradient cell once (gh-ocannl-2362):
-   within one rounding of the f64 reference, which a per-step narrowing is not (the bf16 host
-   control below), so a seeded schedule narrowing at more points (a storage-width tile) would
+   within one rounding of the f64 reference, which a per-step narrowing is not (the host controls
+   below, per precision), so a seeded schedule narrowing at more points (a storage-width tile) would
    differ. *)
 
 (* Whether this backend's own resolution widens [prec]: then the default narrows once. *)
@@ -361,15 +361,31 @@ let (_ : (Ir.Ops.prec * (layer * (float array * float array) * Autotune.seeded_c
 
 let defaults = parity ~arith:`Reproducible
 
-(* f32 -> bf16, round to nearest even, on an f32 value. *)
-let to_bf16 v =
-  let u = Int32.to_int_trunc (Int32.bits_of_float v) land 0xFFFF_FFFF in
-  let lsb = (u lsr 16) land 1 in
-  Int32.float_of_bits (Int32.of_int_trunc ((u + 0x7FFF + lsb) land 0xFFFF_0000))
+(* Cells narrowed to [prec] after every batch row, as the default did before gh-ocannl-2362: f32
+   additions of [term r cell], each sum rounded through the library's own codec ([at_prec]). *)
+let per_step prec ~cells ~term =
+  let acc = ref (Array.create ~len:cells 0.) in
+  for r = 0 to rows - 1 do
+    acc := at_prec prec (Array.mapi !acc ~f:(fun c a -> f32 (a +. f32 (term r c))))
+  done;
+  !acc
 
-(* A bf16 cell narrowed after every batch row, as the default did before gh-ocannl-2362: f32 sums of
-   f32 products, rounded to bf16 per step. *)
-let per_step_bf16 ~terms = List.fold terms ~init:0. ~f:(fun acc v -> to_bf16 (f32 (acc +. f32 v)))
+(* The power of the within-one-rounding claims, on the host, per precision: narrowed after every
+   row, some weight-gradient cell lands further than one rounding from the reference. *)
+let () =
+  List.iter precs ~f:(fun prec ->
+      let dy = at_prec prec dy_values in
+      let steps =
+        per_step prec ~cells:(no * ni) ~term:(fun r c ->
+            dy.((r * no) + (c / ni)) *. f32 x_values.((r * ni) + (c % ni)))
+      in
+      p_exists
+        (Printf.sprintf
+           "host: narrowed after every row, some %s weight-gradient cell is further than one \
+            rounding from the reference (the claim's power)"
+           (name prec))
+        (List.zip_exn (Array.to_list steps) (Array.to_list (wgrad_at prec)))
+        ~f:(fun (g, r) -> Float.(abs (g -. r) > one_rounding prec r)))
 
 (* The gate, on bf16: the bias gradient arrives sunk, so the gate changes nothing. *)
 let () =
@@ -400,23 +416,8 @@ let () =
    Verdict.gated_all ~when_:(accum_widens bf16) ~on:backend_name label
      [ (b_default, bgrad_ref) ]
      ~f:(fun (got, want) -> Verdict.within label got want ~tol:(one_rounding bf16)));
-  (* The power of the within-one-rounding claims, on the host: narrowed after every row, some cell
-     of each gradient lands further away. *)
-  let dy = at_prec bf16 dy_values in
-  let w_steps =
-    Array.init (no * ni) ~f:(fun c ->
-        let o = c / ni and i = c % ni in
-        per_step_bf16
-          ~terms:(List.init rows ~f:(fun r -> dy.((r * no) + o) *. f32 x_values.((r * ni) + i))))
-  and b_steps =
-    Array.init no ~f:(fun o ->
-        per_step_bf16 ~terms:(List.init rows ~f:(fun r -> f32 dy_values.((r * no) + o))))
-  in
-  p_exists
-    "host: narrowed after every row, some bf16 weight-gradient cell is further than one rounding \
-     from the reference (the claims' power)"
-    (List.zip_exn (Array.to_list w_steps) (Array.to_list (wgrad_at bf16)))
-    ~f:(fun (g, r) -> Float.(abs (g -. r) > one_rounding bf16 r));
+  (* The bias claim's power, on the host. *)
+  let b_steps = per_step bf16 ~cells:no ~term:(fun r o -> dy_values.((r * no) + o)) in
   p_exists
     "host: narrowed after every row, some bf16 bias-gradient cell is further than one rounding \
      from the reference (the claims' power)"

@@ -52,12 +52,14 @@ where accum_prec widens fp8, the seeded routine compiles without falling back: t
 fp8: with the gate off the weight gradient is bitwise the default pipeline's: true
 fp8: with the gate off the bias gradient is bitwise the default pipeline's: true
 where accum_prec widens fp8, every default weight-gradient cell is within one fp8 rounding of the f64 reference (narrowed once): true
+host: narrowed after every row, some bfloat16 weight-gradient cell is further than one rounding from the reference (the claim's power): true
+host: narrowed after every row, some half weight-gradient cell is further than one rounding from the reference (the claim's power): true
+host: narrowed after every row, some fp8 weight-gradient cell is further than one rounding from the reference (the claim's power): true
 where accum_prec widens bf16, the gate changes neither what the seeded default sinks nor what it seeds: true
 where accum_prec widens bf16, the admitted routine compiles without falling back: true
 with the gate on the seeded weight gradient is bitwise the default pipeline's: true
 with the gate on the bias gradient is bitwise the default pipeline's: true
 where accum_prec widens bf16, every default bias-gradient cell is within one bf16 rounding of the reference (narrowed once): true
-host: narrowed after every row, some bf16 weight-gradient cell is further than one rounding from the reference (the claims' power): true
 host: narrowed after every row, some bf16 bias-gradient cell is further than one rounding from the reference (the claims' power): true
 where accum_prec widens bf16, with the key unset the seeded default decides as with the gate off: true
 where accum_prec widens bf16, the key stated true decides what the gate decides: true
