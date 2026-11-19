@@ -2064,18 +2064,18 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
        ([Low_level.validate_loop_binders]); an op repeats one only by copying a loop body -- a
        materializing [Unroll], a [Partition], [Tensorize]'s contraction, [Fuse_epilogue]'s rebuilt
        nests -- or, for a pipelined [Stage], its own fresh load-nest loops, outside every scope. The
-       copies one op makes share the scope placement and each keep their copy of the staged read
+       copies one op makes share the scope placement, and each keeps its copy of the staged read
        until something folds them (the chain's trailing simplify, or [Fuse_epilogue]'s own, which
-       runs mid-chain), so the uncovered binder needs a difference between copies made after the
-       copy -- that fold dropping the read from one copy, a materializing op minting its accumulator
-       scope in one copy and declining in another, or tile loops naming one [Partition] segment's
-       symbol so only that copy's reads are staged. Which is why the argument rests on operation
-       order. Every shipped chain puts its [Stage]s ahead of all the copying ops: the sketch
-       families ([Sketch_families]) emit Swap, Split, Pad, Retype, Expand_zero and Coalesce, then
-       the Stages, then Privatize, Tensorize, the materializing Unrolls of tile loops and the
-       k-block Partition; the CPU channel-vector preset follows the Grid retypes with Swap, Stage,
-       Privatize and a Vectorized retype; autotune builds no [Stage], and appends its moves after a
-       seed's ops (its split-reduce prelude ahead of the seeds is Swap, Coalesce and statement-level
+       runs mid-chain), so the uncovered binder needs a difference the copies acquire later -- that
+       fold dropping the read from one copy, a materializing op minting its accumulator scope in one
+       copy and declining in another, or tile loops naming one [Partition] segment's symbol so only
+       that copy's reads are staged; the argument therefore rests on operation order. Every shipped
+       chain puts its [Stage]s ahead of all the copying ops: the sketch families ([Sketch_families])
+       emit Swap, Split, Pad, Retype, Expand_zero and Coalesce, then the Stages, then Privatize,
+       Tensorize, the materializing Unrolls of tile loops and the k-block Partition; the CPU
+       channel-vector preset follows the Grid retypes with Swap, Stage, Privatize and a Vectorized
+       retype; autotune builds no [Stage], and appends its moves after a seed's ops (its
+       split-reduce prelude ahead of the seeds is Swap, Coalesce and statement-level
        [Split_reduce]). So at a shipped [Stage] the anchor has one binder, the one on the staged
        reads' path, and the gate is a backstop for user-written chains. A selective splice (only the
        binders on staged reads' paths) waits for a chain that needs it. *)
