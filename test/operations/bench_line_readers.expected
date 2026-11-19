@@ -67,6 +67,7 @@ rank-site-field prints the pick's seeded_label, as gh1253_cells.sh asks: true
 an OCaml literal decodes as OCaml writes it: true
 == the seeded-default census (Autotune.seeded_apply; CUDA and HIP only)
 the seeded run states its leg claim: true
+the run printed seeded_default derivations exactly where its leg ran: true
 each plan derivation states its time in seconds: true
 each census line counts no more segments seeded than it has: true
 each census line lists as many seeded segments as it counts: true

@@ -2807,9 +2807,7 @@ files.
   functions (gh-ocannl-1909), while `hip_fast_math=false` drops the umbrella (gh-ocannl-1779). The
   helper is correct under either policy. Pinned by
   `division_special_values`, whose exact HIP f32 claims fail under the old compiler vector.
-  Measured on gfx1102 discrete memory at the default and under `reproducible`, and on Metal (M4
-  Max), where the f32 and half special-operand claims hold and the f64, subnormal and estimate
-  claims skip (gh-ocannl-1910).
+  Measured on gfx1102 discrete memory at the default and under `reproducible` (gh-ocannl-1910).
 - **gfx1102 compiles without `real-true16`, and HIPRTC never gets `-amdgpu-waitcnt-*`**
   (`Compiler_options.hip_target_options`, gh-ocannl-1182/1222). In true16 mode, 16-bit values live
   in VGPR halves, and a pending D16 high-half load raced a low-half update of the same register,
@@ -3094,7 +3092,9 @@ files.
   gfx1151 (unified) and gfx1102 (discrete). A binop computes at its result's precision, so an
   f32-annotated `+` stored to a `bfloat` node is a `bfloat` `+`; f32 compute on bf16 data needs an
   f32 destination. `bf16_subnormal_storage` pins all four tables, each per-backend claim failing
-  if its backend starts or stops flushing a leg.
+  if its backend starts or stops flushing a leg. `division_special_values` skips its
+  subnormal-quotient claims on Metal for this flush; its f32 and half special-operand claims (±0,
+  ±inf, NaN) hold there, measured on M4 Max (gh-ocannl-1910).
 
 - **Metal's `exp`/`log`/`exp2`/`log2` render bare: IEEE on the special values, with two recorded
   departures** (gh-ocannl-1515; same probe, `metal_f32_math_probe.exe exp log exp2 log2`, M4 Max).

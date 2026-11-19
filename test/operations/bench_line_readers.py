@@ -396,6 +396,11 @@ seeded_claims = [
         "no more census lines than plan derivations", len(census) <= len(derived),
         f"{len(census)} census, {len(derived)} derivations")),
 ]
+# The skip is checked, not taken on trust: the run printed derivation lines exactly where its leg
+# ran, so a backend that seeds while its leg claims to skip, or the reverse, fails here.
+claim("the run printed seeded_default derivations exactly where its leg ran",
+      bool(derived) != bool(skip) and (bool(census) <= bool(derived)),
+      f"skip {skip and skip[1]!r}, {len(derived)} derivations, {len(census)} census lines")
 skipped_formats = set()
 if skip:
     for text, _ in seeded_claims:
