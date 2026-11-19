@@ -1210,17 +1210,21 @@ files.
   repeat this: the wide arm with the table boundary takes 7.54 ms, with the scratch boundary 1.31 ms, and the
   `half8x8` accumulator (Metal's `Fp16_auto`) 6.63 ms. n = 1024 agrees (scratch 0.215 of today's tile). The boundary is
   `Metal_backend.mma_d_boundary_lines`' `thread_elements()` element loop through
-  `ocannl_mma_rc8`. Touching the accumulator lanes elementwise, at all, is what costs. Unrolling
-  the loop, by `#pragma unroll` or with literal indices (no runtime index left in the AIR), still
-  takes ~7.9 ms. Staging through `simdgroup_store`/`simdgroup_load` on a scratch touches no lane.
-  The same holds inside the k loop: elementwise adds into the accumulator (`simdgroup_multiply`, then
-  `thread_elements() +=`) run at ~9 ms. Float x float fragments are slow in this skeleton whatever
+  `ocannl_mma_rc8`, and the probe isolates that boundary as a whole. Unrolling its loop, by
+  `#pragma unroll` or with literal indices (no runtime index left in the AIR), still takes
+  ~7.9 ms, which rules out runtime indexing as the sole cause. The scratch staging replaces, at
+  once, the elementwise accumulator access, the coordinate lookup and the strided device
+  addressing, so the probe does not say which of these costs. Elementwise accumulator access is
+  the suspect: elementwise adds inside the k loop (`simdgroup_multiply`, then
+  `thread_elements() +=`) also run at ~9 ms, though they replace the fused update as well. Float x float fragments are slow in this skeleton whatever
   the input type: f32 tile 8.6 ms, bf16 operands converted to float fragments 11.2 ms, bf16 widened
   into float threadgroup tiles 14.6 ms. Half and bfloat fragments into a float accumulator run at
-  ~13 TFLOP/s. Accumulation, checked on exact-premise inputs against host models the probe
-  shows pairwise distinct: every float-accumulator staging is WIDE (exact, or rounded once at
-  a narrow destination). The scratch boundary is bitwise today's kernel on inexact data (4096 of
-  4096). The narrow models are confirmed: bfloat8x8 block-narrow, half8x8 serial-narrow. So the
+  ~13 TFLOP/s. Accumulation was checked on exact-premise inputs, against host models the probe shows
+  pairwise distinct. Every float-accumulator staging is WIDE (exact, or rounded once at a narrow
+  destination) except `hybrid`, which rounds each 8-deep block into a bfloat temporary
+  (block-into-f32). On inexact bf16 data, the scratch boundary's output is bitwise equal to the
+  table kernel's (the probe compares the two directly); for f16, the probe checks only the
+  exact-premise verdict. The narrow models are confirmed: bfloat8x8 block-narrow, half8x8 serial-narrow. So the
   wide arm's tile cost is not inherent: a scratch boundary (per simdgroup) recovers the narrow
   tile's speed at wide values, for bf16 and f16 alike.
 - **The f16 tensor-unit narrowing census is measured per backend and family** (gh-ocannl-2151),

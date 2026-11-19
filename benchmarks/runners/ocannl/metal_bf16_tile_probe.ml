@@ -47,7 +47,10 @@
    256) and counts outputs bitwise equal to a serial f32 FMA chain in k order and to the [wide]
    kernel (both rounded to a narrow destination where the staging has one): a staging equal to
    [wide] there changes no value at all. Exit status 1 means the probe lost its own discriminating
-   power: a [Baseline_narrow] kernel matched [exact], or a [Baseline_wide] one was not WIDE.
+   power: a [Baseline_narrow] kernel did not match its known model (block-narrow for bfloat8x8,
+   serial-narrow for half8x8; the models are distinct, so it then also is not [exact]), or a
+   [Baseline_wide] one was not WIDE. The inexact run also compares every bf16 staging with the
+   [wide-table] kernel, today's tile, directly.
 
    Timings: the command buffer's GPU clock, one dispatch per command buffer, every pipeline warmed
    first. Each round visits every staging in a rotated order and takes the median of [--reps]
@@ -72,7 +75,10 @@ let bytes_of = function Bf16 | F16 -> 2 | F32 -> 4
 (* The significand bits a storage type rounds to, for the host models. *)
 let sig_bits = function Bf16 -> 8 | F16 -> 11 | F32 -> 24
 
-type role = Baseline_wide | Baseline_narrow | Candidate | Reference
+(* [Baseline_narrow m]: a narrow accumulator whose M4 Max model is known (gh-ocannl-2029); it must
+   match [m] exactly, so a kernel that writes garbage or matches no model fails rather than passing
+   as "not wide". *)
+type role = Baseline_wide | Baseline_narrow of string | Candidate | Reference
 
 (* How the codegen's per-lane element loop is spelled: [Loop] as rendered today, [Unroll_pragma] the
    same loop under [#pragma unroll], [Constant_index] the two lanes' statements written out with
@@ -136,14 +142,16 @@ let stagings =
       "multiply into a float temporary, then add";
     s ~mac:(mac_mul_add "bfloat") "hybrid" Bf16 Bf16 Bf16 F32 Reference
       "multiply into a bfloat temporary, then add (rounds)";
-    s "narrow" Bf16 Bf16 Bf16 Bf16 Baseline_narrow "bfloat8x8 accumulator: the speed target";
+    s "narrow" Bf16 Bf16 Bf16 Bf16 (Baseline_narrow "block-narrow")
+      "bfloat8x8 accumulator: the speed target";
     s "f32" F32 F32 F32 F32 Baseline_wide "the f32 tile: the f32 control";
     s ~narrow_elt:F16 "half-wide" F16 F16 F16 F32 Reference "half fragments, float acc";
     s ~narrow_elt:F16 ~boundary:(Table Loop) "half-table" F16 F16 F16 F32 Reference
       "the f16 wide arm as rendered: table boundary";
     s ~narrow_elt:F16 ~boundary:Scratch "half-scratch" F16 F16 F16 F32 Reference
       "the f16 wide arm, scratch boundary";
-    s ~narrow_elt:F16 "half-narrow" F16 F16 F16 F16 Baseline_narrow "half8x8 accumulator";
+    s ~narrow_elt:F16 "half-narrow" F16 F16 F16 F16 (Baseline_narrow "serial-narrow")
+      "half8x8 accumulator";
   ]
 
 let kernel_name st = "k_" ^ String.map (fun c -> if c = '-' then '_' else c) st.name
@@ -608,7 +616,7 @@ let checks device queue =
           let bad =
             match st.role with
             | Baseline_wide -> not exact_ok
-            | Baseline_narrow -> exact_ok
+            | Baseline_narrow expected -> not (List.mem expected matched)
             | Candidate | Reference -> false
           in
           if bad then incr failures;
@@ -618,32 +626,34 @@ let checks device queue =
             (if bad then "  <- contradicts its role" else ""))
         stagings)
     [ (32, false); (256, true) ];
-  (* Inexact data: equality to the serial f32 chain and to today's wide kernel. *)
+  (* Inexact data: equality to the serial f32 chain, to the [wide] kernel, and to the [wide-table]
+     kernel (today's tile) directly. A staging with a narrow destination is compared with the f32
+     references rounded to that destination; the table kernel's output already has one. *)
   let k = 256 in
   let g = make_gemm device ~m ~n ~k in
   let a, b = inexact_operands ~m ~n ~k in
   set_inputs g ~elts:[ Bf16; F32 ] a b;
   let serial = serial_f32 ~m ~n ~k a b in
-  let wide_st = List.find (fun st -> st.name = "wide") stagings in
-  poison g;
-  ignore (dispatch queue g wide_st : float);
-  let wide = read_out g F32 in
+  let run name =
+    let st = List.find (fun st -> st.name = name) stagings in
+    poison g;
+    ignore (dispatch queue g st : float);
+    read_out g st.out
+  in
+  let wide = run "wide" and table = run "wide-table" in
   Printf.printf "  inexact bf16 operands over 8 binades, k = %d: outputs (of %d) bitwise equal to\n"
     k (m * n);
-  Printf.printf "    %-12s %14s %14s\n" "staging" "serial f32" "wide kernel";
+  Printf.printf "    %-12s %14s %14s %14s\n" "staging" "serial f32" "wide kernel" "today (table)";
   List.iter
     (fun st ->
-      if st.input <> F16 then (
-        poison g;
-        ignore (dispatch queue g st : float);
-        let got = read_out g st.out in
-        (* A converted destination is compared with the references rounded to it. *)
-        let narrowed xs =
-          if st.out = st.acc then xs else Array.map (round_sig (sig_bits st.out)) xs
-        in
-        Printf.printf "    %-12s %14d %14d\n" st.name
+      if st.input <> F16 then
+        let got = run st.name in
+        let narrowed xs = if st.out = F32 then xs else Array.map (round_sig (sig_bits st.out)) xs in
+        let table_cmp = if st.out = Bf16 then string_of_int (count_equal got table) else "-" in
+        Printf.printf "    %-12s %14d %14d %14s\n" st.name
           (count_equal got (narrowed serial))
-          (count_equal got (narrowed wide))))
+          (count_equal got (narrowed wide))
+          table_cmp)
     stagings;
   !failures
 
@@ -738,7 +748,10 @@ let () =
               (String.split_on_char ',' v)
       | _, Some v, _, _ -> rounds := pos v
       | _, _, Some v, _ -> reps := pos v
-      | _, _, _, Some v -> print_source := Some (pos v)
+      | _, _, _, Some v ->
+          let v = pos v in
+          if v mod 32 <> 0 then usage ();
+          print_source := Some v
       | None, None, None, None -> if arg = "--check-only" then check_only := true else usage ())
     (List.tl (Array.to_list Sys.argv));
   (match !print_source with
