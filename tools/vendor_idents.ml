@@ -1,7 +1,6 @@
-(* gh-ocannl-1338: harvest, by experiment, the names a GPU toolchain declares at file scope -- the
-   names a routine name cannot take, since [extern "C" __global__ void <name>(] (or Metal's [kernel
-   void <name>(]) after the backend's prelude then fails to compile -- and check the backend's
-   [vendor_routine_idents] table against them.
+(* Harvest the file-scope names a GPU routine must avoid (gh-ocannl-1338). The backend's runtime
+   compiler checks a kernel definition and subsequent unqualified vendor type uses after the
+   prelude. The uses catch C++ struct names a kernel definition can legally hide.
 
    Usage: vendor_idents.exe <cuda|hip|metal|cc> [--include-dir DIR]... [--batch N] [--names A,B,...]
 
@@ -9,15 +8,19 @@
    [--names] measures just the listed names, each alone, and prints the compiler's first error line
    for each that fails: a spot check of one entry, not a harvest.
 
-   The candidates are every identifier token of the headers the backend's kernel prelude reaches
-   (its [#include]s, followed transitively through the toolchain's include tree, plus the headers
-   its runtime compiler includes on its own), less the names another layer already covers: the
-   implementation's reserved namespace ([C_syntax.implementation_reserved], a rule) and the
-   routine-name floor ([routine_floor_idents]: the node-name blacklist and the C library's names).
-   The table's own entries are candidates too, so an entry that no longer collides is noticed. Each
-   candidate is compiled as a kernel name after the prelude, in batches; a failing batch is settled
-   by compiling the names its report blames one at a time, and by bisection where the report blames
-   none, so every name reported as failing failed ALONE.
+   The harvest reads literal, single-line quoted and angled [#include] and [#include_next] lines,
+   starting at the backend's prelude and implicit runtime headers. It resolves those spellings as
+   paths and tokenizes header text without comments and literals. It does not preprocess macro
+   include operands or evaluate conditionals. HIP follows only canonical paths inside the [hip],
+   [hsa] and [rocwmma] subtrees of the include directories, including explicit [--include-dir]
+   roots. The compiler still sees its ordinary headers and options. Candidate names are the tokens
+   and current table entries, less the names another layer covers: the implementation's reserved
+   namespace ([C_syntax.implementation_reserved], a rule) and the routine-name floor
+   ([routine_floor_idents]: the node-name blacklist and the C library's names). The table's own
+   entries are candidates too, so an entry that no longer collides is noticed. Each candidate is
+   compiled as a kernel name after the prelude, in batches; a failing batch is settled by compiling
+   the names its report blames one at a time, and by bisection where the report blames none, so
+   every name reported as failing failed ALONE.
 
    What it prints: the measurement, the names that fail although the backend's [kernel_ident] passes
    them through (missing from the table), the table entries that compile as kernel names
@@ -185,7 +188,7 @@ let includes text =
 let is_file p = Stdlib.Sys.file_exists p && not (Stdlib.Sys.is_directory p)
 
 (* Every header the [entries] reach through [dirs], with the identifier tokens of all of them. *)
-let header_closure ~dirs ~entries =
+let header_closure ~dirs ~entries ~selected_path =
   let seen = Hash_set.create (module String) in
   let unresolved = Hash_set.create (module String) in
   let tokens = Hash_set.create (module String) in
@@ -194,6 +197,7 @@ let header_closure ~dirs ~entries =
       match (kind, from) with `Quoted, Some dir -> [ Stdlib.Filename.concat dir target ] | _ -> []
     in
     List.find (local @ List.map dirs ~f:(fun d -> Stdlib.Filename.concat d target)) ~f:is_file
+    |> Option.bind ~f:selected_path
   in
   let rec visit ~from inc =
     match resolve ~from inc with
@@ -207,6 +211,20 @@ let header_closure ~dirs ~entries =
   in
   List.iter entries ~f:(visit ~from:None);
   (Hash_set.length seen, Hash_set.to_list unresolved, tokens)
+
+let hip_sdk_path dirs =
+  let canonical path = try Some (Unix.realpath path) with Unix.Unix_error _ -> None in
+  let subtrees =
+    List.concat_map dirs ~f:(fun dir ->
+        List.filter_map [ "hip"; "hsa"; "rocwmma" ] ~f:(fun subtree ->
+            let path = Stdlib.Filename.concat dir subtree in
+            if Stdlib.Sys.file_exists path && Stdlib.Sys.is_directory path then canonical path
+            else None))
+  in
+  fun path ->
+    Option.filter (canonical path) ~f:(fun path ->
+        List.exists subtrees ~f:(fun root ->
+            String.is_prefix path ~prefix:(Stdlib.Filename.concat root "")))
 
 (* {2 Measuring} *)
 
@@ -276,7 +294,8 @@ let () =
     List.map (includes probe.prelude) ~f:(fun (_, t) -> (`Angled, t))
     @ List.map vendor.implicit_entries ~f:(fun t -> (`Angled, t))
   in
-  let n_headers, unresolved, tokens = header_closure ~dirs ~entries in
+  let selected_path = if String.equal backend "hip" then hip_sdk_path dirs else Option.some in
+  let n_headers, unresolved, tokens = header_closure ~dirs ~entries ~selected_path in
   Stdio.printf "headers: %d read from [%s]; %d include targets unresolved%s\n" n_headers
     (String.concat ~sep:"; " dirs) (List.length unresolved)
     (match List.take (List.sort unresolved ~compare:String.compare) 8 with
@@ -292,9 +311,17 @@ let () =
   Stdio.printf "candidates: %d (of %d header tokens and %d table entries)\n%!"
     (List.length candidates) (Hash_set.length tokens) (List.length table);
   let first_line = line_count probe.prelude + 1 in
+  (* A kernel can hide a C++ struct name without conflicting with its declaration. Keep the
+     unqualified type uses on the candidate's line so diagnostics still identify that candidate. *)
+  let type_uses =
+    List.mapi Ir.Cuda_like_config.Vendor_vector_types.probe_types ~f:(fun i typ ->
+        Printf.sprintf " using __ocannl_probe_type_%d = %s;" i typ)
+    |> String.concat
+  in
   let source names =
     probe.prelude ^ "\n"
-    ^ String.concat ~sep:"\n" (List.map names ~f:probe.kernel_definition)
+    ^ String.concat ~sep:"\n"
+        (List.map names ~f:(fun name -> probe.kernel_definition name ^ type_uses))
     ^ "\n"
   in
   let compiles = ref 0 in

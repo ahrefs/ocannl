@@ -175,12 +175,13 @@ let metal_exemplars =
     ("metal", "metal__");
   ]
 
-(* The CUDA and HIP tables are measured per toolchain (gh-ocannl-1338, [tools/vendor_idents.exe]),
-   which is why the two lists differ: nvrtc accepts a kernel named [float4] (CUDA's vector types are
-   structs, which a function of the same name hides) and rejects [rsqrtf] (a C-linkage math
-   function), while hiprtc does the opposite. *)
+(* The CUDA and HIP tables are measured per toolchain (gh-ocannl-1338, [tools/vendor_idents.exe]). A
+   CUDA kernel named [float4] compiles on its own and hides the struct type from later uses. The
+   harvest includes such a use after the kernel definition (gh-ocannl-1713). *)
 let cuda_exemplars =
   [
+    ("float4", "float4__");
+    ("uint4", "uint4__");
     ("half2", "half2__");
     ("nv_bfloat16", "nv_bfloat16__");
     ("CUDARTAPI", "CUDARTAPI__");

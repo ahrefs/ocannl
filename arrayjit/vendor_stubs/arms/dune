@@ -170,6 +170,7 @@
  (libraries
   base
   stdio
+  unix
   arrayjit.ir
   cuda_backend_stub_check
   hip_backend_stub_check

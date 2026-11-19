@@ -3122,8 +3122,9 @@ files.
   `exp` by `2 + |x|` ulps and accepts a result at the flushed input or flushed f32 result.
 
 - **CUDA's and HIP's fast-math unary functions, audited** (gh-ocannl-1336; `unary_math_special_values`,
-  measured on RTX 5070 Ti and gfx1102 discrete). **HIP** stays IEEE within the stated ulps,
-  subnormals kept: `-ffast-math` leaves ROCm's library functions precise. The exception was f32
+  measured on RTX 5070 Ti and HIP gfx1102 discrete, with the fixed HIP rendering verified under
+  the default and reproducible profiles on gfx1151 unified). **HIP** stays IEEE within the stated
+  ulps, subnormals kept: `-ffast-math` leaves ROCm's library functions precise. The exception was f32
   `sinf`/`cosf` of ±inf, which returned 0.974869 and 0.222781 instead of NaN, hiding an upstream
   overflow (bf16 widens into them). So f32 and bf16 `sin`/`cos` render through `Builtins_hip`'s
   `ocannl_sinf`/`ocannl_cosf`, which classify the input by its bits and select the NaN bits in an

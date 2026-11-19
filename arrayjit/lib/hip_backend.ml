@@ -205,6 +205,12 @@ let rocwmma_include_dir =
          && Stdlib.Sys.file_exists (p ^ "/rocwmma/internal/types.hpp"))
      |> Option.map ~f:(String.map ~f:(fun c -> if Char.(c = '\\') then '/' else c)))
 
+let rocwmma_include_options () =
+  Option.to_list (Option.map (Lazy.force rocwmma_include_dir) ~f:(fun d -> "-I" ^ d))
+
+let hip_probe_include_options () =
+  List.stable_dedup (hip_include_options () @ rocwmma_include_options ()) ~compare:String.compare
+
 (* The header trees, compiler version and loaded module identity can move independently. All are
    available before backend initialization. *)
 let host_capabilities () =
@@ -406,10 +412,7 @@ end = struct
     let hip_include_opt = hip_include_options () in
     (* rocWMMA include dir, only for tensor-core kernels ([rocwmma_include_dir] finds the dir
        holding [rocwmma/rocwmma.hpp]). *)
-    let rocwmma_include_opt =
-      if not uses_rocwmma then []
-      else match Lazy.force rocwmma_include_dir with Some d -> [ "-I" ^ d ] | None -> []
-    in
+    let rocwmma_include_opt = if uses_rocwmma then rocwmma_include_options () else [] in
     (* gh-ocannl-735: hiprtc otherwise reassociates ordinary scalar bf16/f16 recurrences differently
        across loop, repeated-statement and scope-local spellings. [Compiler_options.hiprtc] keeps
        the narrow override -- and the infinity sentinels the masked-softmax path emits as values --

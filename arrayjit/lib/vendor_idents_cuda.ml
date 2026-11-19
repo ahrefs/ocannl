@@ -973,6 +973,7 @@ let names =
     "fdimf";
     "fdivide";
     "fdividef";
+    "float4";
     "frexpf";
     "half";
     "half2";
@@ -1035,6 +1036,7 @@ let names =
     "sinpi";
     "sinpif";
     "std";
+    "uint4";
     "ullmax";
     "ullmin";
     "umax";

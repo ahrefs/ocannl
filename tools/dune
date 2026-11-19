@@ -98,6 +98,7 @@
  (libraries
   base
   stdio
+  unix
   arrayjit.ir
   (select
    vendor_idents_arm_cuda.ml

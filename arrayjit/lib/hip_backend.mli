@@ -21,6 +21,10 @@ val hip_include_options : unit -> string list
     half of that program learned in review what a divergent guess costs (a soak that probes "ready"
     and then fails to compile wherever the SDK is not where the guess looked). *)
 
+val hip_probe_include_options : unit -> string list
+(** The HIP and rocWMMA include options used for the routine-name probe's full prelude. The harvest
+    uses the same search order to resolve the installed SDK sources. *)
+
 val fp8_guard_source : unit -> string
 (** The device-side source text of the two guarded narrowing helpers HIP emits in place of a bare
     float-to-e5m2 cast (gh-ocannl-647): [ocannl_single_to_fp8_uniform] and
