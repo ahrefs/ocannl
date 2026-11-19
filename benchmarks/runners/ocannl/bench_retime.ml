@@ -152,6 +152,19 @@ let configured_timing () =
     inputs that are not its own outputs, as an exactness oracle must anyway. *)
 let configured_repeats () = Utils.registered_int ~arg_name:"autotune_repeats"
 
+(** [screen_reading result]: what a screen ranks one timing call by: its minimum whenever the clock
+    resolved one, admitted or refused -- see the screen's section below -- and [None] for a
+    non-positive or non-finite minimum. *)
+let screen_reading (result : Autotune.timing_result) =
+  if Float.is_finite result.ms && Float.is_positive result.ms then Some result.ms else None
+
+(** [read_screen ~timing (ctx, routine)]: one screen reading under [timing] and the configured
+    [autotune_repeats]: [(screen_reading, refused)], [refused] when the admission gate refused the
+    window, which the instrument counts. *)
+let read_screen ~timing ((ctx, routine) : Context.t * Context.routine) =
+  let result = Autotune.time_routine ~timing ~repeats:(configured_repeats ()) ctx routine in
+  (screen_reading result, Option.is_none (Autotune.admitted_timing_ms result))
+
 (** [read_once (ctx, routine)]: one reading -- one {!Autotune.time_routine} call under
     {!configured_timing} and the configured [autotune_repeats], admitted through
     {!Autotune.admitted_timing_ms} ([None] when refused). {!retime} is made of these. *)
@@ -186,22 +199,32 @@ let retime ?calls (routines : (Context.t * Context.routine) list) =
     s budget on the screen alone. The first stage reads every kernel once under {!screen_timing},
     [isolated] -- one launch and one host synchronization a sample, no calibration -- and keeps
     those within {!screen_ratio} of the slowest isolated reading, at most {!screen_wide_at_most} of
-    them, plus any refused ({!screen_keep_wide}). The second reads only those, once each, under the
-    configured objective, and keeps the re-timing's candidates from THOSE readings ({!rescreen}). An
-    isolated reading carries a launch-and-sync round trip the queued objective amortizes (~40-90 us
-    on gfx1151, varying by kernel), so it does not order kernels whose times are within that round
-    trip of one another, and on a step whose dominant kernel is a few times the round trip the
-    floor-bound kernels crowd the slowest isolated readings. The wide cap is what absorbs that: a
-    kernel outranks the queued-slowest one in the first stage only by an isolated reading above it,
-    and the final cap of {!screen_at_most} is ranked by queued readings, which the round trip does
-    not inflate.
+    them, plus any with no reading ({!screen_keep_wide}). The second reads only those, once each,
+    under the configured objective, and keeps the re-timing's candidates from THOSE readings
+    ({!rescreen}). An isolated reading carries a launch-and-sync round trip the queued objective
+    amortizes (~40-90 us on gfx1151, varying by kernel), so it does not order kernels whose times
+    are within that round trip of one another, and on a step whose dominant kernel is a few times
+    the round trip the floor-bound kernels crowd the slowest isolated readings. The wide cap is what
+    absorbs that: a kernel outranks the queued-slowest one in the first stage only by an isolated
+    reading above it, and the final cap of {!screen_at_most} is ranked by queued readings, which the
+    round trip does not inflate.
 
     A reading is a minimum over a window, so noise only raises it above the kernel's floor. The
     truly slowest kernel is therefore left out only when some other kernel's single reading came out
-    more than twice the slowest's own -- a window inflated past 2x that the admission gate still
-    passed -- or, in the first stage, when {!screen_wide_at_most} other kernels' isolated readings
-    came out above its own; and then a wrong one can be named. A kernel whose screen reading was
-    refused is not ruled out: it is always kept, outside the cap, since nothing is known of it. *)
+    more than twice the slowest's own -- an inflated window -- or, in the first stage, when
+    {!screen_wide_at_most} other kernels' isolated readings came out above its own; and then a wrong
+    one can be named.
+
+    A screen reading is ranked by its minimum even when {!Autotune.admitted_timing_ms} refuses the
+    window ({!screen_reading}): the screen only decides what is re-measured, and a refused window's
+    minimum can only over-state the kernel -- it is not dropped on a reading noise lowered, it may
+    only crowd the cut as any inflated window does. Before gh-ocannl-1818 a refused reading was kept
+    unconditionally, outside the cap, and on a shared box that made the screen's cost unbounded: a
+    Metal [gpt2_mini_train] step under co-tenant load had 38 of 195 queued screen readings refused,
+    and re-timed all 46 candidates at four calls each, 136 s; isolated, 105 of 195 were refused.
+    Only a kernel with no reading at all -- a clock that resolved nothing -- is still kept outside
+    the cap, since nothing is known of it. The re-timing's readings, which decide the dominant
+    kernel and state its range, go through the admission gate as before. *)
 
 (** The first stage's objective: [isolated], whatever [autotune_timing] says, because it needs no
     calibration. *)
@@ -218,9 +241,9 @@ let screen_ratio = 2.
 let screen_at_most = 8
 
 (** [screen_keep ?ratio ?at_most entries]: [(kept, dropped)], each in [entries]' order, of entries
-    paired with their screen reading ([None]: refused). Kept: every refused entry, and of the others
-    those reading at least [slowest /. ratio] ([ratio] default {!screen_ratio}), at most [at_most]
-    (default {!screen_at_most}) of them, the slowest first, ties to the earlier entry.
+    paired with their screen reading ([None]: no reading). Kept: every entry with none, and of the
+    others those reading at least [slowest /. ratio] ([ratio] default {!screen_ratio}), at most
+    [at_most] (default {!screen_at_most}) of them, the slowest first, ties to the earlier entry.
 
     Applied after each new reading to the entries kept so far, it keeps exactly what it keeps
     applied once to all of them: the slowest reading only grows, so an entry it drops stays below
@@ -245,11 +268,11 @@ let screen_keep ?(ratio = screen_ratio) ?(at_most = screen_at_most) entries =
   let strip = List.map ~f:(fun (_, x, _) -> x) in
   (strip kept, strip dropped)
 
-(** The most kernels the first stage keeps (not counting refused ones), the slowest isolated
-    readings first: three times {!screen_at_most}, so that the queued-slowest kernel stays in while
-    fewer than that many others read above it isolated -- sixteen more than the final cap allows.
-    Each costs one reading under the configured objective in the second stage -- about 1.3 s on HIP,
-    so ~30 s at the cap. *)
+(** The most kernels the first stage keeps (not counting those with no reading), the slowest
+    isolated readings first: three times {!screen_at_most}, so that the queued-slowest kernel stays
+    in while fewer than that many others read above it isolated -- sixteen more than the final cap
+    allows. Each costs one reading under the configured objective in the second stage -- about 1.3 s
+    on HIP, so ~30 s at the cap. *)
 let screen_wide_at_most = 3 * screen_at_most
 
 (** [screen_keep_wide entries]: the first stage's cut, {!screen_keep} at {!screen_ratio} and

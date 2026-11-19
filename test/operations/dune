@@ -2767,7 +2767,14 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules bench_retime_spread)
- (libraries base stdio unix bench_retime test_utils arrayjit.verdict))
+ (libraries
+  base
+  stdio
+  unix
+  bench_retime
+  test_utils
+  arrayjit.autotune
+  arrayjit.verdict))
 
 ; gh-ocannl-1490: bench_conv_diag's census-only and per-seed parity modes, through the library
 ; both call, on a small convnet step fabricated in memory, with the parity mode's negative control

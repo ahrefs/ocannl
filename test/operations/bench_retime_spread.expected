@@ -42,3 +42,7 @@ two-stage screen: the re-timing's candidates are capped by the second-stage read
 two-stage screen: a second-stage reading past 2x of the slowest one is dropped: true
 two-stage screen: what the second stage drops keeps its second-stage reading: true
 two-stage screen: a refused second-stage reading is kept for the re-timing: true
+screen reading: an admitted window reads its minimum: true
+screen reading: a window refused as contended still reads its minimum: true
+screen reading: a window refused as unbatched still reads its minimum: true
+screen reading: a clock that resolved nothing gives no reading: true
