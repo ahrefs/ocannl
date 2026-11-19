@@ -19,7 +19,7 @@
    [Not_dispatched_key "baseline"] (gh-ocannl-543). - Either way the search returns a working
    routine whose winner carries a measurement. - The rule holds on the cache-replay path too: a
    planted entry naming the serial form as the winner is rejected and re-searched on GPU, and
-   honoured on CPU. *)
+   honoured on CPU. The GPU re-search compares its winner with its own untuned default. *)
 
 open Base
 open Ocannl
@@ -170,8 +170,8 @@ let () =
      in which case the seed dedups against the timed serial baseline and inherits its measurement.
      The default seed's own window can be the refused one, which leaves no measurement to be the
      reference -- admitted only against the refusal count. *)
-  p "the untuned default pipeline is measured as the reference, or refused by contention (gh-552)"
-    (match r.Autotune.default_ms with
+  let matches_default (r : Autotune.report) =
+    match r.default_ms with
     (* The crown's search reading is no slower than the default's, unless the beam finals
        (gh-ocannl-1635) crowned it over the default in shared windows. *)
     | Some d ->
@@ -180,7 +180,10 @@ let () =
     (* The default seed's OWN refusal, not the search's refusal count: report-wide, the count cannot
        separate this from the gh-552 regression of never proposing or attributing the seed (Codex P2
        on PR #608). *)
-    | None -> r.Autotune.default_refused);
+    | None -> r.default_refused
+  in
+  p "the untuned default pipeline is measured as the reference, or refused by contention (gh-552)"
+    (matches_default r);
   p_close "tuned routine values correct" got mm_expected ~tol:approx_tol;
 
   (* --- gh-ocannl-1340: the refusals and the dedup are decided before codegen. A link is where a
@@ -297,5 +300,9 @@ let () =
     (if is_gpu || not cache_available then
        Option.is_some r.Autotune.default_ms || r.Autotune.default_refused
      else Option.is_none r.Autotune.default_ms);
+  let replay_gpu = Verdict.leg ~when_:is_gpu ~on:backend () in
+  in_leg ~leg:replay_gpu
+    "the re-search winner matches or beats its untuned default, or the default timing was refused"
+    (fun label -> p label (matches_default r));
   p_close "the routine from the poisoned-cache path computes correct values" got mm_expected
     ~tol:approx_tol

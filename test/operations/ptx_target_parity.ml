@@ -14,10 +14,9 @@
    seed, the pad-masked shared-fragment flavor of #1430 among them, under [tf32_matmuls] (set here,
    so the CUDA run reaches the tf32 tile without a rerun rule). The operands are small integers, so
    every sum is exact in f32 and in tf32: the comparison is bitwise. Each is compiled under
-   [Cuda_mma.with_ptx_target Floor] and [Native] and run once; the arch each compile reached is read
-   from its PTX's own [.target] directive (what [with_ptx_target] returns), never from the options
-   asked for. The claims are gated on a compile having recorded a PTX program, never on a backend
-   name: a backend that compiles no PTX skips them.
+   [Cuda_mma.with_ptx_target Floor] and [Native] with cold kernel caches and run once. The arch each
+   compile reached comes from its PTX's own [.target] directive. The claims run on CUDA where an f32
+   tensor-core tile can seed.
 
    Negative control: with #1430's [C_syntax.lane_restrict] reverted, the pad-masked seed's floor
    compile differs from its native one on rog-nv-linux (sm_120). *)
@@ -101,10 +100,11 @@ let whole_lowering () =
 let run ~target ~name ~transform =
   let y = make_merged name in
   let (ctx, routine), compiles =
-    Mma.with_ptx_target target (fun () ->
-        Context.compile ~lowered_transform:transform (Context.auto ())
-          (named name (Train.forward y))
-          Ir.Indexing.Empty)
+    Ir.Kernel_code_cache.with_cold_caches (fun () ->
+        Mma.with_ptx_target target (fun () ->
+            Context.compile ~lowered_transform:transform (Context.auto ())
+              (named name (Train.forward y))
+              Ir.Indexing.Empty))
   in
   let ctx = Context.run ctx routine in
   (Context.get_values ctx y.Tensor.value, routine.Context.mma, compiles)
@@ -187,26 +187,15 @@ let () =
   in
   in_leg ~leg "every variant's floor and native compiles agree bit for bit" (fun label ->
       p_all label (Lazy.force results) ~f:(fun (_, agree, _, _) -> agree));
-  (* A variant whose floor compiles already targeted the device's arch (an sm_80 device's tf32
-     seeds) has the same option list at both targets, so its native compile may be served by the
-     kernel code cache and record nothing: only the others must compile at native. *)
   let at_native (c : Mma.ptx_compile) =
     Option.equal String.equal c.Mma.target (Some (native_arch c))
   in
-  in_leg ~leg
-    "every variant with floor PTX for another arch compiled native PTX, all for the device's arch"
-    (fun label ->
-      p_all label
-        (List.filter (Lazy.force results) ~f:(fun (_, _, (_, _, fc), _) ->
-             not (List.for_all fc ~f:at_native)))
-        ~f:(fun (_, _, _, (_, _, nc)) ->
-          (not (List.is_empty nc))
-          && List.for_all nc ~f:(fun c ->
-              Option.equal String.equal c.Mma.target (Some (native_arch c)))));
+  in_leg ~leg "every variant compiled native PTX, all for the device's arch" (fun label ->
+      p_all label (Lazy.force results) ~f:(fun (_, _, _, (_, _, nc)) ->
+          (not (List.is_empty nc)) && List.for_all nc ~f:at_native));
   in_leg ~leg "some variant's floor compile compiled PTX for another arch" (fun label ->
       p_exists label (Lazy.force results) ~f:(fun (_, _, (_, _, fc), _) ->
-          List.exists fc ~f:(fun c ->
-              not (Option.equal String.equal c.Mma.target (Some (native_arch c))))));
+          List.exists fc ~f:(fun c -> not (at_native c))));
   in_leg ~leg "every seed's routine is labeled tensorized at both targets" (fun label ->
       p_all label
         (List.filter (Lazy.force results) ~f:(fun (i, _, _, _) -> i > 0))
