@@ -1208,7 +1208,13 @@ files.
   boundary takes 1.27 ms. With the boundary through a 64-float threadgroup scratch, it takes 1.32 ms [0.175
   (0.164-0.183)]. The `bfloat8x8` accumulator takes 1.42 ms, and the f32 tile 8.60 ms. The f16 rows
   repeat this: the wide arm with the table boundary takes 7.54 ms, with the scratch boundary 1.31 ms, and the
-  `half8x8` accumulator (Metal's `Fp16_auto`) 6.63 ms. n = 1024 agrees (scratch 0.215 of today's tile). The boundary is
+  `half8x8` accumulator (Metal's `Fp16_auto`) 6.63 ms. That figure does not depend on the timing
+  data's subnormal half products: with operands whose products are all normal it was 6.61 ms
+  (indicative, non-exclusive run). The probe does not explain it. n = 1024 agrees (scratch 0.215 of today's tile). These are GPU-clock
+  probe figures. Both anchors sit about 1.1-1.5 ms below gh-2150's `schedule_bench` host-clock
+  readings of the generated kernels (wide 7.55 against ~9 ms, narrow 1.42 against ~2.5 ms), so the
+  ratios here are probe-level: today/narrow is 5.3 here against 3.66 there, and scratch/narrow,
+  0.93, is not a codegen-level prediction. The boundary is
   `Metal_backend.mma_d_boundary_lines`' `thread_elements()` element loop through
   `ocannl_mma_rc8`, and the probe isolates that boundary as a whole. Unrolling its loop, by
   `#pragma unroll` or with literal indices (no runtime index left in the AIR), still takes

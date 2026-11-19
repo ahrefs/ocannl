@@ -678,7 +678,10 @@ let timings device queue ~sizes ~rounds ~reps =
       let g = make_gemm device ~m:size ~n:size ~k:size in
       let a, b = inexact_operands ~m:size ~n:size ~k:size in
       set_inputs g ~elts:[ Bf16; F32 ] a b;
-      (* Halved, the same values stay in half's normal range (down to 2^-8), exactly. *)
+      (* Halved, the same values stay exact in half (operands down to 2^-8, normal; their products
+         reach 2^-16, below half's normal range). The half8x8 timing does not depend on this: with
+         unhalved operands, every product normal, it was unchanged (gh-ocannl-2322, 6.61 against
+         6.56 ms at n = 2048, a non-exclusive run). *)
       set_inputs g ~elts:[ F16 ] (Array.map (fun x -> x /. 2.0) a) (Array.map (fun x -> x /. 2.0) b);
       List.iter
         (fun st ->
