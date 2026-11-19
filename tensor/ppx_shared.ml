@@ -1050,13 +1050,10 @@ let add_module_qualifier_to_applied_function ?(module_name = "NTDSL")
             && match txt with Ldot (Ldot (Lident _, "O"), "**.") -> true | _ -> false)
            || (before_translation && Poly.equal txt (Lident "**.")))
            && List.count args ~f:(function Nolabel, _ -> true | _ -> false) = 2 -> (
-        (* A power: translated (gh-ocannl-2274), or the bare infix [**.] an [%extend_dsls] body
-           wrote, which reaches this helper before translation (gh-ocannl-2320). After translation
-           there is no bare one: [translate] makes every [**.] the ghost head, and the [%oc] arm
-           below keeps an escaped one the user's own OCaml. The named [pointpow] takes the exponent
-           first, the opposite of the infix order, and it is the module's own: without gradients in
-           [NTDSL]. As for the operators below, the absent label stays unapplied for [param] to
-           supply. *)
+        (* An initializer reaches this rewrite with a generated ghost head (gh-ocannl-2274).
+           [%extend_dsls] reaches it earlier, with the bare [**.] (gh-ocannl-2320). The named
+           [pointpow] takes the exponent first and uses the target module's gradient policy. Leave
+           the absent label for [param] to supply. *)
         let labelled, operands =
           List.partition_tf args ~f:(function Nolabel, _ -> false | _ -> true)
         in
