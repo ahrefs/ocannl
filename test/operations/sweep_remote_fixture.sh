@@ -694,7 +694,8 @@ for name, target, old, new, oracle in controls:
             shutil.copy2(sweep.parent / resolved, dest / 'tools' / resolved)
     shutil.copy2(sweep.parent.parent / 'benchmarks/fixture_digest.py', dest / 'benchmarks/fixture_digest.py')
     shutil.copy2(harness.parent.parent.parent / 'bin/dune', dest / 'bin/dune')
-    for file in [harness, harness.parent / 'sweep_remote_fixture.sh']:
+    # The live test/operations/dune too: the harness commits it into its fixture (gh-ocannl-1104).
+    for file in [harness, harness.parent / 'sweep_remote_fixture.sh', harness.parent / 'dune']:
         shutil.copy2(file, dest / 'test/operations' / file.name)
     for support in ['harness-support.sh', 'process-group.sh']:
         destination = dest / 'scripts' / support

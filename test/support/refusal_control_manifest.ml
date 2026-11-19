@@ -693,6 +693,18 @@ let raw_entries =
         "[scanner-refusal:ed4970402e1305b0dfaabed50860c3fe] configuration variable the";
         "[scanner-refusal:c5caa846079a8640d0b93242bba8fd1b] tracing dependency without";
         "[scanner-refusal:144d103d186b613dbedbe258066e8ccc] whose read disappears";
+        "[scanner-refusal:04c4a735214f08537c76d2eea48da974] family stanza listing";
+        "[scanner-refusal:f48208137f226b2a88a3b74e26606f32] Ir.Numerics";
+        "[scanner-refusal:d5993b75f466d86b8b85f936920dab21] Test_utils";
+        "[scanner-refusal:07998ddbb5d57aef4a47cef70de23836] numerics policy only";
+        "[scanner-refusal:1079839546092d96868e5a453cccbc0b] opted-out member the";
+        "[scanner-refusal:fb28546c629f972f641023b13bbadcf4] opted-out member the";
+        "[scanner-refusal:88592385a9799d9f98c3be9d93123e2c] member is refused";
+        "[scanner-refusal:59a004df0ff72eab5f2475d0ac0a92a3] opt-out declaring anything";
+        "[scanner-refusal:971bc72210caf9086923f04657b45008] unconditional family stanza";
+        "[scanner-refusal:f153e264ba5496c0a9f14ea067f21c96] conditional member listed";
+        "[scanner-refusal:e73d0c1ae2e2a075dd7e0de834f08ab9] executable naming the";
+        "[scanner-refusal:e9bf35fc126f302b1c2b4eb4e3f8224d] executable listed through";
         "[scanner-refusal:b8514eb10109dce5b36ef105c1bc36a6] module passes unaggregated";
         "[scanner-refusal:9dc8db9d29efd1b85da8aff105b1aae8] tested module with";
         "[scanner-refusal:775f43c0a7dca22c07a091f603457c7a] another is reported";

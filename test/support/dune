@@ -127,6 +127,7 @@
   dune_stanza_scan
   config_dep_resolution
   lifecycle_scan
+  policy_invariance_scan
   slot_kind
   verdict_callee
   verdict_scan

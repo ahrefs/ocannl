@@ -104,6 +104,7 @@ let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
 module Scan = Test_scan.Dune_stanza_scan
 module Lifecycle = Test_scan.Lifecycle_scan
+module Policy = Test_scan.Policy_invariance_scan
 module Sources = Test_scan.Config_key_scan
 module Refusals = Test_scan.Refusal_control_scan
 module Refusal_manifest = Test_scan.Refusal_control_manifest
@@ -579,7 +580,23 @@ let lifecycle_family =
     family_floor = 1;
   }
 
-let families = [ metal_family; lifecycle_family ]
+(* gh-ocannl-1104: the tests the daily sweep's policy units run under every non-default fp16/bf16
+   mode -- derived from what their own modules NAME ([Policy] owns the reading and its boundary),
+   less the members whose stanza opts out with a reason. Unlike the two families above, the alias is
+   held to the derivation in both directions: a listed test that names no policy runs under five
+   modes for nothing and reads as coverage, and an opted-out one the alias still reaches makes its
+   opt-out a lie. *)
+let policy_family =
+  {
+    family_alias = Policy.family_alias;
+    family_is =
+      "names the numerics policy (Ir.Numerics, or a Test_utils value reaching it) in its own \
+       modules, with no opt-out";
+    (* About forty on 2026-11-19, all in test/operations. *)
+    family_floor = 20;
+  }
+
+let families = [ metal_family; lifecycle_family; policy_family ]
 
 (* A family member is not a STANZA but one of the things a stanza builds: `(tests (names a b))` is
    two tests with an alias each, and `(executables (names a b))` two executables with their own
@@ -659,21 +676,22 @@ let executable_identities stanza ~subdir ~name =
    placement the `ocannl_config` dep and the backend marker take. A command this comparison declines
    leaves the unit unaggregated, which is reported: the direction that asks the author to say what
    they meant rather than passing on a coincidence of names. *)
-let runner_aliases file_stanzas ~identities:(file, public) =
+let runs_identity ~identities:(file, public) (runner_subdir, stanza) =
+  List.exists (Scan.executables_run stanza) ~f:(fun (cwd, command) ->
+      match command with
+      | (Scan.Runs _ | Scan.Runs_dependency _) as command ->
+          Option.exists (Scan.command_file_path ~cwd command) ~f:(fun path ->
+              String.equal (normalize_path (Scan.in_subdir runner_subdir path)) file)
+      (* And a public name only where the command RESOLVED one. `(run ./pkg.probe)` and `(run
+         %{bin:pkg.probe})` carry the same string and name different things -- a file here, an
+         installed program -- so reading the first as a public-name runner would credit an unrelated
+         rule with this executable (Codex P2, round 8). *)
+      | Scan.Runs_public name -> List.mem public name ~equal:String.equal
+      | _ -> false)
+
+let runner_aliases file_stanzas ~identities =
   List.concat_map file_stanzas ~f:(fun (runner_subdir, stanza) ->
-      if
-        List.exists (Scan.executables_run stanza) ~f:(fun (cwd, command) ->
-            match command with
-            | (Scan.Runs _ | Scan.Runs_dependency _) as command ->
-                Option.exists (Scan.command_file_path ~cwd command) ~f:(fun path ->
-                    String.equal (normalize_path (Scan.in_subdir runner_subdir path)) file)
-            (* And a public name only where the command RESOLVED one. `(run ./pkg.probe)` and `(run
-               %{bin:pkg.probe})` carry the same string and name different things -- a file here, an
-               installed program -- so reading the first as a public-name runner would credit an
-               unrelated rule with this executable (Codex P2, round 8). *)
-            | Scan.Runs_public name -> List.mem public name ~equal:String.equal
-            | _ -> false)
-      then
+      if runs_identity ~identities (runner_subdir, stanza) then
         (* A `(test)` with a custom action can be the runner, and its focused entry point is the
            `runtest-<name>` dune generates -- `aliases_of` reports the directory-wide `runtest` for
            it, which is filtered out as a suite alias and would leave the executable reachable by
@@ -902,6 +920,30 @@ let is_golden_diff stanza =
       Option.value_map (Scan.field stanza "action") ~default:false ~f:(fun args ->
           List.exists args ~f:is_diff_action)
   | _ -> false
+
+(* gh-ocannl-1104: the aliases of the golden-diff rules that judge what an executable WRITES -- the
+   `(rule (target x.actual) … (run %{dep:x.exe}))` plus `(rule (alias runtest-x) (action (diff
+   x.expected x.actual)))` shape, where the rule running the program has no alias of its own and the
+   one that fails is the diff. Same directory only: a target is named relative to its rule. The
+   policy family credits an executable with these, so a program run as a test that way is a member
+   rather than a program the derivation cannot see. *)
+let diff_judge_aliases file_stanzas ~identities =
+  List.concat_map file_stanzas ~f:(fun (runner_subdir, runner) ->
+      if not (runs_identity ~identities (runner_subdir, runner)) then []
+      else
+        List.concat_map (targets_of runner) ~f:(fun target ->
+            List.concat_map file_stanzas ~f:(fun (subdir, judge) ->
+                if
+                  String.equal subdir runner_subdir && is_golden_diff judge
+                  && Option.value_map (Scan.field judge "action") ~default:false ~f:(fun args ->
+                      List.exists args ~f:(diffs_file ~named:(named_deps judge) target))
+                then
+                  List.filter_map (aliases_of judge) ~f:(fun alias ->
+                      Option.some_if
+                        (not (List.mem suites alias ~equal:String.equal))
+                        (subdir, alias))
+                else [])))
+  |> List.dedup_and_sort ~compare:Poly.compare
 
 (* The names dune generates a `runtest-<name>` alias for by itself (>= 3.20): every `(test)`/
    `(tests)` stanza name, and every inline-test library's name. A hand-written alias must not reuse
@@ -1606,6 +1648,44 @@ let main () =
              the blessed pin helpers (%s) -- bless a new helper in `vector_file_pin_values` once \
              review has seen it pin every key, or restore the statement a blessed one lost"
             (show vector_file_pinners) (show vector_file_blessed)));
+  (* gh-ocannl-1104: the policy wrappers a test may name instead of [Ir.Numerics], derived from the
+     support module that owns them; and, per source, whether it names either. On the repository, and
+     in any tree holding that module, the derivation must find a wrapper: losing it would drop every
+     test reaching the policy only through one out of the family without a word. *)
+  let policy_wrappers =
+    match List.Assoc.find source_files ~equal:String.equal Policy.support_source with
+    | None -> []
+    | Some on_disk -> (
+        match
+          Test_scan.Scan_attempt.run (fun () -> Policy.wrappers (In_channel.read_all on_disk))
+        with
+        | Scanned wrappers -> wrappers
+        | Unparsed where ->
+            fail (Policy.reading_refused ~source:Policy.support_source ~where);
+            []
+        | Raised exn ->
+            fail (Policy.reading_raised ~source:Policy.support_source ~exn);
+            [])
+  in
+  (let found = List.Assoc.mem source_files ~equal:String.equal Policy.support_source in
+   if (repository_census || found) && List.is_empty policy_wrappers then
+     fail (Policy.support_lost ~found));
+  let policy_named_sources = Hashtbl.create (module String) in
+  let names_policy source on_disk =
+    Hashtbl.find_or_add policy_named_sources source ~default:(fun () ->
+        match
+          Test_scan.Scan_attempt.run (fun () ->
+              Policy.policy_references ~wrappers:policy_wrappers (In_channel.read_all on_disk))
+        with
+        | Scanned references -> not (List.is_empty references)
+        | Unparsed where ->
+            fail (Policy.reading_refused ~source ~where);
+            false
+        | Raised exn ->
+            fail (Policy.reading_raised ~source ~exn);
+            false)
+  in
+  let policy_opt_out_table = ref [] in
   let gateless = Map.of_alist_exn (module String) gateless_dirs in
   let gateless_used = ref [] in
   let gated = ref [] in
@@ -2347,6 +2427,77 @@ let main () =
                 String.equal subdir u.unit_subdir && Sexp.equal stanza u.unit_stanza
                 && Option.equal String.equal (Some name) u.unit_name))
       in
+      (* gh-ocannl-1104: the programs whose own modules name the numerics policy, each by its
+         [(subdir …)], stanza and name; the opt-outs the file declares; and what each directory's
+         family stanza lists, for the reverse direction of the check. *)
+      let policy_contract = Policy.opt_out_contract content in
+      List.iter (Policy.issues policy_contract) ~f:(fun why -> fail (dune_file ^ ": " ^ why));
+      let policy_named = ref [] in
+      let policy_listed = ref [] in
+      check_per_directory (fun subdir group ->
+          let here = Scan.in_subdir dir subdir in
+          let directory_modules = Scan.directory_modules ~dir:here (List.map source_files ~f:fst) in
+          (* The ambient gate's own aliases are the one entry no member answers for: every family
+             stanza lists one, so the stanza is rerun when the environment changes. *)
+          let gates =
+            List.concat_map group ~f:(fun stanza ->
+                if is_gate ~subdir ~stanzas:group stanza then aliases_of stanza else [])
+            @ List.map (Set.to_list (gate_generated_names group)) ~f:(fun name -> "runtest-" ^ name)
+          in
+          policy_listed :=
+            ( subdir,
+              List.filter (Policy.listed group) ~f:(fun (_, alias) ->
+                  not (List.mem gates alias ~equal:String.equal)) )
+            :: !policy_listed;
+          List.iter group ~f:(fun stanza ->
+              if Policy.runnable stanza then
+                let programs =
+                  match
+                    Scan.stanza_programs ~subdir ~runner_stanzas:all_group_runners
+                      ~directory_modules group stanza
+                  with
+                  | Some declared ->
+                      List.map declared.Scan.programs ~f:(fun p ->
+                          (p.Scan.program, p.Scan.own_modules))
+                  | None ->
+                      let modules = Scan.modules_of ~directory_modules group stanza in
+                      List.map (Scan.names_of stanza) ~f:(fun name -> (name, modules))
+                in
+                List.iter programs ~f:(fun (name, modules) ->
+                    if
+                      List.exists modules ~f:(fun m ->
+                          List.exists (Policy.module_sources stanza m) ~f:(fun file ->
+                              let source = String.lowercase (Scan.in_subdir here file) in
+                              Option.value_map
+                                (List.Assoc.find sources ~equal:String.equal source)
+                                ~default:false ~f:(names_policy source)))
+                    then policy_named := (subdir, stanza, name) :: !policy_named)));
+      let policy_opt_outs = Policy.opt_outs policy_contract in
+      let opt_out_of u =
+        List.find_map policy_opt_outs ~f:(fun (subdir, stanza, opt_out) ->
+            Option.some_if
+              (String.equal subdir u.unit_subdir && Sexp.equal stanza u.unit_stanza)
+              opt_out)
+      in
+      (* An executable's units also count the golden diffs judging what it writes
+         ([diff_judge_aliases]): for this family that is how such a program is run as a test, and
+         the alias that reaches it. *)
+      let policy_units () =
+        List.map units ~f:(fun u ->
+            match (Scan.head u.unit_stanza, u.unit_name) with
+            | Some ("executable" | "executables"), Some name ->
+                let judges =
+                  diff_judge_aliases file_stanzas
+                    ~identities:(executable_identities u.unit_stanza ~subdir:u.unit_subdir ~name)
+                in
+                { u with unit_aliases = u.unit_aliases @ judges }
+            | _ -> u)
+        |> List.filter ~f:(fun u ->
+            Policy.runs_as_test u.unit_stanza ~aliases:(List.map u.unit_aliases ~f:snd)
+            && List.exists !policy_named ~f:(fun (subdir, stanza, name) ->
+                String.equal subdir u.unit_subdir && Sexp.equal stanza u.unit_stanza
+                && Option.equal String.equal (Some name) u.unit_name))
+      in
       let family_reaches = Hashtbl.create (module String) in
       let family_directory family subdir = family.family_alias ^ "\t" ^ subdir in
       check_per_directory (fun subdir here ->
@@ -2354,8 +2505,14 @@ let main () =
               Hashtbl.set family_reaches ~key:(family_directory family subdir)
                 ~data:(aliases_reached_from here family.family_alias)));
       let check_family_members () =
+        let policy_units = policy_units () in
+        let policy_members = List.filter policy_units ~f:(fun u -> Option.is_none (opt_out_of u)) in
         List.iter
-          [ (metal_family, metal_members); (lifecycle_family, lifecycle_members) ]
+          [
+            (metal_family, metal_members);
+            (lifecycle_family, lifecycle_members);
+            (policy_family, policy_members);
+          ]
           ~f:(fun (family, members) ->
             (* Reachability PER DIRECTORY, from the stanzas dune applies there: a `(subdir child …)`
                group may carry its own `(alias (name <family>) …)`, and the root recursive
@@ -2392,7 +2549,41 @@ let main () =
                              (List.map aliases ~f:(fun (subdir, alias) ->
                                   if String.is_empty subdir then Printf.sprintf "`(alias %s)`" alias
                                   else Printf.sprintf "`(alias %s)` in `(subdir %s …)`" alias subdir)))
-                       family.family_alias)))
+                       family.family_alias)));
+        (* gh-ocannl-1104, the reverse direction, asked of the policy family alone: an opted-out
+           member the alias still reaches, an opt-out on a stanza that is no member, and an entry of
+           a directory's family stanza that names no member. *)
+        let reaches_policy (subdir, alias) =
+          Option.value_map
+            (Hashtbl.find family_reaches (family_directory policy_family subdir))
+            ~default:false
+            ~f:(fun reached -> Set.mem reached alias)
+        in
+        List.iter policy_units ~f:(fun u ->
+            Option.iter (opt_out_of u) ~f:(fun opt_out ->
+                policy_opt_out_table :=
+                  (dune_file, opt_out.Policy.opt_out_line, u.unit_identity, opt_out.opt_out_reason)
+                  :: !policy_opt_out_table;
+                if List.exists u.unit_aliases ~f:reaches_policy then
+                  fail
+                    (Policy.opted_out_listed ~dune_file ~identity:u.unit_identity
+                       ~line:opt_out.opt_out_line)));
+        List.iter policy_opt_outs ~f:(fun (subdir, stanza, opt_out) ->
+            if
+              not
+                (List.exists policy_units ~f:(fun u ->
+                     String.equal subdir u.unit_subdir && Sexp.equal stanza u.unit_stanza))
+            then fail (Policy.opt_out_on_non_member ~dune_file ~line:opt_out.Policy.opt_out_line));
+        List.iter !policy_listed ~f:(fun (subdir, listed) ->
+            List.iter listed ~f:(fun (listing, alias) ->
+                match
+                  List.find policy_members ~f:(fun u ->
+                      List.mem u.unit_aliases (subdir, alias) ~equal:Poly.equal)
+                with
+                | None -> fail (Policy.stale ~dune_file ~alias)
+                | Some u ->
+                    if not (Policy.same_condition ~listing ~member:u.unit_stanza) then
+                      fail (Policy.condition_mismatch ~dune_file ~alias)))
       in
       (* A hand-written per-test alias must not reuse a name dune generates one for: the aliases
          merge, and the targeted run stops being one test (Codex P2, round 5). Asked of every rule
@@ -3414,6 +3605,15 @@ let main () =
       printf "  %s: %s\n"
         (fst (List.hd_exn group))
         (String.concat ~sep:", " (List.map group ~f:snd)));
+  printf
+    "\n\
+     Policy-invariance opt-outs (gh-ocannl-1104): members of @%s whose stanza leaves them out of\n\
+     the numerics-mode matrix, each with its reason.\n"
+    Policy.family_alias;
+  List.iter (List.sort !policy_opt_out_table ~compare:Poly.compare)
+    ~f:(fun (dune_file, _line, identity, reason) ->
+      (* No line: an edit above the stanza would move every entry of the golden. *)
+      printf "  %s, the %s -- %s\n" dune_file identity reason);
   eprintf
     "Focused-aggregate members, and the family alias that reaches each (not diffed -- see \
      gh-ocannl-665):\n\
@@ -5065,6 +5265,174 @@ let family_control () =
          ~substring:"exempted run-time reads no source makes any more");
   try remove_tree root with Unix.Unix_error _ -> ()
 
+(* gh-ocannl-1104's control, a tree of its own: the repository's policy members are all listed, and
+   its one opt-out is honoured, so a control read off it would pass whether the rule decides
+   anything or not. The tree holds a test naming [Ir.Numerics] through a module alias, one reaching
+   it only through a [Test_utils] wrapper (derived from the tree's own
+   [test/support/test_utils.ml]), and one that spells [Ir.Numerics] only in a comment and a string;
+   what varies is what the family stanza lists and where an opt-out sits. *)
+let policy_family_control () =
+  let exe =
+    let name = Stdlib.Sys.executable_name in
+    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
+    else name
+  in
+  let root = Stdlib.Filename.temp_dir "evd_policy" "" in
+  let context = control_context () in
+  let sources =
+    [
+      ("t/gate.ml", "let () = ()\n");
+      ("t/direct.ml", "module N = Ir.Numerics\nlet () = N.set_policy (N.get ())\n");
+      ("t/wrapped.ml", "let () = Test_utils.with_policy Fn.id (fun () -> ())\n");
+      ("t/mention.ml", "(* Ir.Numerics *)\nlet note = \"Ir.Numerics.get\"\nlet () = ignore note\n");
+      ("t/judged.ml", "let () = ignore (Ir.Numerics.get ())\n");
+      ( Policy.support_source,
+        "let with_policy adjust f =\n\
+        \  let saved = Ir.Numerics.get () in\n\
+        \  Ir.Numerics.set_policy (adjust saved);\n\
+        \  Exn.protect ~f ~finally:(fun () -> Ir.Numerics.set_policy saved)\n" );
+    ]
+  in
+  List.iter (context @ sources) ~f:(fun (file, content) ->
+      write_file (Stdlib.Filename.concat root file) content);
+  let paths = "t/dune" :: List.map (sources @ context) ~f:fst in
+  let opt_out =
+    Printf.sprintf " ; %s %s -- its claims follow the default policy\n" Policy.sentinel
+  in
+  let condition = "(enabled_if (= %{system} linux))" in
+  (* [conditional] members carry [condition]; with [~separate], the family lists them in a second
+     stanza behind the same condition rather than in the main one. *)
+  (* [~judged]: the tree also holds an `(executable)` naming the policy whose only run writes a
+     target a golden-diff rule on `runtest-judged` checks -- the shape the derivation has to credit
+     through the diff rather than through an alias of the running rule. *)
+  let judged_stanzas =
+    "\n\
+     (executable\n\
+    \ (name judged)\n\
+    \ (modules judged)\n\
+    \ (libraries base))\n\n\
+     (rule\n\
+    \ ; ocannl-backend: none -- a synthetic control fixture, judged on its sources alone.\n\
+    \ (target judged.actual)\n\
+    \ (deps ocannl_config)\n\
+    \ (action\n\
+    \  (with-stdout-to\n\
+    \   %{target}\n\
+    \   (run %{dep:judged.exe}))))\n\n\
+     (rule\n\
+    \ (alias runtest-judged)\n\
+    \ (deps (alias runtest-gate))\n\
+    \ (action\n\
+    \  (diff judged.expected judged.actual)))\n\n\
+     (alias\n\
+    \ (name runtest)\n\
+    \ (deps (alias runtest-judged)))\n"
+  in
+  let run ?(exempt = []) ?(declaration = Policy.declaration) ?(conditional = []) ?(separate = false)
+      ?(judged = false) listed =
+    let is_conditional name = List.mem conditional name ~equal:String.equal in
+    let member name =
+      Printf.sprintf
+        "(test\n\
+        \ ; ocannl-backend: none -- a synthetic control fixture, judged on its sources alone.\n\
+         %s (name %s)\n\
+         %s (modules %s)\n\
+        \ (deps ocannl_config)\n\
+        \ (libraries base))\n"
+        (if List.mem exempt name ~equal:String.equal then opt_out declaration else "")
+        name
+        (if is_conditional name then " " ^ condition ^ "\n" else "")
+        name
+    in
+    let entries names =
+      String.concat ~sep:"\n" (List.map names ~f:(Printf.sprintf "  (alias runtest-%s)"))
+    in
+    let behind, main = List.partition_tf listed ~f:(fun name -> separate && is_conditional name) in
+    write_file
+      (Stdlib.Filename.concat root "t/dune")
+      (Printf.sprintf "%s\n%s%s\n(alias\n (name %s)\n (deps\n  (alias runtest-gate)\n%s))\n%s"
+         (family_gate ~elsewhere:false)
+         (String.concat ~sep:"\n" (List.map [ "direct"; "wrapped"; "mention" ] ~f:member))
+         (if judged then judged_stanzas else "")
+         Policy.family_alias (entries main)
+         (if List.is_empty behind then ""
+          else
+            Printf.sprintf "\n(alias\n (name %s)\n %s\n (deps\n%s))\n" Policy.family_alias condition
+              (entries behind)));
+    run_checker ~root ~exe ("." :: paths)
+  in
+  let exited n (status, _) = match status with Unix.WEXITED m -> m = n | _ -> false in
+  let says fragment (_, text) = String.is_substring text ~substring:fragment in
+  let unreached = Printf.sprintf "the `%s` alias does not reach it" Policy.family_alias in
+  let complete = run [ "direct"; "wrapped" ] in
+  let direct_omitted = run [ "wrapped" ] in
+  let wrapped_omitted = run [ "direct" ] in
+  let stale = run [ "direct"; "wrapped"; "mention" ] in
+  let opted_out = run ~exempt:[ "direct" ] [ "wrapped" ] in
+  let opted_out_listed = run ~exempt:[ "direct" ] [ "direct"; "wrapped" ] in
+  let opt_out_non_member = run ~exempt:[ "mention" ] [ "direct"; "wrapped" ] in
+  let mislabelled = run ~exempt:[ "direct" ] ~declaration:"every-mode" [ "wrapped" ] in
+  let unconditioned = run ~conditional:[ "direct" ] [ "direct"; "wrapped" ] in
+  let conditioned = run ~conditional:[ "direct" ] ~separate:true [ "direct"; "wrapped" ] in
+  let judged_omitted = run ~judged:true [ "direct"; "wrapped" ] in
+  let judged_listed = run ~judged:true [ "direct"; "wrapped"; "judged" ] in
+  printf
+    "\n\
+     The policy-invariance family (gh-ocannl-1104), put to a tree of three tests -- one naming\n\
+     Ir.Numerics through a module alias, one reaching it through a Test_utils wrapper, one spelling\n\
+     it only in a comment and a string -- under ten listings, opt-outs and conditions -- and to an\n\
+     executable naming it whose only run writes a target a golden diff checks.\n";
+  List.iter
+    [
+      ("complete", complete);
+      ("direct omitted", direct_omitted);
+      ("wrapped omitted", wrapped_omitted);
+      ("stale", stale);
+      ("opted out", opted_out);
+      ("opted out, listed", opted_out_listed);
+      ("opt-out on a non-member", opt_out_non_member);
+      ("mislabelled opt-out", mislabelled);
+      ("conditional member, main stanza", unconditioned);
+      ("conditional member, own stanza", conditioned);
+      ("diff-judged executable omitted", judged_omitted);
+      ("diff-judged executable listed", judged_listed);
+    ]
+    ~f:(fun (label, (status, text)) ->
+      eprintf "the policy control's %s run %s. Its captured output:\n%s\n" label
+        (describe_status status) text);
+  Verdict.p "a family stanza listing every test that names the numerics policy is accepted"
+    (exited 0 complete);
+  Verdict.p
+    "a test naming Ir.Numerics through a module alias that the policy family omits is refused"
+    (exited 1 direct_omitted && says unreached direct_omitted);
+  Verdict.p
+    "a test reaching the policy only through a derived Test_utils wrapper that the family omits is \
+     refused"
+    (exited 1 wrapped_omitted && says unreached wrapped_omitted);
+  Verdict.p "a family entry naming a test that names the numerics policy only in prose is refused"
+    (exited 1 stale && says "no test there names the numerics policy" stale);
+  Verdict.p "an opted-out member the family leaves out is accepted, and its reason is listed"
+    (exited 0 opted_out && says "its claims follow the default policy" opted_out);
+  Verdict.p "an opted-out member the family still lists is refused"
+    (exited 1 opted_out_listed && says "still reaches it" opted_out_listed);
+  Verdict.p "an opt-out on a stanza that is no member is refused"
+    (exited 1 opt_out_non_member && says "is no member to opt out" opt_out_non_member);
+  Verdict.p "an opt-out declaring anything but `exempt` is refused"
+    (exited 1 mislabelled && says "is not `exempt`" mislabelled);
+  Verdict.p "a conditional member listed by an unconditional family stanza is refused"
+    (exited 1 unconditioned && says "is not enabled under the member's own" unconditioned);
+  Verdict.p "a conditional member listed behind its own condition is accepted"
+    (exited 0 conditioned);
+  Verdict.p
+    "an executable naming the policy, run only through a target a golden diff checks, that the \
+     family omits is refused"
+    (exited 1 judged_omitted
+    && says "executable judged" judged_omitted
+    && says unreached judged_omitted);
+  Verdict.p "the same executable listed through its golden diff's alias is accepted"
+    (exited 0 judged_listed);
+  try remove_tree root with Unix.Unix_error _ -> ()
+
 (* gh-ocannl-1037's control, a tree of its own for the reason the others give: the repository's
    inline-test modules all have their aliases, so a control read off it would pass whether the rule
    decides anything or not. Put to a synthetic library of two tested modules and one untested
@@ -6093,6 +6461,7 @@ let () =
       floor_control ();
       lifecycle_contract_control ();
       family_control ();
+      policy_family_control ();
       inline_alias_control ();
       search_control ();
       ambient_gate_control ();

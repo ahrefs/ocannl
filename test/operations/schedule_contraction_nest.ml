@@ -403,34 +403,38 @@ let bf16_leg ~tag ~build =
      synthetic uniform-bf16 8x8x8 tile advertising pipeline depth 2 whatever the host: the depth
      floor, not a missing depth, is what keeps the pipelined twin away -- the f32 site above, at the
      same depths, seeds one. *)
-  (let bf16_limits =
-     {
-       mma_limits with
-       mma =
-         Option.map mma_limits.Ir.Backend_intf.mma ~f:(fun m ->
-             {
-               m with
-               Ir.Backend_intf.mma_format_tiles =
-                 [
-                   ( (Ir.Backend_intf.Mma_bf16, Ir.Backend_intf.Mma_bf16, Ir.Backend_intf.Mma_bf16),
-                     (8, 8, 8) );
-                 ];
-             });
-     }
-   in
-   let opt = capture (named (tag ^ "_bf16_structural") (Train.forward (build ()))) in
-   let seeds =
-     Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits:bf16_limits opt
-     |> List.filter ~f:(fun q -> q.Autotune.sk_mma && not q.Autotune.sk_epilogue)
-   in
-   p_none
-     (tag
-    ^ " bf16 (structural): at a synthetic tile advertising depth 2, no pipelined twin is seeded \
-       below the async arms' 4-byte element floor") seeds ~f:(fun q -> q.Autotune.sk_depth > 1);
-   List.iter shapes ~f:(fun (what, pick) ->
-       p
-         (tag ^ " bf16 (structural): the multi-axis site seeds the " ^ what ^ " shape")
-         (List.exists seeds ~f:pick)));
+  (* Under the default bf16 mode, pinned (gh-ocannl-1104): the synthetic tile is uniform bf16, which
+     an exported [bf16_arithmetic=false] widens away from, leaving the site no tensorized seed to
+     judge. *)
+  ( Test_utils.with_bf16_auto @@ fun () ->
+    let bf16_limits =
+      {
+        mma_limits with
+        mma =
+          Option.map mma_limits.Ir.Backend_intf.mma ~f:(fun m ->
+              {
+                m with
+                Ir.Backend_intf.mma_format_tiles =
+                  [
+                    ( (Ir.Backend_intf.Mma_bf16, Ir.Backend_intf.Mma_bf16, Ir.Backend_intf.Mma_bf16),
+                      (8, 8, 8) );
+                  ];
+              });
+      }
+    in
+    let opt = capture (named (tag ^ "_bf16_structural") (Train.forward (build ()))) in
+    let seeds =
+      Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits:bf16_limits opt
+      |> List.filter ~f:(fun q -> q.Autotune.sk_mma && not q.Autotune.sk_epilogue)
+    in
+    p_none
+      (tag
+     ^ " bf16 (structural): at a synthetic tile advertising depth 2, no pipelined twin is seeded \
+        below the async arms' 4-byte element floor") seeds ~f:(fun q -> q.Autotune.sk_depth > 1);
+    List.iter shapes ~f:(fun (what, pick) ->
+        p
+          (tag ^ " bf16 (structural): the multi-axis site seeds the " ^ what ^ " shape")
+          (List.exists seeds ~f:pick)) );
   let close = Float.equal in
   let routine = tag ^ "_bf16_mma" in
   let setup =
