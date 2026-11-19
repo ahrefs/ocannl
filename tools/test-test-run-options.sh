@@ -112,7 +112,9 @@
 #      its slow- and train- members left off and the slow- ones named; run
 #      options pass through; --start detaches, both wait forms preserve failure
 #      and cap/source match run (including slow and explicit caps); a foreground
-#      mutant loses that oracle. --list prints the list and runs nothing (and exits
+#      mutant loses that oracle. A failing scan from the scans aggregate is
+#      reported while another alias is still running, and the batch stays red.
+#      --list prints the list and runs nothing (and exits
 #      3, still printing, on an incomplete list); usage errors run nothing and
 #      ask no affected; an affected failure, a cross-cutting verdict (either
 #      form), an incomplete one, and a line of no known family run nothing; a
@@ -2876,6 +2878,82 @@ else
   else report 1 "prepush --since OLD..NEW: a mutant asking --since OLD..NEW loses the oracle" "mutant survived"; fi
 fi
 cp "$SRC" "$repeat_root/tools/test-run.sh"
+
+# The scan uses an arbitrary name and a relative dependency from the aggregate.
+# Its sibling in another directory shares the basename and stays pending until
+# it sees the notice. The fake Dune exits red for the benchmark scan alone.
+pp_scan_check() {
+  local tag=$1 rc out err
+  shift
+  if [ "${1:-}" = --start ]; then
+    argv_mode=prepush_scan_red REPEAT_TEST_SCAN_ALERT=$TMP/$tag.wait.err pp_probe "$tag" 0 --since base --start
+    if [ "$argv_rc" != 0 ]; then pp_scan_detail="launch: exit $argv_rc: $argv_err"; return; fi
+    rc=0
+    OCANNL_TOOL_TEST_RUNS="$TMP/argv-runs-$tag" "$repeat_root/tools/test-run.sh" wait --timeout 60 last \
+      >"$TMP/$tag.wait.out" 2>"$TMP/$tag.wait.err" || rc=$?
+    out=$(cat "$TMP/$tag.wait.out") err=$(cat "$TMP/$tag.wait.err")
+  else
+    argv_mode=prepush_scan_red REPEAT_TEST_SCAN_ALERT=$TMP/$tag.err pp_probe "$tag" 0 --since base "$@"
+    rc=$argv_rc out=$argv_out err=$argv_err
+  fi
+  if [ "$rc" != 1 ] || [ "$(cat "$argv_dir/exit" 2>/dev/null)" != 1 ] ||
+     ! grep -qxF 'verdict: FAIL (exit 1)' <<<"$out"; then
+    pp_scan_detail="expected one red batch, got exit $rc: $out $err"
+  elif ! grep -qxF 'slow alias saw the early scan report' "$argv_dir/log"; then
+    pp_scan_detail="slow alias finished before the scan notice: $err"
+  else
+    pp_scan_detail=
+  fi
+}
+pp_scan_operations=$repeat_root/test/operations
+mkdir -p "$pp_scan_operations"
+cat >"$pp_scan_operations/dune" <<'DUNE'
+(alias
+ (name scans)
+ (deps (alias ../../benchmarks/runtest-fixture-scan)))
+DUNE
+pp_scan_probes() {
+  local pp_out=$TMP/pp-scan-targets label
+  printf '%s\n' '@test/operations/runtest-fixture-scan' '@benchmarks/runtest-fixture-scan' >"$pp_out"
+  label='prepush reports the red scan and its log before the slow alias finishes'
+  pp_scan_check pp-scan
+  if [ -z "$pp_scan_detail" ]; then report 0 "$label"; else report 1 "$label" "$pp_scan_detail"; fi
+  label='prepush --start: wait last reports the scan early and returns the batch verdict'
+  pp_scan_check pp-scan-start --start
+  if [ -z "$pp_scan_detail" ]; then report 0 "$label"; else report 1 "$label" "$pp_scan_detail"; fi
+  label='prepush --list preserves the selected scan and non-scan in affected order'
+  pp_probe pp-scan-list 0 --since base --list
+  if [ "$argv_rc" = 0 ] && [ -z "$argv_calls" ] && [ "$argv_out" = "$(cat "$pp_out")" ]; then
+    report 0 "$label"
+  else report 1 "$label" "exit $argv_rc; list: $argv_out; calls: $argv_calls"; fi
+  printf '%s\n' '@test/operations/runtest-fixture-scan' >"$pp_out"
+  label='prepush reports an explicitly added scan with the caller’s abbreviated dependency-path flag'
+  pp_scan_check pp-scan-extra build --debug-dependency-pat @benchmarks/runtest-fixture-scan
+  if [ -z "$pp_scan_detail" ]; then report 0 "$label"; else report 1 "$label" "$pp_scan_detail"; fi
+  printf '%s\n' '@benchmarks/runtest-fixture-scan' >>"$pp_out"
+  # Select the actual filter, while the fake dune and opam stub keep this
+  # probe independent of the installed Windows toolchain.
+  cp "$HERE/dune-quiet.sh" "$repeat_root/tools/"
+  printf ':\n' >"$repeat_root/tools/opam-env.sh"
+  label='prepush reports a scan through the linker-warning filter while Dune is still running'
+  OSTYPE=msys pp_scan_check pp-scan-filter
+  if [ -z "$pp_scan_detail" ] && ! grep -Fq 'Warning: corrupt .drectve' "$argv_dir/log"; then
+    report 0 "$label"
+  else report 1 "$label" "${pp_scan_detail:-the linker warning reached the run log}"; fi
+  label='prepush without the early notice loses the scan timing oracle'
+  sed 's/; prepush_scan_alert "$run_dir"; done/; done/' "$SRC" >"$repeat_root/tools/test-run.sh"
+  if cmp -s "$SRC" "$repeat_root/tools/test-run.sh"; then
+    report 1 "$label" "mutant was not made"
+  else
+    pp_scan_check pp-scan-mutant
+    case $pp_scan_detail in
+      'slow alias finished before the scan notice:'*) report 0 "$label" ;;
+      *) report 1 "$label" "${pp_scan_detail:-mutant survived}" ;;
+    esac
+  fi
+  cp "$SRC" "$repeat_root/tools/test-run.sh"
+}
+pp_scan_probes
 
 # First-tier mode must pass the flag to affected, preserve filtering, and
 # label the result even after the shared launcher's green verdict.

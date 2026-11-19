@@ -4177,7 +4177,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   - The pre-push run is one command (gh-ocannl-1829): `tools/test-run.sh prepush --since BASE
     [--start] [--cap N] [--test-cap N] [--expect-backend B]... [build -j 4]` asks `affected --since BASE`
     for its default list (link-only aliases included), leaves off the `slow-` and `train-` members
-    and runs the rest as `run --targets-file` would: same digest, verdict and exit status.
+    and runs the rest in one Dune build with one digest, verdict and exit status.
+    It derives the selected scans from `test/operations/dune`'s `scans` stanza and enables Dune's
+    dependency paths for those batches (gh-ocannl-2329). The attached run, `wait` and a running
+    `status` name the first selected scan Dune reports as failed and point to the run log.
+    The notice leaves the run's verdict pending until the whole build finishes.
     `--start` uses `start` instead (same cap selection and fleet slot); follow a successful
     launch with `wait last` or `wait DIR`. An empty kept list exits 2: nothing started, so there
     is no run to wait for. It cannot be combined with `--list`. `train-` members run in CI's

@@ -749,6 +749,33 @@ case $REPEAT_TEST_MODE in
   stdout) printf 'stdout %s\n' "$n"; printf 'stable stderr\n' >&2 ;;
   stderr) printf 'stable stdout\n'; printf 'stderr %s\n' "$n" >&2 ;;
   fail) printf 'stable stdout\n'; printf 'stable failure\n' >&2; exit 7 ;;
+  prepush_scan_red)
+    dep_flags=0
+    for arg do
+      [ "$arg" != -- ] || break
+      if [[ $arg == --* && --debug-dependency-path == "$arg"* ]]; then
+        dep_flags=$((dep_flags + 1))
+      fi
+    done
+    [ "$dep_flags" -le 1 ] || { echo 'dune: dependency-path flag repeated' >&2; exit 2; }
+    echo 'Warning: corrupt .drectve at end of def file' >&2
+    printf 'File "fixture-scans.dune", lines 1-3, characters 0-60:\nfixture scan failed\n' >&2
+    if [ "$dep_flags" = 1 ]; then
+      printf '%s\n' '-> required by alias test/operations/runtest-fixture-scan in fixture-decoy.dune:1' >&2
+      printf '%s\n' '-> required by alias benchmarks/runtest-fixture-scan' '   in fixture-scans.dune:1' >&2
+    fi
+    # The other alias stays live until the caller reports the scan or the
+    # fixture deadline expires. Record what it saw before it completed.
+    for ((i=0; i<32; i++)); do
+      if grep -qxF "test-run: prepush: scan failed: @benchmarks/runtest-fixture-scan (log: ${trace_to%/*}/log)" \
+          "$REPEAT_TEST_SCAN_ALERT" 2>/dev/null; then
+        echo 'slow alias saw the early scan report'
+        break
+      fi
+      sleep 0.25
+    done
+    echo 'slow alias finished'
+    exit 1 ;;
   fail_first)
     if [ "$n" = 1 ]; then printf 'first failure\n' >&2; exit 7; fi
     printf 'later stdout\n'; printf 'later stderr\n' >&2
