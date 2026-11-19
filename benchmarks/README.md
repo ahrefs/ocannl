@@ -1259,26 +1259,26 @@ the full output to `logs/<stamp>-<box>-box-check.log`; no unit's row changes, si
 measures.
 
 Per-box state from `check-box.sh` against each box's store (`~/ocannl-staging/benchmarks/fixtures`).
-The October 15 rows come from the `--box-only` audit at 47fb8940 on 2026-10-15. Every box passed
-venv, packages, recorded freeze, device round trip, `Python.h` and toolchain.
+The October 15 rows come from the `--box-only` audit at 47fb8940 on 2026-10-15; a dated row says
+when it was checked since. Every box passed venv, packages, recorded freeze, device round trip,
+`Python.h` and toolchain.
 
 | Box | torch (device) | Toolchain | Fixture gaps (recorded for the box, absent from its store) | Rows the bytes on disk no longer match |
 | --- | --- | --- | --- | --- |
 | m4-max (mac-studio) | 2.13.0 (mps) | macOS SDK (CommandLineTools) | `gpt2_mini_b1`, `gpt2_mini_train_b256` | none |
-| rog-nv | 2.14.0+cu130 (RTX 5070 Ti Laptop) | nvcc 13.4 | `cifar_conv`, `cifar_stride`, `mlp_small`, `mlp_wide` | `gpt2_mini`, `lenet` (m4-max's bytes on disk) |
-| minix | 2.14.1+rocm7.2 (Radeon 8060S, gfx1151) | hipcc (HIP 7.1) | `cifar_conv`, `cifar_stride`, `mlp_small`, `mlp_wide`, `gpt2_mini_train_b256` | `gpt2_mini`, `lenet` (m4-max's bytes on disk) |
+| rog-nv (2026-11-19, ace31a22, READY: 31 items) | 2.14.0+cu130 (RTX 5070 Ti Laptop) | nvcc 13.5 | none | none |
+| minix (2026-11-19, ace31a22, READY: 31 items) | 2.14.1+rocm7.2 (Radeon 8060S, gfx1151) | hipcc (HIP 7.1) | none | none |
 | tuf (2026-11-19) | 2.13.0+rocm7.1 (RX 7700S, gfx1102) | hipcc (HIP 7.1) | none | none |
 
 In the October 15 audit, the anchor's store (m4-max's, which provisioning copies from) lacked
-`gpt2_mini_b1` and `gpt2_mini_train_b256`. Of the audited boxes, only rog held the latter.
-The cifar and mlp fixtures existed only as rog-nv's and minix's `raw-v1` rows.
-minix and tuf compare different torch builds.
+`gpt2_mini_b1` and `gpt2_mini_train_b256`. minix and tuf compare different torch builds.
 
-Since gh-ocannl-1357 (2026-10-30), rog-nv's and minix's `gpt2_mini` and `lenet` rows record the
-bytes on their disks (`content-v1`, the m4-max bytes), so the last column reads none for both
-boxes; reports measured on the replaced `raw-v1` files say so at their top. The same day's audit
-found minix's store holding `gpt2_mini_train_b256` too, and the cifar_conv, cifar_stride and mlp
-fixtures still on neither box.
+On 2026-11-19 rog-nv and minix held every fixture they record, all 22 rows `content-v1`, on
+kernel 7.0.0-43 with its initrd (`default-kernel`). Since gh-ocannl-1357 (2026-10-30) their
+`gpt2_mini` and `lenet` rows record the m4-max bytes on their disks (reports measured on the
+replaced `raw-v1` files say so at their top), and since gh-ocannl-2004 their `cifar_conv`,
+`cifar_stride`, `mlp_small` and `mlp_wide` rows record their own recovered originals, whose
+copies the anchor keeps under `by-origin/` (above).
 
 The November 19 tuf audit found all recorded fixtures present, including `gpt2_mini_b1` and
 `gpt2_mini_train_b256`. Its `lenet` copy matches tuf's recorded digest. The targeted check found
