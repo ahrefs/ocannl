@@ -29,6 +29,10 @@ The text lines (gh-ocannl-1767), each with ONE reader here, listed in `FORMATS`:
   `schedule_log_launches`) -- `schedule_launches`.
 - The seeded-default census the untuned compile logs (`seeded_default: ...`) -- `seeded_default`.
 
+Apart from those formats, `progress_lines` picks a running cell's progress lines out of its stderr by
+their producers' prefixes (`PROGRESS_PREFIXES`, gh-ocannl-2378) for `cells.py progress`, reading no
+field of them.
+
 A shell driver asks the same readers through the command line at the end of this file (`python3
 bench_output.py <command> FILE ...`) rather than grepping a line itself: a pattern of its own is a
 second reader, and a second reader is how gh-ocannl-1668's appended `[grid: ...]` census went unread
@@ -504,6 +508,35 @@ def seeded_default(text):
     """(the plan-derivation times as printed, `<t> s`; the census lines from `seeded_default:` on),
     each in order."""
     return _SEEDED_DERIVED.findall(text), _SEEDED_CENSUS.findall(text)
+
+
+# ---------------------------------------------------------------------------------------------
+# Progress lines (gh-ocannl-2378): what a running cell's stderr says about where it is, for
+# `cells.py progress`. No fields are read: a line is a progress line when it opens with one of the
+# prefixes below, each written by its producer as the work advances. Fail-closed boundary: only
+# these prefixes count. The configuration records every cell prints at start-up (`pins`'
+# `log_config_json`), the welcome banner, a warning, an exception's text or any other runner chatter
+# is never shown as progress. The list is what t2321's cold bf16 searches printed to stderr
+# (gh1051_bf16_ab.sh's `search_<arm>` cells, autotune_log=true, about 6.7k lines each): after the
+# records, `tune_placements:` at each placement arm, `autotune:` per candidate (its compile, timing,
+# calibration and pool census), then `autotune-crown:` and `bench:` at the end. A cell under
+# `autotune_progress=true` adds the `autotune-progress:` lines (README, gh-ocannl-1061), the one
+# stream that numbers its candidates. Each prefix names a producer and a token that producer must
+# still print (test_cells.py's ProgressCommandTest holds them).
+
+PROGRESS_PREFIXES = {
+    "autotune-progress: ": ("arrayjit/lib/autotune.ml", '"autotune-progress: wall_s='),
+    "autotune-crown: ": ("arrayjit/lib/autotune.ml", '"autotune-crown: routine='),
+    "autotune: ": ("arrayjit/lib/autotune.ml", '"autotune: %s'),
+    "tune_placements: ": ("lib/train.ml", '"tune_placements: %s'),
+    "bench: ": ("benchmarks/runners/ocannl/bench_harness.ml", '"bench: '),
+}
+
+
+def progress_lines(text):
+    """The progress lines of a cell's stderr, in order."""
+    prefixes = tuple(PROGRESS_PREFIXES)
+    return [line for line in text.splitlines() if line.startswith(prefixes)]
 
 
 # ---------------------------------------------------------------------------------------------

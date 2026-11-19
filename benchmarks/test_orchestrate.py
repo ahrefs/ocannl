@@ -34,7 +34,8 @@ from test.test_bench_line_scan import BenchLineReaderScanTest  # noqa: F401  (li
 from test.test_modes import ModeReportTest, ModeRuleTest  # noqa: F401  (likewise)
 from test_cells import (  # noqa: F401  (likewise)
     AbDriverTest, CellCommandTest, ConfigRecordsExpectTest, Gh1051AbDriverTest, Gh1180DriverTest,
-    Gh1253FlipDriverTest, Gh1279DriverTest, Gh1557DriverTest, Gh740DriverTest, ProseTraceScanTest)
+    Gh1253FlipDriverTest, Gh1279DriverTest, Gh1557DriverTest, Gh740DriverTest, ProgressCommandTest,
+    ProseTraceScanTest)
 from test.test_cell_group import (
     cap_counted_from, interrupt_once_published, kill_the_group_on_cleanup, publish_pid)
 

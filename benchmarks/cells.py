@@ -44,6 +44,17 @@ interleaved) are its two front ends:
   (a refusal or a cap included: a capped cell is a lower bound only under its treatment); 125 when
   its group was not proven gone (stop: the box is not clean); 2 for a usage error.
 
+Where a run is, read-only (gh-ocannl-2378): `python3 benchmarks/cells.py progress RUN_DIR` finds the
+cell directories at or under RUN_DIR (`cell_dirs`: any directory holding a `stderr`), takes the
+newest unfinished one -- no completion record (`cell_finished`: no `cell.json`, and for a
+`run_cells` run no complete `cells.jsonl` line yet), its stderr written last -- and prints its
+path, its stderr's age and its last progress line (`bench_output.progress_lines`, which names the
+prefixes that count). Exit 0 with an unfinished cell; 1 when every cell has its record (the newest
+is shown instead) or there is no cell; 2 for a usage error. Boundary: unfinished is not proven
+alive -- a cell interrupted or killed with its driver keeps no record either, and the stderr's age
+is what tells the two apart; a cell whose stderr went elsewhere (`cell --stderr F`) is not found;
+the command writes nothing.
+
 Exit statuses a front end shares: 0 when every cell is clean; `REFUSED_EXIT` (3) when the only
 faults are cells that themselves exited `REFUSED_EXIT` -- a bench saying the machine refused its
 measurement (host contention, gh-ocannl-855), a fact about the box rather than a failed run;
@@ -793,9 +804,111 @@ def cell_main(argv):
     return status
 
 
+# ---------------------------------------------------------------------------------------------
+# Where a run is, read-only (gh-ocannl-2378).
+
+PROGRESS_SHOWN_CHARS = 400
+_RUN_CELL_RE = re.compile(r"(\d{3,})-.+")
+
+
+def cell_dirs(run_dir):
+    """Every cell directory at or under `run_dir`: a directory holding a `stderr` file, the stream
+    both layouts keep by default (`run_cells`' `cells/<NNN>-<label>/`, the `cell` command's DIR)."""
+    return sorted(Path(d) for d, _, files in os.walk(run_dir) if "stderr" in files)
+
+
+def cell_finished(cell_dir, jsonl_lines):
+    """Whether a cell has a completion record: the `cell` command wrote its `cell.json`, or the cell
+    is `run_cells`' `cells/<NNN>-<label>/` and its run's `cells.jsonl` holds a complete line for it
+    -- that file gets one line per cell, appended in cell order as each finishes. `jsonl_lines`
+    caches each `cells.jsonl`'s count of complete lines for one probe, so every cell of a run is
+    judged against the same reading of it."""
+    if (cell_dir / "cell.json").is_file():
+        return True
+    m = _RUN_CELL_RE.fullmatch(cell_dir.name)
+    jsonl = cell_dir.parent.parent / "cells.jsonl"
+    if not (m and cell_dir.parent.name == "cells"):
+        return False
+    if jsonl not in jsonl_lines:
+        jsonl_lines[jsonl] = (jsonl.read_text(errors="replace").count("\n") if jsonl.is_file()
+                              else None)
+    return jsonl_lines[jsonl] is not None and jsonl_lines[jsonl] > int(m[1])
+
+
+def progress_report(run_dir, now=None):
+    """(lines, exit status) of the `progress` command: the newest unfinished cell -- no completion
+    record, its stderr written last -- with its stderr's age and its last progress line
+    (`bench_output.progress_lines`); 1 when every cell has its record, naming the newest instead.
+    Unfinished is not proven alive: a cell interrupted or killed with its driver keeps no record
+    either, and only its stderr's age tells it from a live one. `now` (seconds since the epoch)
+    is read after the stderr's mtime unless given."""
+    import bench_output  # here, not at the top: the cell runner itself reads no bench line
+
+    run_dir = Path(run_dir)
+    shown = lambda d: display_value(d.relative_to(run_dir).as_posix())  # noqa: E731
+    cells = [(d, d / "stderr") for d in cell_dirs(run_dir)]
+    if not cells:
+        return [f"cells: no cell directory (one holding a `stderr`) under "
+                f"{display_value(str(run_dir))}"], 1
+    jsonl_lines = {}
+    open_cells = [c for c in cells if not cell_finished(c[0], jsonl_lines)]
+    newest = lambda cs: max(cs, key=lambda c: c[1].stat().st_mtime)  # noqa: E731
+    if open_cells:
+        cell_dir, stderr = newest(open_cells)
+        head = (f"cells: unfinished cell {shown(cell_dir)} (the newest of {len(open_cells)} with "
+                f"no completion record, among {len(cells)} cells under "
+                f"{display_value(str(run_dir))})")
+        status = 0
+    else:
+        cell_dir, stderr = newest(cells)
+        head = (f"cells: no unfinished cell: all {len(cells)} cells under "
+                f"{display_value(str(run_dir))} have a completion record; the newest is "
+                f"{shown(cell_dir)}")
+        status = 1
+    mtime = stderr.stat().st_mtime
+    now = time.time() if now is None else now
+    text = stderr.read_text(errors="replace")
+    lines = [head, f"cells: its stderr holds {len(text.splitlines())} lines, last written "
+                   f"{max(0.0, now - mtime):.0f} s ago"]
+    progress = bench_output.progress_lines(text)
+    if not progress:
+        lines.append("cells: no progress line yet (one opening with "
+                     + ", ".join(p.strip() for p in bench_output.PROGRESS_PREFIXES) + ")")
+    else:
+        last = progress[-1]
+        if len(last) > PROGRESS_SHOWN_CHARS:
+            last = (last[:PROGRESS_SHOWN_CHARS]
+                    + f" ... [{len(last) - PROGRESS_SHOWN_CHARS} more chars]")
+        lines.append(f"cells: progress line {len(progress)}: {last}")
+    return lines, status
+
+
+def progress_main(argv):
+    parser = argparse.ArgumentParser(
+        prog="cells.py progress",
+        description="Show where a cell run is, read-only: the newest unfinished cell under RUN_DIR "
+                    "(no completion record, its stderr written last), its stderr's age, and its "
+                    "last progress line.")
+    parser.add_argument("run_dir", metavar="RUN_DIR", type=Path,
+                        help="a run directory: a driver's $OUT, a bin_cells/ab run, or one cell")
+    args = parser.parse_args(argv)
+    run_dir = args.run_dir.expanduser().resolve()
+    if not run_dir.is_dir():
+        parser.exit(2, f"cells: {display_value(str(run_dir))} is not a directory\n")
+    lines, status = progress_report(run_dir)
+    for line in lines:
+        print(log_line(line), flush=True)
+    return status
+
+
+USAGE = """usage: cells.py cell --backend B --dir DIR ... -- [NAME=VALUE]... EXE [ARGS...]
+       cells.py progress RUN_DIR"""
+
 if __name__ == "__main__":
-    if sys.argv[1:2] != ["cell"]:
-        print("usage: cells.py cell --backend B --dir DIR ... -- [NAME=VALUE]... EXE [ARGS...]",
-              file=sys.stderr)
-        sys.exit(2)
-    sys.exit(cell_main(sys.argv[2:]))
+    command = sys.argv[1:2]
+    if command == ["cell"]:
+        sys.exit(cell_main(sys.argv[2:]))
+    if command == ["progress"]:
+        sys.exit(progress_main(sys.argv[2:]))
+    print(USAGE, file=sys.stderr)
+    sys.exit(2)
