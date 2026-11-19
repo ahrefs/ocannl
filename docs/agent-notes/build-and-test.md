@@ -1161,6 +1161,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   is now the one command for a person: it runs every member, or with `--only` the members
   whose `--list-legs` shows a leg the selector matches, so `--only '^81:'` needs no member's
   name (leg 105 pins it); it takes no slot and is no member of the tier.
+- Leg 99 of `tools/test-test-run-last.sh` keeps the build blocked until its supervisor
+  has died, then kills the build group (gh-ocannl-2303). The reverse order gives the
+  supervisor time to record 137. Queued queries wait for the wrapper's ready marker
+  and each refused prepush drains its guardian before the next query. A new waiter
+  recreates the queued sighting before the fixture releases the launch.
 - Leg 99b of `tools/test-test-run-last.sh` dogfoods the deployed fleet slot
   (gh-ocannl-1926): `fleet_slot_probe` enables it; `none` and CI shell mode
   skip it by name. A nested `execution slot --bg` starts immediately using the
