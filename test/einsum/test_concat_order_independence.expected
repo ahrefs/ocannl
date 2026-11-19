@@ -28,6 +28,12 @@ and so does registering that store in one batch, bcast_if_1: true
 u = 3_bcast_if_1, k = 5_default is accepted when stated up front in every order: true
 a waiting-side k >= 2_default, below the sum's minimum, is refused in every order, bcast_if_1: true
 k >= 3_bcast_if_1 with u >= 2_default settles to u = 1_bcast_if_1, k = 3_bcast_if_1 in every order: true
+k >= 5_default with u >= 3_default gives both plain sizes in every order: true
+k >= 5_default with u >= 3_default gives both plain sizes in one batch: true
+k >= 5_default with u >= 3_default gives both plain sizes when stated up front: true
+k >= 3_default with no u bound gives u = 1_a and k = 3_default in every order: true
+k >= 3_default with no u bound gives u = 1_a and k = 3_default in one batch: true
+k >= 3_default with no u bound gives u = 1_a and k = 3_default when stated up front: true
 bounded stores whose verdict or solution depends on the order: true
 bounded accepted runs that size a component to 0: true
 bounded accepted answers refused when stated up front: true

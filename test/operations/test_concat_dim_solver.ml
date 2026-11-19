@@ -502,6 +502,102 @@ let test_zero_component () =
       [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2); eq (Row.Var u) (dim 0) ])
     ~want:"u = 0 of default, k = 2 of default"
 
+(* With a claim already on each prefix, the ordinary ground equation accepts the free components
+   under their own bounds. Exercise the closing prepass without the window that sizes the prefix in
+   [test_concat_order_independence]. *)
+let test_plain_concat_bounds () =
+  let no_extra _ _ = [] in
+  let fixed_min v d : Row.constraint_ =
+    Row.Dim_constr
+      { d = Row.Var v; constr = At_least_dim { d_min = d; sites = [] }; origin = dummy_origin }
+  in
+  let stride2 v = Row.Affine { stride = 2; over = Row.Var v; conv = None; stride_offset = 0 } in
+  let closed dims : Row.t =
+    { beg_dims = []; dims; bcast = Broadcastable; prov = Row.provenance ~sh_id:2317 ~kind:`Output }
+  in
+  let settles ~reverse ~k_size ~u_expected ?bound_u ?(before = no_extra) ?(after = no_extra) () =
+    let u = Row.get_var () and k = Row.get_var () in
+    let larger = Row.Concat [ Row.Var u; dim ~basis:"a" 4 ]
+    and smaller = Row.Concat [ Row.Var k; dim ~basis:"a" 2 ] in
+    let equality = if reverse then eq smaller larger else eq larger smaller in
+    let constraints =
+      before u k
+      @ [ equality; ineq (dim k_size) k ]
+      @ Option.to_list (Option.map bound_u ~f:(fun d -> ineq (dim d) u))
+      @ after u k
+    in
+    let close = Row.Shape_row (closed [ Row.Var u; Row.Var k ], dummy_origin) in
+    let stages =
+      [ (Row.Stage1, constraints); (Stage4, [ close ]); (Stage6a, []); (Stage6b, []); (Stage7, []) ]
+    in
+    let result =
+      List.fold stages
+        ~init:(`Ok ([], Row.empty_env))
+        ~f:(fun acc (stage, cs) ->
+          match acc with
+          | `Ok (deferred, env) -> run_solve_env ~stage (deferred @ cs) env
+          | (`Shape _ | `Other _) as error -> error)
+    in
+    match result with
+    | `Ok (_, env) ->
+        let has v (size, tag) =
+          match Row.get_dim_from_env env v with
+          | Some (Row.Dim { d; basis; _ }) -> d = size && String.equal basis tag
+          | _ -> false
+        in
+        has u u_expected && has k (k_size, Row.default_basis)
+    | `Shape m | `Other m ->
+        Stdio.eprintf "plain concat bounds: %s\n" m;
+        false
+  in
+  Verdict.Claims.p_all ~min:2
+    "  matching plain concat bounds settle to both GLBs in either orientation" [ false; true ]
+    ~f:(fun reverse -> settles ~reverse ~k_size:5 ~u_expected:(3, Row.default_basis) ~bound_u:3 ());
+  Verdict.Claims.p_all ~min:2
+    "  a plain concat bound at the minimum leaves a positive residual in either orientation"
+    [ false; true ] ~f:(fun reverse -> settles ~reverse ~k_size:3 ~u_expected:(1, "a") ());
+  (* The fixed index sizes the shared stride at stage 7. Its held equations give both free
+     components their plain tags before the concatenation chooses a residual's tag. *)
+  Verdict.Claims.p_all ~min:2 "  held size equations still supply the components at the minimum"
+    [ false; true ] ~f:(fun reverse ->
+      let after u k =
+        let w = Row.get_var () in
+        [ eq (bound u [ 3 ]) (stride2 w); eq (bound k [ 1 ]) (stride2 w); fixed_min w 2 ]
+      in
+      settles ~reverse ~k_size:3 ~u_expected:(1, Row.default_basis) ~after ());
+  (* The deferred same-sum equation must see both plain stride-derived tags. With u bound early, it
+     gives x the prefix claim before the stride can size x. *)
+  Verdict.Claims.p_all ~min:2 "  matching plain bounds let competing held equations supply tags"
+    [ false; true ] ~f:(fun reverse ->
+      let before u _ =
+        let w = Row.get_var () and x = Row.get_var () in
+        let with_claim v = Row.Concat [ Row.Var v; dim ~basis:"a" 4 ] in
+        [
+          eq (with_claim u) (with_claim x);
+          eq (bound u [ 3 ]) (stride2 w);
+          eq (bound x [ 3 ]) (stride2 w);
+          fixed_min w 3;
+        ]
+      in
+      settles ~reverse ~k_size:5 ~u_expected:(3, Row.default_basis) ~bound_u:3 ~before ());
+  (* A held row total can also supply the tag, when the fixed minimum gives its other axis a
+     size. *)
+  Verdict.Claims.p_all ~min:2 "  held row totals supply the components at the minimum"
+    [ false; true ] ~f:(fun reverse ->
+      let before u k =
+        let w = Row.get_var () in
+        let total v n : Row.constraint_ =
+          Row.Rows_constr
+            {
+              r = [ closed [ Row.Var v; Row.Var w ] ];
+              constr = Total_elems { numerator = Num_elems n; divided_by = []; keep_axis = false };
+              origin = dummy_origin;
+            }
+        in
+        [ total u 2; total k 6; fixed_min w 2 ]
+      in
+      settles ~reverse ~k_size:3 ~u_expected:(1, Row.default_basis) ~before ())
+
 let () =
   Stdio.printf "=== Concat dim-solver hardening (solver-level) ===\n";
   Tensor.unsafe_reinitialize ();
@@ -515,4 +611,5 @@ let () =
   test_concrete_concat ();
   test_tagged_components_any_order ();
   test_zero_component ();
+  Verdict.case "plain concatenation bounds" test_plain_concat_bounds;
   Stdio.printf "=== Done ===\n"

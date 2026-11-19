@@ -220,6 +220,8 @@ let outcomes items = List.map (orders items) ~f:(solve items)
 
 type store = { items : item list; outs : outcome list }
 
+let batch items = solve ~batched:true items (List.init (List.length items) ~f:Fn.id)
+
 let order_dependent { items; outs } =
   let dependent = not (List.for_all outs ~f:(equal_outcome (List.hd_exn outs))) in
   if dependent then
@@ -237,7 +239,7 @@ let refuses_own_answer (items, order, sol) =
       true
 
 let batch_differs { items; outs } =
-  let batched = solve ~batched:true items (List.init (List.length items) ~f:Fn.id) in
+  let batched = batch items in
   let differs = not (equal_outcome batched (List.hd_exn outs)) in
   if differs then
     Stdio.eprintf "batched differs: %s => %s against %s (not part of the golden)\n"
@@ -553,6 +555,36 @@ let () =
               | Accepted sol ->
                   has sol "v" 2 tag && has sol "u" 1 Row.bcast_if_1 && has sol "k" 3 tag
               | Refused -> false));
+      (* gh-ocannl-2317: both sums already carry the shared claim, so the free components can retain
+         their own plain bounds. At the sum's minimum the unbounded component takes the claim from
+         the positive residual instead. *)
+      let shared = List.map [ "w(s2,k3 default)(v)=5 a"; "[u; 2v]=[k; 2 a]" ] ~f:item in
+      let plain_bound label pick d =
+        {
+          name = Printf.sprintf "%s >= %d default" label d;
+          mk = (fun _ u k -> ineq (tagged d Row.default_basis) (Var (pick u k)));
+        }
+      in
+      let check_plain_bounds label ~n ~k ~u ~u_basis additional =
+        let items = shared @ (plain_bound "k" (fun _ k -> k) k :: additional) in
+        let ground = function
+          | Accepted sol ->
+              has sol "v" 2 "a" && has sol "u" u u_basis && has sol "k" k Row.default_basis
+          | Refused -> false
+        in
+        p_all ~min:n (label ^ " in every order") (outcomes items) ~f:ground;
+        p (label ^ " in one batch") (ground (batch items));
+        let pins =
+          [ ("v", Some (2, "a")); ("u", Some (u, u_basis)); ("k", Some (k, Row.default_basis)) ]
+        in
+        p_all ~min:n (label ^ " when stated up front") (orders items) ~f:(fun order ->
+            ground (solve ~pins items order))
+      in
+      check_plain_bounds "k >= 5_default with u >= 3_default gives both plain sizes" ~n:24 ~k:5 ~u:3
+        ~u_basis:Row.default_basis
+        [ plain_bound "u" (fun u _ -> u) 3 ];
+      check_plain_bounds "k >= 3_default with no u bound gives u = 1_a and k = 3_default" ~n:6 ~k:3
+        ~u:1 ~u_basis:"a" [];
       let bounded = List.map bounded_stores ~f:fst in
       p_none ~min:1700 "bounded stores whose verdict or solution depends on the order" bounded
         ~f:order_dependent;

@@ -119,11 +119,20 @@ files.
   The test's bounded sub-search (gh-ocannl-2223's store with at most one bound on `k` and one on
   `u`, sizes 2-6, every tag: 1,764 stores) measures the reach: 177 accepted on the base, 213
   after, the 36 new all refused before, no accepted store changed (210 since gh-ocannl-2316
-  refuses the three that sized `u` to 0). A bound on the closing side
-  stays refused unless it carries the shared claim: the equation sizes `u` with the claim, so
-  `k >= 5_default ; u >= 3_default` meets `u = 3_a` against `3_default` and is refused, as on
-  the base, though `u = 3_default, k = 5_default` is a ground answer. Several free components and
-  equal sums still wait without bounds.
+  refuses the three that sized `u` to 0). Two plain GLBs with the positive residual size above
+  1 now close together (gh-ocannl-2317): `k >= 5_default ; u >= 3_default` gives both plain
+  dimensions because neither can broadcast and both sums already carry the shared claim. Closing
+  `k` alone gave `u` the shared tag, which its own bound rejects. A plain bound at the minimum
+  with an unbounded closing component also goes first: `k >= 3_default` gives `u = 1_a`, the
+  existing positive residual. A competing held dimension or row relation on either component
+  can supply its tag during closure, so the new choices require an independent pair. Both answers
+  are accepted when stated first. The bounded sweep adds 12 stores (222 accepted), nine matching
+  plain pairs and three plain bounds at the minimum. All 210 previously accepted stores retain
+  their exact answers. For that shared `a` store, `k >= 5_default ; u >= 3_h` forces a
+  conflicting `h` claim. Two refused shapes with ground answers are deferred: `k >= 5_a ;
+  u >= 3_default` admits `k = 5_a, u = 3_default`, and `k >= 3_default ; u >= 2_default`
+  admits `k = 3_default, u = 1_(bcast_if_1)`. Several free components and equal sums still
+  wait without bounds.
 - Concatenation arithmetic never sizes a non-discardable component to 0, the size only a block
   spec's discardable component may take (gh-ocannl-2316). In `unify_dim`'s `Concat`/`Dim` arm a
   zero residual on a single non-discardable `Var` waits once its basis is decided (a conflict

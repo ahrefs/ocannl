@@ -6498,9 +6498,8 @@ let draw_counter_leaves ineqs env =
    equation. The side with the smaller solved sum waits while the other free component closes; the
    equation then determines its size and basis. Returns the waiting variable, the closing one and
    the solved-sum difference. Boundary: exactly one plain variable per side, equal non-default
-   solved claims, unequal solved sums. A waiting-side use-site bound is the one bound carried across
-   the sum: see [concat_bounded_waiting]. The driver's final-fixpoint cycle breaker remains
-   available. *)
+   solved claims, unequal solved sums. Bounds can change which side closes first at stage 7: see
+   [concat_bounded_waiting]. The driver's final-fixpoint cycle breaker remains available. *)
 let concat_closing_dependent d1 d2 =
   match (d1, d2) with
   | Concat xs, Concat ys -> (
@@ -6545,31 +6544,122 @@ let closing_dim_dependencies ineqs env =
    closes to that GLB at the final stage, before the closing side guesses. The sum forces it: the
    waiting variable is the closing one plus the solved-sum difference, the closing one is at least
    1, so the waiting one exceeds 1 and cannot be the broadcast top its bound otherwise admits. Its
-   GLB is then its only value, which is the answer the fully solved check accepts: stated up front,
-   it is accepted with the closing side taking the shared claim, as the equation then sizes it.
-   Closing the other side first, at the bound shifted by the difference, would size the waiting
-   variable through the equation, where it takes the shared claim and meets its own GLB's tag.
+   GLB is then its only value. With a single bound the equation sizes the closing component under
+   the shared claim, which is also accepted when stated up front. Closing the other side first, at
+   the bound shifted by the difference, would size the waiting variable through the equation, where
+   it takes the shared claim and meets its own GLB's tag.
 
-   It fires only where the existing order must fail on size: a GLB above the difference plus 1,
-   which the closing side's minimal guess cannot reach. At exactly the difference plus 1 that guess
-   already reaches the GLB's size and keeps the closing side claim-free ([1_(bcast_if_1)]), which a
-   bound of its own may need; below it the closing side would go under 1 and the store stays refused
-   as before. Boundary: only [concat_closing_dependent]'s shape (one free variable per side, equal
-   non-default claims, unequal sums), only a GLB that is a solved size, and only a non-discardable
-   closing variable (one that may close to 0 does not force the other above 1). This is no general
-   propagation of bounds through sums: several free components, or equal sums, still wait without
-   one. *)
-let concat_bounded_waiting ineqs env =
-  List.filter_map ineqs ~f:(function
+   Above the minimum, matching [default] GLBs on both components must be installed together
+   (gh-ocannl-2317). Neither component can broadcast at that residual size and the solved components
+   already carry the claim. Closing just the waiting component would let the residual equation give
+   the other component a tag its bound refuses.
+
+   At the minimum, a [default] waiting bound also closes first when the closing component has no
+   bound of its own. The positive residual takes the shared claim. A guess on the closing side would
+   preserve [1_(bcast_if_1)], which its own bound may need when the waiting GLB already carries the
+   claim. Below the minimum the residual would go under 1.
+
+   Both new choices require independent dimension entries and a closing component that cannot be
+   discarded, including through an alias. A competing held relation can supply a component's tag
+   after a fixed-index minimum closes. The existing closing pass handles those components. *)
+let concat_bounded_waiting ~parameter_axes ineqs env =
+  let ordinary_glb v =
+    if Set.mem parameter_axes v then None
+    else
+      match find_dim env.dim_env v with
+      | None -> Some None
+      | Some
+          (Bounds_dim
+             {
+               is_in_param = false;
+               has_uniq_constr_unless = None;
+               res = [];
+               opnd = [];
+               constr = Unconstrained_dim;
+               glb;
+               _;
+             }) ->
+          Some glb
+      | _ -> None
+  in
+  let held_by_dim =
+    lazy
+      (let subst_vars vars = vars_of_dims (List.map vars ~f:(fun v -> subst_dim env (Var v))) in
+       let row_bounds r =
+         match r.bcast with Broadcastable -> None | Row_var v -> find_row env.row_env v
+       in
+       let row_dims v =
+         let r = subst_row env (row_of_var v empty_provenance) in
+         let bound_vars =
+           Option.value_map (row_bounds r) ~default:dim_var_set_empty ~f:(fun entry ->
+               subst_vars (Set.to_list (row_entry_dim_mentions entry)))
+         in
+         Set.union (dim_vars_of_row r) bound_vars
+       in
+       let shape_only = function
+         | Shape_row (r, _) -> (
+             (* A shape-only row asks for ordinary closure. Its banked bounds or product can supply
+                dimensions independently, just as an explicit row constraint can. *)
+             match row_bounds (subst_row env r) with
+             | None
+             | Some (Bounds_row { glb = None; constr = Unconstrained; res = []; opnd = []; _ }) ->
+                 true
+             | Some _ -> false)
+         | _ -> false
+       in
+       List.fold ineqs
+         ~init:(Map.empty (module Dim_var))
+         ~f:(fun held c ->
+           if shape_only c then held
+           else
+             let dims, rows = constraint_vars c in
+             let vars =
+               Set.union_list (module Dim_var) (subst_vars dims :: List.map rows ~f:row_dims)
+             in
+             let equation =
+               match c with
+               | Dim_eq { d1; d2; _ } -> Some (subst_dim env d1, subst_dim env d2)
+               | _ -> None
+             in
+             Set.fold vars ~init:held ~f:(fun held v -> Map.add_multi held ~key:v ~data:equation)))
+  in
+  let competing_equation lhs rhs v =
+    List.exists
+      (Map.find_multi (Lazy.force held_by_dim) v)
+      ~f:(function
+        | None -> true
+        | Some (d1, d2) ->
+            not ((equal_dim d1 lhs && equal_dim d2 rhs) || (equal_dim d1 rhs && equal_dim d2 lhs)))
+  in
+  List.concat_map ineqs ~f:(function
     | Dim_eq { d1; d2; origin } -> (
-        match concat_closing_dependent (subst_dim env d1) (subst_dim env d2) with
+        let d1 = subst_dim env d1 and d2 = subst_dim env d2 in
+        match concat_closing_dependent d1 d2 with
         | Some (waiting, closing, diff) when not (Set.mem env.discardable_vars closing) -> (
             match find_dim env.dim_env waiting with
-            | Some (Bounds_dim { glb = Some (Dim { d; _ } as glb); _ }) when d > diff + 1 ->
-                Some (Dim_eq { d1 = Var waiting; d2 = glb; origin })
-            | _ -> None)
-        | _ -> None)
-    | _ -> None)
+            | Some (Bounds_dim { glb = Some (Dim { d; basis; _ } as glb); _ }) when d > diff ->
+                let residual = d - diff in
+                let wait_eq = Dim_eq { d1 = Var waiting; d2 = glb; origin } in
+                let usual = if residual > 1 then [ wait_eq ] else [] in
+                if
+                  String.equal basis default_basis
+                  && Option.is_some (ordinary_glb waiting)
+                  && not (may_be_empty env closing)
+                then
+                  let independent () =
+                    not (competing_equation d1 d2 closing || competing_equation d1 d2 waiting)
+                  in
+                  match ordinary_glb closing with
+                  | Some None when residual = 1 && independent () -> [ wait_eq ]
+                  | Some (Some (Dim { d; basis; _ } as close_glb))
+                    when residual > 1 && d = residual && String.equal basis default_basis
+                         && independent () ->
+                      [ wait_eq; Dim_eq { d1 = Var closing; d2 = close_glb; origin } ]
+                  | _ -> usual
+                else usual
+            | _ -> [])
+        | _ -> [])
+    | _ -> [])
 
 let%debug4_sexp rec solve_inequalities ~(stage : stage)
     ?(discardable_vars : dim_var_set = dim_var_set_empty) (ineqs : constraint_ list) env :
@@ -6629,7 +6719,7 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
             | _ -> None)
       in
       (* gh-ocannl-2268: in the same pass, a bounded waiting concatenation side takes its GLB. *)
-      let fixed = concat_bounded_waiting ineqs env @ fixed in
+      let fixed = concat_bounded_waiting ~parameter_axes ineqs env @ fixed in
       if List.is_empty fixed then (ineqs, env)
       else
         (* gh-ocannl-2318: the closings propagate before the rest of the pass reads the environment:
