@@ -55,7 +55,8 @@ let string s =
 
     [state] names what the arm did about searching — the {!Autotune.outcome_name} of its outcome
     (gh-ocannl-677), one of ["searched"], ["searched-untimed"] (a search that timed nothing and
-    shipped the untuned default, gh-ocannl-2310), ["search-died"], ["cache-replay"],
+    shipped the untuned default, gh-ocannl-2310), ["searched-budget-fallback"] (a cut search
+    returned the unmeasured untuned default, gh-ocannl-2365), ["search-died"], ["cache-replay"],
     ["search-disabled"], ["pre-search-failure"], ["abandoned"], ["abandonment-replay"],
     ["lineage-refused"]. [searched] and [cache_hit] are that same fact projected onto the two
     booleans the wire format carried before, kept for readers that predate the field; they are NOT
@@ -64,15 +65,14 @@ let string s =
     [rounds_run] and [beam_width] are the search's own record of how far it went (gh-ocannl-1137):
     the result line's [regime_knobs] carries what the configuration ASKED for, and a runner passing
     [~rounds:0] — every OCANNL benchmark runner does — runs no beam round whatever [autotune_rounds]
-    says. A replayed or disabled arm ran none either way. [budget_cut] says the arm's crown comes
-    from a search its wall-clock budget cut ([autotune_budget_seconds], gh-ocannl-1409): this arm's
-    own search, or for a replay the search that stored the entry ({!Autotune.report}'s
-    [budget_cut]). [budget_s] is the budget the arm's call resolved, [null] for none
-    ({!Autotune.report}'s [budget_s], gh-ocannl-1438): a fact about the call, not the crown, so a
-    replay that a budget admitted says so. [call_budget_s] and [call_share_s] are its siblings one
-    level up (gh-ocannl-1440): the [Train.tune_placements] call's budget
-    ([tune_call_budget_seconds]) and this arm's share of it, [null] without one; the arm's search is
-    cut at the tighter of [budget_s] and [call_share_s].
+    says. A replayed or disabled arm ran none either way. [budget_cut] says the wall-clock budget
+    cut a search ([autotune_budget_seconds], gh-ocannl-1409): this arm's own search, or for a replay
+    the search that stored the entry ({!Autotune.report}'s [budget_cut]). [budget_s] is the budget
+    the arm's call resolved, [null] for none ({!Autotune.report}'s [budget_s], gh-ocannl-1438): a
+    fact about the call, not the crown, so a replay that a budget admitted says so. [call_budget_s]
+    and [call_share_s] are its siblings one level up (gh-ocannl-1440): the [Train.tune_placements]
+    call's budget ([tune_call_budget_seconds]) and this arm's share of it, [null] without one; the
+    arm's search is cut at the tighter of [budget_s] and [call_share_s].
 
     [timings_contended] is the number of timing windows refused because host contention dominated
     their samples (gh-ocannl-855). A nonzero count means the finite winner, if any, came from an

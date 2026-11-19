@@ -1000,7 +1000,9 @@ let () =
             | None ->
                 if Option.is_some lv then fail "%s: the tune cell reported nothing" s.tag;
                 false
-            | Some (Autotune.Searched | Autotune.Searched_untimed) when !contended > 0 ->
+            | Some
+                (Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback)
+              when !contended > 0 ->
                 (* A refused timing window leaves the search's measurement set incomplete: its crown
                    was chosen from a truncated comparison, so it is not the tuner's selection. *)
                 fail
@@ -1008,7 +1010,7 @@ let () =
                    from an incomplete comparison"
                   s.tag !contended !lbl;
                 false
-            | Some Autotune.Searched when Float.is_finite !ms && not (String.is_empty !lbl) ->
+            | Some Autotune.Searched ->
                 p "   %-22s crowned: %s  (search best_ms %.4f; search wall %.1f s, %s)\n" s.tag !lbl
                   !ms !wall !counts;
                 Hashtbl.set tuned ~key:s.tag ~data:!lbl;
@@ -1019,13 +1021,13 @@ let () =
                    default, not a tuned measurement"
                   s.tag;
                 false
-            | Some Autotune.Searched ->
-                fail
-                  "%s: the search crowned no timed candidate (best_ms %g, winner %S) -- the \
-                   routine it returned is the untuned default, not a tuned measurement"
-                  s.tag !ms !lbl;
+            | Some Autotune.Searched_budget_fallback ->
+                fail "%s: the budget cut the search before it measured the untuned default" s.tag;
                 false
-            | Some o ->
+            | Some
+                (( Autotune.Search_died _ | Autotune.Cache_replay | Autotune.Abandonment_replay _
+                 | Autotune.Search_disabled | Autotune.Pre_search_failure _ | Autotune.Abandoned _
+                 | Autotune.Lineage_refused _ ) as o) ->
                 fail
                   "%s: the tune cell did not search (%s) -- its number is not a tuned measurement"
                   s.tag (Autotune.outcome_name o);

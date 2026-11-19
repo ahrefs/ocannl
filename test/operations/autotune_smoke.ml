@@ -29,7 +29,12 @@ let accum_prec = Ll_test.backend_accum_prec
    particular [not (replayed r)] is NOT "a search ran" — that mis-derivation is what the variant
    exists to stop, and the states section below pins the distinction. *)
 let completed (r : Autotune.report) =
-  match r.Autotune.outcome with Autotune.Searched | Autotune.Searched_untimed -> true | _ -> false
+  match r.Autotune.outcome with
+  | Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback -> true
+  | Autotune.Search_died _ | Autotune.Cache_replay | Autotune.Abandonment_replay _
+  | Autotune.Search_disabled | Autotune.Pre_search_failure _ | Autotune.Abandoned _
+  | Autotune.Lineage_refused _ ->
+      false
 
 let replayed (r : Autotune.report) =
   match r.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false
@@ -522,8 +527,8 @@ let () =
       | _ -> true);
   p_all "a report that neither searched nor replayed timed nothing" named_states ~f:(fun (_, r) ->
       match r.Autotune.outcome with
-      | Autotune.Searched | Autotune.Searched_untimed | Autotune.Search_died _
-      | Autotune.Abandoned _ | Autotune.Cache_replay ->
+      | Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback
+      | Autotune.Search_died _ | Autotune.Abandoned _ | Autotune.Cache_replay ->
           true
       | Autotune.Search_disabled | Autotune.Pre_search_failure _ | Autotune.Abandonment_replay _
       | Autotune.Lineage_refused _ ->

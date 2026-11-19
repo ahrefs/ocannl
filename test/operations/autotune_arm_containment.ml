@@ -31,7 +31,12 @@ open Verdict.Claims
    means — and the two ways an arm can die, mid-search and before the search exists, are told apart
    by the state rather than by a [partial] flag both of them set. *)
 let completed (r : Autotune.report) =
-  match r.Autotune.outcome with Autotune.Searched | Autotune.Searched_untimed -> true | _ -> false
+  match r.Autotune.outcome with
+  | Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback -> true
+  | Autotune.Search_died _ | Autotune.Cache_replay | Autotune.Abandonment_replay _
+  | Autotune.Search_disabled | Autotune.Pre_search_failure _ | Autotune.Abandoned _
+  | Autotune.Lineage_refused _ ->
+      false
 
 let replayed (r : Autotune.report) =
   match r.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false

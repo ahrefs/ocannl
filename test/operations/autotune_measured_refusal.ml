@@ -124,7 +124,12 @@ let () =
         (Autotune.contention_refusals r) r.candidates_contended r.candidates_timed;
       (* Timed or not: a loaded host may refuse every window the seam does not (gh-ocannl-2310). *)
       p "the search completed"
-        (match r.outcome with Autotune.Searched | Autotune.Searched_untimed -> true | _ -> false);
+        (match r.outcome with
+        | Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback -> true
+        | Autotune.Search_died _ | Autotune.Cache_replay | Autotune.Abandonment_replay _
+        | Autotune.Search_disabled | Autotune.Pre_search_failure _ | Autotune.Abandoned _
+        | Autotune.Lineage_refused _ ->
+            false);
       p "default_refused" r.default_refused;
       p "every started retry is retained in the search report"
         (r.timings_retried = List.length !retried);

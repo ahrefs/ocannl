@@ -11,7 +11,8 @@ choose (benchmarks/runners/ocannl/bench_json.ml), and a regex that stops at an a
 brace reads a nested object placed before a scalar as a missing scalar -- the failure that made
 gh-ocannl-1263's per-arm timing matrix move to the arm's last field. Every field the checks rest on
 is required to be present with its type, so a renamed or dropped field fails the session rather
-than reading as a pass.
+than reading as a pass. The named wire states for completed searches determine whether an arm
+can supply timing evidence. Unknown states fail the check even if a timing is present.
 """
 import math
 from pathlib import Path
@@ -63,6 +64,9 @@ def problems(path):
     for name in REQUIRED_ARMS:
         found = [a for a in arms if a.get("arm") == name]
         state = found[0].get("state") if len(found) == 1 else None
+        if state == "searched-budget-fallback":
+            out.append("INCOMPLETE SESSION: arm %s fell back to the unmeasured default after a budget cut" % name)
+            continue
         if state not in ("searched", "searched-untimed"):
             # Absent, ambiguous, or did not search: "searched":true at the top covers a died search.
             detail = "" if len(found) <= 1 else " (it appears %d times)" % len(found)
