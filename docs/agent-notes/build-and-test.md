@@ -63,7 +63,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   is anchored to the directory that generates them. And where the premise is "this value happens to
   equal that constant", read the constant from where it is defined rather than restating the
   coincidence: an unchecked default is the one name no call site spells.
-- **The `scans` family is derived, with two hand-listed members.** `env_var_deps` recognises a
+- **The `scans` family is derived, with targeted exceptions.** `env_var_deps` recognises a
   repo-wide scan by its corpus: a `(rule)` whose deps glob the repository recursively, take its
   source tree, or name a root document. `schedule_refusal_scan` is a `(test)` whose corpus is two
   named library sources (`schedule.ml`, `sketch_families.ml`), so no derivation puts it in the
@@ -71,7 +71,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   added to `schedule.ml` passed `tools/fmt-check.sh`'s scans and went red in CI
   (lukstafi/ocannl-staging#1766). A scan reading named library sources is in the same position:
   list it by hand, or widen the derivation to cover that corpus shape.
-  The other member, `benchmarks/runtest-capped_fixture_scan`, has globs that stay inside
+  `benchmarks/runtest-capped_fixture_scan` has globs that stay inside
   `benchmarks/`, so `env_var_deps` cannot derive it. It is listed so every push through
   `tools/fmt-check.sh` checks fixture guards: fixtures are copied from neighbours, and a local
   corpus is no reason to let their startup races return.
@@ -81,6 +81,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   rule twice in an isolated project and plants a failing case to retain traceback, FAILED summary
   and nonzero status. It exercises output rather than recognizing source forms; the fake-dune
   tier fixtures cannot see diagnostics from the real compile tier.
+  `prepush_scan_membership` is listed explicitly because its Dune corpus is the single live
+  stanza that defines the family.
 - **What reaches the scans is wider than what looks like infrastructure.** Two members of
   `@test/operations/scans` census sources across the tree, tests included, so a test-only edit can
   turn them red with no config key, stanza or new file in the diff. `codegen_text_inventory`
@@ -4242,7 +4244,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     for its default list (link-only aliases included), leaves off the `slow-` and `train-` members
     and runs the rest in one Dune build with one digest, verdict and exit status.
     It derives the selected scans from `test/operations/dune`'s `scans` stanza and enables Dune's
-    dependency paths for those batches (gh-ocannl-2329). The attached run, `wait` and a running
+    dependency paths for those batches (gh-ocannl-2329). The `runtest-prepush_scan_membership` action
+    uses the runner's `_prepush-scan-members` probe to pin `runtest-slot_kind_live` in the live stanza.
+    The attached run, `wait` and a running
     `status` name the first selected scan Dune reports as failed and point to the run log.
     The notice leaves the run's verdict pending until the whole build finishes.
     `--start` uses `start` instead (same cap selection and fleet slot); follow a successful
@@ -5668,7 +5672,9 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   each GPU lane addressed. Full Metal, CUDA and HIP units build `@bin/twin-tile-dry`
   when the pinned commit has its literal alias field in `bin/dune` (gh-ocannl-2307). Its seed
   geometry and output checks share the unit's device, timeout and verdict with the suite,
-  including the completion pass after a clean serial retry.
+  including the completion pass after a clean serial retry. `sweep_harness.sh` commits the live
+  `bin/dune` in its fixture and checks the target handed to fake opam. The parent commit covers
+  a historical ref predating the alias.
 - A unit whose backend field is not a backend is a configuration VARIANT (gh-ocannl-1778), keyed by
   its own name in logs, history, unit state, `--only` and the run record, and mapped back to its
   backend wherever the backend decides (`unit_backend`, `unit_dune_env`, `unit_suite`). Three so
@@ -6179,7 +6185,8 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   test outside the list counts the configuration again: under a GPU configuration it takes a GPU
   slot, the loud direction, by design; `@lifecycle` stays off the list because its probes read
   the configuration. `slot_kind_live` (in `@test/operations/scans`, reading only the files its
-  deps hand it) keeps both answers true of the tree: no listed alias's closure holds a
+  deps hand it) reuses each command's resolution for its inventory and claims. It keeps both
+  answers true of the tree: no listed alias's closure holds a
   configuration reader or a dependency it cannot follow; what every build reaches (compilations,
   source-like producers, their files) holds no reader and names no backend; every reader (a stanza declaring `(env_var OCANNL_BACKEND)`, or neither it nor a
   marker) runs where its nearest configuration is one the runner resolves -- in `BATCH_CONFIG_DIRS`, or copied

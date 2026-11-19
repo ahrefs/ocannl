@@ -326,6 +326,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-placement_surface
   test/operations/dune                     @runtest-prefix_scan_fp_licences
   test/operations/dune                     @runtest-premise_ratchet
+  test/operations/dune                     @runtest-prepush_scan_membership
   test/operations/dune                     @runtest-primitive_ops
   test/operations/dune                     @runtest-profile_fp16_floor-approximate
   test/operations/dune                     @runtest-profile_fp16_floor-performance

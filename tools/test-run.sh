@@ -101,6 +101,8 @@
 # including an explicit `--error-reporting=deterministic`.
 # The membership reader accepts one top-level scans alias in
 # test/operations/dune with literal relative per-test alias dependencies.
+# The read-only _prepush-scan-members probe uses the same reader with exact
+# selected alias operands. It reads that one file and takes no worktree lock.
 # The log reader accepts only Dune's column-one `-> required by alias` lines
 # naming an exact selected member. Other membership shapes, other diagnostics
 # and explicit build roots leave the ordinary verdict as the only report.
@@ -1529,7 +1531,7 @@ select_dune() {
 # through its real path derive the same key, lock file, and recorded wt.
 # Read-only queries interpret relative paths here, never through a caller's
 # CDPATH (which can also make cd print an extra path on stdout).
-case ${1:-} in paths | lock-status | affected | aliases) CDPATH= ;; esac
+case ${1:-} in paths | lock-status | affected | aliases | _prepush-scan-members) CDPATH= ;; esac
 # The caller's own directory, physical, before the move: the one place a path
 # the caller wrote is read relative to it (`--targets-file FILE`, `aliases
 # PATH`), as the caller's shell would read it.
@@ -1540,6 +1542,65 @@ cd -P "$(dirname "$0")/.." || die "cannot cd to repo root"
 # this copy of the script. Normally also the tree under test; `bisect` points a
 # run at a tree of its own instead (see TESTRUN_TREE below).
 runner_root=$PWD
+
+# Credentials never reach dune, which records every spawned process's environment in the
+# worktree's `_build/trace.csexp` (gh-ocannl-1280). Removed from this script's own environment,
+# before any subcommand, so dune -- launched by the supervisor, by `_resolve`, `_probe`, `repeat`
+# or a promotion query -- and everything it spawns inherit none; nothing this script runs reads
+# one. select_dune scrubs again after sourcing the opam environment. The deny-list is shared with
+# tools/sweep.sh and tools/machine-verify.sh.
+[ -r tools/credential-env.sh ] || die "cannot read tools/credential-env.sh"
+# shellcheck source=credential-env.sh
+. tools/credential-env.sh
+scrub_credentials() {
+  eval "$(credential_env_scrub_text)" ||
+    die "cannot remove credential variables from the environment:$credential_env_left"
+}
+scrub_credentials
+
+# Share the Dune reader with the family report and other alias queries.
+[ -r tools/dune-golden-families.sh ] || die "cannot read tools/dune-golden-families.sh"
+# shellcheck source=dune-golden-families.sh
+. tools/dune-golden-families.sh
+
+prepush_scan_members() {
+  perl -e "$dune_reader_perl"'
+  my %selected;
+  for my $arg (@ARGV) {
+    last if $arg eq "--";
+    $selected{$1} = 1 if $arg =~ /\A\@\@?([A-Za-z0-9_.+\/-]+)\z/;
+  }
+  my $forms = eval { read_dune("test/operations/dune") } or exit 0;
+  my @scans = grep {
+    ref $_ && @$_ && $_->[0] eq "alias" &&
+    grep { ref $_ && @$_ == 2 && $_->[0] eq "name" && $_->[1] eq "scans" } @$_
+  } @$forms;
+  exit 0 unless @scans == 1 && @{ $scans[0] } == 3;
+  my @deps = grep { ref $_ && $_->[0] eq "deps" } @{ $scans[0] };
+  exit 0 unless @deps == 1;
+  my (undef, @aliases) = @{ $deps[0] };
+  my @members;
+  for my $dep (@aliases) {
+    exit 0 unless ref $dep && @$dep == 2 && $dep->[0] eq "alias" &&
+      !ref $dep->[1] && $dep->[1] =~ m{\A(?:[A-Za-z0-9_.+-]+/)*runtest-[A-Za-z0-9_.+-]+\z};
+    my @path = ("test", "operations");
+    for my $part (split m{/}, $dep->[1]) {
+      next if $part eq ".";
+      if ($part eq "..") { exit 0 unless @path; pop @path; }
+      else { push @path, $part; }
+    }
+    my $member = join "/", @path;
+    push @members, $member if $selected{$member};
+  }
+  print "$_\n" for @members;
+' -- "$@"
+}
+# Used by the live scan before any Dune or worktree-lock setup.
+if [ "${1:-}" = _prepush-scan-members ]; then
+  shift
+  prepush_scan_members "$@"
+  exit $?
+fi
 
 [ -r scripts/process-group.sh ] || die "cannot read scripts/process-group.sh"
 # shellcheck source=../scripts/process-group.sh
@@ -1574,24 +1635,6 @@ runner_root=$PWD
 [ -r tools/bisect-steps.sh ] || die "cannot read tools/bisect-steps.sh"
 # shellcheck source=bisect-steps.sh
 . tools/bisect-steps.sh
-# The family report and alias resolution share the same Dune reader.
-[ -r tools/dune-golden-families.sh ] || die "cannot read tools/dune-golden-families.sh"
-# shellcheck source=dune-golden-families.sh
-. tools/dune-golden-families.sh
-# Credentials never reach dune, which records every spawned process's environment in the
-# worktree's `_build/trace.csexp` (gh-ocannl-1280). Removed from this script's own environment,
-# before any subcommand, so dune -- launched by the supervisor, by `_resolve`, `_probe`, `repeat`
-# or a promotion query -- and everything it spawns inherit none; nothing this script runs reads
-# one. select_dune scrubs again after sourcing the opam environment. The deny-list is shared with
-# tools/sweep.sh and tools/machine-verify.sh.
-[ -r tools/credential-env.sh ] || die "cannot read tools/credential-env.sh"
-# shellcheck source=credential-env.sh
-. tools/credential-env.sh
-scrub_credentials() {
-  eval "$(credential_env_scrub_text)" ||
-    die "cannot remove credential variables from the environment:$credential_env_left"
-}
-scrub_credentials
 
 # perl is load-bearing rather than a convenience: the per-worktree flock, the
 # cap supervisor and the atomic rename behind the `last` pointer are all
@@ -4656,36 +4699,7 @@ if [ "$sub" = prepush ]; then
   # same directory as Dune does, then intersect with affected's kept operands
   # and exact alias words before Dune's own `--`.
   if [ -r test/operations/dune ] && ! explicit_build_root "$@"; then
-    pp_scans=$(perl -e "$dune_reader_perl"'
-      my %selected;
-      for my $arg (@ARGV) {
-        last if $arg eq "--";
-        $selected{$1} = 1 if $arg =~ /\A\@\@?([A-Za-z0-9_.+\/-]+)\z/;
-      }
-      my $forms = eval { read_dune("test/operations/dune") } or exit 0;
-      my @scans = grep {
-        ref $_ && @$_ && $_->[0] eq "alias" &&
-        grep { ref $_ && @$_ == 2 && $_->[0] eq "name" && $_->[1] eq "scans" } @$_
-      } @$forms;
-      exit 0 unless @scans == 1 && @{ $scans[0] } == 3;
-      my @deps = grep { ref $_ && $_->[0] eq "deps" } @{ $scans[0] };
-      exit 0 unless @deps == 1;
-      my (undef, @aliases) = @{ $deps[0] };
-      my @members;
-      for my $dep (@aliases) {
-        exit 0 unless ref $dep && @$dep == 2 && $dep->[0] eq "alias" &&
-          !ref $dep->[1] && $dep->[1] =~ m{\A(?:[A-Za-z0-9_.+-]+/)*runtest-[A-Za-z0-9_.+-]+\z};
-        my @path = ("test", "operations");
-        for my $part (split m{/}, $dep->[1]) {
-          next if $part eq ".";
-          if ($part eq "..") { exit 0 unless @path; pop @path; }
-          else { push @path, $part; }
-        }
-        my $member = join "/", @path;
-        push @members, $member if $selected{$member};
-      }
-      print "$_\n" for @members;
-    ' -- "${pp_keep[@]}" "$@") || pp_scans=
+    pp_scans=$(prepush_scan_members "${pp_keep[@]}" "$@") || pp_scans=
   fi
   sub=$pp_mode
   set -- ${pp_run_opts[@]+"${pp_run_opts[@]}"} --targets-file "$pp_dir/list" "$@"
