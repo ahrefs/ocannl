@@ -3,11 +3,11 @@
 
    The routine is a small MLP's training step -- forward, backprop, SGD -- which the GPU backends'
    default pipeline fissions into several kernels. It is compiled twice from fresh contexts with
-   cold kernel caches: once with the split forced off ([Kernel_code_cache.with_split], at most one
-   program) and once with it forced on (up to four programs of at least one kernel each). The step
-   runs once after each, and the loss and both updated weights must agree bit for bit: the same
-   kernels' code, only grouped into other programs. The inputs are not dyadic, so a kernel compiled
-   differently in its smaller program would show.
+   cold kernel caches and distinct names for the debug artifacts. One compile forces the split off
+   ([Kernel_code_cache.with_split], at most one program) and the other forces it on (up to four
+   programs of at least one kernel each). The step runs once after each, and the loss and both
+   updated weights must agree bit for bit: the same kernels' code, only grouped into other programs.
+   The inputs are not dyadic, so a kernel compiled differently in its smaller program would show.
 
    The split claims are gated on [Kernel_code_cache.split_capable_compiles] (a backend that can
    split recorded the compile), never on a backend name; that record stays with the kernel cache
@@ -66,7 +66,7 @@ let step () =
 
 let comp, read = step ()
 
-let compile_and_run split =
+let compile_and_run ~name split =
   let capable = K.split_capable_compiles () and programs = K.programs_compiled_concurrently () in
   let ctx = Context.auto () in
   let (ctx, routine), cost =
@@ -74,7 +74,7 @@ let compile_and_run split =
        calling domain before the cold scope restores the caches. *)
     K.with_cold_caches (fun () ->
         K.with_split split (fun () ->
-            CC.with_census (fun () -> Context.compile ~name:"gcp_step" ctx comp Ir.Indexing.Empty)))
+            CC.with_census (fun () -> Context.compile ~name ctx comp Ir.Indexing.Empty)))
   in
   let ctx = Context.run ctx routine in
   ( Context.backend_name ctx,
@@ -88,10 +88,10 @@ let bitwise_equal a e =
 
 let () =
   let backend, joint, cj, _, joint_programs =
-    compile_and_run { K.max_programs = 1; min_kernels = 1 }
+    compile_and_run ~name:"gcp_joint" { K.max_programs = 1; min_kernels = 1 }
   in
   let _, split, cs, capable, split_programs =
-    compile_and_run { K.max_programs = 4; min_kernels = 1 }
+    compile_and_run ~name:"gcp_split" { K.max_programs = 4; min_kernels = 1 }
   in
   List.iter2_exn read (List.zip_exn joint split) ~f:(fun t (joint, split) ->
       p
