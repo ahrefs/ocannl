@@ -818,14 +818,15 @@ let test_plain_concat_bounds () =
   let closed dims : Row.t =
     { beg_dims = []; dims; bcast = Broadcastable; prov = Row.provenance ~sh_id:2317 ~kind:`Output }
   in
-  let settles ~reverse ~k_size ~u_expected ?bound_u ?(before = no_extra) ?(after = no_extra) () =
+  let settles ~reverse ~k_size ~u_expected ?(k_basis = Row.default_basis) ?bound_u
+      ?(before = no_extra) ?(after = no_extra) () =
     let u = Row.get_var () and k = Row.get_var () in
     let larger = Row.Concat [ Row.Var u; dim ~basis:"a" 4 ]
     and smaller = Row.Concat [ Row.Var k; dim ~basis:"a" 2 ] in
     let equality = if reverse then eq smaller larger else eq larger smaller in
     let constraints =
       before u k
-      @ [ equality; ineq (dim k_size) k ]
+      @ [ equality; ineq (dim ~basis:k_basis k_size) k ]
       @ Option.to_list (Option.map bound_u ~f:(fun d -> ineq (dim d) u))
       @ after u k
     in
@@ -842,13 +843,16 @@ let test_plain_concat_bounds () =
           | (`Shape _ | `Other _) as error -> error)
     in
     match result with
-    | `Ok (_, env) ->
+    | `Ok ([], env) ->
         let has v (size, tag) =
           match Row.get_dim_from_env env v with
           | Some (Row.Dim { d; basis; _ }) -> d = size && String.equal basis tag
           | _ -> false
         in
-        has u u_expected && has k (k_size, Row.default_basis)
+        has u u_expected && has k (k_size, k_basis)
+    | `Ok (_ :: _, _) ->
+        Stdio.eprintf "plain concat bounds: constraints still pending\n";
+        false
     | `Shape m | `Other m ->
         Stdio.eprintf "plain concat bounds: %s\n" m;
         false
@@ -859,6 +863,14 @@ let test_plain_concat_bounds () =
   Verdict.Claims.p_all ~min:2
     "  a plain concat bound at the minimum leaves a positive residual in either orientation"
     [ false; true ] ~f:(fun reverse -> settles ~reverse ~k_size:3 ~u_expected:(1, "a") ());
+  Verdict.Claims.p_all ~min:2
+    "  a waiting bound carrying the shared claim keeps the closing GLB plain in either orientation"
+    [ false; true ] ~f:(fun reverse ->
+      settles ~reverse ~k_size:5 ~k_basis:"a" ~u_expected:(3, Row.default_basis) ~bound_u:3 ());
+  Verdict.Claims.p_all ~min:2
+    "  a plain closing bound at residual one takes the broadcast top in either orientation"
+    [ false; true ] ~f:(fun reverse ->
+      settles ~reverse ~k_size:3 ~u_expected:(1, Row.bcast_if_1) ~bound_u:2 ());
   (* The fixed index sizes the shared stride at stage 7. Its held equations give both free
      components their plain tags before the concatenation chooses a residual's tag. *)
   Verdict.Claims.p_all ~min:2 "  held size equations still supply the components at the minimum"

@@ -74,6 +74,8 @@ Closure guesses an alias of a discardable component to 0
   a bounded closing component aliased to a discardable one: u = 3 of a, k = 5 of default in either orientation: true
   matching plain concat bounds settle to both GLBs in either orientation: true
   a plain concat bound at the minimum leaves a positive residual in either orientation: true
+  a waiting bound carrying the shared claim keeps the closing GLB plain in either orientation: true
+  a plain closing bound at residual one takes the broadcast top in either orientation: true
   held size equations still supply the components at the minimum: true
   matching plain bounds let competing held equations supply tags: true
   held row totals supply the components at the minimum: true
