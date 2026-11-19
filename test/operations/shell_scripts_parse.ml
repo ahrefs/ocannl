@@ -3918,8 +3918,10 @@ end
       read and needs no order.
     - The shell a command runs in: brace groups, [if], loops, [case] arms and [{ }] function bodies
       are the shell they sit in; a [( )] subshell, a [( )] function body, a pipeline element and a
-      background job (its whole [&&]/[||] list) are a shell of their own, which starts with no EXIT
-      trap but with the original dispositions of the shell around it (a fork copies them).
+      background job (its whole [&&]/[||] list) are a shell of their own, which starts with the
+      original dispositions of the shell around it (a fork copies them) and its EXIT trap too: bash
+      5.3 records its deferring handler as the original of a subshell's first trap after the
+      parent's EXIT trap, where bash 3.2 records the default (loud there).
     - The order, as the paths through the file, each with a state of its own (past 32 distinct
       states at one point they merge, an EXIT trap on any counting and a signal recorded on one only
       unrecorded): an [if]'s bodies and a [case]'s arms are alternatives (and so is none of them,
@@ -3997,8 +3999,9 @@ module Trap_order = struct
 
   let fresh = { exit_at = None; originals = Map.empty (module String) }
 
-  (** A fork copies the originals; a subshell runs no EXIT trap of its parent's. *)
-  let subshell shell = { shell with exit_at = None }
+  (** A fork copies the originals, and for the order the parent's EXIT trap stands in the subshell
+      too (bash 5.3; the module header). *)
+  let subshell shell = shell
 
   (** Either of two states: an EXIT trap set if either set one; a signal recorded only where both
       recorded it, as the deferring handler if either recorded that. A signal one of them left
@@ -4273,12 +4276,12 @@ module Trap_order = struct
       ( "in a subshell setting its own EXIT trap first",
         "( trap : EXIT; trap 'exit 1' TERM )\n",
         [ 1 ] );
-      ("in a subshell after the parent's EXIT trap", "trap : EXIT\n( trap 'exit 1' TERM )\n", []);
+      ("in a subshell after the parent's EXIT trap", "trap : EXIT\n( trap 'exit 1' TERM )\n", [ 2 ]);
       ( "in a subshell after the parent's EXIT trap and TERM trap",
         "trap 'exit 1' TERM\ntrap : EXIT\n( trap : EXIT; trap 'exit 2' TERM )\n",
         [] );
-      ("in a background job after EXIT", "trap : EXIT\n{ trap 'exit 1' TERM; } &\n", []);
-      ("in a pipeline after EXIT", "trap : EXIT\ntrap 'exit 1' TERM | cat\n", []);
+      ("in a background job after EXIT", "trap : EXIT\n{ trap 'exit 1' TERM; } &\n", [ 2 ]);
+      ("in a pipeline after EXIT", "trap : EXIT\ntrap 'exit 1' TERM | cat\n", [ 2 ]);
       ( "in an uncalled function body after EXIT",
         "trap : EXIT\nf() {\n  trap 'exit 1' TERM\n}\n",
         [] );
@@ -4287,7 +4290,7 @@ module Trap_order = struct
         [ 3 ] );
       ( "in a function called only in a subshell after EXIT",
         "trap : EXIT\nf() {\n  trap 'exit 1' TERM\n}\n( f )\n",
-        [] );
+        [ 3 ] );
       ( "after a redefined function's later body sets the EXIT trap",
         "setup() { :; }\nsetup() {\n  trap : EXIT\n}\nsetup\ntrap 'exit 1' TERM\n",
         [ 6 ] );
@@ -4395,7 +4398,7 @@ module Trap_order = struct
       ( "in a subshell after the parent's EXIT trap",
         "trap : EXIT\n(\n  trap 'exit 1' TERM\n@@)\n",
         "TERM",
-        [] );
+        [ 3 ] );
       ( "in a subshell after the parent's TERM and EXIT traps",
         "trap 'exit 1' TERM\ntrap : EXIT\n(\n  trap : EXIT\n  trap 'exit 2' TERM\n@@)\n",
         "TERM",
@@ -4425,6 +4428,14 @@ module Trap_order = struct
         "trap : EXIT\ncat >/dev/null <<'X'\ntrap 'exit 1' TERM\nX\n@@",
         "TERM",
         [] );
+    ]
+
+  (** Rows whose bash half differs between versions, with what each does: the check flags them, and
+      either reading of bash holds. *)
+  let version_dependent =
+    [
+      ( "in a subshell after the parent's EXIT trap",
+        "bash 3.2 lets the subshell die on delivery, bash 5.3 defers the signal" );
     ]
 
   (** Runs [texts] under [bash] at once, each with stdin and stderr on /dev/null, and returns each
@@ -4542,10 +4553,19 @@ module Trap_order = struct
               | Deferred { line; _ } -> Some line | Unread_signal _ | Unread_structure _ -> None)
         in
         let deferred = not (List.is_empty lines) in
-        let expected = if deferred then "deferred" else "default" in
+        let either = List.Assoc.find version_dependent name ~equal:String.equal in
+        let expected =
+          match either with
+          | Some _ -> "deferred or default"
+          | None -> if deferred then "deferred" else "default"
+        in
+        let bash_holds said =
+          match either with
+          | Some _ -> List.mem [ "deferred"; "default" ] said ~equal:String.equal
+          | None -> String.equal said expected
+        in
         let holds =
-          List.equal Int.equal flagged lines
-          && Option.value_map said ~default:false ~f:(String.equal expected)
+          List.equal Int.equal flagged lines && Option.value_map said ~default:false ~f:bash_holds
         in
         if measurable && not holds then
           eprintf "trap-order execution control %s: flagged lines %s, bash said %s (want %s)\n" name
@@ -4555,8 +4575,11 @@ module Trap_order = struct
         Verdict.gated ~aggregation:`Environment ~when_:measurable
           ~on:"Windows, whose bash emulates fork and signals"
           (Printf.sprintf "trap-order execution control %s: %s, and flagged %s" name
-             (if deferred then "bash defers the signal in a subshell"
-              else "a subshell dies on delivery")
+             (match either with
+             | Some versions -> versions
+             | None ->
+                 if deferred then "bash defers the signal in a subshell"
+                 else "a subshell dies on delivery")
              (if deferred then "there" else "nowhere"))
           holds)
 end

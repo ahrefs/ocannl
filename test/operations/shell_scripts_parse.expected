@@ -636,7 +636,7 @@ trap-order execution control ignored before EXIT, then trapped: a subshell dies 
 trap-order execution control pinned by an ignore and a reset before EXIT: a subshell dies on delivery, and flagged nowhere: true
 trap-order execution control trapped, reset, re-trapped after EXIT: a subshell dies on delivery, and flagged nowhere: true
 trap-order execution control in a subshell setting its own EXIT trap first: bash defers the signal in a subshell, and flagged there: true
-trap-order execution control in a subshell after the parent's EXIT trap: a subshell dies on delivery, and flagged nowhere: true
+trap-order execution control in a subshell after the parent's EXIT trap: bash 3.2 lets the subshell die on delivery, bash 5.3 defers the signal, and flagged there: true
 trap-order execution control in a subshell after the parent's TERM and EXIT traps: a subshell dies on delivery, and flagged nowhere: true
 trap-order execution control in a function body after EXIT: bash defers the signal in a subshell, and flagged there: true
 trap-order execution control in a branch after EXIT: bash defers the signal in a subshell, and flagged there: true

@@ -1794,12 +1794,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
 - **Every terminating signal a shell traps is trapped before its EXIT trap** (gh-ocannl-2332).
   The mechanism above is not TERM's alone: bash's deferring handler goes on every signal of its
   terminating list (HUP, INT, PIPE, ALRM, USR1, USR2, TERM and the faults), and the first `trap` on
-  one after the EXIT trap, `trap '' SIG` included, records it as the original. Measured on bash
-  3.2: HUP, USR1, USR2, ALRM, PIPE and TERM trapped after EXIT all reach a subshell deferred; QUIT
-  is not on the list; INT reached the probe's subshell deferred in every order, with no EXIT trap too. The order is per
-  shell: a subshell starts with no EXIT trap but with its parent's recorded originals, so one that
-  sets its own EXIT trap and then a TERM trap defers TERM in ITS subshells, and a TERM trap a
-  subshell sets after its parent's EXIT trap does not. `shell_scripts_parse`'s trap-order check
+  one after the EXIT trap, `trap '' SIG` included, records it as the original. Measured on bash 3.2:
+  HUP, USR1, USR2, ALRM, PIPE and TERM trapped after EXIT all reach a subshell deferred; QUIT is not
+  on the list; INT reached the probe's subshell deferred in every order, with no EXIT trap too. The
+  order is per shell: a subshell starts with its parent's recorded originals, so one that sets its
+  own EXIT trap and then a TERM trap defers TERM in ITS subshells, and a TERM trap a subshell sets
+  after its parent's EXIT trap defers on bash 5.3 (measured on tuf) but not on 3.2, so the check
+  counts the parent's EXIT trap inside a subshell too. `shell_scripts_parse`'s trap-order check
   refuses the order in every script it reads (`harness_scratch` counts as INT, TERM, then EXIT; the
   header of its `Trap_order` module lists what it reads and what it does not, heredoc bodies among
   the latter), and its execution rows measure each rule against the host's bash. Fixing a site by
