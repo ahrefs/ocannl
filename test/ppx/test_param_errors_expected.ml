@@ -641,3 +641,154 @@ let init_let_rhs =
       fun x ->
         Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
           (fun () -> __ocannl_body x)
+let number_beside_object =
+  let open! TDSL.O in
+    fun () ->
+      let w =
+        (TDSL.param ?more_label:None
+           ?value:(Some
+                     ([%ocaml.error
+                        "ppx_ocannl %op: the inline declaration { w } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
+           ?values:None ?param_init:None "w") () in
+      let __ocannl_body x =
+        let n = 3 in
+        (+) ?label:(Some ["number_beside_object"]) (( * ) ?label:None w x)
+          (TDSL.O.(!..) n) in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"number_beside_object" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let number_in_val_rhs =
+  let open! TDSL.O in
+    fun () ->
+      let w =
+        (TDSL.param ?more_label:None
+           ?value:(Some
+                     ([%ocaml.error
+                        "ppx_ocannl %op: the inline declaration { w } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
+           ?values:None ?param_init:None "w") () in
+      let __ocannl_body x =
+        let n = 3 in
+        (+) ?label:(Some ["number_in_val_rhs"]) (( * ) ?label:None w x)
+          (TDSL.O.(!..) n) in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"number_in_val_rhs" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let number_before_val =
+  let open! TDSL.O in
+    fun n () ->
+      let w =
+        (TDSL.param ?more_label:None
+           ?value:(Some
+                     ([%ocaml.error
+                        "ppx_ocannl %op: the inline declaration { w } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
+           ?values:None ?param_init:None "w") () in
+      let __ocannl_body x =
+        let n = Int.succ n in
+        (+) ?label:(Some ["number_before_val"]) (( * ) ?label:None w x)
+          (TDSL.O.(!..) n) in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"number_before_val" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+class initializer_parent = object val n = 2 end
+let number_in_inherited_method =
+  let open! TDSL.O in
+    fun () ->
+      let w =
+        (TDSL.param ?more_label:None
+           ?value:(Some
+                     ([%ocaml.error
+                        "ppx_ocannl %op: the inline declaration { w } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
+           ?values:None ?param_init:None "w") () in
+      let __ocannl_body x =
+        let n = 3 in
+        (+) ?label:(Some ["number_in_inherited_method"])
+          (( * ) ?label:None w x) (TDSL.O.(!..) n) in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"number_in_inherited_method"
+          ~arity:1 (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let number_default_earlier_param =
+  let open! TDSL.O in
+    fun () ->
+      let w =
+        (TDSL.param ?more_label:None
+           ?value:(Some (Float.of_int ((fun n ?(scale= n) () -> scale) 2 ())))
+           ?values:None ?param_init:None "w") () in
+      let __ocannl_body x =
+        let n = 3 in
+        (+) ?label:(Some ["number_default_earlier_param"])
+          (( * ) ?label:None w x) (TDSL.O.(!..) n) in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"number_default_earlier_param"
+          ~arity:1 (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let number_default_own_param =
+  let open! TDSL.O in
+    fun () ->
+      let w =
+        (TDSL.param ?more_label:None
+           ?value:(Some
+                     ([%ocaml.error
+                        "ppx_ocannl %op: the inline declaration { w } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
+           ?values:None ?param_init:None "w") () in
+      let __ocannl_body x =
+        let n = 3 in
+        (+) ?label:(Some ["number_default_own_param"])
+          (( * ) ?label:None w x) (TDSL.O.(!..) n) in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"number_default_own_param"
+          ~arity:1 (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let number_guard_case_param =
+  let open! TDSL.O in
+    fun () ->
+      let w =
+        (TDSL.param ?more_label:None
+           ?value:(Some
+                     (Float.of_int
+                        (match Some 2 with | Some n when n > 0 -> n | _ -> 1)))
+           ?values:None ?param_init:None "w") () in
+      let __ocannl_body x =
+        let n = 3 in
+        (+) ?label:(Some ["number_guard_case_param"]) (( * ) ?label:None w x)
+          (TDSL.O.(!..) n) in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"number_guard_case_param"
+          ~arity:1 (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let number_guard_free_param =
+  let open! TDSL.O in
+    fun () ->
+      let w =
+        (TDSL.param ?more_label:None
+           ?value:(Some
+                     ([%ocaml.error
+                        "ppx_ocannl %op: the inline declaration { w } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
+           ?values:None ?param_init:None "w") () in
+      let __ocannl_body x =
+        let n = 3 in
+        (+) ?label:(Some ["number_guard_free_param"]) (( * ) ?label:None w x)
+          (TDSL.O.(!..) n) in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"number_guard_free_param"
+          ~arity:1 (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)

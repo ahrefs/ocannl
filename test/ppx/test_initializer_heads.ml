@@ -63,6 +63,20 @@ let%op number_object_local n () x =
   * x
   + !..n
 
+let%op number_object_field n () x =
+  let n = [%oc Int.succ n] in
+  {
+    w =
+      !..(object
+            val n = 3
+            method value = n
+            initializer ignore n
+          end
+           #value);
+  }
+  * x
+  + !..n
+
 let named_binary source other = [%op { w = add source other }]
 let named_unary source = [%op { w = relu source }]
 let named_ternary source = [%op { w = fma source 2.0 3.0 }]
@@ -87,6 +101,7 @@ let _ =
     number_nested,
     number_let_local,
     number_object_local,
+    number_object_field,
     named_binary,
     named_unary,
     named_ternary,

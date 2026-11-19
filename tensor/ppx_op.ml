@@ -124,12 +124,21 @@ let guard_late ~late ~decl (e : expression) =
 
       method! class_structure { pcstr_self; pcstr_fields } =
         self#pattern pcstr_self;
-        (* Only methods and initializer clauses can refer to self. *)
-        let self_scope = {<bound = bind_pattern bound pcstr_self>} in
-        List.iter pcstr_fields ~f:(fun field ->
-            match field.pcf_desc with
-            | Pcf_method _ | Pcf_initializer _ -> self_scope#class_field field
-            | _ -> self#class_field field)
+        (* Methods and initializer clauses see self and preceding instance variable declarations.
+           Inherited variables stay unresolved because their bindings depend on the parent class. *)
+        ignore
+          (List.fold pcstr_fields ~init:(bind_pattern bound pcstr_self)
+             ~f:(fun object_bound field ->
+               match field.pcf_desc with
+               | Pcf_method _ | Pcf_initializer _ ->
+                   {<bound = object_bound>}#class_field field;
+                   object_bound
+               | Pcf_val ({ txt = name; _ }, _, _) ->
+                   self#class_field field;
+                   Set.add object_bound name
+               | _ ->
+                   self#class_field field;
+                   object_bound))
 
       method! module_expr_desc =
         function

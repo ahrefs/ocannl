@@ -117,7 +117,13 @@ files.
   lexical scope (gh-ocannl-2355). A non-recursive `let` binds in its body, so
   `!..(let n = Int.succ n in n)` still reads the late-bound `n` on the right-hand side. An
   initializer's own `let n = 3 in n` is valid, as is a method using its object's self name.
-  The compiled `test_initializer_heads` pins both. Scope comes from syntactic value binders.
+  The compiled `test_initializer_heads` pins both. An object's declared instance variables
+  bind in subsequent methods and initializer clauses (gh-ocannl-2377, also compiled there).
+  Earlier methods and initializer clauses can read the enclosing name. The object's `val`
+  right-hand sides and expressions outside the object keep the enclosing scope. Inherited
+  variables remain unresolved by the PPX, so a use matching a late name is still refused.
+  The `test_param_errors` golden pins these refusals, optional defaults that see preceding
+  parameters, and case guards that see their case pattern.
   An open or include does not establish that an unqualified identifier is local.
   The `try` body and handlers, `lazy` body, constructor/variant
   arguments and `let*`/`and*` binding expressions and body are traversed too (gh-ocannl-2166).
