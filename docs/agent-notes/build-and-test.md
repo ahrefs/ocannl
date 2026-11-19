@@ -1113,6 +1113,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   Bash coverage. The planted nested nounset empty array passed the base dispatcher
   at widths 1 and 4 and failed the pinned leg at both widths; the same subject
   exited 1 under `/bin/bash` 3.2 and 0 under Homebrew 5.3.
+- A closed standard descriptor can be reopened before a shell script starts. On Linux,
+  uutils `env` 0.10.0 reopened each of fd 0, 1 and 2 on `/dev/null` when the caller closed
+  it (gh-ocannl-2401). For a Bash script that must preserve those descriptors, a `/bin/sh`
+  launcher can use `exec bash` to retain PATH lookup and the caller's descriptors.
 - A shell member can reach `finish` after a leg tries to run a missing command
   (gh-ocannl-2331). The dispatcher checks the member's output using the diagnostic
   forms in `tools/test-harnesses.sh`'s header, since Bash 3.2 has no
@@ -1277,8 +1281,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `harness-legs-alone` matrix deals candidates round-robin in `tools/test-harnesses.sh --list`
   order with `--shard K/N` (gh-ocannl-2353). `--list [--shard K/N]` prints that same candidate
   selection without launching a member. `tools/test-harness-legs-alone.sh` compares the
-  shards with the unsharded fixture, and `ci_matrix.sh` checks the workflow supplies every
-  shard once and leaves siblings running after a failure. Run it locally, slot-wrapped,
+  shards with the unsharded fixture and checks that closed stdout makes the listing exit 1.
+  `tools/harness-legs-alone.sh` uses the `/bin/sh` launcher pattern above (gh-ocannl-2401).
+  `ci_matrix.sh` checks the workflow supplies every shard once and leaves siblings running
+  after a failure. Run it locally, slot-wrapped,
   on a harness whose legs you restructured. `HARNESS --list-legs` prints each gate (`LEG  NAME`)
   without running a leg body. Every gate also checks its leg's NAME, in every run: a name selects
   one leg; a leading leg number (`80:`, `2-3:`, `59-63, 66:`) numbers one leg, a further leg beside
