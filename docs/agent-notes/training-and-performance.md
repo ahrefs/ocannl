@@ -731,15 +731,15 @@ files.
   Rebuilding a fixture that VANISHED is not that regeneration when the rebuild reproduces this
   box's recorded digest: `gen_fixtures.py --out-dir` into scratch (or copy from another tree),
   `fixture_digest.py --check --expect-origin <box>` the candidate, and copy it in only when that
-  exits 0 (recipe and the `raw-v1` caveat in `benchmarks/README.md`).
-- The boxes are **not** on the same fixture bytes, and the digest file says so per origin
-  (`<sha256>  <bytes>  <name>  <origin>`, gh-ocannl-759). `mlp_small` and `gpt2_mini` hash
-  differently on minix and rog-nv at identical sizes — two venvs, two numpy `Generator` streams,
-  one spec — so `report-hip.md` and `report-gh675-cuda.md` are **not cross-box comparable for
-  those two workloads**; each is self-consistent within its box, so within-box session-to-session
-  comparisons stand. A fixture MATCHes if it is *some* recorded box's bytes, and every row
-  (`fixture_origin`) and report section names whose. Before quoting one box's number against
-  another's, check that the two sections name the same origin.
+  exits 0 (recipe, the `raw-v1` caveat, and where each box's bytes are kept -- the anchor's
+  `fixtures/by-origin/<box>/` -- in `benchmarks/README.md`).
+- **A different `raw-v1` row, or a `content-v1` MISMATCH, is not by itself a different numpy
+  stream.** What is known per fixture, and how to tell metadata from tensors, is owned by
+  `benchmarks/README.md` (the per-box entries bullet under Layout, and the vanished-fixture
+  recipe). Before quoting one box's number against another's, compare canonical content, not the
+  printed strings: a report's `raw-v1` digest that a migration verified maps to its row's `content-v1` digest in
+  `DIGESTS.txt`'s history (gh-ocannl-2004's commit for the four recovered fixtures), and where
+  the original files are gone (`gpt2_mini`'s two) the comparison stays unresolved.
 - **A measurement session starts with `benchmarks/check-box.sh --box <id> --fixture <name>...`**
   from the checkout it measures in, and measures only on exit 0 (gh-ocannl-1062). Five waves found
   the gap only once a session had begun: a native boot with no venv, fresh worktrees with no

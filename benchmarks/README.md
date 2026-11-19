@@ -210,13 +210,19 @@ single-threaded segments that sum to the serial step
   transformer records only, copied unchanged from m4-max, including the two new batch
   endpoints generated with the mac-studio bench venv; its non-transformer absences are
   likewise explicit missing-record warnings.
-  - **Entries are per box, and today the boxes differ.** `mlp_small` and `gpt2_mini` hash
-    differently on minix and rog-nv at identical sizes — two venvs, two numpy streams, one
-    workload spec — so `report-hip.md` and `report-gh675-cuda.md` are **not cross-box
-    comparable for those two workloads**, and never have been. Each is self-consistent within
-    its box, so within-box session-to-session comparisons stand. The file records both boxes'
-    bytes rather than letting one win; a fixture MATCHes if it is *some* recorded box's bytes,
-    and the report names which.
+  - **Entries are per box, and a different `raw-v1` row was never evidence of a different
+    stream.** Two rows under one name are two boxes' records; a fixture MATCHes if it is *some*
+    recorded box's bytes, and the report names which. Before gh-ocannl-1007 a row hashed the file,
+    whose bytes change with safetensors' per-process metadata key order, so rog-nv and minix
+    recorded different rows for one content: their recovered originals of `cifar_conv`,
+    `cifar_stride`, `mlp_small` and `mlp_wide` differ in key order alone and share one
+    `content-v1` digest per fixture (gh-ocannl-2004, which migrated those rows). `gpt2_mini`'s
+    two `raw-v1` files, the ones `report-hip.md` (minix) and `report-gh675-cuda.md` (rog-nv) ran
+    on, are gone -- both boxes have held m4-max's bytes since gh-ocannl-1357 -- and with fifteen
+    metadata keys no key-order search can rebuild them, so whether those two differed in content
+    is unknown: their sizes were equal, and every pair whose bytes survived differed in key order
+    only. Today every fixture's rows agree across the boxes that record it. Within-box
+    session-to-session comparisons stand either way.
   - **Pin fixtures you already have, without regenerating**: `python3 benchmarks/fixture_digest.py
     --record` (add `--origin <box>` when the hostname is not the name the reports use). It is
     stdlib-only — no venv needed — and it leaves every other origin's entry alone.
@@ -1075,10 +1081,31 @@ agreeing box; from then on it is the recorded workload, not a smoke fixture.
 A `content-v1` row covers the canonicalized tensors and metadata, so a faithful rebuild matches
 it. A `raw-v1` row hashes the file bytes, which vary with safetensors' metadata order: a `MATCH`
 against one still certifies the candidate, but a `MISMATCH` against one is inconclusive rather
-than a loss. A `MISMATCH` against a `content-v1` row means this venv no longer reproduces the
-recorded stream (a numpy upgrade, a changed spec or generator): the bytes are lost on this box,
-and replacing them is the cross-box regeneration above. What the rule forbids is replacing
-recorded bytes, never reproducing them.
+than a loss. A `MISMATCH` against a `content-v1` row says the canonical content differs, in the
+metadata or in the tensors, and only a tensor difference means this venv no longer reproduces the
+recorded stream (a numpy upgrade, a changed spec or generator). The generator's metadata moves on
+its own: it writes metadata keys added since older files were recorded (e.g. `loss_scale`), so a
+rebuild of `lenet`, `cifar_conv`,
+`cifar_stride` or `mlp_small` MISMATCHes its row while every tensor's dtype, shape and payload
+equal the recorded file's (gh-ocannl-2004, on mac-studio's numpy 2.5.1 venv). So a
+`content-v1` MISMATCH alone does not say the bytes are lost; either way the candidate stays out
+of `fixtures/`. Get the recorded bytes back from where they are kept (next paragraph); only when
+no copy survives is replacing them the cross-box regeneration above. What the rule forbids is
+replacing recorded bytes, never reproducing them.
+
+**Where each box's fixture bytes are kept.** A box's store is its main checkout's
+`~/ocannl-staging/benchmarks/fixtures`, which `orchestrate.py` and the box check read. The
+anchor's store (mac-studio's, `mac-studio:~/ocannl-staging/benchmarks/fixtures`) is the fleet's
+backup: m4-max's bytes at its top level, which every box whose rows agree with m4-max's measures
+on too, and under `by-origin/<box>/<name>.safetensors` the recorded file of a box whose bytes
+the top level does not hold -- today rog-nv's and minix's `cifar_conv`, `cifar_stride`, `mlp_small`
+and `mlp_wide`, the originals gh-ocannl-2004 recovered (their names collide across boxes, hence
+one directory per box). `by-origin/` is below every reader's glob, so neither m4-max's box check
+nor provisioning sees it. lukstafi/ludics-lite's `install-linux.sh --bench-venv` copies only the
+top level, so it cannot supply a `by-origin/` fixture: copy one back by hand and check it as
+above (`fixture_digest.py --check --expect-origin <box>`) before it goes in. A box that records
+bytes the anchor does not hold copies them into `by-origin/<box>/` in the same session, or the
+next re-provisioning loses them.
 
 tinygrad's CPU device JIT-compiles kernels with `clang`; on a machine without clang, point
 `CC` at a substitute (a `zig cc` wrapper script from `pip install ziglang` works — translate
@@ -1175,7 +1202,13 @@ m4-max) and the toolchain its drivers compile with (`nvcc`, `hipcc`, the macOS S
 packages, `pip freeze` against the `~/.venvs/ocannl-bench.requirements.txt` provisioning recorded,
 one tensor round-tripped through the device (minix's rocm7.1 torch passed `is_available()` and
 segfaulted on that copy), `Python.h` for torch.compile, the interpreter this checkout's drivers
-resolve through `bench_venv.py`, the toolchain, the box's rows by name (`fixture-records`:
+resolve through `bench_venv.py`, the toolchain, the kernel the box boots next (`default-kernel`,
+native Linux only, `skip` elsewhere and in a WSL guest: the kernel image `/boot/vmlinuz` links to
+has its `initrd.img-<version>`,
+and `dpkg -l` lists no package a maintainer script left half-configured or half-installed --
+rog's failed nvidia DKMS build on 2026-11-03 left its new default kernel without an initrd, and
+the box panicked at its next reboot with nothing reporting it beforehand), the box's rows by
+name (`fixture-records`:
 `fixture_digest.py --check-names --expect-recorded <box>`, below), and each fixture against this
 checkout's `DIGESTS.txt` -- then `READY`, or `GAP (<n> of <m> items)` with exit 1; usage errors
 exit 2. `--fixture` (a workload stem, repeatable) narrows the fixtures to the session's; without
@@ -1195,8 +1228,11 @@ to resolve any environment failures before measuring.
 
 It checks and never provisions. Each GAP line is followed by its repair: on a Linux box
 lukstafi/ludics-lite's `scripts/install-linux.sh --bench-venv [nvidia|amd]` (the venv, its
-recorded freeze, the `benchmarks/.venv` link and the anchor's fixtures copied into
-`~/ocannl-staging/benchmarks/fixtures`); on m4-max the venv is built by hand per [Setup](#setup).
+recorded freeze, the `benchmarks/.venv` link and the anchor's top-level fixtures copied into
+`~/ocannl-staging/benchmarks/fixtures`, never its `by-origin/` copies: an absent fixture's repair
+names where the box's own bytes are kept, per *Where each box's fixture bytes are kept* under
+[Setup](#setup)); on
+m4-max the venv is built by hand per [Setup](#setup).
 A fresh worktree's `fixtures/` holds only `DIGESTS.txt`, so copy or link the session's fixtures
 in from the box's store and re-run the check, or pass `--fixture-dir` to check the store a driver
 reads (`gh1133_cells.sh`'s `FIXTURE_DIR`) -- never regenerate one to get past a GAP (see above).
@@ -1226,26 +1262,26 @@ the full output to `logs/<stamp>-<box>-box-check.log`; no unit's row changes, si
 measures.
 
 Per-box state from `check-box.sh` against each box's store (`~/ocannl-staging/benchmarks/fixtures`).
-The October 15 rows come from the `--box-only` audit at 47fb8940 on 2026-10-15. Every box passed
-venv, packages, recorded freeze, device round trip, `Python.h` and toolchain.
+The October 15 rows come from the `--box-only` audit at 47fb8940 on 2026-10-15; a dated row says
+when it was checked since. Every box passed venv, packages, recorded freeze, device round trip,
+`Python.h` and toolchain.
 
 | Box | torch (device) | Toolchain | Fixture gaps (recorded for the box, absent from its store) | Rows the bytes on disk no longer match |
 | --- | --- | --- | --- | --- |
 | m4-max (mac-studio) | 2.13.0 (mps) | macOS SDK (CommandLineTools) | `gpt2_mini_b1`, `gpt2_mini_train_b256` | none |
-| rog-nv | 2.14.0+cu130 (RTX 5070 Ti Laptop) | nvcc 13.4 | `cifar_conv`, `cifar_stride`, `mlp_small`, `mlp_wide` | `gpt2_mini`, `lenet` (m4-max's bytes on disk) |
-| minix | 2.14.1+rocm7.2 (Radeon 8060S, gfx1151) | hipcc (HIP 7.1) | `cifar_conv`, `cifar_stride`, `mlp_small`, `mlp_wide`, `gpt2_mini_train_b256` | `gpt2_mini`, `lenet` (m4-max's bytes on disk) |
+| rog-nv (2026-11-19, ace31a22, READY: 31 items) | 2.14.0+cu130 (RTX 5070 Ti Laptop) | nvcc 13.5 | none | none |
+| minix (2026-11-19, ace31a22, READY: 31 items) | 2.14.1+rocm7.2 (Radeon 8060S, gfx1151) | hipcc (HIP 7.1) | none | none |
 | tuf (2026-11-19) | 2.13.0+rocm7.1 (RX 7700S, gfx1102) | hipcc (HIP 7.1) | none | none |
 
 In the October 15 audit, the anchor's store (m4-max's, which provisioning copies from) lacked
-`gpt2_mini_b1` and `gpt2_mini_train_b256`. Of the audited boxes, only rog held the latter.
-The cifar and mlp fixtures existed only as rog-nv's and minix's `raw-v1` rows.
-minix and tuf compare different torch builds.
+`gpt2_mini_b1` and `gpt2_mini_train_b256`. minix and tuf compare different torch builds.
 
-Since gh-ocannl-1357 (2026-10-30), rog-nv's and minix's `gpt2_mini` and `lenet` rows record the
-bytes on their disks (`content-v1`, the m4-max bytes), so the last column reads none for both
-boxes; reports measured on the replaced `raw-v1` files say so at their top. The same day's audit
-found minix's store holding `gpt2_mini_train_b256` too, and the cifar_conv, cifar_stride and mlp
-fixtures still on neither box.
+On 2026-11-19 rog-nv and minix held every fixture they record, all 22 rows `content-v1`, on
+kernel 7.0.0-43 with its initrd (`default-kernel`). Since gh-ocannl-1357 (2026-10-30) their
+`gpt2_mini` and `lenet` rows record the m4-max bytes on their disks (reports measured on the
+replaced `raw-v1` files say so at their top), and since gh-ocannl-2004 their `cifar_conv`,
+`cifar_stride`, `mlp_small` and `mlp_wide` rows record their own recovered originals, whose
+copies the anchor keeps under `by-origin/` (above).
 
 The November 19 tuf audit found all recorded fixtures present, including `gpt2_mini_b1` and
 `gpt2_mini_train_b256`. Its `lenet` copy matches tuf's recorded digest. The targeted check found

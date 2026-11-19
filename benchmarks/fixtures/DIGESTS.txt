@@ -33,16 +33,16 @@
 # measurement-boxes: m4-max minix rog-nv tuf
 #
 # <sha256>  <bytes>  <name>  <origin>  <digest-kind>
-c27e59b4163397290685aa1736bf7176f56de5ec5019da89db5ad29f80d855c2  26190952  cifar_conv.safetensors  minix  raw-v1
-d008d1cff9885ffaa01eca91b95b9a0cadc2175f9b79a9e4ed8c06dc1dd7b74a  26190952  cifar_conv.safetensors  rog-nv  raw-v1
+d5ed93ec3d30f0d5c00ed05f1cb4d85eb9d79b76d6c7a29be26ec3637132d131  26190952  cifar_conv.safetensors  minix  content-v1
+d5ed93ec3d30f0d5c00ed05f1cb4d85eb9d79b76d6c7a29be26ec3637132d131  26190952  cifar_conv.safetensors  rog-nv  content-v1
 065d246d181aeadd2417c23d0e0fa9fb604b77d3b95a089e412d350ba0f9f9c4  13505936  cifar_resnet.safetensors  m4-max  content-v1
 065d246d181aeadd2417c23d0e0fa9fb604b77d3b95a089e412d350ba0f9f9c4  13505936  cifar_resnet.safetensors  minix  content-v1
 065d246d181aeadd2417c23d0e0fa9fb604b77d3b95a089e412d350ba0f9f9c4  13505936  cifar_resnet.safetensors  rog-nv  content-v1
 2bda4d0d75b8e7b58932de0f1ccbe17f7984fa837b08e6c27a9094adc74bc68a  1079312  cifar_resnet_b1.safetensors  m4-max  content-v1
 2bda4d0d75b8e7b58932de0f1ccbe17f7984fa837b08e6c27a9094adc74bc68a  1079312  cifar_resnet_b1.safetensors  minix  content-v1
 2bda4d0d75b8e7b58932de0f1ccbe17f7984fa837b08e6c27a9094adc74bc68a  1079312  cifar_resnet_b1.safetensors  rog-nv  content-v1
-023d0f51049e6eccd65ec92d0f05ab03aeeb024aad50e6f7f15044ad0029153b  32789600  cifar_stride.safetensors  minix  raw-v1
-b9540f5a6a084a81b764b84108e6c319837448f6064f0f9359e15f7a7e4ea734  32789600  cifar_stride.safetensors  rog-nv  raw-v1
+f299cf2dc2fcdd3042c8b96f3ea31d308251f08a4e6e63eedf1c0cd143d341d3  32789600  cifar_stride.safetensors  minix  content-v1
+f299cf2dc2fcdd3042c8b96f3ea31d308251f08a4e6e63eedf1c0cd143d341d3  32789600  cifar_stride.safetensors  rog-nv  content-v1
 c322a00b72df143612eafafedf7c468e9c05f3e4bc1e7eb6d77ada651ef98de8  13871384  gpt2_mini.safetensors  m4-max  content-v1
 c322a00b72df143612eafafedf7c468e9c05f3e4bc1e7eb6d77ada651ef98de8  13871384  gpt2_mini.safetensors  minix  content-v1
 c322a00b72df143612eafafedf7c468e9c05f3e4bc1e7eb6d77ada651ef98de8  13871384  gpt2_mini.safetensors  rog-nv  content-v1
@@ -107,7 +107,7 @@ bcaab56e4359c5cdba46b3953d955f8dfc2736029f485f8d0ff8709ced844f6e  14756136  gpt2
 63f7d107ce83465de33a33d9306af2ee03738704f82a0e139245a68f62d51e69  4483216  lenet.safetensors  minix  content-v1
 63f7d107ce83465de33a33d9306af2ee03738704f82a0e139245a68f62d51e69  4483216  lenet.safetensors  rog-nv  content-v1
 63f7d107ce83465de33a33d9306af2ee03738704f82a0e139245a68f62d51e69  4483216  lenet.safetensors  tuf  content-v1
-2c48b1d78c6820f639d431b3f57902bcdb79e09f909e0f83415d851cc20ec0c1  51384  mlp_small.safetensors  minix  raw-v1
-f09de9504262eb184672c9f58da821c47e0ee9f6311bd69207700c33298c44ca  51384  mlp_small.safetensors  rog-nv  raw-v1
-4309ccbb2cf62ad678aa99c797ceed0a70f5370572015b601910e05c3f72a3eb  9650952  mlp_wide.safetensors  minix  raw-v1
-56b3d2ce63ac668bc150264f40850cfb49ad477ea8a42b82d2f033841ed15742  9650952  mlp_wide.safetensors  rog-nv  raw-v1
+ff8311f8a682c26e9ca384de58b24013499e1dd4718dd1f33a79d61770817c51  51384  mlp_small.safetensors  minix  content-v1
+ff8311f8a682c26e9ca384de58b24013499e1dd4718dd1f33a79d61770817c51  51384  mlp_small.safetensors  rog-nv  content-v1
+8e93bda5c94c8aad1bf83f9c8631a4d83bb33ce14f6a8803c221fc674335bb89  9650952  mlp_wide.safetensors  minix  content-v1
+8e93bda5c94c8aad1bf83f9c8631a4d83bb33ce14f6a8803c221fc674335bb89  9650952  mlp_wide.safetensors  rog-nv  content-v1

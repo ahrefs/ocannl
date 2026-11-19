@@ -19,10 +19,9 @@ change rewrites the file, which shows up as a reviewable diff rather than as sil
 
 **A fixture is recorded per origin** (gh-ocannl-759). The measuring boxes generate their own
 fixtures from their own venvs, and numpy promises no `Generator` stream stability across releases,
-so the same workload spec legitimately has different bytes on different boxes -- and it does today:
-`mlp_small` and `gpt2_mini` hash differently on minix and rog-nv, at identical sizes, which is why
-`report-hip.md` and `report-gh675-cuda.md` are not cross-box comparable for those two. A file with
-one entry per name cannot say that. It also sets a trap: whichever box regenerates first overwrites
+so the same workload spec can legitimately have different bytes on different boxes (what the
+records show box by box is in `benchmarks/README.md`'s per-box entries bullet). A file with one
+entry per name cannot say that. It also sets a trap: whichever box regenerates first overwrites
 the other's entry, and the other box's untouched fixtures then read as MISMATCH -- a changed
 workload announced where nothing changed. Keying entries by `(name, origin)` removes both problems:
 every box's bytes are recorded and attributed, a fixture matches if it is *some* recorded box's

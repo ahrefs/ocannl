@@ -3,6 +3,11 @@
 > **2026-10-30 (gh-ocannl-1357): measured on the replaced raw-v1 files, not comparable byte-for-byte
 > with later content-v1 reports.** Its `gpt2_mini` is rog-nv's raw-v1 file (`043c1ea8…`). The files on those boxes have since been replaced by the
 > m4-max content-v1 bytes, which `fixtures/DIGESTS.txt` now records for rog-nv and minix.
+>
+> **2026-11-19 (gh-ocannl-2004): the stream reading below is disproved for `mlp_small`.** Its
+> rog-nv and minix files differ in metadata key order alone, with one content digest; for
+> `gpt2_mini` the two raw-v1 files are gone and the question is open. See
+> `benchmarks/README.md` (Layout, the per-box entries bullet).
 
 **Box `rog-nv-wsl` (RTX 5070 Ti Laptop, WSL2), 2026-08-23/24.** The sibling ROCm leg
 (gfx1151) is the comment on gh-ocannl-675 dated 2026-08-23; this file is the NVIDIA half and the

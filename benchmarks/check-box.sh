@@ -45,7 +45,9 @@
 # line names the route that resolved: BENCH_VENV_PY, benchmarks/.venv, or the shared venv a fresh
 # worktree falls back to; --box-only
 # skips it, since a sweep worktree is no measurement checkout), toolchain (nvcc, hipcc, or the
-# macOS SDK the Metal bindings build against), fixture-records (fixture_digest.py --check-names
+# macOS SDK the Metal bindings build against), default-kernel (on native Linux: the kernel image
+# /boot/vmlinuz links to has its initrd, and `dpkg -l` lists no half-configured or half-installed
+# package, so the next reboot comes back -- skip elsewhere and in a WSL guest), fixture-records (fixture_digest.py --check-names
 # --expect-recorded BOX: DIGESTS has a row of BOX's for every fixture name the check covers --
 # the required ones and, without --fixture, every workload's fixture the store holds -- read by
 # name, so a copy that landed in the store but was never recorded as BOX's is a GAP whose repair is
@@ -371,6 +373,65 @@ case $toolchain in
     ;;
 esac
 
+# The kernel the box boots next (gh-ocannl-2004): rog's failed nvidia DKMS build left
+# linux-image-7.0.0-42 half-configured (`iF`), so its initrd was never generated while
+# /boot/vmlinuz already pointed at it, and every reboot panicked with nothing reporting it
+# beforehand -- the running kernel was fine. Native Linux only: off Linux, and in a WSL guest
+# (whose kernel the Windows host picks, never /boot), it reads skip. It follows the
+# /boot/vmlinuz link to a non-empty kernel image, names the version from the image's file name
+# and asks for that version's initrd (/boot/initrd.img-<version>, non-empty), then asks `dpkg -l`
+# for packages a maintainer script left half-configured or half-installed (`?F`, `?H`; the
+# transient states an upgrade passes through are not flagged). Without dpkg the package half
+# reads as not checked. OCANNL_TOOL_CHECK_BOX_BOOT_DIR moves /boot (its harness's stand-in).
+default_kernel() {
+  local os release boot link image version listing broken problems=()
+  os=$(uname -s 2>/dev/null) || os=unknown
+  if [ "$os" != Linux ]; then
+    item default-kernel skip "not Linux ($os): no /boot or dpkg to check"
+    return
+  fi
+  release=$(uname -r 2>/dev/null) || release=
+  case $release in
+    *[Mm]icrosoft* | *WSL*)
+      item default-kernel skip "a WSL guest (kernel $release): the Windows host picks its kernel, not /boot"
+      return
+      ;;
+  esac
+  boot=${OCANNL_TOOL_CHECK_BOX_BOOT_DIR:-/boot}
+  if ! link=$(readlink "$boot/vmlinuz" 2>/dev/null); then
+    problems+=("$boot/vmlinuz is not a link naming the default kernel")
+  else
+    case $link in /*) image=$link ;; *) image=$boot/$link ;; esac
+    version=${link##*/} version=${version#vmlinuz-}
+    if [ "$version" = "${link##*/}" ] || [ -z "$version" ]; then
+      problems+=("$boot/vmlinuz links to '$link', not a vmlinuz-<version>")
+    elif [ ! -f "$image" ] || [ ! -s "$image" ]; then
+      problems+=("$boot/vmlinuz dangles: '$link' is no kernel image")
+    elif [ ! -s "$boot/initrd.img-$version" ]; then
+      problems+=("the default kernel $version has no $boot/initrd.img-$version, so its next boot panics")
+    fi
+  fi
+  local pkgs="package states not checked (no dpkg on PATH)"
+  if command -v dpkg >/dev/null 2>&1; then
+    if ! listing=$(COLUMNS=200 dpkg -l 2>&1); then
+      problems+=("dpkg -l failed: $(printf '%s\n' "$listing" | tail -n 1)")
+    else
+      broken=$(printf '%s\n' "$listing" | awk '$1 ~ /^[a-z][FH]/ { printf "%s%s (%s)", sep, $2, $1; sep = ", " }')
+      if [ -n "$broken" ]; then
+        problems+=("dpkg -l shows packages a maintainer script left unfinished: $broken")
+      fi
+      pkgs="no half-configured or half-installed package"
+    fi
+  fi
+  if [ ${#problems[@]} = 0 ]; then
+    item default-kernel ok "$version has $boot/initrd.img-$version; $pkgs"
+  else
+    item default-kernel GAP "$(printf '%s; ' "${problems[@]}" | sed 's/; $//')" \
+      "needs root on the box, and reboot only once this item reads ok: a half-installed (?H) package is reinstalled (sudo apt-get install --reinstall <package>); for a half-configured (?F) one fix what its maintainer script stopped on (for a kernel, usually a DKMS module that does not build against it), then sudo dpkg --configure -a, which also builds a kernel's missing initrd; an initrd missing on its own is sudo update-initramfs -c -k <version>"
+  fi
+}
+default_kernel
+
 check_fixtures() {
   if [ -z "$unrecorded" ]; then
     item fixture-records ok "$digests has a row of $box's for each of the ${#named[@]} fixture names checked (by name)"
@@ -383,7 +444,7 @@ check_fixtures() {
     path=$fixture_dir/$name.safetensors
     if [ ! -e "$path" ]; then
       item "fixture $name" GAP "absent from $fixture_dir" \
-        "copy the box's recorded bytes in and check them (benchmarks/README.md, 'Rebuilding a fixture that vanished'); install-linux.sh --bench-venv copies the anchor's into ~/ocannl-staging -- never regenerate to pass"
+        "fetch $box's bytes from the anchor into scratch (mac-studio:~/ocannl-staging/benchmarks/fixtures/by-origin/$box/$name.safetensors if present, else its top-level $name.safetensors), run python3 benchmarks/fixture_digest.py --check --expect-origin $box on the copy, and move it into $fixture_dir only on exit 0 (benchmarks/README.md, 'Where each box's fixture bytes are kept'); install-linux.sh --bench-venv copies only the top level, so it cannot supply a by-origin copy -- never regenerate to pass"
     elif out=$(python3 "$here/fixture_digest.py" --check --digests "$digests" "$path" 2>&1); then
       # Some box's recorded bytes, so measurable; whether they are THIS box's is the reports'
       # origin field, said here too because a box whose own row no longer describes its bytes
