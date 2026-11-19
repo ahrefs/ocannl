@@ -2673,7 +2673,9 @@
   (pps ppx_ocannl)))
 
 ; gh-ocannl-1910: the untuned compile on the ambient backend, logging the seeded-default census,
-; which only CUDA and HIP print; the model pick would replace the seeded plan, so it is stated off.
+; which only CUDA and HIP print; the model pick would replace the seeded plan, so it is stated off,
+; and the seeding gate is the fixed threshold 32 rather than the ranked one, which on HIP kept the
+; 64x64 matmul's default and so printed no census line.
 ; Its own rule, so bench_line_readers' above keeps naming cc.
 
 (rule
@@ -2692,7 +2694,8 @@
       %{dep:bench_line_samples.exe}
       seeded
       --ocannl_autotune_log=true
-      --ocannl_model_default_schedule=false))))))
+      --ocannl_model_default_schedule=false
+      --ocannl_gpu_default_sketch_min_reduction=32))))))
 
 ; Tensor-core kernels must name their accumulator destination in the shipped table, even when
 ; their zeroing kernel is separate. This compiles two tiny matmuls; it runs no timing window.
