@@ -62,7 +62,7 @@ let compile () =
           (String.concat ~sep:" "
              (Array.to_list
                 (Array.map (Context.get_values ctx out.Tensor.value) ~f:(fun v ->
-                     Int.to_string (Float.to_int v)))));
+                     Printf.sprintf "%Lx" (Int64.bits_of_float v)))));
         ctx)
   in
   Context.release ctx;
@@ -70,14 +70,15 @@ let compile () =
 
 let parent () =
   (* The parent's own flags reach every child, so a backend chosen on the commandline is the
-     children's too; the environment is inherited. *)
+     children's too; the environment is inherited. The leg's own setting goes first, since the first
+     matching flag wins. *)
   let flags =
     List.filter (List.tl_exn (Array.to_list Stdlib.Sys.argv)) ~f:(String.is_prefix ~prefix:"--")
   in
   let run mode ~on =
     let key = "debug_check_lane_bounds=" ^ Bool.to_string on in
     let ((status, stdout, stderr) as result) =
-      Fresh_process.run ((mode :: flags) @ [ "--ocannl_" ^ key ])
+      Fresh_process.run (mode :: ("--ocannl_" ^ key) :: flags)
     in
     Fresh_process.report ~label:(mode ^ ", " ^ key) result;
     (Poly.equal status (Unix.WEXITED 0), stdout, stderr)
