@@ -1037,8 +1037,9 @@ files.
   `model_seeded_anchor` and `seeded_default` judge the seeded model's premises for it on cc.
   For the restriction itself, `seeded_default` uses a separate f16 contraction with a matrix rate
   above the scalar issue rate. With the seeding settings off the same target must pick an MMA
-  leaf, so the seeded claim can fail. The device leg uses the same contraction at the device's
-  own limits and gates on the advertised tile (gh-ocannl-1879).
+  leaf, so the seeded claim can fail. Both legs pin the pricing in a fresh process before the
+  model reads its process-lifetime settings. The device leg gates on the advertised tile and
+  uses the device's own lowering limits and MMA hook (gh-ocannl-1879).
 - **A decision-only reader ranks what the compile hands its transform** (gh-ocannl-1878): a compile
   sinks zeros under `buffer_aliasing` before scheduling, which moves fission boundaries and so
   kernels, so running `select` on a bare `Context.lowered_for_decisions` prices a fission that never
