@@ -189,8 +189,8 @@ let includes text =
 let is_file p = Stdlib.Sys.file_exists p && not (Stdlib.Sys.is_directory p)
 
 (* Every header the [entries] reach through [dirs], with the identifier tokens of all of them. *)
-let header_closure ~dirs ~entries ~selected_path =
-  let seen = Hash_set.create (module String) in
+let header_closure ~dirs ~entries ~header_identity =
+  let seen = Hash_set.Poly.create () in
   let unresolved = Hash_set.create (module String) in
   let tokens = Hash_set.create (module String) in
   let resolve ~from (kind, target) =
@@ -198,14 +198,14 @@ let header_closure ~dirs ~entries ~selected_path =
       match (kind, from) with `Quoted, Some dir -> [ Stdlib.Filename.concat dir target ] | _ -> []
     in
     List.find (local @ List.map dirs ~f:(fun d -> Stdlib.Filename.concat d target)) ~f:is_file
-    |> Option.bind ~f:selected_path
+    |> Option.bind ~f:(fun path -> Option.map (header_identity path) ~f:(fun key -> (path, key)))
   in
   let rec visit ~from inc =
     match resolve ~from inc with
     | None -> Hash_set.add unresolved (snd inc)
-    | Some path when Hash_set.mem seen path -> ()
-    | Some path ->
-        Hash_set.add seen path;
+    | Some (_, key) when Hash_set.mem seen key -> ()
+    | Some (path, key) ->
+        Hash_set.add seen key;
         let raw = Stdio.In_channel.read_all path in
         List.iter (identifiers (blank_comments_and_literals raw)) ~f:(Hash_set.add tokens);
         List.iter (includes raw) ~f:(visit ~from:(Some (Stdlib.Filename.dirname path)))
@@ -213,7 +213,7 @@ let header_closure ~dirs ~entries ~selected_path =
   List.iter entries ~f:(visit ~from:None);
   (Hash_set.length seen, Hash_set.to_list unresolved, tokens)
 
-let hip_sdk_path dirs =
+let hip_sdk_header_identity dirs =
   let canonical path = try Some (Unix.realpath path) with Unix.Unix_error _ -> None in
   let subtrees =
     List.concat_map dirs ~f:(fun dir ->
@@ -223,9 +223,15 @@ let hip_sdk_path dirs =
             else None))
   in
   fun path ->
-    Option.filter (canonical path) ~f:(fun path ->
-        List.exists subtrees ~f:(fun root ->
-            String.is_prefix path ~prefix:(Stdlib.Filename.concat root "")))
+    Option.bind (canonical path) ~f:(fun file ->
+        if
+          List.exists subtrees ~f:(fun root ->
+              String.is_prefix file ~prefix:(Stdlib.Filename.concat root ""))
+        then
+          (* The same symlink target can get different quoted includes from different
+             directories. *)
+          Option.map (canonical (Stdlib.Filename.dirname path)) ~f:(fun dir -> (file, dir))
+        else None)
 
 (* {2 Measuring} *)
 
@@ -297,8 +303,11 @@ let () =
         List.map (includes probe.Ir.C_syntax.prelude) ~f:(fun (_, t) -> (`Angled, t)))
     @ List.map vendor.implicit_entries ~f:(fun t -> (`Angled, t))
   in
-  let selected_path = if String.equal backend "hip" then hip_sdk_path dirs else Option.some in
-  let n_headers, unresolved, tokens = header_closure ~dirs ~entries ~selected_path in
+  let header_identity =
+    if String.equal backend "hip" then hip_sdk_header_identity dirs
+    else fun path -> Some (path, Stdlib.Filename.dirname path)
+  in
+  let n_headers, unresolved, tokens = header_closure ~dirs ~entries ~header_identity in
   Stdio.printf "headers: %d read from [%s]; %d include targets unresolved%s\n" n_headers
     (String.concat ~sep:"; " dirs) (List.length unresolved)
     (match List.take (List.sort unresolved ~compare:String.compare) 8 with
