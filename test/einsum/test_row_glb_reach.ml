@@ -383,3 +383,57 @@ let () =
   let unmarked = closes "u := [d], [5] <= [d], u unmarked  (rows u)" (store ~mark:false) in
   pf "a marked row's absorbed axis closes to its use site" (marked [ "[5]" ]);
   pf "an unmarked row's closes minimal" (unmarked [ "[1]" ])
+
+(* gh-ocannl-2370: the leaf-wait window guard of gh-ocannl-2318 ([below_pending_minimum]). A leaf
+   axis [l] under a result axis [w] with a fixed index's minimum waits for stage 7 instead of
+   guessing 1 at stage 5, so the minimum reaches it. When [w] is the plain extent of an unpadded
+   window with an open kernel, that window equation holds [w] ([closing_dim_dependencies]): stage 7
+   does not close it to its minimum first, so waiting would bring the leaf nothing. The guard lets
+   it keep its broadcast guess at stage 5, as before gh-ocannl-2318. No program reaching this was
+   found (a window's extent under a fixed index and over a leaf), so the store is staged: the unheld
+   twin pins the wait, the held store the guard. With the guard removed the held store's leaf waits
+   through stage 6b and still closes 1 at stage 7: the guard keeps the closing order, it does not
+   change this store's value. *)
+let () =
+  Verdict.case "a leaf below a minimum, through a held window extent" @@ fun () ->
+  let store ~held_window =
+    let l = Row.get_var () and w = Row.get_var () in
+    let window =
+      Row.Affine
+        {
+          stride = 1;
+          over = Var (Row.get_var ());
+          conv = Some { dilation = 1; kernel = Var (Row.get_var ()); use_padding = false };
+          stride_offset = 0;
+        }
+    in
+    let constraints =
+      [
+        Row.Terminal_dim (false, Var l, origin);
+        Row.Dim_ineq { res = Var w; opnd = Var l; from_ = Sexp.Atom "leaf"; origin };
+        Row.Dim_constr { d = Var w; constr = At_least_dim { d_min = 8; sites = [] }; origin };
+      ]
+      @ if held_window then [ Row.Dim_eq { d1 = Var w; d2 = window; origin } ] else []
+    in
+    let shown env = Option.value_map (Row.get_dim_val env l) ~default:"?" ~f:Int.to_string in
+    let _, trace =
+      List.fold all_stages
+        ~init:((constraints, Row.empty_env), [])
+        ~f:(fun ((cs, env), trace) stage ->
+          let cs, env = Row.solve_inequalities ~stage cs env in
+          ((cs, env), (stage, shown env) :: trace))
+    in
+    let trace = List.rev trace in
+    Stdio.printf "leaf l <= w, w >= 8%s: l after %s\n"
+      (if held_window then ", w a held window extent" else "")
+      (String.concat ~sep:", "
+         (List.map trace ~f:(fun (stage, l) -> Sexp.to_string (Row.sexp_of_stage stage) ^ " " ^ l)));
+    List.Assoc.find_exn trace ~equal:Row.equal_stage
+  in
+  let unheld = store ~held_window:false in
+  let held = store ~held_window:true in
+  pf "with no window, the leaf waits through stage 6b and takes the minimum at stage 7"
+    (String.equal (unheld Stage6b) "?" && String.equal (unheld Stage7) "8");
+  pf "through a held window extent, the leaf keeps its broadcast guess at stage 5"
+    (String.equal (held Stage5) "1");
+  pf "the held extent's minimum does not reach the leaf at stage 7" (String.equal (held Stage7) "1")

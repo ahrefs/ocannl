@@ -36,9 +36,10 @@
    whose operand is a stretch or a reduction. The stretch closed to the result's open axis by role
    at stage 6a, and the inequality it held closed the waiting draw under it empty at stage 6b. The
    reduction's axis, a leaf axis of the reduced draw, guessed 1 at stage 5. A draw whose block
-   counter is its own now takes such an axis by role (draws sharing a counter still broadcast one
-   block), and a leaf axis below it waits for stage 7; [stretch u *. 2] is the minimal stretch case,
-   [(u1 ++ "ab => a") *. v] the reduction case.
+   counter is its own now takes such an axis by role, and a leaf axis below it waits for stage 7;
+   [stretch u *. 2] is the minimal stretch case, [(u1 ++ "ab => a") *. v] the reduction case. With
+   gh-ocannl-2370 draws sharing a counter take it too when they need the same number of blocks at
+   their minima (9 and 12 cells); 8 and 12 still broadcast one block.
 
    With gh-ocannl-2257, the open result remainder in [relu u + (c[3] ++ "a => a...")] settles at
    stage 6a. Previously [relu] closed empty at stage 6b and the draw closed against it, giving one
@@ -389,6 +390,23 @@ let () =
       let%op y = relu u + (c ++ "ab => ab...") in
       ([ u ], y, y))
 
+let dims t = Array.to_list (Shape.to_dims t.Tensor.shape)
+
+(* The draw holds a finite value in each of its [n] cells, none repeated. *)
+let distinct_label n = Printf.sprintf "the %d-cell draw holds a distinct value in every cell" n
+
+let distinct_cell label ctx (draw, n) =
+  let seen = Hash_set.create (module Float) in
+  p_all ~min:n label
+    (Array.to_list (Context.get_values ctx draw.Tensor.value))
+    ~f:(fun value ->
+      let fresh = Float.is_finite value && not (Hash_set.mem seen value) in
+      Hash_set.add seen value;
+      fresh)
+
+let distinct_cells ctx draws =
+  List.iter draws ~f:(fun ((_, n) as draw) -> distinct_cell (distinct_label n) ctx draw)
+
 (* Eight cells require two blocks and twelve require three. With one shared counter the conversions
    each close to a scalar and repeat its value across their respective use sites. *)
 let () =
@@ -431,18 +449,59 @@ let () =
   let ctx = Train.run_once ~f:forward (context ()) y in
   p_all ~min:3 "the shared bits and both draws take their full shapes"
     [ (bits, [ 3 ]); (u, [ 9 ]); (v, [ 12 ]) ]
-    ~f:(fun (t, want) -> List.equal Int.equal (Array.to_list (Shape.to_dims t.Tensor.shape)) want);
+    ~f:(fun (t, want) -> List.equal Int.equal (dims t) want);
+  distinct_cells ctx [ (u, 9); (v, 12) ]
+
+(* gh-ocannl-2370: the agreeing-block rule computes each draw's demand with its own coefficient. A
+   block holds four single-precision cells and two double-precision ones, so 9 single and 6 double
+   cells both need three blocks of the same bits; one coefficient for both would see 3 and 2 (or 5
+   and 3) blocks and keep the ordinary closing order. Metal has no f64, so this is a leg. *)
+let () =
+  Verdict.case "draws sharing a three-block counter at different lane widths" @@ fun () ->
+  let ctx = context () in
+  let leg =
+    Verdict.leg ~when_:(Context.codegen_capabilities ctx).supports_f64
+      ~on:(Context.backend_name ctx) ()
+  in
+  let run =
+    lazy
+      (Tensor.unsafe_reinitialize ();
+       let offsets = NTDSL.term ~fetch_op:Range_over_offsets () in
+       let bits =
+         TDSL.threefry4x32 ~spec:"..p..|..q..->..r..; ..b.. => ..b.." (TDSL.embed_self_id ())
+           offsets ()
+       in
+       let u = TDSL.uint4x32_to_prec_uniform bits () in
+       let v = TDSL.uint4x32_to_prec_uniform bits () in
+       Ir.Tnode.update_prec u.Tensor.value Ir.Ops.single;
+       Ir.Tnode.update_prec v.Tensor.value Ir.Ops.double;
+       let c9 = const [ 9 ] and c6 = const [ 6 ] in
+       let%op y = relu u + (c9 ++ "a => a...") in
+       let%op z = relu v + (c6 ++ "a => a...") in
+       Train.set_materialized u.Tensor.value;
+       Train.set_materialized v.Tensor.value;
+       let forward y =
+         let y_code = Train.forward y in
+         Ir.Assignments.sequence [ y_code; Train.forward z ]
+       in
+       (Train.run_once ~f:forward ctx y, bits, u, v))
+  in
+  in_leg ~leg "the draws keep their lane widths" (fun label ->
+      let _, _, u, v = Lazy.force run in
+      p_all ~min:2 label
+        [ (u, Ir.Ops.single); (v, Ir.Ops.double) ]
+        ~f:(fun (t, prec) -> Ir.Ops.equal_prec (Lazy.force t.Tensor.value.storage_prec) prec));
+  in_leg ~leg "the shared bits and both draws take their full shapes at both widths" (fun label ->
+      let _, bits, u, v = Lazy.force run in
+      p_all ~min:3 label
+        [ (bits, [ 3 ]); (u, [ 9 ]); (v, [ 6 ]) ]
+        ~f:(fun (t, want) -> List.equal Int.equal (dims t) want));
   List.iter
-    [ (u, 9); (v, 12) ]
-    ~f:(fun (draw, n) ->
-      let seen = Hash_set.create (module Float) in
-      p_all ~min:n
-        (Printf.sprintf "the %d-cell draw holds a distinct value in every cell" n)
-        (Array.to_list (Context.get_values ctx draw.Tensor.value))
-        ~f:(fun value ->
-          let fresh = Float.is_finite value && not (Hash_set.mem seen value) in
-          Hash_set.add seen value;
-          fresh))
+    [ (9, fun (_, _, u, _) -> u); (6, fun (_, _, _, v) -> v) ]
+    ~f:(fun (n, pick) ->
+      in_leg ~leg (distinct_label n) (fun label ->
+          let ((ran, _, _, _) as run) = Lazy.force run in
+          distinct_cell label ran (pick run, n)))
 
 module Row = Ocannl.Row
 
@@ -503,15 +562,19 @@ let () =
         (shared_remainders_after_stage6a ~one_block_bound:true)
         ~f:Fn.id)
 
-(* gh-ocannl-2318: a shared counter whose use sites' sizes arrive as fixed-index minima behind a
-   stretch under a pointwise result instead of as constants, at 8 and 12 cells (two and three
-   blocks). A minimum sizes only a draw whose counter is its own: taken by both, the block counts 2
-   and 3 conflicted and the store was refused. The claim is the acceptance and the results' minima;
-   the draws keeping the ordinary closing order and broadcasting one block is a known limitation,
-   printed (into the golden) but not claimed, so a later fix that fills them is a re-promotion, not
-   a red. *)
-let () =
-  Verdict.case "draws sharing a packed counter, sized by fixed-index minima" @@ fun () ->
+(* gh-ocannl-2318, gh-ocannl-2370: a shared counter whose use sites' sizes arrive as fixed-index
+   minima behind a stretch under a pointwise result instead of as constants. Before gh-ocannl-2370 a
+   minimum sized only a draw whose counter was its own, so both draws kept the ordinary closing
+   order and broadcast one block. A minimum now sizes the draws when every draw on the counter needs
+   the same number of blocks at its minima: 9 and 12 cells (indices 8 and 11) both need three, and
+   both draws fill. 8 and 12 cells need two and three blocks. No counter serves both at their
+   minima: a round-up total over [k] blocks of 4 holds [4k - 3] to [4k] cells, so three blocks
+   cannot hold 8 cells and two cannot hold 12. Filling them would mean growing the 8-cell result
+   past its minimum, which a fixed index does not ask for, so that pair keeps the ordinary closing
+   order and repeats one block: printed (into the golden), not claimed, so a later fix that fills it
+   is a re-promotion, not a red. Taken by both, the block counts 2 and 3 conflicted and the store
+   was refused, so the claim for that pair is the acceptance and the results' minima. *)
+let minima_pair ~ia ~ib =
   Tensor.unsafe_reinitialize ();
   let offsets = NTDSL.term ~fetch_op:Range_over_offsets () in
   let bits =
@@ -521,13 +584,28 @@ let () =
   let v = TDSL.uint4x32_to_prec_uniform bits () in
   let%op mu = stretch u *. !.2. in
   let%op mv = stretch v *. !.2. in
-  let%op y = mu ++ "...|7 => ...|0" in
-  let%op z = mv ++ "...|11 => ...|0" in
+  let y = TDSL.einsum1 (Printf.sprintf "...|%d => ...|0" ia) mu () in
+  let z = TDSL.einsum1 (Printf.sprintf "...|%d => ...|0" ib) mv () in
   let%op root = y + z in
-  let (_ : Context.t) = Train.forward_once (context ()) root in
-  let dims t = Array.to_list (Shape.to_dims t.Tensor.shape) in
-  Stdio.printf "shared counter, fixed-index minima: bits %s, u %s, v %s, mu %s, mv %s\n"
-    (shape bits) (shape u) (shape v) (shape mu) (shape mv);
+  Train.set_materialized u.Tensor.value;
+  Train.set_materialized v.Tensor.value;
+  let ctx = Train.forward_once (context ()) root in
+  Stdio.printf "shared counter, fixed-index minima %d and %d: bits %s, u %s, v %s, mu %s, mv %s\n"
+    (ia + 1) (ib + 1) (shape bits) (shape u) (shape v) (shape mu) (shape mv);
+  (ctx, bits, u, v, mu, mv)
+
+let () =
+  Verdict.case "draws sharing a three-block counter, sized by fixed-index minima" @@ fun () ->
+  let ctx, bits, u, v, mu, mv = minima_pair ~ia:8 ~ib:11 in
+  p_all ~min:5 "the shared bits, both draws and both results take the minima's shapes"
+    [ (bits, [ 3 ]); (u, [ 9 ]); (v, [ 12 ]); (mu, [ 9 ]); (mv, [ 12 ]) ]
+    ~f:(fun (t, want) -> List.equal Int.equal (dims t) want);
+  distinct_cells ctx [ (u, 9); (v, 12) ]
+
+let () =
+  Verdict.case "draws sharing a packed counter, sized by disagreeing fixed-index minima"
+  @@ fun () ->
+  let _ctx, _bits, _u, _v, mu, mv = minima_pair ~ia:7 ~ib:11 in
   p_all ~min:2 "accepted, and the pointwise results take the fixed indices' minima"
     [ (mu, [ 8 ]); (mv, [ 12 ]) ]
     ~f:(fun (t, want) -> List.equal Int.equal (dims t) want)
