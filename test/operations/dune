@@ -2494,6 +2494,7 @@
   ../../benchmarks/gh1002_cells.py
   ../../benchmarks/kernel_attribution.py
   ../../benchmarks/gh1161_sites.py
+  ../../benchmarks/gh1253_gate_compare.py
   ../../benchmarks/gh1442_agreement.py
   ../../benchmarks/gh1600_txn_fit.py
   (sandbox always preserve_file_kind))
