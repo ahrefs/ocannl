@@ -803,6 +803,8 @@ if tuned:
                           ship_substituted=False, placement_replay=not searched,
                           searches=2 if searched else 0, replays=0 if searched else 1,
                           no_searches=0))
+    if BAD_SEARCH and searched and not narrow:
+        arms[-1]["timings_contended"] = 1
     if BAD_REPLAY and not searched and opt.get("output_debug_files_in_build_directory") != "true":
         tune["tune"].update(searches=1, replays=0, placement_replay=False)
 else:
@@ -822,7 +824,8 @@ print(json.dumps({"framework": "ocannl", "storage_precision": prec, "searched": 
 @POSIX_ONLY
 class Gh1051AbDriverTest(StubRunTest):
     def measure(self, backend="hip", census="Mma_intrinsics 2", same_bf16=False, fixture=False,
-                no_narrow_source=False, mode="train", tuned=False, repeats=None, bad_replay=False):
+                no_narrow_source=False, mode="train", tuned=False, repeats=None, bad_replay=False,
+                bad_search=False, relative_tmp=False):
         ext = {"hip": "hip", "metal": "metal"}[backend]
         root = self.dir / "root"
         write_stub(root / "_build/default/bin/schedule_bench.exe",
@@ -830,7 +833,8 @@ class Gh1051AbDriverTest(StubRunTest):
                    .replace("SAME_BF16", repr(same_bf16))
                    .replace("NO_NARROW_SOURCE", repr(no_narrow_source)))
         write_stub(root / "_build/default/benchmarks/runners/ocannl/bench_gpt.exe",
-                   TRAIN_BODY.replace("EXT", ext).replace("BAD_REPLAY", repr(bad_replay)))
+                   TRAIN_BODY.replace("EXT", ext).replace("BAD_REPLAY", repr(bad_replay))
+                   .replace("BAD_SEARCH", repr(bad_search)))
         dune = self.fakebin / "dune"
         dune.write_text("#!/bin/sh\nexit 0\n")
         dune.chmod(0o755)
@@ -848,7 +852,8 @@ class Gh1051AbDriverTest(StubRunTest):
             lead.extend(["--repeats", repeats])
         proc = self.run_tool([box_gate.BASH, str(HERE / "gh1051_bf16_ab.sh"), *lead, str(root),
                               backend, "stub", "4", "64"],
-                             {"TMPDIR": str(tmp), "OCANNL_BF16_ARITHMETIC": "auto"})
+                             {"TMPDIR": "../tmp with space" if relative_tmp else str(tmp),
+                              "OCANNL_BF16_ARITHMETIC": "auto"})
         m = re.search(r"raw=(.+) training-fixture=", proc.stdout)
         return proc, (Path(m.group(1)) if m else None)
 
@@ -935,7 +940,8 @@ class Gh1051AbDriverTest(StubRunTest):
         self.assertEqual({r["env"]["BENCH_DOMINANT_KERNEL"] for r in records}, {"0"})
 
     def test_tuned_bf16_arms_replay_their_crowns_beside_an_untuned_f32_control(self):
-        proc, raw = self.measure(backend="metal", fixture=True, tuned=True, repeats="50")
+        proc, raw = self.measure(backend="metal", fixture=True, tuned=True, repeats="50",
+                                 relative_tmp=True)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual({r["argv"][-6] for r in self.records(raw / "n64")}, {"50"})
         proof = list(raw.glob("identity_run_gemm_*/cell.json"))
@@ -952,9 +958,20 @@ class Gh1051AbDriverTest(StubRunTest):
                           if r["arm"].endswith("-single")}, {"0"})
 
     def test_timed_cells_that_do_not_replay_invalidate_the_tuned_row(self):
-        proc, _ = self.measure(backend="metal", fixture=True, tuned=True, bad_replay=True)
+        proc, raw = self.measure(backend="metal", fixture=True, tuned=True, bad_replay=True)
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("expected one clean placement replay", proc.stdout)
+        report = (raw / "tuned/report.md").read_text()
+        self.assertIn("| step_ms.p50 | true-bfloat16 | 0 | - | - | - |", report)
+        self.assertIn("| step_ms.p50 | true-single | 4 |", report)
+        self.assertEqual({r["arm"] for r in self.records(raw / "tuned") if r["ok"]},
+                         {"false-single", "true-single"})
+
+    def test_invalid_wide_search_stops_before_narrowing(self):
+        proc, raw = self.measure(backend="metal", fixture=True, tuned=True, bad_search=True)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("search_false: expected two clean cold searches", proc.stderr)
+        self.assertFalse((raw / "search_true").exists())
 
     def test_zero_repeats_is_refused_before_running_cells(self):
         proc, raw = self.measure(repeats="000")

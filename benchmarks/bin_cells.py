@@ -454,7 +454,7 @@ def stated_files(common_env, arms):
     return dict(sorted(files.items()))
 
 
-def main(argv=None, arm_commits=None):
+def main(argv=None, arm_commits=None, *, validate_cell=None):
     argv = sys.argv[1:] if argv is None else argv
     split = argv.index("--") if "--" in argv else len(argv)
     parser = build_parser()
@@ -527,7 +527,8 @@ def main(argv=None, arm_commits=None):
     try:
         records = cells.run_cells(arms=arms, orders=orders, out=out, env=env,
                                   backend=args.backend, common=common, common_env=common_env,
-                                  timeout=args.cell_timeout, reader=reader, driver=DRIVER)
+                                  timeout=args.cell_timeout, reader=reader, driver=DRIVER,
+                                  validate_cell=validate_cell)
     except cell_group.CleanupFailed as e:
         print(log_line(display_value(str(e))), file=sys.stderr, flush=True)
         return cells.SURVIVOR_EXIT

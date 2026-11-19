@@ -157,7 +157,9 @@ if [ -n "$FIXTURE" ]; then
   dune build benchmarks/runners/ocannl/bench_gpt.exe 2>/dev/null || { echo "BUILD FAILED (bench_gpt)"; exit 1; }
 fi
 GPT="$ROOT/_build/default/benchmarks/runners/ocannl/bench_gpt.exe"
-OUT=$(mktemp -d "${TMPDIR:-/tmp}/gh1051_ab.XXXXXX")
+OUT=$(mktemp -d "${TMPDIR:-/tmp}/gh1051_ab.XXXXXX") || exit 1
+# The search and replay cells have different working directories.
+OUT=$(cd "$OUT" && pwd -P) || exit 1
 echo "gh1051 bf16 A/B: backend=$BACKEND label=$LABEL rounds=$ROUNDS repeats=$REPEATS sizes=${SIZES[*]} sha=$(git -C "$ROOT" rev-parse HEAD)"
 echo "host=$(hostname) raw=$OUT training-fixture=${FIXTURE:-none}"
 git -C "$ROOT" status --porcelain --untracked-files=no | sed 's/^/  dirty: /'
@@ -269,6 +271,7 @@ if [ -n "$FIXTURE" ]; then
         "${TRAIN_ENV[@]}" BENCH_TUNE=1 BENCH_PRECISION=bf16 "$GPT" "${TRAIN_ARGS[@]}" \
         --ocannl_bf16_arithmetic="$arm" --ocannl_autotune_search=true \
         --ocannl_autotune_cache_dir="$OUT/cache-$arm" || exit $?
+      python3 "$HERE/gh1051_cells.py" tuned-search "$OUT/search_$arm" || exit $?
     done
   fi
   for prec in single bfloat16; do
@@ -315,14 +318,16 @@ envs=()
 for e in "${TRAIN_ENV[@]}"; do envs+=(--env "$e"); done
 tune=0
 cache_false= cache_true=
+runner=("$HERE/bin_cells.py")
 if [ "$TUNED" = 1 ]; then
   tune=1
+  runner=("$HERE/gh1051_cells.py" tuned-cells "$OUT")
   # bin_cells shell-splits each arm's arguments, including paths from the operator's TMPDIR.
   quoted_out=$(python3 -c 'import shlex, sys; print(shlex.quote(sys.argv[1]))' "$OUT") || exit 1
   cache_false=" --ocannl_autotune_cache_dir=${quoted_out}/cache-false"
   cache_true=" --ocannl_autotune_cache_dir=${quoted_out}/cache-true"
 fi
-python3 "$HERE/bin_cells.py" --exe "$GPT" --backend "$BACKEND" --out "$TRAIN" ${GATE[@]+"${GATE[@]}"} \
+python3 "${runner[@]}" --exe "$GPT" --backend "$BACKEND" --out "$TRAIN" ${GATE[@]+"${GATE[@]}"} \
   --reader record --rounds "$ROUNDS" --cell-timeout 1800 "${envs[@]}" \
   --arm "false-bfloat16=BENCH_TUNE=$tune BENCH_PRECISION=bf16 --ocannl_bf16_arithmetic=false$cache_false" \
   --arm "true-bfloat16=BENCH_TUNE=$tune BENCH_PRECISION=bf16 --ocannl_bf16_arithmetic=true$cache_true" \

@@ -454,7 +454,8 @@ def parse_arm(text, flag="--arm"):
     return {"label": label, "args": rest, "env": env}
 
 
-def run_cells(*, arms, orders, out, env, backend, common, common_env, timeout, reader, driver):
+def run_cells(*, arms, orders, out, env, backend, common, common_env, timeout, reader, driver,
+              validate_cell=None):
     """Run every cell of the design and return its records, one per cell, also appended to
     `out/cells.jsonl` as they finish.
 
@@ -467,7 +468,8 @@ def run_cells(*, arms, orders, out, env, backend, common, common_env, timeout, r
     [problem]), raising ValueError for output it cannot read; a cell is clean when it exited 0, its
     configuration records state the treatment, and its reader found results and no problem. A cell
     exiting `REFUSED_EXIT` is marked `refused`, and its reader's complaints are not added to its
-    refusal."""
+    refusal. A driver can validate a clean cell's provenance with `validate_cell(arm, stdout)`
+    before its readings are admitted. A ValueError rejects the cell."""
     records = []
     with open(out / "cells.jsonl", "w") as jsonl:
         for rnd, order in enumerate(orders):
@@ -501,6 +503,8 @@ def run_cells(*, arms, orders, out, env, backend, common, common_env, timeout, r
                 # window was refused); whatever it did report is kept, never paired.
                 try:
                     results, read_problems = reader(stdout, stderr)
+                    if validate_cell is not None and not (problems or read_problems):
+                        validate_cell(arm["label"], stdout)
                 except ValueError as e:
                     results, read_problems = [], [str(e)]
                 if not refused:

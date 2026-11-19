@@ -1,6 +1,6 @@
 """Shared cell parsing, validation and tables for the gh-ocannl-1051 drivers.
 
-Used by gh1051_bf16_ab.sh (modes "ab", "untuned", "tuned", and "tuned-proof", on HIP and Metal),
+Used by gh1051_bf16_ab.sh (GEMM and training modes, on HIP and Metal),
 gh2195_f16_ab.sh (the same two modes at `half`) and gh1051_boundary_split.sh (mode "split"), so
 that they cannot drift apart on what a valid cell is. The ab driver's cells are bin_cells.py runs, one
 per size (`load_runs`: a cell counts only when its run found it clean -- exit 0, its resolved
@@ -434,21 +434,23 @@ def training_crown(rec, *, replay):
     return placement, digest, mma, schedule
 
 
+def read_training_crown(path, *, replay):
+    try:
+        return training_crown(bench_output.only_result_record(path.read_text()), replay=replay)
+    except (OSError, KeyError, TypeError, ValueError) as e:
+        raise ValueError(f"{path.parent.name}: {e}") from e
+
+
 def tuned_references(out, label=None):
     """Validate the cold searches and their source-proof replays before timing."""
     references = {}
     for flag, policy in (("false", "wide"), ("true", "narrow")):
         cold = out / f"search_{flag}" / "stdout"
         proof = out / f"identity_run_train_bfloat16_{flag}" / "stdout"
-        try:
-            searched = training_crown(bench_output.only_result_record(cold.read_text()),
-                                      replay=False)
-            replayed = training_crown(bench_output.only_result_record(proof.read_text()),
-                                      replay=True)
-            if searched[:3] != replayed[:3]:
-                raise ValueError("source-proof replay did not ship the cold search's placement and census")
-        except (OSError, KeyError, TypeError, ValueError) as e:
-            raise ValueError(f"{policy} bf16 search/proof: {e}") from e
+        searched = read_training_crown(cold, replay=False)
+        replayed = read_training_crown(proof, replay=True)
+        if searched[:3] != replayed[:3]:
+            raise ValueError(f"{policy} bf16 source-proof replay differs from its cold crown")
         references[flag] = replayed
         if label is not None:
             placement, _, (tensorization, statements, fallbacks), schedule = searched
@@ -458,6 +460,24 @@ def tuned_references(out, label=None):
                 f"shipped MMA {display_value(tensorization)}, {statements} statements, "
                 f"{fallbacks} scalar fallbacks"))
     return references
+
+
+def tuned_result(reference, arm, stdout):
+    """Admit a timed record only under the provenance for its planned arm."""
+    flag, _, prec = arm.partition("-")
+    if flag not in reference or prec not in ("single", "bfloat16"):
+        raise ValueError("unknown tuned training arm")
+    rec = bench_output.only_result_record(stdout)
+    try:
+        if prec == "bfloat16":
+            if training_crown(rec, replay=True) != reference[flag]:
+                raise ValueError("timed replay differs from the source-proof replay")
+        elif (rec["storage_precision"] != "f32" or rec["variant"] != "default"
+              or rec["searched"] is not False or rec.get("tune") is not None):
+            raise ValueError("expected the untuned f32 drift control")
+    except (KeyError, TypeError) as e:
+        raise ValueError(f"unreadable training provenance ({e})") from e
+    return rec
 
 
 def training(run, label, fixture, prec, *, tuned=False):
@@ -487,15 +507,10 @@ def training(run, label, fixture, prec, *, tuned=False):
             continue
         try:
             stdout = cell_runner.cell_stream(run, r, "stdout")
-            rec = (bench_output.only_result_record(stdout) if tuned
+            rec = (tuned_result(reference, r["arm"], stdout) if tuned
                    else bench_output.result_record(stdout))
             got = bench_output.field(rec, "storage_precision")
             step = bench_output.field(rec, "step_ms.p50")
-            if tuned and p == prec and training_crown(rec, replay=True) != reference[flag]:
-                raise ValueError("timed replay differs from the source-proof replay")
-            if tuned and p == "single" and (rec["variant"] != "default" or rec["searched"]
-                                            or rec.get("tune") is not None):
-                raise ValueError("expected the untuned f32 drift control")
         except (OSError, KeyError, ValueError, TypeError) as e:
             problems.append(f"{cell}: unreadable result line ({display_value(str(e))})")
             continue
@@ -590,7 +605,20 @@ def split(out, label):
 
 if __name__ == "__main__":
     # ab OUT LABEL [PREC]: PREC is the treatment precision, bfloat16 (the default) or half.
-    mode, out, label = sys.argv[1], sys.argv[2], sys.argv[3]
+    mode, out = sys.argv[1:3]
+    if mode in ("tuned-search", "tuned-cells"):
+        try:
+            if mode == "tuned-search":
+                read_training_crown(Path(out) / "stdout", replay=False)
+                sys.exit(0)
+            references = tuned_references(Path(out))
+        except ValueError as e:
+            sys.exit(log_line(f"INVALID: {display_value(str(e))}"))
+        import bin_cells
+
+        sys.exit(bin_cells.main(sys.argv[3:],
+                                validate_cell=lambda arm, stdout: tuned_result(references, arm, stdout)))
+    label = sys.argv[3]
     if mode == "tuned-proof":
         try:
             tuned_references(Path(out), label)
