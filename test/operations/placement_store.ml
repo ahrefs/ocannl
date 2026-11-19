@@ -894,8 +894,12 @@ let () =
         Float.is_inf best_ms
         &&
         match rb.Autotune.outcome with
-        | Autotune.Searched | Autotune.Searched_untimed | Autotune.Cache_replay -> true
-        | _ -> false)
+        | Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback
+        | Autotune.Cache_replay ->
+            true
+        | Autotune.Search_died _ | Autotune.Abandonment_replay _ | Autotune.Search_disabled
+        | Autotune.Pre_search_failure _ | Autotune.Abandoned _ | Autotune.Lineage_refused _ ->
+            false)
     | _ -> false);
   records_when_clean ~identity:persisted6.identity ~failed:failed6 ~clean:clean6
     [ placement_stores persisted6 ]
