@@ -290,8 +290,8 @@ if [ -n "$FIXTURE" ]; then
     done
   done
   prove train bench_gpt
-  [ "$FAIL" -eq 0 ] || exit "$FAIL"
   if [ "$TUNED" = 1 ]; then
+    [ "$FAIL" -eq 0 ] || exit "$FAIL"
     python3 "$HERE/gh1051_cells.py" tuned-proof "$OUT" "$LABEL" || exit $?
   fi
 fi

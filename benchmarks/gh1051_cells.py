@@ -523,7 +523,7 @@ def training(run, label, fixture, prec, *, tuned=False):
                 str(bench_output.field(rec, "shipped_mma.tensorization")))
         except (KeyError, ValueError, TypeError):
             shipped.setdefault((flag, p), set()).add("not reported")
-        if not tuned:
+        if not tuned or p == "single":
             _, lines = bench_output.seeded_default(cell_runner.cell_stream(run, r, "stderr"))
             census.setdefault((flag, p), set()).add(tuple(lines))
     for key, seen in sorted(census.items()):

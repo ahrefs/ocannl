@@ -814,6 +814,10 @@ if opt.get("output_debug_files_in_build_directory") == "true":
     os.makedirs(d)
     reach = " acc=" + ("bf16" if narrow else "f32") if prec == "bf16" else ""
     open(os.path.join(d, "step.EXT"), "w").write("kernel " + prec + reach + "\\n")
+    if BAD_IDENTITY and prec == "f32" and not narrow:
+        sys.exit(9)
+elif VARY_F32_CENSUS and prec == "f32":
+    print(f"seeded_default: {1 + rnd % 2} of 2 segments seeded", file=sys.stderr)
 step = (5.0 if prec == "f32" else 4.0 if narrow else 4.0 * skew) * drift
 print(json.dumps({"framework": "ocannl", "storage_precision": prec, "searched": searched,
                   "variant": "tuned" if tuned else "default", "shipped_mma": mma, **tune,
@@ -825,7 +829,7 @@ print(json.dumps({"framework": "ocannl", "storage_precision": prec, "searched": 
 class Gh1051AbDriverTest(StubRunTest):
     def measure(self, backend="hip", census="Mma_intrinsics 2", same_bf16=False, fixture=False,
                 no_narrow_source=False, mode="train", tuned=False, repeats=None, bad_replay=False,
-                bad_search=False, relative_tmp=False):
+                bad_search=False, relative_tmp=False, bad_identity=False, vary_f32_census=False):
         ext = {"hip": "hip", "metal": "metal"}[backend]
         root = self.dir / "root"
         write_stub(root / "_build/default/bin/schedule_bench.exe",
@@ -834,7 +838,8 @@ class Gh1051AbDriverTest(StubRunTest):
                    .replace("NO_NARROW_SOURCE", repr(no_narrow_source)))
         write_stub(root / "_build/default/benchmarks/runners/ocannl/bench_gpt.exe",
                    TRAIN_BODY.replace("EXT", ext).replace("BAD_REPLAY", repr(bad_replay))
-                   .replace("BAD_SEARCH", repr(bad_search)))
+                   .replace("BAD_SEARCH", repr(bad_search)).replace("BAD_IDENTITY", repr(bad_identity))
+                   .replace("VARY_F32_CENSUS", repr(vary_f32_census)))
         dune = self.fakebin / "dune"
         dune.write_text("#!/bin/sh\nexit 0\n")
         dune.chmod(0o755)
@@ -972,6 +977,19 @@ class Gh1051AbDriverTest(StubRunTest):
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("search_false: expected two clean cold searches", proc.stderr)
         self.assertFalse((raw / "search_true").exists())
+
+    def test_untuned_row_collects_timings_after_an_identity_exit_with_sources(self):
+        proc, raw = self.measure(backend="metal", fixture=True, bad_identity=True)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("identity run (train, single, false) exited 9", proc.stdout)
+        self.assertTrue((raw / "n64/cells.jsonl").is_file(), proc.stdout)
+        self.assertEqual(len(self.records(raw / "n64")), 16)
+        self.assertEqual(len(self.records(raw / "untuned")), 16)
+
+    def test_tuned_row_checks_its_untuned_f32_census_across_rounds(self):
+        proc, _ = self.measure(backend="metal", fixture=True, tuned=True, vary_f32_census=True)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("false-single: the seeding census differs across rounds", proc.stdout)
 
     def test_zero_repeats_is_refused_before_running_cells(self):
         proc, raw = self.measure(repeats="000")
