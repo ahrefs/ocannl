@@ -1588,6 +1588,7 @@ let leg_population_slots =
   [
     ("p", Boolean_at 1);
     ("claim", Boolean_at 1);
+    ("p_unless", Boolean_at 1);
     ("pass_fail", Boolean_at 1);
     ("gated", Boolean_at 1);
     ("pf", Boolean_last);
@@ -6301,10 +6302,37 @@ type folded_gate = {
       (** The gate a [~when_] would carry: the negation of the run-constant disjunct, printed. *)
 }
 
+type folded_hatch = {
+  hatch_form : string;  (** The claim's callee, as written. *)
+  hatch_ambiguous : bool;
+  hatch_line : int;
+  hatch : string;  (** The hatch disjunct, printed: what [~unless] would name. *)
+}
+(** A run-time hatch folded into a claim's value (gh-ocannl-996): see {!hatch_fields}. *)
+
 type folded_census = {
   folded : folded_gate list;  (** In source order. *)
+  folded_hatches : folded_hatch list;  (** In source order. *)
   folded_claim_sites : int;  (** Every claim whose value was read. *)
 }
+
+(** {2 A run-time hatch folded into the value (gh-ocannl-996)}
+
+    The same split finds a second fold. [p "…" (reading.contended || within_envelope)] passes
+    wherever the instrument reported contention, printing the row a check prints and recording an
+    evaluation: a claim bypassed seven runs in eight reads as verified. [Verdict.p_unless ~unless]
+    (or a [gated] form given [~unless]) takes the hatch as its own argument and records the bypass.
+
+    What is refused, as a closed list: a claim whose value has a disjunct, at the claim's passing
+    polarity, that is a field projection or a bare name spelled with one of {!hatch_fields} -- the
+    run-time verdicts the timing instrument reports about its own window ([Autotune.timing_result]'s
+    [contended], [dispersed] and [unbatched]) -- beside another disjunct the test computed. What is
+    not: any other spelling of a hatch (a [match] on a status, a helper returning one, a hatch below
+    a conjunction), a hatch that is the claim's whole value (a claim ABOUT contention, which checks
+    it), and a negated one ([(not r.contended) || b] checks [b] exactly when the window was
+    contended, which is no bypass). A new hatch vocabulary joins the list in the PR that introduces
+    it. *)
+let hatch_fields = [ "contended"; "dispersed"; "unbatched" ]
 
 let configuration_readers =
   [
@@ -6333,6 +6361,7 @@ let folded_slots =
   [
     ("p", Positional 1, true);
     ("claim", Positional 1, true);
+    ("p_unless", Positional 1, true);
     ("pass_fail", Positional 1, true);
     ("gated", Positional 1, true);
     ("pf", Last_positional, true);
@@ -6370,7 +6399,14 @@ let folded_unread_members =
 let folded_gate_census content =
   let ast = Read.structure_of content in
   let owners = Verdict_callee.of_structure ast in
-  let folded = ref [] and sites = ref 0 in
+  let folded = ref [] and hatches = ref [] and sites = ref 0 in
+  let hatch_leaf leaf =
+    match (strip_constraints leaf).pexp_desc with
+    | Pexp_field (_, { txt = Ppxlib.Longident.Lident name | Ldot (_, name); _ })
+    | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } ->
+        List.mem hatch_fields name ~equal:String.equal
+    | _ -> false
+  in
   let constancy = Hashtbl.create (module Int) in
   (* What the source assigns into a binding with [:=], by the binding's identity: a ref's value is
      its initializer's and every write's. Claims are judged once the walk is over, when every write
@@ -6794,18 +6830,33 @@ let folded_gate_census content =
                                   then None
                                   else Some (leaf, positive, self#constancy env leaf))
                             in
+                            let printed leaf =
+                              Ppxlib.Pprintast.string_of_expression leaf
+                              |> String.split_on_chars ~on:[ '\n'; ' ' ]
+                              |> List.filter ~f:(fun word -> not (String.is_empty word))
+                              |> String.concat ~sep:" "
+                            in
+                            let is_hatch (leaf, positive, _) = positive && hatch_leaf leaf in
+                            (match List.find parts ~f:is_hatch with
+                            | Some (leaf, _, _)
+                              when List.exists parts ~f:(fun ((_, _, c) as part) ->
+                                       Poly.equal c Varying && not (is_hatch part)) ->
+                                hatches :=
+                                  {
+                                    hatch_form = spelled;
+                                    hatch_ambiguous = Poly.equal ownership Ambiguous;
+                                    hatch_line = expr.pexp_loc.loc_start.pos_lnum;
+                                    hatch = printed leaf;
+                                  }
+                                  :: !hatches
+                            | _ -> ());
                             let gate =
                               List.find parts ~f:(fun (_, _, c) -> Poly.equal c Run_constant)
                             in
                             match gate with
                             | Some (leaf, positive, _)
                               when List.exists parts ~f:(fun (_, _, c) -> Poly.equal c Varying) ->
-                                let printed =
-                                  Ppxlib.Pprintast.string_of_expression leaf
-                                  |> String.split_on_chars ~on:[ '\n'; ' ' ]
-                                  |> List.filter ~f:(fun word -> not (String.is_empty word))
-                                  |> String.concat ~sep:" "
-                                in
+                                let printed = printed leaf in
                                 folded :=
                                   {
                                     folded_form = spelled;
@@ -6826,4 +6877,4 @@ let folded_gate_census content =
     (walker#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } ast
       : structure);
   List.iter (List.rev !pending) ~f:(fun judge -> judge ());
-  { folded = List.rev !folded; folded_claim_sites = !sites }
+  { folded = List.rev !folded; folded_hatches = List.rev !hatches; folded_claim_sites = !sites }

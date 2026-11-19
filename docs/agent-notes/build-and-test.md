@@ -3035,6 +3035,28 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   dialect)`, partly checked everywhere) are not read. The tree's 32 folded sites converted with
   their goldens unmoved, `gated` printing `p`'s line; the cross-machine sweep's skip coverage now
   sees what they never checked.
+- **A run-time hatch is the claim's argument, not a disjunct of its value** (gh-ocannl-996). A claim
+  that executed but cannot be judged on this run -- a timing envelope over a window the instrument
+  declared `contended`, a recording the load left unclean -- is a third state between a pass and a
+  skip. Written `p "…" (r.contended || within r)` it prints the row a check prints and records an
+  evaluation, so a claim verified one run in eight reads as covered: gh-ocannl-994's queued low
+  bound refused 92 of 406 non-contended fleet readings and stayed green because an idle
+  minix/multidev_cc flagged 22 of 25 contended. `Verdict.p_unless ~unless:[ (hatch, taken); … ]
+  label b` (and `?unless` on `gated` and the `gated_*` forms, judged AFTER the gate, so a closed
+  gate stays a skip) prints the same row either way and records `OCANNL_TOOL_VERDICT_CHECKED` (every
+  hatch declared) or `OCANNL_TOOL_VERDICT_BYPASS` (the hatches taken, also echoed on stderr as
+  `BYPASSED (<hatches>): <label>`, and no `EVALUATED`), one per reach -- the two terms of the claim's
+  bypass rate (*Sweep units and verdicts*). The distinction from a gate: a hatch is what the
+  instrument reports about THIS run, a gate a capability of the backend or host; `placement_store`'s
+  claims resting on a recording skip on an unkeyed, refused or failed run and bypass on unclean
+  evidence. The folded-gate reader refuses the folded spelling: a disjunct at the claim's passing
+  polarity that is a field or bare name in `Verdict_scan.hatch_fields` (`contended`, `dispersed`,
+  `unbatched`), beside one the test computed; a hatch below a conjunction, through a helper or a
+  `match`, a negated one, and a claim about contention alone are not read. The instrument's numbers
+  go beside the human stderr line as `Verdict.measure name [ (key, value); … ]`
+  (`OCANNL_TOOL_VERDICT_MEASURE<TAB>executable<TAB>name<TAB>key=value…`), so a bound's next
+  threshold question is a query over the sweep's collected records rather than a campaign parsing
+  stderr.
 - Boolean operator aliases in `verdict_provenance.ml` (gh-ocannl-968) keep their first
   argument until application, so constant annihilators and partial applications use the same
   conjunction/disjunction algebra as direct syntax. Partial Boolean predicates retain their captured

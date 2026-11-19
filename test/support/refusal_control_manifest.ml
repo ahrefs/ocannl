@@ -888,6 +888,7 @@ let raw_entries =
         "[scanner-refusal:1decd3d7c917569b94d9f613373fc1c2] population or gate";
         "[scanner-refusal:c2cbc4e8a5802e3ad11a4c22d434e95b] run-constant gate into";
         "[scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised";
+        "[scanner-refusal:add5883320d9cdf491a628c74ff3aa98] folds the run-time";
         "[scanner-refusal:0599e4e661e8f3457de44f5cb1b23a1a] compares float readbacks";
         "[scanner-refusal:e10fe49d52c241506e850ae9e6766dc9] tolerance reader raised";
         "[scanner-refusal:1045125e8f0a2a1ed0a5933a3c7ab89e] hand-rolled success trailer";
@@ -923,6 +924,7 @@ let raw_entries =
         "[scanner-refusal:664fc647996773a4adb1a331fc223f1f] gates and populations";
         "[scanner-refusal:578e6b63483d4d08d00475e2d75ee60b] exempt_uncompared_legs";
         "[scanner-refusal:92b2164afd41d9fd93850d02494032d7] run-constant gate into";
+        "[scanner-refusal:e1194c69948ad1ab8eca8dfe687e1962] run-time hatch into";
         "[scanner-refusal:90b4edf499fe49feb30dde99ff5e87b3] no source writes";
         "[scanner-refusal:83059def842c32ad5e0ce705c42e5d69] skip-list reader read";
         "[scanner-refusal:e9935bd293c26e123652183c000cb7e8] Verdict.Claims";

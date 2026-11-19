@@ -1557,8 +1557,8 @@ let () =
   let iso2 = measure Autotune.Isolated in
   let after = ref_round_trip () in
   (* The low side of the [Isolated] claim below, as a predicate on the anchor so the anchor can be
-     resampled against it. *)
-  let iso_admitted floor_ms = iso.contended || Float.(iso.ms >= floor_ms / 3.) in
+     resampled against it. A contended reading needs no resampling: the claim bypasses it. *)
+  let iso_within floor_ms = Float.(iso.ms >= floor_ms / 3.) in
   (* The anchor is a minimum, so it is contended exactly when EVERY one of its samples is: GPU
      time-slicing against a sibling CUDA process in a -j 8 suite holds a launch-plus-sync at 2-5 ms
      for a whole 16-sample window, while the isolated window between them still caught a majority of
@@ -1573,7 +1573,7 @@ let () =
     let c0 = Mtime_clock.counter () in
     let rec resample floor_ms n =
       if
-        iso_admitted floor_ms || n >= anchor_resample_windows
+        iso.contended || iso_within floor_ms || n >= anchor_resample_windows
         || Float.(Mtime.Span.to_float_ns (Mtime_clock.count c0) / 1e6 >= anchor_resample_wall_ms)
       then (floor_ms, n)
       else resample (Float.min floor_ms (ref_round_trip ())) (n + 1)
@@ -1582,7 +1582,51 @@ let () =
   in
   (* [contended] is reported here because it is the escape hatch every executed claim below is
      written around: a reading that took it is outside the envelope those claims calibrate, so a
-     calibration run has to be able to tell the two apart. *)
+     calibration run has to be able to tell the two apart. The claims take it as their own argument
+     ([p_unless], [gated ~unless]), so a reading that took it leaves a BYPASS record naming the
+     claim and the hatch rather than a pass (gh-ocannl-996). *)
+  let contended name r = (name ^ " window contended", r.contended) in
+  let dispersed name r = (name ^ " window dispersed", r.dispersed) in
+  let timed_mean r = r.timed_wall_ms /. Float.of_int (max 1 (r.timed_batches * r.depth)) in
+  let median_per_launch r = r.timed_median_ms /. Float.of_int (max 1 r.depth) in
+  (* The instrument's own numbers as machine records beside the human line below (gh-ocannl-996):
+     every reading the claims judge, and the anchor, so a threshold question is a query over the
+     sweep's collected records rather than a campaign parsing this stderr. *)
+  let num x = Printf.sprintf "%.9g" x in
+  List.iter
+    [ ("isolated", 1, iso); ("queued", 1, que); ("queued", 2, que2); ("isolated", 2, iso2) ]
+    ~f:(fun (mode, round, r) ->
+      Verdict.measure "timing reading"
+        [
+          ("backend", backend ());
+          ("mode", mode);
+          ("round", Int.to_string round);
+          ("ms", num r.ms);
+          ("contended", Bool.to_string r.contended);
+          ("dispersed", Bool.to_string r.dispersed);
+          ("depth", Int.to_string r.depth);
+          ("samples", Int.to_string r.samples);
+          ("dispatches", Int.to_string r.dispatches);
+          ("calibration_dispatches", Int.to_string r.calibration_dispatches);
+          ("retry_dispatches", Int.to_string r.retry_dispatches);
+          ("reused", Int.to_string r.reused);
+          ("timed_batches", Int.to_string r.timed_batches);
+          ("timed_wall_ms", num r.timed_wall_ms);
+          ("timed_mean_ms", num (timed_mean r));
+          ("timed_median_batch_ms", num r.timed_median_ms);
+          ("median_per_launch_ms", num (median_per_launch r));
+          ("call_wall_ms", num r.wall_ms);
+        ]);
+  Verdict.measure "round trip anchor"
+    [
+      ("backend", backend ());
+      ("floor_ms", num floor_ms);
+      ("before_ms", num before);
+      ("between_ms", num between);
+      ("after_ms", num after);
+      ("resampled_windows", Int.to_string resampled);
+      ("queued_over_round_trip", num (que.ms /. floor_ms));
+    ];
   let contention r =
     if r.contended then " (contended)" else if r.dispersed then " (dispersed, admitted)" else ""
   in
@@ -1596,12 +1640,18 @@ let () =
     que.depth que.wall_ms iso2.ms (contention iso2) que2.ms (contention que2) que2.depth floor_ms
     before between after resampled (que.ms /. floor_ms);
   let finite r = Float.is_finite r.ms && Float.is_positive r.ms in
-  p "both modes returned a positive finite per-launch time or reported contention"
-    ((finite iso || iso.contended) && (finite que || que.contended));
+  p_unless
+    ~unless:[ contended "isolated" iso ]
+    "isolated timing returned a positive finite per-launch time or reported contention" (finite iso);
+  p_unless
+    ~unless:[ contended "queued" que ]
+    "queued timing returned a positive finite per-launch time or reported contention" (finite que);
   (* One launch per timed run, at least [repeats] runs and at most the 64-run top-up cap, plus the
      warmup. Two-sided: the upper bound would also admit a loop that stopped at the warmup. *)
-  p "isolated timing either reports contention or dispatches one launch per timed run"
-    (iso.contended || (iso.samples >= 16 && iso.samples <= 64 && iso.dispatches = 1 + iso.samples));
+  p_unless
+    ~unless:[ contended "isolated" iso ]
+    "isolated timing either reports contention or dispatches one launch per timed run"
+    (iso.samples >= 16 && iso.samples <= 64 && iso.dispatches = 1 + iso.samples);
   p "isolated timing reports batch depth 1" (iso.depth = 1);
   (* The seam's report is not taken on faith: past the warmup (1) and the calibration dispatches,
      the dispatch counter must decompose into whole batches of the reported depth, between the 16
@@ -1609,25 +1659,28 @@ let () =
      the one it reported fails this on any count the reported depth does not divide. The batches a
      depth-1 settle reused from the calibration (gh-ocannl-1074) are already in its count, and only
      a depth-1 settle may reuse any. *)
-  p "queued timing either refuses contention or dispatches whole batches at the reported depth"
-    (que.contended
-    || que.depth >= 1 && que.calibration_dispatches >= 16 && que.samples >= 16 && que.samples <= 64
-       && (que.reused = 0 || que.depth = 1)
-       && que.dispatches
-          = 1 + que.calibration_dispatches + que.retry_dispatches
-            + ((que.samples - que.reused) * que.depth));
+  p_unless
+    ~unless:[ contended "queued" que ]
+    "queued timing either refuses contention or dispatches whole batches at the reported depth"
+    (que.depth >= 1 && que.calibration_dispatches >= 16 && que.samples >= 16 && que.samples <= 64
+    && (que.reused = 0 || que.depth = 1)
+    && que.dispatches
+       = 1 + que.calibration_dispatches + que.retry_dispatches
+         + ((que.samples - que.reused) * que.depth));
   p "isolated timing reuses no calibration" (iso.reused = 0);
   (* Depth > 1 is what queued mode IS. Gated on the depth the queued call itself reported: on a
      machine where one dispatch already costs a whole batch target the claim is vacuously true, and
-     a vacuous [true] must not read like a verified one. *)
+     a vacuous [true] must not read like a verified one. The gate is judged before the hatch, as
+     [gated ~unless] does everywhere: a contended pair at depth 1 is the skip a quiet one is, and a
+     contended pair that batched is a bypass. *)
   let batches_here = que.depth > 1 in
-  gated ~aggregation:`Environment ~on:(backend ())
-    ~when_:(que.contended || iso.contended || batches_here)
+  gated ~aggregation:`Environment ~on:(backend ()) ~when_:batches_here
+    ~unless:[ contended "queued" que; contended "isolated" iso ]
     ~detail:(fun () ->
       Printf.sprintf "queued %d dispatches at depth %d vs isolated %d" que.dispatches que.depth
         iso.dispatches)
     "queued timing either reports contention or dispatches more launches than isolated"
-    (que.contended || iso.contended || que.dispatches > iso.dispatches);
+    (que.dispatches > iso.dispatches);
   (* Per launch, not per batch. The two sides refuse mirror errors: a reading that forgot to divide
      by the depth is about [depth] times the cost of a launch in that call, and a reading divided by
      the depth TWICE is that cost's [1/depth]. Both errors are claims about the same quantity the
@@ -1672,8 +1725,6 @@ let () =
      [Isolated] is the one reading still compared to that round trip, and only on its low side: it
      IS that quantity by definition, so the two are one quantity's two implementations, and the
      factor of 3 stood at 1.8x clear of the worst measured ratio (0.61) across the same sweep. *)
-  let timed_mean r = r.timed_wall_ms /. Float.of_int (max 1 (r.timed_batches * r.depth)) in
-  let median_per_launch r = r.timed_median_ms /. Float.of_int (max 1 r.depth) in
   (* The seam's window is the one the reading summarizes: the loop counts its own batches, so an
      anchor taken from a window other than the one [samples] describes fails here rather than
      silently rescaling both sides of the envelope. *)
@@ -1688,8 +1739,10 @@ let () =
      #735). The error such an upper side would refuse, a window summed or averaged instead of
      minimized, is refused on the injected clock above, where it needs no device and no second
      window. *)
-  Verdict.pass_fail "isolated reading is a per-launch time or reports contention"
-    (iso_admitted floor_ms) ~detail:(fun () ->
+  p_unless
+    ~unless:[ contended "isolated" iso ]
+    "isolated reading is a per-launch time or reports contention" (iso_within floor_ms)
+    ~detail:(fun () ->
       Printf.sprintf "%.6f ms vs round trip %.6f ms (median batch %.6f ms)" iso.ms floor_ms
         (median_per_launch iso));
   (* The depth from which either side of the queued envelope discriminates, derived rather than
@@ -1719,12 +1772,13 @@ let () =
   let upper_discriminating_depth = 5 and low_discriminating_depth = 4 in
   gated ~aggregation:`Environment ~on:(backend ())
     ~when_:(que.depth >= upper_discriminating_depth)
+    ~unless:[ contended "queued" que ]
     ~detail:(fun () ->
       Printf.sprintf "%.6f ms vs twice the median per launch %.6f ms at depth %d" que.ms
         (2. *. median_per_launch que)
         que.depth)
     "queued reading is a per-launch time rather than a per-batch one, or reports contention"
-    (que.contended || Float.(que.ms <= 2. * median_per_launch que));
+    Float.(que.ms <= 2. * median_per_launch que);
   (* The low side, as the larger of two terms that refuse on different grounds. [2 / depth] is
      structural: the reading is a minimum over the batches this median is a middle of, so it cannot
      exceed that median, a twice-divided one cannot exceed [median / depth], and a bound at twice
@@ -1775,13 +1829,14 @@ let () =
      vacuously. *)
   gated ~aggregation:`Environment ~on:(backend ())
     ~when_:(que.depth >= low_discriminating_depth)
+      (* A dispersed window is outside the [median <= 2 * minimum] bound this side rests on, whether
+         or not its host-load attribution admitted it (gh-ocannl-1558). *)
+    ~unless:[ contended "queued" que; dispersed "queued" que ]
     ~detail:(fun () ->
       Printf.sprintf "%.6f ms vs low bound %.6f ms at depth %d" que.ms queued_low_bound que.depth)
     "queued reading is not that per-launch time divided by the batch depth as well, or reports \
      contention"
-    (* A dispersed window is outside the [median <= 2 * minimum] bound this side rests on, whether
-       or not its host-load attribution admitted it (gh-ocannl-1558). *)
-    (que.contended || que.dispersed || Float.(que.ms >= queued_low_bound));
+    Float.(que.ms >= queued_low_bound);
   (* Amortizing a round trip can only remove time, so a queued reading above the isolated one is the
      instrument reporting the wrong quantity, not a slow machine. The factor absorbs the noise a
      min-of-N leaves; the point of the claim is the direction.
@@ -1798,12 +1853,22 @@ let () =
      direction to inherit. The other claims stay on the first round: they are about one call's own
      decomposition, not about a quantity two calls can be minimized over. *)
   let iso_min = Float.min iso.ms iso2.ms and que_min = Float.min que.ms que2.ms in
-  Verdict.pass_fail "queued timing does not read above isolated timing or reports contention"
-    (* A dispersed window admitted as a cc routine's own variance (gh-ocannl-1558) is bypassed as a
-       contended one is: the direction needs one unstalled sample under each minimum. *)
-    (iso.contended || iso2.contended || que.contended || que2.contended || iso.dispersed
-   || iso2.dispersed || que.dispersed || que2.dispersed
-    || Float.(que_min <= iso_min * 2.))
+  p_unless
+  (* A dispersed window admitted as a cc routine's own variance (gh-ocannl-1558) is bypassed as a
+     contended one is: the direction needs one unstalled sample under each minimum. *)
+    ~unless:
+      [
+        contended "first isolated" iso;
+        contended "second isolated" iso2;
+        contended "first queued" que;
+        contended "second queued" que2;
+        dispersed "first isolated" iso;
+        dispersed "second isolated" iso2;
+        dispersed "first queued" que;
+        dispersed "second queued" que2;
+      ]
+    "queued timing does not read above isolated timing or reports contention"
+    Float.(que_min <= iso_min * 2.)
     ~detail:(fun () ->
       Printf.sprintf "queued %.6f ms (%.6f, %.6f) vs isolated %.6f ms (%.6f, %.6f)" que_min que.ms
         que2.ms iso_min iso.ms iso2.ms);
@@ -1811,9 +1876,10 @@ let () =
      queued routine can run all 64 batches. The pure injected-clock claims above pin the budget;
      this executed leg pins only the absolute timed-batch dispatch cap, after the separately
      accounted calibration work. *)
-  p "queued timing either reports contention or stays within the 64-batch dispatch cap"
-    (que.contended
-    || que.dispatches <= 1 + que.calibration_dispatches + que.retry_dispatches + (64 * que.depth))
+  p_unless
+    ~unless:[ contended "queued" que ]
+    "queued timing either reports contention or stays within the 64-batch dispatch cap"
+    (que.dispatches <= 1 + que.calibration_dispatches + que.retry_dispatches + (64 * que.depth))
 
 (* {1 The objective is part of the cache identity} *)
 

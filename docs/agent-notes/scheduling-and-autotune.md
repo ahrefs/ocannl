@@ -2986,7 +2986,10 @@ files.
   `depth` such a check has to resolve, so the divisor had no admissible value — it refused 23% of
   the sweep's non-contended readings, all on Linux `multidev_cc` (30 of 30 on one box), and stayed
   green only because those readings were usually flagged `contended` and took the claim's escape
-  hatch. A bound on a batched reading belongs on the SAME quantity, and specifically on the WINDOW
+  hatch. That hatch is now each claim's own argument (`Verdict.p_unless ~unless`, gh-ocannl-996):
+  a taken hatch leaves a BYPASS record, the sweep reports a bypass rate per unit, and every reading
+  and the round-trip anchor are `Verdict.measure` records (depth, minimum, window median and mean,
+  the contention flags) collected with the unit's verdict records. A bound on a batched reading belongs on the SAME quantity, and specifically on the WINDOW
   the reading is a minimum over: the timed batches and their summed wall, which `time_routine`
   reports as its `Autotune.timing_call` record's `window` (`samples` — counted by the loop, not
   restated from its result, so a test can hold the two against each other — `reused`, the window's

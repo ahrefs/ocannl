@@ -632,6 +632,7 @@ let collection_quantifier path =
 let claim_kinds =
   [
     ("p", P);
+    ("p_unless", P);
     ("pf", Pf);
     ("pass_fail", Pass_fail);
     ("gated", Gated);

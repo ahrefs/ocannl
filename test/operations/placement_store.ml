@@ -38,11 +38,13 @@
    can spoil; such a run records nothing, by design. So every recording run (run 1, run 6, the
    cross-process recorder) is retried in a fresh directory until one attempt records, up to
    [recording_attempts] times (gh-ocannl-1086). Where none did, the claims resting on the recording
-   are not waived as a silent [true]: they are skipped through [Verdict], an environment skip naming
-   why, which the sweep counts. The claims that rest on a store or a lookup having happened are
-   likewise skipped on the filesystem's own evidence: a refusal the cache absorbed, which
-   [Schedule_cache.recording_cache_io] reports (gh-ocannl-1040), or a run whose own context has no
-   timing identity (gh-ocannl-1043). *)
+   are not waived as a silent [true]: where the run could not record here (no timing identity, a
+   refused store, a failed search) they are skipped through [Verdict], an environment skip naming
+   why; where the load spoiled the evidence they take the contention hatch, a BYPASS record naming
+   the claim (gh-ocannl-996). The sweep counts both, apart. The claims that rest on a store or a
+   lookup having happened are likewise skipped on the filesystem's own evidence: a refusal the cache
+   absorbed, which [Schedule_cache.recording_cache_io] reports (gh-ocannl-1040), or a run whose own
+   context has no timing identity (gh-ocannl-1043). *)
 
 open Base
 open Ocannl
@@ -104,17 +106,22 @@ let attempts_until ~fresh ~settled attempt =
   in
   go 1 []
 
-(* Why a recording run's entry is absent, as the skip reason of the claims resting on it: no timing
-   identity to key on, a refused store, a compared search that failed, or unclean evidence on every
-   attempt. A clean, keyed, unrefused run that recorded nothing is no environment: its record claim
-   fails. *)
+(* Why a recording run's entry is absent, as the claims resting on it report it: no timing identity
+   to key on, a refused store or a compared search that failed are what this run could not record
+   under -- a skip on that reason; unclean evidence on every attempt is the load, a run-time
+   condition rather than a capability -- the claims' contention hatch, a bypass (gh-ocannl-996). A
+   clean, keyed, unrefused run that recorded nothing is no environment: its record claim fails. *)
+type unrecorded = Skip_on of string | Unclean
+
+let unclean_hatch =
+  Printf.sprintf "unclean evidence on all %d recording attempts" recording_attempts
+
 let unrecorded_on ~identity ~failed ~clean stores =
-  if not identity then Cache_plant.unkeyed_on
-  else if List.exists stores ~f:Cache_plant.refused then Cache_plant.refused_on
-  else if failed then "a compared search failed"
-  else if not clean then
-    Printf.sprintf "unclean evidence on all %d recording attempts" recording_attempts
-  else "a clean recording run that recorded nothing"
+  if not identity then Skip_on Cache_plant.unkeyed_on
+  else if List.exists stores ~f:Cache_plant.refused then Skip_on Cache_plant.refused_on
+  else if failed then Skip_on "a compared search failed"
+  else if not clean then Unclean
+  else Skip_on "a clean recording run that recorded nothing"
 
 let graph ~label =
   let mav =
@@ -164,13 +171,25 @@ let refused_in ops label = Cache_plant.refused_in (List.concat ops) label
    process-wide claim before run 8 keeps red. *)
 let unless_refused ops label b = Cache_plant.unless_refused (List.concat ops) label b
 
+(* The gate and the hatch of a claim resting on a recording: where it is absent ([recorded] false),
+   [why] says which -- a reason the run could not record here closes the gate, skipping on it, and
+   unclean evidence opens it with the contention hatch taken, a bypass. Every claim that is
+   evaluated declares the hatch, so its CHECKED records are the denominator of its bypass rate. *)
+let recording_gate ~recorded why =
+  let bypassed = (not recorded) && match why with Unclean -> true | Skip_on _ -> false in
+  let on = match why with Skip_on on -> on | Unclean -> unclean_hatch in
+  (recorded || bypassed, on, [ (unclean_hatch, bypassed) ])
+
 (* [label] over [b], evaluated where the recording it rests on happened ([recorded]) and none of the
-   operations [ops] was refused. Where the recording is absent it is skipped on [on] (from
-   {!unrecorded_on}), a counted environment skip rather than the vacuous [true] it used to be
-   (gh-ocannl-1086); a refusal skips it as [unless_refused] does. *)
-let given_recording ~recorded ~on ops label b =
+   operations [ops] was refused. Where the recording is absent it is skipped on the reason [why]
+   names (from {!unrecorded_on}), a counted environment skip rather than the vacuous [true] it used
+   to be (gh-ocannl-1086), or bypassed on its contention hatch ({!recording_gate}); a refusal skips
+   it as [unless_refused] does. *)
+let given_recording ~recorded ~why ops label b =
   if refused_in ops label then skipped ~aggregation:`Environment ~backend:refused_on label
-  else gated ~aggregation:`Environment ~when_:recorded ~on label b
+  else
+    let when_, on, unless = recording_gate ~recorded why in
+    gated ~aggregation:`Environment ~when_ ~on ~unless label b
 
 (* A recording run's own record claim: [b] (it recorded) where its context is keyed, none of its
    placement stores [ops] was refused, and its evidence was [clean]; skipped otherwise, on the
@@ -179,7 +198,7 @@ let records_when_clean ~identity ~failed ~clean ops label b =
   if not identity then Cache_plant.unless_unkeyed ~identity label b
   else
     given_recording ~recorded:clean
-      ~on:(unrecorded_on ~identity ~failed ~clean (List.concat ops))
+      ~why:(unrecorded_on ~identity ~failed ~clean (List.concat ops))
       ops label b
 
 (* gh-ocannl-1421: the measurement seam under [~rank_fissioned_first], which ranks every
@@ -458,7 +477,7 @@ let () =
       ~failed:(on_record (fun c -> c.failed))
       ~clean:recorder_clean (ops placement_stores record)
   in
-  let given_entry = given_recording ~recorded:(Option.is_some entry) ~on:unrecorded in
+  let given_entry = given_recording ~recorded:(Option.is_some entry) ~why:unrecorded in
   p "the replaying process runs to completion and reports what it observed" (Option.is_some replay);
   p "the replaying process numbers the graph's tensor nodes differently"
     (on_record (fun r -> on_replay (fun c -> c.uid <> r.uid)));
@@ -488,7 +507,7 @@ let () =
      search's. *)
   given_recording
     ~recorded:(Option.is_some entry && recorder_clean)
-    ~on:unrecorded
+    ~why:unrecorded
     [ ops schedule_stores record; ops lookups replay ]
     "a cross-process replay's one search is a schedule-cache replay"
     (on_replay (fun c -> c.replayed));
@@ -517,7 +536,7 @@ let () =
   p_close "the control process's routine computes the right values"
     (Option.value_map control ~default:[||] ~f:(fun c -> c.values))
     reference ~tol:approx_tol;
-  let given_held = given_recording ~recorded:(Option.is_some held_before_control) ~on:unrecorded in
+  let given_held = given_recording ~recorded:(Option.is_some held_before_control) ~why:unrecorded in
   given_held [] "the control process replays nothing recorded: both arms report"
     (on_control (fun c -> c.arms = 2));
   given_held [] "the control process leaves the entry recorded for the other problem untouched"
@@ -625,7 +644,7 @@ let () =
     unrecorded_on ~identity:persisted1.identity ~failed:failed1 ~clean:clean1
       (placement_stores persisted1)
   in
-  let given_stored1 = given_recording ~recorded:stored1 ~on:unrecorded1 in
+  let given_stored1 = given_recording ~recorded:stored1 ~why:unrecorded1 in
   given_stored1 [] "the recorded decision is the shipped one"
     (match keys1 with
     | [ k ] -> String.equal (SC.shipped_label (read_entry k).SC.decision) (arm shipped1)
@@ -699,7 +718,7 @@ let () =
   (* The recorded decision reproduces the lowering the cold run tuned: the one search is a
      schedule-cache replay of the winner the cold run's shipped search crowned, which a clean run 1
      -- the only kind that records -- stored. *)
-  given_recording ~recorded:(stored1 && clean1) ~on:unrecorded1
+  given_recording ~recorded:(stored1 && clean1) ~why:unrecorded1
     [ schedule_stores persisted1; lookups persisted2 ]
     "a replay's one search is a schedule-cache replay"
     (match arms2 with [ r ] -> replayed r | _ -> false);
@@ -742,7 +761,7 @@ let () =
      back to -- the entry the store holds is one a fresh lowering of its decision reproduces
      (gh-ocannl-1022). Run 1's claims above are skipped exactly when run 1 recorded nothing; this
      one only when no run did. *)
-  gated ~aggregation:`Environment ~when_:(Option.is_some recorded) ~on:unrecorded1
+  given_recording ~recorded:(Option.is_some recorded) ~why:unrecorded1 []
     "the entry the store holds is reproduced by a fresh lowering of its decision"
     (match recorded with
     | None -> false
@@ -773,11 +792,11 @@ let () =
   let label =
     "a bypassed store's arms replay the schedule cache, whenever the cold run cached them"
   in
-  if refused_in [ schedule_stores persisted1; lookups persisted3b ] label then
-    skipped ~aggregation:`Environment ~backend:refused_on label
-  else
-    gated_all ~aggregation:`Environment ~when_:(persisted1.identity && clean1) ~on:unrecorded1 label
-      arms3b ~f:replayed;
+  (if refused_in [ schedule_stores persisted1; lookups persisted3b ] label then
+     skipped ~aggregation:`Environment ~backend:refused_on label
+   else
+     let when_, on, unless = recording_gate ~recorded:(persisted1.identity && clean1) unrecorded1 in
+     gated_all ~aggregation:`Environment ~when_ ~on ~unless label arms3b ~f:replayed);
   p "a bypassed store leaves the recorded decision untouched"
     (Option.equal Sexp.equal before (snapshot ())
     && List.length (placement_keys ()) = Option.length recorded);
@@ -814,7 +833,7 @@ let () =
         got expected ~tol:approx_tol;
       (* Skipped also on a refused read of it: the run then never saw the stale entry, and tunes
          both arms cold. *)
-      given_recording ~recorded:(Option.is_some recorded) ~on:unrecorded1
+      given_recording ~recorded:(Option.is_some recorded) ~why:unrecorded1
         [ corrupting; placement_lookups persisted ]
         (Printf.sprintf "an entry that %s is ignored and the placements re-tuned" how)
         (List.length arms = 2);
@@ -824,7 +843,7 @@ let () =
       let clean = clean_evidence (arms @ flips) in
       given_recording
         ~recorded:(clean && Option.is_some recorded)
-        ~on:
+        ~why:
           (if Option.is_none recorded then unrecorded1
            else
              unrecorded_on ~identity:persisted.identity
@@ -908,7 +927,7 @@ let () =
     (Option.is_some entry6);
   let given_entry6 =
     given_recording ~recorded:(Option.is_some entry6)
-      ~on:
+      ~why:
         (unrecorded_on ~identity:persisted6.identity ~failed:failed6 ~clean:clean6
            (placement_stores persisted6))
   in
@@ -1028,15 +1047,16 @@ let () =
      gh-ocannl-1040's rog leg) the injected hook never fires, and [schedule_cache_regime] pins the
      injected reason -- and the run must have attempted one. The gate is the keyed run being clean,
      told from its reports and never from the stores the claim judges (gh-ocannl-1115,
-     gh-ocannl-1361): a contended run is skipped whether or not it stored, since a gate that opened
-     on the stores being there would turn a regression that stops attempting them into a skip. *)
+     gh-ocannl-1361): a contended run is bypassed whether or not it stored, since a gate that opened
+     on the stores being there would turn a regression that stops attempting them into a skip. The
+     load is the claim's hatch, not its gate (gh-ocannl-996): the gate is the timing identity. *)
   let stores8 = placement_stores persisted8 in
   let clean8 = clean_evidence (arms8 @ flips8) in
   Stdio.eprintf
     "run 8 (not part of the golden): clean %b, %d placement stores, %d refused cache operations\n%!"
     clean8 (List.length stores8)
     (List.count persisted8.io ~f:refused);
-  gated ~aggregation:`Environment ~when_:(persisted8.identity && clean8)
-    ~on:"no timing identity, or a contended run"
+  gated ~aggregation:`Environment ~when_:persisted8.identity ~on:"no timing identity"
+    ~unless:[ ("unclean evidence (a contended run)", not clean8) ]
     "under refused commits, the cold run reports its placement store's refusal"
     ((not (List.is_empty stores8)) && List.for_all stores8 ~f:refused)

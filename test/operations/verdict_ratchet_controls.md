@@ -736,6 +736,36 @@ sites, and only them (run `20261019T165108Z-75301`); the rebase onto master brou
 candidate, `cc_kept_library`'s claim that a library is kept where the configuration requests it,
 which is a claim over the configuration alone and taught the reader the settings record.
 
+## gh-ocannl-996 mutation runs
+
+The folded-hatch half of the same reader (`Verdict_scan.folded_gate_census`'s `folded_hatches`)
+refuses a `Verdict` claim whose value has a disjunct, at its passing polarity, that is a field or a
+bare name spelled `contended`, `dispersed` or `unbatched` -- the timing instrument's run-time
+verdicts about its own window -- beside one the test computed: the hatch belongs in the
+`~unless` argument of `Verdict.p_unless` (or of a `gated` form), which records a bypass. Every run used
+tools/mutation-run.sh on the named module and the focused verdict_ratchet alias, exited 1 on exactly
+the listed false claims, and restored the source byte-for-byte; the `verdict_scan.ml` rows ran as
+one batch against baseline `20261119T184446Z-72003`, the other two against their own
+(`20261119T185228Z-25957`, `20261119T190030Z-6867`).
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| A hatch disjunct beside a computed one refuses the claim | `verdict_scan.ml`: no leaf is a hatch | Failed: `refuses a contention hatch folded into a claim's value`; `refuses a hatch folded into a quantified claim's predicate, and a dispersed one`; `refuses a hatch folded into a hatched claim's own value`; `refuses a hatch a bare name carries`; and `refuses a planted folded hatch` | `20261119T184510Z-3693` |
+| A bare name spelled as a hatch is one | `verdict_scan.ml`: only a field projection is a hatch | Failed: the bare-name refusal | `20261119T184805Z-87174` |
+| Only a hatch at the claim's passing polarity is one | `verdict_scan.ml`: a hatch at either polarity | Failed: `accepts a negated hatch, which checks the claim exactly where it is contended` | `20261119T184557Z-63029` |
+| A claim about contention alone is no fold | `verdict_scan.ml`: no computed disjunct required | Failed: `accepts a claim about contention itself`, and the corpus claim (the tree's own claims about contention, the stalled-window one over `burst.contended` among them) | `20261119T184649Z-21951` |
+| A hatched claim's own value is read | `verdict_scan.ml`: `p_unless` dropped from the slots | Failed: the hatched-claim refusal, and the corpus claim that the reader judges every Claims member | `20261119T184853Z-41042` |
+| A finding refuses the run | `verdict_ratchet.ml`: the hatch refusal never fails | Failed: the planted-refusal control | `20261119T185324Z-14032` |
+
+The accepting neighbour no single mutation above turns red is exercised on every run:
+`accepts a hatch taken as the claim's argument`.
+
+The shipped shape, re-seeded into the corpus: in `test/operations/autotune_timing_modes.ml`, the
+64-batch dispatch-cap claim restored to its folded spelling (`p` over the disjunction of
+`que.contended` and the cap)
+failed the corpus claim that no claim folds a run-time hatch into its value, naming that site and
+`que.contended`, and nothing else (run `20261119T190114Z-78730`).
+
 ## gh-ocannl-1303 mutation runs
 
 The gate reader's residue from staging#1089's review (ahrefs/ocannl#1303): its collection-module

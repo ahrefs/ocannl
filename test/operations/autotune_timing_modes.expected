@@ -122,17 +122,18 @@ the spelling is case- and space-insensitive: true
 a misspelling is refused rather than defaulted: true
 
 == the instrument's two modes ==
-both modes returned a positive finite per-launch time or reported contention: true
+isolated timing returned a positive finite per-launch time or reported contention: true
+queued timing returned a positive finite per-launch time or reported contention: true
 isolated timing either reports contention or dispatches one launch per timed run: true
 isolated timing reports batch depth 1: true
 queued timing either refuses contention or dispatches whole batches at the reported depth: true
 isolated timing reuses no calibration: true
 queued timing either reports contention or dispatches more launches than isolated: true
 both readings are anchored on the timed window they reported: true
-isolated reading is a per-launch time or reports contention: PASS
+isolated reading is a per-launch time or reports contention: true
 queued reading is a per-launch time rather than a per-batch one, or reports contention: true
 queued reading is not that per-launch time divided by the batch depth as well, or reports contention: true
-queued timing does not read above isolated timing or reports contention: PASS
+queued timing does not read above isolated timing or reports contention: true
 queued timing either reports contention or stays within the 64-batch dispatch cap: true
 
 == the objective in the cache key ==
