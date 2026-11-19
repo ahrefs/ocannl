@@ -250,7 +250,7 @@ module Impl : sig
   include Ir.Backend_impl.Lowered_backend
 
   val hip_to_code : name:string -> string -> Hiprtc.compile_to_code_result
-  val routine_name_probe : unit -> Ir.C_syntax.routine_name_probe
+  val routine_name_probe : with_rocwmma:bool -> unit -> Ir.C_syntax.routine_name_probe
 end = struct
   include Backend_impl.Device (Device_stream) (Slab)
 
@@ -1070,19 +1070,19 @@ end = struct
     end) in
     C_syntax.codegen_capabilities (module Config)
 
-  (* gh-ocannl-1338: the kernel-name harvest's view of this backend ([tools/vendor_idents.ml]). The
-     conditional includes come first; the alias makes the source mention [rocwmma::], which is what
-     gives the rocWMMA tree's include path to [hiprtc_options], and declares nothing a probed name
-     could collide with but itself. *)
-  let routine_name_probe () =
+  (* Non-tensorized kernels use [Cuda_like_config.Hip.header_prelude] alone. For the tensorized leg, the alias makes
+     [hiprtc_options] choose the rocWMMA include path and language mode (gh-ocannl-1338). *)
+  let routine_name_probe ~with_rocwmma () =
     let module Syntax = C_syntax.C_syntax (Hip_syntax_config (struct
       let procs = [||]
     end))
     in
     let prelude =
-      String.concat ~sep:"\n" (List.map Cuda_like_config.Hip.conditional_includes ~f:snd)
-      ^ "\nusing ocannl_probe_rocwmma_t = rocwmma::float16_t;\n"
-      ^ Cuda_like_config.Hip.header_prelude
+      if with_rocwmma then
+        String.concat ~sep:"\n" (List.map Cuda_like_config.Hip.conditional_includes ~f:snd)
+        ^ "\nusing ocannl_probe_rocwmma_t = rocwmma::float16_t;\n"
+        ^ Cuda_like_config.Hip.header_prelude
+      else Cuda_like_config.Hip.header_prelude
     in
     let compile source =
       match hip_to_code ~name:"vendor_idents_probe" source with

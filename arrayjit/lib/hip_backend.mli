@@ -6,10 +6,9 @@ module Impl : sig
       Exposed for hardware-backed compiler regression probes; callers normally enter through
       {!compile}. *)
 
-  val routine_name_probe : unit -> Ir.C_syntax.routine_name_probe
-  (** What [tools/vendor_idents.exe] harvests this backend's routine-name table through
-      (gh-ocannl-1338): the kernel prelude (rocWMMA's include among it), {!hip_to_code}, and the
-      routine-name mangling. *)
+  val routine_name_probe : with_rocwmma:bool -> unit -> Ir.C_syntax.routine_name_probe
+  (** The kernel prelude and compiler used by the routine-name harvest (gh-ocannl-1338). The
+      ordinary HIP prelude is always present. [with_rocwmma] selects the tensorized context. *)
 end
 
 val hip_include_options : unit -> string list

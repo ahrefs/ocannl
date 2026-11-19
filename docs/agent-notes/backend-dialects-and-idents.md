@@ -369,8 +369,12 @@ files.
   and prints the measurement, the missing and superfluous entries, and the module to paste. HIP's
   candidate harvest follows literal includes inside canonical `hip`, `hsa` and `rocwmma` header
   subtrees (gh-ocannl-1713), so a distro SDK under `/usr/include` does not bring host header trees
-  into the candidate set. The hiprtc probe still compiles against the full prelude. Exit 1 says the checked-in table no longer matches the
-  toolchain; `--names a,b` spot-checks entries. Regenerate on the newest toolkit the fleet runs: the measurements so far only
+  into the candidate set. hiprtc checks the ordinary prelude first and sends its survivors through
+  the rocWMMA prelude. Each reported name fails alone in a real kernel configuration. On discrete
+  gfx1102, the harvest read 153 canonical headers instead of 35,418 paths and ran in 335 seconds
+  versus 661. The 495 generated names were byte-identical. Exit 1 says the checked-in table differs
+  from the measurement. `--names a,b` spot-checks entries. Regenerate on the newest toolkit the
+  fleet runs. The measurements so far only
   grew (CUDA 13.5 added six runtime-API enumerators to 13.4's 1029 names and dropped none), so the
   newest table is also the union. Should a later report list superfluous entries, keep the ones an
   older supported toolkit still rejects -- a superfluous entry only renames a routine, a missing

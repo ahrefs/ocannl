@@ -9,7 +9,12 @@
 open Base
 
 let built = true
-let probe () = Hip_backend.Impl.routine_name_probe ()
+
+let probes () =
+  [
+    ("ordinary HIP", Hip_backend.Impl.routine_name_probe ~with_rocwmma:false ());
+    ("HIP with rocWMMA", Hip_backend.Impl.routine_name_probe ~with_rocwmma:true ());
+  ]
 
 let include_dirs () =
   List.filter_map (Hip_backend.hip_probe_include_options ()) ~f:(String.chop_prefix ~prefix:"-I")

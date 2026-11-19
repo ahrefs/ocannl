@@ -18,9 +18,10 @@
    namespace ([C_syntax.implementation_reserved], a rule) and the routine-name floor
    ([routine_floor_idents]: the node-name blacklist and the C library's names). The table's own
    entries are candidates too, so an entry that no longer collides is noticed. Each candidate is
-   compiled as a kernel name after the prelude, in batches; a failing batch is settled by compiling
-   the names its report blames one at a time, and by bisection where the report blames none, so
-   every name reported as failing failed ALONE.
+   compiled as a kernel name after a prelude, in batches. Failing batches are settled by compiling
+   the names their reports blame one at a time, or by bisection where the reports blame none. HIP
+   tests the ordinary prelude first and retests survivors with the rocWMMA prelude. Each reported
+   collision failed alone in at least one kernel configuration the backend uses.
 
    What it prints: the measurement, the names that fail although the backend's [kernel_ident] passes
    them through (missing from the table), the table entries that compile as kernel names
@@ -41,7 +42,7 @@ open Base
 type vendor = {
   backend : string;
   built : bool;
-  probe : unit -> Ir.C_syntax.routine_name_probe;
+  probes : unit -> (string * Ir.C_syntax.routine_name_probe) list;
   include_dirs : unit -> string list;
   capabilities : unit -> (string * string) list;
   implicit_entries : string list;
@@ -56,7 +57,7 @@ let vendors =
     {
       backend = "cuda";
       built = Vendor_idents_arm_cuda.built;
-      probe = Vendor_idents_arm_cuda.probe;
+      probes = (fun () -> [ ("CUDA", Vendor_idents_arm_cuda.probe ()) ]);
       include_dirs = Vendor_idents_arm_cuda.include_dirs;
       capabilities = Vendor_idents_arm_cuda.capabilities;
       implicit_entries = [ "cuda_runtime.h" ];
@@ -65,7 +66,7 @@ let vendors =
     {
       backend = "hip";
       built = Vendor_idents_arm_hip.built;
-      probe = Vendor_idents_arm_hip.probe;
+      probes = Vendor_idents_arm_hip.probes;
       include_dirs = Vendor_idents_arm_hip.include_dirs;
       capabilities = Vendor_idents_arm_hip.capabilities;
       implicit_entries = [ "hip/hip_runtime.h" ];
@@ -74,7 +75,7 @@ let vendors =
     {
       backend = "metal";
       built = Vendor_idents_arm_metal.built;
-      probe = Vendor_idents_arm_metal.probe;
+      probes = (fun () -> [ ("Metal", Vendor_idents_arm_metal.probe ()) ]);
       include_dirs = Vendor_idents_arm_metal.include_dirs;
       capabilities = Vendor_idents_arm_metal.capabilities;
       implicit_entries = [];
@@ -285,13 +286,15 @@ let () =
     Stdio.printf
       "vendor_idents: the %s arm is not built on this box (its vendor library is absent)\n" backend;
     Stdlib.exit 2);
-  let probe = vendor.probe () in
+  let probes = vendor.probes () in
+  let _, probe = List.hd_exn probes in
   Stdio.printf "vendor_idents: backend %s\n" backend;
   let capabilities = vendor.capabilities () in
   List.iter capabilities ~f:(fun (k, v) -> Stdio.printf "  %s: %s\n" k v);
   let dirs = extra_dirs @ vendor.include_dirs () in
   let entries =
-    List.map (includes probe.prelude) ~f:(fun (_, t) -> (`Angled, t))
+    List.concat_map probes ~f:(fun (_, probe) ->
+        List.map (includes probe.Ir.C_syntax.prelude) ~f:(fun (_, t) -> (`Angled, t)))
     @ List.map vendor.implicit_entries ~f:(fun t -> (`Angled, t))
   in
   let selected_path = if String.equal backend "hip" then hip_sdk_path dirs else Option.some in
@@ -310,7 +313,6 @@ let () =
   in
   Stdio.printf "candidates: %d (of %d header tokens and %d table entries)\n%!"
     (List.length candidates) (Hash_set.length tokens) (List.length table);
-  let first_line = line_count probe.prelude + 1 in
   (* A kernel can hide a C++ struct name without conflicting with its declaration. Keep the
      unqualified type uses on the candidate's line so diagnostics still identify that candidate. *)
   let type_uses =
@@ -318,33 +320,69 @@ let () =
         Printf.sprintf " using __ocannl_probe_type_%d = %s;" i typ)
     |> String.concat
   in
-  let source names =
-    probe.prelude ^ "\n"
-    ^ String.concat ~sep:"\n"
-        (List.map names ~f:(fun name -> probe.kernel_definition name ^ type_uses))
-    ^ "\n"
-  in
   let compiles = ref 0 in
-  let compile names =
-    Int.incr compiles;
-    probe.compile (source names)
+  let measurements =
+    List.map probes ~f:(fun (label, (probe : Ir.C_syntax.routine_name_probe)) ->
+        let first_line = line_count probe.prelude + 1 in
+        let source names =
+          probe.prelude ^ "\n"
+          ^ String.concat ~sep:"\n"
+              (List.map names ~f:(fun name -> probe.kernel_definition name ^ type_uses))
+          ^ "\n"
+        in
+        let compile names =
+          Int.incr compiles;
+          probe.compile (source names)
+        in
+        (* The controls: the prelude compiles alone, and with a fresh name; a keyword does not. *)
+        (match (compile [], compile [ "ocannl_probe_control" ], compile [ "int" ]) with
+        | Ok (), Ok (), Error _ -> ()
+        | prelude, control, keyword ->
+            let say what = function
+              | Ok () -> what ^ " compiled"
+              | Error r -> what ^ " failed: " ^ r
+            in
+            Stdio.printf "vendor_idents: %s controls failed, no measurement taken\n%s\n%s\n%s\n"
+              label (say "the prelude" prelude)
+              (say "a fresh kernel name" control)
+              (say "[int]" keyword);
+            Stdlib.exit 2);
+        let failed_alone name = Result.is_error (compile [ name ]) in
+        let rec settle names =
+          match names with
+          | [] -> []
+          | [ name ] -> if failed_alone name then [ name ] else []
+          | _ -> (
+              match compile names with
+              | Ok () -> []
+              | Error report -> (
+                  let arr = Array.of_list names in
+                  let blamed =
+                    List.filter_map (blamed_lines report) ~f:(fun line ->
+                        let k = line - first_line in
+                        if k >= 0 && k < Array.length arr then Some arr.(k) else None)
+                    |> List.dedup_and_sort ~compare:String.compare
+                  in
+                  match List.filter blamed ~f:failed_alone with
+                  | [] ->
+                      let left, right = List.split_n names (List.length names / 2) in
+                      settle left @ settle right
+                  | failed ->
+                      let failed_set = Set.of_list (module String) failed in
+                      failed @ settle (List.filter names ~f:(fun n -> not (Set.mem failed_set n)))))
+        in
+        ( label,
+          compile,
+          fun candidates -> List.chunks_of candidates ~length:batch |> List.concat_map ~f:settle ))
   in
-  (* The controls: the prelude compiles alone, and with a fresh name; a keyword does not. *)
-  (match (compile [], compile [ "ocannl_probe_control" ], compile [ "int" ]) with
-  | Ok (), Ok (), Error _ -> ()
-  | prelude, control, keyword ->
-      let say what = function Ok () -> what ^ " compiled" | Error r -> what ^ " failed: " ^ r in
-      Stdio.printf "vendor_idents: the controls do not hold, no measurement taken\n%s\n%s\n%s\n"
-        (say "the prelude" prelude)
-        (say "a fresh kernel name" control)
-        (say "[int]" keyword);
-      Stdlib.exit 2);
-  let failed_alone name = Result.is_error (compile [ name ]) in
   Option.iter spot_names ~f:(fun names ->
       List.iter names ~f:(fun name ->
-          match compile [ name ] with
-          | Ok () -> Stdio.printf "%s: compiles as a kernel name\n" name
-          | Error report ->
+          match
+            List.find_map measurements ~f:(fun (_, compile, _) ->
+                match compile [ name ] with Ok () -> None | Error report -> Some report)
+          with
+          | None -> Stdio.printf "%s: compiles as a kernel name\n" name
+          | Some report ->
               let first_error =
                 List.find (String.split_lines report) ~f:(fun l ->
                     String.is_substring l ~substring:"error")
@@ -352,34 +390,20 @@ let () =
               Stdio.printf "%s: fails: %s\n" name
                 (Option.value first_error ~default:"(no error line)"));
       Stdlib.exit 0);
-  let rec settle names =
-    match names with
-    | [] -> []
-    | [ name ] -> if failed_alone name then [ name ] else []
-    | _ -> (
-        match compile names with
-        | Ok () -> []
-        | Error report -> (
-            let arr = Array.of_list names in
-            let blamed =
-              List.filter_map (blamed_lines report) ~f:(fun line ->
-                  let k = line - first_line in
-                  if k >= 0 && k < Array.length arr then Some arr.(k) else None)
-              |> List.dedup_and_sort ~compare:String.compare
-            in
-            match List.filter blamed ~f:failed_alone with
-            | [] ->
-                let left, right = List.split_n names (List.length names / 2) in
-                settle left @ settle right
-            | failed ->
-                let failed_set = Set.of_list (module String) failed in
-                failed @ settle (List.filter names ~f:(fun n -> not (Set.mem failed_set n)))))
+  let _, failed =
+    List.fold measurements ~init:(candidates, []) ~f:(fun (remaining, failed) (label, _, measure) ->
+        let before = !compiles in
+        let collisions = measure remaining in
+        if List.length measurements > 1 then
+          Stdio.printf "measured %s: %d compiles; %d collisions\n%!" label (!compiles - before)
+            (List.length collisions);
+        let collisions_set = Hash_set.of_list (module String) collisions in
+        let remaining =
+          List.filter remaining ~f:(fun name -> not (Hash_set.mem collisions_set name))
+        in
+        (remaining, List.rev_append collisions failed))
   in
-  let failed =
-    List.chunks_of candidates ~length:batch
-    |> List.concat_map ~f:settle
-    |> List.dedup_and_sort ~compare:String.compare
-  in
+  let failed = List.sort failed ~compare:String.compare in
   Stdio.printf "measured: %d compiles; %d names fail as a kernel name\n" !compiles
     (List.length failed);
   let failed_set = Set.of_list (module String) failed in
