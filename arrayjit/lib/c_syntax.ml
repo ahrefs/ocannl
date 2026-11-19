@@ -803,11 +803,10 @@ type async_copy_syntax = {
       [OCANNL_SELECT] final step needs the truth apart from the arms);
     - [Blend_over_locals decl]: the backend's own short-circuiting spelling ([ternop_syntax] /
       [binop_syntax]) applied to arms first bound to locals declared [decl] (C++'s [auto]) in an
-      immediately-invoked lambda. The truth is then exactly the dialect's own test, whatever it is
-      ([Satur01_gate]'s differs between cc and the GPU dialects, ahrefs/ocannl#1647), and each local
-      keeps its arm's type, so the value and type are the short-circuiting spelling's (a lambda
-      returns the decayed type of its one [return], the [?:]'s). A lambda rather than cc's GNU
-      statement expression: NVRTC (13.4) rejects [({ ... })] ("expected an expression"). *)
+      immediately-invoked lambda. The truth is exactly the dialect's own test, and each local keeps
+      its arm's type, so the value and type are the short-circuiting spelling's (a lambda returns
+      the decayed type of its one [return], the [?:]'s). A lambda rather than cc's GNU statement
+      expression: NVRTC (13.4) rejects [({ ... })] ("expected an expression"). *)
 type select_blend =
   | Blend_truth of (PPrint.document -> PPrint.document -> PPrint.document -> PPrint.document)
   | Blend_over_locals of string
@@ -1654,8 +1653,9 @@ let rng_binop_syntax ~backend ~call prec op =
   | _ -> invalid_arg "C_syntax.rng_binop_syntax: not a random number generation operator"
 
 (** All maximal identifier-like substrings of [s] -- a run of alphanumerics and underscores starting
-    at a letter or underscore. This decomposes a composite rendering like ["(fabsf(floorf("] into
-    [["fabsf"; "floorf"]] rather than the concatenation ["fabsffloorf"].
+    at a letter or underscore. The [Satur01_gate] prefix
+    ["__extension__ ({ __auto_type ocannl_sat01_x__ = ("] yields
+    [["__extension__"; "__auto_type"; "ocannl_sat01_x__"]].
 
     A run whose first character is preceded by a digit or a [.] is the tail of a numeric literal
     ([f] in ["0.0f"], [h] in ["1.0h"]), not a name, and is skipped -- otherwise every single-letter
@@ -3727,23 +3727,19 @@ module C_syntax (B : C_syntax_config) = struct
   let binop_expr ?(blend = true) prec op ~v1 ~v2 e1 e2 =
     let open PPrint in
     let gate_blend () = if blend then blend_for prec ~cond:v1 ~arms:[ (v2, prec) ] else None in
-    (* Each truth is the short-circuiting spelling's own test ([Ops.binop_c_syntax]'s float arms),
-       arms in its order: [Satur01_gate] yields its second operand where the test FAILS. *)
+    (* Each truth is the short-circuiting spelling's own test, with the same typed zero. *)
     match op with
     | Ops.Relu_gate | Ops.Satur01_gate -> (
         let zero = string (Ops.c_float_literal prec "0.0") in
-        match (op, gate_blend (), prec) with
-        | Ops.Relu_gate, Some (Blend_truth blend), _ ->
+        match (op, gate_blend ()) with
+        | Ops.Relu_gate, Some (Blend_truth blend) ->
             blend (parens e1 ^^ string " > " ^^ zero) e2 zero
-        | _, Some (Blend_truth blend), Ops.Single_prec _ ->
-            blend (string "fabsf(floorf(" ^^ e1 ^^ string ")) > " ^^ zero) zero e2
-        | _, Some (Blend_truth blend), _ ->
-            blend (string "fabs(floor(" ^^ e1 ^^ string ")) > " ^^ zero) zero e2
-        | _, Some (Blend_over_locals decl), _ ->
-            (* The dialect's own gate over its operand's value: the GPU [Satur01_gate] tests [0 < x
-               && x < 1], not cc's [fabs(floor(x)) > 0]. *)
+        | _, Some (Blend_truth blend) ->
+            let prefix, suffix = Ops.c_sat01_gate_condition in
+            blend (string prefix ^^ e1 ^^ string suffix) e2 zero
+        | _, Some (Blend_over_locals decl) ->
             Over_locals.blend_gate ~decl ~binop_syntax:B.binop_syntax prec op e1 e2
-        | _, None, _ -> group (B.binop_syntax prec op e1 e2))
+        | _, None -> group (B.binop_syntax prec op e1 e2))
     | _ -> group (B.binop_syntax prec op e1 e2)
 
   (* gh-ocannl-2145: a short-circuiting gated operator ([Ops.Gated_second]: the gates, [&&], [||])

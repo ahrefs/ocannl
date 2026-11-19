@@ -176,8 +176,7 @@ let () =
         (Cs.operand_conditionality_violations ~binop_syntax ~ternop_syntax ~select_blend_syntax));
   (* gh-ocannl-1695: HIP blends a value select over [auto] locals at every float compute precision
      but fp8, CUDA at none (ptxas if-converts the short-circuiting spelling itself), and the blend's
-     truth is the dialect's own test -- the GPU [Satur01_gate]'s [0 < x && x < 1], not cc's
-     [fabs(floor(x)) > 0] (ahrefs/ocannl#1647). *)
+     truth is the dialect's own spelling of the open unit interval. *)
   let float_precs = [ Ops.half; Ops.bfloat16; Ops.single; Ops.double ] in
   p_all "HIP blends value selects over auto locals at f16, bf16, f32 and f64" float_precs
     ~f:(fun prec ->

@@ -255,6 +255,11 @@ let () =
         ~inputs:[ (byte, a); (byte, b); (byte, flat 1.) ]
         (fun e -> le e (bin Ops.Relu_gate (e.arg 2) (sum e) ~p:byte))
         over_byte;
+      (* Both signs of 2^32 used to reach [abs] at [int] width on cc and pass the operand. *)
+      case "int64 Satur01_gate at zero and wide integers" ~slot:Ops.int64 ~expect:Executed_only
+        ~inputs:[ (Ops.int64, [| 0.; 4294967296.; -4294967296.; 1. |]) ]
+        (fun e -> LL.Binop (Ops.Satur01_gate, e.arg 0, e.lit e.p 5.))
+        (flat 0.);
       case "byte select arm against 255"
         ~inputs:[ (byte, a); (byte, b); (byte, flat 1.); (byte, flat 2.) ]
         (fun e -> le e (LL.Ternop (Ops.Where, e.arg 2, sum e, e.arg 3), byte))
