@@ -247,9 +247,13 @@ files.
   7 and 11 they need 2 and 3 blocks, and taking both was refused. No counter holds both at their
   minima (`k` round-up blocks of 4 hold `4k-3` to `4k` cells), and serving 8 from three blocks
   would grow the result past the minimum its fixed index sets, so that pair keeps the ordinary
-  order and broadcasts one block, printed in `row_glb_reach_executed`, not claimed. The same test
-  pins the agreeing-remainder rule at two lane widths (9 single and 6 double cells, three blocks
-  each; an f64 leg). A reduced draw's leaf axis under the result guessed
+  order and broadcasts one block, printed in `row_glb_reach_executed`, not claimed. A minimum
+  counts only where stage 7 closes the axis at it first (not one a held window or concat equation
+  defers, nor one in a parameter's bound component), and a total still pending in the pass on the
+  counter blocks the rule, as it blocks gh-ocannl-2319's; no store was found where those three
+  change an outcome (staged attempts are refused on the base too). The same test pins both
+  agreeing rules at two lane widths (9 single and 6 double cells, three blocks each, by constants
+  and by minima; an f64 leg): forcing one coefficient on either rule fails its case. A reduced draw's leaf axis under the result guessed
   1 at stage 5 (`close_dim_terminal`): it now waits until stage 7 while a non-parameter result
   above it, through `res` links, still has such a minimum, unless the walk meets an axis a held
   window or concat equation defers: stage 7 does not close that axis to its minimum first, so the

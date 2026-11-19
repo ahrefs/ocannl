@@ -452,12 +452,15 @@ let () =
     ~f:(fun (t, want) -> List.equal Int.equal (dims t) want);
   distinct_cells ctx [ (u, 9); (v, 12) ]
 
-(* gh-ocannl-2370: the agreeing-block rule computes each draw's demand with its own coefficient. A
+(* gh-ocannl-2370: the agreeing-block rules compute each draw's demand with its own coefficient. A
    block holds four single-precision cells and two double-precision ones, so 9 single and 6 double
    cells both need three blocks of the same bits; one coefficient for both would see 3 and 2 (or 5
-   and 3) blocks and keep the ordinary closing order. Metal has no f64, so this is a leg. *)
-let () =
-  Verdict.case "draws sharing a three-block counter at different lane widths" @@ fun () ->
+   and 3) blocks and keep the ordinary closing order. [uses u v] builds the two use sites, sized by
+   constants (gh-ocannl-2319's remainders) or by fixed-index minima (the role arm). The roots are
+   sequenced without a tensor operation that would constrain their shapes. Metal has no f64, so each
+   case is a leg; its labels name the case, as a skip's record is keyed by its label. *)
+let lane_width_pair name uses =
+  Verdict.case name @@ fun () ->
   let ctx = context () in
   let leg =
     Verdict.leg ~when_:(Context.codegen_capabilities ctx).supports_f64
@@ -475,9 +478,7 @@ let () =
        let v = TDSL.uint4x32_to_prec_uniform bits () in
        Ir.Tnode.update_prec u.Tensor.value Ir.Ops.single;
        Ir.Tnode.update_prec v.Tensor.value Ir.Ops.double;
-       let c9 = const [ 9 ] and c6 = const [ 6 ] in
-       let%op y = relu u + (c9 ++ "a => a...") in
-       let%op z = relu v + (c6 ++ "a => a...") in
+       let y, z = uses u v in
        Train.set_materialized u.Tensor.value;
        Train.set_materialized v.Tensor.value;
        let forward y =
@@ -486,12 +487,12 @@ let () =
        in
        (Train.run_once ~f:forward ctx y, bits, u, v))
   in
-  in_leg ~leg "the draws keep their lane widths" (fun label ->
+  in_legf ~leg "%s: the draws keep their lane widths" name (fun label ->
       let _, _, u, v = Lazy.force run in
       p_all ~min:2 label
         [ (u, Ir.Ops.single); (v, Ir.Ops.double) ]
         ~f:(fun (t, prec) -> Ir.Ops.equal_prec (Lazy.force t.Tensor.value.storage_prec) prec));
-  in_leg ~leg "the shared bits and both draws take their full shapes at both widths" (fun label ->
+  in_legf ~leg "%s: the shared bits and both draws take their full shapes" name (fun label ->
       let _, bits, u, v = Lazy.force run in
       p_all ~min:3 label
         [ (bits, [ 3 ]); (u, [ 9 ]); (v, [ 6 ]) ]
@@ -499,9 +500,22 @@ let () =
   List.iter
     [ (9, fun (_, _, u, _) -> u); (6, fun (_, _, _, v) -> v) ]
     ~f:(fun (n, pick) ->
-      in_leg ~leg (distinct_label n) (fun label ->
+      in_legf ~leg "%s: %s" name (distinct_label n) (fun label ->
           let ((ran, _, _, _) as run) = Lazy.force run in
           distinct_cell label ran (pick run, n)))
+
+let () =
+  lane_width_pair "three blocks at two lane widths, sized by constants" (fun u v ->
+      let c9 = const [ 9 ] and c6 = const [ 6 ] in
+      let%op y = relu u + (c9 ++ "a => a...") in
+      let%op z = relu v + (c6 ++ "a => a...") in
+      (y, z));
+  lane_width_pair "three blocks at two lane widths, sized by fixed-index minima" (fun u v ->
+      let%op mu = stretch u *. !.2. in
+      let%op mv = stretch v *. !.2. in
+      let%op y = mu ++ "...|8 => ...|0" in
+      let%op z = mv ++ "...|5 => ...|0" in
+      (y, z))
 
 module Row = Ocannl.Row
 
@@ -600,7 +614,10 @@ let () =
   p_all ~min:5 "the shared bits, both draws and both results take the minima's shapes"
     [ (bits, [ 3 ]); (u, [ 9 ]); (v, [ 12 ]); (mu, [ 9 ]); (mv, [ 12 ]) ]
     ~f:(fun (t, want) -> List.equal Int.equal (dims t) want);
-  distinct_cells ctx [ (u, 9); (v, 12) ]
+  List.iter
+    [ (u, 9); (v, 12) ]
+    ~f:(fun ((_, n) as draw) ->
+      distinct_cell ("sized by fixed-index minima, " ^ distinct_label n) ctx draw)
 
 let () =
   Verdict.case "draws sharing a packed counter, sized by disagreeing fixed-index minima"
