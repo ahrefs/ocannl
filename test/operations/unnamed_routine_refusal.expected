@@ -1,0 +1,7 @@
+compiling a bare t.forward is refused with an Invalid_argument: true
+first line: Assignments.get_name_exn: the routine has no name: its code carries no Block_comment naming it. Compile [Train.forward t] rather than the bare [t.forward] (it wraps the code in a comment naming the routine), or pass [~name] to the compile.
+the comp's own code follows the first line, whole: true
+the long comp's code is longer than the cut: true
+a long comp's code is cut to its head, saying how much was left out: true
+the compile's ~name names the bare forward: true
+Train.forward names the refused tensor's own forward: true
