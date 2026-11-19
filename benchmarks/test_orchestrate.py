@@ -2915,8 +2915,10 @@ class FixtureDigestTest(unittest.TestCase):
         # gh-ocannl-720 copies the transformer fixtures to other boxes instead of regenerating
         # them, gh-ocannl-1161 the cifar_resnet ones to rog-nv and minix, and gh-ocannl-1357
         # re-recorded rog-nv's and minix's lenet as the m4-max copies they hold, as tuf's lenet row
-        # later records its copy. Pin that recorded policy and keep missing/different origins
-        # visible for every entry.
+        # later records its copy. gh-ocannl-2004 migrated rog-nv's and minix's own recovered
+        # bytes of the four pre-gh-ocannl-1007 fixtures to content-v1: their raw-v1 rows differed
+        # by metadata key order alone, so the two boxes now record one content. Pin that recorded
+        # policy and keep missing/different origins visible for every entry.
         digests = HERE / "fixtures" / fixture_digest.DIGEST_FILE
         entries, declared = fixture_digest._read_document(digests)
         specs = [json.loads(spec.read_text()) for spec in (HERE / "workloads").glob("*.json")]
@@ -2933,6 +2935,9 @@ class FixtureDigestTest(unittest.TestCase):
         copy_boxes = {name: {"m4-max", "tuf"} for name in expected}
         copy_boxes.update({name: {"m4-max", "minix", "rog-nv"} for name in resnet})
         copy_boxes.update({name: {"m4-max", "minix", "rog-nv", "tuf"} for name in lenet})
+        recovered = {f"{n}.safetensors" for n in ("cifar_conv", "cifar_stride", "mlp_small", "mlp_wide")}
+        recovered_boxes = {"minix", "rog-nv"}
+        self.assertFalse(recovered & copied, "a recovered fixture is no m4-max copy")
 
         for name, recorded in entries.items():
             self.assertTrue(recorded, name)
@@ -2950,10 +2955,19 @@ class FixtureDigestTest(unittest.TestCase):
                         by_origin[origin].sha256, by_origin["m4-max"].sha256, f"{name} on {origin}"
                     )
 
+            if name in recovered:
+                self.assertEqual(
+                    {(by_origin[b].kind, by_origin[b].sha256) for b in recovered_boxes},
+                    {("content-v1", by_origin["rog-nv"].sha256)},
+                    f"{name}: rog-nv and minix record one content",
+                )
+
             for entry in recorded:
                 same = {entry.origin}
                 if name in copied and entry.origin in copies:
                     same = copies
+                if name in recovered and entry.origin in recovered_boxes:
+                    same = recovered_boxes
                 self.assertEqual(
                     set(fixture_digest.divergent_origins(digests, [name], entry.origin)),
                     set(declared) - same,

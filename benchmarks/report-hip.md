@@ -3,6 +3,12 @@
 > **2026-10-30 (gh-ocannl-1357): measured on the replaced raw-v1 files, not comparable byte-for-byte
 > with later content-v1 reports.** Its `gpt2_mini` is minix's raw-v1 file (`10839bd1…`), and its `lenet` predates any recorded digest. The files on those boxes have since been replaced by the
 > m4-max content-v1 bytes, which `fixtures/DIGESTS.txt` now records for rog-nv and minix.
+>
+> **2026-11-19 (gh-ocannl-2004): the cross-box reading below is disproved for four workloads.**
+> minix's and rog-nv's `mlp_small`, `mlp_wide`, `cifar_conv` and `cifar_stride` differ in
+> metadata key order alone, with one content digest per fixture, so "different numpy `Generator`
+> stream" does not hold for them; for `gpt2_mini` the two raw-v1 files are gone and the question is
+> open. See `benchmarks/README.md` (Layout, the per-box entries bullet).
 
 platform: Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.43 x86_64 | ocannl commit: e687da82 | parity tol: 0.002 (max rel diff over first parity steps vs pytorch/cpu/eager; reduced precisions get their own envelope: bf16 0.004, f16 0.002, f16-static 0.002, f16-gated16 0.002)
 > The HIP/ROCm leg of the **gh-ocannl-538** re-measurement sweep, run from scratch on minix-pc:
