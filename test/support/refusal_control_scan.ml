@@ -176,32 +176,6 @@ let is_direct_failure_callee expression =
 let is_apply_operator expression =
   Option.value_map (last_name expression) ~default:false ~f:(String.equal "@@")
 
-(** The members [module Claims] binds in [verdict_source] (the text of [test/support/verdict.ml]),
-    in order; [None] when it declares no such structure. An item other than a plain [let x = ...] is
-    named as unreadable, so it can only ever mismatch: a member it hides is never assumed judged. *)
-let claims_members verdict_source =
-  List.find_map (Read.structure_of verdict_source) ~f:(fun item ->
-      match item.pstr_desc with
-      | Pstr_module
-          {
-            pmb_name = { txt = Some "Claims"; _ };
-            pmb_expr = { pmod_desc = Pmod_structure items; _ };
-            _;
-          } ->
-          Some
-            (List.concat_map items ~f:(fun item ->
-                 let unreadable () =
-                   [ Printf.sprintf "<unreadable item, line %d>" item.pstr_loc.loc_start.pos_lnum ]
-                 in
-                 match item.pstr_desc with
-                 | Pstr_value (_, bindings) ->
-                     List.concat_map bindings ~f:(fun binding ->
-                         match binding.pvb_pat.ppat_desc with
-                         | Ppat_var { txt; _ } -> [ txt ]
-                         | _ -> unreadable ())
-                 | _ -> unreadable ()))
-      | _ -> None)
-
 type claims_mismatch = {
   unjudged : string list;  (** [Claims] members neither list judges. *)
   not_members : string list;

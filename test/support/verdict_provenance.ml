@@ -639,6 +639,36 @@ let claim_kinds =
     ("claimf", Claimf);
   ]
 
+(* The quantifier reader follows a Boolean passed as the claim's value. The ratchet requires this
+   list and [claim_kinds] to partition [Verdict.Claims]. *)
+let claims_without_boolean_argument =
+  [
+    (* Diagnostic, skip, and row boundary. *)
+    "fail";
+    "skipped";
+    "case";
+    (* Collections, and where applicable a predicate, with their own population checks. *)
+    "p_all";
+    "p_all2";
+    "pf_all2";
+    "p_none";
+    "p_alli";
+    "p_empty";
+    "p_exists";
+    "p_pairwise_distinct";
+    "gated_all";
+    "gated_alli";
+    "gated_exists";
+    "pass_fail_all2";
+    (* Paired numeric collections and a tolerance. *)
+    "p_close";
+    "pf_close";
+    "pass_fail_close";
+    (* The Boolean is in the claim the callback makes. *)
+    "in_leg";
+    "in_legf";
+  ]
+
 let unlabelled arguments =
   List.filter_map arguments ~f:(function Asttypes.Nolabel, a -> Some a | _ -> None)
 

@@ -498,6 +498,8 @@ refuses a vacuous operand in a selected Boolean predicate: true
 accepts a witnessed operand in a selected Boolean predicate: true
 the shipping ratchet process refuses the planted helper fixture: true
 the shipping ratchet process refuses a quantifier written directly in a native claim: true
+refuses an unclassified quantifier form added to Verdict.Claims: true
+refuses a quantifier classification for an export removed from Verdict.Claims: true
 refuses a stale quantified-helper exemption: true
 a shadowed helper name resolves to two definitions, not one: true
 refuses an exemption key that names both shadowed definitions: true
@@ -517,6 +519,7 @@ a same-line repeated computed-label exemption key resolves to two source sites, 
 refuses an exemption key that names both same-line repeated computed-label source sites: true
 refuses a pass_fail claim whose label binding a skip also reports: true
 refuses an opened pass_fail_all2 paired with a bound skip wrapper: true
+refuses pass_fail_close paired with a skip under the same label: true
 resolves a label binding to the literal the other side spells out: true
 refuses a label computed by the same expression on both sides: true
 accepts a gated claim reported through p on its evaluated side: true
@@ -937,6 +940,7 @@ and the line-break reader read the labels of Verdict claims: true
 no parity claim hand-rolls a float tolerance into its predicate: true
 and the tolerance reader read the predicates of Verdict parity claims: true
 and the claim-name resolver decides every member Verdict.Claims exports: true
+and the quantifier reader classifies each Verdict.Claims member exactly once: true
 and it reads the label of every claim form Verdict.Claims exports: true
 no quantified claim passes a literal floor below one: true
 and the floor reader read the literal floors of Verdict claims: true
@@ -996,6 +1000,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:b56027d13651cbbf21ae177b43426575] parity claim hand-rolls
   [scanner-refusal:d36bcdb919d2b79b23dc1e15969fde60] tolerance reader read
   [scanner-refusal:2d867210446f1449a6beebc663d207c6] Verdict.Claims
+  [scanner-refusal:b03ecbfa5a4a006730722bb2e47ba011] Verdict.Claims
   [scanner-refusal:20d88fc03901bcbdfbc113ed14029a7a] Verdict.Claims
   [scanner-refusal:43f45dea7e13ae71ff6e05054baafcca] quantified claim passes
   [scanner-refusal:e7253c1a7a914e2fb31ae0576e3b56eb] the literal floors

@@ -2923,16 +2923,17 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   wrapper or a native call use the claimed ARGUMENT offset, so one intentional exemption cannot
   silently cover another call through the same wrapper or another claimed slot in the same call.
 - `verdict_ratchet`'s third reader is about DIALECT (gh-ocannl-997): `Verdict_scan.dialect_census`
-  refuses a label reported through both `pass_fail`/`pass_fail_all2` and `skipped` in one source,
+  refuses a label reported through both the PASS/FAIL family and `skipped` in one source,
   since a skip prints `p`'s line and the pair breaks the golden on the host that skips. The rule,
-  the remedy (`Verdict.gated`) and what the reader cannot see are in the conventions note. A new
-  claim entry point that takes a label and a boolean joins `claim_kinds` in
-  `verdict_provenance.ml`, or the quantifier reader goes blind at its call sites; a new
-  `Verdict.Claims` member of any kind joins `Verdict_callee.members`, which `verdict_ratchet` holds
-  equal to the module. The refusal
-  reader cannot go blind that way: `refusal_control_scan_cases` holds `refusing_claims` plus
-  `non_refusing_claims` (`refusal_control_scan.ml`) equal to the members `Verdict.Claims` binds,
-  read from `verdict.ml`, so a new `Claims` member is red until judged in one of them.
+  the remedy (`Verdict.gated`) and what the reader cannot see are in the conventions note. The
+  family is derived from `Verdict_callee.members` by the exact name `pass_fail` and prefix
+  `pass_fail_`. The resolver's vocabulary is pinned by `verdict_ratchet` against
+  `Verdict_callee.claims_members`, the source census of `Verdict.Claims` in `verdict.ml`.
+  The ratchet also holds `claim_kinds` and `claims_without_boolean_argument` in
+  `verdict_provenance.ml` to an exact, duplicate-free partition of that census (gh-ocannl-1291).
+  A new claim form that takes a label and a boolean belongs in `claim_kinds`.
+  `refusal_control_scan_cases` uses the same census to hold `refusing_claims` plus
+  `non_refusing_claims` (`refusal_control_scan.ml`) equal to the exported members.
 - Whose a claim is -- `Verdict`'s or not -- is ONE resolver's answer (gh-ocannl-1361):
   `test/support/verdict_callee.ml` walks a source once through `Lexical_scope` and every Verdict
   reader (the provenance layer, `Verdict_scan.claim_calls` behind the line-break and dialect

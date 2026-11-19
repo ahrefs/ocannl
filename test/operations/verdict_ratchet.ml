@@ -3352,6 +3352,32 @@ let run_colliding_site_controls () =
   @ run_colliding_site_control "same-line repeated computed-label" Scan.Computed_label
       "fixture:%s repeated row: " same_line_repeated_computed_site_fixture
 
+let quantifier_judged_members =
+  List.map Provenance.claim_kinds ~f:fst @ Provenance.claims_without_boolean_argument
+  |> List.sort ~compare:String.compare
+
+let quantifier_covers sorted_members =
+  List.equal String.equal sorted_members quantifier_judged_members
+  && not (List.contains_dup quantifier_judged_members ~compare:String.compare)
+
+(* Edit the same source the live comparison reads so the controls witness changes to Claims itself.
+   A missing anchor or an unreadable edited structure fails the control. *)
+let run_quantifier_coverage_controls verdict_source =
+  let member_line = "  let p_none = p_none\n" in
+  let refuses_edit with_ =
+    Option.value_map verdict_source ~default:false ~f:(fun source ->
+        let edited = String.substr_replace_first source ~pattern:member_line ~with_ in
+        (not (String.equal source edited))
+        && Option.value_map (Test_scan.Verdict_callee.claims_members edited) ~default:false
+             ~f:(fun members -> not (quantifier_covers (List.sort members ~compare:String.compare))))
+  in
+  [
+    ( "refuses an unclassified quantifier form added to Verdict.Claims",
+      refuses_edit (member_line ^ "  let p_unclassified_fixture = p\n") );
+    ( "refuses a quantifier classification for an export removed from Verdict.Claims",
+      refuses_edit "" );
+  ]
+
 (* {1 One dialect per gated claim (gh-ocannl-997)}
 
    [Verdict.skipped] prints [Verdict.p]'s line, [<claim>: true], and never [pass_fail]'s [<claim>:
@@ -3377,6 +3403,11 @@ let () =
   if on_gpu then pass_fail_all2 "the readback matches" got want ~f:Float.equal
   else skipped "the readback matches"|ocaml},
       [ "the readback matches" ] );
+    ( "refuses pass_fail_close paired with a skip under the same label",
+      {ocaml|let () =
+  if on_gpu then Verdict.pass_fail_close "the readback is close" got want ~tol
+  else Verdict.skipped ~backend:"cc" "the readback is close"|ocaml},
+      [ "the readback is close" ] );
     ( "resolves a label binding to the literal the other side spells out",
       {ocaml|let claim = "the leg holds"
 let () =
@@ -7087,8 +7118,12 @@ let () =
           Some (Stdio.In_channel.read_all path)
         else None)
   in
+  let verdict_source =
+    Option.map (Map.find on_disk "test/support/verdict.ml") ~f:In_channel.read_all
+  in
   let control_results =
     run_quantified_helper_controls () @ run_refusal_controls ()
+    @ run_quantifier_coverage_controls verdict_source
     @ [ run_stale_quantified_control () ]
     @ run_shadowed_quantified_controls ()
     @ run_colliding_site_controls () @ run_dialect_pairing_controls ()
@@ -7399,22 +7434,30 @@ let () =
      whose argument is a multi-line message: a new claim form it did not read would be a label it
      never checks. *)
   let claims_members =
-    Option.bind (Map.find on_disk "test/support/verdict.ml") ~f:(fun path ->
-        Test_scan.Refusal_control_scan.claims_members (In_channel.read_all path))
+    Option.bind verdict_source ~f:Test_scan.Verdict_callee.claims_members
     |> Option.value ~default:[ "<no Claims module in test/support/verdict.ml>" ]
   in
   (* The names whose ownership the one resolver decides, held equal to [Verdict.Claims] itself: a
      member it did not know would be a claim every reader passes over (gh-ocannl-1361). *)
+  let sorted_claims_members = List.sort claims_members ~compare:String.compare in
   let resolved_members = List.sort Test_scan.Verdict_callee.members ~compare:String.compare in
-  let resolves_every_member =
-    List.equal String.equal (List.sort claims_members ~compare:String.compare) resolved_members
-  in
+  let resolves_every_member = List.equal String.equal sorted_claims_members resolved_members in
   if not resolves_every_member then
     eprintf "Verdict.Claims exports [%s]; Verdict_callee resolves [%s]\n"
       (String.concat ~sep:"; " claims_members)
       (String.concat ~sep:"; " resolved_members);
   Verdict.p "and the claim-name resolver decides every member Verdict.Claims exports"
     resolves_every_member;
+  (* A new form would otherwise go unread at every call until it was explicitly classified. *)
+  let quantifier_judges_every_member = quantifier_covers sorted_claims_members in
+  if not quantifier_judges_every_member then
+    eprintf
+      "Verdict.Claims exports [%s]; the quantifier reader classifies [%s] (check missing, stale, \
+       or duplicate names)\n"
+      (String.concat ~sep:"; " claims_members)
+      (String.concat ~sep:"; " quantifier_judged_members);
+  Verdict.p "and the quantifier reader classifies each Verdict.Claims member exactly once"
+    quantifier_judges_every_member;
   let unlabelled = [ "fail" ] in
   let exported_label_forms =
     List.filter claims_members ~f:(fun member ->
@@ -7458,10 +7501,7 @@ let () =
     List.sort (Scan.gated_boolean :: Scan.gated_forms) ~compare:String.compare
   in
   let exported_gated_forms =
-    Option.bind (Map.find on_disk "test/support/verdict.ml") ~f:(fun path ->
-        Test_scan.Refusal_control_scan.claims_members (In_channel.read_all path))
-    |> Option.value ~default:[ "<no Claims module in test/support/verdict.ml>" ]
-    |> List.filter ~f:(fun member ->
+    List.filter claims_members ~f:(fun member ->
         String.equal member "gated"
         || String.is_prefix member ~prefix:"gated_"
         || String.is_prefix member ~prefix:"<")
@@ -7483,9 +7523,7 @@ let () =
     List.map Scan.leg_population_slots ~f:fst @ Scan.leg_slotless_members
     |> List.sort ~compare:String.compare
   in
-  let leg_judges_every_member =
-    List.equal String.equal (List.sort claims_members ~compare:String.compare) leg_judged
-  in
+  let leg_judges_every_member = List.equal String.equal sorted_claims_members leg_judged in
   if not leg_judges_every_member then
     eprintf "Verdict.Claims exports [%s]; the leg reader judges [%s]\n"
       (String.concat ~sep:"; " claims_members)
@@ -7530,9 +7568,7 @@ let () =
     List.map Scan.folded_slots ~f:(fun (member, _, _) -> member) @ Scan.folded_unread_members
     |> List.sort ~compare:String.compare
   in
-  let judges_every_member =
-    List.equal String.equal (List.sort claims_members ~compare:String.compare) folded_judged
-  in
+  let judges_every_member = List.equal String.equal sorted_claims_members folded_judged in
   if not judges_every_member then
     eprintf "Verdict.Claims exports [%s]; the folded-gate reader judges [%s]\n"
       (String.concat ~sep:"; " claims_members)
