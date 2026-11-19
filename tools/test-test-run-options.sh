@@ -2934,7 +2934,7 @@ if ! ps -o command= -p "$$" >/dev/null 2>&1; then
 else
 pp_term_check
 if [ -z "$pp_term_detail" ]; then report 0 "$pp_term_label"; else report 1 "$pp_term_label" "$pp_term_detail"; fi
-perl -pe 's/^      if \[ -n "\$\{pp_dir:-\}" \]; then$/      if false; then/' "$SRC" >"$repeat_root/tools/test-run.sh"
+perl -pe 's/^      if \[ -n "\$\{relay_pinned:-\}" \]; then$/      if false; then/' "$SRC" >"$repeat_root/tools/test-run.sh"
 if cmp -s "$SRC" "$repeat_root/tools/test-run.sh"; then
   report 1 "$pp_term_control" "mutant was not made"
 else

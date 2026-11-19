@@ -4463,6 +4463,8 @@ shift
 # verdict stands for a list that was not the pre-push one without saying
 # FIRST TIER ONLY.
 pp_scans=
+# Set where the run's relay signals are pinned before an EXIT trap (relay_end).
+relay_pinned=
 if [ "$sub" = prepush ]; then
   pp_usage='prepush --since BASE|OLD..NEW [--referenced-only] [--list | [--start] [--cap N] [--test-cap N] [--expect-backend B]... [build [DUNE OPTIONS...]]]'
   pp_base= pp_print=0 pp_mode=run pp_run_opts=() pp_tier=0
@@ -4534,6 +4536,7 @@ if [ "$sub" = prepush ]; then
   # first instructions running pp_close, and removing pp_dir, inside itself.
   trap '' INT TERM HUP
   trap - INT TERM HUP
+  relay_pinned=1
   trap pp_close EXIT
   pp_query() {
     pp_rc=0
@@ -6089,11 +6092,12 @@ case $sub in
         [ "$seen" != "$sigs_seen" ] || return 1
       done
     }
-    # The relay ends with relay_end, not a bare reset: under prepush the reset
-    # would restore the default pinned before pp_close's EXIT trap, and a
-    # signal after it would end this shell without pp_close (gh-ocannl-2332).
+    # The relay ends with relay_end, not a bare reset: where its signals were
+    # pinned before an EXIT trap (relay_pinned, prepush's), the reset would
+    # restore that default, and a signal after it would end this shell without
+    # the EXIT trap (gh-ocannl-2332).
     relay_end() {
-      if [ -n "${pp_dir:-}" ]; then
+      if [ -n "${relay_pinned:-}" ]; then
         trap 'exit 130' INT
         trap 'exit 143' TERM
         trap 'exit 129' HUP
