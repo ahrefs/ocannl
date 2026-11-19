@@ -1072,6 +1072,28 @@ type backend_facts = {
 }
 [@@deriving equal]
 
+(* The [with_select_blend] in effect on this domain: the facts record it targets and the
+   [blends_value_selects] it states for them. *)
+let select_blend_override = Stdlib.Domain.DLS.new_key (fun () -> None)
+
+(** gh-ocannl-2326, a measurement and test seam: within [f], on the calling domain, the backend
+    whose facts are physically [facts] (one of the records below) lowers and renders value selects
+    as if its [blends_value_selects] fact were [blend] -- the lowering's fan-in guard
+    ([Backends.lower_assignments], through {!effective_facts}) and the renderers that have a blend
+    (cc, CUDA, HIP) alike, so a compile from assignments is charged as it renders. Not part of the
+    schedule cache's identity, nor of a [Lowering_reuse] cell's: a timing run under it compiles with
+    the cache bypassed, and compiles under different overrides share no reuse cell. *)
+let with_select_blend ~facts ~blend f =
+  let saved = Stdlib.Domain.DLS.get select_blend_override in
+  Stdlib.Domain.DLS.set select_blend_override (Some (facts, blend));
+  Exn.protect ~f ~finally:(fun () -> Stdlib.Domain.DLS.set select_blend_override saved)
+
+(** [facts] under the {!with_select_blend} in effect for them, if any. *)
+let effective_facts facts =
+  match Stdlib.Domain.DLS.get select_blend_override with
+  | Some (target, blend) when phys_equal target facts -> { facts with blends_value_selects = blend }
+  | _ -> facts
+
 let binds_hardware_grid facts = equal_grid_execution facts.grid_execution Hardware_grid
 let renders_on_host_pool facts = equal_grid_execution facts.grid_execution Host_pool
 

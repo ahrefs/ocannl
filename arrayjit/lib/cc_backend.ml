@@ -1962,7 +1962,7 @@ struct
         ^^ string ";" ^^ break 1 ^^ string "OCANNL_SELECT(" ^^ truth
         ^^ string ", ocannl_sel_a__, ocannl_sel_b__); })")
     in
-    if not Backend_intf.cc_facts.blends_value_selects then None
+    if not (Backend_intf.effective_facts Backend_intf.cc_facts).blends_value_selects then None
     else
       match prec with
       | Ops.Single_prec _ | Ops.Double_prec _ -> Some (C_syntax.Blend_truth blend)

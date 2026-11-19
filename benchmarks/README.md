@@ -1105,8 +1105,14 @@ architecture alongside measurements.
 
 ### CUDA value-select benchmark
 
-`bench_cuda_select` checks and times short-circuiting and local-value blending on fixed schedules
-at two distinct PTX targets. It generates its inputs in memory. Build the executable and verify
+`bench_cuda_select` checks and times short-circuiting and local-value blending at two distinct
+PTX targets: first on fixed kernel segments, which isolate the renderer, then on a whole training
+step (the `cifar_conv` geometry at batch 64 by default, `--step-batch=N`; ReLU and 2×2 max
+pooling, forward, backward and SGD) compiled under each rendering, the choice reaching the fan-in
+guard as well as the renderer, beside a second short-circuiting compile whose source must equal
+the first's (up to the names each lowering mints) as its control. The step's values are compared
+across the arms within a stated tolerance, since placements may differ; `BENCH_SELECT_SOURCES=<dir>`
+writes each arm's step source there. It generates its inputs in memory. Build the executable and verify
 the emitted forms, targets and host parity with a dry run before requesting a measurement window.
 From the checkout, give the cell driver an empty scratch directory in `RUN_DIR`.
 

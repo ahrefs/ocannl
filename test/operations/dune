@@ -15000,6 +15000,26 @@
   (run %{test} "--ocannl_autotune_log_seeding=true")))
 
 (test
+ ; gh-ocannl-2326: the select-blend override reaches the fan-in guard and the renderer alike.
+ (name select_blend_override)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules select_blend_override)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  test_utils
+  ll_test
+  arrayjit.context
+  arrayjit.utils)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  ; gh-ocannl-1476: an operand repeated in one step -- a self-concatenation, a self-product -- gets
  ; projections of its own per occurrence, executed forward and backward.
  (name self_concat)

@@ -1099,6 +1099,10 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
 
   let await_within = Option.value_exn Device.bounded_await
 
+  (* The device's facts under the caller's [Backend_intf.with_select_blend], if any
+     (gh-ocannl-2326): what this compile lowers and decides by. *)
+  let device_facts () = Backend_intf.effective_facts Device.backend_facts
+
   type fissioned = { batch : Device.code_batch; count : int } [@@deriving sexp_of]
 
   type floor_nodes = {
@@ -1146,7 +1150,7 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
     let lowered =
       if prelowered then lowered
       else
-        match maybe_elide_zeros ~facts:Device.backend_facts [ lowered ] with
+        match maybe_elide_zeros ~facts:(device_facts ()) [ lowered ] with
         | [ single ] -> single
         | _ -> lowered
     in
@@ -1162,7 +1166,7 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
         ~init:(Set.empty (module Tn))
         ~f:(fun ~key ~data acc ->
           if
-            Schedule.may_keep_off_device ~facts:Device.backend_facts ~limits ~shared_target plc key
+            Schedule.may_keep_off_device ~facts:(device_facts ()) ~limits ~shared_target plc key
               data
           then Set.add acc key
           else acc)
@@ -1228,7 +1232,7 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
       | None ->
           Compile_cost.time_lower (fun () ->
               let lower () =
-                lower_assignments ~facts:Device.backend_facts ~limits:(Device.hardware_limits ())
+                lower_assignments ~facts:(device_facts ()) ~limits:(Device.hardware_limits ())
                   optim_ctx ?name bindings comp.asgns
               in
               (* gh-ocannl-1526: a search's later compiles take a private copy of its first
@@ -1275,14 +1279,14 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
                  pool-rendered Grid on CPU backends; the identity otherwise. Kernel fission may
                  split the routine into several kernels at cross-workgroup dependency edges; they
                  run back-to-back on the routine's stream (see [link]). *)
-              Schedule.maybe_default_schedules ~facts:Device.backend_facts ~limits
+              Schedule.maybe_default_schedules ~facts:(device_facts ()) ~limits
                 ~static_indices:(Indexing.bound_symbols bindings) lowered)
     in
     (* A [?prelowered] routine is hand-built IR compiled as written (the gh-ocannl-562 test seam):
        its zeros are what the test is about, so they are not elided. *)
     let lowereds =
       if Option.is_some prelowered then lowereds
-      else maybe_elide_zeros ~facts:Device.backend_facts lowereds
+      else maybe_elide_zeros ~facts:(device_facts ()) lowereds
     in
     record_segments lowereds;
     (* Per-compile launch-geometry trace (config [schedule_log_launches]): one line per segment with
@@ -1814,7 +1818,7 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
     let segments = List.map segments ~f:copy in
     (* As in [compile]: a [?prelowered] routine's zeros are compiled as written. *)
     let segments =
-      if prelowered then segments else maybe_elide_zeros ~facts:Device.backend_facts segments
+      if prelowered then segments else maybe_elide_zeros ~facts:(device_facts ()) segments
     in
     if List.is_empty segments then invalid_arg "Backends.link_delta: no segments";
     let alias_spans =
@@ -2307,7 +2311,7 @@ let wrapped_backend w = match unwrap w with Unwrapped (i, _) -> i.bi_backend
 
 let backend_facts (b : backend) : backend_facts =
   let (module B) = backend_module b in
-  B.backend_facts
+  Backend_intf.effective_facts B.backend_facts
 
 let make_context ?(ordinal = 0) backend =
   match impl_of_backend backend with

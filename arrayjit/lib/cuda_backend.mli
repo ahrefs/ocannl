@@ -9,8 +9,11 @@ end
 
 val with_select_rendering : blend:bool -> (unit -> 'a) -> 'a * string list
 (** Run a synchronous comparison on the calling domain with CUDA's value selects rendered in the
-    chosen form and return the full emitted source of each compile in order. This diagnostic
-    override applies to rendering only, so both arms can use the same lowered and scheduled IR. *)
+    chosen form ({!Ir.Backend_intf.with_select_blend}) and return the full emitted source of each
+    compile in order. The choice reaches the lowering's fan-in guard as well as the renderer, so a
+    compile from assignments is placed as it renders (gh-ocannl-2326); a [~prelowered] compile keeps
+    the placements it was lowered with, so arms over one prelowered segment differ in rendering
+    only. *)
 
 val cuda_include_options : unit -> string list
 (** The [-I] options an nvrtc compile needs in order to find the CUDA toolkit headers
