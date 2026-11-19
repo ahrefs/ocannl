@@ -275,6 +275,75 @@
   (alias runtest-set_values_pool_coalescing)
   (alias runtest-wrapper_release_paths)))
 
+; The numerics-mode matrix (gh-ocannl-1104): every test whose own modules name the numerics policy
+; -- `Ir.Numerics`, or a `Test_utils` value reaching it -- which the daily sweep's `cc-policy-*` and
+; `metal-policy-*` units run under each non-default `OCANNL_FP16_ARITHMETIC` and
+; `OCANNL_BF16_ARITHMETIC` mode. Such a test pins the policy for some legs and reads the ambient one
+; in others, and no other run ever exports a mode, so a default-labelled leg that forgot to pin it
+; would read green everywhere but here. Membership is derived by `test/operations/env_var_deps`
+; (`Test_scan.Policy_invariance_scan`), which holds this list to it in BOTH directions: a member left
+; out fails, and so does an entry that names no policy. A member whose claims follow the default by
+; design carries an `exempt` opt-out with its reason inside its own stanza (the grammar is in
+; `Policy_invariance_scan`'s header) and is left out here: `reduction_forms`. An executable run only
+; through a target and a golden diff is not reached (`cc_march_census`, which forces every child's
+; fp16 mode itself).
+
+(alias
+ (name policy-invariance)
+ (deps
+  (alias runtest-accum_width)
+  (alias runtest-cache_key_agreement)
+  (alias runtest-cc_half_excess_precision)
+  (alias runtest-codegen_resolution_identity)
+  (alias runtest-compiled_workgroup_bytes)
+  (alias runtest-cuda_mma_arms)
+  (alias runtest-cuda_mma_cutoffs)
+  (alias runtest-cuda_mma_k8_parity)
+  (alias runtest-digest_identity_flips)
+  (alias runtest-env_spelling_gate)
+  (alias runtest-f16_accum_ab)
+  (alias runtest-fragment_scope_move_legality)
+  (alias runtest-gebp_padded_parity)
+  (alias runtest-hardware_warp_shuffle)
+  (alias runtest-hip_half_masked_gradient)
+  (alias runtest-masked_persistent_fragment)
+  (alias runtest-mixed_prec_twin_rounding)
+  (alias runtest-mma_bf16_seed_parity)
+  (alias runtest-mma_format_arm_tables)
+  (alias runtest-mma_format_scope)
+  (alias runtest-narrow_accum_init)
+  (alias runtest-narrow_placement_contract)
+  (alias runtest-narrow_rng_nesting)
+  (alias runtest-narrow_storage_compute)
+  (alias runtest-op_table_compile)
+  (alias runtest-pipelined_move_legality)
+  (alias runtest-privatize_recheck)
+  (alias runtest-profile_fp16_floor)
+  (alias runtest-ptx_target_parity)
+  (alias runtest-schedule_cache_numerics)
+  (alias runtest-schedule_coalesce)
+  (alias runtest-schedule_contraction_nest)
+  (alias runtest-schedule_mma_matmul)
+  (alias runtest-schedule_mma_scope_scratch)
+  (alias runtest-schedule_pipelined_matmul)
+  (alias runtest-schedule_strided_1x1)
+  (alias runtest-scope_collapse_rounding)
+  (alias runtest-sketch_family_tree)
+  (alias runtest-tf32_fissioned_epilogue)
+  (alias runtest-tile_mma_forced_decline)
+  (alias runtest-tile_mma_narrow)))
+
+; The one member dune builds only under a condition: listed above, it would leave the whole family
+; undefined wherever the condition is false (`No rule found for alias`), so it sits behind its own
+; stanza's condition here.
+
+(alias
+ (name policy-invariance)
+ (enabled_if
+  (= %{env:OCANNL_BACKEND=cc} cuda))
+ (deps
+  (alias runtest-cuda_wmma_floor)))
+
 ; This directory's golden-diff rules, aggregated back onto `runtest` (gh-ocannl-726). Each of them
 ; attaches to its own `runtest-<name>` alias and to NOTHING else, so that `dune build
 ; @test/operations/runtest-verdict_ratchet` runs that one test and applies its diff; this stanza is
@@ -13326,6 +13395,11 @@
  ;     the contraction leg compiles. Its operands now pass ~prec, which is the better fix and was
  ;     made alongside this; the key stays declared because node creation still consults it wherever
  ;     the ppx mints an intermediate this test does not name.
+ ; ocannl-policy-invariance: exempt -- its form table is stated for the default numerics policy
+ ; and asserts that premise as a claim, so every non-default mode fails it by design. Under a
+ ; narrow fp16 mode its reassociating f16 members' value claims fail as well (gh-ocannl-1104):
+ ; their bitwise reference assumes an accumulator wider than storage, where every association
+ ; agrees, and a storage-width f16 accumulator makes the vectorized order a different number.
  (name reduction_forms)
  (package neural_nets_lib)
  (deps

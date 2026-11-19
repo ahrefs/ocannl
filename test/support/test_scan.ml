@@ -8,6 +8,11 @@ module Config_key_scan = Config_key_scan
     tests. *)
 
 module Lifecycle_scan = Lifecycle_scan
+
+module Policy_invariance_scan = Policy_invariance_scan
+(** Which tests the numerics-mode matrix runs, derived from the policy their modules name
+    (gh-ocannl-1104). *)
+
 module Dune_stanza_scan = Dune_stanza_scan
 
 module Config_dep_resolution = Config_dep_resolution

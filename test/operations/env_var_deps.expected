@@ -171,6 +171,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @gc-stress-backprop
   test/operations/dune                     @lifecycle
   test/operations/dune                     @metal-codegen
+  test/operations/dune                     @policy-invariance
   test/operations/dune                     @runtest
   test/operations/dune                     @runtest-agent_notes_structure
   test/operations/dune                     @runtest-agents_md_size
@@ -499,7 +500,11 @@ root runs the whole family; membership is derived from what a member stanza decl
 member the family's `(alias (name <family>) (deps ...))` stanza omits fails this scan.
   arrayjit/test/dune: metal-codegen
   benchmarks/runners/ocannl/dune: metal-codegen
-  test/operations/dune: lifecycle, metal-codegen
+  test/operations/dune: lifecycle, metal-codegen, policy-invariance
+
+Policy-invariance opt-outs (gh-ocannl-1104): members of @policy-invariance whose stanza leaves them out of
+the numerics-mode matrix, each with its reason.
+  test/operations/dune, the test reduction_forms -- its form table is stated for the default numerics policy
 
 every stanza that runs an executable either declares the backend variable or says in place why it does not: true
 no `(env_var ...)` declares a variable the ambient record carries, which every rule depending on `ocannl_config` reruns for already: true

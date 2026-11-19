@@ -1661,6 +1661,28 @@ files.
   accumulator as its negative control (an f16 destination under `Fp16_narrow` returns 2048 in both
   scopes); a half-accumulator mutant of the mixed arm fails the value claims (2048), a declining
   mutant only the structure ones.
+- **A test that names the numerics policy runs under every non-default fp16/bf16 mode, daily**
+  (gh-ocannl-1104). Membership of `@policy-invariance` is derived by `env_var_deps`
+  (`Test_scan.Policy_invariance_scan`, whose header states the reading's boundary): a program whose
+  own modules name `Ir.Numerics`, or a `Test_utils` value reaching it (`with_policy` and its
+  `with_fp16_*`/`with_bf16_*` wrappers, derived from `test_utils.ml`), and the family stanza in
+  `test/operations/dune` is held to that set in both directions. The sweep's `cc-policy-*` and
+  `metal-policy-*` units run the alias with one of `OCANNL_FP16_ARITHMETIC=false|true|prefer_narrow`
+  or `OCANNL_BF16_ARITHMETIC=false|true` exported (build-and-test.md#the-cross-machine-sweep). The
+  ambient record makes every rule rerun under the exported mode, and nothing but these units ever
+  exports one, so a leg whose claim is the DEFAULT mode's behaviour pins it --
+  `Test_utils.with_fp16_auto`, `with_bf16_auto`, or `with_policy` -- around the compile, or it
+  tests another policy under the default's name the day someone runs it so. The first matrix run
+  found three such legs: `tile_mma_narrow`'s half-hoisted and tuned legs (half computing in half
+  under a narrow mode declines the f32 register tile), `schedule_mma_scope_scratch`'s seeding
+  prediction (no uniform-f16 seed under `false`), and `schedule_contraction_nest`'s bf16 structural
+  leg (no uniform-bf16 seed under bf16 `false`). A test whose claims follow the default by design
+  -- `reduction_forms`, whose form table asserts the default as its first claim -- carries
+  `; ocannl-policy-invariance: exempt -- <reason>` inside its stanza and leaves the alias; the
+  opt-out is whole-stanza, so prefer pinning the legs that need the default. A member under an
+  `(enabled_if …)` (`cuda_wmma_floor`) is listed in a second `policy-invariance` alias stanza
+  behind the same condition: dune refuses an alias dependency with no rule, so listing it in the
+  main stanza breaks the family on every other backend.
 ## Warp reductions and hardware ownership
 - **The warp-shuffle rendering stages at the residency, and gates on it** (gh-ocannl-682).
   `C_syntax.try_warp_reduce` holds `wred_v_*`, the `__shared__ wred_partials_*` slots and every
