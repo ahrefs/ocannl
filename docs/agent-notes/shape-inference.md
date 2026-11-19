@@ -128,7 +128,11 @@ files.
   can supply its tag during closure, so the new choices require an independent pair. Both answers
   are accepted when stated first. The bounded sweep adds 12 stores (222 accepted), nine matching
   plain pairs and three plain bounds at the minimum. All 210 previously accepted stores retain
-  their exact answers. Several free components and equal sums still wait without bounds.
+  their exact answers. For that shared `a` store, `k >= 5_default ; u >= 3_h` forces a
+  conflicting `h` claim. Two refused shapes with ground answers are deferred: `k >= 5_a ;
+  u >= 3_default` admits `k = 5_a, u = 3_default`, and `k >= 3_default ; u >= 2_default`
+  admits `k = 3_default, u = 1_(bcast_if_1)`. Several free components and equal sums still
+  wait without bounds.
 - Concatenation arithmetic never sizes a non-discardable component to 0, the size only a block
   spec's discardable component may take (gh-ocannl-2316). In `unify_dim`'s `Concat`/`Dim` arm a
   zero residual on a single non-discardable `Var` waits once its basis is decided (a conflict

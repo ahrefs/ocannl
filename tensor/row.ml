@@ -6584,48 +6584,44 @@ let concat_bounded_waiting ~parameter_axes ineqs env =
   in
   let held_by_dim =
     lazy
-      (let dim_vars dims = vars_of_dims (List.map dims ~f:(subst_dim env)) in
-       let subst_vars vars = dim_vars (List.map (Set.to_list vars) ~f:(fun v -> Var v)) in
+      (let subst_vars vars = vars_of_dims (List.map vars ~f:(fun v -> subst_dim env (Var v))) in
        let row_bounds r =
          match r.bcast with Broadcastable -> None | Row_var v -> find_row env.row_env v
        in
-       let row_vars r =
-         let r = subst_row env r in
+       let row_dims v =
+         let r = subst_row env (row_of_var v empty_provenance) in
          let bound_vars =
            Option.value_map (row_bounds r) ~default:dim_var_set_empty ~f:(fun entry ->
-               subst_vars (row_entry_dim_mentions entry))
+               subst_vars (Set.to_list (row_entry_dim_mentions entry)))
          in
          Set.union (dim_vars_of_row r) bound_vars
        in
-       let mentions = function
-         | Dim_eq { d1; d2; _ } ->
-             let d1 = subst_dim env d1 and d2 = subst_dim env d2 in
-             (Set.union (vars_of_dim d1) (vars_of_dim d2), Some (d1, d2))
-         | Dim_size { dim; _ } | Dim_constr { d = dim; _ } | Terminal_dim (_, dim, _) ->
-             (dim_vars [ dim ], None)
-         | Dim_ineq { res; opnd; _ } -> (dim_vars [ res; opnd ], None)
-         | Row_eq { r1; r2; _ } | Row_ineq { res = r1; opnd = r2; _ } ->
-             (Set.union (row_vars r1) (row_vars r2), None)
-         | Rows_constr { r; constr; _ } ->
-             ( Set.union_list
-                 (module Dim_var)
-                 (subst_vars (row_constraint_dim_vars constr) :: List.map r ~f:row_vars),
-               None )
-         | Terminal_row (_, r, _) -> (row_vars r, None)
+       let shape_only = function
          | Shape_row (r, _) -> (
              (* A shape-only row asks for ordinary closure. Its banked bounds or product can supply
                 dimensions independently, just as an explicit row constraint can. *)
              match row_bounds (subst_row env r) with
              | None
              | Some (Bounds_row { glb = None; constr = Unconstrained; res = []; opnd = []; _ }) ->
-                 (dim_var_set_empty, None)
-             | Some _ -> (row_vars r, None))
+                 true
+             | Some _ -> false)
+         | _ -> false
        in
        List.fold ineqs
          ~init:(Map.empty (module Dim_var))
          ~f:(fun held c ->
-           let vars, equation = mentions c in
-           Set.fold vars ~init:held ~f:(fun held v -> Map.add_multi held ~key:v ~data:equation)))
+           if shape_only c then held
+           else
+             let dims, rows = constraint_vars c in
+             let vars =
+               Set.union_list (module Dim_var) (subst_vars dims :: List.map rows ~f:row_dims)
+             in
+             let equation =
+               match c with
+               | Dim_eq { d1; d2; _ } -> Some (subst_dim env d1, subst_dim env d2)
+               | _ -> None
+             in
+             Set.fold vars ~init:held ~f:(fun held v -> Map.add_multi held ~key:v ~data:equation)))
   in
   let competing_equation lhs rhs v =
     List.exists
