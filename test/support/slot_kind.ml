@@ -532,6 +532,8 @@ type target =
   | Product of { dir : string; file : string }
       (** a compilation product of a stanza in [dir]: [<name>.exe], [.bc], [.cma] or [.cmxa] *)
 
+let workspace_check = Alias { dir = ""; alias = "check"; recursive = true }
+
 (** The aliases whose whole closure reads no configuration, so that a batch of them holds only what
     their stanzas name (gh-ocannl-1227). Closed and short: an entry is the alias in one directory,
     with one recursion, never a basename -- a [scans] alias elsewhere is no member. [slot_kind_live]
@@ -542,6 +544,7 @@ let config_free_aliases =
   [
     Alias { dir = "test/operations"; alias = "scans"; recursive = true };
     Alias { dir = ""; alias = "metal-codegen"; recursive = true };
+    workspace_check;
   ]
 
 let spell = function
@@ -1299,7 +1302,8 @@ let summary = function
     enforces (gh-ocannl-1518).
 
     - Each listed alias's closure holds no stanza reading the configuration, and no alias dependency
-      whose path the closure cannot follow -- a missing alias is refused too.
+      whose path the closure cannot follow. Dune supplies the workspace's [@check] even when no
+      stanza attaches to it.
     - What every build reaches (every compilation, every source-like producer, and what they need)
       holds no reader and names no backend: a plain compilation runs nothing that opens a device.
     - Every stanza reading the configuration runs where the configuration it finds is one the runner
@@ -1332,12 +1336,12 @@ let refusals ?(config_free = config_free_aliases) ~config_files dune_files =
           | Alias { dir = root; alias; recursive } as t ->
               let what = Printf.sprintf "the listed %s" (spell t) in
               if
-                not
-                  (List.exists stanzas ~f:(fun s ->
-                       in_scope ~recursive ~root s.dir
-                       && List.mem s.attached alias ~equal:String.equal))
-              then [ what ^ ": no stanza carries it" ]
-              else closure_refusals ~what (reached stanzas [ (root, alias, recursive) ]))
+                List.exists stanzas ~f:(fun s ->
+                    in_scope ~recursive ~root s.dir && List.mem s.attached alias ~equal:String.equal)
+              then closure_refusals ~what (reached stanzas [ (root, alias, recursive) ])
+                (* Without an attached stanza, @check's compilation closure is checked below. *)
+              else if Poly.equal t workspace_check then []
+              else [ what ^ ": no stanza carries it" ])
       in
       let plain =
         let what = "a plain compilation" in

@@ -381,10 +381,10 @@
 # device-init deadline writes before its process dies by SIGALRM
 # (gh-ocannl-1281) keeps dune's status under the verdict `WEDGED DEVICE`, and
 # the digest quotes that line: the device, not the tests, is what to read.
-# And a run whose batch does not hold a backend its `--expect-backend` names
-# exits 2 under the verdict `BACKEND REFUSED`, dune never started (see
-# plan_backend_check: a GPU box's batch that resolved to cc only says so even
-# without the option). A `dune build` naming an alias dune does not know
+# With `--expect-backend`, an unread batch or a backend-holding batch missing
+# an expected backend exits 2 under `BACKEND REFUSED` before dune starts.
+# A resolved batch holding no backend runs with a vacuous-pin note when no
+# alias was skipped (see plan_backend_check). A `dune build` naming an alias dune does not know
 # (`@test/operations/runtest-misspelt`) exits 2 under the verdict `ALIAS
 # REFUSED`, asked of dune before the batch's backends, the slot or the device
 # probe, and dune's build never started (see plan_aliases); a refused
@@ -415,10 +415,13 @@
 # or 14400s for targets reaching @slow, 7200s for targets reaching the
 # training aliases (@train, train-NAME), and 3600s otherwise;
 # `--cap 0` disables it (then supply your own bound). `--expect-backend B`
-# (repeatable) refuses a batch that does not hold backend B, before dune starts
-# (BACKEND REFUSED, exit 2): pass the GPU backend a GPU-box leg is for, since a
-# batch there that resolves to cc alone is green and tests nothing on the GPU
-# (plan_backend_check, gh-ocannl-1433). `--test-cap N` bounds each
+# (repeatable) refuses unread batches and batches holding backends that lack
+# B before dune starts (BACKEND REFUSED, exit 2). A resolved backend-free batch
+# with no skipped aliases runs with a note in the announcements, log and digest
+# (gh-ocannl-2309).
+# Pass the GPU backend a GPU-box leg is for, since a batch there that resolves
+# to cc alone is green and tests nothing on the GPU (gh-ocannl-1433).
+# `--test-cap N` bounds each
 # process dune starts (each test, in a test batch) and ENDS the run when one
 # outlives it, as the run's own cap would; N (or $OCANNL_TOOL_PER_TEST_CAP)
 # applies to any batch, 0 lifts it, and by default only a GPU batch not
@@ -909,12 +912,14 @@ run_reads_batch() { [ -n "$batch_resolved" ] && { [ -n "$slot_fw" ] || batch_box
 # green and has tested nothing on the GPU, which is how two wave legs passed
 # while proving nothing about the backend they were run for. So:
 #   - `--expect-backend B` (repeatable; a backend name, an alias canonicalized)
-#     is the caller's statement of what the batch must hold. A batch that does
-#     not hold every B, or whose backends could not be read (an unread answer
-#     is "any backend" for a width and a slot, but proves no backend held), is
-#     refused before dune starts: BACKEND REFUSED, exit 2, and the digest
-#     names what it held. The option makes `run` resolve the batch's backends
-#     on any box, where otherwise only a width hazard or a fleet slot does.
+#     uses the backend resolver's result (tools/batch-backends.sh). An unread
+#     result is "any backend" for a width and a slot and proves no backend held.
+#     Unread results and nonempty sets missing any expected backend are refused
+#     before dune starts with BACKEND REFUSED and exit 2. The digest gives the reason.
+#     A resolved empty set runs with a vacuous-pin note only if no disabled
+#     alias was skipped. A skipped alias may have been the backend witness.
+#     The option makes `run` resolve backends on any box, where otherwise only a
+#     width hazard or a fleet slot does.
 #   - Without the option, on a GPU box -- one where cuda or hip meets a width
 #     hazard (tools/box-jobs.sh's local view: the fleet's Linux GPU boxes, a
 #     WSL guest's bridge), so never a Mac -- a batch whose resolved backends
@@ -924,6 +929,7 @@ run_reads_batch() { [ -n "$batch_resolved" ] && { [ -n "$slot_fw" ] || batch_box
 #     has said what it meant, cc included.
 expect_backends=  # canonical, space-separated; from the run's `expect-backend`
 backend_refusal=  # why the batch is refused, empty for none
+backend_note=  # why the pin is vacuous, empty for none
 backend_warning=  # the GPU box's warning, empty for none
 box_gpu_backends() { # the GPU backends that meet a width hazard on this box
   local b out=
@@ -940,12 +946,20 @@ batch_holds_backend() { # <backend>; 0 iff the resolved batch holds it
   done <<<"$batch_holds"
   return 1
 }
-plan_backend_check() { # after plan_batch, and batch_resolve when expect_backends is set
+plan_backend_check() { # after plan_aliases and batch resolution
   local b missing= gpus select
-  backend_refusal= backend_warning=
+  backend_refusal= backend_note= backend_warning=
   if [ -n "$expect_backends" ]; then
     if [ -n "$batch_unknown" ]; then
       backend_refusal="--expect-backend $expect_backends: this batch's backends are unread ($batch_unknown), so nothing shows it holds $expect_backends"
+      return 0
+    fi
+    if [ -n "$batch_resolved" ] && [ -z "$batch_holds" ]; then
+      if [ -n "$alias_disabled" ]; then
+        backend_refusal="--expect-backend $expect_backends: after skipping disabled aliases, the remaining batch holds no backend. Set OCANNL_BACKEND to enable the skipped aliases, or rerun just the remaining targets without --expect-backend."
+      else
+        backend_note="NOTE: --expect-backend $expect_backends is vacuous for this batch (it holds no backend)."
+      fi
       return 0
     fi
     for b in $expect_backends; do
@@ -4135,6 +4149,8 @@ digest() {
   [ ! -s "$dir/marker-refused" ] || sed 's/^/marker refused: /' "$dir/marker-refused"
   if [ -s "$dir/backend-refused" ]; then
     echo "backend refused: $(cat "$dir/backend-refused")"
+  elif [ -s "$dir/backend-note" ]; then
+    cat "$dir/backend-note"
   elif [ -s "$dir/backend-warning" ]; then
     cat "$dir/backend-warning"
   fi
@@ -5661,6 +5677,10 @@ case $sub in
       printf '%s\n' "$backend_warning" >"$run_dir/backend-warning" ||
         { echo "test-run: cannot record the backend warning in $run_dir"; exit 126; }
     fi
+    if [ -n "$backend_note" ] && [ "$mode" != plan ] && [ "$mode" != repeat ]; then
+      printf '%s\n' "$backend_note" >"$run_dir/backend-note" ||
+        { echo "test-run: cannot record the backend note in $run_dir"; exit 126; }
+    fi
     clamp_slot_wait
     plan_width_cap "$@"
     plan_slot_kind
@@ -5737,6 +5757,8 @@ case $sub in
         if [ -n "$backend_refusal" ]; then
           echo "expect-backend: run would refuse this batch (BACKEND REFUSED, exit 2)"
           printf '  %s\n' "$backend_refusal"
+        elif [ -n "$backend_note" ]; then
+          printf '%s\n' "$backend_note"
         elif [ -n "$expect_backends" ]; then
           echo "expect-backend: $expect_backends, held"
         fi
@@ -5792,7 +5814,7 @@ case $sub in
     # the launcher's stderr: the cap is in the artifact triage reads rather
     # than only in the launching terminal's scrollback.
     : >"$run_dir/resolved.tmp" || { echo "test-run: cannot write in $run_dir"; exit 126; }
-    for line in "$backend_warning" "$width_announce" "$slot_announce" "$probe_announce"; do
+    for line in "$backend_note" "$backend_warning" "$width_announce" "$slot_announce" "$probe_announce"; do
       [ -z "$line" ] || printf 'test-run: %s\n' "$line" | tee -a "$run_dir/resolved.tmp"
     done
     if [ -n "$alias_siblings" ]; then

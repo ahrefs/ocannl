@@ -117,10 +117,12 @@
 #      stays uncapped and --cpu; one it answers with one is -j 4, --gpu.
 #  88. a GPU box's batch resolving to cc alone (gh-ocannl-1433) runs and WARNs
 #      in the announcements, the log and the digest, and `--expect-backend`
-#      refuses it before dune (BACKEND REFUSED, exit 2); the GPU backend held,
-#      cc expected, a Mac, a batch holding no backend say nothing; a WSL bridge
-#      names cuda or hip and recommends neither; the option
-#      still refuses on a Mac and refuses an unread batch; `plan` reports both.
+#      refuses it before dune (BACKEND REFUSED, exit 2). A held pin, a Mac,
+#      and an unpinned backend-free batch are quiet. A WSL bridge names cuda
+#      or hip and recommends neither. The option also refuses wrong backends
+#      on a Mac and refuses unread batches. A resolved backend-free batch
+#      runs with a vacuous-pin note, which `plan` also reports. An empty
+#      remainder after filtering out a disabled alias still refuses.
 
 . "$(cd "$(dirname "$0")" && pwd)/test-test-run-common.sh"
 
@@ -1135,10 +1137,13 @@ harness_leg_run '78: a configuration'\''s backend counts only where the reachabi
 # it held). The controls: the same batch on cuda, or expecting cc, says
 # nothing; a box with no GPU hazard (every Mac) says nothing for cc, yet the
 # option still resolves and refuses there; an unread batch (`exec`) proves no
-# backend and is refused; a batch holding no backend is not warned about;
-# `plan` reports both; a non-backend or a misplaced option is a usage error.
+# backend and is refused. A batch holding no backend runs without a warning
+# and notes a vacuous pin when given one, keeping dune's exit status. If
+# disabled aliases were skipped, the pin refuses a backend-free remainder.
+# `plan` reports the refusal, warning and note. An invalid option is a usage error.
 leg_88() {
 local d= label="backend check: a GPU box's cc-only batch is warned about, and --expect-backend refuses it"
+local note='NOTE: --expect-backend cuda is vacuous for this batch (it holds no backend).'
 native_fleet=$fleet_none
 for probe in "nv-cc|$nv_present|$kfd_absent|cuda|" "kfd-cc|$nv_absent|$kfd_small|hip|"; do
   IFS='|' read -r tag nv kfd gpu _ <<<"$probe"
@@ -1201,8 +1206,44 @@ if [ -z "$d" ]; then
 fi
 if [ -z "$d" ]; then
   FAKE_REACH='end' native_probe be-none "$dxg_absent" "$kfd_absent" "$nv_present" "" run build @cheap
-  [ "$argv_rc" = 0 ] && ! grep -q 'WARNING' <<<"$argv_err$argv_out" ||
+  [ "$argv_rc" = 0 ] && ! grep -q 'WARNING:\|NOTE:' <<<"$argv_err$argv_out" ||
     d="a batch holding no backend: exit $argv_rc; stderr $argv_err"
+fi
+if [ -z "$d" ]; then
+  FAKE_REACH='end' native_probe be-none-expect "$dxg_absent" "$kfd_absent" "$nv_present" "" run --expect-backend cuda build @check
+  if [ "$argv_rc" != 0 ] || [ "$argv_calls" != "build @check" ]; then
+    d="backend-free --expect-backend cuda: exit $argv_rc (want 0); dune calls: ${argv_calls:-<none>}; digest: $argv_out"
+  elif ! grep -qxF -- "test-run: $note" <<<"$argv_err" ||
+       ! grep -qxF -- "test-run: $note" "$argv_dir/log" ||
+       ! grep -qxF -- "$note" <<<"$argv_out"; then
+    d="backend-free --expect-backend cuda: missing note in stderr, the run log or the digest (run: $argv_dir)"
+  fi
+fi
+if [ -z "$d" ]; then
+  FAKE_REACH='end' argv_mode=fail native_probe be-none-red "$dxg_absent" "$kfd_absent" "$nv_present" "" run --expect-backend cuda build @check
+  [ "$argv_rc" = 7 ] && [ "$argv_calls" = "build @check" ] &&
+    grep -qF -- 'verdict: FAIL (exit 7)' <<<"$argv_out" && grep -qxF -- "$note" <<<"$argv_out" ||
+    d="backend-free failing dune: exit $argv_rc (want 7); dune calls: ${argv_calls:-<none>}; digest: $argv_out"
+fi
+if [ -z "$d" ]; then
+  FAKE_REACH='end' native_probe be-plan-none "$dxg_absent" "$kfd_absent" "$nv_present" "" plan --expect-backend cuda build @check
+  if [ "$argv_rc" != 0 ] || [ -n "$argv_calls" ] ||
+     ! grep -qxF -- "$note" <<<"$argv_out" || grep -q 'held\|BACKEND REFUSED' <<<"$argv_out"; then
+    d="plan for backend-free --expect-backend cuda: exit $argv_rc; dune calls: ${argv_calls:-<none>}; output: $argv_out"
+  fi
+fi
+if [ -z "$d" ]; then
+  # Dropping the requested CUDA alias must leave no successful backend assertion.
+  mkdir -p "$repeat_root/be-disabled"
+  printf '%s\n' '(rule (alias gpu) (enabled_if (= %{env:OCANNL_BACKEND=cc} cuda)) (action (progn)))' >"$repeat_root/be-disabled/dune"
+  printf '%s\n' 'be-disabled gpu' '. check' >"$TMP/be-disabled.aliases"
+  FAKE_REACH='end' REPEAT_TEST_ALIASES=$TMP/be-disabled.aliases \
+    native_probe be-filtered "$dxg_absent" "$kfd_absent" "$nv_present" cc run --expect-backend cuda build @be-disabled/gpu @check
+  [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] &&
+    grep -qF -- 'disabled alias skipped: @be-disabled/gpu' <<<"$argv_out" &&
+    grep -qF -- 'backend refused: --expect-backend cuda: after skipping disabled aliases, the remaining batch holds no backend.' <<<"$argv_out" &&
+    grep -qF -- 'Set OCANNL_BACKEND to enable the skipped aliases, or rerun just the remaining targets without --expect-backend.' <<<"$argv_out" ||
+    d="pin after skipping the CUDA alias: exit $argv_rc (want 2); dune calls: ${argv_calls:-<none>}; digest: $argv_out"
 fi
 if [ -z "$d" ]; then
   native_probe be-plan "$dxg_absent" "$kfd_absent" "$nv_present" "" plan --expect-backend cuda build @cheap

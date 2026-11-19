@@ -101,6 +101,7 @@ let () =
     (String.equal (summary "build @test/operations/scans") "names nothing");
   p "@metal-codegen holds Metal and nothing else"
     (String.equal (summary "build @metal-codegen") "names metal");
+  p "@check holds no backend" (String.equal (summary "build @check") "names nothing");
   p "a plain build of a bin/ executable holds no backend"
     (String.equal (summary "build bin/projection_shape_bench.exe") "names nothing");
   p "a plain build in bisect's spelling holds no backend"
