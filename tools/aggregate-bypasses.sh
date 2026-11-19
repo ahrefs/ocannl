@@ -16,7 +16,8 @@
 # OCANNL_TOOL_VERDICT_ACTION header; within them exactly
 #   OCANNL_TOOL_VERDICT_BYPASS<TAB>hatches<TAB>executable<TAB>claim
 #   OCANNL_TOOL_VERDICT_CHECKED<TAB>hatches<TAB>executable<TAB>claim
-# with three non-empty fields. Every other OCANNL_TOOL_VERDICT_<KIND> record
+# with three non-empty fields, each header with its executable and working
+# directory (its arguments may be empty). Every other OCANNL_TOOL_VERDICT_<KIND> record
 # passes through unjudged (SKIP, EVALUATED, MEASURE, and kinds of a newer
 # Verdict); any other line, a record before the first header, or a run with no
 # header at all makes the input malformed (exit 2), since a swept commit
@@ -89,7 +90,12 @@ trap cleanup EXIT
 unit_rows() {
   awk '
     BEGIN { FS = "\t" }
-    index($0, "OCANNL_TOOL_VERDICT_ACTION\t") == 1 { actions++; next }
+    # The header Verdict writes: executable, working directory, arguments (possibly none).
+    index($0, "OCANNL_TOOL_VERDICT_ACTION\t") == 1 {
+      if (NF != 4 || $2 == "" || $3 == "") malformed = 1
+      actions++
+      next
+    }
     index($0, "OCANNL_TOOL_VERDICT_BYPASS\t") == 1 || index($0, "OCANNL_TOOL_VERDICT_CHECKED\t") == 1 {
       if (!actions || NF != 4 || $2 == "" || $3 == "" || $4 == "") { malformed = 1; next }
       key = $3 "\t" $4

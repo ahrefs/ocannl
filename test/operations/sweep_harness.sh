@@ -1414,13 +1414,24 @@ grep -q '^bypass rates: CLEAR -- every hatched claim reached was checked on some
 grep -qxF '  m4-max/cc: 0 of 1 hatched claim reach(es) bypassed (0%), 1 checked' <<<"$bypass_incremental"
 grep -q '^bypass rates for [0-9a-f]* (incremental execution)$' \
   "$(sed -n 's/^bypass rates: .* -- //p' <<<"$bypass_incremental" | tail -1)"
+# A unit that ran its actions but reached no hatched claim has a row of its own in
+# the summary, told apart from a unit with no records at all: an incremental unit
+# whose every action was cached wrote none, which is its ordinary state and is
+# silent, never reported as lost evidence.
+bypass_none=$(SWEEP_TEST_OPAM_OUT_CC=$common run_sweep_args --only cc)
+grep -q '^bypass rates: CLEAR -- no hatched claim was reached -- ' <<<"$bypass_none"
+grep -qxF '  m4-max/cc: no hatched claim reached' <<<"$bypass_none"
+bypass_cached=$(SWEEP_TEST_OPAM_NO_RECORDS=1 SWEEP_TEST_OPAM_OUT_CC=$hatch_checked run_sweep_args --only cc)
+grep -q "^bypass rates: not aggregated (no unit's verdict records were staged)$" <<<"$bypass_cached"
+absent 'evidence unavailable' <<<"$bypass_cached"
 # A scoped run stages no unit's records, and says so rather than staying silent.
 grep -q '^bypass rates: not aggregated (requires no --target)$' <<<"$(run_sweep_args --target bypass-probe)"
 
 # The aggregator's own contract, over records the real Verdict wrote. A unit
 # with no hatched claim reached says so; a malformed hatched record, a record
 # before any action header and an input with no header at all are refused
-# (exit 2) rather than read as nothing bypassed; a newer record kind passes.
+# (exit 2) rather than read as nothing bypassed, and so is a header truncated
+# before its executable and directory; a newer record kind passes.
 bypasses=$(dirname "$sweep")/aggregate-bypasses.sh
 hatched_records() { # out text
   local dir
@@ -1445,7 +1456,11 @@ cp "$tmp/hatched-bypass.records" "$tmp/hatched-short.records"
 printf 'OCANNL_TOOL_VERDICT_BYPASS\tqueued window contended\tverdict_skip_probe.exe\n' \
   >>"$tmp/hatched-short.records"
 grep -v '^OCANNL_TOOL_VERDICT_ACTION' "$tmp/hatched-bypass.records" >"$tmp/hatched-legacy.records"
-for refused in hatched-short hatched-legacy; do
+{
+  printf 'OCANNL_TOOL_VERDICT_ACTION\t\n'
+  cat "$tmp/hatched-legacy.records"
+} >"$tmp/hatched-truncated.records"
+for refused in hatched-short hatched-legacy hatched-truncated; do
   set +e
   refused_err=$("$bypasses" --run a/cc "$tmp/$refused.records" 2>&1 >/dev/null)
   refused_rc=$?

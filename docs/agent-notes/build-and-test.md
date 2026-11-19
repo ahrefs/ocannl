@@ -6695,9 +6695,11 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
 
 - **Bypass rates** (gh-ocannl-996): after the skip coverage, the sweep hands every unit whose
   records it staged -- forced passes, cleared reds, and incremental passes too, whose cached
-  actions simply wrote nothing -- to `tools/aggregate-bypasses.sh`, which writes
+  actions simply wrote nothing (an incremental unit that ran nothing is silent; records that could
+  not be read or carry no action header say `bypass evidence unavailable`) -- to
+  `tools/aggregate-bypasses.sh`, which writes
   `logs/<stamp>-bypass-rates.txt`: per unit, `<bypassed> of <reaches> hatched claim reach(es)
-  bypassed (<n>%)` and each claim bypassed at least once with the hatches it took, then `UNVERIFIED:`
+  bypassed (<n>%)` (or `no hatched claim reached`) and each claim bypassed at least once with the hatches it took, then `UNVERIFIED:`
   for a claim bypassed on EVERY unit that reached it -- this run checked it nowhere. The sweep's
   stdout quotes the `bypass rates:` result with the report path, each unit's line and each finding,
   indented. A finding never fails the sweep (a valid hatch on a loaded night is no regression): the

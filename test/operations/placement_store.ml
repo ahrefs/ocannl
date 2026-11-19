@@ -1049,14 +1049,18 @@ let () =
      told from its reports and never from the stores the claim judges (gh-ocannl-1115,
      gh-ocannl-1361): a contended run is bypassed whether or not it stored, since a gate that opened
      on the stores being there would turn a regression that stops attempting them into a skip. The
-     load is the claim's hatch, not its gate (gh-ocannl-996): the gate is the timing identity. *)
+     load is the claim's hatch, not its gate (gh-ocannl-996): the gate is the timing identity and a
+     compared search that did not fail. *)
   let stores8 = placement_stores persisted8 in
   let clean8 = clean_evidence (arms8 @ flips8) in
   Stdio.eprintf
     "run 8 (not part of the golden): clean %b, %d placement stores, %d refused cache operations\n%!"
     clean8 (List.length stores8)
     (List.count persisted8.io ~f:refused);
-  gated ~aggregation:`Environment ~when_:persisted8.identity ~on:"no timing identity"
+  let failed8 = failed_search (arms8 @ flips8) in
+  gated ~aggregation:`Environment
+    ~when_:(persisted8.identity && not failed8)
+    ~on:(if persisted8.identity then "a compared search failed" else "no timing identity")
     ~unless:[ ("unclean evidence (a contended run)", not clean8) ]
     "under refused commits, the cold run reports its placement store's refusal"
     ((not (List.is_empty stores8)) && List.for_all stores8 ~f:refused)

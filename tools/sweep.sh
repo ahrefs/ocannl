@@ -2277,16 +2277,18 @@ collect_verdict_records() { # host wt dest log path_prefix
 stage_skip_evidence() { # machine backend host wt log path_prefix [cleared|bypass-only]
   local machine=$1 backend=$2 host=$3 wt=$4 log=$5 path_prefix=$6 cleared=${7:-}
   local records=${5%.log}.verdict-records staged=skip-run
-  # An incremental unit whose every action was cached ran none and wrote no records: no evidence,
-  # and nothing to say about it, since that is its ordinary state.
+  # An incremental unit whose every action was cached ran none and wrote no records -- an EMPTY
+  # collection -- which is its ordinary state and says nothing. Records that could not be read, or
+  # that hold lines but no action header, are lost evidence, and say so for either reader.
+  local evidence=skip
+  [ "$cleared" != bypass-only ] || evidence=bypass
   if ! collect_verdict_records "$host" "$wt" "$records" "$log" "$path_prefix"; then
-    [ "$cleared" = bypass-only ] ||
-      say "  $machine/$backend: skip evidence unavailable -- its per-action verdict records could not be read"
+    say "  $machine/$backend: $evidence evidence unavailable -- its per-action verdict records could not be read"
     return 0
   fi
+  [ "$cleared" != bypass-only ] || [ -s "$records" ] || return 0
   if ! grep -q "^OCANNL_TOOL_VERDICT_ACTION$(printf '\t')" "$records"; then
-    [ "$cleared" = bypass-only ] ||
-      say "  $machine/$backend: skip evidence unavailable -- no per-action verdict records (a swept commit predating gh-ocannl-1114?)"
+    say "  $machine/$backend: $evidence evidence unavailable -- no per-action verdict records (a swept commit predating gh-ocannl-1114?)"
     return 0
   fi
   [ "$cleared" != bypass-only ] || staged=bypass-run
@@ -3331,7 +3333,8 @@ else
   mv "$bypass_stage" "$bypass_report" || die_post_run "cannot publish $bypass_report"
   bypass_result=$(grep '^result:' "$bypass_report" | head -1)
   echo "bypass rates: ${bypass_result#result: } -- $bypass_report"
-  grep -E '^([^ ].*: [0-9]+ of [0-9]+ hatched claim|UNVERIFIED: )' "$bypass_report" | sed 's/^/  /'
+  grep -E '^([^ ].*: ([0-9]+ of [0-9]+ hatched claim|no hatched claim reached$)|UNVERIFIED: )' \
+    "$bypass_report" | sed 's/^/  /'
 fi
 echo "history: $HISTORY"
 echo "logs:    $LOGS/$stamp-*"
