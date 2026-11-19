@@ -115,13 +115,14 @@ let build_graph () =
   let step = Ir.Assignments.sequence [ update; sgd ] in
   let ctx, routine =
     if gpu ctx then
-      (* This graph's small loops coalesce under the untuned preset. Use the tuner's fission preset
-         directly so fresh processes compile the same multi-kernel schedule. *)
+      (* This graph's small loops coalesce under the untuned preset. Explicit materialization and
+         Context.compile with a fixed transform give both processes the same multi-kernel
+         schedule. *)
       let limits = Context.hardware_limits ctx in
-      let preset = Autotune.segment_preset ~presets:`Search ~is_gpu:true ~is_cpu:false ~limits in
       let lowered_transform code =
         let _, segments =
-          Autotune.tuner_fission ~is_gpu:true ~limits ~preset ~static_indices:[ batch_n ] code
+          Autotune.sketch_segmentation ~presets:`Search ~is_gpu:true ~is_cpu:false ~limits
+            ~static_indices:[ batch_n ] code
         in
         List.map segments ~f:(fun (_, _, _, scheduled) -> scheduled)
       in

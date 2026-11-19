@@ -308,10 +308,10 @@ files.
   annotation (gh-ocannl-1788). It used to re-annotate a load at its storage precision, which erased
   such a request before the gate, and in a heterogeneous slot (a `Where` condition, a guard) changed
   the precision the renderer evaluates the load at.
-- Defaulting the builders to `binop_own` and `where_own` (gh-ocannl-1741) changed two aliases
-  in the 425-alias cc trial, including the widened sweeps. `access_fold` lost a discarded `Arg2`
-  operand to the smart constructor and `ll_builder_precisions` accepted two annotations its refusal
-  tests exercise. Zero generated-text and value goldens moved.
+- The builders kept their defaults after a 425-alias cc trial of `binop_own` and `where_own`
+  (gh-ocannl-1741). `access_fold`'s structural visit of discarded operands lost an `Arg2` operand.
+  `ll_builder_precisions`'s two refusal claims for single annotations on narrow binop loads and
+  `Where` arms failed because both forms became accepted. Zero generated-text and value goldens moved.
 - **Byte RNG expressions return unsigned bytes before storage** (gh-ocannl-2136): every
   scalar and lane helper, on every backend and through the host stub, returns byte storage's
   unsigned type. Packed vectors may keep `int8x16_t` bit containers. A signed scalar return

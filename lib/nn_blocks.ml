@@ -561,11 +561,10 @@ let%op max_pool2d ?(stride = 2) ?(window_size = 2) ?(use_padding = false) () x =
   (* NOTE: the constant kernel = 0.0 carries the window size as an operand axis. Projection
      inference runs per-assignment in a distinct phase from shape inference; it once needed an
      operand carrying the window's extent (https://github.com/ahrefs/ocannl/discussions/381), but
-     since gh-ocannl-1656/1691 a captured, set kernel sizes a one-operand window too: the spec
-     without its kernel slot, [x @^^ "... | stride*oh< + wh, ... => ... | oh, ..." ["wh"; ...]],
-     computes the same. The layers keep the binary form. [stretch] makes the kernel's shape resolve
-     at this use site — it acquires the window axes from the einsum spec (gh-ocannl-544; plain
-     operation results close down to their arguments' shapes). *)
+     since gh-ocannl-1656/1691 a captured, set kernel also sizes a one-operand window. The layers
+     keep the binary form for signed-zero behavior (gh-ocannl-1741). On cc a window of negative
+     zeros yields positive zero with the per-tap addition and negative zero without it. [stretch]
+     makes the kernel acquire its axes from the einsum spec (gh-ocannl-544). *)
   Shape.set_dim pwh window_size;
   Shape.set_dim pww window_size;
   if use_padding then
