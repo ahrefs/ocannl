@@ -2852,9 +2852,10 @@ let phase12 () =
    (* A host read has to work after the concat's routine-local fallback buffer is gone, in every
       configuration that could leave the reader virtual (gh-ocannl-2364): at the default fan-in cap,
       with the cap disabled, and under an explicit [Inline] preference on the reader. The guard is a
-      readback verdict, not a cap, so it lands the reader [159:footprint-observed-reader] in all
-      three; without it the reader stays virtual over the visit cap's [Local] buffer and the read is
-      refused as [Unobservable_local]. *)
+      readback verdict, not a cap, so it lands the reader [159:footprint-observed-reader] in each (a
+      site, which offers placement search no flip, where a cap provenance would); without it the
+      reader stays virtual over the visit cap's [Local] buffer and the read is refused as
+      [Unobservable_local]. *)
    Tn.set_observable c_;
    let mat_name = "vcf_sites_footprint_observed_mat" in
    let mat = optimize ~materialized:[ a; c_ ] ~name:mat_name llc in
@@ -2875,6 +2876,10 @@ let phase12 () =
        | _ -> false)
    in
    observed_leg ~label:"" ~what:"at the default fan-in cap" (LL.empty_optimize_ctx ());
+   (* Over the cap (its charge, [a] and [w], is 2), the verdict still takes precedence: a cap
+      landing would offer an [`Inline] flip the verdict then refuses. *)
+   LL.virtualize_settings.max_inline_fanin <- 1;
+   observed_leg ~label:"_over_cap" ~what:"over the fan-in cap" (LL.empty_optimize_ctx ());
    LL.virtualize_settings.max_inline_fanin <- -1;
    observed_leg ~label:"_cap_off" ~what:"with the fan-in cap disabled" (LL.empty_optimize_ctx ());
    LL.virtualize_settings.max_inline_fanin <- 3;

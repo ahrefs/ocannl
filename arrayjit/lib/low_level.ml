@@ -12321,9 +12321,19 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
      The same load sets carry the observed-reader guard (gh-ocannl-2325, gh-ocannl-2364): an
      observable consumer whose charge loads a cap-backed footprint is materialized below. That guard
      is about host readback, not recompute cost, so the walk also runs with the cap disabled
-     whenever a cap-backed footprint exists to be loaded, and the guard skips no cap exemption. *)
+     whenever a cap-backed footprint exists to be loaded and an observable consumer could be
+     guarded, and the guard skips no cap exemption. *)
   let fanin_cap_on = virtualize_settings.max_inline_fanin >= 0 in
-  if fanin_cap_on || Hashtbl.exists footprint_scoped ~f:Option.is_some then
+  let guard_eligible traced =
+    traced.has_assignment && traced.read_by_other && undecided traced.tn
+    && not (Hashtbl.mem footprint_scoped traced.tn)
+  in
+  if
+    fanin_cap_on
+    || Hashtbl.exists footprint_scoped ~f:Option.is_some
+       && Hashtbl.exists traced_store ~f:(fun traced ->
+           Tn.is_observable traced.tn && guard_eligible traced)
+  then
     (* The reads a stored computation replays when [inline_computation] inlines it: the one read
        collector ({!read_charge_of_proc}, gh-ocannl-1451) that [trace_node_facts] uses for this
        routine's own setters. Used for a dependency this routine only READS whose definition an
@@ -12550,16 +12560,8 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
             | None -> ()
             | Some traced ->
                 if fanin_cap_on then traced.inline_fanin <- max 1 fanin;
-                if
-                  traced.has_assignment && traced.read_by_other && undecided tn
-                  && not (Hashtbl.mem footprint_scoped tn)
-                then
+                if guard_eligible traced then
                   if
-                    fanin_cap_on
-                    && (not (cap_exempt traced))
-                    && fanin > virtualize_settings.max_inline_fanin
-                  then land_on_cap traced Inline_fanin_cap
-                  else if
                     Tn.is_observable tn
                     && List.exists s ~f:(fun loads ->
                         Set.exists loads ~f:(fun p ->
@@ -12571,8 +12573,15 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
                        readback verdict, not a heuristic cap: it holds with the fan-in cap disabled
                        and over an explicit [Inline] preference (gh-ocannl-2364), where the ordinary
                        path leaves the reader virtual over the cap's [Local] buffer and
-                       [Context.observability] reports it [Unobservable_local]. *)
-                    Tn.Placements.update plc tn Never_virtual (Site "159:footprint-observed-reader")))
+                       [Context.observability] reports it [Unobservable_local]. It takes precedence
+                       over the cap, whose provenance would offer an [`Inline] flip this verdict
+                       then refuses. *)
+                    Tn.Placements.update plc tn Never_virtual (Site "159:footprint-observed-reader")
+                  else if
+                    fanin_cap_on
+                    && (not (cap_exempt traced))
+                    && fanin > virtualize_settings.max_inline_fanin
+                  then land_on_cap traced Inline_fanin_cap))
 
 type recompute_pricer_fn =
   static_indices:Indexing.static_symbol list ->

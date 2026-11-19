@@ -307,6 +307,8 @@ the capped reduction reads the inherited producer through one footprint scratch:
 the inherited-footprint reduction matches the reference and the materialized reading: true
 at the default fan-in cap: the observed reduction is materialized as a footprint-observed reader: true
 at the default fan-in cap: the observed reduction and its output read back like the materialized reading: true
+over the fan-in cap: the observed reduction is materialized as a footprint-observed reader: true
+over the fan-in cap: the observed reduction and its output read back like the materialized reading: true
 with the fan-in cap disabled: the observed reduction is materialized as a footprint-observed reader: true
 with the fan-in cap disabled: the observed reduction and its output read back like the materialized reading: true
 under an explicit Inline preference on the reader: the observed reduction is materialized as a footprint-observed reader: true

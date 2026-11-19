@@ -1129,14 +1129,15 @@ files.
   can fall back to inlining, so its template's loads still expand. Earlier routines store
   templates in the lineage, and any footprint decision for those templates is made again here.
   An undecided observable consumer materializes (`159:footprint-observed-reader`) when its virtual
-  reading could retract a dependency to a buffer whose storage can be local or aliased, unless its
-  charge already lands it on the cap. That guard is a readback verdict, not a heuristic cap
-  (gh-ocannl-2364): the load-set walk also runs with the fan-in cap disabled whenever a cap-backed
-  footprint exists, and the guard overrides an explicit `Inline` preference. The ordinary path does
+  reading could retract a dependency to a buffer whose storage can be local or aliased. That guard
+  is a readback verdict, not a heuristic cap (gh-ocannl-2364): it lands ahead of the cap, whose
+  provenance would offer an `Inline` flip the verdict refuses; the load-set walk also runs with the
+  fan-in cap disabled when a cap-backed footprint and an eligible observable consumer both exist;
+  and the guard overrides an explicit `Inline` preference. The ordinary path does
   not cover either reading: it leaves the reader virtual over the visit cap's `Local` buffer, and
   `Context.observability` refuses the host read as `Unobservable_local`.
   `virtual_chain_fanin` phase 12 pins the scratch and whole-buffer charges, the inherited
-  fallback, and host readback at the default cap, with the cap disabled and under `Inline`, with
+  fallback, and host readback at the default cap, over it, with it disabled and under `Inline`, with
   execution against a materialized reference in each case.
 - **The shift-the-uids check reads what a compile ships, not only the decision surface**
   (gh-ocannl-1877): `flip_order_minting` part 1 compares, across builds minted at different uid
