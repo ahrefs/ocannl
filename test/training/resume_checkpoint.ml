@@ -242,6 +242,12 @@ let child path =
     (show_order (order_of_progress progress));
   List.iter fp ~f:print_endline
 
+(* The child must compile under the same settings, including overrides that outrank its
+   environment. *)
+let run_resume_child mode path =
+  let args = List.tl_exn (Array.to_list Stdlib.Sys.argv) in
+  Fresh_process.run (mode :: path :: List.filter args ~f:Utils.cmdline_arg_is_config_key)
+
 let raises_failure ?(also = "") ~substring f =
   match f () with
   | _ -> false
@@ -295,7 +301,7 @@ let parent () =
            (List.map first_losses ~f:(fun l -> "loss " ^ bits l))
            (List.take (List.drop uninterrupted n_params) stop_step));
       (* The resume, in a fresh process. *)
-      let ((status, out, _) as result) = Fresh_process.run [ "resume"; path ] in
+      let ((status, out, _) as result) = run_resume_child "resume" path in
       let child_ok = Poly.equal status (Unix.WEXITED 0) in
       if not child_ok then Fresh_process.report ~label:"resume child" result;
       let lines = String.split_lines out in
@@ -607,7 +613,7 @@ let mp_parent () =
       let detector = Outliers.create ~window_size:mp_window () in
       let ctx, progress, _ = mp_run_steps prog detector (start ()) ~until:mp_stop_step in
       Checkpoint.save ~ctx ~progress prog.mp_state path;
-      let ((status, out, _) as result) = Fresh_process.run [ "resume-mp"; path ] in
+      let ((status, out, _) as result) = run_resume_child "resume-mp" path in
       let child_ok = Poly.equal status (Unix.WEXITED 0) in
       if not child_ok then Fresh_process.report ~label:"mixed-precision resume child" result;
       let resumed = String.split_lines out in
@@ -657,9 +663,9 @@ let mp_parent () =
            (fun () -> Outliers.restore_state other_detector (extra_exn saved detector_key))))
 
 let () =
-  match Stdlib.Sys.argv with
-  | [| _; "resume"; path |] -> child path
-  | [| _; "resume-mp"; path |] -> mp_child path
+  match Array.to_list Stdlib.Sys.argv with
+  | _ :: "resume" :: path :: _ -> child path
+  | _ :: "resume-mp" :: path :: _ -> mp_child path
   | _ ->
       parent ();
       mp_parent ()

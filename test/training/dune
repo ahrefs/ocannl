@@ -687,7 +687,8 @@
   stderr_capture
   arrayjit.ir
   arrayjit.autotune
-  arrayjit.context)
+  arrayjit.context
+  arrayjit.utils)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
