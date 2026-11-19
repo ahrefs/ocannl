@@ -755,6 +755,10 @@ names a leg uncompared that is the result of a function under a module alias of 
 names a leg uncompared whose function a structure of the source may rebind by a later include: true
 names a leg uncompared whose other-source function writes the reference its gate reads: true
 refuses a leg another source's function gates on a part of a tuple it destructures: true
+names a leg uncompared whose function a submodule exports before a later include may replace it: true
+names a leg uncompared whose other-source gate reads a reference a helper there writes: true
+accepts a leg a caller builds through a third source's function that applies the claim's own: true
+names a leg uncompared that another source's function builds from an optional it is handed by name: true
 names a leg uncompared that is the result of a function of a module no source defines: true
 names a leg uncompared whose function a later include in its source may rebind: true
 names a leg uncompared whose function a later include of a structure including another may rebind: true

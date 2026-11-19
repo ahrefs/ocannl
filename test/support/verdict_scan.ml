@@ -1338,14 +1338,16 @@ let tolerance_census content =
     as a caller's are; its [Verdict] resolutions join this source's. A destructured parameter of [f]
     is the parts of what the application supplies ({!parts}), and [?l:None] for a parameter with a
     default is the default. A module path inside [M] ([M.Sub.f]), an [f] that is no [fun] its body
-    follows, an [f] whose body writes into a binding (a write this reader does not time against the
-    claim), an [f] exported before a later [include] -- in [M]'s structure, this source's or
-    another's -- of a module whose exports the reader does not know (one it cannot read, or a
-    [struct ... end] holding such an [include]), which may rebind it, a source that does not parse,
-    and a module name no source is compiled as each leave the leg UNCOMPARED, with the reason; so
-    does [L.f] under a module alias of another source ([module L = Ll_test]), which binds no
-    structure in scope. A module name an [open] of a module this reader cannot read rebinds is read
-    as the corpus's source of that name, as a caller's [M.f] is.
+    follows, an [f] whose body writes into a binding, or whose own gate reads a binding the walk saw
+    written anywhere (writes this reader does not time against the claim), an [f] handed [?l:e] for
+    a parameter with a default, [e] no literal [None] or [Some _], an [f] exported -- itself or
+    through a submodule -- before a later [include] in [M]'s structure, this source's or another's,
+    of a module whose exports the reader does not know (one it cannot read, or a [struct ... end]
+    holding such an [include]), which may rebind it, a source that does not parse, and a module name
+    no source is compiled as each leave the leg UNCOMPARED, with the reason; so does [L.f] under a
+    module alias of another source ([module L = Ll_test]), which binds no structure in scope. A
+    module name an [open] of a module this reader cannot read rebinds is read as the corpus's source
+    of that name, as a caller's [M.f] is.
 
     {3 A leg taken out of a value (gh-ocannl-2286)}
 
@@ -2890,8 +2892,15 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
                          far (gh-ocannl-2336, review). *)
                       let unknown () =
                         opaque := true;
-                        List.iter exports ~f:(fun (_, { identity; _ }) ->
-                            Hash_set.add rebindable identity)
+                        (* Its submodules' exports too, which the include may replace. *)
+                        let rec mark values modules =
+                          List.iter values ~f:(fun (_, { identity; _ }) ->
+                              Hash_set.add rebindable identity);
+                          List.iter modules ~f:(function
+                            | _, Local_structure { values; modules; _ } -> mark values modules
+                            | _ -> ())
+                        in
+                        mark exports !module_exports
                       in
                       ( self#opened ~top:false ~include_:true env denotes,
                         match denotes with
@@ -3615,8 +3624,8 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
                 | Some name, `Given e -> bound e env name
                 | Some name, `Option e -> (
                     (* [?l:e] for a parameter with a default is [e]'s payload or the default
-                       (gh-ocannl-2336, local review): a literal [None] or [Some x] says which;
-                       otherwise both are, read together as a pair no leg is taken from. *)
+                       (gh-ocannl-2336, local review): a literal [None] or [Some x] says which. Any
+                       other [e] a leg's way refuses beforehand ({!unresolved_option}). *)
                     match (slot, (strip_constraints e).pexp_desc) with
                     | ( Optional_slot (_, Some (d, d_env)),
                         Pexp_construct ({ txt = Lident "None"; _ }, None) ) ->
@@ -3624,15 +3633,6 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
                     | ( Optional_slot (_, Some _),
                         Pexp_construct ({ txt = Lident "Some"; _ }, Some payload) ) ->
                         bound payload env name
-                    | Optional_slot (_, Some (d, d_env)), _ ->
-                        let default = "(default)" in
-                        let loc = e.pexp_loc in
-                        bound
-                          (Ppxlib.Ast_builder.Default.pexp_tuple ~loc
-                             [ e; Ppxlib.Ast_builder.Default.evar ~loc default ])
-                          (Lexical_scope.bind_values env [ default ]
-                             { (self#local) with definition = Some (d, d_env) })
-                          name
                     | _ -> bound e env name)
                 | Some name, `Default (d, d_env) -> bound d d_env name
                 (* A destructured parameter is the parts of what is supplied (gh-ocannl-2336,
@@ -3641,6 +3641,22 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
                 | None, `Default whole -> self#bind_parts scope pattern whole
                 | _ -> self#bind_patterns scope [ pattern ])
             | Pparam_newtype _ -> scope)
+
+      (* The label of an optional parameter with a default among [params] that [arguments] hands
+         [?l:e] for, [e] no literal [None] or [Some _]: its value is [e]'s payload or the default,
+         which {!bind_applied} cannot say, so a leg built through it is not followed
+         (gh-ocannl-2336, review). *)
+      method unresolved_option params arguments =
+        List.find_map params ~f:(fun param ->
+            match param.pparam_desc with
+            | Pparam_val (Optional label, Some _, _) ->
+                List.find_map arguments ~f:(function
+                  | Ppxlib.Asttypes.Optional given, e when String.equal given label -> (
+                      match (strip_constraints e).pexp_desc with
+                      | Pexp_construct ({ txt = Lident ("None" | "Some"); _ }, _) -> None
+                      | _ -> Some label)
+                  | _ -> None)
+            | _ -> None)
 
       (* Where the parameter [identity] of a named function takes its value at the application
          [arguments]: an argument, an optional parameter's default, an option passed with [?l:], or
@@ -4016,9 +4032,19 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
                                 ( { pexp_desc = Pexp_function (params, _, Pfunction_body body); _ },
                                   definition_env );
                           }
-                        when not (Set.mem seen identity) ->
-                          let seen = Set.add seen identity in
-                          go seen path (self#bind_applied ~definition_env env params arguments) body
+                        when not (Set.mem seen identity) -> (
+                          match self#unresolved_option params arguments with
+                          | Some label ->
+                              Error
+                                (Printf.sprintf
+                                   "its leg is the result of `%s`, handed `?%s:` an option the \
+                                    reader does not resolve against the parameter's default"
+                                   name label)
+                          | None ->
+                              let seen = Set.add seen identity in
+                              go seen path
+                                (self#bind_applied ~definition_env env params arguments)
+                                body)
                       | _ ->
                           Error
                             (Printf.sprintf
@@ -4033,19 +4059,53 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
                         ~f:(fun definitions ->
                           List.fold definitions ~init:(Ok []) ~f:(fun acc definition ->
                               Result.bind acc ~f:(fun alternatives ->
-                                  let identity, params, body, definition_env = definition in
-                                  if Set.mem seen identity then
+                                  let identity, params, body, definition_env, (start, stop) =
+                                    definition
+                                  in
+                                  let spelled = Ppxlib.Longident.name (Ldot (prefix, name)) in
+                                  (* A gate the body writes builds on something written elsewhere --
+                                     [prepare xs] setting the reference the gate reads -- at a time
+                                     this reader does not relate to the claim (review): such a leg
+                                     is not followed. *)
+                                  let written_gate r =
+                                    List.find_map r.leg_gates ~f:(fun (gate, gate_env) ->
+                                        let at = position gate in
+                                        if start <= at && at < stop then
+                                          Hash_set.find (self#gate_reads gate_env gate)
+                                            ~f:(fun (_, read) ->
+                                              read <> 0
+                                              && (Hashtbl.mem writes read
+                                                || Hashtbl.mem field_writes read
+                                                || Hashtbl.mem unlisted_writes read))
+                                        else None)
+                                  in
+                                  if Option.is_some (self#unresolved_option params arguments) then
+                                    Error
+                                      (Printf.sprintf
+                                         "its leg is the result of `%s`, handed an optional \
+                                          argument the reader does not resolve against its default"
+                                         spelled)
+                                  else if Set.mem seen identity then
                                     Error
                                       (Printf.sprintf
                                          "its leg is the result of `%s`, whose own result passes \
                                           back through it"
-                                         (Ppxlib.Longident.name (Ldot (prefix, name))))
+                                         spelled)
                                   else
                                     Result.bind
                                       (go (Set.add seen identity) path
                                          (self#bind_applied ~definition_env env params arguments)
                                          body)
-                                      ~f:(fun more -> bounded_resolutions (alternatives @ more)))))
+                                      ~f:(fun more ->
+                                        match List.find_map more ~f:written_gate with
+                                        | Some (read, _) ->
+                                            Error
+                                              (Printf.sprintf
+                                                 "its leg is the result of `%s`, whose gate reads \
+                                                  `%s`, which the source writes into at a time the \
+                                                  reader does not relate to the claim"
+                                                 spelled read)
+                                        | None -> bounded_resolutions (alternatives @ more)))))
                   | _ ->
                       Error
                         (Printf.sprintf "its leg is the result of `%s`, another module's function"
@@ -4101,7 +4161,7 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
                      "its leg is the result of `%s`, whose body writes into a binding, which the \
                       reader does not time against the claim"
                      spelled)
-              else Ok (identity, params, body, definition_env)
+              else Ok (identity, params, body, definition_env, span_of fn)
           | _ ->
               Error
                 (Printf.sprintf
@@ -4143,7 +4203,7 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
         Hashtbl.find_or_add defining_structures source ~default:(fun () ->
             let parsed =
               match Hashtbl.find walked_callers source with
-              | Some structure -> Scan_attempt.Scanned structure
+              | Some (structure, scope) -> Scan_attempt.Scanned (structure, scope)
               | None -> (
                   let at = !next_offset in
                   next_offset := at + String.length text + 1;
@@ -4154,14 +4214,16 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
                       binder#structure structure;
                       self#walk_foreign (fun () ->
                           ignore (self#structure (Lazy.force empty_scope) structure : structure));
-                      Scanned structure
-                  | other -> other)
+                      Scanned (structure, Lazy.force empty_scope)
+                  | Unparsed report -> Unparsed report
+                  | Raised exn -> Raised exn)
             in
             match parsed with
-            | Scanned structure ->
+            | Scanned (structure, scope) ->
+                (* In the scope it was walked in: a caller's binds this source's module. *)
                 let values =
                   match
-                    self#module_of (Lazy.force empty_scope)
+                    self#module_of scope
                       (Ppxlib.Ast_builder.Default.pmod_structure ~loc:Ppxlib.Location.none structure)
                   with
                   | Some (Local_structure { values; _ }) -> values
@@ -5196,7 +5258,14 @@ let gate_census ?callers ?(definitions = fun _ _ -> []) content =
               caller_spans := (at, at + String.length text + 1, source) :: !caller_spans;
               match Scan_attempt.run (fun () -> structure_at ~offset:at text) with
               | Scanned caller ->
-                  Hashtbl.set walked_callers ~key:source ~data:caller;
+                  Hashtbl.set walked_callers ~key:source
+                    ~data:
+                      ( caller,
+                        {
+                          top with
+                          Lexical_scope.modules =
+                            Map.singleton (module String) module_name structure;
+                        } );
                   Verdict_callee.absorb ~into:owners (Verdict_callee.of_structure caller);
                   binder#structure caller;
                   (match module_spelled_otherwise ~module_name ~spelled_elsewhere caller with

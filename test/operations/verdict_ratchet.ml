@@ -5363,6 +5363,64 @@ let () =
       [],
       [ "rows" ],
       1 );
+    ( "names a leg uncompared whose function a submodule exports before a later include may \
+       replace it",
+      {ocaml|open Verdict.Claims
+module Legs = struct
+  module Inner = struct
+    let rows_leg leg _ = Verdict.sub_leg leg ~when_:(lazy on_gpu) ~on:"a CPU"
+  end
+  include Other
+end
+let () =
+  let leg = Verdict.leg ~when_:on_gpu ~on:backend_name () in
+  let rows = probe () in
+  in_leg ~leg:(Legs.Inner.rows_leg leg rows) "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      none,
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "names a leg uncompared whose other-source gate reads a reference a helper there writes",
+      claim_under "Legs.rows_leg leg rows",
+      legs
+        {ocaml|let ready = ref false
+let prepare xs = ready := not (List.is_empty xs)
+let rows_leg leg xs =
+  prepare xs;
+  Verdict.sub_leg leg ~when_:(lazy !ready) ~on:"no rows"|ocaml},
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "accepts a leg a caller builds through a third source's function that applies the claim's own",
+      {ocaml|open Verdict.Claims
+let arm_leg leg = Verdict.sub_leg leg ~when_:(lazy on_gpu) ~on:"a CPU"
+let check ~leg rows = in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      legs {ocaml|let arm_leg leg = Checks.arm_leg leg|ocaml},
+      [
+        {
+          Scan.source = "legs.ml";
+          text = {ocaml|let arm_leg leg = Checks.arm_leg leg|ocaml};
+          spelled_elsewhere = false;
+        };
+        {
+          Scan.source = "caller.ml";
+          text =
+            {ocaml|let () = Checks.check ~leg:(Legs.arm_leg (Verdict.leg ~when_:on_gpu ~on:backend_name ())) (probe ())|ocaml};
+          spelled_elsewhere = false;
+        };
+      ],
+      [],
+      1 );
+    ( "names a leg uncompared that another source's function builds from an optional it is handed \
+       by name",
+      claim_under "let absent = None in Legs.rows_leg leg rows ?pair:absent ()",
+      legs
+        {ocaml|let from_pair leg (xs, _) =
+  Verdict.sub_leg leg ~when_:(lazy (not (List.is_empty xs))) ~on:"no rows"
+let rows_leg leg rows ?(pair = (rows, ())) () = from_pair leg pair|ocaml},
+      [],
+      [ "uncompared in_leg" ],
+      0 );
     ( "names a leg uncompared that is the result of a function of a module no source defines",
       claim_under "Legs.arm_leg leg k16",
       none,

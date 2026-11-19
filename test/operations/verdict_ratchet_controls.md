@@ -989,7 +989,7 @@ body, with the application's arguments bound; and the ratchet refuses every leg 
 leaves uncompared unless `exempt_uncompared_legs` names it, stale-checked. Each row also states how
 many claims were compared, as the gh-ocannl-1893 rows do. Every run used tools/mutation-run.sh
 --batch with the focused alias on mac-studio (M4 Max), on a green baseline (`verdict_scan.ml`:
-`20261118T213400Z-37206`; `verdict_ratchet.ml`: `20261118T205244Z-97507`), and restored the source
+`20261118T213400Z-37206`; `verdict_ratchet.ml`: `20261118T205244Z-97507`; the Codex round 2 rows ran on `20261119T000358Z-46285`), and restored the source
 byte for byte.
 
 | Mechanism | Mutation | Controls | Run |
@@ -1002,8 +1002,12 @@ byte for byte.
 | A defining source is walked as a caller is, so its writes are read (local review) | `verdict_scan.ml`: no defining source walked | Failed: `names a leg uncompared that another source's function takes from a record it writes into`; and the reference-write row named below | `20261118T213553Z-13037` |
 | A definition is the one in its speller's own directory (local review) | `verdict_scan.ml`: every definition asked for this source's directory | Failed: `refuses a leg built by the definition in its speller's own directory, not the claim's` | `20261118T213643Z-72984` |
 | The definition index prefers the speller's directory (local review) | `verdict_ratchet.ml`: the index asked for the claim's source's directory | Failed: `the definition index reads a module from its speller's own directory, else every source of the name` | `20261118T205522Z-27425` |
-| `?l:None` for a parameter with a default binds the default (local review) | `verdict_scan.ml`: `?l:e` bound to `e` whatever the default | Failed: `refuses a leg another source's function gates on the default its caller's None leaves` | `20261118T213735Z-48993` |
+| `?l:None` for a parameter with a default binds the default (local review) | `verdict_scan.ml`: `?l:e` bound to `e` whatever the default | Failed: `refuses a leg another source's function gates on the default its caller's None leaves` | `20261118T213735Z-48993`, `20261119T000520Z-96749` |
 | An uncompared leg claim outside its exemption, and a stale exemption, are refused; one under its exemption is counted | `verdict_ratchet.ml`: the uncompared refusal, then the stale one, fails nothing; then the exemption is not consulted | Failed: `refuses a leg claim it leaves uncompared outside its exemption, counts one under it, and refuses a stale exemption`, under each | `20261118T205359Z-53571`, `20261118T205440Z-88801`, `20261118T205606Z-71688` |
+| A later opaque include may replace a submodule too (Codex round 2) | `verdict_scan.ml`: a submodule's exports not marked rebindable | Failed: `names a leg uncompared whose function a submodule exports before a later include may replace it` | `20261119T000642Z-35402` |
+| A gate the body builds on a binding written elsewhere is not followed (Codex round 2) | `verdict_scan.ml`: no gate read for a written binding | Failed: `names a leg uncompared whose other-source gate reads a reference a helper there writes` | `20261119T000732Z-53391` |
+| A defining caller's values keep the scope it was walked in (Codex round 2) | `verdict_scan.ml`: a defining caller's values rebuilt in an empty scope | Failed: `accepts a leg a caller builds through a third source's function that applies the claim's own` | `20261119T000820Z-80316` |
+| An optional handed by name to a defaulted parameter leaves the leg uncompared (Codex round 2) | `verdict_scan.ml`: the unresolved optional not refused on another source's function | Failed: `names a leg uncompared that another source's function builds from an optional it is handed by name` | `20261119T000928Z-13303` |
 | A module no source is compiled as leaves the leg uncompared | none: the boundary row, read by the rows above | `names a leg uncompared that is the result of a function of a module no source defines` stays green under every mutation | the runs above |
 | A module alias of another source binds no structure, so the leg stays uncompared (review checkpoint) | none: the boundary row, its callee gating on the rows so that following the alias would refuse it rather than leave it uncompared | `names a leg uncompared that is the result of a function under a module alias of another source` stays green under every mutation | the runs above |
 
