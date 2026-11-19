@@ -260,6 +260,15 @@ unset OCANNL_TOOL_HARNESS_EXPECTED_SKIPS OCANNL_TOOL_HARNESS_SKIP_RECORD OCANNL_
   OCANNL_TOOL_HARNESS_DUNE_SKIP_RECORD
 scratch=()
 serial_relay=
+# The signals the parallel run relays are pinned at their default before the
+# EXIT trap (gh-ocannl-2332): `trap ''` records the default as each one's
+# original, and the reset leaves it untrapped, so a member forked as one
+# arrives dies on delivery rather than outliving the run, while an untrapped
+# signal still runs the EXIT trap at once. The parallel run ends its relay
+# with exit traps, not a reset, which would restore that default and skip the
+# EXIT trap.
+trap '' HUP INT TERM
+trap - HUP INT TERM
 trap 'status=$?; [ -z "$serial_relay" ] || kill -TERM "$serial_relay" 2>/dev/null; rm -rf ${scratch[@]+"${scratch[@]}"}; [ -z "$slot_record" ] || echo "$status" >"$slot_record"' EXIT
 # Refuse a list (exit 2, before any member runs) holding any line but the
 # three forms the header names, or an entry naming a harness this run does not
@@ -582,7 +591,9 @@ else
     done
     [ "$progressed" = 1 ] || sleep 0.2
   done
-  trap - HUP INT TERM
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   if [ -n "$interrupted" ]; then
     # The members beside it are stopped, then every member that ran is
     # printed, in order, before the run ends with the interrupting status.

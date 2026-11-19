@@ -127,7 +127,9 @@
 #      A range, `--since OLD..NEW`, reaches affected as its own positional
 #      range, for the list and for the harness ask alike, and the closing
 #      line names no `--since` command; a mutant handing the range over as
-#      `--since` loses that oracle.
+#      `--since` loses that oracle. A TERM after the run's relay has ended
+#      still runs pp_close, which removes the scratch list (gh-ocannl-2332); a
+#      mutant resetting the relay under prepush loses it.
 #      The harness commands `affected --harnesses --since BASE` prints
 #      (gh-ocannl-1929) are named as the last lines of stderr and never run,
 #      the very last naming the one command that runs them for this BASE:
@@ -2878,6 +2880,72 @@ else
   else report 1 "prepush --since OLD..NEW: a mutant asking --since OLD..NEW loses the oracle" "mutant survived"; fi
 fi
 cp "$SRC" "$repeat_root/tools/test-run.sh"
+
+# A TERM after the run's relay has ended still runs pp_close (gh-ocannl-2332).
+# The relay's signals are pinned at their default before pp_close's EXIT trap,
+# so the run ends its relay with exit traps, not a reset: a reset would restore
+# that default, and the TERM would end the launcher without pp_close. The hook
+# is a `cat` on PATH that TERMs the launcher when the launcher reads a verdict
+# (digest's first read, after the relay ends); pp_close's mark is the scratch
+# list it removes. The control resets the relay under prepush too.
+pp_term_bin=$TMP/pp-term-bin
+mkdir -p "$pp_term_bin"
+cat >"$pp_term_bin/cat" <<'HOOK'
+#!/usr/bin/env bash
+if [ "$#" = 1 ] && [ ! -e "$PP_TERM_MARK" ]; then
+  case $1 in
+    */exit)
+      # The launcher: the outermost of the shells running it, since the command
+      # substitution it may fork for this read carries the same command line.
+      launcher= pid=$PPID
+      while case $(ps -o command= -p "$pid" 2>/dev/null) in
+              *"tools/test-run.sh prepush "*) true ;;
+              *) false ;;
+            esac; do
+        launcher=$pid pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+      done
+      if [ -n "$launcher" ]; then : >"$PP_TERM_MARK"; kill -TERM "$launcher"; fi ;;
+  esac
+fi
+exec "$PP_TERM_REAL_CAT" "$@"
+HOOK
+chmod +x "$pp_term_bin/cat"
+pp_term_check() {
+  local saved_path=$PATH
+  rm -f "$TMP/pp-term.mark"
+  export PP_TERM_MARK=$TMP/pp-term.mark PP_TERM_REAL_CAT
+  PP_TERM_REAL_CAT=$(command -v cat)
+  PATH=$pp_term_bin:$PATH
+  pp_probe pp-term 0 --since base build -j 2
+  PATH=$saved_path
+  unset PP_TERM_MARK PP_TERM_REAL_CAT
+  if [ ! -e "$TMP/pp-term.mark" ]; then pp_term_detail="the hook never TERMed the launcher: exit $argv_rc; $argv_err"
+  elif [ -n "$(pp_left)" ]; then pp_term_detail="pp_close never ran: the scratch list was left ($(pp_left)); exit $argv_rc"
+  elif [ "$argv_rc" != 143 ]; then pp_term_detail="exit $argv_rc, not the TERM's 143: $argv_err"
+  else pp_term_detail=; fi
+  find "$pp_tmp" -name 'test-run-prepush.*' -prune -exec rm -rf {} +
+}
+pp_term_label="prepush: a TERM after the run's relay ends still runs pp_close"
+pp_term_control="control: $pp_term_label, lost to a relay reset under prepush"
+# The hook finds the launcher through `ps -o`, which MSYS's ps lacks.
+if ! ps -o command= -p "$$" >/dev/null 2>&1; then
+  skip "$pp_term_label" "this host's ps has no -o (MSYS), so the hook cannot find the launcher"
+  skip "$pp_term_control" "this host's ps has no -o (MSYS), so the hook cannot find the launcher"
+else
+pp_term_check
+if [ -z "$pp_term_detail" ]; then report 0 "$pp_term_label"; else report 1 "$pp_term_label" "$pp_term_detail"; fi
+perl -pe 's/^      if \[ -n "\$\{pp_dir:-\}" \]; then$/      if false; then/' "$SRC" >"$repeat_root/tools/test-run.sh"
+if cmp -s "$SRC" "$repeat_root/tools/test-run.sh"; then
+  report 1 "$pp_term_control" "mutant was not made"
+else
+  pp_term_check
+  case $pp_term_detail in
+    "pp_close never ran:"*) report 0 "$pp_term_control" ;;
+    *) report 1 "$pp_term_control" "mutant survived: ${pp_term_detail:-pp_close ran}" ;;
+  esac
+fi
+cp "$SRC" "$repeat_root/tools/test-run.sh"
+fi
 
 # The scan uses an arbitrary name and a relative dependency from the aggregate.
 # Its sibling in another directory shares the basename and stays pending until

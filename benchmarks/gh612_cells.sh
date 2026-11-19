@@ -192,7 +192,7 @@ cmd_search() { (
   # STAGE is referenced by the handler at trap time, NOT interpolated into it: an OUT_ROOT
   # containing whitespace would otherwise be word-split by `rm -rf` and delete a sibling path.
   STAGE=$stage
-  trap 'rm -rf "$STAGE"' EXIT INT TERM
+  trap 'rm -rf "$STAGE"' INT TERM EXIT
   tree=$(require_dir "$tree")
   case ${tree:-} in /?*) ;; *) exit 2;; esac
   check_config "$tree" || exit 2
@@ -273,7 +273,7 @@ cmd_snap() { (
   # An interrupted `snap` would otherwise orphan this poller, and a later retry that recreates
   # armsnap would have the stray copying sources from the earlier run into it -- contaminating the
   # candidate set pick_armA chooses from. Kill it on any exit or signal, not only the normal path.
-  trap 'kill '"$w"' 2>/dev/null' EXIT INT TERM
+  trap 'kill '"$w"' 2>/dev/null' INT TERM EXIT
   # Same hole `replay` had: a populated cache DIRECTORY is not a hit, so a differing tree or
   # cache-key flag would let this search afresh and `pick_armA` would snapshot a NEWLY crowned
   # artifact instead of the measured one -- silently corrupting every structural diff built on it.
@@ -363,7 +363,7 @@ cmd_profile() { (
   local pstage="$OUT_ROOT/.staging-$label-r$rep-profile"
   rm -rf "$pstage"; mkdir -p "$pstage" || exit 2
   PSTAGE=$pstage
-  trap 'rm -rf "$PSTAGE"' EXIT INT TERM
+  trap 'rm -rf "$PSTAGE"' INT TERM EXIT
   local i
   for i in $(seq "$n"); do
     if ! $PIN "$out/harness" > "$pstage/kernels-$i.csv" 2> "$pstage/kernels-$i.err"; then

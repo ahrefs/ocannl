@@ -576,10 +576,10 @@ branch_plan() (
     die_plan 'temporary directory is inside a Git checkout; set TMPDIR outside it'
   fi
   scratch=$(mktemp -d "$scratch_parent/merge-build-plan.XXXXXX") || die_plan 'cannot make a scratch directory'
-  trap 'rm -rf "$scratch"' EXIT
   trap 'exit 129' HUP
   trap 'exit 130' INT
   trap 'exit 143' TERM
+  trap 'rm -rf "$scratch"' EXIT
   git clone --shared --no-checkout --quiet -- "$root" "$scratch/checkout" ||
     die_plan 'cannot create the candidate repository'
   cd "$scratch/checkout" || die_plan 'cannot enter the candidate repository'
