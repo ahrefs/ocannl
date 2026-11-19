@@ -9,6 +9,31 @@ module SC = Ir.Schedule_cache
 module BI = Ir.Backend_intf
 module FI = Ir.Resource_fault_injection
 
+module No_identity_driver = struct
+  include Autotune.Context_driver
+
+  let timing_identity _ = None
+end
+
+module No_identity = Autotune.Make (No_identity_driver)
+
+let force_no_identity =
+  let mode =
+    Option.value
+      (Stdlib.Sys.getenv_opt "OCANNL_TOOL_TEST_TIMING_IDENTITY")
+      ~default:"device-identity"
+  in
+  (* Verdict keys each action by argv. Check the argument against the seam's setting so the record
+     identifies the mode that actually ran. *)
+  match (mode, Array.to_list Stdlib.Sys.argv) with
+  | "no-identity", [ _; "no-identity" ] -> true
+  | "device-identity", ([ _ ] | [ _; "device-identity" ]) -> false
+  | _ -> failwith "the timing-identity mode and action argument disagree"
+
+let timing_identity, tune =
+  if force_no_identity then (No_identity_driver.timing_identity, No_identity.tune)
+  else (Context.timing_identity, Autotune.tune)
+
 let cache_dir = "autotune_cache_device"
 let absent_cache_dir = "autotune_cache_device_absent"
 
@@ -45,7 +70,9 @@ let () =
   let limits = Context.hardware_limits ctx in
   let capabilities = Context.codegen_capabilities ctx in
   let construction = BI.sexp_of_hardware_limits limits in
-  let identity = Context.timing_identity ctx in
+  let identity = timing_identity ctx in
+  if force_no_identity && Option.is_some identity then
+    Verdict.fail "the forcing leg requires a driver without timing identity";
   Stdio.eprintf "backend=%s; timing identity (not part of the golden): %s\n%!" backend
     (Sexp.to_string_hum ([%sexp_of: BI.timing_identity option] identity));
   p "identity queries preserve conservative construction limits"
@@ -75,7 +102,7 @@ let () =
             fill_lane_width = None;
           }));
   p "a concrete context's identity is stable"
-    (Option.equal BI.equal_timing_identity identity (Context.timing_identity ctx));
+    (Option.equal BI.equal_timing_identity identity (timing_identity ctx));
   (match identity with
   | Some identity ->
       p "the available identity contains concrete device facts"
@@ -200,7 +227,7 @@ let () =
   let reports = ref [] in
   let run () =
     let ctx, routine =
-      Autotune.tune ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir
+      tune ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir
         ~report:(fun r -> reports := r :: !reports)
         (Context.auto ()) comp Ir.Indexing.Empty
     in
@@ -217,17 +244,17 @@ let () =
   let replayed =
     match second_report.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false
   in
-  (* Both are claims about a device with no timing identity; one that has it checks nothing here,
-     and says so (gh-ocannl-1310). *)
-  gated ~aggregation:`Environment ~when_:(Option.is_none identity)
-    ~on:(backend ^ " with a device timing identity")
-    "runtime replay requires a concrete device identity" (not replayed);
-  gated ~aggregation:`Environment ~when_:(Option.is_none identity)
-    ~on:(backend ^ " with a device timing identity")
-    "unavailable identity leaves the runtime store absent"
-    (not (Stdlib.Sys.file_exists cache_dir));
+  let no_identity =
+    Verdict.leg ~aggregation:`Environment ~when_:(Option.is_none identity)
+      ~on:(backend ^ " with a device timing identity")
+      ()
+  in
+  in_leg ~leg:no_identity "runtime replay requires a concrete device identity" (fun label ->
+      p label (not replayed));
+  in_leg ~leg:no_identity "unavailable identity leaves the runtime store absent" (fun label ->
+      p label (not (Stdlib.Sys.file_exists cache_dir)));
   p "the identity is stable across allocation, execution and replay"
-    (Option.equal BI.equal_timing_identity identity (Context.timing_identity ctx));
+    (Option.equal BI.equal_timing_identity identity (timing_identity ctx));
   if Option.is_some identity && first_report.Autotune.timings_contended > 0 then
     skipped ~aggregation:`Environment ~backend
       "a complete cold search replays on the same concrete device"

@@ -432,6 +432,7 @@
   (alias runtest-render_decline_inventory)
   (alias runtest-resnet_block-origins_cap_0)
   (alias runtest-schedule_bench_padded)
+  (alias runtest-schedule_cache_device-no_identity)
   (alias runtest-schedule_conv_gemm-tf32)
   (alias runtest-schedule_pad-contract_off)
   (alias runtest-scheme_error_rendering-full_sexp)
@@ -14234,8 +14235,15 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  (env_var OCANNL_TOOL_TEST_TIMING_IDENTITY)
   (env_var OCANNL_BACKEND))
+ (locks schedule_cache_device)
  (modules schedule_cache_device)
+ (action
+  (setenv
+   OCANNL_TOOL_TEST_TIMING_IDENTITY
+   device-identity
+   (run %{test} device-identity)))
  (libraries
   base
   ocannl
@@ -14247,6 +14255,31 @@
   arrayjit.autotune)
  (preprocess
   (pps ppx_here ppx_sexp_conv ppx_ocannl)))
+
+(rule
+ (target schedule_cache_device-no_identity.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_TOOL_TEST_TIMING_IDENTITY)
+  (env_var OCANNL_BACKEND))
+ (locks schedule_cache_device)
+ (action
+  (setenv
+   OCANNL_TOOL_TEST_TIMING_IDENTITY
+   no-identity
+   (with-stdout-to
+    %{target}
+    (run %{dep:schedule_cache_device.exe} no-identity)))))
+
+(rule
+ (alias runtest-schedule_cache_device-no_identity)
+ (package neural_nets_lib)
+ (action
+  (diff
+   schedule_cache_device.expected
+   schedule_cache_device-no_identity.actual)))
 
 (test
  ; ocannl-backend: none -- pure filesystem exercise of Schedule_cache entry naming; no context or compile.

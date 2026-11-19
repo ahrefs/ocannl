@@ -917,6 +917,8 @@ let case label f =
     run; the exit status is taken care of without it. *)
 let any_failed () = not (List.is_empty !failed_names)
 
+let success_trailer_prefix = "OK: "
+
 (** [success_trailer ?blank_line rows] prints each of [rows] as an [OK: <row>] line, behind an empty
     line when [blank_line], provided no check has failed so far -- and nothing otherwise: a scan's
     closing statement of what its claims established, which a failing run must not print. It is the
@@ -929,7 +931,7 @@ let any_failed () = not (List.is_empty !failed_names)
 let success_trailer ?(blank_line = false) rows =
   if not (any_failed ()) then (
     if blank_line then Stdio.print_string "\n";
-    List.iter rows ~f:(fun row -> Stdio.printf "OK: %s\n" (one_line row)))
+    List.iter rows ~f:(fun row -> Stdio.printf "%s%s\n" success_trailer_prefix (one_line row)))
 
 (** Ends a NEGATIVE-CONTROL run, one whose failures are the output its golden pins: exits 1 when
     something failed and 0 when nothing did, without the teardown's ["FAILED: n checks …"] line.

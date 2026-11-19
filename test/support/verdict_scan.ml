@@ -58,7 +58,19 @@
     evaded by any wrapper, including the [let p name b = Stdio.printf "%s: %b\n" name b] helpers
     several tests defined before {!Verdict} existed. Those helpers are the exact population this
     ratchet exists to keep from regrowing, so a claim-shaped format string in a test source is
-    either an assertion or, by exemption, a documented exception. *)
+    either an assertion or, by exemption, a documented exception.
+
+    {1 Success trailers (gh-ocannl-1449)}
+
+    The trailer reader reserves a literal line starting with [OK: ] for {!Verdict.success_trailer}.
+    It checks decoded string literals passed as the format or text argument of a direct stdout call
+    spelled [printf] (bare or qualified by [Printf], [Stdio], or [Format]), [print_string] or
+    [print_endline] (bare or qualified by [Stdlib] or [Stdio]), or [fprintf] (bare or qualified by
+    [Printf] or [Stdio]) or [output_string] (bare or qualified by [Stdlib]) with a literal [stdout]
+    or [Stdlib.stdout] channel path. A line starts at the literal's beginning or after a decoded
+    newline. The reader works from those spellings and leaves channel aliases, printer aliases and
+    shadowing, computed strings, format-generated line breaks, and non-OCaml output outside its
+    model. *)
 
 open Base
 open Ppxlib.Parsetree
@@ -221,6 +233,7 @@ type site = {
 
 type scan = {
   sites : site list;  (** The claim-shaped literals, in source order. *)
+  hand_rolled_trailers : (int * string) list;  (** Literal stdout trailers by line and printer. *)
   literals : int;  (** Every string literal in expression position. *)
   applied_literals : int;  (** How many of those are an argument of a named function. *)
 }
@@ -229,6 +242,28 @@ type scan = {
     expected, so the consuming test can say that its empty offender list came from a scan that read
     something — rather than leaving "no offenders" and "no reading" the same result. *)
 
+let stdout_text path (arguments : (Ppxlib.Asttypes.arg_label * expression) list) =
+  match (path, arguments) with
+  | ( ( [ "printf" ]
+      | [ ("Printf" | "Stdio" | "Format"); "printf" ]
+      | [ ("print_string" | "print_endline") ]
+      | [ ("Stdlib" | "Stdio"); ("print_string" | "print_endline") ] ),
+      (Nolabel, text) :: _ ) ->
+      Some text
+  | ( ( [ "fprintf" ]
+      | [ ("Printf" | "Stdio"); "fprintf" ]
+      | [ "output_string" ]
+      | [ "Stdlib"; "output_string" ] ),
+      (Nolabel, channel) :: (Nolabel, text) :: _ ) -> (
+      match Read.longident_of channel with
+      | Some ([ "stdout" ] | [ "Stdlib"; "stdout" ]) -> Some text
+      | _ -> None)
+  | _ -> None
+
+let is_trailer_literal text =
+  List.exists (String.split ~on:'\n' text)
+    ~f:(String.is_prefix ~prefix:Verdict.success_trailer_prefix)
+
 (** [scan content] reads one source. Raises if [content] does not parse: a reader that cannot read
     its input must say so rather than report an empty census. *)
 let scan content =
@@ -236,7 +271,7 @@ let scan content =
   (* The function each literal is an argument of, noted as the application is entered — an iterator
      visits a node before its children, so the argument's own visit below finds it. *)
   let printers = Hashtbl.create (module Int) in
-  let sites = ref [] and literals = ref 0 in
+  let sites = ref [] and literals = ref 0 and hand_rolled_trailers = ref [] in
   let iterator =
     object
       inherit Ast_traverse.iter as super
@@ -250,6 +285,13 @@ let scan content =
             match Read.longident_of callee with
             | Some path ->
                 let name = String.concat ~sep:"." path in
+                Option.iter (stdout_text path arguments) ~f:(fun text ->
+                    if
+                      Option.value_map (Read.string_literal text) ~default:false
+                        ~f:is_trailer_literal
+                    then
+                      hand_rolled_trailers :=
+                        (text.pexp_loc.loc_start.pos_lnum, name) :: !hand_rolled_trailers);
                 List.iter arguments ~f:(fun (_, argument) ->
                     if Option.is_some (Read.string_literal argument) then
                       Hashtbl.set printers ~key:argument.pexp_loc.loc_start.pos_cnum ~data:name)
@@ -279,7 +321,12 @@ let scan content =
     end
   in
   iterator#structure ast;
-  { sites = List.rev !sites; literals = !literals; applied_literals = Hashtbl.length printers }
+  {
+    sites = List.rev !sites;
+    hand_rolled_trailers = List.rev !hand_rolled_trailers;
+    literals = !literals;
+    applied_literals = Hashtbl.length printers;
+  }
 
 (** {1 A gated claim reported in two dialects (gh-ocannl-997)}
 

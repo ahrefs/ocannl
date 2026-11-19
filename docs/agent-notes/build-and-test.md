@@ -3110,7 +3110,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   failing run of `verdict_ratchet`, `env_var_deps`, `config_dep_completeness` and the rest is
   that many rows short; the runner matches the run against the golden without its `OK: ` rows,
   with or without the blank row before them, under the same row-for-row and teardown conditions.
-  A new scan that prints its trailer through `Verdict.success_trailer` inherits this. A golden
+  A new scan that prints its trailer through `Verdict.success_trailer` inherits this.
+  `verdict_ratchet` refuses literal stdout trailer rows under the closed printer forms in
+  `Verdict_scan`'s Success trailers section (gh-ocannl-1449). A golden
   ending on a marker section's closing row (`End of synthetic controls.`, every manifest golden)
   needs neither the teardown nor the row-for-row match: a run whose stdout ends on the golden's
   LAST closing row (counted, since every section ends on the same text) printed all it was going

@@ -3426,6 +3426,9 @@ files.
   remain preexisting provenance gaps (gh-ocannl-1026), not reasons to disable supported caches. Outer `None` means
   concrete device discovery failed and bypasses all shared cache I/O. Execution/tuning remain
   available. `schedule_cache_device` pins device/metadata separation, bypass, and real-backend replay.
+  Its `runtest-schedule_cache_device-no_identity` variant supplies a driver whose timing identity
+  is absent while allocation, compilation and execution use the selected backend (gh-ocannl-1449).
+  The Dune action passes the mode as an argument so the two variants keep separate Verdict records.
 ## Capabilities and search diagnostics
 - **HIP's tensor-core capability is gated on the HOST, not only on the device** (gh-ocannl-1032):
   `mma_supported` is `all_rdna_wave32 && rocwmma_include_dir`, and both `hardware_limits.mma` and
