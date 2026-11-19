@@ -1823,8 +1823,15 @@ files.
   the tile declines to its fallback) a packed seed differed from the serial loop by an ulp on
   non-dyadic data. `tile_fallback_unfused` pins the fallback against a host emulation of the
   two-rounding f32 chain, `runtest-schedule_pad-contract_off` the register tile; restoring the
-  unconditional fusion fails both (0x1.8p-11 and 0x1p-10). `tile_mma_declines` pins the
-  register-tiled census with the contraction licence off.
+  unconditional fusion fails both (0x1.8p-11 and 0x1p-10). The same test's GPU leg (gh-ocannl-1834)
+  pins the fallback by value on CUDA and HIP under `cuda_fast_math=false` / `hip_fast_math=false`:
+  a hand-applied `Tensorize` of an f32 matmul (the CPU seeder offers no f32 tensorized seed there,
+  and wmma with tf32 off and rocWMMA both decline f32, so the census reads `Scalar_fallback`),
+  equal to the chain bitwise; the unconditional fusion fails it by 0x1.8p-11 on both
+  (rog-nv-linux's CUDA, minix-amd-linux's unified-memory HIP). It also states
+  `fp_contract=false`: the IR licence's explicit `FMA` would fail the two-rounding oracle under
+  any compile pin. `tile_mma_declines` pins the register-tiled census with the contraction
+  licence off.
 - **The contraction pin is a per-backend fact read off the compile's own option builder**
   (gh-ocannl-1457): `compiler_contraction_off` is cc's `Cc_backend.contraction_off`
   (`Compiler_options.clang_contraction_off` over the fast-math and contraction flags in compile
