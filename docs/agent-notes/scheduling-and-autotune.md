@@ -1205,9 +1205,17 @@ files.
   scope-nested tile loop (`rewrite_loop_holder` in `schedule.ml`). `stage_scope_anchor`.
   `Schedule.apply_opt_op` checks the program every op leaves and refuses, typed and naming the op,
   a violation the op ADDED (a malformed entry is not the next op's fault);
-  the race queries alone called the `Grid` retype and the `Stage` legal. An IMPURE entry (only a
-  hand-built `?prelowered` routine can bring one) is refused before any op runs, by `apply_typed`
-  and `schedule_legality` on a non-empty schedule (`check_entry_scope_purity`, gh-ocannl-2314):
+  the race queries alone called the `Grid` retype and the `Stage` legal.
+  `schedule_op_scope_purity` (gh-ocannl-2313) pins the impure-body arm: an anchored `Stage` checks
+  the staged reads' paths, then inserts a load at every occurrence of the anchor.
+  `validate_loop_binders` requires unique loop symbols at optimize entry. Schedule rewrites can
+  duplicate binders later, so the hand-built fixture installs a second anchor binder after
+  optimize, inside a pure scope that contains no staged read. The added tensor write is refused
+  by the post-op gate. Disabling that gate lets the stage apply with the write still in the scope.
+  With a distinct scope-loop symbol the stage writes the tile outside the scope and leaves it pure.
+  An IMPURE entry (only a hand-built `?prelowered` routine can bring one) is refused before any op
+  runs, by `apply_typed` and `schedule_legality` on a non-empty schedule
+  (`check_entry_scope_purity`, gh-ocannl-2314):
   ops such as `privatized_tile_split`'s `writes` and `Fuse_epilogue`'s plain-write sites read
   writes at statement level, so they misread a hidden one (the base applied `[Privatize; Retype
   Grid]` over a tile updated inside a scope body). It is untyped, an invariant: a typed
