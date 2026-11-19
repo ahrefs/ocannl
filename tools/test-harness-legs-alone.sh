@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Refusal checks match literal reasons for the named fixture cases; they do not
 # parse complete usage output or classify arbitrary diagnostics.
-# The shard check reads only the member paths in the checker's HARNESS headers
-# for the fixture. Per-leg output and wording are outside its membership check.
+# The shard checks read only the fixture member paths in HARNESS headers or on
+# --list's stdout. Per-leg output and wording are outside their membership check.
 # Opposing controls for tools/harness-legs-alone.sh (gh-ocannl-1367): on a
 # fixture repository whose manifest names a gated and an ungated harness, a
 # clean harness passes leg by leg and group by group; a leg that reads what an
@@ -24,6 +24,10 @@ cp "$here/harness-legs-alone.sh" "$fixture/tools/" &&
 cat >"$fixture/tools/test-harnesses.sh" <<'STUB'
 #!/usr/bin/env bash
 [ "$*" = --list ] || exit 2
+if [ "${DISCOVERY:-0}" = list ]; then
+  printf '%s\n' fixtures/list-d.sh fixtures/commented.sh fixtures/list-b.sh fixtures/list-c.sh fixtures/list-a.sh
+  exit 0
+fi
 printf '%s\n' fixtures/gated.sh fixtures/ungated.sh
 [ "${DISCOVERY:-0}" = 0 ] || printf '%s\n' fixtures/continued.sh fixtures/commented.sh
 STUB
@@ -97,6 +101,14 @@ cat >"$fixture/fixtures/commented.sh" <<'COMMENTED'
 # Fixture harness naming harness_leg_run only in this comment; running it fails.
 exit 1
 COMMENTED
+for member in a b c d; do
+  cat >"$fixture/fixtures/list-$member.sh" <<'LIST_PROBE'
+#!/usr/bin/env bash
+: >"$LIST_STARTED"
+harness_leg never
+exit 9
+LIST_PROBE
+done
 chmod +x "$fixture/tools/"*.sh "$fixture/fixtures/"*.sh
 # The checkout every run must leave as it found it.
 git -C "$fixture" init -q && git -C "$fixture" add -A &&
@@ -357,6 +369,47 @@ leg_shards() {
   else report 1 'a shard and named harness together are refused' "exit $rc; $(cat "$TMP/out")"; fi
 }
 
+leg_list() {
+  local started=$TMP/list-started shard reason
+  DISCOVERY=list LIST_STARTED=$started run --list
+  if [ "$rc" != 0 ] || ! cmp -s "$TMP/out" <(
+    printf '%s\n' fixtures/list-d.sh fixtures/list-b.sh fixtures/list-c.sh fixtures/list-a.sh
+  ); then
+    harness_abandon "candidate list: exit $rc; $(cat "$TMP/out")"
+    return
+  fi
+  cp "$TMP/out" "$TMP/list-all"
+  : >"$TMP/list-shards"
+  for shard in 1 2 3 4; do
+    DISCOVERY=list LIST_STARTED=$started run --list --shard "$shard/4"
+    if [ "$rc" != 0 ]; then
+      harness_abandon "candidate list for shard $shard/4: exit $rc; $(cat "$TMP/out")"
+      return
+    fi
+    cat "$TMP/out" >>"$TMP/list-shards"
+  done
+  # Four candidates across four shards also pin the dealing order.
+  if cmp -s "$TMP/list-all" "$TMP/list-shards" && [ ! -e "$started" ]; then
+    report 0 '--list shards enumerate the unsharded candidates once each without starting a harness'
+  else
+    report 1 '--list shards enumerate the unsharded candidates once each without starting a harness'
+  fi
+
+  run --list fixtures/gated.sh
+  reason='--list selects from the manifest and takes no named harnesses'
+  if refusal_matches; then report 0 '--list with a named harness is refused'
+  else report 1 '--list with a named harness is refused' "exit $rc; $(cat "$TMP/out")"; fi
+
+  rc=0
+  LC_ALL=C DISCOVERY=list LIST_STARTED=$started "$subject" --list 1>&- 2>"$TMP/out" || rc=$?
+  if [ "$rc" = 1 ] && grep -qF 'Bad file descriptor' "$TMP/out"; then
+    report 0 '--list reports a failed write'
+  else
+    report 1 '--list reports a failed write' "exit $rc; $(cat "$TMP/out")"
+  fi
+}
+
 harness_leg_run 'leg isolation controls' leg_isolation
 harness_leg_run 'shard membership and dealing' leg_shards
+harness_leg_run 'list candidates and shards without running members' leg_list
 finish

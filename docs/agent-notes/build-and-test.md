@@ -1116,6 +1116,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   forms in `tools/test-harnesses.sh`'s header, since Bash 3.2 has no
   `command_not_found_handle`. The self-test keeps the leg's passing verdict and
   checks that both widths fail the member anyway, with a no-check control.
+  In the command-substitution case the successful outer `printf` masks the
+  missing function's exit status, as the original harness did.
 - On a fleet box a harness run is a test batch like any other, and like `tools/test-run.sh` and
   `tools/fmt-check.sh` it takes one of the box's correctness slots itself, as `--cpu`
   (gh-ocannl-1576): after its arguments and skip lists pass, it runs itself again under `fleet-worker.sh execution
@@ -1258,6 +1260,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   script's TEXT (a mutant's seam, an extraction) abandons itself where the older FILE lacks the
   line — a FAIL that says so, not the leg's verdict on FILE. Leg 102 pins the option with a
   subject missing one `proc_table_perl` rule: leg 99 fails in the one check that rule answers.
+  Leg 99c holds the slot stand-in wrapper unreaped until its guardian exits. Removing the
+  zombie branch of `q_exited` fails that check while the wrapper is still in state Z.
 - **Every gated leg must pass run alone** (gh-ocannl-1367). A leg that reads what an EARLIER
   leg's body made (a variable, a file, a lock, an exported mode) passes in every full run and fails
   only under `--only`, as two did when `tools/test-test-run.sh` was first gated (`LAB_MAP`,
@@ -1269,7 +1273,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   that leaves a tracked or untracked file behind (a later run could pass on it); with no argument it takes every
   member of `tools/test-harnesses.sh` whose gates list a leg. The scheduled and dispatched
   `harness-legs-alone` matrix deals candidates round-robin in `tools/test-harnesses.sh --list`
-  order with `--shard K/N` (gh-ocannl-2353). `tools/test-harness-legs-alone.sh` compares the
+  order with `--shard K/N` (gh-ocannl-2353). `--list [--shard K/N]` prints that same candidate
+  selection without launching a member. `tools/test-harness-legs-alone.sh` compares the
   shards with the unsharded fixture, and `ci_matrix.sh` checks the workflow supplies every
   shard once and leaves siblings running after a failure. Run it locally, slot-wrapped,
   on a harness whose legs you restructured. `HARNESS --list-legs` prints each gate (`LEG  NAME`)

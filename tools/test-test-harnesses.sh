@@ -896,6 +896,7 @@ exercise() {
       bash -c 'ocannl_fixture_undefined_function; true'
       printf '\n' ;;
     named-bash-c) bash -c 'ocannl_fixture_undefined_function; true' 'named fixture' ;;
+    command-substitution) printf '%s' "$(ocannl_fixture_undefined_function)" ;;
     prose)
       printf '%s\n' 'the expected fixture text says command not found' >&2
       printf '%s\n' 'assertion: command not found' 'fixture.sh: line 2: sample: command not found (example)' >&2
@@ -918,7 +919,7 @@ AFFECTED
 missing_cases() { # SUBJECT EXPECTED-BASH BRANCH
   local subject=$1 version=$2 branch=$3 width form want
   for width in 1 4; do
-    for form in script bash-c named-bash-c prose; do
+    for form in script bash-c named-bash-c command-substitution prose; do
       MISSING_FORM=$form
       run --affected --since HEAD --jobs "$width"
       want=0

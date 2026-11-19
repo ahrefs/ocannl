@@ -24,8 +24,12 @@
 # Shape-reading boundary (99b): only ps pid/ppid/exact command fields;
 # no shell text, fleet source, or environments. This pins guardian/child
 # topology while a fixture holds publication, not guardian signal handling.
+# Readiness (99c): release the wrapper after its ready marker, then keep its
+# parent from reaping until state Z and guardian exit have both been checked.
+# Teardown asks the parent to reap, killing its own child if still running.
+# The parent does the same at its deadline if the harness cannot signal it.
 #
-# Groups: #lifecycle (99, 99b, 105, 105b, 105c), #queries (100), #harness (102), #hermetic (70).
+# Groups: #lifecycle (99, 99b, 99c, 105, 105b, 105c), #queries (100), #harness (102), #hermetic (70).
 #
 # Legs:
 #  99. `wait last` and `status last` follow a launch still in flight
@@ -57,6 +61,7 @@
 #  99b. Real fleet --bg: queued status, wait through publication to red, then
 #      its own verdict without unpublished; compare guardian/child topology
 #      to q-slot, with a guardian-free negative control. Skips off fleet/CI.
+#  99c. The stand-in guardian exits even while its wrapper remains a zombie.
 # 100. every `last` lookup stays in its own worktree: beside a sibling's newer
 #      red run in the same state root, `wait last`, `status last` and `paths
 #      run last` name the worktree's own, `list` lists only its runs (`--all`
@@ -283,6 +288,81 @@ q_refuse() { # release: end the only outstanding wrapper and drain its guardian
   wait "$q_wrap_pid" 2>/dev/null || rc=$?
   q_wraps=()
   q_drain_guardian "$1" && [ "$released" = 1 ] && [ "$rc" = 75 ]
+}
+
+q_zombie_release=$TMP/zombie.slot q_zombie_parent=
+lifecycle_cleanup() {
+  [ -n "$q_zombie_parent" ] || return 0
+  local rc=0
+  kill -USR1 "$q_zombie_parent" 2>/dev/null || :
+  wait "$q_zombie_parent" || rc=$?
+  q_zombie_parent=
+  return "$rc"
+}
+q_is_zombie() { [ "$(pstate "$1")" = Z ]; }
+q_guardian_ended() {
+  # Observe the recorded guardian without using its own exit predicate.
+  case $(pstate "$1") in
+    Z) return 0 ;;
+    '') ! kill -0 "$1" 2>/dev/null ;;
+    *) return 1 ;;
+  esac
+}
+leg_99c() {
+  local label='the queued guardian exits while its wrapper is still unreaped'
+  local wrapper guardian= detail=
+  if [ "$have_state" = 0 ]; then
+    skip "$label" "no way to read a process's state on this system"
+    return
+  fi
+  # Bash can reap its background children before wait. This parent calls
+  # waitpid only after the harness has checked the guardian.
+  perl -MPOSIX=WNOHANG -e '
+    my ($slot, $release) = @ARGV;
+    my $reap = 0;
+    $SIG{USR1} = sub { $reap = 1 };
+    my $child = fork();
+    die "fork: $!" unless defined $child;
+    if (!$child) {
+      exec "bash", $slot, $release, "refuse", "--";
+      die "exec bash: $!";
+    }
+    # Leave time for the three bounded observations, even if no signal arrives.
+    for (1..1000) {
+      last if $reap;
+      select undef, undef, undef, .1;
+    }
+    my $waited = waitpid($child, WNOHANG);
+    my $status = $?;
+    if ($waited == 0) {
+      kill "KILL", $child;
+      waitpid($child, 0);
+    }
+    exit !($reap && $waited == $child && $status == (75 << 8));
+  ' "$q_slot" "$q_zombie_release" &
+  q_zombie_parent=$!
+  if ! q_until 30 test -s "$q_zombie_release.ready" ||
+     ! read -r wrapper <"$q_zombie_release.ready" ||
+     ! read -r guardian <"$q_zombie_release.guardian" || ! [[ $guardian =~ ^[1-9][0-9]*$ ]]; then
+    guardian=
+    detail='the wrapper never published its guardian and ready markers'
+  elif q_guardian_ended "$guardian"; then
+    detail='the guardian exited before the wrapper was released'
+  elif ! touch "$q_zombie_release" || ! q_until 30 q_is_zombie "$wrapper"; then
+    detail='the wrapper never reached state Z'
+  elif ! q_until 30 q_guardian_ended "$guardian"; then
+    detail='the guardian outlived its unreaped wrapper'
+  elif ! q_is_zombie "$wrapper"; then
+    detail='the wrapper was reaped before the guardian exited'
+  fi
+  lifecycle_cleanup || detail=${detail:-'the parent did not reap a wrapper that exited 75'}
+  # A failed assertion can leave the guardian waiting for that reap.
+  if [ -n "$detail" ]; then
+    [ -z "$guardian" ] || q_until 30 q_guardian_ended "$guardian"
+    report 1 "$label" "$detail"
+  else
+    report 0 "$label"
+  fi
 }
 
 q_pp_label="a queued prepush or prefixed launch is in flight; a queued prepush --list is not"
@@ -898,6 +978,7 @@ EOF
   if [ -z "$real_detail" ]; then report 0 "$label"; else report 1 "$label" "$real_detail"; fi
 }
 harness_leg_run '99b: real fleet slot and stand-in shape #lifecycle' leg_99b
+harness_leg_run '99c: queued guardian exits before wrapper reap #lifecycle' leg_99c
 
 # ---------------------------------------------------------------------------
 # Leg 105: the residuals of following a queued launch (gh-ocannl-1913)
