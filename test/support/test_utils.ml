@@ -81,6 +81,10 @@ let with_policy adjust f =
 let with_fp16_auto f =
   with_policy (fun p -> { p with Ir.Numerics.fp16_arithmetic = Ir.Numerics.Fp16_auto }) f
 
+(** [with_bf16_auto f] is [with_policy] pinning [Bf16_auto], the default bf16 mode. *)
+let with_bf16_auto f =
+  with_policy (fun p -> { p with Ir.Numerics.bf16_arithmetic = Ir.Numerics.Bf16_auto }) f
+
 (** [with_fp16_narrow f] is [with_policy] pinning [Fp16_narrow]: the f16-accumulate tensor-unit arms
     and storage-width serial accumulators on every GPU backend, which [Fp16_auto] no longer names on
     CUDA and HIP (gh-ocannl-2195). *)

@@ -135,7 +135,13 @@ let run_census ~name ?schedule (out : Tensor.t) =
 
 let run ~name ?schedule out = fst (run_census ~name ?schedule out)
 
+(* The widening legs below claim the DEFAULT fp16 mode's half resolution -- half storage computing
+   in f32, which the [tile_prec = Some single] packs rely on -- so they pin it (gh-ocannl-1104):
+   under an exported [fp16_arithmetic=true|prefer_narrow] half computes in half, the hoisted pack's
+   register tiling declines to the scalar fallback, and the leg would test another policy under the
+   default's name. The pure-f16 leg inside sets its own mode. *)
 let () =
+  Test_utils.with_fp16_auto @@ fun () ->
   let ba =
     Ll_test.operand ~b:[] ~o:[ n ] ~i:[ n ]
       (Ll_test.cycle ~dims:[| n; n |] ~modulus:3 ~offset:0. ~stride:0.25)
@@ -503,8 +509,12 @@ let () =
 
 (* The tuner's own path to the same tile (gh-ocannl-1975; the default schedule ships none). Every
    matmul seed of a site reading two twins goes through its real pipeline, and then a search ships
-   whatever it ships: which seed wins is the box's business, what it computes is not. *)
+   whatever it ships: which seed wins is the box's business, what it computes is not. Under the
+   default fp16 mode, pinned (gh-ocannl-1104): the twins are half, and the seeds that ship a tile
+   are the default resolution's f32-compute ones -- a narrow mode computes them in half and seeds no
+   register tile, which is another policy's search. *)
 let () =
+  Test_utils.with_fp16_auto @@ fun () ->
   let eps = 2. **. -12. in
   let dims = [| n; n |] in
   let a_base = Ll_test.cycle ~dims ~modulus:3 ~offset:4. ~stride:0.25 in

@@ -207,7 +207,12 @@ let claim_seed_refuted =
   "the matmul family refutes every staged tensorized seed one byte below its gate estimate, and a \
    tiles-only family does not"
 
+(* Under the default fp16 mode, pinned (gh-ocannl-1104): the stand-in advertises uniform-f16 tiles,
+   and only a mode that computes half in half seeds them -- under an exported
+   [fp16_arithmetic=false] the family has no staged tensorized seed at all, and both seed claims
+   would quantify over nothing. *)
 let () =
+  Test_utils.with_fp16_auto @@ fun () ->
   let bk = 16 in
   let a = NTDSL.init ~l:"dup_a" ~prec:Ir.Ops.half ~i:[ 2 * bk ] ~o:[ m ] ~f:(fun _ -> 1.) () in
   let b = NTDSL.init ~l:"dup_b" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ 2 * bk ] ~f:(fun _ -> 1.) () in
