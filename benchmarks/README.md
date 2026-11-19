@@ -1424,10 +1424,10 @@ fixtures still on neither box.
   tensorized candidate's time.
   A tensorized win in the arm that loses the A/B reaches no artifact and shows up in no step time,
   so without this the sweep can only find it by grepping `OCANNL_AUTOTUNE_LOG` output that a
-  successful cell discards. Each arm also names its outcome `state` — `searched`,
-  `search-died`, `cache-replay`, `search-disabled` or `pre-search-failure`, the `Autotune.outcome`
-  the call reported (gh-ocannl-677) — which is what makes a *mixed* cell readable: one arm cached,
-  the other searched because its half of the A/B never was. Read `mma_best_ms` against `best_ms` for the margin: tensorization
+  successful cell discards. Each arm also names its `Autotune.outcome` in `state` (gh-ocannl-677),
+  so a *mixed* cell can show which arm replayed and which searched. An arm reporting
+  `searched-budget-fallback` admitted timings before its budget cut and shipped the untuned
+  default unmeasured. An arm reporting `searched-untimed` admitted zero timings. Read `mma_best_ms` against `best_ms` for the margin: tensorization
   losing by 1% and by 40% are different findings.
 - **A warm pass reports one arm unless the placement store is bypassed** (gh-ocannl-786,
   gh-ocannl-1020). The search pass records which placement shipped beside the schedule entries,

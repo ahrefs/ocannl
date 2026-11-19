@@ -30,6 +30,9 @@ type outcome =
   | Searched_untimed
       (** A search ran and completed but timed nothing (gh-ocannl-2310): the untuned default ships,
           never measured. *)
+  | Searched_budget_fallback
+      (** The budget cut a search that admitted a timing before it measured the untuned floor. The
+          untuned default ships unmeasured. *)
   | Search_died of terminal_failure
       (** A search ran and terminated on a fatal failure. The counters hold what it had reached. *)
   | Cache_replay  (** A cached winner replayed; nothing was searched in this process. *)
@@ -628,6 +631,7 @@ let no_search_report ~timing =
 let outcome_name = function
   | Searched -> "searched"
   | Searched_untimed -> "searched-untimed"
+  | Searched_budget_fallback -> "searched-budget-fallback"
   | Search_died _ -> "search-died"
   | Cache_replay -> "cache-replay"
   | Search_disabled -> "search-disabled"
@@ -642,8 +646,8 @@ let outcome_name = function
 let terminal_failure (r : report) =
   match r.outcome with
   | Search_died tf | Pre_search_failure tf -> Some tf
-  | Searched | Searched_untimed | Cache_replay | Abandonment_replay _ | Search_disabled
-  | Abandoned _ | Lineage_refused _ ->
+  | Searched | Searched_untimed | Searched_budget_fallback | Cache_replay | Abandonment_replay _
+  | Search_disabled | Abandoned _ | Lineage_refused _ ->
       None
 
 (* gh-ocannl-1718 (moved from the test-support [Tune_crown], gh-ocannl-1498): what a call crowned
@@ -849,10 +853,11 @@ let budget_setting () = Utils.registered_positive_float_or_unset ~arg_name:"auto
    [schedule_fission=false] and no seeded plan, where [default_seed_label] is [None]), or the
    floor's windows were refused, the dispatched serial baseline's included when it is the default
    (automatic scheduling off) -- the cut crown has no such reference, and the serial baseline can be
-   all it timed. Such a search ships the untuned default and stores nothing, reporting as one that
-   timed nothing. Except where the default is an undispatched serial form (a GPU with automatic
-   scheduling off, gh-ocannl-532), which no timed candidate can be slower than. A policy seam like
-   {!search_measurements_cacheable}, so the cases are pinned without manufacturing each regime. *)
+   all it timed. Such a search ships the untuned default and stores nothing. It reports
+   [Searched_budget_fallback] if it admitted a timing. The rule exempts the undispatched serial
+   default (a GPU with automatic scheduling off, gh-ocannl-532), which no timed candidate can be
+   slower than. A policy seam like {!search_measurements_cacheable}, so the cases are pinned without
+   manufacturing each regime. *)
 let budget_floor_unmeasured ~budget_cut ~auto_sched ~baseline_dispatched ~floor_measured =
   budget_cut && (auto_sched || baseline_dispatched) && not floor_measured
 
@@ -12427,6 +12432,7 @@ module Make (D : Driver) = struct
               budget_floor_unmeasured ~budget_cut:!budget_cut ~auto_sched ~baseline_dispatched
                 ~floor_measured:(Option.is_some (default_ms ()) || Option.is_some (seeded_ms ()))
             in
+            let budget_fallback = floor_unmeasured && not nothing_timed in
             (if use_cache then
                if floor_unmeasured then
                  logf
@@ -12627,7 +12633,7 @@ module Make (D : Driver) = struct
                (gh-ocannl-1408). Every branch sweeps the candidates first, so a deferred call leaves
                nothing of its search resident. *)
             let ship =
-              if floor_unmeasured && not nothing_timed then (
+              if budget_fallback then (
                 logf
                   "the budget cut the search before it measured the untuned default: shipping the \
                    untuned default compile (gh-ocannl-1409)";
@@ -12704,14 +12710,15 @@ module Make (D : Driver) = struct
                   | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
             in
             let result = if defer then ship else Fn.const (ship ()) in
-            (* The report describes the routine returned (Codex P1 on PR #1234): a caller ranking
-               arms by [best_ms] must not credit this one with a candidate it discarded, and the
-               untuned default it ships was never timed -- the nothing-timed report's shape. *)
+            (* The budget fallback discarded its timed candidates. Keep their census without
+               crediting the untuned default with a crown or its measurement (gh-ocannl-2365). *)
             let completed_report =
-              if floor_unmeasured && not nothing_timed then
+              if budget_fallback then
                 {
                   completed_report with
+                  outcome = Searched_budget_fallback;
                   best_ms = Float.infinity;
+                  best_spread = None;
                   best_label = "";
                   best_tensorized = false;
                   best_tensorization = None;

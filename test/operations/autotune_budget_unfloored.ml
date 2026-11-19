@@ -49,12 +49,14 @@ let () =
   let cold = search ~tag:"cold" in
   let r = cold.report and attempts = cold.attempts and output = cold.output in
   p "cold: the budget cut the search before any candidate"
-    ((match r.Autotune.outcome with Autotune.Searched -> true | _ -> false)
-    && r.Autotune.budget_cut
-    && List.equal String.equal attempts [ "baseline" ]);
+    (r.Autotune.budget_cut && List.equal String.equal attempts [ "baseline" ]);
+  p "cold: the budget fallback has its own outcome name"
+    (String.equal (Autotune.outcome_name r.Autotune.outcome) "searched-budget-fallback");
   (* It reports what it shipped: an untimed untuned default, not the baseline it timed. *)
   p "cold: the report credits no timed crown"
     (Float.is_inf r.Autotune.best_ms && String.equal r.Autotune.best_label "");
+  p "cold: the report credits no timing spread to the default"
+    (Option.is_none r.Autotune.best_spread);
   p_empty "cold: the report keeps no best-so-far record of the discarded candidates" ~over:attempts
     r.Autotune.best_steps;
   p_all2 "cold: the shipped routine computes the untuned output bit for bit" output reference
@@ -63,4 +65,6 @@ let () =
   let warm = search ~tag:"warm" in
   Cache_plant.unless_unkeyed_or_refused ~identity:warm.identity warm.ios
     "warm: nothing was stored, so the next budgeted call searches again"
-    (match warm.report.Autotune.outcome with Autotune.Searched -> true | _ -> false)
+    (match warm.report.Autotune.outcome with
+    | Autotune.Searched_budget_fallback -> true
+    | _ -> false)

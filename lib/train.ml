@@ -996,8 +996,15 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
         logf "arm %s best: %.4f ms (%s)" arm best_ms
           (Option.value_map r ~default:"no report" ~f:(fun r ->
                Printf.sprintf "%s%s%s, best tensorized %s%s"
-                 (if String.is_empty r.Autotune.best_label then "nothing timed"
-                  else r.Autotune.best_label)
+                 (match r.Autotune.outcome with
+                 | Autotune.Searched | Autotune.Cache_replay -> r.Autotune.best_label
+                 | Autotune.Searched_budget_fallback ->
+                     "budget cut before timing the untuned default"
+                 | Autotune.Searched_untimed -> "nothing timed"
+                 | ( Autotune.Search_disabled | Autotune.Lineage_refused _ | Autotune.Search_died _
+                   | Autotune.Pre_search_failure _ | Autotune.Abandoned _
+                   | Autotune.Abandonment_replay _ ) as outcome ->
+                     Autotune.outcome_name outcome)
                  (* What the schedule asked for, and next to it what the emission delivered
                     (gh-ocannl-626): "[tensorized]" alone has read as a tensor-core claim over a
                     kernel whose every [Tile_mma] fell back to the lane-0 scalar loop. *)

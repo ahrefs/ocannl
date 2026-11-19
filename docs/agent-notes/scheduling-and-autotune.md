@@ -1713,12 +1713,13 @@ files.
   arm gap stayed at 57–95% (gh-ocannl-546, benchmarks/report-gh546-metal.md). Conclusions of the
   form "family X wins/never wins here" need repeats; the arm-level verdict does not.
   `Autotune.report` says what a call did about searching in ONE field, `outcome` (gh-ocannl-677):
-  `Searched` | `Searched_untimed` | `Search_died of terminal_failure` | `Cache_replay` |
-  `Search_disabled` | `Pre_search_failure of terminal_failure`, plus the abandonment and
-  lineage-refusal states. Match it; do not re-derive it. A search that completed but timed nothing
-  is `Searched_untimed` (gh-ocannl-2310), not `Searched` over `best_label = ""`: before, two bench
-  consumers (`projection_shape_bench`, `companion_flavor_bench`) re-derived "untimed" from the
-  label and `best_ms`. In particular **"this
+  `Searched` | `Searched_untimed` | `Searched_budget_fallback` |
+  `Search_died of terminal_failure` | `Cache_replay` | `Search_disabled` |
+  `Pre_search_failure of terminal_failure`, plus the abandonment and lineage-refusal states.
+  Match it. A search that completed with zero admitted timings reports `Searched_untimed`
+  (gh-ocannl-2310). A budget cut that admitted timings and then shipped the unmeasured untuned
+  default reports `Searched_budget_fallback` (gh-ocannl-2365). Both benchmark consumers
+  (`projection_shape_bench`, `companion_flavor_bench`) use the outcome to admit a crown. In particular **"this
   process searched" is not `not cache_hit`** — under `autotune_search=false` (the `reproducible`
   profile) and on every pre-search failure a call reports neither having searched nor having
   replayed, and ships the untuned default. That mis-derivation, made twice in one PR, is what the
@@ -3303,7 +3304,9 @@ files.
   starts (`budget_allows`), skips everything later except the untuned floors (the seeded plan and
   the default seed), and crowns its incumbent -- unless no floor was measured (no candidate
   reproduces the default under `schedule_fission=false`), when it ships the untuned default and
-  stores nothing. The crown is stored with `Schedule_cache.entry`'s
+  stores nothing. `autotune_budget_unfloored` pins `Searched_budget_fallback` on this path after an
+  admitted baseline timing, while `autotune_budget` pins `Searched` for a cut with a timed crown.
+  The crown is stored with `Schedule_cache.entry`'s
   `budget_cut`, and a call without a budget declines it and searches in full, the way a contended
   search is kept out of the cache entirely (`search_measurements_cacheable`): an incomplete
   measurement set must not answer every later call. The placement store refuses cut evidence for

@@ -1190,21 +1190,14 @@ type abandonment = {
 
 (** What the call did about searching (gh-ocannl-677). The states are mutually exclusive and each
     carries exactly its own data, so a consumer matches instead of re-deriving: "it searched" is
-    [Searched | Searched_untimed | Search_died _ | Abandoned _] and nothing else — in particular it
-    is {e not} [not cache_hit], the reading that costs a benchmark harness every tuned cell under
-    the reproducible profile, where a call reports having neither searched nor replayed. Spelled as
-    four independent booleans until gh-ocannl-677, where two consumers mis-derived the state in one
-    PR.
-
-    Note the arithmetic: five constructors for what reads as four outcomes, because "nothing
-    searched" is two — a deliberate no-search that ships the untuned default and returns, and a
-    failure before the search that reports and then raises. The old encoding could not tell them
-    apart either, it just did not say so. *)
+    [Searched | Searched_untimed | Searched_budget_fallback | Search_died _ | Abandoned _]. Deriving
+    it as [not cache_hit] costs a benchmark harness every tuned cell under the reproducible profile,
+    where a call reports having neither searched nor replayed. Spelled as four independent booleans
+    until gh-ocannl-677, where two consumers mis-derived the state in one PR. *)
 
 type outcome =
   | Searched
-      (** A search ran and completed: candidates were proposed and compiled or timed, leaving the
-          process loaded with their modules and buffers, and at least one timing was admitted. *)
+      (** A search completed with a timed crown. This includes a cut search that kept its crown. *)
   | Searched_untimed
       (** A search ran and completed, but timed nothing (gh-ocannl-2310): every candidate, the
           serial baseline included, was refused or declined, or every timing window was refused.
@@ -1216,6 +1209,11 @@ type outcome =
           dimension to bind (every refusal a [Not_dispatched_key] in [declines]), and the untuned
           compile of it runs in one work-item. Running it is a wait no bound covers, as running any
           routine {!tune} returns is. *)
+  | Searched_budget_fallback
+      (** A search admitted a timing, then returned the untuned default because its budget ran out
+          before it measured the untuned floor (gh-ocannl-2365). The census records the work done.
+          There is no crown, so [best_label] is [""], [best_ms] is [infinity], and nothing is
+          cached. *)
   | Search_died of terminal_failure
       (** A search ran and terminated on the carried fatal failure. The counters hold the work it
           had reached, and [best_ms] is a mid-search measurement of the {e search} context: no
@@ -1720,14 +1718,12 @@ type report = {
           [finals_admitted] count this call's windows (none); [Finals_not_run] for an entry that
           carries no finals record. *)
   budget_cut : bool;
-      (** The crown comes from a search that stopped proposing candidates because its wall-clock
-          budget (config [autotune_budget_seconds], gh-ocannl-1409, or its [call_share_s] of an
-          enclosing call's budget, gh-ocannl-1440) ran out: this call's own search, whose candidates
-          timed are then a prefix of its menu plus the untuned floors (exempt from the budget), or
-          for a {!Cache_replay} the search that stored the entry, as the entry's [budget_cut]
-          records -- like [best_ms], a fact about the crown rather than about this call. [outcome]
-          stays {!Searched} for a cut search -- it completed and shipped its crown -- so this is the
-          field telling a cut search from a full one. *)
+      (** The search stopped proposing candidates when its wall-clock budget ran out (config
+          [autotune_budget_seconds], gh-ocannl-1409, or its [call_share_s] of an enclosing call's
+          budget, gh-ocannl-1440). This describes the current search or, on a {!Cache_replay}, the
+          search that stored the entry. A cut search with a timed crown reports {!Searched}. A cut
+          search that returns the unmeasured untuned default reports {!Searched_budget_fallback} if
+          it admitted a timing and {!Searched_untimed} if it admitted none. *)
   budget_s : float option;
       (** The wall-clock budget this call resolved (config [autotune_budget_seconds],
           gh-ocannl-1409), [None] for none: what [budget_cut] was measured against, with
@@ -1992,10 +1988,8 @@ type report = {
           [default_ms]), when its seed failed to compile or both its window and its one retry were
           refused, and on a cache hit (not stored). *)
   best_ms : float;
-      (** The winner's measured time, or [infinity] when nothing was timed at all — every candidate
-          failed and the baseline was not dispatched (or was declined). In that case the outcome is
-          {!Searched_untimed}, no cache entry is stored and the returned routine is the untuned
-          default compile, not the serial baseline.
+      (** The winner's measured time. In {!Searched_untimed} and {!Searched_budget_fallback}, this
+          is [infinity] because the untuned default was returned unmeasured.
 
           It is a reading of {!timing_mode}, and which one is not recorded anywhere in the report or
           the cache entry, so a number carried across processes is only comparable to another taken
@@ -2010,8 +2004,8 @@ type report = {
   best_spread : float option;
       (** The winning window's [spread] (gh-ocannl-1558): how noisy the measurement behind [best_ms]
           was. On a {!Cache_replay} report it is the storing search's, replayed from the entry as
-          [best_ms] is. [None] when nothing was timed, and on a hit whose entry predates the field.
-      *)
+          [best_ms] is. [None] for {!Searched_untimed}, {!Searched_budget_fallback}, and a hit whose
+          entry predates the field. *)
   timing : timing_mode;
       (** The {!timing_mode} every time in this report was measured under (gh-ocannl-755), including
           the times a [Cache_replay] carries: the objective is a cache-key component, so an entry
@@ -3921,8 +3915,7 @@ val budget_setting : unit -> float option
 
 val budget_floor_unmeasured :
   budget_cut:bool -> auto_sched:bool -> baseline_dispatched:bool -> floor_measured:bool -> bool
-(** gh-ocannl-1409: whether a search its budget cut ships the untuned default compile, stores
-    nothing and reports as a search that timed nothing, rather than crowning what it reached: the
+(** gh-ocannl-1409: whether a cut search ships the untuned default compile and stores nothing. The
     budget cut it ([budget_cut]), it measured neither untuned floor ([floor_measured]: the default
     seed's time, the baseline's when automatic scheduling is off, or the seeded plan's), and the
     untuned default is a form a timed candidate could be slower than -- a scheduled pipeline
@@ -4702,13 +4695,13 @@ module Make (D : Driver) : sig
       default-pipeline seed, {!default_seed_label}) are attempted regardless, so the crown is no
       slower than what the caller ships untuned. Where the cut left the untuned default unmeasured
       -- no candidate reproduces it (automatic scheduling with [schedule_fission=false] and no
-      seeded plan), or its windows were refused -- the call ships the untuned default compile,
-      stores nothing and reports as a search that timed nothing ({!budget_floor_unmeasured}). The
-      report's [budget_cut] says the budget stopped something. A cut search with clean timings
-      stores its crown marked as cut ({!Ir.Schedule_cache.entry}'s [budget_cut]); a later call with
-      a budget replays it, and one without a budget searches in full and overwrites it. The budget's
-      value is part of the search trajectory's identity, so a cut search's [best_steps] serve early
-      stopping only under the same budget.
+      seeded plan), or its windows were refused -- the call ships the untuned default compile, and
+      stores nothing ({!budget_floor_unmeasured}). Its report says {!Searched_budget_fallback} if it
+      admitted a timing, or {!Searched_untimed} if it admitted none. A cut search with a crown and
+      clean timings stores the crown marked as cut ({!Ir.Schedule_cache.entry}'s [budget_cut]); a
+      later call with a budget replays it, and one without a budget searches in full and overwrites
+      it. The budget's value is part of the search trajectory's identity, so a cut search's
+      [best_steps] serve early stopping only under the same budget.
 
       Untuned fallback (gh-ocannl-1441): every path on which {!tune} ships "the untuned default
       compile" -- search disabled with nothing to replay, a refused lineage, a deferred cache replay

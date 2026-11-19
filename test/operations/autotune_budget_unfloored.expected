@@ -1,6 +1,8 @@
 setup: no candidate reproduces the untuned default: true
 cold: the budget cut the search before any candidate: true
+cold: the budget fallback has its own outcome name: true
 cold: the report credits no timed crown: true
+cold: the report credits no timing spread to the default: true
 cold: the report keeps no best-so-far record of the discarded candidates: true
 cold: the shipped routine computes the untuned output bit for bit: true
 warm: nothing was stored, so the next budgeted call searches again: true
