@@ -119,9 +119,11 @@ module Injecting_driver = struct
     let lowered_transform =
       match (lowered_transform, provenance, candidate, !inject, !injected) with
       | Some transform, SO.Candidate, Some c, Some (src, col_sums), None ->
-          (* After the inner transform, so the search's own gates (dedup, the gh-ocannl-532
-             dispatchability refusal, the gh-ocannl-1313 frame gate) decide first, as for any
-             candidate: only a candidate they let through reaches codegen and link. *)
+          (* After the inner transform, so the search's in-transform gates (dedup, the gh-ocannl-532
+             dispatchability refusal) decide first, as for any candidate. The gh-ocannl-1313 frame
+             gate runs later, pre-driver in [Backends] on the segments this returns -- the injected
+             kernel included -- which is why the array sits under the frame limit: only then does
+             the candidate reach codegen and link. *)
           Some
             (fun opt ->
               let forms = transform opt in
