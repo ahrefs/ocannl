@@ -310,6 +310,20 @@
 #   compile) that a harness reaches is mapped to those legs, not UNMAPPED.
 #   A changed script no harness reaches is named on stderr.
 #
+# Literal dependencies (gh-ocannl-2304): for each changed `*.sh` path, stderr
+# carries one line `affected: PATH: named as a dependency by the rule of
+# @ALIAS` per per-test alias that names PATH, sorted, whatever the alias's
+# rank. An alias names PATH when dune and its stanza agree: one of its own
+# targets' rules reads PATH as a File dependency (`dune rules`, the reach
+# above), and a `rule` or `alias` stanza of its directory attached to it names
+# PATH, relative to that directory, as an atom of its `(deps ...)`, inside a
+# `(:NAME ...)` or `(file ...)` there, or as a `%{dep:PATH}` token anywhere
+# in it. Deliberately not: a glob, a `source_tree` (whose files `dune rules`
+# prints as File dependencies, so dune's reading alone cannot tell them from
+# a named one), a `(test)` stanza, a blind alias, an alias it needs, a
+# generated or included dune file's stanza. `tools/merge-build-check.sh`
+# counts such an alias as the script's coverage when its tests tier runs it.
+#
 # The harness census (gh-ocannl-2342): `affected --harness-census [MEMBER]`
 # prints, for every member (or MEMBER alone), what the boundary above reaches,
 # read with the same index and steps, whatever changed: one line per reached
@@ -2285,6 +2299,39 @@ if (@scoped) {
 }
 print STDERR "affected: $_: its whole directory, because $unscoped{$_}\n" for sort keys %unscoped;
 
+# Literal dependencies (the header's, gh-ocannl-2304): ALIAS names PATH when both
+# dune's reading and the alias's own stanza say so. Dune's: the alias is
+# described and one of its own targets' rules reads PATH as a File dependency
+# (`dune rules`, above). The stanza's: a `rule` or `alias` stanza of the
+# alias's directory attached to it (`(alias NAME)`, `(aliases ...)`) names
+# PATH relative to that directory, as an atom of its `(deps ...)`, inside a
+# `(:NAME ...)` or `(file ...)` there, or as a `%{dep:PATH}` anywhere in it.
+# `dune rules` prints a source tree's files as File dependencies too, so its
+# reading alone cannot tell a named script from one read with a whole tree.
+sub literal_hit {   # DIR TOKEN PATH: the plain atom TOKEN, from DIR, is PATH
+  my ($dir, $t, $p) = @_;
+  !ref $t && $t !~ /[%\x01]/ && (rpath($dir, $t) // "") eq $p;
+}
+sub dep_token {   # DIR FORM PATH: a `%{dep:PATH}` token in FORM
+  my ($dir, $x, $p) = @_;
+  return scalar grep { dep_token($dir, $_, $p) } @$x if ref $x;
+  return scalar grep { (rpath($dir, $_) // "") eq $p } $x =~ /%\{dep:([^}%]+)\}/g;
+}
+sub names_literally {   # ALIAS PATH
+  my ($a, $p) = @_;
+  return 0 unless $a->{described} && grep { $reads{$_} && $reads{$_}{$p} } @{$a->{own}};
+  for my $s (grep { $_->{dir} eq $a->{dir} && $_->{kind} =~ /^(?:rule|alias)$/ } @dstanzas) {
+    next unless grep { !ref $_ && $_ eq $a->{alias} } @{dfield($s->{x}, "alias") // []}, @{dfield($s->{x}, "aliases") // []};
+    for my $d (@{dfield($s->{x}, "deps") // []}) {
+      return 1 if literal_hit($s->{dir}, $d, $p);
+      return 1 if ref $d && @$d && !ref $d->[0] && ($d->[0] =~ /^:/ || $d->[0] eq "file")
+        && grep { literal_hit($s->{dir}, $_, $p) } @$d[1 .. $#$d];
+    }
+    return 1 if dep_token($s->{dir}, $s->{x}, $p);
+  }
+  return 0;
+}
+
 for my $p (@changed) {
   my ($d, $b) = dir_of($p);
   for my $a (@al) {
@@ -2371,6 +2418,12 @@ for my $p (@changed) {
   push @parts, "read by the rules of $n_read alias(es)" if $n_read;
   push @parts, "read by $harness_read{$p} harness(es), named below" if $harness_read{$p};
   print STDERR "affected: $p: " . join("; ", @parts) . "\n" if @parts;
+  # A changed script an alias's rule names by its path (gh-ocannl-2304): the header's "Literal
+  # dependencies".
+  if ($b =~ /\.sh\z/) {
+    my @named = map { $_->{name} } grep { names_literally($_, $p) } @al;
+    print STDERR "affected: $p: named as a dependency by the rule of $_\n" for sort @named;
+  }
   # Any path but a module source a stanza owns may be an input of an alias
   # action dune does not dump (see `opaque` below).
   unless ($b =~ /\.mli?$/ && @ix && !$unmapped) { for ($d, @{$copies{$p} // []}) { $data_dirs{$_} = 1; $data_why{$_} //= $p } }

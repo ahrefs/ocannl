@@ -348,7 +348,17 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   is fail-closed: a failed ask, a line `--affected`'s allowlist refuses, a path reading as an
   option, a scoped run refused before a member starts (exit 2), and a changed `*.sh` no member
   reaches, each asked alone so one reached path cannot hide another, all run the whole
-  tier. What the mapping answers is the policy: `scripts/harness-support.sh`, which every member
+  tier -- unless the tests tier covers that script (gh-ocannl-2304): an alias of the list the
+  tests tier runs in this build names it as a dependency, as `affected` says on an exact
+  `affected: SCRIPT: named as a dependency by the rule of ALIAS` line of the same ask (the
+  alias's own `rule` or `alias` stanza names the path in its `(deps)` or as a `%{dep:}`, and
+  `dune rules` reads it; `tools/affected-tests.sh`'s "Literal dependencies"). A glob or a
+  `source_tree` never names one: `dune rules` prints a source tree's files as File
+  dependencies too, so the repository scans reading `(source_tree ../..)` would otherwise cover
+  every script. So `test/operations/sweep_leg_scripts.sh` alone runs no harness, its
+  `runtest-sweep_harness` running in the tests tier, and an unmapped script still runs the
+  whole tier; the tier prints PENDING until that list is read (`--plan` alone stays there,
+  `--plan --base REV` settles it). What the mapping answers is the policy: `scripts/harness-support.sh`, which every member
   loads, reaches the whole tier, and a manifest edit reaches the members naming
   `tools/test-harnesses.sh` (four members), which is why `tools/test-test-run.sh` compares the
   closing line of `prepush` without spelling that name. A harness named only in another's literal

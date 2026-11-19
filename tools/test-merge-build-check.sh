@@ -6,7 +6,9 @@
 # reads (the HEAD side's change, a script or not, a path the base side renamed by its other name;
 # a one-parent HEAD, --all and a quoted path run the whole tier), what it narrows to (the
 # change's reach, of any group; none when it reaches no member; the whole tier on a failed ask,
-# an unrecognized line or an unmapped script), the toolchain fallback through opam env, the exit
+# an unrecognized line or an unmapped script), what covers a script no member reaches (#cover:
+# an alias of the list the tests tier runs that affected's exact line says names it, never one
+# outside that list, an OWED list or a near-miss line), the toolchain fallback through opam env, the exit
 # statuses, stable tier lines across different run durations, that the build of the base alone
 # narrows as the merge does, that this repository's mapping gives shared support the whole tier
 # and a manifest edit less, and that
@@ -110,7 +112,8 @@ FAKE
   # FAKE_TIER_LIST under FAKE_TIER_VERDICT and FAKE_TIER_RC (its ask repeats the list's trailer
   # first, as prepush's does). Each ask counts FAKE_TRAIN_N train- members left off (0; `none`
   # prints no count), and `affected` answers FAKE_AFFECTED under FAKE_AFF_VERDICT and FAKE_AFF_RC.
-  # By default the change reaches no per-test alias.
+  # Both asks print FAKE_NAMED's lines on stderr (affected's literal-dependency lines). By default
+  # the change reaches no per-test alias.
   cat >"$R/tools/fmt-check.sh" <<'FAKE'
 #!/bin/sh
 printf 'fmt scans=%s\n' "${OCANNL_TOOL_FMT_CHECK_SCANS-unset}" >>"$FAKE_RECORD.tiers"
@@ -139,6 +142,7 @@ if [ "${FAKE_BAD_RULES:-0}" = 1 ]; then
 fi
 reason() {
   [ -z "${FAKE_REASON:-}" ] || printf 'affected: CROSS-CUTTING reason: %s\n' "$FAKE_REASON" >&2
+  [ -z "${FAKE_NAMED:-}" ] || cat "$FAKE_NAMED" >&2
 }
 count() {
   if [ -n "${FAKE_TRAIN_NAMES:-}" ]; then
@@ -1028,6 +1032,120 @@ shell --jobs 4' ] && has 'the scoped run was refused (exit 2), no member run; ru
   if [ "$rc" = 1 ] && has 'harness tier FAILED (tools/test-harnesses.sh exit 1)'; then
     report 0 'the whole tier a refusal falls back on still decides'
   else report 1 'the whole tier a refusal falls back on still decides' "exit $rc; $(cat "$TMP/out")"; fi
+fi
+
+# A script no member reaches is covered by an alias the tests tier runs whose rule names it
+# (gh-ocannl-2304): affected's exact `named as a dependency` line, for an alias of the list run
+# here. The issue's two shapes -- a script beside its owning test, one a test elsewhere names --
+# and an unmapped one. The paths are the fixture's own: a repository path named here would be
+# one this harness reaches (affected's harness reader), handing it every edit of that script.
+if harness_leg 'a script an alias the tests tier runs names is covered, any other runs the whole tier #cover'; then
+  SWEEP=ops/fixture_legs.sh CENSUS=tools/fixture-trace.sh
+  SWEEP_ALIAS=@ops/runtest-fixture_owner CENSUS_ALIAS=@bench/runtest-fixture_orchestrate
+  named_by() { # SCRIPT ALIAS...: affected's line for each ALIAS naming SCRIPT
+    local s=$1 a
+    shift
+    for a do printf 'affected: %s: named as a dependency by the rule of %s\n' "$s" "$a"; done
+  }
+  cover_fixture() { # NAME PATH...: a fixture whose head side edits each PATH (they exist on both)
+    local n=$1 f
+    shift
+    fixture "$n"
+    mkdir -p "$R/ops" "$R/tools"
+    for f in "$SWEEP" "$CENSUS" tools/unmapped.sh; do printf '1\n2\n3\n4\n5\n6\n' >"$R/$f"; done
+    git -C "$R" add -A && git -C "$R" commit -q -m 'the scripts' && git -C "$R" branch -f side
+    first x.ml && commit_on base
+    git -C "$R" checkout -q side
+    for f do last "$f"; done
+    commit_on side && merge_side
+  }
+  printf '%s\n' @a/runtest-x "$SWEEP_ALIAS" "$CENSUS_ALIAS" >"$TMP/cover-list"
+  { named_by "$SWEEP" "$SWEEP_ALIAS"; named_by "$CENSUS" "$CENSUS_ALIAS"; } >"$TMP/cover-named"
+  : >"$TMP/reach"
+  covered() { # LABEL SCRIPT ALIAS: a full run built the list, ran no harness and said why
+    if [ "$rc" = 0 ] && [ "$(cat "$TMP/record")" = "$COMPILE
+build --root . -j 4 $(tr '\n' ' ' <"$TMP/cover-list" | sed 's/ $//')" ] &&
+       has "harness tier: PENDING -- no harness reaches $2: whole unless" &&
+       has "harness tier: $2 is named as a dependency by $3, which the tests tier runs" &&
+       has 'harness tier: skipped -- the 1 path(s) the head side changed reach no harness beyond the aliases the tests tier runs' &&
+       has 'merge-build-check: passed'; then
+      report 0 "$1"
+    else report 1 "$1" "exit $rc; $(cat "$TMP/record"); $(cat "$TMP/out")"; fi
+  }
+  whole() { # LABEL WHY: a full run of the whole tier, for WHY
+    if [ "$rc" = 0 ] && [ "$(grep '^shell ' "$TMP/record")" = 'shell --jobs 4' ] &&
+       has "harness tier: SELECTED -- whole -- $2" && has 'merge-build-check: passed'; then
+      report 0 "$1"
+    else report 1 "$1" "exit $rc; $(cat "$TMP/record"); $(cat "$TMP/out")"; fi
+  }
+  cover_fixture cover-sweep "$SWEEP"
+  COVER_SWEEP=$R
+  FAKE_LIST=$TMP/cover-list FAKE_NAMED=$TMP/cover-named run "$TMP/dunebin"
+  covered "$SWEEP alone runs no harness: $SWEEP_ALIAS, which the tests tier runs, names it" "$SWEEP" "$SWEEP_ALIAS"
+  cp "$TMP/out" "$TMP/cover-merge"
+  cover_fixture cover-census "$CENSUS"
+  FAKE_LIST=$TMP/cover-list FAKE_NAMED=$TMP/cover-named run "$TMP/dunebin"
+  covered "$CENSUS alone runs no harness: $CENSUS_ALIAS, which the tests tier runs, names it" "$CENSUS" "$CENSUS_ALIAS"
+  cover_fixture cover-unmapped tools/unmapped.sh
+  FAKE_LIST=$TMP/cover-list FAKE_NAMED=$TMP/cover-named run "$TMP/dunebin"
+  whole 'an unmapped script no alias names runs the whole tier' \
+    'no harness reaches tools/unmapped.sh, and no alias the tests tier runs names it as a dependency'
+  # The negative control's case: the line is there, its alias is not in the list run here.
+  printf '%s\n' @a/runtest-x "$CENSUS_ALIAS" >"$TMP/cover-short"
+  FAKE_LIST=$TMP/cover-short FAKE_NAMED=$TMP/cover-named R=$COVER_SWEEP run "$TMP/dunebin"
+  whole 'a script named only by an alias outside the list the tests tier runs runs the whole tier' \
+    "no harness reaches $SWEEP, and no alias the tests tier runs names it as a dependency"
+  # Whole lines only: a longer alias, a longer path, the line of another script.
+  { named_by "$SWEEP" "${SWEEP_ALIAS}x"; named_by "${SWEEP}x" "$SWEEP_ALIAS"; named_by "$CENSUS" "$SWEEP_ALIAS"; } >"$TMP/cover-near"
+  FAKE_LIST=$TMP/cover-list FAKE_NAMED=$TMP/cover-near R=$COVER_SWEEP run "$TMP/dunebin"
+  whole 'a line that names another alias, path or script covers nothing' \
+    "no harness reaches $SWEEP, and no alias the tests tier runs names it as a dependency"
+  # A cross-cutting change's first tier is the list run here.
+  FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/cover-list FAKE_NAMED=$TMP/cover-named \
+    OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL R=$COVER_SWEEP owed "$OWED_FULL" add \
+    "$(run_line "$(git -C "$COVER_SWEEP" rev-parse 'HEAD^2')" 'runtest -j 4')"
+  FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/cover-list FAKE_NAMED=$TMP/cover-named \
+    OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL R=$COVER_SWEEP run "$TMP/dunebin"
+  if [ "$rc" = 0 ] && [ -z "$(grep '^shell ' "$TMP/record")" ] &&
+     has "harness tier: $SWEEP is named as a dependency by $SWEEP_ALIAS, which the tests tier runs"; then
+    report 0 'a cross-cutting change'"'"'s first tier covers what an alias in it names'
+  else report 1 'a cross-cutting change'"'"'s first tier covers what an alias in it names' "exit $rc; orc $orc; $(cat "$TMP/record"); $(cat "$TMP/out")"; fi
+  # With no first tier the list is OWED, not run here: nothing it names is covered.
+  FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_RC=2 FAKE_TIER_VERDICT=cross-cutting \
+    FAKE_TIER_LIST=$TMP/cover-list FAKE_NAMED=$TMP/cover-named OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL R=$COVER_SWEEP run "$TMP/dunebin"
+  whole 'a list OWED rather than run covers nothing' \
+    "no harness reaches $SWEEP, and the tests tier runs no list here to cover it"
+  # A covered script beside one a member reaches: the tier narrows to that member.
+  cover_fixture cover-mixed "$SWEEP" tools/sub/a.sh
+  reach_of tools/sub/a.sh
+  FAKE_LIST=$TMP/cover-list FAKE_NAMED=$TMP/cover-named run "$TMP/dunebin"
+  if [ "$rc" = 0 ] && [ "$(grep '^shell ' "$TMP/record")" = "shell --jobs 4 --affected --files $SWEEP tools/sub/a.sh" ] &&
+     has 'harness tier: SELECTED -- scoped to what the 2 path(s) the head side changed reach beyond the aliases the tests tier runs:'; then
+    report 0 'a covered script beside a reached one runs what the change reaches'
+  else report 1 'a covered script beside a reached one runs what the change reaches' "exit $rc; $(cat "$TMP/record"); $(cat "$TMP/out")"; fi
+  : >"$TMP/reach"
+  # --plan alone asks no list: the tier stays PENDING. A branch plan reads the list and settles it.
+  R=$COVER_SWEEP plan
+  if [ "$rc" = 0 ] && has "harness tier: PENDING -- no harness reaches $SWEEP: whole unless" &&
+     ! has 'is named as a dependency by'; then
+    report 0 '--plan alone prints the tier PENDING'
+  else report 1 '--plan alone prints the tier PENDING' "exit $rc; $(cat "$TMP/out")"; fi
+  fork_tip=$(git -C "$COVER_SWEEP" rev-parse 'HEAD^1')
+  git -C "$COVER_SWEEP" checkout -q side
+  FAKE_LIST=$TMP/cover-list FAKE_NAMED=$TMP/cover-named R=$COVER_SWEEP run "$TMP/dunebin" --plan --base "$fork_tip"
+  if [ "$rc" = 0 ] && [ ! -s "$TMP/record" ] &&
+     has "harness tier: $SWEEP is named as a dependency by $SWEEP_ALIAS, which the tests tier runs" &&
+     has 'harness tier: skipped -- the 1 path(s) the head side changed reach no harness beyond the aliases the tests tier runs'; then
+    report 0 'a branch plan prints the alias that covers the script, and why no harness runs'
+  else report 1 'a branch plan prints the alias that covers the script, and why no harness runs' "exit $rc; $(cat "$TMP/record"); $(cat "$TMP/out")"; fi
+  git -C "$COVER_SWEEP" checkout -q base
+  # The build of the base alone reads the same coverage.
+  sha=$(git -C "$COVER_SWEEP" commit-tree 'HEAD^1^{tree}' -p 'HEAD^1' -p 'HEAD^2' -m 'the base alone') &&
+    git -C "$COVER_SWEEP" checkout -q --detach "$sha"
+  FAKE_LIST=$TMP/cover-list FAKE_NAMED=$TMP/cover-named R=$COVER_SWEEP run "$TMP/dunebin"
+  if [ "$rc" = 0 ] && cmp -s "$TMP/out" "$TMP/cover-merge"; then
+    report 0 'the build of the base alone reads the same coverage as the merge'
+  else report 1 'the build of the base alone reads the same coverage as the merge' "exit $rc; $(diff "$TMP/cover-merge" "$TMP/out")"; fi
 fi
 
 # The real tools/test-harnesses.sh on the real path of an ask, its `affected --harnesses` a
