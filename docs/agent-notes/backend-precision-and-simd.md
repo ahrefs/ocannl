@@ -293,7 +293,7 @@ files.
   `cmp`-built guard as `if_idx` does; `if_at single` (an explicit guard precision) over
   `lt (embed s) (ic 5)` is refused (the comparison evaluates at the guard's `single`, and the
   `Constant`'s index-precision annotation is neither that nor its own `single`). To compare at
-  `single` (a `single` flag local), spell `binop Cmplt`: `lt` there is refused.
+  `single` (a `single` flag local), use `cmp_at single` (gh-ocannl-1741).
   `test/operations/ll_builder_precisions` pins each builder under `single`, `half` and `bfloat16`
   stores. `C_syntax.compile_proc` repeats the check on the way out (gh-ocannl-1739), so a
   `?prelowered` routine, which skips `optimize`, meets it there. The optimizer's own rewrites leave
@@ -308,6 +308,10 @@ files.
   annotation (gh-ocannl-1788). It used to re-annotate a load at its storage precision, which erased
   such a request before the gate, and in a heterogeneous slot (a `Where` condition, a guard) changed
   the precision the renderer evaluates the load at.
+- The builders kept their defaults after a 425-alias cc trial of `binop_own` and `where_own`
+  (gh-ocannl-1741). `access_fold`'s structural visit of discarded operands lost an `Arg2` operand.
+  `ll_builder_precisions`'s two refusal claims for single annotations on narrow binop loads and
+  `Where` arms failed because both forms became accepted. Zero generated-text and value goldens moved.
 - **Byte RNG expressions return unsigned bytes before storage** (gh-ocannl-2136): every
   scalar and lane helper, on every backend and through the host stub, returns byte storage's
   unsigned type. Packed vectors may keep `int8x16_t` bit containers. A signed scalar return

@@ -1,7 +1,8 @@
 (* Resumable training checkpoints (gh-ocannl-96): a run stopped mid-epoch, checkpointed with
    [Checkpoint.save], and resumed in a FRESH PROCESS by [Checkpoint.restore] must continue exactly
    as the uninterrupted run -- the same per-step losses and the same final parameters, bit for bit,
-   on cc.
+   on the selected backend. The GPU run materializes the regression graph's intermediates so the
+   checkpoint collects the carried state of a fissioned training step.
 
    The loop carries every kind of state a resume has to bring back: randomly initialized parameters
    (the counter-based device RNG), an SGD momentum buffer (optimizer state the compiled routine
@@ -99,15 +100,35 @@ let cosine_learning_rate ~total_steps =
 
 (* Built identically by every run: the same construction order gives the same node ids, which is how
    a checkpoint matches its nodes. *)
+let gpu ctx = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts ctx)
+
 let build_graph () =
+  let ctx = Context.auto () in
   let xs, ys = dataset () in
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let loss = batch_loss ~mlp:(make_mlp ()) ~xs ~ys batch_n in
+  if gpu ctx then Train.every_non_literal_materialized loss;
   let learning_rate, set_lr = cosine_learning_rate ~total_steps in
   let update = Train.grad_update loss in
   let sgd = Train.sgd_update ~learning_rate ~momentum:0.9 ~weight_decay:1e-3 loss in
-  let ctx = Train.init_params (Context.cpu ()) bindings loss in
-  let ctx, routine = Train.to_routine ctx bindings (Ir.Assignments.sequence [ update; sgd ]) in
+  let ctx = Train.init_params ctx bindings loss in
+  let step = Ir.Assignments.sequence [ update; sgd ] in
+  let ctx, routine =
+    if gpu ctx then
+      (* This graph's small loops coalesce under the untuned preset. Explicit materialization and
+         Context.compile with a fixed transform give both processes the same multi-kernel
+         schedule. *)
+      let limits = Context.hardware_limits ctx in
+      let lowered_transform code =
+        let _, segments =
+          Autotune.sketch_segmentation ~presets:`Search ~is_gpu:true ~is_cpu:false ~limits
+            ~static_indices:[ batch_n ] code
+        in
+        List.map segments ~f:(fun (_, _, _, scheduled) -> scheduled)
+      in
+      Context.compile ~name:"resume_training_step" ~lowered_transform ctx step bindings
+    else Train.to_routine ctx bindings step
+  in
   let params =
     Set.to_list loss.Tensor.params
     |> List.map ~f:(fun p -> p.Tensor.value)
@@ -222,6 +243,12 @@ let child path =
     (show_order (order_of_progress progress));
   List.iter fp ~f:print_endline
 
+(* The child must compile under the same settings, including overrides that outrank its
+   environment. *)
+let run_resume_child mode path =
+  let args = List.tl_exn (Array.to_list Stdlib.Sys.argv) in
+  Fresh_process.run (mode :: path :: List.filter args ~f:Utils.cmdline_arg_is_config_key)
+
 let raises_failure ?(also = "") ~substring f =
   match f () with
   | _ -> false
@@ -245,6 +272,12 @@ let parent () =
     ~f:(fun () ->
       (* The uninterrupted run. *)
       let prog = build () in
+      let backend = Context.backend_name prog.ctx in
+      let segments = List.length prog.routine.Context.segments in
+      eprintf "(not part of the golden) %s training step: %d kernel segments\n" backend segments;
+      let leg = Verdict.leg ~when_:(gpu prog.ctx) ~on:backend () in
+      in_leg ~leg "the GPU training step spans multiple kernel segments" (fun label ->
+          p label (segments > 1));
       let ctx, _, losses = run_steps prog (start ()) ~until:total_steps in
       let uninterrupted = fingerprint ctx prog losses in
       List.iteri losses ~f:(fun i l -> eprintf "(not part of the golden) step %d loss %.9g\n" i l);
@@ -269,7 +302,7 @@ let parent () =
            (List.map first_losses ~f:(fun l -> "loss " ^ bits l))
            (List.take (List.drop uninterrupted n_params) stop_step));
       (* The resume, in a fresh process. *)
-      let ((status, out, _) as result) = Fresh_process.run [ "resume"; path ] in
+      let ((status, out, _) as result) = run_resume_child "resume" path in
       let child_ok = Poly.equal status (Unix.WEXITED 0) in
       if not child_ok then Fresh_process.report ~label:"resume child" result;
       let lines = String.split_lines out in
@@ -456,7 +489,7 @@ let build_mp () =
   let learning_rate, set_lr = cosine_learning_rate ~total_steps:mp_total_steps in
   let checksum, grad_comp = MP.scaled_grad_update scaler loss in
   let sgd_comp = MP.scaled_sgd_update scaler ~learning_rate ~momentum:0.9 loss in
-  let ctx = Train.init_params (Context.cpu ()) bindings loss in
+  let ctx = Train.init_params (Context.auto ()) bindings loss in
   let ctx, grad_routine = Train.to_routine ctx bindings grad_comp in
   let ctx, sgd_routine = Train.to_routine ctx IDX.empty sgd_comp in
   {
@@ -550,6 +583,10 @@ let mp_parent () =
     ~finally:(fun () -> try Stdlib.Sys.remove path with Sys_error _ -> ())
     ~f:(fun () ->
       let prog = build_mp () in
+      eprintf "(not part of the golden) %s mixed-precision step: %d grad, %d SGD kernel segments\n"
+        (Context.backend_name prog.mp_ctx)
+        (List.length prog.grad_routine.Context.segments)
+        (List.length prog.sgd_routine.Context.segments);
       let detector = Outliers.create ~window_size:mp_window () in
       let ctx, _, steps = mp_run_steps prog detector (start ()) ~until:mp_total_steps in
       let uninterrupted = mp_fingerprint ctx prog steps in
@@ -577,7 +614,7 @@ let mp_parent () =
       let detector = Outliers.create ~window_size:mp_window () in
       let ctx, progress, _ = mp_run_steps prog detector (start ()) ~until:mp_stop_step in
       Checkpoint.save ~ctx ~progress prog.mp_state path;
-      let ((status, out, _) as result) = Fresh_process.run [ "resume-mp"; path ] in
+      let ((status, out, _) as result) = run_resume_child "resume-mp" path in
       let child_ok = Poly.equal status (Unix.WEXITED 0) in
       if not child_ok then Fresh_process.report ~label:"mixed-precision resume child" result;
       let resumed = String.split_lines out in
@@ -627,9 +664,9 @@ let mp_parent () =
            (fun () -> Outliers.restore_state other_detector (extra_exn saved detector_key))))
 
 let () =
-  match Stdlib.Sys.argv with
-  | [| _; "resume"; path |] -> child path
-  | [| _; "resume-mp"; path |] -> mp_child path
+  match Array.to_list Stdlib.Sys.argv with
+  | _ :: "resume" :: path :: _ -> child path
+  | _ :: "resume-mp" :: path :: _ -> mp_child path
   | _ ->
       parent ();
       mp_parent ()
