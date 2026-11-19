@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Run the cross-framework benchmark matrix (OCANNL / PyTorch / tinygrad) and report.
 
 For each fixture in fixtures/, runs every (framework, backend, variant, precision) cell,

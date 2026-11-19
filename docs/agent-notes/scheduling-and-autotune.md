@@ -2698,10 +2698,14 @@ files.
   prelude, behind the prefix, gives the same exact sums. Measured (`benchmarks/gh1279_cells.sh`, isolated out projection,
   j = 256, (h, e) = (8, 32); best coal-k finalist against best uncoalesced one, fwd/rev legs):
   HIP gfx1151 1.23x on both production sites with depth 32, the search crowning a coal-k seed;
-  CUDA RTX 5070 Ti 0.90x there, because the uncoalesced winner is a 64x64 block (256 threads)
-  the K menu does not offer, and the search crowns uncoalesced refinements; Metal neutral within
+  CUDA RTX 5070 Ti about 0.90x there in the original measurement; Metal neutral within
   its desktop co-tenant noise. Depth 256 won only on CUDA's 16-row small-output site (1.43x), where
   the search's crown was the split of the merged k (partials plus combine, 0.0096 ms) instead.
+  After adding the 64x64 block, the CUDA remeasurement on rog-nv-linux gave 0.941x at 1024 rows
+  and 0.818x at b8 x 128 in both orders. The best finalist in each class used a 64x64 block.
+  The coalesced winner used the menu's shallowest K depth, 32 (16 KiB staged), while the
+  uncoalesced winner used depth 8 (4 KiB staged). The search still crowned uncoalesced refinements.
+  [gh-ocannl-1459 remeasurement](https://github.com/ahrefs/ocannl/issues/1459#issuecomment-6325478059).
 ## Timing objectives and calibration
 - **What the tuner's numbers are a measurement OF is a config choice, and the two objectives do not
   crown the same candidate** (gh-ocannl-755). `Autotune.time_routine` takes a `timing_mode`, from

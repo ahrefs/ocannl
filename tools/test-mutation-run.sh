@@ -12,6 +12,8 @@
 # (gh-ocannl-1539); harness_leg_restore then puts back what the leg left in the
 # shared fixture. Only a subject that cannot be staged at all (the runner
 # scripts, what test-run.sh sources) still ends the harness.
+# The omitted-marker header check reads the prefix through the count and its
+# following space. The explanatory suffix can change independently of the verdict.
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 . "$root/scripts/harness-support.sh"
@@ -451,8 +453,8 @@ for mode in omitted omittedlast; do
   export PROBE_MODE=$mode
   PROBE_ALIAS=@runtest-manifest run_case 1
   grep -q '^rows: 5 printed of 6 in manifest.expected$' "$fixture/result"
-  grep -q "^refusal markers omitted: 1 (every other row printed, so the run reached its last row); each, with why it did not print:$" \
-    "$fixture/result" || { cat "$fixture/result"; echo "$mode: no omitted-markers line"; exit 1; }
+  grep -q '^refusal markers omitted: 1 ' "$fixture/result" ||
+    { cat "$fixture/result"; echo "$mode: expected one omitted marker"; exit 1; }
   case $mode in
     omitted) listed='  [scanner-refusal:00000000000000000000000000000001] first refusal -- its claim failed: "first"' ;;
     omittedlast) listed="  [scanner-refusal:00000000000000000000000000000002] last refusal -- no failed check of this run is behind it: its claim or refusal did not run" ;;

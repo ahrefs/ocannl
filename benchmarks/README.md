@@ -1218,6 +1218,14 @@ gate runs inside whatever slot the driver runs in, so a measurement's GPU slot o
 in the driver's own process group discipline (a cancelled driver takes the check's device probe
 with it), and it sees `BENCH_VENV_PY` even where a driver scrubs `BENCH_*` from its cells.
 
+Launch the cross-framework matrix from the repository root with the benchmark venv's
+interpreter. Set both `--box` and `--gpu` for the measurement box. Use `--gpu hip` on
+AMD Linux and `--gpu metal` on macOS.
+
+```bash
+"$HOME/.venvs/ocannl-bench/bin/python" benchmarks/orchestrate.py --box rog-nv --gpu cuda
+```
+
 `tools/sweep.sh` runs it once per box (`--box-only`, which skips the checkout-relative
 interpreter, against `<main checkout>/benchmarks/fixtures`) and reports
 `<box>: box check: ready` or `ENVIRONMENT GAP (not a test failure)` with the GAP lines, logging
