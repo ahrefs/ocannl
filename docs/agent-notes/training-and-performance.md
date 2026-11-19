@@ -583,28 +583,42 @@ files.
   kernels across builds through repeated processes, never one table each. The instrument cost
   371-381 s of the cell's 377-386 s (about 2.1 s a kernel; the 21-run protocol cost an estimated
   0.15 s, mostly the compile).
-- **The dominant-kernel instrument screens, then re-times** (gh-ocannl-1763). Each kernel gets ONE
-  timing call (about 0.5 s whatever its size); only the kernels within 2x of the slowest reading
-  (at most 8, plus any whose reading was refused; `Bench_retime.screen_keep`) are re-timed, together,
-  at the full call count, so the dominant kernel keeps its median and range. Measured at `78f65199`
-  (mac-studio M4 Max, Metal, `gpt2_mini_train`, two processes each): the instrument took 94-100 s
-  (screen 91-97 s, re-timing 2.7 s) against 364-366 s for the full table, cells 99-107 s against
-  369-372 s. Both arms named k138 `l0_ffn_b2.grad` (7.41-7.44 ms screened, 7.40-7.55 ms in the
-  table); only k120 (5.4 ms) joined it as a candidate, the table agreeing that no third kernel is
-  within 2x (k80 at 2.35-2.38 ms), and the paired ratio k138/k120 read 1.37-1.39, resolved. The
-  screen is now almost all of the cost: what remains is one call per kernel, so a step with more
-  kernels pays linearly. `BENCH_KERNEL_TABLE=1` still re-times every kernel (kprof needs them).
-  On minix at `53c2ba0b`: cc (129 kernels) 119-122 s against the table's 233-245 s, both naming
-  k89 `wte.grad` (216-278 ms: a noisy box), the screen's two candidates the tables' only two within
-  2x -- the gain is smaller because re-timing two ~250 ms kernels costs ~30 s. HIP (unified
-  memory, 270 kernels) is the expensive case: one QUEUED call costs 1.1-1.5 s there (the CUDA/HIP
-  batch-depth calibration), so the screen alone took 408-412 s and the instrument ~452 s of its
-  600 s budget, with 9-10 candidates (the cap of 8 plus refused screen readings) re-timed in
-  40-45 s. The old four-call default extrapolates to ~1300 s there, past the budget: before the
-  screen a HIP `gpt2_mini_train` cell's column would have read "instrument over budget". The kprof
-  setting (`autotune_timing=isolated`, every kernel, four calls) took 47 s -- and named a different
-  kernel (k248 `wte.grad`) than queued timing does (k198, 1.16x over k248, resolved): the two modes
-  measure different quantities, so never compare a kprof table's dominant kernel with a cell's.
+- **The dominant-kernel instrument screens in two stages, then re-times** (gh-ocannl-1763,
+  gh-ocannl-1818). Every kernel gets ONE `isolated` timing call (no batch-depth calibration); the
+  24 slowest of those readings (`Bench_retime.screen_keep_wide`, no ratio) get one call each under
+  the configured `autotune_timing`; the kernels within 2x of the slowest ADMITTED second-stage
+  reading, at most 8 (`Bench_retime.rescreen`), are re-timed together at the full call count, so
+  the dominant kernel keeps its median and range. Why each piece:
+  - One QUEUED call costs ~1.1-1.5 s on CUDA/HIP (calibration probes, then up to 64 ~10 ms
+    batches) and ~0.5 s on Metal; an isolated one costs ~0.15 s with the compile. At one queued
+    call a kernel, minix's HIP step spent 431-433 s of the 600 s budget on the screen alone.
+  - The isolated reading carries a ~40-90 us launch-and-sync round trip that differs between
+    kernels, so on a step whose dominant kernel is a few round trips long it does not order the
+    top kernels: kprof's all-`isolated` table names a different kernel than queued timing does
+    (k248 `wte.grad` vs k198 at `53c2ba0b`), and two kernels of 8 and 7 us queued can read 48 and
+    97 us isolated. Hence a wide cap with no ratio in stage one, and the final cap ranked by
+    configured-objective readings: the cell's answer stays the queued one. The closing line's
+    `isolated reading ranked R of 24` is the margin -- 1 of 24 on every measured backend.
+  - A screen reading the admission gate refuses is ranked by its minimum (it only over-states).
+    The old rule kept every refused reading as a candidate, outside the cap; isolated Metal
+    windows are mostly refused (121-127 of 195 even on a quiet box), and a loaded mac-studio made
+    the base re-time 37-46 candidates. Refused second-stage readings do not set the cut while an
+    admitted one exists: an `unbatched` CUDA/HIP refusal is a depth-1, round-trip-inclusive time.
+  - Measured base `00dc0c42` vs head `b944d18d` (`gpt2_mini_train`, `BENCH_TUNE=0`, two
+    processes per arm, exclusive windows): minix HIP (unified, 286 kernels) instrument 465-480 s
+    -> 106 s (isolated screen 45.5-45.7 s, re-screen 25.8-25.9 s, re-timing 34.1-34.2 s), cells
+    484-499 s -> 111 s, all four naming k207 (0.337 ms; 1.15x over k127, resolved); rog CUDA
+    (RTX 5070 Ti, 286 kernels) 354-357 s -> 43.5-43.7 s (12.1-12.2 + 27.1-27.5 + 4.1-4.2 s),
+    cells 358-361 s -> 47 s, all four naming k264 `wte.grad wpe.grad` (0.311-0.314 ms, the only
+    candidate). On rog the isolated screen is ~0.04 s a kernel and a queued call ~1.1 s.
+    mac-studio (a shared correctness slot, head only at the final screen): Metal (195 kernels)
+    112-197 s at base -> 18.8-22.9 s, all naming k81; cc (133 kernels) 159-199 s -> 96-123 s,
+    all naming k89 `wte.grad`, whose re-timing of one ~400 ms kernel dominates. The isolated
+    rank was 1 of 24 everywhere at the final screen. `segments_ms` sums these screening
+    estimates in two objectives.
+  - `BENCH_KERNEL_TABLE=1` still re-times every kernel on its own (kprof needs them), and the
+    two timing modes measure different quantities: never compare a kprof table's dominant kernel
+    with a cell's.
 - **What separates an isolated time from the in-step one on rog, and what does not**
   (gh-ocannl-1391). Not the buffers: the isolated compile is a child of the step's context and
   links against the step's own buffers (a probe of every kernel of gpt2_mini_train_b256 found

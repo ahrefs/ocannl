@@ -1642,30 +1642,39 @@ let dominant_kernel_record ~segment ~segments ~declined ~seg_ms ?(seg_ms_lo = Fl
     has been paid for, and a cell must not lose its result line to a diagnostic column, so any
     failure is reported on stderr and as a ["no-kernel"] verdict naming it.
 
-    Screen, then re-time (gh-ocannl-1763). Each kernel is compiled on its own, run once and SCREENED
-    with one timing call ({!Bench_retime.read_once}); the kernels whose reading comes within
-    {!Bench_retime.screen_ratio} of the slowest -- at most {!Bench_retime.screen_at_most}, plus any
-    whose reading was refused -- stay compiled ({!Bench_retime.screen_keep}, the rest released as
-    the screen goes), and once every kernel is screened those candidates are re-timed together in
-    one {!Bench_retime.retime} session of [calls] (default {!kernel_calls}) calls each, interleaved,
-    and released. Dominance is by median among the candidates, and the record carries the dominant
-    kernel's range beside it, as when every kernel was re-timed (gh-ocannl-1694): what the screen
-    removes is the [calls] calls on each of the many kernels nowhere near the slowest, which cost
-    the instrument about 2.1 s a kernel on a 178-kernel Metal step. A screened kernel's time in
-    [segments_ms] is its one reading. With the table on ({!kernel_table_enabled}) every kernel is
-    instead re-timed on its own, as before, so every row states a median and range. A closing stderr
-    line states the screen's and the re-timing's wall time and, with two candidates timed, the
-    dominant kernel's paired ratio over the runner-up ({!Bench_retime.paired_ratio}).
+    Screen, then re-time (gh-ocannl-1763), the screen in two stages (gh-ocannl-1818). Each kernel is
+    compiled on its own, run once and SCREENED with one timing call under
+    {!Bench_retime.screen_timing} ([isolated]: no batch-depth calibration, which cost over a second
+    a call on CUDA/HIP); the {!Bench_retime.screen_wide_at_most} slowest readings, plus any kernel
+    with no reading, stay compiled ({!Bench_retime.screen_keep_wide}, the rest released as the
+    screen goes). Once every kernel is screened, those are RE-SCREENED with one call each under the
+    configured [autotune_timing] ({!Bench_retime.rescreen}), which keeps the candidates -- within
+    {!Bench_retime.screen_ratio} of the slowest admitted re-screened reading, at most
+    {!Bench_retime.screen_at_most}, plus any with no reading -- and releases the rest; the
+    candidates are re-timed together in one {!Bench_retime.retime} session of [calls] (default
+    {!kernel_calls}) calls each, interleaved, and released. Both screens rank a reading the
+    admission gate refused by its minimum ({!Bench_retime.screen_reading}), and the closing line
+    counts them per stage. Dominance is by median among the candidates, and the record carries the
+    dominant kernel's range beside it, as when every kernel was re-timed (gh-ocannl-1694): what the
+    screen removes is the [calls] calls on each of the many kernels nowhere near the slowest, which
+    cost the instrument about 2.1 s a kernel on a 178-kernel Metal step. A kernel's time in
+    [segments_ms] is, for a candidate, its re-timed median; for a re-screened kernel, its
+    configured-objective reading; for the rest, its one isolated reading. With the table on
+    ({!kernel_table_enabled}) every kernel is instead re-timed on its own, as before, so every row
+    states a median and range. A closing stderr line states the three stages' wall times, the
+    dominant kernel's rank among the re-screened kernels' isolated readings (how close the first
+    stage came to leaving it out) and, with two candidates timed, the dominant kernel's paired ratio
+    over the runner-up ({!Bench_retime.paired_ratio}).
 
     Nor may it eat the cell: past [budget_s] seconds (default {!dominant_kernel_budget_s}) it stops
     and reports ["no-kernel"], instrument over budget (gh-ocannl-1260). It is stopped mid-kernel
-    where {!instrument_preemptible} ({!with_deadline}), and in any case starts no kernel, and no
-    re-timing, once the budget has passed. A kernel that started inside the budget and is not
-    interrupted (Windows, or a long foreign call) may finish past it; when that was the last stage,
-    every kernel was timed and the column is the full answer, so it is reported -- the budget bounds
-    the instrument's cost, and discarding a completed measurement would recover none of it. [calls]
-    is {!time_shipped_kernels}'; [time_kernel ~i] wraps kernel [i]'s compile and screen (its compile
-    and full timing with the table on), once per kernel in launch order.
+    where {!instrument_preemptible} ({!with_deadline}), and in any case starts no kernel, no
+    re-screen reading and no re-timing once the budget has passed. A kernel that started inside the
+    budget and is not interrupted (Windows, or a long foreign call) may finish past it; when that
+    was the last stage, every kernel was timed and the column is the full answer, so it is reported
+    -- the budget bounds the instrument's cost, and discarding a completed measurement would recover
+    none of it. [calls] is {!time_shipped_kernels}'; [time_kernel ~i] wraps kernel [i]'s compile and
+    screen (its compile and full timing with the table on), once per kernel in launch order.
 
     Two kernels whose ranges overlap are not resolved apart, so on a step whose two slowest kernels
     are that close, which one is named can change between processes. *)
@@ -1702,6 +1711,9 @@ let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing (
   (* The screen's candidates: kernel index, its compiled context and routine, its screen reading.
      Held compiled until the re-timing, and released on every path out of the instrument. *)
   let held = ref [] in
+  (* Screen readings the admission gate refused, per stage: ranked by their minimum all the same
+     ({!Bench_retime.screen_reading}), and counted for the closing line. *)
+  let refused_screen = ref 0 and refused_rescreen = ref 0 in
   let retiming = ref None in
   let over_budget_note () =
     Printf.sprintf
@@ -1710,7 +1722,8 @@ let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing (
       (elapsed_s ()) !started n
       (match !retiming with
       | None -> ""
-      | Some candidates -> Printf.sprintf " and %d candidates being re-timed" candidates)
+      | Some (`Rescreen kernels) -> Printf.sprintf " and %d kernels being re-screened" kernels
+      | Some (`Retime candidates) -> Printf.sprintf " and %d candidates being re-timed" candidates)
       budget_s
   in
   let release_held () =
@@ -1731,11 +1744,14 @@ let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing (
         (* Held before anything else can raise, so the instrument's exit releases it. *)
         held := (i, kctx, routine, None) :: !held;
         run_once ();
-        let reading = Bench_retime.read_once (kctx, routine) in
+        let reading, refused =
+          Bench_retime.read_screen ~timing:Bench_retime.screen_timing (kctx, routine)
+        in
+        if refused then Int.incr refused_screen;
         held :=
           List.map !held ~f:(fun ((k, c, r, _) as e) -> if k = i then (k, c, r, reading) else e);
         let _kept, dropped =
-          Bench_retime.screen_keep (List.map !held ~f:(fun ((_, _, _, r) as e) -> (e, r)))
+          Bench_retime.screen_keep_wide (List.map !held ~f:(fun ((_, _, _, r) as e) -> (e, r)))
         in
         List.iter dropped ~f:(fun (j, kctx, _, _) ->
             Context.release kctx;
@@ -1763,20 +1779,41 @@ let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing (
            ?hermetic:(if table then None else Some screen)
            ~calls ~stop:over_budget ~time_kernel ~ctx ~bindings routines)
     in
-    if table || List.length rows < n then (rows, `Retimed_all, [])
+    if table || List.length rows < n then (rows, `Retimed_all, [], [])
     else if over_budget () then raise Instrument_over_budget
     else
       let screen_s = elapsed_s () in
-      let candidates =
-        List.sort !held ~compare:(fun (a, _, _, _) (b, _, _, _) -> Int.compare a b)
+      (* The second stage (gh-ocannl-1818): the first stage's kept kernels, read once each under the
+         configured objective; what it drops is released before the re-timing. *)
+      let wide = List.sort !held ~compare:(fun (a, _, _, _) (b, _, _, _) -> Int.compare a b) in
+      retiming := Some (`Rescreen (List.length wide));
+      let timing = Bench_retime.configured_timing () in
+      let kept, dropped =
+        Bench_retime.rescreen wide ~read:(fun (_, kctx, r, _) ->
+            if over_budget () then raise Instrument_over_budget;
+            let ((_, refused) as reading) = Bench_retime.read_screen ~timing (kctx, r) in
+            if refused then Int.incr refused_rescreen;
+            reading)
       in
-      retiming := Some (List.length candidates);
+      List.iter dropped ~f:(fun ((j, kctx, _, _), _) ->
+          Context.release kctx;
+          held := List.filter !held ~f:(fun (k, _, _, _) -> k <> j));
+      let rescreen_s = elapsed_s () -. screen_s in
+      let rescreened =
+        List.map (kept @ dropped) ~f:(fun ((i, _, _, isolated), queued) -> (i, (isolated, queued)))
+      in
+      if over_budget () then raise Instrument_over_budget;
+      let candidates = List.map kept ~f:fst in
+      retiming := Some (`Retime (List.length candidates));
       let _timing, readings =
-        if List.is_empty candidates then (Bench_retime.configured_timing (), [])
+        if List.is_empty candidates then (timing, [])
         else Bench_retime.retime ~calls (List.map candidates ~f:(fun (_, kctx, r, _) -> (kctx, r)))
       in
       let retimed = List.map2_exn candidates readings ~f:(fun (i, _, _, _) rs -> (i, rs)) in
-      (rows, `Screened (screen_s, elapsed_s () -. screen_s), retimed)
+      ( rows,
+        `Screened (screen_s, rescreen_s, elapsed_s () -. screen_s -. rescreen_s),
+        rescreened,
+        retimed )
   in
   let outcome =
     match with_deadline ~seconds:budget_s measure with
@@ -1789,11 +1826,12 @@ let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing (
   match outcome with
   | Error Instrument_over_budget -> no_kernel (over_budget_note ())
   | Error exn -> no_kernel ("instrument failed: " ^ Exn.to_string exn)
-  | Ok (rows, _, _) when List.length rows < n -> no_kernel (over_budget_note ())
-  | Ok (rows, how, retimed) -> (
+  | Ok (rows, _, _, _) when List.length rows < n -> no_kernel (over_budget_note ())
+  | Ok (rows, how, rescreened, retimed) -> (
       (* Every kernel with a time: [(i, seg, spread, mma, how)], [how] [`Alone] with the table on
          (each kernel re-timed in a session of its own), [`Candidate readings] for a candidate (its
-         readings in the shared re-timing), [`Screen] for a kernel that kept its screen reading. A
+         readings in the shared re-timing), [`Screen] for a kernel that kept a screen reading: its
+         second-stage one when the first stage kept it, else its first-stage (isolated) one. A
          candidate none of whose re-timed readings was admitted has no time. *)
       let timed =
         List.filter_map rows ~f:(fun (i, seg, result) ->
@@ -1804,7 +1842,11 @@ let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing (
                 | `Retimed_all -> Some (i, seg, spread, mma, `Alone)
                 | `Screened _ -> (
                     match List.Assoc.find retimed i ~equal:Int.equal with
-                    | None -> Some (i, seg, spread, mma, `Screen)
+                    | None -> (
+                        match List.Assoc.find rescreened i ~equal:Int.equal with
+                        | Some (_, (Some _ as queued)) ->
+                            Some (i, seg, Bench_retime.spread_of [| queued |], mma, `Screen)
+                        | Some (_, None) | None -> Some (i, seg, spread, mma, `Screen))
                     | Some rs ->
                         let s = Bench_retime.spread_of rs in
                         if s.Bench_retime.admitted = 0 then None
@@ -1816,24 +1858,55 @@ let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing (
         List.filter timed ~f:(fun (_, _, _, _, how) ->
             match how with `Alone | `Candidate _ -> true | `Screen -> false)
       in
+      (* The one selection both the closing line and the record name, ties to the earlier kernel. *)
+      let dominant = List.max_elt deciding ~compare:by_median in
       (match how with
       | `Retimed_all -> ()
-      | `Screened (screen_s, retime_s) ->
+      | `Screened (screen_s, rescreen_s, retime_s) ->
           let runner_up =
-            match List.rev (List.sort deciding ~compare:by_median) with
-            | (i, _, _, _, `Candidate num) :: (j, _, _, _, `Candidate den) :: _ ->
-                Printf.sprintf "; k%d over k%d: %s" i j
-                  (Bench_retime.ratio_fields ~name:"ratio" (Bench_retime.paired_ratio ~num ~den))
+            match dominant with
+            | Some (i, _, _, _, `Candidate num) -> (
+                match
+                  List.max_elt
+                    (List.filter deciding ~f:(fun (j, _, _, _, _) -> j <> i))
+                    ~compare:by_median
+                with
+                | Some (j, _, _, _, `Candidate den) ->
+                    Printf.sprintf "; k%d over k%d: %s" i j
+                      (Bench_retime.ratio_fields ~name:"ratio"
+                         (Bench_retime.paired_ratio ~num ~den))
+                | _ -> "")
             | _ -> ""
           in
+          (* How close the first stage came to leaving the dominant kernel out: its rank among the
+             re-screened kernels' isolated readings, the margin {!Bench_retime.screen_wide_at_most}
+             is there for. *)
+          let isolated_rank =
+            match dominant with
+            | None -> ""
+            | Some (d, _, _, _, _) -> (
+                let isolated = List.filter_map rescreened ~f:(fun (_, (isolated, _)) -> isolated) in
+                match List.Assoc.find rescreened d ~equal:Int.equal with
+                | Some (Some r, _) ->
+                    Printf.sprintf "; k%d's isolated reading ranked %d of %d" d
+                      (Bench_retime.rank_among r isolated)
+                      (List.length isolated)
+                | Some (None, _) -> Printf.sprintf "; k%d had no isolated reading" d
+                | None -> "")
+          in
           Stdio.eprintf
-            "bench: dominant kernel: screened %d kernels with one timing call each in %.1f s, \
-             re-timed %d candidates (within %gx of the slowest reading, at most %d) with %d calls \
-             each in %.1f s%s\n\
+            "bench: dominant kernel: screened %d kernels with one %s timing call each in %.1f s \
+             (%d refused, ranked by their minimum), re-screened the %d slowest (at most %d) with \
+             one %s call each in %.1f s (%d refused), re-timed %d candidates (within %gx of the \
+             slowest admitted re-screened reading, at most %d) with %d calls each in %.1f s%s%s\n\
              %!"
-            n screen_s (List.length retimed) Bench_retime.screen_ratio Bench_retime.screen_at_most
-            calls retime_s runner_up);
-      match List.max_elt deciding ~compare:by_median with
+            n
+            (Autotune.timing_string Bench_retime.screen_timing)
+            screen_s !refused_screen (List.length rescreened) Bench_retime.screen_wide_at_most
+            (Autotune.timing_string (Bench_retime.configured_timing ()))
+            rescreen_s !refused_rescreen (List.length retimed) Bench_retime.screen_ratio
+            Bench_retime.screen_at_most calls retime_s isolated_rank runner_up);
+      match dominant with
       | None when n = 0 -> no_kernel "the step shipped no kernel segments"
       | None when not (List.is_empty timed) ->
           no_kernel
