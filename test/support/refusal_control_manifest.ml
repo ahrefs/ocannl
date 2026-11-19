@@ -824,6 +824,12 @@ let raw_entries =
         "[scanner-refusal:2d086d94d5a797eb9901008d71d5c241] errexit-and-list fixture";
         "[scanner-refusal:3f096017191c7a4d9f63d7a94dcfb6ff] reaches the one-predicate-per-statement";
         "[scanner-refusal:36dfd5919c0215c23122a0ec198d2739] errexit execution control";
+        "[scanner-refusal:c4194f68155e0665e0176c65824cb4fa] trap-order fixture";
+        "[scanner-refusal:624b5e03b7974c6da8261c5b00b3f94f] reaches the trap-order";
+        "[scanner-refusal:7dddd02c97cea5d19abe99b74fa55dee] reaches the unread-signal";
+        "[scanner-refusal:bd11a3abd96cb5a9802b6d3d4246e404] reaches the unread-structure";
+        "[scanner-refusal:d6f4a25fb971a1f7f1c33b8fa3a42a54] script whose structure";
+        "[scanner-refusal:4b1c2d6d0d37de04d679a9d0323a5467] trap-order execution control";
         "[scanner-refusal:730f080d2e13414d67084e34416888e9] takes its lifecycle";
         "[scanner-refusal:711cc6b5aa70f8e1ec411351c89c6ccc] lifecycle or redefines";
         "[scanner-refusal:348d853f9ff7699418e79b2c7469d193] the command running";
@@ -836,6 +842,7 @@ let raw_entries =
         "[scanner-refusal:8743bc48ff2a3da0c15e40f654ad6ff7] shebang";
         "[scanner-refusal:3184b30e46c2d310e18bbae7c1c8ae9e] shared harness contract";
         "[scanner-refusal:15ee2c44c18fee32abb92315075e99ab] parses";
+        "[scanner-refusal:f574a9b9751d21a02afcc893a83b2dbe] below the repository's";
         "[scanner-refusal:8d61869dcd0de680f0aead692a642ebe] the scan reached";
         "[scanner-refusal:8fe3f688c6c4ef4b004016098ba03f34] reached the session";
       ] );
