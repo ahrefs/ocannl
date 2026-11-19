@@ -50,33 +50,19 @@ let () =
       print_code_name "float" t_float.value);
 
   Verdict.case "C math functions" (fun () ->
-      (* ── Test 2: C math function name labels ── exp/log exercise the direct (non-nested) unop
-         extraction path. floorf/fabsf exercise the Satur01_gate binop path where the old
-         remove_paren approach produced the wrong combined string "fabsffloorf" instead of two
-         entries "fabsf" and "floorf". *)
       Tensor.unsafe_reinitialize ();
       let ctx2 = Context.auto () in
       let t_exp = mk "exp" in
       (* id=0 *)
       let t_log = mk "log" in
       (* id=1 *)
-      let t_floorf = mk "floorf" in
-      (* id=2 *)
-      let t_fabsf = mk "fabsf" in
-      (* id=3 *)
-      let sum2 = NTDSL.add t_exp t_log () in
-      let sum3 = NTDSL.add t_floorf t_fabsf () in
-      let result2 = NTDSL.add sum2 sum3 () in
+      let result2 = NTDSL.add t_exp t_log () in
       Train.set_materialized t_exp.value;
       Train.set_materialized t_log.value;
-      Train.set_materialized t_floorf.value;
-      Train.set_materialized t_fabsf.value;
       Train.set_materialized result2.value;
       let _ctx2 = Train.forward_once ctx2 result2 in
       print_code_name "exp" t_exp.value;
-      print_code_name "log" t_log.value;
-      print_code_name "floorf" t_floorf.value;
-      print_code_name "fabsf" t_fabsf.value);
+      print_code_name "log" t_log.value);
 
   Verdict.case "backend builtins" (fun () ->
       (* ── Test 3: names the backend's own rendering emits, colliding inside one kernel ── A

@@ -15,8 +15,8 @@
    - Values, on every backend, bitwise against an OCaml reference of the short-circuiting semantics:
    an unselected NaN or infinity does not reach the result (a mask multiply would leak it), a
    selected negative zero stays negative, a NaN condition selects the then-arm of a [Where] and
-   gates a [Relu_gate] shut, and [Satur01_gate] yields its operand where its test FAILS. Legs at
-   f32, f64, a half-precision condition beside an f32 result, and bf16 storage computing at f32;
+   gates a [Relu_gate] shut, and [Satur01_gate] passes its operand only for inputs in (0, 1). Legs
+   at f32, f64, a half-precision condition beside an f32 result, and bf16 storage computing at f32;
    and, on cc, a gate and a [Where] composed into further arithmetic, whose rounding follows the
    [?:] spelling's C type (a gate's [0.0f] literal and a [Where] of floats both stay float). -
    Emission, on cc: those legs call the blend and keep no [?:] spelling of their select. - Guards,
@@ -112,7 +112,7 @@ let has text s = String.is_substring text ~substring:s
 
 (* Every short-circuiting spelling a value select has on cc ([Ops.ternop_c_syntax],
    [Ops.binop_c_syntax], float arms). *)
-let short_circuit_forms = [ ") != 0.0 ? ("; " > 0.0 ?"; ")) > 0.0 ? 0.0 :" ]
+let short_circuit_forms = [ ") != 0.0 ? ("; " > 0.0 ?"; "; }) ?" ]
 
 (* The blend's own spelling, every backend's ([C_syntax.blend_local_a]): cc's [__auto_type] and the
    GPU dialects' [auto] local of the first arm. *)
@@ -450,11 +450,9 @@ let legs =
       ~xv:[| nan; -0.; 0.; 1.; -1.; inf; 2.; -.inf |]
       ~gv:[| 1.; 2.; nan; -0.; nan; 4.; inf; 8. |]
       ();
-    (* [fabsf(floorf(x)) > 0.0 ? 0.0 : g]: the operand passes where the test FAILS — [x] in [0, 1),
-       and NaN. *)
     gate_leg ~name:"bs_sat01_gate" ~op:Ops.Satur01_gate
-      ~semantics:(fun x g -> if Float.(abs (round_down x) > 0.) then 0. else g)
-      ~xv:[| 0.5; 1.5; -0.5; nan; 0.; 0.75; -1.; 2. |]
+      ~semantics:(Ops.interpret_binop Ops.Satur01_gate)
+      ~xv:[| 0.5; 1.5; -0.5; nan; 0.; 0.75; -0.; 1. |]
       ~gv:[| -0.; nan; nan; 7.; inf; -2.5; 1.; nan |]
       ();
     (* Composed into [(sel + h) - k] with [h = k = 2^24]: the sum keeps a small [sel] exactly at
@@ -465,45 +463,6 @@ let legs =
     masked_leg ~axis:census_axis ~name:"bs_where_masked" ();
   ]
 
-(* The value claims a GPU backend fails on special values, a pre-existing divergence this test
-   exposed (ahrefs/ocannl#1647), each paired with a backend observed failing it (CUDA RTX 5070 Ti
-   and HIP gfx1151 at 1d62ce19, Metal M-series at 387de34a). [Satur01_gate] on all three, cells 3
-   and 4: a NaN and a zero operand gate shut, since the GPU renderings spell [0 < x && x < 1 ? g :
-   0] ([Ops.interpret_binop]'s semantics) where the reference follows cc's [fabs(floor(x)) > 0 ? 0 :
-   g]. On HIP, besides, every select whose condition is NaN at a cell: the [Where] legs take the
-   else-arm, [bs_nested_guard] included. Blended (gh-ocannl-1695, gfx1151) that reaches the
-   zero-else [bs_where_zero] too, which the short-circuiting spelling had kept exact, while
-   [Relu_gate], whose NaN operand the short-circuiting spelling passed, now gates shut exactly. The
-   pairs are the defect's record, not a capability: no backend predicate names them. Each such claim
-   is skipped on its backend only, with every disagreeing cell printed to stderr (and a note once
-   none disagrees); every other backend, and every other claim, stays exact.
-
-   HIP honors NaNs under both policies since gh-ocannl-1909; its five NaN-condition entries are
-   lifted. [bs_sat01_gate] is the semantics gap above and stays under either policy. *)
-let known_divergence_1647 =
-  [ ("bs_sat01_gate", "cuda"); ("bs_sat01_gate", "metal"); ("bs_sat01_gate", "hip") ]
-
-(* [name]'s bitwise value claim, or its gated skip where ahrefs/ocannl#1647 records it failing. *)
-let values_claim ~name claim got want =
-  let diverges =
-    List.exists known_divergence_1647 ~f:(fun (leg, backend) ->
-        String.equal leg name && String.is_substring backend_name ~substring:backend)
-  in
-  if diverges then (
-    Array.iteri got ~f:(fun i v ->
-        let w = want.(i) in
-        if not (same_bits v w) then
-          Stdio.eprintf
-            "branchless_select: %s cell %d: got %h, the reference %h (known divergence, \
-             ahrefs/ocannl#1647; not part of the golden)\n"
-            name i v w);
-    Stdio.eprintf "branchless_select: %s: value claim gated on %s by ahrefs/ocannl#1647%s\n" name
-      backend_name
-      (if Array.for_all2_exn got want ~f:same_bits then " (every cell now matches: lift the gate)"
-       else "");
-    skipped claim)
-  else p_all2 claim got want ~f:same_bits
-
 let () =
   List.iter legs ~f:(fun leg ->
       (* A skipped claim prints its label as a passing one does, so one golden holds on every
@@ -512,7 +471,7 @@ let () =
       (if leg.cpu_only && not on_cc then skipped claim
        else
          let got = execute_leg ~name:leg.name ~seed:leg.seed ~out:leg.out leg.llc in
-         values_claim ~name:leg.name claim got leg.want);
+         p_all2 claim got leg.want ~f:same_bits);
       let text = lazy (kernel_text leg.name) in
       let leg' = blend_leg ~cpu_only:leg.cpu_only in
       in_legf ~leg:leg' "%s: the select calls the blend helper" leg.name (fun label ->
@@ -620,7 +579,7 @@ let () =
   in
   let llc = loop_n i 6 (set out [| iter i |] outer) in
   let got = execute_leg ~name ~seed:[ (a, a_vals); (v, vv) ] ~out llc in
-  values_claim ~name (name ^ ": values") got [| 1.5; -1.; 3.5; -1.; 0.; 0. |];
+  p_all2 (name ^ ": values") got [| 1.5; -1.; 3.5; -1.; 0.; 0. |] ~f:same_bits;
   let claim = name ^ ": the value select blends around the inner guard's [?:]" in
   if blends then
     let text = kernel_text name in

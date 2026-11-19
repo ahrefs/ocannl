@@ -573,9 +573,8 @@ files.
   `Builtins_cuda`, `Builtins_hip` and `Builtins_metal`. Integer `Trunc` is its operand and integer
   `Not` a `== 0` truth. `op_table_compile`'s `Under_mod` family compiles every homogeneous arm as
   the first operand of `Mod` at each integer precision, the one consumer that rejects a
-  float-typed arm, and its executed cases pin the values. Not covered: cc's `Satur01_gate` passes
-  at 0 where the other backends and `Ops.interpret_binop` do not, at float and integer precisions
-  alike, and its integer spelling tests `abs()`, an `int` function.
+  float-typed arm. `integer_promotion_folds` executes the integer `Satur01_gate` boundary
+  (gh-ocannl-1647).
 - **A `Max`/`Min` neutral element is the slot's extreme at an integer precision** (gh-ocannl-2081).
   `Ops.neutral_elem` stays the operator's and answers infinities: shape inference reads it before
   any precision is settled, and a non-finite answer is what clamps a padded window, which is also
@@ -2723,8 +2722,7 @@ files.
   builder: the new default component invalidates every old approximate-division crown.
   `cache_key_agreement` pins that relationship; `test_hip_compile_options` pins both vectors.
   `division_special_values` and `unary_math_special_values` require the exact contracts under
-  both policies; `branchless_select` lifts all five HIP NaN-condition divergences. The
-  `bs_sat01_gate` cross-backend semantics gap remains.
+  both policies. `branchless_select` checks all five HIP NaN-condition cases.
 - **HIP fmod must classify either NaN operand by bits** (gh-ocannl-1909): ROCm returned
   the dividend for a NaN divisor under fast math plus `-fhonor-nans`, at f32, half, bfloat16
   and f64 on gfx1151. `Builtins_hip.ocannl_fmodf` and `ocannl_fmod` now select NaN for

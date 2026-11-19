@@ -914,6 +914,11 @@ let binop_cd_fallback_syntax = function
    that arithmetic type too, including in the value-select blend. *)
 let c_float_literal prec literal = match prec with Single_prec _ -> literal ^ "f" | _ -> literal
 
+(* Both comparisons read the same value, and a nested condition appears in the emitted text once. *)
+let c_sat01_gate_condition =
+  ( "__extension__ ({ __auto_type ocannl_sat01_x__ = (",
+    "); (ocannl_sat01_x__ > 0) & (ocannl_sat01_x__ < 1); })" )
+
 let binop_c_syntax prec v =
   match (v, prec) with
   | Arg1, _ -> invalid_arg "Ops.binop_c_syntax: Arg1 is not an operator"
@@ -936,14 +941,10 @@ let binop_c_syntax prec v =
   | Relu_gate, _ ->
       let zero = c_float_literal prec "0.0" in
       ("(", " > " ^ zero ^ " ?", " : " ^ zero ^ ")")
-  | ( Satur01_gate,
-      ( Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _
-      | Fp8_prec _ ) ) ->
-      ("(abs(", " ) > 0 ? 0 : (", "))")
-  | Satur01_gate, Single_prec _ ->
-      (* This disagrees at 0 with the semantics. *)
-      ("(fabsf(floorf(", ")) > 0.0f ? 0.0f : (", "))")
-  | Satur01_gate, _ -> ("(fabs(floor(", ")) > 0.0 ? 0.0 : (", "))")
+  | Satur01_gate, _ ->
+      let prefix, suffix = c_sat01_gate_condition in
+      let zero = if is_integer prec then "0" else c_float_literal prec "0.0" in
+      ("(" ^ prefix, suffix ^ " ?", " : " ^ zero ^ ")")
   (* An integer [Max]/[Min] compares in the operands' common type and is typed that ([Builtins_cc]'s
      [OCANNL_MAX]/[OCANNL_MIN], gh-ocannl-1883): [fmax] returned a [double], which [%] does not take
      and which rounds an int64 above 2^53. *)

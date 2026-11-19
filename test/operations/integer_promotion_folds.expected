@@ -44,6 +44,8 @@ byte Trunc of a sum against 255: the comparison survives: true
 byte open gate over a sum against 255: with its literals as written it gives the worked value: true
 byte open gate over a sum against 255: with each literal in a node it gives the worked value: true
 byte open gate over a sum against 255: the comparison survives: true
+int64 Satur01_gate at zero and wide integers: with its literals as written it gives the worked value: true
+int64 Satur01_gate at zero and wide integers: with each literal in a node it gives the worked value: true
 byte select arm against 255: with its literals as written it gives the worked value: true
 byte select arm against 255: with each literal in a node it gives the worked value: true
 byte select arm against 255: the comparison survives: true

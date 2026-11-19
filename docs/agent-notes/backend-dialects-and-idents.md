@@ -69,8 +69,8 @@ files.
   bounds-guarded, the realistic pool), though a hand-written nvcc probe with an `if (i < n)` guard
   did branch -- census the emitted kernels, not a probe. NVRTC 13.4 rejects GNU statement
   expressions (`({ ... })`: "expected an expression"), which HIPRTC and cc accept, hence the lambda.
-  The truth stays the dialect's own test: the GPU `Satur01_gate` spells `0 < x && x < 1`, not cc's
-  `fabs(floor(x)) > 0`. On HIP the blend moved ahrefs/ocannl#1647's NaN-condition divergence:
+  The blend uses the dialect's own spelling of each gate. On HIP it moved the NaN-condition
+  divergence tracked in ahrefs/ocannl#1647:
   `Relu_gate` became exact and the zero-else `Where` took the else-arm. HIP compiles under
   no-NaNs fast math, so a NaN LITERAL bound to a local is the optimizer's to drop: a blended
   masked-attention fill `where mask s NAN` came back finite (`online_softmax*`), so
@@ -78,6 +78,14 @@ files.
   `Blend_over_locals` (`bs_nan_fill`). Metal keeps `?:`: its
   offline compiler ships with full Xcode only and Apple's GPU ISA has no public disassembler, so no
   census can say whether it branches.
+- `Satur01_gate` passes its second operand only for `0 < x < 1` (gh-ocannl-1647). cc's
+  ternary and branchless blend share an ordered range test over a single copy of the
+  condition. The ternary still guards its payload and keeps the result in its arithmetic
+  type. The old cc tests passed at zero, and `abs` narrowed wide integers through C's `int`.
+  `branchless_select` checks both signed zeros, NaN and the upper endpoint against
+  `Ops.interpret_binop`. `integer_promotion_folds` executes the gate on int64 zero and both signs
+  of 2^32. `tensor/operation.ml` uses the gate for the backward pass of `sat01`, whose gradient
+  at zero is now zero on cc.
 - Metal has no `double`, and f64 stays rejected in `typ_of_prec` — a declared double buffer must
   fail rather than be silently degraded; only scalar expression casts render as `float`. So a
   backend-agnostic test must never reach for `double` just to have a second precision:
