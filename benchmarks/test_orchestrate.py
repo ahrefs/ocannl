@@ -2242,7 +2242,9 @@ class DominantKernelTest(unittest.TestCase):
         self.assertIn("`not recorded`", str(e.exception))
 
     def test_a_timed_kernel_with_an_unusable_mode_is_refused(self):
-        for bad in (None, "", 3):
+        # `not recorded` is the reader's name for an ABSENT field: a line stating it would pass for a
+        # legacy row.
+        for bad in (None, "", 3, bench_output.TIMING_NOT_RECORDED):
             with self.subTest(timing=bad):
                 with self.assertRaises(ValueError):
                     bench_output.dominant_kernel_timing(

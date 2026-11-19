@@ -165,7 +165,8 @@ with tempfile.TemporaryDirectory() as scratch:
 exercised.add("kernel_table_legend")
 # The dominant-kernel record the same run printed names the mode its time was measured under, as the
 # timing calls behind it report it (gh-ocannl-1860): the run's pinned `isolated`, which is not the
-# default, so a mode restated from anywhere but those calls would read `queued` here.
+# default -- and the run restates `queued` once the last kernel's calls return, so a mode re-read
+# from the configuration when the record is written would read `queued` here.
 record = {"dominant_kernel": strict_json.loads(captured("harness", "out").strip().splitlines()[-1])}
 claim("the dominant-kernel record names the timing mode the table's legend states",
       bench_output.dominant_kernel_timing(record) == bench_output.kernel_table_timing(err)

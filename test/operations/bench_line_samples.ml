@@ -7,8 +7,11 @@
    -- one kernel through the instrument's own [time_kernel] seam as declined, one as refused, so the
    table holds every kind of row -- and the launch-geometry trace of their compiles
    ([schedule_log_launches], from the command line) beside it. A CPU backend ships a routine as one
-   kernel, hence four routines. Its [dominant_kernel] record goes to stdout. - [trace]: the timing
-   trace ([BENCH_TIMING_TRACE=1], from the rule) of a seed-only search of a small matmul, then the
+   kernel, hence four routines. Its [dominant_kernel] record goes to stdout. The run states
+   [autotune_timing=isolated] itself, as a kprof cell pins it, and restates it [queued] once the
+   last kernel's timing calls return: the record must name the mode those calls were made under, not
+   the configuration it is written under (gh-ocannl-1860). - [trace]: the timing trace
+   ([BENCH_TIMING_TRACE=1], from the rule) of a seed-only search of a small matmul, then the
    end-of-search marker; the summary prints at exit. - [trace-raise]: the same search with one
    failure injected (gh-ocannl-2246): the first candidate after the baseline to start its timing
    call's validation raises [Device_memory_exhausted] from its first batch
@@ -39,6 +42,7 @@ open Ocannl.Operation.DSL_modules
 module H = Bench_harness
 
 let harness () =
+  Utils.state_config ~key:"autotune_timing" ~data:"isolated";
   let ctx = ref (Context.auto ()) in
   let routines =
     List.init 4 ~f:(fun k ->
@@ -68,7 +72,11 @@ let harness () =
                admitted = 0;
                refused = 4;
              })
-    | _ -> timing ()
+    | i ->
+        let timed = timing () in
+        if i = List.length routines - 1 then
+          Utils.state_config ~key:"autotune_timing" ~data:"queued";
+        timed
   in
   (* The record is the result line's [dominant_kernel] object, printed on stdout for the reader of
      its timing mode (gh-ocannl-1860); the rows are read off stderr. *)

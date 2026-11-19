@@ -118,8 +118,10 @@ def dominant_kernel_timing(result):
     record was measured under (`Bench_json.kernel`'s `timing`, gh-ocannl-1860): the emitter's
     spelling (`queued`, `isolated`), or TIMING_NOT_RECORDED for a line from before the field, or
     None when the row has no such time -- no `dominant_kernel` object, or one that timed no kernel
-    (`segment` null). ValueError for a timed kernel whose `timing` is not a non-empty string,
-    which no emitter writes.
+    (`segment` null). ValueError for a timed kernel whose `timing` is not a non-empty string, or is
+    TIMING_NOT_RECORDED itself, which no emitter writes. Any other string is read as the mode it
+    names: the set is `Autotune.timing_mode`'s, and a copy of it here would go stale the day a mode
+    is added, where equality between rows -- all the report asks of the mode -- needs none.
 
     This JSON field has no place in `FORMATS`, a registry of TEXT lines and their anchors; this
     function is its one reader all the same, and every consumer of the mode calls it."""
@@ -129,7 +131,7 @@ def dominant_kernel_timing(result):
     if "timing" not in k:
         return TIMING_NOT_RECORDED
     timing = k["timing"]
-    if not isinstance(timing, str) or not timing:
+    if not isinstance(timing, str) or not timing or timing == TIMING_NOT_RECORDED:
         raise ValueError(f"a timed dominant kernel states no usable timing mode: {timing!r}")
     return timing
 
