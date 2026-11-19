@@ -995,7 +995,10 @@ if [ -n "$TARGET" ]; then
   policy_skip_reason="a --target run builds no @policy-invariance"
 elif ! git -C "$MAIN" cat-file -e "${full_sha}:test/operations/dune" 2>/dev/null; then
   policy_skip_reason="$run_sha has no @policy-invariance alias (no test/operations/dune)"
-elif ! git -C "$MAIN" grep -Eq -e '^ \(name policy-invariance\)$' "$full_sha" -- test/operations/dune; then
+elif git -C "$MAIN" grep -Eq -e '^ \(name policy-invariance\)$' "$full_sha" -- test/operations/dune; then
+  :
+else
+  # The status is the grep's here, not a negation's: 1 is "no such stanza", anything else a failure.
   [ "$?" -eq 1 ] || die "cannot read test/operations/dune at $run_sha"
   policy_skip_reason="$run_sha has no @policy-invariance alias"
 fi

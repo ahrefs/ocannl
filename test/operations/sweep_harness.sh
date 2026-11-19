@@ -337,6 +337,11 @@ printf 'let%%expect_test _ = print_endline "old" [%%expect {| old |}]\n' \
   >"$main/test/inline_expect.ml"
 printf '(rule\n (alias runtest-state-probe)\n (deps unit.cc_expected.ml noise.expected)\n (action (diff "unit.%%{read:../config/ocannl_backend.txt}_expected.ml" unit.actual)))\n(rule\n (alias runtest-pre-diff-probe)\n (deps pre_diff_expected.ml)\n (action (progn (run crashing.exe) (diff pre_diff_expected.ml pre_diff.actual))))\n' \
   >"$main/test/dune"
+# A test/operations/dune with no `@policy-invariance` stanza, as a ref from before the alias has
+# (gh-ocannl-1104): the next commit replaces it with the live one.
+mkdir -p "$main/test/operations"
+printf '; a dune file from before the policy-invariance alias\n' >"$main/test/operations/dune"
+git -C "$main" add test/operations/dune
 git -C "$main" add fixture benchmarks/fixtures/DIGESTS.txt test/dune \
   test/unit.cc_expected.ml test/noise.expected test/config/ocannl_config \
   test/pre_diff_expected.ml test/inline_expect.ml
@@ -346,7 +351,6 @@ mkdir -p "$main/bin"
 cp "$(dirname "$0")/../../bin/dune" "$main/bin/dune"
 # And the live test/operations/dune, whose `@policy-invariance` stanza admits the policy units
 # (gh-ocannl-1104); the fixture commit before this one predates it, as a historical ref would.
-mkdir -p "$main/test/operations"
 cp "$(dirname "$0")/dune" "$main/test/operations/dune"
 # The sweep reads committed bytes, including on Windows with CRLF checkouts.
 git -C "$main" -c core.autocrlf=input add bin/dune test/operations/dune
@@ -1159,6 +1163,12 @@ set -e
 [ "$policy_target_rc" -eq 2 ]
 grep -qF 'sweep: --only cc-policy-fp16-true: a --target run builds no @policy-invariance' \
   <<<"$policy_target_error"
+# ...while the same pre-alias ref still sweeps the ordinary units: only the policy units are left
+# out, said once (Codex P2 on #2241: a negated `git grep` once read its own status as 0 there and
+# aborted the whole sweep).
+pre_alias_cc=$(run_sweep_backend cc --ref "$fixture_sha")
+grep -q 'm4-max/cc: incremental-pass' <<<"$pre_alias_cc"
+grep -qF 'has no @policy-invariance alias' <<<"$pre_alias_cc"
 [ "$policy_ref_rc" -eq 2 ]
 grep -qF 'has no @policy-invariance alias' <<<"$policy_ref_error" ||
   { printf 'policy ref refusal said:\n%s\n' "$policy_ref_error" >&2; false; }
