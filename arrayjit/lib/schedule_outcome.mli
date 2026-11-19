@@ -82,6 +82,11 @@ type cause =
     }
   | Backend_rejected of { backend : string; stage : string; severity : severity; detail : string }
   | Unclassified of { phase : phase; exn_constructor : string; detail : string }
+      (** An exception no classifier recognized, contained as a decline. [exn_constructor] is the
+          exception's constructor name (["Invalid_argument"]); [detail] is [Exn.to_string] of the
+          whole exception, so it renders the message WRAPPED in its constructor (for example
+          [(Invalid_argument "...")], the message sexp-quoted). A test reading the message matches
+          [detail] by substring, never by equality with the message. *)
   | Seed_evicted of { family : string; detail : string }
       (** A detected seed site the search declined to propose because a candidate-volume cap bound
           (gh-ocannl-541): the site was reachable and ranked, and lost only to the cap. Recorded in

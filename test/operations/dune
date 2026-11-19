@@ -17788,6 +17788,17 @@
  (deps
   (alias runtest-uniform_rank_zero-logged)))
 
+(test
+ (name unnamed_routine_refusal)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules unnamed_routine_refusal)
+ (libraries base ocannl stdio arrayjit.verdict arrayjit.context)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-2118: no stanza declares a compiler-reaching library its compiled modules never
 ; reference. It reads the dune files, the workspace description (`dune describe`, run by the check
 ; against the source root with a private build directory) and the typed trees `@check` writes, so it

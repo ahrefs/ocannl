@@ -5746,10 +5746,10 @@ let elide_staged_barriers (opt : Low_level.optimized) : Low_level.optimized =
     in
     { opt with llc = seq opt.llc }
 
-(* Fault-injection seam (gh-ocannl-1323): called with each op just before {!apply_typed} applies it.
-   A genuine transform bug has no stable trigger, so the test that pins "an untyped exception inside
-   [apply] is fatal" makes one here. One value per domain, as [Autotune.Seam]; the default is a
-   no-op and no configuration selects it. *)
+(* Fault-injection seam (gh-ocannl-1323): called with each op just before {!apply_typed} or
+   {!schedule_legality} applies it. A genuine transform bug has no stable trigger, so the test that
+   pins "an untyped exception inside [apply] is fatal" makes one here. One value per domain, as
+   [Autotune.Seam]; the default is a no-op and no configuration selects it. *)
 let transform_fault : (optop -> unit) Stdlib.Domain.DLS.key =
   Stdlib.Domain.DLS.new_key (fun () _op -> ())
 
@@ -6705,7 +6705,13 @@ let schedule_legality (opt : Low_level.optimized) (sched : schedule) : (optop * 
         match v with
         | Op_illegal _ -> List.rev ((op, v) :: acc)
         | _ -> (
-            match apply_opt_op ~app opt op with
+            match
+              (* The fault seam, fired just before [apply_opt_op] as {!apply_typed}'s fold fires it
+                 (gh-ocannl-2314); inside the scrutinee, so an injected typed refusal reads as the
+                 op's own [Op_illegal] and an untyped one propagates. *)
+              Stdlib.Domain.DLS.get transform_fault op;
+              apply_opt_op ~app opt op
+            with
             | opt' -> go opt' ((op, v) :: acc) tl
             | exception Schedule_outcome.Cause_at (_, cause) ->
                 (* Rendered as the exception {!apply} raises for it, so the message reads as before

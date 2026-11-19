@@ -248,7 +248,14 @@ val to_low_level : ?static_indices:Indexing.static_symbol list -> t -> Low_level
 val to_doc :
   ?name:string -> ?static_indices:Indexing.static_symbol list -> unit -> t -> PPrint.document
 
+val to_string : t -> string
+(** The code rendered as {!to_doc} renders it, at the layout {!get_name_exn}'s refusal prints. *)
+
 val get_name_exn : t -> string
+(** The routine name the code's {!Block_comment}s derive (joined with [_then_] across a {!Seq}).
+    Raises [Invalid_argument] when they derive none -- typically a bare [t.Tensor.forward], which
+    [Train.forward] wraps in a comment naming the routine. The message's first line names that fix,
+    and the compile's [?name]; the code, cut to its first lines, follows it. *)
 
 val lower :
   ?rewrite_target:Rewrites.target ->

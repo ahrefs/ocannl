@@ -17,14 +17,14 @@
 
    The claims. The impure entry is refused by [Schedule.apply], naming the entry and the [Set] of
    [acc], with no op dispatched (the [with_transform_fault] seam counts dispatches), and by
-   [Schedule.schedule_legality], which returns no verdict. The refusal is untyped -- the routine's
-   fault, not a candidate's: under [Schedule_outcome.protect] it is fatal when strict and an
-   [Unclassified] decline when permissive, never an [Illegal_schedule]. The controls: the
-   statement-level twin reaches its ops and is refused at the [Retype], naming the tile's lifetime;
-   a pure entry holding a pure scope body runs every op and computes the unscheduled values; the
-   empty schedule is the identity, even on the impure entry; and a pure entry holding a [Grid] loop
-   inside a scope body (the other half of the scope grammar, which an op can repair) is admitted,
-   its [Retype] to [Serial] applied. *)
+   [Schedule.schedule_legality], which returns no verdict and dispatches no op either. The refusal
+   is untyped -- the routine's fault, not a candidate's: under [Schedule_outcome.protect] it is
+   fatal when strict and an [Unclassified] decline when permissive, never an [Illegal_schedule]. The
+   controls: the statement-level twin reaches its ops and is refused at the [Retype], naming the
+   tile's lifetime; a pure entry holding a pure scope body runs every op and computes the
+   unscheduled values; the empty schedule is the identity, even on the impure entry; and a pure
+   entry holding a [Grid] loop inside a scope body (the other half of the scope grammar, which an op
+   can repair) is admitted, its [Retype] to [Serial] applied. *)
 
 open Base
 open Ocannl.Operation.DSL_modules
@@ -113,15 +113,25 @@ let () =
     "an impure entry is refused by Schedule.apply, naming the entry and the hidden write, before \
      any op runs"
     (entry_refusal ~what:"apply" ~acc:hidden.acc (fun () -> Sched.apply (gap hidden) hidden.opt));
-  (* [schedule_legality] probes on a hermetic copy and calls no fault seam, so only the refusal
-     itself is observable here. *)
-  p "schedule_legality refuses it too, naming the entry and the hidden write, with no verdict"
-    (match Sched.schedule_legality hidden.opt (gap hidden) with
-    | verdicts ->
-        Stdio.eprintf "legality: %d verdicts (not part of the golden)\n%!" (List.length verdicts);
+  (* [schedule_legality] applies its ops through the same fault seam, so its dispatches are counted
+     like [apply]'s; the pure entry below shows the count sees them. *)
+  p
+    "schedule_legality refuses it too, naming the entry and the hidden write, with no verdict and \
+     no op dispatched"
+    (match
+       counting (fun () ->
+           Result.try_with (fun () -> Sched.schedule_legality hidden.opt (gap hidden)))
+     with
+    | Error (Invalid_argument msg), 0 ->
+        names_entry ~caller:"Schedule.schedule_legality" ~what:"legality" ~acc:hidden.acc msg
+    | Error exn, n ->
+        Stdio.eprintf "legality: %d ops ran, then %s (not part of the golden)\n%!" n
+          (Exn.to_string exn);
         false
-    | exception Invalid_argument msg ->
-        names_entry ~caller:"Schedule.schedule_legality" ~what:"legality" ~acc:hidden.acc msg);
+    | Ok verdicts, n ->
+        Stdio.eprintf "legality: %d verdicts, %d ops ran (not part of the golden)\n%!"
+          (List.length verdicts) n;
+        false);
   p "strict: the entry refusal is fatal, untyped (Invalid_argument, no cause)"
     (match classify ~strict:true (fun () -> Sched.apply_classified (gap hidden) hidden.opt) with
     | Error (Outcome.Fatal { exn = Invalid_argument msg; cause = None; _ }) ->
@@ -158,6 +168,10 @@ let () =
   let sched = [ pz pure; Sched.Retype { axis = pure.r; ty = LL.Serial } ] in
   let applied, dispatched = counting (fun () -> Sched.apply sched pure.opt) in
   p "a pure entry holding a pure scope body runs every op" (dispatched = List.length sched);
+  let verdicts, judged = counting (fun () -> Sched.schedule_legality pure.opt sched) in
+  p "and schedule_legality dispatches every op of it too" (judged = List.length sched);
+  p_none "judging none of them illegal" verdicts ~min:(List.length sched) ~f:(fun (_, v) ->
+      match v with Sched.Op_illegal _ -> true | _ -> false);
   let reference = values pure pure.opt in
   p
     "the unscheduled cells are distinct and moved off their seeds, so a swapped or dropped \

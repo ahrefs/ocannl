@@ -1974,7 +1974,22 @@ let get_name_exn asgns =
   in
   let result = loop asgns in
   if String.is_empty result then
-    invalid_arg ("Assignments.get_name_exn: no comments in code: " ^ to_string asgns)
+    (* The fix first, so the refusal's first line is the whole story; the code follows it, cut to
+       its head -- a routine's code can run to thousands of lines, and it only identifies which comp
+       was nameless. No fallback name is derived: it would rename the build files. *)
+    let max_code_lines = 20 in
+    let code_lines = String.split_lines (to_string asgns) in
+    let code =
+      match List.split_n code_lines max_code_lines with
+      | head, [] -> String.concat ~sep:"\n" head
+      | head, rest ->
+          String.concat ~sep:"\n" head ^ Printf.sprintf "\n... (%d more lines)" (List.length rest)
+    in
+    invalid_arg
+      ("Assignments.get_name_exn: the routine has no name: its code carries no Block_comment \
+        naming it. Compile [Train.forward t] rather than the bare [t.forward] (it wraps the code \
+        in a comment naming the routine), or pass [~name] to the compile.\n\
+        The code:\n" ^ code)
   else result
 
 let%track6_sexp lower ?(rewrite_target = Rewrites.conservative_target) ?blends_value_selects
