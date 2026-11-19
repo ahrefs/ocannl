@@ -24,8 +24,9 @@
    residual basis choice. Those two stores remain named, counted exceptions; every other store
    remains subject to all three claims. gh-ocannl-2268 adds a waiting-side use-site bound to
    gh-ocannl-2223's shared-claim example, solved in every order. No accepted answer sizes a
-   component to 0, since none of these is discardable (gh-ocannl-2316). Counts go to stderr. The
-   search runs whole. *)
+   component to 0, since none of these is discardable (gh-ocannl-2316), and a 0 stated for one is
+   refused in every order and batched (gh-ocannl-2368). Counts go to stderr. The search runs
+   whole. *)
 
 open! Base
 open Ocannl
@@ -590,6 +591,35 @@ let () =
         ~f:order_dependent;
       p_none ~min:1000 "bounded accepted runs that size a component to 0" bounded_runs
         ~f:zero_component;
+      (* gh-ocannl-2368: a 0 stated outright binds only a discardable component or a registered
+         concatenation component (a zero-width segment), and none of these is either, so stating [u
+         = 0] beside a concatenation is refused in every order and batched. On the base, [[v; u] =
+         4_t] took it, giving [v = 4]. *)
+      let zero_stated_runs =
+        List.concat_map tags ~f:(fun t ->
+            List.concat_map
+              [ "[u; 2v]=[k; 2 " ^ t ^ "]"; "[v; u]=4 " ^ t ]
+              ~f:(fun concat ->
+                let items =
+                  [
+                    item concat;
+                    {
+                      name = Printf.sprintf "u=0 %s" t;
+                      mk = (fun _ u _ -> eq (Var u) (tagged 0 t));
+                    };
+                  ]
+                in
+                List.map (batch items :: outcomes items) ~f:(fun out -> (items, out))))
+      in
+      p_all ~min:24
+        "runs with a 0 stated for a non-discardable component, refused in every order and batched"
+        zero_stated_runs ~f:(fun (items, out) ->
+          match out with
+          | Refused -> true
+          | Accepted sol ->
+              Stdio.eprintf "stated 0 accepted: %s => %s (not part of the golden)\n"
+                (store_name items) (solution_to_string sol);
+              false);
       p_none ~min:1000 "bounded accepted answers refused when stated up front" bounded_runs
         ~f:refuses_own_answer;
       (* What the rule newly solves, derived from its reach: a bound on k at d > 3, tagged default

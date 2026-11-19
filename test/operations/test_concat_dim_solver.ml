@@ -135,62 +135,135 @@ let test_ac1_glb_merge_postpone_below_stage4 () =
   | `Shape m -> fail "unexpected Shape_error: %s" m
   | `Other e -> fail "regression (expected no assert false): %s" e
 
-(* AC3 — variables-only [Concat = Concat] at UNEQUAL arity (3 components vs 2). The generalized
-   pairing arm fires at stage >= 4 (the old guard required equal arity), equates the oldest variable
-   of each side (a=d, then b=e) and re-runs under the new env, leaving c = 0 (since a+b+c = d+e with
-   a=d, b=e). We verify the arithmetic (c=0) and the LINK: forcing a := 7 must surface as d = 7, and
-   b := 9 as e = 9 — only possible if the oldest variables were actually equated. *)
-let test_ac3_unequal_arity_all_var () =
-  Stdio.printf "AC3: variables-only Concat=Concat at unequal arity (3 vs 2) links oldest vars\n";
-  let a = Row.get_var () and b = Row.get_var () and c = Row.get_var () in
-  let d = Row.get_var () and e = Row.get_var () in
-  let eq d1 d2 : Row.constraint_ = Row.Dim_eq { d1; d2; origin = dummy_origin } in
-  let lhs = Row.Concat [ Row.Var a; Row.Var b; Row.Var c ] in
-  let rhs = Row.Concat [ Row.Var d; Row.Var e ] in
-  match
-    try
-      let _rem, env = Row.solve_inequalities ~stage:Stage4 [ eq lhs rhs ] Row.empty_env in
-      let c_val = Row.get_dim_val env c in
-      let _rem, env = Row.solve_inequalities ~stage:Stage4 [ eq (Row.Var a) (dim 7) ] env in
-      let d_val = Row.get_dim_val env d in
-      let _rem, env = Row.solve_inequalities ~stage:Stage4 [ eq (Row.Var b) (dim 9) ] env in
-      let e_val = Row.get_dim_val env e in
-      `Ok (c_val, d_val, e_val)
-    with
-    | Row.Shape_error (m, _) -> `Shape m
-    | e -> `Other (Exn.to_string e)
-  with
-  | `Ok (Some 0, Some 7, Some 9) ->
-      Stdio.printf "  PASS: c=0, a=d (d read 7 after a:=7), b=e (e read 9 after b:=9)\n"
-  | `Ok (c_val, d_val, e_val) ->
-      let show = function Some n -> Int.to_string n | None -> "?" in
-      fail "c=%s d=%s e=%s (expected 0, 7, 9)" (show c_val) (show d_val) (show e_val)
-  | `Shape m -> fail "unexpected Shape_error: %s" m
-  | `Other e -> fail "regression (expected resolution, not exn): %s" e
+(* gh-ocannl-2368: a variables-only [Concat = Concat] at UNEQUAL arity (3 components vs 2) waits. [a
+   + b + c = d + e] implies neither [a = d] nor [c = 0]: the stage-4+ pairing that equated the
+   oldest variables (a = d, then b = e) left [c = 0], a size only a discardable component may take.
+   The equation stays pending, in either orientation, and links nothing; once the other components
+   are sized, arithmetic sizes the last one, positive, and an inconsistent size is still refused, so
+   the equation was kept, not dropped. Closed by a shape row with every component registered as a
+   concatenation component (closure guesses none of them, gh-ocannl-1656), it is refused rather than
+   sized. *)
+let test_unequal_arity_waits () =
+  Stdio.printf "Unequal arity: variables-only [a; b; c] = [d; e] waits, in either orientation\n";
+  let vars () = List.init 5 ~f:(fun _ -> Row.get_var ()) in
+  let equation ~flip vs =
+    match List.map vs ~f:(fun v -> Row.Var v) with
+    | [ a; b; c; d; e ] ->
+        let lhs = Row.Concat [ a; b; c ] and rhs = Row.Concat [ d; e ] in
+        if flip then eq rhs lhs else eq lhs rhs
+    | _ -> assert false
+  in
+  let size vs sizes =
+    List.filter_map (List.zip_exn vs sizes) ~f:(fun (v, n) ->
+        Option.map n ~f:(fun n -> eq (Row.Var v) (dim n)))
+  in
+  let show env v = match Row.get_dim_val env v with Some n -> Int.to_string n | None -> "?" in
+  List.iter [ false; true ] ~f:(fun flip ->
+      let side = if flip then "[d; e] = [a; b; c]" else "[a; b; c] = [d; e]" in
+      let vs = vars () in
+      (match run_solve ~stage:Stage4 [ equation ~flip vs ] with
+      | `Ok (pending, env) ->
+          let a = List.nth_exn vs 0 and c = List.nth_exn vs 2 and d = List.nth_exn vs 3 in
+          let linked =
+            match run_solve_env ~stage:Stage4 (pending @ [ eq (Row.Var a) (dim 7) ]) env with
+            | `Ok (_, env) -> Option.is_some (Row.get_dim_val env d)
+            | _ -> true
+          in
+          if List.length pending = 1 && Option.is_none (Row.get_dim_val env c) && not linked then
+            Stdio.printf "  PASS: %s: one pending equation, c unsized, a := 7 leaves d unsized\n"
+              side
+          else
+            fail "%s: %d pending, c=%s, linked=%b (expected 1, ?, false)" side (List.length pending)
+              (show env c) linked
+      | `Shape m -> fail "%s: unexpected Shape_error: %s" side m
+      | `Other e -> fail "%s: regression: %s" side e);
+      let vs = vars () in
+      let e = List.nth_exn vs 4 in
+      match run_solve ~stage:Stage4 [ equation ~flip vs ] with
+      | `Ok (pending, env) -> (
+          (match
+             run_solve_env ~stage:Stage4
+               (pending @ size vs [ Some 2; Some 3; Some 4; Some 1; None ])
+               env
+           with
+          | `Ok ([], env) when Option.equal Int.equal (Row.get_dim_val env e) (Some 8) ->
+              Stdio.printf "  PASS: %s: a, b, c, d = 2, 3, 4, 1 then sizes e = 8, nothing pending\n"
+                side
+          | `Ok (rest, env) ->
+              fail "%s: e=%s with %d pending (expected 8, none)" side (show env e)
+                (List.length rest)
+          | `Shape m -> fail "%s: sizing refused: %s" side m
+          | `Other m -> fail "%s: regression: %s" side m);
+          match
+            run_solve_env ~stage:Stage4
+              (pending @ size vs [ Some 2; Some 3; Some 4; Some 1; Some 7 ])
+              env
+          with
+          | `Shape _ -> Stdio.printf "  PASS: %s: e = 7 against the same sizes is refused\n" side
+          | `Ok _ -> fail "%s: e = 7 accepted: the equation was dropped" side
+          | `Other m -> fail "%s: regression: %s" side m)
+      | `Shape m -> fail "%s: unexpected Shape_error: %s" side m
+      | `Other e -> fail "%s: regression: %s" side e);
+  let vs = vars () in
+  List.iter vs ~f:Row.add_concat_component;
+  let close : Row.constraint_ =
+    Row.Shape_row
+      ( {
+          beg_dims = [];
+          dims = List.map vs ~f:(fun v -> Row.Var v);
+          bcast = Broadcastable;
+          prov = Row.provenance ~sh_id:2368 ~kind:`Output;
+        },
+        dummy_origin )
+  in
+  let result =
+    List.fold
+      [
+        (Row.Stage1, [ equation ~flip:false vs ]);
+        (Stage4, [ close ]);
+        (Stage5, []);
+        (Stage6a, []);
+        (Stage6b, []);
+        (Stage7, []);
+      ]
+      ~init:(`Ok ([], Row.empty_env))
+      ~f:(fun acc (stage, cs) ->
+        match acc with
+        | `Ok (pending, env) -> run_solve_env ~stage (pending @ cs) env
+        | other -> other)
+  in
+  match result with
+  | `Shape m -> Stdio.printf "  PASS: closed as concatenation components: refused: %s\n" m
+  | `Ok (_, env) ->
+      fail "closed as concatenation components: accepted, c = %s" (show env (List.nth_exn vs 2))
+  | `Other e -> fail "closed as concatenation components: regression: %s" e
 
-(* AC3 — the pairing arm fires even when the OTHER side carries a solved [Dim] (the guard is "one
-   side all-Var", not "overlap all-Var", and must take precedence over the arithmetic-cancellation
-   arm). [Concat a^b] = [Concat (Dim 4)^e] with a,b,e variables: the all-Var left side fires the
-   arm, the oldest residual variables a and e are equated, and the leftover binds b to the solved 4
-   (a+b = 4+e with a=e ⟹ b=4). We verify b = 4. *)
-let test_ac3_one_side_all_var_other_has_solved () =
-  Stdio.printf "AC3: one side all-Var, other carries a solved Dim — pairing arm still fires\n";
+(* gh-ocannl-2368: a variables-only side against one carrying a solved [Dim] waits too. The stage-4+
+   pairing equated [a = e] in [[a; b] = [4; e]] and so chose the split [b = 4]; nothing in the
+   equation forces it. Once [a] and [e] are sized, arithmetic sizes [b]. *)
+let test_solved_side_waits () =
+  Stdio.printf "A solved side: [a; b] = [4; e] waits; a = 2, e = 3 then size b = 5\n";
   let a = Row.get_var () and b = Row.get_var () and e = Row.get_var () in
-  let eq d1 d2 : Row.constraint_ = Row.Dim_eq { d1; d2; origin = dummy_origin } in
   let lhs = Row.Concat [ Row.Var a; Row.Var b ] in
   let rhs = Row.Concat [ dim 4; Row.Var e ] in
-  match
-    try
-      let _rem, env = Row.solve_inequalities ~stage:Stage4 [ eq lhs rhs ] Row.empty_env in
-      `Ok (Row.get_dim_val env b)
-    with
-    | Row.Shape_error (m, _) -> `Shape m
-    | ex -> `Other (Exn.to_string ex)
-  with
-  | `Ok (Some 4) ->
-      Stdio.printf "  PASS: leftover bound b = 4 (solved Dim crossed into all-Var side)\n"
-  | `Ok other ->
-      fail "expected b = 4, got %s" (match other with Some n -> Int.to_string n | None -> "?")
+  match run_solve ~stage:Stage4 [ eq lhs rhs ] with
+  | `Ok (pending, env) -> (
+      if Option.is_some (Row.get_dim_val env b) || List.length pending <> 1 then
+        fail "expected one pending equation and b unsized, got %d pending, b sized"
+          (List.length pending)
+      else Stdio.printf "  PASS: one pending equation, b unsized\n";
+      match
+        run_solve_env ~stage:Stage4
+          (pending @ [ eq (Row.Var a) (dim 2); eq (Row.Var e) (dim 3) ])
+          env
+      with
+      | `Ok ([], env) when Option.equal Int.equal (Row.get_dim_val env b) (Some 5) ->
+          Stdio.printf "  PASS: b = 5 from the sum, nothing pending\n"
+      | `Ok (_, env) ->
+          fail "expected b = 5, got %s"
+            (match Row.get_dim_val env b with Some n -> Int.to_string n | None -> "?")
+      | `Shape m -> fail "sizing refused: %s" m
+      | `Other m -> fail "regression: %s" m)
   | `Shape m -> fail "unexpected Shape_error: %s" m
   | `Other e -> fail "regression (expected no assert false): %s" e
 
@@ -307,12 +380,21 @@ let test_concrete_concat () =
    system below gets one verdict whichever of its equations is solved first. *)
 let test_tagged_components_any_order () =
   Stdio.printf "Tagged components: one verdict in either order\n";
+  (* A system's discardable variables, set by its [mk] (only a 0 needs one, gh-ocannl-2368). *)
+  let discardable = ref Row.dim_var_set_empty in
   let solve_in_turn cs =
     List.fold cs
       ~init:(`Ok ([], Row.empty_env))
       ~f:(fun acc c ->
         match acc with
-        | `Ok (deferred, env) -> run_solve_env ~stage:Stage4 (deferred @ [ c ]) env
+        | `Ok (deferred, env) -> (
+            try
+              `Ok
+                (Row.solve_inequalities ~stage:Stage4 ~discardable_vars:!discardable
+                   (deferred @ [ c ]) env)
+            with
+            | Row.Shape_error (m, _) -> `Shape m
+            | e -> `Other (Exn.to_string e))
         | other -> other)
   in
   let value env v =
@@ -322,6 +404,7 @@ let test_tagged_components_any_order () =
   in
   let in_both_orders name (mk : unit -> Row.dim_var * Row.constraint_ * Row.constraint_) ~want =
     let verdict first =
+      discardable := Row.dim_var_set_empty;
       let u, c1, c2 = mk () in
       match solve_in_turn (if first then [ c1; c2 ] else [ c2; c1 ]) with
       | `Ok (_, env) -> "u = " ^ value env u
@@ -360,9 +443,11 @@ let test_tagged_components_any_order () =
       let a = Row.get_var () and u = Row.get_var () in
       (u, eq (concat_of a u) (dim 4), eq (Row.Var a) (dim ~basis:Row.bcast_if_1 1)))
     ~want:"u = 3 of default";
-  in_both_orders "[a; u] = 3 rgb, a = 0 bcast_if_1: an empty segment claims nothing"
+  (* A 0 binds a discardable component only (gh-ocannl-2368), as a block spec's would be. *)
+  in_both_orders "[a; u] = 3 rgb, a = 0 bcast_if_1, a discardable: an empty segment claims nothing"
     (fun () ->
       let a = Row.get_var () and u = Row.get_var () in
+      discardable := Set.add Row.dim_var_set_empty a;
       (u, eq (concat_of a u) (dim ~basis:rgb 3), eq (Row.Var a) (dim ~basis:Row.bcast_if_1 0)))
     ~want:"u = 3 of rgb";
   in_both_orders "[u; 2] = [k; 2 rgb], k = 3: a zero residual keeps its claim"
@@ -409,32 +494,46 @@ let test_zero_component () =
     | Some (Row.Dim { d; basis; _ }) -> Printf.sprintf "%d of %s" d basis
     | _ -> "unsized"
   in
-  let verdict ~discardable mk order =
-    let u = Row.get_var () and k = Row.get_var () in
-    let cs = mk u k in
+  (* [discardable] names which of [u] and a third variable [w] a block spec would have marked. A run
+     is solved one constraint per Stage 1 pass in [order], or all in one ([batched]). Success
+     requires nothing left pending (gh-ocannl-2368). *)
+  let verdict ~discardable ~batched mk order =
+    let u = Row.get_var () and k = Row.get_var () and w = Row.get_var () in
+    let cs = mk u k w in
     let discardable_vars =
-      if discardable then Set.add Row.dim_var_set_empty u else Row.dim_var_set_empty
+      match discardable with
+      | `None -> Row.dim_var_set_empty
+      | `U -> Set.add Row.dim_var_set_empty u
+      | `W -> Set.add Row.dim_var_set_empty w
     in
+    let registered = List.map order ~f:(fun i -> List.nth_exn cs i) in
     let stages =
-      List.map order ~f:(fun i -> (Row.Stage1, [ List.nth_exn cs i ]))
-      @ [ (Row.Stage2, []); (Stage3, []); (Stage4, [ close [ u; k ] ]) ]
+      (if batched then [ (Row.Stage1, registered) ]
+       else List.map registered ~f:(fun c -> (Row.Stage1, [ c ])))
+      @ [ (Row.Stage2, []); (Stage3, []); (Stage4, [ close [ u; k; w ] ]) ]
       @ List.map [ Row.Stage5; Stage6a; Stage6b; Stage7 ] ~f:(fun s -> (s, []))
     in
     match
       List.fold stages ~init:([], Row.empty_env) ~f:(fun (deferred, env) (stage, cs) ->
           Row.solve_inequalities ~stage ~discardable_vars (deferred @ cs) env)
     with
-    | _, env -> Printf.sprintf "u = %s, k = %s" (value env u) (value env k)
+    | [], env -> Printf.sprintf "u = %s, k = %s" (value env u) (value env k)
+    | pending, _ -> Printf.sprintf "%d pending" (List.length pending)
     | exception Row.Shape_error _ -> "refused"
     | exception e -> "regression: " ^ Exn.to_string e
   in
-  let in_every_order ?(discardable = false) name ~n mk ~want =
+  let in_every_order ?(discardable = `None) name ~n mk ~want =
     let orders = permutations (List.init n ~f:Fn.id) in
-    Verdict.Claims.p_all ~min:(List.length orders)
-      (Printf.sprintf "  %s: %s in every order" name want) orders ~f:(fun order ->
-        let got = verdict ~discardable mk order in
+    let runs = List.cartesian_product [ false; true ] orders in
+    Verdict.Claims.p_all
+      ~min:(2 * List.length orders)
+      (Printf.sprintf "  %s: %s in every order, and batched" name want)
+      runs
+      ~f:(fun (batched, order) ->
+        let got = verdict ~discardable ~batched mk order in
         if not (String.equal got want) then
-          Stdio.eprintf "  %s, order %s: %s (not part of the golden)\n" name
+          Stdio.eprintf "  %s, %s %s: %s (not part of the golden)\n" name
+            (if batched then "batched" else "order")
             (String.concat ~sep:"," (List.map order ~f:Int.to_string))
             got;
         String.equal got want)
@@ -446,35 +545,34 @@ let test_zero_component () =
       in_every_order
         ("[u; 4] = [k; 2 " ^ t ^ "], k = 2: the zero residual is not sized")
         ~n:2
-        (fun u k -> [ concat u k ~basis:t; eq (Row.Var k) (dim 2) ])
+        (fun u k _ -> [ concat u k ~basis:t; eq (Row.Var k) (dim 2) ])
         ~want:"refused";
       in_every_order
         ("[u; 4] = [k; 2 " ^ t ^ "], k = 2, u = 0 " ^ t ^ ": the answer the base gave, stated")
         ~n:3
-        (fun u k ->
+        (fun u k _ ->
           [ concat u k ~basis:t; eq (Row.Var k) (dim 2); eq (Row.Var u) (dim ~basis:t 0) ])
         ~want:"refused";
       in_every_order
         ("[u; 4] = [k; 2 " ^ t ^ "], k = 4: a positive residual takes the claim")
         ~n:2
-        (fun u k -> [ concat u k ~basis:t; eq (Row.Var k) (dim 4) ])
+        (fun u k _ -> [ concat u k ~basis:t; eq (Row.Var k) (dim 4) ])
         ~want:("u = 2 of " ^ t ^ ", k = 4 of default");
-      in_every_order ~discardable:true
+      in_every_order ~discardable:`U
         ("[u; 4] = [k; 2 " ^ t ^ "], k = 2, u discardable: an empty segment cannot carry the claim")
         ~n:2
-        (fun u k -> [ concat u k ~basis:t; eq (Row.Var k) (dim 2) ])
+        (fun u k _ -> [ concat u k ~basis:t; eq (Row.Var k) (dim 2) ])
         ~want:"refused");
   in_every_order "[u; 4] = [k; 2], k = 2: no claim, still not sized" ~n:2
-    (fun u k -> [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2) ])
+    (fun u k _ -> [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2) ])
     ~want:"refused";
-  in_every_order ~discardable:true "[u; 4] = [k; 2], k = 2, u discardable: sized 0" ~n:2
-    (fun u k -> [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2) ])
+  in_every_order ~discardable:`U "[u; 4] = [k; 2], k = 2, u discardable: sized 0" ~n:2
+    (fun u k _ -> [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2) ])
     ~want:"u = 0 of default, k = 2 of default";
   (* The permission to be empty is the component's: an alias it was equated with may be sized 0 by
      the sum too, whichever of the two the substitution presents. *)
-  in_every_order ~discardable:true "[u; 4] = [k; 2], k = 2, u = w, u discardable: sized 0" ~n:3
-    (fun u k ->
-      let w = Row.get_var () in
+  in_every_order ~discardable:`U "[u; 4] = [k; 2], k = 2, u = w, u discardable: sized 0" ~n:3
+    (fun u k w ->
       [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2); eq (Row.Var u) (Row.Var w) ])
     ~want:"u = 0 of default, k = 2 of default";
   (* A zero residual decides its basis before it waits: two bounds [4] and [[u; 4_a]] on one operand
@@ -495,12 +593,203 @@ let test_zero_component () =
          with
         | _ -> true
         | exception Row.Shape_error _ -> false));
-  (* A 0 stated outright is the statement's, not the arithmetic's: substitution consumes it, and the
-     equation waits rather than refusing, so it meets one verdict whichever arrives first. *)
-  in_every_order "[u; 4] = [k; 2], k = 2, u = 0 stated: one verdict in every order" ~n:3
-    (fun u k ->
+  (* A 0 stated outright binds only a variable that may be empty (gh-ocannl-2368). For any other it
+     waits while constraints register, so an alias to a discardable variable arriving later still
+     binds it, and is refused at closing. On the base this store accepted [u = 0]. *)
+  in_every_order "[u; 4] = [k; 2], k = 2, u = 0 stated: refused" ~n:3
+    (fun u k _ ->
       [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2); eq (Row.Var u) (dim 0) ])
-    ~want:"u = 0 of default, k = 2 of default"
+    ~want:"refused";
+  in_every_order "u = 0 stated, nothing else: refused" ~n:1
+    (fun u _ _ -> [ eq (Row.Var u) (dim 0) ])
+    ~want:"refused";
+  in_every_order "0 = u stated, nothing else: refused" ~n:1
+    (fun u _ _ -> [ eq (dim 0) (Row.Var u) ])
+    ~want:"refused";
+  in_every_order ~discardable:`U "u = 0 stated, u discardable: sized 0" ~n:1
+    (fun u _ _ -> [ eq (Row.Var u) (dim 0) ])
+    ~want:"u = 0 of default, k = 1 of bcast_if_1";
+  (* The permission travels with an equation, whichever comes first: [w] discardable sized 0 and [u
+     = w] in either order (the 0 [u] inherits came through substitution), or [u = 0] stated before
+     the alias that licenses it. *)
+  in_every_order ~discardable:`W "w = 0, u = w, w discardable: u inherits 0" ~n:2
+    (fun u _ w -> [ eq (Row.Var w) (dim 0); eq (Row.Var u) (Row.Var w) ])
+    ~want:"u = 0 of default, k = 1 of bcast_if_1";
+  in_every_order ~discardable:`W "u = 0, u = w, w discardable: the alias licenses u" ~n:2
+    (fun u _ w -> [ eq (Row.Var u) (dim 0); eq (Row.Var u) (Row.Var w) ])
+    ~want:"u = 0 of default, k = 1 of bcast_if_1";
+  (* A row equation substitutes [w] before its axes meet, so the 0 reaches [u] as a value, not a
+     statement: it is inherited in either order. *)
+  in_every_order ~discardable:`W "w = 0, [u] = [w] as rows, w discardable: u inherits 0" ~n:2
+    (fun u _ w ->
+      let row v : Row.t =
+        {
+          beg_dims = [];
+          dims = [ Row.Var v ];
+          bcast = Broadcastable;
+          prov = Row.provenance ~sh_id:2368 ~kind:`Output;
+        }
+      in
+      [ eq (Row.Var w) (dim 0); Row.Row_eq { r1 = row u; r2 = row w; origin = dummy_origin } ])
+    ~want:"u = 0 of default, k = 1 of bcast_if_1";
+  in_every_order "u = [] stated, the empty concatenation: refused" ~n:1
+    (fun u _ _ -> [ eq (Row.Var u) (Row.Concat []) ])
+    ~want:"refused";
+  (* Equal values are no alias: [w] sized 0 licenses no other variable sized 0 by a literal. *)
+  in_every_order ~discardable:`W "w = 0, u = 0, w discardable: u is refused" ~n:2
+    (fun u _ w -> [ eq (Row.Var w) (dim 0); eq (Row.Var u) (dim 0) ])
+    ~want:"refused";
+  (* A concatenation component stated 0 is a zero-width segment, as an einsum extraction's capture
+     [p^o^q => o] with [q = 0] states it (einsum specs mark no discardable component). The
+     arithmetic still waits on a component's zero residual: [[u; 4] = [k; 2]] meets [u = 0] in every
+     order, and alone it is refused at closure, which sizes no component. *)
+  in_every_order "u a concatenation component, u = 0 stated: a zero-width segment" ~n:1
+    (fun u _ _ ->
+      Row.add_concat_component u;
+      [ eq (Row.Var u) (dim 0) ])
+    ~want:"u = 0 of default, k = 1 of bcast_if_1";
+  in_every_order "[u; 4] = [k; 2], k = 2, u = 0 stated, u a component: sized 0" ~n:3
+    (fun u k _ ->
+      Row.add_concat_component u;
+      [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2); eq (Row.Var u) (dim 0) ])
+    ~want:"u = 0 of default, k = 2 of default";
+  in_every_order "[u; 4] = [k; 2], k = 2, u a component: the zero residual is not sized" ~n:2
+    (fun u k _ ->
+      Row.add_concat_component u;
+      [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2) ])
+    ~want:"refused";
+  (* A residual of one component erases to it, which passed a bare 0 to the binding: [[k; u; 2] =
+     [k; 2]] cancels to [[u] = []] and sized [u] to 0 on the base. It waits as the [Concat]/[Dim]
+     residual does. *)
+  in_every_order "[k; u; 2] = [k; 2], u a component: refused, not sized 0" ~n:1
+    (fun u k _ ->
+      Row.add_concat_component u;
+      [ eq (Row.Concat [ Row.Var k; Row.Var u; dim 2 ]) (Row.Concat [ Row.Var k; dim 2 ]) ])
+    ~want:"refused";
+  in_every_order ~discardable:`U "[k; u; 2] = [k; 2], u discardable: sized 0" ~n:1
+    (fun u k _ ->
+      [ eq (Row.Concat [ Row.Var k; Row.Var u; dim 2 ]) (Row.Concat [ Row.Var k; dim 2 ]) ])
+    ~want:"u = 0 of default, k = 1 of bcast_if_1"
+
+(* gh-ocannl-2368: closure's guesses read the permission to be empty through an alias. With [u]
+   discardable and [u = w], closure sizes both 0 in either orientation of the equation, which
+   decides whether substitution presents [u] or [w]; on the base, plain membership guessed [w] to 1
+   when it represented the two. With [w] registered as a concatenation component, the guess still
+   goes to 0 instead of refusing to size it (gh-ocannl-1656 exempts a component that may be
+   empty). *)
+let test_alias_guesses_empty () =
+  Stdio.printf "Closure guesses an alias of a discardable component to 0\n";
+  let solve ~component ~u_first =
+    let u = Row.get_var () and w = Row.get_var () in
+    if component then Row.add_concat_component w;
+    let alias = if u_first then eq (Row.Var u) (Row.Var w) else eq (Row.Var w) (Row.Var u) in
+    let close : Row.constraint_ =
+      Row.Shape_row
+        ( {
+            beg_dims = [];
+            dims = [ Row.Var w ];
+            bcast = Broadcastable;
+            prov = Row.provenance ~sh_id:2368 ~kind:`Output;
+          },
+          dummy_origin )
+    in
+    let discardable_vars = Set.add Row.dim_var_set_empty u in
+    match
+      List.fold
+        [
+          (Row.Stage1, [ alias ]);
+          (Stage4, [ close ]);
+          (Stage5, []);
+          (Stage6a, []);
+          (Stage6b, []);
+          (Stage7, []);
+        ]
+        ~init:([], Row.empty_env)
+        ~f:(fun (pending, env) (stage, cs) ->
+          Row.solve_inequalities ~stage ~discardable_vars (pending @ cs) env)
+    with
+    | [], env -> (Row.get_dim_val env u, Row.get_dim_val env w)
+    | _ -> (None, None)
+    | exception Row.Shape_error _ -> (None, None)
+  in
+  List.iter [ false; true ] ~f:(fun component ->
+      Verdict.Claims.p_all ~min:2
+        (Printf.sprintf "  u = w, u discardable%s: both 0 in either orientation, nothing pending"
+           (if component then ", w a concatenation component" else ""))
+        [ true; false ]
+        ~f:(fun u_first ->
+          match solve ~component ~u_first with
+          | Some 0, Some 0 -> true
+          | u, w ->
+              let show = function Some n -> Int.to_string n | None -> "?" in
+              Stdio.eprintf
+                "  alias guess (u_first=%b, component=%b): u=%s w=%s (not part of the golden)\n"
+                u_first component (show u) (show w);
+              false));
+  (* [concat_bounded_waiting] carries a waiting component's bound onto its closing partner whether
+     or not that partner may be empty: gh-ocannl-2268's store [w(s2,k3) (v) = 5_a ; [u; 2v] = [k;
+     2_a] ; k >= 5] with [u] equated to a discardable [w] has the one answer [u = 3_a, k = 5], since
+     [u = 0] would make [k = 2_a], which its bound refutes. On the base, plain membership refused it
+     when [w] represented the two. *)
+  let bounded_store ~u_first =
+    let v = Row.get_var () and u = Row.get_var () and k = Row.get_var () and w = Row.get_var () in
+    let window =
+      Row.Affine
+        {
+          stride = 2;
+          over = Row.Var v;
+          conv = Some { dilation = 1; kernel = dim 3; use_padding = false };
+          stride_offset = 0;
+        }
+    in
+    let doubled = Row.Affine { stride = 2; over = Row.Var v; conv = None; stride_offset = 0 } in
+    let cs =
+      [
+        eq window (dim ~basis:"a" 5);
+        eq (Row.Concat [ Row.Var u; doubled ]) (Row.Concat [ Row.Var k; dim ~basis:"a" 2 ]);
+        ineq (dim 5) k;
+        (if u_first then eq (Row.Var u) (Row.Var w) else eq (Row.Var w) (Row.Var u));
+      ]
+    in
+    let close : Row.constraint_ =
+      Row.Shape_row
+        ( {
+            beg_dims = [];
+            dims = List.map [ v; u; k; w ] ~f:(fun x -> Row.Var x);
+            bcast = Broadcastable;
+            prov = Row.provenance ~sh_id:2368 ~kind:`Output;
+          },
+          dummy_origin )
+    in
+    let discardable_vars = Set.add Row.dim_var_set_empty w in
+    let show env x =
+      match Row.get_dim_from_env env x with
+      | Some (Row.Dim { d; basis; _ }) -> Printf.sprintf "%d of %s" d basis
+      | _ -> "unsized"
+    in
+    match
+      List.fold
+        (List.map cs ~f:(fun c -> (Row.Stage1, [ c ]))
+        @ [ (Row.Stage4, [ close ]); (Stage5, []); (Stage6a, []); (Stage6b, []); (Stage7, []) ])
+        ~init:([], Row.empty_env)
+        ~f:(fun (pending, env) (stage, cs) ->
+          Row.solve_inequalities ~stage ~discardable_vars (pending @ cs) env)
+    with
+    | [], env -> Printf.sprintf "u = %s, k = %s" (show env u) (show env k)
+    | pending, _ -> Printf.sprintf "%d pending" (List.length pending)
+    | exception Row.Shape_error _ -> "refused"
+  in
+  let want = "u = 3 of a, k = 5 of default" in
+  Verdict.Claims.p_all ~min:2
+    ("  a bounded closing component aliased to a discardable one: " ^ want
+   ^ " in either orientation")
+    [ true; false ]
+    ~f:(fun u_first ->
+      let got = bounded_store ~u_first in
+      if not (String.equal got want) then
+        Stdio.eprintf "  bounded store aliased (u_first=%b): %s (not part of the golden)\n" u_first
+          got;
+      String.equal got want)
 
 (* With a claim already on each prefix, the ordinary ground equation accepts the free components
    under their own bounds. Exercise the closing prepass without the window that sizes the prefix in
@@ -604,12 +893,13 @@ let () =
   test_ac1_glb_merge_compatible ();
   test_ac1_glb_merge_incompatible_demotes ();
   test_ac1_glb_merge_postpone_below_stage4 ();
-  test_ac3_unequal_arity_all_var ();
-  test_ac3_one_side_all_var_other_has_solved ();
+  test_unequal_arity_waits ();
+  test_solved_side_waits ();
   test_nested_concat_flattened ();
   test_ac3_affine_residual_not_overconstrained ();
   test_concrete_concat ();
   test_tagged_components_any_order ();
   test_zero_component ();
+  test_alias_guesses_empty ();
   Verdict.case "plain concatenation bounds" test_plain_concat_bounds;
   Stdio.printf "=== Done ===\n"

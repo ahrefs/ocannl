@@ -36,6 +36,7 @@ k >= 3_default with no u bound gives u = 1_a and k = 3_default in one batch: tru
 k >= 3_default with no u bound gives u = 1_a and k = 3_default when stated up front: true
 bounded stores whose verdict or solution depends on the order: true
 bounded accepted runs that size a component to 0: true
+runs with a 0 stated for a non-discardable component, refused in every order and batched: true
 bounded accepted answers refused when stated up front: true
 a bounded waiting side above the sum's minimum settles to its bound in every order: true
 bounded stores registered in one batch settling otherwise: true

@@ -16,15 +16,19 @@ let fail fmt = Printf.ksprintf Verdict.fail fmt
    the second drives the merge) — the honest reachability check, since this is by construction a
    broadcast [Dim_ineq] between [Concat] bounds rather than an equality through [unify_dim].
 
-   - AC3: an unequal-arity, variables-only [Concat = Concat] equality. The old guard required equal
-   arity and left these deferred forever; the generalized stage-4+ variable-pairing arm equates the
-   oldest variable of each side and re-runs, resolving deterministically at any arity.
+   - AC3: an unequal-arity, variables-only [Concat = Concat] equality. A stage-4+ generalization of
+   the variable pairing once equated the oldest variable of each side and re-ran, which sized a
+   disjoint equation's leftover component to 0 ([[a; b; c] = [d; e]] gave [c = 0]), a size only a
+   discardable component may take. The constraints decide no such pairing, so a disjoint equation
+   now waits at every stage until its components are sized (gh-ocannl-2368). A shared component
+   cancels, and a singleton residual side is the sum of the other ([[s; a; b] = [s; c]] solves [c =
+   a + b]), so those stay solved.
 
    Crucially, every assertion checks the EXACT solver outcome, distinguishing three cases: [Solved]
    (returned with NO leftover constraints — the equation is actually solved), [Deferred n] (returned
-   without error but left [n] unsolved constraints — the pre-fix behaviour for AC3), and [Raised] (a
-   [Shape_error] / occurs-check / [assert false] escaped). A bare "did not raise" check would pass
-   on the pre-fix [Deferred] behaviour, so it is not used. *)
+   without error but left [n] unsolved constraints), and [Raised] (a [Shape_error] / occurs-check /
+   [assert false] escaped). A bare "did not raise" check cannot tell a pending equation from a
+   solved one, so it is not used. *)
 
 let dummy_origin : Row.constraint_origin list =
   [ { lhs_name = "t"; lhs_kind = `Output; rhs_name = "t"; rhs_kind = `Output; operation = None } ]
@@ -86,14 +90,14 @@ let test_ac1_concat_glb_merge () =
   in
   report "two Concat GLB bounds merge at stage 4" ~expect:Solved (run ~stage:Stage4 cs)
 
-(* AC3 — unequal-arity, variables-only [Concat = Concat] is SOLVED (leftover empty) at stage 4. The
-   disjoint cases are the shape the old equal-arity guard rejected (it would leave them [Deferred]);
-   the shared-leading-component cases are the nested-stacking shape (a common operand axis cancels,
-   leaving an unequal variables-only residual). [Solved] — not merely "did not raise" — is what
-   distinguishes the fix from the pre-fix deferral. *)
+(* AC3 — unequal-arity, variables-only [Concat = Concat] at stage 4. A disjoint equation waits
+   ([Deferred 1]: its one equation stays pending), since pairing its variables would choose a split,
+   and size a leftover to 0. A shared leading component cancels, leaving a singleton side that is
+   the sum of the other, which is [Solved]. On the base the disjoint cases read [Solved], with the
+   leftover sized 0. *)
 let test_ac3_unequal_arity_solved () =
-  Stdio.printf "AC3: unequal-arity variables-only Concat = Concat is SOLVED at stage 4\n";
-  report "3-var = 2-var (disjoint)" ~expect:Solved
+  Stdio.printf "AC3: unequal-arity variables-only Concat = Concat at stage 4: disjoint waits\n";
+  report "3-var = 2-var (disjoint)" ~expect:(Deferred 1)
     (run ~stage:Stage4
        [
          Row.Dim_eq
@@ -103,7 +107,7 @@ let test_ac3_unequal_arity_solved () =
              origin = dummy_origin;
            };
        ]);
-  report "2-var = 3-var (disjoint)" ~expect:Solved
+  report "2-var = 3-var (disjoint)" ~expect:(Deferred 1)
     (run ~stage:Stage4
        [
          Row.Dim_eq
@@ -132,12 +136,9 @@ let test_ac3_unequal_arity_solved () =
            };
        ])
 
-(* AC3 stage gating — below stage 4 the generalized variable-pairing arm must NOT fire, so an
-   unequal-arity variables-only equation is left [Deferred] (exactly one leftover constraint here),
-   NOT [Solved]. This instantiates the [is_stage4_up] guard's false branch: if the stage gate were
-   removed, this would resolve to [Solved] and the assertion would fail. *)
+(* AC3 below stage 4 — the disjoint equation waits at stage 1 too: no stage pairs it. *)
 let test_ac3_stage_gate_defers () =
-  Stdio.printf "AC3: below stage 4 the equation is DEFERRED (gate holds), not solved\n";
+  Stdio.printf "AC3: below stage 4 the equation is DEFERRED, not solved\n";
   report "3-var = 2-var deferred at stage 1" ~expect:(Deferred 1)
     (run ~stage:Stage1
        [
