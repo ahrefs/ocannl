@@ -393,7 +393,8 @@ let () =
    found (a window's extent under a fixed index and over a leaf), so the store is staged: the unheld
    twin pins the wait, the held store the guard. With the guard removed the held store's leaf waits
    through stage 6b and still closes 1 at stage 7: the guard keeps the closing order, it does not
-   change this store's value. *)
+   change this store's value. That stage-7 value is printed in the trace, not claimed: a later rule
+   that let the held extent's minimum reach the leaf is a re-promotion. *)
 let () =
   Verdict.case "a leaf below a minimum, through a held window extent" @@ fun () ->
   let store ~held_window =
@@ -435,5 +436,4 @@ let () =
   pf "with no window, the leaf waits through stage 6b and takes the minimum at stage 7"
     (String.equal (unheld Stage6b) "?" && String.equal (unheld Stage7) "8");
   pf "through a held window extent, the leaf keeps its broadcast guess at stage 5"
-    (String.equal (held Stage5) "1");
-  pf "the held extent's minimum does not reach the leaf at stage 7" (String.equal (held Stage7) "1")
+    (String.equal (held Stage5) "1")

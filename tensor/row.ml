@@ -5589,6 +5589,26 @@ let in_param_bound_component env v =
   in
   go dim_var_set_empty [ v ]
 
+(* gh-ocannl-2319, gh-ocannl-2370: the blocks of [counter] that [cells] take under a packed draw's
+   total [constr], with the draw's own coefficient. [None] unless [constr] is a plain round-up over
+   [counter] (substituted). *)
+let round_up_blocks env constr ~counter cells =
+  match constr with
+  | Total_elems
+      { numerator = Strided_var { coeff; var; denom; round_up = true }; divided_by = []; _ }
+    when equal_dim (subst_dim env (Var var)) (Var counter) ->
+      let coeff_val = Utils.safe_force coeff in
+      if coeff_val > 0 then solve_strided_var ~coeff_val ~denom ~round_up:true cells else None
+  | _ -> None
+
+(* gh-ocannl-2319, gh-ocannl-2370: the (substituted) dimension variables of the totals still pending
+   among [ineqs]: a counter they mention has a sharer [counter_sharers] cannot see, since it reads
+   only totals stored in row bounds. *)
+let pending_total_vars env ineqs =
+  List.fold ineqs ~init:dim_var_set_empty ~f:(fun acc -> function
+    | Rows_constr { constr; _ } -> Set.union acc (total_vars env constr)
+    | _ -> acc)
+
 (* gh-ocannl-2370: the blocks of [counter] the packed draw [w] needs once its GLB's axes close at
    their least sizes: a concrete axis at its size, a {!pending_minimum} at its minimum when stage 7
    closes it there first -- not an axis a held window or concatenation equation defers
@@ -5596,33 +5616,21 @@ let in_param_bound_component env v =
    an open remainder or another axis, or [w]'s total is not a plain round-up over [counter]. *)
 let packed_minimum_demand ~deferred_dims env w counter =
   match find_row env.row_env w with
-  | Some
-      (Bounds_row
-         {
-           glb = Some glb;
-           constr =
-             Total_elems
-               {
-                 numerator = Strided_var { coeff; var; denom; round_up = true };
-                 divided_by = [];
-                 _;
-               };
-           _;
-         })
-    when equal_dim (subst_dim env (Var var)) (Var counter) -> (
+  | Some (Bounds_row { glb = Some glb; constr; _ }) -> (
       let glb = subst_row env glb in
       let least = function
         | Dim { d; _ } -> Some d
+        (* Neither exclusion is pinned: the staged stores tried for them (a held stride-one window
+           sizing a 12-cell axis to 13, four blocks; a parameter-bound minimum) are refused on the
+           base too, since a draw under a GLB row closes to it at stage 7 whatever this arm did.
+           They keep the prediction to the axes stage 7 closes at their minima first. *)
         | Var x when Set.mem deferred_dims x || in_param_bound_component env x -> None
         | Var x -> pending_minimum_size env x
         | Sym _ | Affine _ | Concat _ -> None
       in
       match (glb.bcast, Option.all (List.map (glb.beg_dims @ glb.dims) ~f:least)) with
       | Broadcastable, Some sizes ->
-          let coeff_val = Utils.safe_force coeff in
-          if coeff_val > 0 then
-            solve_strided_var ~coeff_val ~denom ~round_up:true (List.fold sizes ~init:1 ~f:( * ))
-          else None
+          round_up_blocks env constr ~counter (List.fold sizes ~init:1 ~f:( * ))
       | _ -> None)
   | _ -> None
 
@@ -5633,19 +5641,19 @@ let packed_minimum_demand ~deferred_dims env w counter =
    admit: the closings that follow then agree on the counter, as gh-ocannl-2319's agreeing
    remainders do. Demands that differ keep the ordinary closing order: no counter holds both draws
    at their minima (a round-up total over [k] blocks of [c] cells holds [c(k-1)+1] to [ck] cells),
-   and serving the smaller from the larger demand would grow its result past the minimum. A total
-   still pending in the pass ([held_totals], the dimension variables of its [Rows_constr]) is a
-   sharer [counter_sharers] cannot see, so a counter it mentions takes no minimum. *)
+   and serving the smaller from the larger demand would grow its result past the minimum. A shared
+   counter that a total still pending in the pass mentions ([held_totals], {!pending_total_vars})
+   has a sharer [counter_sharers] cannot see, so it takes no minimum, as gh-ocannl-2319's held
+   totals take no remainder. A counter with no stored sharer keeps gh-ocannl-2318's rule as it
+   landed. Not pinned: a staged pending third total (settling to one block) is refused on the base
+   too. *)
 let packed_counter_minimum_sizes ~deferred_dims ~held_totals env v constr =
   match Option.map (packed_draw_counter constr) ~f:(fun c -> subst_dim env (Var c)) with
-  | Some (Var counter)
-    when Set.exists (Lazy.force held_totals) ~f:(fun h ->
-             Set.mem (vars_of_dim (subst_dim env (Var h))) counter) ->
-      false
   | Some (Var counter) -> (
       let packed_minimum_demand = packed_minimum_demand ~deferred_dims in
       match counter_sharers env ~draw:v counter with
       | [] -> true
+      | _ :: _ when Set.mem (Lazy.force held_totals) counter -> false
       | sharers -> (
           match packed_minimum_demand env v counter with
           | Some blocks ->
@@ -6848,13 +6856,7 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
     (* gh-ocannl-2370: the dimension variables of the totals still pending in this pass, which a
        packed draw's minimum reads as unseen sharers of a counter
        ([packed_counter_minimum_sizes]). *)
-    let held_totals =
-      lazy
-        (List.fold ineqs ~init:dim_var_set_empty ~f:(fun acc -> function
-          | Rows_constr { constr = Total_elems _ as constr; _ } ->
-              Set.union acc (row_constraint_dim_vars constr)
-          | _ -> acc))
-    in
+    let held_totals = lazy (pending_total_vars env ineqs) in
     (* A held-size pass checks many relations. Attribute each refusal to the relation being compared
        or inverted, before the per-constraint handler can prefix it. *)
     let with_constraint source f =
@@ -7263,7 +7265,6 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
     in
     if List.is_empty candidates then []
     else
-      let total_vars = total_vars env in
       let add_row vars r = Option.fold (row_var r) ~init:vars ~f:Set.add in
       let add_row_with_bound vars r =
         match row_var r with
@@ -7274,17 +7275,15 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
             | _ -> vars)
         | None -> vars
       in
-      let held_rows, held_totals =
-        List.fold (others @ draws) ~init:(row_var_set_empty, dim_var_set_empty)
-          ~f:(fun (rows, totals) -> function
-          | Row_eq { r1; r2; _ } -> (add_row_with_bound (add_row_with_bound rows r1) r2, totals)
-          | Row_ineq { res; opnd; _ } ->
-              (add_row_with_bound (add_row_with_bound rows res) opnd, totals)
-          | Rows_constr { r; constr; _ } ->
-              (List.fold r ~init:rows ~f:add_row, Set.union totals (total_vars constr))
-          | Terminal_row (_, r, _) -> (add_row rows r, totals)
-          | _ -> (rows, totals))
+      let held_rows =
+        List.fold (others @ draws) ~init:row_var_set_empty ~f:(fun rows -> function
+          | Row_eq { r1; r2; _ } -> add_row_with_bound (add_row_with_bound rows r1) r2
+          | Row_ineq { res; opnd; _ } -> add_row_with_bound (add_row_with_bound rows res) opnd
+          | Rows_constr { r; _ } -> List.fold r ~init:rows ~f:add_row
+          | Terminal_row (_, r, _) -> add_row rows r
+          | _ -> rows)
       in
+      let held_totals = pending_total_vars env (others @ draws) in
       let candidate_draws =
         List.fold candidates
           ~init:(Map.empty (module Row_var))
@@ -7293,18 +7292,8 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
       in
       let block_demand closings draw counter =
         match Map.find candidate_draws draw with
-        | Some
-            ( tail,
-              cells,
-              Total_elems
-                {
-                  numerator = Strided_var { coeff; var; denom; round_up = true };
-                  divided_by = [];
-                  _;
-                } )
-          when Map.mem closings tail && equal_dim (subst_dim env (Var var)) (Var counter) ->
-            let coeff_val = Utils.safe_force coeff in
-            if coeff_val > 0 then solve_strided_var ~coeff_val ~denom ~round_up:true cells else None
+        | Some (tail, cells, constr) when Map.mem closings tail ->
+            round_up_blocks env constr ~counter cells
         | _ -> None
       in
       let counter_can_close closings draw counter =

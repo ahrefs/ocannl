@@ -249,8 +249,10 @@ files.
   would grow the result past the minimum its fixed index sets, so that pair keeps the ordinary
   order and broadcasts one block, printed in `row_glb_reach_executed`, not claimed. A minimum
   counts only where stage 7 closes the axis at it first (not one a held window or concat equation
-  defers, nor one in a parameter's bound component), and a total still pending in the pass on the
-  counter blocks the rule, as it blocks gh-ocannl-2319's; no store was found where those three
+  defers, nor one in a parameter's bound component), and on a shared counter a total still pending
+  in the pass blocks the rule, as it blocks gh-ocannl-2319's (an own counter keeps gh-ocannl-2318's
+  rule unchanged); both rules read blocks through `round_up_blocks` and pending totals through
+  `pending_total_vars`. No store was found where those three
   change an outcome (staged attempts are refused on the base too). The same test pins both
   agreeing rules at two lane widths (9 single and 6 double cells, three blocks each, by constants
   and by minima; an f64 leg): forcing one coefficient on either rule fails its case. A reduced draw's leaf axis under the result guessed

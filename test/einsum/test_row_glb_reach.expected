@@ -58,4 +58,3 @@ leaf l <= w, w >= 8: l after Stage1 ?, Stage2 ?, Stage3 ?, Stage4 ?, Stage5 ?, S
 leaf l <= w, w >= 8, w a held window extent: l after Stage1 ?, Stage2 ?, Stage3 ?, Stage4 ?, Stage5 1, Stage6a 1, Stage6b 1, Stage7 1
 with no window, the leaf waits through stage 6b and takes the minimum at stage 7: true
 through a held window extent, the leaf keeps its broadcast guess at stage 5: true
-the held extent's minimum does not reach the leaf at stage 7: true
