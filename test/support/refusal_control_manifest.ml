@@ -908,6 +908,7 @@ let raw_entries =
         "[scanner-refusal:b56027d13651cbbf21ae177b43426575] parity claim hand-rolls";
         "[scanner-refusal:d36bcdb919d2b79b23dc1e15969fde60] tolerance reader read";
         "[scanner-refusal:084b5e19d97705d191e28ba889a52530] test source hand-rolls";
+        "[scanner-refusal:fd2fc8de1719682e3cecae854e708253] trailer reader read";
         "[scanner-refusal:2d867210446f1449a6beebc663d207c6] Verdict.Claims";
         "[scanner-refusal:20d88fc03901bcbdfbc113ed14029a7a] Verdict.Claims";
         "[scanner-refusal:43f45dea7e13ae71ff6e05054baafcca] quantified claim passes";

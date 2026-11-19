@@ -5906,7 +5906,13 @@ let all_readers content =
 
 let read_claims ?(readers = all_readers) ~fail ~source content =
   let nothing () =
-    ( { Scan.sites = []; hand_rolled_trailers = []; literals = 0; applied_literals = 0 },
+    ( {
+        Scan.sites = [];
+        hand_rolled_trailers = [];
+        stdout_literals = 0;
+        literals = 0;
+        applied_literals = 0;
+      },
       [],
       { Scan.pairings = []; skipped_sites = 0; pass_fail_sites = 0 },
       { Scan.broken = []; label_sites = 0 } )
@@ -7130,7 +7136,7 @@ let () =
   in
   let uncompared_exempted = Hashtbl.create (module String) in
   let tolerance_offenders = ref 0 and parity_sites = ref 0 in
-  let trailer_offenders = ref 0 in
+  let trailer_offenders = ref 0 and trailer_literals = ref 0 in
   let floor_offenders = ref 0 and literal_floors = ref 0 in
   let floor_exemptions = Map.of_alist_exn (module String) exempt_floors in
   let floors_exempted = Hashtbl.create (module String) in
@@ -7191,6 +7197,7 @@ let () =
          put there -- and the one thing worse than a parse failure here is one that leaves nobody
          knowing which of three hundred files it was about. *)
       let scanned, helper_claims, dialects, line_breaks = read_claims ~fail ~source content in
+      trailer_literals := !trailer_literals + scanned.Scan.stdout_literals;
       List.iter scanned.Scan.hand_rolled_trailers ~f:(fun site ->
           Int.incr trailer_offenders;
           refuse_hand_rolled_trailer ~fail ~source site);
@@ -7456,6 +7463,7 @@ let () =
   Verdict.p "and the tolerance reader read the predicates of Verdict parity claims"
     (!parity_sites > 0);
   Verdict.p "no test source hand-rolls a success trailer" (!trailer_offenders = 0);
+  Verdict.p "and the trailer reader read literal stdout rows" (!trailer_literals > 0);
   (* The claim forms whose labels it reads, held equal to every [Verdict.Claims] member but [fail],
      whose argument is a multi-line message: a new claim form it did not read would be a label it
      never checks. *)

@@ -236,13 +236,12 @@ type site = {
 type scan = {
   sites : site list;  (** The claim-shaped literals, in source order. *)
   hand_rolled_trailers : (int * string) list;  (** Literal stdout trailers by line and printer. *)
+  stdout_literals : int;  (** Literal text or formats read for a trailer. *)
   literals : int;  (** Every string literal in expression position. *)
   applied_literals : int;  (** How many of those are an argument of a named function. *)
 }
-(** [literals] and [applied_literals] are not verdicts; they are what a blind walk cannot produce. A
-    walk whose expression hook stopped firing reports zero of both over a corpus where thousands are
-    expected, so the consuming test can say that its empty offender list came from a scan that read
-    something — rather than leaving "no offenders" and "no reading" the same result. *)
+(** The counts let the ratchet require that each reader saw input in the real corpus even when it
+    found no offenders. *)
 
 let stdout_text path (arguments : (Ppxlib.Asttypes.arg_label * expression) list) =
   match (path, arguments) with
@@ -282,6 +281,7 @@ let scan content =
      visits a node before its children, so the argument's own visit below finds it. *)
   let printers = Hashtbl.create (module Int) in
   let sites = ref [] and literals = ref 0 and hand_rolled_trailers = ref [] in
+  let stdout_literals = ref 0 in
   let iterator =
     object
       inherit Ast_traverse.iter as super
@@ -296,12 +296,11 @@ let scan content =
             | Some path ->
                 let name = String.concat ~sep:"." path in
                 Option.iter (stdout_text path arguments) ~f:(fun text ->
-                    if
-                      Option.value_map (Read.string_literal text) ~default:false
-                        ~f:is_trailer_literal
-                    then
-                      hand_rolled_trailers :=
-                        (text.pexp_loc.loc_start.pos_lnum, name) :: !hand_rolled_trailers);
+                    Option.iter (Read.string_literal text) ~f:(fun value ->
+                        Int.incr stdout_literals;
+                        if is_trailer_literal value then
+                          hand_rolled_trailers :=
+                            (text.pexp_loc.loc_start.pos_lnum, name) :: !hand_rolled_trailers));
                 List.iter arguments ~f:(fun (_, argument) ->
                     if Option.is_some (Read.string_literal argument) then
                       Hashtbl.set printers ~key:argument.pexp_loc.loc_start.pos_cnum ~data:name)
@@ -334,6 +333,7 @@ let scan content =
   {
     sites = List.rev !sites;
     hand_rolled_trailers = List.rev !hand_rolled_trailers;
+    stdout_literals = !stdout_literals;
     literals = !literals;
     applied_literals = Hashtbl.length printers;
   }
