@@ -1020,16 +1020,17 @@ other runs and is not a provenance baseline.
 python3 -m venv benchmarks/.venv
 benchmarks/.venv/bin/pip install numpy safetensors torch tinygrad
 benchmarks/.venv/bin/python benchmarks/gen_fixtures.py
-benchmarks/.venv/bin/python benchmarks/orchestrate.py --box <box>
+benchmarks/.venv/bin/python benchmarks/orchestrate.py --box <box> --gpu <backend>
 ```
 
-`--box` names the measurement box (see [Measurement boxes](#measurement-boxes)); a checkout that is
-no measurement box, measuring for itself, passes `--skip-box-check` instead.
+`--box` names the measurement box (see [Measurement boxes](#measurement-boxes)). Set `--gpu cuda`
+for rog-nv, `--gpu hip` for minix or tuf, or `--gpu metal` for m4-max. For measurements outside
+a declared measurement box, use `--skip-box-check` in place of `--box <box>`.
 
-A box that keeps one shared venv outside the checkout (the measurement boxes use
-`~/.venvs/ocannl-bench`) needs nothing more: every driver (`orchestrate.py`, `gh675_cells.py`, ...)
-resolves its interpreter through `bench_venv.py`, which takes a non-empty `BENCH_VENV_PY`, else
-`benchmarks/.venv` (a symlink to the shared venv, or a venv of the checkout's own), else
+For the launch command above, `benchmarks/.venv` can be a symlink to the box's shared venv
+(`~/.venvs/ocannl-bench`). To launch framework runners, each driver (`orchestrate.py`,
+`gh675_cells.py`, ...) resolves its interpreter through `bench_venv.py`, which takes a non-empty
+`BENCH_VENV_PY`, else `benchmarks/.venv` (a symlink to the shared venv, or a venv of the checkout's own), else
 `~/.venvs/ocannl-bench` itself -- so a fresh worktree, which has neither of the first two, reaches
 the box's venv unprompted (gh-ocannl-1433). A Windows venv's `Scripts/python.exe` is found at
 either place. `python3 benchmarks/bench_venv.py` prints what it resolved and by which route, as
@@ -1217,14 +1218,6 @@ Python twin `box_gate.py`; `test-box-gate.sh` drives every driver against a stan
 gate runs inside whatever slot the driver runs in, so a measurement's GPU slot or hold covers it,
 in the driver's own process group discipline (a cancelled driver takes the check's device probe
 with it), and it sees `BENCH_VENV_PY` even where a driver scrubs `BENCH_*` from its cells.
-
-Launch the cross-framework matrix from the repository root with the benchmark venv's
-interpreter. Set both `--box` and `--gpu` for the measurement box. Use `--gpu hip` on
-AMD Linux and `--gpu metal` on macOS.
-
-```bash
-"$HOME/.venvs/ocannl-bench/bin/python" benchmarks/orchestrate.py --box rog-nv --gpu cuda
-```
 
 `tools/sweep.sh` runs it once per box (`--box-only`, which skips the checkout-relative
 interpreter, against `<main checkout>/benchmarks/fixtures`) and reports
