@@ -1141,8 +1141,9 @@ test_cmd() { # backend wt [jobs [host]]
   # before any test touches the device (device_probe_cmd): a wedged device ends the unit here, as
   # DEVICE UNHEALTHY, rather than at the first test's per-test cap.
   device_probe_cmd "$backend" "$wt" "$host" || :
-  # The per-test cap beside the suite's dune (test_cap_start_cmd); the `@slow` leg below, and a
-  # --target that reaches the slow aliases, keep only the unit's cap.
+  # The per-test cap beside the suite's dune (test_cap_start_cmd); the `@slow` leg below keeps only
+  # the unit's cap. A --target leg is `runtest DIR`, which reaches no slow alias, so a GPU unit's
+  # --target leg is always watched.
   local watched=
   if [ -z "$TARGET" ]; then
     # shellcheck disable=SC2046  # the suite's aliases are word-split on purpose
