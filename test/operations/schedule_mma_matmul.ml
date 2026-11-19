@@ -33,7 +33,16 @@ module Sched = Ir.Schedule
 module RT = Ir.Register_tile
 module Asgns = Ir.Assignments
 module Numerics = Ir.Numerics
+module Descriptors = Test_utils.Descriptors
 
+(* gh-ocannl-1882: the longest compile-heavy test holds every debug-artifact writer and every piece
+   of per-compile driver state its routines reach to the descriptor bound [build_file_descriptors]
+   pins on one trivial routine. The open descriptors and [Context.backend_compiles] are read once
+   the first routine has compiled and run, and the run's end (the last block of this file) is
+   claimed against that reading: a writer keeping even one descriptor per compile turns this test
+   red on every backend instead of waiting for a 256-descriptor shell to kill it
+   (gh-ocannl-1784). *)
+let after_first_compile = ref None
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 let () = Numerics.set_policy { (Numerics.get ()) with tf32_matmuls = false }
 
@@ -308,6 +317,7 @@ let () =
     Context.compile ~lowered_transform:(fun opt -> [ opt ]) ctx_s serial_comp Ir.Indexing.Empty
   in
   let ctx_s = Context.run ctx_s routine_s in
+  after_first_compile := Some (Descriptors.count (), Context.backend_compiles ());
   let got_serial = nonzero "mm_serial" (Context.get_values ctx_s mc0.Tensor.value) in
   (* Every tensorized leg below expands its target's zero ahead of the [Tile_mma]; fresh buffers are
      zero and would hide a dropped or short expansion (gh-ocannl-1625), so each such run starts its
@@ -2933,3 +2943,23 @@ let () =
       p "misassigned roles are rejected with a targeted error"
         (String.is_substring msg ~substring:"Schedule.Tensorize")
   | None -> p "misassigned roles are rejected with a targeted error" false
+
+(* --- Descriptor growth across the whole run (gh-ocannl-1882) --- *)
+let () =
+  let leg =
+    Verdict.leg ~aggregation:`Environment ~when_:(not Stdlib.Sys.win32) ~on:"windows (no /dev/fd)"
+      ()
+  in
+  let baseline, compiles_at_baseline = Option.value_exn !after_first_compile in
+  let compiles = Context.backend_compiles () - compiles_at_baseline in
+  let growth = Descriptors.count () - baseline in
+  Stdio.eprintf
+    "schedule_mma_matmul: %d backend compiles after the first grew open descriptors by %d from %d, \
+     the bound %d (not part of the golden)\n\
+     %!"
+    compiles growth baseline (Descriptors.bound ~compiles);
+  in_leg ~leg
+    "the backend compiles after the first, with debug artifacts on, keep open descriptors within \
+     the bound" (fun label -> p label (Descriptors.within_bound ~compiles growth));
+  in_leg ~leg "negative control: one leaking write per compile, up to the bound, breaks it"
+    (fun label -> p label (Descriptors.leak_breaks_bound ~compiles))

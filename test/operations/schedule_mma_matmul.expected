@@ -113,3 +113,5 @@ Fp16_narrow/Bf16_narrow: census is all-intrinsics exactly for the advertised for
 Fp16_wide/Bf16_wide: census is all-intrinsics exactly for the advertised format triples: true
 tf32 policy-on: census is all-intrinsics exactly for the advertised format triples: true
 misassigned roles are rejected with a targeted error: true
+the backend compiles after the first, with debug artifacts on, keep open descriptors within the bound: true
+negative control: one leaking write per compile, up to the bound, breaks it: true
