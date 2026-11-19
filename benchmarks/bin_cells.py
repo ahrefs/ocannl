@@ -226,18 +226,28 @@ def mode_cells(group):
     return (str(len(group)), ms(statistics.median(group)), f"{ms(group[0])}-{ms(group[-1])}")
 
 
-def mode_lines(arms, variants, by):
-    """The Modes section (gh-ocannl-2308): `cells.MODE_RULE`, then for each variant with a bimodal
-    arm every arm's two groups, and (with two arms or more) the paired ratios within modes against
-    the reference, descriptively (`cells.MODE_PAIRED_HEADER`)."""
+MODE_SPLIT_HEADER = ("variant", "arm", "cells", "fast n", "fast median", "fast range", "slow n",
+                     "slow median", "slow range", "gap", "step", "reading")
+MODE_PAIRED_LEAD = ("variant", "arm", "modes")
+MODE_PAIRED_NOTE = ("(modes = arm/reference; a pair is one round's two cells; descriptive -- the "
+                    "pairs are selected by their own times, so no sign-test p)")
+
+
+def mode_rows(arms, variants, by):
+    """The Modes section's rows (gh-ocannl-2308), for each variant with a bimodal arm, in
+    `variants` order: {variant: (split_rows, paired_rows)} -- every arm's two groups
+    (`MODE_SPLIT_HEADER`), and the paired ratios within modes of each later arm against the first,
+    the reference (`MODE_PAIRED_LEAD` + `cells.MODE_PAIRED_HEADER`). A variant none of whose arms
+    is bimodal is absent: it is read pooled. `by` maps (variant, arm) to {round: seconds}. The
+    front ends that render their own tables (gh1180_tie_ab.sh) read their modes here too."""
     ref = arms[0]
-    lines = ["", "## Modes", "", cells.MODE_RULE, ""]
-    split_rows, paired_rows = [], []
+    out = {}
     for v in variants:
         times = {a: by.get((v, a), {}) for a in arms}
         reading = cells.mode_reading(times, ref)
         if not any(m["bimodal"] for m in reading.values()):
             continue
+        split_rows, paired_rows = [], []
         for a in arms:
             m = reading[a]
             s = m["split"]
@@ -253,16 +263,23 @@ def mode_lines(arms, variants, by):
                                                      reading[a]["labels"]):
                 paired_rows.append((display_value(v), display_value(a), modes,
                                     *cells.paired_cells(stats)[:4]))
+        out[v] = (split_rows, paired_rows)
+    return out
+
+
+def mode_lines(arms, variants, by):
+    """The Modes section (gh-ocannl-2308): `cells.MODE_RULE`, then `mode_rows`' tables."""
+    ref = arms[0]
+    lines = ["", "## Modes", "", cells.MODE_RULE, ""]
+    rows = mode_rows(arms, variants, by).values()
+    split_rows = [r for split, _ in rows for r in split]
+    paired_rows = [r for _, paired in rows for r in paired]
     if not split_rows:
         return lines + ["No arm is bimodal."]
-    lines += table_lines(("variant", "arm", "cells", "fast n", "fast median", "fast range",
-                          "slow n", "slow median", "slow range", "gap", "step", "reading"),
-                         split_rows, "llrrrrrrrrrl")
+    lines += table_lines(MODE_SPLIT_HEADER, split_rows, "llrrrrrrrrrl")
     if paired_rows:
-        lines += ["", f"Paired against {display_value(ref)} within modes (modes = arm/reference; a "
-                  "pair is one round's two cells; descriptive -- the pairs are selected by their "
-                  "own times, so no sign-test p):", ""]
-        lines += table_lines(("variant", "arm", "modes", *cells.MODE_PAIRED_HEADER), paired_rows,
+        lines += ["", f"Paired against {display_value(ref)} within modes {MODE_PAIRED_NOTE}:", ""]
+        lines += table_lines((*MODE_PAIRED_LEAD, *cells.MODE_PAIRED_HEADER), paired_rows,
                              "lllrrrr")
     return lines
 

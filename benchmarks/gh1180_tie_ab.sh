@@ -32,6 +32,10 @@
 # names the requested geometry, and every packed line's census reads Mma_register_tiled with no
 # scalar fallback; any other cell fails the run and the summary marks it. Serial (packmma) and
 # pool-parallel (packmma_par) are kept apart; the ratio is rnB's time over rnA's, per round.
+# Each variant is read for modes as bin_cells.py's own report reads it (bin_cells.mode_rows,
+# cells.MODE_RULE; gh-ocannl-2308): a variant with a bimodal arm keeps its pooled row, marked
+# "pooled over modes" since that row mixes them, and the summary's Modes section gives its arms'
+# two groups and the ratios within modes; a variant without one reads pooled alone, as before.
 #
 # Exit: 0 every cell valid; 1 a cell failed or failed a check (this outranks a refusal); 2 usage;
 # 3 the only faults are cells refusing their measurement for host contention (bin_cells' exit 3).
@@ -44,9 +48,10 @@ summary() { # OUT
 import os, re, sys
 out = sys.argv[1]
 sys.path.insert(0, sys.argv[2])  # benchmarks/, for the shared runner and the table builders
-import bench_output, cells
+import bench_output, bin_cells, cells
 from display_safe import display_value, log_line, table_lines
 bad, refused, rows = [], [], []
+mode_split, mode_paired = [], []  # the cases' within-mode rows, each led by its case and pair
 log = os.path.join(out, 'driver.log')
 m = re.search(r'cases: (.*)', open(log).read()) if os.path.exists(log) else None
 if not m:
@@ -100,15 +105,34 @@ for c in (m.group(1).split() if m else []):
         for variant, seconds, _, _ in r['results']:
             by.setdefault((variant, r['arm']), {})[r['round']] = seconds
     label = ' '.join(display_value(x) for x in (prec, f'n={n}', f'bm={bm}', f'bk={bk}'))
-    for variant in ('packmma', 'packmma_par'):
+    kinds = {'packmma': 'serial', 'packmma_par': 'parallel'}
+    # The mode reading (gh-ocannl-2308), bin_cells.py's own: rnA is the reference, so a within-mode
+    # ratio is rnB's time over rnA's, as the pooled one is. A variant with a bimodal arm keeps its
+    # pooled row, marked: that row mixes the modes, and its within-mode rows are the reading. Only
+    # the packed variants are read: the bench's `naive` reference line is timed but never paired.
+    modes = bin_cells.mode_rows([f'rn{rna}', f'rn{rnb}'], list(kinds.values()),
+                                {(kinds[v], arm): t for (v, arm), t in by.items() if v in kinds})
+    pair = (label, f'rn{rna}', f'rn{rnb}')  # the pooled table's Case, A and B
+    for split, paired in modes.values():
+        mode_split += [(*pair, *r) for r in split]
+        mode_paired += [(*pair, *r) for r in paired]
+    for variant, kind in kinds.items():
         a, b = by.get((variant, f'rn{rna}'), {}), by.get((variant, f'rn{rnb}'), {})
         if (sorted(a) != sorted(b) or len(a) != manifest['rounds']) and not case_refused:
             bad.append(f'{display_value(name)}: {variant} lacks a side of the pair in some round')
         stats = cells.paired(a, b)
-        rows.append((label, 'serial' if variant == 'packmma' else 'parallel', f'rn{rna}', f'rn{rnb}',
-                     *cells.paired_cells(stats)))
+        rows.append((label, f'{kind} (pooled over modes)' if kind in modes else kind, f'rn{rna}',
+                     f'rn{rnb}', *cells.paired_cells(stats)))
 text = '\n'.join(table_lines(['Case', 'Variant', 'A', 'B', *cells.PAIRED_HEADER], rows)) + '\n'
 text += '\nratio = B time / A time per round; each case\'s full report is OUT/<case>/report.md\n'
+if mode_split:
+    text += ('\nA variant "pooled over modes" has a bimodal arm: its row above mixes the modes, '
+             'which the rows below read apart.\n\n## Modes\n\n' + cells.MODE_RULE + '\n\n')
+    text += '\n'.join(table_lines(['Case', 'A', 'B', *bin_cells.MODE_SPLIT_HEADER], mode_split)) + '\n'
+    if mode_paired:
+        text += (f'\nB paired against A within modes {bin_cells.MODE_PAIRED_NOTE}:\n\n'
+                 + '\n'.join(table_lines(['Case', 'A', 'B', *bin_cells.MODE_PAIRED_LEAD,
+                                           *cells.MODE_PAIRED_HEADER], mode_paired)) + '\n')
 if bad:
     text += '\nINVALID CELLS:\n' + '\n'.join(log_line('- ' + b) for b in bad) + '\n'
 if refused:
