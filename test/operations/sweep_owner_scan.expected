@@ -1,0 +1,10 @@
+test/operations/cache_key_agreement.ml: plain-run:test/operations/runtest-cache_key_agreement:outranked -- @test/operations/runtest-cache_key_agreement runs the source without `outranked`
+test/operations/cc_backend_trace_name.ml: ci-step:ci.yml:test/operations/runtest-cc_backend_trace_name:Check non-default module log level and trace semantics -- step "Check non-default module log level and trace semantics" of .github/workflows/ci.yml builds @test/operations/runtest-cc_backend_trace_name with OCANNL_LOG_LEVEL_CC_BACKEND set
+test/operations/cuda_wmma_floor.missing.ml: plain-run:test/operations/runtest-cuda_wmma_floor:--forced -- @test/operations/runtest-cuda_wmma_floor runs the source without `--forced`
+the scan resolves the compiler-trace CI step owning cc_backend_trace_name: true
+the scan resolves a plain-run owner of a forced skip: true
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:13a68f9fac09b107d35175bdfad613d4] cc_backend_trace_name
+  [scanner-refusal:9fd940ff3d9f45509ae4d01b3bc7efdb] resolves a plain-run
+End of synthetic controls.
