@@ -1294,7 +1294,7 @@ common=$'SKIPPED on fixture (vacuous): common unevaluated claim\nOCANNL_TOOL_VER
 cc_only=$'SKIPPED on fixture (vacuous): cc-only unevaluated claim\nOCANNL_TOOL_VERDICT_SKIP\tbackend\tfixture.exe\tcc-only unevaluated claim'
 metal_only=$'SKIPPED on fixture (vacuous): metal-only unevaluated claim\nOCANNL_TOOL_VERDICT_SKIP\tbackend\tfixture.exe\tmetal-only unevaluated claim'
 environment=$'SKIPPED on fixture gate (vacuous): environment-gated claim\nOCANNL_TOOL_VERDICT_SKIP\tenvironment\tfixture.exe\tenvironment-gated claim'
-outside=$'SKIPPED on external matrix (vacuous): independently-covered claim\nOCANNL_TOOL_VERDICT_SKIP\toutside-sweep\tfixture.exe\tindependently-covered claim'
+outside=$'SKIPPED on external matrix (vacuous): independently-covered claim\nOCANNL_TOOL_VERDICT_SKIP\toutside-sweep\tfixture.exe\tindependently-covered claim\tci-step:ci.yml:test/operations/runtest-fixture:Trace leg'
 cc_unit_log=$common$'\n'$cc_only$'\n'$environment$'\n'$outside
 metal_unit_log=$common$'\n'$metal_only$'\n'$environment$'\n'$outside
 coverage=$(SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log \
@@ -1309,7 +1309,12 @@ grep -q '^POTENTIAL: skipped on every completed backend: fixture.exe: common une
 absent 'cc-only unevaluated claim' "$coverage_report"
 absent 'metal-only unevaluated claim' "$coverage_report"
 absent 'environment-gated claim' "$coverage_report"
-absent 'independently-covered claim' "$coverage_report"
+# An outside-sweep claim joins neither finding set; the report names its owner
+# (gh-ocannl-926), once however many units recorded it.
+absent 'skipped on every completed backend: fixture.exe: independently-covered claim' "$coverage_report"
+[ "$(grep -c 'independently-covered claim' "$coverage_report")" -eq 1 ]
+grep -qxF 'outside the sweep: fixture.exe: independently-covered claim -- owned by ci-step:ci.yml:test/operations/runtest-fixture:Trace leg' \
+  "$coverage_report"
 grep -q '^completed boxes: m4-max$' "$coverage_report"
 grep -q '^missing boxes: minix, rog-nv$' "$coverage_report"
 grep -q '^environment status: insufficient (1 of 3 declared boxes completed; need at least 2 unless the matrix is complete)$' \
@@ -1773,9 +1778,27 @@ grep -q '^aggregate-skips: cannot extract compatible skip records from ' <<<"$ex
 # nothing, never of every claim executed. A log line, or a record no action
 # header precedes, is not a records file either. Each makes the run
 # incompatible.
-for legacy in empty log orphan; do
+# An outside-sweep record names its owner and no other scope carries one
+# (gh-ocannl-926): an owner outside the grammar, one holding a control
+# character, and a backend record carrying one are each malformed, not evidence.
+for legacy in empty log orphan bad-owner control-owner owned-backend; do
   case $legacy in
     empty) : >"$tmp/legacy-cc.records" ;;
+    bad-owner)
+      cat "$tmp/identity-cc.log" >"$tmp/legacy-cc.records"
+      printf 'OCANNL_TOOL_VERDICT_SKIP\toutside-sweep\tfixture.exe\tbadly owned claim\tthe trace job\n' \
+        >>"$tmp/legacy-cc.records"
+      ;;
+    control-owner)
+      cat "$tmp/identity-cc.log" >"$tmp/legacy-cc.records"
+      printf 'OCANNL_TOOL_VERDICT_SKIP\toutside-sweep\tfixture.exe\tcarriage claim\tci-step:ci.yml:t/runtest-x:Trace\rleg\n' \
+        >>"$tmp/legacy-cc.records"
+      ;;
+    owned-backend)
+      cat "$tmp/identity-cc.log" >"$tmp/legacy-cc.records"
+      printf 'OCANNL_TOOL_VERDICT_SKIP\tbackend\tfixture.exe\towned backend claim\tplain-run:t/runtest-x:--forced\n' \
+        >>"$tmp/legacy-cc.records"
+      ;;
     log)
       printf 'SKIPPED on cc (vacuous): common unevaluated claim\n' >"$tmp/legacy-cc.records"
       grep -v '^OCANNL_TOOL_VERDICT_ACTION' "$tmp/identity-cc.log" >>"$tmp/legacy-cc.records"
@@ -1795,6 +1818,20 @@ for legacy in empty log orphan; do
   [ "$legacy_error_rc" -eq 2 ]
   grep -q '^aggregate-skips: cannot extract compatible skip records from ' <<<"$legacy_error"
 done
+# An outside-sweep record with no owner field is a swept commit whose Verdict
+# predates owners (today's refuses to write one): it still joins neither
+# intersection, and the report says its owner went unrecorded.
+cat "$tmp/identity-cc.log" >"$tmp/unowned-cc.records"
+printf 'OCANNL_TOOL_VERDICT_SKIP\toutside-sweep\tfixture.exe\tunowned claim\n' >>"$tmp/unowned-cc.records"
+unowned_report=$("$aggregate" \
+  --known cc --known metal \
+  --known-box m4-max \
+  --run cc m4-max "$tmp/unowned-cc.records" --run metal m4-max "$tmp/identity-metal.log")
+grep -q '^result: PASS -- no claim was skipped on every known backend$' <<<"$unowned_report"
+grep -qxF 'outside the sweep: fixture.exe: unowned claim -- owner not recorded (a swept commit predating gh-ocannl-926)' \
+  <<<"$unowned_report"
+absent 'skipped on every .*unowned claim' <<<"$unowned_report"
+
 # A record kind this aggregator does not judge -- the bypass record gh-ocannl-996
 # proposes, from a newer swept commit -- passes through, so the same records
 # still aggregate as they did.

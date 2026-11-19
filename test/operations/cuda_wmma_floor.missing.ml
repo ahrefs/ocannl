@@ -3,7 +3,11 @@
 let () =
   Stdio.Out_channel.set_binary_mode Stdio.stdout true;
   let aggregation =
-    if Array.exists (fun x -> x = "--forced") Sys.argv then `Outside_sweep else `Environment
+    if Array.exists (fun x -> x = "--forced") Sys.argv then
+      `Outside_sweep
+        (Verdict.Plain_run
+           { alias = "test/operations/runtest-cuda_wmma_floor"; forcing = "--forced" })
+    else `Environment
   in
   let leg = Verdict.leg ~aggregation ~when_:false ~on:"NVRTC bindings unavailable" () in
   Cuda_wmma_floor_claims.run ~leg ~compute_70_leg:leg ~k8_leg:leg ~jit_70_leg:leg ~k16_leg:leg

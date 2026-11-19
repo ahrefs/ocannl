@@ -47,16 +47,16 @@ let replay () =
         | None, Some (hatch, claim) -> Verdict.p_unless ~unless:[ (hatch, false) ] claim true
         | None, None -> ());
         (if String.length line > plen && String.sub line 0 plen = prefix then
+           let replay aggregation claim = Verdict.skipped ~aggregation ~backend:"fixture" claim in
            match String.split_on_char '\t' (String.sub line plen (String.length line - plen)) with
-           | [ scope; _exe; claim ] ->
-               let aggregation =
-                 match scope with
-                 | "backend" -> `Backend
-                 | "environment" -> `Environment
-                 | "outside-sweep" -> `Outside_sweep
-                 | _ -> failwith ("unknown skip scope in fixture: " ^ scope)
-               in
-               Verdict.skipped ~aggregation ~backend:"fixture" claim
+           | [ "backend"; _exe; claim ] -> replay `Backend claim
+           | [ "environment"; _exe; claim ] -> replay `Environment claim
+           | [ "outside-sweep"; _exe; claim; owner ] -> (
+               (* The fixture's owner, not the tree's: read back through Verdict's own grammar so
+                  the replayed record carries it verbatim. *)
+               match Verdict.sweep_owner_of_field owner with
+               | Some owner -> replay (`Outside_sweep owner) claim
+               | None -> failwith ("malformed outside-sweep owner in fixture: " ^ line))
            | _ -> failwith ("malformed skip record in fixture: " ^ line));
         loop ()
   in

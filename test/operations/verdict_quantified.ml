@@ -183,6 +183,18 @@ let () =
       gated ~when_:false ~on:"a fixture backend"
         ~detail:(fun () -> failwith "detail evaluated")
         "the gated claim" false
+  (* gh-ocannl-926: an outside-sweep owner the record grammar cannot carry is a failed check, and no
+     SKIP record is written for it. Children only, for the same reason. *)
+  | "owner_empty_alias" ->
+      Verdict.skipped
+        ~aggregation:(`Outside_sweep (Verdict.Plain_run { alias = ""; forcing = "--forced" }))
+        ~backend:"a fixture backend" "the owned claim"
+  | "owner_colon_workflow" ->
+      Verdict.skipped
+        ~aggregation:
+          (`Outside_sweep
+             (Verdict.Ci_step { workflow = "c:i.yml"; step = "Trace leg"; alias = "t/runtest-x" }))
+        ~backend:"a fixture backend" "the owned claim"
   | "gated_false" ->
       gated ~when_:true ~on:"a fixture backend"
         ~detail:(fun () -> "measured 3 vs bound 2")
@@ -443,6 +455,24 @@ let () =
       Verdict.p "a closed gate announces the skip on stderr, naming what it ran on"
         (String.is_substring closed_stderr
            ~substring:"SKIPPED on a fixture backend (vacuous): the gated claim");
+      List.iter
+        [
+          ("owner_empty_alias", "its alias is empty");
+          ("owner_colon_workflow", "its workflow \"c:i.yml\" holds a colon");
+        ]
+        ~f:(fun (mode, why) ->
+          let ((_, _, stderr) as child) = run_child mode in
+          let ok =
+            Fresh_process.matches ~stream:`Stderr ~exit:1
+              ~contains:[ "cannot be recorded: " ^ why ]
+              child
+            && not (String.is_substring stderr ~substring:"OCANNL_TOOL_VERDICT_SKIP")
+          in
+          if not ok then Fresh_process.report ~label:mode child;
+          Verdict.pf
+            "an outside-sweep owner the record cannot carry (%s) fails the run and writes no skip \
+             record (%s)"
+            why mode ok);
       (* The quantified gated forms keep both properties, and an open gate keeps the floor. *)
       List.iter [ "gated_all"; "gated_alli"; "gated_exists" ] ~f:(fun form ->
           let open_status, opened, _ = run_child (form ^ "_open") in
