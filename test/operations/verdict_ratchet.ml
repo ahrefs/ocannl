@@ -6755,6 +6755,9 @@ let run_success_trailer_control () =
     {ocaml|let () = Stdio.printf "summary\nOK: %s\n" "formatted"
 let () = print_endline "OK: complete"
 let () = Printf.fprintf Stdlib.stdout "OK: %d\n" 1
+let () = Stdlib.Printf.printf "OK: qualified\n"
+let () = Printf.fprintf Stdio.stdout "OK: stdio channel\n"
+let () = Stdio.Out_channel.output_string Stdio.Out_channel.stdout "OK: output string\n"
 let () = Stdio.eprintf "OK: stderr"
 let () = Stdio.printf "description of OK: markers"
 let () = Verdict.success_trailer ["shared trailer"]
@@ -6768,7 +6771,14 @@ let marker = "OK: data"
            messages := msg :: !messages));
   let expected =
     List.map
-      [ (1, "Stdio.printf"); (2, "print_endline"); (3, "Printf.fprintf") ]
+      [
+        (1, "Stdio.printf");
+        (2, "print_endline");
+        (3, "Printf.fprintf");
+        (4, "Stdlib.Printf.printf");
+        (5, "Printf.fprintf");
+        (6, "Stdio.Out_channel.output_string");
+      ]
       ~f:(fun (line, printer) ->
         Printf.sprintf "fixture.ml:%d prints a hand-rolled success trailer through `%s`." line
           printer)

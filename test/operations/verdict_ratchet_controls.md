@@ -828,7 +828,7 @@ restored the source byte-for-byte. Each run's baseline exited 0 (`20261020T07425
 
 | Mechanism | Mutation | Controls | Run |
 |---|---|---|---|
-| Literal stdout trailer rows go through the shared printer | `verdict_scan.ml`: no literal recognized as a trailer | Failed: `refuses planted hand-rolled success trailers in literal stdout rows` | `20261119T154313Z-83525` |
+| Literal stdout trailer rows go through the shared printer | `verdict_scan.ml`: no literal recognized as a trailer, then qualified stdout forms left unread in a separate run | Failed: `refuses planted hand-rolled success trailers in literal stdout rows` | `20261119T154313Z-83525`, `20261119T161922Z-72006` |
 
 ## gh-ocannl-1794 mutation runs
 

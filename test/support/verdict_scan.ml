@@ -64,13 +64,15 @@
 
     The trailer reader reserves a literal line starting with [OK: ] for {!Verdict.success_trailer}.
     It checks decoded string literals passed as the format or text argument of a direct stdout call
-    spelled [printf] (bare or qualified by [Printf], [Stdio], or [Format]), [print_string] or
-    [print_endline] (bare or qualified by [Stdlib] or [Stdio]), or [fprintf] (bare or qualified by
-    [Printf] or [Stdio]) or [output_string] (bare or qualified by [Stdlib]) with a literal [stdout]
-    or [Stdlib.stdout] channel path. A line starts at the literal's beginning or after a decoded
-    newline. The reader works from those spellings and leaves channel aliases, printer aliases and
-    shadowing, computed strings, format-generated line breaks, and non-OCaml output outside its
-    model. *)
+    spelled [printf] (bare, [Stdio.printf], or qualified by [Printf] or [Format] with optional
+    [Stdlib]), or [print_string] and [print_endline] (bare or qualified by [Stdlib] or [Stdio]). It
+    also reads [fprintf] (bare, [Stdio.Out_channel.fprintf], or qualified by [Printf] with optional
+    [Stdlib]) and [output_string] (bare, [Stdlib.output_string], or qualified by [Out_channel],
+    [Stdlib.Out_channel] or [Stdio.Out_channel]) with a direct [stdout] channel path. The channel
+    may be bare or qualified by [Stdlib], [Stdio], or those same [Out_channel] paths. A line starts
+    at the literal's beginning or after a decoded newline. The spelling controls the check even if
+    shadowed. Channel and printer aliases, computed strings, format-generated line breaks, and
+    non-OCaml output are outside the model. *)
 
 open Base
 open Ppxlib.Parsetree
@@ -246,17 +248,25 @@ let stdout_text path (arguments : (Ppxlib.Asttypes.arg_label * expression) list)
   match (path, arguments) with
   | ( ( [ "printf" ]
       | [ ("Printf" | "Stdio" | "Format"); "printf" ]
+      | [ "Stdlib"; ("Printf" | "Format"); "printf" ]
       | [ ("print_string" | "print_endline") ]
       | [ ("Stdlib" | "Stdio"); ("print_string" | "print_endline") ] ),
       (Nolabel, text) :: _ ) ->
       Some text
   | ( ( [ "fprintf" ]
-      | [ ("Printf" | "Stdio"); "fprintf" ]
+      | [ "Printf"; "fprintf" ]
+      | [ "Stdlib"; "Printf"; "fprintf" ]
+      | [ "Stdio"; "Out_channel"; "fprintf" ]
       | [ "output_string" ]
-      | [ "Stdlib"; "output_string" ] ),
+      | [ ("Stdlib" | "Out_channel"); "output_string" ]
+      | [ ("Stdlib" | "Stdio"); "Out_channel"; "output_string" ] ),
       (Nolabel, channel) :: (Nolabel, text) :: _ ) -> (
       match Read.longident_of channel with
-      | Some ([ "stdout" ] | [ "Stdlib"; "stdout" ]) -> Some text
+      | Some
+          ( [ "stdout" ]
+          | [ ("Stdlib" | "Stdio" | "Out_channel"); "stdout" ]
+          | [ ("Stdlib" | "Stdio"); "Out_channel"; "stdout" ] ) ->
+          Some text
       | _ -> None)
   | _ -> None
 

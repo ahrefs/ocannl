@@ -3429,6 +3429,7 @@ files.
   Its `runtest-schedule_cache_device-no_identity` variant supplies a driver whose timing identity
   is absent while allocation, compilation and execution use the selected backend (gh-ocannl-1449).
   The Dune action passes the mode as an argument so the two variants keep separate Verdict records.
+  The forced leg records keyed cache operations, including lookup misses that leave no directory.
 ## Capabilities and search diagnostics
 - **HIP's tensor-core capability is gated on the HOST, not only on the device** (gh-ocannl-1032):
   `mma_supported` is `all_rdna_wave32 && rocwmma_include_dir`, and both `hardware_limits.mma` and

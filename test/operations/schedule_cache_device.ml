@@ -234,8 +234,11 @@ let () =
     let ctx = Context.run ctx routine in
     Context.get_values ctx y.Tensor.value
   in
-  let first = run () in
-  let second = run () in
+  let (first, second), cache_io =
+    SC.recording_cache_io (fun () ->
+        let first = run () in
+        (first, run ()))
+  in
   p_all2 "the cold routine computes the reference" first [| 2.; 4.; 6.; 8. |] ~f:Float.equal;
   p_all2 "the second routine computes the reference" second first ~f:Float.equal;
   let second_report, first_report =
@@ -253,6 +256,8 @@ let () =
       p label (not replayed));
   in_leg ~leg:no_identity "unavailable identity leaves the runtime store absent" (fun label ->
       p label (not (Stdlib.Sys.file_exists cache_dir)));
+  in_leg ~leg:no_identity "unavailable identity bypasses runtime cache I/O" (fun label ->
+      p_empty label ~over:[ first; second ] cache_io);
   p "the identity is stable across allocation, execution and replay"
     (Option.equal BI.equal_timing_identity identity (timing_identity ctx));
   if Option.is_some identity && first_report.Autotune.timings_contended > 0 then
