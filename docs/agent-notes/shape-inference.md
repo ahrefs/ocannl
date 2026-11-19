@@ -147,8 +147,9 @@ files.
   - Pairing: only the equal-arity, variables-only, no-solved-component case pairs (the first
     `Row.Concat` bullet). A stage-4+ generalization paired the rest too and left the leftover to
     arithmetic: `[a; b; c] = [d; e]` gave `c = 0`, `[a; b] = [4; e]` chose `b = 4`, and `[a; b;
-    2] = [d; e]` was refused. The equation now waits; arithmetic sizes the last component once the others are
-    known, and closure closes it at stage 7 (an einsum component is refused, gh-ocannl-1656).
+    2] = [d; e]` was refused. The equation now waits; arithmetic sizes the last component once
+    the others are known, and closure closes it at stage 7 (an einsum component is refused,
+    gh-ocannl-1656).
   - Closure: the guesses to 0 and `refuse_concat_component_guess`'s exemption read
     `may_be_empty`. Plain membership guessed an alias of a discardable component to 1, or refused
     it as a concatenation component, depending on which variable represented the two.
@@ -160,7 +161,12 @@ files.
     cannot be empty.
   - Statement: a constraint stating a concrete 0 (`0`, `Concat []`) for a variable that may not be
     empty waits while constraints register and is refused from stage 5 (`stated_zero`, read where
-    `solve_inequalities` dispatches a `Dim_eq`). Waiting keeps one verdict when the alias or the
+    `solve_inequalities` dispatches a `Dim_eq` or a `Dim_size`: a setter's number is a `Dim_size`
+    when its reference carries no basis, and must meet the same verdict as the `Dim_eq` it
+    otherwise is). A published solution re-delivered through the same arm is judged as a statement
+    too, which is conservative. Out of scope: a literal 0 written as a row's axis (a 0-extent
+    tensor axis), which `unify_row` passes to `unify_dim` axis by axis; such a row is a shape,
+    not a size statement. Waiting keeps one verdict when the alias or the
     discardable mark arrives after the 0 (`u = 0; u = w` with `w` discardable is accepted in both
     orders). A 0 that reaches a variable through a variable already sized 0 is no statement: `u =
     w` after `w = 0`, or a row equation substituting `w`, gives `u = 0` in either order, since

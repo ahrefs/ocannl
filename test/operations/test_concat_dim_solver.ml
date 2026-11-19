@@ -632,6 +632,20 @@ let test_zero_component () =
       in
       [ eq (Row.Var w) (dim 0); Row.Row_eq { r1 = row u; r2 = row w; origin = dummy_origin } ])
     ~want:"u = 0 of default, k = 1 of bcast_if_1";
+  (* A setter's number is a [Dim_size] when its reference carries no basis: its 0 meets the same
+     verdict as the stated equation. *)
+  let size0 u : Row.constraint_ =
+    Row.Dim_size { dim = Row.Var u; size = 0; origin = dummy_origin }
+  in
+  in_every_order "[u; 4] = [k; 2], k = 2, u sized 0 by a setter: refused" ~n:3
+    (fun u k _ -> [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2); size0 u ])
+    ~want:"refused";
+  in_every_order "u sized 0 by a setter, nothing else: refused" ~n:1
+    (fun u _ _ -> [ size0 u ])
+    ~want:"refused";
+  in_every_order ~discardable:`U "u sized 0 by a setter, u discardable: sized 0" ~n:1
+    (fun u _ _ -> [ size0 u ])
+    ~want:"u = 0 of default, k = 1 of bcast_if_1";
   in_every_order "u = [] stated, the empty concatenation: refused" ~n:1
     (fun u _ _ -> [ eq (Row.Var u) (Row.Concat []) ])
     ~want:"refused";

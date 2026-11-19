@@ -58,6 +58,9 @@ Zero components: only a discardable one is sized 0, in every order
   w = 0, u = w, w discardable: u inherits 0: u = 0 of default, k = 1 of bcast_if_1 in every order, and batched: true
   u = 0, u = w, w discardable: the alias licenses u: u = 0 of default, k = 1 of bcast_if_1 in every order, and batched: true
   w = 0, [u] = [w] as rows, w discardable: u inherits 0: u = 0 of default, k = 1 of bcast_if_1 in every order, and batched: true
+  [u; 4] = [k; 2], k = 2, u sized 0 by a setter: refused: refused in every order, and batched: true
+  u sized 0 by a setter, nothing else: refused: refused in every order, and batched: true
+  u sized 0 by a setter, u discardable: sized 0: u = 0 of default, k = 1 of bcast_if_1 in every order, and batched: true
   u = [] stated, the empty concatenation: refused: refused in every order, and batched: true
   w = 0, u = 0, w discardable: u is refused: refused in every order, and batched: true
   u a concatenation component, u = 0 stated: a zero-width segment: u = 0 of default, k = 1 of bcast_if_1 in every order, and batched: true

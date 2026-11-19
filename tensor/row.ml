@@ -2883,7 +2883,11 @@ let stated_zero env d1 d2 =
 (* A stated 0 that does not bind waits while constraints register, then is refused from stage 5,
    where closure starts sizing what is left. Waiting, as gh-ocannl-2316's zero residual does, keeps
    one verdict when an alias to a discardable variable, or the discardable mark itself, arrives
-   after the 0. *)
+   after the 0. The held constraint bypasses [stated_zero] in one place: [settle_window] probes
+   every held [Dim_eq] through [unify_dim] at a fixpoint, which binds the 0 in the probe's
+   environment. That is safe because only a window pair sets [settling.settled]: an unsettled probe
+   drops its environment and restores the globals. A settling arm that could fire on a bare [Var] =
+   [Dim] equation would have to skip a held stated 0. *)
 let zero_waits ~stage held env v =
   if is_stage5_up stage then
     raise
@@ -6979,7 +6983,7 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
           match dim with
           | Dim { d; _ } when d = size -> ([], env)
           | (Var _ | Affine _ | Concat _) when not (is_stage2_up stage) -> ([ ineq ], env)
-          | _ ->
+          | _ -> (
               let basis =
                 match dim with
                 | Dim { basis; _ } -> basis
@@ -6990,7 +6994,11 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
                     | _ -> default_basis)
                 | Sym _ | Affine _ | Concat _ -> default_basis
               in
-              unify_dim ~stage origin (dim, get_dim ~d:size ~basis ()) env)
+              (* A setter's 0 arrives here when its reference has no basis: it meets the statement
+                 rule as the [Dim_eq] a basis would make it (gh-ocannl-2368). *)
+              match if size = 0 then stated_zero env dim (get_default_dim ~d:0 ()) else None with
+              | Some v -> zero_waits ~stage ineq env v
+              | None -> unify_dim ~stage origin (dim, get_dim ~d:size ~basis ()) env))
       | Row_eq { r1; r2; origin } ->
           (* Substituted inside unify_row. *)
           unify_row ~stage origin (r1, r2) env
