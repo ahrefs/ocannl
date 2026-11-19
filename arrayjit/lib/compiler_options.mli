@@ -81,6 +81,14 @@ val metal_math_api : selector_available:(string -> bool) -> metal_math_api
     callback keeps the capability seam injectable without making this pure module depend on the
     Metal runtime. *)
 
+val metal_math_api_name : metal_math_api -> string
+(** The name [Metal_backend.host_capabilities] reports the regime under, as the [metal_math_api]
+    entry of [Context.host_capabilities]. *)
+
+val metal_math_api_of_name : string -> metal_math_api option
+(** The inverse of {!metal_math_api_name}: how a test that re-compiles a run's [.metal] artifact
+    reads the regime the run compiled under back (gh-ocannl-1828). *)
+
 (** Ordered property writes to apply to an [MTLCompileOptions] object; [Metal_backend] is only the
     interpreter that applies them, so the complete sequence is testable without linking Metal. *)
 type metal_option =

@@ -918,6 +918,27 @@ let gpu_probes () =
     (Poly.equal (census Census.Air ~basename:"k.metal" air_branching) (1, 5, 8));
   Verdict.p "AIR: a [select] is no branch, and nor is an unconditional [br label]"
     (Poly.equal (census Census.Air ~basename:"k.metal" air_blended) (0, 5, 6));
+  (* LLVM prints a [switch] over several lines, its [!dbg] after the closing bracket. *)
+  let air_switch =
+    air_module
+      [
+        "define void @k(i32 %0) local_unnamed_addr #0 !dbg !10 {";
+        "  switch i32 %0, label %3 [";
+        "    i32 0, label %2";
+        "    i32 1, label %2";
+        "  ], !dbg !22";
+        "";
+        "2:                                                ; preds = %1, %1";
+        "  br label %3, !dbg !22";
+        "";
+        "3:                                                ; preds = %1, %2";
+        "  ret void, !dbg !24";
+        "}";
+      ]
+  in
+  Verdict.p
+    "AIR: a [switch] printed over several lines is one branch, at its closing line's location"
+    (Poly.equal (census Census.Air ~basename:"k.metal" air_switch) (1, 2, 3));
   Verdict.p "AIR: locations whose subprogram names another source attribute nothing to this one"
     (Poly.equal (census Census.Air ~basename:"other.metal" air_branching) (0, 0, 0));
   Verdict.p "an empty listing has no markers and no instructions"

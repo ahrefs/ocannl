@@ -32,13 +32,13 @@ bs_where_masked: values match the select's semantics, bitwise: true
 bs_where_masked: the select calls the blend helper: true
 bs_where_masked: no short-circuiting spelling of the select remains: true
 bs_where_zero: no conditional branch on the select's lines (the backend's compiler) (CUDA: floor PTX target only): true
-bs_where_zero: Metal's AIR keeps the select's short-circuit, 1 conditional branch(es) on its lines (pinned on Metal Toolchain 32023.922; gh-ocannl-1828): true
+bs_where_zero: Metal's AIR keeps the select's short-circuit, 1 conditional branch(es) on its line (pinned on Metal Toolchain 32023.922; gh-ocannl-1828): true
 bs_relu_gate: no conditional branch on the select's lines (the backend's compiler) (CUDA: floor PTX target only): true
-bs_relu_gate: Metal's AIR keeps the select's short-circuit, 1 conditional branch(es) on its lines (pinned on Metal Toolchain 32023.922; gh-ocannl-1828): true
+bs_relu_gate: Metal's AIR keeps the select's short-circuit, 1 conditional branch(es) on its line (pinned on Metal Toolchain 32023.922; gh-ocannl-1828): true
 bs_where_eq: no conditional branch on the select's lines (the backend's compiler) (CUDA: floor PTX target only): true
-bs_where_eq: Metal's AIR keeps the select's short-circuit, 1 conditional branch(es) on its lines (pinned on Metal Toolchain 32023.922; gh-ocannl-1828): true
+bs_where_eq: Metal's AIR keeps the select's short-circuit, 1 conditional branch(es) on its line (pinned on Metal Toolchain 32023.922; gh-ocannl-1828): true
 bs_where_masked: no conditional branch on the select's lines (the backend's compiler) (CUDA: floor PTX target only): true
-bs_where_masked: Metal's AIR keeps the select's short-circuit, 1 conditional branch(es) on its lines (pinned on Metal Toolchain 32023.922; gh-ocannl-1828): true
+bs_where_masked: Metal's AIR keeps the select's short-circuit, 1 conditional branch(es) on its line (pinned on Metal Toolchain 32023.922; gh-ocannl-1828): true
 bs_index_guard: values: true
 bs_index_guard: an index guard keeps its [?:] and calls no blend: true
 bs_gather_guard: values: true
@@ -56,4 +56,4 @@ pool backward: the inlined gradient equals the reference, bitwise: true
 pool backward: the inlined gradient equals the inlining-off run, bitwise: true
 pool backward: the inlined gradient's selects call the blend: true
 pool backward: no conditional branch on the inlined selects' lines (the backend's compiler) (CUDA: floor PTX target only): true
-bs_pool_inlined: Metal's AIR keeps the select's short-circuit, 1 conditional branch(es) on its lines (pinned on Metal Toolchain 32023.922; gh-ocannl-1828): true
+pool backward: Metal's AIR has 1 conditional branch(es) on the inlined kernel's [?:] lines, its window guards' and its selects' together (pinned on Metal Toolchain 32023.922; gh-ocannl-1828): true

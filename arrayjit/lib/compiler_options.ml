@@ -174,6 +174,15 @@ let metal_math_api ~selector_available =
     Modern_split
   else Legacy
 
+(* gh-ocannl-1828: how [Metal_backend.host_capabilities] names the regime, and how a test that
+   re-compiles a run's artifact reads it back to rebuild the run's {!metal} sequence. *)
+let metal_math_api_name = function Modern_split -> "modern_split" | Legacy -> "legacy"
+
+let metal_math_api_of_name = function
+  | "modern_split" -> Some Modern_split
+  | "legacy" -> Some Legacy
+  | _ -> None
+
 type metal_option =
   | Language_version_3_1
   | Language_version_3_2

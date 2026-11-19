@@ -1375,16 +1375,29 @@ let parse_air ~dump ~source_basename =
             | _ -> None))
   in
   let in_body = ref false and markers = ref 0 and out = ref [] in
+  (* A [switch] prints over several lines -- [switch i32 %x, label %d [], one case per line, then
+     [], !dbg !<n>] -- so an instruction whose line ends in [[] is held open, its cases skipped, and
+     attributed by the line that closes it. *)
+  let open_insn = ref None in
+  let emit k body =
+    let g_source = Option.bind (int_after body ~key:"!dbg !") ~f:source_line_of in
+    if Option.is_some g_source then Int.incr markers;
+    let g_mnemonic, g_cond = air_classify body in
+    out := (k + 1, { g_source; g_text = body; g_mnemonic; g_cond }) :: !out
+  in
   List.iteri lines ~f:(fun k line ->
       if String.is_prefix line ~prefix:"define " then in_body := true
       else if String.equal (String.rstrip line) "}" then in_body := false
       else if !in_body && String.is_prefix line ~prefix:"  " then
         let body = String.strip line in
-        if (not (String.is_empty body)) && not (String.is_prefix body ~prefix:";") then (
-          let g_source = Option.bind (int_after body ~key:"!dbg !") ~f:source_line_of in
-          if Option.is_some g_source then Int.incr markers;
-          let g_mnemonic, g_cond = air_classify body in
-          out := (k + 1, { g_source; g_text = body; g_mnemonic; g_cond }) :: !out));
+        match !open_insn with
+        | Some (k0, opening) ->
+            if String.is_prefix body ~prefix:"]" then (
+              open_insn := None;
+              emit k0 (opening ^ " " ^ body))
+        | None ->
+            if (not (String.is_empty body)) && not (String.is_prefix body ~prefix:";") then
+              if String.is_suffix body ~suffix:"[" then open_insn := Some (k, body) else emit k body);
   { g_lines = List.rev !out; g_markers = !markers }
 
 (** [parse_gpu dialect ~dump ~source_basename] reads a disassembly listing ([nvdisasm -g -c] or
@@ -1484,21 +1497,9 @@ let metal_cli_flags options =
 
 let metal_compiler = "xcrun -sdk macosx metal"
 
-(** [metal_toolchain ()] is the Metal Toolchain's version line
-    ([Apple metal version 32023.922 (metalfe-32023.922.4)]), or why there is none: no [xcrun] (not
-    macOS), or [xcrun] finding no [metal] (Xcode without the separately downloaded Metal Toolchain
-    component). *)
-let metal_toolchain () =
-  let rc, out = run_capture (metal_compiler ^ " --version") in
-  let first = List.hd (String.split_lines out) |> Option.value ~default:"" |> String.strip in
-  if rc = 0 && String.is_prefix first ~prefix:"Apple metal version " then Ok first
-  else
-    Error
-      (Printf.sprintf "no Metal Toolchain (%s --version exited %d: %s)" metal_compiler rc
-         (String.concat ~sep:" " (List.take (String.split_lines (String.strip out)) 2)))
-
-(** [metal_toolchain_version line] is the version number a {!metal_toolchain} line names
-    ([32023.922]): what a census pinning exact AIR counts pins. *)
+(** [metal_toolchain_version line] is the version number a Metal Toolchain's [--version] line names
+    ([Apple metal version 32023.922 (metalfe-32023.922.4)] -> [32023.922]; the backend reports the
+    line as its [metal_toolchain] host capability): what a census pinning exact AIR counts pins. *)
 let metal_toolchain_version line =
   match String.chop_prefix line ~prefix:"Apple metal version " with
   | Some rest -> List.hd (String.split rest ~on:' ')
@@ -1511,15 +1512,17 @@ let metal_toolchain_version line =
     older architecture than the device (NVRTC's default, when no kernel marker raises it), and the
     driver's JIT assembles it for the device, so the census does too; absent, the PTX's own
     [.target]. For [Air], [artifact] is the run's [.metal] source, re-compiled under
-    [?metal_options], the run's own [Compiler_options.metal] sequence, which it requires. *)
-let disassemble_gpu ?cuda_arch ?metal_options dialect ~artifact =
+    [?metal_options], the run's own [Compiler_options.metal] sequence, by the toolchain whose
+    version line [?metal_toolchain] is (the Metal backend's [metal_toolchain] host capability), both
+    of which it requires. *)
+let disassemble_gpu ?cuda_arch ?metal_options ?metal_toolchain dialect ~artifact =
   let q = Stdlib.Filename.quote in
   match dialect with
   | Air -> (
-      match (metal_options, metal_toolchain ()) with
+      match (metal_options, metal_toolchain) with
       | None, _ -> Error "an AIR census needs the run's Metal compile options"
-      | _, Error why -> Error why
-      | Some options, Ok version ->
+      | _, None -> Error ("no Metal Toolchain (" ^ metal_compiler ^ ")")
+      | Some options, Some version ->
           let flags =
             String.concat ~sep:" "
               (metal_cli_flags options @ [ "-gline-tables-only"; "-S"; "-emit-llvm" ])
