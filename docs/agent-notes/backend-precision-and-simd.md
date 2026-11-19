@@ -1187,11 +1187,17 @@ files.
   1.02, 0.73-1.38), so no difference is claimed.
   Training: gpt2_mini_train's untuned bf16 step 0.990 (0.940-1.004) (f32 control 0.999) -- its
   untuned plan ships no tile in either arm, so only the serial accumulators move (2 of its 4
-  generated sources differ). Accuracy beside it (whole-output checksum error against the exact
-  answer): wide 0.00027 everywhere, narrow tile 0.005-0.0065, narrow serial 0.014-0.034. Decision:
-  keep `Bf16_auto` wide on Metal -- the untuned default pays nothing, a tuned bf16 GEMM about
-  1.24x where it resolves (n = 2048), for an 18-125x smaller error and tile/serial value parity (a
-  crown changes no value). The tile speed stays one setting away: `bf16_arithmetic=true`, which
+  generated sources differ). Tuned training (gh-ocannl-2321, same mac-studio M4 Max, 16 paired
+  rounds) was 1.041 (1.008-1.066), with the untuned f32 control at 0.999 (0.989-1.007).
+  Each bf16 policy crowned once in its own empty cache. Both shipped a materialize-all
+  `F_sketch` and replayed 376 segments, with 26 wide and 34 narrow MMA statements and zero
+  scalar fallbacks. That ratio includes the schedules each policy chose in this window.
+  With 50 GEMM repeats at n = 1024, the fastest-per-policy ratio was still unresolved at
+  1.128 (0.898-1.717), with its f32 control at 1.007 (0.900-1.183).
+  Keep `Bf16_auto` wide on Metal. The tuned training cost was 4.1% in this window and the
+  n = 2048 tuned GEMM paid about 1.24x. The GEMM's whole-output checksum error was 0.00027 wide,
+  0.005-0.0065 on narrow tiles and 0.014-0.034 on narrow serial legs. Wide reduces the error
+  18-125x and preserves tile/serial value parity. Narrow stays available as `bf16_arithmetic=true`, which
   the `approximate` profile already pins; no profile payload changed.
 - **The f16 tensor-unit narrowing census is measured per backend and family** (gh-ocannl-2151),
   in `test/operations/mma_bf16_seed_parity`. The narrow arm (`Fp16_narrow`) is compared with three
