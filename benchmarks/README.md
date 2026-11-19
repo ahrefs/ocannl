@@ -965,6 +965,18 @@ single-threaded segments that sum to the serial step
   configuration is not its command line (whatever else held), 125 when its group was not proven
   gone -- the driver stops there. `config_records.py expect FILE KEY=VALUE...` is the same check
   over a stderr a driver kept itself.
+- `cells.py progress RUN_DIR` — where a run is, read-only (gh-ocannl-2378): under a driver's
+  `$OUT`, a `bin_cells`/`ab` run or one cell directory, it names the newest unfinished cell (no
+  completion record: no `cell.json`, or no complete `cells.jsonl` line yet; of those, the one whose
+  `stderr` was written last), its stderr's line count and age, and its last progress line -- a
+  line opening with one of `bench_output.PROGRESS_PREFIXES` (`autotune-progress:`,
+  `autotune-crown:`, `autotune:`, `tune_placements:`, `bench:`). Exit 0 with an unfinished cell, 1
+  when every cell has its record (the newest is shown) or none exists. Unfinished is not proven
+  alive: a cell interrupted or killed with its driver keeps no record either, and the stderr's age
+  tells the two apart. A cold search (`gh1051_bf16_ab.sh`'s `search_<arm>`, about 39
+  minutes on Metal, quiet in its driver's own output) writes `autotune:` lines as each candidate
+  compiles and times under `autotune_log=true`; under `--ocannl_autotune_progress=true` the
+  `autotune-progress:` lines also number each candidate of its phase.
 - `bench_output.py` — the one reader of what OCANNL's benches print (gh-ocannl-1443): `bench-result:`
   lines, the runners' result line (the last stdout line opening a JSON object, read strictly;
   `strict_json.py field` asks it for one field from a shell driver), `bench: checkpoint` lines, the

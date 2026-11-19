@@ -22,11 +22,14 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 import unittest.mock
 from pathlib import Path
 
 import box_gate
+import cells
+from display_safe import display_value
 
 HERE = Path(__file__).resolve().parent
 
@@ -579,6 +582,108 @@ class ProseTraceScanTest(unittest.TestCase):
             (root / "clean.sh").write_text('run --ocannl_log_config_json=true\n')
             (root / "test_d.py").write_text('"log_config_sourcing"\n')
             self.assertEqual(prose_trace_readers(root), ["a.sh:1", "b.py:1", "runners/x/c.sh:1"])
+
+
+class ProgressCommandTest(unittest.TestCase):
+    """`cells.py progress RUN_DIR` (gh-ocannl-2378): the newest unfinished cell's last progress line,
+    read-only, over fixture runs in both layouts -- a shell driver's `cell` directories and a
+    `run_cells` run."""
+
+    RECORDS = "\n".join([record_line("backend", "metal", "commandline", "--ocannl_backend=metal"),
+                         "Welcome to OCANNL! Configuration defaults file is disabled."]) + "\n"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.run_dir = Path(self.tmp.name).resolve() / "run"
+        # How the command shows the run directory (a Windows path is JSON-quoted).
+        self.shown = display_value(str(self.run_dir))
+
+    def cell(self, rel, stderr, finished, mtime=None):
+        d = self.run_dir / rel
+        d.mkdir(parents=True)
+        (d / "stdout").write_text("")
+        (d / "stderr").write_text(self.RECORDS + stderr)
+        if finished:
+            (d / "cell.json").write_text("{}\n")
+        if mtime is not None:
+            os.utime(d / "stderr", (mtime, mtime))
+        return d
+
+    def progress(self):
+        proc = subprocess.run([sys.executable, "-B", str(CELLS), "progress", str(self.run_dir)],
+                              text=True, capture_output=True, timeout=60)
+        self.assertEqual(proc.stderr, "")
+        return proc.returncode, proc.stdout.splitlines()
+
+    def test_a_run_in_progress_shows_its_unfinished_cells_last_progress_line(self):
+        # The finished cell was written last: lacking a completion record, not being newest, is
+        # what makes a cell the one shown.
+        now = time.time()
+        self.cell("search_false", "autotune: F_sketch[a]: 70.1 ms\nbench: tune shipped=A\n",
+                  finished=True, mtime=now)
+        self.cell("search_true", "tune_placements: arm A (default placements) search:\n"
+                  "autotune: F_sketch[b]: compile compiled in 0.3 s\n"
+                  "autotune: F_sketch[b]: 64.5 ms (digest 1/2)\n"
+                  "a warning that is not a progress line\n", finished=False, mtime=now - 30)
+        status, out = self.progress()
+        self.assertEqual(status, 0, out)
+        self.assertEqual(out[0], "cells: unfinished cell search_true (the newest of 1 with no "
+                                 f"completion record, among 2 cells under {self.shown})")
+        self.assertRegex(out[1], r"^cells: its stderr holds 6 lines, last written \d+ s ago$")
+        self.assertEqual(out[2], "cells: progress line 3: autotune: F_sketch[b]: 64.5 ms (digest 1/2)")
+        self.assertEqual(len(out), 3)
+        # The age, on a fixed clock.
+        lines, _ = cells.progress_report(self.run_dir, now=now + 12)
+        self.assertEqual(lines[1], "cells: its stderr holds 6 lines, last written 42 s ago")
+
+    def test_a_finished_run_says_no_cell_is_unfinished(self):
+        now = time.time()
+        self.cell("search_false", "bench: tune shipped=A\n", finished=True, mtime=now - 60)
+        self.cell("search_true", "bench: tune shipped=B\n", finished=True, mtime=now)
+        status, out = self.progress()
+        self.assertEqual(status, 1, out)
+        self.assertEqual(out[0], f"cells: no unfinished cell: all 2 cells under {self.shown} have a "
+                                 "completion record; the newest is search_true")
+        self.assertEqual(out[2], "cells: progress line 1: bench: tune shipped=B")
+
+    def test_a_run_cells_run_counts_its_cells_jsonl_lines(self):
+        # cells.jsonl holds cell 0's line and a partial one: cell 1 is still running.
+        now = time.time()
+        self.cell("cells/000-a", "autotune: done\n", finished=False, mtime=now)
+        self.cell("cells/001-b", "autotune: F_sketch[c]: 9.0 ms\n", finished=False, mtime=now - 5)
+        (self.run_dir / "cells.jsonl").write_text('{"cell": 0}\n{"cell": 1, "par')
+        status, out = self.progress()
+        self.assertEqual(status, 0, out)
+        self.assertTrue(out[0].startswith("cells: unfinished cell cells/001-b (the newest of 1 "), out)
+        (self.run_dir / "cells.jsonl").write_text('{"cell": 0}\n{"cell": 1}\n')
+        status, out = self.progress()
+        self.assertEqual(status, 1, out)
+        self.assertTrue(out[0].endswith("the newest is cells/000-a"), out)
+
+    def test_no_progress_line_yet_and_a_long_line(self):
+        self.cell("starting", "", finished=False)
+        status, out = self.progress()
+        self.assertEqual(status, 0, out)
+        self.assertEqual(out[2], "cells: no progress line yet (one opening with autotune-progress:, "
+                                 "autotune-crown:, autotune:, tune_placements:, bench:)")
+        (self.run_dir / "starting" / "stderr").write_text("autotune: " + "x" * 500 + "\n")
+        _, out = self.progress()
+        self.assertEqual(out[2], "cells: progress line 1: autotune: " + "x" * 390
+                         + " ... [110 more chars]")
+
+    def test_no_cell_directory(self):
+        self.run_dir.mkdir()
+        status, out = self.progress()
+        self.assertEqual((status, out), (1, [f"cells: no cell directory (one holding a `stderr`) "
+                                             f"under {self.shown}"]))
+
+    def test_every_progress_prefix_names_what_its_producer_prints(self):
+        import bench_output
+        self.assertTrue(bench_output.PROGRESS_PREFIXES)
+        for prefix, (path, token) in bench_output.PROGRESS_PREFIXES.items():
+            self.assertTrue(token.startswith('"' + prefix.rstrip()), prefix)
+            self.assertIn(token, (HERE.parent / path).read_text(), f"{prefix}: {path}")
 
 
 @POSIX_ONLY

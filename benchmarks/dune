@@ -47,11 +47,13 @@
   ../ocannl_config.reference
   ../test/operations/bench_result_line.expected
   ; The bench-line reader scan (test/test_bench_line_scan.py, gh-ocannl-1767) holds
-  ; bench_output.FORMATS to the sources that print each format.
+  ; bench_output.FORMATS to the sources that print each format, and test_cells.py's
+  ; ProgressCommandTest holds bench_output.PROGRESS_PREFIXES the same way (gh-ocannl-2378).
   ../bin/schedule_bench.ml
   ../bin/narrow_gebp_bench.ml
   ../arrayjit/lib/backends.ml
   ../arrayjit/lib/autotune.ml
+  ../lib/train.ml
   runners/ocannl/bench_harness.ml
   runners/ocannl/bench_rank_site.ml
   (glob_files workloads/*.json)

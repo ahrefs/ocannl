@@ -6087,10 +6087,14 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   A `sample` of such a process sits in `IOSurfaceSharedEvent waitUntilSignaledValue:timeoutMS:`
   with `ioreg -r -d 1 -c IOAccelerator` reading Device Utilization near 100 %, but a kernel that
   never ends looks the same (backend-dialects-and-idents.md, gh-ocannl-2082), and utilization is
-  device-wide. The evidence that a run advances is its stderr `Epoch N` lines, one per ten epochs,
-  which dune holds back unless the batch passes `--no-buffer`: at these rates one every 9
-  minutes for `mnist_conv` and 14 for `cifar_conv` once training starts, a few minutes after
-  launch. A run that misses two of them is worth sampling as a hang. The 2026-11-17 readings that
+  device-wide. The evidence that a run advances is its stderr lines, which dune holds back unless
+  the batch passes `--no-buffer` (gh-ocannl-2378): `Training started <t> s after launch` once
+  the routine is compiled, then `Epoch N/E: avg loss = ... (<t> s after launch)` after EVERY
+  epoch -- at these rates (40 steps an epoch) one every 53 s for `mnist_conv` and 82 s for
+  `cifar_conv`. A run that misses two of them (about 2 and 3 minutes with no new line) is worth
+  sampling as a hang. A benchmark search, quiet in its driver's output for tens of minutes, has
+  the same reader: `python3 benchmarks/cells.py progress <run dir>` names the newest unfinished
+  cell, its stderr's age and its last progress line (benchmarks/README.md). The 2026-11-17 readings that
   looked like stalls were all cut short by caps below the run's length: a 100 s `--test-cap`, a
   manual stop at 523 s, and 18- and 60-minute run caps. So run these aliases with `--no-buffer`
   under the slow default with no `--test-cap`, one Metal training batch at a time.
