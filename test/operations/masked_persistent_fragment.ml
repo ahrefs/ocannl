@@ -50,24 +50,10 @@ let half = Ir.Ops.half
 let single = Ir.Ops.single
 let host_limits = Context.hardware_limits (Context.auto ())
 
-(* A stand-in matrix unit for the structural claims where the host has none: an f16 x f16 -> f32
-   8x8x8 tile, at no other hardware limit. *)
 let standin_limits =
-  {
-    BI.no_hardware_limits with
-    mma =
-      Some
-        {
-          BI.minimal_mma_capability with
-          mma_tile = (8, 8, 8);
-          mma_f16_wide_acc_scopes = [ BI.Mma_per_statement; BI.Mma_fragment_scope ];
-          mma_format_tiles =
-            [
-              ((BI.Mma_f16, BI.Mma_f16, BI.Mma_f32), (8, 8, 8));
-              ((BI.Mma_f16, BI.Mma_f16, BI.Mma_f16), (8, 8, 8));
-            ];
-        };
-  }
+  Ll_test.mma_8x8x8_limits
+    ~f16_wide_acc_scopes:[ BI.Mma_per_statement; BI.Mma_fragment_scope ]
+    Ll_test.f16_mma_formats
 
 (* The seeder's own judgment that this GPU seeds a tensorized site of these precisions. *)
 let gpu_advertises ~d_prec =

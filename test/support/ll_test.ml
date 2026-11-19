@@ -1800,42 +1800,37 @@ end
     them on every host (gh-ocannl-1626); nothing is rendered in this dialect. *)
 let gpu_like_capabilities () = Ir.C_syntax.codegen_capabilities (module Gpu_like_config)
 
-(** A stand-in matrix unit at no other hardware limit: an f32 x f32 -> f32 8x8x8 tile. The limits a
-    structural leg seeds tensorized GPU sketches under whatever the host (gh-ocannl-1626) -- cc
-    advertises no GPU tile, so per-PR CI proposes none at the host's own limits. *)
-let f32_mma_limits =
+(** A stand-in 8x8x8 matrix unit with the given formats and no other hardware limits. *)
+let mma_8x8x8_limits ?f16_wide_acc_scopes formats =
   let module BI = Ir.Backend_intf in
+  let tile = (8, 8, 8) in
+  let minimal = BI.minimal_mma_capability in
   {
     BI.no_hardware_limits with
     mma =
       Some
         {
-          BI.minimal_mma_capability with
-          mma_tile = (8, 8, 8);
-          mma_format_tiles = [ ((BI.Mma_f32, BI.Mma_f32, BI.Mma_f32), (8, 8, 8)) ];
+          minimal with
+          mma_tile = tile;
+          mma_format_tiles = List.map formats ~f:(fun format -> (format, tile));
+          mma_f16_wide_acc_scopes =
+            Option.value f16_wide_acc_scopes ~default:minimal.mma_f16_wide_acc_scopes;
         };
   }
+
+(** An f32 x f32 -> f32 tile for seeding tensorized GPU sketches on any host (gh-ocannl-1626). *)
+let f32_mma_limits = mma_8x8x8_limits [ Ir.Backend_intf.(Mma_f32, Mma_f32, Mma_f32) ]
+
+(** The f16 x f16 formats shared by the stand-ins with and without wide-accumulator scopes. *)
+let f16_mma_formats =
+  let open Ir.Backend_intf in
+  [ (Mma_f16, Mma_f16, Mma_f16); (Mma_f16, Mma_f16, Mma_f32) ]
 
 (** {!f32_mma_limits}' f16 twin: f16 x f16 tiles accumulating at f16 and at f32, 8x8x8, no wide-
     accumulator scope. The stand-in an f16 leg seeds its tensorized GPU sketches under on every host
     (gh-ocannl-1780): {!f32_mma_limits} advertises no f16 format, so under it an f16 site's
     tensorized capability is withheld and no tensorized seed is proposed. *)
-let f16_mma_limits =
-  let module BI = Ir.Backend_intf in
-  {
-    BI.no_hardware_limits with
-    mma =
-      Some
-        {
-          BI.minimal_mma_capability with
-          mma_tile = (8, 8, 8);
-          mma_format_tiles =
-            [
-              ((BI.Mma_f16, BI.Mma_f16, BI.Mma_f16), (8, 8, 8));
-              ((BI.Mma_f16, BI.Mma_f16, BI.Mma_f32), (8, 8, 8));
-            ];
-        };
-  }
+let f16_mma_limits = mma_8x8x8_limits f16_mma_formats
 
 (** The CUDA dialect without a device: {!Ir.Cuda_like_config}'s CUDA syntax, with no builtins and no
     extra identifier blacklist. It binds [blockIdx]/[threadIdx] registers and shuffles 32-lane

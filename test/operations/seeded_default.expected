@@ -21,10 +21,14 @@ the auto-gated weight gradient is bitwise the default pipeline's: true
 the auto-gated bias gradient is bitwise the default pipeline's: true
 the model reports a pick: true
 on CUDA/HIP the model starts from the seeded plan: its pick is the seeded plan or beats it, never the plain default pipeline: true
-on CUDA/HIP the model's pick is no tensor-core or conv form: true
 on CUDA/HIP the model's weight gradient is bitwise the default pipeline's: true
 on CUDA/HIP the model's bias gradient is bitwise the default pipeline's: true
 where the backend rates an envelope, model_pick names model_default's pick without compiling: true
 structural: for the cuda stand-in the model starts from the seeded plan: its pick is never the plain default pipeline: true
-structural: for the cuda stand-in the model's pick is no tensor-core or conv form: true
 structural control: without rated ceilings the cuda stand-in's pick is the default pipeline: true
+structural: without seeding, the model picks a tensor-core leaf: true
+structural: with seeding, the ranked pick is no tensor-core or conv form: true
+structural: seeding is active under the fixture's seeded settings: true
+on CUDA/HIP without seeding, the model picks a tensor-core leaf: true
+on CUDA/HIP with seeding, the ranked pick is no tensor-core or conv form: true
+on CUDA/HIP seeding is active under the fixture's seeded settings: true
