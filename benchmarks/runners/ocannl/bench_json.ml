@@ -342,8 +342,10 @@ type kernel = {
   segments : int;  (** How many kernels the step shipped. *)
   declined : int;
       (** Kernels that could not be timed on their own (a hermetic compile the backend refused, or a
-          kernel none of whose timing calls was admitted): the dominant one is dominant among the
-          others only. *)
+          re-timed candidate none of whose timing calls was admitted): the dominant one is dominant
+          among the others only. A kernel the screen dropped is not counted: its screen reading
+          ruled it out whether or not the admission gate admitted that window, since a refused
+          window's minimum only over-states the kernel (gh-ocannl-1818). *)
   writes : string;  (** The nodes it writes, the label a reader finds it by. *)
   seg_ms : float;
       (** Its per-launch time on its own: the median of its timing calls under the configured
@@ -354,7 +356,10 @@ type kernel = {
   seg_ms_hi : float;  (** The greatest, likewise. *)
   segments_ms : float;
       (** The kernels' times, summed over those that were timed: a re-timed candidate's median, a
-          screened kernel's one reading (gh-ocannl-1763). *)
+          screened kernel's one reading (gh-ocannl-1763) -- under the configured [autotune_timing]
+          for a kernel the second screen stage read, under [isolated] for one only the first stage
+          read, and its minimum even where the admission gate refused that window (gh-ocannl-1818).
+          A sum of screening estimates in two objectives, not step latency. *)
   tensorization : string;  (** [Ir.C_syntax.tensorization_name] of its own compile. *)
   flops : int;
   bytes : int;

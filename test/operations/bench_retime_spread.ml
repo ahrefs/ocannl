@@ -137,7 +137,7 @@ let () =
   in
   let cases =
     List.concat_map [ 1; 2; 3; 8 ] ~f:(fun at_most ->
-        List.concat_map [ 1.5; 2.; 4. ] ~f:(fun ratio ->
+        List.concat_map [ 1.5; 2.; 4.; Float.infinity ] ~f:(fun ratio ->
             List.map [ 11; 29; 47; 1763 ] ~f:(fun seed -> (at_most, ratio, sequence ~seed ~len:40))))
   in
   p_all "screen: applied after each reading, it keeps what one application to all of them keeps"
@@ -150,27 +150,30 @@ let () =
 
 (* gh-ocannl-1818: the screen's two stages. The first reads every kernel once under [isolated]
    timing, whose reading carries a launch-and-sync round trip the queued objective amortizes, and
-   keeps a WIDE set ([screen_keep_wide]); the second reads only those once under the configured
-   objective and keeps the re-timing's candidates from those readings ([rescreen]). The scenario is
-   the crowding the wide cap is for, after gpt2_mini_train on HIP, whose dominant kernel is a few
-   round trips long: twelve kernels a little faster than the dominant one under queued timing but
-   with a longer round trip read above it isolated, so a single isolated stage capped at
-   [screen_at_most] would leave it out. Kernels are [(name, isolated, queued)]. *)
+   keeps the [screen_wide_at_most] slowest readings, with no ratio ([screen_keep_wide]); the second
+   reads only those once under the configured objective and keeps the re-timing's candidates from
+   those readings ([rescreen]). The scenario is the crowding the wide cap is for, after
+   gpt2_mini_train on HIP, whose dominant kernel is a few round trips long: twelve kernels a little
+   faster than the dominant one under queued timing but with a longer round trip read above it
+   isolated, so a single isolated stage capped at [screen_at_most] would leave it out. Kernels are
+   [(name, isolated, queued)]; "unread" has no isolated reading. *)
 let () =
   let names l = String.concat ~sep:" " l in
   let kernels =
     ("dom", Some 0.34375, Some 0.3125)
     :: List.init 12 ~f:(fun k -> (Printf.sprintf "f%d" k, Some 0.375, Some 0.25))
-    @ List.init 10 ~f:(fun k -> (Printf.sprintf "s%d" k, Some 0.125, Some 0.0625))
-    @ [ ("refused", None, Some 0.125) ]
+    @ List.init 20 ~f:(fun k -> (Printf.sprintf "s%d" k, Some 0.125, Some 0.0625))
+    @ [ ("unread", None, Some 0.125) ]
   in
   let name (n, _, _) = n in
   let isolated (_, i, _) = i in
+  let starts_s k = String.is_prefix (name k) ~prefix:"s" in
   (* The first stage as the instrument applies it: after each reading, to what it holds so far. *)
   let wide =
     List.fold kernels ~init:[] ~f:(fun held k ->
         fst (R.screen_keep_wide (List.map (held @ [ k ]) ~f:(fun k -> (k, isolated k)))))
   in
+  let _, wide_dropped = R.screen_keep_wide (List.map kernels ~f:(fun k -> (k, isolated k))) in
   printf "two-stage screen: the first stage kept %d of %d\n" (List.length wide)
     (List.length kernels);
   p_none "two-stage screen: the scenario crowds the dominant kernel out of a single isolated stage"
@@ -178,15 +181,21 @@ let () =
     ~f:(fun k -> String.equal (name k) "dom");
   p_exists "two-stage screen: the first stage keeps the dominant kernel, ranked thirteenth isolated"
     wide ~f:(fun k -> String.equal (name k) "dom");
-  p_none "two-stage screen: the first stage drops what is past 2x of the slowest isolated reading"
-    wide ~f:(fun k -> String.is_prefix (name k) ~prefix:"s");
-  p_exists "two-stage screen: the first stage keeps a refused isolated reading" wide ~f:(fun k ->
-      String.equal (name k) "refused");
+  p "two-stage screen: the first stage keeps screen_wide_at_most readings and the unread kernel"
+    (List.length wide = R.screen_wide_at_most + 1);
+  p_all "two-stage screen: what the first stage drops are the fastest isolated readings"
+    wide_dropped ~f:starts_s;
+  p_exists
+    "two-stage screen: the first stage applies no ratio: a reading past 2x of the slowest is kept \
+     while the cap has room"
+    wide ~f:starts_s;
+  p_exists "two-stage screen: the first stage keeps a kernel with no isolated reading" wide
+    ~f:(fun k -> String.equal (name k) "unread");
   let reads = ref [] in
   let kept, dropped =
     R.rescreen wide ~read:(fun (n, _, q) ->
         reads := n :: !reads;
-        q)
+        (q, false))
   in
   let kept_names = List.map kept ~f:(fun (k, _) -> name k) in
   printf "two-stage screen: re-timing [%s], dropped %d\n" (names kept_names) (List.length dropped);
@@ -195,16 +204,25 @@ let () =
   p "two-stage screen: the re-timing's candidates are capped by the second-stage readings"
     (List.length kept = R.screen_at_most && String.equal (List.hd_exn kept_names) "dom");
   p_exists "two-stage screen: a second-stage reading past 2x of the slowest one is dropped" dropped
-    ~f:(fun (k, _) -> String.equal (name k) "refused");
+    ~f:(fun (k, _) -> String.equal (name k) "unread");
   p_all "two-stage screen: what the second stage drops keeps its second-stage reading" dropped
     ~f:(fun ((_, _, q), r) -> Option.equal Float.equal q r);
-  let kept, _ =
-    R.rescreen
-      [ ("a", Some 1.); ("b", Some 4.) ]
-      ~read:(fun (n, _) -> if String.equal n "a" then None else Some 4.)
-  in
-  p "two-stage screen: a refused second-stage reading is kept for the re-timing"
-    (List.equal String.equal (List.map kept ~f:(fun ((n, _), _) -> n)) [ "a"; "b" ])
+  let kept_of read entries = List.map (fst (R.rescreen entries ~read)) ~f:(fun ((n, _), _) -> n) in
+  let refused_a (n, r) = (r, String.equal n "a") in
+  p "two-stage screen: a refused second-stage reading does not set the cut while one is admitted"
+    (List.equal String.equal
+       (kept_of refused_a [ ("a", Some 0.40625); ("b", Some 0.15625) ])
+       [ "a"; "b" ]);
+  p "two-stage screen: with every second-stage reading refused, the refused ones set the cut"
+    (List.equal String.equal
+       (kept_of (fun (_, r) -> (r, true)) [ ("a", Some 0.40625); ("b", Some 0.15625) ])
+       [ "a" ]);
+  p "two-stage screen: a second-stage call with no reading is kept for the re-timing"
+    (List.equal String.equal
+       (kept_of
+          (fun (n, r) -> if String.equal n "a" then (None, true) else (r, false))
+          [ ("a", Some 1.); ("b", Some 4.) ])
+       [ "a"; "b" ])
 
 (* gh-ocannl-1818: a screen ranks a timing call by its minimum whether or not the admission gate
    admitted the window -- a refused window's minimum only over-states the kernel -- and keeps a

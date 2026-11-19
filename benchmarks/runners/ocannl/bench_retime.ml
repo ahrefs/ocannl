@@ -197,10 +197,12 @@ let retime ?calls (routines : (Context.t * Context.routine) list) =
     [queued] by default -- still cost 1.1-1.5 s on CUDA/HIP, where it calibrates a batch depth of up
     to 2048 launches with probes and confirmations, so a 270-kernel HIP step spent ~410 s of its 600
     s budget on the screen alone. The first stage reads every kernel once under {!screen_timing},
-    [isolated] -- one launch and one host synchronization a sample, no calibration -- and keeps
-    those within {!screen_ratio} of the slowest isolated reading, at most {!screen_wide_at_most} of
-    them, plus any with no reading ({!screen_keep_wide}). The second reads only those, once each,
-    under the configured objective, and keeps the re-timing's candidates from THOSE readings
+    [isolated] -- one launch and one host synchronization a sample, no calibration -- and keeps the
+    {!screen_wide_at_most} slowest isolated readings, plus any kernel with no reading
+    ({!screen_keep_wide}); it applies no ratio, since a ratio between two isolated readings says
+    nothing reliable about the configured objective's (two kernels of 8 and 7 us under queued timing
+    can read 48 and 97 us isolated, their round trips differing). The second reads only those, once
+    each, under the configured objective, and keeps the re-timing's candidates from THOSE readings
     ({!rescreen}). An isolated reading carries a launch-and-sync round trip the queued objective
     amortizes (~40-90 us on gfx1151, varying by kernel), so it does not order kernels whose times
     are within that round trip of one another, and on a step whose dominant kernel is a few times
@@ -210,21 +212,24 @@ let retime ?calls (routines : (Context.t * Context.routine) list) =
     round trip does not inflate.
 
     A reading is a minimum over a window, so noise only raises it above the kernel's floor. The
-    truly slowest kernel is therefore left out only when some other kernel's single reading came out
-    more than twice the slowest's own -- an inflated window -- or, in the first stage, when
-    {!screen_wide_at_most} other kernels' isolated readings came out above its own; and then a wrong
-    one can be named.
+    truly slowest kernel is therefore left out only when, in the first stage, {!screen_wide_at_most}
+    other kernels' isolated readings came out above its own, or, in the second, some other kernel's
+    admitted reading came out more than twice its own -- an inflated window -- or [screen_at_most]
+    others above it; and then a wrong one can be named.
 
     A screen reading is ranked by its minimum even when {!Autotune.admitted_timing_ms} refuses the
     window ({!screen_reading}): the screen only decides what is re-measured, and a refused window's
     minimum can only over-state the kernel -- it is not dropped on a reading noise lowered, it may
-    only crowd the cut as any inflated window does. Before gh-ocannl-1818 a refused reading was kept
-    unconditionally, outside the cap, and on a shared box that made the screen's cost unbounded: a
-    Metal [gpt2_mini_train] step under co-tenant load had 38 of 195 queued screen readings refused,
-    and re-timed all 46 candidates at four calls each, 136 s; isolated, 105 of 195 were refused.
-    Only a kernel with no reading at all -- a clock that resolved nothing -- is still kept outside
-    the cap, since nothing is known of it. The re-timing's readings, which decide the dominant
-    kernel and state its range, go through the admission gate as before. *)
+    only crowd the cap as any inflated window does. It does not set the second stage's cut, though,
+    while any reading there was admitted ({!rescreen}): on CUDA/HIP a queued reading refused as
+    [unbatched] is a depth-1, round-trip-inclusive time, and as the slowest it would cut a kernel
+    whose admitted queued reading is the larger true time. Before gh-ocannl-1818 a refused reading
+    was kept unconditionally, outside the cap, and on a shared box that made the screen's cost
+    unbounded: a Metal [gpt2_mini_train] step under co-tenant load had 38 of 195 queued screen
+    readings refused, and re-timed all 46 candidates at four calls each, 136 s; isolated, 105 of 195
+    were refused. Only a kernel with no reading at all -- a clock that resolved nothing -- is still
+    kept outside the cap, since nothing is known of it. The re-timing's readings, which decide the
+    dominant kernel and state its range, go through the admission gate as before. *)
 
 (** The first stage's objective: [isolated], whatever [autotune_timing] says, because it needs no
     calibration. *)
@@ -240,20 +245,29 @@ let screen_ratio = 2.
     overlap anyway. *)
 let screen_at_most = 8
 
-(** [screen_keep ?ratio ?at_most entries]: [(kept, dropped)], each in [entries]' order, of entries
-    paired with their screen reading ([None]: no reading). Kept: every entry with none, and of the
-    others those reading at least [slowest /. ratio] ([ratio] default {!screen_ratio}), at most
-    [at_most] (default {!screen_at_most}) of them, the slowest first, ties to the earlier entry.
+(** [screen_keep ?ratio ?at_most ?refused entries]: [(kept, dropped)], each in [entries]' order, of
+    entries paired with their screen reading ([None]: no reading). Kept: every entry with none, and
+    of the others those reading at least [slowest /. ratio] ([ratio] default {!screen_ratio}), at
+    most [at_most] (default {!screen_at_most}) of them, the slowest first, ties to the earlier
+    entry. [slowest] is the slowest reading of an entry [refused] (default: none) does not hold, or,
+    when it holds of every entry with a reading, the slowest of those.
 
-    Applied after each new reading to the entries kept so far, it keeps exactly what it keeps
-    applied once to all of them: the slowest reading only grows, so an entry it drops stays below
-    the final cut, and one dropped by the cap has [at_most] entries above it that are dropped, if
-    ever, only for something that drops it too. So a caller may release what it drops as it goes. *)
-let screen_keep ?(ratio = screen_ratio) ?(at_most = screen_at_most) entries =
+    Without [refused], applied after each new reading to the entries kept so far, it keeps exactly
+    what it keeps applied once to all of them: the slowest reading only grows, so an entry it drops
+    stays below the final cut, and one dropped by the cap has [at_most] entries above it that are
+    dropped, if ever, only for something that drops it too. So a caller may release what it drops as
+    it goes. With [refused] the slowest can fall (an admitted reading arriving after refused ones
+    only), so apply it once. *)
+let screen_keep ?(ratio = screen_ratio) ?(at_most = screen_at_most) ?(refused = fun _ -> false)
+    entries =
   let indexed = List.mapi entries ~f:(fun k (x, r) -> (k, x, r)) in
+  let slowest_of ~admitted_only =
+    List.fold indexed ~init:Float.neg_infinity ~f:(fun m (_, x, r) ->
+        match r with Some r when (not admitted_only) || not (refused x) -> Float.max m r | _ -> m)
+  in
   let slowest =
-    List.fold indexed ~init:Float.neg_infinity ~f:(fun m (_, _, r) ->
-        match r with Some r -> Float.max m r | None -> m)
+    let admitted = slowest_of ~admitted_only:true in
+    if Float.is_finite admitted then admitted else slowest_of ~admitted_only:false
   in
   let read = List.filter_map indexed ~f:(fun (k, _, r) -> Option.map r ~f:(fun r -> (k, r))) in
   let ranked =
@@ -275,16 +289,24 @@ let screen_keep ?(ratio = screen_ratio) ?(at_most = screen_at_most) entries =
     on HIP, so ~30 s at the cap. *)
 let screen_wide_at_most = 3 * screen_at_most
 
-(** [screen_keep_wide entries]: the first stage's cut, {!screen_keep} at {!screen_ratio} and
-    {!screen_wide_at_most}, over [entries] paired with their {!screen_timing} reading. Like
-    {!screen_keep}, it may be applied after each reading. *)
-let screen_keep_wide entries = screen_keep ~at_most:screen_wide_at_most entries
+(** [screen_keep_wide entries]: the first stage's cut, {!screen_keep} at {!screen_wide_at_most} and
+    no ratio, over [entries] paired with their {!screen_timing} reading. Like {!screen_keep} without
+    [refused], it may be applied after each reading. *)
+let screen_keep_wide entries =
+  screen_keep ~ratio:Float.infinity ~at_most:screen_wide_at_most entries
 
 (** [rescreen ~read entries]: the second stage. Reads each of [entries] -- the first stage's kept
-    set -- once with [read] (the configured objective's {!read_once}), in [entries]' order, and
-    returns [(kept, dropped)] of [(entry, reading)] by {!screen_keep} at its defaults over those
-    readings: what the re-timing gets, and what keeps its second-stage reading. *)
+    set -- once with [read] (the configured objective's {!read_screen}: the reading and whether the
+    admission gate refused it), in [entries]' order, and returns [(kept, dropped)] of
+    [(entry, reading)] by {!screen_keep} at its defaults over those readings, the cut set by the
+    admitted ones while there are any: what the re-timing gets, and what keeps its second-stage
+    reading. *)
 let rescreen ~read entries =
   let read = List.map entries ~f:(fun e -> (e, read e)) in
-  let kept, dropped = screen_keep (List.map read ~f:(fun ((_, r) as er) -> (er, r))) in
-  (kept, dropped)
+  let kept, dropped =
+    screen_keep
+      ~refused:(fun (_, (_, refused)) -> refused)
+      (List.map read ~f:(fun ((_, (r, _)) as er) -> (er, r)))
+  in
+  let strip = List.map ~f:(fun (e, (r, _)) -> (e, r)) in
+  (strip kept, strip dropped)
