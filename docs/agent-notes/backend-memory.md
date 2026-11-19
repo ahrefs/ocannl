@@ -670,6 +670,30 @@ files.
   converted scope they are refused at `Hardware_limits`) and
   `test/operations/metal_threadgroup_overflow.ml` (odd tiles at the limit are refused at
   `Hardware_limits`, even ones run; under the seam's exact sizes the odd ones reach `Backend_link`).
+- **Two relations hold the workgroup-memory charge to what is allocated** (gh-ocannl-1530), and a
+  new allocation that dodges either turns one red. FLOOR = GATE, host-side on every backend:
+  `test/operations/workgroup_memory_accounting.ml`'s family legs build every GPU seed of the matmul,
+  coalesced and conv families (staged, tensorized, depth, swizzle and `Fuse_epilogue` twins, under
+  synthetic limits advertising all of them) and hold each one kept at a limit of exactly its built
+  schedule's `Schedule.workgroup_memory_bytes` and refused one byte below, so the seeding floors
+  neither over- nor under-charge. It found two floors short: the tensorized family judged unstaged
+  (`bk = 0`) geometries not at all, missing the per-kernel tile-MMA scratch, and neither GPU
+  tensorized floor charged the fusion target that a fused twin's `Fuse_epilogue ~shared` places in
+  workgroup memory, whole, when it is not settled on device (`Sketch_families.fused_shared_target`;
+  a 32x32 f32 routine-local product is 4 KiB). COMPILED <= GATE, per kernel on the device:
+  `test/operations/compiled_workgroup_bytes.ml` compiles every whole-routine seed
+  `Autotune.search_seeding` proposes under the device's own limits and compares the driver's
+  figure for each kernel with its segment's charge. The driver's figure comes from
+  `Ir.Compiled_kernels.with_census`, an opt-in, domain-local bracket the backends record into at
+  link: Metal's `staticThreadgroupMemoryLength`, HIP's `HIP_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES`, and
+  CUDA's `CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES` through `Cuda_backend.Function_attributes`, ctypes
+  bindings to the driver that load the PTX a second time, because cudajit's `Cu.Module.func` is
+  opaque (a cudajit attribute binding would supersede them). The claim is AT MOST: a device compiler
+  may drop an array it proves dead, and an over-charge only costs candidates. On the M4 Max every one
+  of 160-odd seeded kernels allocated exactly its charge, Metal's static length included, so the 4 B
+  per-array granule is the whole of Metal's rounding there, and a non-vacuity claim requires a
+  positive exact match. The negative controls that the claim catches: dropping the arrays term, or
+  (under `Fp16_wide`, the `half_out` fixture) the tile-MMA term, of `Schedule.kernel_workgroup_bytes`.
 - `Context.get_used_memory` must report OCANNL's OWN allocation (`Slab.used_memory`, or the
   backend's atomic counter) — never the driver's `total - free`. That is device-global: it counts
   other processes and moves in allocation granules, so it cannot see sub-granule effects like the

@@ -3805,8 +3805,8 @@ let interval_axis ~(axis : [ `Bm | `Bk ]) ~(values : int array)
 let matmul_flavor_tree ?(coalesced : coalesce_layout option)
     ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~is_gpu ~is_cpu
     ~(limits : Ir.Backend_intf.hardware_limits) ~(coverage_witness : string option Lazy.t)
-    ~(cpu_companions : string option Lazy.t) ~epilogue_cell_updates ~(fused : bool) site :
-    family_tree =
+    ~(cpu_companions : string option Lazy.t) ~epilogue_cell_updates ~(shared_target : int list)
+    ~(fused : bool) site : family_tree =
   (* Builder preconditions statically decidable at tree construction (gh-ocannl-577): rules the
      schedule builders settle identically for every tile completion refute here, with their
      witnesses, instead of failing candidate by candidate at build — the same lift phase 2 gave the
@@ -4103,15 +4103,18 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
               ( c % n = 0,
                 Printf.sprintf "%s=%d is not a multiple of the intrinsic tile %s=%d" what c of_ n )
             in
-            (* A sound workgroup-memory floor for staged geometries: any completion allocates at
-               least the cooperative operand tiles ([bm x bk] of A, [bk x bn] of B), [depth]-fold
-               under software pipelining — other shared allocations only add. Exceeding the
-               advertised limit refutes every completion below the child pre-compile, where
-               [Schedule.check_hardware_limits_classified] would otherwise reject it one candidate
-               compile at a time. [None]/unknown limit refutes nothing. *)
+            (* A sound workgroup-memory floor for every geometry: any completion allocates at least
+               the cooperative operand tiles of a staged geometry ([bm x bk] of A, [bk x bn] of B),
+               [depth]-fold under software pipelining, the per-kernel tile-MMA scratch of the site's
+               triple, which staged and unstaged completions' [Tile_mma] alike carry
+               (gh-ocannl-1530: an unstaged geometry was not judged at all), and in the fused flavor
+               the shared copy of the fusion target ([shared_target]) — other shared allocations
+               only add. Exceeding the advertised limit refutes every completion below the child
+               pre-compile, where [Schedule.check_hardware_limits_classified] would otherwise reject
+               it one candidate compile at a time. [None]/unknown limit refutes nothing. *)
             let staged_tiles_exceed ?(masked_fragment = true) ~bm ~bn ~bk ~depth () =
               match limits.Ir.Backend_intf.max_workgroup_memory_bytes with
-              | Some cap when bk > 0 ->
+              | Some cap ->
                   (* The gate's own charge ([Sched.kernel_workgroup_bytes]): each operand tile one
                      array of [depth] copies, rounded to the backend's allocation granule, plus the
                      per-kernel scratch of the site's triple, which every completion's [Tile_mma]
@@ -4126,18 +4129,21 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                      dividing and padding members is judged without it ([~masked_fragment:false]):
                      the charge is not monotone in [bm], so its corner would not bound the box. *)
                   let masked_fragment =
-                    if masked_fragment && matmul_acc_masked site ~bm ~bn then
+                    if masked_fragment && bk > 0 && matmul_acc_masked site ~bm ~bn then
                       [ bm * bn * Ir.Ops.prec_in_bytes d_prec ]
+                    else []
+                  in
+                  let operand_tiles =
+                    if bk > 0 then
+                      [
+                        depth * bm * bk * Ir.Ops.prec_in_bytes a_prec;
+                        depth * bk * bn * Ir.Ops.prec_in_bytes b_prec;
+                      ]
                     else []
                   in
                   let charge ~mma_triples =
                     Sched.kernel_workgroup_bytes ~capabilities
-                      ~arrays:
-                        ([
-                           depth * bm * bk * Ir.Ops.prec_in_bytes a_prec;
-                           depth * bk * bn * Ir.Ops.prec_in_bytes b_prec;
-                         ]
-                        @ masked_fragment)
+                      ~arrays:(operand_tiles @ masked_fragment @ shared_target)
                       ~mma_triples
                   in
                   let bytes = charge ~mma_triples:[ (d_prec, a_prec, b_prec) ] in
@@ -4145,8 +4151,8 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                   if bytes > cap then
                     Some
                       (Printf.sprintf
-                         "staged operand tiles need %d bytes of workgroup memory%s%s%s, exceeding \
-                          the %d-byte limit"
+                         "%s need %d bytes of workgroup memory%s%s%s%s, exceeding the %d-byte limit"
+                         (if bk > 0 then "staged operand tiles" else "the unstaged tile-MMA kernel")
                          bytes
                          (if depth > 1 then Printf.sprintf " at pipeline depth %d" depth else "")
                          (if scratch > 0 then
@@ -4155,6 +4161,9 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                          (match masked_fragment with
                          | [ f ] ->
                              Printf.sprintf " (with the %d-byte pad-masked accumulator fragment)" f
+                         | _ -> "")
+                         (match shared_target with
+                         | [ t ] -> Printf.sprintf " (with the %d-byte shared fusion target)" t
                          | _ -> "")
                          cap)
                   else None
@@ -4900,6 +4909,15 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
    is derived from it and the alignment analysis runs twice only where the unfused flavor is
    refuted. Both flavors' subtrees stay lazy like every other level: nothing below the root is built
    before a consumer descends into it. *)
+(* gh-ocannl-1530: the workgroup-shared copy of the fusion target a fused GPU tensorized twin's
+   [Fuse_epilogue] places ([epilogue_shared]; [Sched.apply_fuse_epilogue]): the whole target, as
+   the gate charges it, unless the target is settled on device, judged on the base code's
+   placements as the op judges them. The GPU tensorized floors charge it in their fused flavor. *)
+let fused_shared_target ~(opt : LL.optimized) ~fused target =
+  if fused && not (Sched.settled_on_device opt.LL.optimize_ctx.placements target) then
+    [ Ir.Tnode.size_in_bytes_peek target ]
+  else []
+
 let matmul_family_tree ?coalesced ?capabilities ~is_gpu ~is_cpu
     ~(limits : Ir.Backend_intf.hardware_limits) ~(opt : LL.optimized) site : family_tree =
   let unfused_coverage = lazy (matmul_coverage_witness ~opt ~fused:false site) in
@@ -4914,7 +4932,9 @@ let matmul_family_tree ?coalesced ?capabilities ~is_gpu ~is_cpu
       (lazy
         (matmul_flavor_tree ?coalesced ?capabilities ~is_gpu ~is_cpu ~limits ~coverage_witness
            ~cpu_companions:(lazy (cpu_mma_companion_writes ~opt ~fused site))
-           ~epilogue_cell_updates ~fused site))
+           ~epilogue_cell_updates
+           ~shared_target:(fused_shared_target ~opt ~fused site.m_d)
+           ~fused site))
   in
   decided_choice
     [
@@ -5287,7 +5307,9 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
                        ([Sched.contract_tensorized_accumulator]'s [shared_frag]: a staged pipeline
                        under pad masks); otherwise it stays in simdgroup fragments. A reduction pad
                        alone masks nothing: [Tensorize] discharges its guard, the staged operands'
-                       padded slots being exact zeros. *)
+                       padded slots being exact zeros. The fused flavor also places the conv output,
+                       whole, in workgroup-shared memory unless it is settled on device
+                       ([fused_shared_target], gh-ocannl-1530). *)
                     let memory_witness ~copies ~acc_masked rows =
                       match limits.Ir.Backend_intf.max_workgroup_memory_bytes with
                       | None -> None
@@ -5299,9 +5321,9 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
                                    copies * rows * nred_p * Ir.Ops.prec_in_bytes a_prec;
                                    copies * nred_p * noc_p * Ir.Ops.prec_in_bytes b_prec;
                                  ]
-                                @
-                                if acc_masked then [ rows * noc_p * Ir.Ops.prec_in_bytes prec ]
-                                else [])
+                                @ (if acc_masked then [ rows * noc_p * Ir.Ops.prec_in_bytes prec ]
+                                   else [])
+                                @ fused_shared_target ~opt ~fused site.c_d)
                               ~mma_triples:[ (prec, a_prec, b_prec) ]
                           in
                           if bytes <= cap then None
