@@ -730,16 +730,11 @@ files.
   `fixture_digest.py --check --expect-origin <box>` the candidate, and copy it in only when that
   exits 0 (recipe, the `raw-v1` caveat, and where each box's bytes are kept -- the anchor's
   `fixtures/by-origin/<box>/` -- in `benchmarks/README.md`).
-- **A different `raw-v1` row is not a different workload.** The digest file keys rows by origin
-  (`<sha256>  <bytes>  <name>  <origin>  <digest-kind>`, gh-ocannl-759), and before gh-ocannl-1007
-  a row hashed the file, whose bytes move with safetensors' metadata key order, so two boxes
-  could record different rows for one content: every rog-nv/minix pair whose bytes survived did
-  (gh-ocannl-2004). Likewise a rebuild that MISMATCHes a `content-v1` row can differ in metadata
-  alone (a key the generator added since, such as `loss_scale`), not in the numpy stream. What
-  is known per fixture, and how to tell metadata from tensors, is owned by `benchmarks/README.md`
-  (the per-box entries bullet under Layout, and the vanished-fixture recipe). Before quoting one
-  box's number against another's, compare canonical content, not the printed strings: a report's
-  `raw-v1` digest that a migration verified maps to its row's `content-v1` digest in
+- **A different `raw-v1` row, or a `content-v1` MISMATCH, is not by itself a different numpy
+  stream.** What is known per fixture, and how to tell metadata from tensors, is owned by
+  `benchmarks/README.md` (the per-box entries bullet under Layout, and the vanished-fixture
+  recipe). Before quoting one box's number against another's, compare canonical content, not the
+  printed strings: a report's `raw-v1` digest that a migration verified maps to its row's `content-v1` digest in
   `DIGESTS.txt`'s history (gh-ocannl-2004's commit for the four recovered fixtures), and where
   the original files are gone (`gpt2_mini`'s two) the comparison stays unresolved.
 - **A measurement session starts with `benchmarks/check-box.sh --box <id> --fixture <name>...`**

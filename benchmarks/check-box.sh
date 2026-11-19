@@ -444,7 +444,7 @@ check_fixtures() {
     path=$fixture_dir/$name.safetensors
     if [ ! -e "$path" ]; then
       item "fixture $name" GAP "absent from $fixture_dir" \
-        "copy $box's recorded bytes in from where they are kept, and copy them into $fixture_dir only once python3 benchmarks/fixture_digest.py --check --expect-origin $box exits 0 on them (benchmarks/README.md, 'Where each box's fixture bytes are kept'): the anchor's store, mac-studio:~/ocannl-staging/benchmarks/fixtures, holds by-origin/$box/$name.safetensors when $box's bytes differ from its top level, and otherwise the top-level $name.safetensors; install-linux.sh --bench-venv copies only the top level, so it cannot supply a by-origin copy -- never regenerate to pass"
+        "fetch $box's bytes from the anchor into scratch (mac-studio:~/ocannl-staging/benchmarks/fixtures/by-origin/$box/$name.safetensors if present, else its top-level $name.safetensors), run python3 benchmarks/fixture_digest.py --check --expect-origin $box on the copy, and move it into $fixture_dir only on exit 0 (benchmarks/README.md, 'Where each box's fixture bytes are kept'); install-linux.sh --bench-venv copies only the top level, so it cannot supply a by-origin copy -- never regenerate to pass"
     elif out=$(python3 "$here/fixture_digest.py" --check --digests "$digests" "$path" 2>&1); then
       # Some box's recorded bytes, so measurable; whether they are THIS box's is the reports'
       # origin field, said here too because a box whose own row no longer describes its bytes

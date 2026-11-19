@@ -1083,8 +1083,8 @@ against one still certifies the candidate, but a `MISMATCH` against one is incon
 than a loss. A `MISMATCH` against a `content-v1` row says the canonical content differs, in the
 metadata or in the tensors, and only a tensor difference means this venv no longer reproduces the
 recorded stream (a numpy upgrade, a changed spec or generator). The generator's metadata moves on
-its own: it now writes keys that older files lack (`loss_scale`; for `lenet` also `stride1`,
-`stride2`, `use_padding` and `in_channels`), so a rebuild of `lenet`, `cifar_conv`,
+its own: it writes metadata keys added since older files were recorded (e.g. `loss_scale`), so a
+rebuild of `lenet`, `cifar_conv`,
 `cifar_stride` or `mlp_small` MISMATCHes its row while every tensor's dtype, shape and payload
 equal the recorded file's (gh-ocannl-2004, on mac-studio's numpy 2.5.1 venv). So a
 `content-v1` MISMATCH alone does not say the bytes are lost; either way the candidate stays out
@@ -1229,7 +1229,8 @@ It checks and never provisions. Each GAP line is followed by its repair: on a Li
 lukstafi/ludics-lite's `scripts/install-linux.sh --bench-venv [nvidia|amd]` (the venv, its
 recorded freeze, the `benchmarks/.venv` link and the anchor's top-level fixtures copied into
 `~/ocannl-staging/benchmarks/fixtures`, never its `by-origin/` copies: an absent fixture's repair
-names where the box's own bytes are kept, per [Rebuilding a fixture that vanished](#setup)); on
+names where the box's own bytes are kept, per *Where each box's fixture bytes are kept* under
+[Setup](#setup)); on
 m4-max the venv is built by hand per [Setup](#setup).
 A fresh worktree's `fixtures/` holds only `DIGESTS.txt`, so copy or link the session's fixtures
 in from the box's store and re-run the check, or pass `--fixture-dir` to check the store a driver
