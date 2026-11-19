@@ -60,14 +60,12 @@ open Ppxlib
 module Read = Config_key_scan
 
 (** The source census used by the Verdict readers. It reads the value bindings inside the top-level
-    literal [module Claims = struct ... end] in [test/support/verdict.ml], in source order. Only
-    variable patterns supply names. Other items or patterns (including [include]) produce an
-    unreadable entry so coverage checks fail. An absent or differently declared module returns
-    [None]. *)
+    [module Claims = struct ... end] in [test/support/verdict.ml] after
+    {!Config_key_scan.structure_of} normalizes its structure. Only variable patterns supply names.
+    Other items or patterns (including [include] inside [Claims]) produce an unreadable entry so
+    coverage checks fail. An absent or differently declared module returns [None]. *)
 let claims_members verdict_source =
-  List.find_map
-    (Parse.implementation (Lexing.from_string verdict_source))
-    ~f:(fun item ->
+  List.find_map (Read.structure_of verdict_source) ~f:(fun item ->
       match item.pstr_desc with
       | Pstr_module
           {
