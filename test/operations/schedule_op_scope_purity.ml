@@ -1,8 +1,10 @@
 (* gh-ocannl-2313: the post-op scope-grammar check refuses a real [Stage] that adds a tensor write
-   to a pure [Local_scope]. A hand-built, post-optimize fixture gives the Stage anchor a second
-   occurrence inside the scope. The stage's anchor precheck follows staged reads, all outside the
-   scope in this fixture, while its splice rewrites every occurrence of the anchor symbol. A
-   distinct symbol for the scope's loop makes the same stage legal. *)
+   to a pure [Local_scope]. [validate_loop_binders] requires unique loop symbols at optimize entry.
+   Schedule rewrites can duplicate binders later, so the hand-built fixture uses [optimize_scoped]
+   to give the Stage anchor a second binder inside the scope after optimize. Stage's anchor precheck
+   follows staged reads, all outside the scope here, while the splice rewrites every occurrence of
+   the anchor symbol. A distinct symbol for the scope's loop lets the same Stage write the tile
+   outside the scope. *)
 
 open Base
 open Ocannl.Operation.DSL_modules
@@ -60,5 +62,10 @@ let () =
         false);
   let opt, stage = program ~duplicate_anchor:false "op_scope_distinct" in
   let applied = Sched.apply_classified [ stage ] opt in
-  p "Stage applies and leaves pure scope bodies when the scope loop has a distinct binder"
-    (Option.is_none (LL.scope_purity_violation applied.llc))
+  let tile_writes =
+    count_stmt ~in_scopes:false applied.llc ~f:(function
+      | LL.Set { tn; _ } -> String.equal tn.namespace Sched.tile_namespace
+      | _ -> false)
+  in
+  p "with a distinct scope-loop binder, Stage writes a tile outside the scope and leaves it pure"
+    (tile_writes > 0 && Option.is_none (LL.scope_purity_violation applied.llc))

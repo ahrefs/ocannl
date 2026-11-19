@@ -1207,10 +1207,12 @@ files.
   a violation the op ADDED (a malformed entry is not the next op's fault);
   the race queries alone called the `Grid` retype and the `Stage` legal.
   `schedule_op_scope_purity` (gh-ocannl-2313) pins the impure-body arm: an anchored `Stage` checks
-  the staged reads' paths, then inserts a load at every occurrence of the anchor. A hand-built
-  pure scope with a second occurrence that contains no staged read receives a tensor write and is
-  refused by the post-op gate. Disabling that gate lets the stage apply with the write still in
-  the scope. With a distinct scope-loop symbol the stage applies and leaves the scope pure.
+  the staged reads' paths, then inserts a load at every occurrence of the anchor.
+  `validate_loop_binders` requires unique loop symbols at optimize entry. Schedule rewrites can
+  duplicate binders later, so the hand-built fixture installs a second anchor binder after
+  optimize, inside a pure scope that contains no staged read. The added tensor write is refused
+  by the post-op gate. Disabling that gate lets the stage apply with the write still in the scope.
+  With a distinct scope-loop symbol the stage writes the tile outside the scope and leaves it pure.
   An IMPURE entry (only a hand-built `?prelowered` routine can bring one) is refused before any op
   runs, by `apply_typed` and `schedule_legality` on a non-empty schedule
   (`check_entry_scope_purity`, gh-ocannl-2314):

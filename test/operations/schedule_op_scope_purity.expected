@@ -1,3 +1,3 @@
 the entry with a duplicated Stage anchor has a pure scope body: true
 Stage is refused at transform time for leaving a tensor write inside a scope body: true
-Stage applies and leaves pure scope bodies when the scope loop has a distinct binder: true
+with a distinct scope-loop binder, Stage writes a tile outside the scope and leaves it pure: true
