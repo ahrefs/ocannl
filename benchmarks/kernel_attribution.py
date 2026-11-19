@@ -536,8 +536,9 @@ def masked_key(writes):
 def pair_kernels(a, b):
     """Two kernel lists (rows in table order) paired in step order (gh-ocannl-2328): difflib's
     longest matching blocks over masked_key, so a kernel on one side only shifts nothing after it,
-    and then, between two consecutive pairs, a gap holding as many rows on each side pairs them by
-    position -- the structure the paired kernels fix where the nodes say nothing (a bf16 weight
+    then what is left over by a trusted exact key found once on each side (kernels the builds ran
+    in another order), and then, between two consecutive step-order pairs, a gap holding as many
+    rows on each side pairs them by position -- the structure the paired kernels fix where the nodes say nothing (a bf16 weight
     gradient writes its cast twin's `n86_cast.grad` where f32 writes `l3_ffn_w2.grad`). Matching
     the whole lists keeps one layer's kernel off another's: masked, the
     repeated layers agree except for their named nodes, which then anchor each layer. Returns
@@ -548,6 +549,20 @@ def pair_kernels(a, b):
               for blk in difflib.SequenceMatcher(a=ka, b=kb, autojunk=False).get_matching_blocks()
               for t in range(blk.size)]
     paired_a, paired_b = {r["i"] for r, _ in by_key}, {r["i"] for _, r in by_key}
+    # A kernel the two builds ran in another order: step order pairs only one of a swapped pair,
+    # so what is left over joins by its exact key where that key is trusted and found once on each
+    # side -- before any gap pairs by position, which would otherwise take those rows first.
+    trusted = trusted_key(by_key)
+    left_a = [r for r in a if r["i"] not in paired_a]
+    left_b = [r for r in b if r["i"] not in paired_b]
+    count_a = Counter(stable_key(r["writes"]) for r in left_a)
+    count_b = Counter(stable_key(r["writes"]) for r in left_b)
+    by_b = {stable_key(r["writes"]): r for r in left_b}
+    reordered = [(r, by_b[k]) for r in left_a for k in [stable_key(r["writes"])]
+                 if trusted(k) and count_a[k] == 1 and count_b.get(k) == 1]
+    paired_a |= {r["i"] for r, _ in reordered}
+    paired_b |= {r["i"] for _, r in reordered}
+    # Gaps are bounded by the step-order pairs only: a reordered pair keeps no order to bound one.
     bounds = [(-1, -1)] + [(x["i"], y["i"]) for x, y in by_key] + [(float("inf"), float("inf"))]
     by_position = []
     for (a0, b0), (a1, b1) in zip(bounds, bounds[1:]):
@@ -557,19 +572,7 @@ def pair_kernels(a, b):
             by_position += list(zip(ga, gb))
     paired_a |= {r["i"] for r, _ in by_position}
     paired_b |= {r["i"] for _, r in by_position}
-    # A kernel the two builds ran in another order: step order pairs only one of a swapped pair,
-    # so what is left over joins by its exact key where that key is trusted and once on each side.
-    trusted = trusted_key(by_key)
-    left_a = [r for r in a if r["i"] not in paired_a]
-    left_b = [r for r in b if r["i"] not in paired_b]
-    count_a = Counter(stable_key(r["writes"]) for r in left_a)
-    count_b = Counter(stable_key(r["writes"]) for r in left_b)
-    by_b = {stable_key(r["writes"]): r for r in left_b}
-    reordered = [(r, by_b[k]) for r in left_a for k in [stable_key(r["writes"])]
-                 if trusted(k) and count_a[k] == 1 and count_b.get(k) == 1]
     by_key += reordered
-    paired_a |= {r["i"] for r, _ in reordered}
-    paired_b |= {r["i"] for _, r in reordered}
     return (by_key, by_position, [r for r in a if r["i"] not in paired_a],
             [r for r in b if r["i"] not in paired_b])
 

@@ -31,6 +31,7 @@ masking an anonymous node keeps its suffix and its .grad: true
 renumbered builds pair layer by layer in step order, not by the id `n20` both use, and an equal gap pairs by position: true
 the report marks the pairs step order made, apart from the joined ones: true
 two named kernels the builds ran in the other order still join by their nodes: true
+swapped named kernels join by their nodes before any gap pairs them by position: true
 in a renumbered build an anonymous id the two share is no join: true
 cells of two precisions are joined, never read as repeats, even with one kernel list: true
 a HIP cell reports its busy shader clock and power from the sysfs samples: true

@@ -489,6 +489,14 @@ with tempfile.TemporaryDirectory() as scratch:
           == [(0, 0), (1, 1), (2, 2), (3, 4), (4, 3), (5, 5)]
           and not by_position and not left_f and not left_h, str((by_key, left_f, left_h)))
     print("two named kernels the builds ran in the other order still join by their nodes: true")
+    # Two swapped pairs: the exact keys are reserved before a gap pairs by position.
+    rows = lambda names: [{"i": i, "writes": w, "med": 0.5} for i, w in enumerate(names)]
+    swap_key, swap_position, swap_f, swap_h = ka.pair_kernels(rows(["A", "B", "C", "D"]),
+                                                              rows(["B", "A", "D", "C"]))
+    check(sorted((x["writes"], y["writes"]) for x, y in swap_key + swap_position)
+          == [("A", "A"), ("B", "B"), ("C", "C"), ("D", "D")] and not swap_position
+          and not swap_f and not swap_h, str((swap_key, swap_position)))
+    print("swapped named kernels join by their nodes before any gap pairs them by position: true")
     trusted = ka.trusted_key(by_key)
     # A kernel writing only minted staging keys on it, and its id is as anonymous as `n5_x`'s.
     check(trusted("layer_norm_l0") and not trusted("n5_x") and not trusted("tile__n7_acc"), "trust")
