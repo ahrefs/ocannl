@@ -1021,10 +1021,11 @@ files.
   `seeded_ranker`) the chain seeds neither on rog and the claim fails, beside the anchoring claim,
   which a single seeded product would still pass. On HIP that revert is inert -- the pricing needs
   a staged-copy rate, which HIP does not publish -- and the count is two on tuf (discrete) and minix
-  (unified) alike, under HIP's own calibration (gh-ocannl-2306's records). Its CUDA stand-in leg
-  seeds both products under either score, so the count is a device run's to read; the test's
-  `seeding gate here:` stderr line names the gate it resolved. A change meant to move that count
-  moves the claim's number in the same commit, with the reason.
+  (unified) alike, under HIP's own calibration; HIP's control is `seeded_ranker` declining every
+  sketch, which fails the claim alone (the readings: gh-ocannl-2306's comments, staging#2196). Its
+  CUDA stand-in leg seeds both products under either score, so the count is a device run's to
+  read; the test's `seeding gate here:` stderr line names the gate it resolved. A change meant to
+  move that count moves the claim's number in the same commit, with the reason.
 - **A model decision for another target is asked without a compile** (gh-ocannl-1780):
   `Autotune.model_pick` is `model_default`'s choice, decided and not compiled (one `model_selection`
   feeds both; only the compile-level fallback is the compile's), and it and `model_explain` take a
