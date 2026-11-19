@@ -130,10 +130,11 @@ let helper_floors = [ ("test", 1) ]
     is the [(library)] stanza owning it. *)
 let harness_only_root = "benchmarks/"
 
-(** Files the globs hand over that are not members of either population, each for a reason that is
-    about this scan rather than about them.
+(** Files the globs hand over that are members of no population -- neither the text pins nor the
+    tests building kernel text or calling a compiler themselves -- each for a reason that is about
+    this scan rather than about them.
 
-    Both are checked to be present below: an exclusion naming a file the globs no longer produce has
+    Each is checked to be present below: an exclusion naming a file the globs no longer produce has
     stopped excluding anything and is hiding the next file that takes its name. *)
 let excluded =
   [
@@ -148,6 +149,10 @@ let excluded =
       "the test OF the freshness-checked reader: it writes its artifact contents by hand and \
        checks that a stale or overwritten one is refused, so the strings under it are fixtures no \
        backend emits and a codegen change does not re-run it" );
+    ( "test/metal_probe/metal_hang_probe.ml",
+      "a hand-run raw-Metal diagnostic, not a test (gh-ocannl-2139): it compiles its own MSL with \
+       Metal's default options and links no OCANNL, so no codegen, prelude or compiler-flag change \
+       reaches it, and its stall cells hang the GPU, so no alias may run it" );
   ]
 
 (** Members allowed to read a kernel's statements as the text after its [Main logic] banner, each
@@ -662,7 +667,7 @@ let () =
   in
   let executing =
     List.filter_map source_files ~f:(fun (name, on_disk) ->
-        if List.mem unparsed_by_census name ~equal:String.equal then None
+        if is_excluded name || List.mem unparsed_by_census name ~equal:String.equal then None
         else
           match Attempt.run (fun () -> Exec.classify harness ~contents:(read on_disk)) with
           | Attempt.Scanned [] -> None

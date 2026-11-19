@@ -475,8 +475,11 @@ files.
   classify a hang (gh-ocannl-2089), and the test gives the OS a bounded 20 s to kill its kernel.
   It reads whether a kill happened off `recoveryCount` (`ioreg -r -c IOAccelerator -l`), never
   off the backend under test: the report claims are a leg open only where the count rose. The
-  probe is kept on the branch `claude/w1110-2082-probe` of the staging repository
-  (`test/metal_probe/run_cells.sh`).
+  probe is `test/metal_probe/metal_hang_probe.ml` (cells `stall`, `spin`, `plain`, `pulse`),
+  built on macOS by `dune build @check` against the switch's metal pin and run by no alias:
+  `test/metal_probe/run_cells.sh stall:1:120 plain` builds it and runs cells in order, and only a
+  window with the GPU to itself runs a stall cell. It reads `recoveryCount` through
+  `test/support/gpu_recovery.ml`, the slow tests' reader, so they cannot disagree on a recovery.
 
 ## Backend capability facts
 

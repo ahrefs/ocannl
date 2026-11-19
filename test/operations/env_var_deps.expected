@@ -14,6 +14,7 @@ Directories whose sources this scan reads:
   test/config
   test/einsum
   test/gpt2
+  test/metal_probe
   test/operations
   test/operations/atomic_file_rename_scan_fixture
   test/operations/profiles
@@ -480,6 +481,7 @@ will copy them from, and the tallies go to stderr (gh-ocannl-659, gh-ocannl-665)
   test/config/dune: declares OCANNL_BACKEND; markers: none
   test/einsum/dune: declares OCANNL_BACKEND; markers: cc, none
   test/gpt2/dune: declares OCANNL_BACKEND; markers: none
+  test/metal_probe/dune: nothing that runs a test executable
   test/operations/atomic_file_rename_scan_fixture/dune: markers: none
   test/operations/dune: declares OCANNL_BACKEND; markers: cc, cuda, metal, multidev_cc, none
   test/operations/profiles/dune: markers: none
