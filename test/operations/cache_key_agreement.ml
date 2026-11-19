@@ -83,7 +83,7 @@ let scope_name = function
 
 (* How a flip reaches the reader. *)
 type resolver =
-  | Per_lookup  (** stated in the config file; the reader resolves it on every call *)
+  | Per_lookup  (** stated in process; the reader resolves it on every call *)
   | Settings  (** resolved into [Utils.settings] at startup: re-resolved by [restore_settings] *)
   | Numerics_policy  (** resolved into the memoized [Numerics] policy: re-resolved *)
   | Log_level_field
@@ -96,10 +96,12 @@ type setup =
   | Routine_logs of bool
   | Log_level of int
   | Stated of string * string
-      (** a key stated in the config file for the comparison: a gate that is itself a setting *)
+      (** a key stated in process for the comparison: a gate that is itself a setting *)
 
-(* A [Stated] setup that a commandline or environment statement outranks: the regime cannot be
-   established in this process, so the flips that need it are not made. *)
+(* A [Stated] setup the commandline states otherwise: an in-process statement outranks the
+   environment and every profile, but [Utils.state_config] refuses to contradict the commandline
+   (gh-ocannl-2354), so the regime cannot be established in this process and the flips that need it
+   are not made. *)
 exception Setup_outranked of string
 
 type flip = {
@@ -303,19 +305,23 @@ let canonical_of ?(lower_only = false) ctx =
    with exn when lower_only && Option.is_some !canon -> ignore (exn : exn));
   Option.value_exn ~here:[%here] !canon
 
-(* Whether the config file is where [key] now resolves from, stating [value]: a commandline or
-   environment statement outranks it, and one that happens to state the same value is still not the
-   flip (it was the baseline too). *)
-let stated_in_file key value =
+(* Whether the commandline states [key] as something other than [value]: the one source an
+   in-process statement cannot outrank, since [Utils.state_config] refuses the contradiction
+   (gh-ocannl-2354). *)
+let commandline_contradicts key value =
+  match Utils.read_cmdline_var key with Some (v, _) -> not (String.equal v value) | None -> false
+
+(* Whether the in-process statement is where [key] now resolves from, stating [value]. *)
+let stated_in_process key value =
   match Utils.profile_key_source key with
-  | Some (v, Utils.From_config_file) -> String.equal v value
+  | Some (v, Utils.From_in_process) -> String.equal v value
   | Some _ | None -> false
 
 let with_setup setups f =
   let level0 = Utils.settings.log_level and logs0 = Utils.settings.debug_log_from_routines in
   let stated =
     List.filter_map setups ~f:(function
-      | Stated (key, value) -> Some (key, value, Hashtbl.find Utils.config_file_args key)
+      | Stated (key, value) -> Some (key, value, Utils.stated_config key)
       | Routine_logs _ | Log_level _ -> None)
   in
   let restore () =
@@ -323,16 +329,17 @@ let with_setup setups f =
     Utils.settings.debug_log_from_routines <- logs0;
     List.iter stated ~f:(fun (key, _, previous) ->
         match previous with
-        | None -> Hashtbl.remove Utils.config_file_args key
-        | Some data -> Hashtbl.set Utils.config_file_args ~key ~data)
+        | None -> Utils.unstate_config key
+        | Some data -> Utils.state_config ~key ~data)
   in
   Exn.protect ~finally:restore ~f:(fun () ->
       List.iter setups ~f:(function
         | Routine_logs on -> Utils.settings.debug_log_from_routines <- on
         | Log_level level -> Utils.settings.log_level <- level
         | Stated (key, value) ->
-            Hashtbl.set Utils.config_file_args ~key ~data:value;
-            if not (stated_in_file key value) then raise (Setup_outranked key));
+            if commandline_contradicts key value then raise (Setup_outranked key);
+            Utils.state_config ~key ~data:value;
+            if not (stated_in_process key value) then raise (Setup_outranked key));
       f ())
 
 let resync = function
@@ -351,9 +358,8 @@ let same_as_baseline key value =
   | Some (current, _) -> String.equal (norm current) (norm value)
   | None -> false
 
-(* [f] under [key] stated as [value]; [None] when the flip cannot take effect in this process: a
-   commandline or environment statement outranks the config file, or the key already resolves to
-   [value]. *)
+(* [f] under [key] stated as [value]; [None] when the flip cannot take effect in this process: the
+   commandline states the key otherwise, or the key already resolves to [value]. *)
 let with_stated key value resolver f =
   match resolver with
   | Log_level_field ->
@@ -362,17 +368,17 @@ let with_stated key value resolver f =
       else (
         Utils.settings.log_level <- Int.of_string value;
         Some (Exn.protect ~f ~finally:(fun () -> Utils.settings.log_level <- level0)))
-  | _ when same_as_baseline key value -> None
+  | _ when same_as_baseline key value || commandline_contradicts key value -> None
   | _ ->
-      let previous = Hashtbl.find Utils.config_file_args key in
-      Hashtbl.set Utils.config_file_args ~key ~data:value;
+      let previous = Utils.stated_config key in
+      Utils.state_config ~key ~data:value;
       let restore () =
         (match previous with
-        | None -> Hashtbl.remove Utils.config_file_args key
-        | Some data -> Hashtbl.set Utils.config_file_args ~key ~data);
+        | None -> Utils.unstate_config key
+        | Some data -> Utils.state_config ~key ~data);
         resync resolver
       in
-      if not (stated_in_file key value) then (
+      if not (stated_in_process key value) then (
         restore ();
         None)
       else
@@ -430,11 +436,12 @@ let () =
       let tag = Option.value (Context.hardware_limits ctx).codegen_tag ~default:"" in
       Stdio.eprintf "HIP cache math switches: %s; backend tag: %s\n" switches tag;
       Verdict.p label (String.is_substring tag ~substring:("/hiprtc-math:" ^ switches)));
-  (* A flip a commandline or environment statement outranks is not made, and says so as a skip
-     rather than leaving a claim that reads as if it had been (Codex P2, round 3): rerunning a test
-     under an [OCANNL_<KEY>] is supported, and the key it states is the one this run cannot flip.
-     Announced, not printed: which keys are stated is the run's, and the golden holds no row per key
-     (gh-ocannl-1819; the [-outranked] rule pins it). *)
+  (* A flip the commandline outranks is not made, and says so as a skip rather than leaving a claim
+     that reads as if it had been (Codex P2, round 3): rerunning a test with an [--ocannl_<key>]
+     argument is supported, and the key it states is the one this run cannot flip. An ambient
+     [OCANNL_<KEY>] no longer outranks a flip: the in-process statement is above it
+     (gh-ocannl-2354). Announced, not printed: which keys are stated is the run's, and the golden
+     holds no row per key (gh-ocannl-1819; the [-outranked] rule pins it). *)
   let outranked = ref [] in
   (* The [-outranked] rule forces these skips on every box, where the plain run makes the flips: its
      records must not read as the fleet never covering them. *)
@@ -445,8 +452,8 @@ let () =
       ~aggregation:(if forced_outranked then `Outside_sweep else `Environment)
       ~backend:(Context.backend_name ctx)
       (Printf.sprintf
-         "%s of %s: the key, or the regime it is flipped in, is stated on the commandline or in \
-          the environment, or already resolves to every candidate value"
+         "%s of %s: the key, or the regime it is flipped in, is stated on the commandline, or \
+          already resolves to every candidate value"
          what key)
   in
   let backend = Context.backend_name ctx in
@@ -491,8 +498,9 @@ let () =
   (* 2. Settings-borne keys, derived from [utils.ml] (the rule's argument): each one is flipped
      through [restore_settings], never by a config poke that would change nothing. *)
   let settings_borne =
-    match Stdlib.Sys.argv with
-    | [| _; utils_ml |] | [| _; utils_ml; _ |] ->
+    (* The source, then [outranked] and its commandline statements, if any. *)
+    match Array.to_list Stdlib.Sys.argv with
+    | _ :: utils_ml :: _ ->
         Test_scan.Config_key_scan.settings_field_initializers (In_channel.read_all utils_ml)
         |> List.concat_map ~f:snd
         |> Set.of_list (module String)
@@ -524,9 +532,7 @@ let () =
     let flips =
       match in_regime () with
       | exception Setup_outranked gate ->
-          eprintf
-            "%s: its regime needs %s, which is stated on the commandline or in the environment\n"
-            key gate;
+          eprintf "%s: its regime needs %s, which the commandline states otherwise\n" key gate;
           []
       | before ->
           List.filter_map flip.candidates ~f:(fun value ->
@@ -607,7 +613,7 @@ let () =
        eprintf
          "%s: read by the GPU backends' own code, not flipped for cuda (not part of the golden)\n"
          key);
-   (* As in 3: a flip the commandline or environment outranks is not made, and says so. *)
+   (* As in 3: a flip the commandline outranks is not made, and says so. *)
    let outcomes = List.map shared ~f:(outcome ~components:cuda_components) in
    let took_effect =
      List.filter outcomes ~f:(fun (key, _, _, flips) ->
@@ -942,8 +948,8 @@ let () =
   | Some () -> ()
   | None ->
       Verdict.fail
-        "output_debug_files_in_build_directory is stated on the commandline or in the environment, \
-         so the oracle cannot read the kernels it compiles");
+        "output_debug_files_in_build_directory is stated otherwise on the commandline, so the \
+         oracle cannot read the kernels it compiles");
   (* The [-outranked] rule states these keys so that the plain golden is diffed against a run whose
      flips were outranked: a claim, printing no row, so its stdout stays the golden's. Without it
      the diff passes as well in a run where nothing outranked anything. *)

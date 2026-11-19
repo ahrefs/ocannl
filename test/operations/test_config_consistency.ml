@@ -195,6 +195,9 @@ let () =
                  profile_payload_sources, whose key list is the payload's own. Top-level, because an
                  exemption does not reach a lambda nested in an exempted function. *)
               "profile_key_source";
+              (* gh-ocannl-2354: an in-process statement, then the precedence walk -- the full
+                 resolution unchecked_global_arg_with_source and profile_key_source share. *)
+              "resolve_global_arg";
             ] );
         ("tnode.ml", Set.of_list (module String) [ "get_style" ]);
       ]

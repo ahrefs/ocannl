@@ -115,22 +115,18 @@ let () =
   directive ".version 9.0\n  .target sm_120a, debug\n" ~expected:(Some "sm_120a");
   directive ".version 9.0\n.address_size 64\n" ~expected:None;
   (* gh-ocannl-1705: the [cuda_ptx_target] key picks the target outside every extent, and an extent
-     outranks it. Stated per value at the file level; an ambient statement (the sweep's native-PTX
-     leg exports one for the whole suite) outranks the file, so the expectation follows it. *)
-  let ambient = Stdlib.Sys.getenv_opt "OCANNL_CUDA_PTX_TARGET" in
+     outranks it. Stated per value in process, which outranks an ambient statement too (the sweep's
+     native-PTX leg exports one for the whole suite; gh-ocannl-2354), so both values are read. *)
   List.iter [ "floor"; "native" ] ~f:(fun value ->
-      let previous = Hashtbl.find Utils.config_file_args "cuda_ptx_target" in
-      Hashtbl.set Utils.config_file_args ~key:"cuda_ptx_target" ~data:value;
-      let stated = Option.value ambient ~default:value in
-      let want = if String.equal stated "native" then native else Ir.Cuda_mma.Floor in
-      let outside = Ir.Cuda_mma.current_ptx_target () in
-      let (inside_floor, _), (inside_native, _) =
-        ( Ir.Cuda_mma.with_ptx_target Floor Ir.Cuda_mma.current_ptx_target,
-          Ir.Cuda_mma.with_ptx_target native Ir.Cuda_mma.current_ptx_target )
+      let want = if String.equal value "native" then native else Ir.Cuda_mma.Floor in
+      let outside, (inside_floor, _), (inside_native, _) =
+        Utils.with_stated_config
+          [ ("cuda_ptx_target", value) ]
+          (fun () ->
+            ( Ir.Cuda_mma.current_ptx_target (),
+              Ir.Cuda_mma.with_ptx_target Floor Ir.Cuda_mma.current_ptx_target,
+              Ir.Cuda_mma.with_ptx_target native Ir.Cuda_mma.current_ptx_target ))
       in
-      (match previous with
-      | None -> Hashtbl.remove Utils.config_file_args "cuda_ptx_target"
-      | Some data -> Hashtbl.set Utils.config_file_args ~key:"cuda_ptx_target" ~data);
       let show t = Sexp.to_string (Ir.Cuda_mma.sexp_of_ptx_target t) in
       if
         not
@@ -140,7 +136,7 @@ let () =
       then
         failwith
           (Printf.sprintf
-             "cuda_ptx_target=%s (stated %s): want %s outside any extent, got %s; inside Floor %s, \
-              inside Native %s"
-             value stated (show want) (show outside) (show inside_floor) (show inside_native)));
+             "cuda_ptx_target=%s: want %s outside any extent, got %s; inside Floor %s, inside \
+              Native %s"
+             value (show want) (show outside) (show inside_floor) (show inside_native)));
   Stdio.print_endline "cuda gpu_arch_options: ok"
