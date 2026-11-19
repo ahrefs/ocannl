@@ -6179,7 +6179,8 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   test outside the list counts the configuration again: under a GPU configuration it takes a GPU
   slot, the loud direction, by design; `@lifecycle` stays off the list because its probes read
   the configuration. `slot_kind_live` (in `@test/operations/scans`, reading only the files its
-  deps hand it) keeps both answers true of the tree: no listed alias's closure holds a
+  deps hand it) reuses each command's resolution for its inventory and claims. It keeps both
+  answers true of the tree: no listed alias's closure holds a
   configuration reader or a dependency it cannot follow; what every build reaches (compilations,
   source-like producers, their files) holds no reader and names no backend; every reader (a stanza declaring `(env_var OCANNL_BACKEND)`, or neither it nor a
   marker) runs where its nearest configuration is one the runner resolves -- in `BATCH_CONFIG_DIRS`, or copied
