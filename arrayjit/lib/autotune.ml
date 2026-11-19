@@ -12849,13 +12849,9 @@ module Context_driver = struct
   let routine_segments (r : routine) = r.segments
   let routine_mma (r : routine) = r.mma
 
-  (* The name a compile given no [?name] derives ([Backends.lower_assignments]); [None] where that
-     derivation raises, for the compile itself to refuse. *)
-  let program_name (comp : program) =
-    match Ir.Assignments.get_name_exn comp.asgns with
-    | derived -> Some derived
-    | exception Invalid_argument _ -> None
-
+  (* The name a compile given no [?name] derives ([Backends.lower_assignments]); [None] where none
+     derives, for the compile itself to refuse. *)
+  let program_name (comp : program) = Ir.Assignments.derived_name comp.asgns
   let program_nodes (comp : program) = Ir.Assignments.collect_mentioned comp.asgns
   let reuse_create = Ir.Lowering_reuse.create
   let reuse_reseed = Ir.Lowering_reuse.reseed

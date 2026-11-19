@@ -1090,9 +1090,7 @@ let check_no_duplicate_fragments ?name ctx (comp : Asgns.comp) =
 let check_shared_gradient_reset ?name ctx (comp : Asgns.comp) =
   let this =
     Option.value_or_thunk name ~default:(fun () ->
-        match Asgns.get_name_exn comp.asgns with
-        | derived -> derived
-        | exception Invalid_argument _ -> "(unnamed)")
+        Option.value (Asgns.derived_name comp.asgns) ~default:"(unnamed)")
   in
   let routine { gr_id; gr_name; _ } = Printf.sprintf "%s (id=%d)" gr_name gr_id in
   let conflict grad =

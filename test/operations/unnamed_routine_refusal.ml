@@ -5,11 +5,11 @@
    it through [Assignments.get_name_exn]. That refusal used to read "no comments in code: " followed
    by the whole code, and said nothing of the fix. Its first line now says the routine has no name
    and names both remedies, [Train.forward t] and the compile's [?name]; the code follows, cut to
-   its head. The claims: the refusal stays an [Invalid_argument] (the readers that fall back on it,
-   such as [Context]'s ["(unnamed)"] label for its shared-gradient refusal, match that constructor),
-   its first line is the golden's, the comp's own code follows that line, a long comp's code is cut
-   to its first lines with a count of the rest, and both remedies the line names compile the same
-   tensor.
+   its head. The claims: the refusal stays an [Invalid_argument] (its documented constructor; a
+   reader that only asks whether a name derives, such as [Context]'s ["(unnamed)"] label for its
+   shared-gradient refusal, reads [Assignments.derived_name] instead), its first line is the
+   golden's, the comp's own code follows that line, a long comp's code is cut to its first lines
+   with a count of the rest, and both remedies the line names compile the same tensor.
 
    [Train.to_routine] and [Train.run_once] take no [?name], so the compile's [~name] is no remedy
    there. They ask for the name first -- [~output_cd_file:true] reads it for the [.cd] file's name
