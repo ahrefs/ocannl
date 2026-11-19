@@ -1258,6 +1258,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   script's TEXT (a mutant's seam, an extraction) abandons itself where the older FILE lacks the
   line — a FAIL that says so, not the leg's verdict on FILE. Leg 102 pins the option with a
   subject missing one `proc_table_perl` rule: leg 99 fails in the one check that rule answers.
+  Leg 99c holds the slot stand-in wrapper unreaped until its guardian exits. Removing the
+  zombie branch of `q_exited` fails that check while the wrapper is still in state Z.
 - **Every gated leg must pass run alone** (gh-ocannl-1367). A leg that reads what an EARLIER
   leg's body made (a variable, a file, a lock, an exported mode) passes in every full run and fails
   only under `--only`, as two did when `tools/test-test-run.sh` was first gated (`LAB_MAP`,
