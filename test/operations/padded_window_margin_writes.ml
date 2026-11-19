@@ -52,17 +52,6 @@ let conv_input_grad ~left w =
           Array.foldi kernel_vals ~init:acc ~f:(fun k acc kv ->
               if o + k - left = c then acc +. (wo *. kv) else acc)))
 
-(* [vals] as an operand reader with one zero cell appended: the index [Array.length vals] stands for
-   a tap that reads the margin, or a term no tap reaches. *)
-let with_zero vals =
-  let len = Array.length vals in
-  Ll_test.operand ~b:[] ~o:[ len + 1 ] ~i:[] (fun ix -> if ix.(0) < len then vals.(ix.(0)) else 0.)
-
-let check_sums label products got =
-  p_all2 label got
-    (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id)))
-    ~f:Float.equal
-
 let () =
   Tensor.unsafe_reinitialize ();
   let src = ndarray ~grad:true [ 1; n ] src_vals in
@@ -98,7 +87,9 @@ let () =
      over the taps [(o, k)] reading the cell, and the smoothing's cells sum [g.(o + k - left) *
      kernel.(k)] over the kernel, a margin tap reading zero. Every product is a small positive
      integer, so every partial sum of every cell is exact in single precision, in any order. *)
-  let w_r = with_zero w_vals and k_r = with_zero kernel_vals and g_r = with_zero g in
+  let w_r = Exact_sums.with_zero w_vals
+  and k_r = Exact_sums.with_zero kernel_vals
+  and g_r = Exact_sums.with_zero g in
   let gradient =
     Ll_test.reduction_cells ~out:[| 1; n |] ~over:[| n; 3 |] (fun o r ->
         w_r [| (if r.(0) + r.(1) - left = o.(1) then r.(0) else n) |] *. k_r [| r.(1) |])
@@ -108,13 +99,14 @@ let () =
         let c = o.(1) + r.(0) - left in
         g_r [| (if c >= 0 && c < n then c else n) |] *. k_r [| r.(0) |])
   in
-  let sig_bits = Ir.Ops.significand_bits Ir.Ops.single in
+  let sig_bits = Exact_sums.sig_bits in
   p_all "every partial sum of every cell of x's gradient is exact in f32" gradient
     ~f:(Ll_test.exact_partials ~sig_bits);
   p_all "every partial sum of every smoothed cell is exact in f32" smoothed
     ~f:(Ll_test.exact_partials ~sig_bits);
-  check_sums "x's gradient's host sums are its executed values" gradient (Context.get_values ctx gx);
-  check_sums "the smoothing's host sums are its executed values" smoothed
+  Exact_sums.check_sums "x's gradient's host sums are its executed values" gradient
+    (Context.get_values ctx gx);
+  Exact_sums.check_sums "the smoothing's host sums are its executed values" smoothed
     (Context.get_values ctx sm.Tensor.value);
   (* The discrimination premise: some padding position receives a nonzero contribution, so a margin
      that kept it differs from the padding value. *)

@@ -52,10 +52,18 @@ let () =
     Test_scan.Source_inventory.select inventory ~f:(fun path ->
         Test_scan.Ll_test_scan.test_source path && String.is_suffix path ~suffix:".ml")
   in
+  (* The support sources are census members too: one missing, or not parsing, exports nothing. *)
+  let support =
+    Scan.support ~source_of:(fun path ->
+        List.find sources ~f:(fun (file : Test_scan.Source_inventory.file) ->
+            String.equal file.path path)
+        |> Option.map ~f:(fun (file : Test_scan.Source_inventory.file) ->
+            In_channel.read_all file.on_disk))
+  in
   let rows =
     List.filter_map sources ~f:(fun file ->
         match
-          Scan.read_or_refusal ~reader:Scan.read ~source:file.path
+          Scan.read_or_refusal ~reader:(Scan.read ~support) ~source:file.path
             (In_channel.read_all file.on_disk)
         with
         | Ok sites -> Some (file.path, sites)

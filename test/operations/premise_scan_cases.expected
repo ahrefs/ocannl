@@ -17,3 +17,29 @@ reading a context without running it is not an executed reference: true
 one unchecked dispatched products arm keeps the shared site uncovered: true
 opaque product builders cannot export a shared lexical identity: true
 an unrelated checked operand cannot cover a site: true
+a premise checked through a support module's reader and comparison is covered: true
+without the support source its helpers confer nothing: true
+a support comparison with a branch that skips the check confers nothing: true
+a support reader with a branch that is no checked reader confers nothing: true
+an open of the support module brings its helpers: true
+a module alias of the support module brings its helpers: true
+an include of the support module brings its helpers: true
+a rebound support module name confers nothing: true
+a support source with a top-level include exports nothing: true
+a support wrapper chain within the three-call bound is followed: true
+a local open of the support module brings its helpers: true
+the collision control aligns the two builders at one offset: true
+a support helper's own compared products cannot cover a caller's builder at their offset: true
+the three-call bound spans modules: one call deeper confers nothing: true
+the forward_once result read at its own tensor's value is an executed reference: true
+update_once, Ocannl-qualified and with options, is an executed reference too: true
+a forward_once context read at another tensor confers nothing: true
+a forward_once context read at a rebound name confers nothing: true
+a compile without forward_once's run confers nothing: true
+a rebound Train module confers nothing: true
+a gradient materialized before update_once is an executed reference: true
+a gradient not materialized first confers nothing: true
+a gradient materialized only after the run confers nothing: true
+another node's materialization confers nothing: true
+a materialized node whose name was rebound since confers nothing: true
+a local wrapper reading its own forward_once tensor is an executed reference: true

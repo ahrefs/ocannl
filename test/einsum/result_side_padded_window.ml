@@ -55,24 +55,6 @@ let padded_transposed =
           if o >= 0 && o < n then res.(o) <- res.(o) +. (av *. kv)));
   res
 
-(* [vals] as an operand reader with one zero cell appended: the index [Array.length vals] stands for
-   a tap that reads a margin, or a term no tap reaches. *)
-let with_zero vals =
-  let len = Array.length vals in
-  Ll_test.operand ~b:[] ~o:[ len + 1 ] ~i:[] (fun ix -> if ix.(0) < len then vals.(ix.(0)) else 0.)
-
-(* The compile and run [Train.forward_once] performs for a program with no parameters, returning the
-   run's context: the premise's executed reference is read from it. *)
-let run t =
-  Train.set_materialized t.Tensor.value;
-  let ctx, routine = Train.to_routine (Context.auto ()) Ir.Indexing.Empty (Train.forward t) in
-  Context.run ctx routine
-
-let check_sums label products got =
-  p_all2 label got
-    (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id)))
-    ~f:Float.equal
-
 let run_positive_controls () =
   Tensor.unsafe_reinitialize ();
   (* The bitwise premise, from the operands' own data: the padded window's cells sum [a.(o + k -
@@ -80,9 +62,9 @@ let run_positive_controls () =
      convolution's sum [a.(i) * w.(k)] over the pairs with [i + k] the cell. Every product is a
      small positive integer, so every partial sum of every cell is exact in single precision, in any
      order; each control compares these host sums with the values it executed. *)
-  let a_r = with_zero a_vals
-  and w_r = with_zero kernel_vals
-  and rev_r = with_zero (Array.rev kernel_vals) in
+  let a_r = Exact_sums.with_zero a_vals
+  and w_r = Exact_sums.with_zero kernel_vals
+  and rev_r = Exact_sums.with_zero (Array.rev kernel_vals) in
   let left = (kk - 1) / 2 in
   let padded =
     Ll_test.reduction_cells ~out:[| 1; n |] ~over:[| kk |] (fun o r ->
@@ -95,7 +77,7 @@ let run_positive_controls () =
       ~over:[| n; kk |]
       (fun o r -> a_r [| (if r.(0) + r.(1) = o.(1) then r.(0) else n) |] *. w_r [| r.(1) |])
   in
-  let sig_bits = Ir.Ops.significand_bits Ir.Ops.single in
+  let sig_bits = Exact_sums.sig_bits in
   p_all "every partial sum of every padded-window cell is exact in f32" padded
     ~f:(Ll_test.exact_partials ~sig_bits);
   p_all "every partial sum of every full transposed-convolution cell is exact in f32" full
@@ -107,8 +89,8 @@ let run_positive_controls () =
          it margins (padding_lifecycle). *)
       let%op x = src ++ "s, c => s, c" in
       let%op y = x +* "s, o=+k; k => s, o" reversed in
-      let ctx = run y in
-      check_sums "the padded window's host sums are its executed values" padded
+      let ctx = Train.forward_once (Context.auto ()) y in
+      Exact_sums.check_sums "the padded window's host sums are its executed values" padded
         (Context.get_values ctx y.Tensor.value);
       pf_all2
         "the operand-side padded window with the reversed kernel is the padded transposed \
@@ -119,8 +101,9 @@ let run_positive_controls () =
       let a = operand () in
       let w = kernel () in
       let%op r = a +* "s, i; k => s, i<+k" w in
-      let ctx = run r in
-      check_sums "the full transposed convolution's host sums are its executed values" full
+      let ctx = Train.forward_once (Context.auto ()) r in
+      Exact_sums.check_sums "the full transposed convolution's host sums are its executed values"
+        full
         (Context.get_values ctx r.Tensor.value);
       p "the result-side unpadded window's extent is n + K - 1"
         (Array.equal Int.equal (Ir.Tnode.dims_without_padding r.Tensor.value) [| 1; n + kk - 1 |]);
