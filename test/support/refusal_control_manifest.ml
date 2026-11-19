@@ -861,6 +861,8 @@ let raw_entries =
         "[scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised";
         "[scanner-refusal:0de32014cb53ae9628faaa035dbb0ac7] starting with";
         "[scanner-refusal:6e412a3ea539daeb755ee0d61f3d40f7] exempt_skip_lists";
+        "[scanner-refusal:fc367fa3dd3580b30c61063bebf7bd25] applies the leg";
+        "[scanner-refusal:3b5509d5f78cc3d75c4b9816b7f0021a] exempt_uncompared_legs";
         "[scanner-refusal:cccb6b32fe71c4e65b2b51a39ea8c519] skip-list reader raised";
         "[scanner-refusal:f3e306858423827e6575d13a17d57af6] check cannot vouch";
         "[scanner-refusal:4b8222a751df16e2ca351f7bacca5583] claim readers raised";
@@ -898,6 +900,7 @@ let raw_entries =
         "[scanner-refusal:03571cf329d0733bb946c2eca2946008] Verdict.Claims";
         "[scanner-refusal:f675a65703076dfc53ea44fb59f9fd09] claim-name resolver resolves";
         "[scanner-refusal:664fc647996773a4adb1a331fc223f1f] gates and populations";
+        "[scanner-refusal:578e6b63483d4d08d00475e2d75ee60b] exempt_uncompared_legs";
         "[scanner-refusal:92b2164afd41d9fd93850d02494032d7] run-constant gate into";
         "[scanner-refusal:90b4edf499fe49feb30dde99ff5e87b3] no source writes";
         "[scanner-refusal:83059def842c32ad5e0ce705c42e5d69] skip-list reader read";

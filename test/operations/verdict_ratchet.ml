@@ -4765,8 +4765,8 @@ let () =
       [ "unread in_leg" ] );
   ]
 
-let gate_control_findings ?callers source =
-  let census = Scan.gate_census ?callers source in
+let gate_control_findings ?callers ?definitions source =
+  let census = Scan.gate_census ?callers ?definitions source in
   List.map census.Scan.readings ~f:(fun (reading : Scan.gate_reading) ->
       String.concat ~sep:", " reading.reads
       ^ (if reading.ambiguous then " [ambiguous]" else "")
@@ -5270,12 +5270,293 @@ let () = Checks.Sub.check ~leg:(Verdict.leg ~when_:on_gpu ~on:backend_name ()) (
       0 );
   ]
 
+(* gh-ocannl-2336: a leg that is the result of another source's function is that function's body,
+   read with the application's arguments bound, as a local function's is. Each row is a source, the
+   definitions handed to the reader with it -- sources compiled as [Legs] -- and the callers of its
+   module [Checks]. *)
+let leg_definition_controls =
+  let legs text _ = [ ("legs.ml", text) ] and none _ = [] in
+  let arm_leg =
+    {ocaml|let arm_leg leg arm =
+  Verdict.sub_leg leg ~when_:(lazy (meets_floor arm)) ~on:"a device below the arm's floor"|ocaml}
+  and rows_leg =
+    {ocaml|let rows_leg leg xs = Verdict.sub_leg leg ~when_:(lazy (not (List.is_empty xs))) ~on:"no rows"|ocaml}
+  and claim_under leg_expression =
+    Printf.sprintf
+      {ocaml|open Verdict.Claims
+let () =
+  let leg = Verdict.leg ~when_:on_gpu ~on:backend_name () in
+  let rows = probe () in
+  in_leg ~leg:(%s) "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml}
+      leg_expression
+  in
+  [
+    ( "accepts a leg another source's function returns, its sub-leg gated on an invariant",
+      claim_under "Legs.arm_leg leg k16",
+      legs arm_leg,
+      [],
+      [],
+      1 );
+    ( "refuses a leg another source's function returns, its sub-leg gated on the rows handed in",
+      claim_under "Legs.rows_leg leg rows",
+      legs rows_leg,
+      [],
+      [ "rows" ],
+      1 );
+    ( "refuses a leg a caller builds by another source's function from the rows it hands in",
+      {ocaml|open Verdict.Claims
+let check ~leg rows = in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      legs rows_leg,
+      [
+        {
+          Scan.source = "caller.ml";
+          text =
+            {ocaml|let () =
+  let rows = probe () in
+  Checks.check ~leg:(Legs.rows_leg (Verdict.leg ~when_:on_gpu ~on:backend_name ()) rows) rows|ocaml};
+          spelled_elsewhere = false;
+        };
+      ],
+      [ "rows [applied in caller.ml]" ],
+      1 );
+    ( "names a leg uncompared that is the result of a function under a module alias of another \
+       source",
+      {ocaml|open Verdict.Claims
+module L = Legs
+let () =
+  let leg = Verdict.leg ~when_:on_gpu ~on:backend_name () in
+  let rows = probe () in
+  in_leg ~leg:(L.rows_leg leg rows) "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      legs rows_leg,
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "names a leg uncompared whose function a structure of the source may rebind by a later include",
+      {ocaml|open Verdict.Claims
+module Legs = struct
+  let rows_leg leg _ = Verdict.sub_leg leg ~when_:(lazy on_gpu) ~on:"a CPU"
+  include Other
+end
+let () =
+  let leg = Verdict.leg ~when_:on_gpu ~on:backend_name () in
+  let rows = probe () in
+  in_leg ~leg:(Legs.rows_leg leg rows) "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      none,
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "names a leg uncompared whose other-source function writes the reference its gate reads",
+      claim_under "Legs.rows_leg leg rows",
+      legs
+        {ocaml|let rows_leg leg xs =
+  let ready = ref false in
+  ready := not (List.is_empty xs);
+  Verdict.sub_leg leg ~when_:(lazy !ready) ~on:"no rows"|ocaml},
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "refuses a leg another source's function gates on a part of a tuple it destructures",
+      claim_under "Legs.rows_leg leg (rows, ())",
+      legs
+        {ocaml|let rows_leg leg (xs, _) =
+  Verdict.sub_leg leg ~when_:(lazy (not (List.is_empty xs))) ~on:"no rows"|ocaml},
+      [],
+      [ "rows" ],
+      1 );
+    ( "names a leg uncompared whose function a submodule exports before a later include may \
+       replace it",
+      {ocaml|open Verdict.Claims
+module Legs = struct
+  module Inner = struct
+    let rows_leg leg _ = Verdict.sub_leg leg ~when_:(lazy on_gpu) ~on:"a CPU"
+  end
+  include Other
+end
+let () =
+  let leg = Verdict.leg ~when_:on_gpu ~on:backend_name () in
+  let rows = probe () in
+  in_leg ~leg:(Legs.Inner.rows_leg leg rows) "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      none,
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "names a leg uncompared whose other-source gate reads a reference a helper there writes",
+      claim_under "Legs.rows_leg leg rows",
+      legs
+        {ocaml|let ready = ref false
+let prepare xs = ready := not (List.is_empty xs)
+let rows_leg leg xs =
+  prepare xs;
+  Verdict.sub_leg leg ~when_:(lazy !ready) ~on:"no rows"|ocaml},
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "accepts a leg a caller builds through a third source's function that applies the claim's own",
+      {ocaml|open Verdict.Claims
+let arm_leg leg = Verdict.sub_leg leg ~when_:(lazy on_gpu) ~on:"a CPU"
+let check ~leg rows = in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      legs {ocaml|let arm_leg leg = Checks.arm_leg leg|ocaml},
+      [
+        {
+          Scan.source = "legs.ml";
+          text = {ocaml|let arm_leg leg = Checks.arm_leg leg|ocaml};
+          spelled_elsewhere = false;
+        };
+        {
+          Scan.source = "caller.ml";
+          text =
+            {ocaml|let () = Checks.check ~leg:(Legs.arm_leg (Verdict.leg ~when_:on_gpu ~on:backend_name ())) (probe ())|ocaml};
+          spelled_elsewhere = false;
+        };
+      ],
+      [],
+      1 );
+    ( "names a leg uncompared that another source's function builds from an optional it is handed \
+       by name",
+      claim_under "let absent = None in Legs.rows_leg leg rows ?pair:absent ()",
+      legs
+        {ocaml|let from_pair leg (xs, _) =
+  Verdict.sub_leg leg ~when_:(lazy (not (List.is_empty xs))) ~on:"no rows"
+let rows_leg leg rows ?(pair = (rows, ())) () = from_pair leg pair|ocaml},
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "refuses a leg another source's function destructures from the default its caller's None \
+       leaves",
+      claim_under "Legs.rows_leg leg rows ?pair:None ()",
+      legs
+        {ocaml|let rows_leg leg rows ?pair:((xs, _) = (rows, ())) () =
+  Verdict.sub_leg leg ~when_:(lazy (not (List.is_empty xs))) ~on:"no rows"|ocaml},
+      [],
+      [ "rows" ],
+      1 );
+    ( "accepts a leg built by a structure's function that another structure includes before an \
+       unreadable include",
+      {ocaml|open Verdict.Claims
+module Safe = struct
+  let arm_leg leg = Verdict.sub_leg leg ~when_:(lazy on_gpu) ~on:"a CPU"
+end
+module Copy = struct
+  include Safe
+  include Other
+end
+let () =
+  let leg = Verdict.leg ~when_:on_gpu ~on:backend_name () in
+  let rows = probe () in
+  in_leg ~leg:(Safe.arm_leg leg) "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      none,
+      [],
+      [],
+      1 );
+    ( "names a leg uncompared whose other-source helper's gate reads a reference another helper \
+       writes",
+      claim_under "Legs.rows_leg leg rows",
+      legs
+        {ocaml|let ready = ref false
+let prepare xs = ready := not (List.is_empty xs)
+let make leg = Verdict.sub_leg leg ~when_:(lazy !ready) ~on:"no rows"
+let rows_leg leg xs =
+  prepare xs;
+  make leg|ocaml},
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "names a leg uncompared whose other-source function applies a name a later include may rebind",
+      claim_under "Legs.rows_leg leg rows",
+      legs
+        {ocaml|let wrap leg _ = Verdict.sub_leg leg ~when_:(lazy on_gpu) ~on:"a CPU"
+include Other
+let rows_leg leg xs = wrap leg xs|ocaml},
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "names a leg uncompared whose other-source function applies a submodule a later include may \
+       replace",
+      claim_under "Legs.rows_leg leg rows",
+      legs
+        {ocaml|module Inner = struct
+  let wrap leg _ = Verdict.sub_leg leg ~when_:(lazy on_gpu) ~on:"a CPU"
+end
+include Other
+let rows_leg leg xs = Inner.wrap leg xs|ocaml},
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "names a leg uncompared whose other-source function hands its gate's reference to a writing \
+       helper",
+      claim_under "Legs.rows_leg leg rows",
+      legs
+        {ocaml|let prepare dst xs = dst := not (List.is_empty xs)
+let rows_leg leg xs =
+  let ready = ref false in
+  prepare ready xs;
+  Verdict.sub_leg leg ~when_:(lazy !ready) ~on:"no rows"|ocaml},
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "names a leg uncompared that is the result of a function of a module no source defines",
+      claim_under "Legs.arm_leg leg k16",
+      none,
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "names a leg uncompared whose function a later include in its source may rebind",
+      claim_under "Legs.arm_leg leg k16",
+      legs (arm_leg ^ "\ninclude Other"),
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "names a leg uncompared whose function a later include of a structure including another may \
+       rebind",
+      claim_under "Legs.arm_leg leg k16",
+      legs (arm_leg ^ "\ninclude struct include Other end"),
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "names a leg uncompared that another source's function takes from a record it writes into",
+      claim_under "Legs.rows_leg leg rows",
+      legs
+        {ocaml|let rows_leg leg xs =
+  let made = { leg = Verdict.sub_leg leg ~when_:(lazy true) ~on:"never" } in
+  made.leg <- Verdict.sub_leg leg ~when_:(lazy (not (List.is_empty xs))) ~on:"no rows";
+  made.leg|ocaml},
+      [],
+      [ "uncompared in_leg" ],
+      0 );
+    ( "refuses a leg another source's function gates on the default its caller's None leaves",
+      claim_under "Legs.rows_leg leg rows ?gate_rows:None ()",
+      legs
+        {ocaml|let rows_leg leg rows ?(gate_rows = rows) () =
+  Verdict.sub_leg leg ~when_:(lazy (not (List.is_empty gate_rows))) ~on:"no rows"|ocaml},
+      [],
+      [ "rows" ],
+      1 );
+    ( "refuses a leg built by the definition in its speller's own directory, not the claim's",
+      {ocaml|open Verdict.Claims
+let check ~leg rows = in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      (function
+      | Some "caller.ml" -> [ ("legs.ml", rows_leg) ]
+      | _ -> [ ("elsewhere/legs.ml", arm_leg) ]),
+      [
+        {
+          Scan.source = "caller.ml";
+          text =
+            {ocaml|let () =
+  let rows = probe () in
+  Checks.check ~leg:(Legs.rows_leg (Verdict.leg ~when_:on_gpu ~on:backend_name ()) rows) rows|ocaml};
+          spelled_elsewhere = false;
+        };
+      ],
+      [ "rows [applied in caller.ml]" ],
+      1 );
+  ]
+
 let run_gate_population_controls () =
-  let compared_row ~family ?callers (label, source, expected, compared) =
+  let compared_row ~family ?callers ?definitions (label, source, expected, compared) =
     let found =
-      gate_control_findings ?callers source
+      gate_control_findings ?callers ?definitions source
       @
-      let census = Scan.gate_census ?callers source in
+      let census = Scan.gate_census ?callers ?definitions source in
       [ Printf.sprintf "%d compared" (census.Scan.leg_sites + census.Scan.gated_sites) ]
     in
     let expected = expected @ [ Printf.sprintf "%d compared" compared ] in
@@ -5313,6 +5594,12 @@ let run_gate_population_controls () =
       compared_row ~family:"leg cross-source"
         ~callers:{ Scan.module_name = "Checks"; sources }
         (label, source, expected, compared))
+  @ List.map leg_definition_controls
+      ~f:(fun (label, source, defining, sources, expected, compared) ->
+        compared_row ~family:"leg cross-source"
+          ~callers:{ Scan.module_name = "Checks"; sources }
+          ~definitions:(fun spelled_in -> function "Legs" -> defining spelled_in | _ -> [])
+          (label, source, expected, compared))
 
 let refuse_gate_reading ~fail ~source (reading : Scan.gate_reading) =
   fail
@@ -5410,6 +5697,29 @@ let cross_source_callers ~read sources =
             });
     }
 
+(* The other direction (gh-ocannl-2336): for a source and a module name it may spell, the other
+   sources compiled as that module, whose functions {!Scan.gate_census} reads where a leg is the
+   result of one, asked with the source the name is spelled in ([None]: the source itself). The
+   directory rule is the callers' turned round: a source compiled as the module in the speller's own
+   directory is the one it means; where there is none, every source of that name is a definition the
+   reader follows, each an alternative -- a definition more is a comparison more. *)
+let cross_source_definitions ~read sources =
+  let by_module = Hashtbl.create (module String) in
+  List.iter sources ~f:(fun source ->
+      Hashtbl.add_multi by_module ~key:(module_of_source source) ~data:source);
+  fun source spelled_in module_name ->
+    let speller = Option.value spelled_in ~default:source in
+    let defining =
+      List.filter (Hashtbl.find_multi by_module module_name) ~f:(fun other ->
+          not (String.equal other source || String.equal other speller))
+      |> List.sort ~compare:String.compare
+    in
+    let here =
+      List.filter defining ~f:(fun other ->
+          String.equal (Stdlib.Filename.dirname other) (Stdlib.Filename.dirname speller))
+    in
+    List.map (if List.is_empty here then defining else here) ~f:(fun other -> (other, read other))
+
 (* The index itself (gh-ocannl-2286, review): the callers {!cross_source_callers} hands each source
    of a small tree -- a [(select)] module's two arms in [a/], a module [Lib] in both [a/] and [b/],
    a caller of each in [b/] and in [c/], which defines no [Lib], and a source that does not parse --
@@ -5452,6 +5762,21 @@ let index_controls =
         "b/user.ml";
         "c/other.ml";
       ] );
+    ( "the definition index reads a module from its speller's own directory, else every source of \
+       the name",
+      (let definitions_of =
+         cross_source_definitions (List.map index_tree ~f:fst) ~read:(fun source ->
+             List.Assoc.find_exn index_tree source ~equal:String.equal)
+       in
+       let defining census spelled_in =
+         List.map (definitions_of census spelled_in "Lib") ~f:fst |> String.concat ~sep:","
+       in
+       [
+         defining "a/x.real.ml" None;
+         defining "a/x.real.ml" (Some "b/user.ml");
+         defining "a/x.real.ml" (Some "c/other.ml");
+       ]),
+      [ "a/lib.ml"; "b/lib.ml"; "a/lib.ml,b/lib.ml" ] );
   ]
 
 let run_index_controls () =
@@ -5491,7 +5816,7 @@ let refuse_skip_list ~fail ~source (site : Scan.skip_list) =
        | Scan.Skip_run n -> Printf.sprintf "applies %d skips in one branch" n)
        site.Scan.first_label)
 
-let stale_skip_list_exemptions ~exemptions ~found =
+let stale_counted_exemptions ~exemptions ~found =
   List.filter_map exemptions ~f:(fun (key, sites, _) ->
       let count = Option.value (Hashtbl.find found key) ~default:0 in
       if count = sites then None
@@ -5506,6 +5831,49 @@ let refuse_stale_skip_lists ~fail stale_skip_lists =
           added under an exempted key needs its own exemption, a removed one drops it from \
           exempt_skip_lists: %s"
          (String.concat ~sep:", " (Set.to_list stale_skip_lists)))
+
+(* gh-ocannl-2336: the leg claims the gate reader leaves UNCOMPARED, pinned. A complete leg claim
+   whose leg or make function lies outside [Verdict_scan.gate_census]'s model is named with the
+   reason the reader derives and compared with nothing, so its gate could read the claim's
+   population unseen: each one is refused, unless exempted here by its source and that derived
+   reason, with the number of sites the key covers and why the site stays outside the reader. The
+   count is held as {!exempt_skip_lists}' is: a site added under an exempted key is refused, as is
+   one removed. *)
+let exempt_uncompared_legs = []
+let uncompared_leg_key ~source (leg : Scan.unread_leg) = source ^ ": " ^ leg.Scan.why
+
+let refuse_uncompared_leg ~fail ~source (leg : Scan.unread_leg) =
+  fail
+    (Printf.sprintf
+       "%s:%d applies the leg claim `%s`, whose leg or make function the gate reader cannot follow \
+        because %s, so its gate is compared with nothing and may read the claim's population \
+        unseen (gh-ocannl-2336). Build the leg where the reader follows it -- a `Verdict.leg` or \
+        `Verdict.sub_leg` bound to a name, or the result of a function of a test source, applied \
+        where every application is seen -- or extend Verdict_scan.gate_census; failing both, \
+        exempt the site in verdict_ratchet.ml's exempt_uncompared_legs by its source and this \
+        reason, with why it stays outside the reader"
+       source leg.Scan.leg_line leg.Scan.leg_form leg.Scan.why)
+
+(* The uncompared legs of [source], each counted under its key in [exempted] where [exemptions]
+   holds one and refused otherwise: how many were refused. *)
+let judge_uncompared_legs ~fail ~exemptions ~exempted ~source legs =
+  List.count legs ~f:(fun leg ->
+      let key = uncompared_leg_key ~source leg in
+      if Map.mem exemptions key then (
+        Hashtbl.incr exempted key;
+        false)
+      else (
+        refuse_uncompared_leg ~fail ~source leg;
+        true))
+
+let refuse_stale_uncompared_legs ~fail stale =
+  if not (Set.is_empty stale) then
+    fail
+      (Printf.sprintf
+         "exempted uncompared leg claims whose sites no longer number what their exemption says -- \
+          a site added under an exempted key needs its own exemption, a removed one drops it from \
+          exempt_uncompared_legs: %s"
+         (String.concat ~sep:", " (Set.to_list stale)))
 
 (* The skip-list reader over one source, its failures told apart as {!read_gates} tells the gate
    reader's. *)
@@ -5717,12 +6085,12 @@ let run_leg_and_skip_list_refusal_control () =
      so the production table being empty cannot leave the comparison untested. *)
   let exemptions = [ ("fixture.ml:claim", 1, "synthetic control") ] in
   let counts n = Hashtbl.of_alist_exn (module String) [ ("fixture.ml:claim", n) ] in
-  let stale = stale_skip_list_exemptions ~exemptions ~found:(counts 2) in
+  let stale = stale_counted_exemptions ~exemptions ~found:(counts 2) in
   let counts_compared =
     Set.equal stale (Set.singleton (module String) "fixture.ml:claim (exempted 1, found 2)")
-    && Set.is_empty (stale_skip_list_exemptions ~exemptions ~found:(counts 1))
+    && Set.is_empty (stale_counted_exemptions ~exemptions ~found:(counts 1))
     && Set.equal
-         (stale_skip_list_exemptions ~exemptions ~found:(Hashtbl.create (module String)))
+         (stale_counted_exemptions ~exemptions ~found:(Hashtbl.create (module String)))
          (Set.singleton (module String) "fixture.ml:claim (exempted 1, found 0)")
   in
   refuse_stale_skip_lists stale ~fail:(fun _ ->
@@ -5739,6 +6107,69 @@ let run_leg_and_skip_list_refusal_control () =
   ( "refuses a leg claim it cannot complete, a planted hand-written skip list, a skip-list reader \
      that raised, and a stale exemption",
     !refused_leg && !refused_list && !refused_raise && !refused_stale && counts_compared )
+
+(* The wiring from an uncompared leg claim outside {!exempt_uncompared_legs}, and from a stale
+   exemption there, to their failures (gh-ocannl-2336), exercised as
+   {!run_leg_and_skip_list_refusal_control} exercises the skip lists'. *)
+let run_uncompared_leg_refusal_control () =
+  let source = "test/operations/verdict_ratchet.ml" in
+  let uncompared_format =
+    "%s:%d applies the leg claim `%s`, whose leg or make function the gate reader cannot follow \
+     because %s, so its gate is compared with nothing and may read the claim's population unseen \
+     (gh-ocannl-2336). Build the leg where the reader follows it -- a `Verdict.leg` or \
+     `Verdict.sub_leg` bound to a name, or the result of a function of a test source, applied \
+     where every application is seen -- or extend Verdict_scan.gate_census; failing both, exempt \
+     the site in verdict_ratchet.ml's exempt_uncompared_legs by its source and this reason, with \
+     why it stays outside the reader"
+  and stale_format =
+    "exempted uncompared leg claims whose sites no longer number what their exemption says -- a \
+     site added under an exempted key needs its own exemption, a removed one drops it from \
+     exempt_uncompared_legs: %s"
+  in
+  let refused_leg = ref false and refused_stale = ref false in
+  let fixture =
+    List.find_map_exn gate_population_controls ~f:(fun (found, source, _) ->
+        if
+          String.equal found
+            "names a leg handed in as a parameter uncompared rather than counting it read"
+        then Some source
+        else None)
+  in
+  (* Through the corpus's own judgement: refused with no exemption, counted under a matching one
+     with nothing refused and nothing stale, and a stale exemption refused. *)
+  let legs = (Scan.gate_census fixture).Scan.uncompared_legs in
+  let judge exemptions ~fail =
+    let exempted = Hashtbl.create (module String) in
+    let refused =
+      judge_uncompared_legs ~fail
+        ~exemptions:
+          (Map.of_alist_exn
+             (module String)
+             (List.map exemptions ~f:(fun (key, sites, _) -> (key, sites))))
+        ~exempted ~source:"fixture.ml" legs
+    in
+    (refused, stale_counted_exemptions ~exemptions ~found:exempted)
+  in
+  let refused, _ =
+    judge [] ~fail:(fun _ ->
+        refused_leg := true;
+        Test_scan.Refusal_control_manifest.observe_failure ~source ~format:uncompared_format)
+  in
+  let exempting =
+    List.map legs ~f:(fun leg ->
+        (uncompared_leg_key ~source:"fixture.ml" leg, 1, "synthetic control"))
+  in
+  let exempted_refused, exempted_stale = judge exempting ~fail:(fun _ -> ()) in
+  let judged =
+    refused = 1 && List.length legs = 1 && exempted_refused = 0 && Set.is_empty exempted_stale
+  in
+  let _, stale = judge [ ("fixture.ml: why", 1, "synthetic control") ] ~fail:(fun _ -> ()) in
+  refuse_stale_uncompared_legs stale ~fail:(fun _ ->
+      refused_stale := true;
+      Test_scan.Refusal_control_manifest.observe_failure ~source ~format:stale_format);
+  ( "refuses a leg claim it leaves uncompared outside its exemption, counts one under it, and \
+     refuses a stale exemption",
+    !refused_leg && !refused_stale && judged )
 
 (* {1 A gate is a skip, not a disjunct of the claim (gh-ocannl-1310)}
 
@@ -6639,6 +7070,13 @@ let () =
       (List.map exempt_skip_lists ~f:(fun (key, sites, _) -> (key, sites)))
   in
   let skip_lists_exempted = Hashtbl.create (module String) in
+  let uncompared_offenders = ref 0 in
+  let uncompared_exemptions =
+    Map.of_alist_exn
+      (module String)
+      (List.map exempt_uncompared_legs ~f:(fun (key, sites, _) -> (key, sites)))
+  in
+  let uncompared_exempted = Hashtbl.create (module String) in
   let tolerance_offenders = ref 0 and parity_sites = ref 0 in
   let floor_offenders = ref 0 and literal_floors = ref 0 in
   let floor_exemptions = Map.of_alist_exn (module String) exempt_floors in
@@ -6658,7 +7096,11 @@ let () =
     @ run_line_break_controls ()
     @ [ run_line_break_refusal_control () ]
     @ run_gate_population_controls () @ run_index_controls ()
-    @ [ run_gate_refusal_control (); run_leg_and_skip_list_refusal_control () ]
+    @ [
+        run_gate_refusal_control ();
+        run_leg_and_skip_list_refusal_control ();
+        run_uncompared_leg_refusal_control ();
+      ]
     @ [ run_claim_reader_refusal_control (); run_matrix_reader_control () ]
     @ run_folded_gate_controls ()
     @ [ run_folded_gate_refusal_control () ]
@@ -6674,10 +7116,9 @@ let () =
     control_results @ run_manifest_controls ~manifest ~controls:(control_results @ matrix_results)
   in
   let per_directory = Hashtbl.create (module String) in
-  let callers_of =
-    cross_source_callers sources ~read:(fun source ->
-        In_channel.read_all (Map.find_exn on_disk source))
-  in
+  let read source = In_channel.read_all (Map.find_exn on_disk source) in
+  let callers_of = cross_source_callers sources ~read in
+  let definitions_of = cross_source_definitions sources ~read in
   printf
     "Test sources that print a claim they decided themselves, outside `Verdict`: a format whose\n\
      last argument-consuming conversion is a bare `%%b` at the end, behind a label ending in `:`,\n\
@@ -6698,7 +7139,10 @@ let () =
           Int.incr line_break_offenders;
           refuse_line_break ~fail ~source site);
       let gates =
-        read_gates ~fail ~source ~census:(Scan.gate_census ~callers:(callers_of source)) content
+        read_gates ~fail ~source
+          ~census:
+            (Scan.gate_census ~callers:(callers_of source) ~definitions:(definitions_of source))
+          content
       in
       gated_sites := !gated_sites + gates.Scan.gated_sites;
       List.iter gates.Scan.readings ~f:(fun reading ->
@@ -6716,6 +7160,10 @@ let () =
           uncompared_sites :=
             Printf.sprintf "  %s:%d %s: %s" source leg.leg_line leg.leg_form leg.why
             :: !uncompared_sites);
+      uncompared_offenders :=
+        !uncompared_offenders
+        + judge_uncompared_legs ~fail ~exemptions:uncompared_exemptions
+            ~exempted:uncompared_exempted ~source gates.Scan.uncompared_legs;
       List.iter gates.Scan.unread_legs ~f:(fun leg ->
           Int.incr gate_offenders;
           refuse_unread_leg ~fail ~source leg);
@@ -6840,6 +7288,12 @@ let () =
   else
     List.iter exempt_skip_lists ~f:(fun (key, sites, why) ->
         printf "  %s (%d site%s) -- %s\n" key sites (if sites = 1 then "" else "s") why);
+  printf "\nUncompared leg claims exempted, with the reason each stays outside the gate reader:\n";
+  if List.is_empty exempt_uncompared_legs then
+    printf "  (none: every complete leg claim is followed to its gates)\n"
+  else
+    List.iter exempt_uncompared_legs ~f:(fun (key, sites, why) ->
+        printf "  %s (%d site%s) -- %s\n" key sites (if sites = 1 then "" else "s") why);
   printf "\nLiteral floors below one exempted, with the reason each keeps its floor:\n";
   List.iter exempt_floors ~f:(fun (key, why) -> printf "  %s -- %s\n" key why);
   printf "\nSynthetic helper-rule controls:\n";
@@ -6870,9 +7324,13 @@ let () =
          (String.concat ~sep:", " (Set.to_list stale)));
   refuse_stale_quantified ~fail stale_quantified;
   let stale_skip_lists =
-    stale_skip_list_exemptions ~exemptions:exempt_skip_lists ~found:skip_lists_exempted
+    stale_counted_exemptions ~exemptions:exempt_skip_lists ~found:skip_lists_exempted
   in
   refuse_stale_skip_lists ~fail stale_skip_lists;
+  let stale_uncompared_legs =
+    stale_counted_exemptions ~exemptions:exempt_uncompared_legs ~found:uncompared_exempted
+  in
+  refuse_stale_uncompared_legs ~fail stale_uncompared_legs;
   let stale_floors =
     List.filter_map exempt_floors ~f:(fun (key, _) ->
         let found = Option.value (Hashtbl.find floors_exempted key) ~default:0 in
@@ -7060,6 +7518,7 @@ let () =
   Verdict.p "and the claim-name resolver resolves every leg constructor Verdict declares"
     resolves_every_leg_constructor;
   Verdict.p "and it compared the gates and populations of leg claims" (!leg_sites > 0);
+  Verdict.p "no leg claim goes uncompared outside exempt_uncompared_legs" (!uncompared_offenders = 0);
   Verdict.p "no claim folds a run-constant gate into its value" (!folded_offenders = 0);
   Verdict.p "no source writes a skip list by hand" (!skip_list_offenders = 0);
   Verdict.p "and the skip-list reader read skips" (!skips_read > 0);
@@ -7084,7 +7543,8 @@ let () =
   Verdict.p "the scan found every literal planted for it" (Set.is_empty missing);
   Verdict.p "every exemption on this check's lists is still earned"
     (Set.is_empty unread && Set.is_empty stale && Set.is_empty stale_quantified
-   && Set.is_empty stale_skip_lists);
+   && Set.is_empty stale_skip_lists
+    && Set.is_empty stale_uncompared_legs);
   (* Over the exemption lists, which is where a shared key would have to be written. *)
   Verdict.p_empty "every exempted claim-shaped literal is one source site, not a shared key"
     ~over:(exempt_sites @ exempt_computed_sites)

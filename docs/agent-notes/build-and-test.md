@@ -2742,14 +2742,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `exempt_skip_lists` entries, each with its site count and reason. Both readers work under one
   BOUNDED model of what runs, stated once in `verdict_scan.ml`'s skip-list header (*The model*):
   a function value or `lazy` is deferred unless a collection function calls it back, and a
-  construct outside the model is read conservatively -- no skip list, an uncompared leg -- never
-  refused. Extending the model starts in that header. Since gh-ocannl-1893 item 2 the model reads
-  DEFERRED SKIP VALUES where they run: a skip bound to a name of any spelling, a named skip wrapper
-  at a complete application (`let skip_both () = skipped "a"; skipped "b"` run in a branch is a
-  skip run), a stored partial iteration where its name completes it, a named `lazy` where it is
-  forced (once per branch), and a lazy sequence's callbacks where a consumer runs them; which
-  `Seq`/`Sequence` functions consume is the `consumes` column of `collection_functions`, the one
-  owner both readers ask.
+  construct outside the model is read conservatively: the skip-list reader then sees no skip list,
+  which is never refused, and the gate reader leaves the leg uncompared, which is refused as a gate
+  nothing read unless `exempt_uncompared_legs` names it (gh-ocannl-2336, below). Extending the model
+  starts in that header. Since gh-ocannl-1893 item 2 the model reads DEFERRED SKIP VALUES where they
+  run: a skip bound to a name of any spelling, a named skip wrapper at a complete application
+  (`let skip_both () = skipped "a"; skipped "b"` run in a branch is a skip run), a stored partial
+  iteration where its name completes it, a named `lazy` where it is forced (once per branch), and a
+  lazy sequence's callbacks where a consumer runs them; which `Seq`/`Sequence` functions consume is
+  the `consumes` column of `collection_functions`, the one owner both readers ask.
   The item-1 migration of gh-ocannl-1893 removes the remaining exemptions. The cache-reuse
   claims in `cc_march_census` gate on the configured compiler's expanded compilation plan,
   classified before collecting the counters; an always-evaluated claim checks the plan's
@@ -2963,12 +2964,21 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   as call sites. A leg read from a record field, out of a record or tuple parameter pattern, or
   from the element parameter of an anonymous callback `List`/`Array` `iter`/`map`/... is handed in
   place is followed to the literal it is taken from, one resolution per element of a literal list,
-  compared on both sides with that element chosen. A local function or `lazy` a make function runs
-  is its run code. What stays uncompared -- named site by site on the ratchet's stderr -- is a
+  compared on both sides with that element chosen. A leg that is the RESULT of another source's
+  function (`Ll_test.cuda_arm_leg leg arm`) is that function's body, read with the application's
+  arguments bound as a local function's is, from the source the index gives as compiled under that
+  module -- the speller's own directory's, else every one of the name (gh-ocannl-2336). A local
+  function or `lazy` a make function runs is its run code. What stays uncompared -- named site by
+  site on the ratchet's stderr, and REFUSED unless `exempt_uncompared_legs` names its source and
+  the reader's reason with a site count and why it stays outside (stale-checked both ways, as
+  `exempt_skip_lists` is), so a regression that moves sites back onto the boundary turns the
+  ratchet red (gh-ocannl-2336) -- is a
   function some application of which the reader cannot see (handed on as a value, a caller
   spelling the module packed, as a functor argument, through a wrapped library's path, or
   re-exporting it where a third source spells the caller, or not parsing), a field of no literal,
-  an element of a computed collection, and a make function taken out of a value; the header in
+  an element of a computed collection, a function of a module no corpus source is compiled as (or
+  one its source may rebind by a later `include`), and a make function taken out of a value; the
+  header in
   `test/support/verdict_scan.ml` lists the forms. A leg claim applied in part is refused as
   unread. Most of its mutation runs exit 4, not 1: the ratchet's trailing
   `OK:` row prints only on success (the manifest's gh-ocannl-1289 section says how they were

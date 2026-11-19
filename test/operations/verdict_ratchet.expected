@@ -72,6 +72,9 @@ Quantified bindings exempted because emptiness is their passing meaning:
 Hand-written skip lists exempted, with the reason each keeps the form:
   (none: every conditional claim is written once)
 
+Uncompared leg claims exempted, with the reason each stays outside the gate reader:
+  (none: every complete leg claim is followed to its gates)
+
 Literal floors below one exempted, with the reason each keeps its floor:
   test/operations/verdict_quantified.ml:Verdict.p_all:every seed is even -- a control of Verdict.check_floor's runtime refusal, which verdict_quantified runs in a child process and expects to raise
   test/operations/verdict_quantified.ml:Verdict.p_none:no seed is odd -- a control of Verdict.check_floor's runtime refusal, which verdict_quantified runs in a child process and expects to raise
@@ -745,10 +748,35 @@ names a leg uncompared whose module a caller opens through another module's path
 names a leg uncompared in a submodule whose module another source re-exports: true
 names a leg uncompared whose helper another source also hands on as a value: true
 names a leg uncompared whose helper's module a caller that does not parse may spell: true
+accepts a leg another source's function returns, its sub-leg gated on an invariant: true
+refuses a leg another source's function returns, its sub-leg gated on the rows handed in: true
+refuses a leg a caller builds by another source's function from the rows it hands in: true
+names a leg uncompared that is the result of a function under a module alias of another source: true
+names a leg uncompared whose function a structure of the source may rebind by a later include: true
+names a leg uncompared whose other-source function writes the reference its gate reads: true
+refuses a leg another source's function gates on a part of a tuple it destructures: true
+names a leg uncompared whose function a submodule exports before a later include may replace it: true
+names a leg uncompared whose other-source gate reads a reference a helper there writes: true
+accepts a leg a caller builds through a third source's function that applies the claim's own: true
+names a leg uncompared that another source's function builds from an optional it is handed by name: true
+refuses a leg another source's function destructures from the default its caller's None leaves: true
+accepts a leg built by a structure's function that another structure includes before an unreadable include: true
+names a leg uncompared whose other-source helper's gate reads a reference another helper writes: true
+names a leg uncompared whose other-source function applies a name a later include may rebind: true
+names a leg uncompared whose other-source function applies a submodule a later include may replace: true
+names a leg uncompared whose other-source function hands its gate's reference to a writing helper: true
+names a leg uncompared that is the result of a function of a module no source defines: true
+names a leg uncompared whose function a later include in its source may rebind: true
+names a leg uncompared whose function a later include of a structure including another may rebind: true
+names a leg uncompared that another source's function takes from a record it writes into: true
+refuses a leg another source's function gates on the default its caller's None leaves: true
+refuses a leg built by the definition in its speller's own directory, not the claim's: true
 the index reads each select arm as the module dune copies it to: true
 the index hands a caller to its own directory's module of the name, and the rest to every one: true
+the definition index reads a module from its speller's own directory, else every source of the name: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
 refuses a leg claim it cannot complete, a planted hand-written skip list, a skip-list reader that raised, and a stale exemption: true
+refuses a leg claim it leaves uncompared outside its exemption, counts one under it, and refuses a stale exemption: true
 a claim reader's exception on a source that parses reaches the scanner-defect refusal, not the parse one: true
 a syntax matrix cell whose reader raises reads as a reader defect, not a parse failure: true
 refuses a negated backend gate folded into a claim's value: true
@@ -919,6 +947,7 @@ and the gate reader completed gated claims to compare: true
 and the leg reader judges every member Verdict.Claims exports: true
 and the claim-name resolver resolves every leg constructor Verdict declares: true
 and it compared the gates and populations of leg claims: true
+no leg claim goes uncompared outside exempt_uncompared_legs: true
 no claim folds a run-constant gate into its value: true
 no source writes a skip list by hand: true
 and the skip-list reader read skips: true
@@ -944,6 +973,8 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised
   [scanner-refusal:0de32014cb53ae9628faaa035dbb0ac7] starting with
   [scanner-refusal:6e412a3ea539daeb755ee0d61f3d40f7] exempt_skip_lists
+  [scanner-refusal:fc367fa3dd3580b30c61063bebf7bd25] applies the leg
+  [scanner-refusal:3b5509d5f78cc3d75c4b9816b7f0021a] exempt_uncompared_legs
   [scanner-refusal:cccb6b32fe71c4e65b2b51a39ea8c519] skip-list reader raised
   [scanner-refusal:4b8222a751df16e2ca351f7bacca5583] claim readers raised
   [scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application
@@ -975,6 +1006,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:03571cf329d0733bb946c2eca2946008] Verdict.Claims
   [scanner-refusal:f675a65703076dfc53ea44fb59f9fd09] claim-name resolver resolves
   [scanner-refusal:664fc647996773a4adb1a331fc223f1f] gates and populations
+  [scanner-refusal:578e6b63483d4d08d00475e2d75ee60b] exempt_uncompared_legs
   [scanner-refusal:92b2164afd41d9fd93850d02494032d7] run-constant gate into
   [scanner-refusal:90b4edf499fe49feb30dde99ff5e87b3] no source writes
   [scanner-refusal:83059def842c32ad5e0ce705c42e5d69] skip-list reader read
