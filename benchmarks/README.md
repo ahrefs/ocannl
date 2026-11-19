@@ -1201,7 +1201,12 @@ m4-max) and the toolchain its drivers compile with (`nvcc`, `hipcc`, the macOS S
 packages, `pip freeze` against the `~/.venvs/ocannl-bench.requirements.txt` provisioning recorded,
 one tensor round-tripped through the device (minix's rocm7.1 torch passed `is_available()` and
 segfaulted on that copy), `Python.h` for torch.compile, the interpreter this checkout's drivers
-resolve through `bench_venv.py`, the toolchain, the box's rows by name (`fixture-records`:
+resolve through `bench_venv.py`, the toolchain, the kernel the box boots next (`default-kernel`,
+Linux only, `skip` elsewhere: the kernel `/boot/vmlinuz` names has its `initrd.img-<version>`,
+and `dpkg -l` lists no package a maintainer script left half-configured or half-installed --
+rog's failed nvidia DKMS build on 2026-11-03 left its new default kernel without an initrd, and
+the box panicked at its next reboot with nothing reporting it beforehand), the box's rows by
+name (`fixture-records`:
 `fixture_digest.py --check-names --expect-recorded <box>`, below), and each fixture against this
 checkout's `DIGESTS.txt` -- then `READY`, or `GAP (<n> of <m> items)` with exit 1; usage errors
 exit 2. `--fixture` (a workload stem, repeatable) narrows the fixtures to the session's; without
@@ -1221,8 +1226,10 @@ to resolve any environment failures before measuring.
 
 It checks and never provisions. Each GAP line is followed by its repair: on a Linux box
 lukstafi/ludics-lite's `scripts/install-linux.sh --bench-venv [nvidia|amd]` (the venv, its
-recorded freeze, the `benchmarks/.venv` link and the anchor's fixtures copied into
-`~/ocannl-staging/benchmarks/fixtures`); on m4-max the venv is built by hand per [Setup](#setup).
+recorded freeze, the `benchmarks/.venv` link and the anchor's top-level fixtures copied into
+`~/ocannl-staging/benchmarks/fixtures`, never its `by-origin/` copies: an absent fixture's repair
+names where the box's own bytes are kept, per [Rebuilding a fixture that vanished](#setup)); on
+m4-max the venv is built by hand per [Setup](#setup).
 A fresh worktree's `fixtures/` holds only `DIGESTS.txt`, so copy or link the session's fixtures
 in from the box's store and re-run the check, or pass `--fixture-dir` to check the store a driver
 reads (`gh1133_cells.sh`'s `FIXTURE_DIR`) -- never regenerate one to get past a GAP (see above).

@@ -81,7 +81,33 @@ for tool in nvcc hipcc; do
   printf '#!/bin/sh\necho "%s fake, release 1.0"\n' "$tool" >"$TMP/bin/$tool"
 done
 printf '#!/bin/sh\necho /fake/MacOSX.sdk\n' >"$TMP/bin/xcrun"
+# The default-kernel item reads `uname -s`, `/boot` and `dpkg -l`: every leg sees a stand-in Linux
+# box with a clean /boot and dpkg database, whatever this host is, so the item reads ok on macOS
+# and on a CI runner alike; its own legs change FAKE_UNAME, FAKE_DPKG and the boot directory.
+real_uname=$(command -v uname) || exit 2
+printf '#!/bin/sh\n[ "$1" = -s ] && [ $# = 1 ] && { echo "${FAKE_UNAME:-Linux}"; exit 0; }\nexec %s "$@"\n' \
+  "$real_uname" >"$TMP/bin/uname"
+printf '#!/bin/sh\n[ "$1" = -l ] || exit 2\ncat "$FAKE_DPKG"\n' >"$TMP/bin/dpkg"
 chmod +x "$TMP/bin/"*
+# [fake_boot DIR VERSION [initrd|no-initrd|dangling]]: Ubuntu's /boot layout for VERSION.
+fake_boot() {
+  mkdir -p "$1"
+  [ "${3:-initrd}" = dangling ] || : >"$1/vmlinuz-$2"
+  ln -sfn "vmlinuz-$2" "$1/vmlinuz"
+  ln -sfn "initrd.img-$2" "$1/initrd.img"
+  [ "${3:-initrd}" != initrd ] || echo initramfs >"$1/initrd.img-$2"
+}
+fake_boot "$TMP/boot" 7.0.0-43-generic
+# A database as `dpkg -l` prints it: headers, an installed package, a removed one's leftovers.
+cat >"$TMP/dpkg-clean" <<'DPKG'
+Desired=Unknown/Install/Remove/Purge/Hold
+| Status=Not/Inst/Conf-files/Unpacked/halF-conf/Half-inst/trig-aWait/Trig-pend
+|/ Err?=(none)/Reinst-required (Status,Err: uppercase=bad)
+||/ Name                          Version        Architecture Description
++++-=============================-==============-============-==============================
+ii  linux-image-7.0.0-43-generic  7.0.0-43.43    amd64        Signed kernel image generic
+rc  linux-image-7.0.0-31-generic  7.0.0-31.31    amd64        Signed kernel image generic
+DPKG
 
 # One tiny valid safetensors file under a real workload's name, recorded as rog-nv's bytes in a
 # scratch DIGESTS that declares the real file's boxes, and as minix's and m4-max's copies of them --
@@ -104,6 +130,8 @@ done
 
 export FAKE_FREEZE=$TMP/freeze FAKE_INCLUDEPY=$TMP/include BENCH_VENV_PY=$venv/bin/python
 export PATH="$TMP/bin:$PATH" OCANNL_TOOL_CHECK_BOX_DEVICE_CAP=5
+export OCANNL_TOOL_CHECK_BOX_BOOT_DIR=$TMP/boot FAKE_DPKG=$TMP/dpkg-clean
+unset FAKE_UNAME
 unset FAKE_TORCH
 
 # [check RUN ARG...]: the subject on the scratch box; output in runs/RUN, status in $rc.
@@ -133,10 +161,10 @@ usage_leg() {
 if harness_leg 'ready box'; then
   check ready --box rog-nv
   if [ "$rc" = 0 ] && ! grep -q 'GAP' "$TMP/runs/ready" &&
-     [ "$(grep -c ': ok -- ' "$TMP/runs/ready")" = 9 ] &&
+     [ "$(grep -c ': ok -- ' "$TMP/runs/ready")" = 10 ] &&
      grep -qx "check-box: fixture-records: ok -- $TMP/DIGESTS.txt has a row of rog-nv's for each of the 1 fixture names checked (by name)" \
        "$TMP/runs/ready" &&
-     tail -n 1 "$TMP/runs/ready" | grep -qx 'check-box: rog-nv: READY (9 items)'; then
+     tail -n 1 "$TMP/runs/ready" | grep -qx 'check-box: rog-nv: READY (10 items)'; then
     report 0 'a box meeting every item is READY, exit 0'
   else
     report 1 'a box meeting every item is READY, exit 0' "rc=$rc"
@@ -317,6 +345,56 @@ if harness_leg 'gap: toolchain'; then
   PATH="$TMP/bin3:$PATH" check broken-toolchain --box rog-nv
   gap_leg 'an nvcc that cannot run is a toolchain GAP' broken-toolchain toolchain
 fi
+
+# gh-ocannl-2004: rog's half-configured kernel package left its default kernel without an initrd.
+if harness_leg 'default kernel'; then
+  check kernel-clean --box rog-nv
+  if [ "$rc" = 0 ] &&
+     grep -Fqx "check-box: default-kernel: ok -- 7.0.0-43-generic has $TMP/boot/initrd.img-7.0.0-43-generic; no half-configured or half-installed package" \
+       "$TMP/runs/kernel-clean"; then
+    report 0 'a default kernel with its initrd and a clean dpkg database is ok'
+  else
+    report 1 'a default kernel with its initrd and a clean dpkg database is ok' "rc=$rc"
+    sed 's/^/      | /' "$TMP/runs/kernel-clean"
+  fi
+
+  # The 2026-11-06 fault: vmlinuz and initrd.img point at -42, whose initrd was never built.
+  fake_boot "$TMP/boot-no-initrd" 7.0.0-43-generic
+  fake_boot "$TMP/boot-no-initrd" 7.0.0-42-generic no-initrd
+  OCANNL_TOOL_CHECK_BOX_BOOT_DIR=$TMP/boot-no-initrd check kernel-no-initrd --box rog-nv
+  gap_leg 'a default kernel whose initrd.img link dangles is a default-kernel GAP' kernel-no-initrd default-kernel
+  if grep -Fq "the default kernel 7.0.0-42-generic has no $TMP/boot-no-initrd/initrd.img-7.0.0-42-generic" \
+       "$TMP/runs/kernel-no-initrd" &&
+     grep -q '^  repair: needs root on the box: .*sudo dpkg --configure -a' "$TMP/runs/kernel-no-initrd"; then
+    report 0 'its line names the kernel and the missing initrd, and its repair needs root'
+  else report 1 'its line names the kernel and the missing initrd, and its repair needs root'; fi
+
+  { cat "$TMP/dpkg-clean"
+    echo 'iF  linux-image-7.0.0-42-generic  7.0.0-42.42    amd64        Signed kernel image generic'
+  } >"$TMP/dpkg-half-configured"
+  FAKE_DPKG=$TMP/dpkg-half-configured check kernel-iF --box rog-nv
+  gap_leg 'a half-configured (iF) package is a default-kernel GAP' kernel-iF default-kernel
+  if grep -q '^check-box: default-kernel: GAP -- dpkg -l shows packages a maintainer script left unfinished: linux-image-7.0.0-42-generic (iF)$' \
+       "$TMP/runs/kernel-iF"; then
+    report 0 'its line names the package and its state'
+  else report 1 'its line names the package and its state'; fi
+
+  fake_boot "$TMP/boot-dangling" 7.0.0-44-generic dangling
+  OCANNL_TOOL_CHECK_BOX_BOOT_DIR=$TMP/boot-dangling check kernel-dangling --box rog-nv
+  gap_leg 'a vmlinuz link to no kernel image is a default-kernel GAP' kernel-dangling default-kernel
+  OCANNL_TOOL_CHECK_BOX_BOOT_DIR=$TMP/absent-boot check kernel-no-link --box rog-nv
+  gap_leg 'no vmlinuz link names no default kernel: a GAP, not a pass' kernel-no-link default-kernel
+
+  # Off Linux the item judges nothing, even over a /boot that would fail.
+  FAKE_UNAME=Darwin OCANNL_TOOL_CHECK_BOX_BOOT_DIR=$TMP/boot-no-initrd check kernel-darwin --box rog-nv
+  if [ "$rc" = 0 ] &&
+     grep -qx 'check-box: default-kernel: skip -- not Linux (Darwin): no /boot or dpkg to check' "$TMP/runs/kernel-darwin"; then
+    report 0 'on another OS the item reads skip and the box stays READY'
+  else
+    report 1 'on another OS the item reads skip and the box stays READY' "rc=$rc"
+    sed 's/^/      | /' "$TMP/runs/kernel-darwin"
+  fi
+fi
 if harness_leg 'gap: fixtures'; then
   mkdir -p "$TMP/empty-store"
   check absent --box rog-nv --fixture mlp_small --fixture-dir "$TMP/empty-store"
@@ -359,7 +437,7 @@ if harness_leg 'gap: fixture records'; then
        "$TMP/runs/records-named" &&
      grep -q '^  repair: .*fixture_digest.py --record-matching --origin tuf ' "$TMP/runs/records-named" &&
      grep -q "^check-box: fixture mlp_small: ok -- .*(not tuf's recorded bytes)$" "$TMP/runs/records-named" &&
-     tail -n 1 "$TMP/runs/records-named" | grep -qx 'check-box: tuf: GAP (1 of 9 items)'; then
+     tail -n 1 "$TMP/runs/records-named" | grep -qx 'check-box: tuf: GAP (1 of 10 items)'; then
     report 0 'it names the unrecorded fixture and the record-matching repair, and is the only gap'
   else
     report 1 'it names the unrecorded fixture and the record-matching repair, and is the only gap'
@@ -411,14 +489,14 @@ if harness_leg 'fleet names'; then
   check fleet-rog --box rog-nv-linux
   if [ "$rc" = 0 ] && head -n 1 "$TMP/runs/fleet-rog" |
        grep -qx "check-box: --box rog-nv-linux is the fleet's name for measurement box rog-nv" &&
-     tail -n 1 "$TMP/runs/fleet-rog" | grep -qx 'check-box: rog-nv: READY (9 items)'; then
+     tail -n 1 "$TMP/runs/fleet-rog" | grep -qx 'check-box: rog-nv: READY (10 items)'; then
     report 0 "the fleet's name for a box is that box, said before the items, and the verdict names the box"
   else
     report 1 "the fleet's name for a box is that box, said before the items, and the verdict names the box" "rc=$rc"
     sed 's/^/      | /' "$TMP/runs/fleet-rog"
   fi
   FAKE_TORCH=hip check fleet-minix --box minix-amd-linux --fixture mlp_small
-  [ "$rc" = 0 ] && tail -n 1 "$TMP/runs/fleet-minix" | grep -qx 'check-box: minix: READY (9 items)'
+  [ "$rc" = 0 ] && tail -n 1 "$TMP/runs/fleet-minix" | grep -qx 'check-box: minix: READY (10 items)'
   report $? "minix-amd-linux is minix, a hip box" "rc=$rc"
   check fleet-macbook --box macbook-pro
   usage_leg 'a fleet box that measures nothing is refused by name, as no measurement box' fleet-macbook \
