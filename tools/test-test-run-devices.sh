@@ -1241,7 +1241,8 @@ if [ -z "$d" ]; then
     native_probe be-filtered "$dxg_absent" "$kfd_absent" "$nv_present" cc run --expect-backend cuda build @be-disabled/gpu @check
   [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] &&
     grep -qF -- 'disabled alias skipped: @be-disabled/gpu' <<<"$argv_out" &&
-    grep -qF -- 'backend refused: --expect-backend cuda: after skipping disabled aliases, the remaining batch holds no backend' <<<"$argv_out" ||
+    grep -qF -- 'backend refused: --expect-backend cuda: after skipping disabled aliases, the remaining batch holds no backend.' <<<"$argv_out" &&
+    grep -qF -- 'Set OCANNL_BACKEND to enable the skipped aliases, or rerun just the remaining targets without --expect-backend.' <<<"$argv_out" ||
     d="pin after skipping the CUDA alias: exit $argv_rc (want 2); dune calls: ${argv_calls:-<none>}; digest: $argv_out"
 fi
 if [ -z "$d" ]; then

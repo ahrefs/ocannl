@@ -956,7 +956,7 @@ plan_backend_check() { # after plan_aliases and batch resolution
     fi
     if [ -n "$batch_resolved" ] && [ -z "$batch_holds" ]; then
       if [ -n "$alias_disabled" ]; then
-        backend_refusal="--expect-backend $expect_backends: after skipping disabled aliases, the remaining batch holds no backend"
+        backend_refusal="--expect-backend $expect_backends: after skipping disabled aliases, the remaining batch holds no backend. Set OCANNL_BACKEND to enable the skipped aliases, or rerun just the remaining targets without --expect-backend."
       else
         backend_note="NOTE: --expect-backend $expect_backends is vacuous for this batch (it holds no backend)."
       fi
