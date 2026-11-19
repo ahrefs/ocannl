@@ -2961,5 +2961,12 @@ let () =
   in_leg ~leg
     "the backend compiles after the first, with debug artifacts on, keep open descriptors within \
      the bound" (fun label -> p label (Descriptors.within_bound ~compiles growth));
-  in_leg ~leg "negative control: one leaking write per compile, up to the bound, breaks it"
-    (fun label -> p label (Descriptors.leak_breaks_bound ~compiles))
+  (* Negative control: a few channels kept open, a literal count deliberately independent of the
+     bound (not read off it), so the counter must see them and the bound must reject them; a bound
+     loosened past 16 on a run this long turns it red. *)
+  let leaked = 16 in
+  in_leg ~leg "negative control: 16 leaking writes break the bound" (fun label ->
+      p label (not (Descriptors.within_bound ~compiles (Descriptors.leak_growth leaked))));
+  in_legf ~leg "the bound, the baseline and the control fit under a %d-descriptor limit"
+    Descriptors.low_shell_limit (fun label ->
+      p label (baseline + Descriptors.bound ~compiles + leaked < Descriptors.low_shell_limit))

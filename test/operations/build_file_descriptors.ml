@@ -61,7 +61,8 @@ let () =
       String.is_substring (Test_utils.Generated.read ~ext:".ll" name) ~substring:name);
   p_all "every compile's .cd artifact is written" !names ~f:(fun name ->
       not (String.is_empty (Test_utils.Generated.read ~ext:".cd" name)));
-  (* Negative control: the counter sees a writer that keeps one channel per step open. *)
-  in_legf ~leg "negative control: %d leaking writes break the bound of %d compiles"
-    (Descriptors.bound ~compiles) compiles (fun label ->
-      p label (Descriptors.leak_breaks_bound ~compiles))
+  (* Negative control: one channel kept open per compile, a count written here rather than read off
+     the bound, so the counter must see it and the bound must reject it. *)
+  in_legf ~leg "negative control: %d leaking writes break the bound of %d compiles" compiles
+    compiles (fun label ->
+      p label (not (Descriptors.within_bound ~compiles (Descriptors.leak_growth compiles))))

@@ -5,8 +5,11 @@
     and only a long run under a low limit (macOS's 256 in a non-interactive ssh shell) notices.
     [build_file_descriptors] pins the contract on a trivial routine, and [schedule_mma_matmul], the
     longest compile-heavy test, holds every writer its routines reach to it. Both read the same
-    counter, claim the same bound, and run the same leaking control through them, so a counter that
-    cannot see growth, or a bound loose enough to admit a per-compile leak, cannot pass either test.
+    counter and claim the same bound. Each test's negative control leaks a channel count the test
+    writes as its own literal, independent of {!bound}, and claims the bound rejects it: so a
+    counter that cannot see growth fails the control, and so does a bound loosened past that count.
+    [schedule_mma_matmul] also claims the bound, its baseline and its control fit under
+    {!low_shell_limit}.
 
     Each test makes its claims in its own [Verdict.leg], closed on Windows, which has no [/dev/fd]
     (built at the claim's site, where [verdict_ratchet]'s gate reader follows it): the readings
@@ -18,13 +21,15 @@ open Base
     listing's own descriptor is counted in every reading alike. *)
 let count () = if Stdlib.Sys.win32 then 0 else Array.length (Stdlib.Sys.readdir "/dev/fd")
 
+(** The descriptor limit of a non-interactive ssh shell on macOS, under which [schedule_mma_matmul]
+    once ran out of descriptors (gh-ocannl-1784). *)
+let low_shell_limit = 256
+
 (** The most new descriptors any number of compiles may leave open: the room for one-time state
     opened on demand after the warm-up compile -- driver state a routine's first compile or launch
-    of a new kind opens, and that stays open for the process's lifetime. Measured on cc and Metal
-    (mac-studio, M4 Max), that state is nothing: [schedule_mma_matmul] grew by 0 across 41 and 300
-    compiles. The room is for backends where it was not measured (CUDA and HIP), and it stays far
-    below the 256-descriptor shell that killed [schedule_mma_matmul] (gh-ocannl-1784), whose
-    baseline after its first compile is 10 to 14. *)
+    of a new kind opens, and that stays open for the process's lifetime. On cc and Metal that state
+    measured nothing (the tests print their growth on stderr); the room is for backends where it was
+    not measured (CUDA and HIP), and it stays far below {!low_shell_limit}. *)
 let allowance = 16
 
 (** [bound ~compiles] is the number of new open descriptors [compiles] compiles, read after a
@@ -37,14 +42,13 @@ let bound ~compiles = Int.min compiles allowance
 (** [within_bound ~compiles growth] is [growth < bound ~compiles]. *)
 let within_bound ~compiles growth = growth < bound ~compiles
 
-(** [leak_breaks_bound ~compiles] keeps one channel open per compile up to the bound, reads the
-    growth through {!count} and closes them: whether {!within_bound} rejects that leak -- the
-    negative control of the claim beside it. At most {!allowance} channels, so the control cannot
-    itself run a 256-descriptor shell out of descriptors. *)
-let leak_breaks_bound ~compiles =
-  let steps = bound ~compiles in
+(** [leak_growth n] keeps [n] channels open at once, reads the growth through {!count} and closes
+    them: the negative control's measurement. [n] must be positive, since a control that leaks
+    nothing shows nothing. *)
+let leak_growth n =
+  if n < 1 then invalid_arg (Printf.sprintf "Descriptors.leak_growth: %d channels leak nothing" n);
   let before = count () in
-  let leaked = List.init steps ~f:(fun (_ : int) -> Stdio.Out_channel.create "/dev/null") in
+  let leaked = List.init n ~f:(fun (_ : int) -> Stdio.Out_channel.create "/dev/null") in
   let growth = count () - before in
   List.iter leaked ~f:Stdio.Out_channel.close;
-  not (within_bound ~compiles growth)
+  growth
