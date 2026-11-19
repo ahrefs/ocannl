@@ -2010,11 +2010,29 @@ let fit_memory_budget ?budget ?max_candidates ?name ctx comp bindings =
       let ctx, plan = Memory_budget.fit ?name ?max_candidates ~budget ctx comp bindings in
       (ctx, Some plan)
 
-(** Dumps [comp] as a [.cd] file in the build directory, for the [?output_cd_file] argument of
-    {!to_routine} and {!run_once}. [caller] names the calling function in the error raised when the
-    global setting [output_debug_files_in_build_directory] is false. *)
-let dump_cd_file ~caller bindings (comp : Asgns.comp) =
-  let name = Asgns.get_name_exn comp.Asgns.asgns in
+(** The routine name [comp]'s code derives ({!Asgns.derived_name}), for [caller], a compile entry
+    point taking no [?name] ({!to_routine}, {!run_once}). Asked first, so a nameless [comp] is
+    refused before any work, naming [caller] and only the fixes [caller] can take:
+    {!Asgns.get_name_exn}'s own refusal also offers the compile's [~name], which [caller] does not
+    pass on. The code excerpt follows the first line, as in [get_name_exn]'s; an error rendering it
+    (a configuration error, say) propagates as it is. *)
+let routine_name ~caller (comp : Asgns.comp) =
+  match Asgns.derived_name comp.Asgns.asgns with
+  | Some name -> name
+  | None ->
+      let code = Asgns.nameless_code_excerpt comp.Asgns.asgns in
+      raise
+      @@ Utils.User_error
+           (caller
+          ^ ": the routine has no name: its code carries no Block_comment naming it. Pass \
+             [Train.forward t] rather than the bare [t.forward] (it wraps the code in a comment \
+             naming the routine), or name the code with a %cd block comment [~~(\"name\"; code)].\n\
+             The code:\n" ^ code)
+
+(** Dumps [comp] as a [.cd] file named [name] in the build directory, for the [?output_cd_file]
+    argument of {!to_routine} and {!run_once}. [caller] names the calling function in the error
+    raised when the global setting [output_debug_files_in_build_directory] is false. *)
+let dump_cd_file ~caller ~name bindings (comp : Asgns.comp) =
   if not Utils.settings.output_debug_files_in_build_directory then
     raise
     @@ Utils.User_error
@@ -2061,7 +2079,9 @@ let compile_within_budget ?budget ?max_candidates ?budget_report ctx comp bindin
 
 let%track7_sexp to_routine (ctx : Context.t) ?(output_cd_file = false) ?budget ?max_candidates
     ?budget_report bindings comp =
-  if output_cd_file then dump_cd_file ~caller:"Train.to_routine" bindings comp;
+  let caller = "Train.to_routine" in
+  let name = routine_name ~caller comp in
+  if output_cd_file then dump_cd_file ~caller ~name bindings comp;
   (* Materialize the guessed output nodes so they persist across calls and are inspectable on demand
      via the context (gh-ocannl-333). *)
   Set.iter (Asgns.guess_materialized comp.Asgns.asgns) ~f:set_materialized;
@@ -2144,7 +2164,9 @@ let%track3_sexp run_once ?(output_cd_file = false) ?(skip_init = false) ?reinit_
   set_materialized t.Tensor.value;
   (* Compute the update early, to ensure the shape inference is done. *)
   let update = f t in
-  if output_cd_file then dump_cd_file ~caller:"Train.run_once" bindings update;
+  let caller = "Train.run_once" in
+  let name = routine_name ~caller update in
+  if output_cd_file then dump_cd_file ~caller ~name bindings update;
   let initialized =
     if skip_init || Set.is_empty t.params then ctx else init_params ?reinit_all ctx bindings t
   in

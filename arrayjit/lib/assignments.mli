@@ -251,11 +251,20 @@ val to_doc :
 val to_string : t -> string
 (** The code rendered as {!to_doc} renders it, at the layout {!get_name_exn}'s refusal prints. *)
 
+val derived_name : t -> string option
+(** The routine name the code's {!Block_comment}s derive (joined with [_then_] across a {!Seq}), or
+    [None] when they derive none -- typically a bare [t.Tensor.forward], which [Train.forward] wraps
+    in a comment naming the routine. Renders nothing. *)
+
+val nameless_code_excerpt : t -> string
+(** The code as {!to_string} renders it, cut to its first lines with a count of the rest: what a
+    refusal of a nameless routine prints after its first line, to identify the comp. *)
+
 val get_name_exn : t -> string
-(** The routine name the code's {!Block_comment}s derive (joined with [_then_] across a {!Seq}).
-    Raises [Invalid_argument] when they derive none -- typically a bare [t.Tensor.forward], which
-    [Train.forward] wraps in a comment naming the routine. The message's first line names that fix,
-    and the compile's [?name]; the code, cut to its first lines, follows it. *)
+(** {!derived_name}, raising [Invalid_argument] where it is [None]. The message's first line names
+    the fix, [Train.forward], and the compile's [?name]; a line [The code:] and the
+    {!nameless_code_excerpt} follow it. A compile entry point taking no [?name] refuses through
+    {!derived_name} instead, with only the fixes it can take ([Train.to_routine]). *)
 
 val lower :
   ?rewrite_target:Rewrites.target ->

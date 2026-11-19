@@ -5,11 +5,21 @@
    it through [Assignments.get_name_exn]. That refusal used to read "no comments in code: " followed
    by the whole code, and said nothing of the fix. Its first line now says the routine has no name
    and names both remedies, [Train.forward t] and the compile's [?name]; the code follows, cut to
-   its head. The claims: the refusal stays an [Invalid_argument] (the readers that fall back on it,
-   such as [Context]'s ["(unnamed)"] label for its shared-gradient refusal, match that constructor),
-   its first line is the golden's, the comp's own code follows that line, a long comp's code is cut
-   to its first lines with a count of the rest, and both remedies the line names compile the same
-   tensor. *)
+   its head. The claims: the refusal stays an [Invalid_argument] (its documented constructor; a
+   reader that only asks whether a name derives, such as [Context]'s ["(unnamed)"] label for its
+   shared-gradient refusal, reads [Assignments.derived_name] instead), its first line is the
+   golden's, the comp's own code follows that line, a long comp's code is cut to its first lines
+   with a count of the rest, and both remedies the line names compile the same tensor.
+
+   [Train.to_routine] and [Train.run_once] take no [?name], so the compile's [~name] is no remedy
+   there. They ask for the name first -- [~output_cd_file:true] reads it for the [.cd] file's name
+   before anything else, so these legs need no debug-files setting -- and refuse a nameless comp
+   with a [Utils.User_error] naming the caller and only the remedies it can take, the comp's code
+   following as in [get_name_exn]'s refusal. The claims: each such refusal is a [User_error] whose
+   first line names its caller and [Train.forward t] and never [~name], with the code after it, for
+   [to_routine] with and without [~output_cd_file:true] and for [run_once] given a bare [t.forward];
+   and both remedies it names, [Train.forward] and a [%cd] block comment, compile through
+   [to_routine]. *)
 
 open Base
 open Ocannl
@@ -78,4 +88,78 @@ let () =
     | (_ : Context.t * Context.routine) -> true
     | exception exn ->
         Stdio.eprintf "Train.forward: %s (not part of the golden)\n%!" (Exn.to_string exn);
+        false)
+
+(* The Train entry points that take no [?name]. *)
+let () =
+  let ctx = Context.auto () in
+  let train_refusal ~caller run =
+    let refusal =
+      match run () with
+      | () -> None
+      | exception Utils.User_error msg -> Some msg
+      | exception exn ->
+          Stdio.eprintf "%s: %s (not part of the golden)\n%!" caller (Exn.to_string exn);
+          None
+    in
+    p (caller ^ " refuses a nameless comp with a User_error") (Option.is_some refusal);
+    let msg = Option.value refusal ~default:"" in
+    Stdio.printf "%s first line: %s\n" caller (first_line msg);
+    p
+      (caller ^ "'s refusal names its caller and Train.forward, and not ~name")
+      (String.is_prefix (first_line msg) ~prefix:(caller ^ ": ")
+      && String.is_substring msg ~substring:"[Train.forward t]"
+      && not (String.is_substring msg ~substring:"~name"));
+    msg
+  in
+  let code_follows ~what msg (t : Tensor.t) =
+    let code = match String.split_lines msg with _ :: "The code:" :: code -> code | _ -> [] in
+    p_all2
+      (what ^ ": the comp's own code follows the first line, whole")
+      (Array.of_list code)
+      (Array.of_list (rendering t.Tensor.forward))
+      ~f:String.equal
+  in
+  let x = TDSL.range 5 ~label:[ "unr_tr_x" ] in
+  let%op y_tr = (x *. 2.) + 1. in
+  let msg =
+    train_refusal ~caller:"Train.to_routine" (fun () ->
+        ignore
+          (Train.to_routine ctx ~output_cd_file:true Ir.Indexing.Empty y_tr.Tensor.forward
+            : Context.t * Context.routine))
+  in
+  code_follows ~what:"to_routine ~output_cd_file:true" msg y_tr;
+  let msg' =
+    train_refusal ~caller:"Train.to_routine" (fun () ->
+        ignore
+          (Train.to_routine ctx Ir.Indexing.Empty y_tr.Tensor.forward : Context.t * Context.routine))
+  in
+  p "to_routine refuses alike with and without ~output_cd_file" (String.equal msg msg');
+  let x2 = TDSL.range 5 ~label:[ "unr_ro_x" ] in
+  let%op y2 = (x2 *. 2.) + 1. in
+  let msg =
+    train_refusal ~caller:"Train.run_once" (fun () ->
+        ignore
+          (Train.run_once ~output_cd_file:true ~f:(fun t -> t.Tensor.forward) ctx y2 : Context.t))
+  in
+  code_follows ~what:"run_once ~output_cd_file:true" msg y2;
+  p "Train.forward compiles through Train.to_routine"
+    (match Train.to_routine ctx Ir.Indexing.Empty (Train.forward y_tr) with
+    | (_ : Context.t * Context.routine) -> true
+    | exception exn ->
+        Stdio.eprintf "to_routine (Train.forward y_tr): %s (not part of the golden)\n%!"
+          (Exn.to_string exn);
+        false);
+  let x3 = TDSL.range 5 ~label:[ "unr_cd_x" ] in
+  let%op y3 = (x3 *. 2.) + 1. in
+  p "a %cd block comment names the bare forward through Train.to_routine"
+    (match
+       Train.to_routine ctx Ir.Indexing.Empty
+         [%cd
+           ~~("unr_cd_named";
+              y3.forward)]
+     with
+    | (_ : Context.t * Context.routine) -> true
+    | exception exn ->
+        Stdio.eprintf "to_routine ~~(...): %s (not part of the golden)\n%!" (Exn.to_string exn);
         false)

@@ -399,7 +399,11 @@ val to_routine :
     [routine.context] for the same value. A caller that only wants the routine can [snd] this. Under
     a budget, the plan's decision context is an ancestor the caller never holds; the returned
     context's release unit adopts it ({!Context.adopt_ancestor}, gh-ocannl-1762), so the
-    {!Context.release} of that context, or of [routine.context], releases it too. *)
+    {!Context.release} of that context, or of [routine.context], releases it too.
+
+    The routine is named by [comp]'s code ({!Ir.Assignments.get_name_exn}); this takes no [?name],
+    so a nameless [comp] -- a bare [t.forward] rather than {!forward}[ t] -- is refused with a
+    [Utils.User_error] before anything else, naming the fixes that apply here. *)
 
 val ranged_launch_param : Ir.Indexing.static_symbol -> string option
 (** The kind of a launch parameter that has a range, so that 0 is not a neutral value for it, and
@@ -441,7 +445,8 @@ val run_once :
 
     If [output_cd_file] is true, the global setting [output_debug_files_in_build_directory] must be
     true, and the update code is output to a file before shape inference potentially crashes at
-    [init_params].
+    [init_params]. As with {!to_routine}, the routine is named by the code of [f t]: a nameless one
+    is refused, before anything is initialized or compiled.
 
     [once] is literal: this compiles [f t] and runs it one time. The tensor stays usable -- a loss
     built on it after a {!forward_once} trains through it -- and reuse is a property of the
