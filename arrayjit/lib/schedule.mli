@@ -847,6 +847,12 @@ val op_legality : Low_level.optimized -> optop -> op_verdict
     aligned-mapping analysis, which the single-op oracle does not model. [Vectorized] retypes and
     [Swap]s only reorder within the nest and keep the intra-nest scope.
 
+    These verdicts assume pure [Local_scope] bodies, as validated by {!Low_level.optimize}. A menu
+    can probe before applying any schedule. On hand-built impure IR even [Op_legal] can precede an
+    entry refusal: {!apply} and {!schedule_legality} check purity before the first op of a non-empty
+    schedule. This charges a hidden write to the routine and avoids repeating the entry walk for
+    each proposal (gh-ocannl-2367).
+
     [Tensorize]'s role assignment is decided: the micro-kernel recognition of apply (a pure function
     of the code) is probed, so an invalid role permutation — e.g. the reduction loop assigned to
     [i]/[j], violating the discipline that the [k] role is the only rmw-carrying loop of the

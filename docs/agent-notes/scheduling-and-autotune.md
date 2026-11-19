@@ -1234,10 +1234,12 @@ files.
   Grid]` over a tile updated inside a scope body). It is untyped, an invariant: a typed
   `Illegal_schedule` would make a search decline every arm alike; strict classification reports
   the routine's fault once. Purity only: an entry's hardware loop in a scope stays exempt per op
-  (an op can repair it, a `Retype` to `Serial`), and so does everything on the single-op probes
-  (`scope_verdict`, `probe_opt_op`). `schedule_entry_scope_purity`. `scope_verdict` asks the
-  same of the single op, from one unchecked probe shared with the other two scopes, only where a
-  scope body holds a loop. The same post-op check re-judges every `Privatize` tile of the
+  (an op can repair it, a `Retype` to `Serial`). The single-op oracle `op_legality` assumes pure
+  scope bodies (gh-ocannl-2367). Its probes (`scope_verdict`, `probe_opt_op`) omit the chain's
+  entry check, so a menu can offer a move on hand-built impure IR that application refuses before
+  dispatch. `schedule_entry_scope_purity` pins both results on the same move. `scope_verdict` checks
+  the grammar only where a scope body holds a loop, using the same unchecked application as the
+  other two scope checks. The same post-op check re-judges every `Privatize` tile of the
   application: no hardware-typed loop may sit inside its per-thread lifetime (between its
   init-load and store-back) — the mint-time refusals, for the ops after the mint. That needs the
   application's tile record, so a bare `op_legality` of one op does not see it (`Op_unknown`: the

@@ -5675,8 +5675,10 @@ let apply_opt_op ~app (opt : Low_level.optimized) (op : optop) : Low_level.optim
   applied
 
 (* One op applied on its own, outside {!apply_typed}: the legality probes and the zero-expansion
-   check. [Privatize] judges its tile width on the program the op is given, and there is no final
-   re-check — a probe's result is discarded, or (zero expansion) mints no tile. *)
+   check. As in {!op_legality}, the chain entry owns the purity check: [apply_opt_op] here judges
+   the result relative to the input. The zero-expansion caller supplies an isolated [Zero_out].
+   [Privatize] judges its tile width on the program the op is given, and there is no final re-check
+   — a probe's result is discarded, or (zero expansion) mints no tile. *)
 let probe_opt_op (opt : Low_level.optimized) (op : optop) : Low_level.optimized =
   apply_opt_op ~app:(start_application opt.Low_level.llc) opt op
 
@@ -6525,7 +6527,8 @@ let scope_bodies_hold_loops (llc : Low_level.t) : bool =
    [llc].
 
    The scope grammar (gh-ocannl-1467) comes first, judged as {!apply_opt_op} judges it — a violation
-   the op added — so the menu gate prunes what application would refuse; the race queries below
+   the op added from a clean input. This probe assumes entry purity (see {!op_legality}); the
+   non-empty chain checks it even when the menu has already probed the op. The race queries below
    would call such an op legal (a [Grid] retype of a scope-nested loop) or unknown. It is asked only
    where {!scope_bodies_hold_loops}. The staging scope (gh-ocannl-1231) is checked over the applied
    IR outright: the renderer cannot render a violation at all. The fragment scope (gh-ocannl-1342)
