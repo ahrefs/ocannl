@@ -15,7 +15,7 @@ open Verdict.Claims
 module Cache_plant = Test_utils.Cache_plant
 
 let budget_key = "autotune_budget_seconds"
-let () = Hashtbl.set Utils.config_file_args ~key:"schedule_fission" ~data:"false"
+let () = Utils.state_config ~key:"schedule_fission" ~data:"false"
 let backend_name = Context.backend_name (Context.cpu ())
 let chain = Fissioned_chain.chain_with_output ()
 let reference = Scripted_search.untuned (fst chain) (snd chain)

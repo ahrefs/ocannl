@@ -28,8 +28,8 @@
 
    The envelope overrides are read once per process, at the first pre-filter, so [small_menu] (or
    [small_menu_envelope], which pins the vector file too) runs at a test's top level before its
-   first search, at the config-file level; the test's stanza declares the keys' environment
-   variables, so an ambient override reruns it rather than serving the previous result. *)
+   first search, stated in process ([Utils.state_config]), which an ambient [OCANNL_<KEY>] does not
+   outrank (gh-ocannl-2354). *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -81,9 +81,7 @@ let chain () = snd (chain_with_output ())
 (* The fraction of each segment's sketches the small menu keeps, for a test that passes it to one
    search ([Autotune.tune ~keep_fraction]) rather than stating it for all of them. *)
 let keep_fraction = 0.2
-
-let state settings =
-  List.iter settings ~f:(fun (key, data) -> Hashtbl.set Utils.config_file_args ~key ~data)
+let state settings = List.iter settings ~f:(fun (key, data) -> Utils.state_config ~key ~data)
 
 (* The cc vector file the small menu is pinned to (see the header): AVX2's, 32 bytes on 16
    registers, where each segment keeps more than the claims' floor. *)

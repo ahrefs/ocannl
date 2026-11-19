@@ -8,7 +8,8 @@
    ([Autotune.on_candidate_attempt]), each admitted window with the time the script gave it, and,
    for a full search, the schedule-cache operations ([Ir.Schedule_cache.recording_cache_io]); a
    budget test reads a virtual clock off the attempts ([Autotune.budget_elapsed], gh-ocannl-1409).
-   Configuration a test states for one search is set at the config-file level for that search alone.
+   Configuration a test states for one search is stated in process ([Utils.with_stated_config],
+   above any ambient [OCANNL_<KEY>]) for that search alone.
 
    [scripted] is that scope around any body -- an [Autotune.tune] call with arguments of its own, or
    [Train.tune_placements]; [search] is the common body: one [Autotune.tune] on a computation,
@@ -44,21 +45,10 @@ let window_index () =
     Hashtbl.set counts ~key:w.label ~data:(k + 1);
     k
 
-(* [with_settings settings f] runs [f] with each [(key, value)] of [settings] stated at the
-   config-file level, restoring what the file level held before on return or exception. *)
-let with_settings settings f =
-  let saved =
-    List.map settings ~f:(fun (key, _) -> (key, Hashtbl.find Utils.config_file_args key))
-  in
-  Exn.protect
-    ~finally:(fun () ->
-      List.iter (List.rev saved) ~f:(fun (key, old) ->
-          match old with
-          | Some data -> Hashtbl.set Utils.config_file_args ~key ~data
-          | None -> Hashtbl.remove Utils.config_file_args key))
-    ~f:(fun () ->
-      List.iter settings ~f:(fun (key, data) -> Hashtbl.set Utils.config_file_args ~key ~data);
-      f ())
+(* [with_settings settings f] runs [f] with each [(key, value)] of [settings] stated in process
+   ([Utils.with_stated_config], above the environment and the commandline's profile,
+   gh-ocannl-2354), restoring the prior statements on return or exception. *)
+let with_settings settings f = Utils.with_stated_config settings f
 
 (* [scripted ~measure body] runs [body] with every admitted window measuring [measure window] and
    returns its result beside the scope's [record]. [?settings] are stated for the scope alone;

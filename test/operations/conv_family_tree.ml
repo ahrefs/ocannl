@@ -412,13 +412,13 @@ let () =
   let opt = lowering "cft_padwaste" (make_conv "cpw" ~b:2 ~h:22 ~ic:8 ~oc:8) in
   let tree () = Autotune.conv_sketch_tree ~is_gpu:true ~is_cpu:false ~limits:gpu_limits opt in
   let default_tree = tree () in
-  Hashtbl.set Utils.config_file_args ~key:"autotune_pad_waste_max" ~data:"1.25";
+  Utils.state_config ~key:"autotune_pad_waste_max" ~data:"1.25";
   p "pad waste: the lowered threshold is in force" Float.(Autotune.pad_waste_max () = 1.25);
   (* The tree is lazy and reads the threshold where a menu is built, so it is walked while the
      threshold is in force. *)
   let lowered = tree () in
   Option.iter lowered ~f:(fun t -> ignore (Sspace.enumerate t : _ list));
-  Hashtbl.remove Utils.config_file_args "autotune_pad_waste_max";
+  Utils.unstate_config "autotune_pad_waste_max";
   match (default_tree, lowered) with
   | Some default_tree, Some lowered ->
       Stdio.printf "== 20-row conv, GPU, pad-waste threshold 1.25 ==\n";
@@ -1004,7 +1004,7 @@ let () =
   let tag = "conv_tail_exec" in
   (* The companion geometry is gated at the default preset's work threshold (gh-ocannl-1843); off
      for this small tail, so it is annotated. *)
-  Hashtbl.set Utils.config_file_args ~key:"cpu_schedule_min_work" ~data:"0";
+  Utils.state_config ~key:"cpu_schedule_min_work" ~data:"0";
   let out = make_conv ~tail:true ~bias_shift:1000. "cte" ~b:2 ~h:11 ~ic:4 ~oc:8 in
   let comp = Train.forward out in
   let recovered opt =
@@ -1117,4 +1117,4 @@ let () =
               Stdio.eprintf "%s: %s: %s\n%!" tag (show q) (Exn.to_string exn);
               false));
   executes ~what:"unfused serial leaf" ~enum:offered serial;
-  Hashtbl.remove Utils.config_file_args "cpu_schedule_min_work"
+  Utils.unstate_config "cpu_schedule_min_work"

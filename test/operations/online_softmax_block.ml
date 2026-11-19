@@ -634,11 +634,11 @@ let () =
   (* Tiles past the stack threshold would be [On_device] buffers shared by every parallel row: the
      fold declines, and the output is the composed one (executed). *)
   let threshold_key = "stack_threshold_in_bytes" in
-  Hashtbl.set Utils.config_file_args ~key:threshold_key ~data:"16";
+  Utils.state_config ~key:threshold_key ~data:"16";
   let small =
     Exn.protect
       ~f:(fun () -> forward ~on:true ~block:8 ~seq ~d_k:8 ())
-      ~finally:(fun () -> Hashtbl.remove Utils.config_file_args threshold_key)
+      ~finally:(fun () -> Utils.unstate_config threshold_key)
   in
   let reference = forward ~on:false ~block:0 ~seq ~d_k:8 () in
   p "tiles past the stack threshold: no fold" (Set.is_empty (tiles small.optimized.LL.llc));
@@ -775,16 +775,16 @@ let () =
 let () =
   printf "--- leg 8: auto resolves before lowering and preserves explicit sizes ---\n";
   let key = "online_softmax_block" in
-  let previous = Hashtbl.find Utils.config_file_args key in
-  Hashtbl.set Utils.config_file_args ~key ~data:"auto";
+  let previous = Utils.stated_config key in
+  Utils.state_config ~key ~data:"auto";
   Online_softmax.set_enabled (Some true);
   Online_softmax.set_backward_enabled (Some false);
   Online_softmax.set_block None;
   Exn.protect
     ~finally:(fun () ->
       (match previous with
-      | None -> Hashtbl.remove Utils.config_file_args key
-      | Some value -> Hashtbl.set Utils.config_file_args ~key ~data:value);
+      | None -> Utils.unstate_config key
+      | Some value -> Utils.state_config ~key ~data:value);
       Online_softmax.set_enabled None;
       Online_softmax.set_backward_enabled None;
       Online_softmax.set_block None)

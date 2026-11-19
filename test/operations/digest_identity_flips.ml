@@ -33,8 +33,8 @@ open Verdict.Claims
 (* Config values resolve per lookup, so a config-file entry poked in is what later reads see —
    unless the commandline or the environment states the key, which take precedence. Each flip below
    asserts it actually took effect before drawing a conclusion from it. *)
-let set_config key value = Hashtbl.set Utils.config_file_args ~key ~data:value
-let unset_config key = Hashtbl.remove Utils.config_file_args key
+let set_config key value = Utils.state_config ~key ~data:value
+let unset_config key = Utils.unstate_config key
 
 (* A fresh computation per compile: tensors carry their memory modes and lowering results, so a
    second compile of the same graph would not re-decide anything. [a]'s eight values are small

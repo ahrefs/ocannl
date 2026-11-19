@@ -15,6 +15,9 @@
 # case-insensitive. The values are case-sensitive and should be
 # lowercase where case is irrelevant. The configuration is read from a few sources,
 # from highest priority:
+# 0. A program's own in-process statements (`Utils.state_config`, how a test states the
+#    configuration it tests; gh-ocannl-2354). A statement contradicting a commandline
+#    argument is refused, so no file, variable or profile can silently outrank one.
 # 1. Commandline arguments.
 #    1a. The payload of a `profile` picked by a commandline argument.
 # 2. Environment variables.
@@ -87,12 +90,13 @@
 # for drivers and tests to read back instead of the prose of `log_config_sourcing` -- the
 # same records `Utils.resolved_config ()` returns, whether or not this is on. Schema 1:
 #   {"ocannl_config":1,"key":K,"value":V,"source":S,"layer":L,"profile":P,"origin":O}
-# `source` is commandline|environment|config_file|profile|default; `layer` the precedence
-# level the value came from (the level that picked the profile, for a profile value);
-# `profile` the profile's name or null; `origin` the argv element, the environment variable,
-# the config file's path (for a profile value: where the profile was picked), or null for a
-# default. `value` is the raw string, before a typed getter parses it. A line is printed when
-# the setting is first resolved -- the bootstrap settings once this switch is settled, every
+# `source` is in_process|commandline|environment|config_file|profile|default; `layer` the
+# precedence level the value came from (the level that picked the profile, for a profile
+# value); `profile` the profile's name or null; `origin` `Utils.state_config` for an
+# in-process statement, the argv element, the environment variable, the config file's path
+# (for a profile value: where the profile was picked), or null for a default. `value` is
+# the raw string, before a typed getter parses it. A line is printed when the setting is
+# first resolved -- the bootstrap settings once this switch is settled, every
 # other one at its first read -- and again only if a later read resolves it differently; a
 # setting never read prints nothing. Stdout is never touched. Off by default.
 #log_config_json=false

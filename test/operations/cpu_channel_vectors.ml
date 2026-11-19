@@ -48,12 +48,10 @@ let () = Generated.init ~backend_name:"cc"
 let facts = Context.backend_facts_of_name "cc"
 
 let set_key key v =
-  match v with
-  | Some data -> Hashtbl.set Utils.config_file_args ~key ~data
-  | None -> Hashtbl.remove Utils.config_file_args key
+  match v with Some data -> Utils.state_config ~key ~data | None -> Utils.unstate_config key
 
 let with_key key v f =
-  let saved = Hashtbl.find Utils.config_file_args key in
+  let saved = Utils.stated_config key in
   set_key key (Some v);
   Exn.protect ~f ~finally:(fun () -> set_key key saved)
 

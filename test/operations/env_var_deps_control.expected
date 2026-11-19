@@ -150,7 +150,7 @@ nor a `setenv` of `-1` or of the empty string, which reads as unset: true
 a call through another module's or a local module's namesake of the helper pins nothing: true
 while one through an alias of the helper's module does: true
 a program pinning the width but not the register count is reported: true
-a `setenv` of `-1` around a run undoes an initializer's statement of the width: true
+a `setenv` of `-1` around a run does not undo an initializer's statement of the width, which is stated above the environment: true
 a helper spelling that a later namesake module rebinds is not credited at the rebinding: true
 in a plural `(tests)` stanza, one program's pin is not another's, while a program pinning itself passes: true
 a helper called after the first search pins nothing: true
@@ -161,11 +161,11 @@ a helper in a closure the initializer builds but never calls pins nothing: true
 nor does one whose key a later item spells again before the first search: true
 while a call under a condition, the `if is_cpu` shape, does: true
 a bare call under an `open` of the helper's module, which a value can shadow, pins nothing: true
-a `setenv` of `-1` around one of a run's invocations undoes the helper's pin: true
+nor does one around one of a run's invocations undo the helper's pin: true
 a blessed helper that stops stating a key, and a support value stating every key unblessed, are both refused: true
 a rule re-running a `(test)`'s program by name on cc is a run of it: unanswered, it is reported, naming the rule: true
 while the program's marker, or a `setenv` pin around the rule's run, answers for it: true
-and a `setenv` of `-1` around the rule's run undoes the initializer's pin: true
+and a `setenv` of `-1` around the rule's run does not undo the initializer's pin: true
 a rule in another dune file re-running the program on cc is a run of it too: true
 a stanza that can select cc and runs a command naming no program in command position -- a shell line, a PATH tool handed an executable of ours -- is refused, not read as running none: true
 and so is one handing a PATH tool a text-valued pform, which may expand to one, or a line spelling `.exe`: true
@@ -379,7 +379,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:d3f1d0e95f110142f78dbbfade3eec72] through another module's
   [scanner-refusal:90ead9391fc487dfbe2cd91e0b0f7288] helper's module does
   [scanner-refusal:8bda63bc4c91bc8f3c9f625a9c7f7f44] program pinning the
-  [scanner-refusal:cccad474843811a2756fc4f505d927f0] an initializer's statement
+  [scanner-refusal:77352d3abfb3f47f0dcc785a2e428b15] an initializer's statement
   [scanner-refusal:d65197a8a018021b4c7aa22fcf90c773] namesake module rebinds
   [scanner-refusal:593b4e2508d631a9f42d0d6fe061b2e6] program pinning itself
   [scanner-refusal:e1e7c11bf8ecfecb20b9031955b16937] helper called after
@@ -390,11 +390,11 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:3d6b57503b5fac620375759535912df9] spells again before
   [scanner-refusal:585ea2db9ead892ec918b32c984e2d49] is_cpu
   [scanner-refusal:c5e986988e4412345d94af936dabc9d7] helper's module which
-  [scanner-refusal:b21f26c1c5b5c5f237aa3238bc586c52] run's invocations undoes
+  [scanner-refusal:2555a3d542f36ae8f5d74c20d99d9cde] run's invocations undo
   [scanner-refusal:63f4eab503a1525a9de1686cfaca3b41] support value stating
   [scanner-refusal:4cf5336639f62b774e8c76bc09d17120] re-running a test)`'s
   [scanner-refusal:146f0968d410f75502805f05d1a387b3] the program's marker
-  [scanner-refusal:691a80247cf1c72faf9d7410cf67b33a] undoes the initializer's
+  [scanner-refusal:a625fef5b0ce99db1e03c615491fa578] undo the initializer's
   [scanner-refusal:416d761ba145a451f16c4913c93ec004] re-running the program
   [scanner-refusal:194c3da6b4172812b49f3a686fb02e5e] handed an executable
   [scanner-refusal:28d540b06acc9c02ad1d408123cc27ae] text-valued pform which

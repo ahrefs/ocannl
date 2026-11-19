@@ -46,14 +46,7 @@ let named name (comp : Asgns.comp) : Asgns.comp =
 
 (* The floor is read per compile from the configuration; a leg states it for its own compile and
    restores what was there. *)
-let with_floor value f =
-  let key = "cc_grid_min_updates" in
-  let prior = Hashtbl.find Utils.config_file_args key in
-  Hashtbl.set Utils.config_file_args ~key ~data:value;
-  Exn.protect ~f ~finally:(fun () ->
-      match prior with
-      | Some v -> Hashtbl.set Utils.config_file_args ~key ~data:v
-      | None -> Hashtbl.remove Utils.config_file_args key)
+let with_floor value f = Utils.with_stated_config [ ("cc_grid_min_updates", value) ] f
 
 (* The outermost Grid loops of a scheduled procedure: the launches the floor judges. *)
 let grid_launches llc =

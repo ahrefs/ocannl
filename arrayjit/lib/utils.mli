@@ -225,6 +225,7 @@ val describe_config_level : config_level -> string
 (** A level's name in prose, such as ["the commandline"]. *)
 
 type config_source =
+  | From_in_process  (** stated by {!state_config}, above every other source *)
   | From_cmdline of string  (** the matching [Sys.argv] element *)
   | From_env of string  (** the matching environment variable *)
   | From_config_file
@@ -254,7 +255,35 @@ val parse_config_lines : source:String.t -> String.t List.t -> (String.t * Strin
 (** Parses [ocannl_config]-syntax lines into [(key, value)] pairs; [source] names them in errors. *)
 
 val config_file_args : (String.t, String.t) Hashtbl.t
-(** The settings of the [ocannl_config] file found up from the working directory, if any. *)
+(** The settings of the [ocannl_config] file found up from the working directory, if any. A program
+    states its own configuration with {!state_config}, never by writing here: this table ranks below
+    the environment, so an ambient [OCANNL_<KEY>] would silently outrank the write (gh-ocannl-2354;
+    [test/operations/config_statement_scan] refuses such a write under the test trees). *)
+
+val state_config : key:String.t -> data:String.t -> unit
+(** [state_config ~key ~data] states [key] for this process above every source a run is given -- the
+    commandline, the environment, the config file and any profile -- so a test that states the
+    configuration it tests is not outranked by an ambient [OCANNL_<KEY>] (gh-ocannl-2354). Raises
+    [Invalid_argument] naming the key when a commandline argument sets [key] to a different value,
+    for a key the library resolves while it initializes ([profile] and the bootstrap keys), which no
+    statement can reach, and for a key not spelled as the reads look it up (lowercase letters,
+    digits and underscores, without the [ocannl_] prefix), or for a key {!known_config_keys} does
+    not register. A key fixed when the library initializes (a [Utils.settings] snapshot, for one) is
+    not refused, and no statement reaches it: see the eager class in
+    docs/agent-notes/build-and-test.md, Process-lifetime settings. A setting a module holds for the
+    process's lifetime (a lazy at module initialization) still keeps the value its first read saw:
+    state the key before that. *)
+
+val unstate_config : String.t -> unit
+(** Withdraws [key]'s in-process statement, if any; the other sources answer for it again. *)
+
+val stated_config : String.t -> String.t option
+(** [key]'s in-process statement, if any. *)
+
+val with_stated_config : (String.t * String.t) List.t -> (unit -> 'a) -> 'a
+(** [with_stated_config settings f] states each [(key, data)] of [settings] (as {!state_config}) for
+    the duration of [f], then restores each key's prior statement, or its absence, even when [f]
+    raises. Statements are the process's, not a domain's: state and scope them from one domain. *)
 
 val config_file_path : string
 (** The path of the config file read, or [""] when none was. *)

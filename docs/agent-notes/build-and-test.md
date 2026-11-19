@@ -2369,13 +2369,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   says can select cc or multidev_cc. Each either pins the vector FILE -- `cc_vector_bytes` and
   `cc_vector_registers`, since at a pinned width AVX2 and AVX-512 still differ in register count,
   which caps the register tiles seeded -- or its program stanza carries `; cc-vector-width:
-  independent -- <reason>`. Per key and cc-capable run, a `--ocannl_<key>=` argument or a
-  `setenv` around the run decides (it must set a value the key accepts, never `-1` or `""`); only
-  without either does the initializer count, and then only a call of a BLESSED helper
+  independent -- <reason>`. Per key and cc-capable run, a `--ocannl_<key>=` argument leaves it
+  unpinned; then the initializer decides, and only a call of a BLESSED helper
   (`vector_file_pin_values`: `Fissioned_chain.small_menu`/`small_menu_envelope`) in a top-level
-  item before any search -- a program's own `Hashtbl.set` of the keys is no pin. The blessing is
-  held equal to a derivation (`Config_key_scan.stating_reach`: the support values whose bodies
-  write every key), so a new pinning helper is blessed in review. Each program of a plural
+  item before any search counts -- a program's own `Utils.state_config` of the keys is no pin. The
+  helper states the keys in process, above any `setenv` (gh-ocannl-2354), so only without it does
+  a `setenv` around the run decide (it must set a value the key accepts, never `-1` or `""`). The
+  blessing is held equal to a derivation (`Config_key_scan.stating_reach`: the support values whose
+  bodies write every key with `Utils.state_config` or `putenv`; a config-table write, which the
+  environment outranks, and a scoped `Utils.with_stated_config`, which restores the key before the
+  search, are no pins), so a new pinning helper is blessed in review. Each program of a plural
   `(tests)` stanza answers on its own, and a support value reaching `Autotune.tune` starts a search
   as the entry point does. A program's runs are its `(test)` stanza's own plus every stanza, in
   ANY dune file, naming it in command position (gh-ocannl-1901): a metal-only `(test)` re-run on cc
@@ -7212,11 +7215,27 @@ box.
 
 ### Process-lifetime settings
 
+- **A test states a key in process with `Utils.state_config ~key ~data`**, or for a scope with
+  `Utils.with_stated_config [ (key, data) ] f`, which restores the prior statements even when `f`
+  raises; `Utils.unstate_config` withdraws one (gh-ocannl-2354). A statement ranks above every
+  source a run is given: the commandline, every `OCANNL_<KEY>`, the config file and any profile.
+  A commandline argument that contradicts it is refused at the statement, naming the key, and so is
+  a key resolved while the library initializes (`profile`, the bootstrap keys). Never write
+  `Utils.config_file_args`. That is the config FILE's table, below the environment, so a write
+  there runs under the caller's value whenever one is exported, which is the
+  `OCANNL_<KEY>=… dune build @…` recipe AGENTS.md gives, and nothing says so:
+  lukstafi/ocannl-staging#2144 failed four claims that way. `config_statement_scan` (in
+  `@test/operations/scans`) refuses any use of the table under `test/` and `arrayjit/test/` but a
+  read; its one exemption is `config_statement_precedence`, the control showing the raw write
+  outranked. A statement reports itself as the `in_process` source (`Utils.From_in_process`, with
+  `Utils.state_config` as the origin in the `log_config_json` records). A test that wants the
+  CALLER's value to win reads it rather than stating it; one that wants the commandline to win
+  (`cache_key_agreement`'s `-outranked` rule) checks `Utils.read_cmdline_var` before stating.
 - A configuration key read inside a `lazy` that a module creates at initialization is read ONCE
   per process (gh-ocannl-1535): the first force resolves it, and that value -- or the exception a
   refused value raised (`Utils.Invalid_config_value`, a `User_error`), which OCaml re-raises on
   every later force -- answers for the rest of the process. A test that states such a key in
-  process, by `Hashtbl.set Utils.config_file_args`, therefore changes nothing once anything has
+  process, by `Utils.state_config`, therefore changes nothing once anything has
   forced the lazy, and an earlier test case, a compile that reached the key at its default, or a
   library call made while building the fixture all count. The failure is silent: the run goes on
   under the first value. The keys are listed below, per source file, and `test_config_consistency`
@@ -7225,8 +7244,8 @@ box.
   test its own configuration: a directory with an `ocannl_config` of its own, as
   `test/operations/profiles` has (its rules then list `ocannl_ambient` too, as
   `config_dep_completeness` requires), or a `setenv` around the rule's `run`. For several values in one test, run a child per value: `Fresh_process.run`
-  re-executes the test's own executable with `--ocannl_<key>=<value>`, which outranks every other
-  source, and the child reports what it saw on stdout -- `cache_key_agreement` states
+  re-executes the test's own executable with `--ocannl_<key>=<value>`, which outranks every source
+  but an in-process statement, and the child reports what it saw on stdout -- `cache_key_agreement` states
   `cc_grid_private_bytes_cap`, `cc_pool_core_class` and `max_shape_error_origins` that way. An
   in-process statement is sound only as the first thing the executable does, before anything can
   force the lazy, and the site says so (`placement_surface` states `gpu_fission_keep_mapping` that

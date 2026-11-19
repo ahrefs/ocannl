@@ -69,9 +69,7 @@ open Verdict.Claims
 let forced_cap = 6144
 
 (* Before anything resolves the cap: [Cs.per_chunk_private_bytes_cap] is a process-lifetime lazy. *)
-let () =
-  Hashtbl.set Utils.config_file_args ~key:"cc_grid_private_bytes_cap"
-    ~data:(Int.to_string forced_cap)
+let () = Utils.state_config ~key:"cc_grid_private_bytes_cap" ~data:(Int.to_string forced_cap)
 
 (* The cc vector file the sketch menu follows, pinned for the process (the width auto-probes from
    the host, and the register tile's geometry follows it): the claims are about hoisted-grid seeds'

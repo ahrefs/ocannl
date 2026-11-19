@@ -35,8 +35,9 @@ import strict_json  # noqa: E402
 
 TAG = '{"ocannl_config":'
 VERSION = 1
-SOURCES = ("commandline", "environment", "config_file", "profile", "default")
-LAYERS = ("commandline", "environment", "config_file", "default")
+# `in_process` is a program's own statement (Utils.state_config, gh-ocannl-2354), above the rest.
+SOURCES = ("in_process", "commandline", "environment", "config_file", "profile", "default")
+LAYERS = ("in_process", "commandline", "environment", "config_file", "default")
 FIELDS = ("ocannl_config", "key", "value", "source", "layer", "profile", "origin")
 
 
@@ -64,7 +65,10 @@ def _record(line):
         raise ConfigRecordError(f"an unknown source or layer: {line!r}")
     # The combinations Utils.config_record_to_json can produce, and no other.
     if source == "profile":
-        consistent = layer != "default" and bool(profile) and origin is not None
+        # No profile is picked in process: Utils.state_config refuses the `profile` key.
+        consistent = layer not in ("default", "in_process") and bool(profile) and origin is not None
+    elif source == "in_process":
+        consistent = layer == source and profile is None and origin == "Utils.state_config"
     elif source == "default":
         consistent = layer == "default" and profile is None and origin is None
     else:

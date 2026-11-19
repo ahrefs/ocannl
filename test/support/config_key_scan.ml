@@ -1374,7 +1374,7 @@ type held_read = { held_key : string; holder : string; held_at : int }
     read when a [lazy] created at module initialization is forced. Such a lazy is forced once, and
     its value -- or the exception its first force raised, which OCaml re-raises on every later force
     -- answers for the rest of the process, so a setting a test states in-process after the first
-    force ([Hashtbl.set Utils.config_file_args]) never reaches it.
+    force ([Utils.state_config]) never reaches it.
 
     {b Recognised forms}, a closed list:
     - a lazy is [lazy e], or [Lazy.from_fun e] under any receiver path ending in [Lazy.from_fun];
@@ -1517,12 +1517,12 @@ let value_paths_in_source content =
 
     A statement is a WRITE that carries the literal in its arguments: an application of one of
     [table_writes] ([Hashtbl.set], ...) to one of [tables] ([Utils.config_file_args]), or of one of
-    [env_writes] ([Unix.putenv]). A value also states the literal when it hands it to a top-level
-    value of the same module that writes whatever it is given -- [Fissioned_chain.small_menu] passes
-    ["cc_vector_bytes"] in a list to its local [state], whose body is a [Hashtbl.set] on the table
-    -- and when it names a value that states it. A literal outside a write's arguments is not a
-    statement: a [Hashtbl.mem] on the table, an [~arg_name] read, a format string, a table of names
-    (Codex P2, round 1 of staging#1263).
+    [writers] ([Unix.putenv], [Utils.state_config]), whatever its arguments. A value also states the
+    literal when it hands it to a top-level value of the same module that writes whatever it is
+    given -- [Fissioned_chain.small_menu] passes ["cc_vector_bytes"] in a list to its local [state],
+    whose body is a [Utils.state_config] -- and when it names a value that states it. A literal
+    outside a write's arguments is not a statement: a [Hashtbl.mem] on the table, an [~arg_name]
+    read, a format string, a table of names (Codex P2, round 1 of staging#1263).
 
     A write whose value is a string literal [pins] rejects states nothing -- ["-1"] and [""] leave
     the cc width on its auto-probe -- and neither does a [(literal, value)] pair whose value is one;
@@ -1531,7 +1531,7 @@ let value_paths_in_source content =
     Flow-insensitive within a value, and an over-read where it errs: a value that sets the key and
     later unsets it states it. A literal reaching a write through a local binding, or nested modules
     and functor bodies, are not followed. *)
-let stating_reach ~literals ~tables ~table_writes ~env_writes ~pins content =
+let stating_reach ~literals ~tables ~table_writes ~writers ~pins content =
   let structure = structure_of content in
   let ident_path expr =
     match expr.pexp_desc with Pexp_ident { txt; _ } -> flatten_module_path txt | _ -> None
@@ -1575,7 +1575,7 @@ let stating_reach ~literals ~tables ~table_writes ~env_writes ~pins content =
     if
       ends_in table_writes fn
       && List.exists args ~f:(fun ((_, arg) as a) -> positional a && ends_in tables arg)
-      || ends_in env_writes fn
+      || ends_in writers fn
     then
       Some
         (match

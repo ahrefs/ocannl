@@ -58,11 +58,11 @@ open Verdict.Claims
 let backend_name = "cc"
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 let () = Generated.init ~backend_name
-let () = Hashtbl.set Utils.config_file_args ~key:"cc_grid_min_updates" ~data:"0"
+let () = Utils.state_config ~key:"cc_grid_min_updates" ~data:"0"
 
 (* The companion geometry is gated at the default preset's work threshold, the floor's twin; both
    off, so these small companions are annotated and rendered on the pool. *)
-let () = Hashtbl.set Utils.config_file_args ~key:"cpu_schedule_min_work" ~data:"0"
+let () = Utils.state_config ~key:"cpu_schedule_min_work" ~data:"0"
 let accum_prec = Ll_test.backend_accum_prec
 
 let cpu_limits =
@@ -486,7 +486,7 @@ let () =
    diag8 companion's tiny [Grid] loop serially, as the default pipeline would. *)
 let () =
   let tag = "floor8" in
-  Hashtbl.set Utils.config_file_args ~key:"cc_grid_min_updates" ~data:"16384";
+  Utils.state_config ~key:"cc_grid_min_updates" ~data:"16384";
   let x = ints (tag ^ "_x") ~rows:8 ~cols:32 7 in
   let y = ints (tag ^ "_y") ~rows:32 ~cols:8 5 in
   let%op a = x +* "ik; kj => ij" y in
@@ -509,7 +509,7 @@ let () =
       if pool_rendered_writers ~companion name post then any_pool := true)
     serial_offered;
   p (tag ^ ": no seed renders the companion as a pool dispatch under the floor") (not !any_pool);
-  Hashtbl.set Utils.config_file_args ~key:"cc_grid_min_updates" ~data:"0"
+  Utils.state_config ~key:"cc_grid_min_updates" ~data:"0"
 
 (* Leg 7: the gate. The companion geometry is gated at the default preset's work threshold
    ([cpu_schedule_min_work], the launch floor's twin, gh-ocannl-1843): at its configured default the
@@ -529,7 +529,7 @@ let () =
   let companion = d.Tensor.value in
   p_exists (tag ^ ": premise: ungated, the preset gives the companion a Grid loop") [ companion ]
     ~f:(fun tn -> not (List.is_empty (preset_grid opt tn)));
-  Hashtbl.remove Utils.config_file_args "cpu_schedule_min_work";
+  Utils.unstate_config "cpu_schedule_min_work";
   let offered = seeds opt and back = recovered opt in
   p_empty
     (tag ^ ": at the default threshold the preset gives the companion no Grid loop")
@@ -538,6 +538,6 @@ let () =
   p_none (tag ^ ": at the default threshold no offered or recovered seed gives it a Grid loop")
     (offered @ back) ~f:(fun sp ->
       not (List.is_empty (grid_loops_writing (applied opt sp).LL.llc companion)));
-  Hashtbl.set Utils.config_file_args ~key:"cpu_schedule_min_work" ~data:"0"
+  Utils.state_config ~key:"cpu_schedule_min_work" ~data:"0"
 
 let () = Stdio.printf "cpu_mma_companion_coverage: done\n"

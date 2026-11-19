@@ -54,14 +54,7 @@ let named name (comp : Asgns.comp) : Asgns.comp =
 
 (* The pool-launch work floor ([C_syntax.grid_min_updates], config [cc_grid_min_updates]) is read
    per compile; a leg states it for its own compiles and restores what was there. *)
-let with_floor value f =
-  let key = "cc_grid_min_updates" in
-  let prior = Hashtbl.find Utils.config_file_args key in
-  Hashtbl.set Utils.config_file_args ~key ~data:value;
-  Exn.protect ~f ~finally:(fun () ->
-      match prior with
-      | Some v -> Hashtbl.set Utils.config_file_args ~key ~data:v
-      | None -> Hashtbl.remove Utils.config_file_args key)
+let with_floor value f = Utils.with_stated_config [ ("cc_grid_min_updates", value) ] f
 
 let () =
   (* --- Large elementwise kernel through the automatic schedule (no lowered_transform): 512 x 512 =

@@ -1349,6 +1349,9 @@ let describe_config_level = function
 
 (** Where {!get_global_arg} found a value; reported by the [log_config_sourcing] trace. *)
 type config_source =
+  | From_in_process
+      (** stated by {!state_config}, above every other source (gh-ocannl-2354) -- a test's own
+          statement of the configuration it tests *)
   | From_cmdline of string  (** the matching [Sys.argv] element *)
   | From_env of string  (** the matching environment variable *)
   | From_config_file
@@ -1357,6 +1360,7 @@ type config_source =
 
 (** A short provenance tag, e.g. ["profile 'reproducible' via the commandline"]. *)
 let config_source_label = function
+  | From_in_process -> "in-process statement"
   | From_cmdline _ -> "commandline"
   | From_env _ -> "environment"
   | From_config_file -> "config file"
@@ -1365,6 +1369,7 @@ let config_source_label = function
   | From_default -> "default"
 
 let describe_config_source ~value ~default = function
+  | From_in_process -> Printf.sprintf "Found %s, stated in process (Utils.state_config)" value
   | From_cmdline arg -> Printf.sprintf "Found %s, commandline %s" value arg
   | From_env var -> Printf.sprintf "Found %s, environment %s" value var
   | From_config_file -> Printf.sprintf "Found %s, in the config file" value
@@ -1528,6 +1533,68 @@ let profile_ineligible_keys =
       "log_config_json";
       "suppress_welcome_message";
     ]
+
+(** {2 In-process statements (gh-ocannl-2354)} *)
+
+(* What a program states about its own configuration, above every source a run is given. The
+   config-file table sits below the environment, so a test that wrote its setting there ran under
+   the caller's [OCANNL_<KEY>] whenever one was exported -- the recipe AGENTS.md gives for a one-off
+   configuration change -- and nothing said so. A statement here outranks the environment and every
+   profile; a commandline argument contradicting it is refused at the statement, so the value stated
+   is the value read, or the program stops naming the key. *)
+let stated_config_args : (string, string) Hashtbl.t = Hashtbl.create (module String)
+let stated_config key = Hashtbl.find stated_config_args key
+
+let state_config ~key ~data =
+  (* The reads look a key up as it is registered: lowercase letters, digits and underscores, without
+     the [ocannl_] prefix. A statement under any other spelling would state nothing, silently. *)
+  let read_spelling c = Char.is_lowercase c || Char.is_digit c || Char.equal c '_' in
+  if
+    String.is_empty key
+    || (not (String.for_all key ~f:read_spelling))
+    || String.is_prefix key ~prefix:"ocannl_"
+  then
+    invalid_arg
+      (Printf.sprintf
+         "OCANNL: Utils.state_config ~key:%S: a key is stated as the reads look it up -- lowercase \
+          letters, digits and underscores, without the ocannl_ prefix"
+         key);
+  if not (Set.mem known_config_keys key) then
+    invalid_arg
+      (Printf.sprintf
+         "OCANNL: Utils.state_config ~key:%S: no such configuration key is registered \
+          (Utils.known_config_keys), so no read looks it up and the statement would change nothing"
+         key);
+  if Set.mem profile_ineligible_keys key then
+    invalid_arg
+      (Printf.sprintf
+         "OCANNL: Utils.state_config ~key:%S: this key is resolved while the library initializes, \
+          before any statement can be made, so stating it would change nothing; set it on the \
+          commandline, in the environment or in ocannl_config instead"
+         key);
+  Option.iter (read_cmdline_var key) ~f:(fun (value, arg) ->
+      if not (String.equal value data) then
+        invalid_arg
+          (Printf.sprintf
+             "OCANNL: Utils.state_config ~key:%S ~data:%S contradicts the commandline argument %s: \
+              a program's statement of its configuration and its commandline must agree \
+              (gh-ocannl-2354)"
+             key data arg));
+  Hashtbl.set stated_config_args ~key ~data
+
+let unstate_config key = Hashtbl.remove stated_config_args key
+
+let with_stated_config settings f =
+  let saved = List.map settings ~f:(fun (key, _) -> (key, stated_config key)) in
+  Exn.protect
+    ~f:(fun () ->
+      List.iter settings ~f:(fun (key, data) -> state_config ~key ~data);
+      f ())
+    ~finally:(fun () ->
+      List.iter (List.rev saved) ~f:(fun (key, prior) ->
+          match prior with
+          | Some data -> Hashtbl.set stated_config_args ~key ~data
+          | None -> Hashtbl.remove stated_config_args key))
 
 (* The payloads are embedded rather than installed as files: the config search walks up from the
    working directory and would find the USER's config, so a shipped preset file would need
@@ -1780,6 +1847,7 @@ let active_profile =
     | From_env _ -> Some (Env_level, name)
     | From_config_file -> Some (Config_file_level, name)
     | From_default -> None
+    | From_in_process -> assert false (* Profile selection never consults a statement. *)
     | From_profile _ -> assert false (* Profile selection never consults a payload. *)
   in
   Option.map picked ~f:(fun (level, name) ->
@@ -1819,13 +1887,14 @@ let json_string_literal text =
 (** One record as the one-line JSON object the [log_config_json] stream carries -- schema version 1,
     every field always present, in this order:
     [{"ocannl_config":1,"key":K,"value":V,"source":S,"layer":L,"profile":P,"origin":O}]. [source] is
-    the sublevel kind: [commandline], [environment], [config_file], [profile] or [default]. [layer]
-    is the precedence level the value came from: [source] itself, except for a profile value, whose
-    layer is the level that picked the profile. [profile] is that profile's name, else [null].
-    [origin] is the concrete place that stated the value -- the argv element, the environment
-    variable's name, the config file's path, and for a profile value the place that picked the
-    profile -- or [null] for a default. The leading field is both the tag a reader picks the lines
-    out of stderr by and the schema version. *)
+    the sublevel kind: [in_process], [commandline], [environment], [config_file], [profile] or
+    [default]. [layer] is the precedence level the value came from: [source] itself, except for a
+    profile value, whose layer is the level that picked the profile. [profile] is that profile's
+    name, else [null]. [origin] is the concrete place that stated the value -- [Utils.state_config]
+    for an in-process statement, the argv element, the environment variable's name, the config
+    file's path, and for a profile value the place that picked the profile -- or [null] for a
+    default. The leading field is both the tag a reader picks the lines out of stderr by and the
+    schema version. *)
 let config_record_to_json ({ key; value; source } : config_record) =
   let level_tag = function
     | Cmdline_level -> "commandline"
@@ -1833,6 +1902,7 @@ let config_record_to_json ({ key; value; source } : config_record) =
     | Config_file_level -> "config_file"
   in
   let source_tag = function
+    | From_in_process -> "in_process"
     | From_cmdline _ -> "commandline"
     | From_env _ -> "environment"
     | From_config_file -> "config_file"
@@ -1841,6 +1911,7 @@ let config_record_to_json ({ key; value; source } : config_record) =
   in
   (* The concrete place a non-profile source names: the argv element, the variable, the file. *)
   let explicit_origin = function
+    | From_in_process -> Some "Utils.state_config"
     | From_cmdline arg -> Some arg
     | From_env var -> Some var
     | From_config_file -> Some config_file_path
@@ -1878,9 +1949,15 @@ let record_config_resolution, resolved_config =
   let equal_source s1 s2 =
     match (s1, s2) with
     | From_cmdline a1, From_cmdline a2 | From_env a1, From_env a2 -> String.equal a1 a2
-    | From_config_file, From_config_file | From_default, From_default -> true
+    | From_in_process, From_in_process
+    | From_config_file, From_config_file
+    | From_default, From_default ->
+        true
     | From_profile (l1, n1), From_profile (l2, n2) -> equal_config_level l1 l2 && String.equal n1 n2
-    | (From_cmdline _ | From_env _ | From_config_file | From_profile _ | From_default), _ -> false
+    | ( ( From_in_process | From_cmdline _ | From_env _ | From_config_file | From_profile _
+        | From_default ),
+        _ ) ->
+        false
   in
   let record ~key (value, source) =
     Stdlib.Mutex.protect mutex (fun () ->
@@ -1938,6 +2015,15 @@ let read_defaults : (string, string) Hashtbl.t =
   List.iter bootstrap_reads ~f:(fun (key, default, _) -> Hashtbl.set table ~key ~data:default);
   table
 
+(* The full resolution of one key: an in-process statement, then the precedence walk over the
+   process's commandline, environment, config file and profile. *)
+let resolve_global_arg ~default ~arg_name =
+  match stated_config arg_name with
+  | Some value -> (value, From_in_process)
+  | None ->
+      resolve_config_value ~cmdline:read_cmdline_var ~env:read_env_var
+        ~file:(Hashtbl.find config_file_args) ~profile:profile_lookup ~default ~arg_name
+
 (* The lookup itself, for {!get_global_arg_with_source} and the typed getters below it. *)
 let unchecked_global_arg_with_source ~default ~arg_name:n =
   (match Hashtbl.find read_defaults n with
@@ -1954,10 +2040,7 @@ let unchecked_global_arg_with_source ~default ~arg_name:n =
   let with_debug = !log_config_sourcing && not (Hash_set.mem accessed_global_args n) in
   if with_debug then
     Stdio.eprintf "Retrieving commandline, environment, or config file variable ocannl_%s\n%!" n;
-  let result, source =
-    resolve_config_value ~cmdline:read_cmdline_var ~env:read_env_var
-      ~file:(Hashtbl.find config_file_args) ~profile:profile_lookup ~default ~arg_name:n
-  in
+  let result, source = resolve_global_arg ~default ~arg_name:n in
   if with_debug then Stdio.eprintf "%s\n%!" (describe_config_source ~value:result ~default source);
   record_config_resolution ~key:n (result, source);
   Hash_set.add accessed_global_args n;
@@ -2076,10 +2159,7 @@ let registered_keyword ~arg_name ~expected ~parse =
     the profile is reported without a second list anywhere. Not logged and not recorded as an
     access: the read sites report their own reads. *)
 let profile_key_source key =
-  match
-    resolve_config_value ~cmdline:read_cmdline_var ~env:read_env_var
-      ~file:(Hashtbl.find config_file_args) ~profile:profile_lookup ~default:"" ~arg_name:key
-  with
+  match resolve_global_arg ~default:"" ~arg_name:key with
   | _, From_default -> None
   | value, source -> Some (value, source)
 
