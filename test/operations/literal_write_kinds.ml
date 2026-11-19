@@ -180,3 +180,36 @@ let () =
           LC.exact "the comp reads and updates the opted-out init" (values ctx x)
             (Array.map uploaded ~f:(( +. ) 100.));
           Context.release ctx)
+
+let () =
+  let open Ir.Assignments in
+  let n = 4 in
+  let zeroes = Array.create ~len:n 0. in
+  let reset_and_read ?mutable_ name =
+    let x =
+      NTDSL.init ?mutable_ ~l:name ~prec:Ir.Ops.single ~o:[ n ]
+        ~f:(fun i -> Float.of_int (i.(0) + 1))
+        ()
+    in
+    let array = x.Tensor.value in
+    let reset = to_comp (Fetch { array; fetch_op = Constant 0.; dims = array.dims }) in
+    let y = double x in
+    let ctx, routine =
+      Context.compile ~name (Context.auto ()) (sequence [ reset; Train.forward y ]) IDX.empty
+    in
+    let ctx = Context.run ctx routine in
+    let got = values ctx y in
+    Context.release ctx;
+    got
+  in
+  let msg =
+    LC.refusal "a fetch reset of a default init" (fun () ->
+        LC.exact "the unexpectedly accepted reset cleared the reader's input"
+          (reset_and_read "default_reset") zeroes)
+  in
+  List.iter
+    [ "Context.compile"; "default_reset"; "gh-ocannl-2104"; "Operation.init ~mutable_:true" ]
+    ~f:(fun text -> p ("the fetch-write refusal names " ^ text) (LC.has msg text));
+  LC.exact "a fetch reset of an opted-out init clears the reader's input"
+    (reset_and_read ~mutable_:true "mutable_reset")
+    zeroes

@@ -93,3 +93,8 @@ a comp can write an opted-out init: true
 an opted-out init accepts an upload: true
 the opted-out init holds the uploaded values: true
 the comp reads and updates the opted-out init: true
+the fetch-write refusal names Context.compile: true
+the fetch-write refusal names default_reset: true
+the fetch-write refusal names gh-ocannl-2104: true
+the fetch-write refusal names Operation.init ~mutable_:true: true
+a fetch reset of an opted-out init clears the reader's input: true

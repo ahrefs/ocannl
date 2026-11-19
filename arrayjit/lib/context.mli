@@ -284,7 +284,8 @@ val compile :
     [Tensor.ndarray] literal, default [Operation.init] tensor, or a number), directly or through a
     slice view of it, at any size and in any lineage (gh-ocannl-2104): hoisted packing and link-time
     initialization read the literal's registered values, so a routine reading it would silently
-    ignore the write. The literal's own forward fetch is not such a write. The host-side twin is
+    ignore the write. The literal's own forward fetch is not such a write. An ndarray-backed literal
+    has its initial values as data, so a fetch into it is refused too. The host-side twin is
     {!from_host}'s gh-ocannl-2021 refusal. *)
 
 type retained

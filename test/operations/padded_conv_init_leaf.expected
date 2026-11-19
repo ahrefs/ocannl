@@ -3,6 +3,8 @@ every partial sum of every input-gradient cell is exact in f32: true
 the convolution's host sums are its executed values: true
 the leaf took margins from its consumer: true
 the padded init leaf is host-constant: true
+padded init data is ineligible for link-time packing: true
+the memory floor retains the padded init buffer: true
 the convolution is the zero-padded correlation of the leaf's data: true
 the leaf reads back as its data, margins not included: true
 the input gradient's host sums are its executed values: true

@@ -633,8 +633,9 @@ let forward_fetched frontier comp =
     ~view_aliases:Asgns.slice_alias_eligible comp
 
 (* The nodes [comp] writes other than by a [Fetch]: [Rev_sides]' buffers, any other [Accum_op]'s and
-   [Set_vec_unop]'s [lhs]. *)
-let overwritten (comp : Asgns.comp) =
+   [Set_vec_unop]'s [lhs]. The literal guard also counts fetches into ndarray-backed nodes. Their
+   forward fragment can be owned by the same comp even though it carries no defining fetch. *)
+let overwritten ?(include_ndarray_fetches = false) (comp : Asgns.comp) =
   let add acc = function Asgns.Node tn -> Set.add acc tn | Asgns.Merge_buffer _ -> acc in
   Asgns.fold_leaves comp.asgns
     ~init:(Set.empty (module Tn))
@@ -643,6 +644,8 @@ let overwritten (comp : Asgns.comp) =
           Array.fold lhses ~init:acc ~f:(fun acc buf ->
               Option.value_map buf ~default:acc ~f:(add acc))
       | Asgns.Accum_op { lhs; _ } | Asgns.Set_vec_unop { lhs; _ } -> Set.add acc lhs
+      | Asgns.Fetch { array; _ } when include_ndarray_fetches && array.Tn.precision_from_data ->
+          Set.add acc array
       | Asgns.Fetch _ | Asgns.Noop | Asgns.Seq _ | Asgns.Block_comment _ -> acc)
 
 (* gh-ocannl-2027: the buffer a write to [tn] reaches -- a confirmed slice alias's parent's. *)
@@ -1007,12 +1010,13 @@ let rec literal_of tn =
    small literal self-initializes from them at link time
    ([Low_level.hosted_constant_inits_to_link_time]). So a write other than the literal's own fetch
    -- an [Accum_op], [Set_vec_unop] or [Rev_sides] target, directly or through a slice view of it --
-   is refused, at any size, in any lineage, before lowering. A small literal whose forward the same
-   computation carries was already refused as fetch-defined (gh-ocannl-1876); this check runs first,
+   is refused, at any size, in any lineage, before lowering. An ndarray-backed literal already has
+   its data, so a [Fetch] into it is also a write. A small literal whose forward the same
+   computation carries was already refused as fetch-defined (gh-ocannl-1876). This check runs first
    so a literal is named as one at every size. *)
 let check_no_literal_write ?name (comp : Asgns.comp) =
   let conflicts =
-    Set.to_list (overwritten comp)
+    Set.to_list (overwritten ~include_ndarray_fetches:true comp)
     |> List.filter_map ~f:(fun tn ->
         Option.map (literal_of tn) ~f:(fun lit ->
             Printf.sprintf "%s%s" (Tn.debug_name tn)

@@ -393,8 +393,8 @@ type t = {
           or margin-touching operations expecting a different neutral — are rejected at
           shape-inference time. *)
   precision_from_data : (bool[@sexp_drop_if fun _ -> true]);
-      (** Storage precision was fixed by an initialization array at construction. Diagnostic
-          provenance only; independent of whether the layout was also fixed. *)
+      (** Storage precision was fixed by an initialization array at construction. An ndarray-backed
+          node has no defining fetch and may still infer its layout. *)
   layout_at_creation : (bool[@sexp_drop_if fun _ -> true]);
       (** The node keeps an array it was given ({!create_from_padded}: [wrap], [wrap_padded],
           [wrap_param], a loaded checkpoint), so {!field-padding} committed at creation rather than
@@ -829,7 +829,7 @@ let snapshot_open
        dims = _;
        padding = _;
        precision_from_data = _;
-       (* Immutable diagnostic provenance. *)
+       (* Immutable construction provenance. *)
        layout_at_creation = _;
        size_in_bytes = _;
        id = _;
