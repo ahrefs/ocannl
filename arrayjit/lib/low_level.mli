@@ -1747,9 +1747,10 @@ val post_virtualization_pipeline :
     [cleanup_virtual_llc] (placement commitments; a scope over a node committed non-virtual after
     the scope was minted retracts to a read), {!simplify_llc} under the static indices' interval
     environment, the hosted-constant link-time conversion, {!rewrite_one_hot_reductions},
-    {!eliminate_common_subexpressions} and {!hoist_cross_statement_cse}. One function, so the
-    routine and the flip-candidate pricer's synthetic instantiation cannot receive different
-    pipelines. Commits placements in the given table. *)
+    {!sink_narrow_reduction_loops}, {!eliminate_common_subexpressions} and
+    {!hoist_cross_statement_cse}. One function, so the routine and the flip-candidate pricer's
+    synthetic instantiation cannot receive different pipelines. Commits placements in the given
+    table. *)
 
 val instantiate_at_synthetic_read :
   placements:Tnode.Placements.t ->
@@ -2179,6 +2180,17 @@ val without_node_bounds : (unit -> 'a) -> 'a
     code (gh-ocannl-1480). A bounds candidate is process state that grows as routines link, and the
     autotuner's replay of a saved schedule must rebuild the very code it was saved against. Less
     folding is always sound: a guard left in place is only checked at run time. *)
+
+val sink_narrow_reduction_loops : t -> t
+(** gh-ocannl-2362: in each perfect serial nest whose leaf accumulates into a NARROW-float node
+    ({!Ops.is_narrow_float}) at a cell made of plain loop iterators, read only at that cell, moves
+    the loops the cell mentions above the reduction loops, each group keeping its relative order.
+    Every cell receives its contributions in the same order, so the program is unchanged; the
+    reduction becomes an innermost run code generation localizes at [accum_prec] and narrows once,
+    the residency the [bf16_arithmetic]/[fp16_arithmetic] policies promise, where backprop's
+    forward-ordered lowering put the batch reduction outermost and rounded every step. Every other
+    nest, and every f32/f64/integer target, is returned unchanged. Part of
+    {!post_virtualization_pipeline}, after {!rewrite_one_hot_reductions}. *)
 
 val rewrite_one_hot_reductions : ?static_indices:Indexing.static_symbol list -> t -> t
 (** gh-343: rewrites the narrow one-hot embedding pattern -- an [Add] reduction over a loop variable

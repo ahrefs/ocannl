@@ -1,0 +1,16 @@
+weight gradient: the f32 twin equals the host's sum onto the incoming value: true
+weight gradient: the bf16 result is the materialized f32 sum narrowed once, cell for cell: true
+weight gradient: narrowing at every step would differ in some cell (host): true
+input gradient: the f32 twin equals the host's sum onto the incoming value: true
+input gradient: the bf16 result is the materialized f32 sum narrowed once, cell for cell: true
+input gradient: narrowing at every step would differ in some cell (host): true
+bias gradient: the f32 twin equals the host's sum onto the incoming value: true
+bias gradient: the bf16 result is the materialized f32 sum narrowed once, cell for cell: true
+bias gradient: narrowing at every step would differ in some cell (host): true
+the privatized preset privatizes a bf16 gradient's accumulation: true
+weight gradient: the privatized preset computes the default's values: true
+input gradient: the privatized preset computes the default's values: true
+bias gradient: the privatized preset computes the default's values: true
+the seeded default ships an accumulator tile over a bf16 gradient: true
+every accumulator tile the seeded default ships over a bf16 gradient is f32: true
+the seeded default computes the default's values, every gradient cell for cell: true

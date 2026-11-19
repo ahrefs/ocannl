@@ -13178,6 +13178,151 @@ let describe_operand_precisions (llc : t) : t = walk_operand_precisions ~mode:`D
 let validate_operand_precisions ?(site = "Low_level.validate_operand_precisions") (llc : t) : unit =
   Option.iter (operand_precision_violation llc) ~f:(fun msg -> invalid_arg (site ^ ": " ^ msg))
 
+(* gh-ocannl-2362: the reduction sink for narrow-float accumulation targets. Backprop lowers a
+   gradient over its FORWARD op's product space, the result's axes first, so a weight gradient
+   [dw[i,j] += x[b,s,i] * dy[b,s,j]] runs [for b, s, j, i] -- its reduction loops OUTSIDE the loops
+   of the cell it writes. Code generation localizes an accumulator only over reduction levels BELOW
+   the cell's own loops ([peel_accum_nest]), so such a nest read-modify-writes its node at every
+   step, and at narrow storage that rounds every step: against the [bf16_arithmetic] /
+   [fp16_arithmetic] policies' wide residency, and against every [Privatize] tile, which the shared
+   width decision ([decide_accum_width]) keeps at storage to match.
+
+   The stage moves the written cell's loops above the reduction loops, each group in its original
+   relative order (the order [Sketch_families.reduction_sink]'s swap chain reaches on the CUDA/HIP
+   schedules, which leaves narrow sites alone for exactly this reason). Every cell then receives its
+   contributions in the order it did, so the program's semantics are unchanged; what changes is that
+   the reduction becomes a run of innermost levels code generation localizes at [accum_prec] and
+   narrows once. At identity [accum_prec] (a narrow policy) a localized accumulator is exactly the
+   read-modify-write (gh-ocannl-639), so values move only where the backend widens, which is the
+   residency its policy promises.
+
+   Fail-closed allowlist, per maximal perfect serial chain (each level ONE statement, every loop
+   [Serial], starting at 0, not dead), with a [Set] leaf: - the target's storage precision is a
+   narrow float ([Ops.is_narrow_float]); f32, f64 and integer targets keep their lowered order (a
+   perf trade on the CPU and Metal defaults, not a residency question); - the leaf reads its target,
+   and only at its own cell (no other cell, no [Get_dynamic], no [Local_scope] body mentioning it),
+   so no step observes another cell's progress; - every chain loop the cell mentions is PLAIN: it is
+   one axis's whole index, [Iterator s], and no other axis mentions it. A cell a reduction loop's
+   affine or concatenated index also moves (a convolution's input gradient) has several contributing
+   tuples per cell interleaved with the other loops, so it is left alone; - guards between levels
+   are [pure_index_guard]s; each moves to just inside the innermost (new order) chain loop it
+   mentions, or above the chain if it mentions none -- a pure guard filters tuples, so where it sits
+   below its own loops changes neither which tuples run nor their order. [Set_dynamic] scatters,
+   [Tile_mma], scans, sibling statements and every other leaf are left alone. Runs after
+   [rewrite_one_hot_reductions], whose scatter match wants the vocabulary loop innermost as lowered
+   (gh-ocannl-466). *)
+let sink_narrow_reduction_loops (llc : t) : t =
+  let only_self_reads d di =
+    let rec go (s : scalar_t) =
+      match s with
+      | Get (g, i) -> (not (Tn.equal g d)) || Array.equal Indexing.equal_axis_index i di
+      | Get_dynamic { tn = g; dyn_value = v, _; _ } -> (not (Tn.equal g d)) && go v
+      | Local_scope { body; _ } -> not (proc_mentions ~merge:false d body)
+      | Ternop (_, (a, _), (b, _), (c, _)) -> go a && go b && go c
+      | Binop (_, (a, _), (b, _)) -> go a && go b
+      | Unop (_, (a, _)) -> go a
+      | Get_merge_buffer _ | Get_local _ | Constant _ | Constant_bits _ | Embed_index _ -> true
+    in
+    go
+  in
+  let rec reads_self d di (s : scalar_t) =
+    match s with
+    | Get (g, i) -> Tn.equal g d && Array.equal Indexing.equal_axis_index i di
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        reads_self d di a || reads_self d di b || reads_self d di c
+    | Binop (_, (a, _), (b, _)) -> reads_self d di a || reads_self d di b
+    | Unop (_, (a, _)) -> reads_self d di a
+    | _ -> false
+  in
+  let guard_symbols (cond : scalar_t) =
+    match cond with
+    | Binop (_, (a, _), (b, _)) ->
+        List.concat_map [ a; b ] ~f:(function
+          | Embed_index idx -> index_symbols [| idx |]
+          | _ -> [])
+    | _ -> []
+  in
+  (* The chain from a loop down: loops outermost first, each with the guards found directly inside
+     it (outermost first), the guards above the first loop, and the leaf. [None] where the chain is
+     not of the allowlisted shape. *)
+  let rec chain (c : t) =
+    match c with
+    | For_loop { index; from_ = 0; to_; body; axis = Serial } when to_ >= 0 -> (
+        match chain_body body with
+        | Some (guards, loops, leaf) -> Some ([], (index, to_, guards) :: loops, leaf)
+        | None -> None)
+    | _ -> None
+  and chain_body (c : t) =
+    match c with
+    | If { cond = (cond, _) as cond_arg; body } when pure_index_guard cond -> (
+        match chain_body body with
+        | Some (guards, loops, leaf) -> Some (cond_arg :: guards, loops, leaf)
+        | None -> None)
+    | For_loop _ -> Option.map (chain c) ~f:(fun (_, loops, leaf) -> ([], loops, leaf))
+    | Set _ -> Some ([], [], c)
+    | _ -> None
+  in
+  let sink (c : t) : t option =
+    match chain c with
+    | Some (_, (_ :: _ :: _ as loops), (Set { tn = d; idcs = di; llsc; _ } as leaf))
+      when Ops.is_narrow_float (Lazy.force d.Tn.storage_prec)
+           && reads_self d di llsc && only_self_reads d di llsc ->
+        let syms = List.map loops ~f:(fun (s, _, _) -> s) in
+        let mentions s idx = List.mem (index_symbols [| idx |]) s ~equal:Indexing.equal_symbol in
+        let is_write s = Array.exists di ~f:(mentions s) in
+        let plain s =
+          Array.count di ~f:(mentions s) = 1
+          && Array.exists di ~f:(Indexing.equal_axis_index (Indexing.Iterator s))
+        in
+        if not (List.for_all syms ~f:(fun s -> (not (is_write s)) || plain s)) then None
+        else
+          let writes, reductions = List.partition_tf loops ~f:(fun (s, _, _) -> is_write s) in
+          let order = writes @ reductions in
+          if List.equal Indexing.equal_symbol syms (List.map order ~f:(fun (s, _, _) -> s)) then
+            None
+          else
+            (* Re-place every guard: just inside the innermost loop of [order] it mentions. *)
+            let position s =
+              List.findi order ~f:(fun _ (s', _, _) -> Indexing.equal_symbol s s')
+              |> Option.map ~f:fst
+            in
+            let all_guards = List.concat_map loops ~f:(fun (_, _, gs) -> gs) in
+            let placed = Array.create ~len:(List.length order + 1) [] in
+            List.iter all_guards ~f:(fun ((cond, _) as g) ->
+                let at =
+                  List.filter_map (guard_symbols cond) ~f:position
+                  |> List.max_elt ~compare:Int.compare
+                  |> Option.value_map ~default:0 ~f:(fun p -> p + 1)
+                in
+                placed.(at) <- placed.(at) @ [ g ]);
+            let wrap gs body =
+              List.fold_right gs ~init:body ~f:(fun cond body -> If { cond; body })
+            in
+            let rec build i = function
+              | [] -> leaf
+              | (index, to_, _) :: rest ->
+                  For_loop
+                    {
+                      index;
+                      from_ = 0;
+                      to_;
+                      body = wrap placed.(i + 1) (build (i + 1) rest);
+                      axis = Serial;
+                    }
+            in
+            Some (wrap placed.(0) (build 0 order))
+    | _ -> None
+  in
+  let rec walk (c : t) : t =
+    match c with
+    | For_loop ({ body; _ } as r) -> (
+        match sink c with Some sunk -> sunk | None -> For_loop { r with body = walk body })
+    | Seq (a, b) -> Seq (walk a, walk b)
+    | If ({ body; _ } as r) -> If { r with body = walk body }
+    | _ -> c
+  in
+  walk llc
+
 (* gh-ocannl-1011: the passes virtualized code receives on its way to being the routine's schedule —
    cleanup's commitments and retractions, simplification under the routine's interval environment,
    the hosted-constant link-time conversion, the one-hot reduction rewrite, the scalar and the
@@ -13187,6 +13332,7 @@ let validate_operand_precisions ?(site = "Low_level.validate_operand_precisions"
    the emitted code does rather than a remembered subset of it. *)
 let post_virtualization_pipeline plc traced_store ~input_scopes ~static_indices (llc : t) : t =
   describe_operand_precisions @@ hoist_cross_statement_cse @@ eliminate_common_subexpressions
+  @@ sink_narrow_reduction_loops
   @@ rewrite_one_hot_reductions ~static_indices
   @@ hosted_constant_inits_to_link_time plc traced_store
   @@ simplify_llc static_indices

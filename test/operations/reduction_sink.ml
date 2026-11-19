@@ -124,7 +124,16 @@ let () =
   let _, narrow =
     reduce3 ~tag:"bf16" ~narrow:true ~idx:(fun _ _ o -> [| it o |]) ~d_dims:[| no |] ()
   in
-  let opt = Ll_test.optimize ~name:"rs_bf16" narrow in
+  (* gh-ocannl-2362: the optimizer sinks a narrow plain-cell accumulation itself
+     ([LL.sink_narrow_reduction_loops]), so on optimized code the chain has nothing to do whichever
+     the accumulator; the sink's narrow rule is pinned on the nest as built
+     ([Ll_test.optimize_scoped]), the order a nest the optimizer's narrower allowlist declines
+     keeps. *)
+  let sunk = Ll_test.optimize ~name:"rs_bf16_sunk" narrow in
+  p_empty "the optimizer has already sunk the bf16 accumulator: no chain, even at storage precision"
+    ~over:(LL.flat_lines [ sunk.LL.llc ])
+    (Autotune.reduction_sink ~accum_prec:Fn.id sunk);
+  let opt = Ll_test.optimize_scoped ~name:"rs_bf16" ~raw:narrow narrow in
   p_empty "a bf16 accumulator its backend widens to f32 is left alone"
     ~over:(LL.flat_lines [ opt.LL.llc ])
     (Autotune.reduction_sink ~accum_prec:(fun _ -> Ir.Ops.single) opt);

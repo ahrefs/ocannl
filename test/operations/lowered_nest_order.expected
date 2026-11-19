@@ -2,3 +2,8 @@ every forward case lowers a contraction nest with output and reduction loops, ra
 forward lowering opens every output loop before any reduction loop, raw and optimized: true
 the predicate refuses the matmul with its reduction loop interchanged above an output loop: true
 backprop lowers a weight gradient's batch reduction loop OUTSIDE its output loops (the order is a forward-lowering property only): true
+the bf16 legs find a contraction nest of each gradient, raw and optimized: true
+a bf16 dense layer's weight and input gradients both lower reduction-outer raw: true
+the optimized routine opens every output loop of both bf16 gradients before its reductions: true
+an f32 weight gradient keeps its batch reduction outermost in the optimized routine: true
+a bf16 window input gradient, its cell moved by a reduction loop, keeps the lowered order: true

@@ -516,10 +516,15 @@ files.
   lower that way, raw (`opt.source`) and optimized (`opt.llc`). Backprop does not: a gradient is
   lowered over its FORWARD op's product space, so a weight gradient `dw[o,i] += dy[b,o] * x[b,i]`
   iterates its batch reduction OUTERMOST, the shape `Autotune.detect_matmul_canonical`'s interchange
-  exists for (gh-ocannl-1183). Never rely on the order for an arbitrary accumulation; `Privatize`'s
+  exists for (gh-ocannl-1183). That holds of the raw lowering always and of the OPTIMIZED routine
+  for f32/f64/integer targets; a narrow-float target's plain-cell nest is sunk by the optimizer
+  (`Low_level.sink_narrow_reduction_loops`, gh-ocannl-2362, backend-precision-and-simd.md), output
+  loops first. Never rely on the order for an arbitrary accumulation; `Privatize`'s
   tile width relied on it through a rebuilt peel input until gh-ocannl-1151 replaced that with the
   shared decision (backend-precision-and-simd.md). `test/operations/lowered_nest_order` pins both
-  halves, roles read off each nest's accumulating write, with an interchanged negative control.
+  halves, roles read off each nest's accumulating write, with an interchanged negative control, and
+  the narrow half: bf16 weight and input gradients raw reduction-outer, optimized output-first; an
+  f32 gradient and a bf16 window input gradient (affine cell) keeping the lowered order.
 - **A gh-490 extent guard is per-ITERATOR, so an axis with no product iterator gets none**, and
   `Accum_op` reaches that shape from ordinary `%op` code: a maximum-one symbolic axis has an empty
   product space, both sides indexed at `Fixed_idx 0`. Reducing over one bound to zero returned the

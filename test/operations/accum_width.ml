@@ -1667,7 +1667,10 @@ let () =
    - [k { i { acc[i] += 1 } }]: the cell varies under the inner output loop [i], so code generation
      never localizes it and the serial rendering narrows per step (256 + 1 + 1 stays 256 per cell).
      The rebuild dropped [i], peeled [k] and minted a wide tile (258): this leg fails before
-     gh-ocannl-1151.
+     gh-ocannl-1151. The optimizer would sink this plain-cell narrow nest to [i { k { .. } }]
+     (gh-ocannl-2362, [LL.sink_narrow_reduction_loops]), so the leg hands [Sched.apply] the nest as
+     built ([Ll_test.optimize_scoped]): the entry a nest the sink declines still has (a cell an
+     affine reduction index moves, a read of another cell).
    - A [Stage] applied by an EARLIER [apply]: its loads are sibling statements of the reduction in
      the program the later [Privatize] is handed, so the serial rendering of that program narrows
      per step and so must the tile (256). The negative control is the same three ops in ONE
@@ -1740,11 +1743,11 @@ let () =
                  [| it i |]
                  (bin Ir.Ops.Add (Ll_test.get acc [| it i |]) (LL.Constant 1.0))))
        in
-       let serial =
-         exec ~name:"aw_pi_serial" ~acc
-           (Ll_test.optimize ~materialized:[ acc ] ~name:"aw_pi_serial" (raw ()))
+       let as_built ~name =
+         Ll_test.optimize_scoped ~materialized:[ acc ] ~name ~raw:(raw ()) (raw ())
        in
-       let o = Ll_test.optimize ~materialized:[ acc ] ~name:"aw_pi_priv" (raw ()) in
+       let serial = exec ~name:"aw_pi_serial" ~acc (as_built ~name:"aw_pi_serial") in
+       let o = as_built ~name:"aw_pi_priv" in
        let scheduled = Sched.apply [ pz ~target:acc ~over:k ] o in
        let priv = exec ~name:"aw_pi_priv" ~acc scheduled in
        Stdio.eprintf
