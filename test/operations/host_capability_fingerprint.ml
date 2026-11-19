@@ -14,11 +14,18 @@ let expect_headers label actual expected =
 let header = "toolkit.h"
 let file dir = Stdlib.Filename.concat dir header
 let record dir = Utils.capability_dir ~requires:[ header ] (Some dir)
+let atime = 1_700_000_000.
 
 let write_header dir ~mtime data =
   let path = file dir in
   Stdio.Out_channel.write_all path ~data;
-  Unix.utimes path mtime mtime
+  Unix.utimes path atime mtime
+
+let try_directory_symlink ~target link =
+  match Unix.symlink ~to_dir:true target link with
+  | () -> true
+  | exception Unix.Unix_error ((EACCES | EPERM | ENOSYS | EOPNOTSUPP), _, _) -> false
+  | exception Unix.Unix_error _ when Stdlib.Sys.win32 && not (Unix.has_symlink ()) -> false
 
 let with_directory f =
   let dir = Unix.realpath (Stdlib.Filename.temp_dir "ocannl-host-headers-" "") in
@@ -27,6 +34,26 @@ let with_directory f =
     ~finally:(fun () ->
       if Stdlib.Sys.file_exists (file dir) then Unix.unlink (file dir);
       Unix.rmdir dir)
+
+let check_repointed_symlink first ~mtime ~initial =
+  let label = "repointing an include directory symlink moves its resolved path" in
+  let link = Stdlib.Filename.concat first "include" in
+  let linked_record () =
+    Exn.protect ~f:(fun () -> record link) ~finally:(fun () -> Unix.unlink link)
+  in
+  write_header first ~mtime "a";
+  if try_directory_symlink ~target:first link then
+    let linked_first = linked_record () in
+    with_directory (fun second ->
+        write_header second ~mtime "a";
+        Unix.symlink ~to_dir:true second link;
+        let linked_second = linked_record () in
+        let digest = String.chop_prefix_exn initial ~prefix:first in
+        p label
+          (String.equal linked_first (link ^ "=>" ^ first ^ digest)
+          && String.equal linked_second (link ^ "=>" ^ second ^ digest)))
+  else
+    skipped ~aggregation:`Environment ~backend:"temporary directory without symlink support" label
 
 let () =
   (* Independent expectations make a directive the parser silently drops observable. *)
@@ -43,7 +70,7 @@ let () =
       write_header first ~mtime "a";
       let initial = record first in
       let later = mtime +. 10. in
-      Unix.utimes (file first) later later;
+      Unix.utimes (file first) atime later;
       let touched = record first in
       p "changing only header mtime moves the fingerprint" (not (String.equal initial touched));
       write_header first ~mtime:later "ab";
@@ -52,22 +79,4 @@ let () =
       Unix.unlink (file first);
       p "removing the header identifies the missing file"
         (String.equal (record first) (first ^ "(missing:" ^ header ^ ")"));
-      let leg =
-        Verdict.leg ~aggregation:`Environment ~when_:(Unix.has_symlink ())
-          ~on:"host without symlink support" ()
-      in
-      in_leg ~leg "repointing an include directory symlink moves its resolved path" (fun label ->
-          write_header first ~mtime "a";
-          with_directory (fun second ->
-              write_header second ~mtime "a";
-              let link = Stdlib.Filename.concat first "include" in
-              let through_link target =
-                Unix.symlink ~to_dir:true target link;
-                Exn.protect ~f:(fun () -> record link) ~finally:(fun () -> Unix.unlink link)
-              in
-              let digest = String.chop_prefix_exn initial ~prefix:first in
-              let linked_first = through_link first in
-              let linked_second = through_link second in
-              p label
-                (String.equal linked_first (link ^ "=>" ^ first ^ digest)
-                && String.equal linked_second (link ^ "=>" ^ second ^ digest)))))
+      check_repointed_symlink first ~mtime ~initial)

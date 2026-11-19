@@ -228,14 +228,13 @@ let host_capabilities () =
         Printf.sprintf "%d.%d" major minor
       with _ -> "unavailable" );
   ]
-  @
-  match Utils.capability_file "/sys/module/amdgpu/version" with
-  | Some version -> [ ("amdgpu_module_version", version) ]
-  | None ->
-      (* An in-tree module can lack MODULE_VERSION while exposing its source checksum. *)
-      Option.to_list
-        (Option.map (Utils.capability_file "/sys/module/amdgpu/srcversion") ~f:(fun version ->
-             ("amdgpu_module_srcversion", version)))
+  (* A patched module can keep its release version while its source checksum changes. *)
+  @ List.filter_map
+      [
+        ("amdgpu_module_version", "/sys/module/amdgpu/version");
+        ("amdgpu_module_srcversion", "/sys/module/amdgpu/srcversion");
+      ]
+      ~f:(fun (key, path) -> Option.map (Utils.capability_file path) ~f:(fun value -> (key, value)))
 
 (* [initialized_devices] never forgets its entries. *)
 let initialized_devices = Hash_set.create (module Int)
