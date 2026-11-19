@@ -241,6 +241,34 @@ with tempfile.TemporaryDirectory() as scratch:
     print(section[:section.index("Every setting")], end="")
     print(report[report.index("## Cells"):], end="")
 
+    # Keep the default report golden above independent of the opt-in comparisons.
+    named = ("--pair", "B:C", "--pair", "C:B")
+    three = ("--rounds", "2", "--arm", "A=0.008", "--arm", "B=0.004", "--arm", "C=0.002")
+    paired_run = drive("three", *three, *named)
+
+    def rereport(*argv):
+        return subprocess.run([sys.executable, str(driver_path), "report", str(scratch / "three"),
+                               *argv], capture_output=True, text=True)
+
+    replay = rereport(*named)
+    default = rereport()
+    expected_rows = {"C": ["probe", "B", "2", "2.000", "2.000-2.000", "0 of 2", "0.5"],
+                     "B": ["probe", "C", "2", "0.500", "0.500-0.500", "2 of 2", "0.5"]}
+    if paired_run.returncode or replay.returncode or paired_run.stdout != replay.stdout:
+        raise SystemExit(f"named comparisons failed to round-trip: {paired_run.stderr}{replay.stderr}")
+    for ref, expected in expected_rows.items():
+        section = replay.stdout.partition(f"## Paired against {ref} (")[2].split("\n## ", 1)[0]
+        rows = [[col.strip() for col in line.strip("|").split("|")]
+                for line in section.splitlines() if line.startswith("|")]
+        if expected not in rows or f"## Paired against {ref} (" in default.stdout:
+            raise SystemExit(f"wrong named comparison against {ref}: {rows!r}")
+    for bad_pair in (drive("unknown_pair", *three, "--pair", "B:missing"),
+                     rereport("--pair", "B:missing")):
+        if bad_pair.returncode != 2 or "unknown arm 'missing'" not in bad_pair.stderr:
+            raise SystemExit(f"wrong refusal for an unknown arm: {bad_pair.stderr}")
+    if (scratch / "unknown_pair").exists():
+        raise SystemExit("an unknown arm started a run")
+
     bad = drive("bad", "--rounds", "2", "--arm", "ok=0.001", "--arm", "fails=fail",
                 "--arm", "nonfinite=nonfinite")
     claim("a failing cell fails the run", bad.returncode == 1)
