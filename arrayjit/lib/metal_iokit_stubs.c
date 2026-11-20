@@ -2,7 +2,9 @@
 
    An Apple-silicon GPU's IORegistry entry -- the AGX accelerator service whose registry ID is the
    one [MTLDevice.registryID] reports -- carries a "gpu-core-count" number property (what
-   `ioreg -rc AGXAccelerator -d1` prints). The launch fill's multiprocessor count reads it. */
+   `ioreg -rc AGXAccelerator -d1` prints). The launch fill's multiprocessor count reads it.
+
+   This file also provides the Core Foundation plist reader used to identify the bundled driver. */
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>

@@ -2382,9 +2382,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   box that lost a capability shows up as a diff between sweeps, not only as a failing test.
 - **Driver identity in the host record comes from files** (gh-ocannl-1471). CUDA reads the first
   line of `/proc/driver/nvidia/version`. HIP reads `version` and `srcversion` under
-  `/sys/module/amdgpu` independently. Unreadable or blank files contribute no field. The
-  Metal reads the `ProductBuildVersion` string in `SystemVersion.plist` through Core Foundation, since
-  a macOS update can change the bundled driver while preserving the math API. The GPU-free
+  `/sys/module/amdgpu` independently. Unreadable or blank files contribute no field. Metal reads the
+  `ProductBuildVersion` string in `SystemVersion.plist` through Core Foundation, since a macOS
+  update can change the bundled driver while preserving the math API. The GPU-free
   `host_capability_fingerprint` test exercises the production CUDA and HIP preludes and
   conditional includes from `Cuda_like_config`, plus the file changes that move a stamp and a
   build change with a fixed macOS product version.

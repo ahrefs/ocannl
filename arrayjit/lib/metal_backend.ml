@@ -2560,6 +2560,9 @@ let metal_driver_build system_version_plist =
           Option.some_if (not (String.is_empty build)) ("metal_driver_build", build))
   | exception Stdlib.Sys_error _ -> None
 
+(* gh-ocannl-1038: [Impl.runtime_math_api] shares the runtime query that selects Metal's compile
+   options. An OS update can change that answer. The toolchain version identifies the compiler an
+   AIR census uses to recompile a run's artifact. Both are available without opening a device. *)
 let host_capabilities_from ~system_version_plist =
   [
     ("metal_math_api", Compiler_options.metal_math_api_name (Metal_math_api_runtime.get ()));
