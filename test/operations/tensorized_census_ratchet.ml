@@ -115,7 +115,9 @@ let sort_logs root logs =
     List.concat_map [ "test"; "arrayjit/test" ] ~f:(fun dir ->
         Inventory.regular_files (Stdlib.Filename.concat root dir))
     |> List.map ~f:(fun on_disk -> (Inventory.relative_to_root ~root on_disk, on_disk))
-    |> List.filter ~f:(fun (path, _) -> Test_scan.Ll_test_scan.test_source path)
+    (* A [.pp.ml] is dune's marshalled AST, present only when ROOT is a build tree. *)
+    |> List.filter ~f:(fun (path, _) ->
+        Test_scan.Ll_test_scan.test_source path && not (String.is_suffix path ~suffix:".pp.ml"))
     |> List.map ~f:(fun (path, on_disk) -> (path, In_channel.read_all on_disk))
   in
   let judged = Scan.judged_paths sources in

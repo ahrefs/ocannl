@@ -11,7 +11,15 @@
    The golden pins each sort, which reproduces the PR's hand sort: the census failures per stanza
    (cc and Metal columns of its table), Metal's five decline-sensitive value claims, the other
    requested stanzas held, no anomaly. Then a planted failure of each anomalous kind, appended to
-   the cc sweep, must be flagged with its stanza. *)
+   the cc sweep, must be flagged with its stanza. Last, the CLI itself runs over the same logs,
+   rooted at this build tree, and its exit statuses are pinned.
+
+   The logs are fixed history; the sources they are sorted against are today's. So renaming a label
+   [Forced_decline_sort.decline_sensitive] lists, or changing whether a test judges the census,
+   turns a saved sweep's sort red. Do not loosen a glob until it matches both labels: re-capture
+   both sweeps (the leg in build-and-test.md#verdict-claims, on cc and on Metal), or, without a Mac,
+   keep the old label as a second listed pattern whose reason says it matches the saved sweeps and
+   since when. *)
 
 open Base
 open Stdio
@@ -150,3 +158,32 @@ let () =
   p "an unfinished run's report lists no held stanza"
     ((not (List.is_empty base_log.requested))
     && not (String.is_substring (Sort.render log sorted) ~substring:"  held:"))
+
+(* The CLI, [tensorized_census_ratchet.exe --sort-forced-decline ROOT LOG...], rooted at this build
+   tree ([../..], which holds test/ as this test's dependencies put it there): its argv form, its
+   whole-checkout source reading and its exit statuses. *)
+let () =
+  let cli args =
+    Stdlib.Sys.command
+      (Stdlib.Filename.quote_command
+         (Stdlib.Filename.concat Stdlib.Filename.current_dir_name "tensorized_census_ratchet.exe")
+         ~stdout:Stdlib.Filename.null ~stderr:Stdlib.Filename.null ("--sort-forced-decline" :: args))
+  in
+  let saved =
+    List.map [ "pr2233_cc.txt"; "pr2233_metal.txt" ] ~f:(Stdlib.Filename.concat logs_dir)
+  in
+  p "the CLI sorts both saved sweeps with no anomaly: exit 0" (cli ("../.." :: saved) = 0);
+  let planted = Stdlib.Filename.temp_file "forced_decline_sort" ".txt" in
+  Out_channel.write_all planted
+    ~data:
+      (In_channel.read_all (List.hd_exn saved)
+      ^ "\n\
+         File \"test/operations/dune\", line 1, characters 7-27:\n\
+         1 |  (name schedule_batched_mma)\n\
+         FAIL: planted: the tensorized matmul matches the serial twin: false\n\
+         FAILED: 1 check did not hold: \"planted\".\n");
+  p "the CLI exits 1 on a sweep with a planted parity failure" (cli [ "../.."; planted ] = 1);
+  Stdlib.Sys.remove planted;
+  p "the CLI exits 2 on an unreadable log" (cli [ "../.."; "no_such_sweep.txt" ] = 2);
+  p "the CLI exits 2 on a root holding no census-judging test"
+    (cli [ logs_dir; List.hd_exn saved ] = 2)

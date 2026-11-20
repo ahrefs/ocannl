@@ -8454,10 +8454,14 @@
  ; The forced-decline sorter (`tensorized_census_ratchet.exe --sort-forced-decline`) over the cc
  ; and Metal sweeps of lukstafi/ocannl-staging#2233 (forced_decline_logs/): the sort reproduces
  ; that PR's hand sort, and a planted failure of each anomalous kind is flagged with its stanza.
+ ; The logs are history sorted against today's sources: when a label edit turns one red, the
+ ; test's header says what to do (re-capture, or a second listed pattern) -- never loosen a glob.
+ ; It also runs its CLI, the ratchet executable, over this build tree.
  (name forced_decline_sort)
  (package neural_nets_lib)
  (deps
   ocannl_config
+  tensorized_census_ratchet.exe
   (glob_files *.ml)
   (glob_files forced_decline_logs/*.txt))
  (modules forced_decline_sort)

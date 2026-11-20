@@ -51,3 +51,7 @@ the sorter flags a failure outside the census-judging tests planted in the cc sw
 the sorter flags a golden diff planted in the cc sweep, naming its stanza: true
 the sorter flags an unfinished run (a capped batch's exit status) planted in the cc sweep, naming its stanza: true
 an unfinished run's report lists no held stanza: true
+the CLI sorts both saved sweeps with no anomaly: exit 0: true
+the CLI exits 1 on a sweep with a planted parity failure: true
+the CLI exits 2 on an unreadable log: true
+the CLI exits 2 on a root holding no census-judging test: true
