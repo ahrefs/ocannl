@@ -1,0 +1,3 @@
+the shared HIP header and two siblings account for three reads: true
+both HIP header aliases resolve their own quoted siblings: true
+the HIP SDK boundary rejects the external symlink: true

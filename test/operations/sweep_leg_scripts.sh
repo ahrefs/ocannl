@@ -11,7 +11,7 @@ leg_root=$tmp/leg-scripts
 leg_bin=$tmp/leg-bin
 mkdir -p "$leg_root/tools" "$leg_bin"
 for leg in vendor-idents-check.sh cuda-tf32-parity.sh cuda-native-ptx-rerun.sh ci-failed-rules.sh \
-  credential-env.sh environment-refusals.sh; do
+  credential-env.sh environment-refusals.sh opam-env.sh; do
   cp "$leg_tools/$leg" "$leg_root/tools/$leg"
 done
 leg_calls=$tmp/leg-dune.calls
@@ -64,6 +64,42 @@ LEG_DUNE_OUT='verdict: no measurement of the cuda headers was taken' LEG_DUNE_RC
 [ "$leg_rc" -eq 2 ]
 [ "$(leg_verdict)" = 'vendor-idents: verdict: unavailable: no measurement of the cuda headers was taken' ]
 absent 'credentials=[A-Z]' "$leg_calls"
+
+# Start with no Dune and let the real opam-env helper take its PATH from a stub opam.
+leg_opam_bin=$tmp/leg-opam-bin
+mkdir "$leg_opam_bin"
+(
+  export MSYS=winsymlinks:sys
+  for tool in bash sh dirname env mktemp cat sed tail rm uname; do
+    ln -s "$(command -v "$tool")" "$leg_opam_bin/$tool"
+  done
+  if command -v cygpath >/dev/null 2>&1; then
+    ln -s "$(command -v cygpath)" "$leg_opam_bin/cygpath"
+  fi
+)
+cat >"$leg_opam_bin/opam" <<'EOF_LEG_OPAM'
+#!/bin/sh
+case "$*" in
+  'var root') printf '/tmp\n' ;;
+  'env --shell=sh')
+    [ -n "${LEG_OPAM_DUNE_DIR:-}" ] || exit 1
+    printf 'PATH="%s:$PATH"; export PATH; FOO_API_KEY=fixture-from-opam; export FOO_API_KEY;\n' "$LEG_OPAM_DUNE_DIR" ;;
+  *) exit 1 ;;
+esac
+EOF_LEG_OPAM
+chmod +x "$leg_opam_bin/opam"
+env -u BASH_ENV PATH="$leg_opam_bin" bash -c '! command -v dune >/dev/null 2>&1'
+: >"$leg_calls"
+leg_path=$leg_opam_bin LEG_OPAM_DUNE_DIR=$leg_bin \
+  LEG_DUNE_OUT='verdict: the metal table holds for this toolchain' run_leg vendor-idents-check.sh metal
+[ "$leg_rc" -eq 0 ]
+[ "$(leg_verdict)" = 'vendor-idents: verdict: holds (the metal table holds for this toolchain)' ]
+grep -qx 'exec --no-print-directory tools/vendor_idents.exe -- metal | .* credentials=' "$leg_calls"
+: >"$leg_calls"
+leg_path=$leg_opam_bin LEG_OPAM_DUNE_DIR= run_leg vendor-idents-check.sh metal
+[ "$leg_rc" -eq 2 ]
+[ "$(leg_verdict)" = 'vendor-idents: verdict: unavailable: dune not found (opam environment not set up?)' ]
+[ ! -s "$leg_calls" ]
 
 # tf32 parity: the fixture first, then the build on its own, then the step under the pinned regime.
 : >"$leg_calls"

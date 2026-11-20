@@ -9783,6 +9783,14 @@
      hip_scratch_tune_survives.actual)))))
 
 (test
+ (name hip_sdk_header_symlinks)
+ (package arrayjit)
+ ; ocannl-backend: none -- harvests a temporary SDK header tree on the host.
+ (deps ocannl_config)
+ (modules hip_sdk_header_symlinks)
+ (libraries base stdio unix arrayjit.verdict vendor_idents_headers))
+
+(test
  (name host_capability_fingerprint)
  (package arrayjit)
  ; ocannl-backend: none -- reads host files and the Metal compile-options API without opening a device.
@@ -16400,6 +16408,7 @@
   ../../tools/sweep-supervisor.sh
   ; the diagnostic legs' scripts, run against a fake dune (gh-ocannl-1705)
   ../../tools/vendor-idents-check.sh
+  ../../tools/opam-env.sh
   ../../tools/cuda-tf32-parity.sh
   ../../tools/cuda-native-ptx-rerun.sh
   ; shared floor/native runtime-refusal signatures and matcher (gh-ocannl-2219)
