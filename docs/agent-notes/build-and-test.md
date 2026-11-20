@@ -373,6 +373,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   base's tree, so it selects and narrows the same way. A reach the two trees answer differently
   shows as `+` lines, a refusal, and a base red no leg of the scope reaches lets the merge through
   rather than asking for `--override`.
+- **Restoring a file from another revision**: name the revision your branch is built on, and
+  restore the file whole. Inside a worktree, `origin/master` is the shared remote ref, which a
+  sibling's fetch can have moved past your merge base, so `git show origin/master:<file>` can return
+  a newer file than your branch started from. Name the base instead: `git show "$(git merge-base
+  HEAD origin/master)":<file>` (gh-ocannl-1818: a restore of `test/operations/dune` from
+  `origin/master` brought in an unrelated master line, and the merge-build plan called the change
+  CROSS-CUTTING). Bring the file over with `git checkout <rev> -- <path>`, never `git show
+  <rev>:<path> > <path>`: git records the mode, but a redirect that creates the file uses the
+  default mode, so the exec bit is lost (gh-ocannl-2139: a restored `run_cells.sh` lost it, and the execution slot refused to
+  run it until the mode was restored).
 
 ### Scan corpora, goldens and floors
 
@@ -3642,6 +3652,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   fails the run, as a text member does. `codegen_text_scan_cases` pins each route beside its near
   miss, including the negative control: a fixture whose staged callback writes a node by its bare
   label.
+- **Count compiles with `Context.backend_compiles`, not a wrapper around `Context.compile`**
+  (gh-ocannl-1882). A test-local function that shadows or wraps `Context.compile` and forwards
+  `?prelowered` is read as the second route above, so the census lists its file as a prelowered
+  compile site, which it is not. Such a wrapper also misses compiles made outside it, such as those
+  by the `Ll_test` helpers and Metal's link-time device compiles. `Context.backend_compiles ()` is
+  the library's own per-domain counter, and it counts both.
 - **Then the tests that call a backend's compiler themselves** (gh-ocannl-1772): a change to a
   backend's builtins prelude, its compiler flags or how its compiler is resolved breaks them, and
   neither section above lists them. `test_shared_builtins` writes `Builtins_cc.source` and a probe
@@ -4540,6 +4556,11 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   The parse tree is version-stable where the grammar is not: to cover such a construct, parse a
   floor-legal spelling and rewrite the tree (`local_rebinding` in
   `test/operations/provenance_tag_scan_cases.ml`), with the scanner taking a structure.
+- Deleting files under `_build` behind dune's back leaves its database believing the targets still
+  exist, so it does not rebuild them. The next build fails on a missing artifact that it never
+  tried to produce (gh-ocannl-2139: after an `rm -rf` of one `_build` directory, `@check` failed
+  on a missing `.cmi`). Run `dune clean` instead. To force one target to rebuild, change one of
+  its inputs; do not delete its output.
 
 ## What CI actually covers
 
