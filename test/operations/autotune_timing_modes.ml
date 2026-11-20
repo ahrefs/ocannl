@@ -32,6 +32,74 @@ open Verdict.Claims
 
 let backend () = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
+(* {1 The scope child (gh-ocannl-996's bypass path)}
+
+   A child mode of this executable, run by the section after the instrument's below and by nothing
+   else: under the test scope its argument names, it times a one-element counter routine of its own
+   through [Autotune.time_routine] and makes ONE hatched claim over the reading that call returned.
+   It runs before every other section and exits, so the child makes that claim and no other. Its
+   records go to the directory the parent names: the sweep's own collection never sees them, since
+   Verdict empties [OCANNL_TOOL_VERDICT_RECORDS] for every descendant.
+
+   The PHYSICAL window is scripted to the opposite of the scope's verdict, on any host and backend,
+   so the scope alone can account for the record (local Codex review): under the forced scope a flat
+   clock ([Autotune.on_batch_wall], every batch 1 ms per launch) on a quiet host
+   ([Autotune.host_load_reading]) is an admitted window; under the cleared scope a clock with three
+   batches in four at 4 ms over a 1 ms floor is a dispersed one, refused for contention on a GPU
+   backend outright and on a CPU backend by the scripted co-tenant. The child prints the admission
+   its [on_call] record holds, which stays physical, beside the claim. *)
+let scope_child_mode = "contention-scope-child"
+let scope_child_claim = "scope child: isolated timing returns a positive finite per-launch time"
+
+let () =
+  match Sys.get_argv () with
+  | [| _; mode; scope |] when String.equal mode scope_child_mode ->
+      let scoped f =
+        match scope with
+        | "forced" -> Autotune.with_contended_test_windows f
+        | "cleared" -> Autotune.with_uncontended_test_windows f
+        | other -> failwith ("unknown test-window scope " ^ other)
+      in
+      let node = Ll_test.node_factory ~first_id:9950 ~dims:[| 1 |] () "gh996_scope_counter" in
+      Ll_test.materialize node;
+      let idx = Ll_test.fixed 0 in
+      let bump =
+        Ll_test.set_at node idx (Ll_test.add (Ll_test.get node [| idx |]) (Ll_test.c 1.))
+      in
+      let o = Ll_test.optimize ~materialized:[ node ] ~name:"gh996_scope_counter" bump in
+      let ctx, routine = Ll_test.link ~name:"gh996_scope_counter" o in
+      let ctx = Context.set_values ctx node [| 0. |] in
+      let stalled = String.equal scope "cleared" in
+      let clock ~depth ~ordinal _wall =
+        (if stalled && ordinal % 4 <> 0 then 4. else 1.) *. Float.of_int depth
+      in
+      let host =
+        let k = ref 0 and foreign = if stalled then 3. else 0. in
+        fun () ->
+          let t = Float.of_int !k in
+          Int.incr k;
+          Some { Utils.Host_load.wall_s = t; busy_s = (8. +. foreign) *. t; own_s = 8. *. t }
+      in
+      let record = ref None in
+      let r =
+        Autotune.Seam.with_value Autotune.host_load_reading host (fun () ->
+            Autotune.Seam.with_value Autotune.on_batch_wall clock (fun () ->
+                scoped (fun () ->
+                    Autotune.time_routine
+                      ~on_call:(fun c -> record := Some c)
+                      ~repeats:3 ~timing:Autotune.Isolated ctx routine)))
+      in
+      Stdio.printf "scope child: physical admission %s\n"
+        (Option.value_map !record ~default:"none" ~f:(fun (c : Autotune.timing_call) ->
+             Autotune.batch_admission_name c.decision.admission));
+      p_unless
+        ~unless:
+          [ ("isolated window contended", r.contended); ("isolated window unbatched", r.unbatched) ]
+        scope_child_claim
+        (Float.is_finite r.ms && Float.is_positive r.ms);
+      Stdlib.exit 0
+  | _ -> ()
+
 (* {1 Sampling policy, with an injected clock} *)
 
 let sample_from_samples values fallback =
@@ -1877,6 +1945,82 @@ let () =
      accounted calibration work. *)
   p_unless ~unless:(refused "queued" que) "queued timing stays within the 64-batch dispatch cap"
     (que.dispatches <= 1 + que.calibration_dispatches + que.retry_dispatches + (64 * que.depth))
+
+(* {1 The test scopes reach the instrument's own reading}
+
+   gh-ocannl-996 made every hatched claim above leave a BYPASS record when its window took the
+   hatch, and a CHECKED one when it did not. On cc the bypass side was reachable only by load that
+   never came (no cc window contended under 32 spinners), so it ran only on Metal and on a loaded
+   multidev_cc. The test scopes now set the flags of the reading [time_routine] returns, not only of
+   what a search admits, so a scope child drives one such claim through each side on any backend, cc
+   included, and the parent reads the child's own record file. Two-sided, and each side against the
+   physical verdict: the forced scope must bypass a window the child's script made admitted, and the
+   cleared scope must check the SAME claim over a window the script made contended, so a scope that
+   left [time_routine]'s reading physical fails both, on any host. The physical admission is read
+   off the child's [on_call] record, which says the script did what the scope is judged against. *)
+let () =
+  Stdio.printf "\n== the test scopes reach time_routine's own reading ==\n";
+  let exe = Stdlib.Filename.basename (Fresh_process.executable ()) in
+  let records_var = "OCANNL_TOOL_VERDICT_RECORDS" in
+  let run_scope_child scope =
+    let dir = Stdlib.Filename.temp_dir "gh996_scope_child" "" in
+    let env =
+      Array.append
+        (Array.filter (Unix.environment ()) ~f:(fun binding ->
+             not (String.is_prefix binding ~prefix:(records_var ^ "="))))
+        [| records_var ^ "=" ^ dir |]
+    in
+    Exn.protect
+      ~f:(fun () ->
+        let child = Fresh_process.run ~env [ scope_child_mode; scope ] in
+        let records =
+          Stdlib.Sys.readdir dir |> Array.to_list
+          |> List.concat_map ~f:(fun file ->
+              Stdio.In_channel.read_lines (Stdlib.Filename.concat dir file))
+        in
+        (child, records))
+      ~finally:(fun () ->
+        Array.iter (Stdlib.Sys.readdir dir) ~f:(fun file ->
+            Stdlib.Sys.remove (Stdlib.Filename.concat dir file));
+        Stdlib.Sys.rmdir dir)
+  in
+  let hatched_records records =
+    List.filter records ~f:(fun line ->
+        List.exists [ "BYPASS"; "CHECKED" ] ~f:(fun kind ->
+            String.is_prefix line ~prefix:("OCANNL_TOOL_VERDICT_" ^ kind ^ "\t")))
+  in
+  let record kind hatches =
+    String.concat ~sep:"\t" [ "OCANNL_TOOL_VERDICT_" ^ kind; hatches; exe; scope_child_claim ]
+  in
+  let judge ~scope ~physical ~expected label =
+    let ((status, out, _) as child), records = run_scope_child scope in
+    let ran =
+      Poly.equal status (Unix.WEXITED 0)
+      && String.is_substring out ~substring:(scope_child_claim ^ ": true")
+      && String.is_substring out ~substring:("scope child: physical admission " ^ physical ^ "\n")
+    in
+    let recorded = List.equal String.equal (hatched_records records) [ expected ] in
+    if not (ran && recorded) then (
+      Fresh_process.report ~label:(scope ^ "-scope child") child;
+      List.iter records ~f:(fun line ->
+          Stdio.eprintf "  %s-scope child record: %s\n%!" scope (Fresh_process.prefixed line)));
+    p
+      (Printf.sprintf
+         "%s scope: the child exits clean with the claim's passing row, its window physically %s"
+         scope physical)
+      ran;
+    p label recorded
+  in
+  judge ~scope:"forced"
+    ~physical:(Autotune.batch_admission_name Autotune.Admitted)
+    ~expected:(record "BYPASS" "isolated window contended")
+    "forced scope: time_routine's reading of an admitted window takes the contention hatch, so the \
+     claim's one hatched record is a BYPASS naming it";
+  judge ~scope:"cleared"
+    ~physical:(Autotune.batch_admission_name Autotune.Refused_contended)
+    ~expected:(record "CHECKED" "isolated window contended, isolated window unbatched")
+    "cleared scope: over a contended window the same claim's one hatched record is a CHECKED \
+     naming both hatches"
 
 (* {1 The objective is part of the cache identity} *)
 
