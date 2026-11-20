@@ -34,7 +34,11 @@
    tab-separated row gives a store, its order (zero-based constraint indices or [batch]), and the
    outcome, including each accepted variable's size and basis or [unsized]. The file covers the
    bounded sub-search only and is written before the verdicts, so a regression run can still be
-   compared. Without the flag no file is opened. The flag leaves stdout and the verdicts alone. *)
+   compared. Without the flag no file is opened. The flag leaves stdout and the verdicts alone. From
+   the repo root, run [python3 tools/compare-bounded-outcomes.py BASE.tsv HEAD.tsv]. It compares by
+   (store, order) and exits 1 on differences. To expect exactly N newly accepted rows, pass
+   [--expect-refused-to-accepted N]; see [--help] for the other transition counts. Missing keys
+   always fail the comparison, and malformed dumps (including duplicates) exit 2. *)
 
 open! Base
 open Ocannl
