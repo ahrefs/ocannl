@@ -51,9 +51,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   - The stanzas go where the scan's name sorts in `test/operations/dune`, and the new aliases go
     in sorted order in each aggregate list they join. `stanza_order` refuses both kinds of
     misplacement.
-  - Each rule lists `ocannl_config` in its deps (`config_dep_completeness`). It also lists
+  - Each rule that RUNS the scanner (the `.actual` producer and any `--refusal-control` run) lists
+    `ocannl_config` in its deps (`config_dep_completeness`). It also lists
     `(alias runtest-env_spelling_gate)` and carries the `; ocannl-backend: none -- <reason>`
-    marker; `env_var_deps` refuses a rule missing either.
+    marker; `env_var_deps` refuses a rule missing either. A `(test)` stanza such as `<name>_cases`
+    needs only the `ocannl_config` dep and the marker. The golden-diff rule beside a producer runs no program and takes none of them. It
+    reaches the gate through the producer's output.
   - The golden-diff rule of a rule that reads the repository goes on its own
     `runtest-<name>` alias. A rule reads the repository when it takes a `source_tree` or
     `glob_files_rec` outside its directory, or a root file. That alias is listed in BOTH the
