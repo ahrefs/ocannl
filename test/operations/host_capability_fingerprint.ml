@@ -55,6 +55,35 @@ let check_repointed_symlink first ~mtime ~initial =
   else
     skipped ~aggregation:`Environment ~backend:"temporary directory without symlink support" label
 
+let check_macos_build_version read =
+  let system_version_plist = Stdlib.Filename.temp_file "ocannl-system-version-" ".plist" in
+  let probe build =
+    Stdio.Out_channel.write_all system_version_plist
+      ~data:
+        (Printf.sprintf
+           {|<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>ProductVersion</key><string>15.1</string>
+  <key>ProductBuildVersion</key><string>%s</string>
+</dict>
+</plist>
+|}
+           build);
+    read ~system_version_plist
+  in
+  Exn.protect
+    ~f:(fun () ->
+      let first = probe "24B83" in
+      let second = probe "24B91" in
+      let find = List.Assoc.find ~equal:String.equal in
+      let api = find first "metal_math_api" in
+      Option.is_some api
+      && Option.equal String.equal api (find second "metal_math_api")
+      && Option.equal String.equal (find first "metal_driver_build") (Some "24B83")
+      && Option.equal String.equal (find second "metal_driver_build") (Some "24B91"))
+    ~finally:(fun () -> Unix.unlink system_version_plist)
+
 let () =
   (* Independent expectations make a directive the parser silently drops observable. *)
   expect_headers "CUDA prelude names its toolkit headers" (Cuda.prelude_headers ())
@@ -79,4 +108,8 @@ let () =
       Unix.unlink (file first);
       p "removing the header identifies the missing file"
         (String.equal (record first) (first ^ "(missing:" ^ header ^ ")"));
-      check_repointed_symlink first ~mtime ~initial)
+      check_repointed_symlink first ~mtime ~initial);
+  let label = "changing the macOS build moves the host record with the same Metal math API" in
+  match Host_capability_fingerprint_metal.read with
+  | None -> skipped ~aggregation:`Environment ~backend:"host without Metal" label
+  | Some read -> p label (check_macos_build_version read)

@@ -9767,10 +9767,21 @@
 (test
  (name host_capability_fingerprint)
  (package arrayjit)
- ; ocannl-backend: none -- reads the shared preludes and fingerprints temporary headers.
+ ; ocannl-backend: none -- reads host files and the Metal compile-options API without opening a device.
  (deps ocannl_config)
- (modules host_capability_fingerprint)
- (libraries base stdio unix arrayjit.ir arrayjit.utils arrayjit.verdict))
+ (modules host_capability_fingerprint host_capability_fingerprint_metal)
+ (libraries
+  base
+  stdio
+  unix
+  arrayjit.ir
+  arrayjit.utils
+  arrayjit.verdict
+  (select
+   host_capability_fingerprint_metal.ml
+   from
+   (arrayjit.metal_backend -> host_capability_fingerprint_metal.real.ml)
+   (-> host_capability_fingerprint_metal.missing.ml))))
 
 ; gh-ocannl-1959: a host write to a node a forward fetch of the lineage re-establishes is refused.
 

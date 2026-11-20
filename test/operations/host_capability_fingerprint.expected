@@ -6,3 +6,4 @@ changing only header mtime moves the fingerprint: true
 changing only header size moves the fingerprint: true
 removing the header identifies the missing file: true
 repointing an include directory symlink moves its resolved path: true
+changing the macOS build moves the host record with the same Metal math API: true
