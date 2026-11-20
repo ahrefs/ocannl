@@ -2199,11 +2199,12 @@ tf_dir=$TMP/targets
 mkdir -p "$tf_dir/sub"
 printf '# a comment\n\n  @x/runtest-a  \r\n@x/slow-b\r\n# trailing\n' >"$tf_dir/list.txt"
 printf '@y/train-c\n' >"$tf_dir/sub/more.txt"
-printf '@@runtest-d\n' >"$tf_dir/root.txt"
+printf '@@runtest-d\n@x/runtest-e+f\n' >"$tf_dir/root.txt"
 # Accepted: argv order, default subcommand, a relative file, two files, a
-# root `@@` operand, and placement before dune's own `--`.
+# root `@@` operand, a `+` in a name (which dune's alias listing can hold),
+# and placement before dune's own `--`.
 for probe in "with-opts|run --targets-file $tf_dir/list.txt build -j 2|build -j 2 @x/runtest-a @x/slow-b" \
-             "root|run --targets-file $tf_dir/root.txt build|build @@runtest-d" \
+             "root|run --targets-file $tf_dir/root.txt build|build @@runtest-d @x/runtest-e+f" \
              "default|run --targets-file $tf_dir/list.txt|build @x/runtest-a @x/slow-b" \
              "two|start --targets-file $tf_dir/list.txt --targets-file $tf_dir/sub/more.txt build|build @x/runtest-a @x/slow-b @y/train-c" \
              "sep|run --targets-file $tf_dir/sub/more.txt build @w -- @after|build @w @y/train-c -- @after" \
