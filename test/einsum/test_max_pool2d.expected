@@ -189,5 +189,6 @@ max_pool2d: pooled shared values correct (0-margins never read): true
 max_pool2d_copy: shared tensor carries the conv's committed margins: [1/2; 1/2; 0/0] elem=0.
 max_pool2d_copy: pooled shared = [10 11 14 15 26 27 30 31]
 max_pool2d_copy: pooled shared values correct (0-margins never read): true
+cc max_pool2d returns positive zero for an all-negative-zero window: true
 
 All max_pool2d tests completed!

@@ -315,6 +315,32 @@ let test_max_pool2d_conflicting_consumers () =
   run_variant "max_pool2d_copy" (fun x ->
       Nn_blocks.max_pool2d_copy ~stride:2 ~window_size:3 ~use_padding:true () x)
 
+let test_max_pool2d_signed_zero () =
+  Tensor.unsafe_reinitialize ();
+  let ctx = Context.auto () in
+  let backend = Context.backend_name ctx in
+  let cc_leg = Verdict.leg ~when_:(String.equal backend "cc") ~on:backend () in
+  let leg =
+    Verdict.sub_leg cc_leg ~aggregation:`Environment ~on:"cc math that may discard signed zero"
+      ~when_:
+        (lazy
+          (let licence = Ir.Low_level.Fp_licence.of_config () in
+           (not licence.finite_math)
+           && not (Utils.get_global_flag ~default:false ~arg_name:"cc_backend_fast_math")))
+  in
+  Verdict.in_leg ~leg "cc max_pool2d returns positive zero for an all-negative-zero window"
+    (fun label ->
+      let input =
+        NTDSL.init ~l:"negative_zero" ~prec:Ir.Ops.single ~o:[ 2; 2; 1 ] ~f:(fun _ -> -0.0) ()
+      in
+      let output = max_pool2d () input in
+      Train.set_materialized input.value;
+      let ctx = Train.forward_once ctx output in
+      let pooled = Context.get_value ctx output.value [| 0; 0; 0 |] in
+      eprintf "cc max_pool2d signed-zero result = %s (not part of the golden)\n%!"
+        (Test_utils.hex_float pooled);
+      Verdict.p label (Int64.equal (Int64.bits_of_float pooled) (Int64.bits_of_float 0.0)))
+
 let () =
   Verdict.case "test_max_pool2d_basic" test_max_pool2d_basic;
   Verdict.case "test_max_pool2d_window3" test_max_pool2d_window3;
@@ -325,4 +351,5 @@ let () =
   Verdict.case "test_max_pool2d_padded_locked_data" test_max_pool2d_padded_locked_data;
   Verdict.case "test_max_pool2d_padded_locked_data_copy" test_max_pool2d_padded_locked_data_copy;
   Verdict.case "test_max_pool2d_conflicting_consumers" test_max_pool2d_conflicting_consumers;
+  Verdict.case "test_max_pool2d_signed_zero" test_max_pool2d_signed_zero;
   printf "\nAll max_pool2d tests completed!\n%!"
