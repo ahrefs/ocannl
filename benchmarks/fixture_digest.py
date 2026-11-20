@@ -313,6 +313,28 @@ def _shown(value):
     return json.dumps(value)
 
 
+def _shown_change(was, now):
+    """A changed metadata value, both sides: whole when short, else each cut to a window starting
+    a little before the first character where they differ, so the cut shows the change."""
+    if len(was) <= COMPARE_VALUE_WIDTH and len(now) <= COMPARE_VALUE_WIDTH:
+        return f"{json.dumps(was)} -> {json.dumps(now)}"
+    first = next(
+        (i for i, (x, y) in enumerate(zip(was, now)) if x != y), min(len(was), len(now))
+    )
+    start = max(0, first - 16)
+
+    def window(value):
+        cut = value[start:start + COMPARE_VALUE_WIDTH]
+        return (
+            ("…" if start else "")
+            + json.dumps(cut)
+            + ("…" if start + COMPARE_VALUE_WIDTH < len(value) else "")
+            + f" ({len(value)} chars)"
+        )
+
+    return f"{window(was)} -> {window(now)}, first differing at char {first}"
+
+
 def _same_payload(a, a_at, b, b_at, size):
     """Whether `size` bytes of `a` from `a_at` equal those of `b` from `b_at`, streamed."""
     a.seek(a_at)
@@ -361,7 +383,7 @@ def compare_fixtures(a, b):
             lines += [f"  added   {_shown(k)}: {_shown(meta_b[k])}" for k in added]
             lines += [f"  removed {_shown(k)}: {_shown(meta_a[k])}" for k in removed]
             lines += [
-                f"  changed {_shown(k)}: {_shown(meta_a[k])} -> {_shown(meta_b[k])}"
+                f"  changed {_shown(k)}: {_shown_change(meta_a[k], meta_b[k])}"
                 for k in changed
             ]
         else:

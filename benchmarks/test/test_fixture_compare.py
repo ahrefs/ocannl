@@ -96,6 +96,17 @@ class FixtureCompareTest(unittest.TestCase):
         self.assertNotIn("DIFFERS", proc.stdout)
         self.assertEqual(lines[-1], "verdict: every tensor identical (dtype, shape, payload)")
 
+    def test_a_long_changed_value_shows_where_it_changes(self):
+        spec = "x" * 100
+        a = self.fixture("a", metadata={"spec": spec + "old"}, tensors=TENSORS)
+        b = self.fixture("b", metadata={"spec": spec + "new"}, tensors=TENSORS)
+        proc = self.compare(a, b)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        line = next(x for x in proc.stdout.splitlines() if x.startswith('  changed "spec"'))
+        self.assertIn("first differing at char 100", line)
+        self.assertIn('old"', line)
+        self.assertIn('new"', line)
+
     def test_identical_content_reports_identical_metadata(self):
         a = self.fixture("a", metadata={"k": "v"}, tensors=TENSORS)
         b = self.fixture("b", metadata={"k": "v"}, tensors=list(reversed(TENSORS)), extra_padding=8)
