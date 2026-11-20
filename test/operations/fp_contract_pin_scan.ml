@@ -528,6 +528,37 @@ let code_claim_lines structure =
   pass ();
   List.dedup_and_sort !lines ~compare:Int.compare
 
+(* Whether [e] is the string literal [s]: what both pin forms mean by "the literal". *)
+let is_literal s (e : expression) =
+  match e.pexp_desc with
+  | Pexp_constant (Pconst_string (s', _, _)) -> String.equal s s'
+  | _ -> false
+
+(* The environment form of the pin: [<M>.putenv] applied to exactly the key literal and a value,
+   anywhere in the source. Last-wins in source order, as the statement form is: [true] when the last
+   such application's value is the literal [off], [false] when it is another literal or a computed
+   value, or when there is none. *)
+let env_mode structure =
+  let writes = ref [] in
+  let finder =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression e =
+        (match e.pexp_desc with
+        | Pexp_apply
+            ( { pexp_desc = Pexp_ident { txt = Lident "putenv" | Ldot (_, "putenv"); _ }; _ },
+              [ (Nolabel, key); (Nolabel, value) ] )
+          when is_literal pin_key key ->
+            writes := (key.pexp_loc.loc_start.pos_cnum, is_literal pin_value value) :: !writes
+        | _ -> ());
+        super#expression e
+    end
+  in
+  finder#structure structure;
+  List.max_elt !writes ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+  |> Option.value_map ~default:false ~f:snd
+
 (* The in-process statement form of the pin (gh-ocannl-2354): [<M>.Utils.state_config] applied to
    exactly the labelled [~key:"cc_backend_fp_contract"] and [~data], as a top-level [let () =], [let
    _ =] or bare expression item -- alone or as one element of a top-level [;] sequence. That is
@@ -538,46 +569,12 @@ let code_claim_lines structure =
    states anything else (a literal mode or a computed value), [None] when no statement stands. *)
 let state_config_key = "cc_backend_fp_contract"
 
-(* The environment form of the pin: [<M>.putenv] applied to exactly the key literal and a value,
-   anywhere in the source. Last-wins in source order, as the statement form is: [true] when the last
-   such application's value is the literal [off], [false] when it is another literal or a computed
-   value, or when there is none. *)
-let env_mode structure =
-  let writes = ref [] in
-  let literal (e : expression) =
-    match e.pexp_desc with Pexp_constant (Pconst_string (s, _, _)) -> Some s | _ -> None
-  in
-  let finder =
-    object
-      inherit Ast_traverse.iter as super
-
-      method! expression e =
-        (match e.pexp_desc with
-        | Pexp_apply
-            ( { pexp_desc = Pexp_ident { txt = Lident "putenv" | Ldot (_, "putenv"); _ }; _ },
-              [ (Nolabel, key); (Nolabel, value) ] )
-          when Option.equal String.equal (literal key) (Some pin_key) ->
-            writes :=
-              ( key.pexp_loc.loc_start.pos_cnum,
-                Option.equal String.equal (literal value) (Some pin_value) )
-              :: !writes
-        | _ -> ());
-        super#expression e
-    end
-  in
-  finder#structure structure;
-  List.max_elt !writes ~compare:(fun (a, _) (b, _) -> Int.compare a b)
-  |> Option.value_map ~default:false ~f:snd
-
 let stated_mode structure =
   let utils_value name = function
     | Longident.Ldot ((Lident "Utils" | Ldot (_, "Utils")), n) -> String.equal n name
     | _ -> false
   in
-  let literal (e : expression) =
-    match e.pexp_desc with Pexp_constant (Pconst_string (s, _, _)) -> Some s | _ -> None
-  in
-  let is_key e = Option.equal String.equal (literal e) (Some state_config_key) in
+  let is_key = is_literal state_config_key in
   (* What one top-level expression does to the statement: [`Keep] leaves it, [`Set v] replaces
      it. *)
   let step (e : expression) =
@@ -590,8 +587,7 @@ let stated_mode structure =
             | _ -> None)
         in
         match (args, labelled "key", labelled "data") with
-        | [ _; _ ], [ key ], [ data ] when is_key key ->
-            `Set (Some (Option.equal String.equal (literal data) (Some pin_value)))
+        | [ _; _ ], [ key ], [ data ] when is_key key -> `Set (Some (is_literal pin_value data))
         | _ -> `Keep)
     | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, [ (Nolabel, key) ])
       when utils_value "unstate_config" txt && is_key key ->
