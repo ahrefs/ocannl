@@ -7895,6 +7895,7 @@ class OcannlTreeTest(unittest.TestCase):
                       "check=True)", main)
         self.assertIn("source = source_identity(ROOT)", main)
         self.assertIn("harness commit: ", source)
+        self.assertIn("', modified' if harness_dirty", source)
 
     def test_gh1181_takes_its_master_tree_from_the_same_variable(self):
         import gh1181_cells
@@ -7907,9 +7908,23 @@ class OcannlTreeTest(unittest.TestCase):
         # wrong pin is refused before --out exists, so a retry needs nothing cleared.
         self.assertIn('cell_dir = HERE if tree == "master" else root / "benchmarks"', measure)
         self.assertNotIn('env, root / "benchmarks"', measure)
-        self.assertLess(measure.index("not --master-commit"), measure.index("out.mkdir("))
-        self.assertLess(measure.index("not the anchor commit"), measure.index("out.mkdir("))
         base = ["--backend", "cuda", "--box", "rog-nv", "--out", "x", "--no-anchor", "why"]
+        # A wrong pin is refused before --out exists, so a retry has nothing to clear: observed
+        # by running measure up to the refusal, the box gate and git stood in for.
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            args = gh1181_cells.parse_args(["--backend", "cuda", "--box", "rog-nv", "--out",
+                                            str(out), "--no-anchor", "why", "--master-commit",
+                                            "c3e5975aa"])
+            with unittest.mock.patch.dict(os.environ), \
+                    unittest.mock.patch.object(orchestrate, "install_termination_handler"), \
+                    unittest.mock.patch.object(gh1181_cells.box_gate, "require"), \
+                    unittest.mock.patch.object(gh1181_cells, "git_sha",
+                                               return_value="1fc57811" + "0" * 32):
+                with self.assertRaises(SystemExit) as raised:
+                    gh1181_cells.measure(args)
+            self.assertIn("not --master-commit c3e5975aa", str(raised.exception))
+            self.assertFalse(out.exists())
         self.assertEqual(gh1181_cells.parse_args(base + ["--master-commit", "c3e5975aa"])
                          .master_commit, "c3e5975aa")
         for bad in ("c3e5", "C3E5975AA", "c3e5975ag"):

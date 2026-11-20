@@ -2789,7 +2789,10 @@ def report(
         harness_commit = run_supporting(
             ["git", "rev-parse", "--short", "HEAD"], cwd=HERE, capture_output=True
         ).stdout.strip()
-        harness = f" (harness commit: {harness_commit})"
+        harness_dirty = run_supporting(
+            ["git", "status", "--porcelain", "--untracked-files=no"], cwd=HERE, capture_output=True
+        ).stdout.strip()
+        harness = f" (harness commit: {harness_commit}{', modified' if harness_dirty else ''})"
     lines.append(f"# Benchmark results\n")
     lines.append(
         f"platform: {platform.platform()} {platform.machine()} | "
