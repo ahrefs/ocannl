@@ -141,7 +141,9 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
 The v1.1.2 conv issues each close against a named cell of the `cifar_resnet` leg, before and
 after, on one box; the untuned baseline cells on rog-nv (CUDA), m4-max (Metal) and minix (HIP) are
 in [report-gh1161-resnet.md](report-gh1161-resnet.md), re-measured with the tuned cells on 2026-10-30 in
-[report-gh1161-resnet-20261030.md](report-gh1161-resnet-20261030.md). A **step cell** is `<workload>/<backend>/<variant>/<regime>` (the regime
+[report-gh1161-resnet-20261030.md](report-gh1161-resnet-20261030.md), and at the 1.2 tag, with
+`1fc57811`'s untuned cells as a same-window anchor, on 2026-11-20 in
+[report-gh1161-resnet-20261120.md](report-gh1161-resnet-20261120.md). A **step cell** is `<workload>/<backend>/<variant>/<regime>` (the regime
 `exact` or `approximate`), e.g. `cifar_resnet_b1/cuda/tuned/exact`: the step p50 of that
 `orchestrate.py` row. A **site cell** is a step cell plus a site family, e.g.
 `cifar_resnet_b1/cuda/tuned/exact · sc1x1s2`: the summed kernel times (each the median of its
@@ -501,7 +503,15 @@ single-threaded segments that sum to the serial step
   CPU-only matrix), `--no-fixture-digest-check` (measure fixtures that do not match
   `fixtures/DIGESTS.txt`),
   `--cell-timeout SECONDS` / `--beam-parallel N` / `--no-cache-quarantine` (the wedged-cell
-  mitigations below). Env: `BENCH_CELL_LOG_DIR=<dir>` keeps every cell's raw combined
+  mitigations below). Env: `BENCH_OCANNL_TREE=<checkout>` measures another OCANNL checkout's
+  runners with this checkout's harness, e.g. a release tag built in a second worktree
+  (gh-ocannl-2008). The sweep builds and runs that tree's `bench_*.exe`, checks `--cell-flag`
+  keys against its `ocannl_config.reference`, and stamps its HEAD as `ocannl commit` (the report
+  header adds `harness commit`, marked `modified` when this checkout has tracked changes). The
+  fixtures, `DIGESTS.txt`, the venv and the cells' working directory, and so the `ocannl_config`
+  the cells read, stay this checkout's. The tree must be the root of its own git worktree, or the
+  sweep refuses at import. `gh1181_cells.py` takes its master tree from the same variable and
+  pins it with `--master-commit`. `BENCH_CELL_LOG_DIR=<dir>` keeps every cell's raw combined
   output, one file per cell label (the label sanitized, then a digest of it, so no two labels
   share a file), written as the cell runs (gh-ocannl-1061) — so it can be
   tailed live, and a cell killed at its cap, or a sweep that is itself killed, leaves everything

@@ -64,20 +64,21 @@ options, including TF32 on supported CUDA hardware, fast math on CPU, and attent
 that reduce intermediate storage. Check the resulting accuracy and speed on your workload.
 
 Start with the default numerics; the approximate profile is opt-in and has no general speedup
-guarantee. The [October 30 tuned inference comparison](benchmarks/report-tagline-gpt2-20261030.md)
-measured `gpt2_mini` f32 inference at:
+guarantee. The [1.2 tag's tuned inference comparison](benchmarks/report-tagline-gpt2-20261120.md)
+(2026-11-20, each box in its own exclusive window) measured `gpt2_mini` f32 inference at:
 
 | backend | exact | approximate | approximate vs exact |
 |---|---|---|---|
-| CUDA | 3.283 ms | 2.364 ms | 28% lower latency |
-| Metal | 7.002 ms | 5.693 ms | 19% lower latency |
-| unified-memory HIP | 4.310 ms | 4.409 ms | 2% slower |
-| discrete HIP | 5.487 ms | 5.874 ms | 7% slower |
+| CUDA | 2.151 ms | 2.089 ms | 3% lower latency |
+| Metal | 6.739 ms | 5.913 ms | 12% lower latency |
+| unified-memory HIP | 4.082 ms | 5.697 ms | 40% slower |
 
-On CUDA, approximate inference had been 28% *slower* than exact in the
-[October 3–4 comparison](benchmarks/report-tagline-gpt2.md). v1.1.1's CUDA attention fallback
-turned that slowdown into a speedup, at about 3× the allocator high-water mark
-([PR #952](https://github.com/lukstafi/ocannl-staging/pull/952)).
+Measured in the same windows, the tag's tuned exact step is 1.52x faster than the October 30
+commit's on CUDA, 1.06x on unified-memory HIP and 1.02x on Metal. The exact step's gains closed
+most of CUDA's earlier approximate advantage (28% in the
+[October 30 comparison](benchmarks/report-tagline-gpt2-20261030.md)). On unified-memory HIP the
+approximate step reads 1.29x slower than on October 30, a cross-window reading the report
+details. Discrete-memory HIP was not re-measured at 1.2; its October 30 figures describe 1.1.3.
 
 OCANNL remains slower than `torch.compile` and tinygrad BEAM=2 in both regimes. Exact pairs
 OCANNL's default numerics with exact-pinned PyTorch; approximate pairs
@@ -86,12 +87,9 @@ and runs its defaults in both columns.
 
 | backend | exact: slower than `torch.compile` / tinygrad | approximate: slower than `torch.compile` / tinygrad |
 |---|---|---|
-| CUDA | 3.31× / 2.17× | 4.24× / 1.56× |
-| Metal | 2.82× / 3.39× | 2.60× / 2.76× |
-| unified-memory HIP | 1.36× / 1.39× | 1.35× / 1.42× |
-| discrete HIP | 1.11× / 1.36× | 1.19× / 1.45× |
-
-The Metal ratios to PyTorch are flattered: PyTorch on that box reads slower than it did in October.
+| CUDA | 2.18× / 1.37× | 3.74× / 1.33× |
+| Metal | 2.73× / 3.30× | 2.75× / 2.89× |
+| unified-memory HIP | 1.29× / 1.27× | 1.74× / 1.78× |
 
 The campaign did not produce controlled training measurements.
 
