@@ -52,9 +52,13 @@
    operator-based application, partial helper applications, function-case parameters, omitted
    optional defaults and bare external-reader aliases are not reconstructed.
 
-   - A PIN, in either of two forms. The environment form: the string literal
-   [OCANNL_CC_BACKEND_FP_CONTRACT] whose next string literal is [off] (the [Unix.putenv] a pinned
-   test does at module initialization), read from the lexemes. The statement form (gh-ocannl-2354):
+   - A PIN, in either of two forms. The environment form: [putenv], under any qualifier
+   ([Unix.putenv] in practice), applied to exactly the two unlabelled arguments
+   [OCANNL_CC_BACKEND_FP_CONTRACT] and [off], read from the parse tree anywhere in the source
+   ([env_mode] below). The LAST such application of the key in the source text decides, as a later
+   [putenv] replaces an earlier one: a literal of another mode or a computed value unpins. A read of
+   the key ([Sys.getenv_opt]) writes nothing and is not read; nor is a [putenv] through a local
+   alias or helper, a partial application or an operator. The statement form (gh-ocannl-2354):
    [Utils.state_config], under any qualifier ending in [Utils], applied to exactly the labelled
    literals [~key:"cc_backend_fp_contract"] and [~data:"off"] in either order, read from the parse
    tree and only at module initialization -- a top-level [let () =], [let _ =] or bare expression
@@ -103,8 +107,7 @@ let kinds =
 
 let sentinel = "cc-fp-contract:"
 
-(* The pin's two literals, the value spelled first: the other order would make this file's own
-   source read as a pin. *)
+(* The environment pin's two literals. *)
 let pin_value = "off"
 let pin_key = "OCANNL_CC_BACKEND_FP_CONTRACT"
 let subject_phrases = [ "bitwise"; "bit-for-bit"; "bit-identical" ]
@@ -535,6 +538,37 @@ let code_claim_lines structure =
    states anything else (a literal mode or a computed value), [None] when no statement stands. *)
 let state_config_key = "cc_backend_fp_contract"
 
+(* The environment form of the pin: [<M>.putenv] applied to exactly the key literal and a value,
+   anywhere in the source. Last-wins in source order, as the statement form is: [true] when the last
+   such application's value is the literal [off], [false] when it is another literal or a computed
+   value, or when there is none. *)
+let env_mode structure =
+  let writes = ref [] in
+  let literal (e : expression) =
+    match e.pexp_desc with Pexp_constant (Pconst_string (s, _, _)) -> Some s | _ -> None
+  in
+  let finder =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression e =
+        (match e.pexp_desc with
+        | Pexp_apply
+            ( { pexp_desc = Pexp_ident { txt = Lident "putenv" | Ldot (_, "putenv"); _ }; _ },
+              [ (Nolabel, key); (Nolabel, value) ] )
+          when Option.equal String.equal (literal key) (Some pin_key) ->
+            writes :=
+              ( key.pexp_loc.loc_start.pos_cnum,
+                Option.equal String.equal (literal value) (Some pin_value) )
+              :: !writes
+        | _ -> ());
+        super#expression e
+    end
+  in
+  finder#structure structure;
+  List.max_elt !writes ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+  |> Option.value_map ~default:false ~f:snd
+
 let stated_mode structure =
   let utils_value name = function
     | Longident.Ldot ((Lident "Utils" | Ldot (_, "Utils")), n) -> String.equal n name
@@ -581,7 +615,7 @@ let stated_mode structure =
       | _ -> state)
 
 let read content =
-  (* Parsed once: the claim reader and the statement reader walk the same structure. *)
+  (* Parsed once: the claim reader and both pin readers walk the same structure. *)
   let structure = Parse.implementation (Lexing.from_string content) in
   let lexemes = Prose_lexemes.of_source content in
   let literals =
@@ -597,11 +631,6 @@ let read content =
         then Some l.line
         else None)
   in
-  let rec pinned = function
-    | (a : Prose_lexemes.t) :: (b :: _ as rest) ->
-        (String.equal a.text pin_key && String.equal b.text pin_value) || pinned rest
-    | _ -> false
-  in
   let markers =
     List.filter_map lexemes ~f:(fun (l : Prose_lexemes.t) ->
         match l.kind with
@@ -612,7 +641,7 @@ let read content =
   {
     claim_lines = claim_lines @ code_claim_lines structure;
     (* A statement ranks above the environment, so one that stands decides alone. *)
-    pinned = Option.value (stated_mode structure) ~default:(pinned literals);
+    pinned = Option.value (stated_mode structure) ~default:(env_mode structure);
     markers;
   }
 
