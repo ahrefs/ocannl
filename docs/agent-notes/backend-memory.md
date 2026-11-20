@@ -697,9 +697,17 @@ files.
   bindings to the driver that load the PTX a second time, because cudajit's `Cu.Module.func` is
   opaque (a cudajit attribute binding would supersede them). The claim is AT MOST: a device compiler
   may drop an array it proves dead, and an over-charge only costs candidates. On the M4 Max every one
-  of 160-odd seeded kernels allocated exactly its charge, Metal's static length included, so the 4 B
-  per-array granule is the whole of Metal's rounding there, and a non-vacuity claim requires a
-  positive exact match. The negative controls that the claim catches: dropping the arrays term, or
+  of 160-odd seeded kernels allocated exactly its charge, Metal's static length included, and a
+  non-vacuity claim requires a positive exact match. Those charges are all multiples of 16 B, and
+  Metal's static length rounds to 16 B (M4 Max, measured on an f16 product of 9x21 and of 9x17
+  halves that a fused twin places whole in workgroup memory beside three aligned tiles: charged
+  4476 and 4404 B, reported 4480 and 4416; one unaligned array cannot tell a 16 B kernel total from
+  a 16 B per-array granule), while its pipeline-creation request is the sum of 4 B-rounded arrays
+  (`metal_threadgroup_overflow`). So a fixture whose charge is not a multiple of 16 reads as
+  UNDER-CHARGED by up to 12 B against the static length, and with one unaligned array the 16 B
+  rounding absorbs the 4 B per-array term, which the static length cannot then tell apart. Seeded
+  tiles are padded to tile multiples (powers of two); the fused whole product is the only seeded
+  unaligned array found. The negative controls that the claim catches: dropping the arrays term, or
   (under `Fp16_wide`, the `half_out` fixture) the tile-MMA term, of `Schedule.kernel_workgroup_bytes`.
 - `Context.get_used_memory` must report OCANNL's OWN allocation (`Slab.used_memory`, or the
   backend's atomic counter) — never the driver's `total - free`. That is device-global: it counts

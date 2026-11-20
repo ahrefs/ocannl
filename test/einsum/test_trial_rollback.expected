@@ -5,5 +5,8 @@ so it closes as with nothing marked: refused, since closure cannot split a + c =
 postponed below stage 4: [a; c] against [b; d], a solved before the merge applies: true
 and b, merged with the marked a inside the postponed attempt, stays unmarked: true
 so it closes as with nothing marked: true
+[a; e; 3].<v> = <v2>.[b; f; 5]: the overlap k = 1 commits, f = 3: true
+and b, merged with the marked a inside the refused overlap k = 0, stays unmarked: true
+so it closes as with nothing marked: minimal: true
 two constraints: windows, bounds, a shared kernel, a window pair: true
 three open windows, shared kernels or pairs: true

@@ -2542,8 +2542,10 @@ let phase11 () =
    concat with spare cells footprint-scoped onto scratch (gh-ocannl-616). Every concat is sized to
    the cells it writes, except in the footprint legs. With the fan-in cap on, the spare-cell concat
    costs its reader one load even if the reader stays virtual and the footprint retracts to a whole
-   buffer. Every leg executes against a reference and a materialized reading, with every producer
-   varying in its cell. *)
+   buffer. An observable reader of a cap-backed footprint is materialized for host readback
+   (gh-ocannl-2364) at, over and without the cap, under [Inline], and when it is a one-hot selector
+   the heuristic caps exempt. Every leg executes against a reference and a materialized reading,
+   with every producer varying in its cell. *)
 
 (* The routine's footprint scratch nodes (gh-ocannl-616): a cap landing on footprint-scoped scratch
    leaves its producer virtual with no read surviving, exactly as inlining does, so a claim that a
@@ -2886,7 +2888,79 @@ let phase12 () =
    let inline_ctx = LL.empty_optimize_ctx () in
    Hash_set.add inline_ctx.LL.inline_preferences c_;
    observed_leg ~label:"_inline" ~what:"under an explicit Inline preference on the reader"
-     inline_ctx);
+     inline_ctx;
+   (* The guard overrides the one-hot selector exemption by the same argument as [Inline]: an
+      observable selector [s[j,k] := (k = a[j])] is exempt from the heuristic caps (so
+      [rewrite_one_hot_reductions] could fire on it), yet a virtual reading of it would retract the
+      footprint to the visit cap's [Local] buffer just the same. Each cell of [a] is read [cells]
+      times, past the default visit cap, and [a] is allocated [3*dim] over a [2*dim] read box, so
+      the cap lands on footprint scratch. [a]'s cells are a permutation of [0, cells), so the
+      selector is a permutation matrix: each row's one sits in a different column. *)
+   let omk = node_factory ~first_id:9360 ~dims:[| cells; cells |] () in
+   (* [(3i + 1) mod cells]: 3 is coprime to [cells], so a permutation of [0, cells), and not an
+      involution (0 -> 1 -> 4), so the matrix is not symmetric and a transposed read of the selector
+      shows. The second, constant index puts the 1 inside the modulus. *)
+   let perm i = weighted ~weights:[| 3; 1 |] ~modulus:cells ~offset:0. ~stride:1. [| i; 1 |] in
+   let h = lmk "mh_onehot" and g = lmk "mg_onehot" in
+   let a = lmk "ma_onehot" and s = omk "ms_onehot" and out = omk "mo_onehot" in
+   List.iter [ h; g; out ] ~f:materialize;
+   Tn.set_observable s;
+   let g_vals =
+     Array.init (3 * dim) ~f:(fun i ->
+         weighted ~weights:[| 1 |] ~modulus:2 ~offset:1. ~stride:1. [| i |])
+   in
+   let h_vals = Array.init (3 * dim) ~f:(fun i -> perm i -. g_vals.(i)) in
+   let onehot_seed =
+     [ (s, blank (cells * cells)); (out, blank (cells * cells)); (h, h_vals); (g, g_vals) ]
+   in
+   let producer =
+     let i = sym () in
+     loop_n i cells (set a [| iter i |] (add (get h [| iter i |]) (get g [| iter i |])))
+   in
+   let selector =
+     let j = sym () and k = sym () in
+     loop_n j cells
+       (loop_n k cells
+          (set s
+             [| iter j; iter k |]
+             (LL.Binop (Ir.Ops.Cmpeq, (embed k, single), (get a [| iter j |], single)))))
+   in
+   let copy2 =
+     let j = sym () and k = sym () in
+     loop_n j cells (loop_n k cells (set out [| iter j; iter k |] (get s [| iter j; iter k |])))
+   in
+   let llc = List.reduce_exn ~f:seq [ producer; selector; copy2 ] in
+   let expected =
+     Array.init (cells * cells) ~f:(fun c ->
+         if Float.equal (Float.of_int (c % cells)) (perm (c / cells)) then 1. else 0.)
+   in
+   let name = "vcf_sites_footprint_onehot" in
+   LL.virtualize_settings.max_visits <- 1;
+   let o = optimize ~name llc in
+   let what = "an observable one-hot selector over a cap-backed footprint" in
+   p
+     (what ^ ": the selector is a one-hot producer, exempt from the heuristic caps")
+     (let traced = Hashtbl.find_exn o.LL.traced_store s in
+      traced.LL.prefers_virtual_one_hot && not traced.LL.has_non_one_hot_setter);
+   p
+     (what ^ ": the producer is read only through one footprint scratch")
+     (known_virtual o a
+     && count_get o a = 0
+     && match footprint_scratches o with [ sc ] -> count_get o sc = 1 | _ -> false);
+   p
+     (what ^ ": the selector is materialized as a footprint-observed reader")
+     (known_non_virtual o s && Option.equal Tn.equal_provenance (rejection_code o s) observed_reader);
+   let ctx = run ~name o ~seed:onehot_seed in
+   let mat_name = name ^ "_mat" in
+   let mat = optimize ~materialized:[ a; s ] ~name:mat_name llc in
+   let got_mat = execute ~name:mat_name mat ~seed:onehot_seed ~read:[ s; out ] in
+   p
+     (what ^ ": the selector and its copy read back like the reference and the materialized reading")
+     (match Context.observability ctx s with
+     | Stored | Recomputable ->
+         let got = List.map [ s; out ] ~f:(Context.get_values ctx) in
+         same got [ expected; expected ] && same got got_mat
+     | _ -> false));
   LL.virtualize_settings.max_visits <- saved_visits;
   LL.virtualize_settings.footprint_materialization <- saved_footprint;
   (* Across routines: A commits the concat and its two-site reader [c] [Virtual] with the cap off;

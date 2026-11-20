@@ -313,6 +313,10 @@ with the fan-in cap disabled: the observed reduction is materialized as a footpr
 with the fan-in cap disabled: the observed reduction and its output read back like the materialized reading: true
 under an explicit Inline preference on the reader: the observed reduction is materialized as a footprint-observed reader: true
 under an explicit Inline preference on the reader: the observed reduction and its output read back like the materialized reading: true
+an observable one-hot selector over a cap-backed footprint: the selector is a one-hot producer, exempt from the heuristic caps: true
+an observable one-hot selector over a cap-backed footprint: the producer is read only through one footprint scratch: true
+an observable one-hot selector over a cap-backed footprint: the selector is materialized as a footprint-observed reader: true
+an observable one-hot selector over a cap-backed footprint: the selector and its copy read back like the reference and the materialized reading: true
 cross-routine two-site read: routine A commits the concat and its reader virtual: true
 cross-routine two-site read: the stored reader is charged both slices (3), so B's consumer with w (4) is materialized by the fan-in cap: true
 cross-routine two-site read: execution matches the reference: true

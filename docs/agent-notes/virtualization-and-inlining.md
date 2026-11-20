@@ -1134,13 +1134,13 @@ files.
   provenance would offer an `Inline` flip the verdict refuses; the load-set walk also runs with the
   fan-in cap disabled when a cap-backed footprint and an eligible observable consumer both exist;
   and the guard overrides an explicit `Inline` preference. It overrides the one-hot selector
-  exemption by the same argument, so `rewrite_one_hot_reductions` cannot fire on such a reader;
-  that half is argued, with no executed leg. The ordinary path does
-  not cover either reading: it leaves the reader virtual over the visit cap's `Local` buffer, and
+  exemption by the same argument, so `rewrite_one_hot_reductions` cannot fire on such a reader.
+  The ordinary path does not cover either reading: it leaves the reader virtual over the visit cap's `Local` buffer, and
   `Context.observability` refuses the host read as `Unobservable_local`.
   `virtual_chain_fanin` phase 12 pins the scratch and whole-buffer charges, the inherited
-  fallback, and host readback at the default cap, over it, with it disabled and under `Inline`, with
-  execution against a materialized reference in each case.
+  fallback, and host readback at the default cap, over it, with it disabled, under `Inline` and
+  for an observable one-hot selector (a permutation matrix over the footprint), with execution
+  against a materialized reference in each case.
 - **The shift-the-uids check reads what a compile ships, not only the decision surface**
   (gh-ocannl-1877): `flip_order_minting` part 1 compares, across builds minted at different uid
   offsets, the emitted source up to minted identifiers (`Generated.normalize_minted`) and every
