@@ -512,6 +512,7 @@
   (alias runtest-stanza_order)
   (alias runtest-sweep_components)
   (alias runtest-sweep_harness)
+  (alias runtest-sweep_leg_scripts)
   (alias runtest-sweep_owner_scan)
   (alias runtest-sweep_owner_scan_refusal_control)
   (alias runtest-tensorized_census_ratchet)
@@ -16406,20 +16407,12 @@
   ../../tools/credential-env.sh
   ; the process supervisor and quoting every unit leg runs under (gh-ocannl-1380)
   ../../tools/sweep-supervisor.sh
-  ; the diagnostic legs' scripts, run against a fake dune (gh-ocannl-1705)
-  ../../tools/vendor-idents-check.sh
-  ../../tools/opam-env.sh
-  ../../tools/cuda-tf32-parity.sh
-  ../../tools/cuda-native-ptx-rerun.sh
   ; shared floor/native runtime-refusal signatures and matcher (gh-ocannl-2219)
   ../../tools/environment-refusals.sh
-  ; the reader the native-PTX leg's verdict names failed rules through (gh-ocannl-2005)
-  ../../tools/ci-failed-rules.sh
   ; the stanza whose `@policy-invariance` alias admits the policy units (gh-ocannl-1104)
   dune
   sweep_harness.sh
   sweep_remote_fixture.sh
-  sweep_leg_scripts.sh
   ../../scripts/harness-support.sh
   ../../scripts/process-group.sh
   (env_var ProgramFiles)
@@ -16443,6 +16436,30 @@
  (name sweep_harness_driver)
  (modules sweep_harness_driver)
  (libraries unix arrayjit.ir arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- the diagnostic wrappers call a fake Dune.
+ (alias runtest-sweep_leg_scripts)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  sweep_leg_scripts.sh
+  ../../scripts/harness-support.sh
+  ../../benchmarks/fixture_digest.py
+  ../../tools/ci-failed-rules.sh
+  ../../tools/credential-env.sh
+  ../../tools/cuda-native-ptx-rerun.sh
+  ../../tools/cuda-tf32-parity.sh
+  ../../tools/environment-refusals.sh
+  ../../tools/opam-env.sh
+  ../../tools/vendor-idents-check.sh
+  (env_var ProgramFiles)
+  (env_var ProgramW6432)
+  (env_var "ProgramFiles(x86)")
+  (env_var LOCALAPPDATA))
+ (action
+  (run %{dep:sweep_harness_driver.exe} %{dep:sweep_leg_scripts.sh})))
 
 ; gh-ocannl-926: every `Outside_sweep skip names the matrix that owns its execution -- a CI step
 ; building the test's alias, or the plain run of the executable a rule forces into the skip -- and

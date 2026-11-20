@@ -354,6 +354,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-stanza_order
   test/operations/dune                     @runtest-sweep_components
   test/operations/dune                     @runtest-sweep_harness
+  test/operations/dune                     @runtest-sweep_leg_scripts
   test/operations/dune                     @runtest-sweep_owner_scan
   test/operations/dune                     @runtest-sweep_owner_scan_refusal_control
   test/operations/dune                     @runtest-tensorized_census_ratchet
