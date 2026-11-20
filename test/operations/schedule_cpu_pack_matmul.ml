@@ -60,7 +60,11 @@ let () =
     Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:17 ~offset:(-8.) ~stride:1.)
   in
   let ma = TDSL.ndarray mav ~label:[ "ma" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
-  let mb = TDSL.ndarray mbv ~label:[ "mb" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
+  let cell values ij = values.((ij.(0) * n) + ij.(1)) in
+  let mb =
+    NTDSL.init ~mutable_:true ~l:"mb" ~prec:Ir.Ops.single ~i:[ n ] ~o:[ n ] ~f:(cell mbv) ()
+  in
+  Train.set_materialized mb.value;
 
   (* --- Naive twin --- *)
   let%op mc0 = ma * mb in
@@ -105,7 +109,7 @@ let () =
             tile_loops = [ k_i; j_i ];
             shared = false;
             cooperative = None;
-            hoisted = false;
+            hoisted = Sched.hoistable_constant mb.Tensor.value;
             swizzle = None;
             pad_stride = None;
             pipeline_depth = 1;
@@ -116,19 +120,41 @@ let () =
   in
   let pack_comp = named "mmp_packed" (Train.forward mc1) in
   let transform opt = Sched.apply (pack_schedule opt) opt in
-  let ctx_a = Context.auto () in
   let ctx_a, routine_a =
-    Context.compile ~lowered_transform:(fun o -> [ transform o ]) ctx_a pack_comp Ir.Indexing.Empty
+    Context.compile ~lowered_transform:(fun o -> [ transform o ]) ctx_s pack_comp Ir.Indexing.Empty
   in
   (* [Privatize] drops [Zero_out mc1] and opens its tile at zero instead; fresh buffers are zero and
      would hide a tile opened from [mc1] (gh-ocannl-1625), so [mc1] starts off its every result. *)
   let mc1_prefill = Array.init (n * n) ~f:(fun c -> Float.of_int (1000 + c)) in
-  let ctx_a = Context.set_values ctx_a mc1.Tensor.value mc1_prefill in
-  let ctx_a = Context.run ctx_a routine_a in
-  let got_packed = Context.get_values ctx_a mc1.Tensor.value in
+  let run_packed ctx =
+    let ctx = Context.set_values ctx mc1.Tensor.value mc1_prefill in
+    let ctx = Context.run ctx routine_a in
+    (ctx, Context.get_values ctx mc1.Tensor.value)
+  in
+  let oracle mb_values =
+    Ll_test.matmul_products ~m:n ~n ~k:n (cell mav) (cell mb_values)
+    |> List.map ~f:(List.sum (module Float) ~f:Fn.id)
+    |> Array.of_list
+  in
+  let ctx_a, got_packed = run_packed ctx_a in
   p_close "packed tiled matmul matches the naive twin" got_packed got_naive ~tol:approx_tol;
   p_all2 "the prefill of the accumulator differs from the naive twin's result in every cell"
     mc1_prefill got_naive ~f:(fun a b -> Float.(a <> b));
+  let initial_expected = oracle mbv in
+  p_all2 "packed matmul with the initial operand matches the host oracle" got_packed
+    initial_expected ~f:Float.equal;
+
+  (* Reuse the same linked routine so packing from the original host init would stay stale. *)
+  let replacement = Array.map mbv ~f:(fun x -> Float.(x + 1.0)) in
+  let replacement_expected = oracle replacement in
+  p_all2 "the replacement operand changes every result cell" initial_expected replacement_expected
+    ~f:(fun a b -> Float.(a <> b));
+  p_all2 "the prefill differs from the replacement result in every cell" mc1_prefill
+    replacement_expected ~f:(fun a b -> Float.(a <> b));
+  let ctx_a = Context.set_values ctx_a mb.value replacement in
+  let _, got_replacement = run_packed ctx_a in
+  p_all2 "packed matmul with the re-uploaded operand matches the host oracle" got_replacement
+    replacement_expected ~f:Float.equal;
   let src = Generated.read "mmp_packed" in
   let has sub = String.is_substring src ~substring:sub in
   let count_sub sub = String.substr_index_all src ~may_overlap:false ~pattern:sub |> List.length in
