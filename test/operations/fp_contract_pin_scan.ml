@@ -52,14 +52,24 @@
    operator-based application, partial helper applications, function-case parameters, omitted
    optional defaults and bare external-reader aliases are not reconstructed.
 
-   - A PIN: the string literal [OCANNL_CC_BACKEND_FP_CONTRACT] whose next string literal is [off]
-   (the [Unix.putenv] the pinned tests do at module initialization). A pin made elsewhere -- a dune
-   stanza's flag or profile, a directory's ocannl_config -- is not read: such a source carries a
-   marker instead, or pins in-process too. - A MARKER: a comment whose whole text is
-   [cc-fp-contract], a colon, a kind, [--] and a reason of at least two words. Every comment holding
-   the sentinel followed by a colon must be one, so a misspelt kind or a missing reason fails rather
-   than reads as absent. The kinds, a closed vocabulary ([kinds] below), each name why contraction
-   cannot reach the claim.
+   - A PIN, in either of two forms. The environment form: the string literal
+   [OCANNL_CC_BACKEND_FP_CONTRACT] whose next string literal is [off] (the [Unix.putenv] a pinned
+   test does at module initialization), read from the lexemes. The statement form (gh-ocannl-2354):
+   [Utils.state_config], under any qualifier ending in [Utils], applied to exactly the labelled
+   literals [~key:"cc_backend_fp_contract"] and [~data:"off"] in either order, read from the parse
+   tree and only at module initialization -- a top-level [let () =], [let _ =] or bare expression
+   item, alone or as one element of a top-level [;] sequence ([stated_mode] below). The LAST such
+   statement of the key decides, as the library's replacement does: a later [~data] of another mode
+   or a computed value unpins, and a top-level [Utils.unstate_config "cc_backend_fp_contract"]
+   withdraws the statement. A standing statement ranks above the environment, so it decides alone;
+   the environment form is read only where none stands. A statement inside a function body, a [let
+   ... in] or a nested module is not read, nor is one through [open Utils] or
+   [Utils.with_stated_config]. A pin made elsewhere -- a dune stanza's flag or profile, a
+   directory's ocannl_config -- is not read: such a source carries a marker instead, or pins
+   in-process too. - A MARKER: a comment whose whole text is [cc-fp-contract], a colon, a kind, [--]
+   and a reason of at least two words. Every comment holding the sentinel followed by a colon must
+   be one, so a misspelt kind or a missing reason fails rather than reads as absent. The kinds, a
+   closed vocabulary ([kinds] below), each name why contraction cannot reach the claim.
 
    Every subject is listed in the golden with its disposition, so the list is the review surface: a
    new bitwise claim lands with its pin or its marker in the same diff. A source with a pin AND a
@@ -202,7 +212,7 @@ let callback_slots path =
             ]
             name ~equal:String.equal))
 
-let code_claim_lines content =
+let code_claim_lines structure =
   (* A single application may supply parameters of nested ordinary lambdas too. Flatten only
      unconstrained function bodies; returned identifiers remain comparator factories. *)
   let flatten =
@@ -218,7 +228,7 @@ let code_claim_lines content =
         | _ -> e
     end
   in
-  let ast = flatten#structure (Parse.implementation (Lexing.from_string content)) in
+  let ast = flatten#structure structure in
   let functions = Hashtbl.create (module Int) in
   let parameters = Hashtbl.create (module Int) in
   let changed = ref false in
@@ -515,7 +525,64 @@ let code_claim_lines content =
   pass ();
   List.dedup_and_sort !lines ~compare:Int.compare
 
+(* The in-process statement form of the pin (gh-ocannl-2354): [<M>.Utils.state_config] applied to
+   exactly the labelled [~key:"cc_backend_fp_contract"] and [~data], as a top-level [let () =], [let
+   _ =] or bare expression item -- alone or as one element of a top-level [;] sequence. That is
+   module initialization: a statement inside a function, a [let ... in] or a nested module states
+   the key only when that code runs, and is not read. A later statement replaces an earlier one, as
+   [Utils.state_config] does, and [Utils.unstate_config "cc_backend_fp_contract"] withdraws it, so
+   the LAST of them decides: [Some true] when it states the literal [off], [Some false] when it
+   states anything else (a literal mode or a computed value), [None] when no statement stands. *)
+let state_config_key = "cc_backend_fp_contract"
+
+let stated_mode structure =
+  let utils_value name = function
+    | Longident.Ldot ((Lident "Utils" | Ldot (_, "Utils")), n) -> String.equal n name
+    | _ -> false
+  in
+  let literal (e : expression) =
+    match e.pexp_desc with Pexp_constant (Pconst_string (s, _, _)) -> Some s | _ -> None
+  in
+  let is_key e = Option.equal String.equal (literal e) (Some state_config_key) in
+  (* What one top-level expression does to the statement: [`Keep] leaves it, [`Set v] replaces
+     it. *)
+  let step (e : expression) =
+    match e.pexp_desc with
+    | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, args)
+      when utils_value "state_config" txt -> (
+        let labelled name =
+          List.filter_map args ~f:(function
+            | Labelled l, arg when String.equal l name -> Some arg
+            | _ -> None)
+        in
+        match (args, labelled "key", labelled "data") with
+        | [ _; _ ], [ key ], [ data ] when is_key key ->
+            `Set (Some (Option.equal String.equal (literal data) (Some pin_value)))
+        | _ -> `Keep)
+    | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, [ (Nolabel, key) ])
+      when utils_value "unstate_config" txt && is_key key ->
+        `Set None
+    | _ -> `Keep
+  in
+  let rec in_sequence state (e : expression) =
+    match e.pexp_desc with
+    | Pexp_sequence (a, b) -> in_sequence (in_sequence state a) b
+    | _ -> ( match step e with `Keep -> state | `Set v -> v)
+  in
+  List.fold structure ~init:None ~f:(fun state item ->
+      match item.pstr_desc with
+      | Pstr_eval (e, _) -> in_sequence state e
+      | Pstr_value (Nonrecursive, bindings) ->
+          List.fold bindings ~init:state ~f:(fun state vb ->
+              match vb.pvb_pat.ppat_desc with
+              | Ppat_construct ({ txt = Lident "()"; _ }, None) | Ppat_any ->
+                  in_sequence state vb.pvb_expr
+              | _ -> state)
+      | _ -> state)
+
 let read content =
+  (* Parsed once: the claim reader and the statement reader walk the same structure. *)
+  let structure = Parse.implementation (Lexing.from_string content) in
   let lexemes = Prose_lexemes.of_source content in
   let literals =
     List.filter lexemes ~f:(fun (l : Prose_lexemes.t) ->
@@ -542,7 +609,12 @@ let read content =
             Some (l.line, parse_marker l.text)
         | Comment | String_literal -> None)
   in
-  { claim_lines = claim_lines @ code_claim_lines content; pinned = pinned literals; markers }
+  {
+    claim_lines = claim_lines @ code_claim_lines structure;
+    (* A statement ranks above the environment, so one that stands decides alone. *)
+    pinned = Option.value (stated_mode structure) ~default:(pinned literals);
+    markers;
+  }
 
 (* The source's disposition, or why it has none. [None] for a source outside the subject. *)
 let judge reading =
@@ -592,6 +664,20 @@ let cases () =
     (refused "let () = p \"tiled and serial agree BIT-FOR-BIT\" true\n");
   p "case: a pin to another mode is no pin"
     (refused ("let () = Unix.putenv \"OCANNL_CC_BACKEND_FP_CONTRACT\" \"fast\"\n" ^ claim));
+  let stated first second = Printf.sprintf "let () = Utils.state_config %s %s\n" first second in
+  let key = "~key:\"cc_backend_fp_contract\"" in
+  p_all ~min:2 "case: Utils.state_config of off is a pin, its labels in either order"
+    [ stated key "~data:\"off\""; stated "~data:\"off\"" key ]
+    ~f:(fun pin -> match judge_text (pin ^ claim) with Some (Ok Pinned) -> true | _ -> false);
+  p "case: Utils.state_config of fast is no pin" (refused (stated key "~data:\"fast\"" ^ claim));
+  p "case: Utils.state_config of off replaced by fast is no pin"
+    (refused (stated key "~data:\"off\"" ^ stated key "~data:\"fast\"" ^ claim));
+  p "case: Utils.state_config of fast outranks the putenv of off"
+    (refused (pin ^ stated key "~data:\"fast\"" ^ claim));
+  p "case: Utils.unstate_config withdraws the statement of off"
+    (refused
+       (stated key "~data:\"off\"" ^ "let () = Utils.unstate_config \"cc_backend_fp_contract\"\n"
+      ^ claim));
   p "case: a marker of an unknown kind is refused"
     (refused (marker "trust-me" "it is fine" ^ claim));
   p "case: a one-word reason is refused" (refused (marker "gated" "flags" ^ claim));

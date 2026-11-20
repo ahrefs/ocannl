@@ -37,13 +37,12 @@ module Asgns = Ir.Assignments
 module Tn = Ir.Tnode
 open Verdict.Claims
 
-(* The pins, set as the first thing the executable does. [cc_backend_fp_contract=off] is the
-   environment pin [fp_contract_pin_scan] reads. The rest are stated in process, ranked above every
-   source a run is given (a contradicting commandline argument is refused here, naming the key):
-   [fp_contract=false] keeps lowering from writing the serial loop's [acc + a * b] as an explicit
-   FMA, which no compile pin would undo; [tf32_matmuls=false] keeps CUDA's wmma off the f32
-   statement on tf32 hardware. *)
-let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
+(* The pins, stated in process as the first thing the executable does, ranked above every source a
+   run is given (a contradicting commandline argument is refused here, naming the key):
+   [cc_backend_fp_contract=off] is the pin [fp_contract_pin_scan] reads; [fp_contract=false] keeps
+   lowering from writing the serial loop's [acc + a * b] as an explicit FMA, which no compile pin
+   would undo; [tf32_matmuls=false] keeps CUDA's wmma off the f32 statement on tf32 hardware. *)
+let () = Utils.state_config ~key:"cc_backend_fp_contract" ~data:"off"
 let () = Utils.state_config ~key:"fp_contract" ~data:"false"
 let () = Utils.state_config ~key:"cc_vector_bytes" ~data:"0"
 let () = Utils.state_config ~key:"cuda_fast_math" ~data:"false"

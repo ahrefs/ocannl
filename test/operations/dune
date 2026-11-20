@@ -17640,7 +17640,6 @@
   base
   ocannl
   stdio
-  unix
   arrayjit.verdict
   ll_test
   arrayjit.utils

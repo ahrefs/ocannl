@@ -40,6 +40,44 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   itself through the probe `test-run.sh` and `fmt-check.sh` share (gh-ocannl-1576), foreground or
   detached (gh-ocannl-1236; The harness, shells and processes).
 
+- **Adding a repository scan: the touch-list.** A new scan has to be registered in several places.
+  Each one below names the check that refuses the scan when that registration is missing, so run
+  `@test/operations/scans` and read its refusals rather than this list.
+  The list comes from staging#2245 (gh-ocannl-926), which added `sweep_owner_scan`. It took three
+  rounds there because each missing registration showed up only as a red run.
+  - The reader, when it lives in `test/support/` beside the other scan modules, joins the
+    `(modules ...)` list in `test/support/dune` and gets a re-export in `test/support/test_scan.ml`.
+    The compiler refuses a missing one with an unbound module.
+  - The stanzas go where the scan's name sorts in `test/operations/dune`, and the new aliases go
+    in sorted order in each aggregate list they join. `stanza_order` refuses both kinds of
+    misplacement.
+  - Each rule that RUNS the scanner (the `.actual` producer and any `--refusal-control` run) lists
+    `ocannl_config` in its deps (`config_dep_completeness`). It also lists
+    `(alias runtest-env_spelling_gate)` and carries the `; ocannl-backend: none -- <reason>`
+    marker; `env_var_deps` refuses a rule missing either. A `(test)` stanza such as `<name>_cases`
+    needs only the `ocannl_config` dep and the marker. The golden-diff rule beside a producer runs
+    no program and takes none of them. It reaches the gate through the producer's output.
+  - The golden-diff rule of a rule that reads the repository goes on its own
+    `runtest-<name>` alias. A rule reads the repository when it takes a `source_tree` or
+    `glob_files_rec` outside its directory, or a root file. That alias is listed in BOTH the
+    `(name runtest)` and the `(name scans)` aggregates. `env_var_deps` derives the family from
+    what each rule reads, and it refuses a scan that `@scans` does not reach. A hand-written
+    alias that is not a scan, such as a `--refusal-control` diff, is held to the `runtest` list
+    only (gh-ocannl-726). A companion that reads no repository, such as `<name>_cases` or
+    `<name>_refusal_control`, joins `scans` by hand.
+  - The scanner source gets a row in `raw_entries` of `test/support/refusal_control_manifest.ml`.
+    `env_var_deps` holds the manifest's sources equal to the scanner census it derives, and it
+    names a source with no row. The scan's own golden run writes the row ready to paste on
+    stderr (Scan corpora, goldens and floors).
+  - The scanner source and its permanent control goldens go into the deps of the
+    `refusal_control_scan_cases` stanza, and into its argument list, paired. The pairing is the
+    source, then its comma-joined goldens. `refusal_control_scan_cases` refuses a manifest source
+    the stanza lacks, one it adds, and one it names twice. Each refusal the scanner can make has to
+    appear in one of those goldens; otherwise `env_var_deps` reports it as an orphan.
+  - The goldens that list aliases or scanners change: `env_var_deps.expected` gains the new aliases
+    under *Ambient environment gates*, and `refusal_control_scan_cases.expected` gains the
+    scanner's rows. Promote both.
+
 - `markdown_links` (gh-ocannl-2006) joins `@scans`; its closed dialect is documented in
   `Test_scan.Markdown_link_scan`. Relative images must exist, and nonempty fragments on corpus
   Markdown targets must name a supported ATX heading (gh-ocannl-2107). Unsupported heading syntax
@@ -373,6 +411,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   base's tree, so it selects and narrows the same way. A reach the two trees answer differently
   shows as `+` lines, a refusal, and a base red no leg of the scope reaches lets the merge through
   rather than asking for `--override`.
+- **Restoring a file from another revision**: name the revision your branch is built on, and
+  restore the file whole. Inside a worktree, `origin/master` is the shared remote ref, which a
+  sibling's fetch can have moved past your merge base, so `git show origin/master:<file>` can return
+  a newer file than your branch started from. Name the base instead: `git show "$(git merge-base
+  HEAD origin/master)":<file>` (gh-ocannl-1818: a restore of `test/operations/dune` from
+  `origin/master` brought in an unrelated master line, and the merge-build plan called the change
+  CROSS-CUTTING). Bring the file over with `git checkout <rev> -- <path>`, never `git show
+  <rev>:<path> > <path>`: git records the mode, but a redirect that creates the file uses the
+  default mode, so the exec bit is lost (gh-ocannl-2139: a restored `run_cells.sh` lost it, and
+  the execution slot refused to run it until the mode was restored).
 
 ### Scan corpora, goldens and floors
 
@@ -3652,6 +3700,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   fails the run, as a text member does. `codegen_text_scan_cases` pins each route beside its near
   miss, including the negative control: a fixture whose staged callback writes a node by its bare
   label.
+- **Count compiles with `Context.backend_compiles`, not a wrapper around `Context.compile`**
+  (gh-ocannl-1882). A test-local function that shadows or wraps `Context.compile` and forwards
+  `?prelowered` is read as the second route above, so the census lists its file as a prelowered
+  compile site, which it is not. Such a wrapper also misses compiles made outside it, such as those
+  by the `Ll_test` helpers and Metal's link-time device compiles. `Context.backend_compiles ()` is
+  the library's own per-domain counter, and it counts both.
 - **Then the tests that call a backend's compiler themselves** (gh-ocannl-1772): a change to a
   backend's builtins prelude, its compiler flags or how its compiler is resolved breaks them, and
   neither section above lists them. `test_shared_builtins` writes `Builtins_cc.source` and a probe
@@ -4550,6 +4604,11 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   The parse tree is version-stable where the grammar is not: to cover such a construct, parse a
   floor-legal spelling and rewrite the tree (`local_rebinding` in
   `test/operations/provenance_tag_scan_cases.ml`), with the scanner taking a structure.
+- Deleting files under `_build` behind dune's back leaves its database believing the targets still
+  exist, so it does not rebuild them. The next build fails on a missing artifact that it never
+  tried to produce (gh-ocannl-2139: after an `rm -rf` of one `_build` directory, `@check` failed
+  on a missing `.cmi`). Run `dune clean` instead. To force one target to rebuild, change one of
+  its inputs; do not delete its output.
 
 ## What CI actually covers
 
