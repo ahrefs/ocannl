@@ -7,23 +7,27 @@
    -- one kernel through the instrument's own [time_kernel] seam as declined, one as refused, so the
    table holds every kind of row -- and the launch-geometry trace of their compiles
    ([schedule_log_launches], from the command line) beside it. A CPU backend ships a routine as one
-   kernel, hence four routines. - [trace]: the timing trace ([BENCH_TIMING_TRACE=1], from the rule)
-   of a seed-only search of a small matmul, then the end-of-search marker; the summary prints at
-   exit. - [trace-raise]: the same search with one failure injected (gh-ocannl-2246): the first
-   candidate after the baseline to start its timing call's validation raises
-   [Device_memory_exhausted] from its first batch ([Autotune.on_batch_wall], inside the tagged call
-   and past its validation) -- the candidate's classified decline, which the search survives (an
-   expired wait would abandon the device, gh-ocannl-2133). The run prints the injected candidate's
-   label and exception on stdout, [%S]-quoted as the trace quotes them, for the reader to find in
-   the trace's [raised] line. - [trace-cut]: the same search on a scripted clock
-   ([Autotune.on_batch_wall], as [autotune_hopeless_window] drives it, gh-ocannl-2330): the baseline
-   and the floors read 12 ms, and every other attempt 100 ms -- over four times the floor -- until
-   the first window is cut as hopeless, every attempt after it the floor again, so exactly one
-   window is cut. The run prints the cut candidate's label on stdout, [%S]-quoted, read off the
-   exception the raised-call observer is handed. - [trace-stop]: the same search under a budget
-   whose virtual clock ([Autotune.budget_elapsed]) passes it during the first non-floor candidate's
-   timing, so exactly that window is stopped ([Autotune.Timing_stopped]); the run prints its label
-   as [stopped: %S]. - [seeded]: the recipes' untuned compile ([Autotune.seeded_default], what
+   kernel, hence four routines. Its [dominant_kernel] record goes to stdout. The run states
+   [autotune_timing=isolated] itself, as a kprof cell pins it, and restates it [queued] once the
+   last kernel's timing calls return: the record must name the mode those calls were made under, not
+   the configuration it is written under (gh-ocannl-1860). - [trace]: the timing trace
+   ([BENCH_TIMING_TRACE=1], from the rule) of a seed-only search of a small matmul, then the
+   end-of-search marker; the summary prints at exit. - [trace-raise]: the same search with one
+   failure injected (gh-ocannl-2246): the first candidate after the baseline to start its timing
+   call's validation raises [Device_memory_exhausted] from its first batch
+   ([Autotune.on_batch_wall], inside the tagged call and past its validation) -- the candidate's
+   classified decline, which the search survives (an expired wait would abandon the device,
+   gh-ocannl-2133). The run prints the injected candidate's label and exception on stdout,
+   [%S]-quoted as the trace quotes them, for the reader to find in the trace's [raised] line. -
+   [trace-cut]: the same search on a scripted clock ([Autotune.on_batch_wall], as
+   [autotune_hopeless_window] drives it, gh-ocannl-2330): the baseline and the floors read 12 ms,
+   and every other attempt 100 ms -- over four times the floor -- until the first window is cut as
+   hopeless, every attempt after it the floor again, so exactly one window is cut. The run prints
+   the cut candidate's label on stdout, [%S]-quoted, read off the exception the raised-call observer
+   is handed. - [trace-stop]: the same search under a budget whose virtual clock
+   ([Autotune.budget_elapsed]) passes it during the first non-floor candidate's timing, so exactly
+   that window is stopped ([Autotune.Timing_stopped]); the run prints its label as [stopped: %S]. -
+   [seeded]: the recipes' untuned compile ([Autotune.seeded_default], what
    [Autotune.untuned_compile] is with the model pick off) of a 64x64 matmul on the run's own
    backend, under [autotune_log] (from the rule): where the backend seeds its untuned default
    ([Autotune.seeded_default_backend]: CUDA and HIP) the compile goes through
@@ -38,6 +42,7 @@ open Ocannl.Operation.DSL_modules
 module H = Bench_harness
 
 let harness () =
+  Utils.state_config ~key:"autotune_timing" ~data:"isolated";
   let ctx = ref (Context.auto ()) in
   let routines =
     List.init 4 ~f:(fun k ->
@@ -67,10 +72,16 @@ let harness () =
                admitted = 0;
                refused = 4;
              })
-    | _ -> timing ()
+    | i ->
+        let timed = timing () in
+        if i = List.length routines - 1 then
+          Utils.state_config ~key:"autotune_timing" ~data:"queued";
+        timed
   in
-  (* The record is the result line's [dominant_kernel] object; the rows are what is read here. *)
-  ignore (H.dominant_kernel ~calls:4 ~time_kernel ~ctx:!ctx ~bindings:Train.IDX.empty routines)
+  (* The record is the result line's [dominant_kernel] object, printed on stdout for the reader of
+     its timing mode (gh-ocannl-1860); the rows are read off stderr. *)
+  Stdio.print_endline
+    (H.dominant_kernel ~calls:4 ~time_kernel ~ctx:!ctx ~bindings:Train.IDX.empty routines)
 
 (* Installed after the trace, so the trace's own seams run first and count what this injects. *)
 let inject_one_raise () =

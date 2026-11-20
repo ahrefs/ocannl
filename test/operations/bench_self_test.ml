@@ -338,6 +338,16 @@ let () =
         ((match field dk "segment" with Some (`Int i) -> i >= 0 | _ -> false)
          && Option.value_map (number dk "seg_ms") ~default:false ~f:(fun t -> Float.(t > 0.))
         || all_untimed);
+      (* gh-ocannl-1860: the time is the re-timing's, under the configured objective, so its mode is
+         that one -- not the first screen stage's [isolated], which differs from it by default. *)
+      Verdict.p
+        "a timed dominant kernel names the configured objective its re-timing ran under (or every \
+         reading was refused)"
+        (match field dk "segment" with
+        | Some (`Int _) ->
+            Option.equal String.equal (string_field dk "timing")
+              (Some (Autotune.timing_string (Bench_retime.configured_timing ())))
+        | _ -> all_untimed);
       Verdict.p "its verdict is one the report renders, and a number is printed exactly when exact"
         (match (string_field dk "verdict", field dk "pct_of_peak") with
         | Some "exact", Some (`Float _ | `Int _) -> true

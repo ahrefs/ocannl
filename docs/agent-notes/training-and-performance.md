@@ -618,7 +618,11 @@ files.
     estimates in two objectives.
   - `BENCH_KERNEL_TABLE=1` still re-times every kernel on its own (kprof needs them), and the
     two timing modes measure different quantities: never compare a kprof table's dominant kernel
-    with a cell's.
+    with a cell's. The record says which (gh-ocannl-1860): `dominant_kernel.timing` is the mode
+    the timing calls behind `seg_ms` reported -- a kprof cell, pinned `isolated`, reads
+    `isolated` -- and `orchestrate.py` refuses a column or ceiling mixing modes, through
+    `bench_output.dominant_kernel_timing`, the field's one reader. Rows from before the field read
+    `not recorded`: alone they render, beside a recorded mode they are refused.
 - **What separates an isolated time from the in-step one on rog, and what does not**
   (gh-ocannl-1391). Not the buffers: the isolated compile is a child of the step's context and
   links against the step's own buffers (a probe of every kernel of gpt2_mini_train_b256 found

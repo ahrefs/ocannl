@@ -34,6 +34,7 @@ root = Path(sys.argv[1]).resolve()
 bench = root / "benchmarks"
 sys.path.insert(0, str(bench))
 import bench_output  # noqa: E402
+import strict_json  # noqa: E402
 
 
 def check(condition, detail):
@@ -162,6 +163,14 @@ with tempfile.TemporaryDirectory() as scratch:
                             if not line.startswith("bench: per-kernel table (")))
     claim("an .err with the legend removed states no timing", kattr.table_timing(base) is None)
 exercised.add("kernel_table_legend")
+# The dominant-kernel record the same run printed names the mode its time was measured under, as the
+# timing calls behind it report it (gh-ocannl-1860): the run's pinned `isolated`, which is not the
+# default -- and the run restates `queued` once the last kernel's calls return, so a mode re-read
+# from the configuration when the record is written would read `queued` here.
+record = {"dominant_kernel": strict_json.loads(captured("harness", "out").strip().splitlines()[-1])}
+claim("the dominant-kernel record names the timing mode the table's legend states",
+      bench_output.dominant_kernel_timing(record) == bench_output.kernel_table_timing(err)
+      == "isolated", repr(record["dominant_kernel"].get("timing")))
 
 # ---------------------------------------------------------------------------------------------
 print("== the launch-geometry trace (schedule_log_launches)")

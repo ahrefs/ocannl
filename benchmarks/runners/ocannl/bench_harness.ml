@@ -1263,8 +1263,9 @@ let kernel_timing_legend ~calls =
     {!Autotune.time_routine} calls under the configured [autotune_timing] (queued by default: a
     calibrated batch of launches per synchronization, so the reading is a per-launch time with the
     submit/sync round trip amortized, the quantity a search ranks candidates by), summarized as
-    their median and range ({!Bench_retime.spread}) -- in the context that compile returned, and
-    that context is released afterwards (it is a leaf: nothing is compiled from it). [bind] sets the
+    their median and range ({!Bench_retime.spread}), beside the mode those calls were made under as
+    the re-timing returns it (gh-ocannl-1860) -- in the context that compile returned, and that
+    context is released afterwards (it is a leaf: nothing is compiled from it). [bind] sets the
     routine's static indices before it runs; the timing calls then measure it at
     {!Autotune.set_test_bindings}' representative values, as the tuner does, and restore [bind]'s.
     Until gh-ocannl-1694 this was one min-of-20 of synchronized launches, a single minimum whose
@@ -1296,11 +1297,12 @@ let time_hermetic ?calls ~bind compile =
         ~finally:(fun () -> Context.release ctx)
         ~f:(fun () ->
           run_once ();
-          let _timing, readings =
+          let timing, readings =
             Bench_retime.retime ~calls:(kernel_calls calls) [ (ctx, routine) ]
           in
           let spread = Bench_retime.spread_of (List.hd_exn readings) in
-          if spread.Bench_retime.admitted = 0 then Error (Untimed spread) else Ok (spread, routine)))
+          if spread.Bench_retime.admitted = 0 then Error (Untimed spread)
+          else Ok (timing, spread, routine)))
 
 (** A per-kernel row's time: the median, then {!Bench_retime.bounds_fields}' range and admission
     count, the spelling every runner's re-timed line uses ([ms_lo=.. ms_hi=.. ms_retimed=a/c]). *)
@@ -1356,7 +1358,7 @@ let time_segments ?promote_locals ?calls ~backend ~limits ~static_indices ~ctx ~
           Int.incr declined;
           Stdio.printf "  seg%-3d %s %s (%s)  w:%s\n" i kind_s (hermetic_failure_label failure)
             (hermetic_failure_detail failure) ws
-      | Ok (spread, routine) ->
+      | Ok (_timing, spread, routine) ->
           total := !total +. spread.Bench_retime.ms;
           censuses := routine.Context.mma :: !censuses;
           (* The volatility census beside the tensorization one (gh-ocannl-782/820): on Metal the
@@ -1520,7 +1522,8 @@ let print_shipped_census ?(out = Stdio.stdout) routines =
     timed before it said so, fewer than the census. [time_kernel ~i timing] runs kernel [i]'s
     compile-and-time [timing] (default: just runs it) -- the seam a test stands a slow kernel in.
     [calls] is {!time_hermetic}'s. [hermetic ~i ~bind compile] compiles and times kernel [i]
-    (default {!time_hermetic}); {!dominant_kernel}'s screen stands its one-reading timing in it. *)
+    (default {!time_hermetic}), returning the mode its time was measured under beside the time;
+    {!dominant_kernel}'s screen stands its one-reading timing in it. *)
 let time_shipped_kernels ?out ?calls ?(stop = fun () -> false)
     ?(time_kernel = fun ~i:_ timing -> timing ()) ?hermetic ~ctx ~bindings routines =
   let calls = kernel_calls calls in
@@ -1555,7 +1558,7 @@ let time_shipped_kernels ?out ?calls ?(stop = fun () -> false)
             Stdio.Out_channel.fprintf out "bench: kernel %d/%d %s %s (%s) w: %s\n" i n
               (segment_geometry seg) (hermetic_failure_label failure)
               (hermetic_failure_detail failure) ws
-        | Ok (spread, routine) ->
+        | Ok (_timing, spread, routine) ->
             Stdio.Out_channel.fprintf out "bench: kernel %d/%d %s %s %s mma:%s vol:%s w: %s\n" i n
               (kernel_time_fields spread) (segment_geometry seg) (segment_io seg)
               (Ir.C_syntax.mma_summary_string routine.Context.mma)
@@ -1574,7 +1577,7 @@ let time_shipped_segments ?(out = Stdio.stdout) ?calls ~ctx ~bindings routines =
     (kernel_timing_legend ~calls);
   let outcomes =
     time_shipped_kernels ~out ~calls ~ctx ~bindings routines
-    |> List.map ~f:(fun (_, _, result) -> Result.map result ~f:fst)
+    |> List.map ~f:(fun (_, _, result) -> Result.map result ~f:(fun (_, spread, _) -> spread))
   in
   let timed = List.filter_map outcomes ~f:Result.ok in
   Stdio.Out_channel.fprintf out
@@ -1605,7 +1608,7 @@ let label_writes = 3
     the traffic the bandwidth ceiling it is scored against moves -- the same count as the kernel
     table's [io:] field. *)
 let dominant_kernel_record ~segment ~segments ~declined ~seg_ms ?(seg_ms_lo = Float.nan)
-    ?(seg_ms_hi = Float.nan) ~segments_ms ~tensorization seg =
+    ?(seg_ms_hi = Float.nan) ~timing ~segments_ms ~tensorization seg =
   let module CM = Ir.Cost_model in
   let s = CM.analyze seg.Ir.Low_level.llc in
   let g = global_counts seg s in
@@ -1625,6 +1628,7 @@ let dominant_kernel_record ~segment ~segments ~declined ~seg_ms ?(seg_ms_lo = Fl
       seg_ms;
       seg_ms_lo;
       seg_ms_hi;
+      timing = Autotune.timing_string timing;
       segments_ms;
       tensorization;
       flops = s.CM.flops;
@@ -1756,7 +1760,7 @@ let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing (
         List.iter dropped ~f:(fun (j, kctx, _, _) ->
             Context.release kctx;
             held := List.filter !held ~f:(fun (k, _, _, _) -> k <> j));
-        Ok (Bench_retime.spread_of [| reading |], routine))
+        Ok (Bench_retime.screen_timing, Bench_retime.spread_of [| reading |], routine))
   in
   let table = kernel_table_enabled () in
   if table then
@@ -1805,13 +1809,15 @@ let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing (
       if over_budget () then raise Instrument_over_budget;
       let candidates = List.map kept ~f:fst in
       retiming := Some (`Retime (List.length candidates));
-      let _timing, readings =
+      let retimed_under, readings =
         if List.is_empty candidates then (timing, [])
         else Bench_retime.retime ~calls (List.map candidates ~f:(fun (_, kctx, r, _) -> (kctx, r)))
       in
-      let retimed = List.map2_exn candidates readings ~f:(fun (i, _, _, _) rs -> (i, rs)) in
+      let retimed =
+        List.map2_exn candidates readings ~f:(fun (i, _, _, _) rs -> (i, (retimed_under, rs)))
+      in
       ( rows,
-        `Screened (screen_s, rescreen_s, elapsed_s () -. screen_s -. rescreen_s),
+        `Screened (screen_s, rescreen_s, elapsed_s () -. screen_s -. rescreen_s, timing),
         rescreened,
         retimed )
   in
@@ -1828,50 +1834,58 @@ let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing (
   | Error exn -> no_kernel ("instrument failed: " ^ Exn.to_string exn)
   | Ok (rows, _, _, _) when List.length rows < n -> no_kernel (over_budget_note ())
   | Ok (rows, how, rescreened, retimed) -> (
-      (* Every kernel with a time: [(i, seg, spread, mma, how)], [how] [`Alone] with the table on
-         (each kernel re-timed in a session of its own), [`Candidate readings] for a candidate (its
-         readings in the shared re-timing), [`Screen] for a kernel that kept a screen reading: its
-         second-stage one when the first stage kept it, else its first-stage (isolated) one. A
-         candidate none of whose re-timed readings was admitted has no time. *)
+      (* Every kernel with a time: [(i, seg, spread, mma, how)], [how] [`Alone timing] with the
+         table on (each kernel re-timed in a session of its own), [`Candidate (timing, readings)]
+         for a candidate (its readings in the shared re-timing), [`Screen timing] for a kernel that
+         kept a screen reading: its second-stage one when the first stage kept it, else its
+         first-stage (isolated) one. [timing] is the mode the timing calls behind [spread] were made
+         under, as the call that made them returns it (gh-ocannl-1860). A candidate none of whose
+         re-timed readings was admitted has no time. *)
       let timed =
         List.filter_map rows ~f:(fun (i, seg, result) ->
             Result.ok result
-            |> Option.bind ~f:(fun (spread, routine) ->
+            |> Option.bind ~f:(fun (hermetic_timing, spread, routine) ->
                 let mma = routine.Context.mma in
                 match how with
-                | `Retimed_all -> Some (i, seg, spread, mma, `Alone)
-                | `Screened _ -> (
+                | `Retimed_all -> Some (i, seg, spread, mma, `Alone hermetic_timing)
+                | `Screened (_, _, _, rescreen_timing) -> (
                     match List.Assoc.find retimed i ~equal:Int.equal with
                     | None -> (
                         match List.Assoc.find rescreened i ~equal:Int.equal with
                         | Some (_, (Some _ as queued)) ->
-                            Some (i, seg, Bench_retime.spread_of [| queued |], mma, `Screen)
-                        | Some (_, None) | None -> Some (i, seg, spread, mma, `Screen))
-                    | Some rs ->
+                            Some
+                              ( i,
+                                seg,
+                                Bench_retime.spread_of [| queued |],
+                                mma,
+                                `Screen rescreen_timing )
+                        | Some (_, None) | None ->
+                            Some (i, seg, spread, mma, `Screen hermetic_timing))
+                    | Some (retimed_under, rs) ->
                         let s = Bench_retime.spread_of rs in
                         if s.Bench_retime.admitted = 0 then None
-                        else Some (i, seg, s, mma, `Candidate rs))))
+                        else Some (i, seg, s, mma, `Candidate (retimed_under, rs)))))
       in
       let median (_, _, s, _, _) = s.Bench_retime.ms in
       let by_median a b = Float.compare (median a) (median b) in
       let deciding =
         List.filter timed ~f:(fun (_, _, _, _, how) ->
-            match how with `Alone | `Candidate _ -> true | `Screen -> false)
+            match how with `Alone _ | `Candidate _ -> true | `Screen _ -> false)
       in
       (* The one selection both the closing line and the record name, ties to the earlier kernel. *)
       let dominant = List.max_elt deciding ~compare:by_median in
       (match how with
       | `Retimed_all -> ()
-      | `Screened (screen_s, rescreen_s, retime_s) ->
+      | `Screened (screen_s, rescreen_s, retime_s, rescreen_timing) ->
           let runner_up =
             match dominant with
-            | Some (i, _, _, _, `Candidate num) -> (
+            | Some (i, _, _, _, `Candidate (_, num)) -> (
                 match
                   List.max_elt
                     (List.filter deciding ~f:(fun (j, _, _, _, _) -> j <> i))
                     ~compare:by_median
                 with
-                | Some (j, _, _, _, `Candidate den) ->
+                | Some (j, _, _, _, `Candidate (_, den)) ->
                     Printf.sprintf "; k%d over k%d: %s" i j
                       (Bench_retime.ratio_fields ~name:"ratio"
                          (Bench_retime.paired_ratio ~num ~den))
@@ -1903,7 +1917,7 @@ let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing (
             n
             (Autotune.timing_string Bench_retime.screen_timing)
             screen_s !refused_screen (List.length rescreened) Bench_retime.screen_wide_at_most
-            (Autotune.timing_string (Bench_retime.configured_timing ()))
+            (Autotune.timing_string rescreen_timing)
             rescreen_s !refused_rescreen (List.length retimed) Bench_retime.screen_ratio
             Bench_retime.screen_at_most calls retime_s isolated_rank runner_up);
       match dominant with
@@ -1927,13 +1941,14 @@ let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing (
                "none of the %d kernels was timed on its own: %d declined to compile alone, %d had \
                 no timing call admitted"
                n (n - untimed) untimed)
-      | Some (i, seg, spread, mma, _) ->
+      | Some (i, seg, spread, mma, how) ->
           let segments_ms = List.sum (module Float) timed ~f:median in
           let tensorization = Ir.C_syntax.tensorization_name mma.Ir.C_syntax.tensorization in
+          let timing = match how with `Alone t | `Candidate (t, _) | `Screen t -> t in
           let kernel, s =
             dominant_kernel_record ~segment:i ~segments:n
               ~declined:(n - List.length timed)
-              ~seg_ms:spread.Bench_retime.ms ~seg_ms_lo:spread.lo_ms ~seg_ms_hi:spread.hi_ms
+              ~seg_ms:spread.Bench_retime.ms ~seg_ms_lo:spread.lo_ms ~seg_ms_hi:spread.hi_ms ~timing
               ~segments_ms ~tensorization seg
           in
           let ceiling =

@@ -2410,10 +2410,12 @@ DOMINANT_KERNEL_MARK = {
 def dominant_kernel_cell(result):
     """The %-of-peak column's cell for one row.
 
-    `41.3% f32 memory · k3/12 0.412 ms w1.grad`: the attainment, the ceiling it was scored against
-    and the roofline leg that binds, then which kernel it is -- its launch position among the
-    kernels the cell shipped, its own measured time (the median of its timing calls; the result
-    line carries their range beside it, gh-ocannl-1694) and the nodes it writes. The number is printed
+    `41.3% f32 memory · k3/12 0.412 ms (queued) w1.grad`: the attainment, the ceiling it was
+    scored against and the roofline leg that binds, then which kernel it is -- its launch position
+    among the kernels the cell shipped, its own measured time (the median of its timing calls; the
+    result line carries their range beside it, gh-ocannl-1694) with the `autotune_timing` mode it
+    was measured under (`bench_output.dominant_kernel_timing`, gh-ocannl-1860; `not recorded` on a
+    line from before the field) and the nodes it writes. The number is printed
     only for an `exact` verdict; every other verdict prints its mark in its place, keeping the
     kernel's identity beside it so a reader can still see which kernel dominated. A cell whose
     runner did not run the instrument -- every Python row, and an OCANNL row under
@@ -2429,7 +2431,8 @@ def dominant_kernel_cell(result):
         head = DOMINANT_KERNEL_MARK.get(verdict, f"**UNKNOWN VERDICT {verdict}**")
     if k.get("segment") is None:
         return head
-    where = f"k{k['segment']}/{k['segments']} {num(k.get('seg_ms'), '.3f')} ms"
+    timing = bench_output.dominant_kernel_timing(result)
+    where = f"k{k['segment']}/{k['segments']} {num(k.get('seg_ms'), '.3f')} ms ({timing})"
     if k.get("writes"):
         where += f" {k['writes']}"
     if k.get("declined"):
@@ -2437,10 +2440,49 @@ def dominant_kernel_cell(result):
     return f"{head} \u00b7 {where}"
 
 
+def dominant_kernel_timing(rows):
+    """The one `autotune_timing` mode the dominant-kernel times of this section's rows were measured
+    under (`bench_output.dominant_kernel_timing`), or None when no row has such a time.
+
+    One column holds one quantity (gh-ocannl-1860), so rows whose modes differ are refused with a
+    ValueError naming each mode and its rows, rather than rendered: an `isolated` time carries a
+    launch-and-sync round trip a `queued` one amortizes, enough on HIP to name a different
+    dominant kernel (k248 isolated against k198 queued, gh-ocannl-1763), and nothing in a mixed
+    column would tell a reader which number is which. A row from before the field is `not
+    recorded`, a reading like any other, as `recorded_ambient_env` treats an unstamped row: a
+    report of such rows alone renders, each cell saying so, but paired with a recorded mode it is
+    refused, since either mode could be behind it. Rendering the rows separately is the remedy.
+    """
+    by_mode = {}
+    for r in rows:
+        mode = bench_output.dominant_kernel_timing(r)
+        if mode is not None:
+            by_mode.setdefault(mode, []).append(r)
+    if len(by_mode) > 1:
+        raise ValueError(
+            "cannot put dominant-kernel times measured under different autotune_timing modes in "
+            "one column (gh-ocannl-1860): "
+            + "; ".join(
+                f"`{mode}`: "
+                + ", ".join(
+                    f"{r.get('framework')}/{r.get('backend')}/{rendered_variant(r)}/"
+                    f"{r.get('precision', 'f32')}"
+                    for r in rs
+                )
+                for mode, rs in sorted(by_mode.items())
+            )
+            + " -- render the rows separately"
+        )
+    return next(iter(by_mode), None)
+
+
 def dominant_kernel_ceilings(rows):
     """The distinct ceilings this section's rows were scored against, first-seen, as the legend's
     `(tag, source, FLOP/s, bytes/s)` entries -- so the header names every ceiling a number in the
-    column is a percentage OF, with the constants and whose they are."""
+    column is a percentage OF, with the constants and whose they are. Refused, as
+    `dominant_kernel_timing` refuses it, when the rows' times were measured under different
+    modes: a ceiling shared by percentages of different quantities compares them."""
+    dominant_kernel_timing(rows)
     seen = []
     for r in rows:
         k = r.get("dominant_kernel") or {}
@@ -2855,6 +2897,7 @@ def report(
         with_dominant_kernel = any(r.get("dominant_kernel") for r in rows)
         if with_dominant_kernel:
             ceilings = dominant_kernel_ceilings(rows)
+            column_timing = dominant_kernel_timing(rows)
             lines.append(
                 "`kernel %peak` is the attainment of the cell's DOMINANT KERNEL (gh-ocannl-1006): "
                 "of the kernels the cell shipped -- a tuned cell's searched winner included -- the "
@@ -2867,8 +2910,15 @@ def report(
                 "by default -- whose range rides on the "
                 "result line as `seg_ms_lo`/`seg_ms_hi`, gh-ocannl-1694; chosen by measured time, "
                 "not by the cost model's own bound, which the column exists partly to check). "
-                "`kN/M` is its launch position among M kernels, then its median time and the nodes "
-                "it writes. The "
+                "`kN/M` is its launch position among M kernels, then its median time, the "
+                "`autotune_timing` mode it was measured under in parentheses (gh-ocannl-1860; "
+                + (
+                    f"`{column_timing}` for every row of this section, since a column mixing modes "
+                    "is refused"
+                    if column_timing is not None
+                    else "no row of this section has a time"
+                )
+                + ") and the nodes it writes. The "
                 "number is its roofline lower bound over that time -- max(ops / peak FLOP/s, "
                 "bytes / peak bandwidth) on the cost model's counts -- and `compute` / `memory` "
                 "names the leg that binds. Ceilings, matched to the kernel's precision and mma "
