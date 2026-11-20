@@ -5,7 +5,8 @@ One invocation measures one box's GPU column across three frameworks, with an an
 August `7014dc44` by default, `--anchor-commit` for another) re-measured beside today's master in
 the same window:
 
-- OCANNL tuned at the checkout this file lives in (`master`), under the exact regime and under
+- OCANNL tuned at the checkout this file lives in (`master`; `BENCH_OCANNL_TREE` names another, so
+  today's harness measures a release tag built in a second worktree, gh-ocannl-2008), under the exact regime and under
   `--ocannl_profile=approximate`, and OCANNL tuned exact at the anchor commit (`--aug`, a second
   checkout whose `bench_gpt.exe` is run unchanged: history is selected by executable path, never
   patched). The arm keeps its name, `ocannl-aug-exact`, whichever commit anchors it. Tuned cells keep orchestrate's two-pass protocol: a search process, then a fresh
@@ -74,6 +75,9 @@ def parse_args(argv=None):
                     help="checkout of the anchor commit with its bench_gpt.exe built")
     ap.add_argument("--anchor-commit", default=AUGUST, metavar="SHA",
                     help="the commit --aug must be at (a prefix of it; default the August 7014dc44)")
+    ap.add_argument("--master-commit", metavar="SHA",
+                    help="the commit the master tree (BENCH_OCANNL_TREE, else this checkout) must "
+                    "be at (a prefix of it); unchecked when omitted")
     ap.add_argument("--no-anchor", metavar="REASON",
                     help="run without the anchor arm, recording why (it did not build, say)")
     ap.add_argument("--out", type=Path, required=True)
@@ -98,6 +102,9 @@ def parse_args(argv=None):
             ap.error("--backend and --box are required to measure")
         if len(a.anchor_commit) < 8 or any(c not in "0123456789abcdef" for c in a.anchor_commit):
             ap.error("--anchor-commit takes a lowercase hex commit prefix of at least 8 digits")
+        if a.master_commit is not None and (
+                len(a.master_commit) < 8 or any(c not in "0123456789abcdef" for c in a.master_commit)):
+            ap.error("--master-commit takes a lowercase hex commit prefix of at least 8 digits")
         if "ocannl-aug-exact" in a.arms and not (a.aug or a.no_anchor):
             ap.error("the anchor arm needs --aug, or --no-anchor with the reason")
     return a
@@ -180,7 +187,11 @@ def environment(a, fixtures):
         "venv_python": str(o.VENV_PY),
         "versions": versions,
         "driver_sha256": raw_sha256(driver),
-        "master_tree": str(HERE.parent),
+        "master_tree": str(o.ROOT),
+        # The harness that gated the rows: this file's checkout, which differs from the master
+        # tree when BENCH_OCANNL_TREE names another. Its revision and whether tracked files differ
+        # from it are `driver_sha` and `driver_tracked_changes` below.
+        "driver_tree": str(HERE.parent),
         "aug_tree": str(a.aug) if a.aug else None,
         "anchor_commit": a.anchor_commit,
         "no_anchor": a.no_anchor,
@@ -237,10 +248,13 @@ def measure(a):
     # refused run leaves nothing to clear before the next attempt.
     box_gate.require("gh1181_cells.py", a, HERE / "fixtures", a.workloads,
                      run=lambda cmd: o.run_supporting(cmd).returncode)
-    out.mkdir(parents=True, exist_ok=False)
-    master = HERE.parent
+    # The trees are pinned before --out is made too, so a wrong commit leaves nothing to clear.
+    master = o.ROOT
     trees = {"master": master}
     shas = {"master": git_sha(master)}
+    if a.master_commit and not shas["master"].startswith(a.master_commit):
+        raise SystemExit(f"the master tree {master} is at {shas['master']}, not --master-commit "
+                         f"{a.master_commit}")
     arms = list(a.arms)
     if "ocannl-aug-exact" in arms:
         if a.no_anchor:
@@ -252,6 +266,7 @@ def measure(a):
             shas["aug"] = git_sha(trees["aug"])
             if not shas["aug"].startswith(a.anchor_commit):
                 raise SystemExit(f"--aug is at {shas['aug']}, not the anchor commit {a.anchor_commit}")
+    out.mkdir(parents=True, exist_ok=False)
 
     # A row is stamped with its tree's HEAD, so that HEAD must be what runs: a tree with tracked
     # modifications is refused, and the runner of every tree an arm uses is built from it here,
@@ -286,6 +301,9 @@ def measure(a):
 
     env_record = environment(a, fixtures)
     env_record["shas"] = shas
+    env_record["driver_sha"] = git_sha(HERE.parent)
+    env_record["driver_tracked_changes"] = bool(supporting_output(
+        ["git", "-C", str(HERE.parent), "status", "--porcelain", "--untracked-files=no"]).strip())
     env_record["executables"] = executables
     env_record["arms_run"] = arms
     (out / "env.json").write_text(json.dumps(env_record, indent=2) + "\n")
@@ -363,6 +381,10 @@ def measure(a):
                 cache.mkdir(parents=True, exist_ok=False)
                 if framework == "ocannl":
                     root = trees[tree]
+                    # The master arm runs where this harness lives, so the `ocannl_config` it reads
+                    # is the driver's whichever tree BENCH_OCANNL_TREE names; the anchor arm keeps
+                    # its own checkout's, as it always has.
+                    cell_dir = HERE if tree == "master" else root / "benchmarks"
                     env = o.cell_env(base, fx, variant, "f32")
                     reuse = a.search_once and repeat > 0
                     tuned_cache = (out / "caches" / workload / "r0" / arm) if a.search_once else cache
@@ -377,7 +399,7 @@ def measure(a):
                         # The search this replay's cache came from, already gated in repeat 0.
                         search = searched_once.get((workload, arm))
                     else:
-                        search = run(workload, arm, repeat, "search", cmd, env, root / "benchmarks",
+                        search = run(workload, arm, repeat, "search", cmd, env, cell_dir,
                                      regime)
                         if search is not None:
                             rows.append(search)
@@ -395,7 +417,7 @@ def measure(a):
                     # is the arm's timing row (and fails the provenance gate if it searched).
                     for attempt in range(COMPLETION_PASSES + 1):
                         stage = "replay" if attempt == 0 else f"replay{attempt + 1}"
-                        replay = run(workload, arm, repeat, stage, cmd, env, root / "benchmarks",
+                        replay = run(workload, arm, repeat, stage, cmd, env, cell_dir,
                                      regime)
                         if (replay is None or o.search_provenance(replay) != "SEARCHED"
                                 or attempt == COMPLETION_PASSES):

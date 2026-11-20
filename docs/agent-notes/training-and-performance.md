@@ -1022,6 +1022,18 @@ files.
   identities out of the fp16 constant guard's scope); the runner-side workaround they replaced —
   pinning the softmax at f32 and materializing the masked scores — is gone, so do not
   reintroduce a pin for a constant the library now keeps representable.
+- To measure a past revision (a release tag) with today's gates, build it in a second worktree and
+  name it in `BENCH_OCANNL_TREE` for `orchestrate.py` or `gh1181_cells.py` (gh-ocannl-2008). The
+  runners, the configuration reference and the stamped HEAD are that tree's; the fixtures, venv,
+  gates and the cells' `ocannl_config` stay the driver's. Pin it with `--master-commit`, and keep a
+  same-window anchor (`--aug`, or a second sweep with the anchor's tree named): across a box-stack
+  change, such as the 2026-11-06 kernel and driver move, nothing else compares. Two costs to plan
+  windows around:
+  - The per-kernel table (`BENCH_KERNEL_TABLE=1`) is the measured tree's own instrument. At the
+    1.2 tag it made each OCANNL ResNet cell 8-25x longer than at `1fc57811`. A minix window took
+    about 3.7 h for the tagline plus ResNet.
+  - Metal's tuned batch-64 `cifar_resnet` searches need about 3,200 s exact and more than the
+    3,600 s cap approximate. The approximate cell has been missing in both recorded windows.
 - Before comparing two vector renderings, check that neither is measuring its SCALAR PEEL
   (gh-ocannl-575; the peel is gone since gh-ocannl-620 — the remainder is a vector tile now — but the
   reading trap stands). `try_register_tile` covered `n - (n mod bw)` columns and peeled the rest to scalar

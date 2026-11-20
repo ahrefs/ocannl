@@ -18,6 +18,10 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
+# The suite is about this checkout: a measured-tree override exported in the launching shell would
+# rebind orchestrate's ROOT at import (OcannlTreeTest sets it only in the probes it starts).
+os.environ.pop("BENCH_OCANNL_TREE", None)
+
 import bench_output
 import bench_venv
 import box_gate
@@ -7802,6 +7806,131 @@ class ResultsDirTest(unittest.TestCase):
         for name in ("partial.jsonl", "partial-failures.jsonl"):
             self.assertIn(f'RESULTS_DIR / "{name}"', main)
         self.assertIn("report(results, RESULTS_DIR,", main)
+
+
+class OcannlTreeTest(unittest.TestCase):
+    """`BENCH_OCANNL_TREE`: the checkout whose runners a sweep measures (gh-ocannl-2008).
+
+    A release tag is measured by today's harness: the tag's runners, configuration reference and
+    HEAD; this checkout's gates, fixtures and venv.
+    """
+
+    @staticmethod
+    def git(cwd, *args):
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+        subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True)
+
+    @classmethod
+    def checkout(cls, parent, name="tree", init=True):
+        """An OCANNL-shaped directory, the root of a git repository of its own when `init`."""
+        tree = Path(parent) / name
+        (tree / "benchmarks" / "runners" / "ocannl").mkdir(parents=True)
+        (tree / "ocannl_config.reference").write_text("#log_level=1\n")
+        if init:
+            cls.git(tree, "init", "-q")
+        return tree.resolve()
+
+    def test_unset_or_empty_is_the_orchestrators_own_checkout(self):
+        for env in ({}, {"BENCH_OCANNL_TREE": ""}):
+            with self.subTest(env=env):
+                self.assertEqual(orchestrate.ocannl_tree(env), HERE.parent)
+
+    def test_a_named_checkout_is_resolved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = self.checkout(tmp)
+            self.assertEqual(orchestrate.ocannl_tree({"BENCH_OCANNL_TREE": str(tree)}), tree)
+
+    def test_a_directory_that_is_no_checkout_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bare = Path(tmp) / "bare"
+            bare.mkdir()
+            half = Path(tmp) / "half"
+            half.mkdir()
+            (half / "ocannl_config.reference").write_text("")
+            for value in (str(bare), str(half), str(Path(tmp) / "absent")):
+                with self.subTest(value=value):
+                    with self.assertRaises(SystemExit) as raised:
+                        orchestrate.ocannl_tree({"BENCH_OCANNL_TREE": value})
+                    self.assertIn("is not an OCANNL checkout", str(raised.exception))
+
+    def test_a_source_copy_that_is_not_its_own_git_root_is_refused(self):
+        # Inside another repository git would name the enclosing worktree, whose HEAD is not the
+        # revision that runs; outside any repository there is no HEAD at all.
+        with tempfile.TemporaryDirectory() as tmp:
+            outer = Path(tmp) / "outer"
+            outer.mkdir()
+            self.git(outer, "init", "-q")
+            nested = self.checkout(outer, "copy", init=False)
+            loose = self.checkout(tmp, "loose", init=False)
+            for tree in (nested, loose):
+                with self.subTest(tree=tree):
+                    with self.assertRaises(SystemExit) as raised:
+                        orchestrate.ocannl_tree({"BENCH_OCANNL_TREE": str(tree)})
+                    self.assertIn("is not the root of a git worktree", str(raised.exception))
+
+    def test_the_module_reads_the_variable_at_import(self):
+        # Observed in a fresh interpreter: the runners, the configuration reference and the tree
+        # main builds in and stamps are all the named checkout's.
+        probe = ("import orchestrate as o; print(o.ROOT); print(o.CONFIG_REFERENCE); "
+                 "print(o.ocannl_exe('gpt'))")
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = self.checkout(tmp)
+            for value, want in ((str(tree), tree), (None, HERE.parent)):
+                env = {k: v for k, v in os.environ.items() if k != "BENCH_OCANNL_TREE"}
+                if value is not None:
+                    env["BENCH_OCANNL_TREE"] = value
+                with self.subTest(value=value):
+                    out = subprocess.run(
+                        [sys.executable, "-c", probe],
+                        cwd=HERE, env=env, capture_output=True, text=True, check=True,
+                    ).stdout.splitlines()
+                    self.assertEqual([Path(line) for line in out], [
+                        want, want / "ocannl_config.reference",
+                        want / "_build/default/benchmarks/runners/ocannl/bench_gpt.exe"])
+
+    def test_main_builds_stamps_and_reports_from_the_measured_tree(self):
+        source = Path(orchestrate.__file__).read_text()
+        main = source[source.index("\ndef main():") :]
+        self.assertIn('run_supporting(["dune", "build", "--root", ".", *targets], cwd=ROOT, '
+                      "check=True)", main)
+        self.assertIn("source = source_identity(ROOT)", main)
+        self.assertIn("harness commit: ", source)
+        self.assertIn("', modified' if harness_dirty", source)
+
+    def test_gh1181_takes_its_master_tree_from_the_same_variable(self):
+        import gh1181_cells
+
+        source = Path(gh1181_cells.__file__).read_text()
+        measure = source[source.index("\ndef measure(a):") :]
+        self.assertIn("master = o.ROOT", measure)
+        self.assertNotIn("HERE.parent\n    trees", measure)
+        # The master arm's cells run in this harness's directory (its `ocannl_config`), and a
+        # wrong pin is refused before --out exists, so a retry needs nothing cleared.
+        self.assertIn('cell_dir = HERE if tree == "master" else root / "benchmarks"', measure)
+        self.assertNotIn('env, root / "benchmarks"', measure)
+        base = ["--backend", "cuda", "--box", "rog-nv", "--out", "x", "--no-anchor", "why"]
+        # A wrong pin is refused before --out exists, so a retry has nothing to clear: observed
+        # by running measure up to the refusal, the box gate and git stood in for.
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            args = gh1181_cells.parse_args(["--backend", "cuda", "--box", "rog-nv", "--out",
+                                            str(out), "--no-anchor", "why", "--master-commit",
+                                            "c3e5975aa"])
+            with unittest.mock.patch.dict(os.environ), \
+                    unittest.mock.patch.object(orchestrate, "install_termination_handler"), \
+                    unittest.mock.patch.object(gh1181_cells.box_gate, "require"), \
+                    unittest.mock.patch.object(gh1181_cells, "git_sha",
+                                               return_value="1fc57811" + "0" * 32):
+                with self.assertRaises(SystemExit) as raised:
+                    gh1181_cells.measure(args)
+            self.assertIn("not --master-commit c3e5975aa", str(raised.exception))
+            self.assertFalse(out.exists())
+        self.assertEqual(gh1181_cells.parse_args(base + ["--master-commit", "c3e5975aa"])
+                         .master_commit, "c3e5975aa")
+        for bad in ("c3e5", "C3E5975AA", "c3e5975ag"):
+            with self.subTest(bad=bad):
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    gh1181_cells.parse_args(base + ["--master-commit", bad])
 
 
 class SkipCellTest(unittest.TestCase):

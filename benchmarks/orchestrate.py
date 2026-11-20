@@ -45,7 +45,54 @@ import cell_group
 from display_safe import display_value, log_line, log_lines, table_lines
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent
+
+
+def ocannl_tree(env):
+    """The OCANNL checkout whose runners the OCANNL cells build and execute.
+
+    BENCH_OCANNL_TREE names it; unset or empty, it is the checkout this file lives in. The override
+    lets this harness measure another revision without patching it -- a release tag built in a
+    second worktree, measured by today's gates (gh-ocannl-2008). Everything the measured revision
+    owns is read from it: its runner executables, its `ocannl_config.reference` (the keys and
+    profile payloads its own flags accept), its HEAD in the report header and in every failure
+    record's `source_revision`. The harness, the fixtures and DIGESTS.txt, the venv and the cells'
+    working directory stay this checkout's. A value that is not an OCANNL checkout is refused at
+    import rather than resolved to runners that do not exist, and so is one that is not the root
+    of its own git worktree: a source copy inside another checkout would have that checkout's HEAD
+    stamped on rows it did not produce.
+    """
+    value = env.get("BENCH_OCANNL_TREE")
+    if not value:
+        return HERE.parent
+    tree = Path(value).resolve()
+    if not (tree / "ocannl_config.reference").is_file() or not (
+        tree / "benchmarks" / "runners" / "ocannl"
+    ).is_dir():
+        raise SystemExit(
+            f"BENCH_OCANNL_TREE={display_value(value)} is not an OCANNL checkout (no "
+            "ocannl_config.reference or benchmarks/runners/ocannl under it)"
+        )
+    try:
+        toplevel = subprocess.run(
+            ["git", "-C", str(tree), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SystemExit(
+            f"BENCH_OCANNL_TREE={display_value(value)}: git could not name its worktree "
+            f"({display_value(str(exc))})"
+        )
+    root = toplevel.stdout.strip()
+    if toplevel.returncode != 0 or not root or Path(root).resolve() != tree:
+        raise SystemExit(
+            f"BENCH_OCANNL_TREE={display_value(value)} is not the root of a git worktree (git "
+            f"names {display_value(root or toplevel.stderr.strip() or 'none')}), so its HEAD "
+            "would not be the revision that runs"
+        )
+    return tree
+
+
+ROOT = ocannl_tree(os.environ)
 # BENCH_VENV_PY overrides the venv interpreter; bench_venv owns the rule so drivers cannot drift.
 VENV_PY = bench_venv.venv_python(HERE)
 # BENCH_CELL_LOG_DIR: keep every cell's raw combined output under this directory, one file per
@@ -2736,10 +2783,20 @@ def report(
     commit = run_supporting(
         ["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True
     ).stdout.strip()
+    # A sweep measuring another checkout (BENCH_OCANNL_TREE) names the harness revision beside it.
+    harness = ""
+    if ROOT != HERE.parent:
+        harness_commit = run_supporting(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=HERE, capture_output=True
+        ).stdout.strip()
+        harness_dirty = run_supporting(
+            ["git", "status", "--porcelain", "--untracked-files=no"], cwd=HERE, capture_output=True
+        ).stdout.strip()
+        harness = f" (harness commit: {harness_commit}{', modified' if harness_dirty else ''})"
     lines.append(f"# Benchmark results\n")
     lines.append(
         f"platform: {platform.platform()} {platform.machine()} | "
-        f"ocannl commit: {commit} | parity tol: {PARITY_TOL:g} (max rel diff over "
+        f"ocannl commit: {commit}{harness} | parity tol: {PARITY_TOL:g} (max rel diff over "
         f"first parity steps vs pytorch/cpu/eager; reduced precisions get their own envelope: "
         + ", ".join(f"{p} {t:g}" for p, t in sorted(PARITY_TOL_PRECISION.items()))
         + f"; the approximate regime {PARITY_TOL_APPROX:g})\n"
