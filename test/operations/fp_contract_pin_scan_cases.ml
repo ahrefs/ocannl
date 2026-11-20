@@ -422,4 +422,51 @@ let got = Context.get_values ctx tensor
 let () = p "equal" (same_bits got.(0) 1.)
 |ocaml}
     );
+    (* The environment form is last-wins too: a later [putenv] of the key replaces an earlier one,
+       and a read of the key writes nothing. *)
+    ( "a putenv of off replaced by a putenv of fast is no pin",
+      true,
+      {ocaml|
+open Verdict.Claims
+let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
+let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "fast"
+let same_bits x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let got = Context.get_values ctx tensor
+let () = p "equal" (same_bits got.(0) 1.)
+|ocaml}
+    );
+    ( "a putenv of fast replaced by a putenv of off is a pin",
+      false,
+      {ocaml|
+open Verdict.Claims
+let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "fast"
+let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
+let same_bits x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let got = Context.get_values ctx tensor
+let () = p "equal" (same_bits got.(0) 1.)
+|ocaml}
+    );
+    ( "a putenv of a computed mode after off is no pin",
+      true,
+      {ocaml|
+open Verdict.Claims
+let mode = "fast"
+let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
+let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" mode
+let same_bits x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let got = Context.get_values ctx tensor
+let () = p "equal" (same_bits got.(0) 1.)
+|ocaml}
+    );
+    ( "a read of the key after a putenv of off keeps the pin",
+      false,
+      {ocaml|
+open Verdict.Claims
+let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
+let mode = Sys.getenv_opt "OCANNL_CC_BACKEND_FP_CONTRACT"
+let same_bits x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let got = Context.get_values ctx tensor
+let () = p "equal" (same_bits got.(0) 1.)
+|ocaml}
+    );
   ]

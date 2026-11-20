@@ -44,6 +44,10 @@ case: code subject -- pinned by an in-process statement of off, data first: true
 case: code subject -- pinned by a qualified statement in a top-level sequence: true
 case: code subject -- a statement inside a function is no pin: true
 case: code subject -- a statement of another key is no pin: true
+case: code subject -- a putenv of off replaced by a putenv of fast is no pin: true
+case: code subject -- a putenv of fast replaced by a putenv of off is a pin: true
+case: code subject -- a putenv of a computed mode after off is no pin: true
+case: code subject -- a read of the key after a putenv of off keeps the pin: true
 case: a pinned claim is listed as pinned: true
 case: a marked claim is listed with its kind: true
 case: a claim with neither pin nor marker is refused: true

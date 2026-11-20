@@ -74,6 +74,17 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     source, then its comma-joined goldens. `refusal_control_scan_cases` refuses a manifest source
     the stanza lacks, one it adds, and one it names twice. Each refusal the scanner can make has to
     appear in one of those goldens; otherwise `env_var_deps` reports it as an orphan.
+  - A scan's case table with a companion stub, `test/operations/scan_case_stubs/<table>.mli`,
+    has each `{ocaml|…|ocaml}` snippet type-checked against that stub by
+    `tools/typecheck-scan-cases.sh --stubbed` (Parsing sources in a scan). So a fixture that uses a
+    name the stub lacks (`Utils`, `Unix`, a new module path, a new stand-in value) needs a stub
+    entry. No dune rule runs this: `tools/test-typecheck-scan-cases.sh` refuses the unbound name (a
+    harness; its legs 1 and 10, which `tools/test-harnesses.sh --affected` runs for a changed stub,
+    `*_scan_cases.ml` table or `config_scan_lexing.ml`, the harness's `affected-reads` lines). A
+    stubbed table of any other name is reached only by the full harness, so check it directly
+    with `tools/typecheck-scan-cases.sh <table>.ml`. Missing stub entries cost a harness run on
+    staging#2254 (gh-ocannl-2354); the check came from staging#1371. A table with no stub is not
+    checked at all, so a new table feeding snippets should get one.
   - The goldens that list aliases or scanners change: `env_var_deps.expected` gains the new aliases
     under *Ambient environment gates*, and `refusal_control_scan_cases.expected` gains the
     scanner's rows. Promote both.
