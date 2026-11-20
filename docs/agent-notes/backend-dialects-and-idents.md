@@ -90,7 +90,8 @@ files.
   `branchless_select` checks both signed zeros, NaN and the upper endpoint against
   `Ops.interpret_binop`. `integer_promotion_folds` executes the gate on int64 zero and both signs
   of 2^32. `tensor/operation.ml` uses the gate for the backward pass of `sat01`, whose gradient
-  at zero is now zero on cc.
+  at zero is now zero on cc. `sat01_gradient_endpoints` checks the tensor backward pass at both
+  endpoints and at 0.5 with a nonzero upstream gradient.
 - Metal has no `double`, and f64 stays rejected in `typ_of_prec` — a declared double buffer must
   fail rather than be silently degraded; only scalar expression casts render as `float`. So a
   backend-agnostic test must never reach for `double` just to have a second precision:

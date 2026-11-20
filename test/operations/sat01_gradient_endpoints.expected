@@ -1,0 +1,1 @@
+sat01 backward passes the upstream gradient only inside (0, 1): true
