@@ -620,26 +620,95 @@ let () =
           write_record
             (record_line "EVALUATED" [ record_executable (); Stdlib.String.escaped label ]))
 
-type skip_aggregation = [ `Backend | `Environment | `Outside_sweep ]
+(** Who executes a claim the fleet sweep cannot (gh-ocannl-926): the [`Outside_sweep] scope's owner,
+    written into the skip record so that ownership is a fact the tree is checked against rather than
+    a comment. [test/operations/sweep_owner_scan] resolves every owner spelled in the tree, and
+    refuses the scan when the matrix it names is gone.
+
+    - [Ci_step { workflow; step; alias }]: the step named [step] of [.github/workflows/<workflow>]
+      builds [@<alias>], and [<alias>] is the per-test alias of the stanza that compiles the
+      skipping source -- the compiler-trace CI leg owning [cc_backend_trace_name]'s level-3 claim.
+    - [Plain_run { alias; forcing }]: the skip occurs only when the command line carries the atom
+      [forcing], and [@<alias>] -- a stanza compiling the same source and passing no [forcing] --
+      runs the claim on the sweep itself: [cache_key_agreement]'s [-outranked] rule, owned by the
+      plain run, and [cuda_wmma_floor]'s forced missing-toolkit arm, owned by the real witness.
+
+    [alias] is spelled as [dune build] takes it after the [@], from the repository root
+    ([test/operations/runtest-<name>]). Every component is non-empty and free of control characters,
+    and every one but the last also free of [:], so that {!sweep_owner_field} and
+    {!sweep_owner_of_field} invert each other. *)
+type sweep_owner =
+  | Ci_step of { workflow : string; step : string; alias : string }
+  | Plain_run of { alias : string; forcing : string }
+
+(** The owner as the skip record's fourth field: [ci-step:<workflow>:<alias>:<step>] or
+    [plain-run:<alias>:<forcing>]. [tools/aggregate-skips.sh] holds the record to this grammar. *)
+let sweep_owner_field = function
+  | Ci_step { workflow; step; alias } -> String.concat ~sep:":" [ "ci-step"; workflow; alias; step ]
+  | Plain_run { alias; forcing } -> String.concat ~sep:":" [ "plain-run"; alias; forcing ]
+
+(* Why [owner] cannot be written as a record field that reads back as itself, if it cannot. *)
+let sweep_owner_problem owner =
+  let has_control = String.exists ~f:(fun c -> Char.to_int c < 0x20 || Char.equal c '\x7f') in
+  let components =
+    match owner with
+    | Ci_step { workflow; step; alias } ->
+        [ ("workflow", workflow, false); ("alias", alias, false); ("step", step, true) ]
+    | Plain_run { alias; forcing } -> [ ("alias", alias, false); ("forcing", forcing, true) ]
+  in
+  List.find_map components ~f:(fun (what, value, last) ->
+      if String.is_empty value then Some (Printf.sprintf "its %s is empty" what)
+      else if has_control value then Some (Printf.sprintf "its %s holds a control character" what)
+      else if String.mem value ':' && not last then
+        Some
+          (Printf.sprintf "its %s %S holds a colon, which the record's grammar splits on" what value)
+      else None)
+
+(** The inverse of {!sweep_owner_field}: [None] for a field outside its grammar. *)
+let sweep_owner_of_field field =
+  let owner =
+    match String.lsplit2 field ~on:':' with
+    | Some ("ci-step", rest) -> (
+        match String.lsplit2 rest ~on:':' with
+        | Some (workflow, rest) -> (
+            match String.lsplit2 rest ~on:':' with
+            | Some (alias, step) -> Some (Ci_step { workflow; step; alias })
+            | None -> None)
+        | None -> None)
+    | Some ("plain-run", rest) -> (
+        match String.lsplit2 rest ~on:':' with
+        | Some (alias, forcing) -> Some (Plain_run { alias; forcing })
+        | None -> None)
+    | _ -> None
+  in
+  Option.bind owner ~f:(fun owner ->
+      Option.some_if (Option.is_none (sweep_owner_problem owner)) owner)
+
+type skip_aggregation = [ `Backend | `Environment | `Outside_sweep of sweep_owner ]
 (** [skipped ~backend name] reports a leg the run's backend cannot evaluate: a GPU intrinsic on a
     CPU backend, a tf32 policy outside CUDA. It prints the same stdout line {!p} would — the
     [.expected] goldens are backend-uniform, and a [(test)] stanza diffs stdout ONLY, so stderr is
     free — and announces the skip on stderr, naming the claim. [grep SKIPPED] over a run then
     enumerates exactly what that hardware did not verify. A second
-    [OCANNL_TOOL_VERDICT_SKIP<TAB>scope<TAB>executable<TAB>claim] record on stderr is the
-    machine-readable form, and the one the action's record file receives (the per-action records
-    above), which is what the forced sweep intersects across backends; the executable identity keeps
-    equal labels in different test legs distinct there. [scope] is [backend] by default. Pass
-    [~aggregation:`Environment] when the leg is gated by a host or configuration capability rather
-    than the selected backend, such as a compiler target, preprocessing flag or filesystem feature;
-    its human announcement remains visible, and the forced fleet sweep aggregates it across the
-    measurement boxes declared by [benchmarks/fixtures/DIGESTS.txt] instead of mistaking it for
-    unsupported backend coverage. Scope describes this observation, not the claim identity: if any
-    declared-box log marks a claim [Environment], a [Backend] skip carrying the same executable and
-    claim key on another box is also evidence that box did not execute it. Pass
-    [~aggregation:`Outside_sweep] only when a separate checked matrix owns execution of the claim
-    (for example the compiler-trace CI leg); the record remains validated and human-visible but
-    neither sweep dimension treats its absence as evidence.
+    [OCANNL_TOOL_VERDICT_SKIP<TAB>scope<TAB>executable<TAB>claim] record on stderr (an
+    [outside-sweep] one ends in a fourth [<TAB>owner] field) is the machine-readable form, and the
+    one the action's record file receives (the per-action records above), which is what the forced
+    sweep intersects across backends; the executable identity keeps equal labels in different test
+    legs distinct there. [scope] is [backend] by default. Pass [~aggregation:`Environment] when the
+    leg is gated by a host or configuration capability rather than the selected backend, such as a
+    compiler target, preprocessing flag or filesystem feature; its human announcement remains
+    visible, and the forced fleet sweep aggregates it across the measurement boxes declared by
+    [benchmarks/fixtures/DIGESTS.txt] instead of mistaking it for unsupported backend coverage.
+    Scope describes this observation, not the claim identity: if any declared-box log marks a claim
+    [Environment], a [Backend] skip carrying the same executable and claim key on another box is
+    also evidence that box did not execute it. Pass [~aggregation:(`Outside_sweep owner)] only when
+    another checked run owns execution of the claim, and name it ({!sweep_owner}): the
+    compiler-trace CI leg, or the plain run of an executable a rule forces into the skip. The record
+    carries the owner as a fourth field ({!sweep_owner_field}) and remains validated and
+    human-visible, but neither sweep dimension treats its absence as evidence;
+    [test/operations/sweep_owner_scan] fails when the owner no longer resolves, so deleting the
+    matrix is a red rather than a silent loss of coverage. An owner the record grammar cannot carry
+    is a failed check.
 
     Use it in place of a bare [p name true]: that line is byte-identical to a verified run's, so
     neither the transcript nor a reviewer can tell the claim was never evaluated — which is how a
@@ -668,15 +737,17 @@ let announce_skip ?(aggregation = (`Backend : skip_aggregation)) ~backend name =
      basename is stable across worktrees and machines; pairing it with the claim prevents equal
      labels in different tests from being conflated. [String.escaped] keeps each field on one TSV
      line even if a computed label contains a control character. *)
-  emit_record "SKIP"
-    [
-      (match aggregation with
-      | `Backend -> "backend"
-      | `Environment -> "environment"
-      | `Outside_sweep -> "outside-sweep");
-      record_executable ();
-      Stdlib.String.escaped name;
-    ]
+  let claim = [ record_executable (); Stdlib.String.escaped name ] in
+  match aggregation with
+  | `Backend -> emit_record "SKIP" ("backend" :: claim)
+  | `Environment -> emit_record "SKIP" ("environment" :: claim)
+  | `Outside_sweep owner -> (
+      match sweep_owner_problem owner with
+      | None -> emit_record "SKIP" (("outside-sweep" :: claim) @ [ sweep_owner_field owner ])
+      | Some why ->
+          fail
+            (Printf.sprintf "the outside-sweep owner of skipped claim %S cannot be recorded: %s"
+               (one_line name) why))
 
 let skipped ?aggregation ~backend name =
   announce_skip ?aggregation ~backend name;

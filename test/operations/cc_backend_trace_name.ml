@@ -40,5 +40,15 @@ let () =
   else
     (* The Ubuntu compiler-trace CI job executes this exact claim at level 3. The ordinary fleet
        sweep cannot infer that configuration-only execution from its default-config box logs, so
-       keep the skip visible without presenting it as missing sweep coverage. *)
-    Verdict.skipped ~aggregation:`Outside_sweep ~backend:(trace_gate ^ "<3") claim
+       keep the skip visible without presenting it as missing sweep coverage, naming the step that
+       owns it (sweep_owner_scan holds the step to building this test's alias). *)
+    Verdict.skipped
+      ~aggregation:
+        (`Outside_sweep
+           (Verdict.Ci_step
+              {
+                workflow = "ci.yml";
+                step = "Check non-default module log level and trace semantics";
+                alias = "test/operations/runtest-cc_backend_trace_name";
+              }))
+      ~backend:(trace_gate ^ "<3") claim

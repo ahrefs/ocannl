@@ -131,6 +131,10 @@ module Open_node_scan = Open_node_scan
 (** Holding every tensor node a module of [tensor/] creates to [Tensor.note_open_node], the uid list
     a rewind discards by (gh-ocannl-1579). *)
 
+module Sweep_owner_scan = Sweep_owner_scan
+(** Holding every [`Outside_sweep] skip to an owner that still resolves: a CI step building the
+    test's alias, or the plain run of the forced executable (gh-ocannl-926). *)
+
 module Debug_name_scan = Debug_name_scan
 (** Holding every test's use of a node's debug name to display, never lookup (gh-ocannl-1606). *)
 

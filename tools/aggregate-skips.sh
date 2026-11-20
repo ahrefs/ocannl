@@ -30,6 +30,13 @@
 #     --run cc m4-max /path/to/cc.verdict-records \
 #     --run metal m4-max /path/to/metal.verdict-records
 #
+# An outside-sweep record (`Verdict.skipped ~aggregation:(`Outside_sweep owner)`)
+# carries a fourth field, its owner -- `ci-step:<workflow>:<alias>:<step>` or
+# `plain-run:<alias>:<forcing>` -- and joins neither intersection; the report
+# lists each such claim with its owner. An ungrammatical owner, or a backend or
+# environment record carrying one, is malformed; an outside-sweep record with no
+# owner field is a swept commit predating owners and is listed as such.
+#
 # Exit 1 means a complete backend or declared-box matrix has a claim skipped in
 # every member. Partial coverage is a loud report but exits 0 because an absent
 # member may have evaluated the claim. Malformed input exits 2.
@@ -195,11 +202,27 @@ extract_claims() {
       if (!actions) malformed = 1
       record = substr($0, length("OCANNL_TOOL_VERDICT_SKIP\t") + 1)
       fields = split(record, part, "\t")
-      if (fields != 3 || part[2] == "" || part[3] == "") malformed = 1
+      # An outside-sweep record names its owner in a fourth field
+      # (Verdict.sweep_owner_field, gh-ocannl-926); the other scopes carry
+      # none. An extra field or an ungrammatical owner (a control character
+      # included, which Verdict never writes) is malformed. Three
+      # fields are a Verdict predating owners -- the current one refuses to write one
+      # -- reported as such, as records predating EVALUATED judge as before.
+      if (part[1] == "outside-sweep") {
+        if (fields < 3 || fields > 4 || part[2] == "" || part[3] == "" ||
+            (fields == 4 && (part[4] !~ /^(ci-step:[^:]+:[^:]+:.+|plain-run:[^:]+:.+)$/ ||
+                             part[4] ~ /[[:cntrl:]]/)))
+          malformed = 1
+        else if (scope == "outside-sweep") {
+          skipped[part[2] "\t" part[3]] = 1
+          owner[part[2] "\t" part[3]] = (fields == 4 ? part[4] : "")
+        }
+      }
+      else if (fields != 3 || part[2] == "" || part[3] == "") malformed = 1
       else if (part[1] == scope || (scope == "sweep" &&
                (part[1] == "backend" || part[1] == "environment")))
         skipped[part[2] "\t" part[3]] = 1
-      else if (part[1] != "backend" && part[1] != "environment" && part[1] != "outside-sweep") malformed = 1
+      else if (part[1] != "backend" && part[1] != "environment") malformed = 1
       next
     }
     index($0, "OCANNL_TOOL_VERDICT_EVALUATED\t") == 1 {
@@ -214,7 +237,10 @@ extract_claims() {
     { malformed = 1 }
     END {
       if (malformed || !actions) exit 3
-      for (claim in skipped) if (!(claim in evaluated)) print claim
+      for (claim in skipped) if (!(claim in evaluated)) {
+        if (scope == "outside-sweep") print claim "\t" owner[claim]
+        else print claim
+      }
     }
   ' scope="$scope" "$records" | LC_ALL=C sort -u
 }
@@ -340,5 +366,24 @@ else
     fi
   fi
 fi
+
+# Claims another checked run owns (Verdict's `Outside_sweep`): neither
+# intersection judges them, and the report names each one's owner, which
+# test/operations/sweep_owner_scan holds to an existing matrix.
+: >"$tmp/outside-unsorted"
+for records in "${run_records[@]}"; do
+  extract_claims outside-sweep "$records" >>"$tmp/outside-unsorted" ||
+    die "cannot extract compatible skip records from $records"
+done
+LC_ALL=C sort -u "$tmp/outside-unsorted" >"$tmp/outside" ||
+  die "cannot collect outside-sweep skip records"
+while IFS=$'\t' read -r test_id claim owner; do
+  if [ -n "$owner" ]; then
+    printf 'outside the sweep: %s: %s -- owned by %s\n' "$test_id" "$claim" "$owner"
+  else
+    printf 'outside the sweep: %s: %s -- owner not recorded (a swept commit predating gh-ocannl-926)\n' \
+      "$test_id" "$claim"
+  fi || die "cannot write report"
+done <"$tmp/outside"
 
 exit "$failed"

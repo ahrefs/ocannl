@@ -1,0 +1,26 @@
+a CI step that builds the skipping test's alias owns it: true
+a plain run of the same test, passing no forcing argument, owns the forced skip: true
+a select arm the owning test compiles is the same source, and so is the copy the forced rule runs: true
+a rule running an executable that compiles the source owns it through its alias: true
+a skip with no owner is refused: true
+a CI step that no longer builds the alias is refused: true
+a plain-run alias no stanza defines any more is refused: true
+a CI step that only mentions the alias in a comment no longer builds it: true
+a CI step building only a longer alias that starts with this one does not build it: true
+a renamed CI step is refused: true
+a deleted workflow is refused: true
+an owner alias outside the skipping source's directory is refused: true
+an owning stanza that does not compile the source is refused: true
+an owner that itself passes the forcing argument is refused: true
+a forcing argument no stanza passes any more is refused: true
+a CI step that names the alias only outside a dune build no longer builds it: true
+an owning rule that only depends on the executable does not run the source: true
+a forcing argument only an unrelated test passes does not run the forced skip: true
+a CI step that builds the alias but no longer sets the stanza's gate runs what the sweep runs: true
+a CI owner whose stanza declares no gate is refused: true
+an owner the record grammar cannot carry is refused: true
+a computed owner is refused: true
+an owner with a computed field is refused: true
+an exempted file's computed owner is read as a use and is not a finding: true
+an exemption whose file constructs no owner is stale: true
+a pattern or a type spelling the tag is not a use; the one expression beside them is: true

@@ -6713,8 +6713,8 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   run's own configuration, with no golden row of its claim to print (which flips a stated key
   outranks), uses `Verdict.announce_skip` instead: the same stderr line and record, no stdout row,
   so the golden does not depend on the ambient environment (gh-ocannl-1819); a rule forcing such a
-  skip on every box records it `Outside_sweep`, or the intersection reads the fleet as never
-  covering a claim the plain run covers. The sweep's stdout
+  skip on every box records it `Outside_sweep` owned by the plain run (below), or the intersection
+  reads the fleet as never covering a claim the plain run covers. The sweep's stdout
   summary quotes the report's `result:` verdict and each `FAIL:`/`POTENTIAL:` finding line (indented, under the
   `skip coverage:` line that carries the report path), so consumers of sweep output — the daily
   scheduled routine's report and notification foremost — see zero-coverage findings without
@@ -6743,11 +6743,35 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   incomplete and it never stands in for a declared box; the report lists it on an
   `undeclared boxes` line. In the other direction, a declared box with no runnable unit
   is a harness refusal rather than permanent silent non-coverage.
-  A configuration matrix that runs outside the fleet sweep uses
-  ``Verdict.skipped ~aggregation:`Outside_sweep``: the announcement and machine-record validation
-  remain, but neither sweep intersection claims ownership. This is deliberately narrow: the
-  `cc_backend_trace_name` claim is executed by the Ubuntu compiler-trace CI leg at trace level 3,
-  while the ordinary sweep's default configuration cannot execute it (gh-ocannl-885).
+  A claim another checked run owns uses ``Verdict.skipped ~aggregation:(`Outside_sweep owner)``:
+  the announcement and machine-record validation remain, but neither sweep intersection claims
+  ownership, so the owner is the claim's only coverage and is named, never left to a comment
+  (gh-ocannl-926). Write it as a literal `Verdict.sweep_owner` at the call site, one of two kinds.
+  `Ci_step { workflow; step; alias }` is a step of `.github/workflows/<workflow>`, by its `name:`,
+  that builds `@<alias>`, the per-test alias of the stanza compiling the skipping source, and whose
+  own `env:` sets one of the `(env_var …)` dependencies that stanza declares -- the gate that makes
+  the step's run differ from the sweep's, so declare it there:
+  `cc_backend_trace_name`'s level-3 claim, which the Ubuntu compiler-trace step executes while the
+  sweep's default configuration cannot (gh-ocannl-885). `Plain_run { alias; forcing }` is for a
+  skip that only a forcing command-line atom produces: `@<alias>` compiles the same source and
+  passes no `forcing`, and runs the claim on the sweep itself (`cache_key_agreement`'s
+  `outranked` rule; `cuda_wmma_floor`'s `--forced` missing-toolkit alias, owned by the real
+  witness's select arm). The alias is spelled from the repository root, as `dune build @…` takes
+  it, and lies in the skipping source's directory. The record carries the owner as a fourth field
+  (`ci-step:<workflow>:<alias>:<step>`, `plain-run:<alias>:<forcing>`; Verdict fails the run
+  rather than write one its grammar cannot carry). `tools/aggregate-skips.sh` refuses an
+  ungrammatical owner and an owner on any other scope, and its report lists each outside-sweep
+  claim on an `outside the sweep: … -- owned by …` line; a record with no owner field can only
+  come from a swept commit predating owners and is listed as `owner not recorded`, as records
+  predating `EVALUATED` judge as before.
+  `test/operations/sweep_owner_scan` (in `@scans`) resolves every owner the tree spells -- the
+  step still builds the alias and still sets its gate, the alias's stanza still exists and runs
+  the source, the forced run still exists beside a plain one -- and refuses a computed owner
+  outside its named exemptions (the harness's replay probe, `verdict_quantified`'s refusal
+  children), so deleting or renaming the owning matrix is a red rather than a
+  claim silently dropped from both dimensions. A new owner kind (a whole workflow job, an alias in
+  another directory) is a new constructor and a new resolution arm in
+  `test/support/sweep_owner_scan.ml`, not a looser match.
 
 ### Sweep units and verdicts
 

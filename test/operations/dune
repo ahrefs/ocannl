@@ -212,6 +212,9 @@
   (alias runtest-slot_kind_live)
   (alias runtest-source_inventory_cases)
   (alias runtest-stanza_order)
+  (alias runtest-sweep_owner_scan)
+  (alias runtest-sweep_owner_scan_cases)
+  (alias runtest-sweep_owner_scan_refusal_control)
   (alias runtest-tensorized_census_ratchet)
   (alias runtest-tensorized_census_scan_cases)
   (alias runtest-test_config_consistency)
@@ -509,6 +512,8 @@
   (alias runtest-stanza_order)
   (alias runtest-sweep_components)
   (alias runtest-sweep_harness)
+  (alias runtest-sweep_owner_scan)
+  (alias runtest-sweep_owner_scan_refusal_control)
   (alias runtest-tensorized_census_ratchet)
   (alias runtest-test_config_consistency)
   (alias runtest-test_log_stmt_format)
@@ -13580,6 +13585,10 @@
   open_node_scan_control.expected
   open_node_scan_refusal_control.expected
   open_node_scan_cases.expected
+  sweep_owner_scan.ml
+  sweep_owner_scan.expected
+  sweep_owner_scan_refusal_control.expected
+  sweep_owner_scan_cases.expected
   debug_name_scan.ml
   debug_name_scan.expected
   debug_name_scan_control.expected
@@ -13675,6 +13684,8 @@
    provenance_tag_inventory.expected,provenance_tag_scan_cases.expected
    open_node_scan.ml
    open_node_scan.expected,open_node_scan_control.expected,open_node_scan_refusal_control.expected,open_node_scan_cases.expected
+   sweep_owner_scan.ml
+   sweep_owner_scan.expected,sweep_owner_scan_refusal_control.expected,sweep_owner_scan_cases.expected
    debug_name_scan.ml
    debug_name_scan.expected,debug_name_scan_control.expected,debug_name_scan_refusal_control.expected
    label_dispatch_scan.ml
@@ -16380,6 +16391,76 @@
  (name sweep_harness_driver)
  (modules sweep_harness_driver)
  (libraries unix arrayjit.ir arrayjit.verdict))
+
+; gh-ocannl-926: every `Outside_sweep skip names the matrix that owns its execution -- a CI step
+; building the test's alias, or the plain run of the executable a rule forces into the skip -- and
+; this fails when that owner is gone, which would otherwise drop the claim from both sweep
+; dimensions in silence. The reader states what it reads in test/support/sweep_owner_scan.ml; the
+; corpus is the source tree's .ml files, their directories' dune files and .github/workflows.
+
+(executable
+ (name sweep_owner_scan)
+ (modules sweep_owner_scan)
+ (libraries base stdio test_scan arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- parses test sources and reads dune files and workflows as text.
+ (target sweep_owner_scan.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (sandbox always)
+  (source_tree ../..))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:sweep_owner_scan.exe}
+    %{workspace_root}
+    %{dep:sweep_owner_scan.exe}
+    %{target}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-sweep_owner_scan)
+ (package neural_nets_lib)
+ (action
+  (diff sweep_owner_scan.expected sweep_owner_scan.actual)))
+
+; Its refusals on synthetic trees: a missing owner, a step that no longer builds the alias, an
+; alias no stanza defines, and each other drift the reader names.
+
+(test
+ ; ocannl-backend: none -- feeds synthetic sources, dune files and workflows to the reader.
+ (name sweep_owner_scan_cases)
+ (package neural_nets_lib)
+ (modules sweep_owner_scan_cases)
+ (libraries base test_scan arrayjit.verdict)
+ (deps ocannl_config))
+
+; Each of the scanner's own refusals, reached through a synthetic input (gh-ocannl-800).
+
+(rule
+ ; ocannl-backend: none -- feeds synthetic sources to the scanner without running a backend.
+ (target sweep_owner_scan_refusal_control.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  sweep_owner_scan.ml)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:sweep_owner_scan.exe} --refusal-control))))
+
+(rule
+ (alias runtest-sweep_owner_scan_refusal_control)
+ (package neural_nets_lib)
+ (action
+  (diff
+   sweep_owner_scan_refusal_control.expected
+   sweep_owner_scan_refusal_control.actual)))
 
 ; gh-ocannl-929: the gradient half of that contract -- grad_update, gradient accumulation across
 ; extents, and the Rev_sides scatter executed and refused.

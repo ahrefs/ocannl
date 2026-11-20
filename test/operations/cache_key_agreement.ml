@@ -449,7 +449,12 @@ let () =
   let skip_outranked ~what key =
     outranked := (what, key) :: !outranked;
     Verdict.announce_skip
-      ~aggregation:(if forced_outranked then `Outside_sweep else `Environment)
+      ~aggregation:
+        (if forced_outranked then
+           `Outside_sweep
+             (Verdict.Plain_run
+                { alias = "test/operations/runtest-cache_key_agreement"; forcing = "outranked" })
+         else `Environment)
       ~backend:(Context.backend_name ctx)
       (Printf.sprintf
          "%s of %s: the key, or the regime it is flipped in, is stated on the commandline, or \

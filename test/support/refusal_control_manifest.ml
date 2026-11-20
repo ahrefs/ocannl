@@ -137,6 +137,14 @@ let raw_entries =
         "[scanner-refusal:69cf046689c576d9dca494c4b411d591] Tnode.create";
         "[scanner-refusal:aad2a5fc0b2e347174ab90714113a6f6] tensor.ml";
       ] );
+    ( "sweep_owner_scan.ml",
+      [
+        "[scanner-refusal:ccfbd7919a1ffc7c1e052d9d49911b39] does not parse";
+        "[scanner-refusal:69de7c57450df323441e9dc5d85110a3] outside-sweep owner reader";
+        "[scanner-refusal:d041f52ef5edce112db1ae82bf45699f] tree matches nothing";
+        "[scanner-refusal:13a68f9fac09b107d35175bdfad613d4] cc_backend_trace_name";
+        "[scanner-refusal:9fd940ff3d9f45509ae4d01b3bc7efdb] resolves a plain-run";
+      ] );
     ( "debug_name_scan.ml",
       [
         "[scanner-refusal:fe40918919ee07d96a2c92a926ae0b28] does not parse";
