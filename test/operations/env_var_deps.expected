@@ -492,7 +492,7 @@ will copy them from, and the tallies go to stderr (gh-ocannl-659, gh-ocannl-665)
   test/operations/profiles/dune: markers: none
   test/operations/startup_streams/dune: markers: none
   test/operations/unused_compiler_deps_fixtures/dune: nothing that runs a test executable
-  test/ppx/dune: declares OCANNL_BACKEND; markers: none
+  test/ppx/dune: declares OCANNL_BACKEND; markers: cc, none
   test/support/dune: nothing that runs a test executable
   test/training/dune: declares OCANNL_BACKEND; markers: cc, multidev_cc, none
   tools/dune: nothing that runs a test executable

@@ -1,4 +1,5 @@
-open Ocannl.Nn_blocks.DSL_modules
+open Ocannl
+open Nn_blocks.DSL_modules
 
 let binary_tensor source other = [%op { w = source + other }]
 let binary_literal source = [%op { w = source + 0.0 }]
@@ -67,15 +68,28 @@ let%op number_object_field n () x =
   let n = [%oc Int.succ n] in
   {
     w =
-      !..(object
+      !..(let selected = ref 0 in
+          object
             val n = 3
-            method value = n
-            initializer ignore n
+            initializer selected := n
+            method value = !selected
           end
-           #value);
+            #value);
+    o = [ 1 ];
   }
-  * x
+  *. x
   + !..n
+
+let () =
+  (* With x = 1 the output is the selected value plus the successor of the enclosing 41. *)
+  let enclosing = 41 in
+  let input = NTDSL.ndarray [| 1.0 |] ~output_dims:[ 1 ] () in
+  let output = number_object_field enclosing () input in
+  let ctx = Train.forward_once (Context.cpu ()) output in
+  let selected =
+    Context.get_value ctx output.Tensor.value [| 0 |] -. Float.of_int (Int.succ enclosing)
+  in
+  Verdict.p "object initializer reads the preceding field value 3" (Float.equal selected 3.0)
 
 let named_binary source other = [%op { w = add source other }]
 let named_unary source = [%op { w = relu source }]

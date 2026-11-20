@@ -401,12 +401,12 @@
   (diff test_initializer_heads_expected.ml test_initializer_heads_actual.ml)))
 
 (tests
- ; ocannl-backend: none -- defines functions only, without executing tensor operations.
+ ; ocannl-backend: cc -- the object initializer's value is read through Context.cpu.
  (names test_initializer_heads test_initializer_heads_expected)
  (package neural_nets_lib)
  (modules test_initializer_heads test_initializer_heads_expected)
  (deps ocannl_config)
- (libraries ocannl)
+ (libraries ocannl arrayjit.context arrayjit.verdict)
  (preprocess
   (per_module
    ((pps ppx_ocannl)

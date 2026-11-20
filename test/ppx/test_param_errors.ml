@@ -195,6 +195,21 @@ let%op number_before_val n () x =
   * x
   + !..n
 
+(* An initializer before the field still reads the late-bound enclosing name. *)
+let%op number_initializer_before_val n () x =
+  let n = [%oc Int.succ n] in
+  {
+    w =
+      !..(object
+            initializer ignore n
+            val n = 3
+            method value = n
+          end
+           #value);
+  }
+  * x
+  + !..n
+
 class initializer_parent =
   object
     val n = 2
