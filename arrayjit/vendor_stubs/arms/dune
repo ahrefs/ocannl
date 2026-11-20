@@ -170,7 +170,7 @@
  (libraries
   base
   stdio
-  unix
+  vendor_idents_headers
   arrayjit.ir
   arrayjit.builtins_cuda
   arrayjit.builtins_hip

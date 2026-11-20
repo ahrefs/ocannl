@@ -374,8 +374,11 @@ files.
   and prints the measurement, the missing and superfluous entries, and the module to paste. HIP's
   candidate harvest follows literal includes inside canonical `hip`, `hsa` and `rocwmma` header
   subtrees (gh-ocannl-1713), so a distro SDK under `/usr/include` does not bring host header trees
-  into the candidate set. hiprtc checks the ordinary prelude first and sends its survivors through
-  the rocWMMA prelude. Each reported name fails alone in a real kernel configuration. On discrete
+  into the candidate set. The harvest parses each canonical header once and resolves quoted
+  includes separately for each opening directory. `hip_sdk_header_symlinks` checks both identities
+  and the SDK boundary with a temporary header tree. hiprtc checks the ordinary prelude first and
+  sends its survivors through the rocWMMA prelude. Each reported name fails alone in a real kernel
+  configuration. On discrete
   gfx1102, the harvest read 153 canonical headers instead of 35,418 paths and ran in 335 seconds
   versus 661. The 495 generated names were byte-identical. Exit 1 says the checked-in table differs
   from the measurement. `--names a,b` spot-checks entries. Regenerate on the newest toolkit the

@@ -79,6 +79,12 @@
   (language c)
   (names fp8_soak_stubs)))
 
+(library
+ (name vendor_idents_headers)
+ (package arrayjit)
+ (modules vendor_idents_headers)
+ (libraries base stdio unix))
+
 ; gh-ocannl-1338: the routine-name harvest. Compiles every identifier token of the headers a GPU
 ; backend's kernel prelude reaches as a kernel name, with that backend's own compiler, and checks
 ; the backend's `vendor_routine_idents` table against what fails; for CUDA and HIP it also prints
@@ -98,7 +104,7 @@
  (libraries
   base
   stdio
-  unix
+  vendor_idents_headers
   arrayjit.ir
   arrayjit.builtins_cuda
   arrayjit.builtins_hip

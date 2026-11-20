@@ -9763,6 +9763,14 @@
      hip_scratch_tune_survives.actual)))))
 
 (test
+ (name hip_sdk_header_symlinks)
+ (package arrayjit)
+ ; ocannl-backend: none -- harvests a temporary SDK header tree on the host.
+ (deps ocannl_config)
+ (modules hip_sdk_header_symlinks)
+ (libraries base stdio unix arrayjit.verdict vendor_idents_headers))
+
+(test
  (name host_capability_fingerprint)
  (package arrayjit)
  ; ocannl-backend: none -- reads the shared preludes and fingerprints temporary headers.
