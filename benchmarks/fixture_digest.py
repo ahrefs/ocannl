@@ -49,11 +49,15 @@ ones whose fixtures predate any venv you could reconstruct.
                                                     # refusing anything that would be a baseline
     python3 benchmarks/fixture_digest.py --list-declared-measurement-boxes
                                                     # the fleet matrix, one box per line
+    python3 benchmarks/fixture_digest.py --compare <recorded> <candidate>
+                                                    # metadata keys and per-tensor payload
+                                                    # verdicts: exit 0 iff the tensors are equal
 """
 
 import argparse
 import hashlib
 import json
+import os
 import platform
 import re
 import struct
@@ -156,6 +160,100 @@ def _frame(digest, label, value):
     digest.update(value)
 
 
+def _read_layout(fixture, file_size):
+    """The validated layout of one open safetensors file: ``(metadata, tensors, payload_start)``.
+
+    ``tensors`` maps each name to ``(dtype, shape, start, end)``, offsets relative to
+    ``payload_start``.  Every structural defect (a short or oversized header, invalid JSON, an
+    unknown dtype, a payload size that disagrees with dtype and shape, overlapping, gapped or
+    trailing payload bytes) raises ``ValueError``.  It reads the header only: the payload bytes
+    are the caller's to stream (``sha256_file`` hashes them, ``compare_fixtures`` compares them).
+    """
+    raw_length = fixture.read(8)
+    if len(raw_length) != 8:
+        raise ValueError("missing the 8-byte header length")
+    header_length = struct.unpack("<Q", raw_length)[0]
+    if header_length > file_size - 8:
+        raise ValueError(
+            f"header length {header_length} exceeds the {file_size - 8} bytes after it"
+        )
+    raw_header = fixture.read(header_length)
+    try:
+        header = json.loads(raw_header, object_pairs_hook=_unique_object)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise ValueError(f"invalid JSON header: {error}") from None
+    if not isinstance(header, dict):
+        raise ValueError("JSON header is not an object")
+
+    metadata = header.pop("__metadata__", {})
+    if not isinstance(metadata, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str)
+        for key, value in metadata.items()
+    ):
+        raise ValueError("__metadata__ is not a string-to-string object")
+
+    payload_start = 8 + header_length
+    payload_size = file_size - payload_start
+    tensors = {}
+    ranges = []
+    for name, descriptor in header.items():
+        if not isinstance(name, str) or not isinstance(descriptor, dict):
+            raise ValueError(f"tensor {name!r} does not have an object descriptor")
+        if set(descriptor) != {"dtype", "shape", "data_offsets"}:
+            raise ValueError(
+                f"tensor {name!r} descriptor must contain exactly dtype, shape, and "
+                "data_offsets"
+            )
+        dtype, shape, offsets = (
+            descriptor["dtype"],
+            descriptor["shape"],
+            descriptor["data_offsets"],
+        )
+        if not isinstance(dtype, str):
+            raise ValueError(f"tensor {name!r} dtype is not a string")
+        if dtype not in DTYPE_SIZES:
+            raise ValueError(f"tensor {name!r} has unknown dtype {dtype!r}")
+        if not isinstance(shape, list) or any(
+            isinstance(dim, bool) or not isinstance(dim, int) or dim < 0 for dim in shape
+        ):
+            raise ValueError(f"tensor {name!r} shape is not a list of non-negative integers")
+        if (
+            not isinstance(offsets, list)
+            or len(offsets) != 2
+            or any(isinstance(offset, bool) or not isinstance(offset, int) for offset in offsets)
+        ):
+            raise ValueError(f"tensor {name!r} data_offsets is not a pair of integers")
+        start, end = offsets
+        if start < 0 or end < start or end > payload_size:
+            raise ValueError(
+                f"tensor {name!r} has invalid data_offsets {offsets!r} for a "
+                f"{payload_size}-byte payload"
+            )
+        elements = 1
+        for dimension in shape:
+            elements *= dimension
+        expected_bytes = elements * DTYPE_SIZES[dtype]
+        if end - start != expected_bytes:
+            raise ValueError(
+                f"tensor {name!r} has {end - start} bytes but dtype {dtype} and shape "
+                f"{shape!r} require {expected_bytes}"
+            )
+        tensors[name] = (dtype, shape, start, end)
+        ranges.append((start, end, name))
+
+    cursor = 0
+    for start, end, name in sorted(ranges):
+        if start != cursor:
+            relation = "overlaps" if start < cursor else "leaves a gap before"
+            raise ValueError(f"tensor {name!r} {relation} payload byte {cursor}")
+        cursor = end
+    if cursor != payload_size:
+        raise ValueError(
+            f"tensor payloads end at byte {cursor}, leaving {payload_size - cursor} trailing bytes"
+        )
+    return metadata, tensors, payload_start
+
+
 def sha256_file(path):
     """The canonical content digest of one safetensors fixture.
 
@@ -171,90 +269,10 @@ def sha256_file(path):
     path = Path(path)
     try:
         with path.open("rb") as fixture:
-            raw_length = fixture.read(8)
-            if len(raw_length) != 8:
-                raise ValueError("missing the 8-byte header length")
-            header_length = struct.unpack("<Q", raw_length)[0]
-            file_size = path.stat().st_size
-            if header_length > file_size - 8:
-                raise ValueError(
-                    f"header length {header_length} exceeds the {file_size - 8} bytes after it"
-                )
-            raw_header = fixture.read(header_length)
-            try:
-                header = json.loads(raw_header, object_pairs_hook=_unique_object)
-            except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
-                raise ValueError(f"invalid JSON header: {error}") from None
-            if not isinstance(header, dict):
-                raise ValueError("JSON header is not an object")
-
-            metadata = header.pop("__metadata__", {})
-            if not isinstance(metadata, dict) or any(
-                not isinstance(key, str) or not isinstance(value, str)
-                for key, value in metadata.items()
-            ):
-                raise ValueError("__metadata__ is not a string-to-string object")
-
-            payload_start = 8 + header_length
-            payload_size = file_size - payload_start
-            tensors = {}
-            ranges = []
-            for name, descriptor in header.items():
-                if not isinstance(name, str) or not isinstance(descriptor, dict):
-                    raise ValueError(f"tensor {name!r} does not have an object descriptor")
-                if set(descriptor) != {"dtype", "shape", "data_offsets"}:
-                    raise ValueError(
-                        f"tensor {name!r} descriptor must contain exactly dtype, shape, and "
-                        "data_offsets"
-                    )
-                dtype, shape, offsets = (
-                    descriptor["dtype"],
-                    descriptor["shape"],
-                    descriptor["data_offsets"],
-                )
-                if not isinstance(dtype, str):
-                    raise ValueError(f"tensor {name!r} dtype is not a string")
-                if dtype not in DTYPE_SIZES:
-                    raise ValueError(f"tensor {name!r} has unknown dtype {dtype!r}")
-                if not isinstance(shape, list) or any(
-                    isinstance(dim, bool) or not isinstance(dim, int) or dim < 0 for dim in shape
-                ):
-                    raise ValueError(f"tensor {name!r} shape is not a list of non-negative integers")
-                if (
-                    not isinstance(offsets, list)
-                    or len(offsets) != 2
-                    or any(isinstance(offset, bool) or not isinstance(offset, int) for offset in offsets)
-                ):
-                    raise ValueError(f"tensor {name!r} data_offsets is not a pair of integers")
-                start, end = offsets
-                if start < 0 or end < start or end > payload_size:
-                    raise ValueError(
-                        f"tensor {name!r} has invalid data_offsets {offsets!r} for a "
-                        f"{payload_size}-byte payload"
-                    )
-                elements = 1
-                for dimension in shape:
-                    elements *= dimension
-                expected_bytes = elements * DTYPE_SIZES[dtype]
-                if end - start != expected_bytes:
-                    raise ValueError(
-                        f"tensor {name!r} has {end - start} bytes but dtype {dtype} and shape "
-                        f"{shape!r} require {expected_bytes}"
-                    )
-                tensors[name] = (dtype, shape, start, end)
-                ranges.append((start, end, name))
-
-            cursor = 0
-            for start, end, name in sorted(ranges):
-                if start != cursor:
-                    relation = "overlaps" if start < cursor else "leaves a gap before"
-                    raise ValueError(f"tensor {name!r} {relation} payload byte {cursor}")
-                cursor = end
-            if cursor != payload_size:
-                raise ValueError(
-                    f"tensor payloads end at byte {cursor}, leaving {payload_size - cursor} trailing bytes"
-                )
-
+            # The open handle's size, not the path's: a generator replaces fixtures with
+            # os.replace, and the layout must describe the bytes this handle reads.
+            size = os.fstat(fixture.fileno()).st_size
+            metadata, tensors, payload_start = _read_layout(fixture, size)
             digest = hashlib.sha256()
             _frame(digest, "format", b"ocannl-safetensors-content-v1")
             canonical_metadata = json.dumps(
@@ -282,6 +300,96 @@ def sha256_file(path):
             return digest.hexdigest()
     except OSError as error:
         raise ValueError(f"cannot read fixture: {error}") from None
+
+
+#: A metadata value longer than this is shown cut, with its length: workload specs can be long.
+COMPARE_VALUE_WIDTH = 72
+
+
+def _shown(value):
+    """A metadata key, value or tensor name from a file, quoted so no byte can forge a line."""
+    if len(value) > COMPARE_VALUE_WIDTH:
+        return json.dumps(value[:COMPARE_VALUE_WIDTH]) + f"… ({len(value)} chars)"
+    return json.dumps(value)
+
+
+def _same_payload(a, a_at, b, b_at, size):
+    """Whether `size` bytes of `a` from `a_at` equal those of `b` from `b_at`, streamed."""
+    a.seek(a_at)
+    b.seek(b_at)
+    while size:
+        n = min(1 << 20, size)
+        left, right = a.read(n), b.read(n)
+        if len(left) != n or len(right) != n:
+            raise ValueError("a tensor payload ends early")
+        if left != right:
+            return False
+        size -= n
+    return True
+
+
+def compare_fixtures(a, b):
+    """What differs between two safetensors fixtures: ``(lines, differing_tensors)``.
+
+    The question a ``content-v1`` MISMATCH leaves open: the digest covers metadata and tensors
+    alike, so a rebuild whose generator writes a metadata key the recorded file predates (e.g.
+    ``loss_scale``) MISMATCHes exactly as one drawing a different numpy stream does, and only the
+    second means the workload changed (gh-ocannl-2004). The lines list the metadata keys added,
+    removed or changed from `a` to `b`, then every tensor of either file with its dtype, shape and
+    payload verdict; ``differing_tensors`` counts the tensors that are not identical -- present in
+    one file only, of another dtype or shape, or with other payload bytes. Equal canonical content
+    is therefore ``differing_tensors == 0`` and no metadata line, and metadata alone never makes a
+    tensor differ. A file ``_read_layout`` refuses raises ``ValueError`` naming it.
+    """
+    with Path(a).open("rb") as fa, Path(b).open("rb") as fb:
+        layouts = []
+        for path, handle in ((a, fa), (b, fb)):
+            try:
+                layouts.append(_read_layout(handle, os.fstat(handle.fileno()).st_size))
+            except ValueError as error:
+                raise ValueError(f"{json.dumps(str(path))}: {error}") from None
+        (meta_a, tensors_a, start_a), (meta_b, tensors_b, start_b) = layouts
+        lines = []
+        added = sorted(set(meta_b) - set(meta_a))
+        removed = sorted(set(meta_a) - set(meta_b))
+        changed = sorted(k for k in set(meta_a) & set(meta_b) if meta_a[k] != meta_b[k])
+        if added or removed or changed:
+            lines.append(
+                f"metadata: {len(added)} added, {len(removed)} removed, {len(changed)} changed "
+                f"(of {len(set(meta_a) | set(meta_b))} key(s))"
+            )
+            lines += [f"  added   {_shown(k)}: {_shown(meta_b[k])}" for k in added]
+            lines += [f"  removed {_shown(k)}: {_shown(meta_a[k])}" for k in removed]
+            lines += [
+                f"  changed {_shown(k)}: {_shown(meta_a[k])} -> {_shown(meta_b[k])}"
+                for k in changed
+            ]
+        else:
+            lines.append(f"metadata: identical ({len(meta_a)} key(s))")
+        differing = 0
+        for name in sorted(set(tensors_a) | set(tensors_b)):
+            shown = f"tensor {_shown(name)}:"
+            if name not in tensors_b or name not in tensors_a:
+                side, (dtype, shape, _, _) = (
+                    ("A", tensors_a[name]) if name in tensors_a else ("B", tensors_b[name])
+                )
+                lines.append(f"{shown} {dtype} {shape} only in {side} -- DIFFERS")
+                differing += 1
+                continue
+            dtype_a, shape_a, s_a, e_a = tensors_a[name]
+            dtype_b, shape_b, s_b, e_b = tensors_b[name]
+            if (dtype_a, shape_a) != (dtype_b, shape_b):
+                lines.append(
+                    f"{shown} {dtype_a} {shape_a} -> {dtype_b} {shape_b} -- DIFFERS "
+                    "(payload not compared)"
+                )
+                differing += 1
+            elif _same_payload(fa, start_a + s_a, fb, start_b + s_b, e_a - s_a):
+                lines.append(f"{shown} {dtype_a} {shape_a} payload equal")
+            else:
+                lines.append(f"{shown} {dtype_a} {shape_a} payload DIFFERS")
+                differing += 1
+        return lines, differing
 
 
 def _raw_sha256_file(path):
@@ -903,6 +1011,17 @@ def _main(argv=None):
         "checkout can run for boxes whose fixtures it does not hold",
     )
     mode.add_argument(
+        "--compare",
+        nargs=2,
+        type=Path,
+        metavar=("A", "B"),
+        help="say what differs between two fixture files, reading no digest record: the metadata "
+        "keys added, removed or changed from A to B, then each tensor's dtype, shape and payload "
+        "verdict. Exit 0 when every tensor is identical (a metadata-only difference included), 1 "
+        "when a tensor differs, 2 when a file is unreadable. It tells a content-v1 MISMATCH that "
+        "is metadata only from a changed tensor stream",
+    )
+    mode.add_argument(
         "--list-declared-measurement-boxes",
         action="store_true",
         help="print the explicit measurement-boxes header, one box per line; print nothing for "
@@ -968,6 +1087,28 @@ def _main(argv=None):
             "--expect-recorded is a condition on --check's or --check-names's verdict; no other "
             "mode reads it"
         )
+    if args.compare:
+        if args.fixtures:
+            ap.error("--compare takes its two files as its own arguments; give no other fixtures")
+        if args.origin is not None or args.adopt_legacy is not None or args.digests is not None:
+            ap.error("--compare reads two files and no digest record; it takes no --origin, "
+                     "--adopt-legacy or --digests")
+        a, b = args.compare
+        try:
+            lines, differing = compare_fixtures(a, b)
+        except (OSError, ValueError) as error:
+            # 2, never 1: an unreadable file is no verdict about either file's tensors.
+            print(f"fixture_digest.py --compare: unreadable: {error}", file=sys.stderr)
+            return 2
+        print(f"A: {json.dumps(str(a))}")
+        print(f"B: {json.dumps(str(b))}")
+        for line in lines:
+            print(line)
+        if differing:
+            print(f"verdict: {differing} tensor(s) differ -- not the same workload")
+            return 1
+        print("verdict: every tensor identical (dtype, shape, payload)")
+        return 0
     if args.list_declared_measurement_boxes:
         if args.fixtures:
             ap.error("--list-declared-measurement-boxes reads only --digests; give no fixtures")

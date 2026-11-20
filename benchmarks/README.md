@@ -1099,7 +1099,10 @@ recorded stream (a numpy upgrade, a changed spec or generator). The generator's 
 its own: it writes metadata keys added since older files were recorded (e.g. `loss_scale`), so a
 rebuild of `lenet`, `cifar_conv`,
 `cifar_stride` or `mlp_small` MISMATCHes its row while every tensor's dtype, shape and payload
-equal the recorded file's (gh-ocannl-2004, on mac-studio's numpy 2.5.1 venv). So a
+equal the recorded file's (gh-ocannl-2004, on mac-studio's numpy 2.5.1 venv). To tell the two
+apart, run `python3 benchmarks/fixture_digest.py --compare <recorded copy> <candidate>`: it lists the
+metadata keys added, removed or changed, then each tensor's dtype, shape and payload verdict, and
+exits 0 only when every tensor is identical (1 when one differs, 2 when a file is unreadable). So a
 `content-v1` MISMATCH alone does not say the bytes are lost; either way the candidate stays out
 of `fixtures/`. Get the recorded bytes back from where they are kept (next paragraph); only when
 no copy survives is replacing them the cross-box regeneration above. What the rule forbids is
