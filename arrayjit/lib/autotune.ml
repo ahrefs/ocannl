@@ -1599,11 +1599,7 @@ let host_load_reading : (unit -> Host_load.reading option) Seam.t = Seam.make Ho
 let on_batch_wall : (depth:int -> ordinal:int -> float -> float) Seam.t =
   Seam.make (fun ~depth:_ ~ordinal:_ wall -> wall)
 
-(* Unless the test-only scope above is active, only an admitted window reaches the seam; its result
-   then passes the same [admitted_timing_ms] gate as a real reading, so a value that gate refuses
-   (zero, negative, NaN, infinite) refuses the window exactly as a degenerate clock reading would --
-   through the caller's ordinary refusal path, with nothing raised outside the search's cleanup
-   boundaries. *)
+(* The test scope's flags on a reading; idempotent, applied by [time_routine] and at admission. *)
 let scoped_window_contention timing_result =
   match Seam.get test_window_contention with
   | Physical -> timing_result
@@ -1615,6 +1611,11 @@ let scoped_window_contention timing_result =
       }
   | Forced -> { timing_result with contended = true }
 
+(* Unless the test-only scope above is active, only an admitted window reaches the seam; its result
+   then passes the same [admitted_timing_ms] gate as a real reading, so a value that gate refuses
+   (zero, negative, NaN, infinite) refuses the window exactly as a degenerate clock reading would --
+   through the caller's ordinary refusal path, with nothing raised outside the search's cleanup
+   boundaries. *)
 let apply_measurement_seam ~label ~digest timing_result =
   let timing_result = scoped_window_contention timing_result in
   match admitted_timing_ms timing_result with
