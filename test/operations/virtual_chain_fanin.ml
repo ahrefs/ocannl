@@ -2910,7 +2910,9 @@ let phase12 () =
          weighted ~weights:[| 1 |] ~modulus:2 ~offset:1. ~stride:1. [| i |])
    in
    let h_vals = Array.init (3 * dim) ~f:(fun i -> perm i -. g_vals.(i)) in
-   let onehot_seed = [ (out, blank (cells * cells)); (h, h_vals); (g, g_vals) ] in
+   let onehot_seed =
+     [ (s, blank (cells * cells)); (out, blank (cells * cells)); (h, h_vals); (g, g_vals) ]
+   in
    let producer =
      let i = sym () in
      loop_n i cells (set a [| iter i |] (add (get h [| iter i |]) (get g [| iter i |])))

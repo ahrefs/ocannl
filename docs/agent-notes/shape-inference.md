@@ -195,7 +195,7 @@ files.
     `test/einsum/test_concat_order_independence.ml`. The refusals among them also pin
     `zero_waits`' invariant that no settling arm binds a held stated 0: each holds its 0 through
     the stage 2-4 fixpoints where `settle_window` probes it, so a mutant settling arm firing on a
-    bare `Var = Dim` turns six of those claims red.
+    bare `Var = Dim` turns the stated-0 refusals among them red.
 - A nonidentity plain or padded stride derives `default` from a claim-free extent
   (gh-ocannl-2245), through `stride_input_basis` in substitution and unification. Copying
   `1_(bcast_if_1)`'s tag onto size 2 created a concatenation claim from a filler: 20 of
