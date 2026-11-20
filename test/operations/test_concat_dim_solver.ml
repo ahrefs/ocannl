@@ -595,7 +595,9 @@ let test_zero_component () =
         | exception Row.Shape_error _ -> false));
   (* A 0 stated outright binds only a variable that may be empty (gh-ocannl-2368). For any other it
      waits while constraints register, so an alias to a discardable variable arriving later still
-     binds it, and is refused at closing. On the base this store accepted [u = 0]. *)
+     binds it, and is refused at closing. On the base this store accepted [u = 0]. These refusals
+     also pin [Row.zero_waits]' invariant: the held 0 sits through the stage 2-4 fixpoints where
+     [settle_window] probes it, so a settling arm that bound it would accept the store. *)
   in_every_order "[u; 4] = [k; 2], k = 2, u = 0 stated: refused" ~n:3
     (fun u k _ ->
       [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2); eq (Row.Var u) (dim 0) ])

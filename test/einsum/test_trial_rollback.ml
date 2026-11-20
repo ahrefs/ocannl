@@ -1,11 +1,14 @@
 (* gh-ocannl-2129: a refused trial solve leaves no trace. The row solver tries equations it may drop
-   -- [solve_dim_ineq]'s equality merge of two bounds, an open window's candidate tags and the probe
-   vetting them -- and a [Var = Var] merge shares a use-site mark ([resolve_at_use_dim]) before a
-   later part of the same trial fails. The mark decides how the variable closes: marked, an
-   unconstrained dim with a bound closes to it at stage 6; unmarked, it closes minimal at stage 7.
-   So a leaked mark changes the shape silently. Each case below is run with a mark that only the
-   refused trial could share, against the same system with nothing marked, and a control shows the
-   closing does tell a marked variable apart.
+   -- [solve_dim_ineq]'s equality merge of two bounds, a balanced-flank row equation's overlaps, an
+   open window's candidate tags and the probe vetting them -- and a [Var = Var] merge shares a
+   use-site mark ([resolve_at_use_dim]) before a later part of the same trial fails. The mark
+   decides how the variable closes: marked, an unconstrained dim with a bound closes to it at stage
+   6; unmarked, it closes minimal at stage 7. So a leaked mark changes the shape silently. Each case
+   below is run with a mark that only the refused trial could share, against the same system with
+   nothing marked, and a control shows the closing does tell a marked variable apart. Since
+   gh-ocannl-2368 the equality merge pairs only where that discharges the equation whole, so the
+   refused trial sharing a mark here is the balanced-flank overlap trial of [unify_row]
+   (gh-ocannl-2154): the merges pin a postponement and a reconciled commit.
 
    The window sites (a candidate's solve, the probe vetting it) are rolled back too, but no system
    here makes their leak visible: the marks a refused candidate shares come from equations the held
@@ -67,9 +70,9 @@ let show = function Ok (_, env) -> fun v -> value env v | Error msg -> fun _ -> 
    refused, demoting the operand to the broadcast top. That refusal was the pairing's: [b = a + c +
    2] satisfies the sum, and since gh-ocannl-2368 the equation waits instead, so the merge commits
    and no mark is shared. With [b] then sized 7 by its bound, [a + c = 5] is left to closure, which
-   cannot split it: the store is refused, alike with and without the mark. No other trial here
-   shares a mark through the pairing arm and is then refused: pairing now fires only where it
-   discharges the equation whole. *)
+   cannot split it: the store is refused, alike with and without the mark. No trial shares a mark
+   through the pairing arm and is then refused: pairing now fires only where it discharges the
+   equation whole ([flank_refused] below is the refusal that shares one). *)
 let merge_reconciled ~mark =
   let v = Row.get_var () and b = Row.get_var () and a = Row.get_var () and c = Row.get_var () in
   if mark then Row.add_resolve_at_use_dim a;
@@ -109,6 +112,30 @@ let merge_postponed ~mark =
   in
   (show r v, show r b, Row.is_resolve_at_use_dim b)
 
+(* The balanced-flank overlap trial ([unify_row], gh-ocannl-2154): a refused trial that shares a
+   mark. [[a; e; 3].<v> = <v2>.[b; f; 5]] waits to stage 6, which tries the overlaps k = 0, 1, 2 and
+   commits the least whose consequences raise nothing. At k = 0 the rows align whole: a = b shares
+   a's mark, and 3 = 5 refuses. At k = 1, v2 = [a] aligns [e; 3] with [b; f]: b merges with the
+   unmarked e only, and with its bound of 7 closes as with nothing marked. *)
+let flank_refused ~mark =
+  let v = Row.get_row_var () and v2 = Row.get_row_var () in
+  let a = Row.get_var () and e = Row.get_var () and b = Row.get_var () and f = Row.get_var () in
+  if mark then Row.add_resolve_at_use_dim a;
+  let prov = Row.provenance ~sh_id:2129 ~kind:`Output in
+  let lhs : Row.t = { beg_dims = [ Var a; Var e; dim 3 ]; dims = []; bcast = Row_var v; prov }
+  and rhs : Row.t = { beg_dims = []; dims = [ Var b; Var f; dim 5 ]; bcast = Row_var v2; prov } in
+  let r =
+    run
+      ([
+         (Row.Stage1, [ Row.Row_eq { r1 = lhs; r2 = rhs; origin } ]);
+         (Stage2, []);
+         (Stage3, []);
+         (Stage4, [ ineq (dim 7) (Var b); close [ b ] ]);
+       ]
+      @ List.map closing ~f:(fun s -> (s, [])))
+  in
+  (show r b, show r f, Row.is_resolve_at_use_dim b)
+
 (* The control: [b] marked itself closes to its bound, so the claims below can fail. *)
 let marked_directly () =
   let b = Row.get_var () in
@@ -136,6 +163,18 @@ let () =
       p "and b, merged with the marked a inside the postponed attempt, stays unmarked"
         (not b_marked);
       p "so it closes as with nothing marked" (String.equal b b' && String.equal b "1 of bcast_if_1"))
+
+let () =
+  Verdict.case "a refused overlap trial leaves no mark" (fun () ->
+      let b, f, b_marked = flank_refused ~mark:true and b', f', _ = flank_refused ~mark:false in
+      Stdio.eprintf
+        "overlap trial: b = %s marked, %s unmarked; f = %s, %s (not part of the golden)\n" b b' f f';
+      p "[a; e; 3].<v> = <v2>.[b; f; 5]: the overlap k = 1 commits, f = 3"
+        (String.equal f "3 of default" && String.equal f f');
+      p "and b, merged with the marked a inside the refused overlap k = 0, stays unmarked"
+        (not b_marked);
+      p "so it closes as with nothing marked: minimal"
+        (String.equal b b' && String.equal b "1 of bcast_if_1"))
 
 (* Search: held windows over one output (or a shared kernel), every order. *)
 let window ?(stride = 1) ~kernel over =

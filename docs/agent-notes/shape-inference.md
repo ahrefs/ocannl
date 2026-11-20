@@ -192,7 +192,10 @@ files.
     broadcast inequality rather than an equation, still reads plain membership: it is not a zero
     rule. Pins: `test_zero_component`, `test_alias_guesses_empty`, `test_unequal_arity_waits` in
     `test/operations/test_concat_dim_solver.ml`, and the stated-zero runs of
-    `test/einsum/test_concat_order_independence.ml`.
+    `test/einsum/test_concat_order_independence.ml`. The refusals among them also pin
+    `zero_waits`' invariant that no settling arm binds a held stated 0: each holds its 0 through
+    the stage 2-4 fixpoints where `settle_window` probes it, so a mutant settling arm firing on a
+    bare `Var = Dim` turns six of those claims red.
 - A nonidentity plain or padded stride derives `default` from a claim-free extent
   (gh-ocannl-2245), through `stride_input_basis` in substitution and unification. Copying
   `1_(bcast_if_1)`'s tag onto size 2 created a concatenation claim from a filler: 20 of
@@ -775,8 +778,12 @@ files.
   which drops `env'`; `settle_open`'s refused candidates, through the `settling` record's
   `checkpoint` (`settle_open` sits inside `unify_dim`, above `capture_globals`); the `fits` probe,
   whose environment is always discarded; and `settle_window`'s equation that settled nothing. A
-  leak is silent: a mark shared inside a refused merge closed a bound variable to its GLB (7)
-  instead of 1 (`test/einsum/test_trial_rollback`). Not rewound: fresh ids and the mutation serial
+  leak is silent: a mark shared inside a refused trial closes a bound variable to its GLB (7)
+  instead of 1. `test/einsum/test_trial_rollback` pins it on a refused overlap (`[a; e; 3].<v> =
+  <v2>.[b; f; 5]`, whose k = 0 shares `a`'s mark with `b` before `3 = 5` refuses); since
+  gh-ocannl-2368 the equality merge pairs only where that discharges the equation whole, and no
+  fixture found reaches a refused merge sharing a mark, so its legs pin the postponement and the
+  reconciled commit. Not rewound: fresh ids and the mutation serial
   (forward-only), transient flags cleared on raise, test switches and work counters. A new trial
   site goes through `capture_globals`, and a new inference set joins it (`mutation_serial_scan`).
 - Vetting a window's candidate against every other held constraint (gh-ocannl-2129's second part)
