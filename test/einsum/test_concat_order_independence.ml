@@ -32,13 +32,16 @@
    [./test_concat_order_independence.exe --dump-bounded-outcomes=/abs/path/out.tsv] from
    [_build/default/test/einsum]. A failed build can leave a previous executable there. Each
    tab-separated row gives a store, its order (zero-based constraint indices or [batch]), and the
-   outcome, including each accepted variable's size and basis or [unsized]. The file covers the
-   bounded sub-search only and is written before the verdicts, so a regression run can still be
-   compared. Without the flag no file is opened. The flag leaves stdout and the verdicts alone. From
-   the repo root, run [python3 tools/compare-bounded-outcomes.py BASE.tsv HEAD.tsv]. It compares by
-   (store, order) and exits 1 on differences. To expect exactly N newly accepted rows, pass
-   [--expect-refused-to-accepted N]; see [--help] for the other transition counts. Missing keys
-   always fail the comparison, and malformed dumps (including duplicates) exit 2. *)
+   outcome, including each accepted variable's size and basis or [unsized]. The dump appears only
+   once complete. It covers the bounded sub-search and is published before the solver verdicts, so a
+   regression run can still be compared. A failed write preserves an earlier complete dump at that
+   path. A retry reclaims expired staging files for that destination. Use a fresh path to identify
+   the current run by its output file. The flag alone enables the export and leaves stdout and the
+   verdicts alone. From the repo root, run [python3 tools/compare-bounded-outcomes.py BASE.tsv
+   HEAD.tsv]. It compares by (store, order) and exits 1 on differences. To expect exactly N newly
+   accepted rows, pass [--expect-refused-to-accepted N]; see [--help] for the other transition
+   counts. Missing keys always fail the comparison, and malformed dumps (including duplicates) exit
+   2. *)
 
 open! Base
 open Ocannl
@@ -248,7 +251,8 @@ let bounded_outcomes_path () =
   | _ -> failwith (flag ^ " requires one nonempty output path")
 
 let dump_bounded_outcomes path stores =
-  Stdio.Out_channel.with_file path ~f:(fun out ->
+  Utils.Atomic_file.cleanup_stale_for path;
+  Utils.Atomic_file.with_channel ~path () ~f:(fun out ->
       List.iter stores ~f:(fun ({ items; outs; batched }, _) ->
           let name = store_name items in
           let write run outcome =
@@ -257,6 +261,29 @@ let dump_bounded_outcomes path stores =
           List.iter2_exn (orders items) outs ~f:(fun order outcome ->
               write (String.concat ~sep:"," (List.map order ~f:Int.to_string)) outcome);
           write "batch" (Lazy.force batched)))
+
+let check_bounded_dump_publication () =
+  let path = Stdlib.Filename.temp_file "ocannl-bounded-outcomes-" ".tsv" in
+  Stdlib.Sys.remove path;
+  Exn.protect
+    ~finally:(fun () -> if Stdlib.Sys.file_exists path then Stdlib.Sys.remove path)
+    ~f:(fun () ->
+      let exception Batch_interrupted in
+      (* The ordered row is written before the exporter forces the failing batch. *)
+      let fixture =
+        {
+          items = [ List.hd_exn pool ];
+          outs = [ Refused ];
+          batched = lazy (raise Batch_interrupted);
+        }
+      in
+      let interrupted =
+        match dump_bounded_outcomes path [ (fixture, false) ] with
+        | () -> false
+        | exception Batch_interrupted -> true
+      in
+      p "bounded dump propagates a failed batch" interrupted;
+      p "a failed batch leaves no published bounded dump" (not (Stdlib.Sys.file_exists path)))
 
 let order_dependent { items; outs; _ } =
   let dependent = not (List.for_all outs ~f:(equal_outcome (List.hd_exn outs))) in
@@ -485,6 +512,7 @@ let () =
   Stdio.eprintf "%d order-dependent stores, %d named #2095 exceptions (not part of the golden)\n"
     (List.length dependent) (List.count stores ~f:known_2095);
   let verdicts names = outcomes (List.map names ~f:item) in
+  Verdict.case "bounded dump publication" check_bounded_dump_publication;
   Verdict.case "stride basis derivation" stride_matrix;
   Verdict.case "stride pair solutions" stride_pair_controls;
   Verdict.case "concatenations with tagged components settle alike in every order" (fun () ->

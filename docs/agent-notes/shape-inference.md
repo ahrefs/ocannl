@@ -142,7 +142,10 @@ files.
   in every order and batched. Several free components and equal sums still wait without bounds.
   Compare future dumps with `tools/compare-bounded-outcomes.py` using the exact expected
   row counts for each transition. Counts include ordered and batched rows, so the gh-ocannl-2369
-  comparison expects 600 refused-to-accepted rows across the 24 stores.
+  comparison expects 600 refused-to-accepted rows across the 24 stores. The comparator checks
+  coverage relative to its two inputs. Atomic publication prevents two identically interrupted
+  runs from agreeing on a prefix. The exporter test injects a batch exception after an ordered
+  row and checks that the fresh destination is absent.
 - No path sizes a non-discardable concatenation component to 0, the size only a block spec's
   discardable component may take (gh-ocannl-2316, gh-ocannl-2368). The permission is read through
   substitution everywhere (`may_be_empty`): a variable equated with a discardable one may be empty

@@ -1,3 +1,5 @@
+bounded dump propagates a failed batch: true
+a failed batch leaves no published bounded dump: true
 stride basis rule agrees with pinned extents in both orientations and orders: true
 pinned stride pairs size the other extent in both orders: true
 open stride pairs close to equal sized extents: true
