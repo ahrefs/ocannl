@@ -8,7 +8,7 @@
     sorts each failure into what the leg predicts and what it does not:
 
     - a {b census failure} (expected): a failed claim, in a stanza running a census-judging test,
-      whose label asserts no parity;
+      whose label asserts no parity and speaks the census's vocabulary ({!names_census});
     - an {b expected value failure}: a failed claim asserting parity that {!decline_sensitive}
       lists, each with the reason its reference is one rendering's numerics or its label conjoins a
       census judgment (build-and-test.md#verdict-claims names them);
@@ -44,9 +44,10 @@
 
     {1 What it deliberately does not read}
 
-    - A failed claim whose label neither asserts parity nor judges the census -- a structural claim
-      in a census-judging test -- sorts as a census failure: the label is the reader's one signal,
-      as it is the census scan's.
+    - A claim is read by its rendered label alone, as the census scan reads claims. So a failed
+      claim whose label asserts no parity yet names the census vocabulary sorts as a census failure
+      even if it was in fact a value claim; one naming neither is an anomaly (unread), so a new
+      census wording is a loud red until {!names_census} learns it, never a silent pass.
     - It does not decide which stanzas SHOULD have run: a judged test missing from the sweep is the
       leg's own boundary ([tensorized_census_ratchet] holds every running stanza to declaring the
       variable), not something a log shows. *)
@@ -119,6 +120,43 @@ let asserts_parity label =
   || Tensorized_census_scan.has_word text "within"
   || String.is_substring text ~substring:"same as"
 
+(** Whether a rendered label speaks the census's vocabulary: tensorization by the census scan's own
+    words ({!Tensorized_census_scan.names_tensorization}), or a word of the rendering a census claim
+    describes -- a stem of [render], [register-til], [register til], [label], [structure], [census],
+    [declin], [fallback], [fragment], [intrinsic], [simdgroup], [micro-kernel], [emit], [tile],
+    [tiling], [pack], [panel], [geometry], [bridge], [splat], [lane]. A closed list read off every
+    census claim the saved sweeps fail; a census claim worded outside it reads as an anomaly (see
+    the header). *)
+let names_census label =
+  Tensorized_census_scan.names_tensorization label
+  ||
+  let text = String.lowercase label in
+  List.exists
+    [
+      "render";
+      "register-til";
+      "register til";
+      "label";
+      "structure";
+      "census";
+      "declin";
+      "fallback";
+      "fragment";
+      "intrinsic";
+      "simdgroup";
+      "micro-kernel";
+      "emit";
+      "tile";
+      "tiling";
+      "pack";
+      "panel";
+      "geometry";
+      "bridge";
+      "splat";
+      "lane";
+    ]
+    ~f:(Tensorized_census_scan.has_stem text)
+
 (** {1 Reading a log} *)
 
 (* [line] without its ANSI SGR escapes ([ESC [ ... m]), which a colorized dune writes around a
@@ -151,7 +189,9 @@ type block = {
 
 type log = {
   blocks : block list;
-  others : string list;  (** Failure headers on a file other than a dune file. *)
+  others : string list;
+      (** Failures outside any stanza block, described: a header on a file other than a dune file (a
+          golden diff), or a dune error with no location. *)
   requested : string list;  (** Stanza names of the [runtest-<name>] aliases the run built. *)
   run_exit : int option;  (** A run record's closing [exit: <n>], when the log has one. *)
 }
@@ -308,10 +348,14 @@ let read text =
                       truncated = false;
                     },
                     false )
-            else others := line :: !others;
+            else others := ("a failure on a file other than a dune file: " ^ line) :: !others;
             go rest
         | None ->
             (match !current with
+            | (None | Some (_, true)) when String.is_prefix line ~prefix:"Error: " ->
+                (* A dune error with no location (an empty alias, a refused invocation): no test
+                   block holds it, and nothing it names ran. *)
+                others := ("a dune error with no location: " ^ line) :: !others
             | None -> ()
             | Some (b, torn) ->
                 let b =
@@ -355,6 +399,7 @@ let finished log = match log.run_exit with None | Some (0 | 1) -> true | Some _ 
 
 type verdict =
   | Census  (** Expected under the leg. *)
+  | Unread  (** Anomaly: neither parity nor the census vocabulary. *)
   | Expected_value of string  (** A listed decline-sensitive value claim, with its reason. *)
   | Parity  (** Anomaly: a parity claim failed. *)
 
@@ -402,7 +447,7 @@ let sort ~judged log =
       let claims =
         List.map block.fails ~f:(fun label ->
             let verdict =
-              if not (asserts_parity label) then Census
+              if not (asserts_parity label) then if names_census label then Census else Unread
               else
                 match
                   List.find decline_sensitive ~f:(fun e ->
@@ -426,12 +471,16 @@ let unfinished log =
 
 let anomalies log sorted =
   Option.to_list (unfinished log)
-  @ List.map log.others ~f:(fun header -> "a failure on a file other than a dune file: " ^ header)
+  @ log.others
   @ List.concat_map sorted ~f:(fun s ->
       Option.to_list (Option.map s.anomaly ~f:(fun a -> s.block.stanza ^ ": " ^ a))
       @ List.filter_map s.claims ~f:(fun (label, v) ->
           match v with
           | Parity -> Some (Printf.sprintf "%s: a parity claim failed: %S" s.block.stanza label)
+          | Unread ->
+              Some
+                (Printf.sprintf "%s: a failed claim reads as neither parity nor census: %S"
+                   s.block.stanza label)
           | Census | Expected_value _ -> None))
 
 (** The report, one line a stanza, then its expected value failures and every anomaly, then the
@@ -458,10 +507,13 @@ let render log sorted =
               | Expected_value r when String.equal r reason -> line "      %S" label
               | _ -> ()));
       List.iter s.claims ~f:(fun (label, v) ->
-          match v with Parity -> line "    ANOMALY: a parity claim failed: %S" label | _ -> ());
+          match v with
+          | Parity -> line "    ANOMALY: a parity claim failed: %S" label
+          | Unread ->
+              line "    ANOMALY: a failed claim reads as neither parity nor census: %S" label
+          | _ -> ());
       Option.iter s.anomaly ~f:(fun a -> line "    ANOMALY: %s" a));
-  List.iter log.others ~f:(fun h ->
-      line "  ANOMALY: a failure on a file other than a dune file: %s" h);
+  List.iter log.others ~f:(fun o -> line "  ANOMALY: %s" o);
   Option.iter (unfinished log) ~f:(fun a -> line "  ANOMALY: %s" a);
   let red = List.map sorted ~f:(fun s -> s.block.stanza) in
   let held =

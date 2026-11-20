@@ -45,6 +45,8 @@ the cc sweep has a red census-judging test stanza to plant in: true
 the sorter flags a failed parity claim planted in the cc sweep, naming its stanza: true
 the sorter flags a failed tolerance claim planted in the cc sweep, naming its stanza: true
 the sorter flags a failed parity claim under a colorized header planted in the cc sweep, naming its stanza: true
+the sorter flags a failed value claim in neither vocabulary planted in the cc sweep, naming its stanza: true
+the sorter flags a dune error with no location planted in the cc sweep, naming its stanza: true
 the sorter flags a crash planted in the cc sweep, naming its stanza: true
 the sorter flags an unaccounted failure count planted in the cc sweep, naming its stanza: true
 the sorter flags a failure outside the census-judging tests planted in the cc sweep, naming its stanza: true

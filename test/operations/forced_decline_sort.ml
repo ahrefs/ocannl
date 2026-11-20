@@ -113,6 +113,16 @@ let () =
             append
               (colored_header stanza
               ^ one_fail "planted: the tensorized matmul matches the serial twin") );
+          (* Value claims whose labels name neither parity nor the census (qkv_zero_init's and
+             tile_mma_narrow's wordings). *)
+          ( "a failed value claim in neither vocabulary",
+            stanza,
+            append
+              (header stanza ^ one_fail "planted: fission qkv resets the accumulator on every call")
+          );
+          ( "a dune error with no location",
+            "Alias",
+            append "Error: Alias \"nope\" specified on the command line is empty.\n" );
           ( "a crash",
             stanza,
             append (header stanza ^ "Fatal error: exception Failure(\"planted\")\n") );
