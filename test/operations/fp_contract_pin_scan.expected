@@ -162,6 +162,7 @@ test/operations/verdict_ratchet.ml -- not-executed: the bitwise text is a scan's
 test/operations/winograd_conv.ml -- exact-operands: bounded integer fixtures with dyadic transforms, every sum exact in f32
 test/operations/wrap_prec_convert.ml -- no-contraction: a same-precision wrap readback compared with host data is a pure copy
 test/operations/zero_elision.ml -- pinned off
+test/support/forced_decline_sort.ml -- not-executed: a log reader matching claim labels as text
 test/support/tensorized_census_scan.ml -- not-executed: a scan reader matching the word in claim labels
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:

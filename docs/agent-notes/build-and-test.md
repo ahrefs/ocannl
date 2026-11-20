@@ -3284,8 +3284,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   false/| None | Some ("" | "0") -> Ok true/' @test/operations/runtest-<name>`
   (`schedule_batched_mma`: caught on cc and Metal): it refuses a red baseline and counts a run only
   once it reached its last row, so a crash the hook causes is not read as a caught census claim. The
-  environment form is the cheaper sweep over every declaring stanza, and its reds still need sorting
-  by hand.
+  environment form is the cheaper sweep over every declaring stanza, and its reds are sorted by
+  `tensorized_census_ratchet.exe --sort-forced-decline <checkout> <log>...` (built by `dune build
+  ./test/operations/tensorized_census_ratchet.exe`; the log is the run record's,
+  `"$(tools/test-run.sh paths run last)/log"`). Against the ratchet's own census-judging set
+  (`Tensorized_census_scan.judged_paths`) it counts each red stanza's census failures and flags as
+  an anomaly, with its stanza, a failed parity claim (the census scan's `asserts_parity` words), a
+  crash, a failure count it cannot account for (dune's truncation included), a failure outside the
+  census-judging tests and any non-stanza failure (a golden diff); the value claims above are a
+  listed judgment (`Forced_decline_sort.decline_sensitive`). Exit 0 means every failure is one the
+  hook predicts. `forced_decline_sort`'s golden pins its sort of the cc and Metal sweeps of
+  lukstafi/ocannl-staging#2233 (`test/operations/forced_decline_logs/`), which reproduces that PR's
+  hand sort, and flags a planted failure of each anomalous kind.
 
 ## Hand-built IR tests
 

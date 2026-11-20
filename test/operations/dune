@@ -8449,6 +8449,20 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ ; ocannl-backend: none -- reads saved sweep logs and this directory's test sources as text.
+ ; The forced-decline sorter (`tensorized_census_ratchet.exe --sort-forced-decline`) over the cc
+ ; and Metal sweeps of lukstafi/ocannl-staging#2233 (forced_decline_logs/): the sort reproduces
+ ; that PR's hand sort, and a planted failure of each anomalous kind is flagged with its stanza.
+ (name forced_decline_sort)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (glob_files *.ml)
+  (glob_files forced_decline_logs/*.txt))
+ (modules forced_decline_sort)
+ (libraries base stdio test_scan arrayjit.verdict))
+
 ; gh-ocannl-605: the environment and commandline spellings of a configuration key. The rule sets
 ; the synthetic keys the executable looks up -- `demo_key` in the one environment spelling that
 ; survives and in the three dash-prefixed ones that do not, `dashed_only_key` in the dropped ones

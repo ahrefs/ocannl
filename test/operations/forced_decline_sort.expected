@@ -1,0 +1,53 @@
+this directory holds census-judging tests: true
+every decline-sensitive value claim the sorter lists names a claim its source still writes: true
+the sorter read a saved forced-decline sweep: true
+
+forced-decline sort of pr2233_cc.txt:
+  schedule_batched_mma: 2 census claim(s) failed (test/operations/schedule_batched_mma.ml)
+  schedule_pack_mma_matmul: 6 census claim(s) failed (test/operations/schedule_pack_mma_matmul.ml)
+  schedule_pad: 3 census claim(s) failed (test/operations/schedule_pad.ml)
+  schedule_mma_matmul: 15 census claim(s) failed (test/operations/schedule_mma_matmul.ml)
+  vec_signed_zero: 1 census claim(s) failed (test/operations/vec_signed_zero.ml)
+  schedule_pad-contract_off: 3 census claim(s) failed (test/operations/schedule_pad.ml)
+  schedule_conv_gemm: 12 census claim(s) failed (test/operations/schedule_conv_gemm.ml)
+  tile_mma_narrow: 7 census claim(s) failed (test/operations/tile_mma_narrow.ml)
+  schedule_conv_gemm-tf32: 12 census claim(s) failed (test/operations/schedule_conv_gemm.ml)
+  held: online_softmax_block_mma qkv_zero_init qkv_zero_init-approximate reduction_forms schedule_coalesce schedule_swizzle_matmul tf32_reference_rounding tf32_reference_rounding-tf32 tile_mma_forced_decline
+  9 stanza(s) red, 9 held, 0 anomaly(ies): every failure is one the forced decline predicts
+pr2233_cc.txt: every failure is one the forced decline predicts: true
+
+forced-decline sort of pr2233_metal.txt:
+  schedule_pad: 1 census claim(s) failed (test/operations/schedule_pad.ml)
+  schedule_batched_mma: 4 census claim(s) failed (test/operations/schedule_batched_mma.ml)
+  qkv_zero_init: 0 census claim(s) failed (test/operations/qkv_zero_init.ml)
+    expected value failure(s), since the label conjoins a census judgment (renders tensorized) with parity; the separate parity claim over the same sketches is the one that must hold:
+      "every tensorized folded qkv sketch renders tensorized and matches the materialized run"
+      "every tensorized folded f16-operand qkv sketch renders tensorized and matches the materialized run"
+      "every tensorized folded routine-local product with its tail sketch renders tensorized and matches the materialized run"
+  online_softmax_block_mma: 10 census claim(s) failed (test/operations/online_softmax_block_mma.ml)
+  qkv_zero_init-approximate: 0 census claim(s) failed (test/operations/qkv_zero_init.ml)
+    expected value failure(s), since the label conjoins a census judgment (renders tensorized) with parity; the separate parity claim over the same sketches is the one that must hold:
+      "every tensorized folded qkv sketch renders tensorized and matches the materialized run"
+      "every tensorized folded f16-operand qkv sketch renders tensorized and matches the materialized run"
+      "every tensorized folded routine-local product with its tail sketch renders tensorized and matches the materialized run"
+  schedule_mma_matmul: 24 census claim(s) failed (test/operations/schedule_mma_matmul.ml)
+    expected value failure(s), since its reference is the persistent fragment's once-per-tile narrowing, which the declined scope's per-block narrowing misses by construction:
+      "staged+tensorized Fp16_wide matmul equals the once-narrowed wide reference bitwise"
+      "staged+tensorized Bf16_wide matmul equals the once-narrowed wide reference bitwise"
+  schedule_pad-contract_off: 1 census claim(s) failed (test/operations/schedule_pad.ml)
+  schedule_coalesce: 4 census claim(s) failed (test/operations/schedule_coalesce.ml)
+  schedule_conv_gemm: 7 census claim(s) failed (test/operations/schedule_conv_gemm.ml)
+  schedule_conv_gemm-tf32: 7 census claim(s) failed (test/operations/schedule_conv_gemm.ml)
+  held: reduction_forms schedule_pack_mma_matmul schedule_swizzle_matmul tf32_reference_rounding tf32_reference_rounding-tf32 tile_mma_forced_decline tile_mma_narrow vec_signed_zero
+  10 stanza(s) red, 8 held, 0 anomaly(ies): every failure is one the forced decline predicts
+pr2233_metal.txt: every failure is one the forced decline predicts: true
+the cc sweep has a red census-judging test stanza to plant in: true
+the sorter flags a failed parity claim planted in the cc sweep, naming its stanza: true
+the sorter flags a failed tolerance claim planted in the cc sweep, naming its stanza: true
+the sorter flags a failed parity claim under a colorized header planted in the cc sweep, naming its stanza: true
+the sorter flags a crash planted in the cc sweep, naming its stanza: true
+the sorter flags an unaccounted failure count planted in the cc sweep, naming its stanza: true
+the sorter flags a failure outside the census-judging tests planted in the cc sweep, naming its stanza: true
+the sorter flags a golden diff planted in the cc sweep, naming its stanza: true
+the sorter flags an unfinished run (a capped batch's exit status) planted in the cc sweep, naming its stanza: true
+an unfinished run's report lists no held stanza: true
