@@ -36,11 +36,13 @@
 # search over candidates nobody compiled before -- the case the cache is for -- meets the cold cost.
 #
 # Every bench_gpt process is a cell of the shared runner (ROOT's benchmarks/cells.py `cell`,
-# gh-ocannl-1607): no OCANNL_*, BENCH_* or OpenMP variable and no config file reaches it, the backend
-# and the treatment are on argv and the runner modes stated, it runs from a directory of its own
-# under OUT (OUT/dump, OUT/search, OUT/search-mib<arm>-r<round>: each keeps its cell.json record), and
-# its resolved configuration is read back. CUDA_CACHE_DISABLE is the CUDA driver's, passed through
+# gh-ocannl-1607): no ambient OCANNL_*, BENCH_* or OpenMP variable and no config file reaches it,
+# the backend and treatment are on argv, and the runner modes are stated. Each runs in its own
+# directory under OUT (OUT/dump, OUT/search, OUT/search-mib<arm>-r<round>) with a cell.json record
+# and reads back its resolved configuration. CUDA_CACHE_DISABLE is the CUDA driver's, passed through
 # and recorded with the cell. The probe is a C program, not an OCANNL process, and runs as it is.
+# Each cell sets BENCH_DOMINANT_KERNEL=0 because the driver reports compile costs and reads no
+# per-kernel timings.
 #
 # Exit: 0 every step succeeded; 1 a step failed; 2 usage; 125 a process outlived its cleanup.
 set -u
@@ -121,7 +123,7 @@ case "${1:-}" in
     # is written beside its source as <routine>.ptx; with it on, a cache-miss program is named apart.
     python3 "$ROOT/benchmarks/cells.py" cell --backend cuda --dir "$OUT/dump" \
       --stdout "$OUT/dump.out" --stderr "$OUT/dump.err" --expect cuda_kernel_cache_mib=0 -- \
-      BENCH_FIXTURE="$FIX" BENCH_TUNE=0 "$OUT/bin/bench_gpt.exe" \
+      BENCH_FIXTURE="$FIX" BENCH_TUNE=0 BENCH_DOMINANT_KERNEL=0 "$OUT/bin/bench_gpt.exe" \
       --ocannl_output_debug_files_in_build_directory=true --ocannl_cuda_kernel_cache_mib=0 \
       --ocannl_build_files_prefix="$PREFIX" \
       || { echo "gh1529: the untuned dump run failed (see $OUT/dump.err)" >&2; exit 1; }
@@ -168,7 +170,8 @@ case "${1:-}" in
     rm -rf "$OUT/autotune_cache"
     python3 "$ROOT/benchmarks/cells.py" cell --backend cuda --dir "$OUT/search" \
       --stdout "$OUT/search.out" --stderr "$OUT/search.err" -- \
-      BENCH_FIXTURE="$FIX" BENCH_TUNE=1 BENCH_TIMING_TRACE=1 "$OUT/bin/bench_gpt.exe" \
+      BENCH_FIXTURE="$FIX" BENCH_TUNE=1 BENCH_DOMINANT_KERNEL=0 BENCH_TIMING_TRACE=1 \
+      "$OUT/bin/bench_gpt.exe" \
       --ocannl_autotune_cache_dir="$OUT/autotune_cache" \
       --ocannl_tune_call_budget_seconds="$BUDGET"
     rc=$?
@@ -201,7 +204,8 @@ case "${1:-}" in
         rm -rf "$OUT/autotune_cache"
         CUDA_CACHE_DISABLE=1 python3 "$ROOT/benchmarks/cells.py" cell --backend cuda \
           --dir "$base" --stdout "$base.out" --stderr "$base.err" -- \
-          BENCH_FIXTURE="$FIX" BENCH_TUNE=1 BENCH_TIMING_TRACE=1 "$OUT/bin/bench_gpt.exe" \
+          BENCH_FIXTURE="$FIX" BENCH_TUNE=1 BENCH_DOMINANT_KERNEL=0 BENCH_TIMING_TRACE=1 \
+          "$OUT/bin/bench_gpt.exe" \
           ${arm[@]+"${arm[@]}"} --ocannl_autotune_cache_dir="$OUT/autotune_cache" \
           --ocannl_tune_call_budget_seconds="$BUDGET"
         rc=$?
