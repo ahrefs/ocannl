@@ -51,6 +51,9 @@ case: a claim in capitals is a claim too: true
 case: a pin to another mode is no pin: true
 case: Utils.state_config of off is a pin, its labels in either order: true
 case: Utils.state_config of fast is no pin: true
+case: Utils.state_config of off replaced by fast is no pin: true
+case: Utils.state_config of fast outranks the putenv of off: true
+case: Utils.unstate_config withdraws the statement of off: true
 case: a marker of an unknown kind is refused: true
 case: a one-word reason is refused: true
 case: a sentinel that does not open its comment is refused: true
@@ -178,6 +181,9 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:3ef51a84cfe8ca3b03690fcda8b63c21] to another mode
   [scanner-refusal:02d106e7052951bcf97aada0e6bd4f13] Utils.state_config
   [scanner-refusal:08304716a8de10400315dadefbfc01d0] Utils.state_config
+  [scanner-refusal:6b3c897a51c7aa7f19a5aee3aa606bb8] Utils.state_config
+  [scanner-refusal:19b74f64556e25424a61189b12a8d9c1] Utils.state_config
+  [scanner-refusal:a1474866d87b39b20580a308ff625d49] Utils.unstate_config
   [scanner-refusal:19ba2d6c29ec6da6833b4f6102b96167] an unknown kind
   [scanner-refusal:6a15033dd60a8451f9ff4ba97f4280cb] one-word reason is
   [scanner-refusal:be5184012422a01273ca348715955f05] sentinel that does
