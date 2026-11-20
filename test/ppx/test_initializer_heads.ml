@@ -69,12 +69,16 @@ let%op number_object_field n () x =
   {
     w =
       !..(let selected = ref 0 in
-          object
-            val n = 3
-            initializer selected := n
-            method value = !selected
-          end
-            #value);
+          let field =
+            object
+              val n = 3
+              initializer selected := n
+              method value = n
+            end
+              #value
+          in
+          Verdict.p "object method reads the preceding field value 3" (Int.equal field 3);
+          !selected);
     o = [ 1 ];
   }
   *. x

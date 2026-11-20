@@ -143,11 +143,16 @@ let number_object_field =
             ?value:(Some
                       (Float.of_int
                          (let selected = ref 0 in
-                          (object
-                             val n = 3
-                             initializer selected := n
-                             method value = !selected
-                           end)#value))) ?values:None ?param_init:None "w")
+                          let field =
+                            (object
+                               val n = 3
+                               initializer selected := n
+                               method value = n
+                             end)#value in
+                          Verdict.p
+                            "object method reads the preceding field value 3"
+                            (Int.equal field 3);
+                          !selected))) ?values:None ?param_init:None "w")
            ~output_dims:[1]) () in
       let __ocannl_body x =
         let n = Int.succ n in
