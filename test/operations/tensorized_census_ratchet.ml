@@ -8,6 +8,7 @@ open Verdict.Claims
 module Scan = Test_scan.Tensorized_census_scan
 module Inventory = Test_scan.Source_inventory
 module Dune = Test_scan.Dune_stanza_scan
+module Sort = Test_scan.Forced_decline_sort
 
 (* A row absorbs every unjudged tensorized parity claim of its file with this label (the label
    expression as the refusal prints it), and says why that claim needs no census. A row nothing
@@ -82,10 +83,7 @@ let scan ?(pin_harness = true) ?(check_hook = true) ~exemptions root generated =
         claim.label);
   List.iter (Scan.violations ~exemptions sources) ~f:Verdict.fail;
   if check_hook then (
-    let judged =
-      List.filter_map read ~f:(fun (path, _, judged) -> Option.some_if judged path)
-      |> List.dedup_and_sort ~compare:String.compare
-    in
+    let judged = Scan.judged_paths sources in
     let undeclared = undeclared_hook inventory judged in
     List.iter undeclared ~f:Verdict.fail;
     p_empty "every stanza running a census-judging test declares the forced-decline variable"
@@ -109,8 +107,40 @@ let scan ?(pin_harness = true) ?(check_hook = true) ~exemptions root generated =
   List.iter exemptions ~f:(fun (e : Scan.exemption) ->
       printf "%s -- `%s`: %s\n" e.path e.label e.reason)
 
+(* [--sort-forced-decline ROOT LOG...]: sort each saved sweep LOG against the census-judging tests
+   of the checkout ROOT (its test/ and arrayjit/test/ sources; no build tree is read). Exit 0 when
+   every failure is one the forced decline predicts, 1 on an anomaly, 2 on an unreadable log. *)
+let sort_logs root logs =
+  let sources =
+    List.concat_map [ "test"; "arrayjit/test" ] ~f:(fun dir ->
+        Inventory.regular_files (Stdlib.Filename.concat root dir))
+    |> List.map ~f:(fun on_disk -> (Inventory.relative_to_root ~root on_disk, on_disk))
+    (* A [.pp.ml] is dune's marshalled AST, present only when ROOT is a build tree. *)
+    |> List.filter ~f:(fun (path, _) ->
+        Test_scan.Ll_test_scan.test_source path && not (String.is_suffix path ~suffix:".pp.ml"))
+    |> List.map ~f:(fun (path, on_disk) -> (path, In_channel.read_all on_disk))
+  in
+  let judged = Scan.judged_paths sources in
+  if List.is_empty judged then (
+    eprintf "no census-judging test under %s/test: is it an OCANNL checkout?\n" root;
+    Stdlib.exit 2);
+  let anomalous =
+    List.count logs ~f:(fun path ->
+        match In_channel.read_all path with
+        | exception Sys_error e ->
+            eprintf "unreadable log: %s\n" e;
+            Stdlib.exit 2
+        | text ->
+            let log = Sort.read text in
+            let sorted = Sort.sort ~judged log in
+            printf "forced-decline sort of %s:\n%s" path (Sort.render log sorted);
+            not (List.is_empty (Sort.anomalies log sorted)))
+  in
+  Stdlib.exit (if anomalous > 0 then 1 else 0)
+
 let () =
   match Array.to_list Stdlib.Sys.argv with
+  | _ :: "--sort-forced-decline" :: root :: (_ :: _ as logs) -> sort_logs root logs
   | [ _; "--fixture"; root ] -> scan ~pin_harness:false ~check_hook:false ~exemptions:[] root []
   | [ _; "--fixture-hook"; root ] -> scan ~pin_harness:false ~exemptions:[] root []
   | [ _; "--fixture-exempt"; root ] ->

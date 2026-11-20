@@ -554,6 +554,17 @@ let tensorized_executed content =
                 Some
                   { claim; judged = false; via = (if c = claim.item then None else Some (line c)) }))
 
+(** The census-judging tests: the paths of [sources] ([(path, content)]) with an executed tensorized
+    parity claim whose every execution judges the census, sorted. [tensorized_census_ratchet] holds
+    every stanza running one to declaring the forced-decline variable, and the forced-decline sorter
+    ({!Forced_decline_sort}) sorts a sweep's failures against the same set. *)
+let judged_paths sources =
+  List.filter_map sources ~f:(fun (path, content) ->
+      Option.some_if
+        (List.exists (tensorized_executed content) ~f:(fun (r : reading) -> r.judged))
+        path)
+  |> List.dedup_and_sort ~compare:String.compare
+
 (** The claims a source must not ship: tensorized, executed, and with no census judgment in reach.
 *)
 let unjudged content =

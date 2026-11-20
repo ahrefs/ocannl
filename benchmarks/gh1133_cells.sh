@@ -105,12 +105,25 @@
 # FIXTURES (default the three inference and three training fixtures), TREATMENTS (default
 # "base fill1 fill256"), FIXTURE_DIR (default benchmarks/fixtures of this checkout), REF (default
 # base: the treatment the summary's ratio column divides by; a d1 treatment divides by d1REF),
-# KERNEL_TABLE (default 1: every shipped kernel's min-of-20 time, geometry and written nodes go to
+# KERNEL_TABLE (default 1: every shipped kernel's time, geometry and written nodes go to
 # the cell's .err, the per-kernel attribution of gh-ocannl-1002; 0 turns it off -- on by default
 # because a lane or fission A/B moves kernels, and one step-time line hid gh-ocannl-1167's wrong
-# premise where only the table exposed it; it costs nothing extra: the dominant-kernel instrument
-# times every kernel either way, after the timed steps), REF_ALL (default unset: a treatment every
-# cell's ratio divides by, overriding REF's d1 pairing -- for the b<T> A/Bs).
+# premise where only the table exposed it; kprof's attribution reads it, so a kprof run keeps it
+# on), REF_ALL (default unset: a treatment every cell's ratio divides by, overriding REF's d1
+# pairing -- for the b<T> A/Bs).
+#
+# What KERNEL_TABLE=1 costs, so a measurement request can size its deadline: the table re-times
+# EVERY shipped kernel of a step or kprof cell, after the timed steps -- the median and range of
+# four calibrated timing calls each, about half a second a call whatever the kernel's size
+# (gh-ocannl-1694) -- where the table-off instrument screens them with one call each and re-times
+# only the few slowest (gh-ocannl-1763, 1818). It stops at the runner's instrument budget,
+# BENCH_DOMINANT_KERNEL_BUDGET_S (default 600 s; this driver clears BENCH_*, so the default
+# applies), and a many-kernel training step on a GPU reaches it: on gfx1151 (minix-amd-linux) every
+# gpt2_mini_train cell took 624-630 s, the budget plus its steps, so a one-hour window stopped a
+# 12-cell run after six (gh-ocannl-2362, lukstafi/ocannl-staging#2224). So allow up to ten minutes a
+# step/kprof cell on top of the steps, and run a step-only A/B with KERNEL_TABLE=0. The driver says
+# so on stderr at startup when the table is on for more than three such cells
+# (benchmarks/test-gh1133-cells.sh holds its 600 s to the runner's default budget).
 #
 # Exit: 0 all steps complete; 1 a cell or step failed; 2 usage; 130 interrupted.
 # The environment is cleared of OCANNL_*, BENCH_* and the OpenMP controls: every treatment is
@@ -134,6 +147,21 @@ ref=${REF:-base}
 kernel_table=${KERNEL_TABLE:-1}
 case $kernel_table in 0 | 1) ;; *) echo "gh1133: KERNEL_TABLE must be 0 or 1, got '$kernel_table'" >&2; exit 2 ;; esac
 case $repeats in '' | *[!0-9]* | 0*) echo "gh1133: REPEATS must be a positive decimal integer, got '$repeats'" >&2; exit 2 ;; esac
+# The table's cost, said before anything runs (the header's "What KERNEL_TABLE=1 costs"): only
+# bench_gpt's step and kprof cells run the instrument, one per fixture x treatment x repeat.
+table_cells=0
+if [ "$kernel_table" = 1 ]; then
+  # shellcheck disable=SC2086 # lists of names, one word each
+  per_pass=$(($(set -- $fixtures; echo $#) * $(set -- $treatments; echo $#)))
+  for table_step in "$@"; do
+    case $table_step in step | kprof) table_cells=$((table_cells + per_pass * repeats)) ;; esac
+  done
+fi
+table_note=
+if [ "$table_cells" -gt 3 ]; then
+  table_note="gh1133: KERNEL_TABLE=1 re-times every shipped kernel of each of $table_cells step/kprof cells, up to the runner's 600 s instrument budget a cell: allow up to $((table_cells * 10)) min beyond the steps (gfx1151 gpt2_mini_train: ~625 s a cell); KERNEL_TABLE=0 makes a step-only A/B"
+  echo "$table_note" >&2
+fi
 [ -d "$base" ] || { echo "gh1133: BASE $base is not a directory" >&2; exit 2; }
 if [ -e "$out" ] && [ -n "$(ls -A "$out" 2>/dev/null)" ]; then
   echo "gh1133: OUT $out is not empty; give each invocation a fresh directory" >&2
@@ -168,6 +196,7 @@ trap 'cat "$out/driver.log" >&3' EXIT
 cd "$root/benchmarks" || exit 2
 echo "gh1133: $(date -u +%FT%TZ) root=$root base=$base out=$out cap=$cap backend=$backend repeats=$repeats"
 echo "gh1133: fixtures: $fixtures; treatments: $treatments; ref: $ref; kernel table: $kernel_table; fixture dir: $fixture_dir; steps: $*"
+[ -z "$table_note" ] || echo "$table_note"
 built=0 proven=0 failed=0
 # kprof: HIP's tracer and amdgpu hwmon directory (its clock sampler's source), and the lines every
 # cell's .err states (set by the kprof step).

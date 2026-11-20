@@ -122,6 +122,7 @@
   debug_name_scan
   label_dispatch_scan
   tensorized_census_scan
+  forced_decline_sort
   provenance_tag_scan
   scan_argv
   scan_floors

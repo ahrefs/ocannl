@@ -32,6 +32,7 @@ from test.test_cell_group import CellGroupTest  # imported so unittest.main incl
 from test.test_gpu_memory_census import GpuMemoryCensusTest  # same unittest discovery
 from test.test_bench_line_scan import BenchLineReaderScanTest  # noqa: F401  (likewise)
 from test.test_modes import ModeReportTest, ModeRuleTest  # noqa: F401  (likewise)
+from test.test_fixture_compare import FixtureCompareTest, write_safetensors  # noqa: F401
 from test_cells import (  # noqa: F401  (likewise)
     AbDriverTest, CellCommandTest, ConfigRecordsExpectTest, Gh1051AbDriverTest, Gh1180DriverTest,
     Gh1253FlipDriverTest, Gh1279DriverTest, Gh1557DriverTest, Gh740DriverTest, ProgressCommandTest,
@@ -2479,33 +2480,8 @@ class FixtureDigestTest(unittest.TestCase):
         self.dir = Path(self.tmp.name)
         self.addCleanup(self.tmp.cleanup)
 
-    @staticmethod
-    def write_fixture(path, content=b"weights", metadata=None, tensors=None, extra_padding=0):
-        """Write a tiny safetensors fixture for digest tests.
-
-        This is test construction, not a second production writer: the records deliberately keep
-        insertion order so tests can vary the non-canonical serialization independently of the
-        content identity.
-        """
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        metadata = {"name": path.stem, **(metadata or {})}
-        tensors = tensors or [("weights", "U8", [len(content)], content)]
-        header = {"__metadata__": metadata}
-        payload = bytearray()
-        for tensor_name, dtype, shape, tensor_content in tensors:
-            start = len(payload)
-            payload.extend(tensor_content)
-            header[tensor_name] = {
-                "dtype": dtype,
-                "shape": shape,
-                "data_offsets": [start, len(payload)],
-            }
-        encoded = json.dumps(header, separators=(",", ":")).encode()
-        padding = (-len(encoded)) % 8 + extra_padding
-        encoded += b" " * padding
-        path.write_bytes(len(encoded).to_bytes(8, "little") + encoded + payload)
-        return path
+    # The one test writer of safetensors fixtures, shared with FixtureCompareTest.
+    write_fixture = staticmethod(write_safetensors)
 
     def fixture(self, name, content=b"weights", **kwargs):
         return self.write_fixture(self.dir / name, content, **kwargs)

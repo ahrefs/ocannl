@@ -721,7 +721,15 @@ single-threaded segments that sum to the serial step
   its steps pass; a `step` whose cells produced no result line still fails it
   (`benchmarks/test-gh1133-cells.sh` pins both). Its cells print the per-kernel table
   (`BENCH_KERNEL_TABLE=1`) by default -- a lane or fission A/B moves kernels, and a step-time line
-  alone hid gh-ocannl-1167's wrong premise -- and `KERNEL_TABLE=0` turns it off.
+  alone hid gh-ocannl-1167's wrong premise -- and `KERNEL_TABLE=0` turns it off. **Size a
+  measurement's deadline for the table**: it re-times every shipped kernel of each `step` and
+  `kprof` cell (four calibrated timing calls a kernel, about half a second each), up to the runner's
+  600 s instrument budget a cell, and a many-kernel training step on a GPU reaches that budget
+  (gfx1151, minix-amd-linux: 624-630 s a `gpt2_mini_train` cell, so a one-hour window stopped a
+  12-cell run after six; gh-ocannl-2362). Allow up to ten minutes a cell beyond the steps, or run a
+  step-only A/B as `KERNEL_TABLE=0 benchmarks/gh1133_cells.sh ...`; the driver states the estimate
+  on stderr at startup when the table is on for more than three such cells. `kprof` reads the table,
+  so keep it on there.
   Its `kprof` step (CUDA, `nsys` on PATH; gh-ocannl-1347) is the per-kernel attribution of step
   time: each cell is a step cell run under `nsys profile --trace=cuda --cuda-graph-trace=node`,
   so every segment of the replayed graph is a trace record, and
@@ -1099,7 +1107,10 @@ recorded stream (a numpy upgrade, a changed spec or generator). The generator's 
 its own: it writes metadata keys added since older files were recorded (e.g. `loss_scale`), so a
 rebuild of `lenet`, `cifar_conv`,
 `cifar_stride` or `mlp_small` MISMATCHes its row while every tensor's dtype, shape and payload
-equal the recorded file's (gh-ocannl-2004, on mac-studio's numpy 2.5.1 venv). So a
+equal the recorded file's (gh-ocannl-2004, on mac-studio's numpy 2.5.1 venv). To tell the two
+apart, run `python3 benchmarks/fixture_digest.py --compare <recorded copy> <candidate>`: it lists the
+metadata keys added, removed or changed, then each tensor's dtype, shape and payload verdict, and
+exits 0 only when every tensor is identical (1 when one differs, 2 when a file is unreadable). So a
 `content-v1` MISMATCH alone does not say the bytes are lost; either way the candidate stays out
 of `fixtures/`. Get the recorded bytes back from where they are kept (next paragraph); only when
 no copy survives is replacing them the cross-box regeneration above. What the rule forbids is

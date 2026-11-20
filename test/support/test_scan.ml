@@ -146,6 +146,10 @@ module Tensorized_census_scan = Tensorized_census_scan
 (** Finding executed claims about a tensorized routine whose item judges no mma census, which parity
     alone cannot replace (gh-ocannl-1309). *)
 
+module Forced_decline_sort = Forced_decline_sort
+(** Sorting a forced-decline sweep's failures into the census claims the leg predicts and the
+    anomalies it does not, against the census scan's census-judging tests (gh-ocannl-1308). *)
+
 module Provenance_tag_scan = Provenance_tag_scan
 (** Where the virtualizer's rejection codes are minted, which files name them, and the boundary
     test's phase table checked against the minting functions (gh-ocannl-1015). *)
