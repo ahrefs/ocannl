@@ -721,7 +721,15 @@ single-threaded segments that sum to the serial step
   its steps pass; a `step` whose cells produced no result line still fails it
   (`benchmarks/test-gh1133-cells.sh` pins both). Its cells print the per-kernel table
   (`BENCH_KERNEL_TABLE=1`) by default -- a lane or fission A/B moves kernels, and a step-time line
-  alone hid gh-ocannl-1167's wrong premise -- and `KERNEL_TABLE=0` turns it off.
+  alone hid gh-ocannl-1167's wrong premise -- and `KERNEL_TABLE=0` turns it off. **Size a
+  measurement's deadline for the table**: it re-times every shipped kernel of each `step` and
+  `kprof` cell (four calibrated timing calls a kernel, about half a second each), up to the runner's
+  600 s instrument budget a cell, and a many-kernel training step on a GPU reaches that budget
+  (gfx1151, minix-amd-linux: 624-630 s a `gpt2_mini_train` cell, so a one-hour window stopped a
+  12-cell run after six; gh-ocannl-2362). Allow up to ten minutes a cell beyond the steps, or run a
+  step-only A/B as `KERNEL_TABLE=0 benchmarks/gh1133_cells.sh ...`; the driver states the estimate
+  on stderr at startup when the table is on for more than three such cells. `kprof` reads the table,
+  so keep it on there.
   Its `kprof` step (CUDA, `nsys` on PATH; gh-ocannl-1347) is the per-kernel attribution of step
   time: each cell is a step cell run under `nsys profile --trace=cuda --cuda-graph-trace=node`,
   so every segment of the replayed graph is a trace record, and
