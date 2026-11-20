@@ -212,7 +212,7 @@ let callback_slots path =
             ]
             name ~equal:String.equal))
 
-let code_claim_lines content =
+let code_claim_lines structure =
   (* A single application may supply parameters of nested ordinary lambdas too. Flatten only
      unconstrained function bodies; returned identifiers remain comparator factories. *)
   let flatten =
@@ -228,7 +228,7 @@ let code_claim_lines content =
         | _ -> e
     end
   in
-  let ast = flatten#structure (Parse.implementation (Lexing.from_string content)) in
+  let ast = flatten#structure structure in
   let functions = Hashtbl.create (module Int) in
   let parameters = Hashtbl.create (module Int) in
   let changed = ref false in
@@ -535,7 +535,7 @@ let code_claim_lines content =
    states anything else (a literal mode or a computed value), [None] when no statement stands. *)
 let state_config_key = "cc_backend_fp_contract"
 
-let stated_mode content =
+let stated_mode structure =
   let utils_value name = function
     | Longident.Ldot ((Lident "Utils" | Ldot (_, "Utils")), n) -> String.equal n name
     | _ -> false
@@ -569,10 +569,7 @@ let stated_mode content =
     | Pexp_sequence (a, b) -> in_sequence (in_sequence state a) b
     | _ -> ( match step e with `Keep -> state | `Set v -> v)
   in
-  List.fold
-    (Parse.implementation (Lexing.from_string content))
-    ~init:None
-    ~f:(fun state item ->
+  List.fold structure ~init:None ~f:(fun state item ->
       match item.pstr_desc with
       | Pstr_eval (e, _) -> in_sequence state e
       | Pstr_value (Nonrecursive, bindings) ->
@@ -584,6 +581,8 @@ let stated_mode content =
       | _ -> state)
 
 let read content =
+  (* Parsed once: the claim reader and the statement reader walk the same structure. *)
+  let structure = Parse.implementation (Lexing.from_string content) in
   let lexemes = Prose_lexemes.of_source content in
   let literals =
     List.filter lexemes ~f:(fun (l : Prose_lexemes.t) ->
@@ -611,9 +610,9 @@ let read content =
         | Comment | String_literal -> None)
   in
   {
-    claim_lines = claim_lines @ code_claim_lines content;
+    claim_lines = claim_lines @ code_claim_lines structure;
     (* A statement ranks above the environment, so one that stands decides alone. *)
-    pinned = Option.value (stated_mode content) ~default:(pinned literals);
+    pinned = Option.value (stated_mode structure) ~default:(pinned literals);
     markers;
   }
 

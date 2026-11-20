@@ -55,8 +55,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     `ocannl_config` in its deps (`config_dep_completeness`). It also lists
     `(alias runtest-env_spelling_gate)` and carries the `; ocannl-backend: none -- <reason>`
     marker; `env_var_deps` refuses a rule missing either. A `(test)` stanza such as `<name>_cases`
-    needs only the `ocannl_config` dep and the marker. The golden-diff rule beside a producer runs no program and takes none of them. It
-    reaches the gate through the producer's output.
+    needs only the `ocannl_config` dep and the marker. The golden-diff rule beside a producer runs
+    no program and takes none of them. It reaches the gate through the producer's output.
   - The golden-diff rule of a rule that reads the repository goes on its own
     `runtest-<name>` alias. A rule reads the repository when it takes a `source_tree` or
     `glob_files_rec` outside its directory, or a root file. That alias is listed in BOTH the
@@ -419,8 +419,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `origin/master` brought in an unrelated master line, and the merge-build plan called the change
   CROSS-CUTTING). Bring the file over with `git checkout <rev> -- <path>`, never `git show
   <rev>:<path> > <path>`: git records the mode, but a redirect that creates the file uses the
-  default mode, so the exec bit is lost (gh-ocannl-2139: a restored `run_cells.sh` lost it, and the execution slot refused to
-  run it until the mode was restored).
+  default mode, so the exec bit is lost (gh-ocannl-2139: a restored `run_cells.sh` lost it, and
+  the execution slot refused to run it until the mode was restored).
 
 ### Scan corpora, goldens and floors
 
