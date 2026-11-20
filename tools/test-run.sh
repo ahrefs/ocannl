@@ -604,10 +604,15 @@ reject_misplaced_options() {
 # Blank lines and `#` comment lines are skipped, a CR before the newline is
 # dropped and the words are trimmed; every other line is one `@` alias operand
 # and nothing else, so no line can carry an option or a second word into
-# dune's argv. A file with no alias at all is refused: `dune build` with no
-# target builds the default alias, a long build that tests nothing.
+# dune's argv. An operand is `@` or `@@` and then only the characters an alias
+# path holds -- letters, digits, `_`, `-`, `.` and `/` -- so a pasted
+# `@DIR/NAME,` or a quoted `"@DIR/NAME"` is refused naming its line, before
+# dune runs, rather than reaching dune as a target no stanza defines (a stray
+# comma once ended a batch in a misleading backend refusal). A file with no
+# alias at all is refused: `dune build` with no target builds the default
+# alias, a long build that tests nothing.
 read_targets_files() { # FILE... -> targets_list
-  local f path line n
+  local f path line n operand_re='^@@?[A-Za-z0-9_./-]+$'
   targets_list=()
   for f do
     case $f in
@@ -625,9 +630,10 @@ read_targets_files() { # FILE... -> targets_list
       case $line in '' | '#'*) continue ;; esac
       case $line in
         *[[:space:]]*) die "--targets-file $f:$n: one alias per line, not: $line" ;;
-        @?*) targets_list+=("$line") ;;
-        *) die "--targets-file $f:$n: not an alias operand (@DIR/NAME): $line" ;;
       esac
+      [[ $line =~ $operand_re ]] ||
+        die "--targets-file $f:$n: not an alias operand (@DIR/NAME): $line"
+      targets_list+=("$line")
     done <"$path" || die "--targets-file $f: cannot read $path"
   done
   [ ${#targets_list[@]} -gt 0 ] ||

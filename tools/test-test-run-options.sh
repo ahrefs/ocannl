@@ -72,8 +72,10 @@
 #  94. targeted batches (gh-ocannl-1740): `--targets-file` hands dune the
 #      listed aliases after its own words (comments, blank lines, CRLF and
 #      padding skipped; a relative file read from the caller's directory;
-#      `build` by default; repeatable; before dune's `--`), and refuses, dune
-#      never invoked, an empty list, a line that is not one `@` operand, a
+#      `build` by default; repeatable; a root `@@` operand; before dune's
+#      `--`), and refuses, dune never invoked, an empty list, a line that is
+#      not one `@` operand of alias-path characters (a trailing comma or
+#      semicolon, a quoted alias: each named by its line, gh-ocannl-1308), a
 #      missing file, a subcommand other than build, the option after the dune
 #      arguments; repeat (plain, and --direct through fresh's operand check)
 #      and bisect read the file too, and bisect wants a target from one side
@@ -2197,9 +2199,11 @@ tf_dir=$TMP/targets
 mkdir -p "$tf_dir/sub"
 printf '# a comment\n\n  @x/runtest-a  \r\n@x/slow-b\r\n# trailing\n' >"$tf_dir/list.txt"
 printf '@y/train-c\n' >"$tf_dir/sub/more.txt"
-# Accepted: argv order, default subcommand, a relative file, two files, and
-# placement before dune's own `--`.
+printf '@@runtest-d\n' >"$tf_dir/root.txt"
+# Accepted: argv order, default subcommand, a relative file, two files, a
+# root `@@` operand, and placement before dune's own `--`.
 for probe in "with-opts|run --targets-file $tf_dir/list.txt build -j 2|build -j 2 @x/runtest-a @x/slow-b" \
+             "root|run --targets-file $tf_dir/root.txt build|build @@runtest-d" \
              "default|run --targets-file $tf_dir/list.txt|build @x/runtest-a @x/slow-b" \
              "two|start --targets-file $tf_dir/list.txt --targets-file $tf_dir/sub/more.txt build|build @x/runtest-a @x/slow-b @y/train-c" \
              "sep|run --targets-file $tf_dir/sub/more.txt build @w -- @after|build @w @y/train-c -- @after" \
@@ -2222,10 +2226,19 @@ done
 printf '# nothing but comments\n\n' >"$tf_dir/empty.txt"
 printf '@x/runtest-a\n-j 4\n' >"$tf_dir/option.txt"
 printf '@x/runtest-a\ntest/x\n' >"$tf_dir/bare.txt"
+# Punctuation pasted from prose or a shell list: each refused naming its line
+# (gh-ocannl-1308: `@alias,` reached dune and the batch ended in a misleading
+# backend refusal).
+printf '@x/runtest-a\n@x/runtest-b,\n' >"$tf_dir/comma.txt"
+printf '# list\n@x/runtest-a;\r\n' >"$tf_dir/semicolon.txt"
+printf '@x/runtest-a\n\n"@x/runtest-b"\n' >"$tf_dir/quoted.txt"
 printf '@x/scans\n' >"$tf_dir/aggregate.txt"
 for probe in "empty|run --targets-file $tf_dir/empty.txt build|no alias listed" \
              "option|run --targets-file $tf_dir/option.txt build|option.txt:2: one alias per line" \
              "bare|run --targets-file $tf_dir/bare.txt build|bare.txt:2: not an alias operand" \
+             "comma|run --targets-file $tf_dir/comma.txt build|comma.txt:2: not an alias operand (@DIR/NAME): @x/runtest-b," \
+             "semicolon|run --targets-file $tf_dir/semicolon.txt build|semicolon.txt:2: not an alias operand (@DIR/NAME): @x/runtest-a;" \
+             "quoted|run --targets-file $tf_dir/quoted.txt build|quoted.txt:3: not an alias operand (@DIR/NAME): \"@x/runtest-b\"" \
              "missing|run --targets-file $tf_dir/absent.txt build|no readable file" \
              "runtest|run --targets-file $tf_dir/list.txt runtest|which only dune's build takes" \
              "valueless|run --targets-file|requires a file" \
