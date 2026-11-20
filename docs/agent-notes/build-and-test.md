@@ -397,9 +397,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   reading `(source_tree ../..)` would otherwise cover every script. The rule reads no further than
   the dune file: a script a rule lists in its `(deps)` only so a text scan can read it counts as
   covered too, so naming a `.sh` in a scan rule's deps takes that script out of the harness
-  fallback. So `test/operations/sweep_leg_scripts.sh` alone runs no harness, its
-  `runtest-sweep_harness` running in the tests tier, and an unmapped script still runs the whole
-  tier; the tier prints PENDING until that list is read (`--plan` alone stays there, `--plan --base
+  fallback. The tests tier runs `runtest-sweep_leg_scripts` for an edit to
+  `test/operations/sweep_leg_scripts.sh` alone. An unmapped script still runs the whole harness
+  tier, which prints PENDING until that list is read (`--plan` alone stays there, `--plan --base
   REV` settles it). What the mapping answers is the policy: `scripts/harness-support.sh`, which
   every member
   loads, reaches the whole tier, and a manifest edit reaches the members naming
