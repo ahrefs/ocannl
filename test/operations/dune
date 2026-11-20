@@ -16358,6 +16358,7 @@
   ../../tools/sweep-supervisor.sh
   ; the diagnostic legs' scripts, run against a fake dune (gh-ocannl-1705)
   ../../tools/vendor-idents-check.sh
+  ../../tools/opam-env.sh
   ../../tools/cuda-tf32-parity.sh
   ../../tools/cuda-native-ptx-rerun.sh
   ; shared floor/native runtime-refusal signatures and matcher (gh-ocannl-2219)

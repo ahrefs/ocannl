@@ -19,6 +19,8 @@
 #   vendor-idents: verdict: unavailable: ...     2  nothing was measured (the arm is not built, the
 #                                                   headers were not found), or the tool stopped
 #                                                   before its own verdict (a failed build, a crash)
+# With zero SDK headers, a Metal holds verdict covers only the existing Metal_backend grammar
+# entries (gh-ocannl-707; see the Metal arm in tools/vendor_idents.ml).
 # Its boundary: it reads vendor_idents.exe's exit status and its `verdict:`, `fail, yet` and
 # `in the table, yet` lines, nothing else of its output.
 set -u
@@ -34,6 +36,9 @@ case ${1:-} in
   cuda | hip | metal) backend=$1 ;;
   *) echo "usage: tools/vendor-idents-check.sh <cuda|hip|metal>" >&2; exit 2 ;;
 esac
+
+command -v dune >/dev/null 2>&1 || . tools/opam-env.sh
+command -v dune >/dev/null 2>&1 || verdict 2 "unavailable: dune not found (opam environment not set up?)"
 
 # Dune records the environment of every process it spawns in _build/trace.csexp (gh-ocannl-1280).
 # shellcheck source=credential-env.sh
