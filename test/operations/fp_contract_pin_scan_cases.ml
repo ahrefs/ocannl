@@ -378,4 +378,48 @@ let make () = eq
 let () = p "equal" (make () (Context.get_values ctx tensor).(0))
 |ocaml}
     );
+    (* gh-ocannl-2354's in-process form of the pin. Each fixture is the first case's refused bit
+       claim plus one statement, so [false] here says the statement is what disposed of it. *)
+    ( "pinned by an in-process statement of off, data first",
+      false,
+      {ocaml|
+open Verdict.Claims
+let () = Utils.state_config ~data:"off" ~key:"cc_backend_fp_contract"
+let same_bits x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let got = Context.get_values ctx tensor
+let () = p "equal" (same_bits got.(0) 1.)
+|ocaml}
+    );
+    ( "pinned by a qualified statement in a top-level sequence",
+      false,
+      {ocaml|
+open Verdict.Claims
+let () =
+  Ir.Utils.state_config ~key:"fp_contract" ~data:"false";
+  Ir.Utils.state_config ~key:"cc_backend_fp_contract" ~data:"off"
+let same_bits x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let got = Context.get_values ctx tensor
+let () = p "equal" (same_bits got.(0) 1.)
+|ocaml}
+    );
+    ( "a statement inside a function is no pin",
+      true,
+      {ocaml|
+open Verdict.Claims
+let pin () = Utils.state_config ~key:"cc_backend_fp_contract" ~data:"off"
+let same_bits x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let got = Context.get_values ctx tensor
+let () = p "equal" (same_bits got.(0) 1.)
+|ocaml}
+    );
+    ( "a statement of another key is no pin",
+      true,
+      {ocaml|
+open Verdict.Claims
+let () = Utils.state_config ~key:"fp_contract" ~data:"off"
+let same_bits x y = Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)
+let got = Context.get_values ctx tensor
+let () = p "equal" (same_bits got.(0) 1.)
+|ocaml}
+    );
   ]

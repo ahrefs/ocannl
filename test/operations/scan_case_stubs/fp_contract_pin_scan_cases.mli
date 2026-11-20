@@ -47,3 +47,14 @@ module List : sig
   val iter2_exn : 'a list -> 'b list -> f:('a -> 'b -> unit) -> unit
   val zip_exn : 'a list -> 'b list -> ('a * 'b) list
 end
+
+(* The in-process pin, as [arrayjit/lib/utils.mli] declares it, bare and through [Ir]. *)
+module Utils : sig
+  val state_config : key:string -> data:string -> unit
+end
+
+module Ir : sig
+  module Utils : sig
+    val state_config : key:string -> data:string -> unit
+  end
+end

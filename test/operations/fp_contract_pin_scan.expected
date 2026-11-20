@@ -40,11 +40,17 @@ case: code subject -- fully applied returned collection predicate: true
 case: code subject -- unused returned collection predicate: true
 case: code subject -- fully applied returned comparator identifier: true
 case: code subject -- fully applied returned unary comparator: true
+case: code subject -- pinned by an in-process statement of off, data first: true
+case: code subject -- pinned by a qualified statement in a top-level sequence: true
+case: code subject -- a statement inside a function is no pin: true
+case: code subject -- a statement of another key is no pin: true
 case: a pinned claim is listed as pinned: true
 case: a marked claim is listed with its kind: true
 case: a claim with neither pin nor marker is refused: true
 case: a claim in capitals is a claim too: true
 case: a pin to another mode is no pin: true
+case: Utils.state_config of off is a pin, its labels in either order: true
+case: Utils.state_config of fast is no pin: true
 case: a marker of an unknown kind is refused: true
 case: a one-word reason is refused: true
 case: a sentinel that does not open its comment is refused: true
@@ -170,6 +176,8 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:0917e598d504b434f3e3c9567742fcc6] claim with neither
   [scanner-refusal:9d3c109a283ee3d6803e356b583bdff2] claim in capitals
   [scanner-refusal:3ef51a84cfe8ca3b03690fcda8b63c21] to another mode
+  [scanner-refusal:02d106e7052951bcf97aada0e6bd4f13] Utils.state_config
+  [scanner-refusal:08304716a8de10400315dadefbfc01d0] Utils.state_config
   [scanner-refusal:19ba2d6c29ec6da6833b4f6102b96167] an unknown kind
   [scanner-refusal:6a15033dd60a8451f9ff4ba97f4280cb] one-word reason is
   [scanner-refusal:be5184012422a01273ca348715955f05] sentinel that does

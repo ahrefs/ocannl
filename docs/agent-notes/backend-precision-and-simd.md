@@ -446,7 +446,8 @@ files.
   parameter rebinding use `Lexical_scope`; unknown external callers add no evidence.
   Its header owns the closed forms and dependency-summary boundary. Numeric `Float.equal` alone is outside
   that extension. Each subject is either pinned
-  in-process (`Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"` before the first compile) or
+  in-process before the first compile, by `Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"` or by
+  a top-level `Utils.state_config ~key:"cc_backend_fp_contract" ~data:"off"` (gh-ocannl-2354), or
   carrying one marker comment `cc-fp-contract` + colon + `<kind> -- <reason>`, the kinds a closed
   vocabulary the scan's golden prints (`exact-operands`, `no-contraction`, `same-shape`, `gated`,
   `not-cc`, `not-executed`). A new bitwise claim comparing two kernel shapes on inexact operands

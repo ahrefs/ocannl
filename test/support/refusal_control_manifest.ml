@@ -106,6 +106,8 @@ let raw_entries =
         "[scanner-refusal:0917e598d504b434f3e3c9567742fcc6] claim with neither";
         "[scanner-refusal:9d3c109a283ee3d6803e356b583bdff2] claim in capitals";
         "[scanner-refusal:3ef51a84cfe8ca3b03690fcda8b63c21] to another mode";
+        "[scanner-refusal:02d106e7052951bcf97aada0e6bd4f13] Utils.state_config";
+        "[scanner-refusal:08304716a8de10400315dadefbfc01d0] Utils.state_config";
         "[scanner-refusal:19ba2d6c29ec6da6833b4f6102b96167] an unknown kind";
         "[scanner-refusal:6a15033dd60a8451f9ff4ba97f4280cb] one-word reason is";
         "[scanner-refusal:be5184012422a01273ca348715955f05] sentinel that does";

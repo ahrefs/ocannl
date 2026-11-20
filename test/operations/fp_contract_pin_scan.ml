@@ -52,14 +52,20 @@
    operator-based application, partial helper applications, function-case parameters, omitted
    optional defaults and bare external-reader aliases are not reconstructed.
 
-   - A PIN: the string literal [OCANNL_CC_BACKEND_FP_CONTRACT] whose next string literal is [off]
-   (the [Unix.putenv] the pinned tests do at module initialization). A pin made elsewhere -- a dune
-   stanza's flag or profile, a directory's ocannl_config -- is not read: such a source carries a
-   marker instead, or pins in-process too. - A MARKER: a comment whose whole text is
-   [cc-fp-contract], a colon, a kind, [--] and a reason of at least two words. Every comment holding
-   the sentinel followed by a colon must be one, so a misspelt kind or a missing reason fails rather
-   than reads as absent. The kinds, a closed vocabulary ([kinds] below), each name why contraction
-   cannot reach the claim.
+   - A PIN, in either of two forms. The environment form: the string literal
+   [OCANNL_CC_BACKEND_FP_CONTRACT] whose next string literal is [off] (the [Unix.putenv] a pinned
+   test does at module initialization), read from the lexemes. The statement form (gh-ocannl-2354):
+   [Utils.state_config], under any qualifier ending in [Utils], applied to exactly the labelled
+   literals [~key:"cc_backend_fp_contract"] and [~data:"off"] in either order, read from the parse
+   tree and only at module initialization -- a top-level [let () =], [let _ =] or bare expression
+   item, alone or as one element of a top-level [;] sequence ([state_config_pinned] below). A
+   statement inside a function body, a [let ... in] or a nested module is not read, nor is one
+   through [open Utils] or [Utils.with_stated_config]. A pin made elsewhere -- a dune stanza's flag
+   or profile, a directory's ocannl_config -- is not read: such a source carries a marker instead,
+   or pins in-process too. - A MARKER: a comment whose whole text is [cc-fp-contract], a colon, a
+   kind, [--] and a reason of at least two words. Every comment holding the sentinel followed by a
+   colon must be one, so a misspelt kind or a missing reason fails rather than reads as absent. The
+   kinds, a closed vocabulary ([kinds] below), each name why contraction cannot reach the claim.
 
    Every subject is listed in the golden with its disposition, so the list is the review surface: a
    new bitwise claim lands with its pin or its marker in the same diff. A source with a pin AND a
@@ -515,6 +521,52 @@ let code_claim_lines content =
   pass ();
   List.dedup_and_sort !lines ~compare:Int.compare
 
+(* The in-process statement form of the pin (gh-ocannl-2354): [<M>.Utils.state_config] applied to
+   exactly [~key:"cc_backend_fp_contract"] and [~data:"off"], literal strings, in either order, as a
+   top-level [let () =], [let _ =] or bare expression item -- alone or as one element of a top-level
+   [;] sequence. That is module initialization: a statement inside a function, a [let ... in] or a
+   nested module states the key only when that code runs, and is not read. *)
+let state_config_key = "cc_backend_fp_contract"
+
+let state_config_pinned content =
+  let is_state_config = function
+    | Longident.Ldot ((Lident "Utils" | Ldot (_, "Utils")), "state_config") -> true
+    | _ -> false
+  in
+  let literal (e : expression) =
+    match e.pexp_desc with Pexp_constant (Pconst_string (s, _, _)) -> Some s | _ -> None
+  in
+  let pin (e : expression) =
+    match e.pexp_desc with
+    | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, args) when is_state_config txt -> (
+        let labelled name =
+          List.filter_map args ~f:(function
+            | Labelled l, arg when String.equal l name -> Some arg
+            | _ -> None)
+        in
+        match (args, labelled "key", labelled "data") with
+        | [ _; _ ], [ key ], [ data ] ->
+            Option.equal String.equal (literal key) (Some state_config_key)
+            && Option.equal String.equal (literal data) (Some pin_value)
+        | _ -> false)
+    | _ -> false
+  in
+  let rec in_sequence (e : expression) =
+    match e.pexp_desc with Pexp_sequence (a, b) -> in_sequence a || in_sequence b | _ -> pin e
+  in
+  List.exists
+    (Parse.implementation (Lexing.from_string content))
+    ~f:(fun item ->
+      match item.pstr_desc with
+      | Pstr_eval (e, _) -> in_sequence e
+      | Pstr_value (Nonrecursive, bindings) ->
+          List.exists bindings ~f:(fun vb ->
+              match vb.pvb_pat.ppat_desc with
+              | Ppat_construct ({ txt = Lident "()"; _ }, None) | Ppat_any ->
+                  in_sequence vb.pvb_expr
+              | _ -> false)
+      | _ -> false)
+
 let read content =
   let lexemes = Prose_lexemes.of_source content in
   let literals =
@@ -542,7 +594,11 @@ let read content =
             Some (l.line, parse_marker l.text)
         | Comment | String_literal -> None)
   in
-  { claim_lines = claim_lines @ code_claim_lines content; pinned = pinned literals; markers }
+  {
+    claim_lines = claim_lines @ code_claim_lines content;
+    pinned = pinned literals || state_config_pinned content;
+    markers;
+  }
 
 (* The source's disposition, or why it has none. [None] for a source outside the subject. *)
 let judge reading =
@@ -592,6 +648,12 @@ let cases () =
     (refused "let () = p \"tiled and serial agree BIT-FOR-BIT\" true\n");
   p "case: a pin to another mode is no pin"
     (refused ("let () = Unix.putenv \"OCANNL_CC_BACKEND_FP_CONTRACT\" \"fast\"\n" ^ claim));
+  let stated first second = Printf.sprintf "let () = Utils.state_config %s %s\n" first second in
+  let key = "~key:\"cc_backend_fp_contract\"" in
+  p_all ~min:2 "case: Utils.state_config of off is a pin, its labels in either order"
+    [ stated key "~data:\"off\""; stated "~data:\"off\"" key ]
+    ~f:(fun pin -> match judge_text (pin ^ claim) with Some (Ok Pinned) -> true | _ -> false);
+  p "case: Utils.state_config of fast is no pin" (refused (stated key "~data:\"fast\"" ^ claim));
   p "case: a marker of an unknown kind is refused"
     (refused (marker "trust-me" "it is fine" ^ claim));
   p "case: a one-word reason is refused" (refused (marker "gated" "flags" ^ claim));
