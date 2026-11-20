@@ -378,9 +378,9 @@ files.
   includes separately for each opening directory. `hip_sdk_header_symlinks` checks both identities
   and the SDK boundary with a temporary header tree. hiprtc checks the ordinary prelude first and
   sends its survivors through the rocWMMA prelude. Each reported name fails alone in a real kernel
-  configuration. On discrete
-  gfx1102, the harvest read 153 canonical headers instead of 35,418 paths and ran in 335 seconds
-  versus 661. The 495 generated names were byte-identical. Exit 1 says the checked-in table differs
+  configuration. The gh-ocannl-1713 run on discrete gfx1102 counted 153 file and opening-directory
+  pairs, down from 35,418 paths before SDK scoping. That run took 387 seconds versus 661.
+  The 495 generated names were byte-identical. Exit 1 says the checked-in table differs
   from the measurement. `--names a,b` spot-checks entries. Regenerate on the newest toolkit the
   fleet runs. The measurements so far only
   grew (CUDA 13.5 added six runtime-API enumerators to 13.4's 1029 names and dropped none), so the
