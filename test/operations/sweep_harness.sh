@@ -4490,6 +4490,4 @@ grep -q "^sweep: declared measurement box 'spare' has no sweep unit$" <<<"$matri
 # signal, and it is what distinguishes this exit 2 from a lane-stopped one.
 [ "$(ls "$state"/logs/*-run.tsv | wc -l)" -eq "$records_before" ]
 
-. "$(dirname "$0")/sweep_leg_scripts.sh"
-
 printf 'sweep execution accounting, RTC context, dxg window evidence, fingerprinting, run record and skip aggregation: PASS\n'

@@ -1,12 +1,22 @@
 #!/usr/bin/env bash
-# Sourced by sweep_harness.sh: the diagnostic legs' own scripts (gh-ocannl-1705) -- the real
-# tools/vendor-idents-check.sh, tools/cuda-tf32-parity.sh and tools/cuda-native-ptx-rerun.sh, beside
-# the sweep under test -- run against a fake `dune` on PATH, which records each call's arguments and
-# the environment the leg pins, and answers with a canned report and status. Each leg's verdict line
-# and status are held to its documented table, the WARNING arm (status 1) firing exactly where its
-# condition holds and staying quiet otherwise, and no credential reaches dune. No backend runs.
+# The diagnostic legs' own scripts (gh-ocannl-1705) run against a fake `dune` on PATH, which records
+# each call's arguments and the environment the leg pins, and answers with a canned report and
+# status. The fixture checks each wrapper's documented verdict and exit status, including when
+# the WARNING arm fires, and checks that no credential reaches Dune. No backend runs.
 # The missing-Python control removes only the literal command-v/verdict guard from a scratch copy.
-leg_tools=$(cd "$(dirname "$sweep")" && pwd)
+set -Eeuo pipefail
+. "$(dirname "$0")/../../scripts/harness-support.sh"
+harness_args
+harness_scratch ocannl-sweep-legs
+trap 'printf "sweep_leg_scripts: line %s failed: %s\n" "$LINENO" "$BASH_COMMAND" >&2' ERR
+tmp=$TMP
+leg_tools=$(cd "$(dirname "$0")/../../tools" && pwd)
+absent() {
+  local rc=0
+  grep -q "$@" || rc=$?
+  [ "$rc" -eq 1 ]
+}
+
 leg_root=$tmp/leg-scripts
 leg_bin=$tmp/leg-bin
 mkdir -p "$leg_root/tools" "$leg_bin"
@@ -290,4 +300,5 @@ mv "$leg_root/ci-failed-rules.sh.aside" "$leg_root/tools/ci-failed-rules.sh"
 [ "$leg_rc" -eq 1 ]
 [ "$(leg_verdict)" = 'cuda-native-ptx: verdict: NATIVE TARGET RED (dune exited 1; no failed rule in its output)' ]
 absent 'credentials=[A-Z]' "$leg_calls"
-printf 'sweep diagnostic leg scripts: PASS\n'
+report 0 'sweep diagnostic leg scripts'
+finish

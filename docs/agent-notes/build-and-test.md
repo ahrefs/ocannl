@@ -5800,6 +5800,9 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   homes and cloned repos: prep and real locks, boot-specific PATH and widths, collected kernel
   evidence, guest-identity retries and serial reruns. The harness header audits unreachable
   decisions; `sweep_harness.sh --remote-only` isolates these command-path fixtures.
+  `runtest-sweep_leg_scripts` runs the real diagnostic wrappers against stubbed Dune.
+  The integration fixtures generate their diagnostic stand-ins at the swept ref, so edits to the
+  real wrappers reach the focused alias.
 
 - `tools/sweep.sh` is the coverage for every backend CI does not run: cc and metal locally
   (the macOS host), cuda on rog, hip and then multidev_cc on minix, and hip again on tuf, all pinned
