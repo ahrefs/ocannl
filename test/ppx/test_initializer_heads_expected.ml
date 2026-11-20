@@ -1,4 +1,5 @@
-open Ocannl.Nn_blocks.DSL_modules
+open Ocannl
+open Nn_blocks.DSL_modules
 let binary_tensor source other =
   let open! TDSL.O in
     let w =
@@ -138,17 +139,24 @@ let number_object_field =
   let open! TDSL.O in
     fun n () ->
       let w =
-        (TDSL.param ?more_label:None
-           ?value:(Some
-                     (Float.of_int
-                        (object
-                           val n = 3
-                           method value = n
-                           initializer ignore n
-                         end)#value)) ?values:None ?param_init:None "w") () in
+        ((TDSL.param ?more_label:None
+            ?value:(Some
+                      (Float.of_int
+                         (let selected = ref 0 in
+                          let field =
+                            (object
+                               val n = 3
+                               initializer selected := n
+                               method value = n
+                             end)#value in
+                          Verdict.p
+                            "object method reads the preceding field value 3"
+                            (Int.equal field 3);
+                          !selected))) ?values:None ?param_init:None "w")
+           ~output_dims:[1]) () in
       let __ocannl_body x =
         let n = Int.succ n in
-        (+) ?label:(Some ["number_object_field"]) (( * ) ?label:None w x)
+        (+) ?label:(Some ["number_object_field"]) (( *. ) ?label:None w x)
           (TDSL.O.(!..) n) in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"number_object_field" ~arity:1
@@ -156,6 +164,16 @@ let number_object_field =
       fun x ->
         Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
           (fun () -> __ocannl_body x)
+let () =
+  let enclosing = 41 in
+  let input = NTDSL.ndarray [|1.0|] ~output_dims:[1] () in
+  let output = number_object_field enclosing () input in
+  let ctx = Train.forward_once (Context.cpu ()) output in
+  let selected =
+    (Context.get_value ctx output.Tensor.value [|0|]) -.
+      (Float.of_int (Int.succ enclosing)) in
+  Verdict.p "object initializer reads the preceding field value 3"
+    (Float.equal selected 3.0)
 let named_binary source other =
   let open! TDSL.O in
     let w =

@@ -118,7 +118,8 @@ files.
   `!..(let n = Int.succ n in n)` still reads the late-bound `n` on the right-hand side. An
   initializer's own `let n = 3 in n` is valid, as is a method using its object's self name.
   The compiled `test_initializer_heads` pins both. An object's declared instance variables
-  bind in subsequent methods and initializer clauses (gh-ocannl-2377, also compiled there).
+  bind in subsequent methods and initializer clauses (gh-ocannl-2377). The compiled fixture
+  checks both reads after an instance field shadows the enclosing name.
   Earlier methods and initializer clauses can read the enclosing name. The object's `val`
   right-hand sides and expressions outside the object keep the enclosing scope. Inherited
   variables remain unresolved by the PPX, so a use matching a late name is still refused.

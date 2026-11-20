@@ -14354,6 +14354,17 @@
   ctypes.foreign))
 
 (test
+ (name sat01_gradient_endpoints)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules sat01_gradient_endpoints)
+ (libraries base ocannl arrayjit.verdict arrayjit.context)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name scalar_rmw_accumulation)
  (package neural_nets_lib)
  (deps

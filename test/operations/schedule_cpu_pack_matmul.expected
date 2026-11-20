@@ -1,3 +1,7 @@
 packed tiled matmul matches the naive twin: true
 the prefill of the accumulator differs from the naive twin's result in every cell: true
+packed matmul with the initial operand matches the host oracle: true
+the replacement operand changes every result cell: true
+the prefill differs from the replacement result in every cell: true
+packed matmul with the re-uploaded operand matches the host oracle: true
 packed tiles are plain local arrays, no barriers, no guards: true

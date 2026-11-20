@@ -123,6 +123,8 @@ files.
   ndarray-backed literal is also a write because its defining values arrive as data. A preloaded
   accumulator is built data-backed (`Operation.init ~mutable_:true`). Tests:
   `test/operations/routine_write_literal` and `test/operations/literal_write_kinds`.
+  `schedule_cpu_pack_matmul` runs one linked packed contraction before and after a host upload to
+  a mutable init-backed operand and compares both runs with a host oracle.
 - Both digests over lowered code — the analysis cache's key (`Low_level.analysis_digest`) and the
   schedule cache's canonical identity (`Schedule_cache.canonicalize`) — share ONE walk,
   `Low_level.Canonical_render.emit` (gh-ocannl-563). Render a newly added `Low_level.t` /

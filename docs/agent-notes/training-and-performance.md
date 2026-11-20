@@ -1052,7 +1052,8 @@ files.
   Six exclusive CUDA training-step pairs on rog-nv-linux gave a median queued ratio of
   0.99712 [0.99564, 0.99785] and identical parity losses. The unchanged launch control varied
   by 10–19% between arms. The signed-zero reason for retaining binary pooling is in the
-  source note at `Nn_blocks.max_pool2d`.
+  source note at `Nn_blocks.max_pool2d`. `test/einsum/test_max_pool2d` checks it on cc when
+  the math settings preserve signed zero.
 - Picking the best of many candidates timed in DIFFERENT rounds is a winner's-curse selection: each
   reading carries its round's offset (drift, or contention that only ever slows a round down), so
   the round-best is often the luckiest round, not the fastest candidate. Re-timing the round-best
