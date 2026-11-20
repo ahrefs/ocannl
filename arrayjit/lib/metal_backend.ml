@@ -2549,12 +2549,23 @@ let metal_toolchain () =
       String.strip line
   | _ -> "absent"
 
-(* gh-ocannl-1038: what this backend probes on the host rather than on a device -- which math API
-   the running Objective-C runtime's compile options accept, the query [Impl]'s [runtime_math_api]
-   makes before every compile, which moves with an OS update and decides the option sequence every
-   Metal compile uses; and the Metal Toolchain a test's AIR census compiles with. *)
-let host_capabilities () =
+external product_build_version : string -> string option = "ocannl_metal_product_build_version"
+
+(* A macOS update can change the bundled driver while preserving the math API. *)
+let metal_driver_build system_version_plist =
+  match Stdio.In_channel.read_all system_version_plist with
+  | contents ->
+      Option.bind (product_build_version contents) ~f:(fun build ->
+          let build = String.strip build in
+          Option.some_if (not (String.is_empty build)) ("metal_driver_build", build))
+  | exception Stdlib.Sys_error _ -> None
+
+let host_capabilities_from ~system_version_plist =
   [
     ("metal_math_api", Compiler_options.metal_math_api_name (Metal_math_api_runtime.get ()));
     ("metal_toolchain", metal_toolchain ());
   ]
+  @ Option.to_list (metal_driver_build system_version_plist)
+
+let host_capabilities () =
+  host_capabilities_from ~system_version_plist:"/System/Library/CoreServices/SystemVersion.plist"

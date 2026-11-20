@@ -32,8 +32,8 @@ val host_capabilities : unit -> (string * string) list
     parallel-Grid runtime, the compiler and its flags), then the host-side probes of each GPU
     backend whose library is linked. On CUDA and HIP this includes toolkit headers, the hiprtc
     version on HIP, and the running driver or module identity where procfs or sysfs exposes it.
-    Metal reports the math API the runtime accepts and the Metal Toolchain's version (or its
-    absence). Key/value pairs, in a fixed order.
+    Metal reports the math API the runtime accepts, the Metal Toolchain's version (or its absence),
+    and the macOS build of the bundled driver when available. Key/value pairs, in a fixed order.
 
     [tools/host_caps.exe] prints it as the host line of every CI build job, and test/config/dune
     records it beside the ambient environment in [ocannl_ambient], which every test's configuration

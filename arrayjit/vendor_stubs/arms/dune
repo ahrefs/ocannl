@@ -254,6 +254,19 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; test/operations: the host-capability fixture uses the Metal backend without a device.
+
+(rule
+ (action
+  (copy#
+   ../../../test/operations/host_capability_fingerprint_metal.real.ml
+   host_capability_fingerprint_metal.ml)))
+
+(library
+ (name host_capability_fingerprint_metal_arm)
+ (modules host_capability_fingerprint_metal)
+ (libraries metal_backend_stub_check))
+
 ; test/operations: the arms that reach their backend through `Context` and name no vendor module.
 
 (rule

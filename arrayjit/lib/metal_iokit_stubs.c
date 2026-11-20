@@ -35,3 +35,38 @@ CAMLprim value ocannl_metal_gpu_core_count(value v_registry_id) {
   CAMLparam1(v_registry_id);
   CAMLreturn(Val_long(gpu_core_count_of_registry_id((uint64_t)Int64_val(v_registry_id))));
 }
+
+/* Read the top-level ProductBuildVersion only when it is a plist string. */
+CAMLprim value ocannl_metal_product_build_version(value v_contents) {
+  CAMLparam1(v_contents);
+  CAMLlocal1(build);
+  CFDataRef data = CFDataCreate(kCFAllocatorDefault, (const UInt8 *)String_val(v_contents),
+                               caml_string_length(v_contents));
+  if (data == NULL) CAMLreturn(Val_none);
+  CFPropertyListRef plist = CFPropertyListCreateWithData(
+      kCFAllocatorDefault, data, kCFPropertyListImmutable, NULL, NULL);
+  CFRelease(data);
+  if (plist == NULL) CAMLreturn(Val_none);
+
+  CFStringRef version = NULL;
+  if (CFGetTypeID(plist) == CFDictionaryGetTypeID()) {
+    CFTypeRef entry = CFDictionaryGetValue((CFDictionaryRef)plist, CFSTR("ProductBuildVersion"));
+    if (entry != NULL && CFGetTypeID(entry) == CFStringGetTypeID()) version = (CFStringRef)entry;
+  }
+  if (version == NULL) {
+    CFRelease(plist);
+    CAMLreturn(Val_none);
+  }
+
+  CFRange range = CFRangeMake(0, CFStringGetLength(version));
+  CFIndex len = 0;
+  if (CFStringGetBytes(version, range, kCFStringEncodingUTF8, 0, false, NULL, 0, &len) !=
+      range.length) {
+    CFRelease(plist);
+    CAMLreturn(Val_none);
+  }
+  build = caml_alloc_string(len);
+  CFStringGetBytes(version, range, kCFStringEncodingUTF8, 0, false, Bytes_val(build), len, NULL);
+  CFRelease(plist);
+  CAMLreturn(caml_alloc_some(build));
+}
