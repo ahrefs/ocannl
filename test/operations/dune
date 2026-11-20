@@ -2229,7 +2229,9 @@
   base
   ocannl
   stdio
+  unix
   mtime.clock.os
+  fresh_process
   arrayjit.verdict
   ll_test
   arrayjit.ir

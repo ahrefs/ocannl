@@ -136,6 +136,12 @@ queued reading is not that per-launch time divided by the batch depth as well: t
 queued timing does not read above isolated timing: true
 queued timing stays within the 64-batch dispatch cap: true
 
+== the test scopes reach time_routine's own reading ==
+forced scope: the child exits clean with the claim's passing row, its window physically admitted: true
+forced scope: time_routine's reading of an admitted window takes the contention hatch, so the claim's one hatched record is a BYPASS naming it: true
+cleared scope: the child exits clean with the claim's passing row, its window physically refused_contended: true
+cleared scope: over a contended window the same claim's one hatched record is a CHECKED naming both hatches: true
+
 == the objective in the cache key ==
 the cache key is stable within one objective: true
 the cache key separates the two timing objectives: true

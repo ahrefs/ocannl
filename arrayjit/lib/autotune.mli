@@ -3983,11 +3983,16 @@ val with_contended_test_windows : (unit -> 'a) -> 'a
     unbatched or unreadable keeps that cause, which {!timing_admission} names first. The innermost
     of it and {!with_uncontended_test_windows} applies; restoration, nesting and per-domain scope as
     there. Like that scope and a scripted {!on_candidate_measured} reading, it acts downstream of
-    the timing call: each {!timing_call}'s [admission] and the report's [timing_decisions] keep
-    recording the physical reading (a forced window there reads as admitted, as a cleared one reads
-    as contended), while the report's refusal counts and [baseline_refusal] follow the scoped
-    verdict. A test reading the two side by side relies on that split, as
-    [autotune_measured_refusal] does to tell the host's refusals from the seam's. *)
+    the timing call's own record: each {!timing_call}'s [admission] and the report's
+    [timing_decisions] keep recording the physical reading (a forced window there reads as admitted,
+    as a cleared one reads as contended), while the report's refusal counts and [baseline_refusal]
+    follow the scoped verdict. A test reading the two side by side relies on that split, as
+    [autotune_measured_refusal] does to tell the host's refusals from the seam's. Both scopes also
+    set the flags of the {!timing_result} that {!time_routine} itself RETURNS, exactly as admission
+    does (the two applications agree): a test timing a routine directly, as [autotune_timing_modes]
+    does, reads the scoped verdict there, so a hatched claim over that reading is driven through its
+    bypass on a host that never contends (gh-ocannl-996's bypass path, on cc). No configuration
+    selects either scope, and no library or [bin/] caller enters one. *)
 
 val host_load_reading : (unit -> Utils.Host_load.reading option) Seam.t
 (** The host-load signal an {!Attribute_dispersion} timing call reads around its window
@@ -4500,7 +4505,10 @@ module Make (D : Driver) : sig
       bounds the top-up beyond the caller's requested floor. Metal queued timing retries a
       contention-refused window once at the same depth with fresh samples (gh-ocannl-1060). The
       retry faces the same admission rule; only its outcome reaches the search's refusal accounting.
-      Other backends and isolated timing take no retry.
+      Other backends and isolated timing take no retry. Inside a test scope
+      ({!with_contended_test_windows}, {!with_uncontended_test_windows}) the returned reading's
+      [contended] (and, where that scope says, [unbatched]) flag is the scope's, not the window's;
+      [on_call]'s record keeps the physical one.
 
       [phase] labels the call's {!batch_decision} (gh-ocannl-1199); none by default.
 

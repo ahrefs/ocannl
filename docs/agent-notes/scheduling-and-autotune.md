@@ -1317,6 +1317,15 @@ files.
   `on_candidate_measured` returning NaN inside the uncontended scope (outside it, a host contention
   refusal can pre-empt the scripted one), contention by `with_contended_test_windows`; both are
   pinned in `autotune_refusal_causes`.
+- **The test scopes reach `time_routine`'s own reading.** Both scopes set the flags of the
+  `timing_result` that `Autotune.time_routine` returns, as well as at admission (the two agree), so
+  a test that times a routine itself reads the scoped verdict. That is how a hatched claim over such a
+  reading (`Verdict.p_unless`) is driven through its BYPASS on cc, where no window contends under
+  any load. The `on_call` record and the report's `timing_decisions` stay physical.
+  `autotune_timing_modes`' scope child pins both sides: the forced scope must leave exactly one
+  BYPASS record, the cleared scope one CHECKED. Run such a claim in a child process with its own
+  `OCANNL_TOOL_VERDICT_RECORDS` directory: a forced bypass in the test's own process would be a
+  claim the sweep's bypass report reads as bypassed on every night (`UNVERIFIED`).
 - **Dispersion is a fact; on a CPU backend contention is an attribution** (gh-ocannl-1558). The
   2x-majority rule (`window_result`) sets `dispersed`, and records `spread` (median raw wall over
   the floor). On GPU backends a dispersed window is still refused (`Refuse_dispersed`). On

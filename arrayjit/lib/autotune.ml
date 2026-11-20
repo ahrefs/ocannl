@@ -1573,7 +1573,13 @@ let measurement_is_physical () = phys_equal (Seam.get on_candidate_measured) phy
    [Forced] is the opposite scope (gh-ocannl-1517): it sets the contention flag on every window, so
    a test can drive the contention refusal's own accounting on any host, as [on_candidate_measured]
    drives the degenerate-reading one. Only the flag: a reading that is unreadable or unbatched keeps
-   that cause, which [timing_admission] names first. *)
+   that cause, which [timing_admission] names first.
+
+   Either scope acts on the reading [time_routine] returns as well as at admission
+   ([scoped_window_contention], applied by both): a test that times a routine itself then reads the
+   scope's verdict, as the search does, and a hatched claim over that reading can be driven through
+   its bypass on a host that never contends (cc, under any load). Applying it twice is a no-op.
+   Never on the call's [timing_call] record, which stays the instrument's physical account. *)
 type test_window_contention = Physical | Cleared | Forced
 
 let test_window_contention : test_window_contention Seam.t = Seam.make Physical
@@ -1593,23 +1599,25 @@ let host_load_reading : (unit -> Host_load.reading option) Seam.t = Seam.make Ho
 let on_batch_wall : (depth:int -> ordinal:int -> float -> float) Seam.t =
   Seam.make (fun ~depth:_ ~ordinal:_ wall -> wall)
 
+(* The test scope's flags on a reading; idempotent, applied by [time_routine] and at admission. *)
+let scoped_window_contention timing_result =
+  match Seam.get test_window_contention with
+  | Physical -> timing_result
+  | Cleared ->
+      {
+        timing_result with
+        contended = false;
+        unbatched = timing_result.unbatched && measurement_is_physical ();
+      }
+  | Forced -> { timing_result with contended = true }
+
 (* Unless the test-only scope above is active, only an admitted window reaches the seam; its result
    then passes the same [admitted_timing_ms] gate as a real reading, so a value that gate refuses
    (zero, negative, NaN, infinite) refuses the window exactly as a degenerate clock reading would --
    through the caller's ordinary refusal path, with nothing raised outside the search's cleanup
    boundaries. *)
 let apply_measurement_seam ~label ~digest timing_result =
-  let timing_result =
-    match Seam.get test_window_contention with
-    | Physical -> timing_result
-    | Cleared ->
-        {
-          timing_result with
-          contended = false;
-          unbatched = timing_result.unbatched && measurement_is_physical ();
-        }
-    | Forced -> { timing_result with contended = true }
-  in
+  let timing_result = scoped_window_contention timing_result in
   match admitted_timing_ms timing_result with
   | None -> timing_result
   | Some ms -> { timing_result with ms = Seam.get on_candidate_measured ~label ~digest ms }
@@ -6795,12 +6803,15 @@ module Make (D : Driver) = struct
           Int.incr ordinal;
           wall
         in
-        calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio ~prior_depth
-          ~started ~tagged:tag_failures ~on_retry ~on_call ~phase ~timing ~repeats
-          ~retry_contended:(retry_contended_window_for_backend (D.backend_facts cctx))
-          ~dispersion:(dispersion_policy_for_backend (D.backend_facts cctx))
-          ~queue_depth_cap:(queue_depth_cap_for_backend (D.backend_facts cctx))
-          ~batch)
+        (* The test scopes' verdict on the returned reading (above [apply_measurement_seam]); the
+           [on_call] record [calibrate_and_time_from] hands out stays physical. *)
+        scoped_window_contention
+          (calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio ~prior_depth
+             ~started ~tagged:tag_failures ~on_retry ~on_call ~phase ~timing ~repeats
+             ~retry_contended:(retry_contended_window_for_backend (D.backend_facts cctx))
+             ~dispersion:(dispersion_policy_for_backend (D.backend_facts cctx))
+             ~queue_depth_cap:(queue_depth_cap_for_backend (D.backend_facts cctx))
+             ~batch))
 
   type compiled = {
     form : form;
