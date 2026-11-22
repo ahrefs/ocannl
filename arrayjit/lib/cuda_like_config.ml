@@ -78,6 +78,12 @@ module Cuda = struct
      prelude, measured by [tools/vendor_idents.exe]. *)
   let vendor_routine_idents = Vendor_idents_cuda.names
 
+  (* gh-ocannl-2426: CUDA's [CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES] reports static shared memory to 1
+     B. Measured on rog-nv-linux (RTX 5070 Ti, run 20261122T165804Z-1226811): the 9x21, 9x11 and
+     9x17 f16 fused products (378, 198, 306 B beside 4096 B of aligned tiles) reported 4474, 4294
+     and 4402 B, and two-array byte/half probes (17+16, 17+17, 33+33 B) reported 33, 34 and 66 B. *)
+  let workgroup_reporting_granule = 1
+
   let convert_precision ~typ_of_prec ~from ~to_ =
     match (from, to_) with
     | Ops.Double_prec _, Ops.Double_prec _
@@ -222,6 +228,14 @@ module Hip = struct
      prelude, measured by [tools/vendor_idents.exe]. *)
   let vendor_routine_idents = Vendor_idents_hip.names
 
+  (* gh-ocannl-2426: HIP's [HIP_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES] reports static shared memory to 1
+     B on both discrete and unified memory. Measured on tuf-amd-linux (gfx1102 discrete, run
+     20261122T165816Z-762875) and minix-amd-linux (gfx1151 unified, run 20261122T165826Z-1286312),
+     byte-identical on both: the 9x21, 9x11 and 9x17 f16 fused products (378, 198, 306 B beside 4096
+     B of aligned tiles) reported 4474, 4294 and 4402 B, and two-array byte/half probes reported odd
+     totals (47, 49, 81 B). *)
+  let workgroup_reporting_granule = 1
+
   let convert_precision ~typ_of_prec ~from ~to_ =
     match (from, to_) with
     | Ops.Double_prec _, Ops.Double_prec _
@@ -340,6 +354,7 @@ module Make (Dialect : sig
   val div_f64 : string option
   val fp8_from_float_syntax : string * string
   val vendor_routine_idents : string list
+  val workgroup_reporting_granule : int
 
   val convert_precision :
     typ_of_prec:(Ops.prec -> string) -> from:Ops.prec -> to_:Ops.prec -> string * string
@@ -397,6 +412,7 @@ struct
 
   let barrier_syntax = Some "__syncthreads();"
   let shared_decl_prefix = Some "__shared__ "
+  let workgroup_reporting_granule = Dialect.workgroup_reporting_granule
   let restrict_keyword = Some "__restrict__"
 
   (* Warp-shuffle rendering of [Workgroup_reduce] accumulation loops (gh-ocannl-462):

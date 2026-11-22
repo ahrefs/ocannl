@@ -1392,6 +1392,12 @@ module type C_syntax_config = sig
       estimate to round each allocation by. Metal: 4 (measured). Default 1: the declared sizes add
       up exactly. *)
 
+  val workgroup_reporting_granule : int
+  (** The granule, in bytes, the driver rounds a compiled kernel's reported static workgroup-shared
+      total ({!Compiled_kernels.record.static_workgroup_bytes}) up to (gh-ocannl-2426), published as
+      {!Backend_intf.codegen_capabilities.workgroup_reporting_granule}. Metal: 16 (measured); CUDA
+      and HIP: 1 (measured). Default 1. *)
+
   val kernel_log_param : (string * string) option
   (** Kernel parameter for logging, if any. E.g., (Some ("int", "log_id")) or (Some ("const char*",
       "log_file_name")). *)
@@ -1470,6 +1476,7 @@ let codegen_capabilities (module Config : C_syntax_config) =
     mma_operand_fragments = Config.mma_operand_fragments;
     mma_kernel_workgroup_bytes = Config.mma_kernel_workgroup_bytes;
     workgroup_allocation_alignment = Config.workgroup_allocation_alignment;
+    workgroup_reporting_granule = Config.workgroup_reporting_granule;
     (* gh-ocannl-1168: [extent / warp_size] slots where the lane all-reduce spans several whole
        simdgroups -- a shuffle-capable backend with barriers and shared declarations, an f32/f64
        residency (the precisions [ocannl_shfl_xor] is overloaded at), routine logging off -- and
@@ -3172,6 +3179,7 @@ struct
   let mma_kernel_prologue ~triples:_ = []
   let mma_kernel_workgroup_bytes ~triples:_ = 0
   let workgroup_allocation_alignment = 1
+  let workgroup_reporting_granule = 1
   let float_log_style = if Input.full_printf_support then "%g" else "%de-3"
 
   let styled_log_arg doc =

@@ -21,7 +21,9 @@ type record = {
   kernel : string;  (** The kernel's name, as the backend links it. *)
   static_workgroup_bytes : int;
       (** The static workgroup-shared (threadgroup / [__shared__]) bytes the compiled kernel
-          allocates, as the driver reports them. *)
+          allocates, as the driver reports them — rounded up to the backend's
+          {!Backend_intf.codegen_capabilities.workgroup_reporting_granule} (gh-ocannl-2426: 16 B on
+          Metal, 1 B on CUDA and HIP). *)
 }
 [@@deriving sexp_of]
 

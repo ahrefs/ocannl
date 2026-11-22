@@ -1,5 +1,5 @@
-(* gh-ocannl-1530: the device compiler's own static workgroup allocation, kernel by kernel, against
-   the schedule layer's charge for it, over every candidate a search seeds.
+(* gh-ocannl-1530, gh-ocannl-2426: the device compiler's own static workgroup allocation, kernel by
+   kernel, against the schedule layer's charge for it, over every candidate a search seeds.
 
    [Schedule.workgroup_memory_bytes] is the charge the hardware gate holds a kernel to before its
    compile, and the one the seeding floors reproduce through [Schedule.kernel_workgroup_bytes]
@@ -10,23 +10,32 @@
    kernel, Metal's [staticThreadgroupMemoryLength], CUDA's and HIP's
    [FUNC_ATTRIBUTE_SHARED_SIZE_BYTES].
 
+   Each backend's driver rounds that reported figure up to its own reporting granule
+   ([Backend_intf.codegen_capabilities.workgroup_reporting_granule], gh-ocannl-2426): Metal rounds
+   the kernel's 4 B-rounded total up to 16 B, while CUDA and HIP report to 1 B. The upper bound is
+   therefore [charged] rounded up to that granule — not [charged] bare, which flags unaligned Metal
+   kernels as under-charged by up to 12 B.
+
    The claim is AT MOST, not equality: a device compiler may allocate less than the kernel declares
    (NVVM, ptxas and the Metal compiler drop an array they prove dead; the lane all-reduce partials
    are charged at the wider of two precisions), and an over-charge only costs candidates, while an
    under-charge is the defect. Each kernel's slack is printed to stderr. So that the claim can fail,
-   some kernel's figure must equal its charge exactly and be positive: a dropped term of the charge
-   then shows on it (the negative control the PR reports).
+   some aligned kernel's figure must equal its positive charge exactly (a dropped term of the charge
+   shows on it), and some unaligned kernel's figure must equal its granule-rounded bound below a 32
+   B multiple (pinning the reporting granule from both sides).
 
    Candidates: every whole-routine seed [Autotune.search_seeding] proposes under the device's own
    limits and capabilities (sketch and coalesced; staged, tensorized and [Fuse_epilogue] twins
    included), each compiled through the seed's own schedule, over fixtures chosen for their
-   allocations: a dividing GEMM with a tail (staged tiles, fused twins), a padded one (the masked
-   accumulator tile), two f16-operand ones (half tiles; an f16 product, whose accumulator boundary
-   converts on Metal: the per-kernel tile-MMA term), the attention out projection (the
-   contraction-coalesced K menu's deep staged tiles) and a conv (the conv family's staged tiles). A
-   candidate the gate or the backend refuses is outside the comparison (stderr says why); a crash
-   fails. Kernel figures pair with the routine's shipped segments in launch order, which the
-   census's count must match.
+   allocations: a dividing GEMM with a tail (staged tiles, fused twins), a routine-local GEMM (whole
+   aligned fused product), two odd f16 routine-local GEMMs (9x21 and 9x11: unaligned fused products
+   of 378 and 198 B beside aligned tiles, pinning the reporting granule below and above), a padded
+   GEMM (the masked accumulator tile), two f16-operand ones (half tiles; an f16 product, whose
+   accumulator boundary converts on Metal: the per-kernel tile-MMA term), the attention out
+   projection (the contraction-coalesced K menu's deep staged tiles) and a conv (the conv family's
+   staged tiles). A candidate the gate or the backend refuses is outside the comparison (stderr says
+   why); a crash fails. Kernel figures pair with the routine's shipped segments in launch order,
+   which the census's count must match.
 
    The C backends declare no workgroup memory and record nothing: the leg is skipped there, its
    fixtures still built and seeded. *)
@@ -52,9 +61,20 @@ let leg = Verdict.leg ~when_:is_gpu ~on:backend_name ()
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
-(* One compiled kernel beside its segment's charge, and the share of that charge that is the
-   backend's per-kernel tile-MMA scratch. *)
-type kernel = { name : string; compiled : int; charged : int; mma_scratch : int }
+let round_up ~granule bytes =
+  let g = max 1 granule in
+  (bytes + g - 1) / g * g
+
+(* One compiled kernel beside its segment's charge, that charge rounded up to the backend's
+   reporting granule, and the share of that charge that is the backend's per-kernel tile-MMA
+   scratch. *)
+type kernel = {
+  name : string;
+  compiled : int;
+  charged : int;
+  reported_bound : int;
+  mma_scratch : int;
+}
 
 type outcome =
   | Compiled of kernel list
@@ -119,10 +139,12 @@ let fixture ?(materialize = true) ?(fp16_wide = false) ?scratch_triple tag build
                   Compiled
                     (List.map2_exn records segments ~f:(fun r seg ->
                          let charged = Sched.workgroup_memory_bytes ~capabilities seg in
+                         let granule = capabilities.Ir.Backend_intf.workgroup_reporting_granule in
                          {
                            name = r.Ir.Compiled_kernels.kernel;
                            compiled = r.static_workgroup_bytes;
                            charged;
+                           reported_bound = round_up ~granule charged;
                            mma_scratch =
                              charged - Sched.workgroup_memory_bytes ~capabilities:no_scratch seg;
                          }))
@@ -139,9 +161,12 @@ let fixture ?(materialize = true) ?(fp16_wide = false) ?scratch_triple tag build
         | Compiled ks ->
             List.iter ks ~f:(fun k ->
                 Stdio.eprintf
-                  "%s: %s kernel %s: compiled %d, charged %d%s (not part of the golden)\n%!" tag
-                  label k.name k.compiled k.charged
-                  (if k.compiled > k.charged then " UNDER-CHARGED" else ""))
+                  "%s: %s kernel %s: compiled %d, charged %d, bound %d (granule %d)%s (not part of \
+                   the golden)\n\
+                   %!"
+                  tag label k.name k.compiled k.charged k.reported_bound
+                  capabilities.Ir.Backend_intf.workgroup_reporting_granule
+                  (if k.compiled > k.reported_bound then " UNDER-CHARGED" else ""))
         | Unpaired msg ->
             Stdio.eprintf "%s: %s UNPAIRED: %s (not part of the golden)\n%!" tag label msg
         | Refused msg ->
@@ -264,6 +289,14 @@ let () =
   (* The product left to the fused tail alone: a tensorized fused twin places it, routine-local, in
      workgroup-shared memory whole. *)
   fixture ~materialize:false "dense_local" (gemm ~m:32 ~k:32 ~n:32 "cwb_dense_local");
+  (* Odd f16 products left to the fused tail alone (378 B and 198 B): neither is a multiple of 16 B,
+     so they exercise [workgroup_reporting_granule] on every GPU backend (gh-ocannl-2426). 9x11's 16
+     B-rounded bound is 4304 B (16 mod 32 on Metal; 4294 B on CUDA and HIP), ruling out a coarser
+     granule as well as a finer one. *)
+  fixture ~materialize:false "half_local_odd"
+    (gemm ~prec:Ir.Ops.half ~out_prec:Ir.Ops.half ~m:9 ~k:32 ~n:21 "cwb_half_local_odd");
+  fixture ~materialize:false "half_local_9x11"
+    (gemm ~prec:Ir.Ops.half ~out_prec:Ir.Ops.half ~m:9 ~k:32 ~n:11 "cwb_half_local_9x11");
   fixture "padded" (gemm ~m:20 ~k:70 ~n:50 "cwb_padded");
   fixture "half" (gemm ~prec:Ir.Ops.half ~m:32 ~k:48 ~n:40 "cwb_half");
   (* An f16 product under the wide fp16 policy, an f32 accumulator over half storage: on Metal its
@@ -284,7 +317,13 @@ let () =
       p_all ~min:1 label
         (List.filter outcomes ~f:(function _, Refused _ -> false | _ -> true))
         ~f:(function _, Compiled _ -> true | _ -> false));
-  in_leg ~leg "no compiled kernel allocates more workgroup memory than its charge" (fun label ->
-      p_all ~min:1 label kernels ~f:(fun k -> k.compiled <= k.charged));
+  in_leg ~leg
+    "no compiled kernel allocates more workgroup memory than its charge rounded to the reporting \
+     granule" (fun label -> p_all ~min:1 label kernels ~f:(fun k -> k.compiled <= k.reported_bound));
   in_leg ~leg "some compiled kernel allocates exactly its positive charge" (fun label ->
-      p_exists label kernels ~f:(fun k -> k.compiled > 0 && k.compiled = k.charged))
+      p_exists label kernels ~f:(fun k -> k.compiled > 0 && k.compiled = k.charged));
+  in_leg ~leg
+    "some unaligned compiled kernel allocates exactly its granule-rounded bound, not a coarser \
+     multiple" (fun label ->
+      p_exists label kernels ~f:(fun k ->
+          k.charged % 16 <> 0 && k.compiled = k.reported_bound && k.reported_bound % 32 <> 0))

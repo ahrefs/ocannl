@@ -819,6 +819,15 @@ type codegen_capabilities = {
           gh-ocannl-1226), so [Schedule.workgroup_memory_bytes] rounds each allocation it counts up
           to this before summing (gh-ocannl-1330); [1] where the sum of exact sizes is what the
           device allocates. *)
+  workgroup_reporting_granule : int;
+      (** The granule, in bytes, the driver rounds a compiled kernel's reported static
+          workgroup-shared total ({!Compiled_kernels.record.static_workgroup_bytes}) up to
+          (gh-ocannl-2426): the backend's [C_syntax_config.workgroup_reporting_granule]. Metal's
+          [staticThreadgroupMemoryLength] rounds the kernel's 4 B-rounded total up to 16 B, while
+          CUDA's [CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES] and HIP's
+          [HIP_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES] report to 1 B. Distinct from
+          {!workgroup_allocation_alignment}, which is the per-array granule the schedule gate and
+          pipeline creation enforce. *)
   lane_all_reduce_workgroup_bytes : extent:int -> prec:Ops.prec -> int;
       (** Static workgroup-shared bytes one lane all-reduce site declares for its per-simdgroup
           partials (gh-ocannl-1168): a reduction of [extent] lanes into a scope local residing at
@@ -873,6 +882,7 @@ let no_codegen_capabilities =
     mma_operand_fragments = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
     mma_kernel_workgroup_bytes = (fun ~triples:_ -> 0);
     workgroup_allocation_alignment = 1;
+    workgroup_reporting_granule = 1;
     lane_all_reduce_workgroup_bytes = (fun ~extent:_ ~prec:_ -> 0);
     warp_reduce_workgroup_bytes = (fun ~extent:_ ~prec:_ -> 0);
   }
@@ -896,12 +906,13 @@ let no_codegen_capabilities =
     Rendering them would add no discrimination, only re-tunes.
 
     The fields deliberately not rendered are [mma_kernel_workgroup_bytes],
-    [workgroup_allocation_alignment], [lane_all_reduce_workgroup_bytes] and
-    [warp_reduce_workgroup_bytes] (the same argument holds for all four): it decides whether a
-    schedule FITS, never what a kernel computes, and it is a function of the storage triples, the
-    numerics policy and the backend, which the key already carries ([Schedule_cache.numerics_tag]
-    and the backend identity), so rendering it would add no discrimination. An emitter change that
-    grows the scratch is caught without it: a replayed winner passes the same
+    [workgroup_allocation_alignment], [workgroup_reporting_granule],
+    [lane_all_reduce_workgroup_bytes] and [warp_reduce_workgroup_bytes] (the same argument holds for
+    all five): they decide whether a schedule FITS or how the driver reports its allocation, never
+    what a kernel computes, and they are functions of the storage triples, the numerics policy and
+    the backend, which the key already carries ([Schedule_cache.numerics_tag] and the backend
+    identity), so rendering them would add no discrimination. An emitter change that grows the
+    scratch is caught without it: a replayed winner passes the same
     [Schedule.check_hardware_limits_classified] gate as a fresh candidate, so one that no longer
     fits is refused there as a typed cause, which autotune answers by re-searching (gh-ocannl-572:
     over-keying is a defect too). *)
@@ -920,6 +931,7 @@ let codegen_capabilities_fingerprint
       mma_operand_fragments = _;
       mma_kernel_workgroup_bytes = _;
       workgroup_allocation_alignment = _;
+      workgroup_reporting_granule = _;
       lane_all_reduce_workgroup_bytes = _;
       warp_reduce_workgroup_bytes = _;
     } =
