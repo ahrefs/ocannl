@@ -323,8 +323,10 @@ type mma_peaks = {
 
 val mma_peaks : cc:int -> mma_peaks
 (** Per-format advisory dense tensor-core peaks for a CUDA device of compute capability [cc],
-    anchored to [Cuda_backend]'s mid-range GeForce RTX class baseline ([1.5e13] fp32 FLOP/s) and
-    gated on each format's {!arm_floor}. *)
+    anchored to [Cuda_backend]'s mid-range GeForce RTX class baseline ([1.5e13] fp32 FLOP/s) for
+    Ampere/Ada/Blackwell ([sm_80+] for f16/bf16/tf32, [sm_89+] for fp8) and gated on each format's
+    {!arm_floor}. Pre-Ampere architectures (Volta/Turing) return [None] rather than carrying an
+    inapplicable GeForce ratio. *)
 
 (** {1 nvrtc architecture targets} *)
 

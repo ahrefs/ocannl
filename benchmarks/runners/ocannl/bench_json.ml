@@ -351,10 +351,7 @@ let choose_ceiling ~mma_ceiling ~gpu ~tensorization ~narrow_native ~peak_flops
     | Some (Mma_no_peak reason), Some _ -> Error reason
     | None, Some _ ->
         Error "tensor-core kernel: no mma peak for this format, and peak_flops is scalar f32"
-    | _, None ->
-        Error
-          "no peak_memory_bandwidth for this backend (the C backends carry no class constant; set \
-           model_peak_flops and model_peak_memory_bandwidth)"
+    | _, None -> Error "no peak_memory_bandwidth for this backend (set model_peak_memory_bandwidth)"
   else
     match (peak_flops, peak_memory_bandwidth) with
     | None, _ | _, None ->

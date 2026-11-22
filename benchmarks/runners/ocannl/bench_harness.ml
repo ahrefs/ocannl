@@ -1658,36 +1658,20 @@ let mma_ceiling_of ~backend ~(limits : Ir.Backend_intf.hardware_limits)
                 match distinct with
                 | [ (fmt, accum_prec) ] -> (
                     let fmt_name = BI.mma_input_format_name fmt in
+                    let source_string = function
+                      | Autotune.Mma_peak_config key -> Printf.sprintf "%s config" key
+                      | Autotune.Mma_peak_backend prov ->
+                          Printf.sprintf "%s %s" backend (BI.mma_peak_provenance_string prov)
+                      | Autotune.Mma_peak_scalar_alu `Backend ->
+                          Printf.sprintf "%s class constant (mma shares shader ALU)" backend
+                      | Autotune.Mma_peak_scalar_alu `Config ->
+                          "model_peak_flops config (mma shares shader ALU)"
+                    in
                     match Autotune.mma_peak_leg ~limits ~accum_prec fmt with
-                    | Autotune.Mma_peak_found (flops, Autotune.Mma_peak_config key) ->
-                        Bench_json.Mma_peak
-                          { format = fmt_name; flops; source = Printf.sprintf "%s config" key }
-                    | Autotune.Mma_peak_found (flops, Autotune.Mma_peak_backend prov) ->
-                        Bench_json.Mma_peak
-                          {
-                            format = fmt_name;
-                            flops;
-                            source =
-                              Printf.sprintf "%s %s" backend (BI.mma_peak_provenance_string prov);
-                          }
-                    | Autotune.Mma_peak_found (flops, Autotune.Mma_peak_scalar_alu `Backend) ->
-                        Bench_json.Mma_peak
-                          {
-                            format = fmt_name;
-                            flops;
-                            source =
-                              Printf.sprintf "%s class constant (mma shares shader ALU)" backend;
-                          }
-                    | Autotune.Mma_peak_found (flops, Autotune.Mma_peak_scalar_alu `Config) ->
-                        Bench_json.Mma_peak
-                          {
-                            format = fmt_name;
-                            flops;
-                            source = "model_peak_flops config (mma shares shader ALU)";
-                          }
+                    | Autotune.Mma_peak_found (flops, src) ->
+                        Bench_json.Mma_peak { format = fmt_name; flops; source = source_string src }
                     | Autotune.Mma_peak_unavailable reason ->
                         Bench_json.Mma_no_peak (Printf.sprintf "tensor-core kernel: %s" reason))
-                | [] -> Bench_json.Mma_no_peak "tensor-core kernel: no emitted MMA format recorded"
                 | many ->
                     let names =
                       String.concat ~sep:", "

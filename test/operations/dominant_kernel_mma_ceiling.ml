@@ -68,22 +68,29 @@ let emit ?(tf32 = false) ?accum a b d =
 let () =
   if Array.exists Stdlib.Sys.argv ~f:(String.equal defaults_probe_arg) then (
     let cuda120 = cuda_limits ~cc:120 in
+    let cuda80 = cuda_limits ~cc:80 in
     let cuda75 = cuda_limits ~cc:75 in
     let cuda_cases =
       [
-        ("f16", emit Ir.Ops.half Ir.Ops.half Ir.Ops.single, 3.0e13);
-        ("bf16", emit Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.single, 3.0e13);
-        ("tf32", emit ~tf32:true Ir.Ops.single Ir.Ops.single Ir.Ops.single, 1.5e13);
-        ("fp8", emit Ir.Ops.fp8 Ir.Ops.fp8 Ir.Ops.single, 6.0e13);
+        ("cuda_sm120:f16", "f16", emit Ir.Ops.half Ir.Ops.half Ir.Ops.single, 3.0e13);
+        ("cuda_sm120:bf16", "bf16", emit Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.single, 3.0e13);
+        ( "cuda_sm120:tf32",
+          "tf32",
+          emit ~tf32:true Ir.Ops.single Ir.Ops.single Ir.Ops.single,
+          1.5e13 );
+        ("cuda_sm120:fp8", "fp8", emit Ir.Ops.fp8 Ir.Ops.fp8 Ir.Ops.single, 6.0e13);
       ]
     in
-    let ok_cuda_sm120 =
-      List.for_all cuda_cases ~f:(fun (expected_fmt, emitted, expected_flops) ->
-          match H.mma_ceiling_of ~backend:"cuda" ~limits:cuda120 (summary_of [ emitted ]) with
-          | Bench_json.Mma_peak { format; flops; source } ->
-              String.equal format expected_fmt && Float.equal flops expected_flops
-              && String.is_substring source ~substring:"cuda datasheet ("
-          | Bench_json.Mma_no_peak _ -> false)
+    let cuda_tokens =
+      List.map cuda_cases ~f:(fun (tag, expected_fmt, emitted, expected_flops) ->
+          let ok =
+            match H.mma_ceiling_of ~backend:"cuda" ~limits:cuda120 (summary_of [ emitted ]) with
+            | Bench_json.Mma_peak { format; flops; source } ->
+                String.equal format expected_fmt && Float.equal flops expected_flops
+                && String.is_substring source ~substring:"cuda datasheet ("
+            | Bench_json.Mma_no_peak _ -> false
+          in
+          (tag, ok))
     in
     let ok_cuda_wide_f16 =
       match
@@ -102,61 +109,84 @@ let () =
       | Bench_json.Mma_no_peak reason -> String.is_substring reason ~substring:"f32 accumulation"
       | Bench_json.Mma_peak _ -> false
     in
-    let ok_cuda_sm75 =
+    let ok_cuda_sm80 =
       (match
-         H.mma_ceiling_of ~backend:"cuda" ~limits:cuda75
+         H.mma_ceiling_of ~backend:"cuda" ~limits:cuda80
            (summary_of [ emit Ir.Ops.half Ir.Ops.half Ir.Ops.single ])
        with
         | Bench_json.Mma_peak { format = "f16"; flops; _ } -> Float.equal flops 3.0e13
         | _ -> false)
       &&
       match
-        H.mma_ceiling_of ~backend:"cuda" ~limits:cuda75
+        H.mma_ceiling_of ~backend:"cuda" ~limits:cuda80
           (summary_of [ emit Ir.Ops.fp8 Ir.Ops.fp8 Ir.Ops.single ])
+      with
+      | Bench_json.Mma_no_peak _ -> true
+      | Bench_json.Mma_peak _ -> false
+    in
+    let ok_cuda_sm75_refused =
+      match
+        H.mma_ceiling_of ~backend:"cuda" ~limits:cuda75
+          (summary_of [ emit Ir.Ops.half Ir.Ops.half Ir.Ops.single ])
       with
       | Bench_json.Mma_no_peak _ -> true
       | Bench_json.Mma_peak _ -> false
     in
     let hip_cases =
       [
-        ("f16", emit Ir.Ops.half Ir.Ops.half Ir.Ops.single, 4.0e13);
-        ("f16", emit ~accum:Ir.Ops.half Ir.Ops.half Ir.Ops.half Ir.Ops.half, 4.0e13);
-        ("bf16", emit Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.single, 4.0e13);
-        ("bf16", emit ~accum:Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.bfloat16, 4.0e13);
+        ("hip_rdna3:f16_wide", "f16", emit Ir.Ops.half Ir.Ops.half Ir.Ops.single, 4.0e13);
+        ( "hip_rdna3:f16_narrow",
+          "f16",
+          emit ~accum:Ir.Ops.half Ir.Ops.half Ir.Ops.half Ir.Ops.half,
+          4.0e13 );
+        ("hip_rdna3:bf16_wide", "bf16", emit Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.single, 4.0e13);
+        ( "hip_rdna3:bf16_narrow",
+          "bf16",
+          emit ~accum:Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.bfloat16,
+          4.0e13 );
       ]
     in
-    let ok_hip_rdna3 =
-      List.for_all hip_cases ~f:(fun (expected_fmt, emitted, expected_flops) ->
-          match
-            H.mma_ceiling_of ~backend:"hip" ~limits:hip_rdna3_limits (summary_of [ emitted ])
-          with
-          | Bench_json.Mma_peak { format; flops; source } ->
-              String.equal format expected_fmt && Float.equal flops expected_flops
-              && String.is_substring source ~substring:"hip datasheet ("
-          | Bench_json.Mma_no_peak _ -> false)
+    let hip_tokens =
+      List.map hip_cases ~f:(fun (tag, expected_fmt, emitted, expected_flops) ->
+          let ok =
+            match
+              H.mma_ceiling_of ~backend:"hip" ~limits:hip_rdna3_limits (summary_of [ emitted ])
+            with
+            | Bench_json.Mma_peak { format; flops; source } ->
+                String.equal format expected_fmt && Float.equal flops expected_flops
+                && String.is_substring source ~substring:"hip datasheet ("
+            | Bench_json.Mma_no_peak _ -> false
+          in
+          (tag, ok))
     in
-    let ok_hip_cdna =
+    let ok_hip_no_cap =
       match
-        H.mma_ceiling_of ~backend:"hip" ~limits:BI.no_hardware_limits
+        H.mma_ceiling_of ~backend:"hip"
+          ~limits:{ hip_rdna3_limits with mma = None }
           (summary_of [ emit Ir.Ops.half Ir.Ops.half Ir.Ops.single ])
       with
-      | Bench_json.Mma_no_peak _ -> true
+      | Bench_json.Mma_no_peak reason -> String.is_substring reason ~substring:"no mma capability"
       | Bench_json.Mma_peak _ -> false
     in
     let metal_cases =
       [
-        ("f32", emit Ir.Ops.single Ir.Ops.single Ir.Ops.single);
-        ("f16", emit Ir.Ops.half Ir.Ops.half Ir.Ops.half);
-        ("bf16", emit Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.single);
+        ("metal:f32", "f32", emit Ir.Ops.single Ir.Ops.single Ir.Ops.single);
+        ("metal:f16", "f16", emit Ir.Ops.half Ir.Ops.half Ir.Ops.half);
+        ("metal:bf16", "bf16", emit Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.single);
       ]
     in
-    let ok_metal =
-      List.for_all metal_cases ~f:(fun (expected_fmt, emitted) ->
-          match H.mma_ceiling_of ~backend:"metal" ~limits:metal_limits (summary_of [ emitted ]) with
-          | Bench_json.Mma_peak { format; flops; source } ->
-              String.equal format expected_fmt && Float.equal flops 5.0e12
-              && String.equal source "metal class constant (mma shares shader ALU)"
-          | Bench_json.Mma_no_peak _ -> false)
+    let metal_tokens =
+      List.map metal_cases ~f:(fun (tag, expected_fmt, emitted) ->
+          let ok =
+            match
+              H.mma_ceiling_of ~backend:"metal" ~limits:metal_limits (summary_of [ emitted ])
+            with
+            | Bench_json.Mma_peak { format; flops; source } ->
+                String.equal format expected_fmt && Float.equal flops 5.0e12
+                && String.equal source "metal class constant (mma shares shader ALU)"
+            | Bench_json.Mma_no_peak _ -> false
+          in
+          (tag, ok))
     in
     let ok_mixed_formats =
       match
@@ -188,18 +218,17 @@ let () =
       | Bench_json.Mma_peak _ -> false
     in
     let checks =
-      [
-        ("cuda_sm120", ok_cuda_sm120);
-        ("cuda_wide_f16", ok_cuda_wide_f16);
-        ("cuda_narrow_f16_refused", ok_cuda_narrow_f16_refused);
-        ("cuda_sm75", ok_cuda_sm75);
-        ("hip_rdna3", ok_hip_rdna3);
-        ("hip_cdna", ok_hip_cdna);
-        ("metal", ok_metal);
-        ("mixed_formats", ok_mixed_formats);
-        ("partial_fallback", ok_partial_fallback);
-        ("empty_formats", ok_empty_formats);
-      ]
+      cuda_tokens @ hip_tokens @ metal_tokens
+      @ [
+          ("cuda_wide_f16", ok_cuda_wide_f16);
+          ("cuda_narrow_f16_refused", ok_cuda_narrow_f16_refused);
+          ("cuda_sm80", ok_cuda_sm80);
+          ("cuda_sm75_refused", ok_cuda_sm75_refused);
+          ("hip_no_cap", ok_hip_no_cap);
+          ("mixed_formats", ok_mixed_formats);
+          ("partial_fallback", ok_partial_fallback);
+          ("empty_formats", ok_empty_formats);
+        ]
     in
     List.iter checks ~f:(fun (tag, ok) -> if ok then Stdio.printf "%s\n%!" tag);
     Stdlib.exit 0)
@@ -356,19 +385,19 @@ let () =
   in
   let sm60 = Ir.Cuda_mma.mma_peaks ~cc:60
   and sm70 = Ir.Cuda_mma.mma_peaks ~cc:70
+  and sm75 = Ir.Cuda_mma.mma_peaks ~cc:75
   and sm80 = Ir.Cuda_mma.mma_peaks ~cc:80
   and sm89 = Ir.Cuda_mma.mma_peaks ~cc:89
   and sm120 = Ir.Cuda_mma.mma_peaks ~cc:120 in
-  p "CUDA pre-Volta (sm_60) advertises no tensor-core peaks"
-    (Option.is_none sm60.f16 && Option.is_none sm60.bf16 && Option.is_none sm60.tf32
-   && Option.is_none sm60.fp8);
-  p "CUDA Volta (sm_70) advertises only f16 with datasheet provenance"
-    (check_datasheet sm70.f16 && Option.is_none sm70.bf16 && Option.is_none sm70.tf32
-   && Option.is_none sm70.fp8);
-  p "CUDA Ampere (sm_80) adds bf16 and tf32 with datasheet provenance, not fp8"
+  p_all ~min:3 "CUDA pre-Ampere (sm_60, sm_70, sm_75) advertise no Ampere+ GeForce peaks"
+    [ sm60; sm70; sm75 ] ~f:(fun pk ->
+      Option.is_none pk.f16 && Option.is_none pk.bf16 && Option.is_none pk.tf32
+      && Option.is_none pk.fp8);
+  p "CUDA Ampere (sm_80) advertises f16, bf16 and tf32 with datasheet provenance, not fp8"
     (check_datasheet sm80.f16 && check_datasheet sm80.bf16 && check_datasheet sm80.tf32
    && Option.is_none sm80.fp8);
-  p_all "CUDA Ada/Blackwell (sm_89, sm_120) advertise all four formats with datasheet provenance"
+  p_all ~min:2
+    "CUDA Ada/Blackwell (sm_89, sm_120) advertise all four formats with datasheet provenance"
     [ sm89; sm120 ] ~f:(fun pk ->
       check_datasheet pk.f16 && check_datasheet pk.bf16 && check_datasheet pk.tf32
       && check_datasheet pk.fp8);
@@ -382,20 +411,27 @@ let () =
     | Unix.WEXITED 0 -> List.mem passed tag ~equal:String.equal
     | _ -> false
   in
-  p "CUDA sm_120 resolves each emitted MMA format to its datasheet peak" (defaults_ok "cuda_sm120");
+  p_all ~min:4 "CUDA sm_120 resolves each emitted MMA format to its datasheet peak"
+    [ "cuda_sm120:f16"; "cuda_sm120:bf16"; "cuda_sm120:tf32"; "cuda_sm120:fp8" ]
+    ~f:defaults_ok;
   p "CUDA wide f16 (f16 storage, f32 accumulator) resolves to its f32-accum datasheet peak"
     (defaults_ok "cuda_wide_f16");
   p
     "CUDA narrow f16-accumulate arm (Wmma_f16_f16) fails closed rather than using the f32-accum \
      peak"
     (defaults_ok "cuda_narrow_f16_refused");
-  p "CUDA sm_75 refuses fp8 (no peak for that architecture) while keeping f16"
-    (defaults_ok "cuda_sm75");
-  p "HIP RDNA3 resolves wide and narrow f16 and bf16 WMMA to their datasheet peaks"
-    (defaults_ok "hip_rdna3");
-  p "HIP without mma capability (CDNA) fails closed to no-ceiling" (defaults_ok "hip_cdna");
-  p "Metal maps f32, f16 and bf16 simdgroup_matrix kernels to the scalar ceiling"
-    (defaults_ok "metal");
+  p "CUDA sm_80 refuses fp8 (no peak for that architecture) while keeping f16"
+    (defaults_ok "cuda_sm80");
+  p "CUDA sm_75 (Turing) fails closed rather than citing Ampere+ GeForce ratios"
+    (defaults_ok "cuda_sm75_refused");
+  p_all ~min:4 "HIP RDNA3 resolves wide and narrow f16 and bf16 WMMA to their datasheet peaks"
+    [ "hip_rdna3:f16_wide"; "hip_rdna3:f16_narrow"; "hip_rdna3:bf16_wide"; "hip_rdna3:bf16_narrow" ]
+    ~f:defaults_ok;
+  p "HIP without mma capability fails closed even when mma_peak_* fields are set"
+    (defaults_ok "hip_no_cap");
+  p_all ~min:3 "Metal maps f32, f16 and bf16 simdgroup_matrix kernels to the scalar ceiling"
+    [ "metal:f32"; "metal:f16"; "metal:bf16" ]
+    ~f:defaults_ok;
   p "a kernel mixing two distinct MMA formats fails closed to no-ceiling"
     (defaults_ok "mixed_formats");
   p "a partially tensorized kernel with scalar fallbacks fails closed to no-ceiling"

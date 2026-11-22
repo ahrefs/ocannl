@@ -1828,6 +1828,7 @@ end = struct
          in
          (* The wavefront the shuffles assume: 32 lanes. *)
          let wave = 32 in
+         let mma_ok = mma_supported () in
          {
            Backend_intf.max_threads_per_workgroup =
              min_over (fun (a : H.Device.attributes) -> a.max_threads_per_block);
@@ -1868,7 +1869,7 @@ end = struct
               would let autotune pick [Tile_mma] and then fail to compile. [None] unless EVERY
               device qualifies: limits are min-over-devices, so code compiled once must be valid
               wherever it links. Precision combinations are decided per call by [mma_syntax]. *)
-           mma = (if mma_supported () then Some Hip_mma.capability else None);
+           mma = (if mma_ok then Some Hip_mma.capability else None);
            simd_vector = Ir.Vector_file.none;
            native_fp16_arithmetic = false;
            simdgroup_width = Some wave;
@@ -1982,8 +1983,8 @@ end = struct
            (* gh-ocannl-1092: advisory per-format dense RDNA3 WMMA peaks (reporting-only, never
               feeds autotune ranking or bound pruning), gated on [mma_supported ()] so CDNA and
               header-less hosts stay [None]. *)
-           mma_peak_f16 = Option.some_if (mma_supported ()) Hip_mma.mma_peak_f16;
-           mma_peak_bf16 = Option.some_if (mma_supported ()) Hip_mma.mma_peak_bf16;
+           mma_peak_f16 = Option.some_if mma_ok Hip_mma.mma_peak_f16;
+           mma_peak_bf16 = Option.some_if mma_ok Hip_mma.mma_peak_bf16;
            mma_peak_tf32 = None;
            mma_peak_fp8 = None;
            mma_uses_scalar_peak = false;

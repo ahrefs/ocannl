@@ -1,14 +1,14 @@
-CUDA pre-Volta (sm_60) advertises no tensor-core peaks: true
-CUDA Volta (sm_70) advertises only f16 with datasheet provenance: true
-CUDA Ampere (sm_80) adds bf16 and tf32 with datasheet provenance, not fp8: true
+CUDA pre-Ampere (sm_60, sm_70, sm_75) advertise no Ampere+ GeForce peaks: true
+CUDA Ampere (sm_80) advertises f16, bf16 and tf32 with datasheet provenance, not fp8: true
 CUDA Ada/Blackwell (sm_89, sm_120) advertise all four formats with datasheet provenance: true
 HIP RDNA3 advertises f16 and bf16 WMMA peaks with datasheet provenance: true
 CUDA sm_120 resolves each emitted MMA format to its datasheet peak: true
 CUDA wide f16 (f16 storage, f32 accumulator) resolves to its f32-accum datasheet peak: true
 CUDA narrow f16-accumulate arm (Wmma_f16_f16) fails closed rather than using the f32-accum peak: true
-CUDA sm_75 refuses fp8 (no peak for that architecture) while keeping f16: true
+CUDA sm_80 refuses fp8 (no peak for that architecture) while keeping f16: true
+CUDA sm_75 (Turing) fails closed rather than citing Ampere+ GeForce ratios: true
 HIP RDNA3 resolves wide and narrow f16 and bf16 WMMA to their datasheet peaks: true
-HIP without mma capability (CDNA) fails closed to no-ceiling: true
+HIP without mma capability fails closed even when mma_peak_* fields are set: true
 Metal maps f32, f16 and bf16 simdgroup_matrix kernels to the scalar ceiling: true
 a kernel mixing two distinct MMA formats fails closed to no-ceiling: true
 a partially tensorized kernel with scalar fallbacks fails closed to no-ceiling: true
