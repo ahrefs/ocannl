@@ -140,6 +140,20 @@ anon = (proc('_build', 41, 1, 2, './gate.exe', '/default/test/operations',
              ['/.actions/default/test/operations/' + 'a' * 32])
         + proc('_build', 42, 2, 1, './top.exe', '/default', ['/.actions/default/' + 'b' * 32]))
 (root / 'anonymous').write_bytes(b''.join([config('_build')] + anon))
+closed = sexp(['config', 'exit', str(T0 + 51 * S), ['ignored', canary]])
+(root / 'complete-empty').write_bytes(b''.join([config('_build')] + others + [closed]))
+more = (proc(bd, 43, 2, 1, bd + '/default/arrayjit/test/driver.exe', '/default', [])
+        + proc(bd, 44, 3, 1, './generator.exe', '/default/test', ['/default/test/fixture_compiled_output.exe'])
+        + proc(bd, 45, 4, 1, '/opt/bin/tool.exe', '/default/test', ['/.actions/default/test/' + 'c' * 32])
+        + proc(bd, 46, 5, 1, 'tool\n.exe', '/default/test', ['/default/test/unsafe.actual'])
+        + proc(bd, 47, 6, 1, '/opt/bin/python3', '/default/benchmarks',
+               ['/.actions/default/benchmarks/runtest-fixture_alias-' + 'd' * 32])
+        + proc(bd, 48, 7, 1, '/bin/sh', '/default', ['/.actions/default/runtest-' + 'e' * 32]))
+finished = body(bd)
+# Complete traces normally finish all processes. The open row is covered by the timing legs.
+finished.pop()
+(root / 'complete-inventory').write_bytes(b''.join([config(bd)] + finished + more + [closed]))
+(root / 'complete-anonymous').write_bytes(b''.join([config('_build')] + anon + [closed]))
 # Tampered: `prog`'s length prefix is enlarged to swallow a planted environment record
 # and the field's own close; still well-formed csexp, so the reader cannot see it.
 swallowed = b'tampered.exe)(3:env' + atom('FAKE_API_TOKEN=' + canary) + b')'
@@ -266,6 +280,31 @@ leg "--tsv --dirs reads a --build-dir trace alike" \
 } >"$TMP/anonymous.expected"
 leg "--tsv names an alias action dune names by its digest alone @DIR/(anonymous-DIGEST)" \
   exact "$SUBJECT" anonymous "$TMP/anonymous.expected" --tsv "$TMP/anonymous"
+
+inventory_leg() {
+  local empty=$TMP/executed-empty inventory=$TMP/executed anonymous=$TMP/executed-anonymous
+  exact "$SUBJECT" executed-empty /dev/null --executed-to "$empty" "$TMP/complete-empty" &&
+    [ -f "$empty" ] && [ ! -s "$empty" ] || return 1
+  exact "$SUBJECT" executed-partial "$TMP/table.expected" --executed-to "$TMP/executed-partial" "$TMP/trace" &&
+    [ ! -e "$TMP/executed-partial" ] || return 1
+  run_subject "$SUBJECT" executed --executed-to "$inventory" "$TMP/complete-inventory"
+  if leaked executed || [ "$(cat "$TMP/runs/executed/rc")" != 0 ]; then return 1; fi
+  printf '%s\t%s\n' \
+    driver.exe arrayjit/test/driver.exe \
+    fixture_scan.exe test/operations/fixture_scan.actual \
+    fixture_scan.exe test/operations/fixture_scan_control.actual \
+    fixture_trainer.exe test/training/fixture_trainer.actual \
+    python3 @benchmarks/runtest-fixture_alias \
+    sh @runtest \
+    sh @test/operations/runtest-slot_kind_cases >"$TMP/executed.expected"
+  cmp -s "$TMP/executed.expected" "$inventory" || return 1
+  exact "$SUBJECT" executed-anonymous "$TMP/anonymous.expected" --tsv \
+    --executed-to "$anonymous" "$TMP/complete-anonymous" || return 1
+  printf '%s\t%s\n' gate.exe "@test/operations/(anonymous-$(printf 'a%.0s' $(seq 32)))" \
+    >"$TMP/executed-anonymous.expected"
+  cmp -s "$TMP/executed-anonymous.expected" "$anonymous"
+}
+leg "executed records cover only identified test processes from complete traces" inventory_leg
 
 mkdir -p "$TMP/repo/tools" "$TMP/repo/_build"
 cp "$SUBJECT" "$TMP/repo/tools/"

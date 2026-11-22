@@ -1536,7 +1536,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   can resolve `missing/..` where POSIX spellings cannot: queries follow the shell's identity.
   A missing suffix whose symlink-parent prefix differs between logical cd and physical
   traversal is refused; already resolved roots and ordinary symlink prefixes work.
-  The harness uses them for fixture pointers, run discovery, and repeat lock assertions;
+  A finished record publishes `elapsed` before `exit` (gh-ocannl-2305). It is the
+  whole wall-clock seconds from record allocation through verdict publication,
+  including slot waits and diagnostics that precede the verdict. Use
+  `cat "$(tools/test-run.sh paths executed RUN)"` to read the distinct program and
+  observed action pairs the complete, run-owned Dune trace identifies.
+  The trace reader's header lists the accepted forms. An empty inventory means the
+  trace had no matching process, as on a cached rerun. A missing inventory exits 2,
+  including on older trace formats, interrupted trace writes and caller-owned
+  traces. A forced build can reuse an unchanged test's output rule and still pass
+  its alias. The harness removes the test's external witness between runs and
+  checks both the witness and the inventory on cold, warm and forced builds.
+  The harness uses path queries for fixture pointers, run discovery, and repeat lock assertions;
   deliberately tested process predicates/identity fixtures still extract functions. Prefer foreground `run` launched through the agent harness's background mode
   (the harness notifies on exit); `start`/`status`/
   `wait`/`stop` are only for runs that must outlive the launching session. Its own options go
@@ -6732,11 +6743,11 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   guarded discovery; `Utils.driver_init_test_stall` stalls there
   (`arrayjit/test/test_hip_driver_init_deadline`, a HIP leg only).
 - **Revisit a per-action bound from the traces, through `tools/action-durations.sh`**: it reads a
-  dune trace (`_build/trace.csexp` by default — a bare dune's; a `tools/test-run.sh run` writes its
-  batch's into the run directory and keeps only the five slowest, below) and
+  dune trace (`_build/trace.csexp` by default). A `tools/test-run.sh run` writes its
+  batch's trace into the run directory. The reader
   prints the slowest processes dune started, each named by its alias or first target relative to
-  the trace's own `build_dir`, or with `--group prog|dir` the max/total per test executable or
-  directory; `--prog '\.exe$'` keeps the tests. A process the trace saw start and not finish
+  the trace's own `build_dir`, or with `--group prog|dir` the max/total per program or
+  directory. `--prog '\.exe$'` filters by the program's basename. A process the trace saw start and not finish
   prints `open`, its seconds a lower bound. Every `tools/test-run.sh run`/`start` already keeps
   the five slowest of its batch as `slowest` in the run directory, and the digest prints them —
   a `TIMEOUT`'s too, where they show how close the rest came — so the data piles up under

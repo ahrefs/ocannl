@@ -226,6 +226,9 @@
 # and the argv truncation budget are stable.
 #
 # Read-only queries: `paths run [RUN|last]` resolves a recorded run (default last).
+# `paths executed [RUN|last]` gives the finished run's test-action inventory
+# (exit 2 when unavailable). An empty file means a complete trace held no
+# matching test action, including when dune reused every test.
 # `paths worktree|runs|lock|owner|last [RUN|last]` without a run names THIS
 # script's worktree and state root, even before its first launch; with a run it
 # names that run's recorded worktree/state (including legacy in-tree locks).
@@ -455,14 +458,22 @@
 # the environment, which are configuration rather than source (see
 # record_checkout). The digest prints them as its `source:` line: the commit,
 # then `(clean)` or `+ N uncommitted paths`. At the run's end it records
-# `promotions`: dune's own promotion list, which the digest reports in place
-# of reading the log for diffs. `promotion-files` keeps corrected contents and
+# `elapsed` before publishing `exit`: whole wall-clock seconds from allocation
+# of the run directory to verdict publication, including resolution, waits
+# and diagnostics before the verdict. The digest reports dune's own
+# `promotions` list in place of reading the log for diffs.
+# `promotion-files` keeps corrected contents and
 # their originals for `tools/promote.sh --from-run RUN`, even after a later build
 # replaces dune's list (see record_promotions). And `slowest`, which the digest
 # also prints: the five longest processes in the batch's own dune trace (a
 # trace file of the run's, never the worktree's `_build/trace.csexp`), with
 # their seconds, recorded on every exit path, the caps' included (see
-# explicit_trace_file). A batch naming a test with a sibling golden the batch
+# explicit_trace_file). The same read records `executed` when it has a complete
+# run-owned trace. See tools/action-durations.sh for the recognised process
+# forms. Each TSV row names the process program and its observed action.
+# Dune versions with an older trace format, explicitly redirected traces and
+# repeat sets have no inventory. After cancellation, trace diagnostics can
+# land after the verdict. A batch naming a test with a sibling golden the batch
 # leaves unrun records `sibling-goldens`, which the digest prints too (see
 # alias_siblings_perl).
 #
@@ -2059,6 +2070,7 @@ supervisor_perl=$lock_census_perl'
   my $own = delete $ENV{OCANNL_TOOL_TESTRUN_OWN};
   my $bg = delete $ENV{OCANNL_TOOL_TESTRUN_BG};
   my $lock = delete $ENV{OCANNL_TOOL_TESTRUN_LOCK};
+  my $started = delete $ENV{OCANNL_TOOL_TESTRUN_STARTED};
   my ($pid, $finishing, $hurry);
   my $code_of = sub { my $st = shift; ($st & 127) ? 128 + ($st & 127) : $st >> 8 };
   my $write = sub { # path, content -> 1, or 0 with $! set
@@ -2067,10 +2079,10 @@ supervisor_perl=$lock_census_perl'
     close $fh or return 0;
     1;
   };
-  # The slowest actions of the run (see explicit_trace_file): the five longest
-  # processes of the trace the batch wrote into the run directory, read once
-  # the child has exited (dune with it), and published as `slowest` only when
-  # the reader succeeds. The reader is a child of its own, in a group of its
+  # Read the run trace once the child has exited (dune with it). Publish
+  # `slowest` for its five longest processes and `executed` for the executed
+  # test actions, on success and where the reader produced each record.
+  # The reader is a child of its own, in a group of its
   # own so its python goes with it, holding no descriptor past stdio (the
   # worktree lock is fd 9) and with every check of the trace made there, so
   # nothing here can block on the file system: it is polled for its bound (30
@@ -2086,7 +2098,7 @@ supervisor_perl=$lock_census_perl'
   # are seams for tools/test-test-run.sh; an ambient value can only shorten
   # the bound (anything but 1-30 reads as 30), and the reader it names is
   # bounded and KILLed like the real one.
-  my $slowest = sub {
+  my $read_trace = sub {
     my $tail = shift;
     my $trace = "$own/trace.csexp";
     my $bound = $ENV{OCANNL_TOOL_SLOWEST_CAP};
@@ -2105,7 +2117,7 @@ supervisor_perl=$lock_census_perl'
       open(STDIN, "<", "/dev/null");
       open(STDERR, ">", "$own/slowest.err");
       open(STDOUT, ">", "$own/slowest.tmp") or POSIX::_exit(126);
-      exec("bash", $reader, "-n", "5", $trace);
+      exec("bash", $reader, "-n", "5", "--executed-to", "$own/executed.tmp", $trace);
       POSIX::_exit(127);
     }
     my ($st, $cut);
@@ -2123,9 +2135,9 @@ supervisor_perl=$lock_census_perl'
     }
     my $why;
     if (defined $st && $st == 0) {
-      rename("$own/slowest.tmp", "$own/slowest") or unlink "$own/slowest.tmp";
+      rename("$own/slowest.tmp", "$own/slowest") if -s "$own/slowest.tmp";
+      rename("$own/executed.tmp", "$own/executed") if -f "$own/executed.tmp";
     } else {
-      unlink "$own/slowest.tmp";
       if ($cut) {
         $why = "the run was cancelled while the reader ran";
       } elsif (!defined $st) {
@@ -2136,7 +2148,7 @@ supervisor_perl=$lock_census_perl'
         $why = $lines[-1] if @lines;
       }
     }
-    unlink "$own/slowest.err";
+    unlink "$own/slowest.tmp", "$own/executed.tmp", "$own/slowest.err";
     if (defined $why) {
       chomp $why;
       $write->("$own/slowest-skipped", substr($why, 0, 300) . "\n");
@@ -2184,7 +2196,7 @@ supervisor_perl=$lock_census_perl'
     if ($own) {
       my $discard;
       my $read = !$hurry;
-      $slowest->(0) if $read;
+      $read_trace->(0) if $read;
       # A `fresh` run builds in a directory of its own, which goes with the
       # run on every path -- the caps and cancellations included -- once dune
       # is gone; the digest reports one that survived.
@@ -2202,7 +2214,12 @@ supervisor_perl=$lock_census_perl'
       print STDOUT "exit: $code\n";
       my $ok = 0;
       for my $try (1 .. 3) {
-        if ($write->("$own/exit.tmp", "$code\n") && rename("$own/exit.tmp", "$own/exit")) {
+        my $elapsed = time() - $started;
+        $elapsed = 0 if $elapsed < 0;
+        if ($write->("$own/exit.tmp", "$code\n") &&
+            $write->("$own/elapsed.tmp", "$elapsed\n") &&
+            rename("$own/elapsed.tmp", "$own/elapsed") &&
+            rename("$own/exit.tmp", "$own/exit")) {
           $ok = 1;
           last;
         }
@@ -2215,7 +2232,7 @@ supervisor_perl=$lock_census_perl'
           require File::Path;
           File::Path::remove_tree($discard);
         }
-        $slowest->(1) unless $read;
+        $read_trace->(1) unless $read;
       }
     }
     exit $code;
@@ -2748,11 +2765,10 @@ promotion_bounded() { # command...
 # the reader is bounded (30 seconds, then KILL and a bounded reap) and never
 # holds the worktree lock, so a reader that cannot even be reaped still lets
 # the verdict publish and the lock clear (see supervisor_perl). The trace is
-# then deleted: the record is the five rows, and an environment dump per run
-# would pile up under the runs directory. Nothing is recorded where the argv
-# names a trace file of its own (`--trace-file`, or any abbreviation of it;
-# erring towards "names one" costs only the record), or where the first word
-# is not one of the subcommands known to take the option.
+# then deleted: the records hold timing and test actions. An environment
+# dump per run would pile up under the runs directory. The runner injects
+# its trace option only for a recognised subcommand and leaves traces
+# requested by `--trace-file` or an abbreviation to the caller.
 explicit_trace_file() { # dune argv; 0 iff it names a trace file before dune's `--`
   for arg do
     case $arg in
@@ -3035,7 +3051,10 @@ record_build_failures() { # <trace file>
 }
 
 new_run() {
-  run_dir=$RUNS/$(date -u +%Y%m%dT%H%M%SZ)-$$
+  local stamp
+  stamp=$(date -u '+%Y%m%dT%H%M%SZ %s') || die "cannot read the run start time"
+  run_started=${stamp#* }
+  run_dir=$RUNS/${stamp%% *}-$$
   mkdir "$run_dir" || die "cannot create $run_dir"
   # Every pre-launch metadata write is checked: a quota hit or squatter that
   # slipped through here would let the launch report success while status,
@@ -4387,8 +4406,12 @@ finish_run() { # rc -> append sentinel, record verdict
   # write is retried with backoff -- a filesystem that filled up during the
   # run may clear, and giving up silently would downgrade a real verdict
   # into a generic "died without recording a verdict".
-  local n=0
-  until printf '%s\n' "$1" >"$run_dir/exit.tmp" &&
+  local n=0 now elapsed
+  until now=$(date +%s) &&
+        elapsed=$((now >= run_started ? now - run_started : 0)) &&
+        printf '%s\n' "$1" >"$run_dir/exit.tmp" &&
+        printf '%s\n' "$elapsed" >"$run_dir/elapsed.tmp" &&
+        mv -f "$run_dir/elapsed.tmp" "$run_dir/elapsed" &&
         mv -f "$run_dir/exit.tmp" "$run_dir/exit"; do
     n=$(( n + 1 ))
     if [ "$n" -ge 3 ]; then
@@ -4912,14 +4935,20 @@ case $sub in
     [ $# -ge 1 ] && [ $# -le 2 ] || die "usage: paths FIELD [RUN|last]"
     field=$1
     [ $# -lt 2 ] || take_run_ref "paths FIELD [RUN|last]" "$2"
-    case $field in run | worktree | runs | lock | owner | last) ;;
-      *) die "unknown path field: $field (run, worktree, runs, lock, owner, last)" ;;
+    case $field in run | executed | worktree | runs | lock | owner | last) ;;
+      *) die "unknown path field: $field (run, executed, worktree, runs, lock, owner, last)" ;;
     esac
     query_state_for "${2:-}"
-    if [ "$field" = run ]; then
+    if [ "$field" = run ] || [ "$field" = executed ]; then
       resolve_run "${2:-last}"
       # Legacy last symlinks may spell a run through a symlinked directory.
-      query_physical_path "$run_dir" || die "cannot resolve $run_dir"
+      query_out=$(query_physical_path "$run_dir") || die "cannot resolve $run_dir"
+      if [ "$field" = executed ]; then
+        [ -f "$query_out/exit" ] && [ -f "$query_out/executed" ] ||
+          die "no executed-action inventory for $run_dir"
+        query_out=$query_out/executed
+      fi
+      printf '%s\n' "$query_out"
       exit 0
     fi
     query_wt=$PWD query_runs=$RUNS query_lock=$LOCK query_owner=$OWNER query_last=$LAST
@@ -6182,6 +6211,7 @@ case $sub in
     # lose the verdict; `run` differs from `start` only in staying attached to
     # wait and digest.
     OCANNL_TOOL_TESTRUN_BG=1 OCANNL_TOOL_TESTRUN_RD=$run_dir OCANNL_TOOL_TESTRUN_OWN=$run_dir \
+      OCANNL_TOOL_TESTRUN_STARTED=$run_started \
       OCANNL_TOOL_TESTRUN_RUNNER=$runner_root OCANNL_TOOL_TESTRUN_LOCK=$LOCK perl -e "$supervisor_perl" -- "$cap" \
         env "OCANNL_TOOL_TESTRUN_OWN=$run_dir" "${BASH:-bash}" "$runner_root/tools/test-run.sh" _resolve "$sub" "$cap" "$test_cap" "$DUNE" "$@" \
         </dev/null >>"$run_dir/log" 2>&1 &
