@@ -144,12 +144,12 @@
 # Boundary, as an allowlist. Whatever it does not cover is reported on stderr,
 # never silently dropped. THE CONVERTER IS A STRICT ALLOWLIST: it reads dune's
 # canonical text only as top-level forms, their heads, the `alias`/`aliases`/
-# `targets`/`target`/`action` fields, literal `name`/`names`, and literal
-# `include`/`subdir` paths; everything else passes to dune verbatim. It
-# rewrites only a rule with literal alias names, no declared targets and one
-# action field. Any form it neither rewrites nor knows to attach no action to
-# an alias falls back to the reach without the probe for the aliases it can
-# affect (the alias, or every alias of its directory), named on stderr.
+# `targets`/`target`/`action` fields, literal `name`/`names`, literal
+# `include`/`subdir` paths, and the fields described under "Literal
+# dependencies". It rewrites targetless rules with literal alias names and
+# one action field, and adds dependency witnesses to eligible aliases.
+# Other forms pass to Dune verbatim. A form the converter cannot vouch for
+# keeps the affected aliases under the fallback, named on stderr.
 #   - A per-test alias is `@DIR/FAMILY-NAME` or `@DIR/FAMILY-NAME-VARIANT`
 #     that `dune show aliases` lists, FAMILY one of runtest, train, slow. Other
 #     families (`@scans`, `@lifecycle`, `@bin-smoke`, ...) are aggregates and
@@ -313,17 +313,18 @@
 # Literal dependencies (gh-ocannl-2304): for each changed `*.sh` path, stderr
 # carries one line `affected: PATH: named as a dependency by the rule of
 # @ALIAS` per per-test alias that names PATH, sorted, whatever the alias's
-# rank. An alias names PATH when ONE rule of its own says so twice: a `rule`
-# stanza attached to it (`(alias NAME)`, `(aliases ...)`), with no targets,
-# that the probe twins (below), names PATH relative to its directory -- an atom
-# of its `(deps ...)`, inside a `(file ...)` there or a `(:NAME ...)` group (an
-# atom or a `(file ...)`), or a `%{dep:PATH}` token in any field -- and dune,
-# asked of that twin (`dune rules`, the reach above), reads PATH as a File
-# dependency. Deliberately not: a glob, a `source_tree` (whose files `dune
-# rules` prints as File dependencies, so dune's reading alone cannot tell them
-# from a named one), a quoted or variable path, an `(alias)` stanza's deps, a
-# rule with targets, a `(test)` stanza, a blind alias, an alias it needs, a
-# rule dune does not build, one rule's naming with another's reading.
+# rank. One stanza of a described alias must both name and read PATH. For a
+# targetless `(rule)` attached to the alias, the probe reads its twin. For an
+# `(alias)` stanza with a literal name and only `name`, `deps`, `enabled_if`,
+# `package` or `locks` fields, the probe adds a private target with the same
+# deps and guards. `dune rules @ALIAS` must include that stanza's target, and
+# its rule must directly read PATH as a File dependency.
+# In either case, names are unquoted, literal relative paths inside the tree:
+# a deps atom, a `(file ...)` there, either inside a named `(:NAME ...)` group,
+# or a `%{dep:PATH}` token (in any rule field or in an alias's deps). A glob,
+# a `source_tree`, or a dependency read only by a different alias stanza gives
+# no credit. Rules with targets, tests, blind aliases, disabled stanzas, and
+# dependencies reported only at runtime are outside this reading.
 # `tools/merge-build-check.sh` counts such an alias as the script's coverage
 # when its tests tier runs it. Naming is all this reads: a rule that lists a
 # script only so a text scan can read it names it as much as one running it.
@@ -977,8 +978,8 @@ sub path_in {   # DIR/P normalized, for a literal relative P staying in the tree
   }
   return @parts ? join("/", @parts) : ".";
 }
-# The paths a rule's own fields name (gh-ocannl-2304; main's "Literal
-# dependencies"): an atom of its `(deps ...)`, one inside a `(file ...)` there
+# The paths a stanza's fields name (see "Literal dependencies" in the header):
+# an atom of its `(deps ...)`, one inside a `(file ...)` there
 # or inside a `(:NAME ...)` group (as an atom or a `(file ...)`), and the PATH
 # of every `%{dep:PATH}` token in any field. A literal relative path staying in
 # the tree only (path_in): a glob, a `source_tree`, an alias, a variable or a
@@ -1013,8 +1014,9 @@ my %plain = map { $_ => 1 } "executable", "executables", "library", "test", "tes
   "ocamllex", "ocamlyacc", "menhir", "install", "env", "dirs", "data_only_dirs", "vendored_dirs", "include_subdirs",
   "documentation", "generate_sites_module", "foreign_library";
 my %written;
-sub convert {   # DIR FILE FORMS TOP -> the rewritten forms
-  my ($dir, $file, $forms, $top) = @_;
+sub convert {   # DIR FILE FORMS TOP [ALIAS_OCC] -> the rewritten forms
+  my ($dir, $file, $forms, $top, $alias_occ) = @_;
+  $alias_occ //= {};
   my (@out, %occ);
   # Each top-level form is recorded once it is processed (the continue block),
   # with whether the converter vouched for it: no note said otherwise.
@@ -1033,7 +1035,7 @@ sub convert {   # DIR FILE FORMS TOP -> the rewritten forms
     }
     if ($h eq "subdir") {
       my $sub = @fl ? path_in($dir, $fl[0]) : undef;
-      if (defined $sub) { push @out, [$h, $fl[0], convert($sub, $file, [@fl[1 .. $#fl]], 0)]; next }
+      if (defined $sub) { push @out, [$h, $fl[0], convert($sub, $file, [@fl[1 .. $#fl]], 0, $alias_occ)]; next }
       note("blindtree", $dir, "$file has a (subdir) whose directory is not a literal path below it"); push @out, $f; next;
     }
     if ($h eq "include") {
@@ -1088,9 +1090,27 @@ sub convert {   # DIR FILE FORMS TOP -> the rewritten forms
     if ($h eq "alias") {
       my @n = map { @$_[1 .. $#$_] } grep { named($_, "name") } @fl;
       if (@n != 1 || !name_lit($n[0])) { note("blind", $dir, "$file has an (alias) whose name is not literal"); push @out, $f; next }
-      if (grep { named($_, "action") } @fl) { note("undescribed", $dir, $n[0], "an (alias) of $file with an action") }
-      else { note("source", $dir, $n[0]) }
-      push @out, $f; next;
+      if (grep { named($_, "action") } @fl) {
+        note("undescribed", $dir, $n[0], "an (alias) of $file with an action");
+        push @out, $f; next;
+      }
+      note("source", $dir, $n[0]);
+      my @deps = grep { named($_, "deps") } @fl;
+      my @lit = grep { /\.sh\z/ } literal_names($dir, \@deps);
+      unless (@lit && !grep { !is_field($_) || $_->[0] !~ /^(?:name|deps|enabled_if|package|locks)$/ } @fl) {
+        push @out, $f; next;
+      }
+      # An alias expansion can combine several stanzas' reads. Give this
+      # stanza its own rule so a sibling's dependency cannot vouch for it.
+      # A file can contribute several blocks to one directory. An included
+      # file uses the same target names in each directory that includes it.
+      my $key = "alias $n[0]";
+      my $twin = "__affected_probe_" . substr(md5_hex(join("\0", $file, $key, ++$alias_occ->{$key})), 0, 12);
+      push @out, ["rule", @deps, grep({ named($_, "enabled_if") || named($_, "package") } @fl),
+                  ["action", ["write-file", $twin, '""']]];
+      push @out, [$h, map { named($_, "deps") ? [@$_, $twin] : $_ } @fl];
+      note("alias-witness", $dir, $twin, $n[0], @lit);
+      next;
     }
     unless ($plain{$h}) { note("blind", $dir, "$file has a ($h) stanza, which this reader does not model"); push @out, $f; next }
     # A test's alias action is dune's documented one: its output rule (a golden
@@ -1437,7 +1457,7 @@ for my $d (sort keys %$targets) {
 # What the probe's converter rewrote and what it did not (see convert.pl): per
 # directory, the twins of each alias, the aliases with a stanza that makes them
 # depend on files (`source`), and what stays blind.
-my (%twins, %sources, %undescribed, %blind, %blindtree, %tested, %names_of);
+my (%twins, %sources, %undescribed, %blind, %blindtree, %tested, %names_of, %alias_witness);
 for (split /\n/, slurp("$tmp/manifest")) {
   my ($k, $d, @r) = split /\t/;
   if ($k eq "twin") { my $t = shift @r; push @{$twins{$d}{$_}}, in_dir($d, $t) for @r }
@@ -1447,7 +1467,15 @@ for (split /\n/, slurp("$tmp/manifest")) {
   elsif ($k eq "blindtree") { $blindtree{$d} //= $r[0] }
   elsif ($k eq "test") { $tested{$d}{"runtest-$r[0]"} = 1 }
   elsif ($k eq "names") { my $t = shift @r; $names_of{in_dir($d, $t)}{$_} = 1 for @r }
+  elsif ($k eq "alias-witness") {
+    my ($t, $a, @paths) = @r;
+    $alias_witness{in_dir($d, $t)} = ["\@" . in_dir($d, $a), { map { $_ => 1 } @paths }];
+  }
   else { fail("unexpected manifest line from the probe: $_") }
+}
+# Only the declaring alias's expansion can use a witness as evidence.
+for my $d (keys %$targets) {
+  @{$targets->{$d}} = grep { !$alias_witness{in_dir($d, $_)} } @{$targets->{$d}};
 }
 sub blind_reason {   # why an alias of DIR named NAME is not described, or undef
   my ($d, $name) = @_;
@@ -1791,7 +1819,23 @@ sub source_query {   # ALIAS [FORCE]: FORCE asks dune whatever the manifest says
   for my $rule (@got) {
     my $tg = field($rule, "targets");
     my @t = map { atom($_, "targets") } map { items(field($tg // [], $_)) } "files", "directories";
-    if (my @rel = grep { defined } map { strip_ctx($_) } @t) { $own{$_} = 1 for @rel; next }
+    if (my @rel = grep { defined } map { strip_ctx($_) } @t) {
+      for my $rel (@rel) {
+        my $witness = $alias_witness{$rel};
+        unless ($witness) { $own{$rel} = 1; next }
+        # A glob or a helper alias can pick up a witness. Its rule is evidence
+        # only for the alias whose stanza declared those dependencies.
+        my ($alias, $paths) = @$witness;
+        next unless $alias eq $a->{name};
+        for my $dep (items(field($rule, "deps"))) {
+          next unless ref $dep && $dep->[0] eq "File";
+          my ($where, $path) = pair($dep->[1], "a File dependency");
+          my $p = $where eq "In_build_dir" ? strip_ctx($path) : $where eq "In_source_tree" ? $path : undef;
+          $a->{named_deps}{$p} = 1 if defined $p && $paths->{$p};
+        }
+      }
+      next;
+    }
     # An installed file (what `(package PKG)` needs) is a link to a file of the
     # build: that file is the alias's own, or a library's compiled artifact.
     for my $dep (items(field($rule, "deps"))) {
@@ -1799,7 +1843,7 @@ sub source_query {   # ALIAS [FORCE]: FORCE asks dune whatever the manifest says
       next if $k =~ /^(?:Env|Universe|Sandbox_config)$/;
       my ($where, $path) = $k eq "File" ? pair($v, "a File dependency") : ("", "");
       if ($where eq "In_build_dir" && (my @o = compiled_owners($path))) { $a->{owners}{$_} = 1 for @o }
-      elsif ($where eq "In_build_dir" && defined(my $rel = strip_ctx($path))) { $own{$rel} = 1 }
+      elsif ($where eq "In_build_dir" && defined(my $rel = strip_ctx($path))) { $own{$rel} = 1 unless $alias_witness{$rel} }
       elsif ($where ne "External") {
         $a->{described} = 0;
         $a->{blind_why} = "$a->{name} needs @t, whose rule this reader does not follow";
@@ -1830,6 +1874,7 @@ while (@queue) {
         if ($where eq "In_build_dir") {
           if (my @o = compiled_owners($path)) { $r{$_} = 1 for @o; next }
           my $rel = strip_ctx($path) // next;   # another context's, or _build/install
+          next if $alias_witness{$rel};
           if ($rel =~ m{^(?:(.*)/)?([^/]+)\.(?:exe|bc)$}) { $r{$_} = 1 for @{$exe{($1 // ".") . "\0$2"} // []} }
           else {
             $p{$rel} = 1;
@@ -2332,16 +2377,13 @@ if (@scoped) {
 }
 print STDERR "affected: $_: its whole directory, because $unscoped{$_}\n" for sort keys %unscoped;
 
-# Literal dependencies (the header's, gh-ocannl-2304): ALIAS names PATH when one
-# rule of its own, its probe twin, both names PATH (the converter's `names` note)
-# and reads it as a File dependency (`dune rules`, above) -- the same rule, so a
-# rule dune does not build, or one reading PATH with a whole source tree, is no
-# other rule's evidence. `dune rules` prints a source tree's files as File
-# dependencies too, so its reading alone cannot tell a named script from one
-# read with a whole tree.
+# Literal dependencies (see the header). For dependency-only aliases,
+# source_query checks the witness without adding it to the ordinary graph.
 sub names_literally {   # ALIAS PATH
   my ($a, $p) = @_;
-  return $a->{described} && grep { $names_of{$_} && $names_of{$_}{$p} && $reads{$_} && $reads{$_}{$p} } @{$a->{own}};
+  return 0 unless $a->{described};
+  return 1 if $a->{named_deps} && $a->{named_deps}{$p};
+  return grep { $names_of{$_} && $names_of{$_}{$p} && $reads{$_} && $reads{$_}{$p} } @{$a->{own}};
 }
 
 for my $p (@changed) {
