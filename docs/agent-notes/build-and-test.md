@@ -1331,7 +1331,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `git show origin/master:tools/test-run.sh >F` and `--subject F --only '^N:'`, expecting exit 1 —
   not a scratch copy of `tools/` and `scripts/` with the script swapped in, which the
   gh-ocannl-1830 worker made about ten times. `--subject-rev REV` resolves a commit in the
-  checkout and stages its `tools/test-run.sh` blob. Either explicit selector overrides the
+  checkout, with Git's repository-local environment cleared, and stages its `tools/test-run.sh`
+  blob. The dispatcher resolves a moving ref once and gives every member the commit ID.
+  Either explicit selector overrides the
   environment. The aggregate clears the ambient selector so its verdict belongs to the checkout.
   `tools/test-mutation-run.sh --subject FILE` similarly substitutes the mutation runner in all
   its fixtures. Both harnesses register their own options with `harness_own_option`.

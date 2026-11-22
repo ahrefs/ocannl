@@ -5,6 +5,21 @@
 # unfinished status 0 becomes exit 1; existing nonzero statuses are preserved.
 # Parse errors before trap installation rely on Bash's own nonzero status.
 
+# Read from the named checkout even when invoked from a different repo's hook.
+harness_git() (
+  local repo_env
+  repo_env=$(git rev-parse --local-env-vars) || return 2
+  # The variable names come from Git, one per line.
+  # shellcheck disable=SC2086
+  unset $repo_env
+  git "$@"
+)
+
+harness_resolve_subject_commit() { # TOOLS_DIR REVISION
+  harness_git -C "$1" rev-parse --verify --end-of-options "$2^{commit}" ||
+    { echo "${0##*/}: cannot resolve subject revision $2" >&2; return 2; }
+}
+
 # Register one value-taking option for the calling harness. Only registered
 # long names accept --name VALUE or --name=VALUE; no abbreviation is read.
 harness_own_option() { # --NAME DESTINATION EMPTY_HINT

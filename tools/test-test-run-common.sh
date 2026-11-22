@@ -111,8 +111,7 @@ SELF=$HERE/${0##*/}
 stock_src=$HERE/test-run.sh
 SRC=${subject:-$stock_src}
 if [ -n "$subject_rev" ]; then
-  subject_commit=$(git -C "$HERE" rev-parse --verify --end-of-options "${subject_rev}^{commit}") ||
-    { echo "${0##*/}: cannot resolve subject revision $subject_rev" >&2; exit 2; }
+  subject_commit=$(harness_resolve_subject_commit "$HERE" "$subject_rev") || exit 2
 else
   [ -f "$SRC" ] && [ -r "$SRC" ] || { echo "no $SRC" >&2; exit 2; }
 fi
@@ -128,7 +127,7 @@ SWEEP_SRC="$HERE/sweep.sh"
 harness_scratch "test-test-run"
 if [ -n "$subject_rev" ]; then
   SRC=$TMP/revision-subject.sh
-  git -C "$HERE" show "${subject_commit}:tools/test-run.sh" >"$SRC" ||
+  harness_git -C "$HERE" show "${subject_commit}:tools/test-run.sh" >"$SRC" ||
     { echo "${0##*/}: revision $subject_commit contains no tools/test-run.sh" >&2; exit 2; }
   printf '  subject revision: %s\n' "$subject_commit"
 fi
