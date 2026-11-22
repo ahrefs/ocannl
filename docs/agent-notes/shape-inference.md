@@ -422,7 +422,11 @@ files.
   equal only to themselves, materialized at their declared maximum; `Total_elems` against them
   fails fast, and `Total_elems` cannot resolve conv/affine dims either — give leaves explicit
   dims (e.g. `Operation.init ~o:[n] ~grad_spec:Require_grad`) instead of `Tensor.term_init` when
-  the consumer is a windowed spec.
+  the consumer is a windowed spec. The distinct-symbol check in `derive_projections` is defensive:
+  projection ids can share a product iterator (a unit-stride window is one source of aliasing),
+  but equating two plain symbolic axes first goes through dimension solving, which requires the
+  same static symbol. The check only compares axes with actual iterators. Extent-one axes can
+  share the absence of an iterator without identifying their symbols.
 - `einsum_n_constraints` (the shared constraint-generation helper for binary Einsum, Block/concat
   and ternary Einsum) takes `?lhs_constraints_first` because the branches need OPPOSITE orders and
   no global choice works: binary Einsum passes `true` (the LHS constraint must precede RHS Affine
