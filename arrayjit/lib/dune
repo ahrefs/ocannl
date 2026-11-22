@@ -6,12 +6,30 @@
 ; build` then returned the already-built stripped modules, and the documented recipe had to
 ; `touch` the sources to force re-preprocessing.
 
+(rule
+ ; ocannl-backend: none -- reads Utils source with the OCaml parser.
+ (target eager_config_keys.ml)
+ (package arrayjit)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{exe:gen_config_keys/generate_eager_config_keys.exe}
+    %{dep:utils.ml}))))
+
 (library
  (name utils)
  (public_name arrayjit.utils)
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL_UTILS))
- (modules utils datatypes cpu_topology atomic_file host_load)
+ (modules
+  utils
+  datatypes
+  cpu_topology
+  atomic_file
+  host_load
+  eager_config_keys)
+ (private_modules eager_config_keys)
  ; `unix` for `Unix.environment`, which the unknown-environment-variable warning walks, and for
  ; `Atomic_file`'s exclusive open, file mtime and sub-second sleep (its pid comes from the
  ; `utils_stubs` C stub, not `Unix.getpid`). `mtime.clock.os` for the one thing `unix` has no clock

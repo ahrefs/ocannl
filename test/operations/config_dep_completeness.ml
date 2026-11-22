@@ -114,6 +114,9 @@ let exempt_sites =
     ( "arrayjit/lib:gen_builtins/generate.exe",
       "the builtin header generator links only the OCaml stdlib and a pure C definition table; it \
        reads no OCANNL configuration" );
+    ( "arrayjit/lib:gen_config_keys/generate_eager_config_keys.exe",
+      "the eager-key registry generator reads Utils source with the OCaml parser and links no \
+       OCANNL configuration reader" );
     ( "test/operations:gen_codec_header.exe",
       "the codec header generator for half_codec_exhaustive and bf16_codec_exhaustive \
        (gh-ocannl-985, gh-ocannl-1069) links only the OCaml stdlib and a copy of the same pure C \

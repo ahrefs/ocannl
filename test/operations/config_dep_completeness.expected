@@ -5,8 +5,9 @@ directory gains its first stanza of a kind or loses its last, and within a direc
 raw-text floor reported by the claim at the end holds the count up.
 
 .claude/dune: nothing that runs a test executable
-arrayjit/lib/dune: exempt rules (gen_builtins/generate.exe)
+arrayjit/lib/dune: exempt rules (gen_builtins/generate.exe, gen_config_keys/generate_eager_config_keys.exe)
 arrayjit/lib/gen_builtins/dune: nothing that runs a test executable
+arrayjit/lib/gen_config_keys/dune: nothing that runs a test executable
 arrayjit/test/dune: tests, exe-running rules
 arrayjit/vendor_stubs/arms/dune: nothing that runs a test executable
 arrayjit/vendor_stubs/cudajit/dune: nothing that runs a test executable
@@ -52,6 +53,7 @@ Exempt from the dependency, running an executable that reads no configuration:
   test/operations:python3, handed %{dep:bench_line_readers.py}, ../.. -- the bench-line readers' check (gh-ocannl-1767) reads, through stdlib Python modules, the lines its rule's OCANNL runs captured before it -- each a `run` of its own, under the rule's `ocannl_config` -- and its one subprocess is bench_output.py's command line; the Python step launches no OCANNL executable
   test/operations:python3, handed %{dep:../../benchmarks/config_records.py} -- the resolved-configuration reader (gh-ocannl-1766), run over a stream the OCaml half of the test kept in a rule of its own, which lists `ocannl_config`; the reader is stdlib Python and launches no OCANNL executable, so no configuration is in reach of what it reads
   arrayjit/lib:gen_builtins/generate.exe -- the builtin header generator links only the OCaml stdlib and a pure C definition table; it reads no OCANNL configuration
+  arrayjit/lib:gen_config_keys/generate_eager_config_keys.exe -- the eager-key registry generator reads Utils source with the OCaml parser and links no OCANNL configuration reader
   test/operations:gen_codec_header.exe -- the codec header generator for half_codec_exhaustive and bf16_codec_exhaustive (gh-ocannl-985, gh-ocannl-1069) links only the OCaml stdlib and a copy of the same pure C definition table; it reads no OCANNL configuration
   test/ppx:pp.exe -- the ppx driver, run to expand a source file and diff the expansion: `ppx_ocannl` links base, ppxlib, str and einsum_parser -- no configuration reader -- so no `ocannl_config` can reach its output
   benchmarks/runners/ocannl:metal_queue_probe.exe -- the standalone Metal queue probe, run on `@bin-smoke` as the bindings' runtime canary (gh-ocannl-905): it links `metal`, `ctypes` and `unix` and no arrayjit at all -- no configuration reader, so no `ocannl_config` can reach what it does

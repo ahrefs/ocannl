@@ -19,7 +19,7 @@
    compared against the classification. A read is the over-keying hazard whether or not the value
    happens to move anything: a non-[Keyed] key that reaches the key costs a full retune per flip; -
    the keys resolved once at startup, which a trace cannot see, are flipped through their resolver
-   ([Utils.restore_settings], or the memoized numerics policy) and held to the same promise; the
+   (a [Utils.settings] field, or the memoized numerics policy) and held to the same promise; the
    settings-borne set is DERIVED from [utils.ml]'s [settings.field <- ...] assignments, so a new one
    cannot be swept by a config poke that changes nothing; - the search-shaping keys, whose defaults
    and kinds [Utils.config_key_defaults] owns, are flipped off their default too and must move
@@ -87,11 +87,9 @@ let scope_name = function
 (* How a flip reaches the reader. *)
 type resolver =
   | Per_lookup  (** stated in process; the reader resolves it on every call *)
-  | Settings  (** resolved into [Utils.settings] at startup: re-resolved by [restore_settings] *)
+  | Settings of (string -> (unit -> unit) option)
+      (** sets a snapshot field directly and returns its restorer when the field changes *)
   | Numerics_policy  (** resolved into the memoized [Numerics] policy: re-resolved *)
-  | Log_level_field
-      (** resolved once into [Utils.original_log_level], which [restore_settings] reapplies: the
-          field is set directly *)
 
 (* The regime a flip is compared in: what is set before the baseline and the flipped key are
    computed alike. A gate's own keys bite only behind it, so they are flipped behind it. *)
@@ -120,6 +118,28 @@ let flag = [ "true"; "false" ]
 
 let config ?(under = []) ?(scope = Every_backend) candidates =
   { resolver = Per_lookup; candidates; under; scope }
+
+let flip_field get set parse value =
+  let prior = get () and next = parse value in
+  if Poly.equal prior next then None
+  else (
+    set next;
+    Some (fun () -> set prior))
+
+let setting ?under ?scope flip candidates =
+  { (config ?under ?scope candidates) with resolver = Settings flip }
+
+let flip_large_models =
+  flip_field
+    (fun () -> Utils.settings.large_models)
+    (fun value -> Utils.settings.large_models <- value)
+    Bool.of_string
+
+let flip_debug_files =
+  flip_field
+    (fun () -> Utils.settings.output_debug_files_in_build_directory)
+    (fun value -> Utils.settings.output_debug_files_in_build_directory <- value)
+    Bool.of_string
 
 let logging = [ Routine_logs true; Log_level 2 ]
 
@@ -152,14 +172,26 @@ let keyed_flips =
        on a box whose own [auto] resolves to no grid. *)
     ( "cc_parallel_chunks",
       config ~scope:Cpu ~under:[ Stated ("cc_parallel_grid", "openmp") ] [ "3"; "5" ] );
-    ("large_models", { (config flag) with resolver = Settings });
-    ("big_models", { (config flag) with resolver = Settings });
+    (* Both spellings initialize the same field. The sweep varies what the key code reads. *)
+    ("large_models", setting flip_large_models flag);
+    ("big_models", setting flip_large_models flag);
     ( "log_level",
-      { (config [ "2"; "0" ]) with resolver = Log_level_field; under = [ Routine_logs true ] } );
-    ("debug_log_from_routines", { (config flag) with resolver = Settings; under = [ Log_level 2 ] });
+      setting ~under:[ Routine_logs true ]
+        (flip_field
+           (fun () -> Utils.settings.log_level)
+           (fun value -> Utils.settings.log_level <- value)
+           Int.of_string)
+        [ "2"; "0" ] );
+    ( "debug_log_from_routines",
+      setting ~under:[ Log_level 2 ]
+        (flip_field
+           (fun () -> Utils.settings.debug_log_from_routines)
+           (fun value -> Utils.settings.debug_log_from_routines <- value)
+           Bool.of_string)
+        flag );
     ("debug_log_to_stream_files", config ~under:logging flag);
     ( "output_debug_files_in_build_directory",
-      { (config flag) with resolver = Settings; under = [ Log_level 2 ]; scope = Cuda_hip } );
+      setting ~under:[ Log_level 2 ] ~scope:Cuda_hip flip_debug_files flag );
     ("prefer_backend_uniformity", config ~under:logging flag);
     ("buffer_aliasing", config flag);
     ("gpu_graph_capture", config ~scope:Cuda_hip flag);
@@ -218,10 +250,34 @@ let child_flag = "--components"
    [utils.ml] assigns from configuration. *)
 let settings_flips =
   [
-    ("fixed_state_for_init", [ "7"; "8" ]);
-    ("print_decimals_precision", [ "9"; "3" ]);
-    ("check_half_prec_constants_cutoff", [ "100.0"; "200.0" ]);
-    ("default_prng_variant", [ "crypto"; "light" ]);
+    ( "fixed_state_for_init",
+      setting
+        (flip_field
+           (fun () -> Utils.settings.fixed_state_for_init)
+           (fun value -> Utils.settings.fixed_state_for_init <- value)
+           (fun value -> Some (Int.of_string value)))
+        [ "7"; "8" ] );
+    ( "print_decimals_precision",
+      setting
+        (flip_field
+           (fun () -> Utils.settings.print_decimals_precision)
+           (fun value -> Utils.settings.print_decimals_precision <- value)
+           Int.of_string)
+        [ "9"; "3" ] );
+    ( "check_half_prec_constants_cutoff",
+      setting
+        (flip_field
+           (fun () -> Utils.settings.check_half_prec_constants_cutoff)
+           (fun value -> Utils.settings.check_half_prec_constants_cutoff <- value)
+           Float.of_string_opt)
+        [ "100.0"; "200.0" ] );
+    ( "default_prng_variant",
+      setting
+        (flip_field
+           (fun () -> Utils.settings.default_prng_variant)
+           (fun value -> Utils.settings.default_prng_variant <- value)
+           Fn.id)
+        [ "crypto"; "light" ] );
   ]
 
 (* Values off a registered key's default, by its kind: [Utils.config_key_defaults] owns both. A
@@ -347,10 +403,8 @@ let with_setup setups f =
       f ())
 
 let resync = function
-  | Per_lookup -> ()
-  | Settings -> Utils.restore_settings ()
+  | Per_lookup | Settings _ -> ()
   | Numerics_policy -> Ir.Numerics.set_policy (Ir.Numerics.default ())
-  | Log_level_field -> ()
 
 (* Whether stating [value] would change nothing: the key already resolves to it, from whatever
    source (Codex P2, round 5) -- a candidate equal to its baseline is no flip, and a claim that
@@ -362,16 +416,11 @@ let same_as_baseline key value =
   | Some (current, _) -> String.equal (norm current) (norm value)
   | None -> false
 
-(* [f] under [key] stated as [value]; [None] when the flip cannot take effect in this process: the
-   commandline states the key otherwise, or the key already resolves to [value]. *)
-let with_stated key value resolver f =
+(* Run [f] with a different effective value. The commandline can block a statement, while a snapshot
+   field is varied directly and restored after the probe. *)
+let with_flip key value resolver f =
   match resolver with
-  | Log_level_field ->
-      let level0 = Utils.settings.log_level in
-      if Int.of_string value = level0 then None
-      else (
-        Utils.settings.log_level <- Int.of_string value;
-        Some (Exn.protect ~f ~finally:(fun () -> Utils.settings.log_level <- level0)))
+  | Settings flip -> Option.map (flip value) ~f:(fun restore -> Exn.protect ~f ~finally:restore)
   | _ when same_as_baseline key value || commandline_contradicts key value -> None
   | _ ->
       let previous = Utils.stated_config key in
@@ -505,7 +554,7 @@ let () =
     ~over:(Set.to_list keyed_names)
     (Set.to_list (Set.union (Set.diff keyed_names tabled) (Set.diff tabled keyed_names)));
   (* 2. Settings-borne keys, derived from [utils.ml] (the rule's argument): each one is flipped
-     through [restore_settings], never by a config poke that would change nothing. *)
+     through its field, which is already initialized when the probe runs. *)
   let settings_borne =
     (* The source, then [outranked] and its commandline statements, if any. *)
     match Array.to_list Stdlib.Sys.argv with
@@ -519,13 +568,12 @@ let () =
   in
   let flipped_through_settings =
     List.filter_map keyed_flips ~f:(fun (key, flip) ->
-        Option.some_if (Poly.equal flip.resolver Settings) key)
+        match flip.resolver with Settings _ -> Some key | Per_lookup | Numerics_policy -> None)
     @ List.map settings_flips ~f:fst
     |> Set.of_list (module String)
   in
   p_empty ~min:6
-    "every key utils.ml resolves into Utils.settings is flipped through restore_settings, and only \
-     those"
+    "every key utils.ml resolves into Utils.settings is flipped through its field, and only those"
     ~over:(Set.to_list settings_borne)
     (Set.to_list
        (Set.union
@@ -535,8 +583,7 @@ let () =
      and nothing elsewhere. *)
   let outcome ?(components = components) (key, flip) =
     let component = List.Assoc.find_exn keyed key ~equal:String.equal in
-    (* The regime is set inside the flip as well: re-resolving the settings record resets the log
-       level the regime raised. *)
+    (* Reapply the regime for each probe so gated reads see it on both sides of the flip. *)
     let in_regime () = with_setup flip.under components in
     let flips =
       match in_regime () with
@@ -545,7 +592,7 @@ let () =
           []
       | before ->
           List.filter_map flip.candidates ~f:(fun value ->
-              match with_stated key value flip.resolver in_regime with
+              match with_flip key value flip.resolver in_regime with
               | None -> None
               | Some after -> Some (value, moved before after)
               | exception exn ->
@@ -795,11 +842,11 @@ let () =
      resolver: each flip must change the settings record (or the flip proves nothing) and move no
      component. *)
   let settings_outcomes =
-    List.map settings_flips ~f:(fun (key, candidates) ->
+    List.map settings_flips ~f:(fun (key, flip) ->
         let before = components () and settings0 = Utils.sexp_of_settings Utils.settings in
         let flips =
-          List.filter_map candidates ~f:(fun value ->
-              with_stated key value Settings (fun () ->
+          List.filter_map flip.candidates ~f:(fun value ->
+              with_flip key value flip.resolver (fun () ->
                   ( not (Sexp.equal settings0 (Utils.sexp_of_settings Utils.settings)),
                     moved before (components ()) )))
         in
@@ -808,8 +855,8 @@ let () =
         if List.is_empty flips then skip_outranked ~what:"the settings flip" key;
         not (List.is_empty flips))
   in
-  p_all ~min:4 "each settings-borne key outside Keyed is flipped by restore_settings"
-    settings_outcomes ~f:(fun (key, flips) ->
+  p_all ~min:4 "each settings-borne key outside Keyed changes its settings field" settings_outcomes
+    ~f:(fun (key, flips) ->
       let ok = List.exists flips ~f:fst in
       if not ok then eprintf "%s: no flip changed Utils.settings\n" key;
       ok);
@@ -825,7 +872,7 @@ let () =
     List.filter registered ~f:(fun (key, (kind, default)) ->
         let flippable =
           List.exists (off_default kind default) ~f:(fun value ->
-              Option.is_some (with_stated key value Per_lookup (fun () -> ())))
+              Option.is_some (with_flip key value Per_lookup (fun () -> ())))
         in
         if not flippable then skip_outranked ~what:"the registered flip" key;
         flippable)
@@ -834,7 +881,7 @@ let () =
     registered ~f:(fun (key, (kind, default)) ->
       let before = components () in
       List.exists (off_default kind default) ~f:(fun value ->
-          match with_stated key value Per_lookup (fun () -> moved before (components ())) with
+          match with_flip key value Per_lookup (fun () -> moved before (components ())) with
           | None | Some [] -> false
           | Some moved ->
               eprintf "%s=%s moved [%s]\n" key value (String.concat ~sep:", " moved);
@@ -908,7 +955,7 @@ let () =
     let exempt key = List.Assoc.mem emitted_exemptions key ~equal:String.equal in
     let values key =
       match List.Assoc.find settings_flips key ~equal:String.equal with
-      | Some candidates -> Some (Settings, candidates)
+      | Some flip -> Some (flip.resolver, flip.candidates)
       | None ->
           Option.map (List.Assoc.find emitted_flips key ~equal:String.equal) ~f:(fun c ->
               (Per_lookup, c))
@@ -929,7 +976,7 @@ let () =
           | Some (resolver, candidates) ->
               let flippable =
                 List.exists candidates ~f:(fun value ->
-                    Option.is_some (with_stated key value resolver (fun () -> ())))
+                    Option.is_some (with_flip key value resolver (fun () -> ())))
               in
               if not flippable then skip_outranked ~what:"the codegen-diff flip" key;
               flippable)
@@ -940,7 +987,7 @@ let () =
         | None -> false
         | Some (resolver, candidates) ->
             List.exists candidates ~f:(fun value ->
-                match with_stated key value resolver compile_probe with
+                match with_flip key value resolver compile_probe with
                 | None -> false
                 | Some (key', src) ->
                     let under =
@@ -953,12 +1000,9 @@ let () =
                     eprintf "%s=%s: the probe compile raised %s\n" key value (Exn.to_string exn);
                     true))
   in
-  (match with_stated "output_debug_files_in_build_directory" "true" Settings oracle with
-  | Some () -> ()
-  | None ->
-      Verdict.fail
-        "output_debug_files_in_build_directory is stated otherwise on the commandline, so the \
-         oracle cannot read the kernels it compiles");
+  (match flip_debug_files "true" with
+  | Some restore -> Exn.protect ~f:oracle ~finally:restore
+  | None -> oracle ());
   (* The [-outranked] rule states these keys so that the plain golden is diffed against a run whose
      flips were outranked: a claim, printing no row, so its stdout stays the golden's. Without it
      the diff passes as well in a run where nothing outranked anything. *)

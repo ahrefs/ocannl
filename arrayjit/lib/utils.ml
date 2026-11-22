@@ -1546,6 +1546,8 @@ let profile_ineligible_keys =
 
 (** {2 In-process statements (gh-ocannl-2354)} *)
 
+let eager_config_keys = List.fold Eager_config_keys.keys ~init:profile_ineligible_keys ~f:Set.add
+
 (* What a program states about its own configuration, above every source a run is given. The
    config-file table sits below the environment, so a test that wrote its setting there ran under
    the caller's [OCANNL_<KEY>] whenever one was exported -- the recipe AGENTS.md gives for a one-off
@@ -1575,7 +1577,7 @@ let state_config ~key ~data =
          "OCANNL: Utils.state_config ~key:%S: no such configuration key is registered \
           (Utils.known_config_keys), so no read looks it up and the statement would change nothing"
          key);
-  if Set.mem profile_ineligible_keys key then
+  if Set.mem eager_config_keys key then
     invalid_arg
       (Printf.sprintf
          "OCANNL: Utils.state_config ~key:%S: this key is resolved while the library initializes, \
@@ -2277,14 +2279,12 @@ let get_global_flag ~default ~arg_name:n =
    what a kernel computes ([with_runtime_debug], [debug_log_from_routines]) sit at level 2 and are
    unaffected. *)
 let original_log_level =
-  let log_level =
-    let s = String.strip @@ get_global_arg ~default:"0" ~arg_name:"log_level" in
-    match Int.of_string_opt s with
-    | Some ll -> ll
-    | None -> invalid_arg @@ "ocannl_log_level setting should be an integer; found: " ^ s
-  in
-  settings.log_level <- log_level;
-  log_level
+  settings.log_level <-
+    (let s = String.strip @@ get_global_arg ~default:"0" ~arg_name:"log_level" in
+     match Int.of_string_opt s with
+     | Some ll -> ll
+     | None -> invalid_arg @@ "ocannl_log_level setting should be an integer; found: " ^ s);
+  settings.log_level
 
 (* Originally from the library core.filename_base. *)
 let filename_concat p1 p2 =

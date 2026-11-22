@@ -1,6 +1,6 @@
 HIP cache identity contains the selected production math switches, including the default regime: true
 the flip and unflippable tables cover exactly the Keyed class: true
-every key utils.ml resolves into Utils.settings is flipped through restore_settings, and only those: true
+every key utils.ml resolves into Utils.settings is flipped through its field, and only those: true
 every Keyed key the running backend hashes moves its own component when flipped: true
 and no Keyed flip moves a component its classification does not account for: true
 every Keyed key outside the running backend's scope moves nothing when flipped: true
@@ -18,7 +18,7 @@ no pool-class flip moves a component other than the pool and what follows from i
 with the chunk count auto, codegen beyond the pool tag moves exactly when the pool width does: true
 with the chunk count stated, a pool-class flip moves codegen only through the pool tag: true
 the pool component separates exactly the pool decisions that differ: true
-each settings-borne key outside Keyed is flipped by restore_settings: true
+each settings-borne key outside Keyed changes its settings field: true
 and moves no component of the cache key: true
 no registered non-Keyed key moves the cache key when flipped off its default: true
 two fresh builds of the probe compile to the same kernel under the same key: true

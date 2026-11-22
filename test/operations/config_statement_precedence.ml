@@ -131,4 +131,30 @@ let () =
     [ "profile"; "log_config_json" ] ~f:(fun key ->
       match refusal ~key ~data:"true" with
       | Some message -> String.is_substring message ~substring:(Printf.sprintf "~key:%S" key)
-      | None -> false)
+      | None -> false);
+  let key = "print_decimals_precision" in
+  let before = Utils.settings.print_decimals_precision in
+  let data = Int.to_string (if Int.equal before 7 then 8 else 7) in
+  p "a statement of a settings snapshot is refused, naming the key"
+    (match Utils.state_config ~key ~data with
+    | () ->
+        Stdlib.Printf.eprintf "statement accepted: lookup=%b, snapshot still %d (before %d)\n"
+          (Option.equal String.equal (Utils.stated_config key) (Some data))
+          Utils.settings.print_decimals_precision before;
+        Utils.unstate_config key;
+        false
+    | exception Invalid_argument message ->
+        String.is_substring message ~substring:(Printf.sprintf "~key:%S" key))
+
+let () =
+  p_all ~min:3 "a startup-only input or compatibility spelling is refused, naming the key"
+    [ ("log_level", "2"); ("detach_c_stderr", "false"); ("big_models", "true") ]
+    ~f:(fun (key, data) ->
+      match Utils.state_config ~key ~data with
+      | () ->
+          Utils.unstate_config key;
+          false
+      | exception Invalid_argument message ->
+          String.is_substring message ~substring:(Printf.sprintf "~key:%S" key)
+          && String.is_substring message ~substring:"resolved while the library initializes"
+          && Option.is_none (Utils.stated_config key))
