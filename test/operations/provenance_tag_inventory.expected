@@ -69,10 +69,10 @@ Site -- arrayjit/lib/low_level.ml, loop_proc:
   152:cleanup-dropped-set
 Site -- arrayjit/lib/low_level.ml, loop_scalar:
   18:inlined-scope
-Site -- arrayjit/lib/low_level.ml, materialize_observable_readers:
-  161:observed-reader-reads-local
 Site -- arrayjit/lib/low_level.ml, materialized:
   50:routine-interface
+Site -- arrayjit/lib/low_level.ml, observed_reader_reads_local:
+  161:observed-reader-reads-local
 Site -- arrayjit/lib/low_level.ml, specialize_proc:
   40:scalar-constexpr
 Site -- arrayjit/lib/online_softmax.ml, backward_provenance:

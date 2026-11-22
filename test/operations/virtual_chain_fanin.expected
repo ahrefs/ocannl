@@ -329,8 +329,11 @@ observed reduction over the exact-size concat (persistent): the reader can repla
 observed reduction over the exact-size concat (persistent): the materialized reference matches the expected values: true
 observed reduction over the exact-size concat (persistent): the observed reader and its copy read back like the materialized reference: true
 late gather: the gather forces the producer to routine-local scratch: true
+late gather: the reader that captured the earlier value stays virtual: true
 late gather: the materialized reference matches the expected values: true
 late gather: the stored reader and downstream outputs match the materialized reference: true
+late gathers: the outer buffer shields the routine-local scratch: true
+late gathers: the reader replays the persistent buffer and matches the materialized reading: true
 a visit-capped footprint concat and w cost two loads, so the reduction stays virtual: true
 the virtual reduction reads the concat's visit-cap buffer: true
 the virtual reduction leaves no footprint scratch: true

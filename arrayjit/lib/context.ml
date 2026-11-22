@@ -2129,7 +2129,7 @@ let walk_virtual ctx (root : Tn.t) : walk_verdict =
         (* Stored newest first; walked oldest first, so "first" means program order. *)
         let w =
           List.fold (List.rev components) ~init:W_ok ~f:(fun acc (_, body) ->
-              let facts = Ir.Low_level.replay_facts ~self:v body in
+              let facts = Ir.Low_level.replay_facts ~placements:plc ~self:v body in
               let acc =
                 if facts.replay_merge_reads then combine_verdicts acc (W_merge [ v ]) else acc
               in

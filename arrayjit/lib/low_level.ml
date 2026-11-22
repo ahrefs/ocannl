@@ -3186,6 +3186,15 @@ type replay_facts = {
   replay_free_symbols : Set.M(Indexing.Symbol).t;
 }
 
+let observed_reader_reads_local = Tn.Site "161:observed-reader-reads-local"
+
+let keeps_observable_scope plc tn =
+  Option.exists (Tn.Placements.get plc tn) ~f:(fun (_, provenance) ->
+      Tn.equal_provenance (Tn.leading_provenance provenance) observed_reader_reads_local)
+
+let scope_retracts_to_buffer plc tn =
+  Tn.Placements.known_non_virtual plc tn && not (keeps_observable_scope plc tn)
+
 (* gh-ocannl-777: what one replay of a stored computation of [self] touches, for
    [Context.observability]. The statements kept are exactly the ones [instantiate_computations]'
    [loop_proc] keeps -- loops (a dead one replays nothing), [self]'s own setters, scope-local
@@ -3196,7 +3205,7 @@ type replay_facts = {
    index symbol no enclosing loop of the replayed code binds: a static (launch) index of the routine
    that stored the computation. The match arms are exhaustive on purpose, so a new constructor has
    to decide what a replay of it reads. *)
-let replay_facts_with_scope_reads ~scope_reads_buffer ~(self : Tn.t) (code : t) : replay_facts =
+let collect_replay_facts ~scope_retracts ~(self : Tn.t) (code : t) : replay_facts =
   let reads = ref (Set.empty (module Tn)) in
   let merge = ref false in
   let free = ref (Set.empty (module Indexing.Symbol)) in
@@ -3213,8 +3222,7 @@ let replay_facts_with_scope_reads ~scope_reads_buffer ~(self : Tn.t) (code : t) 
     match llsc with
     | Local_scope { id; body; orig_indices; mint = _ } ->
         Array.iter orig_indices ~f:(note_index bound);
-        if scope_reads_buffer id.tn then note_read id.tn;
-        stmt bound body
+        if scope_retracts id.tn then note_read id.tn else stmt bound body
     | Get_local _ | Constant _ | Constant_bits _ -> ()
     | Get (tn, idcs) ->
         note_read tn;
@@ -3268,45 +3276,47 @@ let replay_facts_with_scope_reads ~scope_reads_buffer ~(self : Tn.t) (code : t) 
     | Tile_mma { fallback; _ } -> stmt bound fallback
   in
   stmt (Set.empty (module Indexing.Symbol)) code;
-  {
-    replay_reads = !reads;
-    replay_merge_reads = !merge || computation_reads_merge ~self code;
-    replay_free_symbols = !free;
-  }
+  { replay_reads = !reads; replay_merge_reads = !merge; replay_free_symbols = !free }
 
-let replay_facts ~self code =
-  replay_facts_with_scope_reads ~scope_reads_buffer:(fun _ -> false) ~self code
+let replay_facts ?placements ~self code =
+  let scope_retracts tn =
+    Option.exists placements ~f:(fun plc -> scope_retracts_to_buffer plc tn)
+  in
+  let facts = collect_replay_facts ~scope_retracts ~self code in
+  { facts with replay_merge_reads = facts.replay_merge_reads || computation_reads_merge ~self code }
 
-let materialize_observable_readers ~stores (optim_ctx : optimize_ctx) traced_store =
-  let plc = optim_ctx.placements in
-  let is_local = Tn.Placements.is_local_peek plc in
-  let rec reads_local seen tn =
-    is_local tn
+let replay_reads_local plc computations ~self components =
+  let seen = Hash_set.create (module Tnode) in
+  let scope_retracts tn = (not (Tn.equal tn self)) && scope_retracts_to_buffer plc tn in
+  let rec reads_local tn =
+    Tn.Placements.is_local_peek plc tn
     || (not (Tn.Placements.known_non_virtual plc tn))
        && (not (Hash_set.mem seen tn))
        &&
        (Hash_set.add seen tn;
-        Option.exists (Hashtbl.find optim_ctx.computations tn) ~f:(fun components ->
-            List.exists components ~f:(fun (_, code) ->
-                let facts =
-                  replay_facts_with_scope_reads ~scope_reads_buffer:is_local ~self:tn code
-                in
-                Set.exists facts.replay_reads ~f:(reads_local seen))))
+        Option.exists (Hashtbl.find computations tn) ~f:(components_read_local ~self:tn))
+  and components_read_local ~self components =
+    List.exists components ~f:(fun (_, code) ->
+        let facts = collect_replay_facts ~scope_retracts ~self code in
+        Set.exists facts.replay_reads ~f:reads_local)
   in
-  (* A later use site can refuse a producer whose scope an earlier reader already captured. Cleanup
-     turns that scope into a buffer read. Check both these targets and the dependencies still
-     visible in the stored bodies to [Context.observability]. Classify every reader against the same
-     placements so traversal order cannot affect the verdict. *)
+  Hash_set.add seen self;
+  components_read_local ~self components
+
+let materialize_observable_readers ~stores (optim_ctx : optimize_ctx) traced_store =
+  let { placements = plc; computations; _ } = optim_ctx in
+  (* A later use site can refuse a producer whose scope an earlier reader already captured. Classify
+     every reader against the same placements so traversal order cannot affect the verdict. *)
   Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:traced readers ->
       if
         Tn.is_observable tn && stores tn
         && (traced.has_assignment || traced.zeroed_out)
         && (not (Tn.Placements.known_virtual plc tn || Tn.Placements.known_non_virtual plc tn))
-        && reads_local (Hash_set.create (module Tnode)) tn
+        && Option.exists (Hashtbl.find computations tn)
+             ~f:(replay_reads_local plc computations ~self:tn)
       then tn :: readers
       else readers)
-  |> List.iter ~f:(fun tn ->
-      Tn.Placements.update plc tn Never_virtual (Site "161:observed-reader-reads-local"))
+  |> List.iter ~f:(fun tn -> Tn.Placements.update plc tn Never_virtual observed_reader_reads_local)
 
 (* gh-466: conservative "mentions [tn]" scan over a scalar, descending into [Local_scope] bodies and
    [Get_dynamic] index values. [merge]: whether a merge-buffer read counts, which is not a read of
@@ -5290,7 +5300,7 @@ let validate_virtualization_decision_coverage (plc : Tn.Placements.t) (llc : t) 
         check tn;
         scalar dyn
     | Local_scope { id; body; _ } ->
-        if not (Tn.Placements.known_non_virtual plc id.tn) then ignore (proc body : bool)
+        if not (scope_retracts_to_buffer plc id.tn) then ignore (proc body : bool)
     | Ternop (_, (a, _), (b, _), (c, _)) ->
         scalar a;
         scalar b;
@@ -5411,6 +5421,11 @@ let input_scope_ids (llc : t) : Set.M(Scope_id).t =
   !acc
 
 let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
+  let note_scope_local (id : scope_id) provenance =
+    if not (keeps_observable_scope plc id.tn) then (
+      assert (not (Tn.Placements.known_non_virtual plc id.tn));
+      Tn.Placements.update plc id.tn Virtual provenance)
+  in
   (* The current position is within scope of the definitions of the process_for virtual arrays. *)
   let rec loop_proc ~balanced ~env_dom (llc : t) : t option =
     let loop = loop_proc ~balanced ~env_dom in
@@ -5482,8 +5497,7 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
                  debug;
                }))
     | Set_local (id, llsc) ->
-        assert (not @@ Tn.Placements.known_non_virtual plc id.tn);
-        Tn.Placements.update plc id.tn Virtual Scope_local;
+        note_scope_local id Scope_local;
         Some (Set_local (id, loop_scalar ~balanced ~env_dom llsc))
     | Declare_local _ -> Some llc
     | Comment _ -> Some llc
@@ -5538,7 +5552,7 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
           Array.for_all orig_indices ~f:(function
             | Indexing.Iterator s -> Set.mem env_dom s
             | _ -> true));
-        if Tn.Placements.known_non_virtual plc id.tn then (
+        if scope_retracts_to_buffer plc id.tn then (
           (* gh-ocannl-681: the pass may retract a scope IT minted -- the node was a virtualization
              candidate at that read site and a later refusal committed it [Never_virtual], so the
              setter that now survives writes the very value the body recomputes -- but never one it
@@ -5548,11 +5562,12 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
           Get (id.tn, orig_indices))
         else
           let body = Option.value_exn ~here:[%here] @@ loop_proc ~balanced ~env_dom body in
-          Tn.Placements.update plc id.tn Virtual (Site "18:inlined-scope");
+          (* An observable reader's buffer holds its last value. An earlier capture can still
+             require an older computation, which has its own lexical scope. *)
+          note_scope_local id (Site "18:inlined-scope");
           Local_scope { id; orig_indices; body; mint }
     | Get_local id ->
-        assert (not @@ Tn.Placements.known_non_virtual plc id.tn);
-        Tn.Placements.update plc id.tn Virtual Scope_local;
+        note_scope_local id Scope_local;
         llsc
     | Get_merge_buffer (_, _) -> llsc
     | Embed_index (Fixed_idx _ | Sub_axis) -> llsc
@@ -13714,6 +13729,12 @@ let%diagn2_sexp specialize_proc ?(blends_value_selects = false) (input_ctx : opt
     let world tn =
       Hashtbl.find_or_add worlds tn ~default:(fun () ->
           match Hashtbl.find input_ctx.computations tn with
+          | Some computations
+            when Tn.is_observable tn
+                 && (not (Tn.Placements.known_virtual walked_placements tn))
+                 && replay_reads_local walked_placements input_ctx.computations ~self:tn
+                      computations ->
+              Error (`Store (Tn.provenance_to_string observed_reader_reads_local))
           | Some computations ->
               computations_at_reads
                 ~placements:(Tn.Placements.copy walked_placements)

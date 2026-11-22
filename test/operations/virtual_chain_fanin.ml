@@ -2862,30 +2862,28 @@ let phase12 () =
   exact_observed ~label:"inline" ~cap:saved_cap ~inline:true ~persistent:false ~transitive:false;
   exact_observed ~label:"transitive" ~cap:saved_cap ~inline:false ~persistent:false ~transitive:true;
   exact_observed ~label:"persistent" ~cap:saved_cap ~inline:false ~persistent:true ~transitive:false;
-  (* The gather forces [a] to a buffer after [c_] has captured its computation. The scope in [c_]'s
-     stored template then denotes a scratch read at cleanup. *)
+  let gather a dst =
+    let j = sym () in
+    loop_n j dim
+      (set dst
+         [| iter j |]
+         (LL.Get_dynamic
+            { tn = a; idcs = [| fixed 0 |]; dyn_axis = 0; dyn_value = (get m [| iter j |], single) }))
+  in
+  (* The gather forces [a] to a buffer after [c_] has captured its computation. Retaining the last
+     value of [c_] for observation must also preserve the earlier value [early] captured. *)
   (let a = cmk "ma_late" and c_ = cmk "mc_late" and out = cmk "mo_late" in
-   let sink = cmk "msink_late" in
+   let early = cmk "me_late" and sink = cmk "msink_late" in
    Tn.set_observable c_;
    List.iter [ out; sink ] ~f:materialize;
    let i = sym () in
    let producer =
      loop_n i dim (set a [| iter i |] (add (get x [| iter i |]) (get y [| iter i |])))
    in
-   let j = sym () in
-   let gather =
-     loop_n j dim
-       (set sink
-          [| iter j |]
-          (LL.Get_dynamic
-             {
-               tn = a;
-               idcs = [| fixed 0 |];
-               dyn_axis = 0;
-               dyn_value = (get m [| iter j |], single);
-             }))
+   let llc =
+     List.reduce_exn ~f:seq
+       [ producer; copy c_ x; copy early c_; copy c_ a; copy out early; gather a sink ]
    in
-   let llc = List.reduce_exn ~f:seq [ producer; copy c_ a; copy out c_; gather ] in
    let name = "vcf_sites_observed_late" in
    let opt_ctx = LL.empty_optimize_ctx () in
    Hash_set.add opt_ctx.LL.inline_preferences a;
@@ -2893,18 +2891,49 @@ let phase12 () =
    let seed = (sink, blank dim) :: seed out in
    let ctx = run ~name o ~seed in
    let mat_name = name ^ "_mat" in
-   let mat = optimize ~materialized:[ a; c_ ] ~name:mat_name llc in
+   let mat = optimize ~materialized:[ a; c_; early ] ~name:mat_name llc in
    let got_mat = execute ~name:mat_name mat ~seed ~read:[ c_; out; sink ] in
    let expected = Array.init dim ~f:(fun i -> v x i +. v y i) in
    let gathered = Array.init dim ~f:(fun i -> expected.(Float.to_int m_vals.(i))) in
    p "late gather: the gather forces the producer to routine-local scratch"
      (known_local o a
      && Option.equal Tn.equal_provenance (rejection_code o a) (Some Tn.Surviving_read));
+   p "late gather: the reader that captured the earlier value stays virtual" (known_virtual o early);
    p "late gather: the materialized reference matches the expected values"
-     (same got_mat [ expected; expected; gathered ]);
+     (same got_mat [ expected; Array.init dim ~f:(v x); gathered ]);
    p "late gather: the stored reader and downstream outputs match the materialized reference"
      (match Context.observability ctx c_ with
      | Stored -> same (List.map [ c_; out; sink ] ~f:(Context.get_values ctx)) got_mat
+     | _ -> false));
+  (* The outer gather leaves a persistent buffer. Its discarded scope body used to load [a]. *)
+  (let a = cmk "ma_late_shield" and bridge = cmk "mb_late_shield" and c_ = cmk "mc_late_shield" in
+   let out = cmk "mo_late_shield" and s1 = cmk "ms1_late_shield" and s2 = cmk "ms2_late_shield" in
+   Tn.set_observable bridge;
+   Tn.set_observable c_;
+   List.iter [ out; s1; s2 ] ~f:materialize;
+   let llc =
+     List.reduce_exn ~f:seq
+       [ copy a x; copy bridge a; copy c_ bridge; copy out c_; gather a s1; gather bridge s2 ]
+   in
+   let name = "vcf_sites_observed_late_shield" in
+   let opt_ctx = LL.empty_optimize_ctx () in
+   List.iter [ a; bridge ] ~f:(Hash_set.add opt_ctx.LL.inline_preferences);
+   let o = optimize_in opt_ctx ~name llc in
+   let seeds = (s1, blank dim) :: (s2, blank dim) :: seed out in
+   let ctx = run ~name o ~seed:seeds in
+   let mat_name = name ^ "_mat" in
+   let mat = optimize ~materialized:[ a; bridge; c_ ] ~name:mat_name llc in
+   let read = [ c_; out; s1; s2 ] in
+   let got_mat = execute ~name:mat_name mat ~seed:seeds ~read in
+   let expected = Array.init dim ~f:(v x) in
+   let gathered = Array.init dim ~f:(fun i -> expected.(Float.to_int m_vals.(i))) in
+   p "late gathers: the outer buffer shields the routine-local scratch"
+     (known_local o a && match Context.observability ctx bridge with Stored -> true | _ -> false);
+   p "late gathers: the reader replays the persistent buffer and matches the materialized reading"
+     (match Context.observability ctx c_ with
+     | Recomputable ->
+         same got_mat [ expected; expected; gathered; gathered ]
+         && same (List.map read ~f:(Context.get_values ctx)) got_mat
      | _ -> false));
   (* The visit-cap landing still costs one load if [c] is inlined: a stored reader cannot refer to
      routine-private scratch, so [a] retracts to the visit cap's whole buffer. *)

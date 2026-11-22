@@ -1140,8 +1140,10 @@ files.
   for an observable one-hot selector (a permutation matrix over the footprint), with execution
   against a materialized reference in each case.
 - **An observable candidate materializes if its replay needs routine scratch** (gh-ocannl-2415).
-  At the end of `virtual_llc`, `materialize_observable_readers` uses the same replay walk as
-  `Context.observability`, plus scope targets that cleanup will retract to scratch reads.
+  At the end of `virtual_llc`, `materialize_observable_readers` uses the same placement-aware
+  replay walk as `Context.observability`. Retracted scopes contribute only their buffer target.
+  Scopes already captured for a reader this rule materializes keep their lexical computations,
+  because an earlier capture can require a value the reader's last write overwrote.
   `Placements.is_local_peek` includes `Never_virtual` buffers that will settle `Local` in
   finalization. The verdict applies to open placements, including a specialization that prices
   an `Inline` flip, and keeps the reader `On_device`. The early footprint verdict lets the usual
