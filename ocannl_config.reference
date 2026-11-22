@@ -2147,11 +2147,12 @@
 # writes, and an input gradient its contraction loop between two of them; for a narrow-storage
 # target the optimizer moves the cell's loops above the reductions (each cell keeps its
 # contributions' order), so the whole reduction accumulates wide and narrows once, in the plain
-# rendering and in every privatized or tensorized schedule alike. Where nothing widens the move
-# changes no value. Not reached, so narrowing at every step whatever the policy: an accumulation
-# whose cell a reduction loop's affine or concatenated index also moves (a convolution's input
-# gradient), a scattered embedding row (the one-hot backward's dynamic scatter), and one that
-# reads its target at another cell.
+# rendering and in privatized schedules that cover the same reduction. For a supported
+# convolution input-gradient cell with one positive affine pair (gh-ocannl-2423), the optimizer
+# groups all contributing windows and channels under the cell so the store rounds once.
+# Where nothing widens, the move changes no value. Per-step rounding remains for affine nests
+# outside the allowlist (including multiple independent window pairs or unproved bounds),
+# concatenated cells, dynamic embedding scatters, and accumulations reading another target cell.
 # Programmatic override: `Ir.Numerics.set_policy`.
 #bf16_arithmetic=auto
 

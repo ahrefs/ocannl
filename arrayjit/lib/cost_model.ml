@@ -1376,11 +1376,11 @@ let operand_census ?is_global ?(shared = false) ~is_staged (code : Low_level.t) 
           | r -> r)
       | _ -> None
     in
-    let rec go ~ctx ~scale ~env ~localized ~seen (c : Low_level.t) =
+    let rec go ~ctx ~scale ~env ~guards ~localized ~seen (c : Low_level.t) =
       match c with
       | Low_level.Seq (a, b) ->
-          go ~ctx ~scale ~env ~localized ~seen a;
-          go ~ctx ~scale ~env ~localized ~seen b
+          go ~ctx ~scale ~env ~guards ~localized ~seen a;
+          go ~ctx ~scale ~env ~guards ~localized ~seen b
       | For_loop { index; from_; to_; body; axis } ->
           let extent = max 0 (to_ - from_ + 1) in
           let hardware = Low_level.hardware_kind_of_axis axis in
@@ -1399,22 +1399,26 @@ let operand_census ?is_global ?(shared = false) ~is_staged (code : Low_level.t) 
                 match
                   Low_level.decide_accum_width
                     ~extra_level:(fun _ _ -> false)
-                    ~loop_ranges:(Lazy.force loop_ranges) ~index ~from_ ~to_ body
+                    ~dominating_guards:guards ~loop_ranges:(Lazy.force loop_ranges) ~index ~from_
+                    ~to_ body
                 with
                 | Accum_base { tn; idcs; pinned = None; base = `Update _; _ } ->
                     Some (Chain_cell (tn, idcs))
                 | _ -> None)
             | _ -> localized
           in
-          go ~ctx ~scale:(scale * extent) ~env ~localized ~seen:(fresh ()) body
+          go ~ctx ~scale:(scale * extent) ~env ~guards ~localized ~seen:(fresh ()) body
       | Scan_loop { from_; to_; body; carried; _ } ->
-          List.iter carried ~f:(fun c -> reads ~ctx ~scale ~env ~seen [ c.Low_level.init ]);
-          go ~ctx ~scale:(scale * max 0 (to_ - from_ + 1)) ~env ~localized ~seen:(fresh ()) body
-      | If { cond = cond, _; body } -> (
-          reads ~ctx ~scale ~env ~seen [ cond ];
+          List.iter carried ~f:(fun c -> reads ~ctx ~scale ~env ~guards ~seen [ c.Low_level.init ]);
+          go ~ctx
+            ~scale:(scale * max 0 (to_ - from_ + 1))
+            ~env ~guards ~localized ~seen:(fresh ()) body
+      | If { cond = (cond, _) as condition; body } -> (
+          reads ~ctx ~scale ~env ~guards ~seen [ cond ];
           (* [scale] carries each guarded index's count as [env] has it -- its extent, or what an
              enclosing guard admits of it -- so replacing that count with the new one is exact, and
              nested guards on one index compose as their minimum. *)
+          let guards = condition :: guards in
           match admitted env cond with
           | Some bounds ->
               let scale, env =
@@ -1423,20 +1427,20 @@ let operand_census ?is_global ?(shared = false) ~is_staged (code : Low_level.t) 
                     ( (if current > 0 then scale / current * n else scale),
                       List.Assoc.add env s n ~equal:Idx.equal_symbol ))
               in
-              go ~ctx ~scale ~env ~localized ~seen body
-          | None -> go ~ctx ~scale ~env ~localized ~seen body)
+              go ~ctx ~scale ~env ~guards ~localized ~seen body
+          | None -> go ~ctx ~scale ~env ~guards ~localized ~seen body)
       | Set { tn; llsc; _ } -> (
           match if is_staged tn then staging_guards llsc else None with
-          | Some guards ->
+          | Some staged_guards ->
               add_staged ctx (bytes scale tn);
-              reads ~ctx ~scale ~env ~seen guards
-          | None -> reads ~ctx ~scale ~env ~seen ?self:localized [ llsc ])
+              reads ~ctx ~scale ~env ~guards ~seen staged_guards
+          | None -> reads ~ctx ~scale ~env ~guards ~seen ?self:localized [ llsc ])
       | Set_local (_, llsc) | Set_from_vec { arg = llsc, _; _ } ->
-          reads ~ctx ~scale ~env ~seen [ llsc ]
+          reads ~ctx ~scale ~env ~guards ~seen [ llsc ]
       | Set_dynamic { dyn_value = index, _; llsc; _ } ->
-          reads ~ctx ~scale ~env ~seen [ index; llsc ]
+          reads ~ctx ~scale ~env ~guards ~seen [ index; llsc ]
       | _ -> ()
-    and reads ~ctx ~scale ~env ~seen ?self roots =
+    and reads ~ctx ~scale ~env ~guards ~seen ?self roots =
       if Option.is_some direct || Option.is_some shared_tally then
         let add_direct =
           match direct with
@@ -1467,14 +1471,14 @@ let operand_census ?is_global ?(shared = false) ~is_staged (code : Low_level.t) 
               let emitted = Lazy.force emitted in
               if not (Hash_set.mem emitted id) then (
                 Hash_set.add emitted id;
-                go ~ctx ~scale ~env ~localized:None ~seen:(fresh ()) body)
+                go ~ctx ~scale ~env ~guards ~localized:None ~seen:(fresh ()) body)
           | _ -> ());
           Access.Continue ()
         in
         let hooks = { (Access.hooks ()) with scalar } in
         List.iter roots ~f:(fun sc -> Access.fold_scalar ~policy:scalar_policy ~hooks ~init:() sc)
     in
-    go ~ctx:top_ctx ~scale:1 ~env:[] ~localized:None ~seen:(fresh ()) code;
+    go ~ctx:top_ctx ~scale:1 ~env:[] ~guards:[] ~localized:None ~seen:(fresh ()) code;
     {
       oc_staged = staged ();
       oc_direct = Option.value_map direct ~default:[] ~f:(fun (_, (_, contexts)) -> contexts ());

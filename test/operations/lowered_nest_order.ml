@@ -196,9 +196,9 @@ let () =
    accumulator at [accum_prec] and narrow once. Both gradients of a dense layer: the weight
    gradient's batch reduction is outermost raw, and the input gradient's contraction loop sits
    BETWEEN its two output loops ([x.grad[b,i] += w[o,i] * y.grad[b,o]] runs [b, o, i]). An f32
-   gradient keeps the lowered order in the optimized routine too, and so does a narrow gradient
-   whose cell a reduction loop's affine index also moves (a convolution's input gradient), which no
-   order localizes. *)
+   gradient keeps the lowered order in the optimized routine. A bf16 window input gradient with one
+   affine pair gets a loop owning each cell before any reductions, while a two-dimensional window
+   has two independent affine pairs and keeps the lowered order. *)
 let grad_nests ~name ~prec ~input_grad =
   let x =
     Operation.init ~l:(name ^ "_x") ~prec:Ir.Ops.single ~b:[ 3 ] ~o:[ 5 ]
@@ -243,36 +243,46 @@ let () =
   report_grads "f32 weight gradient" f32;
   p_all "an f32 weight gradient keeps its batch reduction outermost in the optimized routine"
     (snd f32) ~f:(fun (_, nest) -> not (outputs_first nest));
-  (* A 1-D window over two output channels: [x.grad[o+k] += y.grad[o,d] * w[k,d]] -- the cell moves
-     with the window loop, and the channel loop reduces. *)
-  let conv =
+  let conv ~two_dims =
     let x =
-      Operation.init ~l:"lno_cv_x" ~prec:Ir.Ops.single ~o:[ 8 ]
+      Operation.init ~l:"lno_cv_x" ~prec:Ir.Ops.single
+        ~o:(if two_dims then [ 8; 6 ] else [ 8 ])
         ~f:(fun idcs -> Float.of_int (1 + idcs.(0)))
         ~grad_spec:Tensor.Require_grad ()
     in
     let w =
-      Operation.init ~l:"lno_cv_w" ~prec:Ir.Ops.single ~o:[ 3; 2 ]
+      Operation.init ~l:"lno_cv_w" ~prec:Ir.Ops.single
+        ~o:(if two_dims then [ 3; 3; 2 ] else [ 3; 2 ])
         ~f:(fun idcs -> Float.of_int (1 + idcs.(0)))
         ~grad_spec:Tensor.Prohibit_grad ()
     in
     let use_padding = false in
-    let%op y = x +* "o+k; k, d => o, d" w in
+    let y =
+      if two_dims then [%op x +* "o+k, p+t; k, t, d => o, p, d" w]
+      else [%op x +* "o+k; k, d => o, d" w]
+    in
     let%op loss = y ++ "... => 0" in
     let g = Option.value_exn (Option.map x.Tensor.diff ~f:(fun d -> d.Tensor.grad)) in
     Ir.Tnode.update_prec g Ir.Ops.bfloat16;
     Train.set_materialized g;
-    let opt = lowered ~name:"lno_conv" (Train.grad_update loss) in
+    let name = if two_dims then "lno_conv2d" else "lno_conv1d" in
+    let opt = lowered ~name (Train.grad_update loss) in
     let nests_of llc =
       List.filter_map (accumulating_nests_with_node llc) ~f:(fun (tn, nest) ->
           Option.some_if (Ir.Tnode.equal tn g) nest)
     in
     (nests_of opt.source, nests_of opt.llc)
   in
-  report "bf16 window input gradient" conv;
-  p "a bf16 window input gradient, its cell moved by a reduction loop, keeps the lowered order"
-    (let source, llc = conv in
-     List.exists llc ~f:has_both
-     && List.equal
-          (List.equal (fun (s, r) (s', r') -> Idx.equal_symbol s s' && Poly.equal r r'))
-          source llc)
+  let source, llc = conv ~two_dims:false in
+  report "bf16 window input gradient" (source, llc);
+  p_all "the bf16 window input gradient lowers over the forward window and channel loops" source
+    ~f:(fun nest -> has_both nest && not (outputs_first nest));
+  p_all "the optimized bf16 window input gradient opens its cell loop before all reductions" llc
+    ~f:(fun nest -> has_both nest && outputs_first nest);
+  let source, llc = conv ~two_dims:true in
+  report "bf16 two-dimensional window input gradient" (source, llc);
+  p "the bf16 input gradient with two independent affine pairs keeps the lowered order"
+    (List.exists source ~f:(fun nest -> has_both nest && not (outputs_first nest))
+    && List.equal
+         (List.equal (fun (s, r) (s', r') -> Idx.equal_symbol s s' && Poly.equal r r'))
+         source llc)

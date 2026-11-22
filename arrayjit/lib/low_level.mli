@@ -883,6 +883,7 @@ type peel_report = {
 val peel_accum_nest :
   ?extra_level:(Indexing.symbol -> axis_type -> bool) ->
   ?report:(peel_report -> unit) ->
+  ?dominating_guards:scalar_arg list ->
   loop_ranges:Affine.Loop_ranges.t ->
   free_of:Indexing.symbol list ->
   t ->
@@ -903,9 +904,11 @@ val peel_accum_nest :
     statements after the opening init, validated to carry ONE reduction operator — mixed-operator
     sequences are not reductions and keep their per-iteration narrowing), with the accumulated cell
     invariant across the peeled levels ([free_of] seeds the invariance check with the caller's own
-    loop). [rebuild] re-wraps a replacement base statement in the peeled levels. The ONE definition
-    shared by [C_syntax]'s localizing serial fallback and the schedule mints, so transform and
-    emission cannot drift.
+    loop). [dominating_guards] enclose the caller's entire level, including the localized transfers.
+    Signed affine conditions there can prove those transfers in bounds on padded iterations.
+    [rebuild] re-wraps a replacement base statement in the peeled levels. The ONE definition shared
+    by [C_syntax]'s localizing serial fallback and the schedule mints, so transform and emission
+    cannot drift.
 
     A DEAD level ([to_ < from_]) is never peeled, and that refusal is load-bearing rather than
     tidiness: the body of a dead loop performs no accesses at all — the routine-interface walk
@@ -971,6 +974,7 @@ type accum_decision =
     }
 
 val decide_accum_width :
+  ?dominating_guards:scalar_arg list ->
   extra_level:(Indexing.symbol -> axis_type -> bool) ->
   loop_ranges:Affine.Loop_ranges.t ->
   index:Indexing.symbol ->
@@ -2206,15 +2210,12 @@ val without_node_bounds : (unit -> 'a) -> 'a
     folding is always sound: a guard left in place is only checked at run time. *)
 
 val sink_narrow_reduction_loops : t -> t
-(** gh-ocannl-2362: in each perfect serial nest whose leaf accumulates into a NARROW-float node
-    ({!Ops.is_narrow_float}) at a cell made of plain loop iterators, read only at that cell, moves
-    the loops the cell mentions above the reduction loops, each group keeping its relative order.
-    Every cell receives its contributions in the same order, so the program is unchanged; the
-    reduction becomes an innermost run code generation localizes at [accum_prec] and narrows once,
-    the residency the [bf16_arithmetic]/[fp16_arithmetic] policies promise, where backprop's
-    forward-ordered lowering put the batch reduction outermost and rounded every step. Every other
-    nest, and every f32/f64/integer target, is returned unchanged. Part of
-    {!post_virtualization_pipeline}, after {!rewrite_one_hot_reductions}. *)
+(** In a perfect serial nest updating a narrow-float node read only at the written cell, put cell
+    loops outside reductions so code generation can hold the whole reduction at [accum_prec]
+    (gh-ocannl-2362). For plain indices this is an interchange. For one supported affine pair
+    (gh-ocannl-2423), a cell loop owns every overlapping window that reaches the cell. Both preserve
+    each cell's contribution order. Part of {!post_virtualization_pipeline}, after
+    {!rewrite_one_hot_reductions}. *)
 
 val rewrite_one_hot_reductions : ?static_indices:Indexing.static_symbol list -> t -> t
 (** gh-343: rewrites the narrow one-hot embedding pattern -- an [Add] reduction over a loop variable

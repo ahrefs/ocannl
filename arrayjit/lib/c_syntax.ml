@@ -4329,6 +4329,8 @@ module C_syntax (B : C_syntax_config) = struct
             enclosing level's iterations, which is what keeps gh-490's runtime-extent guard
             ([i < s]) peelable. The ranges are what lets it ask whether the accumulated cell tells
             two enclosing instances apart ([Affine.separates], gh-ocannl-721). *)
+    dominating_accum_guards : Low_level.scalar_arg list;
+        (** Guards that still enclose both transfers when a reduction is localized. *)
     current_workgroup_shared : Set.M(Tn).t ref;
         (** Set by [compile_proc]: nodes placed in workgroup-shared memory. Their declarations carry
             [shared_decl_prefix] and cannot use [= {0}] (not allowed for
@@ -7721,6 +7723,9 @@ module C_syntax (B : C_syntax_config) = struct
             local_defs
         in
         let body_doc =
+          let ctx =
+            { ctx with dominating_accum_guards = (c, cprec) :: ctx.dominating_accum_guards }
+          in
           match !(ctx.current_localized_zero_seed) with
           | Some seed when not seed.lzs_consumed ->
               (* An [If] reached before localization conditionally guards the closing store, so it
@@ -8006,7 +8011,8 @@ module C_syntax (B : C_syntax_config) = struct
        census verdict. *)
     match
       Low_level.decide_accum_width ~extra_level:(serialized_hardware ctx)
-        ~loop_ranges:!(ctx.current_loop_ranges) ~index:i ~from_ ~to_ body
+        ~dominating_guards:ctx.dominating_accum_guards ~loop_ranges:!(ctx.current_loop_ranges)
+        ~index:i ~from_ ~to_ body
     with
     | Low_level.Accum_not_a_nest refusal -> Accum_not_a_nest refusal
     | Low_level.Accum_base { tn; idcs; base; debug; rebuild; report; pinned } ->
@@ -9671,6 +9677,7 @@ module C_syntax (B : C_syntax_config) = struct
         volatility_events = ref [];
         current_hardware_axes = ref (Low_level.hardware_axes llc);
         current_loop_ranges = ref (Low_level.loop_ranges llc);
+        dominating_accum_guards = [];
         current_workgroup_shared = ref workgroup_shared;
         current_thread_axes = ref [];
         current_active_slots = ref [];

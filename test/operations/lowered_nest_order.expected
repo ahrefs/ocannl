@@ -6,4 +6,6 @@ the bf16 legs find a contraction nest of each gradient, raw and optimized: true
 a bf16 dense layer's weight and input gradients both lower reduction-outer raw: true
 the optimized routine opens every output loop of both bf16 gradients before its reductions: true
 an f32 weight gradient keeps its batch reduction outermost in the optimized routine: true
-a bf16 window input gradient, its cell moved by a reduction loop, keeps the lowered order: true
+the bf16 window input gradient lowers over the forward window and channel loops: true
+the optimized bf16 window input gradient opens its cell loop before all reductions: true
+the bf16 input gradient with two independent affine pairs keeps the lowered order: true
