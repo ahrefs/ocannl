@@ -1,3 +1,4 @@
+cuda global debug info reports host_register_eligible_devices: true
 small array (4 KiB): repeated uploads compute exact values: true
 small array (4 KiB): repeated uploads below threshold register nothing: true
 kept control: live 4 MiB host array survives collection rounds: true

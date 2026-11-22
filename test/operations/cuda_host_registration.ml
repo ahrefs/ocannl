@@ -109,12 +109,18 @@ let () =
       let ctx = Context.auto () in
       let backend_name = Context.backend_name ctx in
       let on_cuda = String.equal backend_name "cuda" in
-      let eligible = on_cuda && count ctx "host_register_eligible_devices" > 0 in
-      let cuda = Verdict.leg ~when_:eligible ~on:backend_name () in
+      let cuda_backend = Verdict.leg ~when_:on_cuda ~on:backend_name () in
+      let cuda =
+        Verdict.sub_leg cuda_backend ~aggregation:`Environment
+          ~when_:(lazy (count ctx "host_register_eligible_devices" > 0))
+          ~on:"cuda (integrated or no host-register support)"
+      in
       Stdio.eprintf
         "cuda_host_registration: backend=%s eligible_devices=%d (not part of the golden)\n%!"
         backend_name
         (count ctx "host_register_eligible_devices");
+      in_leg ~leg:cuda_backend "cuda global debug info reports host_register_eligible_devices"
+        (fun label -> p label (Option.is_some (debug_counter ctx "host_register_eligible_devices")));
 
       (* 1. Small recurring array (4 KiB < 4 MiB stated threshold). *)
       let ctx, small_routine, small_x, small_y =

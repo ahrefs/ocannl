@@ -93,36 +93,38 @@ let complete_unregister_success t e ~bytes ~next_state =
   Atomic.decr t.live_registered;
   ignore (Atomic.fetch_and_add t.live_bytes (-bytes) : int);
   Atomic.incr t.unregistered;
-  (* If GC finalisation ran while [unregister] was in flight, drop its [keep_alive] and move to
-     [Dead] regardless of [next_state]. *)
+  (* Publish [next_state] before reading [finalized_keep] (Dekker ordering paired with
+     [retain_and_recheck]): if GC finalisation ran concurrently and stored [Some keep], either this
+     exchange clears it and moves [Declined -> Dead], or [retain_and_recheck] observes
+     [Dead]/[Declined] and clears [finalized_keep] itself. *)
+  Atomic.set e.state next_state;
   let was_finalized = Option.is_some (Atomic.exchange e.finalized_keep None) in
-  let final_state = if was_finalized then Dead else next_state in
-  Atomic.set e.state final_state;
-  if phys_equal final_state Dead then push_retired t e
+  if phys_equal next_state Dead then push_retired t e
+  else if was_finalized && Atomic.compare_and_set e.state Declined Dead then push_retired t e
+
+let retain_and_recheck t e ~keep =
+  Atomic.set e.finalized_keep (Some keep);
+  match Atomic.get e.state with
+  | Dead -> ignore (Atomic.exchange e.finalized_keep None : keep_alive option)
+  | Declined ->
+      ignore (Atomic.exchange e.finalized_keep None : keep_alive option);
+      if Atomic.compare_and_set e.state Declined Dead then push_retired t e
+  | Retry_unregister _ -> push_retry t e
+  | Unregistering | Registered _ | Seen -> ()
 
 (* Runs from GC finalisation: takes no lock, spins on nothing, and touches no table so an allocation
    inside [note_transfer] cannot deadlock. Captures [t] and [e], never the array itself. *)
 let rec finalize_entry t e ~keep =
   match Atomic.get e.state with
   | Dead -> ()
-  | Unregistering -> (
-      (* [unregister] is already in flight on this entry (e.g. overlap eviction or
-         [unregister_all]). Stash [keep] atomically so the backing array survives if that call fails
-         and transitions to [Retry_unregister]; re-check afterward in case the in-flight call
-         already cleared [finalized_keep] right before our write. *)
-      Atomic.set e.finalized_keep (Some keep);
-      match Atomic.get e.state with
-      | Dead -> ignore (Atomic.exchange e.finalized_keep None : keep_alive option)
-      | Declined ->
-          ignore (Atomic.exchange e.finalized_keep None : keep_alive option);
-          if Atomic.compare_and_set e.state Declined Dead then push_retired t e
-      | Unregistering | Retry_unregister _ | Registered _ | Seen -> ())
+  | Unregistering | Retry_unregister _ ->
+      (* Unregistration is either in flight or queued for retry on another domain. Publish [keep]
+         and recheck [e.state] so a concurrent recovery to [Dead]/[Declined] cannot leave [keep]
+         permanently rooted in [finalized_keep]. *)
+      retain_and_recheck t e ~keep
   | (Seen | Declined) as prev ->
       if Atomic.compare_and_set e.state prev Dead then push_retired t e
       else finalize_entry t e ~keep
-  | Retry_unregister _ ->
-      Atomic.set e.finalized_keep (Some keep);
-      push_retry t e
   | Registered { token; bytes } as prev -> (
       if not (Atomic.compare_and_set e.state prev Unregistering) then finalize_entry t e ~keep
       else

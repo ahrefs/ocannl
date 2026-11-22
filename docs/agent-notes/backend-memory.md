@@ -964,8 +964,9 @@ files.
   `hipHostRegister`'s cost as unmeasured there (likely deferred). cudajit 0.8.0 binds neither
   `cuMemHostAlloc` nor `cuMemHostRegister`, so the registration route starts with bindings.
 - **Automatic CUDA host-array registration** (gh-ocannl-1854): `Ir.Host_pinning` tracks recurring
-  caller-owned host `Ndarray.t` values by base address and registers them on their second
-  host-to-device transfer at or above `cuda_host_register_min_bytes` (default 4 MiB, `0` disables).
+  caller-owned host `Ndarray.t` values by byte range `[addr, addr + bytes)` and registers them on
+  their second host-to-device transfer at or above `cuda_host_register_min_bytes` (default 4 MiB,
+  `0` disables).
   `Cuda_backend.Host_register` binds `cuMemHostRegister_v2` (not unversioned v1, which rejects
   non-page-aligned `malloc` buffers) with `CU_MEMHOSTREGISTER_PORTABLE` (falling back to `0` on
   `CUDA_ERROR_NOT_SUPPORTED`) and `cuMemHostUnregister` through `Driver_entry` (`libcuda.so.1` /
