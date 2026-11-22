@@ -996,7 +996,9 @@ files.
   scheme pins the trace's precision cells); the body's conversion node fills it per application.
   An explicit `instantiate` has no node and refuses. A new Stage1 arm reading a lazy coefficient
   would break this, and inline precision too. A round-up `Strided_var` is the draw marker: only
-  `Uint4x32_to_prec` mints one. The `op_schemes` GC control witnesses the retained precision cell
+  `Uint4x32_to_prec` mints one. `product_tie_cancellation` passes a nine-element row and a
+  callback coefficient of four to the solver. Stage1 leaves the callback unread and Stage2
+  takes it once, yielding three blocks. The `op_schemes` GC control witnesses the retained precision cell
   directly (gh-ocannl-2170): precision cells no longer capture tensor nodes, so even a sabotaged
   scheme retaining its draw coefficients lets the nodes collect.
 - Printing a scheme (gh-ocannl-1753, `Shape.Scheme.to_string`): substituted boundary rows alone
