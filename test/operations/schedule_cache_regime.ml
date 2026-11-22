@@ -102,7 +102,8 @@ let () =
   make_dir old_cache_dir;
   let old_keys = [ "old-a"; "old-b" ] in
   List.iter old_keys ~f:(fun key -> write_entry ~cache_dir:old_cache_dir key (entry key));
-  write_stamp old_cache_dir (SC.cache_regime_version - 1);
+  let old_regime = SC.cache_regime_version - 1 in
+  write_stamp old_cache_dir old_regime;
   let old_before = snapshot old_cache_dir in
   p "an old stamped generation looks up as a miss the lookup decided, not a refusal"
     (equal_record
@@ -126,10 +127,44 @@ let () =
     (String.equal
        (String.strip (read (stamp_file old_cache_dir)))
        (Int.to_string SC.cache_regime_version));
+  p "an inventory sees the current regime and the newly stored key after a sweep"
+    (match SC.entry_inventory ~dir:old_cache_dir with
+    | Ok (SC.Stamped version, [ key ]) ->
+        version = SC.cache_regime_version && String.equal key "current"
+    | _ -> false);
   p "a current entry remains readable across later cache opens"
     (match SC.lookup ~dir:old_cache_dir ~key:(Some "current") with
     | Some value -> String.equal value.SC.backend "current"
     | None -> false);
+
+  (* Reuse the recorded, committed entry to inspect a different regime without another fixture store
+     whose failure could obscure the behavior under test. *)
+  write_stamp old_cache_dir old_regime;
+  let old_inventory_before = snapshot old_cache_dir in
+  p "an inventory identifies the old regime beside the keys that still exist"
+    (match SC.entry_inventory ~dir:old_cache_dir with
+    | Ok (SC.Stamped version, [ key ]) -> version = old_regime && String.equal key "current"
+    | _ -> false);
+  p "an inventory leaves the old regime and entries intact"
+    (equal_snapshot old_inventory_before (snapshot old_cache_dir));
+  let lock_error =
+    FI.with_callback
+      (function
+        | FI.Schedule_cache_before_lock ->
+            raise (Unix.Unix_error (Unix.EACCES, "lockf", "inventory-control"))
+        | _ -> ())
+      ~f:(fun () -> SC.entry_inventory ~dir:old_cache_dir)
+  in
+  p "an inventory reports a refused lock and preserves the old regime and entries"
+    ((match lock_error with
+       | Error reason -> String.is_prefix reason ~prefix:"lockf inventory-control:"
+       | Ok _ -> false)
+    && equal_snapshot old_inventory_before (snapshot old_cache_dir));
+  Stdio.Out_channel.write_all (stamp_file old_cache_dir) ~data:"malformed";
+  p "an inventory distinguishes an unreadable stamp while retaining the physical key"
+    (match SC.entry_inventory ~dir:old_cache_dir with
+    | Ok (SC.Unreadable_stamp, [ key ]) -> String.equal key "current"
+    | _ -> false);
 
   (* Existing caches predate the stamp itself. Absence is the initial superseded generation, not a
      reason to preserve the entries that motivated this transition -- once a store comes. *)

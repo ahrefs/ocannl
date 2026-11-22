@@ -498,6 +498,15 @@ val entry_keys : dir:string -> string list
     what a test or a person inspecting a cache wants, since the filenames are digests. A missing
     directory, and a file that is not a readable entry of this format, contribute nothing. *)
 
+type regime_stamp = Unstamped | Stamped of int | Unreadable_stamp
+
+val entry_inventory : dir:string -> (regime_stamp * string list, string) Result.t
+(** Read the directory's regime stamp and its physical keys together under the cache's read lock.
+    Compare a [Stamped] version with {!cache_regime_version} to tell which key regime minted the
+    population. Key enumeration considers readable regular files, using {!entry_keys}'s best-effort
+    semantics even under a superseded, newer, missing or unreadable stamp. Payload compatibility is
+    checked by {!lookup}. Inventory is read-only and lock failures return [Error]. *)
+
 val store : dir:string -> key:string option -> entry -> unit
 (** Writes the entry, together with its key, to {!cache_file}[ ~dir ~key], creating [dir] (and
     parents) if missing. Publication goes through {!Utils.Atomic_file}, so concurrent writers
