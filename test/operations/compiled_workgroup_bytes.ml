@@ -90,6 +90,59 @@ let all_kernels : kernel list ref = ref []
 let all_outcomes : (string * outcome) list ref = ref []
 let probe_kernels : kernel list ref = ref []
 let probe_outcomes : (string * outcome) list ref = ref []
+let two_tier_kernels : kernel list ref = ref []
+let two_tier_outcomes : (string * outcome) list ref = ref []
+let one_line msg = String.prefix (String.tr ~target:'\n' ~replacement:' ' msg) 300
+
+let kernels_of ~capabilities ~no_scratch records segments =
+  if List.length records <> List.length segments then
+    Unpaired
+      (Printf.sprintf "%d compiled figures for %d segments" (List.length records)
+         (List.length segments))
+  else
+    let granule = capabilities.Ir.Backend_intf.workgroup_reporting_granule in
+    Compiled
+      (List.map2_exn records segments ~f:(fun r seg ->
+           let charged = Sched.workgroup_memory_bytes ~capabilities seg in
+           {
+             name = r.Ir.Compiled_kernels.kernel;
+             compiled = r.static_workgroup_bytes;
+             charged;
+             reported_bound = round_up ~granule charged;
+             mma_scratch = charged - Sched.workgroup_memory_bytes ~capabilities:no_scratch seg;
+           }))
+
+let compile_and_measure ~capabilities ~no_scratch ~candidate ~lowered_transform ctx fwd =
+  match
+    Ir.Compiled_kernels.with_census (fun () ->
+        Context.compile_outcome ~provenance:Ir.Schedule_outcome.Candidate ~candidate
+          ~lowered_transform ctx fwd Ir.Indexing.Empty)
+  with
+  | Ok (cctx, routine), records ->
+      let outcome = kernels_of ~capabilities ~no_scratch records routine.Context.segments in
+      (* Each candidate's working pools go back before the next links. *)
+      Context.release cctx;
+      outcome
+  | Error (Ir.Schedule_outcome.Classified c), _ ->
+      Refused (Ir.Schedule_outcome.detail_of_cause c.cause)
+  | Error (Ir.Schedule_outcome.Fatal f), _ -> Crashed (Exn.to_string f.exn)
+  | exception exn -> Crashed (Exn.to_string exn)
+
+let report ~granule ~tag ~label outcome =
+  match outcome with
+  | Compiled ks ->
+      List.iter ks ~f:(fun k ->
+          Stdio.eprintf
+            "%s: %s kernel %s: compiled %d, charged %d, bound %d (granule %d)%s (not part of the \
+             golden)\n\
+             %!"
+            tag label k.name k.compiled k.charged k.reported_bound granule
+            (if k.compiled > k.reported_bound then " UNDER-CHARGED" else ""))
+  | Unpaired msg -> Stdio.eprintf "%s: %s UNPAIRED: %s (not part of the golden)\n%!" tag label msg
+  | Refused msg ->
+      Stdio.eprintf "%s: %s refused: %s (not part of the golden)\n%!" tag label (one_line msg)
+  | Crashed msg ->
+      Stdio.eprintf "%s: %s CRASHED: %s (not part of the golden)\n%!" tag label (one_line msg)
 
 let fixture ?(materialize = true) ?(fp16_wide = false) ?scratch_triple tag build =
   let saved = Ir.Numerics.get () in
@@ -104,6 +157,7 @@ let fixture ?(materialize = true) ?(fp16_wide = false) ?scratch_triple tag build
       let ctx = Context.auto () in
       let limits = Context.hardware_limits ctx in
       let capabilities = Context.codegen_capabilities ctx in
+      let granule = capabilities.Ir.Backend_intf.workgroup_reporting_granule in
       let capture = ref None in
       let base_ctx, _routine =
         Context.compile
@@ -121,62 +175,15 @@ let fixture ?(materialize = true) ?(fp16_wide = false) ?scratch_triple tag build
         Autotune.search_seeding ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices:[] opt
       in
       let seeds = seeding.Autotune.ss_whole in
-      let one_line msg = String.prefix (String.tr ~target:'\n' ~replacement:' ' msg) 300 in
       let run q =
         let label = Autotune.sketch_params_label q in
         let outcome =
-          match
-            Ir.Compiled_kernels.with_census (fun () ->
-                Context.compile_outcome ~provenance:Ir.Schedule_outcome.Candidate ~candidate:label
-                  ~lowered_transform:(fun o ->
-                    [ Sched.apply_classified (Autotune.sketch_schedule ~accum_prec ~p:q o) o ])
-                  (Context.auto ()) fwd Ir.Indexing.Empty)
-          with
-          | Ok (cctx, routine), records ->
-              let segments = routine.Context.segments in
-              let outcome =
-                if List.length records <> List.length segments then
-                  Unpaired
-                    (Printf.sprintf "%d compiled figures for %d segments" (List.length records)
-                       (List.length segments))
-                else
-                  Compiled
-                    (List.map2_exn records segments ~f:(fun r seg ->
-                         let charged = Sched.workgroup_memory_bytes ~capabilities seg in
-                         let granule = capabilities.Ir.Backend_intf.workgroup_reporting_granule in
-                         {
-                           name = r.Ir.Compiled_kernels.kernel;
-                           compiled = r.static_workgroup_bytes;
-                           charged;
-                           reported_bound = round_up ~granule charged;
-                           mma_scratch =
-                             charged - Sched.workgroup_memory_bytes ~capabilities:no_scratch seg;
-                         }))
-              in
-              (* Each candidate's working pools go back before the next links. *)
-              Context.release cctx;
-              outcome
-          | Error (Ir.Schedule_outcome.Classified c), _ ->
-              Refused (Ir.Schedule_outcome.detail_of_cause c.cause)
-          | Error (Ir.Schedule_outcome.Fatal f), _ -> Crashed (Exn.to_string f.exn)
-          | exception exn -> Crashed (Exn.to_string exn)
+          compile_and_measure ~capabilities ~no_scratch ~candidate:label
+            ~lowered_transform:(fun o ->
+              [ Sched.apply_classified (Autotune.sketch_schedule ~accum_prec ~p:q o) o ])
+            (Context.auto ()) fwd
         in
-        (match outcome with
-        | Compiled ks ->
-            List.iter ks ~f:(fun k ->
-                Stdio.eprintf
-                  "%s: %s kernel %s: compiled %d, charged %d, bound %d (granule %d)%s (not part of \
-                   the golden)\n\
-                   %!"
-                  tag label k.name k.compiled k.charged k.reported_bound
-                  capabilities.Ir.Backend_intf.workgroup_reporting_granule
-                  (if k.compiled > k.reported_bound then " UNDER-CHARGED" else ""))
-        | Unpaired msg ->
-            Stdio.eprintf "%s: %s UNPAIRED: %s (not part of the golden)\n%!" tag label msg
-        | Refused msg ->
-            Stdio.eprintf "%s: %s refused: %s (not part of the golden)\n%!" tag label (one_line msg)
-        | Crashed msg ->
-            Stdio.eprintf "%s: %s CRASHED: %s (not part of the golden)\n%!" tag label (one_line msg));
+        report ~granule ~tag ~label outcome;
         (label, outcome)
       in
       let outcomes = if is_gpu then List.map seeds ~f:run else [] in
@@ -288,14 +295,10 @@ let conv ~hw ~ic ~oc tag () =
   let%op y = z + bias in
   (z, y)
 
-(* A single-array 37 B [byte] staged kernel (no MMA, no second array to inter-array-align):
-   exercises an odd byte count on every GPU backend so granule 1 vs 2 is caught directly on CUDA and
-   HIP (37 vs 38 B), while Metal charges ceil4(37) = 40 B and reports ceil16(40) = 48 B (16 mod 32,
-   catching both finer and coarser granules). *)
-let run_byte_odd_probe () =
+(* A staged [byte] outer-sum probe (no MMA needed): stages [u] of length [bi] in workgroup-shared
+   memory and, when [stage_v] is true, [v] of length [cols] beside it. *)
+let run_byte_probe ~stage_v ~tag ~bi ~cols =
   Tensor.unsafe_reinitialize ();
-  let tag = "cwb_byte_odd_37" in
-  let bi = 37 and cols = 16 in
   let u =
     NTDSL.init ~l:(tag ^ "_u") ~prec:Ir.Ops.byte
       ~o:[ 2 * bi ]
@@ -313,7 +316,7 @@ let run_byte_odd_probe () =
   let capabilities = Context.codegen_capabilities ctx in
   let granule = capabilities.Ir.Backend_intf.workgroup_reporting_granule in
   let lowered_transform (opt : Ir.Low_level.optimized) =
-    let i, _j =
+    let i, j =
       match List.find_exn (Ll_test.nest_paths opt.llc) ~f:(fun p -> List.length p = 2) with
       | [ i; j ] -> (i, j)
       | _ -> assert false
@@ -321,11 +324,11 @@ let run_byte_odd_probe () =
     let sp_i, _, i_i =
       Sched.split ~axis:i ~factor:bi ~outer:Ir.Low_level.Grid ~inner:Ir.Low_level.Workgroup
     in
-    let stage_u =
+    let stage source tile_loops =
       Sched.Stage
         {
-          source = u.Tensor.value;
-          tile_loops = [ i_i ];
+          source;
+          tile_loops;
           shared = true;
           cooperative = None;
           hoisted = false;
@@ -335,54 +338,26 @@ let run_byte_odd_probe () =
           tile_prec = None;
         }
     in
-    [ Sched.apply [ sp_i; stage_u ] opt ]
+    let ops =
+      sp_i :: stage u.Tensor.value [ i_i ]
+      :: (if stage_v then [ stage v.Tensor.value [ j ] ] else [])
+    in
+    [ Sched.apply ops opt ]
   in
   let outcome =
-    match
-      Ir.Compiled_kernels.with_census (fun () ->
-          Context.compile_outcome ~provenance:Ir.Schedule_outcome.Candidate ~candidate:tag
-            ~lowered_transform ctx fwd Ir.Indexing.Empty)
-    with
-    | Ok (cctx, routine), records ->
-        let segments = routine.Context.segments in
-        let outcome =
-          if List.length records <> List.length segments then
-            Unpaired
-              (Printf.sprintf "%d compiled figures for %d segments" (List.length records)
-                 (List.length segments))
-          else
-            Compiled
-              (List.map2_exn records segments ~f:(fun r seg ->
-                   let charged = Sched.workgroup_memory_bytes ~capabilities seg in
-                   {
-                     name = r.Ir.Compiled_kernels.kernel;
-                     compiled = r.static_workgroup_bytes;
-                     charged;
-                     reported_bound = round_up ~granule charged;
-                     mma_scratch = 0;
-                   }))
-        in
-        Context.release cctx;
-        outcome
-    | Error (Ir.Schedule_outcome.Classified c), _ ->
-        Refused (Ir.Schedule_outcome.detail_of_cause c.cause)
-    | Error (Ir.Schedule_outcome.Fatal f), _ -> Crashed (Exn.to_string f.exn)
-    | exception exn -> Crashed (Exn.to_string exn)
+    compile_and_measure ~capabilities ~no_scratch:capabilities ~candidate:tag ~lowered_transform ctx
+      fwd
   in
-  (match outcome with
-  | Compiled ks ->
-      List.iter ks ~f:(fun k ->
-          Stdio.eprintf
-            "byte_odd_37: kernel %s: compiled %d, charged %d, bound %d (granule %d)%s (not part of \
-             the golden)\n\
-             %!"
-            k.name k.compiled k.charged k.reported_bound granule
-            (if k.compiled > k.reported_bound then " UNDER-CHARGED" else ""))
-  | Unpaired msg -> Stdio.eprintf "byte_odd_37: UNPAIRED: %s (not part of the golden)\n%!" msg
-  | Refused msg -> Stdio.eprintf "byte_odd_37: refused: %s (not part of the golden)\n%!" msg
-  | Crashed msg -> Stdio.eprintf "byte_odd_37: CRASHED: %s (not part of the golden)\n%!" msg);
-  probe_outcomes := [ (tag, outcome) ];
-  probe_kernels := match outcome with Compiled ks -> ks | _ -> []
+  report ~granule ~tag ~label:tag outcome;
+  ((tag, outcome), match outcome with Compiled ks -> ks | _ -> [])
+
+let two_tier_rounding =
+  let caps = Context.codegen_capabilities (Context.auto ()) in
+  is_gpu
+  && caps.Ir.Backend_intf.workgroup_allocation_alignment = 4
+  && caps.Ir.Backend_intf.workgroup_reporting_granule = 16
+
+let two_tier_leg = Verdict.leg ~when_:two_tier_rounding ~on:backend_name ()
 
 let () =
   fixture "dense" (gemm ~m:32 ~k:64 ~n:64 "cwb_dense");
@@ -408,13 +383,28 @@ let () =
     (gemm ~prec:Ir.Ops.half ~out_prec:Ir.Ops.half ~m:32 ~k:32 ~n:32 "cwb_half_out");
   fixture "contraction" (out_proj ~bb:2 ~ss:32 ~jj:64 ~hh:4 ~ee:16 "cwb_contraction");
   fixture "conv" (conv ~hw:10 ~ic:4 ~oc:8 "cwb_conv");
-  if is_gpu then run_byte_odd_probe ()
+  (* Single-array 37 B [byte] probe: no MMA needed and no second array to inter-array-align; catches
+     granule 1 vs 2 directly on CUDA and HIP (37 vs 38 B), while Metal charges 40 B and reports 48 B
+     (16 mod 32). *)
+  if is_gpu then (
+    let out, ks = run_byte_probe ~stage_v:false ~tag:"cwb_byte_odd_37" ~bi:37 ~cols:16 in
+    probe_outcomes := [ out ];
+    probe_kernels := ks);
+  (* Two-array odd-byte probes where allocation alignment (4 B) and reporting granule (16 B) differ
+     (Metal): 17+15 B (exact 32, 4 B-charged 36 -> 48, ruling out 16 B of exact bytes = 32) and
+     17+17 B (exact 34, 4 B-charged 40 -> 48, ruling out 16 B per array = 64). *)
+  if two_tier_rounding then (
+    let o1, k1 = run_byte_probe ~stage_v:true ~tag:"cwb_byte_pair_17_15" ~bi:17 ~cols:15 in
+    let o2, k2 = run_byte_probe ~stage_v:true ~tag:"cwb_byte_pair_17_17" ~bi:17 ~cols:17 in
+    two_tier_outcomes := [ o1; o2 ];
+    two_tier_kernels := k1 @ k2)
 
 let () =
-  let outcomes = !all_outcomes @ !probe_outcomes
-  and kernels = !all_kernels @ !probe_kernels
+  let outcomes = !all_outcomes @ !probe_outcomes @ !two_tier_outcomes
+  and kernels = !all_kernels @ !probe_kernels @ !two_tier_kernels
   and seeded_kernels = !all_kernels
-  and probe = !probe_kernels in
+  and probe = !probe_kernels
+  and two_tier = !two_tier_kernels in
   let limits = Context.hardware_limits (Context.auto ()) in
   let f16_mma_when, f16_mma_agg =
     match
@@ -440,6 +430,10 @@ let () =
     (fun label ->
       p_all ~min:1 label probe ~f:(fun k ->
           k.charged % 16 <> 0 && k.compiled = k.reported_bound && k.reported_bound % 32 <> 0));
+  in_leg ~leg:two_tier_leg
+    "two-array odd-byte probes distinguish 16 B kernel-total rounding over 4 B-aligned arrays from \
+     exact-sum and per-array rounding" (fun label ->
+      p_all ~min:2 label two_tier ~f:(fun k -> k.compiled = k.reported_bound && k.compiled = 48));
   gated_exists ?aggregation:f16_mma_agg ~when_:f16_mma_when ~on:backend_name
     "some unaligned seeded kernel allocates exactly its granule-rounded bound, not a coarser \
      multiple"

@@ -710,12 +710,17 @@ files.
   byte-identical on both) report to 1 B (4474, 4294 and 4402 B on the same f16 fused products).
   On HIP, the two-array probes also showed LLVM AMDGPU aligning each `__shared__` array's start to
   16 B without rounding the trailing array (17+15 B -> 47, 17+17 B -> 49, 33+33 B -> 81 B), which
-  seeded kernels avoid because at most one array (the fused whole product) is unaligned beside
-  16 B-aligned tiles. Non-vacuity claims require an aligned kernel matching its positive charge
-  exactly (`charged % 16 = 0`), a single-array 37 B `byte` staged probe hitting its granule-rounded
-  bound (48 B on Metal, 37 B on CUDA and HIP — distinguishing 1 B from 2 B without requiring MMA),
-  and (where f16 tensorization is advertised) an unaligned seeded kernel (`half_local_odd` 9x21,
-  `half_local_9x11` 9x11) hitting its granule-rounded bound below a 32 B multiple. With one unaligned array on Metal the 16 B reporting
+  exceeds `workgroup_allocation_alignment = 1` when an unaligned array precedes another array (tracked
+  as a deferred follow-up from gh-ocannl-2426; in the `half_local_odd` and `half_local_9x11`
+  fixtures the unaligned product incurred no inter-array padding beside the 4096 B of aligned tiles,
+  which shows it sat last in those fixtures, not that seeding enforces that order). Non-vacuity
+  claims require an aligned kernel matching its positive charge exactly (`charged % 16 = 0`), a
+  single-array 37 B `byte` staged probe hitting its granule-rounded bound (48 B on Metal, 37 B on
+  CUDA and HIP — distinguishing 1 B from 2 B without requiring MMA), two-array odd-byte probes
+  (17+15 B and 17+17 B, both reporting 48 B on Metal) where allocation alignment and reporting
+  granule differ, and (where f16 tensorization is advertised) an unaligned seeded kernel
+  (`half_local_odd` 9x21, `half_local_9x11` 9x11) hitting its granule-rounded bound below a 32 B
+  multiple. With one unaligned array on Metal the 16 B reporting
   granule still absorbs the 4 B per-array term, so `metal_threadgroup_overflow` owns that term.
   The negative controls that `compiled_workgroup_bytes` catches: dropping the arrays term, or
   (under `Fp16_wide`, the `half_out` fixture) the tile-MMA term, of `Schedule.kernel_workgroup_bytes`.

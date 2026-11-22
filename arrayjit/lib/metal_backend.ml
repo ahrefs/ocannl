@@ -895,10 +895,11 @@ module Impl = struct
 
     (* gh-ocannl-2426: Metal's [staticThreadgroupMemoryLength] rounds the kernel's 4 B-rounded total
        up to 16 B, distinct from pipeline creation's 4 B per-array request above. Measured on
-       mac-studio (M4 Max, run 20261122T165750Z-3778): the 9x21, 9x11 and 9x17 f16 fused products
+       mac-studio (M4 Max, run 20261122T165750Z-3778) and pinned in
+       [test/operations/compiled_workgroup_bytes.ml]: the 9x21, 9x11 and 9x17 f16 fused products
        (charged 4476, 4296, 4404 B) reported 4480, 4304 and 4416 B (4304 % 32 = 16, ruling out a
        coarser granule); two-array probes of 17+15 B (exact 32, 4 B-charged 36) and 17+17 B (exact
-       34, 4 B-charged 40) both reported 48 B, distinguishing a 16 B kernel-total rounding of the 4
+       34, 4 B-charged 40) both report 48 B, distinguishing a 16 B kernel-total rounding of the 4
        B-rounded sum from both 16 B per-array rounding (64 B) and 16 B rounding of the exact sum (32
        B). *)
     let workgroup_reporting_granule = 16
