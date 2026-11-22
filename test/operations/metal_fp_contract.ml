@@ -4,17 +4,19 @@
    MTLCompileOptions exposes no contraction switch, so under the default [metal_fp_contract=auto]
    Metal's MathMode.Safe permits contracting a single-expression [(a * b) + c] into a fused
    multiply-add. Under [metal_fp_contract=off] (pinned by [profile=reproducible]), the kernel header
-   emits [#pragma STDC FP_CONTRACT OFF]:
+   emits [#pragma STDC FP_CONTRACT OFF].
 
-   - [compiler_contraction_off] flips from [false] to [true]; - the emitted [.metal] header omits
-   the pragma under [auto] and carries it under [off]; - compiling the same-named probe kernel twice
-   under [auto] hits the process-local kernel code cache, and flipping to [off] under the same name
-   misses the cache and compiles afresh; - under [auto], [(a * b) + c] returns a legal rounding
-   ([2^-24] fused or [+0.0] unfused; the observed values and chain difference are reported to stderr
-   as in [tools/metal_contract_probe.swift]), while under [off] [(a * b) + c] returns [+0.0] (two
-   roundings, bitwise) and an explicit [Ir.Ops.FMA (a, b, c)] still returns [2^-24] (fused); - an
-   FMA-sensitive 37-term multiply-add chain over 16 rows computes the exact host two-rounding f32
-   chain bitwise under [off]. *)
+   This test verifies that [compiler_contraction_off] flips from [false] to [true], that the emitted
+   [.metal] header omits the pragma under [auto] and carries it under [off], and that recompiling
+   the same-named probe kernel twice under [auto] hits the process-local kernel code cache while
+   flipping to [off] under the same name misses the cache and compiles afresh.
+
+   For executed values, [(a * b) + c] under [auto] accepts either legal rounding ([2^-24] fused or
+   [+0.0] unfused, with the observed values and chain difference reported to stderr as in
+   [tools/metal_contract_probe.swift]), while under [off] [(a * b) + c] must round twice to [+0.0]
+   bitwise, an explicit [Ir.Ops.FMA (a, b, c)] must still return the fused [2^-24] bitwise, and an
+   FMA-sensitive 37-term multiply-add chain over 16 rows must match the exact host two-rounding f32
+   chain bitwise. *)
 
 (* cc-fp-contract: not-cc -- every device claim sits in the Metal leg; cc skips them all *)
 
