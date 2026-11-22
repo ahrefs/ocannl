@@ -2012,29 +2012,6 @@ ARRAYJIT_BUILTIN_LINKAGE uint64_t uint4x32_to_uint64_uniform_lane(uint4x32_t x, 
 }
 |},
       [ "uint4x32_t"; "uint4x32_to_uint64_uniform_vec" ] );
-    (* gh-ocannl-1867: the lane operand of a [_uniform_lane] call under [debug_check_lane_bounds]
-       ([Cc_backend]'s [binop_syntax] wraps it; the kernel text is unchanged without the key). The
-       extractors above index the converted block unchecked, and the lane count belongs to the
-       precision the call RENDERS at, so a lane index sized for another precision reads past the
-       block: gh-ocannl-1769's half draw (8 lanes) rendered at single (4) gave zeros and 1.4e27 on
-       x86/gcc and other, finite garbage on arm64/clang. In the [OCANNL_] namespace, which keeps it
-       out of the host stubs' shared header: it needs [stdio.h]. *)
-    ( "OCANNL_CHECKED_LANE",
-      {|
-/* LANE, when it names one of the LANES lanes of a PREC uniform block; otherwise the process aborts
-   (gh-ocannl-1867, config debug_check_lane_bounds). */
-ARRAYJIT_BUILTIN_LINKAGE int32_t OCANNL_CHECKED_LANE(int64_t lane, int32_t lanes, const char *prec) {
-    if (lane < 0 || lane >= lanes) {
-        fprintf(stderr,
-                "ocannl debug_check_lane_bounds: lane %lld is outside the %d lanes of a %s uniform block\n",
-                (long long)lane, (int)lanes, prec);
-        fflush(stderr);
-        abort();
-    }
-    return (int32_t)lane;
-}
-|},
-      [] );
     (* gh-ocannl-1660: the final step of cc's branchless value select ([Cc_backend]'s
        [select_blend_syntax]), applied to the select's truth expression and the two arm locals. gcc
        at x86 keeps a conditional branch for a [?:] even over two values: a float EQUALITY test
@@ -2102,9 +2079,59 @@ ARRAYJIT_BUILTIN_LINKAGE int32_t OCANNL_CHECKED_LANE(int64_t lane, int32_t lanes
       [] );
   ]
 
-let builtins =
-  integer_bfloat16_builtins ~dialect:`C
-  @ integer_power_builtins ~prefix:"static inline" ~supports_double:true ~dialect:`C
-  @ builtins
+let lane_precision_id, builtins =
+  (* The checked argument and the diagnostic table use the same ordinals. The lane extractors own
+     the supported names. *)
+  let prefix = "uint4x32_to_" and suffix = "_uniform_lane" in
+  let lane_precisions =
+    List.filter_map
+      (fun (key, _, _) ->
+        if String.starts_with ~prefix key && String.ends_with ~suffix key then
+          let start = String.length prefix in
+          Some (String.sub key start (String.length key - start - String.length suffix))
+        else None)
+      builtins
+  in
+  let lane_precision_id name =
+    let rec find id = function
+      | [] -> invalid_arg ("no lane precision for " ^ name)
+      | p :: rest -> if String.equal p name then id else find (id + 1) rest
+    in
+    find 0 lane_precisions
+  in
+  let checked_lane =
+    (* gh-ocannl-1867: the lane operand of a [_uniform_lane] call under [debug_check_lane_bounds]
+       ([Cc_backend]'s [binop_syntax] wraps it; the kernel text is unchanged without the key). The
+       extractors above index the converted block unchecked, and the lane count belongs to the
+       precision the call RENDERS at, so a lane index sized for another precision reads past the
+       block: gh-ocannl-1769's half draw (8 lanes) rendered at single (4) gave zeros and 1.4e27 on
+       x86/gcc and other, finite garbage on arm64/clang. In the [OCANNL_] namespace, which keeps it
+       out of the host stubs' shared header: it needs [stdio.h]. *)
+    ( "OCANNL_CHECKED_LANE",
+      Printf.sprintf
+        {|
+/* LANE, when it names one of the LANES lanes of a PREC uniform block; otherwise the process aborts
+   (gh-ocannl-1867, config debug_check_lane_bounds). */
+ARRAYJIT_BUILTIN_LINKAGE int32_t OCANNL_CHECKED_LANE(int64_t lane, int32_t lanes, int32_t prec) {
+    if (lane < 0 || lane >= lanes) {
+        static const char *const names[] = { %s };
+        const char *name = prec >= 0 && (size_t)prec < sizeof names / sizeof *names
+                           ? names[prec] : "unknown";
+        fprintf(stderr,
+                "ocannl debug_check_lane_bounds: lane %%lld is outside the %%d lanes of a %%s uniform block\n",
+                (long long)lane, (int)lanes, name);
+        fflush(stderr);
+        abort();
+    }
+    return (int32_t)lane;
+}
+|}
+        (String.concat ", " (List.map (Printf.sprintf "%S") lane_precisions)),
+      [] )
+  in
+  ( lane_precision_id,
+    integer_bfloat16_builtins ~dialect:`C
+    @ integer_power_builtins ~prefix:"static inline" ~supports_double:true ~dialect:`C
+    @ builtins @ [ checked_lane ] )
 
 let source = includes ^ String.concat "" (List.map (fun (_, def, _) -> def) builtins)

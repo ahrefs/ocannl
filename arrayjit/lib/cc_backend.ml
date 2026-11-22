@@ -995,7 +995,7 @@ let codegen_tag () =
       "part-weight=" ^ Int.to_string (part_weight_setting ());
     ]
     (* gh-ocannl-1867: only when on, so the default regime's keys are the ones it had. *)
-    @ (if check_lane_bounds_setting () then [ "lane-bounds-check" ] else [])
+    @ (if check_lane_bounds_setting () then [ "lane-bounds-check-v2" ] else [])
     (* The pool-parallel Grid rendering, and only when there IS one: with the grid syntax resolved
        to [`None], [C_syntax.collect_parallel_grid] returns before the chunk count or the
        privatization cap can reach the emitted code, so hashing them would retune identical serial
@@ -1879,10 +1879,10 @@ struct
           match (op, prec) with
           | Ops.Uint4x32_to_prec_uniform_lane, (Ops.Uint4x32_prec _ | Ops.Void_prec) -> v2
           | Ops.Uint4x32_to_prec_uniform_lane, _ when check_lane_bounds ->
+              let prec_id = Builtins_cc.lane_precision_id (Ops.prec_string prec) in
               let open PPrint in
               string "OCANNL_CHECKED_LANE(" ^^ v2
-              ^^ string
-                   (Printf.sprintf ", %d, \"%s\")" (Ops.vec_unop_lanes prec) (Ops.prec_string prec))
+              ^^ string (Printf.sprintf ", %d, %d)" (Ops.vec_unop_lanes prec) prec_id)
           | _ -> v2
         in
         C_syntax.rng_binop_syntax ~backend:"CC" ~call prec op v1 v2
