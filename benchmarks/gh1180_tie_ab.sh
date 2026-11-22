@@ -32,10 +32,11 @@
 # found it clean (exit 0 and a clean treatment), its header
 # names the requested geometry, and every packed line's census reads Mma_register_tiled with no
 # scalar fallback; any other cell fails the run and the summary marks it. Serial (packmma) and
-# pool-parallel (packmma_par) are kept apart. A control spread at least as large as the absolute
-# median B/A effect leaves the geometry result inconclusive. Spread is the largest absolute
-# deviation from 1 across the control/A ratios. Flag every arm with cells below 100 us per routine
-# run, using the recorded seconds per run, and leave short parallel rows inconclusive.
+# pool-parallel (packmma_par) are kept apart. The drift check compares the largest absolute
+# deviation of control/A from 1 against the absolute median B/A effect, allowing for roundoff.
+# Geometry readings also require the paired ratios to point in one direction. Flag every arm with
+# cells below 100 us per routine run. The grid census distinguishes short pool timings and serial
+# rendering under the parallel label. Both leave a parallel comparison inconclusive.
 # Each variant is read for modes as bin_cells.py's own report reads it (bin_cells.mode_rows,
 # cells.MODE_RULE; gh-ocannl-2308): a variant with a bimodal arm keeps its pooled row, marked
 # "pooled over modes", and the Modes section gives its arms' groups and within-mode ratios.
@@ -49,7 +50,7 @@ HERE=$(cd "$(dirname "$0")" && pwd -P)
 
 summary() { # OUT
   python3 - "$1" "$HERE" <<'EOF'
-import os, re, sys
+import math, os, re, sys
 out = sys.argv[1]
 sys.path.insert(0, sys.argv[2])  # benchmarks/, for the shared runner and the table builders
 import bench_output, bin_cells, cells
@@ -89,7 +90,7 @@ for c in (m.group(1).split() if m else []):
     # kernel compiler), judged by the runner's own rule rather than restated here.
     bad += [f'{display_value(name)}: ' + display_value(p)
             for p in cells.run_level_problems(manifest, records)]
-    by, clean = {}, {}
+    by, clean, pool = {}, {}, {}
     for r in records:
         cell = f'{display_value(name)} cell {r["cell"]} ({display_value(r["arm"])})'
         if not r['ok']:
@@ -113,14 +114,17 @@ for c in (m.group(1).split() if m else []):
         # a last-bracket match here read the grid census in its place (gh-ocannl-1668 appended it),
         # and every real cell failed the census check below.
         try:
-            packed = {t['variant']: t['mma'] for t in bench_output.timing_lines(text)
+            packed = {t['variant']: t for t in bench_output.timing_lines(text)
                       if t['variant'] in kinds}
+            if 'packmma_par' in packed:
+                pool[r['round'], r['arm']] = bench_output.grid_uses_pool(packed['packmma_par']['grid'])
         except ValueError as e:
             bad.append(f'{cell}: ' + display_value(str(e)))
             continue
         if set(packed) != kinds.keys():
             bad.append(f'{cell}: packed lines missing ({sorted(packed)})')
-        for variant, census in packed.items():
+        for variant, timing in packed.items():
+            census = timing['mma']
             if 'Mma_register_tiled' not in census or 'fallback' in census.lower():
                 bad.append(f'{cell}: {variant} census [{display_value(census)}]')
         results = {v: seconds for v, seconds, _, _ in r['results'] if v in kinds}
@@ -139,6 +143,7 @@ for c in (m.group(1).split() if m else []):
     for split, paired in modes.values():
         mode_split += [(*pair, *r) for r in split]
         mode_paired += [(*pair, *r) for r in paired]
+    case_usable = case_bad == len(bad) and case_refusal_count == len(refused)
     for kind in kinds.values():
         times = {arm: by.get((kind, arm), {}) for arm in arms}
         stats = cells.paired(times[a], times[b])
@@ -149,13 +154,18 @@ for c in (m.group(1).split() if m else []):
             if nshort:
                 short.append(f'{arm} {nshort}/{len(samples)}')
         reasons = []
-        if case_bad != len(bad) or case_refusal_count != len(refused):
+        if not case_usable:
             reasons.append('invalid or refused cells')
         if kind in modes:
             reasons.append('modes')
-        if kind == 'parallel' and short:
-            reasons.append('short parallel timings')
+        if kind == 'parallel':
+            if any(not used for used in pool.values()):
+                reasons.append('serial rendering in parallel cells')
+            if any(pool.get((rnd, arm)) and t < SHORT_SECONDS
+                   for arm, samples in times.items() for rnd, t in samples.items()):
+                reasons.append('short pool timings')
         spread_cell = '-'
+        drift = '-'
         if not controlled:
             reasons.append('no control')
         elif not cells.design_balance(len(arms), orders)[1]:
@@ -163,20 +173,34 @@ for c in (m.group(1).split() if m else []):
         if aa['median'] is not None:
             spread = max(abs(aa['lo'] - 1), abs(aa['hi'] - 1))
             spread_cell = f'{spread:.2%}'
-            if stats['median'] is not None and spread >= abs(stats['median'] - 1):
-                reasons.append('control spread')
-        reading = f'inconclusive ({", ".join(reasons)})' if reasons else 'control clears effect'
+            if stats['median'] is not None and case_usable:
+                effect = abs(stats['median'] - 1)
+                # Division and the signed subtraction around 1 can round equal deviations
+                # differently, e.g. 1 - 0.9 versus 1.1 - 1.
+                if spread >= effect or math.isclose(spread, effect, rel_tol=0, abs_tol=math.ulp(1.0)):
+                    drift = 'spread meets effect'
+                    reasons.append('control spread')
+                else:
+                    drift = 'clears effect'
+        if stats['lo'] is not None and stats['lo'] <= 1 <= stats['hi']:
+            reasons.append('paired range includes 1')
+        if reasons:
+            reading = f'inconclusive ({", ".join(reasons)})'
+        else:
+            reading = 'A faster' if stats['median'] > 1 else 'B faster'
         rows.append((label, f'{kind} (pooled over modes)' if kind in modes else kind, a, b,
-                     *cells.paired_cells(stats), cells.paired_cells(aa)[2], spread_cell,
+                     *cells.paired_cells(stats), cells.paired_cells(aa)[2], spread_cell, drift,
                      ', '.join(short) or '-', reading))
 text = '\n'.join(table_lines(['Case', 'Variant', 'A', 'B', *cells.PAIRED_HEADER,
-                              'Control/A range', 'Control spread', 'Short (<100 µs)', 'Reading'],
+                              'Control/A range', 'Control spread', 'Drift check', 'Short (<100 µs)',
+                              'Reading'],
                              rows)) + '\n'
 text += '\nratio = B time / A time per round; each case\'s full report is OUT/<case>/report.md\n'
 text += ('Control repeats A. Spread is the largest deviation of control/A from 1. '
          'A geometry reading requires spread below the absolute median B/A effect, '
-         'balanced positions and no detected modes. Short counts use seconds per routine run. '
-         'Short parallel timings can be dominated by pool dispatch.\n')
+         'balanced positions, no detected modes and a paired B/A range that excludes 1. '
+         'Short counts use seconds per routine run. Short pool timings can be dominated by '
+         'dispatch.\n')
 if mode_split:
     text += ('\nA variant "pooled over modes" has a bimodal arm: its row above mixes the modes, '
              'which the rows below read apart.\n\n## Modes\n\n' + cells.MODE_RULE + '\n\n')

@@ -343,6 +343,19 @@ def timing_lines(text, layouts=(TIMING_CENSUSES,)):
     return [t for t in (timing_line(line, layouts) for line in text.splitlines()) if t is not None]
 
 
+_GRID_COUNT = re.compile(r"grid: ([0-9]+) of ([1-9][0-9]*) on the pool(?:; .+)?")
+
+
+def grid_uses_pool(census):
+    """Whether a timing line's grid census records any pool rendering."""
+    if census in ("grid: no Grid loop", "grid: no pool-parallel rendering"):
+        return False
+    match = _GRID_COUNT.fullmatch(census)
+    if match is None or int(match[1]) > int(match[2]):
+        raise ValueError(f"unrecognized grid census: {census}")
+    return int(match[1]) > 0
+
+
 GEBP_HEADER_PREFIX = "GEBP "
 
 

@@ -1085,8 +1085,9 @@ files.
   every round (gh-ocannl-1261). Use a multiple of six rounds to balance positions. The largest
   absolute deviation of control/A from 1 must be below the absolute median B/A effect. In the
   exclusive mac-studio M4 Max replay the control cleared this bar for five of fourteen serial
-  sites. All controlled parallel samples took under 100 µs per routine run. The threshold
-  applies to the reported per-run average because each repeat pays dispatch again. A four-site
+  sites. Four also had a paired range excluding 1. Seven of the fourteen `packmma_par` sites
+  rendered on the pool and all their samples took under 100 µs per routine run. The threshold
+  applies to the reported per-run average because each pool repeat pays dispatch again. A four-site
   `taskpolicy -a -l 0 -t 0` probe gave mixed results, so the driver uses the same scheduling
   policy for all arms and flags drift and modes in the report.
 - For gh-ocannl-1741, one-operand max pooling removed the zero add before each LeNet pool tap.
