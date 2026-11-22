@@ -124,6 +124,13 @@ let exemptions =
        fixture corpus is expanded with" );
   ]
 
+(* Refusal sink carrying the compile-time format string alongside the rendered message so synthetic
+   controls pin the originating refusal format itself, never text echoed in another refusal's
+   arguments. *)
+module type FAIL = sig
+  val fail : ('a, unit, string, unit) Stdlib.format4 -> 'a
+end
+
 (* Raised after [fail] has recorded a parse or schema refusal, to stop walking corrupt input. *)
 exception Abort
 
@@ -132,7 +139,8 @@ let abort () = raise Abort
 (* {1 Canonical s-expressions} -- dune's machine format: [<length>:<bytes>] atoms and parentheses,
    no escapes, so there is nothing to approximate. *)
 
-let parse_csexp ~fail text =
+let parse_csexp ~fail:(module F : FAIL) text =
+  let open F in
   let len = String.length text in
   let rec items pos acc =
     if pos >= len then (List.rev acc, pos)
@@ -164,7 +172,7 @@ let parse_csexp ~fail text =
           abort ());
         (Sexp.Atom (String.sub text ~pos:(colon + 1) ~len:n), colon + 1 + n)
     | c ->
-        fail (Printf.sprintf "csexp: unexpected byte %C at %d" c pos);
+        fail "csexp: unexpected byte %C at %d" c pos;
         abort ()
   in
   match items 0 [] with
@@ -192,7 +200,8 @@ let temp name = Stdlib.Filename.concat (Lazy.force temp_root) name
 
 (* [dune describe workspace] of the project rooted at [root], in a build directory of its own. The
    nested dune must not believe it is an action of the running one; its stderr is discarded. *)
-let run_describe ~fail ~dune ~root ~tag =
+let run_describe ~fail:(module F : FAIL) ~dune ~root ~tag =
+  let open F in
   let build_dir = temp ("ucd-" ^ tag ^ "-build") in
   let status, out, _ =
     Fresh_process.run ~exe:dune
@@ -214,7 +223,7 @@ let run_describe ~fail ~dune ~root ~tag =
   match status with
   | WEXITED 0 -> Some (out, build_dir)
   | _ ->
-      fail (Printf.sprintf "dune describe workspace of %s did not exit 0" tag);
+      fail "dune describe workspace of %s did not exit 0" tag;
       None
 
 (* The workspace description lists external libraries only where a library or executable it
@@ -237,7 +246,8 @@ let probe_stanzas names =
 
 let library_fields = [ "name"; "uid"; "local"; "requires"; "source_dir"; "modules"; "include_dirs" ]
 
-let read_library ~fail ~map_path fields =
+let read_library ~fail:(module F : FAIL) ~map_path fields =
+  let open F in
   let get name =
     List.find_map fields ~f:(function
       | Sexp.List [ Sexp.Atom f; v ] when String.equal f name -> Some v
@@ -246,14 +256,12 @@ let read_library ~fail ~map_path fields =
   List.iter fields ~f:(function
     | Sexp.List [ Sexp.Atom f; _ ] when List.mem library_fields f ~equal:String.equal -> ()
     | form ->
-        fail
-          (Printf.sprintf "describe: a library field outside the recognised forms: %s"
-             (Sexp.to_string form)));
+        fail "describe: a library field outside the recognised forms: %s" (Sexp.to_string form));
   let atom name =
     match get name with
     | Some (Sexp.Atom a) -> a
     | _ ->
-        fail (Printf.sprintf "describe: a library without an atom %s" name);
+        fail "describe: a library without an atom %s" name;
         abort ()
   in
   let atoms name =
@@ -262,10 +270,10 @@ let read_library ~fail ~map_path fields =
         List.map l ~f:(function
           | Sexp.Atom a -> a
           | _ ->
-              fail (Printf.sprintf "describe: a library's %s holds a list" name);
+              fail "describe: a library's %s holds a list" name;
               abort ())
     | _ ->
-        fail (Printf.sprintf "describe: a library without a %s list" name);
+        fail "describe: a library without a %s list" name;
         abort ()
   in
   {
@@ -278,29 +286,30 @@ let read_library ~fail ~map_path fields =
 
 (* The libraries of one description, local paths moved from the private build directory to the
    running build's. Malformed output or an unknown entry or field is refused through [fail]. *)
-let read_description ~fail ~workspace_root ~build_dir text =
+let read_description ~fail:sink ~workspace_root ~build_dir text =
+  let (module F : FAIL) = sink in
+  let open F in
   let prefix = build_dir ^ "/default/" in
   let map_path p =
     match String.chop_prefix p ~prefix with
     | Some rel -> workspace_root ^ "/" ^ rel
     | None ->
         if String.is_prefix p ~prefix:build_dir then (
-          fail (Printf.sprintf "describe: a path in a context other than default: %s" p);
+          fail "describe: a path in a context other than default: %s" p;
           abort ());
         p
   in
-  match parse_csexp ~fail text with
+  match parse_csexp ~fail:sink text with
   | None -> []
   | Some [ Sexp.List entries ] -> (
       try
         List.filter_map entries ~f:(function
           | Sexp.List [ Sexp.Atom "library"; Sexp.List fields ] ->
-              Some (read_library ~fail ~map_path fields)
+              Some (read_library ~fail:sink ~map_path fields)
           | Sexp.List (Sexp.Atom ("build_context" | "root" | "executables") :: _) -> None
           | form ->
-              fail
-                (Printf.sprintf "describe: an entry outside the recognised forms: %s"
-                   (String.prefix (Sexp.to_string form) 120));
+              fail "describe: an entry outside the recognised forms: %s"
+                (String.prefix (Sexp.to_string form) 120);
               None)
       with Abort -> [])
   | Some _ ->
@@ -332,13 +341,14 @@ type archive_info = { definitions : string list; interfaces : string list }
 
 let empty_archive = { definitions = []; interfaces = [] }
 
-let read_archive ~fail ~archive text =
+let read_archive ~fail:(module F : FAIL) ~archive text =
+  let open F in
   let lines = String.split_lines text in
   let definitions =
     List.filter_map lines ~f:(fun line -> String.chop_prefix line ~prefix:"Unit name: ")
   in
   if List.is_empty definitions || List.exists definitions ~f:String.is_empty then (
-    fail (Printf.sprintf "archive %s: no recognised unit definitions" archive);
+    fail "archive %s: no recognised unit definitions" archive;
     empty_archive)
   else
     let _, interfaces =
@@ -352,36 +362,39 @@ let read_archive ~fail ~archive text =
                       || String.for_all digest ~f:(String.mem "0123456789abcdef")) ->
                 (true, unit :: units)
             | _ ->
-                fail (Printf.sprintf "archive %s: malformed interface import" archive);
+                fail "archive %s: malformed interface import" archive;
                 (true, units))
           else (false, units))
     in
     { definitions; interfaces }
 
-let archive_units ~fail ?(stderr = Unix.stderr) ~objinfo archive =
+let archive_units ~fail:sink ?(stderr = Unix.stderr) ~objinfo archive =
+  let (module F : FAIL) = sink in
+  let open F in
   match capture ~stderr objinfo [ archive ] with
   | Error e ->
-      fail (Printf.sprintf "archive %s: could not inspect (%s)" archive e);
+      fail "archive %s: could not inspect (%s)" archive e;
       empty_archive
-  | Ok text -> read_archive ~fail ~archive text
+  | Ok text -> read_archive ~fail:sink ~archive text
 
-let shared_units ~fail ?(stderr = Unix.stderr) ~findlib ~objinfo l =
+let shared_units ~fail:sink ?(stderr = Unix.stderr) ~findlib ~objinfo l =
+  let (module F : FAIL) = sink in
+  let open F in
   if l.local then (
-    fail
-      (Printf.sprintf "shared include directory: cannot resolve local archives for %s" l.lib_name);
+    fail "shared include directory: cannot resolve local archives for %s" l.lib_name;
     empty_archive)
   else
     match
       capture ~stderr findlib [ "query"; "-predicates"; "byte"; "-format"; "%+a"; l.lib_name ]
     with
     | Error e ->
-        fail (Printf.sprintf "archive query for %s: %s" l.lib_name e);
+        fail "archive query for %s: %s" l.lib_name e;
         empty_archive
     | Ok text ->
         String.split_lines text
         |> List.filter ~f:(fun line -> not (String.is_empty line))
         |> List.fold ~init:empty_archive ~f:(fun acc path ->
-            let info = archive_units ~fail ~stderr ~objinfo path in
+            let info = archive_units ~fail:sink ~stderr ~objinfo path in
             {
               definitions = info.definitions @ acc.definitions;
               interfaces = info.interfaces @ acc.interfaces;
@@ -389,7 +402,8 @@ let shared_units ~fail ?(stderr = Unix.stderr) ~findlib ~objinfo l =
 
 (* Even the least-dependent importer may be a consumer of a co-located interface whose defining
    archive never imports it. *)
-let interface_owner ~fail ~depends_on ~possible_definers ~name unit candidates =
+let interface_owner ~fail:(module F : FAIL) ~depends_on ~possible_definers ~name unit candidates =
+  let open F in
   let candidates = List.dedup_and_sort candidates ~compare:String.compare in
   let minimal =
     List.filter candidates ~f:(fun uid ->
@@ -398,10 +412,9 @@ let interface_owner ~fail ~depends_on ~possible_definers ~name unit candidates =
                (not (String.equal uid other)) && depends_on uid other)))
   in
   let ambiguous candidates =
-    fail
-      (Printf.sprintf "interface-only unit %s: no unique archive owner among [%s]" unit
-         (String.concat ~sep:", "
-            (List.dedup_and_sort (List.map candidates ~f:name) ~compare:String.compare)));
+    fail "interface-only unit %s: no unique archive owner among [%s]" unit
+      (String.concat ~sep:", "
+         (List.dedup_and_sort (List.map candidates ~f:name) ~compare:String.compare));
     None
   in
   match minimal with
@@ -525,26 +538,27 @@ type stanza = {
 
 let declaring_heads = [ "library"; "executable"; "executables"; "test"; "tests" ]
 
-let rec collect_stanzas ~fail ~dir forms =
+let rec collect_stanzas ~fail:sink ~dir forms =
+  let (module F : FAIL) = sink in
+  let open F in
   List.concat_map forms ~f:(fun form ->
       match form with
       | Sexp.List (Sexp.Atom "subdir" :: Sexp.Atom sub :: body) ->
-          collect_stanzas ~fail ~dir:(Scan.in_subdir dir sub) body
+          collect_stanzas ~fail:sink ~dir:(Scan.in_subdir dir sub) body
       | Sexp.List (Sexp.Atom head :: _) when List.mem declaring_heads head ~equal:String.equal -> (
           let kind = if String.equal head "library" then Library else Executables in
           match Scan.names_of form with
           | name :: _ -> [ { dir; kind; name; form } ]
           | [] ->
-              fail (Printf.sprintf "%s/dune: a %s stanza without a name" dir head);
+              fail "%s/dune: a %s stanza without a name" dir head;
               [])
       | Sexp.List (Sexp.Atom (("include" | "dynamic_include") as head) :: _) ->
           (* The stanzas behind it live in a file this check does not read. *)
-          fail
-            (Printf.sprintf "%s/dune: an %s stanza, whose stanzas this check cannot read" dir head);
+          fail "%s/dune: an %s stanza, whose stanzas this check cannot read" dir head;
           []
       | Sexp.List (Sexp.Atom head :: _) ->
           if Option.is_some (Scan.field form "libraries") then
-            fail (Printf.sprintf "%s/dune: a %s stanza carries a libraries field" dir head);
+            fail "%s/dune: a %s stanza carries a libraries field" dir head;
           []
       | _ -> [])
 
@@ -564,12 +578,13 @@ type declared = Plain of string | Re_exported of string
 
 (* The stanza's declarations, with [select] resolved: the first arm whose positive libraries all
    resolve and whose [!]-negated ones do not, as dune picks it. *)
-let declarations ~fail ~available s =
+let declarations ~fail:(module F : FAIL) ~available s =
+  let open F in
   let where = Printf.sprintf "%s/dune (%s)" s.dir s.name in
   Option.value (Scan.field s.form "libraries") ~default:[]
   |> List.concat_map ~f:(function
     | Sexp.Atom a when String.is_substring a ~substring:"%{" ->
-        fail (Printf.sprintf "%s: a pform in libraries: %s" where a);
+        fail "%s: a pform in libraries: %s" where a;
         []
     | Sexp.Atom a -> [ Plain a ]
     | Sexp.List [ Sexp.Atom "re_export"; Sexp.Atom a ] -> [ Re_exported a ]
@@ -588,9 +603,7 @@ let declarations ~fail ~available s =
             | _ -> None)
         in
         if List.exists parsed ~f:Option.is_none then (
-          fail
-            (Printf.sprintf "%s: a select arm outside the recognised forms: %s" where
-               (Sexp.to_string form));
+          fail "%s: a select arm outside the recognised forms: %s" where (Sexp.to_string form);
           [])
         else
           let holds condition =
@@ -604,12 +617,10 @@ let declarations ~fail ~available s =
               List.filter_map condition ~f:(fun l ->
                   if String.is_prefix l ~prefix:"!" then None else Some (Plain l))
           | None ->
-              fail (Printf.sprintf "%s: no select arm holds" where);
+              fail "%s: no select arm holds" where;
               [])
     | form ->
-        fail
-          (Printf.sprintf "%s: a libraries element outside the recognised forms: %s" where
-             (Sexp.to_string form));
+        fail "%s: a libraries element outside the recognised forms: %s" where (Sexp.to_string form);
         [])
 
 type references =
@@ -662,10 +673,12 @@ type world = {
 type verdict = Inactive | Refused | Checked of finding list
 
 (* One stanza's verdict. Refusals are recorded through [fail]. *)
-let judge ~fail ?(read_references = referenced_units) w s =
+let judge ~fail:sink ?(read_references = referenced_units) w s =
+  let (module F : FAIL) = sink in
+  let open F in
   let objdir = object_dir ~workspace_root:w.workspace_root s in
   let reaching =
-    declarations ~fail ~available:w.available s
+    declarations ~fail:sink ~available:w.available s
     |> List.filter_map ~f:(function
       | Re_exported _ -> None
       | Plain name when Set.mem w.rewriters name -> None
@@ -673,9 +686,7 @@ let judge ~fail ?(read_references = referenced_units) w s =
           match w.resolve name with
           | None ->
               if not (conditional s) then
-                fail
-                  (Printf.sprintf "%s/dune (%s): the declared library %s resolves to nothing" s.dir
-                     s.name name);
+                fail "%s/dune (%s): the declared library %s resolves to nothing" s.dir s.name name;
               None
           | Some l -> Option.map (w.reach_of l.uid) ~f:(fun path -> (name, l.uid, path))))
   in
@@ -683,15 +694,13 @@ let judge ~fail ?(read_references = referenced_units) w s =
   | Missing_dir ->
       if conditional s then Inactive
       else (
-        fail (Printf.sprintf "%s/dune (%s): no object directory %s" s.dir s.name objdir);
+        fail "%s/dune (%s): no object directory %s" s.dir s.name objdir;
         Refused)
   | No_typed_trees ->
-      fail
-        (Printf.sprintf "%s/dune (%s): object directory %s holds no .cmt or .cmti" s.dir s.name
-           objdir);
+      fail "%s/dune (%s): object directory %s holds no .cmt or .cmti" s.dir s.name objdir;
       Refused
   | Unreadable_typed_tree e ->
-      fail (Printf.sprintf "%s/dune (%s): unreadable typed tree: %s" s.dir s.name e);
+      fail "%s/dune (%s): unreadable typed tree: %s" s.dir s.name e;
       Refused
   | Units units -> (
       if List.is_empty reaching then Checked []
@@ -707,7 +716,8 @@ let judge ~fail ?(read_references = referenced_units) w s =
 
 (* A findlib name dune resolves to a library of another name ([ctypes.foreign] is [ctypes-foreign])
    is bound to what its probe library requires. *)
-let bind_probed ~fail ~by_uid ~by_name ~probed unresolved =
+let bind_probed ~fail:(module F : FAIL) ~by_uid ~by_name ~probed unresolved =
+  let open F in
   List.iteri unresolved ~f:(fun i name ->
       if not (Hashtbl.mem by_name name) then
         match List.find probed ~f:(fun l -> String.equal l.lib_name (probe_name i)) with
@@ -715,34 +725,46 @@ let bind_probed ~fail ~by_uid ~by_name ~probed unresolved =
         | Some probe -> (
             match List.filter_map probe.requires ~f:(Hashtbl.find by_uid) with
             | [ l ] -> Hashtbl.set by_name ~key:name ~data:l
-            | _ -> fail (Printf.sprintf "probe: %s resolves to no single library" name)))
+            | _ -> fail "probe: %s resolves to no single library" name))
 
-(* {1 Controls} -- each refusal format, run against synthetic input and asserted by format. *)
+(* {1 Controls} -- each refusal format, run against synthetic input and asserted by format
+   identity. *)
+
+let format_identity format =
+  Stdlib.Digest.string (Test_scan.Refusal_control_scan.normalize format) |> Stdlib.Digest.to_hex
 
 let collect_refusals f =
-  let messages = ref [] in
-  let fail msg = messages := msg :: !messages in
-  let result = f ~fail in
-  (result, List.rev !messages)
+  let recorded = ref [] in
+  let sink : (module FAIL) =
+    (module struct
+      let fail fmt =
+        let format = Stdlib.string_of_format fmt in
+        Printf.ksprintf (fun msg -> recorded := (format, msg) :: !recorded) fmt
+    end)
+  in
+  let result = f ~fail:sink in
+  (result, List.rev !recorded)
 
 let refused_with ?(quiet = false) ~format f =
-  let (), messages = collect_refusals f in
+  let (), recorded = collect_refusals f in
+  let expected_id = format_identity format in
   let matched =
-    match messages with
-    | [ msg ] -> Test_scan.Refusal_control_scan.format_matches ~format msg
+    match recorded with
+    | [ (emitted_format, _msg) ] -> String.equal (format_identity emitted_format) expected_id
     | _ -> false
   in
   if matched then Test_scan.Refusal_control_manifest.observe_failure ~source:manifest_source ~format
   else if not quiet then
-    if List.is_empty messages then eprintf "control expected format %S, got no refusal\n" format
+    if List.is_empty recorded then eprintf "control expected format %S, got no refusal\n" format
     else
-      List.iter messages ~f:(fun msg -> eprintf "control expected format %S, got: %s\n" format msg);
+      List.iter recorded ~f:(fun (emitted_format, msg) ->
+          eprintf "control expected format %S, got format %S (%s)\n" format emitted_format msg);
   matched
 
 let accepted f =
-  let (), messages = collect_refusals f in
-  List.iter messages ~f:(fun msg -> eprintf "control expected no refusal, got: %s\n" msg);
-  match messages with [] -> true | _ :: _ -> false
+  let (), recorded = collect_refusals f in
+  List.iter recorded ~f:(fun (_, msg) -> eprintf "control expected no refusal, got: %s\n" msg);
+  match recorded with [] -> true | _ :: _ -> false
 
 let controls ~dune ~objinfo ~tool_stderr =
   let stanza_of text =
@@ -995,10 +1017,13 @@ let controls ~dune ~objinfo ~tool_stderr =
        in
        refused_with ~format:"probe: %s resolves to no single library" (fun ~fail ->
            bind_probed ~fail ~by_uid ~by_name ~probed [ "alias_lib" ])));
-  p "a control asserting one refusal format rejects a different refusal"
+  p
+    "a control asserting one refusal format rejects another refusal whose arguments contain its \
+     text"
     (not
-       (refused_with ~quiet:true ~format:"csexp: an unclosed list" (fun ~fail ->
-            ignore (parse_csexp ~fail "()3:abc)" : Sexp.t list option))))
+       (refused_with ~quiet:true ~format:"%s: no select arm holds"
+          (judged ~read_references:present_references
+             "(library (name a) (libraries (no select arm holds)))")))
 
 let () =
   Test_utils.set_binary_stdout ();
@@ -1018,12 +1043,17 @@ let () =
         Out_channel.with_file Stdlib.Filename.null ~f:(fun sink ->
             controls ~dune ~objinfo ~tool_stderr:(Unix.descr_of_out_channel sink)))
   in
-  if not (String.is_empty control_stderr) then eprintf "%s" control_stderr;
   p "the synthetic tool calls leave action stderr empty" (String.is_empty control_stderr);
   let refusals = ref [] in
-  let fail msg =
-    refusals := msg :: !refusals;
-    Verdict.fail msg
+  let fail : (module FAIL) =
+    (module struct
+      let fail fmt =
+        Printf.ksprintf
+          (fun msg ->
+            refusals := msg :: !refusals;
+            Verdict.fail msg)
+          fmt
+    end)
   in
   let describe ~root ~tag =
     match run_describe ~fail ~dune ~root ~tag with

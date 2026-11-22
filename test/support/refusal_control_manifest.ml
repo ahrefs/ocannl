@@ -98,7 +98,7 @@ let raw_entries =
         "[scanner-refusal:b1784c07fa1dac619848cd1b4a9d64f0] object directory holding";
         "[scanner-refusal:69ce705759093b5f97c6cc8e0413a500] description dune refuses";
         "[scanner-refusal:8c24881b343b90be6f9574bf281e5045] or multiple libraries";
-        "[scanner-refusal:01d9c0f9b64a49e7ea61bce655343585] refusal format rejects";
+        "[scanner-refusal:80993f82fb1569705822b50a7436584e] rejects another refusal";
         "[scanner-refusal:351ce2a461cb37393c61069ee2649d96] unused_compiler_deps";
         "[scanner-refusal:36778054d93aa08eac389989017aed7a] DUNE_SOURCEROOT";
         "[scanner-refusal:044e249871007719b6bc46d149189c1d] synthetic tool calls";
