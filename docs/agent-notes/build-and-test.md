@@ -5729,6 +5729,11 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
 - **Plan against the current base.** After fetching, run `tools/merge-build-check.sh --plan
   --base origin/master` on the branch. It queries the candidate merge of the two committed tips
   and reports the tests verdict, owed requirements and record admissibility, or a merge conflict.
+  `--plan-merge` (which `--plan --base` invokes and `.github/ship-pr-merge-build` configures as
+  ship-pr's `plan`, gh-ocannl-2358) also prints one `ship-pr-merge-plan:` verdict line
+  (`nothing-owed`, `admitted <needs>`, or `unadmitted <needs>` from `owed-run.sh check`'s exit
+  0/1; any other status fails the plan with no verdict line) so `pr-review.sh merge` refuses an
+  unrecorded owed run before taking a build slot.
   Scratch Dune queries are advisory. The real merge build still owns readiness. A CROSS-CUTTING
   banner comes first in `affected` diagnostics, with the widest observed contributors, and
   the merge build carries those contributors into its missing-record refusal.
