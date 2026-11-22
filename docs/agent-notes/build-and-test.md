@@ -6034,7 +6034,10 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   exit 2 comes from the digest checker fallback, so the exact verdict distinguishes them.
   On 2026-11-02 the parity leg's first run on master said
   `STEP BROKE`: building cifar_resnet raised `Shape_error: tracing the shape scheme model: occurs
-  check failed` under the default `op_shape_schemes=check` (green with it `off`).
+  check failed` under the default `op_shape_schemes=check` (green with it `off`). On 2026-11-22 the
+  CUDA native-PTX baseline on rog-nv-linux (RTX 5070 Ti Laptop, sm_120, gh-ocannl-1910) read
+  `verdict: holds` for `tools/cuda-native-ptx-rerun.sh -j 8 @runtest @train`, confirming the
+  sweep's native-PTX WARNING flags regressions rather than standing reds.
 - The in-flight view is `$STATE/runs/<stamp>.json` (schema 1, gh-ocannl-2220),
   published before lanes fork, with the resolved full ref, controller pid, flags and ordered
   lanes/units. One stable sibling lock serializes read/update/rename; unique File::Temp stages

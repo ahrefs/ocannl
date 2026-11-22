@@ -7,6 +7,9 @@ without a DRAM reference, the minix sweep's 1.7x contrast fits nothing: true
 the recorded cc sweep fits a monotone capacity between 6.45 GB and 8.60 GB, on its own contrast: true
 cc's published cache capacity is the recorded cc sweep's fit: true
 against the STREAM rate the issue-bound cc sweep reads all spilled: true
+the recorded mac-studio ARM cc sweep fits a monotone capacity between 6.45 GB and 8.60 GB, on its own contrast: true
+the mac-studio ARM cc sweep agrees with cc's published cache capacity: true
+against mac-studio's STREAM rate the issue-bound ARM cc sweep reads all spilled: true
 rates that do not split by working set fit a capacity flagged non-monotone: true
 a sweep entirely below the DRAM reference is all spilled: true
 one timed point fits nothing: true
