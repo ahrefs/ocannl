@@ -218,36 +218,6 @@ publish() {
   echo "$me: published $ref on $OWED_RUN_URL: $line"
 }
 
-read_pid_field() {
-  local id
-  id=$(ps -o "$1=" -p "$2") || return 1
-  id=${id//[[:space:]]/}
-  case $id in '' | 0 | *[!0-9]*) return 1 ;; esac
-  printf '%s\n' "$id"
-}
-
-# Both the fleet runner and report get a bounded nested slot. The report is exec'd as the
-# leader of its own process group.
-# The parent of this group's leader belongs to the enclosing leg's group. Its live leader's
-# PID and start token must appear in test-run.sh's stored launchers. The argv digest is outside
-# this check.
-fleet_receipt() {
-  local run=$1 inner parent scope token row
-  inner=$(read_pid_field pgid "$$") && [ "$inner" = "$$" ] && parent=$(read_pid_field ppid "$inner") &&
-    scope=$(read_pid_field pgid "$parent") || return 1
-  [ "$scope" != "$inner" ] || return 1
-  if [ -r /proc/self/stat ]; then
-    token=$(awk '{ sub(/^.*\) /, ""); print $20 }' "/proc/$scope/stat") || return 1
-  else
-    token=$(LC_ALL=C TZ=UTC ps -o lstart= -p "$scope" | awk '{$1=$1; print}') || return 1
-  fi
-  [ -n "$token" ] && [ -r "$run/launchers" ] || return 1
-  while IFS= read -r row; do
-    case $row in "$scope $token "*) return 0 ;; esac
-  done <"$run/launchers"
-  return 1
-}
-
 on_record_master() {
   local h=$1 master rc
   remote_ref refs/heads/master || die "record: could not read master on $OWED_RUN_URL"
@@ -264,11 +234,20 @@ on_record_master() {
 }
 
 record_run() {
-  local run=$1 print=$2 requested_cover=${3-} h c host line checkout writer=record
+  local run=$1 print=$2 leg_record=${3-} observed_head=${4-}
+  local requested_cmd requested_cover h c host line checkout writer=record
   case $run in
     '' | last) run=$(cd "$root" && "${BASH:-bash}" tools/test-run.sh paths run last) || die "record: no last run of this worktree" ;;
   esac
   [ -d "$run" ] || die "record: no run directory $run"
+  if [ -n "$leg_record" ]; then
+    cmp -s "$run/fleet-leg-run-record" <(printf '%s\n' "$leg_record") ||
+      die "record: $run does not match this fleet leg's run record"
+    requested_cmd=$(cat "$run/fleet-leg-command" 2>/dev/null) &&
+      [[ $requested_cmd != *$'\n'* ]] && cmd_cover "$requested_cmd" ||
+      die "record: $run did not request an owed-run command"
+    requested_cover=$cover
+  fi
   [ -f "$run/exit" ] || die "record: $run has no exit status: it has not finished"
   [ "$(cat "$run/exit")" = 0 ] || die "record: $run exited $(cat "$run/exit"), not 0"
   [ -f "$run/dirty" ] || die "record: $run recorded no checkout state"
@@ -280,13 +259,13 @@ record_run() {
   c=$(sed -n 1p "$run/cmd" 2>/dev/null) c=${c% }
   cmd_cover "$c" || die "record: $run ran '$c', none of the forms a record covers (tools/owed-run.sh's header)"
   host=$(hostname -s 2>/dev/null || hostname)
-  if [ -n "$requested_cover" ]; then
+  if [ -n "$leg_record" ]; then
     [ "$cover" = "$requested_cover" ] || die "record: $run does not cover the fleet leg's requested targets"
+    [ "$h" = "$observed_head" ] || die "record: $run is for a different head than the fleet leg observed"
     [ "$h" = "$(git -C "$root" rev-parse HEAD)" ] || die "record: $run is for a different head"
     checkout=$(git -C "$root" status --porcelain --untracked-files=all --ignore-submodules=none) ||
       die "record: could not read the fleet worktree's checkout state"
     [ -z "$checkout" ] || die "record: the fleet worktree is dirty"
-    fleet_receipt "$run" || die "record: $run was not launched by the current fleet leg"
     # Integration runs at merged heads owe no record and can leave a ref that no PR will prune.
     if on_record_master "$h"; then
       printf '%s\n' "$me: recorded nothing (head is on master at $OWED_RUN_URL)"
@@ -297,14 +276,6 @@ record_run() {
   fi
   line=$(run_line "$h" "$writer" "$host:$run" "$c")
   if [ "$print" = 1 ]; then printf '%s\n' "$line"; else publish "$h" "$line"; fi
-}
-
-leg_command() {
-  if [ "${1-}" = env ] && [ "${2-}" = OCANNL_BACKEND=cc ]; then shift 2; fi
-  case ${1-} in tools/test-run.sh | ./tools/test-run.sh) shift ;; *) return 1 ;; esac
-  [ "${1-}" = run ] && [ "${2-}" = --expect-backend ] && [ "${3-}" = cc ] || return 1
-  shift 3
-  cmd_cover "$(printf '%q ' "$@")"
 }
 
 verb=${1-}
@@ -321,10 +292,10 @@ case $verb in
       esac
     done
     record_run "$run" "$print" ;;
-  leg-report)
-    if ! leg_command "$@"; then
-      printf '%s\n' "$me: recorded nothing (not an owed-run argv)"
-    elif ! ( export GIT_TERMINAL_PROMPT=0; record_run last 0 "$cover" ) </dev/null 2>&1; then
+  leg-record)
+    [ $# = 3 ] && [[ $1 = /* ]] && [ -n "$2" ] && is_sha "$3" ||
+      die "leg-record: expected an absolute leg record path, request ID and observed SHA"
+    if ! ( export GIT_TERMINAL_PROMPT=0; record_run last 0 "$1" "$3" ) </dev/null 2>&1; then
       printf '%s\n' "$me: recorded nothing (record refused)"
     fi ;;
   add)

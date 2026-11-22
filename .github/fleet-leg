@@ -1,4 +1,4 @@
-# Backend pins and the owed-run report, read by the fleet's `fleet-worker.sh execution leg`
+# Backend pins and owed-run publication, read by the fleet's `fleet-worker.sh execution leg`
 # (lukstafi/ludics-lite#766 and #773; grammar in ludics-lite's issue-wave/references/executions.md,
 # *A leg on another box*). The leg reads this file on the box AT THE COMMIT under test, before the
 # worktree moves. A leg that may hold the GPU -- any leg not declaring `--cpu`, a measurement's
@@ -16,9 +16,9 @@
 # `sh -c` string, or an environment the caller exported, does not.
 #
 # The reader uses a closed grammar. This file uses `pin-flag <option>`, `pin-env <NAME>` and one
-# `run-report <worktree path>`. The report publishes eligible owed-run records
-# from the execution box. Its status leaves the leg verdict unchanged.
+# `owed-record <worktree path>` (lukstafi/ludics#1219). The hook publishes eligible owed-run
+# records from the execution box after a clean, successful main run.
 
 pin-flag --expect-backend
 pin-env OCANNL_BACKEND
-run-report tools/owed-run-report.sh
+owed-record tools/owed-run-report.sh

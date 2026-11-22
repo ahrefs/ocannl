@@ -6006,6 +6006,13 @@ case $sub in
     # meanwhile is refused, not raced; Codex review round 1 on PR #832), under
     # a run directory that is never published and is removed at the end, and
     # its --cap bounds the build as a run's would.
+    # Save the request before option and targets-file expansion so the owed
+    # hook can compare its coverage with the command Dune actually ran.
+    fleet_leg_cmd=
+    if [ "$sub" = run ] && [ -n "${FLEET_LEG_RUN_RECORD:-}" ] &&
+       [ "${1-}" = --expect-backend ] && [ "${2-}" = cc ]; then
+      fleet_leg_cmd=$(printf '%q ' "${@:3}")
+    fi
     cap=${OCANNL_TOOL_TEST_CAP:-3600}
     cap_default=${OCANNL_TOOL_TEST_CAP:+explicit}
     # Empty is the default, which `_resolve` decides once it knows the batch
@@ -6135,6 +6142,11 @@ case $sub in
     trap 'fwd_sig TERM' TERM
     trap 'fwd_sig HUP' HUP
     new_run "$@"
+    if [ -n "$fleet_leg_cmd" ]; then
+      { printf '%s\n' "$FLEET_LEG_RUN_RECORD" >"$run_dir/fleet-leg-run-record" &&
+        printf '%s\n' "$fleet_leg_cmd" >"$run_dir/fleet-leg-command"; } ||
+        { rm -rf "$run_dir"; die "cannot record the fleet leg in $run_dir"; }
+    fi
     if [ -n "$expect" ]; then
       printf '%s\n' "$expect" >"$run_dir/expect-backend" ||
         { rm -rf "$run_dir"; die "cannot record the expected backends in $run_dir"; }
