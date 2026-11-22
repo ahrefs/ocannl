@@ -153,3 +153,10 @@
  (name calibrate_issue_rate)
  (modules calibrate_issue_rate)
  (libraries base stdio utils context ocannl arrayjit.autotune arrayjit.ir))
+
+; gh-ocannl-2394: extract a saved autotune winner into a digest-free replay fixture.
+
+(executable
+ (name extract_winner_fixture)
+ (modules extract_winner_fixture)
+ (libraries base stdio winner_fixture))
