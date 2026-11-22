@@ -243,74 +243,64 @@ let canonical_census ~static_indices (opt : LL.optimized) : canonical_census =
     shadowed_statics;
   }
 
-let validate_and_resolve_ops ~location ~static_indices (opt : LL.optimized)
-    (ops : SC.saved_schedule) : Sched.schedule =
-  let census = canonical_census ~static_indices opt in
+let validate_ops ~location (census : canonical_census) (ops : SC.saved_schedule) : unit =
   let op_names = Array.of_list_map ops ~f:saved_optop_name in
   let minted_roles_by_op : SC.mint_role list array = Array.create ~len:(List.length ops) [] in
-  let minted_syms = ref (Map.empty (module Minted_key)) in
-  let record_minted idx role sym =
-    minted_syms := Map.set !minted_syms ~key:(idx, role) ~data:sym;
+  let minted_keys = ref (Set.empty (module Minted_key)) in
+  let record_minted idx role =
+    minted_keys := Set.add !minted_keys (idx, role);
     minted_roles_by_op.(idx) <- minted_roles_by_op.(idx) @ [ role ]
   in
   let fail ~op_index ~op_name ~anchor ~detail =
     refuse_anchor { location; op_index = Some op_index; op_name = Some op_name; anchor; detail }
   in
-  let resolve_sym ~op_index ~op_name ~field (sref : SC.sym_ref) : Idx.symbol =
+  let check_sym ~op_index ~op_name ~field (sref : SC.sym_ref) : unit =
     let anchor = Printf.sprintf "%s %s" field (sref_to_string sref) in
     match sref with
-    | SC.Base i -> (
+    | SC.Base i ->
         if i < 0 || i >= census.n_base_loops then
           fail ~op_index ~op_name ~anchor
             ~detail:
               (Printf.sprintf "base loop %d does not exist (fresh lowering has %d base loop(s))" i
                  census.n_base_loops)
-        else
-          match Hashtbl.find census.base_ids i with
-          | Some sym -> sym
-          | None ->
-              fail ~op_index ~op_name ~anchor
-                ~detail:
-                  (Printf.sprintf
-                     "base loop %d is ambiguous (bound by more than one loop in fresh lowering)" i))
-    | SC.Static k -> (
+        else if not (Hashtbl.mem census.base_ids i) then
+          fail ~op_index ~op_name ~anchor
+            ~detail:
+              (Printf.sprintf
+                 "base loop %d is ambiguous (bound by more than one loop in fresh lowering)" i)
+    | SC.Static k ->
         if Hash_set.mem census.shadowed_statics k then
           fail ~op_index ~op_name ~anchor
             ~detail:
               (Printf.sprintf "static index %d is shadowed by a loop binder in fresh lowering" k)
-        else
-          match Hashtbl.find census.static_ids k with
-          | Some sym -> sym
-          | None ->
-              fail ~op_index ~op_name ~anchor
-                ~detail:
-                  (Printf.sprintf
-                     "static index %d does not exist (fresh lowering has %d static index(es))" k
-                     census.n_statics))
-    | SC.Minted (src_op, role) -> (
-        match Map.find !minted_syms (src_op, role) with
-        | Some sym -> sym
-        | None ->
-            let detail =
-              if src_op < 0 || src_op >= op_index then
-                Printf.sprintf "minted axis references op #%d, which has not run before op #%d"
-                  src_op op_index
-              else
-                let minted_desc =
-                  match minted_roles_by_op.(src_op) with
-                  | [] -> "mints no symbols"
-                  | roles ->
-                      "only minted "
-                      ^ String.concat ~sep:", "
-                          (List.map roles ~f:(fun r -> Sexp.to_string (SC.sexp_of_mint_role r)))
-                in
-                Printf.sprintf "op #%d (%s) did not mint %s (%s)" src_op op_names.(src_op)
-                  (Sexp.to_string (SC.sexp_of_mint_role role))
-                  minted_desc
-            in
-            fail ~op_index ~op_name ~anchor ~detail)
+        else if not (Hashtbl.mem census.static_ids k) then
+          fail ~op_index ~op_name ~anchor
+            ~detail:
+              (Printf.sprintf
+                 "static index %d does not exist (fresh lowering has %d static index(es))" k
+                 census.n_statics)
+    | SC.Minted (src_op, role) ->
+        if not (Set.mem !minted_keys (src_op, role)) then
+          let detail =
+            if src_op < 0 || src_op >= op_index then
+              Printf.sprintf "minted axis references op #%d, which has not run before op #%d" src_op
+                op_index
+            else
+              let minted_desc =
+                match minted_roles_by_op.(src_op) with
+                | [] -> "mints no symbols"
+                | roles ->
+                    "only minted "
+                    ^ String.concat ~sep:", "
+                        (List.map roles ~f:(fun r -> Sexp.to_string (SC.sexp_of_mint_role r)))
+              in
+              Printf.sprintf "op #%d (%s) did not mint %s (%s)" src_op op_names.(src_op)
+                (Sexp.to_string (SC.sexp_of_mint_role role))
+                minted_desc
+          in
+          fail ~op_index ~op_name ~anchor ~detail
   in
-  let resolve_tn ~op_index ~op_name ~field idx : Tn.t =
+  let check_tn ~op_index ~op_name ~field idx : Tn.t =
     if idx < 0 || idx >= census.n_tns then
       fail ~op_index ~op_name
         ~anchor:(Printf.sprintf "%s (tn %d)" field idx)
@@ -319,83 +309,76 @@ let validate_and_resolve_ops ~location ~static_indices (opt : LL.optimized)
              census.n_tns)
     else SC.tn_of_ref census.canon idx
   in
-  List.mapi ops ~f:(fun op_index saved_op ->
+  List.iteri ops ~f:(fun op_index saved_op ->
       let op_name = saved_optop_name saved_op in
-      let sym field sref = resolve_sym ~op_index ~op_name ~field sref in
-      let tn field idx = resolve_tn ~op_index ~op_name ~field idx in
+      let sym field sref = check_sym ~op_index ~op_name ~field sref in
+      let tn field idx = check_tn ~op_index ~op_name ~field idx in
       match saved_op with
-      | SC.Split { axis; factor; outer; inner } ->
-          let op, outer_index, inner_index =
-            Sched.split ~axis:(sym "axis" axis) ~factor ~outer ~inner
-          in
-          record_minted op_index SC.Split_outer outer_index;
-          record_minted op_index SC.Split_inner inner_index;
-          op
-      | Swap { outer; inner } -> Sched.Swap { outer = sym "outer" outer; inner = sym "inner" inner }
-      | Retype { axis; ty } -> Sched.Retype { axis = sym "axis" axis; ty }
-      | Unroll { axis; materialize } -> Sched.Unroll { axis = sym "axis" axis; materialize }
+      | SC.Split { axis; _ } ->
+          sym "axis" axis;
+          record_minted op_index SC.Split_outer;
+          record_minted op_index SC.Split_inner
+      | Swap { outer; inner } ->
+          sym "outer" outer;
+          sym "inner" inner
+      | Retype { axis; _ } | Unroll { axis; _ } | Pad { axis; _ } -> sym "axis" axis
       | Partition { axis; breakpoints } ->
-          let op, segment_indices = Sched.partition ~axis:(sym "axis" axis) ~breakpoints in
-          List.iteri segment_indices ~f:(fun j s -> record_minted op_index (SC.Partition_seg j) s);
-          op
-      | Pad { axis; to_multiple_of } -> Sched.Pad { axis = sym "axis" axis; to_multiple_of }
+          sym "axis" axis;
+          for j = 0 to List.length breakpoints do
+            record_minted op_index (SC.Partition_seg j)
+          done
       | Coalesce { outer; inner } ->
-          let op, merged = Sched.coalesce ~outer:(sym "outer" outer) ~inner:(sym "inner" inner) in
-          record_minted op_index SC.Coalesce_merged merged;
-          op
-      | Stage
-          {
-            source;
-            tile_loops;
-            shared;
-            cooperative;
-            hoisted;
-            swizzle;
-            pad_stride;
-            pipeline_depth;
-            tile_prec;
-          } ->
-          Sched.Stage
-            {
-              source = tn "source" source;
-              tile_loops =
-                List.mapi tile_loops ~f:(fun k sref -> sym (Printf.sprintf "tile_loops[%d]" k) sref);
-              shared;
-              cooperative;
-              hoisted;
-              swizzle;
-              pad_stride;
-              pipeline_depth = Option.value pipeline_depth ~default:1;
-              tile_prec;
-            }
-      | Privatize { target; over; acc_prec } ->
-          Sched.Privatize { target = tn "target" target; over = sym "over" over; acc_prec }
+          sym "outer" outer;
+          sym "inner" inner;
+          record_minted op_index SC.Coalesce_merged
+      | Stage { source; tile_loops; _ } ->
+          ignore (tn "source" source : Tn.t);
+          List.iteri tile_loops ~f:(fun k sref -> sym (Printf.sprintf "tile_loops[%d]" k) sref)
+      | Privatize { target; over; _ } ->
+          ignore (tn "target" target : Tn.t);
+          sym "over" over
       | Expand_zero { tn = tn_idx } ->
-          let op, indices = Sched.expand_zero ~tn:(tn "tn" tn_idx) in
-          List.iteri indices ~f:(fun j s -> record_minted op_index (SC.Expand_axis j) s);
-          op
-      | Tensorize { i; j; k; simd_width; tile } ->
-          let op, lane =
-            Sched.tensorize ?tile ~i:(sym "i" i) ~j:(sym "j" j) ~k:(sym "k" k) ~simd_width ()
-          in
-          record_minted op_index SC.Tensorize_lane lane;
-          op
-      | Fuse_epilogue { target; shared } ->
-          Sched.Fuse_epilogue { target = tn "target" target; shared }
-      | Split_reduce { axis; target; num_blocks } ->
-          let op, block_index, inner_index, combine_indices =
-            Sched.split_reduce ~axis:(sym "axis" axis) ~target:(tn "target" target) ~num_blocks
-          in
-          record_minted op_index SC.Split_reduce_block block_index;
-          record_minted op_index SC.Split_reduce_inner inner_index;
-          List.iteri combine_indices ~f:(fun j s ->
-              record_minted op_index (SC.Split_reduce_combine j) s);
-          op
-      | Fold_mma { query; width } ->
-          let op, lane, block = Sched.fold_mma ~query:(sym "query" query) ~width in
-          record_minted op_index SC.Fold_mma_lane lane;
-          record_minted op_index SC.Fold_mma_block block;
-          op)
+          let node = tn "tn" tn_idx in
+          let rank = Array.length (Lazy.force node.Tn.dims) in
+          for j = 0 to rank - 1 do
+            record_minted op_index (SC.Expand_axis j)
+          done
+      | Tensorize { i; j; k; _ } ->
+          sym "i" i;
+          sym "j" j;
+          sym "k" k;
+          record_minted op_index SC.Tensorize_lane
+      | Fuse_epilogue { target; _ } -> ignore (tn "target" target : Tn.t)
+      | Split_reduce { axis; target; _ } ->
+          sym "axis" axis;
+          let node = tn "target" target in
+          let rank = Array.length (Lazy.force node.Tn.dims) in
+          record_minted op_index SC.Split_reduce_block;
+          record_minted op_index SC.Split_reduce_inner;
+          for j = 0 to rank - 1 do
+            record_minted op_index (SC.Split_reduce_combine j)
+          done
+      | Fold_mma { query; _ } ->
+          sym "query" query;
+          record_minted op_index SC.Fold_mma_lane;
+          record_minted op_index SC.Fold_mma_block)
+
+let validate_and_resolve_ops ~location ~static_indices (opt : LL.optimized)
+    (ops : SC.saved_schedule) : Sched.schedule =
+  let census = canonical_census ~static_indices opt in
+  validate_ops ~location census ops;
+  (* Delegate live op construction to [Schedule_cache.of_saved] so fixtures and production cache
+     replay share one decoder (defaults, minted symbols, and builder behavior stay aligned). *)
+  try fst (SC.of_saved census.canon ops)
+  with SO.Cause_at (_, cause) ->
+    refuse_anchor
+      {
+        location;
+        op_index = None;
+        op_name = None;
+        anchor = "Schedule_cache.of_saved";
+        detail = SO.detail_of_cause cause;
+      }
 
 let apply_tracked ~queue ~last_exec f =
   Sched.with_transform_fault

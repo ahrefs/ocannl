@@ -593,12 +593,56 @@ let () =
        ~needles:[ "op #0"; "Expand_zero"; "tn 0"; "Zero_out" ]
        (validate_gpu stale_no_zero_out base_opt));
 
-  (* 4k. Hermeticity: a refused replay leaves opt's placements untouched (no leaked promotion). *)
+  (* 4k. Hermeticity: a refused replay after a mutating prelude (Split_reduce mints a partials node
+     into traced_store before segment 1 fails on a stale anchor) and a refused live precondition
+     after segment 0 both leave the caller's lowering traced_store and placements untouched. *)
   let placement_before = Tn.Placements.raw_entry base_opt.optimize_ctx.placements prod in
-  let replay_refused = WF.replay ~is_gpu:gpu.is_gpu ~limits:gpu.limits stale_base_loop base_opt in
+  let traced_before_base = Hashtbl.length base_opt.traced_store in
+  let replay_refused_live =
+    WF.replay ~is_gpu:gpu.is_gpu ~limits:gpu.limits stale_no_zero_out base_opt
+  in
   let placement_after = Tn.Placements.raw_entry base_opt.optimize_ctx.placements prod in
-  p "refused replay fails and leaves the caller's lowering placements untouched"
-    (Result.is_error replay_refused
+  let traced_after_base = Hashtbl.length base_opt.traced_store in
+  p "refused replay after segment 0 live precondition leaves placements and traced_store untouched"
+    (Result.is_error replay_refused_live
+    && traced_after_base = traced_before_base
     && Option.equal
          (fun (m1, _) (m2, _) -> Tn.equal_memory_mode m1 m2)
-         placement_before placement_after)
+         placement_before placement_after);
+  let s_herm =
+    let a =
+      NTDSL.init ~l:"wf_herm_a" ~prec ~o:[ 8; 32 ]
+        ~f:(Ll_test.weighted ~weights:[| 1; 2 |] ~modulus:5 ~offset:(-2.) ~stride:0.5)
+        ()
+    in
+    let%op s = a ++ "ij=>i" in
+    s
+  in
+  let herm_opt = Ll_test.captured_lowering ~name:"wf_herm_sr" (Train.forward s_herm) in
+  let herm_reduce =
+    match Ll_test.nest_paths herm_opt.llc with
+    | [ [ _; red ] ] -> red
+    | _ -> failwith "expected 2-loop reduction nest"
+  in
+  let herm_sr_op, _, _, _ =
+    Sched.split_reduce ~axis:herm_reduce ~target:s_herm.Tensor.value ~num_blocks:4
+  in
+  let herm_prelude_saved, _ =
+    SC.to_saved (SC.base_registry (SC.canonicalize ~with_placements:false herm_opt)) [ herm_sr_op ]
+  in
+  let stale_after_prelude =
+    {
+      WF.prelude = herm_prelude_saved;
+      segments =
+        Some [ { kind = `Normal; units = 1; ops = [] }; { kind = `Normal; units = 99; ops = [] } ];
+    }
+  in
+  let traced_before_sr = Hashtbl.length herm_opt.traced_store in
+  let replay_refused_sr =
+    WF.replay ~is_gpu:false ~limits:Ir.Backend_intf.no_hardware_limits stale_after_prelude herm_opt
+  in
+  let traced_after_sr = Hashtbl.length herm_opt.traced_store in
+  p
+    "refused replay after a mutating Split_reduce prelude leaves the caller's traced_store \
+     untouched"
+    (Result.is_error replay_refused_sr && traced_after_sr = traced_before_sr)

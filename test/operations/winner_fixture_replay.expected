@@ -27,4 +27,5 @@ stale segmentation unit count is refused by name: true
 stale Zeros segment kind on non-zero statements is refused by name: true
 consumed loop anchor referenced after Split is refused by name: true
 stale Expand_zero anchor with no Zero_out in segment is refused by name: true
-refused replay fails and leaves the caller's lowering placements untouched: true
+refused replay after segment 0 live precondition leaves placements and traced_store untouched: true
+refused replay after a mutating Split_reduce prelude leaves the caller's traced_store untouched: true
