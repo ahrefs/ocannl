@@ -267,6 +267,7 @@ let emitted_flips =
     ("cc_compile_unit_min_bytes", [ "0"; "1048576" ]);
     ("cuda_compile_programs", [ "1"; "4" ]);
     ("cuda_compile_program_min_kernels", [ "1"; "64" ]);
+    ("cuda_host_register_min_bytes", [ "0"; "1" ]);
     ("output_dlls_in_build_directory", flag);
     ("output_prec_in_ll_files", flag);
     ("cd_ident_style", [ "name_only"; "name_and_label" ]);
