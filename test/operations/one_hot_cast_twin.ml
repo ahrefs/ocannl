@@ -475,4 +475,86 @@ let () =
         Ll_test.optimize ~materialized:[ tbl_bf; ids_bf; out_bf ] ~name:"nc_bf_bare" prog_bf
       in
       let c_bf = inspect_ir ~vocab:vocab_bf opt_bf in
-      p "bare bfloat16 Cmpeq with vocab >= 256 is NOT rewritten to Get_dynamic" (c_bf.gathers = 0))
+      p "bare bfloat16 Cmpeq with vocab >= 256 is NOT rewritten to Get_dynamic" (c_bf.gathers = 0);
+
+      (* 5c: A Where selector whose condition evaluates at bfloat16 inside an f32 accumulator over
+         vocab = 300 >= 256 must be checked at the condition precision (bfloat16), not the
+         accumulator precision (single), for both forward gather and backward scatter. *)
+      let tbl_w =
+        Ll_test.node_factory ~prec:Ops.single ~first_id:29520 ~dims:[| vocab_bf |] () "nc_w_tbl"
+      in
+      let ids_w =
+        Ll_test.node_factory ~prec:Ops.bfloat16 ~first_id:29521 ~dims:[| 1 |] () "nc_w_ids"
+      in
+      let out_w =
+        Ll_test.node_factory ~prec:Ops.single ~first_id:29522 ~dims:[| 1 |] () "nc_w_out"
+      in
+      List.iter [ tbl_w; ids_w; out_w ] ~f:Ll_test.materialize;
+      let kw = Ll_test.sym () in
+      let prog_where_fwd =
+        LL.unflat_lines
+          [
+            LL.Zero_out out_w;
+            Ll_test.loop_n kw vocab_bf
+              (Ll_test.set out_w
+                 [| Ll_test.fixed 0 |]
+                 (LL.Binop
+                    ( Ops.Add,
+                      (Ll_test.get out_w [| Ll_test.fixed 0 |], Ops.single),
+                      ( LL.Ternop
+                          ( Ops.Where,
+                            ( LL.Binop
+                                ( Ops.Cmpeq,
+                                  (LL.Embed_index (Ll_test.iter kw), Ops.bfloat16),
+                                  (Ll_test.get ids_w [| Ll_test.fixed 0 |], Ops.bfloat16) ),
+                              Ops.bfloat16 ),
+                            (Ll_test.get tbl_w [| Ll_test.iter kw |], Ops.single),
+                            (LL.Constant 0., Ops.single) ),
+                        Ops.single ) )));
+          ]
+      in
+      let opt_where_fwd =
+        Ll_test.optimize ~materialized:[ tbl_w; ids_w; out_w ] ~name:"nc_where_fwd" prog_where_fwd
+      in
+      let c_where_fwd = inspect_ir ~vocab:vocab_bf opt_where_fwd in
+      p "Where with bfloat16 condition in f32 accumulator (vocab >= 256) is NOT rewritten to gather"
+        (c_where_fwd.gathers = 0);
+
+      let dtbl_w =
+        Ll_test.node_factory ~prec:Ops.single ~first_id:29530 ~dims:[| vocab_bf |] () "nc_w_dtbl"
+      in
+      let grad_w =
+        Ll_test.node_factory ~prec:Ops.single ~first_id:29531 ~dims:[| 1 |] () "nc_w_grad"
+      in
+      List.iter [ dtbl_w; grad_w ] ~f:Ll_test.materialize;
+      let kwb = Ll_test.sym () in
+      let prog_where_bwd =
+        LL.unflat_lines
+          [
+            LL.Zero_out dtbl_w;
+            Ll_test.loop_n kwb vocab_bf
+              (Ll_test.set dtbl_w
+                 [| Ll_test.iter kwb |]
+                 (LL.Binop
+                    ( Ops.Add,
+                      (Ll_test.get dtbl_w [| Ll_test.iter kwb |], Ops.single),
+                      ( LL.Ternop
+                          ( Ops.Where,
+                            ( LL.Binop
+                                ( Ops.Cmpeq,
+                                  (LL.Embed_index (Ll_test.iter kwb), Ops.bfloat16),
+                                  (Ll_test.get ids_w [| Ll_test.fixed 0 |], Ops.bfloat16) ),
+                              Ops.bfloat16 ),
+                            (Ll_test.get grad_w [| Ll_test.fixed 0 |], Ops.single),
+                            (LL.Constant 0., Ops.single) ),
+                        Ops.single ) )));
+          ]
+      in
+      let opt_where_bwd =
+        Ll_test.optimize ~materialized:[ dtbl_w; ids_w; grad_w ] ~name:"nc_where_bwd" prog_where_bwd
+      in
+      let c_where_bwd = inspect_ir ~vocab:vocab_bf opt_where_bwd in
+      p
+        "Where with bfloat16 condition in f32 accumulator (vocab >= 256) is NOT rewritten to \
+         scatter"
+        (c_where_bwd.scatters = 0))

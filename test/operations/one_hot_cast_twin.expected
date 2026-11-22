@@ -28,3 +28,5 @@ f64->f32 cast twin: gathered value rounds to f32 (1.0, not f64 1 + 2^-25): true
 narrowing byte selector over int32 IDs is NOT rewritten to Get_dynamic: true
 narrowing byte selector preserves modular wrap semantics (257 mod 256 = 1 -> 20.): true
 bare bfloat16 Cmpeq with vocab >= 256 is NOT rewritten to Get_dynamic: true
+Where with bfloat16 condition in f32 accumulator (vocab >= 256) is NOT rewritten to gather: true
+Where with bfloat16 condition in f32 accumulator (vocab >= 256) is NOT rewritten to scatter: true

@@ -9488,7 +9488,7 @@ let scalar_reads_scope_id (target : scope_id) (llsc : scalar_t) : bool =
    at an integer annotation is no match (gh-ocannl-1957): the comparison holds at no [k] where it is
    not integral, and no precision re-evaluates it as written for the guards and the dynamic index --
    an integer one converts its float result, a float one drops its leaves' conversions. *)
-let match_one_hot_cmpeq ~ienv ~eval_prec ~from_ ~to_ (k : Indexing.symbol) :
+let match_one_hot_cmpeq ~ienv ~cmpeq_prec ~from_ ~to_ (k : Indexing.symbol) :
     scalar_t -> scalar_arg option =
   let index ((v, p) as arg : scalar_arg) =
     Option.some_if (not (Ops.is_integer p && float_valued v)) arg
@@ -9545,7 +9545,7 @@ let match_one_hot_cmpeq ~ienv ~eval_prec ~from_ ~to_ (k : Indexing.symbol) :
             (v, scope_prec)
   in
   function
-  | Binop (Ops.Cmpeq, (a, pa), (b, pb)) when one_hot_range_exact_in eval_prec ~from_ ~to_ ->
+  | Binop (Ops.Cmpeq, (a, pa), (b, pb)) when one_hot_range_exact_in cmpeq_prec ~from_ ~to_ ->
       if is_embedded_range_iterator k a && not (scalar_mentions_symbol k b) then index (b, pb)
       else if is_embedded_range_iterator k b && not (scalar_mentions_symbol k a) then index (a, pa)
       else None
@@ -9563,7 +9563,6 @@ let match_one_hot_cmpeq ~ienv ~eval_prec ~from_ ~to_ (k : Indexing.symbol) :
 let match_one_hot_contribution ~ienv ~eval_prec ~from_ ~to_ (k : Indexing.symbol)
     (contribution : scalar_t) :
     (Tn.t * Indexing.axis_index array * Ops.prec list * scalar_arg) option =
-  let match_cmpeq = match_one_hot_cmpeq ~ienv ~eval_prec ~from_ ~to_ k in
   (* gh-ocannl-2374: look through precision conversions wrapping the table read -- [Round_prec]
      (from [simplify_llc]'s narrowing-read fold, gh-ocannl-1975) and single-assignment float cast
      [Local_scope]s (e.g. f64 -> f32) -- preserving the conversion chain innermost-first. *)
@@ -9590,12 +9589,17 @@ let match_one_hot_contribution ~ienv ~eval_prec ~from_ ~to_ (k : Indexing.symbol
     | _ -> None
   in
   match contribution with
-  | Ternop (Ops.Where, cond, (then_, _), (Constant 0., _)) -> (
-      match (match_cmpeq (fst cond), as_table_get then_) with
+  | Ternop (Ops.Where, (cond_sc, cond_prec), (then_, _), (Constant 0., _)) -> (
+      (* A [Where] condition evaluates at its own annotation [cond_prec], not the accumulator's
+         [eval_prec]. *)
+      match
+        (match_one_hot_cmpeq ~ienv ~cmpeq_prec:cond_prec ~from_ ~to_ k cond_sc, as_table_get then_)
+      with
       | Some index_expr, Some (table, table_idcs, rounds) ->
           Some (table, table_idcs, rounds, index_expr)
       | _ -> None)
   | Binop (Ops.Mul, (a, _), (b, _)) -> (
+      let match_cmpeq = match_one_hot_cmpeq ~ienv ~cmpeq_prec:eval_prec ~from_ ~to_ k in
       (* one factor is the comparison, the other is the table read *)
       match (match_cmpeq a, as_table_get b) with
       | Some index_expr, Some (table, table_idcs, rounds) ->
@@ -9615,11 +9619,12 @@ let match_one_hot_contribution ~ienv ~eval_prec ~from_ ~to_ (k : Indexing.symbol
    that [g] is free of [k] and does not read the written tensor. *)
 let match_transposed_one_hot_contribution ~ienv ~eval_prec ~from_ ~to_ (k : Indexing.symbol)
     (contribution : scalar_t) : (scalar_arg * scalar_arg) option =
-  let match_cmpeq = match_one_hot_cmpeq ~ienv ~eval_prec ~from_ ~to_ k in
   match contribution with
-  | Ternop (Ops.Where, cond, then_, (Constant 0., _)) ->
-      Option.map (match_cmpeq (fst cond)) ~f:(fun index_expr -> (index_expr, then_))
+  | Ternop (Ops.Where, (cond_sc, cond_prec), then_, (Constant 0., _)) ->
+      Option.map (match_one_hot_cmpeq ~ienv ~cmpeq_prec:cond_prec ~from_ ~to_ k cond_sc)
+        ~f:(fun index_expr -> (index_expr, then_))
   | Binop (Ops.Mul, a, b) -> (
+      let match_cmpeq = match_one_hot_cmpeq ~ienv ~cmpeq_prec:eval_prec ~from_ ~to_ k in
       match match_cmpeq (fst a) with
       | Some index_expr -> Some (index_expr, b)
       | None -> Option.map (match_cmpeq (fst b)) ~f:(fun index_expr -> (index_expr, a)))
