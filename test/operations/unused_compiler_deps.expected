@@ -32,6 +32,8 @@ a stanza with no object directory under enabled_if is inactive, not refused: tru
 an object directory holding no typed tree is refused: true
 an object directory holding an unreadable typed tree is refused: true
 a description dune refuses to produce is refused: true
+a probe resolving to zero or multiple libraries is refused: true
+a control asserting one refusal format rejects another refusal whose arguments contain its text: true
 the synthetic tool calls leave action stderr empty: true
 the workspace description names compiler-libs.common: true
 every dune file and the workspace description lie within the recognised forms: true
@@ -58,6 +60,37 @@ every fixture library the check must report is derived as compiler-reaching: tru
 every fixture stanza is read and reported for exactly its expected libraries: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:38ed84dac52cdd93b3e3c36d807a9b78] csexp an unclosed
+  [scanner-refusal:7b9f08df1830b83e15f81735eb806b0a] atom length without
+  [scanner-refusal:8e4f5848655803e7e25d07ef21708b5d] atom runs past
+  [scanner-refusal:a5b33c62232554fef4df88809fa612c6] csexp unexpected byte
+  [scanner-refusal:46d0267ea0664bd9e2a413612e062656] csexp an unbalanced
+  [scanner-refusal:4af5e799f2d3c8b89fbbe0264fb9a4da] dune describe workspace
+  [scanner-refusal:cc8f7ce3ee8855d58ceda3c3058bb5ae] outside the recognised
+  [scanner-refusal:de4b903cfa394b4049d2db6381615ab2] describe a library
+  [scanner-refusal:18f29b05a5530dc0b19d1f70a9e46645] describe a library's
+  [scanner-refusal:44bdc924085a33ef9a9fe15cbc3a9dfa] describe a library
+  [scanner-refusal:e78a529971f9ec7b38bb24067becb24a] context other than
+  [scanner-refusal:6b085283b3405e85ba3d11513cb884a8] outside the recognised
+  [scanner-refusal:819aea460d5462662096e99432e67c9a] describe not one
+  [scanner-refusal:6e0e71605968988d9c01bcfd8d28af8a] recognised unit definitions
+  [scanner-refusal:dabba7b36e489ee77f7d116fc69bf1ef] malformed interface import
+  [scanner-refusal:cb2bfd7df9e67d7e7bfae1edabb9ca51] could not inspect
+  [scanner-refusal:cc150842e2a3378d147846073232fa3f] shared include directory
+  [scanner-refusal:16f777ad18ff660f1debccb5fbf474fd] archive query for
+  [scanner-refusal:53c0a1deae3afb540f685cce0e25b545] interface-only unit
+  [scanner-refusal:ec195edbfb60eee2dbaf9bcc4c5938ea] stanza without a
+  [scanner-refusal:584d40dd3eabb5585f6ced0fe671eb57] stanza whose stanzas
+  [scanner-refusal:532ff6f33244b0d4e6bac5171d60e0b6] carries a libraries
+  [scanner-refusal:63b88fa452bec0fdd00be66980960322] pform in libraries
+  [scanner-refusal:712ec45e25069175f8164f1106fcc5fb] outside the recognised
+  [scanner-refusal:1e9d3fc1767c7da9e48ecb3a1bb3f179] select arm holds
+  [scanner-refusal:b70a2b3bb6d2686b6ec9fcc2d0778373] libraries element outside
+  [scanner-refusal:9c87841ead2852ff3454a7426f94e5dc] the declared library
+  [scanner-refusal:90c4db4dc0ddba1d876dfb79175075f8] no object directory
+  [scanner-refusal:e654ceab66220252a649c7bb36aa0e49] object directory
+  [scanner-refusal:4bb6aa436016609d636df4dbb21c88fd] unreadable typed tree
+  [scanner-refusal:1705a50114bbcfdc7d549777efcf1348] no single library
   [scanner-refusal:1c8850699d8f9fec6290b9542a410741] an unreadable archive
   [scanner-refusal:e25a1cf286ceb521ee4eb7746aad5229] archive tool producing
   [scanner-refusal:ff2924c3a9869dd3bc7f7d72acd8ead1] malformed archive interface
@@ -92,6 +125,8 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:7398f68cb579d4b59ac9ce927f234276] object directory holding
   [scanner-refusal:b1784c07fa1dac619848cd1b4a9d64f0] object directory holding
   [scanner-refusal:69ce705759093b5f97c6cc8e0413a500] description dune refuses
+  [scanner-refusal:8c24881b343b90be6f9574bf281e5045] or multiple libraries
+  [scanner-refusal:80993f82fb1569705822b50a7436584e] rejects another refusal
   [scanner-refusal:044e249871007719b6bc46d149189c1d] synthetic tool calls
   [scanner-refusal:22c08112ff7b660af6dab49542313b14] compiler-libs.common
   [scanner-refusal:5c6002f7f040eddc8696d03b9a9bb9e2] the workspace description

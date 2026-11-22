@@ -814,6 +814,37 @@ explicit_library_deps.ml: [scanner-refusal:bd4e1515861d31f929904e3deb2b0b7b] und
 explicit_library_deps.ml: [scanner-refusal:36550c0b9c79bcf4a0384888ee112619] declared library's re-export (claim) is catalogued beside explicit_library_deps.expected: true
 explicit_library_deps.ml: [scanner-refusal:068ac0a43201ecb7fea5899eba10c386] runtime dependency compiles (claim) is catalogued beside explicit_library_deps.expected: true
 unused_compiler_deps.ml has exactly the explicitly assigned refusal controls: true
+unused_compiler_deps.ml: [scanner-refusal:38ed84dac52cdd93b3e3c36d807a9b78] csexp an unclosed (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:7b9f08df1830b83e15f81735eb806b0a] atom length without (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:8e4f5848655803e7e25d07ef21708b5d] atom runs past (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:a5b33c62232554fef4df88809fa612c6] csexp unexpected byte (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:46d0267ea0664bd9e2a413612e062656] csexp an unbalanced (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:4af5e799f2d3c8b89fbbe0264fb9a4da] dune describe workspace (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:cc8f7ce3ee8855d58ceda3c3058bb5ae] outside the recognised (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:de4b903cfa394b4049d2db6381615ab2] describe a library (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:18f29b05a5530dc0b19d1f70a9e46645] describe a library's (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:44bdc924085a33ef9a9fe15cbc3a9dfa] describe a library (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:e78a529971f9ec7b38bb24067becb24a] context other than (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:6b085283b3405e85ba3d11513cb884a8] outside the recognised (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:819aea460d5462662096e99432e67c9a] describe not one (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:6e0e71605968988d9c01bcfd8d28af8a] recognised unit definitions (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:dabba7b36e489ee77f7d116fc69bf1ef] malformed interface import (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:cb2bfd7df9e67d7e7bfae1edabb9ca51] could not inspect (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:cc150842e2a3378d147846073232fa3f] shared include directory (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:16f777ad18ff660f1debccb5fbf474fd] archive query for (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:53c0a1deae3afb540f685cce0e25b545] interface-only unit (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:ec195edbfb60eee2dbaf9bcc4c5938ea] stanza without a (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:584d40dd3eabb5585f6ced0fe671eb57] stanza whose stanzas (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:532ff6f33244b0d4e6bac5171d60e0b6] carries a libraries (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:63b88fa452bec0fdd00be66980960322] pform in libraries (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:712ec45e25069175f8164f1106fcc5fb] outside the recognised (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:1e9d3fc1767c7da9e48ecb3a1bb3f179] select arm holds (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:b70a2b3bb6d2686b6ec9fcc2d0778373] libraries element outside (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:9c87841ead2852ff3454a7426f94e5dc] the declared library (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:90c4db4dc0ddba1d876dfb79175075f8] no object directory (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:e654ceab66220252a649c7bb36aa0e49] object directory (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:4bb6aa436016609d636df4dbb21c88fd] unreadable typed tree (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:1705a50114bbcfdc7d549777efcf1348] no single library (direct failure) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:1262ba0367f56ab63b0ef45185bb1257] control stanza must (direct failure) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:1c8850699d8f9fec6290b9542a410741] an unreadable archive (claim) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:e25a1cf286ceb521ee4eb7746aad5229] archive tool producing (claim) is catalogued beside unused_compiler_deps.expected: true
@@ -849,6 +880,8 @@ unused_compiler_deps.ml: [scanner-refusal:910c1650b37b93c2cd7917497f236fb2] enab
 unused_compiler_deps.ml: [scanner-refusal:7398f68cb579d4b59ac9ce927f234276] object directory holding (claim) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:b1784c07fa1dac619848cd1b4a9d64f0] object directory holding (claim) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:69ce705759093b5f97c6cc8e0413a500] description dune refuses (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:8c24881b343b90be6f9574bf281e5045] or multiple libraries (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:80993f82fb1569705822b50a7436584e] rejects another refusal (claim) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:351ce2a461cb37393c61069ee2649d96] unused_compiler_deps (direct failure) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:36778054d93aa08eac389989017aed7a] DUNE_SOURCEROOT (direct failure) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:044e249871007719b6bc46d149189c1d] synthetic tool calls (claim) is catalogued beside unused_compiler_deps.expected: true
