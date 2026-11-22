@@ -1,0 +1,12 @@
+; Reuse the source reader at build time without linking the test libraries or the parser into Utils.
+
+(copy_files ../../../test/support/config_key_scan.ml)
+
+(copy_files ../../../test/support/scan_floors.ml)
+
+(executable
+ (name generate_eager_config_keys)
+ (modules generate_eager_config_keys config_key_scan scan_floors)
+ (libraries base stdio ppxlib)
+ (preprocess
+  (pps ppxlib.metaquot)))

@@ -1,6 +1,6 @@
 HIP cache identity contains the selected production math switches, including the default regime: true
 the flip and unflippable tables cover exactly the Keyed class: true
-every key utils.ml resolves into Utils.settings is flipped through restore_settings, and only those: true
+every key utils.ml resolves into Utils.settings is flipped through its field or startup resolution, and only those: true
 every Keyed key the running backend hashes moves its own component when flipped: true
 and no Keyed flip moves a component its classification does not account for: true
 every Keyed key outside the running backend's scope moves nothing when flipped: true
@@ -11,6 +11,7 @@ no unflippable Keyed key is read per lookup by the key computation: true
 the backend name moves its own component: true
 and only components it reaches: true
 the backend's facts move only the components they reach: true
+big_models at startup moves only its classified component when large_models is unset: true
 cc_grid_private_bytes_cap, stated in a child, moves the codegen component alone on a CPU backend, and nothing on a GPU one: true
 max_shape_error_origins, stated in a child, moves nothing in the cache key: true
 every child run of the pool-class flips completed: true
@@ -18,7 +19,7 @@ no pool-class flip moves a component other than the pool and what follows from i
 with the chunk count auto, codegen beyond the pool tag moves exactly when the pool width does: true
 with the chunk count stated, a pool-class flip moves codegen only through the pool tag: true
 the pool component separates exactly the pool decisions that differ: true
-each settings-borne key outside Keyed is flipped by restore_settings: true
+each settings-borne key outside Keyed changes its settings field: true
 and moves no component of the cache key: true
 no registered non-Keyed key moves the cache key when flipped off its default: true
 two fresh builds of the probe compile to the same kernel under the same key: true
@@ -27,6 +28,7 @@ no such key changes the emitted kernel while leaving the cache key unchanged: tr
 
 Keyed keys this sweep cannot flip in-process:
   backend -- a parameter, not a lookup: backends are process-wide singletons, and the component is the backend name the caller passes -- varied through that argument
+  big_models -- the compatibility alias initializes Utils.settings.large_models when large_models is unset -- varied at startup in child processes
   cc_pool_core_class -- resolved once, by the lazy [Cc_backend.pool_restriction] the first compile forces; the pool tag it decides is what the component hashes -- varied in child processes, held to separating exactly the pool decisions that differ and to moving codegen only through that decision: its tag in the limits record, and the auto chunk count its width sets
   cc_grid_private_bytes_cap -- resolved once, by the lazy [C_syntax.per_chunk_private_bytes_cap] the first compile forces; the codegen tag hashes that resolved value -- varied in child processes
 

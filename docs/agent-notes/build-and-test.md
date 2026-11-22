@@ -7525,9 +7525,14 @@ box.
   raises; `Utils.unstate_config` withdraws one (gh-ocannl-2354). A statement ranks above every
   source a run is given: the commandline, every `OCANNL_<KEY>`, the config file and any profile.
   A commandline argument that contradicts it is refused at the statement, naming the key, and so is
-  a key resolved while the library initializes (`profile`, the bootstrap keys). Never write
-  `Utils.config_file_args`. That is the config FILE's table, below the environment, so a write
-  there runs under the caller's value whenever one is exported, which is the
+  a key resolved while `Utils` initializes (`profile`, bootstrap keys, `Utils.settings` inputs,
+  and `detach_c_stderr`, gh-ocannl-2395). The build derives the snapshot inputs from the
+  assignments to `Utils.settings` and requires a recognized initializer for every field. Use a
+  startup source to test resolution, or vary the mutable field directly to test its consumers.
+  Before gh-ocannl-2395 a statement could change a snapshot when followed by
+  `Utils.restore_settings`. The setter now rejects those keys before the restore can read them.
+  Never write `Utils.config_file_args`. The config file's table ranks below the environment. A
+  write there runs under the caller's value whenever one is exported, which is the
   `OCANNL_<KEY>=… dune build @…` recipe AGENTS.md gives, and nothing says so:
   lukstafi/ocannl-staging#2144 failed four claims that way. `config_statement_scan` (in
   `@test/operations/scans`) refuses any use of the table under `test/` and `arrayjit/test/` but a

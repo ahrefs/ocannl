@@ -265,14 +265,12 @@ val state_config : key:String.t -> data:String.t -> unit
     commandline, the environment, the config file and any profile -- so a test that states the
     configuration it tests is not outranked by an ambient [OCANNL_<KEY>] (gh-ocannl-2354). Raises
     [Invalid_argument] naming the key when a commandline argument sets [key] to a different value,
-    for a key the library resolves while it initializes ([profile] and the bootstrap keys), which no
-    statement can reach, and for a key not spelled as the reads look it up (lowercase letters,
-    digits and underscores, without the [ocannl_] prefix), or for a key {!known_config_keys} does
-    not register. A key fixed when the library initializes (a [Utils.settings] snapshot, for one) is
-    not refused, and no statement reaches it: see the eager class in
-    docs/agent-notes/build-and-test.md, Process-lifetime settings. A setting a module holds for the
-    process's lifetime (a lazy at module initialization) still keeps the value its first read saw:
-    state the key before that. *)
+    for the bootstrap keys, [profile], the keys initializing {!settings}, and [detach_c_stderr], and
+    for unregistered keys or spellings other than lowercase letters, digits and underscores without
+    the [ocannl_] prefix. Supply initialization keys on the command line, in the environment, or in
+    the config file where supported. To change a field of {!settings} in process, assign it
+    directly. Since gh-ocannl-2395, a statement of a snapshot input is refused before
+    {!restore_settings} can read it. State a key read by a lazy before its first force. *)
 
 val unstate_config : String.t -> unit
 (** Withdraws [key]'s in-process statement, if any; the other sources answer for it again. *)
@@ -456,7 +454,9 @@ val routine_log_level_notice : string
     too low to enable it. *)
 
 val restore_settings : unit -> unit
-(** Resets {!settings} to the values the configuration gives. *)
+(** Reapplies the startup log level and rereads the other {!settings} inputs from the command line,
+    environment, config file and profiles. These keys cannot carry in-process statements because
+    {!state_config} refuses them. *)
 
 val with_runtime_debug : unit -> bool
 (** Whether compilation keeps debug information: debug files on and [log_level > 1]. *)

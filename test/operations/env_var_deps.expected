@@ -1,6 +1,7 @@
 Directories whose sources this scan reads:
   arrayjit/lib
   arrayjit/lib/gen_builtins
+  arrayjit/lib/gen_config_keys
   arrayjit/test
   arrayjit/vendor_stubs/cudajit/typecheck
   arrayjit/vendor_stubs/hipjit
@@ -471,6 +472,7 @@ will copy them from, and the tallies go to stderr (gh-ocannl-659, gh-ocannl-665)
   .claude/dune: nothing that runs a test executable
   arrayjit/lib/dune: markers: none
   arrayjit/lib/gen_builtins/dune: nothing that runs a test executable
+  arrayjit/lib/gen_config_keys/dune: nothing that runs a test executable
   arrayjit/test/dune: declares OCANNL_BACKEND; markers: cc, cuda, metal, none
   arrayjit/vendor_stubs/arms/dune: nothing that runs a test executable
   arrayjit/vendor_stubs/cudajit/dune: nothing that runs a test executable

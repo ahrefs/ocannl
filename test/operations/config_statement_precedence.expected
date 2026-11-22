@@ -13,3 +13,5 @@ a statement contradicting the commandline is refused, naming the key and the arg
 a contradicted statement leaves no statement behind: true
 a statement of a key in a spelling no read looks up, or one no read registers, is refused, naming the key: true
 a statement of a key resolved at initialization is refused, naming the key: true
+a statement of a settings snapshot is refused, naming the key: true
+a startup-only input or compatibility spelling is refused, naming the key: true

@@ -20,6 +20,8 @@
     labelled argument is one node however it was spelled, a string literal carries its decoded value
     whatever escapes produced it, and a structure item covers exactly the source it covers. *)
 
+(* The library's eager-key generator compiles this reader and calls [settings_field_initializers],
+   [keyed_reads] and [pattern_name]. *)
 open Base
 open Ppxlib.Parsetree
 
