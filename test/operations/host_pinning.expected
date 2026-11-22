@@ -14,3 +14,4 @@ dynamic disable after registration: already-pinned array stays true, new arrays 
 overlapping slice then parent: slice evicted on parent upload, parent registers, slices covered without re-registering: true
 failed overlap eviction: refuses mixed-range parent transfer, then recovers and registers parent: true
 failed rollback after finaliser race during register: reports pinned and recovers on retry: true
+with_transfer guard: overlapping sub-slice registration on another domain waits until parent transfer finishes: true

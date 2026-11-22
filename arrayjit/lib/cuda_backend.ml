@@ -521,14 +521,14 @@ end = struct
 
     let state : token Host_pinning.t = Host_pinning.create ~min_bytes ~register ~unregister
 
-    let note_transfer ~(device : device) (nd : Ndarray.t) : bool =
-      if not device.dev.host_register_eligible then false
+    let with_transfer ~(device : device) (nd : Ndarray.t) f =
+      if not device.dev.host_register_eligible then f ~registered:false
       else
         let saved = Stdlib.Domain.DLS.get active_context in
         Stdlib.Domain.DLS.set active_context (Some device.dev.primary_context);
         Exn.protect
           ~finally:(fun () -> Stdlib.Domain.DLS.set active_context saved)
-          ~f:(fun () -> Host_pinning.note_transfer state nd)
+          ~f:(fun () -> Host_pinning.with_transfer state nd f)
 
     let unregister_all () = Host_pinning.unregister_all state
     let stats () = Host_pinning.stats state
@@ -542,21 +542,21 @@ end = struct
   let from_host ~dst ~dst_loc hosted =
     set_ctx @@ ctx_of dst;
     let base = Slab.resolve_pool dst.device dst_loc in
-    let registered = Host_register.note_transfer ~device:dst.device hosted in
-    let f src =
-      let full_bytes = Bigarray.Genarray.size_in_bytes src in
-      let elem_bytes = Bigarray.kind_size_in_bytes (Bigarray.Genarray.kind src) in
-      Cu.Stream.memcpy_H_to_D ~length:(full_bytes / elem_bytes) ~dst_offset:dst_loc.offset ~dst:base
-        ~src dst.device.runner
-    in
-    Ndarray.apply { f } hosted;
-    if registered then (
-      (* Page-locked [cuMemcpyHtoDAsync] returns while DMA is still reading [hosted], whereas a
-         pageable transfer waits until host memory has been read. Synchronize here so every caller
-         (including [Backends.allocate_delta], which does not await immediately) keeps the same
-         completion contract, and keep [hosted] alive past the sync. *)
-      Cu.Stream.synchronize dst.device.runner;
-      ignore (Stdlib.Sys.opaque_identity hosted))
+    Host_register.with_transfer ~device:dst.device hosted (fun ~registered ->
+        let f src =
+          let full_bytes = Bigarray.Genarray.size_in_bytes src in
+          let elem_bytes = Bigarray.kind_size_in_bytes (Bigarray.Genarray.kind src) in
+          Cu.Stream.memcpy_H_to_D ~length:(full_bytes / elem_bytes) ~dst_offset:dst_loc.offset
+            ~dst:base ~src dst.device.runner
+        in
+        Ndarray.apply { f } hosted;
+        if registered then (
+          (* Page-locked [cuMemcpyHtoDAsync] returns while DMA is still reading [hosted], whereas a
+             pageable transfer waits until host memory has been read. Synchronize here so every
+             caller (including [Backends.allocate_delta], which does not await immediately) keeps
+             the same completion contract, and keep [hosted] alive past the sync. *)
+          Cu.Stream.synchronize dst.device.runner;
+          ignore (Stdlib.Sys.opaque_identity hosted)))
 
   let to_host ~src ~src_loc hosted =
     set_ctx @@ ctx_of src;

@@ -201,96 +201,103 @@ let sight_new_locked t ~addr ~bytes nd =
     nd;
   false
 
-let note_transfer t nd =
+let decide_transfer_locked t ~addr ~bytes ~end_addr ~threshold nd =
+  drain_retries_locked t;
+  drain_retired_locked t;
+  prune_active_pinned_locked t;
+  (* 1. If an already-registered range completely covers [addr, end_addr), the copy is already
+     pinned and needs no new registration (even for a sub-slice smaller than [threshold]). *)
+  let covered =
+    List.exists t.active_pinned ~f:(fun r ->
+        match Atomic.get r.state with
+        | Registered _ | Retry_unregister _ ->
+            contains ~outer_addr:r.addr ~outer_end:r.end_addr ~inner_addr:addr ~inner_end:end_addr
+        | _ -> false)
+  in
+  if covered then true
+  else
+    (* 2. If any active registration partially overlaps [addr, end_addr), evict it first so the
+       driver never sees a copy spanning registered and unregistered host memory. *)
+    let still_overlapping =
+      List.fold t.active_pinned ~init:false ~f:(fun acc r ->
+          if overlaps ~a_addr:r.addr ~a_end:r.end_addr ~b_addr:addr ~b_end:end_addr then
+            let evicted = attempt_unregister_locked t r ~next_state:Declined in
+            acc || not evicted
+          else acc)
+    in
+    drain_retired_locked t;
+    prune_active_pinned_locked t;
+    if still_overlapping then
+      (* A partially overlapping registration could not be unpinned: refuse to let the backend
+         submit a mixed registered/unregistered copy range. *)
+      raise (Overlap_eviction_failed { addr; bytes })
+    else if threshold <= 0 || bytes < threshold then false
+    else
+      let key = (addr, bytes) in
+      match Hashtbl.find t.table key with
+      | None -> sight_new_locked t ~addr ~bytes nd
+      | Some e -> (
+          match Atomic.get e.state with
+          | Registered _ -> true
+          | Declined -> false
+          | Dead -> sight_new_locked t ~addr ~bytes nd
+          | Unregistering | Retry_unregister _ -> true
+          | Seen -> (
+              match t.register ~addr ~bytes with
+              | None ->
+                  ignore (Atomic.compare_and_set e.state Seen Declined : bool);
+                  Atomic.incr t.declined;
+                  false
+              | Some token -> (
+                  Atomic.incr t.registered;
+                  if Atomic.compare_and_set e.state Seen (Registered { token; bytes }) then (
+                    Atomic.incr t.live_registered;
+                    ignore (Atomic.fetch_and_add t.live_bytes bytes : int);
+                    t.active_pinned <- e :: t.active_pinned;
+                    ignore (Stdlib.Sys.opaque_identity nd);
+                    true)
+                  else
+                    (* A finalizer won the race and moved [e.state] to [Dead] while [t.register]
+                       ran: undo the registration immediately; if undo fails, keep it retryable with
+                       [nd] alive and honest live accounting. *)
+                    try
+                      t.unregister token;
+                      Atomic.incr t.unregistered;
+                      false
+                    with _ ->
+                      Atomic.incr t.unregister_failures;
+                      Atomic.incr t.live_registered;
+                      ignore (Atomic.fetch_and_add t.live_bytes bytes : int);
+                      let retry_entry =
+                        {
+                          addr;
+                          bytes;
+                          end_addr;
+                          state = Atomic.make (Retry_unregister { token; bytes });
+                          finalized_keep = Atomic.make (Some (Keep nd));
+                        }
+                      in
+                      t.active_pinned <- retry_entry :: t.active_pinned;
+                      push_retry t retry_entry;
+                      (* The driver still holds the pin until retry succeeds, so report pinned to
+                         keep stream synchronisation safe. *)
+                      true)))
+
+let with_transfer t nd f =
   let bytes = Ndarray.size_in_bytes nd in
   let threshold = t.min_bytes () in
-  if bytes <= 0 then false
-  else if (threshold <= 0 || bytes < threshold) && Atomic.get t.live_registered = 0 then false
+  if bytes <= 0 then f ~registered:false
+  else if threshold <= 0 && Atomic.get t.live_registered = 0 then f ~registered:false
   else
     let addr = Ndarray.to_native nd in
     let end_addr = Nativeint.(addr + of_int bytes) in
     Stdlib.Mutex.protect t.lock (fun () ->
-        drain_retries_locked t;
-        drain_retired_locked t;
-        prune_active_pinned_locked t;
-        (* 1. If an already-registered range completely covers [addr, end_addr), the copy is already
-           pinned and needs no new registration (even for a sub-slice smaller than [threshold]). *)
-        let covered =
-          List.exists t.active_pinned ~f:(fun r ->
-              match Atomic.get r.state with
-              | Registered _ | Retry_unregister _ ->
-                  contains ~outer_addr:r.addr ~outer_end:r.end_addr ~inner_addr:addr
-                    ~inner_end:end_addr
-              | _ -> false)
-        in
-        if covered then true
-        else
-          (* 2. If any active registration partially overlaps [addr, end_addr), evict it first so
-             the driver never sees a copy spanning registered and unregistered host memory. *)
-          let still_overlapping =
-            List.fold t.active_pinned ~init:false ~f:(fun acc r ->
-                if overlaps ~a_addr:r.addr ~a_end:r.end_addr ~b_addr:addr ~b_end:end_addr then
-                  let evicted = attempt_unregister_locked t r ~next_state:Declined in
-                  acc || not evicted
-                else acc)
-          in
-          drain_retired_locked t;
-          prune_active_pinned_locked t;
-          if still_overlapping then
-            (* A partially overlapping registration could not be unpinned: refuse to let the backend
-               submit a mixed registered/unregistered copy range. *)
-            raise (Overlap_eviction_failed { addr; bytes })
-          else if threshold <= 0 || bytes < threshold then false
-          else
-            let key = (addr, bytes) in
-            match Hashtbl.find t.table key with
-            | None -> sight_new_locked t ~addr ~bytes nd
-            | Some e -> (
-                match Atomic.get e.state with
-                | Registered _ -> true
-                | Declined -> false
-                | Dead -> sight_new_locked t ~addr ~bytes nd
-                | Unregistering | Retry_unregister _ -> true
-                | Seen -> (
-                    match t.register ~addr ~bytes with
-                    | None ->
-                        ignore (Atomic.compare_and_set e.state Seen Declined : bool);
-                        Atomic.incr t.declined;
-                        false
-                    | Some token -> (
-                        Atomic.incr t.registered;
-                        if Atomic.compare_and_set e.state Seen (Registered { token; bytes }) then (
-                          Atomic.incr t.live_registered;
-                          ignore (Atomic.fetch_and_add t.live_bytes bytes : int);
-                          t.active_pinned <- e :: t.active_pinned;
-                          ignore (Stdlib.Sys.opaque_identity nd);
-                          true)
-                        else
-                          (* A finalizer won the race and moved [e.state] to [Dead] while
-                             [t.register] ran: undo the registration immediately; if undo fails,
-                             keep it retryable with [nd] alive and honest live accounting. *)
-                          try
-                            t.unregister token;
-                            Atomic.incr t.unregistered;
-                            false
-                          with _ ->
-                            Atomic.incr t.unregister_failures;
-                            Atomic.incr t.live_registered;
-                            ignore (Atomic.fetch_and_add t.live_bytes bytes : int);
-                            let retry_entry =
-                              {
-                                addr;
-                                bytes;
-                                end_addr;
-                                state = Atomic.make (Retry_unregister { token; bytes });
-                                finalized_keep = Atomic.make (Some (Keep nd));
-                              }
-                            in
-                            t.active_pinned <- retry_entry :: t.active_pinned;
-                            push_retry t retry_entry;
-                            (* The driver still holds the pin until retry succeeds, so report pinned
-                               to keep stream synchronisation safe. *)
-                            true))))
+        let registered = decide_transfer_locked t ~addr ~bytes ~end_addr ~threshold nd in
+        let result = f ~registered in
+        ignore (Stdlib.Sys.opaque_identity nd);
+        result)
+
+let note_transfer t nd = with_transfer t nd (fun ~registered -> registered)
 
 let unregister_all t =
   Stdlib.Mutex.protect t.lock (fun () ->

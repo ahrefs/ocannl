@@ -363,4 +363,50 @@ let () =
     ((not rb_s1) && alias_gone && rb_r2 && st_rb_fail.registered = 1
     && st_rb_fail.unregister_failures = 1
     && st_rb_fail.live_bytes = 8192 && st_rb_ok.unregistered = 1 && st_rb_ok.live_bytes = 0);
-  ignore (Stdlib.Sys.opaque_identity rb_nd2)
+  ignore (Stdlib.Sys.opaque_identity rb_nd2);
+
+  (* 12. [with_transfer] holds the pin-state guard across the transfer callback: while domain A is
+     inside [with_transfer] on an unregistered parent, domain B attempting to register a sighted
+     overlapping sub-slice cannot complete [register] until domain A's callback finishes. *)
+  let parent_transfer_done = Atomic.make false in
+  let slice_registered_during_parent = Atomic.make false in
+  let domain_b_started = Atomic.make false in
+  let hp_guard =
+    HP.create
+      ~min_bytes:(fun () -> 4096)
+      ~register:(fun ~addr ~bytes ->
+        if not (Atomic.get parent_transfer_done) then Atomic.set slice_registered_during_parent true;
+        Some (addr, bytes))
+      ~unregister:(fun _ -> ())
+  in
+  let g_parent_ba = Bigarray.Genarray.create Bigarray.float32 Bigarray.c_layout [| 2; 1024 |] in
+  let g_parent_nd = Nd.as_array Ops.Single g_parent_ba in
+  let g_slice_nd = Nd.as_array Ops.Single (Bigarray.Genarray.sub_left g_parent_ba 0 1) in
+  (* Sight the sub-slice once so its next transfer will register it as soon as it acquires the
+     guard. *)
+  ignore (HP.note_transfer hp_guard g_slice_nd : bool);
+  let domain_b = ref None in
+  let parent_reg =
+    HP.with_transfer hp_guard g_parent_nd (fun ~registered ->
+        let d =
+          Stdlib.Domain.spawn (fun () ->
+              Atomic.set domain_b_started true;
+              HP.with_transfer hp_guard g_slice_nd (fun ~registered -> registered))
+        in
+        domain_b := Some d;
+        while not (Atomic.get domain_b_started) do
+          Stdlib.Domain.cpu_relax ()
+        done;
+        (* Give domain B time to reach the mutex; it must stay blocked until we finish. *)
+        for _ = 1 to 200_000 do
+          Stdlib.Domain.cpu_relax ()
+        done;
+        Atomic.set parent_transfer_done true;
+        registered)
+  in
+  let slice_reg = Stdlib.Domain.join (Option.value_exn !domain_b) in
+  p
+    "with_transfer guard: overlapping sub-slice registration on another domain waits until parent \
+     transfer finishes"
+    ((not parent_reg) && slice_reg && not (Atomic.get slice_registered_during_parent));
+  ignore (Stdlib.Sys.opaque_identity (g_parent_nd, g_slice_nd))

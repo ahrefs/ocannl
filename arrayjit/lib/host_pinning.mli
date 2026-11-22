@@ -32,8 +32,9 @@ type stats = {
 [@@deriving sexp_of]
 
 exception Overlap_eviction_failed of { addr : nativeint; bytes : int }
-(** Raised by {!note_transfer} when a transfer partially overlaps an active registration whose
-    [unregister] failed, refusing to let the backend submit a mixed registered/unregistered copy. *)
+(** Raised by {!with_transfer} / {!note_transfer} when a transfer partially overlaps an active
+    registration whose [unregister] failed, refusing to let the backend submit a mixed
+    registered/unregistered copy. *)
 
 val create :
   min_bytes:(unit -> int) ->
@@ -41,11 +42,16 @@ val create :
   unregister:('token -> unit) ->
   'token t
 
+val with_transfer : 'token t -> Ndarray.t -> (registered:bool -> 'a) -> 'a
+(** Records a host-to-device transfer of [nd] and executes the transfer callback under the pin-state
+    guard, passing [~registered:true] iff [nd] is covered by a live registration for this transfer
+    (including a registration whose rollback failed and remains pinned in the driver). Holding the
+    guard across the callback prevents another domain's transfer or teardown from mutating
+    overlapping registration coverage between the pin-state decision and transfer submission. Raises
+    {!Overlap_eviction_failed} if a partially overlapping registration could not be unregistered. *)
+
 val note_transfer : 'token t -> Ndarray.t -> bool
-(** Records a host-to-device transfer of [nd]. Returns [true] iff [nd] is covered by a live
-    registration for this transfer (including a registration whose rollback failed and remains
-    pinned in the driver). Raises {!Overlap_eviction_failed} if a partially overlapping registration
-    could not be unregistered. *)
+(** Convenience wrapper returning [with_transfer t nd (fun ~registered -> registered)]. *)
 
 val unregister_all : 'token t -> unit
 (** Retries any pending failed unregistrations and unregisters every currently live registered
