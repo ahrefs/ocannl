@@ -205,18 +205,94 @@ let short_fail name detail =
   Stdio.printf "%s\n%!" line;
   Stdio.eprintf "FAIL: %s\n" line
 
+(* Opt-in stderr population counts for passing quantified claims (gh-ocannl-2390). Read once from
+   [OCANNL_TOOL_VERDICT_POPULATION]. Grammar (closed): unset, empty, or whitespace-only disables it
+   ([Population_off]); otherwise lines split on ['\n'] with any trailing ['\r'] stripped and empty
+   lines ignored select every passing quantified claim when any line is ["*"] ([Population_all]), or
+   else form an exact-match set against [one_line name] ([Population_labels set]) without trimming
+   non-blank lines. No substring matching, globbing, regex, or delimiter other than newline: claim
+   labels commonly contain commas, colons, and spaces, whereas {!one_line} guarantees every rendered
+   label is one line. Unmatched labels do not fail the run, so enabling diagnostics never alters a
+   test's exit status or stdout golden. *)
+type population_selection = Population_off | Population_all | Population_labels of Set.M(String).t
+
+let population_selection =
+  match Stdlib.Sys.getenv_opt "OCANNL_TOOL_VERDICT_POPULATION" with
+  | None -> Population_off
+  | Some raw when String.for_all raw ~f:Char.is_whitespace -> Population_off
+  | Some raw ->
+      let strip_cr line =
+        match String.chop_suffix line ~suffix:"\r" with Some stripped -> stripped | None -> line
+      in
+      let lines =
+        String.split raw ~on:'\n' |> List.map ~f:strip_cr |> List.filter ~f:(Fn.non String.is_empty)
+      in
+      if List.is_empty lines then Population_off
+      else if List.mem lines "*" ~equal:String.equal then Population_all
+      else Population_labels (Set.of_list (module String) lines)
+
+(* Preserved before any in-process fd-2 redirection (such as [ppx_expect]'s per-test capture or
+   [Stderr_capture]), so enabling [OCANNL_TOOL_VERDICT_POPULATION] cannot leak diagnostic rows into
+   inline expectations while still reaching the process's real stderr (and any parent capturing
+   stderr at spawn, such as [Fresh_process]). Opened only when enabled so normal runs allocate no
+   extra descriptor; binary mode keeps line endings uniform on Windows. *)
+let population_channel =
+  match population_selection with
+  | Population_off -> None
+  | Population_all | Population_labels _ -> (
+      try
+        let ch = Unix.out_channel_of_descr (Unix.dup ~cloexec:true Unix.stderr) in
+        Stdlib.set_binary_mode_out ch true;
+        Some ch
+      with Unix.Unix_error _ -> Some Stdlib.stderr)
+
+let population_selected name =
+  match population_selection with
+  | Population_off -> false
+  | Population_all -> true
+  | Population_labels labels -> Set.mem labels (one_line name)
+
+(* The stderr line a selected passing quantified claim adds: population and floor, tagged outside
+   the golden. Not prefixed [FAIL: ] or [OCANNL_TOOL_VERDICT_], so mutation runners and sweep
+   aggregators ignore it. *)
+let report_population ?what_ran name ~population ~floor =
+  let ch = Option.value population_channel ~default:Stdlib.stderr in
+  Stdlib.Printf.fprintf ch "%s%s: population %d, floor %d (not part of the golden)\n%!"
+    (one_line name)
+    (match what_ran with None -> "" | Some what -> " (" ^ one_line what ^ ")")
+    population floor
+
+(* Existentials check witnesses against [?min] rather than the full population, so the diagnostic
+   names both explicitly rather than conflating them. *)
+let report_exists_population name ~population ~witnesses ~floor =
+  let ch = Option.value population_channel ~default:Stdlib.stderr in
+  Stdlib.Printf.fprintf ch
+    "%s: population %d, witnesses %d, witness floor %d (not part of the golden)\n%!" (one_line name)
+    population witnesses floor
+
 (* The one place the POPULATION floor is checked, so that every combinator resting on it reports a
    short collection the same way. [holds] is not evaluated when the floor fails: on an empty
    collection a quantifier answers without looking, and answering is what we are refusing to accept.
    The default floor asks [is_empty] rather than [length], so the common path stays O(1) over a
-   collection that can be a whole tensor readback; the length is computed only to report a
-   failure. *)
+   collection that can be a whole tensor readback; the length is computed only to report a failure
+   or an opted-in population count. *)
 let with_population ?(min = 1) name ~is_empty ~length holds =
   check_floor name min;
-  if if min = 1 then not (is_empty ()) else length () >= min then p name (holds ())
+  let meets_floor, measured_length =
+    if min = 1 then (not (is_empty ()), None)
+    else
+      let n = length () in
+      (n >= min, Some n)
+  in
+  if meets_floor then (
+    let ok = holds () in
+    p name ok;
+    if ok && population_selected name then
+      let population = match measured_length with Some n -> n | None -> length () in
+      report_population name ~population ~floor:min)
   else
-    let length = length () in
-    short_fail name (if length = 0 then "empty" else Printf.sprintf "only %d of %d" length min)
+    let n = match measured_length with Some n -> n | None -> length () in
+    short_fail name (if n = 0 then "empty" else Printf.sprintf "only %d of %d" n min)
 
 let quantified ?min name xs holds =
   with_population ?min name
@@ -289,10 +365,13 @@ let report_all2_failure name ~cells ~failed ~first =
     (if cells = 1 then "" else "s")
     first
 
-let p_all2 ?min name got want ~f =
-  match all2_outcome ?min name got want ~f with
+let p_all2 ?(min = 1) name got want ~f =
+  match all2_outcome ~min name got want ~f with
   | All2_short detail -> short_fail name detail
-  | All2_holds { failed = 0; _ } -> p name true
+  | All2_holds { failed = 0; _ } ->
+      p name true;
+      if population_selected name then
+        report_population name ~population:(Array.length got) ~floor:min
   | All2_holds { failed; first } ->
       p name false;
       report_all2_failure name ~cells:(Array.length got) ~failed ~first
@@ -400,10 +479,13 @@ let report_close_failure ?what_ran name got want ~differing ~first ~worst ~magni
     (Float.abs (got.(worst) -. want.(worst)))
     worst_tol magnitude
 
-let p_close ?min ?what_ran ?difference_only name got want ~tol =
-  match close_outcome ?min ?difference_only name ~tol got want with
+let p_close ?(min = 1) ?what_ran ?difference_only name got want ~tol =
+  match close_outcome ~min ?difference_only name ~tol got want with
   | Close_short detail -> short_fail name detail
-  | Close_holds { differing = 0; _ } -> p name true
+  | Close_holds { differing = 0; _ } ->
+      p name true;
+      if population_selected name then
+        report_population ?what_ran name ~population:(Array.length got) ~floor:min
   | Close_holds { differing; first; worst; magnitude; worst_tol } ->
       p name false;
       report_close_failure ?what_ran name got want ~differing ~first ~worst ~magnitude ~worst_tol
@@ -478,7 +560,10 @@ let p_exists ?(min = 1) name xs ~f =
   if List.is_empty xs then short_fail name "empty"
   else
     let witnesses = List.count xs ~f in
-    if witnesses >= min then p name true
+    if witnesses >= min then (
+      p name true;
+      if population_selected name then
+        report_exists_population name ~population:(List.length xs) ~witnesses ~floor:min)
     else if min = 1 then p name false
     else short_fail name (Printf.sprintf "only %d of %d match" witnesses min)
 
@@ -925,9 +1010,12 @@ let pass_fail ?detail label b =
     separated by a semicolon, so an empty readback can report both [(empty)] and the useful
     [(got [])] diagnostic. On an elementwise mismatch [?detail] behaves exactly as in {!pass_fail}.
 *)
-let pass_fail_all2 ?min ?detail label got want ~f =
-  match all2_outcome ?min label got want ~f with
-  | All2_holds { failed = 0; _ } -> pass_fail ?detail label true
+let pass_fail_all2 ?(min = 1) ?detail label got want ~f =
+  match all2_outcome ~min label got want ~f with
+  | All2_holds { failed = 0; _ } ->
+      pass_fail ?detail label true;
+      if population_selected label then
+        report_population label ~population:(Array.length got) ~floor:min
   | All2_holds { failed; first } ->
       pass_fail ?detail label false;
       report_all2_failure label ~cells:(Array.length got) ~failed ~first
@@ -942,10 +1030,13 @@ let pass_fail_all2 ?min ?detail label got want ~f =
 (** [pass_fail_close label got want ~tol] is {!p_close} in {!pass_fail}'s output dialect: a
     structural refusal is the [<label>: FAIL (<reason>)] row {!pass_fail_all2} prints, and a value
     failure the bare [<label>: FAIL] row, with {!p_close}'s worst-cell line beside it on stderr. *)
-let pass_fail_close ?min ?what_ran ?difference_only label got want ~tol =
-  match close_outcome ?min ?difference_only label ~tol got want with
+let pass_fail_close ?(min = 1) ?what_ran ?difference_only label got want ~tol =
+  match close_outcome ~min ?difference_only label ~tol got want with
   | Close_short reason -> pass_fail ~detail:(fun () -> reason) label false
-  | Close_holds { differing = 0; _ } -> pass_fail label true
+  | Close_holds { differing = 0; _ } ->
+      pass_fail label true;
+      if population_selected label then
+        report_population ?what_ran label ~population:(Array.length got) ~floor:min
   | Close_holds { differing; first; worst; magnitude; worst_tol } ->
       pass_fail label false;
       report_close_failure ?what_ran label got want ~differing ~first ~worst ~magnitude ~worst_tol
