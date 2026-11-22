@@ -1756,6 +1756,32 @@ if harness_leg 'harness fixture and heredoc literals'; then
   fx_reach 'fail-closed: << inside quotes does not open a heredoc' tools/test-a.sh tools/test-c.sh
   twin_text 'cat <<'\''NEVER_CLOSED'\''' 'bash tools/sub.sh'
   fx_reach 'fail-closed: an unclosed heredoc leaves its lines scanned' tools/test-a.sh tools/test-c.sh
+  # Local review findings: compound &>/&>> redirects, multiline logical commands/pipelines,
+  # multiline and `#`-led substitutions in unquoted heredocs, sourced scripts in unquoted
+  # heredoc substitutions, and overridden echo/printf functions.
+  twin_text 'bash &>"$TMP/log" <<'\''SH'\''' 'tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: bash &>log <<SH keeps the interpreter heredoc scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'bash \' '  <<'\''SH'\''' 'tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: bash continued across a backslash onto <<SH keeps the body scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'printf '\''tools/sub.sh\n'\'' |' '  bash'
+  fx_reach 'fail-closed: printf piped across a newline to bash still reaches the script' tools/test-a.sh tools/test-c.sh
+  twin_text 'cat <<'\''EOF'\'' |' 'tools/sub.sh' 'EOF' 'bash'
+  fx_reach 'fail-closed: a data heredoc piped across its body to bash still reaches the script' tools/test-a.sh tools/test-c.sh
+  twin_text 'cat <<EOF' 'x=$(' '  tools/sub.sh' ')' 'EOF'
+  fx_reach 'fail-closed: multiline $(...) inside an unquoted heredoc still reaches the script' tools/test-a.sh tools/test-c.sh
+  twin_text 'cat <<EOF' '# $(tools/sub.sh)' 'EOF'
+  fx_reach 'fail-closed: a #-led line with $(...) inside an unquoted heredoc still reaches it' tools/test-a.sh tools/test-c.sh
+  printf '%s\n' 'cat data/x.txt' >"$hrepo/tools/clib.sh"
+  twin_text 'cat <<EOF' '$(. tools/clib.sh)' 'EOF'
+  haffected --harnesses --files data/x.txt
+  hexpect 'fail-closed: a source inside $(...) of an unquoted heredoc is followed by loads' 0 tools/test-c.sh
+  : >"$hrepo/tools/clib.sh"
+  twin_text 'echo() { cat "$1"; }' 'echo tools/sub.sh'
+  fx_reach 'fail-closed: an echo function override keeps echo arguments scanned' tools/test-a.sh tools/test-c.sh
+  printf '%s\n' 'echo() { cat "$1"; }' >"$hrepo/tools/clib.sh"
+  twin_text '. tools/clib.sh' 'echo tools/sub.sh'
+  fx_reach 'fail-closed: an echo function override in a sourced helper keeps echo arguments scanned' tools/test-a.sh tools/test-c.sh
+  : >"$hrepo/tools/clib.sh"
   hc_restore
 fi
 
@@ -1834,6 +1860,12 @@ if harness_leg 'harness python __file__ placement'; then
   py_twin_reach 'fail-closed: a rebound os keeps every tied owner' "${twins[@]}"
   py_text 'class Path: pass' 'p = Path(__file__).parent / "twin.py"'
   py_twin_reach 'fail-closed: a rebound Path keeps every tied owner' "${twins[@]}"
+  py_text 'from pathlib import Path' 'HERE = Path(__file__).parent' 'def f(' '    x,' '    HERE,' '):' '    return HERE / "twin.py"'
+  py_twin_reach 'fail-closed: a multiline def parameter shadowing HERE keeps every tied owner' "${twins[@]}"
+  py_text 'from pathlib import Path' 'HERE = Path(__file__).parent' 'if flag: HERE = other_dir' 'p = HERE / "twin.py"'
+  py_twin_reach 'fail-closed: a single-line suite reassignment (if flag: HERE = ...) keeps every tied owner' "${twins[@]}"
+  py_text 'import os' '__file__ = "data/driver.py"' 'p = os.path.join(os.path.dirname(__file__), "twin.py")'
+  py_twin_reach 'fail-closed: a rebound __file__ keeps every tied owner' "${twins[@]}"
   py_harness_teardown
 fi
 

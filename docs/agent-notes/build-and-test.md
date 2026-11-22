@@ -4369,7 +4369,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     `Path(__file__).resolve().parent / ...`, `.parents[N]`, or a single-assigned variable of one
     of those forms; gh-ocannl-2380) likewise places the path at that `.py` file's own directory,
     failing closed to every tied owner on reassigned/shadowed variables, leading-slash segments,
-    non-literal join arguments, another module's `__file__`, or rebound `os`/`pathlib`/`Path`.
+    non-literal join arguments, another module's `__file__`, or rebound `__file__`/`os`/`pathlib`/`Path`.
     To audit what each harness reaches, and through which
     token, `affected --harness-census [MEMBER]` prints one tab-separated line per reached path
     (`MEMBER PATH STEP FILE:LINE TOKEN OWNERS`), sorted: diff it before and after a reader change,
