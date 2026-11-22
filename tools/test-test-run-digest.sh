@@ -15,7 +15,7 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
-# Groups: #repeat (9-25, 38, 83, 85-85e, 84), #digest (35, 36, 87, 68, 69, 71, 72, 73, 80, 92), #fresh (81), #hermetic (70).
+# Groups: #repeat (9-25, 38, 83, 85-85e, 84), #digest (35, 36, 87, 68, 69, 71, 72, 73, 80-80c, 92), #fresh (81), #hermetic (70).
 #
 # Legs:
 #   9. `repeat` forces and preserves three identical dune runs while holding the
@@ -130,6 +130,10 @@
 #      left. A refused slot or device probe and a setup error never
 #      print a record, a cancellation does. Beside it, against a real dune: a
 #      manual build running beside a managed run keeps its live trace.
+#  80c. A cold batch lists its two test processes and no compiler, a warm
+#      batch lists none, and --force still reuses a target-producing test.
+#      A cold run with process tracing disabled leaves inventory unavailable.
+#      All four publish elapsed seconds with their verdict (real dune).
 #  92 sits after leg 80b: a red run whose own trace holds a failed build step
 #      (a nonzero exit producing only compile artifacts) is BUILD FAILED,
 #      exit 65 over a recorded 1 (`wait` too), naming the step and the output
@@ -366,6 +370,12 @@ else
 fi
 
 repeat_probe repeat-identical stable 3 build @cheap
+repeat_elapsed=$(cat "$repeat_dir/elapsed" 2>/dev/null)
+if [[ $repeat_elapsed =~ ^[0-9]+$ ]]; then
+  report 0 "repeat: the set publishes elapsed seconds"
+else
+  report 1 "repeat: the set publishes elapsed seconds" "elapsed='$repeat_elapsed' in $repeat_dir"
+fi
 if [ "$repeat_rc" = 0 ] && grep -q '^repeat result: IDENTICAL -- ' <<<"$repeat_out" \
    && [ "$(cat "$TMP/repeat-identical.counter")" = 3 ] \
    && [ "$(grep -c '^clean ' "$TMP/repeat-identical.calls")" = 3 ] \
@@ -1144,9 +1154,10 @@ if ! command -v python3 >/dev/null 2>&1; then
 else
   cp "$HERE/action-durations.sh" "$repeat_root/tools/action-durations.sh"
   slow_trace=$TMP/slowest-trace.csexp
-  python3 - "$slow_trace" "$repeat_root/_build" <<'PY'
+  slow_empty_trace=$TMP/slowest-empty-trace.csexp
+  python3 - "$slow_trace" "$slow_empty_trace" "$repeat_root/_build" <<'PY'
 import sys
-path, build = sys.argv[1], sys.argv[2]
+path, empty_path, build = sys.argv[1:4]
 S, T0 = 1_000_000_000, 1_791_291_000 * 1_000_000_000
 def atom(s):
     s = str(s).encode()
@@ -1154,6 +1165,8 @@ def atom(s):
 def sexp(x):
     return b'(' + b''.join(sexp(e) if isinstance(e, list) else atom(e) for e in x) + b')'
 out = [sexp(['config', 'init', str(T0), ['build_dir', build]])]
+with open(empty_path, 'wb') as empty:
+    empty.write(out[0] + sexp(['config', 'exit', str(T0 + S)]))
 for pid, start, dur, prog, target in [
         (11, 1, 21.5, 'fixture_trainer.exe', 'test/training/fixture_trainer.actual'),
         (12, 2, 6.72, 'fixture_scan.exe', 'test/operations/fixture_scan.actual'),
@@ -1202,6 +1215,15 @@ PY
     [ ! -e "$argv_dir/trace.csexp" ] && [ ! -e "$argv_dir/slowest.err" ] &&
     [ ! -e "$argv_dir/slowest-skipped" ]; } ||
     slow_detail="a green run: the record is not published cleanly: $(ls "$argv_dir" | tr '\n' ' ')"
+  if [ -z "$slow_detail" ] && ! (
+    unset DUNE_TRACE
+    REPEAT_TEST_TRACE=$slow_empty_trace argv_probe slow-empty run build @cheap
+    [ "$argv_rc" = 0 ] && [ -f "$argv_dir/executed" ] && [ ! -s "$argv_dir/executed" ] &&
+      [ ! -e "$argv_dir/slowest" ] && grep -Fq 'a cached build starts none' "$argv_dir/slowest-skipped" &&
+      grep -q '^no slowest-actions record: ' <<<"$argv_out"
+  ); then
+    slow_detail="the complete no-process trace did not leave an empty inventory and a slowest diagnostic (see $TMP/argv-runs-slow-empty)"
+  fi
   # A run the cap kills records it too: the TIMEOUT digest shows how far the rest got.
   if [ -z "$slow_detail" ]; then
     REPEAT_TEST_TRACE=$slow_trace REPEAT_TEST_ACTION_SECS=30 argv_mode=slow_dune \
@@ -1213,6 +1235,12 @@ PY
     esac
     [ -n "$slow_detail" ] || [ "$(slow_rows "$argv_out")" = "$slow_want" ] ||
       slow_detail="a capped run: rows $(slow_rows "$argv_out" | tr '\n' ';')"
+    if [ -z "$slow_detail" ]; then
+      slow_elapsed=$(cat "$argv_dir/elapsed" 2>/dev/null)
+      if [[ ! $slow_elapsed =~ ^[0-9]+$ ]] || [ "$slow_elapsed" -lt 2 ]; then
+        slow_detail="a capped run: elapsed is '$slow_elapsed' (want at least the 2s cap)"
+      fi
+    fi
   fi
   # The worktree's shared trace -- which a concurrent manual dune may be
   # writing, under a build lock the launch does not hold -- is never read and
@@ -1691,6 +1719,91 @@ else
 fi
 }
 harness_leg_run '80b: a manual dune beside a managed run keeps its live trace #digest' leg_80_live
+
+leg_80_receipt() {
+  local label="finished records give elapsed seconds and distinguish executed from reused test actions (real dune)"
+  local dune_path root phase receipt inventory elapsed started expected detail=
+  if ! harness_real_dune; then
+    skip "$label" "$harness_dune_absent"
+    return
+  fi
+  dune_path=$harness_dune
+  if ! command -v python3 >/dev/null 2>&1; then
+    skip "$label" "no python3 on PATH"
+    return
+  fi
+  root=$TMP/executed-receipt
+  mkdir -p "$root/tools" "$root/test"
+  cp "$SRC" "$root/tools/test-run.sh"
+  stage_sourced "$root" || { harness_abandon "$stage_error"; return; }
+  cp "$HERE/action-durations.sh" "$root/tools/"
+  printf '(lang dune 3.20)\n' >"$root/dune-project"
+  cat >"$root/test/dune" <<'DUNE'
+(test (name baseline) (modules baseline))
+(executable (name ordinary) (modules ordinary))
+(rule (target ordinary.actual) (action (with-stdout-to %{target} (run ./ordinary.exe))))
+(rule (alias runtest-ordinary) (action (diff ordinary.expected ordinary.actual)))
+DUNE
+  printf 'let () = print_endline "ordinary"\n' >"$root/test/ordinary.ml"
+  printf 'ordinary\n' >"$root/test/ordinary.expected"
+  cat >"$root/test/baseline.ml" <<'ML'
+let () =
+  Out_channel.with_open_text (Sys.getenv "RECEIPT_WITNESS") (fun f -> output_string f "ran\n");
+  print_endline "baseline"
+ML
+  printf 'baseline\n' >"$root/test/baseline.expected"
+  receipt_run() (
+    cd "$root" || exit
+    unset DUNE_TRACE
+    if [ "$phase" = filtered ]; then export DUNE_TRACE=-process; fi
+    PATH=$(dirname "$dune_path"):$PATH OCANNL_TOOL_TEST_RUNS=$TMP/receipt-runs \
+      RECEIPT_WITNESS=$TMP/receipt-witness bash tools/test-run.sh "$@"
+  )
+  for phase in cold warm forced filtered; do
+    set -- @test/runtest-baseline @test/runtest-ordinary
+    case $phase in
+      forced) set -- --force @test/runtest-baseline ;;
+      filtered) set -- --build-dir="$root/filtered-build" @test/runtest-baseline ;;
+    esac
+    started=$SECONDS
+    if ! receipt_run run build --cache=disabled "$@" >"$TMP/receipt-$phase.log" 2>&1; then
+      harness_abandon "$phase: the fixture run failed: $(tail -12 "$TMP/receipt-$phase.log")"; return
+    fi
+    receipt=$(receipt_run paths run last) ||
+      { harness_abandon "$phase: could not find the run record"; return; }
+    if [ "$phase" = cold ] || [ "$phase" = filtered ]; then
+      if [ ! -s "$TMP/receipt-witness" ]; then
+        harness_abandon "$phase: baseline did not execute"; return
+      fi
+      mv "$TMP/receipt-witness" "$TMP/receipt-witness.$phase"
+      expected=$(printf 'baseline.exe\ttest/baseline.exe.output\nordinary.exe\ttest/ordinary.actual')
+    else
+      if [ -e "$TMP/receipt-witness" ]; then
+        harness_abandon "$phase: baseline unexpectedly executed"; return
+      fi
+      expected=
+    fi
+    elapsed=$(cat "$receipt/elapsed" 2>/dev/null)
+    if [[ ! $elapsed =~ ^[0-9]+$ ]] || ! [ "$elapsed" -le "$((SECONDS - started + 1))" ]; then
+      detail="$detail $phase: missing or invalid elapsed '$elapsed' in $receipt;"
+    fi
+    if [ "$phase" = filtered ]; then
+      if ! harness_rejected 2 'no executed-action inventory' "$TMP/receipt-filtered-query.log" \
+           receipt_run paths executed "$receipt" || [ -e "$receipt/executed" ]; then
+        detail="$detail $phase: filtered trace should leave inventory unavailable in $receipt;"
+      fi
+      continue
+    fi
+    if ! inventory=$(receipt_run paths executed "$receipt" 2>/dev/null); then
+      detail="$detail $phase: no executed-action inventory in $receipt;"
+    elif [ "$inventory" != "$receipt/executed" ] || [ ! -f "$inventory" ] ||
+         [ "$(LC_ALL=C sort "$inventory")" != "$expected" ]; then
+      detail="$detail $phase: unexpected inventory in $receipt: $(cat "$inventory" 2>/dev/null);"
+    fi
+  done
+  if [ -n "$detail" ]; then report 1 "$label" "$detail"; else report 0 "$label"; fi
+}
+harness_leg_run '80c: elapsed and the executed-action inventory distinguish reused tests #digest' leg_80_receipt
 
 shared_through synthetic_trace
 

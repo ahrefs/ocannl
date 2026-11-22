@@ -37,6 +37,11 @@
 #   --processes-json-to PATH
 #                      also write that JSON to PATH. The timing table keeps its
 #                      own selection, output and exit status.
+#   --executed-to PATH
+#                      also write the executed test-action inventory, including
+#                      an empty file for a complete trace with no matching rows.
+#                      The caller must know the trace includes process events.
+#                      A complete trace with no processes is successful in this mode.
 #   -h, --help         this header
 #
 # The trace records no alias membership, so a row names its action by what it
@@ -70,6 +75,17 @@
 # checks cannot catch it, since the result is still well-formed csexp.
 # Protection against tampered traces is producer-side scrubbing
 # (ahrefs/ocannl#1280), not this reader; the harness pins the boundary.
+#
+# The executed inventory uses only process records from a complete trace.
+# It accepts named Dune runtest, slow and train alias actions in any directory,
+# and .exe.output, .actual and .coverage targets under test/ or arrayjit/test/.
+# Named .raw startup captures and .out/.log benchmark intermediates fall
+# outside that file-target allowlist. Anonymous alias actions and targetless
+# processes must run a built .exe in one of the test trees. The TSV holds
+# distinct program and action pairs with tabs and line breaks excluded from
+# fields. Alias membership, shell argv,
+# subprocesses Dune did not trace, and incomplete traces are outside this
+# inventory.
 
 set -euo pipefail
 
@@ -81,6 +97,7 @@ tsv=
 dirs=
 processes_json=
 json_to=
+executed_to=
 trace=
 
 die() {
@@ -123,6 +140,11 @@ while [ $# -gt 0 ]; do
     json_to=$2
     shift 2
     ;;
+  --executed-to)
+    [ $# -ge 2 ] && [ -n "$2" ] || die "--executed-to needs a path"
+    executed_to=$2
+    shift 2
+    ;;
   -h | --help)
     sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
@@ -138,7 +160,7 @@ done
 case "$group" in '' | prog | dir) ;; *) die "--group wants prog or dir, got: $group" ;; esac
 [ -z "$tsv" ] || [ -z "$group" ] || die "--tsv prints rows, not a --group summary"
 [ -z "$dirs" ] || [ -n "$tsv" ] || die "--dirs leads --tsv rows; it needs --tsv"
-[ -z "$processes_json" ] || [ -z "$rows$prog_re$group$tsv$json_to" ] ||
+[ -z "$processes_json" ] || [ -z "$rows$prog_re$group$tsv$json_to$executed_to" ] ||
   die "--processes-json takes no row selection or table options"
 rows=${rows:-20}
 trace=${trace:-$root/_build/trace.csexp}
@@ -147,13 +169,14 @@ trace=${trace:-$root/_build/trace.csexp}
 # exec, so the reader is ONE process: tools/test-run.sh bounds it with a KILL
 # that must reach the parse itself where a process group cannot be signalled
 # (Git Bash), not just a shell whose python would outlive it.
-exec python3 - "$trace" "$rows" "$prog_re" "$group" "$tsv" "$dirs" "$processes_json" "$json_to" <<'PY'
+exec python3 - "$trace" "$rows" "$prog_re" "$group" "$tsv" "$dirs" "$processes_json" "$json_to" "$executed_to" <<'PY'
 import json
 import os
+import posixpath
 import re
 import sys
 
-path, rows, prog_re, group, tsv, dirs, processes_json, json_to = (
+path, rows, prog_re, group, tsv, dirs, processes_json, json_to, executed_to = (
     sys.argv[1], int(sys.argv[2]), *sys.argv[3:])
 try:
     prog_pat = re.compile(prog_re) if prog_re else None
@@ -329,6 +352,9 @@ for _, t, _ in events:
 
 config = next((f for kind, _, f in events if kind == (b'config', b'init')), {})
 build_dir = config.get('build_dir') if isinstance(config.get('build_dir'), str) else '_build'
+build_prefix = build_dir.rstrip('/') + '/'
+windows_paths = (os.name == 'nt' or sys.platform in ('cygwin', 'msys')
+                 or re.match(r'^[A-Za-z]:[/\\]', build_dir) is not None)
 
 
 def in_context(path):
@@ -338,15 +364,18 @@ def in_context(path):
     # Dune >= 3.25 names an alias action's target by its digest alone,
     # `<build>/.actions/<ctx>/<dir>/<hash>` (gh-ocannl-2216): its alias is `(anonymous-<hash>)`,
     # which no alias spells, the digest kept so that one action's processes still read as one.
-    prefix = build_dir.rstrip('/') + '/'
-    if not path.startswith(prefix):
+    if not path.startswith(build_prefix):
         return None, path
-    rel = path[len(prefix):]
+    rel = path[len(build_prefix):]
     m = re.match(r'\.actions/[^/]+/(?:(.*)/)?(?:([^/]+)-)?([0-9a-f]{32})$', rel)
     if m:
         return m.group(2) or '(anonymous-%s)' % m.group(3), m.group(1) or '.'
     m = re.match(r'(?:\.sandbox/[^/]+/)?[^/]+(?:/(.*))?$', rel)
     return None, (m.group(1) or '.') if m else rel
+
+
+def alias_action(alias, directory):
+    return '@%s%s' % ('' if directory == '.' else directory + '/', alias)
 
 
 def action(f):
@@ -358,7 +387,7 @@ def action(f):
         return d, '(in %s)' % d
     alias, rel = in_context(targets[0])
     if alias is not None:
-        d, text = rel, '@%s%s' % ('' if rel == '.' else rel + '/', alias)
+        d, text = rel, alias_action(alias, rel)
     else:
         d, text = os.path.dirname(rel) or '.', rel
     return d, text + (' +%d' % (len(targets) - 1) if len(targets) > 1 else '')
@@ -375,8 +404,46 @@ def target_texts(f):
     for t in targets if isinstance(targets, list) else []:
         if isinstance(t, str):
             alias, rel = in_context(t)
-            out.append(rel if alias is None else '@%s%s' % ('' if rel == '.' else rel + '/', alias))
+            out.append(rel if alias is None else alias_action(alias, rel))
     return out
+
+
+def test_tree(path):
+    return path.startswith(('test/', 'arrayjit/test/'))
+
+
+def executed_test(f):
+    prog = f.get('prog')
+    if not isinstance(prog, str) or not prog:
+        return None
+    if windows_paths:
+        prog = prog.replace('\\', '/')
+    name = posixpath.basename(prog)
+    raw_targets = f.get('target_files')
+    targets = raw_targets if isinstance(raw_targets, list) else []
+    for target in targets:
+        if not isinstance(target, str) or not target.startswith(build_prefix):
+            continue
+        alias, rel = in_context(target)
+        if alias is None:
+            if test_tree(rel) and rel.endswith(('.exe.output', '.actual', '.coverage')):
+                return name, rel
+        elif re.fullmatch(r'(?:runtest|slow|train)(?:-[\w.-]+)?', alias):
+            return name, alias_action(alias, rel)
+    # New Dune records an anonymous digest for alias actions. A path under a
+    # test build directory still identifies the executable.
+    if targets and not all(isinstance(t, str) and t.startswith(build_prefix) and
+                           (in_context(t)[0] or '').startswith('(anonymous-') for t in targets):
+        return None
+    executable = prog
+    cwd = f.get('dir')
+    if not prog.startswith(build_prefix) and not re.match(r'^(?:/|[A-Za-z]:)', prog):
+        if isinstance(cwd, str):
+            executable = posixpath.normpath(posixpath.join(cwd, prog))
+    _, rel = in_context(executable)
+    if executable.startswith(build_prefix) and test_tree(rel) and rel.endswith('.exe'):
+        return name, action(f)[1] if targets else rel
+    return None
 
 
 started, done = {}, []
@@ -390,6 +457,19 @@ for kind, t, f in events:
         started.pop(key, None)
         done.append((t[0], t[1], exit_text(f), f))
 done += [(key[1], max(0, last - key[1]), 'open', f) for key, f in started.items()]
+complete = bool(events) and truncated is None and events[-1][0] == (b'config', b'exit')
+if executed_to and complete:
+    executed = set()
+    for _, _, _, fields in done:
+        row = executed_test(fields)
+        if row and not any(c in field for field in row for c in '\t\r\n'):
+            executed.add(row)
+    try:
+        with open(executed_to, 'w', encoding='utf-8', newline='\n') as out:
+            for prog, observed_action in sorted(executed):
+                print(prog, observed_action, sep='\t', file=out)
+    except OSError:
+        sys.exit('action-durations.sh: could not write executed inventory')
 if processes_json or json_to:
     if not events:
         sys.exit('action-durations.sh: no complete trace event')
@@ -409,7 +489,7 @@ if processes_json or json_to:
     if truncated is not None:
         trace_status = 'truncated'
     else:
-        trace_status = 'complete' if events[-1][0] == (b'config', b'exit') else 'incomplete'
+        trace_status = 'complete' if complete else 'incomplete'
     report = {'trace_status': trace_status, 'processes': processes}
     if processes_json:
         print(json.dumps(report))
@@ -425,8 +505,9 @@ for _, ns, ex, f in done:
     if prog_pat is None or prog_pat.search(prog):
         procs.append((ns / 1e9, ex, prog, f))
 if not procs:
-    sys.exit('action-durations.sh: no process in %s%s (a cached build starts none)'
-             % (path, ' matches --prog' if prog_pat else ''))
+    print('action-durations.sh: no process in %s%s (a cached build starts none)'
+          % (path, ' matches --prog' if prog_pat else ''), file=sys.stderr)
+    sys.exit(0 if executed_to and complete and not done else 1)
 
 if tsv:
     procs.sort(key=lambda p: (-p[0], p[2], action(p[3])[1]))
@@ -434,8 +515,7 @@ if tsv:
         lead = []
         if dirs:
             d = f.get('dir') if isinstance(f.get('dir'), str) else '?'
-            prefix = build_dir.rstrip('/') + '/'
-            lead = [d[len(prefix):] if d.startswith(prefix) else d]
+            lead = [d[len(build_prefix):] if d.startswith(build_prefix) else d]
         print('\t'.join(lead + ['%.2f' % s, ex, prog, action(f)[1]] + target_texts(f)))
     sys.exit(0)
 print('processes=%d  open=%d' % (len(procs), sum(1 for p in procs if p[1] == 'open')))

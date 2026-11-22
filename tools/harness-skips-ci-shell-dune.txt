@@ -10,6 +10,7 @@
 # PR. The line forms are the header of tools/test-harnesses.sh.
 
 tools/test-test-run-digest.sh	a manual dune running beside a managed run keeps its live trace (real dune)
+tools/test-test-run-digest.sh	finished records give elapsed seconds and distinguish executed from reused test actions (real dune)
 tools/test-test-run-bisect.sh	credentials: the run's real dune trace names neither GH_TOKEN nor FOO_API_KEY, and does name the plain variable
 tools/test-test-run-options.sh	against a real dune: an unknown alias is refused, known ones run
 tools/test-test-run-bisect.sh	negative control: with the scrub cut out, the real trace names both credentials

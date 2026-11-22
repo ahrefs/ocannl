@@ -1029,7 +1029,7 @@ for args in 'paths' 'paths bogus' 'paths lock last extra' 'paths run' \
             'lock-status last extra'; do
   case $args in
     paths | 'paths lock last extra') query_reason='usage: paths FIELD [RUN|last]' ;;
-    'paths bogus') query_reason='unknown path field: bogus (run, worktree, runs, lock, owner, last)' ;;
+    'paths bogus') query_reason='unknown path field: bogus (run, executed, worktree, runs, lock, owner, last)' ;;
     'paths run' | 'lock-status last') query_reason='no runs recorded for this worktree' ;;
     'paths run missing' | 'paths lock missing') query_reason="no such run: missing (neither a directory nor an entry under $query_expected)" ;;
     'lock-status last extra') query_reason='usage: lock-status [RUN|last]' ;;
