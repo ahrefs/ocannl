@@ -108,7 +108,8 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # The member being run: the legs that run or cut a copy of their own harness name it.
 SELF=$HERE/${0##*/}
 # The subject as named, until the scratch directory exists to stage it in.
-SRC=${subject:-$HERE/test-run.sh}
+stock_src=$HERE/test-run.sh
+SRC=${subject:-$stock_src}
 if [ -n "$subject_rev" ]; then
   subject_commit=$(git -C "$HERE" rev-parse --verify --end-of-options "${subject_rev}^{commit}") ||
     { echo "${0##*/}: cannot resolve subject revision $subject_rev" >&2; exit 2; }
@@ -174,7 +175,7 @@ have_state=1; [ -n "$(pstate $$)" ] || have_state=0
 have_pgid=1;  [ -n "$(ppgid $$)" ]  || have_pgid=0
 
 echo "testing $SRC and $GROUP_SRC"
-[ -z "$subject" ] || echo "  subject: $SRC in place of $HERE/test-run.sh"
+[ -z "$subject" ] || echo "  subject: $SRC in place of $stock_src"
 printf '  digest %s\n' "$( (cksum <"$SRC") 2>/dev/null || echo '?')"
 printf '  group digest %s\n' "$( (cksum <"$GROUP_SRC") 2>/dev/null || echo '?')"
 printf '  state reader: %s; pgid reader: %s\n' \
@@ -1568,11 +1569,28 @@ shared_through() { # NAME: run every stage not yet run, up to and including NAME
     shared_done=$i
   done
 }
+# Check exactly the literal stock path spelling. The only allowed occurrence
+# is its default assignment in this file. Shell aliases, expansions and
+# dynamically built paths are outside this check.
+check_stock_source() {
+  local bad
+  bad=$(awk -v literal='$HERE/'test-run.sh '
+    index($0, literal) {
+      if (FILENAME == ARGV[1] && $0 == "stock_src=" literal) found++
+      else print FILENAME ":" FNR ": " $0
+    }
+    END { if (found != 1) print "expected one stock_src assignment, found " found + 0 }
+  ' "$HERE/test-test-run-common.sh" "$SELF") ||
+    { report 1 "the harness uses its selected source" "could not read the harness sources"; return; }
+  [ -z "$bad" ] || report 1 "the harness uses its selected source" "$bad"
+}
+
 # A member's last lines: leg 70, which names no device and so runs after every
 # leg that faked one, then the footer.
 test_run_close() {
+  check_stock_source
   shared_through native
   harness_leg_run '70: a leg that names no device reads the absent defaults #hermetic' leg_70
-  [ -z "$subject" ] || echo "the subject of this run was $subject, not $HERE/test-run.sh"
+  [ -z "$subject" ] || echo "the subject of this run was $subject, not $stock_src"
   finish
 }
