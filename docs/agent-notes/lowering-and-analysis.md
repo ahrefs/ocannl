@@ -435,10 +435,10 @@ files.
   is localized but whose census localized NOTHING had its scope minted upstream — by a `Schedule`
   mint (`Unroll ~materialize`, `Partition`, `Pad`) or by virtualization — which is a different fact
   about the kernel than "codegen localized it". A further site kind, `Peel_ceded verdict`, says
-  the shared width decision was wide and the SIMD grid or the shuffle tree held the accumulator at
-  that width instead of a scope (gh-ocannl-754; the decision itself is in the backend-precision
+  the shared width decision accepted the reduction and the SIMD grid or shuffle tree held the
+  accumulator at the resolved width (gh-ocannl-754; the decision itself is in the backend-precision
   note). The `reduction_forms` member table declares which of the six (`Peeled` /
-  `Minted_upstream` / `No_localization` / `Never_a_site` / `Widened_elsewhere` /
+  `Minted_upstream` / `No_localization` / `Never_a_site` / `Ceded` /
   `Pinned_to_storage` — `Never_a_site` being BOTH virtualization members, whose accumulator lives in
   the inlined scope rather than in a cell, so there is no memory recurrence and no site at all; the
   last two being gh-ocannl-754's ceded and storage-pinned decisions) each member claims, and

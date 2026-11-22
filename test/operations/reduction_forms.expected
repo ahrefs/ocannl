@@ -53,7 +53,7 @@ reduction: out[3] = sum of 64 terms, hand-built Low_level, 36 members
   14 split-then-vectorize-narrow [f32 bf16 f16] over plain                 Split into a two-wide inner half, then Retype it Vectorized            -> localized scope
                                  codegen's peel takes 2 levels, unguarded
   15 retype-workgroup-reduce     [f32 bf16 f16] over plain                 Retype the reduction axis to Workgroup_reduce                          -> warp-shuffle tree, or the localized scope where no lane index is bound
-                                 codegen peels the serialized level, or the shared width decision is wide and the shuffle tree holds it
+                                 codegen peels the serialized level, or the shuffle tree holds the accumulator at the resolved width
   16 retype-workgroup            [f32 bf16 f16] over plain                 Retype the reduction axis to Workgroup (no index bound: serialized)    -> localized scope
                                  codegen's peel takes one level, unguarded
   17 runtime-guard               [f32 bf16 f16] over runtime-extent guard  a runtime-extent guard, unscheduled                                    -> localized scope

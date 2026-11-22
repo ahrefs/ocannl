@@ -794,7 +794,7 @@ let peel_claim_name = function
   | No_localization -> "codegen's peel localizes nothing"
   | Never_a_site -> "no cell recurrence at any level: the peel is never consulted"
   | Ceded { Cs.levels; guards } ->
-      Printf.sprintf "the shared width decision is wide (%s%s) and the grid or tree holds it"
+      Printf.sprintf "the grid or tree holds the accumulator at the resolved width (%s%s)"
         (match levels with 1 -> "one level" | n -> Printf.sprintf "%d levels" n)
         (match guards with
         | [] -> ", unguarded"
@@ -1345,18 +1345,23 @@ let simd_peel_claimed =
   "the shared width decision is ceded to the SIMD grid, or codegen's peel takes the reduction \
    level where no vector rendering exists"
 
-let member ?(shape = Plain) ?(sched = no_ops) ?(expect = Localized) ?claimed ?(reference = Baseline)
-    ?(store_sites = 1) ?(rmw_sites = 1) ?(foreign_sites = 0) ?(foreign_accesses = 0) ?expect_axis
-    ?(extra = []) ?(peel = Peeled { Cs.levels = 1; guards = [] }) ?peel_claimed ?rendering
+let fixed_rendering ?(form = Localized) peel _ = (form, peel)
+
+let member ?(shape = Plain) ?(sched = no_ops) ?claimed ?(reference = Baseline) ?(store_sites = 1)
+    ?(rmw_sites = 1) ?(foreign_sites = 0) ?(foreign_accesses = 0) ?expect_axis ?(extra = [])
+    ?peel_claimed ?(rendering = fixed_rendering (Peeled { Cs.levels = 1; guards = [] }))
     ?(precisions = [ "f32"; "bf16"; "f16" ]) ?(available = fun _ -> true) slug what =
-  let claimed = Option.value claimed ~default:(form_name expect) in
+  (* Members whose rendering varies across backends or precisions name those alternatives
+     explicitly. The default labels describe the actual declaration at f32. *)
+  let form, peel = rendering Ops.single in
+  let claimed = Option.value claimed ~default:(form_name form) in
   let peel_claimed = Option.value peel_claimed ~default:(peel_claim_name peel) in
   {
     slug;
     what;
     shape;
     sched;
-    rendering = Option.value rendering ~default:(fun _ -> (expect, peel));
+    rendering;
     claimed;
     reference;
     store_sites;
@@ -1382,20 +1387,21 @@ let members =
        hoists a schedule-minted scope through the levels above it, or, as here, meets one that
        already spans the whole reduction. The form is the same localized scope [serial] renders
        (gh-ocannl-733). *)
-    member "unroll-mat" "Unroll ~materialize (the schedule mints the scope)" ~peel:Minted_upstream
-      ~sched:(fun g -> [ Sched.Unroll { axis = g.k; materialize = true } ]);
+    member "unroll-mat" "Unroll ~materialize (the schedule mints the scope)"
+      ~rendering:(fixed_rendering Minted_upstream) ~sched:(fun g ->
+        [ Sched.Unroll { axis = g.k; materialize = true } ]);
     (* The output loop is gone, so each of its [rows] copies closes its own cell -- which is not a
        seam but the whole of that cell's reduction. *)
     member "unroll-outer-mat" "Unroll ~materialize of the OUTPUT axis" ~store_sites:rows
       ~sched:(fun g -> [ Sched.Unroll { axis = g.r; materialize = true } ]);
     (* --- [Partition]: an index-set specialization of one reduction, so its segment seams must not
        become narrowing points — one scope spans every segment. --- *)
-    member "partition" "Partition of the reduction axis into three segments" ~peel:Minted_upstream
-      ~sched:(fun g ->
+    member "partition" "Partition of the reduction axis into three segments"
+      ~rendering:(fixed_rendering Minted_upstream) ~sched:(fun g ->
         let pt, _ = Sched.partition ~axis:g.k ~breakpoints:[ 4; 12 ] in
         [ pt ]);
     member "partition-then-unroll" "Partition, then Unroll one segment (the seam stays addressable)"
-      ~peel:Minted_upstream ~sched:(fun g ->
+      ~rendering:(fixed_rendering Minted_upstream) ~sched:(fun g ->
         let pt, segs = Sched.partition ~axis:g.k ~breakpoints:[ 4; 12 ] in
         [ pt; Sched.Unroll { axis = List.hd_exn segs; materialize = false } ]);
     (* Two segment loops over the output axis, each carrying a whole reduction: two sites. *)
@@ -1411,14 +1417,14 @@ let members =
     (* Two levels into the scope: after the split the reduction is a two-level nest, and the peel
        takes the inner half along with the outer one it is rendering. *)
     member "split-then-swap" "Split the reduction axis, then Swap the halves" ~precisions:[ "f32" ]
-      ~peel:(Peeled { Cs.levels = 2; guards = [] })
+      ~rendering:(fixed_rendering (Peeled { Cs.levels = 2; guards = [] }))
       ~sched:(fun g ->
         let sp, outer, inner = Sched.split ~axis:g.k ~factor:4 ~outer:LL.Serial ~inner:LL.Serial in
         [ sp; Sched.Swap { outer; inner } ]);
     (* --- [Pad]: guarded copies, whose constant-bounded guard the mint must peel into the scope
        --- *)
     member "pad-then-unroll-mat" "Pad the reduction axis, then Unroll ~materialize (guarded copies)"
-      ~peel:Minted_upstream ~sched:(fun g ->
+      ~rendering:(fixed_rendering Minted_upstream) ~sched:(fun g ->
         [
           Sched.Pad { axis = g.k; to_multiple_of = 6 };
           Sched.Unroll { axis = g.k; materialize = true };
@@ -1433,7 +1439,8 @@ let members =
          partials are themselves localized), then one read per block in the combine. Counted off the
          emitted kernel rather than predicted — my arithmetic said five and the init and the open
          are the two it forgot. *)
-      ~expect:Partials_combine ~foreign_sites:1 ~foreign_accesses:7 ~precisions:[ "f32" ]
+      ~rendering:(fixed_rendering ~form:Partials_combine (Peeled { Cs.levels = 1; guards = [] }))
+      ~foreign_sites:1 ~foreign_accesses:7 ~precisions:[ "f32" ]
       ~sched:(fun g ->
         let op, _b, _i, _c = Sched.split_reduce ~axis:g.k ~target:g.out ~num_blocks:4 in
         [ op ]);
@@ -1449,9 +1456,7 @@ let members =
        outer half is peeled with the inner one inside it. *)
     member "split-then-vectorize-inner" "Split, then Retype the INNER half to Vectorized"
       ~rendering:(vectorized_rendering ~extent:vector_inner ~levels:2)
-      ~claimed:simd_claimed ~reference:(Vectorized vector_inner)
-      ~peel:(Peeled { Cs.levels = 2; guards = [] })
-      ~expect_axis:LL.Vectorized
+      ~claimed:simd_claimed ~reference:(Vectorized vector_inner) ~expect_axis:LL.Vectorized
       ~sched:(fun g ->
         (* 32 wide, which every lane ladder a real target has can cover; see {!cols}. *)
         let sp, _outer, inner =
@@ -1464,29 +1469,28 @@ let members =
        below the profitability gate, so the SIMD grid declines and the peel takes it. *)
     member "split-then-vectorize-narrow"
       "Split into a two-wide inner half, then Retype it Vectorized" ~expect_axis:LL.Vectorized
-      ~peel:(Peeled { Cs.levels = 2; guards = [] })
+      ~rendering:(fixed_rendering (Peeled { Cs.levels = 2; guards = [] }))
       ~sched:(fun g ->
         let sp, _outer, inner = Sched.split ~axis:g.k ~factor:2 ~outer:LL.Serial ~inner:LL.Serial in
         [ sp; Sched.Retype { axis = inner; ty = LL.Vectorized } ]);
     (* --- a hardware reduction kind: the warp-shuffle tree where the backend binds one, and the
        serialized fallback (which is a serial level to the peel) where it does not. --- *)
     member "retype-workgroup-reduce" "Retype the reduction axis to Workgroup_reduce"
-      ~expect:(if on_cpu then Localized else Warp)
       ~claimed:"warp-shuffle tree, or the localized scope where no lane index is bound"
         (* The shuffle tree takes accumulators whose RESIDENCY is single or double precision
            (gh-ocannl-682), and refuses anything else by raising rather than by falling back — so
            off the C backends this member is evaluable at f32 and at whichever narrow precisions the
-           backend's [accum_prec] widens, which is bf16 on CUDA and nothing elsewhere. Its value
-           claim stays bitwise there: the tree reassociates, but every association of these
-           operands' f32 sums gives the same float (derived beside {!out_seed}), and both the
-           shuffle and the localized serial baseline narrow to bf16 exactly once. *)
+           backend's [accum_prec] widens under the selected policy. Its value claim stays bitwise
+           there: the tree reassociates, but every association of these operands' f32 sums gives the
+           same float (derived beside {!out_seed}), and both the shuffle and the localized serial
+           baseline narrow to storage exactly once. *)
       ~available:(fun prec_name -> on_cpu || shuffle_takes prec_name)
-      ~peel:
-        (if on_cpu then Peeled { Cs.levels = 1; guards = [] }
-         else Ceded { Cs.levels = 1; guards = [] })
+      ~rendering:(fun _ ->
+        let verdict = { Cs.levels = 1; guards = [] } in
+        if on_cpu then (Localized, Peeled verdict) else (Warp, Ceded verdict))
       ~peel_claimed:
-        "codegen peels the serialized level, or the shared width decision is wide and the shuffle \
-         tree holds it"
+        "codegen peels the serialized level, or the shuffle tree holds the accumulator at the \
+         resolved width"
       ~expect_axis:LL.Workgroup_reduce
       ~sched:(fun g -> [ Sched.Retype { axis = g.k; ty = LL.Workgroup_reduce } ]);
     (* The plain [Workgroup] arm: a hardware binding where the backend has an index for the slot,
@@ -1503,13 +1507,14 @@ let members =
        serial baseline under it (gh-ocannl-715): a refused mint round-trips the accumulator per
        copy, which on narrow storage is a different number. --- *)
     member "runtime-guard" "a runtime-extent guard, unscheduled" ~shape:Runtime_guard
-      ~peel:(Peeled { Cs.levels = 1; guards = [ LL.Guard_confined ] })
+      ~rendering:(fixed_rendering (Peeled { Cs.levels = 1; guards = [ LL.Guard_confined ] }))
       ~reference:Guarded_baseline;
     member "runtime-guard-unroll-mat" "a runtime-extent guard under Unroll ~materialize"
-      ~shape:Runtime_guard ~peel:Minted_upstream ~reference:Guarded_baseline ~sched:(fun g ->
-        [ Sched.Unroll { axis = g.k; materialize = true } ]);
+      ~shape:Runtime_guard ~rendering:(fixed_rendering Minted_upstream) ~reference:Guarded_baseline
+      ~sched:(fun g -> [ Sched.Unroll { axis = g.k; materialize = true } ]);
     member "runtime-guard-partition" "a runtime-extent guard under Partition of the reduction axis"
-      ~shape:Runtime_guard ~peel:Minted_upstream ~reference:Guarded_baseline ~sched:(fun g ->
+      ~shape:Runtime_guard ~rendering:(fixed_rendering Minted_upstream) ~reference:Guarded_baseline
+      ~sched:(fun g ->
         let pt, _ = Sched.partition ~axis:g.k ~breakpoints:[ 4; 12 ] in
         [ pt ]);
     (* --- gh-ocannl-721: a guard mixing the enclosing output index with the peeled reduction one.
@@ -1523,7 +1528,7 @@ let members =
        still pass over a kernel in which the gh-ocannl-721 escape never ran. *)
     member "mixed-guard" "a guard mixing the enclosing output index with the peeled one"
       ~shape:Mixed_guard
-      ~peel:(Peeled { Cs.levels = 1; guards = [ LL.Guard_lane_private ] })
+      ~rendering:(fixed_rendering (Peeled { Cs.levels = 1; guards = [ LL.Guard_lane_private ] }))
       ~reference:Mixed_baseline;
     (* The same shape with the output axis actually BOUND to hardware, which is the form the issue
        states it in: [Workgroup r -> Serial k -> If (r + k < s) (out[r] += x[r,k])]. Where the
@@ -1534,7 +1539,7 @@ let members =
        not. *)
     member "mixed-guard-workgroup" "the same guard with the output axis bound to a workgroup"
       ~shape:Mixed_guard
-      ~peel:(Peeled { Cs.levels = 1; guards = [ LL.Guard_lane_private ] })
+      ~rendering:(fixed_rendering (Peeled { Cs.levels = 1; guards = [ LL.Guard_lane_private ] }))
       ~reference:Mixed_baseline ~expect_axis:LL.Workgroup
       ~sched:(fun g -> [ Sched.Retype { axis = g.r; ty = LL.Workgroup } ]);
     (* --- the OTHER producer of the scope form: virtualization's inline at a read site --- *)
@@ -1542,24 +1547,27 @@ let members =
        and opens it from a zero-init, so nothing here reads the cell it writes and localization was
        never a question (gh-ocannl-733). *)
     member "virtual-accumulator" "a virtual accumulator inlined at its read site" ~shape:Virtual_acc
-      ~peel:Never_a_site ~reference:Owned_cell;
+      ~rendering:(fixed_rendering Never_a_site) ~reference:Owned_cell;
     (* Virtualization's other spelling, and the same peel story: the accumulator lives in the
        inlined scope rather than in a cell, so no level holds a self-recurrence and the peel is
        never consulted. Both virtualization members are {!Never_a_site}, which is the fact that
        separates them from the schedule mints — those DO meet the peel, at a real reduction site,
        and are refused there. *)
     member "where-guarded-update" "virtualization's Where-guarded update spelling"
-      ~shape:Where_scope ~peel:Never_a_site ~reference:Guarded_baseline ~extra:[ " ? " ];
+      ~shape:Where_scope ~rendering:(fixed_rendering Never_a_site) ~reference:Guarded_baseline
+      ~extra:[ " ? " ];
     (* --- the two read-modify-write forms, i.e. the declines. Without these the localized claims
        could not fail: a classifier that answered "localized" for everything would pass every other
        member, and the whole table would be measuring nothing. --- *)
     member "decline-data-guard" "a data-dependent guard (not a pure index guard)" ~shape:Data_guard
-      ~expect:Rmw ~peel:No_localization ~reference:Per_step;
+      ~rendering:(fixed_rendering ~form:Rmw No_localization)
+      ~reference:Per_step;
     member "decline-sibling-statement" "a second statement in the reduction level" ~shape:Side_write
-      ~expect:Rmw ~peel:No_localization ~reference:Per_step;
+      ~rendering:(fixed_rendering ~form:Rmw No_localization)
+      ~reference:Per_step;
     member "decline-sibling-unrolled" "the same level Unrolled: one read-modify-write per copy"
-      ~shape:Side_write ~expect:Rmw ~peel:No_localization ~reference:Per_step ~rmw_sites:cols
-      ~expect_axis:LL.Unrolled ~sched:(fun g ->
+      ~shape:Side_write ~rendering:(fixed_rendering ~form:Rmw No_localization)
+      ~reference:Per_step ~rmw_sites:cols ~expect_axis:LL.Unrolled ~sched:(fun g ->
         [ Sched.Unroll { axis = g.k; materialize = false } ]);
     (* --- gh-ocannl-754: the width-parity corpus. The awkward bodies under each retype kind, at
        the narrow precisions where the residency is wider than storage on the widening backends —
@@ -1570,26 +1578,28 @@ let members =
        tree legitimately take the statement — reassociating f32 products that are not exact, so
        parity would not be bitwise and the claim would say nothing about width. *)
     member "rng" "an RNG-bearing contribution, unscheduled (the storage-pinned accumulator)"
-      ~shape:Rng_contrib ~expect:Rmw ~peel:Pinned_to_storage ~reference:Rng_baseline
-      ~precisions:[ "bf16"; "f16" ];
+      ~shape:Rng_contrib
+      ~rendering:(fixed_rendering ~form:Rmw Pinned_to_storage)
+      ~reference:Rng_baseline ~precisions:[ "bf16"; "f16" ];
     member "rng-unroll" "the RNG-bearing level Unrolled: one read-modify-write per copy"
-      ~shape:Rng_contrib ~expect:Rmw ~peel:Pinned_to_storage ~reference:Rng_baseline ~rmw_sites:cols
-      ~expect_axis:LL.Unrolled ~precisions:[ "bf16"; "f16" ] ~sched:(fun g ->
-        [ Sched.Unroll { axis = g.k; materialize = false } ]);
+      ~shape:Rng_contrib ~rendering:(fixed_rendering ~form:Rmw Pinned_to_storage)
+      ~reference:Rng_baseline ~rmw_sites:cols ~expect_axis:LL.Unrolled ~precisions:[ "bf16"; "f16" ]
+      ~sched:(fun g -> [ Sched.Unroll { axis = g.k; materialize = false } ]);
     (* The schedule mint DOES take an RNG-bearing nest into a scope — and the scope is then pinned
        to storage precision by the rng census ([C_syntax.rng_scope_ids]), so its local narrows on
        every update exactly as the read-modify-write does. A localized FORM whose accumulator is
        storage-width: the member that shows the width is a property of the decision and not of the
        form. *)
     member "rng-unroll-mat" "the RNG-bearing level Unroll ~materialize (a storage-width scope)"
-      ~shape:Rng_contrib ~peel:Minted_upstream ~reference:Rng_baseline ~precisions:[ "bf16"; "f16" ]
-      ~sched:(fun g -> [ Sched.Unroll { axis = g.k; materialize = true } ]);
+      ~shape:Rng_contrib ~rendering:(fixed_rendering Minted_upstream) ~reference:Rng_baseline
+      ~precisions:[ "bf16"; "f16" ] ~sched:(fun g ->
+        [ Sched.Unroll { axis = g.k; materialize = true } ]);
     (* The Vectorized arm over a pinned body: the SIMD grid, which would render the loop-invariant
        draw at compute precision and accumulate its chains wide, takes the shared decision's pin and
        declines where the accumulator would widen. Where the lanes already hold storage width, the
        pin permits SIMD and the value follows its narrow fold. *)
     member "rng-vectorized" "the RNG-bearing axis Retyped to Vectorized" ~shape:Rng_contrib
-      ~rendering:rng_vectorized_rendering ~peel:Pinned_to_storage
+      ~rendering:rng_vectorized_rendering
       ~claimed:"per-step read-modify-write, or a SIMD grid at storage width"
       ~reference:(Vectorized cols) ~expect_axis:LL.Vectorized ~precisions:[ "bf16"; "f16" ]
       ~sched:(fun g -> [ Sched.Retype { axis = g.k; ty = LL.Vectorized } ]);
@@ -1598,8 +1608,9 @@ let members =
        the level serializes. *)
     member "rng-workgroup-reduce"
       "the RNG-bearing axis Retyped to Workgroup_reduce (serialized: no lane index bound)"
-      ~shape:Rng_contrib ~expect:Rmw ~peel:Pinned_to_storage ~reference:Rng_baseline
-      ~expect_axis:LL.Workgroup_reduce ~precisions:[ "bf16"; "f16" ]
+      ~shape:Rng_contrib
+      ~rendering:(fixed_rendering ~form:Rmw Pinned_to_storage)
+      ~reference:Rng_baseline ~expect_axis:LL.Workgroup_reduce ~precisions:[ "bf16"; "f16" ]
       ~available:(fun _ -> on_cpu)
       ~sched:(fun g -> [ Sched.Retype { axis = g.k; ty = LL.Workgroup_reduce } ]);
     (* The peel-declining bodies under the two retype kinds whose renderings hold the accumulator
@@ -1610,20 +1621,23 @@ let members =
        those two are evaluable where the level serializes; the Vectorized arm's decline has a
        defined exit on every backend. *)
     member "sibling-vectorized" "a second statement in the level, Retyped to Vectorized"
-      ~shape:Side_write ~expect:Rmw ~peel:No_localization ~reference:Per_step
-      ~expect_axis:LL.Vectorized ~sched:(fun g ->
+      ~shape:Side_write ~rendering:(fixed_rendering ~form:Rmw No_localization)
+      ~reference:Per_step ~expect_axis:LL.Vectorized ~sched:(fun g ->
         [ Sched.Retype { axis = g.k; ty = LL.Vectorized } ]);
     member "sibling-workgroup-reduce"
       "a second statement in the level, Retyped to Workgroup_reduce (serialized)" ~shape:Side_write
-      ~expect:Rmw ~peel:No_localization ~reference:Per_step ~expect_axis:LL.Workgroup_reduce
+      ~rendering:(fixed_rendering ~form:Rmw No_localization)
+      ~reference:Per_step ~expect_axis:LL.Workgroup_reduce
       ~available:(fun _ -> on_cpu)
       ~sched:(fun g -> [ Sched.Retype { axis = g.k; ty = LL.Workgroup_reduce } ]);
     member "data-guard-vectorized" "a data-dependent guard, Retyped to Vectorized" ~shape:Data_guard
-      ~expect:Rmw ~peel:No_localization ~reference:Per_step ~expect_axis:LL.Vectorized
-      ~sched:(fun g -> [ Sched.Retype { axis = g.k; ty = LL.Vectorized } ]);
+      ~rendering:(fixed_rendering ~form:Rmw No_localization)
+      ~reference:Per_step ~expect_axis:LL.Vectorized ~sched:(fun g ->
+        [ Sched.Retype { axis = g.k; ty = LL.Vectorized } ]);
     member "data-guard-workgroup-reduce"
       "a data-dependent guard, Retyped to Workgroup_reduce (serialized)" ~shape:Data_guard
-      ~expect:Rmw ~peel:No_localization ~reference:Per_step ~expect_axis:LL.Workgroup_reduce
+      ~rendering:(fixed_rendering ~form:Rmw No_localization)
+      ~reference:Per_step ~expect_axis:LL.Workgroup_reduce
       ~available:(fun _ -> on_cpu)
       ~sched:(fun g -> [ Sched.Retype { axis = g.k; ty = LL.Workgroup_reduce } ]);
   ]
@@ -2027,7 +2041,9 @@ let single_draw =
 (* Each lane of each chain starts with one term. It adds its strided terms at storage width, then
    the chains fold lane-wise and the lanes fold in order. A scalar tail extends that partial before
    it joins the seeded accumulator. An inner split repeats this fold for each block. The RNG
-   member's products seed the lanes rounded, with fused updates thereafter. *)
+   member's products seed the lanes rounded, with fused updates thereafter where the layout needs an
+   update. The fixture distinguishes accumulator widths; fused and unfused updates can give
+   identical results here. *)
 let narrow_simd_ref ~extent ~lanes ~rng prec =
   let chains = Ir.Backend_intf.simd_reduce_chains ~lanes ~extent in
   let step = chains * lanes in
