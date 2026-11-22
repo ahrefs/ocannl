@@ -31,19 +31,6 @@ module Generated = Test_utils.Generated
 
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
-
-(* Open where the renderer has a blend to emit: a dialect whose [select_blend_syntax] answers one
-   ([Cc_backend]'s config for cc and multidev_cc, [Cuda_like_config.Make] for CUDA and HIP; Metal
-   keeps [C_syntax.Pure_C_config]'s [None]). No backend fact states it -- [blends_value_selects]
-   says whether the dialect blends by default, which the override replaces -- so the set is those
-   modules', named once here. *)
-let emission_leg =
-  Verdict.leg
-    ~when_:
-      (BI.renders_on_host_pool (Context.backend_facts_of_name backend_name)
-      || List.mem [ "cuda"; "hip" ] backend_name ~equal:String.equal)
-    ~on:backend_name ()
-
 let blend_marker = Ir.C_syntax.blend_local_a ^ " ="
 let () = Generated.init ~backend_name
 let arm_name blend = if blend then "blend" else "short"
@@ -53,6 +40,16 @@ let arm_name blend = if blend then "blend" else "short"
 let under ~blend f =
   let ctx = Context.auto () in
   BI.with_select_blend ~facts:(Context.backend_facts ctx) ~blend (fun () -> f ctx)
+
+(* Open where the renderer has a blend to emit: derived from the backend's
+   [C_syntax_config.select_blend_syntax] via {!Ir.Backend_intf.codegen_capabilities.select_blend}
+   under {!Ir.Backend_intf.with_select_blend} [~blend:true] (gh-ocannl-2386). *)
+let emission_leg =
+  let has_blend =
+    under ~blend:true (fun ctx ->
+        Option.is_some ((Context.codegen_capabilities ctx).BI.select_blend Ir.Ops.single))
+  in
+  Verdict.leg ~when_:has_blend ~on:backend_name ()
 
 let () =
   let ctx = Context.auto () in

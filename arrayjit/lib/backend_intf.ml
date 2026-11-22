@@ -849,6 +849,13 @@ type codegen_capabilities = {
           declares them. Only the backend-level half: which statements are such reductions is
           [Low_level.warp_reduce_cell_sites]' structural predicate, which
           [Schedule.workgroup_memory_bytes] reads beside it. *)
+  select_blend : Ops.prec -> [ `Blend_truth | `Blend_over_locals ] option;
+      (** Whether and how the backend's [C_syntax_config.select_blend_syntax] blends a value select
+          at this compute precision (gh-ocannl-2386), derived from that hook rather than restated
+          per backend: [Some `Blend_truth] for a truth-separated blend (cc),
+          [Some `Blend_over_locals] for a blend binding arms to locals before the dialect's ternary
+          (CUDA, HIP), and [None] where the dialect short-circuits. Read per call, so it reflects
+          any {!with_select_blend} override in effect on the calling domain. *)
 }
 (** Stable code-generation facts callers need before compiling. Actual rendering decisions stay on
     the compiled routine's censuses. *)
@@ -885,6 +892,7 @@ let no_codegen_capabilities =
     workgroup_reporting_granule = 1;
     lane_all_reduce_workgroup_bytes = (fun ~extent:_ ~prec:_ -> 0);
     warp_reduce_workgroup_bytes = (fun ~extent:_ ~prec:_ -> 0);
+    select_blend = (fun _ -> None);
   }
 
 (** A stable, exhaustive rendering of a capability record under the CURRENT numerics policy: its
@@ -934,6 +942,9 @@ let codegen_capabilities_fingerprint
       workgroup_reporting_granule = _;
       lane_all_reduce_workgroup_bytes = _;
       warp_reduce_workgroup_bytes = _;
+      (* Fixed per backend (already in the schedule cache key), and {!with_select_blend} is
+         deliberately outside the schedule cache's identity (gh-ocannl-2326, gh-ocannl-2386). *)
+      select_blend = _;
     } =
   let p = Ops.prec_string in
   let resolution f =

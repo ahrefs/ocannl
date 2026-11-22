@@ -91,17 +91,36 @@ let metal_options =
           ~f:Ir.Compiler_options.metal_math_api_of_name)
        ~f:(fun math_api -> Ir.Compiler_options.metal_of_run ~math_api))
 
-let blends = on_cc || String.equal backend_name "hip"
+let () = Generated.init ~backend_name
+
+(* Derived from the backend's [C_syntax_config.select_blend_syntax] via
+   {!Ir.Backend_intf.codegen_capabilities.select_blend} (gh-ocannl-2386). *)
+let caps = lazy (Context.codegen_capabilities (Context.auto ()))
+
+let select_blend prec =
+  let c = Lazy.force caps in
+  c.Ir.Backend_intf.select_blend (c.compute_prec prec)
+
+let blends_at prec = Option.is_some (select_blend prec)
+let blends = blends_at single
 
 (* The loop the census legs' select runs under. On a GPU dialect, a [Grid] loop: one select per
    thread, the shape a parallel backward kernel has (a serial loop's unrolled copies are the other
    shape, which the realistic pool leg keeps). Serial elsewhere. *)
 let census_axis = if Option.is_some gpu_dialect then LL.Grid else LL.Serial
 
-(* The kernel-text claims each leg makes where the backend blends, skipped by name elsewhere:
-   written once (gh-ocannl-1703). *)
-let blend_leg ~cpu_only = Verdict.leg ~when_:(on_cc || (blends && not cpu_only)) ~on:backend_name ()
-let () = Generated.init ~backend_name
+(* The kernel-text claims each leg makes where the backend blends, skipped where [select_blend]
+   answers [None] at the leg's precision (and [on_cc] restricts [cpu_only] legs, whose expected
+   values are C-typed): written once (gh-ocannl-1703, gh-ocannl-2386). *)
+let blend_leg ~cpu_only ~prec =
+  Verdict.leg ~when_:(((not cpu_only) || on_cc) && blends_at prec) ~on:backend_name ()
+
+let single_blend_leg = Verdict.leg ~when_:blends ~on:backend_name ()
+
+let over_locals_leg =
+  Verdict.leg
+    ~when_:(match select_blend single with Some `Blend_over_locals -> true | _ -> false)
+    ~on:backend_name ()
 
 (* gh-ocannl-1778: the [outlined] mode is this test run with every kernel forced outlined
    ([cc_kernel_part_weight=1], [cc_compile_unit_min_bytes=0] on its rule), under the plain run's
@@ -149,19 +168,21 @@ let short_circuit_forms = [ ") != 0.0 ? ("; " > 0.0 ?"; "; }) ?" ]
    GPU dialects' [auto] local of the first arm. *)
 let blend_marker = Ir.C_syntax.blend_local_a ^ " ="
 
-(* The claim that [text] keeps no short-circuiting spelling of a value select. On cc, none of
-   [short_circuit_forms]. On a GPU dialect the blend keeps the dialect's own [?:] over its locals
-   ([C_syntax.Blend_over_locals]), so what must not remain is a [?] selecting anything but a local:
-   every [?] -- of which a blended kernel has at least its blend's own -- is followed by
-   [C_syntax.blend_local_a]. *)
-let no_short_circuit_claim label text =
-  if on_cc then p_none label short_circuit_forms ~f:(has text)
-  else
-    let after_each_question_mark =
-      List.filter_mapi (String.to_list text) ~f:(fun i ch ->
-          Option.some_if (Char.equal ch '?') (String.lstrip (String.drop_prefix text (i + 1))))
-    in
-    p_all label after_each_question_mark ~f:(String.is_prefix ~prefix:Ir.C_syntax.blend_local_a)
+(* The claim that [text] keeps no short-circuiting spelling of a value select. Under [`Blend_truth]
+   (cc), none of [short_circuit_forms]. Under [`Blend_over_locals] (GPU dialects), the blend keeps
+   the dialect's own [?:] over its locals ([C_syntax.Blend_over_locals]), so what must not remain is
+   a [?] selecting anything but a local: every [?] -- of which a blended kernel has at least its
+   blend's own -- is followed by [C_syntax.blend_local_a]. *)
+let no_short_circuit_claim ~prec label text =
+  match select_blend prec with
+  | Some `Blend_truth -> p_none label short_circuit_forms ~f:(has text)
+  | Some `Blend_over_locals ->
+      let after_each_question_mark =
+        List.filter_mapi (String.to_list text) ~f:(fun i ch ->
+            Option.some_if (Char.equal ch '?') (String.lstrip (String.drop_prefix text (i + 1))))
+      in
+      p_all label after_each_question_mark ~f:(String.is_prefix ~prefix:Ir.C_syntax.blend_local_a)
+  | None -> p label false
 
 (* The guards' short-circuiting spelling: cc's [Ops.ternop_c_syntax] opens the arm with a
    parenthesis, the GPU dialects' does not. *)
@@ -421,6 +442,7 @@ let census_claim ~patterns ~gpu_patterns ~air_claim ~air_skip claim name =
 
 type leg = {
   name : string;
+  prec : Ops.prec;
   cpu_only : bool;  (** whose expected values are the C backends' (C typing, or no f64 elsewhere) *)
   seed : (Tn.t * float array) list;
   out : Tn.t;
@@ -447,6 +469,7 @@ let where_leg ?(else_zero = false) ?(cpu_only = false) ?axis ~name ~mk ~cmk ~cpr
   in
   {
     name;
+    prec;
     cpu_only;
     seed = ([ (cond, cv); (g, gv) ] @ if else_zero then [] else [ (e, ev) ]);
     out;
@@ -461,6 +484,7 @@ let gate_leg ?axis ~name ~op ~semantics ~xv ~gv () =
   let sel = LL.Binop (op, (get x [| iter i |], single), (get g [| iter i |], single)) in
   {
     name;
+    prec = single;
     cpu_only = false;
     seed = [ (x, xv); (g, gv) ];
     out;
@@ -497,6 +521,7 @@ let composed_leg ~name ~select =
   let llsc = LL.Binop (Ops.Sub, (sum, single), at k) in
   {
     name;
+    prec = single;
     cpu_only = true;
     seed =
       ([ (x, xv); (g, gv); (h, big); (k, big) ]
@@ -522,6 +547,7 @@ let eq_gate_leg ?axis ~name () =
   let sel = LL.Ternop (Ops.Where, (cond, single), at g, (c 0., single)) in
   {
     name;
+    prec = single;
     cpu_only = false;
     seed = [ (x, xv); (m, mv); (g, gv) ];
     out;
@@ -546,6 +572,7 @@ let masked_leg ?axis ~name () =
   in
   {
     name;
+    prec = single;
     cpu_only = false;
     seed = [ (cond, cv); (g, gv); (out, ov) ];
     out;
@@ -594,11 +621,11 @@ let () =
          let got = execute_leg ~name:leg.name ~seed:leg.seed ~out:leg.out leg.llc in
          p_all2 claim got leg.want ~f:same_bits);
       let text = lazy (kernel_text leg.name) in
-      let leg' = blend_leg ~cpu_only:leg.cpu_only in
+      let leg' = blend_leg ~cpu_only:leg.cpu_only ~prec:leg.prec in
       in_legf ~leg:leg' "%s: the select calls the blend helper" leg.name (fun label ->
           p label (has (Lazy.force text) blend_marker));
       in_legf ~leg:leg' "%s: no short-circuiting spelling of the select remains" leg.name
-        (fun label -> no_short_circuit_claim label (Lazy.force text)))
+        (fun label -> no_short_circuit_claim ~prec:leg.prec label (Lazy.force text)))
 
 (* The assembly claim, on the shapes of the backward pass: [where cond g 0], a [Relu_gate] and the
    max-pool gate's float equality, each gating a load from a buffer argument (which the compiler
@@ -633,11 +660,10 @@ let () =
   in
   let got = execute_leg ~name ~seed:[ (a, a_vals) ] ~out llc in
   p_all2 (name ^ ": values") got [| 1.5; 2.5; 3.5; 4.5; 0.; 0. |] ~f:same_bits;
-  let claim = name ^ ": an index guard keeps its [?:] and calls no blend" in
-  if blends then
-    let text = kernel_text name in
-    p claim (has text guard_spelling && not (has text blend_marker))
-  else skipped claim
+  in_leg ~leg:single_blend_leg (name ^ ": an index guard keeps its [?:] and calls no blend")
+    (fun claim ->
+      let text = kernel_text name in
+      p claim (has text guard_spelling && not (has text blend_marker)))
 
 (* [out[i] := 0 <= idx[i] && idx[i] < 4 ? table[idx[i]] : 0]: the guard reads only a data value — no
    index at all — and the inactive lanes' rows are far out of range, so only the [Get_dynamic] in
@@ -657,11 +683,10 @@ let () =
     Array.map iv ~f:(fun r -> if Float.(r >= 0. && r < 4.) then a_vals.(Float.to_int r) else 0.)
   in
   p_all2 (name ^ ": values") got want ~f:same_bits;
-  let claim = name ^ ": a value-guarded gather keeps its [?:] and calls no blend" in
-  if blends then
-    let text = kernel_text name in
-    p claim (has text guard_spelling && not (has text blend_marker))
-  else skipped claim
+  in_leg ~leg:single_blend_leg (name ^ ": a value-guarded gather keeps its [?:] and calls no blend")
+    (fun claim ->
+      let text = kernel_text name in
+      p claim (has text guard_spelling && not (has text blend_marker)))
 
 (* [out[i] := m[i] != 0 ? s[i] * 0.5 : NAN]: a masked attention's fill, a NaN LITERAL arm. Under
    HIP's no-NaNs fast math a NaN bound to a local is the optimizer's to drop, and a blended [where
@@ -686,11 +711,10 @@ let () =
   let got = execute_leg ~name ~seed:[ (m, mv); (sv, svv) ] ~out llc in
   let want = Array.init n ~f:(fun i -> if Float.(mv.(i) <> 0.) then svv.(i) *. 0.5 else nan) in
   p_all2 (name ^ ": values, the NaN fill reaching the masked cells") got want ~f:same_bits;
-  let claim = name ^ ": a NaN-literal arm keeps its [?:] where the blend binds locals" in
-  if String.equal backend_name "hip" then
-    let text = kernel_text name in
-    p claim (has text guard_spelling && not (has text blend_marker))
-  else skipped claim
+  in_leg ~leg:over_locals_leg
+    (name ^ ": a NaN-literal arm keeps its [?:] where the blend binds locals") (fun claim ->
+      let text = kernel_text name in
+      p claim (has text guard_spelling && not (has text blend_marker)))
 
 (* [out[i] := v[i] != 0 ? (i < 4 ? a[i] : 0) : -1] over [i < 6]: the outer, value select blends —
    its arm's one read sits behind a guard of its own — and the inner index guard stays [?:]. *)
@@ -707,11 +731,10 @@ let () =
   let llc = loop_n i 6 (set out [| iter i |] outer) in
   let got = execute_leg ~name ~seed:[ (a, a_vals); (v, vv) ] ~out llc in
   p_all2 (name ^ ": values") got [| 1.5; -1.; 3.5; -1.; 0.; 0. |] ~f:same_bits;
-  let claim = name ^ ": the value select blends around the inner guard's [?:]" in
-  if blends then
-    let text = kernel_text name in
-    p claim (has text blend_marker && has text guard_spelling)
-  else skipped claim
+  in_leg ~leg:single_blend_leg (name ^ ": the value select blends around the inner guard's [?:]")
+    (fun claim ->
+      let text = kernel_text name in
+      p claim (has text blend_marker && has text guard_spelling))
 
 (* [out[i] := v[i] != 0 ? ((int)a[i] / (int)b[i] == 0 ? g[i] : 0) : -1], and the same with one more
    select between: [v[i] != 0 ? (u[i] != 0 ? (... division select ...) : 0) : -1]. The division's
@@ -832,11 +855,10 @@ let () =
   if outlined then
     Verdict.claim "the forced run rendered the pool kernel outlined"
       (not (List.is_empty (Generated.outlined_parts (Generated.read "bs_pool_inlined"))));
-  let claim = "pool backward: the inlined gradient's selects call the blend" in
-  if blends then
-    let text = kernel_text "bs_pool_inlined" in
-    p claim (has text blend_marker)
-  else skipped claim;
+  in_leg ~leg:single_blend_leg "pool backward: the inlined gradient's selects call the blend"
+    (fun claim ->
+      let text = kernel_text "bs_pool_inlined" in
+      p claim (has text blend_marker));
   (* The realistic kernel's branch census (gh-ocannl-1660). gcc at x86 is where it bites: over the
      blend's two values it still branched on both selects, the max-pool gate's float equality test
      ([vucomiss], [jp], [je]: two flags defeat its if-conversion) and the ReLU gate, whose float arm

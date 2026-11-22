@@ -29,7 +29,27 @@ let () =
     (BI.equal_backend_facts facts (Context.backend_facts_of_name name));
   let limits = Context.hardware_limits ctx in
   p "the facts bind a hardware grid exactly where the device bounds a workgroup's threads"
-    (Bool.equal (BI.binds_hardware_grid facts) (Option.is_some limits.max_threads_per_workgroup))
+    (Bool.equal (BI.binds_hardware_grid facts) (Option.is_some limits.max_threads_per_workgroup));
+  let caps = Context.codegen_capabilities ctx in
+  p_all "codegen_capabilities.select_blend at f32 and f64 agrees with blends_value_selects"
+    [ Ir.Ops.single; Ir.Ops.double ] ~f:(fun prec ->
+      Bool.equal (Option.is_some (caps.BI.select_blend prec)) facts.BI.blends_value_selects);
+  let cc_leg = Verdict.leg ~when_:(BI.renders_on_host_pool facts) ~on:name () in
+  Verdict.in_leg ~leg:cc_leg
+    "on cc, codegen_capabilities.select_blend reports Blend_truth at f32 and f64 and None elsewhere"
+    (fun label ->
+      p_all label Ir.Ops.all_precs ~f:(fun prec ->
+          match (prec, caps.BI.select_blend prec) with
+          | (Ir.Ops.Single_prec _ | Ir.Ops.Double_prec _), Some `Blend_truth -> true
+          | (Ir.Ops.Single_prec _ | Ir.Ops.Double_prec _), _ -> false
+          | _, None -> true
+          | _, Some _ -> false));
+  (* Has teeth on backends that blend by default (cc, HIP); trivially true where [select_blend] is
+     already [None], kept unconditional so the golden stays backend-uniform. *)
+  p_all "under with_select_blend ~blend:false, codegen_capabilities.select_blend answers None"
+    Ir.Ops.all_precs ~f:(fun prec ->
+      BI.with_select_blend ~facts ~blend:false (fun () ->
+          Option.is_none (caps.BI.select_blend prec)))
 
 (* Each fact varied alone, from both a host-pool and a hardware-grid record, so a consumer that read
    another fact in its place -- one that happens to agree on today's backends -- moves where it
