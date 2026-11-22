@@ -1,3 +1,8 @@
 the entry with a duplicated Stage anchor has a pure scope body: true
 Stage is refused at transform time for leaving a tensor write inside a scope body: true
 with a distinct scope-loop binder, Stage writes a tile outside the scope and leaves it pure: true
+the Grid duplicate starts with a hardware loop in the scope and no hidden write: true
+Stage is refused for adding a hidden write even with a pre-existing Grid loop in the scope: true
+Stage outside the scope is admitted and leaves only the pre-existing Grid loop violation: true
+the single-op oracle input starts with a hidden write and no scope hardware loop: true
+the single-op oracle refuses a new Grid loop in an already impure scope body: true

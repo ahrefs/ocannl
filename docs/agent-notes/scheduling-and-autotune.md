@@ -1223,14 +1223,17 @@ files.
   optimize, inside a pure scope that contains no staged read. The added tensor write is refused
   by the post-op gate. Disabling that gate lets the stage apply with the write still in the scope.
   With a distinct scope-loop symbol the stage writes the tile outside the scope and leaves it pure.
-  That gate is a backstop for user-written chains, not a live hazard (gh-ocannl-2366): every
+  The hidden-write shape is reachable only in user-written chains (gh-ocannl-2366): every
   shipped chain (the sketch families, the CPU channel-vector preset, autotune's seeds and appended
   moves) puts its `Stage`s ahead of every op that copies a loop body (materializing
   `Unroll`/`Partition`, `Tensorize`, `Fuse_epilogue`), so a shipped `Stage`'s anchor has the one
   binder the precheck reads; the argument sits beside the precheck in `apply_stage`. Within one
-  chain over a lowered routine `Fuse_epilogue`'s own purity check is redundant too; its probe,
-  and a hand-built entry with a hardware loop in a scope (which switches the per-op refusal off),
-  still need it.
+  chain the entry and per-op gates guarantee purity, so `Fuse_epilogue`'s own purity check
+  protects its standalone probe. Before gh-ocannl-2417, a hand-built pure input with a duplicate
+  anchor typed `Grid` let `Stage` add a hidden tile write. The per-op gate now compares the
+  presence of each violation kind independently, so a pre-existing hardware loop no longer
+  exempts a new impure body, and a pre-existing impure body cannot mask a new hardware loop in
+  the single-op oracle.
   An IMPURE entry (only a hand-built `?prelowered` routine can bring one) is refused before any op
   runs, by `apply_typed` and `schedule_legality` on a non-empty schedule
   (`check_entry_scope_purity`, gh-ocannl-2314):
