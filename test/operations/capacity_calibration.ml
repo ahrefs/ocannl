@@ -82,10 +82,13 @@ let minix_cc =
 (* gh-ocannl-1910: ARM cross-check of cc's advisory capacity -- mac-studio's Apple M4 Max,
    [CAPACITY_ONLY=1 benchmarks/gh1253_cells.sh cc] at dd438e64b, 2026-11-22 (exclusive window
    wave-20261122-ocannl-t1910-mac-studio-2). Like Zen 5, the untiled contraction is issue-bound
-   (5-27 GB/s requested against 338.75 GB/s STREAM); splitting on its own contrast places the knee
-   between the same 6.45 GB (k = 6144, [x] 24 MiB) and 8.60 GB (k = 8192, 32 MiB) working sets,
-   fitting the identical 7447425761-byte capacity (1.00x of Zen 5, so one cc advisory holds across
-   x86_64 and ARM without a per-architecture constant). *)
+   (5-27 GB/s requested against 338.75 GB/s STREAM). Unlike Zen 5's 12-15 GB/s plateau through 6.45
+   GB, the M4 Max rate falls gradually from 2.15 GB on (23.93 -> 21.30 -> 17.94 -> 12.37 -> 9.69 ->
+   7.28 GB/s; steepest step 4.30 -> 6.45 GB). Splitting on the geometric-mean contrast threshold
+   places the knee in the same k = 6144..8192 grid bracket (6.45 to 8.60 GB) as Zen 5's, so the
+   discrete-grid fit yields the same 7447425761-byte geometric mean to within the sweep's 1.33x grid
+   step; across 2.15..8.60 GB the knee stays well inside the issue's 3x bound, so one cc advisory
+   holds across x86_64 and ARM without a per-architecture constant. *)
 let mac_studio_cc =
   recorded
     [
@@ -161,7 +164,7 @@ let () =
     "the recorded mac-studio ARM cc sweep fits a monotone capacity between 6.45 GB and 8.60 GB, on \
      its own contrast"
     (transition_at ~cached:6449790976 ~spilled:8599371776 (Cal.fit_capacity mac_studio_cc));
-  p "the mac-studio ARM cc sweep agrees with cc's published cache capacity"
+  p "the mac-studio ARM sweep's bracket gives cc's published capacity"
     (match Cal.fit_capacity mac_studio_cc with
     | Cal.Transition { capacity; monotone = true; _ } ->
         Option.equal Int.equal cc_published (Some capacity)

@@ -6036,8 +6036,10 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   `STEP BROKE`: building cifar_resnet raised `Shape_error: tracing the shape scheme model: occurs
   check failed` under the default `op_shape_schemes=check` (green with it `off`). On 2026-11-22 the
   CUDA native-PTX baseline on rog-nv-linux (RTX 5070 Ti Laptop, sm_120, gh-ocannl-1910) read
-  `verdict: holds` for `tools/cuda-native-ptx-rerun.sh -j 8 @runtest @train`, confirming the
-  sweep's native-PTX WARNING flags regressions rather than standing reds.
+  `verdict: holds` for `tools/cuda-native-ptx-rerun.sh -j 8 @runtest @train`, following the
+  2026-11-19 load-only `autotune_candidate_release` SIGSEGV red (unreproduced in gh-ocannl-2410,
+  below), so a new native-PTX WARNING flags regressions (or a recurrence of that crash, checked
+  via the kernel-journal bullet below) rather than standing test failures.
 - The in-flight view is `$STATE/runs/<stamp>.json` (schema 1, gh-ocannl-2220),
   published before lanes fork, with the resolved full ref, controller pid, flags and ordered
   lanes/units. One stable sibling lock serializes read/update/rename; unique File::Temp stages

@@ -275,10 +275,11 @@ files.
   119 GB/s STREAM rate on minix's Zen 5, so a DRAM-rate split reads everything spilled; the cc
   cell splits on the sweep's own contrast (13 GB/s through a 24 MiB `x`, 5-10 GB/s from 32 MiB)
   and cc's advisory is that fit, pinned to its recorded rows in `capacity_calibration`. An ARM
-  cross-check on mac-studio (M4 Max, exclusive window, gh-ocannl-1910) hits the same issue-bound
-  split (12-27 GB/s through 24 MiB, 5-10 GB/s from 32 MiB against 339 GB/s STREAM) and fits the
-  identical 7447425761-byte capacity (1.00x of Zen 5), confirming one cc advisory without a
-  per-architecture constant. The proxy
+  cross-check on mac-studio (M4 Max, exclusive window, gh-ocannl-1910) is likewise issue-bound
+  against 339 GB/s STREAM, with rates falling gradually from 2.15 GB (23.9 to 5.1 GB/s) rather
+  than holding Zen 5's plateau; its contrast split lands in the same 6.45 to 8.60 GB bracket
+  (7447425761 bytes, to within the sweep's 1.33x grid step and well inside 3x), confirming one cc
+  advisory without a per-architecture constant. The proxy
   reads a cc `Grid` iteration as a resident block (ahrefs/ocannl#1610), so a change there is a
   re-fit. `bench_wgrad`'s `wgrad-model:` lines print each plan's per-kernel rank beside its
   distinct-cell bound; `benchmarks/gh1253_cells.sh` runs the whole calibration on one box. Its
