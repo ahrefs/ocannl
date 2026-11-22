@@ -19,6 +19,10 @@ every CUDA arithmetic arity narrows fp8 through the vendor type: true
 both shared dialects preserve operand evaluation contracts: true
 HIP blends value selects over auto locals at f16, bf16, f32 and f64: true
 HIP keeps fp8's short-circuiting select, and CUDA every precision's: true
+codegen_capabilities.select_blend derives HIP's over-locals blend and drops it under override: true
+codegen_capabilities.select_blend is None on CUDA by default and over-locals under override: true
+Pure_C_config and no_codegen_capabilities report no select blend even under override: true
+codegen_capabilities.select_blend derives both blend kinds directly from select_blend_syntax: true
 the GPU Satur01 blend binds its operand, then keeps the dialect's own test over the local: true
 the GPU Where blend binds both arms, then selects between them with the dialect's own ternary: true
 CUDA routine names avoid the names nvrtc rejects as a kernel name: true

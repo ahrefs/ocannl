@@ -29,7 +29,14 @@ let () =
     (BI.equal_backend_facts facts (Context.backend_facts_of_name name));
   let limits = Context.hardware_limits ctx in
   p "the facts bind a hardware grid exactly where the device bounds a workgroup's threads"
-    (Bool.equal (BI.binds_hardware_grid facts) (Option.is_some limits.max_threads_per_workgroup))
+    (Bool.equal (BI.binds_hardware_grid facts) (Option.is_some limits.max_threads_per_workgroup));
+  let caps = Context.codegen_capabilities ctx in
+  p "codegen_capabilities.select_blend at f32 agrees with blends_value_selects"
+    (Bool.equal (Option.is_some (caps.BI.select_blend Ir.Ops.single)) facts.BI.blends_value_selects);
+  p_all "under with_select_blend ~blend:false, codegen_capabilities.select_blend answers None"
+    Ir.Ops.all_precs ~f:(fun prec ->
+      BI.with_select_blend ~facts ~blend:false (fun () ->
+          Option.is_none (caps.BI.select_blend prec)))
 
 (* Each fact varied alone, from both a host-pool and a hardware-grid record, so a consumer that read
    another fact in its place -- one that happens to agree on today's backends -- moves where it

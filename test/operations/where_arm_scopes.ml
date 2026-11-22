@@ -389,7 +389,10 @@ let row_blend () =
   let got = execute ~name o ~seed:[ (x, xs); (m, mask); (out, blank n) ] ~read:[ out ] in
   values name got [ Array.init n ~f:(fun i -> if Float.(mask.(i) < 0.5) then sum2 i else 7.) ];
   let source = Generated.main_logic (Generated.read name) in
-  let blends = Ir.Backend_intf.renders_on_host_pool facts || String.equal backend_name "hip" in
+  let blends =
+    Option.is_some
+      ((Context.codegen_capabilities (Context.auto ())).Ir.Backend_intf.select_blend single)
+  in
   (* One claim name on every backend: the golden is backend-uniform. *)
   let claim =
     name ^ ": the arm's reads follow the select's rendering, blended or short-circuited"

@@ -1515,6 +1515,12 @@ let codegen_capabilities (module Config : C_syntax_config) =
                && Option.is_some Config.shared_decl_prefix ->
             extent / warp * Ops.prec_in_bytes prec
         | _ -> 0);
+    select_blend =
+      (fun prec ->
+        match Config.select_blend_syntax prec with
+        | None -> None
+        | Some (Blend_truth _) -> Some `Blend_truth
+        | Some (Blend_over_locals _) -> Some `Blend_over_locals);
   }
 
 (** Whether [c] lies exactly halfway between two adjacent f32 values, so that narrowing it to f32 is
