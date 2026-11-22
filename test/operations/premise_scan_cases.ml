@@ -25,9 +25,11 @@ let seeded seed idcs =
 let check_products label products want =
   p_all2 label want (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id))) ~f:Float.equal
 let run () =
-  let ctx, routine = Context.compile () in
+  let t = build () in
+  Train.set_materialized t.Tensor.value;
+  let ctx, routine = Context.compile (Context.auto ()) program () in
   let ctx = Context.run ctx routine in
-  let got = Context.get_values ctx () in
+  let got = Context.get_values ctx t.Tensor.value in
   Context.release ctx;
   (got, ())
 let reference () = lazy (fst (run ()))
@@ -49,6 +51,10 @@ let check_sums label products got =
     (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id))) ~f:Float.equal
 let check1 label products got = check_sums label products got
 let check2 label products got = check1 label products got
+let get_stored_values ctx node =
+  match Context.observability ctx node with
+  | Context.Stored -> Context.get_values ctx node
+  | _ -> failwith "expected a stored support value"
 |ocaml}
 
 let cross_module =
@@ -58,9 +64,10 @@ let b = Exact_sums.with_zero [| 3.; 4. |]
 let products = Ll_test.matmul_products ~m:2 ~n:2 ~k:2 a b
 let () = p_all "exact" products ~f:(Ll_test.exact_partials ~sig_bits:24)
 let run () =
-  let ctx, routine = Context.compile () in
-  Context.run ctx routine
-let () = Exact_sums.check_sums "reference" products (Context.get_values (run ()) ())
+  let t = build () in
+  let ctx, routine = Context.compile (Context.auto ()) (Train.forward t) () in
+  Context.get_values (Context.run ctx routine) t.Tensor.value
+let () = Exact_sums.check_sums "reference" products (run ())
 |ocaml}
 
 (* A support helper comparing products it builds itself, and a caller whose own builder is
@@ -71,7 +78,9 @@ let a = Ll_test.operand ~b:[] ~o:[2] ~i:[2] (fun _ -> 1.)
 let b = Ll_test.operand ~b:[] ~o:[2] ~i:[2] (fun _ -> 2.)
 let self_check () =
   let products = Ll_test.matmul_products ~m:2 ~n:2 ~k:2 a b in
-  p_all2 "self" (Context.get_values (Context.run () ()) ())
+  let t = build () in
+  let ctx, routine = Context.compile (Context.auto ()) (Train.forward t) () in
+  p_all2 "self" (Context.get_values (Context.run ctx routine) t.Tensor.value)
     (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id))) ~f:Float.equal
 |ocaml}
 
@@ -83,6 +92,167 @@ let products = Ll_test.matmul_products ~m:2 ~n:2 ~k:2 a b
 let () = p_all "exact" products ~f:(Ll_test.exact_partials ~sig_bits:24)
 let () = Exact_sums.self_check ()
 |ocaml}
+
+(* The bodies compile independently against the stub's check_reference. The scan sees the concrete
+   comparison below in front of each one. *)
+let run_premise =
+  {ocaml|
+let a = Ll_test.operand ~b:[] ~o:[2] ~i:[2] (fun _ -> 1.)
+let b = Ll_test.operand ~b:[] ~o:[2] ~i:[2] (fun _ -> 2.)
+let products = Ll_test.matmul_products ~m:2 ~n:2 ~k:2 a b
+let () = p_all "exact" products ~f:(Ll_test.exact_partials ~sig_bits:24)
+let check_reference values =
+  p_all2 "reference" values
+    (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id))) ~f:Float.equal
+|ocaml}
+
+let run_cases =
+  [
+    ( "a materialized Context.run read is an executed reference",
+      {ocaml|
+let () =
+  let t = build () in
+  Train.set_materialized t.Tensor.value;
+  let ctx, routine = Context.compile (Context.auto ()) program () in
+  let ctx = Context.run ctx routine in
+  check_reference (Context.get_values ctx t.Tensor.value)
+|ocaml},
+      true );
+    ( "a Virtual Context.run read confers nothing",
+      {ocaml|
+let () =
+  let t = build () in
+  Ll_test.virtualize t.Tensor.value;
+  let ctx, routine = Context.compile (Context.auto ()) program () in
+  let ctx = Context.run ctx routine in
+  check_reference (Context.get_values ctx t.Tensor.value)
+|ocaml},
+      false );
+    ( "materializing after Context.compile confers nothing",
+      {ocaml|
+let () =
+  let t = build () in
+  let ctx, routine = Context.compile (Context.auto ()) program () in
+  Train.set_materialized t.Tensor.value;
+  let ctx = Context.run ctx routine in
+  check_reference (Context.get_values ctx t.Tensor.value)
+|ocaml},
+      false );
+    ( "a Context.run read at a rebound node confers nothing",
+      {ocaml|
+let () =
+  let t = build () in
+  Train.set_materialized t.Tensor.value;
+  let ctx, routine = Context.compile (Context.auto ()) program () in
+  let ctx = Context.run ctx routine in
+  let t = build () in
+  check_reference (Context.get_values ctx t.Tensor.value)
+|ocaml},
+      false );
+    ( "compiling Train.forward preserves its own output as an executed reference",
+      {ocaml|
+let () =
+  let t = build () in
+  let ctx, routine = Context.compile (Context.auto ()) (Train.forward t) () in
+  let ctx = Context.run ctx routine in
+  let ctx = Context.run ctx routine in
+  check_reference (Context.get_values ctx t.Tensor.value)
+|ocaml},
+      true );
+    ( "a prelowered Context.compile cannot establish the Train.forward output",
+      {ocaml|
+let () =
+  let t = build () in
+  let ctx, routine = Context.compile ~prelowered (Context.auto ()) (Train.forward t) () in
+  let ctx = Context.run ctx routine in
+  check_reference (Context.get_values ctx t.Tensor.value)
+|ocaml},
+      false );
+    ( "a reused lowering cannot establish the compile's placement",
+      {ocaml|
+let () =
+  let t = build () in
+  let ctx, _ = Context.compile ~reuse (Context.auto ()) program () in
+  Train.set_materialized t.Tensor.value;
+  let ctx, routine = Context.compile ~reuse ctx program () in
+  let ctx = Context.run ctx routine in
+  check_reference (Context.get_values ctx t.Tensor.value)
+|ocaml},
+      false );
+    ( "a sibling context confers nothing",
+      {ocaml|
+let () =
+  let t = build () in
+  let base = Context.auto () in
+  let _, routine = Context.compile base (Train.forward t) () in
+  let sibling, _ = Context.compile base program () in
+  let ctx = Context.run sibling routine in
+  check_reference (Context.get_values ctx t.Tensor.value)
+|ocaml},
+      false );
+    ( "a runtime storage check validates a read from an opaque routine",
+      {ocaml|
+let () =
+  let node = (build ()).Tensor.value in
+  let ctx, routine = opaque_compile (Context.auto ()) node in
+  let ctx = Context.run ctx routine in
+  let values =
+    match Context.observability ctx node with
+    | Context.Stored -> Context.get_values ctx node
+    | _ -> failwith "expected a stored value"
+  in
+  check_reference values
+|ocaml},
+      true );
+    ( "a storage check that reads another node confers nothing",
+      {ocaml|
+let () =
+  let node = (build ()).Tensor.value in
+  let ctx, routine = opaque_compile (Context.auto ()) node in
+  let ctx = Context.run ctx routine in
+  let other = (build ()).Tensor.value in
+  let values =
+    match Context.observability ctx node with
+    | Context.Stored -> Context.get_values ctx other
+    | _ -> failwith "expected a stored value"
+  in
+  check_reference values
+|ocaml},
+      false );
+    ( "a storage check with a returning fallback confers nothing",
+      {ocaml|
+let () =
+  let node = (build ()).Tensor.value in
+  let ctx, routine = opaque_compile (Context.auto ()) node in
+  let ctx = Context.run ctx routine in
+  let values =
+    match Context.observability ctx node with
+    | Context.Stored -> Context.get_values ctx node
+    | _ -> [||]
+  in
+  check_reference values
+|ocaml},
+      false );
+    ( "a support module can validate a stored read from an opaque routine",
+      {ocaml|
+let () =
+  let node = (build ()).Tensor.value in
+  let ctx, routine = opaque_compile (Context.auto ()) node in
+  let ctx = Context.run ctx routine in
+  check_reference (Exact_sums.get_stored_values ctx node)
+|ocaml},
+      true );
+    ( "a rebound support module cannot validate a stored read",
+      {ocaml|
+module Exact_sums = Other_sums
+let () =
+  let node = (build ()).Tensor.value in
+  let ctx, routine = opaque_compile (Context.auto ()) node in
+  let ctx = Context.run ctx routine in
+  check_reference (Exact_sums.get_stored_values ctx node)
+|ocaml},
+      false );
+  ]
 
 (* gh-ocannl-2334: a Train.*_once context as the executed reference. *)
 let once_protocol =
@@ -160,6 +330,12 @@ let () =
     |> read
   in
   p "a different products binding cannot cover the premise" (Scan.uncovered other_products = 1);
+  let support = support_of support_source in
+  List.iter run_cases ~f:(fun (label, body, want_covered) ->
+      p label
+        (match read ~support (run_premise ^ body) with
+        | [ site ] -> Bool.equal site.covered want_covered
+        | _ -> false));
   let host_reference =
     String.substr_replace_all protocol
       ~pattern:"List.hd_exn (L.execute ~name:\"ref\" program ~seed:[] ~read:[])"
@@ -197,7 +373,6 @@ let () =
     ^ String.substr_replace_all protocol ~pattern:"L.operand ~b:[] ~o:[2] ~i:[2]" ~with_:"Fun.id"
   in
   p "an unrelated checked operand cannot cover a site" (Scan.uncovered (read unrelated) = 1);
-  let support = support_of support_source in
   let covered_across = read ~support cross_module in
   p "a premise checked through a support module's reader and comparison is covered"
     (List.length covered_across = 1 && Scan.uncovered covered_across = 0);
@@ -306,7 +481,7 @@ let () =
   p "a compile without forward_once's run confers nothing"
     (Scan.uncovered
        (once_variant ~pattern:"Train.forward_once (Context.auto ()) t"
-          ~with_:"fst (Context.compile (ignore t))")
+          ~with_:"fst (Context.compile (Context.auto ()) (Train.forward t) ())")
     = 1);
   p "a rebound Train module confers nothing"
     (Scan.uncovered (read ("module Train = Other_train\n" ^ once_protocol)) = 1);

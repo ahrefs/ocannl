@@ -709,6 +709,7 @@ let () =
     out
   in
   let reference = projection () in
+  Train.set_materialized reference.Tensor.value;
   (* Serial, as [run_serial]: the identity transform keeps the default scheduler out of it. *)
   let ctx, routine =
     Context.compile

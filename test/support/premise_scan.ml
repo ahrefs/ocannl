@@ -1,4 +1,4 @@
-(* gh-ocannl-2194, gh-ocannl-2334. Recognised forms (closed).
+(* gh-ocannl-2194, gh-ocannl-2334, gh-ocannl-2391. Recognised forms (closed).
 
    Input: .ml under test/ and arrayjit/test/, excluding test/ppx/*_expected.ml snapshots, one file
    at a time. Census: applications of Ll_test.exact_partials through scoped module aliases,
@@ -34,19 +34,23 @@
    The same products' lexical builder identities (source and offset) must reach p_all2 label
    reference sums ~f:Float.equal, directly or through a local comparison wrapper (check_products).
    Sums are Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id)). References come
-   from Ll_test.execute's result list (List.hd_exn or list-pattern extraction), Context.get_values
-   of a Context.run result (its node opaque), or Context.get_values of a Train.forward_once or
-   Train.update_once result (bare or Ocannl-qualified, both positional arguments supplied) at a node
-   that call's compile kept in a buffer: the [.value] or [.Tensor.value] of the very binding passed
-   as the call's tensor argument, which run_once materializes; or a node expression -- an
-   identifier, field projections and one-argument applications of identifiers -- that a statement
-   [Train.set_materialized node], sequenced before the call in its scope, names alike (printed AST),
-   each identifier resolving to the same binding there and at the read. run_once materializes only
-   its tensor (Asgns.guess_materialized's outputs are to_routine's alone), so any other node a _once
-   context is read at -- another tensor, a gradient not materialized first -- may be Virtual, which
-   a read recomputes through a throwaway routine (gh-ocannl-777) rather than reading what the run
-   wrote: it confers nothing. Local wrappers, tuples/fst/snd, lazy/force preserve that provenance.
-   Compile, get_values without run, and host sums alone never establish an executed reference.
+   from Ll_test.execute's result list (List.hd_exn or list-pattern extraction), or from a run
+   followed by a read of a stored node. For Context.get_values the run must be Train.forward_once,
+   Train.update_once (both positional arguments supplied), or Context.run (two positional arguments)
+   using the context and routine from the same Context.compile (three positional arguments, no
+   ~/?prelowered or ~/?reuse), or rerunning that routine on the returned context. The read must name
+   the [.value] or [.Tensor.value] of the same tensor binding passed to the _once call or to
+   Train.forward directly in the compile's assignments slot. Those calls materialize that tensor.
+   Otherwise an explicit [Train.set_materialized node] statement must precede the _once call or
+   compile in its scope. The statement and read must name the same node expression (printed AST:
+   identifiers, field projections and one-argument applications of identifiers), with each name
+   resolving to the same binding. All Train paths also accept Ocannl. For opaque routine
+   construction (including prelowered code and reused lowering), a read can check storage at
+   runtime: match Context.observability ctx node with Context.Stored -> Context.get_values ctx node,
+   with the same two identifiers and a nonreturning wildcard fallback. A Virtual node can be
+   recomputed on read (gh-ocannl-777), so an unchecked read confers nothing. Local wrappers,
+   tuples/fst/snd, lazy/force preserve that provenance. Compile, get_values without run, and host
+   sums alone never establish an executed reference.
 
    Inline List.iter over a literal collection joins the elements' tuple fields before walking its
    callback. ALL dispatched products must be checked and compared; an unknown arm grants nothing.
@@ -55,9 +59,9 @@
    use those spellings (fst/snd also Stdlib). Name-based recognition rejects rebound heads; local
    function wrappers can still derive facts from their bodies. Aliases of standard modules and names
    imported by unknown opens are not resolved. Helper module/value aliases ARE scoped. Only the
-   listed arguments are read; dimensions, claim labels and execute/run arguments are opaque except
-   get_values' context, a _once context's read node, that call's tensor argument and the operands of
-   *.
+   listed arguments are read; dimensions, claim labels, routine bodies and lowering transforms are
+   opaque. An explicit declaration is evidence of placement intent. The scan does not infer which
+   nodes arbitrary assignments write or whether a context has an earlier placement decision.
 
    Mutations after construction/read (beyond the set_materialized statement above, never undone) and
    aliases through mutable storage are not tracked. This is source provenance, not a proof of
@@ -79,10 +83,9 @@ type value =
   | Products of string list
   | References
   | Reference
-  | Ran
-  (* A Train.forward_once/update_once result: the tensor argument's name, when it is one, and the
-     scope at the call, which binds that name and holds the set_materialized markers before it. *)
-  | Ran_once of string option * env
+  | Compiled_context of compilation
+  | Compiled of compilation
+  | Ran of compilation option
   (* A set_materialized marker: the binding frame of each identifier of its node expression. *)
   | Materialized of value Map.M(String).t list
   | Sums of string list
@@ -95,6 +98,7 @@ type value =
 (* What a module name denotes: the harness, a support source's exports, or nothing modelled. *)
 and denotes = Harness | Support of value Map.M(String).t | Opaque
 and env = (value, denotes) Lexical_scope.env
+and compilation = { identity : unit ref; placement : (string option * env) option }
 
 type site = { line : int; covered : bool }
 
@@ -157,6 +161,36 @@ let once_runs =
     "Ocannl.Train.update_once";
   ]
 
+let identifier e = match e.pexp_desc with Pexp_ident { txt = Lident n; _ } -> Some n | _ -> None
+
+let forward_tensor env comp =
+  match comp.pexp_desc with
+  | Pexp_apply (f, [ (Nolabel, tensor) ])
+    when named env f [ "Train.forward"; "Ocannl.Train.forward" ] ->
+      identifier tensor
+  | _ -> None
+
+(* A stored-only read of the exact context and node the runtime check inspected. *)
+let stored_read env observation cases =
+  match (observation.pexp_desc, cases) with
+  | ( Pexp_apply (observe, [ (Nolabel, ctx); (Nolabel, node) ]),
+      [
+        {
+          pc_lhs =
+            { ppat_desc = Ppat_construct ({ txt = Ldot (Lident "Context", "Stored"); _ }, None); _ };
+          pc_guard = None;
+          pc_rhs =
+            { pexp_desc = Pexp_apply (read, [ (Nolabel, read_ctx); (Nolabel, read_node) ]); _ };
+        };
+        { pc_lhs = { ppat_desc = Ppat_any; _ }; pc_guard = None; pc_rhs = fallback };
+      ] )
+    when named env observe [ "Context.observability" ] && named env read [ "Context.get_values" ] ->
+      let same_name a b =
+        match (identifier a, identifier b) with Some a, Some b -> String.equal a b | _ -> false
+      in
+      if same_name ctx read_ctx && same_name node read_node then Some (ctx, fallback) else None
+  | _ -> None
+
 (* The frame binding [n] in scope: two reads of [n] reach one binding iff they reach one frame. *)
 let binding_frame (env : env) n = List.find env.frames ~f:(fun frame -> Map.mem frame n)
 
@@ -191,21 +225,21 @@ let materialize env statement =
       | None -> env)
   | _ -> env
 
-(* Whether a read of [node] from a _once context reads what that run wrote: the call's own tensor's
-   value, or a node materialized before the call, each identifier the same binding at both. *)
-let executed_read ~at_call ~at_read tensor node =
+(* Placement is decided at compilation. A materialization statement after compile cannot establish
+   that the routine has a buffer for the read. *)
+let executed_read ~tensor ~at_compile ~at_read node =
   let own_value =
     match (tensor, node.pexp_desc) with
     | ( Some n,
         Pexp_field
           ( { pexp_desc = Pexp_ident { txt = Lident m; _ }; _ },
             { txt = Lident "value" | Ldot (Lident "Tensor", "value"); _ } ) ) ->
-        String.equal n m && same_binding ~at_call ~at_read n
+        String.equal n m && same_binding ~at_call:at_compile ~at_read n
     | _ -> false
   in
   own_value
   ||
-  match (Lexical_scope.lookup at_call (marker_key node), node_frames at_read node) with
+  match (Lexical_scope.lookup at_compile (marker_key node), node_frames at_read node) with
   | Some (Materialized marked), Some read -> List.equal phys_equal marked read
   | _ -> false
 
@@ -222,6 +256,8 @@ let opened env = function
               ~f:(fun n -> (n, Helper n))))
   | Some Opaque | None -> env
 
+let same_compilation a b = phys_equal a.identity b.identity
+
 let rec join a b =
   match (a, b) with
   | Bottom, v | v, Bottom -> v
@@ -230,9 +266,14 @@ let rec join a b =
   | Operand, Operand -> Operand
   | Reference, Reference -> Reference
   | References, References -> References
-  | Ran, Ran -> Ran
-  | Ran_once (a, x), Ran_once (b, y) when Option.equal String.equal a b && phys_equal x y ->
-      Ran_once (a, x)
+  | Compiled_context a, Compiled_context b when same_compilation a b -> Compiled_context a
+  | Compiled a, Compiled b when same_compilation a b -> Compiled a
+  | Ran (Some a), Ran (Some b) when same_compilation a b -> Ran (Some a)
+  | ( Ran (Some { placement = Some (tensor, at_compile); _ }),
+      Ran (Some { placement = Some (other, at_other); _ }) )
+    when Option.equal String.equal tensor other && phys_equal at_compile at_other ->
+      Ran (Some { identity = ref (); placement = Some (tensor, at_compile) })
+  | Ran _, Ran _ -> Ran None
   | Products a, Products b -> Products (union a b)
   | Compared a, Compared b -> Compared (union a b)
   | Sums a, Sums b -> Sums (union a b)
@@ -299,13 +340,19 @@ let rec value fuel env e =
     when match Map.find env.modules m with Some (Harness | Support _) -> true | _ -> false ->
       value fuel (opened env (Map.find env.modules m)) body
   | Pexp_ifthenelse (_, a, Some b) -> join (v a) (v b)
-  | Pexp_match (scrutinee, cases) ->
-      let fact = v scrutinee in
-      List.fold cases ~init:Bottom ~f:(fun acc c ->
-          join acc (value fuel (bind env c.pc_lhs fact) c.pc_rhs))
+  | Pexp_match (scrutinee, cases) -> (
+      match stored_read env scrutinee cases with
+      | Some (ctx, fallback)
+        when match (v ctx, v fallback) with Ran _, Bottom -> true | _ -> false ->
+          Reference
+      | _ ->
+          let fact = v scrutinee in
+          List.fold cases ~init:Bottom ~f:(fun acc c ->
+              join acc (value fuel (bind env c.pc_lhs fact) c.pc_rhs)))
   | Pexp_assert { pexp_desc = Pexp_construct ({ txt = Lident "false"; _ }, None); _ } -> Bottom
   | Pexp_apply (f, args) -> (
-      let vs = List.map (positional args) ~f:v in
+      let pos = positional args in
+      let vs = List.map pos ~f:v in
       match (v f, vs) with
       | Helper "operand", [ _ ] when labels args [ "b"; "o"; "i" ] -> Operand
       | Helper "operand", [ _; _ ] when labels args [ "b"; "o"; "i" ] -> Cell
@@ -319,18 +366,32 @@ let rec value fuel env e =
           | _ -> Unknown)
       | Helper "execute", _ -> References
       | _, [ _ ] when named env f [ "invalid_arg"; "failwith"; "raise" ] -> Bottom
-      | _, _ when named env f [ "Context.run" ] -> Ran
+      | _, [ _; _; _ ] when named env f [ "Context.compile" ] -> (
+          match pos with
+          | [ _; comp; _ ] ->
+              let opaque =
+                List.exists args ~f:(function
+                  | (Labelled ("prelowered" | "reuse") | Optional ("prelowered" | "reuse")), _ ->
+                      true
+                  | _ -> false)
+              in
+              (* These facts share this call's result even when another compile in the same lexical
+                 scope takes the same arguments. *)
+              let placement = if opaque then None else Some (forward_tensor env comp, env) in
+              let compile = { identity = ref (); placement } in
+              Tuple [ Compiled_context compile; Compiled compile ]
+          | _ -> Unknown)
+      | _, [ (Compiled_context ctx | Ran (Some ctx)); Compiled compile ]
+        when named env f [ "Context.run" ] ->
+          if same_compilation ctx compile then Ran (Some compile) else Unknown
+      | _, [ _; _ ] when named env f [ "Context.run" ] -> Ran None
       | _, [ _; _ ] when named env f once_runs ->
-          let tensor =
-            match positional args with
-            | [ _; { pexp_desc = Pexp_ident { txt = Lident n; _ }; _ } ] -> Some n
-            | _ -> None
-          in
-          Ran_once (tensor, env)
-      | _, [ Ran; _ ] when named env f [ "Context.get_values" ] -> Reference
-      | _, [ Ran_once (tensor, at_call); _ ] when named env f [ "Context.get_values" ] -> (
-          match positional args with
-          | [ _; node ] when executed_read ~at_call ~at_read:env tensor node -> Reference
+          let tensor = match pos with [ _; t ] -> identifier t | _ -> None in
+          Ran (Some { identity = ref (); placement = Some (tensor, env) })
+      | _, [ Ran (Some { placement = Some (tensor, at_compile); _ }); _ ]
+        when named env f [ "Context.get_values" ] -> (
+          match pos with
+          | [ _; node ] when executed_read ~tensor ~at_compile ~at_read:env node -> Reference
           | _ -> Unknown)
       | _, [ References ] when named env f [ "List.hd_exn"; "Base.List.hd_exn" ] -> Reference
       | _, [ Delayed x ] when named env f [ "Lazy.force" ] -> x

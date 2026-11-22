@@ -113,7 +113,7 @@ let run ~tile ~name =
     else ctx
   in
   let ctx = Context.run ctx routine in
-  let got = Context.get_values ctx t.Tensor.value in
+  let got = Exact_sums.get_stored_values ctx t.Tensor.value in
   (got, Ll_test.renderings routine.Context.mma, List.filter_map compiles ~f:(fun c -> c.M.target))
 
 let has logic substring = String.is_substring logic ~substring

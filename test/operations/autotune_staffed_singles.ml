@@ -825,6 +825,7 @@ let () =
   let%op y2 = m2 * v2 in
   Train.set_materialized y2.Tensor.value;
   let%op z = y1 + y2 in
+  Train.set_materialized z.Tensor.value;
   let comp = Train.forward z in
   let comp =
     { comp with Ir.Assignments.asgns = Ir.Assignments.Block_comment ("ss_pair", comp.asgns) }

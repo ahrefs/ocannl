@@ -25,6 +25,13 @@ let check_sums label products got =
     (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id)))
     ~f:Float.equal
 
+(* A stored-only read supplies placement evidence where the scan cannot follow routine construction
+   or a node binding introduced by the DSL. *)
+let get_stored_values ctx node =
+  match Context.observability ctx node with
+  | Context.Stored -> Context.get_values ctx node
+  | _ -> failwith ("premise reference has no stored value for " ^ Ir.Tnode.debug_name node)
+
 (* The label [exact_sum]'s comparison of host sums and executed values carries. *)
 let premise_label label = label ^ ": the premise's host sums are the executed values"
 

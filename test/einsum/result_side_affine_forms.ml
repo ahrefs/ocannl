@@ -392,7 +392,7 @@ let run_forms () =
       let ctx = Context.auto () in
       let ctx, routine = Context.compile ~name:"cd_window" ctx asn Ir.Indexing.Empty in
       let ctx = Context.run ctx routine in
-      let got = Context.get_values ctx sm.Tensor.value in
+      let got = Exact_sums.get_stored_values ctx sm.Tensor.value in
       matches label ~dims
         ~want:(transposed ~stride:2 a_vals kernel_vals)
         (Ir.Tnode.dims_without_padding sm.Tensor.value, got);

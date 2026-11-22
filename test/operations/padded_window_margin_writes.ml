@@ -107,7 +107,7 @@ let () =
   Exact_sums.check_sums "x's gradient's host sums are its executed values" gradient
     (Context.get_values ctx gx);
   Exact_sums.check_sums "the smoothing's host sums are its executed values" smoothed
-    (Context.get_values ctx sm.Tensor.value);
+    (Exact_sums.get_stored_values ctx sm.Tensor.value);
   (* The discrimination premise: some padding position receives a nonzero contribution, so a margin
      that kept it differs from the padding value. *)
   p "a padding position of x's gradient receives a nonzero contribution"

@@ -1924,6 +1924,7 @@
   base
   ocannl
   stdio
+  exact_sums
   stderr_capture
   arrayjit.verdict
   ll_test
@@ -6857,6 +6858,7 @@
   base
   ocannl
   stdio
+  exact_sums
   arrayjit.verdict
   ll_test
   test_utils
@@ -14814,6 +14816,7 @@
   base
   ocannl
   stdio
+  exact_sums
   arrayjit.verdict
   ll_test
   arrayjit.utils
@@ -17686,6 +17689,7 @@
   base
   ocannl
   stdio
+  exact_sums
   ll_test
   arrayjit.verdict
   arrayjit.utils
@@ -19255,6 +19259,7 @@
   base
   ocannl
   stdio
+  exact_sums
   unix
   fresh_process
   test_utils

@@ -266,7 +266,7 @@ let () =
       List.fold ((d, d_prefill) :: seed) ~init:ctx ~f:(fun ctx (tn, vs) ->
           Context.set_values ctx tn vs)
     in
-    Context.get_values (Context.run (Context.run ctx routine) routine) d
+    Exact_sums.get_stored_values (Context.run (Context.run ctx routine) routine) d
   in
   let products =
     L.reduction_cells ~out:[| hh; ee |] ~over:[| kk |] (fun o r ->
@@ -616,7 +616,7 @@ let () =
       List.fold ((d, d_prefill) :: seed) ~init:ctx ~f:(fun ctx (tn, vs) ->
           Context.set_values ctx tn vs)
     in
-    Context.get_values (Context.run (Context.run ctx routine) routine) d
+    Exact_sums.get_stored_values (Context.run (Context.run ctx routine) routine) d
   in
   let products =
     L.reduction_cells ~out:[| jj |] ~over:[| hh; ee |] (fun o r ->
@@ -721,6 +721,7 @@ let capture fwd =
   Option.value_exn ~here:[%here] !captured
 
 let run_with fwd tensor transform =
+  Train.set_materialized tensor.Tensor.value;
   let ctx, routine =
     Context.compile
       ~lowered_transform:(fun o -> [ transform o ])

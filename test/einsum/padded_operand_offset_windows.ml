@@ -255,7 +255,7 @@ let run_forms () =
       let ctx = Context.auto () in
       let ctx, routine = Context.compile ~name:"cd_padded" ctx asn Ir.Indexing.Empty in
       let ctx = Context.run ctx routine in
-      let got = Context.get_values ctx sm.Tensor.value in
+      let got = Exact_sums.get_stored_values ctx sm.Tensor.value in
       matches label ~dims:[| 1; 4 |]
         ~want:(padded_window win (ramp 8) k3)
         (Ir.Tnode.dims_without_padding sm.Tensor.value, got);
