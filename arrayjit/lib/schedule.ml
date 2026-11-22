@@ -5547,10 +5547,10 @@ type scope_grammar_violation =
    entry already holds inside a scope, which an op can repair (a [Retype] of it to [Serial]) and the
    compile gates otherwise refuse; and, for the single-op probes ({!scope_verdict},
    {!probe_opt_op}), either half, as they judge the op on whatever program they are handed and the
-   application that follows refuses an impure entry itself. Compare the presence of each kind
-   independently (gh-ocannl-2417): a pre-existing hardware loop must not hide a new hidden write,
-   even if the hardware loop is the first diagnostic. Check the input for a kind only when the
-   result has it. *)
+   application that follows refuses an impure entry itself. Compare each kind by presence
+   (gh-ocannl-2417): an existing violation exempts further occurrences of its own kind. A
+   pre-existing hardware loop must not hide a new hidden write, even if the hardware loop is the
+   first diagnostic. Check the input for a kind only when the result has it. *)
 let scope_grammar_added ~(before : Low_level.t) ~(after : Low_level.t) =
   let added check =
     match check after with
