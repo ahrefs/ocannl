@@ -5694,15 +5694,15 @@ let packed_minimum_demand ~deferred_dims env w counter =
    counter that a total still pending in the pass mentions ([held_totals], {!pending_total_vars})
    has a sharer [counter_sharers] cannot see, so it takes no minimum, as gh-ocannl-2319's held
    totals take no remainder. A counter with no stored sharer keeps gh-ocannl-2318's rule as it
-   landed. Not pinned: a staged pending third total (settling to one block) is refused on the base
-   too. *)
+   landed. Pinned at stage 6a in [test_row_glb_reach], both unrenamed and with an in-pass counter
+   rename (gh-ocannl-2420). *)
 let packed_counter_minimum_sizes ~deferred_dims ~held_totals env v constr =
   match Option.map (packed_draw_counter constr) ~f:(fun c -> subst_dim env (Var c)) with
   | Some (Var counter) -> (
       let packed_minimum_demand = packed_minimum_demand ~deferred_dims in
       match counter_sharers env ~draw:v counter with
       | [] -> true
-      | _ :: _ when Set.mem (Lazy.force held_totals) counter -> false
+      | _ :: _ when Set.mem (held_totals env) counter -> false
       | sharers -> (
           match packed_minimum_demand env v counter with
           | Some blocks ->
@@ -6915,10 +6915,31 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
     in
     let deferred_dims = Set.diff deferred_dims unblocked_dims in
     let deferred_kernels = Set.diff deferred_kernels unblocked_dims in
-    (* gh-ocannl-2370: the dimension variables of the totals still pending in this pass, which a
-       packed draw's minimum reads as unseen sharers of a counter
-       ([packed_counter_minimum_sizes]). *)
-    let held_totals = lazy (pending_total_vars env ineqs) in
+    (* gh-ocannl-2370, gh-ocannl-2420: the dimension variables of the totals still pending in this
+       pass, which a packed draw's minimum reads as unseen sharers of a counter
+       ([packed_counter_minimum_sizes]). Takes the call's env rather than the pass-start env so a
+       counter renamed earlier in the pass cannot escape the guard, while filtering the pass
+       worklist once and caching per [env.dim_env] so repeated checks stay O(1) when dimension
+       bindings have not changed. *)
+    let held_totals =
+      let pending_totals =
+        lazy
+          (List.filter ineqs ~f:(function
+            | Rows_constr { constr = Total_elems _; _ } -> true
+            | _ -> false))
+      in
+      let cache = ref None in
+      fun env ->
+        match Lazy.force pending_totals with
+        | [] -> dim_var_set_empty
+        | totals -> (
+            match !cache with
+            | Some (cached_dim_env, vars) when phys_equal cached_dim_env env.dim_env -> vars
+            | _ ->
+                let vars = pending_total_vars env totals in
+                cache := Some (env.dim_env, vars);
+                vars)
+    in
     (* A held-size pass checks many relations. Attribute each refusal to the relation being compared
        or inverted, before the per-constraint handler can prefix it. *)
     let with_constraint source f =
