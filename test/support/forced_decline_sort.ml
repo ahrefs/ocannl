@@ -72,13 +72,76 @@ let decline_sensitive =
          scope's per-block narrowing misses by construction";
     };
     {
+      source = "test/operations/schedule_mma_matmul.ml";
+      label =
+        "on CUDA and HIP the default policy's staged+tensorized uniform-f16 matmul equals the \
+         once-narrowed wide reference bitwise";
+      reason =
+        "its reference is the persistent fragment's once-per-tile narrowing, which the declined \
+         scope's per-block narrowing misses by construction";
+    };
+    {
+      source = "test/operations/schedule_mma_matmul.ml";
+      label =
+        "swizzled staged twin under Bf16_wide and the default policy equals the once-narrowed wide \
+         reference bitwise";
+      reason =
+        "its reference is the persistent fragment's once-per-tile narrowing, which the declined \
+         scope's per-block narrowing misses by construction";
+    };
+    {
+      source = "test/operations/schedule_mma_matmul.ml";
+      label =
+        "staged twins per advertised swizzled layout: the censuses agree apart from ldmatrix, \
+         which only the swizzled twin uses";
+      reason =
+        "it is a census comparison whose label uses \"agree\" and requires ldmatrix on the \
+         swizzled twin, which the forced decline suppresses";
+    };
+    {
       source = "test/operations/qkv_zero_init.ml";
       label = "every tensorized * sketch renders tensorized and matches the materialized run";
       reason =
         "the label conjoins a census judgment (renders tensorized) with parity; the separate \
          parity claim over the same sketches is the one that must hold";
     };
+    {
+      source = "test/operations/tf32_reference_rounding.ml";
+      label = "hardware: at least one seed executes tensorized with its reference rounded to tf32";
+      reason =
+        "it conjoins a census judgment (all_tensor_core) with tf32-rounded execution; the separate \
+         parity claim over executed seeds is the one that must hold";
+    };
+    {
+      source = "test/operations/tf32_reference_rounding.ml";
+      label = "hardware control: against the plain reference, some tensorized seed differs";
+      reason =
+        "it checks that a tensorized tf32 seed differs from the plain f32 reference, which a \
+         declined scalar-fallback run matches in f32 by construction";
+    };
   ]
+
+(* Join OCaml string line continuations (a backslash before a newline and horizontal whitespace) so
+   {!stale} matches exact labels regardless of how ocamlformat wrapped the literal in the source. *)
+let unwrap_string_continuations s =
+  let n = String.length s in
+  let buf = Buffer.create n in
+  let rec skip_hspace i =
+    if i < n && (Char.equal s.[i] ' ' || Char.equal s.[i] '\t') then skip_hspace (i + 1) else i
+  in
+  let rec go i =
+    if i >= n then ()
+    else if Char.equal s.[i] '\\' && i + 1 < n && Char.equal s.[i + 1] '\n' then
+      go (skip_hspace (i + 2))
+    else if
+      Char.equal s.[i] '\\' && i + 2 < n && Char.equal s.[i + 1] '\r' && Char.equal s.[i + 2] '\n'
+    then go (skip_hspace (i + 3))
+    else (
+      Buffer.add_char buf s.[i];
+      go (i + 1))
+  in
+  go 0;
+  Buffer.contents buf
 
 (* [pattern] with [*] standing for any text, matched against the whole of [text]. *)
 let glob_matches ~pattern text =
@@ -107,9 +170,10 @@ let stale sources =
       match List.Assoc.find sources e.source ~equal:String.equal with
       | None -> true
       | Some content ->
+          let unwrapped = unwrap_string_continuations content in
           List.exists (String.split e.label ~on:'*') ~f:(fun piece ->
               (not (String.is_empty (String.strip piece)))
-              && not (String.is_substring content ~substring:(String.strip piece))))
+              && not (String.is_substring unwrapped ~substring:(String.strip piece))))
 
 (** Whether a rendered claim label asserts agreement with a reference: see the header. *)
 let asserts_parity label =

@@ -1,0 +1,795 @@
+test-run: batch: reads the configuration: it builds @test/operations/runtest-online_softmax_block_mma, which is not on the configuration-free alias list
+test-run: batch: holds cuda: test/config resolves backend=cuda, from OCANNL_BACKEND
+test-run: capping dune at -j 8. This is a native NVIDIA boot
+  (/dev/nvidiactl), and this batch can hold cuda (test/config resolves backend=cuda, from OCANNL_BACKEND), which holds its GPU. The fleet runs 2 GPU tokens of
+  4 correctness slots on this box (lukstafi/ludics-lite#391): the 2 cuda
+  batches the tokens admit were measured at -j 8 each, and three or four such
+  batches at once hit a CUDA_ERROR_OUT_OF_MEMORY (lukstafi/ludics-lite#316 and ludics-lite#344); two
+  batches at dune's default width were never measured (gh-ocannl-1033). The
+  cap lives in tools/box-jobs.sh; the evidence is in the native-boot bullets of
+  docs/agent-notes/build-and-test.md#gpu-boxes-job-caps-and-runtime-refusals. Pass an
+  explicit -j to run at a width of your own.
+test-run: requesting one of rog-nv-linux's 4 fleet correctness slots if no enclosing slot is reusable (gh-ocannl-1004),
+  as --gpu, one of its 2 GPU tokens: it can hold cuda. Acquisition timeout: 600s.
+  The fleet validates and reuses an enclosing slot without taking an additional slot or GPU token.
+  On this box, a GPU batch is refused if its validated enclosing slot is numbered above 2.
+test-run: a fresh device query for cuda before dune starts, inside the slot; one
+  that does not answer within 60s refuses the batch as DEVICE UNHEALTHY (gh-ocannl-1211).
+EXECUTION SLOT rog-nv-linux: inside slot 2 of 4, held by an enclosing batch, for: env OCANNL_TOOL_TESTRUN_OWN=~/.ocannl-test-runs/20261122T154619Z-550970 /usr/bin/bash ~/ocannl-staging-worktrees/w1122o-2402/tools/test-run.sh _probe dune - 60 cuda -- dune build --trace-file=~/.ocannl-test-runs/20261122T154619Z-550970/trace.csexp -j 8 @test/operations/runtest-online_softmax_block_mma @test/operations/runtest-qkv_zero_init @test/operations/runtest-qkv_zero_init-approximate @test/operations/runtest-reduction_forms @test/operations/runtest-schedule_batched_mma @test/operations/runtest-schedule_coalesce @test/operations/runtest-schedule_conv_gemm @test/operations/runtest-schedule_conv_gemm-tf32 @test/operations/runtest-schedule_mma_matmul @test/operations/runtest-schedule_pack_mma_matmul @test/operations/runtest-schedule_pad @test/operations/runtest-schedule_pad-contract_off @test/operations/runtest-schedule_swizzle_matmul @test/operations/runtest-tf32_reference_rounding @test/operations/runtest-tf32_reference_rounding-tf32 @test/operations/runtest-tile_mma_forced_decline @test/operations/runtest-tile_mma_narrow @test/operations/runtest-vec_signed_zero
+fd_plain (not part of the golden): unforced scalar-fallback: Mma_scalar_fallback x1, 0 fragment scopes; forced scalar-fallback: Mma_scalar_fallback x1, 0
+SKIPPED on cuda (vacuous): unforced, the staged schedule renders tensorized in a persistent-fragment scope
+OCANNL_TOOL_VERDICT_SKIP	backend	tile_mma_forced_decline.exe	unforced, the staged schedule renders tensorized in a persistent-fragment scope
+fd_staged forced (not part of the golden): scalar-fallback: Mma_scalar_fallback x1, 0 fragment scopes
+SKIPPED on cuda (vacuous): staged tiles zero-fill their fringe and the store-back is masked
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	staged tiles zero-fill their fringe and the store-back is masked
+SKIPPED on cuda (vacuous): seeded packed pad-composition matches the serial twin bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	seeded packed pad-composition matches the serial twin bitwise
+SKIPPED on cuda (vacuous): seeded packed pad-composition's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	seeded packed pad-composition's routine is labeled tensorized
+SKIPPED on cuda (vacuous): every 16x16 packed composition's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	every 16x16 packed composition's routine is labeled tensorized
+SKIPPED on cuda (vacuous): every 16x16 packed composition matches the serial twin bitwise on non-dyadic operands
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	every 16x16 packed composition matches the serial twin bitwise on non-dyadic operands
+SKIPPED on cuda (vacuous): the 16x16 packed compositions span at least two packing shapes
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	the 16x16 packed compositions span at least two packing shapes
+SKIPPED on cuda (vacuous): every 16x16 packed composition partitions its k-block loop at the last full block
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	every 16x16 packed composition partitions its k-block loop at the last full block
+SKIPPED on cuda (vacuous): every k-split packed composition matches its unsplit composition bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	every k-split packed composition matches its unsplit composition bitwise
+SKIPPED on cuda (vacuous): every k-split packed composition's edge k segment keeps the unsplit k-block loop's Wheres, its full segment no more
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	every k-split packed composition's edge k segment keeps the unsplit k-block loop's Wheres, its full segment no more
+SKIPPED on cuda (vacuous): every in-kernel-packing composition's full k segment sheds k edge guards
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	every in-kernel-packing composition's full k segment sheds k edge guards
+File "test/operations/dune", line 14469, characters 7-27:
+14469 |  (name schedule_batched_mma)
+               ^^^^^^^^^^^^^^^^^^^^
+SKIPPED on cuda (vacuous): batched_lb tensorized matches the serial twin bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_batched_mma.exe	batched_lb tensorized matches the serial twin bitwise
+SKIPPED on cuda (vacuous): batched_lb tensorized structure as expected
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_batched_mma.exe	batched_lb tensorized structure as expected
+SKIPPED on cuda (vacuous): batched_ib tensorized matches the serial twin bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_batched_mma.exe	batched_ib tensorized matches the serial twin bitwise
+SKIPPED on cuda (vacuous): batched_ib tensorized structure as expected
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_batched_mma.exe	batched_ib tensorized structure as expected
+batched_lb: executing 4 of 16 bf16 mma seeds (compile cost): 2 of 8 batch-serial, 2 of 8 batch-grid
+batched_lb: 2 of 2 batch-serial candidates ran, 2 matched, 0 rendered the intrinsic
+FAIL: batched_lb bf16: a running batch-serial candidate renders the tensor-core intrinsic: false
+batched_lb: 2 of 2 batch-grid candidates ran, 2 matched, 0 rendered the intrinsic
+FAIL: batched_lb bf16: a running batch-grid candidate renders the tensor-core intrinsic: false
+batched_ib: executing 4 of 24 bf16 mma seeds (compile cost): 2 of 8 batch-serial, 2 of 16 batch-grid
+batched_ib: 2 of 2 batch-serial candidates ran, 2 matched, 0 rendered the intrinsic
+FAIL: batched_ib bf16: a running batch-serial candidate renders the tensor-core intrinsic: false
+batched_ib: 2 of 2 batch-grid candidates ran, 2 matched, 0 rendered the intrinsic
+FAIL: batched_ib bf16: a running batch-grid candidate renders the tensor-core intrinsic: false
+FAILED: 4 checks did not hold: "batched_lb bf16: a running batch-serial candidate renders th...", "batched_lb bf16: a running batch-grid candidate renders the ...", "batched_ib bf16: a running batch-serial candidate renders th..." and 1 more.
+SKIPPED on cuda (vacuous): register-tiled Tile_mma preserves negative zero (bitwise vs the serial twin)
+OCANNL_TOOL_VERDICT_SKIP	backend	vec_signed_zero.exe	register-tiled Tile_mma preserves negative zero (bitwise vs the serial twin)
+SKIPPED on cuda (vacuous): register tiling renders a bit-preserving A splat
+OCANNL_TOOL_VERDICT_SKIP	backend	vec_signed_zero.exe	register tiling renders a bit-preserving A splat
+SKIPPED on cuda (vacuous): vectorized reference carries zeros of both signs
+OCANNL_TOOL_VERDICT_SKIP	backend	vec_signed_zero.exe	vectorized reference carries zeros of both signs
+SKIPPED on cuda (vacuous): vectorized FMA preserves a negative-zero uniform operand (bitwise vs the serial twin)
+OCANNL_TOOL_VERDICT_SKIP	backend	vec_signed_zero.exe	vectorized FMA preserves a negative-zero uniform operand (bitwise vs the serial twin)
+SKIPPED on cuda (vacuous): vectorized rendering renders a bit-preserving splat
+OCANNL_TOOL_VERDICT_SKIP	backend	vec_signed_zero.exe	vectorized rendering renders a bit-preserving splat
+backend: cuda, f32 MMA advertised: false, SIMD width 32 (not part of the golden)
+seq 64, head width 32, block 8 composed: 0.00454721972 -0.00103396142 -0.00124870613 0.00160590757 0.00176062295 0.000898448634 (not part of the golden)
+seq 64, head width 32, block 8 fold: 0.00454721972 -0.00103396142 -0.00124870613 0.00160590757 0.00176062295 0.000898448634 (not part of the golden)
+seq 64, head width 32, block 8: mma ((renderings ()) (tensorization Not_requested) (statements 0)
+ (scalar_fallbacks 0) (fragment_scopes 0)) (not part of the golden)
+SKIPPED on cuda (vacuous): seq 64, head width 32, block 8: two Tile_mma statements, the score and the value contraction, both intrinsics
+OCANNL_TOOL_VERDICT_SKIP	backend	online_softmax_block_mma.exe	seq 64, head width 32, block 8: two Tile_mma statements, the score and the value contraction, both intrinsics
+SKIPPED on cuda (vacuous): seq 64, head width 32, block 8: the generated kernel emits the matrix-unit intrinsic
+OCANNL_TOOL_VERDICT_SKIP	backend	online_softmax_block_mma.exe	seq 64, head width 32, block 8: the generated kernel emits the matrix-unit intrinsic
+seq 64, head width 32, block 16 composed: 0.00454721972 -0.00103396142 -0.00124870613 0.00160590757 0.00176062295 0.000898448634 (not part of the golden)
+seq 64, head width 32, block 16 fold: 0.00454721972 -0.00103396142 -0.00124870613 0.00160590757 0.00176062295 0.000898448634 (not part of the golden)
+seq 64, head width 32, block 16: mma ((renderings ()) (tensorization Not_requested) (statements 0)
+ (scalar_fallbacks 0) (fragment_scopes 0)) (not part of the golden)
+SKIPPED on cuda (vacuous): seq 64, head width 32, block 16: two Tile_mma statements, the score and the value contraction, both intrinsics
+OCANNL_TOOL_VERDICT_SKIP	backend	online_softmax_block_mma.exe	seq 64, head width 32, block 16: two Tile_mma statements, the score and the value contraction, both intrinsics
+SKIPPED on cuda (vacuous): seq 64, head width 32, block 16: the generated kernel emits the matrix-unit intrinsic
+OCANNL_TOOL_VERDICT_SKIP	backend	online_softmax_block_mma.exe	seq 64, head width 32, block 16: the generated kernel emits the matrix-unit intrinsic
+seq 64, head width 32, block 32 composed: 0.00454721972 -0.00103396142 -0.00124870613 0.00160590757 0.00176062295 0.000898448634 (not part of the golden)
+seq 64, head width 32, block 32 fold: 0.00454721972 -0.00103396142 -0.00124870613 0.00160590757 0.00176062295 0.000898448634 (not part of the golden)
+seq 64, head width 32, block 32: mma ((renderings ()) (tensorization Not_requested) (statements 0)
+ (scalar_fallbacks 0) (fragment_scopes 0)) (not part of the golden)
+SKIPPED on cuda (vacuous): seq 64, head width 32, block 32: two Tile_mma statements, the score and the value contraction, both intrinsics
+OCANNL_TOOL_VERDICT_SKIP	backend	online_softmax_block_mma.exe	seq 64, head width 32, block 32: two Tile_mma statements, the score and the value contraction, both intrinsics
+SKIPPED on cuda (vacuous): seq 64, head width 32, block 32: the generated kernel emits the matrix-unit intrinsic
+OCANNL_TOOL_VERDICT_SKIP	backend	online_softmax_block_mma.exe	seq 64, head width 32, block 32: the generated kernel emits the matrix-unit intrinsic
+seq 96, head width 16, block 32 composed: 0.00304509839 -0.000500324881 0.000464414072 0.0025617911 -0.000215109903 0.00318655139 (not part of the golden)
+seq 96, head width 16, block 32 fold: 0.00304509839 -0.000500324881 0.000464414072 0.0025617911 -0.000215109903 0.00318655139 (not part of the golden)
+seq 96, head width 16, block 32: mma ((renderings ()) (tensorization Not_requested) (statements 0)
+ (scalar_fallbacks 0) (fragment_scopes 0)) (not part of the golden)
+SKIPPED on cuda (vacuous): seq 96, head width 16, block 32: two Tile_mma statements, the score and the value contraction, both intrinsics
+OCANNL_TOOL_VERDICT_SKIP	backend	online_softmax_block_mma.exe	seq 96, head width 16, block 32: two Tile_mma statements, the score and the value contraction, both intrinsics
+SKIPPED on cuda (vacuous): seq 96, head width 16, block 32: the generated kernel emits the matrix-unit intrinsic
+OCANNL_TOOL_VERDICT_SKIP	backend	online_softmax_block_mma.exe	seq 96, head width 16, block 32: the generated kernel emits the matrix-unit intrinsic
+SKIPPED on cuda (vacuous): under the device's limits the preset emits Fold_mma for the fold
+OCANNL_TOOL_VERDICT_SKIP	backend	online_softmax_block_mma.exe	under the device's limits the preset emits Fold_mma for the fold
+SKIPPED on cuda (vacuous): under the device's limits the folded routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	online_softmax_block_mma.exe	under the device's limits the folded routine is labeled tensorized
+training step: mma ((renderings ()) (tensorization Not_requested) (statements 0)
+ (scalar_fallbacks 0) (fragment_scopes 0)) (not part of the golden)
+SKIPPED on cuda (vacuous): the step's fold renders both contractions as intrinsics
+OCANNL_TOOL_VERDICT_SKIP	backend	online_softmax_block_mma.exe	the step's fold renders both contractions as intrinsics
+SKIPPED on cuda (vacuous): staged tiles zero-fill their fringe and the store-back is masked
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	staged tiles zero-fill their fringe and the store-back is masked
+SKIPPED on cuda (vacuous): seeded packed pad-composition matches the serial twin bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	seeded packed pad-composition matches the serial twin bitwise
+SKIPPED on cuda (vacuous): seeded packed pad-composition's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	seeded packed pad-composition's routine is labeled tensorized
+SKIPPED on cuda (vacuous): every 16x16 packed composition's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	every 16x16 packed composition's routine is labeled tensorized
+SKIPPED on cuda (vacuous): every 16x16 packed composition matches the serial twin bitwise on non-dyadic operands
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	every 16x16 packed composition matches the serial twin bitwise on non-dyadic operands
+SKIPPED on cuda (vacuous): the 16x16 packed compositions span at least two packing shapes
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	the 16x16 packed compositions span at least two packing shapes
+SKIPPED on cuda (vacuous): every 16x16 packed composition partitions its k-block loop at the last full block
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	every 16x16 packed composition partitions its k-block loop at the last full block
+SKIPPED on cuda (vacuous): every k-split packed composition matches its unsplit composition bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	every k-split packed composition matches its unsplit composition bitwise
+SKIPPED on cuda (vacuous): every k-split packed composition's edge k segment keeps the unsplit k-block loop's Wheres, its full segment no more
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	every k-split packed composition's edge k segment keeps the unsplit k-block loop's Wheres, its full segment no more
+SKIPPED on cuda (vacuous): every in-kernel-packing composition's full k segment sheds k edge guards
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_pad.exe	every in-kernel-packing composition's full k segment sheds k edge guards
+emulation: 1576 values, 1 accumulation statements rounded (not part of the golden)
+SKIPPED on cuda (vacuous): hardware: at least one seed executes tensorized with its reference rounded to tf32
+OCANNL_TOOL_VERDICT_SKIP	environment	tf32_reference_rounding.exe	hardware: at least one seed executes tensorized with its reference rounded to tf32
+SKIPPED on cuda (vacuous): hardware: every executed seed matches its reference bitwise
+OCANNL_TOOL_VERDICT_SKIP	environment	tf32_reference_rounding.exe	hardware: every executed seed matches its reference bitwise
+SKIPPED on cuda (vacuous): hardware: no seed fails to reach its segment, is unjudged, or raises
+OCANNL_TOOL_VERDICT_SKIP	environment	tf32_reference_rounding.exe	hardware: no seed fails to reach its segment, is unjudged, or raises
+SKIPPED on cuda (vacuous): hardware control: against the plain reference, some tensorized seed differs
+OCANNL_TOOL_VERDICT_SKIP	environment	tf32_reference_rounding.exe	hardware control: against the plain reference, some tensorized seed differs
+File "test/operations/dune", line 13297, characters 7-20:
+13297 |  (name qkv_zero_init)
+               ^^^^^^^^^^^^^
+qkv_zero_init backend=cuda
+folded qkv seeds executed (not part of the golden): 12, 0 tensorized, 0 of those rendered tensorized
+SKIPPED on cuda (vacuous): every tensorized folded qkv sketch renders tensorized and matches the materialized run
+OCANNL_TOOL_VERDICT_SKIP	environment	qkv_zero_init.exe	every tensorized folded qkv sketch renders tensorized and matches the materialized run
+folded f16-operand qkv seeds executed (not part of the golden): 27, 15 tensorized, 0 of those rendered tensorized
+FAIL: every tensorized folded f16-operand qkv sketch renders tensorized and matches the materialized run: false
+f16-operand qkv seeds' max relative deviation (not part of the golden): 0x0p+0
+folded single-segment sketches (not part of the golden): 18 applied, 0 declined
+SKIPPED on cuda (vacuous): the routine-local product's folded segment seeds tensorized fused-epilogue twins
+OCANNL_TOOL_VERDICT_SKIP	environment	qkv_zero_init.exe	the routine-local product's folded segment seeds tensorized fused-epilogue twins
+folded routine-local product with its tail seeds executed (not part of the golden): 4, 0 tensorized, 0 of those rendered tensorized
+SKIPPED on cuda (vacuous): every tensorized folded routine-local product with its tail sketch renders tensorized and matches the materialized run
+OCANNL_TOOL_VERDICT_SKIP	environment	qkv_zero_init.exe	every tensorized folded routine-local product with its tail sketch renders tensorized and matches the materialized run
+FAILED: 1 check did not hold: "every tensorized folded f16-operand qkv sketch renders tenso...".
+File "test/operations/dune", lines 17556-17568, characters 0-408:
+17556 | (rule
+17557 |  (target tf32_reference_rounding-tf32.actual)
+17558 |  (package neural_nets_lib)
+.......
+17566 |   (with-stdout-to
+17567 |    %{target}
+17568 |    (run %{dep:tf32_reference_rounding.exe} --ocannl_tf32_matmuls=true))))
+emulation: 1576 values, 1 accumulation statements rounded (not part of the golden)
+F_sketch[gpu 32x32x8/4x4 @c5d69289/139bec39:u0]: MATCH worst 0 at out (compared 1 nodes) (not part of the golden)
+F_sketch[gpu 16x16x8/4x4 @c5d69289/139bec39:u0]: MATCH worst 0 at out (compared 1 nodes) (not part of the golden)
+F_sketch[gpu 32x32x16/2x2 @c5d69289/139bec39:u0]: MATCH worst 0 at out (compared 1 nodes) (not part of the golden)
+F_sketch[gpu 16x16x8/2x2 @c5d69289/139bec39:u0]: MATCH worst 0 at out (compared 1 nodes) (not part of the golden)
+F_sketch[mma-gpu 16x32x0 simd32 @c5d69289/139bec39:u0]: MATCH worst 0 at out (compared 1 nodes) (not part of the golden)
+F_sketch[mma-gpu 32x32x0 simd32 @c5d69289/139bec39:u0]: MATCH worst 0 at out (compared 1 nodes) (not part of the golden)
+F_sketch[mma-gpu 32x32x16 simd32 @c5d69289/139bec39:u0]: MATCH worst 0 at out (compared 1 nodes) (not part of the golden)
+F_sketch[mma-gpu 32x32x16 simd32 pd2 @c5d69289/139bec39:u0]: MATCH worst 0 at out (compared 1 nodes) (not part of the golden)
+FAIL: hardware: at least one seed executes tensorized with its reference rounded to tf32: false
+plain reference: F_sketch[gpu 32x32x8/4x4 @c5d69289/139bec39:u0]: MATCH worst 0 at out (compared 1 nodes) (not part of the golden)
+plain reference: F_sketch[gpu 16x16x8/4x4 @c5d69289/139bec39:u0]: MATCH worst 0 at out (compared 1 nodes) (not part of the golden)
+plain reference: F_sketch[gpu 32x32x16/2x2 @c5d69289/139bec39:u0]: MATCH worst 0 at out (compared 1 nodes) (not part of the golden)
+plain reference: F_sketch[gpu 16x16x8/2x2 @c5d69289/139bec39:u0]: MATCH worst 0 at out (compared 1 nodes) (not part of the golden)
+plain reference: F_sketch[mma-gpu 16x32x0 simd32 @c5d69289/139bec39:u0]: MATCH worst 0 at out (compared 1 nodes) (not part of the golden)
+plain reference: F_sketch[mma-gpu 32x32x0 simd32 @c5d69289/139bec39:u0]: MATCH worst 0 at out (compared 1 nodes) (not part of the golden)
+plain reference: F_sketch[mma-gpu 32x32x16 simd32 @c5d69289/139bec39:u0]: MATCH worst 0 at out (compared 1 nodes) (not part of the golden)
+plain reference: F_sketch[mma-gpu 32x32x16 simd32 pd2 @c5d69289/139bec39:u0]: MATCH worst 0 at out (compared 1 nodes) (not part of the golden)
+FAIL: hardware control: against the plain reference, some tensorized seed differs: false
+FAILED: 2 checks did not hold: "hardware: at least one seed executes tensorized with its ref...", "hardware control: against the plain reference, some tensoriz...".
+File "test/operations/dune", lines 13321-13333, characters 0-397:
+13321 | (rule
+13322 |  (target qkv_zero_init-approximate.actual)
+13323 |  (package neural_nets_lib)
+.......
+13331 |   (with-stdout-to
+13332 |    %{target}
+13333 |    (run %{dep:qkv_zero_init.exe} --ocannl_profile=approximate))))
+qkv_zero_init backend=cuda
+folded qkv seeds executed (not part of the golden): 36, 24 tensorized, 0 of those rendered tensorized
+FAIL: every tensorized folded qkv sketch renders tensorized and matches the materialized run: false
+folded f16-operand qkv seeds executed (not part of the golden): 27, 15 tensorized, 0 of those rendered tensorized
+FAIL: every tensorized folded f16-operand qkv sketch renders tensorized and matches the materialized run: false
+f16-operand qkv seeds' max relative deviation (not part of the golden): 0x0p+0
+folded single-segment sketches (not part of the golden): 18 applied, 0 declined
+folded routine-local product with its tail seeds executed (not part of the golden): 12, 8 tensorized, 0 of those rendered tensorized
+FAIL: every tensorized folded routine-local product with its tail sketch renders tensorized and matches the materialized run: false
+FAILED: 3 checks did not hold: "every tensorized folded qkv sketch renders tensorized and ma...", "every tensorized folded f16-operand qkv sketch renders tenso...", "every tensorized folded routine-local product with its tail ...".
+accumulator residency at f32: storage width (per-step)
+accumulator residency at bf16: wider than storage (whole-nest)
+accumulator residency at f16: wider than storage (whole-nest)
+  rf_serial_f32 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 1)(guards()))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_serial_bf16 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 1)(guards()))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_serial_f16 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 1)(guards()))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_unroll_annot_f32 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 1)(guards()))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_unroll_annot_bf16 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 1)(guards()))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_unroll_annot_f16 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 1)(guards()))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_unroll_mat_f32 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_unroll_mat_bf16 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_unroll_mat_f16 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_unroll_outer_mat_f32 peel census: 3 localized, 0 ceded, 0 declined: (Peel_localized((levels 1)(guards()))) x3
+  rf_unroll_outer_mat_bf16 peel census: 3 localized, 0 ceded, 0 declined: (Peel_localized((levels 1)(guards()))) x3
+  rf_unroll_outer_mat_f16 peel census: 3 localized, 0 ceded, 0 declined: (Peel_localized((levels 1)(guards()))) x3
+  rf_partition_f32 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_partition_bf16 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_partition_f16 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_partition_then_unroll_f32 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_partition_then_unroll_bf16 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_partition_then_unroll_f16 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_partition_outer_f32 peel census: 2 localized, 0 ceded, 2 declined: (Peel_localized((levels 1)(guards()))) x2, (Peel_refused Refused_cell_varies) x2
+  rf_partition_outer_bf16 peel census: 2 localized, 0 ceded, 2 declined: (Peel_localized((levels 1)(guards()))) x2, (Peel_refused Refused_cell_varies) x2
+  rf_partition_outer_f16 peel census: 2 localized, 0 ceded, 2 declined: (Peel_localized((levels 1)(guards()))) x2, (Peel_refused Refused_cell_varies) x2
+  rf_split_then_unroll_f32 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 1)(guards()))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_split_then_unroll_bf16 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 1)(guards()))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_split_then_unroll_f16 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 1)(guards()))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_split_then_swap_f32 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 2)(guards()))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_pad_then_unroll_mat_f32 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_pad_then_unroll_mat_bf16 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_pad_then_unroll_mat_f16 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_split_reduce_f32 peel census: 1 localized, 0 ceded, 3 declined: (Peel_localized((levels 1)(guards()))) x1, (Peel_refused Refused_not_a_nest) x2, (Peel_refused Refused_cell_varies) x1
+  rf_retype_vectorized_f32 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 1)(guards()))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_retype_vectorized_bf16 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 1)(guards()))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_retype_vectorized_f16 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 1)(guards()))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_split_then_vectorize_inner_f32 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 2)(guards()))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_split_then_vectorize_inner_bf16 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 2)(guards()))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_split_then_vectorize_inner_f16 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 2)(guards()))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_split_then_vectorize_narrow_f32 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 2)(guards()))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_split_then_vectorize_narrow_bf16 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 2)(guards()))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_split_then_vectorize_narrow_f16 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 2)(guards()))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_retype_workgroup_reduce_f32 peel census: 0 localized, 1 ceded, 1 declined: (Peel_ceded((levels 1)(guards()))) x1, (Peel_refused Refused_not_a_nest) x1
+  rf_retype_workgroup_reduce_bf16 peel census: 0 localized, 1 ceded, 1 declined: (Peel_ceded((levels 1)(guards()))) x1, (Peel_refused Refused_not_a_nest) x1
+  rf_retype_workgroup_reduce_f16 peel census: 0 localized, 1 ceded, 1 declined: (Peel_ceded((levels 1)(guards()))) x1, (Peel_refused Refused_not_a_nest) x1
+SKIPPED on cuda (vacuous): retype-workgroup @ f32: its schedule ops left their mark on the lowered IR
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	retype-workgroup @ f32: its schedule ops left their mark on the lowered IR
+SKIPPED on cuda (vacuous): retype-workgroup @ f32 renders the form its composition claims
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	retype-workgroup @ f32 renders the form its composition claims
+SKIPPED on cuda (vacuous): retype-workgroup @ f32: codegen's peel decided what the composition declares
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	retype-workgroup @ f32: codegen's peel decided what the composition declares
+SKIPPED on cuda (vacuous): retype-workgroup @ f32 agrees with its reference value
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	retype-workgroup @ f32 agrees with its reference value
+SKIPPED on cuda (vacuous): retype-workgroup @ bf16: its schedule ops left their mark on the lowered IR
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	retype-workgroup @ bf16: its schedule ops left their mark on the lowered IR
+SKIPPED on cuda (vacuous): retype-workgroup @ bf16 renders the form its composition claims
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	retype-workgroup @ bf16 renders the form its composition claims
+SKIPPED on cuda (vacuous): retype-workgroup @ bf16: codegen's peel decided what the composition declares
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	retype-workgroup @ bf16: codegen's peel decided what the composition declares
+SKIPPED on cuda (vacuous): retype-workgroup @ bf16 agrees with its reference value
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	retype-workgroup @ bf16 agrees with its reference value
+SKIPPED on cuda (vacuous): retype-workgroup @ f16: its schedule ops left their mark on the lowered IR
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	retype-workgroup @ f16: its schedule ops left their mark on the lowered IR
+SKIPPED on cuda (vacuous): retype-workgroup @ f16 renders the form its composition claims
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	retype-workgroup @ f16 renders the form its composition claims
+SKIPPED on cuda (vacuous): retype-workgroup @ f16: codegen's peel decided what the composition declares
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	retype-workgroup @ f16: codegen's peel decided what the composition declares
+SKIPPED on cuda (vacuous): retype-workgroup @ f16 agrees with its reference value
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	retype-workgroup @ f16 agrees with its reference value
+  rf_runtime_guard_f32 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 1)(guards(Guard_confined)))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_runtime_guard_bf16 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 1)(guards(Guard_confined)))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_runtime_guard_f16 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 1)(guards(Guard_confined)))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_runtime_guard_unroll_mat_f32 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_runtime_guard_unroll_mat_bf16 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_runtime_guard_unroll_mat_f16 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_runtime_guard_partition_f32 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_runtime_guard_partition_bf16 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_runtime_guard_partition_f16 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_mixed_guard_f32 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 1)(guards(Guard_lane_private)))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_mixed_guard_bf16 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 1)(guards(Guard_lane_private)))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_mixed_guard_f16 peel census: 1 localized, 0 ceded, 1 declined: (Peel_localized((levels 1)(guards(Guard_lane_private)))) x1, (Peel_refused Refused_cell_varies) x1
+  rf_mixed_guard_workgroup_f32 peel census: 1 localized, 0 ceded, 0 declined: (Peel_localized((levels 1)(guards(Guard_lane_private)))) x1
+  rf_mixed_guard_workgroup_bf16 peel census: 1 localized, 0 ceded, 0 declined: (Peel_localized((levels 1)(guards(Guard_lane_private)))) x1
+  rf_mixed_guard_workgroup_f16 peel census: 1 localized, 0 ceded, 0 declined: (Peel_localized((levels 1)(guards(Guard_lane_private)))) x1
+  rf_virtual_accumulator_f32 peel census: no reduction peel site
+  rf_virtual_accumulator_bf16 peel census: no reduction peel site
+  rf_virtual_accumulator_f16 peel census: no reduction peel site
+  rf_where_guarded_update_f32 peel census: no reduction peel site
+  rf_where_guarded_update_bf16 peel census: no reduction peel site
+  rf_where_guarded_update_f16 peel census: no reduction peel site
+  rf_decline_data_guard_f32 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_not_a_nest) x2
+  rf_decline_data_guard_bf16 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_not_a_nest) x2
+  rf_decline_data_guard_f16 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_not_a_nest) x2
+  rf_decline_sibling_statement_f32 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_not_a_nest) x2
+  rf_decline_sibling_statement_bf16 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_not_a_nest) x2
+  rf_decline_sibling_statement_f16 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_not_a_nest) x2
+  rf_decline_sibling_unrolled_f32 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_not_a_nest) x2
+  rf_decline_sibling_unrolled_bf16 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_not_a_nest) x2
+  rf_decline_sibling_unrolled_f16 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_not_a_nest) x2
+  rf_rng_bf16 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_cell_varies) x1, (Peel_not_attempted Skip_accum_pinned) x1
+  rf_rng_f16 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_cell_varies) x1, (Peel_not_attempted Skip_accum_pinned) x1
+  rf_rng_unroll_bf16 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_cell_varies) x1, (Peel_not_attempted Skip_accum_pinned) x1
+  rf_rng_unroll_f16 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_cell_varies) x1, (Peel_not_attempted Skip_accum_pinned) x1
+  rf_rng_unroll_mat_bf16 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_rng_unroll_mat_f16 peel census: 0 localized, 0 ceded, 1 declined: (Peel_refused Refused_cell_varies) x1
+  rf_rng_vectorized_bf16 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_cell_varies) x1, (Peel_not_attempted Skip_accum_pinned) x1
+  rf_rng_vectorized_f16 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_cell_varies) x1, (Peel_not_attempted Skip_accum_pinned) x1
+SKIPPED on cuda (vacuous): rng-workgroup-reduce @ bf16: its schedule ops left their mark on the lowered IR
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	rng-workgroup-reduce @ bf16: its schedule ops left their mark on the lowered IR
+SKIPPED on cuda (vacuous): rng-workgroup-reduce @ bf16 renders the form its composition claims
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	rng-workgroup-reduce @ bf16 renders the form its composition claims
+SKIPPED on cuda (vacuous): rng-workgroup-reduce @ bf16: codegen's peel decided what the composition declares
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	rng-workgroup-reduce @ bf16: codegen's peel decided what the composition declares
+SKIPPED on cuda (vacuous): rng-workgroup-reduce @ bf16 agrees with its reference value
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	rng-workgroup-reduce @ bf16 agrees with its reference value
+SKIPPED on cuda (vacuous): rng-workgroup-reduce @ f16: its schedule ops left their mark on the lowered IR
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	rng-workgroup-reduce @ f16: its schedule ops left their mark on the lowered IR
+SKIPPED on cuda (vacuous): rng-workgroup-reduce @ f16 renders the form its composition claims
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	rng-workgroup-reduce @ f16 renders the form its composition claims
+SKIPPED on cuda (vacuous): rng-workgroup-reduce @ f16: codegen's peel decided what the composition declares
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	rng-workgroup-reduce @ f16: codegen's peel decided what the composition declares
+SKIPPED on cuda (vacuous): rng-workgroup-reduce @ f16 agrees with its reference value
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	rng-workgroup-reduce @ f16 agrees with its reference value
+  rf_sibling_vectorized_f32 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_not_a_nest) x2
+  rf_sibling_vectorized_bf16 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_not_a_nest) x2
+  rf_sibling_vectorized_f16 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_not_a_nest) x2
+SKIPPED on cuda (vacuous): sibling-workgroup-reduce @ f32: the sibling stores cover every cell with the value of their own iteration
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	sibling-workgroup-reduce @ f32: the sibling stores cover every cell with the value of their own iteration
+SKIPPED on cuda (vacuous): sibling-workgroup-reduce @ f32: its schedule ops left their mark on the lowered IR
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	sibling-workgroup-reduce @ f32: its schedule ops left their mark on the lowered IR
+SKIPPED on cuda (vacuous): sibling-workgroup-reduce @ f32 renders the form its composition claims
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	sibling-workgroup-reduce @ f32 renders the form its composition claims
+SKIPPED on cuda (vacuous): sibling-workgroup-reduce @ f32: codegen's peel decided what the composition declares
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	sibling-workgroup-reduce @ f32: codegen's peel decided what the composition declares
+SKIPPED on cuda (vacuous): sibling-workgroup-reduce @ f32 agrees with its reference value
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	sibling-workgroup-reduce @ f32 agrees with its reference value
+SKIPPED on cuda (vacuous): sibling-workgroup-reduce @ bf16: the sibling stores cover every cell with the value of their own iteration
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	sibling-workgroup-reduce @ bf16: the sibling stores cover every cell with the value of their own iteration
+SKIPPED on cuda (vacuous): sibling-workgroup-reduce @ bf16: its schedule ops left their mark on the lowered IR
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	sibling-workgroup-reduce @ bf16: its schedule ops left their mark on the lowered IR
+SKIPPED on cuda (vacuous): sibling-workgroup-reduce @ bf16 renders the form its composition claims
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	sibling-workgroup-reduce @ bf16 renders the form its composition claims
+SKIPPED on cuda (vacuous): sibling-workgroup-reduce @ bf16: codegen's peel decided what the composition declares
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	sibling-workgroup-reduce @ bf16: codegen's peel decided what the composition declares
+SKIPPED on cuda (vacuous): sibling-workgroup-reduce @ bf16 agrees with its reference value
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	sibling-workgroup-reduce @ bf16 agrees with its reference value
+SKIPPED on cuda (vacuous): sibling-workgroup-reduce @ f16: the sibling stores cover every cell with the value of their own iteration
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	sibling-workgroup-reduce @ f16: the sibling stores cover every cell with the value of their own iteration
+SKIPPED on cuda (vacuous): sibling-workgroup-reduce @ f16: its schedule ops left their mark on the lowered IR
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	sibling-workgroup-reduce @ f16: its schedule ops left their mark on the lowered IR
+SKIPPED on cuda (vacuous): sibling-workgroup-reduce @ f16 renders the form its composition claims
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	sibling-workgroup-reduce @ f16 renders the form its composition claims
+SKIPPED on cuda (vacuous): sibling-workgroup-reduce @ f16: codegen's peel decided what the composition declares
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	sibling-workgroup-reduce @ f16: codegen's peel decided what the composition declares
+SKIPPED on cuda (vacuous): sibling-workgroup-reduce @ f16 agrees with its reference value
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	sibling-workgroup-reduce @ f16 agrees with its reference value
+  rf_data_guard_vectorized_f32 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_not_a_nest) x2
+  rf_data_guard_vectorized_bf16 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_not_a_nest) x2
+  rf_data_guard_vectorized_f16 peel census: 0 localized, 0 ceded, 2 declined: (Peel_refused Refused_not_a_nest) x2
+SKIPPED on cuda (vacuous): data-guard-workgroup-reduce @ f32: its schedule ops left their mark on the lowered IR
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	data-guard-workgroup-reduce @ f32: its schedule ops left their mark on the lowered IR
+SKIPPED on cuda (vacuous): data-guard-workgroup-reduce @ f32 renders the form its composition claims
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	data-guard-workgroup-reduce @ f32 renders the form its composition claims
+SKIPPED on cuda (vacuous): data-guard-workgroup-reduce @ f32: codegen's peel decided what the composition declares
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	data-guard-workgroup-reduce @ f32: codegen's peel decided what the composition declares
+SKIPPED on cuda (vacuous): data-guard-workgroup-reduce @ f32 agrees with its reference value
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	data-guard-workgroup-reduce @ f32 agrees with its reference value
+SKIPPED on cuda (vacuous): data-guard-workgroup-reduce @ bf16: its schedule ops left their mark on the lowered IR
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	data-guard-workgroup-reduce @ bf16: its schedule ops left their mark on the lowered IR
+SKIPPED on cuda (vacuous): data-guard-workgroup-reduce @ bf16 renders the form its composition claims
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	data-guard-workgroup-reduce @ bf16 renders the form its composition claims
+SKIPPED on cuda (vacuous): data-guard-workgroup-reduce @ bf16: codegen's peel decided what the composition declares
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	data-guard-workgroup-reduce @ bf16: codegen's peel decided what the composition declares
+SKIPPED on cuda (vacuous): data-guard-workgroup-reduce @ bf16 agrees with its reference value
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	data-guard-workgroup-reduce @ bf16 agrees with its reference value
+SKIPPED on cuda (vacuous): data-guard-workgroup-reduce @ f16: its schedule ops left their mark on the lowered IR
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	data-guard-workgroup-reduce @ f16: its schedule ops left their mark on the lowered IR
+SKIPPED on cuda (vacuous): data-guard-workgroup-reduce @ f16 renders the form its composition claims
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	data-guard-workgroup-reduce @ f16 renders the form its composition claims
+SKIPPED on cuda (vacuous): data-guard-workgroup-reduce @ f16: codegen's peel decided what the composition declares
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	data-guard-workgroup-reduce @ f16: codegen's peel decided what the composition declares
+SKIPPED on cuda (vacuous): data-guard-workgroup-reduce @ f16 agrees with its reference value
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	data-guard-workgroup-reduce @ f16 agrees with its reference value
+SKIPPED on cuda (vacuous): tile-mma-fallback @ f32 renders the form its composition claims
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	tile-mma-fallback @ f32 renders the form its composition claims
+SKIPPED on cuda (vacuous): tile-mma-fallback @ f32: codegen's peel decided what the leg declares
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	tile-mma-fallback @ f32: codegen's peel decided what the leg declares
+SKIPPED on cuda (vacuous): tile-mma-fallback @ f32 agrees with its reference value
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	tile-mma-fallback @ f32 agrees with its reference value
+SKIPPED on cuda (vacuous): tile-mma-fallback @ bf16 renders the form its composition claims
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	tile-mma-fallback @ bf16 renders the form its composition claims
+SKIPPED on cuda (vacuous): tile-mma-fallback @ bf16: codegen's peel decided what the leg declares
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	tile-mma-fallback @ bf16: codegen's peel decided what the leg declares
+SKIPPED on cuda (vacuous): tile-mma-fallback @ bf16 agrees with its reference value
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	tile-mma-fallback @ bf16 agrees with its reference value
+SKIPPED on cuda (vacuous): tile-mma-fallback @ f16 renders the form its composition claims
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	tile-mma-fallback @ f16 renders the form its composition claims
+SKIPPED on cuda (vacuous): tile-mma-fallback @ f16: codegen's peel decided what the leg declares
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	tile-mma-fallback @ f16: codegen's peel decided what the leg declares
+SKIPPED on cuda (vacuous): tile-mma-fallback @ f16 agrees with its reference value
+OCANNL_TOOL_VERDICT_SKIP	backend	reduction_forms.exe	tile-mma-fallback @ f16 agrees with its reference value
+File "test/operations/dune", line 14637, characters 7-24:
+14637 |  (name schedule_coalesce)
+               ^^^^^^^^^^^^^^^^^
+fuse-epilogue nest: Schedule.Fuse_epilogue: the store-back site's indices are flattened (Sub_axis): the relocated tail needs a per-axis index (v1) (not part of the golden)
+fuse-epilogue privatized: Schedule.Fuse_epilogue: the store-back site's indices are flattened (Sub_axis): the relocated tail needs a per-axis index (v1) (not part of the golden)
+schedule_coalesce: backend cuda, 10 coalesced seed(s): 64x64x8/4x4, 32x32x8/4x4, 16x16x8/4x4, 32x32x16/2x2, 16x16x8/2x2, 64x64x8/4x4 bgrid, 32x32x8/4x4 bgrid, 16x16x8/4x4 bgrid, 32x32x16/2x2 bgrid, 16x16x8/2x2 bgrid (not part of the golden)
+ck_proj: backend cuda, 24 contraction seed(s): gpu 16x16x256/2x2 coal-k, gpu 32x32x256/4x4 coal-k, gpu 64x64x256/4x4 coal-k, gpu 16x16x128/2x2 coal-k, gpu 32x32x128/4x4 coal-k, gpu 64x64x128/4x4 coal-k, gpu 16x16x64/2x2 coal-k, gpu 32x32x64/4x4 coal-k, gpu 64x64x64/4x4 coal-k, gpu 16x16x32/2x2 coal-k, gpu 32x32x32/4x4 coal-k, gpu 64x64x32/4x4 coal-k, gpu 16x16x256/2x2 bgrid coal-k, gpu 32x32x256/4x4 bgrid coal-k, gpu 64x64x256/4x4 bgrid coal-k, gpu 16x16x128/2x2 bgrid coal-k, gpu 32x32x128/4x4 bgrid coal-k, gpu 64x64x128/4x4 bgrid coal-k, gpu 16x16x64/2x2 bgrid coal-k, gpu 32x32x64/4x4 bgrid coal-k, gpu 64x64x64/4x4 bgrid coal-k, gpu 16x16x32/2x2 bgrid coal-k, gpu 32x32x32/4x4 bgrid coal-k, gpu 64x64x32/4x4 bgrid coal-k (not part of the golden)
+ck_proj: 18 contraction seed(s) under this device's limits: gpu 16x16x256/2x2 coal-k, gpu 16x16x128/2x2 coal-k, gpu 32x32x128/4x4 coal-k, gpu 16x16x64/2x2 coal-k, gpu 32x32x64/4x4 coal-k, gpu 64x64x64/4x4 coal-k, gpu 16x16x32/2x2 coal-k, gpu 32x32x32/4x4 coal-k, gpu 64x64x32/4x4 coal-k, gpu 16x16x256/2x2 bgrid coal-k, gpu 16x16x128/2x2 bgrid coal-k, gpu 32x32x128/4x4 bgrid coal-k, gpu 16x16x64/2x2 bgrid coal-k, gpu 32x32x64/4x4 bgrid coal-k, gpu 64x64x64/4x4 bgrid coal-k, gpu 16x16x32/2x2 bgrid coal-k, gpu 32x32x32/4x4 bgrid coal-k, gpu 64x64x32/4x4 bgrid coal-k (not part of the golden)
+ck_odd: backend cuda, 4 contraction seed(s): gpu 16x16x64/2x2 coal-k, gpu 16x16x32/2x2 coal-k, gpu 16x16x64/2x2 bgrid coal-k, gpu 16x16x32/2x2 bgrid coal-k (not part of the golden)
+ck_odd: 4 contraction seed(s) under this device's limits: gpu 16x16x64/2x2 coal-k, gpu 16x16x32/2x2 coal-k, gpu 16x16x64/2x2 bgrid coal-k, gpu 16x16x32/2x2 bgrid coal-k (not part of the golden)
+ckt_f32: backend cuda, 16 tensorized contraction seed(s): mma-gpu 16x32x64 simd32 coal-k, mma-gpu 16x32x64 simd32 pd2 coal-k, mma-gpu 32x32x64 simd32 coal-k, mma-gpu 32x32x64 simd32 pd2 coal-k, mma-gpu 16x32x32 simd32 coal-k, mma-gpu 16x32x32 simd32 pd2 coal-k, mma-gpu 32x32x32 simd32 coal-k, mma-gpu 32x32x32 simd32 pd2 coal-k, mma-gpu 16x32x64 simd32 bgrid coal-k, mma-gpu 16x32x64 simd32 pd2 bgrid coal-k, mma-gpu 32x32x64 simd32 bgrid coal-k, mma-gpu 32x32x64 simd32 pd2 bgrid coal-k, mma-gpu 16x32x32 simd32 bgrid coal-k, mma-gpu 16x32x32 simd32 pd2 bgrid coal-k, mma-gpu 32x32x32 simd32 bgrid coal-k, mma-gpu 32x32x32 simd32 pd2 bgrid coal-k (not part of the golden)
+ckt_f32: mma-gpu 16x32x64 simd32 coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f32: mma-gpu 16x32x64 simd32 pd2 coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f32: mma-gpu 32x32x64 simd32 coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f32: mma-gpu 32x32x64 simd32 pd2 coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f32: mma-gpu 16x32x32 simd32 coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f32: mma-gpu 16x32x32 simd32 pd2 coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f32: mma-gpu 32x32x32 simd32 coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f32: mma-gpu 32x32x32 simd32 pd2 coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f32: mma-gpu 16x32x64 simd32 bgrid coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f32: mma-gpu 16x32x64 simd32 pd2 bgrid coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f32: mma-gpu 32x32x64 simd32 bgrid coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f32: mma-gpu 32x32x64 simd32 pd2 bgrid coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f32: mma-gpu 16x32x32 simd32 bgrid coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f32: mma-gpu 16x32x32 simd32 pd2 bgrid coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f32: mma-gpu 32x32x32 simd32 bgrid coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f32: mma-gpu 32x32x32 simd32 pd2 bgrid coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+FAIL: ckt_f32: every tensorized contraction seed renders tensorized per its mma census: false
+ckt_f16: backend cuda, 8 tensorized contraction seed(s): mma-gpu 16x32x64 simd32 coal-k, mma-gpu 32x32x64 simd32 coal-k, mma-gpu 16x32x32 simd32 coal-k, mma-gpu 32x32x32 simd32 coal-k, mma-gpu 16x32x64 simd32 bgrid coal-k, mma-gpu 32x32x64 simd32 bgrid coal-k, mma-gpu 16x32x32 simd32 bgrid coal-k, mma-gpu 32x32x32 simd32 bgrid coal-k (not part of the golden)
+ckt_f16: mma-gpu 16x32x64 simd32 coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f16: mma-gpu 32x32x64 simd32 coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f16: mma-gpu 16x32x32 simd32 coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f16: mma-gpu 32x32x32 simd32 coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f16: mma-gpu 16x32x64 simd32 bgrid coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f16: mma-gpu 32x32x64 simd32 bgrid coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f16: mma-gpu 16x32x32 simd32 bgrid coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+ckt_f16: mma-gpu 32x32x32 simd32 bgrid coal-k rendered scalar-fallback: Mma_scalar_fallback x1
+FAIL: ckt_f16: every tensorized contraction seed renders tensorized per its mma census: false
+ckf: backend cuda, 16 fused tensorized contraction twin(s) (not part of the golden)
+FAIL: ckf: every fused tensorized contraction twin renders tensorized per its mma census: false
+ckf_odd: backend cuda, 12 fused tensorized contraction twin(s) (not part of the golden)
+FAIL: ckf_odd: every fused tensorized contraction twin renders tensorized per its mma census: false
+FAILED: 4 checks did not hold: "ckt_f32: every tensorized contraction seed renders tensorize...", "ckt_f16: every tensorized contraction seed renders tensorize...", "ckf: every fused tensorized contraction twin renders tensori..." and 1 more.
+SKIPPED on cuda (vacuous): tuned: the matmul seeds of a site reading twins round, and some ship a tile
+OCANNL_TOOL_VERDICT_SKIP	backend	tile_mma_narrow.exe	tuned: the matmul seeds of a site reading twins round, and some ship a tile
+SKIPPED on cuda (vacuous): tuned: the search seeds the site through its twins
+OCANNL_TOOL_VERDICT_SKIP	backend	tile_mma_narrow.exe	tuned: the search seeds the site through its twins
+File "test/operations/dune", line 14808, characters 7-26:
+14808 |  (name schedule_mma_matmul)
+               ^^^^^^^^^^^^^^^^^^^
+tf32 policy-on: expected every Tile_mma statement to render Mma_intrinsics, census (Mma_scalar_fallback)
+FAIL: tf32 policy-on renders and records wmma tf32: false
+FAIL: tf32 k=24 divergent tile emits the wmma intrinsic: false
+FAIL: tf32 transposed-A matmul emits the expected wmma layout: false
+SKIPPED on cuda (vacuous): C-backend fallback matches bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	C-backend fallback matches bitwise
+half: expected every Tile_mma statement to render a tensorized emission, census (Mma_scalar_fallback)
+FAIL: half tensorized structure as expected: false
+SKIPPED on cuda (vacuous): f16->f32 direct tensorized matmul equals the exact sum bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	f16->f32 direct tensorized matmul equals the exact sum bitwise
+SKIPPED on cuda (vacuous): f16->f32 direct tensorized structure as expected
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	f16->f32 direct tensorized structure as expected
+Fp16_wide: expected every Tile_mma statement to render Mma_intrinsics, census (Mma_scalar_fallback)
+FAIL: Fp16_wide half tensorized structure as expected: false
+SKIPPED on cuda (vacuous): Fp16_wide with narrow_compute_f32 off matches the independent wide reference
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	Fp16_wide with narrow_compute_f32 off matches the independent wide reference
+SKIPPED on cuda (vacuous): Fp16_wide with narrow_compute_f32 off declines the register tiling (no narrow C-tile accumulator)
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	Fp16_wide with narrow_compute_f32 off declines the register tiling (no narrow C-tile accumulator)
+FAIL: bf32 tensorized structure as expected: false
+FAIL: bfu tensorized structure as expected: false
+FAIL: bfu_ta tensorized structure as expected: false
+FAIL: bfu_tb tensorized structure as expected: false
+FAIL: bfu_m2 tensorized structure as expected: false
+schedule_mma_matmul: uniform-bf16 worst excess over the narrowing bound on cuda: Bf16_wide -0.0234, default policy -0.0234, Bf16_narrow -0.0234 (not part of the golden)
+SKIPPED on cuda (vacuous): on HIP with tile MMA, the Bf16_narrow uniform-bf16 twin tensorizes
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	on HIP with tile MMA, the Bf16_narrow uniform-bf16 twin tensorizes
+Bf16_wide: expected every Tile_mma statement to render Mma_intrinsics, census (Mma_scalar_fallback)
+FAIL: Bf16_wide uniform-bf16 tensorized structure as expected: false
+f8: expected every Tile_mma statement to render a tensorized emission, census (Mma_scalar_fallback)
+FAIL: f8 tensorized structure as expected: false
+SKIPPED on cuda (vacuous): f8 Metal fallback fences device memory on both sides
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	f8 Metal fallback fences device memory on both sides
+SKIPPED on cuda (vacuous): f8 Metal fence check rejects a threadgroup-only bracket
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	f8 Metal fence check rejects a threadgroup-only bracket
+f8_ta: expected every Tile_mma statement to render a tensorized emission, census (Mma_scalar_fallback)
+FAIL: f8_ta tensorized structure as expected: false
+SKIPPED on cuda (vacuous): f8_ta Metal fallback fences device memory on both sides
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	f8_ta Metal fallback fences device memory on both sides
+SKIPPED on cuda (vacuous): f8_ta Metal fence check rejects a threadgroup-only bracket
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	f8_ta Metal fence check rejects a threadgroup-only bracket
+f8_tb: expected every Tile_mma statement to render a tensorized emission, census (Mma_scalar_fallback)
+FAIL: f8_tb tensorized structure as expected: false
+SKIPPED on cuda (vacuous): f8_tb Metal fallback fences device memory on both sides
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	f8_tb Metal fallback fences device memory on both sides
+SKIPPED on cuda (vacuous): f8_tb Metal fence check rejects a threadgroup-only bracket
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	f8_tb Metal fence check rejects a threadgroup-only bracket
+SKIPPED on cuda (vacuous): edge-extent tensorized matmul matches the serial twin bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	edge-extent tensorized matmul matches the serial twin bitwise
+SKIPPED on cuda (vacuous): edge-extent register tiling covers the edges with vector tiles, not scalar code
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	edge-extent register tiling covers the edges with vector tiles, not scalar code
+SKIPPED on cuda (vacuous): extent-adapted tensorized matmul matches the serial twin bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	extent-adapted tensorized matmul matches the serial twin bitwise
+SKIPPED on cuda (vacuous): extent-adapted geometry covers the column extent with vector tiles
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	extent-adapted geometry covers the column extent with vector tiles
+SKIPPED on cuda (vacuous): full-mantissa products are inexact in f32
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	full-mantissa products are inexact in f32
+SKIPPED on cuda (vacuous): full-mantissa tensorized matmul matches the serial twin bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	full-mantissa tensorized matmul matches the serial twin bitwise
+SKIPPED on cuda (vacuous): register tiling offers a whole-vector fused accumulator update
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	register tiling offers a whole-vector fused accumulator update
+staged half->f32: expected every Tile_mma statement to render a tensorized emission, census (Mma_scalar_fallback)
+FAIL: staged+tensorized half fragment residency: false
+staged uniform-f16: expected every Tile_mma statement to render a tensorized emission, census (Mma_scalar_fallback)
+FAIL: staged+tensorized uniform-f16 fragment residency: false
+schedule_mma_matmul: staged mm_huw_staged_mma k=144 cell 0 on cuda: 2048 (not part of the golden)
+FAIL: staged+tensorized Fp16_wide matmul equals the once-narrowed wide reference bitwise: false
+staged Fp16_wide: expected every Tile_mma statement to render Mma_intrinsics, census (Mma_scalar_fallback)
+FAIL: staged+tensorized Fp16_wide fragment residency converts d once: false
+schedule_mma_matmul: staged mm_hua_staged_mma k=144 cell 0 on cuda: 2048 (not part of the golden)
+FAIL: on CUDA and HIP the default policy's staged+tensorized uniform-f16 matmul equals the once-narrowed wide reference bitwise: false
+staged Fp16_auto: expected every Tile_mma statement to render Mma_intrinsics, census (Mma_scalar_fallback)
+FAIL: on CUDA and HIP the default policy's staged uniform-f16 fragment converts d once: false
+schedule_mma_matmul: f16->f32 k-split cell 0: direct 2056, fragment 2056; f16->f16 control: direct 2048, fragment 2048 (not part of the golden)
+f16->f32 k-split direct: expected every Tile_mma statement to render Mma_intrinsics, census (Mma_scalar_fallback)
+FAIL: f16->f32 k-split, direct scope: the mixed intrinsic loads and stores d unconverted: false
+f16->f32 k-split fragment: expected every Tile_mma statement to render Mma_intrinsics, census (Mma_scalar_fallback)
+FAIL: f16->f32 k-split, fragment scope: the f32 fragment stays resident with d unconverted: false
+schedule_mma_matmul: staged uniform-bf16 k-split cell 0: Bf16_wide 256, default policy 256, Bf16_narrow 256; references: wide 264, narrowed per block 256 (not part of the golden)
+FAIL: staged+tensorized Bf16_wide matmul equals the once-narrowed wide reference bitwise: false
+FAIL: staged+tensorized default-policy uniform-bf16 matmul narrows between blocks exactly where the backend keeps bf16 storage residency: false
+FAIL: staged+tensorized Bf16_narrow uniform-bf16 matmul narrows between blocks exactly where that mode keeps bf16 storage residency: false
+SKIPPED on cuda (vacuous): on HIP, the staged Bf16_narrow twin tensorizes (the approximate profile's arm)
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	on HIP, the staged Bf16_narrow twin tensorizes (the approximate profile's arm)
+staged Bf16_wide: expected every Tile_mma statement to render Mma_intrinsics, census (Mma_scalar_fallback)
+FAIL: staged+tensorized Bf16_wide fragment residency converts d once: false
+FAIL: swizzled staged twin under Bf16_wide and the default policy equals the once-narrowed wide reference bitwise: false
+swizzled staged Bf16_wide: expected every Tile_mma statement to render Mma_intrinsics_ldmatrix, census (Mma_scalar_fallback)
+FAIL: swizzled staged twin keeps the same register fragment, fed through ldmatrix: false
+staged twins bf16_bf16_bf16: plain census (Mma_scalar_fallback), swizzled census (Mma_scalar_fallback)
+staged twins fp8_e5m2_fp8_e5m2_f32: plain census (Mma_scalar_fallback), swizzled census (Mma_scalar_fallback)
+FAIL: staged twins per advertised swizzled layout: the censuses agree apart from ldmatrix, which only the swizzled twin uses: false
+FAIL: staged twins per advertised swizzled layout: both keep the register fragment resident across k_o: false
+SKIPPED on cuda (vacuous): ta C-backend fallback matches bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	ta C-backend fallback matches bitwise
+SKIPPED on cuda (vacuous): tb C-backend fallback matches bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_mma_matmul.exe	tb C-backend fallback matches bitwise
+default policy (f16, f16, f32): advertised=true, census=[Mma_scalar_fallback]
+default policy (f16, f16, f16): advertised=true, census=[Mma_scalar_fallback]
+default policy (bf16, bf16, f32): advertised=true, census=[Mma_scalar_fallback]
+default policy (bf16, bf16, bf16): advertised=true, census=[Mma_scalar_fallback]
+default policy (fp8, fp8, f32): advertised=true, census=[Mma_scalar_fallback]
+FAIL: default policy: census is all-intrinsics exactly for the advertised format triples: false
+Fp16_narrow/Bf16_narrow (f16, f16, f32): advertised=true, census=[Mma_scalar_fallback]
+Fp16_narrow/Bf16_narrow (f16, f16, f16): advertised=true, census=[Mma_scalar_fallback]
+Fp16_narrow/Bf16_narrow (bf16, bf16, f32): advertised=true, census=[Mma_scalar_fallback]
+Fp16_narrow/Bf16_narrow (bf16, bf16, bf16): advertised=true, census=[Mma_scalar_fallback]
+Fp16_narrow/Bf16_narrow (fp8, fp8, f32): advertised=true, census=[Mma_scalar_fallback]
+FAIL: Fp16_narrow/Bf16_narrow: census is all-intrinsics exactly for the advertised format triples: false
+Fp16_wide/Bf16_wide (f16, f16, f32): advertised=true, census=[Mma_scalar_fallback]
+Fp16_wide/Bf16_wide (f16, f16, f16): advertised=true, census=[Mma_scalar_fallback]
+Fp16_wide/Bf16_wide (bf16, bf16, f32): advertised=true, census=[Mma_scalar_fallback]
+Fp16_wide/Bf16_wide (bf16, bf16, bf16): advertised=true, census=[Mma_scalar_fallback]
+Fp16_wide/Bf16_wide (fp8, fp8, f32): advertised=true, census=[Mma_scalar_fallback]
+FAIL: Fp16_wide/Bf16_wide: census is all-intrinsics exactly for the advertised format triples: false
+tf32 policy-on (f32, f32, f32): advertised=true, census=[Mma_scalar_fallback]
+tf32 policy-on (f16, f16, f32): advertised=true, census=[Mma_scalar_fallback]
+tf32 policy-on (f16, f16, f16): advertised=true, census=[Mma_scalar_fallback]
+tf32 policy-on (bf16, bf16, f32): advertised=true, census=[Mma_scalar_fallback]
+tf32 policy-on (bf16, bf16, bf16): advertised=true, census=[Mma_scalar_fallback]
+tf32 policy-on (fp8, fp8, f32): advertised=true, census=[Mma_scalar_fallback]
+FAIL: tf32 policy-on: census is all-intrinsics exactly for the advertised format triples: false
+schedule_mma_matmul: 316 backend compiles after the first grew open descriptors by 0 from 56, the bound 16 (not part of the golden)
+FAILED: 34 checks did not hold: "tf32 policy-on renders and records wmma tf32", "tf32 k=24 divergent tile emits the wmma intrinsic", "tf32 transposed-A matmul emits the expected wmma layout" and 31 more.
+SKIPPED on cuda (vacuous): cvg: packed+tensorized conv matches the reorder-only twin bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvg: packed+tensorized conv matches the reorder-only twin bitwise
+SKIPPED on cuda (vacuous): cvg: packed+tensorized conv matches the natural form within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvg: packed+tensorized conv matches the natural form within tolerance
+SKIPPED on cuda (vacuous): cvg: the packed+tensorized conv's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvg: the packed+tensorized conv's routine is labeled tensorized
+SKIPPED on cuda (vacuous): cvp: packed+tensorized conv matches the reorder-only twin bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvp: packed+tensorized conv matches the reorder-only twin bitwise
+SKIPPED on cuda (vacuous): cvp: packed+tensorized conv matches the natural form within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvp: packed+tensorized conv matches the natural form within tolerance
+SKIPPED on cuda (vacuous): cvp: the packed+tensorized conv's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvp: the packed+tensorized conv's routine is labeled tensorized
+SKIPPED on cuda (vacuous): cvg2: packed+tensorized conv matches the reorder-only twin bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvg2: packed+tensorized conv matches the reorder-only twin bitwise
+SKIPPED on cuda (vacuous): cvg2: packed+tensorized conv matches the natural form within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvg2: packed+tensorized conv matches the natural form within tolerance
+SKIPPED on cuda (vacuous): cvg2: the packed+tensorized conv's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvg2: the packed+tensorized conv's routine is labeled tensorized
+SKIPPED on cuda (vacuous): conv pipeline structure: im2col packs, register tiling, resident fragment
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	conv pipeline structure: im2col packs, register tiling, resident fragment
+SKIPPED on cuda (vacuous): cvg2 pipeline structure: compacted im2col packs, register tiling fires on the strided row
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvg2 pipeline structure: compacted im2col packs, register tiling fires on the strided row
+SKIPPED on cuda (vacuous): cvs2: the stride-2 conv seeds are the serial pipeline and its Grid twin
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvs2: the stride-2 conv seeds are the serial pipeline and its Grid twin
+SKIPPED on cuda (vacuous): cvs2: every seeded stride-2 candidate matches the natural form within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvs2: every seeded stride-2 candidate matches the natural form within tolerance
+SKIPPED on cuda (vacuous): cvs2: every seeded stride-2 candidate's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvs2: every seeded stride-2 candidate's routine is labeled tensorized
+cvt: sketch_candidates=0 epilogue=0 fiss_sketch_candidates=0 fiss_timed=0 contended=0 unbatched=0 unreadable=0 budget_cut=false hopeless=0 retried=0 retimed=0
+SKIPPED on cuda (vacuous): cvf: fusion merges the tail into the conv nest
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvf: fusion merges the tail into the conv nest
+SKIPPED on cuda (vacuous): cvf: fused conv twin matches the unfused pipeline bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvf: fused conv twin matches the unfused pipeline bitwise
+SKIPPED on cuda (vacuous): cvf: fused conv twin matches the natural form within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvf: fused conv twin matches the natural form within tolerance
+SKIPPED on cuda (vacuous): cvf: the unfused and the fused conv routines are both labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvf: the unfused and the fused conv routines are both labeled tensorized
+SKIPPED on cuda (vacuous): cvu: GPU staged conv pipeline matches the natural form within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvu: GPU staged conv pipeline matches the natural form within tolerance
+SKIPPED on cuda (vacuous): cvu: the GPU staged conv pipeline's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvu: the GPU staged conv pipeline's routine is labeled tensorized
+SKIPPED on cuda (vacuous): cvz: the whole-routine conv site is zeroed in its lowering
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvz: the whole-routine conv site is zeroed in its lowering
+SKIPPED on cuda (vacuous): cvz: the whole-routine zeroed site seeds GPU staged conv flavors
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvz: the whole-routine zeroed site seeds GPU staged conv flavors
+SKIPPED on cuda (vacuous): cvz: every whole-routine zeroed GPU candidate compiles, and matches the natural form run twice
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvz: every whole-routine zeroed GPU candidate compiles, and matches the natural form run twice
+SKIPPED on cuda (vacuous): cvz: every whole-routine zeroed GPU candidate's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvz: every whole-routine zeroed GPU candidate's routine is labeled tensorized
+SKIPPED on cuda (vacuous): cvzt: the whole-routine conv+tail site is zeroed in its lowering
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvzt: the whole-routine conv+tail site is zeroed in its lowering
+SKIPPED on cuda (vacuous): cvzt: the whole-routine zeroed conv+tail site seeds GPU staged conv flavors
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvzt: the whole-routine zeroed conv+tail site seeds GPU staged conv flavors
+SKIPPED on cuda (vacuous): cvzt: every whole-routine zeroed conv+tail GPU seed is a fused-epilogue twin
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvzt: every whole-routine zeroed conv+tail GPU seed is a fused-epilogue twin
+SKIPPED on cuda (vacuous): cvzt: every whole-routine zeroed conv+tail GPU candidate compiles
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvzt: every whole-routine zeroed conv+tail GPU candidate compiles
+SKIPPED on cuda (vacuous): cvzt: every compiling whole-routine conv+tail GPU candidate matches the natural form, run twice
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvzt: every compiling whole-routine conv+tail GPU candidate matches the natural form, run twice
+SKIPPED on cuda (vacuous): cvzt: every compiling whole-routine conv+tail GPU candidate is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvzt: every compiling whole-routine conv+tail GPU candidate is labeled tensorized
+SKIPPED on cuda (vacuous): cvft: the conv segment folds the conv output's per-cell zero, the output not materialized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvft: the conv segment folds the conv output's per-cell zero, the output not materialized
+SKIPPED on cuda (vacuous): cvft: the folded conv+tail segment seeds fused-epilogue GPU twins
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvft: the folded conv+tail segment seeds fused-epilogue GPU twins
+SKIPPED on cuda (vacuous): cvft: every fused-epilogue GPU twin of the folded segment compiles, and matches the natural form run twice
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvft: every fused-epilogue GPU twin of the folded segment compiles, and matches the natural form run twice
+SKIPPED on cuda (vacuous): cvft: every compiling candidate of the folded segment matches the natural form run twice
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvft: every compiling candidate of the folded segment matches the natural form run twice
+SKIPPED on cuda (vacuous): cvft: no candidate of the folded segment fails other than at companion coverage
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvft: no candidate of the folded segment fails other than at companion coverage
+SKIPPED on cuda (vacuous): cvft: every compiling candidate of the folded segment is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvft: every compiling candidate of the folded segment is labeled tensorized
+cvu: sketch_candidates=0 epilogue=0 fiss_sketch_candidates=0 fiss_timed=0 contended=1 unbatched=0 unreadable=0 budget_cut=false hopeless=0 retried=0 retimed=0
+SKIPPED on cuda (vacuous): cvu: every per-segment GPU candidate dedups against its whole-routine twin (none timed)
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvu: every per-segment GPU candidate dedups against its whole-routine twin (none timed)
+cvu2: the advertised f32-site tile does not divide the 8x16x8 micro-kernel
+SKIPPED on cuda (vacuous): cvu2: the GPU staged stride-2 conv pipeline's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvu2: the GPU staged stride-2 conv pipeline's routine is labeled tensorized
+cvu2: sketch_candidates=0 epilogue=0 fiss_sketch_candidates=0 fiss_timed=0 contended=0 unbatched=0 unreadable=0 budget_cut=false hopeless=0 retried=0 retimed=0
+SKIPPED on cuda (vacuous): cvu2: every per-segment GPU stride-2 candidate dedups against its whole-routine twin (none timed)
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvu2: every per-segment GPU stride-2 candidate dedups against its whole-routine twin (none timed)
+SKIPPED on cuda (vacuous): cvs2b: the strided non-dividing row seeds a padded row-panel flavor
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvs2b: the strided non-dividing row seeds a padded row-panel flavor
+SKIPPED on cuda (vacuous): cvs2b: every per-segment stride-2 candidate matches the natural form within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvs2b: every per-segment stride-2 candidate matches the natural form within tolerance
+SKIPPED on cuda (vacuous): cvs2b: every per-segment stride-2 candidate's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvs2b: every per-segment stride-2 candidate's routine is labeled tensorized
+SKIPPED on cuda (vacuous): cvb: blocked (row-panel) conv pipeline matches the natural form within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvb: blocked (row-panel) conv pipeline matches the natural form within tolerance
+SKIPPED on cuda (vacuous): cvb: the blocked conv pipeline's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvb: the blocked conv pipeline's routine is labeled tensorized
+cvb: sketch_candidates=0 epilogue=0 fiss_sketch_candidates=0 fiss_timed=0 contended=0 unbatched=0 unreadable=0 budget_cut=false hopeless=0 retried=0 retimed=0
+SKIPPED on cuda (vacuous): cvzb: the whole-routine blocked-shape conv site is zeroed in its lowering
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvzb: the whole-routine blocked-shape conv site is zeroed in its lowering
+SKIPPED on cuda (vacuous): cvzb: the whole-routine zeroed site seeds a GPU row-block flavor
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvzb: the whole-routine zeroed site seeds a GPU row-block flavor
+SKIPPED on cuda (vacuous): cvzb: every whole-routine zeroed GPU candidate compiles, and matches the natural form run twice
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvzb: every whole-routine zeroed GPU candidate compiles, and matches the natural form run twice
+SKIPPED on cuda (vacuous): cvzb: every whole-routine zeroed GPU candidate's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvzb: every whole-routine zeroed GPU candidate's routine is labeled tensorized
+SKIPPED on cuda (vacuous): cvmb: merged-segment blocked conv pipeline matches the natural form within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvmb: merged-segment blocked conv pipeline matches the natural form within tolerance
+SKIPPED on cuda (vacuous): cvmb: the merged-segment blocked conv pipeline's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvmb: the merged-segment blocked conv pipeline's routine is labeled tensorized
+cvmb: sketch_candidates=0 epilogue=0 fiss_sketch_candidates=0 fiss_timed=0 contended=0 unbatched=0 unreadable=0 budget_cut=false hopeless=0 retried=0 retimed=0
+SKIPPED on cuda (vacuous): cva: aligned-grid conv pipeline on a merged segment matches within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cva: aligned-grid conv pipeline on a merged segment matches within tolerance
+SKIPPED on cuda (vacuous): cva: the aligned-grid conv pipeline's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cva: the aligned-grid conv pipeline's routine is labeled tensorized
+cva: sketch_candidates=0 epilogue=0 fiss_sketch_candidates=0 fiss_timed=0 contended=0 unbatched=0 unreadable=0 budget_cut=false hopeless=0 retried=0 retimed=0
+SKIPPED on cuda (vacuous): cvr: every register-tile twin renders its geometry from the schedule
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvr: every register-tile twin renders its geometry from the schedule
+SKIPPED on cuda (vacuous): cvr: every register-tile twin matches its auto sibling bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvr: every register-tile twin matches its auto sibling bitwise
+File "test/operations/dune", lines 14711-14725, characters 0-515:
+14711 | (rule
+14712 |  (target schedule_conv_gemm-tf32.actual)
+14713 |  (package neural_nets_lib)
+.......
+14723 |   (with-stdout-to
+14724 |    %{target}
+14725 |    (run %{dep:schedule_conv_gemm.exe} --ocannl_tf32_matmuls=true))))
+SKIPPED on cuda (vacuous): cvg: packed+tensorized conv matches the reorder-only twin bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvg: packed+tensorized conv matches the reorder-only twin bitwise
+SKIPPED on cuda (vacuous): cvg: packed+tensorized conv matches the natural form within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvg: packed+tensorized conv matches the natural form within tolerance
+SKIPPED on cuda (vacuous): cvg: the packed+tensorized conv's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvg: the packed+tensorized conv's routine is labeled tensorized
+SKIPPED on cuda (vacuous): cvp: packed+tensorized conv matches the reorder-only twin bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvp: packed+tensorized conv matches the reorder-only twin bitwise
+SKIPPED on cuda (vacuous): cvp: packed+tensorized conv matches the natural form within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvp: packed+tensorized conv matches the natural form within tolerance
+SKIPPED on cuda (vacuous): cvp: the packed+tensorized conv's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvp: the packed+tensorized conv's routine is labeled tensorized
+SKIPPED on cuda (vacuous): cvg2: packed+tensorized conv matches the reorder-only twin bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvg2: packed+tensorized conv matches the reorder-only twin bitwise
+SKIPPED on cuda (vacuous): cvg2: packed+tensorized conv matches the natural form within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvg2: packed+tensorized conv matches the natural form within tolerance
+SKIPPED on cuda (vacuous): cvg2: the packed+tensorized conv's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvg2: the packed+tensorized conv's routine is labeled tensorized
+SKIPPED on cuda (vacuous): conv pipeline structure: im2col packs, register tiling, resident fragment
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	conv pipeline structure: im2col packs, register tiling, resident fragment
+SKIPPED on cuda (vacuous): cvg2 pipeline structure: compacted im2col packs, register tiling fires on the strided row
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvg2 pipeline structure: compacted im2col packs, register tiling fires on the strided row
+SKIPPED on cuda (vacuous): cvs2: the stride-2 conv seeds are the serial pipeline and its Grid twin
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvs2: the stride-2 conv seeds are the serial pipeline and its Grid twin
+SKIPPED on cuda (vacuous): cvs2: every seeded stride-2 candidate matches the natural form within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvs2: every seeded stride-2 candidate matches the natural form within tolerance
+SKIPPED on cuda (vacuous): cvs2: every seeded stride-2 candidate's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvs2: every seeded stride-2 candidate's routine is labeled tensorized
+cvt: sketch_candidates=1 epilogue=1 fiss_sketch_candidates=1 fiss_timed=1 contended=0 unbatched=0 unreadable=0 budget_cut=false hopeless=1 retried=0 retimed=1
+SKIPPED on cuda (vacuous): cvf: fusion merges the tail into the conv nest
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvf: fusion merges the tail into the conv nest
+SKIPPED on cuda (vacuous): cvf: fused conv twin matches the unfused pipeline bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvf: fused conv twin matches the unfused pipeline bitwise
+SKIPPED on cuda (vacuous): cvf: fused conv twin matches the natural form within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvf: fused conv twin matches the natural form within tolerance
+SKIPPED on cuda (vacuous): cvf: the unfused and the fused conv routines are both labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvf: the unfused and the fused conv routines are both labeled tensorized
+SKIPPED on cuda (vacuous): cvu: GPU staged conv pipeline matches the natural form within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvu: GPU staged conv pipeline matches the natural form within tolerance
+SKIPPED on cuda (vacuous): cvu: the GPU staged conv pipeline's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvu: the GPU staged conv pipeline's routine is labeled tensorized
+cvz: 1 GPU seeds on the whole-routine lowering (not part of the golden)
+a conv pipeline rendered scalar-fallback: Mma_scalar_fallback x1
+FAIL: cvz: every whole-routine zeroed GPU candidate's routine is labeled tensorized: false
+cvzt: 1 GPU seeds on the whole-routine lowering (not part of the golden)
+a conv pipeline rendered scalar-fallback: Mma_scalar_fallback x1
+FAIL: cvzt: every compiling whole-routine conv+tail GPU candidate is labeled tensorized: false
+cvft: 1 GPU seeds on the folded conv segment (not part of the golden)
+a conv pipeline rendered scalar-fallback: Mma_scalar_fallback x1
+FAIL: cvft: every compiling candidate of the folded segment is labeled tensorized: false
+cvu: sketch_candidates=1 epilogue=0 fiss_sketch_candidates=1 fiss_timed=1 contended=0 unbatched=0 unreadable=0 budget_cut=false hopeless=1 retried=0 retimed=1
+SKIPPED on cuda (vacuous): cvu: every per-segment GPU candidate dedups against its whole-routine twin (none timed)
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvu: every per-segment GPU candidate dedups against its whole-routine twin (none timed)
+cvu2: the advertised f32-site tile does not divide the 8x16x8 micro-kernel
+SKIPPED on cuda (vacuous): cvu2: the GPU staged stride-2 conv pipeline's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvu2: the GPU staged stride-2 conv pipeline's routine is labeled tensorized
+cvu2: sketch_candidates=1 epilogue=0 fiss_sketch_candidates=1 fiss_timed=1 contended=0 unbatched=0 unreadable=0 budget_cut=false hopeless=1 retried=0 retimed=1
+SKIPPED on cuda (vacuous): cvu2: every per-segment GPU stride-2 candidate dedups against its whole-routine twin (none timed)
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvu2: every per-segment GPU stride-2 candidate dedups against its whole-routine twin (none timed)
+SKIPPED on cuda (vacuous): cvs2b: the strided non-dividing row seeds a padded row-panel flavor
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvs2b: the strided non-dividing row seeds a padded row-panel flavor
+SKIPPED on cuda (vacuous): cvs2b: every per-segment stride-2 candidate matches the natural form within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvs2b: every per-segment stride-2 candidate matches the natural form within tolerance
+SKIPPED on cuda (vacuous): cvs2b: every per-segment stride-2 candidate's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvs2b: every per-segment stride-2 candidate's routine is labeled tensorized
+SKIPPED on cuda (vacuous): cvb: blocked (row-panel) conv pipeline matches the natural form within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvb: blocked (row-panel) conv pipeline matches the natural form within tolerance
+SKIPPED on cuda (vacuous): cvb: the blocked conv pipeline's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvb: the blocked conv pipeline's routine is labeled tensorized
+cvb: sketch_candidates=2 epilogue=0 fiss_sketch_candidates=2 fiss_timed=2 contended=0 unbatched=0 unreadable=0 budget_cut=false hopeless=2 retried=0 retimed=2
+cvzb: 2 GPU seeds on the whole-routine lowering (not part of the golden)
+a conv pipeline rendered scalar-fallback: Mma_scalar_fallback x1
+a conv pipeline rendered scalar-fallback: Mma_scalar_fallback x1
+SKIPPED on cuda (vacuous): cvzb: the whole-routine zeroed site seeds a GPU row-block flavor
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvzb: the whole-routine zeroed site seeds a GPU row-block flavor
+FAIL: cvzb: every whole-routine zeroed GPU candidate's routine is labeled tensorized: false
+SKIPPED on cuda (vacuous): cvmb: merged-segment blocked conv pipeline matches the natural form within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvmb: merged-segment blocked conv pipeline matches the natural form within tolerance
+SKIPPED on cuda (vacuous): cvmb: the merged-segment blocked conv pipeline's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvmb: the merged-segment blocked conv pipeline's routine is labeled tensorized
+cvmb: sketch_candidates=4 epilogue=2 fiss_sketch_candidates=4 fiss_timed=4 contended=0 unbatched=0 unreadable=0 budget_cut=false hopeless=4 retried=0 retimed=4
+SKIPPED on cuda (vacuous): cva: aligned-grid conv pipeline on a merged segment matches within tolerance
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cva: aligned-grid conv pipeline on a merged segment matches within tolerance
+SKIPPED on cuda (vacuous): cva: the aligned-grid conv pipeline's routine is labeled tensorized
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cva: the aligned-grid conv pipeline's routine is labeled tensorized
+cva: sketch_candidates=2 epilogue=1 fiss_sketch_candidates=2 fiss_timed=2 contended=0 unbatched=0 unreadable=0 budget_cut=false hopeless=2 retried=0 retimed=2
+SKIPPED on cuda (vacuous): cvr: every register-tile twin renders its geometry from the schedule
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvr: every register-tile twin renders its geometry from the schedule
+SKIPPED on cuda (vacuous): cvr: every register-tile twin matches its auto sibling bitwise
+OCANNL_TOOL_VERDICT_SKIP	backend	schedule_conv_gemm.exe	cvr: every register-tile twin matches its auto sibling bitwise
+FAILED: 4 checks did not hold: "cvz: every whole-routine zeroed GPU candidate's routine is l...", "cvzt: every compiling whole-routine conv+tail GPU candidate ...", "cvft: every compiling candidate of the folded segment is lab..." and 1 more.
+exit: 1

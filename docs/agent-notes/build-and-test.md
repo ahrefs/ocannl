@@ -3331,7 +3331,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   one asserting a decline or no `Tile_mma` (`all_declined`, `none_emitted`, a `Scalar_fallback`
   comparison), and one in a leg the backend closes. A value claim whose reference IS one rendering's
   numerics fails, and is no parity regression: `schedule_mma_matmul`'s once-narrowed staged
-  wide-policy and bf16 references on Metal, which the declined scope's per-block narrowing misses.
+  wide-policy and bf16 references on Metal, CUDA and HIP (plus CUDA's swizzled bf16 twin and
+  default-policy uniform-f16 leg, and `tf32_reference_rounding-tf32`'s hardware tf32 controls),
+  which the declined scope's per-block or scalar-fallback numerics miss.
   Every stanza running a census-judging file declares the variable, variant rules included, or the
   leg would read its cached result as a survivor; `tensorized_census_ratchet` derives that set and
   refuses an undeclared stanza. Only the declaring stanzas form the leg: an undeclared alias
@@ -3344,7 +3346,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   (`forced-tile-mma-decline` in `codegen_tag`, ON regime only). Per alias the evidenced form is the
   source patch, `tools/mutant.sh arrayjit/lib/utils.ml 's/\| None \| Some \("" \| "0"\) -> Ok
   false/| None | Some ("" | "0") -> Ok true/' @test/operations/runtest-<name>`
-  (`schedule_batched_mma`: caught on cc and Metal): it refuses a red baseline and counts a run only
+  (`schedule_batched_mma`: caught on cc, Metal, CUDA and HIP discrete): it refuses a red baseline
+  and counts a run only
   once it reached its last row, so a crash the hook causes is not read as a caught census claim. The
   environment form is the cheaper sweep over every declaring stanza, and its reds are sorted by
   `tensorized_census_ratchet.exe --sort-forced-decline <checkout> <log>...` (built by `dune build
@@ -3355,9 +3358,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   crash, a failure count it cannot account for (dune's truncation included), a failure outside the
   census-judging tests and any non-stanza failure (a golden diff); the value claims above are a
   listed judgment (`Forced_decline_sort.decline_sensitive`). Exit 0 means every failure is one the
-  hook predicts. `forced_decline_sort`'s golden pins its sort of the cc and Metal sweeps of
-  lukstafi/ocannl-staging#2233 (`test/operations/forced_decline_logs/`), which reproduces that PR's
-  hand sort, and flags a planted failure of each anomalous kind.
+  hook predicts. `forced_decline_sort`'s golden pins its sort of the saved sweeps under
+  `test/operations/forced_decline_logs/` (cc and Metal from lukstafi/ocannl-staging#2233, CUDA on
+  `rog-nv-linux` and HIP discrete on `tuf-amd-linux` from gh-ocannl-2402), and flags a planted
+  failure of each anomalous kind.
 
 ## Hand-built IR tests
 

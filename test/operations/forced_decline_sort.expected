@@ -2,6 +2,53 @@ this directory holds census-judging tests: true
 every decline-sensitive value claim the sorter lists names a claim its source still writes: true
 the sorter read a saved forced-decline sweep: true
 
+forced-decline sort of gh2402_cuda.txt:
+  schedule_batched_mma: 4 census claim(s) failed (test/operations/schedule_batched_mma.ml)
+  qkv_zero_init: 0 census claim(s) failed (test/operations/qkv_zero_init.ml)
+    expected value failure(s), since the label conjoins a census judgment (renders tensorized) with parity; the separate parity claim over the same sketches is the one that must hold:
+      "every tensorized folded f16-operand qkv sketch renders tensorized and matches the materialized run"
+  tf32_reference_rounding-tf32: 0 census claim(s) failed (test/operations/tf32_reference_rounding.ml)
+    expected value failure(s), since it conjoins a census judgment (all_tensor_core) with tf32-rounded execution; the separate parity claim over executed seeds is the one that must hold:
+      "hardware: at least one seed executes tensorized with its reference rounded to tf32"
+    expected value failure(s), since it checks that a tensorized tf32 seed differs from the plain f32 reference, which a declined scalar-fallback run matches in f32 by construction:
+      "hardware control: against the plain reference, some tensorized seed differs"
+  qkv_zero_init-approximate: 0 census claim(s) failed (test/operations/qkv_zero_init.ml)
+    expected value failure(s), since the label conjoins a census judgment (renders tensorized) with parity; the separate parity claim over the same sketches is the one that must hold:
+      "every tensorized folded qkv sketch renders tensorized and matches the materialized run"
+      "every tensorized folded f16-operand qkv sketch renders tensorized and matches the materialized run"
+      "every tensorized folded routine-local product with its tail sketch renders tensorized and matches the materialized run"
+  schedule_coalesce: 4 census claim(s) failed (test/operations/schedule_coalesce.ml)
+  schedule_mma_matmul: 29 census claim(s) failed (test/operations/schedule_mma_matmul.ml)
+    expected value failure(s), since its reference is the persistent fragment's once-per-tile narrowing, which the declined scope's per-block narrowing misses by construction:
+      "staged+tensorized Fp16_wide matmul equals the once-narrowed wide reference bitwise"
+      "on CUDA and HIP the default policy's staged+tensorized uniform-f16 matmul equals the once-narrowed wide reference bitwise"
+      "staged+tensorized Bf16_wide matmul equals the once-narrowed wide reference bitwise"
+      "swizzled staged twin under Bf16_wide and the default policy equals the once-narrowed wide reference bitwise"
+    expected value failure(s), since it is a census comparison whose label uses "agree" and requires ldmatrix on the swizzled twin, which the forced decline suppresses:
+      "staged twins per advertised swizzled layout: the censuses agree apart from ldmatrix, which only the swizzled twin uses"
+  schedule_conv_gemm-tf32: 4 census claim(s) failed (test/operations/schedule_conv_gemm.ml)
+  held: online_softmax_block_mma reduction_forms schedule_conv_gemm schedule_pack_mma_matmul schedule_pad schedule_pad-contract_off schedule_swizzle_matmul tf32_reference_rounding tile_mma_forced_decline tile_mma_narrow vec_signed_zero
+  7 stanza(s) red, 11 held, 0 anomaly(ies): every failure is one the forced decline predicts
+gh2402_cuda.txt: every failure is one the forced decline predicts: true
+
+forced-decline sort of gh2402_hip_tuf.txt:
+  schedule_batched_mma: 4 census claim(s) failed (test/operations/schedule_batched_mma.ml)
+  qkv_zero_init: 0 census claim(s) failed (test/operations/qkv_zero_init.ml)
+    expected value failure(s), since the label conjoins a census judgment (renders tensorized) with parity; the separate parity claim over the same sketches is the one that must hold:
+      "every tensorized folded f16-operand qkv sketch renders tensorized and matches the materialized run"
+  qkv_zero_init-approximate: 0 census claim(s) failed (test/operations/qkv_zero_init.ml)
+    expected value failure(s), since the label conjoins a census judgment (renders tensorized) with parity; the separate parity claim over the same sketches is the one that must hold:
+      "every tensorized folded f16-operand qkv sketch renders tensorized and matches the materialized run"
+  schedule_coalesce: 1 census claim(s) failed (test/operations/schedule_coalesce.ml)
+  schedule_mma_matmul: 23 census claim(s) failed (test/operations/schedule_mma_matmul.ml)
+    expected value failure(s), since its reference is the persistent fragment's once-per-tile narrowing, which the declined scope's per-block narrowing misses by construction:
+      "staged+tensorized Fp16_wide matmul equals the once-narrowed wide reference bitwise"
+      "on CUDA and HIP the default policy's staged+tensorized uniform-f16 matmul equals the once-narrowed wide reference bitwise"
+      "staged+tensorized Bf16_wide matmul equals the once-narrowed wide reference bitwise"
+  held: online_softmax_block_mma reduction_forms schedule_conv_gemm schedule_conv_gemm-tf32 schedule_pack_mma_matmul schedule_pad schedule_pad-contract_off schedule_swizzle_matmul tf32_reference_rounding tf32_reference_rounding-tf32 tile_mma_forced_decline tile_mma_narrow vec_signed_zero
+  5 stanza(s) red, 13 held, 0 anomaly(ies): every failure is one the forced decline predicts
+gh2402_hip_tuf.txt: every failure is one the forced decline predicts: true
+
 forced-decline sort of pr2233_cc.txt:
   schedule_batched_mma: 2 census claim(s) failed (test/operations/schedule_batched_mma.ml)
   schedule_pack_mma_matmul: 6 census claim(s) failed (test/operations/schedule_pack_mma_matmul.ml)
@@ -53,7 +100,7 @@ the sorter flags a failure outside the census-judging tests planted in the cc sw
 the sorter flags a golden diff planted in the cc sweep, naming its stanza: true
 the sorter flags an unfinished run (a capped batch's exit status) planted in the cc sweep, naming its stanza: true
 an unfinished run's report lists no held stanza: true
-the CLI sorts both saved sweeps with no anomaly: exit 0: true
+the CLI sorts every saved sweep with no anomaly: exit 0: true
 the CLI exits 1 on a sweep with a planted parity failure: true
 the CLI exits 2 on an unreadable log: true
 the CLI exits 2 on a root holding no census-judging test: true
