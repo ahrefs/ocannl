@@ -129,6 +129,8 @@ let flip_field get set parse value =
 let setting ?under ?scope flip candidates =
   { (config ?under ?scope candidates) with resolver = Settings flip }
 
+let large_models_alias = "big_models"
+
 let flip_large_models =
   flip_field
     (fun () -> Utils.settings.large_models)
@@ -172,9 +174,7 @@ let keyed_flips =
        on a box whose own [auto] resolves to no grid. *)
     ( "cc_parallel_chunks",
       config ~scope:Cpu ~under:[ Stated ("cc_parallel_grid", "openmp") ] [ "3"; "5" ] );
-    (* Both spellings initialize the same field. The sweep varies what the key code reads. *)
     ("large_models", setting flip_large_models flag);
-    ("big_models", setting flip_large_models flag);
     ( "log_level",
       setting ~under:[ Routine_logs true ]
         (flip_field
@@ -217,15 +217,15 @@ let keyed_flips =
    alone. *)
 let derived_components = [ ("numerics", [ "codegen" ]); ("pool", [ "codegen" ]) ]
 
-(* The [Keyed] keys no in-process flip reaches, each with how it is varied instead (Codex P2, round
-   4): the backend name through [cache_key_components]' own argument, and the two lazily resolved cc
-   settings in child processes of this executable ([child_flag]), each stating its value on the
-   commandline before anything forces the lazy. *)
+(* The [Keyed] keys the sweep varies through an argument or in a fresh process. *)
 let unflippable =
   [
     ( "backend",
       "a parameter, not a lookup: backends are process-wide singletons, and the component is the \
        backend name the caller passes -- varied through that argument" );
+    ( large_models_alias,
+      "the compatibility alias initializes Utils.settings.large_models when large_models is unset \
+       -- varied at startup in child processes" );
     ( "cc_pool_core_class",
       "resolved once, by the lazy [Cc_backend.pool_restriction] the first compile forces; the pool \
        tag it decides is what the component hashes -- varied in child processes, held to \
@@ -420,8 +420,9 @@ let same_as_baseline key value =
    field is varied directly and restored after the probe. *)
 let with_flip key value resolver f =
   match resolver with
+  | _ when commandline_contradicts key value -> None
   | Settings flip -> Option.map (flip value) ~f:(fun restore -> Exn.protect ~f ~finally:restore)
-  | _ when same_as_baseline key value || commandline_contradicts key value -> None
+  | _ when same_as_baseline key value -> None
   | _ ->
       let previous = Utils.stated_config key in
       Utils.state_config ~key ~data:value;
@@ -553,8 +554,7 @@ let () =
   p_empty ~min:20 "the flip and unflippable tables cover exactly the Keyed class"
     ~over:(Set.to_list keyed_names)
     (Set.to_list (Set.union (Set.diff keyed_names tabled) (Set.diff tabled keyed_names)));
-  (* 2. Settings-borne keys, derived from [utils.ml] (the rule's argument): each one is flipped
-     through its field, which is already initialized when the probe runs. *)
+  (* 2. The assignments in [utils.ml] own the coverage set for field and startup flips. *)
   let settings_borne =
     (* The source, then [outranked] and its commandline statements, if any. *)
     match Array.to_list Stdlib.Sys.argv with
@@ -569,11 +569,12 @@ let () =
   let flipped_through_settings =
     List.filter_map keyed_flips ~f:(fun (key, flip) ->
         match flip.resolver with Settings _ -> Some key | Per_lookup | Numerics_policy -> None)
-    @ List.map settings_flips ~f:fst
+    @ List.map settings_flips ~f:fst @ [ large_models_alias ]
     |> Set.of_list (module String)
   in
   p_empty ~min:6
-    "every key utils.ml resolves into Utils.settings is flipped through its field, and only those"
+    "every key utils.ml resolves into Utils.settings is flipped through its field or startup \
+     resolution, and only those"
     ~over:(Set.to_list settings_borne)
     (Set.to_list
        (Set.union
@@ -735,11 +736,9 @@ let () =
    let facts_moved = moved before (components_of ~facts_of:(fun _ -> flipped) ctx canon ~backend) in
    p_all ~min:1 "the backend's facts move only the components they reach" facts_moved ~f:(fun c ->
        List.mem facts_derived_components c ~equal:String.equal));
-  (* The two lazily resolved cc settings, in children that state them on the commandline (which
-     outranks every other source) before anything forces the lazy. A child reports its components
-     and the pool the cc backend decided. *)
-  let child args =
-    let ((status, out, _) as run) = Fresh_process.run (child_flag :: args) in
+  (* A child reports its cache-key components and the pool the cc backend decided. *)
+  let child ?env args =
+    let ((status, out, _) as run) = Fresh_process.run ?env (child_flag :: args) in
     match status with
     | Unix.WEXITED 0 ->
         let lines = List.map (String.split_lines out) ~f:(String.split ~on:'\t') in
@@ -758,6 +757,33 @@ let () =
         Fresh_process.report ~label:"cache_key_agreement child" run;
         None
   in
+  (* Leave the canonical spelling unset so the alias supplies the value. The children share the
+     test's working directory, where startup cleanup could remove other probes' artifacts. *)
+  let alias_env =
+    Array.filter (Unix.environment ()) ~f:(fun entry ->
+        match String.lsplit2 entry ~on:'=' with
+        | Some (name, _) -> (
+            match Utils.classify_env_var name with
+            | Utils.Env_config_key ("large_models" | "profile") -> false
+            | _ -> true)
+        | None -> true)
+  in
+  let alias_child value =
+    child ~env:alias_env
+      [
+        "--ocannl_backend=" ^ backend;
+        "--ocannl_no_config_file=true";
+        "--ocannl_clean_up_build_files_on_startup=false";
+        "--ocannl_clean_up_log_files_on_startup=false";
+        "--ocannl_" ^ large_models_alias ^ "=" ^ value;
+      ]
+  in
+  p "big_models at startup moves only its classified component when large_models is unset"
+    (match (alias_child "false", alias_child "true") with
+    | Some (before, _, _), Some (after, _, _) ->
+        let component = List.Assoc.find_exn keyed large_models_alias ~equal:String.equal in
+        List.equal String.equal (moved before after) [ component ]
+    | _ -> false);
   let grid = "--ocannl_cc_parallel_grid=openmp" in
   let cpu = not (Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend)) in
   let cap_flip =
@@ -1000,9 +1026,15 @@ let () =
                     eprintf "%s=%s: the probe compile raised %s\n" key value (Exn.to_string exn);
                     true))
   in
-  (match flip_debug_files "true" with
-  | Some restore -> Exn.protect ~f:oracle ~finally:restore
-  | None -> oracle ());
+  (let key = "output_debug_files_in_build_directory" in
+   if commandline_contradicts key "true" then
+     Verdict.fail
+       "output_debug_files_in_build_directory is stated otherwise on the commandline, so the \
+        oracle cannot read the kernels it compiles"
+   else
+     match flip_debug_files "true" with
+     | Some restore -> Exn.protect ~f:oracle ~finally:restore
+     | None -> oracle ());
   (* The [-outranked] rule states these keys so that the plain golden is diffed against a run whose
      flips were outranked: a claim, printing no row, so its stdout stays the golden's. Without it
      the diff passes as well in a run where nothing outranked anything. *)
