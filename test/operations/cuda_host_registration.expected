@@ -1,0 +1,11 @@
+small array (4 KiB): repeated uploads compute exact values after immediate host overwrite: true
+small array (4 KiB): repeated uploads below threshold register nothing: true
+kept control: live 4 MiB host array survives collection rounds: true
+large array (4 MiB): first upload computes exact values after immediate host overwrite: true
+large array (4 MiB): first upload sights without registering: true
+large array (4 MiB): second upload computes exact values after immediate host overwrite: true
+large array (4 MiB): second upload registers once and accounts live bytes: true
+large array (4 MiB): third upload computes exact values after immediate host overwrite: true
+large array (4 MiB): third upload reuses registration without re-registering: true
+dropped large array: uploads computed exact values and host array is reclaimed by GC: true
+dropped large array: registered while live and unregistered once by GC finaliser: true

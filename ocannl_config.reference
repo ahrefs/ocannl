@@ -1532,6 +1532,15 @@
 # HIP.
 #cuda_kernel_cache_mib=64
 
+# Minimum byte size of a host array eligible for automatic page-locking via `cuMemHostRegister` on
+# discrete CUDA devices (gh-ocannl-1854). On the second host-to-device transfer of the same
+# caller-owned host array at or above this size, the CUDA backend registers it with the driver so
+# repeated transfers (such as training-batch uploads) run at pinned DMA bandwidth instead of
+# copying through a driver staging buffer; the array's GC finalizer (or process-exit teardown once
+# streams are idle) calls `cuMemHostUnregister`. Single-shot uploads are never registered, and
+# integrated devices are skipped. 0 disables automatic host-array registration.
+#cuda_host_register_min_bytes=4194304
+
 # How many nvrtc programs the CUDA backend compiles a batch's kernel code cache misses as, at once
 # (gh-ocannl-1603): a group of misses under one option list is cut into up to this many programs of
 # contiguous kernels, each of at least cuda_compile_program_min_kernels, compiled concurrently (one

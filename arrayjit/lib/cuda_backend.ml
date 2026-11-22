@@ -57,6 +57,9 @@ module Device_config = struct
     stack_size_baseline : int;
         (** The primary context's [STACK_SIZE] limit when this device was set up, before any of our
             launches grew it: what {!bound_local_memory} restores (gh-ocannl-1872). *)
+    host_register_eligible : bool;
+        (** Whether discrete host-array page-locking ([cuMemHostRegister_v2]) is worthwhile and
+            supported on this device (gh-ocannl-1854). *)
   }
   [@@deriving sexp_of]
 
@@ -399,6 +402,7 @@ end = struct
             attributes.multiprocessor_count * attributes.max_threads_per_multiprocessor;
           total_memory = snd (Cu.Device.get_free_and_total_mem ());
           stack_size_baseline = Cu.Context.get_limit Cu.Context.STACK_SIZE;
+          host_register_eligible = attributes.host_register_supported && not attributes.integrated;
         }
       in
       if Utils.debug_log_from_routines () && not (Hash_set.mem initialized_devices ordinal) then
@@ -437,6 +441,99 @@ end = struct
 
   let is_idle (device : device) = Cu.Stream.is_ready device.runner
 
+  (* Driver entry points cudajit does not bind, resolved lazily from the driver library: a query
+     whose entry point is missing answers [None], never an error. *)
+  module Driver_entry = struct
+    let library =
+      lazy
+        (let filename = if Stdlib.Sys.win32 then "nvcuda.dll" else "libcuda.so.1" in
+         try Some (Dl.dlopen ~filename ~flags:[ Dl.RTLD_NOW ]) with Dl.DL_error _ -> None)
+
+    let bind name signature =
+      lazy
+        (Option.bind (Lazy.force library) ~f:(fun from ->
+             try Some (Foreign.foreign ~from name signature) with Dl.DL_error _ -> None))
+  end
+
+  (* gh-ocannl-1854: page-lock recurring host arrays on discrete CUDA devices via
+     [cuMemHostRegister_v2] / [cuMemHostUnregister]. Bound through {!Driver_entry} because cudajit
+     0.8.0 binds neither entry point (a cudajit binding would supersede this module). Registration
+     happens on the SECOND host-to-device transfer of the same live array at or above
+     [cuda_host_register_min_bytes] (4 MiB default; 0 disables), so single-shot uploads never pay
+     registration cost; unregistration runs from the array's GC finaliser (or at process exit once
+     streams are idle). *)
+  module Host_register = struct
+    open Ctypes
+
+    let mem_host_register =
+      Driver_entry.bind "cuMemHostRegister_v2" (ptr void @-> size_t @-> uint @-> returning int)
+
+    let mem_host_unregister = Driver_entry.bind "cuMemHostUnregister" (ptr void @-> returning int)
+
+    (* CU_MEMHOSTREGISTER_PORTABLE = 0x01; fall back to 0 when CUDA_ERROR_NOT_SUPPORTED (801). *)
+    let flag_portable = Unsigned.UInt.of_int 0x01
+    let flag_default = Unsigned.UInt.zero
+    let cuda_error_not_supported = 801
+
+    let min_bytes () =
+      let raw = Utils.get_global_arg ~default:"4194304" ~arg_name:"cuda_host_register_min_bytes" in
+      match Int.of_string_opt (String.strip raw) with
+      | Some n when n >= 0 -> n
+      | _ ->
+          raise
+          @@ Utils.User_error
+               ("cuda_host_register_min_bytes must be a non-negative integer (bytes); found: " ^ raw)
+
+    type token = { addr : nativeint; primary_context : Cu.Context.t }
+
+    let active_context : Cu.Context.t option Stdlib.Domain.DLS.key =
+      Stdlib.Domain.DLS.new_key (fun () -> None)
+
+    let register ~addr ~bytes : token option =
+      match
+        ( Stdlib.Domain.DLS.get active_context,
+          Lazy.force mem_host_register,
+          Lazy.force mem_host_unregister )
+      with
+      | Some primary_context, Some reg, Some _ -> (
+          try
+            let ptr = ptr_of_raw_address addr in
+            let size = Unsigned.Size_t.of_int bytes in
+            let status = reg ptr size flag_portable in
+            let status =
+              if status = cuda_error_not_supported then reg ptr size flag_default else status
+            in
+            if status = 0 then Some { addr; primary_context } else None
+          with _ -> None)
+      | _ -> None
+
+    let unregister { addr; primary_context } =
+      match Lazy.force mem_host_unregister with
+      | None -> failwith "cuMemHostUnregister unavailable"
+      | Some unreg ->
+          Cu.Context.push_current primary_context;
+          Exn.protect
+            ~finally:(fun () -> ignore (Cu.Context.pop_current () : Cu.Context.t))
+            ~f:(fun () ->
+              let status = unreg (ptr_of_raw_address addr) in
+              if status <> 0 then
+                failwith (Printf.sprintf "cuMemHostUnregister failed with status %d" status))
+
+    let state : token Host_pinning.t = Host_pinning.create ~min_bytes ~register ~unregister
+
+    let note_transfer ~(device : device) (nd : Ndarray.t) : bool =
+      if not device.dev.host_register_eligible then false
+      else
+        let saved = Stdlib.Domain.DLS.get active_context in
+        Stdlib.Domain.DLS.set active_context (Some device.dev.primary_context);
+        Exn.protect
+          ~finally:(fun () -> Stdlib.Domain.DLS.set active_context saved)
+          ~f:(fun () -> Host_pinning.note_transfer state nd)
+
+    let unregister_all () = Host_pinning.unregister_all state
+    let stats () = Host_pinning.stats state
+  end
+
   (* Transfers take {!Backend_intf.buffer_loc} and resolve to the concrete [CUdeviceptr] here,
      against the device's private pool table. We pass [~length] explicitly to [memcpy_H_to_D] /
      [memcpy_D_to_H]: without it the cudajit impl computes [size_in_bytes = full_size - offset],
@@ -445,13 +542,21 @@ end = struct
   let from_host ~dst ~dst_loc hosted =
     set_ctx @@ ctx_of dst;
     let base = Slab.resolve_pool dst.device dst_loc in
+    let registered = Host_register.note_transfer ~device:dst.device hosted in
     let f src =
       let full_bytes = Bigarray.Genarray.size_in_bytes src in
       let elem_bytes = Bigarray.kind_size_in_bytes (Bigarray.Genarray.kind src) in
       Cu.Stream.memcpy_H_to_D ~length:(full_bytes / elem_bytes) ~dst_offset:dst_loc.offset ~dst:base
         ~src dst.device.runner
     in
-    Ndarray.apply { f } hosted
+    Ndarray.apply { f } hosted;
+    if registered then (
+      (* Page-locked [cuMemcpyHtoDAsync] returns while DMA is still reading [hosted], whereas a
+         pageable transfer waits until host memory has been read. Synchronize here so every caller
+         (including [Backends.allocate_delta], which does not await immediately) keeps the same
+         completion contract, and keep [hosted] alive past the sync. *)
+      Cu.Stream.synchronize dst.device.runner;
+      ignore (Stdlib.Sys.opaque_identity hosted))
 
   let to_host ~src ~src_loc hosted =
     set_ctx @@ ctx_of src;
@@ -1485,20 +1590,6 @@ end = struct
       Cu.Context.set_limit Cu.Context.STACK_SIZE device.dev.stack_size_baseline;
       Atomic.incr local_memory_resets)
 
-  (* Driver entry points cudajit does not bind, resolved lazily from the driver library: a query
-     whose entry point is missing answers [None], never an error. *)
-  module Driver_entry = struct
-    let library =
-      lazy
-        (let filename = if Stdlib.Sys.win32 then "nvcuda.dll" else "libcuda.so.1" in
-         try Some (Dl.dlopen ~filename ~flags:[ Dl.RTLD_NOW ]) with Dl.DL_error _ -> None)
-
-    let bind name signature =
-      lazy
-        (Option.bind (Lazy.force library) ~f:(fun from ->
-             try Some (Foreign.foreign ~from name signature) with Dl.DL_error _ -> None))
-  end
-
   (* gh-ocannl-1530: the compiled kernel's static [__shared__] bytes
      ([CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES]), for an armed [Compiled_kernels] census. cudajit's
      [Cu.Module.func] is opaque and [Cu.Module] binds no [cuFuncGetAttribute], so this loads the
@@ -1764,11 +1855,11 @@ end = struct
     Stdlib.at_exit (fun () ->
         (* Only caches holding graphs: an emptied one (a released routine still reachable, or a
            capture that never succeeded) has nothing to wait for the stream for. *)
-        match
-          Backend_impl.Weak_registry.live graph_caches
-          |> List.filter ~f:(fun g ->
-              Stdlib.Mutex.protect g.lock (fun () -> not (Hashtbl.is_empty g.cache)))
-        with
+        (match
+           Backend_impl.Weak_registry.live graph_caches
+           |> List.filter ~f:(fun g ->
+               Stdlib.Mutex.protect g.lock (fun () -> not (Hashtbl.is_empty g.cache)))
+         with
         | [] -> ()
         | live ->
             let by_device =
@@ -1791,7 +1882,29 @@ end = struct
                          (fun () ->
                            Backend_impl.attempt_each (List.map gs ~f:(fun g () -> destroy_graphs g)));
                      }))
-                : Utils.exit_teardown_outcome list))
+                : Utils.exit_teardown_outcome list));
+        (* gh-ocannl-1854: unregister any still-live page-locked host arrays once all CUDA streams
+           are idle; if a stream is hung past [exit_stream_teardown_timeout], skip unregistration
+           and let the driver reclaim on process exit. *)
+        if (Host_register.stats ()).live_bytes > 0 then
+          let devs =
+            if not !initialized then []
+            else Array.to_list !(Lazy.force devices) |> List.filter_map ~f:Fn.id
+          in
+          ignore
+            (Utils.bounded_exit_teardown
+               [
+                 {
+                   what = "registered CUDA host arrays";
+                   is_idle =
+                     (fun () ->
+                       List.for_all devs ~f:(fun device ->
+                           set_ctx device.dev.primary_context;
+                           Cu.Stream.is_ready device.runner));
+                   teardown = (fun () -> Host_register.unregister_all ());
+                 };
+               ]
+              : Utils.exit_teardown_outcome list))
 
   (* One CUDA graph for a fissioned routine's whole segment batch (gh-ocannl-488): stream-capture
      the segment launch loop once per distinct set of launch-time-varying arguments — static-index
@@ -2009,6 +2122,14 @@ end = struct
   end
 
   let get_global_debug_info () =
+    let hp = Host_register.stats () in
+    let eligible_devices =
+      if not !initialized then 0
+      else
+        Array.count
+          !(Lazy.force devices)
+          ~f:(function Some (d : device) -> d.dev.host_register_eligible | None -> false)
+    in
     Sexp.message "cuda_global_debug"
       [
         ("live_streams", [%sexp_of: int] @@ Cu.Stream.get_total_live_streams ());
@@ -2024,6 +2145,13 @@ end = struct
         ( "serial_device_scratch_budget",
           [%sexp_of: int] (Option.value (serial_scratch_budget ()) ~default:0) );
         ("graph_launch_memory_drops", [%sexp_of: int] @@ Atomic.get graph_launch_memory_drops);
+        (* gh-ocannl-1854: automatic page-locking of recurring host arrays. *)
+        ("host_registrations", [%sexp_of: int] hp.registered);
+        ("host_unregistrations", [%sexp_of: int] hp.unregistered);
+        ("host_register_declined", [%sexp_of: int] hp.declined);
+        ("host_unregister_failures", [%sexp_of: int] hp.unregister_failures);
+        ("live_host_registered_bytes", [%sexp_of: int] hp.live_bytes);
+        ("host_register_eligible_devices", [%sexp_of: int] eligible_devices);
         Async_memory_debug.field "stream_pool_reserved_bytes" Async_memory_debug.stream_reserved;
         Async_memory_debug.field "graph_pool_reserved_bytes" Async_memory_debug.graph_reserved;
       ]

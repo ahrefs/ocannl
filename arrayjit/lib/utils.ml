@@ -126,6 +126,7 @@ let known_config_keys =
       "hip_scratch_validation";
       "hip_kernel_cache_mib";
       "cuda_kernel_cache_mib";
+      "cuda_host_register_min_bytes";
       "cuda_compile_programs";
       "cuda_compile_program_min_kernels";
       "cuda_fast_math";
@@ -702,6 +703,7 @@ let config_key_classification : (config_key_class * string * string list) list =
       [
         "multidev_num_devices";
         "cuda_printf_fifo_size";
+        "cuda_host_register_min_bytes";
         "hip_printf_fifo_size";
         "exit_stream_teardown_timeout";
         "fixed_state_for_init";

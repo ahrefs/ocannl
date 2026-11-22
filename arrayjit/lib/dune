@@ -93,6 +93,7 @@
   kernel_code_cache
   kernel_outline
   ndarray
+  host_pinning
   indexing
   affine
   tnode
