@@ -437,3 +437,141 @@ let () =
     (String.equal (unheld Stage6b) "?" && String.equal (unheld Stage7) "8");
   pf "through a held window extent, the leaf keeps its broadcast guess at stage 5"
     (String.equal (held Stage5) "1")
+
+(* gh-ocannl-2370, gh-ocannl-2420: [packed_counter_minimum_sizes] blocks the fixed-index-minimum
+   rule on a shared packed counter while another total mentioning that counter is still pending in
+   the pass ([held_totals]). When the counter is renamed earlier in the same [Stage6a] pass,
+   [held_totals] must substitute with the call's environment, not the pass-start environment, or the
+   renamed counter misses membership and both draws close to their minima anyway.
+
+   To trigger an in-pass counter rename inside [Stage6a]'s [draws] pass (not earlier), an auxiliary
+   packed draw [d_ren] carries an axis [c2] marked resolve-at-use with GLB [c3] (arrived via [Concat
+   [c3; z_ren]] with discardable [z_ren = 0]), plus [c1 <= c2] and [c3 <= c1]. At [Stage6a],
+   [d_ren]'s [Shape_row] emits [c2 = c3], whose re-emitted [c1 <= c3] meets [c3 <= c1] by
+   antisymmetry and emits [c1 = c3] ahead of [u] and [v] in the same pass. Both no-pending-total
+   controls confirm the rename leaves [c3] eligible when no third total is pending. *)
+let () =
+  Verdict.case "shared counter minimum guard with a pending total and in-pass counter rename"
+  @@ fun () ->
+  let run_store ~pending_total ~rename_counter =
+    let u = fresh () and v = fresh () in
+    Row.add_resolve_at_use (var_of u);
+    Row.add_resolve_at_use (var_of v);
+    let a = Row.get_var () and b = Row.get_var () in
+    let c1 = Row.get_var () and c2 = Row.get_var () and c3 = Row.get_var () in
+    let draw_with counter rows =
+      Row.Rows_constr
+        {
+          r = rows;
+          constr =
+            Total_elems
+              {
+                numerator =
+                  Strided_var
+                    {
+                      coeff = Utils.safe_lazy "test block" (fun () -> block);
+                      var = counter;
+                      denom = 1;
+                      round_up = true;
+                    };
+                divided_by = [];
+                keep_axis = false;
+              };
+          origin;
+        }
+    in
+    let w_batch = fresh ~kind:`Batch () and w_out = fresh () in
+    let pending_constraints =
+      if pending_total then
+        [
+          Row.Shape_row (w_batch, origin);
+          Row.Shape_row (w_out, origin);
+          draw_with c1 [ w_batch; w_out ];
+          ineq (closed [ 1 ]) w_batch;
+        ]
+      else []
+    in
+    let d_ren = fresh () and x_ren = Row.get_var () and z_ren = Row.get_var () in
+    let r_ren = { d_ren with Row.dims = [ Row.Var c2 ] } in
+    let discardable_vars = Set.add Row.dim_var_set_empty z_ren in
+    let rename_constraints, rename_step2 =
+      if rename_counter then (
+        Row.add_resolve_at_use_dim c2;
+        ( [
+            draw_with (Row.get_var ()) [ d_ren ];
+            ineq { (closed []) with dims = [ Var x_ren ] } d_ren;
+            Row.Dim_ineq { res = Var c1; opnd = Var c2; from_ = Sexp.Atom "c1<=c2"; origin };
+            Row.Dim_ineq { res = Var c3; opnd = Var c1; from_ = Sexp.Atom "c3<=c1"; origin };
+            Row.Dim_ineq
+              {
+                res = Concat [ Var c3; Var z_ren ];
+                opnd = Var c2;
+                from_ = Sexp.Atom "rename";
+                origin;
+              };
+            Row.Shape_row (r_ren, origin);
+          ],
+          [ Row.Dim_eq { d1 = Var z_ren; d2 = dim 0; origin } ] ))
+      else ([], [])
+    in
+    let constraints =
+      rename_constraints
+      @ [
+          Row.Shape_row (u, origin);
+          Row.Shape_row (v, origin);
+          draw_with c1 [ u ];
+          draw_with c1 [ v ];
+          ineq { (closed []) with dims = [ Var a ] } u;
+          ineq { (closed []) with dims = [ Var b ] } v;
+          Row.Dim_constr { d = Var a; constr = At_least_dim { d_min = 9; sites = [] }; origin };
+          Row.Dim_constr { d = Var b; constr = At_least_dim { d_min = 12; sites = [] }; origin };
+        ]
+      @ pending_constraints
+    in
+    let cs, env =
+      Row.solve_inequalities ~stage:Stage1 ~discardable_vars constraints Row.empty_env
+    in
+    let cs, env =
+      if List.is_empty rename_step2 then (cs, env)
+      else Row.solve_inequalities ~stage:Stage1 ~discardable_vars (rename_step2 @ cs) env
+    in
+    let c1_label env =
+      let c1_sub = List.hd_exn (Row.subst_row env { (closed []) with dims = [ Var c1 ] }).dims in
+      if Row.equal_dim c1_sub (Var c1) then "c1"
+      else if Row.equal_dim c1_sub (Var c3) then "c3"
+      else Row.dim_to_string Axis_size c1_sub
+    in
+    let _, trace =
+      List.fold
+        [ Row.Stage2; Stage3; Stage4; Stage5; Stage6a ]
+        ~init:((cs, env), [])
+        ~f:(fun ((cs, env), trace) stage ->
+          let cs, env = Row.solve_inequalities ~stage ~discardable_vars cs env in
+          ((cs, env), (stage, (axes env u, axes env v, c1_label env)) :: trace))
+    in
+    let trace = List.rev trace in
+    let at stage = List.Assoc.find_exn trace ~equal:Row.equal_stage stage in
+    let u5, v5, c5 = at Stage5 and u6, v6, c6 = at Stage6a in
+    Stdio.printf
+      "pending_total=%b, rename=%b: Stage5(u=%s, v=%s, c1=%s), Stage6a(u=%s, v=%s, c1=%s)\n"
+      pending_total rename_counter u5 v5 c5 u6 v6 c6;
+    ((u5, v5, c5), (u6, v6, c6))
+  in
+  let _, (u_free, v_free, _) = run_store ~pending_total:false ~rename_counter:false in
+  let (_, _, c5_free_ren), (u_free_ren, v_free_ren, c6_free_ren) =
+    run_store ~pending_total:false ~rename_counter:true
+  in
+  let _, (u_held, v_held, _) = run_store ~pending_total:true ~rename_counter:false in
+  let (_, _, c5_held_ren), (u_held_ren, v_held_ren, c6_held_ren) =
+    run_store ~pending_total:true ~rename_counter:true
+  in
+  pf "without a pending total, agreeing minima close both draws at Stage6a"
+    (String.equal u_free "[?]" && String.equal v_free "[?]");
+  pf "without a pending total, an in-pass counter rename still closes both draws at Stage6a"
+    (String.equal c5_free_ren "c1" && String.equal c6_free_ren "c3" && String.equal u_free_ren "[?]"
+   && String.equal v_free_ren "[?]");
+  pf "with a pending total on an unrenamed counter, both draws stay deferred at Stage6a"
+    (String.equal u_held "[,..]" && String.equal v_held "[,..]");
+  pf "with a pending total on a counter renamed within Stage6a, both draws stay deferred"
+    (String.equal c5_held_ren "c1" && String.equal c6_held_ren "c3"
+   && String.equal u_held_ren "[,..]" && String.equal v_held_ren "[,..]")

@@ -303,8 +303,10 @@ files.
   defers, nor one in a parameter's bound component), and on a shared counter a total still pending
   in the pass blocks the rule, as it blocks gh-ocannl-2319's (an own counter keeps gh-ocannl-2318's
   rule unchanged); both rules read blocks through `round_up_blocks` and pending totals through
-  `pending_total_vars`. No store was found where those three
-  change an outcome (staged attempts are refused on the base too). The same test pins both
+  `pending_total_vars`, evaluated with the call's env so an in-pass counter rename cannot escape
+  the guard (gh-ocannl-2420, pinned at stage 6a in `test_row_glb_reach`, both unrenamed and renamed
+  in-pass). No store was found where the two `packed_minimum_demand` exclusions (`deferred_dims`,
+  `in_param_bound_component`) change an outcome (staged attempts are refused on the base too). The same test pins both
   agreeing rules at two lane widths (9 single and 6 double cells, three blocks each, by constants
   and by minima; an f64 leg): forcing one coefficient on either rule fails its case. A reduced draw's leaf axis under the result guessed
   1 at stage 5 (`close_dim_terminal`): it now waits until stage 7 while a non-parameter result
