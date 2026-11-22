@@ -3331,7 +3331,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   one asserting a decline or no `Tile_mma` (`all_declined`, `none_emitted`, a `Scalar_fallback`
   comparison), and one in a leg the backend closes. A value claim whose reference IS one rendering's
   numerics fails, and is no parity regression: `schedule_mma_matmul`'s once-narrowed staged
-  wide-policy and bf16 references on Metal, which the declined scope's per-block narrowing misses.
+  wide-policy (`Fp16_wide`, `Bf16_wide`) and default-policy uniform-bf16 references on Metal, CUDA
+  and HIP, the default-policy uniform-f16 leg on CUDA and HIP, CUDA's `Bf16_narrow` uniform-bf16 and
+  swizzled bf16 twin claims, and `tf32_reference_rounding-tf32`'s hardware tf32 controls, which the
+  declined scope's per-block or scalar-fallback numerics miss.
   Every stanza running a census-judging file declares the variable, variant rules included, or the
   leg would read its cached result as a survivor; `tensorized_census_ratchet` derives that set and
   refuses an undeclared stanza. Only the declaring stanzas form the leg: an undeclared alias
@@ -3344,7 +3347,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   (`forced-tile-mma-decline` in `codegen_tag`, ON regime only). Per alias the evidenced form is the
   source patch, `tools/mutant.sh arrayjit/lib/utils.ml 's/\| None \| Some \("" \| "0"\) -> Ok
   false/| None | Some ("" | "0") -> Ok true/' @test/operations/runtest-<name>`
-  (`schedule_batched_mma`: caught on cc and Metal): it refuses a red baseline and counts a run only
+  (`schedule_batched_mma`: caught on cc, Metal, CUDA and HIP discrete): it refuses a red baseline
+  and counts a run only
   once it reached its last row, so a crash the hook causes is not read as a caught census claim. The
   environment form is the cheaper sweep over every declaring stanza, and its reds are sorted by
   `tensorized_census_ratchet.exe --sort-forced-decline <checkout> <log>...` (built by `dune build
@@ -3355,9 +3359,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   crash, a failure count it cannot account for (dune's truncation included), a failure outside the
   census-judging tests and any non-stanza failure (a golden diff); the value claims above are a
   listed judgment (`Forced_decline_sort.decline_sensitive`). Exit 0 means every failure is one the
-  hook predicts. `forced_decline_sort`'s golden pins its sort of the cc and Metal sweeps of
-  lukstafi/ocannl-staging#2233 (`test/operations/forced_decline_logs/`), which reproduces that PR's
-  hand sort, and flags a planted failure of each anomalous kind.
+  hook predicts. `forced_decline_sort`'s golden pins its sort of the saved sweeps under
+  `test/operations/forced_decline_logs/` (cc and Metal from lukstafi/ocannl-staging#2233, CUDA on
+  `rog-nv-linux` and HIP discrete on `tuf-amd-linux` from gh-ocannl-2402), and flags a planted
+  failure of each anomalous kind.
 
 ## Hand-built IR tests
 
@@ -6167,7 +6172,13 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   resolves as a CPU batch. A wedged device may hold a batch for the whole run cap. Set
   `--test-cap N` for a tighter bound and use `plan` to see the selected caps. Sweep keeps the
   watcher on the regular leg of GPU units even with `--slow`. It classifies by the unit's backend,
-  so its cc unit is exempt and its tuf HIP unit keeps the watcher.
+  so its cc unit is exempt and its tuf HIP unit keeps the watcher. On `tuf-amd-linux` (HIP,
+  discrete gfx1102, at `172cc2753`, gh-ocannl-2402), measured via `tools/test-run.sh run` batches
+  rather than a `sweep` unit: a combined `build -j 8 @runtest @train` run peaked at
+  `padded_conv_cache.exe` (702.75 s; 5th slowest 220.42 s, with all `@train` actions below the
+  top-5 cutoff), and `build -j 8 --force @train` ran all six `@train` actions cleanly with
+  `fsm_transformer.exe` slowest at 171.18 s and `transformer_names.exe` at 151.98 s (124.07 s
+  standalone), so the 1500 s watcher stays on tuf's HIP unit with no `@train` exemption.
 - **A Metal `slow-mnist_conv` or `slow-cifar_conv` in a shared-event wait is usually running
   slowly, not hung; judge by its progress lines (gh-ocannl-2302).** With the library at
   `9023239da` (a step bench beside it), a Metal training step took 1.32 s for `mnist_conv` on

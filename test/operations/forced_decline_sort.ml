@@ -1,25 +1,25 @@
 (* The forced-decline sorter (Test_scan.Forced_decline_sort; the CLI is
-   `tensorized_census_ratchet.exe --sort-forced-decline`) over the two sweeps of
-   lukstafi/ocannl-staging#2233 kept in forced_decline_logs/ -- the census-judging stanzas under
-   OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE=1 on cc and on Metal, each the run record's log with its
-   home directory written as `~`.
+   `tensorized_census_ratchet.exe --sort-forced-decline`) over the saved sweeps kept in
+   forced_decline_logs/ -- the census-judging stanzas under
+   OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE=1 on cc and Metal (lukstafi/ocannl-staging#2233), CUDA
+   (rog-nv-linux) and HIP discrete (tuf-amd-linux) (gh-ocannl-2402), each the run record's log with
+   its home directory written as `~`.
 
    The census-judging set is this directory's: the stanzas of those logs all run tests here, and
    [Tensorized_census_scan.judged_paths] judges each file by its own content, so reading this
    directory's sources gives every one of them the verdict the CLI's whole-checkout reading gives.
 
-   The golden pins each sort, which reproduces the PR's hand sort: the census failures per stanza
-   (cc and Metal columns of its table), Metal's five decline-sensitive value claims, the other
-   requested stanzas held, no anomaly. Then a planted failure of each anomalous kind, appended to
-   the cc sweep, must be flagged with its stanza. Last, the CLI itself runs over the same logs,
-   rooted at this build tree, and its exit statuses are pinned.
+   The golden pins each sort, reproducing the hand sort: the census failures per stanza across all
+   four backends, each backend's expected decline-sensitive claims, the other requested stanzas
+   held, no anomaly. Then a planted failure of each anomalous kind, appended to the cc sweep, must
+   be flagged with its stanza. Last, the CLI itself runs over all saved logs, rooted at this build
+   tree, and its exit statuses are pinned.
 
    The logs are fixed history; the sources they are sorted against are today's. So renaming a label
    [Forced_decline_sort.decline_sensitive] lists, or changing whether a test judges the census,
-   turns a saved sweep's sort red. Do not loosen a glob until it matches both labels: re-capture
-   both sweeps (the leg in build-and-test.md#verdict-claims, on cc and on Metal), or, without a Mac,
-   keep the old label as a second listed pattern whose reason says it matches the saved sweeps and
-   since when. *)
+   turns a saved sweep's sort red. Do not loosen a glob until it matches both labels: re-capture the
+   sweeps (the leg in build-and-test.md#verdict-claims), or, without that hardware, keep the old
+   label as a second listed pattern whose reason says it matches the saved sweeps and since when. *)
 
 open Base
 open Stdio
@@ -180,9 +180,12 @@ let () =
          ~stdout:Stdlib.Filename.null ~stderr:Stdlib.Filename.null ("--sort-forced-decline" :: args))
   in
   let saved =
-    List.map [ "pr2233_cc.txt"; "pr2233_metal.txt" ] ~f:(Stdlib.Filename.concat logs_dir)
+    Stdlib.Sys.readdir logs_dir |> Array.to_list
+    |> List.filter ~f:(fun f -> String.is_suffix f ~suffix:".txt")
+    |> List.sort ~compare:String.compare
+    |> List.map ~f:(Stdlib.Filename.concat logs_dir)
   in
-  p "the CLI sorts both saved sweeps with no anomaly: exit 0" (cli ("../.." :: saved) = 0);
+  p "the CLI sorts every saved sweep with no anomaly: exit 0" (cli ("../.." :: saved) = 0);
   let planted = Stdlib.Filename.temp_file "forced_decline_sort" ".txt" in
   Out_channel.write_all planted
     ~data:

@@ -7,11 +7,13 @@
     log -- a [tools/test-run.sh] run record's [log], or any dune output of the same runs -- and
     sorts each failure into what the leg predicts and what it does not:
 
-    - a {b census failure} (expected): a failed claim, in a stanza running a census-judging test,
-      whose label asserts no parity and speaks the census's vocabulary ({!names_census});
-    - an {b expected value failure}: a failed claim asserting parity that {!decline_sensitive}
-      lists, each with the reason its reference is one rendering's numerics or its label conjoins a
-      census judgment (build-and-test.md#verdict-claims names them);
+    - an {b expected value failure}: a failed claim that {!decline_sensitive} lists (checked before
+      the label heuristics so non-parity-worded value checks are never absorbed into census counts),
+      each with the reason its reference is one rendering's numerics or its label conjoins a census
+      judgment (build-and-test.md#verdict-claims names them);
+    - a {b census failure} (expected): an unlisted failed claim, in a stanza running a
+      census-judging test, whose label asserts no parity and speaks the census's vocabulary
+      ({!names_census});
     - an {b anomaly}, with its stanza: a failed parity claim nothing lists, a crash, a stanza whose
       failure count the reader cannot account for, a failure in a stanza that runs no census-judging
       test, and any failure dune reports on a file other than a dune file (a golden diff, a build
@@ -23,9 +25,10 @@
       ({!Tensorized_census_scan.judged_paths}): the caller hands them in, never a list of its own.
     - "Asserts parity" is {!asserts_parity}: the census scan's own vocabulary
       ({!Tensorized_census_scan.asserts_parity}) widened by the agreement words a tolerance claim
-      uses ([agree], [equal], [identical], [within], [same as]), applied to the label as the [FAIL:]
-      line renders it. Wider than the scan, which decides what needs a census, because here a word
-      missed is a value regression read as an expected census failure.
+      uses ([agree] -- excluding the census-comparison phrase [censuses agree] --, [equal],
+      [identical], [within], [same as]), applied to the label as the [FAIL:] line renders it. Wider
+      than the scan, which decides what needs a census, because here a word missed is a value
+      regression read as an expected census failure.
     - Lines are read with their ANSI SGR escapes removed, so a colorized dune log
       ([CLICOLOR_FORCE=1]) sorts as a plain one.
     - A failing action is a dune header, [File "<dir>/dune", line(s) ...], with the excerpt dune
@@ -72,13 +75,85 @@ let decline_sensitive =
          scope's per-block narrowing misses by construction";
     };
     {
+      source = "test/operations/schedule_mma_matmul.ml";
+      label =
+        "on CUDA and HIP the default policy's staged+tensorized uniform-f16 matmul equals the \
+         once-narrowed wide reference bitwise";
+      reason =
+        "its reference is the persistent fragment's once-per-tile narrowing, which the declined \
+         scope's per-block narrowing misses by construction";
+    };
+    {
+      source = "test/operations/schedule_mma_matmul.ml";
+      label =
+        "staged+tensorized default-policy uniform-bf16 matmul narrows between blocks exactly where \
+         the backend keeps bf16 storage residency";
+      reason =
+        "its reference is the persistent fragment's once-per-tile narrowing, which the declined \
+         scope's per-block narrowing misses by construction";
+    };
+    {
+      source = "test/operations/schedule_mma_matmul.ml";
+      label =
+        "staged+tensorized Bf16_narrow uniform-bf16 matmul narrows between blocks exactly where \
+         that mode keeps bf16 storage residency";
+      reason =
+        "its reference is the persistent fragment's once-per-tile narrowing, which the declined \
+         scope's per-block narrowing misses by construction";
+    };
+    {
+      source = "test/operations/schedule_mma_matmul.ml";
+      label =
+        "swizzled staged twin under Bf16_wide and the default policy equals the once-narrowed wide \
+         reference bitwise";
+      reason =
+        "its reference is the persistent fragment's once-per-tile narrowing, which the declined \
+         scope's per-block narrowing misses by construction";
+    };
+    {
       source = "test/operations/qkv_zero_init.ml";
       label = "every tensorized * sketch renders tensorized and matches the materialized run";
       reason =
         "the label conjoins a census judgment (renders tensorized) with parity; the separate \
          parity claim over the same sketches is the one that must hold";
     };
+    {
+      source = "test/operations/tf32_reference_rounding.ml";
+      label = "hardware: at least one seed executes tensorized with its reference rounded to tf32";
+      reason =
+        "it conjoins a census judgment (all_tensor_core) with tf32-rounded execution; the separate \
+         parity claim over executed seeds is the one that must hold";
+    };
+    {
+      source = "test/operations/tf32_reference_rounding.ml";
+      label = "hardware control: against the plain reference, some tensorized seed differs";
+      reason =
+        "it checks that a tensorized tf32 seed differs from the plain f32 reference, which a \
+         declined scalar-fallback run matches in f32 by construction";
+    };
   ]
+
+(* Join OCaml string line continuations (a backslash before a newline and horizontal whitespace) so
+   {!stale} matches exact labels regardless of how ocamlformat wrapped the literal in the source. *)
+let unwrap_string_continuations s =
+  let n = String.length s in
+  let buf = Buffer.create n in
+  let rec skip_hspace i =
+    if i < n && (Char.equal s.[i] ' ' || Char.equal s.[i] '\t') then skip_hspace (i + 1) else i
+  in
+  let rec go i =
+    if i >= n then ()
+    else if Char.equal s.[i] '\\' && i + 1 < n && Char.equal s.[i + 1] '\n' then
+      go (skip_hspace (i + 2))
+    else if
+      Char.equal s.[i] '\\' && i + 2 < n && Char.equal s.[i + 1] '\r' && Char.equal s.[i + 2] '\n'
+    then go (skip_hspace (i + 3))
+    else (
+      Buffer.add_char buf s.[i];
+      go (i + 1))
+  in
+  go 0;
+  Buffer.contents buf
 
 (* [pattern] with [*] standing for any text, matched against the whole of [text]. *)
 let glob_matches ~pattern text =
@@ -107,16 +182,19 @@ let stale sources =
       match List.Assoc.find sources e.source ~equal:String.equal with
       | None -> true
       | Some content ->
+          let unwrapped = unwrap_string_continuations content in
           List.exists (String.split e.label ~on:'*') ~f:(fun piece ->
               (not (String.is_empty (String.strip piece)))
-              && not (String.is_substring content ~substring:(String.strip piece))))
+              && not (String.is_substring unwrapped ~substring:(String.strip piece))))
 
 (** Whether a rendered claim label asserts agreement with a reference: see the header. *)
 let asserts_parity label =
   Tensorized_census_scan.asserts_parity label
   ||
   let text = String.lowercase label in
-  List.exists [ "agree"; "equal"; "identical" ] ~f:(Tensorized_census_scan.has_stem text)
+  Tensorized_census_scan.has_stem text "agree"
+  && not (String.is_substring text ~substring:"censuses agree")
+  || List.exists [ "equal"; "identical" ] ~f:(Tensorized_census_scan.has_stem text)
   || Tensorized_census_scan.has_word text "within"
   || String.is_substring text ~substring:"same as"
 
@@ -447,15 +525,16 @@ let sort ~judged log =
       let claims =
         List.map block.fails ~f:(fun label ->
             let verdict =
-              if not (asserts_parity label) then if names_census label then Census else Unread
-              else
-                match
-                  List.find decline_sensitive ~f:(fun e ->
-                      Option.equal String.equal (Some e.source) source
-                      && glob_matches ~pattern:e.label label)
-                with
-                | Some e -> Expected_value e.reason
-                | None -> Parity
+              match
+                List.find decline_sensitive ~f:(fun e ->
+                    Option.equal String.equal (Some e.source) source
+                    && glob_matches ~pattern:e.label label)
+              with
+              | Some e -> Expected_value e.reason
+              | None ->
+                  if asserts_parity label then Parity
+                  else if names_census label then Census
+                  else Unread
             in
             (label, verdict))
       in

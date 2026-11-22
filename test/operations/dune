@@ -526,6 +526,7 @@
   (alias runtest-test_where_precision-unoptimized)
   (alias runtest-tf32_reference_rounding-tf32)
   (alias runtest-thread_private_gate-outlined)
+  (alias runtest-tile_mma_forced_decline-tf32)
   (alias runtest-top_down_prec-extension)
   (alias runtest-top_down_prec-unoptimized)
   (alias runtest-transformer_test-origins_cap_0)
@@ -17796,6 +17797,30 @@
   arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-2402: the same claims with tf32_matmuls on, which opens CUDA's tf32 persistent-fragment
+; scope to the f32 staged matmul so `fragment_scope` executes on CUDA instead of skipping under the
+; default policy; a no-op elsewhere (HIP advertises only f16/bf16 MMA). One golden for both runs.
+
+(rule
+ (target tile_mma_forced_decline-tf32.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  ; gh-ocannl-1308: judges the mma census; the forced-decline leg reruns it.
+  (env_var OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE)
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:tile_mma_forced_decline.exe} --ocannl_tf32_matmuls=true))))
+
+(rule
+ (alias runtest-tile_mma_forced_decline-tf32)
+ (package neural_nets_lib)
+ (action
+  (diff tile_mma_forced_decline.expected tile_mma_forced_decline-tf32.actual)))
 
 (test
  (name tile_mma_geometry)
