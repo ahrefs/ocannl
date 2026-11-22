@@ -1135,12 +1135,18 @@ files.
   fan-in cap disabled when a cap-backed footprint and an eligible observable consumer both exist;
   and the guard overrides an explicit `Inline` preference. It overrides the one-hot selector
   exemption by the same argument, so `rewrite_one_hot_reductions` cannot fire on such a reader.
-  The ordinary path does not cover either reading: it leaves the reader virtual over the visit cap's `Local` buffer, and
-  `Context.observability` refuses the host read as `Unobservable_local`.
   `virtual_chain_fanin` phase 12 pins the scratch and whole-buffer charges, the inherited
   fallback, and host readback at the default cap, over it, with it disabled, under `Inline` and
   for an observable one-hot selector (a permutation matrix over the footprint), with execution
   against a materialized reference in each case.
+- **An observable candidate materializes if its replay needs routine scratch** (gh-ocannl-2415).
+  At the end of `virtual_llc`, `materialize_observable_readers` uses the same replay walk as
+  `Context.observability`, plus scope targets that cleanup will retract to scratch reads.
+  `Placements.is_local_peek` includes `Never_virtual` buffers that will settle `Local` in
+  finalization. The verdict applies to open placements, including a specialization that prices
+  an `Inline` flip, and keeps the reader On_device. The early footprint verdict lets the usual
+  footprint prologue survive. Phase 12 also pins exact-size concat and late-refused producer
+  readback against materialized runs.
 - **The shift-the-uids check reads what a compile ships, not only the decision surface**
   (gh-ocannl-1877): `flip_order_minting` part 1 compares, across builds minted at different uid
   offsets, the emitted source up to minted identifiers (`Generated.normalize_minted`) and every

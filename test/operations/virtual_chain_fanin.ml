@@ -2809,6 +2809,103 @@ let phase12 () =
       p
         (prefix ^ "execution matches the reference and the materialized reading")
         (check_exec ~name ~materialized:[ a ] ~out:c_ ~expected:reduced llc o));
+  let exact_observed ~label ~cap ~inline ~persistent ~transitive =
+    LL.virtualize_settings.max_inline_fanin <- cap;
+    let a = lmk ~dims:[| cells |] ("ma_exact_" ^ label)
+    and b = cmk ("mb_exact_" ^ label)
+    and c_ = cmk ("mc_exact_" ^ label)
+    and out = cmk ("mo_exact_" ^ label) in
+    if persistent then Tn.set_observable a;
+    Tn.set_observable c_;
+    materialize out;
+    let setters = List.mapi concat_parts ~f:(fun part ks -> slice_setter a part ks) in
+    let readers = if transitive then [ reducer b a; copy c_ b ] else [ reducer c_ a ] in
+    let llc = List.reduce_exn ~f:seq (setters @ readers @ [ copy out c_ ]) in
+    let name = "vcf_sites_exact_observed_" ^ label in
+    let mat_name = name ^ "_mat" in
+    let mat = optimize ~materialized:[ a; b; c_ ] ~name:mat_name llc in
+    let got_mat = execute ~name:mat_name mat ~seed:(seed out) ~read:[ c_; out ] in
+    let opt_ctx = LL.empty_optimize_ctx () in
+    if inline then Hash_set.add opt_ctx.LL.inline_preferences c_;
+    let o = optimize_in opt_ctx ~name llc in
+    let ctx = run ~name o ~seed:(seed out) in
+    let what = "observed reduction over the exact-size concat (" ^ label ^ ")" in
+    p
+      (what ^ ": the visit cap materializes the concat whole")
+      (Option.equal Tn.equal_provenance (rejection_code o a) (Some Tn.Visit_cap));
+    no_footprint_scratch (what ^ ": the routine uses no footprint scratch") o;
+    if persistent then
+      p
+        (what ^ ": the reader can replay the persistent concat")
+        (match Context.observability ctx c_ with Recomputable -> true | _ -> false)
+    else (
+      p (what ^ ": the concat is routine-local scratch") (known_local o a);
+      p
+        (what ^ ": the reader materializes for host observation")
+        (Option.equal Tn.equal_provenance (rejection_code o c_)
+           (Some (Tn.Site "161:observed-reader-reads-local"))));
+    if transitive then
+      p (what ^ ": the unobserved intermediate reader stays virtual") (known_virtual o b);
+    p
+      (what ^ ": the materialized reference matches the expected values")
+      (same got_mat [ reduced; reduced ]);
+    p
+      (what ^ ": the observed reader and its copy read back like the materialized reference")
+      (match Context.observability ctx c_ with
+      | Stored | Recomputable -> same (List.map [ c_; out ] ~f:(Context.get_values ctx)) got_mat
+      | verdict ->
+          Option.iter (Context.observability_tag verdict) ~f:(Stdio.eprintf "%s\n");
+          false)
+  in
+  exact_observed ~label:"default" ~cap:saved_cap ~inline:false ~persistent:false ~transitive:false;
+  exact_observed ~label:"cap_off" ~cap:(-1) ~inline:false ~persistent:false ~transitive:false;
+  exact_observed ~label:"inline" ~cap:saved_cap ~inline:true ~persistent:false ~transitive:false;
+  exact_observed ~label:"transitive" ~cap:saved_cap ~inline:false ~persistent:false ~transitive:true;
+  exact_observed ~label:"persistent" ~cap:saved_cap ~inline:false ~persistent:true ~transitive:false;
+  (* The gather forces [a] to a buffer after [c_] has captured its computation. The scope in [c_]'s
+     stored template then denotes a scratch read at cleanup. *)
+  (let a = cmk "ma_late" and c_ = cmk "mc_late" and out = cmk "mo_late" in
+   let sink = cmk "msink_late" in
+   Tn.set_observable c_;
+   List.iter [ out; sink ] ~f:materialize;
+   let i = sym () in
+   let producer =
+     loop_n i dim (set a [| iter i |] (add (get x [| iter i |]) (get y [| iter i |])))
+   in
+   let j = sym () in
+   let gather =
+     loop_n j dim
+       (set sink
+          [| iter j |]
+          (LL.Get_dynamic
+             {
+               tn = a;
+               idcs = [| fixed 0 |];
+               dyn_axis = 0;
+               dyn_value = (get m [| iter j |], single);
+             }))
+   in
+   let llc = List.reduce_exn ~f:seq [ producer; copy c_ a; copy out c_; gather ] in
+   let name = "vcf_sites_observed_late" in
+   let opt_ctx = LL.empty_optimize_ctx () in
+   Hash_set.add opt_ctx.LL.inline_preferences a;
+   let o = optimize_in opt_ctx ~name llc in
+   let seed = (sink, blank dim) :: seed out in
+   let ctx = run ~name o ~seed in
+   let mat_name = name ^ "_mat" in
+   let mat = optimize ~materialized:[ a; c_ ] ~name:mat_name llc in
+   let got_mat = execute ~name:mat_name mat ~seed ~read:[ c_; out; sink ] in
+   let expected = Array.init dim ~f:(fun i -> v x i +. v y i) in
+   let gathered = Array.init dim ~f:(fun i -> expected.(Float.to_int m_vals.(i))) in
+   p "late gather: the gather forces the producer to routine-local scratch"
+     (known_local o a
+     && Option.equal Tn.equal_provenance (rejection_code o a) (Some Tn.Surviving_read));
+   p "late gather: the materialized reference matches the expected values"
+     (same got_mat [ expected; expected; gathered ]);
+   p "late gather: the stored reader and downstream outputs match the materialized reference"
+     (match Context.observability ctx c_ with
+     | Stored -> same (List.map [ c_; out; sink ] ~f:(Context.get_values ctx)) got_mat
+     | _ -> false));
   (* The visit-cap landing still costs one load if [c] is inlined: a stored reader cannot refer to
      routine-private scratch, so [a] retracts to the visit cap's whole buffer. *)
   (LL.virtualize_settings.max_inline_fanin <- 3;
