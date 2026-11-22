@@ -90,7 +90,6 @@ let exempt_zero_reference_exports =
     "Ndarray.mapped_count";
     "Ndarray.precision_to_bigarray_kind";
     "Ndarray.ptr_to_string_hum";
-    "Ndarray.to_native";
     "Ndarray.two_pow_63";
     "Ndarray.uint32_to_float";
     "Ndarray.uint64_to_float";

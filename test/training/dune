@@ -627,6 +627,25 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; bench_host_feed_step is a manual diagnostic (not a test) for gh-ocannl-1854: a wide-input MLP
+; training step fed every step via Context.from_host from reusable ~24 MiB host batch arrays,
+; emitting parity-checked Bench_out.result lines (`upload` and `step`) for benchmarks/ab.py.
+
+(executable
+ (name bench_host_feed_step)
+ (modules bench_host_feed_step)
+ (libraries
+  base
+  ocannl
+  mtime
+  mtime.clock.os
+  bench_out
+  arrayjit.ir
+  arrayjit.utils
+  arrayjit.context)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; virtual_grads_parity is a fast regression test for the backward stale-local CSE bug: parameter
 ; gradients through a Virtual pre-activation must match the softmax-CE oracle.
 

@@ -979,3 +979,31 @@ files.
   at once. HIP reported a size-independent 3 us on tuf and 1 us on minix, so treat
   `hipHostRegister`'s cost as unmeasured there (likely deferred). cudajit 0.8.0 binds neither
   `cuMemHostAlloc` nor `cuMemHostRegister`, so the registration route starts with bindings.
+- **Automatic CUDA host-array registration** (gh-ocannl-1854): `Ir.Host_pinning` tracks recurring
+  caller-owned host `Ndarray.t` values by byte range `[addr, addr + bytes)` and registers them on
+  their second host-to-device transfer at or above `cuda_host_register_min_bytes` (default 4 MiB,
+  `0` disables).
+  `Cuda_backend.Host_register` binds `cuMemHostRegister_v2` (not unversioned v1, which rejects
+  non-page-aligned `malloc` buffers) with `CU_MEMHOSTREGISTER_PORTABLE` (falling back to `0` on
+  `CUDA_ERROR_NOT_SUPPORTED`) and `cuMemHostUnregister` through `Driver_entry` (`libcuda.so.1` /
+  `nvcuda.dll`), gated on `attributes.host_register_supported && not attributes.integrated`.
+  Unregistration runs from a lock-free `Gc.finalise` callback on the underlying `Bigarray.Genarray`
+  (atomic state transitions so `unregister` runs at most once on success; a failed `unregister`
+  keeps the token, backing storage, and `live_bytes` accounting retryable on subsequent transfers
+  or `at_exit` teardown; transfers partially overlapping an active registration first evict the
+  overlapping range so `cuMemcpyHtoDAsync` never spans mixed registered/unregistered host memory,
+  while transfers contained inside a registered parent reuse its registration).
+  Pinned `cuMemcpyHtoDAsync` returns while DMA is still reading host memory, whereas pageable
+  transfers wait until host memory is consumed; `Cuda_backend.from_host` therefore wraps the copy
+  in `Host_pinning.with_transfer` and synchronises `dst.device.runner` (pinning the source live via
+  `Sys.opaque_identity`) whenever `~registered:true`, preserving the completion contract for callers
+  that do not await immediately (`Backends.allocate_delta`, immediate host buffer reuse). When
+  `cuda_host_register_min_bytes=0` and nothing is pinned, `with_transfer` takes a zero-lock fast
+  path; otherwise it briefly acquires the table mutex to check/update range coverage and record the
+  active transfer range, releases the mutex before `memcpy_H_to_D` and `Cu.Stream.synchronize`, and
+  serialises only overlapping host byte ranges (so disjoint multi-device transfers run concurrently). Interleaved `benchmarks/ab.py` on
+  `rog-nv-linux` (RTX 5070 Ti Laptop, discrete; `test/training/bench_host_feed_step.exe 60`,
+  4 x 24 MiB batches, 12 paired rounds, every cell clean, `3463502e` vs `49b70522`): upload median
+  1.477 -> 0.6939 ms (ratio 0.462, 12/12 faster, p=0.000488), full training step median 2.225 ->
+  1.418 ms (ratio 0.631, 12/12 faster, p=0.000488). A future cudajit binding for
+  `cuMemHostRegister_v2` / `cuMemHostUnregister` can supersede the `Driver_entry` bindings.
