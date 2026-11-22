@@ -1597,4 +1597,21 @@ printf 'PASS inherited CDPATH preserves the one-shot oracle; the old root-captur
 }
 harness_leg_run_errexit '24a: one-shot dispatch under CDPATH and old-wrapper negative control' leg_24a
 
+# Select one leg in a child. Its ordinary runner reaches the byte oracle.
+# The alternate runner prints a marker and exits before the mutation, so
+# the child's wrong-status check must fail with that marker beside it.
+leg_25() {
+  local alternate=$fixture/alternate-mutation-subject.sh rc=0 output=$fixture/subject-result
+  bash "$root/tools/test-mutation-run.sh" --subject "$mutation_subject" --only '^1:' >"$output" 2>&1
+  grep -qxF 'PASS exact claims and red verdict, CRLF/no-final-newline restoration' "$output"
+  printf '#!/usr/bin/env bash\nprintf "alternate mutation subject\\n"\nexit 71\n' >"$alternate"
+  bash "$root/tools/test-mutation-run.sh" --subject "$alternate" --only '^1:' >"$output" 2>&1 || rc=$?
+  [ "$rc" = 1 ]
+  grep -qxF "  digest $(cksum <"$alternate")" "$output"
+  grep -qxF 'alternate mutation subject' "$output"
+  grep -qxF 'wrong exit: 71 != 1' "$output"
+  printf 'PASS --subject runs the supplied mutation runner in the selected leg\n'
+}
+harness_leg_run_errexit '25: --subject substitutes the mutation runner' leg_25
+
 finish

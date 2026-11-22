@@ -21,6 +21,11 @@
 # runner's timeout responses while the fixture holds the corresponding state.
 # Shape-reading boundary (102): the one prepush --list rule in proc_table_perl
 # is the mutation seam. The nested run must fail at exactly the shared claim.
+# Shape-reading boundary (102b): the stock-source check reads the literal
+# stock path in one physical line. The mutant inserts that path immediately
+# before the member's normal footer. The revision fixture compares commit IDs
+# and the committed blob's checksum with the nested harness header.
+# affected-reads: tools/test-test-run.sh --only '^102b:'
 # Shape-reading boundary (99b): only ps pid/ppid/exact command fields;
 # no shell text, fleet source, or environments. This pins guardian/child
 # topology while a fixture holds publication, not guardian signal handling.
@@ -29,7 +34,7 @@
 # Teardown asks the parent to reap, killing its own child if still running.
 # The parent does the same at its deadline if the harness cannot signal it.
 #
-# Groups: #lifecycle (99, 99b, 99c, 105, 105b, 105c), #queries (100), #harness (102), #hermetic (70).
+# Groups: #lifecycle (99, 99b, 99c, 105, 105b, 105c), #queries (100), #harness (102, 102b), #hermetic (70).
 #
 # Legs:
 #  99. `wait last` and `status last` follow a launch still in flight
@@ -110,6 +115,9 @@
 #      exits 1 with exactly the one check that rule answers failed, having
 #      printed the copy's digest; the option outranks the variable, and a
 #      subject that is no file, or no value, is refused (gh-ocannl-1925).
+# 102b. A committed subject survives an ambient foreign checkout, invalid
+#      selectors refuse before the legs, and every dispatcher member uses the
+#      first commit even if the ref moves. A literal stock read fails a member.
 
 # Preserve the caller's fleet choice before common makes ordinary fixtures hermetic.
 last_fleet_worker=${OCANNL_TOOL_FLEET_WORKER-}
@@ -1422,8 +1430,9 @@ harness_leg_run '100: every last lookup stays in its own worktree #queries' leg_
 # outranks. The refusals are the same harness stopped before any leg.
 subj_label="--subject tests the named copy: without the prepush --list rule, leg 99 fails in that one check alone"
 subj_refuse_label="a subject that is no file, or no value, is refused before any leg, by the option and by the variable"
-subj_run() { # [NAME=VALUE...] -- [harness argv...]: sets subj_rc, subj_out
-  local envs=()
+subj_run() { # MEMBER [NAME=VALUE...] -- [harness argv...]: sets subj_rc, subj_out
+  local member=$1 envs=()
+  shift
   while [ "$1" != -- ]; do envs+=("$1"); shift; done
   shift
   subj_rc=0
@@ -1432,7 +1441,7 @@ subj_run() { # [NAME=VALUE...] -- [harness argv...]: sets subj_rc, subj_out
       OCANNL_TOOL_HARNESS_NAME OCANNL_TOOL_HARNESS_SKIP_RECORD OCANNL_TOOL_HARNESS_DUNE_SKIP_RECORD \
       OCANNL_TOOL_HARNESS_SUBJECT
     mkdir -p "$TMP/subj/tmp"
-    env ${envs[@]+"${envs[@]}"} TMPDIR="$TMP/subj/tmp" bash "$SELF" "$@"
+    env ${envs[@]+"${envs[@]}"} TMPDIR="$TMP/subj/tmp" bash "$member" "$@"
   ) >"$TMP/subj/out" 2>&1 || subj_rc=$?
   subj_out=$(cat "$TMP/subj/out")
 }
@@ -1443,7 +1452,7 @@ awk 'index($0, "next if $w[$i + 1] eq \"prepush\" && grep") { n++; next }
      { print } END { exit n == 1 ? 0 : 1 }' "$SRC" >"$mutant" && bash -n "$mutant" ||
   { harness_abandon "the prepush --list rule is not in $SRC exactly once; the mutant is broken"; return; }
 digest=$(cksum <"$mutant")
-subj_run "OCANNL_TOOL_HARNESS_SUBJECT=$absent" -- --subject "$mutant" --only '^99:'
+subj_run "$SELF" "OCANNL_TOOL_HARNESS_SUBJECT=$absent" -- --subject "$mutant" --only '^99:'
 fails=$(grep '^FAIL  ' <<<"$subj_out")
 if [ "$subj_rc" != 1 ]; then detail="exit $subj_rc (want 1)"
 elif [ "$fails" != "FAIL  $q_pp_label" ]; then detail="the checks failed are not that one alone"
@@ -1453,26 +1462,114 @@ elif ! grep -qF "ran 1 leg(s):" <<<"$subj_out"; then detail="the run did not acc
 fi
 if [ -z "$detail" ]; then report 0 "$subj_label"; else report 1 "$subj_label" "$detail: $subj_out"; fi
 detail=
-subj_run -- --subject "$absent" --only '^99:'
+subj_run "$SELF" -- --subject "$absent" --only '^99:'
 { [ "$subj_rc" = 2 ] && [ "$subj_out" = "no $absent" ]; } ||
   detail="--subject on a missing file: exit $subj_rc (want 2): $subj_out"
 if [ -z "$detail" ]; then
-  subj_run "OCANNL_TOOL_HARNESS_SUBJECT=$absent" -- --only '^99:'
+  subj_run "$SELF" "OCANNL_TOOL_HARNESS_SUBJECT=$absent" -- --only '^99:'
   { [ "$subj_rc" = 2 ] && [ "$subj_out" = "no $absent" ]; } ||
     detail="the variable on a missing file: exit $subj_rc (want 2): $subj_out"
 fi
 if [ -z "$detail" ]; then
-  subj_run -- --only '^99:' --subject
+  subj_run "$SELF" -- --only '^99:' --subject
   { [ "$subj_rc" = 2 ] && [ "$subj_out" = "${SELF##*/}: --subject needs a file" ]; } ||
     detail="--subject with no value: exit $subj_rc (want 2): $subj_out"
 fi
 if [ -z "$detail" ]; then
-  subj_run "OCANNL_TOOL_HARNESS_SUBJECT=$mutant" -- --subject= --only '^99:'
+  subj_run "$SELF" "OCANNL_TOOL_HARNESS_SUBJECT=$mutant" -- --subject= --only '^99:'
   { [ "$subj_rc" = 2 ] && [ "$subj_out" = "${SELF##*/}: --subject needs a file" ]; } ||
     detail="--subject= with an empty value: exit $subj_rc (want 2): $subj_out"
 fi
 if [ -z "$detail" ]; then report 0 "$subj_refuse_label"; else report 1 "$subj_refuse_label" "$detail"; fi
 }
 harness_leg_run '102: --subject tests the named copy in place of the script #harness' leg_102
+
+# Each repository has a "selected" ref. Their blobs, and the target's two
+# versions of its own blob, differ from one another.
+subj_commit() { # CHECKOUT MESSAGE
+  harness_git -C "$1" add -- tools &&
+    harness_git -C "$1" -c user.name=harness -c user.email=harness@example.com \
+      -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -qm "$2" &&
+    harness_git -C "$1" rev-parse HEAD
+}
+
+leg_102b() {
+  local target=$TMP/subj/checkout foreign=$TMP/subj/foreign member
+  local empty first next other digest stock mutant line
+  mkdir -p "$target/tools" "$target/scripts" "$foreign/tools"
+  harness_git init -q "$target"
+  harness_git init -q "$foreign"
+
+  printf 'root\n' >"$target/tools/marker"
+  empty=$(subj_commit "$target" no-runner)
+  cp "$SRC" "$target/tools/test-run.sh"
+  printf '\n# first subject fixture\n' >>"$target/tools/test-run.sh"
+  digest=$(cksum <"$target/tools/test-run.sh")
+  first=$(subj_commit "$target" first)
+  printf '\n# second subject fixture\n' >>"$target/tools/test-run.sh"
+  next=$(subj_commit "$target" next)
+  harness_git -C "$target" update-ref refs/heads/selected "$first"
+
+  printf '# foreign subject fixture\n' >"$foreign/tools/test-run.sh"
+  other=$(subj_commit "$foreign" foreign)
+  harness_git -C "$foreign" update-ref refs/heads/selected "$other"
+  stage_sourced "$target"
+  cp "$SELF" "$HERE/test-test-run-common.sh" "$HERE/test-test-run.sh" "$JOBS_SRC" "$SWEEP_SRC" "$target/tools/"
+  cp "$HERE/../scripts/harness-support.sh" "$GROUP_SRC" "$HOOK_SRC" "$target/scripts/"
+  member=$target/tools/${SELF##*/}
+
+  subj_run "$member" "GIT_DIR=$foreign/.git" "GIT_WORK_TREE=$foreign" -- \
+    --subject-rev selected --list-legs
+  [ "$subj_rc" = 0 ]
+  grep -qxF "  subject revision: $first" <<<"$subj_out"
+  grep -qxF "  digest $digest" <<<"$subj_out"
+  grep -q 'listed .* leg(s); no leg ran' <<<"$subj_out"
+  report 0 "the committed subject comes from the harness checkout despite a foreign Git environment"
+
+  subj_run "$member" -- --subject "$SRC" --subject-rev "$first" --list-legs
+  [ "$subj_rc" = 2 ]
+  [ "$subj_out" = "${SELF##*/}: choose --subject or --subject-rev" ]
+  subj_run "$member" -- --subject-rev no-such-subject --list-legs
+  [ "$subj_rc" = 2 ]
+  grep -qxF "${SELF##*/}: cannot resolve subject revision no-such-subject" <<<"$subj_out"
+  subj_run "$member" -- --subject-rev "$empty" --list-legs
+  [ "$subj_rc" = 2 ]
+  grep -qxF "${SELF##*/}: revision $empty contains no tools/test-run.sh" <<<"$subj_out"
+  if grep -q '^LEG  ' <<<"$subj_out"; then
+    echo 'a missing subject reached a leg'
+    exit 1
+  fi
+  report 0 "conflicting selectors, an unknown revision and a revision without the runner refuse"
+
+  local script
+  printf 'printf "%%s\\n" tools/test-test-run-first.sh tools/test-test-run-next.sh\n' \
+    >"$target/tools/test-harnesses.sh"
+  for script in first next; do
+    cat >"$target/tools/test-test-run-$script.sh" <<'MEMBER'
+set -eu
+printf 'subject argv %s\n' "$1"
+case ${0##*/} in
+  test-test-run-first.sh)
+    git -C "$(dirname "$0")" update-ref refs/heads/selected "$NEXT_SUBJECT" ;;
+esac
+MEMBER
+  done
+  subj_run "$target/tools/test-test-run.sh" "NEXT_SUBJECT=$next" -- --subject-rev=selected
+  [ "$subj_rc" = 0 ]
+  [ "$(harness_git -C "$target" rev-parse selected)" = "$next" ]
+  [ "$(grep '^subject argv ' <<<"$subj_out")" = "$(printf 'subject argv --subject-rev=%s\n' "$first" "$first")" ]
+  report 0 "the dispatcher passes the same resolved commit to both members after the ref moves"
+
+  stock='$HERE/'test-run.sh
+  mutant=$target/tools/stock-reader-mutant.sh
+  line=$(printf 'cksum <"%s" >/dev/null\ntest_run_close' "$stock")
+  harness_line_mutant "$member" "$mutant" test_run_close "$line"
+  subj_run "$mutant" -- --list-legs
+  [ "$subj_rc" = 1 ]
+  grep -qxF 'FAIL  the harness uses its selected source' <<<"$subj_out"
+  grep -Fq 'cksum <"'"$stock"'" >/dev/null' <<<"$subj_out"
+  report 0 "a stock runner read outside the default assignment fails the member"
+}
+harness_leg_run_errexit '102b: committed subjects stay pinned and stock runner bypasses fail #harness' leg_102b
 
 test_run_close

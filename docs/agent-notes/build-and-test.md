@@ -1347,9 +1347,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   subject missing one `proc_table_perl` rule: leg 99 fails in the one check that rule answers.
   Leg 99c holds the slot stand-in wrapper unreaped until its guardian exits. Removing the
   zombie branch of `q_exited` fails that check while the wrapper is still in state Z.
-  Each member checks that the common harness assigns its stock runner path exactly once and
-  that every other use of that literal path fails the run. The serial whole-run duration
-  for the six members on MacBook Pro is recorded in the header of `tools/test-harnesses.sh`.
+  Leg 102b stages two Git repositories to check revision selection, refusal diagnostics, and
+  the dispatcher's commit pin across a ref move. It also plants a literal stock runner read
+  outside the common harness's one default assignment and checks that the member fails.
+  Mutation harness leg 25 substitutes a runner with a distinct exit and checks the failure.
+  The six members' historical serial duration was about 760 s on MacBook Pro, recorded
+  2026-11-07 in the header of `tools/test-harnesses.sh` (a2b1887c1).
 - **Every gated leg must pass run alone** (gh-ocannl-1367). A leg that reads what an EARLIER
   leg's body made (a variable, a file, a lock, an exported mode) passes in every full run and fails
   only under `--only`, as two did when `tools/test-test-run.sh` was first gated (`LAB_MAP`,
