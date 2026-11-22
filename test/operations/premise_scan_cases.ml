@@ -25,9 +25,11 @@ let seeded seed idcs =
 let check_products label products want =
   p_all2 label want (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id))) ~f:Float.equal
 let run () =
-  let ctx, routine = Context.compile () in
+  let t = build () in
+  Train.set_materialized t.Tensor.value;
+  let ctx, routine = Context.compile (Context.auto ()) program () in
   let ctx = Context.run ctx routine in
-  let got = Context.get_values ctx () in
+  let got = Context.get_values ctx t.Tensor.value in
   Context.release ctx;
   (got, ())
 let reference () = lazy (fst (run ()))
@@ -58,9 +60,10 @@ let b = Exact_sums.with_zero [| 3.; 4. |]
 let products = Ll_test.matmul_products ~m:2 ~n:2 ~k:2 a b
 let () = p_all "exact" products ~f:(Ll_test.exact_partials ~sig_bits:24)
 let run () =
-  let ctx, routine = Context.compile () in
-  Context.run ctx routine
-let () = Exact_sums.check_sums "reference" products (Context.get_values (run ()) ())
+  let t = build () in
+  let ctx, routine = Context.compile (Context.auto ()) (Train.forward t) () in
+  Context.get_values (Context.run ctx routine) t.Tensor.value
+let () = Exact_sums.check_sums "reference" products (run ())
 |ocaml}
 
 (* A support helper comparing products it builds itself, and a caller whose own builder is
@@ -71,7 +74,9 @@ let a = Ll_test.operand ~b:[] ~o:[2] ~i:[2] (fun _ -> 1.)
 let b = Ll_test.operand ~b:[] ~o:[2] ~i:[2] (fun _ -> 2.)
 let self_check () =
   let products = Ll_test.matmul_products ~m:2 ~n:2 ~k:2 a b in
-  p_all2 "self" (Context.get_values (Context.run () ()) ())
+  let t = build () in
+  let ctx, routine = Context.compile (Context.auto ()) (Train.forward t) () in
+  p_all2 "self" (Context.get_values (Context.run ctx routine) t.Tensor.value)
     (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id))) ~f:Float.equal
 |ocaml}
 
@@ -82,6 +87,30 @@ let b = Ll_test.operand ~b:[] ~o:[2] ~i:[2] (fun _ -> 2.)
 let products = Ll_test.matmul_products ~m:2 ~n:2 ~k:2 a b
 let () = p_all "exact" products ~f:(Ll_test.exact_partials ~sig_bits:24)
 let () = Exact_sums.self_check ()
+|ocaml}
+
+(* gh-ocannl-2391: a separately compiled routine as the executed reference. *)
+let run_protocol =
+  {ocaml|
+let a = Ll_test.operand ~b:[] ~o:[2] ~i:[2] (fun _ -> 1.)
+let b = Ll_test.operand ~b:[] ~o:[2] ~i:[2] (fun _ -> 2.)
+let products = Ll_test.matmul_products ~m:2 ~n:2 ~k:2 a b
+let () = p_all "exact" products ~f:(Ll_test.exact_partials ~sig_bits:24)
+let () =
+  let t = build () in
+  Train.set_materialized t.Tensor.value;
+  let ctx, routine = Context.compile (Context.auto ()) program () in
+  let ctx = Context.run ctx routine in
+  p_all2 "reference" (Context.get_values ctx t.Tensor.value)
+    (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id))) ~f:Float.equal
+|ocaml}
+
+let stored_reader =
+  {ocaml|
+let values ctx node =
+  match Context.observability ctx node with
+  | Context.Stored -> Context.get_values ctx node
+  | _ -> failwith "expected a stored value"
 |ocaml}
 
 (* gh-ocannl-2334: a Train.*_once context as the executed reference. *)
@@ -106,6 +135,11 @@ let read ?support source =
 let support_of source =
   Test_scan.Scan_attempt.attempted ~what:"premise scan" ~name:"support" ~default:Scan.no_support
     (fun () -> Scan.add_support Scan.no_support ~name:"Exact_sums" source)
+
+let replace_case source ~pattern ~with_ =
+  let variant = String.substr_replace_first source ~pattern ~with_ in
+  if String.equal variant source then Verdict.fail ("premise scan: pattern not found: " ^ pattern);
+  variant
 
 let () =
   let malformed = Scan.read_or_refusal ~reader:Scan.read ~source:"control.ml" "let =" in
@@ -160,6 +194,51 @@ let () =
     |> read
   in
   p "a different products binding cannot cover the premise" (Scan.uncovered other_products = 1);
+  let materialized_read = read run_protocol in
+  p "a materialized Context.run read is an executed reference"
+    (List.length materialized_read = 1 && Scan.uncovered materialized_read = 0);
+  let setter = "  Train.set_materialized t.Tensor.value;\n" in
+  let virtual_read =
+    replace_case run_protocol ~pattern:setter ~with_:"  Ll_test.virtualize t.Tensor.value;\n"
+  in
+  p "a Virtual Context.run read confers nothing" (Scan.uncovered (read virtual_read) = 1);
+  let no_setter = replace_case run_protocol ~pattern:setter ~with_:"" in
+  let run = "  let ctx = Context.run ctx routine in\n" in
+  p "materializing after Context.compile confers nothing"
+    (Scan.uncovered (read (replace_case no_setter ~pattern:run ~with_:(setter ^ run))) = 1);
+  p "a Context.run read at a rebound node confers nothing"
+    (Scan.uncovered
+       (read (replace_case run_protocol ~pattern:run ~with_:(run ^ "  let t = build () in\n")))
+    = 1);
+  let own_output = replace_case no_setter ~pattern:"program" ~with_:"(Train.forward t)" in
+  p "compiling Train.forward preserves its own output as an executed reference"
+    (Scan.uncovered (read own_output) = 0);
+  p "a prelowered Context.compile cannot establish the Train.forward output"
+    (Scan.uncovered
+       (read
+          (replace_case own_output ~pattern:"Context.compile"
+             ~with_:"Context.compile ~prelowered:()"))
+    = 1);
+  let opaque_run =
+    replace_case no_setter ~pattern:"Context.compile (Context.auto ()) program ()"
+      ~with_:"(Context.auto (), ())"
+  in
+  let checked_read = replace_case opaque_run ~pattern:"Context.get_values" ~with_:"values" in
+  p "a runtime storage check validates a read from an opaque routine"
+    (Scan.uncovered (read (stored_reader ^ checked_read)) = 0);
+  p "a storage check that reads another node confers nothing"
+    (Scan.uncovered
+       (read
+          (replace_case stored_reader ~pattern:"Context.get_values ctx node"
+             ~with_:"Context.get_values ctx ()"
+          ^ checked_read))
+    = 1);
+  p "a storage check with a returning fallback confers nothing"
+    (Scan.uncovered
+       (read
+          (replace_case stored_reader ~pattern:"failwith \"expected a stored value\"" ~with_:"[||]"
+          ^ checked_read))
+    = 1);
   let host_reference =
     String.substr_replace_all protocol
       ~pattern:"List.hd_exn (L.execute ~name:\"ref\" program ~seed:[] ~read:[])"
@@ -282,12 +361,7 @@ let () =
   let once = read once_protocol in
   p "the forward_once result read at its own tensor's value is an executed reference"
     (List.length once = 1 && Scan.uncovered once = 0);
-  let once_variant ~pattern ~with_ =
-    let variant = String.substr_replace_first once_protocol ~pattern ~with_ in
-    if String.equal variant once_protocol then
-      Verdict.fail ("premise scan -- once variant: pattern not found: " ^ pattern);
-    read variant
-  in
+  let once_variant ~pattern ~with_ = read (replace_case once_protocol ~pattern ~with_) in
   p "update_once, Ocannl-qualified and with options, is an executed reference too"
     (Scan.uncovered
        (once_variant ~pattern:"Train.forward_once (Context.auto ())"
@@ -306,7 +380,7 @@ let () =
   p "a compile without forward_once's run confers nothing"
     (Scan.uncovered
        (once_variant ~pattern:"Train.forward_once (Context.auto ()) t"
-          ~with_:"fst (Context.compile (ignore t))")
+          ~with_:"fst (Context.compile (Context.auto ()) (Train.forward t) ())")
     = 1);
   p "a rebound Train module confers nothing"
     (Scan.uncovered (read ("module Train = Other_train\n" ^ once_protocol)) = 1);

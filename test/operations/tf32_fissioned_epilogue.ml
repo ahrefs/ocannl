@@ -146,7 +146,7 @@ let () =
     lazy
       (let ctx, routine, prod, out = compile "tf32_ep_reference" in
        let ran = Context.run ctx routine in
-       let values = (Context.get_values ran prod, Context.get_values ran out) in
+       let values = (Exact_sums.get_stored_values ran prod, Context.get_values ran out) in
        Context.release ctx;
        values)
   in

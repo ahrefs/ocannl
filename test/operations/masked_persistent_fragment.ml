@@ -196,6 +196,7 @@ let structural_claims tag lowering (seeds : seed list) =
 
 (* Compile [t] under [transform], run twice, read [t] back with the routine's mma census. *)
 let run ~name ~transform (t : Tensor.t) =
+  Train.set_materialized t.Tensor.value;
   let ctx, routine =
     Context.compile ~lowered_transform:transform (Context.auto ())
       (named name (Train.forward t))

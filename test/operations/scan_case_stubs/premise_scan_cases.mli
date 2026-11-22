@@ -10,6 +10,7 @@ module Ll_test : sig
 
   val exact_partials : sig_bits:int -> float list -> bool
   val execute : name:string -> unit -> seed:unit list -> read:unit list -> float array list
+  val virtualize : unit -> unit
 end
 
 module type Additive = sig
@@ -45,8 +46,11 @@ module Other : module type of Ll_test
 val ignore_comparison : string -> 'a array -> 'b array -> f:('a -> 'b -> bool) -> unit
 
 module Context : sig
-  val compile : unit -> unit * unit
+  type observability = Stored | Recomputable
+
+  val compile : ?prelowered:unit -> unit -> unit -> unit -> unit * unit
   val run : unit -> unit -> unit
+  val observability : unit -> unit -> observability
   val get_values : unit -> unit -> float array
   val release : unit -> unit
   val auto : unit -> unit
@@ -76,6 +80,7 @@ end
 val build : unit -> Tensor.t
 
 module Train : sig
+  val forward : Tensor.t -> unit
   val forward_once : unit -> Tensor.t -> unit
   val update_once : ?output_cd_file:bool -> unit -> Tensor.t -> unit
   val set_materialized : unit -> unit

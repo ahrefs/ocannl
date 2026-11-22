@@ -74,7 +74,7 @@ let search ~tag () =
           (Context.cpu ()) comp Ir.Indexing.Empty)
   in
   let ctx = Context.run ctx routine in
-  let values = Context.get_values ctx s.Tensor.value in
+  let values = Exact_sums.get_stored_values ctx s.Tensor.value in
   p_all2
     (tag ^ ": the routine's values are the premise's host sums")
     values

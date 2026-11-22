@@ -3375,6 +3375,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   applications outside `Premise_scan`'s closed checked-products/reference protocol. Local and
   support-module (`support_sources`, gh-ocannl-2334) reader/comparison wrappers,
   reduction cells and executed-reference wrappers cover the coalescing and masked fragment sites.
+  A plain `Context.run` reference must read the output of a recognized forward compile or a node
+  declared materialized before compile (gh-ocannl-2391). Where compile provenance is opaque,
+  `Exact_sums.get_stored_values` checks `Context.observability` before reading the reference.
   Unknown forms stay debt; a row is not a diagnosis of a wrong premise. Convert when next touched and
   lower its row in the same commit; stale rows and new uncovered sites both fail.
 - `ll_test_ratchet` prints an adopted-but-still-hand-building census (gh-ocannl-1090): the same
