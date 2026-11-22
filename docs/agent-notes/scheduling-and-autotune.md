@@ -976,11 +976,14 @@ files.
   winner replay) replay the plan the search seeded; the paths that never search (search off, a
   refused lineage, a deferred replay that failed) compile through `seeded_transform`, as
   `seeded_default` does, and recompile the plain default only when that fails classified. Before,
-  those paths shipped the plain default the recipes had already beaten. A seed changes no cache
-  key, so a crown searched under seed A still replays under seed B, but its `best_steps` and an
-  abandonment recorded under A do not (`autotune_seeded_seed` runs both seeds; only the
-  `Autotune.on_seeded_plan` seam moves the seed alone, since every key that steers the plan also
-  renders in the trajectory's settings).
+  those paths shipped the plain default the recipes had already beaten. The two helpers work
+  in different phases (gh-ocannl-1537). `compile_untuned_default` derives the recipe plan during
+  its own lowering and reports a pre-search failure. `untuned_default_or_raise` replays the trajectory's
+  existing plan against the search's captured lowering and can keep its partial report and release
+  its candidates on a fatal failure. A seed changes no cache key, so a crown searched under seed A
+  still replays under seed B, but its `best_steps` and an abandonment recorded under A do not.
+  `autotune_seeded_seed` runs both seeds. Only the `Autotune.on_seeded_plan` seam moves the seed
+  alone, since every key that steers the plan also renders in the trajectory's settings.
 - **`gpu_default_sketch_min_reduction=auto` (the default) replaces the threshold by the ranking
   score** (gh-ocannl-1253, `Autotune.Ranked`): a segment seeds when `seeded_params`' sketch ranks
   strictly below the same segment's preset, scored alone under the device's capacity and cache
