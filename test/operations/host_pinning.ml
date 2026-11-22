@@ -452,4 +452,98 @@ let () =
   let reg_b = Stdlib.Domain.join (Option.value_exn !d_b) in
   p "with_transfer concurrency: disjoint transfers on two domains run concurrently without blocking"
     (reg_a && reg_b && Atomic.get both_overlapped);
-  ignore (Stdlib.Sys.opaque_identity (par_a, par_b))
+  ignore (Stdlib.Sys.opaque_identity (par_a, par_b));
+
+  (* 14. Deferred eviction while a registration serves a disjoint active transfer: register [0, 12
+     KiB), start a transfer of [0, 4 KiB) on domain A, then transfer [8, 16 KiB) on domain B
+     (disjoint from A, partially overlapping the registered [0, 12 KiB)). Eviction of [0, 12 KiB)
+     must wait until A's transfer finishes. *)
+  let a_done = Atomic.make false in
+  let evicted_early = Atomic.make false in
+  let b_started = Atomic.make false in
+  let hp_def =
+    HP.create
+      ~min_bytes:(fun () -> 4096)
+      ~register:(fun ~addr ~bytes -> Some (addr, bytes))
+      ~unregister:(fun _ -> if not (Atomic.get a_done) then Atomic.set evicted_early true)
+  in
+  let def_ba = Bigarray.Genarray.create Bigarray.float32 Bigarray.c_layout [| 4; 1024 |] in
+  let def_reg_nd =
+    Nd.as_array Ops.Single (Bigarray.Genarray.sub_left def_ba 0 3)
+    (* [0, 12 KiB) *)
+  in
+  let def_a_nd =
+    Nd.as_array Ops.Single (Bigarray.Genarray.sub_left def_ba 0 1)
+    (* [0, 4 KiB) *)
+  in
+  let def_b_nd =
+    Nd.as_array Ops.Single (Bigarray.Genarray.sub_left def_ba 2 2)
+    (* [8, 16 KiB) *)
+  in
+  ignore (HP.note_transfer hp_def def_reg_nd : bool);
+  let def_reg_ok = HP.note_transfer hp_def def_reg_nd in
+  let d_ev = ref None in
+  let def_a_reg =
+    HP.with_transfer hp_def def_a_nd (fun ~registered ->
+        let d =
+          Stdlib.Domain.spawn (fun () ->
+              Atomic.set b_started true;
+              HP.with_transfer hp_def def_b_nd (fun ~registered -> registered))
+        in
+        d_ev := Some d;
+        while not (Atomic.get b_started) do
+          Stdlib.Domain.cpu_relax ()
+        done;
+        for _ = 1 to 200_000 do
+          Stdlib.Domain.cpu_relax ()
+        done;
+        Atomic.set a_done true;
+        registered)
+  in
+  let def_b_reg = Stdlib.Domain.join (Option.value_exn !d_ev) in
+  let st_def = HP.stats hp_def in
+  p "deferred overlap eviction: waits until active transfer served by that registration finishes"
+    (def_reg_ok && def_a_reg && (not def_b_reg)
+    && (not (Atomic.get evicted_early))
+    && st_def.unregistered = 1 && st_def.live_bytes = 0);
+  ignore (Stdlib.Sys.opaque_identity (def_ba, def_reg_nd, def_a_nd, def_b_nd));
+
+  (* 15. GC finalisation of a registered super-slice wrapper while a covered sub-slice transfer is
+     in flight must defer unregistration until the transfer finishes. *)
+  let sub_done = Atomic.make false in
+  let unreg_during_sub = Atomic.make false in
+  let hp_gc_def =
+    HP.create
+      ~min_bytes:(fun () -> 4096)
+      ~register:(fun ~addr ~bytes -> Some (addr, bytes))
+      ~unregister:(fun _ -> if not (Atomic.get sub_done) then Atomic.set unreg_during_sub true)
+  in
+  let gc_ba = Bigarray.Genarray.create Bigarray.float32 Bigarray.c_layout [| 2; 1024 |] in
+  let gc_sub_nd = Nd.as_array Ops.Single (Bigarray.Genarray.sub_left gc_ba 0 1) in
+  let[@inline never] register_super_slice () =
+    let sup = Bigarray.Genarray.sub_left gc_ba 0 2 in
+    let sup_nd = Nd.as_array Ops.Single sup in
+    ignore (HP.note_transfer hp_gc_def sup_nd : bool);
+    let r = HP.note_transfer hp_gc_def sup_nd in
+    let w = Gc_witness.witness sup in
+    (w, r)
+  in
+  let w_sup, sup_reg = register_super_slice () in
+  let sub_reg =
+    HP.with_transfer hp_gc_def gc_sub_nd (fun ~registered ->
+        Gc_witness.settle ();
+        Atomic.set sub_done true;
+        registered)
+  in
+  let sup_reclaimed_while_deferred = Gc_witness.reclaimed w_sup in
+  HP.unregister_all hp_gc_def;
+  Gc_witness.settle ();
+  let sup_reclaimed_after_unreg = Gc_witness.reclaimed w_sup in
+  let st_gc_def = HP.stats hp_gc_def in
+  p "deferred GC finalisation: super-slice unpin waits until covered sub-slice transfer finishes"
+    (sup_reg && sub_reg
+    && (not (Atomic.get unreg_during_sub))
+    && (not sup_reclaimed_while_deferred)
+    && sup_reclaimed_after_unreg && st_gc_def.unregistered = 1 && st_gc_def.unregister_failures = 0
+    && st_gc_def.live_bytes = 0);
+  ignore (Stdlib.Sys.opaque_identity (gc_ba, gc_sub_nd))

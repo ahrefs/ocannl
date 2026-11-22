@@ -16,3 +16,5 @@ failed overlap eviction: refuses mixed-range parent transfer, then recovers and 
 failed rollback after finaliser race during register: reports pinned and recovers on retry: true
 with_transfer guard: overlapping sub-slice registration on another domain waits until parent transfer finishes: true
 with_transfer concurrency: disjoint transfers on two domains run concurrently without blocking: true
+deferred overlap eviction: waits until active transfer served by that registration finishes: true
+deferred GC finalisation: super-slice unpin waits until covered sub-slice transfer finishes: true
