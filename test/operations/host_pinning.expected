@@ -15,3 +15,4 @@ overlapping slice then parent: slice evicted on parent upload, parent registers,
 failed overlap eviction: refuses mixed-range parent transfer, then recovers and registers parent: true
 failed rollback after finaliser race during register: reports pinned and recovers on retry: true
 with_transfer guard: overlapping sub-slice registration on another domain waits until parent transfer finishes: true
+with_transfer concurrency: disjoint transfers on two domains run concurrently without blocking: true

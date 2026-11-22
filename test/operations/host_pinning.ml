@@ -409,4 +409,47 @@ let () =
     "with_transfer guard: overlapping sub-slice registration on another domain waits until parent \
      transfer finishes"
     ((not parent_reg) && slice_reg && not (Atomic.get slice_registered_during_parent));
-  ignore (Stdlib.Sys.opaque_identity (g_parent_nd, g_slice_nd))
+  ignore (Stdlib.Sys.opaque_identity (g_parent_nd, g_slice_nd));
+
+  (* 13. Disjoint transfers on two domains run their callbacks concurrently without blocking on each
+     other (a two-domain rendezvous inside the callbacks would deadlock if a global mutex were held
+     across the transfer callback). *)
+  let hp_par =
+    HP.create
+      ~min_bytes:(fun () -> 4096)
+      ~register:(fun ~addr ~bytes -> Some (addr, bytes))
+      ~unregister:(fun _ -> ())
+  in
+  let par_a = make_nd 2048 and par_b = make_nd 2048 in
+  (* Register both arrays first so both enter [with_transfer] on the registered path. *)
+  ignore (HP.note_transfer hp_par par_a : bool);
+  ignore (HP.note_transfer hp_par par_a : bool);
+  ignore (HP.note_transfer hp_par par_b : bool);
+  ignore (HP.note_transfer hp_par par_b : bool);
+  let a_inside = Atomic.make false in
+  let b_inside = Atomic.make false in
+  let both_overlapped = Atomic.make false in
+  let d_b = ref None in
+  let reg_a =
+    HP.with_transfer hp_par par_a (fun ~registered ->
+        Atomic.set a_inside true;
+        let d =
+          Stdlib.Domain.spawn (fun () ->
+              HP.with_transfer hp_par par_b (fun ~registered ->
+                  Atomic.set b_inside true;
+                  while not (Atomic.get a_inside) do
+                    Stdlib.Domain.cpu_relax ()
+                  done;
+                  Atomic.set both_overlapped true;
+                  registered))
+        in
+        d_b := Some d;
+        while not (Atomic.get b_inside) do
+          Stdlib.Domain.cpu_relax ()
+        done;
+        registered)
+  in
+  let reg_b = Stdlib.Domain.join (Option.value_exn !d_b) in
+  p "with_transfer concurrency: disjoint transfers on two domains run concurrently without blocking"
+    (reg_a && reg_b && Atomic.get both_overlapped);
+  ignore (Stdlib.Sys.opaque_identity (par_a, par_b))

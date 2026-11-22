@@ -25,15 +25,22 @@ type 'token entry = {
   finalized_keep : keep_alive option Atomic.t;
 }
 
+type active_transfer = { xfer_addr : nativeint; xfer_end : nativeint }
+
 type 'token t = {
   min_bytes : unit -> int;
   register : addr:nativeint -> bytes:int -> 'token option;
   unregister : 'token -> unit;
   lock : Stdlib.Mutex.t;
+  cond : Stdlib.Condition.t;
   table : (Range_key.t, 'token entry) Hashtbl.t;
   (* Active [Registered] / [Retry_unregister] entries, guarded by [lock], for O(#registered) range
      containment and overlap checks. *)
   mutable active_pinned : 'token entry list;
+  (* In-flight [with_transfer] byte ranges, guarded by [lock]. Transfers whose ranges are disjoint
+     run their callbacks concurrently without holding [lock]; overlapping transfers and overlapping
+     retry/teardown unregistrations wait on [cond]. *)
+  mutable active_transfers : active_transfer list;
   retired : 'token entry list Atomic.t;
   retry_queue : 'token entry list Atomic.t;
   registered : int Atomic.t;
@@ -82,8 +89,10 @@ let create ~min_bytes ~register ~unregister =
     register;
     unregister;
     lock = Stdlib.Mutex.create ();
+    cond = Stdlib.Condition.create ();
     table = Hashtbl.create (module Range_key);
     active_pinned = [];
+    active_transfers = [];
     retired = Atomic.make [];
     retry_queue = Atomic.make [];
     registered = Atomic.make 0;
@@ -183,14 +192,24 @@ let is_pinned_state = function
 let prune_active_pinned_locked t =
   t.active_pinned <- List.filter t.active_pinned ~f:(fun e -> is_pinned_state (Atomic.get e.state))
 
+let overlaps_active_transfer_locked t ~addr ~end_addr =
+  List.exists t.active_transfers ~f:(fun x ->
+      overlaps ~a_addr:x.xfer_addr ~a_end:x.xfer_end ~b_addr:addr ~b_end:end_addr)
+
 let drain_retries_locked t =
   let queued = Atomic.exchange t.retry_queue [] in
   let seen = ref [] in
   List.iter queued ~f:(fun e ->
       if not (List.exists !seen ~f:(fun x -> phys_equal x e)) then (
         seen := e :: !seen;
-        let next_state = if Option.is_some (Atomic.get e.finalized_keep) then Dead else Declined in
-        ignore (attempt_unregister_locked t e ~next_state : bool)))
+        if overlaps_active_transfer_locked t ~addr:e.addr ~end_addr:e.end_addr then
+          (* Defer unregistration while an overlapping transfer is in flight on another domain. *)
+          push_retry t e
+        else
+          let next_state =
+            if Option.is_some (Atomic.get e.finalized_keep) then Dead else Declined
+          in
+          ignore (attempt_unregister_locked t e ~next_state : bool)))
 
 let sight_new_locked t ~addr ~bytes nd =
   let end_addr = Nativeint.(addr + of_int bytes) in
@@ -291,16 +310,32 @@ let with_transfer t nd f =
   else
     let addr = Ndarray.to_native nd in
     let end_addr = Nativeint.(addr + of_int bytes) in
-    Stdlib.Mutex.protect t.lock (fun () ->
-        let registered = decide_transfer_locked t ~addr ~bytes ~end_addr ~threshold nd in
-        let result = f ~registered in
+    let xfer = { xfer_addr = addr; xfer_end = end_addr } in
+    let registered =
+      Stdlib.Mutex.protect t.lock (fun () ->
+          while overlaps_active_transfer_locked t ~addr ~end_addr do
+            Stdlib.Condition.wait t.cond t.lock
+          done;
+          let registered = decide_transfer_locked t ~addr ~bytes ~end_addr ~threshold nd in
+          t.active_transfers <- xfer :: t.active_transfers;
+          registered)
+    in
+    Exn.protect
+      ~finally:(fun () ->
         ignore (Stdlib.Sys.opaque_identity nd);
-        result)
+        Stdlib.Mutex.protect t.lock (fun () ->
+            t.active_transfers <-
+              List.filter t.active_transfers ~f:(fun x -> not (phys_equal x xfer));
+            Stdlib.Condition.broadcast t.cond))
+      ~f:(fun () -> f ~registered)
 
 let note_transfer t nd = with_transfer t nd (fun ~registered -> registered)
 
 let unregister_all t =
   Stdlib.Mutex.protect t.lock (fun () ->
+      while not (List.is_empty t.active_transfers) do
+        Stdlib.Condition.wait t.cond t.lock
+      done;
       drain_retries_locked t;
       drain_retired_locked t;
       prune_active_pinned_locked t;

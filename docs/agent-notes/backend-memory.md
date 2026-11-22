@@ -978,10 +978,14 @@ files.
   overlapping range so `cuMemcpyHtoDAsync` never spans mixed registered/unregistered host memory,
   while transfers contained inside a registered parent reuse its registration).
   Pinned `cuMemcpyHtoDAsync` returns while DMA is still reading host memory, whereas pageable
-  transfers wait until host memory is consumed; `Cuda_backend.from_host` therefore synchronises
-  `dst.device.runner` and pins the source live via `Sys.opaque_identity` whenever `note_transfer`
-  returns `true`, preserving the completion contract for callers that do not await immediately
-  (`Backends.allocate_delta`, immediate host buffer reuse). Interleaved `benchmarks/ab.py` on
+  transfers wait until host memory is consumed; `Cuda_backend.from_host` therefore wraps the copy
+  in `Host_pinning.with_transfer` and synchronises `dst.device.runner` (pinning the source live via
+  `Sys.opaque_identity`) whenever `~registered:true`, preserving the completion contract for callers
+  that do not await immediately (`Backends.allocate_delta`, immediate host buffer reuse). When
+  `cuda_host_register_min_bytes=0` and nothing is pinned, `with_transfer` takes a zero-lock fast
+  path; otherwise it briefly acquires the table mutex to check/update range coverage and record the
+  active transfer range, releases the mutex before `memcpy_H_to_D` and `Cu.Stream.synchronize`, and
+  serialises only overlapping host byte ranges (so disjoint multi-device transfers run concurrently). Interleaved `benchmarks/ab.py` on
   `rog-nv-linux` (RTX 5070 Ti Laptop, discrete; `test/training/bench_host_feed_step.exe 60`,
   4 x 24 MiB batches, 12 paired rounds, every cell clean, `3463502e` vs `49b70522`): upload median
   1.477 -> 0.6939 ms (ratio 0.462, 12/12 faster, p=0.000488), full training step median 2.225 ->

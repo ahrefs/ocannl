@@ -43,11 +43,14 @@ val create :
   'token t
 
 val with_transfer : 'token t -> Ndarray.t -> (registered:bool -> 'a) -> 'a
-(** Records a host-to-device transfer of [nd] and executes the transfer callback under the pin-state
-    guard, passing [~registered:true] iff [nd] is covered by a live registration for this transfer
-    (including a registration whose rollback failed and remains pinned in the driver). Holding the
-    guard across the callback prevents another domain's transfer or teardown from mutating
-    overlapping registration coverage between the pin-state decision and transfer submission. Raises
+(** Records a host-to-device transfer of [nd] and executes the transfer callback while guarding its
+    byte range against overlapping pin-state mutations, passing [~registered:true] iff [nd] is
+    covered by a live registration for this transfer (including a registration whose rollback failed
+    and remains pinned in the driver). When [min_bytes () <= 0] and no array is registered, takes a
+    zero-lock fast path; otherwise briefly acquires the table mutex to check/update range coverage
+    and register the active transfer range, releases the mutex before running the callback (so
+    disjoint multi-device transfers run concurrently through copy and stream synchronisation), and
+    serialises only transfers or teardowns whose byte ranges overlap. Raises
     {!Overlap_eviction_failed} if a partially overlapping registration could not be unregistered. *)
 
 val note_transfer : 'token t -> Ndarray.t -> bool
