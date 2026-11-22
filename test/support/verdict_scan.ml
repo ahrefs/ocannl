@@ -6343,6 +6343,7 @@ let configuration_readers =
     (* What [Context] reports of the device and backend a context runs on. *)
     "backend_name";
     "hardware_limits";
+    "thread_scratch_limit";
     "codegen_capabilities";
     "backend_facts";
     "static_properties";

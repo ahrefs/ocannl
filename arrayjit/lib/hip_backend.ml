@@ -1342,34 +1342,44 @@ end = struct
       Utils.with_device_init_deadline ~backend_name:name (fun () ->
           Lazy.force (Lazy.force cache).(device.ordinal))
 
-  let validate_scratch_budget ~(device : device) ~name func =
+  (* Single source of truth for the enforced post-link scratch limit of [device] (gh-ocannl-2404):
+     both [thread_scratch_limit] and [validate_scratch_budget] read from here, so callers checking
+     whether a fixture is over budget move with [scratch_limit_per_work_item] and
+     [hip_scratch_validation] rather than restating them. *)
+  let enforced_scratch_budget (device : device) =
     if Lazy.force hip_scratch_validation then
       let attrs, limit = scratch_budget_of_device device in
-      Option.iter limit ~f:(fun limit ->
-          let requested =
-            H.Module.get_function_attribute func H.Module.HIP_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES
-          in
-          let rounded =
-            (requested + scratch_granule_bytes - 1) / scratch_granule_bytes * scratch_granule_bytes
-          in
-          if rounded > limit then
-            raise
-            @@ Schedule_outcome.Cause_at
-                 ( Schedule_outcome.Backend_link,
-                   Schedule_outcome.Resource_exceeded
-                     {
-                       resource = Schedule_outcome.Thread_scratch;
-                       requested;
-                       limit = Some limit;
-                       detail =
-                         [%string
-                           "HIP: kernel %{name} needs %{requested#Int} bytes of private (scratch) \
-                            memory per work-item, above the %{limit#Int} bytes this device can \
-                            back at full occupancy (%{attrs.max_threads_per_multiprocessor#Int} \
-                            work-items x %{attrs.multiprocessor_count#Int} CUs against a \
-                            %{scratch_total_cap_bytes#Int}-byte scratch allocation). Launching it \
-                            would abort the queue rather than fail cleanly (gh-ocannl-533)"];
-                     } ))
+      Option.map limit ~f:(fun limit -> (attrs, limit))
+    else None
+
+  let thread_scratch_limit (device : device) = Option.map (enforced_scratch_budget device) ~f:snd
+
+  let validate_scratch_budget ~(device : device) ~name func =
+    Option.iter (enforced_scratch_budget device) ~f:(fun (attrs, limit) ->
+        let requested =
+          H.Module.get_function_attribute func H.Module.HIP_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES
+        in
+        let rounded =
+          (requested + scratch_granule_bytes - 1) / scratch_granule_bytes * scratch_granule_bytes
+        in
+        if rounded > limit then
+          raise
+          @@ Schedule_outcome.Cause_at
+               ( Schedule_outcome.Backend_link,
+                 Schedule_outcome.Resource_exceeded
+                   {
+                     resource = Schedule_outcome.Thread_scratch;
+                     requested;
+                     limit = Some limit;
+                     detail =
+                       [%string
+                         "HIP: kernel %{name} needs %{requested#Int} bytes of private (scratch) \
+                          memory per work-item, above the %{limit#Int} bytes this device can back \
+                          at full occupancy (%{attrs.max_threads_per_multiprocessor#Int} \
+                          work-items x %{attrs.multiprocessor_count#Int} CUs against a \
+                          %{scratch_total_cap_bytes#Int}-byte scratch allocation). Launching it \
+                          would abort the queue rather than fail cleanly (gh-ocannl-533)"];
+                   } ))
 
   (* gh-ocannl-1872: the HIP twin of the CUDA launch's back-off (gh-ocannl-1773). A launch, a
      graph's instantiation or a graph launch the runtime refuses with [HIP_ERROR_OUT_OF_MEMORY] was

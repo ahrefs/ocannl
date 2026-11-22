@@ -559,6 +559,14 @@ val hardware_limits : t -> Ir.Backend_intf.hardware_limits
 (** The backend's conservative per-workgroup device limits (all-[None] on backends that do not bind
     hardware axes). Chiefly for schedule transforms and the autotuner. *)
 
+val thread_scratch_limit : t -> int option
+(** The per-work-item private (scratch) memory budget, in bytes, enforced at link time on this
+    context's selected device, or [None] when no post-link per-device scratch limit is enforced
+    (non-HIP backends, HIP with [ocannl_hip_scratch_validation=false], or a device reporting no
+    usable occupancy figures). Unlike {!hardware_limits}, which is conservative across all devices
+    of a backend, this queries the context's own device and returns the exact limit the backend's
+    post-link validator enforces (gh-ocannl-2404). *)
+
 val codegen_capabilities : t -> Ir.Backend_intf.codegen_capabilities
 (** Stable facts from the selected backend's C-syntax configuration. Use the compiled routine's
     censuses for decisions that depend on a particular lowering or rendering. *)

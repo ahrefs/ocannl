@@ -91,6 +91,7 @@ struct
 
   let timing_identity _ = None
   let hardware_limits () = Backend_intf.no_hardware_limits
+  let thread_scratch_limit _device = None
   let codegen_capabilities () = Backend_intf.no_codegen_capabilities
 
   (* The real backend's facts, not a placeholder's: static, they answer without the library, and a
