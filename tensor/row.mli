@@ -388,7 +388,7 @@ val add_used_in_pointwise : row_var -> unit
 
 val add_concat_component : dim_var -> unit
 (** Mark a dimension variable as naming a component of a concatenated einsum axis: closure refuses
-    to guess it to dimension 1 (gh-ocannl-1656). *)
+    to guess it to dimension 1 (gh-ocannl-1656), including through aliases. *)
 
 val add_resolve_at_use : row_var -> unit
 (** Mark a row variable as resolved by its use sites: at the final solver stages it may close to the
@@ -429,15 +429,31 @@ val find_row_entry : environment -> row_var -> row_entry option
 
 val unsolved_constraints : environment -> constraint_ list
 
+val add_zero_permissions :
+  ?discardable_vars:dim_var_set ->
+  ?emptiable_vars:dim_var_set ->
+  ?non_zero_vars:dim_var_set ->
+  environment ->
+  environment
+(** Register zero permissions in [env], holding [discardable_vars ⊆ emptiable_vars] and refusing any
+    [non_zero_vars] member already solved to 0 (gh-ocannl-2418). *)
+
 val solve_inequalities :
   stage:stage ->
   ?discardable_vars:dim_var_set ->
+  ?emptiable_vars:dim_var_set ->
+  ?non_zero_vars:dim_var_set ->
   constraint_ list ->
   environment ->
   constraint_ list * environment
-(** [discardable_vars] are safe to guess dimension = 0, they do not participate in projections for
-    the update step the constraints were derived for. Concatenation arithmetic sizes no other
-    component to 0 (gh-ocannl-2316). *)
+(** [discardable_vars] are safe for closure to guess dimension = 0 (and may be empty), used by
+    [Block] specs where the component does not participate in projections. [emptiable_vars] may be
+    bound to a stated or forced 0 by constraints and concatenation arithmetic, without licensing
+    closure to guess them to 0 (gh-ocannl-2418). Every discardable variable is emptiable
+    ([discardable_vars] is unioned into [emptiable_vars] on entry). [non_zero_vars] are variables
+    appearing both as a concatenation component and as a required standalone or affine axis of a
+    spec, overriding [emptiable_vars] / [discardable_vars] across shared captures and aliases.
+    Concatenation arithmetic sizes no other component to 0 (gh-ocannl-2316). *)
 
 val solve_closing_stages :
   stages:stage list ->
@@ -547,6 +563,8 @@ val var_mark : unit -> int
 val dim_var_id : dim_var -> int
 val row_var_id : row_var -> int
 val discardable_vars : environment -> dim_var_set
+val emptiable_vars : environment -> dim_var_set
+val non_zero_vars : environment -> dim_var_set
 
 type renaming = { rn_dim : dim_var -> dim_var; rn_row : row_var -> row_var }
 

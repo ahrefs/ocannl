@@ -494,18 +494,23 @@ let test_zero_component () =
     | Some (Row.Dim { d; basis; _ }) -> Printf.sprintf "%d of %s" d basis
     | _ -> "unsized"
   in
-  (* [discardable] names which of [u] and a third variable [w] a block spec would have marked. A run
-     is solved one constraint per Stage 1 pass in [order], or all in one ([batched]). Success
-     requires nothing left pending (gh-ocannl-2368). *)
-  let verdict ~discardable ~batched mk order =
+  (* [discardable], [emptiable], and [non_zero] name which of [u] and a third variable [w] a spec
+     would have marked: [discardable] (Block) licenses both 0 bindings and closure's guess-to-0;
+     [emptiable] (einsum) licenses stated or forced 0 bindings without licensing closure to guess 0;
+     [non_zero] marks a required standalone/affine axis that forbids 0 even across shared captures
+     (gh-ocannl-2418). A run is solved one constraint per Stage 1 pass in [order], or all in one
+     ([batched]). Success requires nothing left pending (gh-ocannl-2368). *)
+  let verdict ~discardable ~emptiable ~non_zero ~batched mk order =
     let u = Row.get_var () and k = Row.get_var () and w = Row.get_var () in
     let cs = mk u k w in
-    let discardable_vars =
-      match discardable with
+    let pick = function
       | `None -> Row.dim_var_set_empty
       | `U -> Set.add Row.dim_var_set_empty u
       | `W -> Set.add Row.dim_var_set_empty w
     in
+    let discardable_vars = pick discardable
+    and emptiable_vars = pick emptiable
+    and non_zero_vars = pick non_zero in
     let registered = List.map order ~f:(fun i -> List.nth_exn cs i) in
     let stages =
       (if batched then [ (Row.Stage1, registered) ]
@@ -515,14 +520,16 @@ let test_zero_component () =
     in
     match
       List.fold stages ~init:([], Row.empty_env) ~f:(fun (deferred, env) (stage, cs) ->
-          Row.solve_inequalities ~stage ~discardable_vars (deferred @ cs) env)
+          Row.solve_inequalities ~stage ~discardable_vars ~emptiable_vars ~non_zero_vars
+            (deferred @ cs) env)
     with
     | [], env -> Printf.sprintf "u = %s, k = %s" (value env u) (value env k)
     | pending, _ -> Printf.sprintf "%d pending" (List.length pending)
     | exception Row.Shape_error _ -> "refused"
     | exception e -> "regression: " ^ Exn.to_string e
   in
-  let in_every_order ?(discardable = `None) name ~n mk ~want =
+  let in_every_order ?(discardable = `None) ?(emptiable = `None) ?(non_zero = `None) name ~n mk
+      ~want =
     let orders = permutations (List.init n ~f:Fn.id) in
     let runs = List.cartesian_product [ false; true ] orders in
     Verdict.Claims.p_all
@@ -530,7 +537,7 @@ let test_zero_component () =
       (Printf.sprintf "  %s: %s in every order, and batched" name want)
       runs
       ~f:(fun (batched, order) ->
-        let got = verdict ~discardable ~batched mk order in
+        let got = verdict ~discardable ~emptiable ~non_zero ~batched mk order in
         if not (String.equal got want) then
           Stdio.eprintf "  %s, %s %s: %s (not part of the golden)\n" name
             (if batched then "batched" else "order")
@@ -655,21 +662,21 @@ let test_zero_component () =
   in_every_order ~discardable:`W "w = 0, u = 0, w discardable: u is refused" ~n:2
     (fun u _ w -> [ eq (Row.Var w) (dim 0); eq (Row.Var u) (dim 0) ])
     ~want:"refused";
-  (* A concatenation component stated 0 is a zero-width segment, as an einsum extraction's capture
-     [p^o^q => o] with [q = 0] states it (einsum specs mark no discardable component). The
-     arithmetic still waits on a component's zero residual: [[u; 4] = [k; 2]] meets [u = 0] in every
-     order, and alone it is refused at closure, which sizes no component. *)
-  in_every_order "u a concatenation component, u = 0 stated: a zero-width segment" ~n:1
+  (* gh-ocannl-2418: registering a concatenation component alone ([add_concat_component]) no longer
+     exempts it from [stated_zero] (e.g. [o] in [p^o => o] cannot be stated 0). A structural
+     [emptiable_vars] mark lets a stated or forced 0 bind the component (and its aliases) without
+     licensing closure to guess it to 0. *)
+  in_every_order "u a concatenation component only, u = 0 stated: refused" ~n:1
     (fun u _ _ ->
       Row.add_concat_component u;
       [ eq (Row.Var u) (dim 0) ])
-    ~want:"u = 0 of default, k = 1 of bcast_if_1";
-  in_every_order "[u; 4] = [k; 2], k = 2, u = 0 stated, u a component: sized 0" ~n:3
+    ~want:"refused";
+  in_every_order "[u; 4] = [k; 2], k = 2, u = 0 stated, u a component only: refused" ~n:3
     (fun u k _ ->
       Row.add_concat_component u;
       [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2); eq (Row.Var u) (dim 0) ])
-    ~want:"u = 0 of default, k = 2 of default";
-  in_every_order "[u; 4] = [k; 2], k = 2, u a component: the zero residual is not sized" ~n:2
+    ~want:"refused";
+  in_every_order "[u; 4] = [k; 2], k = 2, u a component only: the zero residual is not sized" ~n:2
     (fun u k _ ->
       Row.add_concat_component u;
       [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2) ])
@@ -677,10 +684,93 @@ let test_zero_component () =
   (* A residual of one component erases to it, which passed a bare 0 to the binding: [[k; u; 2] =
      [k; 2]] cancels to [[u] = []] and sized [u] to 0 on the base. It waits as the [Concat]/[Dim]
      residual does. *)
-  in_every_order "[k; u; 2] = [k; 2], u a component: refused, not sized 0" ~n:1
+  in_every_order "[k; u; 2] = [k; 2], u a component only: refused, not sized 0" ~n:1
     (fun u k _ ->
       Row.add_concat_component u;
       [ eq (Row.Concat [ Row.Var k; Row.Var u; dim 2 ]) (Row.Concat [ Row.Var k; dim 2 ]) ])
+    ~want:"refused";
+  in_every_order ~emptiable:`U "u a component and emptiable, u = 0 stated: a zero-width segment"
+    ~n:1
+    (fun u _ _ ->
+      Row.add_concat_component u;
+      [ eq (Row.Var u) (dim 0) ])
+    ~want:"u = 0 of default, k = 1 of bcast_if_1";
+  in_every_order ~emptiable:`U
+    "u a component and emptiable, u sized 0 by a setter: a zero-width segment" ~n:1
+    (fun u _ _ ->
+      Row.add_concat_component u;
+      [ size0 u ])
+    ~want:"u = 0 of default, k = 1 of bcast_if_1";
+  in_every_order ~emptiable:`U
+    "[u; 4] = [k; 2], k = 2, u = 0 stated, u a component and emptiable: sized 0" ~n:3
+    (fun u k _ ->
+      Row.add_concat_component u;
+      [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2); eq (Row.Var u) (dim 0) ])
+    ~want:"u = 0 of default, k = 2 of default";
+  in_every_order ~emptiable:`U
+    "[u; 4] = [k; 2], k = 2, u a component and emptiable: forced zero residual sized 0" ~n:2
+    (fun u k _ ->
+      Row.add_concat_component u;
+      [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2) ])
+    ~want:"u = 0 of default, k = 2 of default";
+  in_every_order ~emptiable:`U
+    "[k; u; 2] = [k; 2], u a component and emptiable: single-component zero residual sized 0" ~n:1
+    (fun u k _ ->
+      Row.add_concat_component u;
+      [ eq (Row.Concat [ Row.Var k; Row.Var u; dim 2 ]) (Row.Concat [ Row.Var k; dim 2 ]) ])
+    ~want:"u = 0 of default, k = 1 of bcast_if_1";
+  in_every_order ~emptiable:`W "u = 0, u = w, w emptiable: the alias licenses u" ~n:2
+    (fun u _ w -> [ eq (Row.Var u) (dim 0); eq (Row.Var u) (Row.Var w) ])
+    ~want:"u = 0 of default, k = 1 of bcast_if_1";
+  in_every_order ~emptiable:`W "u = 0, w = u, w emptiable: the alias licenses u (other orientation)"
+    ~n:2
+    (fun u _ w -> [ eq (Row.Var u) (dim 0); eq (Row.Var w) (Row.Var u) ])
+    ~want:"u = 0 of default, k = 1 of bcast_if_1";
+  in_every_order ~emptiable:`U "u a component and emptiable, unconstrained: closure refuses" ~n:0
+    (fun u _ _ ->
+      Row.add_concat_component u;
+      [])
+    ~want:"refused";
+  in_every_order ~emptiable:`U "u emptiable only, unconstrained: closure guesses 1, not 0" ~n:0
+    (fun _ _ _ -> [])
+    ~want:"u = 1 of bcast_if_1, k = 1 of bcast_if_1";
+  (* A forced zero residual fixes extent 0 without imposing the surviving axis's named basis on the
+     empty segment, so [[4_rgb; u] = 4_rgb] agrees with both [u = 0_default] and [u = 0_rgb] in
+     every order and batched, and leaves [u = 0_default] alone. *)
+  in_every_order ~emptiable:`U "[4 rgb; u] = 4 rgb, u = 0 default, u emptiable: basis-free zero"
+    ~n:2
+    (fun u _ _ ->
+      [
+        eq (Row.Concat [ dim ~basis:"rgb" 4; Row.Var u ]) (dim ~basis:"rgb" 4);
+        eq (Row.Var u) (dim 0);
+      ])
+    ~want:"u = 0 of default, k = 1 of bcast_if_1";
+  in_every_order ~emptiable:`U "[4 rgb; u] = 4 rgb, u = 0 rgb, u emptiable: keeps explicit basis"
+    ~n:2
+    (fun u _ _ ->
+      [
+        eq (Row.Concat [ dim ~basis:"rgb" 4; Row.Var u ]) (dim ~basis:"rgb" 4);
+        eq (Row.Var u) (dim ~basis:"rgb" 0);
+      ])
+    ~want:"u = 0 of rgb, k = 1 of bcast_if_1";
+  in_every_order ~emptiable:`U "[4 rgb; u] = 4 rgb, u emptiable: forced zero takes default basis"
+    ~n:1
+    (fun u _ _ -> [ eq (Row.Concat [ dim ~basis:"rgb" 4; Row.Var u ]) (dim ~basis:"rgb" 4) ])
+    ~want:"u = 0 of default, k = 1 of bcast_if_1";
+  in_every_order ~emptiable:`U "[4 hsv; u] = 4 rgb, u emptiable: conflicting bases still refused"
+    ~n:1
+    (fun u _ _ -> [ eq (Row.Concat [ dim ~basis:"hsv" 4; Row.Var u ]) (dim ~basis:"rgb" 4) ])
+    ~want:"refused";
+  (* A required standalone axis ([non_zero_vars]) overrides emptiability across an alias, even when
+     the 0 binding arrives first. *)
+  in_every_order ~emptiable:`U ~non_zero:`W
+    "u emptiable, w non-zero, u = w, u = 0 stated: refused in every order" ~n:2
+    (fun u _ w -> [ eq (Row.Var u) (dim 0); eq (Row.Var u) (Row.Var w) ])
+    ~want:"refused";
+  in_every_order ~emptiable:`U ~non_zero:`W
+    "u emptiable, w non-zero, u = w, [u; 4] = [k; 2], k = 2: forced 0 refused" ~n:3
+    (fun u k w ->
+      [ concat u k ~basis:Row.default_basis; eq (Row.Var k) (dim 2); eq (Row.Var u) (Row.Var w) ])
     ~want:"refused";
   in_every_order ~discardable:`U "[k; u; 2] = [k; 2], u discardable: sized 0" ~n:1
     (fun u k _ ->
@@ -807,6 +897,95 @@ let test_alias_guesses_empty () =
           got;
       String.equal got want)
 
+(* gh-ocannl-2418: [refuse_concat_component_guess] reads [concat_component_vars] through aliases, so
+   a registered component [w] equated with a non-component variable [u] is refused at closure in
+   both alias orientations and whichever of [u] or [w] the closing row mentions -- whether or not
+   [w] is also marked structurally emptiable (not discardable). On the base, when [w = u] made [u]
+   the representative, closure guessed [u = 1_(bcast_if_1)] instead of refusing. *)
+let test_aliased_concat_component_refused () =
+  Stdio.printf "Closure refuses an aliased concatenation component in both orientations\n";
+  let refused ~emptiable ~u_first ~close_u =
+    let u = Row.get_var () and w = Row.get_var () in
+    Row.add_concat_component w;
+    let alias = if u_first then eq (Row.Var u) (Row.Var w) else eq (Row.Var w) (Row.Var u) in
+    let close_var = if close_u then u else w in
+    let close : Row.constraint_ =
+      Row.Shape_row
+        ( {
+            beg_dims = [];
+            dims = [ Row.Var close_var ];
+            bcast = Broadcastable;
+            prov = Row.provenance ~sh_id:2418 ~kind:`Output;
+          },
+          dummy_origin )
+    in
+    let emptiable_vars =
+      if emptiable then Set.add Row.dim_var_set_empty w else Row.dim_var_set_empty
+    in
+    match
+      List.fold
+        [
+          (Row.Stage1, [ alias ]);
+          (Stage4, [ close ]);
+          (Stage5, []);
+          (Stage6a, []);
+          (Stage6b, []);
+          (Stage7, []);
+        ]
+        ~init:([], Row.empty_env)
+        ~f:(fun (pending, env) (stage, cs) ->
+          Row.solve_inequalities ~stage ~emptiable_vars (pending @ cs) env)
+    with
+    | exception Row.Shape_error (msg, _) -> String.is_substring msg ~substring:"Shape.set_dim"
+    | _, env ->
+        let show x = match Row.get_dim_val env x with Some n -> Int.to_string n | None -> "?" in
+        Stdio.eprintf
+          "  aliased component accepted (emptiable=%b, u_first=%b, close_u=%b): u=%s w=%s (not \
+           part of the golden)\n"
+          emptiable u_first close_u (show u) (show w);
+        false
+  in
+  let combos =
+    List.cartesian_product [ false; true ] (List.cartesian_product [ true; false ] [ true; false ])
+  in
+  Verdict.Claims.p_all ~min:8
+    "  u = w, w a concatenation component (with or without emptiable): refused in all orientations \
+     and closing rows"
+    combos ~f:(fun (emptiable, (u_first, close_u)) -> refused ~emptiable ~u_first ~close_u);
+  (* Transitive alias chain [w = u; u = v]: [dims_mentioning] reindexing keeps [w] reachable from
+     the final representative [v]. *)
+  let transitive_refused () =
+    let w = Row.get_var () and u = Row.get_var () and v = Row.get_var () in
+    Row.add_concat_component w;
+    let close : Row.constraint_ =
+      Row.Shape_row
+        ( {
+            beg_dims = [];
+            dims = [ Row.Var v ];
+            bcast = Broadcastable;
+            prov = Row.provenance ~sh_id:2418 ~kind:`Output;
+          },
+          dummy_origin )
+    in
+    match
+      List.fold
+        [
+          (Row.Stage1, [ eq (Row.Var w) (Row.Var u); eq (Row.Var u) (Row.Var v) ]);
+          (Stage4, [ close ]);
+          (Stage5, []);
+          (Stage6a, []);
+          (Stage6b, []);
+          (Stage7, []);
+        ]
+        ~init:([], Row.empty_env)
+        ~f:(fun (pending, env) (stage, cs) -> Row.solve_inequalities ~stage (pending @ cs) env)
+    with
+    | exception Row.Shape_error (msg, _) -> String.is_substring msg ~substring:"Shape.set_dim"
+    | _ -> false
+  in
+  Verdict.Claims.p "  w = u; u = v, w a concatenation component: transitive alias refused"
+    (transitive_refused ())
+
 (* With a claim already on each prefix, the ordinary ground equation accepts the free components
    under their own bounds. Exercise the closing prepass without the window that sizes the prefix in
    [test_concat_order_independence]. *)
@@ -929,5 +1108,6 @@ let () =
   test_tagged_components_any_order ();
   test_zero_component ();
   test_alias_guesses_empty ();
+  test_aliased_concat_component_refused ();
   Verdict.case "plain concatenation bounds" test_plain_concat_bounds;
   Stdio.printf "=== Done ===\n"

@@ -157,6 +157,9 @@ let () =
   both ~label:"middle, zero-width suffix" ~spec:"p^o^q => o"
     ~captures:(fun () -> [ capture "p" 2; capture "q" 0 ])
     ~layout:Trailing ~rows:1 ~src:5 ~dst:3 ~offset:2 Extract;
+  both ~label:"middle, forced zero-width suffix (q uncaptured)" ~spec:"p^o^q => o"
+    ~captures:(fun () -> [ capture "p" 2; capture "o" 3 ])
+    ~layout:Trailing ~rows:1 ~src:5 ~dst:3 ~offset:2 Extract;
   both ~label:"batched rows, s, p^o => s, o" ~spec:"s, p^o => s, o"
     ~captures:(fun () -> [ capture "p" 1 ])
     ~layout:Trailing ~rows:3 ~src:4 ~dst:3 ~offset:1 Extract;
@@ -178,6 +181,14 @@ let () =
   both ~label:"replace prefix, a => a^b" ~spec:"a => a^b"
     ~captures:(fun () -> [ capture "b" 2 ])
     ~layout:Trailing ~rows:1 ~src:3 ~dst:5 ~offset:0 Replace;
+  both ~label:"replace prefix, zero-width suffix, a => a^b" ~spec:"a => a^b"
+    ~captures:(fun () -> [ capture "b" 0 ])
+    ~layout:Trailing ~rows:1 ~src:3 ~dst:3 ~offset:0 Replace;
+  (* gh-ocannl-2418: differentiable [einmax1] forces [Shape.product_space_shape], whose fresh
+     re-elaboration must also receive [emptiable_vars] so forced [b = 0] solves on the proxy too. *)
+  run_case ~label:"differentiable einmax1 forced zero-width suffix, a => a^b" ~layout:Trailing
+    ~rows:1 ~src:3 ~dst:3 ~offset:0 ~mode:Replace (fun x ->
+      TDSL.einmax1 "a => a^b" x ~output_dims:[ 3 ] ());
   both ~label:"replace suffix, b => a^b" ~spec:"b => a^b"
     ~captures:(fun () -> [ capture "a" 2 ])
     ~layout:Trailing ~rows:1 ~src:3 ~dst:5 ~offset:2 Replace;
@@ -312,6 +323,7 @@ let refused ~label ~needle make =
 
 let () =
   let x n = fst (leaf ~layout:Trailing ~rows:1 n) in
+  let open_x () = NTDSL.term ~fetch_op:(Constant 1.) () in
   refused ~label:"uncaptured prefix, p^o => o" ~needle:"Shape.set_dim" (fun () ->
       NTDSL.einsum1 "p^o => o" (x 5) ());
   refused ~label:"uncaptured prefix through ++^, p^o => o" ~needle:"Shape.set_dim" (fun () ->
@@ -320,7 +332,103 @@ let () =
       NTDSL.einsum1 "a => a^b" (x 3) ());
   refused ~label:"uncaptured middle, p^o^q => o" ~needle:"Shape.set_dim" (fun () ->
       NTDSL.einsum1 "p^o^q => o" (x 6) ());
+  (* gh-ocannl-2418: an aliased concat component is refused in both binding orders, even when a
+     pre-existing non-concat variable represents the equivalence class. *)
+  refused ~label:"aliased replacement component, non-concat bound first, a => a^b"
+    ~needle:"Shape.set_dim" (fun () ->
+      let r = Shape.get_variable_ref "b" in
+      let _ = NTDSL.einsum1 ~capture_dims:[ r ] "b => b" (open_x ()) () in
+      NTDSL.einsum1 ~capture_dims:[ r ] "a => a^b" (x 3) ());
+  refused ~label:"aliased replacement component, concat bound first, a => a^b"
+    ~needle:"Shape.set_dim" (fun () ->
+      let r = Shape.get_variable_ref "b" in
+      let t = NTDSL.einsum1 ~capture_dims:[ r ] "a => a^b" (x 3) () in
+      let _ = NTDSL.einsum1 ~capture_dims:[ r ] "b => b" (open_x ()) () in
+      t);
+  (* gh-ocannl-2418: a stated 0 binds only a component the spec structurally allows to be empty,
+     never a component the result or another operand needs as a standalone axis. *)
+  refused ~label:"needed output component set to 0, p^o => o (++), o = 0"
+    ~needle:"spec lets be empty" (fun () ->
+      NTDSL.einsum1 ~capture_dims:[ capture "o" 0 ] "p^o => o" (x 5) ());
+  refused ~label:"needed output component set to 0, p^o => o (++^), o = 0"
+    ~needle:"spec lets be empty" (fun () ->
+      NTDSL.concat ~capture_dims:[ capture "o" 0 ] "p^o => o" [| x 5 |] ());
+  refused ~label:"needed source component set to 0, a => a^b (++), a = 0"
+    ~needle:"spec lets be empty" (fun () ->
+      NTDSL.einsum1 ~capture_dims:[ capture "a" 0 ] "a => a^b" (open_x ()) ());
+  refused ~label:"component also a standalone operand axis, a^b; b => a, b = 0"
+    ~needle:"spec lets be empty" (fun () ->
+      NTDSL.einsum ~capture_dims:[ capture "b" 0 ] "a^b; b => a" (x 5) (open_x ()) ());
+  (* gh-ocannl-2418: sharing a capture between an emptiable component ([b] in [a => a^b] forced to
+     0) and a required standalone axis ([b] in [p^b => b]) refuses in every order (the forced zero
+     residual cannot bind a required axis, so closure refuses the undetermined component) and across
+     a closure (the carried 0 is refused as a stated 0 on the required axis). *)
+  refused ~label:"shared capture: forced empty a => a^b then required p^b => b"
+    ~needle:"Shape.set_dim" (fun () ->
+      let r = Shape.get_variable_ref "b" in
+      let _ = NTDSL.einsum1 ~capture_dims:[ r ] ~output_dims:[ 3 ] "a => a^b" (x 3) () in
+      NTDSL.einsum1 ~capture_dims:[ r ] "p^b => b" (x 5) ());
+  refused ~label:"shared capture: required p^b => b then forced empty a => a^b"
+    ~needle:"Shape.set_dim" (fun () ->
+      let r = Shape.get_variable_ref "b" in
+      let t = NTDSL.einsum1 ~capture_dims:[ r ] "p^b => b" (x 5) () in
+      let _ = NTDSL.einsum1 ~capture_dims:[ r ] ~output_dims:[ 3 ] "a => a^b" (x 3) () in
+      t);
+  refused ~label:"shared capture across closure: closed 0 from a => a^b into required p^b => b"
+    ~needle:"spec lets be empty" (fun () ->
+      let r = Shape.get_variable_ref "b" in
+      let t1 = NTDSL.einsum1 ~capture_dims:[ r ] ~output_dims:[ 3 ] "a => a^b" (x 3) () in
+      ignore (Lazy.force t1.Tensor.value.dims : int array);
+      NTDSL.einsum1 ~capture_dims:[ r ] "p^b => b" (x 5) ());
   refused ~label:"margins wider than the operand, p^o => o with p = 6" ~needle:"exceed" (fun () ->
       NTDSL.einsum1 ~capture_dims:[ capture "p" 6 ] "p^o => o" (x 5) ());
   refused ~label:"empty integer component, 0^o => o" ~needle:"is empty" (fun () ->
-      NTDSL.einsum1 "0^o => o" (x 5) ())
+      NTDSL.einsum1 "0^o => o" (x 5) ());
+  (* gh-ocannl-2418: [Shape.Scheme] carries [emptiable] across trace/instantiation without turning
+     it into closure's guess-to-0 permission. *)
+  Verdict.case "shape scheme preserves emptiable without closure guess" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let s_forced =
+        Tensor.Scheme.trace ~label:"forced_q" 1 (function
+          | [ x ] -> [ NTDSL.einsum1 ~capture_dims:[ capture "p" 2 ] "p^o^q => o" x () ]
+          | _ -> assert false)
+      in
+      let x5 = x 5 in
+      let res = Shape.make ~output_dims:[ 3 ] ~debug_name:"scheme_res" ~id:99001 () in
+      Tensor.Scheme.instantiate s_forced ~args:[ x5.shape ] ~results:[ res ];
+      let ok_forced =
+        match Shape.to_dims res with
+        | dims -> List.equal Int.equal (Array.to_list dims) [ 3 ]
+        | exception _ -> false
+      in
+      p "instantiated scheme solves forced zero-width suffix (p^o^q => o, p=2, o=3, src=5)"
+        ok_forced;
+      Tensor.unsafe_reinitialize ();
+      let s_uncap =
+        Tensor.Scheme.trace ~label:"uncap_b" 1 (function
+          | [ x ] -> [ NTDSL.einsum1 "a => a^b" x () ]
+          | _ -> assert false)
+      in
+      let x3 = x 3 in
+      let res2 = Shape.make ~debug_name:"scheme_res2" ~id:99002 () in
+      Tensor.Scheme.instantiate s_uncap ~args:[ x3.shape ] ~results:[ res2 ];
+      let refused_uncap =
+        match Shape.to_dims res2 with
+        | _ -> false
+        | exception Row.Shape_error (msg, _) -> String.is_substring msg ~substring:"Shape.set_dim"
+        | exception _ -> false
+      in
+      p "instantiated scheme still refuses uncaptured a => a^b" refused_uncap);
+  (* gh-ocannl-2418: [non_zero_vars] only marks variables appearing both as a concat component and
+     as a non-concat axis in the same spec, so a literal 0-extent axis passed through a plain
+     non-concat einsum keeps its base verdict (out of scope for the zero rules). *)
+  Verdict.case "plain einsum keeps 0-extent row axis out of scope" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let z = NTDSL.term ~fetch_op:(Constant 0.) ~output_dims:[ 0 ] () in
+      let t = NTDSL.einsum1 "a => a" z () in
+      let ok =
+        match Lazy.force t.Tensor.value.dims with
+        | dims -> List.equal Int.equal (Array.to_list dims) [ 0 ]
+        | exception _ -> false
+      in
+      p "0-extent operand through plain einsum a => a still solves to [0]" ok)
