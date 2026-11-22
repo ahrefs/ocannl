@@ -56,7 +56,7 @@ val in_scope_local_namespace : string -> bool
     the plain serial loop on CPU backends. Like [Vectorized], the annotation licenses reassociating
     the (floating-point) reduction. *)
 type axis_type = Serial | Grid | Workgroup | Workgroup_reduce | Unrolled | Vectorized
-[@@deriving sexp, compare, equal]
+[@@deriving sexp, compare, equal, enumerate]
 
 val axis_type_label : axis_type -> string
 (** Loop keyword used by the human-readable printers: plain ["for"] for [Serial], ["for@<axis>"]

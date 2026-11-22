@@ -90,7 +90,7 @@ let in_scope_local_namespace name =
     GPU backends (gh-ocannl-462), the plain serial loop on CPU backends. Like [Vectorized], the
     annotation licenses reassociating the (floating-point) reduction. *)
 type axis_type = Serial | Grid | Workgroup | Workgroup_reduce | Unrolled | Vectorized
-[@@deriving sexp, compare, equal]
+[@@deriving sexp, compare, equal, enumerate]
 
 (** Loop keyword used by the human-readable printers: plain [for] for [Serial] (unchanged legacy
     output), [for@<axis>] otherwise. *)

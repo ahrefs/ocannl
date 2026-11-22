@@ -1756,9 +1756,9 @@ let axis_coverage (ty : LL.axis_type) : coverage =
          non-parallel-eligible Grid level over a reduction axis, and one that existed would be a \
          cross-thread race rather than a width question"
 
-(* Sample values, one per constructor, purely to drive the printed table: the classification itself
-   is the exhaustive [match] above, which is what the compiler checks. A constructor added without a
-   sample here still fails the build at that match — add both. *)
+(* Sample values, one per constructor, to drive the printed table: the classification itself is the
+   exhaustive [match] above, which the compiler checks, and the sorted-list pin below against
+   {!Sched.optop_constructors} catches any omitted or duplicated sample at test time. *)
 let coverage_sym = Ll_test.sym ()
 
 let coverage_node =
@@ -1785,6 +1785,7 @@ let optop_samples : Sched.optop list =
     Sched.Unroll { axis = s; materialize = false };
     Sched.Partition { axis = s; breakpoints = []; segment_indices = [] };
     Sched.Pad { axis = s; to_multiple_of = 1 };
+    Sched.Coalesce { outer = s; inner = s; merged = s };
     Sched.Stage
       {
         source = coverage_node;
@@ -1801,6 +1802,7 @@ let optop_samples : Sched.optop list =
       ~target:coverage_node ~over:s;
     Sched.Expand_zero { tn = coverage_node; indices = [] };
     Sched.Tensorize { i = s; j = s; k = s; lane = s; simd_width = 1; tile = None };
+    Sched.Fold_mma { query = s; lane = s; block = s; width = 1 };
     Sched.Fuse_epilogue { target = coverage_node; shared = false };
     Sched.Split_reduce
       {
@@ -1813,11 +1815,10 @@ let optop_samples : Sched.optop list =
       };
   ]
 
-let axis_samples : LL.axis_type list =
-  [ LL.Serial; LL.Unrolled; LL.Vectorized; LL.Workgroup; LL.Workgroup_reduce; LL.Grid ]
+let axis_samples : LL.axis_type list = LL.all_of_axis_type
 
-(* The constructor's own name, off its sexp — so the printed table cannot disagree with the value it
-   describes. *)
+(* The constructor's own name, off its sexp — used for [Low_level.axis_type] where [ppx_enumerate]
+   drives the sample list directly. *)
 let constructor_name sexp =
   match sexp with Sexp.List (Sexp.Atom name :: _) -> name | Sexp.Atom name -> name | _ -> "?"
 
@@ -1867,19 +1868,26 @@ let () =
       !ok
   in
   Stdio.printf "Schedule.optop coverage:\n";
-  report ~what:"Schedule.optop"
-    ~name_of:(fun op -> constructor_name (Sched.sexp_of_optop op))
-    ~classify:optop_coverage optop_samples;
+  report ~what:"Schedule.optop" ~name_of:Sched.optop_name ~classify:optop_coverage optop_samples;
   Stdio.printf "Low_level.axis_type coverage:\n";
   report ~what:"Low_level.axis_type"
     ~name_of:(fun ty -> constructor_name (LL.sexp_of_axis_type ty))
     ~classify:axis_coverage axis_samples;
-  (* A duplicated sample would print one constructor twice and leave another unprinted, while the
-     exhaustive matches above stayed satisfied. *)
-  let distinct l = List.length (List.dedup_and_sort l ~compare:String.compare) = List.length l in
-  p "the coverage samples name distinct constructors"
-    (distinct (List.map optop_samples ~f:(fun op -> constructor_name (Sched.sexp_of_optop op)))
-    && distinct (List.map axis_samples ~f:(fun ty -> constructor_name (LL.sexp_of_axis_type ty))))
+  (* Pin the hand-built [optop_samples] list against [ppx_variants_conv]'s derived constructor list
+     as sorted lists (gh-ocannl-724): catches both omissions (a constructor added to
+     [Schedule.optop] and classified in [optop_coverage] without a sample entry) and duplicates,
+     while [axis_samples] is derived directly from [LL.all_of_axis_type]. *)
+  let optop_sample_names =
+    List.sort ~compare:String.compare (List.map optop_samples ~f:Sched.optop_name)
+  in
+  let optop_derived_names = List.sort ~compare:String.compare Sched.optop_constructors in
+  let optop_samples_complete = List.equal String.equal optop_sample_names optop_derived_names in
+  if not optop_samples_complete then
+    Stdio.eprintf "  Schedule.optop samples [%s] <> derived constructors [%s]\n"
+      (String.concat ~sep:", " optop_sample_names)
+      (String.concat ~sep:", " optop_derived_names);
+  p "the Schedule.optop coverage samples cover every constructor exactly once"
+    optop_samples_complete
 
 (* The [Tile_mma] fallback's own reduction is a serial nest like any other, and codegen's peel is
    what localizes it — the leg below checks that against the routine's peel census beside the

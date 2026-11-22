@@ -517,6 +517,12 @@ type optop =
           hence the combine tree). *)
 [@@deriving sexp_of]
 
+val optop_constructors : string list
+(** Every constructor name of {!optop}, in declaration order, derived by [ppx_variants_conv]. *)
+
+val optop_name : optop -> string
+(** The constructor name of an {!optop} value, derived by [ppx_variants_conv]. *)
+
 type schedule = optop list [@@deriving sexp_of]
 (** Applied left to right by {!apply}. *)
 

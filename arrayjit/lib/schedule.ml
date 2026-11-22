@@ -69,7 +69,10 @@ type optop =
           (** Fresh symbols, one per [target] axis, binding the combine nest's loops; see
               {!split_reduce}. *)
     }
-[@@deriving sexp_of]
+[@@deriving sexp_of, variants]
+
+let optop_constructors = List.map Variants_of_optop.descriptions ~f:fst
+let optop_name = Variants_of_optop.to_name
 
 type schedule = optop list [@@deriving sexp_of]
 

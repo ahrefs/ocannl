@@ -7,22 +7,24 @@ Schedule.optop coverage:
   Unroll             covered by unroll-annot, unroll-mat, unroll-outer-mat, rng-unroll, rng-unroll-mat
   Partition          covered by partition, partition-then-unroll, partition-outer
   Pad                covered by pad-then-unroll-mat
+  Coalesce           out of scope: re-indexes two perfectly nested loops as one over the same iterations in the same order (gh-ocannl-1165): a merged reduction pair is one serial reduction loop, whose form serial pins, and a merged output pair changes no accumulator residency
   Stage              out of scope: stages an OPERAND into shared memory: it changes where the reduction reads from, never where its accumulator lives
   Privatize          out of scope: relocates the accumulator into a routine-local tile minted at the backend's accumulator residency, whose own accumulation then takes one of the forms this table pins; the tile's width is pinned by accum_width's Privatize legs (gh-ocannl-1116)
   Expand_zero        covered by tile-mma-fallback
   Tensorize          covered by tile-mma-fallback
+  Fold_mma           out of scope: rewrites the online-softmax block fold whole: its two contractions become Tile_mma statements, whose form tile-mma-fallback pins, and its per-row reductions keep the form the rewrite emitted (test/operations/online_softmax_block pins the fold)
   Fuse_epilogue      out of scope: splices a consumer AFTER the reduction's closing store, so the form it follows is whichever one this table already pins
   Split_reduce       covered by split-reduce
 every Schedule.optop constructor is reached by a member that exists, or exempted with a reason: true
 Low_level.axis_type coverage:
   Serial             covered by serial, decline-data-guard, decline-sibling-statement
-  Unrolled           covered by unroll-annot, decline-sibling-unrolled, rng-unroll
-  Vectorized         covered by retype-vectorized, split-then-vectorize-inner, split-then-vectorize-narrow, rng-vectorized, sibling-vectorized, data-guard-vectorized
+  Grid               out of scope: its fallback is the plain serial loop and NOT the localizing one — the one arm that serializes without localizing. No schedule op in the tree produces an unbindable, non-parallel-eligible Grid level over a reduction axis, and one that existed would be a cross-thread race rather than a width question
   Workgroup          covered by retype-workgroup, mixed-guard-workgroup
   Workgroup_reduce   covered by retype-workgroup-reduce, rng-workgroup-reduce, sibling-workgroup-reduce, data-guard-workgroup-reduce
-  Grid               out of scope: its fallback is the plain serial loop and NOT the localizing one — the one arm that serializes without localizing. No schedule op in the tree produces an unbindable, non-parallel-eligible Grid level over a reduction axis, and one that existed would be a cross-thread race rather than a width question
+  Unrolled           covered by unroll-annot, decline-sibling-unrolled, rng-unroll
+  Vectorized         covered by retype-vectorized, split-then-vectorize-inner, split-then-vectorize-narrow, rng-vectorized, sibling-vectorized, data-guard-vectorized
 every Low_level.axis_type constructor is reached by a member that exists, or exempted with a reason: true
-the coverage samples name distinct constructors: true
+the Schedule.optop coverage samples cover every constructor exactly once: true
 reduction: out[3] = sum of 64 terms, hand-built Low_level, 36 members
   01 serial                      [f32 bf16 f16] over plain                 no schedule ops (the reference rendering)                              -> localized scope
                                  codegen's peel takes one level, unguarded
