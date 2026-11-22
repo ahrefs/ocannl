@@ -1,0 +1,18 @@
+CUDA pre-Volta (sm_60) advertises no tensor-core peaks: true
+CUDA Volta (sm_70) advertises only f16 with datasheet provenance: true
+CUDA Ampere (sm_80) adds bf16 and tf32 with datasheet provenance, not fp8: true
+CUDA Ada/Blackwell (sm_89, sm_120) advertise all four formats with datasheet provenance: true
+HIP RDNA3 advertises f16 and bf16 WMMA peaks with datasheet provenance: true
+CUDA sm_120 resolves each emitted MMA format to its datasheet peak: true
+CUDA sm_75 refuses fp8 (no peak for that architecture) while keeping f16: true
+HIP RDNA3 resolves f16 and bf16 WMMA to their datasheet peaks: true
+HIP without mma capability (CDNA) fails closed to no-ceiling: true
+Metal maps f32, f16 and bf16 simdgroup_matrix kernels to the scalar ceiling: true
+a kernel mixing two distinct MMA formats fails closed to no-ceiling: true
+a tensorized summary with no emitted formats fails closed to no-ceiling: true
+choose_ceiling still refuses a GPU tensor-core kernel when bandwidth is absent: true
+model_peak_mma_* overrides backend constants and Metal scalar-ALU follows model_peak_flops: true
+a live GPU f16 matmul compiles tensorized with emitted MMA format recorded: true
+Bench_harness.mma_ceiling_of resolves the live GPU f16 matmul to mma-f16: true
+dominant_kernel scores the live GPU f16 tensorized matmul as exact mma-f16: true
+Metal f32 simdgroup_matrix matmul scores as exact mma-f32 against the scalar ALU ceiling: true

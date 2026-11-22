@@ -121,3 +121,9 @@ val operand_loads :
 (** [(false, false)]: no [ldmatrix] analogue — {!accepts} declines a swizzled operand, and every
     load {!k_loop_lines} emits is a whole-fragment [load_matrix_sync]. The backend's
     [C_syntax_config.mma_operand_loads]. *)
+
+val mma_peak_f16 : Backend_intf.mma_peak
+(** Advisory dense RDNA3 WMMA peak for FP16 operands (gh-ocannl-1092), reporting-only. *)
+
+val mma_peak_bf16 : Backend_intf.mma_peak
+(** Advisory dense RDNA3 WMMA peak for BF16 operands (gh-ocannl-1092), reporting-only. *)

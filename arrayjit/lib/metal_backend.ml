@@ -721,6 +721,15 @@ module Impl = struct
               model_fill_lane_width). *)
            shared_load_rate = None;
            fill_lane_width = None;
+           (* gh-ocannl-1092: Apple Silicon M1-M4 [simdgroup_matrix] runs on the shader ALUs rather
+              than a separate matrix coprocessor, so tensorized Metal kernels map to the scalar
+              [peak_flops] ceiling (and follow any [model_peak_flops] override, unless a per-format
+              [model_peak_mma_*] override is set). Reporting-only. *)
+           mma_peak_f16 = None;
+           mma_peak_bf16 = None;
+           mma_peak_tf32 = None;
+           mma_peak_fp8 = None;
+           mma_uses_scalar_peak = apple_silicon;
          })
     in
     let codegen_tag () =

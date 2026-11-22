@@ -135,6 +135,37 @@ type mma_input_format =
           pair, so mixed e5m2×e4m3 combinations need no interface change. *)
 [@@deriving sexp_of, equal, enumerate]
 
+let mma_input_format_name = function
+  | Mma_f32 -> "f32"
+  | Mma_tf32 -> "tf32"
+  | Mma_f16 -> "f16"
+  | Mma_bf16 -> "bf16"
+  | Mma_fp8_e5m2 -> "fp8"
+
+(** Where an advisory per-format MMA peak constant in {!hardware_limits} came from (gh-ocannl-1092).
+    Carried on the constant itself so reports name the source alongside the FLOP/s figure rather
+    than flattening datasheet peaks and measured figures into one label. *)
+type mma_peak_provenance =
+  | Datasheet_class of string
+      (** Class-level dense matrix-unit peak cited from vendor architecture documentation; the
+          string names the architecture class and source. *)
+  | Measured_run of string
+      (** Peak derived from a measuring run; the string names the hardware and run. *)
+[@@deriving sexp_of]
+
+type mma_peak = {
+  mma_peak_flops : float;
+      (** Advisory peak dense matrix-unit throughput in FLOP/s (FMA counted as two, matching
+          {!Ir.Cost_model}'s [2*m*n*k] op count). Reporting-only: never feeds autotune ranking or
+          bound pruning. *)
+  mma_peak_provenance : mma_peak_provenance;
+}
+[@@deriving sexp_of]
+
+let mma_peak_provenance_string = function
+  | Datasheet_class cite -> Printf.sprintf "datasheet (%s)" cite
+  | Measured_run cite -> Printf.sprintf "measured (%s)" cite
+
 (** A physical layout the backend's tensor-core loads can consume for a cooperatively staged operand
     tile, beyond the plain row-major one (gh-ocannl-481 item 3, D3). *)
 type mma_staged_layout =
@@ -532,6 +563,35 @@ type hardware_limits = {
           [None], which is [W = 1], the thread-only fill. Read wherever the fill model is but the
           [auto] seeding gate, which keeps the thread-only fill. Same cache identity as
           {!field-cache_capacity_bytes}. *)
+  mma_peak_f16 : mma_peak option; [@sexp.option]
+      (** [Reporting] (see {!limits_key}): advisory dense matrix-unit peak for FP16 operands, in
+          FLOP/s (FMA counted as two), with its provenance (gh-ocannl-1092). Reporting-only: used by
+          the benchmark report's [kernel %peak] column through {!Autotune.mma_peak_leg} and
+          [Bench_json.choose_ceiling]; never consulted by schedule construction, codegen, timing,
+          autotune bound pruning, or untimed model ranking ([test/operations/limits_field_classes]
+          enforces this). Overridable by config [model_peak_mma_f16]; [None] where no separate
+          matrix-unit constant applies (e.g. Metal, where {!field-mma_uses_scalar_peak} maps
+          tensorized kernels to the scalar ceiling, and the C backends). *)
+  mma_peak_bf16 : mma_peak option; [@sexp.option]
+      (** [Reporting]: advisory dense matrix-unit peak for BF16 operands, in FLOP/s, with its
+          provenance (gh-ocannl-1092). Overridable by config [model_peak_mma_bf16]. Same contract as
+          {!field-mma_peak_f16}. *)
+  mma_peak_tf32 : mma_peak option; [@sexp.option]
+      (** [Reporting]: advisory dense matrix-unit peak for TF32 operands (f32 storage truncated to
+          10-bit mantissa on CUDA sm_80+ tensor cores), in FLOP/s, with its provenance
+          (gh-ocannl-1092). Overridable by config [model_peak_mma_tf32]. Same contract as
+          {!field-mma_peak_f16}. *)
+  mma_peak_fp8 : mma_peak option; [@sexp.option]
+      (** [Reporting]: advisory dense matrix-unit peak for FP8 operands (CUDA sm_89+ e5m2), in
+          FLOP/s, with its provenance (gh-ocannl-1092). Overridable by config [model_peak_mma_fp8].
+          Same contract as {!field-mma_peak_f16}. *)
+  mma_uses_scalar_peak : bool; [@sexp_drop_default.equal] [@default false]
+      (** [Reporting] (see {!limits_key}): whether GPU [Tile_mma] intrinsics execute on the same
+          shader ALUs as scalar f32 arithmetic, so the scalar {!field-peak_flops} ceiling (and any
+          [model_peak_flops] override) applies directly to tensorized kernels when no per-format
+          [model_peak_mma_*] override is set (gh-ocannl-1092). [true] on Apple Silicon Metal
+          ([simdgroup_matrix] runs on the shader ALUs on M1-M4); [false] elsewhere. Never consulted
+          by scheduling, codegen, timing, or autotune ranking. *)
   native_fp16_arithmetic : bool;
       (** Whether 16-bit float arithmetic executes natively at twice f32's lane count
           (gh-ocannl-516: ARMv8.2-FP16, AVX512-FP16). [false] covers both "no [_Float16] on this
@@ -614,28 +674,38 @@ let equal_mma_format_triple (a1, b1, d1) (a2, b2, d2) =
 
 (* Prefer tf32 multiplicands when the policy permits them and the backend advertises that tile. The
    accumulator always has the destination's storage format. *)
-let mma_format_triples ~a_prec ~b_prec ~d_prec =
-  let input_formats (prec : Ops.prec) =
-    match prec with
-    | Ops.Half_prec _ -> [ Mma_f16 ]
-    | Ops.Bfloat16_prec _ -> [ Mma_bf16 ]
-    | Ops.Fp8_prec _ -> [ Mma_fp8_e5m2 ]
-    | Ops.Single_prec _ ->
-        if (Numerics.get ()).Numerics.tf32_matmuls then [ Mma_tf32; Mma_f32 ] else [ Mma_f32 ]
-    | _ -> []
+let mma_format_triples, mma_format_triple_for_precisions =
+  let triples_with ~tf32_matmuls ~a_prec ~b_prec ~d_prec =
+    let input_formats (prec : Ops.prec) =
+      match prec with
+      | Ops.Half_prec _ -> [ Mma_f16 ]
+      | Ops.Bfloat16_prec _ -> [ Mma_bf16 ]
+      | Ops.Fp8_prec _ -> [ Mma_fp8_e5m2 ]
+      | Ops.Single_prec _ -> if tf32_matmuls then [ Mma_tf32; Mma_f32 ] else [ Mma_f32 ]
+      | _ -> []
+    in
+    let accumulator =
+      match (d_prec : Ops.prec) with
+      | Ops.Half_prec _ -> Some Mma_f16
+      | Ops.Bfloat16_prec _ -> Some Mma_bf16
+      | Ops.Single_prec _ -> Some Mma_f32
+      | _ -> None
+    in
+    match accumulator with
+    | None -> []
+    | Some d_format ->
+        List.concat_map (input_formats a_prec) ~f:(fun a_format ->
+            List.map (input_formats b_prec) ~f:(fun b_format -> (a_format, b_format, d_format)))
   in
-  let accumulator =
-    match (d_prec : Ops.prec) with
-    | Ops.Half_prec _ -> Some Mma_f16
-    | Ops.Bfloat16_prec _ -> Some Mma_bf16
-    | Ops.Single_prec _ -> Some Mma_f32
-    | _ -> None
+  let mma_format_triples ~a_prec ~b_prec ~d_prec =
+    triples_with ~tf32_matmuls:(Numerics.get ()).Numerics.tf32_matmuls ~a_prec ~b_prec ~d_prec
   in
-  match accumulator with
-  | None -> []
-  | Some d_format ->
-      List.concat_map (input_formats a_prec) ~f:(fun a_format ->
-          List.map (input_formats b_prec) ~f:(fun b_format -> (a_format, b_format, d_format)))
+  let mma_format_triple_for_precisions ~tf32_matmuls (mma : mma_capability) ~a_prec ~b_prec ~d_prec
+      =
+    List.find (triples_with ~tf32_matmuls ~a_prec ~b_prec ~d_prec) ~f:(fun key ->
+        List.Assoc.mem mma.mma_format_tiles key ~equal:equal_mma_format_triple)
+  in
+  (mma_format_triples, mma_format_triple_for_precisions)
 
 let mma_tile_for_precisions (mma : mma_capability) ~a_prec ~b_prec ~d_prec =
   List.find_map (mma_format_triples ~a_prec ~b_prec ~d_prec) ~f:(fun key ->
@@ -1000,6 +1070,11 @@ let no_hardware_limits =
     staged_copy_rate = None;
     shared_load_rate = None;
     fill_lane_width = None;
+    mma_peak_f16 = None;
+    mma_peak_bf16 = None;
+    mma_peak_tf32 = None;
+    mma_peak_fp8 = None;
+    mma_uses_scalar_peak = false;
     native_fp16_arithmetic = false;
     simdgroup_width = None;
     lane_scalar_recompute_cheap = false;
@@ -1207,13 +1282,18 @@ let metal_facts =
     - [Untimed]: read only by the untimed choosers ([Autotune.model_default], the seeding gate,
       {!Ir.Cost_model.ranking_seconds}); never by anything [Autotune.tune] reaches, and never by a
       codegen-stage module. It enters neither the key nor the trajectory identity.
+    - [Reporting]: advisory reporting-only constants (per-format MMA peaks and the scalar-ALU rule
+      for the benchmark report's [kernel %peak] column, gh-ocannl-1092). Never read by schedule
+      construction, codegen, timing, [Autotune.tune], [Autotune.model_default], or
+      [Autotune.seeded_default]. Enters neither the key nor any ranking score.
 
     The classification IS {!limits_key}: it destructures the whole record with no [; _], so a new
     field is a compile error (warning 9) until it is classified — projected into {!Limits_key.t} or
-    discarded as [Untimed]. [test/operations/limits_field_classes] holds the rest: toggling an
-    [Untimed] field leaves the key unchanged and toggling a [Key] field changes it, the projection
-    renders byte-identically to the full record with its [Untimed] fields absent (so no stored key
-    moved when they were added), and no [Untimed] field is read outside its readers. *)
+    discarded as [Untimed] / [Reporting]. [test/operations/limits_field_classes] holds the rest:
+    toggling an [Untimed] or [Reporting] field leaves the key unchanged and toggling a [Key] field
+    changes it, the projection renders byte-identically to the full record with its non-[Key] fields
+    absent (so no stored key moved when they were added), and no [Untimed] or [Reporting] field is
+    read outside its readers. *)
 
 module Limits_key = struct
   type t = {
@@ -1270,6 +1350,11 @@ let limits_key
        staged_copy_rate = _;
        shared_load_rate = _;
        fill_lane_width = _;
+       mma_peak_f16 = _;
+       mma_peak_bf16 = _;
+       mma_peak_tf32 = _;
+       mma_peak_fp8 = _;
+       mma_uses_scalar_peak = _;
        native_fp16_arithmetic;
        simdgroup_width;
        lane_scalar_recompute_cheap;
@@ -1337,6 +1422,26 @@ let untimed_limits (l : hardware_limits) : untimed_limits =
     copy_rate = l.staged_copy_rate;
     shared_rate = l.shared_load_rate;
     lane_width = l.fill_lane_width;
+  }
+
+type reporting_limits = {
+  rep_mma_peak_f16 : mma_peak option;  (** {!field-hardware_limits.mma_peak_f16}. *)
+  rep_mma_peak_bf16 : mma_peak option;  (** {!field-hardware_limits.mma_peak_bf16}. *)
+  rep_mma_peak_tf32 : mma_peak option;  (** {!field-hardware_limits.mma_peak_tf32}. *)
+  rep_mma_peak_fp8 : mma_peak option;  (** {!field-hardware_limits.mma_peak_fp8}. *)
+  rep_mma_uses_scalar_peak : bool;  (** {!field-hardware_limits.mma_uses_scalar_peak}. *)
+}
+(** The [Reporting] fields' readings, the one accessor their readers go through
+    ([test/operations/limits_field_classes] refuses a direct read elsewhere and proves neither
+    [Autotune.tune] nor [Autotune.model_default] / [Autotune.seeded_default] reaches it). *)
+
+let reporting_limits (l : hardware_limits) : reporting_limits =
+  {
+    rep_mma_peak_f16 = l.mma_peak_f16;
+    rep_mma_peak_bf16 = l.mma_peak_bf16;
+    rep_mma_peak_tf32 = l.mma_peak_tf32;
+    rep_mma_peak_fp8 = l.mma_peak_fp8;
+    rep_mma_uses_scalar_peak = l.mma_uses_scalar_peak;
   }
 
 (** A base for [{ minimal_mma_capability with ... }] literals, so adding a field to

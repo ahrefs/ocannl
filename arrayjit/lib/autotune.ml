@@ -3050,6 +3050,52 @@ let envelope ~limits =
   let flops, bandwidth = envelope_legs ~limits in
   (Option.map flops ~f:fst, Option.map bandwidth ~f:fst)
 
+(* gh-ocannl-1092: advisory per-format matrix-unit peaks for the benchmark report's kernel %peak
+   column (reporting-only). These read [Backend_intf.reporting_limits], which [limits_field_classes]
+   proves neither [tune] nor [model_default] / [seeded_default] / [model_score] can reach. *)
+let peak_mma_f16_override =
+  lazy (Utils.registered_positive_float_or_unset ~arg_name:"model_peak_mma_f16")
+
+let peak_mma_bf16_override =
+  lazy (Utils.registered_positive_float_or_unset ~arg_name:"model_peak_mma_bf16")
+
+let peak_mma_tf32_override =
+  lazy (Utils.registered_positive_float_or_unset ~arg_name:"model_peak_mma_tf32")
+
+let peak_mma_fp8_override =
+  lazy (Utils.registered_positive_float_or_unset ~arg_name:"model_peak_mma_fp8")
+
+type mma_peak_source =
+  | Mma_peak_config of string
+  | Mma_peak_backend of Ir.Backend_intf.mma_peak_provenance
+  | Mma_peak_scalar_alu of [ `Config | `Backend ]
+[@@deriving sexp_of]
+
+let mma_peak_leg ~(limits : Ir.Backend_intf.hardware_limits)
+    (format : Ir.Backend_intf.mma_input_format) =
+  let rep = Ir.Backend_intf.reporting_limits limits in
+  let override, advisory =
+    match format with
+    | Mma_f16 -> (Some ("model_peak_mma_f16", peak_mma_f16_override), rep.rep_mma_peak_f16)
+    | Mma_bf16 -> (Some ("model_peak_mma_bf16", peak_mma_bf16_override), rep.rep_mma_peak_bf16)
+    | Mma_tf32 -> (Some ("model_peak_mma_tf32", peak_mma_tf32_override), rep.rep_mma_peak_tf32)
+    | Mma_fp8_e5m2 -> (Some ("model_peak_mma_fp8", peak_mma_fp8_override), rep.rep_mma_peak_fp8)
+    | Mma_f32 -> (None, None)
+  in
+  let from_config =
+    Option.bind override ~f:(fun (key, ov) ->
+        Option.map (Lazy.force ov) ~f:(fun v -> (v, Mma_peak_config key)))
+  in
+  match from_config with
+  | Some _ as hit -> hit
+  | None -> (
+      match advisory with
+      | Some { Ir.Backend_intf.mma_peak_flops; mma_peak_provenance } ->
+          Some (mma_peak_flops, Mma_peak_backend mma_peak_provenance)
+      | None when rep.rep_mma_uses_scalar_peak ->
+          Option.map (fst (envelope_legs ~limits)) ~f:(fun (v, src) -> (v, Mma_peak_scalar_alu src))
+      | None -> None)
+
 (* The roofline lower bound summed over a candidate's kernels; [None] — no model coverage — when any
    kernel is opaque (its counts may UNDER-estimate, so ranking on them could prune the true winner)
    or when no envelope constant is present. The kernels run sequentially, so the bound is per-kernel

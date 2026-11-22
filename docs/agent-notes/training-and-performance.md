@@ -780,6 +780,15 @@ files.
   backend -- the alternative first signal is a wrong number in a report from a GPU box, days later.
   It sidesteps the fixture contract rather than weakening it: `selftest-tiny` is not a workload,
   its numbers compare to nothing, and the emitted record's `workload`/`variant` say so.
+- The `kernel %peak` column scores GPU tensor-core kernels against per-format advisory matrix-unit
+  peaks (`hardware_limits.mma_peak_f16`/`_bf16`/`_tf32`/`_fp8`, each with `mma_peak_provenance`,
+  overridable via `model_peak_mma_*`; gh-ocannl-1092). Apple Silicon Metal sets
+  `mma_uses_scalar_peak = true`, mapping `simdgroup_matrix` kernels to the scalar `peak_flops`
+  ceiling (and any `model_peak_flops` override). The emitted format comes from `C_syntax`'s
+  `emitted_formats` census on the compiled routine, not from `BENCH_PRECISION`; mixed or
+  unconfigured formats fail closed to `no-ceiling`. These five fields are `Reporting`-class
+  (`Backend_intf.reporting_limits`, `Autotune.mma_peak_leg`): outside `Limits_key` and proven
+  unreachable from `Autotune.tune`, `model_default` and `seeded_default` by `limits_field_classes`.
 - A benchmark cell reports what it measured through ONE JSON line, so anything that line cannot
   express is a measurement thrown away (gh-ocannl-676). Non-finite numbers are the whole class:
   OCaml's `%g` spells them `nan`/`inf`, `json.dumps` writes `NaN`, JSON has neither, and

@@ -1979,6 +1979,14 @@ end = struct
              (if (not all_integrated) && Lazy.force all_rdna_wave32 then Some 6.3e11 else None);
            fill_lane_width =
              (if (not all_integrated) && Lazy.force all_rdna_wave32 then Some wave else None);
+           (* gh-ocannl-1092: advisory per-format dense RDNA3 WMMA peaks (reporting-only, never
+              feeds autotune ranking or bound pruning), gated on [mma_supported ()] so CDNA and
+              header-less hosts stay [None]. *)
+           mma_peak_f16 = Option.some_if (mma_supported ()) Hip_mma.mma_peak_f16;
+           mma_peak_bf16 = Option.some_if (mma_supported ()) Hip_mma.mma_peak_bf16;
+           mma_peak_tf32 = None;
+           mma_peak_fp8 = None;
+           mma_uses_scalar_peak = false;
          })
     in
     (* gh-ocannl-572: the kernel source is a function of the lowered code, the device capabilities

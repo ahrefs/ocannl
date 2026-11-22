@@ -876,6 +876,7 @@ test/operations/cuda_launch_reservation.ml [prelowered compile; through Ll_test.
 test/operations/declared_temporaries.ml [through Ll_test.link; run by @test/operations/runtest-declared_temporaries-logged, @test/operations/runtest-declared_temporaries-plain]
 test/operations/default_prefill.ml [through Ll_test.link; run by @test/operations/runtest-default_prefill]
 test/operations/division_special_values.ml [through Ll_test.execute; run by @test/operations/runtest-division_special_values, @test/operations/runtest-division_special_values-reproducible]
+test/operations/dominant_kernel_mma_ceiling.ml [through Bench_harness.dominant_kernel; run by @test/operations/runtest-dominant_kernel_mma_ceiling]
 test/operations/dynamic_axis_coverage.ml [through Ll_test.execute; run by @test/operations/runtest-dynamic_axis_coverage]
 test/operations/fixed_name_temporaries.ml [through Ll_test.execute; through Ll_test.execute_with_census; through Ll_test.run_routine; run by @test/operations/runtest-fixed_name_temporaries-logged, @test/operations/runtest-fixed_name_temporaries-plain]
 test/operations/flip_order_minting.ml [through Ll_test.execute; run by @test/operations/runtest-flip_order_minting]
@@ -1026,6 +1027,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-default_prefill
 @test/operations/runtest-division_special_values
 @test/operations/runtest-division_special_values-reproducible
+@test/operations/runtest-dominant_kernel_mma_ceiling
 @test/operations/runtest-dynamic_axis_coverage
 @test/operations/runtest-fixed_name_temporaries-logged
 @test/operations/runtest-fixed_name_temporaries-plain

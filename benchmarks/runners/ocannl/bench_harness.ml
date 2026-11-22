@@ -1600,6 +1600,97 @@ let narrow_native ~(limits : Ir.Backend_intf.hardware_limits) (s : Ir.Cost_model
       is_half (Lazy.force tn.Tn.storage_prec))
   && is_half (Ir.Numerics.cpu_compute_prec ~native_fp16_arithmetic:true Ir.Ops.half)
 
+(** Resolves a GPU tensorized kernel's matrix-unit compute ceiling from the intrinsic [Tile_mma]
+    formats that actually emitted during its compile (gh-ocannl-1092). Fails closed to
+    {!Bench_json.Mma_no_peak} when no emitted format is recorded, an operand pair is unresolved or
+    mixed, a kernel mixes distinct MMA formats, or the backend/config provides no peak for that
+    format. *)
+let mma_ceiling_of ~backend ~(limits : Ir.Backend_intf.hardware_limits)
+    (mma : Ir.C_syntax.mma_summary) : Bench_json.mma_ceiling =
+  let module BI = Ir.Backend_intf in
+  match limits.BI.mma with
+  | None ->
+      Bench_json.Mma_no_peak
+        (Printf.sprintf "tensor-core kernel: backend %s advertises no mma capability" backend)
+  | Some mma_cap -> (
+      match mma.Ir.C_syntax.emitted_formats with
+      | [] -> Bench_json.Mma_no_peak "tensor-core kernel: no emitted MMA format recorded"
+      | emitted -> (
+          let resolve (e : Ir.C_syntax.emitted_mma) =
+            match
+              BI.mma_format_triple_for_precisions ~tf32_matmuls:e.mma_tf32 mma_cap
+                ~a_prec:e.mma_a_prec ~b_prec:e.mma_b_prec ~d_prec:e.mma_d_prec
+            with
+            | Some (a_fmt, b_fmt, _) when BI.equal_mma_input_format a_fmt b_fmt -> Ok a_fmt
+            | Some (a_fmt, b_fmt, _) ->
+                Error
+                  (Printf.sprintf "mixed operand formats (%s x %s)" (BI.mma_input_format_name a_fmt)
+                     (BI.mma_input_format_name b_fmt))
+            | None ->
+                Error
+                  (Printf.sprintf "unrecognized MMA triple (%s x %s -> %s)"
+                     (Ir.Ops.prec_string e.mma_a_prec) (Ir.Ops.prec_string e.mma_b_prec)
+                     (Ir.Ops.prec_string e.mma_d_prec))
+          in
+          let resolved = List.map emitted ~f:resolve in
+          match List.find_map resolved ~f:Result.error with
+          | Some problem -> Bench_json.Mma_no_peak (Printf.sprintf "tensor-core kernel: %s" problem)
+          | None -> (
+              let distinct =
+                List.fold resolved ~init:[] ~f:(fun acc r ->
+                    let fmt = Result.ok_or_failwith r in
+                    if List.mem acc fmt ~equal:BI.equal_mma_input_format then acc else fmt :: acc)
+                |> List.rev
+              in
+              match distinct with
+              | [ fmt ] -> (
+                  let fmt_name = BI.mma_input_format_name fmt in
+                  match Autotune.mma_peak_leg ~limits fmt with
+                  | Some (flops, Autotune.Mma_peak_config key) ->
+                      Bench_json.Mma_peak
+                        { format = fmt_name; flops; source = Printf.sprintf "%s config" key }
+                  | Some (flops, Autotune.Mma_peak_backend prov) ->
+                      Bench_json.Mma_peak
+                        {
+                          format = fmt_name;
+                          flops;
+                          source =
+                            Printf.sprintf "%s %s" backend (BI.mma_peak_provenance_string prov);
+                        }
+                  | Some (flops, Autotune.Mma_peak_scalar_alu `Backend) ->
+                      Bench_json.Mma_peak
+                        {
+                          format = fmt_name;
+                          flops;
+                          source =
+                            Printf.sprintf "%s class constant (mma shares shader ALU)" backend;
+                        }
+                  | Some (flops, Autotune.Mma_peak_scalar_alu `Config) ->
+                      Bench_json.Mma_peak
+                        {
+                          format = fmt_name;
+                          flops;
+                          source = "model_peak_flops config (mma shares shader ALU)";
+                        }
+                  | None ->
+                      let hint =
+                        match fmt with
+                        | BI.Mma_f16 -> "; set model_peak_mma_f16"
+                        | BI.Mma_bf16 -> "; set model_peak_mma_bf16"
+                        | BI.Mma_tf32 -> "; set model_peak_mma_tf32"
+                        | BI.Mma_fp8_e5m2 -> "; set model_peak_mma_fp8"
+                        | BI.Mma_f32 -> "; set model_peak_flops"
+                      in
+                      Bench_json.Mma_no_peak
+                        (Printf.sprintf "tensor-core kernel (%s): no mma peak for %s%s" fmt_name
+                           backend hint))
+              | [] -> Bench_json.Mma_no_peak "tensor-core kernel: no emitted MMA format recorded"
+              | many ->
+                  let names = String.concat ~sep:", " (List.map many ~f:BI.mma_input_format_name) in
+                  Bench_json.Mma_no_peak
+                    (Printf.sprintf "tensor-core kernel mixes MMA formats (%s): no single ceiling"
+                       names))))
+
 (** How many written nodes a kernel's label names before eliding the rest. *)
 let label_writes = 3
 
@@ -1953,9 +2044,14 @@ let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing (
               ~seg_ms:spread.Bench_retime.ms ~seg_ms_lo:spread.lo_ms ~seg_ms_hi:spread.hi_ms ~timing
               ~segments_ms ~tensorization seg
           in
+          let mma_ceiling =
+            if gpu && String.equal tensorization "tensorized" then
+              Some (mma_ceiling_of ~backend ~limits mma)
+            else None
+          in
           let ceiling =
-            Bench_json.choose_ceiling ~gpu ~tensorization ~narrow_native:(narrow_native ~limits s)
-              ~peak_flops ~peak_memory_bandwidth
+            Bench_json.choose_ceiling ~mma_ceiling ~gpu ~tensorization
+              ~narrow_native:(narrow_native ~limits s) ~peak_flops ~peak_memory_bandwidth
           in
           Bench_json.dominant_kernel_object ~ceiling (Some kernel))
 

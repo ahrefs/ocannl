@@ -78,6 +78,12 @@ let full =
     staged_copy_rate = Some 1e12;
     shared_load_rate = Some 1e13;
     fill_lane_width = Some 32;
+    mma_peak_f16 = Some { BI.mma_peak_flops = 3e13; mma_peak_provenance = Datasheet_class "f16" };
+    mma_peak_bf16 = Some { BI.mma_peak_flops = 3e13; mma_peak_provenance = Datasheet_class "bf16" };
+    mma_peak_tf32 =
+      Some { BI.mma_peak_flops = 1.5e13; mma_peak_provenance = Datasheet_class "tf32" };
+    mma_peak_fp8 = Some { BI.mma_peak_flops = 6e13; mma_peak_provenance = Datasheet_class "fp8" };
+    mma_uses_scalar_peak = true;
     native_fp16_arithmetic = true;
     simdgroup_width = Some 32;
     lane_scalar_recompute_cheap = true;
@@ -119,6 +125,35 @@ let toggles : (string * (BI.hardware_limits -> BI.hardware_limits)) list =
     ("staged_copy_rate", fun l -> { l with staged_copy_rate = Some 1. });
     ("shared_load_rate", fun l -> { l with shared_load_rate = Some 1. });
     ("fill_lane_width", fun l -> { l with fill_lane_width = Some 64 });
+    ( "mma_peak_f16",
+      fun l ->
+        {
+          l with
+          mma_peak_f16 =
+            Some { BI.mma_peak_flops = 1.; mma_peak_provenance = Measured_run "toggle" };
+        } );
+    ( "mma_peak_bf16",
+      fun l ->
+        {
+          l with
+          mma_peak_bf16 =
+            Some { BI.mma_peak_flops = 1.; mma_peak_provenance = Measured_run "toggle" };
+        } );
+    ( "mma_peak_tf32",
+      fun l ->
+        {
+          l with
+          mma_peak_tf32 =
+            Some { BI.mma_peak_flops = 1.; mma_peak_provenance = Measured_run "toggle" };
+        } );
+    ( "mma_peak_fp8",
+      fun l ->
+        {
+          l with
+          mma_peak_fp8 =
+            Some { BI.mma_peak_flops = 1.; mma_peak_provenance = Measured_run "toggle" };
+        } );
+    ("mma_uses_scalar_peak", fun l -> { l with mma_uses_scalar_peak = false });
     ("native_fp16_arithmetic", fun l -> { l with native_fp16_arithmetic = false });
     ("simdgroup_width", fun l -> { l with simdgroup_width = Some 64 });
     ("lane_scalar_recompute_cheap", fun l -> { l with lane_scalar_recompute_cheap = false });
@@ -139,7 +174,13 @@ let field_names sexp =
 let all_fields = field_names (BI.sexp_of_hardware_limits full)
 let key_fields = field_names (BI.Limits_key.sexp_of_t (BI.limits_key full))
 let is_key name = List.mem key_fields name ~equal:String.equal
-let untimed_fields = List.filter all_fields ~f:(Fn.non is_key)
+let non_key_fields = List.filter all_fields ~f:(Fn.non is_key)
+
+let reporting_fields =
+  [ "mma_peak_bf16"; "mma_peak_f16"; "mma_peak_fp8"; "mma_peak_tf32"; "mma_uses_scalar_peak" ]
+
+let untimed_fields =
+  List.filter non_key_fields ~f:(fun f -> not (List.mem reporting_fields f ~equal:String.equal))
 
 let key_of limits =
   SC.codegen_tag ~facts:Ir.Backend_intf.cuda_facts ~limits ~capabilities:BI.no_codegen_capabilities
@@ -174,16 +215,24 @@ let () =
          "transaction_rate";
          "workgroup_bytes_per_multiprocessor";
        ]);
+  p "the Reporting fields are the four per-format MMA peaks and the scalar-ALU flag"
+    (List.equal String.equal
+       (List.sort
+          (List.filter non_key_fields ~f:(fun f ->
+               not (List.mem untimed_fields f ~equal:String.equal)))
+          ~compare:String.compare)
+       reporting_fields);
   let base = key_of full in
   p_all ~min:(List.length all_fields)
-    "toggling a Key field changes the cache key, toggling an Untimed field leaves it unchanged"
+    "toggling a Key field changes the cache key, toggling an Untimed or Reporting field leaves it \
+     unchanged"
     toggles ~f:(fun (name, toggle) ->
       let moved = not (String.equal base (key_of (toggle full))) in
       if Bool.equal moved (is_key name) then true
       else (
         eprintf "field %s: key %s, class %s\n" name
           (if moved then "moved" else "unchanged")
-          (if is_key name then "Key" else "Untimed");
+          (if is_key name then "Key" else "non-Key");
         false))
 
 let presets =
@@ -224,7 +273,8 @@ let presets =
 
 let () =
   p_all ~min:(List.length presets)
-    "the Key projection renders as the full record with its Untimed fields absent, on every preset"
+    "the Key projection renders as the full record with its Untimed and Reporting fields absent, \
+     on every preset"
     presets ~f:(fun (name, l) ->
       let without =
         {
@@ -244,6 +294,11 @@ let () =
           staged_copy_rate = None;
           shared_load_rate = None;
           fill_lane_width = None;
+          mma_peak_f16 = None;
+          mma_peak_bf16 = None;
+          mma_peak_tf32 = None;
+          mma_peak_fp8 = None;
+          mma_uses_scalar_peak = false;
         }
       in
       let ok =
@@ -255,6 +310,7 @@ let () =
 (* {2 The source scan} *)
 
 let accessor = "untimed_limits"
+let reporting_accessor = "reporting_limits"
 
 (* Reads of an Untimed field in one source: field accesses, and record patterns binding the field to
    anything but [_]. Record expressions set fields and are not reads. *)
@@ -1232,17 +1288,55 @@ let () =
       | reads ->
           eprintf "%s reads %s\n" f (String.concat ~sep:", " reads);
           false);
+  p_all ~min:20 "no source but backend_intf.ml reads a Reporting field" outside_intf ~f:(fun f ->
+      match field_reads ~fields:reporting_fields (read f) with
+      | [] -> true
+      | reads ->
+          eprintf "%s reads %s\n" f (String.concat ~sep:", " reads);
+          false);
   p_all ~min:20 "only autotune.ml references the Untimed accessor"
     (List.filter outside_intf ~f:(fun f -> not (String.equal (base f) "autotune.ml")))
     ~f:(fun f ->
       let ok = not (references ~name:accessor (read f)) in
       if not ok then eprintf "%s references %s\n" f accessor;
       ok);
+  p_all ~min:20 "only autotune.ml references the Reporting accessor"
+    (List.filter outside_intf ~f:(fun f -> not (String.equal (base f) "autotune.ml")))
+    ~f:(fun f ->
+      let ok = not (references ~name:reporting_accessor (read f)) in
+      if not ok then eprintf "%s references %s\n" f reporting_accessor;
+      ok);
   let autotune = List.find sources ~f:(fun f -> is_lib f && String.equal (base f) "autotune.ml") in
   p "the scan reads arrayjit/lib/autotune.ml" (Option.is_some autotune);
   Option.iter autotune ~f:(fun f ->
       let source = read f in
       p "autotune.ml references the Untimed accessor" (references ~name:accessor source);
+      p "autotune.ml references the Reporting accessor" (references ~name:reporting_accessor source);
+      p "mma_peak_leg reaches the Reporting accessor (the reach is not blind)"
+        (List.mem
+           (reached_readers ~root:"mma_peak_leg" ~reader:reporting_accessor source)
+           "mma_peak_leg" ~equal:String.equal);
+      let reporting_forbidden_roots =
+        [
+          "tune";
+          "model_default";
+          "seeded_default";
+          "seeded_plan";
+          "model_score";
+          "model_explain";
+          "model_family_search";
+          "envelope";
+          "envelope_legs";
+        ]
+      in
+      p_all "no autotune search, ranking or seeding root reaches the Reporting accessor"
+        reporting_forbidden_roots ~f:(fun root ->
+          let reached = reached_readers ~root ~reader:reporting_accessor source in
+          if List.is_empty reached then true
+          else (
+            eprintf "%s reaches %s via: %s\n" root reporting_accessor
+              (String.concat ~sep:", " reached);
+            false));
       p "model_default reaches the Untimed accessor (the reach is not blind)"
         (List.mem
            (reached_readers ~root:"model_default" ~reader:accessor source)

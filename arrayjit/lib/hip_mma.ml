@@ -196,3 +196,19 @@ let operand_fragments ~a_prec ~b_prec ~d_prec ~scope:_ =
 (* No [ldmatrix] analogue: [accepts] declines a swizzled operand, and every load [k_loop_lines]
    emits is a whole-fragment [load_matrix_sync]. *)
 let operand_loads ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ ~ta:_ ~tb:_ ~a:_ ~b:_ = (false, false)
+
+(* gh-ocannl-1092: advisory dense matrix-unit peaks for the benchmark report's kernel %peak column
+   (reporting-only; never feeds autotune ranking or bound pruning). On RDNA3/RDNA3.5 wave32 (gfx1102
+   RX 7700S: 32 CUs x 512 FLOP/cycle/CU x 2.5 GHz = 40.96 TFLOP/s; gfx1151 Radeon 8060S: 40 CUs x
+   512 x 2.9 GHz = 59.39 TFLOP/s), [v_wmma] delivers 512 FLOP/cycle/CU for both FP16 and BF16 (4x
+   single-issue fp32, matching [Hip_backend]'s [peak_flops = 1.0e13]). *)
+let rdna3_wmma_peak fmt =
+  {
+    Backend_intf.mma_peak_flops = 4.0e13;
+    mma_peak_provenance =
+      Datasheet_class
+        (Printf.sprintf "AMD RDNA3 WMMA class, 512 FLOP/cycle/CU, RX 7700S 41 TFLOP/s dense %s" fmt);
+  }
+
+let mma_peak_f16 = rdna3_wmma_peak "FP16"
+let mma_peak_bf16 = rdna3_wmma_peak "BF16"

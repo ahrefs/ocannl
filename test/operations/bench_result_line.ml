@@ -169,9 +169,9 @@ let tune =
    FLOP/s is 0.2 ms, so the memory leg binds and a 4 ms kernel attains 25%. *)
 let class_legs = (Some (5e12, "fab class constant"), Some (1e12, "fab class constant"))
 
-let ceiling ?(gpu = true) ?(tensorization = "not-requested") ?(narrow_native = false)
+let ceiling ?mma_ceiling ?(gpu = true) ?(tensorization = "not-requested") ?(narrow_native = false)
     ?(legs = class_legs) () =
-  Bench_json.choose_ceiling ~gpu ~tensorization ~narrow_native ~peak_flops:(fst legs)
+  Bench_json.choose_ceiling ~mma_ceiling ~gpu ~tensorization ~narrow_native ~peak_flops:(fst legs)
     ~peak_memory_bandwidth:(snd legs)
 
 let kernel ?(flops = 1_000_000_000) ?(bytes = 1_000_000_000) ?(flops_exact = true)
@@ -204,6 +204,32 @@ let dominant_kernels =
       Bench_json.dominant_kernel_object
         ~ceiling:(ceiling ~gpu:false ~narrow_native:true ())
         (Some (kernel ~flops:40_000_000_000 ~seg_ms:8. ())) );
+    ( "exact mma-f16",
+      (* gh-ocannl-1092: GPU tensor-core kernel scored against its format's datasheet peak: 6e10 ops
+         at 3e13 is 2 ms against 1 ms of bytes, so compute binds and 4 ms attains 50%. *)
+      Bench_json.dominant_kernel_object
+        ~ceiling:
+          (ceiling ~tensorization:"tensorized"
+             ~mma_ceiling:
+               (Bench_json.Mma_peak
+                  { format = "f16"; flops = 3e13; source = "fab datasheet (dense FP16 f32-accum)" })
+             ())
+        (Some (kernel ~tensorization:"tensorized" ~flops:60_000_000_000 ~seg_ms:4. ())) );
+    ( "exact mma-f32 (scalar ALU)",
+      (* gh-ocannl-1092: Apple Silicon Metal rule — simdgroup_matrix shares the shader ALUs, so 2e10
+         ops at 5e12 is 4 ms against 1 ms of bytes and 8 ms attains 50%. *)
+      Bench_json.dominant_kernel_object
+        ~ceiling:
+          (ceiling ~tensorization:"tensorized"
+             ~mma_ceiling:
+               (Bench_json.Mma_peak
+                  {
+                    format = "f32";
+                    flops = 5e12;
+                    source = "fab class constant (mma shares shader ALU)";
+                  })
+             ())
+        (Some (kernel ~tensorization:"tensorized" ~flops:20_000_000_000 ~seg_ms:8. ())) );
     ( "exact, isolated",
       (* gh-ocannl-1860: the same kernel re-timed under [isolated]; a report refuses to put it in
          one column beside the [queued] one (benchmarks/test_orchestrate.py reads both). *)
@@ -518,9 +544,33 @@ let () =
     match member "note" (dk "no-ceiling (no constants)") with
     | `String n -> String.is_substring n ~substring:"no peak_flops"
     | _ -> false);
-  p "a GPU tensor-core kernel is not scored against the scalar f32 constant"
+  p "a GPU tensor-core kernel with no format peak is not scored against the scalar f32 constant"
     (Yojson.Safe.equal (verdict "no-ceiling (gpu tensor cores)") (`String "no-ceiling")
     && Yojson.Safe.equal (member "ceiling" (dk "no-ceiling (gpu tensor cores)")) `Null);
+  p
+    "a GPU tensor-core kernel with an mma-f16 ceiling scores against its format peak with \
+     provenance"
+    (let o = dk "exact mma-f16" in
+     Yojson.Safe.equal (member "verdict" o) (`String "exact")
+     && Yojson.Safe.equal (member "ceiling" o) (`String "mma-f16")
+     && Yojson.Safe.equal (member "ceiling_flops" o) (`Float 3e13)
+     && Yojson.Safe.equal (member "bound" o) (`String "compute")
+     && Yojson.Safe.equal (member "pct_of_peak" o) (`Int 50)
+     &&
+     match member "ceiling_source" o with
+     | `String s -> String.is_substring s ~substring:"fab datasheet (dense FP16 f32-accum)"
+     | _ -> false);
+  p "a GPU tensor-core kernel under the scalar-ALU rule scores as mma-f32 at the scalar peak"
+    (let o = dk "exact mma-f32 (scalar ALU)" in
+     Yojson.Safe.equal (member "verdict" o) (`String "exact")
+     && Yojson.Safe.equal (member "ceiling" o) (`String "mma-f32")
+     && Yojson.Safe.equal (member "ceiling_flops" o) (`Float 5e12)
+     && Yojson.Safe.equal (member "bound" o) (`String "compute")
+     && Yojson.Safe.equal (member "pct_of_peak" o) (`Int 50)
+     &&
+     match member "ceiling_source" o with
+     | `String s -> String.is_substring s ~substring:"mma shares shader ALU"
+     | _ -> false);
   p "a C backend's register tile keeps the scalar ceiling, since it runs on the SIMD units"
     (match ceiling ~gpu:false ~tensorization:"tensorized" () with
     | Ok c -> String.equal c.Bench_json.tag "f32"

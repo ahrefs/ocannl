@@ -1457,14 +1457,19 @@ both `cifar_resnet` and `cifar_resnet_b1` absent from the store (gh-ocannl-1825)
   - *Which ceiling.* Matched to the kernel: `f32` is the backend's single-precision scalar
     `peak_flops` with `peak_memory_bandwidth`; `f16-native` doubles the flops leg for a kernel whose
     arithmetic is all 16-bit on a target where that is native (gh-ocannl-575). A **GPU tensor-core
-    kernel has none** — `no ceiling` — because `peak_flops` is scalar f32 and no class constant for
-    the mma unit exists, so scoring against it would read above 100% on exactly the rows this
-    column is for. The C backends' `Tile_mma` register tile runs on the SIMD units `peak_flops`
-    describes and keeps the scalar ceiling. Both legs or nothing: the C backends carry no class
-    constant, so a `cc` row prints `no ceiling` unless `model_peak_flops` and
-    `model_peak_memory_bandwidth` are set (fit them with `tools/fit_envelope.exe` /
-    `tools/calibrate_bandwidth.exe`); the envelope is `Autotune.envelope_legs`, the one the model
-    ranks with, and the header names each ceiling's constants and whose they are.
+    kernel** uses `mma-<fmt>` (`mma-f16`, `mma-bf16`, `mma-tf32`, `mma-fp8`, `mma-f32`,
+    gh-ocannl-1092) matched to the intrinsic `Tile_mma` format actually emitted: CUDA and HIP supply
+    per-format datasheet peaks in `hardware_limits` (overridable via `model_peak_mma_*`), and Apple
+    Silicon Metal maps `simdgroup_matrix` kernels to the scalar `peak_flops` ceiling
+    (`mma_uses_scalar_peak = true`, following any `model_peak_flops` override). Unconfigured or
+    mixed-format GPU tensor-core kernels still fail closed to `no ceiling`. These per-format MMA
+    peaks are reporting-only (`Autotune.mma_peak_leg`) and never feed autotune ranking or bound
+    pruning. The C backends' `Tile_mma` register tile runs on the SIMD units `peak_flops` describes
+    and keeps the scalar ceiling. Both legs or nothing: the C backends carry no class constant, so a
+    `cc` row prints `no ceiling` unless `model_peak_flops` and `model_peak_memory_bandwidth` are set
+    (fit them with `tools/fit_envelope.exe` / `tools/calibrate_bandwidth.exe`); the scalar envelope
+    is `Autotune.envelope_legs`, the one the model ranks with, and the header names each ceiling's
+    constants and provenance.
   - *Whose ceiling.* These are CLASS constants (or one machine's override), not this device's
     peak: the column ranks before/after on one box and certifies nothing about the hardware. A
     number above 100% says the constant is below this card. A small kernel's per-launch dispatch

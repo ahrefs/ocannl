@@ -226,6 +226,10 @@ let known_config_keys =
       "model_default_geometry_lattice";
       "model_peak_flops";
       "model_peak_memory_bandwidth";
+      "model_peak_mma_f16";
+      "model_peak_mma_bf16";
+      "model_peak_mma_tf32";
+      "model_peak_mma_fp8";
       "model_cache_capacity";
       "model_cache_bandwidth";
       "model_issue_rate";
@@ -596,6 +600,12 @@ let config_key_classification : (config_key_class * string * string list) list =
         "model_fill_lane_width";
       ] );
     ( Execution_neutral,
+      "advisory reporting-only per-format matrix-unit peak ceilings for the benchmark report's \
+       kernel %peak column (gh-ocannl-1092): never consulted by compilation, scheduling, autotune \
+       ranking, bound pruning or the schedule cache",
+      [ "model_peak_mma_f16"; "model_peak_mma_bf16"; "model_peak_mma_tf32"; "model_peak_mma_fp8" ]
+    );
+    ( Execution_neutral,
       "startup and configuration-sourcing chatter, which descriptor foreign C-library chatter \
        follows, and whether its known per-event noise is collapsed into a count",
       [
@@ -825,6 +835,10 @@ let config_key_defaults : (string * (config_value_kind * string)) list =
     ("autotune_calibration_file", (Text, ""));
     ("model_peak_flops", (Positive_float_or_unset, ""));
     ("model_peak_memory_bandwidth", (Positive_float_or_unset, ""));
+    ("model_peak_mma_f16", (Positive_float_or_unset, ""));
+    ("model_peak_mma_bf16", (Positive_float_or_unset, ""));
+    ("model_peak_mma_tf32", (Positive_float_or_unset, ""));
+    ("model_peak_mma_fp8", (Positive_float_or_unset, ""));
     ("strict_failure_classification", (Flag, "true"));
   ]
 

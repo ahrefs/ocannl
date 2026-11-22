@@ -2272,6 +2272,14 @@ end = struct
               model_fill_lane_width. *)
            shared_load_rate = Some 2.5e12;
            fill_lane_width = Some warp;
+           (* gh-ocannl-1092: advisory per-format dense tensor-core peaks (reporting-only, never
+              feeds autotune ranking or bound pruning), gated by attached devices' minimum compute
+              capability via [Cuda_mma.mma_peaks]. *)
+           mma_peak_f16 = (Cuda_mma.mma_peaks ~cc:(min_compute_capability ())).f16;
+           mma_peak_bf16 = (Cuda_mma.mma_peaks ~cc:(min_compute_capability ())).bf16;
+           mma_peak_tf32 = (Cuda_mma.mma_peaks ~cc:(min_compute_capability ())).tf32;
+           mma_peak_fp8 = (Cuda_mma.mma_peaks ~cc:(min_compute_capability ())).fp8;
+           mma_uses_scalar_peak = false;
          })
     in
     (* gh-ocannl-572: the kernel source is a function of the lowered code, the device capabilities
