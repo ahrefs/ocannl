@@ -62,7 +62,7 @@ let () =
       (Autotune.default_seed_label ~facts:(Context.backend_facts_of_name backend_name))
       ~default:"<no default seed>"
   in
-  let run_leg ~leg ~scope =
+  let run_leg ~leg ~name ~scope =
     Stdio.printf "%s\n%!" leg;
     Stdio.eprintf "measured refusal %s\n%!" leg;
     let default_digest = ref None and seam_refused = ref 0 and report = ref None in
@@ -104,8 +104,8 @@ let () =
           else ms );
         let ctx, routine =
           scope (fun () ->
-              Autotune.tune ~search:true ~beam_width:1 ~rounds:0 ~repeats:1 ~timing:Autotune.Queued
-                ~cache_dir:""
+              Autotune.tune ~name ~search:true ~beam_width:1 ~rounds:0 ~repeats:1
+                ~timing:Autotune.Queued ~cache_dir:""
                 ~report:(fun r -> report := Some r)
                 parent comp Ir.Indexing.Empty)
         in
@@ -171,5 +171,6 @@ let () =
           (Option.is_none r.default_ms);
         p "the refused seed did not win" (not (String.equal r.best_label default_seed_label))
   in
-  run_leg ~leg:"leg: production admission" ~scope:(fun f -> f ());
-  run_leg ~leg:"leg: uncontended windows" ~scope:Autotune.with_uncontended_test_windows
+  run_leg ~leg:"leg: production admission" ~name:"amr_production" ~scope:(fun f -> f ());
+  run_leg ~leg:"leg: uncontended windows" ~name:"amr_uncontended"
+    ~scope:Autotune.with_uncontended_test_windows
