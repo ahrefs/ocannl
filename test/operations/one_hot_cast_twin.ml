@@ -107,6 +107,26 @@ let param_by_label root name =
 
 let under_half_ulp prec = (2. **. Float.of_int (-Ops.significand_bits prec)) -. (2. **. -20.)
 
+(* Independent host-side reference for the embedding forward lookup and backward scatter-add, free
+   of [rewrite_one_hot_reductions] (catches any bug shared by both the f32 and cast-twin routes). *)
+let host_embedding_ref ~vocab ~d_model ~ids_rows ~wte_vals ~coeff_vals =
+  let batch = Array.length ids_rows and seq = Array.length ids_rows.(0) in
+  let host_emb = Array.create ~len:(batch * seq * d_model) 0. in
+  let host_grad = Array.create ~len:(d_model * vocab) 0. in
+  for b = 0 to batch - 1 do
+    for s = 0 to seq - 1 do
+      let pos = (b * seq) + s in
+      let id = ids_rows.(b).(s) in
+      if id >= 0 && id < vocab then
+        for d = 0 to d_model - 1 do
+          host_emb.((pos * d_model) + d) <- wte_vals.((d * vocab) + id);
+          let g_idx = (d * vocab) + id in
+          host_grad.(g_idx) <- host_grad.(g_idx) +. coeff_vals.((pos * d_model) + d)
+        done
+    done
+  done;
+  (host_emb, host_grad)
+
 (* Build and run one embedding forward + backward graph at [gpt2_mini_train]-style shapes, either
    plain f32 ([prec = None]) or mixed-precision with a cast twin ([prec = Some (p, placement)]). *)
 let run_embedding_step ~vocab ~d_model ~ids_rows ~wte_vals ~coeff_vals ~prec =
@@ -182,11 +202,19 @@ let () =
           ~f:(fun idx ->
             Ll_test.cycle_flat ~radix:7 ~dims:coeff_dims ~modulus:29 ~offset:1. ~stride:0.01 idx)
       in
+      let host_emb, host_grad =
+        host_embedding_ref ~vocab ~d_model ~ids_rows ~wte_vals ~coeff_vals
+      in
       let f32_emb, f32_grad, f32_counts =
         run_embedding_step ~vocab ~d_model ~ids_rows ~wte_vals ~coeff_vals ~prec:None
       in
       p "f32 baseline lowers embedding forward as Get_dynamic and backward as Set_dynamic"
         (f32_counts.gathers >= 1 && f32_counts.scatters >= 1 && f32_counts.vocab_loops = 0);
+      let f32_tol w = 1e-5 +. (1e-5 *. Float.abs w) in
+      p_close "f32 baseline forward embedding matches independent host reference" f32_emb host_emb
+        ~tol:f32_tol;
+      p_close "f32 baseline backward wte.grad matches independent host reference" f32_grad host_grad
+        ~tol:f32_tol;
       let bf16_emb_tol w = 2e-2 +. (1e-2 *. Float.abs w) in
       let bf16_grad_tol w = 5e-2 +. (2e-2 *. Float.abs w) in
       let rows_have_opposite_sign a b = Array.exists2_exn a b ~f:(fun x y -> Float.(x *. y < 0.)) in
@@ -214,6 +242,8 @@ let () =
           pf "bf16 %s: uint32 IDs emit no integrality Trunc" label (bf_counts.truncs = 0);
           pf_close "bf16 %s: forward embedding matches f32 within bf16 tolerance" label bf_emb
             f32_emb ~tol:bf16_emb_tol;
+          pf_close "bf16 %s: forward embedding matches independent host reference" label bf_emb
+            host_emb ~tol:bf16_emb_tol;
           (* Adjacent IDs past 256 (positions 3 vs 4 -> IDs 256 vs 257; positions 7 vs 8 -> IDs 512
              vs 513) must stay distinct and match their own table rows. *)
           let row_at pos = Array.sub bf_emb ~pos:(pos * d_model) ~len:d_model in
@@ -229,6 +259,8 @@ let () =
              dropped/misrouted scatter. *)
           pf_close "bf16 %s: backward wte.grad matches f32 within bf16 tolerance" label bf_grad
             f32_grad ~tol:bf16_grad_tol;
+          pf_close "bf16 %s: backward wte.grad matches independent host reference" label bf_grad
+            host_grad ~tol:bf16_grad_tol;
           let untouched_cells =
             Array.foldi bf_grad ~init:[] ~f:(fun idx acc g ->
                 if touched.(idx % vocab) then acc else g :: acc)

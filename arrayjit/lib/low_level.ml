@@ -6573,21 +6573,43 @@ let fold_read_roundings llc ~init ~f =
     }
   in
   let rec read_node = function
-    | Get (read, _) | Get_dynamic { tn = read; _ } -> Some read
+    | Get (read, _) -> Some (read, None)
+    | Get_dynamic { tn = read; dyn_value = v, _; _ } -> Some (read, Some v)
     | Unop (Ops.Round_prec, (inner, _)) -> read_node inner
     | _ -> None
   in
-  let scalar _ acc (sc : scalar_t) =
+  let rec scalar _ acc (sc : scalar_t) =
     match sc with
     | Unop (Ops.Round_prec, (inner, t)) -> (
-        match read_node inner with Some read -> Continue (f acc read t) | None -> Continue acc)
+        match read_node inner with
+        | Some (read, dyn_opt) ->
+            let acc = f acc read t in
+            let acc =
+              match dyn_opt with
+              | None -> acc
+              | Some dyn -> fold_scalar ~policy ~hooks:{ (hooks ()) with scalar } ~init:acc dyn
+            in
+            Prune acc
+        | None -> Continue acc)
     | _ -> Continue acc
   in
   fold ~policy ~hooks:{ (hooks ()) with scalar } ~init llc
 
 let rounded_read_prec llc tn =
   fold_read_roundings llc ~init:None ~f:(fun acc read prec ->
-      if Option.is_none acc && Tn.equal read tn then Some prec else acc)
+      if Tn.equal read tn then Some prec else acc)
+
+(* True when every integer in [iv] is represented exactly and distinctly at precision [q] -- no
+   modular wrap-around for integers, and strictly below [float_exact_int_limit] for floats (so no
+   out-of-range integer can round onto an in-range value either). Shared by [integer_scope_exact]
+   (gh-ocannl-1884) and [match_one_hot_cmpeq] (gh-ocannl-2374). *)
+let interval_fits_exact_in (q : Ops.prec) (iv : Interval.t) =
+  iv.integral && iv.exact
+  &&
+  match (Ops.integer_range q, Ops.float_exact_int_limit q) with
+  | Some (lo, hi), _ -> Float.(lo <= iv.lo && iv.hi <= hi)
+  | None, Some limit -> Float.(abs iv.lo < limit && abs iv.hi < limit)
+  | None, None -> false
 
 (* gh-ocannl-1884: whether collapsing a [Local_scope] of integer precision [scope_prec], over [v],
    into a slot evaluating at [eval] leaves its value alone. A collapse drops two things: the
@@ -6620,14 +6642,7 @@ let rounded_read_prec llc tn =
    Only precisions and loop extents are read: a decision resting on a node's bounds candidate would
    have to settle it, and a collapse is not worth refusing a later upload. *)
 let integer_scope_exact ~ienv ~(scope_prec : Ops.prec) ~(eval : Ops.prec) (v : scalar_t) =
-  let holds q (iv : Interval.t) =
-    iv.integral && iv.exact
-    &&
-    match (Ops.integer_range q, Ops.float_exact_int_limit q) with
-    | Some (lo, hi), _ -> Float.(lo <= iv.lo && iv.hi <= hi)
-    | None, Some limit -> Float.(abs iv.lo < limit && abs iv.hi < limit)
-    | None, None -> false
-  in
+  let holds = interval_fits_exact_in in
   let read q ~from =
     let iv = Interval.dtype_range from in
     Option.some_if (Ops.is_integer from && (holds q iv || Ops.widens_exactly ~from ~to_:q)) iv
@@ -9447,31 +9462,38 @@ let sink_zero_outs (llc : t) : t =
    [prec] -- no modular wrap-around for integers, and strictly below [float_exact_int_limit] for
    floats (so no out-of-range integer can round down onto a class index either). *)
 let one_hot_range_exact_in (prec : Ops.prec) ~from_ ~to_ =
-  from_ >= 0 && from_ <= to_
-  &&
-  let lo_k = Float.of_int from_ and hi_k = Float.of_int to_ in
-  match (Ops.integer_range prec, Ops.float_exact_int_limit prec) with
-  | Some (lo, hi), _ -> Float.(lo <= lo_k && hi_k <= hi)
-  | None, Some limit -> Float.(abs lo_k < limit && abs hi_k < limit)
-  | None, None -> false
+  from_ >= 0 && from_ <= to_ && interval_fits_exact_in prec (Interval.of_int_range from_ to_)
 
-let scalar_reads_scope_id (target : scope_id) (llsc : scalar_t) : bool =
-  let open Access_fold in
-  let policy =
-    {
-      discarded_operands = Visit;
-      gated_operands = Visit;
-      dead_loops = Visit;
-      local_scopes = Visit;
-      guards = Ignore;
-      scan_implicit = Visit;
-    }
-  in
-  let scalar _ acc = function
-    | Get_local id when equal_scope_id id target -> Prune true
-    | _ -> Continue acc
-  in
-  fold_scalar ~policy ~hooks:{ (hooks ()) with scalar } ~init:false llsc
+(* Whether a scalar reads the scope local [id], descending into nested scope bodies — certifies that
+   an update's contribution or unwrapped selector index is free of the local it updates (the
+   scope-local counterpart of {!scalar_touches_tn}). *)
+let rec scalar_reads_scope ~id (s : scalar_t) =
+  match s with
+  | Get_local id' -> Scope_id.equal id id'
+  | Local_scope { body; _ } -> code_reads_scope ~id body
+  | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> false
+  | Get_dynamic { dyn_value = v, _; _ } -> scalar_reads_scope ~id v
+  | Ternop (_, (a, _), (b, _), (c, _)) ->
+      scalar_reads_scope ~id a || scalar_reads_scope ~id b || scalar_reads_scope ~id c
+  | Binop (_, (a, _), (b, _)) -> scalar_reads_scope ~id a || scalar_reads_scope ~id b
+  | Unop (_, (a, _)) -> scalar_reads_scope ~id a
+
+and code_reads_scope ~id (llc : t) =
+  match llc with
+  | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Zero_out _ ->
+      false
+  | Seq (a, b) -> code_reads_scope ~id a || code_reads_scope ~id b
+  | For_loop { body; _ } -> code_reads_scope ~id body
+  | Scan_loop { carried; body; _ } ->
+      List.exists carried ~f:(fun c -> Scope_id.equal id c.next || scalar_reads_scope ~id c.init)
+      || code_reads_scope ~id body
+  | If { cond = c, _; body } -> scalar_reads_scope ~id c || code_reads_scope ~id body
+  | Set { llsc; _ } | Set_local (_, llsc) -> scalar_reads_scope ~id llsc
+  | Set_dynamic { dyn_value = v, _; llsc; _ } ->
+      scalar_reads_scope ~id v || scalar_reads_scope ~id llsc
+  | Set_from_vec { arg = a, _; _ } -> scalar_reads_scope ~id a
+  (* The fallback is what a backend without an MMA hook executes, so a local it reads is read. *)
+  | Tile_mma { fallback; _ } -> code_reads_scope ~id fallback
 
 (* gh-343: recognize the in-range guard's reduction body. Matches the two semantically-equivalent
    one-hot selectors over loop variable [k]: - [Where (Cmpeq (Embed_index (Iterator k), index_expr),
@@ -9494,7 +9516,7 @@ let match_one_hot_cmpeq ~ienv ~cmpeq_prec ~from_ ~to_ (k : Indexing.symbol) :
     Option.some_if (not (Ops.is_integer p && float_valued v)) arg
   in
   let scoped_index ~id ~scope_prec (v : scalar_t) : scalar_arg option =
-    if scalar_reads_scope_id id v then None
+    if scalar_reads_scope ~id v then None
     else
       let read_exact ~from =
         if
@@ -9510,27 +9532,12 @@ let match_one_hot_cmpeq ~ienv ~cmpeq_prec ~from_ ~to_ (k : Indexing.symbol) :
       | Get_local { tn; _ }
       | Local_scope { id = { tn; _ }; _ } ->
           read_exact ~from:(Lazy.force tn.Tn.storage_prec)
-      | Constant c -> (
-          if Ops.is_integer scope_prec then
-            match Ops.integer_range scope_prec with
-            | Some (lo, hi) when Float.is_integer c && Float.(lo <= c && c <= hi) ->
-                Some (v, scope_prec)
-            | _ -> None
-          else
-            match Ops.float_exact_int_limit scope_prec with
-            | Some limit when Float.is_integer c && Float.(abs c < limit) -> Some (v, scope_prec)
-            | _ -> None)
+      | Constant c ->
+          Option.some_if (interval_fits_exact_in scope_prec (Interval.point c)) (v, scope_prec)
       | Embed_index idx ->
-          let iv = interval_of_index ienv idx in
-          let fits =
-            iv.integral && iv.exact
-            &&
-            match (Ops.integer_range scope_prec, Ops.float_exact_int_limit scope_prec) with
-            | Some (lo, hi), _ -> Float.(lo <= iv.lo && iv.hi <= hi)
-            | None, Some limit -> Float.(abs iv.lo < limit && abs iv.hi < limit)
-            | None, None -> false
-          in
-          Option.some_if fits (v, Ops.index_prec ())
+          Option.some_if
+            (interval_fits_exact_in scope_prec (interval_of_index ienv idx))
+            (v, Ops.index_prec ())
       | _ ->
           (* Compound expressions are only exact to unwrap when [scope_prec] already equals the
              guard precision ([guard_conjuncts] widens narrower types), and not float-valued at an
@@ -9924,37 +9931,6 @@ let pure_index_guard (llsc : scalar_t) =
   match llsc with
   | Binop ((Ops.Cmplt | Ops.Cmple), (a, _), (b, _)) -> operand a && operand b
   | _ -> false
-
-(* Whether a scalar reads the scope local [id], descending into nested scope bodies — certifies that
-   an update's contribution is free of the local it updates (the scope-local counterpart of
-   {!scalar_touches_tn}). *)
-let rec scalar_reads_scope ~id (s : scalar_t) =
-  match s with
-  | Get_local id' -> Scope_id.equal id id'
-  | Local_scope { body; _ } -> code_reads_scope ~id body
-  | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> false
-  | Get_dynamic { dyn_value = v, _; _ } -> scalar_reads_scope ~id v
-  | Ternop (_, (a, _), (b, _), (c, _)) ->
-      scalar_reads_scope ~id a || scalar_reads_scope ~id b || scalar_reads_scope ~id c
-  | Binop (_, (a, _), (b, _)) -> scalar_reads_scope ~id a || scalar_reads_scope ~id b
-  | Unop (_, (a, _)) -> scalar_reads_scope ~id a
-
-and code_reads_scope ~id (llc : t) =
-  match llc with
-  | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Zero_out _ ->
-      false
-  | Seq (a, b) -> code_reads_scope ~id a || code_reads_scope ~id b
-  | For_loop { body; _ } -> code_reads_scope ~id body
-  | Scan_loop { carried; body; _ } ->
-      List.exists carried ~f:(fun c -> Scope_id.equal id c.next || scalar_reads_scope ~id c.init)
-      || code_reads_scope ~id body
-  | If { cond = c, _; body } -> scalar_reads_scope ~id c || code_reads_scope ~id body
-  | Set { llsc; _ } | Set_local (_, llsc) -> scalar_reads_scope ~id llsc
-  | Set_dynamic { dyn_value = v, _; llsc; _ } ->
-      scalar_reads_scope ~id v || scalar_reads_scope ~id llsc
-  | Set_from_vec { arg = a, _; _ } -> scalar_reads_scope ~id a
-  (* The fallback is what a backend without an MMA hook executes, so a local it reads is read. *)
-  | Tile_mma { fallback; _ } -> code_reads_scope ~id fallback
 
 (* The reduce-shaped update of a scope LOCAL: [local = op(local, contrib)] (or its FMA form) with
    [contrib] free of the local — [subst_accum_read]'s output shape. The [`Scope] arm of the peel
