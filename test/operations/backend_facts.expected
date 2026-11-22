@@ -1,6 +1,7 @@
 a live context's facts are the facts its backend's name parses to: true
 the facts bind a hardware grid exactly where the device bounds a workgroup's threads: true
-codegen_capabilities.select_blend at f32 agrees with blends_value_selects: true
+codegen_capabilities.select_blend at f32 and f64 agrees with blends_value_selects: true
+on cc, codegen_capabilities.select_blend reports Blend_truth at f32 and f64 and None elsewhere: true
 under with_select_blend ~blend:false, codegen_capabilities.select_blend answers None: true
 grid_execution alone moves the GPU and CPU search-shaping key reads: true
 workgroup_shared_placement alone moves whether a node may be kept off the device: true

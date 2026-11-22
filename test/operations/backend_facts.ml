@@ -31,8 +31,19 @@ let () =
   p "the facts bind a hardware grid exactly where the device bounds a workgroup's threads"
     (Bool.equal (BI.binds_hardware_grid facts) (Option.is_some limits.max_threads_per_workgroup));
   let caps = Context.codegen_capabilities ctx in
-  p "codegen_capabilities.select_blend at f32 agrees with blends_value_selects"
-    (Bool.equal (Option.is_some (caps.BI.select_blend Ir.Ops.single)) facts.BI.blends_value_selects);
+  p_all "codegen_capabilities.select_blend at f32 and f64 agrees with blends_value_selects"
+    [ Ir.Ops.single; Ir.Ops.double ] ~f:(fun prec ->
+      Bool.equal (Option.is_some (caps.BI.select_blend prec)) facts.BI.blends_value_selects);
+  let cc_leg = Verdict.leg ~when_:(BI.renders_on_host_pool facts) ~on:name () in
+  Verdict.in_leg ~leg:cc_leg
+    "on cc, codegen_capabilities.select_blend reports Blend_truth at f32 and f64 and None elsewhere"
+    (fun label ->
+      p_all label Ir.Ops.all_precs ~f:(fun prec ->
+          match (prec, caps.BI.select_blend prec) with
+          | (Ir.Ops.Single_prec _ | Ir.Ops.Double_prec _), Some `Blend_truth -> true
+          | (Ir.Ops.Single_prec _ | Ir.Ops.Double_prec _), _ -> false
+          | _, None -> true
+          | _, Some _ -> false));
   p_all "under with_select_blend ~blend:false, codegen_capabilities.select_blend answers None"
     Ir.Ops.all_precs ~f:(fun prec ->
       BI.with_select_blend ~facts ~blend:false (fun () ->

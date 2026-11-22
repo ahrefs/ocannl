@@ -197,27 +197,52 @@ let () =
     let full_printf_support = true
   end) in
   let pure_caps = Cs.codegen_capabilities (module Pure) in
-  let is_over_locals = function Some `Blend_over_locals -> true | _ -> false in
+  let kind_of_syntax = function
+    | None -> None
+    | Some (Cs.Blend_truth _) -> Some `Blend_truth
+    | Some (Cs.Blend_over_locals _) -> Some `Blend_over_locals
+  in
+  let same_blend a b =
+    match (a, b) with
+    | None, None
+    | Some `Blend_truth, Some `Blend_truth
+    | Some `Blend_over_locals, Some `Blend_over_locals ->
+        true
+    | _ -> false
+  in
   p_all
     "codegen_capabilities.select_blend derives HIP's over-locals blend and drops it under override"
     Ops.all_precs ~f:(fun prec ->
-      let expected = List.mem float_precs prec ~equal:Ops.equal_prec in
-      Bool.equal (is_over_locals (hip_caps.BI.select_blend prec)) expected
+      let expected =
+        if List.mem float_precs prec ~equal:Ops.equal_prec then Some `Blend_over_locals else None
+      in
+      let hip_default = hip_caps.BI.select_blend prec in
+      same_blend hip_default expected
+      && same_blend hip_default (kind_of_syntax (Hip.select_blend_syntax prec))
       && BI.with_select_blend ~facts:BI.hip_facts ~blend:false (fun () ->
-          Option.is_none (hip_caps.BI.select_blend prec)));
+          let hip_off = hip_caps.BI.select_blend prec in
+          same_blend hip_off None
+          && same_blend hip_off (kind_of_syntax (Hip.select_blend_syntax prec))));
   p_all
     "codegen_capabilities.select_blend is None on CUDA by default and over-locals under override"
     Ops.all_precs ~f:(fun prec ->
-      let expected = List.mem float_precs prec ~equal:Ops.equal_prec in
-      Option.is_none (cuda_caps.BI.select_blend prec)
+      let expected =
+        if List.mem float_precs prec ~equal:Ops.equal_prec then Some `Blend_over_locals else None
+      in
+      let cuda_default = cuda_caps.BI.select_blend prec in
+      same_blend cuda_default None
+      && same_blend cuda_default (kind_of_syntax (Cuda.select_blend_syntax prec))
       && BI.with_select_blend ~facts:BI.cuda_facts ~blend:true (fun () ->
-          Bool.equal (is_over_locals (cuda_caps.BI.select_blend prec)) expected));
+          let cuda_on = cuda_caps.BI.select_blend prec in
+          same_blend cuda_on expected
+          && same_blend cuda_on (kind_of_syntax (Cuda.select_blend_syntax prec))));
   p_all "Pure_C_config and no_codegen_capabilities report no select blend even under override"
     Ops.all_precs ~f:(fun prec ->
       Option.is_none (pure_caps.BI.select_blend prec)
       && Option.is_none (BI.no_codegen_capabilities.BI.select_blend prec)
       && BI.with_select_blend ~facts:BI.metal_facts ~blend:true (fun () ->
-          Option.is_none (pure_caps.BI.select_blend prec)));
+          Option.is_none (pure_caps.BI.select_blend prec)
+          && Option.is_none (BI.no_codegen_capabilities.BI.select_blend prec)));
   let module Synthetic_blend : Cs.C_syntax_config = struct
     include Pure
 
