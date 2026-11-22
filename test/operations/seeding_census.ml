@@ -8,16 +8,16 @@
 
    The census's seeds ARE [Autotune.sketch_seed_params]' list, and both families' refusals are their
    trees' refutations ([Autotune.matmul_sketch_tree], and since gh-ocannl-697
-   [Autotune.conv_sketch_tree]). A conv leg with no leaf carries a refutation below it, and the
-   named gate is the one the site's facts imply: no mma capability; no mma tile for f32 operands; a
-   vector file under 8 bytes. The whole-routine lowering's conv output is zeroed in the routine, and
-   since gh-ocannl-503 the GPU leg seeds it anyway (the pipeline expands the zero with the site's
-   geometry); on the tuner's GPU fission segments the zero folds into a per-cell companion, and the
-   GPU leg seeds there too. The GPU leg judges companion coverage, not a statement count
-   (gh-ocannl-1406): an aligned-merged conv of three real statements seeds, a channel reduction of
-   the conv output is refused naming the coverage verdict. With the key on (the dune action passes
-   it), [Autotune.log_seeding] writes exactly the rendered lines, and [Autotune.tune] emits a
-   whole-routine census line. *)
+   [Autotune.conv_sketch_tree]). The selected conv leg carries a refutation if it has no leaf, and
+   the named gate is the one the site's facts imply: no mma capability; no mma tile for f32
+   operands; a vector file under 8 bytes. The whole-routine lowering's conv output is zeroed in the
+   routine, and since gh-ocannl-503 the GPU leg seeds it anyway (the pipeline expands the zero with
+   the site's geometry); on the tuner's GPU fission segments the zero folds into a per-cell
+   companion, and the GPU leg seeds there too. The GPU leg judges companion coverage, not a
+   statement count (gh-ocannl-1406): an aligned-merged conv of three real statements seeds, a
+   channel reduction of the conv output is refused naming the coverage verdict. With the key on (the
+   dune action passes it), [Autotune.log_seeding] writes exactly the rendered lines, and
+   [Autotune.tune] emits a whole-routine census line. *)
 
 open Base
 open Ocannl
@@ -83,8 +83,7 @@ let leg_refusal tree leg =
 
 let refusal tree leg = Option.value (leg_refusal tree leg) ~default:""
 
-(* The census reports the seeder's own list, and a conv leg that seeds nothing says why: some
-   refutation lies at or below it. *)
+(* The selected conv leg either seeds or explains why it could not. *)
 let claim_consistent label ~is_gpu ~limits opt (c : Autotune.seeding_census) =
   let seeds = Autotune.sketch_seed_params ~is_gpu ~is_cpu:(not is_gpu) ~limits opt in
   p
@@ -93,10 +92,10 @@ let claim_consistent label ~is_gpu ~limits opt (c : Autotune.seeding_census) =
   match conv_seeding c with
   | None -> ()
   | Some (_, tree) ->
-      p_all (label ^ ": each conv leg without a seed carries a refutation") [ `Cpu; `Gpu ]
-        ~f:(fun leg ->
-          (not (List.is_empty (leg_seeds tree leg)))
-          || not (List.is_empty (leg_refutations tree leg)))
+      let leg = if is_gpu then `Gpu else `Cpu in
+      p
+        (label ^ ": the target conv leg has seeds or a refutation")
+        (not (List.is_empty (leg_seeds tree leg) && List.is_empty (leg_refutations tree leg)))
 
 let make_conv tag =
   let x =
@@ -139,8 +138,8 @@ let () =
       p "conv whole-routine: the site's output is zeroed in the lowering" site.c_zeroed;
       p "conv whole-routine: the GPU leg seeds the zeroed site"
         (Option.is_none (leg_refusal tree `Gpu) && not (List.is_empty (leg_seeds tree `Gpu)));
-      p "conv whole-routine: the CPU leg is refused as not a CPU target"
-        (String.equal (refusal tree `Cpu) "not a CPU target"));
+      p_none "conv whole-routine: the GPU tree omits CPU refutations" (Sspace.refutations tree)
+        ~f:(fun (path, _) -> on_path (FD.Conv_leg `Cpu) path));
   p_exists "conv whole-routine: the conv nest is listed, marked zeroed" gpu.sc_conv_nests
     ~f:(fun (_, zeroed) -> zeroed);
   let no_mma =
@@ -162,6 +161,11 @@ let () =
          mentions (refusal tree `Gpu) ~sub:"advertises no mma tile for operands"));
   let cpu = census ~where:"conv whole-routine cpu" ~is_gpu:false ~limits:cpu_limits opt in
   claim_consistent "conv whole-routine (CPU)" ~is_gpu:false ~limits:cpu_limits opt cpu;
+  let cpu_refutations =
+    Option.value_map (conv_seeding cpu) ~default:[] ~f:(fun (_, tree) -> Sspace.refutations tree)
+  in
+  p_none "conv whole-routine: the CPU tree omits GPU refutations" cpu_refutations
+    ~f:(fun (path, _) -> on_path (FD.Conv_leg `Gpu) path);
   p "conv whole-routine: the CPU leg seeds on a 16-byte vector file"
     (Option.exists (conv_seeding cpu) ~f:(fun (_, tree) ->
          not (List.is_empty (leg_seeds tree `Cpu))));

@@ -5084,173 +5084,170 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
   in
   (* The CPU leg: the register-tiled implicit-GEMM pipeline ([cpu_conv_sketch_schedule]). *)
   let cpu_leg ~fused =
-    if not is_cpu then Sspace.Refuted "not a CPU target"
-    else
-      (* Compute-precision uniformity and vector-capability, resolved through the same
-         [Numerics.cpu_compute_prec] the emission asks (gh-ocannl-575) — see the matmul family's CPU
-         branch for the rationale. *)
-      let native_fp16 = limits.Ir.Backend_intf.native_fp16_arithmetic in
-      let comp_prec p = Ir.Numerics.cpu_compute_prec ~native_fp16_arithmetic:native_fp16 p in
-      let cprec = comp_prec prec in
-      let uniform_vec_capable =
-        (match cprec with
-          | Ir.Ops.Single_prec _ | Ir.Ops.Double_prec _ -> true
-          | Ir.Ops.Half_prec _ -> native_fp16
-          | _ -> false)
-        && Ir.Ops.equal_prec (comp_prec a_prec) cprec
-        && Ir.Ops.equal_prec (comp_prec b_prec) cprec
-        (* The C-tile accumulates at the compute precision, so a divergent accumulator residency
-           ([Fp16_wide] + [narrow_compute_f32 = false] on an f16 destination) is an emission decline
-           — mirror it here or the candidate is timed under a tensorized label (gh-ocannl-680; Codex
-           P1 round 1 on staging PR #477). *)
-        && Ir.Ops.equal_prec
-             (Ir.Numerics.cpu_accum_prec ~native_fp16_arithmetic:native_fp16 prec)
-             cprec
-      in
-      (* The renderer fills the widest vector the out-channel extent allows, halving where it must
-         ({!Ir.Backend_intf.simd_lanes_for}); seeding asks the same question, or it would withhold
-         candidates the renderer would in fact tile. *)
-      let lanes =
-        Ir.Backend_intf.simd_lanes_for ~vector_bytes:limits.Ir.Backend_intf.simd_vector.bytes
-          ~elt_bytes:(max 1 (Ir.Ops.prec_in_bytes cprec))
-          ~extent:site.c_noc
-      in
-      guard
-        [
-          ( limits.Ir.Backend_intf.simd_vector.bytes >= 8,
-            lazy
-              (Printf.sprintf "the %d-byte vector file is under 8 bytes"
-                 limits.Ir.Backend_intf.simd_vector.bytes) );
-          ( Option.is_some lanes,
-            lazy
-              (Printf.sprintf "no SIMD lane count fits the out-channel extent %d at %s" site.c_noc
-                 (Ir.Ops.prec_string cprec)) );
-          ( uniform_vec_capable,
-            lazy
-              "the operands' and the accumulator's compute precisions are not one vector-capable \
-               precision" );
-          (site.c_fma, lazy "the accumulation is not a fused multiply-add");
-          (offset_free, lazy conv_offset_witness);
-        ]
-        (fun () ->
-          let base =
-            { base with sk_epilogue = fused; sk_pack_prec = cpu_conv_pack_prec ~limits site }
-          in
-          (* The register-tile level (gh-ocannl-619 for the matmul family; gh-ocannl-697 here):
-             every CPU conv leaf is twinned with the geometries {!Ir.Register_tile.alternatives}
-             proposes for ITS micro-kernel extents — the GEMM row ([c_nrow], or the panel's [sk_bm]
-             rows) by the out-channel column — at the register tiling's compute precision, "auto"
-             (the renderer's own choice) first, so a site with no alternative keeps its pre-level
-             leaf. Under [autotune_register_tile_rm_twin] the level also carries the two-row twin,
-             as in the matmul family. *)
-          let leaf =
-            let rm_twin_seeded = Utils.registered_flag ~arg_name:"autotune_register_tile_rm_twin" in
-            let file = limits.Ir.Backend_intf.simd_vector in
-            let elt_bytes = max 1 (Ir.Ops.prec_in_bytes (cpu_register_tile_prec ~limits prec)) in
-            fun (p : sketch_params) ->
-              let m = if p.sk_bm = 0 then site.c_nrow else p.sk_bm and n = site.c_noc in
-              match
-                Ir.Register_tile.alternatives ~file ~elt_bytes ~m ~n
-                @
-                if rm_twin_seeded then
-                  Option.to_list (Ir.Register_tile.rm_twin ~file ~elt_bytes ~m ~n)
-                else []
-              with
-              | [] -> leaf p
-              | alts ->
-                  subt (fun () ->
-                      decided_choice
-                        ((Family_decision.Register_tile None, leaf p)
-                        :: List.map alts ~f:(fun t ->
-                            ( Family_decision.Register_tile (Some t),
-                              leaf { p with sk_tile = Some t } ))))
-          in
-          let outer_ok = match site.c_outer with (_, n) :: _ -> n >= 2 | [] -> false in
-          let no_alignment =
-            Printf.sprintf
-              "%d real statements and the default preset's aligned analysis gives no whole-segment \
-               Grid"
-              n_real
-          in
-          (* Grid flavors: the conv pipeline's own [Retype] annotates the conv nest. At most one
-             statement beside the conv (the would-be epilogue tail, which the fused twin relocates
-             under the Grid loop) is the direct form: the companion, if one remains, takes its own
-             per-nest geometry ({!conv_direct_companion_geometry}) — valid on the fork-join model,
-             and excluded as search economy where a companion remains ([direct_grid],
-             {!cpu_companion_exclusion}, gh-ocannl-1609). Segments with more companions (an
-             aligned-merged segment, e.g. lenet's conv+bias/relu+pooling) are proposed when the
-             default preset's analysis Grid-annotates the conv nest's outermost loop
-             ([conv_aligned_grid]) — the pipeline then adopts that whole-segment geometry, and its
-             fused twin omits the preset [Retype] on the tail nest the fusion consumes
-             (fuse-before-annotate, gh-ocannl-501). *)
-          let direct p =
-            cpu_companion_exclusion ~what:"the conv nest's own Grid loop" (direct_grid ~fused)
-              (fun () -> leaf p)
-          in
-          let grid =
-            if not outer_ok then Sspace.Refuted "no outer output loop of extent at least 2"
-            else if n_real <= 2 then direct { base with sk_grid = true }
-            else if Lazy.force aligned then leaf { base with sk_grid = true }
-            else Sspace.Refuted no_alignment
-          in
-          (* Cache-blocked row-panel flavors (gh-ocannl-500): the GEMM row split into panels of
-             [sk_bm] rows ([cpu_conv_sketch_schedule]'s [sk_bm] leg), at least two (possibly padded,
-             gh-ocannl-485) panels. A conv-alone segment [Grid]-parallelizes the panel loop, an
-             aligned-merged segment adopts the whole-segment [Grid] geometry and blocks the row
-             serially for cache residency. The whole-routine zeroed graph keeps the serial and Grid
-             flavors: its [Zero_out] is in the routine, so the aligned analysis bails. *)
-          (* The builder Grid-types the panel loop itself at two or fewer real statements, so
-             there the flavor's own companion demand decides ([direct]): the fused flavor, whose
-             tail the fusion relocates into the conv nest, passes where the unfused one is refuted
-             (Codex P2, round 1 on staging#1310 -- the pre-tree gate asked for the aligned
-             whole-segment geometry there, which the builder does not use, and so withheld the
-             fused panels of an unaligned conv+tail segment). With more statements the builder
-             adopts that aligned geometry, so it must exist. *)
-          let row_block bm =
-            if site.c_zeroed then
-              Sspace.Refuted "the conv output's whole-node Zero_out is in this lowering (c_zeroed)"
-            else if blocks_of site.c_nrow bm < 2 then
+    (* Compute-precision uniformity and vector-capability, resolved through the same
+       [Numerics.cpu_compute_prec] the emission asks (gh-ocannl-575) — see the matmul family's CPU
+       branch for the rationale. *)
+    let native_fp16 = limits.Ir.Backend_intf.native_fp16_arithmetic in
+    let comp_prec p = Ir.Numerics.cpu_compute_prec ~native_fp16_arithmetic:native_fp16 p in
+    let cprec = comp_prec prec in
+    let uniform_vec_capable =
+      (match cprec with
+        | Ir.Ops.Single_prec _ | Ir.Ops.Double_prec _ -> true
+        | Ir.Ops.Half_prec _ -> native_fp16
+        | _ -> false)
+      && Ir.Ops.equal_prec (comp_prec a_prec) cprec
+      && Ir.Ops.equal_prec (comp_prec b_prec) cprec
+      (* The C-tile accumulates at the compute precision, so a divergent accumulator residency
+         ([Fp16_wide] + [narrow_compute_f32 = false] on an f16 destination) is an emission decline —
+         mirror it here or the candidate is timed under a tensorized label (gh-ocannl-680; Codex P1
+         round 1 on staging PR #477). *)
+      && Ir.Ops.equal_prec
+           (Ir.Numerics.cpu_accum_prec ~native_fp16_arithmetic:native_fp16 prec)
+           cprec
+    in
+    (* The renderer fills the widest vector the out-channel extent allows, halving where it must
+       ({!Ir.Backend_intf.simd_lanes_for}); seeding asks the same question, or it would withhold
+       candidates the renderer would in fact tile. *)
+    let lanes =
+      Ir.Backend_intf.simd_lanes_for ~vector_bytes:limits.Ir.Backend_intf.simd_vector.bytes
+        ~elt_bytes:(max 1 (Ir.Ops.prec_in_bytes cprec))
+        ~extent:site.c_noc
+    in
+    guard
+      [
+        ( limits.Ir.Backend_intf.simd_vector.bytes >= 8,
+          lazy
+            (Printf.sprintf "the %d-byte vector file is under 8 bytes"
+               limits.Ir.Backend_intf.simd_vector.bytes) );
+        ( Option.is_some lanes,
+          lazy
+            (Printf.sprintf "no SIMD lane count fits the out-channel extent %d at %s" site.c_noc
+               (Ir.Ops.prec_string cprec)) );
+        ( uniform_vec_capable,
+          lazy
+            "the operands' and the accumulator's compute precisions are not one vector-capable \
+             precision" );
+        (site.c_fma, lazy "the accumulation is not a fused multiply-add");
+        (offset_free, lazy conv_offset_witness);
+      ]
+      (fun () ->
+        let base =
+          { base with sk_epilogue = fused; sk_pack_prec = cpu_conv_pack_prec ~limits site }
+        in
+        (* The register-tile level (gh-ocannl-619 for the matmul family; gh-ocannl-697 here): every
+           CPU conv leaf is twinned with the geometries {!Ir.Register_tile.alternatives} proposes
+           for ITS micro-kernel extents — the GEMM row ([c_nrow], or the panel's [sk_bm] rows) by
+           the out-channel column — at the register tiling's compute precision, "auto" (the
+           renderer's own choice) first, so a site with no alternative keeps its pre-level leaf.
+           Under [autotune_register_tile_rm_twin] the level also carries the two-row twin, as in the
+           matmul family. *)
+        let leaf =
+          let rm_twin_seeded = Utils.registered_flag ~arg_name:"autotune_register_tile_rm_twin" in
+          let file = limits.Ir.Backend_intf.simd_vector in
+          let elt_bytes = max 1 (Ir.Ops.prec_in_bytes (cpu_register_tile_prec ~limits prec)) in
+          fun (p : sketch_params) ->
+            let m = if p.sk_bm = 0 then site.c_nrow else p.sk_bm and n = site.c_noc in
+            match
+              Ir.Register_tile.alternatives ~file ~elt_bytes ~m ~n
+              @
+              if rm_twin_seeded then
+                Option.to_list (Ir.Register_tile.rm_twin ~file ~elt_bytes ~m ~n)
+              else []
+            with
+            | [] -> leaf p
+            | alts ->
+                subt (fun () ->
+                    decided_choice
+                      ((Family_decision.Register_tile None, leaf p)
+                      :: List.map alts ~f:(fun t ->
+                          (Family_decision.Register_tile (Some t), leaf { p with sk_tile = Some t }))
+                      ))
+        in
+        let outer_ok = match site.c_outer with (_, n) :: _ -> n >= 2 | [] -> false in
+        let no_alignment =
+          Printf.sprintf
+            "%d real statements and the default preset's aligned analysis gives no whole-segment \
+             Grid"
+            n_real
+        in
+        (* Grid flavors: the conv pipeline's own [Retype] annotates the conv nest. At most one
+           statement beside the conv (the would-be epilogue tail, which the fused twin relocates
+           under the Grid loop) is the direct form: the companion, if one remains, takes its own
+           per-nest geometry ({!conv_direct_companion_geometry}) — valid on the fork-join model, and
+           excluded as search economy where a companion remains ([direct_grid],
+           {!cpu_companion_exclusion}, gh-ocannl-1609). Segments with more companions (an
+           aligned-merged segment, e.g. lenet's conv+bias/relu+pooling) are proposed when the
+           default preset's analysis Grid-annotates the conv nest's outermost loop
+           ([conv_aligned_grid]) — the pipeline then adopts that whole-segment geometry, and its
+           fused twin omits the preset [Retype] on the tail nest the fusion consumes
+           (fuse-before-annotate, gh-ocannl-501). *)
+        let direct p =
+          cpu_companion_exclusion ~what:"the conv nest's own Grid loop" (direct_grid ~fused)
+            (fun () -> leaf p)
+        in
+        let grid =
+          if not outer_ok then Sspace.Refuted "no outer output loop of extent at least 2"
+          else if n_real <= 2 then direct { base with sk_grid = true }
+          else if Lazy.force aligned then leaf { base with sk_grid = true }
+          else Sspace.Refuted no_alignment
+        in
+        (* Cache-blocked row-panel flavors (gh-ocannl-500): the GEMM row split into panels of
+           [sk_bm] rows ([cpu_conv_sketch_schedule]'s [sk_bm] leg), at least two (possibly padded,
+           gh-ocannl-485) panels. A conv-alone segment [Grid]-parallelizes the panel loop, an
+           aligned-merged segment adopts the whole-segment [Grid] geometry and blocks the row
+           serially for cache residency. The whole-routine zeroed graph keeps the serial and Grid
+           flavors: its [Zero_out] is in the routine, so the aligned analysis bails. *)
+        (* The builder Grid-types the panel loop itself at two or fewer real statements, so
+           there the flavor's own companion demand decides ([direct]): the fused flavor, whose
+           tail the fusion relocates into the conv nest, passes where the unfused one is refuted
+           (Codex P2, round 1 on staging#1310 -- the pre-tree gate asked for the aligned
+           whole-segment geometry there, which the builder does not use, and so withheld the
+           fused panels of an unaligned conv+tail segment). With more statements the builder
+           adopts that aligned geometry, so it must exist. *)
+        let row_block bm =
+          if site.c_zeroed then
+            Sspace.Refuted "the conv output's whole-node Zero_out is in this lowering (c_zeroed)"
+          else if blocks_of site.c_nrow bm < 2 then
+            Sspace.Refuted
+              (Printf.sprintf "a %d-row panel gives fewer than two panels of the %d rows" bm
+                 site.c_nrow)
+          else if n_real <= 2 then
+            (* Both staged tiles are written under the panel Grid: A depends on the panel index and
+               B on the window loops inside it. The accumulator fragment, when present, also lives
+               there. The aligned-merged shape has a different Grid body. *)
+            let panel = { base with sk_bm = bm } in
+            let bytes = cpu_conv_panel_chunk_bytes site panel in
+            let cap = Lazy.force Ir.C_syntax.per_chunk_private_bytes_cap in
+            if bytes > cap then
               Sspace.Refuted
-                (Printf.sprintf "a %d-row panel gives fewer than two panels of the %d rows" bm
-                   site.c_nrow)
-            else if n_real <= 2 then
-              (* Both staged tiles are written under the panel Grid: A depends on the panel index
-                 and B on the window loops inside it. The accumulator fragment, when present, also
-                 lives there. The aligned-merged shape has a different Grid body. *)
-              let panel = { base with sk_bm = bm } in
-              let bytes = cpu_conv_panel_chunk_bytes site panel in
-              let cap = Lazy.force Ir.C_syntax.per_chunk_private_bytes_cap in
-              if bytes > cap then
-                Sspace.Refuted
-                  (Printf.sprintf
-                     "the row panel's privatized tiles take %d bytes per chunk, over \
-                      cc_grid_private_bytes_cap = %d"
-                     bytes cap)
-              else direct panel
-            else if Lazy.force aligned then leaf { base with sk_bm = bm }
-            else Sspace.Refuted no_alignment
-          in
-          (* The shape menu's pad waste (gh-ocannl-1393, [judge_pad_waste]): a row panel that does
-             not divide the row pads it, relative to the unsplit shapes' ratio of 1. It never fires
-             at the default threshold — two or more panels keep the waste under 2x — but a lowered
-             [autotune_pad_waste_max] judges the panels like any geometry menu. *)
-          let row_axis bm = [ ("row", site.c_nrow, bm) ] in
-          subt (fun () ->
-              decided_choice
-                (judge_pad_waste
-                   ([
-                      (Family_decision.Conv_shape `Serial, row_axis 0, leaf base);
-                      (Family_decision.Conv_shape `Grid, row_axis 0, grid);
-                    ]
-                   @ List.map [ 8; 16; 32 ] ~f:(fun bm ->
-                       (Family_decision.Conv_shape (`Row_block bm), row_axis bm, row_block bm))))))
+                (Printf.sprintf
+                   "the row panel's privatized tiles take %d bytes per chunk, over \
+                    cc_grid_private_bytes_cap = %d"
+                   bytes cap)
+            else direct panel
+          else if Lazy.force aligned then leaf { base with sk_bm = bm }
+          else Sspace.Refuted no_alignment
+        in
+        (* The shape menu's pad waste (gh-ocannl-1393, [judge_pad_waste]): a row panel that does not
+           divide the row pads it, relative to the unsplit shapes' ratio of 1. It never fires at the
+           default threshold — two or more panels keep the waste under 2x — but a lowered
+           [autotune_pad_waste_max] judges the panels like any geometry menu. *)
+        let row_axis bm = [ ("row", site.c_nrow, bm) ] in
+        subt (fun () ->
+            decided_choice
+              (judge_pad_waste
+                 ([
+                    (Family_decision.Conv_shape `Serial, row_axis 0, leaf base);
+                    (Family_decision.Conv_shape `Grid, row_axis 0, grid);
+                  ]
+                 @ List.map [ 8; 16; 32 ] ~f:(fun bm ->
+                     (Family_decision.Conv_shape (`Row_block bm), row_axis bm, row_block bm))))))
   in
   (* The GPU leg: the staged implicit-GEMM pipeline ([gpu_conv_sketch_schedule]). *)
   let gpu_leg ~fused =
-    match (is_gpu, limits.Ir.Backend_intf.mma) with
-    | false, _ -> Sspace.Refuted "not a GPU target"
-    | true, None -> Sspace.Refuted "the backend advertises no mma capability"
-    | true, Some ({ Ir.Backend_intf.mma_simd_width = w; _ } as mma) -> (
+    match limits.Ir.Backend_intf.mma with
+    | None -> Sspace.Refuted "the backend advertises no mma capability"
+    | Some ({ Ir.Backend_intf.mma_simd_width = w; _ } as mma) -> (
         let scope = conv_mma_scope site in
         match mma_tile_for_precisions_in_scope mma ~scope ~a_prec ~b_prec ~d_prec:prec with
         | None ->
@@ -5454,14 +5451,14 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
                               else subt (menu ~pipelined:true) );
                           ])))
   in
+  (* A target's absent leg is outside its search space. Reserve refutations for pipelines the target
+     actually offers, so the census reports gates that can affect this search. *)
   let flavor ~fused =
     Sspace.Child
       (lazy
-        (decided_choice
-           [
-             (Family_decision.Conv_leg `Cpu, cpu_leg ~fused);
-             (Family_decision.Conv_leg `Gpu, gpu_leg ~fused);
-           ]))
+        (let cpu = if is_cpu then [ (Family_decision.Conv_leg `Cpu, cpu_leg ~fused) ] else [] in
+         let gpu = if is_gpu then [ (Family_decision.Conv_leg `Gpu, gpu_leg ~fused) ] else [] in
+         Sspace.Choice { level = Family_decision.level (Conv_leg `Cpu); children = cpu @ gpu }))
   in
   (* Unfused first, so the leaves keep the seeds-then-twins order the flat enumeration established
      (candidate timing order, dedup keep-first). The fused flavor is a construction-time verdict of

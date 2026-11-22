@@ -394,8 +394,10 @@ files.
   family judged by its own detector, the other refuted with `no_matmul_site_witness` /
   `no_conv_site_witness`; the per-family trees and `family_seeding`'s trees carry no such level,
   so a path read off the combined view starts one level deeper), and its census lines are the
-  tree's refutations, path by path, where the conv legs used to keep free-text notes. `model_family_search` walks it too, so a conv
-  site gets the family bound, the stats ledger and the operand-load tie-break: where `model_default`
+  tree's refutations, path by path. The conv tree offers the CPU and GPU legs only on their
+  respective targets (gh-ocannl-1537), so the census counts only gates affecting the search.
+  `model_family_search` walks it too, so a conv site gets the family bound, the stats ledger and
+  the operand-load tie-break: where `model_default`
   used to scan conv seeds flat (`best_flat`, first strict improvement), an exact score tie between
   two conv leaves with tile-MMA load counts can now crown the second one. The conv traffic-floor
   increment (gh-ocannl-1489, `conv_path_traffic_floor`) prices both staged operand tiles, written

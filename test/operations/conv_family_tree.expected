@@ -8,7 +8,6 @@
       conv-shape = bm8  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
       conv-shape = bm16  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
       conv-shape = bm32  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
-    conv-leg = gpu  [refuted: not a GPU target]
   fusion = fused  [refuted: Schedule.Fuse_epilogue: no statement follows the reduction over y]
 9x9 conv, CPU: the tree's leaves are the seed list: true
   combined view, root level family:
@@ -21,7 +20,6 @@
 9x9 conv, CPU: every leaf's path agrees with its parameters: true
 == 9x9 conv, GPU (masked) ==
   fusion = unfused
-    conv-leg = cpu  [refuted: not a CPU target]
     conv-leg = gpu
       conv-staging = plain
         conv-rows = rows-whole
@@ -49,7 +47,6 @@
 a site without a fusable tail refutes the fused flavor with the recognizer's reason: true
 == 16x16 conv, GPU (dividing) ==
   fusion = unfused
-    conv-leg = cpu  [refuted: not a CPU target]
     conv-leg = gpu
       conv-staging = plain
         conv-rows = rows-whole
@@ -93,7 +90,6 @@ dividing: a pipelined depth-2 twin is a leaf: true
       conv-shape = bm8  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
       conv-shape = bm16  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
       conv-shape = bm32  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
-    conv-leg = gpu  [refuted: not a GPU target]
   fusion = fused  [refuted: Schedule.Fuse_epilogue: no statement follows the reduction over y]
 16x16 conv into 64 channels, CPU: the tree's leaves are the seed list: true
   combined view, root level family:
@@ -114,7 +110,6 @@ dividing: a pipelined depth-2 twin is a leaf: true
       conv-shape = bm8  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
       conv-shape = bm16  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
       conv-shape = bm32  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
-    conv-leg = gpu  [refuted: not a GPU target]
   fusion = fused
     conv-leg = cpu
       conv-shape = serial
@@ -124,7 +119,6 @@ dividing: a pipelined depth-2 twin is a leaf: true
       conv-shape = bm8  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
       conv-shape = bm16  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
       conv-shape = bm32  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
-    conv-leg = gpu  [refuted: not a GPU target]
 9x9 conv + bias/relu tail, CPU: the tree's leaves are the seed list: true
   combined view, root level family:
     matmul: refuted: no matmul site: no accumulation nest classifies as a contraction, directly or through the enabling interchange
@@ -140,10 +134,8 @@ tail, CPU: the lift recovers the unfused Grid flavor: true
 tail, CPU: the fused Grid flavor is a leaf: true
 == 9x9 conv + bias/relu tail, GPU ==
   fusion = unfused
-    conv-leg = cpu  [refuted: not a CPU target]
     conv-leg = gpu  [refuted: GPU conv companion coverage (gh-521): the accumulation nest's aligned chain was trimmed below its 2x9x9x8 geometry, so its companions cannot share it]
   fusion = fused
-    conv-leg = cpu  [refuted: not a CPU target]
     conv-leg = gpu
       conv-staging = plain
         conv-rows = rows-whole
@@ -172,7 +164,6 @@ tail, GPU: the fused flavor keeps its leaves: true
 tail, GPU: no unfused leaf survives: true
 == 4x4 conv over 4 images, GPU, grid cap 3 ==
   fusion = unfused
-    conv-leg = cpu  [refuted: not a CPU target]
     conv-leg = gpu
       conv-staging = plain
         conv-rows = rows-whole  [refuted: the candidate requests a .y grid extent of 4, exceeding the device limit of 3]
@@ -205,7 +196,6 @@ pad waste: at the default threshold lifting the policy changes no conv leaf list
 pad waste: the lowered threshold is in force: true
 == 20-row conv, GPU, pad-waste threshold 1.25 ==
   fusion = unfused
-    conv-leg = cpu  [refuted: not a CPU target]
     conv-leg = gpu
       conv-staging = plain
         conv-rows = rows-whole
