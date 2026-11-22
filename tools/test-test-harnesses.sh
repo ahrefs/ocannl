@@ -13,11 +13,15 @@
 # --jobs runs members beside one another and prints each one's output whole,
 # in the manifest's order (gh-ocannl-2002).
 # Bash missing-command diagnostics fail the member at either width.
+# Serial relays are owned directly by the dispatcher, drain within a bound
+# after ordinary completion, and leave no relay behind on TERM to the
+# dispatcher PID alone, in both ordinary serial and --ci-real-dune runs.
 # The modern-PATH witness is gated separately; aggregate controls remain ungated.
 # Usage: tools/test-test-harnesses.sh [--keep|--help]
 set -u
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$here/../scripts/harness-support.sh"
+. "$here/../scripts/process-group.sh"
 harness_args "$@"
 harness_require python3 perl git
 harness_scratch test-harnesses
@@ -905,6 +909,17 @@ exercise() {
       sleep 15 >/dev/null &
       printf '%s\n' "$!" >"$LINGER_PID"
       kill -TERM "$$" ;;
+    linger-missing)
+      sleep 15 >/dev/null &
+      printf '%s\n' "$!" >"$LINGER_PID"
+      ocannl_fixture_undefined_function ;;
+    linger-pass)
+      sleep 15 >/dev/null &
+      printf '%s\n' "$!" >"$LINGER_PID" ;;
+    stalled-downstream)
+      perl -e 'print STDERR (("x" x 63) . "\n") x 8192'
+      ocannl_fixture_undefined_function
+      [ -z "${STALL_DONE:-}" ] || : >"$STALL_DONE" ;;
   esac
   report 0 'the fixture leg finished'
 }
@@ -948,19 +963,241 @@ chmod +x "$no_check"
 missing_cases "$no_check" "$expected_member_version" no-check
 
 # The serial dispatcher must return while a descendant still owns stderr.
-# The sleep bounds the failure case, and a live PID is the success witness.
+# The sleep bounds the failure case, and a live (non-zombie) PID is the witness.
 export LINGER_PID=$TMP/linger.pid
 MISSING_FORM=interrupted
 run --affected --since HEAD --jobs 1
 if [ "$got" = 143 ] && [ -s "$LINGER_PID" ] &&
-   kill -0 "$(cat "$LINGER_PID")" 2>/dev/null &&
+   pid_alive "$(cat "$LINGER_PID")" &&
    grep -qxF 'harnesses: interrupted (exit 143)' "$TMP/out"; then
   report 0 'a serial interruption returns while a descendant still holds stderr'
 else
   report 1 'a serial interruption returns while a descendant still holds stderr' "exit $got; $(tr '\n' '|' <"$TMP/out")"
 fi
 if [ -s "$LINGER_PID" ]; then kill -TERM "$(cat "$LINGER_PID")" 2>/dev/null || :; fi
-unset LINGER_PID
+
+# Ordinary serial completion bounds the drain after the member exits: a
+# background descendant holding stderr open must not stall completion, while
+# preserving a missing-command diagnostic and not failing a clean member.
+rm -f "$LINGER_PID"
+MISSING_FORM=linger-missing
+run --affected --since HEAD --jobs 1
+if [ "$got" = 1 ] && [ -s "$LINGER_PID" ] &&
+   pid_alive "$(cat "$LINGER_PID")" &&
+   ! grep -q 'could not relay member output' "$TMP/out" &&
+   grep -q "^harnesses: $control_member: missing command: .*: ocannl_fixture_undefined_function: command not found$" "$TMP/out"; then
+  report 0 'ordinary serial completion bounds stderr drain and preserves missing-command diagnostic'
+else
+  report 1 'ordinary serial completion bounds stderr drain and preserves missing-command diagnostic' \
+    "exit $got; linger_alive=$([ -s "$LINGER_PID" ] && pid_alive "$(cat "$LINGER_PID")" && echo yes || echo no); $(tr '\n' '|' <"$TMP/out")"
+fi
+if [ -s "$LINGER_PID" ]; then kill -TERM "$(cat "$LINGER_PID")" 2>/dev/null || :; fi
+
+rm -f "$LINGER_PID"
+MISSING_FORM=linger-pass
+run --affected --since HEAD --jobs 1
+if [ "$got" = 0 ] && [ -s "$LINGER_PID" ] &&
+   pid_alive "$(cat "$LINGER_PID")" &&
+   ! grep -q 'could not relay member output' "$TMP/out" &&
+   grep -qxF "HARNESS $control_member exit: 0" "$TMP/out"; then
+  report 0 'ordinary serial bounded drain does not fail a clean member with a lingering stderr descendant'
+else
+  report 1 'ordinary serial bounded drain does not fail a clean member with a lingering stderr descendant' \
+    "exit $got; linger_alive=$([ -s "$LINGER_PID" ] && pid_alive "$(cat "$LINGER_PID")" && echo yes || echo no); $(tr '\n' '|' <"$TMP/out")"
+fi
+if [ -s "$LINGER_PID" ]; then kill -TERM "$(cat "$LINGER_PID")" 2>/dev/null || :; fi
+
+# Even when downstream stderr stops reading past the drain bound (filling the
+# pipe buffer), verdict capture still reads the complete stderr file and catches
+# the trailing missing-command diagnostic. Synchronize on member progress and
+# live-relay teardown rather than a fixed startup delay.
+MISSING_FORM=stalled-downstream
+stall_tmp="$TMP/stall-tmp"
+mkdir -p "$stall_tmp"
+rm -f "$TMP/stall-done"
+stall_rc=0
+TMPDIR="$stall_tmp" STALL_DONE="$TMP/stall-done" \
+  python3 - "$TMP" "$subject" "$TMP/stall.out" "$TMP/stall.err" "$stall_tmp" "$TMP/stall-done" <<'PY_STALL' || stall_rc=$?
+import os, select, subprocess, sys, time
+cwd, subj, out_path, err_path, stall_tmp, done_path = sys.argv[1:7]
+needle = stall_tmp + "/test-harnesses-output."
+def relay_live():
+    out = subprocess.check_output(["ps", "-ww", "-eo", "pid=,stat=,command="], text=True)
+    for line in out.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        pid_s, stat, cmd = parts
+        if stat[:1] in ("Z", "z"):
+            continue
+        if int(pid_s) != os.getpid() and needle in cmd:
+            return True
+    return False
+def stderr_ready():
+    return bool(select.select([r_fd], [], [], 0)[0])
+r_fd, w_fd = os.pipe()
+with open(out_path, "wb") as out_f:
+    proc = subprocess.Popen([subj, "--affected", "--since", "HEAD", "--jobs", "1"],
+                            cwd=cwd, stdout=out_f, stderr=w_fd)
+os.close(w_fd)
+deadline = time.monotonic() + 20.0
+while time.monotonic() < deadline and not (os.path.exists(done_path) and stderr_ready()) and proc.poll() is None:
+    time.sleep(0.05)
+while time.monotonic() < deadline and relay_live() and proc.poll() is None:
+    time.sleep(0.05)
+chunks = []
+while True:
+    data = os.read(r_fd, 65536)
+    if not data:
+        break
+    chunks.append(data)
+os.close(r_fd)
+rc = proc.wait(timeout=10)
+with open(err_path, "wb") as err_f:
+    err_f.write(b"".join(chunks))
+sys.exit(rc)
+PY_STALL
+if [ "$stall_rc" = 1 ] &&
+   grep -qxF "HARNESS $control_member exit: 1" "$TMP/stall.out" &&
+   grep -qxF "harnesses: $control_member: live output cut after the drain bound; the verdict read the full capture" "$TMP/stall.err" &&
+   grep -q "^harnesses: $control_member: missing command: .*: ocannl_fixture_undefined_function: command not found$" "$TMP/stall.err"; then
+  report 0 'a stalled downstream stderr reader does not truncate verdict capture'
+else
+  report 1 'a stalled downstream stderr reader does not truncate verdict capture' \
+    "exit $stall_rc; out=$(tr '\n' '|' <"$TMP/stall.out"); err_tail=$(tail -c 300 "$TMP/stall.err" | tr '\n' '|')"
+fi
+
+# --ci-real-dune owns both relays directly and bounds both drains as well.
+cp "$fixture/$rd_member" "$TMP/rd-member-before-relay"
+cat >"$fixture/$rd_member" <<'RD_LINGER'
+#!/usr/bin/env bash
+export LC_ALL=C
+case $MISSING_FORM in
+  linger-missing)
+    sleep 15 >/dev/null &
+    printf '%s\n' "$!" >"$LINGER_PID"
+    ocannl_fixture_undefined_function ;;
+  linger-both)
+    sleep 15 &
+    printf '%s\n' "$!" >"$LINGER_PID" ;;
+esac
+printf 'PASS  %s\n' "$EXTRA_PASS_LABEL"
+exit 0
+RD_LINGER
+chmod +x "$fixture/$rd_member"
+printf '# dune\n%s\t%s\n' "$rd_member" "$rd_label" >"$dune_list"
+export EXTRA_PASS_LABEL=$rd_label
+rm -f "$LINGER_PID"
+MISSING_FORM=linger-missing
+run --ci-real-dune --jobs 1
+if [ "$got" = 1 ] && [ -s "$LINGER_PID" ] &&
+   pid_alive "$(cat "$LINGER_PID")" &&
+   ! grep -q 'could not relay member output' "$TMP/out" &&
+   grep -q "^harnesses: $rd_member: missing command: .*: ocannl_fixture_undefined_function: command not found$" "$TMP/out" &&
+   grep -q '; 0 real-dune check(s) did not pass$' "$TMP/out"; then
+  report 0 '--ci-real-dune bounds stderr drain and preserves missing-command diagnostic and PASS check'
+else
+  report 1 '--ci-real-dune bounds stderr drain and preserves missing-command diagnostic and PASS check' \
+    "exit $got; linger_alive=$([ -s "$LINGER_PID" ] && pid_alive "$(cat "$LINGER_PID")" && echo yes || echo no); $(tr '\n' '|' <"$TMP/out")"
+fi
+if [ -s "$LINGER_PID" ]; then kill -TERM "$(cat "$LINGER_PID")" 2>/dev/null || :; fi
+
+rm -f "$LINGER_PID"
+MISSING_FORM=linger-both
+run --ci-real-dune --jobs 1
+if [ "$got" = 0 ] && [ -s "$LINGER_PID" ] &&
+   pid_alive "$(cat "$LINGER_PID")" &&
+   ! grep -q 'could not relay member output' "$TMP/out" &&
+   grep -q '; 0 real-dune check(s) did not pass$' "$TMP/out"; then
+  report 0 '--ci-real-dune bounds stdout and stderr drains on a clean member and preserves PASS check'
+else
+  report 1 '--ci-real-dune bounds stdout and stderr drains on a clean member and preserves PASS check' \
+    "exit $got; linger_alive=$([ -s "$LINGER_PID" ] && pid_alive "$(cat "$LINGER_PID")" && echo yes || echo no); $(tr '\n' '|' <"$TMP/out")"
+fi
+if [ -s "$LINGER_PID" ]; then kill -TERM "$(cat "$LINGER_PID")" 2>/dev/null || :; fi
+unset EXTRA_PASS_LABEL LINGER_PID
+
+# A TERM sent only to the dispatcher's PID must leave no relay process behind,
+# in both ordinary serial mode (stderr relay) and --ci-real-dune (both relays),
+# and each relay must be a direct child of the dispatcher (PPID = dispatcher PID).
+cat >"$TMP/relay-hold-member" <<'RELAY_HOLD'
+#!/usr/bin/env bash
+printf '%s\n' "$$" >"$RELAY_MEMBER_PID"
+: >"$RELAY_READY"
+exec sleep 15
+RELAY_HOLD
+chmod +x "$TMP/relay-hold-member"
+cp "$fixture/$control_member" "$TMP/control-before-term"
+cp "$TMP/relay-hold-member" "$fixture/$control_member"
+cp "$TMP/relay-hold-member" "$fixture/$rd_member"
+relay_rows_for() { # TMPDIR_PREFIX -> prints `PID PPID` per live relay
+  ps -ww -eo pid=,ppid=,stat=,command= 2>/dev/null |
+    awk -v dir="$1" -v tag="test-harnesses-output." '
+      $3 !~ /^[Zz]/ && index($0, dir "/" tag) > 0 { print $1 " " $2 }'
+}
+for term_mode in ordinary ci-real-dune; do
+  relay_tmp="$TMP/relay-term-$term_mode"
+  mkdir -p "$relay_tmp"
+  rm -f "$TMP/relay-ready" "$TMP/relay-member.pid"
+  case $term_mode in
+    ordinary)
+      want_relays=1
+      term_args=(--affected --since HEAD --jobs 1) ;;
+    ci-real-dune)
+      want_relays=2
+      term_args=(--ci-real-dune --jobs 1) ;;
+  esac
+  (cd "$TMP" && TMPDIR="$relay_tmp" RELAY_READY="$TMP/relay-ready" RELAY_MEMBER_PID="$TMP/relay-member.pid" \
+    exec perl -e '$SIG{TERM} = "DEFAULT"; exec @ARGV;' "$subject" "${term_args[@]}") >"$TMP/term-$term_mode.out" 2>&1 &
+  term_dpid=$!
+  before_rows=
+  term_ticks=0
+  while [ "$term_ticks" -lt 100 ]; do
+    if [ -e "$TMP/relay-ready" ]; then
+      before_rows=$(relay_rows_for "$relay_tmp")
+      before_count=$(printf '%s\n' "$before_rows" | awk 'NF { n++ } END { print n + 0 }')
+      [ "$before_count" -ge "$want_relays" ] && break
+    fi
+    term_ticks=$((term_ticks + 1))
+    sleep 0.05
+  done
+  before_count=$(printf '%s\n' "$before_rows" | awk 'NF { n++ } END { print n + 0 }')
+  before_relays=$(printf '%s\n' "$before_rows" | awk 'NF { print $1 }')
+  wrong_ppid=$(printf '%s\n' "$before_rows" | awk -v d="$term_dpid" 'NF && $2 != d { print $1 ":" $2 }')
+  kill -TERM "$term_dpid" 2>/dev/null || :
+  wait_ticks=0
+  while pid_alive "$term_dpid" && [ "$wait_ticks" -lt 100 ]; do
+    wait_ticks=$((wait_ticks + 1))
+    sleep 0.05
+  done
+  if pid_alive "$term_dpid"; then
+    kill -KILL "$term_dpid" 2>/dev/null || :
+  fi
+  term_rc=0
+  wait "$term_dpid" 2>/dev/null || term_rc=$?
+  after_rows=$(relay_rows_for "$relay_tmp")
+  still_alive=
+  for rpid in $before_relays; do
+    if pid_alive "$rpid"; then
+      still_alive="$still_alive $rpid"
+    fi
+  done
+  if [ "$before_count" = "$want_relays" ] && [ -z "$wrong_ppid" ] && [ "$term_rc" = 143 ] &&
+     [ -z "$after_rows" ] && [ -z "$still_alive" ]; then
+    report 0 "TERM to dispatcher PID alone ($term_mode) exits 143 and leaves no relay process"
+  else
+    report 1 "TERM to dispatcher PID alone ($term_mode) exits 143 and leaves no relay process" \
+      "rc=$term_rc dpid=$term_dpid before=$before_count (want $want_relays) wrong_ppid=[$wrong_ppid] after=[$after_rows] alive=[${still_alive# }]"
+  fi
+  for rpid in $before_relays $(printf '%s\n' "$after_rows" | awk 'NF { print $1 }'); do
+    kill -TERM "$rpid" 2>/dev/null || :
+  done
+  if [ -s "$TMP/relay-member.pid" ]; then
+    kill -TERM "$(cat "$TMP/relay-member.pid")" 2>/dev/null || :
+  fi
+done
+cp "$TMP/control-before-term" "$fixture/$control_member"
+cp "$TMP/rd-member-before-relay" "$fixture/$rd_member"
 
 modern_version=$("$subject_bash" -c 'printf "%s.%s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"')
 if [ "$system_bash_version" = 3.2 ] && [ "$modern_version" != 3.2 ]; then

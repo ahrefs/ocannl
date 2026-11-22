@@ -1188,6 +1188,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   checks that both widths fail the member anyway, with a no-check control.
   In the command-substitution case the successful outer `printf` masks the
   missing function's exit status, as the original harness did.
+  In serial mode the dispatcher captures each member's stderr (and stdout under
+  `--ci-real-dune`) directly into per-member files while dispatcher-owned live
+  relays stream them, so verdict scans stay complete even when downstream stalls
+  or a descendant holds a descriptor open. After ordinary exit it signals the
+  relays to drain up to the member's exit size within ~1 s (20 ticks of 0.05 s)
+  and stops any survivor (TERM, 0.5 s grace, KILL) before reaping; interruption
+  or dispatcher exit stops and reaps all live serial relays immediately
+  (gh-ocannl-2388).
 - On a fleet box a harness run is a test batch like any other, and like `tools/test-run.sh` and
   `tools/fmt-check.sh` it takes one of the box's correctness slots itself, as `--cpu`
   (gh-ocannl-1576): after its arguments and skip lists pass, it runs itself again under `fleet-worker.sh execution
