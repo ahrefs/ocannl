@@ -173,19 +173,31 @@ let () =
 let () =
   (* Valid: half draw (8 lanes) inside a Local_scope stored to a single node (4 lanes). *)
   let out = mk_node Ops.single [| 8 |] "lbs_scope_ok_out" in
+  let ref_out = mk_node Ops.half [| 8 |] "lbs_scope_ok_ref" in
   let u = mk_virtual Ops.half [| 8 |] "lbs_scope_ok_u" in
   let i = Ll_test.sym () in
   let scoped = Ll_test.scope ~orig_indices:[| Ll_test.iter i |] u (lane_extract (mod_lane i 8)) in
-  let llc = Ll_test.loop_n i 8 (Ll_test.set_at out (Ll_test.iter i) scoped) in
-  let opt = Ll_test.optimize ~materialized:[ out ] ~name:"lbs_scope_ok" llc in
-  let values =
-    match Ll_test.execute ~name:"lbs_scope_ok" opt ~seed:[] ~read:[ out ] with
-    | [ vs ] -> vs
+  let llc =
+    LL.unflat_lines
+      [
+        Ll_test.set_from_vec ~length:8 ~vec_unop:Ops.Uint4x32_to_prec_uniform ref_out
+          [| Idx.Fixed_idx 0 |] (bits, u4);
+        Ll_test.loop_n i 8 (Ll_test.set_at out (Ll_test.iter i) scoped);
+      ]
+  in
+  let opt = Ll_test.optimize ~materialized:[ out; ref_out ] ~name:"lbs_scope_ok" llc in
+  let values, ref_values =
+    match
+      Ll_test.execute ~name:"lbs_scope_ok" opt
+        ~seed:[ (out, Array.create ~len:8 (-1.)); (ref_out, Array.create ~len:8 1.) ]
+        ~read:[ out; ref_out ]
+    with
+    | [ vs; rvs ] -> (vs, rvs)
     | _ -> assert false
   in
   p "half Local_scope with modulus 8 inside single store compiles and executes"
     (Array.length values = 8
-    && Array.for_all values ~f:(fun x -> Float.(0. <= x && x < 1.))
+    && Array.equal bits_equal values ref_values
     && List.length (List.dedup_and_sort (Array.to_list values) ~compare:Float.compare) > 1);
   (* Invalid: single Local_scope (4 lanes) with modulus 8 inside a half store (8 lanes). *)
   let out_bad = mk_node Ops.half [| 8 |] "lbs_scope_bad_out" in
@@ -218,12 +230,18 @@ let () =
   in
   let opt_ok = Ll_test.optimize ~materialized:[ out_ok ] ~name:"lbs_arith_half_ok" llc_ok in
   let values =
-    match Ll_test.execute ~name:"lbs_arith_half_ok" opt_ok ~seed:[] ~read:[ out_ok ] with
+    match
+      Ll_test.execute ~name:"lbs_arith_half_ok" opt_ok
+        ~seed:[ (out_ok, Array.create ~len:8 (-1.)) ]
+        ~read:[ out_ok ]
+    with
     | [ vs ] -> vs
     | _ -> assert false
   in
   p "half store arithmetic with modulus 8 renders at half (8 lanes) and executes"
-    (Array.length values = 8 && Array.for_all values ~f:(fun x -> Float.(1. <= x && x < 2.)));
+    (Array.length values = 8
+    && Array.for_all values ~f:(fun x -> Float.(1. <= x && x < 2.))
+    && List.length (List.dedup_and_sort (Array.to_list values) ~compare:Float.compare) > 1);
   let out_bad = mk_node Ops.half [| 9 |] "lbs_arith_half_bad" in
   let i_bad = Ll_test.sym () in
   let llc_bad =
@@ -245,46 +263,83 @@ let () =
 (* 5. Dynamic lane operand (materialized index buffer) is NOT refused statically. *)
 let () =
   let out = mk_node Ops.single [| 4 |] "lbs_dyn_out" in
+  let ref_out = mk_node Ops.single [| 4 |] "lbs_dyn_ref" in
   let idx_buf = mk_node iprec [| 4 |] "lbs_dyn_idx" in
   let i = Ll_test.sym () in
   let llc =
-    Ll_test.loop_n i 4
-      (Ll_test.set_at out (Ll_test.iter i) (lane_extract (LL.Get (idx_buf, [| Ll_test.iter i |]))))
+    LL.unflat_lines
+      [
+        Ll_test.set_from_vec ~length:4 ~vec_unop:Ops.Uint4x32_to_prec_uniform ref_out
+          [| Idx.Fixed_idx 0 |] (bits, u4);
+        Ll_test.loop_n i 4
+          (Ll_test.set_at out (Ll_test.iter i)
+             (lane_extract (LL.Get (idx_buf, [| Ll_test.iter i |]))));
+      ]
   in
-  let opt = Ll_test.optimize ~materialized:[ out; idx_buf ] ~name:"lbs_dyn" llc in
-  let values =
+  let opt = Ll_test.optimize ~materialized:[ out; ref_out; idx_buf ] ~name:"lbs_dyn" llc in
+  let values, ref_values =
     match
-      Ll_test.execute ~name:"lbs_dyn" opt ~seed:[ (idx_buf, [| 0.; 1.; 2.; 3. |]) ] ~read:[ out ]
+      Ll_test.execute ~name:"lbs_dyn" opt
+        ~seed:
+          [
+            (idx_buf, [| 0.; 1.; 2.; 3. |]);
+            (out, Array.create ~len:4 (-1.));
+            (ref_out, Array.create ~len:4 1.);
+          ]
+        ~read:[ out; ref_out ]
     with
-    | [ vs ] -> vs
+    | [ vs; rvs ] -> (vs, rvs)
     | _ -> assert false
   in
   p "dynamic buffer-read lane operand is accepted statically and executes"
-    (Array.length values = 4 && Array.for_all values ~f:(fun x -> Float.(0. <= x && x < 1.)))
+    (Array.length values = 4
+    && Array.equal bits_equal values ref_values
+    && List.length (List.dedup_and_sort (Array.to_list values) ~compare:Float.compare) > 1)
 
 (* 6. Discarded projection operand ([Arg1]) is not rendered and not refused. *)
 let () =
   let out = mk_node Ops.single [| 4 |] "lbs_proj_out" in
+  let ref_out = mk_node Ops.single [| 4 |] "lbs_proj_ref" in
   let i = Ll_test.sym () in
+  let ref_set =
+    Ll_test.set_from_vec ~length:4 ~vec_unop:Ops.Uint4x32_to_prec_uniform ref_out
+      [| Idx.Fixed_idx 0 |] (bits, u4)
+  in
   let safe =
-    Ll_test.loop_n i 4 (Ll_test.set_at out (Ll_test.iter i) (lane_extract (mod_lane i 4)))
+    LL.unflat_lines
+      [
+        ref_set;
+        Ll_test.loop_n i 4 (Ll_test.set_at out (Ll_test.iter i) (lane_extract (mod_lane i 4)));
+      ]
   in
   let proj =
-    Ll_test.loop_n i 4
-      (Ll_test.set_at out (Ll_test.iter i)
-         (LL.Binop
-            ( Ops.Arg1,
-              (lane_extract (mod_lane i 4), Ops.single),
-              (lane_extract (mod_lane i 8), Ops.single) )))
+    LL.unflat_lines
+      [
+        ref_set;
+        Ll_test.loop_n i 4
+          (Ll_test.set_at out (Ll_test.iter i)
+             (LL.Binop
+                ( Ops.Arg1,
+                  (lane_extract (mod_lane i 4), Ops.single),
+                  (lane_extract (mod_lane i 8), Ops.single) )));
+      ]
   in
-  let raw = Ll_test.optimize_scoped ~materialized:[ out ] ~name:"lbs_proj" ~raw:safe proj in
-  let values =
-    match Ll_test.execute ~name:"lbs_proj" raw ~seed:[] ~read:[ out ] with
-    | [ vs ] -> vs
+  let raw =
+    Ll_test.optimize_scoped ~materialized:[ out; ref_out ] ~name:"lbs_proj" ~raw:safe proj
+  in
+  let values, ref_values =
+    match
+      Ll_test.execute ~name:"lbs_proj" raw
+        ~seed:[ (out, Array.create ~len:4 (-1.)); (ref_out, Array.create ~len:4 1.) ]
+        ~read:[ out; ref_out ]
+    with
+    | [ vs; rvs ] -> (vs, rvs)
     | _ -> assert false
   in
   p "discarded Arg1 operand with modulus 8 is not refused and executes"
-    (Array.length values = 4 && Array.for_all values ~f:(fun x -> Float.(0. <= x && x < 1.)))
+    (Array.length values = 4
+    && Array.equal bits_equal values ref_values
+    && List.length (List.dedup_and_sort (Array.to_list values) ~compare:Float.compare) > 1)
 
 (* 7. Fissioned multi-segment batch: a violation in a later segment is still refused. *)
 let () =
