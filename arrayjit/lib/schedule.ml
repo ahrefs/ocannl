@@ -4351,15 +4351,12 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
      {!schedule_legality} it no longer reaches this op. The op's probes do not enter either chain
      ([fuse_epilogue_witness], {!probe_opt_op}, whose grammar check exempts a violation the program
      already held), so the op still refuses an impure body itself, first (above), rather than
-     missing its writes. That check is redundant only inside a chain whose entry breaks neither half
-     of the scope grammar -- every chain over a lowered routine: there gates (1)-(4) hand the op a
-     pure program, and an earlier op that would add a write to a scope body is refused at the op
-     ([schedule_op_scope_purity], gh-ocannl-2313). A hand-built entry already holding a hardware
-     loop in a scope switches that per-op refusal off ({!scope_grammar_added} exempts any violation
-     the input held), so an earlier op's added write would reach this op. A probe handed a
-     [?prelowered] routine sees no gate but this one ([epilogue_fusion_scope_purity]'s probe claim
-     pins it), so it stays. With it, [writes_tn] and [affine_relations] agree on every tensor write;
-     [target_writes] also counts an opaque [Staged_compilation] as a possible write. Pinned by
+     missing its writes. In a chain, the entry check and {!scope_grammar_added} guarantee purity at
+     each op, even if the entry has a hardware loop in a scope ([schedule_op_scope_purity],
+     gh-ocannl-2417). A probe handed a [?prelowered] routine sees no entry gate, so this check still
+     protects the probe ([epilogue_fusion_scope_purity]). With it, [writes_tn] and
+     [affine_relations] agree on every tensor write; [target_writes] also counts an opaque
+     [Staged_compilation] as a possible write. Pinned by
      [test/operations/epilogue_fusion_scope_purity]. --- *)
   let rec writes_tn tn = function
     | Set { tn = t; _ } | Zero_out t | Set_dynamic { tn = t; _ } | Set_from_vec { tn = t; _ } ->
@@ -5541,11 +5538,6 @@ type scope_grammar_violation =
   | Impure_scope_body of string
 [@@deriving sexp_of]
 
-let scope_grammar_violation (llc : Low_level.t) : scope_grammar_violation option =
-  match Low_level.scope_hardware_loop llc with
-  | Some (loop, axis, scope) -> Some (Hardware_loop_in_scope { loop; axis; scope })
-  | None -> Option.map (Low_level.scope_purity_violation llc) ~f:(fun msg -> Impure_scope_body msg)
-
 (* A violation the op ADDED. Only hand-built IR can enter a schedule already breaking the grammar
    ([Low_level.optimize] validates purity on the way in, and lowering emits no hardware loop), and
    such a violation is the program's, not the op's. Of the two halves, an impure body never gets
@@ -5555,12 +5547,20 @@ let scope_grammar_violation (llc : Low_level.t) : scope_grammar_violation option
    entry already holds inside a scope, which an op can repair (a [Retype] of it to [Serial]) and the
    compile gates otherwise refuse; and, for the single-op probes ({!scope_verdict},
    {!probe_opt_op}), either half, as they judge the op on whatever program they are handed and the
-   application that follows refuses an impure entry itself. The program before the op is walked only
-   when the one after it violates. *)
+   application that follows refuses an impure entry itself. Compare the presence of each kind
+   independently (gh-ocannl-2417): a pre-existing hardware loop must not hide a new hidden write,
+   even if the hardware loop is the first diagnostic. Check the input for a kind only when the
+   result has it. *)
 let scope_grammar_added ~(before : Low_level.t) ~(after : Low_level.t) =
-  match scope_grammar_violation after with
-  | Some _ when Option.is_some (scope_grammar_violation before) -> None
-  | v -> v
+  let added check =
+    match check after with
+    | Some _ as violation when Option.is_none (check before) -> violation
+    | _ -> None
+  in
+  match added Low_level.scope_hardware_loop with
+  | Some (loop, axis, scope) -> Some (Hardware_loop_in_scope { loop; axis; scope })
+  | None ->
+      Option.map (added Low_level.scope_purity_violation) ~f:(fun msg -> Impure_scope_body msg)
 
 let scope_grammar_message ~op = function
   | Hardware_loop_in_scope { loop; axis; scope } ->
@@ -5586,8 +5586,8 @@ let scope_grammar_message ~op = function
    grammar walks each op already pays on the program it leaves.
 
    Purity only, not the whole scope grammar: an entry's hardware loop inside a scope is no hidden
-   write, an op can repair it ([Retype] to [Serial]), and [scope_grammar_violation] would report it
-   first, hiding the write this check exists for.
+   write, and an op can repair it ([Retype] to [Serial]). The purity predicate finds hidden writes
+   even if the entry also contains a scope-nested hardware loop.
 
    Untyped, as an invariant, not a {!refuse}: a typed [Illegal_schedule] says the candidate is
    inapplicable (gh-ocannl-1323), which would make a search decline every arm alike and crown
@@ -6528,7 +6528,7 @@ let scope_bodies_hold_loops (llc : Low_level.t) : bool =
    [llc].
 
    The scope grammar (gh-ocannl-1467) comes first, judged as {!apply_opt_op} judges it — a violation
-   the op added from a clean input. This probe assumes entry purity (see {!op_legality}); the
+   of a kind absent from the input. This probe assumes entry purity (see {!op_legality}); the
    non-empty chain checks it even when the menu has already probed the op. The race queries below
    would call such an op legal (a [Grid] retype of a scope-nested loop) or unknown. It is asked only
    where {!scope_bodies_hold_loops}. The staging scope (gh-ocannl-1231) is checked over the applied

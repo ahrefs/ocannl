@@ -4,7 +4,8 @@
    to give the Stage anchor a second binder inside the scope after optimize. Stage's anchor precheck
    follows staged reads, all outside the scope here, while the splice rewrites every occurrence of
    the anchor symbol. A distinct symbol for the scope's loop lets the same Stage write the tile
-   outside the scope. *)
+   outside the scope. A pre-existing Grid loop must not exempt a new tensor write, and the single-op
+   oracle must still report a new hardware loop on an already impure input (gh-ocannl-2417). *)
 
 open Base
 open Ocannl.Operation.DSL_modules
@@ -15,7 +16,7 @@ module Outcome = Ir.Schedule_outcome
 
 let node = node_factory ~first_id:2313000 ~dims:[| 2; 2 |] ()
 
-let program ~duplicate_anchor name =
+let program ?(scope_axis = LL.Serial) ?(hidden_write = false) ~duplicate_anchor name =
   let source = node "source" and out = node "out" in
   let local = node ~dims:[| 1 |] "local" and sink = node ~dims:[| 1 |] "sink" in
   virtualize local;
@@ -24,7 +25,9 @@ let program ~duplicate_anchor name =
   let idcs = [| iter r; iter i |] and cell = [| fixed 0 |] in
   let copy = loop_n r 2 (loop_n i 2 (set out idcs (get source idcs))) in
   let id = LL.get_scope local in
-  let scoped_value = scope_of id (loop_n scope_loop 2 (LL.Set_local (id, c 1.))) in
+  let local_write = LL.Set_local (id, c 1.) in
+  let body = if hidden_write then seq (set sink cell (c 2.)) local_write else local_write in
+  let scoped_value = scope_of id (loop_n ~axis:scope_axis scope_loop 2 body) in
   let opt =
     optimize_scoped ~materialized:[ source; out; sink ] ~name
       ~raw:(seq copy (set sink cell (c 1.)))
@@ -44,23 +47,26 @@ let program ~duplicate_anchor name =
         tile_prec = None;
       }
   in
-  (opt, stage)
+  (opt, stage, scope_loop)
+
+let stage_refuses_scope_write opt stage =
+  match Sched.apply_classified [ stage ] opt with
+  | exception Outcome.Cause_at (Outcome.Transform, Outcome.Illegal_schedule { detail; _ }) ->
+      Stdio.eprintf "%s\n%!" detail;
+      String.is_prefix detail
+        ~prefix:"Schedule.Stage: leaves an impure scope body: Set writes the tensor node "
+  | applied ->
+      Option.iter (LL.scope_purity_violation applied.llc) ~f:(fun detail ->
+          Stdio.eprintf "Stage applied with a scope purity violation: %s\n%!" detail);
+      false
 
 let () =
-  let opt, stage = program ~duplicate_anchor:true "op_scope_duplicate" in
+  let opt, stage, _ = program ~duplicate_anchor:true "op_scope_duplicate" in
   p "the entry with a duplicated Stage anchor has a pure scope body"
     (Option.is_none (LL.scope_purity_violation opt.llc));
   p "Stage is refused at transform time for leaving a tensor write inside a scope body"
-    (match Sched.apply_classified [ stage ] opt with
-    | exception Outcome.Cause_at (Outcome.Transform, Outcome.Illegal_schedule { detail; _ }) ->
-        Stdio.eprintf "%s\n%!" detail;
-        String.is_prefix detail
-          ~prefix:"Schedule.Stage: leaves an impure scope body: Set writes the tensor node "
-    | applied ->
-        Option.iter (LL.scope_purity_violation applied.llc) ~f:(fun detail ->
-            Stdio.eprintf "Stage applied with a scope purity violation: %s\n%!" detail);
-        false);
-  let opt, stage = program ~duplicate_anchor:false "op_scope_distinct" in
+    (stage_refuses_scope_write opt stage);
+  let opt, stage, _ = program ~duplicate_anchor:false "op_scope_distinct" in
   let applied = Sched.apply_classified [ stage ] opt in
   let tile_writes =
     count_stmt ~in_scopes:false applied.llc ~f:(function
@@ -68,4 +74,30 @@ let () =
       | _ -> false)
   in
   p "with a distinct scope-loop binder, Stage writes a tile outside the scope and leaves it pure"
-    (tile_writes > 0 && Option.is_none (LL.scope_purity_violation applied.llc))
+    (tile_writes > 0 && Option.is_none (LL.scope_purity_violation applied.llc));
+  let opt, stage, _ =
+    program ~scope_axis:LL.Grid ~duplicate_anchor:true "op_scope_grid_duplicate"
+  in
+  p "the Grid duplicate starts with a hardware loop in the scope and no hidden write"
+    (Option.is_some (LL.scope_hardware_loop opt.llc)
+    && Option.is_none (LL.scope_purity_violation opt.llc));
+  p "Stage is refused for adding a hidden write even with a pre-existing Grid loop in the scope"
+    (stage_refuses_scope_write opt stage);
+  let opt, stage, axis =
+    program ~scope_axis:LL.Grid ~duplicate_anchor:false "op_scope_grid_distinct"
+  in
+  let applied = Sched.apply_classified [ stage ] opt in
+  p "Stage outside the scope is admitted and leaves only the pre-existing Grid loop violation"
+    (match LL.scope_hardware_loop applied.llc with
+    | Some (loop, LL.Grid, _) ->
+        Ir.Indexing.equal_symbol loop axis && Option.is_none (LL.scope_purity_violation applied.llc)
+    | _ -> false);
+  let opt, _, axis = program ~hidden_write:true ~duplicate_anchor:false "op_scope_impure" in
+  p "the single-op oracle input starts with a hidden write and no scope hardware loop"
+    (Option.is_some (LL.scope_purity_violation opt.llc)
+    && Option.is_none (LL.scope_hardware_loop opt.llc));
+  p "the single-op oracle refuses a new Grid loop in an already impure scope body"
+    (match Sched.op_legality opt (Sched.Retype { axis; ty = LL.Grid }) with
+    | Sched.Op_illegal detail ->
+        String.is_prefix detail ~prefix:"Schedule.Retype: leaves the hardware-annotated loop "
+    | _ -> false)
