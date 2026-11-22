@@ -146,6 +146,12 @@ let () =
     && Option.is_some r_ok.Autotune.best_grid
     && Option.is_some r_ok.Autotune.best_spread
     && not (List.is_empty r_ok.Autotune.best_steps));
+  p "forced replay refusal: the search census matches the control search"
+    (r.Autotune.candidates_timed = r_ok.Autotune.candidates_timed
+    && r.Autotune.candidates_failed = r_ok.Autotune.candidates_failed
+    && Float.equal r.Autotune.baseline_ms r_ok.Autotune.baseline_ms
+    && Option.is_some r_ok.Autotune.default_ms
+    && Option.equal Float.equal r.Autotune.default_ms r_ok.Autotune.default_ms);
   p_all2 "control: the shipped routine computes the reference bit for bit" values_ok reference
     ~f:Float.equal;
 

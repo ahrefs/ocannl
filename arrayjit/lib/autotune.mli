@@ -1220,9 +1220,13 @@ type outcome =
           and the untuned default shipped unmeasured in its place (gh-ocannl-2416). Reported to
           direct {!tune} callers, whose shipping compile runs before the report; the census records
           the search work done while the crown fields are cleared ([best_label] is [""], [best_ms]
-          is [infinity]) so no caller credits the default with the discarded crown. A deferred
-          search ({!tune_deferred}) reports before {!compile_deferred} runs and exposes a later
-          replay substitution through {!shipped_substitute}. *)
+          is [infinity]) so no caller credits the default with the discarded crown. Unlike
+          {!Searched_budget_fallback}, when caching is enabled the timed crown has already been
+          stored before the winner replay runs (a transient link refusal need not discard a sound
+          schedule); a later call's cache lookup re-validates the entry by replaying it and
+          re-searches if that replay fails. A deferred search ({!tune_deferred}) reports before
+          {!compile_deferred} runs and exposes a later replay substitution through
+          {!shipped_substitute}. *)
   | Search_died of terminal_failure
       (** A search ran and terminated on the carried fatal failure. The counters hold the work it
           had reached, and [best_ms] is a mid-search measurement of the {e search} context: no

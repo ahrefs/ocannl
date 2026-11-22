@@ -41,16 +41,13 @@ let completed (r : Autotune.report) =
 let replayed (r : Autotune.report) =
   match r.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false
 
-(* The state a completed search names (gh-ocannl-2310, gh-ocannl-2416): one whose every window host
-   contention refused completed having timed nothing, and one whose winner replay substituted the
-   untuned default reports [searched-replay-fallback]. An uncontended search that timed nothing
-   still expects ["searched"], and fails. *)
+(* The state a completed search names (gh-ocannl-2310): one whose every window host contention
+   refused completed having timed nothing, which is the only way this test's searches may time
+   nothing -- an uncontended search that timed nothing, or a winner replay that substituted the
+   default (gh-ocannl-1480, gh-ocannl-2416), still expects ["searched"], and fails. *)
 let searched_name (r : Autotune.report) =
-  match r.Autotune.outcome with
-  | Autotune.Searched_replay_fallback -> "searched-replay-fallback"
-  | _ ->
-      if r.Autotune.timings_contended > 0 && r.Autotune.candidates_timed = 0 then "searched-untimed"
-      else "searched"
+  if r.Autotune.timings_contended > 0 && r.Autotune.candidates_timed = 0 then "searched-untimed"
+  else "searched"
 
 let approx_tol _ = 1e-4
 
@@ -367,22 +364,15 @@ let () =
     (* The best timed tensorized candidate cannot beat the crowned winner outright — only undercut
        it inside the round band, or where the finals outranked it (both above), which are the
        preconditions the bare inequality was missing. [infinity >= infinity *. 0.99] holds, so a
-       search that timed nothing passes; a finite [mma_best_ms] under an infinite [best_ms] is
-       illegal for a retained crown, whereas fallback outcomes ([Searched_replay_fallback],
-       [Searched_budget_fallback]) intentionally clear [best_ms] while keeping the search census's
-       [mma_best_ms] (gh-ocannl-2416). Judged on a cache hit too: its two times are the storing
-       search's, replayed from the entry, and so is the finals record that explains a gap between
-       them (gh-ocannl-1725). *)
-    let retained_crown =
-      match r.Autotune.outcome with
-      | Autotune.Searched_replay_fallback | Autotune.Searched_budget_fallback -> false
-      | _ -> true
-    in
+       search that timed nothing passes; a finite [mma_best_ms] under an infinite [best_ms] would
+       not, and should not (an unexpected replay fallback fails here too, gh-ocannl-1480). Judged on
+       a cache hit too: its two times are the storing search's, replayed from the entry, and so is
+       the finals record that explains a gap between them (gh-ocannl-1725). *)
     Verdict.pass_fail
       (which
      ^ "'s best tensorized time undercuts the winner only inside the beam's progress band, or \
         where the finals outranked it")
-      ((not retained_crown) || undercut_explained r ~search_ms:r.Autotune.mma_best_ms)
+      (undercut_explained r ~search_ms:r.Autotune.mma_best_ms)
       ~detail:
         (d "mma_best_ms=%s best_ms=%s (band %.0f%%) finals=%s" (ms r.Autotune.mma_best_ms)
            (ms r.Autotune.best_ms) (Autotune.min_progress *. 100.)

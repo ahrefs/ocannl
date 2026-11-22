@@ -278,16 +278,11 @@ let () =
      refused one, which leaves no measurement to be the reference — admitted only against the
      refusal count (gh-ocannl-892). *)
   (* The winner beats the default it is reported against, unless the beam finals (gh-ocannl-1635)
-     crowned it over the default -- judged on the report's own default and finals when the report
-     retains its crown (fallback outcomes clear [best_ms] to [infinity] while keeping [default_ms],
-     gh-ocannl-2416). *)
+     crowned it over the default -- judged on the report's own default and finals. *)
   let beats_default (r : Autotune.report) =
-    match r.Autotune.outcome with
-    | Autotune.Searched_replay_fallback | Autotune.Searched_budget_fallback -> true
-    | _ -> (
-        match r.Autotune.default_ms with
-        | Some d -> Float.(r.Autotune.best_ms <= d) || Autotune.finals_outranked r ~search_ms:d
-        | None -> true)
+    match r.Autotune.default_ms with
+    | Some d -> Float.(r.Autotune.best_ms <= d) || Autotune.finals_outranked r ~search_ms:d
+    | None -> true
   in
   p
     "the default reference is measured and survives the cache round-trip, or is contention-refused \

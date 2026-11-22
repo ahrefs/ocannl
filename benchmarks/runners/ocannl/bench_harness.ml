@@ -689,6 +689,8 @@ let tune_arms () =
     third case instead of recovering it from two counters that are both zero. *)
 let collect_search t (r : Autotune.report) =
   match r.Autotune.outcome with
+  (* [Searched_replay_fallback] is defensive here: [Train.tune_placements] searches through
+     [Autotune.tune_deferred] and reports a replay substitution via [ship_substituted] instead. *)
   | Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback
   | Autotune.Searched_replay_fallback | Autotune.Search_died _ | Autotune.Abandoned _ ->
       t.searches <- t.searches + 1
