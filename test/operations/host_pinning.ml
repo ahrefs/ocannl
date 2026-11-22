@@ -292,4 +292,75 @@ let () =
    && !ov_unreg = 1 && st_p1.unregistered = 1 && st_p1.live_bytes = 0 && p2 && !ov_reg = 2
    && st_p2.registered = 2 && st_p2.live_bytes = 16384 && sl3 && tiny_cov && st_cov.registered = 2
    && st_cov.unregistered = 1 && st_cov.live_bytes = 16384);
-  ignore (Stdlib.Sys.opaque_identity (parent_nd, slice_nd, tiny_slice_nd))
+  ignore (Stdlib.Sys.opaque_identity (parent_nd, slice_nd, tiny_slice_nd));
+
+  (* 10. Failed overlap eviction refuses the mixed-range parent transfer with
+     [Overlap_eviction_failed], keeps the slice retryable, and succeeds once unregister recovers. *)
+  let fail_evict = ref true in
+  let hp_ev =
+    HP.create
+      ~min_bytes:(fun () -> 4096)
+      ~register:(fun ~addr ~bytes -> Some (addr, bytes))
+      ~unregister:(fun _ -> if !fail_evict then failwith "evict error")
+  in
+  let ev_parent_ba = Bigarray.Genarray.create Bigarray.float32 Bigarray.c_layout [| 2; 1024 |] in
+  let ev_parent_nd = Nd.as_array Ops.Single ev_parent_ba in
+  let ev_slice_nd = Nd.as_array Ops.Single (Bigarray.Genarray.sub_left ev_parent_ba 0 1) in
+  let _ = HP.note_transfer hp_ev ev_slice_nd in
+  let ev_sl2 = HP.note_transfer hp_ev ev_slice_nd in
+  let refused =
+    try
+      ignore (HP.note_transfer hp_ev ev_parent_nd : bool);
+      false
+    with HP.Overlap_eviction_failed _ -> true
+  in
+  let st_refused = HP.stats hp_ev in
+  fail_evict := false;
+  let ev_p1 = HP.note_transfer hp_ev ev_parent_nd in
+  let ev_p2 = HP.note_transfer hp_ev ev_parent_nd in
+  let st_ev_ok = HP.stats hp_ev in
+  p
+    "failed overlap eviction: refuses mixed-range parent transfer, then recovers and registers \
+     parent"
+    (ev_sl2 && refused
+    && st_refused.unregister_failures = 1
+    && st_refused.live_bytes = 4096 && (not ev_p1) && ev_p2 && st_ev_ok.unregistered = 1
+    && st_ev_ok.registered = 2 && st_ev_ok.live_bytes = 8192);
+  ignore (Stdlib.Sys.opaque_identity (ev_parent_nd, ev_slice_nd));
+
+  (* 11. Failed rollback after a finaliser raced with [register]: two views share the exact same
+     byte range; the first-sighted view is dropped so GC finalises it inside [register] of the
+     second view, and rollback [unregister] raises. [note_transfer] must still return [true] (the
+     driver still holds the pin) and keep live_bytes retryable until [unregister] recovers. *)
+  let rb_fail = ref true in
+  let trigger_race = ref false in
+  let hp_rb =
+    HP.create
+      ~min_bytes:(fun () -> 4096)
+      ~register:(fun ~addr ~bytes ->
+        if !trigger_race then Gc_witness.settle ();
+        Some (addr, bytes))
+      ~unregister:(fun _ -> if !rb_fail then failwith "rollback unregister error")
+  in
+  let rb_ba = Bigarray.Genarray.create Bigarray.float32 Bigarray.c_layout [| 2048 |] in
+  let[@inline never] sight_first_view () =
+    let alias = Bigarray.reshape_1 rb_ba 2048 |> Bigarray.genarray_of_array1 in
+    let nd = Nd.as_array Ops.Single alias in
+    let r = HP.note_transfer hp_rb nd in
+    let w = Gc_witness.witness alias in
+    (w, r)
+  in
+  let w_alias, rb_s1 = sight_first_view () in
+  let rb_nd2 = Nd.as_array Ops.Single rb_ba in
+  trigger_race := true;
+  let rb_r2 = HP.note_transfer hp_rb rb_nd2 in
+  let alias_gone = Gc_witness.reclaimed w_alias in
+  let st_rb_fail = HP.stats hp_rb in
+  rb_fail := false;
+  HP.unregister_all hp_rb;
+  let st_rb_ok = HP.stats hp_rb in
+  p "failed rollback after finaliser race during register: reports pinned and recovers on retry"
+    ((not rb_s1) && alias_gone && rb_r2 && st_rb_fail.registered = 1
+    && st_rb_fail.unregister_failures = 1
+    && st_rb_fail.live_bytes = 8192 && st_rb_ok.unregistered = 1 && st_rb_ok.live_bytes = 0);
+  ignore (Stdlib.Sys.opaque_identity rb_nd2)

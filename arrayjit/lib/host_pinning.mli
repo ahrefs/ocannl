@@ -31,6 +31,10 @@ type stats = {
 }
 [@@deriving sexp_of]
 
+exception Overlap_eviction_failed of { addr : nativeint; bytes : int }
+(** Raised by {!note_transfer} when a transfer partially overlaps an active registration whose
+    [unregister] failed, refusing to let the backend submit a mixed registered/unregistered copy. *)
+
 val create :
   min_bytes:(unit -> int) ->
   register:(addr:nativeint -> bytes:int -> 'token option) ->
@@ -39,7 +43,9 @@ val create :
 
 val note_transfer : 'token t -> Ndarray.t -> bool
 (** Records a host-to-device transfer of [nd]. Returns [true] iff [nd] is covered by a live
-    registration for this transfer (or an overlapping registration whose unregistration failed). *)
+    registration for this transfer (including a registration whose rollback failed and remains
+    pinned in the driver). Raises {!Overlap_eviction_failed} if a partially overlapping registration
+    could not be unregistered. *)
 
 val unregister_all : 'token t -> unit
 (** Retries any pending failed unregistrations and unregisters every currently live registered

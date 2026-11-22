@@ -53,6 +53,18 @@ type stats = {
 }
 [@@deriving sexp_of]
 
+exception Overlap_eviction_failed of { addr : nativeint; bytes : int }
+
+let () =
+  Stdlib.Printexc.register_printer (function
+    | Overlap_eviction_failed { addr; bytes } ->
+        Some
+          (Printf.sprintf
+             "Host_pinning.Overlap_eviction_failed: could not unregister an active host \
+              registration overlapping [%s, +%d bytes); refusing mixed-range transfer"
+             (Nativeint.Hex.to_string addr) bytes)
+    | _ -> None)
+
 let ule a b =
   Int.(Nativeint.compare Nativeint.(bit_xor a min_value) Nativeint.(bit_xor b min_value) <= 0)
 
@@ -206,7 +218,7 @@ let note_transfer t nd =
         let covered =
           List.exists t.active_pinned ~f:(fun r ->
               match Atomic.get r.state with
-              | Registered _ ->
+              | Registered _ | Retry_unregister _ ->
                   contains ~outer_addr:r.addr ~outer_end:r.end_addr ~inner_addr:addr
                     ~inner_end:end_addr
               | _ -> false)
@@ -225,10 +237,9 @@ let note_transfer t nd =
           drain_retired_locked t;
           prune_active_pinned_locked t;
           if still_overlapping then
-            (* A partially overlapping registration could not be unpinned; do not register a second
-               overlapping range, and return [true] so the caller still synchronises
-               conservatively. *)
-            true
+            (* A partially overlapping registration could not be unpinned: refuse to let the backend
+               submit a mixed registered/unregistered copy range. *)
+            raise (Overlap_eviction_failed { addr; bytes })
           else if threshold <= 0 || bytes < threshold then false
           else
             let key = (addr, bytes) in
@@ -277,7 +288,9 @@ let note_transfer t nd =
                             in
                             t.active_pinned <- retry_entry :: t.active_pinned;
                             push_retry t retry_entry;
-                            false))))
+                            (* The driver still holds the pin until retry succeeds, so report pinned
+                               to keep stream synchronisation safe. *)
+                            true))))
 
 let unregister_all t =
   Stdlib.Mutex.protect t.lock (fun () ->

@@ -983,7 +983,7 @@ files.
   returns `true`, preserving the completion contract for callers that do not await immediately
   (`Backends.allocate_delta`, immediate host buffer reuse). Interleaved `benchmarks/ab.py` on
   `rog-nv-linux` (RTX 5070 Ti Laptop, discrete; `test/training/bench_host_feed_step.exe 60`,
-  4 x 24 MiB batches, 12 paired rounds, every cell clean): upload median 1.501 -> 0.6879 ms
-  (ratio 0.455, 12/12 faster, p=0.000488), full training step median 2.252 -> 1.418 ms (ratio
-  0.629, 12/12 faster, p=0.000488). A future cudajit binding for `cuMemHostRegister_v2` /
-  `cuMemHostUnregister` can supersede the `Driver_entry` bindings.
+  4 x 24 MiB batches, 12 paired rounds, every cell clean, `3463502e` vs `49b70522`): upload median
+  1.477 -> 0.6939 ms (ratio 0.462, 12/12 faster, p=0.000488), full training step median 2.225 ->
+  1.418 ms (ratio 0.631, 12/12 faster, p=0.000488). A future cudajit binding for
+  `cuMemHostRegister_v2` / `cuMemHostUnregister` can supersede the `Driver_entry` bindings.
