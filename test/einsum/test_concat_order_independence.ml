@@ -652,10 +652,10 @@ let () =
       let bounded = List.map bounded_stores ~f:fst in
       (* These two bounds fix both components. The size-one residual can satisfy its bound only as
          the broadcast top, without claiming the prefix's basis. *)
-      let check_shared_bounds ~k_size ~k_basis ~u_bound ~u_size ~u_basis =
+      let check_shared_bounds ~k_size ~k_basis ~u_bound:(u_bound, u_bound_basis) ~u_size ~u_basis =
         let name =
-          Printf.sprintf "%s ; k >= %d %s ; u >= %d default" (store_name shared) k_size k_basis
-            u_bound
+          Printf.sprintf "%s ; k >= %d %s ; u >= %d %s" (store_name shared) k_size k_basis u_bound
+            u_bound_basis
         in
         let { items; outs; batched } =
           List.find_exn bounded ~f:(fun { items; _ } -> String.equal name (store_name items))
@@ -675,8 +675,11 @@ let () =
           (name ^ " accepts its stated witness in all 24 orders")
           (List.count (orders items) ~f:(fun order -> ground (solve ~pins items order)) = 24)
       in
-      check_shared_bounds ~k_size:5 ~k_basis:"a" ~u_bound:3 ~u_size:3 ~u_basis:Row.default_basis;
-      check_shared_bounds ~k_size:3 ~k_basis:Row.default_basis ~u_bound:2 ~u_size:1
+      check_shared_bounds ~k_size:5 ~k_basis:"a" ~u_bound:(3, Row.default_basis) ~u_size:3
+        ~u_basis:Row.default_basis;
+      check_shared_bounds ~k_size:3 ~k_basis:Row.default_basis ~u_bound:(2, Row.default_basis)
+        ~u_size:1 ~u_basis:Row.bcast_if_1;
+      check_shared_bounds ~k_size:3 ~k_basis:Row.default_basis ~u_bound:(2, "h") ~u_size:1
         ~u_basis:Row.bcast_if_1;
       p_none ~min:1700 "bounded stores whose verdict or solution depends on the order" bounded
         ~f:order_dependent;

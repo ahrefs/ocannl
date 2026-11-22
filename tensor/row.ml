@@ -6768,10 +6768,10 @@ let closing_dim_dependencies ineqs env =
    the other component a tag its bound refuses.
 
    At the minimum, a [default] waiting bound also closes first when the closing component has no
-   bound of its own. The positive residual takes the shared claim. If its own bound is [default]
-   above 1, the only size-one component it admits is [1_(bcast_if_1)]. Install that top with the
-   waiting GLB (gh-ocannl-2369). A waiting GLB already carrying the claim can reach the top in the
-   ordinary closing order. Below the minimum the residual would go under 1.
+   bound of its own. The positive residual takes the shared claim. A closing bound above 1 admits
+   only the broadcast top at size one, whatever the bound's tag (gh-ocannl-2369, gh-ocannl-2419).
+   Install that top with the waiting GLB. A waiting GLB already carrying the claim can reach the top
+   in the ordinary closing order. Below the minimum the residual would go under 1.
 
    These choices require independent dimension entries. A competing held relation can supply a
    component's tag after a fixed-index minimum closes. The existing closing pass handles those
@@ -6870,9 +6870,7 @@ let concat_bounded_waiting ~parameter_axes ineqs env =
                   let close_both d2 = [ wait_eq; Dim_eq { d1 = Var closing; d2; origin } ] in
                   match (residual, ordinary_glb closing) with
                   | 1, Some None when waiting_plain && independent () -> [ wait_eq ]
-                  | 1, Some (Some (Dim { d; basis; _ }))
-                    when waiting_plain && d > 1 && String.equal basis default_basis
-                         && independent () ->
+                  | 1, Some (Some (Dim { d; _ })) when waiting_plain && d > 1 && independent () ->
                       close_both (get_bcast_dim ~d:1 ())
                   | _, Some (Some (Dim { d; basis = closing_basis; _ } as close_glb))
                     when residual > 1 && d = residual

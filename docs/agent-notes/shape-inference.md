@@ -148,7 +148,13 @@ files.
   comparison expects 600 refused-to-accepted rows across the 24 stores. The comparator checks
   coverage relative to its two inputs. Atomic publication prevents two identically interrupted
   runs from agreeing on a prefix. The exporter test injects a batch exception after an ordered
-  row and checks that the fresh destination is absent.
+  row and checks that the fresh destination is absent. The residual-one choice also applies
+  to named closing bounds above 1 (gh-ocannl-2419). For `k >= 3_default` and `u >= 2_h`
+  under claim `a`, the same witness satisfies the bound because the size-one broadcast top
+  admits any result basis. It contributes no claim to either concatenated sum. The order test
+  pins `k = 3_default, u = 1_(bcast_if_1)` in 24 orders and in a batch. The bounded sweep
+  adds 45 stores (1,125 rows) and preserves the exact answers of all 246 previously accepted
+  stores.
 - No path sizes a non-emptiable concatenation component to 0 (gh-ocannl-2316, gh-ocannl-2368,
   gh-ocannl-2418). Zero permission is split into environment sets (with `discardable_vars ⊆
   emptiable_vars` held at `add_zero_permissions` / `solve_inequalities` entry, and `non_zero_vars`
