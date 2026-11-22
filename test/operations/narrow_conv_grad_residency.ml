@@ -15,12 +15,15 @@ module Tn = Ir.Tnode
 module Sched = Ir.Schedule
 
 let bf16 = Ir.Ops.bfloat16
-let positions = 9
+let positions = 253
 let channels = 6
 let taps = 5
 let input_extent stride = ((positions - 1) * stride) + taps
 let weight k d = Float.of_int (1 + (((3 * k) + d) % 5)) /. 8.
-let cotangent o d = Float.of_int (1 + (((5 * o) + (3 * d)) % 7)) /. 16.
+
+let cotangent ~stride o d =
+  let scale = if stride < taps then 1 else 3 in
+  Float.of_int (scale * (1 + (((5 * o) + (3 * d)) % 7))) /. 16.
 
 let incoming stride =
   Array.init (input_extent stride) ~f:(fun i -> Float.of_int (256 + (2 * (i % 3))))
@@ -42,7 +45,7 @@ let gradient ~stride prec =
   in
   let c =
     NTDSL.init ~l:"ncgr_c" ~prec:Ir.Ops.single ~o:[ positions; channels ]
-      ~f:(fun idx -> cotangent idx.(0) idx.(1))
+      ~f:(fun idx -> cotangent ~stride idx.(0) idx.(1))
       ()
   in
   let use_padding = false in
@@ -55,13 +58,25 @@ let gradient ~stride prec =
   Train.set_materialized (grad y);
   (Train.grad_update ~accum_steps:1 loss, dx)
 
-let run_fixture ~stride ~tag ?(privatized = false) prec =
+let run_fixture ~stride ~tag ?(privatized = false) ?(split_owner = false) prec =
   let comp, dx = gradient ~stride prec in
   let ctx = Context.auto () in
   let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
   let lowered_transform =
     Option.some_if privatized (fun opt ->
-        let sched = Autotune.extend_with_privatize ~accum_prec ~static_indices:[] [] opt in
+        let preset =
+          if split_owner then
+            let phase =
+              LL.flat_lines [ opt.LL.llc ]
+              |> List.filter ~f:(fun st -> not (List.is_empty (LL.accumulating_writes ~tn:dx st)))
+              |> List.last_exn
+            in
+            let axis = Ll_test.nest_paths phase |> List.hd_exn |> List.hd_exn in
+            let op, _, _ = Sched.split ~axis ~factor:4 ~outer:LL.Serial ~inner:LL.Serial in
+            [ op ]
+          else []
+        in
+        let sched = Autotune.extend_with_privatize ~accum_prec ~static_indices:[] preset opt in
         [ Sched.apply sched opt ])
   in
   let name = Printf.sprintf "ncgr_%s_%d" tag stride in
@@ -81,7 +96,7 @@ let terms ~stride cell =
   List.filter_map (List.range 0 positions) ~f:(fun o ->
       let k = cell - (stride * o) in
       if k < 0 || k >= taps then None
-      else Some (List.init channels ~f:(fun d -> weight k d *. cotangent o d)))
+      else Some (List.init channels ~f:(fun d -> weight k d *. cotangent ~stride o d)))
 
 let check stride =
   let label = Printf.sprintf "stride %d" stride in
@@ -103,15 +118,39 @@ let check stride =
   in
   pf_all2 "%s: the materialized f32 gradient equals the host sums" label twin exact ~f:same;
   discriminates "per step" (modeled ~step:round ~window:Fn.id);
-  discriminates "per window" (modeled ~step:Fn.id ~window:round);
+  if stride < taps then discriminates "per window" (modeled ~step:Fn.id ~window:round);
   pf_all2 "%s: the bf16 gradient equals the f32 gradient rounded once per cell" label narrow once
     ~f:same;
   p_all (Printf.sprintf "%s: the input gradient's accumulator tiles are f32" label) tiles
     ~f:(fun tn -> Ir.Ops.equal_prec (Lazy.force tn.Tn.storage_prec) Ir.Ops.single);
   pf_all2 "%s: the privatized gradient equals the f32 gradient rounded once per cell" label
-    scheduled once ~f:same
+    scheduled once ~f:same;
+  if stride = 2 then (
+    let split, tiles = run_fixture ~stride ~tag:"split" ~privatized:true ~split_owner:true bf16 in
+    p "the split residue with ambiguous entry provenance stays a serial accumulation"
+      (List.length tiles = 1);
+    p_all2 "the split owner's tail guard preserves once-rounded parity across both residues" split
+      once ~f:same)
 
-let () = List.iter [ 1; 2 ] ~f:check
+let () =
+  Test_utils.with_policy
+    (fun policy -> { policy with Ir.Numerics.bf16_arithmetic = Ir.Numerics.Bf16_wide })
+    (fun () -> List.iter [ 1; 2; 6 ] ~f:check)
+
+let () =
+  let open Ll_test in
+  let i = sym () and d = sym () and j = sym () in
+  let out = node_factory ~prec:bf16 ~first_id:24234 ~dims:[| 200001 |] () "ncgr_residues" in
+  let cell = aff [ (100000, i); (1, j) ] 0 in
+  let update = set_at out cell (add_own (get out [| cell |]) (embed d)) in
+  let raw = loop_n i 2 (loop_n d 2 (loop_n j 100001 update)) in
+  let rewritten = LL.sink_narrow_reduction_loops raw in
+  p "a tied traversal chooses the frame with one residue nest"
+    (List.length (nest_paths rewritten) = 1
+    &&
+    match LL.serial_accum_widths ~serialized:(fun _ _ -> false) ~tn:out rewritten with
+    | [ site ] -> site.LL.sa_widens
+    | _ -> false)
 
 let () =
   let open Ll_test in

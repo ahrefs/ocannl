@@ -767,10 +767,13 @@ files.
   pure index guards that move with the loop they mention). Plain cell loops interchange.
   A cell with one supported positive affine pair (gh-ocannl-2423) is reparametrized by cell
   and residue, with the reduction preserving its original visit order across windows. Separate
-  residues own disjoint cells. After one is privatized, an untouched sibling write still
-  identifies its entry width decision by statement identity. Multiple affine pairs and dynamic
-  scatters keep per-step rounding. The affine path is pinned by `narrow_conv_grad_residency`
-  (overlapping stride-one and stride-two gradients against a once-rounded f32 twin). Pinned by
+  residues own disjoint cells, with a code-size budget on materializing residue nests. A signed
+  split mask that dominates the whole reduction can bound its transfers on a padded tail.
+  After one residue is privatized, an untouched sibling write still identifies its entry width
+  by statement identity. If the surviving entry width is ambiguous, the candidate declines.
+  Multiple affine pairs and dynamic scatters keep per-step rounding. The affine path is pinned by
+  `narrow_conv_grad_residency`, including a split tail, a disjoint window with gaps, and the
+  once-rounded f32 twin. The plain path is pinned by
   `lowered_nest_order`'s narrow legs and `narrow_grad_residency` (a bf16 dense layer's three
   gradients onto nonzero incoming values equal an f32 twin's exact sums narrowed once on the default,
   the privatized preset and the seeded CUDA/HIP default, whose shipped `acc` tiles are f32).

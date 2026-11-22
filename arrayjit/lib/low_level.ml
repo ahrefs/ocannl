@@ -594,7 +594,7 @@ let direct_write : t -> Tn.t option = function
    is pruned). Scan bodies are entered: their writes are writes like any other (gh-ocannl-1134).
    Dead loops are entered, the walk being structural. [statement] may [Prune] a subtree it handles
    itself. *)
-let fold_statement_positions ~init
+let fold_statement_positions ?(track_guards = false) ~init
     ~(statement : Access_fold.context -> 'a -> t -> 'a Access_fold.descent) (llc : t) : 'a =
   let open Access_fold in
   let policy =
@@ -603,7 +603,7 @@ let fold_statement_positions ~init
       gated_operands = Skip;
       dead_loops = Visit;
       local_scopes = Skip;
-      guards = Ignore;
+      guards = (if track_guards then Track else Ignore);
       scan_implicit = Skip;
     }
   in
@@ -5939,7 +5939,7 @@ let index_comparisons_total ~ienv ~prec (sc : scalar_t) =
   in
   match sc with
   | Binop (Ops.And, (a, _), (b, _)) -> comparison_total a && comparison_total b
-  | _ -> false
+  | sc -> comparison_total sc
 
 (* Bounds of a tensor-node read: the machine range of the stored precision, narrowed by the node's
    bounds candidate when one exists. The node becomes a source only when the candidate actually
@@ -10175,7 +10175,74 @@ type peel_refusal =
 type peel_report = { levels : int; guards : peel_guard_verdict list; refusal : peel_refusal option }
 [@@deriving sexp_of]
 
-let peel_accum_nest ?(extra_level = fun _ _ -> false) ?report ~loop_ranges ~free_of body :
+(* A dominating split mask can bound a cell coordinate even when the independent loop hulls include
+   padding lanes. Compare the primitive linear forms: e.g. [owner < n] also bounds [stride * owner +
+   residue]. Only signed, total comparisons can supply such a bound. *)
+let within_accum_box ~loop_ranges ~dominating_guards coords =
+  let range = Affine.Loop_ranges.find loop_ranges in
+  if Affine.within_box ~range coords then true
+  else if List.is_empty dominating_guards then false
+  else
+    let ip = Ops.index_prec () in
+    let env =
+      List.fold (Affine.Loop_ranges.to_alist loop_ranges)
+        ~init:(ienv_of_static_indices ~node_bounds:false []) ~f:(fun env (s, (from_, to_)) ->
+          ienv_extend env s ~from_ ~to_)
+    in
+    let rec gcd a b = if b = 0 then a else gcd b (a % b) in
+    let primitive terms =
+      if List.exists terms ~f:(fun (c, _) -> c = Int.min_value) then None
+      else
+        let scale = List.fold terms ~init:0 ~f:(fun g (c, _) -> gcd g (abs c)) in
+        if scale = 0 then None else Some (List.map terms ~f:(fun (c, s) -> (c / scale, s)), scale)
+    in
+    let guards =
+      List.filter_map dominating_guards ~f:(fun (cond, prec) ->
+          match cond with
+          | Binop (((Ops.Cmplt | Ops.Cmple) as op), (a, pa), (b, pb))
+            when List.for_all [ prec; pa; pb ] ~f:(Ops.equal_prec ip)
+                 && index_comparisons_total ~ienv:env ~prec cond -> (
+              let strict = if Ops.equal_binop op Ops.Cmplt then 1 else 0 in
+              match (affine_terms_of_scalar a, affine_terms_of_scalar b) with
+              | Some (terms, off), Some ([], stop) ->
+                  Option.map (primitive terms) ~f:(fun (terms, scale) ->
+                      (terms, `Upper (fdiv_int (stop - off - strict) scale)))
+              | Some ([], start), Some (terms, off) ->
+                  Option.map (primitive terms) ~f:(fun (terms, scale) ->
+                      (terms, `Lower (cdiv_int (start - off + strict) scale)))
+              | _ -> None)
+          | _ -> None)
+    in
+    let equal_terms = List.equal (fun (c, s) (c', s') -> c = c' && Indexing.equal_symbol s s') in
+    Array.for_all coords ~f:(function
+      | Affine.Unknown _ -> false
+      | Affine.Known { size; terms; offset; _ } -> (
+          let index = Indexing.affine ~symbols:terms ~offset in
+          let iv = interval_of_index env index in
+          let lower = Float.(iv.lo >= 0.) and upper = Float.(iv.hi < of_int size) in
+          (lower && upper)
+          ||
+          match primitive terms with
+          | None -> false
+          | Some (terms, scale) ->
+              let restrict (lo, hi) (guard_terms, bound) =
+                if not (equal_terms terms guard_terms) then (lo, hi)
+                else
+                  match bound with
+                  | `Lower v -> (lo || v >= cdiv_int (-offset) scale, hi)
+                  | `Upper v -> (lo, hi || v <= fdiv_int (size - 1 - offset) scale)
+              in
+              (* These subtractions must be exact before a guard can prove a bound. *)
+              let limit = Int.max_value / 4 in
+              offset >= -limit && offset <= limit && size <= limit
+              && index_comparisons_total ~ienv:env ~prec:ip
+                   (Binop (Ops.Cmple, (Embed_index index, ip), (Embed_index index, ip)))
+              &&
+              let lo, hi = List.fold guards ~init:(lower, upper) ~f:restrict in
+              lo && hi))
+
+let peel_accum_nest ?(extra_level = fun _ _ -> false) ?report ?(dominating_guards = []) ~loop_ranges
+    ~free_of body :
     (Tn.t
     * Indexing.axis_index array
     * [ `Update of scalar_t | `Scope of scope_id * t list ]
@@ -10237,7 +10304,7 @@ let peel_accum_nest ?(extra_level = fun _ _ -> false) ?report ~loop_ranges ~free
     Affine.separates ~range
       ~concurrent:(fun s -> loop_bound s && not (peeled ~free_of s))
       ~syms:pending ~coords
-    && Affine.within_box ~range coords
+    && within_accum_box ~loop_ranges ~dominating_guards coords
   in
   let cell_invariant ~free_of idcs =
     not (Array.exists idcs ~f:(fun idx -> List.exists free_of ~f:(fun s -> idx_mentions s idx)))
@@ -10348,10 +10415,10 @@ type accum_decision =
       pinned : accum_skip option;
     }
 
-let decide_accum_width ~extra_level ~loop_ranges ~index ~from_ ~to_ body =
+let decide_accum_width ?dominating_guards ~extra_level ~loop_ranges ~index ~from_ ~to_ body =
   let report = ref None in
   match
-    peel_accum_nest ~extra_level
+    peel_accum_nest ~extra_level ?dominating_guards
       ~report:(fun r -> report := Some r)
       ~loop_ranges ~free_of:[ index ] body
   with
@@ -10414,7 +10481,7 @@ let serial_accum_widths ~serialized ~tn (llc : t) : serial_accum list =
   let loop_ranges = loop_ranges llc in
   let extra_level index axis = equal_axis_type axis Workgroup_reduce && serialized index axis in
   List.rev
-  @@ fold_statement_positions ~init:[] llc ~statement:(fun _ acc (llc : t) ->
+  @@ fold_statement_positions ~track_guards:true ~init:[] llc ~statement:(fun ctx acc (llc : t) ->
       match llc with
       | For_loop { index; from_; to_; body; axis } -> (
           let asks =
@@ -10424,7 +10491,10 @@ let serial_accum_widths ~serialized ~tn (llc : t) : serial_accum list =
             | Grid -> false
           in
           let decision =
-            if asks then Some (decide_accum_width ~extra_level ~loop_ranges ~index ~from_ ~to_ body)
+            if asks then
+              Some
+                (decide_accum_width ~dominating_guards:ctx.Access_fold.guards ~extra_level
+                   ~loop_ranges ~index ~from_ ~to_ body)
             else None
           in
           match decision with
@@ -13369,8 +13439,15 @@ let sink_narrow_reduction_loops (llc : t) : t =
         then None
         else Some (rebuild (writes @ reductions) guards leaf)
       else
+        (* Each residue duplicates the body. Bound the expansion before allocating the list, and
+           break ties in scan length in favour of fewer copies. *)
+        let max_residue_nests = 64 in
+        let na = a / g and nb = b / g in
+        let qa = jmax / na and qb = imax / nb in
+        if min na nb > max_residue_nests then raise Unsupported;
         let (a, i, imax), (b, j, jmax), descending =
-          if jmax / (a / g) <= imax / (b / g) then ((a, i, imax), (b, j, jmax), true)
+          if na <= max_residue_nests && (nb > max_residue_nests || qa < qb || (qa = qb && na <= nb))
+          then ((a, i, imax), (b, j, jmax), true)
           else ((b, j, jmax), (a, i, imax), false)
         in
         let a_step = a / g and b_step = b / g in

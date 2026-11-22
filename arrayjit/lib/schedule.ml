@@ -3148,14 +3148,14 @@ let apply_privatize ~app ~target ~over ~acc_prec (opt : Low_level.optimized) : L
               | [ k ] -> Some k
               | _ -> None
             in
-            let judged =
+            let identified =
               match unique_position (accumulating_writes ~tn:target entry) with
-              | Some k -> [ List.nth_exn bound k ]
+              | Some _ as k -> k
               | None -> (
                   let current = accumulating_writes ~tn:target program in
                   match unique_position current with
-                  | Some k when List.length current = List.length bound -> [ List.nth_exn bound k ]
-                  | _ -> bound)
+                  | Some _ as k when List.length current = List.length bound -> k
+                  | _ -> None)
             in
             (* The tile narrows once per execution of [over], which matches the serial rendering
                only where one execution of [over] covers exactly the level localizing the write:
@@ -3172,9 +3172,16 @@ let apply_privatize ~app ~target ~over ~acc_prec (opt : Low_level.optimized) : L
               | Some Part -> fun _ -> false
               | None -> fun _ -> true
             in
-            match judged with
-            | [] -> false
-            | _ -> List.for_all judged ~f:(fun sa -> sa.sa_widens && localizes_over sa))
+            let widens sa = sa.sa_widens && localizes_over sa in
+            match identified with
+            | Some k -> widens (List.nth_exn bound k)
+            | None ->
+                (* A rewritten write after sibling removal can no longer be assigned by position. A
+                   conflicting entry decision cannot safely select a narrow tile. *)
+                let all_widen = List.for_all bound ~f:widens in
+                if (not all_widen) && List.exists bound ~f:widens then
+                  refuse "Schedule.Privatize: the entry write's accumulator width is ambiguous";
+                (not (List.is_empty bound)) && all_widen)
         | _ -> false
       in
       let widened_scopes =

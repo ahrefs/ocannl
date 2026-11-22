@@ -314,6 +314,7 @@
   (alias runtest-mma_format_arm_tables)
   (alias runtest-mma_format_scope)
   (alias runtest-narrow_accum_init)
+  (alias runtest-narrow_conv_grad_residency)
   (alias runtest-narrow_placement_contract)
   (alias runtest-narrow_rng_nesting)
   (alias runtest-narrow_storage_compute)
@@ -11774,6 +11775,7 @@
   base
   ocannl
   ll_test
+  test_utils
   arrayjit.verdict
   arrayjit.context
   arrayjit.autotune)

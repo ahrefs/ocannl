@@ -883,6 +883,7 @@ type peel_report = {
 val peel_accum_nest :
   ?extra_level:(Indexing.symbol -> axis_type -> bool) ->
   ?report:(peel_report -> unit) ->
+  ?dominating_guards:scalar_arg list ->
   loop_ranges:Affine.Loop_ranges.t ->
   free_of:Indexing.symbol list ->
   t ->
@@ -903,9 +904,11 @@ val peel_accum_nest :
     statements after the opening init, validated to carry ONE reduction operator — mixed-operator
     sequences are not reductions and keep their per-iteration narrowing), with the accumulated cell
     invariant across the peeled levels ([free_of] seeds the invariance check with the caller's own
-    loop). [rebuild] re-wraps a replacement base statement in the peeled levels. The ONE definition
-    shared by [C_syntax]'s localizing serial fallback and the schedule mints, so transform and
-    emission cannot drift.
+    loop). [dominating_guards] enclose the caller's entire level, including the localized transfers.
+    Signed affine conditions there can prove those transfers in bounds on padded iterations.
+    [rebuild] re-wraps a replacement base statement in the peeled levels. The ONE definition shared
+    by [C_syntax]'s localizing serial fallback and the schedule mints, so transform and emission
+    cannot drift.
 
     A DEAD level ([to_ < from_]) is never peeled, and that refusal is load-bearing rather than
     tidiness: the body of a dead loop performs no accesses at all — the routine-interface walk
@@ -971,6 +974,7 @@ type accum_decision =
     }
 
 val decide_accum_width :
+  ?dominating_guards:scalar_arg list ->
   extra_level:(Indexing.symbol -> axis_type -> bool) ->
   loop_ranges:Affine.Loop_ranges.t ->
   index:Indexing.symbol ->
