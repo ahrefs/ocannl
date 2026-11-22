@@ -697,18 +697,33 @@ files.
   CUDA's `CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES` through `Cuda_backend.Function_attributes`, ctypes
   bindings to the driver that load the PTX a second time, because cudajit's `Cu.Module.func` is
   opaque (a cudajit attribute binding would supersede them). The claim is AT MOST: a device compiler
-  may drop an array it proves dead, and an over-charge only costs candidates. On the M4 Max every one
-  of 160-odd seeded kernels allocated exactly its charge, Metal's static length included, and a
-  non-vacuity claim requires a positive exact match. Those charges are all multiples of 16 B, and
-  Metal's static length rounds to 16 B (M4 Max, measured on an f16 product of 9x21 and of 9x17
-  halves that a fused twin places whole in workgroup memory beside three aligned tiles: charged
-  4476 and 4404 B, reported 4480 and 4416; one unaligned array cannot tell a 16 B kernel total from
-  a 16 B per-array granule), while its pipeline-creation request is the sum of 4 B-rounded arrays
-  (`metal_threadgroup_overflow`). So a fixture whose charge is not a multiple of 16 reads as
-  UNDER-CHARGED by up to 12 B against the static length, and with one unaligned array the 16 B
-  rounding absorbs the 4 B per-array term, which the static length cannot then tell apart. Seeded
-  tiles are padded to tile multiples (powers of two); the fused whole product is the only seeded
-  unaligned array found. The negative controls that the claim catches: dropping the arrays term, or
+  may drop an array it proves dead, and an over-charge only costs candidates. The comparison rounds
+  the charge up to `codegen_capabilities.workgroup_reporting_granule` (gh-ocannl-2426), distinct
+  from the per-array `workgroup_allocation_alignment`: Metal's `staticThreadgroupMemoryLength`
+  rounds the kernel's 4 B-rounded total up to 16 B (M4 Max, `20261122T165750Z-3778`: 9x21, 9x11 and
+  9x17 f16 fused products charged 4476, 4296 and 4404 B reported 4480, 4304 and 4416 B, with 4304 %
+  32 = 16 ruling out a coarser granule; two-array probes of 17+15 B [exact 32, 4 B-charged 36] and
+  17+17 B [exact 34, 4 B-charged 40] both reported 48 B, proving 16 B kernel-total rounding of the
+  4 B-per-array sum rather than 16 B per-array [64 B] or 16 B of exact bytes [32 B]), while its
+  pipeline-creation request stays the 4 B-rounded sum (`metal_threadgroup_overflow`). CUDA
+  (`rog-nv-linux`, `20261122T165804Z-1226811`) and HIP (`tuf-amd-linux` discrete gfx1102
+  `20261122T165816Z-762875` and `minix-amd-linux` unified gfx1151 `20261122T165826Z-1286312`,
+  byte-identical on both) report to 1 B (4474, 4294 and 4402 B on the same f16 fused products).
+  On HIP, the two-array probes also showed LLVM AMDGPU aligning each `__shared__` array's start to
+  16 B without rounding the trailing array (17+15 B -> 47, 17+17 B -> 49, 33+33 B -> 81 B), which
+  exceeds `workgroup_allocation_alignment = 1` when an unaligned array precedes another array (tracked
+  as a deferred follow-up from gh-ocannl-2426; in the `half_local_odd` and `half_local_9x11`
+  fixtures the unaligned product incurred no inter-array padding beside the 4096 B of aligned tiles,
+  which shows it sat last in those fixtures, not that seeding enforces that order). Non-vacuity
+  claims require an aligned kernel matching its positive charge exactly (`charged % 16 = 0`), a
+  single-array 37 B `byte` staged probe hitting its granule-rounded bound (48 B on Metal, 37 B on
+  CUDA and HIP — distinguishing 1 B from 2 B without requiring MMA), two-array odd-byte probes
+  (17+15 B and 17+17 B, both reporting 48 B on Metal) where allocation alignment and reporting
+  granule differ, and (where f16 tensorization is advertised) an unaligned seeded kernel
+  (`half_local_odd` 9x21, `half_local_9x11` 9x11) hitting its granule-rounded bound below a 32 B
+  multiple. With one unaligned array on Metal the 16 B reporting
+  granule still absorbs the 4 B per-array term, so `metal_threadgroup_overflow` owns that term.
+  The negative controls that `compiled_workgroup_bytes` catches: dropping the arrays term, or
   (under `Fp16_wide`, the `half_out` fixture) the tile-MMA term, of `Schedule.kernel_workgroup_bytes`.
 - `Context.get_used_memory` must report OCANNL's OWN allocation (`Slab.used_memory`, or the
   backend's atomic counter) — never the driver's `total - free`. That is device-global: it counts

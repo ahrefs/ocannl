@@ -1,5 +1,7 @@
 dense: the search seeds at least one candidate here: true
 dense_local: the search seeds at least one candidate here: true
+half_local_odd: the search seeds at least one candidate here: true
+half_local_9x11: the search seeds at least one candidate here: true
 padded: the search seeds at least one candidate here: true
 half: the search seeds at least one candidate here: true
 half_out: the search seeds at least one candidate here: true
@@ -8,5 +10,8 @@ contraction: the search seeds at least one candidate here: true
 conv: the search seeds at least one candidate here: true
 every seeded candidate compiles, or is refused typed: true
 every compiled candidate reports one figure per shipped kernel: true
-no compiled kernel allocates more workgroup memory than its charge: true
-some compiled kernel allocates exactly its positive charge: true
+no compiled kernel allocates more workgroup memory than its charge rounded to the reporting granule: true
+some aligned compiled kernel allocates exactly its positive charge: true
+the 37-byte unaligned staged kernel allocates exactly its granule-rounded bound: true
+two-array odd-byte probes distinguish 16 B kernel-total rounding over 4 B-aligned arrays from exact-sum and per-array rounding: true
+some unaligned seeded kernel allocates exactly its granule-rounded bound, not a coarser multiple: true
