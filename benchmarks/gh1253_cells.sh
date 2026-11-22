@@ -113,20 +113,21 @@
 # model_default against the plain default, no anchor. A pick
 # whose configuration seeds a plan the timing cell did not time (a profile's auto gate deciding
 # otherwise) gets a timing cell of its own under that profile, appended to the same TSV. Before
-# that append the stock rows are saved as rank_<site>.tsv.stock for the incumbent join.
+# that append the stock rows are saved as rank_<site>.tsv.stock and the main TSV is marked as
+# requiring the snapshot. Keep both files for replay.
 # EXPLAIN_ONLY=<run dir> re-scores a past run's timed sites at this checkout's revision, timing
 # no candidate (a correctness batch, not a measurement): per site of SITES only the `shipped` and
 # `ceilings` listing cells run (the RANK_ONLY constants, BENCH_TUNE=0 pinned), and
 # gh1442_agreement.py joins them to <run dir>/rank_<site>.tsv -- that run's rows, read and never
 # written. Preset attribution comes from the stock _time.err and _time_rN.err censuses when
-# retained, using the .tsv.stock snapshot when the run appended profile rows.
+# retained, with the stock rows from .tsv.stock when present.
 # BENCH_PICK=1 adds each arm's pick line, whose pick_ms/untuned_ms are the cell's own
 # in-process timing (advisory: a rerun moves them, nothing else). Running it at two revisions
 # against one run dir is the before/after agreement check of a ranking-score change, on the same
 # measured rows.
-# It refuses before building anything when a site's TSV is missing or empty, and when a timing
-# knob is set (FIT_FILL, TIME_REPEATS, PICK_PROFILES, PICK_GATE0, TXN_RATE); it ends with each
-# site's `joined=` lines, prefixed by site.
+# It refuses before building anything when a site's TSV is missing or empty or a marked TSV lacks
+# its .tsv.stock (stock_snapshot_missing). It also refuses a timing knob (FIT_FILL, TIME_REPEATS,
+# PICK_PROFILES, PICK_GATE0, TXN_RATE). It ends with each site's `joined=` lines, prefixed by site.
 # Both wgrad arms pin BENCH_TUNE=0 and model_default_schedule=false, so an ambient profile or
 # environment cannot swap the measured plans for tuned or model-picked ones.
 # Every cell is one of the shared runner's (benchmarks/cells.py `cell`, gh-ocannl-1607): hermetic
@@ -147,6 +148,7 @@ backend=$1
 out=$2
 cap=${3:-900}
 sites=${SITES:-wgrad:8,128,256,1024 wgrad:256,128,256,1024 fp8mm:8192,32,4096}
+stock_snapshot_marker='# gh1253_cells: stock snapshot required'
 site_name() {
   local kind=${1%%:*} dims=${1#*:}
   echo "${kind}_${dims//,/x}"
@@ -215,6 +217,9 @@ if [[ -n "${EXPLAIN_ONLY:-}" ]]; then
     tsv="$rows_dir/rank_$(site_name "$site").tsv"
     if [[ ! -s "$tsv" ]]; then
       echo "$0: EXPLAIN_ONLY: no timing rows for site $site: $tsv is missing or empty" >&2
+      missing=$((missing + 1))
+    elif [[ ! -f "$tsv.stock" ]] && grep -qxF "$stock_snapshot_marker" "$tsv"; then
+      echo "$0: EXPLAIN_ONLY: stock_snapshot_missing: $tsv.stock is required by $tsv" >&2
       missing=$((missing + 1))
     fi
   done
@@ -449,11 +454,11 @@ for site in $sites; do
       if [[ -f "$log" ]]; then timing_census+=(--census "$log"); fi
     done
     rows="$rows_dir/rank_${name}.tsv"
-    stock_rows="$rows"
-    if [[ -f "$rows.stock" ]]; then stock_rows="$rows.stock"; fi
+    stock_tsv=()
+    if [[ -f "$rows.stock" ]]; then stock_tsv=(--stock-tsv "$rows.stock"); fi
     python3 "$root/benchmarks/gh1442_agreement.py" "$rows" \
       "ceilings=$out/rank_${name}_ceilings.out" "${fitted_arm}=$out/rank_${name}_${fitted_arm}.out" \
-      --stock-tsv "$stock_rows" ${timing_census[@]+"${timing_census[@]}"} ${fit[@]+"${fit[@]}"} |
+      ${stock_tsv[@]+"${stock_tsv[@]}"} ${timing_census[@]+"${timing_census[@]}"} ${fit[@]+"${fit[@]}"} |
       tee "$out/rank_${name}_agreement.txt" || failed=$((failed + 1))
     continue
   fi
@@ -558,6 +563,7 @@ for site in $sites; do
           if [[ $stock_rows == "$rows" ]]; then
             stock_rows="$rows.stock"
             if [[ -f "$rows" ]]; then cp "$rows" "$stock_rows"; else : > "$stock_rows"; fi
+            printf '%s\n' "$stock_snapshot_marker" >> "$rows"
           fi
           cell "rank_${name}_time_${pname}" env BENCH_TUNE=1 BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" \
             "$rank_site" "$pflag" --ocannl_autotune_keep_fraction=1 \
