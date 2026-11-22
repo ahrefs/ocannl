@@ -1684,14 +1684,18 @@ files.
   found three such legs: `tile_mma_narrow`'s half-hoisted and tuned legs (half computing in half
   under a narrow mode declines the f32 register tile), `schedule_mma_scope_scratch`'s seeding
   prediction (no uniform-f16 seed under `false`), and `schedule_contraction_nest`'s bf16 structural
-  leg (no uniform-bf16 seed under bf16 `false`). A test whose claims follow the default by design
-  -- `reduction_forms`, whose form table asserts the default as a claim, and `cc_march_census`, a
-  golden of emitted text whose bf16 rows follow an exported bf16 mode -- carries
-  `; ocannl-policy-invariance: exempt -- <reason>` inside its stanza and leaves the alias; the
+  leg (no uniform-bf16 seed under bf16 `false`). A test whose claims are tied to one policy carries
+  `; ocannl-policy-invariance: exempt -- <reason>` inside its stanza and leaves the alias, as
+  `cc_march_census` does because its bf16 text golden changes with the exported mode. The
   opt-out is whole-stanza, so prefer pinning the legs that need the default. A member under an
   `(enabled_if …)` (`cuda_wmma_floor`) is listed in a second `policy-invariance` alias stanza
   behind the same condition: dune refuses an alias dependency with no rule, so listing it in the
-  main stanza breaks the family on every other backend.
+  main stanza breaks the family on every other backend. `reduction_forms` follows the ambient
+  policy (gh-ocannl-2403). The serial f16 reference rounds each update when residency is narrow.
+  A native half SIMD grid groups terms into chains and lanes, folds them at half precision and
+  adds the partial to the seed. Its host reference models those roundings separately, including
+  one fold per inner split and fused updates in the RNG grid. An RNG pin still records storage
+  residency when it admits SIMD, because the lanes already have that width.
 ## Warp reductions and hardware ownership
 - **The warp-shuffle rendering stages at the residency, and gates on it** (gh-ocannl-682).
   `C_syntax.try_warp_reduce` holds `wred_v_*`, the `__shared__ wred_partials_*` slots and every
@@ -1750,9 +1754,9 @@ files.
   accumulator wide only if the residency is the storage width (`residency_is_storage`: f32 storage
   and every non-widening backend render RNG-bearing reductions exactly as before) — otherwise the
   shuffle refuses loudly and the grid bails to the serial fallback, which keeps the per-step
-  narrowing. The census gained `Peel_ceded verdict` — the decision was wide and the tree or the
-  grid took it — so `Context.routine.peel` attributes each rendering's width to the shared call;
-  `reduction_forms` claims it as `Widened_elsewhere` (retype-vectorized on cc,
+  narrowing. The census gained `Peel_ceded verdict` for a reduction the shared decision accepted
+  and the grid or tree took, so `Context.routine.peel` attributes each rendering's width to that call;
+  `reduction_forms` claims it as `Ceded` (retype-vectorized on cc,
   retype-workgroup-reduce on the GPUs) and the pinned members as `Pinned_to_storage`. Two
   consequences to know: (1) an UNGUARDED accumulation nest the shuffle cannot render — inner
   levels, or a schedule-minted scope, under a `Workgroup_reduce` level whose lane index the backend

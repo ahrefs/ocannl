@@ -287,7 +287,7 @@
 ; (`Test_scan.Policy_invariance_scan`), which holds this list to it in BOTH directions: a member left
 ; out fails, and so does an entry that names no policy. A member whose claims follow the default by
 ; design carries an `exempt` opt-out with its reason inside its own stanza (the grammar is in
-; `Policy_invariance_scan`'s header) and is left out here: `reduction_forms` and `cc_march_census`.
+; `Policy_invariance_scan`'s header) and is left out here: `cc_march_census`.
 ; An executable run through a target and a golden diff counts through the diff's alias.
 
 (alias
@@ -322,6 +322,7 @@
   (alias runtest-privatize_recheck)
   (alias runtest-profile_fp16_floor)
   (alias runtest-ptx_target_parity)
+  (alias runtest-reduction_forms)
   (alias runtest-schedule_cache_numerics)
   (alias runtest-schedule_coalesce)
   (alias runtest-schedule_contraction_nest)
@@ -13503,19 +13504,11 @@
  ;     just below the explicit keys of the source that picked it, so it moves them without any of
  ;     their own variables being set. `reproducible' supplies cc_vector_bytes=0, which is exactly
  ;     the knob that makes the SIMD members decline to localized forms; `performance' supplies
- ;     fp16_arithmetic=true, which moves the accumulator reference at f16.
+ ;     fp16_arithmetic=prefer_narrow, which can move the accumulator reference at f16.
  ;   DEFAULT_PREC -- the precision a node created without an explicit one takes, so it decides what
  ;     the contraction leg compiles. Its operands now pass ~prec, which is the better fix and was
  ;     made alongside this; the key stays declared because node creation still consults it wherever
  ;     the ppx mints an intermediate this test does not name.
- ; ocannl-policy-invariance: exempt -- its form table is stated for the default numerics policy
- ; and asserts that premise as a claim ("the numerics policy is the default the member table's
- ; forms are stated for"), so every non-default mode fails it by design. Under fp16 true and
- ; prefer_narrow on cc (native fp16) four more claims fail (gh-ocannl-1104): the value claims of
- ; `retype-vectorized`, `split-then-vectorize-inner` and `rng-vectorized` at f16, and the form
- ; claim of `rng-vectorized` at f16. Their bitwise reference assumes an accumulator wider than
- ; storage, where every association agrees; a storage-width f16 accumulator makes the vectorized
- ; order round to a different number.
  (name reduction_forms)
  (package neural_nets_lib)
  (deps
